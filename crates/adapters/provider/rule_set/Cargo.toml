@@ -1,0 +1,9 @@
+[package]
+name = "rule_set_provider"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+config_core = { path = "../../../core/config" }
+provider_evidence = { path = "../../../contracts/provider_label/evidence" }
+provider_label = { path = "../../../contracts/provider_label/label" }

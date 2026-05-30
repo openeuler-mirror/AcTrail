@@ -1,0 +1,14 @@
+[package]
+name = "ebpf_probe"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+config_core = { path = "../../core/config" }
+control_contract = { path = "../../contracts/control_plane" }
+daemon = { path = "../../apps/daemon" }
+libc = "0.2"
+model_core = { path = "../../core/model" }
+sqlite_storage = { path = "../../adapters/storage/sqlite" }
+store_read_contract = { path = "../../contracts/store/read" }
+uds_control_transport = { path = "../../adapters/control/uds/transport" }

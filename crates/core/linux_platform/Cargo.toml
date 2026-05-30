@@ -1,0 +1,8 @@
+[package]
+name = "linux_platform"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+config_core = { path = "../config" }
+libc = "0.2"

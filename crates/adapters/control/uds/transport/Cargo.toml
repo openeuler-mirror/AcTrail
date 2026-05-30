@@ -1,0 +1,8 @@
+[package]
+name = "uds_control_transport"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+control_contract = { path = "../../../../contracts/control_plane" }
+model_core = { path = "../../../../core/model" }

@@ -1,0 +1,12 @@
+[package]
+name = "collector_instance"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+collector_binding = { path = "../binding" }
+collector_capability = { path = "../capability" }
+collector_event = { path = "../event" }
+collector_stats = { path = "../stats" }
+model_core = { path = "../../../core/model" }
+payload_event = { path = "../../payload/event" }

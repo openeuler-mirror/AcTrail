@@ -1,0 +1,14 @@
+[package]
+name = "sqlite_storage"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+model_core = { path = "../../../core/model" }
+rusqlite = { version = "0.31.0", features = ["bundled"] }
+semantic_action = { path = "../../../contracts/semantic_action" }
+store_read_contract = { path = "../../../contracts/store/read" }
+store_retention_contract = { path = "../../../contracts/store/retention" }
+store_snapshot_contract = { path = "../../../contracts/store/snapshot" }
+store_tx_contract = { path = "../../../contracts/store/tx" }
+store_write_contract = { path = "../../../contracts/store/write" }

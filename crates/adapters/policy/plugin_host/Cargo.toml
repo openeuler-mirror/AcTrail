@@ -1,0 +1,9 @@
+[package]
+name = "plugin_policy_host"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+model_core = { path = "../../../core/model" }
+policy_evaluate_contract = { path = "../../../contracts/policy/evaluate" }
+policy_plugin_contract = { path = "../../../contracts/policy/plugin" }

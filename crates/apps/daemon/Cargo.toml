@@ -1,0 +1,35 @@
+[package]
+name = "daemon"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+attach_runtime = { path = "../../core/attach_runtime" }
+clap = { version = "4.6", features = ["derive"] }
+collector_binding = { path = "../../contracts/collector/binding" }
+collector_capability = { path = "../../contracts/collector/capability" }
+collector_event = { path = "../../contracts/collector/event" }
+collector_instance = { path = "../../contracts/collector/instance" }
+control_contract = { path = "../../contracts/control_plane" }
+config_core = { path = "../../core/config" }
+ebpf_collector = { path = "../../adapters/collectors/ebpf" }
+ingest_runtime = { path = "../../core/ingest_runtime" }
+libc = "0.2"
+linux_platform = { path = "../../core/linux_platform" }
+model_core = { path = "../../core/model" }
+otel_export = { path = "../../adapters/export/otel" }
+payload_event = { path = "../../contracts/payload/event" }
+plugin_policy_host = { path = "../../adapters/policy/plugin_host" }
+process_identity_contract = { path = "../../contracts/process/identity" }
+process_tree_snapshot_contract = { path = "../../contracts/process/tree_snapshot" }
+provider_evidence = { path = "../../contracts/provider_label/evidence" }
+provider_label = { path = "../../contracts/provider_label/label" }
+rule_set_provider = { path = "../../adapters/provider/rule_set" }
+semantic_action = { path = "../../contracts/semantic_action" }
+semantic_action_runtime = { path = "../../core/semantic_action_runtime" }
+sqlite_storage = { path = "../../adapters/storage/sqlite" }
+store_read_contract = { path = "../../contracts/store/read" }
+store_tx_contract = { path = "../../contracts/store/tx" }
+store_write_contract = { path = "../../contracts/store/write" }
+trace_runtime = { path = "../../core/trace_runtime" }
+uds_control_server = { path = "../../adapters/control/uds/server" }
