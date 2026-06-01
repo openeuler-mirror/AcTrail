@@ -1,0 +1,16 @@
+[package]
+name = "view"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.6", features = ["derive"] }
+config_core = { path = "../../core/config" }
+json_graph_export = { path = "../../adapters/export/json_graph" }
+model_core = { path = "../../core/model" }
+otel_export = { path = "../../adapters/export/otel" }
+semantic_action = { path = "../../contracts/semantic_action" }
+semantic_action_runtime = { path = "../../core/semantic_action_runtime" }
+sqlite_storage = { path = "../../adapters/storage/sqlite" }
+store_read_contract = { path = "../../contracts/store/read" }
+store_snapshot_contract = { path = "../../contracts/store/snapshot" }

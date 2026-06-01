@@ -1,0 +1,14 @@
+[package]
+name = "attach_runtime"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+collector_binding = { path = "../../contracts/collector/binding" }
+collector_event = { path = "../../contracts/collector/event" }
+collector_instance = { path = "../../contracts/collector/instance" }
+config_core = { path = "../config" }
+model_core = { path = "../model" }
+process_identity_contract = { path = "../../contracts/process/identity" }
+process_tree_snapshot_contract = { path = "../../contracts/process/tree_snapshot" }
+trace_runtime = { path = "../trace_runtime" }

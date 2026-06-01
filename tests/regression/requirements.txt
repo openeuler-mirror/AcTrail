@@ -1,0 +1,4 @@
+# The runner itself is stdlib-only. These packages are for Python-agent
+# regression cases executed by the runner.
+langgraph
+requests

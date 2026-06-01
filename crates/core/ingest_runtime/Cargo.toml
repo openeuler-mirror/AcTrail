@@ -1,0 +1,11 @@
+[package]
+name = "ingest_runtime"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+collector_event = { path = "../../contracts/collector/event" }
+model_core = { path = "../model" }
+policy_evaluate_contract = { path = "../../contracts/policy/evaluate" }
+provider_evidence = { path = "../../contracts/provider_label/evidence" }
+provider_label = { path = "../../contracts/provider_label/label" }

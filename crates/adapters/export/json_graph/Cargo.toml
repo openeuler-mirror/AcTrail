@@ -1,0 +1,9 @@
+[package]
+name = "json_graph_export"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+graph_contract = { path = "../../../contracts/graph" }
+model_core = { path = "../../../core/model" }
+store_snapshot_contract = { path = "../../../contracts/store/snapshot" }

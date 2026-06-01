@@ -1,0 +1,13 @@
+[package]
+name = "ctl"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.6", features = ["derive"] }
+config_core = { path = "../../core/config" }
+control_contract = { path = "../../contracts/control_plane" }
+libc = "0.2"
+linux_platform = { path = "../../core/linux_platform" }
+model_core = { path = "../../core/model" }
+uds_control_client = { path = "../../adapters/control/uds/client" }

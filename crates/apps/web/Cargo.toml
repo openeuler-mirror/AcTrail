@@ -1,0 +1,17 @@
+[package]
+name = "web"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "actrailweb"
+path = "src/main.rs"
+
+[dependencies]
+model_core = { path = "../../core/model" }
+sqlite_storage = { path = "../../adapters/storage/sqlite" }
+store_read_contract = { path = "../../contracts/store/read" }
+store_snapshot_contract = { path = "../../contracts/store/snapshot" }
+
+[dev-dependencies]
+store_write_contract = { path = "../../contracts/store/write" }
