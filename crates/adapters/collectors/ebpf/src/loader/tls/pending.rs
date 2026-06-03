@@ -26,7 +26,9 @@ pub(crate) fn lookup_pending_payload_op(
     operations: &MapHandle,
     tid: u32,
 ) -> Result<Option<PendingTlsPayloadOp>, LoaderError> {
-    let tgid = read_tgid(tid)?;
+    let Some(tgid) = read_tgid(tid)? else {
+        return Ok(None);
+    };
     let namespace_key = ((tgid as u64) << 32) | u64::from(tid);
     let Some(host_key) = namespace_index
         .lookup(&namespace_key.to_ne_bytes(), MapFlags::ANY)
@@ -64,16 +66,37 @@ fn pending_tls_payload_op_from_bytes(
     })
 }
 
-fn read_tgid(tid: u32) -> Result<u32, LoaderError> {
-    let status = std::fs::read_to_string(format!("/proc/{tid}/status"))
-        .map_err(|error| LoaderError::new("lookup_pending_tls_payload_op", error.to_string()))?;
-    status
+/// Errno from a `/proc` read of the traced thread meaning it already exited: `ENOENT` (the entry
+/// was gone before the open) or `ESRCH` (the task was reaped while the status file was being read,
+/// which surfaces as an `Uncategorized` io error kind rather than `NotFound`).
+fn target_exited(error: &std::io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(errno) if errno == libc::ENOENT || errno == libc::ESRCH)
+}
+
+/// Reads the thread group id of `tid`. Returns `Ok(None)` when the target thread has already
+/// exited: the seccomp capture window is stale, so the caller must treat it as "no pending op"
+/// rather than crash the daemon. The thread can vanish at two points — `ENOENT` if its `/proc`
+/// entry is already gone before the open, or `ESRCH` if it exits while the status file is being
+/// read — so both errnos are matched (the latter surfaces as an `Uncategorized` io error kind).
+fn read_tgid(tid: u32) -> Result<Option<u32>, LoaderError> {
+    let status = match std::fs::read_to_string(format!("/proc/{tid}/status")) {
+        Ok(status) => status,
+        Err(error) if target_exited(&error) => return Ok(None),
+        Err(error) => {
+            return Err(LoaderError::new(
+                "lookup_pending_tls_payload_op",
+                error.to_string(),
+            ));
+        }
+    };
+    let tgid = status
         .lines()
         .find_map(|line| line.strip_prefix("Tgid:"))
         .map(str::trim)
         .ok_or_else(|| LoaderError::new("lookup_pending_tls_payload_op", "missing Tgid"))?
         .parse::<u32>()
-        .map_err(|error| LoaderError::new("lookup_pending_tls_payload_op", error.to_string()))
+        .map_err(|error| LoaderError::new("lookup_pending_tls_payload_op", error.to_string()))?;
+    Ok(Some(tgid))
 }
 
 fn read_u64_value(value: &[u8]) -> Result<u64, LoaderError> {
@@ -101,4 +124,23 @@ fn unexpected_value_size(value: &[u8]) -> LoaderError {
         "lookup_pending_tls_payload_op",
         format!("unexpected pending TLS map value size {}", value.len()),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn target_exited_covers_proc_read_race_errnos() {
+        // ENOENT: /proc entry gone before open. ESRCH: thread reaped mid-read.
+        assert!(target_exited(&std::io::Error::from_raw_os_error(
+            libc::ENOENT
+        )));
+        assert!(target_exited(&std::io::Error::from_raw_os_error(
+            libc::ESRCH
+        )));
+        assert!(!target_exited(&std::io::Error::from_raw_os_error(
+            libc::EACCES
+        )));
+    }
 }

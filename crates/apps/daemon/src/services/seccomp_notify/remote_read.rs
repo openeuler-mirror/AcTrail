@@ -2,12 +2,21 @@
 
 use control_contract::reply::ControlError;
 
+/// Errno from a capture-time read of a traced target that means the target already exited:
+/// `ESRCH` from `process_vm_readv`, or `ENOENT` from a `/proc/<pid>` read. The seccomp capture
+/// window is stale; the notification must be continued rather than crashing the daemon, so reads
+/// surface this as `Ok(None)` ("nothing to capture") instead of a fatal error.
+pub(crate) fn target_exited(error: &std::io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(errno) if errno == libc::ESRCH || errno == libc::ENOENT)
+}
+
+/// Returns `Ok(None)` when the target exited mid-capture (see [`target_exited`]).
 pub(crate) fn read_linear_payload(
     pid: u32,
     remote_addr: u64,
     requested_size: u64,
     max_operation_bytes: u32,
-) -> Result<Vec<u8>, ControlError> {
+) -> Result<Option<Vec<u8>>, ControlError> {
     let read_size = requested_size
         .min(u64::from(max_operation_bytes))
         .try_into()
@@ -22,9 +31,9 @@ pub(crate) fn read_iovec_payload(
     remote_iovec_addr: u64,
     declared_iovec_count: usize,
     max_operation_bytes: u32,
-) -> Result<Vec<u8>, ControlError> {
+) -> Result<Option<Vec<u8>>, ControlError> {
     if declared_iovec_count == 0 {
-        return Ok(Vec::new());
+        return Ok(Some(Vec::new()));
     }
     let max_payload_bytes = usize::try_from(max_operation_bytes).map_err(|error| {
         ControlError::new(
@@ -41,7 +50,9 @@ pub(crate) fn read_iovec_payload(
     let table_size = iovec_count
         .checked_mul(iovec_size)
         .ok_or_else(|| ControlError::new("seccomp_read", "iovec table size overflow"))?;
-    let table = read_process_bytes(pid, remote_iovec_addr, table_size)?;
+    let Some(table) = read_process_bytes(pid, remote_iovec_addr, table_size)? else {
+        return Ok(None);
+    };
     if table.len() != table_size {
         return Err(ControlError::new(
             "seccomp_read",
@@ -70,17 +81,20 @@ pub(crate) fn read_iovec_payload(
         }
         let remaining = max_payload_bytes - bytes.len();
         let read_len = iov_len.min(remaining);
-        let chunk = read_process_bytes(pid, iov_base, read_len)?;
+        let Some(chunk) = read_process_bytes(pid, iov_base, read_len)? else {
+            return Ok(None);
+        };
         bytes.extend_from_slice(&chunk);
     }
-    Ok(bytes)
+    Ok(Some(bytes))
 }
 
+/// Returns `Ok(None)` when the target exited mid-capture (see [`target_exited`]).
 pub(crate) fn read_process_bytes(
     pid: u32,
     remote_addr: u64,
     size: usize,
-) -> Result<Vec<u8>, ControlError> {
+) -> Result<Option<Vec<u8>>, ControlError> {
     let mut bytes = vec![0_u8; size];
     let mut local = libc::iovec {
         iov_base: bytes.as_mut_ptr().cast(),
@@ -93,13 +107,14 @@ pub(crate) fn read_process_bytes(
     let read =
         unsafe { libc::process_vm_readv(pid as libc::pid_t, &mut local, 1, &mut remote, 1, 0) };
     if read < 0 {
-        return Err(ControlError::new(
-            "seccomp_read",
-            std::io::Error::last_os_error().to_string(),
-        ));
+        let error = std::io::Error::last_os_error();
+        if target_exited(&error) {
+            return Ok(None);
+        }
+        return Err(ControlError::new("seccomp_read", error.to_string()));
     }
     bytes.truncate(read as usize);
-    Ok(bytes)
+    Ok(Some(bytes))
 }
 
 fn read_iovec_usize(entry: &[u8], offset: usize) -> Result<usize, ControlError> {
@@ -110,4 +125,25 @@ fn read_iovec_usize(entry: &[u8], offset: usize) -> Result<usize, ControlError> 
     Ok(usize::from_ne_bytes(
         bytes.try_into().expect("iovec usize width"),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn target_exited_for_gone_errnos() {
+        assert!(target_exited(&std::io::Error::from_raw_os_error(
+            libc::ESRCH
+        )));
+        assert!(target_exited(&std::io::Error::from_raw_os_error(
+            libc::ENOENT
+        )));
+        assert!(!target_exited(&std::io::Error::from_raw_os_error(
+            libc::EFAULT
+        )));
+        assert!(!target_exited(&std::io::Error::from_raw_os_error(
+            libc::EPERM
+        )));
+    }
 }

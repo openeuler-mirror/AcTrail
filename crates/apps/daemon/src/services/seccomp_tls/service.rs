@@ -14,7 +14,7 @@ use model_core::payload::{
 };
 use model_core::process::ProcessIdentity;
 use payload_event::RawPayloadSegment;
-use process_identity_contract::lookup::ProcessIdentityReader;
+use process_identity_contract::lookup::{IdentityLookupError, ProcessIdentityReader};
 
 use crate::services::diagnostic_logging;
 use crate::services::seccomp_notify::{read_iovec_payload, read_linear_payload};
@@ -171,7 +171,9 @@ impl SeccompTlsService {
             } else {
                 PayloadOperationCompletionState::Partial
             };
-            let process = tls_completion_identity(&completion, identity_reader)?;
+            let Some(process) = tls_completion_identity(&completion, identity_reader)? else {
+                continue;
+            };
             let segment_max = usize::try_from(self.max_segment_bytes).map_err(|error| {
                 ControlError::new(
                     "seccomp_tls_segment",
@@ -250,12 +252,15 @@ impl SeccompTlsService {
         if pending.capture_state == TLS_CAPTURE_STATE_BPF_COPIED_FULL {
             return Ok(true);
         }
-        let bytes = self.capture_request_bytes(
+        let Some(bytes) = self.capture_request_bytes(
             pending.tgid,
             pending.symbol,
             pending.buffer_ptr,
             pending.requested_size,
-        )?;
+        )?
+        else {
+            return Ok(false);
+        };
         self.captures
             .insert(pending.operation_id, CapturedTlsOperation { bytes });
         Ok(true)
@@ -282,12 +287,15 @@ impl SeccompTlsService {
         &mut self,
         request: &TlsPayloadCaptureRequest,
     ) -> Result<(), ControlError> {
-        let bytes = self.capture_request_bytes(
+        let Some(bytes) = self.capture_request_bytes(
             request.pid,
             request.symbol,
             request.buffer_ptr,
             request.requested_size,
-        )?;
+        )?
+        else {
+            return Ok(());
+        };
         self.captures
             .insert(request.operation_id, CapturedTlsOperation { bytes });
         Ok(())
@@ -299,7 +307,7 @@ impl SeccompTlsService {
         symbol: u32,
         buffer_ptr: u64,
         requested_size: u64,
-    ) -> Result<Vec<u8>, ControlError> {
+    ) -> Result<Option<Vec<u8>>, ControlError> {
         if symbol == TLS_SYMBOL_RUSTLS_WRITE_VECTORED {
             let iovec_count = usize::try_from(requested_size).map_err(|error| {
                 ControlError::new("seccomp_tls_read", format!("iovec count overflow: {error}"))
@@ -328,29 +336,38 @@ struct CapturedTlsOperation {
 fn continue_stopped_process(pid: u32) -> Result<(), ControlError> {
     let result = unsafe { libc::kill(pid as libc::pid_t, libc::SIGCONT) };
     if result == 0 {
-        Ok(())
-    } else {
-        Err(ControlError::new(
-            "seccomp_tls_continue",
-            std::io::Error::last_os_error().to_string(),
-        ))
+        return Ok(());
     }
+    let error = std::io::Error::last_os_error();
+    // The target exited while stopped for capture: there is nothing left to resume, so a missing
+    // process (ESRCH) is benign rather than a fatal error that would crash the daemon.
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        return Ok(());
+    }
+    Err(ControlError::new("seccomp_tls_continue", error.to_string()))
 }
 
+/// Returns `Ok(None)` when the target exited before its identity could be read: the segment is
+/// dropped rather than crashing the daemon. Only reachable when `pid_generation` is unset (0).
 fn tls_completion_identity(
     completion: &TlsPayloadCompletion,
     identity_reader: &impl ProcessIdentityReader,
-) -> Result<ProcessIdentity, ControlError> {
+) -> Result<Option<ProcessIdentity>, ControlError> {
     if completion.pid_generation != 0 {
-        return Ok(ProcessIdentity::new(
+        return Ok(Some(ProcessIdentity::new(
             completion.pid,
             completion.pid_generation,
             completion.pid_generation,
-        ));
+        )));
     }
-    identity_reader
-        .read_identity(completion.pid)
-        .map_err(|error| ControlError::new("seccomp_tls_identity", format!("{error:?}")))
+    match identity_reader.read_identity(completion.pid) {
+        Ok(identity) => Ok(Some(identity)),
+        Err(IdentityLookupError::NotFound { .. }) => Ok(None),
+        Err(error) => Err(ControlError::new(
+            "seccomp_tls_identity",
+            format!("{error:?}"),
+        )),
+    }
 }
 
 fn tls_direction(raw: u32) -> Result<PayloadDirection, ControlError> {

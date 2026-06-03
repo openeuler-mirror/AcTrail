@@ -47,7 +47,7 @@ pub(crate) fn recv_notification(fd: libc::c_int) -> Result<SeccompRecv, ControlE
         return Ok(SeccompRecv::Ready(notification));
     }
     let error = std::io::Error::last_os_error();
-    if error.kind() == std::io::ErrorKind::WouldBlock {
+    if recv_error_is_recoverable(&error) {
         return Ok(SeccompRecv::Drained);
     }
     Err(ControlError::new("seccomp_notif_recv", error.to_string()))
@@ -146,6 +146,15 @@ fn seccomp_notification_is_stale(error: &std::io::Error) -> bool {
     matches!(error.raw_os_error(), Some(errno) if errno == libc::ENOENT || errno == libc::ESRCH)
 }
 
+/// A `SECCOMP_IOCTL_NOTIF_RECV` failure that should be ignored rather than crash the daemon:
+/// `EAGAIN` (no notification ready), `EINTR` (interrupted ioctl), or a stale id whose target
+/// already exited (`ENOENT`/`ESRCH`, per `seccomp(2)`).
+fn recv_error_is_recoverable(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::WouldBlock
+        || error.raw_os_error() == Some(libc::EINTR)
+        || seccomp_notification_is_stale(error)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,6 +168,19 @@ mod tests {
             &std::io::Error::from_raw_os_error(libc::ESRCH),
         ));
         assert!(!seccomp_notification_is_stale(
+            &std::io::Error::from_raw_os_error(libc::EBADF),
+        ));
+    }
+
+    #[test]
+    fn recv_errors_drained_for_recoverable_errnos() {
+        for errno in [libc::EAGAIN, libc::EINTR, libc::ENOENT, libc::ESRCH] {
+            assert!(
+                recv_error_is_recoverable(&std::io::Error::from_raw_os_error(errno)),
+                "errno {errno} should be recoverable",
+            );
+        }
+        assert!(!recv_error_is_recoverable(
             &std::io::Error::from_raw_os_error(libc::EBADF),
         ));
     }
