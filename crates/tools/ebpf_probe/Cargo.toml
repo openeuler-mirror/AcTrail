@@ -2,6 +2,7 @@
 name = "ebpf_probe"
 version = "0.1.0"
 edition = "2024"
+license = "MulanPSL-2.0"
 
 [dependencies]
 config_core = { path = "../../core/config" }

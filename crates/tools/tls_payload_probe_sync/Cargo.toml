@@ -1,0 +1,20 @@
+[package]
+name = "tls_payload_probe_sync"
+version = "0.1.0"
+edition = "2024"
+license = "MulanPSL-2.0"
+
+[lib]
+name = "tls_payload_probe_sync"
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "tls-payload-probe-sync"
+path = "src/bin/tls-payload-probe-sync.rs"
+
+[dependencies]
+clap = { version = "4.6", features = ["derive"] }
+libc = "0.2"
+tls_payload_core = { path = "../tls_payload_core" }
+tls_payload_sync = { path = "../../core/tls_payload_sync" }
+tls_probe_point_finder = { path = "../tls_probe_point_finder" }

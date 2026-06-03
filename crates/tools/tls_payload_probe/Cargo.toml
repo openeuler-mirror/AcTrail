@@ -1,0 +1,23 @@
+[package]
+name = "tls_payload_probe"
+version = "0.1.0"
+edition = "2024"
+license = "MulanPSL-2.0"
+build = "build.rs"
+
+[[bin]]
+name = "tls-payload-probe"
+path = "src/bin/tls-payload-probe.rs"
+
+[dependencies]
+brotli = "8"
+clap = { version = "4.6", features = ["derive"] }
+flate2 = "1.1"
+libc = "0.2"
+libbpf-rs = "0.25.0"
+serde_json = "1"
+tls_probe_point_finder = { path = "../tls_probe_point_finder" }
+zstd = "0.13"
+
+[build-dependencies]
+libbpf-cargo = "0.25.0"

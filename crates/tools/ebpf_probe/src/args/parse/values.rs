@@ -8,7 +8,7 @@ use config_core::daemon::{
     EnforcementScope, MemlockRlimit, PayloadRedactionPolicy, PayloadSocketCaptureBackend,
     PayloadSocketSeccompSyscall, PayloadTlsCaptureBackend, PayloadTlsLibrary,
     PayloadTlsLibraryPath, PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource,
-    SseDataPolicy,
+    PayloadTlsSyncRuntimeLibraryPath, SseDataPolicy,
 };
 
 use super::super::MmapWorkloadConfig;
@@ -249,6 +249,15 @@ pub(super) fn required_payload_tls_library_path(
 ) -> Result<PayloadTlsLibraryPath, String> {
     required(flags, flag)?
         .parse::<PayloadTlsLibraryPath>()
+        .map_err(|error| format!("invalid {flag}: {error}"))
+}
+
+pub(super) fn required_payload_tls_sync_runtime_library_path(
+    flags: &BTreeMap<String, String>,
+    flag: &'static str,
+) -> Result<PayloadTlsSyncRuntimeLibraryPath, String> {
+    required(flags, flag)?
+        .parse::<PayloadTlsSyncRuntimeLibraryPath>()
         .map_err(|error| format!("invalid {flag}: {error}"))
 }
 

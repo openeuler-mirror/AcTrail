@@ -37,7 +37,7 @@ pub(crate) struct SeccompTlsService {
 impl SeccompTlsService {
     pub(crate) fn new(config: &PayloadTlsConfig, diagnostic_log_level: DiagnosticLogLevel) -> Self {
         Self {
-            enabled: config.enabled,
+            enabled: config.enabled && !config.capture_backend.is_sync(),
             diagnostics_enabled: config.diagnostics_enabled,
             diagnostic_log_level,
             max_operation_bytes: config.max_operation_bytes,

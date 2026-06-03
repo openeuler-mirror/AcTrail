@@ -2,7 +2,7 @@
 
 use std::ffi::OsStr;
 
-use config_core::daemon::EbpfCollectorConfig;
+use config_core::daemon::PayloadStdioConfig;
 use libbpf_rs::{MapCore, MapFlags, MapHandle, Object};
 
 use crate::loader::LoaderError;
@@ -14,25 +14,22 @@ const STDIO_PAYLOAD_CONFIG_FIELD_SIZE: usize = std::mem::size_of::<u32>();
 const STDIO_PAYLOAD_CONFIG_VALUE_SIZE: usize =
     STDIO_PAYLOAD_CONFIG_FIELDS * STDIO_PAYLOAD_CONFIG_FIELD_SIZE;
 
-pub fn validate_payload_config(config: &EbpfCollectorConfig) -> Result<(), LoaderError> {
-    if !config.payload_stdio.enabled {
+pub fn validate_payload_config(config: &PayloadStdioConfig) -> Result<(), LoaderError> {
+    if !config.enabled {
         return Ok(());
     }
-    if !config.payload_stdio.capture_stdin
-        && !config.payload_stdio.capture_stdout
-        && !config.payload_stdio.capture_stderr
-    {
+    if !config.capture_stdin && !config.capture_stdout && !config.capture_stderr {
         return Err(LoaderError::new(
             "payload_stdio_config",
             "payload_stdio_enabled=true requires at least one enabled stdio stream",
         ));
     }
-    if config.payload_stdio.max_segment_bytes > STDIO_PAYLOAD_MAX_SEGMENT_BYTES {
+    if config.max_segment_bytes > STDIO_PAYLOAD_MAX_SEGMENT_BYTES {
         return Err(LoaderError::new(
             "payload_stdio_config",
             format!(
                 "payload_stdio_max_segment_bytes {} exceeds compiled ABI maximum {}",
-                config.payload_stdio.max_segment_bytes, STDIO_PAYLOAD_MAX_SEGMENT_BYTES
+                config.max_segment_bytes, STDIO_PAYLOAD_MAX_SEGMENT_BYTES
             ),
         ));
     }
@@ -41,7 +38,7 @@ pub fn validate_payload_config(config: &EbpfCollectorConfig) -> Result<(), Loade
 
 pub fn configure_payload_stdio_map(
     object: &Object,
-    config: &EbpfCollectorConfig,
+    config: &PayloadStdioConfig,
 ) -> Result<(), LoaderError> {
     let map = object
         .maps()
@@ -66,14 +63,14 @@ pub fn configure_payload_stdio_map(
 }
 
 fn payload_stdio_config_value(
-    config: &EbpfCollectorConfig,
+    config: &PayloadStdioConfig,
 ) -> [u8; STDIO_PAYLOAD_CONFIG_VALUE_SIZE] {
     let fields = [
-        bool_field(config.payload_stdio.enabled),
-        bool_field(config.payload_stdio.capture_stdin),
-        bool_field(config.payload_stdio.capture_stdout),
-        bool_field(config.payload_stdio.capture_stderr),
-        config.payload_stdio.max_segment_bytes,
+        bool_field(config.enabled),
+        bool_field(config.capture_stdin),
+        bool_field(config.capture_stdout),
+        bool_field(config.capture_stderr),
+        config.max_segment_bytes,
     ];
     let mut value = [0_u8; STDIO_PAYLOAD_CONFIG_VALUE_SIZE];
     for (index, field) in fields.into_iter().enumerate() {

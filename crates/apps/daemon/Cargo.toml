@@ -2,6 +2,7 @@
 name = "daemon"
 version = "0.1.0"
 edition = "2024"
+license = "MulanPSL-2.0"
 
 [dependencies]
 attach_runtime = { path = "../../core/attach_runtime" }
@@ -32,4 +33,8 @@ store_read_contract = { path = "../../contracts/store/read" }
 store_tx_contract = { path = "../../contracts/store/tx" }
 store_write_contract = { path = "../../contracts/store/write" }
 trace_runtime = { path = "../../core/trace_runtime" }
+tls_payload_core = { path = "../../tools/tls_payload_core" }
+tls_payload_sync = { path = "../../core/tls_payload_sync" }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 uds_control_server = { path = "../../adapters/control/uds/server" }

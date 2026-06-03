@@ -9,7 +9,7 @@ use config_core::daemon::{
     PayloadSocketCaptureBackend, PayloadSocketConfig, PayloadSocketSeccompSyscall,
     PayloadStdioConfig, PayloadTlsCaptureBackend, PayloadTlsConfig, PayloadTlsLibrary,
     PayloadTlsLibraryPath, PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource,
-    ResourceMetricsConfig, SseDataPolicy,
+    PayloadTlsSyncRuntimeLibraryPath, ResourceMetricsConfig, SseDataPolicy,
 };
 
 use crate::args::MmapWorkloadConfig;
@@ -229,6 +229,15 @@ impl ConfigValues {
             .map_err(|error| format!("invalid {key}: {error}"))
     }
 
+    fn required_payload_tls_sync_runtime_library_path(
+        &self,
+        key: &'static str,
+    ) -> Result<PayloadTlsSyncRuntimeLibraryPath, String> {
+        self.required(key)?
+            .parse::<PayloadTlsSyncRuntimeLibraryPath>()
+            .map_err(|error| format!("invalid {key}: {error}"))
+    }
+
     fn required_disabled_or_path(
         &self,
         key: &'static str,
@@ -308,6 +317,12 @@ impl ConfigValues {
                 .required_positive_u64("payload_tls_retention_max_bytes_per_trace")?,
             redaction_policy: self
                 .required_payload_redaction_policy("payload_tls_redaction_policy")?,
+            sync_runtime_library_path: self.required_payload_tls_sync_runtime_library_path(
+                "payload_tls_sync_runtime_library_path",
+            )?,
+            sync_event_socket_path: self.required_path("payload_tls_sync_event_socket_path")?,
+            sync_socket_mode: self.required_octal("payload_tls_sync_socket_mode_octal")?,
+            sync_match_limit: self.required_positive_u32("payload_tls_sync_match_limit")?,
         })
     }
 

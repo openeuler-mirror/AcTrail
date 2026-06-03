@@ -91,6 +91,7 @@ fn run_foreground(config: &OperatorConfig) -> Result<(), String> {
             &config.storage_path,
             profiles,
             config.ebpf_config.clone(),
+            config.payload_config.clone(),
             config.diagnostic_log_level,
             config.seccomp_notify.clone(),
             config.process_seccomp.clone(),
@@ -105,6 +106,7 @@ fn run_foreground(config: &OperatorConfig) -> Result<(), String> {
             &config.storage_path,
             profiles,
             config.ebpf_config.clone(),
+            config.payload_config.clone(),
             config.diagnostic_log_level,
             config.seccomp_notify.clone(),
             config.process_seccomp.clone(),
@@ -158,7 +160,11 @@ fn cleanup_runtime_files(config: &OperatorConfig, pid_written: bool) -> Result<(
     if pid_written {
         remove_runtime_file(&config.pid_file)?;
     }
-    remove_runtime_file(&config.socket_path)
+    remove_runtime_file(&config.socket_path)?;
+    if config.payload_config.tls.capture_backend.is_sync() {
+        remove_runtime_file(&config.payload_config.tls.sync_event_socket_path)?;
+    }
+    Ok(())
 }
 
 fn run_error(error: String) -> DaemonRunError {

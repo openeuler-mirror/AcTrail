@@ -35,7 +35,8 @@ fn tls_payload_processing_persists_http_and_sse_application_events() {
     let mut wiring = super::super::build_runtime_wiring(
         &storage_path,
         profiles,
-        super::ebpf_config(false, true),
+        super::ebpf_config(false),
+        super::payload_config(true),
         DiagnosticLogLevel::Info,
         super::seccomp_notify_disabled(),
         super::process_seccomp_disabled(),
@@ -172,7 +173,8 @@ fn tls_payload_processing_persists_http2_frame_and_data_events() {
     let mut wiring = super::super::build_runtime_wiring(
         &storage_path,
         profiles,
-        super::ebpf_config(false, true),
+        super::ebpf_config(false),
+        super::payload_config(true),
         DiagnosticLogLevel::Info,
         super::seccomp_notify_disabled(),
         super::process_seccomp_disabled(),
@@ -270,7 +272,8 @@ fn http2_analyzer_ignores_http1_text_when_both_protocols_are_enabled() {
     let mut wiring = super::super::build_runtime_wiring(
         &storage_path,
         profiles,
-        super::ebpf_config(false, true),
+        super::ebpf_config(false),
+        super::payload_config(true),
         DiagnosticLogLevel::Info,
         super::seccomp_notify_disabled(),
         super::process_seccomp_disabled(),
@@ -355,12 +358,13 @@ fn socket_payload_gate_persists_http_and_drops_non_http_bytes() {
         std::process::id()
     ));
     let profiles = DaemonProfileRegistry::new();
-    let mut ebpf_config = super::ebpf_config(false, false);
-    ebpf_config.payload_socket.enabled = true;
+    let mut payload_config = super::payload_config(false);
+    payload_config.socket.enabled = true;
     let mut wiring = super::super::build_runtime_wiring(
         &storage_path,
         profiles,
-        ebpf_config,
+        super::ebpf_config(false),
+        payload_config,
         DiagnosticLogLevel::Info,
         super::seccomp_notify_disabled(),
         super::process_seccomp_disabled(),

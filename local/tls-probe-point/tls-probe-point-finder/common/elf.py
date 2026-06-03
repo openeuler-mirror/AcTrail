@@ -50,8 +50,12 @@ def build_id(binary: Path) -> str:
 def symbols_by_name(binary: Path, names: tuple[str, ...]) -> dict[str, list[dict[str, Any]]]:
     wanted = set(names)
     found: dict[str, list[dict[str, Any]]] = {name: [] for name in names}
+    current_table = "unknown"
     output = run_checked(["readelf", "-Ws", str(binary)])
     for line in output.splitlines():
+        if line.startswith("Symbol table '"):
+            current_table = line.split("'", maxsplit=2)[1]
+            continue
         parts = line.split()
         if len(parts) < len(("Num", "Value", "Size", "Type", "Bind", "Vis", "Ndx", "Name")):
             continue
@@ -61,10 +65,13 @@ def symbols_by_name(binary: Path, names: tuple[str, ...]) -> dict[str, list[dict
         name = raw_name.split("@", maxsplit=1)[0]
         if name not in wanted:
             continue
+        value = int(parts[1], 16)
+        size = int(parts[2], 10)
         found[name].append(
             {
-                "value": int(parts[1], 16),
-                "size": int(parts[2], 10),
+                "value": value,
+                "size": size,
+                "table": current_table,
                 "bind": parts[4],
                 "ndx": parts[6],
                 "raw_name": raw_name,
@@ -81,10 +88,14 @@ def unique_exported_symbols(binary: Path, names: tuple[str, ...]) -> dict[str, i
         if not addresses:
             continue
         if len(addresses) != 1:
-            formatted = ", ".join(f"0x{address:x}" for address in sorted(addresses))
+            formatted = ", ".join(format_symbol_location(match) for match in matches)
             raise RuntimeError(f"ELF symbol table has multiple {name} addresses: {formatted}")
         resolved[name] = next(iter(addresses))
     return resolved
+
+
+def format_symbol_location(match: dict[str, Any]) -> str:
+    return f"0x{match['value']:x}@{match['table']}"
 
 
 def load_segments(binary: Path) -> list[LoadSegment]:

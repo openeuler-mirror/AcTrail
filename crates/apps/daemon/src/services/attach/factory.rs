@@ -2,7 +2,7 @@
 
 use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
-    ProcessSeccompConfig, ResourceMetricsConfig, SeccompNotifyConfig,
+    PayloadConfig, ProcessSeccompConfig, ResourceMetricsConfig, SeccompNotifyConfig,
 };
 use ebpf_collector::EbpfCollector;
 use ebpf_collector::procfs::{ProcfsIdentityReader, ProcfsTreeSnapshotter};
@@ -20,6 +20,7 @@ use crate::services::resource_metrics::ResourceMetricsSampler;
 use crate::services::seccomp_notify::SeccompNotifyService;
 use crate::services::seccomp_socket::SeccompSocketService;
 use crate::services::seccomp_tls::SeccompTlsService;
+use crate::services::tls_sync::TlsSyncService;
 
 use super::SqliteAttachService;
 use super::helpers::NoopProviderClassifier;
@@ -29,6 +30,7 @@ impl SqliteAttachService {
         profiles: DaemonProfileRegistry,
         storage: SqliteStorage,
         ebpf_config: EbpfCollectorConfig,
+        payload_config: PayloadConfig,
         diagnostic_log_level: DiagnosticLogLevel,
         seccomp_notify: SeccompNotifyConfig,
         process_seccomp: ProcessSeccompConfig,
@@ -37,11 +39,12 @@ impl SqliteAttachService {
         resource_metrics: ResourceMetricsConfig,
         enforcement: FanotifyEnforcementService,
         live_otel_export: LiveOtelExporter,
-    ) -> Self {
+    ) -> Result<Self, control_contract::reply::ControlError> {
         Self::new_with_provider_classifier(
             profiles,
             storage,
             ebpf_config,
+            payload_config,
             diagnostic_log_level,
             seccomp_notify,
             process_seccomp,
@@ -59,6 +62,7 @@ impl SqliteAttachService {
         profiles: DaemonProfileRegistry,
         storage: SqliteStorage,
         ebpf_config: EbpfCollectorConfig,
+        payload_config: PayloadConfig,
         diagnostic_log_level: DiagnosticLogLevel,
         seccomp_notify_config: SeccompNotifyConfig,
         process_seccomp_config: ProcessSeccompConfig,
@@ -69,31 +73,32 @@ impl SqliteAttachService {
         live_otel_export: LiveOtelExporter,
         provider_classifier: Box<dyn ProviderClassifier>,
         provider_classification_enabled: bool,
-    ) -> Self {
-        let payload_tls_enabled = ebpf_config.payload_tls.enabled;
-        let payload_tls_redaction_policy = ebpf_config.payload_tls.redaction_policy;
+    ) -> Result<Self, control_contract::reply::ControlError> {
+        let payload_tls_enabled = payload_config.tls.enabled;
+        let payload_tls_redaction_policy = payload_config.tls.redaction_policy;
         let payload_tls_retention_max_bytes_per_trace =
-            ebpf_config.payload_tls.retention_max_bytes_per_trace;
-        let payload_stdio_enabled = ebpf_config.payload_stdio.enabled;
-        let payload_stdio_redaction_policy = ebpf_config.payload_stdio.redaction_policy;
+            payload_config.tls.retention_max_bytes_per_trace;
+        let payload_stdio_enabled = payload_config.stdio.enabled;
+        let payload_stdio_redaction_policy = payload_config.stdio.redaction_policy;
         let payload_stdio_retention_max_bytes_per_trace =
-            ebpf_config.payload_stdio.retention_max_bytes_per_trace;
-        let payload_socket_enabled = ebpf_config.payload_socket.enabled;
-        let payload_socket_redaction_policy = ebpf_config.payload_socket.redaction_policy;
+            payload_config.stdio.retention_max_bytes_per_trace;
+        let payload_socket_enabled = payload_config.socket.enabled;
+        let payload_socket_redaction_policy = payload_config.socket.redaction_policy;
         let payload_socket_retention_max_bytes_per_trace =
-            ebpf_config.payload_socket.retention_max_bytes_per_trace;
+            payload_config.socket.retention_max_bytes_per_trace;
         let socket_payload_gate = SocketHttpPayloadGate::new(
-            ebpf_config.payload_socket.http_sniff_max_bytes,
-            ebpf_config.payload_socket.stream_state_max_entries,
+            payload_config.socket.http_sniff_max_bytes,
+            payload_config.socket.stream_state_max_entries,
         );
         let seccomp_notify = SeccompNotifyService::new(&seccomp_notify_config);
-        let seccomp_tls = SeccompTlsService::new(&ebpf_config.payload_tls, diagnostic_log_level);
-        let seccomp_socket = SeccompSocketService::new(&ebpf_config.payload_socket);
+        let seccomp_tls = SeccompTlsService::new(&payload_config.tls, diagnostic_log_level);
+        let tls_sync = TlsSyncService::new(&payload_config.tls)?;
+        let seccomp_socket = SeccompSocketService::new(&payload_config.socket);
         let process_seccomp = ProcessSeccompService::new(&process_seccomp_config);
-        Self {
+        Ok(Self {
             profiles,
             storage,
-            collector: EbpfCollector::new(ebpf_config),
+            collector: EbpfCollector::new(ebpf_config, payload_config),
             identity_reader: ProcfsIdentityReader,
             snapshotter: ProcfsTreeSnapshotter,
             next_event_id: 0,
@@ -113,6 +118,7 @@ impl SqliteAttachService {
             socket_payload_gate,
             seccomp_notify,
             seccomp_tls,
+            tls_sync,
             seccomp_socket,
             process_seccomp,
             pending_process_seccomp_observations: Vec::new(),
@@ -123,6 +129,6 @@ impl SqliteAttachService {
             live_otel_export,
             provider_classifier,
             provider_classification_enabled,
-        }
+        })
     }
 }

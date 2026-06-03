@@ -17,6 +17,7 @@ pub fn run_from_env() -> Result<i32, String> {
             profile_name,
             tags,
             payload_tls_enabled,
+            payload_tls_config,
             payload_tls_seccomp_syscalls,
             payload_socket_enabled,
             payload_socket_seccomp_syscalls,
@@ -24,6 +25,7 @@ pub fn run_from_env() -> Result<i32, String> {
             process_seccomp_enabled,
             process_seccomp_syscalls,
             seccomp_notify_reserved_listener_fd,
+            agent_invocation_commands,
             argv,
         } => {
             let transport = UdsSocketTransport::new(invocation.socket_path);
@@ -36,6 +38,7 @@ pub fn run_from_env() -> Result<i32, String> {
                     profile_name,
                     tags,
                     payload_tls_enabled,
+                    payload_tls_config,
                     payload_tls_seccomp_syscalls,
                     payload_socket_enabled,
                     payload_socket_seccomp_syscalls,
@@ -43,6 +46,7 @@ pub fn run_from_env() -> Result<i32, String> {
                     process_seccomp_enabled,
                     process_seccomp_syscalls,
                     seccomp_notify_reserved_listener_fd,
+                    agent_invocation_commands,
                     argv,
                 },
             )

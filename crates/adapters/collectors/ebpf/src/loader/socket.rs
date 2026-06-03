@@ -2,7 +2,7 @@
 
 use std::ffi::OsStr;
 
-use config_core::daemon::{EbpfCollectorConfig, PayloadSocketCaptureBackend};
+use config_core::daemon::{PayloadSocketCaptureBackend, PayloadSocketConfig};
 use libbpf_rs::{MapCore, MapFlags, MapHandle, Object};
 
 use crate::loader::LoaderError;
@@ -14,16 +14,16 @@ const SOCKET_PAYLOAD_CONFIG_FIELD_SIZE: usize = std::mem::size_of::<u32>();
 const SOCKET_PAYLOAD_CONFIG_VALUE_SIZE: usize =
     SOCKET_PAYLOAD_CONFIG_FIELDS * SOCKET_PAYLOAD_CONFIG_FIELD_SIZE;
 
-pub fn validate_payload_config(config: &EbpfCollectorConfig) -> Result<(), LoaderError> {
-    if !config.payload_socket.enabled {
+pub fn validate_payload_config(config: &PayloadSocketConfig) -> Result<(), LoaderError> {
+    if !config.enabled {
         return Ok(());
     }
-    if config.payload_socket.max_segment_bytes > SOCKET_PAYLOAD_MAX_SEGMENT_BYTES {
+    if config.max_segment_bytes > SOCKET_PAYLOAD_MAX_SEGMENT_BYTES {
         return Err(LoaderError::new(
             "payload_socket_config",
             format!(
                 "payload_socket_max_segment_bytes {} exceeds compiled ABI maximum {}",
-                config.payload_socket.max_segment_bytes, SOCKET_PAYLOAD_MAX_SEGMENT_BYTES
+                config.max_segment_bytes, SOCKET_PAYLOAD_MAX_SEGMENT_BYTES
             ),
         ));
     }
@@ -32,7 +32,7 @@ pub fn validate_payload_config(config: &EbpfCollectorConfig) -> Result<(), Loade
 
 pub fn configure_payload_socket_map(
     object: &Object,
-    config: &EbpfCollectorConfig,
+    config: &PayloadSocketConfig,
 ) -> Result<(), LoaderError> {
     let map = object
         .maps()
@@ -57,15 +57,12 @@ pub fn configure_payload_socket_map(
 }
 
 fn payload_socket_config_value(
-    config: &EbpfCollectorConfig,
+    config: &PayloadSocketConfig,
 ) -> [u8; SOCKET_PAYLOAD_CONFIG_VALUE_SIZE] {
     let fields = [
-        bool_field(config.payload_socket.enabled),
-        config.payload_socket.max_segment_bytes,
-        bool_field(
-            config.payload_socket.capture_backend
-                == PayloadSocketCaptureBackend::BpfCopySeccompFallback,
-        ),
+        bool_field(config.enabled),
+        config.max_segment_bytes,
+        bool_field(config.capture_backend == PayloadSocketCaptureBackend::BpfCopySeccompFallback),
     ];
     let mut value = [0_u8; SOCKET_PAYLOAD_CONFIG_VALUE_SIZE];
     for (index, field) in fields.into_iter().enumerate() {

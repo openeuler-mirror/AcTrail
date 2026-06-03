@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 
-use config_core::daemon::{EbpfCollectorConfig, OPERATOR_CONFIG_TEMPLATE, OperatorConfig};
+use config_core::daemon::{
+    EbpfCollectorConfig, OPERATOR_CONFIG_TEMPLATE, OperatorConfig, PayloadConfig,
+};
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 
 use super::AttachPlan;
@@ -8,12 +10,14 @@ use super::AttachPlan;
 #[test]
 fn proc_lifecycle_request_skips_file_and_mmap_programs() {
     let config = config();
+    let payload = payload_config();
     let plan = AttachPlan::from_requests(
         &[CapabilityRequest::new(
             Capability::ProcLifecycle,
             RequestMode::Required,
         )],
         &config,
+        &payload,
     );
 
     assert!(
@@ -47,12 +51,14 @@ fn baseline_has_no_implicit_proc_lifecycle() {
 #[test]
 fn net_transport_loads_fd_io_but_not_file_path_programs() {
     let config = config();
+    let payload = payload_config();
     let plan = AttachPlan::from_requests(
         &[
             CapabilityRequest::new(Capability::ProcLifecycle, RequestMode::Required),
             CapabilityRequest::new(Capability::NetTransport, RequestMode::Required),
         ],
         &config,
+        &payload,
     );
 
     assert!(
@@ -69,6 +75,7 @@ fn net_transport_loads_fd_io_but_not_file_path_programs() {
 #[test]
 fn fs_access_basic_can_skip_file_path_programs() {
     let mut config = config();
+    let payload = payload_config();
     config.file_path_capture_enabled = false;
     let plan = AttachPlan::from_requests(
         &[
@@ -76,6 +83,7 @@ fn fs_access_basic_can_skip_file_path_programs() {
             CapabilityRequest::new(Capability::FsAccessBasic, RequestMode::Required),
         ],
         &config,
+        &payload,
     );
 
     assert!(
@@ -100,6 +108,7 @@ fn fs_access_basic_can_skip_file_path_programs() {
 #[test]
 fn fs_access_basic_loads_file_path_programs_when_enabled() {
     let mut config = config();
+    let payload = payload_config();
     config.file_path_capture_enabled = true;
     let plan = AttachPlan::from_requests(
         &[
@@ -107,6 +116,7 @@ fn fs_access_basic_loads_file_path_programs_when_enabled() {
             CapabilityRequest::new(Capability::FsAccessBasic, RequestMode::Required),
         ],
         &config,
+        &payload,
     );
 
     assert!(
@@ -138,6 +148,7 @@ fn fs_access_basic_loads_file_path_programs_when_enabled() {
 #[test]
 fn fs_access_basic_context_does_not_grant_proc_lifecycle() {
     let mut config = config();
+    let payload = payload_config();
     config.file_path_capture_enabled = true;
     let plan = AttachPlan::from_requests(
         &[CapabilityRequest::new(
@@ -145,6 +156,7 @@ fn fs_access_basic_context_does_not_grant_proc_lifecycle() {
             RequestMode::Required,
         )],
         &config,
+        &payload,
     );
     let attached = plan.attached_capabilities(&[
         "handle_sched_process_fork".to_string(),
@@ -185,12 +197,14 @@ fn fs_access_basic_context_does_not_grant_proc_lifecycle() {
 #[test]
 fn fs_mmap_loads_mmap_without_file_path_programs() {
     let config = config();
+    let payload = payload_config();
     let plan = AttachPlan::from_requests(
         &[
             CapabilityRequest::new(Capability::ProcLifecycle, RequestMode::Required),
             CapabilityRequest::new(Capability::FsMmap, RequestMode::Required),
         ],
         &config,
+        &payload,
     );
 
     assert!(
@@ -210,24 +224,27 @@ fn fs_mmap_loads_mmap_without_file_path_programs() {
 
 #[test]
 fn stdio_requires_enabled_payload_config() {
-    let mut disabled = config();
-    disabled.payload_stdio.enabled = false;
+    let config = config();
+    let mut disabled = payload_config();
+    disabled.stdio.enabled = false;
     let disabled_plan = AttachPlan::from_requests(
         &[CapabilityRequest::new(
             Capability::StdioChunk,
             RequestMode::Required,
         )],
+        &config,
         &disabled,
     );
     assert!(!disabled_plan.contains(&Capability::StdioChunk));
 
-    let mut enabled = config();
-    enabled.payload_stdio.enabled = true;
+    let mut enabled = payload_config();
+    enabled.stdio.enabled = true;
     let enabled_plan = AttachPlan::from_requests(
         &[CapabilityRequest::new(
             Capability::StdioChunk,
             RequestMode::Required,
         )],
+        &config,
         &enabled,
     );
     assert!(enabled_plan.contains(&Capability::StdioChunk));
@@ -235,24 +252,27 @@ fn stdio_requires_enabled_payload_config() {
 
 #[test]
 fn socket_payload_requires_enabled_payload_config() {
-    let mut disabled = config();
-    disabled.payload_socket.enabled = false;
+    let config = config();
+    let mut disabled = payload_config();
+    disabled.socket.enabled = false;
     let disabled_plan = AttachPlan::from_requests(
         &[CapabilityRequest::new(
             Capability::SocketPlaintextPayload,
             RequestMode::Required,
         )],
+        &config,
         &disabled,
     );
     assert!(!disabled_plan.contains(&Capability::SocketPlaintextPayload));
 
-    let mut enabled = config();
-    enabled.payload_socket.enabled = true;
+    let mut enabled = payload_config();
+    enabled.socket.enabled = true;
     let enabled_plan = AttachPlan::from_requests(
         &[CapabilityRequest::new(
             Capability::SocketPlaintextPayload,
             RequestMode::Required,
         )],
+        &config,
         &enabled,
     );
     assert!(enabled_plan.contains(&Capability::SocketPlaintextPayload));
@@ -270,14 +290,16 @@ fn socket_payload_requires_enabled_payload_config() {
 
 #[test]
 fn shared_fd_programs_do_not_grant_unrequested_capabilities() {
-    let mut config = config();
-    config.payload_stdio.enabled = true;
+    let config = config();
+    let mut payload = payload_config();
+    payload.stdio.enabled = true;
     let plan = AttachPlan::from_requests(
         &[CapabilityRequest::new(
             Capability::StdioChunk,
             RequestMode::Required,
         )],
         &config,
+        &payload,
     );
     let attached = plan.attached_capabilities(&[
         "handle_sys_enter_read".to_string(),
@@ -296,12 +318,14 @@ fn shared_fd_programs_do_not_grant_unrequested_capabilities() {
 #[test]
 fn plan_requires_all_planned_capabilities_to_be_satisfied() {
     let config = config();
+    let payload = payload_config();
     let plan = AttachPlan::from_requests(
         &[
             CapabilityRequest::new(Capability::ProcLifecycle, RequestMode::Required),
             CapabilityRequest::new(Capability::FsMmap, RequestMode::Required),
         ],
         &config,
+        &payload,
     );
     let attached = BTreeSet::from([Capability::ProcLifecycle]);
 
@@ -311,6 +335,7 @@ fn plan_requires_all_planned_capabilities_to_be_satisfied() {
 #[test]
 fn file_path_programs_attach_before_process_programs() {
     let mut config = config();
+    let payload = payload_config();
     config.file_path_capture_enabled = true;
     let plan = AttachPlan::from_requests(
         &[
@@ -318,6 +343,7 @@ fn file_path_programs_attach_before_process_programs() {
             CapabilityRequest::new(Capability::FsAccessBasic, RequestMode::Required),
         ],
         &config,
+        &payload,
     );
 
     assert!(
@@ -330,4 +356,10 @@ fn config() -> EbpfCollectorConfig {
     OperatorConfig::parse(OPERATOR_CONFIG_TEMPLATE)
         .expect("operator config template parses")
         .ebpf_config
+}
+
+fn payload_config() -> PayloadConfig {
+    OperatorConfig::parse(OPERATOR_CONFIG_TEMPLATE)
+        .expect("operator config template parses")
+        .payload_config
 }

@@ -11,6 +11,7 @@ members = [
     "crates/core/trace_runtime",
     "crates/core/attach_runtime",
     "crates/core/ingest_runtime",
+    "crates/core/tls_payload_sync",
     "crates/contracts/collector/binding",
     "crates/contracts/collector/capability",
     "crates/contracts/collector/event",
@@ -43,6 +44,10 @@ members = [
     "crates/adapters/provider/rule_set",
     "crates/adapters/storage/sqlite",
     "crates/tools/ebpf_probe",
+    "crates/tools/tls_probe_point_finder",
+    "crates/tools/tls_payload_core",
+    "crates/tools/tls_payload_probe",
+    "crates/tools/tls_payload_probe_sync",
     "crates/tools/sqlite_inspect",
     "crates/tools/graph_inspect",
 ]

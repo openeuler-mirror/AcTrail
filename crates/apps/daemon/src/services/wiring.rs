@@ -5,8 +5,8 @@ use std::path::Path;
 use collector_capability::CollectorDescriptor;
 use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
-    EnforcementConfig, LiveOtelExportConfig, ProcessSeccompConfig, ResourceMetricsConfig,
-    SeccompNotifyConfig,
+    EnforcementConfig, LiveOtelExportConfig, PayloadConfig, ProcessSeccompConfig,
+    ResourceMetricsConfig, SeccompNotifyConfig,
 };
 use config_core::provider_rules::ProviderRuleSetConfig;
 use control_contract::reply::ControlError;
@@ -31,10 +31,13 @@ use super::live::otel_export::LiveOtelExporter;
 use super::process_seccomp::PROCESS_SECCOMP_COLLECTOR_NAME;
 use super::resource_metrics::COLLECTOR_NAME as RESOURCE_METRICS_COLLECTOR_NAME;
 
+const TLS_SYNC_COLLECTOR_NAME: &str = "tls-sync";
+
 pub(crate) fn build_runtime_wiring(
     storage_path: &Path,
     profiles: DaemonProfileRegistry,
     ebpf_config: EbpfCollectorConfig,
+    payload_config: PayloadConfig,
     diagnostic_log_level: DiagnosticLogLevel,
     seccomp_notify: SeccompNotifyConfig,
     process_seccomp: ProcessSeccompConfig,
@@ -48,6 +51,7 @@ pub(crate) fn build_runtime_wiring(
         storage_path,
         profiles,
         ebpf_config,
+        payload_config,
         diagnostic_log_level,
         seccomp_notify,
         process_seccomp,
@@ -64,6 +68,7 @@ pub(crate) fn build_runtime_wiring_with_provider_rule_set(
     storage_path: &Path,
     profiles: DaemonProfileRegistry,
     ebpf_config: EbpfCollectorConfig,
+    payload_config: PayloadConfig,
     diagnostic_log_level: DiagnosticLogLevel,
     seccomp_notify: SeccompNotifyConfig,
     process_seccomp: ProcessSeccompConfig,
@@ -81,6 +86,7 @@ pub(crate) fn build_runtime_wiring_with_provider_rule_set(
         storage_path,
         profiles,
         ebpf_config,
+        payload_config,
         diagnostic_log_level,
         seccomp_notify,
         process_seccomp,
@@ -97,6 +103,7 @@ fn build_runtime_wiring_with_attach_service(
     storage_path: &Path,
     profiles: DaemonProfileRegistry,
     ebpf_config: EbpfCollectorConfig,
+    payload_config: PayloadConfig,
     diagnostic_log_level: DiagnosticLogLevel,
     seccomp_notify: SeccompNotifyConfig,
     process_seccomp: ProcessSeccompConfig,
@@ -129,6 +136,7 @@ fn build_runtime_wiring_with_attach_service(
             profiles.clone(),
             storage.clone(),
             ebpf_config.clone(),
+            payload_config.clone(),
             diagnostic_log_level,
             seccomp_notify.clone(),
             process_seccomp.clone(),
@@ -139,11 +147,12 @@ fn build_runtime_wiring_with_attach_service(
             live_otel_export,
             provider_classifier,
             true,
-        ),
+        )?,
         None => SqliteAttachService::new(
             profiles.clone(),
             storage.clone(),
             ebpf_config.clone(),
+            payload_config.clone(),
             diagnostic_log_level,
             seccomp_notify.clone(),
             process_seccomp.clone(),
@@ -152,13 +161,16 @@ fn build_runtime_wiring_with_attach_service(
             resource_metrics.clone(),
             enforcement,
             live_otel_export,
-        ),
+        )?,
     };
     attach_service.set_id_seeds(event_id_seed, diagnostic_id_seed);
     attach_service.set_payload_segment_id_seed(payload_segment_id_seed);
     let mut available_collectors = Vec::new();
     if ebpf_config.enabled && attach_service.collector_ready() {
         available_collectors.push(attach_service.collector_name());
+    }
+    if payload_config.tls.enabled && payload_config.tls.capture_backend.is_sync() {
+        available_collectors.push(TLS_SYNC_COLLECTOR_NAME.to_string());
     }
     if application_protocol.enabled {
         available_collectors.push(APPLICATION_PROTOCOL_COLLECTOR_NAME.to_string());
@@ -179,6 +191,9 @@ fn build_runtime_wiring_with_attach_service(
     }
     if ebpf_config.enabled {
         collector_descriptors.push(attach_service.collector_descriptor());
+    }
+    if payload_config.tls.enabled && payload_config.tls.capture_backend.is_sync() {
+        collector_descriptors.push(tls_sync_descriptor());
     }
     if application_protocol.enabled {
         collector_descriptors.push(application_protocol_descriptor(&application_protocol));
@@ -207,6 +222,21 @@ fn process_seccomp_descriptor() -> CollectorDescriptor {
             vec![CapabilityField::new(
                 "exec_argv_context",
                 GuaranteeClass::GuaranteedByTransportCollector,
+            )],
+        )],
+        supports_attach_coverage_guard: false,
+        supports_existing_pid_attach: false,
+    }
+}
+
+fn tls_sync_descriptor() -> CollectorDescriptor {
+    CollectorDescriptor {
+        name: CollectorName::new(TLS_SYNC_COLLECTOR_NAME),
+        capabilities: vec![CapabilityDescriptor::new(
+            Capability::TlsPlaintextPayload,
+            vec![CapabilityField::new(
+                "tls_plaintext_segment",
+                GuaranteeClass::RequiresPayloadCollector,
             )],
         )],
         supports_attach_coverage_guard: false,

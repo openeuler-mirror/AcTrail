@@ -10,7 +10,9 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use config_core::capture_profile::CaptureProfile;
-use config_core::daemon::{EbpfCollectorConfig, OPERATOR_CONFIG_TEMPLATE, OperatorConfig};
+use config_core::daemon::{
+    EbpfCollectorConfig, OPERATOR_CONFIG_TEMPLATE, OperatorConfig, PayloadConfig,
+};
 use config_core::provider_rules::ProviderRuleSetConfig;
 use control_contract::command::{ControlCommand, TrackAddCommand};
 use control_contract::reply::ControlReply;
@@ -43,9 +45,11 @@ pub fn run_live_verification(
             event_ring_buffer_max_bytes: config.event_ring_buffer_max_bytes,
             file_path_capture_enabled: config.file_path_capture_enabled,
             file_path_max_bytes: config.file_path_max_bytes,
-            payload_tls: config.payload_tls.clone(),
-            payload_stdio: config.payload_stdio.clone(),
-            payload_socket: config.payload_socket.clone(),
+        },
+        PayloadConfig {
+            tls: config.payload_tls.clone(),
+            stdio: config.payload_stdio.clone(),
+            socket: config.payload_socket.clone(),
         },
         seccomp_defaults.diagnostic_log_level,
         seccomp_defaults.seccomp_notify,

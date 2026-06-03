@@ -3,8 +3,9 @@
 #[path = "seccomp/rules.rs"]
 mod rules;
 
-use std::ffi::CString;
+use std::ffi::{CString, OsString};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
 
 use config_core::daemon::{
     PayloadSocketSeccompSyscall, PayloadTlsSeccompSyscall, ProcessSeccompSyscall,
@@ -20,14 +21,16 @@ pub(super) fn run_child_seccomp(
     client: &mut impl ControlClientPort,
     request_id: RequestId,
     trace_id: TraceId,
-    argv: Vec<String>,
+    argv: Vec<OsString>,
     payload_tls_syscalls: Vec<PayloadTlsSeccompSyscall>,
     payload_socket_syscalls: Vec<PayloadSocketSeccompSyscall>,
     payload_socket_max_segment_bytes: u32,
     process_syscalls: Vec<ProcessSeccompSyscall>,
     reserved_listener_fd: u32,
+    envs: Vec<(std::ffi::OsString, std::ffi::OsString)>,
 ) -> Result<i32, String> {
     let argv = cstring_argv(argv)?;
+    let envs = cstring_env(envs)?;
     let reserved_listener_fd = i32::try_from(reserved_listener_fd)
         .map_err(|error| format!("invalid seccomp_notify_reserved_listener_fd: {error}"))?;
     let rules = build_seccomp_rules(
@@ -44,7 +47,7 @@ pub(super) fn run_child_seccomp(
         ));
     }
     if child == 0 {
-        child_exec_seccomp(&argv, &rules, reserved_listener_fd);
+        child_exec_seccomp(&argv, &rules, reserved_listener_fd, &envs);
     }
     let child_pid = child as libc::pid_t;
     if let Err(error) = wait_child_stopped(child_pid) {
@@ -91,10 +94,16 @@ fn child_exec_seccomp(
     argv: &[CString],
     rules: &[SeccompRule],
     reserved_listener_fd: libc::c_int,
+    envs: &[(CString, CString)],
 ) -> ! {
     match install_seccomp_listener(rules, reserved_listener_fd) {
         Ok(()) => unsafe {
             libc::raise(libc::SIGSTOP);
+            for (key, value) in envs {
+                if libc::setenv(key.as_ptr(), value.as_ptr(), 1) != 0 {
+                    libc::_exit(libc::EXIT_FAILURE);
+                }
+            }
             let mut pointers = argv
                 .iter()
                 .map(|arg| arg.as_ptr())
@@ -306,13 +315,26 @@ fn terminate_child(child_pid: libc::pid_t) {
     }
 }
 
-fn cstring_argv(argv: Vec<String>) -> Result<Vec<CString>, String> {
+fn cstring_argv(argv: Vec<OsString>) -> Result<Vec<CString>, String> {
     if argv.is_empty() {
         return Err("launch requires a command after --".to_string());
     }
     argv.into_iter()
         .map(|arg| {
-            CString::new(arg).map_err(|error| format!("launch argument contains NUL: {error}"))
+            CString::new(arg.as_bytes())
+                .map_err(|error| format!("launch argument contains NUL: {error}"))
+        })
+        .collect()
+}
+
+fn cstring_env(envs: Vec<(OsString, OsString)>) -> Result<Vec<(CString, CString)>, String> {
+    envs.into_iter()
+        .map(|(key, value)| {
+            let key = CString::new(key.as_bytes())
+                .map_err(|error| format!("launch env key contains NUL: {error}"))?;
+            let value = CString::new(value.as_bytes())
+                .map_err(|error| format!("launch env value contains NUL: {error}"))?;
+            Ok((key, value))
         })
         .collect()
 }

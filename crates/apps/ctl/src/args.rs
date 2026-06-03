@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::{ArgAction, Args, Parser, Subcommand};
 use config_core::daemon::{
-    DEFAULT_OPERATOR_CONFIG_PATH, OperatorConfig, PayloadSocketSeccompSyscall,
+    DEFAULT_OPERATOR_CONFIG_PATH, OperatorConfig, PayloadSocketSeccompSyscall, PayloadTlsConfig,
     PayloadTlsSeccompSyscall, ProcessSeccompSyscall,
 };
 use control_contract::selector::TraceSelector;
@@ -34,6 +34,7 @@ pub enum CtlCommand {
         profile_name: ProfileName,
         tags: BTreeSet<String>,
         payload_tls_enabled: bool,
+        payload_tls_config: PayloadTlsConfig,
         payload_tls_seccomp_syscalls: Vec<PayloadTlsSeccompSyscall>,
         payload_socket_enabled: bool,
         payload_socket_seccomp_syscalls: Vec<PayloadSocketSeccompSyscall>,
@@ -41,6 +42,7 @@ pub enum CtlCommand {
         process_seccomp_enabled: bool,
         process_seccomp_syscalls: Vec<ProcessSeccompSyscall>,
         seccomp_notify_reserved_listener_fd: u32,
+        agent_invocation_commands: Vec<String>,
         argv: Vec<String>,
     },
     TrackRemove {
@@ -154,6 +156,11 @@ impl CtlCommandArgs {
                     profile_name: profile_name(args.profile_name, config)?,
                     tags: args.tags.into_iter().collect(),
                     payload_tls_enabled: seccomp_config.payload_tls_enabled,
+                    payload_tls_config: config
+                        .ok_or_else(|| "missing operator config for launch payload".to_string())?
+                        .payload_config
+                        .tls
+                        .clone(),
                     payload_tls_seccomp_syscalls: seccomp_config.payload_tls_syscalls,
                     payload_socket_enabled: seccomp_config.payload_socket_enabled,
                     payload_socket_seccomp_syscalls: seccomp_config.payload_socket_syscalls,
@@ -162,6 +169,7 @@ impl CtlCommandArgs {
                     process_seccomp_enabled: seccomp_config.process_enabled,
                     process_seccomp_syscalls: seccomp_config.process_syscalls,
                     seccomp_notify_reserved_listener_fd: seccomp_config.reserved_listener_fd,
+                    agent_invocation_commands: launch_agent_commands(config),
                     argv: args.argv,
                 })
             }
@@ -185,6 +193,17 @@ impl CtlCommandArgs {
     }
 }
 
+fn launch_agent_commands(config: Option<&OperatorConfig>) -> Vec<String> {
+    let Some(config) = config else {
+        return Vec::new();
+    };
+    if config.agent_invocation.enabled {
+        config.agent_invocation.commands.clone()
+    } else {
+        Vec::new()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct LaunchSeccompConfig {
     payload_tls_enabled: bool,
@@ -200,21 +219,21 @@ struct LaunchSeccompConfig {
 fn launch_seccomp_config(config: Option<&OperatorConfig>) -> Result<LaunchSeccompConfig, String> {
     let config = config.ok_or_else(|| "missing operator config for launch seccomp".to_string())?;
     Ok(LaunchSeccompConfig {
-        payload_tls_enabled: config.ebpf_config.payload_tls.enabled
+        payload_tls_enabled: config.payload_config.tls.enabled
             && config
-                .ebpf_config
-                .payload_tls
+                .payload_config
+                .tls
                 .capture_backend
                 .requires_seccomp_notify(),
-        payload_tls_syscalls: config.ebpf_config.payload_tls.seccomp_syscalls.clone(),
-        payload_socket_enabled: config.ebpf_config.payload_socket.enabled
+        payload_tls_syscalls: config.payload_config.tls.seccomp_syscalls.clone(),
+        payload_socket_enabled: config.payload_config.socket.enabled
             && config
-                .ebpf_config
-                .payload_socket
+                .payload_config
+                .socket
                 .capture_backend
                 .requires_seccomp_notify(),
-        payload_socket_syscalls: config.ebpf_config.payload_socket.seccomp_syscalls.clone(),
-        payload_socket_max_segment_bytes: config.ebpf_config.payload_socket.max_segment_bytes,
+        payload_socket_syscalls: config.payload_config.socket.seccomp_syscalls.clone(),
+        payload_socket_max_segment_bytes: config.payload_config.socket.max_segment_bytes,
         process_enabled: config.process_seccomp.enabled,
         process_syscalls: config.process_seccomp.syscalls.clone(),
         reserved_listener_fd: config.seccomp_notify.reserved_listener_fd,

@@ -44,6 +44,7 @@ use crate::services::resource_metrics::ResourceMetricsSampler;
 use crate::services::seccomp_notify::SeccompNotifyService;
 use crate::services::seccomp_socket::SeccompSocketService;
 use crate::services::seccomp_tls::SeccompTlsService;
+use crate::services::tls_sync::TlsSyncService;
 
 use self::helpers::{capability_requested, collector_capability_requests};
 
@@ -70,6 +71,7 @@ pub(crate) struct SqliteAttachService {
     pub(super) socket_payload_gate: SocketHttpPayloadGate,
     pub(super) seccomp_notify: SeccompNotifyService,
     pub(super) seccomp_tls: SeccompTlsService,
+    pub(super) tls_sync: TlsSyncService,
     pub(super) seccomp_socket: SeccompSocketService,
     pub(super) process_seccomp: ProcessSeccompService,
     pub(super) pending_process_seccomp_observations: Vec<ProcessSeccompObservation>,
@@ -160,12 +162,17 @@ impl SqliteAttachService {
         trace_runtime: &mut trace_runtime::TraceRuntime,
         trace_id: model_core::ids::TraceId,
         root_identity: ProcessIdentity,
+        launch_mode: bool,
         diagnostic_kind: DiagnosticKind,
         diagnostic_message: &'static str,
     ) -> Result<TrackAddReply, ControlError> {
-        trace_runtime
-            .mark_degraded(trace_id)
-            .map_err(|error| ControlError::new("mark_degraded", format!("{:?}", error)))?;
+        let emit_bootstrap_diagnostic =
+            !launch_mode || matches!(diagnostic_kind, DiagnosticKind::BootstrapPartial);
+        if emit_bootstrap_diagnostic {
+            trace_runtime
+                .mark_degraded(trace_id)
+                .map_err(|error| ControlError::new("mark_degraded", format!("{:?}", error)))?;
+        }
         trace_runtime
             .activate_trace(trace_id, SystemTime::now())
             .map_err(|error| ControlError::new("activate_trace", format!("{:?}", error)))?;
@@ -182,18 +189,32 @@ impl SqliteAttachService {
                 .map_err(|error| ControlError::new(error.stage, error.message))?;
         }
 
-        let diagnostic = DiagnosticRecord::new(
-            self.next_diagnostic_id()?,
-            Some(trace_id),
-            diagnostic_kind,
-            DiagnosticSeverity::Warning,
-            SystemTime::now(),
-            diagnostic_message,
-        )
-        .with_process(root_identity);
-        self.storage
-            .append_diagnostic(diagnostic)
-            .map_err(|error| ControlError::new(error.stage, error.message))?;
+        if emit_bootstrap_diagnostic {
+            let diagnostic = DiagnosticRecord::new(
+                self.next_diagnostic_id()?,
+                Some(trace_id),
+                diagnostic_kind,
+                DiagnosticSeverity::Warning,
+                SystemTime::now(),
+                diagnostic_message,
+            )
+            .with_process(root_identity);
+            self.storage
+                .append_diagnostic(diagnostic)
+                .map_err(|error| ControlError::new(error.stage, error.message))?;
+        }
+        if launch_mode {
+            self.log_diagnostic(
+                DiagnosticLogLevel::Info,
+                format_args!(
+                    "agent_launch started trace_id={} name={} pid={} generation={}",
+                    trace_id,
+                    entry.trace.display_name,
+                    entry.trace.root_process_identity.pid,
+                    entry.trace.root_process_identity.generation
+                ),
+            );
+        }
 
         Ok(TrackAddReply {
             trace_id,
@@ -214,6 +235,7 @@ impl SqliteAttachService {
             trace_runtime,
             trace_id,
             root_identity,
+            command.launch_mode,
             diagnostic_kind,
             "snapshot-only attach completed without eBPF coverage guard",
         )
@@ -274,6 +296,7 @@ impl SqliteAttachService {
             trace_runtime,
             trace_id,
             root_identity,
+            command.launch_mode,
             diagnostic_kind,
             if uses_ebpf_collector {
                 "snapshot bootstrap completed before live eBPF tracking and remains gap-marked"
@@ -355,6 +378,9 @@ impl AttachService for SqliteAttachService {
             fds.push(fd);
         }
         if let Some(fd) = self.enforcement.event_poll_fd() {
+            fds.push(fd);
+        }
+        if let Some(fd) = self.tls_sync.event_poll_fd() {
             fds.push(fd);
         }
         fds.extend(self.seccomp_notify.event_poll_fds());

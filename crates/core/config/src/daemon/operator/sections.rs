@@ -6,8 +6,8 @@ use super::super::{
     LiveOtelExportConfig, PayloadRedactionPolicy, PayloadSocketCaptureBackend, PayloadSocketConfig,
     PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadTlsCaptureBackend, PayloadTlsConfig,
     PayloadTlsLibrary, PayloadTlsLibraryPath, PayloadTlsResolver, PayloadTlsSeccompSyscall,
-    PayloadTlsSource, ProcessSeccompConfig, ProcessSeccompSyscall, ResourceMetricsConfig,
-    SeccompNotifyConfig,
+    PayloadTlsSource, PayloadTlsSyncRuntimeLibraryPath, ProcessSeccompConfig,
+    ProcessSeccompSyscall, ResourceMetricsConfig, SeccompNotifyConfig,
 };
 use crate::export::ExportConfig;
 use crate::provider_rules::ProviderRuleSetConfig;
@@ -118,6 +118,11 @@ pub(super) fn payload_tls_config(node: ConfigNode) -> Result<PayloadTlsConfig, S
         retention_max_bytes_per_trace: node
             .required_positive_u64("retention_max_bytes_per_trace")?,
         redaction_policy: node.required_parsed::<PayloadRedactionPolicy>("redaction_policy")?,
+        sync_runtime_library_path: node
+            .required_parsed::<PayloadTlsSyncRuntimeLibraryPath>("sync_runtime_library_path")?,
+        sync_event_socket_path: node.required_path_buf("sync_event_socket_path")?,
+        sync_socket_mode: node.required_octal("sync_socket_mode_octal")?,
+        sync_match_limit: node.required_positive_u32("sync_match_limit")?,
     })
 }
 

@@ -2,6 +2,7 @@
 name = "collector_binding"
 version = "0.1.0"
 edition = "2024"
+license = "MulanPSL-2.0"
 
 [dependencies]
 collector_capability = { path = "../capability" }
