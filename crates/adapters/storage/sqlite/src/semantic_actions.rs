@@ -304,6 +304,8 @@ fn action_from_row(row: &Row<'_>) -> Result<SemanticAction, rusqlite::Error> {
                 .get::<_, Option<String>>("process_pid_namespace")?
                 .map(NamespaceIdentity::new),
             generation: row.get("process_generation")?,
+            start_unix_seconds: None,
+            start_unix_millis: None,
         },
         status: decode_status(row.get::<_, String>("status")?)?,
         completeness: decode_completeness(row.get::<_, String>("completeness")?)?,

@@ -24,6 +24,20 @@ struct ProcStatRecord {
     pid: u32,
     ppid: u32,
     start_time_ticks: u64,
+    start_unix_seconds: Option<u64>,
+}
+
+// CLK_TCK is typically 100 on Linux
+pub const CLK_TCK: u64 = 100;
+
+pub fn read_boot_time() -> Option<u64> {
+    let content = std::fs::read_to_string("/proc/stat").ok()?;
+    for line in content.lines() {
+        if let Some(value) = line.strip_prefix("btime ") {
+            return value.trim().parse::<u64>().ok();
+        }
+    }
+    None
 }
 
 pub struct ProcfsIdentityReader;
@@ -32,10 +46,13 @@ impl ProcessIdentityReader for ProcfsIdentityReader {
     fn read_identity(&self, pid: u32) -> Result<ProcessIdentity, IdentityLookupError> {
         let stat = read_stat(pid)?;
         let pid_namespace = read_pid_namespace(pid);
-        Ok(
+        let mut identity =
             ProcessIdentity::new(stat.pid, stat.start_time_ticks, stat.start_time_ticks)
-                .with_namespace(pid_namespace),
-        )
+                .with_namespace(pid_namespace);
+        if let Some(start_unix) = stat.start_unix_seconds {
+            identity = identity.with_start_unix(start_unix);
+        }
+        Ok(identity)
     }
 }
 
@@ -63,19 +80,26 @@ impl ProcessTreeSnapshotter for ProcfsTreeSnapshotter {
             let Some(stat) = stats.get(&pid) else {
                 continue;
             };
-            let identity =
+            let mut identity =
                 ProcessIdentity::new(stat.pid, stat.start_time_ticks, stat.start_time_ticks)
                     .with_namespace(read_pid_namespace(stat.pid));
+            if let Some(start_unix) = stat.start_unix_seconds {
+                identity = identity.with_start_unix(start_unix);
+            }
             let parent = if stat.pid == root.pid {
                 None
             } else {
-                stats.get(&stat.ppid).map(|parent| {
-                    ProcessIdentity::new(
-                        parent.pid,
-                        parent.start_time_ticks,
-                        parent.start_time_ticks,
+                stats.get(&stat.ppid).map(|parent_stat| {
+                    let mut parent_identity = ProcessIdentity::new(
+                        parent_stat.pid,
+                        parent_stat.start_time_ticks,
+                        parent_stat.start_time_ticks,
                     )
-                    .with_namespace(read_pid_namespace(parent.pid))
+                    .with_namespace(read_pid_namespace(parent_stat.pid));
+                    if let Some(start_unix) = parent_stat.start_unix_seconds {
+                        parent_identity = parent_identity.with_start_unix(start_unix);
+                    }
+                    parent_identity
                 })
             };
             processes.push(ProcessSnapshot {
@@ -165,11 +189,29 @@ fn read_stat(pid: u32) -> Result<ProcStatRecord, IdentityLookupError> {
             pid,
             detail: "missing start_time_ticks".to_string(),
         })?;
+    
+    // Calculate start_unix_seconds from boot_time + ticks
+    let start_unix_seconds = read_boot_time().map(|boot_time| {
+        boot_time + (start_time_ticks / CLK_TCK)
+    });
+    
     Ok(ProcStatRecord {
         pid,
         ppid,
         start_time_ticks,
+        start_unix_seconds,
     })
+}
+
+pub fn read_process_start_unix(pid: u32) -> Option<u64> {
+    let boot_time = read_boot_time()?;
+    let path = format!("/proc/{pid}/stat");
+    let raw = std::fs::read_to_string(path).ok()?;
+    let close_paren = raw.rfind(')')?;
+    let remainder = raw.get(close_paren + 2..)?;
+    let fields = remainder.split_whitespace().collect::<Vec<_>>();
+    let start_time_ticks = fields.get(19)?.parse::<u64>().ok()?;
+    Some(boot_time + (start_time_ticks / CLK_TCK))
 }
 
 fn read_pid_namespace(pid: u32) -> NamespaceIdentity {

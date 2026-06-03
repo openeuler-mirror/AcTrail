@@ -1506,8 +1506,11 @@ dependencies = [
 name = "web"
 version = "0.1.0"
 dependencies = [
+ "json_graph_export",
  "model_core",
  "semantic_action",
+ "serde",
+ "serde_json",
  "sqlite_storage",
  "store_read_contract",
  "store_snapshot_contract",

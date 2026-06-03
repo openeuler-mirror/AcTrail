@@ -22,6 +22,8 @@ pub struct ProcessIdentity {
     pub pid: u32,
     pub task_id: Option<u32>,
     pub start_time_ticks: u64,
+    pub start_unix_seconds: Option<u64>,
+    pub start_unix_millis: Option<u64>,
     pub pid_namespace: Option<NamespaceIdentity>,
     pub generation: u64,
 }
@@ -32,6 +34,8 @@ impl ProcessIdentity {
             pid,
             task_id: None,
             start_time_ticks,
+            start_unix_seconds: None,
+            start_unix_millis: None,
             pid_namespace: None,
             generation,
         }
@@ -44,6 +48,17 @@ impl ProcessIdentity {
 
     pub fn with_namespace(mut self, pid_namespace: NamespaceIdentity) -> Self {
         self.pid_namespace = Some(pid_namespace);
+        self
+    }
+
+    pub fn with_start_unix(mut self, start_unix: u64) -> Self {
+        self.start_unix_seconds = Some(start_unix);
+        self
+    }
+
+    pub fn with_start_unix_millis(mut self, start_unix_millis: u64) -> Self {
+        self.start_unix_seconds = Some(start_unix_millis / 1000);
+        self.start_unix_millis = Some(start_unix_millis);
         self
     }
 }

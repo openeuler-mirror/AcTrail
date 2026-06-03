@@ -2,8 +2,39 @@
 
 use std::collections::BTreeMap;
 
+const CLK_TCK: u64 = 100;
+
+fn read_boot_time() -> Option<u64> {
+    let content = std::fs::read_to_string("/proc/stat").ok()?;
+    for line in content.lines() {
+        if let Some(value) = line.strip_prefix("btime ") {
+            return value.trim().parse::<u64>().ok();
+        }
+    }
+    None
+}
+
 pub fn lifecycle_metadata(pid: u32) -> BTreeMap<String, String> {
     let mut metadata = BTreeMap::new();
+    
+    // Record start_unix_seconds from /proc/<pid>/stat
+    if let (Some(boot_time), Ok(stat)) = (
+        read_boot_time(),
+        std::fs::read_to_string(format!("/proc/{pid}/stat"))
+    ) {
+        if let Some(close_paren) = stat.rfind(')') {
+            if let Some(remainder) = stat.get(close_paren + 2..) {
+                let fields: Vec<&str> = remainder.split_whitespace().collect();
+                if let Some(ticks_str) = fields.get(19) {
+                    if let Ok(ticks) = ticks_str.parse::<u64>() {
+                        let start_unix = boot_time + (ticks / CLK_TCK);
+                        metadata.insert("start_unix_seconds".to_string(), start_unix.to_string());
+                    }
+                }
+            }
+        }
+    }
+    
     // Live lifecycle executable comes from explicit exec observations, not racy /proc/<pid>/exe.
     insert_if_present(&mut metadata, "cwd", read_link(pid, "cwd"));
     insert_if_present(&mut metadata, "comm", read_trimmed(pid, "comm"));

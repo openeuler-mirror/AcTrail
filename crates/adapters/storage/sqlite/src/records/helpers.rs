@@ -61,12 +61,12 @@ pub fn decode_map(raw: &str) -> BTreeMap<String, String> {
 pub fn encode_time(value: SystemTime) -> i64 {
     value
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs() as i64)
+        .map(|duration| duration.as_millis() as i64)  // 存储毫秒精度
         .unwrap_or_default()
 }
 
 pub fn decode_time(value: i64) -> SystemTime {
-    UNIX_EPOCH + Duration::from_secs(value as u64)
+    UNIX_EPOCH + Duration::from_millis(value as u64)  // 恢复毫秒精度
 }
 
 pub fn bool_to_i64(value: bool) -> i64 {

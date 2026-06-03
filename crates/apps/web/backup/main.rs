@@ -1,6 +1,6 @@
 fn main() {
     if let Err(error) = run_from_env() {
-        eprintln!("Error: {error}");
+        eprintln!("{error}");
         std::process::exit(1);
     }
 }
