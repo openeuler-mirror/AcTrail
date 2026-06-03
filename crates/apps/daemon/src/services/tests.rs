@@ -1,6 +1,7 @@
 //! Integration-oriented daemon service tests.
 
 use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 use config_core::capture_profile::CaptureProfile;
@@ -8,19 +9,25 @@ use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
     EnforcementBackend, EnforcementConfig, EnforcementDecision, EnforcementMarkStrategy,
     EnforcementScope, LiveOtelExportConfig, MemlockRlimit, OPERATOR_CONFIG_TEMPLATE,
-    OperatorConfig, PayloadRedactionPolicy, PayloadSocketCaptureBackend, PayloadSocketConfig,
-    PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadTlsCaptureBackend, PayloadTlsConfig,
-    PayloadTlsLibrary, PayloadTlsLibraryPath, PayloadTlsResolver, PayloadTlsSeccompSyscall,
-    PayloadTlsSource, ProcessSeccompConfig, ProcessSeccompSyscall, ResourceMetricsConfig,
-    SeccompNotifyConfig, SseDataPolicy,
+    OperatorConfig, PayloadConfig, ProcessSeccompConfig, ProcessSeccompSyscall,
+    ResourceMetricsConfig, SeccompNotifyConfig, SseDataPolicy,
 };
 use config_core::trace_snapshot::CaptureProfileSnapshot;
 use control_contract::command::{ControlCommand, ListTracesCommand, TrackAddCommand};
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use model_core::event::EventPayload;
 use model_core::ids::{CollectorName, ProfileName, RequestId, TraceName};
+use model_core::payload::{
+    PayloadContentState, PayloadDirection, PayloadOperationCompletionState, PayloadSourceBoundary,
+    PayloadStreamKey, PayloadTruncationState,
+};
 use model_core::process::ProcessIdentity;
+use model_core::trace::TraceHealth;
+use payload_event::RawPayloadSegment;
+use sqlite_storage::SqliteStorage;
+use store_read_contract::diagnostics::DiagnosticReadStore;
 use store_read_contract::events::EventReadStore;
+use store_read_contract::payloads::{PayloadReadStore, PayloadSegmentQuery};
 use store_write_contract::memberships::MembershipWriteStore;
 use store_write_contract::traces::TraceWriteStore;
 use trace_runtime::commands::TrackTraceRequest;
@@ -41,6 +48,8 @@ const RESOURCE_METRICS_COLLECTOR: &str = "resource-sampler";
 const TEST_HTTP_BUFFER_BYTES: u64 = 4096;
 const TEST_HTTP2_MAX_FRAME_BYTES: u64 = 16384;
 const TEST_HTTP2_PREVIEW_BYTES: u64 = 16;
+const TEST_SYNC_CHILD_PID_OFFSET: u32 = 10_000;
+static TEST_SOCKET_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[test]
 fn attach_main_path_runs() {
@@ -54,7 +63,8 @@ fn attach_main_path_runs() {
     let wiring = build_runtime_wiring(
         &storage_path,
         profiles,
-        ebpf_config(true, false),
+        ebpf_config(true),
+        payload_config(false),
         DiagnosticLogLevel::Info,
         seccomp_notify_disabled(),
         process_seccomp_disabled(),
@@ -94,6 +104,67 @@ fn attach_main_path_runs() {
 }
 
 #[test]
+fn launch_mode_suppresses_wrapper_bootstrap_gap() {
+    let storage_path = std::env::temp_dir().join(format!(
+        "actrail-launch-bootstrap-gap-test-{}.sqlite",
+        std::process::id()
+    ));
+    let mut profiles = DaemonProfileRegistry::new();
+    profiles.insert_capture_profile(CaptureProfile::new(
+        ProfileName::new("snapshot"),
+        Vec::new(),
+    ));
+    let wiring = build_runtime_wiring(
+        &storage_path,
+        profiles,
+        ebpf_config(false),
+        payload_config(false),
+        DiagnosticLogLevel::Info,
+        seccomp_notify_disabled(),
+        process_seccomp_disabled(),
+        agent_invocation_disabled(),
+        application_protocol_disabled(),
+        resource_metrics_disabled(),
+        live_otel_export_disabled(),
+        enforcement_disabled(),
+    )
+    .unwrap();
+    let mut host = DaemonServiceHost::new(wiring);
+
+    let reply = host
+        .handle(ControlCommand::TrackAdd(TrackAddCommand {
+            request_id: RequestId::new(1),
+            root_pid: std::process::id(),
+            display_name: TraceName::new("launch-wrapper"),
+            profile_name: ProfileName::new("snapshot"),
+            tags: BTreeSet::new(),
+            launch_mode: true,
+        }))
+        .unwrap();
+    let control_contract::reply::ControlReply::TrackAdded(reply) = reply else {
+        panic!("unexpected reply");
+    };
+
+    let list = host
+        .handle(ControlCommand::ListTraces(ListTracesCommand {
+            request_id: RequestId::new(2),
+            selector: None,
+        }))
+        .unwrap();
+    let control_contract::reply::ControlReply::TraceList(items) = list else {
+        panic!("unexpected list reply");
+    };
+    let trace = items
+        .iter()
+        .find(|item| item.trace_id == reply.trace_id)
+        .expect("launch trace");
+    assert_eq!(trace.health, TraceHealth::Clean);
+
+    let storage = SqliteStorage::open(&storage_path).unwrap();
+    assert!(storage.list_diagnostics(reply.trace_id).unwrap().is_empty());
+}
+
+#[test]
 fn resource_metrics_sampler_persists_procfs_samples() {
     let storage_path = std::env::temp_dir().join(format!(
         "actrail-resource-metrics-test-{}.sqlite",
@@ -103,7 +174,8 @@ fn resource_metrics_sampler_persists_procfs_samples() {
     let mut wiring = build_runtime_wiring(
         &storage_path,
         profiles,
-        ebpf_config(false, false),
+        ebpf_config(false),
+        payload_config(false),
         DiagnosticLogLevel::Info,
         seccomp_notify_disabled(),
         process_seccomp_disabled(),
@@ -167,6 +239,102 @@ fn resource_metrics_sampler_persists_procfs_samples() {
     );
 }
 
+#[test]
+fn tls_sync_payload_persists_without_child_membership() {
+    let storage_path = std::env::temp_dir().join(format!(
+        "actrail-tls-sync-membership-test-{}.sqlite",
+        std::process::id()
+    ));
+    let profiles = DaemonProfileRegistry::new();
+    let mut wiring = build_runtime_wiring(
+        &storage_path,
+        profiles,
+        ebpf_config(false),
+        payload_config(true),
+        DiagnosticLogLevel::Info,
+        seccomp_notify_disabled(),
+        process_seccomp_disabled(),
+        agent_invocation_disabled(),
+        application_protocol_disabled(),
+        resource_metrics_disabled(),
+        live_otel_export_disabled(),
+        enforcement_disabled(),
+    )
+    .unwrap();
+
+    let trace_id = wiring.trace_runtime.reserve_trace_id();
+    let root = ProcessIdentity::new(std::process::id(), 1, 1);
+    create_active_trace(
+        &mut wiring,
+        trace_id,
+        root,
+        ProfileName::new("tls-sync"),
+        TraceName::new("tls-sync"),
+        vec![CapabilityRequest::new(
+            Capability::TlsPlaintextPayload,
+            RequestMode::Required,
+        )],
+        "tls-sync",
+        vec![Capability::TlsPlaintextPayload],
+    );
+    let sync_process = ProcessIdentity::new(sync_child_pid(), 0, 0);
+    wiring
+        .attach_service
+        .process_payload_segment_impl(
+            &wiring.trace_runtime,
+            RawPayloadSegment {
+                trace_id,
+                observed_at: SystemTime::UNIX_EPOCH,
+                process: sync_process.clone(),
+                source_boundary: PayloadSourceBoundary::TlsUserSpace,
+                content_state: PayloadContentState::Plaintext,
+                direction: PayloadDirection::Outbound,
+                stream_key: PayloadStreamKey::new("tls-sync-test"),
+                sequence: 1,
+                original_size: 5,
+                captured_size: 5,
+                operation_id: 1,
+                operation_offset: 0,
+                operation_original_size: 5,
+                operation_captured_size: 5,
+                operation_completion_state: PayloadOperationCompletionState::Success,
+                truncation: PayloadTruncationState::Complete,
+                library: "openssl".to_string(),
+                symbol: "SSL_write".to_string(),
+                protocol_hint: None,
+                bytes: b"hello".to_vec(),
+            },
+        )
+        .unwrap();
+
+    let segments = wiring
+        .attach_service
+        .storage
+        .list_payload_segments(
+            trace_id,
+            PayloadSegmentQuery {
+                segment_id: None,
+                direction: None,
+                limit: None,
+                include_bytes: true,
+            },
+        )
+        .unwrap();
+    assert_eq!(segments.len(), 1);
+    assert_eq!(segments[0].process, sync_process);
+    assert_eq!(
+        segments[0].source_boundary,
+        PayloadSourceBoundary::TlsUserSpace
+    );
+    assert_eq!(segments[0].bytes, b"hello");
+}
+
+fn sync_child_pid() -> u32 {
+    std::process::id()
+        .checked_add(TEST_SYNC_CHILD_PID_OFFSET)
+        .unwrap_or(TEST_SYNC_CHILD_PID_OFFSET)
+}
+
 fn create_active_trace(
     wiring: &mut crate::runtime_wiring::DaemonRuntimeWiring<super::attach::SqliteAttachService>,
     trace_id: model_core::ids::TraceId,
@@ -220,7 +388,7 @@ fn create_active_trace(
     }
 }
 
-fn ebpf_config(enabled: bool, payload_tls_enabled: bool) -> EbpfCollectorConfig {
+fn ebpf_config(enabled: bool) -> EbpfCollectorConfig {
     EbpfCollectorConfig {
         enabled,
         memlock_rlimit: MemlockRlimit::Inherit,
@@ -229,58 +397,20 @@ fn ebpf_config(enabled: bool, payload_tls_enabled: bool) -> EbpfCollectorConfig 
         event_ring_buffer_max_bytes: 4096,
         file_path_capture_enabled: false,
         file_path_max_bytes: 255,
-        payload_tls: PayloadTlsConfig {
-            enabled: payload_tls_enabled,
-            capture_backend: PayloadTlsCaptureBackend::SeccompUserRead,
-            source: PayloadTlsSource::SharedLibrary,
-            resolver: PayloadTlsResolver::OpensslSymbols,
-            library: PayloadTlsLibrary::Openssl,
-            library_path: PayloadTlsLibraryPath::Auto,
-            binary_path: config_core::daemon::DisabledOrPath::Disabled,
-            pattern_path: config_core::daemon::DisabledOrPath::Disabled,
-            max_segment_bytes: 4095,
-            max_operation_bytes: 131040,
-            ring_buffer_bytes: 4096,
-            pending_operation_max_entries: 128,
-            seccomp_syscalls: vec![
-                PayloadTlsSeccompSyscall::Write,
-                PayloadTlsSeccompSyscall::Writev,
-                PayloadTlsSeccompSyscall::Sendto,
-                PayloadTlsSeccompSyscall::Sendmsg,
-            ],
-            diagnostics_enabled: false,
-            retention_max_bytes_per_trace: 4096,
-            redaction_policy: PayloadRedactionPolicy::AuthorizationHeader,
-        },
-        payload_stdio: PayloadStdioConfig {
-            enabled: false,
-            capture_stdin: false,
-            capture_stdout: true,
-            capture_stderr: true,
-            max_segment_bytes: 4095,
-            ring_buffer_bytes: 4096,
-            pending_operation_max_entries: 128,
-            stream_state_max_entries: 128,
-            retention_max_bytes_per_trace: 4096,
-            redaction_policy: PayloadRedactionPolicy::AuthorizationHeader,
-        },
-        payload_socket: PayloadSocketConfig {
-            enabled: false,
-            capture_backend: PayloadSocketCaptureBackend::BpfCopySeccompFallback,
-            max_segment_bytes: 4095,
-            max_operation_bytes: 4096,
-            ring_buffer_bytes: 4096,
-            pending_operation_max_entries: 128,
-            stream_state_max_entries: 128,
-            retention_max_bytes_per_trace: 4096,
-            redaction_policy: PayloadRedactionPolicy::AuthorizationHeader,
-            http_sniff_max_bytes: 1024,
-            seccomp_syscalls: vec![
-                PayloadSocketSeccompSyscall::Write,
-                PayloadSocketSeccompSyscall::Sendto,
-            ],
-        },
     }
+}
+
+fn payload_config(tls_enabled: bool) -> PayloadConfig {
+    let mut payload = OperatorConfig::parse(OPERATOR_CONFIG_TEMPLATE)
+        .expect("operator config template parses")
+        .payload_config;
+    payload.tls.enabled = tls_enabled;
+    payload.tls.sync_event_socket_path = std::env::temp_dir().join(format!(
+        "actrail-test-tls-sync-{}-{}.sock",
+        std::process::id(),
+        TEST_SOCKET_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    payload
 }
 
 fn seccomp_notify_disabled() -> SeccompNotifyConfig {

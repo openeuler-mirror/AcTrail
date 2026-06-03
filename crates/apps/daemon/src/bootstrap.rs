@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
-    EnforcementConfig, LiveOtelExportConfig, ProcessSeccompConfig, ResourceMetricsConfig,
-    SeccompNotifyConfig,
+    EnforcementConfig, LiveOtelExportConfig, PayloadConfig, ProcessSeccompConfig,
+    ResourceMetricsConfig, SeccompNotifyConfig,
 };
 use config_core::provider_rules::ProviderRuleSetConfig;
 use control_contract::reply::ControlError;
@@ -47,6 +47,7 @@ impl LocalDaemonServer {
         storage_path: &Path,
         profiles: DaemonProfileRegistry,
         ebpf_config: EbpfCollectorConfig,
+        payload_config: PayloadConfig,
         diagnostic_log_level: DiagnosticLogLevel,
         seccomp_notify: SeccompNotifyConfig,
         process_seccomp: ProcessSeccompConfig,
@@ -60,6 +61,7 @@ impl LocalDaemonServer {
             storage_path,
             profiles,
             ebpf_config,
+            payload_config,
             diagnostic_log_level,
             seccomp_notify,
             process_seccomp,
@@ -78,6 +80,7 @@ impl LocalDaemonServer {
         storage_path: &Path,
         profiles: DaemonProfileRegistry,
         ebpf_config: EbpfCollectorConfig,
+        payload_config: PayloadConfig,
         diagnostic_log_level: DiagnosticLogLevel,
         seccomp_notify: SeccompNotifyConfig,
         process_seccomp: ProcessSeccompConfig,
@@ -92,6 +95,7 @@ impl LocalDaemonServer {
             storage_path,
             profiles,
             ebpf_config,
+            payload_config,
             diagnostic_log_level,
             seccomp_notify,
             process_seccomp,

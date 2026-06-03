@@ -1,0 +1,9 @@
+[package]
+name = "tls_payload_sync"
+version = "0.1.0"
+edition = "2024"
+license = "MulanPSL-2.0"
+
+[dependencies]
+tls_payload_core = { path = "../../tools/tls_payload_core" }
+tls_probe_point_finder = { path = "../../tools/tls_probe_point_finder" }

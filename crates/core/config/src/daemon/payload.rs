@@ -69,6 +69,7 @@ impl FromStr for PayloadTlsResolver {
 pub enum PayloadTlsCaptureBackend {
     SeccompUserRead,
     BpfCopySeccompFallback,
+    TlsSync,
 }
 
 impl FromStr for PayloadTlsCaptureBackend {
@@ -78,6 +79,7 @@ impl FromStr for PayloadTlsCaptureBackend {
         match value {
             "seccomp-user-read" => Ok(Self::SeccompUserRead),
             "bpf-copy-seccomp-fallback" => Ok(Self::BpfCopySeccompFallback),
+            "tls-sync" => Ok(Self::TlsSync),
             other => Err(format!("unsupported payload TLS capture backend {other}")),
         }
     }
@@ -86,6 +88,10 @@ impl FromStr for PayloadTlsCaptureBackend {
 impl PayloadTlsCaptureBackend {
     pub const fn requires_seccomp_notify(self) -> bool {
         matches!(self, Self::SeccompUserRead | Self::BpfCopySeccompFallback)
+    }
+
+    pub const fn is_sync(self) -> bool {
+        matches!(self, Self::TlsSync)
     }
 }
 
@@ -178,6 +184,26 @@ impl FromStr for PayloadTlsLibraryPath {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PayloadTlsSyncRuntimeLibraryPath {
+    Auto,
+    Path(PathBuf),
+}
+
+impl FromStr for PayloadTlsSyncRuntimeLibraryPath {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value == "auto" {
+            return Ok(Self::Auto);
+        }
+        if value.is_empty() {
+            return Err("payload TLS sync runtime library path must not be empty".to_string());
+        }
+        Ok(Self::Path(PathBuf::from(value)))
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DisabledOrPath {
     Disabled,
     Path(PathBuf),
@@ -233,6 +259,10 @@ pub struct PayloadTlsConfig {
     pub diagnostics_enabled: bool,
     pub retention_max_bytes_per_trace: u64,
     pub redaction_policy: PayloadRedactionPolicy,
+    pub sync_runtime_library_path: PayloadTlsSyncRuntimeLibraryPath,
+    pub sync_event_socket_path: PathBuf,
+    pub sync_socket_mode: u32,
+    pub sync_match_limit: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -262,4 +292,11 @@ pub struct PayloadSocketConfig {
     pub redaction_policy: PayloadRedactionPolicy,
     pub http_sniff_max_bytes: u64,
     pub seccomp_syscalls: Vec<PayloadSocketSeccompSyscall>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PayloadConfig {
+    pub tls: PayloadTlsConfig,
+    pub stdio: PayloadStdioConfig,
+    pub socket: PayloadSocketConfig,
 }

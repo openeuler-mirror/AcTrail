@@ -77,3 +77,9 @@ Recommended reading order is `01 -> 05 -> 02 -> 06 -> 03 -> 04`: start with atta
 `actraild` is expected to run with the privileges required by the target Linux/WSL kernel for eBPF tracepoint/uprobe attachment. Fanotify enforcement additionally requires a kernel/environment that supports fanotify permission events. Required capability or environment failures are reported fail-fast instead of silently downgrading collection. Platform and transfer-test preflight checks are documented in [docs/platform-requirements.md](docs/platform-requirements.md). For a colored checklist on a target host, run `python3 docs/preflight/platform_preflight.py --run-smoke --color always`.
 
 AcTrail examples are config-driven and viewer-first: runtime constants live in config files, and verification should use `actrailviewer` or `actrailweb` instead of direct storage inspection.
+
+## License
+
+AcTrail is licensed under the Mulan Permissive Software License, Version 2. See [LICENSE](LICENSE).
+
+The eBPF C programs include Linux kernel verifier license-section strings such as `char LICENSE[] SEC("license") = "GPL";`. Those strings are kept for BPF loading/helper compatibility and do not replace the repository-level license declaration in `LICENSE`.

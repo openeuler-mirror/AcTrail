@@ -48,7 +48,7 @@ fn diagnostic_log_level_does_not_mutate_tls_diagnostics_config() {
     let config = OperatorConfig::parse(&raw).unwrap();
 
     assert_eq!(config.diagnostic_log_level, DiagnosticLogLevel::Debug);
-    assert!(!config.ebpf_config.payload_tls.diagnostics_enabled);
+    assert!(!config.payload_config.tls.diagnostics_enabled);
 }
 
 #[test]
@@ -119,6 +119,10 @@ fn application_protocol_config_parses_when_socket_payload_is_required() {
         )
         .replace("payload_socket_enabled = false", "payload_socket_enabled = true")
         .replace(
+            "seccomp_notify_enabled = false",
+            "seccomp_notify_enabled = true",
+        )
+        .replace(
             "application_protocol_enabled = false",
             "application_protocol_enabled = true",
         )
@@ -129,7 +133,7 @@ fn application_protocol_config_parses_when_socket_payload_is_required() {
 
     let config = OperatorConfig::parse(&raw).unwrap();
 
-    assert!(config.ebpf_config.payload_socket.enabled);
+    assert!(config.payload_config.socket.enabled);
 }
 
 #[test]
@@ -200,12 +204,18 @@ fn claude_code_executable_tls_example_parses() {
         .join("docs/examples/06.claude-code-tls-capture/operator.conf");
     let raw = std::fs::read_to_string(path)
         .expect("read claude code TLS example config")
+        .replace(
+            "__CLAUDE_TLS_REQUIRED_CAPABILITY__",
+            "required_capability = tls-plaintext-payload",
+        )
+        .replace("__CLAUDE_TLS_ENABLED__", "true")
         .replace("__CLAUDE_TLS_RESOLVER__", "openssl-symbols")
         .replace("__CLAUDE_TLS_LIBRARY__", "openssl")
         .replace("__CLAUDE_TLS_BINARY__", "/tmp/claude-tls-runtime")
-        .replace("__CLAUDE_TLS_PATTERN_PATH__", "disabled");
+        .replace("__CLAUDE_TLS_PATTERN_PATH__", "disabled")
+        .replace("__CLAUDE_SECCOMP_NOTIFY_ENABLED__", "true");
     let config = OperatorConfig::parse(&raw).expect("parse claude code TLS example config");
-    let tls = &config.ebpf_config.payload_tls;
+    let tls = &config.payload_config.tls;
 
     assert!(tls.enabled);
     assert_eq!(

@@ -34,10 +34,10 @@ pub use live_otel_export::LiveOtelExportConfig;
 pub use logging::DiagnosticLogLevel;
 pub use operator::{DEFAULT_OPERATOR_CONFIG_PATH, OPERATOR_CONFIG_TEMPLATE, OperatorConfig};
 pub use payload::{
-    DisabledOrPath, PayloadRedactionPolicy, PayloadSocketCaptureBackend, PayloadSocketConfig,
-    PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadTlsCaptureBackend, PayloadTlsConfig,
-    PayloadTlsLibrary, PayloadTlsLibraryPath, PayloadTlsResolver, PayloadTlsSeccompSyscall,
-    PayloadTlsSource,
+    DisabledOrPath, PayloadConfig, PayloadRedactionPolicy, PayloadSocketCaptureBackend,
+    PayloadSocketConfig, PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadTlsCaptureBackend,
+    PayloadTlsConfig, PayloadTlsLibrary, PayloadTlsLibraryPath, PayloadTlsResolver,
+    PayloadTlsSeccompSyscall, PayloadTlsSource, PayloadTlsSyncRuntimeLibraryPath,
 };
 pub use process::{ProcessSeccompConfig, ProcessSeccompSyscall, SeccompNotifyConfig};
 pub use resource::ResourceMetricsConfig;
@@ -83,9 +83,6 @@ pub struct EbpfCollectorConfig {
     pub event_ring_buffer_max_bytes: u32,
     pub file_path_capture_enabled: bool,
     pub file_path_max_bytes: u32,
-    pub payload_tls: PayloadTlsConfig,
-    pub payload_stdio: PayloadStdioConfig,
-    pub payload_socket: PayloadSocketConfig,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

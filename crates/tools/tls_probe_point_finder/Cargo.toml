@@ -1,0 +1,14 @@
+[package]
+name = "tls_probe_point_finder"
+version = "0.1.0"
+edition = "2024"
+license = "MulanPSL-2.0"
+
+[[bin]]
+name = "tls-probe-point-finder"
+path = "src/bin/tls-probe-point-finder.rs"
+
+[dependencies]
+anstyle = "1.0"
+clap = { version = "4.6", features = ["derive"] }
+rustc-demangle = "0.1"

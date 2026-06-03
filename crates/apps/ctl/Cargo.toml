@@ -2,6 +2,7 @@
 name = "ctl"
 version = "0.1.0"
 edition = "2024"
+license = "MulanPSL-2.0"
 
 [dependencies]
 clap = { version = "4.6", features = ["derive"] }
@@ -10,4 +11,6 @@ control_contract = { path = "../../contracts/control_plane" }
 libc = "0.2"
 linux_platform = { path = "../../core/linux_platform" }
 model_core = { path = "../../core/model" }
+tls_payload_sync = { path = "../../core/tls_payload_sync" }
+tls_probe_point_finder = { path = "../../tools/tls_probe_point_finder" }
 uds_control_client = { path = "../../adapters/control/uds/client" }

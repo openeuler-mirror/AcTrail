@@ -2,6 +2,7 @@
 name = "view"
 version = "0.1.0"
 edition = "2024"
+license = "MulanPSL-2.0"
 
 [dependencies]
 clap = { version = "4.6", features = ["derive"] }

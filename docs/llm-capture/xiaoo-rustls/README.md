@@ -115,6 +115,10 @@ payload_tls_resolver = rustls-symbol-map
 payload_tls_library = rustls
 payload_tls_capture_backend = seccomp-user-read
 payload_tls_redaction_policy = authorization-header
+payload_tls_sync_runtime_library_path = auto
+payload_tls_sync_event_socket_path = /tmp/actrail-tls-sync.sock
+payload_tls_sync_socket_mode_octal = 660
+payload_tls_sync_match_limit = 8
 application_protocol_http1_enabled = true
 ```
 

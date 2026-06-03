@@ -14,6 +14,8 @@ pub(crate) mod seccomp_notify;
 pub(crate) mod seccomp_socket;
 pub(crate) mod seccomp_tls;
 pub(crate) mod semantic_actions;
+#[path = "services/tls_sync/service.rs"]
+pub(crate) mod tls_sync;
 pub(crate) mod wiring;
 
 #[cfg(test)]

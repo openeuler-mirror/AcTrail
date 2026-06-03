@@ -241,6 +241,11 @@ impl ConfigNode {
         Ok(value)
     }
 
+    pub(super) fn required_octal(&self, key: &'static str) -> Result<u32, String> {
+        u32::from_str_radix(&self.required(key)?, 8)
+            .map_err(|error| format!("invalid {}: {error}", self.qualified_key(key)))
+    }
+
     pub(super) fn required_disabled_or_positive_u64(
         &self,
         key: &'static str,

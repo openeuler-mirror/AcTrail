@@ -25,7 +25,7 @@ use std::ffi::OsStr;
 use std::os::fd::RawFd;
 use std::rc::Rc;
 
-use config_core::daemon::EbpfCollectorConfig;
+use config_core::daemon::{EbpfCollectorConfig, PayloadConfig};
 use libbpf_rs::{
     Link, MapCore, MapFlags, MapHandle, Object, ObjectBuilder, RingBuffer, RingBufferBuilder,
 };
@@ -70,6 +70,7 @@ pub struct PidNamespace {
 
 pub struct EbpfProgramLoader {
     config: EbpfCollectorConfig,
+    payload: PayloadConfig,
 }
 
 pub struct EbpfRuntime {
@@ -89,12 +90,16 @@ pub struct EbpfRuntime {
 }
 
 impl EbpfProgramLoader {
-    pub fn new(config: EbpfCollectorConfig) -> Self {
-        Self { config }
+    pub fn new(config: EbpfCollectorConfig, payload: PayloadConfig) -> Self {
+        Self { config, payload }
     }
 
     pub fn config(&self) -> &EbpfCollectorConfig {
         &self.config
+    }
+
+    pub fn payload_config(&self) -> &PayloadConfig {
+        &self.payload
     }
 
     pub fn load_runtime(&self) -> Result<EbpfRuntime, LoaderError> {
@@ -106,10 +111,10 @@ impl EbpfProgramLoader {
         attach_plan: &AttachPlan,
     ) -> Result<EbpfRuntime, LoaderError> {
         file::validate_file_config(&self.config)?;
-        tls::validate_payload_config(&self.config)?;
-        stdio::validate_payload_config(&self.config)?;
-        socket::validate_payload_config(&self.config)?;
-        let effective_config = effective_config_for_attach_plan(&self.config, attach_plan);
+        tls::validate_payload_config(&self.payload.tls)?;
+        stdio::validate_payload_config(&self.payload.stdio)?;
+        socket::validate_payload_config(&self.payload.socket)?;
+        let effective_payload = effective_config_for_attach_plan(&self.payload, attach_plan);
         environment::ensure_tracefs_control()?;
         environment::apply_memlock_rlimit(self.config.memlock_rlimit)?;
         let object_bytes = include_bytes!(env!("ACTRAIL_EBPF_OBJECT"));
@@ -145,63 +150,59 @@ impl EbpfProgramLoader {
         resize_map(
             &mut open_object,
             "pending_tls_payload_ops",
-            effective_config.payload_tls.pending_operation_max_entries,
+            effective_payload.tls.pending_operation_max_entries,
         )?;
         resize_map(
             &mut open_object,
             "tls_pending_ns",
-            effective_config.payload_tls.pending_operation_max_entries,
+            effective_payload.tls.pending_operation_max_entries,
         )?;
         resize_map(
             &mut open_object,
             "pending_stdio_payload_ops",
-            effective_config.payload_stdio.pending_operation_max_entries,
+            effective_payload.stdio.pending_operation_max_entries,
         )?;
         resize_map(
             &mut open_object,
             "payload_stdio_stream_sequences",
-            effective_config.payload_stdio.stream_state_max_entries,
+            effective_payload.stdio.stream_state_max_entries,
         )?;
         resize_map(
             &mut open_object,
             "payload_socket_fds",
-            effective_config.payload_socket.stream_state_max_entries,
+            effective_payload.socket.stream_state_max_entries,
         )?;
         resize_map(
             &mut open_object,
             "payload_socket_process_generations",
-            effective_config.payload_socket.stream_state_max_entries,
+            effective_payload.socket.stream_state_max_entries,
         )?;
         resize_map(
             &mut open_object,
             "pending_socket_payload_ops",
-            effective_config
-                .payload_socket
-                .pending_operation_max_entries,
+            effective_payload.socket.pending_operation_max_entries,
         )?;
         resize_map(
             &mut open_object,
             "pending_socket_dup_ops",
-            effective_config
-                .payload_socket
-                .pending_operation_max_entries,
+            effective_payload.socket.pending_operation_max_entries,
         )?;
         resize_map(
             &mut open_object,
             "payload_socket_stream_sequences",
-            effective_config.payload_socket.stream_state_max_entries,
+            effective_payload.socket.stream_state_max_entries,
         )?;
         resize_map(
             &mut open_object,
             "events",
-            ring_buffer_max_bytes(&effective_config),
+            ring_buffer_max_bytes(&self.config, &effective_payload),
         )?;
         configure_program_autoload(&mut open_object, attach_plan)?;
 
         let object = open_object
             .load()
             .map_err(|error| LoaderError::new("load_object", error.to_string()))?;
-        EbpfRuntime::from_object(object, &effective_config, attach_plan)
+        EbpfRuntime::from_object(object, &self.config, &effective_payload, attach_plan)
     }
 }
 
@@ -209,85 +210,26 @@ impl EbpfRuntime {
     fn from_object(
         mut object: Object,
         config: &EbpfCollectorConfig,
+        payload: &PayloadConfig,
         attach_plan: &AttachPlan,
     ) -> Result<Self, LoaderError> {
-        let tracked_traces = object
-            .maps()
-            .find(|map| map.name() == OsStr::new("tracked_traces"))
-            .ok_or_else(|| LoaderError::new("tracked_map", "tracked_traces map is missing"))
-            .and_then(|map| {
-                MapHandle::try_from(&map)
-                    .map_err(|error| LoaderError::new("tracked_map", error.to_string()))
-            })?;
-
-        let process_generations = object
-            .maps()
-            .find(|map| map.name() == OsStr::new("process_generations"))
-            .ok_or_else(|| {
-                LoaderError::new(
-                    "process_generation_map",
-                    "process_generations map is missing",
-                )
-            })
-            .and_then(|map| {
-                MapHandle::try_from(&map)
-                    .map_err(|error| LoaderError::new("process_generation_map", error.to_string()))
-            })?;
-
-        let pid_namespace = object
-            .maps()
-            .find(|map| map.name() == OsStr::new("pid_namespace"))
-            .ok_or_else(|| LoaderError::new("pid_namespace_map", "pid_namespace map is missing"))
-            .and_then(|map| {
-                MapHandle::try_from(&map)
-                    .map_err(|error| LoaderError::new("pid_namespace_map", error.to_string()))
-            })?;
-
-        let pending_tls_payload_ops = object
-            .maps()
-            .find(|map| map.name() == OsStr::new("pending_tls_payload_ops"))
-            .ok_or_else(|| {
-                LoaderError::new(
-                    "pending_tls_payload_ops",
-                    "pending_tls_payload_ops map is missing",
-                )
-            })
-            .and_then(|map| {
-                MapHandle::try_from(&map)
-                    .map_err(|error| LoaderError::new("pending_tls_payload_ops", error.to_string()))
-            })?;
-
-        let pending_tls_payload_ops_by_namespace = object
-            .maps()
-            .find(|map| map.name() == OsStr::new("tls_pending_ns"))
-            .ok_or_else(|| LoaderError::new("tls_pending_ns", "tls_pending_ns map is missing"))
-            .and_then(|map| {
-                MapHandle::try_from(&map)
-                    .map_err(|error| LoaderError::new("tls_pending_ns", error.to_string()))
-            })?;
-
-        let payload_tls_diagnostics = object
-            .maps()
-            .find(|map| map.name() == OsStr::new("payload_tls_diagnostics"))
-            .ok_or_else(|| {
-                LoaderError::new(
-                    "payload_tls_diagnostics",
-                    "payload_tls_diagnostics map is missing",
-                )
-            })
-            .and_then(|map| {
-                MapHandle::try_from(&map)
-                    .map_err(|error| LoaderError::new("payload_tls_diagnostics", error.to_string()))
-            })?;
-
-        let events_map = object
-            .maps()
-            .find(|map| map.name() == OsStr::new("events"))
-            .ok_or_else(|| LoaderError::new("ring_buffer", "events ring buffer map is missing"))
-            .and_then(|map| {
-                MapHandle::try_from(&map)
-                    .map_err(|error| LoaderError::new("ring_buffer", error.to_string()))
-            })?;
+        let tracked_traces = map_handle(&object, "tracked_traces", "tracked_map")?;
+        let process_generations =
+            map_handle(&object, "process_generations", "process_generation_map")?;
+        let pid_namespace = map_handle(&object, "pid_namespace", "pid_namespace_map")?;
+        let pending_tls_payload_ops = map_handle(
+            &object,
+            "pending_tls_payload_ops",
+            "pending_tls_payload_ops",
+        )?;
+        let pending_tls_payload_ops_by_namespace =
+            map_handle(&object, "tls_pending_ns", "tls_pending_ns")?;
+        let payload_tls_diagnostics = map_handle(
+            &object,
+            "payload_tls_diagnostics",
+            "payload_tls_diagnostics",
+        )?;
+        let events_map = map_handle(&object, "events", "ring_buffer")?;
 
         let events = Rc::new(RefCell::new(Vec::new()));
         let callback_events = Rc::clone(&events);
@@ -302,9 +244,9 @@ impl EbpfRuntime {
             .build()
             .map_err(|error| LoaderError::new("ring_buffer", error.to_string()))?;
         file::configure_file_config_map(&object, config)?;
-        tls::configure_payload_tls_map(&object, config)?;
-        stdio::configure_payload_stdio_map(&object, config)?;
-        socket::configure_payload_socket_map(&object, config)?;
+        tls::configure_payload_tls_map(&object, &payload.tls)?;
+        stdio::configure_payload_stdio_map(&object, &payload.stdio)?;
+        socket::configure_payload_socket_map(&object, &payload.socket)?;
 
         let mut links = Vec::new();
         let mut attached_programs = Vec::new();
@@ -334,7 +276,7 @@ impl EbpfRuntime {
                 attached_programs.push(program_name);
             }
         }
-        for (link, program_name) in tls::attach_payload_tls_programs(&mut object, config)? {
+        for (link, program_name) in tls::attach_payload_tls_programs(&mut object, &payload.tls)? {
             links.push(link);
             attached_programs.push(program_name);
         }
@@ -480,18 +422,32 @@ impl EbpfRuntime {
     }
 }
 
-fn ring_buffer_max_bytes(config: &EbpfCollectorConfig) -> u32 {
+fn ring_buffer_max_bytes(config: &EbpfCollectorConfig, payload: &PayloadConfig) -> u32 {
     let mut max_bytes = config.event_ring_buffer_max_bytes;
-    if config.payload_tls.enabled {
-        max_bytes = max_bytes.max(config.payload_tls.ring_buffer_bytes);
+    if payload.tls.enabled {
+        max_bytes = max_bytes.max(payload.tls.ring_buffer_bytes);
     }
-    if config.payload_stdio.enabled {
-        max_bytes = max_bytes.max(config.payload_stdio.ring_buffer_bytes);
+    if payload.stdio.enabled {
+        max_bytes = max_bytes.max(payload.stdio.ring_buffer_bytes);
     }
-    if config.payload_socket.enabled {
-        max_bytes = max_bytes.max(config.payload_socket.ring_buffer_bytes);
+    if payload.socket.enabled {
+        max_bytes = max_bytes.max(payload.socket.ring_buffer_bytes);
     }
     max_bytes
+}
+
+fn map_handle(
+    object: &Object,
+    map_name: &'static str,
+    stage: &'static str,
+) -> Result<MapHandle, LoaderError> {
+    object
+        .maps()
+        .find(|map| map.name() == OsStr::new(map_name))
+        .ok_or_else(|| LoaderError::new(stage, format!("{map_name} map is missing")))
+        .and_then(|map| {
+            MapHandle::try_from(&map).map_err(|error| LoaderError::new(stage, error.to_string()))
+        })
 }
 
 fn resize_map(

@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use config_core::daemon::EbpfCollectorConfig;
+use config_core::daemon::{EbpfCollectorConfig, PayloadConfig};
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 
 use super::LoaderError;
@@ -141,13 +141,17 @@ impl AttachPlan {
         }
     }
 
-    pub fn from_requests(requests: &[CapabilityRequest], config: &EbpfCollectorConfig) -> Self {
+    pub fn from_requests(
+        requests: &[CapabilityRequest],
+        config: &EbpfCollectorConfig,
+        payload: &PayloadConfig,
+    ) -> Self {
         let mut plan = Self::baseline();
         for request in requests {
             if request.mode == RequestMode::Disabled {
                 continue;
             }
-            if capability_configured_for_attach(&request.capability, config) {
+            if capability_configured_for_attach(&request.capability, payload) {
                 plan.capabilities.insert(request.capability.clone());
             }
         }
@@ -268,23 +272,23 @@ pub(super) fn configure_program_autoload(
 }
 
 pub(super) fn effective_config_for_attach_plan(
-    config: &EbpfCollectorConfig,
+    payload: &PayloadConfig,
     attach_plan: &AttachPlan,
-) -> EbpfCollectorConfig {
-    let mut effective = config.clone();
+) -> PayloadConfig {
+    let mut effective = payload.clone();
     if !attach_plan.contains(&Capability::TlsPlaintextPayload) {
-        effective.payload_tls.enabled = false;
+        effective.tls.enabled = false;
     }
     if !attach_plan.contains(&Capability::StdioChunk) {
-        effective.payload_stdio.enabled = false;
+        effective.stdio.enabled = false;
     }
     if !attach_plan.contains(&Capability::SocketPlaintextPayload) {
-        effective.payload_socket.enabled = false;
+        effective.socket.enabled = false;
     }
     effective
 }
 
-fn capability_configured_for_attach(capability: &Capability, config: &EbpfCollectorConfig) -> bool {
+fn capability_configured_for_attach(capability: &Capability, payload: &PayloadConfig) -> bool {
     match capability {
         Capability::ProcLifecycle
         | Capability::NetTransport
@@ -292,13 +296,15 @@ fn capability_configured_for_attach(capability: &Capability, config: &EbpfCollec
         | Capability::FsMmap
         | Capability::IpcPipeFifo
         | Capability::IpcUnixSocket => true,
-        Capability::TlsPlaintextPayload => config.payload_tls.enabled,
-        Capability::SocketPlaintextPayload => config.payload_socket.enabled,
+        Capability::TlsPlaintextPayload => {
+            payload.tls.enabled && !payload.tls.capture_backend.is_sync()
+        }
+        Capability::SocketPlaintextPayload => payload.socket.enabled,
         Capability::StdioChunk => {
-            config.payload_stdio.enabled
-                && (config.payload_stdio.capture_stdin
-                    || config.payload_stdio.capture_stdout
-                    || config.payload_stdio.capture_stderr)
+            payload.stdio.enabled
+                && (payload.stdio.capture_stdin
+                    || payload.stdio.capture_stdout
+                    || payload.stdio.capture_stderr)
         }
         _ => false,
     }

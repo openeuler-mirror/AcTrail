@@ -3,14 +3,14 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use config_core::daemon::{EbpfCollectorConfig, PayloadTlsLibraryPath};
+use config_core::daemon::{PayloadTlsConfig, PayloadTlsLibraryPath};
 
 use crate::loader::LoaderError;
 
 pub(super) fn resolve_openssl_library_path(
-    config: &EbpfCollectorConfig,
+    config: &PayloadTlsConfig,
 ) -> Result<PathBuf, LoaderError> {
-    match &config.payload_tls.library_path {
+    match &config.library_path {
         PayloadTlsLibraryPath::Path(path) => {
             if path.exists() {
                 Ok(path.clone())

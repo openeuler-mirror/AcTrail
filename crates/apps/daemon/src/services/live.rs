@@ -36,6 +36,7 @@ impl SqliteAttachService {
     ) -> Result<(), ControlError> {
         self.live_otel_export.check_health()?;
         self.drain_resource_metrics_impl(trace_runtime)?;
+        self.drain_tls_sync_events_impl(trace_runtime)?;
         if !self.collector_ready() || self.collector.stats().active_bindings == 0 {
             self.drain_seccomp_notifications_impl(trace_runtime)?;
             self.collector
@@ -96,6 +97,16 @@ impl SqliteAttachService {
         self.seccomp_tls.ingest_direct_captures(direct_captures)?;
         self.seccomp_tls.ingest_capture_requests(capture_requests)?;
         self.seccomp_tls.ingest_completions(completions)
+    }
+
+    fn drain_tls_sync_events_impl(
+        &mut self,
+        trace_runtime: &TraceRuntime,
+    ) -> Result<(), ControlError> {
+        for payload_segment in self.tls_sync.drain()? {
+            self.process_payload_segment_impl(trace_runtime, payload_segment)?;
+        }
+        Ok(())
     }
 
     fn persist_completed_seccomp_tls_operations_impl(
@@ -266,7 +277,15 @@ impl SqliteAttachService {
         self.collector
             .stop_tracking_process(root_identity.pid)
             .map_err(|error| ControlError::new(error.stage, error.message))?;
-        self.persist_trace_state(trace_runtime, trace_id)
+        self.persist_trace_state(trace_runtime, trace_id)?;
+        self.log_diagnostic(
+            DiagnosticLogLevel::Info,
+            format_args!(
+                "agent_launch closed trace_id={} pid={} generation={}",
+                trace_id, root_identity.pid, root_identity.generation
+            ),
+        );
+        Ok(())
     }
 
     pub(super) fn next_diagnostic_id(&mut self) -> Result<DiagnosticId, ControlError> {

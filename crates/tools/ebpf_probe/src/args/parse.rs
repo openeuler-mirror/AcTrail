@@ -20,8 +20,9 @@ use values::{
     required_payload_socket_capture_backend, required_payload_socket_seccomp_syscalls,
     required_payload_tls_capture_backend, required_payload_tls_library,
     required_payload_tls_library_path, required_payload_tls_resolver,
-    required_payload_tls_seccomp_syscalls, required_payload_tls_source, required_sse_data_policy,
-    required_u32, required_u64,
+    required_payload_tls_seccomp_syscalls, required_payload_tls_source,
+    required_payload_tls_sync_runtime_library_path, required_sse_data_policy, required_u32,
+    required_u64,
 };
 
 pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ProbeCommand, String> {
@@ -89,6 +90,19 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ProbeCommand
                     &flags,
                     "--payload-tls-redaction-policy",
                 )?,
+                sync_runtime_library_path: required_payload_tls_sync_runtime_library_path(
+                    &flags,
+                    "--payload-tls-sync-runtime-library-path",
+                )?,
+                sync_event_socket_path: required_path(
+                    &flags,
+                    "--payload-tls-sync-event-socket-path",
+                )?,
+                sync_socket_mode: required_octal_u32(
+                    &flags,
+                    "--payload-tls-sync-socket-mode-octal",
+                )?,
+                sync_match_limit: required_u32(&flags, "--payload-tls-sync-match-limit")?,
             },
             payload_stdio: PayloadStdioConfig {
                 enabled: required_bool(&flags, "--payload-stdio-enabled")?,

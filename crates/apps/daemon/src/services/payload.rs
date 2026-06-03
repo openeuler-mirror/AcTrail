@@ -48,7 +48,10 @@ impl SqliteAttachService {
                 None
             }
         });
-        let Some((matched_trace_id, membership)) = matched else {
+        let Some((matched_trace_id, process)) = matched
+            .map(|(trace_id, membership)| (trace_id, membership.identity))
+            .or_else(|| direct_tls_sync_process(trace_runtime, &raw))
+        else {
             self.log_payload_diagnostic(format_args!(
                 "payload_persist drop_membership_miss trace_id={} pid={} generation={} source={:?} operation_id={}",
                 raw.trace_id,
@@ -90,7 +93,6 @@ impl SqliteAttachService {
                 ),
             ));
         }
-        let process = membership.identity;
         let captured_len = bytes.len();
         let segment = PayloadSegment {
             segment_id: self.next_payload_segment_id()?,
@@ -231,6 +233,18 @@ impl SqliteAttachService {
     fn log_payload_diagnostic(&self, args: std::fmt::Arguments<'_>) {
         self.log_diagnostic(DiagnosticLogLevel::Debug, args);
     }
+}
+
+fn direct_tls_sync_process(
+    trace_runtime: &TraceRuntime,
+    raw: &RawPayloadSegment,
+) -> Option<(TraceId, ProcessIdentity)> {
+    if raw.source_boundary != PayloadSourceBoundary::TlsUserSpace {
+        return None;
+    }
+    trace_runtime
+        .get_trace(raw.trace_id)
+        .map(|_| (raw.trace_id, raw.process.clone()))
 }
 
 struct PayloadProcessingPolicy {

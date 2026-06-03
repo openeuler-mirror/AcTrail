@@ -22,7 +22,7 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use config_core::daemon::{
-    DisabledOrPath, EbpfCollectorConfig, PayloadTlsCaptureBackend, PayloadTlsLibrary,
+    DisabledOrPath, PayloadTlsCaptureBackend, PayloadTlsConfig, PayloadTlsLibrary,
     PayloadTlsLibraryPath, PayloadTlsResolver, PayloadTlsSource,
 };
 use libbpf_rs::{Link, MapCore, MapFlags, MapHandle, Object, UprobeOpts};
@@ -52,16 +52,12 @@ const TLS_LIBRARY_RUSTLS: u32 = 3;
 const TLS_BACKEND_SECCOMP_USER_READ: u32 = 1;
 const TLS_BACKEND_BPF_COPY_SECCOMP_FALLBACK: u32 = 2;
 
-pub fn validate_payload_config(config: &EbpfCollectorConfig) -> Result<(), LoaderError> {
-    if !config.payload_tls.enabled {
+pub fn validate_payload_config(config: &PayloadTlsConfig) -> Result<(), LoaderError> {
+    if !config.enabled {
         return Ok(());
     }
     validate_payload_backend_config(config)?;
-    match (
-        config.payload_tls.source,
-        config.payload_tls.resolver,
-        config.payload_tls.library,
-    ) {
+    match (config.source, config.resolver, config.library) {
         (
             PayloadTlsSource::SharedLibrary,
             PayloadTlsResolver::OpensslSymbols,
@@ -101,9 +97,9 @@ pub fn validate_payload_config(config: &EbpfCollectorConfig) -> Result<(), Loade
 
 pub fn configure_payload_tls_map(
     object: &Object,
-    config: &EbpfCollectorConfig,
+    config: &PayloadTlsConfig,
 ) -> Result<(), LoaderError> {
-    if !config.payload_tls.enabled {
+    if !config.enabled {
         return Ok(());
     }
     let map = object
@@ -117,18 +113,18 @@ pub fn configure_payload_tls_map(
     let key = 0_u32.to_ne_bytes();
     let mut value = Vec::with_capacity(std::mem::size_of::<u32>() * 4);
     value.extend_from_slice(&payload_tls_library_id(config)?.to_ne_bytes());
-    value.extend_from_slice(&payload_tls_backend_id(config).to_ne_bytes());
-    value.extend_from_slice(&config.payload_tls.max_segment_bytes.to_ne_bytes());
-    value.extend_from_slice(&(config.payload_tls.diagnostics_enabled as u32).to_ne_bytes());
+    value.extend_from_slice(&payload_tls_backend_id(config)?.to_ne_bytes());
+    value.extend_from_slice(&config.max_segment_bytes.to_ne_bytes());
+    value.extend_from_slice(&(config.diagnostics_enabled as u32).to_ne_bytes());
     map.update(&key, &value, MapFlags::ANY)
         .map_err(|error| LoaderError::new("payload_tls_config", error.to_string()))
 }
 
 pub fn attach_payload_tls_programs(
     object: &mut Object,
-    config: &EbpfCollectorConfig,
+    config: &PayloadTlsConfig,
 ) -> Result<Vec<(Link, String)>, LoaderError> {
-    if !config.payload_tls.enabled {
+    if !config.enabled {
         return Ok(Vec::new());
     }
     let attach_points = payload_tls_attach_points(config)?;
@@ -169,9 +165,9 @@ pub fn is_payload_tls_program(program_name: &str) -> bool {
     program_name.starts_with("handle_ssl_") || program_name.starts_with("handle_rustls_")
 }
 
-fn validate_disabled_executable_fields(config: &EbpfCollectorConfig) -> Result<(), LoaderError> {
-    if !matches!(config.payload_tls.binary_path, DisabledOrPath::Disabled)
-        || !matches!(config.payload_tls.pattern_path, DisabledOrPath::Disabled)
+fn validate_disabled_executable_fields(config: &PayloadTlsConfig) -> Result<(), LoaderError> {
+    if !matches!(config.binary_path, DisabledOrPath::Disabled)
+        || !matches!(config.pattern_path, DisabledOrPath::Disabled)
     {
         return Err(LoaderError::new(
             "payload_tls_config",
@@ -181,62 +177,61 @@ fn validate_disabled_executable_fields(config: &EbpfCollectorConfig) -> Result<(
     Ok(())
 }
 
-fn validate_payload_backend_config(config: &EbpfCollectorConfig) -> Result<(), LoaderError> {
-    match config.payload_tls.capture_backend {
+fn validate_payload_backend_config(config: &PayloadTlsConfig) -> Result<(), LoaderError> {
+    match config.capture_backend {
         PayloadTlsCaptureBackend::SeccompUserRead => Ok(()),
         PayloadTlsCaptureBackend::BpfCopySeccompFallback => {
-            if config.payload_tls.max_segment_bytes > TLS_PAYLOAD_DIRECT_COPY_MAX_BYTES {
+            if config.max_segment_bytes > TLS_PAYLOAD_DIRECT_COPY_MAX_BYTES {
                 return Err(LoaderError::new(
                     "payload_tls_config",
                     format!(
                         "payload_tls_max_segment_bytes {} exceeds BPF direct-copy ABI maximum {}",
-                        config.payload_tls.max_segment_bytes, TLS_PAYLOAD_DIRECT_COPY_MAX_BYTES
+                        config.max_segment_bytes, TLS_PAYLOAD_DIRECT_COPY_MAX_BYTES
                     ),
                 ));
             }
-            if config.payload_tls.ring_buffer_bytes < TLS_PAYLOAD_DIRECT_COPY_MIN_RING_BUFFER_BYTES
-            {
+            if config.ring_buffer_bytes < TLS_PAYLOAD_DIRECT_COPY_MIN_RING_BUFFER_BYTES {
                 return Err(LoaderError::new(
                     "payload_tls_config",
                     format!(
                         "payload_tls_ring_buffer_bytes {} is too small for bpf-copy-seccomp-fallback; minimum is {}",
-                        config.payload_tls.ring_buffer_bytes,
-                        TLS_PAYLOAD_DIRECT_COPY_MIN_RING_BUFFER_BYTES
+                        config.ring_buffer_bytes, TLS_PAYLOAD_DIRECT_COPY_MIN_RING_BUFFER_BYTES
                     ),
                 ));
             }
             Ok(())
         }
+        PayloadTlsCaptureBackend::TlsSync => Ok(()),
     }
 }
 
-fn validate_executable_symbols_config(config: &EbpfCollectorConfig) -> Result<(), LoaderError> {
+fn validate_executable_symbols_config(config: &PayloadTlsConfig) -> Result<(), LoaderError> {
     validate_executable_library_path(config)?;
-    if !matches!(config.payload_tls.pattern_path, DisabledOrPath::Disabled) {
+    if !matches!(config.pattern_path, DisabledOrPath::Disabled) {
         return Err(LoaderError::new(
             "payload_tls_pattern_path",
             "openssl-symbols resolver requires payload_tls_pattern_path=disabled",
         ));
     }
-    require_path(&config.payload_tls.binary_path, "payload_tls_binary_path").map(|_| ())
+    require_path(&config.binary_path, "payload_tls_binary_path").map(|_| ())
 }
 
-fn validate_executable_pattern_config(config: &EbpfCollectorConfig) -> Result<(), LoaderError> {
+fn validate_executable_pattern_config(config: &PayloadTlsConfig) -> Result<(), LoaderError> {
     validate_executable_library_path(config)?;
-    require_path(&config.payload_tls.binary_path, "payload_tls_binary_path")?;
-    require_path(&config.payload_tls.pattern_path, "payload_tls_pattern_path").map(|_| ())
+    require_path(&config.binary_path, "payload_tls_binary_path")?;
+    require_path(&config.pattern_path, "payload_tls_pattern_path").map(|_| ())
 }
 
 fn validate_executable_static_boringssl_config(
-    config: &EbpfCollectorConfig,
+    config: &PayloadTlsConfig,
 ) -> Result<(), LoaderError> {
     validate_executable_library_path(config)?;
-    require_path(&config.payload_tls.binary_path, "payload_tls_binary_path")?;
+    require_path(&config.binary_path, "payload_tls_binary_path")?;
     validate_disabled_pattern_path(config, "boringssl-static")
 }
 
-fn validate_executable_library_path(config: &EbpfCollectorConfig) -> Result<(), LoaderError> {
-    if matches!(config.payload_tls.library_path, PayloadTlsLibraryPath::Auto) {
+fn validate_executable_library_path(config: &PayloadTlsConfig) -> Result<(), LoaderError> {
+    if matches!(config.library_path, PayloadTlsLibraryPath::Auto) {
         return Ok(());
     }
     Err(LoaderError::new(
@@ -246,13 +241,9 @@ fn validate_executable_library_path(config: &EbpfCollectorConfig) -> Result<(), 
 }
 
 fn payload_tls_attach_points(
-    config: &EbpfCollectorConfig,
+    config: &PayloadTlsConfig,
 ) -> Result<Vec<TlsAttachPoint>, LoaderError> {
-    match (
-        config.payload_tls.source,
-        config.payload_tls.resolver,
-        config.payload_tls.library,
-    ) {
+    match (config.source, config.resolver, config.library) {
         (
             PayloadTlsSource::SharedLibrary,
             PayloadTlsResolver::OpensslSymbols,
@@ -277,7 +268,7 @@ fn payload_tls_attach_points(
             PayloadTlsLibrary::Openssl,
         ) => {
             let binary_path =
-                require_existing_path(&config.payload_tls.binary_path, "payload_tls_binary_path")?;
+                require_existing_path(&config.binary_path, "payload_tls_binary_path")?;
             let offsets = resolve_executable_symbol_offsets(
                 &binary_path,
                 &target_symbols(OPENSSL_UPROBE_TARGETS),
@@ -296,11 +287,9 @@ fn payload_tls_attach_points(
             PayloadTlsLibrary::Boringssl,
         ) => {
             let binary_path =
-                require_existing_path(&config.payload_tls.binary_path, "payload_tls_binary_path")?;
-            let pattern_path = require_existing_path(
-                &config.payload_tls.pattern_path,
-                "payload_tls_pattern_path",
-            )?;
+                require_existing_path(&config.binary_path, "payload_tls_binary_path")?;
+            let pattern_path =
+                require_existing_path(&config.pattern_path, "payload_tls_pattern_path")?;
             let offsets = find_pattern_offsets(
                 &binary_path,
                 &pattern_path,
@@ -319,11 +308,9 @@ fn payload_tls_attach_points(
             PayloadTlsLibrary::Boringssl,
         ) => {
             let binary_path =
-                require_existing_path(&config.payload_tls.binary_path, "payload_tls_binary_path")?;
-            let symbol_map_path = require_existing_path(
-                &config.payload_tls.pattern_path,
-                "payload_tls_pattern_path",
-            )?;
+                require_existing_path(&config.binary_path, "payload_tls_binary_path")?;
+            let symbol_map_path =
+                require_existing_path(&config.pattern_path, "payload_tls_pattern_path")?;
             let offsets = resolve_bun_static_boringssl_offsets(
                 &binary_path,
                 &symbol_map_path,
@@ -342,7 +329,7 @@ fn payload_tls_attach_points(
             PayloadTlsLibrary::Boringssl,
         ) => {
             let binary_path =
-                require_existing_path(&config.payload_tls.binary_path, "payload_tls_binary_path")?;
+                require_existing_path(&config.binary_path, "payload_tls_binary_path")?;
             let symbols = target_symbols(BORINGSSL_UPROBE_TARGETS);
             let offsets = resolve_static_boringssl_offsets(&binary_path, &symbols)?;
             offset_attach_points(
@@ -358,11 +345,9 @@ fn payload_tls_attach_points(
             PayloadTlsLibrary::Rustls,
         ) => {
             let binary_path =
-                require_existing_path(&config.payload_tls.binary_path, "payload_tls_binary_path")?;
-            let symbol_map_path = require_existing_path(
-                &config.payload_tls.pattern_path,
-                "payload_tls_pattern_path",
-            )?;
+                require_existing_path(&config.binary_path, "payload_tls_binary_path")?;
+            let symbol_map_path =
+                require_existing_path(&config.pattern_path, "payload_tls_pattern_path")?;
             let offsets = resolve_rustls_offsets(
                 &binary_path,
                 &symbol_map_path,
@@ -414,18 +399,24 @@ fn offset_attach_points(
         .collect()
 }
 
-fn payload_tls_library_id(config: &EbpfCollectorConfig) -> Result<u32, LoaderError> {
-    match config.payload_tls.library {
+fn payload_tls_library_id(config: &PayloadTlsConfig) -> Result<u32, LoaderError> {
+    match config.library {
         PayloadTlsLibrary::Openssl => Ok(TLS_LIBRARY_OPENSSL),
         PayloadTlsLibrary::Boringssl => Ok(TLS_LIBRARY_BORINGSSL),
         PayloadTlsLibrary::Rustls => Ok(TLS_LIBRARY_RUSTLS),
     }
 }
 
-fn payload_tls_backend_id(config: &EbpfCollectorConfig) -> u32 {
-    match config.payload_tls.capture_backend {
-        PayloadTlsCaptureBackend::SeccompUserRead => TLS_BACKEND_SECCOMP_USER_READ,
-        PayloadTlsCaptureBackend::BpfCopySeccompFallback => TLS_BACKEND_BPF_COPY_SECCOMP_FALLBACK,
+fn payload_tls_backend_id(config: &PayloadTlsConfig) -> Result<u32, LoaderError> {
+    match config.capture_backend {
+        PayloadTlsCaptureBackend::SeccompUserRead => Ok(TLS_BACKEND_SECCOMP_USER_READ),
+        PayloadTlsCaptureBackend::BpfCopySeccompFallback => {
+            Ok(TLS_BACKEND_BPF_COPY_SECCOMP_FALLBACK)
+        }
+        PayloadTlsCaptureBackend::TlsSync => Err(LoaderError::new(
+            "payload_tls_config",
+            "tls-sync backend is not an eBPF TLS backend",
+        )),
     }
 }
 
@@ -452,10 +443,10 @@ fn require_existing_path(
 }
 
 fn validate_disabled_pattern_path(
-    config: &EbpfCollectorConfig,
+    config: &PayloadTlsConfig,
     resolver: &str,
 ) -> Result<(), LoaderError> {
-    if matches!(config.payload_tls.pattern_path, DisabledOrPath::Disabled) {
+    if matches!(config.pattern_path, DisabledOrPath::Disabled) {
         Ok(())
     } else {
         Err(LoaderError::new(

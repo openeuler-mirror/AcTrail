@@ -14,7 +14,7 @@ use model_core::ids::ProfileName;
 use super::values::ConfigValues;
 use super::{
     AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
-    EnforcementConfig, LiveOtelExportConfig, PayloadSocketConfig, PayloadTlsConfig,
+    EnforcementConfig, LiveOtelExportConfig, PayloadConfig, PayloadSocketConfig, PayloadTlsConfig,
     ProcessSeccompConfig, ResourceMetricsConfig, SeccompNotifyConfig, SocketPermissions,
     SseDataPolicy,
 };
@@ -37,6 +37,7 @@ pub struct OperatorConfig {
     pub diagnostic_log_level: DiagnosticLogLevel,
     pub capture_profile: CaptureProfile,
     pub ebpf_config: EbpfCollectorConfig,
+    pub payload_config: PayloadConfig,
     pub seccomp_notify: SeccompNotifyConfig,
     pub process_seccomp: ProcessSeccompConfig,
     pub agent_invocation: AgentInvocationConfig,
@@ -70,6 +71,11 @@ impl OperatorConfig {
         let payload_tls = sections::payload_tls_config(values.node("payload_tls"))?;
         let payload_stdio = sections::payload_stdio_config(values.node("payload_stdio"))?;
         let payload_socket = sections::payload_socket_config(values.node("payload_socket"))?;
+        let payload_config = PayloadConfig {
+            tls: payload_tls,
+            stdio: payload_stdio,
+            socket: payload_socket,
+        };
         let seccomp_notify = sections::seccomp_notify_config(values.node("seccomp_notify"))?;
         let process_seccomp = sections::process_seccomp_config(values.node("process_seccomp"))?;
         let agent_invocation = sections::agent_invocation_config(values.node("agent_invocation"))?;
@@ -80,8 +86,8 @@ impl OperatorConfig {
         )?;
         validate_application_protocol_config(
             &application_protocol,
-            payload_tls.enabled,
-            payload_socket.enabled,
+            payload_config.tls.enabled,
+            payload_config.socket.enabled,
             &capabilities,
         )?;
         let resource_metrics = sections::resource_metrics_config(values.node("resource_metrics"))?;
@@ -90,8 +96,8 @@ impl OperatorConfig {
         validate_enforcement_config(&enforcement, &capabilities)?;
         validate_seccomp_config(
             &seccomp_notify,
-            &payload_tls,
-            &payload_socket,
+            &payload_config.tls,
+            &payload_config.socket,
             &process_seccomp,
             &capabilities,
         )?;
@@ -119,10 +125,8 @@ impl OperatorConfig {
                 event_ring_buffer_max_bytes: values.required_u32("event_ring_buffer_max_bytes")?,
                 file_path_capture_enabled: values.required_bool("file_path_capture_enabled")?,
                 file_path_max_bytes: values.required_positive_u32("file_path_max_bytes")?,
-                payload_tls,
-                payload_stdio,
-                payload_socket,
             },
+            payload_config,
             seccomp_notify,
             process_seccomp,
             agent_invocation,

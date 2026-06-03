@@ -18,7 +18,7 @@ use collector_binding::{
 };
 use collector_instance::{CollectorError, CollectorInstance, CollectorPollBatch};
 use collector_stats::CollectorStats;
-use config_core::daemon::EbpfCollectorConfig;
+use config_core::daemon::{EbpfCollectorConfig, PayloadConfig};
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use model_core::ids::{CollectorName, TraceId};
 use model_core::process::ProcessIdentity;
@@ -62,15 +62,15 @@ pub struct EbpfCollectorDebugSnapshot {
 }
 
 impl EbpfCollector {
-    pub fn new(config: EbpfCollectorConfig) -> Self {
+    pub fn new(config: EbpfCollectorConfig, payload_config: PayloadConfig) -> Self {
         let mut probe_result = probe();
         if !config.enabled {
             probe_result.reason_unavailable =
                 Some("collector disabled by configuration".to_string());
         }
         Self {
-            probe_result: probe_result_for_config(probe_result, &config),
-            loader: EbpfProgramLoader::new(config),
+            probe_result: probe_result_for_config(probe_result, &payload_config),
+            loader: EbpfProgramLoader::new(config, payload_config.clone()),
             bindings: BindingStateMap::default(),
             runtime: None,
             identity_reader: ProcfsIdentityReader,
@@ -198,7 +198,8 @@ impl EbpfCollector {
         &mut self,
         requests: &[CapabilityRequest],
     ) -> Result<(), CollectorError> {
-        let attach_plan = AttachPlan::from_requests(requests, self.loader.config());
+        let attach_plan =
+            AttachPlan::from_requests(requests, self.loader.config(), self.loader.payload_config());
         if self.idle_runtime_needs_replan(&attach_plan) {
             self.runtime = None;
             self.pid_namespace = None;
@@ -278,7 +279,7 @@ impl CollectorInstance for EbpfCollector {
             return Err(CollectorError::new("bind_trace", reason.clone()));
         }
         if let Some(unsupported_required) = request.requested_capabilities.iter().find(|request| {
-            !supported_required_capability(&request.capability, self.loader.config())
+            !supported_required_capability(&request.capability, self.loader.payload_config())
                 && request.mode == RequestMode::Required
         }) {
             return Err(CollectorError::new(
@@ -351,9 +352,9 @@ fn loader_error(error: LoaderError) -> CollectorError {
 
 fn probe_result_for_config(
     mut result: EbpfProbeResult,
-    config: &EbpfCollectorConfig,
+    payload: &PayloadConfig,
 ) -> EbpfProbeResult {
-    if config.payload_tls.enabled {
+    if payload.tls.enabled && !payload.tls.capture_backend.is_sync() {
         result
             .descriptor
             .capabilities
@@ -365,7 +366,7 @@ fn probe_result_for_config(
                 )],
             ));
     }
-    if stdio_payload_capability_configured(config) {
+    if stdio_payload_capability_configured(payload) {
         result
             .descriptor
             .capabilities
@@ -377,7 +378,7 @@ fn probe_result_for_config(
                 )],
             ));
     }
-    if config.payload_socket.enabled {
+    if payload.socket.enabled {
         result
             .descriptor
             .capabilities
@@ -392,7 +393,7 @@ fn probe_result_for_config(
     result
 }
 
-fn supported_required_capability(capability: &Capability, config: &EbpfCollectorConfig) -> bool {
+fn supported_required_capability(capability: &Capability, payload: &PayloadConfig) -> bool {
     matches!(
         capability,
         Capability::ProcLifecycle
@@ -401,16 +402,17 @@ fn supported_required_capability(capability: &Capability, config: &EbpfCollector
             | Capability::FsMmap
             | Capability::IpcPipeFifo
             | Capability::IpcUnixSocket
-    ) || (matches!(capability, Capability::TlsPlaintextPayload) && config.payload_tls.enabled)
-        || (matches!(capability, Capability::SocketPlaintextPayload)
-            && config.payload_socket.enabled)
+    ) || (matches!(capability, Capability::TlsPlaintextPayload)
+        && payload.tls.enabled
+        && !payload.tls.capture_backend.is_sync())
+        || (matches!(capability, Capability::SocketPlaintextPayload) && payload.socket.enabled)
         || (matches!(capability, Capability::StdioChunk)
-            && stdio_payload_capability_configured(config))
+            && stdio_payload_capability_configured(payload))
 }
 
-fn stdio_payload_capability_configured(config: &EbpfCollectorConfig) -> bool {
-    config.payload_stdio.enabled
-        && (config.payload_stdio.capture_stdin
-            || config.payload_stdio.capture_stdout
-            || config.payload_stdio.capture_stderr)
+fn stdio_payload_capability_configured(payload: &PayloadConfig) -> bool {
+    payload.stdio.enabled
+        && (payload.stdio.capture_stdin
+            || payload.stdio.capture_stdout
+            || payload.stdio.capture_stderr)
 }
