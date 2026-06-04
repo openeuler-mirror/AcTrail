@@ -65,6 +65,8 @@ where
             };
         };
 
+        let mut raw_event = raw_event;
+        raw_event.envelope.process = matched.process.clone();
         let mut event = normalize_event(raw_event, matched.trace_id, event_id);
         let policy_decision = apply_policy(&self.policy_evaluator, matched.trace_id, &event);
         let diagnostics = policy_diagnostic(
@@ -96,5 +98,78 @@ where
             events,
             diagnostics,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::time::SystemTime;
+
+    use collector_event::{RawCollectorEvent, RawEventEnvelope, RawObservationPayload};
+    use model_core::ids::{CollectorName, DiagnosticId, EventId, TraceId};
+    use model_core::process::ProcessIdentity;
+    use policy_evaluate_contract::decision::PolicyDecision;
+    use policy_evaluate_contract::evaluate::{PolicyEvaluator, PolicyInput};
+    use provider_evidence::EvidenceBundle;
+    use provider_label::{ProviderClassifier, ProviderLabelRecord};
+
+    use super::{IngestMatch, IngestPipeline};
+
+    const PID: u32 = 100;
+    const RAW_START_TICKS: u64 = 10;
+    const RAW_GENERATION: u64 = RAW_START_TICKS;
+    const MATCHED_START_TICKS: u64 = 20;
+    const MATCHED_GENERATION: u64 = MATCHED_START_TICKS;
+    const TRACE_ID: u64 = 7;
+    const EVENT_ID: u64 = 1;
+    const DIAGNOSTIC_ID: u64 = 1;
+
+    struct AllowPolicy;
+
+    impl PolicyEvaluator for AllowPolicy {
+        fn evaluate(&self, _input: &PolicyInput) -> PolicyDecision {
+            PolicyDecision::allow()
+        }
+    }
+
+    struct UnknownProvider;
+
+    impl ProviderClassifier for UnknownProvider {
+        fn classify(&self, _evidence: &EvidenceBundle) -> ProviderLabelRecord {
+            ProviderLabelRecord::unknown("unknown")
+        }
+    }
+
+    #[test]
+    fn matched_process_identity_is_used_for_persisted_event() {
+        let raw_process = ProcessIdentity::new(PID, RAW_START_TICKS, RAW_GENERATION);
+        let matched_process = ProcessIdentity::new(PID, MATCHED_START_TICKS, MATCHED_GENERATION);
+        let raw_event = RawCollectorEvent {
+            envelope: RawEventEnvelope {
+                observed_at: SystemTime::UNIX_EPOCH,
+                process: raw_process,
+                collector: CollectorName::new("process-seccomp"),
+            },
+            payload: RawObservationPayload::Process {
+                operation: "exec".to_string(),
+                parent: None,
+                metadata: BTreeMap::new(),
+            },
+        };
+
+        let outcome = IngestPipeline::new(AllowPolicy, &UnknownProvider).process(
+            raw_event,
+            Some(IngestMatch {
+                trace_id: TraceId::new(TRACE_ID),
+                process: matched_process.clone(),
+            }),
+            EventId::new(EVENT_ID),
+            None,
+            DiagnosticId::new(DIAGNOSTIC_ID),
+        );
+
+        assert_eq!(outcome.events.len(), 1);
+        assert_eq!(outcome.events[0].envelope.process, matched_process);
     }
 }

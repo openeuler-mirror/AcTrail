@@ -120,6 +120,28 @@ CREATE TABLE IF NOT EXISTS semantic_action_evidence (
     PRIMARY KEY (action_id, evidence_order)
 );
 
+CREATE TABLE IF NOT EXISTS semantic_action_links (
+    trace_id INTEGER NOT NULL,
+    parent_action_id TEXT NOT NULL,
+    child_action_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    confidence TEXT NOT NULL,
+    attributes TEXT NOT NULL,
+    PRIMARY KEY (trace_id, parent_action_id, child_action_id, role)
+);
+
+CREATE TABLE IF NOT EXISTS semantic_action_link_evidence (
+    trace_id INTEGER NOT NULL,
+    parent_action_id TEXT NOT NULL,
+    child_action_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    evidence_order INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    evidence_id INTEGER NOT NULL,
+    evidence_role TEXT NOT NULL,
+    PRIMARY KEY (trace_id, parent_action_id, child_action_id, role, evidence_order)
+);
+
 CREATE TABLE IF NOT EXISTS diagnostics (
     diagnostic_id INTEGER PRIMARY KEY,
     trace_id INTEGER,

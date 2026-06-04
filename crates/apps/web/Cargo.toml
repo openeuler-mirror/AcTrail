@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 model_core = { path = "../../core/model" }
+semantic_action = { path = "../../contracts/semantic_action" }
 sqlite_storage = { path = "../../adapters/storage/sqlite" }
 store_read_contract = { path = "../../contracts/store/read" }
 store_snapshot_contract = { path = "../../contracts/store/snapshot" }

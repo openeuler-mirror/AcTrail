@@ -1,5 +1,7 @@
 //! SQLite-backed API view rendering.
 
+#[path = "view/actions.rs"]
+mod actions;
 #[path = "view/events.rs"]
 mod events;
 #[path = "view/payloads.rs"]
@@ -114,6 +116,11 @@ pub fn trace_json(storage_path: &Path, trace_id: u64) -> Result<String, String> 
     );
     output.push('}');
     Ok(output)
+}
+
+pub fn action_tree_json(storage_path: &Path, trace_id: u64) -> Result<String, String> {
+    let mut storage = open_storage(storage_path)?;
+    actions::action_tree_json(&mut storage, TraceId::new(trace_id))
 }
 
 pub fn payload_json(storage_path: &Path, trace_id: u64, segment_id: u64) -> Result<String, String> {

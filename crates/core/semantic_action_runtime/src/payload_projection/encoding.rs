@@ -1,4 +1,4 @@
-//! Encoding helpers for snapshot semantic projection.
+//! Encoding helpers for payload semantic projection.
 
 pub(super) fn base64_encode(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

@@ -29,8 +29,9 @@ pub(super) fn write_otel_export(invocation: &ViewInvocation) -> Result<String, S
     )?;
 
     let snapshot = source::read_snapshot(&mut storage, Some(trace_id))?;
-    let actions = source::list_all_semantic_actions(&storage, &snapshot)?;
-    let json = render_otlp_json(&snapshot.trace, &actions)
+    let actions = source::list_semantic_actions(&storage, trace_id)?;
+    let links = source::list_semantic_action_links(&storage, trace_id)?;
+    let json = render_otlp_json(&snapshot.trace, &actions, &links)
         .map_err(|error| format!("export otel failed: {}: {}", error.stage, error.message))?;
     let output_path = invocation
         .output_path

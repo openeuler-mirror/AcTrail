@@ -187,6 +187,10 @@ fn route_trace_api(path: &str, storage_path: &Path) -> Result<Response, String> 
             .and_then(|trace_id| view::trace_json(storage_path, trace_id))
             .map(Response::json)
             .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
+        [trace_id, "action-tree"] => parse_u64(trace_id)
+            .and_then(|trace_id| view::action_tree_json(storage_path, trace_id))
+            .map(Response::json)
+            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
         [trace_id, "payloads", segment_id] => {
             let trace_id = parse_u64(trace_id);
             let segment_id = parse_u64(segment_id);

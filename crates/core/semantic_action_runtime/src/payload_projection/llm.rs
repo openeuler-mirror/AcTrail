@@ -6,27 +6,30 @@ use model_core::payload::{
     PayloadContentState, PayloadDirection, PayloadOperationCompletionState, PayloadSegment,
     PayloadSourceBoundary, PayloadTruncationState,
 };
-use model_core::process::ProcessIdentity;
 use semantic_action::{
     SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionStatus,
     SemanticEvidence, SemanticEvidenceKind,
 };
 use serde_json::Value;
-use store_snapshot_contract::view::SnapshotView;
 
-use crate::snapshot::encoding::base64_encode;
-use crate::snapshot::http::{HttpRequestParts, split_http1_request, split_request};
+use crate::payload_projection::encoding::base64_encode;
+use crate::payload_projection::http::{HttpRequestParts, split_http1_request, split_request};
 
 #[path = "llm/stream.rs"]
 mod stream;
 
-use stream::{IndexedPayloadStream, PayloadStreamGroupKey};
+pub(crate) use stream::PayloadStreamGroupKey;
+use stream::{IndexedPayloadStream, PayloadOperationKey};
 
-pub(super) fn project_llm_request_actions(snapshot: &SnapshotView) -> Vec<SemanticAction> {
-    let stream_projection = project_http1_stream_llm_request_actions(snapshot);
+pub(crate) fn project_llm_request_actions_from_segments(
+    trace_id: model_core::ids::TraceId,
+    segments: &[PayloadSegment],
+) -> Vec<SemanticAction> {
+    let stream_projection = project_http1_stream_llm_request_actions(segments);
     let mut actions = stream_projection.actions;
     actions.extend(project_operation_llm_request_actions(
-        snapshot,
+        trace_id,
+        segments,
         &stream_projection.consumed_segment_ids,
     ));
     actions
@@ -37,9 +40,9 @@ struct StreamProjection {
     consumed_segment_ids: BTreeSet<u64>,
 }
 
-fn project_http1_stream_llm_request_actions(snapshot: &SnapshotView) -> StreamProjection {
+fn project_http1_stream_llm_request_actions(segments: &[PayloadSegment]) -> StreamProjection {
     let mut groups: BTreeMap<PayloadStreamGroupKey, Vec<&PayloadSegment>> = BTreeMap::new();
-    for segment in &snapshot.payload_segments {
+    for segment in segments {
         if is_outbound_plaintext_http_candidate(segment) {
             groups
                 .entry(PayloadStreamGroupKey::from_segment(segment))
@@ -84,7 +87,7 @@ fn project_http1_stream_llm_request_actions(snapshot: &SnapshotView) -> StreamPr
             }
             actions.push(SemanticAction {
                 action_id: llm_stream_action_id(&key, message_start, first),
-                trace_id: snapshot.trace.trace_id,
+                trace_id: first.trace_id,
                 kind: SemanticActionKind::LlmRequest,
                 title: llm_title(&attributes),
                 start_time: first.observed_at,
@@ -106,11 +109,12 @@ fn project_http1_stream_llm_request_actions(snapshot: &SnapshotView) -> StreamPr
 }
 
 fn project_operation_llm_request_actions(
-    snapshot: &SnapshotView,
+    trace_id: model_core::ids::TraceId,
+    segments: &[PayloadSegment],
     consumed_segment_ids: &BTreeSet<u64>,
 ) -> Vec<SemanticAction> {
     let mut groups: BTreeMap<PayloadOperationKey, Vec<&PayloadSegment>> = BTreeMap::new();
-    for segment in &snapshot.payload_segments {
+    for segment in segments {
         if is_outbound_plaintext_http_candidate(segment)
             && !consumed_segment_ids.contains(&segment.segment_id.get())
         {
@@ -138,7 +142,7 @@ fn project_operation_llm_request_actions(
         let completeness = llm_completeness(&segments);
         actions.push(SemanticAction {
             action_id: llm_operation_action_id(first),
-            trace_id: snapshot.trace.trace_id,
+            trace_id,
             kind: SemanticActionKind::LlmRequest,
             title: llm_title(&attributes),
             start_time: first.observed_at,
@@ -472,28 +476,4 @@ fn payload_operation_ids(segments: &[&PayloadSegment]) -> String {
         .map(|id| id.to_string())
         .collect::<Vec<_>>()
         .join(",")
-}
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct PayloadOperationKey {
-    process: ProcessIdentity,
-    stream_key: String,
-    operation_id: u64,
-    segment_id: u64,
-}
-
-impl PayloadOperationKey {
-    fn from_segment(segment: &PayloadSegment) -> Self {
-        let segment_id = if segment.operation_id == 0 {
-            segment.segment_id.get()
-        } else {
-            0
-        };
-        Self {
-            process: segment.process.clone(),
-            stream_key: segment.stream_key.to_string(),
-            operation_id: segment.operation_id,
-            segment_id,
-        }
-    }
 }

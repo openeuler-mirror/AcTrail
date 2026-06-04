@@ -71,6 +71,38 @@ impl RetentionStore for SqliteStorage {
             .map_err(|error| RetentionError::new("delete_events", error.to_string()))?;
         transaction
             .execute(
+                "DELETE FROM semantic_action_link_evidence WHERE trace_id = ?1",
+                params![trace_id.get()],
+            )
+            .map_err(|error| {
+                RetentionError::new("delete_semantic_action_link_evidence", error.to_string())
+            })?;
+        transaction
+            .execute(
+                "DELETE FROM semantic_action_links WHERE trace_id = ?1",
+                params![trace_id.get()],
+            )
+            .map_err(|error| {
+                RetentionError::new("delete_semantic_action_links", error.to_string())
+            })?;
+        transaction
+            .execute(
+                "DELETE FROM semantic_action_evidence WHERE action_id IN (
+                    SELECT action_id FROM semantic_actions WHERE trace_id = ?1
+                )",
+                params![trace_id.get()],
+            )
+            .map_err(|error| {
+                RetentionError::new("delete_semantic_action_evidence", error.to_string())
+            })?;
+        transaction
+            .execute(
+                "DELETE FROM semantic_actions WHERE trace_id = ?1",
+                params![trace_id.get()],
+            )
+            .map_err(|error| RetentionError::new("delete_semantic_actions", error.to_string()))?;
+        transaction
+            .execute(
                 "DELETE FROM diagnostics WHERE trace_id = ?1",
                 params![trace_id.get()],
             )

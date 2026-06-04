@@ -5,8 +5,7 @@ use std::path::{Path, PathBuf};
 use config_core::daemon::OperatorConfig;
 use model_core::ids::TraceId;
 use model_core::trace::TraceRecord;
-use semantic_action::{SemanticAction, SemanticActionReadStore};
-use semantic_action_runtime::project_snapshot_actions;
+use semantic_action::{SemanticAction, SemanticActionLink, SemanticActionReadStore};
 use sqlite_storage::SqliteStorage;
 use store_read_contract::filters::TraceFilter;
 use store_read_contract::payloads::{PayloadReadStore, PayloadSegmentQuery};
@@ -84,20 +83,28 @@ pub(super) fn list_payload_segments(
         .map_err(|error| format!("{}: {}", error.stage, error.message))
 }
 
-pub(super) fn list_all_semantic_actions(
+pub(super) fn list_semantic_actions(
     storage: &SqliteStorage,
-    snapshot: &SnapshotView,
+    trace_id: TraceId,
 ) -> Result<Vec<SemanticAction>, String> {
     let mut actions = storage
-        .list_semantic_actions(snapshot.trace.trace_id)
+        .list_semantic_actions(trace_id)
         .map_err(|error| format!("{}: {}", error.stage, error.message))?;
-    actions.extend(project_snapshot_actions(snapshot));
     actions.sort_by(|left, right| {
         (left.start_time, left.action_id.as_str())
             .cmp(&(right.start_time, right.action_id.as_str()))
     });
     actions.dedup_by(|left, right| left.action_id == right.action_id);
     Ok(actions)
+}
+
+pub(super) fn list_semantic_action_links(
+    storage: &SqliteStorage,
+    trace_id: TraceId,
+) -> Result<Vec<SemanticActionLink>, String> {
+    storage
+        .list_semantic_action_links(trace_id)
+        .map_err(|error| format!("{}: {}", error.stage, error.message))
 }
 
 pub(super) fn read_snapshot(

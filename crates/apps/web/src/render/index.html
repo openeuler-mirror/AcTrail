@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AcTrail</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>AcTrail</h1>
+      <div id="traceTitle" class="subtle"></div>
+    </div>
+    <div class="toolbar">
+      <input id="search" type="search" placeholder="Filter">
+      <button id="refresh" type="button">Refresh</button>
+    </div>
+  </header>
+  <main class="layout">
+    <aside class="sidebar">
+      <div class="section-title">Traces</div>
+      <div id="traces" class="trace-list"></div>
+    </aside>
+    <section class="workspace">
+      <div id="metrics" class="metrics"></div>
+      <nav class="tabs">
+        <button class="tab active" data-tab="action_tree" type="button">Action Tree</button>
+        <button class="tab" data-tab="timeline" type="button">Timeline</button>
+        <button class="tab" data-tab="events" type="button">Events</button>
+        <button class="tab" data-tab="process_tree" type="button">Process Tree</button>
+        <button class="tab" data-tab="processes" type="button">Processes</button>
+        <button class="tab" data-tab="payloads" type="button">Payloads</button>
+        <button class="tab" data-tab="resources" type="button">Resources</button>
+        <button class="tab" data-tab="diagnostics" type="button">Diagnostics</button>
+      </nav>
+      <div class="content-grid">
+        <div id="table" class="table-wrap"></div>
+        <aside class="detail-panel">
+          <div id="detailTitle" class="detail-title">No selection</div>
+          <div id="detail" class="detail"></div>
+        </aside>
+      </div>
+    </section>
+  </main>
+  <script src="/assets/app.js"></script>
+</body>
+</html>
