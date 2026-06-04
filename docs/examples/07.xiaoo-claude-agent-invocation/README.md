@@ -1,36 +1,36 @@
-# xiaoO Invokes Claude Code
+# xiaoO 调用 Claude Code 的进程语义验证
 
-This example verifies process-level agent invocation discovery when a real xiaoO agent silently launches Claude Code with `claude -p ...`.
+这个示例验证真实 xiaoO agent 静默拉起 `claude -p ...` 时，AcTrail 能否在进程层识别 agent invocation 关系。
 
-It is a process/semantic trace case, not an LLM payload capture case. `payload_tls_enabled = false` and `payload_socket_enabled = false` on purpose. The expected proof is in the exported OpenTelemetry trace: a seccomp-observed `process.exec` span for `claude -p ...` and an `agent.invocation` span whose parent is xiaoO and whose child is Claude Code.
+这是 process/semantic trace 示例，不是 LLM payload capture 示例。`payload_tls_enabled = false` 和 `payload_socket_enabled = false` 是有意设置。通过条件在导出的 OpenTelemetry trace 里：必须存在一条 seccomp 观测到的 `claude -p ...` `process.exec` span，以及一条 parent 为 xiaoO、child 为 Claude Code 的 `agent.invocation` span。
 
-## Files
+## 文件
 
-| File | Purpose |
+| 文件 | 用途 |
 | --- | --- |
-| `operator.conf` | AcTrail operator config for process exec seccomp observation and agent invocation semantics. |
-| `workload.conf` | Workload values for the real xiaoO -> Claude Code run. |
-| `agent_prompt.template` | Prompt template that instructs xiaoO to run exactly one foreground `claude -p ...` command. |
-| `run_e2e.py` | Thin docs entrypoint that runs the shared real E2E runner with this example's config. |
+| `operator.conf` | AcTrail operator 配置，用于 process exec seccomp observation 和 agent invocation 语义组装。 |
+| `workload.conf` | 真实 xiaoO -> Claude Code 运行所需的 workload 参数。 |
+| `agent_prompt.template` | 提示词模板，要求 xiaoO 只执行一次前台 `claude -p ...` 命令。 |
+| `run_e2e.py` | 最薄的 docs 入口，调用共享真实 E2E runner 并传入本示例配置。 |
 
-## Preconditions
+## 前置条件
 
-- Run from the repository root as root.
-- Build release binaries first: `cargo build --release`.
-- `xiaoo` is on `PATH`; `which xiaoo` should print the executable that will be launched. Set `agent_command` in `workload.conf` only when testing a specific non-PATH binary.
-- `claude` is on `PATH` and can answer `claude -p ...` with the current shell authentication.
-- External network access is available for Claude Code.
+- 在仓库根目录用 root shell 运行。
+- 先完成 release 构建：`cargo build --release`。
+- `xiaoo` 在 `PATH` 中；`which xiaoo` 应打印将要启动的可执行文件。只有测试特定非 PATH binary 时，才修改 `workload.conf` 里的 `agent_command`。
+- `claude` 在 `PATH` 中，并且当前 shell 的认证状态可以让 `claude -p ...` 正常回答。
+- Claude Code 可以访问外部网络。
 
-Do not edit `/tmp` paths by hand. Use the cleanup helper or the E2E script's built-in `actrailctl clean` step.
+不要手工编辑 `/tmp` 路径。使用 cleanup helper，或依赖 E2E 脚本内置的 `actrailctl clean` 步骤。
 
-## Run
+## 运行
 
 ```bash
 python3 docs/examples/clean.py --example xiaoo-claude
 python3 docs/examples/07.xiaoo-claude-agent-invocation/run_e2e.py
 ```
 
-Expected terminal output includes:
+期望终端输出包含：
 
 ```text
 ACTRAIL_AGENT_TREE_OK
@@ -39,11 +39,11 @@ otel_output=/tmp/actrail-xiaoo-claude-agent-invocation.otlp.json
 agent invocation e2e complete
 ```
 
-The script fails fast if xiaoO, Claude Code, AcTrail binaries, seccomp/eBPF privileges, or the expected OTEL spans are missing.
+如果缺少 xiaoO、Claude Code、AcTrail binaries、seccomp/eBPF 权限，或导出的 OTEL span 不符合预期，脚本会 fail-fast。
 
-## Manual Inspection
+## 手动检查
 
-After a successful run, inspect the exported OTLP JSON:
+成功运行后，可以检查导出的 OTLP JSON：
 
 ```bash
 jq '[.resourceSpans[].scopeSpans[].spans[] | select(any(.attributes[]?; .key=="actrail.action.kind" and .value.stringValue=="agent.invocation"))] | length' \
@@ -53,13 +53,13 @@ jq '[.resourceSpans[].scopeSpans[].spans[] | select(any(.attributes[]?; .key=="s
   /tmp/actrail-xiaoo-claude-agent-invocation.otlp.json
 ```
 
-The first command must print at least `1`. The second command must be nonzero. The agent invocation span attributes should contain `agent.parent.executable` ending in `xiaoo` and `agent.child.command_line` containing `claude -p`.
+第一条命令至少应输出 `1`。第二条命令必须非零。`agent.invocation` span attributes 里应包含以 `xiaoo` 结尾的 `agent.parent.executable`，以及包含 `claude -p` 的 `agent.child.command_line`。
 
-## What This Proves
+## 这个示例证明什么
 
-- `actrailctl launch` keeps AcTrail as the trace root.
-- The launched xiaoO process inherits the trace.
-- Claude Code is observed through launch-time `execve`/`execveat` seccomp notify.
-- AcTrail assembles the low-level process facts into a higher-level `agent.invocation` semantic action.
+- `actrailctl launch` 会让 AcTrail 成为 trace root。
+- 被启动的 xiaoO 进程会继承 trace。
+- Claude Code 的启动会被 launch-time `execve`/`execveat` seccomp notify 观测到。
+- AcTrail 会把底层 process facts 组装成更高层的 `agent.invocation` semantic action。
 
-This example does not assert Claude's natural-language response and does not capture Claude LLM request bytes. xiaoO and Claude Code may reach providers through HTTPS/TLS or plain HTTP; use `docs/examples/06.claude-code-tls-capture/` for full outbound Claude Code LLM request payload capture and `tests/agent-trace/xiaoo-rustls/` for xiaoO request-payload capture with either TLS or socket evidence.
+这个示例不校验 Claude 的自然语言回答，也不采集 Claude LLM request bytes。xiaoO 和 Claude Code 可能通过 HTTPS/TLS 或 plain HTTP 访问 provider；完整 payload 采集请优先参考 `docs/examples/08.full-monitor-validation/`。只验证 xiaoO outbound request payload 时，可参考 `docs/examples/06.xiaoo-tls-capture/`。

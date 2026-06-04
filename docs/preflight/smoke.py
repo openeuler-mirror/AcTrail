@@ -21,7 +21,7 @@ def runtime_smoke_checks(bin_dir: Path, run_smoke: bool, verbose: bool) -> list[
                 "skipped; run python3 docs/preflight/platform_preflight.py --run-smoke",
             ),
             Check(
-                "TLS seccomp user-read",
+                "TLS sync payload",
                 WARN,
                 "skipped; run python3 docs/preflight/platform_preflight.py --run-smoke",
             ),
@@ -39,7 +39,7 @@ def runtime_smoke_checks(bin_dir: Path, run_smoke: bool, verbose: bool) -> list[
         ]
     return [
         ebpf_smoke(bin_dir, verbose),
-        tls_seccomp_smoke(bin_dir, verbose),
+        tls_sync_smoke(bin_dir, verbose),
         fanotify_smoke(verbose),
     ]
 
@@ -62,14 +62,14 @@ def ebpf_smoke(bin_dir: Path, verbose: bool) -> Check:
     return Check("eBPF live attach", PASS, "verify-live completed")
 
 
-def tls_seccomp_smoke(bin_dir: Path, verbose: bool) -> Check:
+def tls_sync_smoke(bin_dir: Path, verbose: bool) -> Check:
     config = "docs/examples/02.llm-http-payload-capture/http2-local/operator.conf"
     clean = run_command((sys.executable, "docs/examples/clean.py", "--example", "http2-local"))
     if clean.returncode != 0:
-        return failed_command("TLS seccomp user-read", clean, verbose)
-    start = run_command((str(bin_dir / "actraild"), "start", "--config", config))
+        return failed_command("TLS sync payload", clean, verbose)
+    start = run_command((str(bin_dir / "actraild"), "--config", config, "start"))
     if start.returncode != 0:
-        return failed_command("TLS seccomp user-read", start, verbose)
+        return failed_command("TLS sync payload", start, verbose)
     try:
         launch = run_command(
             (
@@ -87,10 +87,10 @@ def tls_seccomp_smoke(bin_dir: Path, verbose: bool) -> Check:
             )
         )
         if launch.returncode != 0:
-            return failed_command("TLS seccomp user-read", launch, verbose)
+            return failed_command("TLS sync payload", launch, verbose)
         trace_id = parse_trace_id(launch.stdout)
         if trace_id is None:
-            return Check("TLS seccomp user-read", FAIL, "actrailctl launch did not print a trace id")
+            return Check("TLS sync payload", FAIL, "actrailctl launch did not print a trace id")
         payloads = run_command(
             (
                 str(bin_dir / "actrailviewer"),
@@ -102,7 +102,7 @@ def tls_seccomp_smoke(bin_dir: Path, verbose: bool) -> Check:
             )
         )
         if payloads.returncode != 0:
-            return failed_command("TLS seccomp user-read", payloads, verbose)
+            return failed_command("TLS sync payload", payloads, verbose)
         events = run_command(
             (
                 str(bin_dir / "actrailviewer"),
@@ -114,18 +114,18 @@ def tls_seccomp_smoke(bin_dir: Path, verbose: bool) -> Check:
             )
         )
         if events.returncode != 0:
-            return failed_command("TLS seccomp user-read", events, verbose)
+            return failed_command("TLS sync payload", events, verbose)
     finally:
-        run_command((str(bin_dir / "actraild"), "stop", "--config", config))
+        run_command((str(bin_dir / "actraild"), "--config", config, "stop"))
     payload_ok = all(
         value in payloads.stdout for value in ("TlsUserSpace", "openssl", "Complete", "success")
     )
     event_ok = "Application" in events.stdout and ("frame" in events.stdout or "data" in events.stdout)
     if not payload_ok:
-        return Check("TLS seccomp user-read", FAIL, "payload output missed complete OpenSSL rows")
+        return Check("TLS sync payload", FAIL, "payload output missed complete OpenSSL rows")
     if not event_ok:
-        return Check("TLS seccomp user-read", FAIL, "event output missed HTTP/2 Application rows")
-    return Check("TLS seccomp user-read", PASS, f"trace-{trace_id} has complete TLS payload rows")
+        return Check("TLS sync payload", FAIL, "event output missed HTTP/2 Application rows")
+    return Check("TLS sync payload", PASS, f"trace-{trace_id} has complete TLS payload rows")
 
 
 def fanotify_smoke(verbose: bool) -> Check:

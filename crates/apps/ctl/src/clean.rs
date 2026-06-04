@@ -41,6 +41,12 @@ impl CleanArtifacts {
                 config.live_otel_export.path.clone(),
             ));
         }
+        if config.payload_config.tls.capture_backend.is_sync() {
+            entries.push(CleanEntry::file_like(
+                "payload_tls_sync_event_socket_path",
+                config.payload_config.tls.sync_event_socket_path.clone(),
+            ));
+        }
         Self { entries }
     }
 }

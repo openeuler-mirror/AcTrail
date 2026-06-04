@@ -60,7 +60,7 @@ The runner prints colorized `PASS`/`FAIL`/`SKIP` rows and writes:
 
 Default mode is dependency-aware: missing optional agent tools or external API keys are `SKIP`; runnable case failures are `FAIL`. Use `--strict` when skipped cases should fail the run. Use `--suite agent`, `--suite payload`, `--suite enforcement`, or `--case <case-id>` to isolate a subset.
 
-The runner auto-discovers common agent prerequisites before skipping: Node/OpenSSL Claude Code launchers, native ELF Claude entrypoints with OpenSSL symbols or configured Bun/static-BoringSSL discovery, opencode Bun binaries or launcher-adjacent binaries, xiaoO binaries on `PATH`, and Python interpreters with `langgraph`, `requests`, and dynamic OpenSSL. For opencode and supported native Claude binaries, if the checked-in Bun/BoringSSL map does not match the current binary, the runner attempts byte-pattern detection and generates a temporary map for the current build-id. For xiaoO HTTPS payload capture, rustls `PlaintextSink` symbols must be available from either the binary or debuginfo; a stripped xiaoO binary that reaches the provider through HTTP CONNECT proves only the proxy tunnel on the socket path and fails the payload case until debuginfo/TLS symbols or a plain HTTP provider route is supplied. Python builds with static or built-in `_ssl` are rejected for the LangGraph TLS case. If discovery cannot find a runnable dependency, read the check detail before treating the skip as a product failure. `CLAUDE_TLS_BINARY`, `OPENCODE_BIN_PATH`, `XIAOO_BINARY`, `XIAOO_DEBUG_FILE`, and `LANGGRAPH_PYTHON` remain explicit overrides; invalid override values fail fast.
+The runner auto-discovers common agent prerequisites before skipping: Claude Code, opencode, xiaoO, and Python/LangGraph dependencies. A skipped row means the host is missing a required external tool, credential, or supported TLS/plain-HTTP payload path; read the skip detail before treating it as a product failure. `CLAUDE_TLS_BINARY`, `OPENCODE_BIN_PATH`, `XIAOO_BINARY`, `XIAOO_DEBUG_FILE`, and `LANGGRAPH_PYTHON` remain explicit overrides; invalid override values fail fast.
 
 ## Example 01: Quick Start
 
@@ -72,7 +72,7 @@ Run manually because the example intentionally teaches the attach workflow:
 
 ```bash
 python3 docs/examples/clean.py --example quick-start
-./target/release/actraild start --config docs/examples/01.quick-start/operator.conf
+./target/release/actraild --config docs/examples/01.quick-start/operator.conf start
 ./target/release/actrailctl doctor --config docs/examples/01.quick-start/operator.conf
 python3 docs/examples/01.quick-start/lifecycle_network_target.py
 ```
@@ -94,7 +94,7 @@ Return to the workload terminal and press Enter. Then verify:
 Stop daemon after the run:
 
 ```bash
-./target/release/actraild stop --config docs/examples/01.quick-start/operator.conf
+./target/release/actraild --config docs/examples/01.quick-start/operator.conf stop
 ```
 
 Expected result: trace enters `Active`, then `Completed`; viewer shows process lifecycle and local TCP `connect/accept/send/recv` events. A bootstrap-gap diagnostic is acceptable if documented in the README.
@@ -109,7 +109,7 @@ No-network deterministic HTTP/2 path is manual and uses the files under `http2-l
 
 ```bash
 python3 docs/examples/clean.py --example http2-local
-./target/release/actraild start --config docs/examples/02.llm-http-payload-capture/http2-local/operator.conf
+./target/release/actraild --config docs/examples/02.llm-http-payload-capture/http2-local/operator.conf start
 ./target/release/actrailctl launch \
   --config docs/examples/02.llm-http-payload-capture/http2-local/operator.conf \
   --name http2-local-transfer \
@@ -130,7 +130,7 @@ External OpenAI-compatible HTTP/1.1 path requires network and a provider API key
 ```bash
 test -n "${DEEPSEEK_API_KEY:-}"
 python3 docs/examples/clean.py --example llm-http1
-./target/release/actraild start --config docs/examples/02.llm-http-payload-capture/external-openai-compatible/http1-operator.conf
+./target/release/actraild --config docs/examples/02.llm-http-payload-capture/external-openai-compatible/http1-operator.conf start
 ./target/release/actrailctl launch \
   --config docs/examples/02.llm-http-payload-capture/external-openai-compatible/http1-operator.conf \
   --name llm-http1 \
@@ -143,7 +143,7 @@ External OpenAI-compatible HTTP/2 path has the same provider environment contrac
 ```bash
 test -n "${DEEPSEEK_API_KEY:-}"
 python3 docs/examples/clean.py --example llm-http2
-./target/release/actraild start --config docs/examples/02.llm-http-payload-capture/external-openai-compatible/http2-operator.conf
+./target/release/actraild --config docs/examples/02.llm-http-payload-capture/external-openai-compatible/http2-operator.conf start
 ./target/release/actrailctl launch \
   --config docs/examples/02.llm-http-payload-capture/external-openai-compatible/http2-operator.conf \
   --name llm-http2 \
@@ -163,7 +163,7 @@ Use the manual workflow in the README as the transfer-test path. This case is pa
 
 ```bash
 python3 docs/examples/clean.py --example extended-observation
-./target/release/actraild start --config docs/examples/03.extended-observation-e2e/operator.conf
+./target/release/actraild --config docs/examples/03.extended-observation-e2e/operator.conf start
 ./target/release/actrailctl doctor --config docs/examples/03.extended-observation-e2e/operator.conf
 ./target/release/ebpf_probe workload --config docs/examples/03.extended-observation-e2e/workload.conf
 ```
@@ -204,30 +204,49 @@ python3 docs/examples/05.http-payload-unified/run_e2e.py
 
 Expected result: viewer output contains `Application request POST /plain-http`, `Application response 200 OK`, payload rows whose `SOURCE` column is `Syscall`, and payload text containing `POST /plain-http HTTP/1.1` plus `actrail-http-ok`. The non-HTTP marker `actrail-non-http` must not appear in retained payload text.
 
-## Example 06: Claude Code LLM Payload Capture
+## Example 06: xiaoO TLS Payload Capture
 
-Doc: `docs/examples/06.claude-code-tls-capture/README.md`
+Doc: `docs/examples/06.xiaoo-tls-capture/README.md`
 
-Purpose: complete LLM request capture and, for HTTPS/TLS runtimes, response capture from a real `claude -p ...` run via `actrailctl launch`. The traffic may be HTTPS/TLS or plain HTTP, depending on the Claude Code installation and proxy/provider configuration.
+Purpose: complete LLM request capture from a real `xiaoo run ...` launched through `actrailctl launch`. HTTPS/TLS traffic is captured through `tls-sync`; plain HTTP provider routes can be captured through socket plaintext.
 
 Preconditions:
 
-- `claude` is on `PATH`.
-- If Claude uses HTTPS, the installed `claude` entrypoint must be one of the TLS runtimes supported by the E2E resolver: Node/OpenSSL, native ELF OpenSSL symbols, or supported native/static-BoringSSL.
-- If Claude uses a plain HTTP base URL/proxy, the socket plaintext backend is the expected capture path.
-- The shell has whatever authentication Claude Code needs to answer `claude -p`.
-
-Automated transfer test:
+- `xiaoo` is on `PATH`; `which xiaoo` prints the executable under test.
+- xiaoO has provider credentials configured and can answer a normal prompt.
+- For HTTPS/TLS verification, finder fast returns a complete rustls plan:
 
 ```bash
-python3 docs/examples/clean.py --example claude-code
-python3 tests/payload/claude-code/run_e2e.py \
-  --config-template docs/examples/06.claude-code-tls-capture/operator.conf
+target/release/tls-probe-point-finder fast --provider rustls --source auto xiaoo
 ```
 
-Expected result: the script prints `claude code LLM payload e2e complete`, with nonzero `captured_payload_segments`, `exported_payload_nodes`, `semantic_action_rows`, and `otel_semantic_spans`. A run whose actual request rows are `TlsUserSpace` must also print nonzero `captured_response_payload_segments` from inbound `TlsUserSpace` rows. A valid request run may show payload rows from `TlsUserSpace` (`openssl`/`boringssl`) or from `Syscall` (`socket-syscall`) when Claude uses plain HTTP; plain HTTP does not require TLS response rows even if the installed Claude binary has a discoverable TLS runtime. The current Claude example uses `bpf-copy-seccomp-fallback` for TLS and socket payloads: BPF inline copy stays at the stable 4095-byte event ABI, while daemon-side process reads carry normal operations up to 4MB. Large request or response operations must show `captured == original` and `operation_completion_state=success`; LLM request/response rows marked `Truncated` fail the transfer test. The semantic action output must include a complete successful `llm.request`, and the OTLP JSON export must contain the corresponding span with split HTTP headers/body attributes: `llm.request.raw_payload_base64`, `http.request.headers_hpack_base64` or `http.request.headers_text`, `http.request.body_base64`, and `http.request.body_text`.
+Manual transfer test:
 
-The configured Claude subprocess timeout is `claude_timeout_seconds = 180` in `tests/payload/claude-code/workload.conf`. The same file controls launch supervision with `launch_poll_interval_seconds` and `launch_stop_timeout_seconds`; if `actraild` exits while `actrailctl launch` is still running, the E2E fails immediately and prints daemon stdout/stderr. If the script times out, first run `timeout 120 claude -p "请用一句话回答：AcTrail 这个名字是否让你想到 actual trail？"` to separate Claude service latency from AcTrail capture behavior.
+```bash
+python3 docs/examples/clean.py --example xiaoo-tls
+target/release/actraild --config docs/examples/06.xiaoo-tls-capture/operator.conf start
+target/release/actrailctl --config docs/examples/06.xiaoo-tls-capture/operator.conf launch \
+  --name xiaoo-tls-payload \
+  -- \
+  xiaoo run --no-tools --max-turns 1 --prompt "请直接回答：你好"
+```
+
+If the xiaoO CLI under test uses `-p` instead of `--prompt`, run the same command with `xiaoo run -p "请直接回答：你好"`.
+
+Verify:
+
+```bash
+target/release/actrailviewer --config docs/examples/06.xiaoo-tls-capture/operator.conf payloads --trace-id <TRACE_ID> --head 80
+target/release/actrailviewer --config docs/examples/06.xiaoo-tls-capture/operator.conf actions --trace-id <TRACE_ID> --head 80
+```
+
+Expected result: `payloads` shows a complete outbound plaintext payload row. HTTPS/TLS rows should use `SOURCE=TlsUserSpace` and `LIBRARY=rustls`; plain HTTP rows may use `SOURCE=Syscall` and `LIBRARY=socket-syscall`. A row that only contains HTTP proxy `CONNECT <host>:443` is not request body capture. `actions` must include a complete successful `llm.request`.
+
+Stop daemon after the run:
+
+```bash
+target/release/actraild --config docs/examples/06.xiaoo-tls-capture/operator.conf stop
+```
 
 ## Example 07: xiaoO Invokes Claude Code
 
@@ -294,7 +313,7 @@ Expected result:
 
 - Claude Code prints `claude code LLM payload e2e complete`.
 - opencode prints `opencode agent trace e2e complete`; the case is pinned to `deepseek/deepseek-chat` and should show a complete `llm.request` for `deepseek-chat`. HTTPS runs may also show `CONNECT api.deepseek.com:443`; plain HTTP runs should instead show `Syscall/socket-syscall` payload rows.
-- xiaoO prints `xiaoO agent trace e2e complete` and shows a complete `llm.request` when either rustls plaintext symbols are available for HTTPS or xiaoO uses a plain HTTP provider route. A stripped xiaoO binary over HTTP CONNECT is a real unsupported payload-capture setup and should fail with a message asking for debuginfo/TLS symbols or a plain HTTP route.
+- xiaoO prints `xiaoO agent trace e2e complete` and shows a complete `llm.request` when either a rustls plaintext probe plan is available for HTTPS or xiaoO uses a plain HTTP provider route. For x86_64 stripped xiaoO builds, `tls-probe-point-finder fast --provider rustls --source auto xiaoo` should be the first check. If no rustls plan is available and the provider path is HTTP CONNECT, socket capture proves only the proxy tunnel and the case should ask for a supported rustls plan or a plain HTTP route.
 - LangGraph prints `LangGraph OpenAI-compatible agent trace e2e complete` and shows `POST /chat/completions`.
 - Each case prints nonzero payload and OTEL span counts. The required payload proof is a complete outbound plaintext payload row from either `TlsUserSpace` or `Syscall/socket-syscall`; the required semantic proof is a complete successful `llm.request` action plus an OTEL span whose `actrail.action.kind` is `llm.request`.
 

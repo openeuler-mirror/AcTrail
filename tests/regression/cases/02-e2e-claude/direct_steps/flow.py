@@ -19,7 +19,7 @@ def run_direct_claude_case(env, result: CaseResult, workload: dict[str, str]) ->
         "regression_claude_code_payload_run_e2e",
         env.repo_root / "tests/payload/claude-code/run_e2e.py",
     )
-    config_template = env.repo_root / "docs/examples/06.claude-code-tls-capture/operator.conf"
+    config_template = env.repo_root / "tests/payload/claude-code/operator.conf"
     resolved_config = Path(module.required(workload, "resolved_config_path"))
     daemon = None
     result.command = ["direct", "claude-code"]

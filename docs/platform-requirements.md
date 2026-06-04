@@ -34,7 +34,7 @@ For the full local runtime proof, run:
 python3 docs/preflight/platform_preflight.py --run-smoke --color always
 ```
 
-The smoke mode runs the documented local eBPF live attach, HTTP/2 TLS seccomp payload, and fanotify enforcement checks. It also scans `claude` and `opencode` if they are on `PATH`, resolves their runtime executable when possible, and checks whether the executable exports `SSL_read`, `SSL_write`, `SSL_read_ex`, and `SSL_write_ex`. Agent executable rows are marked `[optional]` because they only block the corresponding agent-specific example.
+The smoke mode runs the documented local eBPF live attach, HTTP/2 TLS sync payload, and fanotify enforcement checks. It also scans `claude` and `opencode` if they are on `PATH`, resolves their runtime executable when possible, and checks whether the executable exports `SSL_read`, `SSL_write`, `SSL_read_ex`, and `SSL_write_ex`. Agent executable rows are marked `[optional]` because they only block the corresponding agent-specific example.
 
 ## Required Capabilities
 
@@ -43,10 +43,11 @@ The smoke mode runs the documented local eBPF live attach, HTTP/2 TLS seccomp pa
 | Root or equivalent capabilities | All live collection and fanotify examples | `id -u` must print `0`, or the service must run with equivalent kernel capabilities. Containers may hide capabilities even when the user is root. |
 | Kernel BTF | eBPF CO-RE programs | `test -r /sys/kernel/btf/vmlinux` |
 | Writable tracefs control mount | eBPF tracepoint attachment | `grep -w tracefs /proc/self/mountinfo` and `test -w /sys/kernel/tracing || test -w /sys/kernel/debug/tracing` |
-| Tracepoint/uprobe attachment | Process, file, network, stdio, TLS payload examples | `./target/release/ebpf_probe verify-live --config docs/examples/03.extended-observation-e2e/observation.conf` |
-| Seccomp user notification | TLS seccomp backends (`seccomp-user-read`, `bpf-copy-seccomp-fallback`) | Run the local HTTP/2 TLS payload example through `actrailctl launch`. |
-| `pidfd_open` and `pidfd_getfd` | Copying the child seccomp listener before exec | Covered by the local HTTP/2 TLS payload example. |
-| `process_vm_readv` access to traced child | Reading TLS plaintext for `seccomp-user-read` operations and hybrid fallback operations larger than the BPF direct-copy cap | Covered by TLS payload examples; failures appear in daemon logs or missing payload rows. |
+| Tracepoint/uprobe attachment | Process, file, network, stdio, socket payload, and legacy uprobe TLS examples | `./target/release/ebpf_probe verify-live --config docs/examples/03.extended-observation-e2e/observation.conf` |
+| TLS sync preload runtime | Current TLS plaintext payload examples with `payload_tls_capture_backend = tls-sync` | Run the local HTTP/2 TLS payload example through `actrailctl launch`. |
+| Seccomp user notification | Process exec context and socket payload fallback paths | Run the process invocation or socket payload examples that enable those paths. |
+| `pidfd_open` and `pidfd_getfd` | Copying a child seccomp listener before exec when seccomp-backed paths are enabled | Covered by process invocation and socket fallback examples. |
+| `process_vm_readv` access to traced child | Reading large socket fallback operations and legacy seccomp-backed payload operations | Covered by the examples that enable those paths; failures appear in daemon logs or missing payload rows. |
 | Fanotify permission events | Example 04 enforcement | `python3 docs/examples/04.fanotify-enforcement-e2e/run_e2e.py` |
 
 The development WSL machine used `sysctl kernel.perf_event_paranoid=-1` for live examples, then restored `kernel.perf_event_paranoid=2` after testing. Use the target environment's security policy; AcTrail should fail fast instead of silently downgrading when the kernel refuses required features.
@@ -119,14 +120,15 @@ AcTrail's process fork observation uses `sched/sched_process_fork`; the syscall 
 Some target kernels do not expose compatibility fd-alias tracepoints such as `syscalls/sys_enter_dup2`. AcTrail treats `dup2`/`dup3` alias tracepoints as optional: their absence can reduce fd alias fidelity, but it must not block process, network, file, or socket-payload collection.
 For launch-time process seccomp, config values such as `fork` and `vfork` are resolved through the target architecture's syscall map. Architectures without standalone `fork` or `vfork` syscalls use the available process-creation syscalls such as `clone` and `clone3`; emitted trace metadata still records the actual syscall that fired.
 
-## TLS Seccomp Preflight
+## TLS Sync Preflight
 
-This validates the launch-time TLS seccomp payload path without external network or API keys. The local HTTP/2 example uses `payload_tls_capture_backend = seccomp-user-read`; the Claude Code example uses `bpf-copy-seccomp-fallback` for larger real LLM requests.
+This validates the launch-time TLS sync payload path without external network or API keys. The local HTTP/2 example uses `payload_tls_capture_backend = tls-sync`.
 
 ```bash
 python3 docs/examples/clean.py --example http2-local
-./target/release/actraild start \
-  --config docs/examples/02.llm-http-payload-capture/http2-local/operator.conf
+./target/release/actraild \
+  --config docs/examples/02.llm-http-payload-capture/http2-local/operator.conf \
+  start
 ./target/release/actrailctl launch \
   --config docs/examples/02.llm-http-payload-capture/http2-local/operator.conf \
   --name http2-local-transfer \
@@ -141,8 +143,9 @@ python3 docs/examples/clean.py --example http2-local
   --config docs/examples/02.llm-http-payload-capture/http2-local/operator.conf \
   --trace-id 1 \
   --tail 80
-./target/release/actraild stop \
-  --config docs/examples/02.llm-http-payload-capture/http2-local/operator.conf
+./target/release/actraild \
+  --config docs/examples/02.llm-http-payload-capture/http2-local/operator.conf \
+  stop
 ```
 
 Expected:
@@ -151,7 +154,7 @@ Expected:
 - `actrailviewer payloads` shows `TlsUserSpace` rows with `LIBRARY=openssl`, outbound `SSL_write` or `SSL_write_ex`, inbound `SSL_read` or `SSL_read_ex`, `Complete`, and operation `success`.
 - `actrailviewer events` shows HTTP/2 `Application` rows such as `frame` and `data`.
 
-This preflight covers seccomp user notification, `pidfd_open`, `pidfd_getfd`, uprobes, and daemon-side user-memory reads. The hybrid backend additionally exercises BPF direct-copy in the Claude Code transfer test.
+This preflight covers launch-time `tls-sync` runtime injection, the sync event socket, dynamic OpenSSL probe planning, and daemon-side payload ingestion. Seccomp user notification, `pidfd_open`, `pidfd_getfd`, and `process_vm_readv` are covered by process invocation and socket fallback examples when those paths are enabled.
 
 ## Fanotify Enforcement Preflight
 
@@ -197,6 +200,6 @@ Some low-level facts currently do not have OTEL spans. For example, raw network 
 | `tracefs mount is missing` or not writable | tracefs not mounted or inaccessible | Mount/enable tracefs according to the host policy. |
 | `tracepoint syscalls/sys_enter_dup2 id is unavailable` | Target kernel/architecture omits the compatibility `dup2` tracepoint | Rebuild with a version that treats fd-alias compatibility tracepoints as optional; do not disable socket payload capture. |
 | `perf_event_open` permission errors | perf event policy blocks tracepoint attach | Adjust host policy for the test run or run with required capabilities. |
-| TLS payload rows missing in seccomp-backed TLS examples | seccomp/pidfd/user-memory read path failed, BPF direct-copy events were not consumed, or TLS symbols did not attach | Check `actrailctl launch` stderr and daemon log; do not switch to `track-add` for TLS payload tests. |
+| TLS payload rows missing in `tls-sync` examples | The target was not launched through `actrailctl launch`, the sync runtime was not loaded, the probe plan did not match the target binary, or the daemon did not consume sync payload events | Check `actrailctl launch` stderr and daemon log; do not switch to `track-add` for TLS payload tests. |
 | `fanotify_init: Operation not permitted` | Missing fanotify permission support or required capabilities | Run on a host/VM with fanotify permission events and required privileges. |
 | OTEL file has no expected span | The example did not produce that semantic action, or current semantic export lacks coverage | Verify the corresponding viewer/event/payload surface and file an export coverage task if the fact should become a span. |

@@ -1,11 +1,13 @@
 # xiaoO Rustls LLM Capture
 
-This example captures HTTPS LLM requests from the Rust xiaoO binary without changing xiaoO code. The path is `actrailctl launch` + executable uprobes + seccomp user-read:
+This legacy guide captures HTTPS LLM requests from the Rust xiaoO binary without changing xiaoO code by using an explicit rustls symbol map. For current transfer testing, prefer [Example 06](../../examples/06.xiaoo-tls-capture/README.md), which uses finder fast plus `tls-sync`.
+
+The explicit-map path is `actrailctl launch` + `tls-sync` runtime + executable rustls probe points:
 
 ```text
-xiaoO rustls PlaintextSink::write/write_vectored
-  -> eBPF records pointer metadata and stops the thread
-  -> actraild reads plaintext bytes from the stopped process
+xiaoO rustls plaintext probe points
+  -> actrailctl launch prepares the tls-sync runtime and event socket
+  -> the runtime reports plaintext bytes at the hook point
   -> actrailviewer shows payload rows, actions, JSON, and OTLP spans
 ```
 
@@ -35,7 +37,15 @@ test -x "$XIAOO_BINARY"
 
 Use the same executable for symbol-map generation, `payload_tls_binary_path`, and `actrailctl launch`. If you rebuild xiaoO, regenerate the symbol map because the GNU build-id can change.
 
-## 2. Generate Rustls Symbol Map
+## 2. Check Or Generate Rustls Probe Points
+
+First check the current fast path:
+
+```bash
+target/release/tls-probe-point-finder fast --provider rustls --source auto xiaoo
+```
+
+If that returns a complete `probe_plan`, use `docs/examples/06.xiaoo-tls-capture/` instead of this explicit-map flow. Continue here only when you intentionally need to validate a hand-written symbol map.
 
 AcTrail validates the target executable build-id before attaching. Generate a map for the exact binary:
 
@@ -113,10 +123,10 @@ The config uses:
 payload_tls_source = executable
 payload_tls_resolver = rustls-symbol-map
 payload_tls_library = rustls
-payload_tls_capture_backend = seccomp-user-read
+payload_tls_capture_backend = tls-sync
 payload_tls_redaction_policy = authorization-header
 payload_tls_sync_runtime_library_path = auto
-payload_tls_sync_event_socket_path = /tmp/actrail-tls-sync.sock
+payload_tls_sync_event_socket_path = /tmp/actrail-xiaoo-rustls-tls-sync.sock
 payload_tls_sync_socket_mode_octal = 660
 payload_tls_sync_match_limit = 8
 application_protocol_http1_enabled = true
@@ -130,7 +140,7 @@ Clean the configured runtime files, start the daemon, and check control-plane he
 
 ```bash
 ./target/release/actrailctl clean --config "$XIAOO_CONFIG"
-./target/release/actraild start --config "$XIAOO_CONFIG"
+./target/release/actraild --config "$XIAOO_CONFIG" start
 ./target/release/actrailctl doctor --config "$XIAOO_CONFIG"
 ```
 

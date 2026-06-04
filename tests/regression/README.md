@@ -93,7 +93,7 @@ Automatic discovery and overrides:
   `python3 docs/preflight/claude_native_profile.py --json-output /tmp/actrail-claude-native-profile.json --symbol-map-output /tmp/actrail-claude-code-boringssl.map`
   on that host; it emits a text-only package/build-id/profile report. The
   regression renders the docs example 06 operator template, so the Claude case
-  validates the same config surface used by `docs/examples/06.claude-code-tls-capture/`.
+  validates the same config surface used by `tests/payload/claude-code/`.
 - opencode: scans `opencode` launchers on `PATH`, checks adjacent `.opencode`
   binaries and launcher binaries, and first tries the checked-in Bun/BoringSSL
   map. If the build-id changed, it detects BoringSSL offsets from the current

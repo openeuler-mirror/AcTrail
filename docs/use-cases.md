@@ -8,14 +8,14 @@ This document maps common operator questions to the AcTrail feature path and the
 | --- | --- | --- |
 | What process tree did the agent create? | eBPF process lifecycle plus viewer process/events output. | [Example 01](examples/01.quick-start/README.md), [Example 03](examples/03.extended-observation-e2e/README.md) |
 | Did one agent silently launch another agent? | `actrailctl launch` plus process seccomp exec context and `agent.invocation` semantic action. | [Example 07](examples/07.xiaoo-claude-agent-invocation/README.md) |
-| What LLM request and response did Claude Code exchange? | Executable TLS payload capture plus HTTP/2 and `llm.request` semantic assembly. | [Example 06](examples/06.claude-code-tls-capture/README.md) |
+| What LLM request and response did xiaoO exchange? | TLS sync payload capture plus HTTP/SSE and `llm.request` semantic assembly. | [Example 06](examples/06.xiaoo-tls-capture/README.md) |
 | What LLM request and response did opencode exchange? | Bun/static-BoringSSL executable TLS payload capture plus proxy-aware HTTP semantics. | `python3 tests/agent-trace/run_case.py opencode-bun` |
-| What outbound LLM request did a Rust/rustls agent send? | Executable rustls symbol-map TLS capture. | [xiaoO rustls guide](llm-capture/xiaoo-rustls/README.md) |
+| What outbound LLM request did a Rust/rustls agent send? | `tls-sync` with a rustls probe plan from finder fast, symbols, or a build-id-checked pattern. | [Example 06](examples/06.xiaoo-tls-capture/README.md) |
 | What outbound LLM request did a LangGraph Python agent send? | Dynamic OpenSSL shared-library TLS payload capture around an OpenAI-compatible HTTPS call. | `python3 tests/agent-trace/run_case.py langgraph-openai` |
 | What HTTP request/response did a non-TLS local service exchange? | Socket plaintext payload with HTTP sniffing and HTTP/1.x application analyzer. | [Example 05](examples/05.http-payload-unified/README.md) |
 | Did file enforcement actually block the target? | Fanotify permission backend plus client-side stdout and Enforcement events. | [Example 04](examples/04.fanotify-enforcement-e2e/README.md) |
 | What files, IPC, stdio, and resources did a workload touch? | Extended eBPF observation, stdio payload, provider labels, resource metrics. | [Example 03](examples/03.extended-observation-e2e/README.md) |
-| Can I export higher-level actions to observability tooling? | `actrailviewer export-otel` over semantic actions. | [Example 04](examples/04.fanotify-enforcement-e2e/README.md), [Example 06](examples/06.claude-code-tls-capture/README.md), [Example 07](examples/07.xiaoo-claude-agent-invocation/README.md) |
+| Can I export higher-level actions to observability tooling? | `actrailviewer export-otel` over semantic actions. | [Example 04](examples/04.fanotify-enforcement-e2e/README.md), [Example 06](examples/06.xiaoo-tls-capture/README.md), [Example 07](examples/07.xiaoo-claude-agent-invocation/README.md) |
 | What is the runtime overhead? | `tests/performance/run_benchmark.py` task-runtime benchmark. | [Performance README](../tests/performance/README.md) |
 
 ## Agent Invocation Discovery
@@ -47,7 +47,7 @@ Use the capture path that matches the target runtime:
 | Dynamic OpenSSL | `payload_tls_source = shared-library`, `payload_tls_resolver = openssl-symbols`. |
 | Node/OpenSSL executable | `payload_tls_source = executable`, `payload_tls_resolver = openssl-symbols`. |
 | Bun/static-BoringSSL | `payload_tls_resolver = boringssl-static` for built-in x86_64/aarch64 related-entry detection, or `bun-static-boringssl` with a matching build-id symbol map containing `SSL_read` and `SSL_write`. |
-| Rust/rustls | `payload_tls_resolver = rustls-symbol-map` with a matching build-id symbol map from the binary or debuginfo. |
+| Rust/rustls | `tls-sync` with finder fast resolving rustls plaintext points from symbols, debuginfo, or supported build-id-checked patterns. |
 | Plain HTTP endpoint/proxy | `payload_socket_enabled = true`, `payload_socket_capture_backend = bpf-copy-seccomp-fallback`, plus HTTP/1.x application parsing. |
 
 Real agent acceptance cases:
@@ -56,14 +56,14 @@ Real agent acceptance cases:
 | --- | --- | --- |
 | Claude Code | `python3 tests/agent-trace/run_case.py claude-code` | HTTPS/TLS when supported, otherwise plain HTTP socket plaintext if configured by provider/proxy. |
 | opencode | `python3 tests/agent-trace/run_case.py opencode-bun` | Bun/static-BoringSSL TLS writes or plain HTTP socket plaintext; model pinned to `deepseek/deepseek-chat`. |
-| xiaoO | `python3 tests/agent-trace/run_case.py xiaoo-rustls` | Rust/rustls plaintext write functions or plain HTTP socket plaintext. Stripped HTTPS/HTTP CONNECT binaries need matching debuginfo/TLS symbols before this payload case can pass. |
+| xiaoO | `python3 tests/agent-trace/run_case.py xiaoo-rustls` | Rust/rustls plaintext points or plain HTTP socket plaintext. Stripped HTTPS/HTTP CONNECT binaries need a supported finder rustls plan before this payload case can pass. |
 | LangGraph | `LANGGRAPH_PYTHON=/path/to/python python3 tests/agent-trace/run_case.py langgraph-openai` | Python dynamic OpenSSL shared-library writes for HTTPS; socket plaintext for HTTP API URLs. |
 
 On hosts that require a local proxy for external network access, keep the proxy environment active for these commands. Do not assume the provider route is HTTPS: some agent configs use a plain HTTP base URL or proxy. When HTTPS is used, proxy tunnel facts such as `CONNECT api.deepseek.com:443` may appear alongside decrypted TLS request rows. When plain HTTP is used, the request payload source is `Syscall/socket-syscall`.
 
-For large LLM requests, prefer `bpf-copy-seccomp-fallback` on the relevant payload path: eBPF directly copies operations no larger than the stable inline budget, while seccomp notification remains installed before exec and is used as the user-space read fallback for larger operations. The current real-agent examples use a 4MB user-read operation budget for both TLS and plain HTTP, avoiding fixed multi-MB ringbuf records while still keeping normal LLM requests complete.
+For large LLM requests, set the relevant per-operation budget high enough before running the case. TLS examples use `tls-sync`, so the runtime reports each TLS operation to the daemon instead of forcing every payload into a fixed multi-MB eBPF ringbuf record. Plain HTTP socket payload can still use `bpf-copy-seccomp-fallback`: eBPF copies operations no larger than the inline budget, while seccomp notification is the user-space read fallback for larger socket operations.
 
-Run through `actrailctl launch`; do not use `track-add` for TLS backends that require pre-exec seccomp setup (`seccomp-user-read` and `bpf-copy-seccomp-fallback`).
+Run TLS capture through `actrailctl launch`; do not use `track-add` for `tls-sync`, because the sync runtime, event socket, and probe plan must be prepared before `exec`.
 
 Expected evidence:
 
@@ -83,7 +83,7 @@ Goal: inspect application protocol facts instead of only raw bytes.
 Use:
 
 - Plain HTTP: [Example 05](examples/05.http-payload-unified/README.md).
-- HTTPS/2: [Example 02](examples/02.llm-http-payload-capture/README.md) or [Example 06](examples/06.claude-code-tls-capture/README.md).
+- HTTPS/2: [Example 02](examples/02.llm-http-payload-capture/README.md) or [Example 06](examples/06.xiaoo-tls-capture/README.md).
 
 Expected evidence:
 

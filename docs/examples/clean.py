@@ -81,12 +81,10 @@ EXAMPLES = (
         operator_configs=(Path("docs/examples/05.http-payload-unified/operator.conf"),),
     ),
     ExampleCleanup(
-        name="claude-code",
+        name="xiaoo-tls",
         operator_configs=(
-            Path("docs/examples/06.claude-code-tls-capture/operator.conf"),
-            Path("/tmp/actrail-claude-code-e2e.resolved.conf"),
+            Path("docs/examples/06.xiaoo-tls-capture/operator.conf"),
         ),
-        auxiliary_configs=(Path("tests/payload/claude-code/workload.conf"),),
     ),
     ExampleCleanup(
         name="xiaoo-claude",
@@ -95,6 +93,12 @@ EXAMPLES = (
         ),
         auxiliary_configs=(
             Path("docs/examples/07.xiaoo-claude-agent-invocation/workload.conf"),
+        ),
+    ),
+    ExampleCleanup(
+        name="full-monitor",
+        operator_configs=(
+            Path("docs/examples/08.full-monitor-validation/operator.conf"),
         ),
     ),
 )
