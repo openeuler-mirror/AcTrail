@@ -1,6 +1,6 @@
 //! HTTP request extraction from plaintext transport payloads.
 
-use crate::snapshot::encoding::base64_encode;
+use crate::payload_projection::encoding::base64_encode;
 
 const HTTP2_CONNECTION_PREFACE: &[u8] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 const HTTP2_FRAME_HEADER_BYTES: usize = 9;

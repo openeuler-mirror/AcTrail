@@ -167,10 +167,11 @@ impl FileTracker {
                 Some(path)
             }
             FILE_SYSCALL_CLOSE => {
+                let path = self.resolve_fd_path(enter.pid, enter.arg0 as u32);
                 self.ensure_process(enter.pid)
                     .fds
                     .remove(&(enter.arg0 as u32));
-                None
+                path
             }
             FILE_SYSCALL_DUP | FILE_SYSCALL_DUP2 | FILE_SYSCALL_DUP3 | FILE_SYSCALL_FCNTL => {
                 self.apply_dup_like_exit(enter, result);

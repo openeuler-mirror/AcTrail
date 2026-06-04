@@ -62,6 +62,8 @@ AcTrail fails fast for unsupported required capabilities. Do not add broad fallb
 
 ## Capability Profiles
 
+The generated operator template uses an explicit list style for `required_capability`: enabled capabilities are active lines, and supported but inactive capabilities remain present as commented lines. To enable a capability, uncomment that exact line and enable the matching runtime section below it. This keeps the available capability vocabulary visible without changing the parser contract.
+
 Use a narrow config for each deployment intent:
 
 | Intent | Required Capabilities / Settings |
@@ -72,7 +74,7 @@ Use a narrow config for each deployment intent:
 | Plain HTTP payload | Add `socket-plaintext-payload`; enable `payload_socket_enabled`, `payload_socket_capture_backend`, `payload_socket_seccomp_syscall`, and HTTP application protocol settings. |
 | HTTPS OpenSSL payload | Add `tls-plaintext-payload`; configure TLS resolver/source and use `actrailctl launch` for `tls-sync` capture. |
 | Agent LLM payload | Enable both HTTPS/TLS and plain HTTP socket payload paths when the provider route is not known in advance; the resulting `llm.request` evidence may come from `TlsUserSpace` or `Syscall/socket-syscall`. |
-| Agent invocation discovery | Add `proc-exec-context`; enable `seccomp_notify_enabled`, `process_seccomp_enabled`, and `agent_invocation_enabled`. |
+| Agent invocation discovery | Add `proc-exec-context` plus an LLM payload path; enable `seccomp_notify_enabled`, `process_seccomp_enabled`, payload capture, and `agent_invocation_enabled`. |
 | Fanotify enforcement | Add `enforcement-file-permission-fanotify`; configure enforcement rules and run on a host with permission-event support. |
 
 `observed-seccomp-agent`-style configs are not supersets of payload configs. Process seccomp observation and TLS payload capture solve different problems and should be enabled deliberately.

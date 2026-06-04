@@ -51,6 +51,7 @@ impl SqliteAttachService {
             self.log_payload_tls_diagnostics_impl()?;
             self.drain_enforcement_impl(trace_runtime)?;
             self.reconcile_draining_memberships_impl(trace_runtime)?;
+            self.forget_terminal_semantic_actions_impl(trace_runtime);
             return Ok(());
         }
 
@@ -72,7 +73,19 @@ impl SqliteAttachService {
         self.log_payload_tls_diagnostics_impl()?;
         self.drain_enforcement_impl(trace_runtime)?;
         self.reconcile_draining_memberships_impl(trace_runtime)?;
+        self.forget_terminal_semantic_actions_impl(trace_runtime);
         Ok(())
+    }
+
+    fn forget_terminal_semantic_actions_impl(&mut self, trace_runtime: &TraceRuntime) {
+        for trace in trace_runtime.list_trace_records() {
+            if matches!(
+                trace.lifecycle_state,
+                TraceLifecycleState::Completed | TraceLifecycleState::Failed
+            ) {
+                self.semantic_actions.forget_trace(trace.trace_id);
+            }
+        }
     }
 
     fn ingest_polled_seccomp_tls_controls_impl(&mut self) -> Result<(), ControlError> {
@@ -170,6 +183,7 @@ impl SqliteAttachService {
             let identity_reader = &self.identity_reader;
             seccomp_notify.drain_notifications(|notification, continuation| {
                 process_observations.extend(process_seccomp.handle_notification(
+                    trace_runtime,
                     identity_reader,
                     notification,
                     continuation,
@@ -198,7 +212,10 @@ impl SqliteAttachService {
         let observations = std::mem::take(&mut self.pending_process_seccomp_observations);
         let raw_events = observations
             .into_iter()
-            .map(|observation| self.process_seccomp.materialize_observation(observation))
+            .map(|observation| {
+                self.process_seccomp
+                    .materialize_observation(trace_runtime, observation)
+            })
             .collect();
         self.process_live_event_batch(trace_runtime, raw_events)
     }
@@ -341,6 +358,19 @@ impl SqliteAttachService {
                 metadata,
             } if operation == "exec" => {
                 let identity = raw_event.envelope.process.clone();
+                if metadata
+                    .get("seccomp_observed")
+                    .is_some_and(|value| value == "true")
+                {
+                    if let Some((trace_id, membership)) =
+                        trace_runtime.find_membership_by_pid(identity.pid)
+                    {
+                        return Ok(Some(IngestMatch {
+                            trace_id,
+                            process: membership.identity,
+                        }));
+                    }
+                }
                 if let Some((trace_id, membership)) = trace_runtime.find_membership(&identity) {
                     return Ok(Some(IngestMatch {
                         trace_id,

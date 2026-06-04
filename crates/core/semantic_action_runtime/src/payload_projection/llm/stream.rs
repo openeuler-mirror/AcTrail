@@ -1,5 +1,6 @@
-//! Plaintext payload stream indexing for snapshot LLM projection.
+//! Plaintext payload stream indexing for LLM projection.
 
+use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
 use model_core::process::ProcessIdentity;
 
@@ -40,16 +41,42 @@ struct PayloadSegmentRange<'a> {
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(super) struct PayloadStreamGroupKey {
-    pub(super) process: ProcessIdentity,
-    pub(super) stream_key: String,
+pub(crate) struct PayloadStreamGroupKey {
+    pub(crate) trace_id: TraceId,
+    pub(crate) process: ProcessIdentity,
+    pub(crate) stream_key: String,
 }
 
 impl PayloadStreamGroupKey {
+    pub(crate) fn from_segment(segment: &PayloadSegment) -> Self {
+        Self {
+            trace_id: segment.trace_id,
+            process: segment.process.clone(),
+            stream_key: segment.stream_key.to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(super) struct PayloadOperationKey {
+    process: ProcessIdentity,
+    stream_key: String,
+    operation_id: u64,
+    segment_id: u64,
+}
+
+impl PayloadOperationKey {
     pub(super) fn from_segment(segment: &PayloadSegment) -> Self {
+        let segment_id = if segment.operation_id == 0 {
+            segment.segment_id.get()
+        } else {
+            0
+        };
         Self {
             process: segment.process.clone(),
             stream_key: segment.stream_key.to_string(),
+            operation_id: segment.operation_id,
+            segment_id,
         }
     }
 }

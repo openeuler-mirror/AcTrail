@@ -1027,7 +1027,6 @@ dependencies = [
  "model_core",
  "semantic_action",
  "serde_json",
- "store_snapshot_contract",
 ]
 
 [[package]]
@@ -1391,7 +1390,6 @@ dependencies = [
  "model_core",
  "otel_export",
  "semantic_action",
- "semantic_action_runtime",
  "sqlite_storage",
  "store_read_contract",
  "store_snapshot_contract",
@@ -1509,6 +1507,7 @@ name = "web"
 version = "0.1.0"
 dependencies = [
  "model_core",
+ "semantic_action",
  "sqlite_storage",
  "store_read_contract",
  "store_snapshot_contract",

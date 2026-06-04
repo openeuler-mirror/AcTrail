@@ -127,7 +127,7 @@ impl SqliteAttachService {
         };
 
         self.storage
-            .append_payload_segment(segment)
+            .append_payload_segment(segment.clone())
             .map_err(|error| ControlError::new(error.stage, error.message))?;
         self.log_payload_diagnostic(format_args!(
             "payload_persist stored trace_id={} pid={} generation={} source={:?} bytes={} operation_id={}",
@@ -138,6 +138,7 @@ impl SqliteAttachService {
             captured_len,
             raw.operation_id
         ));
+        self.persist_semantic_actions_for_payload_segment(trace_runtime, &segment)?;
         self.persist_application_events(
             trace_runtime,
             raw.trace_id,

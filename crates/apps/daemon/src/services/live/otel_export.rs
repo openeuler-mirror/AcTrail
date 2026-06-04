@@ -9,7 +9,7 @@ use std::thread::{self, JoinHandle};
 use config_core::daemon::LiveOtelExportConfig;
 use control_contract::reply::ControlError;
 use model_core::trace::TraceRecord;
-use semantic_action::SemanticAction;
+use semantic_action::{SemanticAction, SemanticActionLink};
 
 const WRITER_THREAD_NAME: &str = "actrail-live-otel-export";
 
@@ -123,6 +123,7 @@ impl LiveOtelExporter {
         &self,
         trace: &TraceRecord,
         action: &SemanticAction,
+        links: &[SemanticActionLink],
     ) -> Result<LiveOtelPublishResult, ControlError> {
         self.check_health()?;
         let Some(sender) = &self.sender else {
@@ -130,7 +131,7 @@ impl LiveOtelExporter {
                 dropped_spans: u64::default(),
             });
         };
-        let line = otel_export::render_otlp_json_line(trace, action);
+        let line = otel_export::render_otlp_json_line(trace, action, links);
         match sender.try_send(WriterMessage::Line(line)) {
             Ok(()) => Ok(LiveOtelPublishResult {
                 dropped_spans: u64::default(),

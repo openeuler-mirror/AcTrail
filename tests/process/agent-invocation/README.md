@@ -1,6 +1,6 @@
 # Agent Invocation E2E
 
-This case verifies real silent agent invocation discovery:
+This case verifies real silent agent invocation discovery driven by LLM evidence:
 
 - The outer agent is configured by `agent_command` in `workload.conf`.
 - The reusable prompt is rendered from `agent_prompt.template`.
@@ -27,6 +27,7 @@ Expected result:
 - `actrailctl launch` output contains `ACTRAIL_AGENT_TREE_OK` returned by the foreground `claude -p` command.
 - The exported pretty OTEL JSON is written to `/tmp/actrail-agent-invocation-e2e.otlp.json`.
 - OTEL contains a `process.exec` span for `claude` with `seccomp_observed=true` and argv containing `claude -p`.
-- OTEL contains an `agent.invocation` span whose parent is `xiaoo` and whose child command line contains `claude`.
+- OTEL contains an `llm.request` span for the same Claude process.
+- OTEL contains an `agent.invocation` span whose child command line contains `claude`; its parent is Claude's direct launcher, which may be a shell or timeout wrapper rather than the outer xiaoO process.
 
 This case requires root, `/root/projects/xiaoO/target/release/xiaoo`, a working default xiaoO config, a working `claude` CLI, and external network access. It is not a mock and should fail fast if those prerequisites are missing.

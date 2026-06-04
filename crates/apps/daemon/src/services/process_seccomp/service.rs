@@ -10,6 +10,7 @@ use linux_platform::process_seccomp::KernelProcessSyscall;
 use model_core::ids::{CollectorName, TraceId};
 use model_core::process::ProcessIdentity;
 use process_identity_contract::lookup::ProcessIdentityReader;
+use trace_runtime::registry::TraceRuntime;
 
 use super::clone_flags::{clone_flags, is_thread_clone};
 use super::procfs::{absolute_exec_path_missing, parent_pid};
@@ -104,6 +105,7 @@ impl ProcessSeccompService {
 
     pub(crate) fn handle_notification(
         &self,
+        trace_runtime: &TraceRuntime,
         identity_reader: &impl ProcessIdentityReader,
         notification: &libc::seccomp_notif,
         continuation: &mut NotificationContinuation,
@@ -137,7 +139,7 @@ impl ProcessSeccompService {
                     self.max_args,
                     self.max_arg_bytes,
                 )?;
-                let process = identity(identity_reader, notification.pid)?;
+                let process = identity(trace_runtime, identity_reader, notification.pid)?;
                 let parent_pid = parent_pid(notification.pid)?;
                 continuation.continue_now()?;
                 Ok(vec![ProcessSeccompObservation {
@@ -170,7 +172,7 @@ impl ProcessSeccompService {
                     self.max_args,
                     self.max_arg_bytes,
                 )?;
-                let process = identity(identity_reader, notification.pid)?;
+                let process = identity(trace_runtime, identity_reader, notification.pid)?;
                 let parent_pid = parent_pid(notification.pid)?;
                 continuation.continue_now()?;
                 Ok(vec![ProcessSeccompObservation {
@@ -195,7 +197,7 @@ impl ProcessSeccompService {
                     continuation.continue_now()?;
                     return Ok(Vec::new());
                 }
-                let process = identity(identity_reader, notification.pid)?;
+                let process = identity(trace_runtime, identity_reader, notification.pid)?;
                 continuation.continue_now()?;
                 Ok(vec![ProcessSeccompObservation {
                     observed_at,
@@ -216,8 +218,13 @@ impl ProcessSeccompService {
 
     pub(crate) fn materialize_observation(
         &self,
+        trace_runtime: &TraceRuntime,
         observation: ProcessSeccompObservation,
     ) -> RawCollectorEvent {
+        let process = trace_runtime
+            .find_membership_by_pid(observation.process.pid)
+            .map(|(_, membership)| membership.identity)
+            .unwrap_or_else(|| observation.process.clone());
         match observation.details {
             ProcessSeccompObservationDetails::Exec {
                 args,
@@ -225,7 +232,7 @@ impl ProcessSeccompService {
                 execveat_flags,
             } => self.exec_event(
                 observation.observed_at,
-                observation.process,
+                process,
                 observation.parent_pid,
                 observation.syscall,
                 args,
@@ -238,7 +245,7 @@ impl ProcessSeccompService {
                 clone3_args_size,
             } => self.fork_attempt_event(
                 observation.observed_at,
-                observation.process,
+                process,
                 observation.syscall,
                 flags,
                 clone3_args_ptr,
@@ -332,9 +339,13 @@ enum ProcessSeccompObservationDetails {
 }
 
 fn identity(
+    trace_runtime: &TraceRuntime,
     identity_reader: &impl ProcessIdentityReader,
     pid: u32,
 ) -> Result<ProcessIdentity, ControlError> {
+    if let Some((_, membership)) = trace_runtime.find_membership_by_pid(pid) {
+        return Ok(membership.identity);
+    }
     identity_reader
         .read_identity(pid)
         .map_err(|error| ControlError::new("process_seccomp_identity", format!("{error:?}")))

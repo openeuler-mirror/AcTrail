@@ -64,6 +64,7 @@ def main() -> int:
             float(required(workload, "drain_sleep_seconds")),
         )
         require_claude_exec_span(otel)
+        require_claude_llm_request_span(otel)
         require_agent_invocation_span(otel)
         print(f"agent_invocation_trace_id={launch.trace_id}")
         print(f"otel_output={required(workload, 'otel_output_path')}")
@@ -310,10 +311,10 @@ def wait_for_otel(
         )
         if result.returncode == 0 and output_path.exists():
             document = json.loads(output_path.read_text(encoding="utf-8"))
-            if find_claude_exec_span(document) is not None:
+            if evidence_is_complete(document):
                 return document
         time.sleep(sleep_sec)
-    raise RuntimeError("OTEL export did not contain a seccomp-observed claude process.exec span")
+    raise RuntimeError("OTEL export did not contain complete claude exec, llm.request, and agent.invocation evidence")
 
 
 def require_claude_exec_span(document: dict) -> None:
@@ -328,17 +329,38 @@ def require_claude_exec_span(document: dict) -> None:
         raise RuntimeError(f"claude command_line missing expected argv: {command_line}")
 
 
+def require_claude_llm_request_span(document: dict) -> None:
+    if find_claude_llm_request_span(document) is None:
+        raise RuntimeError("missing claude llm.request span")
+
+
 def require_agent_invocation_span(document: dict) -> None:
     span = find_claude_agent_invocation_span(document)
     if span is None:
-        raise RuntimeError("missing xiaoO -> claude agent.invocation span")
+        raise RuntimeError("missing direct parent -> claude agent.invocation span")
+    exec_span = find_claude_exec_span(document)
+    if exec_span is None:
+        raise RuntimeError("missing claude process.exec span")
     attrs = span_attrs(span)
-    parent = attrs.get("agent.parent.executable", "")
+    exec_attrs = span_attrs(exec_span)
+    exec_pid = exec_attrs.get("process.pid", "")
+    parent_pid = attrs.get("agent.parent.pid", "")
+    child_pid = attrs.get("agent.child.pid", "")
     child = attrs.get("agent.child.command_line", "")
-    if executable_basename(parent) != "xiaoo":
-        raise RuntimeError(f"agent invocation parent is not xiaoO: {parent}")
+    if child_pid != exec_pid:
+        raise RuntimeError(f"agent invocation child pid {child_pid} does not match claude pid {exec_pid}")
+    if not parent_pid or parent_pid == child_pid:
+        raise RuntimeError(f"agent invocation parent pid is not a direct external launcher: {parent_pid}")
     if "claude" not in child:
         raise RuntimeError(f"agent invocation child is not claude: {child}")
+
+
+def evidence_is_complete(document: dict) -> bool:
+    return (
+        find_claude_exec_span(document) is not None
+        and find_claude_llm_request_span(document) is not None
+        and find_claude_agent_invocation_span(document) is not None
+    )
 
 
 def find_claude_exec_span(document: dict) -> dict | None:
@@ -368,6 +390,20 @@ def is_claude_prompt_exec(span: dict, attrs: dict[str, str]) -> bool:
     if any(executable_basename(value) == "claude" for value in executable_candidates):
         return True
     return "\nclaude\n-p" in argv or "/claude\n-p" in argv
+
+
+def find_claude_llm_request_span(document: dict) -> dict | None:
+    exec_span = find_claude_exec_span(document)
+    if exec_span is None:
+        return None
+    exec_pid = span_attrs(exec_span).get("process.pid", "")
+    for span in spans(document):
+        attrs = span_attrs(span)
+        if attrs.get("actrail.action.kind") != "llm.request":
+            continue
+        if attrs.get("process.pid") == exec_pid:
+            return span
+    return None
 
 
 def find_claude_agent_invocation_span(document: dict) -> dict | None:

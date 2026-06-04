@@ -1,7 +1,6 @@
 //! Runtime projection from low-level facts into semantic actions.
 
 pub mod live;
-pub mod snapshot;
+mod payload_projection;
 
 pub use live::LiveSemanticActionRuntime;
-pub use snapshot::project_snapshot_actions;

@@ -7,8 +7,9 @@ use control_contract::reply::ControlError;
 use model_core::diagnostics::{DiagnosticKind, DiagnosticRecord, DiagnosticSeverity};
 use model_core::event::DomainEvent;
 use model_core::ids::TraceId;
-use semantic_action::SemanticAction;
+use model_core::payload::PayloadSegment;
 use semantic_action::SemanticActionWriteStore;
+use semantic_action::{SemanticAction, SemanticActionLink};
 use store_write_contract::diagnostics::DiagnosticWriteStore;
 use trace_runtime::registry::TraceRuntime;
 
@@ -20,13 +21,36 @@ impl SqliteAttachService {
         trace_runtime: &TraceRuntime,
         event: &DomainEvent,
     ) -> Result<(), ControlError> {
-        let actions = self.semantic_actions.observe_event(event);
+        let output = self.semantic_actions.observe_event(event);
+        self.persist_semantic_actions(trace_runtime, output.actions, output.links)
+    }
+
+    pub(super) fn persist_semantic_actions_for_payload_segment(
+        &mut self,
+        trace_runtime: &TraceRuntime,
+        segment: &PayloadSegment,
+    ) -> Result<(), ControlError> {
+        let output = self.semantic_actions.observe_payload_segment(segment);
+        self.persist_semantic_actions(trace_runtime, output.actions, output.links)
+    }
+
+    fn persist_semantic_actions(
+        &mut self,
+        trace_runtime: &TraceRuntime,
+        actions: Vec<SemanticAction>,
+        links: Vec<SemanticActionLink>,
+    ) -> Result<(), ControlError> {
         for action in actions.iter().cloned() {
             self.storage
                 .upsert_semantic_action(action)
                 .map_err(|error| ControlError::new(error.stage, error.message))?;
         }
-        self.publish_live_otel_actions(trace_runtime, &actions)?;
+        for link in links.iter().cloned() {
+            self.storage
+                .upsert_semantic_action_link(link)
+                .map_err(|error| ControlError::new(error.stage, error.message))?;
+        }
+        self.publish_live_otel_actions(trace_runtime, &actions, &links)?;
         Ok(())
     }
 
@@ -34,6 +58,7 @@ impl SqliteAttachService {
         &mut self,
         trace_runtime: &TraceRuntime,
         actions: &[SemanticAction],
+        links: &[SemanticActionLink],
     ) -> Result<(), ControlError> {
         self.live_otel_export.check_health()?;
         if !self.live_otel_export.enabled() || actions.is_empty() {
@@ -44,7 +69,7 @@ impl SqliteAttachService {
             let trace = trace_runtime
                 .get_trace(action.trace_id)
                 .ok_or_else(|| ControlError::new("otel_live_export", "trace not found"))?;
-            let result = self.live_otel_export.publish(&trace.trace, action)?;
+            let result = self.live_otel_export.publish(&trace.trace, action, links)?;
             if result.dropped_spans() > u64::default() {
                 dropped_by_trace
                     .entry(action.trace_id)

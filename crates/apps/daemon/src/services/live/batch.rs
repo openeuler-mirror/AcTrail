@@ -13,7 +13,7 @@ use model_core::process::ProcessMembership;
 use model_core::trace::{TraceLifecycleState, TraceRecord};
 use plugin_policy_host::engine::PluginPolicyEngine;
 use plugin_policy_host::registry::PluginRegistry;
-use semantic_action::{SemanticAction, SemanticActionWriteStore};
+use semantic_action::{SemanticAction, SemanticActionLink, SemanticActionWriteStore};
 use store_tx_contract::boundary::TransactionBoundary;
 use store_write_contract::diagnostics::DiagnosticWriteStore;
 use store_write_contract::events::EventWriteStore;
@@ -65,9 +65,9 @@ impl SqliteAttachService {
                 }
                 batch.trace_ids.insert(trace_id);
                 for event in outcome.events {
-                    batch
-                        .semantic_actions
-                        .extend(self.semantic_actions.observe_event(&event));
+                    let semantic_output = self.semantic_actions.observe_event(&event);
+                    batch.semantic_actions.extend(semantic_output.actions);
+                    batch.semantic_action_links.extend(semantic_output.links);
                     batch.events.push(event);
                 }
             }
@@ -92,7 +92,11 @@ impl SqliteAttachService {
                 transaction
                     .commit()
                     .map_err(|error| ControlError::new(error.stage, error.message))?;
-                self.publish_live_otel_actions(trace_runtime, &commit_result.semantic_actions)?;
+                self.publish_live_otel_actions(
+                    trace_runtime,
+                    &commit_result.semantic_actions,
+                    &commit_result.semantic_action_links,
+                )?;
                 for trace_id in commit_result.terminal_trace_ids {
                     self.collector
                         .unbind_trace(trace_id)
@@ -122,6 +126,11 @@ impl SqliteAttachService {
                 .upsert_semantic_action(action)
                 .map_err(|error| ControlError::new(error.stage, error.message))?;
         }
+        for link in batch.semantic_action_links.iter().cloned() {
+            self.storage
+                .upsert_semantic_action_link(link)
+                .map_err(|error| ControlError::new(error.stage, error.message))?;
+        }
         for diagnostic in batch.diagnostics {
             self.storage
                 .append_diagnostic(diagnostic)
@@ -131,6 +140,7 @@ impl SqliteAttachService {
         Ok(LiveEventCommitResult {
             terminal_trace_ids,
             semantic_actions: batch.semantic_actions,
+            semantic_action_links: batch.semantic_action_links,
         })
     }
 
@@ -163,12 +173,14 @@ struct LiveEventBatch {
     events: Vec<DomainEvent>,
     diagnostics: Vec<DiagnosticRecord>,
     semantic_actions: Vec<SemanticAction>,
+    semantic_action_links: Vec<SemanticActionLink>,
     trace_ids: BTreeSet<TraceId>,
 }
 
 struct LiveEventCommitResult {
     terminal_trace_ids: Vec<TraceId>,
     semantic_actions: Vec<SemanticAction>,
+    semantic_action_links: Vec<SemanticActionLink>,
 }
 
 struct TraceStatePersistence {

@@ -1,14 +1,14 @@
 # xiaoO 调用 Claude Code 的进程语义验证
 
-这个示例验证真实 xiaoO agent 静默拉起 `claude -p ...` 时，AcTrail 能否在进程层识别 agent invocation 关系。
+这个示例验证真实 xiaoO agent 静默拉起 `claude -p ...` 时，AcTrail 能否在识别到 Claude 的 LLM 调用后，把 Claude 进程标记为 agent，并把它的直接拉起边升级为 `agent.invocation`。
 
-这是 process/semantic trace 示例，不是 LLM payload capture 示例。`payload_tls_enabled = false` 和 `payload_socket_enabled = false` 是有意设置。通过条件在导出的 OpenTelemetry trace 里：必须存在一条 seccomp 观测到的 `claude -p ...` `process.exec` span，以及一条 parent 为 xiaoO、child 为 Claude Code 的 `agent.invocation` span。
+这是 process/semantic trace 加 TLS plaintext evidence 示例。`payload_tls_enabled = true` 是必要条件，因为 `agent.invocation` 不再由命令名直接触发；它需要先从 Claude 的出站 LLM request 生成 `llm.request` 证据。通过条件在导出的 OpenTelemetry trace 里：必须存在一条 seccomp 观测到的 `claude -p ...` `process.exec` span、一条同 pid 的 `llm.request` span，以及一条 child 为 Claude Code 的 `agent.invocation` span。`agent.invocation` 的 parent 是 Claude 的直接拉起进程，可能是 xiaoO，也可能是 xiaoO 工具链中的 bash/timeout/python wrapper。
 
 ## 文件
 
 | 文件 | 用途 |
 | --- | --- |
-| `operator.conf` | AcTrail operator 配置，用于 process exec seccomp observation 和 agent invocation 语义组装。 |
+| `operator.conf` | AcTrail operator 配置，用于 process exec seccomp observation、TLS plaintext payload capture 和 agent invocation 语义组装。 |
 | `workload.conf` | 真实 xiaoO -> Claude Code 运行所需的 workload 参数。 |
 | `agent_prompt.template` | 提示词模板，要求 xiaoO 只执行一次前台 `claude -p ...` 命令。 |
 | `run_e2e.py` | 最薄的 docs 入口，调用共享真实 E2E runner 并传入本示例配置。 |
@@ -53,13 +53,14 @@ jq '[.resourceSpans[].scopeSpans[].spans[] | select(any(.attributes[]?; .key=="s
   /tmp/actrail-xiaoo-claude-agent-invocation.otlp.json
 ```
 
-第一条命令至少应输出 `1`。第二条命令必须非零。`agent.invocation` span attributes 里应包含以 `xiaoo` 结尾的 `agent.parent.executable`，以及包含 `claude -p` 的 `agent.child.command_line`。
+第一条命令至少应输出 `1`。第二条命令必须非零。`agent.invocation` span attributes 里应包含 `agent.child.command_line` 且其中有 `claude -p`；`agent.parent.*` 表示 Claude 的直接拉起进程，不要求一定是 xiaoO。
 
 ## 这个示例证明什么
 
 - `actrailctl launch` 会让 AcTrail 成为 trace root。
 - 被启动的 xiaoO 进程会继承 trace。
 - Claude Code 的启动会被 launch-time `execve`/`execveat` seccomp notify 观测到。
-- AcTrail 会把底层 process facts 组装成更高层的 `agent.invocation` semantic action。
+- Claude Code 的出站 LLM request 会形成 `llm.request` 证据。
+- AcTrail 会把发生 LLM 调用的 Claude 进程标记为 agent，并把它的直接 parent -> child exec 边升级成 `agent.invocation` semantic action。
 
-这个示例不校验 Claude 的自然语言回答，也不采集 Claude LLM request bytes。xiaoO 和 Claude Code 可能通过 HTTPS/TLS 或 plain HTTP 访问 provider；完整 payload 采集请优先参考 `docs/examples/08.full-monitor-validation/`。只验证 xiaoO outbound request payload 时，可参考 `docs/examples/06.xiaoo-tls-capture/`。
+这个示例不校验 Claude 的自然语言回答质量。xiaoO 和 Claude Code 可能通过 HTTPS/TLS 或 plain HTTP 访问 provider；完整 payload 采集请优先参考 `docs/examples/08.full-monitor-validation/`。只验证 xiaoO outbound request payload 时，可参考 `docs/examples/06.xiaoo-tls-capture/`。

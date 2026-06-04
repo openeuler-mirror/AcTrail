@@ -7,7 +7,7 @@ This document maps common operator questions to the AcTrail feature path and the
 | Question | Use This Path | Validate With |
 | --- | --- | --- |
 | What process tree did the agent create? | eBPF process lifecycle plus viewer process/events output. | [Example 01](examples/01.quick-start/README.md), [Example 03](examples/03.extended-observation-e2e/README.md) |
-| Did one agent silently launch another agent? | `actrailctl launch` plus process seccomp exec context and `agent.invocation` semantic action. | [Example 07](examples/07.xiaoo-claude-agent-invocation/README.md) |
+| Did one agent silently launch another agent? | `actrailctl launch` plus process seccomp exec context, TLS/plaintext LLM evidence, and `agent.invocation` semantic action. | [Example 07](examples/07.xiaoo-claude-agent-invocation/README.md) |
 | What LLM request and response did xiaoO exchange? | TLS sync payload capture plus HTTP/SSE and `llm.request` semantic assembly. | [Example 06](examples/06.xiaoo-tls-capture/README.md) |
 | What LLM request and response did opencode exchange? | Bun/static-BoringSSL executable TLS payload capture plus proxy-aware HTTP semantics. | `python3 tests/agent-trace/run_case.py opencode-bun` |
 | What outbound LLM request did a Rust/rustls agent send? | `tls-sync` with a rustls probe plan from finder fast, symbols, or a build-id-checked pattern. | [Example 06](examples/06.xiaoo-tls-capture/README.md) |
@@ -20,7 +20,7 @@ This document maps common operator questions to the AcTrail feature path and the
 
 ## Agent Invocation Discovery
 
-Goal: detect a tree-shaped call such as one agent launching `claude -p ...`.
+Goal: detect a tree-shaped call such as one process launching `claude -p ...`, where Claude is proven to be an agent by an outbound LLM request.
 
 Use:
 
@@ -32,9 +32,10 @@ Expected evidence:
 
 - The monitored workload prints `ACTRAIL_AGENT_TREE_OK`.
 - OTEL export contains a `process.exec` span for `claude -p`.
-- OTEL export contains an `agent.invocation` span linking the parent agent executable to the child agent command.
+- OTEL export contains an `llm.request` span for the same Claude process.
+- OTEL export contains an `agent.invocation` span linking Claude's direct launcher to the child Claude command.
 
-This use case does not require TLS payload capture. It proves process-level semantic discovery.
+This use case requires payload capture for the child LLM call. A command match is only a candidate hint; it does not prove agent identity by itself.
 
 ## Complete LLM Request Capture
 

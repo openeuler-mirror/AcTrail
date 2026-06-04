@@ -2,7 +2,7 @@
 
 use model_core::ids::TraceId;
 
-use crate::model::SemanticAction;
+use crate::model::{SemanticAction, SemanticActionLink};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SemanticActionStoreError {
@@ -24,6 +24,11 @@ pub trait SemanticActionWriteStore {
         &mut self,
         action: SemanticAction,
     ) -> Result<(), SemanticActionStoreError>;
+
+    fn upsert_semantic_action_link(
+        &mut self,
+        link: SemanticActionLink,
+    ) -> Result<(), SemanticActionStoreError>;
 }
 
 pub trait SemanticActionReadStore {
@@ -31,4 +36,9 @@ pub trait SemanticActionReadStore {
         &self,
         trace_id: TraceId,
     ) -> Result<Vec<SemanticAction>, SemanticActionStoreError>;
+
+    fn list_semantic_action_links(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<Vec<SemanticActionLink>, SemanticActionStoreError>;
 }

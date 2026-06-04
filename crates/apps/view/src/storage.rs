@@ -102,7 +102,7 @@ pub fn render_storage_view(invocation: ViewInvocation) -> Result<String, String>
         }
         StorageCommand::Actions => {
             let snapshot = source::read_snapshot(&mut storage, invocation.trace_id)?;
-            let actions = source::list_all_semantic_actions(&storage, &snapshot)?;
+            let actions = source::list_semantic_actions(&storage, snapshot.trace.trace_id)?;
             Ok(render::render_semantic_actions(
                 actions,
                 invocation.row_limit,

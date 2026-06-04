@@ -43,7 +43,7 @@ pub(in crate::decode) fn decode(
     let Some(outcome) = outcome else {
         return Ok(None);
     };
-    if outcome.enter.kind == FILE_EVENT_CONTEXT {
+    if outcome.enter.kind == FILE_EVENT_CONTEXT && outcome.enter.aux != FILE_SYSCALL_CLOSE {
         return Ok(None);
     }
     if outcome.enter.kind == FILE_EVENT_MMAP && !mmap_is_shared_writable(&outcome) {
@@ -87,6 +87,8 @@ fn file_operation(outcome: &FileSyscallOutcome) -> &'static str {
     match outcome.enter.kind {
         FILE_EVENT_OPEN if open_truncates(&outcome.enter) => "truncate",
         FILE_EVENT_OPEN => "open",
+        crate::decode::FILE_EVENT_CONTEXT if outcome.enter.aux == FILE_SYSCALL_CLOSE => "close",
+        crate::decode::FILE_EVENT_CONTEXT => "context",
         crate::decode::FILE_EVENT_UNLINK if unlinkat_removes_directory(&outcome.enter) => "rmdir",
         crate::decode::FILE_EVENT_UNLINK => "unlink",
         crate::decode::FILE_EVENT_RENAME => "rename",
@@ -170,6 +172,7 @@ fn insert_fd_metadata(metadata: &mut BTreeMap<String, String>, outcome: &FileSys
             u32::try_from(outcome.result).ok()
         }
         FILE_SYSCALL_MMAP | FILE_SYSCALL_FTRUNCATE if event.fd != FILE_FD_MISSING => Some(event.fd),
+        FILE_SYSCALL_CLOSE => Some(event.arg0 as u32),
         _ => None,
     };
     if let Some(fd) = fd {
