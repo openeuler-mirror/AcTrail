@@ -44,7 +44,7 @@ Use an example config for the workflow you are validating:
 | Broad process/file/network/IPC/resource/stdout observation | `docs/examples/03.extended-observation-e2e/operator.conf` |
 | Plain HTTP socket payload and HTTP/1.x semantics | `docs/examples/05.http-payload-unified/operator.conf` |
 | Local HTTPS/2 TLS payload and HTTP/2 semantics | `docs/examples/02.llm-http-payload-capture/http2-local/operator.conf` |
-| Claude Code outbound LLM request capture | `docs/examples/06.claude-code-tls-capture/operator.conf` |
+| xiaoO outbound LLM request capture | `docs/examples/06.xiaoo-tls-capture/operator.conf` |
 | xiaoO launching Claude Code process tree discovery | `docs/examples/07.xiaoo-claude-agent-invocation/operator.conf` |
 
 For real agent acceptance across multiple runtimes, use the E2E suite under `tests/agent-trace/`. The suite renders its own case configs and validates viewer output plus OTEL spans:
@@ -86,15 +86,15 @@ When `otel_live_export_enabled = true`, the configured `otel_live_export_path` i
 ## 5. Start And Check The Daemon
 
 ```bash
-./target/release/actraild start --config <operator.conf>
-./target/release/actraild status --config <operator.conf>
+./target/release/actraild --config <operator.conf> start
+./target/release/actraild --config <operator.conf> status
 ./target/release/actrailctl doctor --config <operator.conf>
 ```
 
 Use foreground mode when running under a supervisor:
 
 ```bash
-./target/release/actraild run --config <operator.conf>
+./target/release/actraild --config <operator.conf> run
 ```
 
 `actraild start` writes logs to the config's `log_path`. `actrailctl doctor` verifies control-plane readiness; it does not prove that every configured collector has already observed target activity.
@@ -120,7 +120,7 @@ Launch a child under AcTrail:
   <command> <args>
 ```
 
-Use `launch` for seccomp-backed TLS capture (`seccomp-user-read` or `bpf-copy-seccomp-fallback`) and process seccomp agent-invocation observation. Use `track-add` only when observing an already-running process is sufficient. TLS seccomp filters cannot be installed into a process that is already running.
+Use `launch` for `tls-sync` TLS capture and process seccomp agent-invocation observation. Use `track-add` only when observing an already-running process is sufficient. The sync TLS runtime, event socket, and probe plan must be prepared before the target `exec`.
 
 ## 7. Inspect A Trace
 
@@ -234,7 +234,7 @@ Override address or port for a local run:
 ## 11. Stop
 
 ```bash
-./target/release/actraild stop --config <operator.conf>
+./target/release/actraild --config <operator.conf> stop
 ```
 
 If the trace was attached to a long-running process and should stop before process exit:
@@ -249,6 +249,6 @@ If the trace was attached to a long-running process and should stop before proce
 | --- | --- |
 | `tracefs mount is missing` or `perf_event_open` failure | eBPF tracepoint/uprobe attachment is blocked by the host. See [platform-requirements.md](platform-requirements.md). |
 | `BootstrapGap` diagnostic on manual attach | The process existed before AcTrail attached, so pre-attach history may be incomplete. |
-| TLS payload rows missing in a seccomp-backed TLS case | The target was not launched through `actrailctl launch`, the TLS symbol resolver did not match, BPF direct-copy events were not consumed, or user-memory read failed. |
+| TLS payload rows missing in a `tls-sync` case | The target was not launched through `actrailctl launch`, the sync runtime was not loaded, the probe plan did not match the target binary, or sync payload events were not consumed. |
 | Payload operation `partial` or `Truncated` | The configured per-operation or per-segment capture budget was too small for that payload. |
 | OTEL export has no expected span | The semantic action was not assembled for that trace, or that low-level fact has no OTEL span mapping yet. |

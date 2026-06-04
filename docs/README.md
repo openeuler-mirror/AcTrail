@@ -23,7 +23,7 @@ The main runtime flow is:
 actraild -> collectors/analyzers -> AcTrail storage -> actrailviewer/actrailweb/export
 ```
 
-Use `actrailctl track-add` for an already-running process when you only need observation. Use `actrailctl launch` when AcTrail must prepare the child before `exec`, such as TLS seccomp-backed payload capture (`seccomp-user-read` or `bpf-copy-seccomp-fallback`) or process seccomp agent-invocation observation.
+Use `actrailctl track-add` for an already-running process when you only need observation. Use `actrailctl launch` when AcTrail must prepare the child before `exec`, such as TLS sync payload capture (`LD_PRELOAD` runtime plus finder fast probe plan), socket large-payload seccomp fallback, or process seccomp agent-invocation observation.
 
 Process fork observation in the eBPF collector uses `sched/sched_process_fork`. The syscall tracepoint `syscalls/sys_enter_fork` is not required.
 

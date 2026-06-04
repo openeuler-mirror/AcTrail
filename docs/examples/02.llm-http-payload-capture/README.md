@@ -3,8 +3,8 @@
 这份示例用于验证：
 
 ```text
-actrailctl launch -> http1.sh -> curl/OpenSSL -> libbpf eBPF collector -> AcTrail storage -> actrailviewer
-                                                          -> HTTP/1.x semantic Application events
+actrailctl launch -> http1.sh -> curl/OpenSSL -> tls-sync runtime -> AcTrail storage -> actrailviewer
+                                                        -> HTTP/1.x semantic Application events
 ```
 
 验证目标是捕捉真实发往 OpenAI-compatible LLM provider 的 outbound TLS plaintext request，并让 AcTrail 从保留的 plaintext 中派生 HTTP/1.x semantic request event。DeepSeek 只是本例的默认 provider；可以通过环境变量改成别的兼容 endpoint。服务端是否返回业务成功不是本例重点；只要 `curl` 发出了 HTTPS 请求，`actrailviewer` 就应该能看到发出的 HTTP request、JSON body，以及 `Application` domain 的 request row。`actraild` 预期由管理员或 root 运行。
@@ -17,19 +17,19 @@ sequenceDiagram
     participant Daemon as actraild
     participant Launcher as actrailctl launch
     participant Curl as curl/OpenSSL
-    participant Kernel as libbpf/eBPF uprobes
+    participant Runtime as tls-sync runtime
     participant Provider as LLM Provider
     participant Store as AcTrail storage
     participant Viewer as actrailviewer
 
     User->>Daemon: start --config http1-operator.conf
-    Daemon->>Kernel: attach OpenSSL TLS payload uprobes
+    Daemon->>Runtime: prepare sync event socket
     User->>Launcher: launch bash http1.sh
     Launcher->>Daemon: TrackAdd(actrailctl pid)
-    Launcher->>Kernel: install seccomp notify before child exec
+    Launcher->>Runtime: prepare LD_PRELOAD and finder fast probe plan before child exec
     Launcher->>Curl: exec bash http1.sh
     Curl->>Provider: HTTPS/1.1 chat completion request
-    Kernel-->>Daemon: TLS plaintext payload segments
+    Runtime-->>Daemon: TLS plaintext payload events
     Daemon->>Daemon: redact payload and derive HTTP Application events
     Daemon->>Store: persist payload and Application rows
     User->>Viewer: inspect payloads, payload text, and events
@@ -105,7 +105,7 @@ web_listen_addr = 127.0.0.1:18080
 web_request_read_timeout_ms = 1000
 export_directory = /tmp/actrail-llm-http-http1-export
 log_path = /tmp/actrail-llm-http-http1.log
-diagnostic_log_level = debug
+diagnostic_log_level = info
 
 required_capability = proc-lifecycle
 required_capability = net-transport
@@ -118,6 +118,7 @@ required_capability = net-application-http2-frames
 file_path_capture_enabled = false
 
 payload_tls_enabled = true
+payload_tls_capture_backend = tls-sync
 payload_tls_source = shared-library
 payload_tls_resolver = openssl-symbols
 payload_tls_library = openssl
@@ -128,11 +129,11 @@ payload_tls_max_segment_bytes = 4095
 payload_tls_max_operation_bytes = 4194304
 payload_tls_ring_buffer_bytes = 1048576
 payload_tls_pending_operation_max_entries = 4096
-payload_tls_diagnostics_enabled = true
+payload_tls_diagnostics_enabled = false
 payload_tls_retention_max_bytes_per_trace = 10485760
 payload_tls_redaction_policy = authorization-header
 payload_tls_sync_runtime_library_path = auto
-payload_tls_sync_event_socket_path = /tmp/actrail-tls-sync.sock
+payload_tls_sync_event_socket_path = /tmp/actrail-http2-payload-tls-sync.sock
 payload_tls_sync_socket_mode_octal = 660
 payload_tls_sync_match_limit = 8
 
@@ -193,7 +194,7 @@ resource_metrics_memory_alert_rss_kb = disabled
 | `export_directory` | JSON export 默认目录；本例查看 payload 不需要 JSON export |
 | `otel_live_export_*` | 默认关闭的实时 OTEL JSONL span sink；需要实时消费 semantic action span 时显式开启 |
 | `log_path` | `actraild start` 后台运行时 stdout/stderr 追加写入位置 |
-| `diagnostic_log_level` | `debug` 时打开 daemon 诊断日志和 TLS payload 元数据诊断；`actraild start` 写入 `log_path`，`actraild ... run` 写入前台 stdout/stderr |
+| `diagnostic_log_level` | 默认 `info`，避免逐 payload segment 打印调试日志；排查采集失败时临时改成 `debug`。`actraild start` 写入 `log_path`，`actraild ... run` 写入前台 stdout/stderr |
 
 本例默认不把 payload 原文写入 JSON graph，也不启用实时 OTEL JSONL。如果要通过 `actrailviewer export-json` 直接导出 payload 内容，显式设置 `export_payload_bytes_enabled = true` 和/或 `export_payload_text_enabled = true`。
 
@@ -206,15 +207,15 @@ TLS payload 相关配置含义：
 | `required_capability = stdio-chunk` | 同时记录 curl stdout/stderr，证明 provider 请求真实返回了响应 |
 | `required_capability = net-application-plaintext-http` | 要求 daemon 从 TLS plaintext payload 派生 HTTP/1.x semantic events |
 | `payload_tls_enabled` | 启用 TLS uprobe/uretprobe payload capture |
-| `payload_tls_capture_backend` | 固定为 `seccomp-user-read`；TLS payload capture 只能通过 `actrailctl launch` pre-exec seccomp notify 路径完成 |
+| `payload_tls_capture_backend` | 固定为 `tls-sync`；TLS plaintext 由 preload runtime 在 TLS 明文边界同步上报 |
 | `payload_tls_source` | 本例使用 `shared-library`，即动态 OpenSSL libssl |
 | `payload_tls_resolver` | 本例使用 `openssl-symbols`，按 `SSL_read`/`SSL_write` 等符号 attach |
 | `payload_tls_library_path` | `auto` 表示通过 `ldconfig -p` 查找 `libssl.so`；找不到会 fail-fast |
 | `payload_tls_binary_path` / `payload_tls_pattern_path` | 本例不 attach executable，固定写 `disabled` |
-| `payload_tls_max_segment_bytes` | 单个 payload segment 最大复制字节数 |
-| `payload_tls_max_operation_bytes` | daemon 在 seccomp 暂停窗口内对单次 TLS read/write 最多读取的明文字节数；LLM 请求超过该值会显示截断 |
-| `payload_tls_seccomp_syscall` / `seccomp_notify_reserved_listener_fd` | `actrailctl launch` child 在 exec 前安装 seccomp listener 的 TLS syscall 集合和 shared reserved fd |
-| `payload_tls_diagnostics_enabled` | TLS payload 内部计数和元数据事件开关；是否输出日志由顶层 `diagnostic_log_level` 控制 |
+| `payload_tls_max_segment_bytes` | 非 sync TLS 后端的单个 payload segment 最大复制字节数；`tls-sync` 下保留该 key 以保持配置面完整 |
+| `payload_tls_max_operation_bytes` | 单次 TLS plaintext operation 最大保留字节数；LLM 请求超过该值会显示截断 |
+| `payload_tls_seccomp_syscall` / `seccomp_notify_reserved_listener_fd` | 旧 TLS seccomp 后端和 socket large-payload fallback 的 seccomp 配置；`tls-sync` 不依赖这些 syscall 捕获 TLS plaintext |
+| `payload_tls_diagnostics_enabled` | TLS payload 内部计数和元数据事件开关；常规验证保持 `false`，排查时再开启 |
 | `payload_tls_retention_max_bytes_per_trace` | 单个 trace 可保留的 payload 字节上限 |
 | `payload_tls_redaction_policy` | `authorization-header` 会在入库前改写 Authorization header |
 | `application_protocol_enabled` | 启用应用层 analyzer；它只处理已保留的 plaintext payload，不读取密文 syscall bytes |
@@ -240,8 +241,8 @@ external provider 配置使用宽采集面：`payload_tls_enabled = true`、`pay
 终端 A：
 
 ```bash
-./target/release/actraild start --config docs/examples/02.llm-http-payload-capture/external-openai-compatible/http1-operator.conf
-./target/release/actraild status --config docs/examples/02.llm-http-payload-capture/external-openai-compatible/http1-operator.conf
+./target/release/actraild --config docs/examples/02.llm-http-payload-capture/external-openai-compatible/http1-operator.conf start
+./target/release/actraild --config docs/examples/02.llm-http-payload-capture/external-openai-compatible/http1-operator.conf status
 ```
 
 期望看到类似输出：
@@ -265,7 +266,7 @@ collectors=ebpf plugins= storage_ready=true
 
 ## 5. 通过 actrailctl launch 启动外部 LLM HTTP Workload
 
-TLS plaintext payload capture uses `payload_tls_capture_backend = seccomp-user-read`, so this example must run the workload through `actrailctl launch`. Do not use `track-add` for an already-running TLS workload; AcTrail rejects that path because the seccomp listener must be installed before child `exec`.
+TLS plaintext payload capture uses `payload_tls_capture_backend = tls-sync`, so this example must run the workload through `actrailctl launch`. Do not use `track-add` for an already-running TLS workload; `launch` is responsible for preparing `LD_PRELOAD`, the sync event socket, and the finder fast probe plan before the child `exec`.
 
 ```bash
 ./target/release/actrailctl launch \
@@ -361,8 +362,8 @@ event-...  Application  <PID>   request    http/1.1 POST /chat/completions
 终端 A 或 C：
 
 ```bash
-./target/release/actraild stop --config docs/examples/02.llm-http-payload-capture/external-openai-compatible/http1-operator.conf
-./target/release/actraild status --config docs/examples/02.llm-http-payload-capture/external-openai-compatible/http1-operator.conf
+./target/release/actraild --config docs/examples/02.llm-http-payload-capture/external-openai-compatible/http1-operator.conf stop
+./target/release/actraild --config docs/examples/02.llm-http-payload-capture/external-openai-compatible/http1-operator.conf status
 ```
 
 期望看到：
@@ -408,19 +409,19 @@ sequenceDiagram
     participant Daemon as actraild
     participant Launcher as actrailctl launch
     participant Curl as curl/OpenSSL h2
-    participant Kernel as libbpf/eBPF uprobes
+    participant Runtime as tls-sync runtime
     participant Provider as LLM Provider
     participant Store as AcTrail storage
     participant Viewer as actrailviewer
 
     User->>Daemon: start --config http2-operator.conf
-    Daemon->>Kernel: attach OpenSSL TLS payload uprobes
+    Daemon->>Runtime: prepare sync event socket
     User->>Launcher: launch bash http2.sh
     Launcher->>Daemon: TrackAdd(actrailctl pid)
-    Launcher->>Kernel: install seccomp notify before child exec
+    Launcher->>Runtime: prepare LD_PRELOAD and finder fast probe plan before child exec
     Launcher->>Curl: exec bash http2.sh
     Curl->>Provider: HTTPS/2 chat completion request
-    Kernel-->>Daemon: TLS plaintext h2 frames and DATA bytes
+    Runtime-->>Daemon: TLS plaintext h2 frames and DATA bytes
     Daemon->>Daemon: derive HTTP/2 Application frame/DATA facts
     Daemon->>Store: persist payload and h2 Application rows
     User->>Viewer: inspect events, payloads, and selected DATA text
@@ -446,20 +447,20 @@ sequenceDiagram
     participant Workload as http2-local/workload.py
     participant Server as local TLS h2 server
     participant Curl as curl --http2/OpenSSL
-    participant Kernel as libbpf/eBPF uprobes
+    participant Runtime as tls-sync runtime
     participant Store as AcTrail storage
     participant Viewer as actrailviewer
 
     User->>Daemon: start --config http2-local/operator.conf
-    Daemon->>Kernel: attach OpenSSL TLS payload uprobes
+    Daemon->>Runtime: prepare sync event socket
     User->>Workload: start local HTTP/2 workload
     Workload->>Server: bind local TLS+h2 listener
     User->>Workload: actrailctl launch python workload.py
     Workload->>Daemon: TrackAdd(actrailctl pid)
-    Workload->>Kernel: inherit seccomp notify into curl child
+    Workload->>Runtime: inherit LD_PRELOAD and sync event socket into curl child
     Workload->>Curl: run curl --http2 against local server
     Curl->>Server: HTTPS/2 request and response
-    Kernel-->>Daemon: TLS plaintext h2 frames and DATA bytes
+    Runtime-->>Daemon: TLS plaintext h2 frames and DATA bytes
     Daemon->>Daemon: derive HTTP/2 Application frame/DATA facts
     Daemon->>Store: persist payload and Application rows
     User->>Viewer: inspect payloads, events, and export-json
@@ -475,8 +476,8 @@ sequenceDiagram
 终端 A 启动 daemon：
 
 ```bash
-./target/release/actraild start --config docs/examples/02.llm-http-payload-capture/http2-local/operator.conf
-./target/release/actraild status --config docs/examples/02.llm-http-payload-capture/http2-local/operator.conf
+./target/release/actraild --config docs/examples/02.llm-http-payload-capture/http2-local/operator.conf start
+./target/release/actraild --config docs/examples/02.llm-http-payload-capture/http2-local/operator.conf status
 ```
 
 通过 `actrailctl launch` 启动 workload：
@@ -559,4 +560,4 @@ rg '"metadata.data_preview"' /tmp/actrail-http2-trace.json
 ./target/release/actrailviewer processes --config docs/examples/02.llm-http-payload-capture/external-openai-compatible/http1-operator.conf --trace-id <N>
 ```
 
-如果只看到 `actrailctl` root 进程、没有 shell/curl 子进程，说明 `actrailctl launch` 的 child 没有成功进入 workload。先看 `actrailctl launch` 的 stderr 和 daemon 的实际 stdout/stderr：`actraild start` 才会写 `log_path`，`actraild --config ... run` 是前台模式，输出在启动它的终端或 regression artifact 中。不要改用 `track-add`，TLS seccomp-user-read 不支持 attach 已运行进程。
+如果只看到 `actrailctl` root 进程、没有 shell/curl 子进程，说明 `actrailctl launch` 的 child 没有成功进入 workload。先看 `actrailctl launch` 的 stderr 和 daemon 的实际 stdout/stderr：`actraild start` 才会写 `log_path`，`actraild --config ... run` 是前台模式，输出在启动它的终端或 regression artifact 中。不要改用 `track-add`，`tls-sync` 需要在 exec 前准备 preload runtime、sync event socket 和 probe plan。

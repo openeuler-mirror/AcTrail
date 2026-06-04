@@ -23,6 +23,7 @@ SINGLE_VALUE_CONFIG_KEYS = {
     "log_path",
     "export_directory",
     "otel_live_export_path",
+    "payload_tls_sync_event_socket_path",
 }
 
 
@@ -68,7 +69,13 @@ def read_operator_config(path: Path) -> dict[str, str]:
 
 
 def clean_configured_paths(values: dict[str, str]) -> None:
-    for key in ["socket_path", "pid_file", "storage_path", "log_path"]:
+    for key in [
+        "socket_path",
+        "pid_file",
+        "storage_path",
+        "log_path",
+        "payload_tls_sync_event_socket_path",
+    ]:
         path = Path(required_value(values, key))
         if path.exists():
             path.unlink()

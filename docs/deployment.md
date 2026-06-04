@@ -70,7 +70,7 @@ Use a narrow config for each deployment intent:
 | File and IPC observation | Add `fs-access-basic`, `ipc-pipe-fifo`, `ipc-unix-socket`; set `file_path_capture_enabled = true` when path events are required. |
 | Stdio payload | Add `stdio-chunk`; enable `payload_stdio_enabled` and the specific stdin/stdout/stderr booleans. |
 | Plain HTTP payload | Add `socket-plaintext-payload`; enable `payload_socket_enabled`, `payload_socket_capture_backend`, `payload_socket_seccomp_syscall`, and HTTP application protocol settings. |
-| HTTPS OpenSSL payload | Add `tls-plaintext-payload`; configure TLS resolver/source and use `actrailctl launch` for seccomp-backed TLS capture. |
+| HTTPS OpenSSL payload | Add `tls-plaintext-payload`; configure TLS resolver/source and use `actrailctl launch` for `tls-sync` capture. |
 | Agent LLM payload | Enable both HTTPS/TLS and plain HTTP socket payload paths when the provider route is not known in advance; the resulting `llm.request` evidence may come from `TlsUserSpace` or `Syscall/socket-syscall`. |
 | Agent invocation discovery | Add `proc-exec-context`; enable `seccomp_notify_enabled`, `process_seccomp_enabled`, and `agent_invocation_enabled`. |
 | Fanotify enforcement | Add `enforcement-file-permission-fanotify`; configure enforcement rules and run on a host with permission-event support. |
@@ -82,22 +82,22 @@ Use a narrow config for each deployment intent:
 Background mode:
 
 ```bash
-./target/release/actraild start --config local/operator.conf
-./target/release/actraild status --config local/operator.conf
+./target/release/actraild --config local/operator.conf start
+./target/release/actraild --config local/operator.conf status
 ./target/release/actrailctl doctor --config local/operator.conf
 ```
 
 Foreground mode for a supervisor:
 
 ```bash
-./target/release/actraild run --config local/operator.conf
+./target/release/actraild --config local/operator.conf run
 ```
 
 Stop or restart:
 
 ```bash
-./target/release/actraild stop --config local/operator.conf
-./target/release/actraild restart --config local/operator.conf
+./target/release/actraild --config local/operator.conf stop
+./target/release/actraild --config local/operator.conf restart
 ```
 
 Clean local runtime artifacts when intentionally resetting a test deployment:
@@ -114,7 +114,7 @@ Some features require `actrailctl launch` because the child must be prepared bef
 
 | Feature | Why `launch` Is Required |
 | --- | --- |
-| TLS seccomp-backed payload (`seccomp-user-read`, `bpf-copy-seccomp-fallback`) | The child installs a seccomp listener before exec; the parent copies and registers the listener fd, then continues the child. Hybrid capture lets eBPF copy in-budget TLS writes directly and keeps seccomp as the larger-operation fallback. |
+| TLS sync payload (`tls-sync`) | `actrailctl launch` prepares the sync runtime, event socket, and probe plan before the child `exec`. Existing processes cannot receive that preload setup retroactively. |
 | Process seccomp exec/fork/clone observation | The child process tree must inherit the configured seccomp user notification filter. Process-creation names are resolved through the target architecture's syscall map. |
 | Agent invocation semantic actions | The daemon needs process exec context from the launch-time seccomp path. |
 

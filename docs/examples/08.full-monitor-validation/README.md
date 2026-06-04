@@ -24,7 +24,7 @@
 
 ## 敏感数据
 
-当前配置为了便于验证原始 payload，设置为：
+此配置为了便于验证原始 payload，设置为：
 
 ```conf
 payload_tls_redaction_policy = disabled
@@ -50,7 +50,7 @@ cargo build --release -p daemon -p ctl -p view -p tls_probe_point_finder -p tls_
 
 ## 启动 Daemon
 
-默认使用后台模式启动，不需要单独开一个窗口守着 daemon：
+默认使用后台模式启动，daemon stdout/stderr 会写入配置中的 `log_path`：
 
 ```bash
 mkdir -p /tmp/actrail-full-monitor
@@ -75,7 +75,7 @@ target/release/actraild --config docs/examples/08.full-monitor-validation/operat
 target/release/actraild --config docs/examples/08.full-monitor-validation/operator.conf restart
 ```
 
-后台启动后，daemon stdout/stderr 会写入：
+后台启动后，daemon stdout/stderr 路径为：
 
 ```text
 /tmp/actrail-full-monitor/actraild.log
@@ -95,7 +95,7 @@ target/release/actraild --config docs/examples/08.full-monitor-validation/operat
 diagnostic_log_level = info
 ```
 
-这个级别用于避免 daemon 按每个 payload segment 打印大量 `payload_persist stored` 调试行。常规验证时，daemon 日志里会保留粗粒度生命周期诊断，例如：
+这个级别用于避免 daemon 按每个 payload segment 打印大量持久化调试行。常规验证时，daemon 日志里会保留粗粒度生命周期诊断，例如：
 
 ```text
 [info] agent_launch started ...
@@ -110,13 +110,7 @@ diagnostic_log_level = info
 diagnostic_log_level = debug
 ```
 
-debug 模式下，daemon 会高频打印类似：
-
-```text
-[debug] payload_persist stored ...
-```
-
-这些行表示 payload segment 已落库，但每段都会产生字符串格式化和 terminal I/O 开销。排查结束后建议改回 `info` 或 `off`。
+debug 模式下，daemon 会高频输出每个 payload segment 的持久化诊断。这类日志表示 payload segment 已落库，但每段都会产生字符串格式化和 terminal I/O 开销。排查结束后建议改回 `info` 或 `off`。
 
 如果使用前台 `run`，这些日志会直接出现在当前 terminal；如果使用默认的后台 `start`，这些日志会写入 `/tmp/actrail-full-monitor/actraild.log`。
 
@@ -246,7 +240,7 @@ target/release/actraild --config docs/examples/08.full-monitor-validation/operat
 清理配置中的运行时产物：
 
 ```bash
-target/release/actrailctl --config docs/examples/08.full-monitor-validation/operator.conf clean
+python3 docs/examples/clean.py --example full-monitor
 ```
 
 如果要硬清理这个验证目录的运行时数据：

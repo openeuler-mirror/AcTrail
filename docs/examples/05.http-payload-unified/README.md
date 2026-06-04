@@ -6,7 +6,7 @@
 local HTTP workload -> libbpf eBPF collector -> AcTrail storage -> actrailviewer payload/Application events
 ```
 
-本例不使用 TLS，也不需要外网或 API key。它启动一个真实本地 TCP server/client workload，先发送一条非 HTTP socket 消息，再发送一条 HTTP/1.1 request/response。AcTrail 只保留识别为 HTTP 的 socket plaintext payload，并从相同 payload 派生 `Application` request/response rows。
+本例的 workload 不使用 TLS，也不需要外网或 API key。配置里仍启用 `payload_tls_enabled = true` 和 `payload_tls_capture_backend = tls-sync`，用于覆盖 TLS/socket 同时开启时，plain HTTP workload 仍能通过 socket plaintext 路径正常采集。它启动一个真实本地 TCP server/client workload，先发送一条非 HTTP socket 消息，再发送一条 HTTP/1.1 request/response。AcTrail 只保留识别为 HTTP 的 socket plaintext payload，并从相同 payload 派生 `Application` request/response rows。
 
 测试流程：
 
@@ -71,10 +71,12 @@ cargo build --release
 ```text
 required_capability = proc-lifecycle
 required_capability = net-transport
+required_capability = tls-plaintext-payload
 required_capability = socket-plaintext-payload
 required_capability = net-application-plaintext-http
 
-payload_tls_enabled = false
+payload_tls_enabled = true
+payload_tls_capture_backend = tls-sync
 payload_tls_source = shared-library
 payload_tls_resolver = openssl-symbols
 payload_tls_library = openssl
@@ -98,6 +100,8 @@ application_protocol_enabled = true
 application_protocol_http1_enabled = true
 application_protocol_http2_enabled = false
 ```
+
+本例的通过条件仍是 `Syscall/socket-syscall` payload，而不是 TLS payload。`tls-sync` 开启后会等待 launch-time runtime 注入；本例使用 `track-add` attach 已运行的本地 plain HTTP workload，因此不会产生 `TlsUserSpace` 行。
 
 `payload_socket_max_segment_bytes = 4095` 是本例的 socket BPF direct-copy 上限。对于 `bpf-copy-seccomp-fallback` 配置，超过该 inline 上限的 outbound HTTP 候选会在 seccomp 暂停窗口由 daemon 读取用户态 buffer；`payload_socket_max_operation_bytes = 4194304` 表示 4MB 以内的 HTTP LLM request 仍可完整保留。不要把 4095 理解成业务请求大小上限，它只是稳定 eBPF socket event ABI 的 inline copy 上限。
 
@@ -129,7 +133,7 @@ python3 docs/examples/05.http-payload-unified/run_e2e.py
 如果手动运行，先启动 daemon：
 
 ```bash
-./target/release/actraild start --config docs/examples/05.http-payload-unified/operator.conf
+./target/release/actraild --config docs/examples/05.http-payload-unified/operator.conf start
 ./target/release/actrailctl doctor --config docs/examples/05.http-payload-unified/operator.conf
 ```
 

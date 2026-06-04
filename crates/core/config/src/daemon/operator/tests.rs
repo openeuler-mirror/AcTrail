@@ -198,34 +198,20 @@ fn fanotify_enforcement_capability_requires_enforcement_config() {
 }
 
 #[test]
-fn claude_code_executable_tls_example_parses() {
+fn xiaoo_tls_example_parses() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../..")
-        .join("docs/examples/06.claude-code-tls-capture/operator.conf");
-    let raw = std::fs::read_to_string(path)
-        .expect("read claude code TLS example config")
-        .replace(
-            "__CLAUDE_TLS_REQUIRED_CAPABILITY__",
-            "required_capability = tls-plaintext-payload",
-        )
-        .replace("__CLAUDE_TLS_ENABLED__", "true")
-        .replace("__CLAUDE_TLS_RESOLVER__", "openssl-symbols")
-        .replace("__CLAUDE_TLS_LIBRARY__", "openssl")
-        .replace("__CLAUDE_TLS_BINARY__", "/tmp/claude-tls-runtime")
-        .replace("__CLAUDE_TLS_PATTERN_PATH__", "disabled")
-        .replace("__CLAUDE_SECCOMP_NOTIFY_ENABLED__", "true");
-    let config = OperatorConfig::parse(&raw).expect("parse claude code TLS example config");
+        .join("docs/examples/06.xiaoo-tls-capture/operator.conf");
+    let raw = std::fs::read_to_string(path).expect("read xiaoO TLS example config");
+    let config = OperatorConfig::parse(&raw).expect("parse xiaoO TLS example config");
     let tls = &config.payload_config.tls;
 
     assert!(tls.enabled);
-    assert_eq!(
-        tls.capture_backend,
-        PayloadTlsCaptureBackend::BpfCopySeccompFallback
-    );
-    assert_eq!(tls.source, PayloadTlsSource::Executable);
+    assert_eq!(tls.capture_backend, PayloadTlsCaptureBackend::TlsSync);
+    assert_eq!(tls.source, PayloadTlsSource::SharedLibrary);
     assert_eq!(tls.resolver, PayloadTlsResolver::OpensslSymbols);
     assert_eq!(tls.library, PayloadTlsLibrary::Openssl);
-    assert!(matches!(tls.binary_path, DisabledOrPath::Path(_)));
+    assert!(matches!(tls.binary_path, DisabledOrPath::Disabled));
     assert!(matches!(tls.pattern_path, DisabledOrPath::Disabled));
     assert!(config.seccomp_notify.enabled);
     assert_eq!(config.seccomp_notify.reserved_listener_fd, 253);

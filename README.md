@@ -1,8 +1,9 @@
 # AcTrail
 
-> AcTrail records the actual trail of AI agent actions.
+> AcTrail: Action Trail, Actual Trail
+> Don't rely on what agent says, verify what it does
 
-AcTrail 是面向 Linux/WSL 的 AI agent 系统侧观测工具链。它从真实运行时捕获进程、网络、文件、IPC、payload、HTTP semantic events 和资源采样，把 raw runtime events 转成可信、跨框架的 agent action trail，并通过 `actrailviewer` 和只读 Web UI `actrailweb` 查看。
+AcTrail 是面向 Linux 的 AI agent 系统侧观测工具链。它从真实运行时捕获进程、网络、文件、IPC、payload、HTTP semantic events 和资源采样，把 raw runtime events 转成可信、跨框架的 agent action trail，并通过 `actrailviewer` 和只读 Web UI `actrailweb` 查看。
 
 当前公开文档以配置文件驱动为主，不要求用户直接读取 storage，也不要求先导出 JSON 才能查看结果。
 
@@ -36,7 +37,7 @@ sudo apt-get install -y clang llvm libelf-dev zlib1g-dev pkg-config libssl-dev
 
 ```bash
 cargo build --release
-./target/release/actraild start --config docs/examples/01.quick-start/operator.conf
+./target/release/actraild --config docs/examples/01.quick-start/operator.conf start
 ./target/release/actrailctl doctor --config docs/examples/01.quick-start/operator.conf
 ```
 
@@ -51,7 +52,7 @@ cargo build --release
 | Extended observation | File path mutations, regular file I/O, MAP_SHARED mmap, IPC, stdio payload, resource metrics, provider labels, timeline/process-tree Web UI | [docs/examples/03.extended-observation-e2e/README.md](docs/examples/03.extended-observation-e2e/README.md) |
 | Fanotify enforcement | Trace-scoped permission enforcement with allow/deny file access decisions persisted as Enforcement events | [docs/examples/04.fanotify-enforcement-e2e/README.md](docs/examples/04.fanotify-enforcement-e2e/README.md) |
 | HTTP payload unified | Non-TLS HTTP socket plaintext payload capture, HTTP sniff gate, and the same payload/Application viewer surface used by HTTPS | [docs/examples/05.http-payload-unified/README.md](docs/examples/05.http-payload-unified/README.md) |
-| Claude Code TLS executable capture | HTTPS payload capture for Claude Code through executable TLS uprobes; default path covers Node/OpenSSL, with optional Bun/BoringSSL patterns | [docs/examples/06.claude-code-tls-capture/README.md](docs/examples/06.claude-code-tls-capture/README.md) |
+| xiaoO TLS payload capture | HTTPS payload capture for xiaoO through `tls-sync`; rustls probe points are resolved by finder fast at launch time | [docs/examples/06.xiaoo-tls-capture/README.md](docs/examples/06.xiaoo-tls-capture/README.md) |
 
 Recommended reading order is `01 -> 05 -> 02 -> 06 -> 03 -> 04`: start with attach/viewer basics, compare HTTP and HTTPS payload surfaces, then cover executable TLS capture, broad observation, and enforcement.
 
