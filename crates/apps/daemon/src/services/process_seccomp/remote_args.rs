@@ -95,7 +95,10 @@ fn read_argv(
     let table_size = max_args
         .checked_mul(pointer_size)
         .ok_or_else(|| ControlError::new("process_seccomp_args", "argv table size overflow"))?;
-    let pointer_table = read_process_bytes(pid, argv_ptr, table_size)?;
+    let Some(pointer_table) = read_process_bytes(pid, argv_ptr, table_size)? else {
+        *truncated = true;
+        return Ok(Vec::new());
+    };
     if pointer_table.len() != table_size {
         return Err(ControlError::new(
             "process_seccomp_args",
@@ -131,7 +134,10 @@ fn read_c_string(
             format!("max arg bytes overflow: {error}"),
         )
     })?;
-    let bytes = read_process_bytes(pid, remote_addr, max_bytes)?;
+    let Some(bytes) = read_process_bytes(pid, remote_addr, max_bytes)? else {
+        *truncated = true;
+        return Ok(None);
+    };
     let end = bytes.iter().position(|byte| *byte == 0);
     if end.is_none() && bytes.len() == max_bytes {
         *truncated = true;

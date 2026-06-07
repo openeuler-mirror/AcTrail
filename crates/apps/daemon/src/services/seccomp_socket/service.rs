@@ -19,7 +19,7 @@ use payload_event::RawPayloadSegment;
 use trace_runtime::registry::TraceRuntime;
 
 use crate::services::payload_gate::socket_payload_prefix_is_http_candidate;
-use crate::services::seccomp_notify::read_linear_payload;
+use crate::services::seccomp_notify::{read_linear_payload, target_exited};
 
 #[derive(Debug)]
 pub(crate) struct SeccompSocketService {
@@ -71,7 +71,9 @@ impl SeccompSocketService {
         {
             return Ok(());
         }
-        let tgid = tgid_from_status(notification.pid)?;
+        let Some(tgid) = tgid_from_status(notification.pid)? else {
+            return Ok(());
+        };
         let Some((trace_id, membership)) = trace_runtime.find_membership_by_pid(tgid) else {
             return Ok(());
         };
@@ -82,24 +84,30 @@ impl SeccompSocketService {
             .http_sniff_max_bytes
             .min(u64::from(self.max_operation_bytes))
             .min(request.requested_size);
-        let prefix = read_linear_payload(
+        let Some(prefix) = read_linear_payload(
             tgid,
             request.buffer_ptr,
             prefix_size,
             self.max_operation_bytes,
-        )?;
+        )?
+        else {
+            return Ok(());
+        };
         let reached_sniff_limit =
             prefix.len() as u64 >= self.http_sniff_max_bytes.min(request.requested_size);
         if !socket_payload_prefix_is_http_candidate(&prefix, reached_sniff_limit) {
             return Ok(());
         }
 
-        let bytes = read_linear_payload(
+        let Some(bytes) = read_linear_payload(
             tgid,
             request.buffer_ptr,
             request.requested_size,
             self.max_operation_bytes,
-        )?;
+        )?
+        else {
+            return Ok(());
+        };
         self.captures.insert(
             SocketCaptureKey {
                 pid: tgid,
@@ -259,25 +267,36 @@ fn syscall_from_notification(
 
 fn fd_is_socket(pid: u32, fd: u32) -> Result<bool, ControlError> {
     let path = PathBuf::from(format!("/proc/{pid}/fd/{fd}"));
-    let target = std::fs::read_link(&path).map_err(|error| {
-        ControlError::new(
-            "seccomp_socket_fd",
-            format!("readlink {}: {error}", path.display()),
-        )
-    })?;
+    let target = match std::fs::read_link(&path) {
+        Ok(target) => target,
+        // Target exited mid-capture; report "not a socket" so the caller skips this stale
+        // notification rather than crashing the daemon on a benign ENOENT.
+        Err(error) if target_exited(&error) => return Ok(false),
+        Err(error) => {
+            return Err(ControlError::new(
+                "seccomp_socket_fd",
+                format!("readlink {}: {error}", path.display()),
+            ));
+        }
+    };
     Ok(target.to_string_lossy().starts_with("socket:["))
 }
 
-fn tgid_from_status(tid: u32) -> Result<u32, ControlError> {
-    let status = std::fs::read_to_string(format!("/proc/{tid}/status"))
-        .map_err(|error| ControlError::new("seccomp_socket_tgid", error.to_string()))?;
-    status
+/// Returns `Ok(None)` when the target exited mid-capture (its `/proc` entry is gone).
+fn tgid_from_status(tid: u32) -> Result<Option<u32>, ControlError> {
+    let status = match std::fs::read_to_string(format!("/proc/{tid}/status")) {
+        Ok(status) => status,
+        Err(error) if target_exited(&error) => return Ok(None),
+        Err(error) => return Err(ControlError::new("seccomp_socket_tgid", error.to_string())),
+    };
+    let tgid = status
         .lines()
         .find_map(|line| line.strip_prefix("Tgid:"))
         .map(str::trim)
         .ok_or_else(|| ControlError::new("seccomp_socket_tgid", "missing Tgid"))?
         .parse::<u32>()
-        .map_err(|error| ControlError::new("seccomp_socket_tgid", error.to_string()))
+        .map_err(|error| ControlError::new("seccomp_socket_tgid", error.to_string()))?;
+    Ok(Some(tgid))
 }
 
 fn socket_symbol(syscall: u32) -> Result<&'static str, ControlError> {

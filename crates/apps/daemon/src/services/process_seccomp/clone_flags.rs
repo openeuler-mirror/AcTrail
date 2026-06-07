@@ -34,7 +34,9 @@ fn read_clone3_flags(notification: &libc::seccomp_notif) -> Result<Option<u64>, 
     let flags_addr = args_ptr
         .checked_add(CLONE3_FLAGS_OFFSET)
         .ok_or_else(|| ControlError::new("process_seccomp_clone3", "clone3 flags overflow"))?;
-    let bytes = read_process_bytes(notification.pid, flags_addr, CLONE3_FLAGS_SIZE)?;
+    let Some(bytes) = read_process_bytes(notification.pid, flags_addr, CLONE3_FLAGS_SIZE)? else {
+        return Ok(None);
+    };
     if bytes.len() != CLONE3_FLAGS_SIZE {
         return Err(ControlError::new(
             "process_seccomp_clone3",
