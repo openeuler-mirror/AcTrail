@@ -401,5 +401,7 @@ pub(crate) fn decode_process_identity_inline(raw: &str) -> Result<ProcessIdentit
         start_time_ticks,
         pid_namespace,
         generation,
+        start_unix_seconds: None,
+            start_unix_millis: None,
     })
 }

@@ -26,6 +26,8 @@ pub fn trace_from_row(row: &Row<'_>) -> Result<TraceRecord, SqlError> {
                 .get::<_, Option<String>>("root_pid_namespace")?
                 .map(NamespaceIdentity::new),
             generation: row.get("root_generation")?,
+            start_unix_seconds: None,
+            start_unix_millis: None,
         },
         display_name: model_core::ids::TraceName::new(row.get::<_, String>("display_name")?),
         profile_name: model_core::ids::ProfileName::new(row.get::<_, String>("profile_name")?),
@@ -48,6 +50,8 @@ pub fn membership_from_row(row: &Row<'_>) -> Result<ProcessMembership, SqlError>
             pid: row.get("pid")?,
             task_id: row.get("task_id")?,
             start_time_ticks: row.get("start_ticks")?,
+            start_unix_seconds: row.get("start_unix_seconds")?,
+            start_unix_millis: row.get("start_unix_millis")?,
             pid_namespace: row
                 .get::<_, Option<String>>("pid_namespace")?
                 .map(NamespaceIdentity::new),
@@ -58,6 +62,8 @@ pub fn membership_from_row(row: &Row<'_>) -> Result<ProcessMembership, SqlError>
                 pid,
                 task_id: row.get("inherited_from_task_id").ok().flatten(),
                 start_time_ticks: row.get("inherited_from_start_ticks").unwrap_or_default(),
+                start_unix_seconds: row.get("inherited_from_start_unix_seconds").ok().flatten(),
+                start_unix_millis: row.get("inherited_from_start_unix_millis").ok().flatten(),
                 pid_namespace: row
                     .get::<_, Option<String>>("inherited_from_pid_namespace")
                     .ok()
@@ -91,6 +97,8 @@ pub fn event_from_row(row: &Row<'_>) -> Result<DomainEvent, SqlError> {
                 .get::<_, Option<String>>("process_pid_namespace")?
                 .map(NamespaceIdentity::new),
             generation: row.get("process_generation")?,
+            start_unix_seconds: None,
+            start_unix_millis: None,
         },
         collector: model_core::ids::CollectorName::new(row.get::<_, String>("collector")?),
         kind: decode_event_kind(&row.get::<_, String>("kind")?)?,
@@ -131,6 +139,8 @@ pub fn payload_segment_from_row(row: &Row<'_>) -> Result<PayloadSegment, SqlErro
                 .get::<_, Option<String>>("process_pid_namespace")?
                 .map(NamespaceIdentity::new),
             generation: row.get("process_generation")?,
+            start_unix_seconds: None,
+            start_unix_millis: None,
         },
         source_boundary: decode_payload_source_boundary(&row.get::<_, String>("source_boundary")?)?,
         content_state: decode_payload_content_state(&row.get::<_, String>("content_state")?)?,
@@ -173,6 +183,8 @@ pub fn diagnostic_from_row(row: &Row<'_>) -> Result<DiagnosticRecord, SqlError> 
                     .flatten()
                     .map(NamespaceIdentity::new),
                 generation: row.get("process_generation").unwrap_or_default(),
+                start_unix_seconds: None,
+            start_unix_millis: None,
             }),
         kind: decode_diagnostic_kind(&row.get::<_, String>("kind")?)?,
         severity: decode_diagnostic_severity(&row.get::<_, String>("severity")?)?,

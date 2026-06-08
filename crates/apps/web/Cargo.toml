@@ -9,11 +9,14 @@ name = "actrailweb"
 path = "src/main.rs"
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 model_core = { path = "../../core/model" }
 semantic_action = { path = "../../contracts/semantic_action" }
 sqlite_storage = { path = "../../adapters/storage/sqlite" }
 store_read_contract = { path = "../../contracts/store/read" }
 store_snapshot_contract = { path = "../../contracts/store/snapshot" }
+json_graph_export = { path = "../../adapters/export/json_graph" }
 
 [dev-dependencies]
 store_write_contract = { path = "../../contracts/store/write" }

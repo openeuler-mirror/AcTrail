@@ -96,16 +96,18 @@ impl MembershipWriteStore for SqliteStorage {
             .borrow_mut()
             .execute(
                 "INSERT OR REPLACE INTO memberships (
-                    trace_id, pid, task_id, start_ticks, pid_namespace, generation,
+                    trace_id, pid, task_id, start_ticks, start_unix_seconds, start_unix_millis, pid_namespace, generation,
                     inherited_from_pid, inherited_from_task_id, inherited_from_start_ticks,
-                    inherited_from_pid_namespace, inherited_from_generation, capture_enabled,
-                    propagation_enabled, membership_state, exit_code, exit_observed_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                    inherited_from_start_unix_seconds, inherited_from_start_unix_millis, inherited_from_pid_namespace, inherited_from_generation,
+                    capture_enabled, propagation_enabled, membership_state, exit_code, exit_observed_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
                 params![
                     membership.trace_id.get(),
                     membership.identity.pid,
                     membership.identity.task_id,
                     membership.identity.start_time_ticks,
+                    membership.identity.start_unix_seconds,
+                    membership.identity.start_unix_millis,
                     membership
                         .identity
                         .pid_namespace
@@ -124,6 +126,14 @@ impl MembershipWriteStore for SqliteStorage {
                         .inherited_from
                         .as_ref()
                         .map(|identity| identity.start_time_ticks),
+                    membership
+                        .inherited_from
+                        .as_ref()
+                        .and_then(|identity| identity.start_unix_seconds),
+                    membership
+                        .inherited_from
+                        .as_ref()
+                        .and_then(|identity| identity.start_unix_millis),
                     membership.inherited_from.as_ref().and_then(|identity| {
                         identity
                             .pid_namespace
