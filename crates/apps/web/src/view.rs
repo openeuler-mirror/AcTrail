@@ -2,6 +2,8 @@
 
 #[path = "view/actions.rs"]
 mod actions;
+#[path = "view/commands.rs"]
+mod commands;
 #[path = "view/events.rs"]
 mod events;
 #[path = "view/payloads.rs"]
@@ -135,6 +137,11 @@ pub fn action_tree_children_json(
 ) -> Result<String, String> {
     let mut storage = open_storage(storage_path)?;
     actions::action_tree_children_json(&mut storage, TraceId::new(trace_id), parent_id)
+}
+
+pub fn commands_json(storage_path: &Path, trace_id: u64) -> Result<String, String> {
+    let mut storage = open_storage(storage_path)?;
+    commands::commands_json(&mut storage, TraceId::new(trace_id))
 }
 
 pub fn payload_json(storage_path: &Path, trace_id: u64, segment_id: u64) -> Result<String, String> {

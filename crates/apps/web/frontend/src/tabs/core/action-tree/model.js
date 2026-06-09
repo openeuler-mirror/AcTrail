@@ -1,4 +1,6 @@
 import { GRAPH_LANES, TREE_NODE_TYPES, UI_LIMITS } from './config';
+import { compactMeta, compactRows, kindClass, shortTime } from './common';
+import { groupAgentRootActions } from './rootGroups';
 import { semanticActionLabel, semanticActionTarget } from '../../actionLabels';
 
 const NODE_ID_AGENT = 'agent-process';
@@ -27,15 +29,24 @@ export function buildActionTreeRootNode({ traceDetail, rootData }) {
 export function buildActionTreeChildNodes({ parentNode, childData, traceDetail }) {
   const actions = (childData?.actions ?? []).filter((action) => !invalidatedAction(action));
   const links = childData?.links ?? [];
-  if (!actions.length && parentNode.nodeType === TREE_NODE_TYPES.action) {
-    return evidenceNodes(parentNode.detail.raw, traceDetail);
-  }
   const actionById = new Map(actions.map((action) => [action.id, action]));
   const childState = childStateByActionId(childData?.child_state ?? []);
-  return linkedActions(actionById, links)
+  const actionChildren = linkedActions(actionById, links)
     .sort(parentNode.nodeType === TREE_NODE_TYPES.agent ? sortAgentLinkedActions : sortLinkedActionByTime)
     .map(({ action }) => actionTreeNode(action, childState))
     .filter(Boolean);
+  if (parentNode.nodeType === TREE_NODE_TYPES.agent) {
+    return groupAgentRootActions(actionChildren);
+  }
+  if (parentNode.nodeType !== TREE_NODE_TYPES.action) {
+    return actionChildren;
+  }
+  const evidenceChildren = evidenceNodes(
+    parentNode.detail.raw,
+    traceDetail,
+    coveredEvidenceKeys(actions),
+  );
+  return actionChildren.concat(evidenceChildren).sort(sortTreeNodeByTime);
 }
 
 export function buildVisibleActionTreeModel({ root, query }) {
@@ -59,6 +70,7 @@ function actionTreeNode(action, childState) {
 
 function agentNode(traceDetail, observedAgent) {
   const trace = traceDetail?.trace;
+  const attrs = observedAgent?.attributes ?? {};
   const title = observedAgent?.title || trace?.name || 'Agent process';
   const pid = observedAgent?.process?.pid ?? trace?.root_pid;
   return {
@@ -80,6 +92,9 @@ function agentNode(traceDetail, observedAgent) {
       kind: 'agent.process',
       rows: compactRows({
         pid,
+        executable: attrs['process.executable'] ?? attrs.executable,
+        command_line: attrs.command_line,
+        identity_status: attrs['agent.identity.status'],
         profile: trace?.profile,
         state: trace?.state,
         health: trace?.health,
@@ -126,8 +141,10 @@ function actionNode(action) {
   };
 }
 
-function evidenceNodes(action, traceDetail) {
-  return (action.evidence ?? []).map((evidence) => evidenceNode(evidence, traceDetail));
+function evidenceNodes(action, traceDetail, excludedEvidence = new Set()) {
+  return (action.evidence ?? [])
+    .filter((evidence) => !excludedEvidence.has(evidenceKey(evidence)))
+    .map((evidence) => evidenceNode(evidence, traceDetail));
 }
 
 function evidenceNode(evidence, traceDetail) {
@@ -182,6 +199,20 @@ function linkedActions(actionById, links) {
       seen.add(action.id);
       return true;
     });
+}
+
+function coveredEvidenceKeys(actions) {
+  const keys = new Set();
+  for (const action of actions) {
+    for (const evidence of action.evidence ?? []) {
+      keys.add(evidenceKey(evidence));
+    }
+  }
+  return keys;
+}
+
+function evidenceKey(evidence) {
+  return `${evidence.kind}:${evidence.id}`;
 }
 
 function applyLazyState(node, state) {
@@ -263,14 +294,6 @@ function pidLabel(pid) {
   return pid === undefined || pid === null ? null : `pid ${pid}`;
 }
 
-function shortTime(value) {
-  if (!value) {
-    return '';
-  }
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString();
-}
-
 function laneTitles(depth) {
   const baseTitles = [GRAPH_LANES.agent, GRAPH_LANES.actions, GRAPH_LANES.details];
   return Array.from({ length: depth }, (_, index) => baseTitles[index] ?? `L${index + 1}`);
@@ -341,16 +364,6 @@ function attributePriority(kind) {
   return [];
 }
 
-function compactMeta(parts) {
-  return parts.filter((part) => part !== undefined && part !== null && part !== '').join(' ');
-}
-
-function compactRows(rows) {
-  return Object.fromEntries(
-    Object.entries(rows).filter(([, value]) => value !== undefined && value !== null && value !== ''),
-  );
-}
-
 function sortLinkedActionByTime(left, right) {
   return compareActionOrder(left.action, right.action);
 }
@@ -376,6 +389,27 @@ function sortAgentLinkedActions(left, right) {
     ) ||
     compareActionId(left.action, right.action)
   );
+}
+
+function sortTreeNodeByTime(left, right) {
+  return compareOptionalIsoTime(nodeTime(left), nodeTime(right)) || compareNodeId(left, right);
+}
+
+function nodeTime(node) {
+  return node.detail?.raw?.start_time ?? node.detail?.rows?.time ?? null;
+}
+
+function compareOptionalIsoTime(left, right) {
+  if (!left && !right) {
+    return 0;
+  }
+  if (!left) {
+    return 1;
+  }
+  if (!right) {
+    return -1;
+  }
+  return String(left).localeCompare(String(right));
 }
 
 function compareOptionalDecimalStrings(left, right, fieldName) {
@@ -423,10 +457,10 @@ function compareActionId(left, right) {
   return String(left.id ?? '').localeCompare(String(right.id ?? ''));
 }
 
-function findById(items, id) {
-  return (items ?? []).find((item) => item.id === id);
+function compareNodeId(left, right) {
+  return String(left.id ?? '').localeCompare(String(right.id ?? ''));
 }
 
-function kindClass(kind) {
-  return String(kind).replaceAll('.', '-').replaceAll(':', '-').replaceAll('_', '-');
+function findById(items, id) {
+  return (items ?? []).find((item) => item.id === id);
 }

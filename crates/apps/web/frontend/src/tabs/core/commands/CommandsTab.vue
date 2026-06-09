@@ -2,6 +2,7 @@
   <TableTraceTab
     :trace-detail="traceDetail"
     :action-tree="actionTree"
+    :tab-data="commands"
     :query="query"
     :projector="project"
     @select-detail="$emit('select-detail', $event)"
@@ -18,6 +19,10 @@ defineProps({
     default: null,
   },
   actionTree: {
+    type: Object,
+    required: true,
+  },
+  commands: {
     type: Object,
     required: true,
   },

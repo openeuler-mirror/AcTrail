@@ -16,7 +16,7 @@ run_direct_opencode_case = DIRECT_STEPS.run_direct_opencode_case
 
 
 CASE_ID = "e2e-opencode"
-TITLE = "E2E with opencode LLM request capture"
+TITLE = "E2E with opencode LLM exchange capture"
 SUITES = {"quick", "agent", "payload", "full"}
 
 

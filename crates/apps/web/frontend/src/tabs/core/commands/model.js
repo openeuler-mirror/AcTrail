@@ -9,8 +9,8 @@ const COLUMNS = Object.freeze([
   { key: 'title', label: 'Title' },
 ]);
 
-export function project({ actionTree, query = '', rowLimit = 0 }) {
-  return windowedTableView(COLUMNS, actionTree?.actions, commandRow, 'No commands', {
+export function project({ tabData, query = '', rowLimit = 0 }) {
+  return windowedTableView(COLUMNS, tabData?.actions, commandRow, 'No commands', {
     query,
     rowLimit,
     include: actionIsCommand,

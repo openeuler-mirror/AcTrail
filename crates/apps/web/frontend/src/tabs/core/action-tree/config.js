@@ -12,4 +12,5 @@ export const GRAPH_LANES = Object.freeze({
 
 export const UI_LIMITS = Object.freeze({
   inlineAttributeCount: 6,
+  fileActivityGroupMinActions: 2,
 });

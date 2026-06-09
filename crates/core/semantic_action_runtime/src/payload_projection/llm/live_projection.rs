@@ -15,6 +15,7 @@ pub(crate) struct LiveLlmProjection {
     pub(crate) actions: Vec<SemanticAction>,
     pub(crate) encoded_len: usize,
     pub(crate) terminal: bool,
+    pub(crate) raw_response: bool,
 }
 
 pub(crate) fn live_llm_request_message_len(bytes: &[u8]) -> Option<usize> {
@@ -39,6 +40,7 @@ pub(crate) fn project_live_llm_request_message(
         actions: action.into_iter().collect(),
         encoded_len,
         terminal: true,
+        raw_response: false,
     })
 }
 
@@ -63,19 +65,21 @@ pub(crate) fn project_live_llm_response_message(
                 actions: Vec::new(),
                 encoded_len,
                 terminal: true,
+                raw_response: false,
             });
         };
-        return Some(response_projection(actions, encoded_len, can_evict));
+        return Some(response_projection(actions, encoded_len, can_evict, false));
     }
 
     let actions = project_raw_stream_llm_response_actions(key, message_start, bytes, segments)?;
-    Some(response_projection(actions, bytes.len(), true))
+    Some(response_projection(actions, bytes.len(), true, true))
 }
 
 fn response_projection(
     actions: Vec<SemanticAction>,
     encoded_len: usize,
     can_evict: bool,
+    raw_response: bool,
 ) -> LiveLlmProjection {
     let terminal = can_evict
         && actions
@@ -86,6 +90,7 @@ fn response_projection(
         actions,
         encoded_len,
         terminal,
+        raw_response,
     }
 }
 

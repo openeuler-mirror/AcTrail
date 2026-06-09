@@ -342,11 +342,36 @@ fn raw_llm_responses_use_distinct_action_ids_after_evict() {
         .find(|action| action.kind == SemanticActionKind::LlmResponse)
         .expect("first raw SSE response should project");
 
-    let second = runtime.observe_payload_segment(&llm_response_payload_segment(
-        agent,
+    let chunk_crlf = runtime.observe_payload_segment(&llm_response_payload_segment(
+        agent.clone(),
         response_segment_id(1),
         response_operation_id(1),
         response_sequence(1),
+        b"\r\n".to_vec(),
+    ));
+    assert!(chunk_crlf.actions.iter().all(|action| {
+        action.kind != SemanticActionKind::LlmResponse
+            && action.kind != SemanticActionKind::SseStream
+            && action.kind != SemanticActionKind::SseEvent
+    }));
+    let zero_chunk = runtime.observe_payload_segment(&llm_response_payload_segment(
+        agent.clone(),
+        response_segment_id(2),
+        response_operation_id(2),
+        response_sequence(2),
+        b"0\r\n\r\n".to_vec(),
+    ));
+    assert!(zero_chunk.actions.iter().all(|action| {
+        action.kind != SemanticActionKind::LlmResponse
+            && action.kind != SemanticActionKind::SseStream
+            && action.kind != SemanticActionKind::SseEvent
+    }));
+
+    let second = runtime.observe_payload_segment(&llm_response_payload_segment(
+        agent,
+        response_segment_id(3),
+        response_operation_id(3),
+        response_sequence(3),
         concat!(
             r#"data: {"model":"deepseek-chat","choices":[{"delta":{"content":"second"}}]}"#,
             "\n\n",

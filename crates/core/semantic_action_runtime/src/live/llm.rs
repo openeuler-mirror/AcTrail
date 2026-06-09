@@ -138,6 +138,7 @@ struct LiveStreamState {
     base_offset: usize,
     segments: VecDeque<LiveSegmentRange>,
     partial_response_emitted: bool,
+    pending_raw_chunk_terminator: bool,
     completion_detector: ResponseCompletionDetector,
 }
 
@@ -191,6 +192,7 @@ impl LiveStreamState {
     }
 
     fn project_inbound_responses(&mut self, key: &PayloadStreamGroupKey) -> Vec<SemanticAction> {
+        self.discard_pending_raw_chunk_terminator();
         if self.partial_response_emitted && !self.completion_detector.seen() {
             return Vec::new();
         }
@@ -201,6 +203,7 @@ impl LiveStreamState {
             let encoded_len = projection.encoded_len;
             actions.extend(projection.actions);
             if terminal {
+                self.pending_raw_chunk_terminator = projection.raw_response;
                 self.evict_encoded_len(encoded_len);
                 self.partial_response_emitted = false;
                 self.completion_detector.rebuild(&self.buffer);
@@ -249,6 +252,56 @@ impl LiveStreamState {
             front.start = self.base_offset;
         }
     }
+
+    fn discard_pending_raw_chunk_terminator(&mut self) {
+        if !self.pending_raw_chunk_terminator {
+            return;
+        }
+        match raw_chunk_terminator_prefix(&self.buffer) {
+            RawChunkTerminatorPrefix::None => {
+                self.pending_raw_chunk_terminator = false;
+            }
+            RawChunkTerminatorPrefix::Incomplete => {}
+            RawChunkTerminatorPrefix::Prefix(len) => {
+                self.evict_encoded_len(len);
+            }
+            RawChunkTerminatorPrefix::Complete(len) => {
+                self.evict_encoded_len(len);
+                self.pending_raw_chunk_terminator = false;
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RawChunkTerminatorPrefix {
+    None,
+    Incomplete,
+    Prefix(usize),
+    Complete(usize),
+}
+
+fn raw_chunk_terminator_prefix(bytes: &[u8]) -> RawChunkTerminatorPrefix {
+    const CRLF: &[u8] = b"\r\n";
+    const ZERO_CHUNK: &[u8] = b"0\r\n\r\n";
+    const CRLF_ZERO_CHUNK: &[u8] = b"\r\n0\r\n\r\n";
+
+    if bytes.is_empty() {
+        return RawChunkTerminatorPrefix::Incomplete;
+    }
+    if bytes.starts_with(CRLF_ZERO_CHUNK) {
+        return RawChunkTerminatorPrefix::Complete(CRLF_ZERO_CHUNK.len());
+    }
+    if bytes.starts_with(ZERO_CHUNK) {
+        return RawChunkTerminatorPrefix::Complete(ZERO_CHUNK.len());
+    }
+    if CRLF_ZERO_CHUNK.starts_with(bytes) || ZERO_CHUNK.starts_with(bytes) {
+        return RawChunkTerminatorPrefix::Incomplete;
+    }
+    if bytes.starts_with(CRLF) {
+        return RawChunkTerminatorPrefix::Prefix(CRLF.len());
+    }
+    RawChunkTerminatorPrefix::None
 }
 
 struct LiveSegmentRange {

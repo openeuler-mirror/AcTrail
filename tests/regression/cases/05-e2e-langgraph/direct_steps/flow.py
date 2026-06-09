@@ -136,7 +136,7 @@ def finish_langgraph_capture(
     actions = run_step(
         result,
         "semantic actions",
-        lambda: module.wait_for_actions(
+        lambda: module.wait_for_llm_exchange_actions(
             actrailviewer,
             config,
             trace_id,
@@ -144,7 +144,7 @@ def finish_langgraph_capture(
             float(module.required(workload, "drain_sleep_seconds")),
         ),
         lambda rows: expected_found_detail(
-            "viewer returns semantic llm.request actions",
+            "viewer returns semantic llm.request and llm.response actions",
             [f"trace_id=trace-{trace_id}", f"action_output_bytes={len(rows.encode('utf-8'))}"],
         ),
         "semantic action projection ran after payload ingestion",
@@ -152,10 +152,13 @@ def finish_langgraph_capture(
     )
     run_step(
         result,
-        "complete llm.request action",
-        lambda: module.require_complete_llm_action(actions),
-        expected_found_detail("complete successful llm.request exists", ["complete successful llm.request"]),
-        "the action table contains a complete successful semantic request",
+        "complete LLM exchange actions",
+        lambda: module.require_complete_llm_exchange(actions),
+        expected_found_detail(
+            "complete successful llm.request and llm.response exist",
+            ["complete successful llm.request", "complete successful llm.response"],
+        ),
+        "the action table contains a complete successful semantic request/response exchange",
     )
     otel = run_step(
         result,
@@ -169,12 +172,19 @@ def finish_langgraph_capture(
         expected_found_detail("OTEL JSON export is written", [f"path={module.required(workload, 'otel_output_path')}"]),
         "actrailviewer exported the trace to OTEL JSON",
     )
-    span_count = run_step(
+    request_span_count = run_step(
         result,
         "llm.request OTEL span",
         lambda: module.require_otel_span(otel, "llm.request"),
         lambda count: expected_found_detail("OTEL contains llm.request spans", [f"langgraph_llm_request_spans={count}"]),
         "OTEL export contains semantic llm.request spans for the LangGraph provider call",
+    )
+    response_span_count = run_step(
+        result,
+        "llm.response OTEL span",
+        lambda: module.require_otel_span(otel, "llm.response"),
+        lambda count: expected_found_detail("OTEL contains llm.response spans", [f"langgraph_llm_response_spans={count}"]),
+        "OTEL export contains semantic llm.response spans for the LangGraph provider call",
     )
     _, evidence_text = capture_stdout(
         lambda: module.emit_llm_otel_evidence(
@@ -183,13 +193,25 @@ def finish_langgraph_capture(
         )
     )
     result.stdout_tail = env.output_tail(
-        langgraph_output_summary(trace_id, payload_count, span_count, launch_output, evidence_text)
+        langgraph_output_summary(
+            trace_id,
+            payload_count,
+            request_span_count,
+            response_span_count,
+            launch_output,
+            evidence_text,
+        )
     )
     result.add_check(
-        "LLM request content",
-        PASS if "evidence.llm_request.body_text_json=" in evidence_text else FAIL,
+        "LLM exchange content",
+        PASS
+        if (
+            "evidence.llm_request.body_text_json=" in evidence_text
+            and "evidence.llm_response.body_text_json=" in evidence_text
+        )
+        else FAIL,
         expected_found_detail(
-            "OTEL evidence includes model, route, source, request body, and response status",
+            "OTEL evidence includes request and response payload summaries",
             evidence_summary_facts(
                 evidence_text,
                 (
@@ -197,11 +219,14 @@ def finish_langgraph_capture(
                     "evidence.llm_request.route=",
                     "evidence.llm_request.source=",
                     "evidence.llm_request.body_text_json=",
-                    "evidence.llm_response=",
+                    "evidence.llm_response.model=",
+                    "evidence.llm_response.source=",
+                    "evidence.llm_response.payload_bytes=",
+                    "evidence.llm_response.body_text_json=",
                 ),
             ),
         ),
-        "OTEL evidence must include parsed llm.request content",
+        "OTEL evidence must include parsed llm.request content and captured llm.response content",
     )
 
 
@@ -263,14 +288,16 @@ def run_langgraph_launch_step(
 def langgraph_output_summary(
     trace_id: int,
     payload_count: int,
-    span_count: int,
+    request_span_count: int,
+    response_span_count: int,
     launch_output: str,
     evidence_text: str,
 ) -> str:
     return (
         f"langgraph_trace_id={trace_id}\n"
         f"langgraph_payload_segments={payload_count}\n"
-        f"langgraph_llm_request_spans={span_count}\n"
+        f"langgraph_llm_request_spans={request_span_count}\n"
+        f"langgraph_llm_response_spans={response_span_count}\n"
         f"{launch_output}\n"
         f"{evidence_text}"
     )

@@ -37,12 +37,17 @@ reported as `FAIL`.
 Checks use an `expected` / `found` detail shape when the pass condition depends
 on observable facts. Multi-fact checks list each found fact as an unordered item
 so reviewers can see which evidence made the check pass. Real LLM cases also
-propagate `evidence.llm_request.*=` lines from their E2E scripts into the
-Markdown/JSON reports. These lines include the observed model, source boundary,
-route, payload byte count, and a configured request body excerpt. They
-intentionally do not print raw HTTP headers because provider headers may contain
-credentials. If no semantic response span exists, the report says
-`evidence.llm_response=not exported` instead of claiming response-body capture.
+propagate `evidence.llm_request.*=` and `evidence.llm_response.*=` lines from
+their E2E scripts into the Markdown/JSON reports. These lines include the
+observed model, source boundary, route, payload byte count, and configured body
+excerpts. They intentionally do not print raw HTTP headers because provider
+headers may contain credentials. If no semantic response span exists, the report
+says `evidence.llm_response=not exported` instead of claiming response-body
+capture.
+The real agent cases for Claude Code, opencode, xiaoO, and LangGraph require a
+complete `llm.request` and `llm.response` semantic exchange and require both
+action kinds in the OTEL export. The local `http-llm-projection` case remains a
+request-projection check for the plain HTTP provider/proxy path.
 
 The Claude Code case first runs a direct `claude -p` availability prompt and
 requires the configured marker before starting AcTrail. The prompt, marker, and

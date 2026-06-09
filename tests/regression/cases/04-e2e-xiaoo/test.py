@@ -17,7 +17,7 @@ run_direct_xiaoo_case = DIRECT_STEPS.run_direct_xiaoo_case
 
 
 CASE_ID = "e2e-xiaoo"
-TITLE = "E2E with xiaoO LLM request capture"
+TITLE = "E2E with xiaoO LLM exchange capture"
 SUITES = {"quick", "agent", "payload", "full"}
 WORKLOAD_CONFIG = "tests/agent-trace/xiaoo-rustls/workload.conf"
 

@@ -90,7 +90,8 @@ impl SqliteAttachService {
             payload_config.socket.http_sniff_max_bytes,
             payload_config.socket.stream_state_max_entries,
         );
-        let payload_body_retention_gate = PayloadBodyRetentionGate::new();
+        let payload_body_retention_gate =
+            PayloadBodyRetentionGate::new(application_protocol.http2_max_data_preview_bytes);
         let seccomp_notify = SeccompNotifyService::new(&seccomp_notify_config);
         let seccomp_tls = SeccompTlsService::new(&payload_config.tls, diagnostic_log_level);
         let tls_sync = TlsSyncService::new(&payload_config.tls)?;

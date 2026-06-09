@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Agent trace case for a real LangGraph Python LLM request."""
+"""Agent trace case for a real LangGraph Python LLM exchange."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from common import (  # noqa: E402
     read_config,
     repo_root,
     require_binary,
-    require_complete_llm_action,
+    require_complete_llm_exchange,
     require_complete_payload_rows_any,
     require_otel_span,
     require_root,
@@ -26,7 +26,7 @@ from common import (  # noqa: E402
     run_checked,
     start_daemon,
     stop_process,
-    wait_for_actions,
+    wait_for_llm_exchange_actions,
     wait_for_payloads_any,
 )
 
@@ -89,25 +89,27 @@ def main() -> int:
             accepted_payload_sources(),
             direction="outbound",
         )
-        actions = wait_for_actions(
+        actions = wait_for_llm_exchange_actions(
             actrailviewer,
             config,
             trace_id,
             int(required(workload, "drain_attempts")),
             float(required(workload, "drain_sleep_seconds")),
         )
-        require_complete_llm_action(actions)
+        require_complete_llm_exchange(actions)
         otel = export_otel(
             actrailviewer,
             config,
             trace_id,
             Path(required(workload, "otel_output_path")),
         )
-        span_count = require_otel_span(otel, "llm.request")
+        request_span_count = require_otel_span(otel, "llm.request")
+        response_span_count = require_otel_span(otel, "llm.response")
         emit_llm_otel_evidence(otel, int(required(workload, "evidence_text_max_chars")))
         print(f"langgraph_trace_id={trace_id}")
         print(f"langgraph_payload_segments={payload_count}")
-        print(f"langgraph_llm_request_spans={span_count}")
+        print(f"langgraph_llm_request_spans={request_span_count}")
+        print(f"langgraph_llm_response_spans={response_span_count}")
         print("LangGraph OpenAI-compatible agent trace e2e complete")
     finally:
         stop_process(daemon, float(required(workload, "daemon_stop_timeout_seconds")))

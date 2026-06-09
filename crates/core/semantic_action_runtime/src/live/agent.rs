@@ -239,6 +239,8 @@ impl AgentProjector {
         if parent == edge.child {
             return None;
         }
+        let parent_key = action_key(edge.trace_id, &parent);
+        let parent_action = self.process_execs.get(&parent_key)?;
         let child_action = self.process_execs.get(&child_key)?;
         let evidence = self.llm_agents.get(&child_key)?;
         if !self
@@ -247,13 +249,14 @@ impl AgentProjector {
         {
             return None;
         }
-        Some(self.agent_invocation_action(&edge, child_action, evidence))
+        Some(self.agent_invocation_action(&edge, child_action, parent_action, evidence))
     }
 
     fn agent_invocation_action(
         &self,
         edge: &ForkProcessEdge,
         child_action: &SemanticAction,
+        parent_action: &SemanticAction,
         evidence: &AgentEvidence,
     ) -> SemanticAction {
         let mut attributes = BTreeMap::new();
@@ -283,29 +286,26 @@ impl AgentProjector {
                 "agent.parent.generation".to_string(),
                 parent.generation.to_string(),
             );
-            if let Some(parent_action) = self.process_execs.get(&action_key(edge.trace_id, parent))
-            {
-                attributes.insert(
-                    "agent.parent.executable".to_string(),
-                    executable(parent_action),
-                );
-                if let Some(command_line) = command_line(parent_action) {
-                    attributes.insert("agent.parent.command_line".to_string(), command_line);
-                }
-                let status = if parent_action
-                    .attributes
-                    .get(ATTR_AGENT_IDENTITY_STATUS)
-                    .is_some_and(|status| status == AGENT_IDENTITY_STATUS_OBSERVED)
-                {
-                    AGENT_PARENT_STATUS_OBSERVED
-                } else {
-                    AGENT_PARENT_STATUS_UNKNOWN
-                };
-                attributes.insert(
-                    "agent.parent.identity_status".to_string(),
-                    status.to_string(),
-                );
+            attributes.insert(
+                "agent.parent.executable".to_string(),
+                executable(parent_action),
+            );
+            if let Some(command_line) = command_line(parent_action) {
+                attributes.insert("agent.parent.command_line".to_string(), command_line);
             }
+            let status = if parent_action
+                .attributes
+                .get(ATTR_AGENT_IDENTITY_STATUS)
+                .is_some_and(|status| status == AGENT_IDENTITY_STATUS_OBSERVED)
+            {
+                AGENT_PARENT_STATUS_OBSERVED
+            } else {
+                AGENT_PARENT_STATUS_UNKNOWN
+            };
+            attributes.insert(
+                "agent.parent.identity_status".to_string(),
+                status.to_string(),
+            );
         }
         let mut action_evidence = invocation_exec_evidence(child_action);
         action_evidence.extend(invocation_parent_fork_evidence(edge));

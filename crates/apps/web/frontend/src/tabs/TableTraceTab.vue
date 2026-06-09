@@ -37,6 +37,9 @@ const props = defineProps({
     type: Function,
     required: true,
   },
+  tabData: {
+    default: null,
+  },
   initialRows: {
     type: Number,
     default: TABLE_RENDER_LIMITS.initialRows,
@@ -59,6 +62,7 @@ const view = computed(() => {
   const nextView = props.projector({
     traceDetail: props.traceDetail,
     actionTree: props.actionTree,
+    tabData: props.tabData,
     query: normalizedQuery.value,
     rowLimit: batchingEnabled.value ? visibleLimit.value : 0,
   });
@@ -77,6 +81,7 @@ watch(
   () => [
     props.traceDetail,
     props.actionTree,
+    props.tabData,
     normalizedQuery.value,
     props.projector,
     effectiveInitialRows.value,
