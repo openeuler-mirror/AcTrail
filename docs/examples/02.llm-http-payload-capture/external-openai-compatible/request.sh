@@ -1,5 +1,11 @@
 set -euo pipefail
 
+mode="run"
+if [[ "${1:-}" == "run" || "${1:-}" == "prepare" ]]; then
+  mode="$1"
+  shift
+fi
+
 http_version="${1:?missing curl HTTP version}"
 default_prompt="${2:?missing default prompt}"
 
@@ -58,14 +64,29 @@ PY
   )"
 fi
 
-body_file="$(mktemp)"
-trap 'rm -f "$body_file"' EXIT
+prepare_dir="$(mktemp -d /tmp/actrail-llm-http.XXXXXX)"
+chmod 700 "$prepare_dir"
+body_file="$prepare_dir/body.json"
+curl_config="$prepare_dir/curl.conf"
 printf '%s' "$request_json" >"$body_file"
-
-curl --config - --data-binary @"$body_file" <<EOF
+chmod 600 "$body_file"
+cat >"$curl_config" <<EOF
 $http_version
+silent
+show-error
 url = "${base_url%/}${chat_path}"
 header = "Content-Type: application/json"
 header = "$auth_header"
 write-out = "\nACTRAIL_CURL_HTTP_VERSION=%{http_version}\n"
 EOF
+chmod 600 "$curl_config"
+
+if [[ "$mode" == "prepare" ]]; then
+  printf 'ACTRAIL_CURL_CONFIG=%q\n' "$curl_config"
+  printf 'ACTRAIL_CURL_BODY=%q\n' "$body_file"
+  printf 'ACTRAIL_CURL_TMPDIR=%q\n' "$prepare_dir"
+  exit 0
+fi
+
+trap 'rm -rf "$prepare_dir"' EXIT
+curl --config "$curl_config" --data-binary @"$body_file"

@@ -3,10 +3,11 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use tls_payload_core::{PayloadDirection, RewriteRule};
-use tls_probe_point_finder::{PayloadDirection as FinderDirection, ProbePointPlan};
+use tls_payload_core::RewriteRule;
+use tls_probe_point_finder::ProbePointPlan;
 
-use crate::{SyncError, SyncResult};
+use crate::SyncResult;
+use crate::plan::{encode_points, runtime_plan_bundle};
 
 pub const ENV_ENABLED: &str = "TLS_PAYLOAD_SYNC_ENABLED";
 pub const ENV_BINARY: &str = "TLS_PAYLOAD_SYNC_BINARY";
@@ -95,20 +96,19 @@ pub fn runtime_env_for_plans(
     config: &RuntimeEnvConfig,
     plans: &[ProbePointPlan],
 ) -> SyncResult<Vec<(OsString, OsString)>> {
-    let plan = plans
-        .first()
-        .ok_or_else(|| SyncError::new("runtime env requires at least one probe plan"))?;
     let mut env = vec![
         pair(ENV_ENABLED, "1"),
-        pair(ENV_BINARY, &plan.binary.path.display().to_string()),
-        pair(ENV_PROVIDER, plan.provider.as_str()),
-        pair(ENV_POINTS, &encode_points(plan)?),
-        pair(ENV_PLAN_BUNDLE, &encode_plan_bundle(plans)?),
         pair(ENV_RULES, &encode_rules(&config.rules)),
         pair(ENV_MAX_PAYLOAD_BYTES, &config.max_payload_bytes.to_string()),
         pair(ENV_REDACTION, config.redaction.as_str()),
         pair(ENV_EVENTS, &config.events.encode()),
     ];
+    if let Some(plan) = plans.first() {
+        env.push(pair(ENV_BINARY, &plan.binary.path.display().to_string()));
+        env.push(pair(ENV_PROVIDER, plan.provider.as_str()));
+        env.push(pair(ENV_POINTS, &encode_points(plan)?));
+    }
+    env.push(pair(ENV_PLAN_BUNDLE, &runtime_plan_bundle(plans)?));
     if let Some(trace_id) = config.trace_id {
         env.push(pair(ENV_TRACE_ID, &trace_id.to_string()));
     }
@@ -120,39 +120,6 @@ pub fn runtime_env_for_plans(
 
 fn pair(key: &str, value: &str) -> (OsString, OsString) {
     (OsString::from(key), OsString::from(value))
-}
-
-fn encode_points(plan: &ProbePointPlan) -> SyncResult<String> {
-    let mut values = Vec::new();
-    for point in &plan.points {
-        let Some(direction) = direction_to_core(point.direction) else {
-            continue;
-        };
-        values.push(format!(
-            "{}:{}:{}",
-            point.symbol,
-            direction.as_str(),
-            point.file_offset
-        ));
-    }
-    if values.is_empty() {
-        return Err(SyncError::new("probe plan has no payload hook points"));
-    }
-    Ok(values.join(";"))
-}
-
-fn encode_plan_bundle(plans: &[ProbePointPlan]) -> SyncResult<String> {
-    let mut values = Vec::new();
-    for plan in plans {
-        values.push(format!(
-            "{}|{}|{}|{}",
-            encode_hex(plan.target.binary.display().to_string().as_bytes()),
-            encode_hex(plan.binary.path.display().to_string().as_bytes()),
-            encode_hex(plan.provider.as_str().as_bytes()),
-            encode_hex(encode_points(plan)?.as_bytes())
-        ));
-    }
-    Ok(values.join("\n"))
 }
 
 fn encode_rules(rules: &[RewriteRule]) -> String {
@@ -168,14 +135,6 @@ fn encode_rules(rules: &[RewriteRule]) -> String {
         })
         .collect::<Vec<_>>()
         .join(";")
-}
-
-fn direction_to_core(direction: FinderDirection) -> Option<PayloadDirection> {
-    match direction {
-        FinderDirection::Inbound => Some(PayloadDirection::Inbound),
-        FinderDirection::Outbound => Some(PayloadDirection::Outbound),
-        FinderDirection::Control => None,
-    }
 }
 
 fn encode_hex(bytes: &[u8]) -> String {
@@ -195,7 +154,9 @@ mod tests {
         ProbePointPlan, ProbeSource, TargetIdentity, TlsProvider,
     };
 
-    use super::{ENV_PLAN_BUNDLE, EventFilter, RuntimeEnvConfig, runtime_env_for_plans};
+    use super::{
+        ENV_BINARY, ENV_PLAN_BUNDLE, EventFilter, RuntimeEnvConfig, runtime_env_for_plans,
+    };
 
     #[test]
     fn runtime_env_encodes_multiple_probe_plans() {
@@ -218,6 +179,28 @@ mod tests {
             .expect("plan bundle");
 
         assert_eq!(bundle.lines().count(), 2);
+    }
+
+    #[test]
+    fn runtime_env_allows_empty_probe_plan_bundle() {
+        let config = RuntimeEnvConfig {
+            rules: Vec::new(),
+            max_payload_bytes: 4096,
+            redaction: super::RedactionMode::Redact,
+            events: EventFilter::none(),
+            trace_id: None,
+            event_socket_path: None,
+        };
+
+        let env = runtime_env_for_plans(&config, &[]).expect("runtime env");
+        let bundle = env
+            .iter()
+            .find(|(key, _)| key == ENV_PLAN_BUNDLE)
+            .map(|(_, value)| value.to_string_lossy().into_owned())
+            .expect("plan bundle");
+
+        assert_eq!(bundle, "");
+        assert!(!env.iter().any(|(key, _)| key == ENV_BINARY));
     }
 
     fn plan(path: &str, provider: TlsProvider) -> ProbePointPlan {

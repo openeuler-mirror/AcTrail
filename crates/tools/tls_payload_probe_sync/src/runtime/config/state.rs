@@ -41,7 +41,7 @@ pub(in crate::runtime) struct RuntimeConfig {
     redaction: RedactionMode,
     events: EventFilter,
     trace_id: Option<u64>,
-    event_client: Option<Mutex<EventClient>>,
+    event_client: Option<EventClient>,
     sequence: AtomicU64,
 }
 
@@ -56,7 +56,7 @@ impl RuntimeConfig {
             redaction: parts.redaction,
             events: parts.events,
             trace_id: parts.trace_id,
-            event_client: parts.event_client.map(Mutex::new),
+            event_client: parts.event_client,
             sequence: AtomicU64::new(0),
         }
     }
@@ -97,15 +97,11 @@ impl RuntimeConfig {
         self.sequence.fetch_add(1, Ordering::Relaxed)
     }
 
-    pub(in crate::runtime) fn send_event(&self, event: &SyncEvent) -> Result<(), String> {
+    pub(in crate::runtime) fn send_event(&self, event: SyncEvent) -> Result<(), String> {
         let Some(client) = &self.event_client else {
             return Ok(());
         };
-        client
-            .lock()
-            .map_err(|_| "event client mutex poisoned".to_string())?
-            .send(event)
-            .map_err(|error| error.to_string())
+        client.send(event).map_err(|error| error.to_string())
     }
 
     pub(in crate::runtime) fn redact_payload(&self, payload: &[u8]) -> String {

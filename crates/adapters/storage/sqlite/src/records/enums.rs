@@ -7,7 +7,7 @@ use model_core::payload::{
     PayloadSourceBoundary, PayloadTruncationState,
 };
 use model_core::policy::{PolicyVerdict, TruncationReason};
-use model_core::process::MembershipState;
+use model_core::process::{ExitObservationSource, MembershipState};
 use model_core::trace::{TraceHealth, TraceLifecycleState};
 use rusqlite::Error as SqlError;
 
@@ -62,6 +62,21 @@ pub fn decode_membership_state(raw: &str) -> Result<MembershipState, SqlError> {
         "active" => Ok(MembershipState::Active),
         "exited" => Ok(MembershipState::Exited),
         "identity_stale" => Ok(MembershipState::IdentityStale),
+        _ => Err(SqlError::InvalidQuery),
+    }
+}
+
+pub fn encode_exit_observation_source(value: ExitObservationSource) -> &'static str {
+    match value {
+        ExitObservationSource::Event => "event",
+        ExitObservationSource::Reconciled => "reconciled",
+    }
+}
+
+pub fn decode_exit_observation_source(raw: &str) -> Result<ExitObservationSource, SqlError> {
+    match raw {
+        "event" => Ok(ExitObservationSource::Event),
+        "reconciled" => Ok(ExitObservationSource::Reconciled),
         _ => Err(SqlError::InvalidQuery),
     }
 }

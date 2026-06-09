@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import shlex
+import shutil
 import time
 from pathlib import Path
 
@@ -24,8 +26,10 @@ from helpers import (
     run_clean,
     run_command,
     start_daemon,
+    start_process,
     stop_process,
     viewer,
+    wait_for_output,
 )
 
 CURL_HTTP_VERSION_MARKER = "ACTRAIL_CURL_HTTP_VERSION="
@@ -56,11 +60,29 @@ def run_http2_local(env, result: CaseResult, workload: dict[str, str]) -> str:
     target_config = env.repo_root / "docs/examples/02.llm-http-payload-capture/http2-local/workload.conf"
     result.begin_check(name, "running local TLS HTTP/2 workload")
     daemon = None
+    server = None
     launch_output = ""
     try:
         run_clean(env, "http2-local", workload)
         daemon = start_daemon(env, config, workload)
         record_process_artifacts(result, daemon)
+        server = start_process(
+            env,
+            [
+                env.python,
+                str(script),
+                "--target-config",
+                str(target_config),
+                "--serve-only",
+            ],
+        )
+        server_port = parse_server_port(
+            wait_for_output(
+                server,
+                "\n",
+                float(required(workload, "http2_local_launch_timeout_seconds")),
+            )
+        )
         launch = run_command(
             env,
             [
@@ -71,14 +93,24 @@ def run_http2_local(env, result: CaseResult, workload: dict[str, str]) -> str:
                 "--name",
                 "docs-http2-local",
                 "--",
-                env.python,
-                str(script),
-                "--target-config",
-                str(target_config),
+                "curl",
+                "--http2",
+                "--silent",
+                "--show-error",
+                "--insecure",
+                "--request",
+                "POST",
+                "--header",
+                "Content-Type: application/json",
+                "--data",
+                '{"model":"actrail-http2","messages":[{"role":"user","content":"payload capture over h2"}],"stream":false}',
+                f"https://127.0.0.1:{server_port}/v1/chat/completions",
             ],
             float(required(workload, "http2_local_launch_timeout_seconds")),
         )
         launch_output = launch.output
+        wait_for_server_exit(server, workload)
+        server = None
         trace_id = parse_trace_id(launch.output)
         payloads, events, diagnostics = wait_payload_application_views(
             env,
@@ -125,6 +157,7 @@ def run_http2_local(env, result: CaseResult, workload: dict[str, str]) -> str:
             daemon = None
         return fail_step(env, result, name, error)
     finally:
+        stop_process(server, workload)
         stop_process(daemon, workload)
 
 
@@ -162,10 +195,13 @@ def run_external_llm_http(
     result.begin_check(name, "running provider curl workload")
     daemon = None
     launch_output = ""
+    curl_tmpdir = None
     try:
         run_clean(env, clean_name, workload)
         daemon = start_daemon(env, config, workload)
         record_process_artifacts(result, daemon)
+        prepared = prepare_curl_files(env, script, workload)
+        curl_tmpdir = prepared["ACTRAIL_CURL_TMPDIR"]
         launch = run_command(
             env,
             [
@@ -176,8 +212,11 @@ def run_external_llm_http(
                 "--name",
                 f"docs-{clean_name}",
                 "--",
-                "bash",
-                str(script),
+                "curl",
+                "--config",
+                prepared["ACTRAIL_CURL_CONFIG"],
+                "--data-binary",
+                f"@{prepared['ACTRAIL_CURL_BODY']}",
             ],
             float(required(workload, "external_llm_launch_timeout_seconds")),
         )
@@ -272,7 +311,49 @@ def run_external_llm_http(
             daemon = None
         return fail_step(env, result, name, error)
     finally:
+        if curl_tmpdir:
+            shutil.rmtree(curl_tmpdir, ignore_errors=True)
         stop_process(daemon, workload)
+
+
+def parse_server_port(output: str) -> int:
+    first_line = output.splitlines()[0] if output.splitlines() else ""
+    try:
+        return int(first_line)
+    except ValueError as error:
+        raise RuntimeError(f"local HTTP/2 server printed invalid port: {first_line!r}") from error
+
+
+def wait_for_server_exit(server, workload: dict[str, str]) -> None:
+    stdout, stderr = server.communicate(timeout=float(required(workload, "http2_local_launch_timeout_seconds")))
+    if server.returncode != 0:
+        raise RuntimeError(
+            "local HTTP/2 server failed\n"
+            f"stdout={stdout.decode(errors='replace')}\n"
+            f"stderr={stderr.decode(errors='replace')}"
+        )
+
+
+def prepare_curl_files(env, script: Path, workload: dict[str, str]) -> dict[str, str]:
+    prepared = run_command(
+        env,
+        ["bash", str(script), "prepare"],
+        float(required(workload, "control_timeout_seconds")),
+    )
+    values: dict[str, str] = {}
+    for line in prepared.stdout.splitlines():
+        key, separator, raw_value = line.partition("=")
+        if separator != "=":
+            raise RuntimeError(f"invalid curl prepare output line: {line!r}")
+        parts = shlex.split(raw_value)
+        if len(parts) != 1:
+            raise RuntimeError(f"invalid curl prepare value for {key}: {raw_value!r}")
+        values[key] = parts[0]
+    required_keys = {"ACTRAIL_CURL_CONFIG", "ACTRAIL_CURL_BODY", "ACTRAIL_CURL_TMPDIR"}
+    missing = sorted(required_keys.difference(values))
+    if missing:
+        raise RuntimeError(f"curl prepare output missing keys: {', '.join(missing)}")
+    return values
 
 
 def wait_payload_application_views(

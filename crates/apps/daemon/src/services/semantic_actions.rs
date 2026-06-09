@@ -16,42 +16,63 @@ use trace_runtime::registry::TraceRuntime;
 use crate::services::attach::SqliteAttachService;
 
 impl SqliteAttachService {
-    pub(super) fn persist_semantic_actions_for_event(
+    pub(super) fn observe_semantic_actions_for_event(
         &mut self,
-        trace_runtime: &TraceRuntime,
         event: &DomainEvent,
-    ) -> Result<(), ControlError> {
+    ) -> SemanticActionBatch {
         let output = self.semantic_actions.observe_event(event);
-        self.persist_semantic_actions(trace_runtime, output.actions, output.links)
+        SemanticActionBatch {
+            actions: output.actions,
+            links: output.links,
+        }
     }
 
-    pub(super) fn persist_semantic_actions_for_payload_segment(
+    pub(super) fn observe_semantic_actions_for_payload_segment(
         &mut self,
-        trace_runtime: &TraceRuntime,
         segment: &PayloadSegment,
-    ) -> Result<(), ControlError> {
+    ) -> SemanticActionBatch {
         let output = self.semantic_actions.observe_payload_segment(segment);
-        self.persist_semantic_actions(trace_runtime, output.actions, output.links)
+        SemanticActionBatch {
+            actions: output.actions,
+            links: output.links,
+        }
     }
 
-    fn persist_semantic_actions(
+    pub(super) fn write_semantic_action_batch(
         &mut self,
-        trace_runtime: &TraceRuntime,
-        actions: Vec<SemanticAction>,
-        links: Vec<SemanticActionLink>,
+        batch: &SemanticActionBatch,
     ) -> Result<(), ControlError> {
-        for action in actions.iter().cloned() {
+        for action in batch.actions.iter().cloned() {
             self.storage
                 .upsert_semantic_action(action)
                 .map_err(|error| ControlError::new(error.stage, error.message))?;
         }
-        for link in links.iter().cloned() {
+        for link in batch.links.iter().cloned() {
             self.storage
                 .upsert_semantic_action_link(link)
                 .map_err(|error| ControlError::new(error.stage, error.message))?;
         }
-        self.publish_live_otel_actions(trace_runtime, &actions, &links)?;
         Ok(())
+    }
+
+    pub(super) fn finalize_semantic_actions_for_trace(
+        &mut self,
+        trace_id: TraceId,
+        finished_at: std::time::SystemTime,
+    ) -> SemanticActionBatch {
+        let output = self.semantic_actions.finalize_trace(trace_id, finished_at);
+        SemanticActionBatch {
+            actions: output.actions,
+            links: output.links,
+        }
+    }
+
+    pub(super) fn publish_live_otel_action_batch(
+        &mut self,
+        trace_runtime: &TraceRuntime,
+        batch: &SemanticActionBatch,
+    ) -> Result<(), ControlError> {
+        self.publish_live_otel_actions(trace_runtime, &batch.actions, &batch.links)
     }
 
     pub(super) fn publish_live_otel_actions(
@@ -105,5 +126,18 @@ impl SqliteAttachService {
         self.storage
             .append_diagnostic(diagnostic)
             .map_err(|error| ControlError::new(error.stage, error.message))
+    }
+}
+
+#[derive(Default)]
+pub(super) struct SemanticActionBatch {
+    pub(super) actions: Vec<SemanticAction>,
+    pub(super) links: Vec<SemanticActionLink>,
+}
+
+impl SemanticActionBatch {
+    pub(super) fn extend(&mut self, other: Self) {
+        self.actions.extend(other.actions);
+        self.links.extend(other.links);
     }
 }

@@ -66,10 +66,6 @@ impl LocalDaemonServer {
             self.background_poll_timeout()
                 .map_err(|error| DaemonRunError::new(error.code, error.message))?,
         )?;
-        if readiness.event_source_ready || readiness.background_ready {
-            self.drain_live_events()
-                .map_err(|error| DaemonRunError::new(error.code, error.message))?;
-        }
         if readiness.listener_ready {
             loop {
                 match listener.accept() {
@@ -80,6 +76,10 @@ impl LocalDaemonServer {
                     Err(error) => return Err(DaemonRunError::from_io("accept", error)),
                 }
             }
+        }
+        if readiness.event_source_ready || readiness.background_ready {
+            self.drain_live_events()
+                .map_err(|error| DaemonRunError::new(error.code, error.message))?;
         }
         Ok(())
     }

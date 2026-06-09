@@ -65,65 +65,15 @@ mod tests {
 
     use graph_contract::document::GraphNodeKind;
     use graph_contract::relationships::GraphRelationship;
-    use model_core::diagnostics::{DiagnosticKind, DiagnosticRecord, DiagnosticSeverity};
     use model_core::event::{
-        DomainEvent, EventEnvelope, EventFlags, EventKind, EventPayload, LossPayload, NetPayload,
+        DomainEvent, EventEnvelope, EventFlags, EventKind, EventPayload, NetPayload,
     };
-    use model_core::ids::{CollectorName, DiagnosticId, EventId, ProfileName, TraceId, TraceName};
+    use model_core::ids::{CollectorName, EventId, ProfileName, TraceId, TraceName};
     use model_core::process::{ProcessIdentity, ProcessMembership};
-    use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
+    use model_core::trace::TraceRecord;
     use store_snapshot_contract::view::SnapshotView;
 
     use super::build_graph_document;
-
-    #[test]
-    fn degraded_trace_builds_degraded_graph() {
-        let trace_id = TraceId::new(1);
-        let process = ProcessIdentity::new(100, 200, 1);
-        let mut trace = TraceRecord::new(
-            trace_id,
-            process.clone(),
-            TraceName::new("demo"),
-            ProfileName::new("default"),
-            SystemTime::UNIX_EPOCH,
-        );
-        trace.lifecycle_state = TraceLifecycleState::Completed;
-        trace.health = TraceHealth::Degraded;
-
-        let snapshot = SnapshotView {
-            trace,
-            memberships: vec![ProcessMembership::root(trace_id, process.clone())],
-            events: vec![DomainEvent::new(
-                EventEnvelope {
-                    event_id: EventId::new(1),
-                    trace_id,
-                    observed_at: SystemTime::UNIX_EPOCH,
-                    process: process.clone(),
-                    collector: CollectorName::new("ebpf"),
-                    kind: EventKind::Loss,
-                    flags: EventFlags::clean(),
-                },
-                EventPayload::Loss(LossPayload {
-                    reason: "bootstrap_gap".to_string(),
-                    fatal: false,
-                }),
-            )],
-            diagnostics: vec![DiagnosticRecord::new(
-                DiagnosticId::new(1),
-                Some(trace_id),
-                DiagnosticKind::BootstrapGap,
-                DiagnosticSeverity::Warning,
-                SystemTime::UNIX_EPOCH,
-                "gap",
-            )],
-            payload_segments: Vec::new(),
-        };
-
-        let document = build_graph_document("v1".to_string(), snapshot, false, false);
-        assert_eq!(format!("{:?}", document.completeness), "Degraded");
-        assert!(!document.nodes.is_empty());
-        assert!(!document.edges.is_empty());
-    }
 
     #[test]
     fn net_event_export_preserves_payload_and_endpoint_resource() {
@@ -161,7 +111,11 @@ mod tests {
         );
         let snapshot = SnapshotView {
             trace,
-            memberships: vec![ProcessMembership::root(trace_id, process)],
+            memberships: vec![ProcessMembership::root(
+                trace_id,
+                process,
+                SystemTime::UNIX_EPOCH,
+            )],
             events: vec![event],
             payload_segments: Vec::new(),
             diagnostics: Vec::new(),

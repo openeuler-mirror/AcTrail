@@ -64,6 +64,8 @@ def main() -> int:
     args = parse_args()
     target = load_target_config(args.target_config)
     certificate = ensure_certificate(target)
+    if args.serve_only:
+        return serve_foreground(target, certificate)
     run_workload(target, certificate)
     print("http2 payload workload complete", flush=True)
     return 0
@@ -75,6 +77,11 @@ def parse_args() -> argparse.Namespace:
         "--target-config",
         required=True,
         help="key-value workload config for the local HTTP/2 target",
+    )
+    parser.add_argument(
+        "--serve-only",
+        action="store_true",
+        help="start only the local TLS+h2 server and print its port",
     )
     return parser.parse_args()
 
@@ -309,6 +316,27 @@ def format_child_output(stdout: str, stderr: str) -> str:
 
 def server_main(argv: list[str]) -> int:
     args = parse_server_args(argv)
+    return run_server(args)
+
+
+def serve_foreground(target: TargetConfig, certificate: tuple[Path, Path]) -> int:
+    cert_path, key_path = certificate
+    return run_server(
+        argparse.Namespace(
+            bind_host=target.bind_host,
+            listen_port=target.listen_port,
+            listen_backlog=target.listen_backlog,
+            socket_timeout_seconds=target.socket_timeout_seconds,
+            response_body=target.response_body,
+            response_delay_seconds=target.response_delay_seconds,
+            post_response_hold_seconds=target.post_response_hold_seconds,
+            cert_path=str(cert_path),
+            key_path=str(key_path),
+        )
+    )
+
+
+def run_server(args: argparse.Namespace) -> int:
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.set_alpn_protocols(["h2"])
     context.load_cert_chain(args.cert_path, args.key_path)

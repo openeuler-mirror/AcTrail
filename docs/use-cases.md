@@ -8,7 +8,7 @@ This document maps common operator questions to the AcTrail feature path and the
 | --- | --- | --- |
 | What process tree did the agent create? | eBPF process lifecycle plus viewer process/events output. | [Example 01](examples/01.quick-start/README.md), [Example 03](examples/03.extended-observation-e2e/README.md) |
 | Did one agent silently launch another agent? | `actrailctl launch` plus process seccomp exec context, TLS/plaintext LLM evidence, and `agent.invocation` semantic action. | [Example 07](examples/07.xiaoo-claude-agent-invocation/README.md) |
-| What LLM request and response did xiaoO exchange? | TLS sync payload capture plus HTTP/SSE and `llm.request` semantic assembly. | [Example 06](examples/06.xiaoo-tls-capture/README.md) |
+| What LLM request and response did xiaoO exchange? | TLS sync payload capture plus HTTP/SSE and `llm.request`/`llm.response` semantic assembly. | [Example 06](examples/06.xiaoo-tls-capture/README.md) |
 | What LLM request and response did opencode exchange? | Bun/static-BoringSSL executable TLS payload capture plus proxy-aware HTTP semantics. | `python3 tests/agent-trace/run_case.py opencode-bun` |
 | What outbound LLM request did a Rust/rustls agent send? | `tls-sync` with a rustls probe plan from finder fast, symbols, or a build-id-checked pattern. | [Example 06](examples/06.xiaoo-tls-capture/README.md) |
 | What outbound LLM request did a LangGraph Python agent send? | Dynamic OpenSSL shared-library TLS payload capture around an OpenAI-compatible HTTPS call. | `python3 tests/agent-trace/run_case.py langgraph-openai` |
@@ -37,9 +37,9 @@ Expected evidence:
 
 This use case requires payload capture for the child LLM call. A command match is only a candidate hint; it does not prove agent identity by itself.
 
-## Complete LLM Request Capture
+## Complete LLM Exchange Capture
 
-Goal: retain the LLM request and response bytes, and derive an `llm.request` action from the request.
+Goal: retain the LLM request and response bytes, derive an `llm.request` action from the outbound request, and derive an `llm.response` action from inbound JSON or SSE response payloads.
 
 Use the capture path that matches the target runtime:
 
@@ -71,9 +71,9 @@ Expected evidence:
 - `actrailviewer payloads` shows complete outbound plaintext rows: `TlsUserSpace` for HTTPS/TLS or `Syscall/socket-syscall` for plain HTTP.
 - Operation state is `success`.
 - Captured size equals original size for the operation being validated.
-- `actrailviewer actions` contains a complete successful `llm.request`.
+- `actrailviewer actions` contains a complete successful `llm.request` and an `llm.response` when inbound JSON/SSE response payload is retained.
 - `actrailviewer export-json` contains payload nodes if payload export is enabled.
-- `actrailviewer export-otel` contains an `llm.request` span.
+- `actrailviewer export-otel` contains `llm.request` and the assembled `llm.response` span when that action exists.
 
 Rows marked `Truncated` or operation state `partial` mean the configured capture budget is not sufficient for that request.
 
@@ -91,6 +91,7 @@ Expected evidence:
 - Payload rows show the plaintext source boundary: `Syscall` for plain HTTP, `TlsUserSpace` for HTTPS.
 - `Application` events show HTTP request/response, HTTP/2 frames, or HTTP/2 DATA facts depending on the protocol.
 - `llm.request` actions are assembled from retained outbound request payloads when the payload is complete.
+- `llm.response` actions are assembled from retained inbound JSON or SSE payloads; multiple SSE chunks on the same stream update one response action with multiple payload-segment evidence rows.
 
 HTTP parsing consumes retained plaintext payloads. It should not depend on whether bytes came from OpenSSL, BoringSSL, rustls, or socket syscalls.
 
@@ -129,7 +130,7 @@ python3 docs/examples/clean.py --example extended-observation
 Expected evidence includes:
 
 ```text
-process_events=exec,exit,fork,signal
+process_events=exec,exit,fork
 file_events=...
 net_events=...
 ipc_events=...
@@ -138,6 +139,7 @@ stdio_payloads=stderr:outbound,stdin:inbound,stdout:outbound
 ```
 
 The fork event comes from `sched/sched_process_fork`; a host does not need `syscalls/sys_enter_fork` for this path.
+Default process lifecycle capture suppresses process signal events such as `SIGCHLD`.
 
 ## OpenTelemetry Export
 
@@ -156,7 +158,7 @@ Expected evidence:
 
 - Top-level JSON contains `resourceSpans`.
 - Semantic spans contain `actrail.action.kind`.
-- Action kinds currently covered by examples include `process.exec`, `agent.invocation`, `http.message`, `llm.request`, and `enforcement.decision`.
+- Action kinds currently covered by examples include `process.exec`, `agent.invocation`, `file.read`, `file.write`, `http.message`, `llm.request`, `llm.response`, and `enforcement.decision`.
 
 Not every raw fact is currently an OTEL span. Validate low-level network rows, IPC rows, resource samples, provider labels, and payload rows through viewer commands or JSON graph export when no semantic span exists.
 

@@ -3,8 +3,8 @@
 这份示例用于验证：
 
 ```text
-actrailctl launch -> http1.sh -> curl/OpenSSL -> tls-sync runtime -> AcTrail storage -> actrailviewer
-                                                        -> HTTP/1.x semantic Application events
+http1.sh prepare -> actrailctl launch -> curl/OpenSSL -> tls-sync runtime -> AcTrail storage -> actrailviewer
+                                                                      -> HTTP/1.x semantic Application events
 ```
 
 验证目标是捕捉真实发往 OpenAI-compatible LLM provider 的 outbound TLS plaintext request，并让 AcTrail 从保留的 plaintext 中派生 HTTP/1.x semantic request event。DeepSeek 只是本例的默认 provider；可以通过环境变量改成别的兼容 endpoint。服务端是否返回业务成功不是本例重点；只要 `curl` 发出了 HTTPS 请求，`actrailviewer` 就应该能看到发出的 HTTP request、JSON body，以及 `Application` domain 的 request row。`actraild` 预期由管理员或 root 运行。
@@ -24,10 +24,9 @@ sequenceDiagram
 
     User->>Daemon: start --config http1-operator.conf
     Daemon->>Runtime: prepare sync event socket
-    User->>Launcher: launch bash http1.sh
+    User->>Curl: launch curl --config prepared-curl.conf
     Launcher->>Daemon: TrackAdd(actrailctl pid)
     Launcher->>Runtime: prepare LD_PRELOAD and finder fast probe plan before child exec
-    Launcher->>Curl: exec bash http1.sh
     Curl->>Provider: HTTPS/1.1 chat completion request
     Runtime-->>Daemon: TLS plaintext payload events
     Daemon->>Daemon: redact payload and derive HTTP Application events
@@ -81,7 +80,7 @@ test -n "${DEEPSEEK_API_KEY:-}"
 
 如果 provider 不接受默认 OpenAI-compatible body，设置 `ACTRAIL_LLM_REQUEST_JSON` 传入完整请求体。这个变量是 workload 请求体，不是 AcTrail runtime 配置；AcTrail 本身不依赖 DeepSeek 特有字段。
 
-`docs/examples/02.llm-http-payload-capture/external-openai-compatible/http1.sh` 使用 `curl --config -` 传入 URL 和 headers，并通过临时文件传入 JSON body，避免把 bearer token 放进进程 argv。脚本里保留 `http1.1`，这样捕获到的 TLS plaintext 是可读 HTTP/1.1 request，而不是 HTTP/2 binary frame。
+`docs/examples/02.llm-http-payload-capture/external-openai-compatible/http1.sh prepare` 会生成临时 curl config 和 JSON body 文件。后续 `actrailctl launch -- curl --config "$ACTRAIL_CURL_CONFIG" --data-binary @"$ACTRAIL_CURL_BODY"` 直接观测 `curl`，同时避免把 bearer token 放进进程 argv。脚本里保留 `http1.1`，这样捕获到的 TLS plaintext 是可读 HTTP/1.1 request，而不是 HTTP/2 binary frame。
 
 不强制 `http1.1` 时也能捕获 TLS plaintext bytes；区别是 curl 可能通过 ALPN 协商 HTTP/2。`http2.sh` 使用的是 curl 的 HTTP/2 协商模式，不是“只允许 HTTP/2”的强制模式；如果 provider、CDN 或代理路径最终协商为 HTTP/1.1，regression 会把 external HTTP/2 子检查标记为 `SKIP`，并依赖前面的 external HTTP/1.1 子检查覆盖 provider 路径。真正可重复的 HTTP/2 捕获能力由本地 `http2-local/` workload 验证。
 
@@ -269,11 +268,15 @@ collectors=ebpf plugins= storage_ready=true
 TLS plaintext payload capture uses `payload_tls_capture_backend = tls-sync`, so this example must run the workload through `actrailctl launch`. Do not use `track-add` for an already-running TLS workload; `launch` is responsible for preparing `LD_PRELOAD`, the sync event socket, and the finder fast probe plan before the child `exec`.
 
 ```bash
+eval "$(bash docs/examples/02.llm-http-payload-capture/external-openai-compatible/http1.sh prepare)"
+trap 'rm -rf "$ACTRAIL_CURL_TMPDIR"' EXIT
 ./target/release/actrailctl launch \
   --config docs/examples/02.llm-http-payload-capture/external-openai-compatible/http1-operator.conf \
   --name llm-http1 \
   -- \
-  bash docs/examples/02.llm-http-payload-capture/external-openai-compatible/http1.sh
+  curl --config "$ACTRAIL_CURL_CONFIG" --data-binary @"$ACTRAIL_CURL_BODY"
+rm -rf "$ACTRAIL_CURL_TMPDIR"
+trap - EXIT
 ```
 
 期望看到：
@@ -416,10 +419,9 @@ sequenceDiagram
 
     User->>Daemon: start --config http2-operator.conf
     Daemon->>Runtime: prepare sync event socket
-    User->>Launcher: launch bash http2.sh
+    User->>Curl: launch curl --config prepared-curl.conf
     Launcher->>Daemon: TrackAdd(actrailctl pid)
     Launcher->>Runtime: prepare LD_PRELOAD and finder fast probe plan before child exec
-    Launcher->>Curl: exec bash http2.sh
     Curl->>Provider: HTTPS/2 chat completion request
     Runtime-->>Daemon: TLS plaintext h2 frames and DATA bytes
     Daemon->>Daemon: derive HTTP/2 Application frame/DATA facts
@@ -429,11 +431,15 @@ sequenceDiagram
 ```
 
 ```bash
+eval "$(bash docs/examples/02.llm-http-payload-capture/external-openai-compatible/http2.sh prepare)"
+trap 'rm -rf "$ACTRAIL_CURL_TMPDIR"' EXIT
 ./target/release/actrailctl launch \
   --config docs/examples/02.llm-http-payload-capture/external-openai-compatible/http2-operator.conf \
   --name llm-http2 \
   -- \
-  bash docs/examples/02.llm-http-payload-capture/external-openai-compatible/http2.sh
+  curl --config "$ACTRAIL_CURL_CONFIG" --data-binary @"$ACTRAIL_CURL_BODY"
+rm -rf "$ACTRAIL_CURL_TMPDIR"
+trap - EXIT
 ```
 
 这条路径依赖当前 `curl` 支持 HTTP/2、provider API key 可用，并且 provider/CDN/代理路径实际通过 ALPN 协商到 HTTP/2。默认配置读取 `DEEPSEEK_API_KEY`；如果外部路径协商到 HTTP/1.1，regression 会跳过 external HTTP/2 子检查，而不是把 AcTrail HTTP/2 analyzer 判为失败。如果要验证一个可重复、不依赖外网或 API key 的 HTTPS/2 payload E2E，使用专门的本地 HTTPS/2 配置和 workload：
@@ -444,7 +450,7 @@ sequenceDiagram
 sequenceDiagram
     actor User as 操作者
     participant Daemon as actraild
-    participant Workload as http2-local/workload.py
+    participant Workload as http2-local/workload.py --serve-only
     participant Server as local TLS h2 server
     participant Curl as curl --http2/OpenSSL
     participant Runtime as tls-sync runtime
@@ -453,12 +459,11 @@ sequenceDiagram
 
     User->>Daemon: start --config http2-local/operator.conf
     Daemon->>Runtime: prepare sync event socket
-    User->>Workload: start local HTTP/2 workload
+    User->>Workload: start local HTTP/2 server
     Workload->>Server: bind local TLS+h2 listener
-    User->>Workload: actrailctl launch python workload.py
-    Workload->>Daemon: TrackAdd(actrailctl pid)
-    Workload->>Runtime: inherit LD_PRELOAD and sync event socket into curl child
-    Workload->>Curl: run curl --http2 against local server
+    User->>Curl: actrailctl launch curl --http2
+    Curl->>Daemon: TrackAdd(actrailctl pid)
+    Curl->>Runtime: inherit LD_PRELOAD and sync event socket
     Curl->>Server: HTTPS/2 request and response
     Runtime-->>Daemon: TLS plaintext h2 frames and DATA bytes
     Daemon->>Daemon: derive HTTP/2 Application frame/DATA facts
@@ -471,7 +476,7 @@ sequenceDiagram
 | --- | --- |
 | `docs/examples/02.llm-http-payload-capture/http2-local/operator.conf` | AcTrail operator config，启用 OpenSSL TLS plaintext payload 和 HTTP/2 frame/DATA analyzer。 |
 | `docs/examples/02.llm-http-payload-capture/http2-local/workload.conf` | 本地 workload config，定义监听地址、listen backlog、证书参数、request path/body、response body 和等待时间。 |
-| `docs/examples/02.llm-http-payload-capture/http2-local/workload.py` | 最薄的执行入口：读取配置、启动本地 TLS+h2 server，再启动 `curl --http2`。 |
+| `docs/examples/02.llm-http-payload-capture/http2-local/workload.py` | 最薄的 server 入口：读取配置、启动本地 TLS+h2 server，并打印实际监听端口。 |
 
 终端 A 启动 daemon：
 
@@ -480,22 +485,32 @@ sequenceDiagram
 ./target/release/actraild --config docs/examples/02.llm-http-payload-capture/http2-local/operator.conf status
 ```
 
-通过 `actrailctl launch` 启动 workload：
+终端 B 启动本地 TLS+h2 server。它会打印一个端口号并等待一次请求：
+
+```bash
+python3 docs/examples/02.llm-http-payload-capture/http2-local/workload.py \
+  --target-config docs/examples/02.llm-http-payload-capture/http2-local/workload.conf \
+  --serve-only
+```
+
+通过 `actrailctl launch` 启动 `curl`，把 `<PORT>` 替换为终端 B 打印的端口：
 
 ```bash
 ./target/release/actrailctl launch \
   --config docs/examples/02.llm-http-payload-capture/http2-local/operator.conf \
   --name actrail-http2-live \
   -- \
-  python3 docs/examples/02.llm-http-payload-capture/http2-local/workload.py \
-  --target-config docs/examples/02.llm-http-payload-capture/http2-local/workload.conf
+  curl --http2 --silent --show-error --insecure \
+  --request POST \
+  --header "Content-Type: application/json" \
+  --data '{"model":"actrail-http2","messages":[{"role":"user","content":"payload capture over h2"}],"stream":false}' \
+  "https://127.0.0.1:<PORT>/v1/chat/completions"
 ```
 
 记录 `trace trace-<N> entered Active` 中的 `<N>`。成功时 workload 会打印：
 
 ```text
-curl_stdout={"ok":true,"source":"actrail-http2"}
-http2 payload workload complete
+{"ok":true,"source":"actrail-http2"}
 ```
 
 用 viewer 查看 HTTP/2 application events：
@@ -560,4 +575,6 @@ rg '"metadata.data_preview"' /tmp/actrail-http2-trace.json
 ./target/release/actrailviewer processes --config docs/examples/02.llm-http-payload-capture/external-openai-compatible/http1-operator.conf --trace-id <N>
 ```
 
-如果只看到 `actrailctl` root 进程、没有 shell/curl 子进程，说明 `actrailctl launch` 的 child 没有成功进入 workload。先看 `actrailctl launch` 的 stderr 和 daemon 的实际 stdout/stderr：`actraild start` 才会写 `log_path`，`actraild --config ... run` 是前台模式，输出在启动它的终端或 regression artifact 中。不要改用 `track-add`，`tls-sync` 需要在 exec 前准备 preload runtime、sync event socket 和 probe plan。
+如果只看到 `actrailctl` root 进程、没有 curl 子进程，说明 `actrailctl launch` 的 child 没有成功进入 workload。先看 `actrailctl launch` 的 stderr 和 daemon 的实际 stdout/stderr：`actraild start` 才会写 `log_path`，`actraild --config ... run` 是前台模式，输出在启动它的终端或 regression artifact 中。不要改用 `track-add`，`tls-sync` 需要在 exec 前准备 preload runtime、sync event socket 和 probe plan。
+
+如果本地 HTTPS/2 路径报 `no supported TLS payload probe points found`，先确认 `actrailctl launch` 后面的可执行文件是 `curl`，不是 `python3 workload.py`。本地 server 只负责提供目标端口；被观测的 TLS 客户端必须是 `curl`。

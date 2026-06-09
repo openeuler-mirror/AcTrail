@@ -341,14 +341,30 @@ def require_agent_invocation_span(document: dict) -> None:
     exec_span = find_claude_exec_span(document)
     if exec_span is None:
         raise RuntimeError("missing claude process.exec span")
+    llm_span = find_claude_llm_request_span(document)
+    if llm_span is None:
+        raise RuntimeError("missing claude llm.request span")
     attrs = span_attrs(span)
     exec_attrs = span_attrs(exec_span)
+    llm_attrs = span_attrs(llm_span)
     exec_pid = exec_attrs.get("process.pid", "")
     parent_pid = attrs.get("agent.parent.pid", "")
     child_pid = attrs.get("agent.child.pid", "")
     child = attrs.get("agent.child.command_line", "")
+    trigger = attrs.get("agent.invocation.trigger", "")
+    evidence_id = attrs.get("agent.invocation.evidence_action_id", "")
+    llm_action_id = llm_attrs.get("actrail.action.id", "")
     if child_pid != exec_pid:
         raise RuntimeError(f"agent invocation child pid {child_pid} does not match claude pid {exec_pid}")
+    if llm_attrs.get("process.pid", "") != child_pid:
+        raise RuntimeError("agent invocation evidence is not from the Claude child pid")
+    if trigger != "child_llm_request":
+        raise RuntimeError(f"agent invocation trigger is not child_llm_request: {trigger}")
+    if not evidence_id or evidence_id != llm_action_id:
+        raise RuntimeError(
+            "agent invocation evidence_action_id does not point to Claude llm.request: "
+            f"edge={evidence_id}; llm={llm_action_id}"
+        )
     if not parent_pid or parent_pid == child_pid:
         raise RuntimeError(f"agent invocation parent pid is not a direct external launcher: {parent_pid}")
     if "claude" not in child:
@@ -364,6 +380,7 @@ def evidence_is_complete(document: dict) -> bool:
 
 
 def find_claude_exec_span(document: dict) -> dict | None:
+    fallback: list[dict] = []
     for span in spans(document):
         attrs = span_attrs(span)
         if attrs.get("actrail.action.kind") != "process.exec":
@@ -372,7 +389,15 @@ def find_claude_exec_span(document: dict) -> dict | None:
             continue
         if not is_claude_prompt_exec(span, attrs):
             continue
-        return span
+        if is_claude_executable(span, attrs):
+            return span
+        fallback.append(span)
+    for span in fallback:
+        attrs = span_attrs(span)
+        if has_llm_request_for_pid(document, attrs.get("process.pid", "")):
+            return span
+    if fallback:
+        return fallback[0]
     return None
 
 
@@ -390,6 +415,26 @@ def is_claude_prompt_exec(span: dict, attrs: dict[str, str]) -> bool:
     if any(executable_basename(value) == "claude" for value in executable_candidates):
         return True
     return "\nclaude\n-p" in argv or "/claude\n-p" in argv
+
+
+def is_claude_executable(span: dict, attrs: dict[str, str]) -> bool:
+    executable_candidates = [
+        span.get("name", ""),
+        attrs.get("process.executable", ""),
+        attrs.get("executable", ""),
+        attrs.get("exec.path", ""),
+    ]
+    return any(executable_basename(value) == "claude" for value in executable_candidates)
+
+
+def has_llm_request_for_pid(document: dict, pid: str) -> bool:
+    if not pid:
+        return False
+    for span in spans(document):
+        attrs = span_attrs(span)
+        if attrs.get("actrail.action.kind") == "llm.request" and attrs.get("process.pid") == pid:
+            return True
+    return False
 
 
 def find_claude_llm_request_span(document: dict) -> dict | None:

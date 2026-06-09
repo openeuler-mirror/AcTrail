@@ -11,6 +11,13 @@ use serde_json::Value;
 
 use crate::serialize::{int_attr, quoted, string_attr};
 
+const ATTR_PROCESS_PARENT_IDENTITY_STATE: &str = "process.parent.identity_state";
+const PROCESS_PARENT_IDENTITY_STATE_CONFLICT: &str = "conflict";
+const ATTR_ACTION_VALID: &str = "actrail.action.valid";
+const ACTION_VALID_FALSE: &str = "false";
+const ATTR_LINK_VALID: &str = "actrail.link.valid";
+const LINK_VALID_FALSE: &str = "false";
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OtelExportError {
     pub stage: String,
@@ -54,6 +61,9 @@ fn render_otlp_json_compact(
     let service_name = trace.profile_name.as_str();
     let mut spans = Vec::new();
     for action in actions {
+        if action_invalidated(action) {
+            continue;
+        }
         spans.push(render_span(trace, action, links));
     }
     let resource_attrs = vec![
@@ -149,13 +159,18 @@ fn render_span(
 
 fn span_kind(kind: SemanticActionKind) -> &'static str {
     match kind {
-        SemanticActionKind::HttpMessage | SemanticActionKind::LlmRequest => "SPAN_KIND_CLIENT",
+        SemanticActionKind::HttpMessage
+        | SemanticActionKind::LlmRequest
+        | SemanticActionKind::LlmResponse => "SPAN_KIND_CLIENT",
         SemanticActionKind::ProcessExec
         | SemanticActionKind::CommandInvocation
         | SemanticActionKind::ProcessForkAttempt
         | SemanticActionKind::AgentInvocation
+        | SemanticActionKind::FileRead
         | SemanticActionKind::FileWrite
         | SemanticActionKind::FileModify
+        | SemanticActionKind::SseStream
+        | SemanticActionKind::SseEvent
         | SemanticActionKind::EnforcementDecision => "SPAN_KIND_INTERNAL",
     }
 }
@@ -166,6 +181,7 @@ fn parent_link<'a>(
 ) -> Option<&'a SemanticActionLink> {
     links
         .iter()
+        .filter(|link| !link_invalidated_by_child_parent_identity(action, link))
         .filter(|link| link.child_action_id == action.action_id && link_is_parent_child(link.role))
         .min_by_key(|link| parent_role_priority(link.role))
 }
@@ -177,6 +193,7 @@ fn support_links<'a>(
 ) -> impl Iterator<Item = &'a SemanticActionLink> {
     links.iter().filter(move |link| {
         link.child_action_id == action.action_id
+            && !link_invalidated_by_child_parent_identity(action, link)
             && !parent.is_some_and(|parent| {
                 parent.parent_action_id == link.parent_action_id
                     && parent.child_action_id == link.child_action_id
@@ -185,14 +202,48 @@ fn support_links<'a>(
     })
 }
 
+fn action_invalidated(action: &SemanticAction) -> bool {
+    action
+        .attributes
+        .get(ATTR_ACTION_VALID)
+        .is_some_and(|value| value == ACTION_VALID_FALSE)
+}
+
+fn link_invalidated_by_child_parent_identity(
+    action: &SemanticAction,
+    link: &SemanticActionLink,
+) -> bool {
+    if link
+        .attributes
+        .get(ATTR_LINK_VALID)
+        .is_some_and(|value| value == LINK_VALID_FALSE)
+    {
+        return true;
+    }
+    action
+        .attributes
+        .get(ATTR_PROCESS_PARENT_IDENTITY_STATE)
+        .is_some_and(|state| state == PROCESS_PARENT_IDENTITY_STATE_CONFLICT)
+        && matches!(
+            link.role,
+            SemanticActionLinkRole::AgentPerformedAction
+                | SemanticActionLinkRole::CommandContainsCommandInvocation
+        )
+}
+
 fn link_is_parent_child(role: SemanticActionLinkRole) -> bool {
     matches!(
         role,
         SemanticActionLinkRole::AgentPerformedAction
+            | SemanticActionLinkRole::CommandContainsFileAccess
+            | SemanticActionLinkRole::CommandContainsProcessForkAttempt
             | SemanticActionLinkRole::CommandContainsProcessExec
+            | SemanticActionLinkRole::CommandContainsCommandInvocation
             | SemanticActionLinkRole::FileWriteContainsFileEvent
             | SemanticActionLinkRole::AgentInvocationExec
             | SemanticActionLinkRole::AgentInvocationChildLlmRequest
+            | SemanticActionLinkRole::LlmResponseSseStream
+            | SemanticActionLinkRole::SseStreamEvent
     )
 }
 
@@ -200,10 +251,17 @@ fn link_is_parent_child(role: SemanticActionLinkRole) -> bool {
 enum ParentRolePriority {
     AgentInvocationExec,
     CommandContainsProcessExec,
+    CommandContainsCommandInvocation,
     AgentPerformedAction,
+    CommandContainsProcessForkAttempt,
+    CommandContainsFileAccess,
     AgentInvocationChildLlmRequest,
     FileWriteContainsFileEvent,
+    LlmResponseSseStream,
+    SseStreamEvent,
     LlmRequestHttpMessage,
+    LlmRequestLlmResponse,
+    LlmResponseHttpMessage,
 }
 
 fn parent_role_priority(role: SemanticActionLinkRole) -> ParentRolePriority {
@@ -212,6 +270,15 @@ fn parent_role_priority(role: SemanticActionLinkRole) -> ParentRolePriority {
         SemanticActionLinkRole::CommandContainsProcessExec => {
             ParentRolePriority::CommandContainsProcessExec
         }
+        SemanticActionLinkRole::CommandContainsCommandInvocation => {
+            ParentRolePriority::CommandContainsCommandInvocation
+        }
+        SemanticActionLinkRole::CommandContainsProcessForkAttempt => {
+            ParentRolePriority::CommandContainsProcessForkAttempt
+        }
+        SemanticActionLinkRole::CommandContainsFileAccess => {
+            ParentRolePriority::CommandContainsFileAccess
+        }
         SemanticActionLinkRole::AgentPerformedAction => ParentRolePriority::AgentPerformedAction,
         SemanticActionLinkRole::AgentInvocationChildLlmRequest => {
             ParentRolePriority::AgentInvocationChildLlmRequest
@@ -219,7 +286,13 @@ fn parent_role_priority(role: SemanticActionLinkRole) -> ParentRolePriority {
         SemanticActionLinkRole::FileWriteContainsFileEvent => {
             ParentRolePriority::FileWriteContainsFileEvent
         }
+        SemanticActionLinkRole::LlmResponseSseStream => ParentRolePriority::LlmResponseSseStream,
+        SemanticActionLinkRole::SseStreamEvent => ParentRolePriority::SseStreamEvent,
         SemanticActionLinkRole::LlmRequestHttpMessage => ParentRolePriority::LlmRequestHttpMessage,
+        SemanticActionLinkRole::LlmRequestLlmResponse => ParentRolePriority::LlmRequestLlmResponse,
+        SemanticActionLinkRole::LlmResponseHttpMessage => {
+            ParentRolePriority::LlmResponseHttpMessage
+        }
     }
 }
 

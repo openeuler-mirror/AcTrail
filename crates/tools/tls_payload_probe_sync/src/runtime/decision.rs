@@ -161,7 +161,7 @@ fn send_payload_event(
         sequence,
         bytes: payload.to_vec(),
     });
-    send_event_or_abort(config, &event);
+    send_event_or_drop(config, event);
 }
 
 fn send_decision_event(
@@ -187,14 +187,13 @@ fn send_decision_event(
         action: action.to_string(),
         reason: reason.to_string(),
     });
-    send_event_or_abort(config, &event);
+    send_event_or_drop(config, event);
 }
 
-fn send_event_or_abort(config: &config::RuntimeConfig, event: &SyncEvent) {
+fn send_event_or_drop(config: &config::RuntimeConfig, event: SyncEvent) {
     if let Err(error) = config.send_event(event) {
-        output::error_line(&format!("tls_payload_probe_sync event error: {error}\n"));
-        unsafe {
-            libc::_exit(126);
+        if config.should_print_decision() {
+            output::error_line(&format!("tls_payload_probe_sync event dropped: {error}\n"));
         }
     }
 }

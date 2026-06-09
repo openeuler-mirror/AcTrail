@@ -17,7 +17,6 @@ use tls_probe_point_finder::fast::{ArchFilter, FastProbeRequest, ProviderFilter,
 pub(super) struct SyncLaunch {
     pub(super) command: Vec<OsString>,
     pub(super) envs: Vec<(OsString, OsString)>,
-    plan: tls_probe_point_finder::ProbePointPlan,
     library: PathBuf,
 }
 
@@ -28,7 +27,7 @@ pub(super) fn run_child_sync_tls(
     agent_commands: &[String],
 ) -> Result<i32, String> {
     let launch = sync_launch(trace_id, argv, config, agent_commands)?;
-    let status = run_with_preload(&launch.command, &launch.plan, &launch.library, launch.envs)
+    let status = run_with_preload(&launch.command, &launch.library, launch.envs)
         .map_err(|error| error.to_string())?;
     status
         .code()
@@ -44,12 +43,18 @@ pub(super) fn sync_launch(
     if argv.is_empty() {
         return Err("launch requires a command after --".to_string());
     }
+    validate_resolver_inputs(config)?;
     let raw_command = argv.into_iter().map(OsString::from).collect::<Vec<_>>();
-    let plan = resolve_native_plan(&raw_command, config)?;
-    let command =
-        launch_command_for_plan(&raw_command, &plan).map_err(|error| error.to_string())?;
+    let (command, launch_plan) = match resolve_native_plan(&raw_command, config) {
+        Ok(plan) => {
+            let command =
+                launch_command_for_plan(&raw_command, &plan).map_err(|error| error.to_string())?;
+            (command, Some(plan))
+        }
+        Err(_) => (raw_command, None),
+    };
     let library = runtime_library(config)?;
-    let plans = bundle_plans(plan.clone(), config, agent_commands);
+    let plans = bundle_plans(launch_plan, config, agent_commands);
     let mut envs = runtime_env_for_plans(
         &RuntimeEnvConfig {
             rules: Vec::new(),
@@ -70,17 +75,16 @@ pub(super) fn sync_launch(
     Ok(SyncLaunch {
         command,
         envs,
-        plan,
         library,
     })
 }
 
 fn bundle_plans(
-    launch_plan: tls_probe_point_finder::ProbePointPlan,
+    launch_plan: Option<tls_probe_point_finder::ProbePointPlan>,
     config: &PayloadTlsConfig,
     agent_commands: &[String],
 ) -> Vec<tls_probe_point_finder::ProbePointPlan> {
-    let mut plans = vec![launch_plan];
+    let mut plans = launch_plan.into_iter().collect::<Vec<_>>();
     for command in agent_commands {
         let candidate = vec![OsString::from(command)];
         let Ok(plan) = resolve_native_plan(&candidate, config) else {
@@ -129,8 +133,7 @@ fn resolve_plan(
         arch: ArchFilter::Auto,
         provider: ProviderFilter::Auto,
         source: SourceFilter::Auto,
-        match_limit: usize::try_from(config.sync_match_limit)
-            .map_err(|error| format!("payload_tls_sync_match_limit overflow: {error}"))?,
+        match_limit: match_limit(config)?,
         libraries: library_candidates(config),
         library_search_dirs: Vec::new(),
     })
@@ -150,4 +153,22 @@ fn library_candidates(config: &PayloadTlsConfig) -> Vec<PathBuf> {
         PayloadTlsLibraryPath::Auto => Vec::new(),
         PayloadTlsLibraryPath::Path(path) => vec![path.clone()],
     }
+}
+
+fn validate_resolver_inputs(config: &PayloadTlsConfig) -> Result<(), String> {
+    let _ = match_limit(config)?;
+    for path in library_candidates(config) {
+        if !path.is_file() {
+            return Err(format!(
+                "payload_tls_library_path is not a file: {}",
+                path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn match_limit(config: &PayloadTlsConfig) -> Result<usize, String> {
+    usize::try_from(config.sync_match_limit)
+        .map_err(|error| format!("payload_tls_sync_match_limit overflow: {error}"))
 }

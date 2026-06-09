@@ -1,4 +1,4 @@
-//! HTTP request extraction from plaintext transport payloads.
+//! HTTP message extraction from plaintext transport payloads.
 
 use crate::payload_projection::encoding::base64_encode;
 
@@ -10,6 +10,8 @@ const HTTP2_CONTINUATION_FRAME_TYPE: u8 = 0x9;
 const HTTP2_FLAG_PADDED: u8 = 0x8;
 const HTTP2_FLAG_PRIORITY: u8 = 0x20;
 const HTTP1_HEADER_SEPARATOR: &[u8] = b"\r\n\r\n";
+const HTTP1_LINE_ENDING: &[u8] = b"\r\n";
+const HTTP1_RESPONSE_PREFIX: &str = "HTTP/";
 const HTTP1_REQUEST_METHODS: [&str; 9] = [
     "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "CONNECT", "TRACE",
 ];
@@ -28,8 +30,27 @@ pub(super) struct HttpRequestParts {
     pub encoded_len: usize,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct HttpResponseParts {
+    pub protocol: &'static str,
+    pub scheme: &'static str,
+    pub status_code: Option<String>,
+    pub reason: Option<String>,
+    pub stream_id: Option<u32>,
+    pub headers_text: Option<String>,
+    pub headers_hpack_base64: Option<String>,
+    pub body: Vec<u8>,
+    pub encoded_len: usize,
+    pub complete: bool,
+    pub body_boundary_known: bool,
+}
+
 pub(super) fn split_request(bytes: &[u8]) -> Option<HttpRequestParts> {
     split_http1_request(bytes).or_else(|| split_http2_request(bytes))
+}
+
+pub(super) fn split_response(bytes: &[u8]) -> Option<HttpResponseParts> {
+    split_http1_response(bytes).or_else(|| split_http2_response(bytes))
 }
 
 pub(super) fn split_http1_request(bytes: &[u8]) -> Option<HttpRequestParts> {
@@ -69,6 +90,51 @@ pub(super) fn split_http1_request(bytes: &[u8]) -> Option<HttpRequestParts> {
         headers_hpack_base64: None,
         body: bytes[body_start..body_end].to_vec(),
         encoded_len: body_end,
+    })
+}
+
+fn split_http1_response(bytes: &[u8]) -> Option<HttpResponseParts> {
+    let separator = find_bytes(bytes, HTTP1_HEADER_SEPARATOR)?;
+    let header_bytes = &bytes[..separator];
+    let header_text = String::from_utf8_lossy(header_bytes).into_owned();
+    let (status_code, reason) = parse_http1_status_line(&header_text)?;
+    let body_start = separator + HTTP1_HEADER_SEPARATOR.len();
+    let body_bytes = &bytes[body_start..];
+    let content_length = match http1_header_value(&header_text, "content-length") {
+        Some(value) => Some(value.parse::<usize>().ok()?),
+        None => None,
+    };
+    let transfer_is_chunked = http1_header_value(&header_text, "transfer-encoding")
+        .map(|value| value.to_ascii_lowercase().contains("chunked"))
+        .unwrap_or(false);
+    let mut body_boundary_known = content_length.is_some();
+    let (body, body_len, complete) = if let Some(length) = content_length {
+        let available = length.min(body_bytes.len());
+        (
+            body_bytes[..available].to_vec(),
+            available,
+            available == length,
+        )
+    } else if transfer_is_chunked {
+        let chunked = parse_http1_chunked_body_prefix(body_bytes)?;
+        body_boundary_known = chunked.boundary_known;
+        (chunked.body, chunked.consumed_len, chunked.complete)
+    } else {
+        (body_bytes.to_vec(), body_bytes.len(), false)
+    };
+    let encoded_len = body_start.checked_add(body_len)?;
+    Some(HttpResponseParts {
+        protocol: "http/1.1",
+        scheme: "https",
+        status_code: Some(status_code),
+        reason,
+        stream_id: None,
+        headers_text: Some(header_text),
+        headers_hpack_base64: None,
+        body,
+        encoded_len,
+        complete,
+        body_boundary_known,
     })
 }
 
@@ -126,12 +192,74 @@ fn split_http2_request(bytes: &[u8]) -> Option<HttpRequestParts> {
     })
 }
 
+fn split_http2_response(bytes: &[u8]) -> Option<HttpResponseParts> {
+    let mut cursor = if bytes.starts_with(HTTP2_CONNECTION_PREFACE) {
+        HTTP2_CONNECTION_PREFACE.len()
+    } else {
+        0
+    };
+    let mut body = Vec::new();
+    let mut header_block = Vec::new();
+    let mut stream_id = None;
+
+    while cursor + HTTP2_FRAME_HEADER_BYTES <= bytes.len() {
+        let Some(frame) = decode_http2_frame(&bytes[cursor..]) else {
+            cursor += 1;
+            continue;
+        };
+        if frame.stream_id != 0 && stream_id.is_none() {
+            stream_id = Some(frame.stream_id);
+        }
+        match frame.frame_type {
+            HTTP2_DATA_FRAME_TYPE => {
+                if let Some(data) = http2_data_payload(frame.flags, frame.payload) {
+                    body.extend_from_slice(data);
+                }
+            }
+            HTTP2_HEADERS_FRAME_TYPE => {
+                if let Some(headers) = http2_headers_payload(frame.flags, frame.payload) {
+                    header_block.extend_from_slice(headers);
+                }
+            }
+            HTTP2_CONTINUATION_FRAME_TYPE => {
+                header_block.extend_from_slice(frame.payload);
+            }
+            _ => {}
+        }
+        cursor += frame.encoded_len;
+    }
+
+    if body.is_empty() {
+        return None;
+    }
+    Some(HttpResponseParts {
+        protocol: "h2",
+        scheme: "https",
+        status_code: None,
+        reason: None,
+        stream_id,
+        headers_text: None,
+        headers_hpack_base64: (!header_block.is_empty()).then(|| base64_encode(&header_block)),
+        body,
+        encoded_len: bytes.len(),
+        complete: false,
+        body_boundary_known: false,
+    })
+}
+
 fn looks_like_http1_header_block(text: &str) -> bool {
     text.contains(" HTTP/")
         || text.split("\r\n").any(|line| {
             line.split_once(':')
                 .is_some_and(|(key, _)| is_common_http_header(key))
         })
+}
+
+fn http1_header_value<'a>(header_text: &'a str, name: &str) -> Option<&'a str> {
+    header_text.split("\r\n").find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        key.eq_ignore_ascii_case(name).then(|| value.trim())
+    })
 }
 
 fn http1_content_length(header_text: &str) -> Option<Option<usize>> {
@@ -146,11 +274,103 @@ fn http1_content_length(header_text: &str) -> Option<Option<usize>> {
     Some(None)
 }
 
+fn parse_http1_status_line(header_text: &str) -> Option<(String, Option<String>)> {
+    let first_line = header_text.lines().next()?.trim();
+    if !first_line.starts_with(HTTP1_RESPONSE_PREFIX) {
+        return None;
+    }
+    let mut parts = first_line.splitn(3, ' ');
+    parts.next()?;
+    let status_code = parts.next()?.to_string();
+    let reason = parts.next().map(ToString::to_string);
+    Some((status_code, reason))
+}
+
 fn is_common_http_header(key: &str) -> bool {
     matches!(
         key.trim().to_ascii_lowercase().as_str(),
         "host" | "content-length" | "content-type" | "accept" | "user-agent" | "authorization"
     )
+}
+
+struct Http1ChunkedBodyPrefix {
+    body: Vec<u8>,
+    consumed_len: usize,
+    complete: bool,
+    boundary_known: bool,
+}
+
+fn parse_http1_chunked_body_prefix(bytes: &[u8]) -> Option<Http1ChunkedBodyPrefix> {
+    if starts_like_sse_body(bytes) {
+        return Some(Http1ChunkedBodyPrefix {
+            body: bytes.to_vec(),
+            consumed_len: bytes.len(),
+            complete: false,
+            boundary_known: false,
+        });
+    }
+
+    let mut cursor = 0;
+    let mut body = Vec::new();
+    let mut parsed_chunk = false;
+    loop {
+        let Some(line_end) = find_bytes(&bytes[cursor..], HTTP1_LINE_ENDING) else {
+            return parsed_chunk.then_some(Http1ChunkedBodyPrefix {
+                body,
+                consumed_len: bytes.len(),
+                complete: false,
+                boundary_known: true,
+            });
+        };
+        let size_line = &bytes[cursor..cursor + line_end];
+        let size_text = std::str::from_utf8(size_line)
+            .ok()?
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim();
+        let size = usize::from_str_radix(size_text, 16).ok()?;
+        cursor = cursor
+            .checked_add(line_end)?
+            .checked_add(HTTP1_LINE_ENDING.len())?;
+        let data_end = cursor.checked_add(size)?;
+        if bytes.len() < data_end {
+            return Some(Http1ChunkedBodyPrefix {
+                body,
+                consumed_len: bytes.len(),
+                complete: false,
+                boundary_known: true,
+            });
+        }
+        body.extend_from_slice(&bytes[cursor..data_end]);
+        let chunk_end = data_end.checked_add(HTTP1_LINE_ENDING.len())?;
+        if bytes.len() < chunk_end {
+            return Some(Http1ChunkedBodyPrefix {
+                body,
+                consumed_len: bytes.len(),
+                complete: false,
+                boundary_known: true,
+            });
+        }
+        cursor = chunk_end;
+        parsed_chunk = true;
+        if size == 0 {
+            return Some(Http1ChunkedBodyPrefix {
+                body,
+                consumed_len: cursor,
+                complete: true,
+                boundary_known: true,
+            });
+        }
+    }
+}
+
+fn starts_like_sse_body(bytes: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(bytes);
+    text.lines()
+        .next()
+        .map(str::trim)
+        .is_some_and(|line| line.starts_with("event:") || line.starts_with("data:"))
 }
 
 fn parse_http1_request_line(line: &str) -> Option<(Option<String>, Option<String>)> {

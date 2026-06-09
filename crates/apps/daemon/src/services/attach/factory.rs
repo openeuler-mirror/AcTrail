@@ -14,7 +14,7 @@ use crate::profiles::DaemonProfileRegistry;
 use crate::services::application_protocol::ApplicationProtocolAnalyzer;
 use crate::services::enforcement::FanotifyEnforcementService;
 use crate::services::live::otel_export::LiveOtelExporter;
-use crate::services::payload_gate::SocketHttpPayloadGate;
+use crate::services::payload_gate::{PayloadBodyRetentionGate, SocketHttpPayloadGate};
 use crate::services::process_seccomp::ProcessSeccompService;
 use crate::services::resource_metrics::ResourceMetricsSampler;
 use crate::services::seccomp_notify::SeccompNotifyService;
@@ -90,6 +90,7 @@ impl SqliteAttachService {
             payload_config.socket.http_sniff_max_bytes,
             payload_config.socket.stream_state_max_entries,
         );
+        let payload_body_retention_gate = PayloadBodyRetentionGate::new();
         let seccomp_notify = SeccompNotifyService::new(&seccomp_notify_config);
         let seccomp_tls = SeccompTlsService::new(&payload_config.tls, diagnostic_log_level);
         let tls_sync = TlsSyncService::new(&payload_config.tls)?;
@@ -116,6 +117,7 @@ impl SqliteAttachService {
             payload_socket_redaction_policy,
             payload_socket_retention_max_bytes_per_trace,
             socket_payload_gate,
+            payload_body_retention_gate,
             seccomp_notify,
             seccomp_tls,
             tls_sync,

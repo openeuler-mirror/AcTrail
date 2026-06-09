@@ -76,7 +76,8 @@ impl TraceRuntime {
             trace.add_tag(tag);
         }
 
-        let root_membership = ProcessMembership::root(trace_id, request.root_identity);
+        let root_membership =
+            ProcessMembership::root(trace_id, request.root_identity, request.created_at);
         let memberships = MembershipIndex::new(root_membership);
         self.traces.insert(
             trace_id,
@@ -129,6 +130,7 @@ impl TraceRuntime {
         trace_id: TraceId,
         parent_identity: &ProcessIdentity,
         child_identity: ProcessIdentity,
+        observed_at: SystemTime,
     ) -> Result<(), RegistryError> {
         let entry = self
             .traces
@@ -143,8 +145,12 @@ impl TraceRuntime {
             return Err(RegistryError::PropagationDisabled(parent.identity));
         }
 
-        let membership =
-            ProcessMembership::inherited(trace_id, child_identity, parent.identity.clone());
+        let membership = ProcessMembership::inherited(
+            trace_id,
+            child_identity,
+            parent.identity.clone(),
+            observed_at,
+        );
         let _ = entry.memberships.insert(membership);
         Ok(())
     }
@@ -154,6 +160,7 @@ impl TraceRuntime {
         trace_id: TraceId,
         parent_identity: &ProcessIdentity,
         child_identity: ProcessIdentity,
+        observed_at: SystemTime,
     ) -> Result<(), RegistryError> {
         let entry = self
             .traces
@@ -171,8 +178,12 @@ impl TraceRuntime {
             return Err(RegistryError::PropagationDisabled(parent.identity));
         }
 
-        let membership =
-            ProcessMembership::inherited(trace_id, child_identity, parent.identity.clone());
+        let membership = ProcessMembership::inherited(
+            trace_id,
+            child_identity,
+            parent.identity.clone(),
+            observed_at,
+        );
         let _ = entry.memberships.insert(membership);
         Ok(())
     }
@@ -397,7 +408,12 @@ mod tests {
             .activate_trace(trace_id, SystemTime::UNIX_EPOCH)
             .unwrap();
         runtime
-            .inherit_process(trace_id, &root, ProcessIdentity::new(101, 2, 1))
+            .inherit_process(
+                trace_id,
+                &root,
+                ProcessIdentity::new(101, 2, 1),
+                SystemTime::UNIX_EPOCH,
+            )
             .unwrap();
         runtime
             .track_remove_root(RootRemovalRequest {
@@ -437,6 +453,7 @@ mod tests {
                 ExitStatus {
                     code: Some(0),
                     observed_at: SystemTime::UNIX_EPOCH,
+                    source: Some(model_core::process::ExitObservationSource::Event),
                 },
             )
             .unwrap();

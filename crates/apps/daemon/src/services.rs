@@ -5,6 +5,8 @@ pub(crate) mod attach;
 #[path = "services/logging/diagnostic.rs"]
 pub(crate) mod diagnostic_logging;
 pub(crate) mod enforcement;
+#[path = "services/identity/service.rs"]
+pub(crate) mod identity;
 pub(crate) mod live;
 pub(crate) mod payload;
 pub(crate) mod payload_gate;

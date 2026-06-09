@@ -38,7 +38,7 @@ use crate::service_host::AttachService;
 use crate::services::application_protocol::ApplicationProtocolAnalyzer;
 use crate::services::enforcement::FanotifyEnforcementService;
 use crate::services::live::otel_export::LiveOtelExporter;
-use crate::services::payload_gate::SocketHttpPayloadGate;
+use crate::services::payload_gate::{PayloadBodyRetentionGate, SocketHttpPayloadGate};
 use crate::services::process_seccomp::{ProcessSeccompObservation, ProcessSeccompService};
 use crate::services::resource_metrics::ResourceMetricsSampler;
 use crate::services::seccomp_notify::SeccompNotifyService;
@@ -69,6 +69,7 @@ pub(crate) struct SqliteAttachService {
     pub(super) payload_socket_redaction_policy: PayloadRedactionPolicy,
     pub(super) payload_socket_retention_max_bytes_per_trace: u64,
     pub(super) socket_payload_gate: SocketHttpPayloadGate,
+    pub(super) payload_body_retention_gate: PayloadBodyRetentionGate,
     pub(super) seccomp_notify: SeccompNotifyService,
     pub(super) seccomp_tls: SeccompTlsService,
     pub(super) tls_sync: TlsSyncService,
@@ -380,9 +381,7 @@ impl AttachService for SqliteAttachService {
         if let Some(fd) = self.enforcement.event_poll_fd() {
             fds.push(fd);
         }
-        if let Some(fd) = self.tls_sync.event_poll_fd() {
-            fds.push(fd);
-        }
+        fds.extend(self.tls_sync.event_poll_fds());
         fds.extend(self.seccomp_notify.event_poll_fds());
         Ok(fds)
     }

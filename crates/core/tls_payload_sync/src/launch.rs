@@ -26,17 +26,14 @@ pub enum RuntimeLibraryPath {
 
 pub fn run_with_preload(
     command: &[OsString],
-    plan: &ProbePointPlan,
     library: &Path,
     envs: Vec<(OsString, OsString)>,
 ) -> SyncResult<ExitStatus> {
-    validate_native_backend_plan(plan)?;
-    let launch_command = launch_command_for_plan(command, plan)?;
-    let Some(program) = launch_command.first() else {
+    let Some(program) = command.first() else {
         return Err(SyncError::new("probe command is empty"));
     };
     let mut child = Command::new(program);
-    child.args(&launch_command[1..]);
+    child.args(&command[1..]);
     child.envs(envs);
     child.env("LD_PRELOAD", preload_env_value(library)?);
     child

@@ -10,7 +10,6 @@ mod payload;
 use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 
 use collector_event::{RawCollectorEvent, RawEventEnvelope, RawObservationPayload};
 use model_core::capability::Capability;
@@ -126,49 +125,24 @@ fn decode_fork(
     identity_reader: &ProcfsIdentityReader,
 ) -> Result<Option<RawCollectorEvent>, DecodeError> {
     let parent_identity = resolve_parent_identity(&event, bindings, identity_reader)?;
-    let mut child_identity =
+    let child_identity =
         resolve_event_identity(event.aux, event.aux_generation, bindings, identity_reader)
             .map_err(|error| DecodeError::new("fork_identity", error))?;
-    
-    // Record precise start time with millisecond precision
-    if let Ok(duration) = SystemTime::now().duration_since(UNIX_EPOCH) {
-        let start_unix_millis = duration.as_millis() as u64;
-        child_identity = child_identity.with_start_unix_millis(start_unix_millis);
-        // Also store millis in metadata for precise timing
-        let mut metadata = lifecycle_metadata(event.aux);
-        metadata.insert("start_unix_millis".to_string(), start_unix_millis.to_string());
-        
-        bindings.track(event.trace_id, child_identity.clone());
+    let metadata = lifecycle_metadata(event.aux);
+    bindings.track(event.trace_id, child_identity.clone());
 
-        Ok(Some(RawCollectorEvent {
-            envelope: RawEventEnvelope {
-                observed_at: SystemTime::now(),
-                process: child_identity,
-                collector: CollectorName::new("ebpf"),
-            },
-            payload: RawObservationPayload::Process {
-                operation: "fork".to_string(),
-                parent: Some(parent_identity),
-                metadata,
-            },
-        }))
-    } else {
-        let metadata = lifecycle_metadata(event.aux);
-        bindings.track(event.trace_id, child_identity.clone());
-        
-        Ok(Some(RawCollectorEvent {
-            envelope: RawEventEnvelope {
-                observed_at: SystemTime::now(),
-                process: child_identity,
-                collector: CollectorName::new("ebpf"),
-            },
-            payload: RawObservationPayload::Process {
-                operation: "fork".to_string(),
-                parent: Some(parent_identity),
-                metadata,
-            },
-        }))
-    }
+    Ok(Some(RawCollectorEvent {
+        envelope: RawEventEnvelope {
+            observed_at: SystemTime::now(),
+            process: child_identity,
+            collector: CollectorName::new("ebpf"),
+        },
+        payload: RawObservationPayload::Process {
+            operation: "fork".to_string(),
+            parent: Some(parent_identity),
+            metadata,
+        },
+    }))
 }
 
 fn decode_exec(
@@ -176,20 +150,11 @@ fn decode_exec(
     bindings: &mut BindingStateMap,
     identity_reader: &ProcfsIdentityReader,
 ) -> Result<Option<RawCollectorEvent>, DecodeError> {
-    let mut identity =
+    let identity =
         resolve_event_identity(event.pid, event.pid_generation, bindings, identity_reader)
             .map_err(|error| DecodeError::new("exec_identity", error))?;
-    
-    // Record precise start time with millisecond precision
-    let mut metadata = lifecycle_metadata(event.pid);
-    if let Ok(duration) = SystemTime::now().duration_since(UNIX_EPOCH) {
-        let start_unix_millis = duration.as_millis() as u64;
-        identity = identity.with_start_unix_millis(start_unix_millis);
-        metadata.insert("start_unix_millis".to_string(), start_unix_millis.to_string());
-    }
-    
     bindings.track(event.trace_id, identity.clone());
-    
+    let mut metadata = lifecycle_metadata(event.pid);
     if let Some(exec_filename) = event.exec_filename {
         metadata.insert("executable".to_string(), exec_filename.path.clone());
         metadata.insert("exec_filename".to_string(), exec_filename.path);

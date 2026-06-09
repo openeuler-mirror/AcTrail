@@ -11,12 +11,21 @@ use semantic_action::{
 pub(super) const ATTR_AGENT_IDENTITY_STATUS: &str = "agent.identity.status";
 pub(super) const ATTR_AGENT_IDENTITY_SOURCE: &str = "agent.identity.source";
 pub(super) const ATTR_AGENT_IDENTITY_EVIDENCE_ACTION_ID: &str = "agent.identity.evidence_action_id";
-pub(super) const ATTR_AGENT_CANDIDATE_COMMAND_MATCH: &str =
-    "agent.identity.candidate_command_match";
-pub(super) const ATTR_AGENT_CANDIDATE_COMMAND: &str = "agent.identity.candidate_command";
 pub(super) const ATTR_AGENT_INVOCATION_TRIGGER: &str = "agent.invocation.trigger";
 pub(super) const ATTR_AGENT_INVOCATION_EVIDENCE_ACTION_ID: &str =
     "agent.invocation.evidence_action_id";
+pub(super) const ATTR_ACTION_VALID: &str = "actrail.action.valid";
+pub(super) const ACTION_VALID_FALSE: &str = "false";
+pub(super) const ATTR_LINK_VALID: &str = "actrail.link.valid";
+pub(super) const LINK_VALID_FALSE: &str = "false";
+pub(super) const ATTR_PROCESS_PARENT_GENERATION: &str = "process.parent.generation";
+pub(super) const ATTR_PROCESS_PARENT_IDENTITY_STATE: &str = "process.parent.identity_state";
+pub(super) const ATTR_PROCESS_PARENT_PID: &str = "process.parent.pid";
+pub(super) const ATTR_PROCESS_PARENT_PID_NAMESPACE: &str = "process.parent.pid_namespace";
+pub(super) const ATTR_PROCESS_PARENT_START_TIME_TICKS: &str = "process.parent.start_time_ticks";
+pub(super) const ATTR_PROCESS_PARENT_TASK_ID: &str = "process.parent.task_id";
+pub(super) const PROCESS_PARENT_IDENTITY_STATE_CONFLICT: &str = "conflict";
+pub(super) const PROCESS_PARENT_IDENTITY_STATE_OBSERVED: &str = "observed";
 
 pub(super) fn process_exec_action(event: &DomainEvent) -> SemanticAction {
     let EventPayload::Process(payload) = &event.payload else {
@@ -25,6 +34,9 @@ pub(super) fn process_exec_action(event: &DomainEvent) -> SemanticAction {
     let mut attributes = payload.metadata.clone();
     if let Some(executable) = &payload.executable {
         attributes.insert("process.executable".to_string(), executable.clone());
+    }
+    if let Some(parent) = &payload.parent {
+        insert_parent_identity_attributes(&mut attributes, parent);
     }
     SemanticAction {
         action_id: process_action_id(event.envelope.trace_id, &event.envelope.process, "exec"),
@@ -191,6 +203,45 @@ pub(super) fn event_evidence(event: &DomainEvent, role: &str) -> SemanticEvidenc
         id: event.envelope.event_id.get(),
         role: role.to_string(),
     }
+}
+
+pub(super) fn append_missing_evidence(
+    target: &mut Vec<SemanticEvidence>,
+    source: &[SemanticEvidence],
+) {
+    for evidence in source {
+        if !target.contains(evidence) {
+            target.push(evidence.clone());
+        }
+    }
+}
+
+fn insert_parent_identity_attributes(
+    attributes: &mut std::collections::BTreeMap<String, String>,
+    parent: &ProcessIdentity,
+) {
+    attributes.insert(ATTR_PROCESS_PARENT_PID.to_string(), parent.pid.to_string());
+    if let Some(task_id) = parent.task_id {
+        attributes.insert(ATTR_PROCESS_PARENT_TASK_ID.to_string(), task_id.to_string());
+    }
+    attributes.insert(
+        ATTR_PROCESS_PARENT_START_TIME_TICKS.to_string(),
+        parent.start_time_ticks.to_string(),
+    );
+    if let Some(pid_namespace) = &parent.pid_namespace {
+        attributes.insert(
+            ATTR_PROCESS_PARENT_PID_NAMESPACE.to_string(),
+            pid_namespace.as_str().to_string(),
+        );
+    }
+    attributes.insert(
+        ATTR_PROCESS_PARENT_GENERATION.to_string(),
+        parent.generation.to_string(),
+    );
+    attributes.insert(
+        ATTR_PROCESS_PARENT_IDENTITY_STATE.to_string(),
+        PROCESS_PARENT_IDENTITY_STATE_OBSERVED.to_string(),
+    );
 }
 
 pub(super) fn event_action_id(event: &DomainEvent, suffix: &str) -> String {

@@ -1,5 +1,8 @@
 //! Sync TLS payload event ingestion.
 
+#[path = "resolver.rs"]
+mod resolver;
+
 use std::fs::{self, Permissions};
 use std::io::{ErrorKind, Read};
 use std::os::fd::{AsRawFd, RawFd};
@@ -17,11 +20,14 @@ use model_core::payload::{
 use model_core::process::ProcessIdentity;
 use payload_event::RawPayloadSegment;
 use tls_payload_core::PayloadDirection as SyncDirection;
-use tls_payload_sync::{PayloadEvent, SyncEvent, decode_event_line};
+use tls_payload_sync::{PayloadEvent, SyncEvent, decode_event_line, decode_plan_lookup_request};
+
+use self::resolver::TlsSyncPlanResolver;
 
 pub(crate) struct TlsSyncService {
     listener: Option<UnixListener>,
     clients: Vec<TlsSyncClient>,
+    resolver: Option<TlsSyncPlanResolver>,
     read_buffer_bytes: usize,
     max_line_bytes: usize,
 }
@@ -32,10 +38,12 @@ impl TlsSyncService {
             return Ok(Self {
                 listener: None,
                 clients: Vec::new(),
+                resolver: None,
                 read_buffer_bytes: usize::default(),
                 max_line_bytes: usize::default(),
             });
         }
+        let resolver = TlsSyncPlanResolver::new(config)?;
         let listener = UnixListener::bind(&config.sync_event_socket_path)
             .map_err(|error| ControlError::new("tls_sync_bind", error.to_string()))?;
         listener
@@ -49,13 +57,21 @@ impl TlsSyncService {
         Ok(Self {
             listener: Some(listener),
             clients: Vec::new(),
+            resolver: Some(resolver),
             read_buffer_bytes: read_buffer_bytes(config)?,
             max_line_bytes: max_line_bytes(config)?,
         })
     }
 
-    pub(crate) fn event_poll_fd(&self) -> Option<RawFd> {
-        self.listener.as_ref().map(AsRawFd::as_raw_fd)
+    pub(crate) fn event_poll_fds(&self) -> Vec<RawFd> {
+        let mut fds = self
+            .listener
+            .as_ref()
+            .map(AsRawFd::as_raw_fd)
+            .into_iter()
+            .collect::<Vec<_>>();
+        fds.extend(self.clients.iter().map(TlsSyncClient::event_poll_fd));
+        fds
     }
 
     pub(crate) fn drain(&mut self) -> Result<Vec<RawPayloadSegment>, ControlError> {
@@ -63,8 +79,12 @@ impl TlsSyncService {
         let mut segments = Vec::new();
         let mut retained_clients = Vec::new();
         for mut client in std::mem::take(&mut self.clients) {
-            let closed =
-                client.read_events(self.read_buffer_bytes, self.max_line_bytes, &mut segments)?;
+            let closed = client.read_events(
+                self.read_buffer_bytes,
+                self.max_line_bytes,
+                self.resolver.as_ref(),
+                &mut segments,
+            )?;
             if !closed {
                 retained_clients.push(client);
             }
@@ -103,10 +123,15 @@ struct TlsSyncClient {
 }
 
 impl TlsSyncClient {
+    fn event_poll_fd(&self) -> RawFd {
+        self.stream.as_raw_fd()
+    }
+
     fn read_events(
         &mut self,
         read_buffer_bytes: usize,
         max_line_bytes: usize,
+        resolver: Option<&TlsSyncPlanResolver>,
         segments: &mut Vec<RawPayloadSegment>,
     ) -> Result<bool, ControlError> {
         let mut scratch = vec![0_u8; read_buffer_bytes];
@@ -121,7 +146,9 @@ impl TlsSyncClient {
                             "sync event line exceeded configured maximum",
                         ));
                     }
-                    self.drain_complete_lines(segments)?;
+                    if self.drain_complete_lines(resolver, segments)? {
+                        return Ok(true);
+                    }
                 }
                 Err(error) if error.kind() == ErrorKind::WouldBlock => return Ok(false),
                 Err(error) => return Err(ControlError::new("tls_sync_read", error.to_string())),
@@ -131,16 +158,34 @@ impl TlsSyncClient {
 
     fn drain_complete_lines(
         &mut self,
+        resolver: Option<&TlsSyncPlanResolver>,
         segments: &mut Vec<RawPayloadSegment>,
-    ) -> Result<(), ControlError> {
+    ) -> Result<bool, ControlError> {
         while let Some(index) = self.buffer.iter().position(|byte| *byte == b'\n') {
             let line = self.buffer.drain(..=index).collect::<Vec<_>>();
+            if let Ok(request) = decode_plan_lookup_request(&line) {
+                let Some(resolver) = resolver else {
+                    return Err(ControlError::new(
+                        "tls_sync_plan",
+                        "plan lookup received while resolver is disabled",
+                    ));
+                };
+                let response = self
+                    .stream
+                    .try_clone()
+                    .map_err(|error| ControlError::new("tls_sync_plan", error.to_string()))?;
+                response
+                    .set_nonblocking(false)
+                    .map_err(|error| ControlError::new("tls_sync_plan", error.to_string()))?;
+                resolver.submit_lookup(&request.binary, response)?;
+                return Ok(true);
+            }
             match decode_event_line(&line).map_err(sync_event_error)? {
                 SyncEvent::Payload(event) => segments.push(payload_segment(event)?),
                 SyncEvent::Decision(_) => {}
             }
         }
-        Ok(())
+        Ok(false)
     }
 }
 

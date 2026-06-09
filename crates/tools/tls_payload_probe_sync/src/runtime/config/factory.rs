@@ -36,7 +36,7 @@ impl RuntimeConfigFactory {
             redaction,
             events,
             trace_id: optional_trace_id()?,
-            event_client: optional_event_client()?,
+            event_client: optional_event_client(max_payload_bytes)?,
         })))
     }
 }
@@ -64,12 +64,12 @@ fn optional_trace_id() -> Result<Option<u64>, String> {
         .map_err(|error| format!("parse {ENV_TRACE_ID}: {error}"))
 }
 
-fn optional_event_client() -> Result<Option<EventClient>, String> {
+fn optional_event_client(pending_byte_budget: usize) -> Result<Option<EventClient>, String> {
     let Some(value) = std::env::var_os(ENV_EVENT_SOCKET) else {
         return Ok(None);
     };
     let path = PathBuf::from(value);
-    EventClient::connect(&path)
+    EventClient::connect(&path, pending_byte_budget)
         .map(Some)
         .map_err(|error| format!("connect sync event socket {}: {error}", path.display()))
 }

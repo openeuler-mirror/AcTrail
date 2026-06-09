@@ -92,7 +92,6 @@ where
     A: AttachService,
 {
     fn handle(&mut self, command: ControlCommand) -> Result<ControlReply, ControlError> {
-        self.drain_live_events()?;
         match command {
             ControlCommand::TrackAdd(command) => self
                 .wiring
@@ -158,4 +157,87 @@ fn resolve_trace_id(
         .find(|trace| selector.matches(trace))
         .map(|trace| trace.trace_id)
         .ok_or_else(|| ControlError::new("not_found", "no trace matched selector"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::fd::RawFd;
+    use std::time::{Duration, SystemTime};
+
+    use control_contract::command::{ControlCommand, DoctorCommand, TrackAddCommand};
+    use control_contract::reply::{ControlError, TrackAddReply};
+    use model_core::ids::{RequestId, TraceId};
+    use uds_control_server::ControlService;
+
+    use crate::runtime_wiring::DaemonRuntimeWiring;
+
+    use super::{AttachService, DaemonServiceHost};
+
+    #[derive(Default)]
+    struct CountingAttachService {
+        drain_count: u64,
+    }
+
+    impl AttachService for CountingAttachService {
+        fn attach_existing(
+            &mut self,
+            _trace_runtime: &mut trace_runtime::TraceRuntime,
+            _command: &TrackAddCommand,
+        ) -> Result<TrackAddReply, ControlError> {
+            Err(ControlError::new("unused", "unused"))
+        }
+
+        fn drain_live_events(
+            &mut self,
+            _trace_runtime: &mut trace_runtime::TraceRuntime,
+        ) -> Result<(), ControlError> {
+            self.drain_count += 1;
+            Ok(())
+        }
+
+        fn event_poll_fds(&self) -> Result<Vec<RawFd>, ControlError> {
+            Ok(Vec::new())
+        }
+
+        fn background_poll_timeout(&self) -> Result<Option<Duration>, ControlError> {
+            Ok(None)
+        }
+
+        fn remove_root(
+            &mut self,
+            _trace_runtime: &mut trace_runtime::TraceRuntime,
+            _trace_id: TraceId,
+            _removed_at: SystemTime,
+        ) -> Result<(), ControlError> {
+            Ok(())
+        }
+
+        fn register_seccomp_listener(
+            &mut self,
+            _trace_runtime: &mut trace_runtime::TraceRuntime,
+            _command: control_contract::command::RegisterSeccompListenerCommand,
+        ) -> Result<(), ControlError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn control_command_handling_does_not_pre_drain_live_events() {
+        let wiring = DaemonRuntimeWiring {
+            trace_runtime: trace_runtime::TraceRuntime::new(Vec::new(), 1),
+            attach_service: CountingAttachService::default(),
+            available_collectors: Vec::new(),
+            loaded_policy_plugins: Vec::new(),
+            storage_ready: true,
+        };
+        let mut host = DaemonServiceHost::new(wiring);
+
+        let _reply = host
+            .handle(ControlCommand::Doctor(DoctorCommand {
+                request_id: RequestId::new(1),
+            }))
+            .expect("doctor reply");
+
+        assert_eq!(host.wiring.attach_service.drain_count, 0);
+    }
 }

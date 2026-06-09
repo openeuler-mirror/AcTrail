@@ -2,8 +2,8 @@
 
 use clap::error::ErrorKind;
 use tls_payload_sync::{
-    RuntimeEnvConfig, RuntimeLibraryPath, run_with_preload, runtime_env, runtime_library_path,
-    validate_native_backend_plan,
+    RuntimeEnvConfig, RuntimeLibraryPath, launch_command_for_plan, run_with_preload, runtime_env,
+    runtime_library_path, validate_native_backend_plan,
 };
 use tls_probe_point_finder::fast::FastProbeRequest;
 
@@ -57,6 +57,7 @@ fn run_probe(config: crate::cli::config::ProbeConfig) -> ToolResult<()> {
     validate_native_backend_plan(&plan)?;
     reporter::target(&plan)?;
     let library = runtime_library_path(&RuntimeLibraryPath::Auto)?;
+    let command = launch_command_for_plan(&config.command, &plan)?;
     let env_config = RuntimeEnvConfig {
         rules: config.rules.clone(),
         max_payload_bytes: config.max_payload_bytes,
@@ -65,12 +66,7 @@ fn run_probe(config: crate::cli::config::ProbeConfig) -> ToolResult<()> {
         trace_id: None,
         event_socket_path: None,
     };
-    let status = run_with_preload(
-        &config.command,
-        &plan,
-        &library,
-        runtime_env(&env_config, &plan)?,
-    )?;
+    let status = run_with_preload(&command, &library, runtime_env(&env_config, &plan)?)?;
     if status.success() {
         Ok(())
     } else {

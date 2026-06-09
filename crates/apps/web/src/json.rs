@@ -22,6 +22,14 @@ pub fn optional_number<T: std::fmt::Display>(value: Option<T>) -> String {
     value.map(number).unwrap_or_else(|| "null".to_string())
 }
 
+pub fn optional_time(value: Option<SystemTime>) -> String {
+    value.map(time).unwrap_or_else(|| "null".to_string())
+}
+
+pub fn optional_time_nanos(value: Option<SystemTime>) -> String {
+    value.map(time_nanos).unwrap_or_else(|| "null".to_string())
+}
+
 pub fn map(values: &BTreeMap<String, String>) -> String {
     let mut output = String::from("{");
     for (index, (key, value)) in values.iter().enumerate() {
@@ -67,7 +75,14 @@ pub fn process(identity: &ProcessIdentity) -> String {
 
 pub fn time(value: SystemTime) -> String {
     match value.duration_since(UNIX_EPOCH) {
-        Ok(duration) => number(duration.as_secs()),
+        Ok(duration) => number(duration.as_millis()),
+        Err(_) => string("before-unix-epoch"),
+    }
+}
+
+pub fn time_nanos(value: SystemTime) -> String {
+    match value.duration_since(UNIX_EPOCH) {
+        Ok(duration) => string(&duration.as_nanos().to_string()),
         Err(_) => string("before-unix-epoch"),
     }
 }

@@ -41,6 +41,7 @@ tmp/
 findings.md
 progress.md
 task_plan.md
+node_modules/
 
 
 # Added by cargo

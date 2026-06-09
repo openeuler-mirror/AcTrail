@@ -27,4 +27,4 @@ Use `actrailctl track-add` for an already-running process when you only need obs
 
 Process fork observation in the eBPF collector uses `sched/sched_process_fork`. The syscall tracepoint `syscalls/sys_enter_fork` is not required.
 
-For real agent acceptance, use `tests/agent-trace/` after the release binaries are built. That suite runs Claude Code, opencode, xiaoO, and a LangGraph Python workload through AcTrail and validates retained payloads, semantic actions, and OTEL `llm.request` spans.
+For real agent acceptance, use `tests/agent-trace/` after the release binaries are built. That suite runs Claude Code, opencode, xiaoO, and a LangGraph Python workload through AcTrail and validates retained payloads, semantic actions, and OTEL spans for the actions each case declares.

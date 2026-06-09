@@ -10,9 +10,13 @@ use model_core::process::ProcessIdentity;
 pub enum SemanticActionKind {
     ProcessExec,
     FileModify,
+    FileRead,
     FileWrite,
     HttpMessage,
     LlmRequest,
+    LlmResponse,
+    SseStream,
+    SseEvent,
     EnforcementDecision,
     ProcessForkAttempt,
     AgentInvocation,
@@ -24,9 +28,13 @@ impl SemanticActionKind {
         match self {
             Self::ProcessExec => "process.exec",
             Self::FileModify => "file.modify",
+            Self::FileRead => "file.read",
             Self::FileWrite => "file.write",
             Self::HttpMessage => "http.message",
             Self::LlmRequest => "llm.request",
+            Self::LlmResponse => "llm.response",
+            Self::SseStream => "sse.stream",
+            Self::SseEvent => "sse.event",
             Self::EnforcementDecision => "enforcement.decision",
             Self::ProcessForkAttempt => "process.fork_attempt",
             Self::AgentInvocation => "agent.invocation",
@@ -38,9 +46,13 @@ impl SemanticActionKind {
         match value {
             "process.exec" => Some(Self::ProcessExec),
             "file.modify" => Some(Self::FileModify),
+            "file.read" => Some(Self::FileRead),
             "file.write" => Some(Self::FileWrite),
             "http.message" => Some(Self::HttpMessage),
             "llm.request" => Some(Self::LlmRequest),
+            "llm.response" => Some(Self::LlmResponse),
+            "sse.stream" => Some(Self::SseStream),
+            "sse.event" => Some(Self::SseEvent),
             "enforcement.decision" => Some(Self::EnforcementDecision),
             "process.fork_attempt" => Some(Self::ProcessForkAttempt),
             "agent.invocation" => Some(Self::AgentInvocation),
@@ -151,36 +163,59 @@ pub struct SemanticAction {
     pub evidence: Vec<SemanticEvidence>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SemanticActionLinkRole {
     AgentPerformedAction,
+    CommandContainsFileAccess,
+    CommandContainsProcessForkAttempt,
     CommandContainsProcessExec,
+    CommandContainsCommandInvocation,
     FileWriteContainsFileEvent,
     AgentInvocationExec,
     AgentInvocationChildLlmRequest,
     LlmRequestHttpMessage,
+    LlmRequestLlmResponse,
+    LlmResponseHttpMessage,
+    LlmResponseSseStream,
+    SseStreamEvent,
 }
 
 impl SemanticActionLinkRole {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::AgentPerformedAction => "agent.performed_action",
+            Self::CommandContainsFileAccess => "command.contains_file_access",
+            Self::CommandContainsProcessForkAttempt => "command.contains_process_fork_attempt",
             Self::CommandContainsProcessExec => "command.contains_process_exec",
+            Self::CommandContainsCommandInvocation => "command.contains_command_invocation",
             Self::FileWriteContainsFileEvent => "file.write.contains_file_event",
             Self::AgentInvocationExec => "agent.invocation.exec",
             Self::AgentInvocationChildLlmRequest => "agent.invocation.child_llm_request",
             Self::LlmRequestHttpMessage => "llm.request.http_message",
+            Self::LlmRequestLlmResponse => "llm.request.llm_response",
+            Self::LlmResponseHttpMessage => "llm.response.http_message",
+            Self::LlmResponseSseStream => "llm.response.sse_stream",
+            Self::SseStreamEvent => "sse.stream.event",
         }
     }
 
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "agent.performed_action" => Some(Self::AgentPerformedAction),
+            "command.contains_file_access" => Some(Self::CommandContainsFileAccess),
+            "command.contains_process_fork_attempt" => {
+                Some(Self::CommandContainsProcessForkAttempt)
+            }
             "command.contains_process_exec" => Some(Self::CommandContainsProcessExec),
+            "command.contains_command_invocation" => Some(Self::CommandContainsCommandInvocation),
             "file.write.contains_file_event" => Some(Self::FileWriteContainsFileEvent),
             "agent.invocation.exec" => Some(Self::AgentInvocationExec),
             "agent.invocation.child_llm_request" => Some(Self::AgentInvocationChildLlmRequest),
             "llm.request.http_message" => Some(Self::LlmRequestHttpMessage),
+            "llm.request.llm_response" => Some(Self::LlmRequestLlmResponse),
+            "llm.response.http_message" => Some(Self::LlmResponseHttpMessage),
+            "llm.response.sse_stream" => Some(Self::LlmResponseSseStream),
+            "sse.stream.event" => Some(Self::SseStreamEvent),
             _ => None,
         }
     }

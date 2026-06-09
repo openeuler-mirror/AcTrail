@@ -4,7 +4,9 @@ use std::collections::{BTreeMap, btree_map::Entry};
 
 use config_core::daemon::ApplicationProtocolConfig;
 use model_core::event::ApplicationPayload;
-use model_core::payload::{PayloadDirection, PayloadSegment};
+use model_core::ids::TraceId;
+use model_core::payload::{PayloadDirection, PayloadSegment, PayloadStreamKey};
+use model_core::process::ProcessIdentity;
 
 use super::ApplicationEventDraft;
 
@@ -12,39 +14,75 @@ use super::ApplicationEventDraft;
 mod frame;
 
 pub(super) struct Http2Analyzer {
+    #[cfg(test)]
     config: ApplicationProtocolConfig,
-    connections: BTreeMap<String, ConnectionState>,
+    connections: BTreeMap<ConnectionKey, ConnectionState>,
 }
 
 impl Http2Analyzer {
     pub(super) fn new(config: ApplicationProtocolConfig) -> Self {
+        let _ = &config;
         Self {
+            #[cfg(test)]
             config,
             connections: BTreeMap::new(),
         }
     }
 
+    #[cfg(test)]
     pub(super) fn analyze(
         &mut self,
         segment: &PayloadSegment,
+    ) -> Result<Vec<ApplicationEventDraft>, String> {
+        let config = self.config.clone();
+        self.analyze_with_config(segment, &config, false)
+    }
+
+    pub(super) fn analyze_with_config(
+        &mut self,
+        segment: &PayloadSegment,
+        config: &ApplicationProtocolConfig,
+        summary_only: bool,
     ) -> Result<Vec<ApplicationEventDraft>, String> {
         let key = connection_key(segment);
         let state = match self.connections.entry(key.clone()) {
             Entry::Occupied(entry) => entry.into_mut(),
             Entry::Vacant(entry)
-                if starts_or_can_be_frame(segment, self.config.http2_max_frame_bytes) =>
+                if starts_or_can_be_frame(segment, config.http2_max_frame_bytes) =>
             {
                 entry.insert(ConnectionState::default())
             }
             Entry::Vacant(_) => return Ok(Vec::new()),
         };
-        state.append(segment, &self.config)?;
-        let drafts = state.drain_events(segment, &self.config)?;
+        if state.append(segment, config).is_err() {
+            state.clear_direction(segment.direction);
+            if state.is_idle() {
+                self.connections.remove(&key);
+            }
+            return Ok(Vec::new());
+        }
+        let drafts = state.drain_events(segment, config, summary_only)?;
         if state.is_idle() {
             self.connections.remove(&key);
         }
         Ok(drafts)
     }
+
+    pub(super) fn forget_trace(&mut self, trace_id: TraceId) {
+        self.connections.retain(|key, _| key.trace_id != trace_id);
+    }
+
+    #[cfg(test)]
+    pub(super) fn connection_count(&self) -> usize {
+        self.connections.len()
+    }
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct ConnectionKey {
+    trace_id: TraceId,
+    process: ProcessIdentity,
+    stream_key: PayloadStreamKey,
 }
 
 #[derive(Default)]
@@ -69,6 +107,7 @@ impl ConnectionState {
         &mut self,
         segment: &PayloadSegment,
         config: &ApplicationProtocolConfig,
+        summary_only: bool,
     ) -> Result<Vec<ApplicationEventDraft>, String> {
         let mut drafts = Vec::new();
         self.confirm_preface(segment, &mut drafts)?;
@@ -76,12 +115,14 @@ impl ConnectionState {
             return Ok(Vec::new());
         }
 
+        let mut clear_direction = false;
         let direction = self.direction_mut(segment.direction);
         loop {
             let status = match frame::decode_next(&direction.buffer, config.http2_max_frame_bytes) {
                 Ok(status) => status,
-                Err(error) if starts_with_known_frame_header(&direction.buffer) => {
-                    return Err(error);
+                Err(_) if starts_with_known_frame_header(&direction.buffer) => {
+                    clear_direction = true;
+                    break;
                 }
                 Err(_) => {
                     let Some(offset) = find_next_plausible_frame_offset(
@@ -100,6 +141,10 @@ impl ConnectionState {
                 frame::DecodeStatus::Frame(frame) => frame,
             };
             let consumed = frame::encoded_len(&frame);
+            if summary_only && frame.frame_type == frame::DATA_FRAME_TYPE {
+                direction.buffer.drain(..consumed);
+                continue;
+            }
             drafts.push(ApplicationEventDraft {
                 payload: frame_payload(segment, &frame),
             });
@@ -109,6 +154,9 @@ impl ConnectionState {
                 });
             }
             direction.buffer.drain(..consumed);
+        }
+        if clear_direction {
+            self.clear_direction(segment.direction);
         }
         Ok(drafts)
     }
@@ -155,6 +203,10 @@ impl ConnectionState {
 
     fn is_idle(&self) -> bool {
         !self.h2_confirmed && self.outbound.buffer.is_empty() && self.inbound.buffer.is_empty()
+    }
+
+    fn clear_direction(&mut self, direction: PayloadDirection) {
+        self.direction_mut(direction).buffer.clear();
     }
 }
 
@@ -326,13 +378,12 @@ fn insert_frame_metadata(metadata: &mut BTreeMap<String, String>, frame: &frame:
     metadata.insert("length".to_string(), frame.length.to_string());
 }
 
-fn connection_key(segment: &PayloadSegment) -> String {
-    format!(
-        "{}:{}:{}",
-        segment.trace_id.get(),
-        segment.process.pid,
-        segment.stream_key
-    )
+fn connection_key(segment: &PayloadSegment) -> ConnectionKey {
+    ConnectionKey {
+        trace_id: segment.trace_id,
+        process: segment.process.clone(),
+        stream_key: segment.stream_key.clone(),
+    }
 }
 
 fn preview_data(bytes: &[u8], max_bytes: u64) -> Result<Option<(String, bool)>, String> {
@@ -353,117 +404,5 @@ fn preview_data(bytes: &[u8], max_bytes: u64) -> Result<Option<(String, bool)>, 
 }
 
 #[cfg(test)]
-mod tests {
-    use std::time::SystemTime;
-
-    use config_core::daemon::{ApplicationProtocolConfig, SseDataPolicy};
-    use model_core::ids::TraceId;
-    use model_core::payload::{
-        PayloadContentState, PayloadDirection, PayloadSegment, PayloadSegmentId,
-        PayloadSourceBoundary, PayloadStreamKey, PayloadTruncationState,
-    };
-    use model_core::process::ProcessIdentity;
-
-    use super::Http2Analyzer;
-    use super::frame::CONNECTION_PREFACE;
-
-    const TEST_MAX_FRAME_BYTES: u64 = 16384;
-    const TEST_MAX_BUFFER_BYTES: u64 = 1048576;
-    const TEST_PREVIEW_BYTES: u64 = 4096;
-    const SETTINGS_FRAME_TYPE: u8 = 4;
-    const DATA_FRAME_TYPE: u8 = 0;
-    const END_STREAM_FLAG: u8 = 1;
-    const STREAM_ONE: u32 = 1;
-
-    #[test]
-    fn strips_inbound_connection_preface_before_frame_decode() {
-        let mut analyzer = Http2Analyzer::new(test_config());
-        let mut bytes = CONNECTION_PREFACE.to_vec();
-        bytes.extend_from_slice(&test_frame(SETTINGS_FRAME_TYPE, 0, 0, b""));
-        bytes.extend_from_slice(&test_frame(
-            DATA_FRAME_TYPE,
-            END_STREAM_FLAG,
-            STREAM_ONE,
-            b"{\"ok\":true}",
-        ));
-
-        let drafts = analyzer
-            .analyze(&payload_segment(PayloadDirection::Inbound, bytes))
-            .unwrap();
-
-        assert!(
-            drafts
-                .iter()
-                .any(|draft| draft.payload.operation == "connection_preface")
-        );
-        assert!(drafts.iter().any(|draft| {
-            draft.payload.operation == "frame"
-                && draft.payload.metadata.get("frame_type").map(String::as_str) == Some("SETTINGS")
-        }));
-        assert!(drafts.iter().any(|draft| {
-            draft.payload.operation == "data"
-                && draft
-                    .payload
-                    .metadata
-                    .get("data_preview")
-                    .map(String::as_str)
-                    == Some("{\"ok\":true}")
-        }));
-    }
-
-    fn test_config() -> ApplicationProtocolConfig {
-        ApplicationProtocolConfig {
-            enabled: true,
-            http1_enabled: false,
-            http2_enabled: true,
-            capture_host: false,
-            sse_enabled: false,
-            sse_data_policy: SseDataPolicy::Disabled,
-            sse_max_buffer_bytes: TEST_MAX_BUFFER_BYTES,
-            sse_max_data_bytes: TEST_PREVIEW_BYTES,
-            http2_max_frame_bytes: TEST_MAX_FRAME_BYTES,
-            http2_max_connection_buffer_bytes: TEST_MAX_BUFFER_BYTES,
-            http2_emit_data_preview: true,
-            http2_max_data_preview_bytes: TEST_PREVIEW_BYTES,
-        }
-    }
-
-    fn payload_segment(direction: PayloadDirection, bytes: Vec<u8>) -> PayloadSegment {
-        PayloadSegment {
-            segment_id: PayloadSegmentId::new(0),
-            trace_id: TraceId::new(1),
-            observed_at: SystemTime::UNIX_EPOCH,
-            process: ProcessIdentity::new(std::process::id(), 1, 1),
-            source_boundary: PayloadSourceBoundary::TlsUserSpace,
-            content_state: PayloadContentState::Plaintext,
-            direction,
-            stream_key: PayloadStreamKey::new("h2-test"),
-            sequence: 0,
-            original_size: bytes.len() as u64,
-            captured_size: bytes.len() as u64,
-            operation_id: 0,
-            operation_offset: 0,
-            operation_original_size: bytes.len() as u64,
-            operation_captured_size: bytes.len() as u64,
-            operation_completion_state:
-                model_core::payload::PayloadOperationCompletionState::Success,
-            truncation: PayloadTruncationState::Complete,
-            redaction: model_core::payload::PayloadRedactionState::Unredacted,
-            library: "openssl".to_string(),
-            symbol: "SSL_read".to_string(),
-            protocol_hint: Some("h2".to_string()),
-            bytes,
-        }
-    }
-
-    fn test_frame(frame_type: u8, flags: u8, stream_id: u32, payload: &[u8]) -> Vec<u8> {
-        let length = payload.len() as u32;
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(&length.to_be_bytes()[1..]);
-        bytes.push(frame_type);
-        bytes.push(flags);
-        bytes.extend_from_slice(&stream_id.to_be_bytes());
-        bytes.extend_from_slice(payload);
-        bytes
-    }
-}
+#[path = "http2/tests.rs"]
+mod tests;

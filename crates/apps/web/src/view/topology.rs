@@ -166,6 +166,12 @@ fn timeline_row_json(
     output.push(',');
     json::field(&mut output, "observed_at", &json::time(observed_at));
     output.push(',');
+    json::field(
+        &mut output,
+        "observed_at_unix_nanos",
+        &json::time_nanos(observed_at),
+    );
+    output.push(',');
     json::field(&mut output, "pid", &json::number(pid));
     output.push(',');
     json::field(&mut output, "lane", &json::string(lane));

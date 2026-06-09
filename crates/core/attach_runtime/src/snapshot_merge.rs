@@ -35,6 +35,7 @@ pub fn merge_snapshot(
             trace_id,
             process.identity.clone(),
             parent.clone(),
+            snapshot.captured_at,
         ));
     }
 

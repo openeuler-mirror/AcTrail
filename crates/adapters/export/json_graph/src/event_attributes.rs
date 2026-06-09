@@ -9,32 +9,6 @@ use model_core::event::{
 };
 use model_core::process::ProcessIdentity;
 
-#[allow(dead_code)]
-const CLK_TCK: u64 = 100;
-
-#[allow(dead_code)]
-fn read_boot_time() -> Option<u64> {
-    let content = std::fs::read_to_string("/proc/stat").ok()?;
-    for line in content.lines() {
-        if let Some(value) = line.strip_prefix("btime ") {
-            return value.trim().parse::<u64>().ok();
-        }
-    }
-    None
-}
-
-#[allow(dead_code)]
-fn read_process_start_unix(pid: u32) -> Option<u64> {
-    let boot_time = read_boot_time()?;
-    let path = format!("/proc/{pid}/stat");
-    let raw = std::fs::read_to_string(path).ok()?;
-    let close_paren = raw.rfind(')')?;
-    let remainder = raw.get(close_paren + 2..)?;
-    let fields = remainder.split_whitespace().collect::<Vec<_>>();
-    let start_time_ticks = fields.get(19)?.parse::<u64>().ok()?;
-    Some(boot_time + (start_time_ticks / CLK_TCK))
-}
-
 pub fn event_attributes(event: &DomainEvent) -> BTreeMap<String, String> {
     let mut attributes = BTreeMap::new();
     attributes.insert(
@@ -138,22 +112,6 @@ pub fn insert_process_identity(
         format!("{prefix}generation"),
         identity.generation.to_string(),
     );
-    
-    // Use stored start_unix_seconds if available
-    if let Some(start_unix) = identity.start_unix_seconds {
-        attributes.insert(
-            format!("{prefix}start_unix_seconds"),
-            start_unix.to_string(),
-        );
-    }
-    
-    // Use stored start_unix_millis if available
-    if let Some(start_unix_millis) = identity.start_unix_millis {
-        attributes.insert(
-            format!("{prefix}start_unix_millis"),
-            start_unix_millis.to_string(),
-        );
-    }
 }
 
 pub fn insert_time(attributes: &mut BTreeMap<String, String>, prefix: &str, time: SystemTime) {
@@ -164,12 +122,8 @@ pub fn insert_time(attributes: &mut BTreeMap<String, String>, prefix: &str, time
                 duration.as_secs().to_string(),
             );
             attributes.insert(
-                format!("{prefix}_unix_millis"),
-                duration.as_millis().to_string(),
-            );
-            attributes.insert(
                 format!("{prefix}_unix_nanos"),
-                duration.as_nanos().to_string(),
+                duration.subsec_nanos().to_string(),
             );
         }
         Err(error) => {

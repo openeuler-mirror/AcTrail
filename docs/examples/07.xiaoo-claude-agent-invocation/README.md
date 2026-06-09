@@ -4,6 +4,8 @@
 
 这是 process/semantic trace 加 TLS plaintext evidence 示例。`payload_tls_enabled = true` 是必要条件，因为 `agent.invocation` 不再由命令名直接触发；它需要先从 Claude 的出站 LLM request 生成 `llm.request` 证据。通过条件在导出的 OpenTelemetry trace 里：必须存在一条 seccomp 观测到的 `claude -p ...` `process.exec` span、一条同 pid 的 `llm.request` span，以及一条 child 为 Claude Code 的 `agent.invocation` span。`agent.invocation` 的 parent 是 Claude 的直接拉起进程，可能是 xiaoO，也可能是 xiaoO 工具链中的 bash/timeout/python wrapper。
 
+`operator.conf` 继承了 xiaoO TLS 捕获示例里的 stdio、socket 和 application HTTP/SSE 投影能力，并额外打开 process exec seccomp observation 和 agent invocation projection。不要把这些 payload/application 项裁剪成只剩 `process_seccomp`：xiaoO 的第一轮 LLM 决策本身也要被完整观测，否则示例可能停在 xiaoO 第一轮，既看不到 Claude 子进程，也不会生成后续 `agent.invocation` 证据。这个示例不配置 `agent_invocation_command`；入口 xiaoO 可以由 launch 命令本身预热，Claude 子进程必须通过 runtime -> daemon 动态 lookup 得到 TLS sync probe plan。`payload_tls_ring_buffer_bytes = 8388608`、SSE/data preview 上限 `65536` 以及 socket/event ring buffer 值和 xiaoO TLS 示例保持一致，用来覆盖真实 streaming LLM 响应和工具调用 delta。
+
 ## 文件
 
 | 文件 | 用途 |
@@ -22,6 +24,8 @@
 - Claude Code 可以访问外部网络。
 
 不要手工编辑 `/tmp` 路径。使用 cleanup helper，或依赖 E2E 脚本内置的 `actrailctl clean` 步骤。
+
+`workload.conf` 里的 `claude_timeout_seconds` 是 xiaoO 要求 bash 执行的内层 `timeout`；`launch_timeout_seconds` 是外层 `actrailctl launch` 等待 xiaoO 返回的时间，必须大于内层 Claude timeout，否则外层可能在 Claude 刚结束前杀掉整个 workload。
 
 ## 运行
 
