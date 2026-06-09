@@ -56,16 +56,10 @@ pub fn probe() -> EbpfProbeResult {
             capabilities: vec![
                 CapabilityDescriptor::new(
                     Capability::ProcLifecycle,
-                    vec![
-                        CapabilityField::new(
-                            "fork_exec_exit",
-                            GuaranteeClass::GuaranteedByTransportCollector,
-                        ),
-                        CapabilityField::new(
-                            "signals_session_process_group",
-                            GuaranteeClass::GuaranteedByTransportCollector,
-                        ),
-                    ],
+                    vec![CapabilityField::new(
+                        "fork_exec_exit",
+                        GuaranteeClass::GuaranteedByTransportCollector,
+                    )],
                 ),
                 CapabilityDescriptor::new(
                     Capability::NetTransport,

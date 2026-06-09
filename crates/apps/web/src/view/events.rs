@@ -4,7 +4,7 @@ use std::fmt::Write;
 
 use model_core::diagnostics::DiagnosticRecord;
 use model_core::event::{DomainEvent, EventPayload, NetPayload};
-use model_core::process::ProcessMembership;
+use model_core::process::{ExitObservationSource, ProcessMembership};
 
 use crate::json;
 
@@ -42,6 +42,12 @@ pub(super) fn event_json(event: &DomainEvent) -> String {
     output.push(',');
     json::field(
         &mut output,
+        "observed_at_unix_nanos",
+        &json::time_nanos(event.envelope.observed_at),
+    );
+    output.push(',');
+    json::field(
+        &mut output,
         "operation",
         &json::string(&event_operation(event)),
     );
@@ -71,6 +77,18 @@ pub(super) fn process_json(membership: &ProcessMembership) -> String {
     output.push(',');
     json::field(
         &mut output,
+        "observed_at",
+        &json::optional_time(membership.observed_at),
+    );
+    output.push(',');
+    json::field(
+        &mut output,
+        "observed_at_unix_nanos",
+        &json::optional_time_nanos(membership.observed_at),
+    );
+    output.push(',');
+    json::field(
+        &mut output,
         "state",
         &json::string(&format!("{:?}", membership.state)),
     );
@@ -85,8 +103,49 @@ pub(super) fn process_json(membership: &ProcessMembership) -> String {
                 .and_then(|status| status.code),
         ),
     );
+    output.push(',');
+    json::field(
+        &mut output,
+        "exit_observed_at",
+        &json::optional_time(
+            membership
+                .exit_status
+                .as_ref()
+                .map(|status| status.observed_at),
+        ),
+    );
+    output.push(',');
+    json::field(
+        &mut output,
+        "exit_observed_at_unix_nanos",
+        &json::optional_time_nanos(
+            membership
+                .exit_status
+                .as_ref()
+                .map(|status| status.observed_at),
+        ),
+    );
+    output.push(',');
+    json::field(
+        &mut output,
+        "exit_observation_source",
+        &json::optional_string(
+            membership
+                .exit_status
+                .as_ref()
+                .and_then(|status| status.source)
+                .map(exit_observation_source_label),
+        ),
+    );
     output.push('}');
     output
+}
+
+fn exit_observation_source_label(source: ExitObservationSource) -> &'static str {
+    match source {
+        ExitObservationSource::Event => "event",
+        ExitObservationSource::Reconciled => "reconciled",
+    }
 }
 
 pub(super) fn diagnostic_json(diagnostic: &DiagnosticRecord) -> String {

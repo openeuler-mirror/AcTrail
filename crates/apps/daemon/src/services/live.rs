@@ -1,29 +1,25 @@
 //! Live collector draining, runtime mutation, and SQLite persistence.
 
-use std::time::SystemTime;
-
 #[path = "live/batch.rs"]
 mod batch;
 #[path = "live/otel_export.rs"]
 pub(crate) mod otel_export;
 #[path = "live/reconcile.rs"]
 mod reconcile;
+#[path = "live/shutdown.rs"]
+mod shutdown;
 #[path = "live/tls_debug.rs"]
 mod tls_debug;
 
-use collector_event::{RawCollectorEvent, RawObservationPayload};
 use collector_instance::CollectorInstance;
 use config_core::daemon::DiagnosticLogLevel;
 use control_contract::reply::ControlError;
-use ingest_runtime::IngestMatch;
 use model_core::event::{DomainEvent, EventEnvelope, EventFlags, EventKind, EventPayload};
 use model_core::ids::{CollectorName, DiagnosticId, EventId, TraceId};
-use model_core::process::{ExitStatus, ProcessMembership};
+use model_core::process::ProcessMembership;
 use model_core::trace::TraceLifecycleState;
-use store_write_contract::events::EventWriteStore;
 use store_write_contract::memberships::MembershipWriteStore;
 use store_write_contract::traces::TraceWriteStore;
-use trace_runtime::commands::RootRemovalRequest;
 use trace_runtime::registry::TraceRuntime;
 
 use crate::services::attach::SqliteAttachService;
@@ -45,13 +41,13 @@ impl SqliteAttachService {
             self.log_tls_diagnostic_events_impl();
             self.ingest_polled_seccomp_tls_controls_impl()?;
             self.drain_seccomp_notifications_impl(trace_runtime)?;
-            self.flush_process_seccomp_observations_if_idle(trace_runtime)?;
+            self.flush_process_seccomp_observations_impl(trace_runtime)?;
             self.persist_completed_seccomp_tls_operations_impl(trace_runtime)?;
             self.persist_completed_seccomp_socket_operations_impl(trace_runtime)?;
             self.log_payload_tls_diagnostics_impl()?;
             self.drain_enforcement_impl(trace_runtime)?;
             self.reconcile_draining_memberships_impl(trace_runtime)?;
-            self.forget_terminal_semantic_actions_impl(trace_runtime);
+            self.forget_terminal_trace_state_impl(trace_runtime);
             return Ok(());
         }
 
@@ -62,9 +58,7 @@ impl SqliteAttachService {
             .map_err(|error| ControlError::new(error.stage, error.message))?;
         self.log_tls_diagnostic_events_impl();
         self.process_live_event_batch(trace_runtime, batch.observations)?;
-        for payload_segment in batch.payload_segments {
-            self.process_payload_segment_impl(trace_runtime, payload_segment)?;
-        }
+        self.process_payload_segments_impl(trace_runtime, batch.payload_segments)?;
         self.ingest_polled_seccomp_tls_controls_impl()?;
         self.drain_seccomp_notifications_impl(trace_runtime)?;
         self.flush_process_seccomp_observations_if_idle(trace_runtime)?;
@@ -73,17 +67,20 @@ impl SqliteAttachService {
         self.log_payload_tls_diagnostics_impl()?;
         self.drain_enforcement_impl(trace_runtime)?;
         self.reconcile_draining_memberships_impl(trace_runtime)?;
-        self.forget_terminal_semantic_actions_impl(trace_runtime);
+        self.forget_terminal_trace_state_impl(trace_runtime);
         Ok(())
     }
 
-    fn forget_terminal_semantic_actions_impl(&mut self, trace_runtime: &TraceRuntime) {
+    fn forget_terminal_trace_state_impl(&mut self, trace_runtime: &TraceRuntime) {
         for trace in trace_runtime.list_trace_records() {
             if matches!(
                 trace.lifecycle_state,
                 TraceLifecycleState::Completed | TraceLifecycleState::Failed
             ) {
                 self.semantic_actions.forget_trace(trace.trace_id);
+                self.application_protocol.forget_trace(trace.trace_id);
+                self.payload_body_retention_gate
+                    .forget_trace(trace.trace_id);
             }
         }
     }
@@ -116,23 +113,18 @@ impl SqliteAttachService {
         &mut self,
         trace_runtime: &TraceRuntime,
     ) -> Result<(), ControlError> {
-        for payload_segment in self.tls_sync.drain()? {
-            self.process_payload_segment_impl(trace_runtime, payload_segment)?;
-        }
-        Ok(())
+        let payload_segments = self.tls_sync.drain()?;
+        self.process_payload_segments_impl(trace_runtime, payload_segments)
     }
 
     fn persist_completed_seccomp_tls_operations_impl(
         &mut self,
         trace_runtime: &TraceRuntime,
     ) -> Result<(), ControlError> {
-        for payload_segment in self
+        let payload_segments = self
             .seccomp_tls
-            .complete_operations(&self.identity_reader)?
-        {
-            self.process_payload_segment_impl(trace_runtime, payload_segment)?;
-        }
-        Ok(())
+            .complete_operations(&self.identity_reader)?;
+        self.process_payload_segments_impl(trace_runtime, payload_segments)
     }
 
     fn persist_completed_seccomp_socket_operations_impl(
@@ -140,10 +132,8 @@ impl SqliteAttachService {
         trace_runtime: &TraceRuntime,
     ) -> Result<(), ControlError> {
         let completions = self.collector.take_socket_completions();
-        for payload_segment in self.seccomp_socket.complete_operations(completions)? {
-            self.process_payload_segment_impl(trace_runtime, payload_segment)?;
-        }
-        Ok(())
+        let payload_segments = self.seccomp_socket.complete_operations(completions)?;
+        self.process_payload_segments_impl(trace_runtime, payload_segments)
     }
 
     fn log_payload_tls_diagnostics_impl(&mut self) -> Result<(), ControlError> {
@@ -202,11 +192,11 @@ impl SqliteAttachService {
         Ok(())
     }
 
-    fn flush_process_seccomp_observations_if_idle(
+    fn flush_process_seccomp_observations_impl(
         &mut self,
         trace_runtime: &mut TraceRuntime,
     ) -> Result<(), ControlError> {
-        if self.seccomp_notify.has_listeners() {
+        if self.pending_process_seccomp_observations.is_empty() {
             return Ok(());
         }
         let observations = std::mem::take(&mut self.pending_process_seccomp_observations);
@@ -220,10 +210,21 @@ impl SqliteAttachService {
         self.process_live_event_batch(trace_runtime, raw_events)
     }
 
+    fn flush_process_seccomp_observations_if_idle(
+        &mut self,
+        trace_runtime: &mut TraceRuntime,
+    ) -> Result<(), ControlError> {
+        if self.seccomp_notify.has_listeners() {
+            return Ok(());
+        }
+        self.flush_process_seccomp_observations_impl(trace_runtime)
+    }
+
     fn drain_resource_metrics_impl(
         &mut self,
         trace_runtime: &trace_runtime::TraceRuntime,
     ) -> Result<(), ControlError> {
+        let mut events = Vec::new();
         for draft in self.resource_metrics.drain_due(trace_runtime)? {
             let event = DomainEvent::new(
                 EventEnvelope {
@@ -237,18 +238,16 @@ impl SqliteAttachService {
                 },
                 EventPayload::Resource(draft.payload),
             );
-            self.storage
-                .append_event(event.clone())
-                .map_err(|error| ControlError::new(error.stage, error.message))?;
-            self.persist_semantic_actions_for_event(trace_runtime, &event)?;
+            events.push(event);
         }
-        Ok(())
+        self.persist_observed_event_batch(trace_runtime, events)
     }
 
     fn drain_enforcement_impl(
         &mut self,
         trace_runtime: &trace_runtime::TraceRuntime,
     ) -> Result<(), ControlError> {
+        let mut events = Vec::new();
         for draft in self
             .enforcement
             .drain_due(trace_runtime, &self.identity_reader)?
@@ -265,44 +264,9 @@ impl SqliteAttachService {
                 },
                 EventPayload::Enforcement(draft.payload),
             );
-            self.storage
-                .append_event(event.clone())
-                .map_err(|error| ControlError::new(error.stage, error.message))?;
-            self.persist_semantic_actions_for_event(trace_runtime, &event)?;
+            events.push(event);
         }
-        Ok(())
-    }
-
-    pub(super) fn remove_root_impl(
-        &mut self,
-        trace_runtime: &mut TraceRuntime,
-        trace_id: TraceId,
-        removed_at: SystemTime,
-    ) -> Result<(), ControlError> {
-        let root_identity = trace_runtime
-            .get_trace(trace_id)
-            .map(|entry| entry.trace.root_process_identity.clone())
-            .ok_or_else(|| ControlError::new("track_remove", "trace not found"))?;
-
-        trace_runtime
-            .track_remove_root(RootRemovalRequest {
-                trace_id,
-                removed_at,
-            })
-            .map_err(|error| ControlError::new("track_remove", format!("{:?}", error)))?;
-        self.reconcile_draining_memberships_impl(trace_runtime)?;
-        self.collector
-            .stop_tracking_process(root_identity.pid)
-            .map_err(|error| ControlError::new(error.stage, error.message))?;
-        self.persist_trace_state(trace_runtime, trace_id)?;
-        self.log_diagnostic(
-            DiagnosticLogLevel::Info,
-            format_args!(
-                "agent_launch closed trace_id={} pid={} generation={}",
-                trace_id, root_identity.pid, root_identity.generation
-            ),
-        );
-        Ok(())
+        self.persist_observed_event_batch(trace_runtime, events)
     }
 
     pub(super) fn next_diagnostic_id(&mut self) -> Result<DiagnosticId, ControlError> {
@@ -321,139 +285,6 @@ impl SqliteAttachService {
             .checked_add(1)
             .ok_or_else(|| ControlError::new("event_id_overflow", "event id overflow"))?;
         Ok(EventId::new(raw))
-    }
-
-    fn apply_runtime_effects(
-        &mut self,
-        trace_runtime: &mut TraceRuntime,
-        raw_event: &RawCollectorEvent,
-    ) -> Result<Option<IngestMatch>, ControlError> {
-        match &raw_event.payload {
-            RawObservationPayload::Process {
-                operation, parent, ..
-            } if operation == "fork" => {
-                let Some(parent_identity) = parent else {
-                    return Ok(None);
-                };
-                let Some((trace_id, _)) = trace_runtime.find_membership(&parent_identity) else {
-                    return Ok(None);
-                };
-                trace_runtime
-                    .insert_observed_child(
-                        trace_id,
-                        &parent_identity,
-                        raw_event.envelope.process.clone(),
-                    )
-                    .map_err(|error| {
-                        ControlError::new("insert_observed_child", format!("{:?}", error))
-                    })?;
-                Ok(Some(IngestMatch {
-                    trace_id,
-                    process: raw_event.envelope.process.clone(),
-                }))
-            }
-            RawObservationPayload::Process {
-                operation,
-                parent,
-                metadata,
-            } if operation == "exec" => {
-                let identity = raw_event.envelope.process.clone();
-                if metadata
-                    .get("seccomp_observed")
-                    .is_some_and(|value| value == "true")
-                {
-                    if let Some((trace_id, membership)) =
-                        trace_runtime.find_membership_by_pid(identity.pid)
-                    {
-                        return Ok(Some(IngestMatch {
-                            trace_id,
-                            process: membership.identity,
-                        }));
-                    }
-                }
-                if let Some((trace_id, membership)) = trace_runtime.find_membership(&identity) {
-                    return Ok(Some(IngestMatch {
-                        trace_id,
-                        process: membership.identity,
-                    }));
-                }
-                if let Some(parent_identity) = parent {
-                    if let Some((trace_id, parent_membership)) =
-                        trace_runtime.find_membership_by_pid(parent_identity.pid)
-                    {
-                        trace_runtime
-                            .insert_observed_child(
-                                trace_id,
-                                &parent_membership.identity,
-                                identity.clone(),
-                            )
-                            .map_err(|error| {
-                                ControlError::new("insert_observed_child", format!("{:?}", error))
-                            })?;
-                        return Ok(Some(IngestMatch {
-                            trace_id,
-                            process: identity,
-                        }));
-                    }
-                }
-                if let Some(parent_pid) = metadata.get("ppid").and_then(|value| value.parse().ok())
-                {
-                    if let Some((trace_id, parent_membership)) =
-                        trace_runtime.find_membership_by_pid(parent_pid)
-                    {
-                        trace_runtime
-                            .insert_observed_child(
-                                trace_id,
-                                &parent_membership.identity,
-                                identity.clone(),
-                            )
-                            .map_err(|error| {
-                                ControlError::new("insert_observed_child", format!("{:?}", error))
-                            })?;
-                        return Ok(Some(IngestMatch {
-                            trace_id,
-                            process: identity,
-                        }));
-                    }
-                }
-                Ok(trace_runtime
-                    .refresh_process_identity(identity.clone())
-                    .map(|(trace_id, process)| IngestMatch { trace_id, process }))
-            }
-            RawObservationPayload::Process {
-                operation,
-                metadata,
-                ..
-            } if operation == "exit" => {
-                let Some((trace_id, membership)) =
-                    trace_runtime.find_membership(&raw_event.envelope.process)
-                else {
-                    return Ok(None);
-                };
-                trace_runtime
-                    .mark_process_exited(
-                        trace_id,
-                        &membership.identity,
-                        ExitStatus {
-                            code: exit_code(&metadata)?,
-                            observed_at: raw_event.envelope.observed_at,
-                        },
-                    )
-                    .map_err(|error| {
-                        ControlError::new("mark_process_exited", format!("{:?}", error))
-                    })?;
-                Ok(Some(IngestMatch {
-                    trace_id,
-                    process: membership.identity,
-                }))
-            }
-            _ => Ok(trace_runtime
-                .find_membership(&raw_event.envelope.process)
-                .map(|(trace_id, membership)| IngestMatch {
-                    trace_id,
-                    process: membership.identity,
-                })),
-        }
     }
 
     pub(super) fn persist_trace_state(
@@ -496,17 +327,4 @@ impl SqliteAttachService {
 
         Ok(())
     }
-}
-
-fn exit_code(
-    metadata: &std::collections::BTreeMap<String, String>,
-) -> Result<Option<i32>, ControlError> {
-    metadata
-        .get("exit_code")
-        .map(|value| {
-            value
-                .parse::<i32>()
-                .map_err(|error| ControlError::new("exit_code", error.to_string()))
-        })
-        .transpose()
 }

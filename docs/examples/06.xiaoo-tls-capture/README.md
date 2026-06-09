@@ -2,7 +2,7 @@
 
 这个示例验证真实 xiaoO 进程的 LLM request/response payload 采集。xiaoO 项目地址是 <https://gitcode.com/openeuler/xiaoO>。
 
-目标是让测试人员在不了解 AcTrail 内部实现的情况下完成一轮验证：用 `actrailctl launch` 启动 `xiaoo`，由 `tls-sync` 在 TLS 明文边界上报 payload，再通过 `actrailviewer` 查看 payload、HTTP/SSE events 和 `llm.request` semantic action。
+目标是让测试人员在不了解 AcTrail 内部实现的情况下完成一轮验证：用 `actrailctl launch` 启动 `xiaoo`，由 `tls-sync` 在 TLS 明文边界上报 payload，再通过 `actrailviewer` 查看 payload、HTTP/SSE events 和 `llm.request`/`llm.response` semantic action。
 
 如果 xiaoO 的 provider 路径是 HTTPS/TLS，期望 payload 来源为 `TlsUserSpace`。如果 xiaoO 被配置成 plain HTTP provider route，payload 来源可以是 `Syscall/socket-syscall`。如果只看到 HTTP proxy `CONNECT`，说明 socket 只能证明代理隧道，不能解密 request body，需要可用的 TLS plaintext probe plan 或 plain HTTP provider route。
 
@@ -103,7 +103,7 @@ target/release/actrailviewer --config docs/examples/06.xiaoo-tls-capture/operato
 target/release/actrailviewer --config docs/examples/06.xiaoo-tls-capture/operator.conf actions --trace-id trace-1 --head 120
 ```
 
-期望出现 `llm.request`，状态为 success/complete。
+期望出现 `llm.request`，状态为 success/complete。配置保留 inbound response payload 时，还应出现 `llm.response`；如果只看到 response transport/event 但没有 `llm.response`，优先排查 inbound TLS/plain HTTP payload 是否被完整保留、HTTP/SSE analyzer 是否启用，以及 provider 是否实际返回 JSON/SSE body。流式响应的多段 SSE 会聚合到同一条 `llm.response`，其 evidence 数量可能大于 1。
 
 导出 graph 和 OTEL：
 

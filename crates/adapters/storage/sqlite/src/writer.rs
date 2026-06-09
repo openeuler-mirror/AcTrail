@@ -16,11 +16,11 @@ use store_write_contract::traces::TraceWriteStore;
 use crate::SqliteStorage;
 use crate::records::{
     bool_to_i64, encode_diagnostic_kind, encode_diagnostic_severity, encode_event_kind,
-    encode_event_payload, encode_map, encode_membership_state, encode_payload_content_state,
-    encode_payload_direction, encode_payload_operation_completion_state,
-    encode_payload_redaction_state, encode_payload_source_boundary,
-    encode_payload_truncation_state, encode_policy_record, encode_policy_verdict, encode_tags,
-    encode_time, encode_trace_health, encode_trace_lifecycle,
+    encode_event_payload, encode_exit_observation_source, encode_map, encode_membership_state,
+    encode_payload_content_state, encode_payload_direction,
+    encode_payload_operation_completion_state, encode_payload_redaction_state,
+    encode_payload_source_boundary, encode_payload_truncation_state, encode_policy_record,
+    encode_policy_verdict, encode_tags, encode_time, encode_trace_health, encode_trace_lifecycle,
 };
 
 impl TraceWriteStore for SqliteStorage {
@@ -96,18 +96,17 @@ impl MembershipWriteStore for SqliteStorage {
             .borrow_mut()
             .execute(
                 "INSERT OR REPLACE INTO memberships (
-                    trace_id, pid, task_id, start_ticks, start_unix_seconds, start_unix_millis, pid_namespace, generation,
+                    trace_id, pid, task_id, start_ticks, pid_namespace, generation,
                     inherited_from_pid, inherited_from_task_id, inherited_from_start_ticks,
-                    inherited_from_start_unix_seconds, inherited_from_start_unix_millis, inherited_from_pid_namespace, inherited_from_generation,
-                    capture_enabled, propagation_enabled, membership_state, exit_code, exit_observed_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+                    inherited_from_pid_namespace, inherited_from_generation, observed_at,
+                    capture_enabled, propagation_enabled, membership_state, exit_code,
+                    exit_observed_at, exit_observation_source
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
                 params![
                     membership.trace_id.get(),
                     membership.identity.pid,
                     membership.identity.task_id,
                     membership.identity.start_time_ticks,
-                    membership.identity.start_unix_seconds,
-                    membership.identity.start_unix_millis,
                     membership
                         .identity
                         .pid_namespace
@@ -126,14 +125,6 @@ impl MembershipWriteStore for SqliteStorage {
                         .inherited_from
                         .as_ref()
                         .map(|identity| identity.start_time_ticks),
-                    membership
-                        .inherited_from
-                        .as_ref()
-                        .and_then(|identity| identity.start_unix_seconds),
-                    membership
-                        .inherited_from
-                        .as_ref()
-                        .and_then(|identity| identity.start_unix_millis),
                     membership.inherited_from.as_ref().and_then(|identity| {
                         identity
                             .pid_namespace
@@ -144,6 +135,7 @@ impl MembershipWriteStore for SqliteStorage {
                         .inherited_from
                         .as_ref()
                         .map(|identity| identity.generation),
+                    membership.observed_at.map(encode_time),
                     bool_to_i64(membership.capture_enabled),
                     bool_to_i64(membership.propagation_enabled),
                     encode_membership_state(membership.state),
@@ -152,6 +144,11 @@ impl MembershipWriteStore for SqliteStorage {
                         .exit_status
                         .as_ref()
                         .map(|value| encode_time(value.observed_at)),
+                    membership
+                        .exit_status
+                        .as_ref()
+                        .and_then(|value| value.source)
+                        .map(encode_exit_observation_source),
                 ],
             )
             .map(|_| ())

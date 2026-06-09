@@ -242,7 +242,6 @@ actrail.action.status = success
 actrail.action.completeness = complete
 http.request.method = POST
 http.request.body_text = <non-empty JSON request body>
-llm.request.raw_payload_base64 = <non-empty base64>
 ```
 
 ## Failure Modes

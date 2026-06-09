@@ -18,6 +18,9 @@ use super::remote_args::{
     ExecArgs, ExecPath, read_execve_args, read_execve_path, read_execveat_args, read_execveat_path,
 };
 use super::syscall::{effective_syscalls, syscall_from_notification, syscall_name};
+use crate::services::identity::{
+    PROCESS_METADATA_PARENT_PID, PROCESS_METADATA_SECCOMP_OBSERVED, TraceIdentityResolver,
+};
 use crate::services::seccomp_notify::NotificationContinuation;
 
 pub(crate) const PROCESS_SECCOMP_COLLECTOR_NAME: &str = "process-seccomp";
@@ -81,10 +84,12 @@ impl ProcessSeccompService {
         {
             return Ok(None);
         }
-        let target_identity = identity_reader
-            .read_identity(target_pid)
-            .map_err(|error| ControlError::new("process_seccomp_identity", format!("{error:?}")))?;
-        let ppid = parent_pid(target_pid)?;
+        let Some(target_identity) = identity(trace_runtime, identity_reader, target_pid)? else {
+            return Ok(None);
+        };
+        let Some(ppid) = parent_pid(target_pid)? else {
+            return Ok(None);
+        };
         let Some((parent_trace_id, parent)) = trace_runtime.find_membership_by_pid(ppid) else {
             return Err(ControlError::new(
                 "seccomp_listener",
@@ -98,7 +103,12 @@ impl ProcessSeccompService {
             ));
         }
         trace_runtime
-            .inherit_process(trace_id, &parent.identity, target_identity.clone())
+            .inherit_process(
+                trace_id,
+                &parent.identity,
+                target_identity.clone(),
+                SystemTime::now(),
+            )
             .map_err(|error| ControlError::new("process_seccomp_inherit", format!("{error:?}")))?;
         Ok(Some(target_identity))
     }
@@ -139,13 +149,17 @@ impl ProcessSeccompService {
                     self.max_args,
                     self.max_arg_bytes,
                 )?;
-                let process = identity(trace_runtime, identity_reader, notification.pid)?;
+                let Some(process) = identity(trace_runtime, identity_reader, notification.pid)?
+                else {
+                    continuation.continue_now()?;
+                    return Ok(Vec::new());
+                };
                 let parent_pid = parent_pid(notification.pid)?;
                 continuation.continue_now()?;
                 Ok(vec![ProcessSeccompObservation {
                     observed_at,
                     process,
-                    parent_pid: Some(parent_pid),
+                    parent_pid,
                     syscall,
                     details: ProcessSeccompObservationDetails::Exec {
                         args,
@@ -172,13 +186,17 @@ impl ProcessSeccompService {
                     self.max_args,
                     self.max_arg_bytes,
                 )?;
-                let process = identity(trace_runtime, identity_reader, notification.pid)?;
+                let Some(process) = identity(trace_runtime, identity_reader, notification.pid)?
+                else {
+                    continuation.continue_now()?;
+                    return Ok(Vec::new());
+                };
                 let parent_pid = parent_pid(notification.pid)?;
                 continuation.continue_now()?;
                 Ok(vec![ProcessSeccompObservation {
                     observed_at,
                     process,
-                    parent_pid: Some(parent_pid),
+                    parent_pid,
                     syscall,
                     details: ProcessSeccompObservationDetails::Exec {
                         args,
@@ -197,7 +215,11 @@ impl ProcessSeccompService {
                     continuation.continue_now()?;
                     return Ok(Vec::new());
                 }
-                let process = identity(trace_runtime, identity_reader, notification.pid)?;
+                let Some(process) = identity(trace_runtime, identity_reader, notification.pid)?
+                else {
+                    continuation.continue_now()?;
+                    return Ok(Vec::new());
+                };
                 continuation.continue_now()?;
                 Ok(vec![ProcessSeccompObservation {
                     observed_at,
@@ -230,15 +252,22 @@ impl ProcessSeccompService {
                 args,
                 execveat_dirfd,
                 execveat_flags,
-            } => self.exec_event(
-                observation.observed_at,
-                process,
-                observation.parent_pid,
-                observation.syscall,
-                args,
-                execveat_dirfd,
-                execveat_flags,
-            ),
+            } => {
+                let parent = observation
+                    .parent_pid
+                    .and_then(|pid| trace_runtime.find_membership_by_pid(pid))
+                    .map(|(_, membership)| membership.identity);
+                self.exec_event(
+                    observation.observed_at,
+                    process,
+                    observation.parent_pid,
+                    parent,
+                    observation.syscall,
+                    args,
+                    execveat_dirfd,
+                    execveat_flags,
+                )
+            }
             ProcessSeccompObservationDetails::ForkAttempt {
                 flags,
                 clone3_args_ptr,
@@ -259,6 +288,7 @@ impl ProcessSeccompService {
         observed_at: SystemTime,
         process: ProcessIdentity,
         parent_pid: Option<u32>,
+        parent: Option<ProcessIdentity>,
         syscall: ProcessSeccompSyscall,
         args: ExecArgs,
         execveat_dirfd: Option<u64>,
@@ -266,7 +296,10 @@ impl ProcessSeccompService {
     ) -> RawCollectorEvent {
         let mut metadata = common_metadata(syscall);
         if let Some(parent_pid) = parent_pid {
-            metadata.insert("ppid".to_string(), parent_pid.to_string());
+            metadata.insert(
+                PROCESS_METADATA_PARENT_PID.to_string(),
+                parent_pid.to_string(),
+            );
         }
         if let Some(path) = args.path.filter(|value| !value.is_empty()) {
             metadata.insert("executable".to_string(), path.clone());
@@ -285,7 +318,7 @@ impl ProcessSeccompService {
         }
         metadata.insert("env_captured".to_string(), "false".to_string());
         metadata.insert("args_truncated".to_string(), args.truncated.to_string());
-        process_event(observed_at, process, "exec", None, metadata)
+        process_event(observed_at, process, "exec", parent, metadata)
     }
 
     fn fork_attempt_event(
@@ -342,18 +375,20 @@ fn identity(
     trace_runtime: &TraceRuntime,
     identity_reader: &impl ProcessIdentityReader,
     pid: u32,
-) -> Result<ProcessIdentity, ControlError> {
-    if let Some((_, membership)) = trace_runtime.find_membership_by_pid(pid) {
-        return Ok(membership.identity);
-    }
-    identity_reader
-        .read_identity(pid)
-        .map_err(|error| ControlError::new("process_seccomp_identity", format!("{error:?}")))
+) -> Result<Option<ProcessIdentity>, ControlError> {
+    TraceIdentityResolver::new(trace_runtime).runtime_or_read_pid_identity(
+        identity_reader,
+        pid,
+        "process_seccomp_identity",
+    )
 }
 
 fn common_metadata(syscall: ProcessSeccompSyscall) -> BTreeMap<String, String> {
     BTreeMap::from([
-        ("seccomp_observed".to_string(), "true".to_string()),
+        (
+            PROCESS_METADATA_SECCOMP_OBSERVED.to_string(),
+            "true".to_string(),
+        ),
         ("syscall".to_string(), syscall_name(syscall).to_string()),
     ])
 }

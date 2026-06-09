@@ -51,7 +51,7 @@ workload 会做这些真实动作：
 | 行为 | 观测目标 |
 | --- | --- |
 | 启动 `/bin/cat` 子进程 | fork/exec/exit、process group/session 元数据 |
-| 给自身发送被忽略的 signal `10` | process signal event |
+| 给自身发送被忽略的 signal `10` | 默认不持久化 signal event，用于验证 process signal 降噪 |
 | 对 anonymous pipe、FIFO、Unix socketpair 做 read/write roundtrip | IPC events |
 | 对 regular file 做 read/write | 默认 operator config 覆盖的 file events |
 | 执行 open、mkdir、rmdir、rename、unlink、truncate | file-path syscall events；BPF 只发送 raw enter/exit，userspace tracker 负责路径和 fd/cwd 语义 |
@@ -148,7 +148,7 @@ trace trace-<N> entered Active
 actrail-stdio-stdin-e2e
 ```
 
-workload 会触发进程、signal、pipe、FIFO、regular file、file mutation、MAP_SHARED mmap、Unix socket、stdout/stderr payload 和 TCP roundtrip。期望 stdout/stderr 中能看到：
+workload 会触发进程、被默认降噪的 signal、pipe、FIFO、regular file、file mutation、MAP_SHARED mmap、Unix socket、stdout/stderr payload 和 TCP roundtrip。期望 stdout/stderr 中能看到：
 
 ```text
 actrail-stdio-stdout-e2e
@@ -188,7 +188,6 @@ actrail-stdio-continue-e2e
 `events` 应能看到这些代表性行：
 
 ```text
-Process ... signal signal=10 target_pid=... result=...
 Ipc     ... pipe         channel=pipe operation=write ...
 Ipc     ... pipe         channel=pipe operation=read ...
 Ipc     ... fifo         channel=fifo operation=write ...
@@ -271,9 +270,9 @@ actrailweb is running; press Ctrl-C to stop
 http://<ADDR>:<PORT>
 ```
 
-UI 会展示 trace 列表、Timeline、Process Tree、事件/进程/payload/诊断表、按域计数、搜索过滤和右侧详情。Timeline 从 trace 事件和 payload metadata 派生，Process Tree 从 trace membership 派生；点击 payload 行会读取 `/api/traces/<TRACE_ID>/payloads/<SEGMENT_ID>` 并显示捕获文本。
+UI 会展示 trace 列表、指标摘要、agent-centered action swimlane/tree、搜索过滤和右侧详情。当前 Web 主视图从 `/api/traces/<TRACE_ID>/action-tree` 读取存储中的 semantic action/action-link；低层事件、payload 和 process snapshot 作为选中节点的 evidence/detail 展示。点击带 payload evidence 的节点会读取 `/api/traces/<TRACE_ID>/payloads/<SEGMENT_ID>` 并显示捕获文本。
 
-Resources tab 会展示同一份 trace 的资源采样行，包括 `scope=process_tree`、root pid、CPU%、RSS、VSZ、sampler metadata，以及启用 `resource_metrics_include_system` 时的 host memory/load metadata。
+资源采样行仍由 `actrailviewer events` 验证，包括 `scope=process_tree`、root pid、CPU%、RSS、VSZ、sampler metadata，以及启用 `resource_metrics_include_system` 时的 host memory/load metadata。Web UI 会在 trace 指标和选中节点 JSON/detail 中展示这些数据；资源采样没有独立的旧版 Resources tab。
 
 ## 10. 文件路径 syscall 事件
 
@@ -316,8 +315,8 @@ File ... mmap_shared path=/tmp/actrail-extended-observation.mmap result=0 ...
 ```text
 live verification passed
 trace_id=trace-1
-process_events=exec,exit,fork,signal
-file_events=mkdir,mmap_shared,open,read,rename,rmdir,truncate,unlink,write
+process_events=exec,exit,fork
+file_events=close,mkdir,mmap_shared,open,read,rename,rmdir,truncate,unlink,write
 net_events=accept,bind,connect,listen,recv,send
 ipc_events=fifo:read,fifo:write,pipe:read,pipe:write,unix_socket:read,unix_socket:write
 resource_events=process_tree
@@ -339,12 +338,12 @@ stdio_payloads=stderr:outbound,stdin:inbound,stdout:outbound
 | `fs-access-basic` file path mutations | `file_path_capture_enabled = true` -> raw `openat`, `mkdirat`, `unlinkat`, `renameat`, `openat(O_TRUNC)` enter/exit -> userspace file tracker -> File event -> AcTrail storage/viewer |
 | `fs-mmap` MAP_SHARED file mapping | configured `mmap_enabled = true` -> real `MAP_SHARED` mapping and `msync` -> raw mmap enter/exit -> userspace file tracker -> `mmap_shared` File event -> AcTrail storage/viewer |
 | Process memory metadata | fork/exec metadata contains `/proc/<pid>/status` memory and thread fields |
-| Process signal event | `kill(getpid(), 10)` with ignored signal -> signal event -> AcTrail storage/viewer |
+| Process signal noise suppression | `kill(getpid(), 10)` with ignored signal -> no default signal event in AcTrail storage/viewer |
 | Process group/session metadata | exec metadata contains `process_group_id` and `session_id` from `/proc/<pid>/stat` |
 | `resource-metrics` process tree samples | config-gated `/proc` sampler, including `/proc/meminfo` and `/proc/loadavg` when enabled -> `Resource` event -> AcTrail storage/viewer/web |
 | Provider classification | rule-set classifier -> `Label` event -> AcTrail storage/viewer/export |
 | `stdio-chunk` payload | configured read/write syscall capture -> `PayloadSourceBoundary::Stdio` segment -> AcTrail storage/viewer |
-| Web UI | read/snapshot/payload stores -> `actrailweb` HTTP API -> per-connection request handling with configured read timeout -> Timeline/Process Tree/browser UI |
+| Web UI | read/snapshot/payload/action stores -> `actrailweb` HTTP API -> per-connection request handling with configured read timeout -> action swimlane/tree plus right-side detail panel |
 
 这个示例不覆盖 TLS plaintext、HTTP/1.x semantic events、HTTP/2 frame/DATA facts、HTTP socket plaintext、browser plaintext 或 CoW fault。动态 OpenSSL TLS payload、HTTP/1.x semantic events 和本地 HTTPS/2 payload 示例使用单独的 payload 配置，见 `docs/examples/02.llm-http-payload-capture/README.md`；非 TLS HTTP socket plaintext 示例见 `docs/examples/05.http-payload-unified/README.md`；xiaoO 这类真实 Agent 的完整 payload capture 示例见 `docs/examples/06.xiaoo-tls-capture/README.md`。部分 WSL/Linux 环境会拒绝 attach `sys_enter_setsid` 这类 syscall tracepoint，因此本例的 session/process-group 只声明 `/proc` 元数据，不声明 setpgid/setsid syscall event。
 

@@ -24,7 +24,7 @@ pub(super) fn require(
         let EventPayload::File(payload) = &event.payload else {
             continue;
         };
-        if payload.path.is_none() {
+        if payload.operation != "close" && payload.path.is_none() {
             failures.push(format!("{} missing path", payload.operation));
         }
         if payload.result.is_none() {
@@ -63,7 +63,7 @@ pub(super) fn require(
                     failures.push("mmap_shared observed while mmap is not configured".to_string());
                 }
             }
-            "open" | "mkdir" | "rmdir" | "unlink" => {}
+            "open" | "mkdir" | "rmdir" | "unlink" | "close" => {}
             _ => failures.push(format!("unexpected file operation {}", payload.operation)),
         }
         if matches!(

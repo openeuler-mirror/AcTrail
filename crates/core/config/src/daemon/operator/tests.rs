@@ -279,6 +279,24 @@ fn process_seccomp_config_parses_for_exec_context() {
     );
 }
 
+#[test]
+fn agent_invocation_commands_are_optional_dynamic_lookup_hints() {
+    let raw = OPERATOR_CONFIG_TEMPLATE
+        .lines()
+        .filter(|line| !line.starts_with("agent_invocation_command = "))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .replace(
+            "agent_invocation_enabled = false",
+            "agent_invocation_enabled = true",
+        );
+
+    let config = OperatorConfig::parse(&raw).unwrap();
+
+    assert!(config.agent_invocation.enabled);
+    assert!(config.agent_invocation.commands.is_empty());
+}
+
 fn http_enabled_config() -> String {
     OPERATOR_CONFIG_TEMPLATE
         .replace(

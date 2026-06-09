@@ -120,9 +120,9 @@ def run_agent_invocation(env, result: CaseResult, workload: dict[str, str]) -> s
     add_expected_found_check(
         result,
         f"{name} OTEL invocation edge",
-        "one complete agent.invocation edge whose parent and child pids match xiaoO and Claude process.exec spans",
+        "one complete agent.invocation edge whose child is Claude and whose parent is Claude's direct launcher",
         bullet_evidence(edge.facts + [f"missing: {item}" for item in edge.missing]),
-        "docs example 07 must prove the semantic edge xiaoO(pid=P) -> Claude(pid=C), not just keyword presence",
+        "docs example 07 must prove the direct launcher -> Claude semantic edge plus the xiaoO trace root",
         status=otel_status,
     )
     if otel_status == FAIL:
@@ -155,7 +155,7 @@ def validate_agent_invocation_edge(
 ) -> EdgeValidation:
     spans = read_otel_spans(path)
     expected_child_command = f"{Path(expected_claude).name} -p {expected_prompt}"
-    edge = find_agent_invocation_span(spans, expected_xiaoo, expected_claude, expected_child_command)
+    edge = find_agent_invocation_span(spans, expected_claude, expected_child_command)
     if edge is None:
         return EdgeValidation(
             facts=[
@@ -164,25 +164,44 @@ def validate_agent_invocation_edge(
                 f"process.exec_spans={count_kind(spans, 'process.exec')}",
             ],
             missing=[
-                "agent.invocation span with expected parent executable, child executable, child command, success, and complete",
+                "agent.invocation span with expected child executable, child command, success, and complete",
             ],
         )
     parent_pid = edge.attributes["agent.parent.pid"]
     child_pid = edge.attributes["agent.child.pid"]
-    parent_exec = find_process_exec_span(spans, edge.trace_id, parent_pid, expected_xiaoo, None)
+    parent_executable = edge.attributes.get("agent.parent.executable")
+    root_exec = find_process_exec_span_by_executable(spans, edge.trace_id, expected_xiaoo)
+    parent_exec = (
+        find_process_exec_span(spans, edge.trace_id, parent_pid, parent_executable, None)
+        if parent_executable
+        else None
+    )
     child_exec = find_process_exec_span(spans, edge.trace_id, child_pid, expected_claude, expected_child_command)
+    child_llm = find_llm_request_span(spans, edge.trace_id, child_pid)
     facts = [
         f"otel_output={path}",
         f"edge trace_id={edge.trace_id}",
         f"edge action_id={edge.attributes.get('actrail.action.id')}",
         f"edge status={edge.attributes.get('actrail.action.status')} completeness={edge.attributes.get('actrail.action.completeness')}",
+        f"edge trigger={edge.attributes.get('agent.invocation.trigger')}",
+        f"edge evidence_action_id={edge.attributes.get('agent.invocation.evidence_action_id')}",
         f"edge parent pid={parent_pid} executable={edge.attributes.get('agent.parent.executable')}",
         f"edge child pid={child_pid} executable={edge.attributes.get('agent.child.executable')}",
         f"edge child command_line={edge.attributes.get('agent.child.command_line')}",
     ]
     missing: list[str] = []
+    if root_exec is None:
+        missing.append("matching xiaoO process.exec span in the same trace")
+    else:
+        facts.extend(
+            [
+                f"root xiaoO process.exec action_id={root_exec.attributes.get('actrail.action.id')}",
+                f"root xiaoO process.exec pid={root_exec.attributes.get('process.pid')} executable={root_exec.attributes.get('executable')}",
+                f"root xiaoO process.exec command_line={root_exec.attributes.get('command_line')}",
+            ]
+        )
     if parent_exec is None:
-        missing.append("matching xiaoO process.exec span with same trace_id and parent pid")
+        missing.append("matching direct parent process.exec span with same trace_id, parent pid, and parent executable")
     else:
         facts.extend(
             [
@@ -201,13 +220,26 @@ def validate_agent_invocation_edge(
                 f"child process.exec command_line={child_exec.attributes.get('command_line')}",
             ]
         )
-    if parent_exec is not None and child_exec is not None:
+    if child_llm is None:
+        missing.append("matching Claude llm.request span with same trace_id and child pid")
+    else:
+        facts.extend(
+            [
+                f"child llm.request action_id={child_llm.attributes.get('actrail.action.id')}",
+                f"child llm.request pid={child_llm.attributes.get('process.pid')}",
+            ]
+        )
+    if edge.attributes.get("agent.invocation.trigger") != "child_llm_request":
+        missing.append("agent.invocation.trigger=child_llm_request")
+    if child_llm is not None and edge.attributes.get("agent.invocation.evidence_action_id") != child_llm.attributes.get("actrail.action.id"):
+        missing.append("agent.invocation.evidence_action_id points to the child Claude llm.request action")
+    if root_exec is not None and parent_exec is not None and child_exec is not None:
         facts.append(
             "pid linkage verified: "
             f"edge.parent.pid == parent process.pid == {parent_pid}; "
             f"edge.child.pid == child process.pid == {child_pid}"
         )
-        facts.append("trace linkage verified: edge, parent exec, and child exec share the same trace_id")
+        facts.append("trace linkage verified: edge, xiaoO exec, parent exec, and child exec share the same trace_id")
     return EdgeValidation(facts, missing)
 
 
@@ -225,7 +257,6 @@ def read_otel_spans(path: Path) -> list[SpanRecord]:
 
 def find_agent_invocation_span(
     spans: list[SpanRecord],
-    expected_xiaoo: str,
     expected_claude: str,
     expected_child_command: str,
 ) -> SpanRecord | None:
@@ -235,11 +266,26 @@ def find_agent_invocation_span(
             attributes.get("actrail.action.kind") == "agent.invocation"
             and attributes.get("actrail.action.status") == "success"
             and attributes.get("actrail.action.completeness") == "complete"
-            and attributes.get("agent.parent.executable") == expected_xiaoo
             and attributes.get("agent.child.executable") == expected_claude
             and attributes.get("agent.child.command_line") == expected_child_command
             and attributes.get("agent.parent.pid")
             and attributes.get("agent.child.pid")
+        ):
+            return span
+    return None
+
+
+def find_process_exec_span_by_executable(
+    spans: list[SpanRecord],
+    trace_id: str,
+    executable: str,
+) -> SpanRecord | None:
+    for span in spans:
+        attributes = span.attributes
+        if (
+            span.trace_id == trace_id
+            and attributes.get("actrail.action.kind") == "process.exec"
+            and attributes.get("executable") == executable
         ):
             return span
     return None
@@ -260,6 +306,22 @@ def find_process_exec_span(
             and attributes.get("process.pid") == pid
             and attributes.get("executable") == executable
             and (command_line is None or attributes.get("command_line") == command_line)
+        ):
+            return span
+    return None
+
+
+def find_llm_request_span(
+    spans: list[SpanRecord],
+    trace_id: str,
+    pid: str,
+) -> SpanRecord | None:
+    for span in spans:
+        attributes = span.attributes
+        if (
+            span.trace_id == trace_id
+            and attributes.get("actrail.action.kind") == "llm.request"
+            and attributes.get("process.pid") == pid
         ):
             return span
     return None

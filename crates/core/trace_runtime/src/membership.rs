@@ -145,6 +145,8 @@ impl MembershipIndex {
 
 #[cfg(test)]
 mod tests {
+    use std::time::SystemTime;
+
     use model_core::ids::TraceId;
     use model_core::process::{MembershipState, ProcessIdentity, ProcessMembership};
 
@@ -156,8 +158,17 @@ mod tests {
         let parent = ProcessIdentity::new(10, 100, 100);
         let fork_identity = ProcessIdentity::new(11, 110, 110);
         let exec_identity = ProcessIdentity::new(11, 110, 111);
-        let mut index = MembershipIndex::new(ProcessMembership::root(trace_id, parent.clone()));
-        let mut child = ProcessMembership::inherited(trace_id, fork_identity.clone(), parent);
+        let mut index = MembershipIndex::new(ProcessMembership::root(
+            trace_id,
+            parent.clone(),
+            SystemTime::UNIX_EPOCH,
+        ));
+        let mut child = ProcessMembership::inherited(
+            trace_id,
+            fork_identity.clone(),
+            parent,
+            SystemTime::UNIX_EPOCH,
+        );
         child.activate();
         index.insert(child);
 

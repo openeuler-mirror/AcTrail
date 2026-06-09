@@ -17,6 +17,7 @@
 - stdin/stdout/stderr payload 采集。
 - HTTP/1.x、HTTP/2 frame/data、SSE preview 投影。
 - process seccomp exec context 和 agent invocation 检测。
+- agent 身份和子进程 TLS sync probe plan 均由 LLM 访问行为和动态 runtime -> daemon lookup 生成，不依赖静态命令名单。
 - 进程树和系统资源指标。
 - payload bytes/text 导出，以及 live OTEL JSONL 导出。
 
@@ -208,6 +209,8 @@ target/release/actrailviewer --config docs/examples/08.full-monitor-validation/o
 target/release/actrailviewer --config docs/examples/08.full-monitor-validation/operator.conf actions --trace-id trace-1 --head 120
 ```
 
+期望看到按时间排列的高层语义动作，例如 `process.exec`、`file.read`/`file.write`、`command.invocation`、`http.message`、`llm.request` 和在 inbound response payload 被保留时生成的 `llm.response`。流式 provider 的多段 SSE 会先作为 SSE/http evidence 落库，再聚合到同一条 `llm.response`。
+
 查看进程树：
 
 ```bash
@@ -240,7 +243,7 @@ target/release/actraild --config docs/examples/08.full-monitor-validation/operat
 清理配置中的运行时产物：
 
 ```bash
-python3 docs/examples/clean.py --example full-monitor
+target/release/actrailctl --config docs/examples/08.full-monitor-validation/operator.conf clean
 ```
 
 如果要硬清理这个验证目录的运行时数据：
@@ -255,7 +258,8 @@ rm -rf /tmp/actrail-full-monitor
 - `event_ring_buffer_max_bytes = 8388608`：高流量观测使用的 eBPF event ring 大小。
 - `file_path_max_bytes = 255`：BPF 文件路径事件拷贝上限，不能超过当前编译 ABI 最大值。
 - `payload_tls_capture_backend = tls-sync`：通过 preload hook 同步采集 TLS 明文。
-- `payload_tls_max_operation_bytes = 4194304`：sync runtime 可接受的单次 TLS payload 操作上限。
+- `payload_tls_max_operation_bytes = 16777216`：sync runtime 可接受的单次 TLS payload 操作上限；本例按 16MiB 配置，避免较大 LLM request 在进入语义投影前被截断，同时避免单次操作过度消耗每 trace 的 payload retention 预算。
+- TLS/HTTP body retention：观测到的 LLM request/response 保留 body 供语义投影使用；普通非 LLM HTTP payload 只保留 HTTP/application summary fact，不把 body bytes 写入 `payload_segments`。
 - `payload_tls_ring_buffer_bytes = 8388608`：保留给非 sync backend 和诊断尺寸兼容。
 - `payload_tls_retention_max_bytes_per_trace = 104857600`：每个 trace 的 TLS payload 保留预算。
 - `payload_tls_sync_match_limit = 8`：finder fast 每个 pattern 最多检查的匹配数量。

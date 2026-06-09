@@ -1,6 +1,7 @@
 //! Batched live-event persistence for deferred seccomp observations.
 
 use std::collections::BTreeSet;
+use std::time::SystemTime;
 
 use collector_event::{RawCollectorEvent, RawObservationPayload};
 use collector_instance::CollectorInstance;
@@ -22,6 +23,7 @@ use store_write_contract::traces::TraceWriteStore;
 use trace_runtime::registry::TraceRuntime;
 
 use crate::services::attach::SqliteAttachService;
+use crate::services::identity::TraceIdentityResolver;
 
 impl SqliteAttachService {
     pub(super) fn process_live_event_batch(
@@ -35,7 +37,7 @@ impl SqliteAttachService {
         let mut batch = LiveEventBatch::default();
         for raw_event in raw_events {
             let observed_at = raw_event.envelope.observed_at;
-            let matched = self.apply_runtime_effects(trace_runtime, &raw_event)?;
+            let matched = TraceIdentityResolver::apply_runtime_effects(trace_runtime, &raw_event)?;
             let matched_trace_id = matched.as_ref().map(|matched| matched.trace_id);
             let event_id = self.next_event_id()?;
             let label_event_id = if self.provider_classification_enabled
@@ -77,6 +79,24 @@ impl SqliteAttachService {
         self.persist_live_event_batch(trace_runtime, batch)
     }
 
+    pub(super) fn persist_observed_event_batch(
+        &mut self,
+        trace_runtime: &TraceRuntime,
+        events: Vec<DomainEvent>,
+    ) -> Result<(), ControlError> {
+        if events.is_empty() {
+            return Ok(());
+        }
+        let mut batch = LiveEventBatch::default();
+        for event in events {
+            let semantic_output = self.semantic_actions.observe_event(&event);
+            batch.semantic_actions.extend(semantic_output.actions);
+            batch.semantic_action_links.extend(semantic_output.links);
+            batch.events.push(event);
+        }
+        self.persist_live_event_batch(trace_runtime, batch)
+    }
+
     fn persist_live_event_batch(
         &mut self,
         trace_runtime: &TraceRuntime,
@@ -98,9 +118,17 @@ impl SqliteAttachService {
                     &commit_result.semantic_action_links,
                 )?;
                 for trace_id in commit_result.terminal_trace_ids {
+                    let finished_at = terminal_trace_finished_at(trace_runtime, trace_id)?;
+                    let semantic_actions =
+                        self.finalize_semantic_actions_for_trace(trace_id, finished_at);
+                    self.write_semantic_action_batch(&semantic_actions)?;
+                    self.publish_live_otel_action_batch(trace_runtime, &semantic_actions)?;
                     self.collector
                         .unbind_trace(trace_id)
                         .map_err(|error| ControlError::new(error.stage, error.message))?;
+                    self.application_protocol.forget_trace(trace_id);
+                    self.semantic_actions.forget_trace(trace_id);
+                    self.payload_body_retention_gate.forget_trace(trace_id);
                 }
                 Ok(())
             }
@@ -204,4 +232,24 @@ fn trace_state_for_persistence(
             ),
         })
         .ok_or_else(|| ControlError::new("persist_trace_state", "trace not found"))
+}
+
+fn terminal_trace_finished_at(
+    trace_runtime: &TraceRuntime,
+    trace_id: TraceId,
+) -> Result<SystemTime, ControlError> {
+    let trace = trace_runtime
+        .get_trace(trace_id)
+        .map(|entry| &entry.trace)
+        .ok_or_else(|| ControlError::new("terminal_trace", "trace not found"))?;
+    match trace.lifecycle_state {
+        TraceLifecycleState::Completed => trace.timings.completed_at.ok_or_else(|| {
+            ControlError::new("terminal_trace", "completed trace missing completed_at")
+        }),
+        TraceLifecycleState::Failed => trace
+            .timings
+            .failed_at
+            .ok_or_else(|| ControlError::new("terminal_trace", "failed trace missing failed_at")),
+        _ => Err(ControlError::new("terminal_trace", "trace is not terminal")),
+    }
 }

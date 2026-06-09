@@ -299,15 +299,8 @@ impl ConfigNode {
             .collect()
     }
 
-    pub(super) fn repeated(
-        &self,
-        key: &'static str,
-    ) -> Result<impl Iterator<Item = &String>, String> {
-        self.values
-            .get(key)
-            .filter(|values| !values.is_empty())
-            .map(|values| values.iter())
-            .ok_or_else(|| format!("missing config key {}", self.qualified_key(key)))
+    pub(super) fn repeated_optional(&self, key: &'static str) -> impl Iterator<Item = &String> {
+        self.values.get(key).into_iter().flatten()
     }
 
     fn qualified_key(&self, key: &'static str) -> String {

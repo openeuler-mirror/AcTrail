@@ -12,12 +12,12 @@ use ebpf_collector::procfs::ProcfsIdentityReader;
 use model_core::capability::{Capability, CapabilityDescriptor, CapabilityField, GuaranteeClass};
 use model_core::event::EnforcementPayload;
 use model_core::ids::{CollectorName, TraceId};
-use model_core::process::{MembershipState, ProcessIdentity, ProcessMembership};
-use process_identity_contract::lookup::ProcessIdentityReader;
+use model_core::process::ProcessIdentity;
 use trace_runtime::registry::TraceRuntime;
 
 use super::fanotify::{FanotifyHandle, PermissionEventFd, PermissionMetadata, respond};
 use super::rules::{EnforcementRule, EnforcementRules, FileKey};
+use crate::services::identity::TraceIdentityResolver;
 
 pub(in crate::services) const COLLECTOR_NAME: &str = "fanotify-enforcement";
 
@@ -180,22 +180,17 @@ fn traced_process(
     let Ok(pid) = u32::try_from(pid) else {
         return Ok(None);
     };
-    let identity = match identity_reader.read_identity(pid) {
-        Ok(identity) => identity,
+    let resolved = match TraceIdentityResolver::new(trace_runtime).read_and_match_pid(
+        identity_reader,
+        pid,
+        "fanotify_identity",
+    ) {
+        Ok(resolved) => resolved,
         Err(_) => return Ok(None),
     };
-    Ok(trace_runtime
-        .find_membership(&identity)
-        .filter(|(_, membership)| membership_is_capturable(membership))
-        .map(|(trace_id, membership)| (trace_id, membership.identity)))
-}
-
-fn membership_is_capturable(membership: &ProcessMembership) -> bool {
-    membership.capture_enabled
-        && matches!(
-            membership.state,
-            MembershipState::Starting | MembershipState::Active
-        )
+    Ok(resolved
+        .filter(|process| process.is_capturable())
+        .map(|process| (process.trace_id, process.process)))
 }
 
 fn trace_requests_enforcement(trace_runtime: &TraceRuntime, trace_id: TraceId) -> bool {

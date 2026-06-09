@@ -23,7 +23,6 @@ pub(super) fn verify_database(
     expected_stdin: &str,
     expected_stdout: &str,
     expected_stderr: &str,
-    expected_signal: u32,
     expected_mmap: Option<(u64, u64)>,
     expect_resource_metrics: bool,
     expect_system_metrics: bool,
@@ -54,7 +53,7 @@ pub(super) fn verify_database(
     require_operations(
         "process",
         &observed_process,
-        ["fork", "exec", "exit", "signal"].into_iter(),
+        ["fork", "exec", "exit"].into_iter(),
     )?;
     require_operations(
         "net",
@@ -81,7 +80,8 @@ pub(super) fn verify_database(
         ]
         .into_iter(),
     )?;
-    require_process_payloads(&events, expected_signal)?;
+    require_process_payloads(&events)?;
+    reject_default_signal_payloads(&events)?;
     file::require(&events, expected_mmap)?;
     require_net_payloads(&events)?;
     require_ipc_payloads(&events)?;
@@ -237,7 +237,7 @@ fn require_ipc_payloads(events: &[DomainEvent]) -> Result<(), String> {
     }
 }
 
-fn require_process_payloads(events: &[DomainEvent], expected_signal: u32) -> Result<(), String> {
+fn require_process_payloads(events: &[DomainEvent]) -> Result<(), String> {
     let exec_with_executable = events.iter().any(|event| {
         matches!(
             &event.payload,
@@ -275,41 +275,30 @@ fn require_process_payloads(events: &[DomainEvent], expected_signal: u32) -> Res
                 if payload.operation == "exit" && !payload.metadata.contains_key("exit_code")
         )
     });
-    let signal_event = events.iter().any(|event| {
-        matches!(
-            &event.payload,
-            EventPayload::Process(payload)
-                if payload.operation == "signal"
-                    && payload
-                        .metadata
-                        .get("syscall")
-                        .is_some_and(|value| value == "signal_generate")
-                    && payload
-                        .metadata
-                        .get("signal")
-                        .is_some_and(|value| value == &expected_signal.to_string())
-                    && payload.metadata.contains_key("result")
-                    && payload.metadata.contains_key("target_pid")
-        )
-    });
 
-    if exec_with_executable
-        && exec_with_context
-        && exec_with_resource_context
-        && signal_event
-        && !exit_without_code
+    if exec_with_executable && exec_with_context && exec_with_resource_context && !exit_without_code
     {
         Ok(())
     } else {
         Err(format!(
-            "missing lifecycle payload details: exec_executable={}, exec_context={}, exec_resource_context={}, signal={}, all_exit_codes={}",
-            exec_with_executable,
-            exec_with_context,
-            exec_with_resource_context,
-            signal_event,
-            !exit_without_code
+            "missing lifecycle payload details: exec_executable={}, exec_context={}, exec_resource_context={}, all_exit_codes={}",
+            exec_with_executable, exec_with_context, exec_with_resource_context, !exit_without_code
         ))
     }
+}
+
+fn reject_default_signal_payloads(events: &[DomainEvent]) -> Result<(), String> {
+    let Some(payload) = events.iter().find_map(|event| match &event.payload {
+        EventPayload::Process(payload) if payload.operation == "signal" => Some(payload),
+        _ => None,
+    }) else {
+        return Ok(());
+    };
+    Err(format!(
+        "default proc-lifecycle unexpectedly persisted process signal event syscall={} signal={}",
+        payload.metadata.get("syscall").cloned().unwrap_or_default(),
+        payload.metadata.get("signal").cloned().unwrap_or_default()
+    ))
 }
 
 fn require_provider_payloads(

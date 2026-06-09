@@ -14,8 +14,9 @@ const PROC_LIFECYCLE_PROGRAMS: &[&str] = &[
     "handle_sched_process_exit",
     "handle_sys_enter_exit",
     "handle_sys_enter_exit_group",
-    "handle_signal_generate",
 ];
+
+const PROCESS_SIGNAL_DIAGNOSTIC_PROGRAMS: &[&str] = &["handle_signal_generate"];
 
 const PROCESS_CONTEXT_PROGRAMS: &[&str] = &[
     "handle_sched_process_fork",
@@ -333,6 +334,7 @@ fn capability_programs(program_name: &str) -> Option<()> {
         FS_ACCESS_BASIC_PATH_PROGRAMS,
         FS_ACCESS_BASIC_CONTEXT_PROGRAMS,
         PROCESS_CONTEXT_PROGRAMS,
+        PROCESS_SIGNAL_DIAGNOSTIC_PROGRAMS,
         FD_IO_IPC_PROGRAMS,
         SOCKET_PAYLOAD_PROGRAMS,
         FS_MMAP_PROGRAMS,

@@ -34,6 +34,7 @@ impl SqliteStorage {
 
     pub fn open_read_only(path: &Path) -> Result<Self, rusqlite::Error> {
         let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        schema::validate_read_schema(&connection)?;
         Ok(Self {
             connection: Rc::new(RefCell::new(connection)),
             export_leases: Rc::new(RefCell::new(BTreeSet::new())),
@@ -105,7 +106,7 @@ fn next_id_seed(
 
 #[cfg(test)]
 mod tests {
-    use std::time::SystemTime;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use model_core::diagnostics::{DiagnosticKind, DiagnosticRecord, DiagnosticSeverity};
     use model_core::event::{
@@ -114,6 +115,7 @@ mod tests {
     use model_core::ids::{CollectorName, DiagnosticId, EventId, ProfileName, TraceId, TraceName};
     use model_core::process::{ProcessIdentity, ProcessMembership};
     use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
+    use rusqlite::Connection;
     use store_read_contract::diagnostics::DiagnosticReadStore;
     use store_read_contract::events::EventReadStore;
     use store_read_contract::traces::TraceReadStore;
@@ -127,6 +129,110 @@ mod tests {
     use store_write_contract::traces::TraceWriteStore;
 
     use crate::SqliteStorage;
+
+    #[test]
+    fn initialize_migrates_legacy_second_timestamps_to_nanos() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE traces (
+                    trace_id INTEGER PRIMARY KEY,
+                    root_pid INTEGER NOT NULL,
+                    root_task_id INTEGER,
+                    root_start_ticks INTEGER NOT NULL,
+                    root_pid_namespace TEXT,
+                    root_generation INTEGER NOT NULL,
+                    display_name TEXT NOT NULL,
+                    profile_name TEXT NOT NULL,
+                    tags TEXT NOT NULL,
+                    lifecycle_state TEXT NOT NULL,
+                    health TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    started_at INTEGER,
+                    completed_at INTEGER,
+                    failed_at INTEGER
+                );
+                CREATE TABLE memberships (
+                    trace_id INTEGER NOT NULL,
+                    pid INTEGER NOT NULL,
+                    task_id INTEGER,
+                    start_ticks INTEGER NOT NULL,
+                    pid_namespace TEXT,
+                    generation INTEGER NOT NULL,
+                    inherited_from_pid INTEGER,
+                    inherited_from_task_id INTEGER,
+                    inherited_from_start_ticks INTEGER,
+                    inherited_from_pid_namespace TEXT,
+                    inherited_from_generation INTEGER,
+                    capture_enabled INTEGER NOT NULL,
+                    propagation_enabled INTEGER NOT NULL,
+                    membership_state TEXT NOT NULL,
+                    exit_code INTEGER,
+                    exit_observed_at INTEGER,
+                    PRIMARY KEY (trace_id, pid, start_ticks, generation)
+                );
+                "#,
+            )
+            .unwrap();
+        let sample_time = UNIX_EPOCH + Duration::from_secs(1);
+        let legacy_seconds = sample_time.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+        let expected_nanos =
+            i64::try_from(sample_time.duration_since(UNIX_EPOCH).unwrap().as_nanos()).unwrap();
+        connection
+            .execute(
+                "INSERT INTO traces (
+                    trace_id, root_pid, root_task_id, root_start_ticks, root_pid_namespace,
+                    root_generation, display_name, profile_name, tags, lifecycle_state, health,
+                    created_at, started_at, completed_at, failed_at
+                ) VALUES (1, 100, NULL, 200, NULL, 200, 'demo', 'default', '', 'completed', 'clean', ?1, ?1, ?1, NULL)",
+                [legacy_seconds],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO memberships (
+                    trace_id, pid, task_id, start_ticks, pid_namespace, generation,
+                    inherited_from_pid, inherited_from_task_id, inherited_from_start_ticks,
+                    inherited_from_pid_namespace, inherited_from_generation, capture_enabled,
+                    propagation_enabled, membership_state, exit_code, exit_observed_at
+                ) VALUES (1, 100, NULL, 200, NULL, 200, NULL, NULL, NULL, NULL, NULL, 1, 1, 'exited', 0, ?1)",
+                [legacy_seconds],
+            )
+            .unwrap();
+
+        crate::schema::initialize(&connection).unwrap();
+
+        let user_version: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        let created_at: i64 = connection
+            .query_row(
+                "SELECT created_at FROM traces WHERE trace_id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let exit_observed_at: i64 = connection
+            .query_row(
+                "SELECT exit_observed_at FROM memberships WHERE trace_id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let observed_at: Option<i64> = connection
+            .query_row(
+                "SELECT observed_at FROM memberships WHERE trace_id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(user_version, 1);
+        assert_eq!(created_at, expected_nanos);
+        assert_eq!(exit_observed_at, expected_nanos);
+        assert_eq!(observed_at, None);
+    }
 
     #[test]
     fn sqlite_round_trip_and_purge_are_consistent() {
@@ -144,7 +250,11 @@ mod tests {
         trace.health = TraceHealth::Degraded;
         storage.create_trace(trace.clone()).unwrap();
         storage
-            .upsert_membership(ProcessMembership::root(trace_id, process.clone()))
+            .upsert_membership(ProcessMembership::root(
+                trace_id,
+                process.clone(),
+                SystemTime::UNIX_EPOCH,
+            ))
             .unwrap();
         storage
             .append_event(DomainEvent::new(

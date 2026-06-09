@@ -96,7 +96,6 @@ pub fn run_live_verification(
         &config.stdio_continue_message,
         &config.stdio_stdout_message,
         &config.stdio_stderr_message,
-        config.process_signal_number,
         config.mmap.as_ref().map(|mmap| (mmap.length, mmap.offset)),
         config.resource_metrics.enabled,
         config.resource_metrics.include_system,

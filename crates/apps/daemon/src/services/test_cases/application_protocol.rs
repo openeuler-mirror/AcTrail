@@ -10,6 +10,7 @@ use model_core::payload::{
 };
 use model_core::process::ProcessIdentity;
 use payload_event::RawPayloadSegment;
+use semantic_action::{SemanticActionKind, SemanticActionReadStore};
 use store_read_contract::events::EventReadStore;
 use store_read_contract::payloads::{PayloadReadStore, PayloadSegmentQuery};
 
@@ -100,7 +101,11 @@ fn tls_payload_processing_persists_http_and_sse_application_events() {
         )
         .unwrap();
 
-    let sse_body = "event: token\ndata: {\"delta\":\"ok\"}\n\n";
+    let sse_body = concat!(
+        "event: token\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n",
+        "data: [DONE]\n\n",
+    );
     let response = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{}",
         sse_body.len(),
@@ -144,6 +149,26 @@ fn tls_payload_processing_persists_http_and_sse_application_events() {
             && payload.summary == "token"
             && payload.metadata.get("data_truncated").map(String::as_str) == Some("true")
     }));
+    let actions = wiring
+        .attach_service
+        .storage
+        .list_semantic_actions(trace_id)
+        .unwrap();
+    let response = actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmResponse)
+        .expect("inbound SSE payload should persist an llm.response action");
+    assert_eq!(
+        response
+            .attributes
+            .get("llm.response.output_text")
+            .map(String::as_str),
+        Some("ok")
+    );
+    assert!(response.evidence.iter().any(|evidence| {
+        evidence.role == "llm.response.payload"
+            && payloads_contain_id(&wiring.attach_service.storage, trace_id, evidence.id)
+    }));
 
     let payloads = wiring
         .attach_service
@@ -161,6 +186,26 @@ fn tls_payload_processing_persists_http_and_sse_application_events() {
     let request_text = String::from_utf8(payloads[0].bytes.clone()).unwrap();
     assert!(request_text.contains("Authorization: <redacted>"));
     assert!(!request_text.contains("Bearer secret"));
+}
+
+fn payloads_contain_id(
+    storage: &sqlite_storage::SqliteStorage,
+    trace_id: model_core::ids::TraceId,
+    evidence_id: u64,
+) -> bool {
+    storage
+        .list_payload_segments(
+            trace_id,
+            PayloadSegmentQuery {
+                segment_id: None,
+                direction: None,
+                limit: None,
+                include_bytes: false,
+            },
+        )
+        .unwrap()
+        .iter()
+        .any(|segment| segment.segment_id.get() == evidence_id)
 }
 
 #[test]

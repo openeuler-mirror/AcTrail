@@ -3,7 +3,9 @@
 use std::collections::BTreeMap;
 
 use config_core::daemon::ApplicationProtocolConfig;
-use model_core::payload::PayloadSegment;
+use model_core::ids::TraceId;
+use model_core::payload::{PayloadDirection, PayloadSegment, PayloadStreamKey};
+use model_core::process::ProcessIdentity;
 
 use super::ApplicationEventDraft;
 
@@ -11,21 +13,21 @@ use super::ApplicationEventDraft;
 mod parser;
 
 pub(super) struct Http1Analyzer {
-    config: ApplicationProtocolConfig,
-    buffers: BTreeMap<String, StreamBuffer>,
+    buffers: BTreeMap<StreamKey, StreamBuffer>,
 }
 
 impl Http1Analyzer {
-    pub(super) fn new(config: ApplicationProtocolConfig) -> Self {
+    pub(super) fn new(_config: ApplicationProtocolConfig) -> Self {
         Self {
-            config,
             buffers: BTreeMap::new(),
         }
     }
 
-    pub(super) fn analyze(
+    pub(super) fn analyze_with_config(
         &mut self,
         segment: &PayloadSegment,
+        config: &ApplicationProtocolConfig,
+        summary_only: bool,
     ) -> Result<Vec<ApplicationEventDraft>, String> {
         let text = match std::str::from_utf8(&segment.bytes) {
             Ok(text) => text,
@@ -33,19 +35,23 @@ impl Http1Analyzer {
         };
         let key = stream_key(segment);
         let buffer = self.buffers.entry(key.clone()).or_default();
-        buffer.append(text, self.config.sse_max_buffer_bytes)?;
-        if !buffer.starts_like_http_or_sse(self.config.sse_enabled) {
+        if summary_only {
+            buffer.append_summary_only(text, config.sse_max_buffer_bytes)?;
+        } else {
+            buffer.append(text, config.sse_max_buffer_bytes)?;
+        }
+        if !buffer.starts_like_http_or_sse(config.sse_enabled) {
             self.buffers.remove(&key);
             return Ok(Vec::new());
         }
 
         let mut drafts = Vec::new();
-        while let Some(message) = buffer.take_message(&self.config)? {
+        while let Some(message) = buffer.take_message(config, summary_only)? {
             drafts.push(ApplicationEventDraft {
-                payload: message.to_payload(segment, &self.config),
+                payload: message.to_payload(segment, config),
             });
-            if self.config.sse_enabled && message.is_sse() {
-                for payload in message.sse_events(&self.config)? {
+            if config.sse_enabled && message.is_sse() {
+                for payload in message.sse_events(config)? {
                     drafts.push(ApplicationEventDraft { payload });
                 }
             }
@@ -54,6 +60,46 @@ impl Http1Analyzer {
             self.buffers.remove(&key);
         }
         Ok(drafts)
+    }
+
+    pub(super) fn forget_trace(&mut self, trace_id: TraceId) {
+        self.buffers.retain(|key, _| key.trace_id != trace_id);
+    }
+
+    pub(super) fn forget_stream(&mut self, segment: &PayloadSegment) {
+        self.buffers.retain(|key, _| {
+            key.trace_id != segment.trace_id
+                || key.process != segment.process
+                || key.stream_key != segment.stream_key
+        });
+    }
+
+    #[cfg(test)]
+    pub(super) fn buffered_stream_count(&self) -> usize {
+        self.buffers.len()
+    }
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct StreamKey {
+    trace_id: TraceId,
+    process: ProcessIdentity,
+    stream_key: PayloadStreamKey,
+    direction: StreamDirectionKey,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum StreamDirectionKey {
+    Outbound,
+    Inbound,
+}
+
+impl From<PayloadDirection> for StreamDirectionKey {
+    fn from(value: PayloadDirection) -> Self {
+        match value {
+            PayloadDirection::Outbound => Self::Outbound,
+            PayloadDirection::Inbound => Self::Inbound,
+        }
     }
 }
 
@@ -64,6 +110,27 @@ struct StreamBuffer {
 
 impl StreamBuffer {
     fn append(&mut self, text: &str, max_buffer_bytes: u64) -> Result<(), String> {
+        self.append_checked(text, max_buffer_bytes)
+    }
+
+    fn append_summary_only(&mut self, text: &str, max_buffer_bytes: u64) -> Result<(), String> {
+        if self.text.is_empty() && parser::header_prefix_len(text).is_none() {
+            let first_line = text.lines().next().map(str::trim).unwrap_or_default();
+            if !parser::starts_like_http_message(first_line) {
+                return Ok(());
+            }
+        }
+        let prefix = parser::header_prefix_len(text)
+            .and_then(|prefix_len| text.get(..prefix_len))
+            .unwrap_or(text);
+        self.append_checked(prefix, max_buffer_bytes)?;
+        if let Some(prefix_len) = parser::header_prefix_len(&self.text) {
+            self.text.truncate(prefix_len);
+        }
+        Ok(())
+    }
+
+    fn append_checked(&mut self, text: &str, max_buffer_bytes: u64) -> Result<(), String> {
         let next_len = self
             .text
             .len()
@@ -85,16 +152,17 @@ impl StreamBuffer {
     fn take_message(
         &mut self,
         config: &ApplicationProtocolConfig,
+        summary_only: bool,
     ) -> Result<Option<parser::HttpMessage>, String> {
-        parser::take_message(&mut self.text, config)
+        parser::take_message(&mut self.text, config, summary_only)
     }
 }
 
-fn stream_key(segment: &PayloadSegment) -> String {
-    format!(
-        "{}:{}:{:?}",
-        segment.trace_id.get(),
-        segment.stream_key,
-        segment.direction
-    )
+fn stream_key(segment: &PayloadSegment) -> StreamKey {
+    StreamKey {
+        trace_id: segment.trace_id,
+        process: segment.process.clone(),
+        stream_key: segment.stream_key.clone(),
+        direction: StreamDirectionKey::from(segment.direction),
+    }
 }

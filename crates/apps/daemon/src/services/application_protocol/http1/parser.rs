@@ -8,14 +8,38 @@ use model_core::payload::PayloadSegment;
 
 pub(super) fn starts_like_http_or_sse(text: &str, sse_enabled: bool) -> bool {
     let first_line = text.lines().next().map(str::trim).unwrap_or_default();
-    first_line.starts_with("HTTP/")
-        || (first_line.contains(" HTTP/") && first_line.split_whitespace().count() >= 3)
-        || (sse_enabled && starts_like_sse(first_line))
+    starts_like_http_message(first_line) || (sse_enabled && starts_like_sse(first_line))
+}
+
+pub(super) fn starts_like_http_message(first_line: &str) -> bool {
+    if first_line.starts_with("HTTP/") {
+        return true;
+    }
+    let mut parts = first_line.split_whitespace();
+    let Some(method) = parts.next() else {
+        return false;
+    };
+    let Some(_) = parts.next() else {
+        return false;
+    };
+    let Some(version) = parts.next() else {
+        return false;
+    };
+    parts.next().is_none()
+        && method
+            .bytes()
+            .all(|byte| byte.is_ascii_uppercase() || byte == b'-')
+        && version.starts_with("HTTP/")
+}
+
+pub(super) fn header_prefix_len(text: &str) -> Option<usize> {
+    header_boundary(text).map(|(header_end, separator_len)| header_end + separator_len)
 }
 
 pub(super) fn take_message(
     text: &mut String,
     config: &ApplicationProtocolConfig,
+    summary_only: bool,
 ) -> Result<Option<HttpMessage>, String> {
     if text
         .lines()
@@ -23,7 +47,7 @@ pub(super) fn take_message(
         .map(str::trim)
         .is_some_and(starts_like_sse)
     {
-        if !config.sse_enabled {
+        if summary_only || !config.sse_enabled {
             text.clear();
         }
         return Ok(None);
@@ -34,6 +58,15 @@ pub(super) fn take_message(
     let header_text = &text[..header_end];
     let headers = parse_headers(header_text)?;
     let body_start = header_end + separator_len;
+    if summary_only {
+        let message = HttpMessage {
+            first_line: headers.first_line,
+            fields: headers.fields,
+            body: String::new(),
+        };
+        text.clear();
+        return Ok(Some(message));
+    }
     let (body, consumed) = if let Some(length) = headers.content_length {
         let message_end = body_start
             .checked_add(length)
@@ -388,7 +421,7 @@ mod tests {
     #[test]
     fn chunked_response_with_dechunked_sse_body_does_not_error_when_sse_is_disabled() {
         let mut text = claude_streaming_response_fragment();
-        let message = take_message(&mut text, &test_config(false))
+        let message = take_message(&mut text, &test_config(false), false)
             .unwrap()
             .expect("HTTP response headers");
 
@@ -401,7 +434,7 @@ mod tests {
     fn chunked_response_with_dechunked_sse_body_can_emit_sse_preview() {
         let config = test_config(true);
         let mut text = claude_streaming_response_fragment();
-        let message = take_message(&mut text, &config)
+        let message = take_message(&mut text, &config, false)
             .unwrap()
             .expect("HTTP response headers");
 

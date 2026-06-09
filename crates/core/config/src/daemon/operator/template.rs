@@ -95,6 +95,7 @@ process_seccomp_max_arg_bytes = 4096
 process_seccomp_pending_max_entries = 4096
 
 agent_invocation_enabled = false
+# Optional TLS sync probe-plan prewarm hints; agent identity comes from observed LLM requests.
 agent_invocation_command = opencode
 agent_invocation_command = .opencode
 agent_invocation_command = xiaoo

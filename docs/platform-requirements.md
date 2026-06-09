@@ -106,7 +106,7 @@ Expected result includes:
 
 ```text
 live verification passed
-process_events=exec,exit,fork,signal
+process_events=exec,exit,fork
 file_events=...
 net_events=...
 ipc_events=...
@@ -117,6 +117,7 @@ stdio_payloads=stderr:outbound,stdin:inbound,stdout:outbound
 
 If this fails before attach, do not ask testers to edit configs by hand. Treat it as a platform prerequisite failure or an implementation failure.
 AcTrail's process fork observation uses `sched/sched_process_fork`; the syscall tracepoint `syscalls/sys_enter_fork` is not required for this preflight.
+Default process lifecycle capture suppresses process signal events such as `SIGCHLD`.
 Some target kernels do not expose compatibility fd-alias tracepoints such as `syscalls/sys_enter_dup2`. AcTrail treats `dup2`/`dup3` alias tracepoints as optional: their absence can reduce fd alias fidelity, but it must not block process, network, file, or socket-payload collection.
 For launch-time process seccomp, config values such as `fork` and `vfork` are resolved through the target architecture's syscall map. Architectures without standalone `fork` or `vfork` syscalls use the available process-creation syscalls such as `clone` and `clone3`; emitted trace metadata still records the actual syscall that fired.
 
@@ -187,7 +188,7 @@ After any example has produced a completed trace:
 Expected:
 
 - The output file is pretty JSON with a top-level `resourceSpans` field.
-- Examples that produce semantic actions contain spans with `actrail.action.kind`, such as `process.exec`, `file.modify`, `http.message`, `llm.request`, or `enforcement.decision`.
+- Examples that produce semantic actions contain spans with `actrail.action.kind`, such as `process.exec`, `file.read`, `file.write`, `file.modify`, `http.message`, `llm.request`, `llm.response`, or `enforcement.decision`.
 
 Some low-level facts currently do not have OTEL spans. For example, raw network transport rows, IPC rows, resource samples, provider labels, and stdio payloads should still be validated through `actrailviewer` views, JSON graph export, or payload commands until they have dedicated semantic export coverage.
 

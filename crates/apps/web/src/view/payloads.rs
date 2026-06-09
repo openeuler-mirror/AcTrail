@@ -38,6 +38,12 @@ fn payload_base_json(segment: &PayloadSegment) -> String {
     output.push(',');
     json::field(
         &mut output,
+        "observed_at_unix_nanos",
+        &json::time_nanos(segment.observed_at),
+    );
+    output.push(',');
+    json::field(
+        &mut output,
         "direction",
         &json::string(&format!("{:?}", segment.direction)),
     );

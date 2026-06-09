@@ -146,7 +146,7 @@ pub(super) fn process_seccomp_config(node: ConfigNode) -> Result<ProcessSeccompC
 pub(super) fn agent_invocation_config(node: ConfigNode) -> Result<AgentInvocationConfig, String> {
     Ok(AgentInvocationConfig {
         enabled: node.required_bool("enabled")?,
-        commands: node.repeated("command")?.cloned().collect(),
+        commands: node.repeated_optional("command").cloned().collect(),
     })
 }
 

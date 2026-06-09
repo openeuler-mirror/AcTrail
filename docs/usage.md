@@ -209,8 +209,8 @@ Expected proof for these cases is:
 
 ```text
 payload rows: outbound TlsUserSpace, success, captured size equals original size
-actions: complete successful llm.request
-OTEL export: at least one span with actrail.action.kind=llm.request
+actions: complete successful llm.request, plus llm.response when inbound response payload is retained
+OTEL export: spans with actrail.action.kind=llm.request, and llm.response when that action was assembled
 ```
 
 The opencode case also shows proxy tunnel facts such as `CONNECT api.deepseek.com:443` when the host must reach the network through the local proxy.
@@ -230,6 +230,8 @@ Override address or port for a local run:
 ```
 
 `actrailweb` reads storage; it does not start collection by itself.
+
+The current UI is centered on the semantic action graph: the left rail selects a trace, the main canvas renders the agent process and recursively expanded action/evidence swimlanes, and the right panel shows rows, payload text, attributes, and raw JSON for the selected node. It reads low-level trace snapshots for counts/details and `/api/traces/<TRACE_ID>/action-tree` for stored semantic action links; the browser does not invent semantic relationships that were not emitted by the observation pipeline.
 
 ## 11. Stop
 

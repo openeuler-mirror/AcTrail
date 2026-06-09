@@ -26,6 +26,11 @@ fn proc_lifecycle_request_skips_file_and_mmap_programs() {
     );
     assert!(
         !plan
+            .should_load_program("handle_signal_generate")
+            .expect("mapped program")
+    );
+    assert!(
+        !plan
             .should_load_program("handle_sys_enter_openat")
             .expect("mapped program")
     );

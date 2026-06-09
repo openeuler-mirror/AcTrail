@@ -1,6 +1,9 @@
 //! Schema boundaries for traces, events, diagnostics, and tombstones.
 
 use rusqlite::Connection;
+use std::time::Duration;
+
+const SQLITE_SCHEMA_VERSION_NANOS_TIME: i32 = 1;
 
 const CREATE_TABLES_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS traces (
@@ -26,22 +29,20 @@ CREATE TABLE IF NOT EXISTS memberships (
     pid INTEGER NOT NULL,
     task_id INTEGER,
     start_ticks INTEGER NOT NULL,
-    start_unix_seconds INTEGER,
-    start_unix_millis INTEGER,
     pid_namespace TEXT,
     generation INTEGER NOT NULL,
     inherited_from_pid INTEGER,
     inherited_from_task_id INTEGER,
     inherited_from_start_ticks INTEGER,
-    inherited_from_start_unix_seconds INTEGER,
-    inherited_from_start_unix_millis INTEGER,
     inherited_from_pid_namespace TEXT,
     inherited_from_generation INTEGER,
+    observed_at INTEGER,
     capture_enabled INTEGER NOT NULL,
     propagation_enabled INTEGER NOT NULL,
     membership_state TEXT NOT NULL,
     exit_code INTEGER,
     exit_observed_at INTEGER,
+    exit_observation_source TEXT,
     PRIMARY KEY (trace_id, pid, start_ticks, generation)
 );
 
@@ -172,7 +173,65 @@ CREATE TABLE IF NOT EXISTS tombstones (
 
 pub fn initialize(connection: &Connection) -> Result<(), rusqlite::Error> {
     connection.execute_batch(CREATE_TABLES_SQL)?;
-    migrate_payload_operation_columns(connection)
+    migrate_membership_timing_columns(connection)?;
+    migrate_payload_operation_columns(connection)?;
+    migrate_time_columns_to_nanos(connection)
+}
+
+pub fn validate_read_schema(connection: &Connection) -> Result<(), rusqlite::Error> {
+    if user_version(connection)? < SQLITE_SCHEMA_VERSION_NANOS_TIME {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    Ok(())
+}
+
+fn migrate_membership_timing_columns(connection: &Connection) -> Result<(), rusqlite::Error> {
+    add_column_if_missing(connection, "memberships", "observed_at", "INTEGER")?;
+    add_column_if_missing(connection, "memberships", "exit_observation_source", "TEXT")
+}
+
+fn migrate_time_columns_to_nanos(connection: &Connection) -> Result<(), rusqlite::Error> {
+    if user_version(connection)? >= SQLITE_SCHEMA_VERSION_NANOS_TIME {
+        return Ok(());
+    }
+
+    let nanos_per_second = i64::try_from(Duration::from_secs(1).as_nanos())
+        .expect("nanoseconds per second exceed i64");
+    connection.execute_batch("BEGIN IMMEDIATE")?;
+    let result = (|| {
+        for (table, column) in [
+            ("traces", "created_at"),
+            ("traces", "started_at"),
+            ("traces", "completed_at"),
+            ("traces", "failed_at"),
+            ("memberships", "observed_at"),
+            ("memberships", "exit_observed_at"),
+            ("events", "observed_at"),
+            ("payload_segments", "observed_at"),
+            ("semantic_actions", "start_time"),
+            ("semantic_actions", "end_time"),
+            ("diagnostics", "emitted_at"),
+            ("tombstones", "cleaned_at"),
+        ] {
+            connection.execute(
+                &format!("UPDATE {table} SET {column} = {column} * ?1 WHERE {column} IS NOT NULL"),
+                [nanos_per_second],
+            )?;
+        }
+        connection.pragma_update(None, "user_version", SQLITE_SCHEMA_VERSION_NANOS_TIME)?;
+        Ok(())
+    })();
+    match result {
+        Ok(()) => connection.execute_batch("COMMIT"),
+        Err(error) => {
+            let _ = connection.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
+}
+
+fn user_version(connection: &Connection) -> Result<i32, rusqlite::Error> {
+    connection.pragma_query_value(None, "user_version", |row| row.get(0))
 }
 
 fn migrate_payload_operation_columns(connection: &Connection) -> Result<(), rusqlite::Error> {

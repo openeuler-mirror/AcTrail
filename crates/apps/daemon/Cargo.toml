@@ -35,6 +35,7 @@ store_write_contract = { path = "../../contracts/store/write" }
 trace_runtime = { path = "../../core/trace_runtime" }
 tls_payload_core = { path = "../../tools/tls_payload_core" }
 tls_payload_sync = { path = "../../core/tls_payload_sync" }
+tls_probe_point_finder = { path = "../../tools/tls_probe_point_finder" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 uds_control_server = { path = "../../adapters/control/uds/server" }

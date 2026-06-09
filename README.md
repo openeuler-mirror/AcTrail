@@ -18,7 +18,7 @@ actraild -> libbpf eBPF collector -> ingest/analyzers -> AcTrail storage -> actr
 | `actraild` | 采集 daemon，负责 eBPF collector、资源 sampler、analyzer 生命周期、trace attach 和 storage 写入。 |
 | `actrailctl` | 控制面 CLI，用于 doctor、launch、track-add、track-remove、list-traces、clean。 |
 | `actrailviewer` | 只读 CLI viewer，通过配置里的 `storage_path` 查看 trace、事件、网络、payload、诊断和 JSON export。 |
-| `actrailweb` | 只读 Web UI，通过配置里的 `storage_path` 展示 trace 列表、Timeline、Process Tree、Resources、事件、进程、payload 和诊断。 |
+| `actrailweb` | 只读 Web UI，通过配置里的 `storage_path` 展示 trace 列表、指标摘要、agent-centered action swimlane/tree，以及右侧 JSON/payload/detail 面板。 |
 
 ## Quick Start
 
@@ -49,7 +49,7 @@ cargo build --release
 | --- | --- | --- |
 | Quick start | Process lifecycle and local network transport through `actraild -> actrailctl -> actrailviewer/actrailweb` | [docs/examples/01.quick-start/README.md](docs/examples/01.quick-start/README.md) |
 | LLM HTTP payload and semantics | Real OpenAI-compatible HTTPS LLM request payload capture, HTTPS/1.1 semantic rows, configurable external HTTPS/2, and deterministic local HTTPS/2 frame/DATA capture | [docs/examples/02.llm-http-payload-capture/README.md](docs/examples/02.llm-http-payload-capture/README.md) |
-| Extended observation | File path mutations, regular file I/O, MAP_SHARED mmap, IPC, stdio payload, resource metrics, provider labels, timeline/process-tree Web UI | [docs/examples/03.extended-observation-e2e/README.md](docs/examples/03.extended-observation-e2e/README.md) |
+| Extended observation | File path mutations, regular file I/O, MAP_SHARED mmap, IPC, stdio payload, resource metrics, provider labels, viewer output, and actrailweb action-tree UI | [docs/examples/03.extended-observation-e2e/README.md](docs/examples/03.extended-observation-e2e/README.md) |
 | Fanotify enforcement | Trace-scoped permission enforcement with allow/deny file access decisions persisted as Enforcement events | [docs/examples/04.fanotify-enforcement-e2e/README.md](docs/examples/04.fanotify-enforcement-e2e/README.md) |
 | HTTP payload unified | Non-TLS HTTP socket plaintext payload capture, HTTP sniff gate, and the same payload/Application viewer surface used by HTTPS | [docs/examples/05.http-payload-unified/README.md](docs/examples/05.http-payload-unified/README.md) |
 | xiaoO TLS payload capture | HTTPS payload capture for xiaoO through `tls-sync`; rustls probe points are resolved by finder fast at launch time | [docs/examples/06.xiaoo-tls-capture/README.md](docs/examples/06.xiaoo-tls-capture/README.md) |
@@ -60,14 +60,14 @@ Recommended reading order is `01 -> 05 -> 02 -> 06 -> 03 -> 04`: start with atta
 
 | Area | Current public entry |
 | --- | --- |
-| Process lifecycle | `actrailviewer processes/events` and `actrailweb` Process Tree |
-| Network transport | `actrailviewer network/events` and `actrailweb` Timeline |
-| File and IPC events | `actrailviewer events` and `actrailweb` event views |
+| Process lifecycle | `actrailviewer processes/events` and actrailweb process metrics/details |
+| Network transport | `actrailviewer network/events` and actrailweb event evidence details when linked to semantic actions |
+| File and IPC events | `actrailviewer events` and actrailweb action/evidence detail panel |
 | TLS plaintext payload | Dynamic OpenSSL and configured executable TLS payload segments through `actrailviewer payloads/payload` and `actrailweb` payload detail |
 | HTTP socket plaintext payload | `socket-plaintext-payload` capture for non-TLS HTTP, filtered by the daemon HTTP sniff gate and shown through the same payload viewer commands |
 | HTTP/1.x semantic events | Request/response/SSE `Application` rows derived from retained plaintext payloads |
 | HTTP/2 frame/DATA facts | Connection preface, frame, and DATA `Application` rows derived from retained TLS plaintext payloads |
-| Resource metrics | `actrailviewer events` Resource rows and `actrailweb` Resources tab |
+| Resource metrics | `actrailviewer events` Resource rows and actrailweb trace metric/detail surfaces |
 | Stdio payload | `actrailviewer payloads/payload` and `actrailweb` payload detail |
 | Provider labels | Rule-set classifier output as durable `Label` events |
 | Fanotify enforcement | Trace-scoped allow/deny decisions as durable `Enforcement` events |

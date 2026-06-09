@@ -66,7 +66,3 @@ fn decode_hex(value: &str) -> Result<Vec<u8>, String> {
     }
     Ok(bytes)
 }
-
-pub(super) fn decode_hex_string(value: &str) -> Result<String, String> {
-    String::from_utf8(decode_hex(value)?).map_err(|error| format!("hex utf8: {error}"))
-}

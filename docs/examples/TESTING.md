@@ -107,15 +107,33 @@ Purpose: TLS plaintext payload capture and Application events.
 
 No-network deterministic HTTP/2 path is manual and uses the files under `http2-local/`:
 
+Terminal A:
+
 ```bash
 python3 docs/examples/clean.py --example http2-local
 ./target/release/actraild --config docs/examples/02.llm-http-payload-capture/http2-local/operator.conf start
+```
+
+Terminal B starts the local TLS+h2 server and prints a port:
+
+```bash
+python3 docs/examples/02.llm-http-payload-capture/http2-local/workload.py \
+  --target-config docs/examples/02.llm-http-payload-capture/http2-local/workload.conf \
+  --serve-only
+```
+
+Terminal C launches the TLS client under AcTrail. Replace `<PORT>` with the port printed by Terminal B:
+
+```bash
 ./target/release/actrailctl launch \
   --config docs/examples/02.llm-http-payload-capture/http2-local/operator.conf \
   --name http2-local-transfer \
   -- \
-  python3 docs/examples/02.llm-http-payload-capture/http2-local/workload.py \
-  --target-config docs/examples/02.llm-http-payload-capture/http2-local/workload.conf
+  curl --http2 --silent --show-error --insecure \
+  --request POST \
+  --header "Content-Type: application/json" \
+  --data '{"model":"actrail-http2","messages":[{"role":"user","content":"payload capture over h2"}],"stream":false}' \
+  "https://127.0.0.1:<PORT>/v1/chat/completions"
 ```
 
 Record the trace id printed by `actrailctl launch`, then verify with:
@@ -131,11 +149,15 @@ External OpenAI-compatible HTTP/1.1 path requires network and a provider API key
 test -n "${DEEPSEEK_API_KEY:-}"
 python3 docs/examples/clean.py --example llm-http1
 ./target/release/actraild --config docs/examples/02.llm-http-payload-capture/external-openai-compatible/http1-operator.conf start
+eval "$(bash docs/examples/02.llm-http-payload-capture/external-openai-compatible/http1.sh prepare)"
+trap 'rm -rf "$ACTRAIL_CURL_TMPDIR"' EXIT
 ./target/release/actrailctl launch \
   --config docs/examples/02.llm-http-payload-capture/external-openai-compatible/http1-operator.conf \
   --name llm-http1 \
   -- \
-  bash docs/examples/02.llm-http-payload-capture/external-openai-compatible/http1.sh
+  curl --config "$ACTRAIL_CURL_CONFIG" --data-binary @"$ACTRAIL_CURL_BODY"
+rm -rf "$ACTRAIL_CURL_TMPDIR"
+trap - EXIT
 ```
 
 External OpenAI-compatible HTTP/2 path has the same provider environment contract, plus an ALPN requirement: the active provider/CDN/proxy path must actually negotiate HTTP/2. If it negotiates HTTP/1.1, the regression marks this external HTTP/2 sub-check as skipped and relies on the external HTTP/1.1 path plus the deterministic local HTTP/2 workload.
@@ -144,11 +166,15 @@ External OpenAI-compatible HTTP/2 path has the same provider environment contrac
 test -n "${DEEPSEEK_API_KEY:-}"
 python3 docs/examples/clean.py --example llm-http2
 ./target/release/actraild --config docs/examples/02.llm-http-payload-capture/external-openai-compatible/http2-operator.conf start
+eval "$(bash docs/examples/02.llm-http-payload-capture/external-openai-compatible/http2.sh prepare)"
+trap 'rm -rf "$ACTRAIL_CURL_TMPDIR"' EXIT
 ./target/release/actrailctl launch \
   --config docs/examples/02.llm-http-payload-capture/external-openai-compatible/http2-operator.conf \
   --name llm-http2 \
   -- \
-  bash docs/examples/02.llm-http-payload-capture/external-openai-compatible/http2.sh
+  curl --config "$ACTRAIL_CURL_CONFIG" --data-binary @"$ACTRAIL_CURL_BODY"
+rm -rf "$ACTRAIL_CURL_TMPDIR"
+trap - EXIT
 ```
 
 Expected result: payload rows are visible through `actrailviewer payloads`; HTTP/1.1 rows include an outbound `Application request` for `POST /chat/completions`; HTTP/2 rows include `Application frame` and `Application data` for a DATA frame carrying the request body when curl reports `ACTRAIL_CURL_HTTP_VERSION=2`. Do not require an inbound response row or HTTP/2 connection preface for this transfer test.
@@ -170,7 +196,7 @@ python3 docs/examples/clean.py --example extended-observation
 
 After the workload prints `workload_pid=<PID>`, run `actrailctl track-add` from another terminal, then return to the workload terminal and enter `actrail-stdio-stdin-e2e` and `actrail-stdio-continue-e2e` when prompted. Verify with `actrailviewer summary`, `processes`, `events --head 140`, `network --head 20`, and `payloads --head 12`.
 
-Expected result: viewer output shows process fork/exec/exit and signal rows; File rows for regular file, path mutation, truncate, and `mmap_shared`; IPC rows for pipe, FIFO, and Unix socket; Net rows for bind/listen/connect/accept/send/recv; Label rows for `actrail-local-tcp`; Resource rows for `process_tree`; and Stdio payload rows whose `SOURCE` column is `Stdio`. `Completed/Degraded` with only the documented `BootstrapGap` diagnostic is acceptable for this manual attach workflow: it means the workload process existed before `track-add`, so AcTrail can snapshot the already-running process but cannot reconstruct pre-attach live eBPF history.
+Expected result: viewer output shows process fork/exec/exit rows and no default process signal rows; File rows for regular file, path mutation, truncate, and `mmap_shared`; IPC rows for pipe, FIFO, and Unix socket; Net rows for bind/listen/connect/accept/send/recv; Label rows for `actrail-local-tcp`; Resource rows for `process_tree`; and Stdio payload rows whose `SOURCE` column is `Stdio`. `Completed/Degraded` with only the documented `BootstrapGap` diagnostic is acceptable for this manual attach workflow: it means the workload process existed before `track-add`, so AcTrail can snapshot the already-running process but cannot reconstruct pre-attach live eBPF history.
 
 For maintainer regression only, `./target/release/ebpf_probe verify-live --config docs/examples/03.extended-observation-e2e/observation.conf` may be run as an additional assertion pass, but it is not the transfer-test substitute for inspecting viewer output.
 
@@ -267,7 +293,7 @@ python3 docs/examples/clean.py --example xiaoo-claude
 python3 docs/examples/07.xiaoo-claude-agent-invocation/run_e2e.py
 ```
 
-Expected result: terminal output contains `ACTRAIL_AGENT_TREE_OK`, `agent_invocation_trace_id=<TRACE_ID>`, and `agent invocation e2e complete`. The script exports pretty OTLP JSON to `/tmp/actrail-xiaoo-claude-agent-invocation.otlp.json` and validates that it contains a seccomp-observed `process.exec` span for `claude -p`, an `llm.request` span for the same Claude process, and an `agent.invocation` span whose child command line contains `claude`. The invocation parent is Claude's direct launcher and may be a shell or timeout wrapper.
+Expected result: terminal output contains `ACTRAIL_AGENT_TREE_OK`, `agent_invocation_trace_id=<TRACE_ID>`, and `agent invocation e2e complete`. The script exports pretty OTLP JSON to `/tmp/actrail-xiaoo-claude-agent-invocation.otlp.json` and validates that it contains a seccomp-observed `process.exec` span for `claude -p`, an `llm.request` span for the same Claude process, and an `agent.invocation` span whose `agent.invocation.evidence_action_id` points to that Claude `llm.request`. The invocation parent is Claude's direct launcher and may be a shell or timeout wrapper.
 
 This example intentionally enables TLS payload capture because `agent.invocation` is generated from child LLM evidence, not from command names alone.
 

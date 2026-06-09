@@ -1,5 +1,6 @@
 //! Versioned line codec for sync TLS runtime events.
 
+use std::io::Write;
 use std::str::FromStr;
 
 use tls_payload_core::PayloadDirection;
@@ -10,6 +11,7 @@ const EVENT_VERSION: &str = "v1";
 const FIELD_SEPARATOR: char = '\t';
 const PAYLOAD_OPCODE: &str = "payload";
 const DECISION_OPCODE: &str = "decision";
+const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PayloadEvent {
@@ -43,36 +45,50 @@ pub enum SyncEvent {
 }
 
 pub fn encode_event_line(event: &SyncEvent) -> Vec<u8> {
-    let fields = match event {
-        SyncEvent::Payload(event) => vec![
-            EVENT_VERSION.to_string(),
-            PAYLOAD_OPCODE.to_string(),
-            event.trace_id.to_string(),
-            event.pid.to_string(),
-            event.direction.as_str().to_string(),
-            event.provider.clone(),
-            event.symbol.clone(),
-            event.stream_key.to_string(),
-            event.sequence.to_string(),
-            encode_hex(&event.bytes),
-        ],
-        SyncEvent::Decision(event) => vec![
-            EVENT_VERSION.to_string(),
-            DECISION_OPCODE.to_string(),
-            event.trace_id.to_string(),
-            event.pid.to_string(),
-            event.direction.as_str().to_string(),
-            event.provider.clone(),
-            event.symbol.clone(),
-            event.stream_key.to_string(),
-            event.sequence.to_string(),
-            event.action.clone(),
-            encode_hex(event.reason.as_bytes()),
-        ],
-    };
-    let mut line = fields.join(&FIELD_SEPARATOR.to_string()).into_bytes();
-    line.push(b'\n');
+    let mut line = Vec::new();
+    write_event_line(&mut line, event).expect("writing to Vec should not fail");
     line
+}
+
+pub fn write_event_line(writer: &mut impl Write, event: &SyncEvent) -> SyncResult<()> {
+    match event {
+        SyncEvent::Payload(event) => {
+            write_fields(
+                writer,
+                &[
+                    EVENT_VERSION,
+                    PAYLOAD_OPCODE,
+                    &event.trace_id.to_string(),
+                    &event.pid.to_string(),
+                    event.direction.as_str(),
+                    &event.provider,
+                    &event.symbol,
+                    &event.stream_key.to_string(),
+                    &event.sequence.to_string(),
+                ],
+            )?;
+            write_hex(writer, &event.bytes)?;
+        }
+        SyncEvent::Decision(event) => {
+            write_fields(
+                writer,
+                &[
+                    EVENT_VERSION,
+                    DECISION_OPCODE,
+                    &event.trace_id.to_string(),
+                    &event.pid.to_string(),
+                    event.direction.as_str(),
+                    &event.provider,
+                    &event.symbol,
+                    &event.stream_key.to_string(),
+                    &event.sequence.to_string(),
+                    &event.action,
+                ],
+            )?;
+            write_hex(writer, event.reason.as_bytes())?;
+        }
+    }
+    writer.write_all(b"\n").map_err(sync_io_error)
 }
 
 pub fn decode_event_line(line: &[u8]) -> SyncResult<SyncEvent> {
@@ -144,12 +160,34 @@ where
         .map_err(|error| SyncError::new(format!("parse {name}: {error}")))
 }
 
-fn encode_hex(bytes: &[u8]) -> String {
-    let mut value = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        value.push_str(&format!("{byte:02x}"));
+fn write_fields(writer: &mut impl Write, fields: &[&str]) -> SyncResult<()> {
+    for (index, field) in fields.iter().enumerate() {
+        if index != 0 {
+            write_separator(writer)?;
+        }
+        writer.write_all(field.as_bytes()).map_err(sync_io_error)?;
     }
-    value
+    write_separator(writer)
+}
+
+fn write_separator(writer: &mut impl Write) -> SyncResult<()> {
+    let separator = [FIELD_SEPARATOR as u8];
+    writer.write_all(&separator).map_err(sync_io_error)
+}
+
+fn write_hex(writer: &mut impl Write, bytes: &[u8]) -> SyncResult<()> {
+    for byte in bytes {
+        let encoded = [
+            HEX_DIGITS[(byte >> 4) as usize],
+            HEX_DIGITS[(byte & 0x0f) as usize],
+        ];
+        writer.write_all(&encoded).map_err(sync_io_error)?;
+    }
+    Ok(())
+}
+
+fn sync_io_error(error: std::io::Error) -> SyncError {
+    SyncError::new(error.to_string())
 }
 
 fn decode_hex(value: &str) -> SyncResult<Vec<u8>> {
