@@ -16,7 +16,7 @@ run_direct_claude_case = DIRECT_STEPS.run_direct_claude_case
 
 
 CASE_ID = "e2e-claude"
-TITLE = "E2E with Claude Code LLM request capture"
+TITLE = "E2E with Claude Code LLM exchange capture"
 SUITES = {"quick", "agent", "payload", "full"}
 WORKLOAD_CONFIG = "tests/payload/claude-code/workload.conf"
 

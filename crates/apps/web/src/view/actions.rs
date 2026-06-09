@@ -1,12 +1,9 @@
 //! Semantic action tree JSON for the web UI.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use model_core::ids::TraceId;
-use semantic_action::{
-    SemanticAction, SemanticActionLink, SemanticActionLinkConfidence, SemanticActionLinkRole,
-    SemanticActionReadStore,
-};
+use semantic_action::{SemanticAction, SemanticActionLink, SemanticActionReadStore};
 use sqlite_storage::SqliteStorage;
 use sqlite_storage::semantic_actions::{SemanticActionChildRow, SemanticActionSummary};
 
@@ -14,10 +11,12 @@ use crate::json;
 
 const NODE_ID_AGENT: &str = "agent-process";
 const AGENT_ACTION_ROLE: &str = "agent.performed_action";
-const AGENT_START_COMMAND_KIND: &str = "command.invocation";
 const AGENT_ROOT_ACTION_KINDS: &[&str] = &[
     "agent.invocation",
     "command.invocation",
+    "file.modify",
+    "file.read",
+    "file.write",
     "llm.request",
     "llm.response",
 ];
@@ -176,7 +175,7 @@ fn agent_root_children(
     trace_id: TraceId,
     agent: &SemanticAction,
 ) -> Result<Vec<SemanticActionChildRow>, String> {
-    let mut rows = storage
+    storage
         .semantic_action_children_matching_kinds(
             trace_id,
             &agent.action_id,
@@ -189,20 +188,7 @@ fn agent_root_children(
                 "read observed agent children failed: {}: {}",
                 error.stage, error.message
             )
-        })?;
-    if let Some(command) = agent_start_command_child(storage, trace_id, agent)? {
-        if !rows
-            .iter()
-            .any(|row| row.action.action_id == command.action.action_id)
-        {
-            rows.push(command);
-            rows.sort_by(|left, right| {
-                (left.action.start_time, left.action.action_id.as_str())
-                    .cmp(&(right.action.start_time, right.action.action_id.as_str()))
-            });
-        }
-    }
-    Ok(rows)
+        })
 }
 
 fn agent_root_child_count(
@@ -213,53 +199,7 @@ fn agent_root_child_count(
     Ok(agent_root_children(storage, trace_id, agent)?.len())
 }
 
-fn agent_start_command_child(
-    storage: &mut SqliteStorage,
-    trace_id: TraceId,
-    agent: &SemanticAction,
-) -> Result<Option<SemanticActionChildRow>, String> {
-    let Some(command) = load_agent_start_command(storage, trace_id, agent)? else {
-        return Ok(None);
-    };
-    let child_count = storage
-        .semantic_action_child_count(trace_id, &command.action_id, detail_link_roles())
-        .map_err(|error| {
-            format!(
-                "read agent start command child count failed: {}: {}",
-                error.stage, error.message
-            )
-        })?;
-    Ok(Some(SemanticActionChildRow {
-        link: SemanticActionLink {
-            trace_id,
-            parent_action_id: NODE_ID_AGENT.to_string(),
-            child_action_id: command.action_id.clone(),
-            role: SemanticActionLinkRole::AgentPerformedAction,
-            confidence: SemanticActionLinkConfidence::Derived,
-            evidence: command.evidence.clone(),
-            attributes: BTreeMap::new(),
-        },
-        action: command,
-        child_count,
-    }))
-}
-
-fn load_agent_start_command(
-    storage: &mut SqliteStorage,
-    trace_id: TraceId,
-    agent: &SemanticAction,
-) -> Result<Option<SemanticAction>, String> {
-    storage
-        .semantic_action_for_process_kind(trace_id, &agent.process, AGENT_START_COMMAND_KIND)
-        .map_err(|error| {
-            format!(
-                "read agent start command failed: {}: {}",
-                error.stage, error.message
-            )
-        })
-}
-
-fn action_json(action: &SemanticAction) -> String {
+pub(super) fn action_json(action: &SemanticAction) -> String {
     let mut output = String::from("{");
     json::field(&mut output, "id", &json::string(&action.action_id));
     output.push(',');

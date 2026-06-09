@@ -13,7 +13,8 @@ def opencode_output_summary(
     trace_id: int,
     payload_count: int,
     response_count: int,
-    span_count: int,
+    request_span_count: int,
+    response_span_count: int,
     launch_output: str,
     evidence_text: str,
 ) -> str:
@@ -21,7 +22,8 @@ def opencode_output_summary(
         f"opencode_trace_id={trace_id}\n"
         f"opencode_payload_segments={payload_count}\n"
         f"opencode_response_payload_segments={response_count}\n"
-        f"opencode_llm_request_spans={span_count}\n"
+        f"opencode_llm_request_spans={request_span_count}\n"
+        f"opencode_llm_response_spans={response_span_count}\n"
         f"{launch_output}\n"
         f"{evidence_text}"
     )

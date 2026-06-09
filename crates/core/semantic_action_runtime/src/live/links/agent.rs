@@ -10,7 +10,7 @@ use semantic_action::{
 use crate::live::actions::ATTR_AGENT_IDENTITY_STATUS;
 use crate::live::process_parent::{parent_identity_has_conflict, parent_process_from_action};
 
-use super::shared::{ActionLinkKey, invalidate_child_links};
+use super::shared::{ActionLinkKey, invalidate_child_links, is_nested_file_write_event};
 
 const ATTR_AGENT_ACTION_SEQUENCE: &str = "agent.performed_action.sequence";
 
@@ -163,6 +163,9 @@ fn is_observed_agent_process(action: &SemanticAction) -> bool {
 }
 
 fn agent_performed_action_candidate(action: &SemanticAction) -> bool {
+    if is_nested_file_write_event(action) {
+        return false;
+    }
     matches!(
         action.kind,
         SemanticActionKind::LlmRequest

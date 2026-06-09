@@ -95,7 +95,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { RefreshCw, Search, X } from '@lucide/vue';
 
-import { listTraces, readActionTree, readActionTreeRoot, readPayload, readTrace } from './api';
+import { listTraces, readActionTreeRoot, readCommands, readPayload, readTrace } from './api';
 import JsonTree from './components/JsonTree.vue';
 import TraceTabs from './tabs/TraceTabs.vue';
 import { TAB_DEFINITIONS, TAB_IDS } from './tabs/registry';
@@ -106,13 +106,14 @@ const traces = ref([]);
 const selectedTraceId = ref(null);
 const traceDetail = ref(null);
 const actionTree = ref(emptyActionTree());
+const commands = ref(emptyCommands());
 const selectedDetailId = ref(null);
 const selectedDetail = ref(null);
 const query = ref('');
 const error = ref('');
 const payloadText = ref('');
 let activeTraceLoad = null;
-let activeActionTreeLoad = null;
+let activeCommandsLoad = null;
 let activePayloadLoad = null;
 
 const selectedTrace = computed(() =>
@@ -135,6 +136,9 @@ const activeTabProps = computed(() => {
     props.traceKey = selectedTraceId.value ?? 'no-trace';
     props.selectedDetailId = selectedDetailId.value;
     props.selectedDetail = selectedDetail.value;
+  }
+  if (activeTab.value === TAB_IDS.commands) {
+    props.commands = commands.value;
   }
   return props;
 });
@@ -166,7 +170,7 @@ watch(selectedTraceId, async (traceId) => {
 });
 
 watch(activeTab, async () => {
-  await ensureFullActionTreeForActiveTab();
+  await ensureCommandsForActiveTab();
 });
 
 watch(detail, async (nextDetail) => {
@@ -215,13 +219,14 @@ async function loadTrace(traceId) {
   clearDetail();
   traceDetail.value = null;
   actionTree.value = emptyActionTree();
+  commands.value = emptyCommands();
   try {
     error.value = '';
     const [detailData, rootData] = await Promise.all([readTrace(traceId), readActionTreeRoot(traceId)]);
     if (activeTraceLoad === token && selectedTraceId.value === traceId) {
       traceDetail.value = detailData;
       actionTree.value = emptyActionTree(rootData.summary, rootData);
-      await ensureFullActionTreeForActiveTab();
+      await ensureCommandsForActiveTab();
     }
   } catch (err) {
     if (activeTraceLoad === token && selectedTraceId.value === traceId) {
@@ -230,30 +235,26 @@ async function loadTrace(traceId) {
   }
 }
 
-async function ensureFullActionTreeForActiveTab() {
+async function ensureCommandsForActiveTab() {
   const traceId = selectedTraceId.value;
-  if (!traceId || !tabNeedsFullActionTree(activeTab.value)) {
+  if (!traceId || activeTab.value !== TAB_IDS.commands) {
     return;
   }
-  if (actionTree.value?.loadedTraceId === traceId) {
+  if (commands.value?.loadedTraceId === traceId) {
     return;
   }
   const token = Symbol();
-  activeActionTreeLoad = token;
+  activeCommandsLoad = token;
   try {
-    const data = await readActionTree(traceId);
-    if (activeActionTreeLoad === token && selectedTraceId.value === traceId) {
-      actionTree.value = withSummary(data, traceId);
+    const data = await readCommands(traceId);
+    if (activeCommandsLoad === token && selectedTraceId.value === traceId) {
+      commands.value = withCommandTrace(data, traceId);
     }
   } catch (err) {
-    if (activeActionTreeLoad === token && selectedTraceId.value === traceId) {
+    if (activeCommandsLoad === token && selectedTraceId.value === traceId) {
       error.value = String(err.message ?? err);
     }
   }
-}
-
-function tabNeedsFullActionTree(tabId) {
-  return tabId === TAB_IDS.commands;
 }
 
 function handleDetailSelect(nextDetail) {
@@ -278,15 +279,16 @@ function emptyActionTree(summary = null, rootData = null) {
   };
 }
 
-function withSummary(actionTreeData, traceId) {
+function emptyCommands() {
   return {
-    ...actionTreeData,
-    rootData: actionTree.value?.rootData ?? null,
-    summary: {
-      actions: actionTreeData.actions?.length ?? 0,
-      links: actionTreeData.links?.length ?? 0,
-      roots: actionTreeData.roots?.length ?? 0,
-    },
+    actions: [],
+    loadedTraceId: null,
+  };
+}
+
+function withCommandTrace(commandData, traceId) {
+  return {
+    actions: commandData.actions ?? [],
     loadedTraceId: traceId,
   };
 }

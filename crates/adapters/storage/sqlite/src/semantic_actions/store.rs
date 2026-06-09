@@ -2,7 +2,7 @@
 
 use model_core::ids::TraceId;
 use model_core::process::{NamespaceIdentity, ProcessIdentity};
-use rusqlite::{Row, params};
+use rusqlite::{OptionalExtension, Row, params};
 use semantic_action::{
     SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionLink,
     SemanticActionLinkConfidence, SemanticActionLinkRole, SemanticActionReadStore,
@@ -12,13 +12,17 @@ use semantic_action::{
 
 use crate::SqliteStorage;
 use crate::records::{decode_map, decode_time, encode_map, encode_time};
+use crate::semantic_actions::upsert_merge::merge_action;
 
 impl SemanticActionWriteStore for SqliteStorage {
     fn upsert_semantic_action(
         &mut self,
-        action: SemanticAction,
+        mut action: SemanticAction,
     ) -> Result<(), SemanticActionStoreError> {
         let connection = self.connection().borrow_mut();
+        if let Some(existing) = read_action_by_id(&connection, &action.action_id)? {
+            action = merge_action(existing, action)?;
+        }
         connection
             .execute(
                 "INSERT OR REPLACE INTO semantic_actions (
@@ -249,6 +253,26 @@ pub(super) fn read_evidence(
     rows.collect::<Result<Vec<_>, _>>().map_err(|error| {
         SemanticActionStoreError::new("map_semantic_action_evidence", error.to_string())
     })
+}
+
+fn read_action_by_id(
+    connection: &rusqlite::Connection,
+    action_id: &str,
+) -> Result<Option<SemanticAction>, SemanticActionStoreError> {
+    let mut action = connection
+        .query_row(
+            "SELECT * FROM semantic_actions WHERE action_id = ?1",
+            params![action_id],
+            action_from_row,
+        )
+        .optional()
+        .map_err(|error| {
+            SemanticActionStoreError::new("read_existing_semantic_action", error.to_string())
+        })?;
+    if let Some(action) = &mut action {
+        action.evidence = read_evidence(connection, &action.action_id)?;
+    }
+    Ok(action)
 }
 
 pub(super) fn read_link_evidence(

@@ -12,7 +12,7 @@ use super::super::process_parent::{
     ForkProcessEdge, fork_edge_from_event, merge_fork_edges, parent_identity_has_conflict,
     parent_process_from_action,
 };
-use super::shared::{ActionLinkKey, invalidate_child_links};
+use super::shared::{ActionLinkKey, invalidate_child_links, is_nested_file_write_event};
 
 #[derive(Default)]
 pub(super) struct CommandChildActionLinkProjector {
@@ -218,6 +218,9 @@ fn command_child_candidate(action: &SemanticAction) -> bool {
 }
 
 fn command_child_role(action: &SemanticAction) -> Option<SemanticActionLinkRole> {
+    if is_nested_file_write_event(action) {
+        return None;
+    }
     matches!(
         action.kind,
         SemanticActionKind::FileRead

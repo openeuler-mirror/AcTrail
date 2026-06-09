@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Agent trace case for real opencode LLM request capture."""
+"""Agent trace case for real opencode LLM exchange capture."""
 
 from __future__ import annotations
 
@@ -25,14 +25,14 @@ from common import (  # noqa: E402
     render_config,
     repo_root,
     require_binary,
-    require_complete_llm_action,
+    require_complete_llm_exchange,
     require_complete_payload_rows_any,
     require_otel_span,
     require_root,
     required,
     start_daemon,
     stop_process,
-    wait_for_actions,
+    wait_for_llm_exchange_actions,
     wait_for_payloads_any,
 )
 
@@ -105,26 +105,28 @@ def main() -> int:
             direction="outbound",
         )
         response_payload_count = require_tls_response_payloads(payloads, tls_runtime)
-        actions = wait_for_actions(
+        actions = wait_for_llm_exchange_actions(
             actrailviewer,
             resolved_config,
             trace_id,
             int(required(workload, "drain_attempts")),
             float(required(workload, "drain_sleep_seconds")),
         )
-        require_complete_llm_action(actions)
+        require_complete_llm_exchange(actions)
         otel = export_otel(
             actrailviewer,
             resolved_config,
             trace_id,
             Path(required(workload, "otel_output_path")),
         )
-        span_count = require_otel_span(otel, "llm.request")
+        request_span_count = require_otel_span(otel, "llm.request")
+        response_span_count = require_otel_span(otel, "llm.response")
         emit_llm_otel_evidence(otel, int(required(workload, "evidence_text_max_chars")))
         print(f"opencode_trace_id={trace_id}")
         print(f"opencode_payload_segments={payload_count}")
         print(f"opencode_response_payload_segments={response_payload_count}")
-        print(f"opencode_llm_request_spans={span_count}")
+        print(f"opencode_llm_request_spans={request_span_count}")
+        print(f"opencode_llm_response_spans={response_span_count}")
         print("opencode agent trace e2e complete")
     finally:
         stop_process(daemon, float(required(workload, "daemon_stop_timeout_seconds")))

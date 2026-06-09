@@ -2,16 +2,24 @@
 
 This Vue app renders the read-only AcTrail UI. Rust owns storage/API/static serving;
 Vue owns client-side layout, selection, lane expansion, and detail inspection.
+The Action Tree tab loads only the root node initially; each node requests its
+direct children when expanded. Commands use a separate semantic-action list API
+instead of forcing a full action-tree fetch.
 
 ## Build
 
 ```sh
-npm install
-npm run build
+# From the repository root:
+npm ci --prefix crates/apps/web/frontend
+cargo build --release
 ```
 
-The build writes checked-in static assets to `../src/render/dist`, which the Rust
-binary embeds with `include_str!`.
+The web crate build script runs `npm run build` before Rust compiles. The build
+writes checked-in static assets to `../src/render/dist`, which the Rust binary
+embeds with `include_str!`. Run `npm ci` once when Node dependencies are missing
+or when `package-lock.json` changes. Node.js, npm, and `node_modules` are build
+inputs only; the release `actrailweb` binary serves the embedded assets without
+them at runtime.
 
 ## Dependencies
 
@@ -27,6 +35,7 @@ and UI limits:
 - `GRAPH_LANES`: displayed lane names.
 - `TREE_NODE_TYPES`: recursive semantic tree node categories.
 - `inlineAttributeCount`: maximum attributes shown inline before the full JSON block.
+- `fileActivityGroupMinActions`: minimum consecutive root file actions folded into one expandable file activity node.
 
 `src/tabs/tableConfig.js` contains table projection and render batching:
 

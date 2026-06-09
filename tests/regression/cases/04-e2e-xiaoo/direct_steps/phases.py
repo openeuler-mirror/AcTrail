@@ -78,10 +78,10 @@ def run_xiaoo_actions_step(
     tls_runtime,
     configured: str | None,
 ) -> str:
-    result.begin_check("semantic actions", "waiting for llm.request")
+    result.begin_check("semantic actions", "waiting for llm.request and llm.response")
     try:
         actions, _ = capture_stdout(
-            lambda: module.wait_for_actions(
+            lambda: module.wait_for_llm_exchange_actions(
                 actrailviewer,
                 resolved_config,
                 trace_id,
@@ -96,14 +96,14 @@ def run_xiaoo_actions_step(
             "semantic actions",
             status,
             str(error),
-            "for HTTPS/HTTP CONNECT, xiaoO needs rustls debuginfo/TLS symbols before llm.request can be projected",
+            "for HTTPS/HTTP CONNECT, xiaoO needs rustls debuginfo/TLS symbols before llm.request/llm.response can be projected",
         )
         raise StepFailure(str(error)) from error
     result.add_check(
         "semantic actions",
         PASS,
         expected_found_detail(
-            "viewer returns semantic llm.request actions",
+            "viewer returns semantic llm.request and llm.response actions",
             [f"trace_id=trace-{trace_id}", f"action_output_bytes={len(actions.encode('utf-8'))}"],
         ),
         "semantic action projection ran after payload ingestion",

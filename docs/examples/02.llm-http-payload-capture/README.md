@@ -227,7 +227,7 @@ TLS payload 相关配置含义：
 | `application_http2_max_frame_bytes` | 单个 HTTP/2 frame payload 的最大解析长度；本例保留显式值以避免隐藏默认 |
 | `application_http2_max_connection_buffer_bytes` | 单个 trace/process/stream 的 HTTP/2 connection buffer 上限 |
 | `application_http2_emit_data_preview` | 本例关闭；启用后可把 UTF-8 DATA frame body preview 写入 metadata |
-| `application_http2_max_data_preview_bytes` | 启用 DATA preview 时单条 preview 的最大字节数 |
+| `application_http2_max_data_preview_bytes` | 启用 DATA preview 时单条 preview 的最大字节数；同时作为 HTTP/2 body retention 的 LLM 分类探测窗口，窗口内仍不能证明是 LLM 的 stream 会进入 summary-only |
 
 external provider 配置使用宽采集面：`payload_tls_enabled = true`、`payload_socket_enabled = true`、`payload_stdio_enabled = true`。通过条件仍然是 TLS plaintext payload 和从 plaintext 派生的 Application rows；socket payload 和 stdio payload 是排障侧证据，不能替代 `POST /chat/completions` plaintext 捕获。HTTPS 经过 HTTP proxy 时，socket payload 常见内容是 `CONNECT` 或 TLS 密文；stdio payload 只能证明 curl 收到了 provider 响应。
 

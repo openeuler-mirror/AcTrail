@@ -46,7 +46,7 @@ payload_socket_redaction_policy = authorization-header
 在仓库根目录执行：
 
 ```bash
-cargo build --release -p daemon -p ctl -p view -p tls_probe_point_finder -p tls_payload_probe_sync
+cargo build --release
 ```
 
 ## 启动 Daemon
@@ -268,6 +268,7 @@ rm -rf /tmp/actrail-full-monitor
 - `application_http_sse_data_policy = preview`：持久化 SSE data preview。
 - `application_http_sse_max_data_bytes = 65536`：单条 SSE data preview 的大小预算。
 - `application_http2_max_frame_bytes = 65536`：HTTP/2 analyzer 接受的 frame 大小。
+- `application_http2_max_data_preview_bytes = 65536`：HTTP/2 DATA preview 大小预算；同时作为 HTTP/2 body retention 的 LLM 分类探测窗口，窗口内仍不能证明是 LLM 的 stream 会进入 summary-only，避免 Claude TUI 下载类大 payload 被完整入库。
 - `process_seccomp_max_args = 128`：exec argv 捕获数量上限。
 - `process_seccomp_max_arg_bytes = 8192`：exec argv 内容捕获字节上限。
 - `resource_metrics_interval_ms = 1000`：资源指标采样周期。

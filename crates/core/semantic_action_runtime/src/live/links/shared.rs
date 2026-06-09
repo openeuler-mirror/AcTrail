@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use model_core::ids::TraceId;
 use semantic_action::{
-    SemanticAction, SemanticActionLink, SemanticActionLinkConfidence, SemanticActionLinkRole,
-    SemanticEvidence,
+    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkConfidence,
+    SemanticActionLinkRole, SemanticEvidence,
 };
 
 use crate::live::actions::{ATTR_LINK_VALID, LINK_VALID_FALSE};
@@ -56,4 +56,12 @@ pub(super) fn invalidate_child_links(
             )]),
         })
         .collect()
+}
+
+pub(super) fn is_nested_file_write_event(action: &SemanticAction) -> bool {
+    action.kind == SemanticActionKind::FileModify
+        && matches!(
+            action.attributes.get("file.operation").map(String::as_str),
+            Some("write" | "writev")
+        )
 }

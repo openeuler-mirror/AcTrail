@@ -16,7 +16,7 @@ run_direct_langgraph_case = DIRECT_STEPS.run_direct_langgraph_case
 
 
 CASE_ID = "e2e-langgraph"
-TITLE = "E2E with LangGraph Python OpenAI-compatible LLM request"
+TITLE = "E2E with LangGraph Python OpenAI-compatible LLM exchange"
 SUITES = {"quick", "agent", "payload", "full"}
 
 

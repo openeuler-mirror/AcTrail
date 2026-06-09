@@ -15,16 +15,16 @@ export function readTrace(traceId) {
   return fetchJson(`/api/traces/${traceId}`);
 }
 
-export function readActionTree(traceId) {
-  return fetchJson(`/api/traces/${traceId}/action-tree`);
-}
-
 export function readActionTreeRoot(traceId) {
   return fetchJson(`/api/traces/${traceId}/action-tree/root`);
 }
 
 export function readActionTreeChildren(traceId, parentId) {
   return fetchJson(`/api/traces/${traceId}/action-tree/children/${encodeURIComponent(parentId)}`);
+}
+
+export function readCommands(traceId) {
+  return fetchJson(`/api/traces/${traceId}/commands`);
 }
 
 export function readPayload(traceId, payloadId) {

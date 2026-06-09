@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Agent trace case for real xiaoO LLM request capture."""
+"""Agent trace case for real xiaoO LLM exchange capture."""
 
 from __future__ import annotations
 
@@ -20,14 +20,14 @@ from common import (  # noqa: E402
     render_config,
     repo_root,
     require_binary,
-    require_complete_llm_action,
+    require_complete_llm_exchange,
     require_complete_payload_rows_any,
     require_otel_span,
     require_root,
     required,
     start_daemon,
     stop_process,
-    wait_for_actions,
+    wait_for_llm_exchange_actions,
     wait_for_payloads_any,
 )
 from rustls import write_rustls_symbol_map  # noqa: E402
@@ -90,7 +90,7 @@ def main() -> int:
             direction="outbound",
         )
         try:
-            actions = wait_for_actions(
+            actions = wait_for_llm_exchange_actions(
                 actrailviewer,
                 resolved_config,
                 trace_id,
@@ -100,24 +100,26 @@ def main() -> int:
         except RuntimeError as error:
             if tls_runtime is None:
                 raise RuntimeError(
-                    "viewer actions did not show llm.request; xiaoO rustls TLS "
+                    "viewer actions did not show llm.request and llm.response; xiaoO rustls TLS "
                     "symbols were not resolved, so HTTPS routes cannot be decoded. "
                     "Provide a xiaoO binary/debuginfo with rustls PlaintextSink "
                     "symbols or run xiaoO against a plain HTTP provider route."
                 ) from error
             raise
-        require_complete_llm_action(actions)
+        require_complete_llm_exchange(actions)
         otel = export_otel(
             actrailviewer,
             resolved_config,
             trace_id,
             Path(required(workload, "otel_output_path")),
         )
-        span_count = require_otel_span(otel, "llm.request")
+        request_span_count = require_otel_span(otel, "llm.request")
+        response_span_count = require_otel_span(otel, "llm.response")
         emit_llm_otel_evidence(otel, int(required(workload, "evidence_text_max_chars")))
         print(f"xiaoo_trace_id={trace_id}")
         print(f"xiaoo_payload_segments={payload_count}")
-        print(f"xiaoo_llm_request_spans={span_count}")
+        print(f"xiaoo_llm_request_spans={request_span_count}")
+        print(f"xiaoo_llm_response_spans={response_span_count}")
         print("xiaoO agent trace e2e complete")
     finally:
         stop_process(daemon, float(required(workload, "daemon_stop_timeout_seconds")))
