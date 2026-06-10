@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import json
-import time
 from pathlib import Path
 
-from common import required, run_checked
+from common import (
+    count_action_rows,
+    require_complete_llm_exchange,
+    require_llm_exchange_graph,
+    required,
+    run_checked,
+    wait_for_llm_exchange_actions,
+)
 
 
 def export_trace_json(
@@ -76,35 +82,17 @@ def wait_for_semantic_actions(
     attempts: int,
     sleep_sec: float,
 ) -> str:
-    for _ in range(attempts):
-        actions = run_checked(
-            [
-                str(actrailviewer),
-                "actions",
-                "--config",
-                str(config),
-                "--trace-id",
-                str(trace_id),
-            ],
-            echo=False,
-        )
-        if "llm.request" in actions and "llm.response" in actions:
-            print(actions, end="")
-            return actions
-        time.sleep(sleep_sec)
-    raise RuntimeError("viewer did not show semantic llm.request and llm.response actions")
+    return wait_for_llm_exchange_actions(
+        actrailviewer,
+        config,
+        trace_id,
+        attempts,
+        sleep_sec,
+    )
 
 
 def require_llm_exchange(actions: str) -> None:
-    require_complete_action(actions, "llm.request")
-    require_complete_action(actions, "llm.response")
-
-
-def require_complete_action(actions: str, kind: str) -> None:
-    for line in actions.splitlines():
-        if kind in line and "success" in line and "complete" in line:
-            return
-    raise RuntimeError(f"semantic actions did not contain a complete successful {kind}")
+    require_complete_llm_exchange(actions)
 
 
 def require_exported_llm_span(document: dict, marker: str) -> None:
@@ -147,10 +135,6 @@ def require_exported_llm_response_span(document: dict) -> None:
         ):
             return
     raise RuntimeError("OTel export did not contain a complete llm.response span")
-
-
-def count_action_rows(actions: str) -> int:
-    return sum(1 for line in actions.splitlines() if line.startswith("trace:"))
 
 
 def count_otel_spans(document: dict) -> int:

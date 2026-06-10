@@ -44,10 +44,12 @@ Use an example config for the workflow you are validating:
 | Broad process/file/network/IPC/resource/stdout observation | `docs/examples/03.extended-observation-e2e/operator.conf` |
 | Plain HTTP socket payload and HTTP/1.x semantics | `docs/examples/05.http-payload-unified/operator.conf` |
 | Local HTTPS/2 TLS payload and HTTP/2 semantics | `docs/examples/02.llm-http-payload-capture/http2-local/operator.conf` |
+| Full real-agent monitor validation | `docs/examples/08.full-monitor-validation/operator.conf` |
 | xiaoO outbound LLM request capture | `docs/examples/06.xiaoo-tls-capture/operator.conf` |
 | xiaoO launching Claude Code process tree discovery | `docs/examples/07.xiaoo-claude-agent-invocation/operator.conf` |
 
-For real agent acceptance across multiple runtimes, use the E2E suite under `tests/agent-trace/`. The suite renders its own case configs and validates viewer output plus OTEL spans:
+For manual real-agent validation, start with `docs/examples/08.full-monitor-validation/`.
+For acceptance across multiple runtimes, use the E2E suite under `tests/agent-trace/`. The suite renders its own case configs and validates viewer output plus OTEL spans:
 
 ```bash
 python3 tests/agent-trace/run_case.py claude-code

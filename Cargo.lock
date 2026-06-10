@@ -102,7 +102,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "attach_runtime"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "collector_binding",
  "collector_event",
@@ -262,7 +262,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "collector_binding"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "collector_capability",
  "config_core",
@@ -271,21 +271,21 @@ dependencies = [
 
 [[package]]
 name = "collector_capability"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "collector_event"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "collector_instance"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "collector_binding",
  "collector_capability",
@@ -297,7 +297,7 @@ dependencies = [
 
 [[package]]
 name = "collector_stats"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "model_core",
 ]
@@ -310,14 +310,14 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "config_core"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "control_contract"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "model_core",
 ]
@@ -339,7 +339,7 @@ dependencies = [
 
 [[package]]
 name = "ctl"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "clap",
  "config_core",
@@ -354,7 +354,7 @@ dependencies = [
 
 [[package]]
 name = "daemon"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "attach_runtime",
  "clap",
@@ -394,7 +394,7 @@ dependencies = [
 
 [[package]]
 name = "ebpf_collector"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "collector_binding",
  "collector_capability",
@@ -413,7 +413,7 @@ dependencies = [
 
 [[package]]
 name = "ebpf_probe"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "config_core",
  "control_contract",
@@ -532,14 +532,14 @@ dependencies = [
 
 [[package]]
 name = "graph_contract"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "graph_inspect"
-version = "0.1.0"
+version = "0.1.2"
 
 [[package]]
 name = "hashbrown"
@@ -624,7 +624,7 @@ dependencies = [
 
 [[package]]
 name = "ingest_runtime"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "collector_event",
  "model_core",
@@ -669,7 +669,7 @@ dependencies = [
 
 [[package]]
 name = "json_graph_export"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "graph_contract",
  "model_core",
@@ -755,7 +755,7 @@ checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
 name = "linux_platform"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "config_core",
  "libc",
@@ -794,7 +794,7 @@ dependencies = [
 
 [[package]]
 name = "model_core"
-version = "0.1.0"
+version = "0.1.2"
 
 [[package]]
 name = "nix"
@@ -840,7 +840,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "otel_export"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "model_core",
  "semantic_action",
@@ -849,18 +849,18 @@ dependencies = [
 
 [[package]]
 name = "payload_binding"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "payload_capability"
-version = "0.1.0"
+version = "0.1.2"
 
 [[package]]
 name = "payload_event"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "model_core",
 ]
@@ -879,7 +879,7 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
 name = "plugin_policy_host"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "model_core",
  "policy_evaluate_contract",
@@ -888,14 +888,14 @@ dependencies = [
 
 [[package]]
 name = "policy_evaluate_contract"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "policy_plugin_contract"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "policy_evaluate_contract",
 ]
@@ -921,25 +921,25 @@ dependencies = [
 
 [[package]]
 name = "process_identity_contract"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "process_tree_snapshot_contract"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "provider_evidence"
-version = "0.1.0"
+version = "0.1.2"
 
 [[package]]
 name = "provider_label"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "provider_evidence",
 ]
@@ -967,7 +967,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rule_set_provider"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "config_core",
  "provider_evidence",
@@ -1015,14 +1015,14 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "semantic_action"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "semantic_action_runtime"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "config_core",
  "model_core",
@@ -1118,11 +1118,11 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
 name = "sqlite_inspect"
-version = "0.1.0"
+version = "0.1.2"
 
 [[package]]
 name = "sqlite_storage"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "model_core",
  "rusqlite",
@@ -1136,32 +1136,32 @@ dependencies = [
 
 [[package]]
 name = "store_read_contract"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "store_retention_contract"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "store_snapshot_contract"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "store_tx_contract"
-version = "0.1.0"
+version = "0.1.2"
 
 [[package]]
 name = "store_write_contract"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "model_core",
 ]
@@ -1227,11 +1227,11 @@ dependencies = [
 
 [[package]]
 name = "tls_payload_core"
-version = "0.1.0"
+version = "0.1.2"
 
 [[package]]
 name = "tls_payload_probe"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "brotli",
  "clap",
@@ -1246,7 +1246,7 @@ dependencies = [
 
 [[package]]
 name = "tls_payload_probe_sync"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "clap",
  "libc",
@@ -1257,7 +1257,7 @@ dependencies = [
 
 [[package]]
 name = "tls_payload_sync"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "tls_payload_core",
  "tls_probe_point_finder",
@@ -1265,7 +1265,7 @@ dependencies = [
 
 [[package]]
 name = "tls_probe_point_finder"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "anstyle",
  "clap",
@@ -1274,7 +1274,7 @@ dependencies = [
 
 [[package]]
 name = "trace_runtime"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "collector_capability",
  "config_core",
@@ -1327,7 +1327,7 @@ dependencies = [
 
 [[package]]
 name = "uds_control_client"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "control_contract",
  "libc",
@@ -1336,7 +1336,7 @@ dependencies = [
 
 [[package]]
 name = "uds_control_server"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "control_contract",
  "libc",
@@ -1345,7 +1345,7 @@ dependencies = [
 
 [[package]]
 name = "uds_control_transport"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "control_contract",
  "model_core",
@@ -1383,7 +1383,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "view"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "clap",
  "config_core",
@@ -1391,6 +1391,7 @@ dependencies = [
  "model_core",
  "otel_export",
  "semantic_action",
+ "serde_json",
  "sqlite_storage",
  "store_read_contract",
  "store_snapshot_contract",
@@ -1505,7 +1506,7 @@ dependencies = [
 
 [[package]]
 name = "web"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "model_core",
  "semantic_action",

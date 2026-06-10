@@ -1,8 +1,10 @@
 """Shared helpers for real agent trace E2E cases."""
 
 from .actions import (
+    count_action_rows,
     require_complete_llm_action,
     require_complete_llm_exchange,
+    require_llm_exchange_graph,
     wait_for_actions,
     wait_for_llm_exchange_actions,
 )
@@ -32,6 +34,7 @@ from .process import (
 
 __all__ = [
     "clean_configured_paths",
+    "count_action_rows",
     "emit_llm_otel_evidence",
     "export_otel",
     "launch_and_parse_trace",
@@ -44,6 +47,7 @@ __all__ = [
     "require_binary",
     "require_complete_llm_action",
     "require_complete_llm_exchange",
+    "require_llm_exchange_graph",
     "require_complete_payload_rows",
     "require_complete_payload_rows_any",
     "require_otel_span",

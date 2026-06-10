@@ -345,7 +345,7 @@ stdio_payloads=stderr:outbound,stdin:inbound,stdout:outbound
 | `stdio-chunk` payload | configured read/write syscall capture -> `PayloadSourceBoundary::Stdio` segment -> AcTrail storage/viewer |
 | Web UI | read/snapshot/payload/action stores -> `actrailweb` HTTP API -> per-connection request handling with configured read timeout -> action swimlane/tree plus right-side detail panel |
 
-这个示例不覆盖 TLS plaintext、HTTP/1.x semantic events、HTTP/2 frame/DATA facts、HTTP socket plaintext、browser plaintext 或 CoW fault。动态 OpenSSL TLS payload、HTTP/1.x semantic events 和本地 HTTPS/2 payload 示例使用单独的 payload 配置，见 `docs/examples/02.llm-http-payload-capture/README.md`；非 TLS HTTP socket plaintext 示例见 `docs/examples/05.http-payload-unified/README.md`；xiaoO 这类真实 Agent 的完整 payload capture 示例见 `docs/examples/06.xiaoo-tls-capture/README.md`。部分 WSL/Linux 环境会拒绝 attach `sys_enter_setsid` 这类 syscall tracepoint，因此本例的 session/process-group 只声明 `/proc` 元数据，不声明 setpgid/setsid syscall event。
+这个示例不覆盖 TLS plaintext、HTTP/1.x semantic events、HTTP/2 frame/DATA facts、HTTP socket plaintext、browser plaintext 或 CoW fault。动态 OpenSSL TLS payload、HTTP/1.x semantic events 和本地 HTTPS/2 payload 示例使用单独的 payload 配置，见 `docs/examples/02.llm-http-payload-capture/README.md`；非 TLS HTTP socket plaintext 示例见 `docs/examples/05.http-payload-unified/README.md`；xiaoO/Claude/opencode 这类真实 Agent 的完整 payload capture 和 semantic action 验证示例见 `docs/examples/08.full-monitor-validation/README.md`。部分 WSL/Linux 环境会拒绝 attach `sys_enter_setsid` 这类 syscall tracepoint，因此本例的 session/process-group 只声明 `/proc` 元数据，不声明 setpgid/setsid syscall event。
 
 ## 13. 停止 Daemon
 

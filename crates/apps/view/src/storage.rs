@@ -11,7 +11,7 @@ mod render;
 #[path = "storage/source.rs"]
 mod source;
 
-use crate::command::{StorageCommand, ViewInvocation};
+use crate::command::{OutputFormat, StorageCommand, ViewInvocation};
 use store_read_contract::payloads::{PayloadRowLimit, PayloadSegmentQuery};
 
 pub fn render_storage_view(invocation: ViewInvocation) -> Result<String, String> {
@@ -37,14 +37,19 @@ pub fn render_storage_view(invocation: ViewInvocation) -> Result<String, String>
     match invocation.command {
         StorageCommand::Traces => {
             let traces = source::list_traces(&storage)?;
-            Ok(render::render_traces(traces, invocation.row_limit))
+            Ok(match invocation.output_format {
+                OutputFormat::Table => render::render_traces(traces, invocation.row_limit),
+                OutputFormat::Json => render::render_traces_json(traces, invocation.row_limit)?,
+            })
         }
         StorageCommand::Summary => {
+            reject_json_output(invocation.output_format, "summary")?;
             render::reject_limit(invocation.row_limit, "summary")?;
             let snapshot = source::read_snapshot(&mut storage, invocation.trace_id)?;
             Ok(render::render_summary(&snapshot))
         }
         StorageCommand::Processes => {
+            reject_json_output(invocation.output_format, "processes")?;
             let snapshot = source::read_snapshot(&mut storage, invocation.trace_id)?;
             Ok(render::render_processes(
                 snapshot.memberships,
@@ -52,10 +57,12 @@ pub fn render_storage_view(invocation: ViewInvocation) -> Result<String, String>
             ))
         }
         StorageCommand::Events => {
+            reject_json_output(invocation.output_format, "events")?;
             let snapshot = source::read_snapshot(&mut storage, invocation.trace_id)?;
             Ok(render::render_events(snapshot.events, invocation.row_limit))
         }
         StorageCommand::Network => {
+            reject_json_output(invocation.output_format, "network")?;
             let snapshot = source::read_snapshot(&mut storage, invocation.trace_id)?;
             Ok(render::render_network(
                 snapshot.events,
@@ -74,9 +81,13 @@ pub fn render_storage_view(invocation: ViewInvocation) -> Result<String, String>
                     include_bytes: false,
                 },
             )?;
-            Ok(render::render_payloads(segments))
+            Ok(match invocation.output_format {
+                OutputFormat::Table => render::render_payloads(segments),
+                OutputFormat::Json => render::render_payloads_json(segments)?,
+            })
         }
         StorageCommand::Payload => {
+            reject_json_output(invocation.output_format, "payload")?;
             render::reject_limit(invocation.row_limit, "payload")?;
             let trace_id = source::resolve_trace_id(&storage, invocation.trace_id)?;
             let segment_id = invocation
@@ -103,12 +114,19 @@ pub fn render_storage_view(invocation: ViewInvocation) -> Result<String, String>
         StorageCommand::Actions => {
             let snapshot = source::read_snapshot(&mut storage, invocation.trace_id)?;
             let actions = source::list_semantic_actions(&storage, snapshot.trace.trace_id)?;
-            Ok(render::render_semantic_actions(
-                actions,
-                invocation.row_limit,
-            ))
+            Ok(match invocation.output_format {
+                OutputFormat::Table => {
+                    render::render_semantic_actions(actions, invocation.row_limit)
+                }
+                OutputFormat::Json => {
+                    let links =
+                        source::list_semantic_action_links(&storage, snapshot.trace.trace_id)?;
+                    render::render_semantic_actions_json(actions, links, invocation.row_limit)?
+                }
+            })
         }
         StorageCommand::Diagnostics => {
+            reject_json_output(invocation.output_format, "diagnostics")?;
             let snapshot = source::read_snapshot(&mut storage, invocation.trace_id)?;
             Ok(render::render_diagnostics(
                 snapshot.diagnostics,
@@ -126,4 +144,11 @@ fn payload_row_limit(limit: crate::command::RowLimit) -> PayloadRowLimit {
         crate::command::RowLimit::Head(count) => PayloadRowLimit::Head(count),
         crate::command::RowLimit::Tail(count) => PayloadRowLimit::Tail(count),
     }
+}
+
+fn reject_json_output(format: OutputFormat, command: &'static str) -> Result<(), String> {
+    if matches!(format, OutputFormat::Json) {
+        return Err(format!("{command} does not support --output-format json"));
+    }
+    Ok(())
 }

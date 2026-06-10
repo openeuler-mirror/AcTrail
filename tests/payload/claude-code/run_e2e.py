@@ -38,6 +38,7 @@ from export_checks import (  # noqa: E402
     require_exported_llm_span,
     require_exported_payload_marker,
     require_llm_exchange,
+    require_llm_exchange_graph,
     wait_for_semantic_actions,
 )
 from payload_checks import (  # noqa: E402
@@ -104,6 +105,7 @@ def main() -> int:
             float(required(workload_config, "drain_sleep_seconds")),
         )
         require_llm_exchange(actions)
+        require_llm_exchange_graph(actions)
         text = payload_texts(
             actrailviewer,
             resolved_config,
