@@ -236,7 +236,7 @@ pub(super) fn action_json(action: &SemanticAction) -> String {
         &action
             .end_time
             .and_then(|end| end.duration_since(action.start_time).ok())
-            .map(|d| json::string(&json::duration_millis(d.as_millis() as u64)))
+            .map(|d| json::string(&json::duration_micros(d.as_micros() as u64)))
             .unwrap_or_else(|| "null".to_string()),
     );
     output.push(',');

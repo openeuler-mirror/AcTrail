@@ -133,6 +133,7 @@ function actionNode(action) {
         pid: action.process?.pid,
         evidence: action.evidence?.length,
         started: action.start_time,
+        duration: action.duration,
       }),
       attributes: previewAttributes(action.kind, action.attributes),
       evidence: action.evidence ?? [],
@@ -283,10 +284,11 @@ function actionDisplay(action) {
   const label = semanticActionLabel(action);
   const target = semanticActionTarget(action);
   const time = shortTime(action.start_time);
+  const duration = action.duration ? `(${action.duration})` : null;
   return {
     label,
     target,
-    meta: compactMeta([target, time, action.status]),
+    meta: compactMeta([target, time, duration, action.status]),
   };
 }
 
