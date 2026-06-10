@@ -27,6 +27,7 @@ const HEADER_BYTES: usize = 72;
 const PROVIDER_OPENSSL: u32 = 1;
 const PROVIDER_BORINGSSL: u32 = 2;
 const PROVIDER_RUSTLS: u32 = 3;
+const PROVIDER_GO: u32 = 4;
 
 const DIRECTION_OUTBOUND: u32 = 1;
 const DIRECTION_INBOUND: u32 = 2;
@@ -369,6 +370,7 @@ fn provider_id(provider: TlsProvider) -> u32 {
         TlsProvider::OpenSsl => PROVIDER_OPENSSL,
         TlsProvider::BoringSsl => PROVIDER_BORINGSSL,
         TlsProvider::Rustls => PROVIDER_RUSTLS,
+        TlsProvider::Go => PROVIDER_GO,
     }
 }
 
@@ -377,6 +379,7 @@ fn provider_name(provider: u32) -> &'static str {
         PROVIDER_OPENSSL => "openssl",
         PROVIDER_BORINGSSL => "boringssl",
         PROVIDER_RUSTLS => "rustls",
+        PROVIDER_GO => "go",
         _ => "unknown",
     }
 }

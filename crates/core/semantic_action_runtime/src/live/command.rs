@@ -11,6 +11,8 @@ use semantic_action::{
 };
 
 use super::actions::{
+    ATTR_AGENT_IDENTITY_EVIDENCE_ACTION_ID, ATTR_AGENT_IDENTITY_STATUS,
+    ATTR_AGENT_INVOCATION_EVIDENCE_ACTION_ID, ATTR_AGENT_INVOCATION_TRIGGER,
     ATTR_PROCESS_PARENT_IDENTITY_STATE, append_missing_evidence, event_evidence, process_action_id,
     process_exit_status,
 };
@@ -19,6 +21,11 @@ use super::process_parent::{
     is_parent_identity_attr, merge_fork_edges, parent_identity_has_conflict,
 };
 use super::runtime::LiveSemanticActionOutput;
+
+const AGENT_IDENTITY_STATUS_OBSERVED: &str = "observed";
+const AGENT_INVOCATION_TRIGGER_CHILD_LLM_REQUEST: &str = "child_llm_request";
+const ATTR_INVOCATION_KIND: &str = "invocation.kind";
+const INVOCATION_KIND_AGENT: &str = "agent";
 
 pub(super) struct CommandProjector {
     commands: BTreeMap<(TraceId, ProcessIdentity), SemanticAction>,
@@ -55,6 +62,7 @@ impl CommandProjector {
         if let Some(existing) = self.commands.get(&key) {
             merge_existing_command(&mut action, existing);
         }
+        apply_agent_invocation_label(&mut action, process_action, None);
         self.commands.insert(key, action.clone());
         let link = self.command_exec_link(&action, process_action, event);
         LiveSemanticActionOutput {
@@ -74,6 +82,32 @@ impl CommandProjector {
             return LiveSemanticActionOutput::default();
         };
         if apply_fork_parent(&mut action, &edge) == ParentEdgeApply::Unchanged {
+            return LiveSemanticActionOutput::default();
+        }
+        self.commands.insert(key, action.clone());
+        LiveSemanticActionOutput {
+            actions: vec![action],
+            links: Vec::new(),
+        }
+    }
+
+    pub(super) fn observe_agent_identity(
+        &mut self,
+        process_action: &SemanticAction,
+        evidence_action: &SemanticAction,
+    ) -> LiveSemanticActionOutput {
+        if process_action.kind != SemanticActionKind::ProcessExec
+            || !is_observed_agent_process(process_action)
+        {
+            return LiveSemanticActionOutput::default();
+        }
+        let key = command_key(process_action.trace_id, &process_action.process);
+        let Some(mut action) = self.commands.get(&key).cloned() else {
+            return LiveSemanticActionOutput::default();
+        };
+        let previous = action.clone();
+        apply_agent_invocation_label(&mut action, process_action, Some(evidence_action));
+        if action == previous {
             return LiveSemanticActionOutput::default();
         }
         self.commands.insert(key, action.clone());
@@ -205,4 +239,81 @@ fn merge_existing_command(action: &mut SemanticAction, existing: &SemanticAction
         action.status = existing.status;
     }
     append_missing_evidence(&mut action.evidence, &existing.evidence);
+}
+
+fn apply_agent_invocation_label(
+    action: &mut SemanticAction,
+    process_action: &SemanticAction,
+    evidence_action: Option<&SemanticAction>,
+) {
+    if !is_observed_agent_process(process_action) {
+        return;
+    }
+    action.attributes.insert(
+        ATTR_INVOCATION_KIND.to_string(),
+        INVOCATION_KIND_AGENT.to_string(),
+    );
+    action.attributes.insert(
+        ATTR_AGENT_INVOCATION_TRIGGER.to_string(),
+        AGENT_INVOCATION_TRIGGER_CHILD_LLM_REQUEST.to_string(),
+    );
+    if let Some(evidence_action_id) = evidence_action
+        .map(|action| action.action_id.clone())
+        .or_else(|| {
+            process_action
+                .attributes
+                .get(ATTR_AGENT_IDENTITY_EVIDENCE_ACTION_ID)
+                .cloned()
+        })
+    {
+        action.attributes.insert(
+            ATTR_AGENT_INVOCATION_EVIDENCE_ACTION_ID.to_string(),
+            evidence_action_id,
+        );
+    }
+    action.attributes.insert(
+        "agent.child.pid".to_string(),
+        process_action.process.pid.to_string(),
+    );
+    action.attributes.insert(
+        "agent.child.generation".to_string(),
+        process_action.process.generation.to_string(),
+    );
+    copy_process_attr(
+        process_action,
+        action,
+        "process.executable",
+        "agent.child.executable",
+    );
+    copy_process_attr(
+        process_action,
+        action,
+        "command_line",
+        "agent.child.command_line",
+    );
+    if let Some(evidence_action) = evidence_action {
+        append_missing_evidence(&mut action.evidence, &evidence_action.evidence);
+    } else {
+        append_missing_evidence(&mut action.evidence, &process_action.evidence);
+    }
+}
+
+fn is_observed_agent_process(action: &SemanticAction) -> bool {
+    action
+        .attributes
+        .get(ATTR_AGENT_IDENTITY_STATUS)
+        .is_some_and(|status| status == AGENT_IDENTITY_STATUS_OBSERVED)
+}
+
+fn copy_process_attr(
+    process_action: &SemanticAction,
+    command_action: &mut SemanticAction,
+    process_key: &str,
+    command_key: &str,
+) {
+    if let Some(value) = process_action.attributes.get(process_key) {
+        command_action
+            .attributes
+            .insert(command_key.to_string(), value.clone());
+    }
 }

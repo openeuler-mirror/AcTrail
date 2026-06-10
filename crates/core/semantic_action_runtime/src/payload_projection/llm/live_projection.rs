@@ -7,7 +7,8 @@ use crate::payload_projection::http::{split_request, split_response};
 
 use super::request::project_stream_llm_request_action;
 use super::response::{
-    project_raw_stream_llm_response_actions, project_stream_llm_response_message_actions,
+    project_raw_chunked_stream_llm_response_actions, project_raw_stream_llm_response_actions,
+    project_stream_llm_response_message_actions,
 };
 use super::stream::PayloadStreamGroupKey;
 
@@ -71,8 +72,19 @@ pub(crate) fn project_live_llm_response_message(
         return Some(response_projection(actions, encoded_len, can_evict, false));
     }
 
+    if let Some(projection) =
+        project_raw_chunked_stream_llm_response_actions(key, message_start, bytes, segments)
+    {
+        return Some(response_projection(
+            projection.actions,
+            projection.encoded_len,
+            true,
+            projection.trailing_chunk_framing,
+        ));
+    }
+
     let actions = project_raw_stream_llm_response_actions(key, message_start, bytes, segments)?;
-    Some(response_projection(actions, bytes.len(), true, true))
+    Some(response_projection(actions, bytes.len(), true, false))
 }
 
 fn response_projection(

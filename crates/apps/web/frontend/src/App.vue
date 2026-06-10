@@ -95,7 +95,18 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { RefreshCw, Search, X } from '@lucide/vue';
 
-import { listTraces, readActionTreeRoot, readCommands, readPayload, readTrace } from './api';
+import {
+  listTraces,
+  readActionTreeRoot,
+  readCommands,
+  readPayload,
+  readTraceDiagnostics,
+  readTraceEvents,
+  readTracePayloads,
+  readTraceProcesses,
+  readTraceSummary,
+  readTraceTimeline,
+} from './api';
 import JsonTree from './components/JsonTree.vue';
 import TraceTabs from './tabs/TraceTabs.vue';
 import { TAB_DEFINITIONS, TAB_IDS } from './tabs/registry';
@@ -114,6 +125,7 @@ const error = ref('');
 const payloadText = ref('');
 let activeTraceLoad = null;
 let activeCommandsLoad = null;
+let activeTracePartLoad = null;
 let activePayloadLoad = null;
 
 const selectedTrace = computed(() =>
@@ -154,9 +166,9 @@ const metrics = computed(() => {
   const semantic = actionTree.value?.summary ?? {};
   return [
     { label: 'Events', value: counts.events ?? 0 },
-    { label: 'Payloads', value: traceDetail.value?.payloads?.length ?? 0 },
+    { label: 'Payloads', value: counts.payloads ?? traceDetail.value?.payloads?.length ?? 0 },
     { label: 'Actions', value: semantic.actions ?? actionTree.value?.actions?.length ?? 0 },
-    { label: 'Processes', value: traceDetail.value?.processes?.length ?? 0 },
+    { label: 'Processes', value: traceDetail.value?.processes?.length ?? counts.process ?? 0 },
   ];
 });
 
@@ -170,7 +182,7 @@ watch(selectedTraceId, async (traceId) => {
 });
 
 watch(activeTab, async () => {
-  await ensureCommandsForActiveTab();
+  await ensureDataForActiveTab();
 });
 
 watch(detail, async (nextDetail) => {
@@ -222,14 +234,57 @@ async function loadTrace(traceId) {
   commands.value = emptyCommands();
   try {
     error.value = '';
-    const [detailData, rootData] = await Promise.all([readTrace(traceId), readActionTreeRoot(traceId)]);
+    const [summaryData, rootData] = await Promise.all([
+      readTraceSummary(traceId),
+      readActionTreeRoot(traceId),
+    ]);
     if (activeTraceLoad === token && selectedTraceId.value === traceId) {
-      traceDetail.value = detailData;
+      traceDetail.value = summaryData;
       actionTree.value = emptyActionTree(rootData.summary, rootData);
-      await ensureCommandsForActiveTab();
+      await ensureDataForActiveTab();
     }
   } catch (err) {
     if (activeTraceLoad === token && selectedTraceId.value === traceId) {
+      error.value = String(err.message ?? err);
+    }
+  }
+}
+
+async function ensureDataForActiveTab() {
+  await Promise.all([ensureTracePartForActiveTab(), ensureCommandsForActiveTab()]);
+}
+
+async function ensureTracePartForActiveTab() {
+  const traceId = selectedTraceId.value;
+  if (!traceId) {
+    return;
+  }
+  if (activeTab.value === TAB_IDS.timeline) {
+    await ensureTracePart(traceId, 'timeline', readTraceTimeline);
+  } else if (eventBackedTab(activeTab.value)) {
+    await ensureTracePart(traceId, 'events', readTraceEvents);
+  } else if (activeTab.value === TAB_IDS.payloads) {
+    await ensureTracePart(traceId, 'payloads', readTracePayloads);
+  } else if (activeTab.value === TAB_IDS.processes || activeTab.value === TAB_IDS.processTree) {
+    await ensureTracePart(traceId, 'processes', readTraceProcesses);
+  } else if (activeTab.value === TAB_IDS.diagnostics) {
+    await ensureTracePart(traceId, 'diagnostics', readTraceDiagnostics);
+  }
+}
+
+async function ensureTracePart(traceId, key, loader) {
+  if (traceDetail.value?.[key] !== undefined) {
+    return;
+  }
+  const token = Symbol();
+  activeTracePartLoad = token;
+  try {
+    const data = await loader(traceId);
+    if (activeTracePartLoad === token && selectedTraceId.value === traceId) {
+      traceDetail.value = { ...(traceDetail.value ?? {}), ...data };
+    }
+  } catch (err) {
+    if (activeTracePartLoad === token && selectedTraceId.value === traceId) {
       error.value = String(err.message ?? err);
     }
   }
@@ -291,5 +346,14 @@ function withCommandTrace(commandData, traceId) {
     actions: commandData.actions ?? [],
     loadedTraceId: traceId,
   };
+}
+
+function eventBackedTab(tab) {
+  return (
+    tab === TAB_IDS.events ||
+    tab === TAB_IDS.files ||
+    tab === TAB_IDS.network ||
+    tab === TAB_IDS.resources
+  );
 }
 </script>

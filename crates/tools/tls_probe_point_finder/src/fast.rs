@@ -9,8 +9,11 @@ use crate::plan::{
     AttachPoint, CaptureStrategy, PayloadDirection, ProbeBinary, ProbePoint, ProbePointPlan,
     ProbeSource, TargetIdentity, TlsProvider,
 };
-use crate::providers::{boringssl, openssl, rustls};
+use crate::providers::{boringssl, go_tls, openssl, rustls};
 use crate::{ToolError, ToolResult};
+
+#[cfg(test)]
+mod tests;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FastProbeRequest {
@@ -36,6 +39,7 @@ pub enum ProviderFilter {
     OpenSsl,
     BoringSsl,
     Rustls,
+    Go,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -56,10 +60,13 @@ pub fn resolve(request: FastProbeRequest) -> ToolResult<ProbePointPlan> {
     if let Some(plan) = resolve_direct_shared_library(&image, &request)? {
         return Ok(plan);
     }
-    if let Some(plan) = resolve_static_patterns(&image, &request)? {
+    if let Some(plan) = resolve_recursive_shared_library(&image, &request)? {
         return Ok(plan);
     }
-    if let Some(plan) = resolve_recursive_shared_library(&image, &request)? {
+    if let Some(plan) = resolve_executable_go(&image, &request)? {
+        return Ok(plan);
+    }
+    if let Some(plan) = resolve_static_patterns(&image, &request)? {
         return Ok(plan);
     }
     Err(ToolError::new(
@@ -120,6 +127,26 @@ fn resolve_executable_symbols(
         }
     }
     Ok(None)
+}
+
+fn resolve_executable_go(
+    image: &ElfImage,
+    request: &FastProbeRequest,
+) -> ToolResult<Option<ProbePointPlan>> {
+    if !request.source.allows_executable() || !request.provider.allows(TlsProvider::Go) {
+        return Ok(None);
+    }
+    let Some(symbols) = go_tls::resolve_pclntab_symbols(image, go_tls::SYMBOLS)? else {
+        return Ok(None);
+    };
+    let plan = plan_from_symbol_map(
+        image,
+        TlsProvider::Go,
+        ProbeSource::Executable,
+        go_tls::RESOLVER,
+        &symbols,
+    )?;
+    Ok(plan.has_payload_closure().then_some(plan))
 }
 
 fn resolve_direct_shared_library(
@@ -327,6 +354,8 @@ fn direction_for_symbol(symbol: &str) -> PayloadDirection {
         rustls::RUNTIME_BUFFER_PLAINTEXT_SYMBOL | "SSL_write" | "SSL_write_ex" => {
             PayloadDirection::Outbound
         }
+        go_tls::WRITE_SYMBOL => PayloadDirection::Outbound,
+        go_tls::RUNTIME_MEMMOVE_SYMBOL => PayloadDirection::Inbound,
         rustls::RUNTIME_TAKE_RECEIVED_PLAINTEXT_SYMBOL
         | "SSL_read"
         | "SSL_read_ex"
@@ -338,7 +367,10 @@ fn direction_for_symbol(symbol: &str) -> PayloadDirection {
 fn attach_for_symbol(symbol: &str) -> AttachPoint {
     match direction_for_symbol(symbol) {
         PayloadDirection::Inbound
-            if matches!(symbol, "SSL_read" | "SSL_read_ex" | "SSL_read_internal") =>
+            if matches!(
+                symbol,
+                "SSL_read" | "SSL_read_ex" | "SSL_read_internal" | go_tls::READ_SYMBOL
+            ) =>
         {
             AttachPoint::Return
         }
@@ -406,6 +438,7 @@ impl ProviderFilter {
             Self::OpenSsl => provider == TlsProvider::OpenSsl,
             Self::BoringSsl => provider == TlsProvider::BoringSsl,
             Self::Rustls => provider == TlsProvider::Rustls,
+            Self::Go => provider == TlsProvider::Go,
         }
     }
 }
@@ -428,67 +461,5 @@ impl WithTarget for ProbePointPlan {
     fn with_target(mut self, target: &ElfImage) -> Self {
         self.target = target_identity(target);
         self
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use crate::providers::boringssl::{DetectedOffset, StaticPatternDetection};
-
-    use super::{boringssl_probe_symbols, boringssl_static_probe_offsets};
-
-    #[test]
-    fn boringssl_static_plan_excludes_validation_anchors() {
-        let detection = StaticPatternDetection {
-            arch_label: "aarch64",
-            matches: Vec::new(),
-            offsets: vec![
-                DetectedOffset {
-                    symbol: "SSL_read",
-                    file_offset: 0x100,
-                    virtual_address: 0x1000,
-                },
-                DetectedOffset {
-                    symbol: "SSL_read_internal",
-                    file_offset: 0x200,
-                    virtual_address: 0x2000,
-                },
-                DetectedOffset {
-                    symbol: "SSL_do_handshake",
-                    file_offset: 0x300,
-                    virtual_address: 0x3000,
-                },
-                DetectedOffset {
-                    symbol: "SSL_write",
-                    file_offset: 0x400,
-                    virtual_address: 0x4000,
-                },
-            ],
-            map_symbols: BTreeMap::new(),
-        };
-
-        let symbols = boringssl_static_probe_offsets(&detection)
-            .into_iter()
-            .map(|(symbol, _, _)| symbol)
-            .collect::<Vec<_>>();
-
-        assert_eq!(symbols, vec!["SSL_read", "SSL_write"]);
-    }
-
-    #[test]
-    fn boringssl_symbol_map_plan_excludes_validation_anchors() {
-        let symbols = BTreeMap::from([
-            ("SSL_do_handshake".to_string(), 0x1000),
-            ("SSL_read".to_string(), 0x2000),
-            ("SSL_write".to_string(), 0x3000),
-        ]);
-
-        let probe_symbols = boringssl_probe_symbols(&symbols)
-            .into_keys()
-            .collect::<Vec<_>>();
-
-        assert_eq!(probe_symbols, vec!["SSL_read", "SSL_write"]);
     }
 }

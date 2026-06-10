@@ -9,6 +9,7 @@ python3 tests/agent-trace/run_case.py claude-code
 python3 tests/agent-trace/run_case.py opencode-bun
 python3 tests/agent-trace/run_case.py xiaoo-rustls
 python3 tests/agent-trace/run_case.py langgraph-openai
+python3 tests/agent-trace/run_case.py go-net-http
 ```
 
 `claude-code`, `opencode-bun`, and `xiaoo-rustls` require the corresponding real CLI or binary and working provider credentials in the environment. These agents may reach the LLM provider through HTTPS/TLS or through a plain HTTP endpoint/proxy; the E2E cases accept either complete `TlsUserSpace` payload rows or complete `Syscall/socket-syscall` plaintext rows. `langgraph-openai` requires a Python interpreter with `langgraph` and `requests`, plus `DEEPSEEK_API_KEY`; the default workload uses DeepSeek's OpenAI-compatible HTTPS API to exercise a real LangGraph-based Python agent without adding framework instrumentation.
@@ -30,7 +31,9 @@ the byte patterns in `workload.conf` to detect the current `SSL_write` offset
 and writes a temporary matching map.
 
 For `langgraph-openai`, use a Python build whose `_ssl` extension links dynamic
-OpenSSL. The system Python venv path works in this environment:
+OpenSSL. Python imports `_ssl` lazily, so this case uses the eBPF OpenSSL
+shared-library attach path instead of the launch-time `tls-sync` inline hook.
+The system Python venv path works in this environment:
 
 ```bash
 python3 -m venv /tmp/actrail-langgraph-system-venv
@@ -39,9 +42,19 @@ LANGGRAPH_PYTHON=/tmp/actrail-langgraph-system-venv/bin/python \
   python3 tests/agent-trace/run_case.py langgraph-openai
 ```
 
+For `go-net-http`, the runner builds multiple Go workloads under
+`tests/agent-trace/go-net-http/workloads/` and uses a generic full-monitor
+configuration. The test must not specify `go-pclntab`, `payload_tls_library =
+go`, or a Go binary path in the config. AcTrail resolves Go TLS probe points
+automatically when the child process execs. The default runtime path validates
+standard-library `net/http` and a small Go library wrapper. A cgo/OpenSSL
+workload is also built and checked with the automatic fast probe resolver; set
+`ACTRAIL_GO_OPENSSL_E2E=1` to run its provider traffic in an environment where
+the OpenSSL workload can reach the LLM endpoint.
+
 Expected proof:
 
 - payload cases show complete outbound plaintext payload rows. HTTPS/TLS requests use `TlsUserSpace`; plain HTTP requests use `Syscall/socket-syscall`.
-- semantic actions contain a complete successful `llm.request`.
-- OTEL export contains an `llm.request` span.
+- full exchange cases contain complete successful `llm.request` and `llm.response` semantic actions.
+- full exchange cases export `llm.request` and `llm.response` OTEL spans.
 - process invocation cases additionally validate `process.exec` / `agent.invocation` spans in their own scripts.

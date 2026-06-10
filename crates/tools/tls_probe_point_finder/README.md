@@ -29,7 +29,10 @@ directly, and reports provider candidates:
   `SSL_read_ex`, and `SSL_write_ex`.
 - `openssl` shared library symbols: reports user-specified, direct
   `DT_NEEDED`, and transitive `DT_NEEDED` `libssl.so*` candidates with separate
-  confidence.
+  confidence. Python executables are also checked by importing `_ssl` with
+  `-S` and following that extension module's direct `DT_NEEDED` `libssl.so*`
+  dependency; this handles native Python and uv virtualenv launchers that map
+  OpenSSL only after `import _ssl`.
 - `boringssl` executable symbols: available with `--provider boringssl`;
   auto mode does not treat shared `SSL_*` names alone as proof of BoringSSL.
 - `boringssl` executable byte patterns: built-in x86_64/aarch64 related-entry
@@ -43,8 +46,14 @@ directly, and reports provider candidates:
   stripped rustls binaries. These patterns target plaintext inside rustls, not
   wrapper `PlaintextSink` or `tokio-rustls` call sites. Aarch64 rustls static
   pattern detection is intentionally not defined yet.
+- `go` executable pclntab symbols: resolves `crypto/tls.(*Conn).Write`,
+  `crypto/tls.(*Conn).Read`, and `runtime.memmove` from `.gopclntab`,
+  including stripped Go binaries. The eBPF collector can use
+  `payload_tls_resolver = go-pclntab` with `payload_tls_library = go` for
+  Go standard-library HTTPS request and response direct-copy capture without Go
+  return uprobes.
 
-`detect` accepts `--provider auto|openssl|boringssl|rustls`, `--source
+`detect` accepts `--provider auto|openssl|boringssl|rustls|go`, `--source
 auto|executable|shared-library`, and `--arch auto|aarch64|x86_64`. The
 documented default `--match-limit` is `8`; decimal and `0x` integer forms are
 accepted.
@@ -67,11 +76,16 @@ that need attach points, not full human-readable evidence.
 - OpenSSL requires `SSL_read`, `SSL_write`, `SSL_read_ex`, and `SSL_write_ex`.
 - BoringSSL static pattern probing must resolve the provider's related
   read/write entry set; a single isolated byte-pattern hit is not enough.
+- Go requires `crypto/tls.(*Conn).Write`, `crypto/tls.(*Conn).Read`, and
+  `runtime.memmove` from `.gopclntab`. The generated plan marks `Conn.Read` as
+  the read-side state point and `runtime.memmove` as the inbound copy point, so
+  it does not require Go return uprobes.
 
 The fast path tries cheaper lookups before slower scans:
 
 - executable symbol-table matches,
 - user-specified or direct `DT_NEEDED` OpenSSL shared libraries,
+- executable `.gopclntab` matches for Go,
 - executable static byte-pattern matches,
 - transitive `DT_NEEDED` OpenSSL shared libraries.
 

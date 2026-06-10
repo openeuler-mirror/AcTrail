@@ -95,6 +95,20 @@ impl ElfImage {
                 ))
             })
     }
+
+    pub(crate) fn section_data(&self, name: &str) -> ToolResult<Option<&[u8]>> {
+        let Some(section) = self.sections.iter().find(|section| section.name == name) else {
+            return Ok(None);
+        };
+        bounded(&self.data, section.file_offset, section.size).map(Some)
+    }
+
+    pub(crate) fn section_virtual_address(&self, name: &str) -> Option<u64> {
+        self.sections
+            .iter()
+            .find(|section| section.name == name)
+            .map(|section| section.virtual_address)
+    }
 }
 
 #[derive(Clone)]
@@ -138,6 +152,7 @@ pub(super) struct SegmentRange {
 pub(super) struct ElfSection {
     pub(super) name: String,
     pub(super) section_type: u32,
+    pub(super) virtual_address: u64,
     pub(super) file_offset: u64,
     pub(super) size: u64,
     pub(super) link: u32,
@@ -235,6 +250,7 @@ fn parse_sections(data: &[u8]) -> ToolResult<Vec<ElfSection>> {
         raw_sections.push((
             read_u32(header, ELF_SECTION_HEADER_NAME_FIELD)?,
             read_u32(header, ELF_SECTION_HEADER_TYPE_FIELD)?,
+            read_u64(header, ELF_SECTION_HEADER_ADDR_FIELD)?,
             read_u64(header, ELF_SECTION_HEADER_FILE_OFFSET_FIELD)?,
             read_u64(header, ELF_SECTION_HEADER_SIZE_FIELD)?,
             read_u32(header, ELF_SECTION_HEADER_LINK_FIELD)?,
@@ -243,13 +259,13 @@ fn parse_sections(data: &[u8]) -> ToolResult<Vec<ElfSection>> {
     }
     let names_section = raw_sections.get(name_table_index);
     let names = match names_section {
-        Some((_, _, offset, size, _, _)) => Some(bounded(data, *offset, *size)?),
+        Some((_, _, _, offset, size, _, _)) => Some(bounded(data, *offset, *size)?),
         None => None,
     };
     raw_sections
         .into_iter()
         .map(
-            |(name_offset, section_type, file_offset, size, link, entry_size)| {
+            |(name_offset, section_type, virtual_address, file_offset, size, link, entry_size)| {
                 let name = match names {
                     Some(table) => string_at(table, name_offset)?.unwrap_or("").to_string(),
                     None => String::new(),
@@ -257,6 +273,7 @@ fn parse_sections(data: &[u8]) -> ToolResult<Vec<ElfSection>> {
                 Ok(ElfSection {
                     name,
                     section_type,
+                    virtual_address,
                     file_offset,
                     size,
                     link,

@@ -27,6 +27,7 @@ pub(super) const ELF_PROGRAM_HEADER_NOTE: u32 = 4;
 
 pub(super) const ELF_SECTION_HEADER_NAME_FIELD: usize = 0;
 pub(super) const ELF_SECTION_HEADER_TYPE_FIELD: usize = 4;
+pub(super) const ELF_SECTION_HEADER_ADDR_FIELD: usize = 16;
 pub(super) const ELF_SECTION_HEADER_FILE_OFFSET_FIELD: usize = 24;
 pub(super) const ELF_SECTION_HEADER_SIZE_FIELD: usize = 32;
 pub(super) const ELF_SECTION_HEADER_LINK_FIELD: usize = 40;

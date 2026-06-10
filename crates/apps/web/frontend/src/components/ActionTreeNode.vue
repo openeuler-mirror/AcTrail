@@ -5,6 +5,7 @@
       `depth-${depth}`,
       `node-${node.nodeType}`,
       `kind-${node.kindClass}`,
+      node.visualClass ? `visual-${node.visualClass}` : null,
       {
         'is-expanded': childrenVisible,
         'is-selected': selectedId === node.id,
@@ -21,9 +22,14 @@
       >
         <span class="action-card-top">
           <span class="action-card-title">{{ node.title }}</span>
-          <span v-if="hasChildren" class="action-card-toggle" aria-hidden="true">
-            <ChevronDown v-if="childrenVisible" :size="15" />
-            <ChevronRight v-else :size="15" />
+          <span v-if="node.durationBadge || hasChildren" class="action-card-controls">
+            <span v-if="node.durationBadge" class="action-card-duration">
+              {{ node.durationBadge }}
+            </span>
+            <span v-if="hasChildren" class="action-card-toggle" aria-hidden="true">
+              <ChevronDown v-if="childrenVisible" :size="15" />
+              <ChevronRight v-else :size="15" />
+            </span>
           </span>
         </span>
         <span class="action-card-meta">
@@ -158,8 +164,22 @@ function handleClick() {
 }
 
 .action-tree-node.kind-llm-response > .action-tree-branch > .action-card,
-.action-tree-node.kind-llm-request > .action-tree-branch > .action-card {
+.action-tree-node.kind-llm-request > .action-tree-branch > .action-card,
+.action-tree-node.kind-llm-call > .action-tree-branch > .action-card {
   border-left-color: var(--amber);
+}
+
+.action-tree-node.visual-agent-call > .action-tree-branch > .action-card {
+  border-color: #b8c7e8;
+  border-left-color: #3158a3;
+  background: #f3f6fc;
+}
+
+.action-tree-node.visual-agent-call.is-selected > .action-tree-branch > .action-card {
+  border-color: #3158a3;
+  box-shadow:
+    0 0 0 2px rgba(49, 88, 163, 0.18),
+    var(--shadow);
 }
 
 .action-tree-node.kind-payload-segment > .action-tree-branch > .action-card,
@@ -180,6 +200,28 @@ function handleClick() {
   min-width: 0;
   overflow-wrap: anywhere;
   font-weight: 800;
+}
+
+.action-card-controls {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.action-card-duration {
+  min-height: 22px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0 7px;
+  border: 1px solid #d8dfdf;
+  border-radius: 6px;
+  background: #edf2f1;
+  color: var(--teal-deep);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .action-card-toggle {

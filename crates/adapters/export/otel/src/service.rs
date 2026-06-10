@@ -160,6 +160,7 @@ fn render_span(
 fn span_kind(kind: SemanticActionKind) -> &'static str {
     match kind {
         SemanticActionKind::HttpMessage
+        | SemanticActionKind::LlmCall
         | SemanticActionKind::LlmRequest
         | SemanticActionKind::LlmResponse => "SPAN_KIND_CLIENT",
         SemanticActionKind::ProcessExec
@@ -239,9 +240,12 @@ fn link_is_parent_child(role: SemanticActionLinkRole) -> bool {
             | SemanticActionLinkRole::CommandContainsProcessForkAttempt
             | SemanticActionLinkRole::CommandContainsProcessExec
             | SemanticActionLinkRole::CommandContainsCommandInvocation
+            | SemanticActionLinkRole::CommandContainsLlmCall
             | SemanticActionLinkRole::FileWriteContainsFileEvent
             | SemanticActionLinkRole::AgentInvocationExec
             | SemanticActionLinkRole::AgentInvocationChildLlmRequest
+            | SemanticActionLinkRole::LlmCallRequest
+            | SemanticActionLinkRole::LlmCallResponse
             | SemanticActionLinkRole::LlmResponseSseStream
             | SemanticActionLinkRole::SseStreamEvent
     )
@@ -252,10 +256,13 @@ enum ParentRolePriority {
     AgentInvocationExec,
     CommandContainsProcessExec,
     CommandContainsCommandInvocation,
+    CommandContainsLlmCall,
     AgentPerformedAction,
     CommandContainsProcessForkAttempt,
     CommandContainsFileAccess,
     AgentInvocationChildLlmRequest,
+    LlmCallRequest,
+    LlmCallResponse,
     FileWriteContainsFileEvent,
     LlmResponseSseStream,
     SseStreamEvent,
@@ -273,6 +280,9 @@ fn parent_role_priority(role: SemanticActionLinkRole) -> ParentRolePriority {
         SemanticActionLinkRole::CommandContainsCommandInvocation => {
             ParentRolePriority::CommandContainsCommandInvocation
         }
+        SemanticActionLinkRole::CommandContainsLlmCall => {
+            ParentRolePriority::CommandContainsLlmCall
+        }
         SemanticActionLinkRole::CommandContainsProcessForkAttempt => {
             ParentRolePriority::CommandContainsProcessForkAttempt
         }
@@ -283,6 +293,8 @@ fn parent_role_priority(role: SemanticActionLinkRole) -> ParentRolePriority {
         SemanticActionLinkRole::AgentInvocationChildLlmRequest => {
             ParentRolePriority::AgentInvocationChildLlmRequest
         }
+        SemanticActionLinkRole::LlmCallRequest => ParentRolePriority::LlmCallRequest,
+        SemanticActionLinkRole::LlmCallResponse => ParentRolePriority::LlmCallResponse,
         SemanticActionLinkRole::FileWriteContainsFileEvent => {
             ParentRolePriority::FileWriteContainsFileEvent
         }

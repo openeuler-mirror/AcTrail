@@ -4,7 +4,7 @@ use crate::ToolResult;
 use crate::args::{DetectArgs, ProviderChoice, SourceChoice, require_arch};
 use crate::binary::resolve_entry_elf;
 use crate::elf::ElfImage;
-use crate::providers::{boringssl, openssl, rustls};
+use crate::providers::{boringssl, go_tls, openssl, rustls};
 
 use super::assemble::{
     detected_offsets_report, exported_symbols, missing_symbols, names_with_extra,
@@ -58,6 +58,7 @@ fn detect_executable_provider(
         ProviderChoice::OpenSsl => detect_executable_openssl(image, args),
         ProviderChoice::BoringSsl => detect_executable_boringssl(image, args, explicit),
         ProviderChoice::Rustls => detect_executable_rustls(image, args),
+        ProviderChoice::Go => detect_executable_go(image),
         ProviderChoice::Auto => unreachable!("auto provider is expanded before detection"),
     }
 }
@@ -215,13 +216,51 @@ fn detect_executable_rustls(image: &ElfImage, args: &DetectArgs) -> ToolResult<C
     Ok(candidate)
 }
 
+fn detect_executable_go(image: &ElfImage) -> ToolResult<CandidateReport> {
+    let mut candidate = CandidateReport::new("executable", go_tls::NAME);
+    let Some(symbols) = go_tls::resolve_pclntab_symbols(image, go_tls::SYMBOLS)? else {
+        candidate.endpoint_status = Some(MapStatusReport::missing(
+            "incomplete",
+            &go_tls::SYMBOLS
+                .iter()
+                .map(|symbol| (*symbol).to_string())
+                .collect::<Vec<_>>(),
+        ));
+        candidate.status = CandidateStatus::Failed {
+            error: "Go pclntab is missing required crypto/tls endpoints".to_string(),
+        };
+        return Ok(candidate);
+    };
+    for symbol in go_tls::SYMBOLS {
+        let address = symbols
+            .get(*symbol)
+            .copied()
+            .expect("required Go symbol present");
+        let file_offset = image.file_offset_for_virtual_address(address)?;
+        candidate.endpoints.push(EndpointReport {
+            symbol: (*symbol).to_string(),
+            virtual_address: format!("0x{address:x}"),
+            file_offset: format!("0x{file_offset:x}"),
+        });
+    }
+    candidate.symbol_map = Some(symbol_map_report(
+        go_tls::RESOLVER,
+        go_tls::LIBRARY,
+        image.arch(),
+        image.build_id(),
+        &symbols,
+    )?);
+    candidate.status = CandidateStatus::Matched;
+    Ok(candidate)
+}
+
 fn detect_shared_libraries(
     image: &ElfImage,
     args: &DetectArgs,
 ) -> (Vec<CandidateReport>, Vec<String>) {
     if matches!(
         args.provider,
-        ProviderChoice::BoringSsl | ProviderChoice::Rustls
+        ProviderChoice::BoringSsl | ProviderChoice::Rustls | ProviderChoice::Go
     ) {
         return (
             vec![CandidateReport::failed(
@@ -381,6 +420,7 @@ fn providers(choice: ProviderChoice) -> Vec<ProviderChoice> {
             ProviderChoice::OpenSsl,
             ProviderChoice::BoringSsl,
             ProviderChoice::Rustls,
+            ProviderChoice::Go,
         ],
         provider => vec![provider],
     }
@@ -392,5 +432,6 @@ fn provider_name(provider: ProviderChoice) -> &'static str {
         ProviderChoice::OpenSsl => openssl::NAME,
         ProviderChoice::BoringSsl => boringssl::NAME,
         ProviderChoice::Rustls => rustls::NAME,
+        ProviderChoice::Go => go_tls::NAME,
     }
 }

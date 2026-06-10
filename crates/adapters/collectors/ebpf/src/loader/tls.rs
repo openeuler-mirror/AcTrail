@@ -6,6 +6,10 @@ mod boringssl;
 mod diagnostics;
 #[path = "tls/elf.rs"]
 mod elf;
+#[path = "tls/go/resolve.rs"]
+mod go;
+#[path = "tls/go/dynamic.rs"]
+mod go_dynamic;
 #[path = "tls/openssl.rs"]
 mod openssl;
 #[path = "tls/pending.rs"]
@@ -35,11 +39,13 @@ use elf::{resolve_executable_symbol_offsets, resolve_shared_library_symbol_offse
 use openssl::resolve_openssl_library_path;
 use rustls::resolve_rustls_offsets;
 use targets::{
-    BORINGSSL_UPROBE_TARGETS, OPENSSL_UPROBE_TARGETS, RUSTLS_UPROBE_TARGETS, TlsUprobeTarget,
+    BORINGSSL_UPROBE_TARGETS, GO_UPROBE_TARGETS, OPENSSL_UPROBE_TARGETS, RUSTLS_UPROBE_TARGETS,
+    TlsUprobeTarget,
 };
 
 pub(super) use diagnostics::read_tls_payload_diagnostics;
 pub use diagnostics::{TlsPayloadDiagnosticCounter, TlsPayloadDiagnostics};
+pub(super) use go_dynamic::{GoTlsAttachOutcome, attach_programs as attach_go_tls_programs};
 pub use pending::PendingTlsPayloadOp;
 pub(super) use pending::lookup_pending_payload_op;
 
@@ -49,6 +55,7 @@ pub const TLS_PAYLOAD_DIRECT_COPY_MIN_RING_BUFFER_BYTES: u32 = 8_388_608;
 const TLS_LIBRARY_OPENSSL: u32 = 1;
 const TLS_LIBRARY_BORINGSSL: u32 = 2;
 const TLS_LIBRARY_RUSTLS: u32 = 3;
+const TLS_LIBRARY_GO: u32 = 4;
 const TLS_BACKEND_SECCOMP_USER_READ: u32 = 1;
 const TLS_BACKEND_BPF_COPY_SECCOMP_FALLBACK: u32 = 2;
 
@@ -88,6 +95,9 @@ pub fn validate_payload_config(config: &PayloadTlsConfig) -> Result<(), LoaderEr
             PayloadTlsResolver::RustlsSymbolMap,
             PayloadTlsLibrary::Rustls,
         ) => validate_executable_pattern_config(config),
+        (PayloadTlsSource::Executable, PayloadTlsResolver::GoPclntab, PayloadTlsLibrary::Go) => {
+            go::validate_config(config)
+        }
         _ => Err(LoaderError::new(
             "payload_tls_config",
             "unsupported payload TLS source/resolver/library combination",
@@ -112,8 +122,16 @@ pub fn configure_payload_tls_map(
         })?;
     let key = 0_u32.to_ne_bytes();
     let mut value = Vec::with_capacity(std::mem::size_of::<u32>() * 4);
-    value.extend_from_slice(&payload_tls_library_id(config)?.to_ne_bytes());
-    value.extend_from_slice(&payload_tls_backend_id(config)?.to_ne_bytes());
+    let (library, backend) = if config.capture_backend.is_sync() {
+        (TLS_LIBRARY_GO, TLS_BACKEND_BPF_COPY_SECCOMP_FALLBACK)
+    } else {
+        (
+            payload_tls_library_id(config)?,
+            payload_tls_backend_id(config)?,
+        )
+    };
+    value.extend_from_slice(&library.to_ne_bytes());
+    value.extend_from_slice(&backend.to_ne_bytes());
     value.extend_from_slice(&config.max_segment_bytes.to_ne_bytes());
     value.extend_from_slice(&(config.diagnostics_enabled as u32).to_ne_bytes());
     map.update(&key, &value, MapFlags::ANY)
@@ -124,7 +142,7 @@ pub fn attach_payload_tls_programs(
     object: &mut Object,
     config: &PayloadTlsConfig,
 ) -> Result<Vec<(Link, String)>, LoaderError> {
-    if !config.enabled {
+    if !config.enabled || config.capture_backend.is_sync() {
         return Ok(Vec::new());
     }
     let attach_points = payload_tls_attach_points(config)?;
@@ -162,7 +180,13 @@ pub fn attach_payload_tls_programs(
 }
 
 pub fn is_payload_tls_program(program_name: &str) -> bool {
-    program_name.starts_with("handle_ssl_") || program_name.starts_with("handle_rustls_")
+    program_name.starts_with("handle_ssl_")
+        || program_name.starts_with("handle_rustls_")
+        || program_name.starts_with("handle_go_tls_")
+}
+
+pub fn is_go_tls_program(program_name: &str) -> bool {
+    program_name.starts_with("handle_go_tls_")
 }
 
 fn validate_disabled_executable_fields(config: &PayloadTlsConfig) -> Result<(), LoaderError> {
@@ -355,6 +379,12 @@ fn payload_tls_attach_points(
             )?;
             offset_attach_points(&binary_path, &offsets, RUSTLS_UPROBE_TARGETS, "rustls")
         }
+        (PayloadTlsSource::Executable, PayloadTlsResolver::GoPclntab, PayloadTlsLibrary::Go) => {
+            let binary_path =
+                require_existing_path(&config.binary_path, "payload_tls_binary_path")?;
+            let offsets = go::resolve_offsets(&binary_path, &target_symbols(GO_UPROBE_TARGETS))?;
+            offset_attach_points(&binary_path, &offsets, GO_UPROBE_TARGETS, "Go crypto/tls")
+        }
         _ => Err(LoaderError::new(
             "payload_tls_config",
             "unsupported payload TLS attach resolver",
@@ -404,6 +434,7 @@ fn payload_tls_library_id(config: &PayloadTlsConfig) -> Result<u32, LoaderError>
         PayloadTlsLibrary::Openssl => Ok(TLS_LIBRARY_OPENSSL),
         PayloadTlsLibrary::Boringssl => Ok(TLS_LIBRARY_BORINGSSL),
         PayloadTlsLibrary::Rustls => Ok(TLS_LIBRARY_RUSTLS),
+        PayloadTlsLibrary::Go => Ok(TLS_LIBRARY_GO),
     }
 }
 

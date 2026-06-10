@@ -17,6 +17,8 @@ use crate::payload_projection::llm::{
     project_live_llm_response_message,
 };
 
+mod call;
+
 #[derive(Default)]
 pub(super) struct LiveLlmProjector {
     streams: BTreeMap<LiveStreamKey, LiveStreamState>,
@@ -94,7 +96,9 @@ impl LiveLlmProjector {
             }
             if !matches!(
                 action.kind,
-                SemanticActionKind::LlmResponse | SemanticActionKind::SseStream
+                SemanticActionKind::LlmCall
+                    | SemanticActionKind::LlmResponse
+                    | SemanticActionKind::SseStream
             ) {
                 continue;
             }
@@ -124,6 +128,23 @@ impl LiveLlmProjector {
                     continue;
                 }
                 _ => {}
+            }
+            self.emitted_actions.insert(key, action.clone());
+            changed.push(action);
+        }
+        let emitted_actions = self.emitted_actions.values().collect::<Vec<_>>();
+        let call_candidates = call::llm_call_actions_for(&changed, &emitted_actions);
+        for action in call_candidates {
+            let key = EmittedLlmAction {
+                trace_id: action.trace_id,
+                action_id: action.action_id.clone(),
+            };
+            if self
+                .emitted_actions
+                .get(&key)
+                .is_some_and(|existing| existing == &action)
+            {
+                continue;
             }
             self.emitted_actions.insert(key, action.clone());
             changed.push(action);

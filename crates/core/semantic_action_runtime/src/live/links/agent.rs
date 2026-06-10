@@ -168,8 +168,7 @@ fn agent_performed_action_candidate(action: &SemanticAction) -> bool {
     }
     matches!(
         action.kind,
-        SemanticActionKind::LlmRequest
-            | SemanticActionKind::LlmResponse
+        SemanticActionKind::LlmCall
             | SemanticActionKind::CommandInvocation
             | SemanticActionKind::FileRead
             | SemanticActionKind::FileWrite
@@ -180,8 +179,7 @@ fn agent_performed_action_candidate(action: &SemanticAction) -> bool {
 
 fn candidate_agent_process(action: &SemanticAction) -> Option<ProcessIdentity> {
     match action.kind {
-        SemanticActionKind::LlmRequest
-        | SemanticActionKind::LlmResponse
+        SemanticActionKind::LlmCall
         | SemanticActionKind::FileRead
         | SemanticActionKind::FileWrite
         | SemanticActionKind::FileModify

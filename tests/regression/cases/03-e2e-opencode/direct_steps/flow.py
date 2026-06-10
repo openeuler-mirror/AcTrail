@@ -197,8 +197,8 @@ def finish_opencode_capture(
         "complete LLM exchange actions",
         lambda: module.require_complete_llm_exchange(actions),
         expected_found_detail(
-            "complete successful llm.request and llm.response exist",
-            ["complete successful llm.request", "complete successful llm.response"],
+            "complete successful llm.call/request/response exist",
+            ["complete successful llm.call", "complete successful llm.request", "complete successful llm.response"],
         ),
         "the action table contains a complete successful semantic request/response exchange",
     )
@@ -207,8 +207,8 @@ def finish_opencode_capture(
         "LLM exchange action graph",
         lambda: module.require_llm_exchange_graph(actions),
         expected_found_detail(
-            "llm.request links to llm.response and HTTP evidence",
-            ["llm.request.llm_response", "llm.request.http_message", "llm.response facts"],
+            "llm.call links to request/response and HTTP evidence",
+            ["llm.call.request", "llm.call.response", "llm.request.http_message", "llm.response facts"],
         ),
         "viewer JSON exposes the semantic action graph without direct SQLite inspection",
     )

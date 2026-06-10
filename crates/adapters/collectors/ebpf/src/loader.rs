@@ -23,6 +23,7 @@ use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::os::fd::RawFd;
+use std::path::Path;
 use std::rc::Rc;
 
 use config_core::daemon::{EbpfCollectorConfig, PayloadConfig};
@@ -41,6 +42,7 @@ pub use ring_decode::{
     KernelTlsCaptureRequestEvent, KernelTlsCompletionEvent, KernelTlsDiagnosticEvent,
     KernelTlsDirectCaptureEvent,
 };
+use tls::GoTlsAttachOutcome;
 pub use tls::{PendingTlsPayloadOp, TlsPayloadDiagnosticCounter, TlsPayloadDiagnostics};
 
 const ACTIVE_PID_NAMESPACE_KEY: u32 = 0;
@@ -155,6 +157,11 @@ impl EbpfProgramLoader {
         resize_map(
             &mut open_object,
             "tls_pending_ns",
+            effective_payload.tls.pending_operation_max_entries,
+        )?;
+        resize_map(
+            &mut open_object,
+            "go_tls_read_buffers",
             effective_payload.tls.pending_operation_max_entries,
         )?;
         resize_map(
@@ -419,6 +426,18 @@ impl EbpfRuntime {
 
     pub fn tls_payload_diagnostics(&self) -> Result<TlsPayloadDiagnostics, LoaderError> {
         tls::read_tls_payload_diagnostics(&self.payload_tls_diagnostics)
+    }
+
+    pub fn attach_go_tls_executable(&mut self, binary_path: &Path) -> Result<bool, LoaderError> {
+        let outcome = tls::attach_go_tls_programs(&mut self._object, binary_path)?;
+        let GoTlsAttachOutcome::Attached(links) = outcome else {
+            return Ok(false);
+        };
+        for (link, program_name) in links {
+            self._links.push(link);
+            self.attached_programs.push(program_name);
+        }
+        Ok(true)
     }
 }
 

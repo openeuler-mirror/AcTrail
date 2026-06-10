@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::elf::{DynamicInfo, ElfImage};
 use crate::{ToolError, ToolResult};
@@ -14,11 +15,13 @@ pub(crate) const SYMBOLS: &[&str] = &["SSL_read", "SSL_write", "SSL_read_ex", "S
 
 const CONFIDENCE_USER_SPECIFIED: &str = "user-specified";
 const CONFIDENCE_DIRECT_NEEDED: &str = "direct-needed";
+const CONFIDENCE_PYTHON_SSL_NEEDED: &str = "python-_ssl-needed";
 const CONFIDENCE_TRANSITIVE_NEEDED: &str = "transitive-needed";
 const CONFIDENCE_RANK_USER_SPECIFIED: u8 = 3;
 const CONFIDENCE_RANK_DIRECT_NEEDED: u8 = 2;
 const CONFIDENCE_RANK_TRANSITIVE_NEEDED: u8 = 1;
 const CONFIDENCE_RANK_UNKNOWN: u8 = 0;
+const PYTHON_SSL_EXTENSION_QUERY_ARGS: &[&str] = &["-S", "-c", "import _ssl; print(_ssl.__file__)"];
 
 // Documented dependency-resolution directories. These are used only to resolve
 // names already present in a DT_NEEDED dependency graph.
@@ -58,6 +61,7 @@ pub(crate) fn library_candidates(
         insert_candidate(&mut candidates, path, CONFIDENCE_USER_SPECIFIED, true, None)?;
     }
     collect_direct_libssl(image, library_search_dirs, &mut candidates, &mut notices)?;
+    collect_python_ssl_libssl(image, library_search_dirs, &mut candidates, &mut notices)?;
     collect_needed_libssl(image, library_search_dirs, &mut candidates, &mut notices)?;
     Ok(LibrarySearch {
         candidates: candidates.into_values().collect(),
@@ -76,6 +80,7 @@ pub(crate) fn direct_library_candidates(
         insert_candidate(&mut candidates, path, CONFIDENCE_USER_SPECIFIED, true, None)?;
     }
     collect_direct_libssl(image, library_search_dirs, &mut candidates, &mut notices)?;
+    collect_python_ssl_libssl(image, library_search_dirs, &mut candidates, &mut notices)?;
     Ok(LibrarySearch {
         candidates: candidates.into_values().collect(),
         notices,
@@ -115,7 +120,7 @@ fn insert_candidate(
 fn candidate_rank(confidence: &str) -> u8 {
     match confidence {
         CONFIDENCE_USER_SPECIFIED => CONFIDENCE_RANK_USER_SPECIFIED,
-        CONFIDENCE_DIRECT_NEEDED => CONFIDENCE_RANK_DIRECT_NEEDED,
+        CONFIDENCE_DIRECT_NEEDED | CONFIDENCE_PYTHON_SSL_NEEDED => CONFIDENCE_RANK_DIRECT_NEEDED,
         CONFIDENCE_TRANSITIVE_NEEDED => CONFIDENCE_RANK_TRANSITIVE_NEEDED,
         _ => CONFIDENCE_RANK_UNKNOWN,
     }
@@ -195,15 +200,67 @@ fn collect_direct_libssl(
     candidates: &mut BTreeMap<PathBuf, LibraryCandidate>,
     notices: &mut Vec<String>,
 ) -> ToolResult<()> {
-    let dynamic = image.dynamic_info()?;
-    let origin = image.path().parent().unwrap_or_else(|| Path::new("."));
-    let search_dirs = dependency_search_dirs(&dynamic, origin, library_search_dirs);
     let root_label = image
         .path()
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("target")
         .to_string();
+    collect_direct_libssl_from_root(
+        image,
+        library_search_dirs,
+        candidates,
+        notices,
+        CONFIDENCE_DIRECT_NEEDED,
+        &root_label,
+        None,
+    )
+}
+
+fn collect_python_ssl_libssl(
+    image: &ElfImage,
+    library_search_dirs: &[PathBuf],
+    candidates: &mut BTreeMap<PathBuf, LibraryCandidate>,
+    notices: &mut Vec<String>,
+) -> ToolResult<()> {
+    if !is_python_executable(image.path()) {
+        return Ok(());
+    }
+    let Some(extension_path) = python_ssl_extension_path(image.path(), notices)? else {
+        return Ok(());
+    };
+    let extension = ElfImage::parse(&extension_path)?;
+    let root_label = format!(
+        "{}:_ssl",
+        image
+            .path()
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("python")
+    );
+    collect_direct_libssl_from_root(
+        &extension,
+        library_search_dirs,
+        candidates,
+        notices,
+        CONFIDENCE_PYTHON_SSL_NEEDED,
+        &root_label,
+        Some(format!("python_ssl_extension={}", extension_path.display())),
+    )
+}
+
+fn collect_direct_libssl_from_root(
+    image: &ElfImage,
+    library_search_dirs: &[PathBuf],
+    candidates: &mut BTreeMap<PathBuf, LibraryCandidate>,
+    notices: &mut Vec<String>,
+    confidence: &'static str,
+    root_label: &str,
+    extra_note: Option<String>,
+) -> ToolResult<()> {
+    let dynamic = image.dynamic_info()?;
+    let origin = image.path().parent().unwrap_or_else(|| Path::new("."));
+    let search_dirs = dependency_search_dirs(&dynamic, origin, library_search_dirs);
     for needed in &dynamic.needed {
         if !is_libssl_name(needed) {
             continue;
@@ -218,12 +275,78 @@ fn collect_direct_libssl(
         insert_candidate(
             candidates,
             &canonical,
-            CONFIDENCE_DIRECT_NEEDED,
+            confidence,
             true,
-            Some(format!("dependency_chain={root_label} -> {needed}")),
+            Some(direct_libssl_note(
+                root_label,
+                needed,
+                extra_note.as_deref(),
+            )),
         )?;
     }
     Ok(())
+}
+
+fn direct_libssl_note(root_label: &str, needed: &str, extra: Option<&str>) -> String {
+    let mut note = format!("dependency_chain={root_label} -> {needed}");
+    if let Some(extra) = extra {
+        note.push(' ');
+        note.push_str(extra);
+    }
+    note
+}
+
+fn python_ssl_extension_path(
+    python: &Path,
+    notices: &mut Vec<String>,
+) -> ToolResult<Option<PathBuf>> {
+    let output = Command::new(python)
+        .args(PYTHON_SSL_EXTENSION_QUERY_ARGS)
+        .output()
+        .map_err(|error| {
+            ToolError::new(format!(
+                "cannot query Python _ssl extension from {}: {error}",
+                python.display()
+            ))
+        })?;
+    if !output.status.success() {
+        notices.push(format!(
+            "python_ssl_extension_unavailable binary={} status={} stderr={}",
+            python.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+        return Ok(None);
+    }
+    let raw_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if raw_path.is_empty() {
+        notices.push(format!(
+            "python_ssl_extension_unavailable binary={} reason=empty_stdout",
+            python.display()
+        ));
+        return Ok(None);
+    }
+    let path = PathBuf::from(raw_path);
+    fs::canonicalize(&path).map(Some).map_err(|error| {
+        ToolError::new(format!(
+            "cannot resolve Python _ssl extension {}: {error}",
+            path.display()
+        ))
+    })
+}
+
+fn is_python_executable(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    let Some(rest) = name.strip_prefix("python") else {
+        return false;
+    };
+    rest.is_empty()
+        || rest
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_digit())
 }
 
 struct NeededEdge {

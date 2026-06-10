@@ -55,6 +55,7 @@ pub enum TlsProvider {
     OpenSsl,
     BoringSsl,
     Rustls,
+    Go,
 }
 
 impl TlsProvider {
@@ -63,6 +64,7 @@ impl TlsProvider {
             Self::OpenSsl => "openssl",
             Self::BoringSsl => "boringssl",
             Self::Rustls => "rustls",
+            Self::Go => "go",
         }
     }
 }

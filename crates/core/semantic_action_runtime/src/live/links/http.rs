@@ -106,6 +106,7 @@ fn llm_http_link_role(
 
 fn http_message_matches_llm(llm_action: &SemanticAction, http_message: &SemanticAction) -> bool {
     actions_share_payload_segment(llm_action, http_message)
+        || response_actions_share_stream(llm_action, http_message)
 }
 
 fn actions_share_payload_segment(
@@ -121,6 +122,34 @@ fn actions_share_payload_segment(
     llm_action.evidence.iter().any(|evidence| {
         evidence.kind == SemanticEvidenceKind::PayloadSegment && evidence.id == payload_segment_id
     })
+}
+
+fn response_actions_share_stream(
+    llm_action: &SemanticAction,
+    http_message: &SemanticAction,
+) -> bool {
+    if llm_action.kind != SemanticActionKind::LlmResponse {
+        return false;
+    }
+    if llm_action.trace_id != http_message.trace_id || llm_action.process != http_message.process {
+        return false;
+    }
+    if http_message.attributes.get("direction").map(String::as_str) != Some("inbound") {
+        return false;
+    }
+    if llm_action
+        .attributes
+        .get("payload.stream_key")
+        .zip(http_message.attributes.get("stream_key"))
+        .is_none_or(|(left, right)| left != right)
+    {
+        return false;
+    }
+    llm_action
+        .attributes
+        .get("http.response.status_code")
+        .zip(http_message.attributes.get("status_code"))
+        .is_none_or(|(left, right)| left == right)
 }
 
 fn matching_payload_evidence(

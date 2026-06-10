@@ -72,6 +72,7 @@ impl EbpfCollector {
     ) -> Result<(), CollectorError> {
         match event {
             KernelEvent::Observation(event) => {
+                self.maybe_attach_go_tls_after_exec(&event)?;
                 self.apply_file_lifecycle_context(&event);
                 if let Some(event) = decode_observation(
                     event,
@@ -120,5 +121,21 @@ impl EbpfCollector {
             decode::PROC_EVENT_EXIT => self.file_tracker.remove_process(event.pid),
             _ => {}
         }
+    }
+
+    fn maybe_attach_go_tls_after_exec(
+        &mut self,
+        event: &KernelObservationEvent,
+    ) -> Result<(), CollectorError> {
+        if event.kind != decode::PROC_EVENT_EXEC {
+            return Ok(());
+        }
+        let Some(exec_filename) = &event.exec_filename else {
+            return Ok(());
+        };
+        if exec_filename.truncated {
+            return Ok(());
+        }
+        self.attach_dynamic_go_tls(std::path::Path::new(&exec_filename.path))
     }
 }

@@ -4,16 +4,12 @@ use config_core::daemon::AgentInvocationConfig;
 use model_core::event::{DomainEvent, EventPayload};
 use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
-use semantic_action::{
-    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkConfidence,
-    SemanticActionLinkRole,
-};
+use semantic_action::{SemanticAction, SemanticActionKind, SemanticActionLink};
 use std::time::SystemTime;
 
 use super::actions::{
-    ACTION_VALID_FALSE, ATTR_ACTION_VALID, ATTR_LINK_VALID, LINK_VALID_FALSE, enforcement_action,
-    file_modify_action, http_message_action, is_file_modify_operation, is_http_protocol,
-    process_action_id, process_exec_action, process_fork_attempt_action,
+    enforcement_action, file_modify_action, http_message_action, is_file_modify_operation,
+    is_http_protocol, process_exec_action, process_fork_attempt_action,
 };
 use super::agent::AgentProjector;
 use super::command::CommandProjector;
@@ -77,7 +73,6 @@ impl LiveSemanticActionRuntime {
                 {
                     output.extend(self.command.observe_process_exec(event, process_action));
                 }
-                output.extend(agent_invocation_links(&actions));
                 output
                     .links
                     .extend(self.links.observe_actions(&output.actions));
@@ -95,10 +90,6 @@ impl LiveSemanticActionRuntime {
             }
             EventPayload::Process(payload) if payload.operation == "fork" => {
                 let mut output = self.command.observe_process_fork(event);
-                output.extend(LiveSemanticActionOutput::from_actions(
-                    self.agent.observe_process_fork(event),
-                ));
-                output.extend(agent_invocation_links(&output.actions));
                 output.links.extend(self.links.observe_process_fork(event));
                 output
                     .links
@@ -162,7 +153,12 @@ impl LiveSemanticActionRuntime {
             };
             output.actions.push(action.clone());
             output.actions.extend(agent_actions.clone());
-            output.extend(agent_invocation_links(&agent_actions));
+            for process_action in agent_actions {
+                output.extend(
+                    self.command
+                        .observe_agent_identity(&process_action, &action),
+                );
+            }
         }
         output
             .links
@@ -186,78 +182,6 @@ impl LiveSemanticActionRuntime {
         let actions = self.llm.finalize_trace(trace_id, finished_at);
         let links = self.links.observe_actions(&actions);
         LiveSemanticActionOutput { actions, links }
-    }
-}
-
-fn agent_invocation_links(actions: &[SemanticAction]) -> LiveSemanticActionOutput {
-    let mut links = Vec::new();
-    for action in actions
-        .iter()
-        .filter(|action| action.kind == semantic_action::SemanticActionKind::AgentInvocation)
-    {
-        let invalidated = action
-            .attributes
-            .get(ATTR_ACTION_VALID)
-            .is_some_and(|value| value == ACTION_VALID_FALSE);
-        links.push(SemanticActionLink {
-            trace_id: action.trace_id,
-            parent_action_id: action.action_id.clone(),
-            child_action_id: process_action_id(action.trace_id, &action.process, "exec"),
-            role: SemanticActionLinkRole::AgentInvocationExec,
-            confidence: agent_invocation_link_confidence(invalidated),
-            evidence: action
-                .evidence
-                .iter()
-                .filter(|evidence| evidence.role == "agent.invocation.exec")
-                .cloned()
-                .collect(),
-            attributes: agent_invocation_link_attributes(invalidated),
-        });
-        if let Some(child_llm_action_id) = action
-            .attributes
-            .get("agent.invocation.evidence_action_id")
-            .cloned()
-        {
-            links.push(SemanticActionLink {
-                trace_id: action.trace_id,
-                parent_action_id: action.action_id.clone(),
-                child_action_id: child_llm_action_id,
-                role: SemanticActionLinkRole::AgentInvocationChildLlmRequest,
-                confidence: agent_invocation_link_confidence(invalidated),
-                evidence: action
-                    .evidence
-                    .iter()
-                    .filter(|evidence| evidence.role != "agent.invocation.exec")
-                    .cloned()
-                    .collect(),
-                attributes: agent_invocation_link_attributes(invalidated),
-            });
-        }
-    }
-    LiveSemanticActionOutput {
-        actions: Vec::new(),
-        links,
-    }
-}
-
-fn agent_invocation_link_confidence(invalidated: bool) -> SemanticActionLinkConfidence {
-    if invalidated {
-        SemanticActionLinkConfidence::Derived
-    } else {
-        SemanticActionLinkConfidence::Observed
-    }
-}
-
-fn agent_invocation_link_attributes(
-    invalidated: bool,
-) -> std::collections::BTreeMap<String, String> {
-    if invalidated {
-        std::collections::BTreeMap::from([(
-            ATTR_LINK_VALID.to_string(),
-            LINK_VALID_FALSE.to_string(),
-        )])
-    } else {
-        std::collections::BTreeMap::new()
     }
 }
 

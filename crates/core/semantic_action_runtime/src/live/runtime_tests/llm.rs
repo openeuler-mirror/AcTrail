@@ -413,6 +413,9 @@ fn llm_response_projects_sse_stream_and_events() {
 
 "#,
         "data: {\"model\":\"deepseek-v4-flash\",\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n",
+        r#"data: {"model":"deepseek-v4-flash","choices":[],"usage":{"prompt_tokens":12,"completion_tokens":7,"total_tokens":19,"prompt_tokens_details":{"cached_tokens":5},"completion_tokens_details":{"reasoning_tokens":3},"prompt_cache_hit_tokens":4,"prompt_cache_miss_tokens":8}}
+
+"#,
         "data: [DONE]\n\n"
     );
     let bytes = format!(
@@ -464,6 +467,55 @@ fn llm_response_projects_sse_stream_and_events() {
         tool_calls[0]["function"]["arguments_json"]["command"],
         "pwd"
     );
+    assert_eq!(
+        response
+            .attributes
+            .get("llm.response.prompt_tokens")
+            .map(String::as_str),
+        Some("12")
+    );
+    assert_eq!(
+        response
+            .attributes
+            .get("llm.response.completion_tokens")
+            .map(String::as_str),
+        Some("7")
+    );
+    assert_eq!(
+        response
+            .attributes
+            .get("llm.response.total_tokens")
+            .map(String::as_str),
+        Some("19")
+    );
+    assert_eq!(
+        response
+            .attributes
+            .get("llm.response.cached_prompt_tokens")
+            .map(String::as_str),
+        Some("5")
+    );
+    assert_eq!(
+        response
+            .attributes
+            .get("llm.response.reasoning_tokens")
+            .map(String::as_str),
+        Some("3")
+    );
+    assert_eq!(
+        response
+            .attributes
+            .get("llm.response.prompt_cache_hit_tokens")
+            .map(String::as_str),
+        Some("4")
+    );
+    assert_eq!(
+        response
+            .attributes
+            .get("llm.response.prompt_cache_miss_tokens")
+            .map(String::as_str),
+        Some("8")
+    );
 
     let stream = output
         .actions
@@ -475,7 +527,7 @@ fn llm_response_projects_sse_stream_and_events() {
         .iter()
         .filter(|action| action.kind == SemanticActionKind::SseEvent)
         .collect::<Vec<_>>();
-    assert_eq!(events.len(), 6);
+    assert_eq!(events.len(), 7);
     let event_tool_delta_json = events
         .iter()
         .find_map(|event| event.attributes.get("llm.response.delta.tool_calls_json"))

@@ -110,6 +110,11 @@ fn child_exec_seccomp(
                 .chain(std::iter::once(std::ptr::null()))
                 .collect::<Vec<_>>();
             libc::execvp(argv[0].as_ptr(), pointers.as_mut_ptr());
+            eprintln!(
+                "launch child exec {}: {}",
+                argv[0].to_string_lossy(),
+                std::io::Error::last_os_error()
+            );
             libc::_exit(libc::EXIT_FAILURE);
         },
         Err(error) => {

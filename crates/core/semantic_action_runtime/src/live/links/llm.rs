@@ -10,6 +10,7 @@ use super::shared::{ActionLinkKey, SemanticActionKey};
 
 #[derive(Default)]
 pub(super) struct LlmExchangeLinkProjector {
+    calls: BTreeMap<SemanticActionKey, SemanticAction>,
     requests: BTreeMap<SemanticActionKey, SemanticAction>,
     responses: BTreeMap<SemanticActionKey, SemanticAction>,
     emitted_links: BTreeSet<ActionLinkKey>,
@@ -18,17 +19,58 @@ pub(super) struct LlmExchangeLinkProjector {
 impl LlmExchangeLinkProjector {
     pub(super) fn observe_action(&mut self, action: &SemanticAction) -> Vec<SemanticActionLink> {
         match action.kind {
+            SemanticActionKind::LlmCall => {
+                self.calls
+                    .insert(SemanticActionKey::from(action), action.clone());
+                let mut links = Vec::new();
+                if let Some(request) = self.call_request(action) {
+                    links.extend(self.link(
+                        action,
+                        &request,
+                        SemanticActionLinkRole::LlmCallRequest,
+                    ));
+                }
+                if let Some(response) = self.call_response(action) {
+                    links.extend(self.link(
+                        action,
+                        &response,
+                        SemanticActionLinkRole::LlmCallResponse,
+                    ));
+                }
+                links
+            }
             SemanticActionKind::LlmRequest => {
                 self.requests
                     .insert(SemanticActionKey::from(action), action.clone());
-                Vec::new()
+                self.calls
+                    .values()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .iter()
+                    .filter_map(|call| {
+                        call_references_action(call, "llm.call.request_action_id", action)
+                            .then(|| {
+                                self.link(call, action, SemanticActionLinkRole::LlmCallRequest)
+                            })
+                            .flatten()
+                    })
+                    .collect()
             }
             SemanticActionKind::LlmResponse => {
                 self.responses
                     .insert(SemanticActionKey::from(action), action.clone());
-                self.latest_request_for_response(action)
-                    .and_then(|request| self.link(&request, action))
-                    .into_iter()
+                self.calls
+                    .values()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .iter()
+                    .filter_map(|call| {
+                        call_references_action(call, "llm.call.response_action_id", action)
+                            .then(|| {
+                                self.link(call, action, SemanticActionLinkRole::LlmCallResponse)
+                            })
+                            .flatten()
+                    })
                     .collect()
             }
             _ => Vec::new(),
@@ -36,69 +78,82 @@ impl LlmExchangeLinkProjector {
     }
 
     pub(super) fn forget_trace(&mut self, trace_id: TraceId) {
+        self.calls.retain(|key, _| key.trace_id != trace_id);
         self.requests.retain(|key, _| key.trace_id != trace_id);
         self.responses.retain(|key, _| key.trace_id != trace_id);
         self.emitted_links.retain(|key| key.trace_id != trace_id);
     }
 
-    fn latest_request_for_response(&self, response: &SemanticAction) -> Option<SemanticAction> {
+    fn call_request(&self, call: &SemanticAction) -> Option<SemanticAction> {
+        let action_id = call.attributes.get("llm.call.request_action_id")?;
         self.requests
             .values()
-            .filter(|request| llm_actions_share_stream(request, response))
-            .filter(|request| request.start_time <= response.start_time)
-            .max_by_key(|request| (request.start_time, request.action_id.clone()))
+            .find(|request| request.action_id == *action_id)
+            .cloned()
+    }
+
+    fn call_response(&self, call: &SemanticAction) -> Option<SemanticAction> {
+        let action_id = call.attributes.get("llm.call.response_action_id")?;
+        self.responses
+            .values()
+            .find(|response| response.action_id == *action_id)
             .cloned()
     }
 
     fn link(
         &mut self,
-        request: &SemanticAction,
-        response: &SemanticAction,
+        call: &SemanticAction,
+        child: &SemanticAction,
+        role: SemanticActionLinkRole,
     ) -> Option<SemanticActionLink> {
-        if !llm_actions_share_stream(request, response) || request.start_time > response.start_time
-        {
+        if !call_references_role(call, child, role) {
             return None;
         }
         let key = ActionLinkKey {
-            trace_id: request.trace_id,
-            parent_action_id: request.action_id.clone(),
-            child_action_id: response.action_id.clone(),
-            role: SemanticActionLinkRole::LlmRequestLlmResponse,
+            trace_id: call.trace_id,
+            parent_action_id: call.action_id.clone(),
+            child_action_id: child.action_id.clone(),
+            role,
         };
         if !self.emitted_links.insert(key) {
             return None;
         }
         Some(SemanticActionLink {
-            trace_id: request.trace_id,
-            parent_action_id: request.action_id.clone(),
-            child_action_id: response.action_id.clone(),
-            role: SemanticActionLinkRole::LlmRequestLlmResponse,
+            trace_id: call.trace_id,
+            parent_action_id: call.action_id.clone(),
+            child_action_id: child.action_id.clone(),
+            role,
             confidence: SemanticActionLinkConfidence::Observed,
-            evidence: response.evidence.clone(),
+            evidence: child.evidence.clone(),
             attributes: BTreeMap::new(),
         })
     }
 }
 
-fn llm_actions_share_stream(request: &SemanticAction, response: &SemanticAction) -> bool {
-    request.kind == SemanticActionKind::LlmRequest
-        && response.kind == SemanticActionKind::LlmResponse
-        && request.trace_id == response.trace_id
-        && request.process == response.process
-        && request.attributes.get("payload.stream_key")
-            == response.attributes.get("payload.stream_key")
-        && http_stream_ids_are_compatible(request, response)
-}
-
-fn http_stream_ids_are_compatible(request: &SemanticAction, response: &SemanticAction) -> bool {
-    match (
-        request.attributes.get("http.request.stream_id"),
-        response.attributes.get("http.response.stream_id"),
-    ) {
-        (Some(request_stream_id), Some(response_stream_id)) => {
-            request_stream_id == response_stream_id
+fn call_references_role(
+    call: &SemanticAction,
+    child: &SemanticAction,
+    role: SemanticActionLinkRole,
+) -> bool {
+    match role {
+        SemanticActionLinkRole::LlmCallRequest => {
+            call_references_action(call, "llm.call.request_action_id", child)
+                && child.kind == SemanticActionKind::LlmRequest
         }
-        (None, None) => true,
+        SemanticActionLinkRole::LlmCallResponse => {
+            call_references_action(call, "llm.call.response_action_id", child)
+                && child.kind == SemanticActionKind::LlmResponse
+        }
         _ => false,
     }
+}
+
+fn call_references_action(call: &SemanticAction, attr: &str, child: &SemanticAction) -> bool {
+    call.kind == SemanticActionKind::LlmCall
+        && call.trace_id == child.trace_id
+        && call.process == child.process
+        && call
+            .attributes
+            .get(attr)
+            .is_some_and(|action_id| action_id == &child.action_id)
 }

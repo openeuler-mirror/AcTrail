@@ -119,6 +119,7 @@ impl ProcessSeccompService {
         identity_reader: &impl ProcessIdentityReader,
         notification: &libc::seccomp_notif,
         continuation: &mut NotificationContinuation,
+        before_exec_continue: &mut impl FnMut(&ProcessSeccompExecCandidate) -> Result<(), ControlError>,
     ) -> Result<Vec<ProcessSeccompObservation>, ControlError> {
         if !self.enabled {
             return Ok(Vec::new());
@@ -155,6 +156,12 @@ impl ProcessSeccompService {
                     return Ok(Vec::new());
                 };
                 let parent_pid = parent_pid(notification.pid)?;
+                before_exec_continue(&ProcessSeccompExecCandidate {
+                    pid: notification.pid,
+                    path: args.path.clone(),
+                    path_truncated: args.truncated,
+                    execveat_dirfd: None,
+                })?;
                 continuation.continue_now()?;
                 Ok(vec![ProcessSeccompObservation {
                     observed_at,
@@ -192,6 +199,12 @@ impl ProcessSeccompService {
                     return Ok(Vec::new());
                 };
                 let parent_pid = parent_pid(notification.pid)?;
+                before_exec_continue(&ProcessSeccompExecCandidate {
+                    pid: notification.pid,
+                    path: args.path.clone(),
+                    path_truncated: args.truncated,
+                    execveat_dirfd: Some(notification.data.args[0]),
+                })?;
                 continuation.continue_now()?;
                 Ok(vec![ProcessSeccompObservation {
                     observed_at,
@@ -355,6 +368,14 @@ pub(crate) struct ProcessSeccompObservation {
     parent_pid: Option<u32>,
     syscall: ProcessSeccompSyscall,
     details: ProcessSeccompObservationDetails,
+}
+
+#[derive(Debug)]
+pub(crate) struct ProcessSeccompExecCandidate {
+    pub(crate) pid: u32,
+    pub(crate) path: Option<String>,
+    pub(crate) path_truncated: bool,
+    pub(crate) execveat_dirfd: Option<u64>,
 }
 
 #[derive(Debug)]

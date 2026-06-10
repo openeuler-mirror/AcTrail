@@ -236,6 +236,14 @@ fn command_child_role(action: &SemanticAction) -> Option<SemanticActionLinkRole>
         (action.kind == SemanticActionKind::CommandInvocation)
             .then_some(SemanticActionLinkRole::CommandContainsCommandInvocation)
     })
+    .or_else(|| {
+        (action.kind == SemanticActionKind::LlmCall)
+            .then_some(SemanticActionLinkRole::CommandContainsLlmCall)
+    })
+    .or_else(|| {
+        (action.kind == SemanticActionKind::AgentInvocation)
+            .then_some(SemanticActionLinkRole::CommandContainsCommandInvocation)
+    })
 }
 
 fn parent_command_process(action: &SemanticAction) -> Option<ProcessIdentity> {
@@ -243,7 +251,9 @@ fn parent_command_process(action: &SemanticAction) -> Option<ProcessIdentity> {
         SemanticActionKind::FileRead
         | SemanticActionKind::FileWrite
         | SemanticActionKind::FileModify
-        | SemanticActionKind::ProcessForkAttempt => Some(action.process.clone()),
+        | SemanticActionKind::ProcessForkAttempt
+        | SemanticActionKind::LlmCall
+        | SemanticActionKind::AgentInvocation => Some(action.process.clone()),
         SemanticActionKind::CommandInvocation => parent_process_from_action(action),
         _ => None,
     }

@@ -97,7 +97,7 @@ fn resolve_shebang_runtime(entry: &Path) -> ToolResult<Option<PathBuf>> {
         return Ok(None);
     }
     let runtime = shebang_runtime_name(&parts)?;
-    if !KNOWN_TLS_LAUNCHER_RUNTIMES.contains(&runtime.as_str()) {
+    if !is_known_tls_launcher_runtime(&runtime) {
         return Ok(None);
     }
     let binary = resolve_from_path(&runtime)?;
@@ -109,6 +109,21 @@ fn resolve_shebang_runtime(entry: &Path) -> ToolResult<Option<PathBuf>> {
         )));
     }
     Ok(Some(binary))
+}
+
+fn is_known_tls_launcher_runtime(runtime: &str) -> bool {
+    KNOWN_TLS_LAUNCHER_RUNTIMES.contains(&runtime) || is_python_runtime_name(runtime)
+}
+
+fn is_python_runtime_name(runtime: &str) -> bool {
+    let Some(rest) = runtime.strip_prefix("python") else {
+        return false;
+    };
+    rest.is_empty()
+        || rest
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_digit())
 }
 
 fn shebang_runtime_name(parts: &[String]) -> ToolResult<String> {

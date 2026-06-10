@@ -17,6 +17,7 @@ model_core = { path = "../../../core/model" }
 payload_event = { path = "../../../contracts/payload/event" }
 process_identity_contract = { path = "../../../contracts/process/identity" }
 process_tree_snapshot_contract = { path = "../../../contracts/process/tree_snapshot" }
+tls_probe_point_finder = { path = "../../../tools/tls_probe_point_finder" }
 
 [build-dependencies]
 libbpf-cargo = "0.25.0"
