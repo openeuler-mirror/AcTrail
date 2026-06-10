@@ -12,13 +12,11 @@ use crate::json;
 const NODE_ID_AGENT: &str = "agent-process";
 const AGENT_ACTION_ROLE: &str = "agent.performed_action";
 const AGENT_ROOT_ACTION_KINDS: &[&str] = &[
-    "agent.invocation",
     "command.invocation",
     "file.modify",
     "file.read",
     "file.write",
-    "llm.request",
-    "llm.response",
+    "llm.call",
 ];
 
 pub(super) fn action_tree_json(
@@ -364,8 +362,12 @@ fn detail_link_roles() -> &'static [&'static str] {
         "command.contains_process_fork_attempt",
         "command.contains_process_exec",
         "command.contains_command_invocation",
+        "command.contains_llm_call",
         "file.write.contains_file_event",
+        "llm.call.request",
+        "llm.call.response",
         "llm.request.http_message",
+        "llm.request.llm_response",
         "llm.response.http_message",
         "llm.response.sse_stream",
         "sse.stream.event",

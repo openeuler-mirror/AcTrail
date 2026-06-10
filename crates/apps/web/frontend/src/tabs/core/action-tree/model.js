@@ -112,7 +112,9 @@ function actionNode(action) {
     kind: action.kind,
     semanticLabel: display.label,
     kindClass: kindClass(action.kind),
+    visualClass: actionVisualClass(action),
     title: display.label,
+    durationBadge: display.durationBadge,
     meta: display.meta,
     status: action.status,
     children: [],
@@ -140,6 +142,13 @@ function actionNode(action) {
       raw: action,
     },
   };
+}
+
+function actionVisualClass(action) {
+  if (action.kind === 'command.invocation' && action.attributes?.['invocation.kind'] === 'agent') {
+    return 'agent-call';
+  }
+  return '';
 }
 
 function evidenceNodes(action, traceDetail, excludedEvidence = new Set()) {
@@ -284,11 +293,11 @@ function actionDisplay(action) {
   const label = semanticActionLabel(action);
   const target = semanticActionTarget(action);
   const time = shortTime(action.start_time);
-  const duration = action.duration ? `(${action.duration})` : null;
   return {
     label,
     target,
-    meta: compactMeta([target, time, duration, action.status]),
+    durationBadge: action.duration ?? null,
+    meta: compactMeta([target, time, action.status]),
   };
 }
 
@@ -334,8 +343,23 @@ function prioritizedAttributeEntries(kind, attributes) {
 }
 
 function attributePriority(kind) {
+  if (kind === 'llm.call') {
+    return [
+      'llm.call.model',
+      'llm.call.request_action_id',
+      'llm.call.response_action_id',
+      'payload.stream_key',
+      'payload.operation_id',
+      'http.request.stream_id',
+    ];
+  }
   if (kind === 'llm.response') {
     return [
+      'llm.response.prompt_tokens',
+      'llm.response.completion_tokens',
+      'llm.response.total_tokens',
+      'llm.response.cached_prompt_tokens',
+      'llm.response.reasoning_tokens',
       'llm.response.content_text',
       'llm.response.reasoning_text',
       'llm.response.output_text',

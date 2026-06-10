@@ -13,6 +13,18 @@ fn llm_response_links_to_request_and_http_response_message() {
         .iter()
         .find(|action| action.kind == SemanticActionKind::LlmRequest)
         .expect("payload should project an llm.request action");
+    let request_call = request_output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmCall)
+        .expect("payload should project an llm.call action");
+    let request_call_link = request_output
+        .links
+        .iter()
+        .find(|link| link.role == SemanticActionLinkRole::LlmCallRequest)
+        .expect("llm.call should link to its request");
+    assert_eq!(request_call_link.parent_action_id, request_call.action_id);
+    assert_eq!(request_call_link.child_action_id, request.action_id);
 
     let body = r#"{"model":"deepseek-chat","choices":[{"message":{"content":"project path"}}]}"#;
     let bytes = format!(
@@ -33,12 +45,18 @@ fn llm_response_links_to_request_and_http_response_message() {
         .iter()
         .find(|action| action.kind == SemanticActionKind::LlmResponse)
         .expect("payload should project an llm.response action");
+    let response_call = response_output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmCall)
+        .expect("response should update the llm.call action");
     let exchange_link = response_output
         .links
         .iter()
-        .find(|link| link.role == SemanticActionLinkRole::LlmRequestLlmResponse)
-        .expect("llm.response should link to its preceding request");
-    assert_eq!(exchange_link.parent_action_id, request.action_id);
+        .find(|link| link.role == SemanticActionLinkRole::LlmCallResponse)
+        .expect("llm.call should link to its response");
+    assert_eq!(response_call.action_id, request_call.action_id);
+    assert_eq!(exchange_link.parent_action_id, response_call.action_id);
     assert_eq!(exchange_link.child_action_id, response.action_id);
 
     let http_output = runtime.observe_event(&http_response_event(HTTP_RESPONSE_EVENT_ID, agent));

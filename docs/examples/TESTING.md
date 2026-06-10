@@ -293,9 +293,9 @@ python3 docs/examples/clean.py --example xiaoo-claude
 python3 docs/examples/07.xiaoo-claude-agent-invocation/run_e2e.py
 ```
 
-Expected result: terminal output contains `ACTRAIL_AGENT_TREE_OK`, `agent_invocation_trace_id=<TRACE_ID>`, and `agent invocation e2e complete`. The script exports pretty OTLP JSON to `/tmp/actrail-xiaoo-claude-agent-invocation.otlp.json` and validates that it contains a seccomp-observed `process.exec` span for `claude -p`, an `llm.request` span for the same Claude process, and an `agent.invocation` span whose `agent.invocation.evidence_action_id` points to that Claude `llm.request`. The invocation parent is Claude's direct launcher and may be a shell or timeout wrapper.
+Expected result: terminal output contains `ACTRAIL_AGENT_TREE_OK`, `agent_command_trace_id=<TRACE_ID>`, and `agent command e2e complete`. The script exports pretty OTLP JSON to `/tmp/actrail-xiaoo-claude-agent-invocation.otlp.json` and validates that it contains a seccomp-observed `process.exec` span for `claude -p`, an `llm.request` span for the same Claude process, and an agent-labeled `command.invocation` span whose `agent.invocation.evidence_action_id` points to that Claude `llm.request`. The command parent is Claude's direct launcher and may be a shell or timeout wrapper.
 
-This example intentionally enables TLS payload capture because `agent.invocation` is generated from child LLM evidence, not from command names alone.
+This example intentionally enables TLS payload capture because the agent command label is generated from child LLM evidence, not from command names alone.
 
 ## Hidden Agent Invocation Regression
 
@@ -316,7 +316,7 @@ Run:
 python3 tests/process/hidden-agent-invocation/run_e2e.py --bin-dir target/release
 ```
 
-Expected result: terminal output contains `HIDDEN_AGENT_A_LLM_OK`, `HIDDEN_AGENT_XIAOO_OK`, `hidden_agent_trace_id=<TRACE_ID>`, `agent_a_pid=<PID>`, `xiaoo_pid=<PID>`, `script_b_parent_pid=<PID>`, and `hidden agent invocation e2e complete`. The script validates three OTEL facts before passing: the root `agent_a` process is marked `agent.identity.status=observed`, the hidden `xiaoo` process is marked `agent.identity.status=observed`, and the `agent.invocation` edge uses the direct `script_b.sh -> xiaoo` parent/child relationship rather than an ancestor shortcut.
+Expected result: terminal output contains `HIDDEN_AGENT_A_LLM_OK`, `HIDDEN_AGENT_XIAOO_OK`, `hidden_agent_trace_id=<TRACE_ID>`, `agent_a_pid=<PID>`, `xiaoo_pid=<PID>`, `script_b_parent_pid=<PID>`, and `hidden agent invocation e2e complete`. The script validates three OTEL facts before passing: the root `agent_a` process is marked `agent.identity.status=observed`, the hidden `xiaoo` process is marked `agent.identity.status=observed`, and the agent-labeled `command.invocation` uses the direct `script_b.sh -> xiaoo` parent/child relationship rather than an ancestor shortcut.
 
 ## Real Agent Trace Suite
 

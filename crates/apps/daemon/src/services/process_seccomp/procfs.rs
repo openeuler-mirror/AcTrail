@@ -1,6 +1,6 @@
 //! Procfs helpers for process-control seccomp observations.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use control_contract::reply::ControlError;
 
@@ -42,4 +42,29 @@ pub(super) fn absolute_exec_path_missing(pid: u32, path: &str) -> bool {
         std::fs::metadata(path_in_target_root),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound || target_exited(&error)
     )
+}
+
+pub(crate) fn host_exec_path(pid: u32, path: &str, dirfd: Option<u64>) -> Option<PathBuf> {
+    if path.is_empty() {
+        return None;
+    }
+    let raw = Path::new(path);
+    if raw.is_absolute() {
+        return Some(
+            Path::new("/proc")
+                .join(pid.to_string())
+                .join("root")
+                .join(path.strip_prefix('/').unwrap_or(path)),
+        );
+    }
+    if let Some(dirfd) = dirfd.filter(|dirfd| *dirfd as i64 != libc::AT_FDCWD as i64) {
+        let fd_path = Path::new("/proc")
+            .join(pid.to_string())
+            .join("fd")
+            .join(dirfd.to_string());
+        return std::fs::read_link(fd_path).ok().map(|base| base.join(raw));
+    }
+    std::fs::read_link(Path::new("/proc").join(pid.to_string()).join("cwd"))
+        .ok()
+        .map(|cwd| cwd.join(raw))
 }

@@ -113,40 +113,53 @@ fn llm_request_marks_child_agent_and_upgrades_only_direct_edge() {
         Some("observed")
     );
 
-    let invocations = output
+    assert!(
+        output
+            .actions
+            .iter()
+            .all(|action| action.kind != SemanticActionKind::AgentInvocation)
+    );
+    let command = output
         .actions
         .iter()
-        .filter(|action| action.kind == SemanticActionKind::AgentInvocation)
-        .collect::<Vec<_>>();
-    assert_eq!(invocations.len(), 1);
-    assert!(output.links.iter().any(|link| {
-        link.role == SemanticActionLinkRole::AgentInvocationExec
-            && link.parent_action_id == invocations[0].action_id
-    }));
-    assert!(output.links.iter().any(|link| {
-        link.role == SemanticActionLinkRole::AgentInvocationChildLlmRequest
-            && link.parent_action_id == invocations[0].action_id
-    }));
-    let invocation = invocations[0];
+        .find(|action| action.kind == SemanticActionKind::CommandInvocation)
+        .expect("LLM evidence should label the child command.invocation as agent");
     assert_eq!(
-        invocation.attributes.get("agent.parent.pid").cloned(),
+        command.attributes.get("process.parent.pid").cloned(),
         Some(WRAPPER_PID.to_string())
     );
     assert_eq!(
-        invocation.attributes.get("agent.child.pid").cloned(),
+        command.attributes.get("agent.child.pid").cloned(),
         Some(AGENT_PID.to_string())
     );
     assert_eq!(
-        invocation
+        command
+            .attributes
+            .get("invocation.kind")
+            .map(String::as_str),
+        Some("agent")
+    );
+    assert_eq!(
+        command
             .attributes
             .get("agent.invocation.trigger")
             .map(String::as_str),
         Some("child_llm_request")
     );
+    let llm_call = output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmCall)
+        .expect("LLM request should project an llm.call aggregate");
+    assert!(output.links.iter().any(|link| {
+        link.role == SemanticActionLinkRole::CommandContainsLlmCall
+            && link.parent_action_id == command.action_id
+            && link.child_action_id == llm_call.action_id
+    }));
 }
 
 #[test]
-fn llm_request_uses_fork_parent_for_child_agent_invocation() {
+fn llm_request_labels_late_exec_command_as_agent() {
     let mut runtime = runtime();
     let parent = ProcessIdentity::new(WRAPPER_PID, WRAPPER_START_TICKS, WRAPPER_GENERATION);
     let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
@@ -170,54 +183,66 @@ fn llm_request_uses_fork_parent_for_child_agent_invocation() {
         None,
         "/root/.cargo/bin/xiaoo",
     ));
-    let invocation = output
+    let process_exec = output
         .actions
         .iter()
-        .find(|action| action.kind == SemanticActionKind::AgentInvocation)
-        .expect("fork parent identity should allow child agent invocation projection");
-
+        .find(|action| action.kind == SemanticActionKind::ProcessExec)
+        .expect("late exec should be marked with prior LLM evidence");
     assert_eq!(
-        invocation.attributes.get("agent.parent.pid").cloned(),
+        process_exec
+            .attributes
+            .get("agent.identity.status")
+            .map(String::as_str),
+        Some("observed")
+    );
+    let command = output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::CommandInvocation)
+        .expect("late exec should project a command.invocation");
+    assert_eq!(
+        command.attributes.get("process.parent.pid").cloned(),
         Some(parent.pid.to_string())
+    );
+    assert_eq!(
+        command
+            .attributes
+            .get("invocation.kind")
+            .map(String::as_str),
+        Some("agent")
+    );
+    assert!(
+        output
+            .actions
+            .iter()
+            .all(|action| action.kind != SemanticActionKind::AgentInvocation)
     );
 
     let conflicting_parent = ProcessIdentity::new(ROOT_PID, ROOT_START_TICKS, ROOT_GENERATION);
     let conflict_output = runtime.observe_event(&fork_event(
         AGENT_SECOND_FORK_EVENT_ID,
-        invocation.process.clone(),
+        command.process.clone(),
         conflicting_parent,
     ));
-    let invalid_invocation = conflict_output
+    let conflict_command = conflict_output
         .actions
         .iter()
-        .find(|action| {
-            action.kind == SemanticActionKind::AgentInvocation
-                && action.action_id == invocation.action_id
-        })
-        .expect("late fork conflict should invalidate the agent invocation");
+        .find(|action| action.kind == SemanticActionKind::CommandInvocation)
+        .expect("late fork conflict should refresh the command invocation");
     assert_eq!(
-        invalid_invocation
+        conflict_command
             .attributes
-            .get("actrail.action.valid")
+            .get("process.parent.identity_state")
             .map(String::as_str),
-        Some("false")
+        Some("conflict")
     );
-    assert!(conflict_output.links.iter().any(|link| {
-        link.role == SemanticActionLinkRole::AgentInvocationExec
-            && link.parent_action_id == invocation.action_id
-            && link
-                .attributes
-                .get("actrail.link.valid")
-                .is_some_and(|value| value == "false")
-    }));
-    assert!(conflict_output.links.iter().any(|link| {
-        link.role == SemanticActionLinkRole::AgentInvocationChildLlmRequest
-            && link.parent_action_id == invocation.action_id
-            && link
-                .attributes
-                .get("actrail.link.valid")
-                .is_some_and(|value| value == "false")
-    }));
+    assert_eq!(
+        conflict_command
+            .attributes
+            .get("invocation.kind")
+            .map(String::as_str),
+        Some("agent")
+    );
 }
 
 #[test]
@@ -269,21 +294,21 @@ fn agent_performed_action_links_child_command_invocation() {
         .iter()
         .find(|action| action.kind == SemanticActionKind::ProcessExec)
         .expect("LLM request should mark the process as an observed agent");
-    let llm_request = agent_update
+    let llm_call = agent_update
         .actions
         .iter()
-        .find(|action| action.kind == SemanticActionKind::LlmRequest)
-        .expect("LLM payload should project a request action");
-    let request_link = agent_update
+        .find(|action| action.kind == SemanticActionKind::LlmCall)
+        .expect("LLM payload should project a call action");
+    let call_link = agent_update
         .links
         .iter()
         .find(|link| {
             link.role == SemanticActionLinkRole::AgentPerformedAction
-                && link.child_action_id == llm_request.action_id
+                && link.child_action_id == llm_call.action_id
         })
-        .expect("LLM request should be linked under the observed agent");
+        .expect("LLM call should be linked under the observed agent");
     assert_eq!(
-        request_link
+        call_link
             .attributes
             .get(AGENT_ACTION_SEQUENCE_ATTR)
             .map(String::as_str),

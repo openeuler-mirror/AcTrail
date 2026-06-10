@@ -83,11 +83,11 @@ fn startup_file_read_is_projected_and_linked_when_agent_is_observed_later() {
     }));
 
     let agent_update = runtime.observe_payload_segment(&llm_payload_segment(agent));
-    let llm_request = agent_update
+    let llm_call = agent_update
         .actions
         .iter()
-        .find(|action| action.kind == SemanticActionKind::LlmRequest)
-        .expect("LLM payload should project a request action");
+        .find(|action| action.kind == SemanticActionKind::LlmCall)
+        .expect("LLM payload should project a call action");
     let file_read_link = agent_update
         .links
         .iter()
@@ -96,14 +96,14 @@ fn startup_file_read_is_projected_and_linked_when_agent_is_observed_later() {
                 && link.child_action_id == complete_read.action_id
         })
         .expect("previous startup file.read should link under the observed agent");
-    let llm_request_link = agent_update
+    let llm_call_link = agent_update
         .links
         .iter()
         .find(|link| {
             link.role == SemanticActionLinkRole::AgentPerformedAction
-                && link.child_action_id == llm_request.action_id
+                && link.child_action_id == llm_call.action_id
         })
-        .expect("current LLM request should link under the observed agent");
+        .expect("current LLM call should link under the observed agent");
 
     assert_eq!(
         file_read_link
@@ -113,7 +113,7 @@ fn startup_file_read_is_projected_and_linked_when_agent_is_observed_later() {
         Some(FIRST_AGENT_ACTION_SEQUENCE)
     );
     assert_eq!(
-        llm_request_link
+        llm_call_link
             .attributes
             .get(AGENT_ACTION_SEQUENCE_ATTR)
             .map(String::as_str),

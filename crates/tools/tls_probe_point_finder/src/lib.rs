@@ -1,7 +1,9 @@
 //! TLS probe-point detection tool.
 
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::path::Path;
 
 mod args;
 mod binary;
@@ -18,6 +20,29 @@ pub use plan::{
     AttachPoint, CaptureStrategy, PayloadDirection, ProbeBinary, ProbePoint, ProbePointPlan,
     ProbeSource, TargetIdentity, TlsProvider,
 };
+
+pub const GO_TLS_WRITE_SYMBOL: &str = providers::go_tls::WRITE_SYMBOL;
+pub const GO_TLS_READ_SYMBOL: &str = providers::go_tls::READ_SYMBOL;
+pub const GO_RUNTIME_MEMMOVE_SYMBOL: &str = providers::go_tls::RUNTIME_MEMMOVE_SYMBOL;
+
+pub fn resolve_go_pclntab_file_offsets(
+    binary_path: &Path,
+    required_symbols: &[&str],
+) -> ToolResult<BTreeMap<String, u64>> {
+    let image = elf::ElfImage::parse(binary_path)?;
+    let symbols = providers::go_tls::resolve_pclntab_symbols(&image, required_symbols)?
+        .ok_or_else(|| ToolError::new("missing Go crypto/tls pclntab symbols"))?;
+    required_symbols
+        .iter()
+        .map(|symbol| {
+            let virtual_address = symbols.get(*symbol).copied().ok_or_else(|| {
+                ToolError::new(format!("missing Go crypto/tls pclntab symbol {symbol}"))
+            })?;
+            let file_offset = image.file_offset_for_virtual_address(virtual_address)?;
+            Ok(((*symbol).to_string(), file_offset))
+        })
+        .collect()
+}
 
 pub fn run_from_env() -> ToolResult<()> {
     match parse_args() {

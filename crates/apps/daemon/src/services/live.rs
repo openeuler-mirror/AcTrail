@@ -166,7 +166,7 @@ impl SqliteAttachService {
         let seccomp_notify = &mut self.seccomp_notify;
         let seccomp_tls = &mut self.seccomp_tls;
         let seccomp_socket = &mut self.seccomp_socket;
-        let collector = &self.collector;
+        let collector = &mut self.collector;
         let mut process_observations = Vec::new();
         {
             let process_seccomp = &self.process_seccomp;
@@ -177,6 +177,24 @@ impl SqliteAttachService {
                     identity_reader,
                     notification,
                     continuation,
+                    &mut |candidate| {
+                        if candidate.path_truncated {
+                            return Ok(());
+                        }
+                        let Some(path) = candidate.path.as_deref() else {
+                            return Ok(());
+                        };
+                        let Some(host_path) = crate::services::process_seccomp::host_exec_path(
+                            candidate.pid,
+                            path,
+                            candidate.execveat_dirfd,
+                        ) else {
+                            return Ok(());
+                        };
+                        collector
+                            .attach_dynamic_go_tls(&host_path)
+                            .map_err(|error| ControlError::new(error.stage, error.message))
+                    },
                 )?);
                 let tls_consumed = seccomp_tls.handle_notification(collector, notification)?;
                 if !tls_consumed {

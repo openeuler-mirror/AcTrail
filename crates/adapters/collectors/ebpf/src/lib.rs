@@ -1,6 +1,8 @@
 //! eBPF-backed collector adapter.
 
 pub mod capability_probe;
+#[path = "collector/dynamic_go_tls.rs"]
+mod collector_dynamic_go_tls;
 #[path = "collector/events.rs"]
 mod collector_events;
 pub mod decode;
@@ -37,6 +39,7 @@ use crate::loader::{
 };
 use crate::maps::BindingStateMap;
 use crate::procfs::{ProcfsIdentityReader, read_pid_namespace_handle};
+use collector_dynamic_go_tls::DynamicGoTlsAttacher;
 
 pub struct EbpfCollector {
     probe_result: EbpfProbeResult,
@@ -46,6 +49,7 @@ pub struct EbpfCollector {
     identity_reader: ProcfsIdentityReader,
     pid_namespace: Option<PidNamespace>,
     file_tracker: FileTracker,
+    dynamic_go_tls: DynamicGoTlsAttacher,
     tls_capture_requests: Vec<TlsPayloadCaptureRequest>,
     tls_completions: Vec<TlsPayloadCompletion>,
     tls_direct_captures: Vec<TlsPayloadDirectCapture>,
@@ -76,6 +80,7 @@ impl EbpfCollector {
             identity_reader: ProcfsIdentityReader,
             pid_namespace: None,
             file_tracker: FileTracker::default(),
+            dynamic_go_tls: DynamicGoTlsAttacher::new(&payload_config.tls),
             tls_capture_requests: Vec::new(),
             tls_completions: Vec::new(),
             tls_direct_captures: Vec::new(),

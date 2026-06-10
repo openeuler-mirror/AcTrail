@@ -16,12 +16,15 @@ enum actrail_tls_payload_symbol {
     ACTRAIL_TLS_SYMBOL_SSL_READ_EX = 4,
     ACTRAIL_TLS_SYMBOL_RUSTLS_WRITE = 5,
     ACTRAIL_TLS_SYMBOL_RUSTLS_WRITE_VECTORED = 6,
+    ACTRAIL_TLS_SYMBOL_GO_CONN_WRITE = 7,
+    ACTRAIL_TLS_SYMBOL_GO_CONN_READ = 8,
 };
 
 enum actrail_tls_payload_library {
     ACTRAIL_TLS_LIBRARY_OPENSSL = 1,
     ACTRAIL_TLS_LIBRARY_BORINGSSL = 2,
     ACTRAIL_TLS_LIBRARY_RUSTLS = 3,
+    ACTRAIL_TLS_LIBRARY_GO = 4,
 };
 
 enum actrail_tls_completion_flags {
@@ -89,6 +92,17 @@ struct actrail_pending_tls_payload_op {
     __u32 symbol;
     __u32 library;
     __u32 capture_state;
+};
+
+struct actrail_go_tls_read_buffer_key {
+    __u32 tgid;
+    __u32 reserved;
+    __u64 buffer_ptr;
+};
+
+struct actrail_go_tls_read_buffer {
+    __u64 stream_key;
+    __u64 requested_size;
 };
 
 struct actrail_tls_completion_event {
@@ -171,6 +185,13 @@ struct {
     __type(value, __u64);
 } tls_pending_ns SEC(".maps");
 
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1);
+    __type(key, struct actrail_go_tls_read_buffer_key);
+    __type(value, struct actrail_go_tls_read_buffer);
+} go_tls_read_buffers SEC(".maps");
+
 static __always_inline __u32 payload_tls_library(void) {
     __u32 key = 0;
     struct actrail_tls_payload_config *config =
@@ -236,6 +257,15 @@ static __always_inline __u32 payload_tls_direct_copy_limit(void) {
 
 static __always_inline __u32 tls_op_metadata(__u32 direction, __u32 symbol) {
     return direction | (symbol << 16);
+}
+
+static __always_inline __u64 positive_uprobe_isize(unsigned long value) {
+    long signed_value = (long)value;
+
+    if (signed_value <= 0) {
+        return 0;
+    }
+    return (__u64)signed_value;
 }
 
 #include "tls/actrail_tls_payload_capture.h"
@@ -347,7 +377,7 @@ static __always_inline int store_tls_payload_op(
         payload_tls_capture_backend() == ACTRAIL_TLS_BACKEND_SECCOMP_USER_READ) {
         emit_tls_capture_request(&op, tgid, tid, op.requested_size);
     }
-    return 0;
+    return 1;
 }
 
 #include "tls/actrail_tls_payload_completion.h"

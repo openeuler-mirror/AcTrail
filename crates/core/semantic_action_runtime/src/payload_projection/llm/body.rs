@@ -17,11 +17,29 @@ pub(super) struct LlmResponseBody {
     pub(super) content_text: Option<String>,
     pub(super) reasoning_text: Option<String>,
     pub(super) tool_calls_json: Option<String>,
+    pub(super) token_usage: Option<TokenUsage>,
     pub(super) chunk_count: usize,
     pub(super) done: bool,
     pub(super) stream: bool,
     pub(super) sse_events: Vec<SseEvent>,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct TokenUsage {
+    pub(super) prompt_tokens: Option<u64>,
+    pub(super) completion_tokens: Option<u64>,
+    pub(super) total_tokens: Option<u64>,
+    pub(super) cached_prompt_tokens: Option<u64>,
+    pub(super) reasoning_tokens: Option<u64>,
+    pub(super) prompt_cache_hit_tokens: Option<u64>,
+    pub(super) prompt_cache_miss_tokens: Option<u64>,
+}
+
+trait TokenUsageExtractor {
+    fn extract(&self, value: &Value) -> Option<TokenUsage>;
+}
+
+struct OpenAiCompatibleTokenUsageExtractor;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct SseEvent {
@@ -50,6 +68,7 @@ pub(super) fn parse_llm_response_body(body: &[u8]) -> Option<LlmResponseBody> {
     }
     let texts = extract_response_texts(value);
     let tool_calls_json = assembled_tool_calls_json(value);
+    let token_usage = extract_token_usage(value);
     let model = value
         .get("model")
         .and_then(Value::as_str)
@@ -63,6 +82,7 @@ pub(super) fn parse_llm_response_body(body: &[u8]) -> Option<LlmResponseBody> {
         content_text: texts.content_text,
         reasoning_text: texts.reasoning_text,
         tool_calls_json,
+        token_usage,
         done: true,
         stream: false,
         sse_events: Vec::new(),
@@ -95,6 +115,8 @@ fn parse_sse_response_body(text: &str) -> Option<LlmResponseBody> {
     let tool_calls_json = assembled_tool_calls_json_from_values(
         sse_events.iter().filter_map(|event| event.json.as_ref()),
     );
+    let token_usage =
+        extract_token_usage_from_values(sse_events.iter().filter_map(|event| event.json.as_ref()));
     if content_chunks.is_empty()
         && reasoning_chunks.is_empty()
         && tool_calls_json.is_none()
@@ -113,6 +135,7 @@ fn parse_sse_response_body(text: &str) -> Option<LlmResponseBody> {
         content_text,
         reasoning_text,
         tool_calls_json,
+        token_usage,
         chunk_count: content_chunks.len() + reasoning_chunks.len(),
         done,
         stream: true,
@@ -206,6 +229,68 @@ fn json_value_is_llm_response(value: &Value) -> bool {
         && (object.contains_key("choices")
             || object.contains_key("output")
             || object.contains_key("content"))
+}
+
+fn extract_token_usage(value: &Value) -> Option<TokenUsage> {
+    OpenAiCompatibleTokenUsageExtractor.extract(value)
+}
+
+fn extract_token_usage_from_values<'a>(
+    values: impl IntoIterator<Item = &'a Value>,
+) -> Option<TokenUsage> {
+    values.into_iter().filter_map(extract_token_usage).last()
+}
+
+impl TokenUsageExtractor for OpenAiCompatibleTokenUsageExtractor {
+    fn extract(&self, value: &Value) -> Option<TokenUsage> {
+        let usage = value.get("usage")?.as_object()?;
+        let prompt_tokens = token_count(usage.get("prompt_tokens"))
+            .or_else(|| token_count(usage.get("input_tokens")));
+        let completion_tokens = token_count(usage.get("completion_tokens"))
+            .or_else(|| token_count(usage.get("output_tokens")));
+        let total_tokens = token_count(usage.get("total_tokens"));
+        let cached_prompt_tokens = usage
+            .get("prompt_tokens_details")
+            .and_then(Value::as_object)
+            .and_then(|details| token_count(details.get("cached_tokens")));
+        let reasoning_tokens = usage
+            .get("completion_tokens_details")
+            .and_then(Value::as_object)
+            .and_then(|details| token_count(details.get("reasoning_tokens")));
+        let prompt_cache_hit_tokens = token_count(usage.get("prompt_cache_hit_tokens"));
+        let prompt_cache_miss_tokens = token_count(usage.get("prompt_cache_miss_tokens"));
+        let usage = TokenUsage {
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
+            cached_prompt_tokens,
+            reasoning_tokens,
+            prompt_cache_hit_tokens,
+            prompt_cache_miss_tokens,
+        };
+        usage.has_any_count().then_some(usage)
+    }
+}
+
+impl TokenUsage {
+    fn has_any_count(&self) -> bool {
+        self.prompt_tokens
+            .or(self.completion_tokens)
+            .or(self.total_tokens)
+            .or(self.cached_prompt_tokens)
+            .or(self.reasoning_tokens)
+            .or(self.prompt_cache_hit_tokens)
+            .or(self.prompt_cache_miss_tokens)
+            .is_some()
+    }
+}
+
+fn token_count(value: Option<&Value>) -> Option<u64> {
+    match value? {
+        Value::Number(number) => number.as_u64(),
+        Value::String(text) => text.parse().ok(),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

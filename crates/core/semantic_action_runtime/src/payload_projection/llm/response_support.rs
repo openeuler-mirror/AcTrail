@@ -11,7 +11,7 @@ use semantic_action::{
 
 use crate::payload_projection::http::HttpResponseParts;
 
-use super::body::LlmResponseBody;
+use super::body::{LlmResponseBody, TokenUsage};
 use super::stream::PayloadStreamGroupKey;
 
 pub(super) fn llm_response_attributes(
@@ -136,6 +136,9 @@ pub(super) fn raw_llm_response_attributes(
     if let Some(model) = body.model.as_deref() {
         attributes.insert("llm.response.model".to_string(), model.to_string());
     }
+    if let Some(usage) = &body.token_usage {
+        insert_token_usage_attributes(&mut attributes, usage);
+    }
     attributes.insert(
         "payload.stream_key".to_string(),
         first.stream_key.to_string(),
@@ -159,6 +162,50 @@ pub(super) fn raw_llm_response_attributes(
     attributes.insert("payload.library".to_string(), first.library.clone());
     attributes.insert("payload.symbol".to_string(), first.symbol.clone());
     attributes
+}
+
+fn insert_token_usage_attributes(attributes: &mut BTreeMap<String, String>, usage: &TokenUsage) {
+    insert_token_count(
+        attributes,
+        "llm.response.prompt_tokens",
+        usage.prompt_tokens,
+    );
+    insert_token_count(
+        attributes,
+        "llm.response.completion_tokens",
+        usage.completion_tokens,
+    );
+    insert_token_count(attributes, "llm.response.total_tokens", usage.total_tokens);
+    insert_token_count(
+        attributes,
+        "llm.response.cached_prompt_tokens",
+        usage.cached_prompt_tokens,
+    );
+    insert_token_count(
+        attributes,
+        "llm.response.reasoning_tokens",
+        usage.reasoning_tokens,
+    );
+    insert_token_count(
+        attributes,
+        "llm.response.prompt_cache_hit_tokens",
+        usage.prompt_cache_hit_tokens,
+    );
+    insert_token_count(
+        attributes,
+        "llm.response.prompt_cache_miss_tokens",
+        usage.prompt_cache_miss_tokens,
+    );
+}
+
+fn insert_token_count(
+    attributes: &mut BTreeMap<String, String>,
+    key: &'static str,
+    count: Option<u64>,
+) {
+    if let Some(count) = count {
+        attributes.insert(key.to_string(), count.to_string());
+    }
 }
 
 fn llm_response_body_format(body: &LlmResponseBody) -> &'static str {

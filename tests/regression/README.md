@@ -12,8 +12,9 @@ python3 tests/regression/test_all.py
 ```
 
 `requirements.txt` installs the Python workload dependencies needed by the
-regression cases, such as LangGraph. The default LangGraph workload uses HTTPS,
-so use a system-Python venv whose `_ssl` shared object links dynamic OpenSSL.
+regression cases, such as LangGraph. The default LangGraph workload uses HTTPS
+and the eBPF OpenSSL shared-library attach path, so use a system-Python venv
+whose `_ssl` shared object links dynamic OpenSSL.
 If a LangGraph workload is changed to a plain HTTP API URL, the socket payload
 path is valid and dynamic OpenSSL is not required for that case. The runner
 framework itself only uses the Python standard library.

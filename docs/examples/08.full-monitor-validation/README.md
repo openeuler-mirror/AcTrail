@@ -16,7 +16,7 @@
 - socket 明文 payload 采集，backend 为 `payload_socket_capture_backend = bpf-copy-seccomp-fallback`。
 - stdin/stdout/stderr payload 采集。
 - HTTP/1.x、HTTP/2 frame/data、SSE preview 投影。
-- process seccomp exec context 和 agent invocation 检测。
+- process seccomp exec context 和 LLM-evidence-driven agent identity 检测。
 - agent 身份和子进程 TLS sync probe plan 均由 LLM 访问行为和动态 runtime -> daemon lookup 生成，不依赖静态命令名单。
 - 进程树和系统资源指标。
 - payload bytes/text 导出，以及 live OTEL JSONL 导出。
@@ -209,7 +209,7 @@ target/release/actrailviewer --config docs/examples/08.full-monitor-validation/o
 target/release/actrailviewer --config docs/examples/08.full-monitor-validation/operator.conf actions --trace-id trace-1 --head 120
 ```
 
-期望看到按时间排列的高层语义动作，例如 `process.exec`、`file.read`/`file.write`、`command.invocation`、`http.message`、`llm.request` 和在 inbound response payload 被保留时生成的 `llm.response`。流式 provider 的多段 SSE 会先作为 SSE/http evidence 落库，再聚合到同一条 `llm.response`。
+期望看到按时间排列的高层语义动作，例如 `process.exec`、`file.read`/`file.write`、`command.invocation`、`http.message`、`llm.call`、`llm.request` 和在 inbound response payload 被保留时生成的 `llm.response`。识别到 agent 后，对应 `command.invocation` 会带有 `invocation.kind=agent`；`llm.request`/`llm.response` 会挂在同一条 `llm.call` 下。流式 provider 的多段 SSE 会先作为 SSE/http evidence 落库，再聚合到同一条 `llm.response`。
 
 查看进程树：
 

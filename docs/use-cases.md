@@ -11,7 +11,7 @@ This document maps common operator questions to the AcTrail feature path and the
 | What LLM request and response did a real agent exchange? | Full-monitor payload capture plus HTTP/SSE and `llm.request`/`llm.response` semantic assembly. | [Example 08](examples/08.full-monitor-validation/README.md) |
 | What LLM request and response did opencode exchange? | Bun/static-BoringSSL executable TLS payload capture plus proxy-aware HTTP semantics. | `python3 tests/agent-trace/run_case.py opencode-bun` |
 | What outbound LLM request did a Rust/rustls agent send? | `tls-sync` with a rustls probe plan from finder fast, symbols, or a build-id-checked pattern. | [Example 06](examples/06.xiaoo-tls-capture/README.md) |
-| What outbound LLM request did a LangGraph Python agent send? | Dynamic OpenSSL shared-library TLS payload capture around an OpenAI-compatible HTTPS call. | `python3 tests/agent-trace/run_case.py langgraph-openai` |
+| What outbound LLM request did a LangGraph Python agent send? | eBPF dynamic OpenSSL shared-library TLS payload capture around an OpenAI-compatible HTTPS call. | `python3 tests/agent-trace/run_case.py langgraph-openai` |
 | What HTTP request/response did a non-TLS local service exchange? | Socket plaintext payload with HTTP sniffing and HTTP/1.x application analyzer. | [Example 05](examples/05.http-payload-unified/README.md) |
 | Did file enforcement actually block the target? | Fanotify permission backend plus client-side stdout and Enforcement events. | [Example 04](examples/04.fanotify-enforcement-e2e/README.md) |
 | What files, IPC, stdio, and resources did a workload touch? | Extended eBPF observation, stdio payload, provider labels, resource metrics. | [Example 03](examples/03.extended-observation-e2e/README.md) |
@@ -46,10 +46,11 @@ Use a runtime-specific capture path when narrowing a failure:
 
 | Target Runtime | Capture Path |
 | --- | --- |
-| Dynamic OpenSSL | `payload_tls_source = shared-library`, `payload_tls_resolver = openssl-symbols`. |
+| Dynamic OpenSSL | `payload_tls_source = shared-library`, `payload_tls_resolver = openssl-symbols`; use eBPF for Python `_ssl` because `libssl` is loaded after process startup. |
 | Node/OpenSSL executable | `payload_tls_source = executable`, `payload_tls_resolver = openssl-symbols`. |
 | Bun/static-BoringSSL | `payload_tls_resolver = boringssl-static` for built-in x86_64/aarch64 related-entry detection, or `bun-static-boringssl` with a matching build-id symbol map containing `SSL_read` and `SSL_write`. |
 | Rust/rustls | `tls-sync` with finder fast resolving rustls plaintext points from symbols, debuginfo, or supported build-id-checked patterns. |
+| Go `crypto/tls` | `payload_tls_source = executable`, `payload_tls_resolver = go-pclntab`, `payload_tls_library = go`, `payload_tls_capture_backend = bpf-copy-seccomp-fallback`; captures `crypto/tls.(*Conn).Write` outbound and `crypto/tls.(*Conn).Read` inbound through the Go runtime copy path. |
 | Plain HTTP endpoint/proxy | `payload_socket_enabled = true`, `payload_socket_capture_backend = bpf-copy-seccomp-fallback`, plus HTTP/1.x application parsing. |
 
 Real agent acceptance cases:
@@ -59,11 +60,11 @@ Real agent acceptance cases:
 | Claude Code | `python3 tests/agent-trace/run_case.py claude-code` | HTTPS/TLS when supported, otherwise plain HTTP socket plaintext if configured by provider/proxy. |
 | opencode | `python3 tests/agent-trace/run_case.py opencode-bun` | Bun/static-BoringSSL TLS writes or plain HTTP socket plaintext; model pinned to `deepseek/deepseek-chat`. |
 | xiaoO | `python3 tests/agent-trace/run_case.py xiaoo-rustls` | Rust/rustls plaintext points or plain HTTP socket plaintext. Stripped HTTPS/HTTP CONNECT binaries need a supported finder rustls plan before this payload case can pass. |
-| LangGraph | `LANGGRAPH_PYTHON=/path/to/python python3 tests/agent-trace/run_case.py langgraph-openai` | Python dynamic OpenSSL shared-library writes for HTTPS; socket plaintext for HTTP API URLs. |
+| LangGraph | `LANGGRAPH_PYTHON=/path/to/python python3 tests/agent-trace/run_case.py langgraph-openai` | Python dynamic OpenSSL shared-library writes for HTTPS via eBPF; socket plaintext for HTTP API URLs. |
 
 On hosts that require a local proxy for external network access, keep the proxy environment active for these commands. Do not assume the provider route is HTTPS: some agent configs use a plain HTTP base URL or proxy. When HTTPS is used, proxy tunnel facts such as `CONNECT api.deepseek.com:443` may appear alongside decrypted TLS request rows. When plain HTTP is used, the request payload source is `Syscall/socket-syscall`.
 
-For large LLM requests, set the relevant per-operation budget high enough before running the case. TLS examples use `tls-sync`, so the runtime reports each TLS operation to the daemon instead of forcing every payload into a fixed multi-MB eBPF ringbuf record. Plain HTTP socket payload can still use `bpf-copy-seccomp-fallback`: eBPF copies operations no larger than the inline budget, while seccomp notification is the user-space read fallback for larger socket operations.
+For large LLM requests, set the relevant per-operation budget high enough before running the case. Rust/rustls TLS examples use `tls-sync`, so the runtime reports each TLS operation to the daemon instead of forcing every payload into a fixed multi-MB eBPF ringbuf record. Python OpenSSL uses eBPF shared-library probes because `_ssl` maps `libssl` lazily. Go `crypto/tls` capture is entry direct-copy and therefore only emits operations that fit the configured TLS segment budget. Plain HTTP socket payload can still use `bpf-copy-seccomp-fallback`: eBPF copies operations no larger than the inline budget, while seccomp notification is the user-space read fallback for larger socket operations.
 
 Run TLS capture through `actrailctl launch`; do not use `track-add` for `tls-sync`, because the sync runtime, event socket, and probe plan must be prepared before `exec`.
 

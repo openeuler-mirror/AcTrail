@@ -102,8 +102,8 @@ def finish_claude_interactive_capture(
         "interactive complete LLM exchange actions",
         lambda: module.require_llm_exchange(actions),
         expected_found_detail(
-            "complete successful interactive llm.request and llm.response exist",
-            ["complete successful llm.request", "complete successful llm.response"],
+            "complete successful interactive llm.call/request/response exist",
+            ["complete successful llm.call", "complete successful llm.request", "complete successful llm.response"],
         ),
         "`claude <prompt>` produced a complete semantic request/response exchange",
     )
@@ -112,8 +112,8 @@ def finish_claude_interactive_capture(
         "interactive LLM exchange action graph",
         lambda: module.require_llm_exchange_graph(actions),
         expected_found_detail(
-            "interactive llm.request links to llm.response and HTTP evidence",
-            ["llm.request.llm_response", "llm.request.http_message", "llm.response facts"],
+            "interactive llm.call links to request/response and HTTP evidence",
+            ["llm.call.request", "llm.call.response", "llm.request.http_message", "llm.response facts"],
         ),
         "viewer JSON exposes the interactive semantic action graph",
     )

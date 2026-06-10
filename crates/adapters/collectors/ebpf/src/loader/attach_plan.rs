@@ -132,6 +132,7 @@ const DEFAULT_ATTACH_PRIORITY: u8 = 3;
 pub struct AttachPlan {
     capabilities: BTreeSet<Capability>,
     file_path_capture_enabled: bool,
+    dynamic_go_tls_enabled: bool,
 }
 
 impl AttachPlan {
@@ -139,6 +140,7 @@ impl AttachPlan {
         Self {
             capabilities: BTreeSet::new(),
             file_path_capture_enabled: false,
+            dynamic_go_tls_enabled: false,
         }
     }
 
@@ -157,6 +159,7 @@ impl AttachPlan {
             }
         }
         plan.file_path_capture_enabled = config.file_path_capture_enabled;
+        plan.dynamic_go_tls_enabled = payload.tls.enabled && payload.tls.capture_backend.is_sync();
         plan
     }
 
@@ -166,7 +169,8 @@ impl AttachPlan {
 
     pub fn should_load_program(&self, program_name: &str) -> Result<bool, LoaderError> {
         if tls::is_payload_tls_program(program_name) {
-            return Ok(self.contains(&Capability::TlsPlaintextPayload));
+            return Ok(self.contains(&Capability::TlsPlaintextPayload)
+                || (self.dynamic_go_tls_enabled && tls::is_go_tls_program(program_name)));
         }
         if capability_programs(program_name).is_none() {
             return Err(LoaderError::new(
@@ -210,6 +214,10 @@ impl AttachPlan {
 
     pub(crate) fn allows_missing_tracepoint(&self, program_name: &str) -> bool {
         PLATFORM_OPTIONAL_TRACEPOINT_PROGRAMS.contains(&program_name)
+    }
+
+    pub(crate) fn dynamic_go_tls_enabled(&self) -> bool {
+        self.dynamic_go_tls_enabled
     }
 
     fn capability_loads_program(&self, capability: &Capability, program_name: &str) -> bool {
@@ -277,7 +285,9 @@ pub(super) fn effective_config_for_attach_plan(
     attach_plan: &AttachPlan,
 ) -> PayloadConfig {
     let mut effective = payload.clone();
-    if !attach_plan.contains(&Capability::TlsPlaintextPayload) {
+    if !attach_plan.contains(&Capability::TlsPlaintextPayload)
+        && !attach_plan.dynamic_go_tls_enabled()
+    {
         effective.tls.enabled = false;
     }
     if !attach_plan.contains(&Capability::StdioChunk) {

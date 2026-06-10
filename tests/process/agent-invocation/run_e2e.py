@@ -65,10 +65,10 @@ def main() -> int:
         )
         require_claude_exec_span(otel)
         require_claude_llm_request_span(otel)
-        require_agent_invocation_span(otel)
-        print(f"agent_invocation_trace_id={launch.trace_id}")
+        require_agent_command_span(otel)
+        print(f"agent_command_trace_id={launch.trace_id}")
         print(f"otel_output={required(workload, 'otel_output_path')}")
-        print("agent invocation e2e complete")
+        print("agent command e2e complete")
     finally:
         stop_process(daemon, float(required(workload, "daemon_stop_timeout_seconds")))
     return 0
@@ -314,7 +314,7 @@ def wait_for_otel(
             if evidence_is_complete(document):
                 return document
         time.sleep(sleep_sec)
-    raise RuntimeError("OTEL export did not contain complete claude exec, llm.request, and agent.invocation evidence")
+    raise RuntimeError("OTEL export did not contain complete claude exec, llm.request, and agent command evidence")
 
 
 def require_claude_exec_span(document: dict) -> None:
@@ -334,10 +334,10 @@ def require_claude_llm_request_span(document: dict) -> None:
         raise RuntimeError("missing claude llm.request span")
 
 
-def require_agent_invocation_span(document: dict) -> None:
-    span = find_claude_agent_invocation_span(document)
+def require_agent_command_span(document: dict) -> None:
+    span = find_claude_agent_command_span(document)
     if span is None:
-        raise RuntimeError("missing direct parent -> claude agent.invocation span")
+        raise RuntimeError("missing direct parent -> claude agent command span")
     exec_span = find_claude_exec_span(document)
     if exec_span is None:
         raise RuntimeError("missing claude process.exec span")
@@ -348,34 +348,34 @@ def require_agent_invocation_span(document: dict) -> None:
     exec_attrs = span_attrs(exec_span)
     llm_attrs = span_attrs(llm_span)
     exec_pid = exec_attrs.get("process.pid", "")
-    parent_pid = attrs.get("agent.parent.pid", "")
+    parent_pid = attrs.get("process.parent.pid", "")
     child_pid = attrs.get("agent.child.pid", "")
-    child = attrs.get("agent.child.command_line", "")
+    child = attrs.get("agent.child.command_line", "") or attrs.get("command.line", "")
     trigger = attrs.get("agent.invocation.trigger", "")
     evidence_id = attrs.get("agent.invocation.evidence_action_id", "")
     llm_action_id = llm_attrs.get("actrail.action.id", "")
     if child_pid != exec_pid:
-        raise RuntimeError(f"agent invocation child pid {child_pid} does not match claude pid {exec_pid}")
+        raise RuntimeError(f"agent command child pid {child_pid} does not match claude pid {exec_pid}")
     if llm_attrs.get("process.pid", "") != child_pid:
-        raise RuntimeError("agent invocation evidence is not from the Claude child pid")
+        raise RuntimeError("agent command evidence is not from the Claude child pid")
     if trigger != "child_llm_request":
-        raise RuntimeError(f"agent invocation trigger is not child_llm_request: {trigger}")
+        raise RuntimeError(f"agent command trigger is not child_llm_request: {trigger}")
     if not evidence_id or evidence_id != llm_action_id:
         raise RuntimeError(
-            "agent invocation evidence_action_id does not point to Claude llm.request: "
+            "agent command evidence_action_id does not point to Claude llm.request: "
             f"edge={evidence_id}; llm={llm_action_id}"
         )
     if not parent_pid or parent_pid == child_pid:
-        raise RuntimeError(f"agent invocation parent pid is not a direct external launcher: {parent_pid}")
+        raise RuntimeError(f"agent command parent pid is not a direct external launcher: {parent_pid}")
     if "claude" not in child:
-        raise RuntimeError(f"agent invocation child is not claude: {child}")
+        raise RuntimeError(f"agent command child is not claude: {child}")
 
 
 def evidence_is_complete(document: dict) -> bool:
     return (
         find_claude_exec_span(document) is not None
         and find_claude_llm_request_span(document) is not None
-        and find_claude_agent_invocation_span(document) is not None
+        and find_claude_agent_command_span(document) is not None
     )
 
 
@@ -451,13 +451,15 @@ def find_claude_llm_request_span(document: dict) -> dict | None:
     return None
 
 
-def find_claude_agent_invocation_span(document: dict) -> dict | None:
+def find_claude_agent_command_span(document: dict) -> dict | None:
     for span in spans(document):
         attrs = span_attrs(span)
-        if attrs.get("actrail.action.kind") != "agent.invocation":
+        if attrs.get("actrail.action.kind") != "command.invocation":
+            continue
+        if attrs.get("invocation.kind") != "agent":
             continue
         child_executable = attrs.get("agent.child.executable", "")
-        child_command = attrs.get("agent.child.command_line", "")
+        child_command = attrs.get("agent.child.command_line", "") or attrs.get("command.line", "")
         if executable_basename(child_executable) != "claude":
             continue
         if "-p" not in child_command:

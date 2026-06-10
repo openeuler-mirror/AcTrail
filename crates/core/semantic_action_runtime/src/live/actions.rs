@@ -14,8 +14,6 @@ pub(super) const ATTR_AGENT_IDENTITY_EVIDENCE_ACTION_ID: &str = "agent.identity.
 pub(super) const ATTR_AGENT_INVOCATION_TRIGGER: &str = "agent.invocation.trigger";
 pub(super) const ATTR_AGENT_INVOCATION_EVIDENCE_ACTION_ID: &str =
     "agent.invocation.evidence_action_id";
-pub(super) const ATTR_ACTION_VALID: &str = "actrail.action.valid";
-pub(super) const ACTION_VALID_FALSE: &str = "false";
 pub(super) const ATTR_LINK_VALID: &str = "actrail.link.valid";
 pub(super) const LINK_VALID_FALSE: &str = "false";
 pub(super) const ATTR_PROCESS_PARENT_GENERATION: &str = "process.parent.generation";
@@ -216,7 +214,7 @@ pub(super) fn append_missing_evidence(
     }
 }
 
-fn insert_parent_identity_attributes(
+pub(super) fn insert_parent_identity_attributes(
     attributes: &mut std::collections::BTreeMap<String, String>,
     parent: &ProcessIdentity,
 ) {
@@ -265,6 +263,13 @@ pub(super) fn process_action_id(
         process.generation,
         suffix
     )
+}
+
+pub(super) fn llm_call_action_id_from_request_action_id(request_action_id: &str) -> String {
+    request_action_id
+        .strip_suffix(":llm.request")
+        .map(|prefix| format!("{prefix}:llm.call"))
+        .unwrap_or_else(|| format!("{request_action_id}:llm.call"))
 }
 
 pub(super) fn status_from_result(result: Option<i32>) -> SemanticActionStatus {

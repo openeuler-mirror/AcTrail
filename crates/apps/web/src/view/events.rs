@@ -196,9 +196,13 @@ pub(super) fn event_counts(events: &[DomainEvent]) -> EventCounts {
     counts
 }
 
-pub(super) fn counts_json(counts: &EventCounts, retained_payload_bytes: u64) -> String {
+pub(super) fn counts_json(
+    counts: &EventCounts,
+    retained_payload_bytes: u64,
+    payload_segments: usize,
+) -> String {
     format!(
-        "{{\"events\":{},\"process\":{},\"net\":{},\"file\":{},\"ipc\":{},\"stdio\":{},\"application\":{},\"resource\":{},\"control\":{},\"loss\":{},\"label\":{},\"enforcement\":{},\"retained_payload_bytes\":{}}}",
+        "{{\"events\":{},\"process\":{},\"net\":{},\"file\":{},\"ipc\":{},\"stdio\":{},\"application\":{},\"resource\":{},\"control\":{},\"loss\":{},\"label\":{},\"enforcement\":{},\"payloads\":{},\"retained_payload_bytes\":{}}}",
         counts.events,
         counts.process,
         counts.net,
@@ -211,6 +215,7 @@ pub(super) fn counts_json(counts: &EventCounts, retained_payload_bytes: u64) -> 
         counts.loss,
         counts.label,
         counts.enforcement,
+        payload_segments,
         retained_payload_bytes
     )
 }

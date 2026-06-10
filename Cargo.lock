@@ -409,6 +409,7 @@ dependencies = [
  "payload_event",
  "process_identity_contract",
  "process_tree_snapshot_contract",
+ "tls_probe_point_finder",
 ]
 
 [[package]]

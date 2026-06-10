@@ -6,6 +6,7 @@ mod remote_args;
 mod service;
 mod syscall;
 
+pub(crate) use procfs::host_exec_path;
 pub(crate) use service::{
     PROCESS_SECCOMP_COLLECTOR_NAME, ProcessSeccompObservation, ProcessSeccompService,
 };

@@ -21,10 +21,13 @@ const TLS_SYMBOL_SSL_WRITE_EX: u32 = 3;
 const TLS_SYMBOL_SSL_READ_EX: u32 = 4;
 const TLS_SYMBOL_RUSTLS_WRITE: u32 = 5;
 const TLS_SYMBOL_RUSTLS_WRITE_VECTORED: u32 = 6;
+const TLS_SYMBOL_GO_CONN_WRITE: u32 = 7;
+const TLS_SYMBOL_GO_CONN_READ: u32 = 8;
 
 const TLS_LIBRARY_OPENSSL: u32 = 1;
 const TLS_LIBRARY_BORINGSSL: u32 = 2;
 const TLS_LIBRARY_RUSTLS: u32 = 3;
+const TLS_LIBRARY_GO: u32 = 4;
 
 impl SqliteAttachService {
     pub(super) fn log_tls_diagnostic_events_impl(&mut self) {
@@ -87,6 +90,8 @@ fn tls_symbol(raw: u32) -> &'static str {
         TLS_SYMBOL_SSL_READ_EX => "SSL_read_ex",
         TLS_SYMBOL_RUSTLS_WRITE => "rustls_write",
         TLS_SYMBOL_RUSTLS_WRITE_VECTORED => "rustls_write_vectored",
+        TLS_SYMBOL_GO_CONN_WRITE => "go_conn_write",
+        TLS_SYMBOL_GO_CONN_READ => "go_conn_read",
         _ => "unknown",
     }
 }
@@ -96,6 +101,7 @@ fn tls_library(raw: u32) -> &'static str {
         TLS_LIBRARY_OPENSSL => "openssl",
         TLS_LIBRARY_BORINGSSL => "boringssl",
         TLS_LIBRARY_RUSTLS => "rustls",
+        TLS_LIBRARY_GO => "go",
         _ => "unknown",
     }
 }

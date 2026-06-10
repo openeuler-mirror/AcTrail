@@ -32,6 +32,10 @@ struct pt_regs {
 #define ACTRAIL_UPROBE_ARG4(ctx) ((ctx)->cx)
 #define ACTRAIL_UPROBE_RET(ctx) ((ctx)->ax)
 #define ACTRAIL_UPROBE_RET2(ctx) ((ctx)->dx)
+#define ACTRAIL_GO_UPROBE_ARG1(ctx) ((ctx)->ax)
+#define ACTRAIL_GO_UPROBE_ARG2(ctx) ((ctx)->bx)
+#define ACTRAIL_GO_UPROBE_ARG3(ctx) ((ctx)->cx)
+#define ACTRAIL_GO_UPROBE_ARG4(ctx) ((ctx)->di)
 #elif defined(__TARGET_ARCH_arm64)
 struct pt_regs {
     unsigned long regs[31];
@@ -46,6 +50,10 @@ struct pt_regs {
 #define ACTRAIL_UPROBE_ARG4(ctx) ((ctx)->regs[3])
 #define ACTRAIL_UPROBE_RET(ctx) ((ctx)->regs[0])
 #define ACTRAIL_UPROBE_RET2(ctx) ((ctx)->regs[1])
+#define ACTRAIL_GO_UPROBE_ARG1(ctx) ((ctx)->regs[0])
+#define ACTRAIL_GO_UPROBE_ARG2(ctx) ((ctx)->regs[1])
+#define ACTRAIL_GO_UPROBE_ARG3(ctx) ((ctx)->regs[2])
+#define ACTRAIL_GO_UPROBE_ARG4(ctx) ((ctx)->regs[3])
 #else
 #error "unsupported BPF target architecture for AcTrail uprobes"
 #endif

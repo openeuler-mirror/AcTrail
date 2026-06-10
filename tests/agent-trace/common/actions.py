@@ -39,7 +39,7 @@ def wait_for_llm_exchange_actions(
         trace_id,
         attempts,
         sleep_sec,
-        ("llm.request", "llm.response"),
+        ("llm.call", "llm.request", "llm.response"),
     )
 
 
@@ -83,6 +83,7 @@ def require_complete_llm_action(actions: str) -> None:
 
 
 def require_complete_llm_exchange(actions: str) -> None:
+    require_complete_action(actions, "llm.call")
     require_complete_action(actions, "llm.request")
     require_complete_action(actions, "llm.response")
 
@@ -90,20 +91,30 @@ def require_complete_llm_exchange(actions: str) -> None:
 def require_llm_exchange_graph(actions: str) -> None:
     document = parse_actions(actions)
     by_id = {action["action_id"]: action for action in document.get("actions", [])}
+    call_ids = complete_action_ids(document, "llm.call")
     request_ids = complete_action_ids(document, "llm.request")
     response_ids = complete_action_ids(document, "llm.response")
+    if not call_ids:
+        raise RuntimeError("actions did not contain a complete successful llm.call")
     if not request_ids:
         raise RuntimeError("actions did not contain a complete successful llm.request")
     if not response_ids:
         raise RuntimeError("actions did not contain a complete successful llm.response")
     links = document.get("links", [])
     if not any(
-        link.get("role") == "llm.request.llm_response"
-        and link.get("parent_action_id") in request_ids
+        link.get("role") == "llm.call.request"
+        and link.get("parent_action_id") in call_ids
+        and link.get("child_action_id") in request_ids
+        for link in links
+    ):
+        raise RuntimeError("actions did not link llm.call to llm.request")
+    if not any(
+        link.get("role") == "llm.call.response"
+        and link.get("parent_action_id") in call_ids
         and link.get("child_action_id") in response_ids
         for link in links
     ):
-        raise RuntimeError("actions did not link llm.request to llm.response")
+        raise RuntimeError("actions did not link llm.call to llm.response")
     if not any(
         link.get("role") == "llm.request.http_message"
         and link.get("parent_action_id") in request_ids

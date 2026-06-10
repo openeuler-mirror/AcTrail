@@ -187,6 +187,30 @@ fn route_trace_api(path: &str, storage_path: &Path) -> Result<Response, String> 
             .and_then(|trace_id| view::trace_json(storage_path, trace_id))
             .map(Response::json)
             .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
+        [trace_id, "summary"] => parse_u64(trace_id)
+            .and_then(|trace_id| view::trace_summary_json(storage_path, trace_id))
+            .map(Response::json)
+            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
+        [trace_id, "events"] => parse_u64(trace_id)
+            .and_then(|trace_id| view::trace_events_json(storage_path, trace_id))
+            .map(Response::json)
+            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
+        [trace_id, "payloads"] => parse_u64(trace_id)
+            .and_then(|trace_id| view::trace_payloads_json(storage_path, trace_id))
+            .map(Response::json)
+            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
+        [trace_id, "timeline"] => parse_u64(trace_id)
+            .and_then(|trace_id| view::trace_timeline_json(storage_path, trace_id))
+            .map(Response::json)
+            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
+        [trace_id, "processes"] => parse_u64(trace_id)
+            .and_then(|trace_id| view::trace_processes_json(storage_path, trace_id))
+            .map(Response::json)
+            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
+        [trace_id, "diagnostics"] => parse_u64(trace_id)
+            .and_then(|trace_id| view::trace_diagnostics_json(storage_path, trace_id))
+            .map(Response::json)
+            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
         [trace_id, "action-tree"] => parse_u64(trace_id)
             .and_then(|trace_id| view::action_tree_json(storage_path, trace_id))
             .map(Response::json)
