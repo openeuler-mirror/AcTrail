@@ -230,6 +230,16 @@ pub(super) fn action_json(action: &SemanticAction) -> String {
         &json::optional_time_nanos(action.end_time),
     );
     output.push(',');
+    json::field(
+        &mut output,
+        "duration",
+        &action
+            .end_time
+            .and_then(|end| end.duration_since(action.start_time).ok())
+            .map(|d| json::string(&json::duration_millis(d.as_millis() as u64)))
+            .unwrap_or_else(|| "null".to_string()),
+    );
+    output.push(',');
     json::field(&mut output, "process", &json::process(&action.process));
     output.push(',');
     json::field(&mut output, "status", &json::string(action.status.as_str()));

@@ -3,6 +3,7 @@ import { semanticActionLabel, semanticActionTarget } from '../../actionLabels';
 
 const COLUMNS = Object.freeze([
   { key: 'time', label: 'Time' },
+  { key: 'duration', label: 'Duration' },
   { key: 'pid', label: 'PID' },
   { key: 'kind', label: 'Kind' },
   { key: 'status', label: 'Status' },
@@ -25,6 +26,7 @@ function commandRow(action) {
     `command:${action.id}`,
     {
       time: formatTime(action.start_time),
+      duration: action.duration,
       pid: action.process?.pid,
       kind: label,
       status: action.status,
@@ -42,6 +44,7 @@ function commandRow(action) {
         pid: action.process?.pid,
         started: action.start_time,
         ended: action.end_time,
+        duration: action.duration,
       }),
       attributes: action.attributes,
       raw: action,
@@ -57,6 +60,7 @@ function commandMatchesQuery(action, query) {
   return valuesMatchQuery(
     [
       formatTime(action.start_time),
+      action.duration,
       action.process?.pid,
       action.kind,
       semanticActionLabel(action),

@@ -87,6 +87,31 @@ pub fn time_nanos(value: SystemTime) -> String {
     }
 }
 
+/// Formats a duration in milliseconds to a human-readable string like "1min3s897ms"
+pub fn duration_millis(millis: u64) -> String {
+    let minutes = millis / 60_000;
+    let seconds = (millis % 60_000) / 1_000;
+    let ms = millis % 1_000;
+
+    if minutes > 0 {
+        if ms > 0 {
+            format!("{}min{}s{}ms", minutes, seconds, ms)
+        } else if seconds > 0 {
+            format!("{}min{}s", minutes, seconds)
+        } else {
+            format!("{}min", minutes)
+        }
+    } else if seconds > 0 {
+        if ms > 0 {
+            format!("{}s{}ms", seconds, ms)
+        } else {
+            format!("{}s", seconds)
+        }
+    } else {
+        format!("{}ms", ms)
+    }
+}
+
 pub fn field(output: &mut String, key: &str, value: &str) {
     let _ = write!(output, "\"{}\":{}", escape(key), value);
 }
