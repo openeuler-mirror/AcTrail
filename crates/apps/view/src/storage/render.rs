@@ -1,5 +1,7 @@
 //! Text rendering for storage-backed viewer output.
 
+#[path = "render/json.rs"]
+mod json;
 #[path = "render/network.rs"]
 mod network;
 #[path = "render/payload.rs"]
@@ -12,7 +14,7 @@ use model_core::event::{DomainEvent, EventPayload, NetPayload};
 use model_core::payload::PayloadSegment;
 use model_core::process::ProcessMembership;
 use model_core::trace::TraceRecord;
-use semantic_action::SemanticAction;
+use semantic_action::{SemanticAction, SemanticActionLink};
 use store_snapshot_contract::view::SnapshotView;
 
 use crate::command::{PayloadFormat, RowLimit};
@@ -52,6 +54,13 @@ pub(super) fn render_traces(traces: Vec<TraceRecord>, row_limit: Option<RowLimit
         ]);
     }
     render_table(table, "no traces")
+}
+
+pub(super) fn render_traces_json(
+    traces: Vec<TraceRecord>,
+    row_limit: Option<RowLimit>,
+) -> Result<String, String> {
+    json::render_traces(limit_vec(traces, row_limit))
 }
 
 pub(super) fn render_processes(
@@ -100,6 +109,10 @@ pub(super) fn render_payloads(segments: Vec<PayloadSegment>) -> String {
     payload::render_payloads(segments)
 }
 
+pub(super) fn render_payloads_json(segments: Vec<PayloadSegment>) -> Result<String, String> {
+    json::render_payloads(segments)
+}
+
 pub(super) fn render_payload(segment: PayloadSegment, format: PayloadFormat) -> String {
     payload::render_payload(segment, format)
 }
@@ -129,6 +142,14 @@ pub(super) fn render_semantic_actions(
         ]);
     }
     render_table(table, "no semantic actions")
+}
+
+pub(super) fn render_semantic_actions_json(
+    actions: Vec<SemanticAction>,
+    links: Vec<SemanticActionLink>,
+    row_limit: Option<RowLimit>,
+) -> Result<String, String> {
+    json::render_semantic_actions(limit_vec(actions, row_limit), links)
 }
 
 pub(super) fn render_diagnostics(

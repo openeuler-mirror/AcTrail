@@ -21,6 +21,7 @@ from common import (  # noqa: E402
     repo_root,
     require_binary,
     require_complete_llm_exchange,
+    require_llm_exchange_graph,
     require_complete_payload_rows_any,
     require_otel_span,
     require_root,
@@ -107,6 +108,7 @@ def main() -> int:
                 ) from error
             raise
         require_complete_llm_exchange(actions)
+        require_llm_exchange_graph(actions)
         otel = export_otel(
             actrailviewer,
             resolved_config,

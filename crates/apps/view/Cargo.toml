@@ -1,6 +1,6 @@
 [package]
 name = "view"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 license = "MulanPSL-2.0"
 
@@ -11,6 +11,7 @@ json_graph_export = { path = "../../adapters/export/json_graph" }
 model_core = { path = "../../core/model" }
 otel_export = { path = "../../adapters/export/otel" }
 semantic_action = { path = "../../contracts/semantic_action" }
+serde_json = "1"
 sqlite_storage = { path = "../../adapters/storage/sqlite" }
 store_read_contract = { path = "../../contracts/store/read" }
 store_snapshot_contract = { path = "../../contracts/store/snapshot" }

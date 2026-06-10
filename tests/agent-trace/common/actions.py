@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -52,11 +53,25 @@ def wait_for_actions_with_kinds(
 ) -> str:
     for _ in range(attempts):
         output = run_checked(
-            [str(actrailviewer), "actions", "--config", str(config), "--trace-id", str(trace_id)],
+            [
+                str(actrailviewer),
+                "--output-format",
+                "json",
+                "actions",
+                "--config",
+                str(config),
+                "--trace-id",
+                str(trace_id),
+            ],
             echo=False,
         )
-        if all(kind in output for kind in required_kinds):
-            print(output, end="", flush=True)
+        document = parse_actions(output)
+        found_kinds = {action.get("kind") for action in document.get("actions", [])}
+        if all(kind in found_kinds for kind in required_kinds):
+            print(
+                f"viewer_actions_json_bytes={len(output.encode('utf-8'))}",
+                flush=True,
+            )
             return output
         time.sleep(sleep_sec)
     expected = ", ".join(required_kinds)
@@ -72,8 +87,66 @@ def require_complete_llm_exchange(actions: str) -> None:
     require_complete_action(actions, "llm.response")
 
 
+def require_llm_exchange_graph(actions: str) -> None:
+    document = parse_actions(actions)
+    by_id = {action["action_id"]: action for action in document.get("actions", [])}
+    request_ids = complete_action_ids(document, "llm.request")
+    response_ids = complete_action_ids(document, "llm.response")
+    if not request_ids:
+        raise RuntimeError("actions did not contain a complete successful llm.request")
+    if not response_ids:
+        raise RuntimeError("actions did not contain a complete successful llm.response")
+    links = document.get("links", [])
+    if not any(
+        link.get("role") == "llm.request.llm_response"
+        and link.get("parent_action_id") in request_ids
+        and link.get("child_action_id") in response_ids
+        for link in links
+    ):
+        raise RuntimeError("actions did not link llm.request to llm.response")
+    if not any(
+        link.get("role") == "llm.request.http_message"
+        and link.get("parent_action_id") in request_ids
+        and by_id.get(link.get("child_action_id"), {}).get("kind") == "http.message"
+        for link in links
+    ):
+        raise RuntimeError("actions did not link llm.request to an http.message")
+    if not any(
+        link.get("role") in {"llm.response.http_message", "llm.response.sse_stream"}
+        and link.get("parent_action_id") in response_ids
+        for link in links
+    ):
+        raise RuntimeError("actions did not link llm.response to response facts")
+
+
 def require_complete_action(actions: str, kind: str) -> None:
-    for line in actions.splitlines():
-        if kind in line and "success" in line and "complete" in line:
-            return
+    if complete_action_ids(parse_actions(actions), kind):
+        return
     raise RuntimeError(f"actions did not contain a complete successful {kind}")
+
+
+def count_action_rows(actions: str) -> int:
+    return len(parse_actions(actions).get("actions", []))
+
+
+def parse_actions(actions: str) -> dict:
+    try:
+        document = json.loads(actions)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"viewer actions output was not JSON: {error}") from error
+    if not isinstance(document, dict) or not isinstance(document.get("actions"), list):
+        raise RuntimeError("viewer actions JSON must contain an actions list")
+    if not isinstance(document.get("links", []), list):
+        raise RuntimeError("viewer actions JSON links must be a list")
+    return document
+
+
+def complete_action_ids(document: dict, kind: str) -> set[str]:
+    return {
+        action["action_id"]
+        for action in document.get("actions", [])
+        if action.get("kind") == kind
+        and action.get("status") == "success"
+        and action.get("completeness") == "complete"
+        and isinstance(action.get("action_id"), str)
+    }

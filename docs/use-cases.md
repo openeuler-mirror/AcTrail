@@ -8,14 +8,14 @@ This document maps common operator questions to the AcTrail feature path and the
 | --- | --- | --- |
 | What process tree did the agent create? | eBPF process lifecycle plus viewer process/events output. | [Example 01](examples/01.quick-start/README.md), [Example 03](examples/03.extended-observation-e2e/README.md) |
 | Did one agent silently launch another agent? | `actrailctl launch` plus process seccomp exec context, TLS/plaintext LLM evidence, and `agent.invocation` semantic action. | [Example 07](examples/07.xiaoo-claude-agent-invocation/README.md) |
-| What LLM request and response did xiaoO exchange? | TLS sync payload capture plus HTTP/SSE and `llm.request`/`llm.response` semantic assembly. | [Example 06](examples/06.xiaoo-tls-capture/README.md) |
+| What LLM request and response did a real agent exchange? | Full-monitor payload capture plus HTTP/SSE and `llm.request`/`llm.response` semantic assembly. | [Example 08](examples/08.full-monitor-validation/README.md) |
 | What LLM request and response did opencode exchange? | Bun/static-BoringSSL executable TLS payload capture plus proxy-aware HTTP semantics. | `python3 tests/agent-trace/run_case.py opencode-bun` |
 | What outbound LLM request did a Rust/rustls agent send? | `tls-sync` with a rustls probe plan from finder fast, symbols, or a build-id-checked pattern. | [Example 06](examples/06.xiaoo-tls-capture/README.md) |
 | What outbound LLM request did a LangGraph Python agent send? | Dynamic OpenSSL shared-library TLS payload capture around an OpenAI-compatible HTTPS call. | `python3 tests/agent-trace/run_case.py langgraph-openai` |
 | What HTTP request/response did a non-TLS local service exchange? | Socket plaintext payload with HTTP sniffing and HTTP/1.x application analyzer. | [Example 05](examples/05.http-payload-unified/README.md) |
 | Did file enforcement actually block the target? | Fanotify permission backend plus client-side stdout and Enforcement events. | [Example 04](examples/04.fanotify-enforcement-e2e/README.md) |
 | What files, IPC, stdio, and resources did a workload touch? | Extended eBPF observation, stdio payload, provider labels, resource metrics. | [Example 03](examples/03.extended-observation-e2e/README.md) |
-| Can I export higher-level actions to observability tooling? | `actrailviewer export-otel` over semantic actions. | [Example 04](examples/04.fanotify-enforcement-e2e/README.md), [Example 06](examples/06.xiaoo-tls-capture/README.md), [Example 07](examples/07.xiaoo-claude-agent-invocation/README.md) |
+| Can I export higher-level actions to observability tooling? | `actrailviewer export-otel` over semantic actions. | [Example 04](examples/04.fanotify-enforcement-e2e/README.md), [Example 08](examples/08.full-monitor-validation/README.md) |
 | What is the runtime overhead? | `tests/performance/run_benchmark.py` task-runtime benchmark. | [Performance README](../tests/performance/README.md) |
 
 ## Agent Invocation Discovery
@@ -41,7 +41,8 @@ This use case requires payload capture for the child LLM call. A command match i
 
 Goal: retain the LLM request and response bytes, derive an `llm.request` action from the outbound request, and derive an `llm.response` action from inbound JSON or SSE response payloads.
 
-Use the capture path that matches the target runtime:
+For manual real-agent validation, start with [Example 08](examples/08.full-monitor-validation/README.md).
+Use a runtime-specific capture path when narrowing a failure:
 
 | Target Runtime | Capture Path |
 | --- | --- |
@@ -84,7 +85,7 @@ Goal: inspect application protocol facts instead of only raw bytes.
 Use:
 
 - Plain HTTP: [Example 05](examples/05.http-payload-unified/README.md).
-- HTTPS/2: [Example 02](examples/02.llm-http-payload-capture/README.md) or [Example 06](examples/06.xiaoo-tls-capture/README.md).
+- HTTPS/2: [Example 02](examples/02.llm-http-payload-capture/README.md) for a focused protocol case, or [Example 08](examples/08.full-monitor-validation/README.md) for real-agent validation.
 
 Expected evidence:
 

@@ -10,6 +10,7 @@ from e2e_steps.loader import load_module
 from evidence import evidence_summary_facts, expected_found_detail
 from model import FAIL, PASS, CaseResult
 
+from .interactive import finish_claude_interactive_capture
 from .launch import run_claude_launch_step
 from .reporting import claude_output_summary, claude_tls_detail
 
@@ -87,6 +88,16 @@ def run_direct_claude_case(env, result: CaseResult, workload: dict[str, str]) ->
             module,
             workload,
             values,
+            resolved_config,
+            daemon,
+            actrailctl,
+            actrailviewer,
+            tls_runtime,
+        )
+        finish_claude_interactive_capture(
+            result,
+            module,
+            workload,
             resolved_config,
             daemon,
             actrailctl,
@@ -193,6 +204,16 @@ def finish_claude_capture(
         ),
         "the action table contains a complete successful semantic request/response exchange",
     )
+    run_step(
+        result,
+        "LLM exchange action graph",
+        lambda: module.require_llm_exchange_graph(actions),
+        expected_found_detail(
+            "llm.request links to llm.response and HTTP evidence",
+            ["llm.request.llm_response", "llm.request.http_message", "llm.response facts"],
+        ),
+        "viewer JSON exposes the semantic action graph without direct SQLite inspection",
+    )
     text = run_step(
         result,
         "payload text fetch",
@@ -298,8 +319,6 @@ def finish_claude_capture(
         ),
         "OTEL evidence must include parsed llm.request content and captured llm.response content",
     )
-
-
 def render_claude_config(module, config_template: Path, resolved_config: Path, tls_runtime):
     module.write_resolved_operator_config(config_template, resolved_config, tls_runtime)
     return resolved_config

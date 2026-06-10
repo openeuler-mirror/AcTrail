@@ -35,6 +35,7 @@ pub struct ViewInvocation {
     pub storage_config_path: Option<PathBuf>,
     pub storage_path: Option<PathBuf>,
     pub output_path: Option<PathBuf>,
+    pub output_format: OutputFormat,
     pub trace_id: Option<TraceId>,
     pub row_limit: Option<RowLimit>,
     pub payload_direction: Option<PayloadDirection>,
@@ -46,6 +47,12 @@ pub struct ViewInvocation {
 pub enum PayloadFormat {
     Text,
     Hex,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OutputFormat {
+    Table,
+    Json,
 }
 
 pub fn parse_invocation(args: impl IntoIterator<Item = String>) -> Result<ViewInvocation, String> {
@@ -71,6 +78,14 @@ struct ViewerCli {
     #[arg(long = "storage-config", global = true, value_name = "PATH")]
     storage_config_path: Option<PathBuf>,
 
+    #[arg(
+        long = "output-format",
+        global = true,
+        value_parser = parse_output_format,
+        default_value = "table"
+    )]
+    output_format: OutputFormat,
+
     #[command(subcommand)]
     command: Option<ViewerCommandArgs>,
 }
@@ -87,6 +102,7 @@ impl ViewerCli {
             storage_config_path: self.storage_config_path,
             storage_path: self.storage_path,
             output_path: export_output_path(&self.command),
+            output_format: self.output_format,
             trace_id: trace_id_for_command(&self.command),
             row_limit: row_limit_for_command(&self.command)?,
             payload_direction: payload_direction_for_command(&self.command),
@@ -309,5 +325,13 @@ fn parse_payload_format(raw: &str) -> Result<PayloadFormat, String> {
         "text" => Ok(PayloadFormat::Text),
         "hex" => Ok(PayloadFormat::Hex),
         other => Err(format!("invalid payload format {other}")),
+    }
+}
+
+fn parse_output_format(raw: &str) -> Result<OutputFormat, String> {
+    match raw {
+        "table" => Ok(OutputFormat::Table),
+        "json" => Ok(OutputFormat::Json),
+        other => Err(format!("invalid output format {other}")),
     }
 }

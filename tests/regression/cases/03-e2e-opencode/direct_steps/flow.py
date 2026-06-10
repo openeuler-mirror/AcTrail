@@ -202,6 +202,16 @@ def finish_opencode_capture(
         ),
         "the action table contains a complete successful semantic request/response exchange",
     )
+    run_step(
+        result,
+        "LLM exchange action graph",
+        lambda: module.require_llm_exchange_graph(actions),
+        expected_found_detail(
+            "llm.request links to llm.response and HTTP evidence",
+            ["llm.request.llm_response", "llm.request.http_message", "llm.response facts"],
+        ),
+        "viewer JSON exposes the semantic action graph without direct SQLite inspection",
+    )
     otel = run_step(
         result,
         "OTEL export",

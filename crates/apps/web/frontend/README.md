@@ -1,25 +1,22 @@
 # actrailweb frontend
 
-This Vue app renders the read-only AcTrail UI. Rust owns storage/API/static serving;
-Vue owns client-side layout, selection, lane expansion, and detail inspection.
-The Action Tree tab loads only the root node initially; each node requests its
-direct children when expanded. Commands use a separate semantic-action list API
-instead of forcing a full action-tree fetch.
+This Vue app renders the read-only AcTrail UI. Rust owns storage/API/static serving; Vue owns client-side layout, selection, lane expansion, and detail inspection. The Action Tree tab loads only the root node initially; each node requests its direct children when expanded. Commands use a separate semantic-action list API instead of forcing a full action-tree fetch.
 
 ## Build
 
 ```sh
 # From the repository root:
-npm ci --prefix crates/apps/web/frontend
 cargo build --release
 ```
 
-The web crate build script runs `npm run build` before Rust compiles. The build
-writes checked-in static assets to `../src/render/dist`, which the Rust binary
-embeds with `include_str!`. Run `npm ci` once when Node dependencies are missing
-or when `package-lock.json` changes. Node.js, npm, and `node_modules` are build
-inputs only; the release `actrailweb` binary serves the embedded assets without
-them at runtime.
+The web crate embeds checked-in static assets from `../src/render/dist`. Node.js, npm, and `node_modules` are only needed when changing the frontend source; the release `actrailweb` binary serves the embedded assets without them at runtime.
+
+After frontend source changes, regenerate the checked-in assets before committing:
+
+```sh
+npm ci --prefix crates/apps/web/frontend
+npm run build --prefix crates/apps/web/frontend
+```
 
 ## Dependencies
 
