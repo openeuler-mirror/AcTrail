@@ -1,5 +1,6 @@
 //! Top-level entry boundary for the control application.
 
+use config_core::daemon::{OperatorConfig, OperatorConfigInitStatus};
 use uds_control_client::{UdsControlClient, UdsSocketTransport};
 
 use crate::args::{CtlCommand, parse_args};
@@ -11,6 +12,20 @@ use crate::output::format_reply;
 pub fn run_from_env() -> Result<i32, String> {
     let invocation = parse_args(std::env::args().skip(1))?;
     match invocation.command {
+        CtlCommand::Init { config_path } => {
+            match OperatorConfig::initialize(&config_path)? {
+                OperatorConfigInitStatus::Created => {
+                    println!("initialized config {}", config_path.display());
+                }
+                OperatorConfigInitStatus::ExistingValid => {
+                    println!(
+                        "config {} already exists and is valid",
+                        config_path.display()
+                    );
+                }
+            }
+            Ok(i32::default())
+        }
         CtlCommand::Clean { artifacts } => run_clean(artifacts),
         CtlCommand::Launch {
             display_name,
@@ -28,7 +43,7 @@ pub fn run_from_env() -> Result<i32, String> {
             agent_invocation_commands,
             argv,
         } => {
-            let transport = UdsSocketTransport::new(invocation.socket_path);
+            let transport = UdsSocketTransport::new(required_socket_path(invocation.socket_path)?);
             let mut client = UdsControlClient::new(transport);
             run_launch(
                 &mut client,
@@ -52,7 +67,7 @@ pub fn run_from_env() -> Result<i32, String> {
             )
         }
         command => {
-            let transport = UdsSocketTransport::new(invocation.socket_path);
+            let transport = UdsSocketTransport::new(required_socket_path(invocation.socket_path)?);
             let mut client = UdsControlClient::new(transport);
             let reply = dispatch(&mut client, invocation.request_id, command).map_err(|error| {
                 format!("control command failed: {}: {}", error.code, error.message)
@@ -61,4 +76,10 @@ pub fn run_from_env() -> Result<i32, String> {
             Ok(i32::default())
         }
     }
+}
+
+fn required_socket_path(
+    socket_path: Option<std::path::PathBuf>,
+) -> Result<std::path::PathBuf, String> {
+    socket_path.ok_or_else(|| "missing control socket path".to_string())
 }

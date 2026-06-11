@@ -11,14 +11,14 @@ import sys
 import time
 from pathlib import Path
 
-from .config import run_checked
+from .config import actrail_command, run_checked
 
 TRACE_RE = re.compile(r"trace trace-(\d+) entered Active")
 
 
-def start_daemon(actraild: Path, config: Path, timeout_sec: float) -> subprocess.Popen[str]:
+def start_daemon(actraild: Path, config: Path | None, timeout_sec: float) -> subprocess.Popen[str]:
     daemon = subprocess.Popen(
-        [str(actraild), "--config", str(config), "run"],
+        actrail_command(actraild, config, "run"),
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -61,21 +61,20 @@ def read_line_until(process: subprocess.Popen[str], stream, deadline: float) -> 
 
 def launch_and_parse_trace(
     actrailctl: Path,
-    config: Path,
+    config: Path | None,
     name: str,
     argv: list[str],
     timeout_sec: float,
 ) -> tuple[int, str]:
-    command = [
-        str(actrailctl),
-        "--config",
-        str(config),
+    command = actrail_command(
+        actrailctl,
+        config,
         "launch",
         "--name",
         name,
         "--",
         *argv,
-    ]
+    )
     output = run_checked(command, timeout=timeout_sec)
     match = TRACE_RE.search(output)
     if not match:
@@ -86,7 +85,7 @@ def launch_and_parse_trace(
 def launch_and_parse_trace_with_daemon(
     daemon: subprocess.Popen[str],
     actrailctl: Path,
-    config: Path,
+    config: Path | None,
     name: str,
     argv: list[str],
     timeout_sec: float,
@@ -96,16 +95,15 @@ def launch_and_parse_trace_with_daemon(
     require_positive_seconds(timeout_sec, "launch timeout")
     require_positive_seconds(poll_interval_sec, "launch poll interval")
     require_positive_seconds(stop_timeout_sec, "launch stop timeout")
-    command = [
-        str(actrailctl),
-        "--config",
-        str(config),
+    command = actrail_command(
+        actrailctl,
+        config,
         "launch",
         "--name",
         name,
         "--",
         *argv,
-    ]
+    )
     started = time.monotonic()
     process = subprocess.Popen(
         command,

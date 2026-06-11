@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from e2e_steps.binaries import require_actrail_binaries
+from e2e_steps.binaries import require_actrail_binaries, require_actrailweb_binary
 from e2e_steps.checks import capture_stdout, run_step
 from e2e_steps.loader import load_module
 from evidence import evidence_summary_facts, expected_found_detail
@@ -61,6 +61,7 @@ def run_loaded_opencode_case(env, result: CaseResult, module, explicit_binary: s
         "opencode payload capture requires eBPF/seccomp privileges",
     )
     actraild, actrailctl, actrailviewer = require_actrail_binaries(result, module, env.bin_dir)
+    actrailweb = require_actrailweb_binary(result, module, env.bin_dir)
     tls_runtime = run_step(
         result,
         "opencode TLS runtime",
@@ -71,13 +72,16 @@ def run_loaded_opencode_case(env, result: CaseResult, module, explicit_binary: s
         ),
         "TLS runtime discovery decides whether request/response payloads come from BoringSSL or socket fallback",
     )
-    resolved_config = Path(module.required(workload, "resolved_config_path"))
+    resolved_config = None
     run_step(
         result,
-        "operator config",
-        lambda: render_opencode_config(module, case_dir, resolved_config, tls_runtime),
-        lambda path: expected_found_detail("resolved operator config is rendered", [f"path={path}"]),
-        "the case renders a concrete operator config for the selected opencode runtime",
+        "default operator config",
+        lambda: module.read_config(env.default_operator_config_path()),
+        lambda values: expected_found_detail(
+            "default operator config can be parsed",
+            [f"keys={len(values)}", f"path={env.default_operator_config_path()}"],
+        ),
+        "the case uses the static default config and launch-time TLS auto discovery",
     )
     run_step(
         result,
@@ -107,6 +111,7 @@ def run_loaded_opencode_case(env, result: CaseResult, module, explicit_binary: s
             resolved_config,
             actrailctl,
             actrailviewer,
+            actrailweb,
             tls_runtime,
             explicit_binary,
         )
@@ -123,9 +128,10 @@ def finish_opencode_capture(
     result: CaseResult,
     module,
     workload: dict[str, str],
-    resolved_config: Path,
+    resolved_config: Path | None,
     actrailctl: Path,
     actrailviewer: Path,
+    actrailweb: Path,
     tls_runtime,
     explicit_binary: str | None,
 ) -> None:
@@ -212,6 +218,27 @@ def finish_opencode_capture(
         ),
         "viewer JSON exposes the semantic action graph without direct SQLite inspection",
     )
+    run_step(
+        result,
+        "Web action-tree reachability",
+        lambda: module.require_web_action_tree_projection(
+            actrailweb,
+            resolved_config,
+            trace_id,
+            float(module.required(workload, "daemon_ready_timeout_seconds")),
+            float(module.required(workload, "drain_sleep_seconds")),
+            required_reachable_kinds=("llm.call", "llm.request", "llm.response", "http.message"),
+        ),
+        lambda summary: expected_found_detail(
+            "web action-tree recursively reaches every display action",
+            [
+                f"actions={summary['action_count']}",
+                f"reachable={summary['reachable_count']}",
+                f"http_messages={summary['kind_counts'].get('http.message', 0)}",
+            ],
+        ),
+        "actrailweb action-tree API exposes the same semantic actions that the viewer generated",
+    )
     otel = run_step(
         result,
         "OTEL export",
@@ -287,15 +314,6 @@ def resolve_opencode_tls_runtime(module, workload: dict[str, str], case_dir: Pat
     entry = module.require_opencode_entry()
     configured_symbol_map = module.resolve_path(module.required(workload, "symbol_map_path"), repo)
     return module.resolve_optional_opencode_tls_runtime(entry, configured_symbol_map, workload)
-
-
-def render_opencode_config(module, case_dir: Path, resolved_config: Path, tls_runtime):
-    module.render_config(
-        case_dir / "operator.conf",
-        resolved_config,
-        module.opencode_config_replacements(tls_runtime),
-    )
-    return resolved_config
 
 
 def restore_optional_env(name: str, value: str | None) -> None:

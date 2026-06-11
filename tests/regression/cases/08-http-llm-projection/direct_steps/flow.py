@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from e2e_steps.binaries import require_actrail_binaries
+from e2e_steps.binaries import require_actrail_binaries, require_actrailweb_binary
 from e2e_steps.checks import StepFailure, capture_stdout, run_step
 from e2e_steps.loader import load_module
 from evidence import evidence_summary_facts, expected_found_detail
@@ -16,9 +16,8 @@ def run_direct_http_projection_case(env, result: CaseResult) -> None:
         "regression_http_llm_projection_run_e2e",
         env.regression_root / "cases/08-http-llm-projection/run_e2e.py",
     )
-    repo = env.repo_root
     case_dir = env.regression_root / "cases/08-http-llm-projection"
-    config = repo / "tests/payload/http-local/operator.conf"
+    config = None
     settings = run_step(
         result,
         "HTTP projection workload config",
@@ -32,7 +31,18 @@ def run_direct_http_projection_case(env, result: CaseResult) -> None:
     daemon = None
     result.command = ["direct", "http-llm-projection"]
     actraild, actrailctl, actrailviewer = require_actrail_binaries(result, module, env.bin_dir)
+    actrailweb = require_actrailweb_binary(result, module, env.bin_dir)
     workload = case_dir / "workload.py"
+    run_step(
+        result,
+        "default operator config",
+        lambda: module.read_config(env.default_operator_config_path()),
+        lambda values: expected_found_detail(
+            "default operator config can be parsed",
+            [f"keys={len(values)}", f"path={env.default_operator_config_path()}"],
+        ),
+        "the case uses the static default config for local HTTP payload projection",
+    )
     run_step(
         result,
         "clean previous state",
@@ -62,6 +72,7 @@ def run_direct_http_projection_case(env, result: CaseResult) -> None:
             config,
             actrailctl,
             actrailviewer,
+            actrailweb,
         )
     finally:
         if daemon is not None:
@@ -77,17 +88,38 @@ def finish_http_projection_capture(
     module,
     settings: dict[str, str],
     workload: Path,
-    config: Path,
+    config: Path | None,
     actrailctl: Path,
     actrailviewer: Path,
+    actrailweb: Path,
 ) -> None:
-    trace_id = run_http_projection_launch_step(
+    trace_id, workload_pid = run_http_projection_launch_step(
         result,
         module,
         actrailctl,
         config,
         settings,
         workload,
+    )
+    run_step(
+        result,
+        "launch root pid",
+        lambda: require_launch_root_summary(
+            module,
+            actrailviewer,
+            config,
+            trace_id,
+            workload_pid,
+        ),
+        lambda summary: expected_found_detail(
+            "trace root pid is the launched workload",
+            [
+                f"trace_id=trace-{trace_id}",
+                f"workload_pid={workload_pid}",
+                root_pid_fact(summary),
+            ],
+        ),
+        "actrailctl launch should track the launched process as the trace root",
     )
     payloads = run_step(
         result,
@@ -139,6 +171,31 @@ def finish_http_projection_capture(
         lambda: module.require_complete_llm_action(actions),
         expected_found_detail("complete successful llm.request exists", ["complete successful llm.request"]),
         "the action table contains a complete successful semantic request",
+    )
+    run_step(
+        result,
+        "Web action-tree reachability",
+        lambda: module.require_web_action_tree_projection(
+            actrailweb,
+            config,
+            trace_id,
+            float(module.required(settings, "daemon_ready_timeout_seconds")),
+            float(module.required(settings, "drain_sleep_seconds")),
+            required_reachable_kinds=("llm.request", "http.message"),
+            forbidden_root_linkless_kinds=("http.message",),
+            required_parent_child_kinds=(("command.invocation", "http.message"),),
+        ),
+        lambda summary: expected_found_detail(
+            "web action-tree reaches every display action and keeps HTTP under its command display parent",
+            [
+                f"actions={summary['action_count']}",
+                f"reachable={summary['reachable_count']}",
+                f"http_messages={summary['kind_counts'].get('http.message', 0)}",
+                f"root_linkless={summary['root_linkless_count']}",
+                f"command_http_children={summary['parent_child_kind_counts'].get(('command.invocation', 'http.message'), 0)}",
+            ],
+        ),
+        "actrailweb action-tree API exposes HTTP semantic actions without leaving them as root fallback nodes",
     )
     otel = run_step(
         result,
@@ -200,10 +257,10 @@ def run_http_projection_launch_step(
     result: CaseResult,
     module,
     actrailctl: Path,
-    config: Path,
+    config: Path | None,
     settings: dict[str, str],
     workload: Path,
-) -> int:
+) -> tuple[int, int]:
     result.begin_check("HTTP projection launch", "running local workload under actrailctl")
     try:
         (trace_id, output), _ = capture_stdout(
@@ -217,6 +274,7 @@ def run_http_projection_launch_step(
         )
         if "llm projection workload complete" not in output:
             raise RuntimeError("workload did not report completion")
+        workload_pid = module.parse_workload_pid(output)
     except Exception as error:
         result.status = FAIL
         result.add_check(
@@ -231,11 +289,33 @@ def run_http_projection_launch_step(
         PASS,
         expected_found_detail(
             "local OpenAI-style HTTP request completes under actrailctl launch",
-            [f"http_llm_projection_trace_id={trace_id}"],
+            [
+                f"http_llm_projection_trace_id={trace_id}",
+                f"http_llm_projection_workload_pid={workload_pid}",
+            ],
         ),
         "local OpenAI-style HTTP request completed under AcTrail",
     )
-    return trace_id
+    return trace_id, workload_pid
+
+
+def root_pid_fact(summary: str) -> str:
+    for item in summary.split():
+        if item.startswith("root_pid="):
+            return item
+    return "root_pid=missing"
+
+
+def require_launch_root_summary(
+    module,
+    actrailviewer: Path,
+    config: Path | None,
+    trace_id: int,
+    workload_pid: int,
+) -> str:
+    summary = module.trace_summary(actrailviewer, config, trace_id)
+    module.require_launch_root_pid(summary, workload_pid)
+    return summary
 
 
 def http_projection_output_summary(

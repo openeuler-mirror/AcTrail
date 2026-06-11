@@ -5,7 +5,7 @@ edition = "2024"
 license = "MulanPSL-2.0"
 
 [lib]
-name = "tls_payload_probe_sync"
+name = "actrail_tls_payload_probe_sync"
 crate-type = ["rlib", "cdylib"]
 
 [[bin]]

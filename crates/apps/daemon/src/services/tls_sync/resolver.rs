@@ -24,7 +24,7 @@ pub(super) struct TlsSyncPlanResolver {
 
 struct PlanLookupJob {
     binary: PathBuf,
-    response: UnixStream,
+    response: Option<UnixStream>,
 }
 
 struct TlsSyncPlanWorker {
@@ -38,6 +38,7 @@ struct BinaryCacheKey {
     path: PathBuf,
     len: u64,
     modified: Option<(u64, u32)>,
+    build_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -71,7 +72,16 @@ impl TlsSyncPlanResolver {
         self.requests
             .send(PlanLookupJob {
                 binary: binary.to_path_buf(),
-                response,
+                response: Some(response),
+            })
+            .map_err(|error| ControlError::new("tls_sync_plan_worker", error.to_string()))
+    }
+
+    pub(super) fn prewarm(&self, binary: &Path) -> Result<(), ControlError> {
+        self.requests
+            .send(PlanLookupJob {
+                binary: binary.to_path_buf(),
+                response: None,
             })
             .map_err(|error| ControlError::new("tls_sync_plan_worker", error.to_string()))
     }
@@ -81,9 +91,11 @@ impl TlsSyncPlanWorker {
     fn run(mut self, receiver: Receiver<PlanLookupJob>) {
         for mut job in receiver {
             let response = self.lookup(&job.binary);
-            if let Err(error) = job
-                .response
-                .write_all(&tls_payload_sync::encode_plan_lookup_response(&response))
+            let Some(response_stream) = job.response.as_mut() else {
+                continue;
+            };
+            if let Err(error) =
+                response_stream.write_all(&tls_payload_sync::encode_plan_lookup_response(&response))
             {
                 tracing::warn!(
                     target: "actrail::tls_sync",
@@ -148,6 +160,7 @@ impl CachedPlan {
 fn binary_cache_key(path: &Path) -> std::io::Result<BinaryCacheKey> {
     let path = canonical(path);
     let metadata = std::fs::metadata(&path)?;
+    let build_id = tls_probe_point_finder::elf_build_id(&path).ok().flatten();
     Ok(BinaryCacheKey {
         path,
         len: metadata.len(),
@@ -156,6 +169,7 @@ fn binary_cache_key(path: &Path) -> std::io::Result<BinaryCacheKey> {
             .ok()
             .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
             .map(|duration| (duration.as_secs(), duration.subsec_nanos())),
+        build_id,
     })
 }
 

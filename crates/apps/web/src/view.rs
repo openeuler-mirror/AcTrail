@@ -1,5 +1,7 @@
 //! SQLite-backed API view rendering.
 
+#[path = "view/action_tree_projection.rs"]
+mod action_tree_projection;
 #[path = "view/actions.rs"]
 mod actions;
 #[path = "view/commands.rs"]

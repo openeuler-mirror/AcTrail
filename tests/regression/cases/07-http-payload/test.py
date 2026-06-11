@@ -42,6 +42,7 @@ def run(env) -> CaseResult:
         str(env.repo_root / "docs/examples/05.http-payload-unified/run_e2e.py"),
         "--bin-dir",
         str(env.bin_dir),
+        "--default-config",
     ]
     completed = env.run(command)
     result.command = completed.command

@@ -166,6 +166,7 @@ impl SqliteAttachService {
         let seccomp_notify = &mut self.seccomp_notify;
         let seccomp_tls = &mut self.seccomp_tls;
         let seccomp_socket = &mut self.seccomp_socket;
+        let tls_sync = &self.tls_sync;
         let collector = &mut self.collector;
         let mut process_observations = Vec::new();
         {
@@ -191,6 +192,14 @@ impl SqliteAttachService {
                         ) else {
                             return Ok(());
                         };
+                        if let Err(error) = tls_sync.prewarm_plan_for_exec(&host_path) {
+                            tracing::warn!(
+                                target: "actrail::tls_sync",
+                                binary = %host_path.display(),
+                                error = %error.message,
+                                "failed to prewarm TLS sync plan for exec candidate"
+                            );
+                        }
                         collector
                             .attach_dynamic_go_tls(&host_path)
                             .map_err(|error| ControlError::new(error.stage, error.message))

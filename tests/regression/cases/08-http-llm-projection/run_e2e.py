@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "agent-trace"))
 from common import (  # noqa: E402
+    actrail_command,
     clean_configured_paths,
     emit_llm_otel_evidence,
     export_otel,
@@ -21,9 +22,11 @@ from common import (  # noqa: E402
     repo_root,
     require_binary,
     require_complete_llm_action,
+    require_web_action_tree_projection,
     require_otel_span,
     require_root,
     required,
+    run_checked,
     start_daemon,
     stop_process,
     wait_for_actions,
@@ -42,6 +45,7 @@ def main() -> int:
     actraild = require_binary(bin_dir, "actraild")
     actrailctl = require_binary(bin_dir, "actrailctl")
     actrailviewer = require_binary(bin_dir, "actrailviewer")
+    actrailweb = require_binary(bin_dir, "actrailweb")
     workload = case_dir / "workload.py"
 
     clean_configured_paths(actrailctl, config)
@@ -60,6 +64,9 @@ def main() -> int:
         )
         if "llm projection workload complete" not in output:
             raise RuntimeError("workload did not report completion")
+        workload_pid = parse_workload_pid(output)
+        summary = trace_summary(actrailviewer, config, trace_id)
+        require_launch_root_pid(summary, workload_pid)
         payloads = wait_for_payloads(
             actrailctl,
             actrailviewer,
@@ -79,6 +86,16 @@ def main() -> int:
             float(required(settings, "drain_sleep_seconds")),
         )
         require_complete_llm_action(actions)
+        web_tree = require_web_action_tree_projection(
+            actrailweb,
+            config,
+            trace_id,
+            float(required(settings, "daemon_ready_timeout_seconds")),
+            float(required(settings, "drain_sleep_seconds")),
+            required_reachable_kinds=("llm.request", "http.message"),
+            forbidden_root_linkless_kinds=("http.message",),
+            required_parent_child_kinds=(("command.invocation", "http.message"),),
+        )
         otel = export_otel(
             actrailviewer,
             config,
@@ -90,7 +107,9 @@ def main() -> int:
         require_http_llm_span(otel, marker, required(settings, "model"))
         emit_llm_otel_evidence(otel, int(required(settings, "evidence_text_max_chars")))
         print(f"http_llm_projection_trace_id={trace_id}")
+        print(f"http_llm_projection_root_pid={workload_pid}")
         print(f"http_llm_projection_payload_segments={payload_count}")
+        print(f"http_llm_projection_web_action_tree_reachable={web_tree['reachable_count']}")
         print(f"http_llm_projection_spans={span_count}")
         print(f"http_llm_projection_marker={marker}")
         print(f"http_llm_projection_otel={required(settings, 'otel_output_path')}")
@@ -158,6 +177,28 @@ def require_http_llm_span(document: dict, marker: str, model: str) -> None:
         if marker in attrs.get("llm.request.payload_text", ""):
             return
     raise RuntimeError("OTEL export did not contain the expected HTTP llm.request span")
+
+
+def parse_workload_pid(output: str) -> int:
+    match = re.search(r"^workload_pid=(\d+)$", output, re.MULTILINE)
+    if not match:
+        raise RuntimeError("workload output did not contain workload_pid")
+    return int(match.group(1))
+
+
+def trace_summary(actrailviewer: Path, config: Path | None, trace_id: int) -> str:
+    return run_checked(
+        actrail_command(actrailviewer, config, "summary", "--trace-id", str(trace_id)),
+        echo=False,
+    )
+
+
+def require_launch_root_pid(summary: str, workload_pid: int) -> None:
+    expected = f"root_pid={workload_pid}"
+    if expected not in summary:
+        raise RuntimeError(
+            f"launch trace root pid did not match workload pid {workload_pid}\n{summary}"
+        )
 
 
 def require_complete_outbound_socket_payload_rows(payloads: str) -> int:

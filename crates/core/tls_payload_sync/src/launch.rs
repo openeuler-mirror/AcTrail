@@ -29,13 +29,21 @@ pub fn run_with_preload(
     library: &Path,
     envs: Vec<(OsString, OsString)>,
 ) -> SyncResult<ExitStatus> {
+    run_with_preload_libraries(command, &[library.to_path_buf()], envs)
+}
+
+pub fn run_with_preload_libraries(
+    command: &[OsString],
+    libraries: &[PathBuf],
+    envs: Vec<(OsString, OsString)>,
+) -> SyncResult<ExitStatus> {
     let Some(program) = command.first() else {
         return Err(SyncError::new("probe command is empty"));
     };
     let mut child = Command::new(program);
     child.args(&command[1..]);
     child.envs(envs);
-    child.env("LD_PRELOAD", preload_env_value(library)?);
+    child.env("LD_PRELOAD", preload_env_value_for_libraries(libraries)?);
     child
         .status()
         .map_err(|error| SyncError::new(format!("run target: {error}")))
@@ -54,7 +62,7 @@ pub fn runtime_library_path(requested: &RuntimeLibraryPath) -> SyncResult<PathBu
     let directory = executable
         .parent()
         .ok_or_else(|| SyncError::new("current executable has no parent directory"))?;
-    let library = directory.join("libtls_payload_probe_sync.so");
+    let library = directory.join("libactrail_tls_payload_probe_sync.so");
     if !library.is_file() {
         return Err(SyncError::new(format!(
             "sync runtime library not found: {}",
@@ -65,16 +73,32 @@ pub fn runtime_library_path(requested: &RuntimeLibraryPath) -> SyncResult<PathBu
 }
 
 pub fn preload_env_value(library: &Path) -> SyncResult<OsString> {
-    let library = std::fs::canonicalize(library).map_err(|error| {
-        SyncError::new(format!(
-            "cannot resolve sync runtime library {}: {error}",
-            library.display()
-        ))
-    })?;
+    preload_env_value_for_libraries(&[library.to_path_buf()])
+}
+
+pub fn preload_env_value_for_libraries(libraries: &[PathBuf]) -> SyncResult<OsString> {
+    let mut resolved = libraries
+        .iter()
+        .map(|library| {
+            std::fs::canonicalize(library).map_err(|error| {
+                SyncError::new(format!(
+                    "cannot resolve preload library {}: {error}",
+                    library.display()
+                ))
+            })
+        })
+        .collect::<SyncResult<Vec<_>>>()?;
+    if resolved.is_empty() {
+        return Err(SyncError::new("preload library list must not be empty"));
+    }
+    let mut value = resolved.remove(0).into_os_string();
+    for library in resolved {
+        value.push(":");
+        value.push(library);
+    }
     let Some(existing) = std::env::var_os("LD_PRELOAD") else {
-        return Ok(library.into_os_string());
+        return Ok(value);
     };
-    let mut value = library.into_os_string();
     value.push(":");
     value.push(existing);
     Ok(value)
@@ -181,7 +205,7 @@ mod tests {
         ProbeSource, TargetIdentity, TlsProvider,
     };
 
-    use super::validate_native_backend_plan;
+    use super::{preload_env_value_for_libraries, validate_native_backend_plan};
 
     #[test]
     fn native_backend_rejects_probe_binary_architecture_mismatch() {
@@ -240,6 +264,22 @@ mod tests {
 
         assert!(error.to_string().contains("SSL_do_handshake"));
         assert!(error.to_string().contains("validation anchor"));
+    }
+
+    #[test]
+    fn preload_env_value_preserves_dependency_order() {
+        let first = std::fs::canonicalize("/bin/sh").expect("canonical /bin/sh");
+        let second = std::fs::canonicalize("/bin/ls").expect("canonical /bin/ls");
+
+        let value = preload_env_value_for_libraries(&[first.clone(), second.clone()])
+            .expect("preload value")
+            .to_string_lossy()
+            .into_owned();
+
+        assert!(
+            value.starts_with(&format!("{}:{}", first.display(), second.display())),
+            "{value}"
+        );
     }
 
     fn plan(architecture: &str, complete: bool) -> ProbePointPlan {

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from common import (
+    actrail_command,
     count_action_rows,
     require_complete_llm_exchange,
     require_llm_exchange_graph,
@@ -18,21 +19,20 @@ from common import (
 def export_trace_json(
     actrailviewer: Path,
     values: dict[str, str],
-    config: Path,
+    config: Path | None,
     trace_id: int,
 ) -> dict:
     output_path = Path(required(values, "export_directory")) / f"trace-{trace_id}-payload.json"
     run_checked(
-        [
-            str(actrailviewer),
+        actrail_command(
+            actrailviewer,
+            config,
             "export-json",
-            "--config",
-            str(config),
             "--trace-id",
             str(trace_id),
             "--output",
             str(output_path),
-        ],
+        ),
         echo=False,
     )
     with output_path.open("r", encoding="utf-8") as handle:
@@ -42,21 +42,20 @@ def export_trace_json(
 def export_trace_otel(
     actrailviewer: Path,
     values: dict[str, str],
-    config: Path,
+    config: Path | None,
     trace_id: int,
 ) -> dict:
     output_path = Path(required(values, "export_directory")) / f"trace-{trace_id}-semantic.otlp.json"
     run_checked(
-        [
-            str(actrailviewer),
+        actrail_command(
+            actrailviewer,
+            config,
             "export-otel",
-            "--config",
-            str(config),
             "--trace-id",
             str(trace_id),
             "--output",
             str(output_path),
-        ],
+        ),
         echo=False,
     )
     with output_path.open("r", encoding="utf-8") as handle:
@@ -77,7 +76,7 @@ def require_exported_payload_marker(document: dict, marker: str) -> None:
 
 def wait_for_semantic_actions(
     actrailviewer: Path,
-    config: Path,
+    config: Path | None,
     trace_id: int,
     attempts: int,
     sleep_sec: float,

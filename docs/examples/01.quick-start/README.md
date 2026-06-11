@@ -79,6 +79,7 @@ docs/examples/01.quick-start/operator.conf
 socket_path = /tmp/actrail.sock
 pid_file = /tmp/actraild.pid
 storage_path = /tmp/actrail.sqlite
+storage_busy_timeout_ms = 5000
 web_listen_addr = 127.0.0.1:18080
 web_request_read_timeout_ms = 1000
 export_directory = /tmp/actrail-export
@@ -93,6 +94,7 @@ diagnostic_log_level = info
 | `socket_path` | `actraild` 控制面 Unix Domain Socket；`actrailctl` 通过它发送 `doctor`、`track-add`、`track-remove`、`list-traces` 等控制命令 | 运行态文件；`actraild stop` 会删除 |
 | `pid_file` | `actraild start/stop/status/restart` 用来判断 daemon 进程状态的 PID 文件 | 运行态文件；`actraild stop` 会删除 |
 | `storage_path` | AcTrail storage 路径；当前实现使用 SQLite，采集到的 trace、membership、event、diagnostic 会写入这里 | 验证数据；`actraild stop` 不删除 |
+| `storage_busy_timeout_ms` | daemon 写 SQLite 时等待临时锁释放的最长时间；文件库使用 WAL 模式以支持 Web/viewer 并发读取 | 运行参数；来自配置文件 |
 | `web_listen_addr` | `actrailweb --config` 使用的只读 Web UI 监听地址；可用 `--addr` 和 `--port` 临时覆盖 | 运行参数；来自配置文件 |
 | `web_request_read_timeout_ms` | `actrailweb` 等待单个 HTTP connection 发出请求行的最长时间；示例值 `1000` 用于避免浏览器空闲预连接阻塞 UI | 运行参数；来自配置文件 |
 | `export_directory` | `actrailviewer export-json` 未显式传 `--output` 时，导出 JSON graph 的默认目录 | 验证产物；`actraild stop` 不删除 |

@@ -36,6 +36,7 @@ pub fn run_live_verification(
         .map_err(|error| format!("parse built-in seccomp defaults: {error}"))?;
     let mut server = LocalDaemonServer::build_with_provider_rule_set(
         &config.storage_path,
+        seccomp_defaults.storage_busy_timeout_ms,
         verification_profiles(&config),
         EbpfCollectorConfig {
             enabled: true,

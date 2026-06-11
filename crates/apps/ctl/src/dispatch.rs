@@ -37,6 +37,12 @@ pub fn dispatch(
             selector,
         }),
         CtlCommand::Doctor => ControlCommand::Doctor(DoctorCommand { request_id }),
+        CtlCommand::Init { .. } => {
+            return Err(ControlError::new(
+                "invalid_dispatch",
+                "init is handled by the local actrailctl process",
+            ));
+        }
         CtlCommand::Launch { .. } => {
             return Err(ControlError::new(
                 "invalid_dispatch",

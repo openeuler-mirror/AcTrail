@@ -6,13 +6,13 @@ import re
 import time
 from pathlib import Path
 
-from .config import run_checked
+from .config import actrail_command, run_checked
 
 
 def wait_for_payloads(
     actrailctl: Path,
     actrailviewer: Path,
-    config: Path,
+    config: Path | None,
     trace_id: int,
     attempts: int,
     sleep_sec: float,
@@ -20,18 +20,17 @@ def wait_for_payloads(
     required_fragments: list[str],
 ) -> str:
     for _ in range(attempts):
-        run_checked([str(actrailctl), "--config", str(config), "list-traces"], echo=False)
+        run_checked(actrail_command(actrailctl, config, "list-traces"), echo=False)
         output = run_checked(
-            [
-                str(actrailviewer),
+            actrail_command(
+                actrailviewer,
+                config,
                 "payloads",
-                "--config",
-                str(config),
                 "--trace-id",
                 str(trace_id),
                 "--head",
                 head,
-            ],
+            ),
             echo=False,
         )
         if all(fragment in output for fragment in required_fragments):
@@ -44,7 +43,7 @@ def wait_for_payloads(
 def wait_for_payloads_any(
     actrailctl: Path,
     actrailviewer: Path,
-    config: Path,
+    config: Path | None,
     trace_id: int,
     attempts: int,
     sleep_sec: float,
@@ -52,18 +51,17 @@ def wait_for_payloads_any(
     required_options: list[list[str]],
 ) -> str:
     for _ in range(attempts):
-        run_checked([str(actrailctl), "--config", str(config), "list-traces"], echo=False)
+        run_checked(actrail_command(actrailctl, config, "list-traces"), echo=False)
         output = run_checked(
-            [
-                str(actrailviewer),
+            actrail_command(
+                actrailviewer,
+                config,
                 "payloads",
-                "--config",
-                str(config),
                 "--trace-id",
                 str(trace_id),
                 "--head",
                 head,
-            ],
+            ),
             echo=False,
         )
         if any(all(fragment in output for fragment in option) for option in required_options):

@@ -13,7 +13,7 @@ def run_xiaoo_launch_step(
     result: CaseResult,
     module,
     actrailctl: Path,
-    resolved_config: Path,
+    resolved_config: Path | None,
     workload: dict[str, str],
     xiaoo_binary: Path,
 ) -> tuple[int, str]:
@@ -72,7 +72,7 @@ def run_xiaoo_actions_step(
     result: CaseResult,
     module,
     actrailviewer: Path,
-    resolved_config: Path,
+    resolved_config: Path | None,
     trace_id: int,
     workload: dict[str, str],
     tls_runtime,

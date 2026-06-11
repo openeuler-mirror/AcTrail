@@ -1,19 +1,64 @@
-use super::{OPERATOR_CONFIG_TEMPLATE, OperatorConfig};
+use super::{
+    DEFAULT_STORAGE_BUSY_TIMEOUT_MS, OPERATOR_CONFIG_TEMPLATE, OperatorConfig,
+    OperatorConfigInitStatus,
+};
 use crate::daemon::{
     DiagnosticLogLevel, DisabledOrPath, PayloadTlsCaptureBackend, PayloadTlsLibrary,
     PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource, ProcessSeccompSyscall,
 };
 
 #[test]
-fn application_protocol_config_parses_when_tls_payload_is_required() {
-    let config = OperatorConfig::parse(&http_enabled_config()).unwrap();
+fn default_operator_config_is_full_monitor_collection() {
+    let config = OperatorConfig::parse(OPERATOR_CONFIG_TEMPLATE).unwrap();
 
+    assert_eq!(config.capture_profile.name.as_str(), "default-full-monitor");
     assert!(config.application_protocol.enabled);
     assert!(config.application_protocol.http1_enabled);
+    assert!(config.application_protocol.http2_enabled);
     assert!(config.application_protocol.capture_host);
-    assert!(!config.live_otel_export.enabled);
+    assert!(config.payload_config.tls.enabled);
+    assert!(config.payload_config.stdio.enabled);
+    assert!(config.payload_config.socket.enabled);
+    assert!(config.process_seccomp.enabled);
+    assert!(config.agent_invocation.enabled);
+    assert!(config.resource_metrics.enabled);
+    assert!(config.ebpf_config.file_path_capture_enabled);
+    assert!(config.live_otel_export.enabled);
+    assert!(!config.enforcement.enabled);
     assert_eq!(config.live_otel_export.queue_capacity, 1024);
     assert_eq!(config.diagnostic_log_level, DiagnosticLogLevel::Info);
+    assert_eq!(
+        config.storage_busy_timeout_ms,
+        DEFAULT_STORAGE_BUSY_TIMEOUT_MS
+    );
+}
+
+#[test]
+fn storage_busy_timeout_defaults_for_existing_configs() {
+    let raw = OPERATOR_CONFIG_TEMPLATE
+        .lines()
+        .filter(|line| !line.starts_with("storage_busy_timeout_ms = "))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let config = OperatorConfig::parse(&raw).unwrap();
+
+    assert_eq!(
+        config.storage_busy_timeout_ms,
+        DEFAULT_STORAGE_BUSY_TIMEOUT_MS
+    );
+}
+
+#[test]
+fn storage_busy_timeout_rejects_zero() {
+    let raw = OPERATOR_CONFIG_TEMPLATE.replace(
+        "storage_busy_timeout_ms = 5000",
+        "storage_busy_timeout_ms = 0",
+    );
+
+    let error = OperatorConfig::parse(&raw).unwrap_err();
+
+    assert!(error.contains("invalid storage_busy_timeout_ms"));
 }
 
 #[test]
@@ -36,13 +81,8 @@ fn diagnostic_log_level_does_not_mutate_tls_diagnostics_config() {
             "diagnostic_log_level = debug",
         )
         .replace(
-            "required_capability = net-transport\n",
-            "required_capability = net-transport\nrequired_capability = tls-plaintext-payload\n",
-        )
-        .replace("payload_tls_enabled = false", "payload_tls_enabled = true")
-        .replace(
-            "seccomp_notify_enabled = false",
-            "seccomp_notify_enabled = true",
+            "payload_tls_diagnostics_enabled = true",
+            "payload_tls_diagnostics_enabled = false",
         );
 
     let config = OperatorConfig::parse(&raw).unwrap();
@@ -55,15 +95,15 @@ fn diagnostic_log_level_does_not_mutate_tls_diagnostics_config() {
 fn live_otel_export_config_parses_as_own_section() {
     let raw = OPERATOR_CONFIG_TEMPLATE
         .replace(
-            "otel_live_export_enabled = false",
             "otel_live_export_enabled = true",
+            "otel_live_export_enabled = false",
         )
         .replace(
             "otel_live_export_path = /tmp/actrail-live-spans.otlp.jsonl",
             "otel_live_export_path = /tmp/actrail-test-live.otlp.jsonl",
         )
         .replace(
-            "otel_live_export_overwrite_enabled = false",
+            "otel_live_export_overwrite_enabled = true",
             "otel_live_export_overwrite_enabled = true",
         )
         .replace(
@@ -77,7 +117,7 @@ fn live_otel_export_config_parses_as_own_section() {
 
     let config = OperatorConfig::parse(&raw).unwrap();
 
-    assert!(config.live_otel_export.enabled);
+    assert!(!config.live_otel_export.enabled);
     assert_eq!(
         config.live_otel_export.path,
         std::path::PathBuf::from("/tmp/actrail-test-live.otlp.jsonl")
@@ -90,18 +130,8 @@ fn live_otel_export_config_parses_as_own_section() {
 #[test]
 fn http_capability_requires_plaintext_payload_capability() {
     let raw = OPERATOR_CONFIG_TEMPLATE
-        .replace(
-            "required_capability = net-transport\n",
-            "required_capability = net-transport\nrequired_capability = net-application-plaintext-http\n",
-        )
-        .replace(
-            "application_protocol_enabled = false",
-            "application_protocol_enabled = true",
-        )
-        .replace(
-            "application_protocol_http1_enabled = false",
-            "application_protocol_http1_enabled = true",
-        );
+        .replace("required_capability = tls-plaintext-payload\n", "")
+        .replace("required_capability = socket-plaintext-payload\n", "");
 
     let error = OperatorConfig::parse(&raw).unwrap_err();
 
@@ -112,43 +142,17 @@ fn http_capability_requires_plaintext_payload_capability() {
 
 #[test]
 fn application_protocol_config_parses_when_socket_payload_is_required() {
-    let raw = OPERATOR_CONFIG_TEMPLATE
-        .replace(
-            "required_capability = net-transport\n",
-            "required_capability = net-transport\nrequired_capability = socket-plaintext-payload\nrequired_capability = net-application-plaintext-http\n",
-        )
-        .replace("payload_socket_enabled = false", "payload_socket_enabled = true")
-        .replace(
-            "seccomp_notify_enabled = false",
-            "seccomp_notify_enabled = true",
-        )
-        .replace(
-            "application_protocol_enabled = false",
-            "application_protocol_enabled = true",
-        )
-        .replace(
-            "application_protocol_http1_enabled = false",
-            "application_protocol_http1_enabled = true",
-        );
-
-    let config = OperatorConfig::parse(&raw).unwrap();
+    let config = OperatorConfig::parse(OPERATOR_CONFIG_TEMPLATE).unwrap();
 
     assert!(config.payload_config.socket.enabled);
 }
 
 #[test]
 fn http2_capability_requires_protocol_http2_config() {
-    let raw = OPERATOR_CONFIG_TEMPLATE
-        .replace(
-            "required_capability = net-transport\n",
-            "required_capability = net-transport\nrequired_capability = tls-plaintext-payload\nrequired_capability = net-application-http2-frames\n",
-        )
-        .replace("payload_tls_enabled = false", "payload_tls_enabled = true")
-        .replace("seccomp_notify_enabled = false", "seccomp_notify_enabled = true")
-        .replace(
-            "application_protocol_enabled = false",
-            "application_protocol_enabled = true",
-        );
+    let raw = OPERATOR_CONFIG_TEMPLATE.replace(
+        "application_protocol_http2_enabled = true",
+        "application_protocol_http2_enabled = false",
+    );
 
     let error = OperatorConfig::parse(&raw).unwrap_err();
 
@@ -160,8 +164,8 @@ fn http2_capability_requires_protocol_http2_config() {
 #[test]
 fn sse_preview_requires_sse_enabled() {
     let raw = OPERATOR_CONFIG_TEMPLATE.replace(
-        "application_http_sse_data_policy = disabled",
-        "application_http_sse_data_policy = preview",
+        "application_http_sse_enabled = true",
+        "application_http_sse_enabled = false",
     );
 
     let error = OperatorConfig::parse(&raw).unwrap_err();
@@ -174,8 +178,8 @@ fn sse_preview_requires_sse_enabled() {
 #[test]
 fn resource_metrics_capability_requires_sampler_config() {
     let raw = OPERATOR_CONFIG_TEMPLATE.replace(
-        "required_capability = net-transport\n",
-        "required_capability = net-transport\nrequired_capability = resource-metrics\n",
+        "resource_metrics_enabled = true",
+        "resource_metrics_enabled = false",
     );
 
     let error = OperatorConfig::parse(&raw).unwrap_err();
@@ -230,25 +234,7 @@ fn xiaoo_tls_example_parses() {
 
 #[test]
 fn process_seccomp_config_parses_for_exec_context() {
-    let raw = OPERATOR_CONFIG_TEMPLATE
-        .replace(
-            "required_capability = net-transport\n",
-            "required_capability = net-transport\nrequired_capability = proc-exec-context\n",
-        )
-        .replace(
-            "seccomp_notify_enabled = false",
-            "seccomp_notify_enabled = true",
-        )
-        .replace(
-            "process_seccomp_enabled = false",
-            "process_seccomp_enabled = true",
-        )
-        .replace(
-            "agent_invocation_enabled = false",
-            "agent_invocation_enabled = true",
-        );
-
-    let config = OperatorConfig::parse(&raw).unwrap();
+    let config = OperatorConfig::parse(OPERATOR_CONFIG_TEMPLATE).unwrap();
 
     assert!(config.process_seccomp.enabled);
     assert_eq!(
@@ -285,11 +271,7 @@ fn agent_invocation_commands_are_optional_dynamic_lookup_hints() {
         .lines()
         .filter(|line| !line.starts_with("agent_invocation_command = "))
         .collect::<Vec<_>>()
-        .join("\n")
-        .replace(
-            "agent_invocation_enabled = false",
-            "agent_invocation_enabled = true",
-        );
+        .join("\n");
 
     let config = OperatorConfig::parse(&raw).unwrap();
 
@@ -297,24 +279,44 @@ fn agent_invocation_commands_are_optional_dynamic_lookup_hints() {
     assert!(config.agent_invocation.commands.is_empty());
 }
 
-fn http_enabled_config() -> String {
-    OPERATOR_CONFIG_TEMPLATE
-        .replace(
-            "required_capability = net-transport\n",
-            "required_capability = net-transport\nrequired_capability = tls-plaintext-payload\nrequired_capability = net-application-plaintext-http\n",
-        )
-        .replace("payload_tls_enabled = false", "payload_tls_enabled = true")
-        .replace("seccomp_notify_enabled = false", "seccomp_notify_enabled = true")
-        .replace(
-            "application_protocol_enabled = false",
-            "application_protocol_enabled = true",
-        )
-        .replace(
-            "application_protocol_http1_enabled = false",
-            "application_protocol_http1_enabled = true",
-        )
-        .replace(
-            "application_http_capture_host = false",
-            "application_http_capture_host = true",
-        )
+#[test]
+fn initialize_creates_default_operator_config() {
+    let path = temp_config_path("create");
+    let _ = std::fs::remove_file(&path);
+
+    let status = OperatorConfig::initialize(&path).unwrap();
+
+    assert_eq!(status, OperatorConfigInitStatus::Created);
+    let config = OperatorConfig::load(&path).unwrap();
+    assert_eq!(config.capture_profile.name.as_str(), "default-full-monitor");
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn initialize_validates_existing_operator_config() {
+    let path = temp_config_path("existing-valid");
+    std::fs::write(&path, OPERATOR_CONFIG_TEMPLATE).unwrap();
+
+    let status = OperatorConfig::initialize(&path).unwrap();
+
+    assert_eq!(status, OperatorConfigInitStatus::ExistingValid);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn initialize_rejects_existing_invalid_operator_config() {
+    let path = temp_config_path("existing-invalid");
+    std::fs::write(&path, "profile_name = broken\n").unwrap();
+
+    let error = OperatorConfig::initialize(&path).unwrap_err();
+
+    assert!(error.contains("validate config"));
+    std::fs::remove_file(path).unwrap();
+}
+
+fn temp_config_path(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "actrail-operator-config-{name}-{}.conf",
+        std::process::id()
+    ))
 }

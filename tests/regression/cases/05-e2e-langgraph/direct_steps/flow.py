@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from e2e_steps.binaries import require_actrail_binaries
+from e2e_steps.binaries import require_actrail_binaries, require_actrailweb_binary
 from e2e_steps.checks import StepFailure, capture_stdout, run_step
 from e2e_steps.loader import load_module
 from evidence import evidence_summary_facts, expected_found_detail
@@ -32,7 +32,7 @@ def run_loaded_langgraph_case(
     python: str,
 ) -> None:
     case_dir = env.repo_root / "tests/agent-trace/langgraph-openai"
-    config = case_dir / "operator.conf"
+    config = None
     daemon = None
     result.command = ["direct", "langgraph-openai"]
     run_step(
@@ -43,6 +43,17 @@ def run_loaded_langgraph_case(
         "LangGraph payload capture requires eBPF/seccomp privileges",
     )
     actraild, actrailctl, actrailviewer = require_actrail_binaries(result, module, env.bin_dir)
+    actrailweb = require_actrailweb_binary(result, module, env.bin_dir)
+    run_step(
+        result,
+        "default operator config",
+        lambda: module.read_config(env.default_operator_config_path()),
+        lambda values: expected_found_detail(
+            "default operator config can be parsed",
+            [f"keys={len(values)}", f"path={env.default_operator_config_path()}"],
+        ),
+        "the case uses the static default config and launch-time TLS auto discovery",
+    )
     run_step(
         result,
         "clean previous state",
@@ -73,6 +84,7 @@ def run_loaded_langgraph_case(
             config,
             actrailctl,
             actrailviewer,
+            actrailweb,
         )
     finally:
         if daemon is not None:
@@ -89,9 +101,10 @@ def finish_langgraph_capture(
     workload: dict[str, str],
     python: str,
     case_dir: Path,
-    config: Path,
+    config: Path | None,
     actrailctl: Path,
     actrailviewer: Path,
+    actrailweb: Path,
 ) -> None:
     trace_id, launch_output = run_langgraph_launch_step(
         result,
@@ -159,6 +172,27 @@ def finish_langgraph_capture(
             ["complete successful llm.request", "complete successful llm.response"],
         ),
         "the action table contains a complete successful semantic request/response exchange",
+    )
+    run_step(
+        result,
+        "Web action-tree reachability",
+        lambda: module.require_web_action_tree_projection(
+            actrailweb,
+            config,
+            trace_id,
+            float(module.required(workload, "daemon_ready_timeout_seconds")),
+            float(module.required(workload, "drain_sleep_seconds")),
+            required_reachable_kinds=("llm.call", "llm.request", "llm.response", "http.message"),
+        ),
+        lambda summary: expected_found_detail(
+            "web action-tree recursively reaches every display action",
+            [
+                f"actions={summary['action_count']}",
+                f"reachable={summary['reachable_count']}",
+                f"http_messages={summary['kind_counts'].get('http.message', 0)}",
+            ],
+        ),
+        "actrailweb action-tree API exposes the same semantic actions that the viewer generated",
     )
     otel = run_step(
         result,
@@ -234,7 +268,7 @@ def run_langgraph_launch_step(
     result: CaseResult,
     module,
     actrailctl: Path,
-    config: Path,
+    config: Path | None,
     workload: dict[str, str],
     python: str,
     case_dir: Path,

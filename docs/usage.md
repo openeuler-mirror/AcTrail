@@ -60,13 +60,15 @@ python3 tests/agent-trace/run_case.py langgraph-openai
 
 `opencode-bun` is pinned to `deepseek/deepseek-chat` in `tests/agent-trace/opencode-bun/workload.conf`; keep the shell's local proxy environment active on proxy-only hosts. If the installed opencode build-id does not match the checked-in Bun/BoringSSL map, the case detects the current `SSL_read` and `SSL_write` offsets from configured byte patterns and writes a temporary matching map. `langgraph-openai` requires `langgraph`, `requests`, `DEEPSEEK_API_KEY`, and a Python build whose `_ssl` module links dynamic OpenSSL.
 
-To create a full template:
+Initialize the default full-collection operator config:
 
 ```bash
-./target/release/actraild init-config --output local/operator.conf
+sudo ./target/release/actraild init
 ```
 
-Every runtime constant is explicit in the config. Do not rely on hidden defaults when creating a new operator profile.
+The default path is `/etc/actrail/actraild.conf`. `actrailctl init` performs the same initialization. If the file already exists, `init` loads and validates it, reports success or the validation error, and exits without rewriting it. For a local test config, pass `--output local/operator.conf` or `--config local/operator.conf`.
+
+Every runtime constant is explicit in the config. The generated default enables broad collection, but leaves blocking/enforcement disabled.
 
 ## 4. Clean Local Runtime Artifacts
 
@@ -92,6 +94,8 @@ When `otel_live_export_enabled = true`, the configured `otel_live_export_path` i
 ./target/release/actraild --config <operator.conf> status
 ./target/release/actrailctl doctor --config <operator.conf>
 ```
+
+When `--config` is omitted, `actraild` and `actrailctl` load `/etc/actrail/actraild.conf`. If that file is missing or invalid, they fail with the config path and validation/read error.
 
 Use foreground mode when running under a supervisor:
 

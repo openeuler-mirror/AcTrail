@@ -36,11 +36,13 @@ Launch-time process seccomp resolves configured process-control names through th
 
 ## Operator Config Layout
 
-Create a config template:
+Initialize the default full-collection operator config:
 
 ```bash
-./target/release/actraild init-config --output local/operator.conf
+sudo ./target/release/actraild init
 ```
+
+The default path is `/etc/actrail/actraild.conf`. `actrailctl init` performs the same initialization. If the file already exists, `init` loads and validates it, reports success or the validation error, and exits without rewriting it. For a local deployment config, pass `--output local/operator.conf` or `--config local/operator.conf`.
 
 For a persistent deployment, review these fields first:
 
@@ -50,10 +52,11 @@ For a persistent deployment, review these fields first:
 | `socket_mode_octal` | File mode for the control socket. |
 | `pid_file` | Used by `actraild start/stop/status/restart`. |
 | `storage_path` | SQLite storage location; place it on a filesystem with enough space for payload retention. |
+| `storage_busy_timeout_ms` | SQLite busy timeout for daemon writes. Keep this positive; increase it only when long-running readers share the same storage. |
 | `log_path` | Daemon background stdout/stderr log. |
 | `diagnostic_log_level` | Daemon diagnostic verbosity: `off`, `info`, or `debug`. Use `debug` only while collecting failure evidence. |
 | `export_directory` | Default graph export directory when no explicit `--output` is passed. |
-| `otel_live_export_*` | Optional live OTEL JSONL sink. Keep disabled unless a realtime span stream is required. |
+| `otel_live_export_*` | Live OTEL JSONL sink. The generated default enables it; disable it if a realtime span stream is not required. |
 | `profile_name` and `required_capability` | Capability contract for traces created from this config. |
 | `*_retention_max_bytes_per_trace` | Payload storage safety limits. |
 | `export_payload_bytes_enabled` / `export_payload_text_enabled` | Whether raw payload bytes/text can appear in graph JSON export. |
@@ -62,7 +65,7 @@ AcTrail fails fast for unsupported required capabilities. Do not add broad fallb
 
 ## Capability Profiles
 
-The generated operator template uses an explicit list style for `required_capability`: enabled capabilities are active lines, and supported but inactive capabilities remain present as commented lines. To enable a capability, uncomment that exact line and enable the matching runtime section below it. This keeps the available capability vocabulary visible without changing the parser contract.
+The generated operator template is a broad collection profile similar to `docs/examples/08.full-monitor-validation/operator.conf`: process, file, IPC, stdio, TLS plaintext, socket plaintext, HTTP/1, HTTP/2, resource metrics, and live OTEL export are enabled by default. Enforcement remains disabled because it is not passive collection and depends on deployment-specific rules.
 
 Use a narrow config for each deployment intent:
 
@@ -88,6 +91,8 @@ Background mode:
 ./target/release/actraild --config local/operator.conf status
 ./target/release/actrailctl doctor --config local/operator.conf
 ```
+
+When `--config` is omitted, `actraild` and `actrailctl` load `/etc/actrail/actraild.conf`. If that file is missing or invalid, they fail with the config path and validation/read error.
 
 Foreground mode for a supervisor:
 
@@ -124,7 +129,7 @@ For existing processes, `track-add` can observe configured eBPF facts from the a
 
 ## Storage And Retention
 
-Storage is append-oriented SQLite at `storage_path`. Payload retention is controlled per trace by:
+Storage is append-oriented SQLite at `storage_path`. The daemon opens file-backed storage in WAL mode and uses `storage_busy_timeout_ms` when waiting on transient SQLite locks. Payload retention is controlled per trace by:
 
 ```text
 payload_tls_retention_max_bytes_per_trace
@@ -185,7 +190,7 @@ For LangGraph, avoid Python builds that statically embed OpenSSL, because the `o
 1. Stop the daemon for the target config.
 2. Build the new release binaries.
 3. Run platform preflight on the host.
-4. Review config template changes with `actraild init-config` and update the deployment config explicitly.
+4. Review config template changes with `actraild init` or `actrailctl init` and update the deployment config explicitly.
 5. Start the daemon and run a small example matching the deployed capability profile.
 
 Do not rely on stale generated configs when new required configuration keys are introduced.

@@ -14,6 +14,7 @@ from model import CommandResult
 
 # Conventional exit code used by shell timeout wrappers.
 TIMEOUT_RETURN_CODE = 124
+DEFAULT_OPERATOR_CONFIG_PATH = Path("/etc/actrail/actraild.conf")
 
 
 class EnvManager:
@@ -112,6 +113,9 @@ class EnvManager:
 
     def release_binaries_ready(self) -> bool:
         return all(self.release_binary(name) for name in ("actraild", "actrailctl", "actrailviewer"))
+
+    def default_operator_config_path(self) -> Path:
+        return DEFAULT_OPERATOR_CONFIG_PATH
 
     def is_root(self) -> bool:
         return os.geteuid() == 0

@@ -74,6 +74,16 @@ impl TlsSyncService {
         fds
     }
 
+    pub(crate) fn prewarm_plan_for_exec(
+        &self,
+        binary: &std::path::Path,
+    ) -> Result<(), ControlError> {
+        let Some(resolver) = &self.resolver else {
+            return Ok(());
+        };
+        resolver.prewarm(binary)
+    }
+
     pub(crate) fn drain(&mut self) -> Result<Vec<RawPayloadSegment>, ControlError> {
         self.accept_ready_clients()?;
         let mut segments = Vec::new();

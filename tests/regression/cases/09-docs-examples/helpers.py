@@ -18,6 +18,18 @@ WORKLOAD_CONFIG = Path(__file__).resolve().parent / "workload.conf"
 TRACE_RE = re.compile(r"trace trace-(\d+) entered Active")
 
 
+def operator_config_path(env, config: Path | None) -> Path:
+    return config if config is not None else env.default_operator_config_path()
+
+
+def actrail_command(env, binary_name: str, config: Path | None, *args: str) -> list[str]:
+    command = [str(env.release_binary(binary_name))]
+    if config is not None:
+        command.extend(["--config", str(config)])
+    command.extend(args)
+    return command
+
+
 def run_clean(env, example_name: str, workload: dict[str, str]) -> None:
     run_command(
         env,
@@ -33,8 +45,16 @@ def run_clean(env, example_name: str, workload: dict[str, str]) -> None:
     )
 
 
-def start_daemon(env, config: Path, workload: dict[str, str]) -> subprocess.Popen[str]:
-    daemon = start_process(env, [str(env.release_binary("actraild")), "--config", str(config), "run"])
+def clean_default_operator_state(env, workload: dict[str, str]) -> None:
+    run_command(
+        env,
+        actrail_command(env, "actrailctl", None, "clean"),
+        float(required(workload, "control_timeout_seconds")),
+    )
+
+
+def start_daemon(env, config: Path | None, workload: dict[str, str]) -> subprocess.Popen[str]:
+    daemon = start_process(env, actrail_command(env, "actraild", config, "run"))
     ready_output = wait_for_output(daemon, "daemon listening", float(required(workload, "daemon_ready_timeout_seconds")))
     capture_daemon_output(env, daemon, config, ready_output)
     return daemon
@@ -67,37 +87,37 @@ def run_command(env, command: list[str], timeout: float):
     return completed
 
 
-def track_add(env, config: Path, pid: int, name: str, workload: dict[str, str]) -> int:
+def track_add(env, config: Path | None, pid: int, name: str, workload: dict[str, str]) -> int:
     completed = run_command(
         env,
-        [
-            str(env.release_binary("actrailctl")),
-            "--config",
-            str(config),
+        actrail_command(
+            env,
+            "actrailctl",
+            config,
             "track-add",
             "--pid",
             str(pid),
             "--name",
             name,
-        ],
+        ),
         float(required(workload, "control_timeout_seconds")),
     )
     return parse_trace_id(completed.output)
 
 
-def viewer(env, config: Path, command: str, trace_id: int, *extra: str) -> str:
+def viewer(env, config: Path | None, command: str, trace_id: int, *extra: str) -> str:
     workload = read_config(WORKLOAD_CONFIG)
     completed = run_command(
         env,
-        [
-            str(env.release_binary("actrailviewer")),
+        actrail_command(
+            env,
+            "actrailviewer",
+            config,
             command,
-            "--config",
-            str(config),
             "--trace-id",
             str(trace_id),
             *extra,
-        ],
+        ),
         float(required(workload, "control_timeout_seconds")),
     )
     return completed.stdout
@@ -192,7 +212,7 @@ def process_artifact_transcript(env, process: subprocess.Popen | None) -> str:
     return "\n".join(sections)
 
 
-def capture_daemon_output(env, process: subprocess.Popen, config: Path, ready_output: str) -> None:
+def capture_daemon_output(env, process: subprocess.Popen, config: Path | None, ready_output: str) -> None:
     stdout_path, stderr_path = daemon_artifact_paths(env, config)
     stdout_path.parent.mkdir(parents=True, exist_ok=True)
     stdout_path.write_text(ready_output, encoding="utf-8")
@@ -205,11 +225,12 @@ def capture_daemon_output(env, process: subprocess.Popen, config: Path, ready_ou
     setattr(process, "_actrail_output_threads", threads)
 
 
-def daemon_artifact_paths(env, config: Path) -> tuple[Path, Path]:
+def daemon_artifact_paths(env, config: Path | None) -> tuple[Path, Path]:
+    config_path = operator_config_path(env, config)
     try:
-        raw_name = str(config.relative_to(env.repo_root))
+        raw_name = str(config_path.relative_to(env.repo_root))
     except ValueError:
-        raw_name = str(config)
+        raw_name = str(config_path)
     stem = re.sub(r"[^A-Za-z0-9_.-]+", "-", raw_name).strip("-")
     return (
         env.output_dir / f"{stem}.actraild.stdout",

@@ -5,6 +5,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use config_core::daemon::DEFAULT_OPERATOR_CONFIG_PATH;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WebConfig {
     pub storage_path: PathBuf,
@@ -19,11 +21,11 @@ pub const HELP_TEXT: &str = "\
 Read AcTrail traces through a read-only web UI
 
 Usage:
-  actrailweb --config <PATH> [--addr <ADDR>] [--port <PORT>] [--request-read-timeout-ms <MILLIS|disabled>]
+  actrailweb [--config <PATH>] [--addr <ADDR>] [--port <PORT>] [--request-read-timeout-ms <MILLIS|disabled>]
   actrailweb --storage-path <PATH> --addr <ADDR> --port <PORT> --request-read-timeout-ms <MILLIS|disabled>
 
 Options:
-  --config <PATH>                   Operator config path
+  --config <PATH>                   Operator config path; defaults to /etc/actrail/actraild.conf
   --storage-path <PATH>             Storage path when no operator config is used
   --addr <ADDR>                     Listen address or operator config override
   --port <PORT>                     Listen port or operator config override
@@ -82,10 +84,13 @@ fn load_config(path: &Path) -> Result<WebConfig, String> {
 fn load_optional_config(
     flags: &std::collections::BTreeMap<String, String>,
 ) -> Result<Option<WebConfig>, String> {
-    flags
-        .get("--config")
-        .map(|path| load_config(Path::new(path)))
-        .transpose()
+    if let Some(path) = flags.get("--config") {
+        return load_config(Path::new(path)).map(Some);
+    }
+    if flags.contains_key("--storage-path") {
+        return Ok(None);
+    }
+    load_config(Path::new(DEFAULT_OPERATOR_CONFIG_PATH)).map(Some)
 }
 
 fn resolve_storage_path(
@@ -282,6 +287,27 @@ mod tests {
 
         assert_eq!(config.listen_addr.ip(), std::net::Ipv4Addr::UNSPECIFIED);
         assert_eq!(config.listen_addr.port(), u16::MAX);
+    }
+
+    #[test]
+    fn direct_storage_path_mode_does_not_load_default_config() {
+        let config = parse_args([
+            "--storage-path".to_string(),
+            "/tmp/actrail-web-cli.sqlite".to_string(),
+            "--addr".to_string(),
+            "127.0.0.1".to_string(),
+            "--port".to_string(),
+            "18080".to_string(),
+            "--request-read-timeout-ms".to_string(),
+            EXAMPLE_WEB_REQUEST_READ_TIMEOUT_MS.to_string(),
+        ])
+        .expect("parse direct storage path config");
+
+        assert_eq!(
+            config.storage_path,
+            std::path::PathBuf::from("/tmp/actrail-web-cli.sqlite")
+        );
+        assert_eq!(config.listen_addr.to_string(), "127.0.0.1:18080");
     }
 
     #[test]

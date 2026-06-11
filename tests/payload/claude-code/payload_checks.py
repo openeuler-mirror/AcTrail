@@ -6,7 +6,7 @@ import re
 import time
 from pathlib import Path
 
-from common import require_complete_payload_rows_any, run_checked
+from common import actrail_command, require_complete_payload_rows_any, run_checked
 from config_template import PayloadSource, accepted_tls_payload_sources
 from runtime import ClaudeTlsRuntime
 
@@ -14,7 +14,7 @@ from runtime import ClaudeTlsRuntime
 def wait_for_llm_payloads(
     actrailctl: Path,
     actrailviewer: Path,
-    config: Path,
+    config: Path | None,
     trace_id: int,
     attempts: int,
     sleep_sec: float,
@@ -23,18 +23,17 @@ def wait_for_llm_payloads(
     accepted_tls_sources: list[PayloadSource],
 ) -> str:
     for _ in range(attempts):
-        run_checked([str(actrailctl), "--config", str(config), "list-traces"], echo=False)
+        run_checked(actrail_command(actrailctl, config, "list-traces"), echo=False)
         payloads = run_checked(
-            [
-                str(actrailviewer),
+            actrail_command(
+                actrailviewer,
+                config,
                 "payloads",
-                "--config",
-                str(config),
                 "--trace-id",
                 str(trace_id),
                 "--head",
                 head,
-            ],
+            ),
             echo=False,
         )
         if payloads_have_required_llm_rows(payloads, accepted_sources, accepted_tls_sources):
@@ -159,7 +158,7 @@ def payload_source_selection_selftest() -> list[str]:
 
 def payload_texts(
     actrailviewer: Path,
-    config: Path,
+    config: Path | None,
     trace_id: int,
     payloads: str,
     fetch_count: int,
@@ -168,18 +167,17 @@ def payload_texts(
     for segment_id in parse_segment_ids(payloads)[:fetch_count]:
         texts.append(
             run_checked(
-                [
-                    str(actrailviewer),
+                actrail_command(
+                    actrailviewer,
+                    config,
                     "payload",
-                    "--config",
-                    str(config),
                     "--trace-id",
                     str(trace_id),
                     "--segment-id",
                     segment_id,
                     "--format",
                     "text",
-                ],
+                ),
                 echo=False,
             )
         )
