@@ -293,9 +293,20 @@ function actionNode(action, window) {
   };
 }
 
+// Roles that represent a broad "the agent performed this action" bucket rather
+// than tight containment. An action can be linked to several parents (e.g. an
+// llm.response links both to its llm.request via `llm.request.llm_response` and
+// to the agent process via `agent.performed_action`). We prefer the specific
+// containment parent so pairs like request/response nest instead of becoming
+// siblings.
+const LOW_PRIORITY_LINK_ROLES = new Set(['agent.performed_action']);
+
+function linkPriority(role) {
+  return LOW_PRIORITY_LINK_ROLES.has(role) ? 0 : 1;
+}
+
 function groupChildren(links, nodeById) {
-  const map = new Map();
-  const seen = new Set();
+  const bestParent = new Map();
   for (const link of links ?? []) {
     const parent = link.parent;
     const child = link.child;
@@ -305,11 +316,15 @@ function groupChildren(links, nodeById) {
     if (!nodeById.has(parent) || !nodeById.has(child)) {
       continue;
     }
-    const pairKey = `${parent}\u0000${child}`;
-    if (seen.has(pairKey)) {
-      continue;
+    const priority = linkPriority(link.role);
+    const current = bestParent.get(child);
+    if (!current || priority > current.priority) {
+      bestParent.set(child, { parent, priority });
     }
-    seen.add(pairKey);
+  }
+
+  const map = new Map();
+  for (const [child, { parent }] of bestParent) {
     if (!map.has(parent)) {
       map.set(parent, []);
     }
