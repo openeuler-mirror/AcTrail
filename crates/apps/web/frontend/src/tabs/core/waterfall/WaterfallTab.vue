@@ -113,9 +113,12 @@
           </div>
         </div>
 
-        <button v-if="hasMoreRows" type="button" class="wf-load-more" @click="loadMore">
-          Load {{ nextBatchSize }} more ({{ remainingRows }} hidden)
-        </button>
+        <div v-if="hasMoreRows" class="wf-load-more-row">
+          <button type="button" class="wf-load-more" @click="loadMore">
+            Load {{ nextBatchSize }} more ({{ remainingRows }} hidden)
+          </button>
+          <button type="button" class="wf-load-all" @click="loadAll">Load all</button>
+        </div>
       </div>
     </div>
 
@@ -132,6 +135,7 @@ import { normalizeTableQuery } from '../../tableModel';
 import {
   actionDetail,
   buildWaterfall,
+  collectDefaultExpandedIds,
   collectParentIds,
   findWaterfallNode,
   flattenMatchingWaterfall,
@@ -222,7 +226,7 @@ const hasMoreRows = computed(() => remainingRows.value > 0 && nextBatchSize.valu
 watch(
   () => props.waterfall,
   () => {
-    expandedIds.value = new Set(parentIds.value);
+    expandedIds.value = new Set(collectDefaultExpandedIds(roots.value));
     activeGroups.value = new Set(groups.value.map((group) => group.group));
     zoomId.value = null;
   },
@@ -302,6 +306,10 @@ function collapseAll() {
 
 function loadMore() {
   visibleLimit.value += TABLE_RENDER_LIMITS.rowBatchSize;
+}
+
+function loadAll() {
+  visibleLimit.value = totalRows.value;
 }
 
 function zoomTo(row) {
@@ -728,8 +736,16 @@ function clampPct(value) {
   --wf-color: #64748b;
 }
 
-.wf-load-more {
+.wf-load-more-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
   margin: 10px;
+}
+
+.wf-load-more,
+.wf-load-all {
+  flex: 1 1 auto;
   height: 32px;
   border: 1px dashed var(--border);
   border-radius: 8px;
@@ -740,7 +756,8 @@ function clampPct(value) {
   cursor: pointer;
 }
 
-.wf-load-more:hover {
+.wf-load-more:hover,
+.wf-load-all:hover {
   border-color: var(--teal);
   background: #eef7f5;
 }

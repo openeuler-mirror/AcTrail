@@ -1,5 +1,5 @@
 import { compactRows, kindClass, shortTime } from '../action-tree/common';
-import { semanticActionLabel, semanticActionTarget } from '../../actionLabels';
+import { isBashWrapperCommand, semanticActionLabel, semanticActionTarget } from '../../actionLabels';
 
 const ACTION_VALID_ATTR = 'actrail.action.valid';
 const ACTION_VALID_FALSE = 'false';
@@ -160,6 +160,23 @@ export function collectParentIds(roots) {
   const walk = (nodes) => {
     for (const node of nodes) {
       if (node.hasChildren) {
+        ids.push(node.id);
+        walk(node.children);
+      }
+    }
+  };
+  walk(roots);
+  return ids;
+}
+
+export function collectDefaultExpandedIds(roots) {
+  const ids = [];
+  const walk = (nodes) => {
+    for (const node of nodes) {
+      if (!node.hasChildren) {
+        continue;
+      }
+      if (!isBashWrapperCommand(node.action)) {
         ids.push(node.id);
         walk(node.children);
       }

@@ -1,5 +1,5 @@
 import { compactRows, formatTime, row, valuesMatchQuery } from '../../tableModel';
-import { semanticActionLabel, semanticActionTarget } from '../../actionLabels';
+import { isBashWrapperCommand, semanticActionLabel, semanticActionTarget } from '../../actionLabels';
 
 export const COMMAND_COLUMNS = Object.freeze([
   { key: 'title', label: 'Command', tree: true },
@@ -38,6 +38,25 @@ export function collectParentIds(roots) {
       ids.push(node.action.id);
     }
   });
+  return ids;
+}
+
+// Expand non-bash parents by default; keep `bash -c ...` wrappers collapsed so
+// compound shell one-liners do not flood the table with sleep/cat/ls children.
+export function collectDefaultExpandedIds(roots) {
+  const ids = [];
+  const walk = (nodes) => {
+    for (const node of nodes) {
+      if (!node.children.length) {
+        continue;
+      }
+      if (!isBashWrapperCommand(node.action)) {
+        ids.push(node.action.id);
+        walk(node.children);
+      }
+    }
+  };
+  walk(roots);
   return ids;
 }
 

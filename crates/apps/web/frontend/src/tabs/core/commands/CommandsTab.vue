@@ -30,10 +30,12 @@
         empty-label="No commands"
         :total-rows="totalRows"
         :can-load-more="hasMoreRows"
+        :can-load-all="hasMoreRows"
         :next-batch-size="nextBatchSize"
         @select="$emit('select-detail', $event)"
         @toggle="toggleRow"
         @load-more="loadMore"
+        @load-all="loadAll"
       />
     </div>
   </section>
@@ -49,6 +51,7 @@ import { normalizeTableQuery } from '../../tableModel';
 import {
   COMMAND_COLUMNS,
   buildCommandTree,
+  collectDefaultExpandedIds,
   collectParentIds,
   flattenMatchingCommands,
   flattenVisibleCommands,
@@ -101,7 +104,7 @@ const hasMoreRows = computed(() => remainingRows.value > 0 && nextBatchSize.valu
 watch(
   () => props.commands,
   () => {
-    expandedIds.value = new Set(parentIds.value);
+    expandedIds.value = new Set(collectDefaultExpandedIds(roots.value));
   },
   { immediate: true },
 );
@@ -130,6 +133,10 @@ function collapseAll() {
 
 function loadMore() {
   visibleLimit.value += TABLE_RENDER_LIMITS.rowBatchSize;
+}
+
+function loadAll() {
+  visibleLimit.value = totalRows.value;
 }
 </script>
 
