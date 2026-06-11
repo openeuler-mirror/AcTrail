@@ -137,6 +137,7 @@ import {
   buildWaterfall,
   collectDefaultExpandedIds,
   collectParentIds,
+  defaultActiveGroups,
   findWaterfallNode,
   flattenMatchingWaterfall,
   flattenVisibleWaterfall,
@@ -227,7 +228,7 @@ watch(
   () => props.waterfall,
   () => {
     expandedIds.value = new Set(collectDefaultExpandedIds(roots.value));
-    activeGroups.value = new Set(groups.value.map((group) => group.group));
+    activeGroups.value = defaultActiveGroups(groups.value);
     zoomId.value = null;
   },
   { immediate: true },

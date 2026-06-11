@@ -59,6 +59,15 @@ export function kindGroup(kind) {
   return KIND_GROUPS[kind] ?? 'other';
 }
 
+// Default Waterfall legend selection: keep noisy groups off until the user
+// explicitly enables them on large traces.
+export const WATERFALL_DEFAULT_ACTIVE_GROUPS = Object.freeze(['command', 'llm']);
+
+export function defaultActiveGroups(groups) {
+  const available = new Set((groups ?? []).map((group) => group.group));
+  return new Set(WATERFALL_DEFAULT_ACTIVE_GROUPS.filter((group) => available.has(group)));
+}
+
 export function buildWaterfall(actions, links) {
   const validActions = (actions ?? []).filter((action) => !invalidatedAction(action));
   if (!validActions.length) {
