@@ -1,10 +1,8 @@
 //! Top-level command execution for the daemon operator binary.
 
-use std::fs::{self, OpenOptions};
-use std::io::Write;
 use std::path::Path;
 
-use config_core::daemon::{OPERATOR_CONFIG_TEMPLATE, OperatorConfig};
+use config_core::daemon::{OperatorConfig, OperatorConfigInitStatus};
 use daemon::{DaemonProfileRegistry, DaemonRunError, LocalDaemonServer};
 
 use crate::args::{AcTraildCommand, parse_args};
@@ -16,7 +14,7 @@ use crate::signals;
 
 pub fn run_from_env() -> Result<(), String> {
     match parse_args(std::env::args().skip(1))? {
-        AcTraildCommand::InitConfig { output_path } => write_operator_config(&output_path),
+        AcTraildCommand::Init { config_path } => initialize_operator_config(&config_path),
         AcTraildCommand::Run { config_path } => {
             let config = OperatorConfig::load(&config_path)?;
             run_foreground(&config)
@@ -63,22 +61,13 @@ pub fn run_from_env() -> Result<(), String> {
     }
 }
 
-fn write_operator_config(path: &Path) -> Result<(), String> {
-    if let Some(parent) = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("create config directory {}: {error}", parent.display()))?;
+fn initialize_operator_config(path: &Path) -> Result<(), String> {
+    match OperatorConfig::initialize(path)? {
+        OperatorConfigInitStatus::Created => println!("initialized config {}", path.display()),
+        OperatorConfigInitStatus::ExistingValid => {
+            println!("config {} already exists and is valid", path.display());
+        }
     }
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|error| format!("create config {}: {error}", path.display()))?;
-    file.write_all(OPERATOR_CONFIG_TEMPLATE.as_bytes())
-        .map_err(|error| format!("write config {}: {error}", path.display()))?;
-    println!("wrote config {}", path.display());
     Ok(())
 }
 
@@ -89,6 +78,7 @@ fn run_foreground(config: &OperatorConfig) -> Result<(), String> {
     let mut server = match &config.provider_rule_set {
         Some(provider_rule_set) => LocalDaemonServer::build_with_provider_rule_set(
             &config.storage_path,
+            config.storage_busy_timeout_ms,
             profiles,
             config.ebpf_config.clone(),
             config.payload_config.clone(),
@@ -104,6 +94,7 @@ fn run_foreground(config: &OperatorConfig) -> Result<(), String> {
         ),
         None => LocalDaemonServer::build(
             &config.storage_path,
+            config.storage_busy_timeout_ms,
             profiles,
             config.ebpf_config.clone(),
             config.payload_config.clone(),

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from e2e_steps.binaries import require_actrail_binaries
+from e2e_steps.binaries import require_actrail_binaries, require_actrailweb_binary
 from e2e_steps.checks import capture_stdout, run_step
 from e2e_steps.loader import load_module
 from evidence import evidence_summary_facts, expected_found_detail
@@ -20,8 +20,7 @@ def run_direct_claude_case(env, result: CaseResult, workload: dict[str, str]) ->
         "regression_claude_code_payload_run_e2e",
         env.repo_root / "tests/payload/claude-code/run_e2e.py",
     )
-    config_template = env.repo_root / "tests/payload/claude-code/operator.conf"
-    resolved_config = Path(module.required(workload, "resolved_config_path"))
+    resolved_config = None
     daemon = None
     result.command = ["direct", "claude-code"]
     run_step(
@@ -32,6 +31,7 @@ def run_direct_claude_case(env, result: CaseResult, workload: dict[str, str]) ->
         "Claude payload capture requires eBPF/seccomp privileges",
     )
     actraild, actrailctl, actrailviewer = require_actrail_binaries(result, module, env.bin_dir)
+    actrailweb = require_actrailweb_binary(result, module, env.bin_dir)
     tls_runtime = run_step(
         result,
         "Claude TLS runtime",
@@ -42,25 +42,18 @@ def run_direct_claude_case(env, result: CaseResult, workload: dict[str, str]) ->
         ),
         "TLS runtime discovery decides whether request/response payloads come from user-space TLS or socket fallback",
     )
-    run_step(
-        result,
-        "operator config",
-        lambda: render_claude_config(module, config_template, resolved_config, tls_runtime),
-        lambda path: expected_found_detail("resolved operator config is rendered", [f"path={path}"]),
-        "the case renders the docs example 06 operator template for the selected Claude runtime",
-    )
     values = run_step(
         result,
-        "resolved config",
-        lambda: module.read_config(resolved_config),
+        "default operator config",
+        lambda: module.read_config(env.default_operator_config_path()),
         lambda values: expected_found_detail(
-            "rendered operator config can be parsed",
+            "default operator config can be parsed",
             [
                 f"keys={len(values)}",
-                f"path={resolved_config}",
+                f"path={env.default_operator_config_path()}",
             ],
         ),
-        "export paths and daemon settings are read from the rendered config",
+        "export paths and daemon settings are read from the static default config",
     )
     run_step(
         result,
@@ -92,6 +85,7 @@ def run_direct_claude_case(env, result: CaseResult, workload: dict[str, str]) ->
             daemon,
             actrailctl,
             actrailviewer,
+            actrailweb,
             tls_runtime,
         )
         finish_claude_interactive_capture(
@@ -118,10 +112,11 @@ def finish_claude_capture(
     module,
     workload: dict[str, str],
     values: dict[str, str],
-    resolved_config: Path,
+    resolved_config: Path | None,
     daemon,
     actrailctl: Path,
     actrailviewer: Path,
+    actrailweb: Path,
     tls_runtime,
 ) -> None:
     trace_id = run_claude_launch_step(result, module, daemon, actrailctl, resolved_config, workload)
@@ -213,6 +208,27 @@ def finish_claude_capture(
             ["llm.call.request", "llm.call.response", "llm.request.http_message", "llm.response facts"],
         ),
         "viewer JSON exposes the semantic action graph without direct SQLite inspection",
+    )
+    run_step(
+        result,
+        "Web action-tree reachability",
+        lambda: module.require_web_action_tree_projection(
+            actrailweb,
+            resolved_config,
+            trace_id,
+            float(module.required(workload, "daemon_ready_timeout_seconds")),
+            float(module.required(workload, "drain_sleep_seconds")),
+            required_reachable_kinds=("llm.call", "llm.request", "llm.response", "http.message"),
+        ),
+        lambda summary: expected_found_detail(
+            "web action-tree recursively reaches every display action",
+            [
+                f"actions={summary['action_count']}",
+                f"reachable={summary['reachable_count']}",
+                f"http_messages={summary['kind_counts'].get('http.message', 0)}",
+            ],
+        ),
+        "actrailweb action-tree API exposes the same semantic actions that the viewer generated",
     )
     text = run_step(
         result,
@@ -319,6 +335,3 @@ def finish_claude_capture(
         ),
         "OTEL evidence must include parsed llm.request content and captured llm.response content",
     )
-def render_claude_config(module, config_template: Path, resolved_config: Path, tls_runtime):
-    module.write_resolved_operator_config(config_template, resolved_config, tls_runtime)
-    return resolved_config

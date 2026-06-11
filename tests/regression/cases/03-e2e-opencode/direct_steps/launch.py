@@ -13,7 +13,7 @@ def run_opencode_launch_step(
     result: CaseResult,
     module,
     actrailctl: Path,
-    resolved_config: Path,
+    resolved_config: Path | None,
     workload: dict[str, str],
     explicit_binary: str | None,
 ) -> tuple[int, str]:

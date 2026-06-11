@@ -28,6 +28,7 @@ from common import (  # noqa: E402
     require_complete_llm_exchange,
     require_llm_exchange_graph,
     require_complete_payload_rows_any,
+    require_web_action_tree_projection,
     require_otel_span,
     require_root,
     required,
@@ -55,6 +56,7 @@ def main() -> int:
     actraild = require_binary(bin_dir, "actraild")
     actrailctl = require_binary(bin_dir, "actrailctl")
     actrailviewer = require_binary(bin_dir, "actrailviewer")
+    actrailweb = require_binary(bin_dir, "actrailweb")
     opencode_entry = require_opencode_entry()
     configured_symbol_map = resolve_path(required(workload, "symbol_map_path"), repo)
     tls_runtime = resolve_optional_opencode_tls_runtime(
@@ -115,6 +117,14 @@ def main() -> int:
         )
         require_complete_llm_exchange(actions)
         require_llm_exchange_graph(actions)
+        web_tree = require_web_action_tree_projection(
+            actrailweb,
+            resolved_config,
+            trace_id,
+            float(required(workload, "daemon_ready_timeout_seconds")),
+            float(required(workload, "drain_sleep_seconds")),
+            required_reachable_kinds=("llm.call", "llm.request", "llm.response", "http.message"),
+        )
         otel = export_otel(
             actrailviewer,
             resolved_config,
@@ -127,6 +137,7 @@ def main() -> int:
         print(f"opencode_trace_id={trace_id}")
         print(f"opencode_payload_segments={payload_count}")
         print(f"opencode_response_payload_segments={response_payload_count}")
+        print(f"opencode_web_action_tree_reachable={web_tree['reachable_count']}")
         print(f"opencode_llm_request_spans={request_span_count}")
         print(f"opencode_llm_response_spans={response_span_count}")
         print("opencode agent trace e2e complete")

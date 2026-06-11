@@ -28,18 +28,25 @@ impl SqliteAttachService {
                 ));
             }
             if self.collector.stats().active_bindings == 0 {
-                return Err(ControlError::new(
-                    "track_remove",
-                    "cannot final-drain trace because no eBPF bindings are active",
-                ));
+                if !self.trace_allows_missing_ebpf_binding(trace_runtime, trace_id)? {
+                    return Err(ControlError::new(
+                        "track_remove",
+                        "cannot final-drain trace because no eBPF bindings are active",
+                    ));
+                }
+                self.collector
+                    .poll_tls_payload_control_events()
+                    .map_err(|error| ControlError::new(error.stage, error.message))?;
+                self.log_tls_diagnostic_events_impl();
+            } else {
+                let batch = self
+                    .collector
+                    .poll_batch()
+                    .map_err(|error| ControlError::new(error.stage, error.message))?;
+                self.log_tls_diagnostic_events_impl();
+                self.process_live_event_batch(trace_runtime, batch.observations)?;
+                self.process_payload_segments_impl(trace_runtime, batch.payload_segments)?;
             }
-            let batch = self
-                .collector
-                .poll_batch()
-                .map_err(|error| ControlError::new(error.stage, error.message))?;
-            self.log_tls_diagnostic_events_impl();
-            self.process_live_event_batch(trace_runtime, batch.observations)?;
-            self.process_payload_segments_impl(trace_runtime, batch.payload_segments)?;
         } else {
             self.collector
                 .poll_tls_payload_control_events()
@@ -67,6 +74,20 @@ impl SqliteAttachService {
             .collectors
             .iter()
             .any(|collector| collector.collector_name == collector_name))
+    }
+
+    fn trace_allows_missing_ebpf_binding(
+        &self,
+        trace_runtime: &TraceRuntime,
+        trace_id: TraceId,
+    ) -> Result<bool, ControlError> {
+        let entry = trace_runtime
+            .get_trace(trace_id)
+            .ok_or_else(|| ControlError::new("track_remove", "trace not found"))?;
+        Ok(matches!(
+            entry.trace.lifecycle_state,
+            TraceLifecycleState::Completed | TraceLifecycleState::Failed
+        ))
     }
 
     pub(in crate::services) fn remove_root_impl(

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import http.client
 import json
+import os
 import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -15,6 +16,7 @@ def main() -> int:
     args = parse_args()
     if args.response_read_chunk_bytes <= 0:
         raise RuntimeError("--response-read-chunk-bytes must be positive")
+    print(f"workload_pid={os.getpid()}", flush=True)
     server = ThreadingHTTPServer(
         (args.bind_host, args.bind_port), response_handler(args.response_text)
     )

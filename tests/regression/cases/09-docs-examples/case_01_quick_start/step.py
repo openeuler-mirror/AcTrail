@@ -10,31 +10,35 @@ from workload_config import required
 
 from helpers import (
     add_expected_found_check,
+    actrail_command,
+    clean_default_operator_state,
     communicate,
     event_rows,
     fail_step,
     line_evidence,
     network_rows,
+    parse_trace_id,
     record_process_artifacts,
     run_clean,
     start_daemon,
     start_process,
     stop_process,
-    track_add,
     viewer,
+    wait_for_output,
     write_stdin,
 )
 
 
 def run_quick_start(env, result: CaseResult, workload: dict[str, str]) -> str:
     name = "docs 01 quick-start"
-    config = env.repo_root / "docs/examples/01.quick-start/operator.conf"
+    config = None
     script = env.repo_root / "docs/examples/01.quick-start/lifecycle_network_target.py"
-    result.begin_check(name, "running attach workflow")
+    result.begin_check(name, "running launch workflow")
     daemon = None
     target = None
     try:
         run_clean(env, "quick-start", workload)
+        clean_default_operator_state(env, workload)
         daemon = start_daemon(env, config, workload)
         record_process_artifacts(result, daemon)
         process_env = {
@@ -48,12 +52,30 @@ def run_quick_start(env, result: CaseResult, workload: dict[str, str]) -> str:
         }
         target = start_process(
             env,
-            [env.python, str(script), "--config", str(config)],
+            actrail_command(
+                env,
+                "actrailctl",
+                config,
+                "launch",
+                "--name",
+                "docs-quick-start",
+                "--",
+                env.python,
+                str(script),
+                "--config",
+                str(env.default_operator_config_path()),
+            ),
             extra_env=process_env,
         )
-        trace_id = track_add(env, config, target.pid, "docs-quick-start", workload)
+        prefix_stdout = wait_for_output(
+            target,
+            "press Enter after actrailctl reports the trace is Active...",
+            float(required(workload, "control_timeout_seconds")),
+        )
+        trace_id = parse_trace_id(prefix_stdout)
         write_stdin(target, "\n")
         stdout, stderr = communicate(target, float(required(workload, "quick_start_workload_timeout_seconds")))
+        stdout = prefix_stdout + stdout
         if "workload complete" not in stdout:
             raise RuntimeError(f"quick-start workload did not complete\nstdout={stdout}\nstderr={stderr}")
         summary, events, network = wait_quick_start_views(env, config, trace_id, workload)
@@ -102,7 +124,7 @@ def run_quick_start(env, result: CaseResult, workload: dict[str, str]) -> str:
         stop_process(daemon, workload)
 
 
-def wait_quick_start_views(env, config: Path, trace_id: int, workload: dict[str, str]) -> tuple[str, str, str]:
+def wait_quick_start_views(env, config: Path | None, trace_id: int, workload: dict[str, str]) -> tuple[str, str, str]:
     for _ in range(int(required(workload, "drain_attempts"))):
         summary = viewer(env, config, "summary", trace_id)
         events = viewer(env, config, "events", trace_id)

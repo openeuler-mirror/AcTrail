@@ -12,6 +12,7 @@ use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::rc::Rc;
+use std::time::Duration;
 
 use model_core::ids::TraceId;
 use rusqlite::{Connection, OpenFlags};
@@ -25,6 +26,20 @@ pub struct SqliteStorage {
 impl SqliteStorage {
     pub fn open(path: &Path) -> Result<Self, rusqlite::Error> {
         let connection = Connection::open(path)?;
+        configure_file_connection(&connection, None)?;
+        schema::initialize(&connection)?;
+        Ok(Self {
+            connection: Rc::new(RefCell::new(connection)),
+            export_leases: Rc::new(RefCell::new(BTreeSet::new())),
+        })
+    }
+
+    pub fn open_with_busy_timeout(
+        path: &Path,
+        busy_timeout: Duration,
+    ) -> Result<Self, rusqlite::Error> {
+        let connection = Connection::open(path)?;
+        configure_file_connection(&connection, Some(busy_timeout))?;
         schema::initialize(&connection)?;
         Ok(Self {
             connection: Rc::new(RefCell::new(connection)),
@@ -92,6 +107,27 @@ impl SqliteStorage {
     }
 }
 
+fn configure_file_connection(
+    connection: &Connection,
+    busy_timeout: Option<Duration>,
+) -> Result<(), rusqlite::Error> {
+    if let Some(duration) = busy_timeout {
+        connection.busy_timeout(duration)?;
+    }
+    enable_wal_journal_mode(connection)
+}
+
+fn enable_wal_journal_mode(connection: &Connection) -> Result<(), rusqlite::Error> {
+    let mode = connection.query_row("PRAGMA journal_mode = WAL", [], |row| {
+        row.get::<_, String>(0)
+    })?;
+    if mode.eq_ignore_ascii_case("wal") {
+        Ok(())
+    } else {
+        Err(rusqlite::Error::InvalidQuery)
+    }
+}
+
 fn next_id_seed(
     connection: &Connection,
     table: &str,
@@ -123,12 +159,15 @@ mod tests {
     use store_retention_contract::tombstone::TraceTombstone;
     use store_snapshot_contract::lease::SnapshotLeaseStore;
     use store_snapshot_contract::view::SnapshotStore;
+    use store_tx_contract::boundary::TransactionBoundary;
     use store_write_contract::diagnostics::DiagnosticWriteStore;
     use store_write_contract::events::EventWriteStore;
     use store_write_contract::memberships::MembershipWriteStore;
     use store_write_contract::traces::TraceWriteStore;
 
     use crate::SqliteStorage;
+
+    const TEST_BUSY_TIMEOUT: Duration = Duration::from_millis(1);
 
     #[test]
     fn initialize_migrates_legacy_second_timestamps_to_nanos() {
@@ -235,6 +274,35 @@ mod tests {
     }
 
     #[test]
+    fn file_storage_writer_commit_succeeds_while_reader_transaction_is_open() {
+        let path = temp_storage_path("wal-reader");
+        cleanup_storage_files(&path);
+        let mut storage = SqliteStorage::open_with_busy_timeout(&path, TEST_BUSY_TIMEOUT).unwrap();
+        let reader = Connection::open(&path).unwrap();
+        reader.execute_batch("BEGIN").unwrap();
+        let _: i64 = reader
+            .query_row("SELECT COUNT(*) FROM traces", [], |row| row.get(0))
+            .unwrap();
+
+        let transaction = storage.begin().unwrap();
+        let trace_id = TraceId::new(1);
+        storage
+            .create_trace(TraceRecord::new(
+                trace_id,
+                ProcessIdentity::new(100, 200, 200),
+                TraceName::new("wal-reader"),
+                ProfileName::new("snapshot"),
+                SystemTime::UNIX_EPOCH,
+            ))
+            .unwrap();
+        transaction.commit().unwrap();
+
+        reader.execute_batch("ROLLBACK").unwrap();
+        assert!(storage.get_trace(trace_id).is_ok());
+        cleanup_storage_files(&path);
+    }
+
+    #[test]
     fn sqlite_round_trip_and_purge_are_consistent() {
         let mut storage = SqliteStorage::open_in_memory().unwrap();
         let trace_id = TraceId::new(1);
@@ -308,5 +376,18 @@ mod tests {
         assert!(storage.get_trace(trace_id).is_err());
         assert!(storage.list_events(trace_id).is_err());
         assert!(storage.list_diagnostics(trace_id).is_err());
+    }
+
+    fn temp_storage_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "actrail-sqlite-storage-{name}-{}.sqlite",
+            std::process::id()
+        ))
+    }
+
+    fn cleanup_storage_files(path: &std::path::Path) {
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{}", path.display(), suffix));
+        }
     }
 }

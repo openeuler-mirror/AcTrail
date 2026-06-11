@@ -14,7 +14,7 @@ def run_claude_launch_step(
     module,
     daemon,
     actrailctl: Path,
-    resolved_config: Path,
+    resolved_config: Path | None,
     workload: dict[str, str],
 ) -> int:
     return run_claude_launch_mode_step(
@@ -37,7 +37,7 @@ def run_claude_interactive_launch_step(
     module,
     daemon,
     actrailctl: Path,
-    resolved_config: Path,
+    resolved_config: Path | None,
     workload: dict[str, str],
 ) -> int:
     return run_claude_launch_mode_step(
@@ -60,7 +60,7 @@ def run_claude_launch_mode_step(
     module,
     daemon,
     actrailctl: Path,
-    resolved_config: Path,
+    resolved_config: Path | None,
     check_name: str,
     label: str,
     trace_name: str,

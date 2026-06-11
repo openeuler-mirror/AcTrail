@@ -1,6 +1,7 @@
 //! Construction of daemon runtime wiring from concrete adapters.
 
 use std::path::Path;
+use std::time::Duration;
 
 use collector_capability::CollectorDescriptor;
 use config_core::daemon::{
@@ -35,6 +36,7 @@ const TLS_SYNC_COLLECTOR_NAME: &str = "tls-sync";
 
 pub(crate) fn build_runtime_wiring(
     storage_path: &Path,
+    storage_busy_timeout_ms: u64,
     profiles: DaemonProfileRegistry,
     ebpf_config: EbpfCollectorConfig,
     payload_config: PayloadConfig,
@@ -49,6 +51,7 @@ pub(crate) fn build_runtime_wiring(
 ) -> Result<DaemonRuntimeWiring<SqliteAttachService>, ControlError> {
     build_runtime_wiring_with_attach_service(
         storage_path,
+        storage_busy_timeout_ms,
         profiles,
         ebpf_config,
         payload_config,
@@ -66,6 +69,7 @@ pub(crate) fn build_runtime_wiring(
 
 pub(crate) fn build_runtime_wiring_with_provider_rule_set(
     storage_path: &Path,
+    storage_busy_timeout_ms: u64,
     profiles: DaemonProfileRegistry,
     ebpf_config: EbpfCollectorConfig,
     payload_config: PayloadConfig,
@@ -84,6 +88,7 @@ pub(crate) fn build_runtime_wiring_with_provider_rule_set(
     let classifier = RuleSetClassifier::new(RuleSetAdapterConfig::from(provider_rule_set), rules);
     build_runtime_wiring_with_attach_service(
         storage_path,
+        storage_busy_timeout_ms,
         profiles,
         ebpf_config,
         payload_config,
@@ -101,6 +106,7 @@ pub(crate) fn build_runtime_wiring_with_provider_rule_set(
 
 fn build_runtime_wiring_with_attach_service(
     storage_path: &Path,
+    storage_busy_timeout_ms: u64,
     profiles: DaemonProfileRegistry,
     ebpf_config: EbpfCollectorConfig,
     payload_config: PayloadConfig,
@@ -114,8 +120,11 @@ fn build_runtime_wiring_with_attach_service(
     enforcement_config: EnforcementConfig,
     provider_classifier: Option<Box<dyn ProviderClassifier>>,
 ) -> Result<DaemonRuntimeWiring<SqliteAttachService>, ControlError> {
-    let storage = SqliteStorage::open(storage_path)
-        .map_err(|error| ControlError::new("open_storage", error.to_string()))?;
+    let storage = SqliteStorage::open_with_busy_timeout(
+        storage_path,
+        Duration::from_millis(storage_busy_timeout_ms),
+    )
+    .map_err(|error| ControlError::new("open_storage", error.to_string()))?;
     let trace_id_seed = storage
         .next_trace_id_seed()
         .map_err(|error| ControlError::new("trace_id_seed", error.to_string()))?;

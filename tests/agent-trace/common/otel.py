@@ -5,23 +5,22 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .config import run_checked
+from .config import actrail_command, run_checked
 
 
-def export_otel(actrailviewer: Path, config: Path, trace_id: int, output: Path) -> dict:
+def export_otel(actrailviewer: Path, config: Path | None, trace_id: int, output: Path) -> dict:
     if output.exists():
         output.unlink()
     run_checked(
-        [
-            str(actrailviewer),
+        actrail_command(
+            actrailviewer,
+            config,
             "export-otel",
-            "--config",
-            str(config),
             "--trace-id",
             str(trace_id),
             "--output",
             str(output),
-        ],
+        ),
         echo=False,
     )
     return json.loads(output.read_text(encoding="utf-8"))

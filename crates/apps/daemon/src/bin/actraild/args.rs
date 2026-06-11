@@ -7,7 +7,7 @@ use config_core::daemon::DEFAULT_OPERATOR_CONFIG_PATH;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AcTraildCommand {
-    InitConfig { output_path: PathBuf },
+    Init { config_path: PathBuf },
     Run { config_path: PathBuf },
     Start { config_path: PathBuf },
     Stop { config_path: PathBuf },
@@ -46,8 +46,12 @@ impl AcTraildCli {
 
 #[derive(Clone, Debug, Subcommand)]
 enum AcTraildCommandArgs {
-    #[command(about = "Write an operator config template")]
-    InitConfig(InitConfigArgs),
+    #[command(
+        name = "init",
+        visible_alias = "init-config",
+        about = "Initialize the default operator config"
+    )]
+    Init(InitArgs),
     #[command(about = "Run the daemon in the foreground")]
     Run,
     #[command(about = "Start the daemon in the background")]
@@ -67,10 +71,9 @@ impl AcTraildCommandArgs {
         explicit_config: bool,
     ) -> Result<AcTraildCommand, String> {
         match self {
-            Self::InitConfig(args) => {
-                let output_path =
-                    init_config_output(args.output_path, config_path, explicit_config)?;
-                Ok(AcTraildCommand::InitConfig { output_path })
+            Self::Init(args) => {
+                let config_path = init_config_path(args.output_path, config_path, explicit_config)?;
+                Ok(AcTraildCommand::Init { config_path })
             }
             Self::Run => Ok(AcTraildCommand::Run { config_path }),
             Self::Start => Ok(AcTraildCommand::Start { config_path }),
@@ -82,20 +85,18 @@ impl AcTraildCommandArgs {
 }
 
 #[derive(Clone, Debug, Args)]
-struct InitConfigArgs {
+struct InitArgs {
     #[arg(long = "output", value_name = "PATH")]
     output_path: Option<PathBuf>,
 }
 
-fn init_config_output(
+fn init_config_path(
     output_path: Option<PathBuf>,
     config_path: PathBuf,
     explicit_config: bool,
 ) -> Result<PathBuf, String> {
     match (output_path, explicit_config) {
-        (Some(_), true) => {
-            Err("init-config accepts either --output or --config, not both".to_string())
-        }
+        (Some(_), true) => Err("init accepts either --output or --config, not both".to_string()),
         (Some(path), false) => Ok(path),
         (None, true) => Ok(config_path),
         (None, false) => Ok(default_config_path()),
@@ -104,4 +105,50 @@ fn init_config_output(
 
 fn default_config_path() -> PathBuf {
     PathBuf::from(DEFAULT_OPERATOR_CONFIG_PATH)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn init_uses_default_config_path() {
+        let command = parse_args(["init".to_string()]).unwrap();
+
+        assert_eq!(
+            command,
+            AcTraildCommand::Init {
+                config_path: PathBuf::from(DEFAULT_OPERATOR_CONFIG_PATH)
+            }
+        );
+    }
+
+    #[test]
+    fn init_accepts_legacy_init_config_alias() {
+        let command = parse_args(["init-config".to_string()]).unwrap();
+
+        assert_eq!(
+            command,
+            AcTraildCommand::Init {
+                config_path: PathBuf::from(DEFAULT_OPERATOR_CONFIG_PATH)
+            }
+        );
+    }
+
+    #[test]
+    fn init_can_target_explicit_config_path() {
+        let command = parse_args([
+            "--config".to_string(),
+            "/tmp/actrail-test.conf".to_string(),
+            "init".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            command,
+            AcTraildCommand::Init {
+                config_path: PathBuf::from("/tmp/actrail-test.conf")
+            }
+        );
+    }
 }

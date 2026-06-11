@@ -10,6 +10,7 @@ name = "actrailweb"
 path = "src/main.rs"
 
 [dependencies]
+config_core = { path = "../../core/config" }
 model_core = { path = "../../core/model" }
 semantic_action = { path = "../../contracts/semantic_action" }
 sqlite_storage = { path = "../../adapters/storage/sqlite" }

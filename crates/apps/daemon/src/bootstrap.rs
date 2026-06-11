@@ -45,6 +45,7 @@ pub struct LocalDaemonServer {
 impl LocalDaemonServer {
     pub fn build(
         storage_path: &Path,
+        storage_busy_timeout_ms: u64,
         profiles: DaemonProfileRegistry,
         ebpf_config: EbpfCollectorConfig,
         payload_config: PayloadConfig,
@@ -59,6 +60,7 @@ impl LocalDaemonServer {
     ) -> Result<Self, ControlError> {
         let wiring = build_runtime_wiring(
             storage_path,
+            storage_busy_timeout_ms,
             profiles,
             ebpf_config,
             payload_config,
@@ -78,6 +80,7 @@ impl LocalDaemonServer {
 
     pub fn build_with_provider_rule_set(
         storage_path: &Path,
+        storage_busy_timeout_ms: u64,
         profiles: DaemonProfileRegistry,
         ebpf_config: EbpfCollectorConfig,
         payload_config: PayloadConfig,
@@ -93,6 +96,7 @@ impl LocalDaemonServer {
     ) -> Result<Self, ControlError> {
         let wiring = build_runtime_wiring_with_provider_rule_set(
             storage_path,
+            storage_busy_timeout_ms,
             profiles,
             ebpf_config,
             payload_config,

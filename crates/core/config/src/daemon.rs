@@ -32,7 +32,10 @@ pub use enforcement::{
 };
 pub use live_otel_export::LiveOtelExportConfig;
 pub use logging::DiagnosticLogLevel;
-pub use operator::{DEFAULT_OPERATOR_CONFIG_PATH, OPERATOR_CONFIG_TEMPLATE, OperatorConfig};
+pub use operator::{
+    DEFAULT_OPERATOR_CONFIG_PATH, DEFAULT_STORAGE_BUSY_TIMEOUT_MS, OPERATOR_CONFIG_TEMPLATE,
+    OperatorConfig, OperatorConfigInitStatus,
+};
 pub use payload::{
     DisabledOrPath, PayloadConfig, PayloadRedactionPolicy, PayloadSocketCaptureBackend,
     PayloadSocketConfig, PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadTlsCaptureBackend,

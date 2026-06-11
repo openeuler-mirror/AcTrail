@@ -7,10 +7,12 @@ use tls_payload_sync::{
     RuntimePlanDescriptor, decode_runtime_plan, lookup_runtime_plan,
 };
 
+use crate::runtime::maps;
+
 use super::codec::parse_points;
 use super::state::HookPoint;
 
-static PLAN_CACHE: OnceLock<Mutex<BTreeMap<PathBuf, Option<RuntimePlan>>>> = OnceLock::new();
+static PLAN_CACHE: OnceLock<Mutex<BTreeMap<PathBuf, RuntimePlan>>> = OnceLock::new();
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct RuntimePlan {
@@ -20,13 +22,21 @@ pub(super) struct RuntimePlan {
     pub(super) points: Vec<HookPoint>,
 }
 
+impl RuntimePlan {
+    pub(super) fn requires_inline_hooks(&self) -> bool {
+        same_binary(&self.target, &self.binary)
+    }
+}
+
 pub(super) fn current_runtime_plan() -> Result<Option<RuntimePlan>, String> {
     let current_exe = current_exe()?;
     if let Some(plan) = cached_plan(&current_exe)? {
-        return Ok(plan);
+        return Ok(Some(plan));
     }
     let plan = resolve_current_runtime_plan(&current_exe)?;
-    store_cached_plan(current_exe, plan.clone())?;
+    if let Some(plan) = plan.as_ref() {
+        store_cached_plan(current_exe, plan.clone())?;
+    }
     Ok(plan)
 }
 
@@ -34,7 +44,7 @@ fn required_env(name: &str) -> Result<String, String> {
     std::env::var(name).map_err(|_| format!("missing required runtime env {name}"))
 }
 
-fn cached_plan(current_exe: &PathBuf) -> Result<Option<Option<RuntimePlan>>, String> {
+fn cached_plan(current_exe: &PathBuf) -> Result<Option<RuntimePlan>, String> {
     let cache = PLAN_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
     cache
         .lock()
@@ -42,7 +52,7 @@ fn cached_plan(current_exe: &PathBuf) -> Result<Option<Option<RuntimePlan>>, Str
         .map(|cache| cache.get(current_exe).cloned())
 }
 
-fn store_cached_plan(current_exe: PathBuf, plan: Option<RuntimePlan>) -> Result<(), String> {
+fn store_cached_plan(current_exe: PathBuf, plan: RuntimePlan) -> Result<(), String> {
     let cache = PLAN_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
     cache
         .lock()
@@ -73,7 +83,7 @@ fn legacy_runtime_plan(current_exe: &PathBuf) -> Result<Option<RuntimePlan>, Str
         provider: required_env(ENV_PROVIDER)?,
         points: parse_points(&required_env(ENV_POINTS)?)?,
     };
-    if same_binary(&plan.binary, current_exe) || mapped_probe_binary(&plan.binary) {
+    if plan_matches_current_process(&plan, current_exe) {
         Ok(Some(plan))
     } else {
         Ok(None)
@@ -86,7 +96,14 @@ fn lookup_daemon_plan(current_exe: &PathBuf) -> Result<Option<RuntimePlan>, Stri
     };
     let socket_path = PathBuf::from(socket_path);
     match lookup_runtime_plan(&socket_path, current_exe) {
-        Ok(PlanLookupResponse::Found(plan)) => descriptor_to_runtime_plan(plan).map(Some),
+        Ok(PlanLookupResponse::Found(plan)) => {
+            let plan = descriptor_to_runtime_plan(plan)?;
+            if plan_matches_current_process(&plan, current_exe) {
+                Ok(Some(plan))
+            } else {
+                Ok(None)
+            }
+        }
         Ok(PlanLookupResponse::Unsupported { .. }) => Ok(None),
         Err(error) => Err(format!(
             "dynamic TLS plan lookup for {} failed: {error}",
@@ -98,7 +115,9 @@ fn lookup_daemon_plan(current_exe: &PathBuf) -> Result<Option<RuntimePlan>, Stri
 fn select_bundle_plan(value: &str, current_exe: &PathBuf) -> Result<Option<RuntimePlan>, String> {
     for item in value.lines().filter(|item| !item.is_empty()) {
         let plan = parse_bundle_plan(item)?;
-        if same_binary(&plan.target, current_exe) {
+        if same_binary(&plan.target, current_exe)
+            && plan_matches_current_process(&plan, current_exe)
+        {
             return Ok(Some(plan));
         }
     }
@@ -127,6 +146,15 @@ fn current_exe() -> Result<PathBuf, String> {
 
 fn same_binary(configured: &PathBuf, current_exe: &PathBuf) -> bool {
     canonical(configured) == *current_exe
+}
+
+fn plan_matches_current_process(plan: &RuntimePlan, current_exe: &PathBuf) -> bool {
+    if !(same_binary(&plan.binary, current_exe) || mapped_probe_binary(&plan.binary)) {
+        return false;
+    }
+    plan.points
+        .iter()
+        .all(|point| maps::runtime_address(&plan.binary, point.file_offset).is_ok())
 }
 
 fn mapped_probe_binary(binary: &PathBuf) -> bool {

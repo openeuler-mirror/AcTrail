@@ -17,6 +17,7 @@ from common import (  # noqa: E402
     require_binary,
     require_complete_payload_rows_any,
     require_root,
+    require_web_action_tree_projection,
     required,
     start_daemon,
     stop_process,
@@ -60,6 +61,7 @@ def main() -> int:
     actraild = require_binary(bin_dir, "actraild")
     actrailctl = require_binary(bin_dir, "actrailctl")
     actrailviewer = require_binary(bin_dir, "actrailviewer")
+    actrailweb = require_binary(bin_dir, "actrailweb")
     tls_runtime = resolve_optional_claude_tls_runtime(workload_config)
     write_resolved_operator_config(Path(args.config_template), resolved_config, tls_runtime)
     values = read_config(resolved_config)
@@ -106,6 +108,14 @@ def main() -> int:
         )
         require_llm_exchange(actions)
         require_llm_exchange_graph(actions)
+        web_tree = require_web_action_tree_projection(
+            actrailweb,
+            resolved_config,
+            trace_id,
+            float(required(workload_config, "daemon_ready_timeout_seconds")),
+            float(required(workload_config, "drain_sleep_seconds")),
+            required_reachable_kinds=("llm.call", "llm.request", "llm.response", "http.message"),
+        )
         text = payload_texts(
             actrailviewer,
             resolved_config,
@@ -131,6 +141,7 @@ def main() -> int:
         print(f"exported_payload_nodes={count_payload_nodes(export_document)}")
         print(f"exported_payload_marker={marker}")
         print(f"semantic_action_rows={count_action_rows(actions)}")
+        print(f"web_action_tree_reachable={web_tree['reachable_count']}")
         print(f"otel_semantic_spans={count_otel_spans(otel_document)}")
         print(f"otel_payload_marker={marker}")
         print("claude code LLM payload e2e complete")

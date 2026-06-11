@@ -8,6 +8,21 @@ import sys
 from pathlib import Path
 
 
+DEFAULT_OPERATOR_CONFIG_PATH = Path("/etc/actrail/actraild.conf")
+
+
+def operator_config_path(config: Path | None) -> Path:
+    return config if config is not None else DEFAULT_OPERATOR_CONFIG_PATH
+
+
+def actrail_command(binary: Path, config: Path | None, *args: str) -> list[str]:
+    command = [str(binary)]
+    if config is not None:
+        command.extend(["--config", str(config)])
+    command.extend(args)
+    return command
+
+
 def repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
@@ -79,5 +94,5 @@ def render_config(template: Path, output: Path, replacements: dict[str, str]) ->
     output.write_text(raw, encoding="utf-8")
 
 
-def clean_configured_paths(actrailctl: Path, config: Path) -> None:
-    run_checked([str(actrailctl), "--config", str(config), "clean"])
+def clean_configured_paths(actrailctl: Path, config: Path | None) -> None:
+    run_checked(actrail_command(actrailctl, config, "clean"))

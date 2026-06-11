@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from e2e_steps.binaries import require_actrail_binaries
+from e2e_steps.binaries import require_actrail_binaries, require_actrailweb_binary
 from e2e_steps.checks import capture_stdout, run_step
 from e2e_steps.loader import load_module
 from evidence import evidence_summary_facts, expected_found_detail
@@ -55,6 +55,7 @@ def run_loaded_xiaoo_case(env, result: CaseResult, module, configured: str | Non
         "xiaoO payload capture requires eBPF/seccomp privileges",
     )
     actraild, actrailctl, actrailviewer = require_actrail_binaries(result, module, env.bin_dir)
+    actrailweb = require_actrailweb_binary(result, module, env.bin_dir)
     xiaoo_binary = run_step(
         result,
         "xiaoO selected binary",
@@ -72,13 +73,16 @@ def run_loaded_xiaoo_case(env, result: CaseResult, module, configured: str | Non
         ),
         "rustls symbol discovery decides whether HTTPS payloads can be decoded as plaintext",
     )
-    resolved_config = Path(module.required(workload, "resolved_config_path"))
+    resolved_config = None
     run_step(
         result,
-        "operator config",
-        lambda: render_xiaoo_config(module, case_dir, resolved_config, xiaoo_binary, tls_runtime),
-        lambda path: expected_found_detail("resolved operator config is rendered", [f"path={path}"]),
-        "the case renders a concrete operator config for the selected xiaoO runtime",
+        "default operator config",
+        lambda: module.read_config(env.default_operator_config_path()),
+        lambda values: expected_found_detail(
+            "default operator config can be parsed",
+            [f"keys={len(values)}", f"path={env.default_operator_config_path()}"],
+        ),
+        "the case uses the static default config and launch-time TLS auto discovery",
     )
     run_step(
         result,
@@ -108,6 +112,7 @@ def run_loaded_xiaoo_case(env, result: CaseResult, module, configured: str | Non
             resolved_config,
             actrailctl,
             actrailviewer,
+            actrailweb,
             xiaoo_binary,
             tls_runtime,
             configured,
@@ -125,9 +130,10 @@ def finish_xiaoo_capture(
     result: CaseResult,
     module,
     workload: dict[str, str],
-    resolved_config: Path,
+    resolved_config: Path | None,
     actrailctl: Path,
     actrailviewer: Path,
+    actrailweb: Path,
     xiaoo_binary: Path,
     tls_runtime,
     configured: str | None,
@@ -201,6 +207,27 @@ def finish_xiaoo_capture(
         ),
         "viewer JSON exposes the semantic action graph without direct SQLite inspection",
     )
+    run_step(
+        result,
+        "Web action-tree reachability",
+        lambda: module.require_web_action_tree_projection(
+            actrailweb,
+            resolved_config,
+            trace_id,
+            float(module.required(workload, "daemon_ready_timeout_seconds")),
+            float(module.required(workload, "drain_sleep_seconds")),
+            required_reachable_kinds=("llm.call", "llm.request", "llm.response", "http.message"),
+        ),
+        lambda summary: expected_found_detail(
+            "web action-tree recursively reaches every display action",
+            [
+                f"actions={summary['action_count']}",
+                f"reachable={summary['reachable_count']}",
+                f"http_messages={summary['kind_counts'].get('http.message', 0)}",
+            ],
+        ),
+        "actrailweb action-tree API exposes the same semantic actions that the viewer generated",
+    )
     otel = run_step(
         result,
         "OTEL export",
@@ -269,15 +296,6 @@ def finish_xiaoo_capture(
         ),
         "OTEL evidence must include parsed llm.request content and captured llm.response content",
     )
-
-
-def render_xiaoo_config(module, case_dir: Path, resolved_config: Path, xiaoo_binary: Path, tls_runtime):
-    module.render_config(
-        case_dir / "operator.conf",
-        resolved_config,
-        module.xiaoo_config_replacements(xiaoo_binary, tls_runtime),
-    )
-    return resolved_config
 
 
 def restore_optional_env(name: str, value: str | None) -> None:

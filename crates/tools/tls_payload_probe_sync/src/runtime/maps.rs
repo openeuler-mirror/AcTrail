@@ -2,7 +2,10 @@
 
 use std::path::{Path, PathBuf};
 
-pub(super) fn runtime_address(binary: &Path, file_offset: u64) -> Result<usize, String> {
+pub(in crate::runtime) fn runtime_address(
+    binary: &Path,
+    file_offset: u64,
+) -> Result<usize, String> {
     let maps = std::fs::read_to_string("/proc/self/maps")
         .map_err(|error| format!("read /proc/self/maps: {error}"))?;
     let binary = canonical(binary);

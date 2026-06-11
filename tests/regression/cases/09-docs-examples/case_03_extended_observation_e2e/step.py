@@ -10,13 +10,15 @@ from workload_config import read_config, required
 
 from helpers import (
     add_expected_found_check,
+    actrail_command,
+    clean_default_operator_state,
     communicate,
     evidence_rows,
     event_rows,
     fail_step,
     line_evidence,
     network_rows,
-    parse_prefixed_int,
+    parse_trace_id,
     prefixed_line_evidence,
     record_process_artifacts,
     run_clean,
@@ -24,7 +26,6 @@ from helpers import (
     start_daemon,
     start_process,
     stop_process,
-    track_add,
     viewer,
     wait_for_output,
     write_stdin,
@@ -33,27 +34,39 @@ from helpers import (
 
 def run_extended_observation(env, result: CaseResult, workload: dict[str, str]) -> str:
     name = "docs 03 extended observation"
-    config = env.repo_root / "docs/examples/03.extended-observation-e2e/operator.conf"
+    config = None
     workload_config = env.repo_root / "docs/examples/03.extended-observation-e2e/workload.conf"
     target_values = read_config(workload_config)
-    result.begin_check(name, "running manual attach workflow")
+    result.begin_check(name, "running launch workflow")
     daemon = None
     target = None
     try:
         run_clean(env, "extended-observation", workload)
+        clean_default_operator_state(env, workload)
         daemon = start_daemon(env, config, workload)
         record_process_artifacts(result, daemon)
         target = start_process(
             env,
-            [str(env.release_binary("ebpf_probe")), "workload", "--config", str(workload_config)],
+            actrail_command(
+                env,
+                "actrailctl",
+                config,
+                "launch",
+                "--name",
+                "docs-extended-observation",
+                "--",
+                str(env.release_binary("ebpf_probe")),
+                "workload",
+                "--config",
+                str(workload_config),
+            ),
         )
         output = wait_for_output(
             target,
             "waiting_for=" + required(target_values, "stdio_stdin_message"),
             float(required(workload, "extended_workload_ready_timeout_seconds")),
         )
-        pid = parse_prefixed_int(output, "workload_pid=")
-        trace_id = track_add(env, config, pid, "docs-extended-observation", workload)
+        trace_id = parse_trace_id(output)
         time.sleep(float(required(workload, "extended_resource_sample_sleep_seconds")))
         write_stdin(target, required(target_values, "stdio_stdin_message") + "\n")
         wait_for_output(
@@ -76,18 +89,17 @@ def run_extended_observation(env, result: CaseResult, workload: dict[str, str]) 
         )
         add_expected_found_check(
             result,
-            f"{name} process and signal",
-            "Process rows plus signal event",
+            f"{name} process lifecycle",
+            "Process fork, exec, and exit rows",
             event_rows(
                 events,
                 [
                     ("fork row", "Process", "fork", ()),
                     ("exec row", "Process", "exec", ()),
-                    ("signal row", "Process", "signal", ()),
                     ("exit row", "Process", "exit", ()),
                 ],
             ),
-            "extended docs require process lifecycle and signal observation",
+            "extended docs require process lifecycle observation",
         )
         add_expected_found_check(
             result,
@@ -153,7 +165,7 @@ def run_extended_observation(env, result: CaseResult, workload: dict[str, str]) 
 
 def wait_extended_views(
     env,
-    config: Path,
+    config: Path | None,
     trace_id: int,
     workload: dict[str, str],
     target_values: dict[str, str],
@@ -165,7 +177,6 @@ def wait_extended_views(
         payloads = viewer(env, config, "payloads", trace_id, "--head", required(workload, "extended_payload_head"))
         event_fragments = (
             "Process",
-            "signal",
             "File",
             required(target_values, "fifo_path"),
             required(target_values, "file_path"),

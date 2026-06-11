@@ -6,11 +6,11 @@ use std::time::{Duration, SystemTime};
 
 use config_core::capture_profile::CaptureProfile;
 use config_core::daemon::{
-    AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
-    EnforcementBackend, EnforcementConfig, EnforcementDecision, EnforcementMarkStrategy,
-    EnforcementScope, LiveOtelExportConfig, MemlockRlimit, OPERATOR_CONFIG_TEMPLATE,
-    OperatorConfig, PayloadConfig, ProcessSeccompConfig, ProcessSeccompSyscall,
-    ResourceMetricsConfig, SeccompNotifyConfig, SseDataPolicy,
+    AgentInvocationConfig, ApplicationProtocolConfig, DEFAULT_STORAGE_BUSY_TIMEOUT_MS,
+    DiagnosticLogLevel, EbpfCollectorConfig, EnforcementBackend, EnforcementConfig,
+    EnforcementDecision, EnforcementMarkStrategy, EnforcementScope, LiveOtelExportConfig,
+    MemlockRlimit, OPERATOR_CONFIG_TEMPLATE, OperatorConfig, PayloadConfig, ProcessSeccompConfig,
+    ProcessSeccompSyscall, ResourceMetricsConfig, SeccompNotifyConfig, SseDataPolicy,
 };
 use config_core::trace_snapshot::CaptureProfileSnapshot;
 use control_contract::command::{ControlCommand, ListTracesCommand, TrackAddCommand};
@@ -62,6 +62,7 @@ fn attach_main_path_runs() {
     ));
     let wiring = build_runtime_wiring(
         &storage_path,
+        DEFAULT_STORAGE_BUSY_TIMEOUT_MS,
         profiles,
         ebpf_config(true),
         payload_config(false),
@@ -116,6 +117,7 @@ fn launch_mode_suppresses_wrapper_bootstrap_gap() {
     ));
     let wiring = build_runtime_wiring(
         &storage_path,
+        DEFAULT_STORAGE_BUSY_TIMEOUT_MS,
         profiles,
         ebpf_config(false),
         payload_config(false),
@@ -173,6 +175,7 @@ fn resource_metrics_sampler_persists_procfs_samples() {
     let profiles = DaemonProfileRegistry::new();
     let mut wiring = build_runtime_wiring(
         &storage_path,
+        DEFAULT_STORAGE_BUSY_TIMEOUT_MS,
         profiles,
         ebpf_config(false),
         payload_config(false),
@@ -248,6 +251,7 @@ fn tls_sync_payload_persists_without_child_membership() {
     let profiles = DaemonProfileRegistry::new();
     let mut wiring = build_runtime_wiring(
         &storage_path,
+        DEFAULT_STORAGE_BUSY_TIMEOUT_MS,
         profiles,
         ebpf_config(false),
         payload_config(true),
@@ -477,9 +481,11 @@ fn resource_metrics_disabled() -> ResourceMetricsConfig {
 }
 
 fn live_otel_export_disabled() -> LiveOtelExportConfig {
-    OperatorConfig::parse(OPERATOR_CONFIG_TEMPLATE)
+    let mut config = OperatorConfig::parse(OPERATOR_CONFIG_TEMPLATE)
         .unwrap()
-        .live_otel_export
+        .live_otel_export;
+    config.enabled = false;
+    config
 }
 
 fn enforcement_disabled() -> EnforcementConfig {

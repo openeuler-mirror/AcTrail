@@ -20,6 +20,7 @@ from common import (  # noqa: E402
     require_binary,
     require_complete_llm_exchange,
     require_complete_payload_rows_any,
+    require_web_action_tree_projection,
     require_otel_span,
     require_root,
     required,
@@ -46,6 +47,7 @@ def main() -> int:
     actraild = require_binary(bin_dir, "actraild")
     actrailctl = require_binary(bin_dir, "actrailctl")
     actrailviewer = require_binary(bin_dir, "actrailviewer")
+    actrailweb = require_binary(bin_dir, "actrailweb")
     config = Path(args.config)
     clean_configured_paths(actrailctl, config)
     daemon = start_daemon(
@@ -97,6 +99,14 @@ def main() -> int:
             float(required(workload, "drain_sleep_seconds")),
         )
         require_complete_llm_exchange(actions)
+        web_tree = require_web_action_tree_projection(
+            actrailweb,
+            config,
+            trace_id,
+            float(required(workload, "daemon_ready_timeout_seconds")),
+            float(required(workload, "drain_sleep_seconds")),
+            required_reachable_kinds=("llm.call", "llm.request", "llm.response", "http.message"),
+        )
         otel = export_otel(
             actrailviewer,
             config,
@@ -108,6 +118,7 @@ def main() -> int:
         emit_llm_otel_evidence(otel, int(required(workload, "evidence_text_max_chars")))
         print(f"langgraph_trace_id={trace_id}")
         print(f"langgraph_payload_segments={payload_count}")
+        print(f"langgraph_web_action_tree_reachable={web_tree['reachable_count']}")
         print(f"langgraph_llm_request_spans={request_span_count}")
         print(f"langgraph_llm_response_spans={response_span_count}")
         print("LangGraph OpenAI-compatible agent trace e2e complete")

@@ -25,6 +25,12 @@ pub const GO_TLS_WRITE_SYMBOL: &str = providers::go_tls::WRITE_SYMBOL;
 pub const GO_TLS_READ_SYMBOL: &str = providers::go_tls::READ_SYMBOL;
 pub const GO_RUNTIME_MEMMOVE_SYMBOL: &str = providers::go_tls::RUNTIME_MEMMOVE_SYMBOL;
 
+pub fn elf_build_id(binary_path: &Path) -> ToolResult<Option<String>> {
+    Ok(elf::ElfImage::parse(binary_path)?
+        .build_id()
+        .map(ToString::to_string))
+}
+
 pub fn resolve_go_pclntab_file_offsets(
     binary_path: &Path,
     required_symbols: &[&str],

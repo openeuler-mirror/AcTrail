@@ -27,7 +27,9 @@ impl RuntimeConfigFactory {
         )?;
         let events_value = std::env::var(ENV_EVENTS).ok();
         let events = EventFilter::parse(events_value.as_deref())?;
+        let inline_hooks = plan.requires_inline_hooks();
         Ok(Some(RuntimeConfig::from_parts(RuntimeConfigParts {
+            inline_hooks,
             binary: plan.binary,
             provider: plan.provider,
             points: plan.points,

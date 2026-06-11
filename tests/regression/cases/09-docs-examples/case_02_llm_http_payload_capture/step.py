@@ -13,7 +13,9 @@ from workload_config import required
 
 from helpers import (
     add_expected_found_check,
+    actrail_command,
     bullet_evidence,
+    clean_default_operator_state,
     evidence_detail,
     evidence_rows,
     event_domain_line,
@@ -55,7 +57,7 @@ class ViewEvidenceError(RuntimeError):
 
 def run_http2_local(env, result: CaseResult, workload: dict[str, str]) -> str:
     name = "docs 02 local HTTP/2 payload"
-    config = env.repo_root / "docs/examples/02.llm-http-payload-capture/http2-local/operator.conf"
+    config = None
     script = env.repo_root / "docs/examples/02.llm-http-payload-capture/http2-local/workload.py"
     target_config = env.repo_root / "docs/examples/02.llm-http-payload-capture/http2-local/workload.conf"
     result.begin_check(name, "running local TLS HTTP/2 workload")
@@ -64,6 +66,7 @@ def run_http2_local(env, result: CaseResult, workload: dict[str, str]) -> str:
     launch_output = ""
     try:
         run_clean(env, "http2-local", workload)
+        clean_default_operator_state(env, workload)
         daemon = start_daemon(env, config, workload)
         record_process_artifacts(result, daemon)
         server = start_process(
@@ -85,10 +88,10 @@ def run_http2_local(env, result: CaseResult, workload: dict[str, str]) -> str:
         )
         launch = run_command(
             env,
-            [
-                str(env.release_binary("actrailctl")),
-                "--config",
-                str(config),
+            actrail_command(
+                env,
+                "actrailctl",
+                config,
                 "launch",
                 "--name",
                 "docs-http2-local",
@@ -105,7 +108,7 @@ def run_http2_local(env, result: CaseResult, workload: dict[str, str]) -> str:
                 "--data",
                 '{"model":"actrail-http2","messages":[{"role":"user","content":"payload capture over h2"}],"stream":false}',
                 f"https://127.0.0.1:{server_port}/v1/chat/completions",
-            ],
+            ),
             float(required(workload, "http2_local_launch_timeout_seconds")),
         )
         launch_output = launch.output
@@ -187,10 +190,7 @@ def run_external_llm_http(
             "external OpenAI-compatible docs path requires provider credentials",
         )
         return SKIP
-    config = (
-        env.repo_root
-        / f"docs/examples/02.llm-http-payload-capture/external-openai-compatible/{suffix}-operator.conf"
-    )
+    config = None
     script = env.repo_root / f"docs/examples/02.llm-http-payload-capture/external-openai-compatible/{suffix}.sh"
     result.begin_check(name, "running provider curl workload")
     daemon = None
@@ -198,16 +198,17 @@ def run_external_llm_http(
     curl_tmpdir = None
     try:
         run_clean(env, clean_name, workload)
+        clean_default_operator_state(env, workload)
         daemon = start_daemon(env, config, workload)
         record_process_artifacts(result, daemon)
         prepared = prepare_curl_files(env, script, workload)
         curl_tmpdir = prepared["ACTRAIL_CURL_TMPDIR"]
         launch = run_command(
             env,
-            [
-                str(env.release_binary("actrailctl")),
-                "--config",
-                str(config),
+            actrail_command(
+                env,
+                "actrailctl",
+                config,
                 "launch",
                 "--name",
                 f"docs-{clean_name}",
@@ -217,7 +218,7 @@ def run_external_llm_http(
                 prepared["ACTRAIL_CURL_CONFIG"],
                 "--data-binary",
                 f"@{prepared['ACTRAIL_CURL_BODY']}",
-            ],
+            ),
             float(required(workload, "external_llm_launch_timeout_seconds")),
         )
         launch_output = launch.output
@@ -358,7 +359,7 @@ def prepare_curl_files(env, script: Path, workload: dict[str, str]) -> dict[str,
 
 def wait_payload_application_views(
     env,
-    config: Path,
+    config: Path | None,
     trace_id: int,
     workload: dict[str, str],
     protocol: str,
@@ -465,15 +466,10 @@ def view_failure_transcript(error: ViewEvidenceError, daemon_output: str) -> str
     )
 
 
-def drain_trace(env, config: Path, workload: dict[str, str]) -> None:
+def drain_trace(env, config: Path | None, workload: dict[str, str]) -> None:
     run_command(
         env,
-        [
-            str(env.release_binary("actrailctl")),
-            "--config",
-            str(config),
-            "list-traces",
-        ],
+        actrail_command(env, "actrailctl", config, "list-traces"),
         float(required(workload, "control_timeout_seconds")),
     )
 

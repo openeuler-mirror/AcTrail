@@ -18,7 +18,8 @@ pub use event::{
     DecisionEvent, PayloadEvent, SyncEvent, decode_event_line, encode_event_line, write_event_line,
 };
 pub use launch::{
-    RuntimeLibraryPath, launch_command_for_plan, preload_env_value, run_with_preload,
+    RuntimeLibraryPath, launch_command_for_plan, preload_env_value,
+    preload_env_value_for_libraries, run_with_preload, run_with_preload_libraries,
     runtime_library_path, validate_native_backend_plan,
 };
 pub use lookup::{

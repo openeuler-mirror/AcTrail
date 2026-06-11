@@ -5,7 +5,8 @@ mod sections;
 #[path = "operator/template.rs"]
 mod template;
 
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
@@ -23,7 +24,14 @@ use crate::export::ExportConfig;
 use crate::provider_rules::ProviderRuleSetConfig;
 
 pub const DEFAULT_OPERATOR_CONFIG_PATH: &str = "/etc/actrail/actraild.conf";
+pub const DEFAULT_STORAGE_BUSY_TIMEOUT_MS: u64 = 5000;
 pub use template::OPERATOR_CONFIG_TEMPLATE;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OperatorConfigInitStatus {
+    Created,
+    ExistingValid,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OperatorConfig {
@@ -31,6 +39,7 @@ pub struct OperatorConfig {
     pub socket_permissions: SocketPermissions,
     pub pid_file: PathBuf,
     pub storage_path: PathBuf,
+    pub storage_busy_timeout_ms: u64,
     pub export_config: ExportConfig,
     pub live_otel_export: LiveOtelExportConfig,
     pub log_path: PathBuf,
@@ -55,6 +64,23 @@ impl OperatorConfig {
         let raw = fs::read_to_string(path)
             .map_err(|error| format!("read config {}: {error}", path.display()))?;
         Self::parse(&raw)
+    }
+
+    pub fn initialize(path: &Path) -> Result<OperatorConfigInitStatus, String> {
+        match fs::read_to_string(path) {
+            Ok(raw) => {
+                Self::parse(&raw)
+                    .map_err(|error| format!("validate config {}: {error}", path.display()))?;
+                Ok(OperatorConfigInitStatus::ExistingValid)
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                Self::parse(OPERATOR_CONFIG_TEMPLATE)
+                    .map_err(|error| format!("validate default operator config: {error}"))?;
+                write_default_operator_config(path)?;
+                Ok(OperatorConfigInitStatus::Created)
+            }
+            Err(error) => Err(format!("read config {}: {error}", path.display())),
+        }
     }
 
     pub fn parse(raw: &str) -> Result<Self, String> {
@@ -111,6 +137,10 @@ impl OperatorConfig {
             },
             pid_file: PathBuf::from(values.required("pid_file")?),
             storage_path: PathBuf::from(values.required("storage_path")?),
+            storage_busy_timeout_ms: values.optional_positive_u64(
+                "storage_busy_timeout_ms",
+                DEFAULT_STORAGE_BUSY_TIMEOUT_MS,
+            )?,
             export_config,
             live_otel_export,
             log_path: PathBuf::from(values.required("log_path")?),
@@ -140,6 +170,23 @@ impl OperatorConfig {
                 .required_positive_u64("supervision_poll_interval_ms")?,
         })
     }
+}
+
+fn write_default_operator_config(path: &Path) -> Result<(), String> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("create config directory {}: {error}", parent.display()))?;
+    }
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| format!("create config {}: {error}", path.display()))?;
+    file.write_all(OPERATOR_CONFIG_TEMPLATE.as_bytes())
+        .map_err(|error| format!("write config {}: {error}", path.display()))
 }
 
 fn validate_seccomp_config(

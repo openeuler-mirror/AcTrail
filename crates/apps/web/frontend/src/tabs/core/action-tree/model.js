@@ -29,10 +29,9 @@ export function buildActionTreeRootNode({ traceDetail, rootData }) {
 export function buildActionTreeChildNodes({ parentNode, childData, traceDetail }) {
   const actions = (childData?.actions ?? []).filter((action) => !invalidatedAction(action));
   const links = childData?.links ?? [];
-  const actionById = new Map(actions.map((action) => [action.id, action]));
   const childState = childStateByActionId(childData?.child_state ?? []);
-  const actionChildren = linkedActions(actionById, links)
-    .sort(parentNode.nodeType === TREE_NODE_TYPES.agent ? sortAgentLinkedActions : sortLinkedActionByTime)
+  const actionChildren = displayActions(actions, links)
+    .sort(parentNode.nodeType === TREE_NODE_TYPES.agent ? sortAgentDisplayActions : sortDisplayActionByTime)
     .map(({ action }) => actionTreeNode(action, childState))
     .filter(Boolean);
   if (parentNode.nodeType === TREE_NODE_TYPES.agent) {
@@ -196,19 +195,45 @@ function evidenceNode(evidence, traceDetail) {
   };
 }
 
-function linkedActions(actionById, links) {
+function displayActions(actions, links) {
+  const linkByChild = displayLinkByChild(actions, links);
+  return actions.map((action) => ({
+    action,
+    link: linkByChild.get(action.id) ?? null,
+  }));
+}
+
+function displayLinkByChild(actions, links) {
+  const actionById = new Map(actions.map((action) => [action.id, action]));
   const seen = new Set();
-  return links
-    .map((link) => ({ link, action: actionById.get(link.child) }))
-    .filter(({ action }) => action)
-    .filter(({ link, action }) => !invalidatedParentIdentityLink(link, action))
-    .filter(({ action }) => {
-      if (seen.has(action.id)) {
-        return false;
-      }
+  const linkByChild = new Map();
+  for (const link of links) {
+    const action = actionById.get(link.child);
+    if (!action || invalidatedParentIdentityLink(link, action)) {
+      continue;
+    }
+    if (!seen.has(action.id)) {
       seen.add(action.id);
-      return true;
-    });
+      linkByChild.set(action.id, link);
+    }
+  }
+  return linkByChild;
+}
+
+function sortDisplayActionByTime(left, right) {
+  return compareActionOrder(left.action, right.action);
+}
+
+function sortAgentDisplayActions(left, right) {
+  return (
+    compareActionTime(left.action, right.action) ||
+    compareOptionalDecimalStrings(
+      left.link?.attributes?.[AGENT_ACTION_SEQUENCE_ATTR],
+      right.link?.attributes?.[AGENT_ACTION_SEQUENCE_ATTR],
+      AGENT_ACTION_SEQUENCE_ATTR,
+    ) ||
+    compareActionId(left.action, right.action)
+  );
 }
 
 function coveredEvidenceKeys(actions) {
@@ -236,10 +261,7 @@ function childStateByActionId(rows) {
   return new Map(
     rows.map((row) => [
       row.id,
-      {
-        hasChildren: Boolean(row.has_children),
-        childCount: row.child_count ?? 0,
-      },
+      { hasChildren: Boolean(row.has_children), childCount: row.child_count ?? 0 },
     ]),
   );
 }
@@ -390,10 +412,6 @@ function attributePriority(kind) {
   return [];
 }
 
-function sortLinkedActionByTime(left, right) {
-  return compareActionOrder(left.action, right.action);
-}
-
 function compareActionOrder(left, right) {
   return compareActionTime(left, right) || compareActionId(left, right);
 }
@@ -402,18 +420,6 @@ function compareActionTime(left, right) {
   return compareDecimalStrings(
     requiredDecimalString(left.start_time_unix_nanos, 'start_time_unix_nanos'),
     requiredDecimalString(right.start_time_unix_nanos, 'start_time_unix_nanos'),
-  );
-}
-
-function sortAgentLinkedActions(left, right) {
-  return (
-    compareActionTime(left.action, right.action) ||
-    compareOptionalDecimalStrings(
-      left.link.attributes?.[AGENT_ACTION_SEQUENCE_ATTR],
-      right.link.attributes?.[AGENT_ACTION_SEQUENCE_ATTR],
-      AGENT_ACTION_SEQUENCE_ATTR,
-    ) ||
-    compareActionId(left.action, right.action)
   );
 }
 

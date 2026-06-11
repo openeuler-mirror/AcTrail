@@ -9,33 +9,19 @@ use config_core::daemon::{
 use model_core::ids::TraceId;
 use tls_payload_sync::{
     EventFilter, RedactionMode, RuntimeEnvConfig, RuntimeLibraryPath, launch_command_for_plan,
-    preload_env_value, run_with_preload, runtime_env_for_plans, runtime_library_path,
+    preload_env_value_for_libraries, runtime_env_for_plans, runtime_library_path,
     validate_native_backend_plan,
 };
+use tls_probe_point_finder::ProbePointPlan;
 use tls_probe_point_finder::fast::{ArchFilter, FastProbeRequest, ProviderFilter, SourceFilter};
 
 pub(super) struct SyncLaunch {
     pub(super) command: Vec<OsString>,
-    pub(super) envs: Vec<(OsString, OsString)>,
-    library: PathBuf,
-}
-
-pub(super) fn run_child_sync_tls(
-    trace_id: TraceId,
-    argv: Vec<String>,
-    config: &PayloadTlsConfig,
-    agent_commands: &[String],
-) -> Result<i32, String> {
-    let launch = sync_launch(trace_id, argv, config, agent_commands)?;
-    let status = run_with_preload(&launch.command, &launch.library, launch.envs)
-        .map_err(|error| error.to_string())?;
-    status
-        .code()
-        .ok_or_else(|| "launch child terminated without an exit code".to_string())
+    plans: Vec<ProbePointPlan>,
+    preload_libraries: Vec<PathBuf>,
 }
 
 pub(super) fn sync_launch(
-    trace_id: TraceId,
     argv: Vec<String>,
     config: &PayloadTlsConfig,
     agent_commands: &[String],
@@ -53,8 +39,21 @@ pub(super) fn sync_launch(
         }
         Err(_) => (raw_command, None),
     };
-    let library = runtime_library(config)?;
+    let runtime_library = runtime_library(config)?;
     let plans = bundle_plans(launch_plan, config, agent_commands);
+    let preload_libraries = sync_preload_libraries(&runtime_library);
+    Ok(SyncLaunch {
+        command,
+        plans,
+        preload_libraries,
+    })
+}
+
+pub(super) fn sync_launch_envs(
+    trace_id: TraceId,
+    config: &PayloadTlsConfig,
+    launch: &SyncLaunch,
+) -> Result<Vec<(OsString, OsString)>, String> {
     let mut envs = runtime_env_for_plans(
         &RuntimeEnvConfig {
             rules: Vec::new(),
@@ -65,25 +64,22 @@ pub(super) fn sync_launch(
             trace_id: Some(trace_id.get()),
             event_socket_path: Some(config.sync_event_socket_path.clone()),
         },
-        &plans,
+        &launch.plans,
     )
     .map_err(|error| error.to_string())?;
     envs.push((
         OsString::from("LD_PRELOAD"),
-        preload_env_value(&library).map_err(|error| error.to_string())?,
+        preload_env_value_for_libraries(&launch.preload_libraries)
+            .map_err(|error| error.to_string())?,
     ));
-    Ok(SyncLaunch {
-        command,
-        envs,
-        library,
-    })
+    Ok(envs)
 }
 
 fn bundle_plans(
-    launch_plan: Option<tls_probe_point_finder::ProbePointPlan>,
+    launch_plan: Option<ProbePointPlan>,
     config: &PayloadTlsConfig,
     agent_commands: &[String],
-) -> Vec<tls_probe_point_finder::ProbePointPlan> {
+) -> Vec<ProbePointPlan> {
     let mut plans = launch_plan.into_iter().collect::<Vec<_>>();
     for command in agent_commands {
         let candidate = vec![OsString::from(command)];
@@ -101,30 +97,28 @@ fn bundle_plans(
 fn resolve_native_plan(
     command: &[OsString],
     config: &PayloadTlsConfig,
-) -> Result<tls_probe_point_finder::ProbePointPlan, String> {
+) -> Result<ProbePointPlan, String> {
     let plan = resolve_plan(command, config)?;
     validate_native_backend_plan(&plan).map_err(|error| error.to_string())?;
     Ok(plan)
 }
 
-fn contains_plan(
-    plans: &[tls_probe_point_finder::ProbePointPlan],
-    candidate: &tls_probe_point_finder::ProbePointPlan,
-) -> bool {
+fn contains_plan(plans: &[ProbePointPlan], candidate: &ProbePointPlan) -> bool {
     let candidate_path = canonical_path(&candidate.binary.path);
     plans
         .iter()
         .any(|plan| canonical_path(&plan.binary.path) == candidate_path)
 }
 
+fn sync_preload_libraries(runtime_library: &PathBuf) -> Vec<PathBuf> {
+    vec![runtime_library.clone()]
+}
+
 fn canonical_path(path: &std::path::Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-fn resolve_plan(
-    command: &[OsString],
-    config: &PayloadTlsConfig,
-) -> Result<tls_probe_point_finder::ProbePointPlan, String> {
+fn resolve_plan(command: &[OsString], config: &PayloadTlsConfig) -> Result<ProbePointPlan, String> {
     let Some(program) = command.first() else {
         return Err("launch requires a command after --".to_string());
     };
@@ -171,4 +165,20 @@ fn validate_resolver_inputs(config: &PayloadTlsConfig) -> Result<(), String> {
 fn match_limit(config: &PayloadTlsConfig) -> Result<usize, String> {
     usize::try_from(config.sync_match_limit)
         .map_err(|error| format!("payload_tls_sync_match_limit overflow: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::sync_preload_libraries;
+
+    #[test]
+    fn sync_preload_uses_only_runtime_carrier() {
+        let runtime = PathBuf::from("/tmp/libactrail_tls_payload_probe_sync.so");
+
+        let libraries = sync_preload_libraries(&runtime);
+
+        assert_eq!(libraries, vec![runtime]);
+    }
 }

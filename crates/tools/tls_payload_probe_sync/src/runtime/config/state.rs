@@ -20,6 +20,7 @@ pub(in crate::runtime) struct HookPoint {
 }
 
 pub(super) struct RuntimeConfigParts {
+    pub(super) inline_hooks: bool,
     pub(super) binary: PathBuf,
     pub(super) provider: String,
     pub(super) points: Vec<HookPoint>,
@@ -33,6 +34,7 @@ pub(super) struct RuntimeConfigParts {
 
 #[derive(Debug)]
 pub(in crate::runtime) struct RuntimeConfig {
+    inline_hooks: bool,
     binary: PathBuf,
     provider: String,
     points: Vec<HookPoint>,
@@ -48,6 +50,7 @@ pub(in crate::runtime) struct RuntimeConfig {
 impl RuntimeConfig {
     pub(super) fn from_parts(parts: RuntimeConfigParts) -> Self {
         Self {
+            inline_hooks: parts.inline_hooks,
             binary: parts.binary,
             provider: parts.provider,
             points: parts.points,
@@ -63,6 +66,10 @@ impl RuntimeConfig {
 
     pub(in crate::runtime) fn binary(&self) -> &PathBuf {
         &self.binary
+    }
+
+    pub(in crate::runtime) fn inline_hooks(&self) -> bool {
+        self.inline_hooks
     }
 
     pub(in crate::runtime) fn provider(&self) -> &str {

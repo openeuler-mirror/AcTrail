@@ -284,7 +284,10 @@ impl TraceRuntime {
                 MembershipRefreshResult::Unchanged => {
                     return Some((*trace_id, refreshed_identity));
                 }
-                MembershipRefreshResult::Refreshed { .. } => {
+                MembershipRefreshResult::Refreshed { ref stale_identity } => {
+                    if entry.trace.root_process_identity == *stale_identity {
+                        entry.trace.root_process_identity = refreshed_identity.clone();
+                    }
                     return Some((*trace_id, refreshed_identity));
                 }
             }
@@ -460,5 +463,36 @@ mod tests {
 
         let entry = runtime.get_trace(trace_id).unwrap();
         assert_eq!(entry.trace.lifecycle_state, TraceLifecycleState::Completed);
+    }
+
+    #[test]
+    fn root_exec_refresh_updates_trace_root_identity() {
+        let mut runtime = runtime();
+        let trace_id = runtime.reserve_trace_id();
+        let root_before_exec = ProcessIdentity::new(100, 1, 1);
+        let root_after_exec = ProcessIdentity::new(100, 1, 2);
+        let request = TrackTraceRequest {
+            root_identity: root_before_exec.clone(),
+            display_name: TraceName::new("agent"),
+            profile_snapshot: profile_snapshot(),
+            tags: BTreeSet::new(),
+            created_at: SystemTime::UNIX_EPOCH,
+        };
+        let plan = SensorPlan::negotiate(&request.profile_snapshot, &runtime.collectors).unwrap();
+
+        runtime
+            .create_starting_trace(trace_id, request, plan)
+            .unwrap();
+        runtime
+            .activate_trace(trace_id, SystemTime::UNIX_EPOCH)
+            .unwrap();
+        runtime.refresh_process_identity(root_after_exec.clone());
+
+        let entry = runtime.get_trace(trace_id).unwrap();
+        assert_eq!(entry.trace.root_process_identity, root_after_exec);
+        assert_eq!(
+            entry.memberships.get(&root_before_exec).unwrap().state,
+            model_core::process::MembershipState::IdentityStale
+        );
     }
 }

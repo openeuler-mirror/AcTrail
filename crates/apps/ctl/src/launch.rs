@@ -1,5 +1,7 @@
 //! Launch command orchestration.
 
+#[path = "launch/controlled.rs"]
+mod controlled;
 #[path = "launch/seccomp.rs"]
 mod seccomp;
 #[path = "launch/sync.rs"]
@@ -7,7 +9,6 @@ mod sync;
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
-use std::process::{Command, ExitStatus};
 
 use config_core::daemon::{
     PayloadSocketSeccompSyscall, PayloadTlsConfig, PayloadTlsSeccompSyscall, ProcessSeccompSyscall,
@@ -19,8 +20,9 @@ use model_core::ids::{ProfileName, RequestId, TraceId, TraceName};
 
 use crate::output::format_reply;
 use crate::transport::ControlClientPort;
-use seccomp::run_child_seccomp;
-use sync::{run_child_sync_tls, sync_launch};
+use controlled::{ChildSetup, ControlledChild};
+use seccomp::{SeccompSetup, register_listener};
+use sync::{SyncLaunch, sync_launch, sync_launch_envs};
 
 pub(crate) struct LaunchRequest {
     pub display_name: TraceName,
@@ -44,91 +46,90 @@ pub(crate) fn run_launch(
     request_id: RequestId,
     request: LaunchRequest,
 ) -> Result<i32, String> {
-    let reply = client
-        .send(ControlCommand::TrackAdd(TrackAddCommand {
-            request_id,
-            root_pid: std::process::id(),
-            display_name: request.display_name,
-            profile_name: request.profile_name,
-            tags: request.tags,
-            launch_mode: true,
-        }))
-        .map_err(format_control_error)?;
-    let trace_id = track_added_trace_id(&reply)?;
-    println!("{}", format_reply(&reply));
     let tls_sync_enabled =
         request.payload_tls_config.enabled && request.payload_tls_config.capture_backend.is_sync();
-    let seccomp_enabled = request.payload_tls_enabled
+    let payload_tls_seccomp_enabled = request.payload_tls_enabled && !tls_sync_enabled;
+    let seccomp_enabled = payload_tls_seccomp_enabled
         || request.payload_socket_enabled
         || request.process_seccomp_enabled;
-    let child_result = if tls_sync_enabled && seccomp_enabled {
-        let launch = sync_launch(
-            trace_id,
-            request.argv,
-            &request.payload_tls_config,
-            &request.agent_invocation_commands,
-        )?;
-        let payload_tls_seccomp_syscalls = Vec::new();
-        let payload_socket_seccomp_syscalls = if request.payload_socket_enabled {
-            request.payload_socket_seccomp_syscalls
-        } else {
-            Vec::new()
-        };
-        let process_seccomp_syscalls = if request.process_seccomp_enabled {
-            request.process_seccomp_syscalls
-        } else {
-            Vec::new()
-        };
-        run_child_seccomp(
-            client,
-            next_request_id(request_id)?,
-            trace_id,
-            launch.command,
-            payload_tls_seccomp_syscalls,
-            payload_socket_seccomp_syscalls,
-            request.payload_socket_max_segment_bytes,
-            process_seccomp_syscalls,
-            request.seccomp_notify_reserved_listener_fd,
-            launch.envs,
-        )
-    } else if tls_sync_enabled {
-        run_child_sync_tls(
-            trace_id,
-            request.argv,
-            &request.payload_tls_config,
-            &request.agent_invocation_commands,
-        )
-    } else if seccomp_enabled {
-        let payload_tls_seccomp_syscalls = if request.payload_tls_enabled {
-            request.payload_tls_seccomp_syscalls
-        } else {
-            Vec::new()
-        };
-        let payload_socket_seccomp_syscalls = if request.payload_socket_enabled {
-            request.payload_socket_seccomp_syscalls
-        } else {
-            Vec::new()
-        };
-        let process_seccomp_syscalls = if request.process_seccomp_enabled {
-            request.process_seccomp_syscalls
-        } else {
-            Vec::new()
-        };
-        run_child_seccomp(
-            client,
-            next_request_id(request_id)?,
-            trace_id,
-            request.argv.into_iter().map(OsString::from).collect(),
-            payload_tls_seccomp_syscalls,
-            payload_socket_seccomp_syscalls,
-            request.payload_socket_max_segment_bytes,
-            process_seccomp_syscalls,
-            request.seccomp_notify_reserved_listener_fd,
-            Vec::new(),
-        )
+    let child_setup = if seccomp_enabled {
+        ChildSetup::Seccomp(seccomp_setup(&request, payload_tls_seccomp_enabled)?)
     } else {
-        run_child(request.argv)
+        ChildSetup::Plain
     };
+
+    let raw_argv = request.argv;
+    let sync_launch = if tls_sync_enabled {
+        Some(sync_launch(
+            raw_argv.clone(),
+            &request.payload_tls_config,
+            &request.agent_invocation_commands,
+        )?)
+    } else {
+        None
+    };
+    let command = sync_launch
+        .as_ref()
+        .map(|launch| launch.command.clone())
+        .unwrap_or_else(|| raw_argv.into_iter().map(OsString::from).collect());
+    let mut child = ControlledChild::spawn(command, child_setup)?;
+
+    let reply = match client.send(ControlCommand::TrackAdd(TrackAddCommand {
+        request_id,
+        root_pid: child.pid(),
+        display_name: request.display_name,
+        profile_name: request.profile_name,
+        tags: request.tags,
+        launch_mode: true,
+    })) {
+        Ok(reply) => reply,
+        Err(error) => {
+            child.terminate();
+            return Err(format_control_error(error));
+        }
+    };
+    let trace_id = match track_added_trace_id(&reply) {
+        Ok(trace_id) => trace_id,
+        Err(error) => {
+            child.terminate();
+            return Err(error);
+        }
+    };
+    println!("{}", format_reply(&reply));
+
+    if let Err(error) =
+        register_seccomp_listener_if_needed(client, request_id, trace_id, seccomp_enabled, &child)
+    {
+        child.terminate();
+        remove_launch_root_best_effort(
+            client,
+            launch_remove_request_id(request_id, seccomp_enabled)?,
+            trace_id,
+        );
+        return Err(error);
+    }
+    let envs = match launch_envs(trace_id, &request.payload_tls_config, sync_launch.as_ref()) {
+        Ok(envs) => envs,
+        Err(error) => {
+            child.terminate();
+            remove_launch_root_best_effort(
+                client,
+                launch_remove_request_id(request_id, seccomp_enabled)?,
+                trace_id,
+            );
+            return Err(error);
+        }
+    };
+    if let Err(error) = child.continue_with_envs(envs) {
+        child.terminate();
+        remove_launch_root_best_effort(
+            client,
+            launch_remove_request_id(request_id, seccomp_enabled)?,
+            trace_id,
+        );
+        return Err(error);
+    }
+    let child_result = child.wait();
     remove_launch_root(
         client,
         launch_remove_request_id(request_id, seccomp_enabled)?,
@@ -137,15 +138,65 @@ pub(crate) fn run_launch(
     child_result
 }
 
-fn run_child(argv: Vec<String>) -> Result<i32, String> {
-    let (program, args) = argv
-        .split_first()
-        .ok_or_else(|| "launch requires a command after --".to_string())?;
-    let status = Command::new(program)
-        .args(args)
-        .status()
-        .map_err(|error| format!("launch child {program}: {error}"))?;
-    exit_code(status)
+fn seccomp_setup(
+    request: &LaunchRequest,
+    payload_tls_seccomp_enabled: bool,
+) -> Result<SeccompSetup, String> {
+    let payload_tls_seccomp_syscalls = if payload_tls_seccomp_enabled {
+        request.payload_tls_seccomp_syscalls.clone()
+    } else {
+        Vec::new()
+    };
+    let payload_socket_seccomp_syscalls = if request.payload_socket_enabled {
+        request.payload_socket_seccomp_syscalls.clone()
+    } else {
+        Vec::new()
+    };
+    let process_seccomp_syscalls = if request.process_seccomp_enabled {
+        request.process_seccomp_syscalls.clone()
+    } else {
+        Vec::new()
+    };
+    SeccompSetup::new(
+        payload_tls_seccomp_syscalls,
+        payload_socket_seccomp_syscalls,
+        request.payload_socket_max_segment_bytes,
+        process_seccomp_syscalls,
+        request.seccomp_notify_reserved_listener_fd,
+    )
+}
+
+fn register_seccomp_listener_if_needed(
+    client: &mut impl ControlClientPort,
+    request_id: RequestId,
+    trace_id: TraceId,
+    seccomp_enabled: bool,
+    child: &ControlledChild,
+) -> Result<(), String> {
+    if !seccomp_enabled {
+        return Ok(());
+    }
+    let listener_fd = child
+        .listener_fd()
+        .ok_or_else(|| "seccomp launch child did not expose a listener fd".to_string())?;
+    register_listener(
+        client,
+        next_request_id(request_id)?,
+        trace_id,
+        child.pid(),
+        listener_fd,
+    )
+}
+
+fn launch_envs(
+    trace_id: TraceId,
+    payload_tls_config: &PayloadTlsConfig,
+    sync_launch: Option<&SyncLaunch>,
+) -> Result<Vec<(OsString, OsString)>, String> {
+    match sync_launch {
+        Some(sync_launch) => sync_launch_envs(trace_id, payload_tls_config, sync_launch),
+        None => Ok(Vec::new()),
+    }
 }
 
 fn track_added_trace_id(reply: &ControlReply) -> Result<TraceId, String> {
@@ -188,10 +239,12 @@ fn remove_launch_root(
         .map_err(format_control_error)
 }
 
-fn exit_code(status: ExitStatus) -> Result<i32, String> {
-    status
-        .code()
-        .ok_or_else(|| "launch child terminated without an exit code".to_string())
+fn remove_launch_root_best_effort(
+    client: &mut impl ControlClientPort,
+    request_id: RequestId,
+    trace_id: TraceId,
+) {
+    let _ = remove_launch_root(client, request_id, trace_id);
 }
 
 fn format_control_error(error: ControlError) -> String {

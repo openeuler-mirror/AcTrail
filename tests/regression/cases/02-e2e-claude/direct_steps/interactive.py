@@ -15,7 +15,7 @@ def finish_claude_interactive_capture(
     result: CaseResult,
     module,
     workload: dict[str, str],
-    resolved_config: Path,
+    resolved_config: Path | None,
     daemon,
     actrailctl: Path,
     actrailviewer: Path,

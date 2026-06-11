@@ -2,6 +2,8 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
+use std::os::unix::fs::FileTypeExt;
+use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -146,7 +148,44 @@ fn ensure_start_preconditions(config: &OperatorConfig) -> Result<(), String> {
             config.socket_path.display()
         ));
     }
+    if config.payload_config.tls.enabled && config.payload_config.tls.capture_backend.is_sync() {
+        ensure_auxiliary_socket_available(
+            "TLS sync event",
+            &config.payload_config.tls.sync_event_socket_path,
+        )?;
+    }
     Ok(())
+}
+
+fn ensure_auxiliary_socket_available(label: &str, path: &Path) -> Result<(), String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(format!(
+                "inspect {label} socket {}: {error}",
+                path.display()
+            ));
+        }
+    };
+    if !metadata.file_type().is_socket() {
+        return Err(format!(
+            "{label} socket path {} exists but is not a Unix socket; remove it explicitly",
+            path.display()
+        ));
+    }
+    match UnixStream::connect(path) {
+        Ok(_) => Err(format!(
+            "{label} socket {} already has an active listener",
+            path.display()
+        )),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => remove_runtime_file(path),
+        Err(error) => Err(format!(
+            "{label} socket {} exists but could not be verified stale: {error}; remove it explicitly",
+            path.display()
+        )),
+    }
 }
 
 fn wait_until_started(
@@ -238,5 +277,53 @@ fn signal_process(pid: u32, signal: libc::c_int) -> Result<bool, String> {
         Some(errno) if errno == libc::EPERM => Ok(true),
         Some(errno) => Err(format!("signal pid={pid} failed with errno {errno}")),
         None => Err(format!("signal pid={pid} failed")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::net::UnixListener;
+
+    use super::*;
+
+    #[test]
+    fn auxiliary_socket_precondition_removes_stale_socket_file() {
+        let path = temp_socket_path("stale");
+        let _listener = UnixListener::bind(&path).unwrap();
+        drop(_listener);
+
+        ensure_auxiliary_socket_available("test", &path).unwrap();
+
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn auxiliary_socket_precondition_rejects_active_listener() {
+        let path = temp_socket_path("active");
+        let listener = UnixListener::bind(&path).unwrap();
+
+        let error = ensure_auxiliary_socket_available("test", &path).unwrap_err();
+
+        assert!(error.contains("already has an active listener"));
+        drop(listener);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn auxiliary_socket_precondition_rejects_non_socket_path() {
+        let path = temp_socket_path("file");
+        fs::write(&path, b"not a socket").unwrap();
+
+        let error = ensure_auxiliary_socket_available("test", &path).unwrap_err();
+
+        assert!(error.contains("is not a Unix socket"));
+        fs::remove_file(path).unwrap();
+    }
+
+    fn temp_socket_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "actrail-aux-socket-{name}-{}.sock",
+            std::process::id()
+        ))
     }
 }

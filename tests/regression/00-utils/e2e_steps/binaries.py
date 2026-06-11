@@ -17,6 +17,10 @@ def require_actrail_binaries(result: CaseResult, module, bin_dir: Path) -> tuple
     return actraild, actrailctl, actrailviewer
 
 
+def require_actrailweb_binary(result: CaseResult, module, bin_dir: Path) -> Path:
+    return require_actrail_binary(result, module, bin_dir, "actrailweb")
+
+
 def require_actrail_binary(result: CaseResult, module, bin_dir: Path, name: str) -> Path:
     return run_step(
         result,
