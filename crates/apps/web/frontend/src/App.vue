@@ -19,6 +19,10 @@
       </div>
     </header>
 
+    <div v-if="loading" class="load-progress" role="progressbar" aria-label="Loading trace data">
+      <span class="load-progress-bar"></span>
+    </div>
+
     <div class="workbench">
       <aside class="trace-rail">
         <div class="rail-title">Traces</div>
@@ -45,7 +49,13 @@
 
         <TraceTabs v-model="activeTab" :tabs="tabs" />
 
+        <div v-if="showLoadingPanel" class="loading-panel">
+          <span class="loading-spinner" aria-hidden="true"></span>
+          <p>Loading and analyzing captured data…</p>
+          <small>This may take a moment for larger traces.</small>
+        </div>
         <component
+          v-else
           :is="activeTabDefinition.component"
           v-bind="activeTabProps"
           @select-detail="handleDetailSelect"
@@ -122,6 +132,7 @@ const selectedDetailId = ref(null);
 const selectedDetail = ref(null);
 const query = ref('');
 const error = ref('');
+const loading = ref(false);
 const payloadText = ref('');
 let activeTraceLoad = null;
 let activeCommandsLoad = null;
@@ -170,6 +181,19 @@ const metrics = computed(() => {
     { label: 'Actions', value: semantic.actions ?? actionTree.value?.actions?.length ?? 0 },
     { label: 'Processes', value: traceDetail.value?.processes?.length ?? counts.process ?? 0 },
   ];
+});
+
+const showLoadingPanel = computed(() => {
+  if (!loading.value) {
+    return false;
+  }
+  if (activeTab.value === TAB_IDS.actionTree) {
+    return !actionTree.value?.rootData;
+  }
+  if (activeTab.value === TAB_IDS.commands) {
+    return commands.value?.loadedTraceId !== selectedTraceId.value;
+  }
+  return !traceDetail.value;
 });
 
 onMounted(refresh);
@@ -232,20 +256,40 @@ async function loadTrace(traceId) {
   traceDetail.value = null;
   actionTree.value = emptyActionTree();
   commands.value = emptyCommands();
+  loading.value = true;
+  error.value = '';
+
+  const isCurrent = () => activeTraceLoad === token && selectedTraceId.value === traceId;
+  const fail = (err) => {
+    if (isCurrent()) {
+      error.value = String(err.message ?? err);
+    }
+  };
+
+  const summaryLoad = readTraceSummary(traceId)
+    .then((summaryData) => {
+      if (isCurrent()) {
+        traceDetail.value = summaryData;
+      }
+    })
+    .catch(fail);
+
+  const treeLoad = readActionTreeRoot(traceId)
+    .then((rootData) => {
+      if (isCurrent()) {
+        actionTree.value = emptyActionTree(rootData.summary, rootData);
+      }
+    })
+    .catch(fail);
+
   try {
-    error.value = '';
-    const [summaryData, rootData] = await Promise.all([
-      readTraceSummary(traceId),
-      readActionTreeRoot(traceId),
-    ]);
-    if (activeTraceLoad === token && selectedTraceId.value === traceId) {
-      traceDetail.value = summaryData;
-      actionTree.value = emptyActionTree(rootData.summary, rootData);
+    await Promise.all([summaryLoad, treeLoad]);
+    if (isCurrent()) {
       await ensureDataForActiveTab();
     }
-  } catch (err) {
-    if (activeTraceLoad === token && selectedTraceId.value === traceId) {
-      error.value = String(err.message ?? err);
+  } finally {
+    if (isCurrent()) {
+      loading.value = false;
     }
   }
 }
@@ -337,6 +381,7 @@ function emptyActionTree(summary = null, rootData = null) {
 function emptyCommands() {
   return {
     actions: [],
+    links: [],
     loadedTraceId: null,
   };
 }
@@ -344,6 +389,7 @@ function emptyCommands() {
 function withCommandTrace(commandData, traceId) {
   return {
     actions: commandData.actions ?? [],
+    links: commandData.links ?? [],
     loadedTraceId: traceId,
   };
 }
