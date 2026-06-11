@@ -3,7 +3,14 @@
     <table v-if="rows.length" class="data-table">
       <thead>
         <tr>
-          <th v-for="column in columns" :key="column.key" scope="col">{{ column.label }}</th>
+          <th
+            v-for="column in columns"
+            :key="column.key"
+            scope="col"
+            :class="columnClass(column)"
+          >
+            {{ column.label }}
+          </th>
         </tr>
       </thead>
       <tbody>
@@ -11,12 +18,13 @@
           v-for="row in rows"
           :key="row.id"
           class="data-row"
+          :class="{ 'is-selected': selectedId === row.id }"
           tabindex="0"
           @click="select(row)"
           @keydown.enter.prevent="select(row)"
           @keydown.space.prevent="select(row)"
         >
-          <td v-for="column in columns" :key="column.key">
+          <td v-for="column in columns" :key="column.key" :class="columnClass(column)">
             <span class="cell-text">
               <span
                 v-for="index in cellIndent(row.cells[column.key])"
@@ -24,7 +32,35 @@
                 class="tree-indent-unit"
                 aria-hidden="true"
               />
-              {{ cellText(row.cells[column.key]) }}
+              <template v-if="column.tree">
+                <button
+                  v-if="cellHasChildren(row.cells[column.key])"
+                  type="button"
+                  class="tree-toggle"
+                  :aria-expanded="cellExpanded(row.cells[column.key])"
+                  @click.stop="$emit('toggle', row)"
+                  @keydown.enter.stop.prevent="$emit('toggle', row)"
+                  @keydown.space.stop.prevent="$emit('toggle', row)"
+                >
+                  <ChevronDown v-if="cellExpanded(row.cells[column.key])" :size="14" />
+                  <ChevronRight v-else :size="14" />
+                </button>
+                <span v-else class="tree-toggle-spacer" aria-hidden="true" />
+                <span class="tree-label">{{ cellText(row.cells[column.key]) }}</span>
+              </template>
+              <span
+                v-else-if="column.badge && hasCellText(row.cells[column.key])"
+                class="cell-badge"
+                :class="badgeClass(column, row.cells[column.key])"
+              >
+                {{ cellText(row.cells[column.key]) }}
+              </span>
+              <span
+                v-else-if="!hasCellText(row.cells[column.key]) && !cellIndent(row.cells[column.key]).length"
+                class="cell-empty"
+                >—</span
+              >
+              <template v-else>{{ cellText(row.cells[column.key]) }}</template>
             </span>
           </td>
         </tr>
@@ -40,7 +76,8 @@
 </template>
 
 <script setup>
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
+import { ChevronDown, ChevronRight } from '@lucide/vue';
 
 const props = defineProps({
   columns: {
@@ -69,7 +106,9 @@ const props = defineProps({
   },
 });
 
-const emit = defineEmits(['select', 'load-more']);
+const emit = defineEmits(['select', 'load-more', 'toggle']);
+
+const selectedId = ref(null);
 
 const totalRowCount = computed(() =>
   Number.isInteger(props.totalRows) && props.totalRows >= 0 ? props.totalRows : props.rows.length,
@@ -78,7 +117,17 @@ const remainingRows = computed(() => Math.max(totalRowCount.value - props.rows.l
 const nextBatchSize = computed(() => Math.min(positiveInteger(props.nextBatchSize), remainingRows.value));
 const hasMoreRows = computed(() => props.canLoadMore && remainingRows.value > 0 && nextBatchSize.value > 0);
 
+watch(
+  () => props.rows,
+  (rows) => {
+    if (selectedId.value && !rows.some((row) => row.id === selectedId.value)) {
+      selectedId.value = null;
+    }
+  },
+);
+
 function select(row) {
+  selectedId.value = row.id;
   emit('select', row.detail);
 }
 
@@ -94,11 +143,40 @@ function cellText(cell) {
   return String(cell ?? '');
 }
 
+function hasCellText(cell) {
+  return cellText(cell).trim().length > 0;
+}
+
 function cellIndent(cell) {
   if (!cell || typeof cell !== 'object' || !cell.indent) {
     return [];
   }
   return Array.from({ length: cell.indent }, (_, index) => index);
+}
+
+function cellHasChildren(cell) {
+  return Boolean(cell && typeof cell === 'object' && cell.hasChildren);
+}
+
+function cellExpanded(cell) {
+  return Boolean(cell && typeof cell === 'object' && cell.expanded);
+}
+
+function columnClass(column) {
+  return {
+    'col-numeric': column.align === 'numeric',
+    'col-right': column.align === 'right',
+    'col-badge': Boolean(column.badge),
+  };
+}
+
+function badgeClass(column, cell) {
+  const slug = cellText(cell)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return [`badge-${column.badge}`, slug ? `badge-${column.badge}-${slug}` : ''];
 }
 </script>
 
@@ -108,42 +186,72 @@ function cellIndent(cell) {
   height: 100%;
   overflow: auto;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 12px;
   background: var(--surface);
+  box-shadow: var(--shadow);
 }
 
 .data-table {
   width: 100%;
   min-width: 760px;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
 }
 
 .data-table th,
 .data-table td {
-  padding: 10px 12px;
+  padding: 11px 16px;
   border-bottom: 1px solid var(--border);
   text-align: left;
   vertical-align: top;
+}
+
+.data-table tbody tr:last-child td {
+  border-bottom: 0;
 }
 
 .data-table th {
   position: sticky;
   top: 0;
   z-index: 1;
-  background: #f8fbfa;
+  background: linear-gradient(180deg, #f4f9f8, #eef4f3);
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
+  white-space: nowrap;
+  box-shadow: inset 0 -1px 0 var(--border);
+  border-bottom: 0;
+}
+
+.col-numeric {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.col-right {
+  text-align: right;
 }
 
 .data-row {
   cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+
+.data-table tbody tr:nth-child(even) td {
+  background: rgba(15, 118, 110, 0.025);
 }
 
 .data-row:hover td,
 .data-row:focus td {
   background: #eef7f5;
+}
+
+.data-row.is-selected td {
+  background: #e3f1ee;
+  box-shadow: inset 2px 0 0 var(--teal);
 }
 
 .data-row:focus {
@@ -161,10 +269,97 @@ function cellIndent(cell) {
   width: var(--table-indent-step);
 }
 
+.tree-toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-right: 6px;
+  padding: 0;
+  border: 1px solid #cfdedb;
+  border-radius: 5px;
+  background: #f1f8f6;
+  color: var(--teal-deep);
+  vertical-align: -3px;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background-color 0.12s ease;
+}
+
+.tree-toggle:hover {
+  border-color: var(--teal);
+  background: #e3f1ee;
+}
+
+.tree-toggle-spacer {
+  display: inline-block;
+  width: 18px;
+  margin-right: 6px;
+}
+
+.tree-label {
+  overflow-wrap: anywhere;
+}
+
+.cell-empty {
+  color: #aab6b6;
+}
+
+.cell-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.badge-kind {
+  border-color: #cfe0dd;
+  background: #f1f8f6;
+  color: var(--teal-deep);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+
+.badge-status {
+  border-color: var(--border);
+  background: var(--surface-muted);
+  color: var(--muted);
+  text-transform: capitalize;
+}
+
+.badge-status-success {
+  border-color: #b7e0cd;
+  background: #e7f6ee;
+  color: #0f7a4f;
+}
+
+.badge-status-error {
+  border-color: #f3c2cb;
+  background: #fdecef;
+  color: var(--rose);
+}
+
+.badge-status-in-progress {
+  border-color: #f3dbb0;
+  background: #fdf4e3;
+  color: #b06f04;
+}
+
+.badge-status-unknown {
+  border-color: var(--border);
+  background: var(--surface-muted);
+  color: var(--muted);
+}
+
 .empty-table {
-  padding: 32px 18px;
+  padding: 40px 18px;
   color: var(--muted);
   text-align: center;
+  font-weight: 600;
 }
 
 .table-more {
@@ -172,19 +367,23 @@ function cellIndent(cell) {
   justify-content: center;
   padding: 14px;
   border-top: 1px solid var(--border);
+  background: var(--surface);
 }
 
 .load-more {
   height: 34px;
-  padding: 0 14px;
+  padding: 0 16px;
   border: 1px solid #bdd7d2;
   border-radius: 8px;
   background: #eef7f5;
   color: var(--teal-deep);
+  font-weight: 700;
   cursor: pointer;
+  transition: border-color 0.12s ease, background-color 0.12s ease;
 }
 
 .load-more:hover {
   border-color: var(--teal);
+  background: #e3f1ee;
 }
 </style>

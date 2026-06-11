@@ -1,6 +1,9 @@
 //! Command semantic action JSON rendering.
 
+use std::collections::BTreeSet;
+
 use model_core::ids::TraceId;
+use semantic_action::SemanticActionReadStore;
 use sqlite_storage::SqliteStorage;
 
 use super::actions;
@@ -20,10 +23,37 @@ pub(super) fn commands_json(
                 error.stage, error.message
             )
         })?;
+    let action_ids = actions
+        .iter()
+        .map(|action| action.action_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let links = storage.list_semantic_action_links(trace_id).map_err(|error| {
+        format!(
+            "list command links failed: {}: {}",
+            error.stage, error.message
+        )
+    })?;
+    let link_rows = links
+        .iter()
+        .filter(|link| {
+            action_ids.contains(link.parent_action_id.as_str())
+                && action_ids.contains(link.child_action_id.as_str())
+        })
+        .map(|link| {
+            let mut output = String::from("{");
+            json::field(&mut output, "parent", &json::string(&link.parent_action_id));
+            output.push(',');
+            json::field(&mut output, "child", &json::string(&link.child_action_id));
+            output.push('}');
+            output
+        })
+        .collect::<Vec<_>>();
     let rows = actions.iter().map(actions::action_json).collect::<Vec<_>>();
 
     let mut output = String::from("{");
     json::field(&mut output, "actions", &format!("[{}]", rows.join(",")));
+    output.push(',');
+    json::field(&mut output, "links", &format!("[{}]", link_rows.join(",")));
     output.push('}');
     Ok(output)
 }

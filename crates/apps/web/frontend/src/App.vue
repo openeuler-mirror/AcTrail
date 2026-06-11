@@ -381,6 +381,7 @@ function emptyActionTree(summary = null, rootData = null) {
 function emptyCommands() {
   return {
     actions: [],
+    links: [],
     loadedTraceId: null,
   };
 }
@@ -388,6 +389,7 @@ function emptyCommands() {
 function withCommandTrace(commandData, traceId) {
   return {
     actions: commandData.actions ?? [],
+    links: commandData.links ?? [],
     loadedTraceId: traceId,
   };
 }
