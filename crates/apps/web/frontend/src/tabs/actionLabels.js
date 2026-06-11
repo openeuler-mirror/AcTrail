@@ -23,6 +23,23 @@ export function semanticActionLabel(action) {
   return action?.kind ?? '';
 }
 
+export function isBashWrapperCommand(action) {
+  const attributes = action?.attributes ?? {};
+  const line =
+    attributes['command.line'] ?? attributes['agent.child.command_line'] ?? action?.title ?? '';
+  const executable = attributes['process.executable'] ?? '';
+  const text = String(line).trim();
+  const exe = String(executable).trim();
+  if (!text && !exe) {
+    return false;
+  }
+  const usesDashC = /\s-c(?:\s|$)/.test(text);
+  if (usesDashC && (/(?:^|\/)bash(?:\s|$)/.test(text) || /\/bash$/.test(exe))) {
+    return true;
+  }
+  return false;
+}
+
 export function semanticActionTarget(action) {
   const attributes = action?.attributes ?? {};
   if (action?.kind === 'command.invocation') {

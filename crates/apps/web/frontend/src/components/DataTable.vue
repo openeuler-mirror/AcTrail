@@ -68,7 +68,10 @@
     </table>
     <div v-if="hasMoreRows" class="table-more">
       <button class="load-more" type="button" @click="$emit('load-more')">
-        Load {{ nextBatchSize }} more of {{ remainingRows }}
+        Load {{ nextBatchSize }} more ({{ remainingRows }} hidden)
+      </button>
+      <button v-if="canLoadAll" class="load-all" type="button" @click="$emit('load-all')">
+        Load all
       </button>
     </div>
     <div v-if="!rows.length" class="empty-table">{{ emptyLabel }}</div>
@@ -104,9 +107,13 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  canLoadAll: {
+    type: Boolean,
+    default: false,
+  },
 });
 
-const emit = defineEmits(['select', 'load-more', 'toggle']);
+const emit = defineEmits(['select', 'load-more', 'load-all', 'toggle']);
 
 const selectedId = ref(null);
 
@@ -365,12 +372,15 @@ function badgeClass(column, cell) {
 .table-more {
   display: flex;
   justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px;
   padding: 14px;
   border-top: 1px solid var(--border);
   background: var(--surface);
 }
 
-.load-more {
+.load-more,
+.load-all {
   height: 34px;
   padding: 0 16px;
   border: 1px solid #bdd7d2;
@@ -382,7 +392,12 @@ function badgeClass(column, cell) {
   transition: border-color 0.12s ease, background-color 0.12s ease;
 }
 
-.load-more:hover {
+.load-all {
+  border-style: dashed;
+}
+
+.load-more:hover,
+.load-all:hover {
   border-color: var(--teal);
   background: #e3f1ee;
 }

@@ -6,6 +6,7 @@ import ActionTreeTab from './core/action-tree/ActionTreeTab.vue';
 import CommandsTab from './core/commands/CommandsTab.vue';
 import OverviewTab from './core/overview/OverviewTab.vue';
 import TimelineTab from './core/timeline/TimelineTab.vue';
+import WaterfallTab from './core/waterfall/WaterfallTab.vue';
 import DiagnosticsTab from './system/diagnostics/DiagnosticsTab.vue';
 import ProcessesTab from './system/processes/ProcessesTab.vue';
 import ProcessTreeTab from './system/process-tree/ProcessTreeTab.vue';
@@ -14,6 +15,7 @@ import ResourcesTab from './system/resources/ResourcesTab.vue';
 export const TAB_IDS = Object.freeze({
   overview: 'overview',
   actionTree: 'action_tree',
+  waterfall: 'waterfall',
   commands: 'commands',
   timeline: 'timeline',
   events: 'events',
@@ -29,6 +31,7 @@ export const TAB_IDS = Object.freeze({
 export const TAB_DEFINITIONS = Object.freeze([
   { id: TAB_IDS.overview, label: 'Overview', component: OverviewTab },
   { id: TAB_IDS.actionTree, label: 'Action Tree', component: ActionTreeTab },
+  { id: TAB_IDS.waterfall, label: 'Waterfall', component: WaterfallTab },
   { id: TAB_IDS.commands, label: 'Commands', component: CommandsTab },
   { id: TAB_IDS.timeline, label: 'Timeline', component: TimelineTab },
   { id: TAB_IDS.events, label: 'Events', component: EventsTab },

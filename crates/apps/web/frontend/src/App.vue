@@ -107,6 +107,7 @@ import { RefreshCw, Search, X } from '@lucide/vue';
 
 import {
   listTraces,
+  readActionTree,
   readActionTreeRoot,
   readCommands,
   readPayload,
@@ -128,6 +129,7 @@ const selectedTraceId = ref(null);
 const traceDetail = ref(null);
 const actionTree = ref(emptyActionTree());
 const commands = ref(emptyCommands());
+const waterfall = ref(emptyWaterfall());
 const selectedDetailId = ref(null);
 const selectedDetail = ref(null);
 const query = ref('');
@@ -136,6 +138,7 @@ const loading = ref(false);
 const payloadText = ref('');
 let activeTraceLoad = null;
 let activeCommandsLoad = null;
+let activeWaterfallLoad = null;
 let activeTracePartLoad = null;
 let activePayloadLoad = null;
 
@@ -162,6 +165,10 @@ const activeTabProps = computed(() => {
   }
   if (activeTab.value === TAB_IDS.commands) {
     props.commands = commands.value;
+  }
+  if (activeTab.value === TAB_IDS.waterfall) {
+    props.waterfall = waterfall.value;
+    props.selectedDetailId = selectedDetailId.value;
   }
   return props;
 });
@@ -192,6 +199,9 @@ const showLoadingPanel = computed(() => {
   }
   if (activeTab.value === TAB_IDS.commands) {
     return commands.value?.loadedTraceId !== selectedTraceId.value;
+  }
+  if (activeTab.value === TAB_IDS.waterfall) {
+    return waterfall.value?.loadedTraceId !== selectedTraceId.value;
   }
   return !traceDetail.value;
 });
@@ -256,6 +266,7 @@ async function loadTrace(traceId) {
   traceDetail.value = null;
   actionTree.value = emptyActionTree();
   commands.value = emptyCommands();
+  waterfall.value = emptyWaterfall();
   loading.value = true;
   error.value = '';
 
@@ -295,7 +306,11 @@ async function loadTrace(traceId) {
 }
 
 async function ensureDataForActiveTab() {
-  await Promise.all([ensureTracePartForActiveTab(), ensureCommandsForActiveTab()]);
+  await Promise.all([
+    ensureTracePartForActiveTab(),
+    ensureCommandsForActiveTab(),
+    ensureWaterfallForActiveTab(),
+  ]);
 }
 
 async function ensureTracePartForActiveTab() {
@@ -356,6 +371,28 @@ async function ensureCommandsForActiveTab() {
   }
 }
 
+async function ensureWaterfallForActiveTab() {
+  const traceId = selectedTraceId.value;
+  if (!traceId || activeTab.value !== TAB_IDS.waterfall) {
+    return;
+  }
+  if (waterfall.value?.loadedTraceId === traceId) {
+    return;
+  }
+  const token = Symbol();
+  activeWaterfallLoad = token;
+  try {
+    const data = await readActionTree(traceId);
+    if (activeWaterfallLoad === token && selectedTraceId.value === traceId) {
+      waterfall.value = withWaterfallTrace(data, traceId);
+    }
+  } catch (err) {
+    if (activeWaterfallLoad === token && selectedTraceId.value === traceId) {
+      error.value = String(err.message ?? err);
+    }
+  }
+}
+
 function handleDetailSelect(nextDetail) {
   selectedDetailId.value = nextDetail?.selectionId ?? null;
   selectedDetail.value = nextDetail;
@@ -383,6 +420,24 @@ function emptyCommands() {
     actions: [],
     links: [],
     loadedTraceId: null,
+  };
+}
+
+function emptyWaterfall() {
+  return {
+    actions: [],
+    links: [],
+    roots: [],
+    loadedTraceId: null,
+  };
+}
+
+function withWaterfallTrace(data, traceId) {
+  return {
+    actions: data.actions ?? [],
+    links: data.links ?? [],
+    roots: data.roots ?? [],
+    loadedTraceId: traceId,
   };
 }
 
