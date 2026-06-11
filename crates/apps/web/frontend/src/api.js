@@ -39,6 +39,10 @@ export function readTraceDiagnostics(traceId) {
   return fetchJson(`/api/traces/${traceId}/diagnostics`);
 }
 
+export function readActionTree(traceId) {
+  return fetchJson(`/api/traces/${traceId}/action-tree`);
+}
+
 export function readActionTreeRoot(traceId) {
   return fetchJson(`/api/traces/${traceId}/action-tree/root`);
 }
