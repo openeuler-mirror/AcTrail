@@ -42,6 +42,8 @@ findings.md
 progress.md
 task_plan.md
 node_modules/
+crates/apps/web/frontend/dist/
+crates/apps/web/src/render/dist/
 
 
 # Added by cargo
@@ -50,5 +52,4 @@ node_modules/
 .codex/
 .codex
 .agents/
-
 
