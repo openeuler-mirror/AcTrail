@@ -87,8 +87,7 @@
                 <span class="wf-meta-start" :title="`start +${formatOffset(row.startOffsetMs)}`">
                   {{ row.startClock || row.startOffsetLabel }}
                 </span>
-                <span class="wf-meta-sep">·</span>
-                <span class="wf-meta-dur" :class="{ 'is-live': row.live }">{{ row.durationText }}</span>
+                <DurationBadge :live="row.live">{{ row.durationText }}</DurationBadge>
               </div>
             </div>
             <button
@@ -104,12 +103,14 @@
           <div class="wf-track">
             <div
               class="wf-bar"
-              :class="[`wf-group-${row.kindGroup}`, `wf-status-${row.status}`, { live: row.live }]"
+              :class="[
+                `wf-group-${row.kindGroup}`,
+                `wf-status-${row.status}`,
+                { live: row.live, instant: barInstant(row) },
+              ]"
               :style="barStyle(row)"
               :title="barTitle(row)"
-            >
-              <span class="wf-bar-text">{{ barText(row) }}</span>
-            </div>
+            />
           </div>
         </div>
 
@@ -130,6 +131,7 @@
 import { computed, ref, watch } from 'vue';
 import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Search, ZoomIn } from '@lucide/vue';
 
+import DurationBadge from '../../../components/DurationBadge.vue';
 import { TABLE_RENDER_LIMITS } from '../../tableConfig';
 import { normalizeTableQuery } from '../../tableModel';
 import {
@@ -241,19 +243,23 @@ watch([displayRoots, normalizedQuery, activeGroups], () => {
 function barStyle(row) {
   const { startMs, spanMs } = axisWindow.value;
   const left = clampPct(((row.startOffsetMs - startMs) / spanMs) * 100);
+  if (barInstant(row)) {
+    return { left: `${left}%`, width: '3px' };
+  }
   const endMs = row.live ? startMs + spanMs : row.startOffsetMs + (row.durMs ?? 0);
   const width = Math.max(((endMs - row.startOffsetMs) / spanMs) * 100, 0.5);
   return { left: `${left}%`, width: `${Math.min(width, 100 - left)}%` };
 }
 
-function barText(row) {
-  if (row.live) {
-    return 'running…';
+function barInstant(row) {
+  if (row.live || row.durMs === null) {
+    return false;
   }
-  if (row.durMs === null) {
-    return '';
+  const { spanMs } = axisWindow.value;
+  if (!spanMs) {
+    return false;
   }
-  return row.durationLabel ?? formatOffset(row.durMs);
+  return (row.durMs / spanMs) * 100 < 1.5;
 }
 
 function barTitle(row) {
@@ -622,19 +628,6 @@ function clampPct(value) {
   font-variant-numeric: tabular-nums;
 }
 
-.wf-meta-sep {
-  opacity: 0.5;
-}
-
-.wf-meta-dur {
-  color: var(--teal-deep);
-  font-weight: 700;
-}
-
-.wf-meta-dur.is-live {
-  color: var(--amber, #d97706);
-}
-
 .wf-zoom {
   display: inline-flex;
   align-items: center;
@@ -673,21 +666,14 @@ function clampPct(value) {
   transform: translateY(-50%);
   height: 16px;
   min-width: 2px;
-  display: flex;
-  align-items: center;
-  padding: 0 6px;
   border-radius: 5px;
   background: var(--wf-color, var(--muted));
-  overflow: hidden;
 }
 
-.wf-bar-text {
-  color: #ffffff;
-  font-size: 10px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.25);
+.wf-bar.instant {
+  height: 18px;
+  min-width: 3px;
+  border-radius: 2px;
 }
 
 .wf-bar.live {

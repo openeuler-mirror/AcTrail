@@ -362,6 +362,13 @@ function badgeClass(column, cell) {
   color: var(--muted);
 }
 
+.badge-duration {
+  border-color: #d8dfdf;
+  background: #edf2f1;
+  color: var(--teal-deep);
+  font-variant-numeric: tabular-nums;
+}
+
 .empty-table {
   padding: 40px 18px;
   color: var(--muted);

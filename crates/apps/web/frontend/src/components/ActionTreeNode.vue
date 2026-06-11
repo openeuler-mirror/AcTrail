@@ -23,9 +23,7 @@
         <span class="action-card-top">
           <span class="action-card-title">{{ node.title }}</span>
           <span v-if="node.durationBadge || hasChildren" class="action-card-controls">
-            <span v-if="node.durationBadge" class="action-card-duration">
-              {{ node.durationBadge }}
-            </span>
+            <DurationBadge v-if="node.durationBadge">{{ node.durationBadge }}</DurationBadge>
             <span v-if="hasChildren" class="action-card-toggle" aria-hidden="true">
               <ChevronDown v-if="childrenVisible" :size="15" />
               <ChevronRight v-else :size="15" />
@@ -59,6 +57,8 @@
 <script setup>
 import { computed, ref, watch } from 'vue';
 import { ChevronDown, ChevronRight } from '@lucide/vue';
+
+import DurationBadge from './DurationBadge.vue';
 
 defineOptions({ name: 'ActionTreeNode' });
 
@@ -207,21 +207,6 @@ function handleClick() {
   display: inline-flex;
   align-items: flex-start;
   gap: 6px;
-}
-
-.action-card-duration {
-  min-height: 22px;
-  display: inline-grid;
-  place-items: center;
-  padding: 0 7px;
-  border: 1px solid #d8dfdf;
-  border-radius: 6px;
-  background: #edf2f1;
-  color: var(--teal-deep);
-  font-size: 11px;
-  font-weight: 800;
-  line-height: 1;
-  white-space: nowrap;
 }
 
 .action-card-toggle {
