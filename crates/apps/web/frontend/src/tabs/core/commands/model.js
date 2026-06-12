@@ -4,7 +4,7 @@ import { isBashWrapperCommand, semanticActionLabel, semanticActionTarget } from 
 export const COMMAND_COLUMNS = Object.freeze([
   { key: 'title', label: 'Command', tree: true },
   { key: 'time', label: 'Time', align: 'numeric' },
-  { key: 'duration', label: 'Duration', align: 'numeric' },
+  { key: 'duration', label: 'Duration', align: 'numeric', badge: 'duration' },
   { key: 'pid', label: 'PID', align: 'numeric' },
   { key: 'kind', label: 'Kind', badge: 'kind' },
   { key: 'status', label: 'Status', badge: 'status' },
