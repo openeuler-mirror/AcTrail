@@ -5,7 +5,7 @@ export default defineConfig({
   base: '/',
   plugins: [vue()],
   build: {
-    outDir: '../src/render/dist',
+    outDir: 'dist',
     emptyOutDir: true,
     cssCodeSplit: false,
     rollupOptions: {

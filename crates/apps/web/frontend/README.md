@@ -6,16 +6,40 @@ This Vue app renders the read-only AcTrail UI. Rust owns storage/API/static serv
 
 ```sh
 # From the repository root:
+npm ci --prefix crates/apps/web/frontend
 cargo build --release
 ```
 
-The web crate embeds checked-in static assets from `../src/render/dist`. Node.js, npm, and `node_modules` are only needed when changing the frontend source; the release `actrailweb` binary serves the embedded assets without them at runtime.
+The web crate builds the Vue app into Cargo `OUT_DIR` and embeds those static
+assets in the `actrailweb` binary. Node.js, npm, and `node_modules` are build
+inputs only; the release binary serves the embedded assets without them at
+runtime.
 
-After frontend source changes, regenerate the checked-in assets before committing:
+Packaging environments that cannot download npm dependencies during `cargo
+build` should provide prebuilt assets explicitly:
 
 ```sh
-npm ci --prefix crates/apps/web/frontend
-npm run build --prefix crates/apps/web/frontend
+ACTRAILWEB_PREBUILT_ASSETS_DIR="$PWD/crates/apps/web/frontend/dist" cargo build --release --locked
+```
+
+`ACTRAILWEB_PREBUILT_ASSETS_DIR` must be an absolute path containing
+`index.html`, `assets/app.css`, and `assets/app.js`. When this variable is set,
+the Cargo build script copies those files into `OUT_DIR` and does not run npm.
+When it is not set, the build script runs `npm run build` and fails if npm or
+installed frontend dependencies are unavailable.
+
+For source package creation, use the repository script from a checkout with
+network access to npm:
+
+```sh
+scripts/package-source.sh --output ../src-AcTrail/AcTrail-0.2.0.tar.gz
+```
+
+Then point the RPM spec build at the packaged frontend dist:
+
+```sh
+export ACTRAILWEB_PREBUILT_ASSETS_DIR="$PWD/crates/apps/web/frontend/dist"
+cargo build --release --locked
 ```
 
 ## Dependencies
