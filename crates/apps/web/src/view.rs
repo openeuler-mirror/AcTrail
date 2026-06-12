@@ -2,6 +2,8 @@
 
 #[path = "view/action_tree_projection.rs"]
 mod action_tree_projection;
+#[path = "view/projection_cache.rs"]
+mod projection_cache;
 #[path = "view/actions.rs"]
 mod actions;
 #[path = "view/commands.rs"]
@@ -117,19 +119,29 @@ pub fn trace_summary_json(storage_path: &Path, trace_id: u64) -> Result<String, 
         .get_trace(trace_id)
         .map_err(|error| format!("read trace failed: {}: {}", error.stage, error.message))?
         .ok_or_else(|| format!("trace {trace_id} not found"))?;
-    let events = storage
-        .list_events(trace_id)
-        .map_err(|error| format!("list events failed: {}: {}", error.stage, error.message))?;
-    let payloads = storage
-        .list_payload_segments(trace_id, PayloadSegmentQuery::metadata_only(None))
-        .map_err(|error| format!("list payloads failed: {}: {}", error.stage, error.message))?;
+    let variant_counts = storage
+        .count_events_by_variant(trace_id)
+        .map_err(|error| {
+            format!(
+                "count events by variant failed: {}: {}",
+                error.stage, error.message
+            )
+        })?;
+    let payload_segments = storage
+        .count_payload_segments(trace_id)
+        .map_err(|error| {
+            format!(
+                "count payload segments failed: {}: {}",
+                error.stage, error.message
+            )
+        })?;
     let retained_payload_bytes = storage.retained_payload_bytes(trace_id).map_err(|error| {
         format!(
             "read retained payload bytes failed: {}: {}",
             error.stage, error.message
         )
     })?;
-    let counts = events::event_counts(&events);
+    let counts = events::event_counts_from_variants(&variant_counts);
 
     let mut output = String::from("{");
     json::field(&mut output, "trace", &trace_record_json(&trace));
@@ -137,7 +149,7 @@ pub fn trace_summary_json(storage_path: &Path, trace_id: u64) -> Result<String, 
     json::field(
         &mut output,
         "counts",
-        &events::counts_json(&counts, retained_payload_bytes, payloads.len()),
+        &events::counts_json(&counts, retained_payload_bytes, payload_segments),
     );
     output.push('}');
     Ok(output)
@@ -218,12 +230,12 @@ pub fn trace_diagnostics_json(storage_path: &Path, trace_id: u64) -> Result<Stri
 
 pub fn action_tree_json(storage_path: &Path, trace_id: u64) -> Result<String, String> {
     let mut storage = open_storage(storage_path)?;
-    actions::action_tree_json(&mut storage, TraceId::new(trace_id))
+    actions::action_tree_json(storage_path, &mut storage, TraceId::new(trace_id))
 }
 
 pub fn action_tree_root_json(storage_path: &Path, trace_id: u64) -> Result<String, String> {
     let mut storage = open_storage(storage_path)?;
-    actions::action_tree_root_json(&mut storage, TraceId::new(trace_id))
+    actions::action_tree_root_json(storage_path, &mut storage, TraceId::new(trace_id))
 }
 
 pub fn action_tree_children_json(
@@ -232,7 +244,7 @@ pub fn action_tree_children_json(
     parent_id: &str,
 ) -> Result<String, String> {
     let mut storage = open_storage(storage_path)?;
-    actions::action_tree_children_json(&mut storage, TraceId::new(trace_id), parent_id)
+    actions::action_tree_children_json(storage_path, &mut storage, TraceId::new(trace_id), parent_id)
 }
 
 pub fn commands_json(storage_path: &Path, trace_id: u64) -> Result<String, String> {

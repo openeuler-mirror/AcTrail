@@ -1,20 +1,43 @@
 //! Semantic action tree JSON for the web UI.
 
+use std::collections::BTreeSet;
+
 use model_core::ids::TraceId;
-use semantic_action::{SemanticAction, SemanticActionLink};
+use semantic_action::{SemanticAction, SemanticActionKind, SemanticActionLink};
 use sqlite_storage::SqliteStorage;
 use sqlite_storage::semantic_actions::SemanticActionSummary;
 
-use super::action_tree_projection::ActionDisplayProjection;
+use super::action_tree_projection::{
+    ActionDisplayProjection, DisplayChild, display_parent_role_strs, root_link_role_strs,
+};
+use super::projection_cache::cached_action_display_projection;
 use crate::json;
 
 const NODE_ID_AGENT: &str = "agent-process";
 
+const HEAVY_ATTRIBUTE_KEYS: &[&str] = &[
+    "http.request.body_text",
+    "http.request.body_json",
+    "http.response.body_text",
+    "http.response.body_json",
+];
+
+const HEAVY_ATTRIBUTE_SUFFIXES: &[&str] = &[
+    ".payload_text",
+    ".body_text",
+    ".body_json",
+    ".output_text",
+    ".content_text",
+    ".reasoning_text",
+    ".tool_calls_json",
+];
+
 pub(super) fn action_tree_json(
+    storage_path: &std::path::Path,
     storage: &mut SqliteStorage,
     trace_id: TraceId,
 ) -> Result<String, String> {
-    let projection = ActionDisplayProjection::load(storage, trace_id)?;
+    let projection = load_cached_projection(storage_path, storage, trace_id)?;
     let roots = projection
         .root_action_ids
         .iter()
@@ -23,7 +46,7 @@ pub(super) fn action_tree_json(
     let action_rows = projection
         .actions
         .iter()
-        .map(action_json)
+        .map(action_json_lite)
         .collect::<Vec<_>>();
     let link_rows = projection.links.iter().map(link_json).collect::<Vec<_>>();
 
@@ -42,6 +65,7 @@ pub(super) fn action_tree_json(
 }
 
 pub(super) fn action_tree_root_json(
+    storage_path: &std::path::Path,
     storage: &mut SqliteStorage,
     trace_id: TraceId,
 ) -> Result<String, String> {
@@ -51,7 +75,6 @@ pub(super) fn action_tree_root_json(
             error.stage, error.message
         )
     })?;
-    let projection = ActionDisplayProjection::load(storage, trace_id)?;
     let observed_agent = storage
         .observed_agent_semantic_action(trace_id)
         .map_err(|error| {
@@ -60,7 +83,7 @@ pub(super) fn action_tree_root_json(
                 error.stage, error.message
             )
         })?;
-    let child_count = projection.root_child_count();
+    let child_count = root_child_count(storage, trace_id, &summary, observed_agent.as_ref())?;
 
     let mut root = String::from("{");
     json::field(&mut root, "id", &json::string(NODE_ID_AGENT));
@@ -84,23 +107,24 @@ pub(super) fn action_tree_root_json(
     output.push(',');
     json::field(&mut output, "summary", &summary_json(summary));
     output.push('}');
+    let _ = storage_path;
     Ok(output)
 }
 
 pub(super) fn action_tree_children_json(
+    storage_path: &std::path::Path,
     storage: &mut SqliteStorage,
     trace_id: TraceId,
     parent_id: &str,
 ) -> Result<String, String> {
-    let projection = ActionDisplayProjection::load(storage, trace_id)?;
     let rows = if parent_id == NODE_ID_AGENT {
-        projection.root_children()
+        load_agent_root_children(storage_path, storage, trace_id)?
     } else {
-        projection.children(parent_id)
+        load_display_children(storage, trace_id, parent_id)?
     };
     let action_rows = rows
         .iter()
-        .map(|row| action_json(&row.action))
+        .map(|row| action_json_lite(&row.action))
         .collect::<Vec<_>>();
     let link_rows = rows
         .iter()
@@ -132,7 +156,159 @@ pub(super) fn action_tree_children_json(
     Ok(output)
 }
 
+fn load_cached_projection(
+    storage_path: &std::path::Path,
+    storage: &mut SqliteStorage,
+    trace_id: TraceId,
+) -> Result<std::sync::Arc<ActionDisplayProjection>, String> {
+    cached_action_display_projection(storage_path, trace_id, || {
+        ActionDisplayProjection::load(storage, trace_id)
+    })
+}
+
+fn root_child_count(
+    storage: &mut SqliteStorage,
+    trace_id: TraceId,
+    summary: &SemanticActionSummary,
+    observed_agent: Option<&SemanticAction>,
+) -> Result<usize, String> {
+    if let Some(agent) = observed_agent {
+        return storage
+            .semantic_action_child_count(trace_id, &agent.action_id, root_link_role_strs())
+            .map_err(|error| {
+                format!(
+                    "count agent root children failed: {}: {}",
+                    error.stage, error.message
+                )
+            });
+    }
+    Ok(summary.roots)
+}
+
+fn load_agent_root_children(
+    storage_path: &std::path::Path,
+    storage: &mut SqliteStorage,
+    trace_id: TraceId,
+) -> Result<Vec<DisplayChild>, String> {
+    let observed_agent = storage
+        .observed_agent_semantic_action(trace_id)
+        .map_err(|error| {
+            format!(
+                "read observed agent action failed: {}: {}",
+                error.stage, error.message
+            )
+        })?;
+    if let Some(agent) = observed_agent {
+        let roles = display_parent_role_strs();
+        let rows = storage
+            .semantic_action_children(trace_id, &agent.action_id, root_link_role_strs(), roles)
+            .map_err(|error| {
+                format!(
+                    "list agent root children failed: {}: {}",
+                    error.stage, error.message
+                )
+            })?;
+        if !rows.is_empty() {
+            return Ok(rows
+                .into_iter()
+                .map(|row| DisplayChild {
+                    action: row.action,
+                    link: Some(row.link),
+                    child_count: row.child_count,
+                })
+                .collect());
+        }
+    }
+    let projection = load_cached_projection(storage_path, storage, trace_id)?;
+    Ok(projection.root_children())
+}
+
+fn load_display_children(
+    storage: &mut SqliteStorage,
+    trace_id: TraceId,
+    parent_id: &str,
+) -> Result<Vec<DisplayChild>, String> {
+    let roles = display_parent_role_strs();
+    let mut rows = storage
+        .semantic_action_children(trace_id, parent_id, roles, roles)
+        .map_err(|error| {
+            format!(
+                "list semantic action children failed: {}: {}",
+                error.stage, error.message
+            )
+        })?
+        .into_iter()
+        .map(|row| DisplayChild {
+            action: row.action,
+            link: Some(row.link),
+            child_count: row.child_count,
+        })
+        .collect::<Vec<_>>();
+    let parent = storage
+        .semantic_action_by_id(trace_id, parent_id)
+        .map_err(|error| {
+            format!(
+                "read parent semantic action failed: {}: {}",
+                error.stage, error.message
+            )
+        })?;
+    if parent
+        .as_ref()
+        .is_some_and(|action| action.kind == SemanticActionKind::CommandInvocation)
+    {
+        let parent = parent.expect("parent action was just checked");
+        let linked_ids = rows
+            .iter()
+            .map(|row| row.action.action_id.clone())
+            .collect::<BTreeSet<_>>();
+        let fallback = storage
+            .semantic_action_command_fallback_children(trace_id, &parent, roles)
+            .map_err(|error| {
+                format!(
+                    "list command fallback children failed: {}: {}",
+                    error.stage, error.message
+                )
+            })?;
+        for action in fallback {
+            if linked_ids.contains(&action.action_id) {
+                continue;
+            }
+            let child_count = storage
+                .semantic_action_child_count(trace_id, &action.action_id, roles)
+                .map_err(|error| {
+                    format!(
+                        "count fallback child actions failed: {}: {}",
+                        error.stage, error.message
+                    )
+                })?;
+            rows.push(DisplayChild {
+                action,
+                link: None,
+                child_count,
+            });
+        }
+    }
+    rows.sort_by(|left, right| {
+        (left.action.start_time, left.action.action_id.as_str())
+            .cmp(&(right.action.start_time, right.action.action_id.as_str()))
+    });
+    Ok(rows)
+}
+
 pub(super) fn action_json(action: &SemanticAction) -> String {
+    render_action_json(action, false)
+}
+
+pub(super) fn action_json_lite(action: &SemanticAction) -> String {
+    render_action_json(action, true)
+}
+
+fn render_action_json(action: &SemanticAction, lite: bool) -> String {
+    let attributes = if lite {
+        lite_attributes(&action.attributes)
+    } else {
+        action.attributes.clone()
+    };
     let mut output = String::from("{");
     json::field(&mut output, "id", &json::string(&action.action_id));
     output.push(',');
@@ -189,11 +365,36 @@ pub(super) fn action_json(action: &SemanticAction) -> String {
         &json::optional_number(action.confidence_millis),
     );
     output.push(',');
-    json::field(&mut output, "attributes", &json::map(&action.attributes));
+    json::field(&mut output, "attributes", &json::map(&attributes));
     output.push(',');
-    json::field(&mut output, "evidence", &evidence_json(&action.evidence));
+    json::field(
+        &mut output,
+        "evidence",
+        &if lite {
+            "[]".to_string()
+        } else {
+            evidence_json(&action.evidence)
+        },
+    );
     output.push('}');
     output
+}
+
+fn lite_attributes(
+    attributes: &std::collections::BTreeMap<String, String>,
+) -> std::collections::BTreeMap<String, String> {
+    attributes
+        .iter()
+        .filter(|(key, _)| !is_heavy_attribute(key))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
+fn is_heavy_attribute(key: &str) -> bool {
+    HEAVY_ATTRIBUTE_KEYS.contains(&key)
+        || HEAVY_ATTRIBUTE_SUFFIXES
+            .iter()
+            .any(|suffix| key.ends_with(suffix))
 }
 
 fn link_json(link: &SemanticActionLink) -> String {
@@ -212,7 +413,15 @@ fn link_json(link: &SemanticActionLink) -> String {
     output.push(',');
     json::field(&mut output, "attributes", &json::map(&link.attributes));
     output.push(',');
-    json::field(&mut output, "evidence", &evidence_json(&link.evidence));
+    json::field(
+        &mut output,
+        "evidence",
+        &if link.evidence.is_empty() {
+            "[]".to_string()
+        } else {
+            evidence_json(&link.evidence)
+        },
+    );
     output.push('}');
     output
 }

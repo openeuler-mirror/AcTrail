@@ -48,7 +48,7 @@ pub(super) fn commands_json(
             output
         })
         .collect::<Vec<_>>();
-    let rows = actions.iter().map(actions::action_json).collect::<Vec<_>>();
+    let rows = actions.iter().map(actions::action_json_lite).collect::<Vec<_>>();
 
     let mut output = String::from("{");
     json::field(&mut output, "actions", &format!("[{}]", rows.join(",")));

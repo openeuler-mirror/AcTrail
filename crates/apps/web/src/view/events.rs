@@ -175,6 +175,30 @@ pub(super) fn diagnostic_json(diagnostic: &DiagnosticRecord) -> String {
     output
 }
 
+pub(super) fn event_counts_from_variants(
+    variants: &std::collections::BTreeMap<String, usize>,
+) -> EventCounts {
+    let mut counts = EventCounts::default();
+    for (variant, count) in variants {
+        counts.events += count;
+        match variant.as_str() {
+            "process" => counts.process += count,
+            "net" => counts.net += count,
+            "file" => counts.file += count,
+            "ipc" => counts.ipc += count,
+            "stdio" => counts.stdio += count,
+            "application" => counts.application += count,
+            "resource" => counts.resource += count,
+            "control" => counts.control += count,
+            "loss" => counts.loss += count,
+            "label" => counts.label += count,
+            "enforcement" => counts.enforcement += count,
+            _ => {}
+        }
+    }
+    counts
+}
+
 pub(super) fn event_counts(events: &[DomainEvent]) -> EventCounts {
     let mut counts = EventCounts::default();
     for event in events {
