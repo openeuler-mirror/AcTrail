@@ -1510,6 +1510,7 @@ name = "web"
 version = "0.2.0"
 dependencies = [
  "config_core",
+ "flate2",
  "model_core",
  "semantic_action",
  "sqlite_storage",

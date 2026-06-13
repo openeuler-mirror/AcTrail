@@ -6,6 +6,9 @@ use std::path::{Path, PathBuf};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use flate2::Compression;
+use flate2::write::GzEncoder;
+
 use crate::args::WebConfig;
 use crate::{render, view};
 
@@ -115,14 +118,28 @@ fn serve_stream(
     stream
         .set_read_timeout(request_read_timeout)
         .map_err(|error| format!("set request read timeout failed: {error}"))?;
-    let response = match read_request(&mut stream).and_then(|request| route(&request, storage_path))
-    {
+    let request = read_request(&mut stream)?;
+    let response = match route(&request, storage_path) {
         Ok(response) => response,
         Err(error) => Response::text(STATUS_INTERNAL_ERROR, error),
     };
-    stream
-        .write_all(response.serialize().as_bytes())
-        .map_err(|error| error.to_string())
+    let response = response.with_optional_gzip(request.accepts_gzip);
+    write_response(&mut stream, &response).map_err(|error| error.to_string())
+}
+
+fn write_response(stream: &mut TcpStream, response: &Response) -> std::io::Result<()> {
+    let mut headers = format!(
+        "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n",
+        response.status,
+        response.content_type,
+        response.body.len(),
+    );
+    if let Some(encoding) = response.content_encoding {
+        headers.push_str(&format!("Content-Encoding: {encoding}\r\n"));
+    }
+    headers.push_str("\r\n");
+    stream.write_all(headers.as_bytes())?;
+    stream.write_all(&response.body)
 }
 
 fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
@@ -138,6 +155,7 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
     if parts.len() != 3 {
         return Err(format!("invalid HTTP request line {request_line:?}"));
     }
+    let mut accepts_gzip = false;
     loop {
         let mut header = String::new();
         reader
@@ -146,10 +164,18 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
         if header == "\r\n" || header == "\n" || header.is_empty() {
             break;
         }
+        if header
+            .to_ascii_lowercase()
+            .starts_with("accept-encoding:")
+            && header.to_ascii_lowercase().contains("gzip")
+        {
+            accepts_gzip = true;
+        }
     }
     Ok(Request {
         method: parts[0].to_string(),
         path: parts[1].to_string(),
+        accepts_gzip,
     })
 }
 
@@ -281,62 +307,67 @@ fn percent_decode(value: &str) -> Result<String, String> {
 struct Request {
     method: String,
     path: String,
+    accepts_gzip: bool,
 }
 
 struct Response {
     status: &'static str,
     content_type: &'static str,
-    body: String,
+    body: Vec<u8>,
+    content_encoding: Option<&'static str>,
 }
 
 impl Response {
     fn html(body: String) -> Self {
-        Self {
-            status: STATUS_OK,
-            content_type: "text/html; charset=utf-8",
-            body,
-        }
+        Self::text_bytes(STATUS_OK, "text/html; charset=utf-8", body.into_bytes())
     }
 
     fn css(body: String) -> Self {
-        Self {
-            status: STATUS_OK,
-            content_type: "text/css; charset=utf-8",
-            body,
-        }
+        Self::text_bytes(STATUS_OK, "text/css; charset=utf-8", body.into_bytes())
     }
 
     fn javascript(body: String) -> Self {
-        Self {
-            status: STATUS_OK,
-            content_type: "application/javascript; charset=utf-8",
-            body,
-        }
+        Self::text_bytes(
+            STATUS_OK,
+            "application/javascript; charset=utf-8",
+            body.into_bytes(),
+        )
     }
 
     fn json(body: String) -> Self {
-        Self {
-            status: STATUS_OK,
-            content_type: "application/json; charset=utf-8",
-            body,
-        }
+        Self::text_bytes(STATUS_OK, "application/json; charset=utf-8", body.into_bytes())
     }
 
     fn text(status: &'static str, body: impl Into<String>) -> Self {
+        Self::text_bytes(status, "text/plain; charset=utf-8", body.into().into_bytes())
+    }
+
+    fn text_bytes(status: &'static str, content_type: &'static str, body: Vec<u8>) -> Self {
         Self {
             status,
-            content_type: "text/plain; charset=utf-8",
-            body: body.into(),
+            content_type,
+            body,
+            content_encoding: None,
         }
     }
 
-    fn serialize(&self) -> String {
-        format!(
-            "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            self.status,
-            self.content_type,
-            self.body.len(),
-            self.body
-        )
+    fn with_optional_gzip(mut self, enabled: bool) -> Self {
+        if !enabled || self.body.len() < 1024 {
+            return self;
+        }
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        if encoder.write_all(&self.body).is_err() {
+            return self;
+        }
+        let compressed = match encoder.finish() {
+            Ok(body) => body,
+            Err(_) => return self,
+        };
+        if compressed.len() >= self.body.len() {
+            return self;
+        }
+        self.body = compressed;
+        self.content_encoding = Some("gzip");
+        self
     }
 }

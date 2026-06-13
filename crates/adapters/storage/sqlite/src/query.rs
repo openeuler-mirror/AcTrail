@@ -183,6 +183,68 @@ impl SnapshotStore for SqliteStorage {
 }
 
 impl SqliteStorage {
+    pub fn count_events_by_variant(
+        &self,
+        trace_id: model_core::ids::TraceId,
+    ) -> Result<std::collections::BTreeMap<String, usize>, ReadError> {
+        if self.is_purged(trace_id) {
+            return Err(ReadError::new(
+                "count_events_by_variant",
+                "trace has been purged",
+            ));
+        }
+        let connection = self.connection().borrow();
+        let mut statement = connection
+            .prepare(
+                "SELECT payload_variant, COUNT(*) AS count
+                 FROM events
+                 WHERE trace_id = ?1
+                 GROUP BY payload_variant",
+            )
+            .map_err(|error| ReadError::new("prepare_event_variant_counts", error.to_string()))?;
+        let rows = statement
+            .query_map(params![trace_id.get()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                ))
+            })
+            .map_err(|error| ReadError::new("query_event_variant_counts", error.to_string()))?;
+        let mut counts = std::collections::BTreeMap::new();
+        for row in rows {
+            let (variant, count) = row
+                .map_err(|error| ReadError::new("map_event_variant_counts", error.to_string()))?;
+            counts.insert(
+                variant,
+                usize::try_from(count)
+                    .map_err(|error| ReadError::new("event_variant_count", error.to_string()))?,
+            );
+        }
+        Ok(counts)
+    }
+
+    pub fn count_payload_segments(
+        &self,
+        trace_id: model_core::ids::TraceId,
+    ) -> Result<usize, ReadError> {
+        if self.is_purged(trace_id) {
+            return Err(ReadError::new(
+                "count_payload_segments",
+                "trace has been purged",
+            ));
+        }
+        let connection = self.connection().borrow();
+        let count = connection
+            .query_row(
+                "SELECT COUNT(*) FROM payload_segments WHERE trace_id = ?1",
+                params![trace_id.get()],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|error| ReadError::new("count_payload_segments", error.to_string()))?;
+        usize::try_from(count)
+            .map_err(|error| ReadError::new("count_payload_segments", error.to_string()))
+    }
+
     pub(crate) fn is_purged(&self, trace_id: model_core::ids::TraceId) -> bool {
         let connection = self.connection().borrow();
         connection

@@ -255,7 +255,7 @@ pub(super) fn read_evidence(
     })
 }
 
-fn read_action_by_id(
+pub(super) fn read_action_by_id(
     connection: &rusqlite::Connection,
     action_id: &str,
 ) -> Result<Option<SemanticAction>, SemanticActionStoreError> {
