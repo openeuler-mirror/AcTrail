@@ -92,6 +92,31 @@ fn diagnostic_log_level_does_not_mutate_tls_diagnostics_config() {
 }
 
 #[test]
+fn payload_tls_java_agent_defaults_disabled_for_existing_configs() {
+    let raw = OPERATOR_CONFIG_TEMPLATE
+        .lines()
+        .filter(|line| !line.starts_with("payload_tls_java_agent_enabled = "))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let config = OperatorConfig::parse(&raw).unwrap();
+
+    assert!(!config.payload_config.tls.java_agent_enabled);
+}
+
+#[test]
+fn payload_tls_java_agent_can_be_enabled() {
+    let raw = OPERATOR_CONFIG_TEMPLATE.replace(
+        "payload_tls_java_agent_enabled = false",
+        "payload_tls_java_agent_enabled = true",
+    );
+
+    let config = OperatorConfig::parse(&raw).unwrap();
+
+    assert!(config.payload_config.tls.java_agent_enabled);
+}
+
+#[test]
 fn live_otel_export_config_parses_as_own_section() {
     let raw = OPERATOR_CONFIG_TEMPLATE
         .replace(
@@ -230,6 +255,38 @@ fn xiaoo_tls_example_parses() {
     );
     assert!(config.export_config.payload_bytes_enabled);
     assert!(config.export_config.payload_text_enabled);
+}
+
+#[test]
+fn java_langchain4j_example_enables_java_payload_agent() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .join("docs/examples/10.java-langchain4j-agent/operator.conf");
+    let raw = std::fs::read_to_string(path).expect("read Java LangChain4j example config");
+    let config = OperatorConfig::parse(&raw).expect("parse Java LangChain4j example config");
+
+    assert!(config.payload_config.tls.enabled);
+    assert_eq!(
+        config.payload_config.tls.capture_backend,
+        PayloadTlsCaptureBackend::TlsSync
+    );
+    assert!(config.payload_config.tls.java_agent_enabled);
+}
+
+#[test]
+fn xiaoo_java_langchain4j_example_enables_java_payload_agent() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .join("docs/examples/11.xiaoo-java-langchain4j-agent-invocation/operator.conf");
+    let raw = std::fs::read_to_string(path).expect("read xiaoO Java LangChain4j example config");
+    let config = OperatorConfig::parse(&raw).expect("parse xiaoO Java LangChain4j example config");
+
+    assert!(config.payload_config.tls.enabled);
+    assert_eq!(
+        config.payload_config.tls.capture_backend,
+        PayloadTlsCaptureBackend::TlsSync
+    );
+    assert!(config.payload_config.tls.java_agent_enabled);
 }
 
 #[test]

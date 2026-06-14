@@ -27,12 +27,14 @@ pub(super) fn commands_json(
         .iter()
         .map(|action| action.action_id.as_str())
         .collect::<BTreeSet<_>>();
-    let links = storage.list_semantic_action_links(trace_id).map_err(|error| {
-        format!(
-            "list command links failed: {}: {}",
-            error.stage, error.message
-        )
-    })?;
+    let links = storage
+        .list_semantic_action_links(trace_id)
+        .map_err(|error| {
+            format!(
+                "list command links failed: {}: {}",
+                error.stage, error.message
+            )
+        })?;
     let link_rows = links
         .iter()
         .filter(|link| {

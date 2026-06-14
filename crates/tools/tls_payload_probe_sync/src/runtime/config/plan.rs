@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use tls_payload_sync::{
@@ -12,18 +12,18 @@ use crate::runtime::maps;
 use super::codec::parse_points;
 use super::state::HookPoint;
 
-static PLAN_CACHE: OnceLock<Mutex<BTreeMap<PathBuf, RuntimePlan>>> = OnceLock::new();
+static PLAN_CACHE: OnceLock<Mutex<BTreeMap<PathBuf, Option<RuntimePlan>>>> = OnceLock::new();
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct RuntimePlan {
-    pub(super) target: PathBuf,
-    pub(super) binary: PathBuf,
-    pub(super) provider: String,
-    pub(super) points: Vec<HookPoint>,
+pub(in crate::runtime) struct RuntimePlan {
+    pub(in crate::runtime) target: PathBuf,
+    pub(in crate::runtime) binary: PathBuf,
+    pub(in crate::runtime) provider: String,
+    pub(in crate::runtime) points: Vec<HookPoint>,
 }
 
 impl RuntimePlan {
-    pub(super) fn requires_inline_hooks(&self) -> bool {
+    pub(in crate::runtime) fn requires_inline_hooks(&self) -> bool {
         same_binary(&self.target, &self.binary)
     }
 }
@@ -31,12 +31,22 @@ impl RuntimePlan {
 pub(super) fn current_runtime_plan() -> Result<Option<RuntimePlan>, String> {
     let current_exe = current_exe()?;
     if let Some(plan) = cached_plan(&current_exe)? {
-        return Ok(Some(plan));
+        return Ok(plan);
     }
     let plan = resolve_current_runtime_plan(&current_exe)?;
-    if let Some(plan) = plan.as_ref() {
-        store_cached_plan(current_exe, plan.clone())?;
+    store_cached_plan(current_exe, plan.clone())?;
+    Ok(plan)
+}
+
+pub(in crate::runtime) fn runtime_plan_for_binary(
+    binary: &Path,
+) -> Result<Option<RuntimePlan>, String> {
+    let binary = canonical(binary);
+    if let Some(plan) = cached_plan(&binary)? {
+        return Ok(plan);
     }
+    let plan = lookup_daemon_plan(&binary)?;
+    store_cached_plan(binary, plan.clone())?;
     Ok(plan)
 }
 
@@ -44,24 +54,24 @@ fn required_env(name: &str) -> Result<String, String> {
     std::env::var(name).map_err(|_| format!("missing required runtime env {name}"))
 }
 
-fn cached_plan(current_exe: &PathBuf) -> Result<Option<RuntimePlan>, String> {
+fn cached_plan(binary: &Path) -> Result<Option<Option<RuntimePlan>>, String> {
     let cache = PLAN_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
     cache
         .lock()
         .map_err(|_| "runtime plan cache mutex poisoned".to_string())
-        .map(|cache| cache.get(current_exe).cloned())
+        .map(|cache| cache.get(binary).cloned())
 }
 
-fn store_cached_plan(current_exe: PathBuf, plan: RuntimePlan) -> Result<(), String> {
+fn store_cached_plan(binary: PathBuf, plan: Option<RuntimePlan>) -> Result<(), String> {
     let cache = PLAN_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
     cache
         .lock()
         .map_err(|_| "runtime plan cache mutex poisoned".to_string())?
-        .insert(current_exe, plan);
+        .insert(binary, plan);
     Ok(())
 }
 
-fn resolve_current_runtime_plan(current_exe: &PathBuf) -> Result<Option<RuntimePlan>, String> {
+fn resolve_current_runtime_plan(current_exe: &Path) -> Result<Option<RuntimePlan>, String> {
     if let Some(value) = std::env::var_os(ENV_PLAN_BUNDLE) {
         if let Some(plan) = select_bundle_plan(&value.to_string_lossy(), current_exe)? {
             return Ok(Some(plan));
@@ -70,10 +80,10 @@ fn resolve_current_runtime_plan(current_exe: &PathBuf) -> Result<Option<RuntimeP
     if let Some(plan) = legacy_runtime_plan(current_exe)? {
         return Ok(Some(plan));
     }
-    lookup_daemon_plan(current_exe)
+    lookup_daemon_plan_for_current_process(current_exe)
 }
 
-fn legacy_runtime_plan(current_exe: &PathBuf) -> Result<Option<RuntimePlan>, String> {
+fn legacy_runtime_plan(current_exe: &Path) -> Result<Option<RuntimePlan>, String> {
     let Some(binary) = std::env::var_os(ENV_BINARY) else {
         return Ok(None);
     };
@@ -90,7 +100,9 @@ fn legacy_runtime_plan(current_exe: &PathBuf) -> Result<Option<RuntimePlan>, Str
     }
 }
 
-fn lookup_daemon_plan(current_exe: &PathBuf) -> Result<Option<RuntimePlan>, String> {
+fn lookup_daemon_plan_for_current_process(
+    current_exe: &Path,
+) -> Result<Option<RuntimePlan>, String> {
     let Some(socket_path) = std::env::var_os(ENV_EVENT_SOCKET) else {
         return Ok(None);
     };
@@ -112,7 +124,29 @@ fn lookup_daemon_plan(current_exe: &PathBuf) -> Result<Option<RuntimePlan>, Stri
     }
 }
 
-fn select_bundle_plan(value: &str, current_exe: &PathBuf) -> Result<Option<RuntimePlan>, String> {
+fn lookup_daemon_plan(binary: &Path) -> Result<Option<RuntimePlan>, String> {
+    let Some(socket_path) = std::env::var_os(ENV_EVENT_SOCKET) else {
+        return Ok(None);
+    };
+    let socket_path = PathBuf::from(socket_path);
+    match lookup_runtime_plan(&socket_path, binary) {
+        Ok(PlanLookupResponse::Found(plan)) => {
+            let plan = descriptor_to_runtime_plan(plan)?;
+            if plan_matches_probe_binary(&plan, binary) {
+                Ok(Some(plan))
+            } else {
+                Ok(None)
+            }
+        }
+        Ok(PlanLookupResponse::Unsupported { .. }) => Ok(None),
+        Err(error) => Err(format!(
+            "dynamic TLS plan lookup for {} failed: {error}",
+            binary.display()
+        )),
+    }
+}
+
+fn select_bundle_plan(value: &str, current_exe: &Path) -> Result<Option<RuntimePlan>, String> {
     for item in value.lines().filter(|item| !item.is_empty()) {
         let plan = parse_bundle_plan(item)?;
         if same_binary(&plan.target, current_exe)
@@ -144,20 +178,38 @@ fn current_exe() -> Result<PathBuf, String> {
         .map_err(|error| format!("resolve current executable: {error}"))
 }
 
-fn same_binary(configured: &PathBuf, current_exe: &PathBuf) -> bool {
-    canonical(configured) == *current_exe
+fn same_binary(configured: &Path, current_exe: &Path) -> bool {
+    canonical(configured) == current_exe
 }
 
-fn plan_matches_current_process(plan: &RuntimePlan, current_exe: &PathBuf) -> bool {
+fn plan_matches_current_process(plan: &RuntimePlan, current_exe: &Path) -> bool {
+    if !same_binary(&plan.target, current_exe) {
+        return false;
+    }
     if !(same_binary(&plan.binary, current_exe) || mapped_probe_binary(&plan.binary)) {
         return false;
+    }
+    if plan.provider == "openssl" && !plan.requires_inline_hooks() {
+        return true;
     }
     plan.points
         .iter()
         .all(|point| maps::runtime_address(&plan.binary, point.file_offset).is_ok())
 }
 
-fn mapped_probe_binary(binary: &PathBuf) -> bool {
+fn plan_matches_probe_binary(plan: &RuntimePlan, binary: &Path) -> bool {
+    if !same_binary(&plan.binary, binary) {
+        return false;
+    }
+    if plan.provider == "openssl" && !plan.requires_inline_hooks() {
+        return true;
+    }
+    plan.points
+        .iter()
+        .all(|point| maps::runtime_address(&plan.binary, point.file_offset).is_ok())
+}
+
+fn mapped_probe_binary(binary: &Path) -> bool {
     let Ok(maps) = std::fs::read_to_string("/proc/self/maps") else {
         return false;
     };
@@ -168,6 +220,6 @@ fn mapped_probe_binary(binary: &PathBuf) -> bool {
         .any(|path| canonical(&path) == binary)
 }
 
-fn canonical(path: &PathBuf) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.clone())
+fn canonical(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }

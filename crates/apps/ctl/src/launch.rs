@@ -2,6 +2,8 @@
 
 #[path = "launch/controlled.rs"]
 mod controlled;
+#[path = "launch/java_agent.rs"]
+mod java_agent;
 #[path = "launch/seccomp.rs"]
 mod seccomp;
 #[path = "launch/sync.rs"]

@@ -257,18 +257,11 @@ fn apply_agent_invocation_label(
         ATTR_AGENT_INVOCATION_TRIGGER.to_string(),
         AGENT_INVOCATION_TRIGGER_CHILD_LLM_REQUEST.to_string(),
     );
-    if let Some(evidence_action_id) = evidence_action
-        .map(|action| action.action_id.clone())
-        .or_else(|| {
-            process_action
-                .attributes
-                .get(ATTR_AGENT_IDENTITY_EVIDENCE_ACTION_ID)
-                .cloned()
-        })
-    {
+    let evidence_action_id = agent_identity_evidence_action_id(process_action, evidence_action);
+    if let Some(evidence_action_id) = &evidence_action_id {
         action.attributes.insert(
             ATTR_AGENT_INVOCATION_EVIDENCE_ACTION_ID.to_string(),
-            evidence_action_id,
+            evidence_action_id.clone(),
         );
     }
     action.attributes.insert(
@@ -291,10 +284,34 @@ fn apply_agent_invocation_label(
         "command_line",
         "agent.child.command_line",
     );
-    if let Some(evidence_action) = evidence_action {
+    if evidence_action_matches_identity(evidence_action_id.as_deref(), evidence_action) {
+        let evidence_action = evidence_action.expect("checked by evidence_action_matches_identity");
         append_missing_evidence(&mut action.evidence, &evidence_action.evidence);
     } else {
         append_missing_evidence(&mut action.evidence, &process_action.evidence);
+    }
+}
+
+fn agent_identity_evidence_action_id(
+    process_action: &SemanticAction,
+    evidence_action: Option<&SemanticAction>,
+) -> Option<String> {
+    process_action
+        .attributes
+        .get(ATTR_AGENT_IDENTITY_EVIDENCE_ACTION_ID)
+        .cloned()
+        .or_else(|| evidence_action.map(|action| action.action_id.clone()))
+}
+
+fn evidence_action_matches_identity(
+    evidence_action_id: Option<&str>,
+    evidence_action: Option<&SemanticAction>,
+) -> bool {
+    match (evidence_action_id, evidence_action) {
+        (Some(evidence_action_id), Some(evidence_action)) => {
+            evidence_action.action_id == evidence_action_id
+        }
+        _ => false,
     }
 }
 

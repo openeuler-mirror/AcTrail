@@ -103,6 +103,11 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ProbeCommand
                     "--payload-tls-sync-socket-mode-octal",
                 )?,
                 sync_match_limit: required_u32(&flags, "--payload-tls-sync-match-limit")?,
+                java_agent_enabled: optional_bool(
+                    &flags,
+                    "--payload-tls-java-agent-enabled",
+                    false,
+                )?,
             },
             payload_stdio: PayloadStdioConfig {
                 enabled: required_bool(&flags, "--payload-stdio-enabled")?,

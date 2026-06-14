@@ -267,6 +267,7 @@ pub struct PayloadTlsConfig {
     pub sync_event_socket_path: PathBuf,
     pub sync_socket_mode: u32,
     pub sync_match_limit: u32,
+    pub java_agent_enabled: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

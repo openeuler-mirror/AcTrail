@@ -7,4 +7,5 @@ mod policy;
 mod state;
 
 pub(super) use factory::RuntimeConfigFactory;
-pub(super) use state::{HookPoint, RuntimeConfig, get, set};
+pub(super) use plan::{RuntimePlan, runtime_plan_for_binary};
+pub(super) use state::{RuntimeConfig, get, set};

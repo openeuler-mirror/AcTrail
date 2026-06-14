@@ -33,8 +33,9 @@ pub(super) fn decide_payload(
         );
         return RuntimeAction::Block;
     }
+    let provider = config.provider_for_symbol(symbol);
     report_payload(direction, symbol, stream_key, sequence, payload);
-    match config.decide(symbol, direction, stream_key, payload) {
+    match config.decide(&provider, symbol, direction, stream_key, payload) {
         Ok(Decision::Allow) => RuntimeAction::Allow,
         Ok(Decision::Block { reason }) => {
             report_decision(
@@ -100,14 +101,17 @@ pub(super) fn report_payload(
     let Some(config) = config::get() else {
         return;
     };
-    send_payload_event(config, direction, symbol, stream_key, sequence, payload);
+    let provider = config.provider_for_symbol(symbol);
+    send_payload_event(
+        config, &provider, direction, symbol, stream_key, sequence, payload,
+    );
     if !config.should_print_payload() {
         return;
     }
     output::event_line(&format!(
         "sync_payload: direction={} provider={} symbol={} stream=0x{:x} bytes={} preview={}\n",
         direction.as_str(),
-        config.provider(),
+        provider,
         symbol,
         stream_key,
         payload.len(),
@@ -127,8 +131,9 @@ pub(super) fn report_decision(
     let Some(config) = config::get() else {
         return;
     };
+    let provider = config.provider_for_symbol(symbol);
     send_decision_event(
-        config, action, direction, symbol, stream_key, sequence, reason,
+        config, &provider, action, direction, symbol, stream_key, sequence, reason,
     );
     if !config.should_print_decision() {
         return;
@@ -136,12 +141,13 @@ pub(super) fn report_decision(
     output::event_line(&format!(
         "sync_decision: action={action} direction={} provider={} symbol={symbol} bytes={bytes} reason={reason}\n",
         direction.as_str(),
-        config.provider(),
+        provider,
     ));
 }
 
 fn send_payload_event(
     config: &config::RuntimeConfig,
+    provider: &str,
     direction: PayloadDirection,
     symbol: &str,
     stream_key: usize,
@@ -155,7 +161,7 @@ fn send_payload_event(
         trace_id,
         pid: process_id(),
         direction,
-        provider: config.provider().to_string(),
+        provider: provider.to_string(),
         symbol: symbol.to_string(),
         stream_key: stream_key as u64,
         sequence,
@@ -166,6 +172,7 @@ fn send_payload_event(
 
 fn send_decision_event(
     config: &config::RuntimeConfig,
+    provider: &str,
     action: &str,
     direction: PayloadDirection,
     symbol: &str,
@@ -180,7 +187,7 @@ fn send_decision_event(
         trace_id,
         pid: process_id(),
         direction,
-        provider: config.provider().to_string(),
+        provider: provider.to_string(),
         symbol: symbol.to_string(),
         stream_key: stream_key as u64,
         sequence,

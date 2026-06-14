@@ -6,20 +6,23 @@ use tls_payload_sync::{
 };
 
 use super::codec::parse_rules;
-use super::plan::current_runtime_plan;
+use super::plan::{RuntimePlan, current_runtime_plan};
 use super::policy::{EventFilter, RedactionMode};
 use super::state::{RuntimeConfig, RuntimeConfigParts};
 
 pub(in crate::runtime) struct RuntimeConfigFactory;
 
+pub(in crate::runtime) struct RuntimeBootstrap {
+    pub(in crate::runtime) config: RuntimeConfig,
+    pub(in crate::runtime) initial_plan: Option<RuntimePlan>,
+}
+
 impl RuntimeConfigFactory {
-    pub(in crate::runtime) fn from_env() -> Result<Option<RuntimeConfig>, String> {
+    pub(in crate::runtime) fn from_env() -> Result<Option<RuntimeBootstrap>, String> {
         if std::env::var_os(ENV_ENABLED).is_none() {
             return Ok(None);
         }
-        let Some(plan) = current_runtime_plan()? else {
-            return Ok(None);
-        };
+        let initial_plan = current_runtime_plan()?;
         let rules = parse_rules(&std::env::var(ENV_RULES).unwrap_or_default())?;
         let max_payload_bytes = required_payload_limit()?;
         let redaction = RedactionMode::parse(
@@ -27,19 +30,17 @@ impl RuntimeConfigFactory {
         )?;
         let events_value = std::env::var(ENV_EVENTS).ok();
         let events = EventFilter::parse(events_value.as_deref())?;
-        let inline_hooks = plan.requires_inline_hooks();
-        Ok(Some(RuntimeConfig::from_parts(RuntimeConfigParts {
-            inline_hooks,
-            binary: plan.binary,
-            provider: plan.provider,
-            points: plan.points,
-            rules,
-            max_payload_bytes,
-            redaction,
-            events,
-            trace_id: optional_trace_id()?,
-            event_client: optional_event_client(max_payload_bytes)?,
-        })))
+        Ok(Some(RuntimeBootstrap {
+            config: RuntimeConfig::from_parts(RuntimeConfigParts {
+                rules,
+                max_payload_bytes,
+                redaction,
+                events,
+                trace_id: optional_trace_id()?,
+                event_client: optional_event_client(max_payload_bytes)?,
+            }),
+            initial_plan,
+        }))
     }
 }
 
