@@ -101,6 +101,33 @@ EXAMPLES = (
             Path("docs/examples/08.full-monitor-validation/operator.conf"),
         ),
     ),
+    ExampleCleanup(
+        name="python-langgraph-agent",
+        operator_configs=(
+            Path("docs/examples/09.python-langgraph-agent/operator.conf"),
+        ),
+        auxiliary_configs=(
+            Path("docs/examples/09.python-langgraph-agent/workload.conf"),
+        ),
+    ),
+    ExampleCleanup(
+        name="java-langchain4j-agent",
+        operator_configs=(
+            Path("docs/examples/10.java-langchain4j-agent/operator.conf"),
+        ),
+        auxiliary_configs=(
+            Path("docs/examples/10.java-langchain4j-agent/workload.conf"),
+        ),
+    ),
+    ExampleCleanup(
+        name="xiaoo-java-langchain4j-agent",
+        operator_configs=(
+            Path("docs/examples/11.xiaoo-java-langchain4j-agent-invocation/operator.conf"),
+        ),
+        auxiliary_configs=(
+            Path("docs/examples/11.xiaoo-java-langchain4j-agent-invocation/workload.conf"),
+        ),
+    ),
 )
 
 

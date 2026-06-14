@@ -1,0 +1,1 @@
+你必须使用 bash 工具执行且只执行这一条命令：timeout {java_timeout_seconds} {java_command_line}。禁止运行交互式程序，禁止自己直接回答，必须等待命令完成并原样返回 stdout/stderr；如果超时或失败也不要重试。

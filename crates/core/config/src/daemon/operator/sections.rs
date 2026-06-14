@@ -123,6 +123,7 @@ pub(super) fn payload_tls_config(node: ConfigNode) -> Result<PayloadTlsConfig, S
         sync_event_socket_path: node.required_path_buf("sync_event_socket_path")?,
         sync_socket_mode: node.required_octal("sync_socket_mode_octal")?,
         sync_match_limit: node.required_positive_u32("sync_match_limit")?,
+        java_agent_enabled: node.optional_bool("java_agent_enabled", false)?,
     })
 }
 

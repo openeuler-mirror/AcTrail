@@ -297,6 +297,91 @@ Expected result: terminal output contains `ACTRAIL_AGENT_TREE_OK`, `agent_comman
 
 This example intentionally enables TLS payload capture because the agent command label is generated from child LLM evidence, not from command names alone.
 
+## Example 09: Python LangGraph Agent
+
+Doc: `docs/examples/09.python-langgraph-agent/README.md`
+
+Purpose: real framework-agent detection for a Python LangGraph workload that calls an external OpenAI-compatible LLM through LangChain's `ChatOpenAI` integration.
+
+Preconditions:
+
+- `DEEPSEEK_API_KEY` is set, or override `ACTRAIL_LLM_API_KEY_ENV` and related provider variables.
+- External network access is available for the LLM provider.
+- LangGraph uses a Python interpreter with `langgraph` and `langchain-openai`. If needed:
+
+```bash
+python3 -m venv /tmp/actrail-langgraph-system-venv
+uv pip install --python /tmp/actrail-langgraph-system-venv/bin/python langgraph langchain-openai
+```
+
+Run:
+
+```bash
+python3 docs/examples/clean.py --example python-langgraph-agent
+LANGGRAPH_PYTHON=/tmp/actrail-langgraph-system-venv/bin/python \
+  python3 docs/examples/09.python-langgraph-agent/run_e2e.py
+```
+
+Expected result: terminal output contains `ACTRAIL_LANGGRAPH_AGENT_COMPLETE`, `python_langgraph_trace_id=<TRACE_ID>`, and `Python LangGraph OpenAI-compatible agent docs e2e complete`. The script validates a real non-empty LLM answer, a complete successful outbound plaintext payload row from the normal runtime TLS path for HTTPS providers or `Syscall/socket-syscall` for plain HTTP provider routes, a complete successful `llm.request` action, and an OTEL `actrail.action.kind=llm.request` span containing the configured model and prompt. A socket row that only contains HTTP proxy `CONNECT <host>:443` is not request body capture. If the workload reaches the real LLM but these AcTrail assertions fail, treat that as the capability gap this case is meant to expose. `llm.response` evidence is printed when present, but it is not a required pass condition.
+
+Provider overrides follow the docs example convention:
+
+```bash
+ACTRAIL_LLM_BASE_URL=https://api.deepseek.com
+ACTRAIL_LLM_CHAT_PATH=/chat/completions
+ACTRAIL_LLM_MODEL=deepseek-chat
+ACTRAIL_LLM_API_KEY_ENV=DEEPSEEK_API_KEY
+ACTRAIL_LLM_PROMPT='Reply exactly with ACTRAIL_LANGGRAPH_DOCS_OK'
+```
+
+## Example 10: Java LangChain4j Agent
+
+Doc: `docs/examples/10.java-langchain4j-agent/README.md`
+
+Purpose: real framework-agent detection for a Java LangChain4j workload packaged as a fat executable jar. The workload calls an external OpenAI-compatible LLM through the JDK HTTPS stack, with AcTrail's launch-time JSSE Java agent enabled.
+
+Preconditions:
+
+- `DEEPSEEK_API_KEY` is set, or override `ACTRAIL_LLM_API_KEY_ENV` and related provider variables.
+- JDK 17+ `java` and `javac` are on `PATH` for both `cargo build --release` and this runner, and `mvn --version` reports a Java 17+ runtime.
+- External network access is available for Maven Central and the LLM provider.
+
+Run:
+
+```bash
+python3 docs/examples/clean.py --example java-langchain4j-agent
+python3 docs/examples/10.java-langchain4j-agent/run_e2e.py
+```
+
+Expected result: terminal output contains `ACTRAIL_LANGCHAIN4J_AGENT_COMPLETE`, `java_langchain4j_trace_id=<TRACE_ID>`, and `Java LangChain4j OpenAI-compatible agent docs e2e complete`. The script validates a real non-empty LLM answer, a complete successful outbound `TlsUserSpace/jsse` plaintext payload row, a complete successful `llm.request` action, and an OTEL `actrail.action.kind=llm.request` span containing the configured model and prompt. `llm.response` evidence is printed when present, but it is not a required pass condition.
+
+The runner builds the shared Java workload fat jar under `docs/examples/_workloads/java-langchain4j-agent/target/` before AcTrail starts, then traces the workload as `java -jar ...`. This case intentionally uses LangChain4j's plain Java `OpenAiChatModel` over the default JDK HTTPS path and does not route traffic through a local relay, use socket fallback, or force HTTP/1.1. AcTrail capture is provided by `payload_tls_java_agent_enabled = true`; if the real LLM call succeeds but AcTrail cannot project `llm.request`, the runner fails and reports the JSSE Java-agent capture path as the likely current gap.
+
+## Example 11: xiaoO Execs Java LangChain4j Agent
+
+Doc: `docs/examples/11.xiaoo-java-langchain4j-agent-invocation/README.md`
+
+Purpose: expose the Java framework Agent child-exec path. The runner follows Example 07 by launching real xiaoO with `actrailctl launch`, then requires the Java child exec and HTTPS/JSSE LLM evidence to produce a complete agent-labeled `command.invocation`. The Java process itself must be a normal xiaoO child exec, not the direct `actrailctl launch` target.
+
+Preconditions:
+
+- `xiaoo` is on `PATH`; `which xiaoo` should print the executable that will be launched.
+- `DEEPSEEK_API_KEY` is set, or override `ACTRAIL_LLM_API_KEY_ENV` and related provider variables.
+- JDK 17+ `java` and `javac` are on `PATH` for both `cargo build --release` and this runner, and `mvn --version` reports a Java 17+ runtime.
+- The LLM provider route is HTTPS. Plain HTTP/socket fallback is not an acceptable pass path for this case.
+- External network access is available for xiaoO, Maven Central, and the LLM provider.
+
+Run:
+
+```bash
+python3 docs/examples/clean.py --example xiaoo-java-langchain4j-agent
+python3 docs/examples/11.xiaoo-java-langchain4j-agent-invocation/run_e2e.py
+```
+
+Expected result: terminal output contains `ACTRAIL_LANGCHAIN4J_AGENT_COMPLETE`, `xiaoo_java_langchain4j_trace_id=<TRACE_ID>`, and `xiaoO Java LangChain4j agent invocation docs e2e complete`. The script validates that xiaoO was launched the same way as Example 07, that a Java child executed the shared Java LangChain4j fat jar, that the Java PID produced a complete successful JSSE/TlsUserSpace `llm.request` containing the configured model and prompt, and that an agent-labeled `command.invocation` points its `agent.invocation.evidence_action_id` at that Java child `llm.request`.
+
+Do not enable socket fallback, manually pass `JAVA_TOOL_OPTIONS`, or make the Java child the direct `actrailctl launch` target to make this case pass. `payload_tls_java_agent_enabled = true` is intentional: it tests trace-scoped JSSE agent injection inherited by a normal xiaoO child exec.
+
 ## Hidden Agent Invocation Regression
 
 Doc: `tests/process/hidden-agent-invocation/README.md`

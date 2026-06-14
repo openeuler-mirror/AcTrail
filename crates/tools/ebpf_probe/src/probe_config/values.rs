@@ -323,6 +323,7 @@ impl ConfigValues {
             sync_event_socket_path: self.required_path("payload_tls_sync_event_socket_path")?,
             sync_socket_mode: self.required_octal("payload_tls_sync_socket_mode_octal")?,
             sync_match_limit: self.required_positive_u32("payload_tls_sync_match_limit")?,
+            java_agent_enabled: self.optional_bool("payload_tls_java_agent_enabled", false)?,
         })
     }
 

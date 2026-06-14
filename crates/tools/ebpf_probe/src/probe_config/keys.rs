@@ -33,6 +33,7 @@ pub(super) fn live_config_keys() -> BTreeSet<&'static str> {
         "payload_tls_sync_event_socket_path",
         "payload_tls_sync_socket_mode_octal",
         "payload_tls_sync_match_limit",
+        "payload_tls_java_agent_enabled",
         "seccomp_notify_enabled",
         "seccomp_notify_reserved_listener_fd",
         "process_seccomp_enabled",

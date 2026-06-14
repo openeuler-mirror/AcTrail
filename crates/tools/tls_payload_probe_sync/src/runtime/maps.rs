@@ -1,5 +1,6 @@
 //! `/proc/self/maps` address resolution.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 pub(in crate::runtime) fn runtime_address(
@@ -49,6 +50,21 @@ pub(super) fn is_writable_range(address: usize, length: usize) -> bool {
         }
     }
     false
+}
+
+pub(super) fn executable_mapped_files() -> Result<Vec<PathBuf>, String> {
+    let maps = std::fs::read_to_string("/proc/self/maps")
+        .map_err(|error| format!("read /proc/self/maps: {error}"))?;
+    let mut files = BTreeSet::new();
+    for line in maps.lines() {
+        let Some(entry) = MapEntry::parse(line) else {
+            continue;
+        };
+        if entry.executable && entry.path.is_absolute() {
+            files.insert(entry.path);
+        }
+    }
+    Ok(files.into_iter().collect())
 }
 
 struct MapEntry {

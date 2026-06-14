@@ -15,10 +15,13 @@ use tls_payload_sync::{
 use tls_probe_point_finder::ProbePointPlan;
 use tls_probe_point_finder::fast::{ArchFilter, FastProbeRequest, ProviderFilter, SourceFilter};
 
+use super::java_agent::{java_agent_env_required, maybe_append_java_agent_env};
+
 pub(super) struct SyncLaunch {
     pub(super) command: Vec<OsString>,
     plans: Vec<ProbePointPlan>,
     preload_libraries: Vec<PathBuf>,
+    java_agent_env_required: bool,
 }
 
 pub(super) fn sync_launch(
@@ -42,10 +45,12 @@ pub(super) fn sync_launch(
     let runtime_library = runtime_library(config)?;
     let plans = bundle_plans(launch_plan, config, agent_commands);
     let preload_libraries = sync_preload_libraries(&runtime_library);
+    let java_agent_env_required = java_agent_env_required(config);
     Ok(SyncLaunch {
         command,
         plans,
         preload_libraries,
+        java_agent_env_required,
     })
 }
 
@@ -72,6 +77,7 @@ pub(super) fn sync_launch_envs(
         preload_env_value_for_libraries(&launch.preload_libraries)
             .map_err(|error| error.to_string())?,
     ));
+    maybe_append_java_agent_env(launch.java_agent_env_required, &mut envs)?;
     Ok(envs)
 }
 
