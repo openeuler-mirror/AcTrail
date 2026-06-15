@@ -2,6 +2,8 @@
 
 #[path = "view/action_tree_projection.rs"]
 mod action_tree_projection;
+#[path = "view/projection_cache.rs"]
+mod projection_cache;
 #[path = "view/action_tree_roles.rs"]
 mod action_tree_roles;
 #[path = "view/actions.rs"]
@@ -239,9 +241,17 @@ pub fn trace_diagnostics_json(
     Ok(format!("{{\"diagnostics\":[{}]}}", rows.join(",")))
 }
 
+pub fn clear_cache_json() -> Result<String, String> {
+    Ok(projection_cache::clear_projection_cache_json())
+}
+
 pub fn action_tree_json(storage_config: &StorageConfig, trace_id: u64) -> Result<String, String> {
     let mut storage = open_storage(storage_config)?;
-    actions::action_tree_json(storage.as_mut(), TraceId::new(trace_id))
+    actions::action_tree_json(
+        storage_config.path(),
+        storage.as_mut(),
+        TraceId::new(trace_id),
+    )
 }
 
 pub fn action_tree_root_json(

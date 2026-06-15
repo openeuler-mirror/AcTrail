@@ -195,7 +195,7 @@
 .wf-row {
   display: grid;
   grid-template-columns: var(--wf-gutter-width) minmax(0, 1fr);
-  align-items: center;
+  align-items: stretch;
   min-height: 40px;
   border-bottom: 1px solid var(--surface-muted);
   cursor: pointer;
@@ -422,5 +422,120 @@
 }
 
 .waterfall-panel {
-  --wf-gutter-width: 300px;
+  --wf-gutter-width: 380px;
+}
+
+.wf-llm-scope {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #ede9fe;
+  border: 1px solid #c4b5fd;
+  color: #5b21b6;
+  font-size: 9px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.wf-agent-context {
+  min-width: 0;
+  overflow: hidden;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wf-phase-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 4px;
+}
+
+.wf-phase-key {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.wf-llm-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 2px;
+}
+
+.wf-llm-message {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  padding: 3px 6px;
+  border-radius: 6px;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.wf-llm-message-request {
+  background: #f3f6f8;
+  border: 1px solid #dde4e8;
+  color: #334155;
+}
+
+.wf-llm-message-response {
+  background: #eef7f5;
+  border: 1px solid #cfe0dd;
+  color: var(--teal-deep);
+}
+
+.wf-llm-message-label {
+  flex: 0 0 auto;
+  min-width: 22px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.72;
+}
+
+.wf-llm-message-text {
+  min-width: 0;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+}
+
+.wf-bar-phase {
+  height: 14px;
+}
+
+.wf-bar-request {
+  --wf-color: #818cf8;
+  background: #818cf8;
+}
+
+.wf-bar-response {
+  --wf-color: #4338ca;
+  background: #4338ca;
+}
+
+.wf-bar-ttft {
+  --wf-color: #c7d2fe;
+  background: repeating-linear-gradient(
+    45deg,
+    #eef2ff 0,
+    #eef2ff 4px,
+    #c7d2fe 4px,
+    #c7d2fe 8px
+  );
 }

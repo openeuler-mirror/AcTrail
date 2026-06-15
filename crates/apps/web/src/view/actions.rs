@@ -1,6 +1,7 @@
 //! Semantic action tree JSON for the web UI.
 
 use std::collections::BTreeSet;
+use std::path::Path;
 
 use model_core::ids::TraceId;
 use semantic_action::{SemanticAction, SemanticActionKind, SemanticActionLink, SemanticEvidence};
@@ -11,6 +12,7 @@ use storage_core::{
 
 use super::action_tree_projection::{ActionDisplayProjection, DisplayChild};
 use super::action_tree_roles::{DISPLAY_PARENT_ROLE_STRS, NODE_ID_AGENT, ROOT_LINK_ROLE_STRS};
+use super::projection_cache;
 use crate::json;
 
 const HEAVY_ATTRIBUTE_KEYS: &[&str] = &[
@@ -30,10 +32,15 @@ const HEAVY_ATTRIBUTE_SUFFIXES: &[&str] = &[
 ];
 
 pub(super) fn action_tree_json(
+    storage_path: &Path,
     storage: &mut dyn StorageBackend,
     trace_id: TraceId,
 ) -> Result<String, String> {
-    let projection = ActionDisplayProjection::load(storage, trace_id)?;
+    let projection = projection_cache::cached_action_display_projection(
+        storage_path,
+        trace_id,
+        || ActionDisplayProjection::load(storage, trace_id),
+    )?;
     let roots = projection
         .root_action_ids
         .iter()
@@ -42,7 +49,7 @@ pub(super) fn action_tree_json(
     let actions = projection
         .actions
         .iter()
-        .map(action_json_lite)
+        .map(action_json)
         .collect::<Vec<_>>();
     let links = projection.links.iter().map(link_json).collect::<Vec<_>>();
     Ok(format!(

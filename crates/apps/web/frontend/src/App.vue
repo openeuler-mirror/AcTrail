@@ -67,10 +67,11 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, markRaw, onMounted, shallowRef, ref, watch } from 'vue';
 import { RefreshCw, Search } from '@lucide/vue';
 
 import {
+  clearServerCache,
   listTraces,
   readActionTree,
   readActionTreeRoot,
@@ -89,10 +90,10 @@ const tabs = TAB_DEFINITIONS;
 const activeTab = ref(TAB_IDS.overview);
 const traces = ref([]);
 const selectedTraceId = ref(null);
-const traceDetail = ref(null);
+const traceDetail = shallowRef(null);
 const actionTree = ref(emptyActionTree());
-const commands = ref(emptyCommands());
-const waterfall = ref(emptyWaterfall());
+const commands = shallowRef(emptyCommands());
+const waterfall = shallowRef(emptyWaterfall());
 const query = ref('');
 const error = ref('');
 const loading = ref(false);
@@ -170,6 +171,7 @@ watch(activeTab, async () => {
 async function refresh() {
   try {
     error.value = '';
+    await clearServerCache();
     const data = await listTraces();
     traces.value = data.traces ?? [];
     if (!selectedTraceId.value && traces.value.length) {
@@ -266,7 +268,10 @@ async function ensureTracePart(traceId, key, loader) {
   try {
     const data = await loader(traceId);
     if (activeTracePartLoad === token && selectedTraceId.value === traceId) {
-      traceDetail.value = { ...(traceDetail.value ?? {}), ...data };
+      traceDetail.value = {
+        ...(traceDetail.value ?? {}),
+        ...freezeTracePayload(data),
+      };
     }
   } catch (err) {
     if (activeTracePartLoad === token && selectedTraceId.value === traceId) {
@@ -349,8 +354,8 @@ function emptyWaterfall() {
 
 function withWaterfallTrace(data, traceId) {
   return {
-    actions: data.actions ?? [],
-    links: data.links ?? [],
+    actions: freezeTraceList(data.actions),
+    links: freezeTraceList(data.links),
     roots: data.roots ?? [],
     loadedTraceId: traceId,
   };
@@ -358,10 +363,27 @@ function withWaterfallTrace(data, traceId) {
 
 function withCommandTrace(commandData, traceId) {
   return {
-    actions: commandData.actions ?? [],
-    links: commandData.links ?? [],
+    actions: freezeTraceList(commandData.actions),
+    links: freezeTraceList(commandData.links),
     loadedTraceId: traceId,
   };
+}
+
+function freezeTraceList(items) {
+  return (items ?? []).map((item) => markRaw(item));
+}
+
+function freezeTracePayload(data) {
+  if (!data || typeof data !== 'object') {
+    return data;
+  }
+  const next = { ...data };
+  for (const key of Object.keys(next)) {
+    if (Array.isArray(next[key])) {
+      next[key] = freezeTraceList(next[key]);
+    }
+  }
+  return next;
 }
 
 function eventBackedTab(tab) {
