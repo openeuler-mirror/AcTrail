@@ -293,13 +293,7 @@ function metricRows(action, llmMessages = null) {
 }
 
 function rowFromNode(node, depth, expanded) {
-  const llmMessages =
-    node.llmMessages ??
-    (node.kind === 'llm.request'
-      ? buildLlmMessages(node.action, null)
-      : node.kind === 'llm.response'
-        ? buildLlmMessages(null, node.action)
-        : null);
+  const llmMessages = ensureLlmMessages(node);
   return {
     id: node.id,
     depth,
@@ -454,11 +448,12 @@ function subtreeMatchesQuery(node, query) {
 }
 
 function nodeMatchesQuery(node, query) {
+  const messages = ensureLlmMessages(node);
   const llmText = [
-    node.llmMessages?.requestFull,
-    node.llmMessages?.responseFull,
-    node.llmMessages?.requestPreview,
-    node.llmMessages?.responsePreview,
+    messages?.requestFull,
+    messages?.responseFull,
+    messages?.requestPreview,
+    messages?.responsePreview,
     node.llmContext?.parentLabel,
     node.llmContext?.scopeLabel,
   ];
@@ -476,9 +471,28 @@ function attachLlmCallDetails(node, nodeById, parentByChild, window) {
   const responseAction =
     node.children.find((child) => child.kind === 'llm.response')?.action ??
     actionById(nodeById, node.action.attributes?.['llm.call.response_action_id']);
-  node.llmMessages = buildLlmMessages(requestAction, responseAction);
+  node.llmRequestAction = requestAction;
+  node.llmResponseAction = responseAction;
   node.llmPhases = buildLlmPhases(requestAction, responseAction, window);
   node.llmContext = resolveLlmCallContext(node, nodeById, parentByChild);
+}
+
+function ensureLlmMessages(node) {
+  if (Object.prototype.hasOwnProperty.call(node, 'llmMessages')) {
+    return node.llmMessages;
+  }
+  let messages = null;
+  if (node.kind === 'llm.call') {
+    messages = buildLlmMessages(node.llmRequestAction, node.llmResponseAction);
+  } else if (node.kind === 'llm.request') {
+    const requestFull = llmRequestMessage(node.action);
+    messages = buildLlmMessages(node.action, null, requestFull, '');
+  } else if (node.kind === 'llm.response') {
+    const responseFull = llmResponseMessage(node.action);
+    messages = buildLlmMessages(null, node.action, '', responseFull);
+  }
+  node.llmMessages = messages;
+  return messages;
 }
 
 function buildLlmPhases(requestAction, responseAction, window) {
@@ -600,6 +614,92 @@ export function llmBarSegments(row, axisWindow) {
     return [phaseSegment('response', { startOffsetMs: row.startOffsetMs, durMs: row.durMs, live: row.live }, startMs, spanMs, row.live)].filter(Boolean);
   }
   return [];
+}
+
+function barInstantRow(row, axisWindow) {
+  if (row.live || row.durMs === null) {
+    return false;
+  }
+  const { spanMs } = axisWindow;
+  if (!spanMs) {
+    return false;
+  }
+  return (row.durMs / spanMs) * 100 < 1.5;
+}
+
+function barStyleForRow(row, axisWindow) {
+  const { startMs, spanMs } = axisWindow;
+  const left = clampPct(((row.startOffsetMs - startMs) / spanMs) * 100);
+  if (barInstantRow(row, axisWindow)) {
+    return { left: `${left}%`, width: '3px' };
+  }
+  const endMs = row.live ? startMs + spanMs : row.startOffsetMs + (row.durMs ?? 0);
+  const width = Math.max(((endMs - row.startOffsetMs) / spanMs) * 100, 0.5);
+  return { left: `${left}%`, width: `${Math.min(width, 100 - left)}%` };
+}
+
+function barClassForRow(row) {
+  if (row.kind === 'llm.request') {
+    return 'wf-bar-request';
+  }
+  if (row.kind === 'llm.response') {
+    return 'wf-bar-response';
+  }
+  return `wf-group-${row.kindGroup}`;
+}
+
+function barTitleForRow(row) {
+  const lines = [row.label];
+  if (row.target) {
+    lines.push(row.target);
+  }
+  if (row.llmRequestPreview) {
+    lines.push(`request: ${row.llmMessages?.requestFull ?? row.llmRequestPreview}`);
+  }
+  if (row.llmResponsePreview) {
+    lines.push(`response: ${row.llmMessages?.responseFull ?? row.llmResponsePreview}`);
+  }
+  if (row.llmScope) {
+    lines.push(`scope: ${row.llmScope}`);
+  }
+  if (row.agentContext) {
+    lines.push(`parent: ${row.agentContext}`);
+  }
+  if (row.llmPhases?.gap?.durMs) {
+    lines.push(`ttft: ${formatOffset(row.llmPhases.gap.durMs)}`);
+  }
+  lines.push(`start +${formatOffset(row.startOffsetMs)}`);
+  for (const metric of row.metrics) {
+    lines.push(`${metric.label}: ${metric.value}`);
+  }
+  lines.push(`status: ${row.status}`);
+  return lines.join('\n');
+}
+
+export function decorateWaterfallRows(rows, axisWindow) {
+  return rows.map((row) => {
+    const segments = llmBarSegments(row, axisWindow).map((segment) => ({
+      ...segment,
+      instant: segment.kind !== 'ttft' && isInstantBarSegment(segment),
+    }));
+    return {
+      ...row,
+      barSegments: segments,
+      barStyle: barStyleForRow(row, axisWindow),
+      barClass: barClassForRow(row),
+      barInstant: barInstantRow(row, axisWindow),
+      barTitle: barTitleForRow(row),
+    };
+  });
+}
+
+function isInstantBarSegment(segment) {
+  const width = Number.parseFloat(String(segment.style.width));
+  return Number.isFinite(width) && width < 1.5;
+}
+
+export function emptyWaterfallModel() {
+  return { roots: [], window: emptyWindow(), groups: [], totalActions: 0 };
 }
 
 function phaseSegment(kind, phase, startMs, spanMs, live) {

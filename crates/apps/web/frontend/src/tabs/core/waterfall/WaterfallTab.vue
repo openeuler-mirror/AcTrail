@@ -68,6 +68,7 @@
         <div
           v-for="row in rows"
           :key="row.id"
+          v-memo="[row.id, row.expanded, row.barTitle, selectedDetailId, axisWindowKey]"
           class="wf-row"
           :class="{ selected: row.id === selectedDetailId }"
           @click="select(row)"
@@ -132,9 +133,9 @@
             </button>
           </div>
           <div class="wf-track">
-            <template v-if="barSegments(row).length">
+            <template v-if="row.barSegments?.length">
               <div
-                v-for="(segment, index) in barSegments(row)"
+                v-for="(segment, index) in row.barSegments"
                 :key="`${row.id}-${segment.kind}-${index}`"
                 class="wf-bar wf-bar-phase"
                 :class="[
@@ -144,19 +145,19 @@
                   { instant: segment.instant },
                 ]"
                 :style="segment.style"
-                :title="barTitle(row)"
+                :title="row.barTitle"
               />
             </template>
             <div
               v-else
               class="wf-bar"
               :class="[
-                barClass(row),
+                row.barClass,
                 `wf-status-${row.status}`,
-                { live: row.live, instant: barInstant(row) },
+                { live: row.live, instant: row.barInstant },
               ]"
-              :style="barStyle(row)"
-              :title="barTitle(row)"
+              :style="row.barStyle"
+              :title="row.barTitle"
             />
           </div>
         </div>
@@ -170,6 +171,7 @@
       </div>
     </div>
 
+    <div v-else-if="modelBuilding && hasWaterfallData" class="waterfall-empty">Building chart…</div>
     <div v-else class="waterfall-empty">No actions to chart</div>
     </section>
     <DetailPanel :detail="selectedDetail" :trace-id="traceKey" @clear="clearDetail" />
@@ -177,7 +179,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Search, ZoomIn } from '@lucide/vue';
 
 import DetailPanel from '../../../components/DetailPanel.vue';
@@ -189,12 +191,13 @@ import {
   buildWaterfall,
   collectDefaultExpandedIds,
   collectParentIds,
+  decorateWaterfallRows,
   defaultActiveGroups,
+  emptyWaterfallModel,
   findWaterfallNode,
   flattenMatchingWaterfall,
   flattenVisibleWaterfall,
   formatOffset,
-  llmBarSegments,
   subtreeWindow,
   windowLabel,
 } from './model';
@@ -228,8 +231,66 @@ const zoomId = ref(null);
 const visibleLimit = ref(TABLE_RENDER_LIMITS.initialRows);
 const selectedDetailId = ref(null);
 const selectedDetail = ref(null);
+const model = ref(emptyWaterfallModel());
+const modelBuilding = ref(false);
+let modelBuildToken = 0;
+let modelIdleHandle = null;
 
-const model = computed(() => buildWaterfall(props.waterfall?.actions, props.waterfall?.links));
+const hasWaterfallData = computed(
+  () => (props.waterfall?.actions?.length ?? 0) > 0 || (props.waterfall?.links?.length ?? 0) > 0,
+);
+
+function scheduleWaterfallBuild(actions, links) {
+  modelBuildToken += 1;
+  const token = modelBuildToken;
+  if (modelIdleHandle !== null) {
+    if (typeof cancelIdleCallback === 'function') {
+      cancelIdleCallback(modelIdleHandle);
+    } else {
+      clearTimeout(modelIdleHandle);
+    }
+    modelIdleHandle = null;
+  }
+  if (!actions?.length && !links?.length) {
+    model.value = emptyWaterfallModel();
+    modelBuilding.value = false;
+    return;
+  }
+  modelBuilding.value = true;
+  const runBuild = () => {
+    modelIdleHandle = null;
+    if (token !== modelBuildToken) {
+      return;
+    }
+    model.value = buildWaterfall(actions, links);
+    modelBuilding.value = false;
+  };
+  if (typeof requestIdleCallback === 'function') {
+    modelIdleHandle = requestIdleCallback(runBuild, { timeout: 120 });
+  } else {
+    modelIdleHandle = setTimeout(runBuild, 0);
+  }
+}
+
+watch(
+  () => [props.waterfall?.actions, props.waterfall?.links],
+  ([actions, links]) => {
+    scheduleWaterfallBuild(actions, links);
+  },
+  { immediate: true },
+);
+
+onBeforeUnmount(() => {
+  modelBuildToken += 1;
+  if (modelIdleHandle !== null) {
+    if (typeof cancelIdleCallback === 'function') {
+      cancelIdleCallback(modelIdleHandle);
+    } else {
+      clearTimeout(modelIdleHandle);
+    }
+  }
+});
+
 const roots = computed(() => model.value.roots);
 const groups = computed(() => model.value.groups);
 const window = computed(() => model.value.window);
@@ -256,6 +317,10 @@ const axisWindow = computed(() =>
     ? subtreeWindow(zoomNode.value, window.value.spanMs)
     : { startMs: 0, spanMs: window.value.spanMs },
 );
+const axisWindowKey = computed(() => {
+  const { startMs, spanMs } = axisWindow.value;
+  return `${startMs}:${spanMs}`;
+});
 
 const ticks = computed(() => {
   const { startMs, spanMs } = axisWindow.value;
@@ -265,11 +330,12 @@ const ticks = computed(() => {
   });
 });
 
-const allRows = computed(() =>
-  queryActive.value
+const allRows = computed(() => {
+  const flat = queryActive.value
     ? flattenMatchingWaterfall(displayRoots.value, normalizedQuery.value, activeGroups.value)
-    : flattenVisibleWaterfall(displayRoots.value, expandedIds.value, activeGroups.value),
-);
+    : flattenVisibleWaterfall(displayRoots.value, expandedIds.value, activeGroups.value);
+  return decorateWaterfallRows(flat, axisWindow.value);
+});
 
 const totalRows = computed(() => allRows.value.length);
 const rows = computed(() => allRows.value.slice(0, visibleLimit.value));
@@ -278,92 +344,18 @@ const nextBatchSize = computed(() => Math.min(TABLE_RENDER_LIMITS.rowBatchSize, 
 const hasMoreRows = computed(() => remainingRows.value > 0 && nextBatchSize.value > 0);
 
 watch(
-  () => props.waterfall,
-  () => {
+  model,
+  (nextModel) => {
     clearDetail();
-    expandedIds.value = new Set(collectDefaultExpandedIds(roots.value));
-    activeGroups.value = defaultActiveGroups(groups.value);
+    expandedIds.value = new Set(collectDefaultExpandedIds(nextModel.roots));
+    activeGroups.value = defaultActiveGroups(nextModel.groups);
     zoomId.value = null;
   },
-  { immediate: true },
 );
 
 watch([displayRoots, normalizedQuery, activeGroups], () => {
   visibleLimit.value = TABLE_RENDER_LIMITS.initialRows;
 });
-
-function barSegments(row) {
-  const segments = llmBarSegments(row, axisWindow.value);
-  return segments.map((segment) => ({
-    ...segment,
-    instant: segment.kind !== 'ttft' && isInstantSegment(segment),
-  }));
-}
-
-function isInstantSegment(segment) {
-  const width = Number.parseFloat(String(segment.style.width));
-  return Number.isFinite(width) && width < 1.5;
-}
-
-function barClass(row) {
-  if (row.kind === 'llm.request') {
-    return 'wf-bar-request';
-  }
-  if (row.kind === 'llm.response') {
-    return 'wf-bar-response';
-  }
-  return `wf-group-${row.kindGroup}`;
-}
-
-function barStyle(row) {
-  const { startMs, spanMs } = axisWindow.value;
-  const left = clampPct(((row.startOffsetMs - startMs) / spanMs) * 100);
-  if (barInstant(row)) {
-    return { left: `${left}%`, width: '3px' };
-  }
-  const endMs = row.live ? startMs + spanMs : row.startOffsetMs + (row.durMs ?? 0);
-  const width = Math.max(((endMs - row.startOffsetMs) / spanMs) * 100, 0.5);
-  return { left: `${left}%`, width: `${Math.min(width, 100 - left)}%` };
-}
-
-function barInstant(row) {
-  if (row.live || row.durMs === null) {
-    return false;
-  }
-  const { spanMs } = axisWindow.value;
-  if (!spanMs) {
-    return false;
-  }
-  return (row.durMs / spanMs) * 100 < 1.5;
-}
-
-function barTitle(row) {
-  const lines = [row.label];
-  if (row.target) {
-    lines.push(row.target);
-  }
-  if (row.llmRequestPreview) {
-    lines.push(`request: ${row.llmMessages?.requestFull ?? row.llmRequestPreview}`);
-  }
-  if (row.llmResponsePreview) {
-    lines.push(`response: ${row.llmMessages?.responseFull ?? row.llmResponsePreview}`);
-  }
-  if (row.llmScope) {
-    lines.push(`scope: ${row.llmScope}`);
-  }
-  if (row.agentContext) {
-    lines.push(`parent: ${row.agentContext}`);
-  }
-  if (row.llmPhases?.gap?.durMs) {
-    lines.push(`ttft: ${formatOffset(row.llmPhases.gap.durMs)}`);
-  }
-  lines.push(`start +${formatOffset(row.startOffsetMs)}`);
-  for (const metric of row.metrics) {
-    lines.push(`${metric.label}: ${metric.value}`);
-  }
-  lines.push(`status: ${row.status}`);
-  return lines.join('\n');
-}
 
 function select(row) {
   selectedDetailId.value = row.id;
@@ -432,10 +424,6 @@ function zoomTo(row) {
 
 function resetZoom() {
   zoomId.value = null;
-}
-
-function clampPct(value) {
-  return Math.min(Math.max(value, 0), 100);
 }
 </script>
 <style src="./waterfall.css" scoped></style>
