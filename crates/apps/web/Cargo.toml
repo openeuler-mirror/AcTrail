@@ -13,10 +13,6 @@ path = "src/main.rs"
 config_core = { path = "../../core/config" }
 model_core = { path = "../../core/model" }
 semantic_action = { path = "../../contracts/semantic_action" }
-sqlite_storage = { path = "../../adapters/storage/sqlite" }
-store_read_contract = { path = "../../contracts/store/read" }
-store_snapshot_contract = { path = "../../contracts/store/snapshot" }
+storage_core = { path = "../../storage/core" }
+storage_factory = { path = "../../storage/factory" }
 flate2 = "1.1"
-
-[dev-dependencies]
-store_write_contract = { path = "../../contracts/store/write" }

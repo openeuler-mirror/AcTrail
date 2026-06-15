@@ -77,8 +77,7 @@ fn run_foreground(config: &OperatorConfig) -> Result<(), String> {
     profiles.insert_capture_profile(config.capture_profile.clone());
     let mut server = match &config.provider_rule_set {
         Some(provider_rule_set) => LocalDaemonServer::build_with_provider_rule_set(
-            &config.storage_path,
-            config.storage_busy_timeout_ms,
+            &config.storage,
             profiles,
             config.ebpf_config.clone(),
             config.payload_config.clone(),
@@ -88,13 +87,12 @@ fn run_foreground(config: &OperatorConfig) -> Result<(), String> {
             config.agent_invocation.clone(),
             config.application_protocol.clone(),
             config.resource_metrics.clone(),
-            config.live_otel_export.clone(),
+            config.export_runtime.clone(),
             config.enforcement.clone(),
             provider_rule_set,
         ),
         None => LocalDaemonServer::build(
-            &config.storage_path,
-            config.storage_busy_timeout_ms,
+            &config.storage,
             profiles,
             config.ebpf_config.clone(),
             config.payload_config.clone(),
@@ -104,7 +102,7 @@ fn run_foreground(config: &OperatorConfig) -> Result<(), String> {
             config.agent_invocation.clone(),
             config.application_protocol.clone(),
             config.resource_metrics.clone(),
-            config.live_otel_export.clone(),
+            config.export_runtime.clone(),
             config.enforcement.clone(),
         ),
     }
@@ -115,6 +113,7 @@ fn run_foreground(config: &OperatorConfig) -> Result<(), String> {
     let result = server.serve_forever_until(
         &config.socket_path,
         config.socket_permissions,
+        config.control_pending_connection_max,
         signals::shutdown_requested,
         || {
             socket_bound = true;
@@ -123,7 +122,7 @@ fn run_foreground(config: &OperatorConfig) -> Result<(), String> {
             println!(
                 "daemon listening socket={} storage={}",
                 config.socket_path.display(),
-                config.storage_path.display()
+                config.storage.path().display()
             );
             Ok(())
         },

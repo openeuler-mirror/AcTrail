@@ -18,6 +18,8 @@ enum actrail_socket_payload_syscall {
     ACTRAIL_SOCKET_SYSCALL_WRITE = 2,
     ACTRAIL_SOCKET_SYSCALL_SENDTO = 3,
     ACTRAIL_SOCKET_SYSCALL_RECVFROM = 4,
+    ACTRAIL_SOCKET_SYSCALL_WRITEV = 5,
+    ACTRAIL_SOCKET_SYSCALL_SENDMSG = 6,
 };
 
 enum actrail_socket_payload_flags {

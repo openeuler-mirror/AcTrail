@@ -68,7 +68,7 @@ sudo ./target/release/actraild init
 
 The default path is `/etc/actrail/actraild.conf`. `actrailctl init` performs the same initialization. If the file already exists, `init` loads and validates it, reports success or the validation error, and exits without rewriting it. For a local test config, pass `--output local/operator.conf` or `--config local/operator.conf`.
 
-Every runtime constant is explicit in the config. The generated default enables broad collection, but leaves blocking/enforcement disabled.
+Every runtime constant is explicit in the config. The generated default enables broad collection, but leaves blocking/enforcement disabled. Its socket plaintext fallback listens to `write`, `writev`, `sendto`, and `sendmsg`, so plain HTTP request bodies sent through vectored socket writes can produce `llm.request` evidence.
 
 ## 4. Clean Local Runtime Artifacts
 
@@ -85,7 +85,7 @@ python3 docs/examples/clean.py --example <example-name>
 ```
 
 `clean` only removes artifacts declared by the config or example metadata. It is meant to replace repeated manual `/tmp/actrail-*` deletion.
-When `otel_live_export_enabled = true`, the configured `otel_live_export_path` is also cleaned.
+When `[export] enabled = true`, enabled `otel-jsonl` route output files are also cleaned.
 
 ## 5. Start And Check The Daemon
 
@@ -126,7 +126,7 @@ Launch a child under AcTrail:
   <command> <args>
 ```
 
-Use `launch` for `tls-sync` TLS capture and process seccomp agent-invocation observation. Use `track-add` only when observing an already-running process is sufficient. The sync TLS runtime, event socket, and probe plan must be prepared before the target `exec`.
+Use `launch` for `tls-sync` TLS capture and process seccomp agent-invocation observation. Use `track-add` only when observing an already-running process is sufficient. The sync TLS runtime, event socket, and probe plan must be prepared before the target `exec`. Set `payload_tls_java_agent_enabled = true` only for Java JSSE HTTPS capture; the default is `false`.
 
 ## 7. Inspect A Trace
 
@@ -184,11 +184,20 @@ Export OpenTelemetry OTLP JSON:
 Payload bytes/text appear in JSON export only when the operator config enables `export_payload_bytes_enabled` or `export_payload_text_enabled`. Offline OTEL export emits semantic action spans at export time. For live span streaming, enable:
 
 ```conf
-otel_live_export_enabled = true
-otel_live_export_path = /tmp/actrail-live-spans.otlp.jsonl
-otel_live_export_overwrite_enabled = false
-otel_live_export_queue_capacity = 1024
-otel_live_export_flush_every_spans = 1
+[export]
+enabled = true
+
+[[export.routes]]
+name = "live-otel"
+kind = "otel-jsonl"
+delivery = "best-effort"
+enabled = true
+
+[export.routes.otel-jsonl.live-otel]
+path = "/tmp/actrail-live-spans.otlp.jsonl"
+overwrite_enabled = false
+queue_capacity = 1024
+flush_every_spans = 1
 ```
 
 The live file is compact JSONL: one OTLP JSON document per line, one span per document. Queue-full drops are reported as `RuntimeDropped` diagnostics; writer I/O errors fail the daemon instead of silently falling back.

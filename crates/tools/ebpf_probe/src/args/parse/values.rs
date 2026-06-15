@@ -6,9 +6,9 @@ use std::path::PathBuf;
 use config_core::daemon::{
     DisabledOrPath, EnforcementBackend, EnforcementDecision, EnforcementMarkStrategy,
     EnforcementScope, MemlockRlimit, PayloadRedactionPolicy, PayloadSocketCaptureBackend,
-    PayloadSocketSeccompSyscall, PayloadTlsCaptureBackend, PayloadTlsLibrary,
-    PayloadTlsLibraryPath, PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource,
-    PayloadTlsSyncRuntimeLibraryPath, SseDataPolicy,
+    PayloadSocketSeccompSyscall, PayloadStdioStorageMode, PayloadTlsCaptureBackend,
+    PayloadTlsLibrary, PayloadTlsLibraryPath, PayloadTlsResolver, PayloadTlsSeccompSyscall,
+    PayloadTlsSource, PayloadTlsSyncRuntimeLibraryPath, SseDataPolicy,
 };
 
 use super::super::MmapWorkloadConfig;
@@ -276,6 +276,15 @@ pub(super) fn required_payload_redaction_policy(
 ) -> Result<PayloadRedactionPolicy, String> {
     required(flags, flag)?
         .parse::<PayloadRedactionPolicy>()
+        .map_err(|error| format!("invalid {flag}: {error}"))
+}
+
+pub(super) fn required_payload_stdio_storage_mode(
+    flags: &BTreeMap<String, String>,
+    flag: &'static str,
+) -> Result<PayloadStdioStorageMode, String> {
+    required(flags, flag)?
+        .parse::<PayloadStdioStorageMode>()
         .map_err(|error| format!("invalid {flag}: {error}"))
 }
 

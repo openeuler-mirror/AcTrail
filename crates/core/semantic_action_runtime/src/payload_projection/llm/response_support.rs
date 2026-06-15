@@ -6,12 +6,13 @@ use model_core::payload::{
     PayloadOperationCompletionState, PayloadSegment, PayloadSourceBoundary, PayloadTruncationState,
 };
 use semantic_action::{
-    SemanticActionCompleteness, SemanticActionStatus, SemanticEvidence, SemanticEvidenceKind,
+    LlmTokenUsage, SemanticActionCompleteness, SemanticActionStatus, SemanticEvidence,
+    SemanticEvidenceKind,
 };
 
 use crate::payload_projection::http::HttpResponseParts;
 
-use super::body::{LlmResponseBody, TokenUsage};
+use super::body::LlmResponseBody;
 use super::stream::PayloadStreamGroupKey;
 
 pub(super) fn llm_response_attributes(
@@ -147,6 +148,7 @@ pub(super) fn raw_llm_response_attributes(
         "payload.operation_id".to_string(),
         first.operation_id.to_string(),
     );
+    attributes.insert("payload.sequence".to_string(), first.sequence.to_string());
     attributes.insert(
         "payload.operation_ids".to_string(),
         payload_operation_ids(segments),
@@ -164,7 +166,7 @@ pub(super) fn raw_llm_response_attributes(
     attributes
 }
 
-fn insert_token_usage_attributes(attributes: &mut BTreeMap<String, String>, usage: &TokenUsage) {
+fn insert_token_usage_attributes(attributes: &mut BTreeMap<String, String>, usage: &LlmTokenUsage) {
     insert_token_count(
         attributes,
         "llm.response.prompt_tokens",

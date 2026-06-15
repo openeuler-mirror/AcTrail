@@ -28,18 +28,15 @@ impl CleanArtifacts {
         let mut entries = vec![
             CleanEntry::file_like("socket_path", config.socket_path.clone()),
             CleanEntry::file_like("pid_file", config.pid_file.clone()),
-            CleanEntry::file_like("storage_path", config.storage_path.clone()),
+            CleanEntry::file_like("storage_sqlite_path", config.storage.path().to_path_buf()),
             CleanEntry::file_like("log_path", config.log_path.clone()),
             CleanEntry::directory(
                 "export_directory",
                 config.export_config.output_directory.clone(),
             ),
         ];
-        if config.live_otel_export.enabled {
-            entries.push(CleanEntry::file_like(
-                "otel_live_export_path",
-                config.live_otel_export.path.clone(),
-            ));
+        for output_file in config.export_runtime.enabled_output_files() {
+            entries.push(CleanEntry::file_like(output_file.label, output_file.path));
         }
         if config.payload_config.tls.capture_backend.is_sync() {
             entries.push(CleanEntry::file_like(

@@ -2,23 +2,22 @@
 
 use std::io;
 use std::os::fd::RawFd;
-use std::os::unix::net::UnixStream;
-use std::path::Path;
 use std::time::Duration;
 
 use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
-    EnforcementConfig, LiveOtelExportConfig, PayloadConfig, ProcessSeccompConfig,
-    ResourceMetricsConfig, SeccompNotifyConfig,
+    EnforcementConfig, PayloadConfig, ProcessSeccompConfig, ResourceMetricsConfig,
+    RuntimeExportConfig, SeccompNotifyConfig,
 };
 use config_core::provider_rules::ProviderRuleSetConfig;
 use control_contract::reply::ControlError;
-use uds_control_server::UdsControlServer;
+use storage_factory::StorageConfig;
+use uds_control_server::{UdsControlConnection, UdsControlServer};
 
 use crate::profiles::DaemonProfileRegistry;
 use crate::runtime_wiring::DaemonRuntimeWiring;
 use crate::service_host::{AttachService, DaemonServiceHost};
-use crate::services::attach::SqliteAttachService;
+use crate::services::attach::StorageAttachService;
 use crate::services::{build_runtime_wiring, build_runtime_wiring_with_provider_rule_set};
 
 pub struct DaemonBootstrap<A> {
@@ -39,13 +38,12 @@ where
 }
 
 pub struct LocalDaemonServer {
-    server: UdsControlServer<DaemonServiceHost<SqliteAttachService>>,
+    server: UdsControlServer<DaemonServiceHost<StorageAttachService>>,
 }
 
 impl LocalDaemonServer {
     pub fn build(
-        storage_path: &Path,
-        storage_busy_timeout_ms: u64,
+        storage_config: &StorageConfig,
         profiles: DaemonProfileRegistry,
         ebpf_config: EbpfCollectorConfig,
         payload_config: PayloadConfig,
@@ -55,12 +53,11 @@ impl LocalDaemonServer {
         agent_invocation: AgentInvocationConfig,
         application_protocol: ApplicationProtocolConfig,
         resource_metrics: ResourceMetricsConfig,
-        live_otel_export: LiveOtelExportConfig,
+        export_runtime: RuntimeExportConfig,
         enforcement: EnforcementConfig,
     ) -> Result<Self, ControlError> {
         let wiring = build_runtime_wiring(
-            storage_path,
-            storage_busy_timeout_ms,
+            storage_config,
             profiles,
             ebpf_config,
             payload_config,
@@ -70,7 +67,7 @@ impl LocalDaemonServer {
             agent_invocation,
             application_protocol,
             resource_metrics,
-            live_otel_export,
+            export_runtime,
             enforcement,
         )?;
         Ok(Self {
@@ -79,8 +76,7 @@ impl LocalDaemonServer {
     }
 
     pub fn build_with_provider_rule_set(
-        storage_path: &Path,
-        storage_busy_timeout_ms: u64,
+        storage_config: &StorageConfig,
         profiles: DaemonProfileRegistry,
         ebpf_config: EbpfCollectorConfig,
         payload_config: PayloadConfig,
@@ -90,13 +86,12 @@ impl LocalDaemonServer {
         agent_invocation: AgentInvocationConfig,
         application_protocol: ApplicationProtocolConfig,
         resource_metrics: ResourceMetricsConfig,
-        live_otel_export: LiveOtelExportConfig,
+        export_runtime: RuntimeExportConfig,
         enforcement: EnforcementConfig,
         provider_rule_set: &ProviderRuleSetConfig,
     ) -> Result<Self, ControlError> {
         let wiring = build_runtime_wiring_with_provider_rule_set(
-            storage_path,
-            storage_busy_timeout_ms,
+            storage_config,
             profiles,
             ebpf_config,
             payload_config,
@@ -106,7 +101,7 @@ impl LocalDaemonServer {
             agent_invocation,
             application_protocol,
             resource_metrics,
-            live_otel_export,
+            export_runtime,
             enforcement,
             provider_rule_set,
         )?;
@@ -130,8 +125,11 @@ impl LocalDaemonServer {
         self.server.service_mut().ebpf_debug_snapshot(pid)
     }
 
-    pub(crate) fn serve_connection(&mut self, stream: &mut UnixStream) -> io::Result<()> {
-        self.server.serve_connection(stream)
+    pub(crate) fn progress_control_connection(
+        &mut self,
+        connection: &mut UdsControlConnection,
+    ) -> io::Result<bool> {
+        connection.try_progress(&mut self.server)
     }
 
     pub(crate) fn control_event_poll_fds(&mut self) -> Result<Vec<RawFd>, ControlError> {

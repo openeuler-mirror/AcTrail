@@ -1,58 +1,69 @@
 //! Daemon wiring for live semantic action materialization.
 
-use std::collections::BTreeMap;
 use std::time::SystemTime;
 
 use control_contract::reply::ControlError;
-use model_core::diagnostics::{DiagnosticKind, DiagnosticRecord, DiagnosticSeverity};
+use model_core::diagnostics::DiagnosticRecord;
 use model_core::event::DomainEvent;
 use model_core::ids::TraceId;
-use model_core::payload::PayloadSegment;
-use semantic_action::SemanticActionWriteStore;
+use model_core::trace::TraceRecord;
+use recording_runtime::{
+    RecordingError, RecordingWriter, SemanticActionBatch, TraceRecordLookup, TraceStateRecord,
+};
 use semantic_action::{SemanticAction, SemanticActionLink};
-use store_write_contract::diagnostics::DiagnosticWriteStore;
+use semantic_action_runtime::derive_lineage_links;
 use trace_runtime::registry::TraceRuntime;
 
-use crate::services::attach::SqliteAttachService;
+use crate::services::attach::StorageAttachService;
+use crate::services::live::next_diagnostic_id_from_seed;
 
-impl SqliteAttachService {
+impl StorageAttachService {
     pub(super) fn observe_semantic_actions_for_event(
         &mut self,
         event: &DomainEvent,
     ) -> SemanticActionBatch {
         let output = self.semantic_actions.observe_event(event);
-        SemanticActionBatch {
-            actions: output.actions,
-            links: output.links,
-        }
-    }
-
-    pub(super) fn observe_semantic_actions_for_payload_segment(
-        &mut self,
-        segment: &PayloadSegment,
-    ) -> SemanticActionBatch {
-        let output = self.semantic_actions.observe_payload_segment(segment);
-        SemanticActionBatch {
-            actions: output.actions,
-            links: output.links,
-        }
+        SemanticActionBatch::from_parts(output.actions, output.links)
     }
 
     pub(super) fn write_semantic_action_batch(
         &mut self,
-        batch: &SemanticActionBatch,
+        batch: SemanticActionBatch,
+    ) -> Result<SemanticActionBatch, ControlError> {
+        RecordingWriter::new(self.storage.as_mut())
+            .persist_semantic_actions(batch)
+            .map_err(recording_error_to_control)
+    }
+
+    pub(super) fn persist_observed_batch_then_publish(
+        &mut self,
+        trace_runtime: &TraceRuntime,
+        events: Vec<DomainEvent>,
+        diagnostics: Vec<DiagnosticRecord>,
+        semantic_actions: SemanticActionBatch,
+        trace_states: Vec<TraceStateRecord>,
     ) -> Result<(), ControlError> {
-        for action in batch.actions.iter().cloned() {
-            self.storage
-                .upsert_semantic_action(action)
-                .map_err(|error| ControlError::new(error.stage, error.message))?;
-        }
-        for link in batch.links.iter().cloned() {
-            self.storage
-                .upsert_semantic_action_link(link)
-                .map_err(|error| ControlError::new(error.stage, error.message))?;
-        }
-        Ok(())
+        let traces = LiveTraceRecordLookup::new(trace_runtime);
+        let next_diagnostic_id = &mut self.next_diagnostic_id;
+        RecordingWriter::new(self.storage.as_mut())
+            .persist_live_events_then_export(
+                &self.export_runtime,
+                events,
+                diagnostics,
+                semantic_actions,
+                trace_states,
+                &traces,
+                SystemTime::now(),
+                || {
+                    next_diagnostic_id_from_seed(next_diagnostic_id)
+                        .map_err(control_error_to_recording)
+                },
+            )
+            .map_err(recording_error_to_control)
+    }
+
+    pub(super) fn mark_semantic_projection_dirty(&mut self, trace_id: TraceId) {
+        self.finalized_terminal_traces.remove(&trace_id);
     }
 
     pub(super) fn finalize_semantic_actions_for_trace(
@@ -61,83 +72,94 @@ impl SqliteAttachService {
         finished_at: std::time::SystemTime,
     ) -> SemanticActionBatch {
         let output = self.semantic_actions.finalize_trace(trace_id, finished_at);
-        SemanticActionBatch {
-            actions: output.actions,
-            links: output.links,
-        }
+        SemanticActionBatch::from_parts(output.actions, output.links)
     }
 
-    pub(super) fn publish_live_otel_action_batch(
+    pub(super) fn finalize_semantic_projection_for_trace(
         &mut self,
         trace_runtime: &TraceRuntime,
-        batch: &SemanticActionBatch,
+        trace_id: TraceId,
+        finished_at: std::time::SystemTime,
     ) -> Result<(), ControlError> {
-        self.publish_live_otel_actions(trace_runtime, &batch.actions, &batch.links)
+        let semantic_actions = self.finalize_semantic_actions_for_trace(trace_id, finished_at);
+        let semantic_actions = self.write_semantic_action_batch(semantic_actions)?;
+        let mut links = semantic_actions.links().to_vec();
+        links.extend(self.rebuild_lineage_semantic_links(trace_id)?);
+        self.publish_live_export_actions(trace_runtime, semantic_actions.actions(), &links)
     }
 
-    pub(super) fn publish_live_otel_actions(
+    pub(super) fn rebuild_lineage_semantic_links(
+        &mut self,
+        trace_id: TraceId,
+    ) -> Result<Vec<SemanticActionLink>, ControlError> {
+        let memberships = self
+            .storage
+            .trace_memberships(trace_id)
+            .map_err(|error| ControlError::new(error.stage, error.message))?;
+        let actions = self
+            .storage
+            .list_semantic_actions(trace_id)
+            .map_err(|error| ControlError::new(error.stage, error.message))?;
+        let existing_links = self
+            .storage
+            .list_semantic_action_links(trace_id)
+            .map_err(|error| ControlError::new(error.stage, error.message))?;
+        let links = derive_lineage_links(trace_id, &memberships, &actions, &existing_links);
+        let batch = SemanticActionBatch::from_parts(Vec::new(), links);
+        let batch = RecordingWriter::new(self.storage.as_mut())
+            .persist_semantic_actions(batch)
+            .map_err(recording_error_to_control)?;
+        let (_, links) = batch.into_parts();
+        Ok(links)
+    }
+
+    pub(super) fn publish_live_export_actions(
         &mut self,
         trace_runtime: &TraceRuntime,
         actions: &[SemanticAction],
         links: &[SemanticActionLink],
     ) -> Result<(), ControlError> {
-        self.live_otel_export.check_health()?;
-        if !self.live_otel_export.enabled() || actions.is_empty() {
-            return Ok(());
-        }
-        let mut dropped_by_trace = BTreeMap::<TraceId, u64>::new();
-        for action in actions {
-            let trace = trace_runtime
-                .get_trace(action.trace_id)
-                .ok_or_else(|| ControlError::new("otel_live_export", "trace not found"))?;
-            let result = self.live_otel_export.publish(&trace.trace, action, links)?;
-            if result.dropped_spans() > u64::default() {
-                dropped_by_trace
-                    .entry(action.trace_id)
-                    .and_modify(|count| *count = count.saturating_add(result.dropped_spans()))
-                    .or_insert_with(|| result.dropped_spans());
-            }
-        }
-        for (trace_id, dropped_spans) in dropped_by_trace {
-            self.append_live_otel_drop_diagnostic(trace_id, dropped_spans)?;
-        }
-        Ok(())
-    }
-
-    fn append_live_otel_drop_diagnostic(
-        &mut self,
-        trace_id: TraceId,
-        dropped_spans: u64,
-    ) -> Result<(), ControlError> {
-        let diagnostic = DiagnosticRecord::new(
-            self.next_diagnostic_id()?,
-            Some(trace_id),
-            DiagnosticKind::RuntimeDropped,
-            DiagnosticSeverity::Warning,
-            SystemTime::now(),
-            "live OTEL export dropped spans because the configured queue was full",
-        )
-        .with_metadata("sink", "otel_live_jsonl")
-        .with_metadata("dropped_spans", dropped_spans.to_string())
-        .with_metadata(
-            "queue_capacity",
-            self.live_otel_export.queue_capacity().to_string(),
-        );
-        self.storage
-            .append_diagnostic(diagnostic)
-            .map_err(|error| ControlError::new(error.stage, error.message))
+        let traces = LiveTraceRecordLookup::new(trace_runtime);
+        let next_diagnostic_id = &mut self.next_diagnostic_id;
+        RecordingWriter::new(self.storage.as_mut())
+            .export_semantic_actions_for_trace(
+                &self.export_runtime,
+                &traces,
+                actions,
+                links,
+                SystemTime::now(),
+                || {
+                    next_diagnostic_id_from_seed(next_diagnostic_id)
+                        .map_err(control_error_to_recording)
+                },
+            )
+            .map_err(recording_error_to_control)
     }
 }
 
-#[derive(Default)]
-pub(super) struct SemanticActionBatch {
-    pub(super) actions: Vec<SemanticAction>,
-    pub(super) links: Vec<SemanticActionLink>,
+fn recording_error_to_control(error: RecordingError) -> ControlError {
+    ControlError::new(error.stage, error.message)
 }
 
-impl SemanticActionBatch {
-    pub(super) fn extend(&mut self, other: Self) {
-        self.actions.extend(other.actions);
-        self.links.extend(other.links);
+fn control_error_to_recording(error: ControlError) -> RecordingError {
+    RecordingError::new(error.code, error.message)
+}
+
+pub(in crate::services) struct LiveTraceRecordLookup<'a> {
+    trace_runtime: &'a TraceRuntime,
+}
+
+impl<'a> LiveTraceRecordLookup<'a> {
+    pub(in crate::services) fn new(trace_runtime: &'a TraceRuntime) -> Self {
+        Self { trace_runtime }
+    }
+}
+
+impl TraceRecordLookup for LiveTraceRecordLookup<'_> {
+    fn trace_record(&self, trace_id: TraceId) -> Option<&TraceRecord> {
+        // Keep TraceRuntime ownership in daemon while recording sees only trace records.
+        self.trace_runtime
+            .get_trace(trace_id)
+            .map(|entry| &entry.trace)
     }
 }

@@ -1,32 +1,23 @@
 //! Batched live-event persistence for deferred seccomp observations.
 
 use std::collections::BTreeSet;
-use std::time::SystemTime;
 
 use collector_event::{RawCollectorEvent, RawObservationPayload};
-use collector_instance::CollectorInstance;
 use control_contract::reply::ControlError;
 use ingest_runtime::IngestPipeline;
 use model_core::diagnostics::{DiagnosticKind, DiagnosticRecord};
 use model_core::event::DomainEvent;
 use model_core::ids::TraceId;
-use model_core::process::ProcessMembership;
-use model_core::trace::{TraceLifecycleState, TraceRecord};
 use plugin_policy_host::engine::PluginPolicyEngine;
 use plugin_policy_host::registry::PluginRegistry;
-use semantic_action::{SemanticAction, SemanticActionLink, SemanticActionWriteStore};
-use store_tx_contract::boundary::TransactionBoundary;
-use store_write_contract::diagnostics::DiagnosticWriteStore;
-use store_write_contract::events::EventWriteStore;
-use store_write_contract::memberships::MembershipWriteStore;
-use store_write_contract::traces::TraceWriteStore;
+use recording_runtime::{SemanticActionBatch, TraceStateRecord};
 use trace_runtime::registry::TraceRuntime;
 
-use crate::services::attach::SqliteAttachService;
+use crate::services::attach::StorageAttachService;
 use crate::services::identity::TraceIdentityResolver;
 
-impl SqliteAttachService {
-    pub(super) fn process_live_event_batch(
+impl StorageAttachService {
+    pub(in crate::services) fn process_live_event_batch(
         &mut self,
         trace_runtime: &mut TraceRuntime,
         raw_events: Vec<RawCollectorEvent>,
@@ -56,6 +47,7 @@ impl SqliteAttachService {
                 pipeline.process(raw_event, matched, event_id, label_event_id, diagnostic_id);
 
             if let Some(trace_id) = matched_trace_id {
+                self.mark_semantic_projection_dirty(trace_id);
                 if outcome
                     .diagnostics
                     .iter()
@@ -67,9 +59,9 @@ impl SqliteAttachService {
                 }
                 batch.trace_ids.insert(trace_id);
                 for event in outcome.events {
-                    let semantic_output = self.semantic_actions.observe_event(&event);
-                    batch.semantic_actions.extend(semantic_output.actions);
-                    batch.semantic_action_links.extend(semantic_output.links);
+                    batch
+                        .semantic_actions
+                        .extend(self.observe_semantic_actions_for_event(&event));
                     batch.events.push(event);
                 }
             }
@@ -89,9 +81,10 @@ impl SqliteAttachService {
         }
         let mut batch = LiveEventBatch::default();
         for event in events {
-            let semantic_output = self.semantic_actions.observe_event(&event);
-            batch.semantic_actions.extend(semantic_output.actions);
-            batch.semantic_action_links.extend(semantic_output.links);
+            self.mark_semantic_projection_dirty(event.envelope.trace_id);
+            batch
+                .semantic_actions
+                .extend(self.observe_semantic_actions_for_event(&event));
             batch.events.push(event);
         }
         self.persist_live_event_batch(trace_runtime, batch)
@@ -102,97 +95,25 @@ impl SqliteAttachService {
         trace_runtime: &TraceRuntime,
         batch: LiveEventBatch,
     ) -> Result<(), ControlError> {
-        let transaction = self
-            .storage
-            .begin()
-            .map_err(|error| ControlError::new(error.stage, error.message))?;
-        let write_result = self.write_live_event_batch(trace_runtime, batch);
-        match write_result {
-            Ok(commit_result) => {
-                transaction
-                    .commit()
-                    .map_err(|error| ControlError::new(error.stage, error.message))?;
-                self.publish_live_otel_actions(
-                    trace_runtime,
-                    &commit_result.semantic_actions,
-                    &commit_result.semantic_action_links,
-                )?;
-                for trace_id in commit_result.terminal_trace_ids {
-                    let finished_at = terminal_trace_finished_at(trace_runtime, trace_id)?;
-                    let semantic_actions =
-                        self.finalize_semantic_actions_for_trace(trace_id, finished_at);
-                    self.write_semantic_action_batch(&semantic_actions)?;
-                    self.publish_live_otel_action_batch(trace_runtime, &semantic_actions)?;
-                    self.collector
-                        .unbind_trace(trace_id)
-                        .map_err(|error| ControlError::new(error.stage, error.message))?;
-                    self.application_protocol.forget_trace(trace_id);
-                    self.semantic_actions.forget_trace(trace_id);
-                    self.payload_body_retention_gate.forget_trace(trace_id);
-                }
-                Ok(())
-            }
-            Err(error) => {
-                let _ = transaction.rollback();
-                Err(error)
-            }
-        }
+        let trace_states = self.trace_states_for_persistence(trace_runtime, batch.trace_ids)?;
+        self.persist_observed_batch_then_publish(
+            trace_runtime,
+            batch.events,
+            batch.diagnostics,
+            batch.semantic_actions,
+            trace_states,
+        )
     }
 
-    fn write_live_event_batch(
-        &mut self,
-        trace_runtime: &TraceRuntime,
-        batch: LiveEventBatch,
-    ) -> Result<LiveEventCommitResult, ControlError> {
-        for event in batch.events {
-            self.storage
-                .append_event(event)
-                .map_err(|error| ControlError::new(error.stage, error.message))?;
-        }
-        for action in batch.semantic_actions.iter().cloned() {
-            self.storage
-                .upsert_semantic_action(action)
-                .map_err(|error| ControlError::new(error.stage, error.message))?;
-        }
-        for link in batch.semantic_action_links.iter().cloned() {
-            self.storage
-                .upsert_semantic_action_link(link)
-                .map_err(|error| ControlError::new(error.stage, error.message))?;
-        }
-        for diagnostic in batch.diagnostics {
-            self.storage
-                .append_diagnostic(diagnostic)
-                .map_err(|error| ControlError::new(error.stage, error.message))?;
-        }
-        let terminal_trace_ids = self.write_trace_states(trace_runtime, batch.trace_ids)?;
-        Ok(LiveEventCommitResult {
-            terminal_trace_ids,
-            semantic_actions: batch.semantic_actions,
-            semantic_action_links: batch.semantic_action_links,
-        })
-    }
-
-    fn write_trace_states(
-        &mut self,
+    fn trace_states_for_persistence(
+        &self,
         trace_runtime: &TraceRuntime,
         trace_ids: BTreeSet<TraceId>,
-    ) -> Result<Vec<TraceId>, ControlError> {
-        let mut terminal_trace_ids = Vec::new();
-        for trace_id in trace_ids {
-            let state = trace_state_for_persistence(trace_runtime, trace_id)?;
-            self.storage
-                .create_trace(state.trace)
-                .map_err(|error| ControlError::new(error.stage, error.message))?;
-            for membership in state.memberships {
-                self.storage
-                    .upsert_membership(membership)
-                    .map_err(|error| ControlError::new(error.stage, error.message))?;
-            }
-            if state.terminal {
-                terminal_trace_ids.push(trace_id);
-            }
-        }
-        Ok(terminal_trace_ids)
+    ) -> Result<Vec<TraceStateRecord>, ControlError> {
+        trace_ids
+            .into_iter()
+            .map(|trace_id| self.trace_state_record_for_persistence(trace_runtime, trace_id))
+            .collect()
     }
 }
 
@@ -200,56 +121,6 @@ impl SqliteAttachService {
 struct LiveEventBatch {
     events: Vec<DomainEvent>,
     diagnostics: Vec<DiagnosticRecord>,
-    semantic_actions: Vec<SemanticAction>,
-    semantic_action_links: Vec<SemanticActionLink>,
+    semantic_actions: SemanticActionBatch,
     trace_ids: BTreeSet<TraceId>,
-}
-
-struct LiveEventCommitResult {
-    terminal_trace_ids: Vec<TraceId>,
-    semantic_actions: Vec<SemanticAction>,
-    semantic_action_links: Vec<SemanticActionLink>,
-}
-
-struct TraceStatePersistence {
-    trace: TraceRecord,
-    memberships: Vec<ProcessMembership>,
-    terminal: bool,
-}
-
-fn trace_state_for_persistence(
-    trace_runtime: &TraceRuntime,
-    trace_id: TraceId,
-) -> Result<TraceStatePersistence, ControlError> {
-    trace_runtime
-        .get_trace(trace_id)
-        .map(|entry| TraceStatePersistence {
-            trace: entry.trace.clone(),
-            memberships: entry.memberships.memberships().cloned().collect(),
-            terminal: matches!(
-                entry.trace.lifecycle_state,
-                TraceLifecycleState::Completed | TraceLifecycleState::Failed
-            ),
-        })
-        .ok_or_else(|| ControlError::new("persist_trace_state", "trace not found"))
-}
-
-fn terminal_trace_finished_at(
-    trace_runtime: &TraceRuntime,
-    trace_id: TraceId,
-) -> Result<SystemTime, ControlError> {
-    let trace = trace_runtime
-        .get_trace(trace_id)
-        .map(|entry| &entry.trace)
-        .ok_or_else(|| ControlError::new("terminal_trace", "trace not found"))?;
-    match trace.lifecycle_state {
-        TraceLifecycleState::Completed => trace.timings.completed_at.ok_or_else(|| {
-            ControlError::new("terminal_trace", "completed trace missing completed_at")
-        }),
-        TraceLifecycleState::Failed => trace
-            .timings
-            .failed_at
-            .ok_or_else(|| ControlError::new("terminal_trace", "failed trace missing failed_at")),
-        _ => Err(ControlError::new("terminal_trace", "trace is not terminal")),
-    }
 }

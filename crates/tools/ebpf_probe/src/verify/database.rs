@@ -1,23 +1,20 @@
-//! SQLite assertions for live eBPF verification.
+//! Storage assertions for live eBPF verification.
 
 #[path = "database/file.rs"]
 mod file;
 #[path = "database/stdio.rs"]
 mod stdio;
 
-use std::collections::HashSet;
-use std::path::Path;
-
 use model_core::event::{DomainEvent, EventPayload};
 use model_core::ids::TraceId;
-use sqlite_storage::SqliteStorage;
-use store_read_contract::events::EventReadStore;
-use store_read_contract::payloads::{PayloadReadStore, PayloadSegmentQuery};
+use std::collections::HashSet;
+use storage_core::{PayloadSegmentQuery, StorageOpenMode};
+use storage_factory::{StorageConfig, open_storage_backend};
 
 use crate::report::LiveVerificationReport;
 
 pub(super) fn verify_database(
-    storage_path: &Path,
+    storage_config: &StorageConfig,
     trace_id: TraceId,
     expected_provider: &str,
     expected_stdin: &str,
@@ -27,7 +24,8 @@ pub(super) fn verify_database(
     expect_resource_metrics: bool,
     expect_system_metrics: bool,
 ) -> Result<LiveVerificationReport, String> {
-    let storage = SqliteStorage::open(storage_path).map_err(|error| error.to_string())?;
+    let storage = open_storage_backend(storage_config, StorageOpenMode::ReadOnly)
+        .map_err(|error| format!("open storage failed: {}: {}", error.stage, error.message))?;
     let events = storage
         .list_events(trace_id)
         .map_err(|error| format!("query events failed: {}: {}", error.stage, error.message))?;

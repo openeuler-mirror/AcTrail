@@ -8,19 +8,53 @@ Run from the repository root after `cargo build --release`:
 python3 tests/agent-trace/run_case.py claude-code
 python3 tests/agent-trace/run_case.py opencode-bun
 python3 tests/agent-trace/run_case.py xiaoo-rustls
+python3 tests/agent-trace/run_case.py xiaoo-http-proxy
 python3 tests/agent-trace/run_case.py langgraph-openai
 python3 tests/agent-trace/run_case.py go-net-http
 ```
 
 `claude-code`, `opencode-bun`, and `xiaoo-rustls` require the corresponding real CLI or binary and working provider credentials in the environment. These agents may reach the LLM provider through HTTPS/TLS or through a plain HTTP endpoint/proxy; the E2E cases accept either complete `TlsUserSpace` payload rows or complete `Syscall/socket-syscall` plaintext rows. `langgraph-openai` requires a Python interpreter with `langgraph` and `requests`, plus `DEEPSEEK_API_KEY`; the default workload uses DeepSeek's OpenAI-compatible HTTPS API to exercise a real LangGraph-based Python agent without adding framework instrumentation.
 
-For `xiaoo-rustls`, a stripped release binary can still be runnable as an
-agent but not observable at the HTTPS plaintext boundary unless matching rustls
-`PlaintextSink` symbols are available from the binary or debuginfo. If that
-binary reaches its provider through HTTP CONNECT, socket capture can prove the
-proxy tunnel but cannot decode the encrypted request body; configure xiaoO for a
-plain HTTP provider route or provide debuginfo/TLS symbols for this payload
-case.
+`xiaoo-http-proxy` is the real-agent plain HTTP coverage. Its automatic runner
+starts the generic OpenAI-compatible reverse provider shim from
+`tests/support/llm-http-proxy/`, writes a temporary xiaoO config under
+`target/agent-trace/xiaoo-http-proxy/`, and launches xiaoO against a local
+plain HTTP endpoint. The checked-in `xiaoo-http-proxy/xiaoo-config.toml` is for
+manual runs and defaults to `http://127.0.0.1:18098`; the proxy script uses the
+same address when started without arguments. The shim forwards to the configured
+HTTPS upstream provider using `DEEPSEEK_API_KEY`, while xiaoO only receives a
+dummy local API key. The pass condition requires complete inbound and outbound
+`Syscall/socket-syscall` payload rows plus complete `llm.call`, `llm.request`,
+and `llm.response` actions. This is not an `HTTP_PROXY`/CONNECT test; CONNECT
+would not expose the LLM request body to socket plaintext capture.
+
+Manual xiaoO HTTP proxy smoke path, using separate terminals for the long-running
+proxy and daemon commands:
+
+```bash
+export DEEPSEEK_API_KEY=...
+python3 tests/support/llm-http-proxy/provider_proxy.py
+```
+
+```bash
+target/release/actrailctl --config tests/agent-trace/xiaoo-http-proxy/operator.conf clean
+target/release/actraild --config tests/agent-trace/xiaoo-http-proxy/operator.conf run
+```
+
+```bash
+export ACTRAIL_XIAOO_HTTP_PROXY_API_KEY=actrail-local-proxy-key
+target/release/actrailctl --config tests/agent-trace/xiaoo-http-proxy/operator.conf \
+  launch --name agent-xiaoo-http-proxy -- \
+  xiaoo run --config tests/agent-trace/xiaoo-http-proxy/xiaoo-config.toml \
+    --no-tools --max-turns 1 --prompt '请只输出 ACTRAIL_XIAOO_HTTP_PROXY_OK，不要解释'
+```
+
+For `xiaoo-rustls`, the runner requires `tls-probe-point-finder fast` to return
+a complete rustls plan for the selected xiaoO binary. Stripped x86_64 builds are
+supported through the checked rustls static patterns when both
+`rustls_buffer_plaintext` and `rustls_take_received_plaintext` are found. A
+socket-only HTTP CONNECT trace is not accepted for this case because it does not
+prove HTTPS request-body plaintext capture.
 
 The `opencode-bun` case is pinned in `opencode-bun/workload.conf` to
 `deepseek/deepseek-chat`. This keeps the case independent from the local

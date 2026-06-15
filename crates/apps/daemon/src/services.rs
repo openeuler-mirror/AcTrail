@@ -1,4 +1,4 @@
-//! Concrete daemon services backed by procfs bootstrap and sqlite storage.
+//! Concrete daemon services backed by procfs bootstrap and storage persistence.
 
 pub(crate) mod application_protocol;
 pub(crate) mod attach;

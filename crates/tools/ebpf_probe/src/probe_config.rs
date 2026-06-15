@@ -8,7 +8,7 @@ mod values;
 use std::fs;
 use std::path::Path;
 
-use config_core::daemon::SseDataPolicy;
+use config_core::daemon::{PayloadStdioStorageMode, SseDataPolicy};
 
 use crate::args::{LiveVerificationConfig, WorkloadConfig};
 use keys::{live_config_keys, workload_config_keys};
@@ -111,6 +111,15 @@ fn validate_live_config(config: &LiveVerificationConfig) -> Result<(), String> {
             "verify-live requires payload_stdio_capture_stdin/stdout/stderr = true".to_string(),
         );
     }
+    if !(config.payload_stdio.stdin_storage_mode == PayloadStdioStorageMode::Full
+        && config.payload_stdio.stdout_storage_mode == PayloadStdioStorageMode::Full
+        && config.payload_stdio.stderr_storage_mode == PayloadStdioStorageMode::Full)
+    {
+        return Err(
+            "verify-live requires payload_stdio_stdin/stdout/stderr_storage_mode = full"
+                .to_string(),
+        );
+    }
     if !config.file_path_capture_enabled {
         return Err("verify-live requires file_path_capture_enabled = true".to_string());
     }
@@ -157,6 +166,8 @@ fn validate_live_config(config: &LiveVerificationConfig) -> Result<(), String> {
 mod tests {
     use std::path::Path;
 
+    use config_core::daemon::PayloadStdioStorageMode;
+
     use super::{load_live_verification_config, load_workload_config};
 
     #[test]
@@ -172,6 +183,18 @@ mod tests {
         assert!(config.payload_stdio.capture_stdin);
         assert!(config.payload_stdio.capture_stdout);
         assert!(config.payload_stdio.capture_stderr);
+        assert_eq!(
+            config.payload_stdio.stdin_storage_mode,
+            PayloadStdioStorageMode::Full
+        );
+        assert_eq!(
+            config.payload_stdio.stdout_storage_mode,
+            PayloadStdioStorageMode::Full
+        );
+        assert_eq!(
+            config.payload_stdio.stderr_storage_mode,
+            PayloadStdioStorageMode::Full
+        );
         assert!(config.mmap.is_some());
         assert_eq!(config.provider_expected_provider, "actrail-local-tcp");
     }

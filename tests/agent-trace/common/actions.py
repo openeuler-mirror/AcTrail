@@ -205,6 +205,7 @@ def read_web_action_tree_projection(
 ) -> dict[str, object]:
     wait_for_action_tree_root(base_url, timeout_seconds, poll_interval_seconds)
     full = fetch_action_tree_json(base_url, "", timeout_seconds)
+    page_limit = action_tree_page_limit(full)
     seen: set[str] = set()
     stack = [NODE_ID_AGENT]
     kind_counts: dict[str, int] = {}
@@ -216,7 +217,7 @@ def read_web_action_tree_projection(
         parent_kind = kind_by_id.get(parent_id)
         children = fetch_action_tree_json(
             base_url,
-            f"/children/{urllib.parse.quote(parent_id, safe='')}",
+            action_tree_children_path(parent_id, page_limit),
             timeout_seconds,
         )
         child_state = {row["id"]: row for row in children.get("child_state", [])}
@@ -287,6 +288,24 @@ def read_web_action_tree_projection(
         "root_linkless_count": len(root_linkless_kinds),
         "root_linkless_kinds": root_linkless_kinds,
     }
+
+
+def action_tree_page_limit(full_tree: dict) -> int:
+    action_count = len(
+        [
+            action
+            for action in full_tree.get("actions", [])
+            if isinstance(action.get("id"), str)
+        ]
+    )
+    if action_count == 0:
+        raise RuntimeError("web action-tree has no display actions")
+    return action_count
+
+
+def action_tree_children_path(parent_id: str, page_limit: int) -> str:
+    encoded_parent = urllib.parse.quote(parent_id, safe="")
+    return f"/children/{encoded_parent}?offset=0&limit={page_limit}"
 
 
 def wait_for_action_tree_root(

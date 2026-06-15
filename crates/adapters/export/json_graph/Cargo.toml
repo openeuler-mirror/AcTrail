@@ -7,4 +7,4 @@ license = "MulanPSL-2.0"
 [dependencies]
 graph_contract = { path = "../../../contracts/graph" }
 model_core = { path = "../../../core/model" }
-store_snapshot_contract = { path = "../../../contracts/store/snapshot" }
+storage_core = { path = "../../../storage/core" }

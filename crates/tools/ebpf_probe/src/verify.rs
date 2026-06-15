@@ -19,6 +19,7 @@ use control_contract::reply::ControlReply;
 use daemon::{DaemonProfileRegistry, LocalDaemonServer};
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use model_core::ids::{ProfileName, RequestId, TraceId, TraceName};
+use storage_factory::StorageConfig;
 
 use crate::args::{LiveVerificationConfig, workload_from_live_config};
 use crate::report::LiveVerificationReport;
@@ -34,9 +35,9 @@ pub fn run_live_verification(
     };
     let seccomp_defaults = OperatorConfig::parse(OPERATOR_CONFIG_TEMPLATE)
         .map_err(|error| format!("parse built-in seccomp defaults: {error}"))?;
+    let storage_config = StorageConfig::sqlite_path(&config.storage_path);
     let mut server = LocalDaemonServer::build_with_provider_rule_set(
-        &config.storage_path,
-        seccomp_defaults.storage_busy_timeout_ms,
+        &storage_config,
         verification_profiles(&config),
         EbpfCollectorConfig {
             enabled: true,
@@ -58,7 +59,7 @@ pub fn run_live_verification(
         seccomp_defaults.agent_invocation,
         config.application_protocol.clone(),
         config.resource_metrics.clone(),
-        seccomp_defaults.live_otel_export,
+        seccomp_defaults.export_runtime,
         config.enforcement.clone(),
         &provider_rule_set,
     )
@@ -91,7 +92,7 @@ pub fn run_live_verification(
         final_snapshot.attached_programs.join(",")
     );
     database::verify_database(
-        &config.storage_path,
+        &storage_config,
         trace_id,
         &config.provider_expected_provider,
         &config.stdio_continue_message,

@@ -6,3 +6,4 @@ license = "MulanPSL-2.0"
 
 [dependencies]
 model_core = { path = "../../core/model" }
+serde_json = "1"

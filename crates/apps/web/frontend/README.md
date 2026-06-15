@@ -56,7 +56,9 @@ and UI limits:
 - `GRAPH_LANES`: displayed lane names.
 - `TREE_NODE_TYPES`: recursive semantic tree node categories.
 - `inlineAttributeCount`: maximum attributes shown inline before the full JSON block.
-- `fileActivityGroupMinActions`: minimum consecutive root file actions folded into one expandable file activity node.
+- `actionGroupMinActions`: minimum consecutive same-kind action nodes folded into one local expandable action group.
+- `actionTreeChildPageSize = 100`: direct children requested per action tree expansion page.
+- `actionTreeChildPrefetchRemaining = 50`: remaining rendered siblings before the next child page is prefetched.
 
 `src/tabs/tableConfig.js` contains table projection and render batching:
 

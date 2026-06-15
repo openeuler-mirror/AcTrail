@@ -1,5 +1,6 @@
-//! Attach service backed by procfs bootstrap and SQLite persistence.
+//! Attach service backed by procfs bootstrap and storage persistence.
 
+use std::collections::BTreeSet;
 use std::os::fd::RawFd;
 use std::time::{Duration, SystemTime};
 
@@ -15,21 +16,20 @@ mod logging;
 use attach_runtime::snapshot_merge::merge_snapshot;
 use collector_binding::TraceBindingRequest;
 use collector_instance::CollectorInstance;
-use config_core::daemon::{DiagnosticLogLevel, PayloadRedactionPolicy};
+use config_core::daemon::{DiagnosticLogLevel, PayloadRedactionPolicy, PayloadStdioStorageMode};
 use config_core::trace_snapshot::CaptureProfileSnapshot;
 use control_contract::command::TrackAddCommand;
 use control_contract::reply::{ControlError, TrackAddReply};
 use ebpf_collector::EbpfCollector;
 use ebpf_collector::procfs::{ProcfsIdentityReader, ProcfsTreeSnapshotter};
+use export_core::ExportRuntime;
 use model_core::capability::Capability;
 use model_core::diagnostics::{DiagnosticKind, DiagnosticRecord, DiagnosticSeverity};
 use model_core::process::ProcessIdentity;
 use provider_label::ProviderClassifier;
+use recording_runtime::{RecordingWriter, TraceStateRecord};
 use semantic_action_runtime::LiveSemanticActionRuntime;
-use sqlite_storage::SqliteStorage;
-use store_write_contract::diagnostics::DiagnosticWriteStore;
-use store_write_contract::memberships::MembershipWriteStore;
-use store_write_contract::traces::TraceWriteStore;
+use storage_core::StorageBackend;
 use trace_runtime::commands::TrackTraceRequest;
 use trace_runtime::sensor_plan::SensorPlan;
 
@@ -37,7 +37,6 @@ use crate::profiles::DaemonProfileRegistry;
 use crate::service_host::AttachService;
 use crate::services::application_protocol::ApplicationProtocolAnalyzer;
 use crate::services::enforcement::FanotifyEnforcementService;
-use crate::services::live::otel_export::LiveOtelExporter;
 use crate::services::payload_gate::{PayloadBodyRetentionGate, SocketHttpPayloadGate};
 use crate::services::process_seccomp::{ProcessSeccompObservation, ProcessSeccompService};
 use crate::services::resource_metrics::ResourceMetricsSampler;
@@ -48,9 +47,9 @@ use crate::services::tls_sync::TlsSyncService;
 
 use self::helpers::{capability_requested, collector_capability_requests};
 
-pub(crate) struct SqliteAttachService {
+pub(crate) struct StorageAttachService {
     pub(super) profiles: DaemonProfileRegistry,
-    pub(super) storage: SqliteStorage,
+    pub(super) storage: Box<dyn StorageBackend>,
     pub(super) collector: EbpfCollector,
     pub(super) identity_reader: ProcfsIdentityReader,
     pub(super) snapshotter: ProcfsTreeSnapshotter,
@@ -65,6 +64,9 @@ pub(crate) struct SqliteAttachService {
     pub(super) payload_stdio_enabled: bool,
     pub(super) payload_stdio_redaction_policy: PayloadRedactionPolicy,
     pub(super) payload_stdio_retention_max_bytes_per_trace: u64,
+    pub(super) payload_stdio_stdin_storage_mode: PayloadStdioStorageMode,
+    pub(super) payload_stdio_stdout_storage_mode: PayloadStdioStorageMode,
+    pub(super) payload_stdio_stderr_storage_mode: PayloadStdioStorageMode,
     pub(super) payload_socket_enabled: bool,
     pub(super) payload_socket_redaction_policy: PayloadRedactionPolicy,
     pub(super) payload_socket_retention_max_bytes_per_trace: u64,
@@ -80,12 +82,15 @@ pub(crate) struct SqliteAttachService {
     pub(super) resource_metrics: ResourceMetricsSampler,
     pub(super) enforcement: FanotifyEnforcementService,
     pub(super) semantic_actions: LiveSemanticActionRuntime,
-    pub(super) live_otel_export: LiveOtelExporter,
+    pub(super) export_runtime: ExportRuntime,
+    pub(super) finalized_terminal_traces: BTreeSet<model_core::ids::TraceId>,
+    pub(super) diagnosed_terminal_open_memberships:
+        BTreeSet<(model_core::ids::TraceId, ProcessIdentity)>,
     pub(super) provider_classifier: Box<dyn ProviderClassifier>,
     pub(super) provider_classification_enabled: bool,
 }
 
-impl SqliteAttachService {
+impl StorageAttachService {
     pub(crate) fn collector_name(&self) -> String {
         self.collector.descriptor().name.to_string()
     }
@@ -181,15 +186,14 @@ impl SqliteAttachService {
         let entry = trace_runtime.get_trace(trace_id).ok_or_else(|| {
             ControlError::new("trace_missing", "trace disappeared after activation")
         })?;
-        self.storage
-            .create_trace(entry.trace.clone())
-            .map_err(|error| ControlError::new(error.stage, error.message))?;
-        for membership in entry.memberships.memberships().cloned() {
-            self.storage
-                .upsert_membership(membership)
-                .map_err(|error| ControlError::new(error.stage, error.message))?;
-        }
-
+        let trace = entry.trace.clone();
+        let trace_state = TraceStateRecord::new(
+            trace.clone(),
+            entry.memberships.memberships().cloned().collect(),
+        );
+        RecordingWriter::new(self.storage.as_mut())
+            .persist_trace_state(trace_state)
+            .map_err(recording_error_to_control)?;
         if emit_bootstrap_diagnostic {
             let diagnostic = DiagnosticRecord::new(
                 self.next_diagnostic_id()?,
@@ -200,9 +204,9 @@ impl SqliteAttachService {
                 diagnostic_message,
             )
             .with_process(root_identity);
-            self.storage
-                .append_diagnostic(diagnostic)
-                .map_err(|error| ControlError::new(error.stage, error.message))?;
+            RecordingWriter::new(self.storage.as_mut())
+                .persist_diagnostic(diagnostic)
+                .map_err(recording_error_to_control)?;
         }
         if launch_mode {
             self.log_diagnostic(
@@ -210,16 +214,16 @@ impl SqliteAttachService {
                 format_args!(
                     "agent_launch started trace_id={} name={} pid={} generation={}",
                     trace_id,
-                    entry.trace.display_name,
-                    entry.trace.root_process_identity.pid,
-                    entry.trace.root_process_identity.generation
+                    trace.display_name,
+                    trace.root_process_identity.pid,
+                    trace.root_process_identity.generation
                 ),
             );
         }
 
         Ok(TrackAddReply {
             trace_id,
-            lifecycle_state: entry.trace.lifecycle_state,
+            lifecycle_state: trace.lifecycle_state,
         })
     }
 
@@ -308,7 +312,7 @@ impl SqliteAttachService {
     }
 }
 
-impl AttachService for SqliteAttachService {
+impl AttachService for StorageAttachService {
     fn attach_existing(
         &mut self,
         trace_runtime: &mut trace_runtime::TraceRuntime,
@@ -432,4 +436,8 @@ impl AttachService for SqliteAttachService {
         }
         self.seccomp_notify.register_listener(command.listener_fd)
     }
+}
+
+fn recording_error_to_control(error: recording_runtime::RecordingError) -> ControlError {
+    ControlError::new(error.stage, error.message)
 }

@@ -7,8 +7,9 @@ use std::time::SystemTime;
 use config_core::daemon::{PayloadSocketCaptureBackend, PayloadSocketConfig};
 use control_contract::reply::ControlError;
 use ebpf_collector::{
-    EbpfCollector, SOCKET_PAYLOAD_DIRECTION_OUTBOUND, SOCKET_PAYLOAD_SYSCALL_SENDTO,
-    SOCKET_PAYLOAD_SYSCALL_WRITE, SocketPayloadCompletion,
+    EbpfCollector, SOCKET_PAYLOAD_DIRECTION_OUTBOUND, SOCKET_PAYLOAD_SYSCALL_SENDMSG,
+    SOCKET_PAYLOAD_SYSCALL_SENDTO, SOCKET_PAYLOAD_SYSCALL_WRITE, SOCKET_PAYLOAD_SYSCALL_WRITEV,
+    SocketPayloadCompletion,
 };
 use model_core::payload::{
     PayloadContentState, PayloadDirection, PayloadOperationCompletionState, PayloadSourceBoundary,
@@ -19,7 +20,9 @@ use payload_event::RawPayloadSegment;
 use trace_runtime::registry::TraceRuntime;
 
 use crate::services::payload_gate::socket_payload_prefix_is_http_candidate;
-use crate::services::seccomp_notify::{read_linear_payload, target_exited};
+use crate::services::seccomp_notify::{
+    read_iovec_payload, read_linear_payload, read_msghdr_iovec_payload, target_exited,
+};
 
 #[derive(Debug)]
 pub(crate) struct SeccompSocketService {
@@ -63,12 +66,10 @@ impl SeccompSocketService {
         let Some(request) = SocketReadRequest::from_notification(notification)? else {
             return Ok(());
         };
-        if request.requested_size <= u64::from(self.max_segment_bytes) {
+        if request.skip_small_linear_payload(self.max_segment_bytes) {
             return Ok(());
         }
-        if request.syscall == SOCKET_PAYLOAD_SYSCALL_WRITE
-            && !fd_is_socket(notification.pid, request.fd)?
-        {
+        if request.requires_socket_fd_check() && !fd_is_socket(notification.pid, request.fd)? {
             return Ok(());
         }
         let Some(tgid) = tgid_from_status(notification.pid)? else {
@@ -83,26 +84,20 @@ impl SeccompSocketService {
         let prefix_size = self
             .http_sniff_max_bytes
             .min(u64::from(self.max_operation_bytes))
-            .min(request.requested_size);
-        let Some(prefix) = read_linear_payload(
-            tgid,
-            request.buffer_ptr,
-            prefix_size,
-            self.max_operation_bytes,
-        )?
+            .min(request.read_size_hint());
+        let Some(prefix) = request.read_payload(tgid, prefix_size, self.max_operation_bytes)?
         else {
             return Ok(());
         };
         let reached_sniff_limit =
-            prefix.len() as u64 >= self.http_sniff_max_bytes.min(request.requested_size);
+            prefix.len() as u64 >= self.http_sniff_max_bytes.min(request.read_size_hint());
         if !socket_payload_prefix_is_http_candidate(&prefix, reached_sniff_limit) {
             return Ok(());
         }
 
-        let Some(bytes) = read_linear_payload(
+        let Some(bytes) = request.read_payload(
             tgid,
-            request.buffer_ptr,
-            request.requested_size,
+            u64::from(self.max_operation_bytes),
             self.max_operation_bytes,
         )?
         else {
@@ -113,8 +108,8 @@ impl SeccompSocketService {
                 pid: tgid,
                 fd: request.fd,
                 syscall: request.syscall,
-                buffer_ptr: request.buffer_ptr,
-                requested_size: request.requested_size,
+                buffer_ptr: request.key_buffer_ptr,
+                requested_size: request.key_requested_size,
             },
             CapturedSocketOperation {
                 trace_id,
@@ -231,8 +226,24 @@ struct SocketCaptureKey {
 struct SocketReadRequest {
     fd: u32,
     syscall: u32,
-    buffer_ptr: u64,
-    requested_size: u64,
+    key_buffer_ptr: u64,
+    key_requested_size: u64,
+    source: SocketPayloadSource,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum SocketPayloadSource {
+    Linear {
+        buffer_ptr: u64,
+        requested_size: u64,
+    },
+    Iovec {
+        iovec_ptr: u64,
+        iovec_count: usize,
+    },
+    MsgHdr {
+        msghdr_ptr: u64,
+    },
 }
 
 impl SocketReadRequest {
@@ -241,14 +252,99 @@ impl SocketReadRequest {
         let Some(syscall) = syscall else {
             return Ok(None);
         };
+        let fd = u32::try_from(notification.data.args[0]).map_err(|error| {
+            ControlError::new("seccomp_socket_args", format!("fd overflow: {error}"))
+        })?;
+        let key_buffer_ptr = notification.data.args[1];
+        let key_requested_size = key_requested_size(syscall, notification);
+        let source = match syscall {
+            SOCKET_PAYLOAD_SYSCALL_WRITE | SOCKET_PAYLOAD_SYSCALL_SENDTO => {
+                SocketPayloadSource::Linear {
+                    buffer_ptr: notification.data.args[1],
+                    requested_size: notification.data.args[2],
+                }
+            }
+            SOCKET_PAYLOAD_SYSCALL_WRITEV => SocketPayloadSource::Iovec {
+                iovec_ptr: notification.data.args[1],
+                iovec_count: usize::try_from(notification.data.args[2]).map_err(|error| {
+                    ControlError::new("seccomp_socket_args", format!("iovcnt overflow: {error}"))
+                })?,
+            },
+            SOCKET_PAYLOAD_SYSCALL_SENDMSG => SocketPayloadSource::MsgHdr {
+                msghdr_ptr: notification.data.args[1],
+            },
+            other => {
+                return Err(ControlError::new(
+                    "seccomp_socket_args",
+                    format!("unsupported socket payload syscall {other}"),
+                ));
+            }
+        };
         Ok(Some(Self {
-            fd: u32::try_from(notification.data.args[0]).map_err(|error| {
-                ControlError::new("seccomp_socket_args", format!("fd overflow: {error}"))
-            })?,
+            fd,
             syscall,
-            buffer_ptr: notification.data.args[1],
-            requested_size: notification.data.args[2],
+            key_buffer_ptr,
+            key_requested_size,
+            source,
         }))
+    }
+
+    fn skip_small_linear_payload(&self, max_segment_bytes: u32) -> bool {
+        match self.source {
+            SocketPayloadSource::Linear { requested_size, .. } => {
+                requested_size <= u64::from(max_segment_bytes)
+            }
+            SocketPayloadSource::Iovec { .. } | SocketPayloadSource::MsgHdr { .. } => false,
+        }
+    }
+
+    fn requires_socket_fd_check(&self) -> bool {
+        matches!(
+            self.syscall,
+            SOCKET_PAYLOAD_SYSCALL_WRITE | SOCKET_PAYLOAD_SYSCALL_WRITEV
+        )
+    }
+
+    fn read_size_hint(&self) -> u64 {
+        match self.source {
+            SocketPayloadSource::Linear { requested_size, .. } => requested_size,
+            SocketPayloadSource::Iovec { .. } | SocketPayloadSource::MsgHdr { .. } => {
+                u64::from(u32::MAX)
+            }
+        }
+    }
+
+    fn read_payload(
+        &self,
+        pid: u32,
+        requested_size: u64,
+        max_operation_bytes: u32,
+    ) -> Result<Option<Vec<u8>>, ControlError> {
+        let max_bytes_u64 = requested_size.min(u64::from(max_operation_bytes));
+        let max_bytes_u32 = u32::try_from(max_bytes_u64).map_err(|error| {
+            ControlError::new(
+                "seccomp_socket_read",
+                format!("read size overflow: {error}"),
+            )
+        })?;
+        match self.source {
+            SocketPayloadSource::Linear {
+                buffer_ptr,
+                requested_size,
+            } => read_linear_payload(
+                pid,
+                buffer_ptr,
+                requested_size.min(max_bytes_u64),
+                max_operation_bytes,
+            ),
+            SocketPayloadSource::Iovec {
+                iovec_ptr,
+                iovec_count,
+            } => read_iovec_payload(pid, iovec_ptr, iovec_count, max_bytes_u32),
+            SocketPayloadSource::MsgHdr { msghdr_ptr } => {
+                read_msghdr_iovec_payload(pid, msghdr_ptr, max_bytes_u32)
+            }
+        }
     }
 }
 
@@ -262,7 +358,20 @@ fn syscall_from_notification(
     if raw == libc::SYS_sendto {
         return Ok(Some(SOCKET_PAYLOAD_SYSCALL_SENDTO));
     }
+    if raw == libc::SYS_writev {
+        return Ok(Some(SOCKET_PAYLOAD_SYSCALL_WRITEV));
+    }
+    if raw == libc::SYS_sendmsg {
+        return Ok(Some(SOCKET_PAYLOAD_SYSCALL_SENDMSG));
+    }
     Ok(None)
+}
+
+fn key_requested_size(syscall: u32, notification: &libc::seccomp_notif) -> u64 {
+    match syscall {
+        SOCKET_PAYLOAD_SYSCALL_SENDMSG => 0,
+        _ => notification.data.args[2],
+    }
 }
 
 fn fd_is_socket(pid: u32, fd: u32) -> Result<bool, ControlError> {
@@ -303,6 +412,8 @@ fn socket_symbol(syscall: u32) -> Result<&'static str, ControlError> {
     match syscall {
         SOCKET_PAYLOAD_SYSCALL_WRITE => Ok("write"),
         SOCKET_PAYLOAD_SYSCALL_SENDTO => Ok("sendto"),
+        SOCKET_PAYLOAD_SYSCALL_WRITEV => Ok("writev"),
+        SOCKET_PAYLOAD_SYSCALL_SENDMSG => Ok("sendmsg"),
         other => Err(ControlError::new(
             "seccomp_socket_symbol",
             format!("unsupported socket payload syscall {other}"),

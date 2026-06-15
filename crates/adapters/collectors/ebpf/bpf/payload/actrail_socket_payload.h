@@ -3,6 +3,8 @@
 
 #include "actrail_socket_payload_types.h"
 
+#define ACTRAIL_LINUX_EINPROGRESS 115
+
 static __always_inline struct actrail_socket_payload_config *socket_payload_config(void) {
     __u32 key = 0;
     return bpf_map_lookup_elem(&payload_socket_config, &key);
@@ -205,6 +207,14 @@ static __always_inline int emit_socket_payload_op(struct trace_event_raw_sys_exi
         return 0;
     }
 
+    if ((op->syscall == ACTRAIL_SOCKET_SYSCALL_WRITEV
+            || op->syscall == ACTRAIL_SOCKET_SYSCALL_SENDMSG)
+        && payload_socket_user_read_enabled()) {
+        emit_socket_payload_completion(op, tgid, tid, original_size);
+        bpf_map_delete_elem(&pending_socket_payload_ops, &pid_tgid);
+        return 0;
+    }
+
     if (op->direction == ACTRAIL_SOCKET_PAYLOAD_OUTBOUND
         && payload_socket_user_read_enabled()
         && original_size > limit) {
@@ -274,6 +284,45 @@ static __always_inline int store_socket_payload_sendto_op(
     );
 }
 
+static __always_inline int store_socket_payload_writev_op(
+    struct trace_event_raw_sys_enter *ctx
+) {
+    return store_socket_payload_op(
+        ctx,
+        ACTRAIL_SOCKET_PAYLOAD_OUTBOUND,
+        ACTRAIL_SOCKET_SYSCALL_WRITEV,
+        0,
+        1,
+        2,
+        1
+    );
+}
+
+static __always_inline int store_socket_payload_sendmsg_op(
+    struct trace_event_raw_sys_enter *ctx
+) {
+    __u64 pid_tgid = current_pid_tgid();
+    __u32 tgid = current_namespace_tgid();
+    __u64 *trace_id = bpf_map_lookup_elem(&tracked_traces, &tgid);
+    struct actrail_socket_payload_config *config = socket_payload_config();
+    struct actrail_pending_socket_payload_op op = {};
+    __u32 fd = (__u32)ctx->args[0];
+
+    if (!tgid || !trace_id || !config || !config->enabled || !ctx->args[1]) {
+        return 0;
+    }
+
+    op.trace_id = *trace_id;
+    op.buffer_ptr = (__u64)ctx->args[1];
+    op.requested_size = 0;
+    op.fd = fd;
+    op.fd_generation = socket_payload_fd_generation(tgid, fd);
+    op.direction = ACTRAIL_SOCKET_PAYLOAD_OUTBOUND;
+    op.syscall = ACTRAIL_SOCKET_SYSCALL_SENDMSG;
+    bpf_map_update_elem(&pending_socket_payload_ops, &pid_tgid, &op, BPF_ANY);
+    return 0;
+}
+
 static __always_inline int store_socket_payload_recvfrom_op(
     struct trace_event_raw_sys_enter *ctx
 ) {
@@ -323,7 +372,10 @@ static __always_inline void socket_payload_track_connect_exit(
     __u32 tgid = current_namespace_tgid();
     struct actrail_pending_net_op *op = bpf_map_lookup_elem(&pending_net_ops, &pid_tgid);
 
-    if (!tgid || !op || ctx->ret != 0 || op->kind != ACTRAIL_NET_CONNECT) {
+    if (!tgid || !op || op->kind != ACTRAIL_NET_CONNECT) {
+        return;
+    }
+    if (ctx->ret != 0 && ctx->ret != -ACTRAIL_LINUX_EINPROGRESS) {
         return;
     }
     socket_payload_track_fd(tgid, op->fd);

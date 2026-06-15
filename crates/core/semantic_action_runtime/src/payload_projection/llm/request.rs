@@ -129,6 +129,7 @@ fn llm_attributes(
         "payload.operation_id".to_string(),
         first.operation_id.to_string(),
     );
+    attributes.insert("payload.sequence".to_string(), first.sequence.to_string());
     attributes.insert(
         "payload.operation_ids".to_string(),
         payload_operation_ids(segments),

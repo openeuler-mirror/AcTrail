@@ -12,25 +12,18 @@ use super::export_file::{reject_active_trace_if_disabled, write_new_file};
 use super::source;
 
 pub(super) fn write_json_export(invocation: &ViewInvocation) -> Result<String, String> {
-    if invocation.storage_config_path.is_some() {
-        return Err("--storage-config is not supported for export-json".to_string());
-    }
     let config = OperatorConfig::load(&invocation.config_path)?;
-    let storage_path = invocation
-        .storage_path
-        .clone()
-        .unwrap_or_else(|| config.storage_path.clone());
-    let storage = source::open_storage(&storage_path)?;
-    let trace_id = source::resolve_trace_id(&storage, invocation.trace_id)?;
+    let storage_config = source::storage_config(invocation)?;
+    let mut storage = source::open_storage(&storage_config)?;
+    let trace_id = source::resolve_trace_id(storage.as_ref(), invocation.trace_id)?;
     reject_active_trace_if_disabled(
-        &storage,
+        storage.as_ref(),
         trace_id,
         config.export_config.allow_active_trace_snapshot,
     )?;
 
     let mut exporter = JsonGraphExportService::new(
-        storage.clone(),
-        storage,
+        storage.as_mut(),
         config.export_config.graph_schema_version,
         config.export_config.payload_bytes_enabled,
         config.export_config.payload_text_enabled,

@@ -15,7 +15,7 @@ use model_core::payload::PayloadSegment;
 use model_core::process::ProcessMembership;
 use model_core::trace::TraceRecord;
 use semantic_action::{SemanticAction, SemanticActionLink};
-use store_snapshot_contract::view::SnapshotView;
+use storage_core::SnapshotView;
 
 use crate::command::{PayloadFormat, RowLimit};
 use crate::table::Table;

@@ -4,9 +4,9 @@ use control_contract::reply::ControlError;
 
 use crate::service_host::AttachDebugService;
 
-use super::SqliteAttachService;
+use super::StorageAttachService;
 
-impl AttachDebugService for SqliteAttachService {
+impl AttachDebugService for StorageAttachService {
     fn ebpf_debug_snapshot(
         &self,
         pid: u32,

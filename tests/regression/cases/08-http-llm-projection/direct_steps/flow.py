@@ -17,7 +17,7 @@ def run_direct_http_projection_case(env, result: CaseResult) -> None:
         env.regression_root / "cases/08-http-llm-projection/run_e2e.py",
     )
     case_dir = env.regression_root / "cases/08-http-llm-projection"
-    config = None
+    config = env.repo_root / "tests/payload/http-local/operator.conf"
     settings = run_step(
         result,
         "HTTP projection workload config",
@@ -35,13 +35,13 @@ def run_direct_http_projection_case(env, result: CaseResult) -> None:
     workload = case_dir / "workload.py"
     run_step(
         result,
-        "default operator config",
-        lambda: module.read_config(env.default_operator_config_path()),
+        "HTTP projection operator config",
+        lambda: module.read_config(config),
         lambda values: expected_found_detail(
-            "default operator config can be parsed",
-            [f"keys={len(values)}", f"path={env.default_operator_config_path()}"],
+            "HTTP projection operator config can be parsed",
+            [f"keys={len(values)}", f"path={config}"],
         ),
-        "the case uses the static default config for local HTTP payload projection",
+        "the case uses a checked-in migrated config for local HTTP payload projection",
     )
     run_step(
         result,

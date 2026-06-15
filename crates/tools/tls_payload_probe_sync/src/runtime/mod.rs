@@ -2,7 +2,6 @@
 
 mod config;
 mod decision;
-mod exec;
 mod hook;
 mod loader;
 mod maps;
@@ -48,7 +47,7 @@ fn initialize_once() -> Result<(), String> {
     if let Some(plan) = initial_plan {
         ssl::install_plan(&plan)?;
     }
-    loader::scan_loaded_tls_libraries("init")
+    Ok(())
 }
 
 fn retry_initialize_after_loader_event() {
@@ -64,13 +63,17 @@ fn retry_initialize_after_loader_event() {
 mod exec_tests {
     use std::ffi::OsString;
 
-    use super::exec::{EnvEntry, merge_java_exec_env};
+    use super::loader::exec::{EnvEntry, merge_exec_env};
 
     #[test]
     fn java_exec_env_merge_preserves_child_env_and_adds_actrail_keys() {
         let current = vec![
             EnvEntry::new("TLS_PAYLOAD_SYNC_TRACE_ID", "42"),
             EnvEntry::new("TLS_PAYLOAD_SYNC_EVENT_SOCKET", "/tmp/actrail.sock"),
+            EnvEntry::new(
+                "LD_PRELOAD",
+                "/opt/actrail/libsync.so:/usr/lib/libcustom.so",
+            ),
             EnvEntry::new(
                 "JAVA_TOOL_OPTIONS",
                 "-Droot=true -javaagent:/tmp/actrail-java-payload-agent-1234.jar",
@@ -79,19 +82,24 @@ mod exec_tests {
         ];
         let child = vec![
             EnvEntry::new("PATH", "/usr/bin"),
+            EnvEntry::new("LD_PRELOAD", "/usr/lib/libcustom.so"),
             EnvEntry::new("JAVA_TOOL_OPTIONS", "-Dchild=true"),
         ];
 
-        let merged = merge_java_exec_env("/usr/bin/java", &child, &current);
+        let merged = merge_exec_env("/usr/bin/java", &child, &current);
 
         assert_eq!(merged[0], EnvEntry::new("PATH", "/usr/bin"));
         assert_eq!(
-            merged[1],
+            merged[2],
             EnvEntry::new(
                 "JAVA_TOOL_OPTIONS",
                 "-Dchild=true -javaagent:/tmp/actrail-java-payload-agent-1234.jar"
             )
         );
+        assert!(merged.contains(&EnvEntry::new(
+            "LD_PRELOAD",
+            "/usr/lib/libcustom.so:/opt/actrail/libsync.so"
+        )));
         assert!(merged.contains(&EnvEntry::new("TLS_PAYLOAD_SYNC_TRACE_ID", "42")));
         assert!(merged.contains(&EnvEntry::new(
             "TLS_PAYLOAD_SYNC_EVENT_SOCKET",
@@ -101,13 +109,27 @@ mod exec_tests {
     }
 
     #[test]
-    fn non_java_exec_env_merge_is_unchanged() {
-        let current = vec![EnvEntry::new("TLS_PAYLOAD_SYNC_TRACE_ID", "42")];
+    fn non_java_exec_env_merge_preserves_native_runtime_only() {
+        let current = vec![
+            EnvEntry::new("TLS_PAYLOAD_SYNC_TRACE_ID", "42"),
+            EnvEntry::new("LD_PRELOAD", "/opt/actrail/libsync.so"),
+            EnvEntry::new(
+                "JAVA_TOOL_OPTIONS",
+                "-javaagent:/tmp/actrail-java-payload-agent-1234.jar",
+            ),
+        ];
         let child = vec![EnvEntry::new("PATH", "/usr/bin")];
 
-        let merged = merge_java_exec_env("/usr/bin/python3", &child, &current);
+        let merged = merge_exec_env("/usr/bin/python3", &child, &current);
 
-        assert_eq!(merged, child);
+        assert_eq!(merged[0], EnvEntry::new("PATH", "/usr/bin"));
+        assert!(merged.contains(&EnvEntry::new("TLS_PAYLOAD_SYNC_TRACE_ID", "42")));
+        assert!(merged.contains(&EnvEntry::new("LD_PRELOAD", "/opt/actrail/libsync.so")));
+        assert!(
+            !merged
+                .iter()
+                .any(|entry| entry.key() == "JAVA_TOOL_OPTIONS")
+        );
     }
 
     #[test]
@@ -121,7 +143,7 @@ mod exec_tests {
             "-Xmx128m -javaagent:/tmp/actrail-java-payload-agent-1234.jar",
         )];
 
-        let merged = merge_java_exec_env(OsString::from("java.exe"), &child, &current);
+        let merged = merge_exec_env(OsString::from("java.exe"), &child, &current);
 
         assert_eq!(merged, child);
     }

@@ -1,11 +1,13 @@
 use super::{
-    DEFAULT_STORAGE_BUSY_TIMEOUT_MS, OPERATOR_CONFIG_TEMPLATE, OperatorConfig,
+    DEFAULT_CONTROL_PENDING_CONNECTION_MAX, OPERATOR_CONFIG_TEMPLATE, OperatorConfig,
     OperatorConfigInitStatus,
 };
 use crate::daemon::{
-    DiagnosticLogLevel, DisabledOrPath, PayloadTlsCaptureBackend, PayloadTlsLibrary,
-    PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource, ProcessSeccompSyscall,
+    DiagnosticLogLevel, DisabledOrPath, PayloadSocketSeccompSyscall, PayloadTlsCaptureBackend,
+    PayloadTlsLibrary, PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource,
+    ProcessSeccompSyscall,
 };
+use storage_factory::StorageBackendKind;
 
 #[test]
 fn default_operator_config_is_full_monitor_collection() {
@@ -23,42 +25,112 @@ fn default_operator_config_is_full_monitor_collection() {
     assert!(config.agent_invocation.enabled);
     assert!(config.resource_metrics.enabled);
     assert!(config.ebpf_config.file_path_capture_enabled);
-    assert!(config.live_otel_export.enabled);
+    assert!(config.export_runtime.enabled);
     assert!(!config.enforcement.enabled);
-    assert_eq!(config.live_otel_export.queue_capacity, 1024);
-    assert_eq!(config.diagnostic_log_level, DiagnosticLogLevel::Info);
+    assert_eq!(config.export_runtime.routes().len(), 1);
     assert_eq!(
-        config.storage_busy_timeout_ms,
-        DEFAULT_STORAGE_BUSY_TIMEOUT_MS
+        config.export_runtime.routes()[0].target.kind().as_str(),
+        "otel-jsonl"
+    );
+    assert_eq!(
+        config.export_runtime.routes()[0].delivery.as_str(),
+        "best-effort"
+    );
+    assert_eq!(
+        config.export_runtime.enabled_output_files()[0].path,
+        std::path::PathBuf::from("/tmp/actrail-live-spans.otlp.jsonl")
+    );
+    assert_eq!(config.diagnostic_log_level, DiagnosticLogLevel::Info);
+    assert_eq!(config.storage.backend(), StorageBackendKind::Sqlite);
+    assert_eq!(
+        config.control_pending_connection_max,
+        DEFAULT_CONTROL_PENDING_CONNECTION_MAX
+    );
+    assert_eq!(
+        config.payload_config.socket.seccomp_syscalls,
+        vec![
+            PayloadSocketSeccompSyscall::Write,
+            PayloadSocketSeccompSyscall::Writev,
+            PayloadSocketSeccompSyscall::Sendto,
+            PayloadSocketSeccompSyscall::Sendmsg,
+        ]
     );
 }
 
 #[test]
-fn storage_busy_timeout_defaults_for_existing_configs() {
+fn storage_sqlite_busy_timeout_is_required() {
     let raw = OPERATOR_CONFIG_TEMPLATE
         .lines()
-        .filter(|line| !line.starts_with("storage_busy_timeout_ms = "))
+        .filter(|line| !line.starts_with("storage_sqlite_busy_timeout_ms = "))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let error = OperatorConfig::parse(&raw).unwrap_err();
+
+    assert!(error.contains("missing config key storage_sqlite_busy_timeout_ms"));
+}
+
+#[test]
+fn storage_backend_is_required() {
+    let raw = OPERATOR_CONFIG_TEMPLATE
+        .lines()
+        .filter(|line| !line.starts_with("storage_backend = "))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let error = OperatorConfig::parse(&raw).unwrap_err();
+
+    assert!(error.contains("missing config key storage_backend"));
+}
+
+#[test]
+fn storage_backend_rejects_unknown_value() {
+    let raw =
+        OPERATOR_CONFIG_TEMPLATE.replace("storage_backend = sqlite", "storage_backend = mysql");
+
+    let error = OperatorConfig::parse(&raw).unwrap_err();
+
+    assert!(error.contains("invalid storage_backend"));
+}
+
+#[test]
+fn control_pending_connection_max_defaults_for_existing_configs() {
+    let raw = OPERATOR_CONFIG_TEMPLATE
+        .lines()
+        .filter(|line| !line.starts_with("control_pending_connection_max = "))
         .collect::<Vec<_>>()
         .join("\n");
 
     let config = OperatorConfig::parse(&raw).unwrap();
 
     assert_eq!(
-        config.storage_busy_timeout_ms,
-        DEFAULT_STORAGE_BUSY_TIMEOUT_MS
+        config.control_pending_connection_max,
+        DEFAULT_CONTROL_PENDING_CONNECTION_MAX
     );
+}
+
+#[test]
+fn control_pending_connection_max_rejects_zero() {
+    let raw = OPERATOR_CONFIG_TEMPLATE.replace(
+        "control_pending_connection_max = 256",
+        "control_pending_connection_max = 0",
+    );
+
+    let error = OperatorConfig::parse(&raw).unwrap_err();
+
+    assert!(error.contains("invalid control_pending_connection_max"));
 }
 
 #[test]
 fn storage_busy_timeout_rejects_zero() {
     let raw = OPERATOR_CONFIG_TEMPLATE.replace(
-        "storage_busy_timeout_ms = 5000",
-        "storage_busy_timeout_ms = 0",
+        "storage_sqlite_busy_timeout_ms = 5000",
+        "storage_sqlite_busy_timeout_ms = 0",
     );
 
     let error = OperatorConfig::parse(&raw).unwrap_err();
 
-    assert!(error.contains("invalid storage_busy_timeout_ms"));
+    assert!(error.contains("invalid storage_sqlite_busy_timeout_ms"));
 }
 
 #[test]
@@ -92,64 +164,32 @@ fn diagnostic_log_level_does_not_mutate_tls_diagnostics_config() {
 }
 
 #[test]
-fn payload_tls_java_agent_defaults_disabled_for_existing_configs() {
+fn export_runtime_config_parses_route_sections() {
     let raw = OPERATOR_CONFIG_TEMPLATE
-        .lines()
-        .filter(|line| !line.starts_with("payload_tls_java_agent_enabled = "))
-        .collect::<Vec<_>>()
-        .join("\n");
+        .replace("[export]\nenabled = true", "[export]\nenabled = false")
+        .replace(
+            "path = \"/tmp/actrail-live-spans.otlp.jsonl\"",
+            "path = \"/tmp/actrail-test-live.otlp.jsonl\"",
+        )
+        .replace("overwrite_enabled = true", "overwrite_enabled = false")
+        .replace("queue_capacity = 1024", "queue_capacity = 8")
+        .replace("flush_every_spans = 1", "flush_every_spans = 4");
 
     let config = OperatorConfig::parse(&raw).unwrap();
+    let output_files = config.export_runtime.enabled_output_files();
 
-    assert!(!config.payload_config.tls.java_agent_enabled);
-}
-
-#[test]
-fn payload_tls_java_agent_can_be_enabled() {
-    let raw = OPERATOR_CONFIG_TEMPLATE.replace(
-        "payload_tls_java_agent_enabled = false",
-        "payload_tls_java_agent_enabled = true",
-    );
-
-    let config = OperatorConfig::parse(&raw).unwrap();
-
-    assert!(config.payload_config.tls.java_agent_enabled);
-}
-
-#[test]
-fn live_otel_export_config_parses_as_own_section() {
-    let raw = OPERATOR_CONFIG_TEMPLATE
-        .replace(
-            "otel_live_export_enabled = true",
-            "otel_live_export_enabled = false",
-        )
-        .replace(
-            "otel_live_export_path = /tmp/actrail-live-spans.otlp.jsonl",
-            "otel_live_export_path = /tmp/actrail-test-live.otlp.jsonl",
-        )
-        .replace(
-            "otel_live_export_overwrite_enabled = true",
-            "otel_live_export_overwrite_enabled = true",
-        )
-        .replace(
-            "otel_live_export_queue_capacity = 1024",
-            "otel_live_export_queue_capacity = 8",
-        )
-        .replace(
-            "otel_live_export_flush_every_spans = 1",
-            "otel_live_export_flush_every_spans = 4",
-        );
-
-    let config = OperatorConfig::parse(&raw).unwrap();
-
-    assert!(!config.live_otel_export.enabled);
+    assert!(!config.export_runtime.enabled);
+    assert!(output_files.is_empty());
+    assert_eq!(config.export_runtime.routes()[0].name, "live-otel");
+    let export_factory::ExportRouteTargetConfig::OtelJsonl(otel_jsonl) =
+        &config.export_runtime.routes()[0].target;
     assert_eq!(
-        config.live_otel_export.path,
+        otel_jsonl.path,
         std::path::PathBuf::from("/tmp/actrail-test-live.otlp.jsonl")
     );
-    assert!(config.live_otel_export.overwrite_enabled);
-    assert_eq!(config.live_otel_export.queue_capacity, 8);
-    assert_eq!(config.live_otel_export.flush_every_spans, 4);
+    assert!(!otel_jsonl.overwrite_enabled);
+    assert_eq!(otel_jsonl.queue_capacity, 8);
+    assert_eq!(otel_jsonl.flush_every_spans, 4);
 }
 
 #[test]
@@ -255,38 +295,6 @@ fn xiaoo_tls_example_parses() {
     );
     assert!(config.export_config.payload_bytes_enabled);
     assert!(config.export_config.payload_text_enabled);
-}
-
-#[test]
-fn java_langchain4j_example_enables_java_payload_agent() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../..")
-        .join("docs/examples/10.java-langchain4j-agent/operator.conf");
-    let raw = std::fs::read_to_string(path).expect("read Java LangChain4j example config");
-    let config = OperatorConfig::parse(&raw).expect("parse Java LangChain4j example config");
-
-    assert!(config.payload_config.tls.enabled);
-    assert_eq!(
-        config.payload_config.tls.capture_backend,
-        PayloadTlsCaptureBackend::TlsSync
-    );
-    assert!(config.payload_config.tls.java_agent_enabled);
-}
-
-#[test]
-fn xiaoo_java_langchain4j_example_enables_java_payload_agent() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../..")
-        .join("docs/examples/11.xiaoo-java-langchain4j-agent-invocation/operator.conf");
-    let raw = std::fs::read_to_string(path).expect("read xiaoO Java LangChain4j example config");
-    let config = OperatorConfig::parse(&raw).expect("parse xiaoO Java LangChain4j example config");
-
-    assert!(config.payload_config.tls.enabled);
-    assert_eq!(
-        config.payload_config.tls.capture_backend,
-        PayloadTlsCaptureBackend::TlsSync
-    );
-    assert!(config.payload_config.tls.java_agent_enabled);
 }
 
 #[test]

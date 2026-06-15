@@ -5,60 +5,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use model_core::{ids::TraceId, process::ProcessIdentity};
 use semantic_action::{
     SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkRole,
-    SemanticActionReadStore,
 };
-use sqlite_storage::SqliteStorage;
+use storage_core::StorageBackend;
+
+use super::action_tree_roles::{DISPLAY_PARENT_ROLES, ROOT_LINK_ROLES};
+
+#[path = "action_tree_projection/legacy_llm_call.rs"]
+mod legacy_llm_call;
+#[path = "action_tree_projection/link_validity.rs"]
+mod link_validity;
 
 const ACTION_VALID_ATTR: &str = "actrail.action.valid";
-const LINK_VALID_ATTR: &str = "actrail.link.valid";
 const VALID_FALSE: &str = "false";
-const PROCESS_PARENT_IDENTITY_STATE_ATTR: &str = "process.parent.identity_state";
-const PROCESS_PARENT_IDENTITY_STATE_CONFLICT: &str = "conflict";
-const ROOT_PARENT_ID: &str = "";
-
-const ROOT_LINK_ROLES: &[SemanticActionLinkRole] = &[SemanticActionLinkRole::AgentPerformedAction];
-
-pub(super) fn display_parent_role_strs() -> &'static [&'static str] {
-    &[
-        "agent.invocation.exec",
-        "agent.invocation.child_llm_request",
-        "command.contains_command_invocation",
-        "command.contains_llm_call",
-        "command.contains_file_access",
-        "command.contains_process_fork_attempt",
-        "command.contains_process_exec",
-        "file.write.contains_file_event",
-        "llm.call.request",
-        "llm.call.response",
-        "llm.request.http_message",
-        "llm.response.http_message",
-        "llm.response.sse_stream",
-        "sse.stream.event",
-        "llm.request.llm_response",
-    ]
-}
-
-pub(super) fn root_link_role_strs() -> &'static [&'static str] {
-    &["agent.performed_action"]
-}
-
-const DISPLAY_PARENT_ROLES: &[SemanticActionLinkRole] = &[
-    SemanticActionLinkRole::AgentInvocationExec,
-    SemanticActionLinkRole::AgentInvocationChildLlmRequest,
-    SemanticActionLinkRole::CommandContainsCommandInvocation,
-    SemanticActionLinkRole::CommandContainsLlmCall,
-    SemanticActionLinkRole::CommandContainsFileAccess,
-    SemanticActionLinkRole::CommandContainsProcessForkAttempt,
-    SemanticActionLinkRole::CommandContainsProcessExec,
-    SemanticActionLinkRole::FileWriteContainsFileEvent,
-    SemanticActionLinkRole::LlmCallRequest,
-    SemanticActionLinkRole::LlmCallResponse,
-    SemanticActionLinkRole::LlmRequestHttpMessage,
-    SemanticActionLinkRole::LlmResponseHttpMessage,
-    SemanticActionLinkRole::LlmResponseSseStream,
-    SemanticActionLinkRole::SseStreamEvent,
-    SemanticActionLinkRole::LlmRequestLlmResponse,
-];
+pub(super) const ROOT_PARENT_ID: &str = "";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct DisplayChild {
@@ -76,12 +35,16 @@ pub(super) struct ActionDisplayProjection {
 }
 
 impl ActionDisplayProjection {
-    pub(super) fn load(storage: &mut SqliteStorage, trace_id: TraceId) -> Result<Self, String> {
+    pub(super) fn load(
+        storage: &mut dyn StorageBackend,
+        trace_id: TraceId,
+    ) -> Result<Self, String> {
         let actions = load_semantic_actions(storage, trace_id)?;
         let links = load_semantic_action_links(storage, trace_id)?;
         Ok(Self::new(actions, links))
     }
 
+    #[cfg(test)]
     pub(super) fn children(&self, parent_id: &str) -> Vec<DisplayChild> {
         self.children_by_parent
             .get(parent_id)
@@ -89,12 +52,14 @@ impl ActionDisplayProjection {
             .unwrap_or_default()
     }
 
-    pub(super) fn root_children(&self) -> Vec<DisplayChild> {
-        self.children(ROOT_PARENT_ID)
-    }
-
     fn new(actions: Vec<SemanticAction>, links: Vec<SemanticActionLink>) -> Self {
         let actions = valid_actions(actions);
+        let action_by_id = actions
+            .iter()
+            .map(|action| (action.action_id.clone(), action.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let links = valid_links(links, &action_by_id);
+        let actions = legacy_llm_call::normalize_finalized_http_error_calls(actions, &links);
         let action_by_id = actions
             .iter()
             .map(|action| (action.action_id.clone(), action.clone()))
@@ -149,7 +114,7 @@ impl ActionDisplayProjection {
 }
 
 fn load_semantic_actions(
-    storage: &mut SqliteStorage,
+    storage: &mut dyn StorageBackend,
     trace_id: TraceId,
 ) -> Result<Vec<SemanticAction>, String> {
     let mut actions = storage.list_semantic_actions(trace_id).map_err(|error| {
@@ -167,7 +132,7 @@ fn load_semantic_actions(
 }
 
 fn load_semantic_action_links(
-    storage: &mut SqliteStorage,
+    storage: &mut dyn StorageBackend,
     trace_id: TraceId,
 ) -> Result<Vec<SemanticActionLink>, String> {
     storage
@@ -194,10 +159,13 @@ fn valid_links(
     links
         .into_iter()
         .filter(|link| {
+            let Some(parent) = action_by_id.get(&link.parent_action_id) else {
+                return false;
+            };
             let Some(child) = action_by_id.get(&link.child_action_id) else {
                 return false;
             };
-            action_by_id.contains_key(&link.parent_action_id) && !invalidated_link(link, child)
+            !link_validity::invalid_link(link, parent, child, action_by_id)
         })
         .collect()
 }
@@ -407,18 +375,6 @@ fn invalidated_action(action: &SemanticAction) -> bool {
         .attributes
         .get(ACTION_VALID_ATTR)
         .is_some_and(|value| value == VALID_FALSE)
-}
-
-fn invalidated_link(link: &SemanticActionLink, child: &SemanticAction) -> bool {
-    link.attributes
-        .get(LINK_VALID_ATTR)
-        .is_some_and(|value| value == VALID_FALSE)
-        || ((link.role == SemanticActionLinkRole::AgentPerformedAction
-            || link.role == SemanticActionLinkRole::CommandContainsCommandInvocation)
-            && child
-                .attributes
-                .get(PROCESS_PARENT_IDENTITY_STATE_ATTR)
-                .is_some_and(|value| value == PROCESS_PARENT_IDENTITY_STATE_CONFLICT))
 }
 
 #[cfg(test)]

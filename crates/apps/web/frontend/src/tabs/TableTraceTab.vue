@@ -1,15 +1,18 @@
 <template>
-  <section class="table-panel">
-    <DataTable
-      :columns="view.columns"
-      :rows="view.rows"
-      :empty-label="view.emptyLabel"
-      :total-rows="view.totalRows"
-      :can-load-more="hasMoreRows"
-      :next-batch-size="nextBatchSize"
-      @select="$emit('select-detail', $event)"
-      @load-more="loadMore"
-    />
+  <section class="tab-detail-layout">
+    <section class="table-panel tab-detail-main">
+      <DataTable
+        :columns="view.columns"
+        :rows="view.rows"
+        :empty-label="view.emptyLabel"
+        :total-rows="view.totalRows"
+        :can-load-more="hasMoreRows"
+        :next-batch-size="nextBatchSize"
+        @select="selectDetail"
+        @load-more="loadMore"
+      />
+    </section>
+    <DetailPanel :detail="selectedDetail" :trace-id="traceKey" @clear="clearDetail" />
   </section>
 </template>
 
@@ -17,10 +20,15 @@
 import { computed, ref, watch } from 'vue';
 
 import DataTable from '../components/DataTable.vue';
+import DetailPanel from '../components/DetailPanel.vue';
 import { TABLE_RENDER_LIMITS } from './tableConfig';
 import { filterTableRows, normalizeTableQuery, positiveInteger } from './tableModel';
 
 const props = defineProps({
+  traceKey: {
+    type: [String, Number],
+    default: null,
+  },
   traceDetail: {
     type: Object,
     default: null,
@@ -50,9 +58,8 @@ const props = defineProps({
   },
 });
 
-defineEmits(['select-detail']);
-
 const visibleLimit = ref(0);
+const selectedDetail = ref(null);
 const effectiveInitialRows = computed(() => positiveInteger(props.initialRows));
 const effectiveBatchSize = computed(() => positiveInteger(props.rowBatchSize));
 const batchingEnabled = computed(() => effectiveInitialRows.value > 0 && effectiveBatchSize.value > 0);
@@ -92,6 +99,21 @@ watch(
   },
   { immediate: true },
 );
+
+watch(
+  () => props.traceKey,
+  () => {
+    clearDetail();
+  },
+);
+
+function selectDetail(detail) {
+  selectedDetail.value = detail;
+}
+
+function clearDetail() {
+  selectedDetail.value = null;
+}
 
 function loadMore() {
   visibleLimit.value += effectiveBatchSize.value;

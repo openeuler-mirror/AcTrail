@@ -29,9 +29,10 @@ use crate::capability_probe::{EbpfProbeResult, probe};
 use crate::decode::FileTracker;
 pub use crate::decode::{
     SOCKET_PAYLOAD_DIRECTION_INBOUND, SOCKET_PAYLOAD_DIRECTION_OUTBOUND,
-    SOCKET_PAYLOAD_SYSCALL_READ, SOCKET_PAYLOAD_SYSCALL_RECVFROM, SOCKET_PAYLOAD_SYSCALL_SENDTO,
-    SOCKET_PAYLOAD_SYSCALL_WRITE, SocketPayloadCompletion, TlsDiagnosticEvent,
-    TlsPayloadCaptureRequest, TlsPayloadCompletion, TlsPayloadDirectCapture,
+    SOCKET_PAYLOAD_SYSCALL_READ, SOCKET_PAYLOAD_SYSCALL_RECVFROM, SOCKET_PAYLOAD_SYSCALL_SENDMSG,
+    SOCKET_PAYLOAD_SYSCALL_SENDTO, SOCKET_PAYLOAD_SYSCALL_WRITE, SOCKET_PAYLOAD_SYSCALL_WRITEV,
+    SocketPayloadCompletion, TlsDiagnosticEvent, TlsPayloadCaptureRequest, TlsPayloadCompletion,
+    TlsPayloadDirectCapture,
 };
 use crate::loader::{
     AttachPlan, EbpfProgramLoader, EbpfRuntime, LoaderError, PendingTlsPayloadOp, PidNamespace,

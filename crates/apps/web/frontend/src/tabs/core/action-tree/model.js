@@ -1,7 +1,9 @@
 import { GRAPH_LANES, TREE_NODE_TYPES, UI_LIMITS } from './config';
 import { compactMeta, compactRows, kindClass, shortTime } from './common';
-import { groupAgentRootActions } from './rootGroups';
+import { groupActionNodes, mergeActionTreeChildren } from './actionGroups';
 import { semanticActionLabel, semanticActionTarget } from '../../actionLabels';
+
+export { mergeActionTreeChildren };
 
 const NODE_ID_AGENT = 'agent-process';
 const AGENT_ACTION_SEQUENCE_ATTR = 'agent.performed_action.sequence';
@@ -26,7 +28,7 @@ export function buildActionTreeRootNode({ traceDetail, rootData }) {
   return root;
 }
 
-export function buildActionTreeChildNodes({ parentNode, childData, traceDetail }) {
+export function buildActionTreeChildNodes({ parentNode, childData }) {
   const actions = (childData?.actions ?? []).filter((action) => !invalidatedAction(action));
   const links = childData?.links ?? [];
   const childState = childStateByActionId(childData?.child_state ?? []);
@@ -34,18 +36,7 @@ export function buildActionTreeChildNodes({ parentNode, childData, traceDetail }
     .sort(parentNode.nodeType === TREE_NODE_TYPES.agent ? sortAgentDisplayActions : sortDisplayActionByTime)
     .map(({ action }) => actionTreeNode(action, childState))
     .filter(Boolean);
-  if (parentNode.nodeType === TREE_NODE_TYPES.agent) {
-    return groupAgentRootActions(actionChildren);
-  }
-  if (parentNode.nodeType !== TREE_NODE_TYPES.action) {
-    return actionChildren;
-  }
-  const evidenceChildren = evidenceNodes(
-    parentNode.detail.raw,
-    traceDetail,
-    coveredEvidenceKeys(actions),
-  );
-  return actionChildren.concat(evidenceChildren).sort(sortTreeNodeByTime);
+  return groupActionNodes(actionChildren);
 }
 
 export function buildVisibleActionTreeModel({ root, query }) {
@@ -61,7 +52,7 @@ function actionTreeNode(action, childState) {
   const node = actionNode(action);
   const state = childState.get(action.id);
   applyLazyState(node, {
-    hasChildren: Boolean(state?.hasChildren ?? action.evidence?.length),
+    hasChildren: Boolean(state?.hasChildren),
     childrenLoaded: false,
   });
   return node;
@@ -150,51 +141,6 @@ function actionVisualClass(action) {
   return '';
 }
 
-function evidenceNodes(action, traceDetail, excludedEvidence = new Set()) {
-  return (action.evidence ?? [])
-    .filter((evidence) => !excludedEvidence.has(evidenceKey(evidence)))
-    .map((evidence) => evidenceNode(evidence, traceDetail));
-}
-
-function evidenceNode(evidence, traceDetail) {
-  const event = evidence.kind === 'event' ? findById(traceDetail?.events, evidence.id) : null;
-  const payload =
-    evidence.kind === 'payload_segment' ? findById(traceDetail?.payloads, evidence.id) : null;
-  const title = event
-    ? `${event.domain}:${event.operation}`
-    : payload
-      ? `${payload.display_id}:${payload.direction}`
-      : `${evidence.kind}:${evidence.id}`;
-  return {
-    id: `evidence:${evidence.kind}:${evidence.id}:${evidence.role}`,
-    nodeType: TREE_NODE_TYPES.evidence,
-    kind: evidence.kind,
-    kindClass: kindClass(evidence.kind),
-    title,
-    meta: evidence.role,
-    status: event?.operation ?? payload?.status,
-    children: [],
-    hasChildren: false,
-    childrenLoaded: true,
-    loading: false,
-    error: '',
-    detail: {
-      selectionId: `evidence:${evidence.kind}:${evidence.id}:${evidence.role}`,
-      title,
-      kind: evidence.kind,
-      rows: compactRows({
-        role: evidence.role,
-        id: evidence.id,
-        pid: event?.pid ?? payload?.pid,
-        time: event?.observed_at ?? payload?.observed_at,
-      }),
-      attributes: event?.metadata ?? payload,
-      raw: { evidence, event, payload },
-      payloadId: payload?.id,
-    },
-  };
-}
-
 function displayActions(actions, links) {
   const linkByChild = displayLinkByChild(actions, links);
   return actions.map((action) => ({
@@ -236,24 +182,14 @@ function sortAgentDisplayActions(left, right) {
   );
 }
 
-function coveredEvidenceKeys(actions) {
-  const keys = new Set();
-  for (const action of actions) {
-    for (const evidence of action.evidence ?? []) {
-      keys.add(evidenceKey(evidence));
-    }
-  }
-  return keys;
-}
-
-function evidenceKey(evidence) {
-  return `${evidence.kind}:${evidence.id}`;
-}
-
 function applyLazyState(node, state) {
   node.hasChildren = state.hasChildren;
+  node.totalChildren = state.childCount ?? (state.hasChildren ? null : 0);
   node.childrenLoaded = state.childrenLoaded;
+  node.nextChildOffset = 0;
+  node.hasMoreChildren = false;
   node.loading = false;
+  node.loadingMore = false;
   node.error = '';
 }
 
@@ -328,7 +264,7 @@ function pidLabel(pid) {
 }
 
 function laneTitles(depth) {
-  const baseTitles = [GRAPH_LANES.agent, GRAPH_LANES.actions, GRAPH_LANES.details];
+  const baseTitles = [GRAPH_LANES.agent, GRAPH_LANES.actions];
   return Array.from({ length: depth }, (_, index) => baseTitles[index] ?? `L${index + 1}`);
 }
 
@@ -423,27 +359,6 @@ function compareActionTime(left, right) {
   );
 }
 
-function sortTreeNodeByTime(left, right) {
-  return compareOptionalIsoTime(nodeTime(left), nodeTime(right)) || compareNodeId(left, right);
-}
-
-function nodeTime(node) {
-  return node.detail?.raw?.start_time ?? node.detail?.rows?.time ?? null;
-}
-
-function compareOptionalIsoTime(left, right) {
-  if (!left && !right) {
-    return 0;
-  }
-  if (!left) {
-    return 1;
-  }
-  if (!right) {
-    return -1;
-  }
-  return String(left).localeCompare(String(right));
-}
-
 function compareOptionalDecimalStrings(left, right, fieldName) {
   const leftText = optionalDecimalString(left, fieldName);
   const rightText = optionalDecimalString(right, fieldName);
@@ -487,12 +402,4 @@ function compareDecimalStrings(left, right) {
 
 function compareActionId(left, right) {
   return String(left.id ?? '').localeCompare(String(right.id ?? ''));
-}
-
-function compareNodeId(left, right) {
-  return String(left.id ?? '').localeCompare(String(right.id ?? ''));
-}
-
-function findById(items, id) {
-  return (items ?? []).find((item) => item.id === id);
 }

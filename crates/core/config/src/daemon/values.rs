@@ -22,15 +22,24 @@ impl ConfigValues {
     pub(super) fn parse(raw: &str) -> Result<Self, String> {
         let repeated = repeated_keys();
         let mut values = BTreeMap::<String, Vec<String>>::new();
+        let mut section = FlatParserSection::Root;
         for (line_index, line) in raw.lines().enumerate() {
             let trimmed = line.trim();
             if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            if let Some(next_section) = parse_section_header(trimmed, line_index + 1)? {
+                section = next_section;
                 continue;
             }
             let (key, value) = trimmed
                 .split_once('=')
                 .ok_or_else(|| format!("invalid config line {}", line_index + 1))?;
             let key = key.trim().to_string();
+            if section != FlatParserSection::Root {
+                reject_section_key(&section, &key)?;
+                continue;
+            }
             let value = unquote(value.trim())?;
             if !repeated.contains(key.as_str()) && values.contains_key(&key) {
                 return Err(format!("duplicate config key {key}"));
@@ -109,11 +118,11 @@ impl ConfigValues {
         Ok(value)
     }
 
-    pub(super) fn optional_positive_u64(
+    pub(super) fn optional_positive_u32(
         &self,
         key: &'static str,
-        default: u64,
-    ) -> Result<u64, String> {
+        default: u32,
+    ) -> Result<u32, String> {
         let Some(values) = self.values.get(key) else {
             return Ok(default);
         };
@@ -125,9 +134,9 @@ impl ConfigValues {
             .filter(|value| !value.is_empty())
             .ok_or_else(|| format!("config key {key} must not be empty"))?;
         let value = raw
-            .parse::<u64>()
+            .parse::<u32>()
             .map_err(|error| format!("invalid {key}: {error}"))?;
-        if value == u64::default() {
+        if value == u32::default() {
             return Err(format!("invalid {key}: value must be positive"));
         }
         Ok(value)
@@ -173,6 +182,64 @@ impl ConfigValues {
     fn repeated(&self, key: &'static str) -> impl Iterator<Item = &String> {
         self.values.get(key).into_iter().flatten()
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FlatParserSection {
+    Root,
+    Export,
+    ExportRoute,
+    ExportOtelJsonlRoute,
+}
+
+fn parse_section_header(
+    line: &str,
+    line_number: usize,
+) -> Result<Option<FlatParserSection>, String> {
+    if line.starts_with("[[") {
+        if !line.ends_with("]]") {
+            return Err(format!("invalid config section line {line_number}"));
+        }
+        if line == "[[export.routes]]" {
+            return Ok(Some(FlatParserSection::ExportRoute));
+        }
+        return Err(format!("unsupported config section line {line_number}"));
+    }
+    if line.ends_with("]]") {
+        return Err(format!("invalid config section line {line_number}"));
+    }
+    if !(line.starts_with('[') || line.ends_with(']')) {
+        return Ok(None);
+    }
+    if !(line.starts_with('[') && line.ends_with(']')) {
+        return Err(format!("invalid config section line {line_number}"));
+    }
+    let section = &line[1..line.len() - 1];
+    if section == "export" {
+        return Ok(Some(FlatParserSection::Export));
+    }
+    if section.starts_with("export.routes.otel-jsonl.") {
+        return Ok(Some(FlatParserSection::ExportOtelJsonlRoute));
+    }
+    Err(format!("unsupported config section line {line_number}"))
+}
+
+fn reject_section_key(section: &FlatParserSection, key: &str) -> Result<(), String> {
+    let allowed = match section {
+        FlatParserSection::Root => true,
+        FlatParserSection::Export => key == "enabled",
+        FlatParserSection::ExportRoute => matches!(key, "name" | "kind" | "delivery" | "enabled"),
+        FlatParserSection::ExportOtelJsonlRoute => matches!(
+            key,
+            "path" | "overwrite_enabled" | "queue_capacity" | "flush_every_spans"
+        ),
+    };
+    if allowed {
+        return Ok(());
+    }
+    Err(format!(
+        "unexpected config key {key} inside section-based export config"
+    ))
 }
 
 impl ConfigNode {

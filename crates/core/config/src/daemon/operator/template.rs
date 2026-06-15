@@ -5,9 +5,11 @@ pub const OPERATOR_CONFIG_TEMPLATE: &str = r#"# AcTrail default operator configu
 
 socket_path = /tmp/actrail.sock
 socket_mode_octal = 660
+control_pending_connection_max = 256
 pid_file = /tmp/actraild.pid
-storage_path = /tmp/actrail.sqlite
-storage_busy_timeout_ms = 5000
+storage_backend = sqlite
+storage_sqlite_path = /tmp/actrail.sqlite
+storage_sqlite_busy_timeout_ms = 5000
 web_listen_addr = 127.0.0.1:18080
 web_request_read_timeout_ms = 1000
 export_directory = /tmp/actrail-export
@@ -18,12 +20,6 @@ graph_schema_version = manual-v1
 allow_active_trace_snapshot = true
 export_payload_bytes_enabled = true
 export_payload_text_enabled = true
-
-otel_live_export_enabled = true
-otel_live_export_path = /tmp/actrail-live-spans.otlp.jsonl
-otel_live_export_overwrite_enabled = true
-otel_live_export_queue_capacity = 1024
-otel_live_export_flush_every_spans = 1
 
 profile_name = default-full-monitor
 required_capability = proc-lifecycle
@@ -99,6 +95,9 @@ payload_stdio_enabled = true
 payload_stdio_capture_stdin = true
 payload_stdio_capture_stdout = true
 payload_stdio_capture_stderr = true
+payload_stdio_stdin_storage_mode = full
+payload_stdio_stdout_storage_mode = drop
+payload_stdio_stderr_storage_mode = metadata-only
 payload_stdio_max_segment_bytes = 4095
 payload_stdio_ring_buffer_bytes = 4194304
 payload_stdio_pending_operation_max_entries = 8192
@@ -117,7 +116,9 @@ payload_socket_retention_max_bytes_per_trace = 104857600
 payload_socket_redaction_policy = disabled
 payload_socket_http_sniff_max_bytes = 65536
 payload_socket_seccomp_syscall = write
+payload_socket_seccomp_syscall = writev
 payload_socket_seccomp_syscall = sendto
+payload_socket_seccomp_syscall = sendmsg
 
 application_protocol_enabled = true
 application_protocol_http1_enabled = true
@@ -155,4 +156,19 @@ enforcement_event_buffer_bytes = 65536
 startup_wait_ms = 5000
 shutdown_wait_ms = 5000
 supervision_poll_interval_ms = 100
+
+[export]
+enabled = true
+
+[[export.routes]]
+name = "live-otel"
+kind = "otel-jsonl"
+delivery = "best-effort"
+enabled = true
+
+[export.routes.otel-jsonl.live-otel]
+path = "/tmp/actrail-live-spans.otlp.jsonl"
+overwrite_enabled = true
+queue_capacity = 1024
+flush_every_spans = 1
 "#;

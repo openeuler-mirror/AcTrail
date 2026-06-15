@@ -198,25 +198,6 @@ mod tests {
         assert!(error.contains("javac failed"));
     }
 
-    #[test]
-    fn embedded_java_agent_sources_use_jsse_transformer() {
-        let source_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("java-agent/src/main/java/com/actrail/javaagent");
-
-        assert!(source_dir.join("JsseTransformer.java").is_file());
-        assert!(
-            !source_dir
-                .join("HttpClientFacadeTransformer.java")
-                .is_file()
-        );
-        assert!(
-            !source_dir
-                .join("ClassFileHttpClientFacadePatcher.java")
-                .is_file()
-        );
-        assert!(!source_dir.join("AcTrailHttpClientHooks.java").is_file());
-    }
-
     fn tls_sync_config(java_agent_enabled: bool) -> PayloadTlsConfig {
         PayloadTlsConfig {
             enabled: true,

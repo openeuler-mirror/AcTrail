@@ -50,6 +50,15 @@ pub(in crate::runtime) fn runtime_plan_for_binary(
     Ok(plan)
 }
 
+pub(in crate::runtime) fn prefetch_runtime_plan_for_binary(binary: &Path) -> Result<(), String> {
+    let binary = canonical(binary);
+    if cached_plan(&binary)?.is_some() {
+        return Ok(());
+    }
+    let plan = lookup_daemon_plan_without_mapping(&binary)?;
+    store_cached_plan(binary, plan)
+}
+
 fn required_env(name: &str) -> Result<String, String> {
     std::env::var(name).map_err(|_| format!("missing required runtime env {name}"))
 }
@@ -141,6 +150,28 @@ fn lookup_daemon_plan(binary: &Path) -> Result<Option<RuntimePlan>, String> {
         Ok(PlanLookupResponse::Unsupported { .. }) => Ok(None),
         Err(error) => Err(format!(
             "dynamic TLS plan lookup for {} failed: {error}",
+            binary.display()
+        )),
+    }
+}
+
+fn lookup_daemon_plan_without_mapping(binary: &Path) -> Result<Option<RuntimePlan>, String> {
+    let Some(socket_path) = std::env::var_os(ENV_EVENT_SOCKET) else {
+        return Ok(None);
+    };
+    let socket_path = PathBuf::from(socket_path);
+    match lookup_runtime_plan(&socket_path, binary) {
+        Ok(PlanLookupResponse::Found(plan)) => {
+            let plan = descriptor_to_runtime_plan(plan)?;
+            if same_binary(&plan.binary, binary) {
+                Ok(Some(plan))
+            } else {
+                Ok(None)
+            }
+        }
+        Ok(PlanLookupResponse::Unsupported { .. }) => Ok(None),
+        Err(error) => Err(format!(
+            "dynamic TLS plan prefetch for {} failed: {error}",
             binary.display()
         )),
     }

@@ -58,43 +58,8 @@
           v-else
           :is="activeTabDefinition.component"
           v-bind="activeTabProps"
-          @select-detail="handleDetailSelect"
         />
       </main>
-
-      <aside class="detail-panel">
-        <div class="detail-header">
-          <div>
-            <span>{{ detailKind }}</span>
-            <h2>{{ detailTitle }}</h2>
-          </div>
-          <button class="icon-button subtle-button" type="button" title="Clear" @click="clearDetail">
-            <X :size="18" aria-hidden="true" />
-          </button>
-        </div>
-
-        <dl v-if="detailRows.length" class="detail-rows">
-          <template v-for="[key, value] in detailRows" :key="key">
-            <dt>{{ key }}</dt>
-            <dd>{{ value }}</dd>
-          </template>
-        </dl>
-
-        <section v-if="Object.keys(detailAttributes).length" class="detail-section">
-          <h3>Attributes</h3>
-          <JsonTree :value="detailAttributes" />
-        </section>
-
-        <section v-if="payloadText" class="detail-section">
-          <h3>Payload</h3>
-          <pre>{{ payloadText }}</pre>
-        </section>
-
-        <section v-if="detailRawValue" class="detail-section">
-          <h3>JSON</h3>
-          <JsonTree :value="detailRawValue" />
-        </section>
-      </aside>
     </div>
 
     <div v-if="error" class="error-bar">{{ error }}</div>
@@ -103,14 +68,13 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue';
-import { RefreshCw, Search, X } from '@lucide/vue';
+import { RefreshCw, Search } from '@lucide/vue';
 
 import {
   listTraces,
   readActionTree,
   readActionTreeRoot,
   readCommands,
-  readPayload,
   readTraceDiagnostics,
   readTraceEvents,
   readTracePayloads,
@@ -118,7 +82,6 @@ import {
   readTraceSummary,
   readTraceTimeline,
 } from './api';
-import JsonTree from './components/JsonTree.vue';
 import TraceTabs from './tabs/TraceTabs.vue';
 import { TAB_DEFINITIONS, TAB_IDS } from './tabs/registry';
 
@@ -130,17 +93,13 @@ const traceDetail = ref(null);
 const actionTree = ref(emptyActionTree());
 const commands = ref(emptyCommands());
 const waterfall = ref(emptyWaterfall());
-const selectedDetailId = ref(null);
-const selectedDetail = ref(null);
 const query = ref('');
 const error = ref('');
 const loading = ref(false);
-const payloadText = ref('');
 let activeTraceLoad = null;
 let activeCommandsLoad = null;
 let activeWaterfallLoad = null;
 let activeTracePartLoad = null;
-let activePayloadLoad = null;
 
 const selectedTrace = computed(() =>
   traces.value.find((trace) => trace.id === selectedTraceId.value),
@@ -154,30 +113,19 @@ const activeTabDefinition = computed(
 );
 const activeTabProps = computed(() => {
   const props = {
+    traceKey: selectedTraceId.value,
     traceDetail: traceDetail.value,
     actionTree: actionTree.value,
     query: query.value,
   };
-  if (activeTab.value === TAB_IDS.actionTree) {
-    props.traceKey = selectedTraceId.value ?? 'no-trace';
-    props.selectedDetailId = selectedDetailId.value;
-    props.selectedDetail = selectedDetail.value;
-  }
   if (activeTab.value === TAB_IDS.commands) {
     props.commands = commands.value;
   }
   if (activeTab.value === TAB_IDS.waterfall) {
     props.waterfall = waterfall.value;
-    props.selectedDetailId = selectedDetailId.value;
   }
   return props;
 });
-const detail = computed(() => selectedDetail.value);
-const detailTitle = computed(() => detail.value?.title ?? 'No selection');
-const detailKind = computed(() => detail.value?.kind ?? 'detail');
-const detailRows = computed(() => Object.entries(detail.value?.rows ?? {}));
-const detailAttributes = computed(() => detail.value?.attributes ?? {});
-const detailRawValue = computed(() => detail.value?.raw ?? null);
 
 const metrics = computed(() => {
   const counts = traceDetail.value?.counts ?? {};
@@ -219,26 +167,6 @@ watch(activeTab, async () => {
   await ensureDataForActiveTab();
 });
 
-watch(detail, async (nextDetail) => {
-  const token = Symbol();
-  activePayloadLoad = token;
-  payloadText.value = '';
-  if (!nextDetail?.payloadId || !selectedTraceId.value) {
-    return;
-  }
-  const traceId = selectedTraceId.value;
-  try {
-    const payload = await readPayload(traceId, nextDetail.payloadId);
-    if (activePayloadLoad === token && selectedTraceId.value === traceId && detail.value === nextDetail) {
-      payloadText.value = payload.text ?? '';
-    }
-  } catch (err) {
-    if (activePayloadLoad === token && selectedTraceId.value === traceId && detail.value === nextDetail) {
-      error.value = String(err.message ?? err);
-    }
-  }
-});
-
 async function refresh() {
   try {
     error.value = '';
@@ -256,13 +184,11 @@ async function refresh() {
 
 function selectTrace(traceId) {
   selectedTraceId.value = traceId;
-  clearDetail();
 }
 
 async function loadTrace(traceId) {
   const token = Symbol();
   activeTraceLoad = token;
-  clearDetail();
   traceDetail.value = null;
   actionTree.value = emptyActionTree();
   commands.value = emptyCommands();
@@ -391,17 +317,6 @@ async function ensureWaterfallForActiveTab() {
       error.value = String(err.message ?? err);
     }
   }
-}
-
-function handleDetailSelect(nextDetail) {
-  selectedDetailId.value = nextDetail?.selectionId ?? null;
-  selectedDetail.value = nextDetail;
-}
-
-function clearDetail() {
-  selectedDetailId.value = null;
-  selectedDetail.value = null;
-  payloadText.value = '';
 }
 
 function emptyActionTree(summary = null, rootData = null) {

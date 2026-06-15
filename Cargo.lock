@@ -312,7 +312,9 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 name = "config_core"
 version = "0.2.0"
 dependencies = [
+ "export_factory",
  "model_core",
+ "storage_factory",
 ]
 
 [[package]]
@@ -365,24 +367,24 @@ dependencies = [
  "config_core",
  "control_contract",
  "ebpf_collector",
+ "export_core",
+ "export_factory",
  "ingest_runtime",
  "libc",
  "linux_platform",
  "model_core",
- "otel_export",
  "payload_event",
  "plugin_policy_host",
  "process_identity_contract",
  "process_tree_snapshot_contract",
  "provider_evidence",
  "provider_label",
+ "recording_runtime",
  "rule_set_provider",
  "semantic_action",
  "semantic_action_runtime",
- "sqlite_storage",
- "store_read_contract",
- "store_tx_contract",
- "store_write_contract",
+ "storage_core",
+ "storage_factory",
  "tls_payload_core",
  "tls_payload_sync",
  "tls_probe_point_finder",
@@ -421,8 +423,8 @@ dependencies = [
  "daemon",
  "libc",
  "model_core",
- "sqlite_storage",
- "store_read_contract",
+ "storage_core",
+ "storage_factory",
  "uds_control_transport",
 ]
 
@@ -440,6 +442,39 @@ checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
  "windows-sys",
+]
+
+[[package]]
+name = "export_core"
+version = "0.2.0"
+dependencies = [
+ "model_core",
+ "semantic_action",
+]
+
+[[package]]
+name = "export_factory"
+version = "0.2.0"
+dependencies = [
+ "export_core",
+ "export_otel_jsonl",
+]
+
+[[package]]
+name = "export_otel_codec"
+version = "0.2.0"
+dependencies = [
+ "model_core",
+ "semantic_action",
+ "serde_json",
+]
+
+[[package]]
+name = "export_otel_jsonl"
+version = "0.2.0"
+dependencies = [
+ "export_core",
+ "export_otel_codec",
 ]
 
 [[package]]
@@ -674,7 +709,7 @@ version = "0.2.0"
 dependencies = [
  "graph_contract",
  "model_core",
- "store_snapshot_contract",
+ "storage_core",
 ]
 
 [[package]]
@@ -843,9 +878,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 name = "otel_export"
 version = "0.2.0"
 dependencies = [
- "model_core",
- "semantic_action",
- "serde_json",
+ "export_otel_codec",
 ]
 
 [[package]]
@@ -967,6 +1000,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
+name = "recording_runtime"
+version = "0.2.0"
+dependencies = [
+ "export_core",
+ "model_core",
+ "semantic_action",
+ "storage_core",
+]
+
+[[package]]
 name = "rule_set_provider"
 version = "0.2.0"
 dependencies = [
@@ -1019,6 +1062,7 @@ name = "semantic_action"
 version = "0.2.0"
 dependencies = [
  "model_core",
+ "serde_json",
 ]
 
 [[package]]
@@ -1128,11 +1172,33 @@ dependencies = [
  "model_core",
  "rusqlite",
  "semantic_action",
+ "storage_core",
  "store_read_contract",
  "store_retention_contract",
  "store_snapshot_contract",
  "store_tx_contract",
  "store_write_contract",
+]
+
+[[package]]
+name = "storage_core"
+version = "0.2.0"
+dependencies = [
+ "model_core",
+ "semantic_action",
+ "store_read_contract",
+ "store_retention_contract",
+ "store_snapshot_contract",
+ "store_tx_contract",
+ "store_write_contract",
+]
+
+[[package]]
+name = "storage_factory"
+version = "0.2.0"
+dependencies = [
+ "sqlite_storage",
+ "storage_core",
 ]
 
 [[package]]
@@ -1341,6 +1407,7 @@ version = "0.2.0"
 dependencies = [
  "control_contract",
  "libc",
+ "model_core",
  "uds_control_transport",
 ]
 
@@ -1393,9 +1460,8 @@ dependencies = [
  "otel_export",
  "semantic_action",
  "serde_json",
- "sqlite_storage",
- "store_read_contract",
- "store_snapshot_contract",
+ "storage_core",
+ "storage_factory",
 ]
 
 [[package]]
@@ -1513,10 +1579,8 @@ dependencies = [
  "flate2",
  "model_core",
  "semantic_action",
- "sqlite_storage",
- "store_read_contract",
- "store_snapshot_contract",
- "store_write_contract",
+ "storage_core",
+ "storage_factory",
 ]
 
 [[package]]

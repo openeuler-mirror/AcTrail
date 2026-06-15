@@ -18,8 +18,8 @@ use values::{
     required_enforcement_decision, required_enforcement_mark_strategy, required_enforcement_scope,
     required_memlock_rlimit, required_octal_u32, required_path, required_payload_redaction_policy,
     required_payload_socket_capture_backend, required_payload_socket_seccomp_syscalls,
-    required_payload_tls_capture_backend, required_payload_tls_library,
-    required_payload_tls_library_path, required_payload_tls_resolver,
+    required_payload_stdio_storage_mode, required_payload_tls_capture_backend,
+    required_payload_tls_library, required_payload_tls_library_path, required_payload_tls_resolver,
     required_payload_tls_seccomp_syscalls, required_payload_tls_source,
     required_payload_tls_sync_runtime_library_path, required_sse_data_policy, required_u32,
     required_u64,
@@ -114,6 +114,18 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ProbeCommand
                 capture_stdin: required_bool(&flags, "--payload-stdio-capture-stdin")?,
                 capture_stdout: required_bool(&flags, "--payload-stdio-capture-stdout")?,
                 capture_stderr: required_bool(&flags, "--payload-stdio-capture-stderr")?,
+                stdin_storage_mode: required_payload_stdio_storage_mode(
+                    &flags,
+                    "--payload-stdio-stdin-storage-mode",
+                )?,
+                stdout_storage_mode: required_payload_stdio_storage_mode(
+                    &flags,
+                    "--payload-stdio-stdout-storage-mode",
+                )?,
+                stderr_storage_mode: required_payload_stdio_storage_mode(
+                    &flags,
+                    "--payload-stdio-stderr-storage-mode",
+                )?,
                 max_segment_bytes: required_u32(&flags, "--payload-stdio-max-segment-bytes")?,
                 ring_buffer_bytes: required_u32(&flags, "--payload-stdio-ring-buffer-bytes")?,
                 pending_operation_max_entries: required_u32(

@@ -3,7 +3,7 @@
 use graph_contract::completeness::GraphCompleteness;
 use graph_contract::document::GraphDocument;
 use model_core::trace::{TraceHealth, TraceLifecycleState};
-use store_snapshot_contract::view::SnapshotView;
+use storage_core::SnapshotView;
 
 use crate::edges::{diagnostic_edges, event_edges, payload_edges, process_edges};
 use crate::network::{network_resource_edges, network_resource_nodes};
@@ -71,7 +71,7 @@ mod tests {
     use model_core::ids::{CollectorName, EventId, ProfileName, TraceId, TraceName};
     use model_core::process::{ProcessIdentity, ProcessMembership};
     use model_core::trace::TraceRecord;
-    use store_snapshot_contract::view::SnapshotView;
+    use storage_core::SnapshotView;
 
     use super::build_graph_document;
 

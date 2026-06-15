@@ -1,8 +1,14 @@
 //! Semantic action contracts kept separate from raw fact events.
 
+pub mod llm;
 pub mod model;
 pub mod store;
 
+pub use llm::{
+    LlmJsonResponseInput, LlmParsedResponse, LlmParsedSseEvent, LlmProviderMatch,
+    LlmProviderResponseParser, LlmProviderResponseStreamParser, LlmSseEvent, LlmSseResponseInput,
+    LlmTokenUsage, LlmToolCall, LlmToolFunction,
+};
 pub use model::{
     SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionLink,
     SemanticActionLinkConfidence, SemanticActionLinkRole, SemanticActionStatus, SemanticEvidence,

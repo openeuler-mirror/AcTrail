@@ -15,6 +15,12 @@ pub struct UdsControlServer<S> {
     service: S,
 }
 
+pub struct UdsControlConnection {
+    stream: UnixStream,
+    reply: Option<Vec<u8>>,
+    written: usize,
+}
+
 impl<S> UdsControlServer<S>
 where
     S: ControlService,
@@ -44,6 +50,52 @@ where
 
     pub fn service_mut(&mut self) -> &mut S {
         &mut self.service
+    }
+}
+
+impl UdsControlConnection {
+    pub fn new(stream: UnixStream) -> Self {
+        Self {
+            stream,
+            reply: None,
+            written: usize::default(),
+        }
+    }
+
+    pub fn raw_fd(&self) -> RawFd {
+        self.stream.as_raw_fd()
+    }
+
+    pub fn try_progress<S>(&mut self, server: &mut UdsControlServer<S>) -> std::io::Result<bool>
+    where
+        S: ControlService,
+    {
+        if self.reply.is_none() {
+            match read_request_with_fds(&self.stream) {
+                Ok((request, _)) if request.is_empty() => return Ok(true),
+                Ok((request, fds)) => {
+                    self.reply = Some(server.handle_bytes_with_fds(&request, fds));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return Ok(false),
+                Err(error) => return Err(error),
+            }
+        }
+        self.try_write_reply()
+    }
+
+    fn try_write_reply(&mut self) -> std::io::Result<bool> {
+        let Some(reply) = self.reply.as_ref() else {
+            return Ok(false);
+        };
+        while self.written < reply.len() {
+            match self.stream.write(&reply[self.written..]) {
+                Ok(0) => return Ok(true),
+                Ok(written) => self.written = self.written.saturating_add(written),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return Ok(false),
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(true)
     }
 }
 
@@ -121,4 +173,72 @@ fn received_fds(message: &libc::msghdr) -> Vec<RawFd> {
         }
     }
     fds
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Read, Write};
+
+    use control_contract::command::{ControlCommand, DoctorCommand};
+    use control_contract::reply::DoctorReply;
+    use model_core::ids::RequestId;
+
+    use super::*;
+
+    const DOCTOR_REQUEST_ID: u64 = 7;
+
+    struct DoctorService {
+        calls: usize,
+    }
+
+    impl ControlService for DoctorService {
+        fn handle(&mut self, command: ControlCommand) -> Result<ControlReply, ControlError> {
+            match command {
+                ControlCommand::Doctor(command) => {
+                    assert_eq!(command.request_id, RequestId::new(DOCTOR_REQUEST_ID));
+                    self.calls = self.calls.saturating_add(1);
+                    Ok(ControlReply::Doctor(DoctorReply {
+                        available_collectors: vec!["uds-test".to_string()],
+                        loaded_policy_plugins: Vec::new(),
+                        storage_ready: true,
+                    }))
+                }
+                _ => Err(ControlError::new("unexpected_command", "expected doctor")),
+            }
+        }
+    }
+
+    #[test]
+    fn nonblocking_connection_waits_for_request_then_replies() {
+        let (mut client_stream, server_stream) = UnixStream::pair().unwrap();
+        server_stream.set_nonblocking(true).unwrap();
+        let mut connection = UdsControlConnection::new(server_stream);
+        let mut server = UdsControlServer::new(DoctorService { calls: 0 });
+
+        assert!(!connection.try_progress(&mut server).unwrap());
+        assert_eq!(server.service_mut().calls, 0);
+
+        let request =
+            uds_control_transport::encode_command(&ControlCommand::Doctor(DoctorCommand {
+                request_id: RequestId::new(DOCTOR_REQUEST_ID),
+            }));
+        client_stream.write_all(&request).unwrap();
+
+        assert!(connection.try_progress(&mut server).unwrap());
+        assert_eq!(server.service_mut().calls, 1);
+
+        drop(connection);
+        let mut reply = Vec::new();
+        client_stream.read_to_end(&mut reply).unwrap();
+        let decoded = uds_control_transport::decode_reply(&reply).unwrap();
+
+        assert_eq!(
+            decoded,
+            Ok(ControlReply::Doctor(DoctorReply {
+                available_collectors: vec!["uds-test".to_string()],
+                loaded_policy_plugins: Vec::new(),
+                storage_ready: true,
+            }))
+        );
+    }
 }

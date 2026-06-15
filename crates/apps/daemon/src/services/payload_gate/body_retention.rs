@@ -100,6 +100,9 @@ impl PayloadBodyRetentionGate {
         if let Some(stream_id) = http2::candidate_stream_id(&segment.bytes) {
             return self.decide_http2_probe(segment, stream_id);
         }
+        if http2::body_looks_like_llm_request(&segment.bytes) {
+            return PayloadBodyRetentionDecision::remember(PayloadBodyRetention::Full, None);
+        }
         PayloadBodyRetentionDecision::transient(
             self.lookup_with_fallback(segment, None)
                 .unwrap_or(PayloadBodyRetention::Full),
@@ -136,6 +139,9 @@ impl PayloadBodyRetentionGate {
                 self.lookup_exact(segment, stream_id)
                     .unwrap_or(PayloadBodyRetention::SummaryOnly),
             );
+        }
+        if http2::body_looks_like_llm_response(&segment.bytes) {
+            return PayloadBodyRetentionDecision::remember(PayloadBodyRetention::Full, None);
         }
         PayloadBodyRetentionDecision::transient(
             self.lookup_with_fallback(segment, None)

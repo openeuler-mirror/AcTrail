@@ -32,6 +32,8 @@ pub const SOCKET_PAYLOAD_SYSCALL_READ: u32 = 1;
 pub const SOCKET_PAYLOAD_SYSCALL_WRITE: u32 = 2;
 pub const SOCKET_PAYLOAD_SYSCALL_SENDTO: u32 = 3;
 pub const SOCKET_PAYLOAD_SYSCALL_RECVFROM: u32 = 4;
+pub const SOCKET_PAYLOAD_SYSCALL_WRITEV: u32 = 5;
+pub const SOCKET_PAYLOAD_SYSCALL_SENDMSG: u32 = 6;
 const SOCKET_PAYLOAD_FLAG_TRUNCATED: u32 = 1;
 const TLS_PAYLOAD_COMPLETION_FAILED: u32 = 2;
 
@@ -333,6 +335,8 @@ fn socket_symbol(raw: u32) -> Result<&'static str, DecodeError> {
         SOCKET_PAYLOAD_SYSCALL_WRITE => Ok("write"),
         SOCKET_PAYLOAD_SYSCALL_SENDTO => Ok("sendto"),
         SOCKET_PAYLOAD_SYSCALL_RECVFROM => Ok("recvfrom"),
+        SOCKET_PAYLOAD_SYSCALL_WRITEV => Ok("writev"),
+        SOCKET_PAYLOAD_SYSCALL_SENDMSG => Ok("sendmsg"),
         other => Err(DecodeError::new(
             "socket_payload_syscall",
             format!("unknown socket payload syscall {other}"),

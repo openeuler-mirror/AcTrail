@@ -12,7 +12,7 @@ AcTrail has three runtime surfaces:
 | Control CLI | `actrailctl` | Starts traces, launches children, lists/removes traces, cleans local artifacts. |
 | Read-only views | `actrailviewer`, `actrailweb` | Reads storage, renders events/payloads/actions, exports JSON or OTEL. |
 
-Run one daemon per operator config. Keep each deployment's `socket_path`, `pid_file`, `storage_path`, `log_path`, `export_directory`, and enabled `otel_live_export_path` unique.
+Run one daemon per operator config. Keep each deployment's `socket_path`, `pid_file`, `storage_sqlite_path`, `log_path`, `export_directory`, and enabled `otel-jsonl` route path unique.
 
 ## Host Preconditions
 
@@ -50,13 +50,15 @@ For a persistent deployment, review these fields first:
 | --- | --- |
 | `socket_path` | Local Unix socket used by `actrailctl`; keep it private to the host. |
 | `socket_mode_octal` | File mode for the control socket. |
+| `control_pending_connection_max` | Maximum number of simultaneously pending control socket clients; keep the default `256` unless one daemon must coordinate many concurrently connecting agents. |
 | `pid_file` | Used by `actraild start/stop/status/restart`. |
-| `storage_path` | SQLite storage location; place it on a filesystem with enough space for payload retention. |
-| `storage_busy_timeout_ms` | SQLite busy timeout for daemon writes. Keep this positive; increase it only when long-running readers share the same storage. |
+| `storage_backend` | Storage backend implementation. Current supported value: `sqlite`. |
+| `storage_sqlite_path` | SQLite storage location; place it on a filesystem with enough space for payload retention. |
+| `storage_sqlite_busy_timeout_ms` | SQLite busy timeout for daemon writes. Keep this positive; increase it only when long-running readers share the same storage. |
 | `log_path` | Daemon background stdout/stderr log. |
 | `diagnostic_log_level` | Daemon diagnostic verbosity: `off`, `info`, or `debug`. Use `debug` only while collecting failure evidence. |
 | `export_directory` | Default graph export directory when no explicit `--output` is passed. |
-| `otel_live_export_*` | Live OTEL JSONL sink. The generated default enables it; disable it if a realtime span stream is not required. |
+| `[export]` / `[[export.routes]]` | Live export routes. The generated default enables one `otel-jsonl` route; disable it if a realtime span stream is not required. |
 | `profile_name` and `required_capability` | Capability contract for traces created from this config. |
 | `*_retention_max_bytes_per_trace` | Payload storage safety limits. |
 | `export_payload_bytes_enabled` / `export_payload_text_enabled` | Whether raw payload bytes/text can appear in graph JSON export. |
@@ -74,7 +76,7 @@ Use a narrow config for each deployment intent:
 | Process and network trail | `proc-lifecycle`, `net-transport`, `ebpf_enabled = true`. |
 | File and IPC observation | Add `fs-access-basic`, `ipc-pipe-fifo`, `ipc-unix-socket`; set `file_path_capture_enabled = true` when path events are required. |
 | Stdio payload | Add `stdio-chunk`; enable `payload_stdio_enabled` and the specific stdin/stdout/stderr booleans. |
-| Plain HTTP payload | Add `socket-plaintext-payload`; enable `payload_socket_enabled`, `payload_socket_capture_backend`, `payload_socket_seccomp_syscall`, and HTTP application protocol settings. |
+| Plain HTTP payload | Add `socket-plaintext-payload`; enable `payload_socket_enabled`, `payload_socket_capture_backend`, `payload_socket_seccomp_syscall`, and HTTP application protocol settings. The default full-monitor config includes `write`, `writev`, `sendto`, and `sendmsg` so linear and vectored socket writes can both produce request payload evidence. |
 | HTTPS OpenSSL payload | Add `tls-plaintext-payload`; configure TLS resolver/source and use `actrailctl launch` for `tls-sync` capture. |
 | Agent LLM payload | Enable both HTTPS/TLS and plain HTTP socket payload paths when the provider route is not known in advance; the resulting `llm.request` evidence may come from `TlsUserSpace` or `Syscall/socket-syscall`. |
 | Agent invocation discovery | Add `proc-exec-context` plus an LLM payload path; enable `seccomp_notify_enabled`, `process_seccomp_enabled`, payload capture, and `agent_invocation_enabled`. |
@@ -122,6 +124,7 @@ Some features require `actrailctl launch` because the child must be prepared bef
 | Feature | Why `launch` Is Required |
 | --- | --- |
 | TLS sync payload (`tls-sync`) | `actrailctl launch` prepares the sync runtime, event socket, and probe plan before the child `exec`. Existing processes cannot receive that preload setup retroactively. |
+| Java JSSE payload | `payload_tls_java_agent_enabled = true` injects the embedded Java agent through `JAVA_TOOL_OPTIONS` during launch. Keep the default `false` outside Java JSSE workloads. |
 | Process seccomp exec/fork/clone observation | The child process tree must inherit the configured seccomp user notification filter. Process-creation names are resolved through the target architecture's syscall map. |
 | Agent invocation semantic actions | The daemon needs process exec context from the launch-time seccomp path. |
 
@@ -129,7 +132,7 @@ For existing processes, `track-add` can observe configured eBPF facts from the a
 
 ## Storage And Retention
 
-Storage is append-oriented SQLite at `storage_path`. The daemon opens file-backed storage in WAL mode and uses `storage_busy_timeout_ms` when waiting on transient SQLite locks. Payload retention is controlled per trace by:
+With `storage_backend = sqlite`, storage is append-oriented SQLite at `storage_sqlite_path`. The daemon opens file-backed storage in WAL mode and uses `storage_sqlite_busy_timeout_ms` when waiting on transient SQLite locks. Payload retention is controlled per trace by:
 
 ```text
 payload_tls_retention_max_bytes_per_trace
@@ -137,7 +140,13 @@ payload_stdio_retention_max_bytes_per_trace
 payload_socket_retention_max_bytes_per_trace
 ```
 
-Socket BPF direct-copy is controlled by `payload_socket_max_segment_bytes`; the current stable socket BPF event ABI caps that inline copy at `4095` bytes. Larger socket operations fall back to user-read when `payload_socket_capture_backend = bpf-copy-seccomp-fallback`; that path is capped by `payload_socket_max_operation_bytes`. The default operation cap is `4194304` bytes, so HTTP LLM requests up to 4MB are still captured as complete plaintext without forcing every small socket event to reserve a fixed multi-MB ringbuf record. Values above the configured operation cap are retained as partial/truncated payloads and must not be treated as complete `llm.request`.
+Stdio payload storage is controlled before persistence by
+`payload_stdio_stdin_storage_mode`, `payload_stdio_stdout_storage_mode`, and
+`payload_stdio_stderr_storage_mode`. Use `drop` for streams that should not be
+stored, and `metadata-only` when only segment timing/process metadata should be
+kept.
+
+Socket BPF direct-copy is controlled by `payload_socket_max_segment_bytes`; the current stable socket BPF event ABI caps that inline copy at `4095` bytes. Larger socket operations fall back to user-read when `payload_socket_capture_backend = bpf-copy-seccomp-fallback`; that path is capped by `payload_socket_max_operation_bytes`. The default operation cap is `4194304` bytes, so HTTP LLM requests up to 4MB are still captured as complete plaintext without forcing every small socket event to reserve a fixed multi-MB ringbuf record. Values above the configured operation cap are retained as partial/truncated payloads and must not be treated as complete `llm.request`. Vectored outbound socket syscalls (`writev` and `sendmsg`) are user-read fallback only because their payload is described by `iovec`/`msghdr` rather than a single linear buffer.
 
 If export configs enable raw payload fields, graph JSON may contain sensitive request bodies. Keep `export_payload_bytes_enabled = false` and `export_payload_text_enabled = false` for routine deployments unless raw payload export is an explicit requirement.
 

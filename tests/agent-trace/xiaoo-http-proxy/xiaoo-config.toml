@@ -1,0 +1,7 @@
+[llm]
+provider = "deepseek"
+model = "deepseek-chat"
+api_key_env = "ACTRAIL_XIAOO_HTTP_PROXY_API_KEY"
+api_base = "http://127.0.0.1:18098"
+max_tokens = 128
+context_window = 32768

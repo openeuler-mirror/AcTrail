@@ -60,6 +60,9 @@ pub fn resolve(request: FastProbeRequest) -> ToolResult<ProbePointPlan> {
     if let Some(plan) = resolve_direct_shared_library(&image, &request)? {
         return Ok(plan);
     }
+    if let Some(plan) = resolve_boringssl_shared_library(&image, &request)? {
+        return Ok(plan);
+    }
     if let Some(plan) = resolve_recursive_shared_library(&image, &request)? {
         return Ok(plan);
     }
@@ -162,6 +165,16 @@ fn resolve_direct_shared_library(
         &request.library_search_dirs,
     )?;
     resolve_first_openssl_library(image, search.candidates)
+}
+
+fn resolve_boringssl_shared_library(
+    image: &ElfImage,
+    request: &FastProbeRequest,
+) -> ToolResult<Option<ProbePointPlan>> {
+    if !request.source.allows_shared_library() || !request.provider.allows(TlsProvider::BoringSsl) {
+        return Ok(None);
+    }
+    resolve_first_boringssl_library(image, boringssl_library_candidates(image, request))
 }
 
 fn resolve_static_patterns(
@@ -287,6 +300,63 @@ fn resolve_first_openssl_library(
         }
     }
     Ok(None)
+}
+
+fn resolve_first_boringssl_library(
+    target: &ElfImage,
+    candidates: Vec<PathBuf>,
+) -> ToolResult<Option<ProbePointPlan>> {
+    for candidate in candidates {
+        let library = ElfImage::parse(&candidate)?;
+        if library.arch() != target.arch() {
+            continue;
+        }
+        let symbols =
+            library.unique_defined_symbol_values(boringssl::map_symbols(library.arch()))?;
+        if !has_all(&symbols, boringssl::map_symbols(library.arch())) {
+            continue;
+        }
+        let probe_symbols = boringssl_probe_symbols(&symbols);
+        let plan = plan_from_symbol_map(
+            &library,
+            TlsProvider::BoringSsl,
+            ProbeSource::SharedLibrary,
+            boringssl::SHARED_SYMBOL_MAP_RESOLVER,
+            &probe_symbols,
+        )?
+        .with_target(target);
+        if plan.has_payload_closure() {
+            return Ok(Some(plan));
+        }
+    }
+    Ok(None)
+}
+
+fn boringssl_library_candidates(image: &ElfImage, request: &FastProbeRequest) -> Vec<PathBuf> {
+    let mut candidates = request
+        .libraries
+        .iter()
+        .filter(|path| request.provider == ProviderFilter::BoringSsl || !is_libssl_path(path))
+        .cloned()
+        .collect::<Vec<_>>();
+    if is_shared_object_path(image.path()) {
+        if request.provider == ProviderFilter::BoringSsl || !is_libssl_path(image.path()) {
+            candidates.push(image.path().to_path_buf());
+        }
+    }
+    candidates
+}
+
+fn is_shared_object_path(path: &std::path::Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.contains(".so"))
+}
+
+fn is_libssl_path(path: &std::path::Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("libssl") && name.contains(".so"))
 }
 
 fn plan_from_symbol_map(

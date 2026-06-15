@@ -47,11 +47,12 @@ const PROC_COORD_TRACEPOINT_SIGNAL_GENERATE: u32 = 1;
 pub(crate) use file_path::FileTracker;
 pub use payload::{
     SOCKET_PAYLOAD_DIRECTION_INBOUND, SOCKET_PAYLOAD_DIRECTION_OUTBOUND,
-    SOCKET_PAYLOAD_SYSCALL_READ, SOCKET_PAYLOAD_SYSCALL_RECVFROM, SOCKET_PAYLOAD_SYSCALL_SENDTO,
-    SOCKET_PAYLOAD_SYSCALL_WRITE, SocketPayloadCompletion, TlsDiagnosticEvent,
-    TlsPayloadCaptureRequest, TlsPayloadCompletion, TlsPayloadDirectCapture, decode_socket_payload,
-    decode_socket_payload_completion, decode_stdio_payload, decode_tls_capture_request,
-    decode_tls_completion, decode_tls_diagnostic, decode_tls_direct_capture,
+    SOCKET_PAYLOAD_SYSCALL_READ, SOCKET_PAYLOAD_SYSCALL_RECVFROM, SOCKET_PAYLOAD_SYSCALL_SENDMSG,
+    SOCKET_PAYLOAD_SYSCALL_SENDTO, SOCKET_PAYLOAD_SYSCALL_WRITE, SOCKET_PAYLOAD_SYSCALL_WRITEV,
+    SocketPayloadCompletion, TlsDiagnosticEvent, TlsPayloadCaptureRequest, TlsPayloadCompletion,
+    TlsPayloadDirectCapture, decode_socket_payload, decode_socket_payload_completion,
+    decode_stdio_payload, decode_tls_capture_request, decode_tls_completion, decode_tls_diagnostic,
+    decode_tls_direct_capture,
 };
 
 pub(crate) fn decode_file_path(

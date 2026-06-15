@@ -378,9 +378,9 @@ def prepare_configured_directories(config: Path) -> None:
     for key in (
         "socket_path",
         "pid_file",
-        "storage_path",
+        "storage_sqlite_path",
         "log_path",
-        "otel_live_export_path",
+        "export_otel_jsonl_path",
         "payload_tls_sync_event_socket_path",
         "enforcement_rules_path",
     ):
@@ -409,15 +409,35 @@ def run_checked(command: list[str], echo: bool = True) -> str:
 
 def read_config(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
+    section = ""
     for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line.strip("[]")
+            continue
         key, separator, value = line.partition("=")
         if not separator:
             raise RuntimeError(f"invalid config line: {raw}")
-        values[key.strip()] = value.strip()
+        key = key.strip()
+        value = unquote(value.strip())
+        if section == "export" and key == "enabled":
+            values["export_enabled"] = value
+            continue
+        if section.startswith("export.routes.otel-jsonl.") and key == "path":
+            values["export_otel_jsonl_path"] = value
+            continue
+        if section.startswith("export."):
+            continue
+        values[key] = value
     return values
+
+
+def unquote(value: str) -> str:
+    if len(value) >= 2 and value.startswith('"') and value.endswith('"'):
+        return value[1:-1]
+    return value
 
 
 def resolve_config_path(raw: str, workload_path: Path) -> Path:

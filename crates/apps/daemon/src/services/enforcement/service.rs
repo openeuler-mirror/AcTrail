@@ -25,6 +25,7 @@ pub(in crate::services) struct EnforcementEventDraft {
     pub trace_id: TraceId,
     pub observed_at: SystemTime,
     pub process: ProcessIdentity,
+    pub metadata_partial: bool,
     pub payload: EnforcementPayload,
 }
 
@@ -152,7 +153,6 @@ fn handle_permission_event(
         return Ok(());
     }
 
-    let file_key = event_fd.file_key()?;
     let observed_path = event_fd.display_path();
     let decision = decision_for_path(rules, default_decision, observed_path.as_deref());
     respond(
@@ -161,12 +161,17 @@ fn handle_permission_event(
         matches!(decision.decision, EnforcementDecision::Allow),
     )?;
     if audit_enabled {
+        let (file_key, audit_metadata_error) = match event_fd.file_key() {
+            Ok(file_key) => (Some(file_key), None),
+            Err(error) => (None, Some(error)),
+        };
         drafts.push(event_draft(
             trace_id,
             process,
             decision,
             file_key,
             observed_path,
+            audit_metadata_error,
         ));
     }
     Ok(())
@@ -233,14 +238,19 @@ fn event_draft(
     trace_id: TraceId,
     process: ProcessIdentity,
     decision: Decision<'_>,
-    file_key: FileKey,
+    file_key: Option<FileKey>,
     fallback_path: Option<String>,
+    audit_metadata_error: Option<String>,
 ) -> EnforcementEventDraft {
-    let mut metadata = BTreeMap::from([
-        ("scope".to_string(), "trace".to_string()),
-        ("file_dev".to_string(), file_key.dev.to_string()),
-        ("file_ino".to_string(), file_key.ino.to_string()),
-    ]);
+    let metadata_partial = audit_metadata_error.is_some();
+    let mut metadata = BTreeMap::from([("scope".to_string(), "trace".to_string())]);
+    if let Some(file_key) = file_key {
+        metadata.insert("file_dev".to_string(), file_key.dev.to_string());
+        metadata.insert("file_ino".to_string(), file_key.ino.to_string());
+    }
+    if let Some(error) = audit_metadata_error {
+        metadata.insert("audit_metadata_error".to_string(), error);
+    }
     if decision.rule.is_none() {
         metadata.insert("rule_source".to_string(), "default".to_string());
     }
@@ -248,6 +258,7 @@ fn event_draft(
         trace_id,
         observed_at: SystemTime::now(),
         process,
+        metadata_partial,
         payload: EnforcementPayload {
             backend: "fanotify".to_string(),
             operation: "open".to_string(),
