@@ -71,6 +71,7 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { RefreshCw, Search } from '@lucide/vue';
 
 import {
+  clearServerCache,
   listTraces,
   readActionTree,
   readActionTreeRoot,
@@ -170,6 +171,7 @@ watch(activeTab, async () => {
 async function refresh() {
   try {
     error.value = '';
+    await clearServerCache();
     const data = await listTraces();
     traces.value = data.traces ?? [];
     if (!selectedTraceId.value && traces.value.length) {

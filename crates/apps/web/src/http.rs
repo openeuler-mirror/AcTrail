@@ -184,13 +184,22 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
 }
 
 fn route(request: &Request, storage: &StorageConfig) -> Result<Response, String> {
+    let (path, query) = split_request_target(&request.path);
+    if path == "/api/cache/clear" {
+        if request.method != "POST" {
+            return Ok(Response::text(
+                STATUS_METHOD_NOT_ALLOWED,
+                "POST required for /api/cache/clear",
+            ));
+        }
+        return Ok(Response::json(view::clear_cache_json()?));
+    }
     if request.method != "GET" {
         return Ok(Response::text(
             STATUS_METHOD_NOT_ALLOWED,
             "only GET is supported",
         ));
     }
-    let (path, query) = split_request_target(&request.path);
     match path {
         "/" => Ok(Response::html(render::html())),
         "/assets/app.css" => Ok(Response::css(render::css())),

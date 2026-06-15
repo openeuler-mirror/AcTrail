@@ -2,6 +2,8 @@
 
 #[path = "view/action_tree_projection.rs"]
 mod action_tree_projection;
+#[path = "view/projection_cache.rs"]
+mod projection_cache;
 #[path = "view/action_tree_roles.rs"]
 mod action_tree_roles;
 #[path = "view/actions.rs"]
@@ -237,6 +239,10 @@ pub fn trace_diagnostics_json(
         .map(events::diagnostic_json)
         .collect::<Vec<_>>();
     Ok(format!("{{\"diagnostics\":[{}]}}", rows.join(",")))
+}
+
+pub fn clear_cache_json() -> Result<String, String> {
+    Ok(projection_cache::clear_projection_cache_json())
 }
 
 pub fn action_tree_json(storage_config: &StorageConfig, trace_id: u64) -> Result<String, String> {

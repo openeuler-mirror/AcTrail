@@ -27,8 +27,10 @@ export const WATERFALL_METRICS = Object.freeze([
   {
     key: 'model',
     label: 'Model',
-    get: (action) =>
-      action.attributes?.['llm.call.model'] ?? action.attributes?.['llm.response.model'],
+    get: (action, llmMessages) =>
+      llmMessages?.model ??
+      action.attributes?.['llm.call.model'] ??
+      action.attributes?.['llm.response.model'],
   },
   {
     key: 'exit_code',
@@ -86,6 +88,13 @@ export function buildWaterfall(actions, links) {
     }
   }
 
+  const parentByChild = new Map();
+  for (const [parentId, childIds] of childrenByParent) {
+    for (const childId of childIds) {
+      parentByChild.set(childId, parentId);
+    }
+  }
+
   const placed = new Set();
   const attach = (node) => {
     if (placed.has(node.id)) {
@@ -100,6 +109,9 @@ export function buildWaterfall(actions, links) {
       .filter(Boolean)
       .sort(compareNodes);
     node.hasChildren = node.children.length > 0;
+    if (node.kind === 'llm.call') {
+      attachLlmCallDetails(node, nodeById, parentByChild, window);
+    }
     return node;
   };
 
@@ -231,9 +243,10 @@ export function flattenMatchingWaterfall(roots, query, activeGroups) {
   return out;
 }
 
-export function actionDetail(action) {
+export function actionDetail(action, llmMessages = null) {
   const label = semanticActionLabel(action);
   const target = semanticActionTarget(action);
+  const messages = llmMessages ?? llmMessagesFromAction(action);
   return {
     selectionId: action.id,
     title: label,
@@ -247,18 +260,31 @@ export function actionDetail(action) {
       pid: action.process?.pid,
       started: action.start_time,
       ended: action.end_time,
-      ...metricRows(action),
+      request_message: messages?.requestFull,
+      response_message: messages?.responseFull,
+      agent_scope: messages?.scope,
+      parent_command: messages?.parent,
+      ttft: messages?.ttft,
+      ...metricRows(action, messages),
     }),
-    attributes: action.attributes ?? {},
+    attributes: {
+      ...(action.attributes ?? {}),
+      ...(messages?.requestFull
+        ? { 'llm.request.message_preview': messages.requestFull }
+        : {}),
+      ...(messages?.responseFull
+        ? { 'llm.response.message_preview': messages.responseFull }
+        : {}),
+    },
     evidence: action.evidence ?? [],
     raw: action,
   };
 }
 
-function metricRows(action) {
+function metricRows(action, llmMessages = null) {
   const rows = {};
   for (const metric of WATERFALL_METRICS) {
-    const value = metric.get(action);
+    const value = metric.get(action, llmMessages);
     if (value !== undefined && value !== null && value !== '') {
       rows[metric.key] = value;
     }
@@ -267,6 +293,13 @@ function metricRows(action) {
 }
 
 function rowFromNode(node, depth, expanded) {
+  const llmMessages =
+    node.llmMessages ??
+    (node.kind === 'llm.request'
+      ? buildLlmMessages(node.action, null)
+      : node.kind === 'llm.response'
+        ? buildLlmMessages(null, node.action)
+        : null);
   return {
     id: node.id,
     depth,
@@ -287,14 +320,22 @@ function rowFromNode(node, depth, expanded) {
     durationText: node.live
       ? 'running…'
       : node.action.duration ?? formatOffset(node.durMs ?? 0),
-    metrics: tooltipMetrics(node.action),
+    llmRequestPreview: llmMessages?.requestPreview ?? '',
+    llmResponsePreview: llmMessages?.responsePreview ?? '',
+    llmMessages,
+    llmPhases: node.llmPhases ?? null,
+    llmScope: node.llmContext?.scopeLabel ?? '',
+    agentContext: node.llmContext?.parentLabel ?? '',
+    metrics: tooltipMetrics(node.action, llmMessages),
     action: node.action,
   };
 }
 
-function tooltipMetrics(action) {
-  return WATERFALL_METRICS.map((metric) => ({ label: metric.label, value: metric.get(action) }))
-    .filter((item) => item.value !== undefined && item.value !== null && item.value !== '');
+function tooltipMetrics(action, llmMessages = null) {
+  return WATERFALL_METRICS.map((metric) => ({
+    label: metric.label,
+    value: metric.get(action, llmMessages),
+  })).filter((item) => item.value !== undefined && item.value !== null && item.value !== '');
 }
 
 function actionNode(action, window) {
@@ -413,11 +454,456 @@ function subtreeMatchesQuery(node, query) {
 }
 
 function nodeMatchesQuery(node, query) {
-  return [node.label, node.target, node.kind, node.status, node.action.duration]
+  const llmText = [
+    node.llmMessages?.requestFull,
+    node.llmMessages?.responseFull,
+    node.llmMessages?.requestPreview,
+    node.llmMessages?.responsePreview,
+    node.llmContext?.parentLabel,
+    node.llmContext?.scopeLabel,
+  ];
+  return [node.label, node.target, node.kind, node.status, node.action.duration, ...llmText]
     .filter(Boolean)
     .join(' ')
     .toLowerCase()
     .includes(query);
+}
+
+function attachLlmCallDetails(node, nodeById, parentByChild, window) {
+  const requestAction =
+    node.children.find((child) => child.kind === 'llm.request')?.action ??
+    actionById(nodeById, node.action.attributes?.['llm.call.request_action_id']);
+  const responseAction =
+    node.children.find((child) => child.kind === 'llm.response')?.action ??
+    actionById(nodeById, node.action.attributes?.['llm.call.response_action_id']);
+  node.llmMessages = buildLlmMessages(requestAction, responseAction);
+  node.llmPhases = buildLlmPhases(requestAction, responseAction, window);
+  node.llmContext = resolveLlmCallContext(node, nodeById, parentByChild);
+}
+
+function buildLlmPhases(requestAction, responseAction, window) {
+  const request = requestAction ? phaseFromAction(requestAction, window) : null;
+  const response = responseAction ? phaseFromAction(responseAction, window) : null;
+  if (!request && !response) {
+    return null;
+  }
+  let gap = null;
+  if (request && response && request.durMs !== null) {
+    const requestEndMs = request.startOffsetMs + request.durMs;
+    if (response.startOffsetMs > requestEndMs) {
+      gap = {
+        startOffsetMs: requestEndMs,
+        durMs: response.startOffsetMs - requestEndMs,
+      };
+    }
+  }
+  return { request, response, gap };
+}
+
+function phaseFromAction(action, window) {
+  const startNanos = toBigInt(action.start_time_unix_nanos);
+  const endNanos = action.end_time_unix_nanos ? toBigInt(action.end_time_unix_nanos) : null;
+  return {
+    startOffsetMs: nanosDiffMs(startNanos, window.startNanos),
+    durMs: endNanos === null ? null : nanosDiffMs(endNanos, startNanos),
+    live: endNanos === null,
+  };
+}
+
+function resolveLlmCallContext(node, nodeById, parentByChild) {
+  const pid = node.action.process?.pid;
+  const ancestors = walkAncestorNodes(node.id, nodeById, parentByChild);
+  const commandAncestors = ancestors.filter(
+    (ancestor) => ancestor.kind === 'command.invocation' || ancestor.kind === 'agent.invocation',
+  );
+  const parentCommand = commandAncestors[0] ?? null;
+  const trigger = parentCommand?.action.attributes?.['agent.invocation.trigger'];
+  const invocationKind = parentCommand?.action.attributes?.['invocation.kind'];
+  let scope = 'primary';
+  if (trigger === 'child_llm_request') {
+    scope = 'subagent';
+  } else if (commandAncestors.length > 1) {
+    scope = 'nested';
+  } else if (invocationKind === 'agent' && commandAncestors.length) {
+    scope = 'agent';
+  }
+  const parentLabel = parentCommand ? commandContextLabel(parentCommand.action) : '';
+  return {
+    scope,
+    pid,
+    parentLabel,
+    scopeLabel: llmScopeLabel(scope, pid),
+  };
+}
+
+function walkAncestorNodes(nodeId, nodeById, parentByChild) {
+  const ancestors = [];
+  const seen = new Set();
+  let currentId = parentByChild.get(nodeId);
+  while (currentId && !seen.has(currentId)) {
+    seen.add(currentId);
+    const ancestor = nodeById.get(currentId);
+    if (!ancestor) {
+      break;
+    }
+    ancestors.push(ancestor);
+    currentId = parentByChild.get(currentId);
+  }
+  return ancestors;
+}
+
+function commandContextLabel(action) {
+  const attrs = action.attributes ?? {};
+  return previewText(
+    attrs['agent.child.command_line'] ?? attrs['command.line'] ?? action.title ?? '',
+    72,
+  );
+}
+
+function llmScopeLabel(scope, pid) {
+  const pidLabel = pid === undefined || pid === null ? '' : `pid ${pid}`;
+  switch (scope) {
+    case 'subagent':
+      return pidLabel ? `subagent · ${pidLabel}` : 'subagent';
+    case 'nested':
+      return pidLabel ? `nested agent · ${pidLabel}` : 'nested agent';
+    case 'agent':
+      return pidLabel ? `agent · ${pidLabel}` : 'agent';
+    default:
+      return pidLabel || '';
+  }
+}
+
+export function llmBarSegments(row, axisWindow) {
+  const { startMs, spanMs } = axisWindow;
+  if (!spanMs) {
+    return [];
+  }
+  if (row.kind === 'llm.call' && row.llmPhases) {
+    const segments = [];
+    const { request, response, gap } = row.llmPhases;
+    if (request) {
+      segments.push(phaseSegment('request', request, startMs, spanMs, row.live));
+    }
+    if (gap?.durMs > 0.05) {
+      segments.push(phaseSegment('ttft', gap, startMs, spanMs, false));
+    }
+    if (response) {
+      segments.push(phaseSegment('response', response, startMs, spanMs, row.live && !request));
+    }
+    return segments.filter(Boolean);
+  }
+  if (row.kind === 'llm.request') {
+    return [phaseSegment('request', { startOffsetMs: row.startOffsetMs, durMs: row.durMs, live: row.live }, startMs, spanMs, row.live)].filter(Boolean);
+  }
+  if (row.kind === 'llm.response') {
+    return [phaseSegment('response', { startOffsetMs: row.startOffsetMs, durMs: row.durMs, live: row.live }, startMs, spanMs, row.live)].filter(Boolean);
+  }
+  return [];
+}
+
+function phaseSegment(kind, phase, startMs, spanMs, live) {
+  if (!phase) {
+    return null;
+  }
+  const left = clampPct(((phase.startOffsetMs - startMs) / spanMs) * 100);
+  const endMs = live && kind !== 'ttft' ? startMs + spanMs : phase.startOffsetMs + (phase.durMs ?? 0);
+  const widthPct = kind === 'ttft'
+    ? Math.max(((phase.durMs ?? 0) / spanMs) * 100, 0.35)
+    : Math.max(((endMs - phase.startOffsetMs) / spanMs) * 100, 0.5);
+  if (widthPct <= 0) {
+    return null;
+  }
+  return {
+    kind,
+    style: {
+      left: `${left}%`,
+      width: `${Math.min(widthPct, 100 - left)}%`,
+    },
+  };
+}
+
+function clampPct(value) {
+  return Math.min(Math.max(value, 0), 100);
+}
+
+function llmMessagesFromAction(action) {
+  if (action?.kind !== 'llm.call') {
+    if (action?.kind === 'llm.request') {
+      const requestFull = llmRequestMessage(action);
+      return buildLlmMessages(action, null, requestFull, '');
+    }
+    if (action?.kind === 'llm.response') {
+      const responseFull = llmResponseMessage(action);
+      return buildLlmMessages(null, action, '', responseFull);
+    }
+    return null;
+  }
+  return null;
+}
+
+function actionById(nodeById, actionId) {
+  if (!actionId) {
+    return null;
+  }
+  return nodeById.get(actionId)?.action ?? null;
+}
+
+function buildLlmMessages(requestAction, responseAction, requestOverride = null, responseOverride = null) {
+  const requestFull = requestOverride ?? llmRequestMessage(requestAction, { preview: false });
+  const responseFull = responseOverride ?? llmResponseMessage(responseAction);
+  if (!requestFull && !responseFull) {
+    return null;
+  }
+  const requestPreview =
+    requestOverride !== null
+      ? previewText(requestOverride, 160)
+      : previewText(llmRequestMessage(requestAction, { preview: true }) || requestFull, 160);
+  const model =
+    requestAction?.attributes?.['llm.request.model'] ??
+    responseAction?.attributes?.['llm.response.model'] ??
+    null;
+  return {
+    model,
+    requestFull,
+    responseFull,
+    requestPreview,
+    responsePreview: previewText(responseFull, 160),
+  };
+}
+
+function llmRequestMessage(action, { preview = false } = {}) {
+  if (!action) {
+    return '';
+  }
+  const attrs = action.attributes ?? {};
+  const raw =
+    attrs['llm.request.payload_text'] ||
+    attrs['http.request.body_text'] ||
+    attrs['http.request.body_json'] ||
+    '';
+  return extractLlmRequestMessage(raw, preview);
+}
+
+function llmResponseMessage(action) {
+  if (!action) {
+    return '';
+  }
+  const attrs = action.attributes ?? {};
+  const direct =
+    attrs['llm.response.output_text'] ||
+    attrs['llm.response.content_text'] ||
+    attrs['llm.response.reasoning_text'];
+  if (direct) {
+    return direct;
+  }
+  const raw = attrs['llm.response.payload_text'] || attrs['http.response.body_text'] || '';
+  return extractLlmAssistantMessage(raw);
+}
+
+function extractLlmRequestMessage(raw, preview) {
+  const text = String(raw ?? '').trim();
+  if (!text) {
+    return '';
+  }
+  if (text.startsWith('{') || text.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(text);
+      if (preview) {
+        const userText = messagesTextByRoles(parsed?.messages, USER_MESSAGE_ROLES);
+        if (userText) {
+          return userText;
+        }
+        if (typeof parsed?.input === 'string') {
+          return parsed.input.trim();
+        }
+        if (typeof parsed?.prompt === 'string') {
+          return parsed.prompt.trim();
+        }
+      }
+      const fromMessages = messagesText(parsed?.messages ?? parsed?.input);
+      if (fromMessages) {
+        return fromMessages;
+      }
+      if (typeof parsed?.prompt === 'string') {
+        return parsed.prompt.trim();
+      }
+      if (typeof parsed?.input === 'string') {
+        return parsed.input.trim();
+      }
+    } catch {
+      // Fall through to raw text when JSON is truncated or invalid.
+    }
+  }
+  return text;
+}
+
+function extractLlmAssistantMessage(raw) {
+  const text = String(raw ?? '').trim();
+  if (!text) {
+    return '';
+  }
+  if (text.startsWith('{') || text.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(text);
+      const fromChoices = openAiChoicesText(parsed);
+      if (fromChoices) {
+        return fromChoices;
+      }
+      const fromOutput = openAiResponsesOutputText(parsed);
+      if (fromOutput) {
+        return fromOutput;
+      }
+      const fromAnthropic = anthropicResponseText(parsed);
+      if (fromAnthropic) {
+        return fromAnthropic;
+      }
+      const fromMessages = messagesTextByRoles(parsed?.messages, ASSISTANT_MESSAGE_ROLES);
+      if (fromMessages) {
+        return fromMessages;
+      }
+    } catch {
+      // Fall through to raw text when JSON is truncated or invalid.
+    }
+  }
+  return text;
+}
+
+const USER_MESSAGE_ROLES = ['user', 'human'];
+const ASSISTANT_MESSAGE_ROLES = ['assistant'];
+
+function messagesTextByRoles(messages, roles) {
+  if (!Array.isArray(messages)) {
+    return '';
+  }
+  const allowed = new Set(roles);
+  return messages
+    .map((message) => formatMessageLine(message, allowed))
+    .filter(Boolean)
+    .join('\n');
+}
+
+function formatMessageLine(message, allowedRoles = null) {
+  if (!message || typeof message !== 'object') {
+    return '';
+  }
+  const role = String(message.role ?? '').toLowerCase();
+  if (allowedRoles && role && !allowedRoles.has(role)) {
+    return '';
+  }
+  const prefix = message.role ? `[${message.role}] ` : '';
+  const content = messageContentText(message.content ?? message.text ?? message.input);
+  if (!content) {
+    return '';
+  }
+  return `${prefix}${content}`.trim();
+}
+
+function messageContentText(content) {
+  if (typeof content === 'string') {
+    return content.trim();
+  }
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === 'string') {
+          return part;
+        }
+        if (typeof part?.text === 'string') {
+          return part.text;
+        }
+        if (part?.type === 'text' && typeof part?.text === 'string') {
+          return part.text;
+        }
+        return '';
+      })
+      .filter(Boolean)
+      .join(' ')
+      .trim();
+  }
+  return '';
+}
+
+function openAiChoicesText(parsed) {
+  const choices = parsed?.choices;
+  if (!Array.isArray(choices)) {
+    return '';
+  }
+  return choices
+    .map((choice) => {
+      const message = choice?.message ?? choice?.delta;
+      if (!message) {
+        return choice?.text ?? '';
+      }
+      return messageContentText(message.content ?? message.text) || String(message.content ?? message.text ?? '').trim();
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+function openAiResponsesOutputText(parsed) {
+  const output = parsed?.output;
+  if (!Array.isArray(output)) {
+    return '';
+  }
+  return output
+    .flatMap((item) => {
+      if (typeof item?.content === 'string') {
+        return [item.content];
+      }
+      if (Array.isArray(item?.content)) {
+        return item.content
+          .map((part) => (typeof part?.text === 'string' ? part.text : ''))
+          .filter(Boolean);
+      }
+      return [];
+    })
+    .join('');
+}
+
+function anthropicResponseText(parsed) {
+  if (Array.isArray(parsed?.content)) {
+    const text = parsed.content
+      .map((block) => (typeof block?.text === 'string' ? block.text : ''))
+      .filter(Boolean)
+      .join('');
+    if (text) {
+      return text;
+    }
+  }
+  const message = parsed?.message ?? parsed?.delta;
+  if (message) {
+    return messageContentText(message.content ?? message.text);
+  }
+  return '';
+}
+
+function extractLlmUserMessage(raw) {
+  return extractLlmRequestMessage(raw, false);
+}
+
+function messagesText(messages) {
+  if (Array.isArray(messages)) {
+    return messages
+      .map((message) => formatMessageLine(message))
+      .filter(Boolean)
+      .join('\n');
+  }
+  if (typeof messages === 'string') {
+    return messages.trim();
+  }
+  return '';
+}
+
+function previewText(text, maxLen) {
+  const normalized = String(text ?? '').replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return '';
+  }
+  if (normalized.length <= maxLen) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxLen - 1)}…`;
 }
 
 function compareNodes(left, right) {

@@ -13,22 +13,6 @@ use super::action_tree_projection::{ActionDisplayProjection, DisplayChild};
 use super::action_tree_roles::{DISPLAY_PARENT_ROLE_STRS, NODE_ID_AGENT, ROOT_LINK_ROLE_STRS};
 use crate::json;
 
-const HEAVY_ATTRIBUTE_KEYS: &[&str] = &[
-    "http.request.body_text",
-    "http.request.body_json",
-    "http.response.body_text",
-    "http.response.body_json",
-];
-const HEAVY_ATTRIBUTE_SUFFIXES: &[&str] = &[
-    ".payload_text",
-    ".body_text",
-    ".body_json",
-    ".output_text",
-    ".content_text",
-    ".reasoning_text",
-    ".tool_calls_json",
-];
-
 pub(super) fn action_tree_json(
     storage: &mut dyn StorageBackend,
     trace_id: TraceId,
@@ -42,7 +26,7 @@ pub(super) fn action_tree_json(
     let actions = projection
         .actions
         .iter()
-        .map(action_json_lite)
+        .map(action_json)
         .collect::<Vec<_>>();
     let links = projection.links.iter().map(link_json).collect::<Vec<_>>();
     Ok(format!(
@@ -89,7 +73,7 @@ pub(super) fn action_tree_children_json(
     let (rows, total) = load_child_page(storage, trace_id, parent_id, page)?;
     let actions = rows
         .iter()
-        .map(|row| action_json_lite(&row.action))
+        .map(|row| action_json(&row.action))
         .collect::<Vec<_>>();
     let links = rows
         .iter()
@@ -258,60 +242,67 @@ fn next_offset_json(page: SemanticActionChildPageQuery, total: usize) -> String 
 }
 
 pub(super) fn action_json(action: &SemanticAction) -> String {
-    render_action_json(action, false)
-}
-
-pub(super) fn action_json_lite(action: &SemanticAction) -> String {
-    render_action_json(action, true)
-}
-
-fn render_action_json(action: &SemanticAction, lite: bool) -> String {
-    let attributes = if lite {
-        action
-            .attributes
-            .iter()
-            .filter(|(key, _)| !is_heavy_attribute(key))
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect()
-    } else {
-        action.attributes.clone()
-    };
-    let evidence = if lite {
-        "[]".to_string()
-    } else {
-        evidence_json(&action.evidence)
-    };
-    format!(
-        "{{\"id\":{},\"kind\":{},\"title\":{},\"start_time\":{},\"start_time_unix_nanos\":{},\"end_time\":{},\"end_time_unix_nanos\":{},\"duration\":{},\"process\":{},\"status\":{},\"completeness\":{},\"confidence_millis\":{},\"attributes\":{},\"evidence\":{}}}",
-        json::string(&action.action_id),
-        json::string(action.kind.as_str()),
-        json::string(&action.title),
-        json::time(action.start_time),
-        json::time_nanos(action.start_time),
-        action
+    let mut output = String::from("{");
+    json::field(&mut output, "id", &json::string(&action.action_id));
+    output.push(',');
+    json::field(&mut output, "kind", &json::string(action.kind.as_str()));
+    output.push(',');
+    json::field(&mut output, "title", &json::string(&action.title));
+    output.push(',');
+    json::field(&mut output, "start_time", &json::time(action.start_time));
+    output.push(',');
+    json::field(
+        &mut output,
+        "start_time_unix_nanos",
+        &json::time_nanos(action.start_time),
+    );
+    output.push(',');
+    json::field(
+        &mut output,
+        "end_time",
+        &action
             .end_time
             .map(json::time)
             .unwrap_or_else(|| "null".to_string()),
-        json::optional_time_nanos(action.end_time),
-        action
+    );
+    output.push(',');
+    json::field(
+        &mut output,
+        "end_time_unix_nanos",
+        &json::optional_time_nanos(action.end_time),
+    );
+    output.push(',');
+    json::field(
+        &mut output,
+        "duration",
+        &action
             .end_time
             .and_then(|end| end.duration_since(action.start_time).ok())
             .map(|duration| json::string(&json::duration_micros(duration.as_micros() as u64)))
             .unwrap_or_else(|| "null".to_string()),
-        json::process(&action.process),
-        json::string(action.status.as_str()),
-        json::string(action.completeness.as_str()),
-        json::optional_number(action.confidence_millis),
-        json::map(&attributes),
-        evidence
-    )
-}
-
-fn is_heavy_attribute(key: &str) -> bool {
-    HEAVY_ATTRIBUTE_KEYS.contains(&key)
-        || HEAVY_ATTRIBUTE_SUFFIXES
-            .iter()
-            .any(|suffix| key.ends_with(suffix))
+    );
+    output.push(',');
+    json::field(&mut output, "process", &json::process(&action.process));
+    output.push(',');
+    json::field(&mut output, "status", &json::string(action.status.as_str()));
+    output.push(',');
+    json::field(
+        &mut output,
+        "completeness",
+        &json::string(action.completeness.as_str()),
+    );
+    output.push(',');
+    json::field(
+        &mut output,
+        "confidence_millis",
+        &json::optional_number(action.confidence_millis),
+    );
+    output.push(',');
+    json::field(&mut output, "attributes", &json::map(&action.attributes));
+    output.push(',');
+    json::field(&mut output, "evidence", &evidence_json(&action.evidence));
+    output.push('}');
+    output
 }
 
 fn link_json(link: &SemanticActionLink) -> String {

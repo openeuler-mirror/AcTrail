@@ -7,6 +7,16 @@ async function fetchJson(path) {
   return response.json();
 }
 
+export function clearServerCache() {
+  return fetch('/api/cache/clear', { method: 'POST' }).then(async (response) => {
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`${response.status} ${response.statusText}: ${body}`);
+    }
+    return response.json();
+  });
+}
+
 export function listTraces() {
   return fetchJson('/api/traces');
 }
