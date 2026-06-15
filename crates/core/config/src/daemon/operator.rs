@@ -32,6 +32,7 @@ pub use template::OPERATOR_CONFIG_TEMPLATE;
 pub enum OperatorConfigInitStatus {
     Created,
     ExistingValid,
+    Overwritten,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -67,7 +68,22 @@ impl OperatorConfig {
         Self::parse(&raw)
     }
 
-    pub fn initialize(path: &Path) -> Result<OperatorConfigInitStatus, String> {
+    pub fn initialize(path: &Path, force: bool) -> Result<OperatorConfigInitStatus, String> {
+        if force {
+            let existed = match fs::symlink_metadata(path) {
+                Ok(_) => true,
+                Err(error) if error.kind() == ErrorKind::NotFound => false,
+                Err(error) => return Err(format!("inspect config {}: {error}", path.display())),
+            };
+            Self::parse(OPERATOR_CONFIG_TEMPLATE)
+                .map_err(|error| format!("validate default operator config: {error}"))?;
+            write_default_operator_config(path, WriteMode::Overwrite)?;
+            return Ok(if existed {
+                OperatorConfigInitStatus::Overwritten
+            } else {
+                OperatorConfigInitStatus::Created
+            });
+        }
         match fs::read_to_string(path) {
             Ok(raw) => {
                 Self::parse(&raw)
@@ -77,7 +93,7 @@ impl OperatorConfig {
             Err(error) if error.kind() == ErrorKind::NotFound => {
                 Self::parse(OPERATOR_CONFIG_TEMPLATE)
                     .map_err(|error| format!("validate default operator config: {error}"))?;
-                write_default_operator_config(path)?;
+                write_default_operator_config(path, WriteMode::CreateNew)?;
                 Ok(OperatorConfigInitStatus::Created)
             }
             Err(error) => Err(format!("read config {}: {error}", path.display())),
@@ -174,7 +190,13 @@ impl OperatorConfig {
     }
 }
 
-fn write_default_operator_config(path: &Path) -> Result<(), String> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WriteMode {
+    CreateNew,
+    Overwrite,
+}
+
+fn write_default_operator_config(path: &Path, mode: WriteMode) -> Result<(), String> {
     if let Some(parent) = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -182,11 +204,23 @@ fn write_default_operator_config(path: &Path) -> Result<(), String> {
         fs::create_dir_all(parent)
             .map_err(|error| format!("create config directory {}: {error}", parent.display()))?;
     }
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
+    let mut options = OpenOptions::new();
+    options.write(true);
+    match mode {
+        WriteMode::CreateNew => {
+            options.create_new(true);
+        }
+        WriteMode::Overwrite => {
+            options.create(true).truncate(true);
+        }
+    }
+    let action = match mode {
+        WriteMode::CreateNew => "create",
+        WriteMode::Overwrite => "overwrite",
+    };
+    let mut file = options
         .open(path)
-        .map_err(|error| format!("create config {}: {error}", path.display()))?;
+        .map_err(|error| format!("{action} config {}: {error}", path.display()))?;
     file.write_all(OPERATOR_CONFIG_TEMPLATE.as_bytes())
         .map_err(|error| format!("write config {}: {error}", path.display()))
 }

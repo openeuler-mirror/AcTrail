@@ -1,6 +1,6 @@
 //! Live JSONL exporter backed by OTLP semantic-action rendering.
 
-use std::fs::{File, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{BufWriter, Write};
 
 use export_core::{
@@ -95,6 +95,7 @@ impl BestEffortSink<String> for JsonlLineSink {
 }
 
 fn open_output_file(config: &OtelJsonlExporterConfig) -> Result<File, ExportError> {
+    create_parent_directory(config)?;
     let mut options = OpenOptions::new();
     options.write(true);
     if config.overwrite_enabled {
@@ -106,6 +107,25 @@ fn open_output_file(config: &OtelJsonlExporterConfig) -> Result<File, ExportErro
         ExportError::new(
             OTEL_JSONL_EXPORTER_NAME,
             format!("open {} failed: {error}", config.path.display()),
+        )
+    })
+}
+
+fn create_parent_directory(config: &OtelJsonlExporterConfig) -> Result<(), ExportError> {
+    let Some(parent) = config
+        .path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    else {
+        return Ok(());
+    };
+    fs::create_dir_all(parent).map_err(|error| {
+        ExportError::new(
+            OTEL_JSONL_EXPORTER_NAME,
+            format!(
+                "create live OTEL output directory {} failed: {error}",
+                parent.display()
+            ),
         )
     })
 }

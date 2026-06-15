@@ -14,7 +14,9 @@ use crate::signals;
 
 pub fn run_from_env() -> Result<(), String> {
     match parse_args(std::env::args().skip(1))? {
-        AcTraildCommand::Init { config_path } => initialize_operator_config(&config_path),
+        AcTraildCommand::Init { config_path, force } => {
+            initialize_operator_config(&config_path, force)
+        }
         AcTraildCommand::Run { config_path } => {
             let config = OperatorConfig::load(&config_path)?;
             run_foreground(&config)
@@ -61,11 +63,14 @@ pub fn run_from_env() -> Result<(), String> {
     }
 }
 
-fn initialize_operator_config(path: &Path) -> Result<(), String> {
-    match OperatorConfig::initialize(path)? {
+fn initialize_operator_config(path: &Path, force: bool) -> Result<(), String> {
+    match OperatorConfig::initialize(path, force)? {
         OperatorConfigInitStatus::Created => println!("initialized config {}", path.display()),
         OperatorConfigInitStatus::ExistingValid => {
             println!("config {} already exists and is valid", path.display());
+        }
+        OperatorConfigInitStatus::Overwritten => {
+            println!("overwrote config {}", path.display());
         }
     }
     Ok(())

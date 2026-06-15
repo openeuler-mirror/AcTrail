@@ -42,7 +42,21 @@ Initialize the default full-collection operator config:
 sudo ./target/release/actraild init
 ```
 
-The default path is `/etc/actrail/actraild.conf`. `actrailctl init` performs the same initialization. If the file already exists, `init` loads and validates it, reports success or the validation error, and exits without rewriting it. For a local deployment config, pass `--output local/operator.conf` or `--config local/operator.conf`.
+The default path is `/etc/actrail/actraild.conf`. `actrailctl init` performs the same initialization. If the file already exists, `init` loads and validates it, reports success or the validation error, and exits without rewriting it. Pass `--force` or `-f` to overwrite the target path with the current default template. For a local deployment config, pass `--output local/operator.conf` or `--config local/operator.conf`.
+
+The generated default keeps daemon runtime state and durable observation data out of `/tmp`:
+
+| Field | Default |
+| --- | --- |
+| `socket_path` | `/run/actrail/control.sock` |
+| `pid_file` | `/run/actrail/actraild.pid` |
+| `payload_tls_sync_event_socket_path` | `/run/actrail/tls-sync.sock` |
+| `storage_sqlite_path` | `/var/lib/actrail/actrail.sqlite` |
+| `export_directory` | `/var/lib/actrail/export` |
+| live `otel-jsonl` route `path` | `/var/lib/actrail/export/live-spans.otlp.jsonl` |
+| `log_path` | `/var/log/actrail/actraild.log` |
+
+`actraild` creates missing parent directories for configured daemon write paths before opening storage/log/export files or binding Unix sockets. Permission errors remain fatal; fix ownership/privileges or change the configured path deliberately.
 
 For a persistent deployment, review these fields first:
 

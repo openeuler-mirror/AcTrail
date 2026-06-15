@@ -3,17 +3,17 @@
 pub const OPERATOR_CONFIG_TEMPLATE: &str = r#"# AcTrail default operator configuration.
 # This default enables broad collection, but does not enable blocking/enforcement.
 
-socket_path = /tmp/actrail.sock
+socket_path = /run/actrail/control.sock
 socket_mode_octal = 660
 control_pending_connection_max = 256
-pid_file = /tmp/actraild.pid
+pid_file = /run/actrail/actraild.pid
 storage_backend = sqlite
-storage_sqlite_path = /tmp/actrail.sqlite
+storage_sqlite_path = /var/lib/actrail/actrail.sqlite
 storage_sqlite_busy_timeout_ms = 5000
 web_listen_addr = 127.0.0.1:18080
 web_request_read_timeout_ms = 1000
-export_directory = /tmp/actrail-export
-log_path = /tmp/actraild.log
+export_directory = /var/lib/actrail/export
+log_path = /var/log/actrail/actraild.log
 diagnostic_log_level = info
 
 graph_schema_version = manual-v1
@@ -64,7 +64,7 @@ payload_tls_diagnostics_enabled = true
 payload_tls_retention_max_bytes_per_trace = 104857600
 payload_tls_redaction_policy = disabled
 payload_tls_sync_runtime_library_path = auto
-payload_tls_sync_event_socket_path = /tmp/actrail-tls-sync.sock
+payload_tls_sync_event_socket_path = /run/actrail/tls-sync.sock
 payload_tls_sync_socket_mode_octal = 660
 payload_tls_sync_match_limit = 8
 payload_tls_java_agent_enabled = false
@@ -147,7 +147,7 @@ provider_unknown_provider_label = unknown
 enforcement_enabled = false
 enforcement_backend = fanotify
 enforcement_scope = trace
-enforcement_rules_path = /tmp/actrail-enforcement-rules.conf
+enforcement_rules_path = /etc/actrail/enforcement-rules.conf
 enforcement_default_decision = allow
 enforcement_mark_strategy = parent-directories
 enforcement_audit_enabled = true
@@ -167,7 +167,7 @@ delivery = "best-effort"
 enabled = true
 
 [export.routes.otel-jsonl.live-otel]
-path = "/tmp/actrail-live-spans.otlp.jsonl"
+path = "/var/lib/actrail/export/live-spans.otlp.jsonl"
 overwrite_enabled = true
 queue_capacity = 1024
 flush_every_spans = 1

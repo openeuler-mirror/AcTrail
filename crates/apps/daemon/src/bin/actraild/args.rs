@@ -7,7 +7,7 @@ use config_core::daemon::DEFAULT_OPERATOR_CONFIG_PATH;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AcTraildCommand {
-    Init { config_path: PathBuf },
+    Init { config_path: PathBuf, force: bool },
     Run { config_path: PathBuf },
     Start { config_path: PathBuf },
     Stop { config_path: PathBuf },
@@ -73,7 +73,10 @@ impl AcTraildCommandArgs {
         match self {
             Self::Init(args) => {
                 let config_path = init_config_path(args.output_path, config_path, explicit_config)?;
-                Ok(AcTraildCommand::Init { config_path })
+                Ok(AcTraildCommand::Init {
+                    config_path,
+                    force: args.force,
+                })
             }
             Self::Run => Ok(AcTraildCommand::Run { config_path }),
             Self::Start => Ok(AcTraildCommand::Start { config_path }),
@@ -88,6 +91,9 @@ impl AcTraildCommandArgs {
 struct InitArgs {
     #[arg(long = "output", value_name = "PATH")]
     output_path: Option<PathBuf>,
+
+    #[arg(short = 'f', long = "force")]
+    force: bool,
 }
 
 fn init_config_path(
@@ -118,7 +124,8 @@ mod tests {
         assert_eq!(
             command,
             AcTraildCommand::Init {
-                config_path: PathBuf::from(DEFAULT_OPERATOR_CONFIG_PATH)
+                config_path: PathBuf::from(DEFAULT_OPERATOR_CONFIG_PATH),
+                force: false,
             }
         );
     }
@@ -130,7 +137,8 @@ mod tests {
         assert_eq!(
             command,
             AcTraildCommand::Init {
-                config_path: PathBuf::from(DEFAULT_OPERATOR_CONFIG_PATH)
+                config_path: PathBuf::from(DEFAULT_OPERATOR_CONFIG_PATH),
+                force: false,
             }
         );
     }
@@ -147,7 +155,8 @@ mod tests {
         assert_eq!(
             command,
             AcTraildCommand::Init {
-                config_path: PathBuf::from("/tmp/actrail-test.conf")
+                config_path: PathBuf::from("/tmp/actrail-test.conf"),
+                force: false,
             }
         );
     }

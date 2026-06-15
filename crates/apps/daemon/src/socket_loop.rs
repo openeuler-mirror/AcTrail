@@ -149,6 +149,7 @@ fn bind_listener(
     socket_path: &Path,
     permissions: SocketPermissions,
 ) -> Result<UnixListener, DaemonRunError> {
+    create_parent_directory(socket_path)?;
     let listener =
         UnixListener::bind(socket_path).map_err(|error| DaemonRunError::from_io("bind", error))?;
     if let Err(error) = listener.set_nonblocking(true) {
@@ -166,6 +167,24 @@ fn bind_listener(
         ));
     }
     Ok(listener)
+}
+
+fn create_parent_directory(socket_path: &Path) -> Result<(), DaemonRunError> {
+    let Some(parent) = socket_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    else {
+        return Ok(());
+    };
+    fs::create_dir_all(parent).map_err(|error| {
+        DaemonRunError::new(
+            "bind",
+            format!(
+                "create socket directory {} failed: {error}",
+                parent.display()
+            ),
+        )
+    })
 }
 
 fn setup_error_after_bind(

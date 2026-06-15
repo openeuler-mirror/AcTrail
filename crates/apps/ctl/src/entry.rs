@@ -12,8 +12,8 @@ use crate::output::format_reply;
 pub fn run_from_env() -> Result<i32, String> {
     let invocation = parse_args(std::env::args().skip(1))?;
     match invocation.command {
-        CtlCommand::Init { config_path } => {
-            match OperatorConfig::initialize(&config_path)? {
+        CtlCommand::Init { config_path, force } => {
+            match OperatorConfig::initialize(&config_path, force)? {
                 OperatorConfigInitStatus::Created => {
                     println!("initialized config {}", config_path.display());
                 }
@@ -22,6 +22,9 @@ pub fn run_from_env() -> Result<i32, String> {
                         "config {} already exists and is valid",
                         config_path.display()
                     );
+                }
+                OperatorConfigInitStatus::Overwritten => {
+                    println!("overwrote config {}", config_path.display());
                 }
             }
             Ok(i32::default())

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 usage() {
   cat <<'USAGE'
@@ -14,6 +14,33 @@ Requires npm and JDK 17+ on PATH.
 ACTRAIL_JAVA_AGENT_RELEASE overrides the javac --release target and defaults to 17.
 USAGE
 }
+
+stage_index=0
+current_stage="startup"
+
+stage() {
+  stage_index=$((stage_index + 1))
+  current_stage="${stage_index}. $1"
+  printf '\n[%s]\n' "$current_stage"
+}
+
+on_error() {
+  local line="$1"
+  local status="$2"
+
+  printf '\n[%s]\n' "$current_stage" >&2
+  printf 'failed at line: %s\n' "$line" >&2
+  printf 'exit status: %s\n' "$status" >&2
+  exit "$status"
+}
+
+trim_whitespace() {
+  local value="$1"
+  value="${value//[[:space:]]/}"
+  printf '%s' "$value"
+}
+
+trap 'on_error "$LINENO" "$?"' ERR
 
 output_path=""
 version=""
@@ -82,11 +109,26 @@ fi
 package_dir="AcTrail-${version}"
 staging_dir="$(mktemp -d "${TMPDIR:-/tmp}/actrail-source.XXXXXXXX")"
 cleanup() {
-  rm -rf "$staging_dir"
+  local status=$?
+
+  if [ -n "${staging_dir:-}" ] && [ -d "$staging_dir" ]; then
+    stage "Cleanup"
+    printf 'staging: %s\n' "$staging_dir"
+    rm -rf "$staging_dir"
+    printf 'removed: yes\n'
+  fi
+
+  exit "$status"
 }
 trap cleanup EXIT
 
+stage "Prepare source tree"
+printf 'staging: %s\n' "$staging_dir"
+printf 'tree-ish: %s\n' "$treeish"
+printf 'package: %s\n' "$package_dir"
+
 archive_path="$staging_dir/source.tar"
+printf 'archive: %s\n' "$archive_path"
 git archive --format=tar --prefix="${package_dir}/" -o "$archive_path" "$treeish"
 tar -xf "$archive_path" -C "$staging_dir"
 
@@ -102,15 +144,28 @@ java_agent_classes="$java_agent_build_dir/classes"
 java_agent_manifest="$java_agent_build_dir/MANIFEST.MF"
 java_agent_release="${ACTRAIL_JAVA_AGENT_RELEASE:-17}"
 
+stage "Vue dist"
+printf 'frontend: %s\n' "$frontend_dir"
+printf 'dist: %s\n' "$frontend_dist"
+printf 'npm ci: %s\n' "$frontend_dir"
 npm ci --prefix "$frontend_dir"
+printf 'vite build outDir: %s\n' "$frontend_dist"
 npm run build --prefix "$frontend_dir" -- --outDir "$frontend_dist"
+printf 'dist files:\n'
+find "$frontend_dist" -type f | sed "s#^$frontend_dist/#  #" | sort
 
+stage "Java agent package"
 mapfile -t java_agent_sources < <(find "$java_agent_source_dir" -type f -name '*.java' | sort)
 if [ "${#java_agent_sources[@]}" -eq 0 ]; then
   echo "no Java agent sources under $java_agent_source_dir" >&2
   exit 1
 fi
 
+printf 'source dir: %s\n' "$java_agent_source_dir"
+printf 'sources: %s java files\n' "${#java_agent_sources[@]}"
+printf 'build dir: %s\n' "$java_agent_build_dir"
+printf 'javac release: %s\n' "$java_agent_release"
+printf 'jar: %s\n' "$java_agent_jar"
 rm -rf "$java_agent_dist"
 mkdir -p "$java_agent_dist" "$java_agent_classes"
 cat > "$java_agent_manifest" <<'MANIFEST'
@@ -122,11 +177,17 @@ Can-Retransform-Classes: true
 MANIFEST
 javac --release "$java_agent_release" -d "$java_agent_classes" "${java_agent_sources[@]}"
 jar cfm "$java_agent_jar" "$java_agent_manifest" -C "$java_agent_classes" .
+java_agent_jar_size="$(trim_whitespace "$(wc -c < "$java_agent_jar")")"
+printf 'jar size: %s bytes\n' "$java_agent_jar_size"
 
+stage "Source tarball"
+printf 'output: %s\n' "$output_path"
 mkdir -p "$(dirname "$output_path")"
 tar --exclude="${package_dir}/crates/apps/web/frontend/node_modules" \
   -czf "$output_path" \
   -C "$staging_dir" \
   "$package_dir"
+output_size="$(trim_whitespace "$(wc -c < "$output_path")")"
+printf 'size: %s bytes\n' "$output_size"
 
-echo "$output_path"
+printf '\ndone: %s\n' "$output_path"

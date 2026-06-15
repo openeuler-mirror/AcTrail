@@ -46,6 +46,7 @@ impl TlsSyncService {
             });
         }
         let resolver = TlsSyncPlanResolver::new(config)?;
+        create_parent_directory(&config.sync_event_socket_path)?;
         let listener = UnixListener::bind(&config.sync_event_socket_path)
             .map_err(|error| ControlError::new("tls_sync_bind", error.to_string()))?;
         listener
@@ -232,6 +233,24 @@ fn payload_direction(direction: SyncDirection) -> PayloadDirection {
         SyncDirection::Outbound => PayloadDirection::Outbound,
         SyncDirection::Inbound => PayloadDirection::Inbound,
     }
+}
+
+fn create_parent_directory(socket_path: &std::path::Path) -> Result<(), ControlError> {
+    let Some(parent) = socket_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    else {
+        return Ok(());
+    };
+    fs::create_dir_all(parent).map_err(|error| {
+        ControlError::new(
+            "tls_sync_directory",
+            format!(
+                "create TLS sync socket directory {} failed: {error}",
+                parent.display()
+            ),
+        )
+    })
 }
 
 fn enabled(config: &PayloadTlsConfig) -> bool {
