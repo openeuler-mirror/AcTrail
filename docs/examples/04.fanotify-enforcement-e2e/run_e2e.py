@@ -75,9 +75,9 @@ file_path_max_bytes = 255
 
 payload_tls_enabled = false
 payload_tls_capture_backend = tls-sync
-payload_tls_source = shared-library
-payload_tls_resolver = openssl-symbols
-payload_tls_library = openssl
+payload_tls_source = auto
+payload_tls_resolver = auto
+payload_tls_library = auto
 payload_tls_library_path = auto
 payload_tls_binary_path = disabled
 payload_tls_pattern_path = disabled

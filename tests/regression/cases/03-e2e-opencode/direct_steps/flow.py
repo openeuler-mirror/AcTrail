@@ -18,7 +18,6 @@ from .reporting import opencode_output_summary, opencode_tls_detail
 def run_direct_opencode_case(
     env,
     result: CaseResult,
-    explicit_binary: str | None,
     entry: Path,
 ) -> None:
     module = load_module(
@@ -26,20 +25,14 @@ def run_direct_opencode_case(
         env.repo_root / "tests/agent-trace/opencode-bun/run_e2e.py",
     )
     old_path = os.environ.get("PATH", "")
-    old_override = os.environ.get("OPENCODE_BIN_PATH")
     os.environ["PATH"] = f"{entry.parent}{os.pathsep}{old_path}"
-    if explicit_binary:
-        os.environ["OPENCODE_BIN_PATH"] = explicit_binary
-    else:
-        os.environ.pop("OPENCODE_BIN_PATH", None)
     try:
-        run_loaded_opencode_case(env, result, module, explicit_binary)
+        run_loaded_opencode_case(env, result, module)
     finally:
         os.environ["PATH"] = old_path
-        restore_optional_env("OPENCODE_BIN_PATH", old_override)
 
 
-def run_loaded_opencode_case(env, result: CaseResult, module, explicit_binary: str | None) -> None:
+def run_loaded_opencode_case(env, result: CaseResult, module) -> None:
     case_dir = env.repo_root / "tests/agent-trace/opencode-bun"
     daemon = None
     result.command = ["direct", "opencode-bun"]
@@ -62,10 +55,11 @@ def run_loaded_opencode_case(env, result: CaseResult, module, explicit_binary: s
     )
     actraild, actrailctl, actrailviewer = require_actrail_binaries(result, module, env.bin_dir)
     actrailweb = require_actrailweb_binary(result, module, env.bin_dir)
+    tls_probe_point_finder = module.require_binary(env.bin_dir, "tls-probe-point-finder")
     tls_runtime = run_step(
         result,
         "opencode TLS runtime",
-        lambda: resolve_opencode_tls_runtime(module, workload, case_dir, env.repo_root),
+        lambda: resolve_opencode_tls_runtime(module, workload, tls_probe_point_finder),
         lambda tls: expected_found_detail(
             "TLS runtime discovery chooses the capture source",
             [opencode_tls_detail(tls)],
@@ -113,7 +107,6 @@ def run_loaded_opencode_case(env, result: CaseResult, module, explicit_binary: s
             actrailviewer,
             actrailweb,
             tls_runtime,
-            explicit_binary,
         )
     finally:
         if daemon is not None:
@@ -133,7 +126,6 @@ def finish_opencode_capture(
     actrailviewer: Path,
     actrailweb: Path,
     tls_runtime,
-    explicit_binary: str | None,
 ) -> None:
     trace_id, launch_output = run_opencode_launch_step(
         result,
@@ -141,7 +133,6 @@ def finish_opencode_capture(
         actrailctl,
         resolved_config,
         workload,
-        explicit_binary,
     )
     payloads = run_step(
         result,
@@ -310,14 +301,6 @@ def finish_opencode_capture(
     )
 
 
-def resolve_opencode_tls_runtime(module, workload: dict[str, str], case_dir: Path, repo: Path):
+def resolve_opencode_tls_runtime(module, workload: dict[str, str], tls_probe_point_finder: Path):
     entry = module.require_opencode_entry()
-    configured_symbol_map = module.resolve_path(module.required(workload, "symbol_map_path"), repo)
-    return module.resolve_optional_opencode_tls_runtime(entry, configured_symbol_map, workload)
-
-
-def restore_optional_env(name: str, value: str | None) -> None:
-    if value is None:
-        os.environ.pop(name, None)
-    else:
-        os.environ[name] = value
+    return module.resolve_optional_opencode_tls_runtime(entry, workload, tls_probe_point_finder)

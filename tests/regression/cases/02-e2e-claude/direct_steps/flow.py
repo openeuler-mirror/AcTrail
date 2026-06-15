@@ -32,10 +32,20 @@ def run_direct_claude_case(env, result: CaseResult, workload: dict[str, str]) ->
     )
     actraild, actrailctl, actrailviewer = require_actrail_binaries(result, module, env.bin_dir)
     actrailweb = require_actrailweb_binary(result, module, env.bin_dir)
+    tls_probe_point_finder = run_step(
+        result,
+        "tls probe finder binary",
+        lambda: module.require_binary(env.bin_dir, "tls-probe-point-finder"),
+        lambda path: expected_found_detail(
+            "tls-probe-point-finder release binary exists",
+            [f"path={path}"],
+        ),
+        "Claude TLS capture uses finder fast before launch",
+    )
     tls_runtime = run_step(
         result,
         "Claude TLS runtime",
-        lambda: module.resolve_optional_claude_tls_runtime(workload),
+        lambda: module.resolve_optional_claude_tls_runtime(workload, tls_probe_point_finder),
         lambda tls: expected_found_detail(
             "TLS runtime discovery chooses the capture source",
             [claude_tls_detail(tls)],
@@ -161,8 +171,7 @@ def finish_claude_capture(
         lambda: module.require_tls_response_payloads(payloads, tls_runtime),
         lambda count: expected_found_detail(
             "inbound TLS response rows are required only when this trace has outbound TLS rows",
-            module.tls_response_evidence_facts(
-                payloads,
+            tls_response_evidence_facts(
                 module.accepted_tls_payload_sources(tls_runtime),
                 count,
             ),
@@ -335,3 +344,13 @@ def finish_claude_capture(
         ),
         "OTEL evidence must include parsed llm.request content and captured llm.response content",
     )
+
+
+def tls_response_evidence_facts(accepted_sources, count: int) -> list[str]:
+    if not accepted_sources:
+        return ["accepted_tls_sources=none", "captured_response_payload_segments=0"]
+    formatted = ", ".join(f"{source}/{library}" for source, library in accepted_sources)
+    return [
+        f"accepted_tls_sources={formatted}",
+        f"captured_response_payload_segments={count}",
+    ]

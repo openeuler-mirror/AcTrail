@@ -73,7 +73,7 @@ def run_loaded_xiaoo_case(env, result: CaseResult, module, configured: str | Non
     tls_runtime = run_step(
         result,
         "xiaoO TLS runtime",
-        lambda: module.resolve_xiaoo_tls_runtime(
+        lambda: module.resolve_rustls_probe_plan(
             xiaoo_binary,
             workload,
             tls_probe_point_finder,
@@ -168,7 +168,7 @@ def finish_xiaoo_capture(
             int(module.required(workload, "drain_attempts")),
             float(module.required(workload, "drain_sleep_seconds")),
             module.required(workload, "payload_head"),
-            module.accepted_payload_fragments(tls_runtime),
+            module.accepted_payload_fragments(),
         ),
         lambda rows: expected_found_detail(
             "viewer returns accepted payload rows",
@@ -182,7 +182,7 @@ def finish_xiaoo_capture(
         "payload capture",
         lambda: module.require_complete_payload_rows_any(
             payloads,
-            module.accepted_payload_sources(tls_runtime),
+            module.accepted_payload_sources(),
             direction="outbound",
         ),
         lambda count: expected_found_detail("complete outbound payload segments exist", [f"xiaoo_payload_segments={count}"]),

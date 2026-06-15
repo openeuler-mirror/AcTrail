@@ -86,25 +86,8 @@ are not treated as proof of the invocation edge.
 
 Automatic discovery and overrides:
 
-- Claude Code: the payload case first supports Node/OpenSSL launchers. For
-  native ELF entrypoints such as `claude.exe`, it then checks executable
-  OpenSSL symbols and finally the configured Bun/static-BoringSSL symbol-map or
-  byte-pattern discovery path. If none of those exposes an `SSL_write` attach
-  point, the test can still pass through `Syscall/socket-syscall` when the
-  configured Claude provider route is plain HTTP. Plain HTTP traces do not
-  require inbound TLS response rows even when the installed Claude runtime is
-  discoverable. The report includes concrete TLS discovery details so testers
-  can tell which path was used. When the target
-  host cannot export the native binary, run
-  `python3 docs/preflight/claude_native_profile.py --json-output /tmp/actrail-claude-native-profile.json --symbol-map-output /tmp/actrail-claude-code-boringssl.map`
-  on that host; it emits a text-only package/build-id/profile report. The
-  regression renders the docs example 06 operator template, so the Claude case
-  validates the same config surface used by `tests/payload/claude-code/`.
-- opencode: scans `opencode` launchers on `PATH`, checks adjacent `.opencode`
-  binaries and launcher binaries, and first tries the checked-in Bun/BoringSSL
-  map. If the build-id changed, it detects BoringSSL offsets from the current
-  binary and generates a temporary matching map. `OPENCODE_BIN_PATH` overrides
-  discovery.
+- Claude Code: the payload case runs `tls-probe-point-finder fast --provider auto --source auto` against the local Claude runtime before launch. If no complete TLS plan is available, the test can still pass through `Syscall/socket-syscall` when the configured Claude provider route is plain HTTP. Plain HTTP traces do not require inbound TLS response rows even when the installed Claude runtime is discoverable. The report includes concrete TLS discovery details so testers can tell which path was used. When the target host cannot export the native binary, run `python3 docs/preflight/claude_native_profile.py --json-output /tmp/actrail-claude-native-profile.json` on that host; it emits a text-only package/build-id/fast-plan report. The regression renders the same auto-plan config surface used by `tests/payload/claude-code/`.
+- opencode: validates `tls-probe-point-finder fast --provider auto --source auto` for the `opencode` launcher before enabling TLS capture. The resolved operator config keeps `payload_tls_source`, `payload_tls_resolver`, and `payload_tls_library` set to `auto`; it does not write a binary path or temporary symbol map.
 - xiaoO: scans `xiaoo` on `PATH` and runs the selected binary. The rustls case
   requires `tls-probe-point-finder fast` to resolve a complete rustls plaintext
   plan for the selected binary before launch; stripped x86_64 builds can pass

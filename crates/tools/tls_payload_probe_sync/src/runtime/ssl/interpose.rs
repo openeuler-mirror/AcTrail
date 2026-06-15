@@ -3,11 +3,13 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::runtime::tls::dynamic::binding::resolver;
+use crate::runtime::tls::dynamic::core::capture::{
+    SslReadExFn, SslReadFn, SslWriteExFn, SslWriteFn, abort_runtime,
+};
 use crate::runtime::{loader, maps};
 
-use super::{
-    SslReadExFn, SslReadFn, SslWriteExFn, SslWriteFn, abort_runtime, configured_openssl_binary,
-};
+use super::configured_openssl_binary;
 
 static SSL_WRITE_CONFIGURED: AtomicUsize = AtomicUsize::new(0);
 static SSL_WRITE_EX_CONFIGURED: AtomicUsize = AtomicUsize::new(0);
@@ -17,11 +19,6 @@ static SSL_WRITE_NEXT: AtomicUsize = AtomicUsize::new(0);
 static SSL_WRITE_EX_NEXT: AtomicUsize = AtomicUsize::new(0);
 static SSL_READ_NEXT: AtomicUsize = AtomicUsize::new(0);
 static SSL_READ_EX_NEXT: AtomicUsize = AtomicUsize::new(0);
-
-pub(super) fn dynamic_openssl_capture_enabled() -> bool {
-    super::super::retry_initialize_after_loader_event();
-    configured_openssl_binary().is_some()
-}
 
 pub(super) unsafe fn interposed_ssl_write(capture: bool) -> SslWriteFn {
     let address = interposed_symbol(
@@ -92,7 +89,7 @@ fn configured_symbol(cache: &AtomicUsize, symbol: &'static [u8]) -> usize {
             binary_path.display()
         ));
     }
-    let address = unsafe { libc::dlsym(handle, symbol.as_ptr().cast()) } as usize;
+    let address = unsafe { resolver::real_dlsym(handle, symbol.as_ptr().cast()) } as usize;
     if address == 0 {
         abort_runtime(&format!(
             "configured OpenSSL binary {} does not export {}",
@@ -109,9 +106,9 @@ fn next_symbol(cache: &AtomicUsize, symbol: &'static [u8]) -> usize {
     if cached != 0 {
         return cached;
     }
-    let address = unsafe { libc::dlsym(libc::RTLD_NEXT, symbol.as_ptr().cast()) } as usize;
+    let address = unsafe { resolver::real_dlsym(libc::RTLD_NEXT, symbol.as_ptr().cast()) } as usize;
     if address == 0 {
-        if let Some(address) = loaded_openssl_symbol(symbol) {
+        if let Some(address) = loaded_tls_symbol(symbol) {
             cache.store(address, Ordering::Release);
             return address;
         }
@@ -124,9 +121,9 @@ fn next_symbol(cache: &AtomicUsize, symbol: &'static [u8]) -> usize {
     address
 }
 
-fn loaded_openssl_symbol(symbol: &'static [u8]) -> Option<usize> {
+fn loaded_tls_symbol(symbol: &'static [u8]) -> Option<usize> {
     for path in maps::executable_mapped_files().ok()? {
-        if !is_openssl_library(&path) {
+        if !is_tls_library_candidate(&path) {
             continue;
         }
         let path = CString::new(path.as_os_str().as_bytes()).ok()?;
@@ -134,7 +131,7 @@ fn loaded_openssl_symbol(symbol: &'static [u8]) -> Option<usize> {
         if handle.is_null() {
             continue;
         }
-        let address = unsafe { libc::dlsym(handle, symbol.as_ptr().cast()) } as usize;
+        let address = unsafe { resolver::real_dlsym(handle, symbol.as_ptr().cast()) } as usize;
         if address != 0 {
             return Some(address);
         }
@@ -142,10 +139,10 @@ fn loaded_openssl_symbol(symbol: &'static [u8]) -> Option<usize> {
     None
 }
 
-fn is_openssl_library(path: &Path) -> bool {
+fn is_tls_library_candidate(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with("libssl") && name.contains(".so"))
+        .is_some_and(|name| name.contains(".so") && name != "libactrail_tls_payload_probe_sync.so")
 }
 
 fn symbol_name(symbol: &'static [u8]) -> &'static str {

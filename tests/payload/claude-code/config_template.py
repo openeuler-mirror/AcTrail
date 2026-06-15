@@ -10,17 +10,13 @@ from runtime import ClaudeTlsRuntime, resolve_claude_tls_runtime
 PayloadSource = tuple[str, str]
 
 TLS_ENABLED_PLACEHOLDER = "__CLAUDE_TLS_ENABLED__"
-TLS_BINARY_PLACEHOLDER = "__CLAUDE_TLS_BINARY__"
-TLS_RESOLVER_PLACEHOLDER = "__CLAUDE_TLS_RESOLVER__"
-TLS_LIBRARY_PLACEHOLDER = "__CLAUDE_TLS_LIBRARY__"
-TLS_PATTERN_PLACEHOLDER = "__CLAUDE_TLS_PATTERN_PATH__"
 SECCOMP_NOTIFY_PLACEHOLDER = "__CLAUDE_SECCOMP_NOTIFY_ENABLED__"
 TLS_REQUIRED_CAPABILITY_PLACEHOLDER = "__CLAUDE_TLS_REQUIRED_CAPABILITY__"
 
 
-def resolve_optional_claude_tls_runtime(values: dict[str, str]) -> ClaudeTlsRuntime | None:
+def resolve_optional_claude_tls_runtime(values: dict[str, str], finder: Path) -> ClaudeTlsRuntime | None:
     try:
-        runtime = resolve_claude_tls_runtime(values)
+        runtime = resolve_claude_tls_runtime(values, finder)
     except Exception as error:
         if os.environ.get("CLAUDE_TLS_BINARY"):
             raise
@@ -35,7 +31,7 @@ def accepted_payload_sources(
 ) -> list[PayloadSource]:
     sources = [("Syscall", "socket-syscall")]
     if tls_runtime is not None:
-        sources.insert(0, ("TlsUserSpace", tls_runtime.library))
+        sources.insert(0, ("TlsUserSpace", tls_runtime.provider))
     return sources
 
 
@@ -44,7 +40,7 @@ def accepted_tls_payload_sources(
 ) -> list[PayloadSource]:
     if tls_runtime is None:
         return []
-    return [("TlsUserSpace", tls_runtime.library)]
+    return [("TlsUserSpace", tls_runtime.provider)]
 
 
 def write_resolved_operator_config(
@@ -56,20 +52,12 @@ def write_resolved_operator_config(
     if tls_runtime is None:
         replacements = {
             TLS_ENABLED_PLACEHOLDER: "false",
-            TLS_BINARY_PLACEHOLDER: "disabled",
-            TLS_RESOLVER_PLACEHOLDER: "openssl-symbols",
-            TLS_LIBRARY_PLACEHOLDER: "openssl",
-            TLS_PATTERN_PLACEHOLDER: "disabled",
             SECCOMP_NOTIFY_PLACEHOLDER: "true",
             TLS_REQUIRED_CAPABILITY_PLACEHOLDER: "# tls-plaintext-payload disabled",
         }
     else:
         replacements = {
             TLS_ENABLED_PLACEHOLDER: "true",
-            TLS_BINARY_PLACEHOLDER: str(tls_runtime.binary),
-            TLS_RESOLVER_PLACEHOLDER: tls_runtime.resolver,
-            TLS_LIBRARY_PLACEHOLDER: tls_runtime.library,
-            TLS_PATTERN_PLACEHOLDER: tls_runtime.pattern_path,
             SECCOMP_NOTIFY_PLACEHOLDER: "true",
             TLS_REQUIRED_CAPABILITY_PLACEHOLDER: "required_capability = tls-plaintext-payload",
         }

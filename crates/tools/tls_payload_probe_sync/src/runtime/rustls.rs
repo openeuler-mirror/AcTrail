@@ -57,7 +57,9 @@ pub(super) fn install(symbol: &str, address: usize) -> Result<usize, String> {
         }
         _ => return Err(format!("unsupported rustls hook symbol: {symbol}")),
     };
-    let trampoline = hook::install(address, replacement)?;
+    let trampoline = hook::install(address, replacement).map_err(|error| {
+        format!("install rustls hook symbol={symbol} address=0x{address:x}: {error}")
+    })?;
     match symbol {
         RUSTLS_BUFFER_PLAINTEXT_SYMBOL => {
             RUSTLS_BUFFER_PLAINTEXT_ORIGINAL.store(trampoline, Ordering::Release);

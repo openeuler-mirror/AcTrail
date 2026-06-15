@@ -8,14 +8,14 @@ use std::sync::{Mutex, OnceLock};
 
 mod interpose;
 
-use tls_payload_core::PayloadDirection;
-
 use crate::runtime::config::{self, RuntimePlan};
-use crate::runtime::decision::{RuntimeAction, decide_payload};
+use crate::runtime::tls::dynamic::core::capture::{
+    SslReadExFn, SslReadFn, SslWriteExFn, SslWriteFn, abort_runtime, ssl_read_ex_with,
+    ssl_read_with, ssl_write_ex_with, ssl_write_with,
+};
 use crate::runtime::{hook, maps, output, rustls};
 use interpose::{
-    dynamic_openssl_capture_enabled, interposed_ssl_read, interposed_ssl_read_ex,
-    interposed_ssl_write, interposed_ssl_write_ex,
+    interposed_ssl_read, interposed_ssl_read_ex, interposed_ssl_write, interposed_ssl_write_ex,
 };
 
 static SSL_WRITE_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
@@ -23,15 +23,6 @@ static SSL_WRITE_EX_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
 static SSL_READ_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
 static SSL_READ_EX_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
 static INSTALL_STATE: OnceLock<Mutex<InstallState>> = OnceLock::new();
-
-pub(super) type SslWriteFn =
-    unsafe extern "C" fn(*mut c_void, *const c_void, libc::c_int) -> libc::c_int;
-pub(super) type SslWriteExFn =
-    unsafe extern "C" fn(*mut c_void, *const c_void, usize, *mut usize) -> libc::c_int;
-pub(super) type SslReadFn =
-    unsafe extern "C" fn(*mut c_void, *mut c_void, libc::c_int) -> libc::c_int;
-pub(super) type SslReadExFn =
-    unsafe extern "C" fn(*mut c_void, *mut c_void, usize, *mut usize) -> libc::c_int;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum HookInstallStatus {
@@ -87,6 +78,17 @@ pub(super) fn install_plan(plan: &RuntimePlan) -> Result<HookInstallStatus, Stri
     Ok(HookInstallStatus::Installed)
 }
 
+pub(super) fn dynamic_binding_covers_plan(plan: &RuntimePlan) -> bool {
+    plan.provider == "openssl" && plan_uses_ssl_symbols(plan) && is_ssl_abi_shared_library(plan)
+}
+
+pub(super) fn register_dynamic_binding_plan(plan: &RuntimePlan) -> Result<(), String> {
+    if let Some(config) = config::get() {
+        config.register_plan(plan)?;
+    }
+    Ok(())
+}
+
 fn should_install_inline_hooks(plan: &RuntimePlan) -> bool {
     !uses_openssl_interpose(plan)
 }
@@ -126,7 +128,14 @@ fn install_plan_points(plan: &RuntimePlan) -> Result<(), String> {
             rustls::install(&point.symbol, address)?
         } else {
             let replacement = replacement_for_symbol(&point.symbol)?;
-            let trampoline = hook::install(address, replacement)?;
+            let trampoline = hook::install(address, replacement).map_err(|error| {
+                format!(
+                    "install TLS hook provider={} symbol={} binary={} address=0x{address:x}: {error}",
+                    plan.provider,
+                    point.symbol,
+                    plan.binary.display()
+                )
+            })?;
             set_original(&point.symbol, trampoline)?;
             trampoline
         };
@@ -152,6 +161,13 @@ fn plan_uses_ssl_symbols(plan: &RuntimePlan) -> bool {
     })
 }
 
+fn is_ssl_abi_shared_library(plan: &RuntimePlan) -> bool {
+    let Some(file_name) = plan.binary.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    file_name == "libssl.so" || file_name.starts_with("libssl.so.")
+}
+
 fn plan_uses_rustls_symbols(plan: &RuntimePlan) -> bool {
     plan.points
         .iter()
@@ -168,8 +184,8 @@ pub unsafe extern "C" fn SSL_write(
     buffer: *const c_void,
     length: libc::c_int,
 ) -> libc::c_int {
-    let capture = dynamic_openssl_capture_enabled();
-    let original = unsafe { interposed_ssl_write(capture) };
+    let capture = dynamic_tls_capture_enabled();
+    let original = unsafe { interposed_ssl_write(use_configured_openssl_symbol()) };
     if capture {
         unsafe { ssl_write_with(original, ssl, buffer, length) }
     } else {
@@ -184,8 +200,8 @@ pub unsafe extern "C" fn SSL_write_ex(
     length: usize,
     written: *mut usize,
 ) -> libc::c_int {
-    let capture = dynamic_openssl_capture_enabled();
-    let original = unsafe { interposed_ssl_write_ex(capture) };
+    let capture = dynamic_tls_capture_enabled();
+    let original = unsafe { interposed_ssl_write_ex(use_configured_openssl_symbol()) };
     if capture {
         unsafe { ssl_write_ex_with(original, ssl, buffer, length, written) }
     } else {
@@ -199,8 +215,8 @@ pub unsafe extern "C" fn SSL_read(
     buffer: *mut c_void,
     length: libc::c_int,
 ) -> libc::c_int {
-    let capture = dynamic_openssl_capture_enabled();
-    let original = unsafe { interposed_ssl_read(capture) };
+    let capture = dynamic_tls_capture_enabled();
+    let original = unsafe { interposed_ssl_read(use_configured_openssl_symbol()) };
     if capture {
         unsafe { ssl_read_with(original, ssl, buffer, length) }
     } else {
@@ -215,13 +231,29 @@ pub unsafe extern "C" fn SSL_read_ex(
     length: usize,
     read_bytes: *mut usize,
 ) -> libc::c_int {
-    let capture = dynamic_openssl_capture_enabled();
-    let original = unsafe { interposed_ssl_read_ex(capture) };
+    let capture = dynamic_tls_capture_enabled();
+    let original = unsafe { interposed_ssl_read_ex(use_configured_openssl_symbol()) };
     if capture {
         unsafe { ssl_read_ex_with(original, ssl, buffer, length, read_bytes) }
     } else {
         unsafe { original(ssl, buffer, length, read_bytes) }
     }
+}
+
+fn dynamic_tls_capture_enabled() -> bool {
+    super::retry_initialize_after_loader_event();
+    config::get().is_some()
+}
+
+fn use_configured_openssl_symbol() -> bool {
+    configured_openssl_binary().is_some()
+}
+
+pub(in crate::runtime) fn is_exported_ssl_entry(address: usize) -> bool {
+    address == SSL_write as *const () as usize
+        || address == SSL_write_ex as *const () as usize
+        || address == SSL_read as *const () as usize
+        || address == SSL_read_ex as *const () as usize
 }
 
 fn openssl_ssl_read_ex_impl(address: usize) -> usize {
@@ -268,37 +300,6 @@ unsafe extern "C" fn hook_ssl_write(
     unsafe { ssl_write_with(original, ssl, buffer, length) }
 }
 
-unsafe fn ssl_write_with(
-    original: SslWriteFn,
-    ssl: *mut c_void,
-    buffer: *const c_void,
-    length: libc::c_int,
-) -> libc::c_int {
-    if length <= 0 || buffer.is_null() {
-        return unsafe { original(ssl, buffer, length) };
-    }
-    let Ok(length) = usize::try_from(length) else {
-        return tls_write_error("SSL_write", "negative payload length");
-    };
-    let payload = unsafe { std::slice::from_raw_parts(buffer.cast::<u8>(), length) };
-    match decide_payload(
-        PayloadDirection::Outbound,
-        "SSL_write",
-        ssl as usize,
-        payload,
-    ) {
-        RuntimeAction::Allow => unsafe { original(ssl, buffer, length as libc::c_int) },
-        RuntimeAction::Replace(replacement) => unsafe {
-            original(
-                ssl,
-                replacement.as_ptr().cast::<c_void>(),
-                length as libc::c_int,
-            )
-        },
-        RuntimeAction::Block => tls_write_error("SSL_write", "processor blocked payload"),
-    }
-}
-
 unsafe extern "C" fn hook_ssl_write_ex(
     ssl: *mut c_void,
     buffer: *const c_void,
@@ -309,31 +310,6 @@ unsafe extern "C" fn hook_ssl_write_ex(
     unsafe { ssl_write_ex_with(original, ssl, buffer, length, written) }
 }
 
-unsafe fn ssl_write_ex_with(
-    original: SslWriteExFn,
-    ssl: *mut c_void,
-    buffer: *const c_void,
-    length: usize,
-    written: *mut usize,
-) -> libc::c_int {
-    if length == 0 || buffer.is_null() {
-        return unsafe { original(ssl, buffer, length, written) };
-    }
-    let payload = unsafe { std::slice::from_raw_parts(buffer.cast::<u8>(), length) };
-    match decide_payload(
-        PayloadDirection::Outbound,
-        "SSL_write_ex",
-        ssl as usize,
-        payload,
-    ) {
-        RuntimeAction::Allow => unsafe { original(ssl, buffer, length, written) },
-        RuntimeAction::Replace(replacement) => unsafe {
-            original(ssl, replacement.as_ptr().cast::<c_void>(), length, written)
-        },
-        RuntimeAction::Block => 0,
-    }
-}
-
 unsafe extern "C" fn hook_ssl_read(
     ssl: *mut c_void,
     buffer: *mut c_void,
@@ -341,23 +317,6 @@ unsafe extern "C" fn hook_ssl_read(
 ) -> libc::c_int {
     let original = unsafe { original_ssl_read() };
     unsafe { ssl_read_with(original, ssl, buffer, length) }
-}
-
-unsafe fn ssl_read_with(
-    original: SslReadFn,
-    ssl: *mut c_void,
-    buffer: *mut c_void,
-    length: libc::c_int,
-) -> libc::c_int {
-    let result = unsafe { original(ssl, buffer, length) };
-    if result <= 0 || buffer.is_null() {
-        return result;
-    }
-    let Ok(length) = usize::try_from(result) else {
-        abort_runtime("SSL_read returned invalid length");
-    };
-    inbound_rewrite("SSL_read", ssl as usize, buffer.cast::<u8>(), length);
-    result
 }
 
 unsafe extern "C" fn hook_ssl_read_ex(
@@ -370,41 +329,11 @@ unsafe extern "C" fn hook_ssl_read_ex(
     unsafe { ssl_read_ex_with(original, ssl, buffer, length, read_bytes) }
 }
 
-unsafe fn ssl_read_ex_with(
-    original: SslReadExFn,
-    ssl: *mut c_void,
-    buffer: *mut c_void,
-    length: usize,
-    read_bytes: *mut usize,
-) -> libc::c_int {
-    let result = unsafe { original(ssl, buffer, length, read_bytes) };
-    if result != 1 || buffer.is_null() || read_bytes.is_null() {
-        return result;
-    }
-    let completed = unsafe { *read_bytes };
-    if completed == 0 {
-        return result;
-    }
-    inbound_rewrite("SSL_read_ex", ssl as usize, buffer.cast::<u8>(), completed);
-    result
-}
-
 fn configured_openssl_binary() -> Option<PathBuf> {
     INSTALL_STATE
         .get()
         .and_then(|state| state.lock().ok())
         .and_then(|state| state.openssl_interpose_binary.clone())
-}
-
-fn inbound_rewrite(symbol: &str, stream_key: usize, buffer: *mut u8, length: usize) {
-    let payload = unsafe { std::slice::from_raw_parts(buffer, length) };
-    match decide_payload(PayloadDirection::Inbound, symbol, stream_key, payload) {
-        RuntimeAction::Allow => {}
-        RuntimeAction::Replace(replacement) => unsafe {
-            std::ptr::copy_nonoverlapping(replacement.as_ptr(), buffer, replacement.len());
-        },
-        RuntimeAction::Block => abort_runtime("inbound processor blocked payload"),
-    }
 }
 
 unsafe fn original_ssl_write() -> SslWriteFn {
@@ -437,20 +366,4 @@ unsafe fn original_ssl_read_ex() -> SslReadExFn {
         abort_runtime("SSL_read_ex original is not installed");
     }
     unsafe { std::mem::transmute(address) }
-}
-
-fn tls_write_error(symbol: &str, reason: &str) -> libc::c_int {
-    if config::get().is_some_and(|config| config.should_print_decision()) {
-        output::event_line(&format!(
-            "sync_decision: action=block direction=outbound symbol={symbol} reason={reason}\n"
-        ));
-    }
-    -1
-}
-
-fn abort_runtime(message: &str) -> ! {
-    output::error_line(&format!("tls_payload_probe_sync abort: {message}\n"));
-    unsafe {
-        libc::_exit(126);
-    }
 }

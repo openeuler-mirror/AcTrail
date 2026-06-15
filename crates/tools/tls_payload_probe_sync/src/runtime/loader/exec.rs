@@ -6,7 +6,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tls_payload_sync::ENV_EVENT_SOCKET;
 
+use crate::runtime::tls::dynamic::binding::resolver;
+
 const JAVA_TOOL_OPTIONS: &str = "JAVA_TOOL_OPTIONS";
+const LD_AUDIT: &str = "LD_AUDIT";
 const LD_PRELOAD: &str = "LD_PRELOAD";
 const TLS_SYNC_PREFIX: &str = "TLS_PAYLOAD_SYNC_";
 const ACTRAIL_AGENT_JAR_MARKER: &str = "actrail-java-payload-agent-";
@@ -66,6 +69,7 @@ pub(in crate::runtime) fn merge_exec_env(
     let mut merged = child_env.to_vec();
     merge_tls_sync_env(&mut merged, current_env);
     merge_ld_preload(&mut merged, current_env);
+    merge_ld_audit(&mut merged, current_env);
     if is_java_executable(program.as_ref()) {
         merge_java_tool_options(&mut merged, current_env);
     }
@@ -91,6 +95,23 @@ fn merge_ld_preload(merged: &mut Vec<EnvEntry>, current_env: &[EnvEntry]) {
         return;
     };
     let Some(position) = merged.iter().position(|entry| entry.key == LD_PRELOAD) else {
+        merged.push(current.clone());
+        return;
+    };
+    merged[position].value =
+        append_missing_ld_preload_entries(&merged[position].value, &current.value);
+}
+
+fn merge_ld_audit(merged: &mut Vec<EnvEntry>, current_env: &[EnvEntry]) {
+    let Some(current) = current_env
+        .iter()
+        .rev()
+        .find(|entry| entry.key == LD_AUDIT)
+        .filter(|entry| !entry.value.is_empty())
+    else {
+        return;
+    };
+    let Some(position) = merged.iter().position(|entry| entry.key == LD_AUDIT) else {
         merged.push(current.clone());
         return;
     };
@@ -370,7 +391,10 @@ fn original_symbol(cache: &AtomicUsize, symbol: &[u8]) -> Option<usize> {
     if cached != 0 {
         return Some(cached);
     }
-    let address = unsafe { libc::dlsym(libc::RTLD_NEXT, symbol.as_ptr().cast()) } as usize;
+    let name = symbol
+        .strip_suffix(b"\0")
+        .and_then(|symbol| std::str::from_utf8(symbol).ok())?;
+    let address = resolver::libc_symbol(name)?;
     if address == 0 {
         return None;
     }

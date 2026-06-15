@@ -43,11 +43,9 @@ from export_checks import (  # noqa: E402
     wait_for_semantic_actions,
 )
 from payload_checks import (  # noqa: E402
-    payload_source_selection_selftest,
     payload_texts,
     require_non_empty_payload_text,
     require_tls_response_payloads,
-    tls_response_evidence_facts,
     wait_for_llm_payloads,
 )
 
@@ -62,7 +60,8 @@ def main() -> int:
     actrailctl = require_binary(bin_dir, "actrailctl")
     actrailviewer = require_binary(bin_dir, "actrailviewer")
     actrailweb = require_binary(bin_dir, "actrailweb")
-    tls_runtime = resolve_optional_claude_tls_runtime(workload_config)
+    tls_probe_point_finder = require_binary(bin_dir, "tls-probe-point-finder")
+    tls_runtime = resolve_optional_claude_tls_runtime(workload_config, tls_probe_point_finder)
     write_resolved_operator_config(Path(args.config_template), resolved_config, tls_runtime)
     values = read_config(resolved_config)
     clean_configured_paths(actrailctl, resolved_config)

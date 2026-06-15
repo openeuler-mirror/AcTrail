@@ -277,9 +277,9 @@ fn xiaoo_tls_example_parses() {
 
     assert!(tls.enabled);
     assert_eq!(tls.capture_backend, PayloadTlsCaptureBackend::TlsSync);
-    assert_eq!(tls.source, PayloadTlsSource::SharedLibrary);
-    assert_eq!(tls.resolver, PayloadTlsResolver::OpensslSymbols);
-    assert_eq!(tls.library, PayloadTlsLibrary::Openssl);
+    assert_eq!(tls.source, PayloadTlsSource::Auto);
+    assert_eq!(tls.resolver, PayloadTlsResolver::Auto);
+    assert_eq!(tls.library, PayloadTlsLibrary::Auto);
     assert!(matches!(tls.binary_path, DisabledOrPath::Disabled));
     assert!(matches!(tls.pattern_path, DisabledOrPath::Disabled));
     assert!(config.seccomp_notify.enabled);

@@ -64,6 +64,9 @@ pub fn validate_payload_config(config: &PayloadTlsConfig) -> Result<(), LoaderEr
         return Ok(());
     }
     validate_payload_backend_config(config)?;
+    if config.capture_backend.is_sync() {
+        return validate_sync_payload_config(config);
+    }
     match (config.source, config.resolver, config.library) {
         (
             PayloadTlsSource::SharedLibrary,
@@ -103,6 +106,18 @@ pub fn validate_payload_config(config: &PayloadTlsConfig) -> Result<(), LoaderEr
             "unsupported payload TLS source/resolver/library combination",
         )),
     }
+}
+
+fn validate_sync_payload_config(config: &PayloadTlsConfig) -> Result<(), LoaderError> {
+    if !matches!(config.binary_path, DisabledOrPath::Disabled)
+        || !matches!(config.pattern_path, DisabledOrPath::Disabled)
+    {
+        return Err(LoaderError::new(
+            "payload_tls_config",
+            "tls-sync auto plan requires payload_tls_binary_path=disabled and payload_tls_pattern_path=disabled",
+        ));
+    }
+    Ok(())
 }
 
 pub fn configure_payload_tls_map(
@@ -431,6 +446,10 @@ fn offset_attach_points(
 
 fn payload_tls_library_id(config: &PayloadTlsConfig) -> Result<u32, LoaderError> {
     match config.library {
+        PayloadTlsLibrary::Auto => Err(LoaderError::new(
+            "payload_tls_library",
+            "payload_tls_library=auto is only supported by tls-sync auto plan",
+        )),
         PayloadTlsLibrary::Openssl => Ok(TLS_LIBRARY_OPENSSL),
         PayloadTlsLibrary::Boringssl => Ok(TLS_LIBRARY_BORINGSSL),
         PayloadTlsLibrary::Rustls => Ok(TLS_LIBRARY_RUSTLS),

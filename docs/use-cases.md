@@ -47,9 +47,9 @@ Use a runtime-specific capture path when narrowing a failure:
 | Target Runtime | Capture Path |
 | --- | --- |
 | Dynamic OpenSSL | `payload_tls_source = shared-library`, `payload_tls_resolver = openssl-symbols`; use eBPF for Python `_ssl` because `libssl` is loaded after process startup. |
-| Node/OpenSSL executable | `payload_tls_source = executable`, `payload_tls_resolver = openssl-symbols`. |
-| Bun/static-BoringSSL | `payload_tls_resolver = boringssl-static` for built-in x86_64/aarch64 related-entry detection, or `bun-static-boringssl` with a matching build-id symbol map containing `SSL_read` and `SSL_write`. |
-| Rust/rustls | `tls-sync` with finder fast resolving rustls plaintext points from symbols, debuginfo, or supported build-id-checked patterns. |
+| Node/OpenSSL executable | `tls-sync` auto plan via `payload_tls_source = auto`, `payload_tls_resolver = auto`, and `payload_tls_library = auto`. |
+| Bun/static-BoringSSL | `tls-sync` auto plan via finder fast; BoringSSL-specific static detection is an implementation detail, not an operator config value in current examples. |
+| Rust/rustls | `tls-sync` auto plan with finder fast resolving rustls plaintext points from symbols, debuginfo, or supported build-id-checked patterns. |
 | Go `crypto/tls` | `payload_tls_source = executable`, `payload_tls_resolver = go-pclntab`, `payload_tls_library = go`, `payload_tls_capture_backend = bpf-copy-seccomp-fallback`; captures `crypto/tls.(*Conn).Write` outbound and `crypto/tls.(*Conn).Read` inbound through the Go runtime copy path. |
 | Plain HTTP endpoint/proxy | `payload_socket_enabled = true`, `payload_socket_capture_backend = bpf-copy-seccomp-fallback`, plus HTTP/1.x application parsing. |
 

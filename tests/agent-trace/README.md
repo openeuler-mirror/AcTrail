@@ -56,13 +56,7 @@ supported through the checked rustls static patterns when both
 socket-only HTTP CONNECT trace is not accepted for this case because it does not
 prove HTTPS request-body plaintext capture.
 
-The `opencode-bun` case is pinned in `opencode-bun/workload.conf` to
-`deepseek/deepseek-chat`. This keeps the case independent from the local
-opencode default model and avoids stale provider keys. In a proxy-only network,
-keep the shell's local proxy environment active. If the checked-in
-Bun/BoringSSL map does not match the installed opencode build-id, the case uses
-the byte patterns in `workload.conf` to detect the current `SSL_write` offset
-and writes a temporary matching map.
+The `opencode-bun` case is pinned in `opencode-bun/workload.conf` to `deepseek/deepseek-chat`. This keeps the case independent from the local opencode default model and avoids stale provider keys. In a proxy-only network, keep the shell's local proxy environment active. The case validates `tls-probe-point-finder fast --provider auto --source auto` before launch; the resolved operator config keeps `payload_tls_source`, `payload_tls_resolver`, and `payload_tls_library` set to `auto`.
 
 For `langgraph-openai`, use a Python build whose `_ssl` extension links dynamic
 OpenSSL. Python imports `_ssl` lazily, so this case uses the eBPF OpenSSL

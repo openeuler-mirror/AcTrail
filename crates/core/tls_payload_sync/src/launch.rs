@@ -4,7 +4,7 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 
-use tls_probe_point_finder::ProbePointPlan;
+use tls_probe_point_finder::{ProbePointPlan, ProbeSource};
 
 use crate::{SyncError, SyncResult};
 
@@ -37,13 +37,28 @@ pub fn run_with_preload_libraries(
     libraries: &[PathBuf],
     envs: Vec<(OsString, OsString)>,
 ) -> SyncResult<ExitStatus> {
+    run_with_runtime_libraries(command, libraries, libraries, envs)
+}
+
+pub fn run_with_runtime_libraries(
+    command: &[OsString],
+    preload_libraries: &[PathBuf],
+    audit_libraries: &[PathBuf],
+    envs: Vec<(OsString, OsString)>,
+) -> SyncResult<ExitStatus> {
     let Some(program) = command.first() else {
         return Err(SyncError::new("probe command is empty"));
     };
     let mut child = Command::new(program);
     child.args(&command[1..]);
     child.envs(envs);
-    child.env("LD_PRELOAD", preload_env_value_for_libraries(libraries)?);
+    child.env(
+        "LD_PRELOAD",
+        preload_env_value_for_libraries(preload_libraries)?,
+    );
+    if !audit_libraries.is_empty() {
+        child.env("LD_AUDIT", audit_env_value_for_libraries(audit_libraries)?);
+    }
     child
         .status()
         .map_err(|error| SyncError::new(format!("run target: {error}")))
@@ -76,7 +91,33 @@ pub fn preload_env_value(library: &Path) -> SyncResult<OsString> {
     preload_env_value_for_libraries(&[library.to_path_buf()])
 }
 
+pub fn audit_env_value(library: &Path) -> SyncResult<OsString> {
+    audit_env_value_for_libraries(&[library.to_path_buf()])
+}
+
 pub fn preload_env_value_for_libraries(libraries: &[PathBuf]) -> SyncResult<OsString> {
+    loader_env_value_for_libraries(libraries, "LD_PRELOAD")
+}
+
+pub fn audit_env_value_for_libraries(libraries: &[PathBuf]) -> SyncResult<OsString> {
+    loader_env_value_for_libraries(libraries, "LD_AUDIT")
+}
+
+pub fn audit_libraries_for_plans(
+    runtime_libraries: &[PathBuf],
+    plans: &[ProbePointPlan],
+) -> Vec<PathBuf> {
+    if plans
+        .iter()
+        .any(|plan| plan.source == ProbeSource::Executable)
+    {
+        Vec::new()
+    } else {
+        runtime_libraries.to_vec()
+    }
+}
+
+fn loader_env_value_for_libraries(libraries: &[PathBuf], env_name: &str) -> SyncResult<OsString> {
     let mut resolved = libraries
         .iter()
         .map(|library| {
@@ -96,7 +137,7 @@ pub fn preload_env_value_for_libraries(libraries: &[PathBuf]) -> SyncResult<OsSt
         value.push(":");
         value.push(library);
     }
-    let Some(existing) = std::env::var_os("LD_PRELOAD") else {
+    let Some(existing) = std::env::var_os(env_name) else {
         return Ok(value);
     };
     value.push(":");
@@ -205,7 +246,10 @@ mod tests {
         ProbeSource, TargetIdentity, TlsProvider,
     };
 
-    use super::{preload_env_value_for_libraries, validate_native_backend_plan};
+    use super::{
+        audit_env_value_for_libraries, preload_env_value_for_libraries,
+        validate_native_backend_plan,
+    };
 
     #[test]
     fn native_backend_rejects_probe_binary_architecture_mismatch() {
@@ -273,6 +317,22 @@ mod tests {
 
         let value = preload_env_value_for_libraries(&[first.clone(), second.clone()])
             .expect("preload value")
+            .to_string_lossy()
+            .into_owned();
+
+        assert!(
+            value.starts_with(&format!("{}:{}", first.display(), second.display())),
+            "{value}"
+        );
+    }
+
+    #[test]
+    fn audit_env_value_preserves_dependency_order() {
+        let first = std::fs::canonicalize("/bin/sh").expect("canonical /bin/sh");
+        let second = std::fs::canonicalize("/bin/ls").expect("canonical /bin/ls");
+
+        let value = audit_env_value_for_libraries(&[first.clone(), second.clone()])
+            .expect("audit value")
             .to_string_lossy()
             .into_owned();
 

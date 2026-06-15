@@ -32,7 +32,7 @@ from common import (  # noqa: E402
     wait_for_llm_exchange_actions,
     wait_for_payloads_any,
 )
-from rustls import write_rustls_symbol_map  # noqa: E402
+from rustls import resolve_rustls_probe_plan  # noqa: E402
 
 
 def main() -> int:
@@ -47,12 +47,12 @@ def main() -> int:
     actrailweb = require_binary(bin_dir, "actrailweb")
     tls_probe_point_finder = require_binary(bin_dir, "tls-probe-point-finder")
     xiaoo_binary = resolve_xiaoo_binary(required(workload, "xiaoo_binary"))
-    tls_runtime = resolve_xiaoo_tls_runtime(xiaoo_binary, workload, tls_probe_point_finder)
+    require_xiaoo_auto_tls_plan(xiaoo_binary, workload, tls_probe_point_finder)
     resolved_config = Path(required(workload, "resolved_config_path"))
     render_config(
         Path(args.config_template),
         resolved_config,
-        xiaoo_config_replacements(xiaoo_binary, tls_runtime),
+        xiaoo_config_replacements(),
     )
     clean_configured_paths(actrailctl, resolved_config)
     daemon = start_daemon(
@@ -86,11 +86,11 @@ def main() -> int:
             int(required(workload, "drain_attempts")),
             float(required(workload, "drain_sleep_seconds")),
             required(workload, "payload_head"),
-            accepted_payload_fragments(tls_runtime),
+            accepted_payload_fragments(),
         )
         payload_count = require_complete_payload_rows_any(
             payloads,
-            accepted_payload_sources(tls_runtime),
+            accepted_payload_sources(),
             direction="outbound",
         )
         actions = wait_for_llm_exchange_actions(
@@ -150,43 +150,31 @@ def resolve_xiaoo_binary(configured: str) -> Path:
     return require_executable(path)
 
 
-def resolve_xiaoo_tls_runtime(
+def require_xiaoo_auto_tls_plan(
     xiaoo_binary: Path,
     workload: dict[str, str],
     tls_probe_point_finder: Path,
-) -> Path:
-    symbol_map = Path(required(workload, "symbol_map_path"))
-    symbol_detail = write_rustls_symbol_map(
-        xiaoo_binary,
-        symbol_map,
-        workload,
-        tls_probe_point_finder,
-    )
-    print(f"xiaoo_rustls_symbol_source={symbol_detail}")
-    return symbol_map
+) -> None:
+    plan = resolve_rustls_probe_plan(xiaoo_binary, workload, tls_probe_point_finder)
+    print(f"xiaoo_rustls_auto_plan={plan.detail}")
 
 
-def xiaoo_config_replacements(
-    xiaoo_binary: Path,
-    symbol_map: Path,
-) -> dict[str, str]:
+def xiaoo_config_replacements() -> dict[str, str]:
     return {
         "__XIAOO_TLS_ENABLED__": "true",
-        "__XIAOO_BINARY__": str(xiaoo_binary),
-        "__XIAOO_RUSTLS_SYMBOL_MAP__": str(symbol_map),
         "__XIAOO_SECCOMP_NOTIFY_ENABLED__": "true",
         "__XIAOO_TLS_REQUIRED_CAPABILITY__": "required_capability = tls-plaintext-payload",
     }
 
 
-def accepted_payload_sources(_symbol_map: Path) -> list[tuple[str, str]]:
+def accepted_payload_sources() -> list[tuple[str, str]]:
     return [("TlsUserSpace", "rustls")]
 
 
-def accepted_payload_fragments(symbol_map: Path) -> list[list[str]]:
+def accepted_payload_fragments() -> list[list[str]]:
     return [
         [source, library, "outbound", "Complete", "success"]
-        for source, library in accepted_payload_sources(symbol_map)
+        for source, library in accepted_payload_sources()
     ]
 
 
