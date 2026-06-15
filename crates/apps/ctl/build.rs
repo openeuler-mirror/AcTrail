@@ -4,24 +4,45 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+const PREBUILT_JAVA_AGENT_ENV: &str = "ACTRAIL_JAVA_AGENT_PREBUILT_JAR";
+const SKIP_JAVA_AGENT_ENV: &str = "ACTRAIL_SKIP_JAVA_AGENT_BUILD";
+const REQUIRE_JAVA_AGENT_ENV: &str = "ACTRAIL_REQUIRE_JAVA_AGENT_BUILD";
+const JAVA_RELEASE_ENV: &str = "ACTRAIL_JAVA_AGENT_RELEASE";
+const JAVA_AGENT_SOURCE_DIR: &str = "java-agent/src/main/java";
+const JAVA_AGENT_BUILD_DIR: &str = "java-agent";
+const JAVA_AGENT_JAR_NAME: &str = "actrail-java-payload-agent.jar";
+const DEFAULT_JAVA_RELEASE: &str = "17";
+
 fn main() {
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest dir"));
-    let source_dir = manifest_dir.join("java-agent/src/main/java");
+    let source_dir = manifest_dir.join(JAVA_AGENT_SOURCE_DIR);
     println!("cargo:rerun-if-changed={}", source_dir.display());
-    println!("cargo:rerun-if-env-changed=ACTRAIL_SKIP_JAVA_AGENT_BUILD");
-    println!("cargo:rerun-if-env-changed=ACTRAIL_REQUIRE_JAVA_AGENT_BUILD");
+    println!("cargo:rerun-if-env-changed={PREBUILT_JAVA_AGENT_ENV}");
+    println!("cargo:rerun-if-env-changed={SKIP_JAVA_AGENT_ENV}");
+    println!("cargo:rerun-if-env-changed={REQUIRE_JAVA_AGENT_ENV}");
+    println!("cargo:rerun-if-env-changed={JAVA_RELEASE_ENV}");
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR must be set"));
     let artifact_rs = out_dir.join("java_agent_artifact.rs");
-    if env::var_os("ACTRAIL_SKIP_JAVA_AGENT_BUILD").is_some() {
+    if env::var_os(SKIP_JAVA_AGENT_ENV).is_some() {
         write_artifact_unavailable(
             &artifact_rs,
             "Java payload agent build was skipped by ACTRAIL_SKIP_JAVA_AGENT_BUILD",
         );
         return;
     }
-    let require_java_agent = env::var_os("ACTRAIL_REQUIRE_JAVA_AGENT_BUILD").is_some();
-    match build_java_agent(&source_dir, &out_dir) {
+
+    if let Some(path) = env::var_os(PREBUILT_JAVA_AGENT_ENV) {
+        match copy_prebuilt_java_agent(PathBuf::from(path), &out_dir.join(JAVA_AGENT_JAR_NAME)) {
+            Ok(jar) => write_artifact_available(&artifact_rs, &jar),
+            Err(error) => panic!("use prebuilt Java payload agent jar: {error}"),
+        }
+        return;
+    }
+
+    let require_java_agent = env::var_os(REQUIRE_JAVA_AGENT_ENV).is_some();
+    let java_release = java_release();
+    match build_java_agent(&source_dir, &out_dir, &java_release) {
         Ok(jar) => write_artifact_available(&artifact_rs, &jar),
         Err(error) => {
             let message = format!(
@@ -41,7 +62,53 @@ fn main() {
     }
 }
 
-fn build_java_agent(source_dir: &Path, out_dir: &Path) -> Result<PathBuf, String> {
+fn java_release() -> OsString {
+    env::var_os(JAVA_RELEASE_ENV)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| OsString::from(DEFAULT_JAVA_RELEASE))
+}
+
+fn copy_prebuilt_java_agent(source: PathBuf, target: &Path) -> Result<PathBuf, String> {
+    if !source.is_absolute() {
+        return Err(format!(
+            "{PREBUILT_JAVA_AGENT_ENV} must be an absolute path"
+        ));
+    }
+    println!("cargo:rerun-if-changed={}", source.display());
+    if !source.is_file() {
+        return Err(format!(
+            "missing prebuilt Java payload agent jar {}",
+            source.display()
+        ));
+    }
+    println!(
+        "cargo:warning=using prebuilt Java payload agent jar from {}",
+        source.display()
+    );
+    let parent = target
+        .parent()
+        .ok_or_else(|| "prebuilt Java payload agent target has no parent".to_string())?;
+    fs::create_dir_all(parent).map_err(|error| {
+        format!(
+            "create prebuilt Java payload agent target dir {}: {error}",
+            parent.display()
+        )
+    })?;
+    fs::copy(&source, target).map_err(|error| {
+        format!(
+            "copy prebuilt Java payload agent jar {} to {}: {error}",
+            source.display(),
+            target.display()
+        )
+    })?;
+    Ok(target.to_path_buf())
+}
+
+fn build_java_agent(
+    source_dir: &Path,
+    out_dir: &Path,
+    java_release: &OsString,
+) -> Result<PathBuf, String> {
     let sources = java_sources(source_dir)?;
     if sources.is_empty() {
         return Err(format!(
@@ -49,9 +116,9 @@ fn build_java_agent(source_dir: &Path, out_dir: &Path) -> Result<PathBuf, String
             source_dir.display()
         ));
     }
-    let classes_dir = out_dir.join("java-agent/classes");
-    let jar_path = out_dir.join("actrail-java-payload-agent.jar");
-    let manifest_path = out_dir.join("java-agent/MANIFEST.MF");
+    let classes_dir = out_dir.join(JAVA_AGENT_BUILD_DIR).join("classes");
+    let jar_path = out_dir.join(JAVA_AGENT_JAR_NAME);
+    let manifest_path = out_dir.join(JAVA_AGENT_BUILD_DIR).join("MANIFEST.MF");
     recreate_dir(&classes_dir)?;
     fs::create_dir_all(
         manifest_path
@@ -73,7 +140,7 @@ fn build_java_agent(source_dir: &Path, out_dir: &Path) -> Result<PathBuf, String
 
     let mut javac_args = vec![
         OsString::from("--release"),
-        OsString::from("17"),
+        java_release.clone(),
         OsString::from("-d"),
         classes_dir.clone().into_os_string(),
     ];

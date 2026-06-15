@@ -4,9 +4,9 @@ use config_core::daemon::DiagnosticLogLevel;
 
 use crate::services::diagnostic_logging;
 
-use super::SqliteAttachService;
+use super::StorageAttachService;
 
-impl SqliteAttachService {
+impl StorageAttachService {
     pub(in crate::services) fn diagnostic_log_enabled(&self, required: DiagnosticLogLevel) -> bool {
         diagnostic_logging::diagnostic_log_enabled(self.diagnostic_log_level, required)
     }

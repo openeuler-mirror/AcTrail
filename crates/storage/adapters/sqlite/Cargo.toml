@@ -1,0 +1,16 @@
+[package]
+name = "sqlite_storage"
+version.workspace = true
+edition = "2024"
+license = "MulanPSL-2.0"
+
+[dependencies]
+model_core = { path = "../../../core/model" }
+rusqlite = { version = "0.31.0", features = ["bundled"] }
+semantic_action = { path = "../../../contracts/semantic_action" }
+storage_core = { path = "../../core" }
+store_read_contract = { path = "../../../contracts/store/read" }
+store_retention_contract = { path = "../../../contracts/store/retention" }
+store_snapshot_contract = { path = "../../../contracts/store/snapshot" }
+store_tx_contract = { path = "../../../contracts/store/tx" }
+store_write_contract = { path = "../../../contracts/store/write" }

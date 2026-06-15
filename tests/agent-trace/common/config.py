@@ -29,9 +29,15 @@ def repo_root() -> Path:
 
 def read_config(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
+    section = ""
     for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line.strip("[]")
+            continue
+        if section.startswith("export"):
             continue
         key, separator, value = line.partition("=")
         if not separator:

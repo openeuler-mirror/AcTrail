@@ -6,30 +6,20 @@ use std::time::{Duration, SystemTime};
 
 use config_core::capture_profile::CaptureProfile;
 use config_core::daemon::{
-    AgentInvocationConfig, ApplicationProtocolConfig, DEFAULT_STORAGE_BUSY_TIMEOUT_MS,
-    DiagnosticLogLevel, EbpfCollectorConfig, EnforcementBackend, EnforcementConfig,
-    EnforcementDecision, EnforcementMarkStrategy, EnforcementScope, LiveOtelExportConfig,
-    MemlockRlimit, OPERATOR_CONFIG_TEMPLATE, OperatorConfig, PayloadConfig, ProcessSeccompConfig,
-    ProcessSeccompSyscall, ResourceMetricsConfig, SeccompNotifyConfig, SseDataPolicy,
+    AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
+    EnforcementBackend, EnforcementConfig, EnforcementDecision, EnforcementMarkStrategy,
+    EnforcementScope, MemlockRlimit, OPERATOR_CONFIG_TEMPLATE, OperatorConfig, PayloadConfig,
+    ProcessSeccompConfig, ProcessSeccompSyscall, ResourceMetricsConfig, RuntimeExportConfig,
+    SeccompNotifyConfig, SseDataPolicy,
 };
 use config_core::trace_snapshot::CaptureProfileSnapshot;
 use control_contract::command::{ControlCommand, ListTracesCommand, TrackAddCommand};
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use model_core::event::EventPayload;
 use model_core::ids::{CollectorName, ProfileName, RequestId, TraceName};
-use model_core::payload::{
-    PayloadContentState, PayloadDirection, PayloadOperationCompletionState, PayloadSourceBoundary,
-    PayloadStreamKey, PayloadTruncationState,
-};
 use model_core::process::ProcessIdentity;
 use model_core::trace::TraceHealth;
-use payload_event::RawPayloadSegment;
-use sqlite_storage::SqliteStorage;
-use store_read_contract::diagnostics::DiagnosticReadStore;
-use store_read_contract::events::EventReadStore;
-use store_read_contract::payloads::{PayloadReadStore, PayloadSegmentQuery};
-use store_write_contract::memberships::MembershipWriteStore;
-use store_write_contract::traces::TraceWriteStore;
+use storage_factory::StorageConfig;
 use trace_runtime::commands::TrackTraceRequest;
 use trace_runtime::sensor_plan::{CollectorPlan, SensorPlan};
 use uds_control_server::ControlService;
@@ -41,6 +31,12 @@ use super::build_runtime_wiring;
 
 #[path = "test_cases/application_protocol.rs"]
 mod application_protocol_tests;
+#[path = "test_cases/lineage_projection.rs"]
+mod lineage_projection_tests;
+#[path = "test_cases/live_export.rs"]
+mod live_export_tests;
+#[path = "test_cases/tls_sync.rs"]
+mod tls_sync_tests;
 
 const RESOURCE_TEST_INTERVAL: Duration = Duration::from_millis(2);
 const APPLICATION_PROTOCOL_COLLECTOR: &str = "application-protocol-analyzer";
@@ -48,7 +44,6 @@ const RESOURCE_METRICS_COLLECTOR: &str = "resource-sampler";
 const TEST_HTTP_BUFFER_BYTES: u64 = 4096;
 const TEST_HTTP2_MAX_FRAME_BYTES: u64 = 16384;
 const TEST_HTTP2_PREVIEW_BYTES: u64 = 16;
-const TEST_SYNC_CHILD_PID_OFFSET: u32 = 10_000;
 static TEST_SOCKET_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[test]
@@ -61,8 +56,7 @@ fn attach_main_path_runs() {
         Vec::new(),
     ));
     let wiring = build_runtime_wiring(
-        &storage_path,
-        DEFAULT_STORAGE_BUSY_TIMEOUT_MS,
+        &test_storage_config(storage_path.clone()),
         profiles,
         ebpf_config(true),
         payload_config(false),
@@ -72,7 +66,7 @@ fn attach_main_path_runs() {
         agent_invocation_disabled(),
         application_protocol_disabled(),
         resource_metrics_disabled(),
-        live_otel_export_disabled(),
+        export_runtime_disabled(),
         enforcement_disabled(),
     )
     .unwrap();
@@ -116,8 +110,7 @@ fn launch_mode_suppresses_wrapper_bootstrap_gap() {
         Vec::new(),
     ));
     let wiring = build_runtime_wiring(
-        &storage_path,
-        DEFAULT_STORAGE_BUSY_TIMEOUT_MS,
+        &test_storage_config(storage_path.clone()),
         profiles,
         ebpf_config(false),
         payload_config(false),
@@ -127,7 +120,7 @@ fn launch_mode_suppresses_wrapper_bootstrap_gap() {
         agent_invocation_disabled(),
         application_protocol_disabled(),
         resource_metrics_disabled(),
-        live_otel_export_disabled(),
+        export_runtime_disabled(),
         enforcement_disabled(),
     )
     .unwrap();
@@ -162,7 +155,11 @@ fn launch_mode_suppresses_wrapper_bootstrap_gap() {
         .expect("launch trace");
     assert_eq!(trace.health, TraceHealth::Clean);
 
-    let storage = SqliteStorage::open(&storage_path).unwrap();
+    let storage = storage_factory::open_storage_backend(
+        &test_storage_config(storage_path.clone()),
+        storage_core::StorageOpenMode::ReadOnly,
+    )
+    .unwrap();
     assert!(storage.list_diagnostics(reply.trace_id).unwrap().is_empty());
 }
 
@@ -174,8 +171,7 @@ fn resource_metrics_sampler_persists_procfs_samples() {
     ));
     let profiles = DaemonProfileRegistry::new();
     let mut wiring = build_runtime_wiring(
-        &storage_path,
-        DEFAULT_STORAGE_BUSY_TIMEOUT_MS,
+        &test_storage_config(storage_path.clone()),
         profiles,
         ebpf_config(false),
         payload_config(false),
@@ -192,7 +188,7 @@ fn resource_metrics_sampler_persists_procfs_samples() {
             cpu_alert_percent_millis: None,
             memory_alert_rss_kb: None,
         },
-        live_otel_export_disabled(),
+        export_runtime_disabled(),
         enforcement_disabled(),
     )
     .unwrap();
@@ -242,105 +238,12 @@ fn resource_metrics_sampler_persists_procfs_samples() {
     );
 }
 
-#[test]
-fn tls_sync_payload_persists_without_child_membership() {
-    let storage_path = std::env::temp_dir().join(format!(
-        "actrail-tls-sync-membership-test-{}.sqlite",
-        std::process::id()
-    ));
-    let profiles = DaemonProfileRegistry::new();
-    let mut wiring = build_runtime_wiring(
-        &storage_path,
-        DEFAULT_STORAGE_BUSY_TIMEOUT_MS,
-        profiles,
-        ebpf_config(false),
-        payload_config(true),
-        DiagnosticLogLevel::Info,
-        seccomp_notify_disabled(),
-        process_seccomp_disabled(),
-        agent_invocation_disabled(),
-        application_protocol_disabled(),
-        resource_metrics_disabled(),
-        live_otel_export_disabled(),
-        enforcement_disabled(),
-    )
-    .unwrap();
-
-    let trace_id = wiring.trace_runtime.reserve_trace_id();
-    let root = ProcessIdentity::new(std::process::id(), 1, 1);
-    create_active_trace(
-        &mut wiring,
-        trace_id,
-        root,
-        ProfileName::new("tls-sync"),
-        TraceName::new("tls-sync"),
-        vec![CapabilityRequest::new(
-            Capability::TlsPlaintextPayload,
-            RequestMode::Required,
-        )],
-        "tls-sync",
-        vec![Capability::TlsPlaintextPayload],
-    );
-    let sync_process = ProcessIdentity::new(sync_child_pid(), 0, 0);
-    wiring
-        .attach_service
-        .process_payload_segment_impl(
-            &wiring.trace_runtime,
-            RawPayloadSegment {
-                trace_id,
-                observed_at: SystemTime::UNIX_EPOCH,
-                process: sync_process.clone(),
-                source_boundary: PayloadSourceBoundary::TlsUserSpace,
-                content_state: PayloadContentState::Plaintext,
-                direction: PayloadDirection::Outbound,
-                stream_key: PayloadStreamKey::new("tls-sync-test"),
-                sequence: 1,
-                original_size: 5,
-                captured_size: 5,
-                operation_id: 1,
-                operation_offset: 0,
-                operation_original_size: 5,
-                operation_captured_size: 5,
-                operation_completion_state: PayloadOperationCompletionState::Success,
-                truncation: PayloadTruncationState::Complete,
-                library: "openssl".to_string(),
-                symbol: "SSL_write".to_string(),
-                protocol_hint: None,
-                bytes: b"hello".to_vec(),
-            },
-        )
-        .unwrap();
-
-    let segments = wiring
-        .attach_service
-        .storage
-        .list_payload_segments(
-            trace_id,
-            PayloadSegmentQuery {
-                segment_id: None,
-                direction: None,
-                limit: None,
-                include_bytes: true,
-            },
-        )
-        .unwrap();
-    assert_eq!(segments.len(), 1);
-    assert_eq!(segments[0].process, sync_process);
-    assert_eq!(
-        segments[0].source_boundary,
-        PayloadSourceBoundary::TlsUserSpace
-    );
-    assert_eq!(segments[0].bytes, b"hello");
-}
-
-fn sync_child_pid() -> u32 {
-    std::process::id()
-        .checked_add(TEST_SYNC_CHILD_PID_OFFSET)
-        .unwrap_or(TEST_SYNC_CHILD_PID_OFFSET)
+pub(super) fn test_storage_config(path: std::path::PathBuf) -> StorageConfig {
+    StorageConfig::sqlite_path(path)
 }
 
 fn create_active_trace(
-    wiring: &mut crate::runtime_wiring::DaemonRuntimeWiring<super::attach::SqliteAttachService>,
+    wiring: &mut crate::runtime_wiring::DaemonRuntimeWiring<super::attach::StorageAttachService>,
     trace_id: model_core::ids::TraceId,
     process: ProcessIdentity,
     profile_name: ProfileName,
@@ -480,10 +383,10 @@ fn resource_metrics_disabled() -> ResourceMetricsConfig {
     }
 }
 
-fn live_otel_export_disabled() -> LiveOtelExportConfig {
+fn export_runtime_disabled() -> RuntimeExportConfig {
     let mut config = OperatorConfig::parse(OPERATOR_CONFIG_TEMPLATE)
         .unwrap()
-        .live_otel_export;
+        .export_runtime;
     config.enabled = false;
     config
 }

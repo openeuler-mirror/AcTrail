@@ -2,8 +2,7 @@
 
 use graph_contract::document::GraphDocument;
 use model_core::ids::TraceId;
-use store_snapshot_contract::lease::SnapshotLeaseStore;
-use store_snapshot_contract::view::SnapshotStore;
+use storage_core::{SnapshotView, StorageBackend};
 
 use crate::document::build_graph_document;
 use crate::serialize::to_json;
@@ -23,29 +22,22 @@ impl ExportError {
     }
 }
 
-pub struct JsonGraphExportService<L, S> {
-    lease_store: L,
-    snapshot_store: S,
+pub struct JsonGraphExportService<'a> {
+    storage: &'a mut dyn StorageBackend,
     schema_version: String,
     include_payload_bytes: bool,
     include_payload_text: bool,
 }
 
-impl<L, S> JsonGraphExportService<L, S>
-where
-    L: SnapshotLeaseStore,
-    S: SnapshotStore,
-{
+impl<'a> JsonGraphExportService<'a> {
     pub fn new(
-        lease_store: L,
-        snapshot_store: S,
+        storage: &'a mut dyn StorageBackend,
         schema_version: impl Into<String>,
         include_payload_bytes: bool,
         include_payload_text: bool,
     ) -> Self {
         Self {
-            lease_store,
-            snapshot_store,
+            storage,
             schema_version: schema_version.into(),
             include_payload_bytes,
             include_payload_text,
@@ -73,20 +65,17 @@ where
         ))
     }
 
-    fn read_snapshot_with_lease(
-        &mut self,
-        trace_id: TraceId,
-    ) -> Result<store_snapshot_contract::view::SnapshotView, ExportError> {
+    fn read_snapshot_with_lease(&mut self, trace_id: TraceId) -> Result<SnapshotView, ExportError> {
         let lease = self
-            .lease_store
+            .storage
             .acquire_export_lease(trace_id)
             .map_err(|error| ExportError::new(error.stage, error.message))?;
         let snapshot_result = self
-            .snapshot_store
+            .storage
             .read_snapshot(&lease)
             .map_err(|error| ExportError::new(error.stage, error.message));
         let release_result = self
-            .lease_store
+            .storage
             .release_export_lease(lease)
             .map_err(|error| ExportError::new(error.stage, error.message));
 

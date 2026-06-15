@@ -57,7 +57,7 @@ pub(crate) fn read_iovec_payload(
         return Err(ControlError::new(
             "seccomp_read",
             format!(
-                "short rustls iovec table read: expected {table_size}, read {}",
+                "short iovec table read: expected {table_size}, read {}",
                 table.len()
             ),
         ));
@@ -76,7 +76,7 @@ pub(crate) fn read_iovec_payload(
         if iov_base == 0 {
             return Err(ControlError::new(
                 "seccomp_read",
-                "rustls iovec entry has null base with non-zero length",
+                "iovec entry has null base with non-zero length",
             ));
         }
         let remaining = max_payload_bytes - bytes.len();
@@ -87,6 +87,46 @@ pub(crate) fn read_iovec_payload(
         bytes.extend_from_slice(&chunk);
     }
     Ok(Some(bytes))
+}
+
+pub(crate) fn read_msghdr_iovec_payload(
+    pid: u32,
+    remote_msghdr_addr: u64,
+    max_operation_bytes: u32,
+) -> Result<Option<Vec<u8>>, ControlError> {
+    let msghdr_size = std::mem::size_of::<libc::msghdr>();
+    let Some(msghdr) = read_process_bytes(pid, remote_msghdr_addr, msghdr_size)? else {
+        return Ok(None);
+    };
+    if msghdr.len() != msghdr_size {
+        return Err(ControlError::new(
+            "seccomp_read",
+            format!(
+                "short msghdr read: expected {msghdr_size}, read {}",
+                msghdr.len()
+            ),
+        ));
+    }
+    let iov_addr = read_usize_at(
+        &msghdr,
+        std::mem::offset_of!(libc::msghdr, msg_iov),
+        "msghdr",
+    )? as u64;
+    let iov_count = read_usize_at(
+        &msghdr,
+        std::mem::offset_of!(libc::msghdr, msg_iovlen),
+        "msghdr",
+    )?;
+    if iov_count == 0 {
+        return Ok(Some(Vec::new()));
+    }
+    if iov_addr == 0 {
+        return Err(ControlError::new(
+            "seccomp_read",
+            "msghdr has null msg_iov with non-zero msg_iovlen",
+        ));
+    }
+    read_iovec_payload(pid, iov_addr, iov_count, max_operation_bytes)
 }
 
 /// Returns `Ok(None)` when the target exited mid-capture (see [`target_exited`]).
@@ -118,10 +158,14 @@ pub(crate) fn read_process_bytes(
 }
 
 fn read_iovec_usize(entry: &[u8], offset: usize) -> Result<usize, ControlError> {
+    read_usize_at(entry, offset, "iovec table entry")
+}
+
+fn read_usize_at(bytes: &[u8], offset: usize, label: &str) -> Result<usize, ControlError> {
     let size = std::mem::size_of::<usize>();
-    let bytes = entry.get(offset..offset + size).ok_or_else(|| {
-        ControlError::new("seccomp_read", "rustls iovec table entry is truncated")
-    })?;
+    let bytes = bytes
+        .get(offset..offset + size)
+        .ok_or_else(|| ControlError::new("seccomp_read", format!("{label} is truncated")))?;
     Ok(usize::from_ne_bytes(
         bytes.try_into().expect("iovec usize width"),
     ))

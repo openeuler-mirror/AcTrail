@@ -6,10 +6,10 @@ use std::path::Path;
 
 use model_core::ids::TraceId;
 use model_core::trace::TraceLifecycleState;
-use store_read_contract::traces::TraceReadStore;
+use storage_core::StorageBackend;
 
 pub(super) fn reject_active_trace_if_disabled(
-    storage: &sqlite_storage::SqliteStorage,
+    storage: &dyn StorageBackend,
     trace_id: TraceId,
     allow_active: bool,
 ) -> Result<(), String> {

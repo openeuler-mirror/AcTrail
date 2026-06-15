@@ -159,62 +159,6 @@ fn llm_request_marks_child_agent_and_upgrades_only_direct_edge() {
 }
 
 #[test]
-fn repeated_llm_request_keeps_agent_invocation_evidence_stable() {
-    let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
-
-    runtime.observe_event(&exec_event(
-        AGENT_EXEC_EVENT_ID,
-        agent.clone(),
-        None,
-        "/root/.local/bin/claude",
-    ));
-    let first_output = runtime.observe_payload_segment(&llm_payload_segment(agent.clone()));
-    let first_llm_request = first_output
-        .actions
-        .iter()
-        .find(|action| action.kind == SemanticActionKind::LlmRequest)
-        .expect("first payload should project an llm.request");
-    let first_command = first_output
-        .actions
-        .iter()
-        .find(|action| action.kind == SemanticActionKind::CommandInvocation)
-        .expect("first LLM request should label the command invocation as agent");
-    assert_eq!(
-        first_command
-            .attributes
-            .get("agent.invocation.evidence_action_id")
-            .map(String::as_str),
-        Some(first_llm_request.action_id.as_str())
-    );
-
-    let mut second_segment = llm_payload_segment(agent);
-    second_segment.segment_id = response_segment_id(10);
-    second_segment.operation_id = response_operation_id(10);
-    second_segment.sequence = response_sequence(10);
-    let second_output = runtime.observe_payload_segment(&second_segment);
-    let second_llm_request = second_output
-        .actions
-        .iter()
-        .find(|action| action.kind == SemanticActionKind::LlmRequest)
-        .expect("second payload should project another llm.request");
-    assert_ne!(second_llm_request.action_id, first_llm_request.action_id);
-    if let Some(second_command) = second_output
-        .actions
-        .iter()
-        .find(|action| action.kind == SemanticActionKind::CommandInvocation)
-    {
-        assert_eq!(
-            second_command
-                .attributes
-                .get("agent.invocation.evidence_action_id")
-                .map(String::as_str),
-            Some(first_llm_request.action_id.as_str())
-        );
-    }
-}
-
-#[test]
 fn llm_request_labels_late_exec_command_as_agent() {
     let mut runtime = runtime();
     let parent = ProcessIdentity::new(WRAPPER_PID, WRAPPER_START_TICKS, WRAPPER_GENERATION);

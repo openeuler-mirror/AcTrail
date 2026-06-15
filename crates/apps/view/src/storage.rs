@@ -12,7 +12,7 @@ mod render;
 mod source;
 
 use crate::command::{OutputFormat, StorageCommand, ViewInvocation};
-use store_read_contract::payloads::{PayloadRowLimit, PayloadSegmentQuery};
+use storage_core::{PayloadRowLimit, PayloadSegmentQuery};
 
 pub fn render_storage_view(invocation: ViewInvocation) -> Result<String, String> {
     if matches!(
@@ -32,11 +32,11 @@ pub fn render_storage_view(invocation: ViewInvocation) -> Result<String, String>
         }
     }
 
-    let storage_path = source::storage_path(&invocation)?;
-    let mut storage = source::open_storage(&storage_path)?;
+    let storage_config = source::storage_config(&invocation)?;
+    let mut storage = source::open_storage(&storage_config)?;
     match invocation.command {
         StorageCommand::Traces => {
-            let traces = source::list_traces(&storage)?;
+            let traces = source::list_traces(storage.as_ref())?;
             Ok(match invocation.output_format {
                 OutputFormat::Table => render::render_traces(traces, invocation.row_limit),
                 OutputFormat::Json => render::render_traces_json(traces, invocation.row_limit)?,
@@ -45,12 +45,12 @@ pub fn render_storage_view(invocation: ViewInvocation) -> Result<String, String>
         StorageCommand::Summary => {
             reject_json_output(invocation.output_format, "summary")?;
             render::reject_limit(invocation.row_limit, "summary")?;
-            let snapshot = source::read_snapshot(&mut storage, invocation.trace_id)?;
+            let snapshot = source::read_snapshot(storage.as_mut(), invocation.trace_id)?;
             Ok(render::render_summary(&snapshot))
         }
         StorageCommand::Processes => {
             reject_json_output(invocation.output_format, "processes")?;
-            let snapshot = source::read_snapshot(&mut storage, invocation.trace_id)?;
+            let snapshot = source::read_snapshot(storage.as_mut(), invocation.trace_id)?;
             Ok(render::render_processes(
                 snapshot.memberships,
                 invocation.row_limit,
@@ -58,21 +58,21 @@ pub fn render_storage_view(invocation: ViewInvocation) -> Result<String, String>
         }
         StorageCommand::Events => {
             reject_json_output(invocation.output_format, "events")?;
-            let snapshot = source::read_snapshot(&mut storage, invocation.trace_id)?;
+            let snapshot = source::read_snapshot(storage.as_mut(), invocation.trace_id)?;
             Ok(render::render_events(snapshot.events, invocation.row_limit))
         }
         StorageCommand::Network => {
             reject_json_output(invocation.output_format, "network")?;
-            let snapshot = source::read_snapshot(&mut storage, invocation.trace_id)?;
+            let snapshot = source::read_snapshot(storage.as_mut(), invocation.trace_id)?;
             Ok(render::render_network(
                 snapshot.events,
                 invocation.row_limit,
             ))
         }
         StorageCommand::Payloads => {
-            let trace_id = source::resolve_trace_id(&storage, invocation.trace_id)?;
+            let trace_id = source::resolve_trace_id(storage.as_ref(), invocation.trace_id)?;
             let segments = source::list_payload_segments(
-                &storage,
+                storage.as_ref(),
                 trace_id,
                 PayloadSegmentQuery {
                     segment_id: None,
@@ -89,7 +89,7 @@ pub fn render_storage_view(invocation: ViewInvocation) -> Result<String, String>
         StorageCommand::Payload => {
             reject_json_output(invocation.output_format, "payload")?;
             render::reject_limit(invocation.row_limit, "payload")?;
-            let trace_id = source::resolve_trace_id(&storage, invocation.trace_id)?;
+            let trace_id = source::resolve_trace_id(storage.as_ref(), invocation.trace_id)?;
             let segment_id = invocation
                 .payload_segment_id
                 .ok_or_else(|| "payload requires --segment-id".to_string())?;
@@ -97,7 +97,7 @@ pub fn render_storage_view(invocation: ViewInvocation) -> Result<String, String>
                 .payload_format
                 .ok_or_else(|| "payload requires --format".to_string())?;
             let mut segments = source::list_payload_segments(
-                &storage,
+                storage.as_ref(),
                 trace_id,
                 PayloadSegmentQuery {
                     segment_id: Some(segment_id),
@@ -112,22 +112,24 @@ pub fn render_storage_view(invocation: ViewInvocation) -> Result<String, String>
             Ok(render::render_payload(segment, format))
         }
         StorageCommand::Actions => {
-            let snapshot = source::read_snapshot(&mut storage, invocation.trace_id)?;
-            let actions = source::list_semantic_actions(&storage, snapshot.trace.trace_id)?;
+            let snapshot = source::read_snapshot(storage.as_mut(), invocation.trace_id)?;
+            let actions = source::list_semantic_actions(storage.as_ref(), snapshot.trace.trace_id)?;
             Ok(match invocation.output_format {
                 OutputFormat::Table => {
                     render::render_semantic_actions(actions, invocation.row_limit)
                 }
                 OutputFormat::Json => {
-                    let links =
-                        source::list_semantic_action_links(&storage, snapshot.trace.trace_id)?;
+                    let links = source::list_semantic_action_links(
+                        storage.as_ref(),
+                        snapshot.trace.trace_id,
+                    )?;
                     render::render_semantic_actions_json(actions, links, invocation.row_limit)?
                 }
             })
         }
         StorageCommand::Diagnostics => {
             reject_json_output(invocation.output_format, "diagnostics")?;
-            let snapshot = source::read_snapshot(&mut storage, invocation.trace_id)?;
+            let snapshot = source::read_snapshot(storage.as_mut(), invocation.trace_id)?;
             Ok(render::render_diagnostics(
                 snapshot.diagnostics,
                 invocation.row_limit,

@@ -2,12 +2,12 @@
 
 mod body;
 mod live_projection;
+mod provider;
 mod request;
 mod response;
 mod response_support;
 mod sse;
 mod stream;
-mod tool_calls;
 
 pub(crate) use live_projection::{
     LiveLlmProjection, live_llm_http_response_message_len, live_llm_request_message_len,

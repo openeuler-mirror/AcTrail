@@ -1,0 +1,10 @@
+[package]
+name = "export_otel_codec"
+version.workspace = true
+edition = "2024"
+license = "MulanPSL-2.0"
+
+[dependencies]
+model_core = { path = "../../../core/model" }
+semantic_action = { path = "../../../contracts/semantic_action" }
+serde_json = "1"

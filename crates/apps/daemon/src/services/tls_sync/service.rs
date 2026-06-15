@@ -1,5 +1,7 @@
 //! Sync TLS payload event ingestion.
 
+#[path = "plan_store.rs"]
+mod plan_store;
 #[path = "resolver.rs"]
 mod resolver;
 

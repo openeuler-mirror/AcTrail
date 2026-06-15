@@ -1,42 +1,39 @@
 //! Construction of daemon runtime wiring from concrete adapters.
 
-use std::path::Path;
-use std::time::Duration;
-
 use collector_capability::CollectorDescriptor;
 use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
-    EnforcementConfig, LiveOtelExportConfig, PayloadConfig, ProcessSeccompConfig,
-    ResourceMetricsConfig, SeccompNotifyConfig,
+    EnforcementConfig, PayloadConfig, ProcessSeccompConfig, ResourceMetricsConfig,
+    RuntimeExportConfig, SeccompNotifyConfig,
 };
 use config_core::provider_rules::ProviderRuleSetConfig;
 use control_contract::reply::ControlError;
+use export_core::ExportRuntime;
 use model_core::capability::{Capability, CapabilityDescriptor, CapabilityField, GuaranteeClass};
 use model_core::ids::CollectorName;
 use provider_label::ProviderClassifier;
 use rule_set_provider::classifier::RuleSetClassifier;
 use rule_set_provider::config::RuleSetAdapterConfig;
 use rule_set_provider::loader::load_rules;
-use sqlite_storage::SqliteStorage;
+use storage_core::StorageOpenMode;
+use storage_factory::{StorageConfig, open_storage_backend};
 
 use crate::profiles::DaemonProfileRegistry;
 use crate::runtime_wiring::DaemonRuntimeWiring;
 
 use super::application_protocol::COLLECTOR_NAME as APPLICATION_PROTOCOL_COLLECTOR_NAME;
-use super::attach::SqliteAttachService;
+use super::attach::StorageAttachService;
 use super::enforcement::{
     COLLECTOR_NAME as ENFORCEMENT_COLLECTOR_NAME, FanotifyEnforcementService,
     enforcement_descriptor,
 };
-use super::live::otel_export::LiveOtelExporter;
 use super::process_seccomp::PROCESS_SECCOMP_COLLECTOR_NAME;
 use super::resource_metrics::COLLECTOR_NAME as RESOURCE_METRICS_COLLECTOR_NAME;
 
 const TLS_SYNC_COLLECTOR_NAME: &str = "tls-sync";
 
 pub(crate) fn build_runtime_wiring(
-    storage_path: &Path,
-    storage_busy_timeout_ms: u64,
+    storage_config: &StorageConfig,
     profiles: DaemonProfileRegistry,
     ebpf_config: EbpfCollectorConfig,
     payload_config: PayloadConfig,
@@ -46,12 +43,11 @@ pub(crate) fn build_runtime_wiring(
     agent_invocation: AgentInvocationConfig,
     application_protocol: ApplicationProtocolConfig,
     resource_metrics: ResourceMetricsConfig,
-    live_otel_export: LiveOtelExportConfig,
+    export_runtime: RuntimeExportConfig,
     enforcement: EnforcementConfig,
-) -> Result<DaemonRuntimeWiring<SqliteAttachService>, ControlError> {
+) -> Result<DaemonRuntimeWiring<StorageAttachService>, ControlError> {
     build_runtime_wiring_with_attach_service(
-        storage_path,
-        storage_busy_timeout_ms,
+        storage_config,
         profiles,
         ebpf_config,
         payload_config,
@@ -61,15 +57,14 @@ pub(crate) fn build_runtime_wiring(
         agent_invocation,
         application_protocol,
         resource_metrics,
-        live_otel_export,
+        export_runtime,
         enforcement,
         None,
     )
 }
 
 pub(crate) fn build_runtime_wiring_with_provider_rule_set(
-    storage_path: &Path,
-    storage_busy_timeout_ms: u64,
+    storage_config: &StorageConfig,
     profiles: DaemonProfileRegistry,
     ebpf_config: EbpfCollectorConfig,
     payload_config: PayloadConfig,
@@ -79,16 +74,15 @@ pub(crate) fn build_runtime_wiring_with_provider_rule_set(
     agent_invocation: AgentInvocationConfig,
     application_protocol: ApplicationProtocolConfig,
     resource_metrics: ResourceMetricsConfig,
-    live_otel_export: LiveOtelExportConfig,
+    export_runtime: RuntimeExportConfig,
     enforcement: EnforcementConfig,
     provider_rule_set: &ProviderRuleSetConfig,
-) -> Result<DaemonRuntimeWiring<SqliteAttachService>, ControlError> {
+) -> Result<DaemonRuntimeWiring<StorageAttachService>, ControlError> {
     let rules = load_rules(&provider_rule_set.rules_path)
         .map_err(|message| ControlError::new("provider_rules", message))?;
     let classifier = RuleSetClassifier::new(RuleSetAdapterConfig::from(provider_rule_set), rules);
     build_runtime_wiring_with_attach_service(
-        storage_path,
-        storage_busy_timeout_ms,
+        storage_config,
         profiles,
         ebpf_config,
         payload_config,
@@ -98,15 +92,14 @@ pub(crate) fn build_runtime_wiring_with_provider_rule_set(
         agent_invocation,
         application_protocol,
         resource_metrics,
-        live_otel_export,
+        export_runtime,
         enforcement,
         Some(Box::new(classifier)),
     )
 }
 
 fn build_runtime_wiring_with_attach_service(
-    storage_path: &Path,
-    storage_busy_timeout_ms: u64,
+    storage_config: &StorageConfig,
     profiles: DaemonProfileRegistry,
     ebpf_config: EbpfCollectorConfig,
     payload_config: PayloadConfig,
@@ -116,34 +109,31 @@ fn build_runtime_wiring_with_attach_service(
     agent_invocation: AgentInvocationConfig,
     application_protocol: ApplicationProtocolConfig,
     resource_metrics: ResourceMetricsConfig,
-    live_otel_export_config: LiveOtelExportConfig,
+    export_runtime_config: RuntimeExportConfig,
     enforcement_config: EnforcementConfig,
     provider_classifier: Option<Box<dyn ProviderClassifier>>,
-) -> Result<DaemonRuntimeWiring<SqliteAttachService>, ControlError> {
-    let storage = SqliteStorage::open_with_busy_timeout(
-        storage_path,
-        Duration::from_millis(storage_busy_timeout_ms),
-    )
-    .map_err(|error| ControlError::new("open_storage", error.to_string()))?;
+) -> Result<DaemonRuntimeWiring<StorageAttachService>, ControlError> {
+    let storage = open_storage_backend(storage_config, StorageOpenMode::ReadWrite)
+        .map_err(|error| ControlError::new(error.stage, error.message))?;
     let trace_id_seed = storage
         .next_trace_id_seed()
-        .map_err(|error| ControlError::new("trace_id_seed", error.to_string()))?;
+        .map_err(|error| ControlError::new(error.stage, error.message))?;
     let event_id_seed = storage
         .next_event_id_seed()
-        .map_err(|error| ControlError::new("event_id_seed", error.to_string()))?;
+        .map_err(|error| ControlError::new(error.stage, error.message))?;
     let diagnostic_id_seed = storage
         .next_diagnostic_id_seed()
-        .map_err(|error| ControlError::new("diagnostic_id_seed", error.to_string()))?;
+        .map_err(|error| ControlError::new(error.stage, error.message))?;
     let payload_segment_id_seed = storage
         .next_payload_segment_id_seed()
-        .map_err(|error| ControlError::new("payload_segment_id_seed", error.to_string()))?;
+        .map_err(|error| ControlError::new(error.stage, error.message))?;
     let enforcement = FanotifyEnforcementService::new(enforcement_config.clone())?;
-    let live_otel_export = LiveOtelExporter::new(live_otel_export_config)?;
+    let export_runtime = export_runtime(export_runtime_config)?;
 
     let mut attach_service = match provider_classifier {
-        Some(provider_classifier) => SqliteAttachService::new_with_provider_classifier(
+        Some(provider_classifier) => StorageAttachService::new_with_provider_classifier(
             profiles.clone(),
-            storage.clone(),
+            storage,
             ebpf_config.clone(),
             payload_config.clone(),
             diagnostic_log_level,
@@ -153,13 +143,13 @@ fn build_runtime_wiring_with_attach_service(
             application_protocol.clone(),
             resource_metrics.clone(),
             enforcement,
-            live_otel_export,
+            export_runtime,
             provider_classifier,
             true,
         )?,
-        None => SqliteAttachService::new(
+        None => StorageAttachService::new(
             profiles.clone(),
-            storage.clone(),
+            storage,
             ebpf_config.clone(),
             payload_config.clone(),
             diagnostic_log_level,
@@ -169,7 +159,7 @@ fn build_runtime_wiring_with_attach_service(
             application_protocol.clone(),
             resource_metrics.clone(),
             enforcement,
-            live_otel_export,
+            export_runtime,
         )?,
     };
     attach_service.set_id_seeds(event_id_seed, diagnostic_id_seed);
@@ -221,6 +211,11 @@ fn build_runtime_wiring_with_attach_service(
         loaded_policy_plugins: Vec::new(),
         storage_ready: true,
     })
+}
+
+fn export_runtime(config: RuntimeExportConfig) -> Result<ExportRuntime, ControlError> {
+    export_factory::build_export_runtime(&config)
+        .map_err(|error| ControlError::new(error.code, error.message))
 }
 
 fn process_seccomp_descriptor() -> CollectorDescriptor {

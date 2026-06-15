@@ -1,4 +1,4 @@
-//! Construction for the SQLite-backed attach service.
+//! Construction for the storage-backed attach service.
 
 use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
@@ -6,14 +6,14 @@ use config_core::daemon::{
 };
 use ebpf_collector::EbpfCollector;
 use ebpf_collector::procfs::{ProcfsIdentityReader, ProcfsTreeSnapshotter};
+use export_core::ExportRuntime;
 use provider_label::ProviderClassifier;
 use semantic_action_runtime::LiveSemanticActionRuntime;
-use sqlite_storage::SqliteStorage;
+use storage_core::StorageBackend;
 
 use crate::profiles::DaemonProfileRegistry;
 use crate::services::application_protocol::ApplicationProtocolAnalyzer;
 use crate::services::enforcement::FanotifyEnforcementService;
-use crate::services::live::otel_export::LiveOtelExporter;
 use crate::services::payload_gate::{PayloadBodyRetentionGate, SocketHttpPayloadGate};
 use crate::services::process_seccomp::ProcessSeccompService;
 use crate::services::resource_metrics::ResourceMetricsSampler;
@@ -22,13 +22,13 @@ use crate::services::seccomp_socket::SeccompSocketService;
 use crate::services::seccomp_tls::SeccompTlsService;
 use crate::services::tls_sync::TlsSyncService;
 
-use super::SqliteAttachService;
+use super::StorageAttachService;
 use super::helpers::NoopProviderClassifier;
 
-impl SqliteAttachService {
+impl StorageAttachService {
     pub(in crate::services) fn new(
         profiles: DaemonProfileRegistry,
-        storage: SqliteStorage,
+        storage: Box<dyn StorageBackend>,
         ebpf_config: EbpfCollectorConfig,
         payload_config: PayloadConfig,
         diagnostic_log_level: DiagnosticLogLevel,
@@ -38,7 +38,7 @@ impl SqliteAttachService {
         application_protocol: ApplicationProtocolConfig,
         resource_metrics: ResourceMetricsConfig,
         enforcement: FanotifyEnforcementService,
-        live_otel_export: LiveOtelExporter,
+        export_runtime: ExportRuntime,
     ) -> Result<Self, control_contract::reply::ControlError> {
         Self::new_with_provider_classifier(
             profiles,
@@ -52,7 +52,7 @@ impl SqliteAttachService {
             application_protocol,
             resource_metrics,
             enforcement,
-            live_otel_export,
+            export_runtime,
             Box::new(NoopProviderClassifier),
             false,
         )
@@ -60,7 +60,7 @@ impl SqliteAttachService {
 
     pub(in crate::services) fn new_with_provider_classifier(
         profiles: DaemonProfileRegistry,
-        storage: SqliteStorage,
+        storage: Box<dyn StorageBackend>,
         ebpf_config: EbpfCollectorConfig,
         payload_config: PayloadConfig,
         diagnostic_log_level: DiagnosticLogLevel,
@@ -70,7 +70,7 @@ impl SqliteAttachService {
         application_protocol: ApplicationProtocolConfig,
         resource_metrics: ResourceMetricsConfig,
         enforcement: FanotifyEnforcementService,
-        live_otel_export: LiveOtelExporter,
+        export_runtime: ExportRuntime,
         provider_classifier: Box<dyn ProviderClassifier>,
         provider_classification_enabled: bool,
     ) -> Result<Self, control_contract::reply::ControlError> {
@@ -82,6 +82,9 @@ impl SqliteAttachService {
         let payload_stdio_redaction_policy = payload_config.stdio.redaction_policy;
         let payload_stdio_retention_max_bytes_per_trace =
             payload_config.stdio.retention_max_bytes_per_trace;
+        let payload_stdio_stdin_storage_mode = payload_config.stdio.stdin_storage_mode;
+        let payload_stdio_stdout_storage_mode = payload_config.stdio.stdout_storage_mode;
+        let payload_stdio_stderr_storage_mode = payload_config.stdio.stderr_storage_mode;
         let payload_socket_enabled = payload_config.socket.enabled;
         let payload_socket_redaction_policy = payload_config.socket.redaction_policy;
         let payload_socket_retention_max_bytes_per_trace =
@@ -114,6 +117,9 @@ impl SqliteAttachService {
             payload_stdio_enabled,
             payload_stdio_redaction_policy,
             payload_stdio_retention_max_bytes_per_trace,
+            payload_stdio_stdin_storage_mode,
+            payload_stdio_stdout_storage_mode,
+            payload_stdio_stderr_storage_mode,
             payload_socket_enabled,
             payload_socket_redaction_policy,
             payload_socket_retention_max_bytes_per_trace,
@@ -129,7 +135,9 @@ impl SqliteAttachService {
             resource_metrics: ResourceMetricsSampler::new(resource_metrics),
             enforcement,
             semantic_actions: LiveSemanticActionRuntime::new(agent_invocation),
-            live_otel_export,
+            export_runtime,
+            finalized_terminal_traces: Default::default(),
+            diagnosed_terminal_open_memberships: Default::default(),
             provider_classifier,
             provider_classification_enabled,
         })

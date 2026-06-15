@@ -1,6 +1,7 @@
 # AcTrail
 
 > AcTrail: Action Trail, Actual Trail
+>
 > Don't rely on what agent says, verify what it does
 
 AcTrail is a Linux system-observation toolkit for AI agents. It captures

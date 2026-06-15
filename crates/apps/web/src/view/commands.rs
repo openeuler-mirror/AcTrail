@@ -3,8 +3,7 @@
 use std::collections::BTreeSet;
 
 use model_core::ids::TraceId;
-use semantic_action::SemanticActionReadStore;
-use sqlite_storage::SqliteStorage;
+use storage_core::StorageBackend;
 
 use super::actions;
 use crate::json;
@@ -12,7 +11,7 @@ use crate::json;
 const COMMAND_ACTION_KINDS: &[&str] = &["command.invocation", "process.exec"];
 
 pub(super) fn commands_json(
-    storage: &mut SqliteStorage,
+    storage: &mut dyn StorageBackend,
     trace_id: TraceId,
 ) -> Result<String, String> {
     let actions = storage
@@ -50,7 +49,10 @@ pub(super) fn commands_json(
             output
         })
         .collect::<Vec<_>>();
-    let rows = actions.iter().map(actions::action_json_lite).collect::<Vec<_>>();
+    let rows = actions
+        .iter()
+        .map(actions::action_json_lite)
+        .collect::<Vec<_>>();
 
     let mut output = String::from("{");
     json::field(&mut output, "actions", &format!("[{}]", rows.join(",")));

@@ -90,13 +90,12 @@ def run_xiaoo_actions_step(
             )
         )
     except Exception as error:
-        status = SKIP if tls_runtime is None and not configured else FAIL
-        result.status = status
+        result.status = FAIL
         result.add_check(
             "semantic actions",
-            status,
+            FAIL,
             str(error),
-            "for HTTPS/HTTP CONNECT, xiaoO needs rustls debuginfo/TLS symbols before llm.request/llm.response can be projected",
+            "xiaoO rustls capture resolved TLS hooks, so llm.request/llm.response projection is required",
         )
         raise StepFailure(str(error)) from error
     result.add_check(

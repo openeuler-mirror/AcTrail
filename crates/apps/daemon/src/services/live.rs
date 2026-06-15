@@ -2,8 +2,6 @@
 
 #[path = "live/batch.rs"]
 mod batch;
-#[path = "live/otel_export.rs"]
-pub(crate) mod otel_export;
 #[path = "live/reconcile.rs"]
 mod reconcile;
 #[path = "live/shutdown.rs"]
@@ -18,19 +16,17 @@ use model_core::event::{DomainEvent, EventEnvelope, EventFlags, EventKind, Event
 use model_core::ids::{CollectorName, DiagnosticId, EventId, TraceId};
 use model_core::process::ProcessMembership;
 use model_core::trace::TraceLifecycleState;
-use store_write_contract::memberships::MembershipWriteStore;
-use store_write_contract::traces::TraceWriteStore;
+use recording_runtime::{RecordingWriter, TraceStateRecord};
 use trace_runtime::registry::TraceRuntime;
 
-use crate::services::attach::SqliteAttachService;
+use crate::services::attach::StorageAttachService;
 use crate::services::resource_metrics::COLLECTOR_NAME as RESOURCE_METRICS_COLLECTOR_NAME;
 
-impl SqliteAttachService {
+impl StorageAttachService {
     pub(super) fn drain_live_events_impl(
         &mut self,
         trace_runtime: &mut TraceRuntime,
     ) -> Result<(), ControlError> {
-        self.live_otel_export.check_health()?;
         self.drain_resource_metrics_impl(trace_runtime)?;
         self.drain_tls_sync_events_impl(trace_runtime)?;
         if !self.collector_ready() || self.collector.stats().active_bindings == 0 {
@@ -47,6 +43,7 @@ impl SqliteAttachService {
             self.log_payload_tls_diagnostics_impl()?;
             self.drain_enforcement_impl(trace_runtime)?;
             self.reconcile_draining_memberships_impl(trace_runtime)?;
+            self.finalize_terminal_traces_impl(trace_runtime)?;
             self.forget_terminal_trace_state_impl(trace_runtime);
             return Ok(());
         }
@@ -67,6 +64,7 @@ impl SqliteAttachService {
         self.log_payload_tls_diagnostics_impl()?;
         self.drain_enforcement_impl(trace_runtime)?;
         self.reconcile_draining_memberships_impl(trace_runtime)?;
+        self.finalize_terminal_traces_impl(trace_runtime)?;
         self.forget_terminal_trace_state_impl(trace_runtime);
         Ok(())
     }
@@ -76,7 +74,8 @@ impl SqliteAttachService {
             if matches!(
                 trace.lifecycle_state,
                 TraceLifecycleState::Completed | TraceLifecycleState::Failed
-            ) {
+            ) && self.finalized_terminal_traces.contains(&trace.trace_id)
+            {
                 self.semantic_actions.forget_trace(trace.trace_id);
                 self.application_protocol.forget_trace(trace.trace_id);
                 self.payload_body_retention_gate
@@ -287,7 +286,10 @@ impl SqliteAttachService {
                     process: draft.process,
                     collector: CollectorName::new(crate::services::enforcement::COLLECTOR_NAME),
                     kind: EventKind::Enforcement,
-                    flags: EventFlags::clean(),
+                    flags: EventFlags {
+                        metadata_partial: draft.metadata_partial,
+                        ..EventFlags::clean()
+                    },
                 },
                 EventPayload::Enforcement(draft.payload),
             );
@@ -297,12 +299,7 @@ impl SqliteAttachService {
     }
 
     pub(super) fn next_diagnostic_id(&mut self) -> Result<DiagnosticId, ControlError> {
-        let raw = self.next_diagnostic_id;
-        self.next_diagnostic_id = self
-            .next_diagnostic_id
-            .checked_add(1)
-            .ok_or_else(|| ControlError::new("diagnostic_id_overflow", "diagnostic id overflow"))?;
-        Ok(DiagnosticId::new(raw))
+        next_diagnostic_id_from_seed(&mut self.next_diagnostic_id)
     }
 
     pub(super) fn next_event_id(&mut self) -> Result<EventId, ControlError> {
@@ -319,32 +316,19 @@ impl SqliteAttachService {
         trace_runtime: &TraceRuntime,
         trace_id: TraceId,
     ) -> Result<(), ControlError> {
-        let (trace, memberships, terminal) = trace_runtime
+        let terminal = trace_runtime
             .get_trace(trace_id)
             .map(|entry| {
-                (
-                    entry.trace.clone(),
-                    entry
-                        .memberships
-                        .memberships()
-                        .cloned()
-                        .collect::<Vec<ProcessMembership>>(),
-                    matches!(
-                        entry.trace.lifecycle_state,
-                        TraceLifecycleState::Completed | TraceLifecycleState::Failed
-                    ),
+                matches!(
+                    entry.trace.lifecycle_state,
+                    TraceLifecycleState::Completed | TraceLifecycleState::Failed
                 )
             })
             .ok_or_else(|| ControlError::new("persist_trace_state", "trace not found"))?;
-
-        self.storage
-            .create_trace(trace)
-            .map_err(|error| ControlError::new(error.stage, error.message))?;
-        for membership in memberships {
-            self.storage
-                .upsert_membership(membership)
-                .map_err(|error| ControlError::new(error.stage, error.message))?;
-        }
+        let trace_state = self.trace_state_record_for_persistence(trace_runtime, trace_id)?;
+        RecordingWriter::new(self.storage.as_mut())
+            .persist_trace_state(trace_state)
+            .map_err(recording_error_to_control)?;
 
         if terminal {
             self.collector
@@ -354,4 +338,36 @@ impl SqliteAttachService {
 
         Ok(())
     }
+
+    pub(in crate::services) fn trace_state_record_for_persistence(
+        &self,
+        trace_runtime: &TraceRuntime,
+        trace_id: TraceId,
+    ) -> Result<TraceStateRecord, ControlError> {
+        trace_runtime
+            .get_trace(trace_id)
+            .map(|entry| {
+                TraceStateRecord::new(
+                    entry.trace.clone(),
+                    entry
+                        .memberships
+                        .memberships()
+                        .cloned()
+                        .collect::<Vec<ProcessMembership>>(),
+                )
+            })
+            .ok_or_else(|| ControlError::new("persist_trace_state", "trace not found"))
+    }
+}
+
+pub(super) fn next_diagnostic_id_from_seed(seed: &mut u64) -> Result<DiagnosticId, ControlError> {
+    let raw = *seed;
+    *seed = seed
+        .checked_add(1)
+        .ok_or_else(|| ControlError::new("diagnostic_id_overflow", "diagnostic id overflow"))?;
+    Ok(DiagnosticId::new(raw))
+}
+
+fn recording_error_to_control(error: recording_runtime::RecordingError) -> ControlError {
+    ControlError::new(error.stage, error.message)
 }

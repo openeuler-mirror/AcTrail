@@ -1,43 +1,46 @@
 <template>
-  <section class="commands-panel">
-    <div class="commands-toolbar">
-      <span class="commands-count">{{ commandCount }} commands</span>
-      <div class="commands-actions">
-        <button
-          type="button"
-          class="tree-action"
-          :disabled="!hasTree || queryActive"
-          @click="expandAll"
-        >
-          <ChevronsUpDown :size="15" aria-hidden="true" />
-          Expand all
-        </button>
-        <button
-          type="button"
-          class="tree-action"
-          :disabled="!hasTree || queryActive"
-          @click="collapseAll"
-        >
-          <ChevronsDownUp :size="15" aria-hidden="true" />
-          Collapse all
-        </button>
+  <section class="tab-detail-layout">
+    <section class="commands-panel tab-detail-main">
+      <div class="commands-toolbar">
+        <span class="commands-count">{{ commandCount }} commands</span>
+        <div class="commands-actions">
+          <button
+            type="button"
+            class="tree-action"
+            :disabled="!hasTree || queryActive"
+            @click="expandAll"
+          >
+            <ChevronsUpDown :size="15" aria-hidden="true" />
+            Expand all
+          </button>
+          <button
+            type="button"
+            class="tree-action"
+            :disabled="!hasTree || queryActive"
+            @click="collapseAll"
+          >
+            <ChevronsDownUp :size="15" aria-hidden="true" />
+            Collapse all
+          </button>
+        </div>
       </div>
-    </div>
-    <div class="commands-table">
-      <DataTable
-        :columns="columns"
-        :rows="rows"
-        empty-label="No commands"
-        :total-rows="totalRows"
-        :can-load-more="hasMoreRows"
-        :can-load-all="hasMoreRows"
-        :next-batch-size="nextBatchSize"
-        @select="$emit('select-detail', $event)"
-        @toggle="toggleRow"
-        @load-more="loadMore"
-        @load-all="loadAll"
-      />
-    </div>
+      <div class="commands-table">
+        <DataTable
+          :columns="columns"
+          :rows="rows"
+          empty-label="No commands"
+          :total-rows="totalRows"
+          :can-load-more="hasMoreRows"
+          :can-load-all="hasMoreRows"
+          :next-batch-size="nextBatchSize"
+          @select="selectDetail"
+          @toggle="toggleRow"
+          @load-more="loadMore"
+          @load-all="loadAll"
+        />
+      </div>
+    </section>
+    <DetailPanel :detail="selectedDetail" :trace-id="traceKey" @clear="clearDetail" />
   </section>
 </template>
 
@@ -46,6 +49,7 @@ import { computed, ref, watch } from 'vue';
 import { ChevronsDownUp, ChevronsUpDown } from '@lucide/vue';
 
 import DataTable from '../../../components/DataTable.vue';
+import DetailPanel from '../../../components/DetailPanel.vue';
 import { TABLE_RENDER_LIMITS } from '../../tableConfig';
 import { normalizeTableQuery } from '../../tableModel';
 import {
@@ -58,6 +62,10 @@ import {
 } from './model';
 
 const props = defineProps({
+  traceKey: {
+    type: [String, Number],
+    default: null,
+  },
   traceDetail: {
     type: Object,
     default: null,
@@ -76,11 +84,10 @@ const props = defineProps({
   },
 });
 
-defineEmits(['select-detail']);
-
 const columns = COMMAND_COLUMNS;
 const expandedIds = ref(new Set());
 const visibleLimit = ref(TABLE_RENDER_LIMITS.initialRows);
+const selectedDetail = ref(null);
 
 const roots = computed(() => buildCommandTree(props.commands?.actions, props.commands?.links));
 const parentIds = computed(() => collectParentIds(roots.value));
@@ -104,6 +111,7 @@ const hasMoreRows = computed(() => remainingRows.value > 0 && nextBatchSize.valu
 watch(
   () => props.commands,
   () => {
+    clearDetail();
     expandedIds.value = new Set(collectDefaultExpandedIds(roots.value));
   },
   { immediate: true },
@@ -121,6 +129,14 @@ function toggleRow(row) {
     next.add(row.id);
   }
   expandedIds.value = next;
+}
+
+function selectDetail(detail) {
+  selectedDetail.value = detail;
+}
+
+function clearDetail() {
+  selectedDetail.value = null;
 }
 
 function expandAll() {

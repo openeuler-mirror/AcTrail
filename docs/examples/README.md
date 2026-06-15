@@ -16,9 +16,7 @@ OTEL export, and `actrailweb`.
 | `06.xiaoo-tls-capture` | [README](06.xiaoo-tls-capture/README.md) |
 | `07.xiaoo-claude-agent-invocation` | [README](07.xiaoo-claude-agent-invocation/README.md) |
 | `08.full-monitor-validation` | [README](08.full-monitor-validation/README.md) |
-| `09.python-langgraph-agent` | [README](09.python-langgraph-agent/README.md) |
 | `10.java-langchain4j-agent` | [README](10.java-langchain4j-agent/README.md) |
-| `11.xiaoo-java-langchain4j-agent-invocation` | [README](11.xiaoo-java-langchain4j-agent-invocation/README.md) |
 
 Regression coverage for documented examples is described in
 [TESTING.md](TESTING.md).

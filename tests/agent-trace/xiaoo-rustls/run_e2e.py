@@ -45,8 +45,9 @@ def main() -> int:
     actrailctl = require_binary(bin_dir, "actrailctl")
     actrailviewer = require_binary(bin_dir, "actrailviewer")
     actrailweb = require_binary(bin_dir, "actrailweb")
+    tls_probe_point_finder = require_binary(bin_dir, "tls-probe-point-finder")
     xiaoo_binary = resolve_xiaoo_binary(required(workload, "xiaoo_binary"))
-    tls_runtime = resolve_optional_xiaoo_tls_runtime(xiaoo_binary, workload)
+    tls_runtime = resolve_xiaoo_tls_runtime(xiaoo_binary, workload, tls_probe_point_finder)
     resolved_config = Path(required(workload, "resolved_config_path"))
     render_config(
         Path(args.config_template),
@@ -92,23 +93,13 @@ def main() -> int:
             accepted_payload_sources(tls_runtime),
             direction="outbound",
         )
-        try:
-            actions = wait_for_llm_exchange_actions(
-                actrailviewer,
-                resolved_config,
-                trace_id,
-                int(required(workload, "drain_attempts")),
-                float(required(workload, "drain_sleep_seconds")),
-            )
-        except RuntimeError as error:
-            if tls_runtime is None:
-                raise RuntimeError(
-                    "viewer actions did not show llm.request and llm.response; xiaoO rustls TLS "
-                    "symbols were not resolved, so HTTPS routes cannot be decoded. "
-                    "Provide a xiaoO binary/debuginfo with rustls PlaintextSink "
-                    "symbols or run xiaoO against a plain HTTP provider route."
-                ) from error
-            raise
+        actions = wait_for_llm_exchange_actions(
+            actrailviewer,
+            resolved_config,
+            trace_id,
+            int(required(workload, "drain_attempts")),
+            float(required(workload, "drain_sleep_seconds")),
+        )
         require_complete_llm_exchange(actions)
         require_llm_exchange_graph(actions)
         web_tree = require_web_action_tree_projection(
@@ -159,32 +150,26 @@ def resolve_xiaoo_binary(configured: str) -> Path:
     return require_executable(path)
 
 
-def resolve_optional_xiaoo_tls_runtime(
+def resolve_xiaoo_tls_runtime(
     xiaoo_binary: Path,
     workload: dict[str, str],
-) -> Path | None:
+    tls_probe_point_finder: Path,
+) -> Path:
     symbol_map = Path(required(workload, "symbol_map_path"))
-    try:
-        symbol_detail = write_rustls_symbol_map(xiaoo_binary, symbol_map, workload)
-    except Exception as error:
-        print(f"xiaoo_tls_runtime=disabled {error}")
-        return None
+    symbol_detail = write_rustls_symbol_map(
+        xiaoo_binary,
+        symbol_map,
+        workload,
+        tls_probe_point_finder,
+    )
     print(f"xiaoo_rustls_symbol_source={symbol_detail}")
     return symbol_map
 
 
 def xiaoo_config_replacements(
     xiaoo_binary: Path,
-    symbol_map: Path | None,
+    symbol_map: Path,
 ) -> dict[str, str]:
-    if symbol_map is None:
-        return {
-            "__XIAOO_TLS_ENABLED__": "false",
-            "__XIAOO_BINARY__": str(xiaoo_binary),
-            "__XIAOO_RUSTLS_SYMBOL_MAP__": "disabled",
-            "__XIAOO_SECCOMP_NOTIFY_ENABLED__": "true",
-            "__XIAOO_TLS_REQUIRED_CAPABILITY__": "# tls-plaintext-payload disabled",
-        }
     return {
         "__XIAOO_TLS_ENABLED__": "true",
         "__XIAOO_BINARY__": str(xiaoo_binary),
@@ -194,14 +179,11 @@ def xiaoo_config_replacements(
     }
 
 
-def accepted_payload_sources(symbol_map: Path | None) -> list[tuple[str, str]]:
-    sources = [("Syscall", "socket-syscall")]
-    if symbol_map is not None:
-        sources.insert(0, ("TlsUserSpace", "rustls"))
-    return sources
+def accepted_payload_sources(_symbol_map: Path) -> list[tuple[str, str]]:
+    return [("TlsUserSpace", "rustls")]
 
 
-def accepted_payload_fragments(symbol_map: Path | None) -> list[list[str]]:
+def accepted_payload_fragments(symbol_map: Path) -> list[list[str]]:
     return [
         [source, library, "outbound", "Complete", "success"]
         for source, library in accepted_payload_sources(symbol_map)

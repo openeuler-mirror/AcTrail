@@ -1,8 +1,12 @@
 //! Dynamic loader interposition for TLS libraries imported after process start.
 
+pub(super) mod exec;
+
 use std::cell::Cell;
 use std::collections::BTreeSet;
+use std::ffi::CStr;
 use std::ffi::c_void;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -30,7 +34,7 @@ pub(super) unsafe fn open_existing(filename: *const libc::c_char) -> *mut c_void
 
 pub(super) fn scan_loaded_tls_libraries(reason: &str) -> Result<(), String> {
     for path in maps::executable_mapped_files()? {
-        if is_openssl_library(&path) {
+        if is_probe_library_candidate(&path) {
             scan_library_once(&path, reason)?;
         }
     }
@@ -110,10 +114,19 @@ fn unclaim_library_scan(path: &Path) {
     }
 }
 
-fn is_openssl_library(path: &Path) -> bool {
+fn is_probe_library_candidate(path: &Path) -> bool {
+    if is_own_runtime_library(path) {
+        return false;
+    }
     path.file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with("libssl") && name.contains(".so"))
+        .is_some_and(|name| name.contains(".so"))
+}
+
+fn is_own_runtime_library(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == "libactrail_tls_payload_probe_sync.so")
 }
 
 fn canonical(path: &Path) -> PathBuf {
@@ -132,7 +145,7 @@ pub unsafe extern "C" fn dlopen(filename: *const libc::c_char, flags: libc::c_in
         output::error_line("tls_payload_probe_sync error: real dlopen not found\n");
         return std::ptr::null_mut();
     };
-    call_loader_with_scan("dlopen", || unsafe { original(filename, flags) })
+    call_loader_with_scan("dlopen", filename, || unsafe { original(filename, flags) })
 }
 
 #[unsafe(no_mangle)]
@@ -145,37 +158,86 @@ pub unsafe extern "C" fn dlmopen(
         output::error_line("tls_payload_probe_sync error: real dlmopen not found\n");
         return std::ptr::null_mut();
     };
-    call_loader_with_scan("dlmopen", || unsafe {
+    call_loader_with_scan("dlmopen", filename, || unsafe {
         original(namespace, filename, flags)
     })
 }
 
-fn call_loader_with_scan(reason: &'static str, call: impl FnOnce() -> *mut c_void) -> *mut c_void {
+fn call_loader_with_scan(
+    reason: &'static str,
+    filename: *const libc::c_char,
+    call: impl FnOnce() -> *mut c_void,
+) -> *mut c_void {
     LOADER_GUARD.with(|guard| {
         if guard.get() {
             return call();
         }
         guard.set(true);
+        prefetch_requested_library_plan(filename);
         let handle = call();
         if !handle.is_null() {
-            after_successful_load(reason);
+            after_successful_load(reason, filename);
         }
         guard.set(false);
         handle
     })
 }
 
-fn after_successful_load(reason: &str) {
+fn prefetch_requested_library_plan(filename: *const libc::c_char) {
+    if config::get().is_none() {
+        return;
+    }
+    let Some(path) = requested_library_path(filename) else {
+        return;
+    };
+    if let Err(error) = config::prefetch_runtime_plan_for_binary(&path) {
+        output::error_line(&format!(
+            "tls_payload_probe_sync dynamic plan prefetch failed: {error}\n"
+        ));
+    }
+}
+
+fn after_successful_load(reason: &str, filename: *const libc::c_char) {
     if config::get().is_none() {
         super::retry_initialize_after_loader_event();
     }
     if config::get().is_some() {
+        match scan_requested_library(filename, reason) {
+            Ok(true) => {}
+            Ok(false) => {}
+            Err(error) => {
+                output::error_line(&format!(
+                    "tls_payload_probe_sync dynamic direct scan failed: {error}\n"
+                ));
+                return;
+            }
+        }
         if let Err(error) = scan_loaded_tls_libraries(reason) {
             output::error_line(&format!(
                 "tls_payload_probe_sync dynamic scan failed: {error}\n"
             ));
         }
     }
+}
+
+fn scan_requested_library(filename: *const libc::c_char, reason: &str) -> Result<bool, String> {
+    let Some(path) = requested_library_path(filename) else {
+        return Ok(false);
+    };
+    scan_library_once(&path, reason)?;
+    Ok(true)
+}
+
+fn requested_library_path(filename: *const libc::c_char) -> Option<PathBuf> {
+    if filename.is_null() {
+        return None;
+    }
+    let path = unsafe { CStr::from_ptr(filename) };
+    let path = Path::new(std::ffi::OsStr::from_bytes(path.to_bytes()));
+    if !path.is_absolute() || !is_probe_library_candidate(path) {
+        return None;
+    }
+    Some(path.to_path_buf())
 }
 
 fn original_dlopen() -> Option<DlopenFn> {
@@ -205,21 +267,29 @@ fn original_symbol(cache: &AtomicUsize, symbol: &[u8]) -> Option<usize> {
 mod tests {
     use std::path::Path;
 
-    use super::is_openssl_library;
+    use super::is_probe_library_candidate;
 
     #[test]
-    fn openssl_library_match_accepts_soname_paths() {
-        assert!(is_openssl_library(Path::new("/usr/lib64/libssl.so.1.1")));
-        assert!(is_openssl_library(Path::new(
+    fn probe_library_match_accepts_shared_object_paths() {
+        assert!(is_probe_library_candidate(Path::new(
+            "/usr/lib64/libssl.so.1.1"
+        )));
+        assert!(is_probe_library_candidate(Path::new(
             "/lib/x86_64-linux-gnu/libssl.so.3"
+        )));
+        assert!(is_probe_library_candidate(Path::new(
+            "/tmp/libnetty_tcnative_linux_x86_64.so"
         )));
     }
 
     #[test]
-    fn openssl_library_match_rejects_non_ssl_libraries() {
-        assert!(!is_openssl_library(Path::new(
-            "/usr/lib64/libcrypto.so.1.1"
+    fn probe_library_match_rejects_non_shared_object_paths() {
+        assert!(!is_probe_library_candidate(Path::new("/usr/bin/java")));
+        assert!(!is_probe_library_candidate(Path::new(
+            "/usr/lib64/libssl.a"
         )));
-        assert!(!is_openssl_library(Path::new("/usr/lib64/libssl.a")));
+        assert!(!is_probe_library_candidate(Path::new(
+            "/tmp/libactrail_tls_payload_probe_sync.so"
+        )));
     }
 }

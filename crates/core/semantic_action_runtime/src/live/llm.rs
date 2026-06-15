@@ -18,6 +18,7 @@ use crate::payload_projection::llm::{
 };
 
 mod call;
+mod http;
 
 #[derive(Default)]
 pub(super) struct LiveLlmProjector {
@@ -76,6 +77,27 @@ impl LiveLlmProjector {
             .or_default()
             .observe_segment(&key, segment);
         self.changed_actions(actions)
+    }
+
+    pub(super) fn observe_http_message(&mut self, action: &SemanticAction) -> Vec<SemanticAction> {
+        let emitted_actions = self.emitted_actions.values().collect::<Vec<_>>();
+        let Some(failed_call) = http::failed_call_for_http_response(action, &emitted_actions)
+        else {
+            return Vec::new();
+        };
+        let key = EmittedLlmAction {
+            trace_id: failed_call.trace_id,
+            action_id: failed_call.action_id.clone(),
+        };
+        if self
+            .emitted_actions
+            .get(&key)
+            .is_some_and(|existing| existing == &failed_call)
+        {
+            return Vec::new();
+        }
+        self.emitted_actions.insert(key, failed_call.clone());
+        vec![failed_call]
     }
 
     pub(super) fn forget_trace(&mut self, trace_id: TraceId) {

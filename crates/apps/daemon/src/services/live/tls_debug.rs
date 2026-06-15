@@ -3,7 +3,7 @@
 use config_core::daemon::DiagnosticLogLevel;
 use ebpf_collector::TlsDiagnosticEvent;
 
-use crate::services::attach::SqliteAttachService;
+use crate::services::attach::StorageAttachService;
 
 const TLS_DIAG_REASON_TRACE_LOOKUP_MISS: u32 = 1;
 const TLS_DIAG_REASON_TRACE_LOOKUP_HOST_FALLBACK: u32 = 2;
@@ -29,7 +29,7 @@ const TLS_LIBRARY_BORINGSSL: u32 = 2;
 const TLS_LIBRARY_RUSTLS: u32 = 3;
 const TLS_LIBRARY_GO: u32 = 4;
 
-impl SqliteAttachService {
+impl StorageAttachService {
     pub(super) fn log_tls_diagnostic_events_impl(&mut self) {
         let events = self.collector.take_tls_diagnostic_events();
         if events.is_empty() || !self.diagnostic_log_enabled(DiagnosticLogLevel::Debug) {

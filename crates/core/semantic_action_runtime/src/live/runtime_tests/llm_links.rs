@@ -1,5 +1,14 @@
+use std::time::{Duration, UNIX_EPOCH};
+
 use model_core::process::ProcessIdentity;
-use semantic_action::{SemanticActionKind, SemanticActionLinkRole};
+use model_core::{
+    event::{DomainEvent, EventPayload},
+    ids::EventId,
+    payload::PayloadSegmentId,
+};
+use semantic_action::{
+    SemanticActionCompleteness, SemanticActionKind, SemanticActionLinkRole, SemanticActionStatus,
+};
 
 use super::test_support::*;
 
@@ -147,4 +156,278 @@ fn llm_request_does_not_link_preceding_connect_tunnel_messages() {
                 || link.parent_action_id != request.action_id
         }));
     }
+}
+
+#[test]
+fn raw_llm_response_links_only_to_current_http_response_message() {
+    let mut runtime = runtime();
+    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let stale_response = http_response_event_with(
+        EventId::new(30),
+        agent.clone(),
+        response_segment_id(0),
+        response_sequence(0),
+        "404",
+        "Not Found",
+    );
+    let stale_output = runtime.observe_event(&stale_response);
+    let stale_http = stale_output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::HttpMessage)
+        .expect("stale HTTP response should project");
+    let current_response = http_response_event_with(
+        EventId::new(31),
+        agent.clone(),
+        response_segment_id(1),
+        response_sequence(1),
+        "200",
+        "OK",
+    );
+    let current_output = runtime.observe_event(&current_response);
+    let current_http = current_output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::HttpMessage)
+        .expect("current HTTP response should project");
+
+    let first = runtime.observe_payload_segment(&llm_response_payload_segment(
+        agent.clone(),
+        response_segment_id(2),
+        response_operation_id(2),
+        response_sequence(2),
+        raw_sse_response_bytes("first"),
+    ));
+    let first_response = first
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmResponse)
+        .expect("first raw SSE response should project");
+    let response_http_links = first
+        .links
+        .iter()
+        .filter(|link| link.role == SemanticActionLinkRole::LlmResponseHttpMessage)
+        .collect::<Vec<_>>();
+    assert_eq!(response_http_links.len(), 1);
+    assert_eq!(
+        response_http_links[0].parent_action_id,
+        first_response.action_id
+    );
+    assert_eq!(
+        response_http_links[0].child_action_id,
+        current_http.action_id
+    );
+    assert_ne!(response_http_links[0].child_action_id, stale_http.action_id);
+
+    let next_request = http_request_event_with(
+        EventId::new(32),
+        agent.clone(),
+        response_segment_id(3),
+        response_sequence(3),
+    );
+    runtime.observe_event(&next_request);
+    let second = runtime.observe_payload_segment(&llm_response_payload_segment(
+        agent,
+        response_segment_id(4),
+        response_operation_id(4),
+        response_sequence(4),
+        raw_sse_response_bytes("second"),
+    ));
+    let second_response = second
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmResponse)
+        .expect("second raw SSE response should project");
+    assert!(second.links.iter().all(|link| {
+        link.role != SemanticActionLinkRole::LlmResponseHttpMessage
+            || link.parent_action_id != second_response.action_id
+    }));
+}
+
+#[test]
+fn llm_call_ends_on_matching_http_error_response() {
+    let mut runtime = runtime();
+    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let request_output = runtime.observe_payload_segment(&llm_payload_segment(agent.clone()));
+    let request_call = request_output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmCall)
+        .expect("LLM request should create an in-progress llm.call");
+    assert_eq!(request_call.status, SemanticActionStatus::InProgress);
+
+    let mut response_event = http_response_event_with(
+        EventId::new(33),
+        agent.clone(),
+        response_segment_id(5),
+        response_sequence(5),
+        "404",
+        "Not Found",
+    );
+    response_event.envelope.observed_at = UNIX_EPOCH + Duration::from_millis(250);
+    let response_output = runtime.observe_event(&response_event);
+    let failed_call = response_output
+        .actions
+        .iter()
+        .find(|action| {
+            action.kind == SemanticActionKind::LlmCall && action.action_id == request_call.action_id
+        })
+        .expect("HTTP error response should end the matching llm.call");
+
+    assert_eq!(failed_call.status, SemanticActionStatus::Error);
+    assert_eq!(
+        failed_call.completeness,
+        SemanticActionCompleteness::Complete
+    );
+    assert_eq!(
+        failed_call.end_time,
+        Some(UNIX_EPOCH + Duration::from_millis(250))
+    );
+    assert_eq!(
+        failed_call
+            .attributes
+            .get("http.response.status_code")
+            .map(String::as_str),
+        Some("404")
+    );
+    assert!(
+        !failed_call
+            .attributes
+            .contains_key("actrail.action.finalized_on_trace_close")
+    );
+
+    let finalized = runtime.finalize_trace(TRACE_ID, UNIX_EPOCH + Duration::from_secs(10));
+    assert!(finalized.actions.iter().all(|action| {
+        action.kind != SemanticActionKind::LlmCall || action.action_id != request_call.action_id
+    }));
+}
+
+#[test]
+fn llm_call_ends_on_http_error_with_direction_local_payload_sequence() {
+    let mut runtime = runtime();
+    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let request_at = UNIX_EPOCH + Duration::from_millis(100);
+    let response_at = UNIX_EPOCH + Duration::from_millis(250);
+    let trace_close_at = UNIX_EPOCH + Duration::from_secs(10);
+    let mut request_segment = llm_payload_segment(agent.clone());
+    request_segment.sequence = RESPONSE_FIRST_SEQUENCE;
+    request_segment.observed_at = request_at;
+    let request_output = runtime.observe_payload_segment(&request_segment);
+    let request_call = request_output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmCall)
+        .expect("LLM request should create an in-progress llm.call");
+    assert_eq!(request_call.status, SemanticActionStatus::InProgress);
+    assert_eq!(request_call.start_time, request_at);
+    assert_eq!(request_call.end_time, None);
+
+    let mut response_event = http_response_event_with(
+        EventId::new(34),
+        agent,
+        response_segment_id(6),
+        RESPONSE_FIRST_SEQUENCE,
+        "404",
+        "Not Found",
+    );
+    response_event.envelope.observed_at = response_at;
+    let response_output = runtime.observe_event(&response_event);
+    let failed_call = response_output
+        .actions
+        .iter()
+        .find(|action| {
+            action.kind == SemanticActionKind::LlmCall && action.action_id == request_call.action_id
+        })
+        .expect("HTTP error response with direction-local sequence should end the llm.call");
+
+    assert_eq!(failed_call.status, SemanticActionStatus::Error);
+    assert_eq!(
+        failed_call.completeness,
+        SemanticActionCompleteness::Complete
+    );
+    assert_eq!(failed_call.start_time, request_at);
+    assert_eq!(failed_call.end_time, Some(response_at));
+    assert_eq!(
+        failed_call
+            .end_time
+            .expect("HTTP 404 should close the call")
+            .duration_since(failed_call.start_time)
+            .expect("LLM call end time should not precede start time"),
+        response_at
+            .duration_since(request_at)
+            .expect("test response time should follow request time")
+    );
+    assert_eq!(
+        failed_call
+            .attributes
+            .get("http.response.status_code")
+            .map(String::as_str),
+        Some("404")
+    );
+    assert!(
+        !failed_call
+            .attributes
+            .contains_key("actrail.action.finalized_on_trace_close")
+    );
+
+    let finalized = runtime.finalize_trace(TRACE_ID, trace_close_at);
+    assert!(finalized.actions.iter().all(|action| {
+        action.kind != SemanticActionKind::LlmCall || action.action_id != request_call.action_id
+    }));
+}
+
+fn http_response_event_with(
+    event_id: EventId,
+    process: ProcessIdentity,
+    segment_id: PayloadSegmentId,
+    sequence: u64,
+    status_code: &str,
+    reason: &str,
+) -> DomainEvent {
+    let mut event = http_response_event(event_id, process);
+    let EventPayload::Application(payload) = &mut event.payload else {
+        unreachable!("http_response_event returns an application event");
+    };
+    payload.summary = format!("{status_code} {reason}");
+    payload.metadata.insert(
+        "payload_segment_id".to_string(),
+        segment_id.get().to_string(),
+    );
+    payload
+        .metadata
+        .insert("payload_sequence".to_string(), sequence.to_string());
+    payload
+        .metadata
+        .insert("status_code".to_string(), status_code.to_string());
+    payload
+        .metadata
+        .insert("reason".to_string(), reason.to_string());
+    event
+}
+
+fn http_request_event_with(
+    event_id: EventId,
+    process: ProcessIdentity,
+    segment_id: PayloadSegmentId,
+    sequence: u64,
+) -> DomainEvent {
+    let mut event = http_request_event(event_id, process);
+    let EventPayload::Application(payload) = &mut event.payload else {
+        unreachable!("http_request_event returns an application event");
+    };
+    payload.metadata.insert(
+        "payload_segment_id".to_string(),
+        segment_id.get().to_string(),
+    );
+    payload
+        .metadata
+        .insert("payload_sequence".to_string(), sequence.to_string());
+    event
+}
+
+fn raw_sse_response_bytes(content: &str) -> Vec<u8> {
+    format!(
+        "data: {{\"model\":\"deepseek-chat\",\"choices\":[{{\"delta\":{{\"content\":\"{content}\"}}}}]}}\n\ndata: [DONE]\n\n"
+    )
+    .into_bytes()
 }

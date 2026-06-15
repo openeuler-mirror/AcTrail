@@ -68,16 +68,13 @@ Its prompt, marker, and timeout are configured by `availability_prompt`,
 configured provider or default model outside AcTrail, the case is skipped before
 payload capture checks run.
 
-The `docs-examples` case keeps the one-command regression aligned with the
-deterministic and maintained automated subset of `docs/examples/TESTING.md`. It
-automates the documented quick-start attach workflow, the local HTTP/2 payload
-workflow, the extended-observation attach workflow, and the xiaoO -> Claude
-agent-invocation example. It also runs the external HTTP/1.1 and HTTP/2
-OpenAI-compatible docs paths when the configured API key environment variable is
-present; otherwise those provider checks are reported as `SKIP`. Examples 09 and
-10 have their own docs transfer scripts because they depend on external Python
-or Java framework toolchains and provider credentials. Each documented example's
-regression step lives under its
+The `docs-examples` case keeps the one-command regression aligned with
+`docs/examples/TESTING.md`. It automates the documented quick-start attach
+workflow, the local HTTP/2 payload workflow, the extended-observation attach
+workflow, and the xiaoO -> Claude agent-invocation example. It also runs the
+external HTTP/1.1 and HTTP/2 OpenAI-compatible docs paths when the configured
+API key environment variable is present; otherwise those provider checks are
+reported as `SKIP`. Each documented example's regression step lives under its
 own `tests/regression/cases/09-docs-examples/case_*` directory; the root
 `test.py` only wires the ordered scenario list. Its regression-only control
 timeouts and viewer polling budgets, including xiaoO availability turn count,
@@ -108,14 +105,22 @@ Automatic discovery and overrides:
   map. If the build-id changed, it detects BoringSSL offsets from the current
   binary and generates a temporary matching map. `OPENCODE_BIN_PATH` overrides
   discovery.
-- xiaoO: scans `xiaoo` on `PATH` and runs the selected binary. The payload case
-  can pass through rustls `PlaintextSink` symbols from the main binary,
-  `XIAOO_DEBUG_FILE`, or the configured GNU build-id debuginfo directory; it
-  can also pass through `Syscall/socket-syscall` if xiaoO is configured to use
-  a plain HTTP provider route. A stripped release binary that reaches the
-  provider through HTTPS/HTTP CONNECT is expected to fail this payload case
-  until matching debuginfo or another TLS attach profile is provided.
-  `XIAOO_BINARY` overrides discovery.
+- xiaoO: scans `xiaoo` on `PATH` and runs the selected binary. The rustls case
+  requires `tls-probe-point-finder fast` to resolve a complete rustls plaintext
+  plan for the selected binary before launch; stripped x86_64 builds can pass
+  through the checked rustls static patterns. Socket-only HTTP CONNECT evidence
+  is not accepted as a substitute for this case. `XIAOO_BINARY` overrides
+  discovery.
+- xiaoO HTTP proxy: runs xiaoO with a generated config under
+  `target/agent-trace/xiaoo-http-proxy/`. The generated config points xiaoO at a
+  local plain HTTP OpenAI-compatible reverse provider shim from
+  `tests/support/llm-http-proxy/`, and the shim forwards to the configured HTTPS
+  upstream using `upstream_api_key_env` from
+  `tests/agent-trace/xiaoo-http-proxy/workload.conf`. The manual fixed-port
+  config lives at `tests/agent-trace/xiaoo-http-proxy/xiaoo-config.toml`. This
+  case requires
+  complete inbound and outbound `Syscall/socket-syscall` payload rows and a
+  complete `llm.call` / `llm.request` / `llm.response` action graph.
 - LangGraph: scans the current Python, active virtualenv, repository `.venv`,
   and Python executables on `PATH` for `langgraph`, `requests`, and dynamic
   OpenSSL when the configured API URL is HTTPS. Python builds with static or

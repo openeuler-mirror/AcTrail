@@ -7,5 +7,5 @@ mod policy;
 mod state;
 
 pub(super) use factory::RuntimeConfigFactory;
-pub(super) use plan::{RuntimePlan, runtime_plan_for_binary};
+pub(super) use plan::{RuntimePlan, prefetch_runtime_plan_for_binary, runtime_plan_for_binary};
 pub(super) use state::{RuntimeConfig, get, set};

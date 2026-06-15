@@ -150,7 +150,9 @@ impl FromStr for PayloadTlsSeccompSyscall {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum PayloadSocketSeccompSyscall {
     Write,
+    Writev,
     Sendto,
+    Sendmsg,
 }
 
 impl FromStr for PayloadSocketSeccompSyscall {
@@ -159,9 +161,11 @@ impl FromStr for PayloadSocketSeccompSyscall {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "write" => Ok(Self::Write),
+            "writev" => Ok(Self::Writev),
             "sendto" => Ok(Self::Sendto),
+            "sendmsg" => Ok(Self::Sendmsg),
             other => Err(format!(
-                "unsupported payload socket seccomp syscall {other}; supported: write, sendto"
+                "unsupported payload socket seccomp syscall {other}; supported: write, writev, sendto, sendmsg"
             )),
         }
     }
@@ -245,6 +249,26 @@ impl FromStr for PayloadRedactionPolicy {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PayloadStdioStorageMode {
+    Full,
+    MetadataOnly,
+    Drop,
+}
+
+impl FromStr for PayloadStdioStorageMode {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "full" => Ok(Self::Full),
+            "metadata-only" => Ok(Self::MetadataOnly),
+            "drop" => Ok(Self::Drop),
+            other => Err(format!("unsupported payload stdio storage mode {other}")),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PayloadTlsConfig {
     pub enabled: bool,
@@ -276,6 +300,9 @@ pub struct PayloadStdioConfig {
     pub capture_stdin: bool,
     pub capture_stdout: bool,
     pub capture_stderr: bool,
+    pub stdin_storage_mode: PayloadStdioStorageMode,
+    pub stdout_storage_mode: PayloadStdioStorageMode,
+    pub stderr_storage_mode: PayloadStdioStorageMode,
     pub max_segment_bytes: u32,
     pub ring_buffer_bytes: u32,
     pub pending_operation_max_entries: u32,

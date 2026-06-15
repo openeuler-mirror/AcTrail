@@ -1,8 +1,7 @@
 use std::time::SystemTime;
 
 use config_core::daemon::{
-    ApplicationProtocolConfig, DEFAULT_STORAGE_BUSY_TIMEOUT_MS, DiagnosticLogLevel,
-    PayloadRedactionPolicy, SseDataPolicy,
+    ApplicationProtocolConfig, DiagnosticLogLevel, PayloadRedactionPolicy, SseDataPolicy,
 };
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use model_core::event::EventPayload;
@@ -13,9 +12,8 @@ use model_core::payload::{
 };
 use model_core::process::ProcessIdentity;
 use payload_event::RawPayloadSegment;
-use semantic_action::{SemanticActionKind, SemanticActionReadStore};
-use store_read_contract::events::EventReadStore;
-use store_read_contract::payloads::{PayloadReadStore, PayloadSegmentQuery};
+use semantic_action::SemanticActionKind;
+use storage_core::{PayloadSegmentQuery, StorageBackend};
 
 use crate::profiles::DaemonProfileRegistry;
 
@@ -31,6 +29,8 @@ const HTTP2_STREAM_ONE: u32 = 1;
 const HTTP2_CONNECTION_STREAM: u32 = 0;
 const HTTP2_RESERVED_STREAM_ID_MASK: u32 = 0x7fff_ffff;
 const HTTP2_BYTE_MASK: u32 = 0xff;
+const RETENTION_BATCH_SEGMENT_BYTES: u64 = 10;
+const RETENTION_BATCH_LIMIT_BYTES: u64 = 15;
 
 #[test]
 fn tls_payload_processing_persists_http_and_sse_application_events() {
@@ -42,8 +42,7 @@ fn tls_payload_processing_persists_http_and_sse_application_events() {
     let mut payload_config = super::payload_config(true);
     payload_config.tls.redaction_policy = PayloadRedactionPolicy::AuthorizationHeader;
     let mut wiring = super::super::build_runtime_wiring(
-        &storage_path,
-        DEFAULT_STORAGE_BUSY_TIMEOUT_MS,
+        &super::test_storage_config(storage_path.clone()),
         profiles,
         super::ebpf_config(false),
         payload_config,
@@ -66,7 +65,7 @@ fn tls_payload_processing_persists_http_and_sse_application_events() {
             http2_max_data_preview_bytes: super::TEST_HTTP2_PREVIEW_BYTES,
         },
         super::resource_metrics_disabled(),
-        super::live_otel_export_disabled(),
+        super::export_runtime_disabled(),
         super::enforcement_disabled(),
     )
     .unwrap();
@@ -113,7 +112,7 @@ fn tls_payload_processing_persists_http_and_sse_application_events() {
 
     let sse_body = concat!(
         "event: token\n",
-        "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n",
+        "data: {\"model\":\"test-model\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n",
         "data: [DONE]\n\n",
     );
     let response = format!(
@@ -177,7 +176,11 @@ fn tls_payload_processing_persists_http_and_sse_application_events() {
     );
     assert!(response.evidence.iter().any(|evidence| {
         evidence.role == "llm.response.payload"
-            && payloads_contain_id(&wiring.attach_service.storage, trace_id, evidence.id)
+            && payloads_contain_id(
+                wiring.attach_service.storage.as_ref(),
+                trace_id,
+                evidence.id,
+            )
     }));
 
     let payloads = wiring
@@ -198,8 +201,91 @@ fn tls_payload_processing_persists_http_and_sse_application_events() {
     assert!(!request_text.contains("Bearer secret"));
 }
 
+#[test]
+fn payload_batch_retention_counts_prior_uncommitted_segments_and_rolls_back() {
+    let storage_path = std::env::temp_dir().join(format!(
+        "actrail-payload-retention-batch-test-{}.sqlite",
+        std::process::id()
+    ));
+    let profiles = DaemonProfileRegistry::new();
+    let mut payload_config = super::payload_config(true);
+    payload_config.tls.retention_max_bytes_per_trace = RETENTION_BATCH_LIMIT_BYTES;
+    let mut wiring = super::super::build_runtime_wiring(
+        &super::test_storage_config(storage_path.clone()),
+        profiles,
+        super::ebpf_config(false),
+        payload_config,
+        DiagnosticLogLevel::Info,
+        super::seccomp_notify_disabled(),
+        super::process_seccomp_disabled(),
+        super::agent_invocation_disabled(),
+        super::application_protocol_disabled(),
+        super::resource_metrics_disabled(),
+        super::export_runtime_disabled(),
+        super::enforcement_disabled(),
+    )
+    .unwrap();
+
+    let trace_id = wiring.trace_runtime.reserve_trace_id();
+    let process = ProcessIdentity::new(std::process::id(), 1, 1);
+    super::create_active_trace(
+        &mut wiring,
+        trace_id,
+        process.clone(),
+        ProfileName::new("payload-retention-batch"),
+        TraceName::new("payload-retention-batch"),
+        vec![CapabilityRequest::new(
+            Capability::TlsPlaintextPayload,
+            RequestMode::Required,
+        )],
+        super::APPLICATION_PROTOCOL_COLLECTOR,
+        vec![Capability::TlsPlaintextPayload],
+    );
+
+    let segment_bytes = vec![b'a'; RETENTION_BATCH_SEGMENT_BYTES as usize];
+    let result = wiring.attach_service.process_payload_segments_impl(
+        &wiring.trace_runtime,
+        vec![
+            raw_tls_segment(
+                trace_id,
+                process.clone(),
+                PayloadDirection::Outbound,
+                0,
+                segment_bytes.clone(),
+            ),
+            raw_tls_segment(
+                trace_id,
+                process,
+                PayloadDirection::Outbound,
+                1,
+                segment_bytes,
+            ),
+        ],
+    );
+
+    let error = result.expect_err("second payload segment should exceed retention limit");
+    assert_eq!(error.code, "payload_retention");
+    let payloads = wiring
+        .attach_service
+        .storage
+        .list_payload_segments(
+            trace_id,
+            PayloadSegmentQuery {
+                segment_id: None,
+                direction: None,
+                limit: None,
+                include_bytes: false,
+            },
+        )
+        .unwrap();
+    assert!(
+        payloads.is_empty(),
+        "retention failure must roll back the first segment in the same transaction"
+    );
+}
+
 fn payloads_contain_id(
-    storage: &sqlite_storage::SqliteStorage,
+    storage: &dyn StorageBackend,
     trace_id: model_core::ids::TraceId,
     evidence_id: u64,
 ) -> bool {
@@ -226,8 +312,7 @@ fn tls_payload_processing_persists_http2_frame_and_data_events() {
     ));
     let profiles = DaemonProfileRegistry::new();
     let mut wiring = super::super::build_runtime_wiring(
-        &storage_path,
-        DEFAULT_STORAGE_BUSY_TIMEOUT_MS,
+        &super::test_storage_config(storage_path.clone()),
         profiles,
         super::ebpf_config(false),
         super::payload_config(true),
@@ -250,7 +335,7 @@ fn tls_payload_processing_persists_http2_frame_and_data_events() {
             http2_max_data_preview_bytes: super::TEST_HTTP_BUFFER_BYTES,
         },
         super::resource_metrics_disabled(),
-        super::live_otel_export_disabled(),
+        super::export_runtime_disabled(),
         super::enforcement_disabled(),
     )
     .unwrap();
@@ -326,8 +411,7 @@ fn http2_analyzer_ignores_http1_text_when_both_protocols_are_enabled() {
     ));
     let profiles = DaemonProfileRegistry::new();
     let mut wiring = super::super::build_runtime_wiring(
-        &storage_path,
-        DEFAULT_STORAGE_BUSY_TIMEOUT_MS,
+        &super::test_storage_config(storage_path.clone()),
         profiles,
         super::ebpf_config(false),
         super::payload_config(true),
@@ -350,7 +434,7 @@ fn http2_analyzer_ignores_http1_text_when_both_protocols_are_enabled() {
             http2_max_data_preview_bytes: super::TEST_HTTP2_PREVIEW_BYTES,
         },
         super::resource_metrics_disabled(),
-        super::live_otel_export_disabled(),
+        super::export_runtime_disabled(),
         super::enforcement_disabled(),
     )
     .unwrap();

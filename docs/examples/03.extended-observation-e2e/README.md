@@ -175,7 +175,7 @@ actrail-stdio-continue-e2e
 
 ## 7. 查看事件
 
-`actrailviewer` 通过 operator config 里的 `storage_path` 读取 AcTrail storage，不需要先导出 JSON：
+`actrailviewer` 通过 operator config 里的 `storage_sqlite_path` 读取 AcTrail storage，不需要先导出 JSON：
 
 ```bash
 ./target/release/actrailviewer traces --config docs/examples/03.extended-observation-e2e/operator.conf

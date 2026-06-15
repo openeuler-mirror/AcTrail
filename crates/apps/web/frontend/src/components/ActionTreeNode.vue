@@ -37,17 +37,25 @@
       </button>
 
       <div v-if="childrenVisible" class="action-child-lane">
-        <ActionTreeNode
-          v-for="child in node.children"
-          :key="child.id"
-          :node="child"
-          :depth="depth + 1"
-          :force-expanded="forceExpanded"
-          :selected-id="selectedId"
-          @select="$emit('select', $event)"
-          @expand="$emit('expand', $event)"
-        />
+        <template v-for="(child, index) in node.children" :key="child.id">
+          <ActionTreeNode
+            :node="child"
+            :depth="depth + 1"
+            :force-expanded="forceExpanded"
+            :selected-id="selectedId"
+            @select="$emit('select', $event)"
+            @expand="$emit('expand', $event)"
+            @load-more="$emit('load-more', $event)"
+          />
+          <div
+            v-if="index === prefetchSentinelIndex"
+            ref="prefetchSentinel"
+            class="action-prefetch-sentinel"
+            aria-hidden="true"
+          ></div>
+        </template>
         <div v-if="node.loading" class="action-node-state">Loading</div>
+        <div v-else-if="node.loadingMore" class="action-node-state">Loading</div>
         <div v-else-if="node.error" class="action-node-state error">{{ node.error }}</div>
       </div>
     </div>
@@ -55,9 +63,10 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { ChevronDown, ChevronRight } from '@lucide/vue';
 
+import { UI_LIMITS } from '../tabs/core/action-tree/config';
 import DurationBadge from './DurationBadge.vue';
 
 defineOptions({ name: 'ActionTreeNode' });
@@ -81,12 +90,24 @@ const props = defineProps({
   },
 });
 
-const emit = defineEmits(['select', 'expand']);
+const emit = defineEmits(['select', 'expand', 'load-more']);
 const expanded = ref(false);
+const prefetchSentinel = ref(null);
+let prefetchObserver = null;
 const hasChildren = computed(() => props.node.hasChildren || props.node.children.length > 0);
 const childrenVisible = computed(
   () => hasChildren.value && (expanded.value || (props.forceExpanded && props.node.childrenLoaded)),
 );
+const prefetchSentinelIndex = computed(() => {
+  if (!props.node.hasMoreChildren || !props.node.children.length) {
+    return null;
+  }
+  const remaining = UI_LIMITS.actionTreeChildPrefetchRemaining;
+  if (!Number.isInteger(remaining) || remaining < 0) {
+    throw new Error('invalid UI_LIMITS.actionTreeChildPrefetchRemaining');
+  }
+  return Math.max(0, props.node.children.length - remaining - 1);
+});
 
 watch(
   () => props.node.id,
@@ -94,6 +115,23 @@ watch(
     expanded.value = false;
   },
 );
+
+watch(
+  () => [
+    props.node.children.length,
+    props.node.hasMoreChildren,
+    props.node.loadingMore,
+    childrenVisible.value,
+  ],
+  () => {
+    refreshPrefetchObserver();
+  },
+  { flush: 'post' },
+);
+
+onBeforeUnmount(() => {
+  disconnectPrefetchObserver();
+});
 
 function handleClick() {
   emit('select', props.node);
@@ -103,6 +141,34 @@ function handleClick() {
     }
     expanded.value = !expanded.value;
   }
+}
+
+async function refreshPrefetchObserver() {
+  disconnectPrefetchObserver();
+  if (!childrenVisible.value || !props.node.hasMoreChildren || props.node.loadingMore) {
+    return;
+  }
+  await nextTick();
+  const sentinel = Array.isArray(prefetchSentinel.value)
+    ? prefetchSentinel.value[0]
+    : prefetchSentinel.value;
+  if (!sentinel) {
+    return;
+  }
+  prefetchObserver = new IntersectionObserver((entries) => {
+    if (entries.some((entry) => entry.isIntersecting)) {
+      emit('load-more', props.node);
+    }
+  });
+  prefetchObserver.observe(sentinel);
+}
+
+function disconnectPrefetchObserver() {
+  if (!prefetchObserver) {
+    return;
+  }
+  prefetchObserver.disconnect();
+  prefetchObserver = null;
 }
 </script>
 
@@ -182,10 +248,19 @@ function handleClick() {
     var(--shadow);
 }
 
-.action-tree-node.kind-payload-segment > .action-tree-branch > .action-card,
-.action-tree-node.node-evidence > .action-tree-branch > .action-card {
-  border-left-color: #64748b;
-  background: #fbfcfc;
+.action-tree-node.node-actionGroup > .action-tree-branch > .action-card,
+.action-tree-node.visual-action-group > .action-tree-branch > .action-card {
+  border-color: #c8d7d5;
+  border-left-color: #475569;
+  background: #f7f9f9;
+}
+
+.action-tree-node.node-actionGroup.is-selected > .action-tree-branch > .action-card,
+.action-tree-node.visual-action-group.is-selected > .action-tree-branch > .action-card {
+  border-color: #475569;
+  box-shadow:
+    0 0 0 2px rgba(71, 85, 105, 0.16),
+    var(--shadow);
 }
 
 .action-card-top {
@@ -288,5 +363,10 @@ function handleClick() {
   border-color: #fecdd3;
   background: #fff1f2;
   color: var(--rose);
+}
+
+.action-prefetch-sentinel {
+  width: var(--action-node-width);
+  height: 1px;
 }
 </style>

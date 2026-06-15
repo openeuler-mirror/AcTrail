@@ -1,12 +1,10 @@
-//! Cache-first TLS sync probe plan resolver.
+//! Store-backed TLS sync probe plan resolver.
 
-use std::collections::BTreeMap;
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
-use std::time::UNIX_EPOCH;
 
 use config_core::daemon::{PayloadTlsConfig, PayloadTlsLibraryPath};
 use control_contract::reply::ControlError;
@@ -16,6 +14,10 @@ use tls_payload_sync::{
 };
 use tls_probe_point_finder::fast::{
     ArchFilter, FastProbeRequest, ProviderFilter, SourceFilter, resolve,
+};
+
+use super::plan_store::{
+    BinaryPlanKey, BinaryPlanRecord, BinaryPlanStore, InMemoryBinaryPlanStore,
 };
 
 pub(super) struct TlsSyncPlanResolver {
@@ -28,23 +30,9 @@ struct PlanLookupJob {
 }
 
 struct TlsSyncPlanWorker {
-    cache: BTreeMap<BinaryCacheKey, CachedPlan>,
+    store: Box<dyn BinaryPlanStore + Send>,
     config: PayloadTlsConfig,
     match_limit: usize,
-}
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct BinaryCacheKey {
-    path: PathBuf,
-    len: u64,
-    modified: Option<(u64, u32)>,
-    build_id: Option<String>,
-}
-
-#[derive(Clone, Debug)]
-enum CachedPlan {
-    Found(RuntimePlanDescriptor),
-    Unsupported(String),
 }
 
 impl TlsSyncPlanResolver {
@@ -53,7 +41,7 @@ impl TlsSyncPlanResolver {
         validate_library_candidates(config)?;
         let (requests, receiver) = mpsc::channel();
         let worker = TlsSyncPlanWorker {
-            cache: BTreeMap::new(),
+            store: Box::<InMemoryBinaryPlanStore>::default(),
             config: config.clone(),
             match_limit,
         };
@@ -108,7 +96,7 @@ impl TlsSyncPlanWorker {
     }
 
     fn lookup(&mut self, binary: &Path) -> PlanLookupResponse {
-        let key = match binary_cache_key(binary) {
+        let key = match BinaryPlanKey::for_path(binary) {
             Ok(key) => key,
             Err(error) => {
                 return PlanLookupResponse::Unsupported {
@@ -116,15 +104,25 @@ impl TlsSyncPlanWorker {
                 };
             }
         };
-        if let Some(cached) = self.cache.get(&key) {
-            return cached.response();
+        match self.store.get(&key) {
+            Ok(Some(cached)) => return cached.response(),
+            Ok(None) => {}
+            Err(error) => {
+                return PlanLookupResponse::Unsupported {
+                    reason: format!("load cached probe plan {}: {error}", key.path().display()),
+                };
+            }
         }
-        let cached = match self.resolve_plan(&key.path) {
-            Ok(plan) => CachedPlan::Found(plan),
-            Err(error) => CachedPlan::Unsupported(error.message),
+        let cached = match self.resolve_plan(key.path()) {
+            Ok(plan) => BinaryPlanRecord::Found(plan),
+            Err(error) => BinaryPlanRecord::Unsupported(error.message),
         };
         let response = cached.response();
-        self.cache.insert(key, cached);
+        if let Err(error) = self.store.put(key, cached) {
+            return PlanLookupResponse::Unsupported {
+                reason: format!("store probe plan: {error}"),
+            };
+        }
         response
     }
 
@@ -146,7 +144,7 @@ impl TlsSyncPlanWorker {
     }
 }
 
-impl CachedPlan {
+impl BinaryPlanRecord {
     fn response(&self) -> PlanLookupResponse {
         match self {
             Self::Found(plan) => PlanLookupResponse::Found(plan.clone()),
@@ -155,26 +153,6 @@ impl CachedPlan {
             },
         }
     }
-}
-
-fn binary_cache_key(path: &Path) -> std::io::Result<BinaryCacheKey> {
-    let path = canonical(path);
-    let metadata = std::fs::metadata(&path)?;
-    let build_id = tls_probe_point_finder::elf_build_id(&path).ok().flatten();
-    Ok(BinaryCacheKey {
-        path,
-        len: metadata.len(),
-        modified: metadata
-            .modified()
-            .ok()
-            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-            .map(|duration| (duration.as_secs(), duration.subsec_nanos())),
-        build_id,
-    })
-}
-
-fn canonical(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn library_candidates(config: &PayloadTlsConfig) -> Vec<PathBuf> {

@@ -1,0 +1,11 @@
+[package]
+name = "recording_runtime"
+version.workspace = true
+edition = "2024"
+license = "MulanPSL-2.0"
+
+[dependencies]
+export_core = { path = "../../export/core" }
+model_core = { path = "../../core/model" }
+semantic_action = { path = "../../contracts/semantic_action" }
+storage_core = { path = "../../storage/core" }

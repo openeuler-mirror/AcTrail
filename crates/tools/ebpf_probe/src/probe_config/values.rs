@@ -7,9 +7,9 @@ use config_core::daemon::{
     ApplicationProtocolConfig, EnforcementBackend, EnforcementConfig, EnforcementDecision,
     EnforcementMarkStrategy, EnforcementScope, MemlockRlimit, PayloadRedactionPolicy,
     PayloadSocketCaptureBackend, PayloadSocketConfig, PayloadSocketSeccompSyscall,
-    PayloadStdioConfig, PayloadTlsCaptureBackend, PayloadTlsConfig, PayloadTlsLibrary,
-    PayloadTlsLibraryPath, PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource,
-    PayloadTlsSyncRuntimeLibraryPath, ResourceMetricsConfig, SseDataPolicy,
+    PayloadStdioConfig, PayloadStdioStorageMode, PayloadTlsCaptureBackend, PayloadTlsConfig,
+    PayloadTlsLibrary, PayloadTlsLibraryPath, PayloadTlsResolver, PayloadTlsSeccompSyscall,
+    PayloadTlsSource, PayloadTlsSyncRuntimeLibraryPath, ResourceMetricsConfig, SseDataPolicy,
 };
 
 use crate::args::MmapWorkloadConfig;
@@ -256,6 +256,15 @@ impl ConfigValues {
             .map_err(|error| format!("invalid {key}: {error}"))
     }
 
+    fn required_payload_stdio_storage_mode(
+        &self,
+        key: &'static str,
+    ) -> Result<PayloadStdioStorageMode, String> {
+        self.required(key)?
+            .parse::<PayloadStdioStorageMode>()
+            .map_err(|error| format!("invalid {key}: {error}"))
+    }
+
     fn required_sse_data_policy(&self, key: &'static str) -> Result<SseDataPolicy, String> {
         self.required(key)?
             .parse::<SseDataPolicy>()
@@ -333,6 +342,12 @@ impl ConfigValues {
             capture_stdin: self.required_bool("payload_stdio_capture_stdin")?,
             capture_stdout: self.required_bool("payload_stdio_capture_stdout")?,
             capture_stderr: self.required_bool("payload_stdio_capture_stderr")?,
+            stdin_storage_mode: self
+                .required_payload_stdio_storage_mode("payload_stdio_stdin_storage_mode")?,
+            stdout_storage_mode: self
+                .required_payload_stdio_storage_mode("payload_stdio_stdout_storage_mode")?,
+            stderr_storage_mode: self
+                .required_payload_stdio_storage_mode("payload_stdio_stderr_storage_mode")?,
             max_segment_bytes: self.required_positive_u32("payload_stdio_max_segment_bytes")?,
             ring_buffer_bytes: self.required_positive_u32("payload_stdio_ring_buffer_bytes")?,
             pending_operation_max_entries: self

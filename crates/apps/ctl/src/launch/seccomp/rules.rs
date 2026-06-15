@@ -27,12 +27,10 @@ pub(super) fn build_seccomp_rules(
         rules.insert(SeccompRule::Notify(payload_tls_syscall_number(syscall)?));
     }
     for syscall in payload_socket_syscalls {
-        let (syscall_number, size_arg) = payload_socket_syscall_rule(syscall)?;
-        rules.insert(SeccompRule::NotifySocketPayload {
-            syscall: syscall_number,
-            size_arg,
-            min_size: payload_socket_max_segment_bytes,
-        });
+        rules.insert(payload_socket_syscall_rule(
+            syscall,
+            payload_socket_max_segment_bytes,
+        )?);
     }
     for syscall in process_syscalls {
         let kernel_syscalls = effective_kernel_syscalls(syscall);
@@ -191,14 +189,33 @@ fn payload_tls_syscall_number(syscall: PayloadTlsSeccompSyscall) -> Result<u32, 
     u32::try_from(raw).map_err(|error| format!("syscall number overflow: {error}"))
 }
 
-fn payload_socket_syscall_rule(syscall: PayloadSocketSeccompSyscall) -> Result<(u32, u32), String> {
-    let (raw, size_arg) = match syscall {
-        PayloadSocketSeccompSyscall::Write => (libc::SYS_write, 2),
-        PayloadSocketSeccompSyscall::Sendto => (libc::SYS_sendto, 2),
+fn payload_socket_syscall_rule(
+    syscall: PayloadSocketSeccompSyscall,
+    max_segment_bytes: u32,
+) -> Result<SeccompRule, String> {
+    let raw = match syscall {
+        PayloadSocketSeccompSyscall::Write => libc::SYS_write,
+        PayloadSocketSeccompSyscall::Writev => libc::SYS_writev,
+        PayloadSocketSeccompSyscall::Sendto => libc::SYS_sendto,
+        PayloadSocketSeccompSyscall::Sendmsg => libc::SYS_sendmsg,
     };
     let syscall_number =
         u32::try_from(raw).map_err(|error| format!("syscall number overflow: {error}"))?;
-    Ok((syscall_number, size_arg))
+    Ok(match syscall {
+        PayloadSocketSeccompSyscall::Write => SeccompRule::NotifySocketPayload {
+            syscall: syscall_number,
+            size_arg: 2,
+            min_size: max_segment_bytes,
+        },
+        PayloadSocketSeccompSyscall::Sendto => SeccompRule::NotifySocketPayload {
+            syscall: syscall_number,
+            size_arg: 2,
+            min_size: max_segment_bytes,
+        },
+        PayloadSocketSeccompSyscall::Writev | PayloadSocketSeccompSyscall::Sendmsg => {
+            SeccompRule::Notify(syscall_number)
+        }
+    })
 }
 
 fn process_seccomp_rule(syscall: KernelProcessSyscall) -> Result<SeccompRule, String> {

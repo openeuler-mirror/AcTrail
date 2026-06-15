@@ -47,8 +47,14 @@ export function readActionTreeRoot(traceId) {
   return fetchJson(`/api/traces/${traceId}/action-tree/root`);
 }
 
-export function readActionTreeChildren(traceId, parentId) {
-  return fetchJson(`/api/traces/${traceId}/action-tree/children/${encodeURIComponent(parentId)}`);
+export function readActionTreeChildren(traceId, parentId, { offset, limit }) {
+  return fetchJson(
+    `/api/traces/${traceId}/action-tree/children/${encodeURIComponent(parentId)}?offset=${offset}&limit=${limit}`,
+  );
+}
+
+export function readActionDetail(traceId, actionId) {
+  return fetchJson(`/api/traces/${traceId}/actions/${encodeURIComponent(actionId)}`);
 }
 
 export function readCommands(traceId) {

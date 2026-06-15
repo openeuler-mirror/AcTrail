@@ -126,11 +126,10 @@ impl LiveSemanticActionRuntime {
             }
             EventPayload::Application(payload) if is_http_protocol(&payload.protocol) => {
                 let action = http_message_action(event);
-                let links = self.links.observe_actions(std::slice::from_ref(&action));
-                LiveSemanticActionOutput {
-                    actions: vec![action],
-                    links,
-                }
+                let mut actions = vec![action.clone()];
+                actions.extend(self.llm.observe_http_message(&action));
+                let links = self.links.observe_actions(&actions);
+                LiveSemanticActionOutput { actions, links }
             }
             EventPayload::Enforcement(_) => {
                 LiveSemanticActionOutput::from_actions(vec![enforcement_action(event)])

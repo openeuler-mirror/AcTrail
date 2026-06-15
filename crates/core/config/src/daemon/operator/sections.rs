@@ -3,11 +3,12 @@
 use super::super::values::{ConfigNode, ConfigValues};
 use super::super::{
     AgentInvocationConfig, ApplicationProtocolConfig, DisabledOrPath, EnforcementConfig,
-    LiveOtelExportConfig, PayloadRedactionPolicy, PayloadSocketCaptureBackend, PayloadSocketConfig,
-    PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadTlsCaptureBackend, PayloadTlsConfig,
-    PayloadTlsLibrary, PayloadTlsLibraryPath, PayloadTlsResolver, PayloadTlsSeccompSyscall,
-    PayloadTlsSource, PayloadTlsSyncRuntimeLibraryPath, ProcessSeccompConfig,
-    ProcessSeccompSyscall, ResourceMetricsConfig, SeccompNotifyConfig,
+    PayloadRedactionPolicy, PayloadSocketCaptureBackend, PayloadSocketConfig,
+    PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadStdioStorageMode,
+    PayloadTlsCaptureBackend, PayloadTlsConfig, PayloadTlsLibrary, PayloadTlsLibraryPath,
+    PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource,
+    PayloadTlsSyncRuntimeLibraryPath, ProcessSeccompConfig, ProcessSeccompSyscall,
+    ResourceMetricsConfig, SeccompNotifyConfig,
 };
 use crate::export::ExportConfig;
 use crate::provider_rules::ProviderRuleSetConfig;
@@ -70,20 +71,6 @@ pub(super) fn export_config(
         payload_bytes_enabled: export.required_bool("payload_bytes_enabled")?,
         payload_text_enabled: export.required_bool("payload_text_enabled")?,
     })
-}
-
-pub(super) fn live_otel_export_config(node: ConfigNode) -> Result<LiveOtelExportConfig, String> {
-    let config = LiveOtelExportConfig {
-        enabled: node.required_bool("enabled")?,
-        path: node.required_path_buf("path")?,
-        overwrite_enabled: node.required_bool("overwrite_enabled")?,
-        queue_capacity: node.required_positive_u32("queue_capacity")?,
-        flush_every_spans: node.required_positive_u32("flush_every_spans")?,
-    };
-    if config.enabled && !config.path.is_absolute() {
-        return Err("invalid otel_live_export_path: expected absolute path".to_string());
-    }
-    Ok(config)
 }
 
 pub(super) fn provider_rule_set_config(
@@ -157,6 +144,12 @@ pub(super) fn payload_stdio_config(node: ConfigNode) -> Result<PayloadStdioConfi
         capture_stdin: node.required_bool("capture_stdin")?,
         capture_stdout: node.required_bool("capture_stdout")?,
         capture_stderr: node.required_bool("capture_stderr")?,
+        stdin_storage_mode: node
+            .required_parsed::<PayloadStdioStorageMode>("stdin_storage_mode")?,
+        stdout_storage_mode: node
+            .required_parsed::<PayloadStdioStorageMode>("stdout_storage_mode")?,
+        stderr_storage_mode: node
+            .required_parsed::<PayloadStdioStorageMode>("stderr_storage_mode")?,
         max_segment_bytes: node.required_positive_u32("max_segment_bytes")?,
         ring_buffer_bytes: node.required_positive_u32("ring_buffer_bytes")?,
         pending_operation_max_entries: node

@@ -17,6 +17,7 @@ pub(crate) const SYMBOLS: &[&str] = &[
 pub(crate) const MAP_SYMBOLS_X86_64: &[&str] = &["SSL_do_handshake", "SSL_read", "SSL_write"];
 pub(crate) const MAP_SYMBOLS_AARCH64: &[&str] = &["SSL_read", "SSL_write"];
 pub(crate) const SYMBOL_MAP_RESOLVER: &str = "bun-static-boringssl";
+pub(crate) const SHARED_SYMBOL_MAP_RESOLVER: &str = "boringssl-shared-symbols";
 pub(crate) const STATIC_RESOLVER: &str = "boringssl-static";
 
 const X86_64_HANDSHAKE_PATTERN: &[u8] = &[

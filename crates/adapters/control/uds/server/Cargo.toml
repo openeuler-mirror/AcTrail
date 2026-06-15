@@ -8,3 +8,6 @@ license = "MulanPSL-2.0"
 control_contract = { path = "../../../../contracts/control_plane" }
 libc = "0.2"
 uds_control_transport = { path = "../transport" }
+
+[dev-dependencies]
+model_core = { path = "../../../../core/model" }

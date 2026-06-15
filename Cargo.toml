@@ -33,7 +33,13 @@ members = [
     "crates/contracts/store/snapshot",
     "crates/contracts/store/retention",
     "crates/contracts/store/tx",
+    "crates/storage/core",
     "crates/contracts/semantic_action",
+    "crates/export/adapters/otel_codec",
+    "crates/export/adapters/otel_jsonl",
+    "crates/export/core",
+    "crates/export/factory",
+    "crates/recording/runtime",
     "crates/adapters/collectors/ebpf",
     "crates/adapters/control/uds/client",
     "crates/adapters/control/uds/server",
@@ -42,7 +48,8 @@ members = [
     "crates/adapters/export/otel",
     "crates/adapters/policy/plugin_host",
     "crates/adapters/provider/rule_set",
-    "crates/adapters/storage/sqlite",
+    "crates/storage/factory",
+    "crates/storage/adapters/sqlite",
     "crates/tools/ebpf_probe",
     "crates/tools/tls_probe_point_finder",
     "crates/tools/tls_payload_core",
@@ -54,4 +61,4 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"

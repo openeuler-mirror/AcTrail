@@ -2,14 +2,14 @@
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use config_core::daemon::DEFAULT_OPERATOR_CONFIG_PATH;
+use storage_factory::StorageConfig;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WebConfig {
-    pub storage_path: PathBuf,
+    pub storage: StorageConfig,
     pub listen_addr: SocketAddr,
     pub request_read_timeout: Option<Duration>,
 }
@@ -42,7 +42,7 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<WebConfig, S
     let flags = parse_flags(args)?;
     let config = load_optional_config(&flags)?;
     Ok(WebConfig {
-        storage_path: resolve_storage_path(&flags, config.as_ref())?,
+        storage: resolve_storage_config(&flags, config.as_ref())?,
         listen_addr: resolve_listen_addr(&flags, config.as_ref())?,
         request_read_timeout: resolve_request_read_timeout(&flags, config.as_ref())?,
     })
@@ -73,9 +73,10 @@ fn parse_flags(
 fn load_config(path: &Path) -> Result<WebConfig, String> {
     let raw = std::fs::read_to_string(path)
         .map_err(|error| format!("read {}: {error}", path.display()))?;
+    let storage = StorageConfig::parse(&raw)?;
     let values = ConfigValues::parse(&raw)?;
     Ok(WebConfig {
-        storage_path: PathBuf::from(values.required("storage_path")?),
+        storage,
         listen_addr: values.required_socket_addr("web_listen_addr")?,
         request_read_timeout: values.required_duration_millis("web_request_read_timeout_ms")?,
     })
@@ -93,18 +94,18 @@ fn load_optional_config(
     load_config(Path::new(DEFAULT_OPERATOR_CONFIG_PATH)).map(Some)
 }
 
-fn resolve_storage_path(
+fn resolve_storage_config(
     flags: &std::collections::BTreeMap<String, String>,
     config: Option<&WebConfig>,
-) -> Result<PathBuf, String> {
+) -> Result<StorageConfig, String> {
     if let Some(path) = flags.get("--storage-path") {
         if path.is_empty() {
             return Err("--storage-path must not be empty".to_string());
         }
-        return Ok(PathBuf::from(path));
+        return Ok(StorageConfig::sqlite_path(path));
     }
     config
-        .map(|config| config.storage_path.clone())
+        .map(|config| config.storage.clone())
         .ok_or_else(|| "missing required flag --storage-path".to_string())
 }
 
@@ -170,9 +171,17 @@ struct ConfigValues {
 impl ConfigValues {
     fn parse(raw: &str) -> Result<Self, String> {
         let mut values = std::collections::BTreeMap::new();
+        let mut inside_export_section = false;
         for (line_index, line) in raw.lines().enumerate() {
             let trimmed = line.trim();
             if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            if let Some(is_export_section) = parse_section_header(trimmed, line_index + 1)? {
+                inside_export_section = is_export_section;
+                continue;
+            }
+            if inside_export_section {
                 continue;
             }
             let (key, value) = trimmed
@@ -182,7 +191,7 @@ impl ConfigValues {
             let value = unquote(value.trim())?;
             if !matches!(
                 key.as_str(),
-                "storage_path" | "web_listen_addr" | "web_request_read_timeout_ms"
+                "web_listen_addr" | "web_request_read_timeout_ms"
             ) {
                 continue;
             }
@@ -212,6 +221,32 @@ impl ConfigValues {
     }
 }
 
+fn parse_section_header(line: &str, line_number: usize) -> Result<Option<bool>, String> {
+    if line.starts_with("[[") {
+        if !line.ends_with("]]") {
+            return Err(format!("invalid config section line {line_number}"));
+        }
+        if line == "[[export.routes]]" {
+            return Ok(Some(true));
+        }
+        return Err(format!("unsupported config section line {line_number}"));
+    }
+    if line.ends_with("]]") {
+        return Err(format!("invalid config section line {line_number}"));
+    }
+    if !(line.starts_with('[') || line.ends_with(']')) {
+        return Ok(None);
+    }
+    if !(line.starts_with('[') && line.ends_with(']')) {
+        return Err(format!("invalid config section line {line_number}"));
+    }
+    let section = &line[1..line.len() - 1];
+    if section == "export" || section.starts_with("export.routes.") {
+        return Ok(Some(true));
+    }
+    Err(format!("unsupported config section line {line_number}"))
+}
+
 fn unquote(value: &str) -> Result<String, String> {
     if value.starts_with('"') || value.ends_with('"') {
         if !(value.starts_with('"') && value.ends_with('"') && value.len() >= 2) {
@@ -237,8 +272,12 @@ mod tests {
             .expect("parse public web config");
 
         assert_eq!(
-            config.storage_path,
-            std::path::PathBuf::from("/tmp/actrail-extended-observation.sqlite")
+            config.storage.path(),
+            std::path::Path::new("/tmp/actrail-extended-observation.sqlite")
+        );
+        assert_eq!(
+            config.storage.backend(),
+            storage_factory::StorageBackendKind::Sqlite
         );
         assert_eq!(config.listen_addr.to_string(), "127.0.0.1:18080");
         assert_eq!(
@@ -258,8 +297,12 @@ mod tests {
             .expect("parse quick-start operator config");
 
         assert_eq!(
-            config.storage_path,
-            std::path::PathBuf::from("/tmp/actrail.sqlite")
+            config.storage.path(),
+            std::path::Path::new("/tmp/actrail.sqlite")
+        );
+        assert_eq!(
+            config.storage.backend(),
+            storage_factory::StorageBackendKind::Sqlite
         );
         assert_eq!(config.listen_addr.to_string(), "127.0.0.1:18080");
         assert_eq!(
@@ -304,8 +347,12 @@ mod tests {
         .expect("parse direct storage path config");
 
         assert_eq!(
-            config.storage_path,
-            std::path::PathBuf::from("/tmp/actrail-web-cli.sqlite")
+            config.storage.path(),
+            std::path::Path::new("/tmp/actrail-web-cli.sqlite")
+        );
+        assert_eq!(
+            config.storage.backend(),
+            storage_factory::StorageBackendKind::Sqlite
         );
         assert_eq!(config.listen_addr.to_string(), "127.0.0.1:18080");
     }

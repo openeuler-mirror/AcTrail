@@ -1,10 +1,10 @@
 <template>
   <TableTraceTab
+    :trace-key="traceKey"
     :trace-detail="traceDetail"
     :action-tree="actionTree"
     :query="query"
     :projector="project"
-    @select-detail="$emit('select-detail', $event)"
   />
 </template>
 
@@ -13,6 +13,10 @@ import TableTraceTab from '../../TableTraceTab.vue';
 import { project } from './model';
 
 defineProps({
+  traceKey: {
+    type: [String, Number],
+    default: null,
+  },
   traceDetail: {
     type: Object,
     default: null,
@@ -26,6 +30,4 @@ defineProps({
     default: '',
   },
 });
-
-defineEmits(['select-detail']);
 </script>

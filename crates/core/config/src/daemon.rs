@@ -3,14 +3,14 @@
 use std::path::PathBuf;
 use std::str::FromStr;
 
+use storage_factory::StorageConfig;
+
 #[path = "daemon/agent.rs"]
 mod agent;
 #[path = "daemon/application.rs"]
 mod application;
 #[path = "daemon/enforcement.rs"]
 mod enforcement;
-#[path = "daemon/live_otel_export.rs"]
-mod live_otel_export;
 #[path = "daemon/logging/config.rs"]
 mod logging;
 #[path = "daemon/operator.rs"]
@@ -30,17 +30,18 @@ pub use enforcement::{
     EnforcementBackend, EnforcementConfig, EnforcementDecision, EnforcementMarkStrategy,
     EnforcementScope,
 };
-pub use live_otel_export::LiveOtelExportConfig;
+pub use export_factory::ExportConfig as RuntimeExportConfig;
 pub use logging::DiagnosticLogLevel;
 pub use operator::{
-    DEFAULT_OPERATOR_CONFIG_PATH, DEFAULT_STORAGE_BUSY_TIMEOUT_MS, OPERATOR_CONFIG_TEMPLATE,
+    DEFAULT_CONTROL_PENDING_CONNECTION_MAX, DEFAULT_OPERATOR_CONFIG_PATH, OPERATOR_CONFIG_TEMPLATE,
     OperatorConfig, OperatorConfigInitStatus,
 };
 pub use payload::{
     DisabledOrPath, PayloadConfig, PayloadRedactionPolicy, PayloadSocketCaptureBackend,
-    PayloadSocketConfig, PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadTlsCaptureBackend,
-    PayloadTlsConfig, PayloadTlsLibrary, PayloadTlsLibraryPath, PayloadTlsResolver,
-    PayloadTlsSeccompSyscall, PayloadTlsSource, PayloadTlsSyncRuntimeLibraryPath,
+    PayloadSocketConfig, PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadStdioStorageMode,
+    PayloadTlsCaptureBackend, PayloadTlsConfig, PayloadTlsLibrary, PayloadTlsLibraryPath,
+    PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource,
+    PayloadTlsSyncRuntimeLibraryPath,
 };
 pub use process::{ProcessSeccompConfig, ProcessSeccompSyscall, SeccompNotifyConfig};
 pub use resource::ResourceMetricsConfig;
@@ -96,7 +97,7 @@ pub struct CollectorConfig {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DaemonConfig {
-    pub storage_path: PathBuf,
+    pub storage: StorageConfig,
     pub control_socket_path: PathBuf,
     pub control_socket_permissions: SocketPermissions,
     pub plugin_directories: Vec<PathBuf>,

@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 def read_trace_diagnostics(operator_config: Path, trace_id: int) -> str:
-    storage_path = Path(operator_value(operator_config, "storage_path"))
+    storage_path = Path(operator_value(operator_config, "storage_sqlite_path"))
     with sqlite3.connect(storage_path) as connection:
         rows = connection.execute(
             """

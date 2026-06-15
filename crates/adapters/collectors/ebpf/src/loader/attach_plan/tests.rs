@@ -291,6 +291,16 @@ fn socket_payload_requires_enabled_payload_config() {
             .should_load_program("handle_sys_enter_write")
             .expect("mapped program")
     );
+    assert!(
+        enabled_plan
+            .should_load_program("handle_sys_enter_writev")
+            .expect("mapped program")
+    );
+    assert!(
+        enabled_plan
+            .should_load_program("handle_sys_enter_sendmsg")
+            .expect("mapped program")
+    );
 }
 
 #[test]

@@ -20,10 +20,10 @@ DEFAULT_OPERATOR_CONFIG_PATH = Path("/etc/actrail/actraild.conf")
 SINGLE_VALUE_CONFIG_KEYS = {
     "socket_path",
     "pid_file",
-    "storage_path",
+    "storage_sqlite_path",
     "log_path",
     "export_directory",
-    "otel_live_export_path",
+    "export_otel_jsonl_path",
     "payload_tls_sync_event_socket_path",
 }
 
@@ -70,17 +70,28 @@ def require_binary(bin_dir: Path, name: str) -> Path:
 
 def read_operator_config(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
+    section = ""
     for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line.strip("[]")
             continue
         key, separator, value = line.partition("=")
         if not separator:
             continue
         key = key.strip()
+        value = unquote(value.strip())
+        if section == "export" and key == "enabled":
+            key = "export_enabled"
+        elif section.startswith("export.routes.otel-jsonl.") and key == "path":
+            key = "export_otel_jsonl_path"
+        elif section.startswith("export."):
+            continue
         if key in values and key in SINGLE_VALUE_CONFIG_KEYS:
             raise RuntimeError(f"duplicate config key {key} in {path}")
-        values.setdefault(key, value.strip())
+        values.setdefault(key, value)
     return values
 
 
@@ -88,7 +99,7 @@ def clean_configured_paths(values: dict[str, str]) -> None:
     for key in [
         "socket_path",
         "pid_file",
-        "storage_path",
+        "storage_sqlite_path",
         "log_path",
         "payload_tls_sync_event_socket_path",
     ]:
@@ -98,8 +109,8 @@ def clean_configured_paths(values: dict[str, str]) -> None:
     export_dir = Path(required_value(values, "export_directory"))
     if export_dir.exists():
         shutil.rmtree(export_dir)
-    if values.get("otel_live_export_enabled") == "true":
-        live_otel_path = Path(required_value(values, "otel_live_export_path"))
+    if values.get("export_enabled") == "true":
+        live_otel_path = Path(required_value(values, "export_otel_jsonl_path"))
         if live_otel_path.exists():
             live_otel_path.unlink()
 
@@ -108,6 +119,12 @@ def required_value(values: dict[str, str], key: str) -> str:
     value = values.get(key)
     if not value:
         raise RuntimeError(f"missing required config key {key}")
+    return value
+
+
+def unquote(value: str) -> str:
+    if len(value) >= 2 and value.startswith('"') and value.endswith('"'):
+        return value[1:-1]
     return value
 
 

@@ -53,7 +53,7 @@ impl HttpMessageLinkProjector {
         http_message: &SemanticAction,
     ) -> Option<SemanticActionLink> {
         let role = llm_http_link_role(llm_action, http_message)?;
-        if !http_message_matches_llm(llm_action, http_message) {
+        if !self.http_message_matches_llm(llm_action, http_message) {
             return None;
         }
         let key = ActionLinkKey {
@@ -80,6 +80,59 @@ impl HttpMessageLinkProjector {
             attributes: BTreeMap::new(),
         })
     }
+    fn http_message_matches_llm(
+        &self,
+        llm_action: &SemanticAction,
+        http_message: &SemanticAction,
+    ) -> bool {
+        actions_share_payload_segment(llm_action, http_message)
+            || self.response_actions_share_stream(llm_action, http_message)
+    }
+
+    fn response_actions_share_stream(
+        &self,
+        llm_action: &SemanticAction,
+        http_message: &SemanticAction,
+    ) -> bool {
+        if !response_stream_candidate(llm_action, http_message) {
+            return false;
+        }
+        let Some(candidate_sequence) = http_payload_sequence(http_message) else {
+            return false;
+        };
+        let Some(response_sequence) = payload_sequence(llm_action) else {
+            return false;
+        };
+        if candidate_sequence > response_sequence {
+            return false;
+        }
+        if self.http_request_between(http_message, response_sequence) {
+            return false;
+        }
+        self.http_messages
+            .values()
+            .filter(|candidate| response_stream_candidate(llm_action, candidate))
+            .filter_map(|candidate| Some((http_payload_sequence(candidate)?, candidate)))
+            .filter(|(sequence, _)| *sequence <= response_sequence)
+            .filter(|(_, candidate)| !self.http_request_between(candidate, response_sequence))
+            .max_by(|left, right| {
+                (left.0, left.1.action_id.as_str()).cmp(&(right.0, right.1.action_id.as_str()))
+            })
+            .is_some_and(|(_, candidate)| candidate.action_id == http_message.action_id)
+    }
+
+    fn http_request_between(&self, http_response: &SemanticAction, response_sequence: u64) -> bool {
+        let Some(response_message_sequence) = http_payload_sequence(http_response) else {
+            return false;
+        };
+        self.http_messages.values().any(|candidate| {
+            candidate.attributes.get("direction").map(String::as_str) == Some("outbound")
+                && same_trace_process_stream(http_response, candidate)
+                && http_payload_sequence(candidate).is_some_and(|sequence| {
+                    response_message_sequence < sequence && sequence < response_sequence
+                })
+        })
+    }
 }
 
 fn http_message_can_link_to_llm(action: &SemanticAction) -> bool {
@@ -104,11 +157,6 @@ fn llm_http_link_role(
     }
 }
 
-fn http_message_matches_llm(llm_action: &SemanticAction, http_message: &SemanticAction) -> bool {
-    actions_share_payload_segment(llm_action, http_message)
-        || response_actions_share_stream(llm_action, http_message)
-}
-
 fn actions_share_payload_segment(
     llm_action: &SemanticAction,
     http_message: &SemanticAction,
@@ -124,10 +172,7 @@ fn actions_share_payload_segment(
     })
 }
 
-fn response_actions_share_stream(
-    llm_action: &SemanticAction,
-    http_message: &SemanticAction,
-) -> bool {
+fn response_stream_candidate(llm_action: &SemanticAction, http_message: &SemanticAction) -> bool {
     if llm_action.kind != SemanticActionKind::LlmResponse {
         return false;
     }
@@ -145,11 +190,47 @@ fn response_actions_share_stream(
     {
         return false;
     }
-    llm_action
-        .attributes
-        .get("http.response.status_code")
-        .zip(http_message.attributes.get("status_code"))
-        .is_none_or(|(left, right)| left == right)
+    if !http_stream_ids_match(llm_action, http_message) {
+        return false;
+    }
+    response_status_codes_are_compatible(llm_action, http_message)
+}
+
+fn http_stream_ids_match(llm_action: &SemanticAction, http_message: &SemanticAction) -> bool {
+    match (
+        llm_action.attributes.get("http.response.stream_id"),
+        http_message.attributes.get("stream_id"),
+    ) {
+        (Some(response_stream_id), Some(message_stream_id)) => {
+            response_stream_id == message_stream_id
+        }
+        (Some(_), None) => false,
+        (None, _) => true,
+    }
+}
+
+fn response_status_codes_are_compatible(
+    llm_action: &SemanticAction,
+    http_message: &SemanticAction,
+) -> bool {
+    match (
+        llm_action.attributes.get("http.response.status_code"),
+        http_message.attributes.get("status_code"),
+    ) {
+        (Some(left), Some(right)) => left == right,
+        (Some(_), None) => false,
+        (None, _) => true,
+    }
+}
+
+fn same_trace_process_stream(left: &SemanticAction, right: &SemanticAction) -> bool {
+    left.trace_id == right.trace_id
+        && left.process == right.process
+        && left
+            .attributes
+            .get("stream_key")
+            .zip(right.attributes.get("stream_key"))
+            .is_some_and(|(left, right)| left == right)
 }
 
 fn matching_payload_evidence(
@@ -172,4 +253,12 @@ fn matching_payload_evidence(
 
 fn http_payload_segment_id(action: &SemanticAction) -> Option<u64> {
     action.attributes.get("payload_segment_id")?.parse().ok()
+}
+
+fn http_payload_sequence(action: &SemanticAction) -> Option<u64> {
+    action.attributes.get("payload_sequence")?.parse().ok()
+}
+
+fn payload_sequence(action: &SemanticAction) -> Option<u64> {
+    action.attributes.get("payload.sequence")?.parse().ok()
 }

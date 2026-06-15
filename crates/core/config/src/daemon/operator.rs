@@ -11,12 +11,13 @@ use std::path::{Path, PathBuf};
 
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use model_core::ids::ProfileName;
+use storage_factory::StorageConfig;
 
 use super::values::ConfigValues;
 use super::{
     AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
-    EnforcementConfig, LiveOtelExportConfig, PayloadConfig, PayloadSocketConfig, PayloadTlsConfig,
-    ProcessSeccompConfig, ResourceMetricsConfig, SeccompNotifyConfig, SocketPermissions,
+    EnforcementConfig, PayloadConfig, PayloadSocketConfig, PayloadTlsConfig, ProcessSeccompConfig,
+    ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig, SocketPermissions,
     SseDataPolicy,
 };
 use crate::capture_profile::CaptureProfile;
@@ -24,7 +25,7 @@ use crate::export::ExportConfig;
 use crate::provider_rules::ProviderRuleSetConfig;
 
 pub const DEFAULT_OPERATOR_CONFIG_PATH: &str = "/etc/actrail/actraild.conf";
-pub const DEFAULT_STORAGE_BUSY_TIMEOUT_MS: u64 = 5000;
+pub const DEFAULT_CONTROL_PENDING_CONNECTION_MAX: u32 = 256;
 pub use template::OPERATOR_CONFIG_TEMPLATE;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -37,11 +38,11 @@ pub enum OperatorConfigInitStatus {
 pub struct OperatorConfig {
     pub socket_path: PathBuf,
     pub socket_permissions: SocketPermissions,
+    pub control_pending_connection_max: u32,
     pub pid_file: PathBuf,
-    pub storage_path: PathBuf,
-    pub storage_busy_timeout_ms: u64,
+    pub storage: StorageConfig,
     pub export_config: ExportConfig,
-    pub live_otel_export: LiveOtelExportConfig,
+    pub export_runtime: RuntimeExportConfig,
     pub log_path: PathBuf,
     pub diagnostic_log_level: DiagnosticLogLevel,
     pub capture_profile: CaptureProfile,
@@ -128,21 +129,22 @@ impl OperatorConfig {
             &capabilities,
         )?;
         let export_config = sections::export_config(&values, values.node("export"))?;
-        let live_otel_export = sections::live_otel_export_config(values.node("otel_live_export"))?;
+        let export_runtime = RuntimeExportConfig::parse(raw)?;
         let provider_rule_set = sections::provider_rule_set_config(values.node("provider"))?;
+        let storage = StorageConfig::parse(raw)?;
         Ok(Self {
             socket_path: PathBuf::from(values.required("socket_path")?),
             socket_permissions: SocketPermissions {
                 mode: values.required_octal("socket_mode_octal")?,
             },
-            pid_file: PathBuf::from(values.required("pid_file")?),
-            storage_path: PathBuf::from(values.required("storage_path")?),
-            storage_busy_timeout_ms: values.optional_positive_u64(
-                "storage_busy_timeout_ms",
-                DEFAULT_STORAGE_BUSY_TIMEOUT_MS,
+            control_pending_connection_max: values.optional_positive_u32(
+                "control_pending_connection_max",
+                DEFAULT_CONTROL_PENDING_CONNECTION_MAX,
             )?,
+            pid_file: PathBuf::from(values.required("pid_file")?),
+            storage,
             export_config,
-            live_otel_export,
+            export_runtime,
             log_path: PathBuf::from(values.required("log_path")?),
             diagnostic_log_level,
             capture_profile: CaptureProfile::new(profile_name, capabilities),

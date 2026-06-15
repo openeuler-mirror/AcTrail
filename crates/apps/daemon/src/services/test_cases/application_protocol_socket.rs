@@ -1,8 +1,6 @@
 use std::time::SystemTime;
 
-use config_core::daemon::{
-    ApplicationProtocolConfig, DEFAULT_STORAGE_BUSY_TIMEOUT_MS, DiagnosticLogLevel, SseDataPolicy,
-};
+use config_core::daemon::{ApplicationProtocolConfig, DiagnosticLogLevel, SseDataPolicy};
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use model_core::event::EventPayload;
 use model_core::ids::{ProfileName, TraceName};
@@ -12,8 +10,7 @@ use model_core::payload::{
 };
 use model_core::process::ProcessIdentity;
 use payload_event::RawPayloadSegment;
-use store_read_contract::events::EventReadStore;
-use store_read_contract::payloads::{PayloadReadStore, PayloadSegmentQuery};
+use storage_core::PayloadSegmentQuery;
 
 use crate::profiles::DaemonProfileRegistry;
 
@@ -27,8 +24,7 @@ fn socket_payload_gate_persists_http_and_drops_non_http_bytes() {
     let mut payload_config = super::super::payload_config(false);
     payload_config.socket.enabled = true;
     let mut wiring = super::super::super::build_runtime_wiring(
-        &storage_path,
-        DEFAULT_STORAGE_BUSY_TIMEOUT_MS,
+        &super::super::test_storage_config(storage_path.clone()),
         profiles,
         super::super::ebpf_config(false),
         payload_config,
@@ -51,7 +47,7 @@ fn socket_payload_gate_persists_http_and_drops_non_http_bytes() {
             http2_max_data_preview_bytes: super::super::TEST_HTTP2_PREVIEW_BYTES,
         },
         super::super::resource_metrics_disabled(),
-        super::super::live_otel_export_disabled(),
+        super::super::export_runtime_disabled(),
         super::super::enforcement_disabled(),
     )
     .unwrap();

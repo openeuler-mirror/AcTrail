@@ -99,7 +99,9 @@ docs/examples/02.llm-http-payload-capture/external-openai-compatible/http1-opera
 ```text
 socket_path = /tmp/actrail-llm-http-http1.sock
 pid_file = /tmp/actrail-llm-http-http1.pid
-storage_path = /tmp/actrail-llm-http-http1.sqlite
+storage_backend = sqlite
+storage_sqlite_path = /tmp/actrail-llm-http-http1.sqlite
+storage_sqlite_busy_timeout_ms = 5000
 web_listen_addr = 127.0.0.1:18080
 web_request_read_timeout_ms = 1000
 export_directory = /tmp/actrail-llm-http-http1-export
@@ -140,6 +142,9 @@ payload_stdio_enabled = true
 payload_stdio_capture_stdin = false
 payload_stdio_capture_stdout = true
 payload_stdio_capture_stderr = true
+payload_stdio_stdin_storage_mode = full
+payload_stdio_stdout_storage_mode = drop
+payload_stdio_stderr_storage_mode = metadata-only
 payload_stdio_max_segment_bytes = 4095
 payload_stdio_ring_buffer_bytes = 1048576
 payload_stdio_pending_operation_max_entries = 4096
@@ -187,11 +192,13 @@ resource_metrics_memory_alert_rss_kb = disabled
 | --- | --- |
 | `socket_path` | `actraild` 控制面 Unix Domain Socket；`actrailctl` 通过它 attach trace |
 | `pid_file` | `actraild start/stop/status/restart` 的进程状态依据 |
-| `storage_path` | AcTrail storage 路径；当前实现使用 SQLite，payload segments 会写入这里 |
+| `storage_backend` | Storage backend 实现；当前支持值为 `sqlite` |
+| `storage_sqlite_path` | AcTrail storage 路径；当 `storage_backend = sqlite` 时，payload segments 会写入这里 |
+| `storage_sqlite_busy_timeout_ms` | daemon 写 SQLite 时等待临时锁释放的最长时间 |
 | `web_listen_addr` | `actrailweb --config` 使用的只读 Web UI 监听地址；可用 `--addr` 和 `--port` 临时覆盖 |
 | `web_request_read_timeout_ms` | `actrailweb` 等待单个 HTTP connection 发出请求行的最长时间；示例值 `1000` 用于避免浏览器空闲预连接阻塞 UI |
 | `export_directory` | JSON export 默认目录；本例查看 payload 不需要 JSON export |
-| `otel_live_export_*` | 默认关闭的实时 OTEL JSONL span sink；需要实时消费 semantic action span 时显式开启 |
+| `[export]` / `[[export.routes]]` | 默认关闭的实时 `otel-jsonl` span sink；需要实时消费 semantic action span 时显式开启 |
 | `log_path` | `actraild start` 后台运行时 stdout/stderr 追加写入位置 |
 | `diagnostic_log_level` | 默认 `info`，避免逐 payload segment 打印调试日志；排查采集失败时临时改成 `debug`。`actraild start` 写入 `log_path`，`actraild ... run` 写入前台 stdout/stderr |
 

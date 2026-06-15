@@ -1,37 +1,37 @@
 //! OpenSSL/BoringSSL ABI hook handlers.
 
 use std::collections::BTreeSet;
-use std::ffi::{CString, c_void};
-use std::os::unix::ffi::OsStrExt;
+use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
+
+mod interpose;
 
 use tls_payload_core::PayloadDirection;
 
 use crate::runtime::config::{self, RuntimePlan};
 use crate::runtime::decision::{RuntimeAction, decide_payload};
 use crate::runtime::{hook, maps, output, rustls};
+use interpose::{
+    dynamic_openssl_capture_enabled, interposed_ssl_read, interposed_ssl_read_ex,
+    interposed_ssl_write, interposed_ssl_write_ex,
+};
 
 static SSL_WRITE_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
 static SSL_WRITE_EX_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
 static SSL_READ_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
 static SSL_READ_EX_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
-static SSL_WRITE_CONFIGURED: AtomicUsize = AtomicUsize::new(0);
-static SSL_WRITE_EX_CONFIGURED: AtomicUsize = AtomicUsize::new(0);
-static SSL_READ_CONFIGURED: AtomicUsize = AtomicUsize::new(0);
-static SSL_READ_EX_CONFIGURED: AtomicUsize = AtomicUsize::new(0);
-static SSL_WRITE_NEXT: AtomicUsize = AtomicUsize::new(0);
-static SSL_WRITE_EX_NEXT: AtomicUsize = AtomicUsize::new(0);
-static SSL_READ_NEXT: AtomicUsize = AtomicUsize::new(0);
-static SSL_READ_EX_NEXT: AtomicUsize = AtomicUsize::new(0);
 static INSTALL_STATE: OnceLock<Mutex<InstallState>> = OnceLock::new();
 
-type SslWriteFn = unsafe extern "C" fn(*mut c_void, *const c_void, libc::c_int) -> libc::c_int;
-type SslWriteExFn =
+pub(super) type SslWriteFn =
+    unsafe extern "C" fn(*mut c_void, *const c_void, libc::c_int) -> libc::c_int;
+pub(super) type SslWriteExFn =
     unsafe extern "C" fn(*mut c_void, *const c_void, usize, *mut usize) -> libc::c_int;
-type SslReadFn = unsafe extern "C" fn(*mut c_void, *mut c_void, libc::c_int) -> libc::c_int;
-type SslReadExFn = unsafe extern "C" fn(*mut c_void, *mut c_void, usize, *mut usize) -> libc::c_int;
+pub(super) type SslReadFn =
+    unsafe extern "C" fn(*mut c_void, *mut c_void, libc::c_int) -> libc::c_int;
+pub(super) type SslReadExFn =
+    unsafe extern "C" fn(*mut c_void, *mut c_void, usize, *mut usize) -> libc::c_int;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum HookInstallStatus {
@@ -51,24 +51,31 @@ pub(super) fn install_plan(plan: &RuntimePlan) -> Result<HookInstallStatus, Stri
     let binary = canonical(&plan.binary);
     let uses_ssl = plan_uses_ssl_symbols(plan);
     let uses_rustls = plan_uses_rustls_symbols(plan);
+    let installs_inline = should_install_inline_hooks(plan);
+    let uses_interpose = uses_openssl_interpose(plan);
     let mut state = INSTALL_STATE
         .get_or_init(|| Mutex::new(InstallState::default()))
         .lock()
         .map_err(|_| "hook install state mutex poisoned".to_string())?;
-    if state.installed_binaries.contains(&binary)
-        || (uses_ssl && state.ssl_binary.is_some())
+    if (!installs_inline && state.openssl_interpose_binary.as_ref() == Some(&binary))
+        || openssl_interpose_already_covers(&state, plan, &binary)
+        || (installs_inline && state.installed_binaries.contains(&binary))
+        || (installs_inline && uses_ssl && state.ssl_binary.is_some())
         || (uses_rustls && state.rustls_binary.is_some())
     {
         return Ok(HookInstallStatus::DuplicateSkipped);
     }
-    if should_install_inline_hooks(plan) {
+    if installs_inline {
         install_plan_points(plan)?;
     }
-    state.installed_binaries.insert(binary.clone());
+    if installs_inline {
+        state.installed_binaries.insert(binary.clone());
+    }
     if uses_ssl {
-        state.ssl_binary = Some(binary.clone());
-        if uses_openssl_interpose(plan) {
+        if uses_interpose {
             state.openssl_interpose_binary = Some(binary.clone());
+        } else {
+            state.ssl_binary = Some(binary.clone());
         }
     }
     if uses_rustls {
@@ -86,6 +93,19 @@ fn should_install_inline_hooks(plan: &RuntimePlan) -> bool {
 
 fn uses_openssl_interpose(plan: &RuntimePlan) -> bool {
     plan.provider == "openssl" && !plan.requires_inline_hooks()
+}
+
+fn openssl_interpose_already_covers(
+    state: &InstallState,
+    plan: &RuntimePlan,
+    binary: &Path,
+) -> bool {
+    plan.provider == "openssl"
+        && plan.requires_inline_hooks()
+        && state
+            .openssl_interpose_binary
+            .as_ref()
+            .is_some_and(|path| path == binary)
 }
 
 fn install_plan_points(plan: &RuntimePlan) -> Result<(), String> {
@@ -369,146 +389,11 @@ unsafe fn ssl_read_ex_with(
     result
 }
 
-fn dynamic_openssl_capture_enabled() -> bool {
-    super::retry_initialize_after_loader_event();
-    configured_openssl_binary().is_some()
-}
-
-unsafe fn interposed_ssl_write(capture: bool) -> SslWriteFn {
-    let address = interposed_symbol(
-        capture,
-        &SSL_WRITE_CONFIGURED,
-        &SSL_WRITE_NEXT,
-        b"SSL_write\0",
-    );
-    unsafe { std::mem::transmute(address) }
-}
-
-unsafe fn interposed_ssl_write_ex(capture: bool) -> SslWriteExFn {
-    let address = interposed_symbol(
-        capture,
-        &SSL_WRITE_EX_CONFIGURED,
-        &SSL_WRITE_EX_NEXT,
-        b"SSL_write_ex\0",
-    );
-    unsafe { std::mem::transmute(address) }
-}
-
-unsafe fn interposed_ssl_read(capture: bool) -> SslReadFn {
-    let address = interposed_symbol(capture, &SSL_READ_CONFIGURED, &SSL_READ_NEXT, b"SSL_read\0");
-    unsafe { std::mem::transmute(address) }
-}
-
-unsafe fn interposed_ssl_read_ex(capture: bool) -> SslReadExFn {
-    let address = interposed_symbol(
-        capture,
-        &SSL_READ_EX_CONFIGURED,
-        &SSL_READ_EX_NEXT,
-        b"SSL_read_ex\0",
-    );
-    unsafe { std::mem::transmute(address) }
-}
-
-fn interposed_symbol(
-    capture: bool,
-    configured_cache: &AtomicUsize,
-    next_cache: &AtomicUsize,
-    symbol: &'static [u8],
-) -> usize {
-    if capture {
-        configured_symbol(configured_cache, symbol)
-    } else {
-        next_symbol(next_cache, symbol)
-    }
-}
-
-fn configured_symbol(cache: &AtomicUsize, symbol: &'static [u8]) -> usize {
-    let cached = cache.load(Ordering::Acquire);
-    if cached != 0 {
-        return cached;
-    }
-    let Some(binary_path) = configured_openssl_binary() else {
-        abort_runtime("dynamic OpenSSL capture is active without a configured OpenSSL binary");
-    };
-    let binary = CString::new(binary_path.as_os_str().as_bytes()).unwrap_or_else(|_| {
-        abort_runtime(&format!(
-            "configured OpenSSL binary path contains an interior NUL: {}",
-            binary_path.display()
-        ))
-    });
-    let handle = unsafe { super::loader::open_existing(binary.as_ptr()) };
-    if handle.is_null() {
-        abort_runtime(&format!(
-            "configured OpenSSL binary is not loaded: {}",
-            binary_path.display()
-        ));
-    }
-    let address = unsafe { libc::dlsym(handle, symbol.as_ptr().cast()) } as usize;
-    if address == 0 {
-        abort_runtime(&format!(
-            "configured OpenSSL binary {} does not export {}",
-            binary_path.display(),
-            symbol_name(symbol)
-        ));
-    }
-    cache.store(address, Ordering::Release);
-    address
-}
-
-fn next_symbol(cache: &AtomicUsize, symbol: &'static [u8]) -> usize {
-    let cached = cache.load(Ordering::Acquire);
-    if cached != 0 {
-        return cached;
-    }
-    let address = unsafe { libc::dlsym(libc::RTLD_NEXT, symbol.as_ptr().cast()) } as usize;
-    if address == 0 {
-        if let Some(address) = loaded_openssl_symbol(symbol) {
-            cache.store(address, Ordering::Release);
-            return address;
-        }
-        abort_runtime(&format!(
-            "dynamic OpenSSL pass-through cannot resolve {}",
-            symbol_name(symbol)
-        ));
-    }
-    cache.store(address, Ordering::Release);
-    address
-}
-
 fn configured_openssl_binary() -> Option<PathBuf> {
     INSTALL_STATE
         .get()
         .and_then(|state| state.lock().ok())
         .and_then(|state| state.openssl_interpose_binary.clone())
-}
-
-fn loaded_openssl_symbol(symbol: &'static [u8]) -> Option<usize> {
-    for path in maps::executable_mapped_files().ok()? {
-        if !is_openssl_library(&path) {
-            continue;
-        }
-        let path = CString::new(path.as_os_str().as_bytes()).ok()?;
-        let handle = unsafe { super::loader::open_existing(path.as_ptr()) };
-        if handle.is_null() {
-            continue;
-        }
-        let address = unsafe { libc::dlsym(handle, symbol.as_ptr().cast()) } as usize;
-        if address != 0 {
-            return Some(address);
-        }
-    }
-    None
-}
-
-fn is_openssl_library(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with("libssl") && name.contains(".so"))
-}
-
-fn symbol_name(symbol: &'static [u8]) -> &'static str {
-    let raw = symbol.strip_suffix(b"\0").unwrap_or(symbol);
-    std::str::from_utf8(raw).unwrap_or("<invalid>")
 }
 
 fn inbound_rewrite(symbol: &str, stream_key: usize, buffer: *mut u8, length: usize) {

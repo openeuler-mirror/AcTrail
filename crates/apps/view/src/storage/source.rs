@@ -1,80 +1,48 @@
 //! Storage access for viewer commands.
 
-use std::path::{Path, PathBuf};
-
 use config_core::daemon::OperatorConfig;
 use model_core::ids::TraceId;
 use model_core::trace::TraceRecord;
-use semantic_action::{SemanticAction, SemanticActionLink, SemanticActionReadStore};
-use sqlite_storage::SqliteStorage;
-use store_read_contract::filters::TraceFilter;
-use store_read_contract::payloads::{PayloadReadStore, PayloadSegmentQuery};
-use store_read_contract::traces::TraceReadStore;
-use store_snapshot_contract::lease::SnapshotLeaseStore;
-use store_snapshot_contract::view::{SnapshotStore, SnapshotView};
+use semantic_action::{SemanticAction, SemanticActionLink};
+use storage_core::{
+    PayloadSegmentQuery, SnapshotView, StorageBackend, StorageOpenMode, TraceFilter,
+};
+use storage_factory::{StorageConfig, open_storage_backend};
 
 use crate::command::ViewInvocation;
 
-pub(super) fn storage_path(invocation: &ViewInvocation) -> Result<PathBuf, String> {
+pub(super) fn storage_config(invocation: &ViewInvocation) -> Result<StorageConfig, String> {
     if invocation.storage_path.is_some() && invocation.storage_config_path.is_some() {
         return Err("--storage-path cannot be combined with --storage-config".to_string());
     }
     if let Some(path) = &invocation.storage_path {
-        return Ok(path.clone());
+        return Ok(StorageConfig::sqlite_path(path));
     }
     if let Some(path) = &invocation.storage_config_path {
-        return storage_path_from_config(path);
+        return OperatorConfig::load(path).map(|config| config.storage);
     }
-    OperatorConfig::load(&invocation.config_path).map(|config| config.storage_path)
+    OperatorConfig::load(&invocation.config_path).map(|config| config.storage)
 }
 
-fn storage_path_from_config(path: &Path) -> Result<PathBuf, String> {
-    let raw = std::fs::read_to_string(path)
-        .map_err(|error| format!("read {}: {error}", path.display()))?;
-    for (line_index, line) in raw.lines().enumerate() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        let (key, value) = trimmed
-            .split_once('=')
-            .ok_or_else(|| format!("invalid config line {}", line_index + 1))?;
-        if key.trim() == "storage_path" {
-            return Ok(PathBuf::from(unquote(value.trim())?));
-        }
+pub(super) fn open_storage(config: &StorageConfig) -> Result<Box<dyn StorageBackend>, String> {
+    if !config.path().exists() {
+        return Err(format!(
+            "storage path does not exist: {}",
+            config.path().display()
+        ));
     }
-    Err(format!(
-        "missing config key storage_path in {}",
-        path.display()
-    ))
+    open_storage_backend(config, StorageOpenMode::ReadOnly)
+        .map_err(|error| format!("open storage {}: {}", error.stage, error.message))
 }
 
-fn unquote(value: &str) -> Result<String, String> {
-    if value.starts_with('"') || value.ends_with('"') {
-        if !(value.starts_with('"') && value.ends_with('"') && value.len() >= 2) {
-            return Err(format!("invalid quoted value {value}"));
-        }
-        return Ok(value[1..value.len() - 1].to_string());
-    }
-    Ok(value.to_string())
-}
-
-pub(super) fn open_storage(path: &PathBuf) -> Result<SqliteStorage, String> {
-    if !path.exists() {
-        return Err(format!("storage path does not exist: {}", path.display()));
-    }
-    SqliteStorage::open_read_only(path)
-        .map_err(|error| format!("open storage {}: {error}", path.display()))
-}
-
-pub(super) fn list_traces(storage: &SqliteStorage) -> Result<Vec<TraceRecord>, String> {
+pub(super) fn list_traces(storage: &dyn StorageBackend) -> Result<Vec<TraceRecord>, String> {
     storage
         .list_traces(&TraceFilter::default())
         .map_err(|error| format!("list traces failed: {}: {}", error.stage, error.message))
 }
 
 pub(super) fn list_payload_segments(
-    storage: &SqliteStorage,
+    storage: &dyn StorageBackend,
     trace_id: model_core::ids::TraceId,
     query: PayloadSegmentQuery,
 ) -> Result<Vec<model_core::payload::PayloadSegment>, String> {
@@ -84,7 +52,7 @@ pub(super) fn list_payload_segments(
 }
 
 pub(super) fn list_semantic_actions(
-    storage: &SqliteStorage,
+    storage: &dyn StorageBackend,
     trace_id: TraceId,
 ) -> Result<Vec<SemanticAction>, String> {
     let mut actions = storage
@@ -99,7 +67,7 @@ pub(super) fn list_semantic_actions(
 }
 
 pub(super) fn list_semantic_action_links(
-    storage: &SqliteStorage,
+    storage: &dyn StorageBackend,
     trace_id: TraceId,
 ) -> Result<Vec<SemanticActionLink>, String> {
     storage
@@ -108,7 +76,7 @@ pub(super) fn list_semantic_action_links(
 }
 
 pub(super) fn read_snapshot(
-    storage: &mut SqliteStorage,
+    storage: &mut dyn StorageBackend,
     requested: Option<TraceId>,
 ) -> Result<SnapshotView, String> {
     let trace_id = resolve_trace_id(storage, requested)?;
@@ -138,7 +106,7 @@ pub(super) fn read_snapshot(
 }
 
 pub(super) fn resolve_trace_id(
-    storage: &SqliteStorage,
+    storage: &dyn StorageBackend,
     requested: Option<TraceId>,
 ) -> Result<TraceId, String> {
     if let Some(trace_id) = requested {

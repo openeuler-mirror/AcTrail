@@ -56,6 +56,13 @@ def run_loaded_xiaoo_case(env, result: CaseResult, module, configured: str | Non
     )
     actraild, actrailctl, actrailviewer = require_actrail_binaries(result, module, env.bin_dir)
     actrailweb = require_actrailweb_binary(result, module, env.bin_dir)
+    tls_probe_point_finder = run_step(
+        result,
+        "tls probe finder binary",
+        lambda: module.require_binary(env.bin_dir, "tls-probe-point-finder"),
+        lambda path: expected_found_detail("tls-probe-point-finder release binary exists", [f"path={path}"]),
+        "xiaoO rustls capture uses finder fast before launch",
+    )
     xiaoo_binary = run_step(
         result,
         "xiaoO selected binary",
@@ -66,12 +73,16 @@ def run_loaded_xiaoo_case(env, result: CaseResult, module, configured: str | Non
     tls_runtime = run_step(
         result,
         "xiaoO TLS runtime",
-        lambda: module.resolve_optional_xiaoo_tls_runtime(xiaoo_binary, workload),
+        lambda: module.resolve_xiaoo_tls_runtime(
+            xiaoo_binary,
+            workload,
+            tls_probe_point_finder,
+        ),
         lambda tls: expected_found_detail(
             "TLS runtime discovery chooses the capture source",
             [xiaoo_tls_detail(tls)],
         ),
-        "rustls symbol discovery decides whether HTTPS payloads can be decoded as plaintext",
+        "finder fast must resolve rustls plaintext hooks before HTTPS payload capture starts",
     )
     resolved_config = None
     run_step(

@@ -1,0 +1,9 @@
+[package]
+name = "storage_factory"
+version.workspace = true
+edition = "2024"
+license = "MulanPSL-2.0"
+
+[dependencies]
+sqlite_storage = { path = "../adapters/sqlite" }
+storage_core = { path = "../core" }
