@@ -38,10 +38,38 @@ fn default_operator_config_is_full_monitor_collection() {
     );
     assert_eq!(
         config.export_runtime.enabled_output_files()[0].path,
-        std::path::PathBuf::from("/tmp/actrail-live-spans.otlp.jsonl")
+        std::path::PathBuf::from("/var/lib/actrail/export/live-spans.otlp.jsonl")
     );
     assert_eq!(config.diagnostic_log_level, DiagnosticLogLevel::Info);
     assert_eq!(config.storage.backend(), StorageBackendKind::Sqlite);
+    assert_eq!(
+        config.socket_path,
+        std::path::PathBuf::from("/run/actrail/control.sock")
+    );
+    assert_eq!(
+        config.pid_file,
+        std::path::PathBuf::from("/run/actrail/actraild.pid")
+    );
+    assert_eq!(
+        config.storage.path(),
+        std::path::Path::new("/var/lib/actrail/actrail.sqlite")
+    );
+    assert_eq!(
+        config.export_config.output_directory,
+        std::path::PathBuf::from("/var/lib/actrail/export")
+    );
+    assert_eq!(
+        config.log_path,
+        std::path::PathBuf::from("/var/log/actrail/actraild.log")
+    );
+    assert_eq!(
+        config.payload_config.tls.sync_event_socket_path,
+        std::path::PathBuf::from("/run/actrail/tls-sync.sock")
+    );
+    assert_eq!(
+        config.enforcement.rules_path,
+        std::path::PathBuf::from("/etc/actrail/enforcement-rules.conf")
+    );
     assert_eq!(
         config.control_pending_connection_max,
         DEFAULT_CONTROL_PENDING_CONNECTION_MAX
@@ -168,7 +196,7 @@ fn export_runtime_config_parses_route_sections() {
     let raw = OPERATOR_CONFIG_TEMPLATE
         .replace("[export]\nenabled = true", "[export]\nenabled = false")
         .replace(
-            "path = \"/tmp/actrail-live-spans.otlp.jsonl\"",
+            "path = \"/var/lib/actrail/export/live-spans.otlp.jsonl\"",
             "path = \"/tmp/actrail-test-live.otlp.jsonl\"",
         )
         .replace("overwrite_enabled = true", "overwrite_enabled = false")
@@ -349,7 +377,7 @@ fn initialize_creates_default_operator_config() {
     let path = temp_config_path("create");
     let _ = std::fs::remove_file(&path);
 
-    let status = OperatorConfig::initialize(&path).unwrap();
+    let status = OperatorConfig::initialize(&path, false).unwrap();
 
     assert_eq!(status, OperatorConfigInitStatus::Created);
     let config = OperatorConfig::load(&path).unwrap();
@@ -362,7 +390,7 @@ fn initialize_validates_existing_operator_config() {
     let path = temp_config_path("existing-valid");
     std::fs::write(&path, OPERATOR_CONFIG_TEMPLATE).unwrap();
 
-    let status = OperatorConfig::initialize(&path).unwrap();
+    let status = OperatorConfig::initialize(&path, false).unwrap();
 
     assert_eq!(status, OperatorConfigInitStatus::ExistingValid);
     std::fs::remove_file(path).unwrap();
@@ -373,12 +401,11 @@ fn initialize_rejects_existing_invalid_operator_config() {
     let path = temp_config_path("existing-invalid");
     std::fs::write(&path, "profile_name = broken\n").unwrap();
 
-    let error = OperatorConfig::initialize(&path).unwrap_err();
+    let error = OperatorConfig::initialize(&path, false).unwrap_err();
 
     assert!(error.contains("validate config"));
     std::fs::remove_file(path).unwrap();
 }
-
 fn temp_config_path(name: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!(
         "actrail-operator-config-{name}-{}.conf",

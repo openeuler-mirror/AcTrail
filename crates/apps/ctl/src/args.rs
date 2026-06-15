@@ -25,6 +25,7 @@ pub struct CtlInvocation {
 pub enum CtlCommand {
     Init {
         config_path: PathBuf,
+        force: bool,
     },
     TrackAdd {
         root_pid: u32,
@@ -148,9 +149,10 @@ impl CtlCommandArgs {
         init_path: Option<PathBuf>,
     ) -> Result<CtlCommand, String> {
         match self {
-            Self::Init(_) => Ok(CtlCommand::Init {
+            Self::Init(args) => Ok(CtlCommand::Init {
                 config_path: init_path
                     .ok_or_else(|| "missing operator config path for init".to_string())?,
+                force: args.force,
             }),
             Self::TrackAdd(args) => {
                 let root_pid = args.root_pid;
@@ -224,6 +226,9 @@ impl CtlCommandArgs {
 struct InitArgs {
     #[arg(long = "output", value_name = "PATH")]
     output_path: Option<PathBuf>,
+
+    #[arg(short = 'f', long = "force")]
+    force: bool,
 }
 
 fn launch_agent_commands(config: Option<&OperatorConfig>) -> Vec<String> {
@@ -429,8 +434,10 @@ mod tests {
         assert_eq!(invocation.socket_path, None);
         assert!(matches!(
             invocation.command,
-            CtlCommand::Init { ref config_path }
-                if config_path == &PathBuf::from(DEFAULT_OPERATOR_CONFIG_PATH)
+            CtlCommand::Init {
+                ref config_path,
+                force: false,
+            } if config_path == &PathBuf::from(DEFAULT_OPERATOR_CONFIG_PATH)
         ));
     }
 
@@ -446,8 +453,10 @@ mod tests {
         assert_eq!(invocation.socket_path, None);
         assert!(matches!(
             invocation.command,
-            CtlCommand::Init { ref config_path }
-                if config_path == &PathBuf::from("/tmp/actrail-ctl-test.conf")
+            CtlCommand::Init {
+                ref config_path,
+                force: false,
+            } if config_path == &PathBuf::from("/tmp/actrail-ctl-test.conf")
         ));
     }
 }

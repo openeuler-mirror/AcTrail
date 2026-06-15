@@ -21,6 +21,7 @@ pub enum DaemonProcessState {
 
 pub fn start_daemon(config_path: &Path, config: &OperatorConfig) -> Result<(), String> {
     ensure_start_preconditions(config)?;
+    create_parent_directory(&config.log_path, "log directory")?;
     let log = OpenOptions::new()
         .create(true)
         .append(true)
@@ -99,13 +100,7 @@ pub fn write_pid_file(path: &Path, pid: u32) -> Result<(), String> {
     if pid == u32::default() {
         return Err("current process id must not be zero".to_string());
     }
-    if let Some(parent) = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("create pid directory {}: {error}", parent.display()))?;
-    }
+    create_parent_directory(path, "pid directory")?;
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -120,6 +115,17 @@ pub fn remove_runtime_file(path: &Path) -> Result<(), String> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(format!("remove {}: {error}", path.display())),
     }
+}
+
+fn create_parent_directory(path: &Path, label: &str) -> Result<(), String> {
+    let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    else {
+        return Ok(());
+    };
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("create {label} {}: {error}", parent.display()))
 }
 
 fn ensure_start_preconditions(config: &OperatorConfig) -> Result<(), String> {
