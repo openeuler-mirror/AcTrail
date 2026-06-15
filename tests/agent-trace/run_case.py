@@ -18,6 +18,7 @@ CASES = {
     "langgraph-openai": "langgraph-openai/run_e2e.py",
     "go-net-http": "go-net-http/run_e2e.py",
     "java-netty-tcnative": "java-netty-tcnative/run_e2e.py",
+    "dynamic-tls": "dynamic-tls/run_e2e.py",
 }
 
 

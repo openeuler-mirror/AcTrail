@@ -202,9 +202,9 @@ mod tests {
         PayloadTlsConfig {
             enabled: true,
             capture_backend: PayloadTlsCaptureBackend::TlsSync,
-            source: PayloadTlsSource::SharedLibrary,
-            resolver: PayloadTlsResolver::OpensslSymbols,
-            library: PayloadTlsLibrary::Openssl,
+            source: PayloadTlsSource::Auto,
+            resolver: PayloadTlsResolver::Auto,
+            library: PayloadTlsLibrary::Auto,
             library_path: PayloadTlsLibraryPath::Auto,
             binary_path: DisabledOrPath::Disabled,
             pattern_path: DisabledOrPath::Disabled,

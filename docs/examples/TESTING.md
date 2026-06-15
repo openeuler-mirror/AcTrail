@@ -60,7 +60,7 @@ The runner prints colorized `PASS`/`FAIL`/`SKIP` rows and writes:
 
 Default mode is dependency-aware: missing optional agent tools or external API keys are `SKIP`; runnable case failures are `FAIL`. Use `--strict` when skipped cases should fail the run. Use `--suite agent`, `--suite payload`, `--suite enforcement`, or `--case <case-id>` to isolate a subset.
 
-The runner auto-discovers common agent prerequisites before skipping: Claude Code, opencode, xiaoO, and Python/LangGraph dependencies. A skipped row means the host is missing a required external tool, credential, or supported TLS/plain-HTTP payload path; read the skip detail before treating it as a product failure. `CLAUDE_TLS_BINARY`, `OPENCODE_BIN_PATH`, `XIAOO_BINARY`, and `LANGGRAPH_PYTHON` remain explicit overrides; invalid override values fail fast.
+The runner auto-discovers common agent prerequisites before skipping: Claude Code, opencode, xiaoO, and Python/LangGraph dependencies. A skipped row means the host is missing a required external tool, credential, or supported TLS/plain-HTTP payload path; read the skip detail before treating it as a product failure. `CLAUDE_TLS_BINARY`, `XIAOO_BINARY`, and `LANGGRAPH_PYTHON` remain explicit overrides; invalid override values fail fast.
 
 ## Example 10: Java LangChain4j Agent
 

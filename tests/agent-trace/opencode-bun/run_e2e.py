@@ -5,17 +5,14 @@ from __future__ import annotations
 
 import argparse
 import os
-import platform
 import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-ELF_MAGIC = b"\x7fELF"
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "runtime_tls"))
-from boringssl import prepare_bun_static_boringssl_map  # noqa: E402
+from fast_plan import resolve_fast_probe_plan  # noqa: E402
 from common import (  # noqa: E402
     clean_configured_paths,
     emit_llm_otel_evidence,
@@ -41,9 +38,8 @@ from common import (  # noqa: E402
 
 @dataclass(frozen=True)
 class OpencodeTlsRuntime:
-    binary: Path
-    resolver: str
-    pattern_path: str
+    provider: str
+    detail: str
 
 
 def main() -> int:
@@ -57,12 +53,12 @@ def main() -> int:
     actrailctl = require_binary(bin_dir, "actrailctl")
     actrailviewer = require_binary(bin_dir, "actrailviewer")
     actrailweb = require_binary(bin_dir, "actrailweb")
+    tls_probe_point_finder = require_binary(bin_dir, "tls-probe-point-finder")
     opencode_entry = require_opencode_entry()
-    configured_symbol_map = resolve_path(required(workload, "symbol_map_path"), repo)
     tls_runtime = resolve_optional_opencode_tls_runtime(
         opencode_entry,
-        configured_symbol_map,
         workload,
+        tls_probe_point_finder,
     )
     resolved_config = Path(required(workload, "resolved_config_path"))
     render_config(
@@ -164,61 +160,33 @@ def require_opencode_entry() -> Path:
 
 def resolve_optional_opencode_tls_runtime(
     entry: Path,
-    configured_symbol_map: Path,
     workload: dict[str, str],
+    tls_probe_point_finder: Path,
 ) -> OpencodeTlsRuntime | None:
-    env_path = os.environ.get("OPENCODE_BIN_PATH")
-    if env_path:
-        binary = require_executable(Path(env_path))
-    elif is_elf_binary(entry):
-        binary = entry
-    else:
-        sibling = entry.parent / ".opencode"
-        if not sibling.exists():
-            print("opencode_tls_runtime=disabled no sibling .opencode Bun executable")
-            return None
-        binary = require_executable(sibling)
-    if platform.machine() in {"aarch64", "x86_64"}:
-        print(f"opencode_tls_runtime={binary} using built-in static BoringSSL detector")
-        return OpencodeTlsRuntime(
-            binary=binary,
-            resolver="boringssl-static",
-            pattern_path="disabled",
-        )
     try:
-        symbol_map, detail = prepare_bun_static_boringssl_map(
-            binary,
-            configured_symbol_map,
-            workload,
+        plan = resolve_fast_probe_plan(
+            entry,
+            tls_probe_point_finder,
+            required(workload, "tls_probe_provider"),
+            required(workload, "tls_probe_source"),
+            required(workload, "tls_probe_match_limit"),
         )
     except Exception as error:
-        if env_path:
-            raise
         print(f"opencode_tls_runtime=disabled {error}")
         return None
-    print(f"opencode_tls_map={symbol_map} {detail}")
-    return OpencodeTlsRuntime(
-        binary=binary,
-        resolver="bun-static-boringssl",
-        pattern_path=str(symbol_map),
-    )
+    print(f"opencode_tls_runtime=auto {plan.detail}")
+    return OpencodeTlsRuntime(provider=plan.provider, detail=plan.detail)
 
 
 def opencode_config_replacements(tls_runtime: OpencodeTlsRuntime | None) -> dict[str, str]:
     if tls_runtime is None:
         return {
             "__OPENCODE_TLS_ENABLED__": "false",
-            "__OPENCODE_TLS_RESOLVER__": "bun-static-boringssl",
-            "__OPENCODE_TLS_BINARY__": "disabled",
-            "__OPENCODE_BORINGSSL_SYMBOL_MAP__": "disabled",
             "__OPENCODE_SECCOMP_NOTIFY_ENABLED__": "true",
             "__OPENCODE_TLS_REQUIRED_CAPABILITY__": "# tls-plaintext-payload disabled",
         }
     return {
         "__OPENCODE_TLS_ENABLED__": "true",
-        "__OPENCODE_TLS_RESOLVER__": tls_runtime.resolver,
-        "__OPENCODE_TLS_BINARY__": str(tls_runtime.binary),
-        "__OPENCODE_BORINGSSL_SYMBOL_MAP__": tls_runtime.pattern_path,
         "__OPENCODE_SECCOMP_NOTIFY_ENABLED__": "true",
         "__OPENCODE_TLS_REQUIRED_CAPABILITY__": "required_capability = tls-plaintext-payload",
     }
@@ -227,7 +195,7 @@ def opencode_config_replacements(tls_runtime: OpencodeTlsRuntime | None) -> dict
 def accepted_payload_sources(tls_runtime: OpencodeTlsRuntime | None) -> list[tuple[str, str]]:
     sources = [("Syscall", "socket-syscall")]
     if tls_runtime is not None:
-        sources.insert(0, ("TlsUserSpace", "boringssl"))
+        sources.insert(0, ("TlsUserSpace", tls_runtime.provider))
     return sources
 
 
@@ -237,7 +205,17 @@ def accepted_payload_fragments(tls_runtime: OpencodeTlsRuntime | None) -> list[l
         for source, library in accepted_payload_sources(tls_runtime)
     ]
     if tls_runtime is not None:
-        fragments.insert(0, ["TlsUserSpace", "boringssl", "outbound", "inbound", "Complete", "success"])
+        fragments.insert(
+            0,
+            [
+                "TlsUserSpace",
+                tls_runtime.provider,
+                "outbound",
+                "inbound",
+                "Complete",
+                "success",
+            ],
+        )
     return fragments
 
 
@@ -246,7 +224,7 @@ def require_tls_response_payloads(payloads: str, tls_runtime: OpencodeTlsRuntime
         return 0
     return require_complete_payload_rows_any(
         payloads,
-        [("TlsUserSpace", "boringssl")],
+        [("TlsUserSpace", tls_runtime.provider)],
         direction="inbound",
     )
 
@@ -255,20 +233,6 @@ def require_executable(path: Path) -> Path:
     if not path.exists() or not os.access(path, os.X_OK):
         raise RuntimeError(f"not an executable: {path}")
     return path.resolve()
-
-
-def is_elf_binary(path: Path) -> bool:
-    try:
-        with path.open("rb") as handle:
-            return handle.read(len(ELF_MAGIC)) == ELF_MAGIC
-    except OSError:
-        return False
-
-
-def resolve_path(raw: str, repo: Path) -> Path:
-    path = Path(raw)
-    return path if path.is_absolute() else repo / path
-
 
 if __name__ == "__main__":
     try:

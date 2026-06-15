@@ -120,9 +120,9 @@ file_path_capture_enabled = false
 
 payload_tls_enabled = true
 payload_tls_capture_backend = tls-sync
-payload_tls_source = shared-library
-payload_tls_resolver = openssl-symbols
-payload_tls_library = openssl
+payload_tls_source = auto
+payload_tls_resolver = auto
+payload_tls_library = auto
 payload_tls_library_path = auto
 payload_tls_binary_path = disabled
 payload_tls_pattern_path = disabled
@@ -212,12 +212,13 @@ TLS payload 相关配置含义：
 | `required_capability = socket-plaintext-payload` | 同时启用 socket syscall payload 侧证据；HTTPS 场景下这通常是代理 CONNECT 或 TLS 密文，不替代 TLS plaintext |
 | `required_capability = stdio-chunk` | 同时记录 curl stdout/stderr，证明 provider 请求真实返回了响应 |
 | `required_capability = net-application-plaintext-http` | 要求 daemon 从 TLS plaintext payload 派生 HTTP/1.x semantic events |
-| `payload_tls_enabled` | 启用 TLS uprobe/uretprobe payload capture |
+| `payload_tls_enabled` | 启用 TLS plaintext payload capture |
 | `payload_tls_capture_backend` | 固定为 `tls-sync`；TLS plaintext 由 preload runtime 在 TLS 明文边界同步上报 |
-| `payload_tls_source` | 本例使用 `shared-library`，即动态 OpenSSL libssl |
-| `payload_tls_resolver` | 本例使用 `openssl-symbols`，按 `SSL_read`/`SSL_write` 等符号 attach |
-| `payload_tls_library_path` | `auto` 表示通过 `ldconfig -p` 查找 `libssl.so`；找不到会 fail-fast |
-| `payload_tls_binary_path` / `payload_tls_pattern_path` | 本例不 attach executable，固定写 `disabled` |
+| `payload_tls_source` | 本例使用 `auto`；`actrailctl launch` 在 exec 前解析目标进程实际 TLS plan |
+| `payload_tls_resolver` | 本例使用 `auto`；runtime 支持 OpenSSL/BoringSSL/rustls/Go 等已实现 provider 的自动 plan |
+| `payload_tls_library` | 本例使用 `auto`；不手工限定 OpenSSL |
+| `payload_tls_library_path` | `auto` 表示不强制候选库路径；如需固定一个动态 TLS 库，可显式配置绝对路径 |
+| `payload_tls_binary_path` / `payload_tls_pattern_path` | `tls-sync` 自动 plan 不从配置读取目标 binary 或 symbol map，固定写 `disabled` |
 | `payload_tls_max_segment_bytes` | 非 sync TLS 后端的单个 payload segment 最大复制字节数；`tls-sync` 下保留该 key 以保持配置面完整 |
 | `payload_tls_max_operation_bytes` | 单次 TLS plaintext operation 最大保留字节数；LLM 请求超过该值会显示截断 |
 | `payload_tls_seccomp_syscall` / `seccomp_notify_reserved_listener_fd` | 旧 TLS seccomp 后端和 socket large-payload fallback 的 seccomp 配置；`tls-sync` 不依赖这些 syscall 捕获 TLS plaintext |
@@ -397,7 +398,7 @@ export DEEPSEEK_API_KEY='<your-deepseek-api-key>'
 
 ### `payload_tls_library_path`
 
-启用 `payload_tls_enabled = true` 且 `payload_tls_source = shared-library` 后，`auto` 会通过 `ldconfig -p` 查找 `libssl.so`。如果当前系统没有动态链接的 OpenSSL libssl，应显式配置：
+`tls-sync` 自动 plan 通常保持 `payload_tls_library_path = auto`。如果需要限制动态 TLS 库候选，可以显式配置绝对路径：
 
 ```text
 payload_tls_library_path = /path/to/libssl.so

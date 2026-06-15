@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+use crate::runtime::tls::dynamic::binding::resolver;
 use crate::runtime::{config, maps, output, ssl};
 
 type DlopenFn = unsafe extern "C" fn(*const libc::c_char, libc::c_int) -> *mut c_void;
@@ -58,6 +59,15 @@ fn scan_library_once(path: &Path, reason: &str) -> Result<(), String> {
                 plan.target.display(),
                 plan.binary.display()
             ));
+            if ssl::dynamic_binding_covers_plan(&plan) {
+                ssl::register_dynamic_binding_plan(&plan)?;
+                target_event(format!(
+                    "sync_dynamic: event=dynamic_binding_registered provider={} binary={}\n",
+                    plan.provider,
+                    plan.binary.display()
+                ));
+                return Ok(());
+            }
             match ssl::install_plan(&plan) {
                 Ok(ssl::HookInstallStatus::Installed) => {
                     target_event(format!(
@@ -255,7 +265,10 @@ fn original_symbol(cache: &AtomicUsize, symbol: &[u8]) -> Option<usize> {
     if cached != 0 {
         return Some(cached);
     }
-    let address = unsafe { libc::dlsym(libc::RTLD_NEXT, symbol.as_ptr().cast()) } as usize;
+    let name = symbol
+        .strip_suffix(b"\0")
+        .and_then(|symbol| std::str::from_utf8(symbol).ok())?;
+    let address = resolver::libc_symbol(name)?;
     if address == 0 {
         return None;
     }

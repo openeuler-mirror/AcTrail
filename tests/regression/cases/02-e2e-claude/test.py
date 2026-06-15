@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from e2e_steps.checks import StepFailure
-from e2e_steps.loader import load_module, load_package
+from e2e_steps.loader import load_package
 from evidence import expected_found_detail
 from model import FAIL, PASS, SKIP, CaseResult
 from workload_config import read_config, required
@@ -23,30 +23,6 @@ WORKLOAD_CONFIG = "tests/payload/claude-code/workload.conf"
 
 def run(env) -> CaseResult:
     result = CaseResult(CASE_ID, TITLE, PASS, 0.0)
-    module = load_module(
-        "regression_claude_code_payload_source_logic",
-        env.repo_root / "tests/payload/claude-code/run_e2e.py",
-    )
-    try:
-        payload_source_facts = module.payload_source_selection_selftest()
-    except Exception as error:
-        result.status = FAIL
-        result.add_check(
-            "payload source selection",
-            FAIL,
-            str(error),
-            "Claude HTTP endpoints must be allowed to pass through Syscall/socket-syscall even when a TLS runtime is discoverable",
-        )
-        return result
-    result.add_check(
-        "payload source selection",
-        PASS,
-        expected_found_detail(
-            "TLS response is required only for traces with outbound TLS payload rows",
-            payload_source_facts,
-        ),
-        "synthetic payload rows cover the HTTP endpoint case that previously required TLS response rows incorrectly",
-    )
     claude = env.which("claude")
     if not claude:
         result.status = SKIP

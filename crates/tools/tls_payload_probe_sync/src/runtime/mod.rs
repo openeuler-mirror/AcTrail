@@ -8,6 +8,7 @@ mod maps;
 mod output;
 mod rustls;
 mod ssl;
+mod tls;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -44,13 +45,32 @@ fn initialize_once() -> Result<(), String> {
     };
     let initial_plan = bootstrap.initial_plan;
     config::set(bootstrap.config)?;
+    register_exit_flush()?;
+    if tls::dynamic::binding::is_audit_namespace() {
+        return Ok(());
+    }
     if let Some(plan) = initial_plan {
         ssl::install_plan(&plan)?;
     }
     Ok(())
 }
 
-fn retry_initialize_after_loader_event() {
+fn register_exit_flush() -> Result<(), String> {
+    let result = unsafe { libc::atexit(flush_sync_events) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err("register sync event flush hook failed".to_string())
+    }
+}
+
+extern "C" fn flush_sync_events() {
+    if let Some(config) = config::get() {
+        let _ = config.close_event_client();
+    }
+}
+
+pub(in crate::runtime) fn retry_initialize_after_loader_event() {
     if config::get().is_some() {
         return;
     }
@@ -74,6 +94,7 @@ mod exec_tests {
                 "LD_PRELOAD",
                 "/opt/actrail/libsync.so:/usr/lib/libcustom.so",
             ),
+            EnvEntry::new("LD_AUDIT", "/opt/actrail/libsync.so"),
             EnvEntry::new(
                 "JAVA_TOOL_OPTIONS",
                 "-Droot=true -javaagent:/tmp/actrail-java-payload-agent-1234.jar",
@@ -100,6 +121,7 @@ mod exec_tests {
             "LD_PRELOAD",
             "/usr/lib/libcustom.so:/opt/actrail/libsync.so"
         )));
+        assert!(merged.contains(&EnvEntry::new("LD_AUDIT", "/opt/actrail/libsync.so")));
         assert!(merged.contains(&EnvEntry::new("TLS_PAYLOAD_SYNC_TRACE_ID", "42")));
         assert!(merged.contains(&EnvEntry::new(
             "TLS_PAYLOAD_SYNC_EVENT_SOCKET",
@@ -113,6 +135,7 @@ mod exec_tests {
         let current = vec![
             EnvEntry::new("TLS_PAYLOAD_SYNC_TRACE_ID", "42"),
             EnvEntry::new("LD_PRELOAD", "/opt/actrail/libsync.so"),
+            EnvEntry::new("LD_AUDIT", "/opt/actrail/libsync.so"),
             EnvEntry::new(
                 "JAVA_TOOL_OPTIONS",
                 "-javaagent:/tmp/actrail-java-payload-agent-1234.jar",
@@ -125,6 +148,7 @@ mod exec_tests {
         assert_eq!(merged[0], EnvEntry::new("PATH", "/usr/bin"));
         assert!(merged.contains(&EnvEntry::new("TLS_PAYLOAD_SYNC_TRACE_ID", "42")));
         assert!(merged.contains(&EnvEntry::new("LD_PRELOAD", "/opt/actrail/libsync.so")));
+        assert!(merged.contains(&EnvEntry::new("LD_AUDIT", "/opt/actrail/libsync.so")));
         assert!(
             !merged
                 .iter()

@@ -58,7 +58,7 @@ python3 tests/agent-trace/run_case.py xiaoo-rustls
 python3 tests/agent-trace/run_case.py langgraph-openai
 ```
 
-`opencode-bun` is pinned to `deepseek/deepseek-chat` in `tests/agent-trace/opencode-bun/workload.conf`; keep the shell's local proxy environment active on proxy-only hosts. If the installed opencode build-id does not match the checked-in Bun/BoringSSL map, the case detects the current `SSL_read` and `SSL_write` offsets from configured byte patterns and writes a temporary matching map. `langgraph-openai` requires `langgraph`, `requests`, `DEEPSEEK_API_KEY`, and a Python build whose `_ssl` module links dynamic OpenSSL.
+`opencode-bun` is pinned to `deepseek/deepseek-chat` in `tests/agent-trace/opencode-bun/workload.conf`; keep the shell's local proxy environment active on proxy-only hosts. The case validates `tls-probe-point-finder fast --provider auto --source auto` before launch and keeps the resolved operator config on `payload_tls_source/resolver/library = auto`. `langgraph-openai` requires `langgraph`, `requests`, `DEEPSEEK_API_KEY`, and a Python build whose `_ssl` module links dynamic OpenSSL.
 
 Initialize the default full-collection operator config:
 

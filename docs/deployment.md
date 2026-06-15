@@ -185,9 +185,9 @@ These cases run compiled AcTrail binaries against real agent runtimes:
 
 | Case | Runtime Path | Acceptance Evidence |
 | --- | --- | --- |
-| `claude-code` | Node/OpenSSL executable TLS payload. | Complete outbound `TlsUserSpace openssl` payload rows, `llm.request`, OTEL span. |
-| `opencode-bun` | Bun/static-BoringSSL executable TLS payload, pinned to `deepseek/deepseek-chat`. | `CONNECT api.deepseek.com:443`, `POST /chat/completions`, complete outbound `TlsUserSpace boringssl` rows, `llm.request`, OTEL span. |
-| `xiaoo-rustls` | Rust/rustls executable symbol-map TLS payload, or socket payload when xiaoO is configured for plain HTTP. | Complete outbound `TlsUserSpace rustls` rows for HTTPS, or complete outbound `Syscall/socket-syscall` rows for plain HTTP; then `llm.request` and OTEL span. A stripped HTTPS/HTTP CONNECT binary without debuginfo is expected to fail this payload case. |
+| `claude-code` | `tls-sync` auto-plan executable TLS payload when finder supports the local Claude runtime. | Complete outbound `TlsUserSpace <provider>` payload rows, `llm.request`, OTEL span. |
+| `opencode-bun` | `tls-sync` auto-plan executable TLS payload, pinned to `deepseek/deepseek-chat`. | `CONNECT api.deepseek.com:443`, `POST /chat/completions`, complete outbound `TlsUserSpace <provider>` rows, `llm.request`, OTEL span. |
+| `xiaoo-rustls` | `tls-sync` auto-plan rustls payload, or socket payload when xiaoO is configured for plain HTTP. | Complete outbound `TlsUserSpace rustls` rows for HTTPS, or complete outbound `Syscall/socket-syscall` rows for plain HTTP; then `llm.request` and OTEL span. A stripped HTTPS/HTTP CONNECT binary without a supported fast plan is expected to fail this payload case. |
 | `langgraph-openai` | Python dynamic OpenSSL shared-library TLS payload. | `POST /chat/completions`, complete outbound `TlsUserSpace openssl` rows, `llm.request`, OTEL span. |
 
 On proxy-only networks, do not unset the shell's local proxy variables. The opencode and LangGraph cases use real provider traffic and must inherit the same `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY` settings that make the agent work outside AcTrail.

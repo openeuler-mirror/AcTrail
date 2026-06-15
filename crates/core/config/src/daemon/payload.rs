@@ -5,6 +5,7 @@ use std::str::FromStr;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PayloadTlsLibrary {
+    Auto,
     Openssl,
     Boringssl,
     Rustls,
@@ -16,6 +17,7 @@ impl FromStr for PayloadTlsLibrary {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
+            "auto" => Ok(Self::Auto),
             "openssl" => Ok(Self::Openssl),
             "boringssl" => Ok(Self::Boringssl),
             "rustls" => Ok(Self::Rustls),
@@ -27,6 +29,7 @@ impl FromStr for PayloadTlsLibrary {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PayloadTlsSource {
+    Auto,
     SharedLibrary,
     Executable,
 }
@@ -36,6 +39,7 @@ impl FromStr for PayloadTlsSource {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
+            "auto" => Ok(Self::Auto),
             "shared-library" => Ok(Self::SharedLibrary),
             "executable" => Ok(Self::Executable),
             other => Err(format!("unsupported payload TLS source {other}")),
@@ -45,6 +49,7 @@ impl FromStr for PayloadTlsSource {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PayloadTlsResolver {
+    Auto,
     OpensslSymbols,
     BoringsslPatterns,
     BunStaticBoringssl,
@@ -58,6 +63,7 @@ impl FromStr for PayloadTlsResolver {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
+            "auto" => Ok(Self::Auto),
             "openssl-symbols" => Ok(Self::OpensslSymbols),
             "boringssl-patterns" => Ok(Self::BoringsslPatterns),
             "bun-static-boringssl" => Ok(Self::BunStaticBoringssl),

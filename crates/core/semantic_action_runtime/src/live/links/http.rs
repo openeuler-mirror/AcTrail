@@ -97,15 +97,12 @@ impl HttpMessageLinkProjector {
         if !response_stream_candidate(llm_action, http_message) {
             return false;
         }
-        let Some(candidate_sequence) = http_payload_sequence(http_message) else {
+        if http_payload_sequence(http_message).is_none() {
             return false;
-        };
+        }
         let Some(response_sequence) = payload_sequence(llm_action) else {
             return false;
         };
-        if candidate_sequence > response_sequence {
-            return false;
-        }
         if self.http_request_between(http_message, response_sequence) {
             return false;
         }
@@ -113,10 +110,10 @@ impl HttpMessageLinkProjector {
             .values()
             .filter(|candidate| response_stream_candidate(llm_action, candidate))
             .filter_map(|candidate| Some((http_payload_sequence(candidate)?, candidate)))
-            .filter(|(sequence, _)| *sequence <= response_sequence)
             .filter(|(_, candidate)| !self.http_request_between(candidate, response_sequence))
             .max_by(|left, right| {
-                (left.0, left.1.action_id.as_str()).cmp(&(right.0, right.1.action_id.as_str()))
+                response_candidate_rank(response_sequence, left)
+                    .cmp(&response_candidate_rank(response_sequence, right))
             })
             .is_some_and(|(_, candidate)| candidate.action_id == http_message.action_id)
     }
@@ -125,14 +122,25 @@ impl HttpMessageLinkProjector {
         let Some(response_message_sequence) = http_payload_sequence(http_response) else {
             return false;
         };
+        let lower = response_message_sequence.min(response_sequence);
+        let upper = response_message_sequence.max(response_sequence);
         self.http_messages.values().any(|candidate| {
             candidate.attributes.get("direction").map(String::as_str) == Some("outbound")
                 && same_trace_process_stream(http_response, candidate)
-                && http_payload_sequence(candidate).is_some_and(|sequence| {
-                    response_message_sequence < sequence && sequence < response_sequence
-                })
+                && http_payload_sequence(candidate)
+                    .is_some_and(|sequence| lower < sequence && sequence < upper)
         })
     }
+}
+
+fn response_candidate_rank<'a>(
+    response_sequence: u64,
+    candidate: &(u64, &'a SemanticAction),
+) -> (std::cmp::Reverse<u64>, &'a str) {
+    (
+        std::cmp::Reverse(candidate.0.abs_diff(response_sequence)),
+        candidate.1.action_id.as_str(),
+    )
 }
 
 fn http_message_can_link_to_llm(action: &SemanticAction) -> bool {

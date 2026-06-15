@@ -6,12 +6,13 @@ use std::io::{BufWriter, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex};
-use std::thread;
+use std::thread::{self, JoinHandle};
 
 use crate::{SyncError, SyncEvent, SyncResult, write_event_line};
 
 pub struct EventClient {
     queue: Arc<EventQueue>,
+    worker: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl EventClient {
@@ -24,15 +25,34 @@ impl EventClient {
         let stream = UnixStream::connect(path)?;
         let queue = Arc::new(EventQueue::new(pending_byte_budget));
         let worker_queue = Arc::clone(&queue);
-        thread::Builder::new()
+        let worker = thread::Builder::new()
             .name("actrail-tls-sync-event-writer".to_string())
             .spawn(move || event_writer(stream, worker_queue))
             .map_err(|error| SyncError::new(format!("spawn sync event writer: {error}")))?;
-        Ok(Self { queue })
+        Ok(Self {
+            queue,
+            worker: Mutex::new(Some(worker)),
+        })
     }
 
     pub fn send(&self, event: SyncEvent) -> SyncResult<()> {
         self.queue.push(event)
+    }
+
+    pub fn close_and_join(&self) -> SyncResult<()> {
+        self.queue.close();
+        let Some(worker) = self
+            .worker
+            .lock()
+            .map_err(|_| SyncError::new("sync event worker mutex poisoned"))?
+            .take()
+        else {
+            return self.queue.flush();
+        };
+        worker
+            .join()
+            .map_err(|_| SyncError::new("sync event writer panicked"))?;
+        self.queue.flush()
     }
 }
 
@@ -56,7 +76,9 @@ impl EventQueue {
             state: Mutex::new(EventQueueState {
                 pending: VecDeque::new(),
                 pending_bytes: 0,
+                in_flight: 0,
                 closed: false,
+                failed: false,
             }),
             ready: Condvar::new(),
             pending_byte_budget,
@@ -69,7 +91,7 @@ impl EventQueue {
             .state
             .lock()
             .map_err(|_| SyncError::new("sync event queue mutex poisoned"))?;
-        if state.closed {
+        if state.closed || state.failed {
             return Err(SyncError::new("sync event writer is closed"));
         }
         let next_pending_bytes = state
@@ -87,12 +109,50 @@ impl EventQueue {
 
     fn pop(&self) -> Option<QueuedEvent> {
         let mut state = self.state.lock().ok()?;
-        while state.pending.is_empty() && !state.closed {
+        loop {
+            if let Some(queued) = state.pending.pop_front() {
+                state.pending_bytes = state.pending_bytes.saturating_sub(queued.event_bytes);
+                state.in_flight = state.in_flight.saturating_add(1);
+                return Some(queued);
+            }
+            if state.closed || state.failed {
+                return None;
+            }
             state = self.ready.wait(state).ok()?;
         }
-        let queued = state.pending.pop_front()?;
-        state.pending_bytes = state.pending_bytes.saturating_sub(queued.event_bytes);
-        Some(queued)
+    }
+
+    fn finish_one(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.in_flight = state.in_flight.saturating_sub(1);
+            self.ready.notify_all();
+        }
+    }
+
+    fn fail(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.failed = true;
+            state.closed = true;
+            self.ready.notify_all();
+        }
+    }
+
+    fn flush(&self) -> SyncResult<()> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| SyncError::new("sync event queue mutex poisoned"))?;
+        while (!state.pending.is_empty() || state.in_flight != 0) && !state.failed {
+            state = self
+                .ready
+                .wait(state)
+                .map_err(|_| SyncError::new("sync event queue mutex poisoned"))?;
+        }
+        if state.failed {
+            Err(SyncError::new("sync event writer is closed"))
+        } else {
+            Ok(())
+        }
     }
 
     fn close(&self) {
@@ -106,7 +166,9 @@ impl EventQueue {
 struct EventQueueState {
     pending: VecDeque<QueuedEvent>,
     pending_bytes: usize,
+    in_flight: usize,
     closed: bool,
+    failed: bool,
 }
 
 struct QueuedEvent {
@@ -125,9 +187,10 @@ fn event_writer(stream: UnixStream, queue: Arc<EventQueue>) {
             })
             .is_err()
         {
-            queue.close();
+            queue.fail();
             return;
         }
+        queue.finish_one();
     }
 }
 

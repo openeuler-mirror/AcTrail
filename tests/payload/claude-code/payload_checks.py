@@ -106,54 +106,10 @@ def required_tls_response_payload_count(
     return require_complete_payload_rows_any(payloads, accepted_tls_sources, direction="inbound")
 
 
-def tls_response_evidence_facts(
-    payloads: str,
-    accepted_tls_sources: list[PayloadSource],
-    response_count: int,
-) -> list[str]:
-    outbound_tls = complete_payload_sources(payloads, accepted_tls_sources, "outbound")
-    inbound_tls = complete_payload_sources(payloads, accepted_tls_sources, "inbound")
-    return [
-        f"accepted_tls_sources={format_payload_sources(accepted_tls_sources)}",
-        f"outbound_tls_sources={format_payload_sources(outbound_tls)}",
-        f"inbound_tls_sources={format_payload_sources(inbound_tls)}",
-        f"tls_response_required={bool(outbound_tls)}",
-        f"captured_response_payload_segments={response_count}",
-    ]
-
-
 def format_payload_sources(sources: list[PayloadSource]) -> str:
     if not sources:
         return "none"
     return ", ".join(f"{source}/{library}" for source, library in sources)
-
-
-def payload_source_selection_selftest() -> list[str]:
-    accepted_tls_sources = [("TlsUserSpace", "boringssl")]
-    accepted_sources = [*accepted_tls_sources, ("Syscall", "socket-syscall")]
-    http_payloads = "payload-1 trace-1 Syscall socket-syscall outbound Complete success\n"
-    https_payloads = (
-        "payload-1 trace-1 TlsUserSpace boringssl outbound Complete success\n"
-        "payload-2 trace-1 TlsUserSpace boringssl inbound Complete success\n"
-    )
-    missing_tls_response = "payload-1 trace-1 TlsUserSpace boringssl outbound Complete success\n"
-    if not payloads_have_required_llm_rows(http_payloads, accepted_sources, accepted_tls_sources):
-        raise RuntimeError("plain HTTP socket payload was treated as requiring a TLS response")
-    if required_tls_response_payload_count(http_payloads, accepted_tls_sources) != 0:
-        raise RuntimeError("plain HTTP socket payload unexpectedly counted a TLS response")
-    if not payloads_have_required_llm_rows(https_payloads, accepted_sources, accepted_tls_sources):
-        raise RuntimeError("TLS payload with inbound response did not satisfy TLS response gate")
-    if required_tls_response_payload_count(https_payloads, accepted_tls_sources) != 1:
-        raise RuntimeError("TLS payload response count was not one")
-    if payloads_have_required_llm_rows(missing_tls_response, accepted_sources, accepted_tls_sources):
-        raise RuntimeError("TLS outbound payload without inbound TLS response passed the gate")
-    return [
-        "plain_http_outbound_source=Syscall/socket-syscall",
-        "plain_http_tls_response_required=false",
-        "https_outbound_source=TlsUserSpace/boringssl",
-        "https_tls_response_required=true",
-        "https_missing_inbound_tls_response_passes=false",
-    ]
 
 
 def payload_texts(

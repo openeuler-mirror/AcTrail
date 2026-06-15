@@ -107,6 +107,13 @@ impl RuntimeConfig {
         client.send(event).map_err(|error| error.to_string())
     }
 
+    pub(in crate::runtime) fn close_event_client(&self) -> Result<(), String> {
+        let Some(client) = &self.event_client else {
+            return Ok(());
+        };
+        client.close_and_join().map_err(|error| error.to_string())
+    }
+
     pub(in crate::runtime) fn redact_payload(&self, payload: &[u8]) -> String {
         match self.redaction {
             RedactionMode::Redact => format!("<redacted bytes={}>", payload.len()),

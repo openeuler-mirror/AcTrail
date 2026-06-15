@@ -22,16 +22,15 @@ TLS_RUNTIME_DIR = REPO_ROOT / "tests/agent-trace/runtime_tls"
 if str(TLS_RUNTIME_DIR) not in sys.path:
     sys.path.insert(0, str(TLS_RUNTIME_DIR))
 
-from boringssl import binary_build_id, prepare_bun_static_boringssl_map  # noqa: E402
+from fast_plan import resolve_fast_probe_plan  # noqa: E402
 
 
 def main() -> int:
     args = parse_args()
     workload = read_key_values(args.workload_config)
-    if args.symbol_map_output:
-        workload["generated_symbol_map_path"] = str(args.symbol_map_output)
     binary = resolve_claude_binary(args.claude_bin)
-    profile = build_profile(binary, workload)
+    finder = require_executable(args.finder)
+    profile = build_profile(binary, workload, finder)
     write_outputs(profile, args)
     print_profile(profile)
     return 0 if profile["status"] == "supported" else 2
@@ -39,19 +38,20 @@ def main() -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Inspect the local Claude Code executable and generate a TLS symbol map when supported."
+        description="Inspect the local Claude Code executable and resolve its TLS fast auto plan."
     )
     parser.add_argument("--claude-bin", type=Path, help="resolved native Claude Code executable")
     parser.add_argument(
         "--workload-config",
         type=Path,
         default=REPO_ROOT / "tests/payload/claude-code/workload.conf",
-        help="Claude payload workload config containing BoringSSL profile settings",
+        help="Claude payload workload config containing TLS fast-plan settings",
     )
     parser.add_argument(
-        "--symbol-map-output",
+        "--finder",
         type=Path,
-        help="where to write a generated bun-static-boringssl symbol map",
+        default=REPO_ROOT / "target/release/tls-probe-point-finder",
+        help="tls-probe-point-finder binary",
     )
     parser.add_argument("--json-output", type=Path, help="where to write the profile JSON")
     return parser.parse_args()
@@ -77,7 +77,7 @@ def require_executable(path: Path) -> Path:
     return resolved
 
 
-def build_profile(binary: Path, workload: dict[str, str]) -> dict[str, Any]:
+def build_profile(binary: Path, workload: dict[str, str], finder: Path) -> dict[str, Any]:
     build_id = binary_build_id(binary)
     profile: dict[str, Any] = {
         "status": "unsupported",
@@ -90,41 +90,22 @@ def build_profile(binary: Path, workload: dict[str, str]) -> dict[str, Any]:
     }
     openssl_symbols = exported_openssl_symbols(binary)
     profile["openssl_symbols"] = openssl_symbols
-    if all(openssl_symbols.values()):
-        profile.update(
-            {
-                "status": "supported",
-                "resolver": "openssl-symbols",
-                "library": "openssl",
-                "symbol_map_path": "disabled",
-            }
-        )
-        return profile
-    if platform.machine() in {"aarch64", "x86_64"}:
-        profile.update(
-            {
-                "status": "supported",
-                "resolver": "boringssl-static",
-                "library": "boringssl",
-                "symbol_map_path": "disabled",
-                "symbol_map_detail": "built-in static BoringSSL related-entry detector",
-            }
-        )
-        return profile
-
-    configured_map = resolve_path(required(workload, "symbol_map_path"))
     try:
-        symbol_map, detail = prepare_bun_static_boringssl_map(binary, configured_map, workload)
+        plan = resolve_fast_probe_plan(
+            binary,
+            finder,
+            required(workload, "tls_probe_provider"),
+            required(workload, "tls_probe_source"),
+            required(workload, "tls_probe_match_limit"),
+        )
     except Exception as error:
         profile.update(
             {
                 "status": "profile_missing",
-                "resolver": "bun-static-boringssl",
-                "library": "boringssl",
                 "reason": str(error),
                 "next_step": (
-                    "Run this profiler on the target host after adding an arch/build-id matching "
-                    "BoringSSL profile, or collect this JSON/log for profile generation. The binary "
+                    "Run this profiler on the target host with the same tls-probe-point-finder binary "
+                    "used by AcTrail, or collect this JSON/log for fast-plan support work. The binary "
                     "does not need to leave the target host."
                 ),
             }
@@ -134,11 +115,12 @@ def build_profile(binary: Path, workload: dict[str, str]) -> dict[str, Any]:
     profile.update(
         {
             "status": "supported",
-            "resolver": "bun-static-boringssl",
-            "library": "boringssl",
-            "symbol_map_path": str(symbol_map),
-            "symbol_map_detail": detail,
-            "symbol_map_text": symbol_map.read_text(encoding="utf-8"),
+            "source": "auto",
+            "resolver": "auto",
+            "library": "auto",
+            "provider": plan.provider,
+            "fast_plan_detail": plan.detail,
+            "fast_plan_symbols": plan.symbols,
         }
     )
     return profile
@@ -216,11 +198,6 @@ def read_json(path: Path) -> dict[str, Any]:
         return {}
 
 
-def resolve_path(raw: str) -> Path:
-    path = Path(raw)
-    return path if path.is_absolute() else REPO_ROOT / path
-
-
 def required(values: dict[str, str], key: str) -> str:
     value = values.get(key)
     if not value:
@@ -234,6 +211,15 @@ def sha256_file(path: Path) -> str:
         while chunk := handle.read(io.DEFAULT_BUFFER_SIZE):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def binary_build_id(binary: Path) -> str:
+    output = run_checked(["readelf", "-n", str(binary)])
+    marker = "Build ID:"
+    for line in output.splitlines():
+        if marker in line:
+            return line.split(marker, 1)[1].strip().lower()
+    return ""
 
 
 def file_description(path: Path) -> str:
@@ -274,11 +260,12 @@ def print_profile(profile: dict[str, Any]) -> None:
                 print(f"  native package: {native['name']} {native['version']} at {native['path']}")
     print(f"  OpenSSL symbols: {profile['openssl_symbols']}")
     if profile["status"] == "supported":
+        print(f"  source: {profile['source']}")
         print(f"  resolver: {profile['resolver']}")
         print(f"  library: {profile['library']}")
-        print(f"  symbol_map_path: {profile['symbol_map_path']}")
-        if profile.get("symbol_map_detail"):
-            print(f"  symbol_map_detail: {profile['symbol_map_detail']}")
+        print(f"  provider: {profile['provider']}")
+        print(f"  fast_plan_detail: {profile['fast_plan_detail']}")
+        print(f"  fast_plan_symbols: {profile['fast_plan_symbols']}")
     else:
         print(f"  reason: {profile.get('reason', 'unsupported runtime')}")
         print(f"  next_step: {profile.get('next_step', '')}")

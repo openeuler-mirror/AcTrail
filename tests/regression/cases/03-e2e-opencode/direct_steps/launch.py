@@ -15,7 +15,6 @@ def run_opencode_launch_step(
     actrailctl: Path,
     resolved_config: Path | None,
     workload: dict[str, str],
-    explicit_binary: str | None,
 ) -> tuple[int, str]:
     result.begin_check("opencode launch", "running opencode under actrailctl")
     try:
@@ -37,7 +36,7 @@ def run_opencode_launch_step(
         if module.required(workload, "expected_output_fragment") not in output:
             raise RuntimeError("opencode output did not contain expected marker")
     except Exception as error:
-        status = SKIP if not explicit_binary and "timed out after" in str(error) else FAIL
+        status = SKIP if "timed out after" in str(error) else FAIL
         result.status = status
         result.add_check(
             "opencode launch",

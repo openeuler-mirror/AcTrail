@@ -4,7 +4,7 @@ from __future__ import annotations
 
 
 def xiaoo_tls_detail(tls_runtime) -> str:
-    return f"xiaoo_tls_runtime={tls_runtime}"
+    return f"xiaoo_tls_runtime={tls_runtime.detail}"
 
 
 def xiaoo_output_summary(

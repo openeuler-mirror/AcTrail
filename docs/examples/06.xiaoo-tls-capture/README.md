@@ -31,7 +31,7 @@ rustls_buffer_plaintext
 rustls_take_received_plaintext
 ```
 
-`operator.conf` 里的 TLS source/resolver 字段保持为可通过配置校验的 OpenSSL shared-library 组合；`tls-sync` 的实际 attach plan 由 `actrailctl launch` 对命令中的 `xiaoo` 调 finder fast 生成。
+`operator.conf` 里的 TLS source/resolver/library 字段保持为 `auto`；`tls-sync` 的实际 attach plan 由 `actrailctl launch` 对命令中的 `xiaoo` 调 finder fast 生成。
 
 ## 运行
 

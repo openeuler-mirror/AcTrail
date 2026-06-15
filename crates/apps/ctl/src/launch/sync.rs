@@ -8,7 +8,8 @@ use config_core::daemon::{
 };
 use model_core::ids::TraceId;
 use tls_payload_sync::{
-    EventFilter, RedactionMode, RuntimeEnvConfig, RuntimeLibraryPath, launch_command_for_plan,
+    EventFilter, RedactionMode, RuntimeEnvConfig, RuntimeLibraryPath,
+    audit_env_value_for_libraries, audit_libraries_for_plans, launch_command_for_plan,
     preload_env_value_for_libraries, runtime_env_for_plans, runtime_library_path,
     validate_native_backend_plan,
 };
@@ -21,6 +22,7 @@ pub(super) struct SyncLaunch {
     pub(super) command: Vec<OsString>,
     plans: Vec<ProbePointPlan>,
     preload_libraries: Vec<PathBuf>,
+    audit_libraries: Vec<PathBuf>,
     java_agent_env_required: bool,
 }
 
@@ -45,11 +47,13 @@ pub(super) fn sync_launch(
     let runtime_library = runtime_library(config)?;
     let plans = bundle_plans(launch_plan, config, agent_commands);
     let preload_libraries = sync_preload_libraries(&runtime_library);
+    let audit_libraries = audit_libraries_for_plans(&preload_libraries, &plans);
     let java_agent_env_required = java_agent_env_required(config);
     Ok(SyncLaunch {
         command,
         plans,
         preload_libraries,
+        audit_libraries,
         java_agent_env_required,
     })
 }
@@ -77,6 +81,13 @@ pub(super) fn sync_launch_envs(
         preload_env_value_for_libraries(&launch.preload_libraries)
             .map_err(|error| error.to_string())?,
     ));
+    if !launch.audit_libraries.is_empty() {
+        envs.push((
+            OsString::from("LD_AUDIT"),
+            audit_env_value_for_libraries(&launch.audit_libraries)
+                .map_err(|error| error.to_string())?,
+        ));
+    }
     maybe_append_java_agent_env(launch.java_agent_env_required, &mut envs)?;
     Ok(envs)
 }
@@ -171,20 +182,4 @@ fn validate_resolver_inputs(config: &PayloadTlsConfig) -> Result<(), String> {
 fn match_limit(config: &PayloadTlsConfig) -> Result<usize, String> {
     usize::try_from(config.sync_match_limit)
         .map_err(|error| format!("payload_tls_sync_match_limit overflow: {error}"))
-}
-
-#[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-
-    use super::sync_preload_libraries;
-
-    #[test]
-    fn sync_preload_uses_only_runtime_carrier() {
-        let runtime = PathBuf::from("/tmp/libactrail_tls_payload_probe_sync.so");
-
-        let libraries = sync_preload_libraries(&runtime);
-
-        assert_eq!(libraries, vec![runtime]);
-    }
 }

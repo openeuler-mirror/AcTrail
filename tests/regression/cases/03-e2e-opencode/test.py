@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from e2e_steps.checks import StepFailure
@@ -22,7 +21,6 @@ SUITES = {"quick", "agent", "payload", "full"}
 
 def run(env) -> CaseResult:
     result = CaseResult(CASE_ID, TITLE, PASS, 0.0)
-    explicit_binary = os.environ.get("OPENCODE_BIN_PATH")
     launchers = env.executable_candidates("opencode")
     if not launchers:
         result.status = SKIP
@@ -53,7 +51,7 @@ def run(env) -> CaseResult:
         )
         return result
     try:
-        run_direct_opencode_case(env, result, explicit_binary, entry)
+        run_direct_opencode_case(env, result, entry)
     except StepFailure:
         return result
     if any(check.status == FAIL for check in result.checks):

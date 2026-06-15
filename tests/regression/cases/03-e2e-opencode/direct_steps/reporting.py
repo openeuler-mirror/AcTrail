@@ -6,7 +6,7 @@ from __future__ import annotations
 def opencode_tls_detail(tls_runtime) -> str:
     if tls_runtime is None:
         return "opencode_tls_runtime=disabled"
-    return f"opencode_tls_runtime={tls_runtime.binary} resolver={tls_runtime.resolver}"
+    return f"opencode_tls_runtime=auto provider={tls_runtime.provider} detail={tls_runtime.detail}"
 
 
 def opencode_output_summary(
