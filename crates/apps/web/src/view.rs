@@ -247,7 +247,11 @@ pub fn clear_cache_json() -> Result<String, String> {
 
 pub fn action_tree_json(storage_config: &StorageConfig, trace_id: u64) -> Result<String, String> {
     let mut storage = open_storage(storage_config)?;
-    actions::action_tree_json(storage.as_mut(), TraceId::new(trace_id))
+    actions::action_tree_json(
+        storage_config.path(),
+        storage.as_mut(),
+        TraceId::new(trace_id),
+    )
 }
 
 pub fn action_tree_root_json(
