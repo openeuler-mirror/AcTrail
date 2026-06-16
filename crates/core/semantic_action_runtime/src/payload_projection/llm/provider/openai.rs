@@ -50,7 +50,6 @@ impl LlmProviderResponseParser for OpenAiCompatibleResponseParser {
                 .get("model")
                 .and_then(Value::as_str)
                 .map(ToString::to_string),
-            output_text: texts.output_text(),
             content_text: texts.content_text,
             reasoning_text: texts.reasoning_text,
             tool_calls: assembler.into_calls(),
@@ -91,11 +90,9 @@ impl LlmProviderResponseParser for OpenAiCompatibleResponseParser {
         }
         let content_text = (!content_chunks.is_empty()).then(|| content_chunks.join(""));
         let reasoning_text = (!reasoning_chunks.is_empty()).then(|| reasoning_chunks.join(""));
-        let output_text = content_text.clone().or_else(|| reasoning_text.clone());
         Some(LlmParsedResponse {
             provider_id: self.provider_id(),
             model: parsed_events.iter().find_map(|event| event.model.clone()),
-            output_text,
             content_text,
             reasoning_text,
             tool_calls,
@@ -185,7 +182,6 @@ impl LlmProviderResponseStreamParser for OpenAiCompatibleStreamParser {
                 .parsed_events
                 .iter()
                 .find_map(|event| event.model.clone()),
-            output_text: content_text.clone().or_else(|| reasoning_text.clone()),
             content_text,
             reasoning_text,
             tool_calls,

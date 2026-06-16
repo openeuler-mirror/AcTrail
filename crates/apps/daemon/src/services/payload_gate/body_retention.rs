@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use config_core::daemon::SemanticRetentionConfig;
 use model_core::ids::TraceId;
 use model_core::payload::{
     PayloadContentState, PayloadDirection, PayloadSegment, PayloadSourceBoundary,
@@ -25,22 +26,45 @@ pub(in crate::services) enum PayloadBodyRetention {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::services) struct PayloadBodyRetentionDecision {
     pub(in crate::services) mode: PayloadBodyRetention,
+    pub(in crate::services) semantic_layer: PayloadSemanticLayer,
     remember: bool,
     stream_id: Option<u32>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::services) enum PayloadSemanticLayer {
+    None,
+    Http,
+    Llm,
+}
+
+impl PayloadSemanticLayer {
+    pub(in crate::services) fn consumed_by_higher_layer(self) -> bool {
+        matches!(self, Self::Http | Self::Llm)
+    }
+
+    pub(in crate::services) fn consumed_by_llm(self) -> bool {
+        matches!(self, Self::Llm)
+    }
+}
+
 pub(in crate::services) struct PayloadBodyRetentionGate {
-    streams: BTreeMap<BodyStreamKey, PayloadBodyRetention>,
+    streams: BTreeMap<BodyStreamKey, PayloadBodyRetentionMemo>,
     http2_probe_bytes: BTreeMap<BodyStreamKey, u64>,
     http2_probe_max_bytes: u64,
+    semantic_retention: SemanticRetentionConfig,
 }
 
 impl PayloadBodyRetentionGate {
-    pub(in crate::services) fn new(http2_probe_max_bytes: u64) -> Self {
+    pub(in crate::services) fn new(
+        http2_probe_max_bytes: u64,
+        semantic_retention: SemanticRetentionConfig,
+    ) -> Self {
         Self {
             streams: BTreeMap::new(),
             http2_probe_bytes: BTreeMap::new(),
             http2_probe_max_bytes,
+            semantic_retention,
         }
     }
 
@@ -49,7 +73,10 @@ impl PayloadBodyRetentionGate {
         segment: &PayloadSegment,
     ) -> PayloadBodyRetentionDecision {
         if !plaintext_http_transport(segment) {
-            return PayloadBodyRetentionDecision::transient(PayloadBodyRetention::Full);
+            return PayloadBodyRetentionDecision::transient(
+                PayloadBodyRetention::Full,
+                PayloadSemanticLayer::None,
+            );
         }
         match segment.direction {
             PayloadDirection::Outbound => self.decide_outbound(segment),
@@ -63,7 +90,12 @@ impl PayloadBodyRetentionGate {
         decision: PayloadBodyRetentionDecision,
     ) {
         if decision.remember {
-            self.remember(segment, decision.stream_id, decision.mode);
+            self.remember(
+                segment,
+                decision.stream_id,
+                decision.mode,
+                decision.semantic_layer,
+            );
         }
     }
 
@@ -77,13 +109,15 @@ impl PayloadBodyRetentionGate {
         if let Some(request) = classify_http1_request(&segment.bytes) {
             if request.llm {
                 return PayloadBodyRetentionDecision::remember(
-                    PayloadBodyRetention::Full,
+                    self.http_analysis_mode(true),
+                    PayloadSemanticLayer::Llm,
                     request.stream_id,
                 );
             }
             if request.summary_only_safe {
                 return PayloadBodyRetentionDecision::remember(
-                    PayloadBodyRetention::SummaryOnly,
+                    self.http_analysis_mode(false),
+                    PayloadSemanticLayer::Http,
                     request.stream_id,
                 );
             }
@@ -91,7 +125,8 @@ impl PayloadBodyRetentionGate {
         if let Some(request) = http2::classify_request(&segment.bytes) {
             if request.llm {
                 return PayloadBodyRetentionDecision::remember(
-                    PayloadBodyRetention::Full,
+                    self.http_analysis_mode(true),
+                    PayloadSemanticLayer::Llm,
                     request.stream_id,
                 );
             }
@@ -101,11 +136,18 @@ impl PayloadBodyRetentionGate {
             return self.decide_http2_probe(segment, stream_id);
         }
         if http2::body_looks_like_llm_request(&segment.bytes) {
-            return PayloadBodyRetentionDecision::remember(PayloadBodyRetention::Full, None);
+            return PayloadBodyRetentionDecision::remember(
+                self.http_analysis_mode(true),
+                PayloadSemanticLayer::Llm,
+                None,
+            );
         }
-        PayloadBodyRetentionDecision::transient(
+        PayloadBodyRetentionDecision::transient_memo(
             self.lookup_with_fallback(segment, None)
-                .unwrap_or(PayloadBodyRetention::Full),
+                .unwrap_or(PayloadBodyRetentionMemo {
+                    mode: PayloadBodyRetention::Full,
+                    semantic_layer: PayloadSemanticLayer::None,
+                }),
         )
     }
 
@@ -113,39 +155,58 @@ impl PayloadBodyRetentionGate {
         if let Some(response) = classify_http1_response(&segment.bytes) {
             if response.llm {
                 return PayloadBodyRetentionDecision::remember(
-                    PayloadBodyRetention::Full,
+                    self.http_analysis_mode(true),
+                    PayloadSemanticLayer::Llm,
                     response.stream_id,
                 );
             }
-            return PayloadBodyRetentionDecision::transient(
+            return PayloadBodyRetentionDecision::transient_memo(
                 self.lookup_with_fallback(segment, response.stream_id)
-                    .unwrap_or(PayloadBodyRetention::SummaryOnly),
+                    .unwrap_or(PayloadBodyRetentionMemo {
+                        mode: self.http_analysis_mode(false),
+                        semantic_layer: PayloadSemanticLayer::Http,
+                    }),
             );
         }
         if let Some(response) = http2::classify_response(&segment.bytes) {
             if response.llm {
                 return PayloadBodyRetentionDecision::remember(
-                    PayloadBodyRetention::Full,
+                    self.http_analysis_mode(true),
+                    PayloadSemanticLayer::Llm,
                     response.stream_id,
                 );
             }
-            return PayloadBodyRetentionDecision::transient(
-                self.lookup_exact(segment, response.stream_id)
-                    .unwrap_or(PayloadBodyRetention::SummaryOnly),
+            return PayloadBodyRetentionDecision::transient_memo(
+                self.lookup_exact(segment, response.stream_id).unwrap_or(
+                    PayloadBodyRetentionMemo {
+                        mode: self.http_analysis_mode(false),
+                        semantic_layer: PayloadSemanticLayer::Http,
+                    },
+                ),
             );
         }
         if let Some(stream_id) = http2::candidate_stream_id(&segment.bytes) {
-            return PayloadBodyRetentionDecision::transient(
+            return PayloadBodyRetentionDecision::transient_memo(
                 self.lookup_exact(segment, stream_id)
-                    .unwrap_or(PayloadBodyRetention::SummaryOnly),
+                    .unwrap_or(PayloadBodyRetentionMemo {
+                        mode: PayloadBodyRetention::SummaryOnly,
+                        semantic_layer: PayloadSemanticLayer::None,
+                    }),
             );
         }
         if http2::body_looks_like_llm_response(&segment.bytes) {
-            return PayloadBodyRetentionDecision::remember(PayloadBodyRetention::Full, None);
+            return PayloadBodyRetentionDecision::remember(
+                self.http_analysis_mode(true),
+                PayloadSemanticLayer::Llm,
+                None,
+            );
         }
-        PayloadBodyRetentionDecision::transient(
+        PayloadBodyRetentionDecision::transient_memo(
             self.lookup_with_fallback(segment, None)
-                .unwrap_or(PayloadBodyRetention::Full),
+                .unwrap_or(PayloadBodyRetentionMemo {
+                    mode: PayloadBodyRetention::Full,
+                    semantic_layer: PayloadSemanticLayer::None,
+                }),
         )
     }
 
@@ -155,24 +216,29 @@ impl PayloadBodyRetentionGate {
         stream_id: Option<u32>,
     ) -> PayloadBodyRetentionDecision {
         if let Some(mode) = self.lookup_exact(segment, stream_id) {
-            return PayloadBodyRetentionDecision::transient(mode);
+            return PayloadBodyRetentionDecision::transient_memo(mode);
         }
         let key = BodyStreamKey::new(segment, stream_id);
         let used = self.http2_probe_bytes.get(&key).copied().unwrap_or(0);
         let Some(next) = used.checked_add(segment.captured_size) else {
             return PayloadBodyRetentionDecision::remember(
                 PayloadBodyRetention::SummaryOnly,
+                PayloadSemanticLayer::None,
                 stream_id,
             );
         };
         if next > self.http2_probe_max_bytes {
             return PayloadBodyRetentionDecision::remember(
                 PayloadBodyRetention::SummaryOnly,
+                PayloadSemanticLayer::None,
                 stream_id,
             );
         }
         self.http2_probe_bytes.insert(key, next);
-        PayloadBodyRetentionDecision::transient(PayloadBodyRetention::Full)
+        PayloadBodyRetentionDecision::transient(
+            PayloadBodyRetention::Full,
+            PayloadSemanticLayer::None,
+        )
     }
 
     fn remember(
@@ -180,17 +246,24 @@ impl PayloadBodyRetentionGate {
         segment: &PayloadSegment,
         stream_id: Option<u32>,
         mode: PayloadBodyRetention,
+        semantic_layer: PayloadSemanticLayer,
     ) {
         let key = BodyStreamKey::new(segment, stream_id);
         self.http2_probe_bytes.remove(&key);
-        self.streams.insert(key, mode);
+        self.streams.insert(
+            key,
+            PayloadBodyRetentionMemo {
+                mode,
+                semantic_layer,
+            },
+        );
     }
 
     fn lookup_exact(
         &self,
         segment: &PayloadSegment,
         stream_id: Option<u32>,
-    ) -> Option<PayloadBodyRetention> {
+    ) -> Option<PayloadBodyRetentionMemo> {
         self.streams
             .get(&BodyStreamKey::new(segment, stream_id))
             .copied()
@@ -200,28 +273,60 @@ impl PayloadBodyRetentionGate {
         &self,
         segment: &PayloadSegment,
         stream_id: Option<u32>,
-    ) -> Option<PayloadBodyRetention> {
+    ) -> Option<PayloadBodyRetentionMemo> {
         self.lookup_exact(segment, stream_id)
             .or_else(|| self.lookup_exact(segment, None))
+    }
+
+    fn http_analysis_mode(&self, llm_message: bool) -> PayloadBodyRetention {
+        if self
+            .semantic_retention
+            .http_body_content_needed(llm_message)
+        {
+            PayloadBodyRetention::Full
+        } else {
+            PayloadBodyRetention::SummaryOnly
+        }
     }
 }
 
 impl PayloadBodyRetentionDecision {
-    fn remember(mode: PayloadBodyRetention, stream_id: Option<u32>) -> Self {
+    fn remember(
+        mode: PayloadBodyRetention,
+        semantic_layer: PayloadSemanticLayer,
+        stream_id: Option<u32>,
+    ) -> Self {
         Self {
             mode,
+            semantic_layer,
             remember: true,
             stream_id,
         }
     }
 
-    fn transient(mode: PayloadBodyRetention) -> Self {
+    fn transient(mode: PayloadBodyRetention, semantic_layer: PayloadSemanticLayer) -> Self {
         Self {
             mode,
+            semantic_layer,
             remember: false,
             stream_id: None,
         }
     }
+
+    fn transient_memo(memo: PayloadBodyRetentionMemo) -> Self {
+        Self {
+            mode: memo.mode,
+            semantic_layer: memo.semantic_layer,
+            remember: false,
+            stream_id: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PayloadBodyRetentionMemo {
+    mode: PayloadBodyRetention,
+    semantic_layer: PayloadSemanticLayer,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]

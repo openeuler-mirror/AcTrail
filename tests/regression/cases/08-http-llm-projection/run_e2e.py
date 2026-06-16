@@ -174,7 +174,17 @@ def require_http_llm_span(document: dict, marker: str, model: str) -> None:
             continue
         if attrs.get("llm.request.model") != model:
             continue
-        if marker in attrs.get("llm.request.payload_text", ""):
+        body_json = attrs.get("llm.request.body_json", "")
+        if (
+            attrs.get("llm.request.payload_bytes")
+            and attrs.get("llm.request.raw_payload_bytes")
+            and body_json
+            and model in body_json
+            and marker in body_json
+            and not attrs.get("llm.request.payload_text")
+            and not attrs.get("http.request.body_text")
+            and not attrs.get("http.request.body_json")
+        ):
             return
     raise RuntimeError("OTEL export did not contain the expected HTTP llm.request span")
 

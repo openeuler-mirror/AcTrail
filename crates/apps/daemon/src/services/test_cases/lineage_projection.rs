@@ -27,6 +27,7 @@ fn terminal_reconcile_projects_late_exec_through_process_lineage() {
         super::seccomp_notify_disabled(),
         super::process_seccomp_disabled(),
         super::agent_invocation_disabled(),
+        super::SemanticRetentionConfig::default(),
         super::application_protocol_disabled(),
         super::resource_metrics_disabled(),
         super::export_runtime_disabled(),

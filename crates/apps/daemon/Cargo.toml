@@ -30,6 +30,7 @@ recording_runtime = { path = "../../recording/runtime" }
 rule_set_provider = { path = "../../adapters/provider/rule_set" }
 semantic_action = { path = "../../contracts/semantic_action" }
 semantic_action_runtime = { path = "../../core/semantic_action_runtime" }
+serde_json = "1.0"
 storage_core = { path = "../../storage/core" }
 storage_factory = { path = "../../storage/factory" }
 trace_runtime = { path = "../../core/trace_runtime" }

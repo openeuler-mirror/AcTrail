@@ -171,7 +171,7 @@ application_protocol_http2_enabled = true
 application_http_capture_host = true
 application_http_sse_enabled = false
 application_http_sse_data_policy = disabled
-application_http_sse_max_buffer_bytes = 1048576
+application_http_sse_max_buffer_bytes = 4194304
 application_http_sse_max_data_bytes = 4096
 application_http2_max_frame_bytes = 16384
 application_http2_max_connection_buffer_bytes = 1048576
@@ -230,7 +230,7 @@ TLS payload 相关配置含义：
 | `application_protocol_http2_enabled` | external provider 配置同时启用 HTTP/2 frame/DATA facts，避免协议协商和代理路径变化时只剩单通道证据 |
 | `application_http_capture_host` | 把 HTTP/1.x `Host` header 写入 semantic metadata，便于 viewer/web 过滤 |
 | `application_http_sse_enabled` | 本例关闭；需要观察 streaming response 时可启用 SSE event 派生 |
-| `application_http_sse_max_buffer_bytes` | 单个 trace/stream/direction 的 HTTP/SSE 解析缓冲上限 |
+| `application_http_sse_max_buffer_bytes` | 单个 trace/stream/direction 的 HTTP/SSE 解析缓冲上限；默认 `4194304` |
 | `application_http_sse_max_data_bytes` | SSE preview 模式下单条 `data:` 预览最大字节数；本例关闭 preview 但仍显式配置 |
 | `application_http2_max_frame_bytes` | 单个 HTTP/2 frame payload 的最大解析长度；本例保留显式值以避免隐藏默认 |
 | `application_http2_max_connection_buffer_bytes` | 单个 trace/process/stream 的 HTTP/2 connection buffer 上限 |

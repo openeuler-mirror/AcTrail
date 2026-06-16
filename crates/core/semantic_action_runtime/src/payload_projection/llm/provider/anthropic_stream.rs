@@ -55,7 +55,6 @@ pub(super) fn parsed_events_to_response(
     Some(LlmParsedResponse {
         provider_id,
         model: parsed_events.iter().find_map(|event| event.model.clone()),
-        output_text: content_text.clone().or_else(|| reasoning_text.clone()),
         content_text,
         reasoning_text,
         tool_calls,

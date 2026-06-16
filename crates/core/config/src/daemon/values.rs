@@ -1,5 +1,8 @@
 //! Shared key-value parsing helpers for operator config files.
 
+#[path = "values/sections.rs"]
+mod sections;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -7,6 +10,7 @@ use std::str::FromStr;
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 
 use super::MemlockRlimit;
+use sections::{FlatParserSection, parse_section_header, section_storage_key};
 
 pub(super) struct ConfigValues {
     values: BTreeMap<String, Vec<String>>,
@@ -35,16 +39,20 @@ impl ConfigValues {
             let (key, value) = trimmed
                 .split_once('=')
                 .ok_or_else(|| format!("invalid config line {}", line_index + 1))?;
-            let key = key.trim().to_string();
-            if section != FlatParserSection::Root {
-                reject_section_key(&section, &key)?;
+            let key = key.trim();
+            if section == FlatParserSection::Root && key.starts_with("llm_semantic_") {
+                return Err(format!(
+                    "unsupported legacy config key {key}; use [semantic_retention] sections"
+                ));
+            }
+            let Some(storage_key) = section_storage_key(&section, key)? else {
                 continue;
-            }
+            };
             let value = unquote(value.trim())?;
-            if !repeated.contains(key.as_str()) && values.contains_key(&key) {
-                return Err(format!("duplicate config key {key}"));
+            if !repeated.contains(storage_key.as_str()) && values.contains_key(&storage_key) {
+                return Err(format!("duplicate config key {storage_key}"));
             }
-            values.entry(key).or_default().push(value);
+            values.entry(storage_key).or_default().push(value);
         }
         Ok(Self { values })
     }
@@ -184,64 +192,6 @@ impl ConfigValues {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum FlatParserSection {
-    Root,
-    Export,
-    ExportRoute,
-    ExportOtelJsonlRoute,
-}
-
-fn parse_section_header(
-    line: &str,
-    line_number: usize,
-) -> Result<Option<FlatParserSection>, String> {
-    if line.starts_with("[[") {
-        if !line.ends_with("]]") {
-            return Err(format!("invalid config section line {line_number}"));
-        }
-        if line == "[[export.routes]]" {
-            return Ok(Some(FlatParserSection::ExportRoute));
-        }
-        return Err(format!("unsupported config section line {line_number}"));
-    }
-    if line.ends_with("]]") {
-        return Err(format!("invalid config section line {line_number}"));
-    }
-    if !(line.starts_with('[') || line.ends_with(']')) {
-        return Ok(None);
-    }
-    if !(line.starts_with('[') && line.ends_with(']')) {
-        return Err(format!("invalid config section line {line_number}"));
-    }
-    let section = &line[1..line.len() - 1];
-    if section == "export" {
-        return Ok(Some(FlatParserSection::Export));
-    }
-    if section.starts_with("export.routes.otel-jsonl.") {
-        return Ok(Some(FlatParserSection::ExportOtelJsonlRoute));
-    }
-    Err(format!("unsupported config section line {line_number}"))
-}
-
-fn reject_section_key(section: &FlatParserSection, key: &str) -> Result<(), String> {
-    let allowed = match section {
-        FlatParserSection::Root => true,
-        FlatParserSection::Export => key == "enabled",
-        FlatParserSection::ExportRoute => matches!(key, "name" | "kind" | "delivery" | "enabled"),
-        FlatParserSection::ExportOtelJsonlRoute => matches!(
-            key,
-            "path" | "overwrite_enabled" | "queue_capacity" | "flush_every_spans"
-        ),
-    };
-    if allowed {
-        return Ok(());
-    }
-    Err(format!(
-        "unexpected config key {key} inside section-based export config"
-    ))
-}
-
 impl ConfigNode {
     pub(super) fn required(&self, key: &'static str) -> Result<String, String> {
         let values = self
@@ -368,6 +318,27 @@ impl ConfigNode {
         T: FromStr<Err = String>,
     {
         self.required(key)?
+            .parse::<T>()
+            .map_err(|error| format!("invalid {}: {error}", self.qualified_key(key)))
+    }
+
+    pub(super) fn optional_parsed<T>(&self, key: &'static str, default: T) -> Result<T, String>
+    where
+        T: FromStr<Err = String>,
+    {
+        let Some(values) = self.values.get(key) else {
+            return Ok(default);
+        };
+        if values.len() != 1 {
+            return Err(format!(
+                "config key {} must appear once",
+                self.qualified_key(key)
+            ));
+        }
+        values
+            .first()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| format!("config key {} must not be empty", self.qualified_key(key)))?
             .parse::<T>()
             .map_err(|error| format!("invalid {}: {error}", self.qualified_key(key)))
     }

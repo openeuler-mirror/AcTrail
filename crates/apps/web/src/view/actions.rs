@@ -28,7 +28,6 @@ const HEAVY_ATTRIBUTE_SUFFIXES: &[&str] = &[
     ".output_text",
     ".content_text",
     ".reasoning_text",
-    ".tool_calls_json",
 ];
 
 pub(super) fn action_tree_json(
@@ -36,11 +35,10 @@ pub(super) fn action_tree_json(
     storage: &mut dyn StorageBackend,
     trace_id: TraceId,
 ) -> Result<String, String> {
-    let projection = projection_cache::cached_action_display_projection(
-        storage_path,
-        trace_id,
-        || ActionDisplayProjection::load(storage, trace_id),
-    )?;
+    let projection =
+        projection_cache::cached_action_display_projection(storage_path, trace_id, || {
+            ActionDisplayProjection::load(storage, trace_id)
+        })?;
     let roots = projection
         .root_action_ids
         .iter()

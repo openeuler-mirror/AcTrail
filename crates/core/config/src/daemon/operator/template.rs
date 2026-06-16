@@ -126,7 +126,7 @@ application_protocol_http2_enabled = true
 application_http_capture_host = true
 application_http_sse_enabled = true
 application_http_sse_data_policy = preview
-application_http_sse_max_buffer_bytes = 1048576
+application_http_sse_max_buffer_bytes = 4194304
 application_http_sse_max_data_bytes = 65536
 application_http2_max_frame_bytes = 65536
 application_http2_max_connection_buffer_bytes = 4194304
@@ -156,6 +156,37 @@ enforcement_event_buffer_bytes = 65536
 startup_wait_ms = 5000
 shutdown_wait_ms = 5000
 supervision_poll_interval_ms = 100
+
+[semantic_retention]
+content_owner = highest_consumed
+
+[semantic_retention.L0_llm_call]
+enabled = true
+request_content = full_provider_json
+response_content = assembled_provider
+tool_calls = assembled_json
+usage = summary
+
+[semantic_retention.L1_sse]
+enabled = true
+stream_summary = true
+event_content = none
+
+[semantic_retention.L2_http]
+enabled = true
+message_summary = true
+headers = metadata
+body_content = text
+
+[semantic_retention.L3_http2_frame]
+enabled = true
+frame_summary = true
+data_content = none
+
+[semantic_retention.L4_payload]
+enabled = true
+stats = true
+body_content = none
 
 [export]
 enabled = true

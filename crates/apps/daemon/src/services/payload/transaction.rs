@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::time::SystemTime;
 
-use config_core::daemon::{DiagnosticLogLevel, PayloadStdioStorageMode};
+use config_core::daemon::{DiagnosticLogLevel, PayloadStdioStorageMode, SemanticRetentionConfig};
 use control_contract::reply::ControlError;
 use model_core::capability::{Capability, RequestMode};
 use model_core::event::{DomainEvent, EventEnvelope, EventFlags, EventKind, EventPayload};
@@ -58,6 +58,7 @@ impl StorageAttachService {
             trace_runtime,
             socket_payload_gate: &mut self.socket_payload_gate,
             payload_body_retention_gate: &mut self.payload_body_retention_gate,
+            semantic_retention: &self.semantic_retention,
             application_protocol: &mut self.application_protocol,
             semantic_actions: &mut self.semantic_actions,
             finalized_terminal_traces: &mut self.finalized_terminal_traces,
@@ -104,6 +105,7 @@ struct PayloadTransactionContext<'a> {
     trace_runtime: &'a TraceRuntime,
     socket_payload_gate: &'a mut SocketHttpPayloadGate,
     payload_body_retention_gate: &'a mut PayloadBodyRetentionGate,
+    semantic_retention: &'a SemanticRetentionConfig,
     application_protocol: &'a mut ApplicationProtocolAnalyzer,
     semantic_actions: &'a mut LiveSemanticActionRuntime,
     finalized_terminal_traces: &'a mut BTreeSet<TraceId>,
@@ -212,26 +214,28 @@ impl PayloadTransactionContext<'_> {
         };
         let body_retention: PayloadBodyRetentionDecision =
             self.payload_body_retention_gate.decide(&segment);
+        let (bytes, redaction) =
+            redact_payload_bytes(policy.redaction, std::mem::take(&mut segment.bytes));
+        segment.captured_size = bytes.len() as u64;
+        segment.redaction = redaction;
+        segment.bytes = bytes;
         let analysis_segment = segment.clone();
-        match body_retention.mode {
-            PayloadBodyRetention::Full => {
-                let (bytes, redaction) =
-                    redact_payload_bytes(policy.redaction, std::mem::take(&mut segment.bytes));
-                segment.captured_size = bytes.len() as u64;
-                segment.redaction = redaction;
-                segment.bytes = bytes;
-            }
-            PayloadBodyRetention::SummaryOnly => {
-                segment.bytes.clear();
-                segment.captured_size = 0;
-            }
+        let mut stored_segment = segment;
+        if should_clear_transport_payload_body(
+            &stored_segment,
+            body_retention,
+            self.semantic_retention,
+        ) {
+            stored_segment.bytes.clear();
         }
-        apply_stdio_storage_mode(&mut segment, policy.stdio_storage_mode);
+        apply_stdio_storage_mode(&mut stored_segment, policy.stdio_storage_mode);
+        let retained_body_bytes = u64::try_from(stored_segment.bytes.len())
+            .map_err(|error| ControlError::new("payload_retention", error.to_string()))?;
         let retained_bytes = session
             .retained_payload_bytes(raw.trace_id)
             .map_err(recording_error_to_control)?;
         let next_retained_bytes = retained_bytes
-            .checked_add(segment.captured_size)
+            .checked_add(retained_body_bytes)
             .ok_or_else(|| ControlError::new("payload_retention", "payload retention overflow"))?;
         if next_retained_bytes > policy.retention_max_bytes_per_trace {
             return Err(ControlError::new(
@@ -242,36 +246,30 @@ impl PayloadTransactionContext<'_> {
                 ),
             ));
         }
-        let stored_captured_size = segment.captured_size;
-        let semantic_actions = self.observe_semantic_actions_for_payload_segment(&segment);
+        let stored_captured_size = stored_segment.captured_size;
+        let semantic_actions = self.observe_semantic_actions_for_payload_segment(&analysis_segment);
         let mut semantic_actions = session
-            .persist_payload_segment(segment, semantic_actions)
+            .persist_payload_segment(stored_segment, semantic_actions)
             .map_err(recording_error_to_control)?;
         self.log_payload_diagnostic(format_args!(
-            "payload_persist stored trace_id={} pid={} generation={} source={:?} bytes={} operation_id={}",
+            "payload_persist stored trace_id={} pid={} generation={} source={:?} captured_bytes={} retained_body_bytes={} operation_id={}",
             raw.trace_id,
             matched.process.pid,
             matched.process.generation,
             raw.source_boundary,
             stored_captured_size,
+            retained_body_bytes,
             raw.operation_id
         ));
         let application_drafts =
             if application_protocol_requested(self.trace_runtime, raw.trace_id)? {
-                match body_retention.mode {
-                    PayloadBodyRetention::Full => self
-                        .application_protocol
-                        .analyze(&analysis_segment)
-                        .map_err(|error| {
-                            ControlError::new("application_protocol_analyzer", error)
-                        })?,
-                    PayloadBodyRetention::SummaryOnly => self
-                        .application_protocol
-                        .analyze_summary_only(&analysis_segment)
-                        .map_err(|error| {
-                            ControlError::new("application_protocol_analyzer", error)
-                        })?,
-                }
+                self.application_protocol
+                    .analyze_with_semantic_context(
+                        &analysis_segment,
+                        body_retention.semantic_layer.consumed_by_llm(),
+                        matches!(body_retention.mode, PayloadBodyRetention::SummaryOnly),
+                    )
+                    .map_err(|error| ControlError::new("application_protocol_analyzer", error))?
             } else {
                 Vec::new()
             };
@@ -376,7 +374,24 @@ fn apply_stdio_storage_mode(segment: &mut PayloadSegment, mode: PayloadStdioStor
         return;
     }
     segment.bytes.clear();
-    segment.captured_size = 0;
+}
+
+fn should_clear_transport_payload_body(
+    segment: &PayloadSegment,
+    decision: PayloadBodyRetentionDecision,
+    semantic_retention: &SemanticRetentionConfig,
+) -> bool {
+    if segment.content_state != model_core::payload::PayloadContentState::Plaintext
+        || !matches!(
+            segment.source_boundary,
+            model_core::payload::PayloadSourceBoundary::TlsUserSpace
+                | model_core::payload::PayloadSourceBoundary::Syscall
+        )
+    {
+        return false;
+    }
+    !semantic_retention
+        .retain_transport_payload_body(decision.semantic_layer.consumed_by_higher_layer())
 }
 
 fn application_protocol_requested(

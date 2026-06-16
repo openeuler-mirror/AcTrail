@@ -24,7 +24,13 @@ mod resource;
 #[path = "daemon/values.rs"]
 mod values;
 
-pub use agent::AgentInvocationConfig;
+pub use agent::{
+    AgentInvocationConfig, Http2DataContentRetention, HttpBodyRetention, HttpHeadersRetention,
+    L0LlmCallRetention, L1SseRetention, L2HttpRetention, L3Http2FrameRetention, L4PayloadRetention,
+    LlmRequestContentRetention, LlmResponseContentRetention, LlmToolCallRetention,
+    LlmUsageRetention, PayloadBodyContentRetention, SemanticContentOwner, SemanticRetentionConfig,
+    SseEventContentRetention,
+};
 pub use application::{ApplicationProtocolConfig, SseDataPolicy};
 pub use enforcement::{
     EnforcementBackend, EnforcementConfig, EnforcementDecision, EnforcementMarkStrategy,

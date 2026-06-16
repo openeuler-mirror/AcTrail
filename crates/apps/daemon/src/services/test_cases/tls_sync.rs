@@ -34,6 +34,7 @@ fn tls_sync_payload_persists_without_child_membership() {
         super::seccomp_notify_disabled(),
         super::process_seccomp_disabled(),
         super::agent_invocation_disabled(),
+        super::SemanticRetentionConfig::default(),
         super::application_protocol_disabled(),
         super::resource_metrics_disabled(),
         super::export_runtime_disabled(),
@@ -84,7 +85,9 @@ fn tls_sync_payload_persists_without_child_membership() {
         segments[0].source_boundary,
         PayloadSourceBoundary::TlsUserSpace
     );
-    assert_eq!(segments[0].bytes, TLS_SYNC_PAYLOAD);
+    assert!(segments[0].bytes.is_empty());
+    assert_eq!(segments[0].captured_size, TLS_SYNC_PAYLOAD.len() as u64);
+    assert_eq!(segments[0].original_size, TLS_SYNC_PAYLOAD.len() as u64);
 }
 
 fn sync_child_pid() -> u32 {

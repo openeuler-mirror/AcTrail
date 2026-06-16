@@ -10,12 +10,6 @@ pub(super) struct ResponseTexts {
 }
 
 impl ResponseTexts {
-    pub(super) fn output_text(&self) -> Option<String> {
-        self.content_text
-            .clone()
-            .or_else(|| self.reasoning_text.clone())
-    }
-
     pub(super) fn chunk_count(&self) -> usize {
         usize::from(self.content_text.is_some()) + usize::from(self.reasoning_text.is_some())
     }

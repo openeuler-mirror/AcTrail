@@ -3,12 +3,13 @@
 use super::super::values::{ConfigNode, ConfigValues};
 use super::super::{
     AgentInvocationConfig, ApplicationProtocolConfig, DisabledOrPath, EnforcementConfig,
+    L0LlmCallRetention, L1SseRetention, L2HttpRetention, L3Http2FrameRetention, L4PayloadRetention,
     PayloadRedactionPolicy, PayloadSocketCaptureBackend, PayloadSocketConfig,
     PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadStdioStorageMode,
     PayloadTlsCaptureBackend, PayloadTlsConfig, PayloadTlsLibrary, PayloadTlsLibraryPath,
     PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource,
     PayloadTlsSyncRuntimeLibraryPath, ProcessSeccompConfig, ProcessSeccompSyscall,
-    ResourceMetricsConfig, SeccompNotifyConfig,
+    ResourceMetricsConfig, SeccompNotifyConfig, SemanticRetentionConfig,
 };
 use crate::export::ExportConfig;
 use crate::provider_rules::ProviderRuleSetConfig;
@@ -135,6 +136,50 @@ pub(super) fn agent_invocation_config(node: ConfigNode) -> Result<AgentInvocatio
     Ok(AgentInvocationConfig {
         enabled: node.required_bool("enabled")?,
         commands: node.repeated_optional("command").cloned().collect(),
+    })
+}
+
+pub(super) fn semantic_retention_config(
+    node: ConfigNode,
+) -> Result<SemanticRetentionConfig, String> {
+    let defaults = SemanticRetentionConfig::default();
+    let l0 = L0LlmCallRetention::default();
+    let l1 = L1SseRetention::default();
+    let l2 = L2HttpRetention::default();
+    let l3 = L3Http2FrameRetention::default();
+    let l4 = L4PayloadRetention::default();
+    Ok(SemanticRetentionConfig {
+        content_owner: node.optional_parsed("content_owner", defaults.content_owner)?,
+        l0_llm_call: L0LlmCallRetention {
+            enabled: node.optional_bool("L0_llm_call_enabled", l0.enabled)?,
+            request_content: node
+                .optional_parsed("L0_llm_call_request_content", l0.request_content)?,
+            response_content: node
+                .optional_parsed("L0_llm_call_response_content", l0.response_content)?,
+            tool_calls: node.optional_parsed("L0_llm_call_tool_calls", l0.tool_calls)?,
+            usage: node.optional_parsed("L0_llm_call_usage", l0.usage)?,
+        },
+        l1_sse: L1SseRetention {
+            enabled: node.optional_bool("L1_sse_enabled", l1.enabled)?,
+            stream_summary: node.optional_bool("L1_sse_stream_summary", l1.stream_summary)?,
+            event_content: node.optional_parsed("L1_sse_event_content", l1.event_content)?,
+        },
+        l2_http: L2HttpRetention {
+            enabled: node.optional_bool("L2_http_enabled", l2.enabled)?,
+            message_summary: node.optional_bool("L2_http_message_summary", l2.message_summary)?,
+            headers: node.optional_parsed("L2_http_headers", l2.headers)?,
+            body_content: node.optional_parsed("L2_http_body_content", l2.body_content)?,
+        },
+        l3_http2_frame: L3Http2FrameRetention {
+            enabled: node.optional_bool("L3_http2_frame_enabled", l3.enabled)?,
+            frame_summary: node.optional_bool("L3_http2_frame_frame_summary", l3.frame_summary)?,
+            data_content: node.optional_parsed("L3_http2_frame_data_content", l3.data_content)?,
+        },
+        l4_payload: L4PayloadRetention {
+            enabled: node.optional_bool("L4_payload_enabled", l4.enabled)?,
+            stats: node.optional_bool("L4_payload_stats", l4.stats)?,
+            body_content: node.optional_parsed("L4_payload_body_content", l4.body_content)?,
+        },
     })
 }
 

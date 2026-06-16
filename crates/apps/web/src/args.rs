@@ -241,7 +241,11 @@ fn parse_section_header(line: &str, line_number: usize) -> Result<Option<bool>, 
         return Err(format!("invalid config section line {line_number}"));
     }
     let section = &line[1..line.len() - 1];
-    if section == "export" || section.starts_with("export.routes.") {
+    if section == "export"
+        || section.starts_with("export.routes.")
+        || section == "semantic_retention"
+        || section.starts_with("semantic_retention.")
+    {
         return Ok(Some(true));
     }
     Err(format!("unsupported config section line {line_number}"))

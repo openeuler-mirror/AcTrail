@@ -41,6 +41,7 @@ fn live_exporter_failure_is_diagnostic_not_payload_failure() {
         super::seccomp_notify_disabled(),
         super::process_seccomp_disabled(),
         super::agent_invocation_disabled(),
+        super::SemanticRetentionConfig::default(),
         ApplicationProtocolConfig {
             enabled: true,
             http1_enabled: true,

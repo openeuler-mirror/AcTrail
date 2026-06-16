@@ -20,6 +20,8 @@ const HTTP_RESPONSE_STATUS_CODE_ATTR: &str = "http.response.status_code";
 const HTTP_RESPONSE_STREAM_ID_ATTR: &str = "http.response.stream_id";
 const STATUS_CODE_ATTR: &str = "status_code";
 const PAYLOAD_SEQUENCE_LLM_ATTR: &str = "payload.sequence";
+const PAYLOAD_SEQUENCE_START_LLM_ATTR: &str = "payload.sequence_start";
+const PAYLOAD_SEQUENCE_END_LLM_ATTR: &str = "payload.sequence_end";
 const HTTP_MESSAGE_STREAM_ID_ATTR: &str = "stream_id";
 
 pub(super) fn invalid_link(
@@ -161,7 +163,7 @@ fn actions_share_payload_segment(parent: &SemanticAction, child: &SemanticAction
     };
     parent.evidence.iter().any(|evidence| {
         evidence.kind == SemanticEvidenceKind::PayloadSegment && evidence.id == payload_segment_id
-    })
+    }) || payload_aggregate_matches_http_message(parent, child)
 }
 
 fn response_payload_marker(action: &SemanticAction) -> Option<u64> {
@@ -189,4 +191,44 @@ fn http_payload_marker(action: &SemanticAction) -> Option<u64> {
 
 fn http_payload_segment_id(action: &SemanticAction) -> Option<u64> {
     action.attributes.get(PAYLOAD_SEGMENT_ID_ATTR)?.parse().ok()
+}
+
+fn payload_aggregate_matches_http_message(
+    llm_action: &SemanticAction,
+    http_message: &SemanticAction,
+) -> bool {
+    if !llm_action
+        .evidence
+        .iter()
+        .any(|evidence| evidence.kind == SemanticEvidenceKind::PayloadAggregate)
+    {
+        return false;
+    }
+    if llm_action
+        .attributes
+        .get(PAYLOAD_STREAM_KEY_ATTR)
+        .zip(http_message.attributes.get(STREAM_KEY_ATTR))
+        .is_none_or(|(left, right)| left != right)
+    {
+        return false;
+    }
+    let Some(http_sequence) = http_payload_marker(http_message) else {
+        return false;
+    };
+    payload_sequence_range(llm_action)
+        .is_some_and(|(start, end)| start <= http_sequence && http_sequence <= end)
+}
+
+fn payload_sequence_range(action: &SemanticAction) -> Option<(u64, u64)> {
+    let start = action
+        .attributes
+        .get(PAYLOAD_SEQUENCE_START_LLM_ATTR)?
+        .parse()
+        .ok()?;
+    let end = action
+        .attributes
+        .get(PAYLOAD_SEQUENCE_END_LLM_ATTR)?
+        .parse()
+        .ok()?;
+    Some((start, end))
 }

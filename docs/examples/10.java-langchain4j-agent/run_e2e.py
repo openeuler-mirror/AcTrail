@@ -166,10 +166,19 @@ def require_otel_request_evidence(document: dict, model: str, prompt: str) -> No
             continue
         if attrs.get("actrail.action.status") != "success":
             continue
-        body = attrs.get("http.request.body_text") or attrs.get("llm.request.payload_text", "")
-        if attrs.get("llm.request.model") == model and prompt in body:
+        body_json = attrs.get("llm.request.body_json", "")
+        if (
+            attrs.get("llm.request.model") == model
+            and attrs.get("llm.request.payload_bytes")
+            and body_json
+            and model in body_json
+            and prompt in body_json
+            and not attrs.get("llm.request.payload_text")
+            and not attrs.get("http.request.body_text")
+            and not attrs.get("http.request.body_json")
+        ):
             return
-    raise RuntimeError("OTEL export did not contain a complete llm.request span with model and prompt")
+    raise RuntimeError("OTEL export did not contain a complete llm.request span with model and payload metadata")
 
 
 def count_otel_spans(document: dict, kind: str) -> int:

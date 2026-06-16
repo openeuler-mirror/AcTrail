@@ -1,6 +1,8 @@
 use std::time::SystemTime;
 
-use config_core::daemon::{ApplicationProtocolConfig, SseDataPolicy};
+use config_core::daemon::{
+    ApplicationProtocolConfig, Http2DataContentRetention, SemanticRetentionConfig, SseDataPolicy,
+};
 use model_core::ids::TraceId;
 use model_core::payload::{
     PayloadContentState, PayloadDirection, PayloadOperationCompletionState, PayloadRedactionState,
@@ -24,7 +26,7 @@ const OTHER_TRACE_ID: TraceId = TraceId::new(2);
 
 #[test]
 fn strips_inbound_connection_preface_before_frame_decode() {
-    let mut analyzer = Http2Analyzer::new(test_config());
+    let mut analyzer = Http2Analyzer::new_with_retention(test_config(), preview_retention());
     let mut bytes = CONNECTION_PREFACE.to_vec();
     bytes.extend_from_slice(&test_frame(SETTINGS_FRAME_TYPE, 0, 0, b""));
     bytes.extend_from_slice(&test_frame(
@@ -60,7 +62,7 @@ fn strips_inbound_connection_preface_before_frame_decode() {
 
 #[test]
 fn oversized_known_frame_drops_direction_without_error() {
-    let mut analyzer = Http2Analyzer::new(test_config());
+    let mut analyzer = Http2Analyzer::new_with_retention(test_config(), preview_retention());
     let oversized = test_frame_header(
         TEST_MAX_FRAME_BYTES + 1,
         DATA_FRAME_TYPE,
@@ -90,7 +92,7 @@ fn oversized_known_frame_drops_direction_without_error() {
 
 #[test]
 fn oversized_frame_does_not_drop_opposite_direction_buffer() {
-    let mut analyzer = Http2Analyzer::new(test_config());
+    let mut analyzer = Http2Analyzer::new_with_retention(test_config(), preview_retention());
     let mut preface = CONNECTION_PREFACE.to_vec();
     preface.extend_from_slice(&test_frame(SETTINGS_FRAME_TYPE, 0, 0, b""));
     analyzer
@@ -167,6 +169,12 @@ fn test_config() -> ApplicationProtocolConfig {
         http2_emit_data_preview: true,
         http2_max_data_preview_bytes: TEST_PREVIEW_BYTES,
     }
+}
+
+fn preview_retention() -> SemanticRetentionConfig {
+    let mut config = SemanticRetentionConfig::default();
+    config.l3_http2_frame.data_content = Http2DataContentRetention::Preview;
+    config
 }
 
 fn payload_segment(direction: PayloadDirection, bytes: Vec<u8>) -> PayloadSegment {

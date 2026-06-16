@@ -1,10 +1,18 @@
 //! HTTP/1.x and SSE parsing helpers for application semantic analysis.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 
-use config_core::daemon::{ApplicationProtocolConfig, SseDataPolicy};
+use config_core::daemon::{
+    ApplicationProtocolConfig, HttpBodyRetention, HttpHeadersRetention, SemanticRetentionConfig,
+};
 use model_core::event::ApplicationPayload;
 use model_core::payload::PayloadSegment;
+use serde_json::{Map, Value};
+
+use super::super::base64_encode;
+
+#[path = "parser/streaming.rs"]
+mod streaming;
 
 pub(super) fn starts_like_http_or_sse(text: &str, sse_enabled: bool) -> bool {
     let first_line = text.lines().next().map(str::trim).unwrap_or_default();
@@ -97,6 +105,82 @@ pub(super) fn take_message(
     Ok(Some(message))
 }
 
+pub(super) fn take_chunked_sse_head(
+    text: &mut String,
+    config: &ApplicationProtocolConfig,
+) -> Result<Option<HttpMessage>, String> {
+    if !config.sse_enabled {
+        return Ok(None);
+    }
+    let Some((header_end, separator_len)) = header_boundary(text) else {
+        return Ok(None);
+    };
+    let headers = parse_headers(&text[..header_end])?;
+    if !headers.is_chunked() {
+        return Ok(None);
+    }
+    let body_start = header_end + separator_len;
+    if text[body_start..]
+        .lines()
+        .next()
+        .map(str::trim)
+        .is_some_and(starts_like_sse)
+    {
+        return Ok(None);
+    }
+    let message = HttpMessage {
+        first_line: headers.first_line,
+        fields: headers.fields,
+        body: String::new(),
+    };
+    if !message.is_sse() {
+        return Ok(None);
+    }
+    text.drain(..body_start);
+    Ok(Some(message))
+}
+
+pub(super) fn take_streaming_sse_events(
+    text: &mut String,
+    config: &ApplicationProtocolConfig,
+) -> Result<Vec<ApplicationPayload>, String> {
+    if !config.sse_enabled
+        || !text
+            .lines()
+            .next()
+            .map(str::trim)
+            .is_some_and(starts_like_sse)
+    {
+        return Ok(Vec::new());
+    }
+    streaming::take_complete_sse_events(text, config)
+}
+
+pub(super) struct ChunkedSseDrain {
+    pub(super) payloads: Vec<ApplicationPayload>,
+    pub(super) done: bool,
+}
+
+pub(super) fn take_chunked_sse_events(
+    text: &mut String,
+    pending_sse: &mut String,
+    config: &ApplicationProtocolConfig,
+) -> Result<ChunkedSseDrain, String> {
+    let chunked = streaming::drain_complete_chunks(text)?;
+    for body in chunked.bodies {
+        pending_sse.push_str(&body);
+    }
+    let mut payloads = streaming::take_complete_sse_events(pending_sse, config)?;
+    if chunked.done && !pending_sse.is_empty() {
+        payloads.extend(streaming::sse_event_payloads(pending_sse, config)?);
+        pending_sse.clear();
+    }
+    Ok(ChunkedSseDrain {
+        payloads,
+        done: chunked.done,
+    })
+}
+
 pub(super) struct HttpMessage {
     first_line: String,
     fields: BTreeMap<String, String>,
@@ -108,6 +192,8 @@ impl HttpMessage {
         &self,
         segment: &PayloadSegment,
         config: &ApplicationProtocolConfig,
+        semantic_retention: &SemanticRetentionConfig,
+        consumed_by_llm: bool,
     ) -> ApplicationPayload {
         let mut metadata = BTreeMap::from([
             (
@@ -125,7 +211,17 @@ impl HttpMessage {
                 segment.segment_id.get().to_string(),
             ),
         ]);
-        add_selected_headers(&mut metadata, &self.fields, config);
+        add_headers(
+            &mut metadata,
+            &self.fields,
+            config,
+            semantic_retention.http_headers(),
+        );
+        add_body(
+            &mut metadata,
+            &self.body,
+            semantic_retention.http_body_content_for_http_message(consumed_by_llm),
+        );
         if let Some(status) = self.response_status() {
             metadata.insert("status_code".to_string(), status.code);
             if let Some(reason) = status.reason {
@@ -168,33 +264,7 @@ impl HttpMessage {
         &self,
         config: &ApplicationProtocolConfig,
     ) -> Result<Vec<ApplicationPayload>, String> {
-        let mut output = Vec::new();
-        for block in sse_blocks(&self.body) {
-            let fields = parse_sse_block(block);
-            if fields.is_empty() {
-                continue;
-            }
-            let event_name = fields
-                .get("event")
-                .cloned()
-                .unwrap_or_else(|| "message".to_string());
-            let mut metadata = BTreeMap::from([("event".to_string(), event_name.clone())]);
-            if let Some(data) = fields.get("data") {
-                metadata.insert("data_size".to_string(), data.len().to_string());
-                if matches!(config.sse_data_policy, SseDataPolicy::Preview) {
-                    let (preview, truncated) = preview_data(data, config.sse_max_data_bytes)?;
-                    metadata.insert("data_preview".to_string(), preview);
-                    metadata.insert("data_truncated".to_string(), truncated.to_string());
-                }
-            }
-            output.push(ApplicationPayload {
-                protocol: "sse".to_string(),
-                operation: "event".to_string(),
-                summary: event_name,
-                metadata,
-            });
-        }
-        Ok(output)
+        streaming::sse_event_payloads(&self.body, config)
     }
 
     fn request_line(&self) -> Option<RequestLine> {
@@ -346,6 +416,28 @@ fn starts_like_sse(line: &str) -> bool {
     line.starts_with("event:") || line.starts_with("data:")
 }
 
+fn add_headers(
+    metadata: &mut BTreeMap<String, String>,
+    fields: &BTreeMap<String, String>,
+    config: &ApplicationProtocolConfig,
+    retention: HttpHeadersRetention,
+) {
+    match retention {
+        HttpHeadersRetention::None => return,
+        HttpHeadersRetention::Metadata => add_selected_headers(metadata, fields, config),
+        HttpHeadersRetention::Full => {
+            let headers = fields
+                .iter()
+                .map(|(key, value)| (key.clone(), Value::String(value.clone())))
+                .collect::<Map<_, _>>();
+            metadata.insert(
+                "http.headers_json".to_string(),
+                Value::Object(headers).to_string(),
+            );
+        }
+    }
+}
+
 fn add_selected_headers(
     metadata: &mut BTreeMap<String, String>,
     fields: &BTreeMap<String, String>,
@@ -363,118 +455,35 @@ fn add_selected_headers(
     }
 }
 
-fn sse_blocks(body: &str) -> VecDeque<&str> {
-    let mut blocks = VecDeque::new();
-    for block in body.split("\n\n") {
-        let normalized = block.trim_matches(['\r', '\n']);
-        if !normalized.is_empty() {
-            blocks.push_back(normalized);
+fn add_body(metadata: &mut BTreeMap<String, String>, body: &str, retention: HttpBodyRetention) {
+    if body.is_empty() {
+        return;
+    }
+    match retention {
+        HttpBodyRetention::None => {}
+        HttpBodyRetention::Text => {
+            metadata.insert("http.body_text".to_string(), body.to_string());
+        }
+        HttpBodyRetention::Json => {
+            if let Ok(value) = serde_json::from_str::<Value>(body) {
+                metadata.insert("http.body_json".to_string(), value.to_string());
+                metadata.insert("http.body_json_state".to_string(), "valid".to_string());
+            } else {
+                metadata.insert(
+                    "http.body_json_state".to_string(),
+                    "invalid_or_unavailable".to_string(),
+                );
+            }
+        }
+        HttpBodyRetention::Raw => {
+            metadata.insert(
+                "http.body_base64".to_string(),
+                base64_encode(body.as_bytes()),
+            );
         }
     }
-    blocks
-}
-
-fn parse_sse_block(block: &str) -> BTreeMap<String, String> {
-    let mut fields = BTreeMap::<String, String>::new();
-    for line in block.lines() {
-        let line = line.trim_end_matches('\r');
-        let Some((name, value)) = line.split_once(':') else {
-            continue;
-        };
-        let key = name.trim().to_ascii_lowercase();
-        let value = value.trim_start();
-        fields
-            .entry(key)
-            .and_modify(|existing| {
-                existing.push('\n');
-                existing.push_str(value);
-            })
-            .or_insert_with(|| value.to_string());
-    }
-    fields
-}
-
-fn preview_data(data: &str, max_bytes: u64) -> Result<(String, bool), String> {
-    let max_bytes = usize::try_from(max_bytes).map_err(|error| error.to_string())?;
-    if data.len() <= max_bytes {
-        return Ok((data.to_string(), false));
-    }
-    let mut end = max_bytes;
-    while !data.is_char_boundary(end) {
-        end = end
-            .checked_sub(1)
-            .ok_or_else(|| "SSE preview boundary underflow".to_string())?;
-    }
-    Ok((data[..end].to_string(), true))
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    const TEST_SSE_MAX_BUFFER_BYTES: u64 = 4096;
-    const TEST_SSE_MAX_DATA_BYTES: u64 = 4096;
-    const TEST_HTTP2_MAX_FRAME_BYTES: u64 = 16384;
-    const TEST_HTTP2_MAX_CONNECTION_BUFFER_BYTES: u64 = 4096;
-    const TEST_HTTP2_MAX_DATA_PREVIEW_BYTES: u64 = 4096;
-
-    #[test]
-    fn chunked_response_with_dechunked_sse_body_does_not_error_when_sse_is_disabled() {
-        let mut text = claude_streaming_response_fragment();
-        let message = take_message(&mut text, &test_config(false), false)
-            .unwrap()
-            .expect("HTTP response headers");
-
-        assert_eq!(message.first_line, "HTTP/1.1 200 OK");
-        assert!(message.body.is_empty());
-        assert!(text.is_empty());
-    }
-
-    #[test]
-    fn chunked_response_with_dechunked_sse_body_can_emit_sse_preview() {
-        let config = test_config(true);
-        let mut text = claude_streaming_response_fragment();
-        let message = take_message(&mut text, &config, false)
-            .unwrap()
-            .expect("HTTP response headers");
-
-        let events = message.sse_events(&config).unwrap();
-        assert!(events.iter().any(|payload| {
-            payload.operation == "event" && payload.summary == "content_block_delta"
-        }));
-        assert!(text.is_empty());
-    }
-
-    fn claude_streaming_response_fragment() -> String {
-        concat!(
-            "HTTP/1.1 200 OK\r\n",
-            "Content-Type: text/event-stream\r\n",
-            "Transfer-Encoding: chunked\r\n",
-            "\r\n",
-            "event: content_block_delta\n",
-            "data: {\"type\":\"content_block_delta\",\"index\":0}\n\n",
-        )
-        .to_string()
-    }
-
-    fn test_config(sse_enabled: bool) -> ApplicationProtocolConfig {
-        ApplicationProtocolConfig {
-            enabled: true,
-            http1_enabled: true,
-            http2_enabled: false,
-            capture_host: false,
-            sse_enabled,
-            sse_data_policy: if sse_enabled {
-                SseDataPolicy::Preview
-            } else {
-                SseDataPolicy::Disabled
-            },
-            sse_max_buffer_bytes: TEST_SSE_MAX_BUFFER_BYTES,
-            sse_max_data_bytes: TEST_SSE_MAX_DATA_BYTES,
-            http2_max_frame_bytes: TEST_HTTP2_MAX_FRAME_BYTES,
-            http2_max_connection_buffer_bytes: TEST_HTTP2_MAX_CONNECTION_BUFFER_BYTES,
-            http2_emit_data_preview: false,
-            http2_max_data_preview_bytes: TEST_HTTP2_MAX_DATA_PREVIEW_BYTES,
-        }
-    }
-}
+#[path = "parser/tests.rs"]
+mod tests;

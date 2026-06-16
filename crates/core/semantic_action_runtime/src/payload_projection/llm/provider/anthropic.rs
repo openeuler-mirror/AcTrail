@@ -90,7 +90,6 @@ impl LlmProviderResponseParser for AnthropicMessagesResponseParser {
                 .get("model")
                 .and_then(Value::as_str)
                 .map(ToString::to_string),
-            output_text: content_text.clone().or_else(|| reasoning_text.clone()),
             content_text,
             reasoning_text,
             tool_calls,

@@ -777,11 +777,7 @@ function llmRequestMessage(action, { preview = false } = {}) {
     return '';
   }
   const attrs = action.attributes ?? {};
-  const raw =
-    attrs['llm.request.payload_text'] ||
-    attrs['http.request.body_text'] ||
-    attrs['http.request.body_json'] ||
-    '';
+  const raw = attrs['llm.request.body_json'] || attrs['llm.request.body_text'] || '';
   return extractLlmRequestMessage(raw, preview);
 }
 
@@ -790,15 +786,14 @@ function llmResponseMessage(action) {
     return '';
   }
   const attrs = action.attributes ?? {};
-  const direct =
-    attrs['llm.response.output_text'] ||
-    attrs['llm.response.content_text'] ||
-    attrs['llm.response.reasoning_text'];
-  if (direct) {
-    return direct;
+  const parts = [
+    attrs['llm.response.reasoning_text'],
+    attrs['llm.response.content_text'],
+  ].filter((value) => String(value ?? '').trim().length > 0);
+  if (parts.length > 0) {
+    return Array.from(new Set(parts)).join('\n\n');
   }
-  const raw = attrs['llm.response.payload_text'] || attrs['http.response.body_text'] || '';
-  return extractLlmAssistantMessage(raw);
+  return '';
 }
 
 function extractLlmRequestMessage(raw, preview) {

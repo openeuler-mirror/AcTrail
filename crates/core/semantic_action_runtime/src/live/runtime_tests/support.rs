@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::time::SystemTime;
 
-use config_core::daemon::AgentInvocationConfig;
+use config_core::daemon::{AgentInvocationConfig, SemanticRetentionConfig};
 use model_core::event::{
     ApplicationPayload, DomainEvent, EventEnvelope, EventFlags, EventKind, EventPayload,
     FilePayload, ProcessPayload,
@@ -64,10 +64,13 @@ const TEST_CONNECT_REQUEST_SEGMENT_ID: &str = "100";
 const TEST_CONNECT_RESPONSE_SEGMENT_ID: &str = "101";
 
 pub(super) fn runtime() -> LiveSemanticActionRuntime {
-    LiveSemanticActionRuntime::new(AgentInvocationConfig {
-        enabled: true,
-        commands: vec!["xiaoo".to_string()],
-    })
+    LiveSemanticActionRuntime::new(
+        AgentInvocationConfig {
+            enabled: true,
+            commands: vec!["xiaoo".to_string()],
+        },
+        SemanticRetentionConfig::default(),
+    )
 }
 
 pub(super) fn exec_event(
