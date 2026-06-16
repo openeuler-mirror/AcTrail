@@ -136,10 +136,7 @@ pub(super) fn cached_action_display_projection(
     loader: impl FnOnce() -> Result<ActionDisplayProjection, String>,
 ) -> Result<Arc<ActionDisplayProjection>, String> {
     sync_storage_revision(storage_path);
-    let key = (
-        storage_key_string(storage_path),
-        trace_id.get(),
-    );
+    let key = (storage_key_string(storage_path), trace_id.get());
     if let Ok(mut cache) = cache_state().lock() {
         if let Some(projection) = cache.get(&key) {
             return Ok(projection);

@@ -32,6 +32,7 @@ fn socket_payload_gate_persists_http_and_drops_non_http_bytes() {
         super::super::seccomp_notify_disabled(),
         super::super::process_seccomp_disabled(),
         super::super::agent_invocation_disabled(),
+        super::super::SemanticRetentionConfig::default(),
         ApplicationProtocolConfig {
             enabled: true,
             http1_enabled: true,

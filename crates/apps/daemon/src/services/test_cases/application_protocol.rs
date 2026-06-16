@@ -1,7 +1,8 @@
 use std::time::SystemTime;
 
 use config_core::daemon::{
-    ApplicationProtocolConfig, DiagnosticLogLevel, PayloadRedactionPolicy, SseDataPolicy,
+    ApplicationProtocolConfig, DiagnosticLogLevel, Http2DataContentRetention,
+    PayloadBodyContentRetention, PayloadRedactionPolicy, SseDataPolicy,
 };
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use model_core::event::EventPayload;
@@ -12,8 +13,8 @@ use model_core::payload::{
 };
 use model_core::process::ProcessIdentity;
 use payload_event::RawPayloadSegment;
-use semantic_action::SemanticActionKind;
-use storage_core::{PayloadSegmentQuery, StorageBackend};
+use semantic_action::{SemanticActionKind, SemanticEvidenceKind};
+use storage_core::PayloadSegmentQuery;
 
 use crate::profiles::DaemonProfileRegistry;
 
@@ -33,7 +34,7 @@ const RETENTION_BATCH_SEGMENT_BYTES: u64 = 10;
 const RETENTION_BATCH_LIMIT_BYTES: u64 = 15;
 
 #[test]
-fn tls_payload_processing_persists_http_and_sse_application_events() {
+fn tls_payload_processing_keeps_llm_summary_without_payload_body_duplication() {
     let storage_path = std::env::temp_dir().join(format!(
         "actrail-application-protocol-http1-test-{}.sqlite",
         std::process::id()
@@ -50,6 +51,7 @@ fn tls_payload_processing_persists_http_and_sse_application_events() {
         super::seccomp_notify_disabled(),
         super::process_seccomp_disabled(),
         super::agent_invocation_disabled(),
+        super::SemanticRetentionConfig::default(),
         ApplicationProtocolConfig {
             enabled: true,
             http1_enabled: true,
@@ -152,17 +154,35 @@ fn tls_payload_processing_persists_http_and_sse_application_events() {
             && payload.summary == "200 OK"
             && payload.metadata.get("content_type").map(String::as_str) == Some("text/event-stream")
     }));
-    assert!(applications.iter().any(|payload| {
-        payload.protocol == "sse"
-            && payload.operation == "event"
-            && payload.summary == "token"
-            && payload.metadata.get("data_truncated").map(String::as_str) == Some("true")
-    }));
+    assert!(!applications.iter().any(|payload| payload.protocol == "sse"));
     let actions = wiring
         .attach_service
         .storage
         .list_semantic_actions(trace_id)
         .unwrap();
+    let request = actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmRequest)
+        .expect("outbound LLM request should persist an llm.request action");
+    assert_eq!(
+        request
+            .attributes
+            .get("llm.request.model")
+            .map(String::as_str),
+        Some("test-model")
+    );
+    let request_body_json = request
+        .attributes
+        .get("llm.request.body_json")
+        .expect("llm.request should retain complete provider request JSON");
+    assert!(request_body_json.contains(r#""messages":["#));
+    assert!(request_body_json.contains(r#""role":"user""#));
+    assert!(request_body_json.contains(r#""content":"hello""#));
+    assert!(request_body_json.contains(r#""stream":true"#));
+    assert!(!request.attributes.contains_key("llm.request.payload_text"));
+    assert!(!request.attributes.contains_key("http.request.body_text"));
+    assert!(!request.attributes.contains_key("http.request.body_json"));
+
     let response = actions
         .iter()
         .find(|action| action.kind == SemanticActionKind::LlmResponse)
@@ -170,17 +190,40 @@ fn tls_payload_processing_persists_http_and_sse_application_events() {
     assert_eq!(
         response
             .attributes
-            .get("llm.response.output_text")
+            .get("llm.response.model")
+            .map(String::as_str),
+        Some("test-model")
+    );
+    assert!(
+        !response
+            .attributes
+            .contains_key("llm.response.payload_text")
+    );
+    assert_eq!(
+        response
+            .attributes
+            .get("llm.response.content_text")
             .map(String::as_str),
         Some("ok")
     );
+    assert!(!response.attributes.contains_key("http.response.body_text"));
+    assert!(!response.attributes.contains_key("http.response.body_json"));
+    assert!(
+        !response
+            .attributes
+            .contains_key("llm.response.sse_events_json")
+    );
+    assert_eq!(
+        response
+            .evidence
+            .iter()
+            .filter(|evidence| evidence.role == "llm.response.payload")
+            .count(),
+        1
+    );
     assert!(response.evidence.iter().any(|evidence| {
-        evidence.role == "llm.response.payload"
-            && payloads_contain_id(
-                wiring.attach_service.storage.as_ref(),
-                trace_id,
-                evidence.id,
-            )
+        evidence.kind == SemanticEvidenceKind::PayloadAggregate
+            && evidence.role == "llm.response.payload"
     }));
 
     let payloads = wiring
@@ -196,9 +239,13 @@ fn tls_payload_processing_persists_http_and_sse_application_events() {
             },
         )
         .unwrap();
-    let request_text = String::from_utf8(payloads[0].bytes.clone()).unwrap();
-    assert!(request_text.contains("Authorization: <redacted>"));
-    assert!(!request_text.contains("Bearer secret"));
+    assert!(payloads.iter().all(|payload| payload.bytes.is_empty()));
+    assert!(payloads.iter().all(|payload| payload.captured_size > 0));
+    assert!(
+        payloads
+            .iter()
+            .all(|payload| payload.operation_captured_size == payload.operation_original_size)
+    );
 }
 
 #[test]
@@ -210,6 +257,8 @@ fn payload_batch_retention_counts_prior_uncommitted_segments_and_rolls_back() {
     let profiles = DaemonProfileRegistry::new();
     let mut payload_config = super::payload_config(true);
     payload_config.tls.retention_max_bytes_per_trace = RETENTION_BATCH_LIMIT_BYTES;
+    let mut semantic_retention = super::SemanticRetentionConfig::default();
+    semantic_retention.l4_payload.body_content = PayloadBodyContentRetention::Retained;
     let mut wiring = super::super::build_runtime_wiring(
         &super::test_storage_config(storage_path.clone()),
         profiles,
@@ -219,6 +268,7 @@ fn payload_batch_retention_counts_prior_uncommitted_segments_and_rolls_back() {
         super::seccomp_notify_disabled(),
         super::process_seccomp_disabled(),
         super::agent_invocation_disabled(),
+        semantic_retention,
         super::application_protocol_disabled(),
         super::resource_metrics_disabled(),
         super::export_runtime_disabled(),
@@ -284,26 +334,6 @@ fn payload_batch_retention_counts_prior_uncommitted_segments_and_rolls_back() {
     );
 }
 
-fn payloads_contain_id(
-    storage: &dyn StorageBackend,
-    trace_id: model_core::ids::TraceId,
-    evidence_id: u64,
-) -> bool {
-    storage
-        .list_payload_segments(
-            trace_id,
-            PayloadSegmentQuery {
-                segment_id: None,
-                direction: None,
-                limit: None,
-                include_bytes: false,
-            },
-        )
-        .unwrap()
-        .iter()
-        .any(|segment| segment.segment_id.get() == evidence_id)
-}
-
 #[test]
 fn tls_payload_processing_persists_http2_frame_and_data_events() {
     let storage_path = std::env::temp_dir().join(format!(
@@ -311,6 +341,8 @@ fn tls_payload_processing_persists_http2_frame_and_data_events() {
         std::process::id()
     ));
     let profiles = DaemonProfileRegistry::new();
+    let mut semantic_retention = super::SemanticRetentionConfig::default();
+    semantic_retention.l3_http2_frame.data_content = Http2DataContentRetention::Preview;
     let mut wiring = super::super::build_runtime_wiring(
         &super::test_storage_config(storage_path.clone()),
         profiles,
@@ -320,6 +352,7 @@ fn tls_payload_processing_persists_http2_frame_and_data_events() {
         super::seccomp_notify_disabled(),
         super::process_seccomp_disabled(),
         super::agent_invocation_disabled(),
+        semantic_retention,
         ApplicationProtocolConfig {
             enabled: true,
             http1_enabled: false,
@@ -419,6 +452,7 @@ fn http2_analyzer_ignores_http1_text_when_both_protocols_are_enabled() {
         super::seccomp_notify_disabled(),
         super::process_seccomp_disabled(),
         super::agent_invocation_disabled(),
+        super::SemanticRetentionConfig::default(),
         ApplicationProtocolConfig {
             enabled: true,
             http1_enabled: true,

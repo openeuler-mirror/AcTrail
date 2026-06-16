@@ -57,6 +57,7 @@ pub fn run_live_verification(
         seccomp_defaults.seccomp_notify,
         seccomp_defaults.process_seccomp,
         seccomp_defaults.agent_invocation,
+        seccomp_defaults.semantic_retention,
         config.application_protocol.clone(),
         config.resource_metrics.clone(),
         seccomp_defaults.export_runtime,

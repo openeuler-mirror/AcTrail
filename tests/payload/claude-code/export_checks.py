@@ -97,19 +97,20 @@ def require_llm_exchange(actions: str) -> None:
 def require_exported_llm_span(document: dict, marker: str) -> None:
     for span in otel_spans(document):
         attributes = otel_attributes(span)
-        body_text = attributes.get("http.request.body_text", "")
+        body_json = attributes.get("llm.request.body_json", "")
         if (
             attributes.get("actrail.action.kind") == "llm.request"
             and attributes.get("actrail.action.completeness") == "complete"
             and attributes.get("actrail.action.status") == "success"
-            and attributes.get("llm.request.payload_text")
             and attributes.get("llm.request.payload_bytes")
             and attributes.get("llm.request.raw_payload_bytes")
+            and body_json
+            and marker in body_json
             and attributes.get("payload.source_boundary") in {"TlsUserSpace", "Syscall"}
             and attributes.get("url.scheme") in {"http", "https"}
-            and body_text.lstrip().startswith("{")
-            and '"model"' in body_text
-            and marker in attributes.get("llm.request.payload_text", "")
+            and not attributes.get("llm.request.payload_text")
+            and not attributes.get("http.request.body_text")
+            and not attributes.get("http.request.body_json")
             and (
                 attributes.get("http.request.headers_hpack_base64")
                 or attributes.get("http.request.headers_text")
@@ -128,9 +129,11 @@ def require_exported_llm_response_span(document: dict) -> None:
             attributes.get("actrail.action.kind") == "llm.response"
             and attributes.get("actrail.action.completeness") == "complete"
             and attributes.get("actrail.action.status") == "success"
-            and attributes.get("llm.response.payload_text")
             and attributes.get("llm.response.payload_bytes")
             and attributes.get("payload.source_boundary") in {"TlsUserSpace", "Syscall"}
+            and not attributes.get("llm.response.payload_text")
+            and not attributes.get("http.response.body_text")
+            and not attributes.get("http.response.body_json")
         ):
             return
     raise RuntimeError("OTel export did not contain a complete llm.response span")

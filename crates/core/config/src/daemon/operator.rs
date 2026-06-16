@@ -17,8 +17,8 @@ use super::values::ConfigValues;
 use super::{
     AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
     EnforcementConfig, PayloadConfig, PayloadSocketConfig, PayloadTlsConfig, ProcessSeccompConfig,
-    ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig, SocketPermissions,
-    SseDataPolicy,
+    ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig, SemanticRetentionConfig,
+    SocketPermissions, SseDataPolicy,
 };
 use crate::capture_profile::CaptureProfile;
 use crate::export::ExportConfig;
@@ -52,6 +52,7 @@ pub struct OperatorConfig {
     pub seccomp_notify: SeccompNotifyConfig,
     pub process_seccomp: ProcessSeccompConfig,
     pub agent_invocation: AgentInvocationConfig,
+    pub semantic_retention: SemanticRetentionConfig,
     pub application_protocol: ApplicationProtocolConfig,
     pub resource_metrics: ResourceMetricsConfig,
     pub provider_rule_set: Option<ProviderRuleSetConfig>,
@@ -122,6 +123,8 @@ impl OperatorConfig {
         let seccomp_notify = sections::seccomp_notify_config(values.node("seccomp_notify"))?;
         let process_seccomp = sections::process_seccomp_config(values.node("process_seccomp"))?;
         let agent_invocation = sections::agent_invocation_config(values.node("agent_invocation"))?;
+        let semantic_retention =
+            sections::semantic_retention_config(values.node("semantic_retention"))?;
         let application_protocol = sections::application_protocol_config(
             values.node("application_protocol"),
             values.node("application_http"),
@@ -178,6 +181,7 @@ impl OperatorConfig {
             seccomp_notify,
             process_seccomp,
             agent_invocation,
+            semantic_retention,
             application_protocol,
             resource_metrics,
             provider_rule_set,

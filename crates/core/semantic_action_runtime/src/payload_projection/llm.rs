@@ -1,6 +1,7 @@
 //! LLM semantic action projection from retained plaintext payloads.
 
 mod body;
+mod evidence;
 mod live_projection;
 mod provider;
 mod request;

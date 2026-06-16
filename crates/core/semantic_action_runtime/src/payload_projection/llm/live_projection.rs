@@ -1,5 +1,6 @@
 //! Single-message LLM projection used by live incremental stream state.
 
+use config_core::daemon::SemanticRetentionConfig;
 use model_core::payload::PayloadSegment;
 use semantic_action::{SemanticAction, SemanticActionKind, SemanticActionStatus};
 
@@ -28,6 +29,7 @@ pub(crate) fn live_llm_http_response_message_len(bytes: &[u8]) -> Option<usize> 
 }
 
 pub(crate) fn project_live_llm_request_message(
+    config: &SemanticRetentionConfig,
     key: &PayloadStreamGroupKey,
     message_start: usize,
     bytes: &[u8],
@@ -36,7 +38,8 @@ pub(crate) fn project_live_llm_request_message(
     let http = split_request(bytes)?;
     let encoded_len = http.encoded_len;
     let raw_bytes = bytes.get(..encoded_len)?;
-    let action = project_stream_llm_request_action(key, message_start, raw_bytes, http, segments);
+    let action =
+        project_stream_llm_request_action(config, key, message_start, raw_bytes, http, segments);
     Some(LiveLlmProjection {
         actions: action.into_iter().collect(),
         encoded_len,
@@ -46,6 +49,7 @@ pub(crate) fn project_live_llm_request_message(
 }
 
 pub(crate) fn project_live_llm_response_message(
+    config: &SemanticRetentionConfig,
     key: &PayloadStreamGroupKey,
     message_start: usize,
     bytes: &[u8],
@@ -56,6 +60,7 @@ pub(crate) fn project_live_llm_response_message(
         let raw_bytes = bytes.get(..encoded_len)?;
         let can_evict = http_response_can_evict(&http);
         let Some(actions) = project_stream_llm_response_message_actions(
+            config,
             key,
             message_start,
             raw_bytes,
@@ -73,7 +78,7 @@ pub(crate) fn project_live_llm_response_message(
     }
 
     if let Some(projection) =
-        project_raw_chunked_stream_llm_response_actions(key, message_start, bytes, segments)
+        project_raw_chunked_stream_llm_response_actions(config, key, message_start, bytes, segments)
     {
         return Some(response_projection(
             projection.actions,
@@ -83,7 +88,8 @@ pub(crate) fn project_live_llm_response_message(
         ));
     }
 
-    let actions = project_raw_stream_llm_response_actions(key, message_start, bytes, segments)?;
+    let actions =
+        project_raw_stream_llm_response_actions(config, key, message_start, bytes, segments)?;
     Some(response_projection(actions, bytes.len(), true, false))
 }
 

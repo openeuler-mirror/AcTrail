@@ -3,9 +3,11 @@ use super::{
     OperatorConfigInitStatus,
 };
 use crate::daemon::{
-    DiagnosticLogLevel, DisabledOrPath, PayloadSocketSeccompSyscall, PayloadTlsCaptureBackend,
-    PayloadTlsLibrary, PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource,
-    ProcessSeccompSyscall,
+    DiagnosticLogLevel, DisabledOrPath, HttpBodyRetention, HttpHeadersRetention,
+    LlmRequestContentRetention, LlmResponseContentRetention, LlmToolCallRetention,
+    LlmUsageRetention, PayloadBodyContentRetention, PayloadSocketSeccompSyscall,
+    PayloadTlsCaptureBackend, PayloadTlsLibrary, PayloadTlsResolver, PayloadTlsSeccompSyscall,
+    PayloadTlsSource, ProcessSeccompSyscall, SemanticContentOwner, SseEventContentRetention,
 };
 use storage_factory::StorageBackendKind;
 
@@ -23,6 +25,43 @@ fn default_operator_config_is_full_monitor_collection() {
     assert!(config.payload_config.socket.enabled);
     assert!(config.process_seccomp.enabled);
     assert!(config.agent_invocation.enabled);
+    assert_eq!(
+        config.semantic_retention.content_owner,
+        SemanticContentOwner::HighestConsumed
+    );
+    assert!(config.semantic_retention.l0_llm_call.enabled);
+    assert_eq!(
+        config.semantic_retention.l0_llm_call.request_content,
+        LlmRequestContentRetention::FullProviderJson
+    );
+    assert_eq!(
+        config.semantic_retention.l0_llm_call.response_content,
+        LlmResponseContentRetention::AssembledProvider
+    );
+    assert_eq!(
+        config.semantic_retention.l0_llm_call.tool_calls,
+        LlmToolCallRetention::AssembledJson
+    );
+    assert_eq!(
+        config.semantic_retention.l0_llm_call.usage,
+        LlmUsageRetention::Summary
+    );
+    assert_eq!(
+        config.semantic_retention.l1_sse.event_content,
+        SseEventContentRetention::None
+    );
+    assert_eq!(
+        config.semantic_retention.l2_http.headers,
+        HttpHeadersRetention::Metadata
+    );
+    assert_eq!(
+        config.semantic_retention.l2_http.body_content,
+        HttpBodyRetention::Text
+    );
+    assert_eq!(
+        config.semantic_retention.l4_payload.body_content,
+        PayloadBodyContentRetention::None
+    );
     assert!(config.resource_metrics.enabled);
     assert!(config.ebpf_config.file_path_capture_enabled);
     assert!(config.export_runtime.enabled);
@@ -370,6 +409,27 @@ fn agent_invocation_commands_are_optional_dynamic_lookup_hints() {
 
     assert!(config.agent_invocation.enabled);
     assert!(config.agent_invocation.commands.is_empty());
+}
+
+#[test]
+fn semantic_retention_rejects_unknown_sse_event_content() {
+    let raw = OPERATOR_CONFIG_TEMPLATE.replace("event_content = none", "event_content = garbage");
+
+    let error = OperatorConfig::parse(&raw).unwrap_err();
+
+    assert!(error.contains("invalid semantic_retention_L1_sse_event_content"));
+}
+
+#[test]
+fn legacy_llm_semantic_keys_are_rejected() {
+    let raw = OPERATOR_CONFIG_TEMPLATE.replace(
+        "[semantic_retention]",
+        "llm_semantic_sse_event_storage = disabled\n\n[semantic_retention]",
+    );
+
+    let error = OperatorConfig::parse(&raw).unwrap_err();
+
+    assert!(error.contains("unsupported legacy config key llm_semantic_sse_event_storage"));
 }
 
 #[test]

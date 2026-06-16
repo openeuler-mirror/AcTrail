@@ -177,7 +177,7 @@ fn actions_share_payload_segment(
     };
     llm_action.evidence.iter().any(|evidence| {
         evidence.kind == SemanticEvidenceKind::PayloadSegment && evidence.id == payload_segment_id
-    })
+    }) || payload_aggregate_matches_http_message(llm_action, http_message)
 }
 
 fn response_stream_candidate(llm_action: &SemanticAction, http_message: &SemanticAction) -> bool {
@@ -248,13 +248,25 @@ fn matching_payload_evidence(
     let Some(payload_segment_id) = http_payload_segment_id(http_message) else {
         return Vec::new();
     };
-    llm_action
+    let exact = llm_action
         .evidence
         .iter()
         .filter(|evidence| {
             evidence.kind == SemanticEvidenceKind::PayloadSegment
                 && evidence.id == payload_segment_id
         })
+        .cloned()
+        .collect::<Vec<_>>();
+    if !exact.is_empty() {
+        return exact;
+    }
+    if !payload_aggregate_matches_http_message(llm_action, http_message) {
+        return Vec::new();
+    }
+    llm_action
+        .evidence
+        .iter()
+        .filter(|evidence| evidence.kind == SemanticEvidenceKind::PayloadAggregate)
         .cloned()
         .collect()
 }
@@ -269,4 +281,44 @@ fn http_payload_sequence(action: &SemanticAction) -> Option<u64> {
 
 fn payload_sequence(action: &SemanticAction) -> Option<u64> {
     action.attributes.get("payload.sequence")?.parse().ok()
+}
+
+fn payload_aggregate_matches_http_message(
+    llm_action: &SemanticAction,
+    http_message: &SemanticAction,
+) -> bool {
+    if !llm_action
+        .evidence
+        .iter()
+        .any(|evidence| evidence.kind == SemanticEvidenceKind::PayloadAggregate)
+    {
+        return false;
+    }
+    if llm_action
+        .attributes
+        .get("payload.stream_key")
+        .zip(http_message.attributes.get("stream_key"))
+        .is_none_or(|(left, right)| left != right)
+    {
+        return false;
+    }
+    let Some(http_sequence) = http_payload_sequence(http_message) else {
+        return false;
+    };
+    payload_sequence_range(llm_action)
+        .is_some_and(|(start, end)| start <= http_sequence && http_sequence <= end)
+}
+
+fn payload_sequence_range(action: &SemanticAction) -> Option<(u64, u64)> {
+    let start = action
+        .attributes
+        .get("payload.sequence_start")?
+        .parse()
+        .ok()?;
+    let end = action
+        .attributes
+        .get("payload.sequence_end")?
+        .parse()
+        .ok()?;
+    Some((start, end))
 }

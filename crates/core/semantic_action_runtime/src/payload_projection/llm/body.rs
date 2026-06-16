@@ -1,10 +1,11 @@
 //! LLM response body and SSE framing adapter.
 
+use config_core::daemon::SseEventContentRetention;
 use semantic_action::{
     LlmJsonResponseInput, LlmParsedResponse, LlmParsedSseEvent, LlmSseEvent as ProviderSseEvent,
     LlmSseResponseInput, LlmTokenUsage,
 };
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::provider::{parse_json_response, parse_sse_response, tool_calls_json};
 
@@ -12,10 +13,9 @@ const SSE_DONE_MARKER: &str = "[DONE]";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct LlmResponseBody {
-    pub(super) text: String,
-    pub(super) json: Option<Value>,
+    pub(super) provider_id: &'static str,
+    pub(super) json_valid: bool,
     pub(super) model: Option<String>,
-    pub(super) output_text: Option<String>,
     pub(super) content_text: Option<String>,
     pub(super) reasoning_text: Option<String>,
     pub(super) tool_calls_json: Option<String>,
@@ -31,14 +31,16 @@ pub(super) struct SseEvent {
     pub(super) index: usize,
     pub(super) event_type: Option<String>,
     pub(super) id: Option<String>,
-    pub(super) data: String,
-    pub(super) json: Option<Value>,
+    pub(super) raw_data: String,
     pub(super) model: Option<String>,
     pub(super) content_text: Option<String>,
     pub(super) reasoning_text: Option<String>,
     pub(super) tool_calls_json: Option<String>,
     pub(super) done: bool,
     pub(super) finish_reason: Option<String>,
+    pub(super) has_content_delta: bool,
+    pub(super) has_reasoning_delta: bool,
+    pub(super) has_tool_delta: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -62,7 +64,24 @@ pub(super) fn parse_llm_response_body(body: &[u8]) -> Option<LlmResponseBody> {
         text: &text,
         json: value,
     })?;
-    Some(response_body(text, json, parsed, Vec::new()))
+    Some(response_body(true, parsed, Vec::new()))
+}
+
+pub(super) fn sse_events_json(
+    events: &[SseEvent],
+    content: SseEventContentRetention,
+) -> Option<String> {
+    let values = match content {
+        SseEventContentRetention::None => return None,
+        SseEventContentRetention::Parsed => {
+            events.iter().map(sse_event_json_value).collect::<Vec<_>>()
+        }
+        SseEventContentRetention::Raw => events
+            .iter()
+            .map(raw_sse_event_json_value)
+            .collect::<Vec<_>>(),
+    };
+    (!values.is_empty()).then(|| Value::Array(values).to_string())
 }
 
 fn parse_sse_response_body(text: &str) -> Option<LlmResponseBody> {
@@ -83,26 +102,19 @@ fn parse_sse_response_body(text: &str) -> Option<LlmResponseBody> {
         .zip(parsed.events)
         .map(|(raw, parsed)| sse_event(raw, parsed))
         .collect();
-    Some(response_body(
-        text.to_string(),
-        None,
-        parsed.response,
-        events,
-    ))
+    Some(response_body(false, parsed.response, events))
 }
 
 fn response_body(
-    text: String,
-    json: Option<Value>,
+    json_valid: bool,
     parsed: LlmParsedResponse,
     sse_events: Vec<SseEvent>,
 ) -> LlmResponseBody {
     let tool_calls_json = tool_calls_json(&parsed.tool_calls);
     LlmResponseBody {
-        text,
-        json,
+        provider_id: parsed.provider_id,
+        json_valid,
         model: parsed.model,
-        output_text: parsed.output_text,
         content_text: parsed.content_text,
         reasoning_text: parsed.reasoning_text,
         tool_calls_json,
@@ -169,17 +181,79 @@ fn provider_sse_event(event: &RawSseEvent) -> ProviderSseEvent<'_> {
 }
 
 fn sse_event(raw: RawSseEvent, parsed: LlmParsedSseEvent) -> SseEvent {
+    let tool_calls_json = tool_calls_json(&parsed.tool_calls);
     SseEvent {
         index: raw.index,
         event_type: raw.event_type,
         id: raw.id,
-        data: raw.data,
-        json: raw.json,
+        raw_data: raw.data,
         model: parsed.model,
+        has_content_delta: parsed.content_text.is_some(),
+        has_reasoning_delta: parsed.reasoning_text.is_some(),
+        has_tool_delta: tool_calls_json.is_some(),
         content_text: parsed.content_text,
         reasoning_text: parsed.reasoning_text,
-        tool_calls_json: tool_calls_json(&parsed.tool_calls),
+        tool_calls_json,
         done: parsed.done,
         finish_reason: parsed.finish_reason,
     }
+}
+
+fn sse_event_json_value(event: &SseEvent) -> Value {
+    let mut object = Map::new();
+    object.insert(
+        "index".to_string(),
+        Value::Number(serde_json::Number::from(event.index as u64)),
+    );
+    if let Some(event_type) = &event.event_type {
+        object.insert("event_type".to_string(), Value::String(event_type.clone()));
+    }
+    if let Some(id) = &event.id {
+        object.insert("id".to_string(), Value::String(id.clone()));
+    }
+    if let Some(model) = &event.model {
+        object.insert("model".to_string(), Value::String(model.clone()));
+    }
+    if let Some(content_text) = &event.content_text {
+        object.insert(
+            "content_text".to_string(),
+            Value::String(content_text.clone()),
+        );
+    }
+    if let Some(reasoning_text) = &event.reasoning_text {
+        object.insert(
+            "reasoning_text".to_string(),
+            Value::String(reasoning_text.clone()),
+        );
+    }
+    if let Some(tool_calls_json) = &event.tool_calls_json
+        && let Ok(tool_calls) = serde_json::from_str::<Value>(tool_calls_json)
+    {
+        object.insert("tool_calls".to_string(), tool_calls);
+    }
+    object.insert("done".to_string(), Value::Bool(event.done));
+    if let Some(finish_reason) = &event.finish_reason {
+        object.insert(
+            "finish_reason".to_string(),
+            Value::String(finish_reason.clone()),
+        );
+    }
+    Value::Object(object)
+}
+
+fn raw_sse_event_json_value(event: &SseEvent) -> Value {
+    let mut object = Map::new();
+    object.insert(
+        "index".to_string(),
+        Value::Number(serde_json::Number::from(event.index as u64)),
+    );
+    if let Some(event_type) = &event.event_type {
+        object.insert("event_type".to_string(), Value::String(event_type.clone()));
+    }
+    if let Some(id) = &event.id {
+        object.insert("id".to_string(), Value::String(id.clone()));
+    }
+    object.insert("data".to_string(), Value::String(event.raw_data.clone()));
+    object.insert("done".to_string(), Value::Bool(event.done));
+    Value::Object(object)
 }

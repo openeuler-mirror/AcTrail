@@ -2,13 +2,16 @@
 
 use std::collections::{BTreeMap, btree_map::Entry};
 
-use config_core::daemon::ApplicationProtocolConfig;
+use config_core::daemon::{
+    ApplicationProtocolConfig, Http2DataContentRetention, SemanticRetentionConfig,
+};
 use model_core::event::ApplicationPayload;
 use model_core::ids::TraceId;
 use model_core::payload::{PayloadDirection, PayloadSegment, PayloadStreamKey};
 use model_core::process::ProcessIdentity;
 
 use super::ApplicationEventDraft;
+use super::base64_encode;
 
 #[path = "http2/frame.rs"]
 mod frame;
@@ -16,6 +19,8 @@ mod frame;
 pub(super) struct Http2Analyzer {
     #[cfg(test)]
     config: ApplicationProtocolConfig,
+    #[cfg(test)]
+    semantic_retention: SemanticRetentionConfig,
     connections: BTreeMap<ConnectionKey, ConnectionState>,
 }
 
@@ -25,6 +30,20 @@ impl Http2Analyzer {
         Self {
             #[cfg(test)]
             config,
+            #[cfg(test)]
+            semantic_retention: SemanticRetentionConfig::default(),
+            connections: BTreeMap::new(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn new_with_retention(
+        config: ApplicationProtocolConfig,
+        semantic_retention: SemanticRetentionConfig,
+    ) -> Self {
+        Self {
+            config,
+            semantic_retention,
             connections: BTreeMap::new(),
         }
     }
@@ -35,13 +54,15 @@ impl Http2Analyzer {
         segment: &PayloadSegment,
     ) -> Result<Vec<ApplicationEventDraft>, String> {
         let config = self.config.clone();
-        self.analyze_with_config(segment, &config, false)
+        let semantic_retention = self.semantic_retention.clone();
+        self.analyze_with_config(segment, &config, &semantic_retention, false)
     }
 
     pub(super) fn analyze_with_config(
         &mut self,
         segment: &PayloadSegment,
         config: &ApplicationProtocolConfig,
+        semantic_retention: &SemanticRetentionConfig,
         summary_only: bool,
     ) -> Result<Vec<ApplicationEventDraft>, String> {
         let key = connection_key(segment);
@@ -61,7 +82,7 @@ impl Http2Analyzer {
             }
             return Ok(Vec::new());
         }
-        let drafts = state.drain_events(segment, config, summary_only)?;
+        let drafts = state.drain_events(segment, config, semantic_retention, summary_only)?;
         if state.is_idle() {
             self.connections.remove(&key);
         }
@@ -107,10 +128,11 @@ impl ConnectionState {
         &mut self,
         segment: &PayloadSegment,
         config: &ApplicationProtocolConfig,
+        semantic_retention: &SemanticRetentionConfig,
         summary_only: bool,
     ) -> Result<Vec<ApplicationEventDraft>, String> {
         let mut drafts = Vec::new();
-        self.confirm_preface(segment, &mut drafts)?;
+        self.confirm_preface(segment, semantic_retention, &mut drafts)?;
         if !self.h2_confirmed && !self.direction(segment.direction).can_parse_frame() {
             return Ok(Vec::new());
         }
@@ -145,13 +167,20 @@ impl ConnectionState {
                 direction.buffer.drain(..consumed);
                 continue;
             }
-            drafts.push(ApplicationEventDraft {
-                payload: frame_payload(segment, &frame),
-            });
-            if frame.frame_type == frame::DATA_FRAME_TYPE {
+            if semantic_retention.http2_frame_summary_enabled() {
                 drafts.push(ApplicationEventDraft {
-                    payload: data_payload(segment, &frame, config)?,
+                    payload: frame_payload(segment, &frame),
                 });
+            }
+            if frame.frame_type == frame::DATA_FRAME_TYPE {
+                let data_content = semantic_retention.http2_data_content();
+                if semantic_retention.http2_frame_summary_enabled()
+                    || !matches!(data_content, Http2DataContentRetention::None)
+                {
+                    drafts.push(ApplicationEventDraft {
+                        payload: data_payload(segment, &frame, config, data_content)?,
+                    });
+                }
             }
             direction.buffer.drain(..consumed);
         }
@@ -164,6 +193,7 @@ impl ConnectionState {
     fn confirm_preface(
         &mut self,
         segment: &PayloadSegment,
+        semantic_retention: &SemanticRetentionConfig,
         drafts: &mut Vec<ApplicationEventDraft>,
     ) -> Result<(), String> {
         if self.h2_confirmed {
@@ -178,7 +208,7 @@ impl ConnectionState {
         }
         direction.buffer.drain(..frame::CONNECTION_PREFACE.len());
         self.h2_confirmed = true;
-        if !self.preface_emitted {
+        if !self.preface_emitted && semantic_retention.http2_frame_summary_enabled() {
             self.preface_emitted = true;
             drafts.push(ApplicationEventDraft {
                 payload: preface_payload(segment),
@@ -321,19 +351,27 @@ fn data_payload(
     segment: &PayloadSegment,
     frame: &frame::Frame,
     config: &ApplicationProtocolConfig,
+    content: Http2DataContentRetention,
 ) -> Result<ApplicationPayload, String> {
     let mut metadata = base_metadata(segment, Some(frame.stream_id));
     insert_frame_metadata(&mut metadata, frame);
     metadata.insert("data_size".to_string(), frame.payload.len().to_string());
-    if config.http2_emit_data_preview {
-        match preview_data(&frame.payload, config.http2_max_data_preview_bytes)? {
-            Some((preview, truncated)) => {
-                metadata.insert("data_preview".to_string(), preview);
-                metadata.insert("data_preview_truncated".to_string(), truncated.to_string());
+    match content {
+        Http2DataContentRetention::None => {}
+        Http2DataContentRetention::Preview if config.http2_emit_data_preview => {
+            match preview_data(&frame.payload, config.http2_max_data_preview_bytes)? {
+                Some((preview, truncated)) => {
+                    metadata.insert("data_preview".to_string(), preview);
+                    metadata.insert("data_preview_truncated".to_string(), truncated.to_string());
+                }
+                None => {
+                    metadata.insert("data_preview_omitted".to_string(), "non_utf8".to_string());
+                }
             }
-            None => {
-                metadata.insert("data_preview_omitted".to_string(), "non_utf8".to_string());
-            }
+        }
+        Http2DataContentRetention::Preview => {}
+        Http2DataContentRetention::Raw => {
+            metadata.insert("data_base64".to_string(), base64_encode(&frame.payload));
         }
     }
     Ok(ApplicationPayload {

@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::time::SystemTime;
 
+use config_core::daemon::SemanticRetentionConfig;
 use model_core::ids::TraceId;
 use model_core::payload::{
     PayloadContentState, PayloadDirection, PayloadSegment, PayloadSourceBoundary,
@@ -20,10 +21,20 @@ use crate::payload_projection::llm::{
 mod call;
 mod http;
 
-#[derive(Default)]
 pub(super) struct LiveLlmProjector {
+    config: SemanticRetentionConfig,
     streams: BTreeMap<LiveStreamKey, LiveStreamState>,
     emitted_actions: BTreeMap<EmittedLlmAction, SemanticAction>,
+}
+
+impl LiveLlmProjector {
+    pub(super) fn new(config: SemanticRetentionConfig) -> Self {
+        Self {
+            config,
+            streams: BTreeMap::new(),
+            emitted_actions: BTreeMap::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -67,6 +78,9 @@ impl LiveLlmProjector {
         &mut self,
         segment: &PayloadSegment,
     ) -> Vec<SemanticAction> {
+        if !self.config.llm_layer_enabled() {
+            return Vec::new();
+        }
         if !plaintext_http_candidate(segment) {
             return Vec::new();
         }
@@ -75,7 +89,7 @@ impl LiveLlmProjector {
             .streams
             .entry(key.clone())
             .or_default()
-            .observe_segment(&key, segment);
+            .observe_segment(&self.config, &key, segment);
         self.changed_actions(actions)
     }
 
@@ -188,13 +202,14 @@ struct LiveStreamState {
 impl LiveStreamState {
     fn observe_segment(
         &mut self,
+        config: &SemanticRetentionConfig,
         key: &LiveStreamKey,
         segment: &PayloadSegment,
     ) -> Vec<SemanticAction> {
         self.append_segment(segment);
         match key.direction {
-            LiveStreamDirection::Outbound => self.project_outbound_requests(&key.group),
-            LiveStreamDirection::Inbound => self.project_inbound_responses(&key.group),
+            LiveStreamDirection::Outbound => self.project_outbound_requests(config, &key.group),
+            LiveStreamDirection::Inbound => self.project_inbound_responses(config, &key.group),
         }
     }
 
@@ -214,15 +229,23 @@ impl LiveStreamState {
         }
     }
 
-    fn project_outbound_requests(&mut self, key: &PayloadStreamGroupKey) -> Vec<SemanticAction> {
+    fn project_outbound_requests(
+        &mut self,
+        config: &SemanticRetentionConfig,
+        key: &PayloadStreamGroupKey,
+    ) -> Vec<SemanticAction> {
         let mut actions = Vec::new();
         while let Some(encoded_len) = live_llm_request_message_len(&self.buffer) {
             let message_start = self.base_offset;
             let message_end = message_start + encoded_len;
             let segments = self.segments_for_range(message_start, message_end);
-            let Some(projection) =
-                project_live_llm_request_message(key, message_start, &self.buffer, &segments)
-            else {
+            let Some(projection) = project_live_llm_request_message(
+                config,
+                key,
+                message_start,
+                &self.buffer,
+                &segments,
+            ) else {
                 break;
             };
             actions.extend(projection.actions);
@@ -234,14 +257,18 @@ impl LiveStreamState {
         actions
     }
 
-    fn project_inbound_responses(&mut self, key: &PayloadStreamGroupKey) -> Vec<SemanticAction> {
+    fn project_inbound_responses(
+        &mut self,
+        config: &SemanticRetentionConfig,
+        key: &PayloadStreamGroupKey,
+    ) -> Vec<SemanticAction> {
         self.discard_pending_raw_chunk_terminator();
         if self.partial_response_emitted && !self.completion_detector.seen() {
             return Vec::new();
         }
 
         let mut actions = Vec::new();
-        while let Some(projection) = self.project_next_response(key) {
+        while let Some(projection) = self.project_next_response(config, key) {
             let terminal = projection.terminal;
             let encoded_len = projection.encoded_len;
             actions.extend(projection.actions);
@@ -261,13 +288,17 @@ impl LiveStreamState {
         actions
     }
 
-    fn project_next_response(&self, key: &PayloadStreamGroupKey) -> Option<LiveLlmProjection> {
+    fn project_next_response(
+        &self,
+        config: &SemanticRetentionConfig,
+        key: &PayloadStreamGroupKey,
+    ) -> Option<LiveLlmProjection> {
         let encoded_len =
             live_llm_http_response_message_len(&self.buffer).unwrap_or_else(|| self.buffer.len());
         let message_start = self.base_offset;
         let message_end = message_start + encoded_len;
         let segments = self.segments_for_range(message_start, message_end);
-        project_live_llm_response_message(key, message_start, &self.buffer, &segments)
+        project_live_llm_response_message(config, key, message_start, &self.buffer, &segments)
     }
 
     fn segments_for_range(&self, start: usize, end: usize) -> Vec<&PayloadSegment> {

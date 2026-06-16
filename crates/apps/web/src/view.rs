@@ -2,8 +2,6 @@
 
 #[path = "view/action_tree_projection.rs"]
 mod action_tree_projection;
-#[path = "view/projection_cache.rs"]
-mod projection_cache;
 #[path = "view/action_tree_roles.rs"]
 mod action_tree_roles;
 #[path = "view/actions.rs"]
@@ -14,6 +12,8 @@ mod commands;
 mod events;
 #[path = "view/payloads.rs"]
 mod payloads;
+#[path = "view/projection_cache.rs"]
+mod projection_cache;
 #[path = "view/topology.rs"]
 mod topology;
 #[path = "view/traces.rs"]

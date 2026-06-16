@@ -94,7 +94,7 @@ impl PayloadReadStore for SqliteStorage {
         let connection = self.connection().borrow();
         let bytes = connection
             .query_row(
-                "SELECT COALESCE(SUM(captured_size), 0) FROM payload_segments WHERE trace_id = ?1",
+                "SELECT COALESCE(SUM(length(bytes)), 0) FROM payload_segments WHERE trace_id = ?1",
                 params![trace_id.get()],
                 |row| row.get::<_, i64>(0),
             )

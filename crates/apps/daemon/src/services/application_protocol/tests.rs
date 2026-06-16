@@ -25,8 +25,16 @@ const TEST_BINARY_SEQUENCE: u64 = 1;
 const TEST_HTTP2_SEQUENCE: u64 = 2;
 const OTHER_TRACE_SEQUENCE: u64 = 3;
 const TEST_BUFFER_BYTES: u64 = 4096;
+const TEST_STREAMING_SSE_BUFFER_BYTES: u64 = 192;
+const TEST_CHUNKED_SSE_BUFFER_BYTES: u64 = 256;
 const TEST_HTTP2_MAX_FRAME_BYTES: u64 = 16384;
 const TEST_HTTP2_PREVIEW_BYTES: u64 = 16;
+const STREAMING_SSE_SEGMENT_ID_BASE: u64 = 100;
+const STREAMING_SSE_SEQUENCE_BASE: u64 = 1000;
+const STREAMING_SSE_EVENT_COUNT: u64 = 16;
+const CHUNKED_SSE_SEGMENT_ID_BASE: u64 = 200;
+const CHUNKED_SSE_SEQUENCE_BASE: u64 = 2000;
+const CHUNKED_SSE_EVENT_COUNT: u64 = 12;
 const HTTP2_CONNECTION_PREFACE: &[u8] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 const HTTP2_DATA_FRAME_TYPE: u8 = 0;
 const HTTP2_SETTINGS_FRAME_TYPE: u8 = 4;
@@ -113,6 +121,128 @@ fn h2_preface_is_not_locked_as_http1_fallback() {
 }
 
 #[test]
+fn streaming_sse_events_are_drained_after_application_drafts() {
+    let mut analyzer = ApplicationProtocolAnalyzer::new(streaming_sse_config());
+    let initial = analyzer
+        .analyze(&payload_segment(
+            PayloadSegmentId::new(STREAMING_SSE_SEGMENT_ID_BASE),
+            TEST_TRACE_ID,
+            PayloadDirection::Inbound,
+            STREAMING_SSE_SEQUENCE_BASE,
+            initial_sse_response(),
+        ))
+        .unwrap();
+    assert_application_event(&initial, "http/1.1", "response", "200 OK");
+    assert_sse_preview(&initial, "{\"phase\":\"open\"}");
+
+    for index in 0..STREAMING_SSE_EVENT_COUNT {
+        let data = format!("{{\"index\":{index}}}");
+        let drafts = analyzer
+            .analyze(&payload_segment(
+                PayloadSegmentId::new(STREAMING_SSE_SEGMENT_ID_BASE + index + 1),
+                TEST_TRACE_ID,
+                PayloadDirection::Inbound,
+                STREAMING_SSE_SEQUENCE_BASE + index + 1,
+                format!("data: {data}\n\n").into_bytes(),
+            ))
+            .unwrap();
+        assert_sse_preview(&drafts, &data);
+    }
+}
+
+#[test]
+fn streaming_sse_incomplete_event_tail_is_retained_until_boundary() {
+    let mut analyzer = ApplicationProtocolAnalyzer::new(streaming_sse_config());
+    analyzer
+        .analyze(&payload_segment(
+            PayloadSegmentId::new(STREAMING_SSE_SEGMENT_ID_BASE),
+            TEST_TRACE_ID,
+            PayloadDirection::Inbound,
+            STREAMING_SSE_SEQUENCE_BASE,
+            initial_sse_response(),
+        ))
+        .unwrap();
+
+    let partial_drafts = analyzer
+        .analyze(&payload_segment(
+            PayloadSegmentId::new(STREAMING_SSE_SEGMENT_ID_BASE + 1),
+            TEST_TRACE_ID,
+            PayloadDirection::Inbound,
+            STREAMING_SSE_SEQUENCE_BASE + 1,
+            b"data: {\"split\"".to_vec(),
+        ))
+        .unwrap();
+    assert!(partial_drafts.is_empty());
+
+    let complete_drafts = analyzer
+        .analyze(&payload_segment(
+            PayloadSegmentId::new(STREAMING_SSE_SEGMENT_ID_BASE + 2),
+            TEST_TRACE_ID,
+            PayloadDirection::Inbound,
+            STREAMING_SSE_SEQUENCE_BASE + 2,
+            b":true}\n\n".to_vec(),
+        ))
+        .unwrap();
+    assert_sse_preview(&complete_drafts, "{\"split\":true}");
+}
+
+#[test]
+fn chunked_sse_events_are_dechunked_and_drained_after_application_drafts() {
+    let mut analyzer = ApplicationProtocolAnalyzer::new(chunked_sse_config());
+    let initial = analyzer
+        .analyze(&payload_segment(
+            PayloadSegmentId::new(CHUNKED_SSE_SEGMENT_ID_BASE),
+            TEST_TRACE_ID,
+            PayloadDirection::Inbound,
+            CHUNKED_SSE_SEQUENCE_BASE,
+            chunked_sse_response_head(),
+        ))
+        .unwrap();
+    assert_application_event(&initial, "http/1.1", "response", "200 OK");
+
+    let mut segment_id = CHUNKED_SSE_SEGMENT_ID_BASE + 1;
+    let mut sequence = CHUNKED_SSE_SEQUENCE_BASE + 1;
+    for index in 0..CHUNKED_SSE_EVENT_COUNT {
+        let data = format!("{{\"chunked\":{index}}}");
+        let event = format!("data: {data}\n\n");
+        let emitted = feed_chunked_sse_chunk(
+            &mut analyzer,
+            &mut segment_id,
+            &mut sequence,
+            event.as_bytes(),
+        );
+        assert_sse_preview(&emitted, &data);
+    }
+}
+
+#[test]
+fn chunked_sse_split_event_tail_is_retained_until_boundary() {
+    let mut analyzer = ApplicationProtocolAnalyzer::new(chunked_sse_config());
+    analyzer
+        .analyze(&payload_segment(
+            PayloadSegmentId::new(CHUNKED_SSE_SEGMENT_ID_BASE),
+            TEST_TRACE_ID,
+            PayloadDirection::Inbound,
+            CHUNKED_SSE_SEQUENCE_BASE,
+            chunked_sse_response_head(),
+        ))
+        .unwrap();
+
+    let mut segment_id = CHUNKED_SSE_SEGMENT_ID_BASE + 1;
+    let mut sequence = CHUNKED_SSE_SEQUENCE_BASE + 1;
+    let first = feed_chunked_sse_chunk(
+        &mut analyzer,
+        &mut segment_id,
+        &mut sequence,
+        b"data: {\"split\"",
+    );
+    assert!(first.is_empty());
+    let emitted =
+        feed_chunked_sse_chunk(&mut analyzer, &mut segment_id, &mut sequence, b":true}\n\n");
+    assert_sse_preview(&emitted, "{\"split\":true}");
+}
+
+#[test]
 fn forget_trace_removes_only_matching_protocol_cache_entries() {
     let mut analyzer = ApplicationProtocolAnalyzer::new(test_config());
     analyzer
@@ -179,6 +309,102 @@ fn test_config() -> ApplicationProtocolConfig {
         http2_emit_data_preview: false,
         http2_max_data_preview_bytes: TEST_HTTP2_PREVIEW_BYTES,
     }
+}
+
+fn streaming_sse_config() -> ApplicationProtocolConfig {
+    let mut config = test_config();
+    config.sse_enabled = true;
+    config.sse_data_policy = SseDataPolicy::Preview;
+    config.sse_max_buffer_bytes = TEST_STREAMING_SSE_BUFFER_BYTES;
+    config.sse_max_data_bytes = TEST_STREAMING_SSE_BUFFER_BYTES;
+    config
+}
+
+fn chunked_sse_config() -> ApplicationProtocolConfig {
+    let mut config = test_config();
+    config.sse_enabled = true;
+    config.sse_data_policy = SseDataPolicy::Preview;
+    config.sse_max_buffer_bytes = TEST_CHUNKED_SSE_BUFFER_BYTES;
+    config.sse_max_data_bytes = TEST_CHUNKED_SSE_BUFFER_BYTES;
+    config
+}
+
+fn initial_sse_response() -> Vec<u8> {
+    concat!(
+        "HTTP/1.1 200 OK\r\n",
+        "Content-Type: text/event-stream; charset=utf-8\r\n",
+        "Transfer-Encoding: chunked\r\n",
+        "\r\n",
+        "data: {\"phase\":\"open\"}\n\n",
+    )
+    .as_bytes()
+    .to_vec()
+}
+
+fn chunked_sse_response_head() -> Vec<u8> {
+    concat!(
+        "HTTP/1.1 200 OK\r\n",
+        "Content-Type: text/event-stream; charset=utf-8\r\n",
+        "Transfer-Encoding: chunked\r\n",
+        "\r\n",
+    )
+    .as_bytes()
+    .to_vec()
+}
+
+fn feed_chunked_sse_chunk(
+    analyzer: &mut ApplicationProtocolAnalyzer,
+    segment_id: &mut u64,
+    sequence: &mut u64,
+    chunk: &[u8],
+) -> Vec<super::ApplicationEventDraft> {
+    let mut emitted = Vec::new();
+    for bytes in [
+        format!("{:x}\r\n", chunk.len()).into_bytes(),
+        chunk.to_vec(),
+        b"\r\n".to_vec(),
+    ] {
+        emitted.extend(
+            analyzer
+                .analyze(&payload_segment(
+                    PayloadSegmentId::new(*segment_id),
+                    TEST_TRACE_ID,
+                    PayloadDirection::Inbound,
+                    *sequence,
+                    bytes,
+                ))
+                .unwrap(),
+        );
+        *segment_id += 1;
+        *sequence += 1;
+    }
+    emitted
+}
+
+fn assert_application_event(
+    drafts: &[super::ApplicationEventDraft],
+    protocol: &str,
+    operation: &str,
+    summary: &str,
+) {
+    assert!(drafts.iter().any(|draft| {
+        draft.payload.protocol == protocol
+            && draft.payload.operation == operation
+            && draft.payload.summary == summary
+    }));
+}
+
+fn assert_sse_preview(drafts: &[super::ApplicationEventDraft], expected: &str) {
+    assert!(drafts.iter().any(|draft| {
+        draft.payload.protocol == "sse"
+            && draft.payload.operation == "event"
+            && draft
+                .payload
+                .metadata
+                .get("data_preview")
+                .map(String::as_str)
+                == Some(expected)
+    }));
 }
 
 fn h2_like_binary_body() -> Vec<u8> {

@@ -1,42 +1,42 @@
 //! Shared helpers for LLM response projection.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
+use config_core::daemon::SemanticRetentionConfig;
 use model_core::payload::{
     PayloadOperationCompletionState, PayloadSegment, PayloadSourceBoundary, PayloadTruncationState,
 };
 use semantic_action::{
     LlmTokenUsage, SemanticActionCompleteness, SemanticActionStatus, SemanticEvidence,
-    SemanticEvidenceKind,
 };
 
 use crate::payload_projection::http::HttpResponseParts;
 
 use super::body::LlmResponseBody;
+use super::evidence::{insert_payload_span_attributes, payload_aggregate_evidence};
 use super::stream::PayloadStreamGroupKey;
 
 pub(super) fn llm_response_attributes(
+    config: &SemanticRetentionConfig,
     segments: &[&PayloadSegment],
     raw_bytes: &[u8],
     http: &HttpResponseParts,
     body: &LlmResponseBody,
 ) -> BTreeMap<String, String> {
     let first = segments[0];
-    let mut attributes = raw_llm_response_attributes(segments, &http.body, body);
+    let mut attributes = raw_llm_response_attributes(config, segments, &http.body, body);
     attributes.insert(
         "llm.response.raw_payload_bytes".to_string(),
         raw_bytes.len().to_string(),
     );
-    attributes.insert("http.response.body_text".to_string(), body.text.clone());
     if body.stream {
         attributes.insert("http.response.body_format".to_string(), "sse".to_string());
         attributes.insert(
             "http.response.body_json_state".to_string(),
             "not_applicable_sse".to_string(),
         );
-    } else if let Some(body_json) = &body.json {
+    } else if body.json_valid {
         attributes.insert("http.response.body_format".to_string(), "json".to_string());
-        attributes.insert("http.response.body_json".to_string(), body_json.to_string());
         attributes.insert(
             "http.response.body_json_state".to_string(),
             "valid".to_string(),
@@ -92,6 +92,7 @@ pub(super) fn llm_response_attributes(
 }
 
 pub(super) fn raw_llm_response_attributes(
+    config: &SemanticRetentionConfig,
     segments: &[&PayloadSegment],
     body_bytes: &[u8],
     body: &LlmResponseBody,
@@ -102,7 +103,6 @@ pub(super) fn raw_llm_response_attributes(
         "llm.response.payload_bytes".to_string(),
         body_bytes.len().to_string(),
     );
-    attributes.insert("llm.response.payload_text".to_string(), body.text.clone());
     attributes.insert("llm.response.stream".to_string(), body.stream.to_string());
     attributes.insert(
         "llm.response.body_format".to_string(),
@@ -113,31 +113,38 @@ pub(super) fn raw_llm_response_attributes(
         "llm.response.chunk_count".to_string(),
         body.chunk_count.to_string(),
     );
-    if let Some(output_text) = &body.output_text {
-        attributes.insert("llm.response.output_text".to_string(), output_text.clone());
-    }
-    if let Some(content_text) = &body.content_text {
-        attributes.insert(
-            "llm.response.content_text".to_string(),
-            content_text.clone(),
-        );
-    }
-    if let Some(reasoning_text) = &body.reasoning_text {
-        attributes.insert(
-            "llm.response.reasoning_text".to_string(),
-            reasoning_text.clone(),
-        );
-    }
-    if let Some(tool_calls_json) = &body.tool_calls_json {
-        attributes.insert(
-            "llm.response.tool_calls_json".to_string(),
-            tool_calls_json.clone(),
-        );
-    }
     if let Some(model) = body.model.as_deref() {
         attributes.insert("llm.response.model".to_string(), model.to_string());
     }
-    if let Some(usage) = &body.token_usage {
+    attributes.insert(
+        "llm.response.provider_id".to_string(),
+        body.provider_id.to_string(),
+    );
+    if config.llm_response_assembled_provider_enabled() {
+        if let Some(content_text) = body.content_text.as_deref() {
+            attributes.insert(
+                "llm.response.content_text".to_string(),
+                content_text.to_string(),
+            );
+        }
+        if let Some(reasoning_text) = body.reasoning_text.as_deref() {
+            attributes.insert(
+                "llm.response.reasoning_text".to_string(),
+                reasoning_text.to_string(),
+            );
+        }
+    }
+    if config.llm_response_tool_calls_enabled()
+        && let Some(tool_calls_json) = body.tool_calls_json.as_deref()
+    {
+        attributes.insert(
+            "llm.response.tool_calls_json".to_string(),
+            tool_calls_json.to_string(),
+        );
+    }
+    if config.llm_response_usage_enabled()
+        && let Some(usage) = &body.token_usage
+    {
         insert_token_usage_attributes(&mut attributes, usage);
     }
     attributes.insert(
@@ -149,14 +156,7 @@ pub(super) fn raw_llm_response_attributes(
         first.operation_id.to_string(),
     );
     attributes.insert("payload.sequence".to_string(), first.sequence.to_string());
-    attributes.insert(
-        "payload.operation_ids".to_string(),
-        payload_operation_ids(segments),
-    );
-    attributes.insert(
-        "payload.segment_count".to_string(),
-        segments.len().to_string(),
-    );
+    insert_payload_span_attributes(&mut attributes, segments);
     attributes.insert(
         "payload.source_boundary".to_string(),
         format!("{:?}", first.source_boundary),
@@ -213,7 +213,7 @@ fn insert_token_count(
 fn llm_response_body_format(body: &LlmResponseBody) -> &'static str {
     if body.stream {
         "sse"
-    } else if body.json.is_some() {
+    } else if body.json_valid {
         "json"
     } else {
         "text"
@@ -221,14 +221,7 @@ fn llm_response_body_format(body: &LlmResponseBody) -> &'static str {
 }
 
 pub(super) fn payload_evidence(segments: &[&PayloadSegment]) -> Vec<SemanticEvidence> {
-    segments
-        .iter()
-        .map(|segment| SemanticEvidence {
-            kind: SemanticEvidenceKind::PayloadSegment,
-            id: segment.segment_id.get(),
-            role: "llm.response.payload".to_string(),
-        })
-        .collect()
+    payload_aggregate_evidence(segments, "llm.response.payload")
 }
 
 pub(super) fn plaintext_transport_scheme(source_boundary: PayloadSourceBoundary) -> &'static str {
@@ -332,15 +325,4 @@ fn operation_segments_are_complete(segments: &[&PayloadSegment]) -> bool {
     }
     expected_offset == first.operation_captured_size
         && first.operation_captured_size == first.operation_original_size
-}
-
-fn payload_operation_ids(segments: &[&PayloadSegment]) -> String {
-    let mut ids = BTreeSet::new();
-    for segment in segments {
-        ids.insert(segment.operation_id);
-    }
-    ids.into_iter()
-        .map(|id| id.to_string())
-        .collect::<Vec<_>>()
-        .join(",")
 }

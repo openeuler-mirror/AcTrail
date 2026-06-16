@@ -3,6 +3,7 @@
 use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
     PayloadConfig, ProcessSeccompConfig, ResourceMetricsConfig, SeccompNotifyConfig,
+    SemanticRetentionConfig,
 };
 use ebpf_collector::EbpfCollector;
 use ebpf_collector::procfs::{ProcfsIdentityReader, ProcfsTreeSnapshotter};
@@ -35,6 +36,7 @@ impl StorageAttachService {
         seccomp_notify: SeccompNotifyConfig,
         process_seccomp: ProcessSeccompConfig,
         agent_invocation: AgentInvocationConfig,
+        semantic_retention: SemanticRetentionConfig,
         application_protocol: ApplicationProtocolConfig,
         resource_metrics: ResourceMetricsConfig,
         enforcement: FanotifyEnforcementService,
@@ -49,6 +51,7 @@ impl StorageAttachService {
             seccomp_notify,
             process_seccomp,
             agent_invocation,
+            semantic_retention,
             application_protocol,
             resource_metrics,
             enforcement,
@@ -67,6 +70,7 @@ impl StorageAttachService {
         seccomp_notify_config: SeccompNotifyConfig,
         process_seccomp_config: ProcessSeccompConfig,
         agent_invocation: AgentInvocationConfig,
+        semantic_retention: SemanticRetentionConfig,
         application_protocol: ApplicationProtocolConfig,
         resource_metrics: ResourceMetricsConfig,
         enforcement: FanotifyEnforcementService,
@@ -93,8 +97,10 @@ impl StorageAttachService {
             payload_config.socket.http_sniff_max_bytes,
             payload_config.socket.stream_state_max_entries,
         );
-        let payload_body_retention_gate =
-            PayloadBodyRetentionGate::new(application_protocol.http2_max_data_preview_bytes);
+        let payload_body_retention_gate = PayloadBodyRetentionGate::new(
+            application_protocol.http2_max_data_preview_bytes,
+            semantic_retention.clone(),
+        );
         let seccomp_notify = SeccompNotifyService::new(&seccomp_notify_config);
         let seccomp_tls = SeccompTlsService::new(&payload_config.tls, diagnostic_log_level);
         let tls_sync = TlsSyncService::new(&payload_config.tls)?;
@@ -131,10 +137,14 @@ impl StorageAttachService {
             seccomp_socket,
             process_seccomp,
             pending_process_seccomp_observations: Vec::new(),
-            application_protocol: ApplicationProtocolAnalyzer::new(application_protocol),
+            semantic_retention: semantic_retention.clone(),
+            application_protocol: ApplicationProtocolAnalyzer::new_with_retention(
+                application_protocol,
+                semantic_retention.clone(),
+            ),
             resource_metrics: ResourceMetricsSampler::new(resource_metrics),
             enforcement,
-            semantic_actions: LiveSemanticActionRuntime::new(agent_invocation),
+            semantic_actions: LiveSemanticActionRuntime::new(agent_invocation, semantic_retention),
             export_runtime,
             finalized_terminal_traces: Default::default(),
             diagnosed_terminal_open_memberships: Default::default(),

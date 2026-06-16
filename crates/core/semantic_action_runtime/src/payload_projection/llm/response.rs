@@ -1,5 +1,6 @@
 //! LLM response projection from inbound plaintext payloads.
 
+use config_core::daemon::SemanticRetentionConfig;
 use model_core::payload::PayloadSegment;
 use semantic_action::{SemanticAction, SemanticActionKind};
 
@@ -23,6 +24,7 @@ pub(super) struct RawChunkedResponseProjection {
 }
 
 pub(super) fn project_stream_llm_response_message_actions(
+    config: &SemanticRetentionConfig,
     key: &PayloadStreamGroupKey,
     message_start: usize,
     raw_bytes: &[u8],
@@ -32,7 +34,7 @@ pub(super) fn project_stream_llm_response_message_actions(
     let body = parse_llm_response_body(&http.body)?;
     let first = *segments.first()?;
     http.scheme = plaintext_transport_scheme(first.source_boundary);
-    let attributes = llm_response_attributes(segments, raw_bytes, &http, &body);
+    let attributes = llm_response_attributes(config, segments, raw_bytes, &http, &body);
     let evidence = payload_evidence(segments);
     let response = SemanticAction {
         action_id: llm_stream_action_id(key, message_start, first),
@@ -48,13 +50,14 @@ pub(super) fn project_stream_llm_response_message_actions(
         attributes,
         evidence,
     };
-    let sse_actions = sse_actions_for_response(&response, &body, segments);
+    let sse_actions = sse_actions_for_response(config, &response, &body, segments);
     let mut actions = vec![response];
     actions.extend(sse_actions);
     Some(actions)
 }
 
 pub(super) fn project_raw_chunked_stream_llm_response_actions(
+    config: &SemanticRetentionConfig,
     key: &PayloadStreamGroupKey,
     message_start: usize,
     bytes: &[u8],
@@ -63,7 +66,7 @@ pub(super) fn project_raw_chunked_stream_llm_response_actions(
     let chunked = parse_chunked_body_prefix(bytes)?;
     let body = parse_llm_response_body(&chunked.body)?;
     let first = *segments.first()?;
-    let attributes = raw_llm_response_attributes(segments, &chunked.body, &body);
+    let attributes = raw_llm_response_attributes(config, segments, &chunked.body, &body);
     let response = SemanticAction {
         action_id: llm_raw_stream_action_id(key, message_start, first),
         trace_id: first.trace_id,
@@ -78,7 +81,7 @@ pub(super) fn project_raw_chunked_stream_llm_response_actions(
         attributes,
         evidence: payload_evidence(segments),
     };
-    let sse_actions = sse_actions_for_response(&response, &body, segments);
+    let sse_actions = sse_actions_for_response(config, &response, &body, segments);
     let mut actions = vec![response];
     actions.extend(sse_actions);
     Some(RawChunkedResponseProjection {
@@ -89,6 +92,7 @@ pub(super) fn project_raw_chunked_stream_llm_response_actions(
 }
 
 pub(super) fn project_raw_stream_llm_response_actions(
+    config: &SemanticRetentionConfig,
     key: &PayloadStreamGroupKey,
     message_start: usize,
     bytes: &[u8],
@@ -96,7 +100,7 @@ pub(super) fn project_raw_stream_llm_response_actions(
 ) -> Option<Vec<SemanticAction>> {
     let body = parse_llm_response_body(bytes)?;
     let first = *segments.first()?;
-    let attributes = raw_llm_response_attributes(segments, bytes, &body);
+    let attributes = raw_llm_response_attributes(config, segments, bytes, &body);
     let response = SemanticAction {
         action_id: llm_raw_stream_action_id(key, message_start, first),
         trace_id: first.trace_id,
@@ -111,7 +115,7 @@ pub(super) fn project_raw_stream_llm_response_actions(
         attributes,
         evidence: payload_evidence(segments),
     };
-    let sse_actions = sse_actions_for_response(&response, &body, segments);
+    let sse_actions = sse_actions_for_response(config, &response, &body, segments);
     let mut actions = vec![response];
     actions.extend(sse_actions);
     Some(actions)

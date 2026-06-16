@@ -2,7 +2,8 @@
 
 use std::collections::BTreeMap;
 
-use config_core::daemon::ApplicationProtocolConfig;
+use config_core::daemon::{ApplicationProtocolConfig, SemanticRetentionConfig};
+use model_core::event::ApplicationPayload;
 use model_core::ids::TraceId;
 use model_core::payload::{PayloadDirection, PayloadSegment, PayloadStreamKey};
 use model_core::process::ProcessIdentity;
@@ -27,6 +28,8 @@ impl Http1Analyzer {
         &mut self,
         segment: &PayloadSegment,
         config: &ApplicationProtocolConfig,
+        semantic_retention: &SemanticRetentionConfig,
+        consumed_by_llm: bool,
         summary_only: bool,
     ) -> Result<Vec<ApplicationEventDraft>, String> {
         let text = match std::str::from_utf8(&segment.bytes) {
@@ -40,23 +43,68 @@ impl Http1Analyzer {
         } else {
             buffer.append(text, config.sse_max_buffer_bytes)?;
         }
-        if !buffer.starts_like_http_or_sse(config.sse_enabled) {
+        if !buffer.expects_chunked_sse_body() && !buffer.starts_like_http_or_sse(config.sse_enabled)
+        {
             self.buffers.remove(&key);
             return Ok(Vec::new());
         }
 
         let mut drafts = Vec::new();
-        while let Some(message) = buffer.take_message(config, summary_only)? {
-            drafts.push(ApplicationEventDraft {
-                payload: message.to_payload(segment, config),
-            });
+        loop {
+            if buffer.expects_chunked_sse_body() {
+                let drain = buffer.take_chunked_sse_events(config)?;
+                for payload in drain.payloads {
+                    drafts.push(ApplicationEventDraft { payload });
+                }
+                if drain.done {
+                    buffer.finish_chunked_sse_body();
+                    if !buffer.text.is_empty() {
+                        continue;
+                    }
+                }
+                break;
+            }
+
+            if !summary_only {
+                if let Some(message) = buffer.take_chunked_sse_head(config)? {
+                    if semantic_retention.http_message_summary_enabled() {
+                        drafts.push(ApplicationEventDraft {
+                            payload: message.to_payload(
+                                segment,
+                                config,
+                                semantic_retention,
+                                consumed_by_llm,
+                            ),
+                        });
+                    }
+                    buffer.start_chunked_sse_body();
+                    continue;
+                }
+                for payload in buffer.take_streaming_sse_events(config)? {
+                    drafts.push(ApplicationEventDraft { payload });
+                }
+            }
+
+            let Some(message) = buffer.take_message(config, summary_only)? else {
+                break;
+            };
+            if semantic_retention.http_message_summary_enabled() {
+                drafts.push(ApplicationEventDraft {
+                    payload: message.to_payload(
+                        segment,
+                        config,
+                        semantic_retention,
+                        consumed_by_llm,
+                    ),
+                });
+            }
             if config.sse_enabled && message.is_sse() {
                 for payload in message.sse_events(config)? {
                     drafts.push(ApplicationEventDraft { payload });
                 }
             }
         }
-        if buffer.text.is_empty() {
+        if buffer.text.is_empty() && !buffer.expects_chunked_sse_body() {
             self.buffers.remove(&key);
         }
         Ok(drafts)
@@ -103,9 +151,23 @@ impl From<PayloadDirection> for StreamDirectionKey {
     }
 }
 
-#[derive(Default)]
 struct StreamBuffer {
     text: String,
+    state: StreamBufferState,
+}
+
+impl Default for StreamBuffer {
+    fn default() -> Self {
+        Self {
+            text: String::new(),
+            state: StreamBufferState::Http,
+        }
+    }
+}
+
+enum StreamBufferState {
+    Http,
+    ChunkedSse { pending_sse: String },
 }
 
 impl StreamBuffer {
@@ -149,12 +211,55 @@ impl StreamBuffer {
         parser::starts_like_http_or_sse(&self.text, sse_enabled)
     }
 
+    fn expects_chunked_sse_body(&self) -> bool {
+        matches!(self.state, StreamBufferState::ChunkedSse { .. })
+    }
+
+    fn start_chunked_sse_body(&mut self) {
+        self.state = StreamBufferState::ChunkedSse {
+            pending_sse: String::new(),
+        };
+    }
+
+    fn finish_chunked_sse_body(&mut self) {
+        self.state = StreamBufferState::Http;
+    }
+
     fn take_message(
         &mut self,
         config: &ApplicationProtocolConfig,
         summary_only: bool,
     ) -> Result<Option<parser::HttpMessage>, String> {
         parser::take_message(&mut self.text, config, summary_only)
+    }
+
+    fn take_chunked_sse_head(
+        &mut self,
+        config: &ApplicationProtocolConfig,
+    ) -> Result<Option<parser::HttpMessage>, String> {
+        parser::take_chunked_sse_head(&mut self.text, config)
+    }
+
+    fn take_streaming_sse_events(
+        &mut self,
+        config: &ApplicationProtocolConfig,
+    ) -> Result<Vec<ApplicationPayload>, String> {
+        parser::take_streaming_sse_events(&mut self.text, config)
+    }
+
+    fn take_chunked_sse_events(
+        &mut self,
+        config: &ApplicationProtocolConfig,
+    ) -> Result<parser::ChunkedSseDrain, String> {
+        match &mut self.state {
+            StreamBufferState::Http => Ok(parser::ChunkedSseDrain {
+                payloads: Vec::new(),
+                done: false,
+            }),
+            StreamBufferState::ChunkedSse { pending_sse } => {
+                parser::take_chunked_sse_events(&mut self.text, pending_sse, config)
+            }
+        }
     }
 }
 

@@ -285,27 +285,28 @@ def finish_xiaoo_capture(
         "LLM exchange content",
         PASS
         if (
-            "evidence.llm_request.body_text_json=" in evidence_text
-            and "evidence.llm_response.body_text_json=" in evidence_text
+            "evidence.llm_request.body_attributes=omitted" in evidence_text
+            and "evidence.llm_response.body_attributes=omitted" in evidence_text
         )
         else FAIL,
         expected_found_detail(
-            "OTEL evidence includes request and response payload summaries",
+            "OTEL evidence includes request and response payload metadata",
             evidence_summary_facts(
                 evidence_text,
                 (
                     "evidence.llm_request.model=",
                     "evidence.llm_request.route=",
                     "evidence.llm_request.source=",
-                    "evidence.llm_request.body_text_json=",
+                    "evidence.llm_request.payload_bytes=",
+                    "evidence.llm_request.body_attributes=",
                     "evidence.llm_response.model=",
                     "evidence.llm_response.source=",
                     "evidence.llm_response.payload_bytes=",
-                    "evidence.llm_response.body_text_json=",
+                    "evidence.llm_response.body_attributes=",
                 ),
             ),
         ),
-        "OTEL evidence must include parsed llm.request content and captured llm.response content",
+        "OTEL evidence must include parsed llm.request metadata without duplicated body content",
     )
 
 

@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterable
-
-
-BODY_TEXT_PREVIEW_CHARS = 100
 
 
 def output_line(output: str, prefix: str) -> str:
@@ -53,29 +49,7 @@ def summary_line(output: str, prefix: str) -> str:
     line = output_line(output, prefix)
     if line.startswith("missing "):
         return line
-    if prefix.endswith("body_text_json="):
-        return format_body_preview(prefix, line)
     key, _, value = line.partition("=")
     if key == "evidence.llm_response":
         return line
     return f"{key} = {value}"
-
-
-def format_body_preview(prefix: str, line: str) -> str:
-    key = prefix.rstrip("=")
-    _, _, raw_value = line.partition("=")
-    value = decode_json_string(raw_value)
-    preview = value[:BODY_TEXT_PREVIEW_CHARS]
-    if len(value) > BODY_TEXT_PREVIEW_CHARS:
-        preview = f"{preview}... [truncated]"
-    return f"{key} = {json.dumps(preview, ensure_ascii=False)}"
-
-
-def decode_json_string(value: str) -> str:
-    try:
-        decoded = json.loads(value)
-    except json.JSONDecodeError:
-        return value
-    if isinstance(decoded, str):
-        return decoded
-    return value

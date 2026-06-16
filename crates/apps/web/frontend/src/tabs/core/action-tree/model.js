@@ -318,9 +318,6 @@ function attributePriority(kind) {
       'llm.response.total_tokens',
       'llm.response.cached_prompt_tokens',
       'llm.response.reasoning_tokens',
-      'llm.response.content_text',
-      'llm.response.reasoning_text',
-      'llm.response.output_text',
       'llm.response.tool_calls_json',
       'llm.response.model',
       'llm.response.done',
@@ -336,13 +333,9 @@ function attributePriority(kind) {
   }
   if (kind === 'sse.event') {
     return [
-      'llm.response.delta.content_text',
-      'llm.response.delta.reasoning_text',
-      'llm.response.delta.tool_calls_json',
       'llm.response.finish_reason',
       'sse.done',
       'sse.data_json_state',
-      'sse.data_text',
     ];
   }
   return [];

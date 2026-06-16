@@ -24,17 +24,17 @@ struct StorageConfigValues {
 impl StorageConfigValues {
     fn parse(raw: &str) -> Result<Self, String> {
         let mut values = BTreeMap::new();
-        let mut inside_export_section = false;
+        let mut inside_ignored_section = false;
         for (line_index, line) in raw.lines().enumerate() {
             let trimmed = line.trim();
             if trimmed.is_empty() || trimmed.starts_with('#') {
                 continue;
             }
-            if let Some(is_export_section) = parse_section_header(trimmed, line_index + 1)? {
-                inside_export_section = is_export_section;
+            if let Some(is_ignored_section) = parse_section_header(trimmed, line_index + 1)? {
+                inside_ignored_section = is_ignored_section;
                 continue;
             }
-            if inside_export_section {
+            if inside_ignored_section {
                 continue;
             }
             let (key, value) = trimmed
@@ -92,7 +92,11 @@ fn parse_section_header(line: &str, line_number: usize) -> Result<Option<bool>, 
         return Err(format!("invalid config section line {line_number}"));
     }
     let section = &line[1..line.len() - 1];
-    if section == "export" || section.starts_with("export.routes.") {
+    if section == "export"
+        || section.starts_with("export.routes.")
+        || section == "semantic_retention"
+        || section.starts_with("semantic_retention.")
+    {
         return Ok(Some(true));
     }
     Err(format!("unsupported config section line {line_number}"))

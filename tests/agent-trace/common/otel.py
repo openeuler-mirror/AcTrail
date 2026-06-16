@@ -37,7 +37,7 @@ def require_otel_span(document: dict, kind: str) -> int:
     return count
 
 
-def emit_llm_otel_evidence(document: dict, max_text_chars: int) -> None:
+def emit_llm_otel_evidence(document: dict, _max_text_chars: int) -> None:
     request = first_otel_action(document, "llm.request")
     if request is None:
         print("evidence.llm_request=not exported")
@@ -46,29 +46,21 @@ def emit_llm_otel_evidence(document: dict, max_text_chars: int) -> None:
         route = attrs.get("url.path", "")
         method = attrs.get("http.request.method", "")
         scheme = attrs.get("url.scheme", "")
-        body = attrs.get("http.request.body_text") or attrs.get("llm.request.payload_text", "")
         print(f"evidence.llm_request.model={attrs.get('llm.request.model', '')}")
         print(f"evidence.llm_request.source={attrs.get('payload.source_boundary', '')}")
         print(f"evidence.llm_request.route={scheme} {method} {route}".rstrip())
         print(f"evidence.llm_request.payload_bytes={attrs.get('llm.request.payload_bytes', '')}")
-        print(
-            "evidence.llm_request.body_text_json="
-            f"{json.dumps(clip_text(body, max_text_chars), ensure_ascii=False)}"
-        )
+        print("evidence.llm_request.body_attributes=omitted")
 
     response = first_otel_action(document, "llm.response")
     if response is None:
         print("evidence.llm_response=not exported")
     else:
         attrs = otel_attrs(response)
-        body = attrs.get("http.response.body_text") or attrs.get("llm.response.payload_text", "")
         print(f"evidence.llm_response.model={attrs.get('llm.response.model', '')}")
         print(f"evidence.llm_response.source={attrs.get('payload.source_boundary', '')}")
         print(f"evidence.llm_response.payload_bytes={attrs.get('llm.response.payload_bytes', '')}")
-        print(
-            "evidence.llm_response.body_text_json="
-            f"{json.dumps(clip_text(body, max_text_chars), ensure_ascii=False)}"
-        )
+        print("evidence.llm_response.body_attributes=omitted")
 
 
 def first_otel_action(document: dict, kind: str) -> dict | None:
@@ -77,12 +69,6 @@ def first_otel_action(document: dict, kind: str) -> dict | None:
         if attrs.get("actrail.action.kind") == kind:
             return span
     return None
-
-
-def clip_text(text: str, max_chars: int) -> str:
-    if max_chars < 0:
-        raise RuntimeError("evidence text max chars must be non-negative")
-    return text if len(text) <= max_chars else text[:max_chars] + "...[truncated]"
 
 
 def otel_spans(document: dict) -> list[dict]:

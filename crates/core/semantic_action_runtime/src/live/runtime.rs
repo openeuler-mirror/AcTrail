@@ -1,6 +1,6 @@
 //! Live semantic action runtime.
 
-use config_core::daemon::AgentInvocationConfig;
+use config_core::daemon::{AgentInvocationConfig, SemanticRetentionConfig};
 use model_core::event::{DomainEvent, EventPayload};
 use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
@@ -46,7 +46,7 @@ impl LiveSemanticActionOutput {
 }
 
 impl LiveSemanticActionRuntime {
-    pub fn new(config: AgentInvocationConfig) -> Self {
+    pub fn new(config: AgentInvocationConfig, semantic_retention: SemanticRetentionConfig) -> Self {
         let AgentInvocationConfig {
             enabled,
             commands: _,
@@ -55,7 +55,7 @@ impl LiveSemanticActionRuntime {
             agent: AgentProjector::new(enabled),
             command: CommandProjector::new(),
             file_access: FileAccessProjector::new(),
-            llm: LiveLlmProjector::default(),
+            llm: LiveLlmProjector::new(semantic_retention),
             links: ActionLinkProjector::new(),
         }
     }

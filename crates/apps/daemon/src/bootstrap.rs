@@ -7,7 +7,7 @@ use std::time::Duration;
 use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
     EnforcementConfig, PayloadConfig, ProcessSeccompConfig, ResourceMetricsConfig,
-    RuntimeExportConfig, SeccompNotifyConfig,
+    RuntimeExportConfig, SeccompNotifyConfig, SemanticRetentionConfig,
 };
 use config_core::provider_rules::ProviderRuleSetConfig;
 use control_contract::reply::ControlError;
@@ -51,6 +51,7 @@ impl LocalDaemonServer {
         seccomp_notify: SeccompNotifyConfig,
         process_seccomp: ProcessSeccompConfig,
         agent_invocation: AgentInvocationConfig,
+        semantic_retention: SemanticRetentionConfig,
         application_protocol: ApplicationProtocolConfig,
         resource_metrics: ResourceMetricsConfig,
         export_runtime: RuntimeExportConfig,
@@ -65,6 +66,7 @@ impl LocalDaemonServer {
             seccomp_notify,
             process_seccomp,
             agent_invocation,
+            semantic_retention,
             application_protocol,
             resource_metrics,
             export_runtime,
@@ -84,6 +86,7 @@ impl LocalDaemonServer {
         seccomp_notify: SeccompNotifyConfig,
         process_seccomp: ProcessSeccompConfig,
         agent_invocation: AgentInvocationConfig,
+        semantic_retention: SemanticRetentionConfig,
         application_protocol: ApplicationProtocolConfig,
         resource_metrics: ResourceMetricsConfig,
         export_runtime: RuntimeExportConfig,
@@ -99,6 +102,7 @@ impl LocalDaemonServer {
             seccomp_notify,
             process_seccomp,
             agent_invocation,
+            semantic_retention,
             application_protocol,
             resource_metrics,
             export_runtime,

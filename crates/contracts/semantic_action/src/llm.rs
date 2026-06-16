@@ -57,7 +57,6 @@ pub trait LlmProviderResponseStreamParser {
 pub struct LlmParsedResponse {
     pub provider_id: &'static str,
     pub model: Option<String>,
-    pub output_text: Option<String>,
     pub content_text: Option<String>,
     pub reasoning_text: Option<String>,
     pub tool_calls: Vec<LlmToolCall>,

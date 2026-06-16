@@ -285,8 +285,8 @@ def finish_claude_capture(
         result,
         "OTEL payload marker",
         lambda: module.require_exported_llm_span(otel_document, marker),
-        expected_found_detail("OTEL llm.request payload contains request marker", [f"otel_payload_marker={marker}"]),
-        "the llm.request payload text exported to OTEL contains the prompt marker",
+        expected_found_detail("OTEL llm.request span contains payload metadata", [f"otel_payload_marker={marker}"]),
+        "the llm.request semantic span exports payload metadata without duplicating prompt text",
     )
     run_step(
         result,
@@ -322,27 +322,28 @@ def finish_claude_capture(
         "LLM exchange content",
         PASS
         if (
-            "evidence.llm_request.body_text_json=" in evidence_text
-            and "evidence.llm_response.body_text_json=" in evidence_text
+            "evidence.llm_request.body_attributes=omitted" in evidence_text
+            and "evidence.llm_response.body_attributes=omitted" in evidence_text
         )
         else FAIL,
         expected_found_detail(
-            "OTEL evidence includes request and response payload summaries",
+            "OTEL evidence includes request and response payload metadata",
             evidence_summary_facts(
                 evidence_text,
                 (
                     "evidence.llm_request.model=",
                     "evidence.llm_request.route=",
                     "evidence.llm_request.source=",
-                    "evidence.llm_request.body_text_json=",
+                    "evidence.llm_request.payload_bytes=",
+                    "evidence.llm_request.body_attributes=",
                     "evidence.llm_response.model=",
                     "evidence.llm_response.source=",
                     "evidence.llm_response.payload_bytes=",
-                    "evidence.llm_response.body_text_json=",
+                    "evidence.llm_response.body_attributes=",
                 ),
             ),
         ),
-        "OTEL evidence must include parsed llm.request content and captured llm.response content",
+        "OTEL evidence must include parsed llm.request metadata without duplicated body content",
     )
 
 

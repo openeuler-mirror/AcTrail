@@ -10,7 +10,7 @@ use config_core::daemon::{
     EnforcementBackend, EnforcementConfig, EnforcementDecision, EnforcementMarkStrategy,
     EnforcementScope, MemlockRlimit, OPERATOR_CONFIG_TEMPLATE, OperatorConfig, PayloadConfig,
     ProcessSeccompConfig, ProcessSeccompSyscall, ResourceMetricsConfig, RuntimeExportConfig,
-    SeccompNotifyConfig, SseDataPolicy,
+    SeccompNotifyConfig, SemanticRetentionConfig, SseDataPolicy,
 };
 use config_core::trace_snapshot::CaptureProfileSnapshot;
 use control_contract::command::{ControlCommand, ListTracesCommand, TrackAddCommand};
@@ -64,6 +64,7 @@ fn attach_main_path_runs() {
         seccomp_notify_disabled(),
         process_seccomp_disabled(),
         agent_invocation_disabled(),
+        SemanticRetentionConfig::default(),
         application_protocol_disabled(),
         resource_metrics_disabled(),
         export_runtime_disabled(),
@@ -118,6 +119,7 @@ fn launch_mode_suppresses_wrapper_bootstrap_gap() {
         seccomp_notify_disabled(),
         process_seccomp_disabled(),
         agent_invocation_disabled(),
+        SemanticRetentionConfig::default(),
         application_protocol_disabled(),
         resource_metrics_disabled(),
         export_runtime_disabled(),
@@ -179,6 +181,7 @@ fn resource_metrics_sampler_persists_procfs_samples() {
         seccomp_notify_disabled(),
         process_seccomp_disabled(),
         agent_invocation_disabled(),
+        SemanticRetentionConfig::default(),
         application_protocol_disabled(),
         ResourceMetricsConfig {
             enabled: true,

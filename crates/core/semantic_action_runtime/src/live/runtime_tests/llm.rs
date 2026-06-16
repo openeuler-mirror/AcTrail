@@ -1,9 +1,14 @@
+use config_core::daemon::{
+    AgentInvocationConfig, SemanticContentOwner, SemanticRetentionConfig, SseEventContentRetention,
+};
 use model_core::process::ProcessIdentity;
 use semantic_action::{
     SemanticActionCompleteness, SemanticActionKind, SemanticActionLinkRole, SemanticActionStatus,
+    SemanticEvidenceKind,
 };
 use serde_json::Value;
 
+use super::LiveSemanticActionRuntime;
 use super::test_support::*;
 
 #[test]
@@ -97,16 +102,31 @@ data: [DONE]
     assert_eq!(
         second_response
             .attributes
-            .get("llm.response.output_text")
+            .get("llm.response.model")
             .map(String::as_str),
-        Some("hello")
+        Some("deepseek-v4-flash")
     );
     assert!(second_response.evidence.iter().any(|evidence| {
-        evidence.id == RESPONSE_FIRST_SEGMENT_ID.get() && evidence.role == "llm.response.payload"
+        evidence.kind == SemanticEvidenceKind::PayloadAggregate
+            && evidence.id == RESPONSE_FIRST_SEGMENT_ID.get()
+            && evidence.role == "llm.response.payload"
     }));
-    assert!(second_response.evidence.iter().any(|evidence| {
-        evidence.id == response_segment_id(5).get() && evidence.role == "llm.response.payload"
-    }));
+    assert_eq!(
+        second_response
+            .evidence
+            .iter()
+            .filter(|evidence| evidence.role == "llm.response.payload")
+            .count(),
+        1
+    );
+    let expected_sequence_end = response_sequence(5).to_string();
+    assert_eq!(
+        second_response
+            .attributes
+            .get("payload.sequence_end")
+            .map(String::as_str),
+        Some(expected_sequence_end.as_str())
+    );
 }
 
 #[test]
@@ -174,9 +194,9 @@ fn llm_response_stream_state_keeps_chunked_boundary_after_done() {
     assert_eq!(
         second_response
             .attributes
-            .get("llm.response.output_text")
+            .get("llm.response.model")
             .map(String::as_str),
-        Some("second")
+        Some("deepseek-v4-flash")
     );
 }
 
@@ -306,9 +326,9 @@ fn llm_response_stream_state_evicts_completed_messages() {
     assert_eq!(
         second_response
             .attributes
-            .get("llm.response.output_text")
+            .get("llm.response.model")
             .map(String::as_str),
-        Some("second")
+        Some("deepseek-chat")
     );
     assert!(second_response.evidence.iter().any(|evidence| {
         evidence.id == response_segment_id(1).get() && evidence.role == "llm.response.payload"
@@ -390,14 +410,14 @@ fn raw_llm_responses_use_distinct_action_ids_after_evict() {
     assert_eq!(
         second_response
             .attributes
-            .get("llm.response.output_text")
+            .get("llm.response.model")
             .map(String::as_str),
-        Some("second")
+        Some("deepseek-chat")
     );
 }
 
 #[test]
-fn llm_response_projects_sse_stream_and_events() {
+fn llm_response_projects_sse_stream_summary_without_event_actions() {
     let mut runtime = runtime();
     let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
 
@@ -439,7 +459,29 @@ fn llm_response_projects_sse_stream_and_events() {
     assert_eq!(
         response
             .attributes
-            .get("llm.response.output_text")
+            .get("llm.response.model")
+            .map(String::as_str),
+        Some("deepseek-v4-flash")
+    );
+    assert!(
+        !response
+            .attributes
+            .contains_key("llm.response.payload_text")
+    );
+    assert!(!response.attributes.contains_key("http.response.body_text"));
+    assert!(!response.attributes.contains_key("http.response.body_json"));
+    assert!(!response.attributes.contains_key("llm.response.output_text"));
+    assert_eq!(
+        response
+            .attributes
+            .get("llm.response.provider_id")
+            .map(String::as_str),
+        Some("openai-compatible")
+    );
+    assert_eq!(
+        response
+            .attributes
+            .get("llm.response.content_text")
             .map(String::as_str),
         Some("answer")
     );
@@ -449,6 +491,11 @@ fn llm_response_projects_sse_stream_and_events() {
             .get("llm.response.reasoning_text")
             .map(String::as_str),
         Some("thinking")
+    );
+    assert!(
+        !response
+            .attributes
+            .contains_key("llm.response.sse_events_json")
     );
     let tool_calls_json = response
         .attributes
@@ -522,30 +569,129 @@ fn llm_response_projects_sse_stream_and_events() {
         .iter()
         .find(|action| action.kind == SemanticActionKind::SseStream)
         .expect("SSE payload should project an sse.stream action");
+    assert_eq!(
+        stream.attributes.get("sse.event_count").map(String::as_str),
+        Some("7")
+    );
+    assert_eq!(
+        stream
+            .attributes
+            .get("sse.content_delta_count")
+            .map(String::as_str),
+        Some("1")
+    );
+    assert_eq!(
+        stream
+            .attributes
+            .get("sse.reasoning_delta_count")
+            .map(String::as_str),
+        Some("1")
+    );
+    assert_eq!(
+        stream
+            .attributes
+            .get("sse.tool_delta_count")
+            .map(String::as_str),
+        Some("3")
+    );
+    assert_eq!(
+        response
+            .evidence
+            .iter()
+            .filter(|evidence| evidence.role == "llm.response.payload")
+            .count(),
+        1
+    );
+    assert!(response.evidence.iter().any(|evidence| {
+        evidence.kind == SemanticEvidenceKind::PayloadAggregate
+            && evidence.role == "llm.response.payload"
+            && evidence.id == RESPONSE_FIRST_SEGMENT_ID.get()
+    }));
+    assert!(
+        output
+            .actions
+            .iter()
+            .all(|action| action.kind != SemanticActionKind::SseEvent)
+    );
     let events = output
         .actions
         .iter()
         .filter(|action| action.kind == SemanticActionKind::SseEvent)
         .collect::<Vec<_>>();
-    assert_eq!(events.len(), 7);
-    let event_tool_delta_json = events
-        .iter()
-        .find_map(|event| event.attributes.get("llm.response.delta.tool_calls_json"))
-        .expect("sse.event should keep raw tool call delta JSON");
-    let event_tool_delta = serde_json::from_str::<Value>(event_tool_delta_json)
-        .expect("sse.event tool call delta should be valid JSON");
-    assert_eq!(event_tool_delta[0]["id"], "call_1");
-    assert_eq!(event_tool_delta[0]["function"]["arguments"], "");
+    assert!(events.is_empty());
     assert!(output.links.iter().any(|link| {
         link.role == SemanticActionLinkRole::LlmResponseSseStream
             && link.parent_action_id == response.action_id
             && link.child_action_id == stream.action_id
     }));
-    assert!(events.iter().all(|event| {
-        output.links.iter().any(|link| {
-            link.role == SemanticActionLinkRole::SseStreamEvent
-                && link.parent_action_id == stream.action_id
-                && link.child_action_id == event.action_id
-        })
-    }));
+}
+
+#[test]
+fn parsed_sse_storage_config_keeps_provider_events_on_sse_stream_action() {
+    let mut semantic_retention = SemanticRetentionConfig::default();
+    semantic_retention.content_owner = SemanticContentOwner::ConfiguredLayers;
+    semantic_retention.l1_sse.event_content = SseEventContentRetention::Parsed;
+    let mut runtime = LiveSemanticActionRuntime::new(
+        AgentInvocationConfig {
+            enabled: true,
+            commands: vec!["xiaoo".to_string()],
+        },
+        semantic_retention,
+    );
+    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+
+    let sse = concat!(
+        "data: {\"model\":\"deepseek-v4-flash\",\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking\"}}]}\n\n",
+        r#"data: {"model":"deepseek-v4-flash","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"pwd\"}"}}]}}]}
+
+"#,
+        "data: {\"model\":\"deepseek-v4-flash\",\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n",
+        "data: [DONE]\n\n"
+    );
+    let bytes = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{}",
+        sse.len(),
+        sse
+    )
+    .into_bytes();
+    let output = runtime.observe_payload_segment(&llm_response_payload_segment(
+        agent,
+        RESPONSE_FIRST_SEGMENT_ID,
+        RESPONSE_FIRST_OPERATION_ID,
+        RESPONSE_FIRST_SEQUENCE,
+        bytes,
+    ));
+    let response = output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmResponse)
+        .expect("SSE payload should project an llm.response action");
+    assert!(
+        !response
+            .attributes
+            .contains_key("llm.response.sse_events_json")
+    );
+    let stream = output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::SseStream)
+        .expect("SSE payload should project an sse.stream action");
+    let events_json = stream
+        .attributes
+        .get("sse.events_json")
+        .expect("parsed SSE storage should be retained when configured");
+    let events =
+        serde_json::from_str::<Value>(events_json).expect("sse.events_json should be valid JSON");
+
+    assert_eq!(events.as_array().map(Vec::len), Some(4));
+    assert_eq!(events[0]["reasoning_text"], "thinking");
+    assert_eq!(events[1]["tool_calls"][0]["function"]["name"], "bash");
+    assert_eq!(events[2]["content_text"], "answer");
+    assert_eq!(events[3]["done"], true);
+    assert!(
+        output
+            .actions
+            .iter()
+            .all(|action| action.kind != SemanticActionKind::SseEvent)
+    );
 }

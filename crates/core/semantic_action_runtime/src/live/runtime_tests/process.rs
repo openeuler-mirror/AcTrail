@@ -246,7 +246,7 @@ fn llm_request_labels_late_exec_command_as_agent() {
 }
 
 #[test]
-fn llm_request_links_to_http_message_on_same_payload_segment() {
+fn llm_request_links_to_http_message_on_same_payload_aggregate() {
     let mut runtime = runtime();
     let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
     let llm_output = runtime.observe_payload_segment(&llm_payload_segment(agent.clone()));
@@ -271,7 +271,7 @@ fn llm_request_links_to_http_message_on_same_payload_segment() {
     assert_eq!(link.parent_action_id, llm_request.action_id);
     assert_eq!(link.child_action_id, http_message.action_id);
     assert!(link.evidence.iter().any(|evidence| {
-        evidence.kind == SemanticEvidenceKind::PayloadSegment
+        evidence.kind == SemanticEvidenceKind::PayloadAggregate
             && evidence.id == PAYLOAD_SEGMENT_ID.get()
     }));
 }

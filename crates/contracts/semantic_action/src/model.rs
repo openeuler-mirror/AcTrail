@@ -123,6 +123,7 @@ impl SemanticActionCompleteness {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SemanticEvidenceKind {
     Event,
+    PayloadAggregate,
     PayloadSegment,
 }
 
@@ -130,6 +131,7 @@ impl SemanticEvidenceKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Event => "event",
+            Self::PayloadAggregate => "payload_aggregate",
             Self::PayloadSegment => "payload_segment",
         }
     }
@@ -137,6 +139,7 @@ impl SemanticEvidenceKind {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "event" => Some(Self::Event),
+            "payload_aggregate" => Some(Self::PayloadAggregate),
             "payload_segment" => Some(Self::PayloadSegment),
             _ => None,
         }

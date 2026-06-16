@@ -221,8 +221,8 @@ def finish_http_projection_capture(
         result,
         "OTEL payload marker",
         lambda: module.require_http_llm_span(otel, marker, module.required(settings, "model")),
-        expected_found_detail("OTEL llm.request payload contains request marker", [f"http_llm_projection_marker={marker}"]),
-        "the exported llm.request payload contains the local prompt marker",
+        expected_found_detail("OTEL llm.request span contains payload metadata", [f"http_llm_projection_marker={marker}"]),
+        "the exported llm.request semantic span contains payload metadata without duplicating prompt text",
     )
     _, evidence_text = capture_stdout(
         lambda: module.emit_llm_otel_evidence(
@@ -235,21 +235,22 @@ def finish_http_projection_capture(
     )
     result.add_check(
         "LLM request content",
-        PASS if "evidence.llm_request.body_text_json=" in evidence_text else FAIL,
+        PASS if "evidence.llm_request.body_attributes=omitted" in evidence_text else FAIL,
         expected_found_detail(
-            "OTEL evidence includes model, route, source, request body, and response status",
+            "OTEL evidence includes model, route, source, payload bytes, and response status",
             evidence_summary_facts(
                 evidence_text,
                 (
                     "evidence.llm_request.model=",
                     "evidence.llm_request.route=",
                     "evidence.llm_request.source=",
-                    "evidence.llm_request.body_text_json=",
+                    "evidence.llm_request.payload_bytes=",
+                    "evidence.llm_request.body_attributes=",
                     "evidence.llm_response=",
                 ),
             ),
         ),
-        "OTEL evidence must include parsed llm.request content",
+        "OTEL evidence must include parsed llm.request metadata without duplicated body content",
     )
 
 

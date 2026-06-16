@@ -16,7 +16,9 @@ mod logging;
 use attach_runtime::snapshot_merge::merge_snapshot;
 use collector_binding::TraceBindingRequest;
 use collector_instance::CollectorInstance;
-use config_core::daemon::{DiagnosticLogLevel, PayloadRedactionPolicy, PayloadStdioStorageMode};
+use config_core::daemon::{
+    DiagnosticLogLevel, PayloadRedactionPolicy, PayloadStdioStorageMode, SemanticRetentionConfig,
+};
 use config_core::trace_snapshot::CaptureProfileSnapshot;
 use control_contract::command::TrackAddCommand;
 use control_contract::reply::{ControlError, TrackAddReply};
@@ -78,6 +80,7 @@ pub(crate) struct StorageAttachService {
     pub(super) seccomp_socket: SeccompSocketService,
     pub(super) process_seccomp: ProcessSeccompService,
     pub(super) pending_process_seccomp_observations: Vec<ProcessSeccompObservation>,
+    pub(super) semantic_retention: SemanticRetentionConfig,
     pub(super) application_protocol: ApplicationProtocolAnalyzer,
     pub(super) resource_metrics: ResourceMetricsSampler,
     pub(super) enforcement: FanotifyEnforcementService,
