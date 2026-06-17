@@ -181,6 +181,7 @@ impl CommandProjector {
             child_action_id: process_action.action_id.clone(),
             role: SemanticActionLinkRole::CommandContainsProcessExec,
             confidence: SemanticActionLinkConfidence::Observed,
+            valid: true,
             evidence: vec![event_evidence(event, evidence_roles::command::EXEC)],
             attributes: BTreeMap::new(),
         })

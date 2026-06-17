@@ -74,6 +74,7 @@ int handle_sched_process_exit(struct sched_process_exit_ctx *ctx) {
     init_event(&event, ACTRAIL_PROC_EXIT, pid, *trace_id);
     attach_exit_code(&event, pid_tgid);
     emit_event(&event);
+    cleanup_suppressed_fds_for_process(pid, event.pid_generation);
     bpf_map_delete_elem(&tracked_traces, &pid);
     delete_process_generation(pid);
     return 0;

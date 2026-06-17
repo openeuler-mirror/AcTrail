@@ -386,7 +386,17 @@ fn http1_request_starts_at(bytes: &[u8]) -> bool {
 }
 
 fn first_http1_request_start_after_prefix(bytes: &[u8]) -> Option<usize> {
-    (1..bytes.len()).find(|offset| http1_request_starts_at(&bytes[*offset..]))
+    (1..bytes.len()).find(|offset| {
+        http1_request_method_starts_at(&bytes[*offset..])
+            && http1_request_starts_at(&bytes[*offset..])
+    })
+}
+
+fn http1_request_method_starts_at(bytes: &[u8]) -> bool {
+    HTTP1_REQUEST_METHODS.iter().any(|method| {
+        let method = method.as_bytes();
+        bytes.starts_with(method) && bytes.get(method.len()) == Some(&b' ')
+    })
 }
 
 fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {

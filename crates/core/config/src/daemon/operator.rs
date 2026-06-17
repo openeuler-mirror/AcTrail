@@ -18,7 +18,7 @@ use super::{
     AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
     EnforcementConfig, FileObservationConfig, PayloadConfig, PayloadSocketConfig, PayloadTlsConfig,
     ProcessSeccompConfig, ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig,
-    SemanticRetentionConfig, SocketPermissions, SseDataPolicy,
+    SemanticRetentionConfig, SocketPermissions, SseDataPolicy, WorkloadDiagnosticsConfig,
 };
 use crate::capture_profile::CaptureProfile;
 use crate::export::ExportConfig;
@@ -46,6 +46,7 @@ pub struct OperatorConfig {
     pub export_runtime: RuntimeExportConfig,
     pub log_path: PathBuf,
     pub diagnostic_log_level: DiagnosticLogLevel,
+    pub workload_diagnostics: WorkloadDiagnosticsConfig,
     pub capture_profile: CaptureProfile,
     pub ebpf_config: EbpfCollectorConfig,
     pub payload_config: PayloadConfig,
@@ -113,6 +114,8 @@ impl OperatorConfig {
             .required("diagnostic_log_level")?
             .parse::<DiagnosticLogLevel>()
             .map_err(|error| format!("invalid diagnostic_log_level: {error}"))?;
+        let workload_diagnostics =
+            sections::workload_diagnostics_config(values.node("workload_diagnostics"))?;
         let payload_tls = sections::payload_tls_config(values.node("payload_tls"))?;
         let payload_stdio = sections::payload_stdio_config(values.node("payload_stdio"))?;
         let payload_socket = sections::payload_socket_config(values.node("payload_socket"))?;
@@ -168,6 +171,7 @@ impl OperatorConfig {
             export_runtime,
             log_path: PathBuf::from(values.required("log_path")?),
             diagnostic_log_level,
+            workload_diagnostics,
             capture_profile: CaptureProfile::new(profile_name, capabilities),
             ebpf_config: EbpfCollectorConfig {
                 enabled: values.required_bool("ebpf_enabled")?,

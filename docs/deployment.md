@@ -55,6 +55,8 @@ The generated default keeps daemon runtime state and durable observation data ou
 | `export_directory` | `/var/lib/actrail/export` |
 | live `otel-jsonl` route `path` | `/var/lib/actrail/export/live-spans.otlp.jsonl` |
 | `log_path` | `/var/log/actrail/actraild.log` |
+| `workload_diagnostics_enabled` | `false` |
+| `workload_diagnostics_interval_ms` | `1000` |
 
 `actraild` creates missing parent directories for configured daemon write paths before opening storage/log/export files or binding Unix sockets. Permission errors remain fatal; fix ownership/privileges or change the configured path deliberately.
 
@@ -71,6 +73,8 @@ For a persistent deployment, review these fields first:
 | `storage_sqlite_busy_timeout_ms` | SQLite busy timeout for daemon writes. Keep this positive; increase it only when long-running readers share the same storage. |
 | `log_path` | Daemon background stdout/stderr log. |
 | `diagnostic_log_level` | Daemon diagnostic verbosity: `off`, `info`, or `debug`. Use `debug` only while collecting failure evidence. |
+| `workload_diagnostics_enabled` | Enables periodic low-overhead daemon workload counter logs to help diagnose hot loops and projection/storage pressure. |
+| `workload_diagnostics_interval_ms` | Period between workload diagnostic log lines when workload diagnostics are enabled. |
 | `export_directory` | Default graph export directory when no explicit `--output` is passed. |
 | `[export]` / `[[export.routes]]` | Live export routes. The generated default enables one `otel-jsonl` route; disable it if a realtime span stream is not required. |
 | `profile_name` and `required_capability` | Capability contract for traces created from this config. |

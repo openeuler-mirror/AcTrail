@@ -345,6 +345,7 @@ impl FileAccessProjector {
             child_action_id: file_modify_action.action_id.clone(),
             role: SemanticActionLinkRole::FileWriteContainsFileEvent,
             confidence: SemanticActionLinkConfidence::Observed,
+            valid: true,
             evidence: vec![event_evidence(event, evidence_roles::file::WRITE)],
             attributes: BTreeMap::new(),
         }]

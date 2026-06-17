@@ -6,8 +6,6 @@ use semantic_action::{
     SemanticActionLinkRole, SemanticEvidence, attr_keys as attrs,
 };
 
-use crate::live::actions::{ATTR_LINK_VALID, LINK_VALID_FALSE};
-
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct SemanticActionKey {
     pub(super) trace_id: TraceId,
@@ -49,11 +47,9 @@ pub(super) fn invalidate_child_links(
             child_action_id: key.child_action_id.clone(),
             role,
             confidence: SemanticActionLinkConfidence::Derived,
+            valid: false,
             evidence: evidence.to_vec(),
-            attributes: BTreeMap::from([(
-                ATTR_LINK_VALID.to_string(),
-                LINK_VALID_FALSE.to_string(),
-            )]),
+            attributes: BTreeMap::new(),
         })
         .collect()
 }

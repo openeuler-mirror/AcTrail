@@ -6,13 +6,13 @@ use semantic_action::{
     SemanticActionLinkRole, attr_keys as attrs,
 };
 
-use crate::live::actions::{ATTR_LINK_VALID, LINK_VALID_FALSE};
-
 use super::shared::{ActionLinkKey, SemanticActionKey};
 
 #[derive(Default)]
 pub(super) struct LlmExchangeLinkProjector {
     calls: BTreeMap<SemanticActionKey, SemanticAction>,
+    call_by_request: BTreeMap<(TraceId, String), SemanticActionKey>,
+    call_by_response: BTreeMap<(TraceId, String), SemanticActionKey>,
     requests: BTreeMap<SemanticActionKey, SemanticAction>,
     responses: BTreeMap<SemanticActionKey, SemanticAction>,
     emitted_links: BTreeSet<ActionLinkKey>,
@@ -22,13 +22,14 @@ impl LlmExchangeLinkProjector {
     pub(super) fn observe_action(&mut self, action: &SemanticAction) -> Vec<SemanticActionLink> {
         match action.kind {
             SemanticActionKind::LlmCall => {
-                let previous = self
-                    .calls
-                    .insert(SemanticActionKey::from(action), action.clone());
+                let key = SemanticActionKey::from(action);
+                let previous = self.calls.insert(key.clone(), action.clone());
                 let mut links = Vec::new();
                 if let Some(previous) = previous.as_ref() {
                     links.extend(self.invalidate_superseded_child_links(previous, action));
+                    self.remove_call_indexes(previous);
                 }
+                self.index_call(&key, action);
                 if let Some(request) = self.call_request(action) {
                     links.extend(self.link(
                         action,
@@ -43,41 +44,45 @@ impl LlmExchangeLinkProjector {
                         SemanticActionLinkRole::LlmCallResponse,
                     ));
                 }
+                if action.status != semantic_action::SemanticActionStatus::InProgress {
+                    self.calls.remove(&key);
+                    self.remove_call_indexes(action);
+                }
                 links
             }
             SemanticActionKind::LlmRequest => {
-                self.requests
-                    .insert(SemanticActionKey::from(action), action.clone());
-                self.calls
-                    .values()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .iter()
-                    .filter_map(|call| {
-                        call_references_action(call, attrs::llm_call::REQUEST_ACTION_ID, action)
-                            .then(|| {
-                                self.link(call, action, SemanticActionLinkRole::LlmCallRequest)
-                            })
-                            .flatten()
-                    })
-                    .collect()
+                let key = SemanticActionKey::from(action);
+                self.requests.insert(key.clone(), action.clone());
+                let call_key = self
+                    .call_by_request
+                    .get(&(action.trace_id, action.action_id.clone()))
+                    .cloned();
+                let Some(call) = call_key.and_then(|key| self.calls.get(&key).cloned()) else {
+                    return Vec::new();
+                };
+                let links = self
+                    .link(&call, action, SemanticActionLinkRole::LlmCallRequest)
+                    .into_iter()
+                    .collect();
+                self.requests.remove(&key);
+                links
             }
             SemanticActionKind::LlmResponse => {
-                self.responses
-                    .insert(SemanticActionKey::from(action), action.clone());
-                self.calls
-                    .values()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .iter()
-                    .filter_map(|call| {
-                        call_references_action(call, attrs::llm_call::RESPONSE_ACTION_ID, action)
-                            .then(|| {
-                                self.link(call, action, SemanticActionLinkRole::LlmCallResponse)
-                            })
-                            .flatten()
-                    })
-                    .collect()
+                let key = SemanticActionKey::from(action);
+                self.responses.insert(key.clone(), action.clone());
+                let call_key = self
+                    .call_by_response
+                    .get(&(action.trace_id, action.action_id.clone()))
+                    .cloned();
+                let Some(call) = call_key.and_then(|key| self.calls.get(&key).cloned()) else {
+                    return Vec::new();
+                };
+                let links = self
+                    .link(&call, action, SemanticActionLinkRole::LlmCallResponse)
+                    .into_iter()
+                    .collect();
+                self.responses.remove(&key);
+                links
             }
             _ => Vec::new(),
         }
@@ -85,9 +90,35 @@ impl LlmExchangeLinkProjector {
 
     pub(super) fn forget_trace(&mut self, trace_id: TraceId) {
         self.calls.retain(|key, _| key.trace_id != trace_id);
+        self.call_by_request
+            .retain(|(candidate, _), _| *candidate != trace_id);
+        self.call_by_response
+            .retain(|(candidate, _), _| *candidate != trace_id);
         self.requests.retain(|key, _| key.trace_id != trace_id);
         self.responses.retain(|key, _| key.trace_id != trace_id);
         self.emitted_links.retain(|key| key.trace_id != trace_id);
+    }
+
+    fn index_call(&mut self, key: &SemanticActionKey, call: &SemanticAction) {
+        if let Some(request_id) = call.attributes.get(attrs::llm_call::REQUEST_ACTION_ID) {
+            self.call_by_request
+                .insert((call.trace_id, request_id.clone()), key.clone());
+        }
+        if let Some(response_id) = call.attributes.get(attrs::llm_call::RESPONSE_ACTION_ID) {
+            self.call_by_response
+                .insert((call.trace_id, response_id.clone()), key.clone());
+        }
+    }
+
+    fn remove_call_indexes(&mut self, call: &SemanticAction) {
+        if let Some(request_id) = call.attributes.get(attrs::llm_call::REQUEST_ACTION_ID) {
+            self.call_by_request
+                .remove(&(call.trace_id, request_id.clone()));
+        }
+        if let Some(response_id) = call.attributes.get(attrs::llm_call::RESPONSE_ACTION_ID) {
+            self.call_by_response
+                .remove(&(call.trace_id, response_id.clone()));
+        }
     }
 
     fn call_request(&self, call: &SemanticAction) -> Option<SemanticAction> {
@@ -130,6 +161,7 @@ impl LlmExchangeLinkProjector {
             child_action_id: child.action_id.clone(),
             role,
             confidence: SemanticActionLinkConfidence::Observed,
+            valid: true,
             evidence: child.evidence.clone(),
             attributes: BTreeMap::new(),
         })
@@ -178,11 +210,9 @@ impl LlmExchangeLinkProjector {
             child_action_id: child_action_id.to_string(),
             role,
             confidence: SemanticActionLinkConfidence::Derived,
+            valid: false,
             evidence: call.evidence.clone(),
-            attributes: BTreeMap::from([(
-                ATTR_LINK_VALID.to_string(),
-                LINK_VALID_FALSE.to_string(),
-            )]),
+            attributes: BTreeMap::new(),
         }
     }
 }

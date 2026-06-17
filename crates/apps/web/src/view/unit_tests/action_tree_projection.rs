@@ -459,6 +459,7 @@ fn link(parent: &str, child: &str, role: SemanticActionLinkRole) -> SemanticActi
         child_action_id: child.to_string(),
         role,
         confidence: SemanticActionLinkConfidence::Observed,
+        valid: true,
         evidence: Vec::new(),
         attributes: BTreeMap::new(),
     }

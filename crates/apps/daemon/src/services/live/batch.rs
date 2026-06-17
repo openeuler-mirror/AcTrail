@@ -26,6 +26,10 @@ impl StorageAttachService {
         if raw_events.is_empty() {
             return Ok(());
         }
+        let input_events = raw_events.len();
+        let mut retained_events = 0usize;
+        let mut semantic_action_count = 0usize;
+        let mut semantic_link_count = 0usize;
         let mut batch = LiveEventBatch::default();
         for raw_event in raw_events {
             let observed_at = raw_event.envelope.observed_at;
@@ -62,6 +66,9 @@ impl StorageAttachService {
                 for event in outcome.events {
                     let output = self.semantic_actions.observe_event(&event);
                     let retain_event = output.retain_event;
+                    semantic_action_count =
+                        semantic_action_count.saturating_add(output.actions.len());
+                    semantic_link_count = semantic_link_count.saturating_add(output.links.len());
                     batch
                         .semantic_actions
                         .extend(SemanticActionBatch::from_action_output(
@@ -71,6 +78,7 @@ impl StorageAttachService {
                             output.file_path_sets,
                         ));
                     if retain_event {
+                        retained_events = retained_events.saturating_add(1);
                         batch.events.push(self.prepare_event_for_storage(event));
                     }
                 }
@@ -78,6 +86,12 @@ impl StorageAttachService {
             batch.diagnostics.extend(outcome.diagnostics);
         }
 
+        self.workload_diagnostics.record_event_projection(
+            input_events,
+            retained_events,
+            semantic_action_count,
+            semantic_link_count,
+        );
         self.persist_live_event_batch(trace_runtime, batch)
     }
 
@@ -89,11 +103,17 @@ impl StorageAttachService {
         if events.is_empty() {
             return Ok(());
         }
+        let input_events = events.len();
+        let mut retained_events = 0usize;
+        let mut semantic_action_count = 0usize;
+        let mut semantic_link_count = 0usize;
         let mut batch = LiveEventBatch::default();
         for event in events {
             self.mark_semantic_projection_dirty(event.envelope.trace_id);
             let output = self.semantic_actions.observe_event(&event);
             let retain_event = output.retain_event;
+            semantic_action_count = semantic_action_count.saturating_add(output.actions.len());
+            semantic_link_count = semantic_link_count.saturating_add(output.links.len());
             batch
                 .semantic_actions
                 .extend(SemanticActionBatch::from_action_output(
@@ -103,9 +123,16 @@ impl StorageAttachService {
                     output.file_path_sets,
                 ));
             if retain_event {
+                retained_events = retained_events.saturating_add(1);
                 batch.events.push(self.prepare_event_for_storage(event));
             }
         }
+        self.workload_diagnostics.record_event_projection(
+            input_events,
+            retained_events,
+            semantic_action_count,
+            semantic_link_count,
+        );
         self.persist_live_event_batch(trace_runtime, batch)
     }
 

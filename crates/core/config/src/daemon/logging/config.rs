@@ -2,11 +2,20 @@
 
 use std::str::FromStr;
 
+pub const DEFAULT_WORKLOAD_DIAGNOSTICS_ENABLED: bool = false;
+pub const DEFAULT_WORKLOAD_DIAGNOSTICS_INTERVAL_MS: u64 = 1000;
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum DiagnosticLogLevel {
     Off,
     Info,
     Debug,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkloadDiagnosticsConfig {
+    pub enabled: bool,
+    pub interval_ms: u64,
 }
 
 impl DiagnosticLogLevel {

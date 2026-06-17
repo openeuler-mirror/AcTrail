@@ -1,6 +1,6 @@
 //! Attach service backed by procfs bootstrap and storage persistence.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::os::fd::RawFd;
 use std::time::{Duration, SystemTime};
 
@@ -47,6 +47,7 @@ use crate::services::seccomp_notify::SeccompNotifyService;
 use crate::services::seccomp_socket::SeccompSocketService;
 use crate::services::seccomp_tls::SeccompTlsService;
 use crate::services::tls_sync::TlsSyncService;
+use crate::services::workload_diagnostics::WorkloadDiagnostics;
 
 use self::helpers::{capability_requested, collector_capability_requests};
 
@@ -88,6 +89,8 @@ pub(crate) struct StorageAttachService {
     pub(super) enforcement: FanotifyEnforcementService,
     pub(super) semantic_actions: LiveSemanticActionRuntime,
     pub(super) export_runtime: ExportRuntime,
+    pub(super) workload_diagnostics: WorkloadDiagnostics,
+    pub(super) retained_payload_bytes_by_trace: BTreeMap<model_core::ids::TraceId, u64>,
     pub(super) finalized_terminal_traces: BTreeSet<model_core::ids::TraceId>,
     pub(super) diagnosed_terminal_open_memberships:
         BTreeSet<(model_core::ids::TraceId, ProcessIdentity)>,

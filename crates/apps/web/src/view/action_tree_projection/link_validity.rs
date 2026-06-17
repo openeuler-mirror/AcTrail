@@ -30,9 +30,11 @@ pub(super) fn invalid_link(
     child: &SemanticAction,
     action_by_id: &BTreeMap<String, SemanticAction>,
 ) -> bool {
-    link.attributes
-        .get(LINK_VALID_ATTR)
-        .is_some_and(|value| value == VALID_FALSE)
+    !link.valid
+        || link
+            .attributes
+            .get(LINK_VALID_ATTR)
+            .is_some_and(|value| value == VALID_FALSE)
         || invalid_llm_call_child_link(link, parent, child)
         || invalid_parent_identity_link(link, child)
         || invalid_response_http_link(link, parent, child, action_by_id)

@@ -8,6 +8,7 @@ use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
     EnforcementConfig, FileObservationConfig, PayloadConfig, ProcessSeccompConfig,
     ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig, SemanticRetentionConfig,
+    WorkloadDiagnosticsConfig,
 };
 use config_core::provider_rules::ProviderRuleSetConfig;
 use control_contract::reply::ControlError;
@@ -18,6 +19,7 @@ use crate::profiles::DaemonProfileRegistry;
 use crate::runtime_wiring::DaemonRuntimeWiring;
 use crate::service_host::{AttachService, DaemonServiceHost};
 use crate::services::attach::StorageAttachService;
+use crate::services::workload_diagnostics::WorkloadDiagnostics;
 use crate::services::{build_runtime_wiring, build_runtime_wiring_with_provider_rule_set};
 
 pub struct DaemonBootstrap<A> {
@@ -39,6 +41,7 @@ where
 
 pub struct LocalDaemonServer {
     server: UdsControlServer<DaemonServiceHost<StorageAttachService>>,
+    workload_diagnostics: WorkloadDiagnostics,
 }
 
 impl LocalDaemonServer {
@@ -55,9 +58,11 @@ impl LocalDaemonServer {
         file_observation: FileObservationConfig,
         application_protocol: ApplicationProtocolConfig,
         resource_metrics: ResourceMetricsConfig,
+        workload_diagnostics_config: WorkloadDiagnosticsConfig,
         export_runtime: RuntimeExportConfig,
         enforcement: EnforcementConfig,
     ) -> Result<Self, ControlError> {
+        let workload_diagnostics = WorkloadDiagnostics::new(workload_diagnostics_config);
         let wiring = build_runtime_wiring(
             storage_config,
             profiles,
@@ -71,11 +76,14 @@ impl LocalDaemonServer {
             file_observation,
             application_protocol,
             resource_metrics,
+            workload_diagnostics.clone(),
             export_runtime,
             enforcement,
         )?;
+        workload_diagnostics.start();
         Ok(Self {
             server: DaemonBootstrap::new(wiring).build_control_server(),
+            workload_diagnostics,
         })
     }
 
@@ -92,10 +100,12 @@ impl LocalDaemonServer {
         file_observation: FileObservationConfig,
         application_protocol: ApplicationProtocolConfig,
         resource_metrics: ResourceMetricsConfig,
+        workload_diagnostics_config: WorkloadDiagnosticsConfig,
         export_runtime: RuntimeExportConfig,
         enforcement: EnforcementConfig,
         provider_rule_set: &ProviderRuleSetConfig,
     ) -> Result<Self, ControlError> {
+        let workload_diagnostics = WorkloadDiagnostics::new(workload_diagnostics_config);
         let wiring = build_runtime_wiring_with_provider_rule_set(
             storage_config,
             profiles,
@@ -109,12 +119,15 @@ impl LocalDaemonServer {
             file_observation,
             application_protocol,
             resource_metrics,
+            workload_diagnostics.clone(),
             export_runtime,
             enforcement,
             provider_rule_set,
         )?;
+        workload_diagnostics.start();
         Ok(Self {
             server: DaemonBootstrap::new(wiring).build_control_server(),
+            workload_diagnostics,
         })
     }
 
@@ -146,5 +159,9 @@ impl LocalDaemonServer {
 
     pub(crate) fn background_poll_timeout(&mut self) -> Result<Option<Duration>, ControlError> {
         self.server.service_mut().background_poll_timeout()
+    }
+
+    pub(crate) fn workload_diagnostics(&self) -> &WorkloadDiagnostics {
+        &self.workload_diagnostics
     }
 }

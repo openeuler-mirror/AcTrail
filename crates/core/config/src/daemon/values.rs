@@ -312,6 +312,36 @@ impl ConfigNode {
         Ok(value)
     }
 
+    pub(super) fn optional_positive_u64(
+        &self,
+        key: &'static str,
+        default: u64,
+    ) -> Result<u64, String> {
+        let Some(values) = self.values.get(key) else {
+            return Ok(default);
+        };
+        if values.len() != 1 {
+            return Err(format!(
+                "config key {} must appear once",
+                self.qualified_key(key)
+            ));
+        }
+        let raw = values
+            .first()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| format!("config key {} must not be empty", self.qualified_key(key)))?;
+        let value = raw
+            .parse::<u64>()
+            .map_err(|error| format!("invalid {}: {error}", self.qualified_key(key)))?;
+        if value == u64::default() {
+            return Err(format!(
+                "invalid {}: value must be positive",
+                self.qualified_key(key)
+            ));
+        }
+        Ok(value)
+    }
+
     pub(super) fn required_octal(&self, key: &'static str) -> Result<u32, String> {
         u32::from_str_radix(&self.required(key)?, 8)
             .map_err(|error| format!("invalid {}: {error}", self.qualified_key(key)))

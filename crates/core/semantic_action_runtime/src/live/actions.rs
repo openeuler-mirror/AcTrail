@@ -15,8 +15,6 @@ pub(super) const ATTR_AGENT_IDENTITY_EVIDENCE_ACTION_ID: &str =
 pub(super) const ATTR_AGENT_INVOCATION_TRIGGER: &str = attrs::agent_invocation::TRIGGER;
 pub(super) const ATTR_AGENT_INVOCATION_EVIDENCE_ACTION_ID: &str =
     attrs::agent_invocation::EVIDENCE_ACTION_ID;
-pub(super) const ATTR_LINK_VALID: &str = attrs::actrail::LINK_VALID;
-pub(super) const LINK_VALID_FALSE: &str = "false";
 pub(super) const ATTR_PROCESS_PARENT_GENERATION: &str = attrs::process_parent::GENERATION;
 pub(super) const ATTR_PROCESS_PARENT_IDENTITY_STATE: &str = attrs::process_parent::IDENTITY_STATE;
 pub(super) const ATTR_PROCESS_PARENT_PID: &str = attrs::process_parent::PID;
@@ -26,6 +24,34 @@ pub(super) const ATTR_PROCESS_PARENT_START_TIME_TICKS: &str =
 pub(super) const ATTR_PROCESS_PARENT_TASK_ID: &str = attrs::process_parent::TASK_ID;
 pub(super) const PROCESS_PARENT_IDENTITY_STATE_CONFLICT: &str = "conflict";
 pub(super) const PROCESS_PARENT_IDENTITY_STATE_OBSERVED: &str = "observed";
+
+pub(super) fn action_for_live_state(action: &SemanticAction) -> SemanticAction {
+    let mut state_action = action.clone();
+    for key in LIVE_STATE_OMITTED_ATTRIBUTES {
+        state_action.attributes.remove(*key);
+    }
+    state_action
+}
+
+const LIVE_STATE_OMITTED_ATTRIBUTES: &[&str] = &[
+    attrs::http_request::BODY_JSON,
+    attrs::http_request::BODY_TEXT,
+    attrs::http_request::HEADERS_HPACK_BASE64,
+    attrs::http_request::HEADERS_TEXT,
+    attrs::http_response::BODY_JSON,
+    attrs::http_response::BODY_TEXT,
+    attrs::http_response::HEADERS_HPACK_BASE64,
+    attrs::http_response::HEADERS_TEXT,
+    attrs::llm_request::BODY_JSON,
+    attrs::llm_request::BODY_TEXT,
+    attrs::llm_request::PAYLOAD_TEXT,
+    attrs::llm_response::CONTENT_TEXT,
+    attrs::llm_response::OUTPUT_TEXT,
+    attrs::llm_response::PAYLOAD_TEXT,
+    attrs::llm_response::REASONING_TEXT,
+    attrs::llm_response::SSE_EVENTS_JSON,
+    attrs::llm_response::TOOL_CALLS_JSON,
+];
 
 pub(super) fn process_exec_action(event: &DomainEvent) -> SemanticAction {
     let EventPayload::Process(payload) = &event.payload else {

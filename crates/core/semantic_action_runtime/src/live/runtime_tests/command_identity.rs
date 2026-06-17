@@ -276,13 +276,7 @@ fn command_invocation_parent_identity_conflict_invalidates_emitted_child_link() 
         invalidated.confidence,
         SemanticActionLinkConfidence::Derived
     );
-    assert_eq!(
-        invalidated
-            .attributes
-            .get("actrail.link.valid")
-            .map(String::as_str),
-        Some("false")
-    );
+    assert_eq!(invalidated.valid, false);
 }
 
 #[test]

@@ -46,7 +46,7 @@ impl EventClient {
                 "sync event fd must be non-negative: {fd}"
             )));
         }
-        set_close_on_exec(fd)?;
+        set_exec_inheritable(fd)?;
         let stream = unsafe { UnixStream::from_raw_fd(fd) };
         Self::from_stream(stream, pending_byte_budget, write_buffer_bytes)
     }
@@ -99,7 +99,7 @@ impl EventClient {
     }
 }
 
-fn set_close_on_exec(fd: RawFd) -> SyncResult<()> {
+fn set_exec_inheritable(fd: RawFd) -> SyncResult<()> {
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
     if flags < 0 {
         return Err(SyncError::new(format!(
@@ -107,9 +107,9 @@ fn set_close_on_exec(fd: RawFd) -> SyncResult<()> {
             std::io::Error::last_os_error()
         )));
     }
-    if unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0 {
+    if unsafe { libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } < 0 {
         return Err(SyncError::new(format!(
-            "mark sync event fd close-on-exec: {}",
+            "mark sync event fd inheritable across exec: {}",
             std::io::Error::last_os_error()
         )));
     }
@@ -333,5 +333,22 @@ mod tests {
         let mut bytes = Vec::new();
         server.read_to_end(&mut bytes).expect("read event line");
         assert_eq!(bytes, encode_event_line(&event));
+    }
+
+    #[test]
+    fn inherited_fd_event_client_preserves_exec_inheritance() {
+        let (client, _server) = UnixStream::pair().expect("socket pair");
+        let fd = client.into_raw_fd();
+
+        let client = EventClient::connect_inherited_fd(fd, 4096, 256).expect("client");
+
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        assert!(flags >= 0, "inherited event fd must remain open");
+        assert_eq!(
+            flags & libc::FD_CLOEXEC,
+            0,
+            "inherited event fd must stay open across A -> B -> C exec chains"
+        );
+        client.close_and_join().expect("close event client");
     }
 }

@@ -147,6 +147,7 @@ impl SseLinkProjector {
             child_action_id: child.action_id.clone(),
             role,
             confidence: SemanticActionLinkConfidence::Observed,
+            valid: true,
             evidence: child.evidence.clone(),
             attributes: BTreeMap::new(),
         })

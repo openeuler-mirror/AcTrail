@@ -22,6 +22,7 @@ use crate::services::seccomp_notify::SeccompNotifyService;
 use crate::services::seccomp_socket::SeccompSocketService;
 use crate::services::seccomp_tls::SeccompTlsService;
 use crate::services::tls_sync::TlsSyncService;
+use crate::services::workload_diagnostics::WorkloadDiagnostics;
 
 use super::StorageAttachService;
 use super::helpers::NoopProviderClassifier;
@@ -40,6 +41,7 @@ impl StorageAttachService {
         file_observation: FileObservationConfig,
         application_protocol: ApplicationProtocolConfig,
         resource_metrics: ResourceMetricsConfig,
+        workload_diagnostics: WorkloadDiagnostics,
         enforcement: FanotifyEnforcementService,
         export_runtime: ExportRuntime,
     ) -> Result<Self, control_contract::reply::ControlError> {
@@ -56,6 +58,7 @@ impl StorageAttachService {
             file_observation,
             application_protocol,
             resource_metrics,
+            workload_diagnostics,
             enforcement,
             export_runtime,
             Box::new(NoopProviderClassifier),
@@ -76,6 +79,7 @@ impl StorageAttachService {
         file_observation: FileObservationConfig,
         application_protocol: ApplicationProtocolConfig,
         resource_metrics: ResourceMetricsConfig,
+        workload_diagnostics: WorkloadDiagnostics,
         enforcement: FanotifyEnforcementService,
         export_runtime: ExportRuntime,
         provider_classifier: Box<dyn ProviderClassifier>,
@@ -154,6 +158,8 @@ impl StorageAttachService {
                 file_observation,
             ),
             export_runtime,
+            workload_diagnostics,
+            retained_payload_bytes_by_trace: Default::default(),
             finalized_terminal_traces: Default::default(),
             diagnosed_terminal_open_memberships: Default::default(),
             provider_classifier,

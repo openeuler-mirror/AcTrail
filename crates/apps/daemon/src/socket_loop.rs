@@ -84,16 +84,27 @@ impl LocalDaemonServer {
             .iter()
             .map(UdsControlConnection::raw_fd)
             .collect::<Vec<_>>();
+        let event_fds = self.event_poll_fds()?;
         let readiness = wait_for_ready(
             listener.as_raw_fd(),
             &control_fds,
-            self.event_poll_fds()?,
+            event_fds.clone(),
             self.background_poll_timeout()
                 .map_err(|error| DaemonRunError::new(error.code, error.message))?,
         )?;
+        self.workload_diagnostics().record_ready_cycle(
+            readiness.listener_ready,
+            readiness.control_ready_fds.len(),
+            readiness.event_source_ready,
+            readiness.background_ready,
+            event_fds.len(),
+        );
         if readiness.event_source_ready || readiness.background_ready {
-            self.drain_live_events()
-                .map_err(|error| DaemonRunError::new(error.code, error.message))?;
+            let started = crate::services::workload_diagnostics::now();
+            let result = self.drain_live_events();
+            self.workload_diagnostics()
+                .record_drain_result(started.elapsed(), result.is_ok());
+            result.map_err(|error| DaemonRunError::new(error.code, error.message))?;
         }
         if readiness.listener_ready {
             loop {

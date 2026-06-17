@@ -81,6 +81,8 @@ The generated default uses persistent Linux paths instead of `/tmp`:
 | `export_directory` | `/var/lib/actrail/export` |
 | live `otel-jsonl` route `path` | `/var/lib/actrail/export/live-spans.otlp.jsonl` |
 | `log_path` | `/var/log/actrail/actraild.log` |
+| `workload_diagnostics_enabled` | `false` |
+| `workload_diagnostics_interval_ms` | `1000` |
 
 `actraild` creates missing parent directories for configured daemon write paths when it opens or binds them. Permission errors remain fatal and must be fixed by running with the intended privileges or changing the config paths explicitly. Example configs under `docs/examples/` intentionally keep `/tmp` paths for repeatable local validation.
 

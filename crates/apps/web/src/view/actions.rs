@@ -280,11 +280,12 @@ fn link_json(link: &SemanticActionLink) -> String {
         evidence_json(&link.evidence)
     };
     format!(
-        "{{\"parent\":{},\"child\":{},\"role\":{},\"confidence\":{},\"attributes\":{},\"evidence\":{}}}",
+        "{{\"parent\":{},\"child\":{},\"role\":{},\"confidence\":{},\"valid\":{},\"attributes\":{},\"evidence\":{}}}",
         json::string(&link.parent_action_id),
         json::string(&link.child_action_id),
         json::string(link.role.as_str()),
         json::string(link.confidence.as_str()),
+        json::boolean(link.valid),
         json::map(&link.attributes),
         evidence
     )

@@ -2,7 +2,8 @@
 
 use super::super::values::{ConfigNode, ConfigValues};
 use super::super::{
-    AgentInvocationConfig, ApplicationProtocolConfig, DisabledOrPath, EnforcementConfig,
+    AgentInvocationConfig, ApplicationProtocolConfig, DEFAULT_WORKLOAD_DIAGNOSTICS_ENABLED,
+    DEFAULT_WORKLOAD_DIAGNOSTICS_INTERVAL_MS, DisabledOrPath, EnforcementConfig,
     FileBulkReadObservationConfig, FileObservationConfig, FileTtyObservationConfig,
     FsEnumerateObservationConfig, L0LlmCallRetention, L1SseRetention, L2HttpRetention,
     L3Http2FrameRetention, L4PayloadRetention, PayloadRedactionPolicy, PayloadSocketCaptureBackend,
@@ -10,7 +11,7 @@ use super::super::{
     PayloadTlsCaptureBackend, PayloadTlsConfig, PayloadTlsLibrary, PayloadTlsLibraryPath,
     PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource,
     PayloadTlsSyncRuntimeLibraryPath, ProcessSeccompConfig, ProcessSeccompSyscall,
-    ResourceMetricsConfig, SeccompNotifyConfig, SemanticRetentionConfig,
+    ResourceMetricsConfig, SeccompNotifyConfig, SemanticRetentionConfig, WorkloadDiagnosticsConfig,
 };
 use crate::export::ExportConfig;
 use crate::provider_rules::ProviderRuleSetConfig;
@@ -46,6 +47,16 @@ pub(super) fn resource_metrics_config(node: ConfigNode) -> Result<ResourceMetric
         cpu_alert_percent_millis: node
             .required_disabled_or_positive_u64("cpu_alert_percent_millis")?,
         memory_alert_rss_kb: node.required_disabled_or_positive_u64("memory_alert_rss_kb")?,
+    })
+}
+
+pub(super) fn workload_diagnostics_config(
+    node: ConfigNode,
+) -> Result<WorkloadDiagnosticsConfig, String> {
+    Ok(WorkloadDiagnosticsConfig {
+        enabled: node.optional_bool("enabled", DEFAULT_WORKLOAD_DIAGNOSTICS_ENABLED)?,
+        interval_ms: node
+            .optional_positive_u64("interval_ms", DEFAULT_WORKLOAD_DIAGNOSTICS_INTERVAL_MS)?,
     })
 }
 

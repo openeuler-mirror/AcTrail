@@ -119,6 +119,18 @@ struct actrail_pending_suppressed_fd_dup_op {
     struct actrail_suppressed_fd_value source_value;
 };
 
+struct actrail_suppressed_fd_fork_context {
+    __u32 parent_pid;
+    __u32 child_pid;
+    __u64 parent_generation;
+    __u64 child_generation;
+};
+
+struct actrail_suppressed_fd_cleanup_context {
+    __u32 pid;
+    __u64 generation;
+};
+
 struct actrail_pid_namespace {
     __u64 dev;
     __u64 ino;
@@ -383,6 +395,78 @@ static __always_inline void delete_suppressed_fd(__u32 pid, __u32 fd) {
     key.fd = fd;
     key.generation = *generation;
     bpf_map_delete_elem(&suppressed_fds, &key);
+}
+
+static long inherit_suppressed_fd_entry(
+    void *map,
+    struct actrail_suppressed_fd_key *key,
+    struct actrail_suppressed_fd_value *value,
+    void *ctx
+) {
+    struct actrail_suppressed_fd_fork_context *context = ctx;
+    struct actrail_suppressed_fd_key child_key = {};
+
+    if (key->pid != context->parent_pid) {
+        return 0;
+    }
+    if (key->generation != context->parent_generation) {
+        return 0;
+    }
+    child_key.pid = context->child_pid;
+    child_key.fd = key->fd;
+    child_key.generation = context->child_generation;
+    bpf_map_update_elem(map, &child_key, value, BPF_ANY);
+    return 0;
+}
+
+static __always_inline void inherit_suppressed_fds_for_child(
+    __u32 parent_pid,
+    __u64 parent_generation,
+    __u32 child_pid,
+    __u64 child_generation
+) {
+    struct actrail_suppressed_fd_fork_context context = {};
+
+    if (!parent_pid || !parent_generation || !child_pid || !child_generation) {
+        return;
+    }
+    context.parent_pid = parent_pid;
+    context.parent_generation = parent_generation;
+    context.child_pid = child_pid;
+    context.child_generation = child_generation;
+    bpf_for_each_map_elem(&suppressed_fds, inherit_suppressed_fd_entry, &context, 0);
+}
+
+static long cleanup_suppressed_fd_entry(
+    void *map,
+    struct actrail_suppressed_fd_key *key,
+    struct actrail_suppressed_fd_value *value,
+    void *ctx
+) {
+    struct actrail_suppressed_fd_cleanup_context *context = ctx;
+
+    if (key->pid != context->pid) {
+        return 0;
+    }
+    if (key->generation != context->generation) {
+        return 0;
+    }
+    bpf_map_delete_elem(map, key);
+    return 0;
+}
+
+static __always_inline void cleanup_suppressed_fds_for_process(
+    __u32 pid,
+    __u64 generation
+) {
+    struct actrail_suppressed_fd_cleanup_context context = {};
+
+    if (!pid || !generation) {
+        return;
+    }
+    context.pid = pid;
+    context.generation = generation;
+    bpf_for_each_map_elem(&suppressed_fds, cleanup_suppressed_fd_entry, &context, 0);
 }
 
 static __always_inline int suppressed_fd_close_enter(

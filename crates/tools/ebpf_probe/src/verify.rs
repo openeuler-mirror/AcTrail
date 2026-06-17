@@ -62,6 +62,7 @@ pub fn run_live_verification(
         seccomp_defaults.file_observation,
         config.application_protocol.clone(),
         config.resource_metrics.clone(),
+        seccomp_defaults.workload_diagnostics,
         seccomp_defaults.export_runtime,
         config.enforcement.clone(),
         &provider_rule_set,

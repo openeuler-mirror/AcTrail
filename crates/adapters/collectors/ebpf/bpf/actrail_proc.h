@@ -24,6 +24,12 @@ static __always_inline int emit_pending_child_proc_op(void) {
 
     bpf_map_update_elem(&tracked_traces, &child_pid, &op->trace_id, BPF_ANY);
     set_process_generation(child_pid, op->child_generation);
+    inherit_suppressed_fds_for_child(
+        op->parent_pid,
+        op->parent_generation,
+        child_pid,
+        op->child_generation
+    );
 
     init_event(&event, ACTRAIL_PROC_FORK, op->parent_pid, op->trace_id);
     event.aux = child_pid;

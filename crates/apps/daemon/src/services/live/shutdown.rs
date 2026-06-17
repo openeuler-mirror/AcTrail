@@ -42,6 +42,7 @@ impl StorageAttachService {
             self.application_protocol.forget_trace(trace_id);
             self.semantic_actions.forget_trace(trace_id);
             self.payload_body_retention_gate.forget_trace(trace_id);
+            self.retained_payload_bytes_by_trace.remove(&trace_id);
             self.finalized_terminal_traces.insert(trace_id);
         }
         Ok(())
@@ -77,6 +78,8 @@ impl StorageAttachService {
                     .collector
                     .poll_batch()
                     .map_err(|error| ControlError::new(error.stage, error.message))?;
+                self.workload_diagnostics
+                    .record_collector_batch(batch.observations.len(), batch.payload_segments.len());
                 self.log_tls_diagnostic_events_impl();
                 self.process_live_event_batch(trace_runtime, batch.observations)?;
                 self.process_payload_segments_impl(trace_runtime, batch.payload_segments)?;

@@ -1,6 +1,8 @@
-use config_core::daemon::{PayloadRedactionPolicy, PayloadStdioStorageMode};
+use config_core::daemon::{
+    PayloadRedactionPolicy, PayloadStdioStorageMode, SemanticRetentionConfig,
+};
 use control_contract::reply::ControlError;
-use model_core::payload::PayloadSourceBoundary;
+use model_core::payload::{PayloadContentState, PayloadSegment, PayloadSourceBoundary};
 use payload_event::RawPayloadSegment;
 
 #[derive(Clone, Copy)]
@@ -91,4 +93,30 @@ pub(in crate::services::payload) struct PayloadProcessingPolicy {
     pub(in crate::services::payload) redaction: PayloadRedactionPolicy,
     pub(in crate::services::payload) retention_max_bytes_per_trace: u64,
     pub(in crate::services::payload) stdio_storage_mode: PayloadStdioStorageMode,
+}
+
+pub(in crate::services::payload) fn apply_stdio_storage_mode(
+    segment: &mut PayloadSegment,
+    mode: PayloadStdioStorageMode,
+) {
+    if !matches!(mode, PayloadStdioStorageMode::MetadataOnly) {
+        return;
+    }
+    segment.bytes.clear();
+}
+
+pub(in crate::services::payload) fn should_clear_transport_payload_body(
+    segment: &PayloadSegment,
+    semantic_retention: &SemanticRetentionConfig,
+    consumed_by_higher_layer: bool,
+) -> bool {
+    if segment.content_state != PayloadContentState::Plaintext
+        || !matches!(
+            segment.source_boundary,
+            PayloadSourceBoundary::TlsUserSpace | PayloadSourceBoundary::Syscall
+        )
+    {
+        return false;
+    }
+    !semantic_retention.retain_transport_payload_body(consumed_by_higher_layer)
 }

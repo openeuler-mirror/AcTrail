@@ -15,6 +15,8 @@ web_request_read_timeout_ms = 1000
 export_directory = /var/lib/actrail/export
 log_path = /var/log/actrail/actraild.log
 diagnostic_log_level = info
+workload_diagnostics_enabled = false
+workload_diagnostics_interval_ms = 1000
 
 graph_schema_version = manual-v1
 allow_active_trace_snapshot = true

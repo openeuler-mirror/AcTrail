@@ -35,9 +35,15 @@ impl StorageAttachService {
         semantic_actions: SemanticActionBatch,
         trace_states: Vec<TraceStateRecord>,
     ) -> Result<(), ControlError> {
+        let event_count = events.len();
+        let diagnostic_count = diagnostics.len();
+        let semantic_action_count = semantic_actions.actions().len();
+        let semantic_link_count = semantic_actions.links().len();
+        let trace_state_count = trace_states.len();
         let traces = LiveTraceRecordLookup::new(trace_runtime);
         let next_diagnostic_id = &mut self.next_diagnostic_id;
-        RecordingWriter::new(self.storage.as_mut())
+        let started = crate::services::workload_diagnostics::now();
+        let result = RecordingWriter::new(self.storage.as_mut())
             .persist_live_events_then_export(
                 &self.export_runtime,
                 events,
@@ -51,7 +57,18 @@ impl StorageAttachService {
                         .map_err(control_error_to_recording)
                 },
             )
-            .map_err(recording_error_to_control)
+            .map_err(recording_error_to_control);
+        self.workload_diagnostics.record_storage_batch(
+            started.elapsed(),
+            event_count,
+            0,
+            diagnostic_count,
+            semantic_action_count,
+            semantic_link_count,
+            trace_state_count,
+            result.is_ok(),
+        );
+        result
     }
 
     pub(super) fn mark_semantic_projection_dirty(&mut self, trace_id: TraceId) {

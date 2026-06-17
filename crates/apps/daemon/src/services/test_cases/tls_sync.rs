@@ -38,6 +38,7 @@ fn tls_sync_payload_persists_without_child_membership() {
         super::FileObservationConfig::default(),
         super::application_protocol_disabled(),
         super::resource_metrics_disabled(),
+        super::workload_diagnostics_disabled(),
         super::export_runtime_disabled(),
         super::enforcement_disabled(),
     )

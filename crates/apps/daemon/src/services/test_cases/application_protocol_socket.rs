@@ -49,6 +49,7 @@ fn socket_payload_gate_persists_http_and_drops_non_http_bytes() {
             http2_max_data_preview_bytes: super::super::TEST_HTTP2_PREVIEW_BYTES,
         },
         super::super::resource_metrics_disabled(),
+        super::super::workload_diagnostics_disabled(),
         super::super::export_runtime_disabled(),
         super::super::enforcement_disabled(),
     )

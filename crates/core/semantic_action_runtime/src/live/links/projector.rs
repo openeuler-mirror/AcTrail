@@ -7,6 +7,7 @@ use super::command::CommandChildActionLinkProjector;
 use super::http::HttpMessageLinkProjector;
 use super::llm::LlmExchangeLinkProjector;
 use super::sse::SseLinkProjector;
+use crate::live::actions::action_for_live_state;
 
 pub(in crate::live) struct ActionLinkProjector {
     agent: AgentPerformedActionLinkProjector,
@@ -31,17 +32,21 @@ impl ActionLinkProjector {
         &mut self,
         actions: &[SemanticAction],
     ) -> Vec<SemanticActionLink> {
-        for action in actions {
+        let state_actions = actions
+            .iter()
+            .map(action_for_live_state)
+            .collect::<Vec<_>>();
+        for action in &state_actions {
             self.agent.observe_action(action);
             self.command.observe_action(action);
         }
 
         let mut links = Vec::new();
-        for action in actions {
+        for action in &state_actions {
             links.extend(self.agent.link_pending_for_agent(action));
             links.extend(self.command.link_pending_for_command(action));
         }
-        for action in actions {
+        for action in &state_actions {
             links.extend(self.http.observe_action(action));
             links.extend(self.llm_exchange.observe_action(action));
             links.extend(self.sse.observe_action(action));

@@ -69,6 +69,7 @@ fn attach_main_path_runs() {
         FileObservationConfig::default(),
         application_protocol_disabled(),
         resource_metrics_disabled(),
+        workload_diagnostics_disabled(),
         export_runtime_disabled(),
         enforcement_disabled(),
     )
@@ -126,6 +127,7 @@ fn launch_mode_suppresses_wrapper_bootstrap_gap() {
         FileObservationConfig::default(),
         application_protocol_disabled(),
         resource_metrics_disabled(),
+        workload_diagnostics_disabled(),
         export_runtime_disabled(),
         enforcement_disabled(),
     )
@@ -197,6 +199,7 @@ fn resource_metrics_sampler_persists_procfs_samples() {
             cpu_alert_percent_millis: None,
             memory_alert_rss_kb: None,
         },
+        workload_diagnostics_disabled(),
         export_runtime_disabled(),
         enforcement_disabled(),
     )
@@ -391,6 +394,10 @@ fn resource_metrics_disabled() -> ResourceMetricsConfig {
         cpu_alert_percent_millis: None,
         memory_alert_rss_kb: None,
     }
+}
+
+fn workload_diagnostics_disabled() -> super::workload_diagnostics::WorkloadDiagnostics {
+    super::workload_diagnostics::WorkloadDiagnostics::default()
 }
 
 fn export_runtime_disabled() -> RuntimeExportConfig {

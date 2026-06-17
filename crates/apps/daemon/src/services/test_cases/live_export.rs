@@ -58,6 +58,7 @@ fn live_exporter_failure_is_diagnostic_not_payload_failure() {
             http2_max_data_preview_bytes: super::TEST_HTTP2_PREVIEW_BYTES,
         },
         super::resource_metrics_disabled(),
+        super::workload_diagnostics_disabled(),
         super::export_runtime_disabled(),
         super::enforcement_disabled(),
     )

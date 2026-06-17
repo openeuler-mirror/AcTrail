@@ -43,6 +43,7 @@ impl SqliteStorage {
                    SELECT 1 FROM semantic_action_links link
                    WHERE link.trace_id = child.trace_id
                      AND link.child_action_id = child.action_id
+                     AND link.valid = 1
                      AND link.role IN ({})
                )
              ORDER BY child.start_time ASC, child.action_id ASC",

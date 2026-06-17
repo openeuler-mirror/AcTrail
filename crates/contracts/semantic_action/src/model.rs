@@ -340,6 +340,7 @@ pub struct SemanticActionLink {
     pub child_action_id: String,
     pub role: SemanticActionLinkRole,
     pub confidence: SemanticActionLinkConfidence,
+    pub valid: bool,
     pub evidence: Vec<SemanticEvidence>,
     pub attributes: BTreeMap<String, String>,
 }

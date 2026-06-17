@@ -186,14 +186,12 @@ fn invalidate_stale_lineage_links(
                 child_action_id: link.child_action_id.clone(),
                 role: link.role,
                 confidence: SemanticActionLinkConfidence::Derived,
+                valid: false,
                 evidence,
-                attributes: BTreeMap::from([
-                    (
-                        ATTR_LINK_SOURCE.to_string(),
-                        LINK_SOURCE_PROCESS_LINEAGE.to_string(),
-                    ),
-                    (ATTR_LINK_VALID.to_string(), LINK_VALID_FALSE.to_string()),
-                ]),
+                attributes: BTreeMap::from([(
+                    ATTR_LINK_SOURCE.to_string(),
+                    LINK_SOURCE_PROCESS_LINEAGE.to_string(),
+                )]),
             }
         })
         .collect()
@@ -212,6 +210,7 @@ fn lineage_link(
         child_action_id: child.action_id.clone(),
         role,
         confidence: SemanticActionLinkConfidence::Derived,
+        valid: true,
         evidence: child.evidence.clone(),
         attributes,
     }
@@ -301,10 +300,11 @@ fn parent_identity_has_conflict(action: &SemanticAction) -> bool {
 }
 
 fn valid_link(link: &SemanticActionLink) -> bool {
-    !link
-        .attributes
-        .get(ATTR_LINK_VALID)
-        .is_some_and(|value| value == LINK_VALID_FALSE)
+    link.valid
+        && !link
+            .attributes
+            .get(ATTR_LINK_VALID)
+            .is_some_and(|value| value == LINK_VALID_FALSE)
 }
 
 fn is_lineage_link(link: &SemanticActionLink) -> bool {

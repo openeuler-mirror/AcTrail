@@ -131,6 +131,7 @@ CREATE TABLE IF NOT EXISTS semantic_action_links (
     child_action_id TEXT NOT NULL,
     role TEXT NOT NULL,
     confidence TEXT NOT NULL,
+    valid INTEGER NOT NULL DEFAULT 1,
     attributes TEXT NOT NULL,
     PRIMARY KEY (trace_id, parent_action_id, child_action_id, role)
 );
@@ -264,6 +265,7 @@ pub fn initialize(connection: &Connection) -> Result<(), rusqlite::Error> {
     connection.execute_batch(CREATE_TABLES_SQL)?;
     migrate_membership_timing_columns(connection)?;
     migrate_payload_operation_columns(connection)?;
+    migrate_semantic_action_link_validity(connection)?;
     migrate_time_columns_to_nanos(connection)?;
     migrate_query_indexes(connection)
 }
@@ -274,7 +276,10 @@ fn migrate_query_indexes(connection: &Connection) -> Result<(), rusqlite::Error>
          CREATE INDEX IF NOT EXISTS idx_payload_segments_trace_id ON payload_segments(trace_id);
          CREATE INDEX IF NOT EXISTS idx_semantic_actions_trace_start ON semantic_actions(trace_id, start_time);
          CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_parent ON semantic_action_links(trace_id, parent_action_id);
-         CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_child ON semantic_action_links(trace_id, child_action_id);",
+         CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_child ON semantic_action_links(trace_id, child_action_id);
+         CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_valid_parent ON semantic_action_links(trace_id, valid, parent_action_id);
+         CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_valid_child ON semantic_action_links(trace_id, valid, child_action_id);
+         CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_valid_role ON semantic_action_links(trace_id, valid, role);",
     )
 }
 
@@ -364,6 +369,15 @@ fn migrate_payload_operation_columns(connection: &Connection) -> Result<(), rusq
         "payload_segments",
         "operation_completion_state",
         "TEXT NOT NULL DEFAULT 'unknown'",
+    )
+}
+
+fn migrate_semantic_action_link_validity(connection: &Connection) -> Result<(), rusqlite::Error> {
+    add_column_if_missing(
+        connection,
+        "semantic_action_links",
+        "valid",
+        "INTEGER NOT NULL DEFAULT 1",
     )
 }
 

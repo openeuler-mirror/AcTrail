@@ -196,6 +196,7 @@ fn read_root_links(
          WHERE link.trace_id = ?
            AND link.child_action_id IN ({})
            AND link.role IN ({})
+           AND link.valid = 1
            AND instr(link.attributes, ?) = 0
            AND instr(parent.attributes, ?) = 0
            AND instr(child.attributes, ?) = 0
@@ -399,6 +400,7 @@ fn valid_display_parent_link_exists_predicate(roles: &[&str], child_alias: &str)
            WHERE link.trace_id = {child_alias}.trace_id
              AND link.child_action_id = {child_alias}.action_id
              AND link.role IN ({})
+             AND link.valid = 1
              AND instr(link.attributes, ?) = 0
              AND instr(parent.attributes, ?) = 0
              AND NOT (
@@ -433,6 +435,7 @@ fn root_link_from_row(row: &Row<'_>) -> Result<SemanticActionLink, rusqlite::Err
         child_action_id: row.get("child_action_id")?,
         role: decode_link_role(row.get::<_, String>("role")?)?,
         confidence: decode_link_confidence(row.get::<_, String>("confidence")?)?,
+        valid: row.get("valid")?,
         evidence: Vec::new(),
         attributes: decode_map(&row.get::<_, String>("attributes")?),
     })

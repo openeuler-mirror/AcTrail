@@ -45,7 +45,10 @@ pub use file_observation::{
     FileBulkReadMode, FileBulkReadObservationConfig, FileMetadataRetention, FileObservationConfig,
     FileRawEventRetention, FileTtyObservationConfig, FsEnumerateObservationConfig,
 };
-pub use logging::DiagnosticLogLevel;
+pub use logging::{
+    DEFAULT_WORKLOAD_DIAGNOSTICS_ENABLED, DEFAULT_WORKLOAD_DIAGNOSTICS_INTERVAL_MS,
+    DiagnosticLogLevel, WorkloadDiagnosticsConfig,
+};
 pub use operator::{
     DEFAULT_CONTROL_PENDING_CONNECTION_MAX, DEFAULT_OPERATOR_CONFIG_PATH, OPERATOR_CONFIG_TEMPLATE,
     OperatorConfig, OperatorConfigInitStatus,
