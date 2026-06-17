@@ -73,7 +73,7 @@ impl EbpfCollector {
         match event {
             KernelEvent::Observation(event) => {
                 self.maybe_attach_go_tls_after_exec(&event)?;
-                self.apply_file_lifecycle_context(&event);
+                self.apply_file_lifecycle_context(&event)?;
                 if let Some(event) = decode_observation(
                     event,
                     &mut self.bindings,
@@ -114,13 +114,20 @@ impl EbpfCollector {
         Ok(())
     }
 
-    fn apply_file_lifecycle_context(&mut self, event: &KernelObservationEvent) {
+    fn apply_file_lifecycle_context(
+        &mut self,
+        event: &KernelObservationEvent,
+    ) -> Result<(), CollectorError> {
         match event.kind {
             decode::PROC_EVENT_FORK => self.file_tracker.inherit_process(event.pid, event.aux),
             decode::PROC_EVENT_EXEC => self.file_tracker.exec_process(event.pid),
-            decode::PROC_EVENT_EXIT => self.file_tracker.remove_process(event.pid),
+            decode::PROC_EVENT_EXIT => {
+                self.cleanup_suppressed_fds_for_process(event.pid, event.pid_generation)?;
+                self.file_tracker.remove_process(event.pid);
+            }
             _ => {}
         }
+        Ok(())
     }
 
     fn maybe_attach_go_tls_after_exec(

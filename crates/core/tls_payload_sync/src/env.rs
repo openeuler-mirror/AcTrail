@@ -20,6 +20,8 @@ pub const ENV_REDACTION: &str = "TLS_PAYLOAD_SYNC_REDACTION";
 pub const ENV_EVENTS: &str = "TLS_PAYLOAD_SYNC_EVENTS";
 pub const ENV_TRACE_ID: &str = "TLS_PAYLOAD_SYNC_TRACE_ID";
 pub const ENV_EVENT_SOCKET: &str = "TLS_PAYLOAD_SYNC_EVENT_SOCKET";
+pub const ENV_EVENT_FD: &str = "TLS_PAYLOAD_SYNC_EVENT_FD";
+pub const ENV_EVENT_WRITE_BUFFER_BYTES: &str = "TLS_PAYLOAD_SYNC_EVENT_WRITE_BUFFER_BYTES";
 
 #[derive(Clone, Debug)]
 pub struct RuntimeEnvConfig {
@@ -29,6 +31,8 @@ pub struct RuntimeEnvConfig {
     pub events: EventFilter,
     pub trace_id: Option<u64>,
     pub event_socket_path: Option<PathBuf>,
+    pub event_fd: Option<i32>,
+    pub event_write_buffer_bytes: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -115,6 +119,12 @@ pub fn runtime_env_for_plans(
     if let Some(path) = &config.event_socket_path {
         env.push(pair(ENV_EVENT_SOCKET, &path.display().to_string()));
     }
+    if let Some(fd) = config.event_fd {
+        env.push(pair(ENV_EVENT_FD, &fd.to_string()));
+    }
+    if let Some(bytes) = config.event_write_buffer_bytes {
+        env.push(pair(ENV_EVENT_WRITE_BUFFER_BYTES, &bytes.to_string()));
+    }
     Ok(env)
 }
 
@@ -155,7 +165,8 @@ mod tests {
     };
 
     use super::{
-        ENV_BINARY, ENV_PLAN_BUNDLE, EventFilter, RuntimeEnvConfig, runtime_env_for_plans,
+        ENV_BINARY, ENV_EVENT_FD, ENV_PLAN_BUNDLE, EventFilter, RuntimeEnvConfig,
+        runtime_env_for_plans,
     };
 
     #[test]
@@ -167,6 +178,8 @@ mod tests {
             events: EventFilter::none(),
             trace_id: None,
             event_socket_path: None,
+            event_fd: None,
+            event_write_buffer_bytes: None,
         };
         let first = plan("/bin/first", TlsProvider::BoringSsl);
         let second = plan("/bin/second", TlsProvider::Rustls);
@@ -190,6 +203,8 @@ mod tests {
             events: EventFilter::none(),
             trace_id: None,
             event_socket_path: None,
+            event_fd: None,
+            event_write_buffer_bytes: None,
         };
 
         let env = runtime_env_for_plans(&config, &[]).expect("runtime env");
@@ -201,6 +216,26 @@ mod tests {
 
         assert_eq!(bundle, "");
         assert!(!env.iter().any(|(key, _)| key == ENV_BINARY));
+    }
+
+    #[test]
+    fn runtime_env_encodes_inherited_event_fd() {
+        let config = RuntimeEnvConfig {
+            rules: Vec::new(),
+            max_payload_bytes: 4096,
+            redaction: super::RedactionMode::Redact,
+            events: EventFilter::none(),
+            trace_id: None,
+            event_socket_path: None,
+            event_fd: Some(3),
+            event_write_buffer_bytes: None,
+        };
+
+        let env = runtime_env_for_plans(&config, &[]).expect("runtime env");
+
+        assert!(env.iter().any(|(key, value)| {
+            key == ENV_EVENT_FD && value.to_string_lossy().as_ref() == "3"
+        }));
     }
 
     fn plan(path: &str, provider: TlsProvider) -> ProbePointPlan {

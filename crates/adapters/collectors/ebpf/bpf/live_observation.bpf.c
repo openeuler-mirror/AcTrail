@@ -366,6 +366,10 @@ int handle_sys_exit_mmap(struct trace_event_raw_sys_exit *ctx) {
 
 SEC("tracepoint/syscalls/sys_enter_close")
 int handle_sys_enter_close(struct trace_event_raw_sys_enter *ctx) {
+    if (suppressed_fd_close_enter(ctx)) {
+        socket_payload_close_enter(ctx);
+        return 0;
+    }
     socket_payload_close_enter(ctx);
     return emit_file_close_enter(ctx);
 }
@@ -377,6 +381,20 @@ int handle_sys_exit_close(struct trace_event_raw_sys_exit *ctx) {
 
 SEC("tracepoint/syscalls/sys_enter_dup")
 int handle_sys_enter_dup(struct trace_event_raw_sys_enter *ctx) {
+    if (suppressed_fd_dup_enter(
+            (__u32)ctx->args[0],
+            0,
+            0,
+            ACTRAIL_SUPPRESSED_FD_DUP_RET_FD
+        )) {
+        socket_payload_dup_enter(
+            ctx,
+            0,
+            ACTRAIL_SYSCALL_ARG_MISSING,
+            ACTRAIL_SOCKET_DUP_RET_FD
+        );
+        return 0;
+    }
     socket_payload_dup_enter(
         ctx,
         0,
@@ -388,42 +406,68 @@ int handle_sys_enter_dup(struct trace_event_raw_sys_enter *ctx) {
 
 SEC("tracepoint/syscalls/sys_exit_dup")
 int handle_sys_exit_dup(struct trace_event_raw_sys_exit *ctx) {
+    suppressed_fd_dup_exit(ctx);
     socket_payload_dup_exit(ctx);
     return emit_file_exit(ctx, ACTRAIL_FILE_CONTEXT, ACTRAIL_FILE_SYSCALL_DUP);
 }
 
 SEC("tracepoint/syscalls/sys_enter_dup2")
 int handle_sys_enter_dup2(struct trace_event_raw_sys_enter *ctx) {
+    if (suppressed_fd_dup_enter(
+            (__u32)ctx->args[0],
+            (__u32)ctx->args[1],
+            1,
+            ACTRAIL_SUPPRESSED_FD_DUP_TARGET_FD
+        )) {
+        socket_payload_dup_enter(ctx, 0, 1, ACTRAIL_SOCKET_DUP_TARGET_FD);
+        return 0;
+    }
     socket_payload_dup_enter(ctx, 0, 1, ACTRAIL_SOCKET_DUP_TARGET_FD);
     return emit_file_dup2_enter(ctx);
 }
 
 SEC("tracepoint/syscalls/sys_exit_dup2")
 int handle_sys_exit_dup2(struct trace_event_raw_sys_exit *ctx) {
+    suppressed_fd_dup_exit(ctx);
     socket_payload_dup_exit(ctx);
     return emit_file_exit(ctx, ACTRAIL_FILE_CONTEXT, ACTRAIL_FILE_SYSCALL_DUP2);
 }
 
 SEC("tracepoint/syscalls/sys_enter_dup3")
 int handle_sys_enter_dup3(struct trace_event_raw_sys_enter *ctx) {
+    if (suppressed_fd_dup_enter(
+            (__u32)ctx->args[0],
+            (__u32)ctx->args[1],
+            1,
+            ACTRAIL_SUPPRESSED_FD_DUP_TARGET_FD
+        )) {
+        socket_payload_dup_enter(ctx, 0, 1, ACTRAIL_SOCKET_DUP_TARGET_FD);
+        return 0;
+    }
     socket_payload_dup_enter(ctx, 0, 1, ACTRAIL_SOCKET_DUP_TARGET_FD);
     return emit_file_dup3_enter(ctx);
 }
 
 SEC("tracepoint/syscalls/sys_exit_dup3")
 int handle_sys_exit_dup3(struct trace_event_raw_sys_exit *ctx) {
+    suppressed_fd_dup_exit(ctx);
     socket_payload_dup_exit(ctx);
     return emit_file_exit(ctx, ACTRAIL_FILE_CONTEXT, ACTRAIL_FILE_SYSCALL_DUP3);
 }
 
 SEC("tracepoint/syscalls/sys_enter_fcntl")
 int handle_sys_enter_fcntl(struct trace_event_raw_sys_enter *ctx) {
+    if (suppressed_fd_fcntl_enter(ctx)) {
+        socket_payload_fcntl_enter(ctx);
+        return 0;
+    }
     socket_payload_fcntl_enter(ctx);
     return emit_file_fcntl_enter(ctx);
 }
 
 SEC("tracepoint/syscalls/sys_exit_fcntl")
 int handle_sys_exit_fcntl(struct trace_event_raw_sys_exit *ctx) {
+    suppressed_fd_dup_exit(ctx);
     socket_payload_dup_exit(ctx);
     return emit_file_exit(ctx, ACTRAIL_FILE_CONTEXT, ACTRAIL_FILE_SYSCALL_FCNTL);
 }

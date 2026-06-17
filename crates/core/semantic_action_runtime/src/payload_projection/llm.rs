@@ -12,7 +12,7 @@ mod stream;
 
 pub(crate) use live_projection::{
     LiveLlmProjection, live_llm_http_response_message_len, live_llm_request_message_len,
-    live_llm_request_stream_id_hint, project_live_llm_request_message,
-    project_live_llm_response_message,
+    live_llm_request_prefix_skip_len, live_llm_request_stream_id_hint,
+    project_live_llm_request_message, project_live_llm_response_message,
 };
 pub(crate) use stream::PayloadStreamGroupKey;

@@ -118,6 +118,23 @@ pub(super) fn http2_llm_request_segment(
     )
 }
 
+pub(super) fn outbound_payload_segment_with_bytes(
+    process: ProcessIdentity,
+    segment_id: PayloadSegmentId,
+    operation_id: u64,
+    sequence: u64,
+    bytes: Vec<u8>,
+) -> PayloadSegment {
+    payload_segment_with_bytes(
+        process,
+        PayloadDirection::Outbound,
+        segment_id,
+        operation_id,
+        sequence,
+        bytes,
+    )
+}
+
 pub(super) fn http2_pending_request_head_segment(
     process: ProcessIdentity,
     segment_id: PayloadSegmentId,

@@ -6,7 +6,7 @@ use collector_capability::CollectorDescriptor;
 use config_core::trace_snapshot::CaptureProfileSnapshot;
 use model_core::capability::CapabilityRequest;
 use model_core::ids::{CollectorName, TraceId};
-use model_core::process::ProcessIdentity;
+use model_core::process::{InitialSuppressedFd, ProcessIdentity};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CoverageGuardRequest {
@@ -26,6 +26,7 @@ pub struct TraceBindingRequest {
     pub root_identity: ProcessIdentity,
     pub profile_snapshot: CaptureProfileSnapshot,
     pub requested_capabilities: Vec<CapabilityRequest>,
+    pub initial_suppressed_fds: Vec<InitialSuppressedFd>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

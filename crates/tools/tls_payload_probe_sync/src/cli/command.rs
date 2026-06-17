@@ -65,6 +65,8 @@ fn run_probe(config: crate::cli::config::ProbeConfig) -> ToolResult<()> {
         events: config.events.clone(),
         trace_id: None,
         event_socket_path: None,
+        event_fd: None,
+        event_write_buffer_bytes: None,
     };
     let preload_libraries = vec![library];
     let plans = vec![plan.clone()];

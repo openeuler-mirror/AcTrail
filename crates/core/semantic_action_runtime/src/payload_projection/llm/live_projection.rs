@@ -4,7 +4,9 @@ use config_core::daemon::SemanticRetentionConfig;
 use model_core::payload::PayloadSegment;
 use semantic_action::{SemanticAction, SemanticActionKind, SemanticActionStatus};
 
-use crate::payload_projection::http::{request_stream_id_hint, split_request, split_response};
+use crate::payload_projection::http::{
+    request_prefix_skip_len, request_stream_id_hint, split_request, split_response,
+};
 
 use super::request::project_stream_llm_request_action;
 use super::response::{
@@ -26,6 +28,10 @@ pub(crate) fn live_llm_request_message_len(bytes: &[u8]) -> Option<usize> {
 
 pub(crate) fn live_llm_request_stream_id_hint(bytes: &[u8]) -> Option<Option<u32>> {
     request_stream_id_hint(bytes)
+}
+
+pub(crate) fn live_llm_request_prefix_skip_len(bytes: &[u8]) -> Option<usize> {
+    request_prefix_skip_len(bytes)
 }
 
 pub(crate) fn live_llm_http_response_message_len(bytes: &[u8]) -> Option<usize> {

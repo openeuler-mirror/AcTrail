@@ -83,6 +83,7 @@ fn attach_main_path_runs() {
             profile_name: ProfileName::new("snapshot"),
             tags: BTreeSet::new(),
             launch_mode: false,
+            initial_suppressed_fds: Vec::new(),
         }))
         .unwrap();
     let control_contract::reply::ControlReply::TrackAdded(reply) = reply else {
@@ -139,6 +140,7 @@ fn launch_mode_suppresses_wrapper_bootstrap_gap() {
             profile_name: ProfileName::new("snapshot"),
             tags: BTreeSet::new(),
             launch_mode: true,
+            initial_suppressed_fds: Vec::new(),
         }))
         .unwrap();
     let control_contract::reply::ControlReply::TrackAdded(reply) = reply else {
@@ -308,6 +310,7 @@ fn ebpf_config(enabled: bool) -> EbpfCollectorConfig {
         memlock_rlimit: MemlockRlimit::Inherit,
         tracked_process_max_entries: 64,
         pending_operation_max_entries: 128,
+        suppressed_fd_max_entries: 128,
         event_ring_buffer_max_bytes: 4096,
         file_path_capture_enabled: false,
         file_path_max_bytes: 255,

@@ -1328,6 +1328,7 @@ dependencies = [
 name = "tls_payload_sync"
 version = "0.3.3"
 dependencies = [
+ "libc",
  "tls_payload_core",
  "tls_probe_point_finder",
 ]

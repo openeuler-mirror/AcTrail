@@ -48,6 +48,7 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ProbeCommand
             memlock_rlimit: required_memlock_rlimit(&flags, "--memlock-rlimit")?,
             tracked_process_max_entries: required_u32(&flags, "--tracked-process-max-entries")?,
             pending_operation_max_entries: required_u32(&flags, "--pending-operation-max-entries")?,
+            suppressed_fd_max_entries: required_u32(&flags, "--suppressed-fd-max-entries")?,
             event_ring_buffer_max_bytes: required_u32(&flags, "--event-ring-buffer-max-bytes")?,
             file_path_capture_enabled: required_bool(&flags, "--file-path-capture-enabled")?,
             file_path_max_bytes: required_u32(&flags, "--file-path-max-bytes")?,

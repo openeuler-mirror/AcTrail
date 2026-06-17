@@ -32,6 +32,7 @@ use libbpf_rs::{
 };
 use model_core::capability::Capability;
 use model_core::ids::TraceId;
+use model_core::process::{ProcessIdentity, ProcessSuppressedFd, SuppressedFdPurpose};
 
 pub use attach_plan::AttachPlan;
 use attach_plan::{configure_program_autoload, effective_config_for_attach_plan};
@@ -48,6 +49,24 @@ pub use tls::{PendingTlsPayloadOp, TlsPayloadDiagnosticCounter, TlsPayloadDiagno
 const ACTIVE_PID_NAMESPACE_KEY: u32 = 0;
 const PID_NAMESPACE_FIELD_SIZE: usize = std::mem::size_of::<u64>();
 const PID_NAMESPACE_VALUE_SIZE: usize = PID_NAMESPACE_FIELD_SIZE * 2;
+const SUPPRESSED_FD_KEY_SIZE: usize = std::mem::size_of::<SuppressedFdKeyLayout>();
+const SUPPRESSED_FD_VALUE_SIZE: usize = std::mem::size_of::<SuppressedFdValueLayout>();
+const SUPPRESSED_FD_PURPOSE_TLS_SYNC_EVENT: u32 = 1;
+const SUPPRESSED_FD_PURPOSE_INTERNAL_UPLOAD: u32 = 2;
+const SUPPRESSED_FD_PURPOSE_INTERNAL_CONTROL: u32 = 3;
+
+#[repr(C)]
+struct SuppressedFdKeyLayout {
+    pid: u32,
+    fd: u32,
+    generation: u64,
+}
+
+#[repr(C)]
+struct SuppressedFdValueLayout {
+    trace_id: u64,
+    purpose: u32,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LoaderError {
@@ -83,6 +102,7 @@ pub struct EbpfRuntime {
     pid_namespace: MapHandle,
     tracked_traces: MapHandle,
     process_generations: MapHandle,
+    suppressed_fds: MapHandle,
     pending_tls_payload_ops: MapHandle,
     pending_tls_payload_ops_by_namespace: MapHandle,
     payload_tls_diagnostics: MapHandle,
@@ -147,6 +167,16 @@ impl EbpfProgramLoader {
         resize_map(
             &mut open_object,
             "pending_exit_ops",
+            self.config.pending_operation_max_entries,
+        )?;
+        resize_map(
+            &mut open_object,
+            "suppressed_fds",
+            self.config.suppressed_fd_max_entries,
+        )?;
+        resize_map(
+            &mut open_object,
+            "pending_suppressed_fd_dup_ops",
             self.config.pending_operation_max_entries,
         )?;
         resize_map(
@@ -223,6 +253,7 @@ impl EbpfRuntime {
         let tracked_traces = map_handle(&object, "tracked_traces", "tracked_map")?;
         let process_generations =
             map_handle(&object, "process_generations", "process_generation_map")?;
+        let suppressed_fds = map_handle(&object, "suppressed_fds", "suppressed_fds")?;
         let pid_namespace = map_handle(&object, "pid_namespace", "pid_namespace_map")?;
         let pending_tls_payload_ops = map_handle(
             &object,
@@ -304,6 +335,7 @@ impl EbpfRuntime {
             pid_namespace,
             tracked_traces,
             process_generations,
+            suppressed_fds,
             pending_tls_payload_ops,
             pending_tls_payload_ops_by_namespace,
             payload_tls_diagnostics,
@@ -327,7 +359,7 @@ impl EbpfRuntime {
 
     pub fn track_pid(
         &self,
-        identity: &model_core::process::ProcessIdentity,
+        identity: &ProcessIdentity,
         trace_id: TraceId,
     ) -> Result<(), LoaderError> {
         let pid = identity.pid;
@@ -339,6 +371,33 @@ impl EbpfRuntime {
         self.process_generations
             .update(&key, &identity.generation.to_ne_bytes(), MapFlags::ANY)
             .map_err(|error| LoaderError::new("track_pid_generation", error.to_string()))
+    }
+
+    pub fn suppress_fd(
+        &self,
+        trace_id: TraceId,
+        suppressed_fd: &ProcessSuppressedFd,
+    ) -> Result<(), LoaderError> {
+        let key = suppressed_fd_key(&suppressed_fd.process, suppressed_fd.fd)?;
+        let value = suppressed_fd_value(trace_id, suppressed_fd.purpose);
+        self.suppressed_fds
+            .update(&key, &value, MapFlags::ANY)
+            .map_err(|error| LoaderError::new("suppress_fd", error.to_string()))
+    }
+
+    pub fn unsuppress_fd(&self, process: &ProcessIdentity, fd: i32) -> Result<(), LoaderError> {
+        let key = suppressed_fd_key(process, fd)?;
+        if self
+            .suppressed_fds
+            .lookup(&key, MapFlags::ANY)
+            .map_err(|error| LoaderError::new("lookup_suppressed_fd", error.to_string()))?
+            .is_none()
+        {
+            return Ok(());
+        }
+        self.suppressed_fds
+            .delete(&key)
+            .map_err(|error| LoaderError::new("unsuppress_fd", error.to_string()))
     }
 
     pub fn set_pid_namespace(&self, namespace: PidNamespace) -> Result<(), LoaderError> {
@@ -480,4 +539,45 @@ fn resize_map(
         .ok_or_else(|| LoaderError::new("resize_map", format!("map {map_name} is missing")))?;
     map.set_max_entries(max_entries)
         .map_err(|error| LoaderError::new("resize_map", error.to_string()))
+}
+
+fn suppressed_fd_key(
+    process: &ProcessIdentity,
+    fd: i32,
+) -> Result<[u8; SUPPRESSED_FD_KEY_SIZE], LoaderError> {
+    let fd = u32::try_from(fd).map_err(|_| {
+        LoaderError::new(
+            "suppress_fd",
+            format!("suppressed fd must be non-negative: {fd}"),
+        )
+    })?;
+    if process.generation == 0 {
+        return Err(LoaderError::new(
+            "suppress_fd",
+            "suppressed fd requires a non-zero process generation",
+        ));
+    }
+    let mut key = [0_u8; SUPPRESSED_FD_KEY_SIZE];
+    key[0..4].copy_from_slice(&process.pid.to_ne_bytes());
+    key[4..8].copy_from_slice(&fd.to_ne_bytes());
+    key[8..16].copy_from_slice(&process.generation.to_ne_bytes());
+    Ok(key)
+}
+
+fn suppressed_fd_value(
+    trace_id: TraceId,
+    purpose: SuppressedFdPurpose,
+) -> [u8; SUPPRESSED_FD_VALUE_SIZE] {
+    let mut value = [0_u8; SUPPRESSED_FD_VALUE_SIZE];
+    value[0..8].copy_from_slice(&trace_id.get().to_ne_bytes());
+    value[8..12].copy_from_slice(&suppressed_fd_purpose_code(purpose).to_ne_bytes());
+    value
+}
+
+fn suppressed_fd_purpose_code(purpose: SuppressedFdPurpose) -> u32 {
+    match purpose {
+        SuppressedFdPurpose::TlsSyncEvent => SUPPRESSED_FD_PURPOSE_TLS_SYNC_EVENT,
+        SuppressedFdPurpose::InternalUpload => SUPPRESSED_FD_PURPOSE_INTERNAL_UPLOAD,
+        SuppressedFdPurpose::InternalControl => SUPPRESSED_FD_PURPOSE_INTERNAL_CONTROL,
+    }
 }

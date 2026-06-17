@@ -288,6 +288,7 @@ impl StorageAttachService {
                 root_identity: root_identity.clone(),
                 profile_snapshot: profile_snapshot.clone(),
                 requested_capabilities,
+                initial_suppressed_fds: command.initial_suppressed_fds.clone(),
             }) {
                 let _ = trace_runtime.fail_trace(trace_id, SystemTime::now());
                 return Err(ControlError::new(error.stage, error.message));

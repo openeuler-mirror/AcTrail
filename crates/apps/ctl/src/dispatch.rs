@@ -27,6 +27,7 @@ pub fn dispatch(
             profile_name,
             tags,
             launch_mode: false,
+            initial_suppressed_fds: Vec::new(),
         }),
         CtlCommand::TrackRemove { selector } => ControlCommand::TrackRemove(TrackRemoveCommand {
             request_id,

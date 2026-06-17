@@ -8,6 +8,8 @@ use semantic_action::{
 
 #[path = "llm_links/fixtures.rs"]
 mod fixtures;
+#[path = "llm_links/http1.rs"]
+mod http1;
 #[path = "llm_links/http2.rs"]
 mod http2;
 

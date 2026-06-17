@@ -15,8 +15,9 @@ use semantic_action::{
 
 use crate::payload_projection::llm::{
     LiveLlmProjection, PayloadStreamGroupKey, live_llm_http_response_message_len,
-    live_llm_request_message_len, live_llm_request_stream_id_hint,
-    project_live_llm_request_message, project_live_llm_response_message,
+    live_llm_request_message_len, live_llm_request_prefix_skip_len,
+    live_llm_request_stream_id_hint, project_live_llm_request_message,
+    project_live_llm_response_message,
 };
 
 mod call;
@@ -246,7 +247,17 @@ impl LiveStreamState {
         key: &PayloadStreamGroupKey,
     ) -> Vec<SemanticAction> {
         let mut actions = Vec::new();
-        while let Some(encoded_len) = live_llm_request_message_len(&self.buffer) {
+        loop {
+            if let Some(skip_len) = live_llm_request_prefix_skip_len(&self.buffer) {
+                self.evict_encoded_len(skip_len);
+                if self.buffer.is_empty() {
+                    break;
+                }
+                continue;
+            }
+            let Some(encoded_len) = live_llm_request_message_len(&self.buffer) else {
+                break;
+            };
             let message_start = self.base_offset;
             let message_end = message_start + encoded_len;
             let segments = self.segments_for_range(message_start, message_end);

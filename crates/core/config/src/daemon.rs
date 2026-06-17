@@ -98,6 +98,7 @@ pub struct EbpfCollectorConfig {
     pub memlock_rlimit: MemlockRlimit,
     pub tracked_process_max_entries: u32,
     pub pending_operation_max_entries: u32,
+    pub suppressed_fd_max_entries: u32,
     pub event_ring_buffer_max_bytes: u32,
     pub file_path_capture_enabled: bool,
     pub file_path_max_bytes: u32,

@@ -1,8 +1,6 @@
-use std::path::PathBuf;
-
 use tls_payload_sync::{
-    ENV_ENABLED, ENV_EVENT_SOCKET, ENV_EVENTS, ENV_MAX_PAYLOAD_BYTES, ENV_REDACTION, ENV_RULES,
-    ENV_TRACE_ID, EventClient,
+    ENV_ENABLED, ENV_EVENT_FD, ENV_EVENT_SOCKET, ENV_EVENT_WRITE_BUFFER_BYTES, ENV_EVENTS,
+    ENV_MAX_PAYLOAD_BYTES, ENV_REDACTION, ENV_RULES, ENV_TRACE_ID, EventClient,
 };
 
 use super::codec::parse_rules;
@@ -68,11 +66,34 @@ fn optional_trace_id() -> Result<Option<u64>, String> {
 }
 
 fn optional_event_client(pending_byte_budget: usize) -> Result<Option<EventClient>, String> {
+    if let Some(value) = std::env::var_os(ENV_EVENT_FD) {
+        let fd = value
+            .to_string_lossy()
+            .parse::<i32>()
+            .map_err(|error| format!("parse {ENV_EVENT_FD}: {error}"))?;
+        let write_buffer_bytes = required_event_write_buffer_bytes()?;
+        return EventClient::connect_inherited_fd(fd, pending_byte_budget, write_buffer_bytes)
+            .map(Some)
+            .map_err(|error| format!("connect inherited sync event fd {fd}: {error}"));
+    }
     let Some(value) = std::env::var_os(ENV_EVENT_SOCKET) else {
         return Ok(None);
     };
-    let path = PathBuf::from(value);
-    EventClient::connect(&path, pending_byte_budget)
+    let path = std::path::PathBuf::from(value);
+    let write_buffer_bytes = required_event_write_buffer_bytes()?;
+    EventClient::connect(&path, pending_byte_budget, write_buffer_bytes)
         .map(Some)
         .map_err(|error| format!("connect sync event socket {}: {error}", path.display()))
+}
+
+fn required_event_write_buffer_bytes() -> Result<usize, String> {
+    let value = std::env::var(ENV_EVENT_WRITE_BUFFER_BYTES)
+        .map_err(|_| format!("missing required runtime env {ENV_EVENT_WRITE_BUFFER_BYTES}"))?;
+    let bytes = value
+        .parse::<usize>()
+        .map_err(|error| format!("parse {ENV_EVENT_WRITE_BUFFER_BYTES}: {error}"))?;
+    if bytes == 0 {
+        return Err("sync event write buffer bytes must be positive".to_string());
+    }
+    Ok(bytes)
 }

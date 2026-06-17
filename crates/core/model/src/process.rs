@@ -49,6 +49,49 @@ impl ProcessIdentity {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SuppressedFdPurpose {
+    TlsSyncEvent,
+    InternalUpload,
+    InternalControl,
+}
+
+impl SuppressedFdPurpose {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::TlsSyncEvent => "tls-sync-event",
+            Self::InternalUpload => "internal-upload",
+            Self::InternalControl => "internal-control",
+        }
+    }
+}
+
+impl std::str::FromStr for SuppressedFdPurpose {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "tls-sync-event" => Ok(Self::TlsSyncEvent),
+            "internal-upload" => Ok(Self::InternalUpload),
+            "internal-control" => Ok(Self::InternalControl),
+            _ => Err(format!("unknown suppressed fd purpose {value}")),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InitialSuppressedFd {
+    pub fd: i32,
+    pub purpose: SuppressedFdPurpose,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProcessSuppressedFd {
+    pub process: ProcessIdentity,
+    pub fd: i32,
+    pub purpose: SuppressedFdPurpose,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MembershipState {
     Starting,
     Active,

@@ -3,6 +3,7 @@
 use std::collections::VecDeque;
 use std::fmt;
 use std::io::{BufWriter, Write};
+use std::os::fd::{FromRawFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex};
@@ -16,18 +17,60 @@ pub struct EventClient {
 }
 
 impl EventClient {
-    pub fn connect(path: &Path, pending_byte_budget: usize) -> SyncResult<Self> {
+    pub fn connect(
+        path: &Path,
+        pending_byte_budget: usize,
+        write_buffer_bytes: usize,
+    ) -> SyncResult<Self> {
         if pending_byte_budget == 0 {
             return Err(SyncError::new(
                 "sync event pending byte budget must be positive",
             ));
         }
+        if write_buffer_bytes == 0 {
+            return Err(SyncError::new(
+                "sync event write buffer bytes must be positive",
+            ));
+        }
         let stream = UnixStream::connect(path)?;
+        Self::from_stream(stream, pending_byte_budget, write_buffer_bytes)
+    }
+
+    pub fn connect_inherited_fd(
+        fd: RawFd,
+        pending_byte_budget: usize,
+        write_buffer_bytes: usize,
+    ) -> SyncResult<Self> {
+        if fd < 0 {
+            return Err(SyncError::new(format!(
+                "sync event fd must be non-negative: {fd}"
+            )));
+        }
+        set_close_on_exec(fd)?;
+        let stream = unsafe { UnixStream::from_raw_fd(fd) };
+        Self::from_stream(stream, pending_byte_budget, write_buffer_bytes)
+    }
+
+    fn from_stream(
+        stream: UnixStream,
+        pending_byte_budget: usize,
+        write_buffer_bytes: usize,
+    ) -> SyncResult<Self> {
+        if pending_byte_budget == 0 {
+            return Err(SyncError::new(
+                "sync event pending byte budget must be positive",
+            ));
+        }
+        if write_buffer_bytes == 0 {
+            return Err(SyncError::new(
+                "sync event write buffer bytes must be positive",
+            ));
+        }
         let queue = Arc::new(EventQueue::new(pending_byte_budget));
         let worker_queue = Arc::clone(&queue);
         let worker = thread::Builder::new()
             .name("actrail-tls-sync-event-writer".to_string())
-            .spawn(move || event_writer(stream, worker_queue))
+            .spawn(move || event_writer(stream, worker_queue, write_buffer_bytes))
             .map_err(|error| SyncError::new(format!("spawn sync event writer: {error}")))?;
         Ok(Self {
             queue,
@@ -54,6 +97,23 @@ impl EventClient {
             .map_err(|_| SyncError::new("sync event writer panicked"))?;
         self.queue.flush()
     }
+}
+
+fn set_close_on_exec(fd: RawFd) -> SyncResult<()> {
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags < 0 {
+        return Err(SyncError::new(format!(
+            "read sync event fd flags: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    if unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0 {
+        return Err(SyncError::new(format!(
+            "mark sync event fd close-on-exec: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    Ok(())
 }
 
 impl fmt::Debug for EventClient {
@@ -176,8 +236,9 @@ struct QueuedEvent {
     event_bytes: usize,
 }
 
-fn event_writer(stream: UnixStream, queue: Arc<EventQueue>) {
-    let mut writer = BufWriter::new(stream);
+fn event_writer(stream: UnixStream, queue: Arc<EventQueue>, write_buffer_bytes: usize) {
+    let chunked = ChunkedWriter::new(stream, write_buffer_bytes);
+    let mut writer = BufWriter::with_capacity(write_buffer_bytes, chunked);
     while let Some(queued) = queue.pop() {
         if write_event_line(&mut writer, &queued.event)
             .and_then(|_| {
@@ -194,6 +255,34 @@ fn event_writer(stream: UnixStream, queue: Arc<EventQueue>) {
     }
 }
 
+struct ChunkedWriter<W> {
+    inner: W,
+    max_write_bytes: usize,
+}
+
+impl<W> ChunkedWriter<W> {
+    fn new(inner: W, max_write_bytes: usize) -> Self {
+        Self {
+            inner,
+            max_write_bytes,
+        }
+    }
+}
+
+impl<W: Write> Write for ChunkedWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        let len = buf.len().min(self.max_write_bytes);
+        self.inner.write(&buf[..len])
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 fn queued_event_bytes(event: &SyncEvent) -> usize {
     match event {
         SyncEvent::Payload(event) => event
@@ -207,5 +296,42 @@ fn queued_event_bytes(event: &SyncEvent) -> usize {
             .saturating_add(event.provider.len())
             .saturating_add(event.symbol.len())
             .saturating_add(event.action.len()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Read;
+    use std::os::fd::IntoRawFd;
+    use std::os::unix::net::UnixStream;
+
+    use tls_payload_core::PayloadDirection;
+
+    use super::*;
+    use crate::{DecisionEvent, encode_event_line};
+
+    #[test]
+    fn inherited_fd_event_client_writes_to_existing_stream() {
+        let (client, mut server) = UnixStream::pair().expect("socket pair");
+        let event = SyncEvent::Decision(DecisionEvent {
+            trace_id: 7,
+            pid: 42,
+            direction: PayloadDirection::Outbound,
+            provider: "rustls".to_string(),
+            symbol: "write".to_string(),
+            stream_key: 1,
+            sequence: 2,
+            action: "allow".to_string(),
+            reason: "test".to_string(),
+        });
+
+        let client =
+            EventClient::connect_inherited_fd(client.into_raw_fd(), 4096, 256).expect("client");
+        client.send(event.clone()).expect("send event");
+        client.close_and_join().expect("close event client");
+
+        let mut bytes = Vec::new();
+        server.read_to_end(&mut bytes).expect("read event line");
+        assert_eq!(bytes, encode_event_line(&event));
     }
 }

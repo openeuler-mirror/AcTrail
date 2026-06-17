@@ -140,6 +140,9 @@ static __always_inline int store_socket_payload_op(
     if (!tgid || !trace_id || !config || !config->enabled || !ctx->args[buffer_arg] || !ctx->args[size_arg]) {
         return 0;
     }
+    if (is_suppressed_fd(tgid, fd)) {
+        return 0;
+    }
     fd_generation = socket_payload_fd_generation(tgid, fd);
     if (require_tracked_fd && !fd_generation) {
         return 0;
@@ -309,6 +312,9 @@ static __always_inline int store_socket_payload_sendmsg_op(
     __u32 fd = (__u32)ctx->args[0];
 
     if (!tgid || !trace_id || !config || !config->enabled || !ctx->args[1]) {
+        return 0;
+    }
+    if (is_suppressed_fd(tgid, fd)) {
         return 0;
     }
 

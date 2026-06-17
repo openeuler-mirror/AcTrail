@@ -175,6 +175,7 @@ impl OperatorConfig {
                 tracked_process_max_entries: values.required_u32("tracked_process_max_entries")?,
                 pending_operation_max_entries: values
                     .required_u32("pending_operation_max_entries")?,
+                suppressed_fd_max_entries: values.required_u32("suppressed_fd_max_entries")?,
                 event_ring_buffer_max_bytes: values.required_u32("event_ring_buffer_max_bytes")?,
                 file_path_capture_enabled: values.required_bool("file_path_capture_enabled")?,
                 file_path_max_bytes: values.required_positive_u32("file_path_max_bytes")?,
