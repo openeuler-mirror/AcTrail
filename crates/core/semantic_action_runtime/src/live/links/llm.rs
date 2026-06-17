@@ -6,6 +6,8 @@ use semantic_action::{
     SemanticActionLinkRole, attr_keys as attrs,
 };
 
+use crate::live::actions::{ATTR_LINK_VALID, LINK_VALID_FALSE};
+
 use super::shared::{ActionLinkKey, SemanticActionKey};
 
 #[derive(Default)]
@@ -20,9 +22,13 @@ impl LlmExchangeLinkProjector {
     pub(super) fn observe_action(&mut self, action: &SemanticAction) -> Vec<SemanticActionLink> {
         match action.kind {
             SemanticActionKind::LlmCall => {
-                self.calls
+                let previous = self
+                    .calls
                     .insert(SemanticActionKey::from(action), action.clone());
                 let mut links = Vec::new();
+                if let Some(previous) = previous.as_ref() {
+                    links.extend(self.invalidate_superseded_child_links(previous, action));
+                }
                 if let Some(request) = self.call_request(action) {
                     links.extend(self.link(
                         action,
@@ -127,6 +133,57 @@ impl LlmExchangeLinkProjector {
             evidence: child.evidence.clone(),
             attributes: BTreeMap::new(),
         })
+    }
+
+    fn invalidate_superseded_child_links(
+        &mut self,
+        previous: &SemanticAction,
+        current: &SemanticAction,
+    ) -> Vec<SemanticActionLink> {
+        [
+            (
+                attrs::llm_call::REQUEST_ACTION_ID,
+                SemanticActionLinkRole::LlmCallRequest,
+            ),
+            (
+                attrs::llm_call::RESPONSE_ACTION_ID,
+                SemanticActionLinkRole::LlmCallResponse,
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(attr, role)| {
+            let old_child = previous.attributes.get(attr)?;
+            let new_child = current.attributes.get(attr)?;
+            (old_child != new_child).then(|| self.invalidate_link(current, old_child, role))
+        })
+        .collect()
+    }
+
+    fn invalidate_link(
+        &mut self,
+        call: &SemanticAction,
+        child_action_id: &str,
+        role: SemanticActionLinkRole,
+    ) -> SemanticActionLink {
+        let key = ActionLinkKey {
+            trace_id: call.trace_id,
+            parent_action_id: call.action_id.clone(),
+            child_action_id: child_action_id.to_string(),
+            role,
+        };
+        self.emitted_links.remove(&key);
+        SemanticActionLink {
+            trace_id: call.trace_id,
+            parent_action_id: call.action_id.clone(),
+            child_action_id: child_action_id.to_string(),
+            role,
+            confidence: SemanticActionLinkConfidence::Derived,
+            evidence: call.evidence.clone(),
+            attributes: BTreeMap::from([(
+                ATTR_LINK_VALID.to_string(),
+                LINK_VALID_FALSE.to_string(),
+            )]),
+        }
     }
 }
 

@@ -275,10 +275,18 @@ pub(super) fn insert_parent_identity_attributes(
 }
 
 pub(super) fn event_action_id(event: &DomainEvent, suffix: &str) -> String {
+    event_action_id_for_event_id(event.envelope.trace_id, event.envelope.event_id, suffix)
+}
+
+pub(super) fn event_action_id_for_event_id(
+    trace_id: TraceId,
+    event_id: model_core::ids::EventId,
+    suffix: &str,
+) -> String {
     format!(
         "trace:{}:event:{}:{}",
-        event.envelope.trace_id.get(),
-        event.envelope.event_id.get(),
+        trace_id.get(),
+        event_id.get(),
         suffix
     )
 }

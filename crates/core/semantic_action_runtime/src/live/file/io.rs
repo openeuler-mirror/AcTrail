@@ -9,7 +9,7 @@ use semantic_action::{
 };
 
 use super::common::event_fd;
-use crate::live::actions::{event_action_id, event_evidence};
+use crate::live::actions::{event_action_id, event_action_id_for_event_id, event_evidence};
 
 #[derive(Clone, Copy)]
 pub(super) enum FileAccessKind {
@@ -63,12 +63,7 @@ pub(super) fn open_backed_io_action(
     path: &str,
 ) -> SemanticAction {
     let mut action = file_io_action(
-        format!(
-            "trace:{}:event:{}:{}",
-            event.envelope.trace_id.get(),
-            open_event_id.get(),
-            kind.action_suffix()
-        ),
+        event_action_id_for_event_id(event.envelope.trace_id, open_event_id, kind.action_suffix()),
         event,
         kind,
         path,

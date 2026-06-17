@@ -1,20 +1,17 @@
 //! Semantic action tree JSON for the web UI.
 
-use std::collections::BTreeSet;
 use std::path::Path;
 
 use model_core::ids::TraceId;
 use semantic_action::{
-    FilePathSetPath, FilePathSetPathPage, SemanticAction, SemanticActionKind, SemanticActionLink,
-    SemanticEvidence,
+    FilePathSetPath, FilePathSetPathPage, SemanticAction, SemanticActionLink, SemanticEvidence,
 };
 use storage_core::{
-    SemanticActionChildPageQuery, SemanticActionChildRow, SemanticActionDisplayRootChildRow,
-    SemanticActionSummary, StorageBackend, StorageError,
+    SemanticActionChildPageQuery, SemanticActionSummary, StorageBackend, StorageError,
 };
 
-use super::action_tree_projection::{ActionDisplayProjection, DisplayChild};
-use super::action_tree_roles::{DISPLAY_PARENT_ROLE_STRS, NODE_ID_AGENT, ROOT_LINK_ROLE_STRS};
+use super::action_tree_projection::{ActionDisplayProjection, DisplayChild, ROOT_PARENT_ID};
+use super::action_tree_roles::NODE_ID_AGENT;
 use super::projection_cache;
 use crate::json;
 
@@ -62,18 +59,21 @@ pub(super) fn action_tree_json(
 }
 
 pub(super) fn action_tree_root_json(
+    storage_path: &Path,
     storage: &mut dyn StorageBackend,
     trace_id: TraceId,
 ) -> Result<String, String> {
+    let projection =
+        projection_cache::cached_action_display_projection(storage_path, trace_id, || {
+            ActionDisplayProjection::load(storage, trace_id)
+        })?;
     let summary = storage
         .semantic_action_summary(trace_id)
         .map_err(|error| storage_error("read semantic action summary", error))?;
     let observed_agent = storage
         .observed_agent_semantic_action(trace_id)
         .map_err(|error| storage_error("read observed agent action", error))?;
-    let root_child_count = storage
-        .semantic_action_display_root_child_count(trace_id, DISPLAY_PARENT_ROLE_STRS)
-        .map_err(|error| storage_error("count display root semantic action children", error))?;
+    let root_child_count = projection.child_count(ROOT_PARENT_ID);
     let observed_agent = observed_agent
         .as_ref()
         .map(action_json)
@@ -89,12 +89,17 @@ pub(super) fn action_tree_root_json(
 }
 
 pub(super) fn action_tree_children_json(
+    storage_path: &Path,
     storage: &mut dyn StorageBackend,
     trace_id: TraceId,
     parent_id: &str,
     page: SemanticActionChildPageQuery,
 ) -> Result<String, String> {
-    let (rows, total) = load_child_page(storage, trace_id, parent_id, page)?;
+    let projection =
+        projection_cache::cached_action_display_projection(storage_path, trace_id, || {
+            ActionDisplayProjection::load(storage, trace_id)
+        })?;
+    let (rows, total) = load_child_page(&projection, parent_id, page);
     let actions = rows
         .iter()
         .map(|row| action_json_lite(&row.action))
@@ -153,123 +158,16 @@ pub(super) fn file_path_set_json(
 }
 
 fn load_child_page(
-    storage: &mut dyn StorageBackend,
-    trace_id: TraceId,
+    projection: &ActionDisplayProjection,
     parent_id: &str,
     page: SemanticActionChildPageQuery,
-) -> Result<(Vec<DisplayChild>, usize), String> {
-    if parent_id == NODE_ID_AGENT {
-        return load_agent_root_page(storage, trace_id, page);
-    }
-    let parent = storage
-        .semantic_action_by_id(trace_id, parent_id)
-        .map_err(|error| storage_error("read parent semantic action", error))?;
-    if parent
-        .as_ref()
-        .is_some_and(|action| action.kind == SemanticActionKind::CommandInvocation)
-    {
-        let rows = load_command_children(storage, trace_id, parent.expect("checked parent"))?;
-        let total = rows.len();
-        return Ok((page_rows(rows, page), total));
-    }
-    let rows = storage
-        .semantic_action_children_page(
-            trace_id,
-            parent_id,
-            DISPLAY_PARENT_ROLE_STRS,
-            DISPLAY_PARENT_ROLE_STRS,
-            page,
-        )
-        .map_err(|error| storage_error("list semantic action children", error))?;
-    Ok((
-        rows.rows.into_iter().map(display_child).collect(),
-        rows.total_count,
-    ))
-}
-
-fn load_agent_root_page(
-    storage: &mut dyn StorageBackend,
-    trace_id: TraceId,
-    page: SemanticActionChildPageQuery,
-) -> Result<(Vec<DisplayChild>, usize), String> {
-    let page = storage
-        .semantic_action_display_root_children_page(
-            trace_id,
-            DISPLAY_PARENT_ROLE_STRS,
-            ROOT_LINK_ROLE_STRS,
-            page,
-        )
-        .map_err(|error| storage_error("list display root semantic action children", error))?;
-    Ok((
-        page.rows.into_iter().map(display_root_child).collect(),
-        page.total_count,
-    ))
-}
-
-fn load_command_children(
-    storage: &mut dyn StorageBackend,
-    trace_id: TraceId,
-    parent: SemanticAction,
-) -> Result<Vec<DisplayChild>, String> {
-    let mut rows = storage
-        .semantic_action_children(
-            trace_id,
-            &parent.action_id,
-            DISPLAY_PARENT_ROLE_STRS,
-            DISPLAY_PARENT_ROLE_STRS,
-        )
-        .map_err(|error| storage_error("list semantic action children", error))?
-        .into_iter()
-        .map(display_child)
-        .collect::<Vec<_>>();
-    let linked_ids = rows
-        .iter()
-        .map(|row| row.action.action_id.clone())
-        .collect::<BTreeSet<_>>();
-    for action in storage
-        .semantic_action_command_fallback_children(trace_id, &parent, DISPLAY_PARENT_ROLE_STRS)
-        .map_err(|error| storage_error("list command fallback children", error))?
-    {
-        if linked_ids.contains(&action.action_id) {
-            continue;
-        }
-        let child_count = storage
-            .semantic_action_child_count(trace_id, &action.action_id, DISPLAY_PARENT_ROLE_STRS)
-            .map_err(|error| storage_error("count fallback child actions", error))?;
-        rows.push(DisplayChild {
-            action,
-            link: None,
-            child_count,
-        });
-    }
-    rows.sort_by(|left, right| {
-        (left.action.start_time, left.action.action_id.as_str())
-            .cmp(&(right.action.start_time, right.action.action_id.as_str()))
-    });
-    Ok(rows)
-}
-
-fn display_child(row: SemanticActionChildRow) -> DisplayChild {
-    DisplayChild {
-        action: row.action,
-        link: Some(row.link),
-        child_count: row.child_count,
-    }
-}
-
-fn display_root_child(row: SemanticActionDisplayRootChildRow) -> DisplayChild {
-    DisplayChild {
-        action: row.action,
-        link: row.root_link,
-        child_count: row.child_count,
-    }
-}
-
-fn page_rows(rows: Vec<DisplayChild>, page: SemanticActionChildPageQuery) -> Vec<DisplayChild> {
-    rows.into_iter()
-        .skip(page.offset)
-        .take(page.limit)
-        .collect()
+) -> (Vec<DisplayChild>, usize) {
+    let parent_id = if parent_id == NODE_ID_AGENT {
+        ROOT_PARENT_ID
+    } else {
+        parent_id
+    };
+    projection.children_page(parent_id, page.offset, page.limit)
 }
 
 fn has_more_children(page: SemanticActionChildPageQuery, total: usize) -> bool {

@@ -259,7 +259,11 @@ pub fn action_tree_root_json(
     trace_id: u64,
 ) -> Result<String, String> {
     let mut storage = open_storage(storage_config)?;
-    actions::action_tree_root_json(storage.as_mut(), TraceId::new(trace_id))
+    actions::action_tree_root_json(
+        storage_config.path(),
+        storage.as_mut(),
+        TraceId::new(trace_id),
+    )
 }
 
 pub fn action_tree_children_json(
@@ -269,7 +273,13 @@ pub fn action_tree_children_json(
     page: SemanticActionChildPageQuery,
 ) -> Result<String, String> {
     let mut storage = open_storage(storage_config)?;
-    actions::action_tree_children_json(storage.as_mut(), TraceId::new(trace_id), parent_id, page)
+    actions::action_tree_children_json(
+        storage_config.path(),
+        storage.as_mut(),
+        TraceId::new(trace_id),
+        parent_id,
+        page,
+    )
 }
 
 pub fn action_detail_json(

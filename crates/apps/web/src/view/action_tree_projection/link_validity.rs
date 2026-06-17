@@ -33,8 +33,38 @@ pub(super) fn invalid_link(
     link.attributes
         .get(LINK_VALID_ATTR)
         .is_some_and(|value| value == VALID_FALSE)
+        || invalid_llm_call_child_link(link, parent, child)
         || invalid_parent_identity_link(link, child)
         || invalid_response_http_link(link, parent, child, action_by_id)
+}
+
+fn invalid_llm_call_child_link(
+    link: &SemanticActionLink,
+    parent: &SemanticAction,
+    child: &SemanticAction,
+) -> bool {
+    match link.role {
+        SemanticActionLinkRole::LlmCallRequest => {
+            parent.kind != SemanticActionKind::LlmCall
+                || child.kind != SemanticActionKind::LlmRequest
+                || !call_references_action(parent, attrs::llm_call::REQUEST_ACTION_ID, child)
+        }
+        SemanticActionLinkRole::LlmCallResponse => {
+            parent.kind != SemanticActionKind::LlmCall
+                || child.kind != SemanticActionKind::LlmResponse
+                || !call_references_action(parent, attrs::llm_call::RESPONSE_ACTION_ID, child)
+        }
+        _ => false,
+    }
+}
+
+fn call_references_action(call: &SemanticAction, attr: &str, child: &SemanticAction) -> bool {
+    call.trace_id == child.trace_id
+        && call.process == child.process
+        && call
+            .attributes
+            .get(attr)
+            .is_some_and(|action_id| action_id == &child.action_id)
 }
 
 fn invalid_parent_identity_link(link: &SemanticActionLink, child: &SemanticAction) -> bool {

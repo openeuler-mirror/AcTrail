@@ -1,14 +1,17 @@
 use std::time::{Duration, UNIX_EPOCH};
 
+use model_core::ids::EventId;
 use model_core::process::ProcessIdentity;
-use model_core::{
-    event::{DomainEvent, EventPayload},
-    ids::EventId,
-    payload::PayloadSegmentId,
-};
 use semantic_action::{
     SemanticActionCompleteness, SemanticActionKind, SemanticActionLinkRole, SemanticActionStatus,
 };
+
+#[path = "llm_links/fixtures.rs"]
+mod fixtures;
+#[path = "llm_links/http2.rs"]
+mod http2;
+
+use fixtures::*;
 
 use super::test_support::*;
 
@@ -115,9 +118,76 @@ fn later_llm_request_does_not_link_to_previous_response() {
     later_request.sequence = response_sequence(10);
     let later_output = runtime.observe_payload_segment(&later_request);
 
+    let later_call = later_output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmCall)
+        .expect("later request should create its own llm.call");
+    assert!(
+        !later_call
+            .attributes
+            .contains_key("llm.call.response_action_id")
+    );
     assert!(later_output.links.iter().all(|link| {
         link.role != SemanticActionLinkRole::LlmRequestLlmResponse
             || link.child_action_id != response.action_id
+    }));
+    assert!(later_output.links.iter().all(|link| {
+        link.role != SemanticActionLinkRole::LlmCallResponse
+            || link.child_action_id != response.action_id
+    }));
+}
+
+#[test]
+fn pending_outbound_request_blocks_response_from_pairing_with_previous_request() {
+    let mut runtime = runtime();
+    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let first_request_output = runtime.observe_payload_segment(&llm_payload_segment(agent.clone()));
+    let first_call = first_request_output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmCall)
+        .expect("first request should create an llm.call");
+
+    let (request_head, request_tail) = split_request_segment(agent.clone());
+    let pending_output = runtime.observe_payload_segment(&request_head);
+    assert!(pending_output.actions.is_empty());
+
+    let response_output = runtime.observe_payload_segment(&llm_response_payload_segment(
+        agent.clone(),
+        response_segment_id(20),
+        response_operation_id(20),
+        response_sequence(20),
+        json_response_bytes("pending request response"),
+    ));
+    let response = response_output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmResponse)
+        .expect("response should project before pending request is complete");
+    assert!(response_output.links.iter().all(|link| {
+        link.role != SemanticActionLinkRole::LlmCallResponse
+            || link.parent_action_id != first_call.action_id
+    }));
+
+    let second_request_output = runtime.observe_payload_segment(&request_tail);
+    let second_call = second_request_output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmCall)
+        .expect("completed pending request should create an llm.call");
+    assert_ne!(second_call.action_id, first_call.action_id);
+    assert_eq!(
+        second_call
+            .attributes
+            .get("llm.call.response_action_id")
+            .map(String::as_str),
+        Some(response.action_id.as_str())
+    );
+    assert!(second_request_output.links.iter().any(|link| {
+        link.role == SemanticActionLinkRole::LlmCallResponse
+            && link.parent_action_id == second_call.action_id
+            && link.child_action_id == response.action_id
     }));
 }
 
@@ -374,60 +444,4 @@ fn llm_call_ends_on_http_error_with_direction_local_payload_sequence() {
     assert!(finalized.actions.iter().all(|action| {
         action.kind != SemanticActionKind::LlmCall || action.action_id != request_call.action_id
     }));
-}
-
-fn http_response_event_with(
-    event_id: EventId,
-    process: ProcessIdentity,
-    segment_id: PayloadSegmentId,
-    sequence: u64,
-    status_code: &str,
-    reason: &str,
-) -> DomainEvent {
-    let mut event = http_response_event(event_id, process);
-    let EventPayload::Application(payload) = &mut event.payload else {
-        unreachable!("http_response_event returns an application event");
-    };
-    payload.summary = format!("{status_code} {reason}");
-    payload.metadata.insert(
-        "payload_segment_id".to_string(),
-        segment_id.get().to_string(),
-    );
-    payload
-        .metadata
-        .insert("payload_sequence".to_string(), sequence.to_string());
-    payload
-        .metadata
-        .insert("status_code".to_string(), status_code.to_string());
-    payload
-        .metadata
-        .insert("reason".to_string(), reason.to_string());
-    event
-}
-
-fn http_request_event_with(
-    event_id: EventId,
-    process: ProcessIdentity,
-    segment_id: PayloadSegmentId,
-    sequence: u64,
-) -> DomainEvent {
-    let mut event = http_request_event(event_id, process);
-    let EventPayload::Application(payload) = &mut event.payload else {
-        unreachable!("http_request_event returns an application event");
-    };
-    payload.metadata.insert(
-        "payload_segment_id".to_string(),
-        segment_id.get().to_string(),
-    );
-    payload
-        .metadata
-        .insert("payload_sequence".to_string(), sequence.to_string());
-    event
-}
-
-fn raw_sse_response_bytes(content: &str) -> Vec<u8> {
-    format!(
-        "data: {{\"model\":\"deepseek-chat\",\"choices\":[{{\"delta\":{{\"content\":\"{content}\"}}}}]}}\n\ndata: [DONE]\n\n"
-    )
-    .into_bytes()
 }

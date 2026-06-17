@@ -15,8 +15,8 @@ use semantic_action::{
 
 use crate::payload_projection::llm::{
     LiveLlmProjection, PayloadStreamGroupKey, live_llm_http_response_message_len,
-    live_llm_request_message_len, project_live_llm_request_message,
-    project_live_llm_response_message,
+    live_llm_request_message_len, live_llm_request_stream_id_hint,
+    project_live_llm_request_message, project_live_llm_response_message,
 };
 
 mod call;
@@ -170,7 +170,9 @@ impl LiveLlmProjector {
             changed.push(action);
         }
         let emitted_actions = self.emitted_actions.values().collect::<Vec<_>>();
-        let call_candidates = call::llm_call_actions_for(&changed, &emitted_actions);
+        let pending_requests = self.pending_request_markers();
+        let call_candidates =
+            call::llm_call_actions_for(&changed, &emitted_actions, &pending_requests);
         for action in call_candidates {
             let key = EmittedLlmAction {
                 trace_id: action.trace_id,
@@ -187,6 +189,14 @@ impl LiveLlmProjector {
             changed.push(action);
         }
         changed
+    }
+
+    fn pending_request_markers(&self) -> Vec<call::PendingLlmRequestMarker> {
+        self.streams
+            .iter()
+            .filter(|(key, _)| key.direction == LiveStreamDirection::Outbound)
+            .filter_map(|(key, state)| state.pending_request_marker(&key.group))
+            .collect()
     }
 }
 
@@ -345,6 +355,24 @@ impl LiveStreamState {
                 self.pending_raw_chunk_terminator = false;
             }
         }
+    }
+
+    fn pending_request_marker(
+        &self,
+        key: &PayloadStreamGroupKey,
+    ) -> Option<call::PendingLlmRequestMarker> {
+        if self.buffer.is_empty() {
+            return None;
+        }
+        let first = self.segments.front()?;
+        let http_stream_id = live_llm_request_stream_id_hint(&self.buffer)?;
+        Some(call::PendingLlmRequestMarker {
+            trace_id: key.trace_id,
+            process: key.process.clone(),
+            stream_key: key.stream_key.clone(),
+            http_stream_id: http_stream_id.map(|id| id.to_string()),
+            sequence_start: first.segment.sequence,
+        })
     }
 }
 

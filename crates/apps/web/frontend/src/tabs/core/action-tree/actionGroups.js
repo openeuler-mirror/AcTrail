@@ -3,6 +3,7 @@ import { compactMeta, compactRows, kindClass, shortTime } from './common';
 
 const GROUP_KIND = 'action.group';
 const SAME_KIND_RULE = 'same-kind';
+const NON_GROUPABLE_KINDS = new Set(['llm.call', 'llm.request', 'llm.response']);
 
 export function groupActionNodes(nodes) {
   const minActions = UI_LIMITS.actionGroupMinActions;
@@ -136,7 +137,11 @@ function actionGroupNode(children) {
 }
 
 function sameKindCandidate(node) {
-  return node.nodeType === TREE_NODE_TYPES.action && node.kind !== GROUP_KIND;
+  return (
+    node.nodeType === TREE_NODE_TYPES.action &&
+    node.kind !== GROUP_KIND &&
+    !NON_GROUPABLE_KINDS.has(node.kind)
+  );
 }
 
 function sameGroupKey(left, right) {

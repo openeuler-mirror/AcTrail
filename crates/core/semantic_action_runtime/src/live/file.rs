@@ -2,6 +2,8 @@
 
 #[path = "file/access.rs"]
 mod access;
+#[path = "file/bulk_read.rs"]
+mod bulk_read;
 #[path = "file/common.rs"]
 mod common;
 #[path = "file/enumerate.rs"]
