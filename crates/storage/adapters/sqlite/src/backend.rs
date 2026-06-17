@@ -6,7 +6,9 @@ use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
 use model_core::process::{ProcessIdentity, ProcessMembership};
 use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
-use semantic_action::{SemanticAction, SemanticActionLink};
+use semantic_action::{
+    FileObservationPath, FilePathSetPathPage, FilePathSetWrite, SemanticAction, SemanticActionLink,
+};
 use storage_core::{
     ExportLease, PayloadSegmentQuery, RetentionCandidate, SemanticActionChildPage,
     SemanticActionChildPageQuery, SemanticActionChildRow, SemanticActionDisplayRootChildPage,
@@ -163,6 +165,22 @@ impl StorageBackend for SqliteStorage {
             .map_err(StorageError::from)
     }
 
+    fn upsert_file_observation_paths(
+        &mut self,
+        paths: &[FileObservationPath],
+    ) -> Result<(), StorageError> {
+        semantic_action::SemanticActionWriteStore::upsert_file_observation_paths(self, paths)
+            .map_err(StorageError::from)
+    }
+
+    fn upsert_file_path_sets(
+        &mut self,
+        path_sets: &[FilePathSetWrite],
+    ) -> Result<(), StorageError> {
+        semantic_action::SemanticActionWriteStore::upsert_file_path_sets(self, path_sets)
+            .map_err(StorageError::from)
+    }
+
     fn list_semantic_actions(
         &self,
         trace_id: TraceId,
@@ -315,6 +333,19 @@ impl StorageBackend for SqliteStorage {
         action_id: &str,
     ) -> Result<Option<SemanticAction>, StorageError> {
         SqliteStorage::semantic_action_by_id(self, trace_id, action_id).map_err(StorageError::from)
+    }
+
+    fn file_path_set_paths_page(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Option<FilePathSetPathPage>, StorageError> {
+        semantic_action::SemanticActionReadStore::file_path_set_paths_page(
+            self, trace_id, action_id, offset, limit,
+        )
+        .map_err(StorageError::from)
     }
 
     fn semantic_action_command_fallback_children(

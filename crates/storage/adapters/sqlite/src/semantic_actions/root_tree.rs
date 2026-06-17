@@ -7,6 +7,7 @@ use rusqlite::types::Value;
 use rusqlite::{Connection, Row, params_from_iter};
 use semantic_action::{
     SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionStoreError,
+    attr_keys as attrs, link_roles,
 };
 
 use crate::SqliteStorage;
@@ -17,12 +18,12 @@ use crate::semantic_actions::store::{
 use crate::semantic_actions::tree::SemanticActionChildPageQuery;
 use crate::semantic_actions::tree_metadata::display_child_counts;
 
-const ACTION_INVALID_MARKER: &str = "actrail.action.valid=false";
-const LINK_INVALID_MARKER: &str = "actrail.link.valid=false";
-const PARENT_CONFLICT_MARKER: &str = "process.parent.identity_state=conflict";
-const AGENT_ROOT_ROLE: &str = "agent.performed_action";
-const COMMAND_CONTAINS_COMMAND_ROLE: &str = "command.contains_command_invocation";
-const COMMAND_KIND: &str = "command.invocation";
+const ACTION_INVALID_MARKER: &str = attrs::actrail::ACTION_VALID_FALSE_MARKER;
+const LINK_INVALID_MARKER: &str = attrs::actrail::LINK_VALID_FALSE_MARKER;
+const PARENT_CONFLICT_MARKER: &str = attrs::process_parent::IDENTITY_STATE_CONFLICT_MARKER;
+const AGENT_ROOT_ROLE: &str = link_roles::AGENT_PERFORMED_ACTION;
+const COMMAND_CONTAINS_COMMAND_ROLE: &str = link_roles::COMMAND_CONTAINS_COMMAND_INVOCATION;
+const COMMAND_KIND: &str = SemanticActionKind::CommandInvocation.as_str();
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SemanticActionDisplayRootChildRow {

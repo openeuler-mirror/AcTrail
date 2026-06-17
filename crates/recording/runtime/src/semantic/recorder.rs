@@ -22,6 +22,9 @@ impl<'a> SemanticActionRecorder<'a> {
         for link in batch.links().iter().cloned() {
             self.storage.upsert_semantic_action_link(link)?;
         }
+        self.storage
+            .upsert_file_observation_paths(batch.file_observation_paths())?;
+        self.storage.upsert_file_path_sets(batch.file_path_sets())?;
         Ok(())
     }
 }

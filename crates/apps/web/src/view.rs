@@ -281,6 +281,16 @@ pub fn action_detail_json(
     actions::action_detail_json(storage.as_mut(), TraceId::new(trace_id), action_id)
 }
 
+pub fn action_file_path_set_json(
+    storage_config: &StorageConfig,
+    trace_id: u64,
+    action_id: &str,
+    page: SemanticActionChildPageQuery,
+) -> Result<String, String> {
+    let mut storage = open_storage(storage_config)?;
+    actions::file_path_set_json(storage.as_mut(), TraceId::new(trace_id), action_id, page)
+}
+
 pub fn commands_json(storage_config: &StorageConfig, trace_id: u64) -> Result<String, String> {
     let mut storage = open_storage(storage_config)?;
     commands::commands_json(storage.as_mut(), TraceId::new(trace_id))

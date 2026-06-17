@@ -226,6 +226,9 @@ fn command_child_role(action: &SemanticAction) -> Option<SemanticActionLinkRole>
         SemanticActionKind::FileRead
             | SemanticActionKind::FileWrite
             | SemanticActionKind::FileModify
+            | SemanticActionKind::FileTtyIo
+            | SemanticActionKind::FileBulkRead
+            | SemanticActionKind::FsEnumerate
     )
     .then_some(SemanticActionLinkRole::CommandContainsFileAccess)
     .or_else(|| {
@@ -251,6 +254,9 @@ fn parent_command_process(action: &SemanticAction) -> Option<ProcessIdentity> {
         SemanticActionKind::FileRead
         | SemanticActionKind::FileWrite
         | SemanticActionKind::FileModify
+        | SemanticActionKind::FileTtyIo
+        | SemanticActionKind::FileBulkRead
+        | SemanticActionKind::FsEnumerate
         | SemanticActionKind::ProcessForkAttempt
         | SemanticActionKind::LlmCall
         | SemanticActionKind::AgentInvocation => Some(action.process.clone()),

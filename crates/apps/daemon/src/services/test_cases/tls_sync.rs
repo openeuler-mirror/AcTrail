@@ -35,6 +35,7 @@ fn tls_sync_payload_persists_without_child_membership() {
         super::process_seccomp_disabled(),
         super::agent_invocation_disabled(),
         super::SemanticRetentionConfig::default(),
+        super::FileObservationConfig::default(),
         super::application_protocol_disabled(),
         super::resource_metrics_disabled(),
         super::export_runtime_disabled(),

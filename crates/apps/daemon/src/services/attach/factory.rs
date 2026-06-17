@@ -2,8 +2,8 @@
 
 use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
-    PayloadConfig, ProcessSeccompConfig, ResourceMetricsConfig, SeccompNotifyConfig,
-    SemanticRetentionConfig,
+    FileObservationConfig, PayloadConfig, ProcessSeccompConfig, ResourceMetricsConfig,
+    SeccompNotifyConfig, SemanticRetentionConfig,
 };
 use ebpf_collector::EbpfCollector;
 use ebpf_collector::procfs::{ProcfsIdentityReader, ProcfsTreeSnapshotter};
@@ -37,6 +37,7 @@ impl StorageAttachService {
         process_seccomp: ProcessSeccompConfig,
         agent_invocation: AgentInvocationConfig,
         semantic_retention: SemanticRetentionConfig,
+        file_observation: FileObservationConfig,
         application_protocol: ApplicationProtocolConfig,
         resource_metrics: ResourceMetricsConfig,
         enforcement: FanotifyEnforcementService,
@@ -52,6 +53,7 @@ impl StorageAttachService {
             process_seccomp,
             agent_invocation,
             semantic_retention,
+            file_observation,
             application_protocol,
             resource_metrics,
             enforcement,
@@ -71,6 +73,7 @@ impl StorageAttachService {
         process_seccomp_config: ProcessSeccompConfig,
         agent_invocation: AgentInvocationConfig,
         semantic_retention: SemanticRetentionConfig,
+        file_observation: FileObservationConfig,
         application_protocol: ApplicationProtocolConfig,
         resource_metrics: ResourceMetricsConfig,
         enforcement: FanotifyEnforcementService,
@@ -138,13 +141,18 @@ impl StorageAttachService {
             process_seccomp,
             pending_process_seccomp_observations: Vec::new(),
             semantic_retention: semantic_retention.clone(),
+            file_observation: file_observation.clone(),
             application_protocol: ApplicationProtocolAnalyzer::new_with_retention(
                 application_protocol,
                 semantic_retention.clone(),
             ),
             resource_metrics: ResourceMetricsSampler::new(resource_metrics),
             enforcement,
-            semantic_actions: LiveSemanticActionRuntime::new(agent_invocation, semantic_retention),
+            semantic_actions: LiveSemanticActionRuntime::new(
+                agent_invocation,
+                semantic_retention,
+                file_observation,
+            ),
             export_runtime,
             finalized_terminal_traces: Default::default(),
             diagnosed_terminal_open_memberships: Default::default(),

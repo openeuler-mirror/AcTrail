@@ -18,10 +18,10 @@ use super::state::{
     FILE_FD_MISSING, FILE_PHASE_EXIT, FILE_SYSCALL_CHDIR, FILE_SYSCALL_CLOSE, FILE_SYSCALL_CREAT,
     FILE_SYSCALL_DUP, FILE_SYSCALL_DUP2, FILE_SYSCALL_DUP3, FILE_SYSCALL_FCHDIR,
     FILE_SYSCALL_FCNTL, FILE_SYSCALL_FTRUNCATE, FILE_SYSCALL_MKDIR, FILE_SYSCALL_MKDIRAT,
-    FILE_SYSCALL_MMAP, FILE_SYSCALL_OPEN, FILE_SYSCALL_OPENAT, FILE_SYSCALL_RENAME,
-    FILE_SYSCALL_RENAMEAT, FILE_SYSCALL_RENAMEAT2, FILE_SYSCALL_RMDIR, FILE_SYSCALL_TRUNCATE,
-    FILE_SYSCALL_UNLINK, FILE_SYSCALL_UNLINKAT, FileSyscallOutcome, FileTracker, PATH_FLAG_FAULT,
-    PATH_FLAG_TRUNCATED,
+    FILE_SYSCALL_MMAP, FILE_SYSCALL_OPEN, FILE_SYSCALL_OPENAT, FILE_SYSCALL_OPENAT2,
+    FILE_SYSCALL_RENAME, FILE_SYSCALL_RENAMEAT, FILE_SYSCALL_RENAMEAT2, FILE_SYSCALL_RMDIR,
+    FILE_SYSCALL_TRUNCATE, FILE_SYSCALL_UNLINK, FILE_SYSCALL_UNLINKAT, FileSyscallOutcome,
+    FileTracker, PATH_FLAG_FAULT, PATH_FLAG_TRUNCATED,
 };
 
 pub(in crate::decode) fn decode(
@@ -168,7 +168,9 @@ fn insert_userspace_retry_metadata(
 fn insert_fd_metadata(metadata: &mut BTreeMap<String, String>, outcome: &FileSyscallOutcome) {
     let event = &outcome.enter;
     let fd = match event.aux {
-        FILE_SYSCALL_OPEN | FILE_SYSCALL_OPENAT | FILE_SYSCALL_CREAT if outcome.result >= 0 => {
+        FILE_SYSCALL_OPEN | FILE_SYSCALL_OPENAT | FILE_SYSCALL_CREAT | FILE_SYSCALL_OPENAT2
+            if outcome.result >= 0 =>
+        {
             u32::try_from(outcome.result).ok()
         }
         FILE_SYSCALL_MMAP | FILE_SYSCALL_FTRUNCATE if event.fd != FILE_FD_MISSING => Some(event.fd),
@@ -208,6 +210,16 @@ fn insert_syscall_args(metadata: &mut BTreeMap<String, String>, outcome: &FileSy
             metadata.insert("flags".to_string(), event.arg2.to_string());
             if open_truncates(event) {
                 metadata.insert("truncate_source".to_string(), "openat_o_trunc".to_string());
+            }
+        }
+        FILE_SYSCALL_OPENAT2 => {
+            metadata.insert("dirfd".to_string(), (event.arg0 as i32).to_string());
+            metadata.insert("flags".to_string(), event.arg2.to_string());
+            metadata.insert("mode".to_string(), event.arg3.to_string());
+            metadata.insert("resolve".to_string(), event.arg4.to_string());
+            metadata.insert("how_size".to_string(), event.arg5.to_string());
+            if open_truncates(event) {
+                metadata.insert("truncate_source".to_string(), "openat2_o_trunc".to_string());
             }
         }
         FILE_SYSCALL_CREAT => {
@@ -267,6 +279,7 @@ fn syscall_name(raw: u32) -> &'static str {
     match raw {
         FILE_SYSCALL_OPEN => "open",
         FILE_SYSCALL_OPENAT => "openat",
+        FILE_SYSCALL_OPENAT2 => "openat2",
         FILE_SYSCALL_CREAT => "creat",
         FILE_SYSCALL_UNLINK => "unlink",
         FILE_SYSCALL_UNLINKAT => "unlinkat",
@@ -298,6 +311,7 @@ fn open_truncates(event: &KernelFilePathEvent) -> bool {
     match event.aux {
         FILE_SYSCALL_OPEN => event.arg1 & libc::O_TRUNC as u64 != 0,
         FILE_SYSCALL_OPENAT => event.arg2 & libc::O_TRUNC as u64 != 0,
+        FILE_SYSCALL_OPENAT2 => event.arg2 & libc::O_TRUNC as u64 != 0,
         _ => false,
     }
 }

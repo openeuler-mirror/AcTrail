@@ -1,5 +1,6 @@
 #include "actrail_net.h"
 #include "actrail_file.h"
+#include "file/actrail_file_open.h"
 #include "actrail_proc.h"
 #include "actrail_tls_payload.h"
 #include "payload/actrail_socket_payload.h"
@@ -283,6 +284,16 @@ int handle_sys_exit_read(struct trace_event_raw_sys_exit *ctx) {
     return emit_pending_net_op(ctx);
 }
 
+SEC("tracepoint/syscalls/sys_enter_open")
+int handle_sys_enter_open(struct trace_event_raw_sys_enter *ctx) {
+    return emit_file_open_enter(ctx);
+}
+
+SEC("tracepoint/syscalls/sys_exit_open")
+int handle_sys_exit_open(struct trace_event_raw_sys_exit *ctx) {
+    return emit_file_exit(ctx, ACTRAIL_FILE_OPEN, ACTRAIL_FILE_SYSCALL_OPEN);
+}
+
 SEC("tracepoint/syscalls/sys_enter_openat")
 int handle_sys_enter_openat(struct trace_event_raw_sys_enter *ctx) {
     return emit_file_openat_enter(ctx);
@@ -291,6 +302,26 @@ int handle_sys_enter_openat(struct trace_event_raw_sys_enter *ctx) {
 SEC("tracepoint/syscalls/sys_exit_openat")
 int handle_sys_exit_openat(struct trace_event_raw_sys_exit *ctx) {
     return emit_file_exit(ctx, ACTRAIL_FILE_OPEN, ACTRAIL_FILE_SYSCALL_OPENAT);
+}
+
+SEC("tracepoint/syscalls/sys_enter_openat2")
+int handle_sys_enter_openat2(struct trace_event_raw_sys_enter *ctx) {
+    return emit_file_openat2_enter(ctx);
+}
+
+SEC("tracepoint/syscalls/sys_exit_openat2")
+int handle_sys_exit_openat2(struct trace_event_raw_sys_exit *ctx) {
+    return emit_file_exit(ctx, ACTRAIL_FILE_OPEN, ACTRAIL_FILE_SYSCALL_OPENAT2);
+}
+
+SEC("tracepoint/syscalls/sys_enter_creat")
+int handle_sys_enter_creat(struct trace_event_raw_sys_enter *ctx) {
+    return emit_file_creat_enter(ctx);
+}
+
+SEC("tracepoint/syscalls/sys_exit_creat")
+int handle_sys_exit_creat(struct trace_event_raw_sys_exit *ctx) {
+    return emit_file_exit(ctx, ACTRAIL_FILE_OPEN, ACTRAIL_FILE_SYSCALL_CREAT);
 }
 
 SEC("tracepoint/syscalls/sys_enter_unlinkat")

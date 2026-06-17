@@ -265,6 +265,36 @@ impl ConfigNode {
         Ok(value)
     }
 
+    pub(super) fn optional_positive_u32(
+        &self,
+        key: &'static str,
+        default: u32,
+    ) -> Result<u32, String> {
+        let Some(values) = self.values.get(key) else {
+            return Ok(default);
+        };
+        if values.len() != 1 {
+            return Err(format!(
+                "config key {} must appear once",
+                self.qualified_key(key)
+            ));
+        }
+        let raw = values
+            .first()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| format!("config key {} must not be empty", self.qualified_key(key)))?;
+        let value = raw
+            .parse::<u32>()
+            .map_err(|error| format!("invalid {}: {error}", self.qualified_key(key)))?;
+        if value == u32::default() {
+            return Err(format!(
+                "invalid {}: value must be positive",
+                self.qualified_key(key)
+            ));
+        }
+        Ok(value)
+    }
+
     pub(super) fn required_u64(&self, key: &'static str) -> Result<u64, String> {
         self.required(key)?
             .parse::<u64>()
@@ -379,6 +409,8 @@ fn repeated_keys() -> BTreeSet<&'static str> {
         "payload_socket_seccomp_syscall",
         "process_seccomp_syscall",
         "agent_invocation_command",
+        "file_observation_tty_path",
+        "file_observation_tty_operation",
     ]
     .into_iter()
     .collect()

@@ -3,7 +3,9 @@
 use model_core::event::{DomainEvent, EventPayload};
 use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
-use semantic_action::{SemanticAction, SemanticActionKind, SemanticActionStatus, SemanticEvidence};
+use semantic_action::{
+    SemanticAction, SemanticActionKind, SemanticActionStatus, SemanticEvidence, evidence_roles,
+};
 use std::collections::BTreeMap;
 
 use super::actions::{
@@ -12,7 +14,7 @@ use super::actions::{
 };
 
 const AGENT_IDENTITY_STATUS_OBSERVED: &str = "observed";
-const AGENT_IDENTITY_SOURCE_LLM_REQUEST: &str = "llm.request";
+const AGENT_IDENTITY_SOURCE_LLM_REQUEST: &str = SemanticActionKind::LlmRequest.as_str();
 
 pub(super) struct AgentProjector {
     process_execs: BTreeMap<(TraceId, ProcessIdentity), SemanticAction>,
@@ -58,7 +60,9 @@ impl AgentProjector {
             .map(|mut action| {
                 action.end_time = Some(event.envelope.observed_at);
                 action.status = process_exit_status(payload.metadata.get("exit_code"));
-                action.evidence.push(event_evidence(event, "process.exit"));
+                action
+                    .evidence
+                    .push(event_evidence(event, evidence_roles::process::EXIT));
                 self.process_execs.insert(key, action.clone());
                 action
             })

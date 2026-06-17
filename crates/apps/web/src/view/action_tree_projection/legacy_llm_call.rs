@@ -2,20 +2,20 @@ use std::collections::BTreeMap;
 
 use semantic_action::{
     SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionLink,
-    SemanticActionLinkRole, SemanticActionStatus,
+    SemanticActionLinkRole, SemanticActionStatus, attr_keys as attrs,
 };
 
 const DIRECTION_ATTR: &str = "direction";
 const DIRECTION_INBOUND: &str = "inbound";
 const DIRECTION_OUTBOUND: &str = "outbound";
-const FINALIZED_ON_TRACE_CLOSE_ATTR: &str = "actrail.action.finalized_on_trace_close";
-const HTTP_RESPONSE_ACTION_ID_ATTR: &str = "llm.call.http_response_action_id";
-const HTTP_RESPONSE_STATUS_CODE_ATTR: &str = "http.response.status_code";
-const LLM_CALL_REQUEST_ACTION_ID_ATTR: &str = "llm.call.request_action_id";
-const LLM_CALL_RESPONSE_ACTION_ID_ATTR: &str = "llm.call.response_action_id";
-const HTTP_REQUEST_STREAM_ID_ATTR: &str = "http.request.stream_id";
-const PAYLOAD_SEQUENCE_ATTR: &str = "payload.sequence";
-const PAYLOAD_STREAM_KEY_ATTR: &str = "payload.stream_key";
+const FINALIZED_ON_TRACE_CLOSE_ATTR: &str = attrs::actrail::ACTION_FINALIZED_ON_TRACE_CLOSE;
+const HTTP_RESPONSE_ACTION_ID_ATTR: &str = attrs::llm_call::HTTP_RESPONSE_ACTION_ID;
+const HTTP_RESPONSE_STATUS_CODE_ATTR: &str = attrs::http_response::STATUS_CODE;
+const LLM_CALL_REQUEST_ACTION_ID_ATTR: &str = attrs::llm_call::REQUEST_ACTION_ID;
+const LLM_CALL_RESPONSE_ACTION_ID_ATTR: &str = attrs::llm_call::RESPONSE_ACTION_ID;
+const HTTP_REQUEST_STREAM_ID_ATTR: &str = attrs::http_request::STREAM_ID;
+const PAYLOAD_SEQUENCE_ATTR: &str = attrs::payload::SEQUENCE;
+const PAYLOAD_STREAM_KEY_ATTR: &str = attrs::payload::STREAM_KEY;
 const STATUS_CODE_ATTR: &str = "status_code";
 const STREAM_KEY_ATTR: &str = "stream_key";
 const HTTP_MESSAGE_STREAM_ID_ATTR: &str = "stream_id";
@@ -75,7 +75,7 @@ fn normalize_call(
     if let Some(reason) = response.attributes.get("reason") {
         normalized
             .attributes
-            .insert("http.response.reason".to_string(), reason.clone());
+            .insert(attrs::http_response::REASON.to_string(), reason.clone());
     }
     normalized
 }

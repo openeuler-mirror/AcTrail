@@ -6,7 +6,9 @@ use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use rusqlite::types::Value;
 use rusqlite::{Connection, Params, Row, params, params_from_iter};
-use semantic_action::{SemanticAction, SemanticActionLink, SemanticActionStoreError};
+use semantic_action::{
+    SemanticAction, SemanticActionLink, SemanticActionStoreError, attr_keys as attrs,
+};
 
 use crate::SqliteStorage;
 use crate::records::decode_map;
@@ -100,7 +102,10 @@ impl SqliteStorage {
             })?;
         let rows = statement
             .query_map(
-                params![trace_id.get(), "%agent.identity.status=observed%"],
+                params![
+                    trace_id.get(),
+                    format!("%{}%", attrs::agent::IDENTITY_STATUS_OBSERVED_MARKER)
+                ],
                 action_from_row,
             )
             .map_err(|error| {
@@ -112,7 +117,7 @@ impl SqliteStorage {
             })?;
             if action
                 .attributes
-                .get("agent.identity.status")
+                .get(attrs::agent::IDENTITY_STATUS)
                 .is_some_and(|status| status == "observed")
                 && !invalidated_action_attrs(&action.attributes)
             {

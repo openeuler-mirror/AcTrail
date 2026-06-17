@@ -10,6 +10,7 @@ use model_core::payload::{
 };
 use semantic_action::{
     SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionStatus,
+    attr_keys as attrs,
 };
 
 use crate::payload_projection::llm::{
@@ -142,7 +143,7 @@ impl LiveLlmProjector {
             action.completeness = SemanticActionCompleteness::Partial;
             action.end_time = Some(finished_at);
             action.attributes.insert(
-                "actrail.action.finalized_on_trace_close".to_string(),
+                attrs::actrail::ACTION_FINALIZED_ON_TRACE_CLOSE.to_string(),
                 "true".to_string(),
             );
             finalized.push(action.clone());

@@ -52,6 +52,7 @@ fn tls_payload_processing_keeps_llm_summary_without_payload_body_duplication() {
         super::process_seccomp_disabled(),
         super::agent_invocation_disabled(),
         super::SemanticRetentionConfig::default(),
+        super::FileObservationConfig::default(),
         ApplicationProtocolConfig {
             enabled: true,
             http1_enabled: true,
@@ -269,6 +270,7 @@ fn payload_batch_retention_counts_prior_uncommitted_segments_and_rolls_back() {
         super::process_seccomp_disabled(),
         super::agent_invocation_disabled(),
         semantic_retention,
+        super::FileObservationConfig::default(),
         super::application_protocol_disabled(),
         super::resource_metrics_disabled(),
         super::export_runtime_disabled(),
@@ -353,6 +355,7 @@ fn tls_payload_processing_persists_http2_frame_and_data_events() {
         super::process_seccomp_disabled(),
         super::agent_invocation_disabled(),
         semantic_retention,
+        super::FileObservationConfig::default(),
         ApplicationProtocolConfig {
             enabled: true,
             http1_enabled: false,
@@ -453,6 +456,7 @@ fn http2_analyzer_ignores_http1_text_when_both_protocols_are_enabled() {
         super::process_seccomp_disabled(),
         super::agent_invocation_disabled(),
         super::SemanticRetentionConfig::default(),
+        super::FileObservationConfig::default(),
         ApplicationProtocolConfig {
             enabled: true,
             http1_enabled: true,

@@ -4,7 +4,7 @@ use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use semantic_action::{
     SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkConfidence,
-    SemanticActionLinkRole,
+    SemanticActionLinkRole, attr_keys as attrs,
 };
 
 use crate::live::actions::ATTR_AGENT_IDENTITY_STATUS;
@@ -12,7 +12,7 @@ use crate::live::process_parent::{parent_identity_has_conflict, parent_process_f
 
 use super::shared::{ActionLinkKey, invalidate_child_links, is_nested_file_write_event};
 
-const ATTR_AGENT_ACTION_SEQUENCE: &str = "agent.performed_action.sequence";
+const ATTR_AGENT_ACTION_SEQUENCE: &str = attrs::agent::PERFORMED_ACTION_SEQUENCE;
 
 #[derive(Default)]
 pub(super) struct AgentPerformedActionLinkProjector {
@@ -173,6 +173,9 @@ fn agent_performed_action_candidate(action: &SemanticAction) -> bool {
             | SemanticActionKind::FileRead
             | SemanticActionKind::FileWrite
             | SemanticActionKind::FileModify
+            | SemanticActionKind::FileTtyIo
+            | SemanticActionKind::FileBulkRead
+            | SemanticActionKind::FsEnumerate
             | SemanticActionKind::ProcessForkAttempt
     )
 }
@@ -183,6 +186,9 @@ fn candidate_agent_process(action: &SemanticAction) -> Option<ProcessIdentity> {
         | SemanticActionKind::FileRead
         | SemanticActionKind::FileWrite
         | SemanticActionKind::FileModify
+        | SemanticActionKind::FileTtyIo
+        | SemanticActionKind::FileBulkRead
+        | SemanticActionKind::FsEnumerate
         | SemanticActionKind::ProcessForkAttempt => Some(action.process.clone()),
         SemanticActionKind::CommandInvocation => parent_process_from_action(action),
         _ => None,

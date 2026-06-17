@@ -10,6 +10,7 @@
   --action-row-gap: 10px;
   --side-panel-sticky-top: 0px;
   --table-indent-step: 14px;
+  --detail-scroll-block-max: 260px;
   --border: #d8dfdf;
   --bg: #f4f7f7;
   --surface: #ffffff;
@@ -320,7 +321,7 @@ input {
 }
 
 .detail-section pre {
-  max-height: 260px;
+  max-height: var(--detail-scroll-block-max);
   margin: 8px 0 0;
   padding: 12px;
   overflow: auto;
@@ -344,6 +345,55 @@ input {
   font-size: 12px;
   line-height: 1.45;
   overflow-wrap: anywhere;
+}
+
+.path-set-rows {
+  margin-bottom: 10px;
+}
+
+.path-set-list {
+  max-height: var(--detail-scroll-block-max);
+  margin: 8px 0 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+  border-top: 1px solid var(--border);
+}
+
+.path-set-list li {
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.path-set-list code {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.detail-load-button {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.detail-load-button:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
+.detail-muted {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .load-progress {

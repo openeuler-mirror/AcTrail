@@ -4,7 +4,10 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use model_core::ids::TraceId;
-use semantic_action::{SemanticAction, SemanticActionKind, SemanticActionLink, SemanticEvidence};
+use semantic_action::{
+    FilePathSetPath, FilePathSetPathPage, SemanticAction, SemanticActionKind, SemanticActionLink,
+    SemanticEvidence,
+};
 use storage_core::{
     SemanticActionChildPageQuery, SemanticActionChildRow, SemanticActionDisplayRootChildRow,
     SemanticActionSummary, StorageBackend, StorageError,
@@ -128,6 +131,25 @@ pub(super) fn action_detail_json(
         .map_err(|error| storage_error("read semantic action", error))?
         .ok_or_else(|| format!("semantic action {action_id} not found"))?;
     Ok(action_json(&action))
+}
+
+pub(super) fn file_path_set_json(
+    storage: &mut dyn StorageBackend,
+    trace_id: TraceId,
+    action_id: &str,
+    page: SemanticActionChildPageQuery,
+) -> Result<String, String> {
+    let path_page = storage
+        .file_path_set_paths_page(trace_id, action_id, page.offset, page.limit)
+        .map_err(|error| storage_error("read file path set", error))?;
+    Ok(match path_page {
+        Some(path_page) => file_path_set_page_json(path_page, page),
+        None => format!(
+            "{{\"path_set\":null,\"offset\":{},\"limit\":{},\"total\":0,\"next_offset\":null,\"has_more\":false,\"paths\":[]}}",
+            json::number(page.offset),
+            json::number(page.limit)
+        ),
+    })
 }
 
 fn load_child_page(
@@ -309,6 +331,40 @@ fn render_action_json(action: &SemanticAction, lite: bool) -> String {
         json::optional_number(action.confidence_millis),
         json::map(&attributes),
         evidence
+    )
+}
+
+fn file_path_set_page_json(
+    path_page: FilePathSetPathPage,
+    page: SemanticActionChildPageQuery,
+) -> String {
+    let paths = path_page
+        .paths
+        .iter()
+        .map(file_path_set_path_json)
+        .collect::<Vec<_>>();
+    format!(
+        "{{\"path_set\":{{\"id\":{},\"action_id\":{},\"state\":{},\"unique_path_count\":{},\"stored_path_count\":{},\"chunking_scheme\":{}}},\"offset\":{},\"limit\":{},\"total\":{},\"next_offset\":{},\"has_more\":{},\"paths\":[{}]}}",
+        json::string(&path_page.path_set_id),
+        json::string(&path_page.action_id),
+        json::string(path_page.state.as_str()),
+        json::number(path_page.unique_path_count),
+        json::number(path_page.stored_path_count),
+        json::string(&path_page.chunking_scheme),
+        json::number(page.offset),
+        json::number(page.limit),
+        json::number(path_page.total_count),
+        next_offset_json(page, path_page.total_count),
+        bool_json(has_more_children(page, path_page.total_count)),
+        paths.join(",")
+    )
+}
+
+fn file_path_set_path_json(path: &FilePathSetPath) -> String {
+    format!(
+        "{{\"path_id\":{},\"path\":{}}}",
+        json::number(path.path_id),
+        json::string(&path.path)
     )
 }
 

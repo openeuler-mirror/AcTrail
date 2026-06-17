@@ -11,6 +11,8 @@ mod agent;
 mod application;
 #[path = "daemon/enforcement.rs"]
 mod enforcement;
+#[path = "daemon/observation/file.rs"]
+mod file_observation;
 #[path = "daemon/logging/config.rs"]
 mod logging;
 #[path = "daemon/operator.rs"]
@@ -37,6 +39,12 @@ pub use enforcement::{
     EnforcementScope,
 };
 pub use export_factory::ExportConfig as RuntimeExportConfig;
+pub use file_observation::{
+    DEFAULT_FILE_BULK_READ_MAX_PATHS_PER_SET, DEFAULT_FILE_BULK_READ_MIN_UNIQUE_PATHS,
+    DEFAULT_FS_ENUMERATE_MAX_PATHS_PER_SET, DEFAULT_FS_ENUMERATE_MIN_UNIQUE_PATHS,
+    FileBulkReadMode, FileBulkReadObservationConfig, FileMetadataRetention, FileObservationConfig,
+    FileRawEventRetention, FileTtyObservationConfig, FsEnumerateObservationConfig,
+};
 pub use logging::DiagnosticLogLevel;
 pub use operator::{
     DEFAULT_CONTROL_PENDING_CONNECTION_MAX, DEFAULT_OPERATOR_CONFIG_PATH, OPERATOR_CONFIG_TEMPLATE,

@@ -8,9 +8,10 @@ use config_core::capture_profile::CaptureProfile;
 use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
     EnforcementBackend, EnforcementConfig, EnforcementDecision, EnforcementMarkStrategy,
-    EnforcementScope, MemlockRlimit, OPERATOR_CONFIG_TEMPLATE, OperatorConfig, PayloadConfig,
-    ProcessSeccompConfig, ProcessSeccompSyscall, ResourceMetricsConfig, RuntimeExportConfig,
-    SeccompNotifyConfig, SemanticRetentionConfig, SseDataPolicy,
+    EnforcementScope, FileObservationConfig, MemlockRlimit, OPERATOR_CONFIG_TEMPLATE,
+    OperatorConfig, PayloadConfig, ProcessSeccompConfig, ProcessSeccompSyscall,
+    ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig, SemanticRetentionConfig,
+    SseDataPolicy,
 };
 use config_core::trace_snapshot::CaptureProfileSnapshot;
 use control_contract::command::{ControlCommand, ListTracesCommand, TrackAddCommand};
@@ -65,6 +66,7 @@ fn attach_main_path_runs() {
         process_seccomp_disabled(),
         agent_invocation_disabled(),
         SemanticRetentionConfig::default(),
+        FileObservationConfig::default(),
         application_protocol_disabled(),
         resource_metrics_disabled(),
         export_runtime_disabled(),
@@ -120,6 +122,7 @@ fn launch_mode_suppresses_wrapper_bootstrap_gap() {
         process_seccomp_disabled(),
         agent_invocation_disabled(),
         SemanticRetentionConfig::default(),
+        FileObservationConfig::default(),
         application_protocol_disabled(),
         resource_metrics_disabled(),
         export_runtime_disabled(),
@@ -182,6 +185,7 @@ fn resource_metrics_sampler_persists_procfs_samples() {
         process_seccomp_disabled(),
         agent_invocation_disabled(),
         SemanticRetentionConfig::default(),
+        FileObservationConfig::default(),
         application_protocol_disabled(),
         ResourceMetricsConfig {
             enabled: true,

@@ -349,7 +349,12 @@ impl PayloadTransactionContext<'_> {
 
     fn observe_semantic_actions_for_event(&mut self, event: &DomainEvent) -> SemanticActionBatch {
         let output = self.semantic_actions.observe_event(event);
-        SemanticActionBatch::from_parts(output.actions, output.links)
+        SemanticActionBatch::from_action_output(
+            output.actions,
+            output.links,
+            output.file_observation_paths,
+            output.file_path_sets,
+        )
     }
 
     fn observe_semantic_actions_for_payload_segment(
@@ -357,7 +362,12 @@ impl PayloadTransactionContext<'_> {
         segment: &PayloadSegment,
     ) -> SemanticActionBatch {
         let output = self.semantic_actions.observe_payload_segment(segment);
-        SemanticActionBatch::from_parts(output.actions, output.links)
+        SemanticActionBatch::from_action_output(
+            output.actions,
+            output.links,
+            output.file_observation_paths,
+            output.file_path_sets,
+        )
     }
 }
 

@@ -188,6 +188,35 @@ enabled = true
 stats = true
 body_content = none
 
+[file_observation]
+enabled = true
+metadata_retention = compact
+
+[file_observation.tty]
+enabled = true
+path = /dev/tty
+path = /dev/pts/*
+operation = open
+operation = close
+operation = read
+operation = write
+raw_event_retention = errors_only
+
+[file_observation.bulk_read]
+enabled = true
+mode = path_set
+raw_event_retention = errors_only
+min_unique_paths = 128
+max_paths_per_set = 4096
+path_set_chunk_max_paths = 256
+
+[file_observation.enumerate]
+enabled = true
+raw_event_retention = errors_only
+min_unique_paths = 2
+max_paths_per_set = 4096
+path_set_chunk_max_paths = 256
+
 [export]
 enabled = true
 

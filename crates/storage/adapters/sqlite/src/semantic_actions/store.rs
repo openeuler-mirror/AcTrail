@@ -4,7 +4,8 @@ use model_core::ids::TraceId;
 use model_core::process::{NamespaceIdentity, ProcessIdentity};
 use rusqlite::{OptionalExtension, Row, params};
 use semantic_action::{
-    SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionLink,
+    FileObservationPath, FilePathSetPathPage, FilePathSetWrite, SemanticAction,
+    SemanticActionCompleteness, SemanticActionKind, SemanticActionLink,
     SemanticActionLinkConfidence, SemanticActionLinkRole, SemanticActionReadStore,
     SemanticActionStatus, SemanticActionStoreError, SemanticActionWriteStore, SemanticEvidence,
     SemanticEvidenceKind,
@@ -110,6 +111,52 @@ impl SemanticActionWriteStore for SqliteStorage {
                 })?;
         }
         Ok(())
+    }
+
+    fn upsert_file_observation_paths(
+        &mut self,
+        paths: &[FileObservationPath],
+    ) -> Result<(), SemanticActionStoreError> {
+        if paths.is_empty() {
+            return Ok(());
+        }
+        let connection = self.connection().borrow_mut();
+        let mut statement = connection
+            .prepare(
+                "INSERT OR IGNORE INTO file_observation_paths (
+                    trace_id, action_id, path_order, path
+                ) VALUES (?1, ?2, ?3, ?4)",
+            )
+            .map_err(|error| {
+                SemanticActionStoreError::new("prepare_file_observation_paths", error.to_string())
+            })?;
+        for path in paths {
+            statement
+                .execute(params![
+                    path.trace_id.get(),
+                    &path.action_id,
+                    path.path_order,
+                    &path.path,
+                ])
+                .map_err(|error| {
+                    SemanticActionStoreError::new(
+                        "upsert_file_observation_paths",
+                        error.to_string(),
+                    )
+                })?;
+        }
+        Ok(())
+    }
+
+    fn upsert_file_path_sets(
+        &mut self,
+        path_sets: &[FilePathSetWrite],
+    ) -> Result<(), SemanticActionStoreError> {
+        if path_sets.is_empty() {
+            return Ok(());
+        }
+        let connection = self.connection().borrow_mut();
+        crate::semantic_actions::path_sets::upsert_file_path_sets(&connection, path_sets)
     }
 }
 
@@ -268,6 +315,29 @@ impl SemanticActionReadStore for SqliteStorage {
             links.push(link);
         }
         Ok(links)
+    }
+
+    fn file_path_set_paths_page(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Option<FilePathSetPathPage>, SemanticActionStoreError> {
+        if self.is_purged(trace_id) {
+            return Err(SemanticActionStoreError::new(
+                "file_path_set_paths_page",
+                "trace has been purged",
+            ));
+        }
+        let connection = self.connection().borrow();
+        crate::semantic_actions::path_sets::file_path_set_paths_page(
+            &connection,
+            trace_id,
+            action_id,
+            offset,
+            limit,
+        )
     }
 }
 

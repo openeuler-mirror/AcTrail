@@ -637,6 +637,7 @@ fn parsed_sse_storage_config_keeps_provider_events_on_sse_stream_action() {
             commands: vec!["xiaoo".to_string()],
         },
         semantic_retention,
+        config_core::daemon::FileObservationConfig::default(),
     );
     let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
 

@@ -16,9 +16,9 @@ use storage_factory::StorageConfig;
 use super::values::ConfigValues;
 use super::{
     AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
-    EnforcementConfig, PayloadConfig, PayloadSocketConfig, PayloadTlsConfig, ProcessSeccompConfig,
-    ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig, SemanticRetentionConfig,
-    SocketPermissions, SseDataPolicy,
+    EnforcementConfig, FileObservationConfig, PayloadConfig, PayloadSocketConfig, PayloadTlsConfig,
+    ProcessSeccompConfig, ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig,
+    SemanticRetentionConfig, SocketPermissions, SseDataPolicy,
 };
 use crate::capture_profile::CaptureProfile;
 use crate::export::ExportConfig;
@@ -53,6 +53,7 @@ pub struct OperatorConfig {
     pub process_seccomp: ProcessSeccompConfig,
     pub agent_invocation: AgentInvocationConfig,
     pub semantic_retention: SemanticRetentionConfig,
+    pub file_observation: FileObservationConfig,
     pub application_protocol: ApplicationProtocolConfig,
     pub resource_metrics: ResourceMetricsConfig,
     pub provider_rule_set: Option<ProviderRuleSetConfig>,
@@ -125,6 +126,7 @@ impl OperatorConfig {
         let agent_invocation = sections::agent_invocation_config(values.node("agent_invocation"))?;
         let semantic_retention =
             sections::semantic_retention_config(values.node("semantic_retention"))?;
+        let file_observation = sections::file_observation_config(values.node("file_observation"))?;
         let application_protocol = sections::application_protocol_config(
             values.node("application_protocol"),
             values.node("application_http"),
@@ -182,6 +184,7 @@ impl OperatorConfig {
             process_seccomp,
             agent_invocation,
             semantic_retention,
+            file_observation,
             application_protocol,
             resource_metrics,
             provider_rule_set,

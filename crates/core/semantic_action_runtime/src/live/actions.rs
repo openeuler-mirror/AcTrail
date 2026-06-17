@@ -5,23 +5,25 @@ use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use semantic_action::{
     SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionStatus,
-    SemanticEvidence, SemanticEvidenceKind,
+    SemanticEvidence, SemanticEvidenceKind, attr_keys as attrs, evidence_roles,
 };
 
-pub(super) const ATTR_AGENT_IDENTITY_STATUS: &str = "agent.identity.status";
-pub(super) const ATTR_AGENT_IDENTITY_SOURCE: &str = "agent.identity.source";
-pub(super) const ATTR_AGENT_IDENTITY_EVIDENCE_ACTION_ID: &str = "agent.identity.evidence_action_id";
-pub(super) const ATTR_AGENT_INVOCATION_TRIGGER: &str = "agent.invocation.trigger";
+pub(super) const ATTR_AGENT_IDENTITY_STATUS: &str = attrs::agent::IDENTITY_STATUS;
+pub(super) const ATTR_AGENT_IDENTITY_SOURCE: &str = attrs::agent::IDENTITY_SOURCE;
+pub(super) const ATTR_AGENT_IDENTITY_EVIDENCE_ACTION_ID: &str =
+    attrs::agent::IDENTITY_EVIDENCE_ACTION_ID;
+pub(super) const ATTR_AGENT_INVOCATION_TRIGGER: &str = attrs::agent_invocation::TRIGGER;
 pub(super) const ATTR_AGENT_INVOCATION_EVIDENCE_ACTION_ID: &str =
-    "agent.invocation.evidence_action_id";
-pub(super) const ATTR_LINK_VALID: &str = "actrail.link.valid";
+    attrs::agent_invocation::EVIDENCE_ACTION_ID;
+pub(super) const ATTR_LINK_VALID: &str = attrs::actrail::LINK_VALID;
 pub(super) const LINK_VALID_FALSE: &str = "false";
-pub(super) const ATTR_PROCESS_PARENT_GENERATION: &str = "process.parent.generation";
-pub(super) const ATTR_PROCESS_PARENT_IDENTITY_STATE: &str = "process.parent.identity_state";
-pub(super) const ATTR_PROCESS_PARENT_PID: &str = "process.parent.pid";
-pub(super) const ATTR_PROCESS_PARENT_PID_NAMESPACE: &str = "process.parent.pid_namespace";
-pub(super) const ATTR_PROCESS_PARENT_START_TIME_TICKS: &str = "process.parent.start_time_ticks";
-pub(super) const ATTR_PROCESS_PARENT_TASK_ID: &str = "process.parent.task_id";
+pub(super) const ATTR_PROCESS_PARENT_GENERATION: &str = attrs::process_parent::GENERATION;
+pub(super) const ATTR_PROCESS_PARENT_IDENTITY_STATE: &str = attrs::process_parent::IDENTITY_STATE;
+pub(super) const ATTR_PROCESS_PARENT_PID: &str = attrs::process_parent::PID;
+pub(super) const ATTR_PROCESS_PARENT_PID_NAMESPACE: &str = attrs::process_parent::PID_NAMESPACE;
+pub(super) const ATTR_PROCESS_PARENT_START_TIME_TICKS: &str =
+    attrs::process_parent::START_TIME_TICKS;
+pub(super) const ATTR_PROCESS_PARENT_TASK_ID: &str = attrs::process_parent::TASK_ID;
 pub(super) const PROCESS_PARENT_IDENTITY_STATE_CONFLICT: &str = "conflict";
 pub(super) const PROCESS_PARENT_IDENTITY_STATE_OBSERVED: &str = "observed";
 
@@ -31,7 +33,7 @@ pub(super) fn process_exec_action(event: &DomainEvent) -> SemanticAction {
     };
     let mut attributes = payload.metadata.clone();
     if let Some(executable) = &payload.executable {
-        attributes.insert("process.executable".to_string(), executable.clone());
+        attributes.insert(attrs::process::EXECUTABLE.to_string(), executable.clone());
     }
     if let Some(parent) = &payload.parent {
         insert_parent_identity_attributes(&mut attributes, parent);
@@ -51,7 +53,7 @@ pub(super) fn process_exec_action(event: &DomainEvent) -> SemanticAction {
         completeness: SemanticActionCompleteness::Complete,
         confidence_millis: None,
         attributes,
-        evidence: vec![event_evidence(event, "process.exec")],
+        evidence: vec![event_evidence(event, evidence_roles::process::EXEC)],
     }
 }
 
@@ -60,9 +62,12 @@ pub(super) fn process_fork_attempt_action(event: &DomainEvent) -> SemanticAction
         unreachable!("process_fork_attempt_action only receives process events")
     };
     let mut attributes = payload.metadata.clone();
-    attributes.insert("process.operation".to_string(), payload.operation.clone());
+    attributes.insert(
+        attrs::process::OPERATION.to_string(),
+        payload.operation.clone(),
+    );
     SemanticAction {
-        action_id: event_action_id(event, "process.fork_attempt"),
+        action_id: event_action_id(event, SemanticActionKind::ProcessForkAttempt.as_str()),
         trace_id: event.envelope.trace_id,
         kind: SemanticActionKind::ProcessForkAttempt,
         title: attributes
@@ -76,7 +81,7 @@ pub(super) fn process_fork_attempt_action(event: &DomainEvent) -> SemanticAction
         completeness: SemanticActionCompleteness::Complete,
         confidence_millis: None,
         attributes,
-        evidence: vec![event_evidence(event, "process.fork_attempt")],
+        evidence: vec![event_evidence(event, evidence_roles::process::FORK_ATTEMPT)],
     }
 }
 
@@ -92,15 +97,18 @@ pub(super) fn file_modify_action(event: &DomainEvent) -> SemanticAction {
         unreachable!("file_modify_action only receives file events")
     };
     let mut attributes = payload.metadata.clone();
-    attributes.insert("file.operation".to_string(), payload.operation.clone());
+    attributes.insert(
+        attrs::file::OPERATION.to_string(),
+        payload.operation.clone(),
+    );
     if let Some(path) = &payload.path {
-        attributes.insert("file.path".to_string(), path.clone());
+        attributes.insert(attrs::file::PATH.to_string(), path.clone());
     }
     if let Some(result) = payload.result {
-        attributes.insert("syscall.result".to_string(), result.to_string());
+        attributes.insert(attrs::syscall::RESULT.to_string(), result.to_string());
     }
     SemanticAction {
-        action_id: event_action_id(event, "file.modify"),
+        action_id: event_action_id(event, SemanticActionKind::FileModify.as_str()),
         trace_id: event.envelope.trace_id,
         kind: SemanticActionKind::FileModify,
         title: payload
@@ -114,7 +122,10 @@ pub(super) fn file_modify_action(event: &DomainEvent) -> SemanticAction {
         completeness: SemanticActionCompleteness::Complete,
         confidence_millis: None,
         attributes,
-        evidence: vec![event_evidence(event, "file.modify")],
+        evidence: vec![event_evidence(
+            event,
+            SemanticActionKind::FileModify.as_str(),
+        )],
     }
 }
 
@@ -123,14 +134,20 @@ pub(super) fn http_message_action(event: &DomainEvent) -> SemanticAction {
         unreachable!("http_message_action only receives application events")
     };
     let mut attributes = payload.metadata.clone();
-    attributes.insert("network.protocol.name".to_string(), "http".to_string());
     attributes.insert(
-        "network.protocol.version".to_string(),
+        attrs::network::PROTOCOL_NAME.to_string(),
+        "http".to_string(),
+    );
+    attributes.insert(
+        attrs::network::PROTOCOL_VERSION.to_string(),
         payload.protocol.clone(),
     );
-    attributes.insert("http.operation".to_string(), payload.operation.clone());
+    attributes.insert(
+        attrs::http::OPERATION.to_string(),
+        payload.operation.clone(),
+    );
     SemanticAction {
-        action_id: event_action_id(event, "http.message"),
+        action_id: event_action_id(event, SemanticActionKind::HttpMessage.as_str()),
         trace_id: event.envelope.trace_id,
         kind: SemanticActionKind::HttpMessage,
         title: payload.summary.clone(),
@@ -141,7 +158,10 @@ pub(super) fn http_message_action(event: &DomainEvent) -> SemanticAction {
         completeness: SemanticActionCompleteness::Complete,
         confidence_millis: None,
         attributes,
-        evidence: vec![event_evidence(event, "http.message")],
+        evidence: vec![event_evidence(
+            event,
+            SemanticActionKind::HttpMessage.as_str(),
+        )],
     }
 }
 
@@ -150,21 +170,30 @@ pub(super) fn enforcement_action(event: &DomainEvent) -> SemanticAction {
         unreachable!("enforcement_action only receives enforcement events")
     };
     let mut attributes = payload.metadata.clone();
-    attributes.insert("enforcement.backend".to_string(), payload.backend.clone());
     attributes.insert(
-        "enforcement.operation".to_string(),
+        attrs::enforcement::BACKEND.to_string(),
+        payload.backend.clone(),
+    );
+    attributes.insert(
+        attrs::enforcement::OPERATION.to_string(),
         payload.operation.clone(),
     );
-    attributes.insert("enforcement.decision".to_string(), payload.decision.clone());
-    attributes.insert("enforcement.result".to_string(), payload.result.clone());
+    attributes.insert(
+        attrs::enforcement::DECISION.to_string(),
+        payload.decision.clone(),
+    );
+    attributes.insert(
+        attrs::enforcement::RESULT.to_string(),
+        payload.result.clone(),
+    );
     if let Some(path) = &payload.path {
-        attributes.insert("file.path".to_string(), path.clone());
+        attributes.insert(attrs::file::PATH.to_string(), path.clone());
     }
     if let Some(rule_id) = &payload.rule_id {
-        attributes.insert("enforcement.rule_id".to_string(), rule_id.clone());
+        attributes.insert(attrs::enforcement::RULE_ID.to_string(), rule_id.clone());
     }
     SemanticAction {
-        action_id: event_action_id(event, "enforcement.decision"),
+        action_id: event_action_id(event, SemanticActionKind::EnforcementDecision.as_str()),
         trace_id: event.envelope.trace_id,
         kind: SemanticActionKind::EnforcementDecision,
         title: format!("{} {}", payload.decision, payload.operation),
@@ -175,7 +204,10 @@ pub(super) fn enforcement_action(event: &DomainEvent) -> SemanticAction {
         completeness: SemanticActionCompleteness::Complete,
         confidence_millis: None,
         attributes,
-        evidence: vec![event_evidence(event, "enforcement.decision")],
+        evidence: vec![event_evidence(
+            event,
+            SemanticActionKind::EnforcementDecision.as_str(),
+        )],
     }
 }
 

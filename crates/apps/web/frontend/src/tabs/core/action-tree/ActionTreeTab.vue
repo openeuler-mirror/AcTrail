@@ -117,8 +117,16 @@ async function selectNode(node) {
 }
 
 function fullActionDetail(currentDetail, action) {
+  const pathSetDetail =
+    (action.kind === 'file.bulk_read' || action.kind === 'fs.enumerate')
+      ? {
+          filePathSetActionId: action.id,
+          filePathSetPageSize: UI_LIMITS.actionTreeChildPageSize,
+        }
+      : {};
   return {
     ...currentDetail,
+    ...pathSetDetail,
     rows: {
       ...(currentDetail.rows ?? {}),
       evidence: action.evidence?.length ?? 0,

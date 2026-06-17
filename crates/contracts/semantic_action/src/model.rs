@@ -12,6 +12,9 @@ pub enum SemanticActionKind {
     FileModify,
     FileRead,
     FileWrite,
+    FileTtyIo,
+    FileBulkRead,
+    FsEnumerate,
     HttpMessage,
     LlmCall,
     LlmRequest,
@@ -31,6 +34,9 @@ impl SemanticActionKind {
             Self::FileModify => "file.modify",
             Self::FileRead => "file.read",
             Self::FileWrite => "file.write",
+            Self::FileTtyIo => "file.tty_io",
+            Self::FileBulkRead => "file.bulk_read",
+            Self::FsEnumerate => "fs.enumerate",
             Self::HttpMessage => "http.message",
             Self::LlmCall => "llm.call",
             Self::LlmRequest => "llm.request",
@@ -50,6 +56,9 @@ impl SemanticActionKind {
             "file.modify" => Some(Self::FileModify),
             "file.read" => Some(Self::FileRead),
             "file.write" => Some(Self::FileWrite),
+            "file.tty_io" => Some(Self::FileTtyIo),
+            "file.bulk_read" => Some(Self::FileBulkRead),
+            "fs.enumerate" => Some(Self::FsEnumerate),
             "http.message" => Some(Self::HttpMessage),
             "llm.call" => Some(Self::LlmCall),
             "llm.request" => Some(Self::LlmRequest),
@@ -167,6 +176,71 @@ pub struct SemanticAction {
     pub confidence_millis: Option<u16>,
     pub attributes: BTreeMap<String, String>,
     pub evidence: Vec<SemanticEvidence>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FileObservationPath {
+    pub trace_id: TraceId,
+    pub action_id: String,
+    pub path_order: u32,
+    pub path: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FilePathSetState {
+    Pending,
+    Complete,
+    Overflow,
+}
+
+impl FilePathSetState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Complete => "complete",
+            Self::Overflow => "overflow",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "pending" => Some(Self::Pending),
+            "complete" => Some(Self::Complete),
+            "overflow" => Some(Self::Overflow),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FilePathSetWrite {
+    pub trace_id: TraceId,
+    pub action_id: String,
+    pub path_set_id: String,
+    pub state: FilePathSetState,
+    pub unique_path_count: u64,
+    pub stored_path_count: u64,
+    pub chunking_scheme: String,
+    pub chunk_max_paths: u32,
+    pub paths: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FilePathSetPath {
+    pub path_id: u64,
+    pub path: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FilePathSetPathPage {
+    pub path_set_id: String,
+    pub action_id: String,
+    pub state: FilePathSetState,
+    pub unique_path_count: u64,
+    pub stored_path_count: u64,
+    pub chunking_scheme: String,
+    pub paths: Vec<FilePathSetPath>,
+    pub total_count: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]

@@ -4,7 +4,7 @@ use model_core::ids::TraceId;
 use model_core::process::ProcessMembership;
 use semantic_action::{
     SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkConfidence,
-    SemanticActionLinkRole,
+    SemanticActionLinkRole, attr_keys as attrs,
 };
 
 use super::index::LineageIndex;
@@ -241,6 +241,9 @@ fn command_child_role(action: &SemanticAction) -> Option<SemanticActionLinkRole>
         SemanticActionKind::FileRead
             | SemanticActionKind::FileWrite
             | SemanticActionKind::FileModify
+            | SemanticActionKind::FileTtyIo
+            | SemanticActionKind::FileBulkRead
+            | SemanticActionKind::FsEnumerate
     )
     .then_some(SemanticActionLinkRole::CommandContainsFileAccess)
     .or_else(|| {
@@ -272,6 +275,9 @@ fn agent_child_candidate(action: &SemanticAction) -> bool {
             | SemanticActionKind::FileRead
             | SemanticActionKind::FileWrite
             | SemanticActionKind::FileModify
+            | SemanticActionKind::FileTtyIo
+            | SemanticActionKind::FileBulkRead
+            | SemanticActionKind::FsEnumerate
             | SemanticActionKind::ProcessForkAttempt
     )
 }
@@ -279,7 +285,10 @@ fn agent_child_candidate(action: &SemanticAction) -> bool {
 fn is_nested_file_write_event(action: &SemanticAction) -> bool {
     action.kind == SemanticActionKind::FileModify
         && matches!(
-            action.attributes.get("file.operation").map(String::as_str),
+            action
+                .attributes
+                .get(attrs::file::OPERATION)
+                .map(String::as_str),
             Some("write" | "writev")
         )
 }

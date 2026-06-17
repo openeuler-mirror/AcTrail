@@ -30,17 +30,30 @@ pub(super) fn decode(
     direction: &'static str,
     file_tracker: &mut FileTracker,
 ) -> Result<Option<RawCollectorEvent>, DecodeError> {
+    if bindings.trace_has_capability(event.trace_id, &Capability::FsAccessBasic) {
+        if let Some(path) = file_tracker.resolve_fd_path(event.pid, event.fd) {
+            let metadata = tracked_file_metadata(&event, operation, direction, &path);
+            return Ok(Some(RawCollectorEvent {
+                envelope: RawEventEnvelope {
+                    observed_at: SystemTime::now(),
+                    process: identity,
+                    collector: CollectorName::new("ebpf"),
+                },
+                payload: RawObservationPayload::File {
+                    operation: operation.to_string(),
+                    path: Some(path),
+                    metadata,
+                },
+            }));
+        }
+    }
+    if !ipc_observation_enabled(bindings, event.trace_id) {
+        return Ok(None);
+    }
     let observation = resolve_fd_observation(event.pid, event.fd)
         .map_err(|error| DecodeError::new("fd_observation", error))?;
     let Some(observation) = observation else {
-        return decode_tracked_file(
-            event,
-            bindings,
-            identity,
-            operation,
-            direction,
-            file_tracker,
-        );
+        return Ok(None);
     };
     let metadata = fd_io_metadata(&event, operation, direction, &observation);
     if ipc_capability_enabled(observation.kind, bindings, event.trace_id) {
@@ -57,52 +70,7 @@ pub(super) fn decode(
             },
         }));
     }
-    if observation.kind == FdTargetKind::RegularFile
-        && bindings.trace_has_capability(event.trace_id, &Capability::FsAccessBasic)
-    {
-        return Ok(Some(RawCollectorEvent {
-            envelope: RawEventEnvelope {
-                observed_at: SystemTime::now(),
-                process: identity,
-                collector: CollectorName::new("ebpf"),
-            },
-            payload: RawObservationPayload::File {
-                operation: operation.to_string(),
-                path: Some(observation.target),
-                metadata,
-            },
-        }));
-    }
     Ok(None)
-}
-
-fn decode_tracked_file(
-    event: KernelObservationEvent,
-    bindings: &BindingStateMap,
-    identity: ProcessIdentity,
-    operation: &'static str,
-    direction: &'static str,
-    file_tracker: &mut FileTracker,
-) -> Result<Option<RawCollectorEvent>, DecodeError> {
-    if !bindings.trace_has_capability(event.trace_id, &Capability::FsAccessBasic) {
-        return Ok(None);
-    }
-    let Some(path) = file_tracker.resolve_fd_path(event.pid, event.fd) else {
-        return Ok(None);
-    };
-    let metadata = tracked_file_metadata(&event, operation, direction, &path);
-    Ok(Some(RawCollectorEvent {
-        envelope: RawEventEnvelope {
-            observed_at: SystemTime::now(),
-            process: identity,
-            collector: CollectorName::new("ebpf"),
-        },
-        payload: RawObservationPayload::File {
-            operation: operation.to_string(),
-            path: Some(path),
-            metadata,
-        },
-    }))
 }
 
 fn fd_io_metadata(
@@ -193,6 +161,11 @@ fn ipc_capability_enabled(
         }
         FdTargetKind::RegularFile | FdTargetKind::Socket | FdTargetKind::Other => false,
     }
+}
+
+fn ipc_observation_enabled(bindings: &BindingStateMap, trace_id: model_core::ids::TraceId) -> bool {
+    bindings.trace_has_capability(trace_id, &Capability::IpcPipeFifo)
+        || bindings.trace_has_capability(trace_id, &Capability::IpcUnixSocket)
 }
 
 fn fd_target_kind(kind: FdTargetKind) -> &'static str {

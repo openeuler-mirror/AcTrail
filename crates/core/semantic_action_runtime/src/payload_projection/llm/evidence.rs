@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use model_core::payload::PayloadSegment;
-use semantic_action::{SemanticEvidence, SemanticEvidenceKind};
+use semantic_action::{SemanticEvidence, SemanticEvidenceKind, attr_keys as attrs};
 
 pub(super) fn payload_aggregate_evidence(
     segments: &[&PayloadSegment],
@@ -28,27 +28,27 @@ pub(super) fn insert_payload_span_attributes(
     };
     let last = segments.last().copied().unwrap_or(first);
     attributes.insert(
-        "payload.aggregate.first_segment_id".to_string(),
+        attrs::payload_aggregate::FIRST_SEGMENT_ID.to_string(),
         first.segment_id.get().to_string(),
     );
     attributes.insert(
-        "payload.aggregate.last_segment_id".to_string(),
+        attrs::payload_aggregate::LAST_SEGMENT_ID.to_string(),
         last.segment_id.get().to_string(),
     );
     attributes.insert(
-        "payload.sequence_start".to_string(),
+        attrs::payload::SEQUENCE_START.to_string(),
         first.sequence.to_string(),
     );
     attributes.insert(
-        "payload.sequence_end".to_string(),
+        attrs::payload::SEQUENCE_END.to_string(),
         last.sequence.to_string(),
     );
     attributes.insert(
-        "payload.operation_ids".to_string(),
+        attrs::payload::OPERATION_IDS.to_string(),
         payload_operation_ids(segments),
     );
     attributes.insert(
-        "payload.segment_count".to_string(),
+        attrs::payload::SEGMENT_COUNT.to_string(),
         segments.len().to_string(),
     );
 }

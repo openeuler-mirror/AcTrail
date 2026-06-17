@@ -18,14 +18,6 @@ use crate::services::attach::StorageAttachService;
 use crate::services::live::next_diagnostic_id_from_seed;
 
 impl StorageAttachService {
-    pub(super) fn observe_semantic_actions_for_event(
-        &mut self,
-        event: &DomainEvent,
-    ) -> SemanticActionBatch {
-        let output = self.semantic_actions.observe_event(event);
-        SemanticActionBatch::from_parts(output.actions, output.links)
-    }
-
     pub(super) fn write_semantic_action_batch(
         &mut self,
         batch: SemanticActionBatch,
@@ -72,7 +64,12 @@ impl StorageAttachService {
         finished_at: std::time::SystemTime,
     ) -> SemanticActionBatch {
         let output = self.semantic_actions.finalize_trace(trace_id, finished_at);
-        SemanticActionBatch::from_parts(output.actions, output.links)
+        SemanticActionBatch::from_action_output(
+            output.actions,
+            output.links,
+            output.file_observation_paths,
+            output.file_path_sets,
+        )
     }
 
     pub(super) fn finalize_semantic_projection_for_trace(

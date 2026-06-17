@@ -50,11 +50,13 @@ enum actrail_file_syscall_id {
     ACTRAIL_FILE_SYSCALL_FCNTL = 19,
     ACTRAIL_FILE_SYSCALL_CHDIR = 20,
     ACTRAIL_FILE_SYSCALL_FCHDIR = 21,
+    ACTRAIL_FILE_SYSCALL_OPENAT2 = 22,
 };
 
 enum actrail_file_syscall_arg_count {
     ACTRAIL_FILE_SYSCALL_ARGC_CHDIR = 1,
     ACTRAIL_FILE_SYSCALL_ARGC_CLOSE = 1,
+    ACTRAIL_FILE_SYSCALL_ARGC_CREAT = 2,
     ACTRAIL_FILE_SYSCALL_ARGC_DUP = 1,
     ACTRAIL_FILE_SYSCALL_ARGC_DUP2 = 2,
     ACTRAIL_FILE_SYSCALL_ARGC_DUP3 = 3,
@@ -62,7 +64,9 @@ enum actrail_file_syscall_arg_count {
     ACTRAIL_FILE_SYSCALL_ARGC_FCNTL = 3,
     ACTRAIL_FILE_SYSCALL_ARGC_MKDIRAT = 3,
     ACTRAIL_FILE_SYSCALL_ARGC_MMAP = 6,
+    ACTRAIL_FILE_SYSCALL_ARGC_OPEN = 3,
     ACTRAIL_FILE_SYSCALL_ARGC_OPENAT = 4,
+    ACTRAIL_FILE_SYSCALL_ARGC_OPENAT2 = 4,
     ACTRAIL_FILE_SYSCALL_ARGC_RENAMEAT = 4,
     ACTRAIL_FILE_SYSCALL_ARGC_UNLINKAT = 3,
 };
@@ -266,22 +270,6 @@ static __always_inline int emit_file_enter(
     }
     bpf_ringbuf_submit(event, 0);
     return 0;
-}
-
-static __always_inline int emit_file_openat_enter(
-    struct trace_event_raw_sys_enter *ctx
-) {
-    return emit_file_enter(
-        ctx,
-        file_enter_descriptor(
-            ACTRAIL_FILE_OPEN,
-            ACTRAIL_FILE_SYSCALL_OPENAT,
-            ACTRAIL_FILE_SYSCALL_ARGC_OPENAT
-        ),
-        ACTRAIL_FILE_FD_MISSING,
-        (__u64)ctx->args[1],
-        0
-    );
 }
 
 static __always_inline int emit_file_unlinkat_enter(

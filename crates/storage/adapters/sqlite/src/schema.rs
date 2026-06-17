@@ -147,6 +147,53 @@ CREATE TABLE IF NOT EXISTS semantic_action_link_evidence (
     PRIMARY KEY (trace_id, parent_action_id, child_action_id, role, evidence_order)
 );
 
+CREATE TABLE IF NOT EXISTS file_observation_paths (
+    trace_id INTEGER NOT NULL,
+    action_id TEXT NOT NULL,
+    path_order INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    PRIMARY KEY (trace_id, action_id, path)
+);
+
+CREATE TABLE IF NOT EXISTS file_paths (
+    path_id INTEGER PRIMARY KEY,
+    trace_id INTEGER NOT NULL,
+    path_hash TEXT NOT NULL,
+    path_text TEXT NOT NULL,
+    UNIQUE (trace_id, path_hash, path_text)
+);
+
+CREATE TABLE IF NOT EXISTS file_path_sets (
+    trace_id INTEGER NOT NULL,
+    path_set_id TEXT NOT NULL,
+    action_id TEXT NOT NULL,
+    state TEXT NOT NULL,
+    unique_path_count INTEGER NOT NULL,
+    stored_path_count INTEGER NOT NULL,
+    chunking_scheme TEXT NOT NULL,
+    PRIMARY KEY (trace_id, path_set_id),
+    UNIQUE (trace_id, action_id)
+);
+
+CREATE TABLE IF NOT EXISTS file_path_set_chunks (
+    trace_id INTEGER NOT NULL,
+    chunk_id TEXT NOT NULL,
+    chunk_hash TEXT NOT NULL,
+    item_count INTEGER NOT NULL,
+    encoded_sorted_path_ids TEXT NOT NULL,
+    chunking_scheme TEXT NOT NULL,
+    PRIMARY KEY (trace_id, chunk_id),
+    UNIQUE (trace_id, chunking_scheme, chunk_hash, encoded_sorted_path_ids)
+);
+
+CREATE TABLE IF NOT EXISTS file_path_set_chunk_refs (
+    trace_id INTEGER NOT NULL,
+    path_set_id TEXT NOT NULL,
+    chunk_order INTEGER NOT NULL,
+    chunk_id TEXT NOT NULL,
+    PRIMARY KEY (trace_id, path_set_id, chunk_order)
+);
+
 CREATE TABLE IF NOT EXISTS diagnostics (
     diagnostic_id INTEGER PRIMARY KEY,
     trace_id INTEGER,
@@ -193,6 +240,23 @@ CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_child_role ON semanti
     trace_id,
     child_action_id,
     role
+);
+
+CREATE INDEX IF NOT EXISTS idx_file_observation_paths_action_order ON file_observation_paths (
+    trace_id,
+    action_id,
+    path_order
+);
+
+CREATE INDEX IF NOT EXISTS idx_file_paths_trace_text ON file_paths (
+    trace_id,
+    path_text
+);
+
+CREATE INDEX IF NOT EXISTS idx_file_path_set_refs_path_set ON file_path_set_chunk_refs (
+    trace_id,
+    path_set_id,
+    chunk_order
 );
 "#;
 

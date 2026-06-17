@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use semantic_action::{
     SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionStatus,
+    attr_keys as attrs,
 };
 
 use crate::live::actions::{append_missing_evidence, llm_call_action_id_from_request_action_id};
@@ -56,25 +57,25 @@ fn llm_call_from_request_response(
 ) -> SemanticAction {
     let mut attributes = BTreeMap::new();
     attributes.insert(
-        "llm.call.request_action_id".to_string(),
+        attrs::llm_call::REQUEST_ACTION_ID.to_string(),
         request.action_id.clone(),
     );
     if let Some(response) = response {
         attributes.insert(
-            "llm.call.response_action_id".to_string(),
+            attrs::llm_call::RESPONSE_ACTION_ID.to_string(),
             response.action_id.clone(),
         );
     }
     if let Some(model) = request
         .attributes
-        .get("llm.request.model")
-        .or_else(|| response.and_then(|action| action.attributes.get("llm.response.model")))
+        .get(attrs::llm_request::MODEL)
+        .or_else(|| response.and_then(|action| action.attributes.get(attrs::llm_response::MODEL)))
     {
-        attributes.insert("llm.call.model".to_string(), model.clone());
+        attributes.insert(attrs::llm_call::MODEL.to_string(), model.clone());
     }
-    copy_attr(request, &mut attributes, "payload.stream_key");
-    copy_attr(request, &mut attributes, "payload.operation_id");
-    copy_attr(request, &mut attributes, "http.request.stream_id");
+    copy_attr(request, &mut attributes, attrs::payload::STREAM_KEY);
+    copy_attr(request, &mut attributes, attrs::payload::OPERATION_ID);
+    copy_attr(request, &mut attributes, attrs::http_request::STREAM_ID);
 
     let mut evidence = request.evidence.clone();
     if let Some(response) = response {
@@ -87,7 +88,7 @@ fn llm_call_from_request_response(
         .map(|action| merge_llm_call_completeness(request.completeness, action.completeness))
         .unwrap_or(SemanticActionCompleteness::Partial);
     let title = attributes
-        .get("llm.call.model")
+        .get(attrs::llm_call::MODEL)
         .map(|model| format!("LLM call {model}"))
         .unwrap_or_else(|| "LLM call".to_string());
 
@@ -137,15 +138,15 @@ fn llm_actions_share_stream(request: &SemanticAction, response: &SemanticAction)
         && response.kind == SemanticActionKind::LlmResponse
         && request.trace_id == response.trace_id
         && request.process == response.process
-        && request.attributes.get("payload.stream_key")
-            == response.attributes.get("payload.stream_key")
+        && request.attributes.get(attrs::payload::STREAM_KEY)
+            == response.attributes.get(attrs::payload::STREAM_KEY)
         && http_stream_ids_are_compatible(request, response)
 }
 
 fn http_stream_ids_are_compatible(request: &SemanticAction, response: &SemanticAction) -> bool {
     match (
-        request.attributes.get("http.request.stream_id"),
-        response.attributes.get("http.response.stream_id"),
+        request.attributes.get(attrs::http_request::STREAM_ID),
+        response.attributes.get(attrs::http_response::STREAM_ID),
     ) {
         (Some(request_stream_id), Some(response_stream_id)) => {
             request_stream_id == response_stream_id

@@ -2,26 +2,26 @@ use std::collections::BTreeMap;
 
 use semantic_action::{
     SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkRole,
-    SemanticEvidenceKind,
+    SemanticEvidenceKind, attr_keys as attrs,
 };
 
-const LINK_VALID_ATTR: &str = "actrail.link.valid";
+const LINK_VALID_ATTR: &str = attrs::actrail::LINK_VALID;
 const VALID_FALSE: &str = "false";
-const PROCESS_PARENT_IDENTITY_STATE_ATTR: &str = "process.parent.identity_state";
+const PROCESS_PARENT_IDENTITY_STATE_ATTR: &str = attrs::process_parent::IDENTITY_STATE;
 const PROCESS_PARENT_IDENTITY_STATE_CONFLICT: &str = "conflict";
 const DIRECTION_ATTR: &str = "direction";
 const DIRECTION_INBOUND: &str = "inbound";
 const DIRECTION_OUTBOUND: &str = "outbound";
 const PAYLOAD_SEGMENT_ID_ATTR: &str = "payload_segment_id";
 const PAYLOAD_SEQUENCE_ATTR: &str = "payload_sequence";
-const PAYLOAD_STREAM_KEY_ATTR: &str = "payload.stream_key";
+const PAYLOAD_STREAM_KEY_ATTR: &str = attrs::payload::STREAM_KEY;
 const STREAM_KEY_ATTR: &str = "stream_key";
-const HTTP_RESPONSE_STATUS_CODE_ATTR: &str = "http.response.status_code";
-const HTTP_RESPONSE_STREAM_ID_ATTR: &str = "http.response.stream_id";
+const HTTP_RESPONSE_STATUS_CODE_ATTR: &str = attrs::http_response::STATUS_CODE;
+const HTTP_RESPONSE_STREAM_ID_ATTR: &str = attrs::http_response::STREAM_ID;
 const STATUS_CODE_ATTR: &str = "status_code";
-const PAYLOAD_SEQUENCE_LLM_ATTR: &str = "payload.sequence";
-const PAYLOAD_SEQUENCE_START_LLM_ATTR: &str = "payload.sequence_start";
-const PAYLOAD_SEQUENCE_END_LLM_ATTR: &str = "payload.sequence_end";
+const PAYLOAD_SEQUENCE_LLM_ATTR: &str = attrs::payload::SEQUENCE;
+const PAYLOAD_SEQUENCE_START_LLM_ATTR: &str = attrs::payload::SEQUENCE_START;
+const PAYLOAD_SEQUENCE_END_LLM_ATTR: &str = attrs::payload::SEQUENCE_END;
 const HTTP_MESSAGE_STREAM_ID_ATTR: &str = "stream_id";
 
 pub(super) fn invalid_link(

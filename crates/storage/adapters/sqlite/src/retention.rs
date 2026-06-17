@@ -97,6 +97,42 @@ impl RetentionStore for SqliteStorage {
             })?;
         transaction
             .execute(
+                "DELETE FROM file_observation_paths WHERE trace_id = ?1",
+                params![trace_id.get()],
+            )
+            .map_err(|error| {
+                RetentionError::new("delete_file_observation_paths", error.to_string())
+            })?;
+        transaction
+            .execute(
+                "DELETE FROM file_path_set_chunk_refs WHERE trace_id = ?1",
+                params![trace_id.get()],
+            )
+            .map_err(|error| {
+                RetentionError::new("delete_file_path_set_chunk_refs", error.to_string())
+            })?;
+        transaction
+            .execute(
+                "DELETE FROM file_path_set_chunks WHERE trace_id = ?1",
+                params![trace_id.get()],
+            )
+            .map_err(|error| {
+                RetentionError::new("delete_file_path_set_chunks", error.to_string())
+            })?;
+        transaction
+            .execute(
+                "DELETE FROM file_path_sets WHERE trace_id = ?1",
+                params![trace_id.get()],
+            )
+            .map_err(|error| RetentionError::new("delete_file_path_sets", error.to_string()))?;
+        transaction
+            .execute(
+                "DELETE FROM file_paths WHERE trace_id = ?1",
+                params![trace_id.get()],
+            )
+            .map_err(|error| RetentionError::new("delete_file_paths", error.to_string()))?;
+        transaction
+            .execute(
                 "DELETE FROM semantic_actions WHERE trace_id = ?1",
                 params![trace_id.get()],
             )

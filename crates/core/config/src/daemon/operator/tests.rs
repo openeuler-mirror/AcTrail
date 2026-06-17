@@ -3,11 +3,12 @@ use super::{
     OperatorConfigInitStatus,
 };
 use crate::daemon::{
-    DiagnosticLogLevel, DisabledOrPath, HttpBodyRetention, HttpHeadersRetention,
-    LlmRequestContentRetention, LlmResponseContentRetention, LlmToolCallRetention,
-    LlmUsageRetention, PayloadBodyContentRetention, PayloadSocketSeccompSyscall,
-    PayloadTlsCaptureBackend, PayloadTlsLibrary, PayloadTlsResolver, PayloadTlsSeccompSyscall,
-    PayloadTlsSource, ProcessSeccompSyscall, SemanticContentOwner, SseEventContentRetention,
+    DiagnosticLogLevel, DisabledOrPath, FileBulkReadMode, FileMetadataRetention,
+    FileRawEventRetention, HttpBodyRetention, HttpHeadersRetention, LlmRequestContentRetention,
+    LlmResponseContentRetention, LlmToolCallRetention, LlmUsageRetention,
+    PayloadBodyContentRetention, PayloadSocketSeccompSyscall, PayloadTlsCaptureBackend,
+    PayloadTlsLibrary, PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource,
+    ProcessSeccompSyscall, SemanticContentOwner, SseEventContentRetention,
 };
 use storage_factory::StorageBackendKind;
 
@@ -61,6 +62,55 @@ fn default_operator_config_is_full_monitor_collection() {
     assert_eq!(
         config.semantic_retention.l4_payload.body_content,
         PayloadBodyContentRetention::None
+    );
+    assert!(config.file_observation.enabled);
+    assert_eq!(
+        config.file_observation.metadata_retention,
+        FileMetadataRetention::Compact
+    );
+    assert!(config.file_observation.tty.enabled);
+    assert_eq!(
+        config.file_observation.tty.raw_event_retention,
+        FileRawEventRetention::ErrorsOnly
+    );
+    assert_eq!(
+        config.file_observation.tty.paths,
+        vec!["/dev/tty".to_string(), "/dev/pts/*".to_string()]
+    );
+    assert_eq!(
+        config.file_observation.tty.operations,
+        vec![
+            "open".to_string(),
+            "close".to_string(),
+            "read".to_string(),
+            "write".to_string(),
+        ]
+    );
+    assert!(config.file_observation.bulk_read.enabled);
+    assert_eq!(
+        config.file_observation.bulk_read.mode,
+        FileBulkReadMode::PathSet
+    );
+    assert_eq!(
+        config.file_observation.bulk_read.raw_event_retention,
+        FileRawEventRetention::ErrorsOnly
+    );
+    assert_eq!(config.file_observation.bulk_read.min_unique_paths, 128);
+    assert_eq!(config.file_observation.bulk_read.max_paths_per_set, 4096);
+    assert_eq!(
+        config.file_observation.bulk_read.path_set_chunk_max_paths,
+        256
+    );
+    assert!(config.file_observation.enumerate.enabled);
+    assert_eq!(
+        config.file_observation.enumerate.raw_event_retention,
+        FileRawEventRetention::ErrorsOnly
+    );
+    assert_eq!(config.file_observation.enumerate.min_unique_paths, 2);
+    assert_eq!(config.file_observation.enumerate.max_paths_per_set, 4096);
+    assert_eq!(
+        config.file_observation.enumerate.path_set_chunk_max_paths,
+        256
     );
     assert!(config.resource_metrics.enabled);
     assert!(config.ebpf_config.file_path_capture_enabled);

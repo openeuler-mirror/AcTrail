@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use model_core::ids::TraceId;
 use semantic_action::{
     SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkConfidence,
-    SemanticActionLinkRole,
+    SemanticActionLinkRole, attr_keys as attrs,
 };
 
 use super::shared::{ActionLinkKey, SemanticActionKey};
@@ -48,7 +48,7 @@ impl LlmExchangeLinkProjector {
                     .collect::<Vec<_>>()
                     .iter()
                     .filter_map(|call| {
-                        call_references_action(call, "llm.call.request_action_id", action)
+                        call_references_action(call, attrs::llm_call::REQUEST_ACTION_ID, action)
                             .then(|| {
                                 self.link(call, action, SemanticActionLinkRole::LlmCallRequest)
                             })
@@ -65,7 +65,7 @@ impl LlmExchangeLinkProjector {
                     .collect::<Vec<_>>()
                     .iter()
                     .filter_map(|call| {
-                        call_references_action(call, "llm.call.response_action_id", action)
+                        call_references_action(call, attrs::llm_call::RESPONSE_ACTION_ID, action)
                             .then(|| {
                                 self.link(call, action, SemanticActionLinkRole::LlmCallResponse)
                             })
@@ -85,7 +85,7 @@ impl LlmExchangeLinkProjector {
     }
 
     fn call_request(&self, call: &SemanticAction) -> Option<SemanticAction> {
-        let action_id = call.attributes.get("llm.call.request_action_id")?;
+        let action_id = call.attributes.get(attrs::llm_call::REQUEST_ACTION_ID)?;
         self.requests
             .values()
             .find(|request| request.action_id == *action_id)
@@ -93,7 +93,7 @@ impl LlmExchangeLinkProjector {
     }
 
     fn call_response(&self, call: &SemanticAction) -> Option<SemanticAction> {
-        let action_id = call.attributes.get("llm.call.response_action_id")?;
+        let action_id = call.attributes.get(attrs::llm_call::RESPONSE_ACTION_ID)?;
         self.responses
             .values()
             .find(|response| response.action_id == *action_id)
@@ -137,11 +137,11 @@ fn call_references_role(
 ) -> bool {
     match role {
         SemanticActionLinkRole::LlmCallRequest => {
-            call_references_action(call, "llm.call.request_action_id", child)
+            call_references_action(call, attrs::llm_call::REQUEST_ACTION_ID, child)
                 && child.kind == SemanticActionKind::LlmRequest
         }
         SemanticActionLinkRole::LlmCallResponse => {
-            call_references_action(call, "llm.call.response_action_id", child)
+            call_references_action(call, attrs::llm_call::RESPONSE_ACTION_ID, child)
                 && child.kind == SemanticActionKind::LlmResponse
         }
         _ => false,

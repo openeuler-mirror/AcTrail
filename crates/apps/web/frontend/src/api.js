@@ -67,6 +67,12 @@ export function readActionDetail(traceId, actionId) {
   return fetchJson(`/api/traces/${traceId}/actions/${encodeURIComponent(actionId)}`);
 }
 
+export function readActionFilePathSet(traceId, actionId, { offset, limit }) {
+  return fetchJson(
+    `/api/traces/${traceId}/actions/${encodeURIComponent(actionId)}/file-path-set?offset=${offset}&limit=${limit}`,
+  );
+}
+
 export function readCommands(traceId) {
   return fetchJson(`/api/traces/${traceId}/commands`);
 }

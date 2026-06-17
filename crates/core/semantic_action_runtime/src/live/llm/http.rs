@@ -1,16 +1,17 @@
 use semantic_action::{
     SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionStatus,
+    attr_keys as attrs,
 };
 
 use crate::live::actions::{append_missing_evidence, llm_call_action_id_from_request_action_id};
 
 const DIRECTION_ATTR: &str = "direction";
 const DIRECTION_INBOUND: &str = "inbound";
-const HTTP_RESPONSE_ACTION_ID_ATTR: &str = "llm.call.http_response_action_id";
-const HTTP_RESPONSE_STATUS_CODE_ATTR: &str = "http.response.status_code";
-const HTTP_REQUEST_STREAM_ID_ATTR: &str = "http.request.stream_id";
-const PAYLOAD_SEQUENCE_ATTR: &str = "payload.sequence";
-const PAYLOAD_STREAM_KEY_ATTR: &str = "payload.stream_key";
+const HTTP_RESPONSE_ACTION_ID_ATTR: &str = attrs::llm_call::HTTP_RESPONSE_ACTION_ID;
+const HTTP_RESPONSE_STATUS_CODE_ATTR: &str = attrs::http_response::STATUS_CODE;
+const HTTP_REQUEST_STREAM_ID_ATTR: &str = attrs::http_request::STREAM_ID;
+const PAYLOAD_SEQUENCE_ATTR: &str = attrs::payload::SEQUENCE;
+const PAYLOAD_STREAM_KEY_ATTR: &str = attrs::payload::STREAM_KEY;
 const STATUS_CODE_ATTR: &str = "status_code";
 const STREAM_KEY_ATTR: &str = "stream_key";
 const HTTP_MESSAGE_STREAM_ID_ATTR: &str = "stream_id";
@@ -33,7 +34,9 @@ pub(super) fn failed_call_for_http_response(
         .copied()
         .find(|action| action.kind == SemanticActionKind::LlmCall && action.action_id == call_id)?;
     if call.status != SemanticActionStatus::InProgress
-        || call.attributes.contains_key("llm.call.response_action_id")
+        || call
+            .attributes
+            .contains_key(attrs::llm_call::RESPONSE_ACTION_ID)
     {
         return None;
     }
@@ -55,7 +58,7 @@ pub(super) fn failed_call_for_http_response(
     if let Some(reason) = http_response.attributes.get("reason") {
         failed
             .attributes
-            .insert("http.response.reason".to_string(), reason.clone());
+            .insert(attrs::http_response::REASON.to_string(), reason.clone());
     }
     append_missing_evidence(&mut failed.evidence, &http_response.evidence);
     Some(failed)

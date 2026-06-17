@@ -3,8 +3,8 @@
 use collector_capability::CollectorDescriptor;
 use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
-    EnforcementConfig, PayloadConfig, ProcessSeccompConfig, ResourceMetricsConfig,
-    RuntimeExportConfig, SeccompNotifyConfig, SemanticRetentionConfig,
+    EnforcementConfig, FileObservationConfig, PayloadConfig, ProcessSeccompConfig,
+    ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig, SemanticRetentionConfig,
 };
 use config_core::provider_rules::ProviderRuleSetConfig;
 use control_contract::reply::ControlError;
@@ -42,6 +42,7 @@ pub(crate) fn build_runtime_wiring(
     process_seccomp: ProcessSeccompConfig,
     agent_invocation: AgentInvocationConfig,
     semantic_retention: SemanticRetentionConfig,
+    file_observation: FileObservationConfig,
     application_protocol: ApplicationProtocolConfig,
     resource_metrics: ResourceMetricsConfig,
     export_runtime: RuntimeExportConfig,
@@ -57,6 +58,7 @@ pub(crate) fn build_runtime_wiring(
         process_seccomp,
         agent_invocation,
         semantic_retention,
+        file_observation,
         application_protocol,
         resource_metrics,
         export_runtime,
@@ -75,6 +77,7 @@ pub(crate) fn build_runtime_wiring_with_provider_rule_set(
     process_seccomp: ProcessSeccompConfig,
     agent_invocation: AgentInvocationConfig,
     semantic_retention: SemanticRetentionConfig,
+    file_observation: FileObservationConfig,
     application_protocol: ApplicationProtocolConfig,
     resource_metrics: ResourceMetricsConfig,
     export_runtime: RuntimeExportConfig,
@@ -94,6 +97,7 @@ pub(crate) fn build_runtime_wiring_with_provider_rule_set(
         process_seccomp,
         agent_invocation,
         semantic_retention,
+        file_observation,
         application_protocol,
         resource_metrics,
         export_runtime,
@@ -112,6 +116,7 @@ fn build_runtime_wiring_with_attach_service(
     process_seccomp: ProcessSeccompConfig,
     agent_invocation: AgentInvocationConfig,
     semantic_retention: SemanticRetentionConfig,
+    file_observation: FileObservationConfig,
     application_protocol: ApplicationProtocolConfig,
     resource_metrics: ResourceMetricsConfig,
     export_runtime_config: RuntimeExportConfig,
@@ -146,6 +151,7 @@ fn build_runtime_wiring_with_attach_service(
             process_seccomp.clone(),
             agent_invocation.clone(),
             semantic_retention.clone(),
+            file_observation.clone(),
             application_protocol.clone(),
             resource_metrics.clone(),
             enforcement,
@@ -163,6 +169,7 @@ fn build_runtime_wiring_with_attach_service(
             process_seccomp.clone(),
             agent_invocation.clone(),
             semantic_retention.clone(),
+            file_observation.clone(),
             application_protocol.clone(),
             resource_metrics.clone(),
             enforcement,

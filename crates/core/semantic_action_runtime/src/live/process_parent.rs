@@ -4,7 +4,7 @@ use std::time::SystemTime;
 use model_core::event::{DomainEvent, EventPayload};
 use model_core::ids::TraceId;
 use model_core::process::{NamespaceIdentity, ProcessIdentity};
-use semantic_action::{SemanticAction, SemanticEvidence};
+use semantic_action::{SemanticAction, SemanticEvidence, evidence_roles};
 
 use super::actions::{
     ATTR_PROCESS_PARENT_GENERATION, ATTR_PROCESS_PARENT_IDENTITY_STATE, ATTR_PROCESS_PARENT_PID,
@@ -41,7 +41,7 @@ pub(super) fn fork_edge_from_event(event: &DomainEvent) -> Option<ForkProcessEdg
         child: event.envelope.process.clone(),
         parent: Some(payload.parent.clone()?),
         observed_at: event.envelope.observed_at,
-        evidence: vec![event_evidence(event, "process.fork")],
+        evidence: vec![event_evidence(event, evidence_roles::process::FORK)],
         conflict: false,
     })
 }

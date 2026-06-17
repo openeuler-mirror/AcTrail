@@ -5,13 +5,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use model_core::ids::TraceId;
 use semantic_action::{
     SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkConfidence,
-    SemanticActionLinkRole,
+    SemanticActionLinkRole, attr_keys as attrs,
 };
 
 use super::shared::ActionLinkKey;
 
-const ATTR_LLM_RESPONSE_ACTION_ID: &str = "llm.response.action_id";
-const ATTR_SSE_STREAM_ACTION_ID: &str = "sse.stream.action_id";
+const ATTR_LLM_RESPONSE_ACTION_ID: &str = attrs::llm_response::ACTION_ID;
+const ATTR_SSE_STREAM_ACTION_ID: &str = attrs::sse::STREAM_ACTION_ID;
 
 #[derive(Default)]
 pub(super) struct SseLinkProjector {

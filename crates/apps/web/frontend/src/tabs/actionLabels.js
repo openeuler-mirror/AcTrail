@@ -1,3 +1,12 @@
+const FILE_ACTION_KINDS = new Set([
+  'file.read',
+  'file.write',
+  'file.modify',
+  'file.tty_io',
+  'file.bulk_read',
+  'fs.enumerate',
+]);
+
 export function semanticActionLabel(action) {
   if (action?.kind === 'command.invocation') {
     if (action.attributes?.['invocation.kind'] === 'agent') {
@@ -13,6 +22,15 @@ export function semanticActionLabel(action) {
   }
   if (action?.kind === 'file.modify') {
     return 'tool.call:file.modify';
+  }
+  if (action?.kind === 'file.tty_io') {
+    return 'tool.call:file.tty_io';
+  }
+  if (action?.kind === 'file.bulk_read') {
+    return 'tool.call:file.bulk_read';
+  }
+  if (action?.kind === 'fs.enumerate') {
+    return 'tool.call:fs.enumerate';
   }
   if (action?.kind === 'agent.invocation') {
     return 'tool.call:agent.invoke';
@@ -45,7 +63,7 @@ export function semanticActionTarget(action) {
   if (action?.kind === 'command.invocation') {
     return attributes['agent.child.command_line'] ?? attributes['command.line'] ?? action.title;
   }
-  if (action?.kind === 'file.read' || action?.kind === 'file.write' || action?.kind === 'file.modify') {
+  if (FILE_ACTION_KINDS.has(action?.kind)) {
     return attributes['file.path'] ?? action.title;
   }
   if (action?.kind === 'agent.invocation') {

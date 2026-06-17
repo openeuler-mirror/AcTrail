@@ -4,8 +4,9 @@ use std::time::{Duration, UNIX_EPOCH};
 use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use semantic_action::{
-    SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionStatus,
-    SemanticActionWriteStore, SemanticEvidence, SemanticEvidenceKind,
+    FilePathSetState, FilePathSetWrite, SemanticAction, SemanticActionCompleteness,
+    SemanticActionKind, SemanticActionReadStore, SemanticActionStatus, SemanticActionWriteStore,
+    SemanticEvidence, SemanticEvidenceKind,
 };
 
 use crate::SqliteStorage;
@@ -46,6 +47,74 @@ fn action_upsert_skips_unchanged_and_splits_row_from_evidence_writes() {
         .expect("write evidence-only action update");
     assert_eq!(audit_count(&storage, "semantic_actions"), 0);
     assert_eq!(audit_count(&storage, "semantic_action_evidence"), 3);
+}
+
+#[test]
+fn file_path_sets_page_paths_and_reuse_identical_chunks() {
+    let mut storage = SqliteStorage::open_in_memory().expect("open in-memory sqlite storage");
+    let trace_id = TraceId::new(1);
+    let first = FilePathSetWrite {
+        trace_id,
+        action_id: "action-1".to_string(),
+        path_set_id: "set-1".to_string(),
+        state: FilePathSetState::Complete,
+        unique_path_count: 3,
+        stored_path_count: 3,
+        chunking_scheme: "path-id-v1:chunk-max=2".to_string(),
+        chunk_max_paths: 2,
+        paths: vec![
+            "/tmp/a".to_string(),
+            "/tmp/b".to_string(),
+            "/tmp/c".to_string(),
+        ],
+    };
+    let mut second = first.clone();
+    second.action_id = "action-2".to_string();
+    second.path_set_id = "set-2".to_string();
+
+    storage
+        .upsert_file_path_sets(&[first, second])
+        .expect("write file path sets");
+
+    assert_eq!(
+        storage
+            .connection()
+            .borrow()
+            .query_row("SELECT COUNT(*) FROM file_paths", [], |row| row
+                .get::<_, i64>(0))
+            .expect("read file_paths count"),
+        3
+    );
+    assert_eq!(
+        storage
+            .connection()
+            .borrow()
+            .query_row("SELECT COUNT(*) FROM file_path_set_chunks", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .expect("read file_path_set_chunks count"),
+        2
+    );
+    assert_eq!(
+        storage
+            .connection()
+            .borrow()
+            .query_row("SELECT COUNT(*) FROM file_path_set_chunk_refs", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .expect("read file_path_set_chunk_refs count"),
+        4
+    );
+
+    let page = storage
+        .file_path_set_paths_page(trace_id, "action-2", 1, 2)
+        .expect("read file path set page")
+        .expect("path set should exist");
+    assert_eq!(page.path_set_id, "set-2");
+    assert_eq!(page.total_count, 3);
+    assert_eq!(page.paths.len(), 2);
+    assert_eq!(page.paths[0].path, "/tmp/b");
+    assert_eq!(page.paths[1].path, "/tmp/c");
 }
 
 fn install_write_audit(storage: &SqliteStorage) {

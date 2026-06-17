@@ -170,6 +170,9 @@ fn span_kind(kind: SemanticActionKind) -> &'static str {
         | SemanticActionKind::FileRead
         | SemanticActionKind::FileWrite
         | SemanticActionKind::FileModify
+        | SemanticActionKind::FileTtyIo
+        | SemanticActionKind::FileBulkRead
+        | SemanticActionKind::FsEnumerate
         | SemanticActionKind::SseStream
         | SemanticActionKind::SseEvent
         | SemanticActionKind::EnforcementDecision => "SPAN_KIND_INTERNAL",

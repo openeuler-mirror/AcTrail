@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use semantic_action::{
     SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkConfidence,
-    SemanticActionLinkRole, SemanticEvidenceKind,
+    SemanticActionLinkRole, SemanticEvidenceKind, attr_keys as attrs,
 };
 
 use crate::live::actions::append_missing_evidence;
@@ -192,7 +192,7 @@ fn response_stream_candidate(llm_action: &SemanticAction, http_message: &Semanti
     }
     if llm_action
         .attributes
-        .get("payload.stream_key")
+        .get(attrs::payload::STREAM_KEY)
         .zip(http_message.attributes.get("stream_key"))
         .is_none_or(|(left, right)| left != right)
     {
@@ -206,7 +206,7 @@ fn response_stream_candidate(llm_action: &SemanticAction, http_message: &Semanti
 
 fn http_stream_ids_match(llm_action: &SemanticAction, http_message: &SemanticAction) -> bool {
     match (
-        llm_action.attributes.get("http.response.stream_id"),
+        llm_action.attributes.get(attrs::http_response::STREAM_ID),
         http_message.attributes.get("stream_id"),
     ) {
         (Some(response_stream_id), Some(message_stream_id)) => {
@@ -222,7 +222,7 @@ fn response_status_codes_are_compatible(
     http_message: &SemanticAction,
 ) -> bool {
     match (
-        llm_action.attributes.get("http.response.status_code"),
+        llm_action.attributes.get(attrs::http_response::STATUS_CODE),
         http_message.attributes.get("status_code"),
     ) {
         (Some(left), Some(right)) => left == right,
@@ -280,7 +280,11 @@ fn http_payload_sequence(action: &SemanticAction) -> Option<u64> {
 }
 
 fn payload_sequence(action: &SemanticAction) -> Option<u64> {
-    action.attributes.get("payload.sequence")?.parse().ok()
+    action
+        .attributes
+        .get(attrs::payload::SEQUENCE)?
+        .parse()
+        .ok()
 }
 
 fn payload_aggregate_matches_http_message(
@@ -296,7 +300,7 @@ fn payload_aggregate_matches_http_message(
     }
     if llm_action
         .attributes
-        .get("payload.stream_key")
+        .get(attrs::payload::STREAM_KEY)
         .zip(http_message.attributes.get("stream_key"))
         .is_none_or(|(left, right)| left != right)
     {
@@ -312,12 +316,12 @@ fn payload_aggregate_matches_http_message(
 fn payload_sequence_range(action: &SemanticAction) -> Option<(u64, u64)> {
     let start = action
         .attributes
-        .get("payload.sequence_start")?
+        .get(attrs::payload::SEQUENCE_START)?
         .parse()
         .ok()?;
     let end = action
         .attributes
-        .get("payload.sequence_end")?
+        .get(attrs::payload::SEQUENCE_END)?
         .parse()
         .ok()?;
     Some((start, end))

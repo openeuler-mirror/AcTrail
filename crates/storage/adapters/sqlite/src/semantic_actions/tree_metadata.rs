@@ -5,7 +5,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use model_core::ids::TraceId;
 use rusqlite::types::Value;
 use rusqlite::{Connection, Row, params_from_iter};
-use semantic_action::{SemanticActionLink, SemanticActionStoreError, SemanticEvidence};
+use semantic_action::{
+    SemanticActionLink, SemanticActionStoreError, SemanticEvidence, attr_keys as attrs, link_roles,
+};
 
 use crate::records::decode_map;
 use crate::semantic_actions::store::evidence_from_row;
@@ -54,7 +56,7 @@ pub(super) fn invalidated_action_attrs(
     attributes: &std::collections::BTreeMap<String, String>,
 ) -> bool {
     attributes
-        .get("actrail.action.valid")
+        .get(attrs::actrail::ACTION_VALID)
         .is_some_and(|value| value == "false")
 }
 
@@ -64,11 +66,12 @@ pub(super) fn invalidated_link_attrs(
     action_attrs: &std::collections::BTreeMap<String, String>,
 ) -> bool {
     link_attrs
-        .get("actrail.link.valid")
+        .get(attrs::actrail::LINK_VALID)
         .is_some_and(|value| value == "false")
-        || ((role == "agent.performed_action" || role == "command.contains_command_invocation")
+        || ((role == link_roles::AGENT_PERFORMED_ACTION
+            || role == link_roles::COMMAND_CONTAINS_COMMAND_INVOCATION)
             && action_attrs
-                .get("process.parent.identity_state")
+                .get(attrs::process_parent::IDENTITY_STATE)
                 .is_some_and(|value| value == "conflict"))
 }
 
