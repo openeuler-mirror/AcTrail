@@ -16,9 +16,9 @@ use storage_factory::StorageConfig;
 use super::values::ConfigValues;
 use super::{
     AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
-    EnforcementConfig, PayloadConfig, PayloadSocketConfig, PayloadTlsConfig, ProcessSeccompConfig,
-    ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig, SemanticRetentionConfig,
-    SocketPermissions, SseDataPolicy,
+    EnforcementConfig, FileObservationConfig, PayloadConfig, PayloadSocketConfig, PayloadTlsConfig,
+    ProcessSeccompConfig, ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig,
+    SemanticRetentionConfig, SocketPermissions, SseDataPolicy, WorkloadDiagnosticsConfig,
 };
 use crate::capture_profile::CaptureProfile;
 use crate::export::ExportConfig;
@@ -46,6 +46,7 @@ pub struct OperatorConfig {
     pub export_runtime: RuntimeExportConfig,
     pub log_path: PathBuf,
     pub diagnostic_log_level: DiagnosticLogLevel,
+    pub workload_diagnostics: WorkloadDiagnosticsConfig,
     pub capture_profile: CaptureProfile,
     pub ebpf_config: EbpfCollectorConfig,
     pub payload_config: PayloadConfig,
@@ -53,6 +54,7 @@ pub struct OperatorConfig {
     pub process_seccomp: ProcessSeccompConfig,
     pub agent_invocation: AgentInvocationConfig,
     pub semantic_retention: SemanticRetentionConfig,
+    pub file_observation: FileObservationConfig,
     pub application_protocol: ApplicationProtocolConfig,
     pub resource_metrics: ResourceMetricsConfig,
     pub provider_rule_set: Option<ProviderRuleSetConfig>,
@@ -112,6 +114,8 @@ impl OperatorConfig {
             .required("diagnostic_log_level")?
             .parse::<DiagnosticLogLevel>()
             .map_err(|error| format!("invalid diagnostic_log_level: {error}"))?;
+        let workload_diagnostics =
+            sections::workload_diagnostics_config(values.node("workload_diagnostics"))?;
         let payload_tls = sections::payload_tls_config(values.node("payload_tls"))?;
         let payload_stdio = sections::payload_stdio_config(values.node("payload_stdio"))?;
         let payload_socket = sections::payload_socket_config(values.node("payload_socket"))?;
@@ -125,6 +129,7 @@ impl OperatorConfig {
         let agent_invocation = sections::agent_invocation_config(values.node("agent_invocation"))?;
         let semantic_retention =
             sections::semantic_retention_config(values.node("semantic_retention"))?;
+        let file_observation = sections::file_observation_config(values.node("file_observation"))?;
         let application_protocol = sections::application_protocol_config(
             values.node("application_protocol"),
             values.node("application_http"),
@@ -166,6 +171,7 @@ impl OperatorConfig {
             export_runtime,
             log_path: PathBuf::from(values.required("log_path")?),
             diagnostic_log_level,
+            workload_diagnostics,
             capture_profile: CaptureProfile::new(profile_name, capabilities),
             ebpf_config: EbpfCollectorConfig {
                 enabled: values.required_bool("ebpf_enabled")?,
@@ -173,6 +179,9 @@ impl OperatorConfig {
                 tracked_process_max_entries: values.required_u32("tracked_process_max_entries")?,
                 pending_operation_max_entries: values
                     .required_u32("pending_operation_max_entries")?,
+                suppressed_fd_max_entries: values.required_u32("suppressed_fd_max_entries")?,
+                suppressed_fd_index_slots_per_process: values
+                    .required_u32("suppressed_fd_index_slots_per_process")?,
                 event_ring_buffer_max_bytes: values.required_u32("event_ring_buffer_max_bytes")?,
                 file_path_capture_enabled: values.required_bool("file_path_capture_enabled")?,
                 file_path_max_bytes: values.required_positive_u32("file_path_max_bytes")?,
@@ -182,6 +191,7 @@ impl OperatorConfig {
             process_seccomp,
             agent_invocation,
             semantic_retention,
+            file_observation,
             application_protocol,
             resource_metrics,
             provider_rule_set,
@@ -358,7 +368,3 @@ fn capability_requested(capabilities: &[CapabilityRequest], capability: &Capabil
         .iter()
         .any(|request| request.mode != RequestMode::Disabled && request.capability == *capability)
 }
-
-#[cfg(test)]
-#[path = "operator/tests.rs"]
-mod tests;

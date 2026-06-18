@@ -8,7 +8,9 @@ use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
 use model_core::process::{ProcessIdentity, ProcessMembership};
 use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
-use semantic_action::{SemanticAction, SemanticActionLink};
+use semantic_action::{
+    FileObservationPath, FilePathSetPathPage, FilePathSetWrite, SemanticAction, SemanticActionLink,
+};
 
 use crate::{
     ExportLease, PayloadSegmentQuery, RetentionCandidate, SnapshotView, StorageError,
@@ -107,6 +109,12 @@ pub trait StorageBackend {
     fn upsert_semantic_action(&mut self, action: SemanticAction) -> Result<(), StorageError>;
     fn upsert_semantic_action_link(&mut self, link: SemanticActionLink)
     -> Result<(), StorageError>;
+    fn upsert_file_observation_paths(
+        &mut self,
+        paths: &[FileObservationPath],
+    ) -> Result<(), StorageError>;
+    fn upsert_file_path_sets(&mut self, path_sets: &[FilePathSetWrite])
+    -> Result<(), StorageError>;
     fn list_semantic_actions(&self, trace_id: TraceId)
     -> Result<Vec<SemanticAction>, StorageError>;
     fn list_semantic_action_links(
@@ -170,6 +178,13 @@ pub trait StorageBackend {
         trace_id: TraceId,
         action_id: &str,
     ) -> Result<Option<SemanticAction>, StorageError>;
+    fn file_path_set_paths_page(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Option<FilePathSetPathPage>, StorageError>;
     fn semantic_action_command_fallback_children(
         &self,
         trace_id: TraceId,

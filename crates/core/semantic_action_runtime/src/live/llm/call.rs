@@ -1,80 +1,48 @@
 use std::collections::BTreeMap;
 
+use model_core::ids::TraceId;
+use model_core::process::ProcessIdentity;
 use semantic_action::{
     SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionStatus,
+    attr_keys as attrs,
 };
 
 use crate::live::actions::{append_missing_evidence, llm_call_action_id_from_request_action_id};
 
-pub(super) fn llm_call_actions_for(
-    changed: &[SemanticAction],
-    emitted_actions: &[&SemanticAction],
-) -> Vec<SemanticAction> {
-    changed
-        .iter()
-        .filter_map(|action| match action.kind {
-            SemanticActionKind::LlmRequest => Some(llm_call_from_request_response(
-                action,
-                latest_response_for_request(action, emitted_actions).as_ref(),
-            )),
-            SemanticActionKind::LlmResponse => latest_request_for_response(action, emitted_actions)
-                .map(|request| llm_call_from_request_response(&request, Some(action))),
-            _ => None,
-        })
-        .collect()
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct PendingLlmRequestMarker {
+    pub(super) trace_id: TraceId,
+    pub(super) process: ProcessIdentity,
+    pub(super) stream_key: String,
+    pub(super) http_stream_id: Option<String>,
+    pub(super) sequence_start: u64,
 }
 
-fn latest_request_for_response(
-    response: &SemanticAction,
-    emitted_actions: &[&SemanticAction],
-) -> Option<SemanticAction> {
-    emitted_actions
-        .iter()
-        .copied()
-        .filter(|request| llm_actions_share_stream(request, response))
-        .filter(|request| request.start_time <= response.start_time)
-        .max_by_key(|request| (request.start_time, request.action_id.clone()))
-        .cloned()
-}
-
-fn latest_response_for_request(
-    request: &SemanticAction,
-    emitted_actions: &[&SemanticAction],
-) -> Option<SemanticAction> {
-    emitted_actions
-        .iter()
-        .copied()
-        .filter(|response| llm_actions_share_stream(request, response))
-        .filter(|response| request.start_time <= response.start_time)
-        .max_by_key(|response| (response.start_time, response.action_id.clone()))
-        .cloned()
-}
-
-fn llm_call_from_request_response(
+pub(super) fn llm_call_from_request_response(
     request: &SemanticAction,
     response: Option<&SemanticAction>,
 ) -> SemanticAction {
     let mut attributes = BTreeMap::new();
     attributes.insert(
-        "llm.call.request_action_id".to_string(),
+        attrs::llm_call::REQUEST_ACTION_ID.to_string(),
         request.action_id.clone(),
     );
     if let Some(response) = response {
         attributes.insert(
-            "llm.call.response_action_id".to_string(),
+            attrs::llm_call::RESPONSE_ACTION_ID.to_string(),
             response.action_id.clone(),
         );
     }
     if let Some(model) = request
         .attributes
-        .get("llm.request.model")
-        .or_else(|| response.and_then(|action| action.attributes.get("llm.response.model")))
+        .get(attrs::llm_request::MODEL)
+        .or_else(|| response.and_then(|action| action.attributes.get(attrs::llm_response::MODEL)))
     {
-        attributes.insert("llm.call.model".to_string(), model.clone());
+        attributes.insert(attrs::llm_call::MODEL.to_string(), model.clone());
     }
-    copy_attr(request, &mut attributes, "payload.stream_key");
-    copy_attr(request, &mut attributes, "payload.operation_id");
-    copy_attr(request, &mut attributes, "http.request.stream_id");
+    copy_attr(request, &mut attributes, attrs::payload::STREAM_KEY);
+    copy_attr(request, &mut attributes, attrs::payload::OPERATION_ID);
+    copy_attr(request, &mut attributes, attrs::http_request::STREAM_ID);
 
     let mut evidence = request.evidence.clone();
     if let Some(response) = response {
@@ -87,7 +55,7 @@ fn llm_call_from_request_response(
         .map(|action| merge_llm_call_completeness(request.completeness, action.completeness))
         .unwrap_or(SemanticActionCompleteness::Partial);
     let title = attributes
-        .get("llm.call.model")
+        .get(attrs::llm_call::MODEL)
         .map(|model| format!("LLM call {model}"))
         .unwrap_or_else(|| "LLM call".to_string());
 
@@ -132,25 +100,10 @@ fn merge_llm_call_completeness(
     }
 }
 
-fn llm_actions_share_stream(request: &SemanticAction, response: &SemanticAction) -> bool {
-    request.kind == SemanticActionKind::LlmRequest
-        && response.kind == SemanticActionKind::LlmResponse
-        && request.trace_id == response.trace_id
-        && request.process == response.process
-        && request.attributes.get("payload.stream_key")
-            == response.attributes.get("payload.stream_key")
-        && http_stream_ids_are_compatible(request, response)
-}
-
-fn http_stream_ids_are_compatible(request: &SemanticAction, response: &SemanticAction) -> bool {
-    match (
-        request.attributes.get("http.request.stream_id"),
-        response.attributes.get("http.response.stream_id"),
-    ) {
-        (Some(request_stream_id), Some(response_stream_id)) => {
-            request_stream_id == response_stream_id
-        }
-        (None, None) => true,
-        _ => false,
-    }
+pub(super) fn payload_sequence_start(action: &SemanticAction) -> Option<u64> {
+    action
+        .attributes
+        .get(attrs::payload::SEQUENCE_START)
+        .or_else(|| action.attributes.get(attrs::payload::SEQUENCE))
+        .and_then(|value| value.parse().ok())
 }

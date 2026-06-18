@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use std::os::fd::RawFd;
 
 use model_core::ids::{ProfileName, RequestId, TraceId, TraceName};
+use model_core::process::InitialSuppressedFd;
 
 use crate::selector::TraceSelector;
 
@@ -15,6 +16,7 @@ pub struct TrackAddCommand {
     pub profile_name: ProfileName,
     pub tags: BTreeSet<String>,
     pub launch_mode: bool,
+    pub initial_suppressed_fds: Vec<InitialSuppressedFd>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

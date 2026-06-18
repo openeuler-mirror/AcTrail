@@ -18,7 +18,13 @@ use super::shared::{ActionLinkKey, invalidate_child_links, is_nested_file_write_
 pub(super) struct CommandChildActionLinkProjector {
     commands_by_process: BTreeMap<(TraceId, ProcessIdentity), SemanticAction>,
     fork_edges: BTreeMap<(TraceId, ProcessIdentity), ForkProcessEdge>,
+    fork_children: BTreeMap<(TraceId, ProcessIdentity), BTreeSet<ProcessIdentity>>,
     pending_by_process: BTreeMap<(TraceId, ProcessIdentity), Vec<SemanticAction>>,
+    pending_key_by_child: BTreeMap<(TraceId, String), (TraceId, ProcessIdentity)>,
+    pending_owner_candidates:
+        BTreeMap<(TraceId, ProcessIdentity), BTreeSet<(TraceId, ProcessIdentity)>>,
+    pending_candidate_owners:
+        BTreeMap<(TraceId, ProcessIdentity), BTreeSet<(TraceId, ProcessIdentity)>>,
     emitted_links: BTreeSet<ActionLinkKey>,
 }
 
@@ -36,9 +42,19 @@ impl CommandChildActionLinkProjector {
             return Vec::new();
         };
         let key = (edge.trace_id, edge.child.clone());
+        let previous = self.fork_edges.get(&key).cloned();
         let edge = merge_fork_edges(self.fork_edges.get(&key), edge);
         self.fork_edges.insert(key.clone(), edge);
-        self.link_pending_for_parent_key(&key)
+        let merged = self.fork_edges.get(&key).cloned();
+        self.update_fork_child_index(previous.as_ref(), merged.as_ref());
+        let affected_pending_keys = self.pending_keys_for_process_subtree(&key);
+        for pending_key in &affected_pending_keys {
+            self.refresh_pending_owner_candidates(pending_key);
+        }
+        affected_pending_keys
+            .iter()
+            .flat_map(|pending_key| self.link_pending_for_parent_key(pending_key))
+            .collect()
     }
 
     pub(super) fn link_pending_for_command(
@@ -80,7 +96,15 @@ impl CommandChildActionLinkProjector {
             .retain(|(candidate, _), _| *candidate != trace_id);
         self.fork_edges
             .retain(|(candidate, _), _| *candidate != trace_id);
+        self.fork_children
+            .retain(|(candidate, _), _| *candidate != trace_id);
         self.pending_by_process
+            .retain(|(candidate, _), _| *candidate != trace_id);
+        self.pending_key_by_child
+            .retain(|(candidate, _), _| *candidate != trace_id);
+        self.pending_owner_candidates
+            .retain(|(candidate, _), _| *candidate != trace_id);
+        self.pending_candidate_owners
             .retain(|(candidate, _), _| *candidate != trace_id);
         self.emitted_links.retain(|key| key.trace_id != trace_id);
     }
@@ -109,6 +133,7 @@ impl CommandChildActionLinkProjector {
             child_action_id: action.action_id.clone(),
             role,
             confidence: SemanticActionLinkConfidence::Observed,
+            valid: true,
             evidence: action.evidence.clone(),
             attributes: BTreeMap::new(),
         })
@@ -118,9 +143,17 @@ impl CommandChildActionLinkProjector {
         let Some(parent_process) = parent_command_process(action) else {
             return;
         };
+        let child_key = (action.trace_id, action.action_id.clone());
+        if let Some(previous_key) = self.pending_key_by_child.remove(&child_key)
+            && previous_key != (action.trace_id, parent_process.clone())
+            && let Some(pending) = self.pending_by_process.get_mut(&previous_key)
+        {
+            pending.retain(|candidate| candidate.action_id != action.action_id);
+        }
+        let pending_key = (action.trace_id, parent_process.clone());
         let pending = self
             .pending_by_process
-            .entry((action.trace_id, parent_process))
+            .entry(pending_key.clone())
             .or_default();
         if let Some(existing) = pending
             .iter_mut()
@@ -130,14 +163,27 @@ impl CommandChildActionLinkProjector {
         } else {
             pending.push(action.clone());
         }
+        self.pending_key_by_child
+            .insert(child_key, (action.trace_id, parent_process));
+        self.refresh_pending_owner_candidates(&pending_key);
     }
 
     fn remove_pending_child(&mut self, action: &SemanticAction) {
-        for pending in self.pending_by_process.values_mut() {
+        let child_key = (action.trace_id, action.action_id.clone());
+        let Some(pending_key) = self.pending_key_by_child.remove(&child_key) else {
+            return;
+        };
+        if let Some(pending) = self.pending_by_process.get_mut(&pending_key) {
             pending.retain(|candidate| candidate.action_id != action.action_id);
         }
-        self.pending_by_process
-            .retain(|_, pending| !pending.is_empty());
+        if self
+            .pending_by_process
+            .get(&pending_key)
+            .is_some_and(Vec::is_empty)
+        {
+            self.pending_by_process.remove(&pending_key);
+            self.remove_pending_owner_candidates(&pending_key);
+        }
     }
 
     fn command_for_parent(
@@ -174,12 +220,25 @@ impl CommandChildActionLinkProjector {
         else {
             return Vec::new();
         };
+        self.link_pending_to_command(parent_key, &parent_command)
+    }
+
+    fn link_pending_to_command(
+        &mut self,
+        parent_key: &(TraceId, ProcessIdentity),
+        parent_command: &SemanticAction,
+    ) -> Vec<SemanticActionLink> {
         let Some(pending) = self.pending_by_process.remove(parent_key) else {
             return Vec::new();
         };
+        self.remove_pending_owner_candidates(parent_key);
         pending
             .iter()
-            .filter_map(|action| self.link(&parent_command, action))
+            .filter_map(|action| {
+                self.pending_key_by_child
+                    .remove(&(action.trace_id, action.action_id.clone()));
+                self.link(&parent_command, action)
+            })
             .collect()
     }
 
@@ -187,29 +246,131 @@ impl CommandChildActionLinkProjector {
         &mut self,
         command: &SemanticAction,
     ) -> Vec<SemanticActionLink> {
+        let owner_key = (command.trace_id, command.process.clone());
         let pending_keys = self
-            .pending_by_process
-            .keys()
-            .filter(|(trace_id, parent)| {
-                *trace_id == command.trace_id
-                    && self
-                        .command_for_parent(*trace_id, parent.clone())
-                        .is_some_and(|candidate| candidate.action_id == command.action_id)
-            })
+            .pending_owner_candidates
+            .get(&owner_key)
             .cloned()
-            .collect::<Vec<_>>();
+            .unwrap_or_default();
         let mut links = Vec::new();
         for key in pending_keys {
-            let Some(pending) = self.pending_by_process.remove(&key) else {
+            let Some(candidate) = self.command_for_parent(key.0, key.1.clone()) else {
                 continue;
             };
-            for action in pending {
-                if let Some(link) = self.link(command, &action) {
-                    links.push(link);
+            if candidate.action_id != command.action_id {
+                continue;
+            }
+            links.extend(self.link_pending_to_command(&key, command));
+        }
+        links
+    }
+
+    fn update_fork_child_index(
+        &mut self,
+        previous: Option<&ForkProcessEdge>,
+        current: Option<&ForkProcessEdge>,
+    ) {
+        if let Some(edge) = previous
+            && let Some(parent) = &edge.parent
+        {
+            let parent_key = (edge.trace_id, parent.clone());
+            if let Some(children) = self.fork_children.get_mut(&parent_key) {
+                children.remove(&edge.child);
+                if children.is_empty() {
+                    self.fork_children.remove(&parent_key);
                 }
             }
         }
-        links
+        let Some(edge) = current else {
+            return;
+        };
+        if edge.conflict {
+            return;
+        }
+        if let Some(parent) = &edge.parent {
+            self.fork_children
+                .entry((edge.trace_id, parent.clone()))
+                .or_default()
+                .insert(edge.child.clone());
+        }
+    }
+
+    fn pending_keys_for_process_subtree(
+        &self,
+        root: &(TraceId, ProcessIdentity),
+    ) -> BTreeSet<(TraceId, ProcessIdentity)> {
+        let mut pending_keys = BTreeSet::new();
+        let mut visited = BTreeSet::new();
+        let mut stack = vec![root.1.clone()];
+        while let Some(process) = stack.pop() {
+            if !visited.insert(process.clone()) {
+                continue;
+            }
+            let key = (root.0, process.clone());
+            if self.pending_by_process.contains_key(&key) {
+                pending_keys.insert(key.clone());
+            }
+            if let Some(children) = self.fork_children.get(&key) {
+                stack.extend(children.iter().cloned());
+            }
+        }
+        pending_keys
+    }
+
+    fn refresh_pending_owner_candidates(&mut self, pending_key: &(TraceId, ProcessIdentity)) {
+        self.remove_pending_owner_candidates(pending_key);
+        if !self.pending_by_process.contains_key(pending_key) {
+            return;
+        }
+        let owners = self.owner_candidates_for_pending_key(pending_key);
+        for owner in &owners {
+            self.pending_owner_candidates
+                .entry(owner.clone())
+                .or_default()
+                .insert(pending_key.clone());
+        }
+        self.pending_candidate_owners
+            .insert(pending_key.clone(), owners);
+    }
+
+    fn remove_pending_owner_candidates(&mut self, pending_key: &(TraceId, ProcessIdentity)) {
+        let Some(owners) = self.pending_candidate_owners.remove(pending_key) else {
+            return;
+        };
+        for owner in owners {
+            if let Some(keys) = self.pending_owner_candidates.get_mut(&owner) {
+                keys.remove(pending_key);
+                if keys.is_empty() {
+                    self.pending_owner_candidates.remove(&owner);
+                }
+            }
+        }
+    }
+
+    fn owner_candidates_for_pending_key(
+        &self,
+        pending_key: &(TraceId, ProcessIdentity),
+    ) -> BTreeSet<(TraceId, ProcessIdentity)> {
+        let mut owners = BTreeSet::new();
+        let mut candidate = pending_key.1.clone();
+        let mut visited = BTreeSet::new();
+        loop {
+            if !visited.insert(candidate.clone()) {
+                break;
+            }
+            owners.insert((pending_key.0, candidate.clone()));
+            let Some(edge) = self.fork_edges.get(&(pending_key.0, candidate)) else {
+                break;
+            };
+            if edge.conflict {
+                break;
+            }
+            let Some(parent) = edge.parent.clone() else {
+                break;
+            };
+            candidate = parent;
+        }
+        owners
     }
 }
 
@@ -226,6 +387,9 @@ fn command_child_role(action: &SemanticAction) -> Option<SemanticActionLinkRole>
         SemanticActionKind::FileRead
             | SemanticActionKind::FileWrite
             | SemanticActionKind::FileModify
+            | SemanticActionKind::FileTtyIo
+            | SemanticActionKind::FileBulkRead
+            | SemanticActionKind::FsEnumerate
     )
     .then_some(SemanticActionLinkRole::CommandContainsFileAccess)
     .or_else(|| {
@@ -251,6 +415,9 @@ fn parent_command_process(action: &SemanticAction) -> Option<ProcessIdentity> {
         SemanticActionKind::FileRead
         | SemanticActionKind::FileWrite
         | SemanticActionKind::FileModify
+        | SemanticActionKind::FileTtyIo
+        | SemanticActionKind::FileBulkRead
+        | SemanticActionKind::FsEnumerate
         | SemanticActionKind::ProcessForkAttempt
         | SemanticActionKind::LlmCall
         | SemanticActionKind::AgentInvocation => Some(action.process.clone()),

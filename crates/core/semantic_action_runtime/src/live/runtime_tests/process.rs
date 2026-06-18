@@ -378,13 +378,7 @@ fn agent_performed_action_links_child_command_invocation() {
                 && link.child_action_id == refreshed_command.action_id
         })
         .expect("late fork conflict should invalidate the agent child command link");
-    assert_eq!(
-        invalidated
-            .attributes
-            .get("actrail.link.valid")
-            .map(String::as_str),
-        Some("false")
-    );
+    assert_eq!(invalidated.valid, false);
 }
 
 #[test]

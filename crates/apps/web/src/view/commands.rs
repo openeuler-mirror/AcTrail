@@ -37,7 +37,8 @@ pub(super) fn commands_json(
     let link_rows = links
         .iter()
         .filter(|link| {
-            action_ids.contains(link.parent_action_id.as_str())
+            link.valid
+                && action_ids.contains(link.parent_action_id.as_str())
                 && action_ids.contains(link.child_action_id.as_str())
         })
         .map(|link| {

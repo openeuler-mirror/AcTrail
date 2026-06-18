@@ -9,7 +9,6 @@ use semantic_action::{
     SemanticEvidenceKind,
 };
 
-use super::ATTR_LINK_VALID;
 use super::derive_lineage_links;
 
 const TRACE_ID: TraceId = TraceId::new(7);
@@ -76,6 +75,7 @@ fn observed_parent_link_blocks_lineage_derived_parent() {
         child_action_id: "child-command".to_string(),
         role: SemanticActionLinkRole::CommandContainsCommandInvocation,
         confidence: SemanticActionLinkConfidence::Observed,
+        valid: true,
         evidence: Vec::new(),
         attributes: BTreeMap::new(),
     };
@@ -108,7 +108,7 @@ fn stale_lineage_link_is_invalidated_when_parent_changes() {
     assert!(links.iter().any(|link| {
         link.parent_action_id == "stale-parent"
             && link.child_action_id == "child-command"
-            && link.attributes.get(ATTR_LINK_VALID).map(String::as_str) == Some("false")
+            && !link.valid
     }));
     assert!(links.iter().any(|link| {
         link.parent_action_id == "parent-command"
@@ -190,6 +190,7 @@ fn lineage_link(parent: &str, child: &str) -> SemanticActionLink {
         child_action_id: child.to_string(),
         role: SemanticActionLinkRole::CommandContainsCommandInvocation,
         confidence: SemanticActionLinkConfidence::Derived,
+        valid: true,
         evidence: Vec::new(),
         attributes,
     }

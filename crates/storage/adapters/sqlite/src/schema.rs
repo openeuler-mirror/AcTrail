@@ -131,6 +131,7 @@ CREATE TABLE IF NOT EXISTS semantic_action_links (
     child_action_id TEXT NOT NULL,
     role TEXT NOT NULL,
     confidence TEXT NOT NULL,
+    valid INTEGER NOT NULL DEFAULT 1,
     attributes TEXT NOT NULL,
     PRIMARY KEY (trace_id, parent_action_id, child_action_id, role)
 );
@@ -145,6 +146,53 @@ CREATE TABLE IF NOT EXISTS semantic_action_link_evidence (
     evidence_id INTEGER NOT NULL,
     evidence_role TEXT NOT NULL,
     PRIMARY KEY (trace_id, parent_action_id, child_action_id, role, evidence_order)
+);
+
+CREATE TABLE IF NOT EXISTS file_observation_paths (
+    trace_id INTEGER NOT NULL,
+    action_id TEXT NOT NULL,
+    path_order INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    PRIMARY KEY (trace_id, action_id, path)
+);
+
+CREATE TABLE IF NOT EXISTS file_paths (
+    path_id INTEGER PRIMARY KEY,
+    trace_id INTEGER NOT NULL,
+    path_hash TEXT NOT NULL,
+    path_text TEXT NOT NULL,
+    UNIQUE (trace_id, path_hash, path_text)
+);
+
+CREATE TABLE IF NOT EXISTS file_path_sets (
+    trace_id INTEGER NOT NULL,
+    path_set_id TEXT NOT NULL,
+    action_id TEXT NOT NULL,
+    state TEXT NOT NULL,
+    unique_path_count INTEGER NOT NULL,
+    stored_path_count INTEGER NOT NULL,
+    chunking_scheme TEXT NOT NULL,
+    PRIMARY KEY (trace_id, path_set_id),
+    UNIQUE (trace_id, action_id)
+);
+
+CREATE TABLE IF NOT EXISTS file_path_set_chunks (
+    trace_id INTEGER NOT NULL,
+    chunk_id TEXT NOT NULL,
+    chunk_hash TEXT NOT NULL,
+    item_count INTEGER NOT NULL,
+    encoded_sorted_path_ids TEXT NOT NULL,
+    chunking_scheme TEXT NOT NULL,
+    PRIMARY KEY (trace_id, chunk_id),
+    UNIQUE (trace_id, chunking_scheme, chunk_hash, encoded_sorted_path_ids)
+);
+
+CREATE TABLE IF NOT EXISTS file_path_set_chunk_refs (
+    trace_id INTEGER NOT NULL,
+    path_set_id TEXT NOT NULL,
+    chunk_order INTEGER NOT NULL,
+    chunk_id TEXT NOT NULL,
+    PRIMARY KEY (trace_id, path_set_id, chunk_order)
 );
 
 CREATE TABLE IF NOT EXISTS diagnostics (
@@ -194,12 +242,30 @@ CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_child_role ON semanti
     child_action_id,
     role
 );
+
+CREATE INDEX IF NOT EXISTS idx_file_observation_paths_action_order ON file_observation_paths (
+    trace_id,
+    action_id,
+    path_order
+);
+
+CREATE INDEX IF NOT EXISTS idx_file_paths_trace_text ON file_paths (
+    trace_id,
+    path_text
+);
+
+CREATE INDEX IF NOT EXISTS idx_file_path_set_refs_path_set ON file_path_set_chunk_refs (
+    trace_id,
+    path_set_id,
+    chunk_order
+);
 "#;
 
 pub fn initialize(connection: &Connection) -> Result<(), rusqlite::Error> {
     connection.execute_batch(CREATE_TABLES_SQL)?;
     migrate_membership_timing_columns(connection)?;
     migrate_payload_operation_columns(connection)?;
+    migrate_semantic_action_link_validity(connection)?;
     migrate_time_columns_to_nanos(connection)?;
     migrate_query_indexes(connection)
 }
@@ -210,7 +276,10 @@ fn migrate_query_indexes(connection: &Connection) -> Result<(), rusqlite::Error>
          CREATE INDEX IF NOT EXISTS idx_payload_segments_trace_id ON payload_segments(trace_id);
          CREATE INDEX IF NOT EXISTS idx_semantic_actions_trace_start ON semantic_actions(trace_id, start_time);
          CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_parent ON semantic_action_links(trace_id, parent_action_id);
-         CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_child ON semantic_action_links(trace_id, child_action_id);",
+         CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_child ON semantic_action_links(trace_id, child_action_id);
+         CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_valid_parent ON semantic_action_links(trace_id, valid, parent_action_id);
+         CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_valid_child ON semantic_action_links(trace_id, valid, child_action_id);
+         CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_valid_role ON semantic_action_links(trace_id, valid, role);",
     )
 }
 
@@ -300,6 +369,15 @@ fn migrate_payload_operation_columns(connection: &Connection) -> Result<(), rusq
         "payload_segments",
         "operation_completion_state",
         "TEXT NOT NULL DEFAULT 'unknown'",
+    )
+}
+
+fn migrate_semantic_action_link_validity(connection: &Connection) -> Result<(), rusqlite::Error> {
+    add_column_if_missing(
+        connection,
+        "semantic_action_links",
+        "valid",
+        "INTEGER NOT NULL DEFAULT 1",
     )
 }
 

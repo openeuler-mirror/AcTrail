@@ -1,9 +1,16 @@
+use model_core::event::EventPayload;
 use model_core::process::ProcessIdentity;
 use semantic_action::{
     SemanticActionCompleteness, SemanticActionKind, SemanticActionLinkRole, SemanticActionStatus,
 };
 
 use super::test_support::*;
+
+#[path = "file/bulk_read.rs"]
+mod bulk_read_tests;
+
+#[path = "file/enumerate.rs"]
+mod enumerate_tests;
 
 #[test]
 fn startup_file_read_is_projected_and_linked_when_agent_is_observed_later() {
@@ -181,4 +188,45 @@ fn command_process_file_read_links_under_command_invocation() {
         .expect("file.read should link under the same-process command invocation");
 
     assert_eq!(link.parent_action_id, command.action_id);
+}
+
+#[test]
+fn tty_write_is_consumed_by_summary_without_file_modify_duplication() {
+    let mut runtime = runtime();
+    let process = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let mut event = file_event(
+        FILE_READ_EVENT_ID,
+        process,
+        "write",
+        TEST_FILE_READ_BYTES as i32,
+        Some(TEST_FILE_READ_BYTES),
+    );
+    let EventPayload::File(payload) = &mut event.payload else {
+        unreachable!("file_event returns a file payload");
+    };
+    payload.path = Some("/dev/tty".to_string());
+    payload
+        .metadata
+        .insert("fd_target".to_string(), "/dev/tty".to_string());
+
+    let output = runtime.observe_event(&event);
+
+    assert!(output.raw_event_consumed);
+    assert!(!output.retain_event);
+    assert!(
+        output
+            .actions
+            .iter()
+            .all(|action| action.kind != SemanticActionKind::FileModify)
+    );
+    let tty = output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::FileTtyIo)
+        .expect("tty write should project a file.tty_io summary");
+    assert!(tty.evidence.is_empty());
+    assert_eq!(
+        tty.attributes.get("file.bytes_written").cloned(),
+        Some(TEST_FILE_READ_BYTES.to_string())
+    );
 }

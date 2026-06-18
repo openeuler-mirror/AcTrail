@@ -6,22 +6,22 @@ use semantic_action::{
 };
 
 use super::anthropic::{ANTHROPIC_PROVIDER_ID, AnthropicMessagesResponseParser};
-use super::common::ToolCallAssembler;
+use super::common::{ParsedSseResponseAccumulator, ToolCallAssembler};
 
 #[derive(Default)]
 pub(super) struct AnthropicMessagesStreamParser {
-    parsed_events: Vec<LlmParsedSseEvent>,
+    accumulator: ParsedSseResponseAccumulator,
 }
 
 impl LlmProviderResponseStreamParser for AnthropicMessagesStreamParser {
     fn observe_event(&mut self, event: LlmSseEvent<'_>) -> LlmParsedSseEvent {
         let parsed = AnthropicMessagesResponseParser.parse_sse_event(event);
-        self.parsed_events.push(parsed.clone());
+        self.accumulator.observe(&parsed);
         parsed
     }
 
     fn finish(&mut self) -> Option<LlmParsedResponse> {
-        parsed_events_to_response(ANTHROPIC_PROVIDER_ID, &self.parsed_events, None, true)
+        self.accumulator.finish(ANTHROPIC_PROVIDER_ID, None, true)
     }
 }
 

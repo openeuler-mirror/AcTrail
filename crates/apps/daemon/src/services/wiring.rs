@@ -3,8 +3,8 @@
 use collector_capability::CollectorDescriptor;
 use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
-    EnforcementConfig, PayloadConfig, ProcessSeccompConfig, ResourceMetricsConfig,
-    RuntimeExportConfig, SeccompNotifyConfig, SemanticRetentionConfig,
+    EnforcementConfig, FileObservationConfig, PayloadConfig, ProcessSeccompConfig,
+    ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig, SemanticRetentionConfig,
 };
 use config_core::provider_rules::ProviderRuleSetConfig;
 use control_contract::reply::ControlError;
@@ -29,6 +29,7 @@ use super::enforcement::{
 };
 use super::process_seccomp::PROCESS_SECCOMP_COLLECTOR_NAME;
 use super::resource_metrics::COLLECTOR_NAME as RESOURCE_METRICS_COLLECTOR_NAME;
+use super::workload_diagnostics::WorkloadDiagnostics;
 
 const TLS_SYNC_COLLECTOR_NAME: &str = "tls-sync";
 
@@ -42,8 +43,10 @@ pub(crate) fn build_runtime_wiring(
     process_seccomp: ProcessSeccompConfig,
     agent_invocation: AgentInvocationConfig,
     semantic_retention: SemanticRetentionConfig,
+    file_observation: FileObservationConfig,
     application_protocol: ApplicationProtocolConfig,
     resource_metrics: ResourceMetricsConfig,
+    workload_diagnostics: WorkloadDiagnostics,
     export_runtime: RuntimeExportConfig,
     enforcement: EnforcementConfig,
 ) -> Result<DaemonRuntimeWiring<StorageAttachService>, ControlError> {
@@ -57,8 +60,10 @@ pub(crate) fn build_runtime_wiring(
         process_seccomp,
         agent_invocation,
         semantic_retention,
+        file_observation,
         application_protocol,
         resource_metrics,
+        workload_diagnostics,
         export_runtime,
         enforcement,
         None,
@@ -75,8 +80,10 @@ pub(crate) fn build_runtime_wiring_with_provider_rule_set(
     process_seccomp: ProcessSeccompConfig,
     agent_invocation: AgentInvocationConfig,
     semantic_retention: SemanticRetentionConfig,
+    file_observation: FileObservationConfig,
     application_protocol: ApplicationProtocolConfig,
     resource_metrics: ResourceMetricsConfig,
+    workload_diagnostics: WorkloadDiagnostics,
     export_runtime: RuntimeExportConfig,
     enforcement: EnforcementConfig,
     provider_rule_set: &ProviderRuleSetConfig,
@@ -94,8 +101,10 @@ pub(crate) fn build_runtime_wiring_with_provider_rule_set(
         process_seccomp,
         agent_invocation,
         semantic_retention,
+        file_observation,
         application_protocol,
         resource_metrics,
+        workload_diagnostics,
         export_runtime,
         enforcement,
         Some(Box::new(classifier)),
@@ -112,8 +121,10 @@ fn build_runtime_wiring_with_attach_service(
     process_seccomp: ProcessSeccompConfig,
     agent_invocation: AgentInvocationConfig,
     semantic_retention: SemanticRetentionConfig,
+    file_observation: FileObservationConfig,
     application_protocol: ApplicationProtocolConfig,
     resource_metrics: ResourceMetricsConfig,
+    workload_diagnostics: WorkloadDiagnostics,
     export_runtime_config: RuntimeExportConfig,
     enforcement_config: EnforcementConfig,
     provider_classifier: Option<Box<dyn ProviderClassifier>>,
@@ -146,8 +157,10 @@ fn build_runtime_wiring_with_attach_service(
             process_seccomp.clone(),
             agent_invocation.clone(),
             semantic_retention.clone(),
+            file_observation.clone(),
             application_protocol.clone(),
             resource_metrics.clone(),
+            workload_diagnostics.clone(),
             enforcement,
             export_runtime,
             provider_classifier,
@@ -163,8 +176,10 @@ fn build_runtime_wiring_with_attach_service(
             process_seccomp.clone(),
             agent_invocation.clone(),
             semantic_retention.clone(),
+            file_observation.clone(),
             application_protocol.clone(),
             resource_metrics.clone(),
+            workload_diagnostics.clone(),
             enforcement,
             export_runtime,
         )?,

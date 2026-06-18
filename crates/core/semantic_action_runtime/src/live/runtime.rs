@@ -1,10 +1,12 @@
 //! Live semantic action runtime.
 
-use config_core::daemon::{AgentInvocationConfig, SemanticRetentionConfig};
+use config_core::daemon::{AgentInvocationConfig, FileObservationConfig, SemanticRetentionConfig};
 use model_core::event::{DomainEvent, EventPayload};
 use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
-use semantic_action::{SemanticAction, SemanticActionKind, SemanticActionLink};
+use semantic_action::{
+    FileObservationPath, FilePathSetWrite, SemanticAction, SemanticActionKind, SemanticActionLink,
+};
 use std::time::SystemTime;
 
 use super::actions::{
@@ -25,28 +27,47 @@ pub struct LiveSemanticActionRuntime {
     links: ActionLinkProjector,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LiveSemanticActionOutput {
     pub actions: Vec<SemanticAction>,
     pub links: Vec<SemanticActionLink>,
+    pub file_observation_paths: Vec<FileObservationPath>,
+    pub file_path_sets: Vec<FilePathSetWrite>,
+    pub retain_event: bool,
+    pub raw_event_consumed: bool,
+}
+
+impl Default for LiveSemanticActionOutput {
+    fn default() -> Self {
+        Self {
+            actions: Vec::new(),
+            links: Vec::new(),
+            file_observation_paths: Vec::new(),
+            file_path_sets: Vec::new(),
+            retain_event: true,
+            raw_event_consumed: false,
+        }
+    }
 }
 
 impl LiveSemanticActionOutput {
-    fn from_actions(actions: Vec<SemanticAction>) -> Self {
-        Self {
-            actions,
-            links: Vec::new(),
-        }
-    }
-
     fn extend(&mut self, other: Self) {
         self.actions.extend(other.actions);
         self.links.extend(other.links);
+        self.file_observation_paths
+            .extend(other.file_observation_paths);
+        self.file_path_sets.extend(other.file_path_sets);
+        self.retain_event = self.retain_event && other.retain_event;
+        self.raw_event_consumed = self.raw_event_consumed || other.raw_event_consumed;
     }
 }
 
 impl LiveSemanticActionRuntime {
-    pub fn new(config: AgentInvocationConfig, semantic_retention: SemanticRetentionConfig) -> Self {
+    pub fn new(
+        config: AgentInvocationConfig,
+        semantic_retention: SemanticRetentionConfig,
+        file_observation: FileObservationConfig,
+    ) -> Self {
         let AgentInvocationConfig {
             enabled,
             commands: _,
@@ -54,19 +75,56 @@ impl LiveSemanticActionRuntime {
         Self {
             agent: AgentProjector::new(enabled),
             command: CommandProjector::new(),
-            file_access: FileAccessProjector::new(),
+            file_access: FileAccessProjector::new(file_observation),
             llm: LiveLlmProjector::new(semantic_retention),
             links: ActionLinkProjector::new(),
         }
     }
 
     pub fn observe_event(&mut self, event: &DomainEvent) -> LiveSemanticActionOutput {
+        if let EventPayload::File(payload) = &event.payload {
+            return if is_file_modify_operation(&payload.operation) {
+                let file_action = file_modify_action(event);
+                let mut output = self
+                    .file_access
+                    .observe_file_event(event, Some(&file_action));
+                if !output.raw_event_consumed {
+                    let insert_at = output
+                        .actions
+                        .iter()
+                        .take_while(|action| {
+                            matches!(
+                                action.kind,
+                                SemanticActionKind::FileBulkRead | SemanticActionKind::FsEnumerate
+                            )
+                        })
+                        .count();
+                    output.actions.insert(insert_at, file_action);
+                }
+                output
+                    .links
+                    .extend(self.links.observe_actions(&output.actions));
+                output
+            } else {
+                let mut output = self.file_access.observe_file_event(event, None);
+                output
+                    .links
+                    .extend(self.links.observe_actions(&output.actions));
+                output
+            };
+        }
+
+        let mut output = if event_projects_semantic_action_boundary(event) {
+            self.file_access.observe_boundary_for_event(event)
+        } else {
+            LiveSemanticActionOutput::default()
+        };
         match &event.payload {
             EventPayload::Process(payload) if payload.operation == "exec" => {
                 let actions = self
                     .agent
                     .observe_process_exec(event, process_exec_action(event));
-                let mut output = LiveSemanticActionOutput::from_actions(actions.clone());
+                output.actions.extend(actions.clone());
                 if let Some(process_action) = actions
                     .iter()
                     .find(|action| action.kind == semantic_action::SemanticActionKind::ProcessExec)
@@ -79,17 +137,14 @@ impl LiveSemanticActionRuntime {
                 output
             }
             EventPayload::Process(payload) if payload.operation == "fork_attempt" => {
-                let mut output =
-                    LiveSemanticActionOutput::from_actions(vec![process_fork_attempt_action(
-                        event,
-                    )]);
+                output.actions.push(process_fork_attempt_action(event));
                 output
                     .links
                     .extend(self.links.observe_actions(&output.actions));
                 output
             }
             EventPayload::Process(payload) if payload.operation == "fork" => {
-                let mut output = self.command.observe_process_fork(event);
+                output.extend(self.command.observe_process_fork(event));
                 output.links.extend(self.links.observe_process_fork(event));
                 output
                     .links
@@ -97,28 +152,10 @@ impl LiveSemanticActionRuntime {
                 output
             }
             EventPayload::Process(payload) if payload.operation == "exit" => {
-                let mut output =
-                    LiveSemanticActionOutput::from_actions(self.agent.observe_process_exit(event));
+                output
+                    .actions
+                    .extend(self.agent.observe_process_exit(event));
                 output.extend(self.command.observe_process_exit(event));
-                output
-                    .links
-                    .extend(self.links.observe_actions(&output.actions));
-                output
-            }
-            EventPayload::File(payload) if is_file_modify_operation(&payload.operation) => {
-                let file_action = file_modify_action(event);
-                let mut output = LiveSemanticActionOutput::from_actions(vec![file_action.clone()]);
-                output.extend(
-                    self.file_access
-                        .observe_file_event(event, Some(&file_action)),
-                );
-                output
-                    .links
-                    .extend(self.links.observe_actions(&output.actions));
-                output
-            }
-            EventPayload::File(_) => {
-                let mut output = self.file_access.observe_file_event(event, None);
                 output
                     .links
                     .extend(self.links.observe_actions(&output.actions));
@@ -126,15 +163,28 @@ impl LiveSemanticActionRuntime {
             }
             EventPayload::Application(payload) if is_http_protocol(&payload.protocol) => {
                 let action = http_message_action(event);
-                let mut actions = vec![action.clone()];
-                actions.extend(self.llm.observe_http_message(&action));
-                let links = self.links.observe_actions(&actions);
-                LiveSemanticActionOutput { actions, links }
+                output.actions.push(action.clone());
+                output
+                    .actions
+                    .extend(self.llm.observe_http_message(&action));
+                output
+                    .links
+                    .extend(self.links.observe_actions(&output.actions));
+                output
             }
             EventPayload::Enforcement(_) => {
-                LiveSemanticActionOutput::from_actions(vec![enforcement_action(event)])
+                output.actions.push(enforcement_action(event));
+                output
+                    .links
+                    .extend(self.links.observe_actions(&output.actions));
+                output
             }
-            _ => LiveSemanticActionOutput::default(),
+            _ => {
+                output
+                    .links
+                    .extend(self.links.observe_actions(&output.actions));
+                output
+            }
         }
     }
 
@@ -143,7 +193,15 @@ impl LiveSemanticActionRuntime {
         segment: &PayloadSegment,
     ) -> LiveSemanticActionOutput {
         let llm_actions = self.llm.observe_payload_segment(segment);
-        let mut output = LiveSemanticActionOutput::default();
+        let mut output = if llm_actions.is_empty() {
+            LiveSemanticActionOutput::default()
+        } else {
+            self.file_access.observe_boundary(
+                segment.trace_id,
+                &segment.process,
+                segment.observed_at,
+            )
+        };
         for action in llm_actions {
             let agent_actions = if action.kind == SemanticActionKind::LlmRequest {
                 self.agent.observe_llm_request(&action)
@@ -178,9 +236,32 @@ impl LiveSemanticActionRuntime {
         trace_id: TraceId,
         finished_at: SystemTime,
     ) -> LiveSemanticActionOutput {
-        let actions = self.llm.finalize_trace(trace_id, finished_at);
+        let mut actions = self.llm.finalize_trace(trace_id, finished_at);
+        let file_output = self.file_access.finalize_trace(trace_id, finished_at);
+        actions.extend(file_output.actions);
         let links = self.links.observe_actions(&actions);
-        LiveSemanticActionOutput { actions, links }
+        LiveSemanticActionOutput {
+            actions,
+            links,
+            file_observation_paths: Vec::new(),
+            file_path_sets: file_output.file_path_sets,
+            retain_event: file_output.retain_event,
+            raw_event_consumed: false,
+        }
+    }
+}
+
+fn event_projects_semantic_action_boundary(event: &DomainEvent) -> bool {
+    match &event.payload {
+        EventPayload::Process(payload) => {
+            matches!(
+                payload.operation.as_str(),
+                "exec" | "fork_attempt" | "fork" | "exit"
+            )
+        }
+        EventPayload::Application(payload) => is_http_protocol(&payload.protocol),
+        EventPayload::Enforcement(_) => true,
+        _ => false,
     }
 }
 

@@ -33,6 +33,8 @@ static long (*bpf_probe_read_user)(void *dst, __u32 size, const void *unsafe_ptr
     (void *)BPF_FUNC_probe_read_user;
 static long (*bpf_probe_read_user_str)(void *dst, __u32 size, const void *unsafe_ptr) =
     (void *)BPF_FUNC_probe_read_user_str;
+static long (*bpf_probe_read)(void *dst, __u32 size, const void *unsafe_ptr) =
+    (void *)BPF_FUNC_probe_read;
 static long (*bpf_probe_read_kernel_str)(void *dst, __u32 size, const void *unsafe_ptr) =
     (void *)BPF_FUNC_probe_read_kernel_str;
 static long (*bpf_get_ns_current_pid_tgid)(

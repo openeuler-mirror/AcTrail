@@ -1,6 +1,8 @@
 //! Shared helpers for provider-specific LLM response parsing.
 
-use semantic_action::{LlmTokenUsage, LlmToolCall, LlmToolFunction};
+use semantic_action::{
+    LlmParsedResponse, LlmParsedSseEvent, LlmTokenUsage, LlmToolCall, LlmToolFunction,
+};
 use serde_json::{Map, Number, Value};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -179,7 +181,7 @@ fn tool_function_value(function: &LlmToolFunction) -> Option<Value> {
     (!object.is_empty()).then(|| Value::Object(object))
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct ToolCallAssembler {
     calls: Vec<LlmToolCall>,
 }
@@ -299,6 +301,70 @@ impl ToolCallAssembler {
             ..LlmToolCall::default()
         });
         self.calls.last_mut()
+    }
+}
+
+#[derive(Default)]
+pub(super) struct ParsedSseResponseAccumulator {
+    model: Option<String>,
+    content_text: Option<String>,
+    reasoning_text: Option<String>,
+    tool_calls: ToolCallAssembler,
+    chunk_count: usize,
+    done: bool,
+}
+
+impl ParsedSseResponseAccumulator {
+    pub(super) fn observe(&mut self, event: &LlmParsedSseEvent) {
+        if self.model.is_none() {
+            self.model = event.model.clone();
+        }
+        if let Some(content) = &event.content_text {
+            append_text(&mut self.content_text, content);
+            self.chunk_count += 1;
+        }
+        if let Some(reasoning) = &event.reasoning_text {
+            append_text(&mut self.reasoning_text, reasoning);
+            self.chunk_count += 1;
+        }
+        for tool_call in &event.tool_calls {
+            self.tool_calls.apply_call_delta(tool_call.clone());
+        }
+        self.done |= event.done;
+    }
+
+    pub(super) fn finish(
+        &self,
+        provider_id: &'static str,
+        token_usage: Option<LlmTokenUsage>,
+        stream: bool,
+    ) -> Option<LlmParsedResponse> {
+        let tool_calls = self.tool_calls.clone().into_calls();
+        if self.content_text.is_none()
+            && self.reasoning_text.is_none()
+            && tool_calls.is_empty()
+            && !self.done
+        {
+            return None;
+        }
+        Some(LlmParsedResponse {
+            provider_id,
+            model: self.model.clone(),
+            content_text: self.content_text.clone(),
+            reasoning_text: self.reasoning_text.clone(),
+            tool_calls,
+            token_usage,
+            chunk_count: self.chunk_count,
+            done: self.done,
+            stream,
+        })
+    }
+}
+
+fn append_text(target: &mut Option<String>, value: &str) {
+    match target {
+        Some(existing) => existing.push_str(value),
+        None => *target = Some(value.to_string()),
     }
 }
 

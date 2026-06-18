@@ -44,6 +44,8 @@ pub fn run_live_verification(
             memlock_rlimit: config.memlock_rlimit,
             tracked_process_max_entries: config.tracked_process_max_entries,
             pending_operation_max_entries: config.pending_operation_max_entries,
+            suppressed_fd_max_entries: config.suppressed_fd_max_entries,
+            suppressed_fd_index_slots_per_process: config.suppressed_fd_index_slots_per_process,
             event_ring_buffer_max_bytes: config.event_ring_buffer_max_bytes,
             file_path_capture_enabled: config.file_path_capture_enabled,
             file_path_max_bytes: config.file_path_max_bytes,
@@ -58,8 +60,10 @@ pub fn run_live_verification(
         seccomp_defaults.process_seccomp,
         seccomp_defaults.agent_invocation,
         seccomp_defaults.semantic_retention,
+        seccomp_defaults.file_observation,
         config.application_protocol.clone(),
         config.resource_metrics.clone(),
+        seccomp_defaults.workload_diagnostics,
         seccomp_defaults.export_runtime,
         config.enforcement.clone(),
         &provider_rule_set,
@@ -339,6 +343,7 @@ fn track_workload(
             profile_name: ProfileName::new(config.profile_name.clone()),
             tags: BTreeSet::new(),
             launch_mode: false,
+            initial_suppressed_fds: Vec::new(),
         }),
     )?;
     let ControlReply::TrackAdded(reply) = reply else {

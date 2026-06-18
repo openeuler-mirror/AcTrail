@@ -11,6 +11,8 @@ mod agent;
 mod application;
 #[path = "daemon/enforcement.rs"]
 mod enforcement;
+#[path = "daemon/observation/file.rs"]
+mod file_observation;
 #[path = "daemon/logging/config.rs"]
 mod logging;
 #[path = "daemon/operator.rs"]
@@ -37,7 +39,16 @@ pub use enforcement::{
     EnforcementScope,
 };
 pub use export_factory::ExportConfig as RuntimeExportConfig;
-pub use logging::DiagnosticLogLevel;
+pub use file_observation::{
+    DEFAULT_FILE_BULK_READ_MAX_PATHS_PER_SET, DEFAULT_FILE_BULK_READ_MIN_UNIQUE_PATHS,
+    DEFAULT_FS_ENUMERATE_MAX_PATHS_PER_SET, DEFAULT_FS_ENUMERATE_MIN_UNIQUE_PATHS,
+    FileBulkReadMode, FileBulkReadObservationConfig, FileMetadataRetention, FileObservationConfig,
+    FileRawEventRetention, FileTtyObservationConfig, FsEnumerateObservationConfig,
+};
+pub use logging::{
+    DEFAULT_WORKLOAD_DIAGNOSTICS_ENABLED, DEFAULT_WORKLOAD_DIAGNOSTICS_INTERVAL_MS,
+    DiagnosticLogLevel, WorkloadDiagnosticsConfig,
+};
 pub use operator::{
     DEFAULT_CONTROL_PENDING_CONNECTION_MAX, DEFAULT_OPERATOR_CONFIG_PATH, OPERATOR_CONFIG_TEMPLATE,
     OperatorConfig, OperatorConfigInitStatus,
@@ -90,6 +101,8 @@ pub struct EbpfCollectorConfig {
     pub memlock_rlimit: MemlockRlimit,
     pub tracked_process_max_entries: u32,
     pub pending_operation_max_entries: u32,
+    pub suppressed_fd_max_entries: u32,
+    pub suppressed_fd_index_slots_per_process: u32,
     pub event_ring_buffer_max_bytes: u32,
     pub file_path_capture_enabled: bool,
     pub file_path_max_bytes: u32,

@@ -237,6 +237,7 @@ fn link(
         child_action_id: child_action_id.to_string(),
         role,
         confidence: SemanticActionLinkConfidence::Observed,
+        valid: true,
         evidence: Vec::new(),
         attributes: BTreeMap::new(),
     }

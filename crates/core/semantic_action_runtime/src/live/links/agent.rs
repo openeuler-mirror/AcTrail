@@ -4,7 +4,7 @@ use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use semantic_action::{
     SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkConfidence,
-    SemanticActionLinkRole,
+    SemanticActionLinkRole, attr_keys as attrs,
 };
 
 use crate::live::actions::ATTR_AGENT_IDENTITY_STATUS;
@@ -12,12 +12,13 @@ use crate::live::process_parent::{parent_identity_has_conflict, parent_process_f
 
 use super::shared::{ActionLinkKey, invalidate_child_links, is_nested_file_write_event};
 
-const ATTR_AGENT_ACTION_SEQUENCE: &str = "agent.performed_action.sequence";
+const ATTR_AGENT_ACTION_SEQUENCE: &str = attrs::agent::PERFORMED_ACTION_SEQUENCE;
 
 #[derive(Default)]
 pub(super) struct AgentPerformedActionLinkProjector {
     agents_by_process: BTreeMap<(TraceId, ProcessIdentity), SemanticAction>,
     pending_by_agent_process: BTreeMap<(TraceId, ProcessIdentity), Vec<SemanticAction>>,
+    pending_key_by_child: BTreeMap<(TraceId, String), (TraceId, ProcessIdentity)>,
     emitted_links: BTreeSet<ActionLinkKey>,
     next_sequence_by_agent: BTreeMap<(TraceId, String), u64>,
 }
@@ -46,7 +47,11 @@ impl AgentPerformedActionLinkProjector {
         };
         pending
             .iter()
-            .filter_map(|action| self.link_agent_child(agent, action))
+            .filter_map(|action| {
+                self.pending_key_by_child
+                    .remove(&(action.trace_id, action.action_id.clone()));
+                self.link_agent_child(agent, action)
+            })
             .collect()
     }
 
@@ -75,6 +80,8 @@ impl AgentPerformedActionLinkProjector {
         self.agents_by_process
             .retain(|(candidate, _), _| *candidate != trace_id);
         self.pending_by_agent_process
+            .retain(|(candidate, _), _| *candidate != trace_id);
+        self.pending_key_by_child
             .retain(|(candidate, _), _| *candidate != trace_id);
         self.emitted_links.retain(|key| key.trace_id != trace_id);
         self.next_sequence_by_agent
@@ -105,6 +112,7 @@ impl AgentPerformedActionLinkProjector {
             child_action_id: action.action_id.clone(),
             role: SemanticActionLinkRole::AgentPerformedAction,
             confidence: SemanticActionLinkConfidence::Observed,
+            valid: true,
             evidence: action.evidence.clone(),
             attributes,
         })
@@ -114,9 +122,16 @@ impl AgentPerformedActionLinkProjector {
         let Some(agent_process) = candidate_agent_process(action) else {
             return;
         };
+        let child_key = (action.trace_id, action.action_id.clone());
+        if let Some(previous_key) = self.pending_key_by_child.remove(&child_key)
+            && previous_key != (action.trace_id, agent_process.clone())
+            && let Some(pending) = self.pending_by_agent_process.get_mut(&previous_key)
+        {
+            pending.retain(|candidate| candidate.action_id != action.action_id);
+        }
         let pending = self
             .pending_by_agent_process
-            .entry((action.trace_id, agent_process))
+            .entry((action.trace_id, agent_process.clone()))
             .or_default();
         if let Some(existing) = pending
             .iter_mut()
@@ -126,6 +141,8 @@ impl AgentPerformedActionLinkProjector {
         } else {
             pending.push(action.clone());
         }
+        self.pending_key_by_child
+            .insert(child_key, (action.trace_id, agent_process));
     }
 
     fn agent_for_child(&self, action: &SemanticAction) -> Option<&SemanticAction> {
@@ -138,7 +155,11 @@ impl AgentPerformedActionLinkProjector {
     }
 
     fn remove_pending_child(&mut self, action: &SemanticAction) {
-        for pending in self.pending_by_agent_process.values_mut() {
+        let child_key = (action.trace_id, action.action_id.clone());
+        let Some(pending_key) = self.pending_key_by_child.remove(&child_key) else {
+            return;
+        };
+        if let Some(pending) = self.pending_by_agent_process.get_mut(&pending_key) {
             pending.retain(|candidate| candidate.action_id != action.action_id);
         }
         self.pending_by_agent_process
@@ -173,6 +194,9 @@ fn agent_performed_action_candidate(action: &SemanticAction) -> bool {
             | SemanticActionKind::FileRead
             | SemanticActionKind::FileWrite
             | SemanticActionKind::FileModify
+            | SemanticActionKind::FileTtyIo
+            | SemanticActionKind::FileBulkRead
+            | SemanticActionKind::FsEnumerate
             | SemanticActionKind::ProcessForkAttempt
     )
 }
@@ -183,6 +207,9 @@ fn candidate_agent_process(action: &SemanticAction) -> Option<ProcessIdentity> {
         | SemanticActionKind::FileRead
         | SemanticActionKind::FileWrite
         | SemanticActionKind::FileModify
+        | SemanticActionKind::FileTtyIo
+        | SemanticActionKind::FileBulkRead
+        | SemanticActionKind::FsEnumerate
         | SemanticActionKind::ProcessForkAttempt => Some(action.process.clone()),
         SemanticActionKind::CommandInvocation => parent_process_from_action(action),
         _ => None,

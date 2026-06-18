@@ -57,8 +57,14 @@ const FS_ACCESS_BASIC_FD_PROGRAMS: &[&str] = &[
 ];
 
 const FS_ACCESS_BASIC_PATH_PROGRAMS: &[&str] = &[
+    "handle_sys_enter_open",
+    "handle_sys_exit_open",
     "handle_sys_enter_openat",
     "handle_sys_exit_openat",
+    "handle_sys_enter_openat2",
+    "handle_sys_exit_openat2",
+    "handle_sys_enter_creat",
+    "handle_sys_exit_creat",
     "handle_sys_enter_unlinkat",
     "handle_sys_exit_unlinkat",
     "handle_sys_enter_renameat",
@@ -89,6 +95,12 @@ const PLATFORM_OPTIONAL_TRACEPOINT_PROGRAMS: &[&str] = &[
     "handle_sys_exit_dup2",
     "handle_sys_enter_dup3",
     "handle_sys_exit_dup3",
+    "handle_sys_enter_open",
+    "handle_sys_exit_open",
+    "handle_sys_enter_openat2",
+    "handle_sys_exit_openat2",
+    "handle_sys_enter_creat",
+    "handle_sys_exit_creat",
 ];
 
 const FD_IO_IPC_PROGRAMS: &[&str] = &[
@@ -261,12 +273,13 @@ impl AttachPlan {
         if matches!(capability, Capability::FsAccessBasic) {
             return programs_attached(FS_ACCESS_BASIC_FD_PROGRAMS, attached_programs)
                 && (!self.file_path_capture_enabled
-                    || (programs_attached(FS_ACCESS_BASIC_PATH_PROGRAMS, attached_programs)
-                        && required_programs_attached(
-                            FS_ACCESS_BASIC_CONTEXT_PROGRAMS,
-                            attached_programs,
-                        )
-                        && programs_attached(PROCESS_CONTEXT_PROGRAMS, attached_programs)));
+                    || (required_programs_attached(
+                        FS_ACCESS_BASIC_PATH_PROGRAMS,
+                        attached_programs,
+                    ) && required_programs_attached(
+                        FS_ACCESS_BASIC_CONTEXT_PROGRAMS,
+                        attached_programs,
+                    ) && programs_attached(PROCESS_CONTEXT_PROGRAMS, attached_programs)));
         }
         if matches!(capability, Capability::FsMmap) {
             return programs_attached(FS_MMAP_PROGRAMS, attached_programs)

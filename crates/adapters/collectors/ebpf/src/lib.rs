@@ -23,7 +23,7 @@ use collector_stats::CollectorStats;
 use config_core::daemon::{EbpfCollectorConfig, PayloadConfig};
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use model_core::ids::{CollectorName, TraceId};
-use model_core::process::ProcessIdentity;
+use model_core::process::{InitialSuppressedFd, ProcessIdentity, ProcessSuppressedFd};
 
 use crate::capability_probe::{EbpfProbeResult, probe};
 use crate::decode::FileTracker;
@@ -56,6 +56,13 @@ pub struct EbpfCollector {
     tls_direct_captures: Vec<TlsPayloadDirectCapture>,
     tls_diagnostic_events: Vec<TlsDiagnosticEvent>,
     socket_completions: Vec<SocketPayloadCompletion>,
+    suppressed_fds: Vec<TraceSuppressedFd>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TraceSuppressedFd {
+    trace_id: TraceId,
+    fd: ProcessSuppressedFd,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -87,6 +94,7 @@ impl EbpfCollector {
             tls_direct_captures: Vec::new(),
             tls_diagnostic_events: Vec::new(),
             socket_completions: Vec::new(),
+            suppressed_fds: Vec::new(),
         }
     }
 
@@ -113,7 +121,14 @@ impl EbpfCollector {
     }
 
     pub fn stop_tracking_process(&mut self, pid: u32) -> Result<(), CollectorError> {
+        let identity = self.bindings.tracked_identity(pid).cloned();
         if let Some(runtime) = self.runtime.as_mut() {
+            if let Some(identity) = identity {
+                runtime
+                    .sweep_suppressed_fds_for_process(identity.pid, identity.generation)
+                    .map_err(loader_error)?;
+            }
+            cleanup_suppressed_fds_for_pid(runtime, &mut self.suppressed_fds, pid)?;
             runtime.untrack_pid(pid).map_err(loader_error)?;
         }
         self.bindings.remove_pid(pid);
@@ -260,6 +275,104 @@ impl EbpfCollector {
             .as_mut()
             .ok_or_else(|| CollectorError::new("runtime", "eBPF runtime was not initialized"))
     }
+
+    fn register_initial_suppressed_fds(
+        &mut self,
+        trace_id: TraceId,
+        root_identity: &ProcessIdentity,
+        initial_fds: &[InitialSuppressedFd],
+    ) -> Result<(), CollectorError> {
+        for initial in initial_fds {
+            let fd = ProcessSuppressedFd {
+                process: root_identity.clone(),
+                fd: initial.fd,
+                purpose: initial.purpose,
+            };
+            self.runtime_mut()?
+                .suppress_fd(trace_id, &fd)
+                .map_err(loader_error)?;
+            self.suppressed_fds.push(TraceSuppressedFd { trace_id, fd });
+        }
+        Ok(())
+    }
+
+    fn cleanup_suppressed_fds_for_process(
+        &mut self,
+        pid: u32,
+        generation: u64,
+    ) -> Result<(), CollectorError> {
+        let Some(runtime) = self.runtime.as_mut() else {
+            self.suppressed_fds.retain(|entry| {
+                entry.fd.process.pid != pid || entry.fd.process.generation != generation
+            });
+            return Ok(());
+        };
+        cleanup_suppressed_fds_for_process(runtime, &mut self.suppressed_fds, pid, generation)
+    }
+}
+
+fn cleanup_suppressed_fds_for_pid(
+    runtime: &EbpfRuntime,
+    registry: &mut Vec<TraceSuppressedFd>,
+    pid: u32,
+) -> Result<(), CollectorError> {
+    let mut retained = Vec::new();
+    for entry in std::mem::take(registry) {
+        if entry.fd.process.pid == pid {
+            runtime
+                .unsuppress_fd(&entry.fd.process, entry.fd.fd)
+                .map_err(loader_error)?;
+        } else {
+            retained.push(entry);
+        }
+    }
+    *registry = retained;
+    Ok(())
+}
+
+fn cleanup_suppressed_fds_for_process(
+    runtime: &EbpfRuntime,
+    registry: &mut Vec<TraceSuppressedFd>,
+    pid: u32,
+    generation: u64,
+) -> Result<(), CollectorError> {
+    runtime
+        .sweep_suppressed_fds_for_process(pid, generation)
+        .map_err(loader_error)?;
+    let mut retained = Vec::new();
+    for entry in std::mem::take(registry) {
+        if entry.fd.process.pid == pid && entry.fd.process.generation == generation {
+            runtime
+                .unsuppress_fd(&entry.fd.process, entry.fd.fd)
+                .map_err(loader_error)?;
+        } else {
+            retained.push(entry);
+        }
+    }
+    *registry = retained;
+    Ok(())
+}
+
+fn cleanup_suppressed_fds_for_trace(
+    runtime: &EbpfRuntime,
+    registry: &mut Vec<TraceSuppressedFd>,
+    trace_id: TraceId,
+) -> Result<(), CollectorError> {
+    runtime
+        .sweep_suppressed_fds_for_trace(trace_id)
+        .map_err(loader_error)?;
+    let mut retained = Vec::new();
+    for entry in std::mem::take(registry) {
+        if entry.trace_id == trace_id {
+            runtime
+                .unsuppress_fd(&entry.fd.process, entry.fd.fd)
+                .map_err(loader_error)?;
+        } else {
+            retained.push(entry);
+        }
+    }
+    *registry = retained;
+    Ok(())
 }
 
 impl CollectorInstance for EbpfCollector {
@@ -304,6 +417,18 @@ impl CollectorInstance for EbpfCollector {
         runtime
             .track_pid(&request.root_identity, request.trace_id)
             .map_err(loader_error)?;
+        if let Err(error) = self.register_initial_suppressed_fds(
+            request.trace_id,
+            &request.root_identity,
+            &request.initial_suppressed_fds,
+        ) {
+            let _ = self.runtime_mut().and_then(|runtime| {
+                runtime
+                    .untrack_pid(request.root_identity.pid)
+                    .map_err(loader_error)
+            });
+            return Err(error);
+        }
         self.bindings.set_trace_capabilities(
             request.trace_id,
             request
@@ -324,6 +449,7 @@ impl CollectorInstance for EbpfCollector {
 
     fn unbind_trace(&mut self, trace_id: TraceId) -> Result<(), CollectorError> {
         if let Some(runtime) = self.runtime.as_mut() {
+            cleanup_suppressed_fds_for_trace(runtime, &mut self.suppressed_fds, trace_id)?;
             for tracked in self.bindings.remove_trace(trace_id) {
                 runtime
                     .untrack_pid(tracked.identity.pid)

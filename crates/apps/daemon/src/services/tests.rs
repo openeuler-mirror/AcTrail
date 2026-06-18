@@ -8,9 +8,10 @@ use config_core::capture_profile::CaptureProfile;
 use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
     EnforcementBackend, EnforcementConfig, EnforcementDecision, EnforcementMarkStrategy,
-    EnforcementScope, MemlockRlimit, OPERATOR_CONFIG_TEMPLATE, OperatorConfig, PayloadConfig,
-    ProcessSeccompConfig, ProcessSeccompSyscall, ResourceMetricsConfig, RuntimeExportConfig,
-    SeccompNotifyConfig, SemanticRetentionConfig, SseDataPolicy,
+    EnforcementScope, FileObservationConfig, MemlockRlimit, OPERATOR_CONFIG_TEMPLATE,
+    OperatorConfig, PayloadConfig, ProcessSeccompConfig, ProcessSeccompSyscall,
+    ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig, SemanticRetentionConfig,
+    SseDataPolicy,
 };
 use config_core::trace_snapshot::CaptureProfileSnapshot;
 use control_contract::command::{ControlCommand, ListTracesCommand, TrackAddCommand};
@@ -65,8 +66,10 @@ fn attach_main_path_runs() {
         process_seccomp_disabled(),
         agent_invocation_disabled(),
         SemanticRetentionConfig::default(),
+        FileObservationConfig::default(),
         application_protocol_disabled(),
         resource_metrics_disabled(),
+        workload_diagnostics_disabled(),
         export_runtime_disabled(),
         enforcement_disabled(),
     )
@@ -81,6 +84,7 @@ fn attach_main_path_runs() {
             profile_name: ProfileName::new("snapshot"),
             tags: BTreeSet::new(),
             launch_mode: false,
+            initial_suppressed_fds: Vec::new(),
         }))
         .unwrap();
     let control_contract::reply::ControlReply::TrackAdded(reply) = reply else {
@@ -120,8 +124,10 @@ fn launch_mode_suppresses_wrapper_bootstrap_gap() {
         process_seccomp_disabled(),
         agent_invocation_disabled(),
         SemanticRetentionConfig::default(),
+        FileObservationConfig::default(),
         application_protocol_disabled(),
         resource_metrics_disabled(),
+        workload_diagnostics_disabled(),
         export_runtime_disabled(),
         enforcement_disabled(),
     )
@@ -136,6 +142,7 @@ fn launch_mode_suppresses_wrapper_bootstrap_gap() {
             profile_name: ProfileName::new("snapshot"),
             tags: BTreeSet::new(),
             launch_mode: true,
+            initial_suppressed_fds: Vec::new(),
         }))
         .unwrap();
     let control_contract::reply::ControlReply::TrackAdded(reply) = reply else {
@@ -182,6 +189,7 @@ fn resource_metrics_sampler_persists_procfs_samples() {
         process_seccomp_disabled(),
         agent_invocation_disabled(),
         SemanticRetentionConfig::default(),
+        FileObservationConfig::default(),
         application_protocol_disabled(),
         ResourceMetricsConfig {
             enabled: true,
@@ -191,6 +199,7 @@ fn resource_metrics_sampler_persists_procfs_samples() {
             cpu_alert_percent_millis: None,
             memory_alert_rss_kb: None,
         },
+        workload_diagnostics_disabled(),
         export_runtime_disabled(),
         enforcement_disabled(),
     )
@@ -304,6 +313,8 @@ fn ebpf_config(enabled: bool) -> EbpfCollectorConfig {
         memlock_rlimit: MemlockRlimit::Inherit,
         tracked_process_max_entries: 64,
         pending_operation_max_entries: 128,
+        suppressed_fd_max_entries: 128,
+        suppressed_fd_index_slots_per_process: 64,
         event_ring_buffer_max_bytes: 4096,
         file_path_capture_enabled: false,
         file_path_max_bytes: 255,
@@ -384,6 +395,10 @@ fn resource_metrics_disabled() -> ResourceMetricsConfig {
         cpu_alert_percent_millis: None,
         memory_alert_rss_kb: None,
     }
+}
+
+fn workload_diagnostics_disabled() -> super::workload_diagnostics::WorkloadDiagnostics {
+    super::workload_diagnostics::WorkloadDiagnostics::default()
 }
 
 fn export_runtime_disabled() -> RuntimeExportConfig {

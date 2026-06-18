@@ -4,7 +4,7 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 
-use tls_probe_point_finder::{ProbePointPlan, ProbeSource};
+use tls_probe_point_finder::ProbePointPlan;
 
 use crate::{SyncError, SyncResult};
 
@@ -105,16 +105,9 @@ pub fn audit_env_value_for_libraries(libraries: &[PathBuf]) -> SyncResult<OsStri
 
 pub fn audit_libraries_for_plans(
     runtime_libraries: &[PathBuf],
-    plans: &[ProbePointPlan],
+    _plans: &[ProbePointPlan],
 ) -> Vec<PathBuf> {
-    if plans
-        .iter()
-        .any(|plan| plan.source == ProbeSource::Executable)
-    {
-        Vec::new()
-    } else {
-        runtime_libraries.to_vec()
-    }
+    runtime_libraries.to_vec()
 }
 
 fn loader_env_value_for_libraries(libraries: &[PathBuf], env_name: &str) -> SyncResult<OsString> {

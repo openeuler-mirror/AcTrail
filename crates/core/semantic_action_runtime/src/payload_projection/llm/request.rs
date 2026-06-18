@@ -8,6 +8,7 @@ use model_core::payload::{
 };
 use semantic_action::{
     SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionStatus,
+    attr_keys as attrs, evidence_roles,
 };
 use serde_json::Value;
 
@@ -28,7 +29,7 @@ pub(super) fn project_stream_llm_request_action(
     let first = *segments.first()?;
     http.scheme = plaintext_transport_scheme(first.source_boundary);
     let attributes = llm_attributes(config, segments, raw_bytes, &http, &body);
-    let evidence = payload_aggregate_evidence(segments, "llm.request.payload");
+    let evidence = payload_aggregate_evidence(segments, evidence_roles::llm_request::PAYLOAD);
     Some(SemanticAction {
         action_id: llm_stream_action_id(key, message_start, first),
         trace_id: first.trace_id,
@@ -55,95 +56,113 @@ fn llm_attributes(
     let first = segments[0];
     let mut attributes = BTreeMap::new();
     attributes.insert(
-        "llm.request.raw_payload_bytes".to_string(),
+        attrs::llm_request::RAW_PAYLOAD_BYTES.to_string(),
         raw_bytes.len().to_string(),
     );
     attributes.insert(
-        "llm.request.payload_bytes".to_string(),
+        attrs::llm_request::PAYLOAD_BYTES.to_string(),
         http.body.len().to_string(),
     );
     if body.json_valid {
         attributes.insert(
-            "http.request.body_json_state".to_string(),
+            attrs::http_request::BODY_JSON_STATE.to_string(),
             "valid".to_string(),
         );
     } else {
         attributes.insert(
-            "http.request.body_json_state".to_string(),
+            attrs::http_request::BODY_JSON_STATE.to_string(),
             "invalid_or_unavailable".to_string(),
         );
     }
     if http.body.contains(&0) {
         attributes.insert(
-            "http.request.body_contains_nul".to_string(),
+            attrs::http_request::BODY_CONTAINS_NUL.to_string(),
             "true".to_string(),
         );
     }
     attributes.insert(
-        "http.request.protocol".to_string(),
+        attrs::http_request::PROTOCOL.to_string(),
         http.protocol.to_string(),
     );
-    attributes.insert("network.protocol.name".to_string(), "http".to_string());
     attributes.insert(
-        "network.protocol.version".to_string(),
+        attrs::network::PROTOCOL_NAME.to_string(),
+        "http".to_string(),
+    );
+    attributes.insert(
+        attrs::network::PROTOCOL_VERSION.to_string(),
         http.protocol.to_string(),
     );
-    attributes.insert("url.scheme".to_string(), http.scheme.to_string());
+    attributes.insert(attrs::url::SCHEME.to_string(), http.scheme.to_string());
     if let Some(method) = &http.method {
-        attributes.insert("http.request.method".to_string(), method.clone());
+        attributes.insert(attrs::http_request::METHOD.to_string(), method.clone());
     }
     if let Some(authority) = &http.authority {
-        attributes.insert("server.address".to_string(), authority.clone());
+        attributes.insert(attrs::server::ADDRESS.to_string(), authority.clone());
     }
     if let Some(path) = &http.path {
-        attributes.insert("url.path".to_string(), path.clone());
+        attributes.insert(attrs::url::PATH.to_string(), path.clone());
     }
     if let Some(stream_id) = http.stream_id {
-        attributes.insert("http.request.stream_id".to_string(), stream_id.to_string());
+        attributes.insert(
+            attrs::http_request::STREAM_ID.to_string(),
+            stream_id.to_string(),
+        );
     }
     if let Some(headers) = &http.headers_text {
-        attributes.insert("http.request.headers_text".to_string(), headers.clone());
         attributes.insert(
-            "http.request.headers_encoding".to_string(),
+            attrs::http_request::HEADERS_TEXT.to_string(),
+            headers.clone(),
+        );
+        attributes.insert(
+            attrs::http_request::HEADERS_ENCODING.to_string(),
             "text".to_string(),
         );
     }
     if let Some(headers) = &http.headers_hpack_base64 {
         attributes.insert(
-            "http.request.headers_hpack_base64".to_string(),
+            attrs::http_request::HEADERS_HPACK_BASE64.to_string(),
             headers.clone(),
         );
         attributes.insert(
-            "http.request.headers_encoding".to_string(),
+            attrs::http_request::HEADERS_ENCODING.to_string(),
             "hpack".to_string(),
         );
     }
     if let Some(model) = body.model.as_deref() {
-        attributes.insert("llm.request.model".to_string(), model.to_string());
+        attributes.insert(attrs::llm_request::MODEL.to_string(), model.to_string());
     }
     if config.llm_request_full_provider_json_enabled() {
         if let Some(body_json) = body.body_json.as_deref() {
-            attributes.insert("llm.request.body_json".to_string(), body_json.to_string());
+            attributes.insert(
+                attrs::llm_request::BODY_JSON.to_string(),
+                body_json.to_string(),
+            );
         } else if let Some(body_text) = body.body_text.as_deref() {
-            attributes.insert("llm.request.body_text".to_string(), body_text.to_string());
+            attributes.insert(
+                attrs::llm_request::BODY_TEXT.to_string(),
+                body_text.to_string(),
+            );
         }
     }
     attributes.insert(
-        "payload.stream_key".to_string(),
+        attrs::payload::STREAM_KEY.to_string(),
         first.stream_key.to_string(),
     );
     attributes.insert(
-        "payload.operation_id".to_string(),
+        attrs::payload::OPERATION_ID.to_string(),
         first.operation_id.to_string(),
     );
-    attributes.insert("payload.sequence".to_string(), first.sequence.to_string());
+    attributes.insert(
+        attrs::payload::SEQUENCE.to_string(),
+        first.sequence.to_string(),
+    );
     insert_payload_span_attributes(&mut attributes, segments);
     attributes.insert(
-        "payload.source_boundary".to_string(),
+        attrs::payload::SOURCE_BOUNDARY.to_string(),
         format!("{:?}", first.source_boundary),
     );
-    attributes.insert("payload.library".to_string(), first.library.clone());
-    attributes.insert("payload.symbol".to_string(), first.symbol.clone());
+    attributes.insert(attrs::payload::LIBRARY.to_string(), first.library.clone());
+    attributes.insert(attrs::payload::SYMBOL.to_string(), first.symbol.clone());
     attributes
 }
 
@@ -257,7 +276,7 @@ fn llm_status(segments: &[&PayloadSegment]) -> SemanticActionStatus {
 
 fn llm_title(attributes: &BTreeMap<String, String>) -> String {
     attributes
-        .get("llm.request.model")
+        .get(attrs::llm_request::MODEL)
         .map(|model| format!("LLM request {}", model))
         .unwrap_or_else(|| "LLM request".to_string())
 }

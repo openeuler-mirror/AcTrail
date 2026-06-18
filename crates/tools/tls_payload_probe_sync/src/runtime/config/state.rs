@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
@@ -26,7 +27,40 @@ pub(super) struct RuntimeConfigParts {
     pub(super) redaction: RedactionMode,
     pub(super) events: EventFilter,
     pub(super) trace_id: Option<u64>,
-    pub(super) event_client: Option<EventClient>,
+    pub(super) event_transport: Option<EventTransportConfig>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum EventTransportConfig {
+    InheritedFd {
+        fd: i32,
+        pending_byte_budget: usize,
+        write_buffer_bytes: usize,
+    },
+    Socket {
+        path: PathBuf,
+        pending_byte_budget: usize,
+        write_buffer_bytes: usize,
+    },
+}
+
+impl EventTransportConfig {
+    fn connect(&self) -> Result<EventClient, String> {
+        match self {
+            Self::InheritedFd {
+                fd,
+                pending_byte_budget,
+                write_buffer_bytes,
+            } => EventClient::connect_inherited_fd(*fd, *pending_byte_budget, *write_buffer_bytes)
+                .map_err(|error| format!("connect inherited sync event fd {fd}: {error}")),
+            Self::Socket {
+                path,
+                pending_byte_budget,
+                write_buffer_bytes,
+            } => EventClient::connect(path, *pending_byte_budget, *write_buffer_bytes)
+                .map_err(|error| format!("connect sync event socket {}: {error}", path.display())),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -36,7 +70,8 @@ pub(in crate::runtime) struct RuntimeConfig {
     redaction: RedactionMode,
     events: EventFilter,
     trace_id: Option<u64>,
-    event_client: Option<EventClient>,
+    event_transport: Option<EventTransportConfig>,
+    event_client: Mutex<Option<EventClient>>,
     sequence: AtomicU64,
     symbol_providers: Mutex<BTreeMap<String, String>>,
 }
@@ -49,7 +84,8 @@ impl RuntimeConfig {
             redaction: parts.redaction,
             events: parts.events,
             trace_id: parts.trace_id,
-            event_client: parts.event_client,
+            event_transport: parts.event_transport,
+            event_client: Mutex::new(None),
             sequence: AtomicU64::new(0),
             symbol_providers: Mutex::new(BTreeMap::new()),
         }
@@ -92,6 +128,13 @@ impl RuntimeConfig {
         Ok(())
     }
 
+    pub(in crate::runtime) fn has_registered_plan(&self) -> bool {
+        self.symbol_providers
+            .lock()
+            .map(|providers| !providers.is_empty())
+            .unwrap_or(false)
+    }
+
     pub(in crate::runtime) fn provider_for_symbol(&self, symbol: &str) -> String {
         self.symbol_providers
             .lock()
@@ -101,14 +144,29 @@ impl RuntimeConfig {
     }
 
     pub(in crate::runtime) fn send_event(&self, event: SyncEvent) -> Result<(), String> {
-        let Some(client) = &self.event_client else {
+        let mut client = self
+            .event_client
+            .lock()
+            .map_err(|_| "sync event client mutex poisoned".to_string())?;
+        if client.is_none() {
+            let Some(transport) = &self.event_transport else {
+                return Ok(());
+            };
+            *client = Some(transport.connect()?);
+        }
+        let Some(client) = client.as_ref() else {
             return Ok(());
         };
         client.send(event).map_err(|error| error.to_string())
     }
 
     pub(in crate::runtime) fn close_event_client(&self) -> Result<(), String> {
-        let Some(client) = &self.event_client else {
+        let client = self
+            .event_client
+            .lock()
+            .map_err(|_| "sync event client mutex poisoned".to_string())?
+            .take();
+        let Some(client) = client else {
             return Ok(());
         };
         client.close_and_join().map_err(|error| error.to_string())
@@ -170,14 +228,16 @@ mod tests {
             redaction: RedactionMode::Redact,
             events: EventFilter::parse(Some("")).expect("empty event filter"),
             trace_id: None,
-            event_client: None,
+            event_transport: None,
         });
         assert_eq!(config.provider_for_symbol("SSL_write"), "unknown");
+        assert!(!config.has_registered_plan());
 
         config
             .register_plan(&openssl_plan())
             .expect("register plan");
 
+        assert!(config.has_registered_plan());
         assert_eq!(config.provider_for_symbol("SSL_write"), "openssl");
         assert_eq!(config.provider_for_symbol("SSL_read"), "openssl");
         assert_eq!(config.provider_for_symbol("SSL_write_ex"), "unknown");

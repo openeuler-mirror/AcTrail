@@ -14,6 +14,10 @@ pub fn number(value: impl std::fmt::Display) -> String {
     value.to_string()
 }
 
+pub fn boolean(value: bool) -> String {
+    value.to_string()
+}
+
 pub fn optional_string(value: Option<&str>) -> String {
     value.map(string).unwrap_or_else(|| "null".to_string())
 }

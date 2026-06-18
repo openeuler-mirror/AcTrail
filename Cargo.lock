@@ -28,9 +28,9 @@ checksum = "cc7bb162ec39d46ab1ca8c77bf72e890535becd1751bb45f64c597edb4c8c6b3"
 
 [[package]]
 name = "alloc-stdlib"
-version = "0.2.2"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94fb8275041c72129eb51b7d0322c29b8387a0386127718b096429201a5d6ece"
+checksum = "0e76a019e91224d279006ff972f1e984179a6e9feb050adba6ce8274aef23195"
 dependencies = [
  "alloc-no-stdlib",
 ]
@@ -102,7 +102,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "attach_runtime"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "collector_binding",
  "collector_event",
@@ -116,21 +116,21 @@ dependencies = [
 
 [[package]]
 name = "autocfg"
-version = "1.5.0"
+version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
+checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "bitflags"
-version = "2.11.1"
+version = "2.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4512299f36f043ab09a583e57bceb5a5aab7a73db1805848e8fef3c9e8c78b3"
+checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "brotli"
-version = "8.0.3"
+version = "8.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8119e4516436f5708bbc474a9d395bf12f1b5395e93a92a56e647ac3388c8610"
+checksum = "5cc91aac060a7a1e25823bdccbfb6af1875b88f17c6daac97894eed8207166b3"
 dependencies = [
  "alloc-no-stdlib",
  "alloc-stdlib",
@@ -139,9 +139,9 @@ dependencies = [
 
 [[package]]
 name = "brotli-decompressor"
-version = "5.0.1"
+version = "5.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5962523e1b92ce1b5e793d9169b9943eece10d39f62550bc04bb605d75b94924"
+checksum = "3a32acac15fe1967bc3986b2a6347dffc965602354ea6f450ad07e8bfd253583"
 dependencies = [
  "alloc-no-stdlib",
  "alloc-stdlib",
@@ -149,9 +149,9 @@ dependencies = [
 
 [[package]]
 name = "bumpalo"
-version = "3.20.2"
+version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d20789868f4b01b2f2caec9f5c4e0213b41e3e5702a50157d699ae31ced2fcb"
+checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
 name = "camino"
@@ -187,9 +187,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.61"
+version = "1.2.64"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d16d90359e986641506914ba71350897565610e87ce0ad9e6f28569db3dd5c6d"
+checksum = "dad887fd958be91b5098c0248def011f4523ab786cd411be668777e55063501f"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -211,9 +211,9 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "chrono"
-version = "0.4.44"
+version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c673075a2e0e5f4a1dde27ce9dee1ea4558c7ffe648f576438a20ca1d2acc4b0"
+checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
  "num-traits",
@@ -262,7 +262,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "collector_binding"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "collector_capability",
  "config_core",
@@ -271,21 +271,21 @@ dependencies = [
 
 [[package]]
 name = "collector_capability"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "collector_event"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "collector_instance"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "collector_binding",
  "collector_capability",
@@ -297,7 +297,7 @@ dependencies = [
 
 [[package]]
 name = "collector_stats"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "model_core",
 ]
@@ -310,7 +310,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "config_core"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "export_factory",
  "model_core",
@@ -319,7 +319,7 @@ dependencies = [
 
 [[package]]
 name = "control_contract"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "model_core",
 ]
@@ -341,7 +341,7 @@ dependencies = [
 
 [[package]]
 name = "ctl"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "clap",
  "config_core",
@@ -356,7 +356,7 @@ dependencies = [
 
 [[package]]
 name = "daemon"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "attach_runtime",
  "clap",
@@ -397,7 +397,7 @@ dependencies = [
 
 [[package]]
 name = "ebpf_collector"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "collector_binding",
  "collector_capability",
@@ -417,7 +417,7 @@ dependencies = [
 
 [[package]]
 name = "ebpf_probe"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "config_core",
  "control_contract",
@@ -447,7 +447,7 @@ dependencies = [
 
 [[package]]
 name = "export_core"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "model_core",
  "semantic_action",
@@ -455,7 +455,7 @@ dependencies = [
 
 [[package]]
 name = "export_factory"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "export_core",
  "export_otel_jsonl",
@@ -463,7 +463,7 @@ dependencies = [
 
 [[package]]
 name = "export_otel_codec"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "model_core",
  "semantic_action",
@@ -472,7 +472,7 @@ dependencies = [
 
 [[package]]
 name = "export_otel_jsonl"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "export_core",
  "export_otel_codec",
@@ -569,14 +569,14 @@ dependencies = [
 
 [[package]]
 name = "graph_contract"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "graph_inspect"
-version = "0.3.2"
+version = "0.4.0"
 
 [[package]]
 name = "hashbrown"
@@ -598,9 +598,9 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
-version = "0.17.0"
+version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f467dd6dccf739c208452f8014c75c18bb8301b050ad1cfb27153803edb0f51"
+checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
 name = "hashlink"
@@ -654,14 +654,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d466e9454f08e4a911e14806c24e16fba1b4c121d1ea474396f396069cf949d9"
 dependencies = [
  "equivalent",
- "hashbrown 0.17.0",
+ "hashbrown 0.17.1",
  "serde",
  "serde_core",
 ]
 
 [[package]]
 name = "ingest_runtime"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "collector_event",
  "model_core",
@@ -694,19 +694,18 @@ dependencies = [
 
 [[package]]
 name = "js-sys"
-version = "0.3.97"
+version = "0.3.102"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1840c94c045fbcf8ba2812c95db44499f7c64910a912551aaaa541decebcacf"
+checksum = "03d04c30968dffe80775bd4d7fb676131cd04a1fb46d2686dbffbaec2d9dfd31"
 dependencies = [
  "cfg-if",
  "futures-util",
- "once_cell",
  "wasm-bindgen",
 ]
 
 [[package]]
 name = "json_graph_export"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "graph_contract",
  "model_core",
@@ -792,7 +791,7 @@ checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
 name = "linux_platform"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "config_core",
  "libc",
@@ -800,15 +799,15 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.29"
+version = "0.4.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
+checksum = "953f07c43838f8e6f9758cab68bf5bed85465e7587ebe0b823f1bcd81978ad3a"
 
 [[package]]
 name = "memchr"
-version = "2.8.0"
+version = "2.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
+checksum = "88904434abc2901f197fe8cc55f0445e7ded921dba5911dad2e2b39b48e663c4"
 
 [[package]]
 name = "memmap2"
@@ -831,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "model_core"
-version = "0.3.2"
+version = "0.4.0"
 
 [[package]]
 name = "nix"
@@ -877,25 +876,25 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "otel_export"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "export_otel_codec",
 ]
 
 [[package]]
 name = "payload_binding"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "payload_capability"
-version = "0.3.2"
+version = "0.4.0"
 
 [[package]]
 name = "payload_event"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "model_core",
 ]
@@ -914,7 +913,7 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
 name = "plugin_policy_host"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "model_core",
  "policy_evaluate_contract",
@@ -923,14 +922,14 @@ dependencies = [
 
 [[package]]
 name = "policy_evaluate_contract"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "policy_plugin_contract"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "policy_evaluate_contract",
 ]
@@ -956,25 +955,25 @@ dependencies = [
 
 [[package]]
 name = "process_identity_contract"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "process_tree_snapshot_contract"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "provider_evidence"
-version = "0.3.2"
+version = "0.4.0"
 
 [[package]]
 name = "provider_label"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "provider_evidence",
 ]
@@ -1002,7 +1001,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "recording_runtime"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "export_core",
  "model_core",
@@ -1012,7 +1011,7 @@ dependencies = [
 
 [[package]]
 name = "rule_set_provider"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "config_core",
  "provider_evidence",
@@ -1060,7 +1059,7 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "semantic_action"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "model_core",
  "serde_json",
@@ -1068,9 +1067,10 @@ dependencies = [
 
 [[package]]
 name = "semantic_action_runtime"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "config_core",
+ "libc",
  "model_core",
  "semantic_action",
  "serde_json",
@@ -1118,9 +1118,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.149"
+version = "1.0.150"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83fc039473c5595ace860d8c4fafa220ff474b3fc6bfdb4293327f1a37e94d86"
+checksum = "e8014e44b4736ed0538adeecded0fce2a272f22dc9578a7eb6b2d9993c74cfb9"
 dependencies = [
  "itoa",
  "memchr",
@@ -1140,9 +1140,9 @@ dependencies = [
 
 [[package]]
 name = "shlex"
-version = "1.3.0"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
+checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "simd-adler32"
@@ -1158,17 +1158,17 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "smallvec"
-version = "1.15.1"
+version = "1.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
+checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 
 [[package]]
 name = "sqlite_inspect"
-version = "0.3.2"
+version = "0.4.0"
 
 [[package]]
 name = "sqlite_storage"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "model_core",
  "rusqlite",
@@ -1183,7 +1183,7 @@ dependencies = [
 
 [[package]]
 name = "storage_core"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "model_core",
  "semantic_action",
@@ -1196,7 +1196,7 @@ dependencies = [
 
 [[package]]
 name = "storage_factory"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "sqlite_storage",
  "storage_core",
@@ -1204,32 +1204,32 @@ dependencies = [
 
 [[package]]
 name = "store_read_contract"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "store_retention_contract"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "store_snapshot_contract"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "store_tx_contract"
-version = "0.3.2"
+version = "0.4.0"
 
 [[package]]
 name = "store_write_contract"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "model_core",
 ]
@@ -1242,9 +1242,9 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "syn"
-version = "2.0.117"
+version = "2.0.118"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e665b8803e7b1d2a727f4023456bbbbe74da67099c585258af0ad9c5013b9b99"
+checksum = "1b9ae57f904213ebb649ce6895b8a66c66f0203b9319718f69a5612a065b1422"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1295,11 +1295,11 @@ dependencies = [
 
 [[package]]
 name = "tls_payload_core"
-version = "0.3.2"
+version = "0.4.0"
 
 [[package]]
 name = "tls_payload_probe"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "brotli",
  "clap",
@@ -1314,7 +1314,7 @@ dependencies = [
 
 [[package]]
 name = "tls_payload_probe_sync"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "clap",
  "libc",
@@ -1325,15 +1325,16 @@ dependencies = [
 
 [[package]]
 name = "tls_payload_sync"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
+ "libc",
  "tls_payload_core",
  "tls_probe_point_finder",
 ]
 
 [[package]]
 name = "tls_probe_point_finder"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "anstyle",
  "clap",
@@ -1342,7 +1343,7 @@ dependencies = [
 
 [[package]]
 name = "trace_runtime"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "collector_capability",
  "config_core",
@@ -1395,7 +1396,7 @@ dependencies = [
 
 [[package]]
 name = "uds_control_client"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "control_contract",
  "libc",
@@ -1404,7 +1405,7 @@ dependencies = [
 
 [[package]]
 name = "uds_control_server"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "control_contract",
  "libc",
@@ -1414,7 +1415,7 @@ dependencies = [
 
 [[package]]
 name = "uds_control_transport"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "control_contract",
  "model_core",
@@ -1452,7 +1453,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "view"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "clap",
  "config_core",
@@ -1477,9 +1478,9 @@ dependencies = [
 
 [[package]]
 name = "wasip2"
-version = "1.0.3+wasi-0.2.9"
+version = "1.0.4+wasi-0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20064672db26d7cdc89c7798c48a0fdfac8213434a1186e5ef29fd560ae223d6"
+checksum = "b67efb37e106e55ce722a510d6b5f9c17f083e5fc79afc2badeb12cc313d9487"
 dependencies = [
  "wit-bindgen 0.57.1",
 ]
@@ -1495,9 +1496,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen"
-version = "0.2.120"
+version = "0.2.125"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df52b6d9b87e0c74c9edfa1eb2d9bf85e5d63515474513aa50fa181b3c4f5db1"
+checksum = "8ddb3f79143bced6de84270411622a2699cee572fc0875aeaf1e7867cf9fca1a"
 dependencies = [
  "cfg-if",
  "once_cell",
@@ -1508,9 +1509,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-macro"
-version = "0.2.120"
+version = "0.2.125"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78b1041f495fb322e64aca85f5756b2172e35cd459376e67f2a6c9dffcedb103"
+checksum = "4e21a184b13fb19e157296e2c46056aec9092264fab83e4ba59e68c61b323c3d"
 dependencies = [
  "quote",
  "wasm-bindgen-macro-support",
@@ -1518,9 +1519,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-macro-support"
-version = "0.2.120"
+version = "0.2.125"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9dcd0ff20416988a18ac686d4d4d0f6aae9ebf08a389ff5d29012b05af2a1b41"
+checksum = "fecefd9c35bd935a20fc3fc344b5f29138961e4f47fb03297d88f2587afb5ebd"
 dependencies = [
  "bumpalo",
  "proc-macro2",
@@ -1531,9 +1532,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-shared"
-version = "0.2.120"
+version = "0.2.125"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "49757b3c82ebf16c57d69365a142940b384176c24df52a087fb748e2085359ea"
+checksum = "23939e44bb9a5d7576fa2b563dc2e136628f1224e88a8deed09e04858b77871f"
 dependencies = [
  "unicode-ident",
 ]
@@ -1574,7 +1575,7 @@ dependencies = [
 
 [[package]]
 name = "web"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "config_core",
  "flate2",
@@ -1748,18 +1749,18 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
-version = "0.8.48"
+version = "0.8.52"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eed437bf9d6692032087e337407a86f04cd8d6a16a37199ed57949d415bd68e9"
+checksum = "ce1022995ff5ff5d841ad7d994facc23098cd40152f2c1d11cd607c6f530653f"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.48"
+version = "0.8.52"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70e3cd084b1788766f53af483dd21f93881ff30d7320490ec3ef7526d203bad4"
+checksum = "1ae7f38b72ec2a254e2b87ef277cf2cd4fb97cbebf944faa6f33354da0867930"
 dependencies = [
  "proc-macro2",
  "quote",

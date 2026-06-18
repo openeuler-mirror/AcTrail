@@ -1,6 +1,10 @@
 //! HTTP message extraction from plaintext transport payloads.
 
+mod stream_id;
+
 use crate::payload_projection::encoding::base64_encode;
+
+pub(super) use stream_id::request_stream_id_hint;
 
 const HTTP2_CONNECTION_PREFACE: &[u8] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 const HTTP2_FRAME_HEADER_BYTES: usize = 9;
@@ -49,6 +53,13 @@ pub(super) fn split_request(bytes: &[u8]) -> Option<HttpRequestParts> {
     split_http1_request(bytes).or_else(|| split_http2_request(bytes))
 }
 
+pub(super) fn request_prefix_skip_len(bytes: &[u8]) -> Option<usize> {
+    if http1_request_starts_at(bytes) {
+        return None;
+    }
+    first_http1_request_start_after_prefix(bytes)
+}
+
 pub(super) fn split_response(bytes: &[u8]) -> Option<HttpResponseParts> {
     split_http1_response(bytes).or_else(|| split_http2_response(bytes))
 }
@@ -57,15 +68,8 @@ pub(super) fn split_http1_request(bytes: &[u8]) -> Option<HttpRequestParts> {
     let separator = find_bytes(bytes, HTTP1_HEADER_SEPARATOR)?;
     let header_bytes = &bytes[..separator];
     let header_text = String::from_utf8_lossy(header_bytes).into_owned();
-    if !looks_like_http1_header_block(&header_text) {
-        return None;
-    }
-    let request_line = header_text
-        .split("\r\n")
-        .find(|line| line.contains(" HTTP/"));
-    let (method, path) = request_line
-        .and_then(parse_http1_request_line)
-        .unwrap_or((None, None));
+    let request_line = header_text.split("\r\n").next()?;
+    let (method, path) = parse_http1_request_line(request_line)?;
     let authority = header_text.split("\r\n").find_map(|line| {
         let (key, value) = line.split_once(':')?;
         key.eq_ignore_ascii_case("host")
@@ -82,7 +86,7 @@ pub(super) fn split_http1_request(bytes: &[u8]) -> Option<HttpRequestParts> {
     Some(HttpRequestParts {
         protocol: "http/1.1",
         scheme: "https",
-        method,
+        method: Some(method),
         authority,
         path,
         stream_id: None,
@@ -247,14 +251,6 @@ fn split_http2_response(bytes: &[u8]) -> Option<HttpResponseParts> {
     })
 }
 
-fn looks_like_http1_header_block(text: &str) -> bool {
-    text.contains(" HTTP/")
-        || text.split("\r\n").any(|line| {
-            line.split_once(':')
-                .is_some_and(|(key, _)| is_common_http_header(key))
-        })
-}
-
 fn http1_header_value<'a>(header_text: &'a str, name: &str) -> Option<&'a str> {
     header_text.split("\r\n").find_map(|line| {
         let (key, value) = line.split_once(':')?;
@@ -284,13 +280,6 @@ fn parse_http1_status_line(header_text: &str) -> Option<(String, Option<String>)
     let status_code = parts.next()?.to_string();
     let reason = parts.next().map(ToString::to_string);
     Some((status_code, reason))
-}
-
-fn is_common_http_header(key: &str) -> bool {
-    matches!(
-        key.trim().to_ascii_lowercase().as_str(),
-        "host" | "content-length" | "content-type" | "accept" | "user-agent" | "authorization"
-    )
 }
 
 struct Http1ChunkedBodyPrefix {
@@ -373,16 +362,41 @@ fn starts_like_sse_body(bytes: &[u8]) -> bool {
         .is_some_and(|line| line.starts_with("event:") || line.starts_with("data:"))
 }
 
-fn parse_http1_request_line(line: &str) -> Option<(Option<String>, Option<String>)> {
+fn parse_http1_request_line(line: &str) -> Option<(String, Option<String>)> {
     let mut parts = line.split_whitespace();
     let method = parts.next()?;
     if !HTTP1_REQUEST_METHODS.contains(&method) {
-        return Some((None, None));
+        return None;
     }
-    Some((
-        Some(method.to_string()),
-        parts.next().map(ToString::to_string),
-    ))
+    let path = parts.next().map(ToString::to_string);
+    parts
+        .next()?
+        .starts_with("HTTP/")
+        .then(|| (method.to_string(), path))
+}
+
+fn http1_request_starts_at(bytes: &[u8]) -> bool {
+    let Some(line_end) = find_bytes(bytes, HTTP1_LINE_ENDING) else {
+        return false;
+    };
+    std::str::from_utf8(&bytes[..line_end])
+        .ok()
+        .and_then(parse_http1_request_line)
+        .is_some()
+}
+
+fn first_http1_request_start_after_prefix(bytes: &[u8]) -> Option<usize> {
+    (1..bytes.len()).find(|offset| {
+        http1_request_method_starts_at(&bytes[*offset..])
+            && http1_request_starts_at(&bytes[*offset..])
+    })
+}
+
+fn http1_request_method_starts_at(bytes: &[u8]) -> bool {
+    HTTP1_REQUEST_METHODS.iter().any(|method| {
+        let method = method.as_bytes();
+        bytes.starts_with(method) && bytes.get(method.len()) == Some(&b' ')
+    })
 }
 
 fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {

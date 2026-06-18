@@ -1,14 +1,12 @@
-use std::path::PathBuf;
-
 use tls_payload_sync::{
-    ENV_ENABLED, ENV_EVENT_SOCKET, ENV_EVENTS, ENV_MAX_PAYLOAD_BYTES, ENV_REDACTION, ENV_RULES,
-    ENV_TRACE_ID, EventClient,
+    ENV_ENABLED, ENV_EVENT_FD, ENV_EVENT_SOCKET, ENV_EVENT_WRITE_BUFFER_BYTES, ENV_EVENTS,
+    ENV_MAX_PAYLOAD_BYTES, ENV_REDACTION, ENV_RULES, ENV_TRACE_ID,
 };
 
 use super::codec::parse_rules;
 use super::plan::{RuntimePlan, current_runtime_plan};
 use super::policy::{EventFilter, RedactionMode};
-use super::state::{RuntimeConfig, RuntimeConfigParts};
+use super::state::{EventTransportConfig, RuntimeConfig, RuntimeConfigParts};
 
 pub(in crate::runtime) struct RuntimeConfigFactory;
 
@@ -18,11 +16,17 @@ pub(in crate::runtime) struct RuntimeBootstrap {
 }
 
 impl RuntimeConfigFactory {
-    pub(in crate::runtime) fn from_env() -> Result<Option<RuntimeBootstrap>, String> {
+    pub(in crate::runtime) fn from_env_with_initial_plan(
+        resolve_initial_plan: bool,
+    ) -> Result<Option<RuntimeBootstrap>, String> {
         if std::env::var_os(ENV_ENABLED).is_none() {
             return Ok(None);
         }
-        let initial_plan = current_runtime_plan()?;
+        let initial_plan = if resolve_initial_plan {
+            current_runtime_plan()?
+        } else {
+            None
+        };
         let rules = parse_rules(&std::env::var(ENV_RULES).unwrap_or_default())?;
         let max_payload_bytes = required_payload_limit()?;
         let redaction = RedactionMode::parse(
@@ -37,7 +41,7 @@ impl RuntimeConfigFactory {
                 redaction,
                 events,
                 trace_id: optional_trace_id()?,
-                event_client: optional_event_client(max_payload_bytes)?,
+                event_transport: optional_event_transport(max_payload_bytes)?,
             }),
             initial_plan,
         }))
@@ -67,12 +71,41 @@ fn optional_trace_id() -> Result<Option<u64>, String> {
         .map_err(|error| format!("parse {ENV_TRACE_ID}: {error}"))
 }
 
-fn optional_event_client(pending_byte_budget: usize) -> Result<Option<EventClient>, String> {
+fn optional_event_transport(
+    pending_byte_budget: usize,
+) -> Result<Option<EventTransportConfig>, String> {
+    if let Some(value) = std::env::var_os(ENV_EVENT_FD) {
+        let fd = value
+            .to_string_lossy()
+            .parse::<i32>()
+            .map_err(|error| format!("parse {ENV_EVENT_FD}: {error}"))?;
+        let write_buffer_bytes = required_event_write_buffer_bytes()?;
+        return Ok(Some(EventTransportConfig::InheritedFd {
+            fd,
+            pending_byte_budget,
+            write_buffer_bytes,
+        }));
+    }
     let Some(value) = std::env::var_os(ENV_EVENT_SOCKET) else {
         return Ok(None);
     };
-    let path = PathBuf::from(value);
-    EventClient::connect(&path, pending_byte_budget)
-        .map(Some)
-        .map_err(|error| format!("connect sync event socket {}: {error}", path.display()))
+    let path = std::path::PathBuf::from(value);
+    let write_buffer_bytes = required_event_write_buffer_bytes()?;
+    Ok(Some(EventTransportConfig::Socket {
+        path,
+        pending_byte_budget,
+        write_buffer_bytes,
+    }))
+}
+
+fn required_event_write_buffer_bytes() -> Result<usize, String> {
+    let value = std::env::var(ENV_EVENT_WRITE_BUFFER_BYTES)
+        .map_err(|_| format!("missing required runtime env {ENV_EVENT_WRITE_BUFFER_BYTES}"))?;
+    let bytes = value
+        .parse::<usize>()
+        .map_err(|error| format!("parse {ENV_EVENT_WRITE_BUFFER_BYTES}: {error}"))?;
+    if bytes == 0 {
+        return Err("sync event write buffer bytes must be positive".to_string());
+    }
+    Ok(bytes)
 }

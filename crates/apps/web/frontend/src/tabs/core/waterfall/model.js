@@ -54,6 +54,9 @@ const KIND_GROUPS = Object.freeze({
   'file.read': 'file',
   'file.write': 'file',
   'file.modify': 'file',
+  'file.tty_io': 'file',
+  'file.bulk_read': 'file',
+  'fs.enumerate': 'file',
   'enforcement.decision': 'enforcement',
 });
 

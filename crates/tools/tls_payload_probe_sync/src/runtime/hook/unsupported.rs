@@ -5,3 +5,8 @@ pub(super) fn install(target: usize, replacement: usize) -> Result<usize, String
         std::env::consts::ARCH
     ))
 }
+
+pub(super) fn installed_jump_target(target: usize) -> Option<usize> {
+    let _ = target;
+    None
+}

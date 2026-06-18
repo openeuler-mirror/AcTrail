@@ -17,6 +17,7 @@ use tls_probe_point_finder::ProbePointPlan;
 use tls_probe_point_finder::fast::{ArchFilter, FastProbeRequest, ProviderFilter, SourceFilter};
 
 use super::java_agent::{java_agent_env_required, maybe_append_java_agent_env};
+use super::suppress::InheritableSuppressedFd;
 
 pub(super) struct SyncLaunch {
     pub(super) command: Vec<OsString>,
@@ -61,8 +62,12 @@ pub(super) fn sync_launch(
 pub(super) fn sync_launch_envs(
     trace_id: TraceId,
     config: &PayloadTlsConfig,
+    socket_max_segment_bytes: u32,
     launch: &SyncLaunch,
+    sync_event_fd: Option<&InheritableSuppressedFd>,
 ) -> Result<Vec<(OsString, OsString)>, String> {
+    let sync_event_fd = sync_event_fd
+        .ok_or_else(|| "TLS sync launch requires an inherited event fd".to_string())?;
     let mut envs = runtime_env_for_plans(
         &RuntimeEnvConfig {
             rules: Vec::new(),
@@ -72,6 +77,12 @@ pub(super) fn sync_launch_envs(
             events: EventFilter::none(),
             trace_id: Some(trace_id.get()),
             event_socket_path: Some(config.sync_event_socket_path.clone()),
+            event_fd: Some(sync_event_fd.raw_fd()),
+            event_write_buffer_bytes: Some(
+                usize::try_from(socket_max_segment_bytes).map_err(|error| {
+                    format!("payload_socket_max_segment_bytes overflow: {error}")
+                })?,
+            ),
         },
         &launch.plans,
     )

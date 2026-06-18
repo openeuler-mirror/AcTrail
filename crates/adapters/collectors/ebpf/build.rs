@@ -17,6 +17,7 @@ fn main() {
     println!("cargo:rerun-if-changed=bpf/actrail_net.h");
     println!("cargo:rerun-if-changed=bpf/actrail_proc.h");
     println!("cargo:rerun-if-changed=bpf/actrail_runtime.h");
+    println!("cargo:rerun-if-changed=bpf/actrail_suppressed_fd.h");
     println!("cargo:rerun-if-changed=bpf/actrail_tls_payload.h");
     println!("cargo:rerun-if-changed=bpf/actrail_uprobe_regs.h");
     println!("cargo:rerun-if-changed=bpf/include/actrail_const.h");

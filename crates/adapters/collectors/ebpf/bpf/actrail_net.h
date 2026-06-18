@@ -26,6 +26,9 @@ static __always_inline int store_pending_net_op(
     op.trace_id = *trace_id;
     op.kind = kind;
     op.fd = (__u32)ctx->args[fd_arg];
+    if (is_suppressed_fd(tgid, op.fd)) {
+        return 0;
+    }
     op.syscall_family = syscall_family;
     op.requested_size =
         size_arg < ACTRAIL_SYSCALL_ARG_MISSING ? (__u64)ctx->args[size_arg] : 0;

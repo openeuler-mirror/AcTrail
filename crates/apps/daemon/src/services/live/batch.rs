@@ -3,10 +3,11 @@
 use std::collections::BTreeSet;
 
 use collector_event::{RawCollectorEvent, RawObservationPayload};
+use config_core::daemon::FileMetadataRetention;
 use control_contract::reply::ControlError;
 use ingest_runtime::IngestPipeline;
 use model_core::diagnostics::{DiagnosticKind, DiagnosticRecord};
-use model_core::event::DomainEvent;
+use model_core::event::{DomainEvent, EventPayload};
 use model_core::ids::TraceId;
 use plugin_policy_host::engine::PluginPolicyEngine;
 use plugin_policy_host::registry::PluginRegistry;
@@ -25,6 +26,10 @@ impl StorageAttachService {
         if raw_events.is_empty() {
             return Ok(());
         }
+        let input_events = raw_events.len();
+        let mut retained_events = 0usize;
+        let mut semantic_action_count = 0usize;
+        let mut semantic_link_count = 0usize;
         let mut batch = LiveEventBatch::default();
         for raw_event in raw_events {
             let observed_at = raw_event.envelope.observed_at;
@@ -59,15 +64,34 @@ impl StorageAttachService {
                 }
                 batch.trace_ids.insert(trace_id);
                 for event in outcome.events {
+                    let output = self.semantic_actions.observe_event(&event);
+                    let retain_event = output.retain_event;
+                    semantic_action_count =
+                        semantic_action_count.saturating_add(output.actions.len());
+                    semantic_link_count = semantic_link_count.saturating_add(output.links.len());
                     batch
                         .semantic_actions
-                        .extend(self.observe_semantic_actions_for_event(&event));
-                    batch.events.push(event);
+                        .extend(SemanticActionBatch::from_action_output(
+                            output.actions,
+                            output.links,
+                            output.file_observation_paths,
+                            output.file_path_sets,
+                        ));
+                    if retain_event {
+                        retained_events = retained_events.saturating_add(1);
+                        batch.events.push(self.prepare_event_for_storage(event));
+                    }
                 }
             }
             batch.diagnostics.extend(outcome.diagnostics);
         }
 
+        self.workload_diagnostics.record_event_projection(
+            input_events,
+            retained_events,
+            semantic_action_count,
+            semantic_link_count,
+        );
         self.persist_live_event_batch(trace_runtime, batch)
     }
 
@@ -79,14 +103,36 @@ impl StorageAttachService {
         if events.is_empty() {
             return Ok(());
         }
+        let input_events = events.len();
+        let mut retained_events = 0usize;
+        let mut semantic_action_count = 0usize;
+        let mut semantic_link_count = 0usize;
         let mut batch = LiveEventBatch::default();
         for event in events {
             self.mark_semantic_projection_dirty(event.envelope.trace_id);
+            let output = self.semantic_actions.observe_event(&event);
+            let retain_event = output.retain_event;
+            semantic_action_count = semantic_action_count.saturating_add(output.actions.len());
+            semantic_link_count = semantic_link_count.saturating_add(output.links.len());
             batch
                 .semantic_actions
-                .extend(self.observe_semantic_actions_for_event(&event));
-            batch.events.push(event);
+                .extend(SemanticActionBatch::from_action_output(
+                    output.actions,
+                    output.links,
+                    output.file_observation_paths,
+                    output.file_path_sets,
+                ));
+            if retain_event {
+                retained_events = retained_events.saturating_add(1);
+                batch.events.push(self.prepare_event_for_storage(event));
+            }
         }
+        self.workload_diagnostics.record_event_projection(
+            input_events,
+            retained_events,
+            semantic_action_count,
+            semantic_link_count,
+        );
         self.persist_live_event_batch(trace_runtime, batch)
     }
 
@@ -114,6 +160,42 @@ impl StorageAttachService {
             .into_iter()
             .map(|trace_id| self.trace_state_record_for_persistence(trace_runtime, trace_id))
             .collect()
+    }
+
+    fn prepare_event_for_storage(&self, mut event: DomainEvent) -> DomainEvent {
+        if !self.file_observation.enabled
+            || self.file_observation.metadata_retention == FileMetadataRetention::Full
+        {
+            return event;
+        }
+        let EventPayload::File(payload) = &mut event.payload else {
+            return event;
+        };
+        payload.metadata.remove("operation");
+        payload.metadata.remove("result");
+        remove_if_matches_path(&mut payload.metadata, "raw_path", payload.path.as_deref());
+        remove_if_matches_path(&mut payload.metadata, "fd_target", payload.path.as_deref());
+        let target_path = payload.metadata.get("target_path").cloned();
+        remove_if_matches_path(
+            &mut payload.metadata,
+            "raw_target_path",
+            target_path.as_deref(),
+        );
+        event
+    }
+}
+
+fn remove_if_matches_path(
+    metadata: &mut std::collections::BTreeMap<String, String>,
+    key: &str,
+    canonical: Option<&str>,
+) {
+    if canonical.is_some_and(|canonical| {
+        metadata
+            .get(key)
+            .is_some_and(|candidate| candidate == canonical)
+    }) {
+        metadata.remove(key);
     }
 }
 

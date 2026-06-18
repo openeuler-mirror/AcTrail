@@ -2,8 +2,8 @@
 
 use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
-    PayloadConfig, ProcessSeccompConfig, ResourceMetricsConfig, SeccompNotifyConfig,
-    SemanticRetentionConfig,
+    FileObservationConfig, PayloadConfig, ProcessSeccompConfig, ResourceMetricsConfig,
+    SeccompNotifyConfig, SemanticRetentionConfig,
 };
 use ebpf_collector::EbpfCollector;
 use ebpf_collector::procfs::{ProcfsIdentityReader, ProcfsTreeSnapshotter};
@@ -22,6 +22,7 @@ use crate::services::seccomp_notify::SeccompNotifyService;
 use crate::services::seccomp_socket::SeccompSocketService;
 use crate::services::seccomp_tls::SeccompTlsService;
 use crate::services::tls_sync::TlsSyncService;
+use crate::services::workload_diagnostics::WorkloadDiagnostics;
 
 use super::StorageAttachService;
 use super::helpers::NoopProviderClassifier;
@@ -37,8 +38,10 @@ impl StorageAttachService {
         process_seccomp: ProcessSeccompConfig,
         agent_invocation: AgentInvocationConfig,
         semantic_retention: SemanticRetentionConfig,
+        file_observation: FileObservationConfig,
         application_protocol: ApplicationProtocolConfig,
         resource_metrics: ResourceMetricsConfig,
+        workload_diagnostics: WorkloadDiagnostics,
         enforcement: FanotifyEnforcementService,
         export_runtime: ExportRuntime,
     ) -> Result<Self, control_contract::reply::ControlError> {
@@ -52,8 +55,10 @@ impl StorageAttachService {
             process_seccomp,
             agent_invocation,
             semantic_retention,
+            file_observation,
             application_protocol,
             resource_metrics,
+            workload_diagnostics,
             enforcement,
             export_runtime,
             Box::new(NoopProviderClassifier),
@@ -71,8 +76,10 @@ impl StorageAttachService {
         process_seccomp_config: ProcessSeccompConfig,
         agent_invocation: AgentInvocationConfig,
         semantic_retention: SemanticRetentionConfig,
+        file_observation: FileObservationConfig,
         application_protocol: ApplicationProtocolConfig,
         resource_metrics: ResourceMetricsConfig,
+        workload_diagnostics: WorkloadDiagnostics,
         enforcement: FanotifyEnforcementService,
         export_runtime: ExportRuntime,
         provider_classifier: Box<dyn ProviderClassifier>,
@@ -138,14 +145,21 @@ impl StorageAttachService {
             process_seccomp,
             pending_process_seccomp_observations: Vec::new(),
             semantic_retention: semantic_retention.clone(),
+            file_observation: file_observation.clone(),
             application_protocol: ApplicationProtocolAnalyzer::new_with_retention(
                 application_protocol,
                 semantic_retention.clone(),
             ),
             resource_metrics: ResourceMetricsSampler::new(resource_metrics),
             enforcement,
-            semantic_actions: LiveSemanticActionRuntime::new(agent_invocation, semantic_retention),
+            semantic_actions: LiveSemanticActionRuntime::new(
+                agent_invocation,
+                semantic_retention,
+                file_observation,
+            ),
             export_runtime,
+            workload_diagnostics,
+            retained_payload_bytes_by_trace: Default::default(),
             finalized_terminal_traces: Default::default(),
             diagnosed_terminal_open_memberships: Default::default(),
             provider_classifier,

@@ -1,39 +1,39 @@
 use semantic_action::{
     SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionStatus,
+    attr_keys as attrs,
 };
 
-use crate::live::actions::{append_missing_evidence, llm_call_action_id_from_request_action_id};
+use crate::live::actions::append_missing_evidence;
 
 const DIRECTION_ATTR: &str = "direction";
 const DIRECTION_INBOUND: &str = "inbound";
-const HTTP_RESPONSE_ACTION_ID_ATTR: &str = "llm.call.http_response_action_id";
-const HTTP_RESPONSE_STATUS_CODE_ATTR: &str = "http.response.status_code";
-const HTTP_REQUEST_STREAM_ID_ATTR: &str = "http.request.stream_id";
-const PAYLOAD_SEQUENCE_ATTR: &str = "payload.sequence";
-const PAYLOAD_STREAM_KEY_ATTR: &str = "payload.stream_key";
+const HTTP_RESPONSE_ACTION_ID_ATTR: &str = attrs::llm_call::HTTP_RESPONSE_ACTION_ID;
+const HTTP_RESPONSE_STATUS_CODE_ATTR: &str = attrs::http_response::STATUS_CODE;
+const HTTP_REQUEST_STREAM_ID_ATTR: &str = attrs::http_request::STREAM_ID;
+const PAYLOAD_SEQUENCE_ATTR: &str = attrs::payload::SEQUENCE;
+const PAYLOAD_STREAM_KEY_ATTR: &str = attrs::payload::STREAM_KEY;
 const STATUS_CODE_ATTR: &str = "status_code";
 const STREAM_KEY_ATTR: &str = "stream_key";
 const HTTP_MESSAGE_STREAM_ID_ATTR: &str = "stream_id";
 const HTTP_CLIENT_ERROR_MIN: u16 = 400;
 const HTTP_SERVER_ERROR_MAX: u16 = 599;
 
-pub(super) fn failed_call_for_http_response(
+pub(super) fn failed_call_for_open_request(
     http_response: &SemanticAction,
-    emitted_actions: &[&SemanticAction],
+    request: &SemanticAction,
+    call: &SemanticAction,
 ) -> Option<SemanticAction> {
-    if !http_error_response(http_response) {
+    if !error_response(http_response) {
         return None;
     }
     let response_sequence = http_payload_sequence(http_response)?;
-    let request =
-        latest_request_for_http_response(http_response, response_sequence, emitted_actions)?;
-    let call_id = llm_call_action_id_from_request_action_id(&request.action_id);
-    let call = emitted_actions
-        .iter()
-        .copied()
-        .find(|action| action.kind == SemanticActionKind::LlmCall && action.action_id == call_id)?;
+    if !request_matches_http_response(request, http_response, response_sequence) {
+        return None;
+    }
     if call.status != SemanticActionStatus::InProgress
-        || call.attributes.contains_key("llm.call.response_action_id")
+        || call
+            .attributes
+            .contains_key(attrs::llm_call::RESPONSE_ACTION_ID)
     {
         return None;
     }
@@ -55,31 +55,10 @@ pub(super) fn failed_call_for_http_response(
     if let Some(reason) = http_response.attributes.get("reason") {
         failed
             .attributes
-            .insert("http.response.reason".to_string(), reason.clone());
+            .insert(attrs::http_response::REASON.to_string(), reason.clone());
     }
     append_missing_evidence(&mut failed.evidence, &http_response.evidence);
     Some(failed)
-}
-
-fn latest_request_for_http_response<'a>(
-    http_response: &SemanticAction,
-    response_sequence: u64,
-    emitted_actions: &'a [&'a SemanticAction],
-) -> Option<&'a SemanticAction> {
-    emitted_actions
-        .iter()
-        .copied()
-        .filter(|action| request_matches_http_response(action, http_response, response_sequence))
-        .max_by(|left, right| {
-            (
-                payload_sequence(left).unwrap_or_default(),
-                left.action_id.as_str(),
-            )
-                .cmp(&(
-                    payload_sequence(right).unwrap_or_default(),
-                    right.action_id.as_str(),
-                ))
-        })
 }
 
 fn request_matches_http_response(
@@ -113,7 +92,7 @@ fn http_stream_ids_match(request: &SemanticAction, http_message: &SemanticAction
     }
 }
 
-fn http_error_response(action: &SemanticAction) -> bool {
+pub(super) fn error_response(action: &SemanticAction) -> bool {
     action.kind == SemanticActionKind::HttpMessage
         && action.attributes.get(DIRECTION_ATTR).map(String::as_str) == Some(DIRECTION_INBOUND)
         && action

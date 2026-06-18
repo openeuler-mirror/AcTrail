@@ -4,10 +4,11 @@ use model_core::ids::TraceId;
 use model_core::process::{NamespaceIdentity, ProcessIdentity};
 use rusqlite::{OptionalExtension, Row, params};
 use semantic_action::{
-    SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionLink,
+    FileObservationPath, FilePathSetPathPage, FilePathSetWrite, SemanticAction,
+    SemanticActionCompleteness, SemanticActionKind, SemanticActionLink,
     SemanticActionLinkConfidence, SemanticActionLinkRole, SemanticActionReadStore,
     SemanticActionStatus, SemanticActionStoreError, SemanticActionWriteStore, SemanticEvidence,
-    SemanticEvidenceKind,
+    SemanticEvidenceKind, attr_keys as attrs,
 };
 
 use crate::SqliteStorage;
@@ -50,14 +51,15 @@ impl SemanticActionWriteStore for SqliteStorage {
         connection
             .execute(
                 "INSERT OR REPLACE INTO semantic_action_links (
-                    trace_id, parent_action_id, child_action_id, role, confidence, attributes
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    trace_id, parent_action_id, child_action_id, role, confidence, valid, attributes
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
                     link.trace_id.get(),
                     &link.parent_action_id,
                     &link.child_action_id,
                     link.role.as_str(),
                     link.confidence.as_str(),
+                    link.valid,
                     encode_map(&link.attributes),
                 ],
             )
@@ -110,6 +112,52 @@ impl SemanticActionWriteStore for SqliteStorage {
                 })?;
         }
         Ok(())
+    }
+
+    fn upsert_file_observation_paths(
+        &mut self,
+        paths: &[FileObservationPath],
+    ) -> Result<(), SemanticActionStoreError> {
+        if paths.is_empty() {
+            return Ok(());
+        }
+        let connection = self.connection().borrow_mut();
+        let mut statement = connection
+            .prepare(
+                "INSERT OR IGNORE INTO file_observation_paths (
+                    trace_id, action_id, path_order, path
+                ) VALUES (?1, ?2, ?3, ?4)",
+            )
+            .map_err(|error| {
+                SemanticActionStoreError::new("prepare_file_observation_paths", error.to_string())
+            })?;
+        for path in paths {
+            statement
+                .execute(params![
+                    path.trace_id.get(),
+                    &path.action_id,
+                    path.path_order,
+                    &path.path,
+                ])
+                .map_err(|error| {
+                    SemanticActionStoreError::new(
+                        "upsert_file_observation_paths",
+                        error.to_string(),
+                    )
+                })?;
+        }
+        Ok(())
+    }
+
+    fn upsert_file_path_sets(
+        &mut self,
+        path_sets: &[FilePathSetWrite],
+    ) -> Result<(), SemanticActionStoreError> {
+        if path_sets.is_empty() {
+            return Ok(());
+        }
+        let connection = self.connection().borrow_mut();
+        crate::semantic_actions::path_sets::upsert_file_path_sets(&connection, path_sets)
     }
 }
 
@@ -269,6 +317,29 @@ impl SemanticActionReadStore for SqliteStorage {
         }
         Ok(links)
     }
+
+    fn file_path_set_paths_page(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Option<FilePathSetPathPage>, SemanticActionStoreError> {
+        if self.is_purged(trace_id) {
+            return Err(SemanticActionStoreError::new(
+                "file_path_set_paths_page",
+                "trace has been purged",
+            ));
+        }
+        let connection = self.connection().borrow();
+        crate::semantic_actions::path_sets::file_path_set_paths_page(
+            &connection,
+            trace_id,
+            action_id,
+            offset,
+            limit,
+        )
+    }
 }
 
 pub(super) fn read_evidence(
@@ -385,14 +456,20 @@ pub(super) fn evidence_from_row(row: &Row<'_>) -> Result<SemanticEvidence, rusql
 }
 
 fn action_link_from_row(row: &Row<'_>) -> Result<SemanticActionLink, rusqlite::Error> {
+    let attributes = decode_map(&row.get::<_, String>("attributes")?);
+    let valid = row.get::<_, bool>("valid")?
+        && !attributes
+            .get(attrs::actrail::LINK_VALID)
+            .is_some_and(|value| value == "false");
     Ok(SemanticActionLink {
         trace_id: TraceId::new(row.get("trace_id")?),
         parent_action_id: row.get("parent_action_id")?,
         child_action_id: row.get("child_action_id")?,
         role: decode_link_role(row.get::<_, String>("role")?)?,
         confidence: decode_link_confidence(row.get::<_, String>("confidence")?)?,
+        valid,
         evidence: Vec::new(),
-        attributes: decode_map(&row.get::<_, String>("attributes")?),
+        attributes,
     })
 }
 

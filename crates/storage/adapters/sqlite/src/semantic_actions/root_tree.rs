@@ -7,6 +7,7 @@ use rusqlite::types::Value;
 use rusqlite::{Connection, Row, params_from_iter};
 use semantic_action::{
     SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionStoreError,
+    attr_keys as attrs, link_roles,
 };
 
 use crate::SqliteStorage;
@@ -17,12 +18,12 @@ use crate::semantic_actions::store::{
 use crate::semantic_actions::tree::SemanticActionChildPageQuery;
 use crate::semantic_actions::tree_metadata::display_child_counts;
 
-const ACTION_INVALID_MARKER: &str = "actrail.action.valid=false";
-const LINK_INVALID_MARKER: &str = "actrail.link.valid=false";
-const PARENT_CONFLICT_MARKER: &str = "process.parent.identity_state=conflict";
-const AGENT_ROOT_ROLE: &str = "agent.performed_action";
-const COMMAND_CONTAINS_COMMAND_ROLE: &str = "command.contains_command_invocation";
-const COMMAND_KIND: &str = "command.invocation";
+const ACTION_INVALID_MARKER: &str = attrs::actrail::ACTION_VALID_FALSE_MARKER;
+const LINK_INVALID_MARKER: &str = attrs::actrail::LINK_VALID_FALSE_MARKER;
+const PARENT_CONFLICT_MARKER: &str = attrs::process_parent::IDENTITY_STATE_CONFLICT_MARKER;
+const AGENT_ROOT_ROLE: &str = link_roles::AGENT_PERFORMED_ACTION;
+const COMMAND_CONTAINS_COMMAND_ROLE: &str = link_roles::COMMAND_CONTAINS_COMMAND_INVOCATION;
+const COMMAND_KIND: &str = SemanticActionKind::CommandInvocation.as_str();
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SemanticActionDisplayRootChildRow {
@@ -195,6 +196,7 @@ fn read_root_links(
          WHERE link.trace_id = ?
            AND link.child_action_id IN ({})
            AND link.role IN ({})
+           AND link.valid = 1
            AND instr(link.attributes, ?) = 0
            AND instr(parent.attributes, ?) = 0
            AND instr(child.attributes, ?) = 0
@@ -398,6 +400,7 @@ fn valid_display_parent_link_exists_predicate(roles: &[&str], child_alias: &str)
            WHERE link.trace_id = {child_alias}.trace_id
              AND link.child_action_id = {child_alias}.action_id
              AND link.role IN ({})
+             AND link.valid = 1
              AND instr(link.attributes, ?) = 0
              AND instr(parent.attributes, ?) = 0
              AND NOT (
@@ -432,6 +435,7 @@ fn root_link_from_row(row: &Row<'_>) -> Result<SemanticActionLink, rusqlite::Err
         child_action_id: row.get("child_action_id")?,
         role: decode_link_role(row.get::<_, String>("role")?)?,
         confidence: decode_link_confidence(row.get::<_, String>("confidence")?)?,
+        valid: row.get("valid")?,
         evidence: Vec::new(),
         attributes: decode_map(&row.get::<_, String>("attributes")?),
     })

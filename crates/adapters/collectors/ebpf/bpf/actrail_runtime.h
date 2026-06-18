@@ -311,6 +311,15 @@ static __always_inline void delete_process_generation(__u32 pid) {
     bpf_map_delete_elem(&process_generations, &pid);
 }
 
+static __always_inline __u64 *lookup_process_generation(__u32 pid) {
+    if (!pid) {
+        return 0;
+    }
+    return bpf_map_lookup_elem(&process_generations, &pid);
+}
+
+#include "actrail_suppressed_fd.h"
+
 static __always_inline void init_event(
     struct actrail_event *event,
     __u32 kind,

@@ -6,7 +6,7 @@ use model_core::process::ProcessIdentity;
 use semantic_action::{
     SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionLink,
     SemanticActionLinkConfidence, SemanticActionLinkRole, SemanticActionStatus, SemanticEvidence,
-    SemanticEvidenceKind,
+    SemanticEvidenceKind, attr_keys as attrs,
 };
 
 use super::{ActionDisplayProjection, DisplayChild, ROOT_PARENT_ID};
@@ -175,6 +175,58 @@ fn finalized_llm_call_uses_matching_http_error_response_time() {
     );
 }
 
+#[test]
+fn stale_llm_call_response_link_is_not_displayed() {
+    let process = ProcessIdentity::new(46, 100, 100);
+    let call = llm_call_with_response("call", "response-current", process.clone(), 1);
+    let stale_response = llm_response("response-stale", process.clone(), 2, 50);
+    let current_response = llm_response("response-current", process, 3, 51);
+    let links = vec![
+        link(
+            "call",
+            "response-stale",
+            SemanticActionLinkRole::LlmCallResponse,
+        ),
+        link(
+            "call",
+            "response-current",
+            SemanticActionLinkRole::LlmCallResponse,
+        ),
+    ];
+
+    let projection =
+        ActionDisplayProjection::new(vec![call, stale_response, current_response], links);
+
+    assert_eq!(
+        action_ids(&projection.children("call")),
+        vec!["response-current".to_string()]
+    );
+}
+
+#[test]
+fn file_read_covered_by_bulk_read_is_not_displayed() {
+    let process = ProcessIdentity::new(47, 100, 100);
+    let bulk = bulk_read("bulk", process.clone(), 1, 70, 72);
+    let covered = file_read("covered-read", process.clone(), 2, 70);
+    let outside = file_read("outside-read", process, 3, 73);
+
+    let projection =
+        ActionDisplayProjection::new(vec![bulk, covered.clone(), outside.clone()], Vec::new());
+
+    assert!(
+        projection
+            .actions
+            .iter()
+            .all(|action| action.action_id != covered.action_id)
+    );
+    assert!(
+        projection
+            .actions
+            .iter()
+            .any(|action| action.action_id == outside.action_id)
+    );
+}
+
 fn action(
     id: &str,
     kind: SemanticActionKind,
@@ -246,6 +298,26 @@ fn finalized_llm_call(
     action.attributes.insert(
         "llm.call.request_action_id".to_string(),
         request_id.to_string(),
+    );
+    action
+}
+
+fn llm_call_with_response(
+    id: &str,
+    response_id: &str,
+    process: ProcessIdentity,
+    start_millis: u64,
+) -> SemanticAction {
+    let mut action = action(
+        id,
+        SemanticActionKind::LlmCall,
+        "LLM call",
+        process,
+        start_millis,
+    );
+    action.attributes.insert(
+        attrs::llm_call::RESPONSE_ACTION_ID.to_string(),
+        response_id.to_string(),
     );
     action
 }
@@ -334,6 +406,52 @@ fn http_action(
     action
 }
 
+fn bulk_read(
+    id: &str,
+    process: ProcessIdentity,
+    start_millis: u64,
+    first_event_id: u64,
+    last_event_id: u64,
+) -> SemanticAction {
+    let mut action = action(
+        id,
+        SemanticActionKind::FileBulkRead,
+        "bulk read",
+        process,
+        start_millis,
+    );
+    action.attributes.insert(
+        attrs::file_bulk_read::FIRST_EVENT_ID.to_string(),
+        first_event_id.to_string(),
+    );
+    action.attributes.insert(
+        attrs::file_bulk_read::LAST_EVENT_ID.to_string(),
+        last_event_id.to_string(),
+    );
+    action
+}
+
+fn file_read(
+    id: &str,
+    process: ProcessIdentity,
+    start_millis: u64,
+    event_id: u64,
+) -> SemanticAction {
+    let mut action = action(
+        id,
+        SemanticActionKind::FileRead,
+        "file read",
+        process,
+        start_millis,
+    );
+    action.evidence.push(SemanticEvidence {
+        kind: SemanticEvidenceKind::Event,
+        id: event_id,
+        role: SemanticActionKind::FileRead.as_str().to_string(),
+    });
+    action
+}
+
 fn link(parent: &str, child: &str, role: SemanticActionLinkRole) -> SemanticActionLink {
     SemanticActionLink {
         trace_id: TraceId::new(1),
@@ -341,6 +459,7 @@ fn link(parent: &str, child: &str, role: SemanticActionLinkRole) -> SemanticActi
         child_action_id: child.to_string(),
         role,
         confidence: SemanticActionLinkConfidence::Observed,
+        valid: true,
         evidence: Vec::new(),
         attributes: BTreeMap::new(),
     }

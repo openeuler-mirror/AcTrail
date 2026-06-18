@@ -9,9 +9,10 @@ mod plan;
 mod runtime;
 
 pub use env::{
-    ENV_BINARY, ENV_ENABLED, ENV_EVENT_SOCKET, ENV_EVENTS, ENV_MAX_PAYLOAD_BYTES, ENV_PLAN_BUNDLE,
-    ENV_POINTS, ENV_PROVIDER, ENV_REDACTION, ENV_RULES, ENV_TRACE_ID, EventFilter, RedactionMode,
-    RuntimeEnvConfig, runtime_env, runtime_env_for_plans,
+    ENV_BINARY, ENV_ENABLED, ENV_EVENT_FD, ENV_EVENT_SOCKET, ENV_EVENT_WRITE_BUFFER_BYTES,
+    ENV_EVENTS, ENV_MAX_PAYLOAD_BYTES, ENV_PLAN_BUNDLE, ENV_POINTS, ENV_PROVIDER, ENV_REDACTION,
+    ENV_RULES, ENV_TRACE_ID, EventFilter, RedactionMode, RuntimeEnvConfig, runtime_env,
+    runtime_env_for_plans,
 };
 pub use error::{SyncError, SyncResult};
 pub use event::{

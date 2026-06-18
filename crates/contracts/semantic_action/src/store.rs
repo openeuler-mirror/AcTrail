@@ -2,7 +2,9 @@
 
 use model_core::ids::TraceId;
 
-use crate::model::{SemanticAction, SemanticActionLink};
+use crate::model::{
+    FileObservationPath, FilePathSetPathPage, FilePathSetWrite, SemanticAction, SemanticActionLink,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SemanticActionStoreError {
@@ -29,6 +31,16 @@ pub trait SemanticActionWriteStore {
         &mut self,
         link: SemanticActionLink,
     ) -> Result<(), SemanticActionStoreError>;
+
+    fn upsert_file_observation_paths(
+        &mut self,
+        paths: &[FileObservationPath],
+    ) -> Result<(), SemanticActionStoreError>;
+
+    fn upsert_file_path_sets(
+        &mut self,
+        path_sets: &[FilePathSetWrite],
+    ) -> Result<(), SemanticActionStoreError>;
 }
 
 pub trait SemanticActionReadStore {
@@ -41,4 +53,12 @@ pub trait SemanticActionReadStore {
         &self,
         trace_id: TraceId,
     ) -> Result<Vec<SemanticActionLink>, SemanticActionStoreError>;
+
+    fn file_path_set_paths_page(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Option<FilePathSetPathPage>, SemanticActionStoreError>;
 }

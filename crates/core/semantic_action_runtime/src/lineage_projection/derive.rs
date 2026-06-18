@@ -4,7 +4,7 @@ use model_core::ids::TraceId;
 use model_core::process::ProcessMembership;
 use semantic_action::{
     SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkConfidence,
-    SemanticActionLinkRole,
+    SemanticActionLinkRole, attr_keys as attrs,
 };
 
 use super::index::LineageIndex;
@@ -186,14 +186,12 @@ fn invalidate_stale_lineage_links(
                 child_action_id: link.child_action_id.clone(),
                 role: link.role,
                 confidence: SemanticActionLinkConfidence::Derived,
+                valid: false,
                 evidence,
-                attributes: BTreeMap::from([
-                    (
-                        ATTR_LINK_SOURCE.to_string(),
-                        LINK_SOURCE_PROCESS_LINEAGE.to_string(),
-                    ),
-                    (ATTR_LINK_VALID.to_string(), LINK_VALID_FALSE.to_string()),
-                ]),
+                attributes: BTreeMap::from([(
+                    ATTR_LINK_SOURCE.to_string(),
+                    LINK_SOURCE_PROCESS_LINEAGE.to_string(),
+                )]),
             }
         })
         .collect()
@@ -212,6 +210,7 @@ fn lineage_link(
         child_action_id: child.action_id.clone(),
         role,
         confidence: SemanticActionLinkConfidence::Derived,
+        valid: true,
         evidence: child.evidence.clone(),
         attributes,
     }
@@ -241,6 +240,9 @@ fn command_child_role(action: &SemanticAction) -> Option<SemanticActionLinkRole>
         SemanticActionKind::FileRead
             | SemanticActionKind::FileWrite
             | SemanticActionKind::FileModify
+            | SemanticActionKind::FileTtyIo
+            | SemanticActionKind::FileBulkRead
+            | SemanticActionKind::FsEnumerate
     )
     .then_some(SemanticActionLinkRole::CommandContainsFileAccess)
     .or_else(|| {
@@ -272,6 +274,9 @@ fn agent_child_candidate(action: &SemanticAction) -> bool {
             | SemanticActionKind::FileRead
             | SemanticActionKind::FileWrite
             | SemanticActionKind::FileModify
+            | SemanticActionKind::FileTtyIo
+            | SemanticActionKind::FileBulkRead
+            | SemanticActionKind::FsEnumerate
             | SemanticActionKind::ProcessForkAttempt
     )
 }
@@ -279,7 +284,10 @@ fn agent_child_candidate(action: &SemanticAction) -> bool {
 fn is_nested_file_write_event(action: &SemanticAction) -> bool {
     action.kind == SemanticActionKind::FileModify
         && matches!(
-            action.attributes.get("file.operation").map(String::as_str),
+            action
+                .attributes
+                .get(attrs::file::OPERATION)
+                .map(String::as_str),
             Some("write" | "writev")
         )
 }
@@ -292,10 +300,11 @@ fn parent_identity_has_conflict(action: &SemanticAction) -> bool {
 }
 
 fn valid_link(link: &SemanticActionLink) -> bool {
-    !link
-        .attributes
-        .get(ATTR_LINK_VALID)
-        .is_some_and(|value| value == LINK_VALID_FALSE)
+    link.valid
+        && !link
+            .attributes
+            .get(ATTR_LINK_VALID)
+            .is_some_and(|value| value == LINK_VALID_FALSE)
 }
 
 fn is_lineage_link(link: &SemanticActionLink) -> bool {

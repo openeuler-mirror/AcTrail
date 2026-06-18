@@ -6,6 +6,8 @@ mod controlled;
 mod java_agent;
 #[path = "launch/seccomp.rs"]
 mod seccomp;
+#[path = "launch/suppress.rs"]
+mod suppress;
 #[path = "launch/sync.rs"]
 mod sync;
 
@@ -19,11 +21,13 @@ use control_contract::command::{ControlCommand, TrackAddCommand, TrackRemoveComm
 use control_contract::reply::{ControlError, ControlReply};
 use control_contract::selector::TraceSelector;
 use model_core::ids::{ProfileName, RequestId, TraceId, TraceName};
+use model_core::process::SuppressedFdPurpose;
 
 use crate::output::format_reply;
 use crate::transport::ControlClientPort;
 use controlled::{ChildSetup, ControlledChild};
 use seccomp::{SeccompSetup, register_listener};
+use suppress::InheritableSuppressedFd;
 use sync::{SyncLaunch, sync_launch, sync_launch_envs};
 
 pub(crate) struct LaunchRequest {
@@ -74,6 +78,14 @@ pub(crate) fn run_launch(
         .as_ref()
         .map(|launch| launch.command.clone())
         .unwrap_or_else(|| raw_argv.into_iter().map(OsString::from).collect());
+    let mut sync_event_fd = if tls_sync_enabled {
+        Some(InheritableSuppressedFd::connect_unix_socket(
+            &request.payload_tls_config.sync_event_socket_path,
+            SuppressedFdPurpose::TlsSyncEvent,
+        )?)
+    } else {
+        None
+    };
     let mut child = ControlledChild::spawn(command, child_setup)?;
 
     let reply = match client.send(ControlCommand::TrackAdd(TrackAddCommand {
@@ -83,6 +95,11 @@ pub(crate) fn run_launch(
         profile_name: request.profile_name,
         tags: request.tags,
         launch_mode: true,
+        initial_suppressed_fds: sync_event_fd
+            .as_ref()
+            .map(InheritableSuppressedFd::initial_suppressed_fd)
+            .into_iter()
+            .collect(),
     })) {
         Ok(reply) => reply,
         Err(error) => {
@@ -110,7 +127,13 @@ pub(crate) fn run_launch(
         );
         return Err(error);
     }
-    let envs = match launch_envs(trace_id, &request.payload_tls_config, sync_launch.as_ref()) {
+    let envs = match launch_envs(
+        trace_id,
+        &request.payload_tls_config,
+        request.payload_socket_max_segment_bytes,
+        sync_launch.as_ref(),
+        sync_event_fd.as_ref(),
+    ) {
         Ok(envs) => envs,
         Err(error) => {
             child.terminate();
@@ -122,6 +145,7 @@ pub(crate) fn run_launch(
             return Err(error);
         }
     };
+    drop(sync_event_fd.take());
     if let Err(error) = child.continue_with_envs(envs) {
         child.terminate();
         remove_launch_root_best_effort(
@@ -193,10 +217,18 @@ fn register_seccomp_listener_if_needed(
 fn launch_envs(
     trace_id: TraceId,
     payload_tls_config: &PayloadTlsConfig,
+    payload_socket_max_segment_bytes: u32,
     sync_launch: Option<&SyncLaunch>,
+    sync_event_fd: Option<&InheritableSuppressedFd>,
 ) -> Result<Vec<(OsString, OsString)>, String> {
     match sync_launch {
-        Some(sync_launch) => sync_launch_envs(trace_id, payload_tls_config, sync_launch),
+        Some(sync_launch) => sync_launch_envs(
+            trace_id,
+            payload_tls_config,
+            payload_socket_max_segment_bytes,
+            sync_launch,
+            sync_event_fd,
+        ),
         None => Ok(Vec::new()),
     }
 }

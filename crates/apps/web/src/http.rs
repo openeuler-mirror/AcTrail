@@ -281,6 +281,21 @@ fn route_trace_api(path: &str, query: &str, storage: &StorageConfig) -> Result<R
                 (Err(error), _) | (_, Err(error)) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
             }
         }
+        [trace_id, "actions", action_id, "file-path-set"] => {
+            let trace_id = parse_u64(trace_id);
+            let action_id = percent_decode(action_id);
+            let page = parse_action_tree_page(query);
+            match (trace_id, action_id, page) {
+                (Ok(trace_id), Ok(action_id), Ok(page)) => {
+                    view::action_file_path_set_json(storage, trace_id, &action_id, page)
+                        .map(Response::json)
+                        .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error)))
+                }
+                (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
+                    Ok(Response::text(STATUS_BAD_REQUEST, error))
+                }
+            }
+        }
         [trace_id, "commands"] => parse_u64(trace_id)
             .and_then(|trace_id| view::commands_json(storage, trace_id))
             .map(Response::json)

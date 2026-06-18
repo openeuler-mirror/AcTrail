@@ -7,8 +7,8 @@ use semantic_action::{
 use serde_json::Value;
 
 use super::common::{
-    ToolCallAssembler, extract_finish_reason, extract_response_texts, extract_token_usage,
-    extract_token_usage_from_values,
+    ParsedSseResponseAccumulator, ToolCallAssembler, extract_finish_reason, extract_response_texts,
+    extract_token_usage, extract_token_usage_from_values,
 };
 
 pub(super) const OPENAI_COMPATIBLE_PROVIDER_ID: &str = "openai-compatible";
@@ -138,58 +138,19 @@ impl LlmProviderResponseParser for OpenAiCompatibleResponseParser {
 
 #[derive(Default)]
 struct OpenAiCompatibleStreamParser {
-    parsed_events: Vec<LlmParsedSseEvent>,
+    accumulator: ParsedSseResponseAccumulator,
 }
 
 impl LlmProviderResponseStreamParser for OpenAiCompatibleStreamParser {
     fn observe_event(&mut self, event: LlmSseEvent<'_>) -> LlmParsedSseEvent {
         let parsed = OpenAiCompatibleResponseParser.parse_sse_event(event);
-        self.parsed_events.push(parsed.clone());
+        self.accumulator.observe(&parsed);
         parsed
     }
 
     fn finish(&mut self) -> Option<LlmParsedResponse> {
-        let content_chunks = self
-            .parsed_events
-            .iter()
-            .filter_map(|event| event.content_text.clone())
-            .collect::<Vec<_>>();
-        let reasoning_chunks = self
-            .parsed_events
-            .iter()
-            .filter_map(|event| event.reasoning_text.clone())
-            .collect::<Vec<_>>();
-        let mut assembler = ToolCallAssembler::default();
-        for event in &self.parsed_events {
-            for tool_call in &event.tool_calls {
-                assembler.apply_call_delta(tool_call.clone());
-            }
-        }
-        let tool_calls = assembler.into_calls();
-        let done = self.parsed_events.iter().any(|event| event.done);
-        if content_chunks.is_empty()
-            && reasoning_chunks.is_empty()
-            && tool_calls.is_empty()
-            && !done
-        {
-            return None;
-        }
-        let content_text = (!content_chunks.is_empty()).then(|| content_chunks.join(""));
-        let reasoning_text = (!reasoning_chunks.is_empty()).then(|| reasoning_chunks.join(""));
-        Some(LlmParsedResponse {
-            provider_id: OPENAI_COMPATIBLE_PROVIDER_ID,
-            model: self
-                .parsed_events
-                .iter()
-                .find_map(|event| event.model.clone()),
-            content_text,
-            reasoning_text,
-            tool_calls,
-            token_usage: None,
-            chunk_count: content_chunks.len() + reasoning_chunks.len(),
-            done,
-            stream: true,
-        })
+        self.accumulator
+            .finish(OPENAI_COMPATIBLE_PROVIDER_ID, None, true)
     }
 }
 

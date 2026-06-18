@@ -19,6 +19,8 @@ pub(crate) mod semantic_actions;
 #[path = "services/tls_sync/service.rs"]
 pub(crate) mod tls_sync;
 pub(crate) mod wiring;
+#[path = "services/logging/workload.rs"]
+pub(crate) mod workload_diagnostics;
 
 #[cfg(test)]
 pub(crate) mod tests;

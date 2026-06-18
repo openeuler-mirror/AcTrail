@@ -21,6 +21,7 @@ use trace_runtime::registry::TraceRuntime;
 
 use crate::services::attach::StorageAttachService;
 use crate::services::resource_metrics::COLLECTOR_NAME as RESOURCE_METRICS_COLLECTOR_NAME;
+use crate::services::workload_diagnostics::PayloadSegmentStage;
 
 impl StorageAttachService {
     pub(super) fn drain_live_events_impl(
@@ -29,7 +30,12 @@ impl StorageAttachService {
     ) -> Result<(), ControlError> {
         self.drain_resource_metrics_impl(trace_runtime)?;
         self.drain_tls_sync_events_impl(trace_runtime)?;
-        if !self.collector_ready() || self.collector.stats().active_bindings == 0 {
+        let stats = self.collector.stats();
+        let active_bindings = stats.active_bindings;
+        let active_path = self.collector_ready() && active_bindings > 0;
+        self.workload_diagnostics
+            .record_drain_call(active_bindings, active_path);
+        if !active_path {
             self.drain_seccomp_notifications_impl(trace_runtime)?;
             self.collector
                 .poll_tls_payload_control_events()
@@ -53,6 +59,8 @@ impl StorageAttachService {
             .collector
             .poll_batch()
             .map_err(|error| ControlError::new(error.stage, error.message))?;
+        self.workload_diagnostics
+            .record_collector_batch(batch.observations.len(), batch.payload_segments.len());
         self.log_tls_diagnostic_events_impl();
         self.process_live_event_batch(trace_runtime, batch.observations)?;
         self.process_payload_segments_impl(trace_runtime, batch.payload_segments)?;
@@ -80,6 +88,7 @@ impl StorageAttachService {
                 self.application_protocol.forget_trace(trace.trace_id);
                 self.payload_body_retention_gate
                     .forget_trace(trace.trace_id);
+                self.retained_payload_bytes_by_trace.remove(&trace.trace_id);
             }
         }
     }
@@ -113,6 +122,8 @@ impl StorageAttachService {
         trace_runtime: &TraceRuntime,
     ) -> Result<(), ControlError> {
         let payload_segments = self.tls_sync.drain()?;
+        self.workload_diagnostics
+            .record_payload_segments(PayloadSegmentStage::TlsSync, payload_segments.len());
         self.process_payload_segments_impl(trace_runtime, payload_segments)
     }
 
@@ -123,6 +134,8 @@ impl StorageAttachService {
         let payload_segments = self
             .seccomp_tls
             .complete_operations(&self.identity_reader)?;
+        self.workload_diagnostics
+            .record_payload_segments(PayloadSegmentStage::SeccompTls, payload_segments.len());
         self.process_payload_segments_impl(trace_runtime, payload_segments)
     }
 
@@ -132,6 +145,8 @@ impl StorageAttachService {
     ) -> Result<(), ControlError> {
         let completions = self.collector.take_socket_completions();
         let payload_segments = self.seccomp_socket.complete_operations(completions)?;
+        self.workload_diagnostics
+            .record_payload_segments(PayloadSegmentStage::SeccompSocket, payload_segments.len());
         self.process_payload_segments_impl(trace_runtime, payload_segments)
     }
 

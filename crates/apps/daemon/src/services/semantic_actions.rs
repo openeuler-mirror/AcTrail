@@ -18,14 +18,6 @@ use crate::services::attach::StorageAttachService;
 use crate::services::live::next_diagnostic_id_from_seed;
 
 impl StorageAttachService {
-    pub(super) fn observe_semantic_actions_for_event(
-        &mut self,
-        event: &DomainEvent,
-    ) -> SemanticActionBatch {
-        let output = self.semantic_actions.observe_event(event);
-        SemanticActionBatch::from_parts(output.actions, output.links)
-    }
-
     pub(super) fn write_semantic_action_batch(
         &mut self,
         batch: SemanticActionBatch,
@@ -43,9 +35,15 @@ impl StorageAttachService {
         semantic_actions: SemanticActionBatch,
         trace_states: Vec<TraceStateRecord>,
     ) -> Result<(), ControlError> {
+        let event_count = events.len();
+        let diagnostic_count = diagnostics.len();
+        let semantic_action_count = semantic_actions.actions().len();
+        let semantic_link_count = semantic_actions.links().len();
+        let trace_state_count = trace_states.len();
         let traces = LiveTraceRecordLookup::new(trace_runtime);
         let next_diagnostic_id = &mut self.next_diagnostic_id;
-        RecordingWriter::new(self.storage.as_mut())
+        let started = crate::services::workload_diagnostics::now();
+        let result = RecordingWriter::new(self.storage.as_mut())
             .persist_live_events_then_export(
                 &self.export_runtime,
                 events,
@@ -59,7 +57,18 @@ impl StorageAttachService {
                         .map_err(control_error_to_recording)
                 },
             )
-            .map_err(recording_error_to_control)
+            .map_err(recording_error_to_control);
+        self.workload_diagnostics.record_storage_batch(
+            started.elapsed(),
+            event_count,
+            0,
+            diagnostic_count,
+            semantic_action_count,
+            semantic_link_count,
+            trace_state_count,
+            result.is_ok(),
+        );
+        result
     }
 
     pub(super) fn mark_semantic_projection_dirty(&mut self, trace_id: TraceId) {
@@ -72,7 +81,12 @@ impl StorageAttachService {
         finished_at: std::time::SystemTime,
     ) -> SemanticActionBatch {
         let output = self.semantic_actions.finalize_trace(trace_id, finished_at);
-        SemanticActionBatch::from_parts(output.actions, output.links)
+        SemanticActionBatch::from_action_output(
+            output.actions,
+            output.links,
+            output.file_observation_paths,
+            output.file_path_sets,
+        )
     }
 
     pub(super) fn finalize_semantic_projection_for_trace(

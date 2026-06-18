@@ -148,7 +148,7 @@ fn read_tracepoint_id(target: &TracepointTarget) -> Result<u64, LoaderError> {
     ))
 }
 
-fn tracefs_roots() -> Result<Vec<PathBuf>, LoaderError> {
+pub(super) fn tracefs_roots() -> Result<Vec<PathBuf>, LoaderError> {
     let mountinfo = std::fs::read_to_string("/proc/self/mountinfo").map_err(|error| {
         LoaderError::new(
             "tracefs_mount",

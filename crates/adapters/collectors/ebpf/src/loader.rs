@@ -8,12 +8,18 @@ mod attach_plan;
 mod environment;
 #[path = "loader/file.rs"]
 mod file;
+#[path = "loader/fork.rs"]
+mod fork;
+#[path = "loader/object.rs"]
+mod object;
 #[path = "loader/ring_decode.rs"]
 mod ring_decode;
 #[path = "loader/socket.rs"]
 mod socket;
 #[path = "loader/stdio.rs"]
 mod stdio;
+#[path = "loader/suppressed_fd.rs"]
+mod suppressed_fd;
 #[path = "loader/tls.rs"]
 mod tls;
 #[path = "loader/tracepoint.rs"]
@@ -27,14 +33,14 @@ use std::path::Path;
 use std::rc::Rc;
 
 use config_core::daemon::{EbpfCollectorConfig, PayloadConfig};
-use libbpf_rs::{
-    Link, MapCore, MapFlags, MapHandle, Object, ObjectBuilder, RingBuffer, RingBufferBuilder,
-};
+use libbpf_rs::{Link, MapCore, MapFlags, MapHandle, Object, ObjectBuilder, RingBuffer};
 use model_core::capability::Capability;
 use model_core::ids::TraceId;
+use model_core::process::{ProcessIdentity, ProcessSuppressedFd};
 
 pub use attach_plan::AttachPlan;
 use attach_plan::{configure_program_autoload, effective_config_for_attach_plan};
+use object::{build_ring_buffer, map_handle, resize_map, ring_buffer_max_bytes};
 use ring_decode::decode_kernel_event;
 pub use ring_decode::{
     KernelEndpoint, KernelEvent, KernelFilePathEvent, KernelObservationEvent,
@@ -83,6 +89,9 @@ pub struct EbpfRuntime {
     pid_namespace: MapHandle,
     tracked_traces: MapHandle,
     process_generations: MapHandle,
+    suppressed_fds: MapHandle,
+    suppressed_fd_index: MapHandle,
+    suppressed_fd_index_slots_per_process: u32,
     pending_tls_payload_ops: MapHandle,
     pending_tls_payload_ops_by_namespace: MapHandle,
     payload_tls_diagnostics: MapHandle,
@@ -104,10 +113,6 @@ impl EbpfProgramLoader {
         &self.payload
     }
 
-    pub fn load_runtime(&self) -> Result<EbpfRuntime, LoaderError> {
-        self.load_runtime_with_plan(&AttachPlan::baseline())
-    }
-
     pub fn load_runtime_with_plan(
         &self,
         attach_plan: &AttachPlan,
@@ -116,6 +121,7 @@ impl EbpfProgramLoader {
         tls::validate_payload_config(&self.payload.tls)?;
         stdio::validate_payload_config(&self.payload.stdio)?;
         socket::validate_payload_config(&self.payload.socket)?;
+        suppressed_fd::validate_config(&self.config)?;
         let effective_payload = effective_config_for_attach_plan(&self.payload, attach_plan);
         environment::ensure_tracefs_control()?;
         environment::apply_memlock_rlimit(self.config.memlock_rlimit)?;
@@ -147,6 +153,21 @@ impl EbpfProgramLoader {
         resize_map(
             &mut open_object,
             "pending_exit_ops",
+            self.config.pending_operation_max_entries,
+        )?;
+        resize_map(
+            &mut open_object,
+            "suppressed_fds",
+            self.config.suppressed_fd_max_entries,
+        )?;
+        resize_map(
+            &mut open_object,
+            "suppressed_fd_index",
+            self.config.suppressed_fd_max_entries,
+        )?;
+        resize_map(
+            &mut open_object,
+            "pending_suppressed_fd_dup_ops",
             self.config.pending_operation_max_entries,
         )?;
         resize_map(
@@ -223,6 +244,9 @@ impl EbpfRuntime {
         let tracked_traces = map_handle(&object, "tracked_traces", "tracked_map")?;
         let process_generations =
             map_handle(&object, "process_generations", "process_generation_map")?;
+        let suppressed_fds = map_handle(&object, "suppressed_fds", "suppressed_fds")?;
+        let suppressed_fd_index =
+            map_handle(&object, "suppressed_fd_index", "suppressed_fd_index")?;
         let pid_namespace = map_handle(&object, "pid_namespace", "pid_namespace_map")?;
         let pending_tls_payload_ops = map_handle(
             &object,
@@ -239,18 +263,10 @@ impl EbpfRuntime {
         let events_map = map_handle(&object, "events", "ring_buffer")?;
 
         let events = Rc::new(RefCell::new(Vec::new()));
-        let callback_events = Rc::clone(&events);
-        let mut ring_buffer_builder = RingBufferBuilder::new();
-        ring_buffer_builder
-            .add(&events_map, move |raw| {
-                callback_events.borrow_mut().push(raw.to_vec());
-                0
-            })
-            .map_err(|error| LoaderError::new("ring_buffer", error.to_string()))?;
-        let ring_buffer = ring_buffer_builder
-            .build()
-            .map_err(|error| LoaderError::new("ring_buffer", error.to_string()))?;
+        let ring_buffer = build_ring_buffer(&events_map, Rc::clone(&events))?;
+        fork::configure_child_pid_offset_map(&object, attach_plan)?;
         file::configure_file_config_map(&object, config)?;
+        suppressed_fd::configure_config_map(&object, config)?;
         tls::configure_payload_tls_map(&object, &payload.tls)?;
         stdio::configure_payload_stdio_map(&object, &payload.stdio)?;
         socket::configure_payload_socket_map(&object, &payload.socket)?;
@@ -304,6 +320,9 @@ impl EbpfRuntime {
             pid_namespace,
             tracked_traces,
             process_generations,
+            suppressed_fds,
+            suppressed_fd_index,
+            suppressed_fd_index_slots_per_process: config.suppressed_fd_index_slots_per_process,
             pending_tls_payload_ops,
             pending_tls_payload_ops_by_namespace,
             payload_tls_diagnostics,
@@ -327,7 +346,7 @@ impl EbpfRuntime {
 
     pub fn track_pid(
         &self,
-        identity: &model_core::process::ProcessIdentity,
+        identity: &ProcessIdentity,
         trace_id: TraceId,
     ) -> Result<(), LoaderError> {
         let pid = identity.pid;
@@ -339,6 +358,47 @@ impl EbpfRuntime {
         self.process_generations
             .update(&key, &identity.generation.to_ne_bytes(), MapFlags::ANY)
             .map_err(|error| LoaderError::new("track_pid_generation", error.to_string()))
+    }
+
+    pub fn suppress_fd(
+        &self,
+        trace_id: TraceId,
+        suppressed_fd: &ProcessSuppressedFd,
+    ) -> Result<(), LoaderError> {
+        suppressed_fd::suppress_fd(
+            &self.suppressed_fds,
+            &self.suppressed_fd_index,
+            self.suppressed_fd_index_slots_per_process,
+            trace_id,
+            suppressed_fd,
+        )
+    }
+
+    pub fn unsuppress_fd(&self, process: &ProcessIdentity, fd: i32) -> Result<(), LoaderError> {
+        suppressed_fd::unsuppress_fd(
+            &self.suppressed_fds,
+            &self.suppressed_fd_index,
+            self.suppressed_fd_index_slots_per_process,
+            process,
+            fd,
+        )
+    }
+
+    pub fn sweep_suppressed_fds_for_process(
+        &self,
+        pid: u32,
+        generation: u64,
+    ) -> Result<(), LoaderError> {
+        suppressed_fd::sweep_process(
+            &self.suppressed_fds,
+            &self.suppressed_fd_index,
+            pid,
+            generation,
+        )
+    }
+
+    pub fn sweep_suppressed_fds_for_trace(&self, trace_id: TraceId) -> Result<(), LoaderError> {
+        suppressed_fd::sweep_trace(&self.suppressed_fds, &self.suppressed_fd_index, trace_id)
     }
 
     pub fn set_pid_namespace(&self, namespace: PidNamespace) -> Result<(), LoaderError> {
@@ -439,45 +499,4 @@ impl EbpfRuntime {
         }
         Ok(true)
     }
-}
-
-fn ring_buffer_max_bytes(config: &EbpfCollectorConfig, payload: &PayloadConfig) -> u32 {
-    let mut max_bytes = config.event_ring_buffer_max_bytes;
-    if payload.tls.enabled {
-        max_bytes = max_bytes.max(payload.tls.ring_buffer_bytes);
-    }
-    if payload.stdio.enabled {
-        max_bytes = max_bytes.max(payload.stdio.ring_buffer_bytes);
-    }
-    if payload.socket.enabled {
-        max_bytes = max_bytes.max(payload.socket.ring_buffer_bytes);
-    }
-    max_bytes
-}
-
-fn map_handle(
-    object: &Object,
-    map_name: &'static str,
-    stage: &'static str,
-) -> Result<MapHandle, LoaderError> {
-    object
-        .maps()
-        .find(|map| map.name() == OsStr::new(map_name))
-        .ok_or_else(|| LoaderError::new(stage, format!("{map_name} map is missing")))
-        .and_then(|map| {
-            MapHandle::try_from(&map).map_err(|error| LoaderError::new(stage, error.to_string()))
-        })
-}
-
-fn resize_map(
-    open_object: &mut libbpf_rs::OpenObject,
-    map_name: &str,
-    max_entries: u32,
-) -> Result<(), LoaderError> {
-    let mut map = open_object
-        .maps_mut()
-        .find(|map| map.name() == OsStr::new(map_name))
-        .ok_or_else(|| LoaderError::new("resize_map", format!("map {map_name} is missing")))?;
-    map.set_max_entries(max_entries)
-        .map_err(|error| LoaderError::new("resize_map", error.to_string()))
 }

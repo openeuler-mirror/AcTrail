@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use model_core::ids::TraceId;
 
 use crate::loader::KernelFilePathEvent;
-use crate::procfs::{FdTargetKind, read_process_cwd, resolve_fd_observation};
+use crate::procfs::read_process_cwd;
 
 use super::user_path::{UserPathRead, read_process_path};
 
@@ -39,6 +39,7 @@ pub(super) const FILE_SYSCALL_DUP3: u32 = 18;
 pub(super) const FILE_SYSCALL_FCNTL: u32 = 19;
 pub(super) const FILE_SYSCALL_CHDIR: u32 = 20;
 pub(super) const FILE_SYSCALL_FCHDIR: u32 = 21;
+pub(super) const FILE_SYSCALL_OPENAT2: u32 = 22;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct FileSyscallOutcome {
@@ -98,26 +99,14 @@ impl FileTracker {
             .retain(|key, event| key.tid != pid && event.pid != pid);
     }
 
-    pub(crate) fn resolve_fd_path(&mut self, pid: u32, fd: u32) -> Option<String> {
+    pub(crate) fn resolve_fd_path(&self, pid: u32, fd: u32) -> Option<String> {
         if fd == FILE_FD_MISSING {
             return None;
         }
-        if let Some(path) = self
-            .processes
+        self.processes
             .get(&pid)
             .and_then(|state| state.fds.get(&fd))
             .cloned()
-        {
-            return Some(path);
-        }
-        let observation = resolve_fd_observation(pid, fd).ok().flatten()?;
-        if observation.kind != FdTargetKind::RegularFile {
-            return None;
-        }
-        self.ensure_process(pid)
-            .fds
-            .insert(fd, observation.target.clone());
-        Some(observation.target)
     }
 
     pub(super) fn record(&mut self, event: KernelFilePathEvent) -> Option<FileSyscallOutcome> {
@@ -157,7 +146,7 @@ impl FileTracker {
             return None;
         }
         match enter.aux {
-            FILE_SYSCALL_OPEN | FILE_SYSCALL_OPENAT | FILE_SYSCALL_CREAT => {
+            FILE_SYSCALL_OPEN | FILE_SYSCALL_OPENAT | FILE_SYSCALL_CREAT | FILE_SYSCALL_OPENAT2 => {
                 let fd = u32::try_from(result).ok()?;
                 let path = primary_path
                     .resolved
@@ -173,7 +162,11 @@ impl FileTracker {
                     .remove(&(enter.arg0 as u32));
                 path
             }
-            FILE_SYSCALL_DUP | FILE_SYSCALL_DUP2 | FILE_SYSCALL_DUP3 | FILE_SYSCALL_FCNTL => {
+            FILE_SYSCALL_DUP | FILE_SYSCALL_DUP2 | FILE_SYSCALL_DUP3 => {
+                self.apply_dup_like_exit(enter, result);
+                None
+            }
+            FILE_SYSCALL_FCNTL if fcntl_duplicates_fd(enter) => {
                 self.apply_dup_like_exit(enter, result);
                 None
             }
@@ -362,6 +355,7 @@ fn primary_path_pointer(event: &KernelFilePathEvent) -> Option<u64> {
         | FILE_SYSCALL_TRUNCATE
         | FILE_SYSCALL_CHDIR => Some(event.arg0),
         FILE_SYSCALL_OPENAT
+        | FILE_SYSCALL_OPENAT2
         | FILE_SYSCALL_UNLINKAT
         | FILE_SYSCALL_RENAMEAT
         | FILE_SYSCALL_RENAMEAT2
@@ -381,6 +375,7 @@ fn secondary_path_pointer(event: &KernelFilePathEvent) -> Option<u64> {
 fn primary_dirfd(event: &KernelFilePathEvent) -> Option<u32> {
     match event.aux {
         FILE_SYSCALL_OPENAT
+        | FILE_SYSCALL_OPENAT2
         | FILE_SYSCALL_UNLINKAT
         | FILE_SYSCALL_RENAMEAT
         | FILE_SYSCALL_RENAMEAT2
@@ -398,8 +393,14 @@ fn secondary_dirfd(event: &KernelFilePathEvent) -> Option<u32> {
 
 fn dup_target_fd(event: &KernelFilePathEvent, result: i64) -> Option<u32> {
     match event.aux {
-        FILE_SYSCALL_DUP | FILE_SYSCALL_FCNTL => u32::try_from(result).ok(),
+        FILE_SYSCALL_DUP => u32::try_from(result).ok(),
+        FILE_SYSCALL_FCNTL if fcntl_duplicates_fd(event) => u32::try_from(result).ok(),
         FILE_SYSCALL_DUP2 | FILE_SYSCALL_DUP3 => Some(event.arg1 as u32),
         _ => None,
     }
+}
+
+fn fcntl_duplicates_fd(event: &KernelFilePathEvent) -> bool {
+    i32::try_from(event.arg1)
+        .is_ok_and(|command| matches!(command, libc::F_DUPFD | libc::F_DUPFD_CLOEXEC))
 }

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::time::SystemTime;
 
-use config_core::daemon::{AgentInvocationConfig, SemanticRetentionConfig};
+use config_core::daemon::{AgentInvocationConfig, FileObservationConfig, SemanticRetentionConfig};
 use model_core::event::{
     ApplicationPayload, DomainEvent, EventEnvelope, EventFlags, EventKind, EventPayload,
     FilePayload, ProcessPayload,
@@ -70,6 +70,7 @@ pub(super) fn runtime() -> LiveSemanticActionRuntime {
             commands: vec!["xiaoo".to_string()],
         },
         SemanticRetentionConfig::default(),
+        FileObservationConfig::default(),
     )
 }
 

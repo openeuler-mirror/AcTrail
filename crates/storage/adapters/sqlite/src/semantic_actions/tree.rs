@@ -6,7 +6,9 @@ use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use rusqlite::types::Value;
 use rusqlite::{Connection, Params, Row, params, params_from_iter};
-use semantic_action::{SemanticAction, SemanticActionLink, SemanticActionStoreError};
+use semantic_action::{
+    SemanticAction, SemanticActionLink, SemanticActionStoreError, attr_keys as attrs,
+};
 
 use crate::SqliteStorage;
 use crate::records::decode_map;
@@ -70,6 +72,7 @@ impl SqliteStorage {
                 SELECT 1 FROM semantic_action_links link
                 WHERE link.trace_id = action.trace_id
                 AND link.child_action_id = action.action_id
+                AND link.valid = 1
              )",
             params![trace_id.get()],
             "count_semantic_action_roots",
@@ -100,7 +103,10 @@ impl SqliteStorage {
             })?;
         let rows = statement
             .query_map(
-                params![trace_id.get(), "%agent.identity.status=observed%"],
+                params![
+                    trace_id.get(),
+                    format!("%{}%", attrs::agent::IDENTITY_STATUS_OBSERVED_MARKER)
+                ],
                 action_from_row,
             )
             .map_err(|error| {
@@ -112,7 +118,7 @@ impl SqliteStorage {
             })?;
             if action
                 .attributes
-                .get("agent.identity.status")
+                .get(attrs::agent::IDENTITY_STATUS)
                 .is_some_and(|status| status == "observed")
                 && !invalidated_action_attrs(&action.attributes)
             {
@@ -294,6 +300,7 @@ impl SqliteStorage {
                     link.child_action_id AS child_action_id,
                     link.role AS role,
                     link.confidence AS confidence,
+                    link.valid AS valid,
                     link.attributes AS link_attributes
              FROM semantic_action_links link
              JOIN semantic_actions child
@@ -301,6 +308,7 @@ impl SqliteStorage {
               AND child.action_id = link.child_action_id
              WHERE link.trace_id = ?
                AND link.parent_action_id = ?
+               AND link.valid = 1
                AND link.role IN ({})
                {}
              ORDER BY child.start_time ASC, child.action_id ASC, link.role ASC{}",
@@ -329,6 +337,7 @@ impl SqliteStorage {
                 SemanticActionStoreError::new("map_semantic_action_child", error.to_string())
             })?;
             if invalidated_action_attrs(&child.action.attributes)
+                || !child.link.valid
                 || invalidated_link_attrs(
                     &child.link.attributes,
                     child.link.role.as_str(),
@@ -405,6 +414,7 @@ fn child_row_from_row(row: &Row<'_>) -> Result<SemanticActionChildRow, rusqlite:
         child_action_id: row.get("child_action_id")?,
         role: decode_link_role(row.get::<_, String>("role")?)?,
         confidence: decode_link_confidence(row.get::<_, String>("confidence")?)?,
+        valid: row.get("valid")?,
         evidence: Vec::new(),
         attributes: decode_map(&row.get::<_, String>("link_attributes")?),
     };

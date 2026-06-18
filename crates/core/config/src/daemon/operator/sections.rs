@@ -2,14 +2,16 @@
 
 use super::super::values::{ConfigNode, ConfigValues};
 use super::super::{
-    AgentInvocationConfig, ApplicationProtocolConfig, DisabledOrPath, EnforcementConfig,
-    L0LlmCallRetention, L1SseRetention, L2HttpRetention, L3Http2FrameRetention, L4PayloadRetention,
-    PayloadRedactionPolicy, PayloadSocketCaptureBackend, PayloadSocketConfig,
-    PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadStdioStorageMode,
+    AgentInvocationConfig, ApplicationProtocolConfig, DEFAULT_WORKLOAD_DIAGNOSTICS_ENABLED,
+    DEFAULT_WORKLOAD_DIAGNOSTICS_INTERVAL_MS, DisabledOrPath, EnforcementConfig,
+    FileBulkReadObservationConfig, FileObservationConfig, FileTtyObservationConfig,
+    FsEnumerateObservationConfig, L0LlmCallRetention, L1SseRetention, L2HttpRetention,
+    L3Http2FrameRetention, L4PayloadRetention, PayloadRedactionPolicy, PayloadSocketCaptureBackend,
+    PayloadSocketConfig, PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadStdioStorageMode,
     PayloadTlsCaptureBackend, PayloadTlsConfig, PayloadTlsLibrary, PayloadTlsLibraryPath,
     PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource,
     PayloadTlsSyncRuntimeLibraryPath, ProcessSeccompConfig, ProcessSeccompSyscall,
-    ResourceMetricsConfig, SeccompNotifyConfig, SemanticRetentionConfig,
+    ResourceMetricsConfig, SeccompNotifyConfig, SemanticRetentionConfig, WorkloadDiagnosticsConfig,
 };
 use crate::export::ExportConfig;
 use crate::provider_rules::ProviderRuleSetConfig;
@@ -45,6 +47,16 @@ pub(super) fn resource_metrics_config(node: ConfigNode) -> Result<ResourceMetric
         cpu_alert_percent_millis: node
             .required_disabled_or_positive_u64("cpu_alert_percent_millis")?,
         memory_alert_rss_kb: node.required_disabled_or_positive_u64("memory_alert_rss_kb")?,
+    })
+}
+
+pub(super) fn workload_diagnostics_config(
+    node: ConfigNode,
+) -> Result<WorkloadDiagnosticsConfig, String> {
+    Ok(WorkloadDiagnosticsConfig {
+        enabled: node.optional_bool("enabled", DEFAULT_WORKLOAD_DIAGNOSTICS_ENABLED)?,
+        interval_ms: node
+            .optional_positive_u64("interval_ms", DEFAULT_WORKLOAD_DIAGNOSTICS_INTERVAL_MS)?,
     })
 }
 
@@ -183,6 +195,73 @@ pub(super) fn semantic_retention_config(
     })
 }
 
+pub(super) fn file_observation_config(node: ConfigNode) -> Result<FileObservationConfig, String> {
+    let defaults = FileObservationConfig::default();
+    let tty = FileTtyObservationConfig::default();
+    let bulk_read = FileBulkReadObservationConfig::default();
+    let enumerate = FsEnumerateObservationConfig::default();
+    let config = FileObservationConfig {
+        enabled: node.optional_bool("enabled", defaults.enabled)?,
+        metadata_retention: node
+            .optional_parsed("metadata_retention", defaults.metadata_retention)?,
+        tty: FileTtyObservationConfig {
+            enabled: node.optional_bool("tty_enabled", tty.enabled)?,
+            paths: optional_repeated_non_empty(&node, "tty_path", tty.paths)?,
+            operations: optional_repeated_non_empty(&node, "tty_operation", tty.operations)?,
+            raw_event_retention: node
+                .optional_parsed("tty_raw_event_retention", tty.raw_event_retention)?,
+        },
+        bulk_read: FileBulkReadObservationConfig {
+            enabled: node.optional_bool("bulk_read_enabled", bulk_read.enabled)?,
+            mode: node.optional_parsed("bulk_read_mode", bulk_read.mode)?,
+            raw_event_retention: node.optional_parsed(
+                "bulk_read_raw_event_retention",
+                bulk_read.raw_event_retention,
+            )?,
+            min_unique_paths: node
+                .optional_positive_u32("bulk_read_min_unique_paths", bulk_read.min_unique_paths)?,
+            max_paths_per_set: node.optional_positive_u32(
+                "bulk_read_max_paths_per_set",
+                bulk_read.max_paths_per_set,
+            )?,
+            path_set_chunk_max_paths: node.optional_positive_u32(
+                "bulk_read_path_set_chunk_max_paths",
+                bulk_read.path_set_chunk_max_paths,
+            )?,
+        },
+        enumerate: FsEnumerateObservationConfig {
+            enabled: node.optional_bool("enumerate_enabled", enumerate.enabled)?,
+            raw_event_retention: node.optional_parsed(
+                "enumerate_raw_event_retention",
+                enumerate.raw_event_retention,
+            )?,
+            min_unique_paths: node
+                .optional_positive_u32("enumerate_min_unique_paths", enumerate.min_unique_paths)?,
+            max_paths_per_set: node.optional_positive_u32(
+                "enumerate_max_paths_per_set",
+                enumerate.max_paths_per_set,
+            )?,
+            path_set_chunk_max_paths: node.optional_positive_u32(
+                "enumerate_path_set_chunk_max_paths",
+                enumerate.path_set_chunk_max_paths,
+            )?,
+        },
+    };
+    if config.bulk_read.max_paths_per_set < config.bulk_read.min_unique_paths {
+        return Err(
+            "file_observation_bulk_read_max_paths_per_set must be >= file_observation_bulk_read_min_unique_paths"
+                .to_string(),
+        );
+    }
+    if config.enumerate.max_paths_per_set < config.enumerate.min_unique_paths {
+        return Err(
+            "file_observation_enumerate_max_paths_per_set must be >= file_observation_enumerate_min_unique_paths"
+                .to_string(),
+        );
+    }
+    Ok(config)
+}
+
 pub(super) fn payload_stdio_config(node: ConfigNode) -> Result<PayloadStdioConfig, String> {
     Ok(PayloadStdioConfig {
         enabled: node.required_bool("enabled")?,
@@ -204,6 +283,23 @@ pub(super) fn payload_stdio_config(node: ConfigNode) -> Result<PayloadStdioConfi
             .required_positive_u64("retention_max_bytes_per_trace")?,
         redaction_policy: node.required_parsed::<PayloadRedactionPolicy>("redaction_policy")?,
     })
+}
+
+fn optional_repeated_non_empty(
+    node: &ConfigNode,
+    key: &'static str,
+    default: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let values = node.repeated_optional(key).cloned().collect::<Vec<_>>();
+    if values.is_empty() {
+        return Ok(default);
+    }
+    if values.iter().any(|value| value.is_empty()) {
+        return Err(format!(
+            "config key file_observation_{key} must not be empty"
+        ));
+    }
+    Ok(values)
 }
 
 pub(super) fn payload_socket_config(node: ConfigNode) -> Result<PayloadSocketConfig, String> {

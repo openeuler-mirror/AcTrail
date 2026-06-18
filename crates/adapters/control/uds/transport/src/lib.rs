@@ -12,7 +12,9 @@ use control_contract::reply::{
 };
 use control_contract::selector::TraceSelector;
 use model_core::ids::{ProfileName, RequestId, TraceId, TraceName};
+use model_core::process::{InitialSuppressedFd, SuppressedFdPurpose};
 use model_core::trace::{TraceHealth, TraceLifecycleState};
+use std::str::FromStr;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ControlCodecError {
@@ -33,12 +35,17 @@ pub fn encode_command(command: &ControlCommand) -> Vec<u8> {
     let mut fields = Vec::new();
     match command {
         ControlCommand::TrackAdd(command) => {
-            fields.push("track_add".to_string());
+            fields.push("track_add_v2".to_string());
             fields.push(command.request_id.get().to_string());
             fields.push(command.root_pid.to_string());
             fields.push(command.display_name.to_string());
             fields.push(command.profile_name.to_string());
             fields.push(command.launch_mode.to_string());
+            fields.push(command.initial_suppressed_fds.len().to_string());
+            for suppressed_fd in &command.initial_suppressed_fds {
+                fields.push(suppressed_fd.fd.to_string());
+                fields.push(suppressed_fd.purpose.as_str().to_string());
+            }
             fields.push(command.tags.len().to_string());
             fields.extend(command.tags.iter().cloned());
         }
@@ -93,6 +100,39 @@ pub fn decode_command(bytes: &[u8]) -> Result<ControlCommand, ControlCodecError>
                 profile_name,
                 tags,
                 launch_mode,
+                initial_suppressed_fds: Vec::new(),
+            }))
+        }
+        "track_add_v2" => {
+            let request_id = RequestId::new(parse_u64(field(&fields, 1)?, "request_id")?);
+            let root_pid = parse_u32(field(&fields, 2)?, "root_pid")?;
+            let display_name = TraceName::new(field(&fields, 3)?);
+            let profile_name = ProfileName::new(field(&fields, 4)?);
+            let launch_mode = parse_bool(field(&fields, 5)?, "launch_mode")?;
+            let suppressed_count = parse_usize(field(&fields, 6)?, "suppressed_fd_count")?;
+            let mut cursor = 7;
+            let mut initial_suppressed_fds = Vec::new();
+            for _ in 0..suppressed_count {
+                let fd = parse_i32(field(&fields, cursor)?, "suppressed_fd")?;
+                let purpose = SuppressedFdPurpose::from_str(field(&fields, cursor + 1)?)
+                    .map_err(|error| ControlCodecError::new("decode", error))?;
+                initial_suppressed_fds.push(InitialSuppressedFd { fd, purpose });
+                cursor += 2;
+            }
+            let tag_count = parse_usize(field(&fields, cursor)?, "tag_count")?;
+            cursor += 1;
+            let mut tags = BTreeSet::new();
+            for offset in 0..tag_count {
+                tags.insert(field(&fields, cursor + offset)?.clone());
+            }
+            Ok(ControlCommand::TrackAdd(TrackAddCommand {
+                request_id,
+                root_pid,
+                display_name,
+                profile_name,
+                tags,
+                launch_mode,
+                initial_suppressed_fds,
             }))
         }
         "register_seccomp_listener" => Ok(ControlCommand::RegisterSeccompListener(
@@ -337,6 +377,11 @@ fn parse_u32(raw: &str, field_name: &str) -> Result<u32, ControlCodecError> {
         .map_err(|_| ControlCodecError::new("decode", format!("invalid {}", field_name)))
 }
 
+fn parse_i32(raw: &str, field_name: &str) -> Result<i32, ControlCodecError> {
+    raw.parse()
+        .map_err(|_| ControlCodecError::new("decode", format!("invalid {}", field_name)))
+}
+
 fn parse_usize(raw: &str, field_name: &str) -> Result<usize, ControlCodecError> {
     raw.parse()
         .map_err(|_| ControlCodecError::new("decode", format!("invalid {}", field_name)))
@@ -377,4 +422,29 @@ fn system_time_to_secs(value: SystemTime) -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn track_add_v2_round_trips_initial_suppressed_fds() {
+        let command = ControlCommand::TrackAdd(TrackAddCommand {
+            request_id: RequestId::new(7),
+            root_pid: 42,
+            display_name: TraceName::new("launch"),
+            profile_name: ProfileName::new("default"),
+            tags: BTreeSet::from(["agent".to_string()]),
+            launch_mode: true,
+            initial_suppressed_fds: vec![InitialSuppressedFd {
+                fd: 3,
+                purpose: SuppressedFdPurpose::TlsSyncEvent,
+            }],
+        });
+
+        let decoded = decode_command(&encode_command(&command)).expect("decode command");
+
+        assert_eq!(decoded, command);
+    }
 }

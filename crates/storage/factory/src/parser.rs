@@ -96,6 +96,8 @@ fn parse_section_header(line: &str, line_number: usize) -> Result<Option<bool>, 
         || section.starts_with("export.routes.")
         || section == "semantic_retention"
         || section.starts_with("semantic_retention.")
+        || section == "file_observation"
+        || section.starts_with("file_observation.")
     {
         return Ok(Some(true));
     }

@@ -4,11 +4,11 @@ use std::collections::BTreeMap;
 
 use config_core::daemon::SemanticRetentionConfig;
 use model_core::payload::PayloadSegment;
-use semantic_action::{SemanticAction, SemanticActionKind};
+use semantic_action::{SemanticAction, SemanticActionKind, attr_keys as attrs};
 
 use super::body::{LlmResponseBody, sse_events_json};
 
-pub(super) const ATTR_LLM_RESPONSE_ACTION_ID: &str = "llm.response.action_id";
+pub(super) const ATTR_LLM_RESPONSE_ACTION_ID: &str = attrs::llm_response::ACTION_ID;
 
 pub(super) fn sse_actions_for_response(
     config: &SemanticRetentionConfig,
@@ -53,37 +53,37 @@ fn sse_stream_action(
             response.action_id.clone(),
         ),
         (
-            "payload.stream_key".to_string(),
+            attrs::payload::STREAM_KEY.to_string(),
             first.stream_key.to_string(),
         ),
     ]);
     if config.sse_stream_summary_enabled() {
         attributes.insert(
-            "sse.event_count".to_string(),
+            attrs::sse::EVENT_COUNT.to_string(),
             body.sse_events.len().to_string(),
         );
         attributes.insert(
-            "sse.content_delta_count".to_string(),
+            attrs::sse::CONTENT_DELTA_COUNT.to_string(),
             sse_content_delta_count(body).to_string(),
         );
         attributes.insert(
-            "sse.reasoning_delta_count".to_string(),
+            attrs::sse::REASONING_DELTA_COUNT.to_string(),
             sse_reasoning_delta_count(body).to_string(),
         );
         attributes.insert(
-            "sse.tool_delta_count".to_string(),
+            attrs::sse::TOOL_DELTA_COUNT.to_string(),
             sse_tool_delta_count(body).to_string(),
         );
-        attributes.insert("sse.done".to_string(), body.done.to_string());
+        attributes.insert(attrs::sse::DONE.to_string(), body.done.to_string());
     }
     if let Some(events_json) = sse_events_json(
         &body.sse_events,
         config.sse_event_content_for_llm_response(),
     ) {
-        attributes.insert("sse.events_json".to_string(), events_json);
+        attributes.insert(attrs::sse::EVENTS_JSON.to_string(), events_json);
     }
     if let Some(model) = body.model.as_deref() {
-        attributes.insert("llm.response.model".to_string(), model.to_string());
+        attributes.insert(attrs::llm_response::MODEL.to_string(), model.to_string());
     }
     SemanticAction {
         action_id: action_id.to_string(),

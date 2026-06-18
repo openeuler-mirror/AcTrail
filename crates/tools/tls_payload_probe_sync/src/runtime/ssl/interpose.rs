@@ -11,68 +11,40 @@ use crate::runtime::{loader, maps};
 
 use super::configured_openssl_binary;
 
-static SSL_WRITE_CONFIGURED: AtomicUsize = AtomicUsize::new(0);
-static SSL_WRITE_EX_CONFIGURED: AtomicUsize = AtomicUsize::new(0);
-static SSL_READ_CONFIGURED: AtomicUsize = AtomicUsize::new(0);
-static SSL_READ_EX_CONFIGURED: AtomicUsize = AtomicUsize::new(0);
 static SSL_WRITE_NEXT: AtomicUsize = AtomicUsize::new(0);
 static SSL_WRITE_EX_NEXT: AtomicUsize = AtomicUsize::new(0);
 static SSL_READ_NEXT: AtomicUsize = AtomicUsize::new(0);
 static SSL_READ_EX_NEXT: AtomicUsize = AtomicUsize::new(0);
 
 pub(super) unsafe fn interposed_ssl_write(capture: bool) -> SslWriteFn {
-    let address = interposed_symbol(
-        capture,
-        &SSL_WRITE_CONFIGURED,
-        &SSL_WRITE_NEXT,
-        b"SSL_write\0",
-    );
+    let address = interposed_symbol(capture, &SSL_WRITE_NEXT, b"SSL_write\0");
     unsafe { std::mem::transmute(address) }
 }
 
 pub(super) unsafe fn interposed_ssl_write_ex(capture: bool) -> SslWriteExFn {
-    let address = interposed_symbol(
-        capture,
-        &SSL_WRITE_EX_CONFIGURED,
-        &SSL_WRITE_EX_NEXT,
-        b"SSL_write_ex\0",
-    );
+    let address = interposed_symbol(capture, &SSL_WRITE_EX_NEXT, b"SSL_write_ex\0");
     unsafe { std::mem::transmute(address) }
 }
 
 pub(super) unsafe fn interposed_ssl_read(capture: bool) -> SslReadFn {
-    let address = interposed_symbol(capture, &SSL_READ_CONFIGURED, &SSL_READ_NEXT, b"SSL_read\0");
+    let address = interposed_symbol(capture, &SSL_READ_NEXT, b"SSL_read\0");
     unsafe { std::mem::transmute(address) }
 }
 
 pub(super) unsafe fn interposed_ssl_read_ex(capture: bool) -> SslReadExFn {
-    let address = interposed_symbol(
-        capture,
-        &SSL_READ_EX_CONFIGURED,
-        &SSL_READ_EX_NEXT,
-        b"SSL_read_ex\0",
-    );
+    let address = interposed_symbol(capture, &SSL_READ_EX_NEXT, b"SSL_read_ex\0");
     unsafe { std::mem::transmute(address) }
 }
 
-fn interposed_symbol(
-    capture: bool,
-    configured_cache: &AtomicUsize,
-    next_cache: &AtomicUsize,
-    symbol: &'static [u8],
-) -> usize {
+fn interposed_symbol(capture: bool, next_cache: &AtomicUsize, symbol: &'static [u8]) -> usize {
     if capture {
-        configured_symbol(configured_cache, symbol)
+        configured_symbol(symbol)
     } else {
         next_symbol(next_cache, symbol)
     }
 }
 
-fn configured_symbol(cache: &AtomicUsize, symbol: &'static [u8]) -> usize {
-    let cached = cache.load(Ordering::Acquire);
-    if cached != 0 {
-        return cached;
-    }
+fn configured_symbol(symbol: &'static [u8]) -> usize {
     let Some(binary_path) = configured_openssl_binary() else {
         abort_runtime("dynamic OpenSSL capture is active without a configured OpenSSL binary");
     };
@@ -97,7 +69,6 @@ fn configured_symbol(cache: &AtomicUsize, symbol: &'static [u8]) -> usize {
             symbol_name(symbol)
         ));
     }
-    cache.store(address, Ordering::Release);
     address
 }
 

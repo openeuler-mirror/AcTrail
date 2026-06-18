@@ -7,7 +7,7 @@ use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use semantic_action::{
     SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionLink,
-    SemanticActionLinkConfidence, SemanticActionLinkRole,
+    SemanticActionLinkConfidence, SemanticActionLinkRole, attr_keys as attrs, evidence_roles,
 };
 
 use super::actions::{
@@ -24,7 +24,7 @@ use super::runtime::LiveSemanticActionOutput;
 
 const AGENT_IDENTITY_STATUS_OBSERVED: &str = "observed";
 const AGENT_INVOCATION_TRIGGER_CHILD_LLM_REQUEST: &str = "child_llm_request";
-const ATTR_INVOCATION_KIND: &str = "invocation.kind";
+const ATTR_INVOCATION_KIND: &str = attrs::invocation::KIND;
 const INVOCATION_KIND_AGENT: &str = "agent";
 
 pub(super) struct CommandProjector {
@@ -68,6 +68,10 @@ impl CommandProjector {
         LiveSemanticActionOutput {
             actions: vec![action],
             links: link.into_iter().collect(),
+            file_observation_paths: Vec::new(),
+            file_path_sets: Vec::new(),
+            retain_event: true,
+            raw_event_consumed: false,
         }
     }
 
@@ -88,6 +92,10 @@ impl CommandProjector {
         LiveSemanticActionOutput {
             actions: vec![action],
             links: Vec::new(),
+            file_observation_paths: Vec::new(),
+            file_path_sets: Vec::new(),
+            retain_event: true,
+            raw_event_consumed: false,
         }
     }
 
@@ -114,6 +122,10 @@ impl CommandProjector {
         LiveSemanticActionOutput {
             actions: vec![action],
             links: Vec::new(),
+            file_observation_paths: Vec::new(),
+            file_path_sets: Vec::new(),
+            retain_event: true,
+            raw_event_consumed: false,
         }
     }
 
@@ -127,11 +139,17 @@ impl CommandProjector {
         };
         action.end_time = Some(event.envelope.observed_at);
         action.status = process_exit_status(payload.metadata.get("exit_code"));
-        action.evidence.push(event_evidence(event, "process.exit"));
+        action
+            .evidence
+            .push(event_evidence(event, evidence_roles::process::EXIT));
         self.commands.insert(key, action.clone());
         LiveSemanticActionOutput {
             actions: vec![action],
             links: Vec::new(),
+            file_observation_paths: Vec::new(),
+            file_path_sets: Vec::new(),
+            retain_event: true,
+            raw_event_consumed: false,
         }
     }
 
@@ -163,7 +181,8 @@ impl CommandProjector {
             child_action_id: process_action.action_id.clone(),
             role: SemanticActionLinkRole::CommandContainsProcessExec,
             confidence: SemanticActionLinkConfidence::Observed,
-            evidence: vec![event_evidence(event, "command.exec")],
+            valid: true,
+            evidence: vec![event_evidence(event, evidence_roles::command::EXEC)],
             attributes: BTreeMap::new(),
         })
     }
@@ -177,13 +196,13 @@ fn command_action(event: &DomainEvent, process_action: &SemanticAction) -> Seman
     let mut attributes = BTreeMap::new();
     if let Some(executable) = process_action
         .attributes
-        .get("process.executable")
+        .get(attrs::process::EXECUTABLE)
         .or_else(|| process_action.attributes.get("executable"))
     {
-        attributes.insert("process.executable".to_string(), executable.clone());
+        attributes.insert(attrs::process::EXECUTABLE.to_string(), executable.clone());
     }
     if let Some(command_line) = process_action.attributes.get("command_line") {
-        attributes.insert("command.line".to_string(), command_line.clone());
+        attributes.insert(attrs::command::LINE.to_string(), command_line.clone());
     }
     for key in ["ppid", "stat_ppid"] {
         if let Some(value) = process_action.attributes.get(key) {
@@ -199,13 +218,13 @@ fn command_action(event: &DomainEvent, process_action: &SemanticAction) -> Seman
         action_id: process_action_id(
             event.envelope.trace_id,
             &event.envelope.process,
-            "command.invocation",
+            SemanticActionKind::CommandInvocation.as_str(),
         ),
         trace_id: event.envelope.trace_id,
         kind: SemanticActionKind::CommandInvocation,
         title: attributes
-            .get("command.line")
-            .or_else(|| attributes.get("process.executable"))
+            .get(attrs::command::LINE)
+            .or_else(|| attributes.get(attrs::process::EXECUTABLE))
             .cloned()
             .unwrap_or_else(|| process_action.title.clone()),
         start_time: event.envelope.observed_at,
@@ -215,7 +234,7 @@ fn command_action(event: &DomainEvent, process_action: &SemanticAction) -> Seman
         completeness: SemanticActionCompleteness::Complete,
         confidence_millis: None,
         attributes,
-        evidence: vec![event_evidence(event, "process.exec")],
+        evidence: vec![event_evidence(event, evidence_roles::process::EXEC)],
     }
 }
 
@@ -265,24 +284,24 @@ fn apply_agent_invocation_label(
         );
     }
     action.attributes.insert(
-        "agent.child.pid".to_string(),
+        attrs::agent_child::PID.to_string(),
         process_action.process.pid.to_string(),
     );
     action.attributes.insert(
-        "agent.child.generation".to_string(),
+        attrs::agent_child::GENERATION.to_string(),
         process_action.process.generation.to_string(),
     );
     copy_process_attr(
         process_action,
         action,
-        "process.executable",
-        "agent.child.executable",
+        attrs::process::EXECUTABLE,
+        attrs::agent_child::EXECUTABLE,
     );
     copy_process_attr(
         process_action,
         action,
         "command_line",
-        "agent.child.command_line",
+        attrs::agent_child::COMMAND_LINE,
     );
     if evidence_action_matches_identity(evidence_action_id.as_deref(), evidence_action) {
         let evidence_action = evidence_action.expect("checked by evidence_action_matches_identity");

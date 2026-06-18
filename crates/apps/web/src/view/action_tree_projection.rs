@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use model_core::{ids::TraceId, process::ProcessIdentity};
 use semantic_action::{
     SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkRole,
+    SemanticEvidenceKind, attr_keys as attrs,
 };
 use storage_core::StorageBackend;
 
@@ -50,6 +51,27 @@ impl ActionDisplayProjection {
             .get(parent_id)
             .cloned()
             .unwrap_or_default()
+    }
+
+    pub(super) fn child_count(&self, parent_id: &str) -> usize {
+        self.children_by_parent
+            .get(parent_id)
+            .map(Vec::len)
+            .unwrap_or_default()
+    }
+
+    pub(super) fn children_page(
+        &self,
+        parent_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> (Vec<DisplayChild>, usize) {
+        let Some(children) = self.children_by_parent.get(parent_id) else {
+            return (Vec::new(), 0);
+        };
+        let total = children.len();
+        let page = children.iter().skip(offset).take(limit).cloned().collect();
+        (page, total)
     }
 
     fn new(actions: Vec<SemanticAction>, links: Vec<SemanticActionLink>) -> Self {
@@ -146,9 +168,14 @@ fn load_semantic_action_links(
 }
 
 fn valid_actions(actions: Vec<SemanticAction>) -> Vec<SemanticAction> {
-    actions
+    let actions = actions
         .into_iter()
         .filter(|action| !invalidated_action(action))
+        .collect::<Vec<_>>();
+    let bulk_read_ranges = bulk_read_ranges(&actions);
+    actions
+        .into_iter()
+        .filter(|action| !bulk_read_covered_file_read(action, &bulk_read_ranges))
         .collect()
 }
 
@@ -375,6 +402,50 @@ fn invalidated_action(action: &SemanticAction) -> bool {
         .attributes
         .get(ACTION_VALID_ATTR)
         .is_some_and(|value| value == VALID_FALSE)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct BulkReadRange {
+    trace_id: TraceId,
+    process: ProcessIdentity,
+    first_event_id: u64,
+    last_event_id: u64,
+}
+
+fn bulk_read_ranges(actions: &[SemanticAction]) -> Vec<BulkReadRange> {
+    actions
+        .iter()
+        .filter(|action| action.kind == SemanticActionKind::FileBulkRead)
+        .filter_map(|action| {
+            Some(BulkReadRange {
+                trace_id: action.trace_id,
+                process: action.process.clone(),
+                first_event_id: action
+                    .attributes
+                    .get(attrs::file_bulk_read::FIRST_EVENT_ID)?
+                    .parse()
+                    .ok()?,
+                last_event_id: action
+                    .attributes
+                    .get(attrs::file_bulk_read::LAST_EVENT_ID)?
+                    .parse()
+                    .ok()?,
+            })
+        })
+        .collect()
+}
+
+fn bulk_read_covered_file_read(action: &SemanticAction, ranges: &[BulkReadRange]) -> bool {
+    action.kind == SemanticActionKind::FileRead
+        && action.evidence.iter().any(|evidence| {
+            evidence.kind == SemanticEvidenceKind::Event
+                && ranges.iter().any(|range| {
+                    range.trace_id == action.trace_id
+                        && range.process == action.process
+                        && range.first_event_id <= evidence.id
+                        && evidence.id <= range.last_event_id
+                })
+        })
 }
 
 #[cfg(test)]

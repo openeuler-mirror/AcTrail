@@ -67,19 +67,42 @@ impl CleanEntry {
 }
 
 pub(crate) fn run_clean(artifacts: CleanArtifacts) -> Result<i32, String> {
+    let mut removed_entries = 0_u64;
+    let mut skipped_entries = 0_u64;
+    let mut freed_bytes = 0_u64;
     for entry in artifacts.entries {
-        clean_entry(entry)?;
+        match clean_entry(entry)? {
+            CleanResult::Removed { bytes } => {
+                removed_entries += 1;
+                freed_bytes = freed_bytes.saturating_add(bytes);
+            }
+            CleanResult::SkippedMissing => {
+                skipped_entries += 1;
+            }
+        }
     }
+    println!(
+        "clean summary: removed {} artifact(s), skipped {} missing, freed {}",
+        removed_entries,
+        skipped_entries,
+        format_bytes(freed_bytes)
+    );
     Ok(i32::default())
 }
 
-fn clean_entry(entry: CleanEntry) -> Result<(), String> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CleanResult {
+    Removed { bytes: u64 },
+    SkippedMissing,
+}
+
+fn clean_entry(entry: CleanEntry) -> Result<CleanResult, String> {
     validate_clean_path(&entry)?;
     let metadata = match fs::symlink_metadata(&entry.path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             println!("skipped missing {} {}", entry.label, entry.path.display());
-            return Ok(());
+            return Ok(CleanResult::SkippedMissing);
         }
         Err(error) => {
             return Err(format!(
@@ -89,6 +112,7 @@ fn clean_entry(entry: CleanEntry) -> Result<(), String> {
             ));
         }
     };
+    let bytes = clean_entry_size(&entry, &metadata)?;
     match entry.kind {
         CleanKind::FileLike => {
             if metadata.is_dir() {
@@ -122,8 +146,13 @@ fn clean_entry(entry: CleanEntry) -> Result<(), String> {
             })?;
         }
     }
-    println!("removed {} {}", entry.label, entry.path.display());
-    Ok(())
+    println!(
+        "removed {} {} (freed {})",
+        entry.label,
+        entry.path.display(),
+        format_bytes(bytes)
+    );
+    Ok(CleanResult::Removed { bytes })
 }
 
 fn validate_clean_path(entry: &CleanEntry) -> Result<(), String> {
@@ -138,4 +167,43 @@ fn validate_clean_path(entry: &CleanEntry) -> Result<(), String> {
         return Err(format!("refusing to clean root path for {}", entry.label));
     }
     Ok(())
+}
+
+fn clean_entry_size(entry: &CleanEntry, metadata: &fs::Metadata) -> Result<u64, String> {
+    match entry.kind {
+        CleanKind::FileLike => Ok(metadata.len()),
+        CleanKind::Directory => directory_size(&entry.path),
+    }
+}
+
+fn directory_size(path: &Path) -> Result<u64, String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("measure {}: {error}", path.display()))?;
+    let mut size = metadata.len();
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Ok(size);
+    }
+    for child in fs::read_dir(path)
+        .map_err(|error| format!("measure directory {}: {error}", path.display()))?
+    {
+        let child =
+            child.map_err(|error| format!("measure directory {}: {error}", path.display()))?;
+        size = size.saturating_add(directory_size(&child.path())?);
+    }
+    Ok(size)
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = KIB * 1024;
+    const GIB: u64 = MIB * 1024;
+    if bytes >= GIB {
+        format!("{:.2} GiB ({} bytes)", bytes as f64 / GIB as f64, bytes)
+    } else if bytes >= MIB {
+        format!("{:.2} MiB ({} bytes)", bytes as f64 / MIB as f64, bytes)
+    } else if bytes >= KIB {
+        format!("{:.2} KiB ({} bytes)", bytes as f64 / KIB as f64, bytes)
+    } else {
+        format!("{bytes} bytes")
+    }
 }
