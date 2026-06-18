@@ -67,27 +67,88 @@ impl CleanEntry {
 }
 
 pub(crate) fn run_clean(artifacts: CleanArtifacts) -> Result<i32, String> {
-    let mut removed_entries = 0_u64;
-    let mut skipped_entries = 0_u64;
-    let mut freed_bytes = 0_u64;
-    for entry in artifacts.entries {
-        match clean_entry(entry)? {
-            CleanResult::Removed { bytes } => {
-                removed_entries += 1;
-                freed_bytes = freed_bytes.saturating_add(bytes);
-            }
-            CleanResult::SkippedMissing => {
-                skipped_entries += 1;
-            }
-        }
+    let mut stats = CleanStats::default();
+    for node in build_clean_tree(artifacts.entries) {
+        clean_node(&node, 0, &mut stats)?;
     }
     println!(
         "clean summary: removed {} artifact(s), skipped {} missing, freed {}",
-        removed_entries,
-        skipped_entries,
-        format_bytes(freed_bytes)
+        stats.removed_entries,
+        stats.skipped_entries,
+        format_bytes(stats.freed_bytes)
     );
     Ok(i32::default())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct CleanNode {
+    entry: CleanEntry,
+    children: Vec<CleanNode>,
+}
+
+fn build_clean_tree(entries: Vec<CleanEntry>) -> Vec<CleanNode> {
+    let parents = parent_indices(&entries);
+    build_clean_children(None, &entries, &parents)
+}
+
+fn parent_indices(entries: &[CleanEntry]) -> Vec<Option<usize>> {
+    entries
+        .iter()
+        .enumerate()
+        .map(|(entry_index, entry)| {
+            entries
+                .iter()
+                .enumerate()
+                .filter(|(candidate_index, candidate)| {
+                    *candidate_index != entry_index
+                        && candidate.kind == CleanKind::Directory
+                        && path_is_child_of(&entry.path, &candidate.path)
+                })
+                .max_by_key(|(_, candidate)| candidate.path.components().count())
+                .map(|(candidate_index, _)| candidate_index)
+        })
+        .collect()
+}
+
+fn path_is_child_of(path: &Path, parent: &Path) -> bool {
+    path != parent && path.starts_with(parent)
+}
+
+fn build_clean_children(
+    parent: Option<usize>,
+    entries: &[CleanEntry],
+    parents: &[Option<usize>],
+) -> Vec<CleanNode> {
+    entries
+        .iter()
+        .enumerate()
+        .filter(|(entry_index, _)| parents[*entry_index] == parent)
+        .map(|(entry_index, entry)| CleanNode {
+            entry: entry.clone(),
+            children: build_clean_children(Some(entry_index), entries, parents),
+        })
+        .collect()
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct CleanStats {
+    removed_entries: u64,
+    skipped_entries: u64,
+    freed_bytes: u64,
+}
+
+impl CleanStats {
+    fn record(&mut self, result: CleanResult) {
+        match result {
+            CleanResult::Removed { bytes } => {
+                self.removed_entries += 1;
+                self.freed_bytes = self.freed_bytes.saturating_add(bytes);
+            }
+            CleanResult::SkippedMissing => {
+                self.skipped_entries += 1;
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -96,13 +157,49 @@ enum CleanResult {
     SkippedMissing,
 }
 
-fn clean_entry(entry: CleanEntry) -> Result<CleanResult, String> {
-    validate_clean_path(&entry)?;
+fn clean_node(node: &CleanNode, depth: usize, stats: &mut CleanStats) -> Result<(), String> {
+    if node.children.is_empty() {
+        let result = clean_entry(&node.entry, depth)?;
+        stats.record(result);
+        return Ok(());
+    }
+    println!(
+        "{}- Clear {} {}",
+        indent(depth),
+        node.entry.label,
+        node.entry.path.display()
+    );
+    let Some(metadata) = inspect_entry(&node.entry)? else {
+        let result = CleanResult::SkippedMissing;
+        print_clean_result(&node.entry, depth + 1, result);
+        stats.record(result);
+        return Ok(());
+    };
+    validate_present_entry(&node.entry, &metadata)?;
+    for child in &node.children {
+        clean_node(child, depth + 1, stats)?;
+    }
+    let result = remove_present_entry(&node.entry, depth + 1)?;
+    stats.record(result);
+    Ok(())
+}
+
+fn clean_entry(entry: &CleanEntry, depth: usize) -> Result<CleanResult, String> {
+    let Some(metadata) = inspect_entry(entry)? else {
+        let result = CleanResult::SkippedMissing;
+        print_clean_result(entry, depth, result);
+        return Ok(result);
+    };
+    validate_present_entry(entry, &metadata)?;
+    remove_present_entry(entry, depth)
+}
+
+fn inspect_entry(entry: &CleanEntry) -> Result<Option<fs::Metadata>, String> {
+    validate_clean_path(entry)?;
     let metadata = match fs::symlink_metadata(&entry.path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            println!("skipped missing {} {}", entry.label, entry.path.display());
-            return Ok(CleanResult::SkippedMissing);
+            return Ok(None);
         }
         Err(error) => {
             return Err(format!(
@@ -112,7 +209,10 @@ fn clean_entry(entry: CleanEntry) -> Result<CleanResult, String> {
             ));
         }
     };
-    let bytes = clean_entry_size(&entry, &metadata)?;
+    Ok(Some(metadata))
+}
+
+fn validate_present_entry(entry: &CleanEntry, metadata: &fs::Metadata) -> Result<(), String> {
     match entry.kind {
         CleanKind::FileLike => {
             if metadata.is_dir() {
@@ -122,9 +222,6 @@ fn clean_entry(entry: CleanEntry) -> Result<CleanResult, String> {
                     entry.path.display()
                 ));
             }
-            fs::remove_file(&entry.path).map_err(|error| {
-                format!("remove {} {}: {error}", entry.label, entry.path.display())
-            })?;
         }
         CleanKind::Directory => {
             if metadata.file_type().is_symlink() {
@@ -141,18 +238,53 @@ fn clean_entry(entry: CleanEntry) -> Result<CleanResult, String> {
                     entry.path.display()
                 ));
             }
+        }
+    }
+    Ok(())
+}
+
+fn remove_present_entry(entry: &CleanEntry, depth: usize) -> Result<CleanResult, String> {
+    let metadata = fs::symlink_metadata(&entry.path)
+        .map_err(|error| format!("inspect {} {}: {error}", entry.label, entry.path.display()))?;
+    validate_present_entry(entry, &metadata)?;
+    let bytes = clean_entry_size(&entry, &metadata)?;
+    match entry.kind {
+        CleanKind::FileLike => {
+            fs::remove_file(&entry.path).map_err(|error| {
+                format!("remove {} {}: {error}", entry.label, entry.path.display())
+            })?;
+        }
+        CleanKind::Directory => {
             fs::remove_dir_all(&entry.path).map_err(|error| {
                 format!("remove {} {}: {error}", entry.label, entry.path.display())
             })?;
         }
     }
-    println!(
-        "removed {} {} (freed {})",
-        entry.label,
-        entry.path.display(),
-        format_bytes(bytes)
-    );
-    Ok(CleanResult::Removed { bytes })
+    let result = CleanResult::Removed { bytes };
+    print_clean_result(entry, depth, result);
+    Ok(result)
+}
+
+fn print_clean_result(entry: &CleanEntry, depth: usize, result: CleanResult) {
+    match result {
+        CleanResult::Removed { bytes } => println!(
+            "{}- Clear {} {} Done. Size: {}",
+            indent(depth),
+            entry.label,
+            entry.path.display(),
+            format_bytes(bytes)
+        ),
+        CleanResult::SkippedMissing => println!(
+            "{}- Clear {} {} Skip. Size: 0 bytes (missing)",
+            indent(depth),
+            entry.label,
+            entry.path.display()
+        ),
+    }
+}
+
+fn indent(depth: usize) -> String {
+    "  ".repeat(depth)
 }
 
 fn validate_clean_path(entry: &CleanEntry) -> Result<(), String> {

@@ -45,7 +45,7 @@ pub(super) fn install_plan(plan: &RuntimePlan) -> Result<HookInstallStatus, Stri
     let uses_rustls = plan_uses_rustls_symbols(plan);
     let installs_inline = should_install_inline_hooks(plan);
     let uses_interpose = uses_openssl_interpose(plan);
-    if installs_inline && binding::is_audit_namespace() {
+    if installs_inline && binding::is_audit_namespace()? {
         if let Some(config) = config::get() {
             config.register_plan(plan)?;
         }
@@ -175,15 +175,18 @@ fn install_plan_points(plan: &RuntimePlan) -> Result<bool, String> {
                 }
                 continue;
             }
-            let trampoline = hook::install(address, replacement).map_err(|error| {
-                format!(
-                    "install TLS hook provider={} symbol={} binary={} address=0x{address:x}: {error}",
-                    plan.provider,
-                    point.symbol,
-                    plan.binary.display()
-                )
-            })?;
-            set_original(&point.symbol, trampoline)?;
+            let trampoline =
+                hook::install(address, replacement, |trampoline| {
+                    set_original(&point.symbol, trampoline)
+                })
+                .map_err(|error| {
+                    format!(
+                        "install TLS hook provider={} symbol={} binary={} address=0x{address:x}: {error}",
+                        plan.provider,
+                        point.symbol,
+                        plan.binary.display()
+                    )
+                })?;
             trampoline
         };
         installed = true;
@@ -329,6 +332,9 @@ fn replacement_for_symbol(symbol: &str) -> Result<usize, String> {
 }
 
 fn set_original(symbol: &str, trampoline: usize) -> Result<(), String> {
+    if trampoline == 0 {
+        return Err(format!("refuse null original trampoline for {symbol}"));
+    }
     match symbol {
         "SSL_write" => SSL_WRITE_ORIGINAL.store(trampoline, Ordering::Release),
         "SSL_write_ex" => SSL_WRITE_EX_ORIGINAL.store(trampoline, Ordering::Release),

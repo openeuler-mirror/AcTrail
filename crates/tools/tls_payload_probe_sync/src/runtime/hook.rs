@@ -13,8 +13,12 @@ mod backend;
 #[path = "hook/unsupported.rs"]
 mod backend;
 
-pub(super) fn install(target: usize, replacement: usize) -> Result<usize, String> {
-    backend::install(target, replacement).map_err(|error| {
+pub(super) fn install(
+    target: usize,
+    replacement: usize,
+    before_patch: impl FnOnce(usize) -> Result<(), String>,
+) -> Result<usize, String> {
+    backend::install(target, replacement, before_patch).map_err(|error| {
         format!("{error}; target_bytes={}", unsafe {
             render_target_bytes(target)
         })

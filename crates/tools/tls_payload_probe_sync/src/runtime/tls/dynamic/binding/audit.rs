@@ -1,17 +1,22 @@
 use std::ffi::{CStr, c_void};
+use std::mem::MaybeUninit;
 use std::os::raw::{c_char, c_uint};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 
-use crate::runtime;
 use crate::runtime::tls::dynamic::core::{self, BindingSource, TlsFuncKind};
+use crate::runtime::{self, loader};
 
-const LAV_CURRENT: c_uint = 2;
+const SUPPORTED_LAV_CURRENT: c_uint = 1;
 const LA_FLG_BINDTO: c_uint = 0x01;
 const LA_FLG_BINDFROM: c_uint = 0x02;
 
 const OWN_RUNTIME_COOKIE: usize = 0xAC7A_11A0_0000_0001;
 
-static AUDIT_NAMESPACE: AtomicBool = AtomicBool::new(false);
+const NAMESPACE_UNKNOWN: u8 = 0;
+const NAMESPACE_BASE: u8 = 1;
+const NAMESPACE_NON_BASE: u8 = 2;
+
+static NAMESPACE_STATE: AtomicU8 = AtomicU8::new(NAMESPACE_UNKNOWN);
 
 #[repr(C)]
 pub(in crate::runtime) struct Elf64Sym {
@@ -34,13 +39,9 @@ struct LinkMap {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn la_version(version: c_uint) -> c_uint {
-    AUDIT_NAMESPACE.store(true, Ordering::Release);
+    store_namespace_state(true);
     runtime::retry_initialize_after_loader_event();
-    if version >= LAV_CURRENT {
-        LAV_CURRENT
-    } else {
-        0
-    }
+    negotiate_audit_version(version)
 }
 
 #[unsafe(no_mangle)]
@@ -99,6 +100,76 @@ fn own_runtime_object(map: *mut LinkMap) -> bool {
         .is_some_and(|name| name == "libactrail_tls_payload_probe_sync.so")
 }
 
-pub(in crate::runtime) fn is_audit_namespace() -> bool {
-    AUDIT_NAMESPACE.load(Ordering::Acquire)
+pub(in crate::runtime) fn is_audit_namespace() -> Result<bool, String> {
+    if let Some(is_audit) = cached_namespace_state() {
+        return Ok(is_audit);
+    }
+    let is_audit = detect_current_namespace_is_audit()?;
+    store_namespace_state(is_audit);
+    Ok(is_audit)
+}
+
+fn cached_namespace_state() -> Option<bool> {
+    match NAMESPACE_STATE.load(Ordering::Acquire) {
+        NAMESPACE_BASE => Some(false),
+        NAMESPACE_NON_BASE => Some(true),
+        _ => None,
+    }
+}
+
+fn store_namespace_state(is_audit: bool) {
+    let state = if is_audit {
+        NAMESPACE_NON_BASE
+    } else {
+        NAMESPACE_BASE
+    };
+    NAMESPACE_STATE.store(state, Ordering::Release);
+}
+
+fn detect_current_namespace_is_audit() -> Result<bool, String> {
+    let lmid = current_runtime_lmid()?;
+    Ok(lmid != libc::LM_ID_BASE as libc::Lmid_t)
+}
+
+fn current_runtime_lmid() -> Result<libc::Lmid_t, String> {
+    let mut info = MaybeUninit::<libc::Dl_info>::zeroed();
+    let address = current_runtime_lmid as *const () as *const c_void;
+    let found = unsafe { libc::dladdr(address, info.as_mut_ptr()) };
+    if found == 0 {
+        return Err("resolve current runtime link-map: dladdr failed".to_string());
+    }
+    let info = unsafe { info.assume_init() };
+    if info.dli_fname.is_null() {
+        return Err("resolve current runtime link-map: dladdr returned no object path".to_string());
+    }
+    let handle = unsafe { loader::open_existing(info.dli_fname) };
+    if handle.is_null() {
+        let path = unsafe { CStr::from_ptr(info.dli_fname) }.to_string_lossy();
+        return Err(format!(
+            "resolve current runtime link-map: dlopen(RTLD_NOLOAD) failed for {path}"
+        ));
+    }
+    let mut lmid = MaybeUninit::<libc::Lmid_t>::uninit();
+    let result = unsafe {
+        libc::dlinfo(
+            handle,
+            libc::RTLD_DI_LMID,
+            lmid.as_mut_ptr().cast::<c_void>(),
+        )
+    };
+    if result != 0 {
+        let path = unsafe { CStr::from_ptr(info.dli_fname) }.to_string_lossy();
+        return Err(format!(
+            "resolve current runtime link-map: dlinfo(RTLD_DI_LMID) failed for {path}"
+        ));
+    }
+    Ok(unsafe { lmid.assume_init() })
+}
+
+fn negotiate_audit_version(version: c_uint) -> c_uint {
+    if version == 0 {
+        0
+    } else {
+        version.min(SUPPORTED_LAV_CURRENT)
+    }
 }
