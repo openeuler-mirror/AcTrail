@@ -74,9 +74,7 @@ flowchart TD
     LAUNCH_BUNDLE["Found：写入 TLS_PAYLOAD_SYNC_PLAN_BUNDLE"]
     LAUNCH_NO_PLAN["Unsupported：bundle 不含 initial plan"]
     LAUNCH_PRELOAD["注入 LD_PRELOAD=libactrail_tls_payload_probe_sync.so"]
-    LAUNCH_AUDIT_DECIDE{"bundle 中是否存在 executable plan"}
-    LAUNCH_AUDIT_ON["无 executable plan：注入 LD_AUDIT"]
-    LAUNCH_AUDIT_OFF["有 executable plan：不注入 LD_AUDIT，避免 DT_NEEDED binding 与 inline hook 重复"]
+    LAUNCH_AUDIT["始终注入 LD_AUDIT，作为默认动态链接采集面"]
     LAUNCH_TLS_ENV["注入 TLS_PAYLOAD_SYNC_* event socket、trace id、redaction、limits"]
     LAUNCH_JAVA_ENV["按配置注入 JAVA_TOOL_OPTIONS javaagent"]
     LAUNCH_EXEC["exec 初始进程"]
@@ -89,13 +87,10 @@ flowchart TD
     LAUNCH_RESULT -->|"Unsupported"| LAUNCH_NO_PLAN
     LAUNCH_BUNDLE --> LAUNCH_PRELOAD
     LAUNCH_NO_PLAN --> LAUNCH_PRELOAD
-    LAUNCH_BUNDLE --> LAUNCH_AUDIT_DECIDE
-    LAUNCH_NO_PLAN --> LAUNCH_AUDIT_DECIDE
-    LAUNCH_AUDIT_DECIDE -->|"否"| LAUNCH_AUDIT_ON
-    LAUNCH_AUDIT_DECIDE -->|"是"| LAUNCH_AUDIT_OFF
+    LAUNCH_BUNDLE --> LAUNCH_AUDIT
+    LAUNCH_NO_PLAN --> LAUNCH_AUDIT
     LAUNCH_PRELOAD --> LAUNCH_EXEC
-    LAUNCH_AUDIT_ON --> LAUNCH_EXEC
-    LAUNCH_AUDIT_OFF --> LAUNCH_EXEC
+    LAUNCH_AUDIT --> LAUNCH_EXEC
     LAUNCH_TLS_ENV --> LAUNCH_EXEC
     LAUNCH_JAVA_ENV --> LAUNCH_EXEC
   end
@@ -154,7 +149,7 @@ flowchart TD
 
   subgraph AUDIT_BINDING["入口 B：DT_NEEDED / LD_AUDIT per-binding wrapper"]
     AUDIT_LOAD["dynamic linker 加载 audit library"]
-    AUDIT_VERSION["la_version 标记 audit namespace 并 retry initialize"]
+    AUDIT_VERSION["la_version 标记 audit namespace 并 retry initialize；audit namespace 不安装 inline hook"]
     AUDIT_OBJOPEN["la_objopen 标记 runtime 自身 cookie"]
     AUDIT_SYMBIND["la_symbind64 观察符号绑定"]
     AUDIT_OWN{"defcook/refcook 是否 runtime 自身"}
@@ -162,7 +157,7 @@ flowchart TD
     AUDIT_WRAPPER["get_or_create_bound_wrapper(kind, real_sym, BindingSource::Audit)"]
     AUDIT_RETURN["返回真实符号或 bound wrapper 给动态链接器"]
 
-    LAUNCH_AUDIT_ON --> AUDIT_LOAD
+    LAUNCH_AUDIT --> AUDIT_LOAD
     AUDIT_LOAD --> AUDIT_VERSION
     AUDIT_VERSION --> AUDIT_OBJOPEN
     AUDIT_OBJOPEN --> AUDIT_SYMBIND

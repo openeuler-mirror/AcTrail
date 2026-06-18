@@ -21,6 +21,16 @@ pub(super) fn install(target: usize, replacement: usize) -> Result<usize, String
     Ok(trampoline)
 }
 
+pub(super) fn installed_jump_target(target: usize) -> Option<usize> {
+    let bytes = unsafe { std::slice::from_raw_parts(target as *const u8, JUMP_PATCH_BYTES) };
+    let first = u32::from_le_bytes(bytes[0..4].try_into().ok()?);
+    let second = u32::from_le_bytes(bytes[4..8].try_into().ok()?);
+    if first != LDR_X16_LITERAL_8 || second != BR_X16 {
+        return None;
+    }
+    Some(u64::from_le_bytes(bytes[8..16].try_into().ok()?) as usize)
+}
+
 unsafe fn patch_target(target: usize, replacement: usize) -> Result<(), String> {
     let page_size = page_size()?;
     let page_start = target & !(page_size - 1);

@@ -314,6 +314,7 @@ fn ebpf_config(enabled: bool) -> EbpfCollectorConfig {
         tracked_process_max_entries: 64,
         pending_operation_max_entries: 128,
         suppressed_fd_max_entries: 128,
+        suppressed_fd_index_slots_per_process: 64,
         event_ring_buffer_max_bytes: 4096,
         file_path_capture_enabled: false,
         file_path_max_bytes: 255,

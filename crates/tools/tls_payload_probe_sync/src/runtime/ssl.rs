@@ -9,6 +9,7 @@ use std::sync::{Mutex, OnceLock};
 mod interpose;
 
 use crate::runtime::config::{self, RuntimePlan};
+use crate::runtime::tls::dynamic::binding;
 use crate::runtime::tls::dynamic::core::capture::{
     SslReadExFn, SslReadFn, SslWriteExFn, SslWriteFn, abort_runtime, ssl_read_ex_with,
     ssl_read_with, ssl_write_ex_with, ssl_write_with,
@@ -44,6 +45,12 @@ pub(super) fn install_plan(plan: &RuntimePlan) -> Result<HookInstallStatus, Stri
     let uses_rustls = plan_uses_rustls_symbols(plan);
     let installs_inline = should_install_inline_hooks(plan);
     let uses_interpose = uses_openssl_interpose(plan);
+    if installs_inline && binding::is_audit_namespace() {
+        if let Some(config) = config::get() {
+            config.register_plan(plan)?;
+        }
+        return Ok(HookInstallStatus::DuplicateSkipped);
+    }
     let mut state = INSTALL_STATE
         .get_or_init(|| Mutex::new(InstallState::default()))
         .lock()
@@ -56,10 +63,11 @@ pub(super) fn install_plan(plan: &RuntimePlan) -> Result<HookInstallStatus, Stri
     {
         return Ok(HookInstallStatus::DuplicateSkipped);
     }
+    let mut installed_inline_points = false;
     if installs_inline {
-        install_plan_points(plan)?;
+        installed_inline_points = install_plan_points(plan)?;
     }
-    if installs_inline {
+    if installs_inline && installed_inline_points {
         state.installed_binaries.insert(binary.clone());
     }
     if uses_ssl {
@@ -75,7 +83,11 @@ pub(super) fn install_plan(plan: &RuntimePlan) -> Result<HookInstallStatus, Stri
     if let Some(config) = config::get() {
         config.register_plan(plan)?;
     }
-    Ok(HookInstallStatus::Installed)
+    if installs_inline && !installed_inline_points {
+        Ok(HookInstallStatus::DuplicateSkipped)
+    } else {
+        Ok(HookInstallStatus::Installed)
+    }
 }
 
 pub(super) fn dynamic_binding_covers_plan(plan: &RuntimePlan) -> bool {
@@ -83,6 +95,14 @@ pub(super) fn dynamic_binding_covers_plan(plan: &RuntimePlan) -> bool {
 }
 
 pub(super) fn register_dynamic_binding_plan(plan: &RuntimePlan) -> Result<(), String> {
+    if dynamic_binding_covers_plan(plan) {
+        let binary = canonical(&plan.binary);
+        let mut state = INSTALL_STATE
+            .get_or_init(|| Mutex::new(InstallState::default()))
+            .lock()
+            .map_err(|_| "hook install state mutex poisoned".to_string())?;
+        state.openssl_interpose_binary = Some(binary);
+    }
     if let Some(config) = config::get() {
         config.register_plan(plan)?;
     }
@@ -110,12 +130,13 @@ fn openssl_interpose_already_covers(
             .is_some_and(|path| path == binary)
 }
 
-fn install_plan_points(plan: &RuntimePlan) -> Result<(), String> {
+fn install_plan_points(plan: &RuntimePlan) -> Result<bool, String> {
     let skip_ssl_read = plan.provider == "openssl"
         && plan
             .points
             .iter()
             .any(|point| point.symbol.as_str() == "SSL_read_ex");
+    let mut installed = false;
     for point in &plan.points {
         if skip_ssl_read && point.symbol == "SSL_read" {
             continue;
@@ -125,9 +146,35 @@ fn install_plan_points(plan: &RuntimePlan) -> Result<(), String> {
             address = openssl_ssl_read_ex_impl(address);
         }
         let trampoline = if rustls::can_handle(&point.symbol) {
-            rustls::install(&point.symbol, address)?
+            match rustls::install(&point.symbol, address)? {
+                rustls::InstallStatus::Installed { trampoline } => trampoline,
+                rustls::InstallStatus::DuplicateSkipped { owner } => {
+                    if config::get().is_some_and(|config| config.should_print_target()) {
+                        output::event_line(&format!(
+                            "sync_hook: provider={} binary={} symbol={} direction={} address=0x{address:x} duplicate_owner=0x{owner:x}\n",
+                            plan.provider,
+                            plan.binary.display(),
+                            point.symbol,
+                            point.direction.as_str(),
+                        ));
+                    }
+                    continue;
+                }
+            }
         } else {
             let replacement = replacement_for_symbol(&point.symbol)?;
+            if let Some(owner) = hook::installed_actrail_jump_target(address) {
+                if config::get().is_some_and(|config| config.should_print_target()) {
+                    output::event_line(&format!(
+                        "sync_hook: provider={} binary={} symbol={} direction={} address=0x{address:x} duplicate_owner=0x{owner:x}\n",
+                        plan.provider,
+                        plan.binary.display(),
+                        point.symbol,
+                        point.direction.as_str(),
+                    ));
+                }
+                continue;
+            }
             let trampoline = hook::install(address, replacement).map_err(|error| {
                 format!(
                     "install TLS hook provider={} symbol={} binary={} address=0x{address:x}: {error}",
@@ -139,6 +186,7 @@ fn install_plan_points(plan: &RuntimePlan) -> Result<(), String> {
             set_original(&point.symbol, trampoline)?;
             trampoline
         };
+        installed = true;
         if config::get().is_some_and(|config| config.should_print_target()) {
             output::event_line(&format!(
                 "sync_hook: provider={} binary={} symbol={} direction={} address=0x{address:x} trampoline=0x{trampoline:x}\n",
@@ -149,7 +197,7 @@ fn install_plan_points(plan: &RuntimePlan) -> Result<(), String> {
             ));
         }
     }
-    Ok(())
+    Ok(installed)
 }
 
 fn plan_uses_ssl_symbols(plan: &RuntimePlan) -> bool {
@@ -242,7 +290,7 @@ pub unsafe extern "C" fn SSL_read_ex(
 
 fn dynamic_tls_capture_enabled() -> bool {
     super::retry_initialize_after_loader_event();
-    config::get().is_some()
+    config::get().is_some_and(|config| config.has_registered_plan())
 }
 
 fn use_configured_openssl_symbol() -> bool {

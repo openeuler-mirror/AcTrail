@@ -6,17 +6,33 @@
 #include "payload/actrail_socket_payload.h"
 #include "payload/actrail_stdio_payload.h"
 
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u32);
+} fork_child_pid_offset SEC(".maps");
+
 SEC("tracepoint/sched/sched_process_fork")
 int handle_sched_process_fork(struct sched_process_fork_ctx *ctx) {
+    __u32 key = 0;
+    __u32 *child_pid_offset = bpf_map_lookup_elem(&fork_child_pid_offset, &key);
     __u32 parent_pid = current_namespace_tgid();
-    __u32 child_global_pid = (__u32)ctx->child_pid;
     __u64 *trace_id = bpf_map_lookup_elem(&tracked_traces, &parent_pid);
     struct actrail_pending_proc_op op = {};
+    __u32 child_global_pid = 0;
 
-    if (!parent_pid) {
+    if (!parent_pid || !trace_id || !child_pid_offset) {
         return 0;
     }
-    if (!trace_id) {
+    if (bpf_probe_read(
+            &child_global_pid,
+            sizeof(child_global_pid),
+            (void *)((__u64)(void *)ctx + *child_pid_offset)
+        ) != 0) {
+        return 0;
+    }
+    if (!child_global_pid) {
         return 0;
     }
 

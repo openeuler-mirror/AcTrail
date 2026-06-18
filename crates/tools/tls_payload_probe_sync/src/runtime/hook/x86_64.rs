@@ -12,6 +12,16 @@ pub(super) fn install(target: usize, replacement: usize) -> Result<usize, String
     Ok(trampoline)
 }
 
+pub(super) fn installed_jump_target(target: usize) -> Option<usize> {
+    let bytes = unsafe { std::slice::from_raw_parts(target as *const u8, JUMP_PATCH_BYTES) };
+    if bytes[0] != 0x48 || bytes[1] != 0xb8 || bytes[10] != 0xff || bytes[11] != 0xe0 {
+        return None;
+    }
+    let mut raw = [0_u8; 8];
+    raw.copy_from_slice(&bytes[2..10]);
+    Some(u64::from_le_bytes(raw) as usize)
+}
+
 unsafe fn write_trampoline(
     source: usize,
     destination: usize,

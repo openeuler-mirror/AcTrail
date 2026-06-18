@@ -257,6 +257,7 @@ rm -rf /tmp/actrail-full-monitor
 - `diagnostic_log_level = info`：默认只保留 agent launch started/closed 这类粗粒度诊断，不打印逐 payload segment 的 debug 诊断。
 - `event_ring_buffer_max_bytes = 8388608`：高流量观测使用的 eBPF event ring 大小。
 - `suppressed_fd_max_entries = 8192`：eBPF observation suppression fd map 容量，用于豁免 AcTrail 内部传输 fd。
+- `suppressed_fd_index_slots_per_process = 64`：每个进程用于 suppressed fd fork 继承和 exit 清理的索引槽数；该索引避免依赖低内核不支持的 eBPF map iteration helper。
 - `file_path_max_bytes = 255`：BPF 文件路径事件拷贝上限，不能超过当前编译 ABI 最大值。
 - `payload_tls_capture_backend = tls-sync`：通过 preload hook 同步采集 TLS 明文。
 - `payload_tls_max_operation_bytes = 16777216`：sync runtime 可接受的单次 TLS payload 操作上限；本例按 16MiB 配置，避免较大 LLM request 在进入语义投影前被截断，同时避免单次操作过度消耗每 trace 的 payload retention 预算。

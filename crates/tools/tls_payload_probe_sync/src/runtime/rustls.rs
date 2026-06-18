@@ -49,7 +49,12 @@ pub(super) fn can_handle(symbol: &str) -> bool {
     )
 }
 
-pub(super) fn install(symbol: &str, address: usize) -> Result<usize, String> {
+pub(super) enum InstallStatus {
+    Installed { trampoline: usize },
+    DuplicateSkipped { owner: usize },
+}
+
+pub(super) fn install(symbol: &str, address: usize) -> Result<InstallStatus, String> {
     let replacement = match symbol {
         RUSTLS_BUFFER_PLAINTEXT_SYMBOL => hook_rustls_buffer_plaintext as *const () as usize,
         RUSTLS_TAKE_RECEIVED_PLAINTEXT_SYMBOL => {
@@ -57,6 +62,9 @@ pub(super) fn install(symbol: &str, address: usize) -> Result<usize, String> {
         }
         _ => return Err(format!("unsupported rustls hook symbol: {symbol}")),
     };
+    if let Some(owner) = hook::installed_actrail_jump_target(address) {
+        return Ok(InstallStatus::DuplicateSkipped { owner });
+    }
     let trampoline = hook::install(address, replacement).map_err(|error| {
         format!("install rustls hook symbol={symbol} address=0x{address:x}: {error}")
     })?;
@@ -69,7 +77,7 @@ pub(super) fn install(symbol: &str, address: usize) -> Result<usize, String> {
         }
         _ => unreachable!(),
     }
-    Ok(trampoline)
+    Ok(InstallStatus::Installed { trampoline })
 }
 
 unsafe extern "C" fn hook_rustls_buffer_plaintext(

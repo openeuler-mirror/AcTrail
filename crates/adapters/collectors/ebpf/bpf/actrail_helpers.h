@@ -14,18 +14,10 @@
 #define __type(name, val) val *name
 #define actrail_barrier_var(var) asm volatile("" : "+r"(var))
 
-#define ACTRAIL_BPF_FUNC_FOR_EACH_MAP_ELEM 164
-
 static void *(*bpf_map_lookup_elem)(void *map, const void *key) = (void *)BPF_FUNC_map_lookup_elem;
 static long (*bpf_map_update_elem)(void *map, const void *key, const void *value, __u64 flags) =
     (void *)BPF_FUNC_map_update_elem;
 static long (*bpf_map_delete_elem)(void *map, const void *key) = (void *)BPF_FUNC_map_delete_elem;
-static long (*bpf_for_each_map_elem)(
-    void *map,
-    void *callback_fn,
-    void *callback_ctx,
-    __u64 flags
-) = (void *)ACTRAIL_BPF_FUNC_FOR_EACH_MAP_ELEM;
 static __u64 (*bpf_get_current_pid_tgid)(void) = (void *)BPF_FUNC_get_current_pid_tgid;
 static long (*bpf_get_current_comm)(void *buf, __u32 size_of_buf) =
     (void *)BPF_FUNC_get_current_comm;
@@ -41,6 +33,8 @@ static long (*bpf_probe_read_user)(void *dst, __u32 size, const void *unsafe_ptr
     (void *)BPF_FUNC_probe_read_user;
 static long (*bpf_probe_read_user_str)(void *dst, __u32 size, const void *unsafe_ptr) =
     (void *)BPF_FUNC_probe_read_user_str;
+static long (*bpf_probe_read)(void *dst, __u32 size, const void *unsafe_ptr) =
+    (void *)BPF_FUNC_probe_read;
 static long (*bpf_probe_read_kernel_str)(void *dst, __u32 size, const void *unsafe_ptr) =
     (void *)BPF_FUNC_probe_read_kernel_str;
 static long (*bpf_get_ns_current_pid_tgid)(

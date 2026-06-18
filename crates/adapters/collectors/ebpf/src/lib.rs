@@ -121,7 +121,13 @@ impl EbpfCollector {
     }
 
     pub fn stop_tracking_process(&mut self, pid: u32) -> Result<(), CollectorError> {
+        let identity = self.bindings.tracked_identity(pid).cloned();
         if let Some(runtime) = self.runtime.as_mut() {
+            if let Some(identity) = identity {
+                runtime
+                    .sweep_suppressed_fds_for_process(identity.pid, identity.generation)
+                    .map_err(loader_error)?;
+            }
             cleanup_suppressed_fds_for_pid(runtime, &mut self.suppressed_fds, pid)?;
             runtime.untrack_pid(pid).map_err(loader_error)?;
         }
@@ -330,6 +336,9 @@ fn cleanup_suppressed_fds_for_process(
     pid: u32,
     generation: u64,
 ) -> Result<(), CollectorError> {
+    runtime
+        .sweep_suppressed_fds_for_process(pid, generation)
+        .map_err(loader_error)?;
     let mut retained = Vec::new();
     for entry in std::mem::take(registry) {
         if entry.fd.process.pid == pid && entry.fd.process.generation == generation {
@@ -349,6 +358,9 @@ fn cleanup_suppressed_fds_for_trace(
     registry: &mut Vec<TraceSuppressedFd>,
     trace_id: TraceId,
 ) -> Result<(), CollectorError> {
+    runtime
+        .sweep_suppressed_fds_for_trace(trace_id)
+        .map_err(loader_error)?;
     let mut retained = Vec::new();
     for entry in std::mem::take(registry) {
         if entry.trace_id == trace_id {

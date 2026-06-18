@@ -8,12 +8,18 @@ mod attach_plan;
 mod environment;
 #[path = "loader/file.rs"]
 mod file;
+#[path = "loader/fork.rs"]
+mod fork;
+#[path = "loader/object.rs"]
+mod object;
 #[path = "loader/ring_decode.rs"]
 mod ring_decode;
 #[path = "loader/socket.rs"]
 mod socket;
 #[path = "loader/stdio.rs"]
 mod stdio;
+#[path = "loader/suppressed_fd.rs"]
+mod suppressed_fd;
 #[path = "loader/tls.rs"]
 mod tls;
 #[path = "loader/tracepoint.rs"]
@@ -27,15 +33,14 @@ use std::path::Path;
 use std::rc::Rc;
 
 use config_core::daemon::{EbpfCollectorConfig, PayloadConfig};
-use libbpf_rs::{
-    Link, MapCore, MapFlags, MapHandle, Object, ObjectBuilder, RingBuffer, RingBufferBuilder,
-};
+use libbpf_rs::{Link, MapCore, MapFlags, MapHandle, Object, ObjectBuilder, RingBuffer};
 use model_core::capability::Capability;
 use model_core::ids::TraceId;
-use model_core::process::{ProcessIdentity, ProcessSuppressedFd, SuppressedFdPurpose};
+use model_core::process::{ProcessIdentity, ProcessSuppressedFd};
 
 pub use attach_plan::AttachPlan;
 use attach_plan::{configure_program_autoload, effective_config_for_attach_plan};
+use object::{build_ring_buffer, map_handle, resize_map, ring_buffer_max_bytes};
 use ring_decode::decode_kernel_event;
 pub use ring_decode::{
     KernelEndpoint, KernelEvent, KernelFilePathEvent, KernelObservationEvent,
@@ -49,24 +54,6 @@ pub use tls::{PendingTlsPayloadOp, TlsPayloadDiagnosticCounter, TlsPayloadDiagno
 const ACTIVE_PID_NAMESPACE_KEY: u32 = 0;
 const PID_NAMESPACE_FIELD_SIZE: usize = std::mem::size_of::<u64>();
 const PID_NAMESPACE_VALUE_SIZE: usize = PID_NAMESPACE_FIELD_SIZE * 2;
-const SUPPRESSED_FD_KEY_SIZE: usize = std::mem::size_of::<SuppressedFdKeyLayout>();
-const SUPPRESSED_FD_VALUE_SIZE: usize = std::mem::size_of::<SuppressedFdValueLayout>();
-const SUPPRESSED_FD_PURPOSE_TLS_SYNC_EVENT: u32 = 1;
-const SUPPRESSED_FD_PURPOSE_INTERNAL_UPLOAD: u32 = 2;
-const SUPPRESSED_FD_PURPOSE_INTERNAL_CONTROL: u32 = 3;
-
-#[repr(C)]
-struct SuppressedFdKeyLayout {
-    pid: u32,
-    fd: u32,
-    generation: u64,
-}
-
-#[repr(C)]
-struct SuppressedFdValueLayout {
-    trace_id: u64,
-    purpose: u32,
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LoaderError {
@@ -103,6 +90,8 @@ pub struct EbpfRuntime {
     tracked_traces: MapHandle,
     process_generations: MapHandle,
     suppressed_fds: MapHandle,
+    suppressed_fd_index: MapHandle,
+    suppressed_fd_index_slots_per_process: u32,
     pending_tls_payload_ops: MapHandle,
     pending_tls_payload_ops_by_namespace: MapHandle,
     payload_tls_diagnostics: MapHandle,
@@ -124,10 +113,6 @@ impl EbpfProgramLoader {
         &self.payload
     }
 
-    pub fn load_runtime(&self) -> Result<EbpfRuntime, LoaderError> {
-        self.load_runtime_with_plan(&AttachPlan::baseline())
-    }
-
     pub fn load_runtime_with_plan(
         &self,
         attach_plan: &AttachPlan,
@@ -136,6 +121,7 @@ impl EbpfProgramLoader {
         tls::validate_payload_config(&self.payload.tls)?;
         stdio::validate_payload_config(&self.payload.stdio)?;
         socket::validate_payload_config(&self.payload.socket)?;
+        suppressed_fd::validate_config(&self.config)?;
         let effective_payload = effective_config_for_attach_plan(&self.payload, attach_plan);
         environment::ensure_tracefs_control()?;
         environment::apply_memlock_rlimit(self.config.memlock_rlimit)?;
@@ -172,6 +158,11 @@ impl EbpfProgramLoader {
         resize_map(
             &mut open_object,
             "suppressed_fds",
+            self.config.suppressed_fd_max_entries,
+        )?;
+        resize_map(
+            &mut open_object,
+            "suppressed_fd_index",
             self.config.suppressed_fd_max_entries,
         )?;
         resize_map(
@@ -254,6 +245,8 @@ impl EbpfRuntime {
         let process_generations =
             map_handle(&object, "process_generations", "process_generation_map")?;
         let suppressed_fds = map_handle(&object, "suppressed_fds", "suppressed_fds")?;
+        let suppressed_fd_index =
+            map_handle(&object, "suppressed_fd_index", "suppressed_fd_index")?;
         let pid_namespace = map_handle(&object, "pid_namespace", "pid_namespace_map")?;
         let pending_tls_payload_ops = map_handle(
             &object,
@@ -270,18 +263,10 @@ impl EbpfRuntime {
         let events_map = map_handle(&object, "events", "ring_buffer")?;
 
         let events = Rc::new(RefCell::new(Vec::new()));
-        let callback_events = Rc::clone(&events);
-        let mut ring_buffer_builder = RingBufferBuilder::new();
-        ring_buffer_builder
-            .add(&events_map, move |raw| {
-                callback_events.borrow_mut().push(raw.to_vec());
-                0
-            })
-            .map_err(|error| LoaderError::new("ring_buffer", error.to_string()))?;
-        let ring_buffer = ring_buffer_builder
-            .build()
-            .map_err(|error| LoaderError::new("ring_buffer", error.to_string()))?;
+        let ring_buffer = build_ring_buffer(&events_map, Rc::clone(&events))?;
+        fork::configure_child_pid_offset_map(&object, attach_plan)?;
         file::configure_file_config_map(&object, config)?;
+        suppressed_fd::configure_config_map(&object, config)?;
         tls::configure_payload_tls_map(&object, &payload.tls)?;
         stdio::configure_payload_stdio_map(&object, &payload.stdio)?;
         socket::configure_payload_socket_map(&object, &payload.socket)?;
@@ -336,6 +321,8 @@ impl EbpfRuntime {
             tracked_traces,
             process_generations,
             suppressed_fds,
+            suppressed_fd_index,
+            suppressed_fd_index_slots_per_process: config.suppressed_fd_index_slots_per_process,
             pending_tls_payload_ops,
             pending_tls_payload_ops_by_namespace,
             payload_tls_diagnostics,
@@ -378,26 +365,40 @@ impl EbpfRuntime {
         trace_id: TraceId,
         suppressed_fd: &ProcessSuppressedFd,
     ) -> Result<(), LoaderError> {
-        let key = suppressed_fd_key(&suppressed_fd.process, suppressed_fd.fd)?;
-        let value = suppressed_fd_value(trace_id, suppressed_fd.purpose);
-        self.suppressed_fds
-            .update(&key, &value, MapFlags::ANY)
-            .map_err(|error| LoaderError::new("suppress_fd", error.to_string()))
+        suppressed_fd::suppress_fd(
+            &self.suppressed_fds,
+            &self.suppressed_fd_index,
+            self.suppressed_fd_index_slots_per_process,
+            trace_id,
+            suppressed_fd,
+        )
     }
 
     pub fn unsuppress_fd(&self, process: &ProcessIdentity, fd: i32) -> Result<(), LoaderError> {
-        let key = suppressed_fd_key(process, fd)?;
-        if self
-            .suppressed_fds
-            .lookup(&key, MapFlags::ANY)
-            .map_err(|error| LoaderError::new("lookup_suppressed_fd", error.to_string()))?
-            .is_none()
-        {
-            return Ok(());
-        }
-        self.suppressed_fds
-            .delete(&key)
-            .map_err(|error| LoaderError::new("unsuppress_fd", error.to_string()))
+        suppressed_fd::unsuppress_fd(
+            &self.suppressed_fds,
+            &self.suppressed_fd_index,
+            self.suppressed_fd_index_slots_per_process,
+            process,
+            fd,
+        )
+    }
+
+    pub fn sweep_suppressed_fds_for_process(
+        &self,
+        pid: u32,
+        generation: u64,
+    ) -> Result<(), LoaderError> {
+        suppressed_fd::sweep_process(
+            &self.suppressed_fds,
+            &self.suppressed_fd_index,
+            pid,
+            generation,
+        )
+    }
+
+    pub fn sweep_suppressed_fds_for_trace(&self, trace_id: TraceId) -> Result<(), LoaderError> {
+        suppressed_fd::sweep_trace(&self.suppressed_fds, &self.suppressed_fd_index, trace_id)
     }
 
     pub fn set_pid_namespace(&self, namespace: PidNamespace) -> Result<(), LoaderError> {
@@ -497,87 +498,5 @@ impl EbpfRuntime {
             self.attached_programs.push(program_name);
         }
         Ok(true)
-    }
-}
-
-fn ring_buffer_max_bytes(config: &EbpfCollectorConfig, payload: &PayloadConfig) -> u32 {
-    let mut max_bytes = config.event_ring_buffer_max_bytes;
-    if payload.tls.enabled {
-        max_bytes = max_bytes.max(payload.tls.ring_buffer_bytes);
-    }
-    if payload.stdio.enabled {
-        max_bytes = max_bytes.max(payload.stdio.ring_buffer_bytes);
-    }
-    if payload.socket.enabled {
-        max_bytes = max_bytes.max(payload.socket.ring_buffer_bytes);
-    }
-    max_bytes
-}
-
-fn map_handle(
-    object: &Object,
-    map_name: &'static str,
-    stage: &'static str,
-) -> Result<MapHandle, LoaderError> {
-    object
-        .maps()
-        .find(|map| map.name() == OsStr::new(map_name))
-        .ok_or_else(|| LoaderError::new(stage, format!("{map_name} map is missing")))
-        .and_then(|map| {
-            MapHandle::try_from(&map).map_err(|error| LoaderError::new(stage, error.to_string()))
-        })
-}
-
-fn resize_map(
-    open_object: &mut libbpf_rs::OpenObject,
-    map_name: &str,
-    max_entries: u32,
-) -> Result<(), LoaderError> {
-    let mut map = open_object
-        .maps_mut()
-        .find(|map| map.name() == OsStr::new(map_name))
-        .ok_or_else(|| LoaderError::new("resize_map", format!("map {map_name} is missing")))?;
-    map.set_max_entries(max_entries)
-        .map_err(|error| LoaderError::new("resize_map", error.to_string()))
-}
-
-fn suppressed_fd_key(
-    process: &ProcessIdentity,
-    fd: i32,
-) -> Result<[u8; SUPPRESSED_FD_KEY_SIZE], LoaderError> {
-    let fd = u32::try_from(fd).map_err(|_| {
-        LoaderError::new(
-            "suppress_fd",
-            format!("suppressed fd must be non-negative: {fd}"),
-        )
-    })?;
-    if process.generation == 0 {
-        return Err(LoaderError::new(
-            "suppress_fd",
-            "suppressed fd requires a non-zero process generation",
-        ));
-    }
-    let mut key = [0_u8; SUPPRESSED_FD_KEY_SIZE];
-    key[0..4].copy_from_slice(&process.pid.to_ne_bytes());
-    key[4..8].copy_from_slice(&fd.to_ne_bytes());
-    key[8..16].copy_from_slice(&process.generation.to_ne_bytes());
-    Ok(key)
-}
-
-fn suppressed_fd_value(
-    trace_id: TraceId,
-    purpose: SuppressedFdPurpose,
-) -> [u8; SUPPRESSED_FD_VALUE_SIZE] {
-    let mut value = [0_u8; SUPPRESSED_FD_VALUE_SIZE];
-    value[0..8].copy_from_slice(&trace_id.get().to_ne_bytes());
-    value[8..12].copy_from_slice(&suppressed_fd_purpose_code(purpose).to_ne_bytes());
-    value
-}
-
-fn suppressed_fd_purpose_code(purpose: SuppressedFdPurpose) -> u32 {
-    match purpose {
-        SuppressedFdPurpose::TlsSyncEvent => SUPPRESSED_FD_PURPOSE_TLS_SYNC_EVENT,
-        SuppressedFdPurpose::InternalUpload => SUPPRESSED_FD_PURPOSE_INTERNAL_UPLOAD,
-        SuppressedFdPurpose::InternalControl => SUPPRESSED_FD_PURPOSE_INTERNAL_CONTROL,
     }
 }

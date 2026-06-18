@@ -40,13 +40,16 @@ fn initialize() -> Result<(), String> {
 }
 
 fn initialize_once() -> Result<(), String> {
-    let Some(bootstrap) = config::RuntimeConfigFactory::from_env()? else {
+    let audit_namespace = tls::dynamic::binding::is_audit_namespace();
+    let Some(bootstrap) =
+        config::RuntimeConfigFactory::from_env_with_initial_plan(!audit_namespace)?
+    else {
         return Ok(());
     };
     let initial_plan = bootstrap.initial_plan;
     config::set(bootstrap.config)?;
     register_exit_flush()?;
-    if tls::dynamic::binding::is_audit_namespace() {
+    if audit_namespace {
         return Ok(());
     }
     if let Some(plan) = initial_plan {
@@ -65,9 +68,11 @@ fn register_exit_flush() -> Result<(), String> {
 }
 
 extern "C" fn flush_sync_events() {
-    if let Some(config) = config::get() {
-        let _ = config.close_event_client();
-    }
+    let _ = std::panic::catch_unwind(|| {
+        if let Some(config) = config::get() {
+            let _ = config.close_event_client();
+        }
+    });
 }
 
 pub(in crate::runtime) fn retry_initialize_after_loader_event() {

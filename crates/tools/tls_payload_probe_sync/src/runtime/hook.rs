@@ -1,5 +1,8 @@
 //! Native inline hook installation.
 
+use std::ffi::CStr;
+use std::path::Path;
+
 #[cfg(target_arch = "aarch64")]
 #[path = "hook/aarch64.rs"]
 mod backend;
@@ -16,6 +19,24 @@ pub(super) fn install(target: usize, replacement: usize) -> Result<usize, String
             render_target_bytes(target)
         })
     })
+}
+
+pub(super) fn installed_actrail_jump_target(target: usize) -> Option<usize> {
+    let owner = backend::installed_jump_target(target)?;
+    is_actrail_runtime_address(owner).then_some(owner)
+}
+
+fn is_actrail_runtime_address(address: usize) -> bool {
+    let mut info = unsafe { std::mem::zeroed::<libc::Dl_info>() };
+    let result = unsafe { libc::dladdr(address as *const libc::c_void, &mut info) };
+    if result == 0 || info.dli_fname.is_null() {
+        return false;
+    }
+    let path = unsafe { CStr::from_ptr(info.dli_fname) };
+    Path::new(path.to_string_lossy().as_ref())
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("libactrail_tls_payload_probe_sync"))
 }
 
 unsafe fn render_target_bytes(target: usize) -> String {

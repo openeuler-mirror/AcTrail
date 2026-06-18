@@ -76,7 +76,7 @@ pub(super) fn sync_launch_envs(
             redaction: RedactionMode::Redact,
             events: EventFilter::none(),
             trace_id: Some(trace_id.get()),
-            event_socket_path: None,
+            event_socket_path: Some(config.sync_event_socket_path.clone()),
             event_fd: Some(sync_event_fd.raw_fd()),
             event_write_buffer_bytes: Some(
                 usize::try_from(socket_max_segment_bytes).map_err(|error| {

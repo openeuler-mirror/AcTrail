@@ -95,8 +95,12 @@ const PLATFORM_OPTIONAL_TRACEPOINT_PROGRAMS: &[&str] = &[
     "handle_sys_exit_dup2",
     "handle_sys_enter_dup3",
     "handle_sys_exit_dup3",
+    "handle_sys_enter_open",
+    "handle_sys_exit_open",
     "handle_sys_enter_openat2",
     "handle_sys_exit_openat2",
+    "handle_sys_enter_creat",
+    "handle_sys_exit_creat",
 ];
 
 const FD_IO_IPC_PROGRAMS: &[&str] = &[

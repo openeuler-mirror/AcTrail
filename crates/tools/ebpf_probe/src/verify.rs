@@ -45,6 +45,7 @@ pub fn run_live_verification(
             tracked_process_max_entries: config.tracked_process_max_entries,
             pending_operation_max_entries: config.pending_operation_max_entries,
             suppressed_fd_max_entries: config.suppressed_fd_max_entries,
+            suppressed_fd_index_slots_per_process: config.suppressed_fd_index_slots_per_process,
             event_ring_buffer_max_bytes: config.event_ring_buffer_max_bytes,
             file_path_capture_enabled: config.file_path_capture_enabled,
             file_path_max_bytes: config.file_path_max_bytes,

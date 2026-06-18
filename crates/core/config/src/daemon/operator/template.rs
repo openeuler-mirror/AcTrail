@@ -43,6 +43,7 @@ memlock_rlimit = inherit
 tracked_process_max_entries = 8192
 pending_operation_max_entries = 8192
 suppressed_fd_max_entries = 8192
+suppressed_fd_index_slots_per_process = 64
 event_ring_buffer_max_bytes = 8388608
 file_path_capture_enabled = true
 file_path_max_bytes = 255
@@ -87,12 +88,7 @@ process_seccomp_max_arg_bytes = 8192
 process_seccomp_pending_max_entries = 8192
 
 agent_invocation_enabled = true
-# Optional TLS sync probe-plan prewarm hints; agent identity comes from observed LLM requests.
-agent_invocation_command = opencode
-agent_invocation_command = .opencode
-agent_invocation_command = xiaoo
-agent_invocation_command = xiaoo-tui
-agent_invocation_command = claude
+# Optional TLS sync probe-plan prewarm hints. Leave empty unless startup cost is acceptable.
 
 payload_stdio_enabled = true
 payload_stdio_capture_stdin = true
