@@ -40,7 +40,10 @@ fn initialize() -> Result<(), String> {
 }
 
 fn initialize_once() -> Result<(), String> {
-    let audit_namespace = tls::dynamic::binding::is_audit_namespace();
+    if std::env::var_os(tls_payload_sync::ENV_ENABLED).is_none() {
+        return Ok(());
+    }
+    let audit_namespace = tls::dynamic::binding::is_audit_namespace()?;
     let Some(bootstrap) =
         config::RuntimeConfigFactory::from_env_with_initial_plan(!audit_namespace)?
     else {

@@ -1,12 +1,19 @@
 const JUMP_PATCH_BYTES: usize = 12;
 const ABSOLUTE_CALL_BYTES: usize = 13;
 
-pub(super) fn install(target: usize, replacement: usize) -> Result<usize, String> {
+pub(super) fn install(
+    target: usize,
+    replacement: usize,
+    before_patch: impl FnOnce(usize) -> Result<(), String>,
+) -> Result<usize, String> {
     let stolen = stolen_len_for_detour(target)?;
     let trampoline = allocate_trampoline(stolen * ABSOLUTE_CALL_BYTES + JUMP_PATCH_BYTES)?;
     unsafe {
         let written = write_trampoline(target, trampoline, stolen)?;
         write_jump(trampoline + written, target + stolen);
+    }
+    before_patch(trampoline)?;
+    unsafe {
         patch_target(target, replacement, stolen)?;
     }
     Ok(trampoline)
@@ -119,6 +126,12 @@ fn allocate_trampoline(size: usize) -> Result<usize, String> {
             "allocate trampoline: {}",
             std::io::Error::last_os_error()
         ));
+    }
+    if pointer.is_null() {
+        unsafe {
+            libc::munmap(pointer, size);
+        }
+        return Err("allocate trampoline returned null address".to_string());
     }
     Ok(pointer as usize)
 }

@@ -9,13 +9,20 @@ const BR_X16: u32 = 0xd61f_0200;
 const BLR_X16: u32 = 0xd63f_0200;
 const B_SKIP_LITERAL: u32 = 0x1400_0003;
 
-pub(super) fn install(target: usize, replacement: usize) -> Result<usize, String> {
+pub(super) fn install(
+    target: usize,
+    replacement: usize,
+    before_patch: impl FnOnce(usize) -> Result<(), String>,
+) -> Result<usize, String> {
     let trampoline =
         allocate_trampoline(STOLEN_INSTRUCTIONS * ABSOLUTE_CALL_BYTES + JUMP_PATCH_BYTES)?;
     unsafe {
         let written = write_trampoline(target, trampoline)?;
         write_jump(trampoline + written, target + STOLEN_BYTES);
         clear_instruction_cache(trampoline, written + JUMP_PATCH_BYTES)?;
+    }
+    before_patch(trampoline)?;
+    unsafe {
         patch_target(target, replacement)?;
     }
     Ok(trampoline)
@@ -148,6 +155,12 @@ fn allocate_trampoline(size: usize) -> Result<usize, String> {
             "allocate trampoline: {}",
             std::io::Error::last_os_error()
         ));
+    }
+    if pointer.is_null() {
+        unsafe {
+            libc::munmap(pointer, size);
+        }
+        return Err("allocate trampoline returned null address".to_string());
     }
     Ok(pointer as usize)
 }
