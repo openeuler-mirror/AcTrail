@@ -296,6 +296,21 @@ fn route_trace_api(path: &str, query: &str, storage: &StorageConfig) -> Result<R
                 }
             }
         }
+        [trace_id, "actions", action_id, "content", "llm-request"] => {
+            let trace_id = parse_u64(trace_id);
+            let action_id = percent_decode(action_id);
+            let max_bytes = parse_llm_request_content_query(query);
+            match (trace_id, action_id, max_bytes) {
+                (Ok(trace_id), Ok(action_id), Ok(max_bytes)) => {
+                    view::action_llm_request_content_json(storage, trace_id, &action_id, max_bytes)
+                        .map(Response::json)
+                        .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error)))
+                }
+                (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
+                    Ok(Response::text(STATUS_BAD_REQUEST, error))
+                }
+            }
+        }
         [trace_id, "commands"] => parse_u64(trace_id)
             .and_then(|trace_id| view::commands_json(storage, trace_id))
             .map(Response::json)
@@ -328,6 +343,14 @@ fn parse_action_tree_page(query: &str) -> Result<SemanticActionChildPageQuery, S
         return Err("invalid query parameter limit: value must be positive".to_string());
     }
     Ok(SemanticActionChildPageQuery { offset, limit })
+}
+
+fn parse_llm_request_content_query(query: &str) -> Result<usize, String> {
+    let max_bytes = required_query_usize(query, "max_bytes")?;
+    if max_bytes == usize::default() {
+        return Err("invalid query parameter max_bytes: value must be positive".to_string());
+    }
+    Ok(max_bytes)
 }
 
 fn required_query_usize(query: &str, key: &'static str) -> Result<usize, String> {

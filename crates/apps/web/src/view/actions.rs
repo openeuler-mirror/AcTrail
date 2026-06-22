@@ -4,7 +4,8 @@ use std::path::Path;
 
 use model_core::ids::TraceId;
 use semantic_action::{
-    FilePathSetPath, FilePathSetPathPage, SemanticAction, SemanticActionLink, SemanticEvidence,
+    FilePathSetPath, FilePathSetPathPage, LlmRequestContentPage, SemanticAction,
+    SemanticActionLink, SemanticEvidence,
 };
 use storage_core::{
     SemanticActionChildPageQuery, SemanticActionSummary, StorageBackend, StorageError,
@@ -157,6 +158,21 @@ pub(super) fn file_path_set_json(
     })
 }
 
+pub(super) fn llm_request_content_json(
+    storage: &mut dyn StorageBackend,
+    trace_id: TraceId,
+    action_id: &str,
+    max_bytes: usize,
+) -> Result<String, String> {
+    let content = storage
+        .llm_request_content_page(trace_id, action_id, max_bytes)
+        .map_err(|error| storage_error("read LLM request content", error))?;
+    Ok(match content {
+        Some(content) => format!("{{\"content\":{}}}", llm_request_content_page_json(content)),
+        None => "{\"content\":null}".to_string(),
+    })
+}
+
 fn load_child_page(
     projection: &ActionDisplayProjection,
     parent_id: &str,
@@ -263,6 +279,19 @@ fn file_path_set_path_json(path: &FilePathSetPath) -> String {
         "{{\"path_id\":{},\"path\":{}}}",
         json::number(path.path_id),
         json::string(&path.path)
+    )
+}
+
+fn llm_request_content_page_json(content: LlmRequestContentPage) -> String {
+    format!(
+        "{{\"action_id\":{},\"format_version\":{},\"canonical_body_hash\":{},\"canonical_body_bytes\":{},\"returned_bytes\":{},\"truncated\":{},\"body_json\":{}}}",
+        json::string(&content.action_id),
+        json::number(content.format_version),
+        json::string(&content.canonical_body_hash),
+        json::number(content.canonical_body_bytes),
+        json::number(content.returned_bytes),
+        bool_json(content.truncated),
+        json::string(&content.body_json)
     )
 }
 

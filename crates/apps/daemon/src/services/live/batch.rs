@@ -76,7 +76,14 @@ impl StorageAttachService {
                             output.links,
                             output.file_observation_paths,
                             output.file_path_sets,
+                            output.llm_request_contents,
                         ));
+                    retained_events = retained_events.saturating_add(output.deferred_events.len());
+                    for deferred_event in output.deferred_events {
+                        batch
+                            .events
+                            .push(self.prepare_event_for_storage(deferred_event));
+                    }
                     if retain_event {
                         retained_events = retained_events.saturating_add(1);
                         batch.events.push(self.prepare_event_for_storage(event));
@@ -121,7 +128,14 @@ impl StorageAttachService {
                     output.links,
                     output.file_observation_paths,
                     output.file_path_sets,
+                    output.llm_request_contents,
                 ));
+            retained_events = retained_events.saturating_add(output.deferred_events.len());
+            for deferred_event in output.deferred_events {
+                batch
+                    .events
+                    .push(self.prepare_event_for_storage(deferred_event));
+            }
             if retain_event {
                 retained_events = retained_events.saturating_add(1);
                 batch.events.push(self.prepare_event_for_storage(event));

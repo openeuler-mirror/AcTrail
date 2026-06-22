@@ -7,18 +7,22 @@ enum actrail_proc_coord_syscall_id {
     ACTRAIL_PROC_COORD_TRACEPOINT_SIGNAL_GENERATE = 1,
 };
 
-static __always_inline int emit_pending_child_proc_op(void) {
-    __u32 child_global_pid = current_tgid();
-    __u32 child_pid = current_namespace_tgid();
+static __always_inline int emit_pending_child_proc_op(__u32 child_kernel_pid) {
+    __u32 child_pid = 0;
     struct actrail_pending_proc_op *op =
-        bpf_map_lookup_elem(&pending_child_proc_ops, &child_global_pid);
+        bpf_map_lookup_elem(&pending_child_proc_ops, &child_kernel_pid);
     struct actrail_event event;
 
     if (!op) {
         return 0;
     }
+    if (op->lookup_flags & ACTRAIL_TRACE_LOOKUP_FLAG_HOST_FALLBACK) {
+        child_pid = child_kernel_pid;
+    } else {
+        child_pid = current_tgid();
+    }
     if (!child_pid) {
-        bpf_map_delete_elem(&pending_child_proc_ops, &child_global_pid);
+        bpf_map_delete_elem(&pending_child_proc_ops, &child_kernel_pid);
         return 0;
     }
 
@@ -36,7 +40,7 @@ static __always_inline int emit_pending_child_proc_op(void) {
     event.pid_generation = op->parent_generation;
     event.aux_generation = op->child_generation;
     emit_event(&event);
-    bpf_map_delete_elem(&pending_child_proc_ops, &child_global_pid);
+    bpf_map_delete_elem(&pending_child_proc_ops, &child_kernel_pid);
     return 0;
 }
 
@@ -85,9 +89,11 @@ static __always_inline int emit_exec_proc_event(
 }
 
 static __always_inline int store_pending_exit_op(struct trace_event_raw_sys_enter *ctx) {
-    __u64 pid_tgid = current_pid_tgid();
-    __u32 pid = current_namespace_tgid();
-    __u64 *trace_id = bpf_map_lookup_elem(&tracked_traces, &pid);
+    __u32 pid = 0;
+    __u32 tid = 0;
+    __u32 lookup_flags = 0;
+    __u64 *trace_id = lookup_current_trace(&pid, &tid, &lookup_flags);
+    __u64 pid_tgid = ((__u64)pid << 32) | tid;
     struct actrail_pending_exit_op op = {};
 
     if (!pid) {

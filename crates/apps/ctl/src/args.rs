@@ -9,10 +9,12 @@ use config_core::daemon::{
     DEFAULT_OPERATOR_CONFIG_PATH, OperatorConfig, PayloadSocketSeccompSyscall, PayloadTlsConfig,
     PayloadTlsSeccompSyscall, ProcessSeccompSyscall,
 };
+use control_contract::command::ProcessRef;
 use control_contract::selector::TraceSelector;
 use model_core::ids::{ProfileName, RequestId, TraceId, TraceName};
 
 use crate::clean::CleanArtifacts;
+use crate::process_ref::process_ref;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CtlInvocation {
@@ -28,7 +30,7 @@ pub enum CtlCommand {
         force: bool,
     },
     TrackAdd {
-        root_pid: u32,
+        root: ProcessRef,
         display_name: TraceName,
         profile_name: ProfileName,
         tags: BTreeSet<String>,
@@ -157,7 +159,7 @@ impl CtlCommandArgs {
             Self::TrackAdd(args) => {
                 let root_pid = args.root_pid;
                 Ok(CtlCommand::TrackAdd {
-                    root_pid,
+                    root: process_ref(root_pid)?,
                     display_name: trace_name(args.name, root_pid)?,
                     profile_name: profile_name(args.profile_name, config)?,
                     tags: args.tags.into_iter().collect(),

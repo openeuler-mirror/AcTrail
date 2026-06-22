@@ -1,5 +1,10 @@
+use std::collections::BTreeMap;
+
 use model_core::ids::TraceId;
-use semantic_action::{FileObservationPath, FilePathSetWrite, SemanticAction, SemanticActionLink};
+use semantic_action::{
+    FileObservationPath, FilePathSetWrite, LlmRequestContentWrite, SemanticAction,
+    SemanticActionLink,
+};
 
 use super::error::RecordingError;
 
@@ -11,6 +16,7 @@ pub struct SemanticActionBatch {
     links: Vec<SemanticActionLink>,
     file_observation_paths: Vec<FileObservationPath>,
     file_path_sets: Vec<FilePathSetWrite>,
+    llm_request_contents: Vec<LlmRequestContentWrite>,
 }
 
 impl SemanticActionBatch {
@@ -20,6 +26,7 @@ impl SemanticActionBatch {
             links,
             file_observation_paths: Vec::new(),
             file_path_sets: Vec::new(),
+            llm_request_contents: Vec::new(),
         }
     }
 
@@ -28,12 +35,14 @@ impl SemanticActionBatch {
         links: Vec<SemanticActionLink>,
         file_observation_paths: Vec<FileObservationPath>,
         file_path_sets: Vec<FilePathSetWrite>,
+        llm_request_contents: Vec<LlmRequestContentWrite>,
     ) -> Self {
         Self {
             actions,
             links,
             file_observation_paths,
             file_path_sets,
+            llm_request_contents,
         }
     }
 
@@ -53,12 +62,17 @@ impl SemanticActionBatch {
         &self.file_path_sets
     }
 
+    pub fn llm_request_contents(&self) -> &[LlmRequestContentWrite] {
+        &self.llm_request_contents
+    }
+
     pub fn as_record_batch(&self) -> SemanticActionRecordBatch<'_> {
         SemanticActionRecordBatch::new(
             &self.actions,
             &self.links,
             &self.file_observation_paths,
             &self.file_path_sets,
+            &self.llm_request_contents,
         )
     }
 
@@ -68,6 +82,43 @@ impl SemanticActionBatch {
         self.file_observation_paths
             .extend(other.file_observation_paths);
         self.file_path_sets.extend(other.file_path_sets);
+        self.llm_request_contents.extend(other.llm_request_contents);
+    }
+
+    pub(crate) fn split_by_trace(self) -> Vec<Self> {
+        let mut batches = BTreeMap::<TraceId, Self>::new();
+        for action in self.actions {
+            batches
+                .entry(action.trace_id)
+                .or_default()
+                .actions
+                .push(action);
+        }
+        for link in self.links {
+            batches.entry(link.trace_id).or_default().links.push(link);
+        }
+        for path in self.file_observation_paths {
+            batches
+                .entry(path.trace_id)
+                .or_default()
+                .file_observation_paths
+                .push(path);
+        }
+        for path_set in self.file_path_sets {
+            batches
+                .entry(path_set.trace_id)
+                .or_default()
+                .file_path_sets
+                .push(path_set);
+        }
+        for content in self.llm_request_contents {
+            batches
+                .entry(content.manifest.trace_id)
+                .or_default()
+                .llm_request_contents
+                .push(content);
+        }
+        batches.into_values().collect()
     }
 
     pub fn into_parts(self) -> (Vec<SemanticAction>, Vec<SemanticActionLink>) {
@@ -80,6 +131,7 @@ pub struct SemanticActionRecordBatch<'a> {
     links: &'a [SemanticActionLink],
     file_observation_paths: &'a [FileObservationPath],
     file_path_sets: &'a [FilePathSetWrite],
+    llm_request_contents: &'a [LlmRequestContentWrite],
 }
 
 impl<'a> SemanticActionRecordBatch<'a> {
@@ -88,12 +140,14 @@ impl<'a> SemanticActionRecordBatch<'a> {
         links: &'a [SemanticActionLink],
         file_observation_paths: &'a [FileObservationPath],
         file_path_sets: &'a [FilePathSetWrite],
+        llm_request_contents: &'a [LlmRequestContentWrite],
     ) -> Self {
         Self {
             actions,
             links,
             file_observation_paths,
             file_path_sets,
+            llm_request_contents,
         }
     }
 
@@ -113,6 +167,10 @@ impl<'a> SemanticActionRecordBatch<'a> {
         self.file_path_sets
     }
 
+    pub fn llm_request_contents(&self) -> &'a [LlmRequestContentWrite] {
+        self.llm_request_contents
+    }
+
     pub fn trace_id(&self) -> Result<Option<TraceId>, RecordingError> {
         let mut trace_id = None;
         for action in self.actions {
@@ -126,6 +184,9 @@ impl<'a> SemanticActionRecordBatch<'a> {
         }
         for path_set in self.file_path_sets {
             record_trace_id(&mut trace_id, path_set.trace_id)?;
+        }
+        for content in self.llm_request_contents {
+            record_trace_id(&mut trace_id, content.manifest.trace_id)?;
         }
         Ok(trace_id)
     }

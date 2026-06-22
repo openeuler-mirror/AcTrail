@@ -43,6 +43,10 @@ pub(super) fn llm_call_from_request_response(
     copy_attr(request, &mut attributes, attrs::payload::STREAM_KEY);
     copy_attr(request, &mut attributes, attrs::payload::OPERATION_ID);
     copy_attr(request, &mut attributes, attrs::http_request::STREAM_ID);
+    if let Some(response) = response {
+        copy_attr(response, &mut attributes, attrs::http_response::STATUS_CODE);
+        copy_attr(response, &mut attributes, attrs::http_response::REASON);
+    }
 
     let mut evidence = request.evidence.clone();
     if let Some(response) = response {

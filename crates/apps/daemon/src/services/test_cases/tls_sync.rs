@@ -30,6 +30,7 @@ fn tls_sync_payload_persists_without_child_membership() {
         profiles,
         super::ebpf_config(false),
         super::payload_config(true),
+        super::DEFAULT_ACTIVE_TRACE_MAX,
         DiagnosticLogLevel::Info,
         super::seccomp_notify_disabled(),
         super::process_seccomp_disabled(),

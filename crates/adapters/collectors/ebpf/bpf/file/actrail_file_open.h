@@ -61,7 +61,7 @@ static __always_inline int emit_file_openat2_enter(
     struct trace_event_raw_sys_enter *ctx
 ) {
     __u64 pid_tgid = current_pid_tgid();
-    __u32 tgid = current_namespace_tgid();
+    __u32 tgid = pid_tgid >> 32;
     __u64 *trace_id = bpf_map_lookup_elem(&tracked_traces, &tgid);
     struct actrail_file_event *event;
     struct actrail_open_how how = {};

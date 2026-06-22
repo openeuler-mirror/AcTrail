@@ -28,12 +28,14 @@ pub(super) struct TtyState {
     start_time: SystemTime,
     first_event_id: EventId,
     last_event_id: EventId,
+    last_emitted_at: Option<SystemTime>,
     open_count: u64,
     close_count: u64,
     read_count: u64,
     write_count: u64,
     bytes_read: u64,
     bytes_written: u64,
+    other_count: u64,
     error_count: u64,
 }
 
@@ -47,12 +49,14 @@ impl TtyState {
             start_time: event.envelope.observed_at,
             first_event_id: event.envelope.event_id,
             last_event_id: event.envelope.event_id,
+            last_emitted_at: None,
             open_count: 0,
             close_count: 0,
             read_count: 0,
             write_count: 0,
             bytes_read: 0,
             bytes_written: 0,
+            other_count: 0,
             error_count: 0,
         }
     }
@@ -77,8 +81,26 @@ impl TtyState {
                     .bytes_written
                     .saturating_add(event_size(event).unwrap_or(0));
             }
-            _ => {}
+            _ => self.other_count = self.other_count.saturating_add(1),
         }
+    }
+
+    pub(super) fn should_emit_summary(
+        &self,
+        observed_at: SystemTime,
+        flush_interval: std::time::Duration,
+    ) -> bool {
+        match self.last_emitted_at {
+            None => true,
+            Some(last_emitted_at) => match observed_at.duration_since(last_emitted_at) {
+                Ok(elapsed) => elapsed >= flush_interval,
+                Err(_) => true,
+            },
+        }
+    }
+
+    pub(super) fn mark_summary_emitted(&mut self, emitted_at: SystemTime) {
+        self.last_emitted_at = Some(emitted_at);
     }
 
     pub(super) fn action(
@@ -151,6 +173,7 @@ impl TtyState {
             .saturating_add(self.close_count)
             .saturating_add(self.read_count)
             .saturating_add(self.write_count)
+            .saturating_add(self.other_count)
     }
 }
 

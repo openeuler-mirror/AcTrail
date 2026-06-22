@@ -8,6 +8,8 @@
           :node-key="entry.key"
           :path="entry.path"
           :value="entry.value"
+          :expanded-paths="expandedPaths"
+          @toggle-node="$emit('toggle-node', $event)"
         />
       </div>
       <pre v-else class="json-leaf">{{ formattedLeaf }}</pre>
@@ -36,6 +38,8 @@
             :node-key="entry.key"
             :path="entry.path"
             :value="entry.value"
+            :expanded-paths="expandedPaths"
+            @toggle-node="$emit('toggle-node', $event)"
           />
         </template>
         <pre v-else class="json-value-block">{{ formattedLeaf }}</pre>
@@ -61,9 +65,14 @@ const props = defineProps({
     type: String,
     default: '$',
   },
+  expandedPaths: {
+    type: Object,
+    default: null,
+  },
 });
 
-const expanded = ref(false);
+const emit = defineEmits(['toggle-node']);
+const localExpanded = ref(false);
 const isRoot = computed(() => props.nodeKey === null);
 const displayKey = computed(() => String(props.nodeKey));
 const normalizedValue = computed(() => normalizeValue(props.value));
@@ -73,16 +82,27 @@ const children = computed(() =>
 );
 const summary = computed(() => summarize(normalizedValue.value));
 const formattedLeaf = computed(() => formatLeaf(normalizedValue.value));
+const controlled = computed(() => props.expandedPaths instanceof Set);
+const expanded = computed(() =>
+  controlled.value ? props.expandedPaths.has(props.path) : localExpanded.value,
+);
 
 watch(
   () => props.value,
   () => {
-    expanded.value = false;
+    if (!controlled.value) {
+      localExpanded.value = false;
+    }
   },
 );
 
 function toggle() {
-  expanded.value = !expanded.value;
+  const next = !expanded.value;
+  if (controlled.value) {
+    emit('toggle-node', { path: props.path, expanded: next });
+    return;
+  }
+  localExpanded.value = next;
 }
 
 function branchEntries(value, parentPath) {

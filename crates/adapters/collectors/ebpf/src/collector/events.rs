@@ -73,7 +73,8 @@ impl EbpfCollector {
         match event {
             KernelEvent::Observation(event) => {
                 self.maybe_attach_go_tls_after_exec(&event)?;
-                self.apply_file_lifecycle_context(&event)?;
+                let lifecycle_event = event.clone();
+                self.apply_file_lifecycle_before_decode(&lifecycle_event)?;
                 if let Some(event) = decode_observation(
                     event,
                     &mut self.bindings,
@@ -84,15 +85,11 @@ impl EbpfCollector {
                 {
                     batch.observations.push(event);
                 }
+                self.apply_file_lifecycle_after_decode(&lifecycle_event)?;
             }
             KernelEvent::FilePath(event) => {
-                if let Some(event) = decode_file_path(
-                    event,
-                    &self.bindings,
-                    &self.identity_reader,
-                    &mut self.file_tracker,
-                )
-                .map_err(|error| CollectorError::new(error.stage, error.message))?
+                if let Some(event) = decode_file_path(event, &self.bindings, &mut self.file_tracker)
+                    .map_err(|error| CollectorError::new(error.stage, error.message))?
                 {
                     batch.observations.push(event);
                 }
@@ -114,16 +111,62 @@ impl EbpfCollector {
         Ok(())
     }
 
-    fn apply_file_lifecycle_context(
+    fn apply_file_lifecycle_before_decode(
         &mut self,
         event: &KernelObservationEvent,
     ) -> Result<(), CollectorError> {
         match event.kind {
-            decode::PROC_EVENT_FORK => self.file_tracker.inherit_process(event.pid, event.aux),
-            decode::PROC_EVENT_EXEC => self.file_tracker.exec_process(event.pid),
             decode::PROC_EVENT_EXIT => {
-                self.cleanup_suppressed_fds_for_process(event.pid, event.pid_generation)?;
-                self.file_tracker.remove_process(event.pid);
+                let map_pid = event.pid;
+                decode::resolve_bound_event_identity(
+                    event.trace_id,
+                    map_pid,
+                    event.pid_generation,
+                    &self.bindings,
+                )
+                .map_err(|error| CollectorError::new("file_lifecycle_exit", error))?;
+                self.cleanup_suppressed_fds_for_process(map_pid, event.pid_generation)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn apply_file_lifecycle_after_decode(
+        &mut self,
+        event: &KernelObservationEvent,
+    ) -> Result<(), CollectorError> {
+        match event.kind {
+            decode::PROC_EVENT_FORK => {
+                let parent_map_pid = event.pid;
+                let child_map_pid = event.aux;
+                let parent = decode::resolve_bound_event_identity(
+                    event.trace_id,
+                    parent_map_pid,
+                    event.pid_generation,
+                    &self.bindings,
+                )
+                .map_err(|error| CollectorError::new("file_lifecycle_parent", error))?;
+                let child = decode::resolve_bound_event_identity(
+                    event.trace_id,
+                    child_map_pid,
+                    event.aux_generation,
+                    &self.bindings,
+                )
+                .map_err(|error| CollectorError::new("file_lifecycle_child", error))?;
+                self.file_tracker
+                    .inherit_process(event.trace_id, &parent, child);
+            }
+            decode::PROC_EVENT_EXEC => {
+                let map_pid = event.pid;
+                let process = decode::resolve_bound_event_identity(
+                    event.trace_id,
+                    map_pid,
+                    event.pid_generation,
+                    &self.bindings,
+                )
+                .map_err(|error| CollectorError::new("file_lifecycle_exec", error))?;
+                self.file_tracker.exec_process(event.trace_id, process);
             }
             _ => {}
         }

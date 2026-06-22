@@ -1,8 +1,6 @@
 # AcTrail
 
-> AcTrail: Action Trail, Actual Trail
->
-> Do not rely on what an agent says. Verify what it does.
+> AcTrail: Action Trail, Actual Trail > > Do not rely on what an agent says. Verify what it does.
 
 AcTrail records what an AI-agent process tree actually did on Linux/WSL: process launches, file/IPC/network activity, plaintext payloads, HTTP semantics, resource samples, policy/enforcement facts, and derived agent actions.
 

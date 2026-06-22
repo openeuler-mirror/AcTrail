@@ -8,7 +8,7 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use config_core::daemon::{
     PayloadSocketSeccompSyscall, PayloadTlsSeccompSyscall, ProcessSeccompSyscall,
 };
-use control_contract::command::{ControlCommand, RegisterSeccompListenerCommand};
+use control_contract::command::{ControlCommand, ProcessRef, RegisterSeccompListenerCommand};
 use control_contract::reply::ControlError;
 use model_core::ids::{RequestId, TraceId};
 
@@ -55,7 +55,7 @@ pub(super) fn register_listener(
     client: &mut impl ControlClientPort,
     request_id: RequestId,
     trace_id: TraceId,
-    child_pid: u32,
+    child: ProcessRef,
     listener_fd: &OwnedFd,
 ) -> Result<(), String> {
     client
@@ -63,7 +63,7 @@ pub(super) fn register_listener(
             RegisterSeccompListenerCommand {
                 request_id,
                 trace_id,
-                target_pid: child_pid,
+                target: child,
                 listener_fd: Some(listener_fd.as_raw_fd()),
             },
         ))

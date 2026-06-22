@@ -2,20 +2,26 @@
 
 use std::collections::BTreeMap;
 
-use config_core::daemon::SemanticRetentionConfig;
+use config_core::daemon::{LlmRequestContentRetention, SemanticRetentionConfig};
 use model_core::payload::{
     PayloadOperationCompletionState, PayloadSegment, PayloadSourceBoundary, PayloadTruncationState,
 };
 use semantic_action::{
-    SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionStatus,
-    attr_keys as attrs, evidence_roles,
+    LlmRequestContentWrite, SemanticAction, SemanticActionCompleteness, SemanticActionKind,
+    SemanticActionStatus, attr_keys as attrs, evidence_roles,
 };
 use serde_json::Value;
 
 use crate::payload_projection::http::HttpRequestParts;
 
 use super::evidence::{insert_payload_span_attributes, payload_aggregate_evidence};
+use super::request_blocks::{FORMAT_VERSION, canonical_request_content, canonical_shape_metadata};
 use super::stream::PayloadStreamGroupKey;
+
+pub(crate) struct ProjectedLlmRequestAction {
+    pub(crate) action: SemanticAction,
+    pub(crate) content: Option<LlmRequestContentWrite>,
+}
 
 pub(super) fn project_stream_llm_request_action(
     config: &SemanticRetentionConfig,
@@ -24,26 +30,117 @@ pub(super) fn project_stream_llm_request_action(
     raw_bytes: &[u8],
     mut http: HttpRequestParts,
     segments: &[&PayloadSegment],
-) -> Option<SemanticAction> {
+) -> Option<ProjectedLlmRequestAction> {
     let body = parse_llm_request_body(&http.body)?;
     let first = *segments.first()?;
+    let action_id = llm_stream_action_id(key, message_start, first);
     http.scheme = plaintext_transport_scheme(first.source_boundary);
-    let attributes = llm_attributes(config, segments, raw_bytes, &http, &body);
+    let content_projection = project_request_content(config, first.trace_id, &action_id, &body)
+        .expect("projecting canonical LLM request content should not fail for parsed JSON");
+    let attributes = llm_attributes(
+        config,
+        segments,
+        raw_bytes,
+        &http,
+        &body,
+        content_projection.metadata.as_ref(),
+    );
     let evidence = payload_aggregate_evidence(segments, evidence_roles::llm_request::PAYLOAD);
-    Some(SemanticAction {
-        action_id: llm_stream_action_id(key, message_start, first),
-        trace_id: first.trace_id,
-        kind: SemanticActionKind::LlmRequest,
-        title: llm_title(&attributes),
-        start_time: first.observed_at,
-        end_time: segments.last().map(|segment| segment.observed_at),
-        process: first.process.clone(),
-        status: llm_status(segments),
-        completeness: llm_stream_completeness(segments),
-        confidence_millis: None,
-        attributes,
-        evidence,
+    Some(ProjectedLlmRequestAction {
+        action: SemanticAction {
+            action_id,
+            trace_id: first.trace_id,
+            kind: SemanticActionKind::LlmRequest,
+            title: llm_title(&attributes),
+            start_time: first.observed_at,
+            end_time: segments.last().map(|segment| segment.observed_at),
+            process: first.process.clone(),
+            status: llm_status(segments),
+            completeness: llm_stream_completeness(segments),
+            confidence_millis: None,
+            attributes,
+            evidence,
+        },
+        content: content_projection.content,
     })
+}
+
+struct RequestContentProjection {
+    content: Option<LlmRequestContentWrite>,
+    metadata: Option<RequestContentMetadata>,
+}
+
+struct RequestContentMetadata {
+    state: &'static str,
+    format_version: Option<u32>,
+    canonical_body_hash: Option<String>,
+    canonical_body_bytes: Option<u64>,
+    block_count: Option<usize>,
+    message_preview: Option<String>,
+}
+
+fn project_request_content(
+    config: &SemanticRetentionConfig,
+    trace_id: model_core::ids::TraceId,
+    action_id: &str,
+    body: &LlmRequestBody,
+) -> Result<RequestContentProjection, String> {
+    if !config.llm_layer_enabled() {
+        return Ok(RequestContentProjection {
+            content: None,
+            metadata: None,
+        });
+    }
+    match config.l0_llm_call.request_content {
+        LlmRequestContentRetention::None => Ok(RequestContentProjection {
+            content: None,
+            metadata: Some(RequestContentMetadata {
+                state: "none",
+                format_version: None,
+                canonical_body_hash: None,
+                canonical_body_bytes: None,
+                block_count: None,
+                message_preview: None,
+            }),
+        }),
+        LlmRequestContentRetention::Shape => Ok(shape_projection(body)),
+        LlmRequestContentRetention::CanonicalBlocks => {
+            let Some(value) = body.json.as_ref() else {
+                return Ok(shape_projection(body));
+            };
+            let content = canonical_request_content(trace_id, action_id, value)?;
+            Ok(RequestContentProjection {
+                metadata: Some(RequestContentMetadata {
+                    state: "canonical_blocks",
+                    format_version: Some(FORMAT_VERSION),
+                    canonical_body_hash: Some(content.canonical_body_hash.clone()),
+                    canonical_body_bytes: Some(content.canonical_body_bytes),
+                    block_count: Some(content.block_count),
+                    message_preview: content.message_preview.clone(),
+                }),
+                content: Some(content.write),
+            })
+        }
+    }
+}
+
+fn shape_projection(body: &LlmRequestBody) -> RequestContentProjection {
+    let (canonical_body_hash, canonical_body_bytes, message_preview) =
+        body.json.as_ref().map_or((None, None, None), |value| {
+            let (hash, bytes, preview) = canonical_shape_metadata(value);
+            (Some(hash), Some(bytes), preview)
+        });
+    RequestContentProjection {
+        content: None,
+        metadata: Some(RequestContentMetadata {
+            state: "shape",
+            format_version: body.json.as_ref().map(|_| FORMAT_VERSION),
+            canonical_body_hash,
+            canonical_body_bytes,
+            block_count: None,
+            message_preview,
+        }),
+    }
 }
 
 fn llm_attributes(
@@ -52,6 +149,7 @@ fn llm_attributes(
     raw_bytes: &[u8],
     http: &HttpRequestParts,
     body: &LlmRequestBody,
+    content: Option<&RequestContentMetadata>,
 ) -> BTreeMap<String, String> {
     let first = segments[0];
     let mut attributes = BTreeMap::new();
@@ -131,18 +229,46 @@ fn llm_attributes(
     if let Some(model) = body.model.as_deref() {
         attributes.insert(attrs::llm_request::MODEL.to_string(), model.to_string());
     }
-    if config.llm_request_full_provider_json_enabled() {
-        if let Some(body_json) = body.body_json.as_deref() {
+    if let Some(content) = content {
+        attributes.insert(
+            attrs::llm_request::CONTENT_STATE.to_string(),
+            content.state.to_string(),
+        );
+        if let Some(format_version) = content.format_version {
             attributes.insert(
-                attrs::llm_request::BODY_JSON.to_string(),
-                body_json.to_string(),
-            );
-        } else if let Some(body_text) = body.body_text.as_deref() {
-            attributes.insert(
-                attrs::llm_request::BODY_TEXT.to_string(),
-                body_text.to_string(),
+                attrs::llm_request::CONTENT_FORMAT_VERSION.to_string(),
+                format_version.to_string(),
             );
         }
+        if let Some(hash) = content.canonical_body_hash.as_deref() {
+            attributes.insert(
+                attrs::llm_request::CANONICAL_BODY_HASH.to_string(),
+                hash.to_string(),
+            );
+        }
+        if let Some(bytes) = content.canonical_body_bytes {
+            attributes.insert(
+                attrs::llm_request::CANONICAL_BODY_BYTES.to_string(),
+                bytes.to_string(),
+            );
+        }
+        if let Some(block_count) = content.block_count {
+            attributes.insert(
+                attrs::llm_request::BLOCK_COUNT.to_string(),
+                block_count.to_string(),
+            );
+        }
+        if let Some(preview) = content.message_preview.as_deref() {
+            attributes.insert(
+                attrs::llm_request::MESSAGE_PREVIEW.to_string(),
+                preview.to_string(),
+            );
+        }
+    } else if config.llm_layer_enabled() {
+        attributes.insert(
+            attrs::llm_request::CONTENT_STATE.to_string(),
+            "unavailable".to_string(),
+        );
     }
     attributes.insert(
         attrs::payload::STREAM_KEY.to_string(),
@@ -180,8 +306,7 @@ fn plaintext_transport_scheme(source_boundary: PayloadSourceBoundary) -> &'stati
 struct LlmRequestBody {
     json_valid: bool,
     model: Option<String>,
-    body_json: Option<String>,
-    body_text: Option<String>,
+    json: Option<Value>,
 }
 
 fn parse_llm_request_body(body: &[u8]) -> Option<LlmRequestBody> {
@@ -195,8 +320,7 @@ fn parse_llm_request_body(body: &[u8]) -> Option<LlmRequestBody> {
         return Some(LlmRequestBody {
             json_valid: true,
             model,
-            body_json: Some(value.to_string()),
-            body_text: None,
+            json: Some(value),
         });
     }
     let text = String::from_utf8_lossy(body);
@@ -204,8 +328,7 @@ fn parse_llm_request_body(body: &[u8]) -> Option<LlmRequestBody> {
         Some(LlmRequestBody {
             json_valid: false,
             model: extract_json_string_lossy(&text, "model"),
-            body_json: None,
-            body_text: Some(text.into_owned()),
+            json: None,
         })
     } else {
         None

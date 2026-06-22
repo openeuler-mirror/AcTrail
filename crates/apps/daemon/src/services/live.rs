@@ -121,7 +121,7 @@ impl StorageAttachService {
         &mut self,
         trace_runtime: &TraceRuntime,
     ) -> Result<(), ControlError> {
-        let payload_segments = self.tls_sync.drain()?;
+        let payload_segments = self.tls_sync.drain(trace_runtime)?;
         self.workload_diagnostics
             .record_payload_segments(PayloadSegmentStage::TlsSync, payload_segments.len());
         self.process_payload_segments_impl(trace_runtime, payload_segments)

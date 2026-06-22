@@ -16,13 +16,13 @@ pub fn dispatch(
 ) -> Result<ControlReply, ControlError> {
     let control_command = match command {
         CtlCommand::TrackAdd {
-            root_pid,
+            root,
             display_name,
             profile_name,
             tags,
         } => ControlCommand::TrackAdd(TrackAddCommand {
             request_id,
-            root_pid,
+            root,
             display_name,
             profile_name,
             tags,

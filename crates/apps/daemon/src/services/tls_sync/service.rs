@@ -14,6 +14,7 @@ use std::time::SystemTime;
 
 use config_core::daemon::{PayloadTlsCaptureBackend, PayloadTlsConfig};
 use control_contract::reply::ControlError;
+use ebpf_collector::procfs::resolve_namespaced_pid;
 use model_core::ids::TraceId;
 use model_core::payload::{
     PayloadContentState, PayloadDirection, PayloadOperationCompletionState, PayloadSourceBoundary,
@@ -23,6 +24,7 @@ use model_core::process::ProcessIdentity;
 use payload_event::RawPayloadSegment;
 use tls_payload_core::PayloadDirection as SyncDirection;
 use tls_payload_sync::{PayloadEvent, SyncEvent, decode_event_line, decode_plan_lookup_request};
+use trace_runtime::registry::TraceRuntime;
 
 use self::resolver::TlsSyncPlanResolver;
 
@@ -87,7 +89,10 @@ impl TlsSyncService {
         resolver.prewarm(binary)
     }
 
-    pub(crate) fn drain(&mut self) -> Result<Vec<RawPayloadSegment>, ControlError> {
+    pub(crate) fn drain(
+        &mut self,
+        trace_runtime: &TraceRuntime,
+    ) -> Result<Vec<RawPayloadSegment>, ControlError> {
         self.accept_ready_clients()?;
         let mut segments = Vec::new();
         let mut retained_clients = Vec::new();
@@ -96,6 +101,7 @@ impl TlsSyncService {
                 self.read_buffer_bytes,
                 self.max_line_bytes,
                 self.resolver.as_ref(),
+                trace_runtime,
                 &mut segments,
             )?;
             if !closed {
@@ -145,6 +151,7 @@ impl TlsSyncClient {
         read_buffer_bytes: usize,
         max_line_bytes: usize,
         resolver: Option<&TlsSyncPlanResolver>,
+        trace_runtime: &TraceRuntime,
         segments: &mut Vec<RawPayloadSegment>,
     ) -> Result<bool, ControlError> {
         let mut scratch = vec![0_u8; read_buffer_bytes];
@@ -159,7 +166,7 @@ impl TlsSyncClient {
                             "sync event line exceeded configured maximum",
                         ));
                     }
-                    if self.drain_complete_lines(resolver, segments)? {
+                    if self.drain_complete_lines(resolver, trace_runtime, segments)? {
                         return Ok(true);
                     }
                 }
@@ -172,6 +179,7 @@ impl TlsSyncClient {
     fn drain_complete_lines(
         &mut self,
         resolver: Option<&TlsSyncPlanResolver>,
+        trace_runtime: &TraceRuntime,
         segments: &mut Vec<RawPayloadSegment>,
     ) -> Result<bool, ControlError> {
         while let Some(index) = self.buffer.iter().position(|byte| *byte == b'\n') {
@@ -194,7 +202,11 @@ impl TlsSyncClient {
                 return Ok(true);
             }
             match decode_event_line(&line).map_err(sync_event_error)? {
-                SyncEvent::Payload(event) => segments.push(payload_segment(event)?),
+                SyncEvent::Payload(event) => {
+                    if let Some(segment) = payload_segment(event, trace_runtime)? {
+                        segments.push(segment);
+                    }
+                }
                 SyncEvent::Decision(_) => {}
             }
         }
@@ -202,16 +214,37 @@ impl TlsSyncClient {
     }
 }
 
-fn payload_segment(event: PayloadEvent) -> Result<RawPayloadSegment, ControlError> {
+fn payload_segment(
+    event: PayloadEvent,
+    trace_runtime: &TraceRuntime,
+) -> Result<Option<RawPayloadSegment>, ControlError> {
+    let trace_id = TraceId::new(event.trace_id);
+    let process = match resolve_tls_sync_process(trace_runtime, trace_id, event.pid) {
+        Ok(process) => process,
+        Err(error) if stale_namespaced_pid_resolution(&error) => {
+            tracing::warn!(
+                target: "actrail::tls_sync",
+                trace_id = trace_id.get(),
+                namespace_pid = event.pid,
+                error = %error.message,
+                "dropped stale TLS sync payload event after process exit"
+            );
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    };
     let captured_size = event.bytes.len() as u64;
-    Ok(RawPayloadSegment {
-        trace_id: TraceId::new(event.trace_id),
+    Ok(Some(RawPayloadSegment {
+        trace_id,
         observed_at: SystemTime::now(),
-        process: ProcessIdentity::new(event.pid, 0, 0),
+        process: process.clone(),
         source_boundary: PayloadSourceBoundary::TlsUserSpace,
         content_state: PayloadContentState::Plaintext,
         direction: payload_direction(event.direction),
-        stream_key: PayloadStreamKey::new(format!("tls-sync:{}:{:x}", event.pid, event.stream_key)),
+        stream_key: PayloadStreamKey::new(format!(
+            "tls-sync:{}:{:x}",
+            process.pid, event.stream_key
+        )),
         sequence: event.sequence,
         original_size: captured_size,
         captured_size,
@@ -225,7 +258,37 @@ fn payload_segment(event: PayloadEvent) -> Result<RawPayloadSegment, ControlErro
         symbol: event.symbol,
         protocol_hint: None,
         bytes: event.bytes,
-    })
+    }))
+}
+
+fn resolve_tls_sync_process(
+    trace_runtime: &TraceRuntime,
+    trace_id: TraceId,
+    namespace_pid: u32,
+) -> Result<ProcessIdentity, ControlError> {
+    let entry = trace_runtime
+        .get_trace(trace_id)
+        .ok_or_else(|| ControlError::new("tls_sync_pid_resolution", "trace not found"))?;
+    let pid_namespace = entry
+        .trace
+        .root_process_identity
+        .pid_namespace
+        .as_ref()
+        .ok_or_else(|| {
+            ControlError::new(
+                "tls_sync_pid_resolution",
+                "trace root process is missing PID namespace metadata",
+            )
+        })?;
+    resolve_namespaced_pid(namespace_pid, pid_namespace)
+        .map_err(|error| ControlError::new("tls_sync_pid_resolution", error))
+}
+
+fn stale_namespaced_pid_resolution(error: &ControlError) -> bool {
+    error.code == "tls_sync_pid_resolution"
+        && error
+            .message
+            .starts_with("no host process matched namespace pid ")
 }
 
 fn payload_direction(direction: SyncDirection) -> PayloadDirection {

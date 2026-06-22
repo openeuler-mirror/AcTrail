@@ -36,11 +36,11 @@ impl SemanticRetentionConfig {
         self.l0_llm_call.enabled
     }
 
-    pub fn llm_request_full_provider_json_enabled(&self) -> bool {
+    pub fn llm_request_consumed_by_l0(&self) -> bool {
         self.l0_llm_call.enabled
-            && matches!(
+            && !matches!(
                 self.l0_llm_call.request_content,
-                LlmRequestContentRetention::FullProviderJson
+                LlmRequestContentRetention::None
             )
     }
 
@@ -98,8 +98,7 @@ impl SemanticRetentionConfig {
         }
         if llm_message
             && self.content_owner == SemanticContentOwner::HighestConsumed
-            && (self.llm_request_full_provider_json_enabled()
-                || self.llm_response_assembled_provider_enabled())
+            && (self.llm_request_consumed_by_l0() || self.llm_response_assembled_provider_enabled())
         {
             return HttpBodyRetention::None;
         }
@@ -171,7 +170,7 @@ impl Default for L0LlmCallRetention {
     fn default() -> Self {
         Self {
             enabled: true,
-            request_content: LlmRequestContentRetention::FullProviderJson,
+            request_content: LlmRequestContentRetention::CanonicalBlocks,
             response_content: LlmResponseContentRetention::AssembledProvider,
             tool_calls: LlmToolCallRetention::AssembledJson,
             usage: LlmUsageRetention::Summary,
@@ -184,7 +183,7 @@ pub enum LlmRequestContentRetention {
     None,
     Shape,
     #[default]
-    FullProviderJson,
+    CanonicalBlocks,
 }
 
 impl FromStr for LlmRequestContentRetention {
@@ -194,7 +193,7 @@ impl FromStr for LlmRequestContentRetention {
         match value {
             "none" => Ok(Self::None),
             "shape" => Ok(Self::Shape),
-            "full_provider_json" => Ok(Self::FullProviderJson),
+            "canonical_blocks" => Ok(Self::CanonicalBlocks),
             other => Err(format!("unsupported LLM request content retention {other}")),
         }
     }

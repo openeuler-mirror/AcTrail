@@ -166,14 +166,15 @@ def require_otel_request_evidence(document: dict, model: str, prompt: str) -> No
             continue
         if attrs.get("actrail.action.status") != "success":
             continue
-        body_json = attrs.get("llm.request.body_json", "")
         if (
             attrs.get("llm.request.model") == model
             and attrs.get("llm.request.payload_bytes")
-            and body_json
-            and model in body_json
-            and prompt in body_json
-            and not attrs.get("llm.request.payload_text")
+            and attrs.get("llm.request.content_state") == "canonical_blocks"
+            and attrs.get("llm.request.canonical_body_hash")
+            and attrs.get("llm.request.block_count")
+            and prompt in attrs.get("llm.request.message_preview", "")
+            and not attrs.get("llm.request.body_json")
+            and not attrs.get("llm.request.body_text")
             and not attrs.get("http.request.body_text")
             and not attrs.get("http.request.body_json")
         ):

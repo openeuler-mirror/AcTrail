@@ -210,6 +210,10 @@ pub(super) fn file_observation_config(node: ConfigNode) -> Result<FileObservatio
             operations: optional_repeated_non_empty(&node, "tty_operation", tty.operations)?,
             raw_event_retention: node
                 .optional_parsed("tty_raw_event_retention", tty.raw_event_retention)?,
+            summary_flush_interval_ms: node.optional_positive_u32(
+                "tty_summary_flush_interval_ms",
+                tty.summary_flush_interval_ms,
+            )?,
         },
         bulk_read: FileBulkReadObservationConfig {
             enabled: node.optional_bool("bulk_read_enabled", bulk_read.enabled)?,
@@ -227,6 +231,10 @@ pub(super) fn file_observation_config(node: ConfigNode) -> Result<FileObservatio
             path_set_chunk_max_paths: node.optional_positive_u32(
                 "bulk_read_path_set_chunk_max_paths",
                 bulk_read.path_set_chunk_max_paths,
+            )?,
+            pending_event_max: node.optional_positive_u32(
+                "bulk_read_pending_event_max",
+                bulk_read.pending_event_max,
             )?,
         },
         enumerate: FsEnumerateObservationConfig {

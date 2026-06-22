@@ -9,7 +9,8 @@ use model_core::payload::PayloadSegment;
 use model_core::process::{ProcessIdentity, ProcessMembership};
 use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
 use semantic_action::{
-    FileObservationPath, FilePathSetPathPage, FilePathSetWrite, SemanticAction, SemanticActionLink,
+    FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
+    LlmRequestContentWrite, SemanticAction, SemanticActionLink,
 };
 
 use crate::{
@@ -115,6 +116,10 @@ pub trait StorageBackend {
     ) -> Result<(), StorageError>;
     fn upsert_file_path_sets(&mut self, path_sets: &[FilePathSetWrite])
     -> Result<(), StorageError>;
+    fn upsert_llm_request_contents(
+        &mut self,
+        contents: &[LlmRequestContentWrite],
+    ) -> Result<(), StorageError>;
     fn list_semantic_actions(&self, trace_id: TraceId)
     -> Result<Vec<SemanticAction>, StorageError>;
     fn list_semantic_action_links(
@@ -185,6 +190,12 @@ pub trait StorageBackend {
         offset: usize,
         limit: usize,
     ) -> Result<Option<FilePathSetPathPage>, StorageError>;
+    fn llm_request_content_page(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+        max_bytes: usize,
+    ) -> Result<Option<LlmRequestContentPage>, StorageError>;
     fn semantic_action_command_fallback_children(
         &self,
         trace_id: TraceId,

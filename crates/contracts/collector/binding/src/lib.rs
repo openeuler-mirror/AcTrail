@@ -24,6 +24,7 @@ pub struct CoverageGuardHandle {
 pub struct TraceBindingRequest {
     pub trace_id: TraceId,
     pub root_identity: ProcessIdentity,
+    pub root_namespace_pid: u32,
     pub profile_snapshot: CaptureProfileSnapshot,
     pub requested_capabilities: Vec<CapabilityRequest>,
     pub initial_suppressed_fds: Vec<InitialSuppressedFd>,

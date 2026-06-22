@@ -212,19 +212,39 @@ fn decode_exec_observation_event(raw: &[u8]) -> Result<KernelObservationEvent, L
 fn decode_file_path_event(raw: &[u8]) -> Result<KernelFilePathEvent, LoaderError> {
     const FILE_PATH_ABI_MAX_BYTES: usize = 256;
     const FILE_EVENT_HEADER_SIZE: usize = 128;
+    const FILE_EVENT_PRIMARY_PATH_SIZE: usize = FILE_EVENT_HEADER_SIZE + FILE_PATH_ABI_MAX_BYTES;
     const FILE_EVENT_SIZE: usize = FILE_EVENT_HEADER_SIZE + FILE_PATH_ABI_MAX_BYTES * 2;
-    if raw.len() != FILE_EVENT_SIZE {
+    let compact = raw.len() == FILE_EVENT_HEADER_SIZE;
+    let primary_path_only = raw.len() == FILE_EVENT_PRIMARY_PATH_SIZE;
+    if raw.len() != FILE_EVENT_SIZE && !compact && !primary_path_only {
         return Err(LoaderError::new(
             "decode_file_path",
             format!(
-                "unexpected file path event size {}, expected {}",
+                "unexpected file path event size {}, expected {}, {}, or {}",
                 raw.len(),
+                FILE_EVENT_HEADER_SIZE,
+                FILE_EVENT_PRIMARY_PATH_SIZE,
                 FILE_EVENT_SIZE
             ),
         ));
     }
     let path_size = read_u32(raw, 48).expect("event length checked");
     let secondary_path_size = read_u32(raw, 56).expect("event length checked");
+    if compact && (path_size != 0 || secondary_path_size != 0) {
+        return Err(LoaderError::new(
+            "decode_file_path",
+            format!(
+                "compact file event carried path sizes path={} secondary={}",
+                path_size, secondary_path_size
+            ),
+        ));
+    }
+    if primary_path_only && secondary_path_size != 0 {
+        return Err(LoaderError::new(
+            "decode_file_path",
+            format!("primary-path file event carried secondary path size {secondary_path_size}"),
+        ));
+    }
     validate_path_size("path", path_size, FILE_PATH_ABI_MAX_BYTES)?;
     validate_path_size(
         "secondary_path",
@@ -255,10 +275,16 @@ fn decode_file_path_event(raw: &[u8]) -> Result<KernelFilePathEvent, LoaderError
         arg4: read_u64(raw, 104).expect("event length checked"),
         arg5: read_u64(raw, 112).expect("event length checked"),
         pid_generation: read_u64(raw, 120).expect("event length checked"),
-        path: raw[path_start..path_start + path_size as usize].to_vec(),
-        secondary_path: raw
-            [secondary_path_start..secondary_path_start + secondary_path_size as usize]
-            .to_vec(),
+        path: if compact {
+            Vec::new()
+        } else {
+            raw[path_start..path_start + path_size as usize].to_vec()
+        },
+        secondary_path: if compact || primary_path_only {
+            Vec::new()
+        } else {
+            raw[secondary_path_start..secondary_path_start + secondary_path_size as usize].to_vec()
+        },
     })
 }
 

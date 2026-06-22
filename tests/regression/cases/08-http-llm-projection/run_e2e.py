@@ -174,14 +174,15 @@ def require_http_llm_span(document: dict, marker: str, model: str) -> None:
             continue
         if attrs.get("llm.request.model") != model:
             continue
-        body_json = attrs.get("llm.request.body_json", "")
         if (
             attrs.get("llm.request.payload_bytes")
             and attrs.get("llm.request.raw_payload_bytes")
-            and body_json
-            and model in body_json
-            and marker in body_json
-            and not attrs.get("llm.request.payload_text")
+            and attrs.get("llm.request.content_state") == "canonical_blocks"
+            and attrs.get("llm.request.canonical_body_hash")
+            and attrs.get("llm.request.block_count")
+            and marker in attrs.get("llm.request.message_preview", "")
+            and not attrs.get("llm.request.body_json")
+            and not attrs.get("llm.request.body_text")
             and not attrs.get("http.request.body_text")
             and not attrs.get("http.request.body_json")
         ):

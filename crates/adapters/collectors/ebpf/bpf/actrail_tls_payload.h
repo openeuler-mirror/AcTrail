@@ -279,7 +279,7 @@ static __always_inline int store_tls_payload_op(
     __u64 size_ptr
 ) {
     __u64 host_pid_tgid = current_pid_tgid();
-    __u64 namespace_pid_tgid = current_namespace_pid_tgid();
+    __u64 namespace_pid_tgid = host_pid_tgid;
     __u32 tgid = 0;
     __u32 tid = 0;
     __u32 lookup_flags = 0;
@@ -384,9 +384,9 @@ static __always_inline int store_tls_payload_op(
 
 static __always_inline int emit_tls_payload_completion(__u64 completed_size, __u32 flags) {
     __u64 host_pid_tgid = current_pid_tgid();
-    __u64 namespace_pid_tgid = current_namespace_pid_tgid();
-    __u32 tgid = namespace_pid_tgid >> 32;
-    __u32 tid = (__u32)namespace_pid_tgid;
+    __u64 namespace_pid_tgid = host_pid_tgid;
+    __u32 tgid = host_pid_tgid >> 32;
+    __u32 tid = (__u32)host_pid_tgid;
     struct actrail_pending_tls_payload_op *op =
         bpf_map_lookup_elem(&pending_tls_payload_ops, &host_pid_tgid);
     struct actrail_tls_completion_event *event;
@@ -394,8 +394,6 @@ static __always_inline int emit_tls_payload_completion(__u64 completed_size, __u
     tls_diag_inc(ACTRAIL_TLS_DIAG_COMPLETION_TOTAL);
     if (!namespace_pid_tgid) {
         namespace_pid_tgid = host_pid_tgid;
-        tgid = namespace_pid_tgid >> 32;
-        tid = (__u32)namespace_pid_tgid;
     }
 
     if (!op) {

@@ -137,7 +137,11 @@ fn section_key_allowed(section: &FlatParserSection, key: &str) -> bool {
         FlatParserSection::FileObservationTty => {
             matches!(
                 key,
-                "enabled" | "path" | "operation" | "raw_event_retention"
+                "enabled"
+                    | "path"
+                    | "operation"
+                    | "raw_event_retention"
+                    | "summary_flush_interval_ms"
             )
         }
         FlatParserSection::FileObservationBulkRead => matches!(
@@ -148,6 +152,7 @@ fn section_key_allowed(section: &FlatParserSection, key: &str) -> bool {
                 | "min_unique_paths"
                 | "max_paths_per_set"
                 | "path_set_chunk_max_paths"
+                | "pending_event_max"
         ),
         FlatParserSection::FileObservationEnumerate => matches!(
             key,

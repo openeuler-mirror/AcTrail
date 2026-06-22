@@ -1,12 +1,6 @@
 # Java LangChain4j Agent
 
-This example launches a real Java workload using LangChain4j
-`OpenAiChatModel`. It calls an OpenAI-compatible external LLM provider through
-the JDK HTTP client over HTTPS. The workload does not use a local stub, replay
-server, HTTP relay, custom HTTP client, or protocol downgrade. AcTrail observes
-this path by enabling its launch-time JSSE Java agent
-(`payload_tls_java_agent_enabled = true`), which reports HTTPS plaintext through
-the normal tls-sync event socket.
+This example launches a real Java workload using LangChain4j `OpenAiChatModel`. It calls an OpenAI-compatible external LLM provider through the JDK HTTP client over HTTPS. The workload does not use a local stub, replay server, HTTP relay, custom HTTP client, or protocol downgrade. AcTrail observes this path by enabling its launch-time JSSE Java agent (`payload_tls_java_agent_enabled = true`), which reports HTTPS plaintext through the normal tls-sync event socket.
 
 Defaults target DeepSeek:
 
@@ -15,10 +9,7 @@ Defaults target DeepSeek:
 - Model: `deepseek-chat`
 - Key environment variable: `DEEPSEEK_API_KEY`
 
-LangChain4j documents the plain Java Maven artifact as
-`dev.langchain4j:langchain4j-open-ai` and exposes `baseUrl`, `apiKey`, and
-`modelName` on `OpenAiChatModel`. The same docs state that the plain Java
-OpenAI integration uses the JDK `java.net.http.HttpClient` by default.
+LangChain4j documents the plain Java Maven artifact as `dev.langchain4j:langchain4j-open-ai` and exposes `baseUrl`, `apiKey`, and `modelName` on `OpenAiChatModel`. The same docs state that the plain Java OpenAI integration uses the JDK `java.net.http.HttpClient` by default.
 
 ## Files
 
@@ -35,15 +26,10 @@ OpenAI integration uses the JDK `java.net.http.HttpClient` by default.
 - Run from the repository root in a Linux/WSL root shell.
 - Build release binaries with JDK 17+ on `PATH`: `cargo build --release`.
 - Set `DEEPSEEK_API_KEY`.
-- JDK 17+ `java` and `javac` are on `PATH`, and `mvn --version` reports a
-  Java 17+ runtime.
+- JDK 17+ `java` and `javac` are on `PATH`, and `mvn --version` reports a Java 17+ runtime.
 - External network access is available for Maven Central and the LLM provider.
 
-The Maven package build runs before AcTrail starts so dependency downloads do not
-pollute the trace. The first run on a cold Maven cache can take several minutes
-while Maven Central dependencies are downloaded. The traced workload is the
-packaged deployment artifact, launched as `java -jar ...` from
-`docs/examples/_workloads/java-langchain4j-agent/target/`.
+The Maven package build runs before AcTrail starts so dependency downloads do not pollute the trace. The first run on a cold Maven cache can take several minutes while Maven Central dependencies are downloaded. The traced workload is the packaged deployment artifact, launched as `java -jar ...` from `docs/examples/_workloads/java-langchain4j-agent/target/`.
 
 ## Provider Overrides
 
@@ -57,13 +43,7 @@ ACTRAIL_LLM_API_KEY_ENV=DEEPSEEK_API_KEY
 ACTRAIL_LLM_PROMPT='Reply exactly with ACTRAIL_LANGCHAIN4J_DOCS_OK'
 ```
 
-`ACTRAIL_LLM_CHAT_PATH` must end with `/chat/completions`, because LangChain4j
-configures the API base URL and appends that chat-completions route internally.
-`ACTRAIL_LLM_BASE_URL` must stay HTTPS; plain HTTP would avoid the JSSE path this
-case is meant to validate.
-If you override the prompt and still want a strict answer marker check, also set
-`ACTRAIL_LLM_EXPECTED_OUTPUT_FRAGMENT`. Without that extra variable, the runner
-only requires a non-empty real LLM answer.
+`ACTRAIL_LLM_CHAT_PATH` must end with `/chat/completions`, because LangChain4j configures the API base URL and appends that chat-completions route internally. `ACTRAIL_LLM_BASE_URL` must stay HTTPS; plain HTTP would avoid the JSSE path this case is meant to validate. If you override the prompt and still want a strict answer marker check, also set `ACTRAIL_LLM_EXPECTED_OUTPUT_FRAGMENT`. Without that extra variable, the runner only requires a non-empty real LLM answer.
 
 ## Run
 
@@ -74,21 +54,12 @@ python3 docs/examples/10.java-langchain4j-agent/run_e2e.py
 
 Expected result:
 
-- The traced workload command uses `java -jar` with the shared Java LangChain4j
-  fat jar.
-- The Java workload prints a non-empty `llm_answer=...` line and
-  `ACTRAIL_LANGCHAIN4J_AGENT_COMPLETE`.
-- `actrailviewer payloads` shows a complete successful outbound
-  `TlsUserSpace/jsse` plaintext row.
+- The traced workload command uses `java -jar` with the shared Java LangChain4j fat jar.
+- The Java workload prints a non-empty `llm_answer=...` line and `ACTRAIL_LANGCHAIN4J_AGENT_COMPLETE`.
+- `actrailviewer payloads` shows a complete successful outbound `TlsUserSpace/jsse` plaintext row.
 - `actrailviewer actions` contains a complete successful `llm.request`.
-- `export-otel` writes `/tmp/actrail-java-langchain4j-agent.otlp.json` with an
-  `actrail.action.kind=llm.request` span containing the configured model and
-  prompt text.
+- `export-otel` writes `/tmp/actrail-java-langchain4j-agent.otlp.json` with an `actrail.action.kind=llm.request` span containing the configured model and prompt text.
 
-This case intentionally does not avoid Java JSSE HTTPS or force HTTP/1.1. If the
-real LLM call succeeds but AcTrail cannot project `llm.request`, the runner
-fails and reports that the configured JSSE Java-agent capture path is not
-producing the expected payload evidence.
+This case intentionally does not avoid Java JSSE HTTPS or force HTTP/1.1. If the real LLM call succeeds but AcTrail cannot project `llm.request`, the runner fails and reports that the configured JSSE Java-agent capture path is not producing the expected payload evidence.
 
-`llm.response` OTEL evidence is printed when present, but it is not a required
-pass condition for this docs transfer test.
+`llm.response` OTEL evidence is printed when present, but it is not a required pass condition for this docs transfer test.

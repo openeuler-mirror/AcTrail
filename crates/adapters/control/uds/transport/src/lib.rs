@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use control_contract::command::{
-    ControlCommand, DoctorCommand, ListTracesCommand, RegisterSeccompListenerCommand,
+    ControlCommand, DoctorCommand, ListTracesCommand, ProcessRef, RegisterSeccompListenerCommand,
     TrackAddCommand, TrackRemoveCommand,
 };
 use control_contract::reply::{
@@ -12,7 +12,7 @@ use control_contract::reply::{
 };
 use control_contract::selector::TraceSelector;
 use model_core::ids::{ProfileName, RequestId, TraceId, TraceName};
-use model_core::process::{InitialSuppressedFd, SuppressedFdPurpose};
+use model_core::process::{InitialSuppressedFd, NamespaceIdentity, SuppressedFdPurpose};
 use model_core::trace::{TraceHealth, TraceLifecycleState};
 use std::str::FromStr;
 
@@ -35,9 +35,9 @@ pub fn encode_command(command: &ControlCommand) -> Vec<u8> {
     let mut fields = Vec::new();
     match command {
         ControlCommand::TrackAdd(command) => {
-            fields.push("track_add_v2".to_string());
+            fields.push("track_add_v3".to_string());
             fields.push(command.request_id.get().to_string());
-            fields.push(command.root_pid.to_string());
+            encode_process_ref(&mut fields, &command.root);
             fields.push(command.display_name.to_string());
             fields.push(command.profile_name.to_string());
             fields.push(command.launch_mode.to_string());
@@ -50,10 +50,10 @@ pub fn encode_command(command: &ControlCommand) -> Vec<u8> {
             fields.extend(command.tags.iter().cloned());
         }
         ControlCommand::RegisterSeccompListener(command) => {
-            fields.push("register_seccomp_listener".to_string());
+            fields.push("register_seccomp_listener_v2".to_string());
             fields.push(command.request_id.get().to_string());
             fields.push(command.trace_id.get().to_string());
-            fields.push(command.target_pid.to_string());
+            encode_process_ref(&mut fields, &command.target);
         }
         ControlCommand::TrackRemove(command) => {
             fields.push("track_remove".to_string());
@@ -84,7 +84,7 @@ pub fn decode_command(bytes: &[u8]) -> Result<ControlCommand, ControlCodecError>
     match opcode {
         "track_add" => {
             let request_id = RequestId::new(parse_u64(field(&fields, 1)?, "request_id")?);
-            let root_pid = parse_u32(field(&fields, 2)?, "root_pid")?;
+            let root = unknown_process_ref(parse_u32(field(&fields, 2)?, "root_pid")?);
             let display_name = TraceName::new(field(&fields, 3)?);
             let profile_name = ProfileName::new(field(&fields, 4)?);
             let launch_mode = parse_bool(field(&fields, 5)?, "launch_mode")?;
@@ -95,7 +95,7 @@ pub fn decode_command(bytes: &[u8]) -> Result<ControlCommand, ControlCodecError>
             }
             Ok(ControlCommand::TrackAdd(TrackAddCommand {
                 request_id,
-                root_pid,
+                root,
                 display_name,
                 profile_name,
                 tags,
@@ -105,7 +105,7 @@ pub fn decode_command(bytes: &[u8]) -> Result<ControlCommand, ControlCodecError>
         }
         "track_add_v2" => {
             let request_id = RequestId::new(parse_u64(field(&fields, 1)?, "request_id")?);
-            let root_pid = parse_u32(field(&fields, 2)?, "root_pid")?;
+            let root = unknown_process_ref(parse_u32(field(&fields, 2)?, "root_pid")?);
             let display_name = TraceName::new(field(&fields, 3)?);
             let profile_name = ProfileName::new(field(&fields, 4)?);
             let launch_mode = parse_bool(field(&fields, 5)?, "launch_mode")?;
@@ -127,7 +127,39 @@ pub fn decode_command(bytes: &[u8]) -> Result<ControlCommand, ControlCodecError>
             }
             Ok(ControlCommand::TrackAdd(TrackAddCommand {
                 request_id,
-                root_pid,
+                root,
+                display_name,
+                profile_name,
+                tags,
+                launch_mode,
+                initial_suppressed_fds,
+            }))
+        }
+        "track_add_v3" => {
+            let request_id = RequestId::new(parse_u64(field(&fields, 1)?, "request_id")?);
+            let root = decode_process_ref(&fields, 2)?;
+            let display_name = TraceName::new(field(&fields, 4)?);
+            let profile_name = ProfileName::new(field(&fields, 5)?);
+            let launch_mode = parse_bool(field(&fields, 6)?, "launch_mode")?;
+            let suppressed_count = parse_usize(field(&fields, 7)?, "suppressed_fd_count")?;
+            let mut cursor = 8;
+            let mut initial_suppressed_fds = Vec::new();
+            for _ in 0..suppressed_count {
+                let fd = parse_i32(field(&fields, cursor)?, "suppressed_fd")?;
+                let purpose = SuppressedFdPurpose::from_str(field(&fields, cursor + 1)?)
+                    .map_err(|error| ControlCodecError::new("decode", error))?;
+                initial_suppressed_fds.push(InitialSuppressedFd { fd, purpose });
+                cursor += 2;
+            }
+            let tag_count = parse_usize(field(&fields, cursor)?, "tag_count")?;
+            cursor += 1;
+            let mut tags = BTreeSet::new();
+            for offset in 0..tag_count {
+                tags.insert(field(&fields, cursor + offset)?.clone());
+            }
+            Ok(ControlCommand::TrackAdd(TrackAddCommand {
+                request_id,
+                root,
                 display_name,
                 profile_name,
                 tags,
@@ -139,7 +171,15 @@ pub fn decode_command(bytes: &[u8]) -> Result<ControlCommand, ControlCodecError>
             RegisterSeccompListenerCommand {
                 request_id: RequestId::new(parse_u64(field(&fields, 1)?, "request_id")?),
                 trace_id: TraceId::new(parse_u64(field(&fields, 2)?, "trace_id")?),
-                target_pid: parse_u32(field(&fields, 3)?, "target_pid")?,
+                target: unknown_process_ref(parse_u32(field(&fields, 3)?, "target_pid")?),
+                listener_fd: None,
+            },
+        )),
+        "register_seccomp_listener_v2" => Ok(ControlCommand::RegisterSeccompListener(
+            RegisterSeccompListenerCommand {
+                request_id: RequestId::new(parse_u64(field(&fields, 1)?, "request_id")?),
+                trace_id: TraceId::new(parse_u64(field(&fields, 2)?, "trace_id")?),
+                target: decode_process_ref(&fields, 3)?,
                 listener_fd: None,
             },
         )),
@@ -276,6 +316,22 @@ pub fn decode_reply(bytes: &[u8]) -> Result<Result<ControlReply, ControlError>, 
         ))),
         _ => Err(ControlCodecError::new("decode", "unknown reply opcode")),
     }
+}
+
+fn encode_process_ref(fields: &mut Vec<String>, process: &ProcessRef) {
+    fields.push(process.namespace_pid.to_string());
+    fields.push(process.pid_namespace.as_str().to_string());
+}
+
+fn decode_process_ref(fields: &[String], offset: usize) -> Result<ProcessRef, ControlCodecError> {
+    Ok(ProcessRef::new(
+        parse_u32(field(fields, offset)?, "namespace_pid")?,
+        NamespaceIdentity::new(field(fields, offset + 1)?.clone()),
+    ))
+}
+
+fn unknown_process_ref(pid: u32) -> ProcessRef {
+    ProcessRef::new(pid, NamespaceIdentity::new("unknown"))
 }
 
 fn encode_selector(fields: &mut Vec<String>, selector: &TraceSelector) {
@@ -429,10 +485,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn track_add_v2_round_trips_initial_suppressed_fds() {
+    fn track_add_v3_round_trips_process_ref_and_initial_suppressed_fds() {
         let command = ControlCommand::TrackAdd(TrackAddCommand {
             request_id: RequestId::new(7),
-            root_pid: 42,
+            root: ProcessRef::new(42, NamespaceIdentity::new("pid:[4026532248]")),
             display_name: TraceName::new("launch"),
             profile_name: ProfileName::new("default"),
             tags: BTreeSet::from(["agent".to_string()]),

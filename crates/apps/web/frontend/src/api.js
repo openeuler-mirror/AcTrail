@@ -73,6 +73,12 @@ export function readActionFilePathSet(traceId, actionId, { offset, limit }) {
   );
 }
 
+export function readActionLlmRequestContent(traceId, actionId, { maxBytes }) {
+  return fetchJson(
+    `/api/traces/${traceId}/actions/${encodeURIComponent(actionId)}/content/llm-request?max_bytes=${maxBytes}`,
+  );
+}
+
 export function readCommands(traceId) {
   return fetchJson(`/api/traces/${traceId}/commands`);
 }

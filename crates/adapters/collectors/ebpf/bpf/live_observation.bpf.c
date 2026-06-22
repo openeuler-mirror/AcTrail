@@ -17,22 +17,30 @@ SEC("tracepoint/sched/sched_process_fork")
 int handle_sched_process_fork(struct sched_process_fork_ctx *ctx) {
     __u32 key = 0;
     __u32 *child_pid_offset = bpf_map_lookup_elem(&fork_child_pid_offset, &key);
-    __u32 parent_pid = current_namespace_tgid();
-    __u64 *trace_id = bpf_map_lookup_elem(&tracked_traces, &parent_pid);
+    __u32 parent_pid = 0;
+    __u32 parent_tid = 0;
+    __u32 lookup_flags = 0;
+    __u32 context_parent_pid = (__u32)ctx->parent_pid;
+    __u64 *trace_id = lookup_trace_for_context_pid(
+        context_parent_pid,
+        &parent_pid,
+        &parent_tid,
+        &lookup_flags
+    );
     struct actrail_pending_proc_op op = {};
-    __u32 child_global_pid = 0;
+    __u32 child_kernel_pid = 0;
 
     if (!parent_pid || !trace_id || !child_pid_offset) {
         return 0;
     }
     if (bpf_probe_read(
-            &child_global_pid,
-            sizeof(child_global_pid),
+            &child_kernel_pid,
+            sizeof(child_kernel_pid),
             (void *)((__u64)(void *)ctx + *child_pid_offset)
         ) != 0) {
         return 0;
     }
-    if (!child_global_pid) {
+    if (!child_kernel_pid) {
         return 0;
     }
 
@@ -40,20 +48,24 @@ int handle_sched_process_fork(struct sched_process_fork_ctx *ctx) {
     op.parent_generation = ensure_process_generation(parent_pid);
     op.child_generation = bpf_ktime_get_ns();
     op.parent_pid = parent_pid;
-    bpf_map_update_elem(&pending_child_proc_ops, &child_global_pid, &op, BPF_ANY);
+    op.lookup_flags = lookup_flags;
+    bpf_map_update_elem(&pending_child_proc_ops, &child_kernel_pid, &op, BPF_ANY);
     return 0;
 }
 
 SEC("tracepoint/sched/sched_process_exec")
 int handle_sched_process_exec(struct sched_process_exec_ctx *ctx) {
-    __u32 pid = current_namespace_tgid();
-    __u64 *trace_id = bpf_map_lookup_elem(&tracked_traces, &pid);
+    __u32 pid = 0;
+    __u32 tid = 0;
+    __u32 lookup_flags = 0;
+    __u32 context_pid = (__u32)ctx->old_pid;
+    __u64 *trace_id = lookup_trace_for_context_pid(context_pid, &pid, &tid, &lookup_flags);
 
     if (!pid) {
         return 0;
     }
-    emit_pending_child_proc_op();
-    trace_id = bpf_map_lookup_elem(&tracked_traces, &pid);
+    emit_pending_child_proc_op(context_pid);
+    trace_id = lookup_trace_for_context_pid(context_pid, &pid, &tid, &lookup_flags);
     if (!trace_id) {
         return 0;
     }
@@ -63,26 +75,24 @@ int handle_sched_process_exec(struct sched_process_exec_ctx *ctx) {
 
 SEC("tracepoint/sched/sched_process_exit")
 int handle_sched_process_exit(struct sched_process_exit_ctx *ctx) {
-    __u64 pid_tgid = current_pid_tgid();
-    __u64 namespace_pid_tgid = current_namespace_pid_tgid();
-    __u32 pid = namespace_pid_tgid >> 32;
-    __u32 tid = (__u32)namespace_pid_tgid;
+    __u32 pid = 0;
+    __u32 tid = 0;
+    __u32 lookup_flags = 0;
+    __u64 pid_tgid;
     __u64 *trace_id;
+    __u32 context_pid = (__u32)ctx->pid;
     struct actrail_event event;
 
-    if (!namespace_pid_tgid) {
-        pid = pid_tgid >> 32;
-        tid = (__u32)pid_tgid;
-    }
+    trace_id = lookup_trace_for_context_pid(context_pid, &pid, &tid, &lookup_flags);
+    pid_tgid = ((__u64)pid << 32) | tid;
     if (!pid) {
         return 0;
     }
     if (pid != tid) {
         return 0;
     }
-    trace_id = bpf_map_lookup_elem(&tracked_traces, &pid);
-    emit_pending_child_proc_op();
-    trace_id = bpf_map_lookup_elem(&tracked_traces, &pid);
+    emit_pending_child_proc_op(context_pid);
+    trace_id = lookup_trace_for_context_pid(context_pid, &pid, &tid, &lookup_flags);
     if (!trace_id) {
         return 0;
     }
@@ -108,8 +118,10 @@ int handle_sys_enter_exit_group(struct trace_event_raw_sys_enter *ctx) {
 
 SEC("tracepoint/signal/signal_generate")
 int handle_signal_generate(struct signal_generate_ctx *ctx) {
-    __u32 pid = current_namespace_tgid();
-    __u64 *trace_id = bpf_map_lookup_elem(&tracked_traces, &pid);
+    __u32 pid = 0;
+    __u32 tid = 0;
+    __u32 lookup_flags = 0;
+    __u64 *trace_id = lookup_current_trace(&pid, &tid, &lookup_flags);
     struct actrail_event event;
 
     if (!pid || !trace_id) {
@@ -127,13 +139,11 @@ int handle_signal_generate(struct signal_generate_ctx *ctx) {
 
 SEC("tracepoint/syscalls/sys_enter_connect")
 int handle_sys_enter_connect(struct trace_event_raw_sys_enter *ctx) {
-    return store_pending_net_op(
-        ctx,
-        ACTRAIL_NET_CONNECT,
+    return store_pending_net_op_resolved(
+        net_descriptor(ACTRAIL_NET_CONNECT, ACTRAIL_NET_SYSCALL_SOCKET),
+        (__u32)ctx->args[0],
         0,
-        ACTRAIL_SYSCALL_ARG_MISSING,
-        1,
-        ACTRAIL_NET_SYSCALL_SOCKET
+        (__u64)ctx->args[1]
     );
 }
 
@@ -145,25 +155,21 @@ int handle_sys_exit_connect(struct trace_event_raw_sys_exit *ctx) {
 
 SEC("tracepoint/syscalls/sys_enter_accept")
 int handle_sys_enter_accept(struct trace_event_raw_sys_enter *ctx) {
-    return store_pending_net_op(
-        ctx,
-        ACTRAIL_NET_ACCEPT,
+    return store_pending_net_op_resolved(
+        net_descriptor(ACTRAIL_NET_ACCEPT, ACTRAIL_NET_SYSCALL_SOCKET),
+        (__u32)ctx->args[0],
         0,
-        ACTRAIL_SYSCALL_ARG_MISSING,
-        1,
-        ACTRAIL_NET_SYSCALL_SOCKET
+        (__u64)ctx->args[1]
     );
 }
 
 SEC("tracepoint/syscalls/sys_enter_accept4")
 int handle_sys_enter_accept4(struct trace_event_raw_sys_enter *ctx) {
-    return store_pending_net_op(
-        ctx,
-        ACTRAIL_NET_ACCEPT,
+    return store_pending_net_op_resolved(
+        net_descriptor(ACTRAIL_NET_ACCEPT, ACTRAIL_NET_SYSCALL_SOCKET),
+        (__u32)ctx->args[0],
         0,
-        ACTRAIL_SYSCALL_ARG_MISSING,
-        1,
-        ACTRAIL_NET_SYSCALL_SOCKET
+        (__u64)ctx->args[1]
     );
 }
 
@@ -182,7 +188,12 @@ int handle_sys_exit_accept4(struct trace_event_raw_sys_exit *ctx) {
 SEC("tracepoint/syscalls/sys_enter_sendto")
 int handle_sys_enter_sendto(struct trace_event_raw_sys_enter *ctx) {
     store_socket_payload_sendto_op(ctx);
-    return store_pending_net_op(ctx, ACTRAIL_NET_SEND, 0, 2, 4, ACTRAIL_NET_SYSCALL_SOCKET);
+    return store_pending_net_op_resolved(
+        net_descriptor(ACTRAIL_NET_SEND, ACTRAIL_NET_SYSCALL_SOCKET),
+        (__u32)ctx->args[0],
+        (__u64)ctx->args[2],
+        (__u64)ctx->args[4]
+    );
 }
 
 SEC("tracepoint/syscalls/sys_exit_sendto")
@@ -216,7 +227,12 @@ int handle_sys_exit_sendmsg(struct trace_event_raw_sys_exit *ctx) {
 SEC("tracepoint/syscalls/sys_enter_recvfrom")
 int handle_sys_enter_recvfrom(struct trace_event_raw_sys_enter *ctx) {
     store_socket_payload_recvfrom_op(ctx);
-    return store_pending_net_op(ctx, ACTRAIL_NET_RECV, 0, 2, 4, ACTRAIL_NET_SYSCALL_SOCKET);
+    return store_pending_net_op_resolved(
+        net_descriptor(ACTRAIL_NET_RECV, ACTRAIL_NET_SYSCALL_SOCKET),
+        (__u32)ctx->args[0],
+        (__u64)ctx->args[2],
+        (__u64)ctx->args[4]
+    );
 }
 
 SEC("tracepoint/syscalls/sys_exit_recvfrom")
@@ -227,13 +243,11 @@ int handle_sys_exit_recvfrom(struct trace_event_raw_sys_exit *ctx) {
 
 SEC("tracepoint/syscalls/sys_enter_bind")
 int handle_sys_enter_bind(struct trace_event_raw_sys_enter *ctx) {
-    return store_pending_net_op(
-        ctx,
-        ACTRAIL_NET_BIND,
+    return store_pending_net_op_resolved(
+        net_descriptor(ACTRAIL_NET_BIND, ACTRAIL_NET_SYSCALL_SOCKET),
+        (__u32)ctx->args[0],
         0,
-        ACTRAIL_SYSCALL_ARG_MISSING,
-        1,
-        ACTRAIL_NET_SYSCALL_SOCKET
+        (__u64)ctx->args[1]
     );
 }
 
@@ -244,13 +258,11 @@ int handle_sys_exit_bind(struct trace_event_raw_sys_exit *ctx) {
 
 SEC("tracepoint/syscalls/sys_enter_listen")
 int handle_sys_enter_listen(struct trace_event_raw_sys_enter *ctx) {
-    return store_pending_net_op(
-        ctx,
-        ACTRAIL_NET_LISTEN,
+    return store_pending_net_op_resolved(
+        net_descriptor(ACTRAIL_NET_LISTEN, ACTRAIL_NET_SYSCALL_SOCKET),
+        (__u32)ctx->args[0],
         0,
-        ACTRAIL_SYSCALL_ARG_MISSING,
-        ACTRAIL_SYSCALL_ARG_MISSING,
-        ACTRAIL_NET_SYSCALL_SOCKET
+        0
     );
 }
 
@@ -263,13 +275,11 @@ SEC("tracepoint/syscalls/sys_enter_write")
 int handle_sys_enter_write(struct trace_event_raw_sys_enter *ctx) {
     store_stdio_payload_op(ctx, ACTRAIL_STDIO_SYSCALL_WRITE);
     store_socket_payload_write_op(ctx);
-    return store_pending_net_op(
-        ctx,
-        ACTRAIL_NET_SEND,
-        0,
-        2,
-        ACTRAIL_SYSCALL_ARG_MISSING,
-        ACTRAIL_NET_SYSCALL_FD_IO
+    return store_pending_net_op_resolved(
+        net_descriptor(ACTRAIL_NET_SEND, ACTRAIL_NET_SYSCALL_FD_IO),
+        (__u32)ctx->args[0],
+        (__u64)ctx->args[2],
+        0
     );
 }
 
@@ -284,13 +294,11 @@ SEC("tracepoint/syscalls/sys_enter_read")
 int handle_sys_enter_read(struct trace_event_raw_sys_enter *ctx) {
     store_stdio_payload_op(ctx, ACTRAIL_STDIO_SYSCALL_READ);
     store_socket_payload_read_op(ctx);
-    return store_pending_net_op(
-        ctx,
-        ACTRAIL_NET_RECV,
-        0,
-        2,
-        ACTRAIL_SYSCALL_ARG_MISSING,
-        ACTRAIL_NET_SYSCALL_FD_IO
+    return store_pending_net_op_resolved(
+        net_descriptor(ACTRAIL_NET_RECV, ACTRAIL_NET_SYSCALL_FD_IO),
+        (__u32)ctx->args[0],
+        (__u64)ctx->args[2],
+        0
     );
 }
 

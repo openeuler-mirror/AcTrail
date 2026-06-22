@@ -47,6 +47,7 @@ enum actrail_syscall_arg_slot {
 
 enum actrail_trace_lookup_flag {
     ACTRAIL_TRACE_LOOKUP_FLAG_HOST_FALLBACK = 1,
+    ACTRAIL_TRACE_LOOKUP_FLAG_CONTEXT_PID_FALLBACK = 2,
 };
 
 struct actrail_endpoint {
@@ -93,6 +94,7 @@ struct actrail_pending_proc_op {
     __u64 parent_generation;
     __u64 child_generation;
     __u32 parent_pid;
+    __u32 lookup_flags;
 };
 
 struct actrail_pending_exit_op {
@@ -212,15 +214,15 @@ static __always_inline int emit_event(struct actrail_event *event) {
     return bpf_ringbuf_output(&events, event, sizeof(*event), 0);
 }
 
-static __always_inline __u64 current_pid_tgid(void) {
+static __always_inline __u64 current_kernel_pid_tgid(void) {
     return bpf_get_current_pid_tgid();
 }
 
-static __always_inline __u32 current_tgid(void) {
-    return current_pid_tgid() >> 32;
+static __always_inline __u32 current_kernel_tgid(void) {
+    return current_kernel_pid_tgid() >> 32;
 }
 
-static __always_inline __u64 current_namespace_pid_tgid(void) {
+static __always_inline __u64 current_collector_pid_tgid(void) {
     __u32 key = ACTRAIL_ACTIVE_PID_NAMESPACE;
     struct actrail_pid_namespace *namespace = bpf_map_lookup_elem(&pid_namespace, &key);
     struct bpf_pidns_info namespace_pid = {};
@@ -238,6 +240,31 @@ static __always_inline __u64 current_namespace_pid_tgid(void) {
     return ((__u64)namespace_pid.tgid << 32) | namespace_pid.pid;
 }
 
+static __always_inline __u64 current_pid_tgid(void) {
+    return current_collector_pid_tgid();
+}
+
+static __always_inline __u32 current_tgid(void) {
+    return current_pid_tgid() >> 32;
+}
+
+static __always_inline __u64 current_trace_pid_tgid(void) {
+    __u64 collector_pid_tgid = current_pid_tgid();
+
+    if (collector_pid_tgid) {
+        return collector_pid_tgid;
+    }
+    return current_kernel_pid_tgid();
+}
+
+static __always_inline __u32 current_trace_tgid(void) {
+    return current_trace_pid_tgid() >> 32;
+}
+
+static __always_inline __u64 current_namespace_pid_tgid(void) {
+    return current_collector_pid_tgid();
+}
+
 static __always_inline __u32 current_namespace_tgid(void) {
     return current_namespace_pid_tgid() >> 32;
 }
@@ -247,38 +274,57 @@ static __always_inline __u64 *lookup_current_trace(
     __u32 *tid,
     __u32 *flags
 ) {
-    __u64 host_pid_tgid = current_pid_tgid();
-    __u64 namespace_pid_tgid = current_namespace_pid_tgid();
-    __u32 lookup_tgid = namespace_pid_tgid >> 32;
+    __u64 collector_pid_tgid = current_pid_tgid();
+    __u32 lookup_tgid = collector_pid_tgid >> 32;
     __u64 *trace_id = 0;
 
     *flags = 0;
-    if (namespace_pid_tgid) {
+    if (collector_pid_tgid) {
         trace_id = bpf_map_lookup_elem(&tracked_traces, &lookup_tgid);
         if (trace_id) {
             *tgid = lookup_tgid;
-            *tid = (__u32)namespace_pid_tgid;
+            *tid = (__u32)collector_pid_tgid;
             return trace_id;
         }
     }
 
-    lookup_tgid = host_pid_tgid >> 32;
-    trace_id = bpf_map_lookup_elem(&tracked_traces, &lookup_tgid);
-    if (trace_id) {
-        *tgid = lookup_tgid;
-        *tid = (__u32)host_pid_tgid;
-        *flags = ACTRAIL_TRACE_LOOKUP_FLAG_HOST_FALLBACK;
+    __u64 kernel_pid_tgid = current_kernel_pid_tgid();
+    __u32 kernel_tgid = kernel_pid_tgid >> 32;
+    if (kernel_pid_tgid && kernel_pid_tgid != collector_pid_tgid) {
+        trace_id = bpf_map_lookup_elem(&tracked_traces, &kernel_tgid);
+        if (trace_id) {
+            *tgid = kernel_tgid;
+            *tid = (__u32)kernel_pid_tgid;
+            *flags = ACTRAIL_TRACE_LOOKUP_FLAG_HOST_FALLBACK;
+            return trace_id;
+        }
+    }
+
+    *tgid = lookup_tgid;
+    *tid = (__u32)collector_pid_tgid;
+    return 0;
+}
+
+static __always_inline __u64 *lookup_trace_for_context_pid(
+    __u32 context_pid,
+    __u32 *tgid,
+    __u32 *tid,
+    __u32 *flags
+) {
+    __u64 *trace_id = lookup_current_trace(tgid, tid, flags);
+
+    if (trace_id || !context_pid) {
         return trace_id;
     }
 
-    if (namespace_pid_tgid) {
-        *tgid = namespace_pid_tgid >> 32;
-        *tid = (__u32)namespace_pid_tgid;
-    } else {
-        *tgid = host_pid_tgid >> 32;
-        *tid = (__u32)host_pid_tgid;
+    trace_id = bpf_map_lookup_elem(&tracked_traces, &context_pid);
+    if (trace_id) {
+        *tgid = context_pid;
+        *tid = context_pid;
+        *flags = ACTRAIL_TRACE_LOOKUP_FLAG_HOST_FALLBACK |
+            ACTRAIL_TRACE_LOOKUP_FLAG_CONTEXT_PID_FALLBACK;
     }
-    return 0;
+    return trace_id;
 }
 
 static __always_inline __u64 ensure_process_generation(__u32 pid) {

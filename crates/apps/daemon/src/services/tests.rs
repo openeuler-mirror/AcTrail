@@ -6,19 +6,19 @@ use std::time::{Duration, SystemTime};
 
 use config_core::capture_profile::CaptureProfile;
 use config_core::daemon::{
-    AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
-    EnforcementBackend, EnforcementConfig, EnforcementDecision, EnforcementMarkStrategy,
-    EnforcementScope, FileObservationConfig, MemlockRlimit, OPERATOR_CONFIG_TEMPLATE,
-    OperatorConfig, PayloadConfig, ProcessSeccompConfig, ProcessSeccompSyscall,
-    ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig, SemanticRetentionConfig,
-    SseDataPolicy,
+    AgentInvocationConfig, ApplicationProtocolConfig, DEFAULT_ACTIVE_TRACE_MAX, DiagnosticLogLevel,
+    EbpfCollectorConfig, EnforcementBackend, EnforcementConfig, EnforcementDecision,
+    EnforcementMarkStrategy, EnforcementScope, FileObservationConfig, MemlockRlimit,
+    OPERATOR_CONFIG_TEMPLATE, OperatorConfig, PayloadConfig, ProcessSeccompConfig,
+    ProcessSeccompSyscall, ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig,
+    SemanticRetentionConfig, SseDataPolicy,
 };
 use config_core::trace_snapshot::CaptureProfileSnapshot;
-use control_contract::command::{ControlCommand, ListTracesCommand, TrackAddCommand};
+use control_contract::command::{ControlCommand, ListTracesCommand, ProcessRef, TrackAddCommand};
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use model_core::event::EventPayload;
 use model_core::ids::{CollectorName, ProfileName, RequestId, TraceName};
-use model_core::process::ProcessIdentity;
+use model_core::process::{NamespaceIdentity, ProcessIdentity};
 use model_core::trace::TraceHealth;
 use storage_factory::StorageConfig;
 use trace_runtime::commands::TrackTraceRequest;
@@ -47,6 +47,16 @@ const TEST_HTTP2_MAX_FRAME_BYTES: u64 = 16384;
 const TEST_HTTP2_PREVIEW_BYTES: u64 = 16;
 static TEST_SOCKET_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
+fn test_process_ref(pid: u32) -> ProcessRef {
+    let namespace_path = format!("/proc/{pid}/ns/pid");
+    let pid_namespace = std::fs::read_link(&namespace_path)
+        .unwrap_or_else(|error| panic!("read {namespace_path}: {error}"));
+    ProcessRef::new(
+        pid,
+        NamespaceIdentity::new(pid_namespace.display().to_string()),
+    )
+}
+
 #[test]
 fn attach_main_path_runs() {
     let storage_path =
@@ -61,6 +71,7 @@ fn attach_main_path_runs() {
         profiles,
         ebpf_config(true),
         payload_config(false),
+        DEFAULT_ACTIVE_TRACE_MAX,
         DiagnosticLogLevel::Info,
         seccomp_notify_disabled(),
         process_seccomp_disabled(),
@@ -79,7 +90,7 @@ fn attach_main_path_runs() {
     let reply = host
         .handle(ControlCommand::TrackAdd(TrackAddCommand {
             request_id: RequestId::new(1),
-            root_pid: std::process::id(),
+            root: test_process_ref(std::process::id()),
             display_name: TraceName::new("self"),
             profile_name: ProfileName::new("snapshot"),
             tags: BTreeSet::new(),
@@ -119,6 +130,7 @@ fn launch_mode_suppresses_wrapper_bootstrap_gap() {
         profiles,
         ebpf_config(false),
         payload_config(false),
+        DEFAULT_ACTIVE_TRACE_MAX,
         DiagnosticLogLevel::Info,
         seccomp_notify_disabled(),
         process_seccomp_disabled(),
@@ -137,7 +149,7 @@ fn launch_mode_suppresses_wrapper_bootstrap_gap() {
     let reply = host
         .handle(ControlCommand::TrackAdd(TrackAddCommand {
             request_id: RequestId::new(1),
-            root_pid: std::process::id(),
+            root: test_process_ref(std::process::id()),
             display_name: TraceName::new("launch-wrapper"),
             profile_name: ProfileName::new("snapshot"),
             tags: BTreeSet::new(),
@@ -184,6 +196,7 @@ fn resource_metrics_sampler_persists_procfs_samples() {
         profiles,
         ebpf_config(false),
         payload_config(false),
+        DEFAULT_ACTIVE_TRACE_MAX,
         DiagnosticLogLevel::Info,
         seccomp_notify_disabled(),
         process_seccomp_disabled(),

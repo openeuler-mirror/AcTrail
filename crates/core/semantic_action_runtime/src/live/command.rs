@@ -13,8 +13,8 @@ use semantic_action::{
 use super::actions::{
     ATTR_AGENT_IDENTITY_EVIDENCE_ACTION_ID, ATTR_AGENT_IDENTITY_STATUS,
     ATTR_AGENT_INVOCATION_EVIDENCE_ACTION_ID, ATTR_AGENT_INVOCATION_TRIGGER,
-    ATTR_PROCESS_PARENT_IDENTITY_STATE, append_missing_evidence, event_evidence, process_action_id,
-    process_exit_status,
+    ATTR_PROCESS_PARENT_IDENTITY_STATE, append_missing_evidence, apply_command_exit_attributes,
+    event_evidence, process_action_id, process_exit_status,
 };
 use super::process_parent::{
     ForkProcessEdge, ParentEdgeApply, apply_fork_parent, fork_edge_from_event,
@@ -70,6 +70,8 @@ impl CommandProjector {
             links: link.into_iter().collect(),
             file_observation_paths: Vec::new(),
             file_path_sets: Vec::new(),
+            llm_request_contents: Vec::new(),
+            deferred_events: Vec::new(),
             retain_event: true,
             raw_event_consumed: false,
         }
@@ -94,6 +96,8 @@ impl CommandProjector {
             links: Vec::new(),
             file_observation_paths: Vec::new(),
             file_path_sets: Vec::new(),
+            llm_request_contents: Vec::new(),
+            deferred_events: Vec::new(),
             retain_event: true,
             raw_event_consumed: false,
         }
@@ -124,6 +128,8 @@ impl CommandProjector {
             links: Vec::new(),
             file_observation_paths: Vec::new(),
             file_path_sets: Vec::new(),
+            llm_request_contents: Vec::new(),
+            deferred_events: Vec::new(),
             retain_event: true,
             raw_event_consumed: false,
         }
@@ -139,6 +145,7 @@ impl CommandProjector {
         };
         action.end_time = Some(event.envelope.observed_at);
         action.status = process_exit_status(payload.metadata.get("exit_code"));
+        apply_command_exit_attributes(&mut action, payload.metadata.get("exit_code"));
         action
             .evidence
             .push(event_evidence(event, evidence_roles::process::EXIT));
@@ -148,6 +155,8 @@ impl CommandProjector {
             links: Vec::new(),
             file_observation_paths: Vec::new(),
             file_path_sets: Vec::new(),
+            llm_request_contents: Vec::new(),
+            deferred_events: Vec::new(),
             retain_event: true,
             raw_event_consumed: false,
         }

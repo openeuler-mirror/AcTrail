@@ -1,9 +1,8 @@
 //! Schema boundaries for traces, events, diagnostics, and tombstones.
 
 use rusqlite::Connection;
-use std::time::Duration;
 
-const SQLITE_SCHEMA_VERSION_NANOS_TIME: i32 = 1;
+const SQLITE_SCHEMA_VERSION_CURRENT: i32 = 4;
 
 const CREATE_TABLES_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS traces (
@@ -167,13 +166,19 @@ CREATE TABLE IF NOT EXISTS file_paths (
 CREATE TABLE IF NOT EXISTS file_path_sets (
     trace_id INTEGER NOT NULL,
     path_set_id TEXT NOT NULL,
-    action_id TEXT NOT NULL,
+    path_set_hash TEXT NOT NULL,
     state TEXT NOT NULL,
     unique_path_count INTEGER NOT NULL,
     stored_path_count INTEGER NOT NULL,
     chunking_scheme TEXT NOT NULL,
-    PRIMARY KEY (trace_id, path_set_id),
-    UNIQUE (trace_id, action_id)
+    PRIMARY KEY (trace_id, path_set_id)
+);
+
+CREATE TABLE IF NOT EXISTS file_path_set_action_refs (
+    trace_id INTEGER NOT NULL,
+    action_id TEXT NOT NULL,
+    path_set_id TEXT NOT NULL,
+    PRIMARY KEY (trace_id, action_id)
 );
 
 CREATE TABLE IF NOT EXISTS file_path_set_chunks (
@@ -194,6 +199,33 @@ CREATE TABLE IF NOT EXISTS file_path_set_chunk_refs (
     chunk_id TEXT NOT NULL,
     PRIMARY KEY (trace_id, path_set_id, chunk_order)
 );
+
+CREATE TABLE IF NOT EXISTS llm_request_manifests (
+    manifest_id INTEGER PRIMARY KEY,
+    trace_id INTEGER NOT NULL,
+    action_id TEXT NOT NULL,
+    format_version INTEGER NOT NULL,
+    canonical_body_hash BLOB NOT NULL,
+    canonical_body_bytes INTEGER NOT NULL,
+    skeleton_json TEXT NOT NULL,
+    UNIQUE (trace_id, action_id)
+);
+
+CREATE TABLE IF NOT EXISTS llm_request_blocks (
+    block_id INTEGER PRIMARY KEY,
+    trace_id INTEGER NOT NULL,
+    block_hash BLOB NOT NULL,
+    uncompressed_bytes INTEGER NOT NULL,
+    encoded_bytes BLOB NOT NULL,
+    UNIQUE (trace_id, block_hash)
+);
+
+CREATE TABLE IF NOT EXISTS llm_request_block_refs (
+    manifest_id INTEGER NOT NULL,
+    ordinal INTEGER NOT NULL,
+    block_id INTEGER NOT NULL,
+    PRIMARY KEY (manifest_id, ordinal)
+) WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS diagnostics (
     diagnostic_id INTEGER PRIMARY KEY,
@@ -259,14 +291,19 @@ CREATE INDEX IF NOT EXISTS idx_file_path_set_refs_path_set ON file_path_set_chun
     path_set_id,
     chunk_order
 );
+
+CREATE INDEX IF NOT EXISTS idx_file_path_set_action_refs_path_set ON file_path_set_action_refs (
+    trace_id,
+    path_set_id
+);
+
 "#;
 
 pub fn initialize(connection: &Connection) -> Result<(), rusqlite::Error> {
+    validate_writable_schema_state(connection)?;
     connection.execute_batch(CREATE_TABLES_SQL)?;
-    migrate_membership_timing_columns(connection)?;
-    migrate_payload_operation_columns(connection)?;
-    migrate_semantic_action_link_validity(connection)?;
-    migrate_time_columns_to_nanos(connection)?;
+    validate_current_schema(connection)?;
+    connection.pragma_update(None, "user_version", SQLITE_SCHEMA_VERSION_CURRENT)?;
     migrate_query_indexes(connection)
 }
 
@@ -284,108 +321,49 @@ fn migrate_query_indexes(connection: &Connection) -> Result<(), rusqlite::Error>
 }
 
 pub fn validate_read_schema(connection: &Connection) -> Result<(), rusqlite::Error> {
-    if user_version(connection)? < SQLITE_SCHEMA_VERSION_NANOS_TIME {
+    if user_version(connection)? != SQLITE_SCHEMA_VERSION_CURRENT {
         return Err(rusqlite::Error::InvalidQuery);
     }
+    validate_current_schema(connection)?;
     Ok(())
 }
 
-fn migrate_membership_timing_columns(connection: &Connection) -> Result<(), rusqlite::Error> {
-    add_column_if_missing(connection, "memberships", "observed_at", "INTEGER")?;
-    add_column_if_missing(connection, "memberships", "exit_observation_source", "TEXT")
-}
-
-fn migrate_time_columns_to_nanos(connection: &Connection) -> Result<(), rusqlite::Error> {
-    if user_version(connection)? >= SQLITE_SCHEMA_VERSION_NANOS_TIME {
+fn validate_writable_schema_state(connection: &Connection) -> Result<(), rusqlite::Error> {
+    let version = user_version(connection)?;
+    if version == SQLITE_SCHEMA_VERSION_CURRENT {
         return Ok(());
     }
-
-    let nanos_per_second = i64::try_from(Duration::from_secs(1).as_nanos())
-        .expect("nanoseconds per second exceed i64");
-    connection.execute_batch("BEGIN IMMEDIATE")?;
-    let result = (|| {
-        for (table, column) in [
-            ("traces", "created_at"),
-            ("traces", "started_at"),
-            ("traces", "completed_at"),
-            ("traces", "failed_at"),
-            ("memberships", "observed_at"),
-            ("memberships", "exit_observed_at"),
-            ("events", "observed_at"),
-            ("payload_segments", "observed_at"),
-            ("semantic_actions", "start_time"),
-            ("semantic_actions", "end_time"),
-            ("diagnostics", "emitted_at"),
-            ("tombstones", "cleaned_at"),
-        ] {
-            connection.execute(
-                &format!("UPDATE {table} SET {column} = {column} * ?1 WHERE {column} IS NOT NULL"),
-                [nanos_per_second],
-            )?;
-        }
-        connection.pragma_update(None, "user_version", SQLITE_SCHEMA_VERSION_NANOS_TIME)?;
-        Ok(())
-    })();
-    match result {
-        Ok(()) => connection.execute_batch("COMMIT"),
-        Err(error) => {
-            let _ = connection.execute_batch("ROLLBACK");
-            Err(error)
-        }
+    if version == 0 && user_table_count(connection)? == 0 {
+        return Ok(());
     }
+    Err(rusqlite::Error::InvalidQuery)
+}
+
+fn validate_current_schema(connection: &Connection) -> Result<(), rusqlite::Error> {
+    require_column(connection, "file_path_sets", "path_set_hash")?;
+    require_column(connection, "file_path_set_action_refs", "action_id")?;
+    require_column(connection, "llm_request_manifests", "manifest_id")?;
+    require_column(connection, "llm_request_blocks", "block_id")?;
+    require_column(connection, "llm_request_block_refs", "manifest_id")
 }
 
 fn user_version(connection: &Connection) -> Result<i32, rusqlite::Error> {
     connection.pragma_query_value(None, "user_version", |row| row.get(0))
 }
 
-fn migrate_payload_operation_columns(connection: &Connection) -> Result<(), rusqlite::Error> {
-    add_column_if_missing(
-        connection,
-        "payload_segments",
-        "operation_id",
-        "INTEGER NOT NULL DEFAULT 0",
-    )?;
-    add_column_if_missing(
-        connection,
-        "payload_segments",
-        "operation_offset",
-        "INTEGER NOT NULL DEFAULT 0",
-    )?;
-    add_column_if_missing(
-        connection,
-        "payload_segments",
-        "operation_original_size",
-        "INTEGER NOT NULL DEFAULT 0",
-    )?;
-    add_column_if_missing(
-        connection,
-        "payload_segments",
-        "operation_captured_size",
-        "INTEGER NOT NULL DEFAULT 0",
-    )?;
-    add_column_if_missing(
-        connection,
-        "payload_segments",
-        "operation_completion_state",
-        "TEXT NOT NULL DEFAULT 'unknown'",
+fn user_table_count(connection: &Connection) -> Result<i64, rusqlite::Error> {
+    connection.query_row(
+        "SELECT COUNT(*) FROM sqlite_master
+         WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+        [],
+        |row| row.get(0),
     )
 }
 
-fn migrate_semantic_action_link_validity(connection: &Connection) -> Result<(), rusqlite::Error> {
-    add_column_if_missing(
-        connection,
-        "semantic_action_links",
-        "valid",
-        "INTEGER NOT NULL DEFAULT 1",
-    )
-}
-
-fn add_column_if_missing(
+fn require_column(
     connection: &Connection,
     table: &str,
     column: &str,
-    definition: &str,
 ) -> Result<(), rusqlite::Error> {
     let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
     let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
@@ -394,9 +372,5 @@ fn add_column_if_missing(
             return Ok(());
         }
     }
-    connection.execute(
-        &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
-        [],
-    )?;
-    Ok(())
+    Err(rusqlite::Error::InvalidQuery)
 }

@@ -4,11 +4,11 @@ use model_core::ids::TraceId;
 use model_core::process::{NamespaceIdentity, ProcessIdentity};
 use rusqlite::{OptionalExtension, Row, params};
 use semantic_action::{
-    FileObservationPath, FilePathSetPathPage, FilePathSetWrite, SemanticAction,
-    SemanticActionCompleteness, SemanticActionKind, SemanticActionLink,
-    SemanticActionLinkConfidence, SemanticActionLinkRole, SemanticActionReadStore,
-    SemanticActionStatus, SemanticActionStoreError, SemanticActionWriteStore, SemanticEvidence,
-    SemanticEvidenceKind, attr_keys as attrs,
+    FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
+    LlmRequestContentWrite, SemanticAction, SemanticActionCompleteness, SemanticActionKind,
+    SemanticActionLink, SemanticActionLinkConfidence, SemanticActionLinkRole,
+    SemanticActionReadStore, SemanticActionStatus, SemanticActionStoreError,
+    SemanticActionWriteStore, SemanticEvidence, SemanticEvidenceKind, attr_keys as attrs,
 };
 
 use crate::SqliteStorage;
@@ -158,6 +158,20 @@ impl SemanticActionWriteStore for SqliteStorage {
         }
         let connection = self.connection().borrow_mut();
         crate::semantic_actions::path_sets::upsert_file_path_sets(&connection, path_sets)
+    }
+
+    fn upsert_llm_request_contents(
+        &mut self,
+        contents: &[LlmRequestContentWrite],
+    ) -> Result<(), SemanticActionStoreError> {
+        if contents.is_empty() {
+            return Ok(());
+        }
+        let connection = self.connection().borrow_mut();
+        crate::semantic_actions::llm_request_content::upsert_llm_request_contents(
+            &connection,
+            contents,
+        )
     }
 }
 
@@ -338,6 +352,27 @@ impl SemanticActionReadStore for SqliteStorage {
             action_id,
             offset,
             limit,
+        )
+    }
+
+    fn llm_request_content_page(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+        max_bytes: usize,
+    ) -> Result<Option<LlmRequestContentPage>, SemanticActionStoreError> {
+        if self.is_purged(trace_id) {
+            return Err(SemanticActionStoreError::new(
+                "llm_request_content_page",
+                "trace has been purged",
+            ));
+        }
+        let connection = self.connection().borrow();
+        crate::semantic_actions::llm_request_content::llm_request_content_page(
+            &connection,
+            trace_id,
+            action_id,
+            max_bytes,
         )
     }
 }

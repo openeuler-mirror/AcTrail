@@ -103,8 +103,7 @@ application_protocol_http2_enabled = false
 
 本例的通过条件仍是 `Syscall/socket-syscall` payload，而不是 TLS payload。`tls-sync` 开启后会等待 launch-time runtime 注入；本例使用 `track-add` attach 已运行的本地 plain HTTP workload，因此不会产生 `TlsUserSpace` 行。
 
-`payload_socket_max_segment_bytes = 4095` 是本例的 socket BPF direct-copy 上限。对于 `bpf-copy-seccomp-fallback` 配置，超过该 inline 上限的 outbound HTTP 候选会在 seccomp 暂停窗口由 daemon 读取用户态 buffer；`payload_socket_max_operation_bytes = 4194304` 表示 4MB 以内的 HTTP LLM request 仍可完整保留。不要把 4095 理解成业务请求大小上限，它只是稳定 eBPF socket event ABI 的 inline copy 上限。
-如果目标 runtime 用 `writev` 或 `sendmsg` 发送 plain HTTP request，需要在同一配置段额外添加对应的 `payload_socket_seccomp_syscall`；这两个 syscall 的 payload 由 `iovec`/`msghdr` 描述，只走 seccomp user-read fallback，不走 BPF direct-copy。
+`payload_socket_max_segment_bytes = 4095` 是本例的 socket BPF direct-copy 上限。对于 `bpf-copy-seccomp-fallback` 配置，超过该 inline 上限的 outbound HTTP 候选会在 seccomp 暂停窗口由 daemon 读取用户态 buffer；`payload_socket_max_operation_bytes = 4194304` 表示 4MB 以内的 HTTP LLM request 仍可完整保留。不要把 4095 理解成业务请求大小上限，它只是稳定 eBPF socket event ABI 的 inline copy 上限。 如果目标 runtime 用 `writev` 或 `sendmsg` 发送 plain HTTP request，需要在同一配置段额外添加对应的 `payload_socket_seccomp_syscall`；这两个 syscall 的 payload 由 `iovec`/`msghdr` 描述，只走 seccomp user-read fallback，不走 BPF direct-copy。
 
 `payload_socket_http_sniff_max_bytes` 是单条 socket stream 在被判定为 HTTP 或非 HTTP 前最多暂存的字节数。被判定为非 HTTP 的 socket bytes 不会进入 payload storage。
 

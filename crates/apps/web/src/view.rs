@@ -301,6 +301,21 @@ pub fn action_file_path_set_json(
     actions::file_path_set_json(storage.as_mut(), TraceId::new(trace_id), action_id, page)
 }
 
+pub fn action_llm_request_content_json(
+    storage_config: &StorageConfig,
+    trace_id: u64,
+    action_id: &str,
+    max_bytes: usize,
+) -> Result<String, String> {
+    let mut storage = open_storage(storage_config)?;
+    actions::llm_request_content_json(
+        storage.as_mut(),
+        TraceId::new(trace_id),
+        action_id,
+        max_bytes,
+    )
+}
+
 pub fn commands_json(storage_config: &StorageConfig, trace_id: u64) -> Result<String, String> {
     let mut storage = open_storage(storage_config)?;
     commands::commands_json(storage.as_mut(), TraceId::new(trace_id))

@@ -48,8 +48,7 @@ Use an example config for the workflow you are validating:
 | xiaoO outbound LLM request capture | `docs/examples/06.xiaoo-tls-capture/operator.conf` |
 | xiaoO launching Claude Code process tree discovery | `docs/examples/07.xiaoo-claude-agent-invocation/operator.conf` |
 
-For manual real-agent validation, start with `docs/examples/08.full-monitor-validation/`.
-For acceptance across multiple runtimes, use the E2E suite under `tests/agent-trace/`. The suite renders its own case configs and validates viewer output plus OTEL spans:
+For manual real-agent validation, start with `docs/examples/08.full-monitor-validation/`. For acceptance across multiple runtimes, use the E2E suite under `tests/agent-trace/`. The suite renders its own case configs and validates viewer output plus OTEL spans:
 
 ```bash
 python3 tests/agent-trace/run_case.py claude-code
@@ -86,6 +85,8 @@ The generated default uses persistent Linux paths instead of `/tmp`:
 
 `actraild` creates missing parent directories for configured daemon write paths when it opens or binds them. Permission errors remain fatal and must be fixed by running with the intended privileges or changing the config paths explicitly. Example configs under `docs/examples/` intentionally keep `/tmp` paths for repeatable local validation.
 
+The generated default also sets `active_trace_max = 128`. That is the daemon admission limit for simultaneous non-terminal traces, independent from `control_pending_connection_max`, which only limits pending control socket clients.
+
 ## 4. Clean Local Runtime Artifacts
 
 Before rerunning an example:
@@ -100,8 +101,7 @@ For docs examples, prefer the helper because it also removes documented workload
 python3 docs/examples/clean.py --example <example-name>
 ```
 
-`clean` only removes artifacts declared by the config or example metadata. It is meant to replace repeated manual `/tmp/actrail-*` deletion.
-When `[export] enabled = true`, enabled `otel-jsonl` route output files are also cleaned.
+`clean` only removes artifacts declared by the config or example metadata. It is meant to replace repeated manual `/tmp/actrail-*` deletion. When `[export] enabled = true`, enabled `otel-jsonl` route output files are also cleaned.
 
 ## 5. Start And Check The Daemon
 

@@ -1,3 +1,6 @@
+use std::path::Path;
+use std::sync::OnceLock;
+
 use config_core::daemon::{
     AgentInvocationConfig, FileBulkReadMode, FileObservationConfig, FileRawEventRetention,
     SemanticRetentionConfig,
@@ -18,12 +21,12 @@ const ENUMERATE_MIN_UNIQUE_PATHS_TEXT: &str = "2";
 const ENUMERATE_MAX_PATHS_PER_SET: u32 = 4;
 const BULK_MIN_UNIQUE_PATHS: u32 = 2;
 const DIR_FD: u32 = 23;
-const DIR_A: &str = "/root/projects/AcTrail/crates";
-const DIR_B: &str = "/root/projects/AcTrail/crates/core";
-const REGULAR_PATH: &str = "/root/projects/AcTrail/Cargo.toml";
-const READ_PATH_A: &str = "/root/projects/AcTrail/AGENTS.md";
-const READ_PATH_B: &str = "/root/projects/AcTrail/README.md";
-const WRITE_PATH: &str = "/root/projects/AcTrail/tmp/action-sequence/temp_note.md";
+static DIR_A: OnceLock<String> = OnceLock::new();
+static DIR_B: OnceLock<String> = OnceLock::new();
+static REGULAR_PATH: OnceLock<String> = OnceLock::new();
+static READ_PATH_A: OnceLock<String> = OnceLock::new();
+static READ_PATH_B: OnceLock<String> = OnceLock::new();
+static WRITE_PATH: OnceLock<String> = OnceLock::new();
 
 #[test]
 fn directory_enumeration_projects_fs_enumerate_and_path_set() {
@@ -59,7 +62,7 @@ fn directory_enumeration_projects_fs_enumerate_and_path_set() {
     let first_open = runtime.observe_event(&directory_open_event(
         EventId::new(FILE_READ_EVENT_ID.get() + 100),
         command_process.clone(),
-        DIR_A,
+        dir_a(),
     ));
     assert!(first_open.actions.is_empty());
     assert!(!first_open.raw_event_consumed);
@@ -75,7 +78,7 @@ fn directory_enumeration_projects_fs_enumerate_and_path_set() {
     let second_open = runtime.observe_event(&directory_open_event(
         EventId::new(FILE_READ_EVENT_ID.get() + 102),
         command_process.clone(),
-        DIR_B,
+        dir_b(),
     ));
     assert!(second_open.raw_event_consumed);
     assert!(!second_open.retain_event);
@@ -120,7 +123,7 @@ fn directory_enumeration_projects_fs_enumerate_and_path_set() {
     let write_output = runtime.observe_event(&write_event(
         EventId::new(FILE_READ_EVENT_ID.get() + 104),
         command_process,
-        WRITE_PATH,
+        write_path(),
     ));
     let completed = completed_enumerate_action(&write_output, &enumerate_action_id)
         .expect("real file write should complete the current fs.enumerate");
@@ -147,23 +150,23 @@ fn directory_enumeration_projects_fs_enumerate_and_path_set() {
     let path_set = &write_output.file_path_sets[0];
     assert_eq!(path_set.action_id, enumerate_action_id);
     assert_eq!(path_set.state, FilePathSetState::Complete);
-    assert_eq!(path_set.paths, expected_paths(&[DIR_A, DIR_B]));
+    assert_eq!(path_set.paths, expected_paths(&[dir_a(), dir_b()]));
 }
 
 #[test]
-fn directory_enumeration_completes_active_bulk_read_before_enumerate() {
+fn directory_enumeration_and_bulk_read_run_until_shared_boundary() {
     let mut runtime = enumerate_runtime(false);
     let process = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
 
     runtime.observe_event(&read_event(
         EventId::new(FILE_READ_EVENT_ID.get() + 200),
         process.clone(),
-        READ_PATH_A,
+        read_path_a(),
     ));
     let bulk_output = runtime.observe_event(&read_event(
         EventId::new(FILE_READ_EVENT_ID.get() + 201),
         process.clone(),
-        READ_PATH_B,
+        read_path_b(),
     ));
     let bulk = bulk_output
         .actions
@@ -175,37 +178,65 @@ fn directory_enumeration_completes_active_bulk_read_before_enumerate() {
     let first_open = runtime.observe_event(&directory_open_event(
         EventId::new(FILE_READ_EVENT_ID.get() + 202),
         process.clone(),
-        DIR_A,
+        dir_a(),
     ));
-    let completed_bulk = completed_bulk_action(&first_open, &bulk_action_id)
-        .expect("directory enumeration should complete an active file.bulk_read");
-    assert_eq!(
-        completed_bulk.completeness,
-        SemanticActionCompleteness::Complete
-    );
     assert!(
         first_open
             .actions
             .iter()
-            .all(|action| action.kind != SemanticActionKind::FsEnumerate)
+            .all(|action| action.action_id != bulk_action_id)
     );
-    assert_eq!(first_open.file_path_sets.len(), 1);
-    assert_eq!(first_open.file_path_sets[0].action_id, bulk_action_id);
-    assert_eq!(
-        first_open.file_path_sets[0].paths,
-        expected_paths(&[READ_PATH_A, READ_PATH_B])
-    );
+    assert!(first_open.file_path_sets.is_empty());
 
     let second_open = runtime.observe_event(&directory_open_event(
         EventId::new(FILE_READ_EVENT_ID.get() + 203),
-        process,
-        DIR_B,
+        process.clone(),
+        dir_b(),
     ));
+    let enumerate = second_open
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::FsEnumerate)
+        .expect("second directory open should activate fs.enumerate");
+    let enumerate_action_id = enumerate.action_id.clone();
     assert!(
         second_open
             .actions
             .iter()
-            .any(|action| action.kind == SemanticActionKind::FsEnumerate)
+            .all(|action| action.action_id != bulk_action_id)
+    );
+
+    let boundary_output = runtime.observe_event(&write_event(
+        EventId::new(FILE_READ_EVENT_ID.get() + 204),
+        process,
+        write_path(),
+    ));
+    let completed_bulk = completed_bulk_action(&boundary_output, &bulk_action_id)
+        .expect("write boundary should complete the active file.bulk_read");
+    assert_eq!(
+        completed_bulk.completeness,
+        SemanticActionCompleteness::Complete
+    );
+    let completed_enumerate = completed_enumerate_action(&boundary_output, &enumerate_action_id)
+        .expect("write boundary should complete the active fs.enumerate");
+    assert_eq!(
+        completed_enumerate.completeness,
+        SemanticActionCompleteness::Complete
+    );
+    assert_eq!(boundary_output.file_path_sets.len(), 2);
+    assert!(
+        boundary_output
+            .file_path_sets
+            .iter()
+            .any(|path_set| path_set.action_id == bulk_action_id
+                && path_set.paths == expected_paths(&[read_path_a(), read_path_b()]))
+    );
+    assert!(
+        boundary_output
+            .file_path_sets
+            .iter()
+            .any(|path_set| path_set.action_id == enumerate_action_id
+                && path_set.paths == expected_paths(&[dir_a(), dir_b()]))
     );
 }
 
@@ -218,9 +249,9 @@ fn regular_file_open_does_not_project_fs_enumerate() {
         let output = runtime.observe_event(&regular_open_event(
             EventId::new(FILE_READ_EVENT_ID.get() + 300 + u64::from(offset)),
             process.clone(),
-            REGULAR_PATH,
+            regular_path(),
         ));
-        assert!(!output.raw_event_consumed);
+        assert!(output.raw_event_consumed);
         assert!(
             output
                 .actions
@@ -228,6 +259,41 @@ fn regular_file_open_does_not_project_fs_enumerate() {
                 .all(|action| action.kind != SemanticActionKind::FsEnumerate)
         );
     }
+}
+
+fn dir_a() -> &'static str {
+    repo_path(&DIR_A, "crates")
+}
+
+fn dir_b() -> &'static str {
+    repo_path(&DIR_B, "crates/core")
+}
+
+fn regular_path() -> &'static str {
+    repo_path(&REGULAR_PATH, "Cargo.toml")
+}
+
+fn read_path_a() -> &'static str {
+    repo_path(&READ_PATH_A, "AGENTS.md")
+}
+
+fn read_path_b() -> &'static str {
+    repo_path(&READ_PATH_B, "README.md")
+}
+
+fn write_path() -> &'static str {
+    repo_path(&WRITE_PATH, "tmp/action-sequence/temp_note.md")
+}
+
+fn repo_path(cell: &'static OnceLock<String>, relative: &str) -> &'static str {
+    cell.get_or_init(|| {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../..")
+            .join(relative)
+            .to_string_lossy()
+            .into_owned()
+    })
+    .as_str()
 }
 
 fn enumerate_runtime(agent_enabled: bool) -> LiveSemanticActionRuntime {

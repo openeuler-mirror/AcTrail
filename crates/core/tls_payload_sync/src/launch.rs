@@ -105,9 +105,13 @@ pub fn audit_env_value_for_libraries(libraries: &[PathBuf]) -> SyncResult<OsStri
 
 pub fn audit_libraries_for_plans(
     runtime_libraries: &[PathBuf],
-    _plans: &[ProbePointPlan],
+    plans: &[ProbePointPlan],
 ) -> Vec<PathBuf> {
-    runtime_libraries.to_vec()
+    if plans.is_empty() {
+        Vec::new()
+    } else {
+        runtime_libraries.to_vec()
+    }
 }
 
 fn loader_env_value_for_libraries(libraries: &[PathBuf], env_name: &str) -> SyncResult<OsString> {

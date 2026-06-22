@@ -46,9 +46,12 @@ pub(super) fn sync_launch(
         Err(_) => (raw_command, None),
     };
     let runtime_library = runtime_library(config)?;
-    let plans = bundle_plans(launch_plan, config, agent_commands);
     let preload_libraries = sync_preload_libraries(&runtime_library);
-    let audit_libraries = audit_libraries_for_plans(&preload_libraries, &plans);
+    let audit_libraries = launch_plan
+        .as_ref()
+        .map(|plan| audit_libraries_for_plans(&preload_libraries, std::slice::from_ref(plan)))
+        .unwrap_or_default();
+    let plans = bundle_plans(launch_plan, config, agent_commands);
     let java_agent_env_required = java_agent_env_required(config);
     Ok(SyncLaunch {
         command,

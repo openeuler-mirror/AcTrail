@@ -10,26 +10,17 @@ npm ci --prefix crates/apps/web/frontend
 cargo build --release
 ```
 
-The web crate builds the Vue app into Cargo `OUT_DIR` and embeds those static
-assets in the `actrailweb` binary. Node.js, npm, and `node_modules` are build
-inputs only; the release binary serves the embedded assets without them at
-runtime.
+The web crate builds the Vue app into Cargo `OUT_DIR` and embeds those static assets in the `actrailweb` binary. Node.js, npm, and `node_modules` are build inputs only; the release binary serves the embedded assets without them at runtime.
 
-Packaging environments that cannot download npm dependencies during `cargo
-build` should provide prebuilt assets explicitly:
+Packaging environments that cannot download npm dependencies during `cargo build` should provide prebuilt assets explicitly:
 
 ```sh
 ACTRAILWEB_PREBUILT_ASSETS_DIR="$PWD/crates/apps/web/frontend/dist" cargo build --release --locked
 ```
 
-`ACTRAILWEB_PREBUILT_ASSETS_DIR` must be an absolute path containing
-`index.html`, `assets/app.css`, and `assets/app.js`. When this variable is set,
-the Cargo build script copies those files into `OUT_DIR` and does not run npm.
-When it is not set, the build script runs `npm run build` and fails if npm or
-installed frontend dependencies are unavailable.
+`ACTRAILWEB_PREBUILT_ASSETS_DIR` must be an absolute path containing `index.html`, `assets/app.css`, and `assets/app.js`. When this variable is set, the Cargo build script copies those files into `OUT_DIR` and does not run npm. When it is not set, the build script runs `npm run build` and fails if npm or installed frontend dependencies are unavailable.
 
-For source package creation, use the repository script from a checkout with
-network access to npm:
+For source package creation, use the repository script from a checkout with network access to npm:
 
 ```sh
 scripts/package-source.sh --output ../src-AcTrail/AcTrail-0.2.0.tar.gz
@@ -50,8 +41,7 @@ cargo build --release --locked
 
 ## Layout constants
 
-`src/tabs/core/action-tree/config.js` contains action tree node types, lane labels,
-and UI limits:
+`src/tabs/core/action-tree/config.js` contains action tree node types, lane labels, and UI limits:
 
 - `GRAPH_LANES`: displayed lane names.
 - `TREE_NODE_TYPES`: recursive semantic tree node categories.

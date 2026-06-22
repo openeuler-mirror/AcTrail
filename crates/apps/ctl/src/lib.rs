@@ -6,6 +6,7 @@ pub(crate) mod dispatch;
 mod entry;
 pub(crate) mod launch;
 pub(crate) mod output;
+pub(crate) mod process_ref;
 pub(crate) mod transport;
 
 pub use args::CtlCommand;

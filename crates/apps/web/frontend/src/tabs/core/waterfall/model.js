@@ -1,5 +1,11 @@
 import { compactRows, kindClass, shortTime } from '../action-tree/common';
 import { isBashWrapperCommand, semanticActionLabel, semanticActionTarget } from '../../actionLabels';
+import {
+  buildLlmMessages,
+  llmRequestMessage,
+  llmResponseMessage,
+  previewText,
+} from '../../../llm/insight';
 
 const ACTION_VALID_ATTR = 'actrail.action.valid';
 const ACTION_VALID_FALSE = 'false';
@@ -36,7 +42,9 @@ export const WATERFALL_METRICS = Object.freeze([
     key: 'exit_code',
     label: 'Exit code',
     get: (action) =>
-      action.attributes?.['process.exit_status'] ?? action.attributes?.['process.exit_code'],
+      action.attributes?.['command.exit_code'] ??
+      action.attributes?.['process.exit_status'] ??
+      action.attributes?.['process.exit_code'],
   },
 ]);
 
@@ -750,258 +758,6 @@ function actionById(nodeById, actionId) {
     return null;
   }
   return nodeById.get(actionId)?.action ?? null;
-}
-
-function buildLlmMessages(requestAction, responseAction, requestOverride = null, responseOverride = null) {
-  const requestFull = requestOverride ?? llmRequestMessage(requestAction, { preview: false });
-  const responseFull = responseOverride ?? llmResponseMessage(responseAction);
-  if (!requestFull && !responseFull) {
-    return null;
-  }
-  const requestPreview =
-    requestOverride !== null
-      ? previewText(requestOverride, 160)
-      : previewText(llmRequestMessage(requestAction, { preview: true }) || requestFull, 160);
-  const model =
-    requestAction?.attributes?.['llm.request.model'] ??
-    responseAction?.attributes?.['llm.response.model'] ??
-    null;
-  return {
-    model,
-    requestFull,
-    responseFull,
-    requestPreview,
-    responsePreview: previewText(responseFull, 160),
-  };
-}
-
-function llmRequestMessage(action, { preview = false } = {}) {
-  if (!action) {
-    return '';
-  }
-  const attrs = action.attributes ?? {};
-  const raw = attrs['llm.request.body_json'] || attrs['llm.request.body_text'] || '';
-  return extractLlmRequestMessage(raw, preview);
-}
-
-function llmResponseMessage(action) {
-  if (!action) {
-    return '';
-  }
-  const attrs = action.attributes ?? {};
-  const parts = [
-    attrs['llm.response.reasoning_text'],
-    attrs['llm.response.content_text'],
-  ].filter((value) => String(value ?? '').trim().length > 0);
-  if (parts.length > 0) {
-    return Array.from(new Set(parts)).join('\n\n');
-  }
-  return '';
-}
-
-function extractLlmRequestMessage(raw, preview) {
-  const text = String(raw ?? '').trim();
-  if (!text) {
-    return '';
-  }
-  if (text.startsWith('{') || text.startsWith('[')) {
-    try {
-      const parsed = JSON.parse(text);
-      if (preview) {
-        const userText = messagesTextByRoles(parsed?.messages, USER_MESSAGE_ROLES);
-        if (userText) {
-          return userText;
-        }
-        if (typeof parsed?.input === 'string') {
-          return parsed.input.trim();
-        }
-        if (typeof parsed?.prompt === 'string') {
-          return parsed.prompt.trim();
-        }
-      }
-      const fromMessages = messagesText(parsed?.messages ?? parsed?.input);
-      if (fromMessages) {
-        return fromMessages;
-      }
-      if (typeof parsed?.prompt === 'string') {
-        return parsed.prompt.trim();
-      }
-      if (typeof parsed?.input === 'string') {
-        return parsed.input.trim();
-      }
-    } catch {
-      // Fall through to raw text when JSON is truncated or invalid.
-    }
-  }
-  return text;
-}
-
-function extractLlmAssistantMessage(raw) {
-  const text = String(raw ?? '').trim();
-  if (!text) {
-    return '';
-  }
-  if (text.startsWith('{') || text.startsWith('[')) {
-    try {
-      const parsed = JSON.parse(text);
-      const fromChoices = openAiChoicesText(parsed);
-      if (fromChoices) {
-        return fromChoices;
-      }
-      const fromOutput = openAiResponsesOutputText(parsed);
-      if (fromOutput) {
-        return fromOutput;
-      }
-      const fromAnthropic = anthropicResponseText(parsed);
-      if (fromAnthropic) {
-        return fromAnthropic;
-      }
-      const fromMessages = messagesTextByRoles(parsed?.messages, ASSISTANT_MESSAGE_ROLES);
-      if (fromMessages) {
-        return fromMessages;
-      }
-    } catch {
-      // Fall through to raw text when JSON is truncated or invalid.
-    }
-  }
-  return text;
-}
-
-const USER_MESSAGE_ROLES = ['user', 'human'];
-const ASSISTANT_MESSAGE_ROLES = ['assistant'];
-
-function messagesTextByRoles(messages, roles) {
-  if (!Array.isArray(messages)) {
-    return '';
-  }
-  const allowed = new Set(roles);
-  return messages
-    .map((message) => formatMessageLine(message, allowed))
-    .filter(Boolean)
-    .join('\n');
-}
-
-function formatMessageLine(message, allowedRoles = null) {
-  if (!message || typeof message !== 'object') {
-    return '';
-  }
-  const role = String(message.role ?? '').toLowerCase();
-  if (allowedRoles && role && !allowedRoles.has(role)) {
-    return '';
-  }
-  const prefix = message.role ? `[${message.role}] ` : '';
-  const content = messageContentText(message.content ?? message.text ?? message.input);
-  if (!content) {
-    return '';
-  }
-  return `${prefix}${content}`.trim();
-}
-
-function messageContentText(content) {
-  if (typeof content === 'string') {
-    return content.trim();
-  }
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        if (typeof part === 'string') {
-          return part;
-        }
-        if (typeof part?.text === 'string') {
-          return part.text;
-        }
-        if (part?.type === 'text' && typeof part?.text === 'string') {
-          return part.text;
-        }
-        return '';
-      })
-      .filter(Boolean)
-      .join(' ')
-      .trim();
-  }
-  return '';
-}
-
-function openAiChoicesText(parsed) {
-  const choices = parsed?.choices;
-  if (!Array.isArray(choices)) {
-    return '';
-  }
-  return choices
-    .map((choice) => {
-      const message = choice?.message ?? choice?.delta;
-      if (!message) {
-        return choice?.text ?? '';
-      }
-      return messageContentText(message.content ?? message.text) || String(message.content ?? message.text ?? '').trim();
-    })
-    .filter(Boolean)
-    .join('\n');
-}
-
-function openAiResponsesOutputText(parsed) {
-  const output = parsed?.output;
-  if (!Array.isArray(output)) {
-    return '';
-  }
-  return output
-    .flatMap((item) => {
-      if (typeof item?.content === 'string') {
-        return [item.content];
-      }
-      if (Array.isArray(item?.content)) {
-        return item.content
-          .map((part) => (typeof part?.text === 'string' ? part.text : ''))
-          .filter(Boolean);
-      }
-      return [];
-    })
-    .join('');
-}
-
-function anthropicResponseText(parsed) {
-  if (Array.isArray(parsed?.content)) {
-    const text = parsed.content
-      .map((block) => (typeof block?.text === 'string' ? block.text : ''))
-      .filter(Boolean)
-      .join('');
-    if (text) {
-      return text;
-    }
-  }
-  const message = parsed?.message ?? parsed?.delta;
-  if (message) {
-    return messageContentText(message.content ?? message.text);
-  }
-  return '';
-}
-
-function extractLlmUserMessage(raw) {
-  return extractLlmRequestMessage(raw, false);
-}
-
-function messagesText(messages) {
-  if (Array.isArray(messages)) {
-    return messages
-      .map((message) => formatMessageLine(message))
-      .filter(Boolean)
-      .join('\n');
-  }
-  if (typeof messages === 'string') {
-    return messages.trim();
-  }
-  return '';
-}
-
-function previewText(text, maxLen) {
-  const normalized = String(text ?? '').replace(/\s+/g, ' ').trim();
-  if (!normalized) {
-    return '';
-  }
-  if (normalized.length <= maxLen) {
-    return normalized;
-  }
-  return `${normalized.slice(0, maxLen - 1)}…`;
 }
 
 function compareNodes(left, right) {

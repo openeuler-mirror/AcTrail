@@ -4,10 +4,12 @@ use std::time::{Duration, UNIX_EPOCH};
 use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use semantic_action::{
-    FilePathSetState, FilePathSetWrite, SemanticAction, SemanticActionCompleteness,
+    FilePathSetState, FilePathSetWrite, LlmRequestBlock, LlmRequestBlockRef,
+    LlmRequestContentWrite, LlmRequestManifest, SemanticAction, SemanticActionCompleteness,
     SemanticActionKind, SemanticActionReadStore, SemanticActionStatus, SemanticActionWriteStore,
-    SemanticEvidence, SemanticEvidenceKind,
+    SemanticEvidence, SemanticEvidenceKind, file_path_set_identity_for_paths,
 };
+use sha2::{Digest, Sha256};
 
 use crate::SqliteStorage;
 
@@ -53,24 +55,29 @@ fn action_upsert_skips_unchanged_and_splits_row_from_evidence_writes() {
 fn file_path_sets_page_paths_and_reuse_identical_chunks() {
     let mut storage = SqliteStorage::open_in_memory().expect("open in-memory sqlite storage");
     let trace_id = TraceId::new(1);
+    let paths = vec![
+        "/tmp/a".to_string(),
+        "/tmp/b".to_string(),
+        "/tmp/c".to_string(),
+    ];
+    let identity = file_path_set_identity_for_paths(
+        FilePathSetState::Complete,
+        "path-id-v1:chunk-max=2",
+        paths.iter().map(String::as_str),
+    );
     let first = FilePathSetWrite {
         trace_id,
         action_id: "action-1".to_string(),
-        path_set_id: "set-1".to_string(),
+        path_set_id: identity.path_set_id.clone(),
         state: FilePathSetState::Complete,
         unique_path_count: 3,
         stored_path_count: 3,
         chunking_scheme: "path-id-v1:chunk-max=2".to_string(),
         chunk_max_paths: 2,
-        paths: vec![
-            "/tmp/a".to_string(),
-            "/tmp/b".to_string(),
-            "/tmp/c".to_string(),
-        ],
+        paths,
     };
     let mut second = first.clone();
     second.action_id = "action-2".to_string();
-    second.path_set_id = "set-2".to_string();
 
     storage
         .upsert_file_path_sets(&[first, second])
@@ -99,22 +106,96 @@ fn file_path_sets_page_paths_and_reuse_identical_chunks() {
         storage
             .connection()
             .borrow()
+            .query_row("SELECT COUNT(*) FROM file_path_sets", [], |row| row
+                .get::<_, i64>(0))
+            .expect("read file_path_sets count"),
+        1
+    );
+    assert_eq!(
+        storage
+            .connection()
+            .borrow()
+            .query_row(
+                "SELECT COUNT(*) FROM file_path_set_action_refs",
+                [],
+                |row| { row.get::<_, i64>(0) }
+            )
+            .expect("read file_path_set_action_refs count"),
+        2
+    );
+    assert_eq!(
+        storage
+            .connection()
+            .borrow()
             .query_row("SELECT COUNT(*) FROM file_path_set_chunk_refs", [], |row| {
                 row.get::<_, i64>(0)
             })
             .expect("read file_path_set_chunk_refs count"),
-        4
+        2
     );
 
     let page = storage
         .file_path_set_paths_page(trace_id, "action-2", 1, 2)
         .expect("read file path set page")
         .expect("path set should exist");
-    assert_eq!(page.path_set_id, "set-2");
+    assert_eq!(page.path_set_id, identity.path_set_id);
     assert_eq!(page.total_count, 3);
     assert_eq!(page.paths.len(), 2);
     assert_eq!(page.paths[0].path, "/tmp/b");
     assert_eq!(page.paths[1].path, "/tmp/c");
+}
+
+#[test]
+fn llm_request_content_reconstructs_body_and_reuses_blocks() {
+    let mut storage = SqliteStorage::open_in_memory().expect("open in-memory sqlite storage");
+    let trace_id = TraceId::new(1);
+    for action_id in ["request-1", "request-2"] {
+        let mut request = action(action_id, SemanticActionStatus::Success);
+        request.kind = SemanticActionKind::LlmRequest;
+        storage
+            .upsert_semantic_action(request)
+            .expect("write request action");
+    }
+
+    storage
+        .upsert_llm_request_contents(&[
+            llm_request_content(trace_id, "request-1"),
+            llm_request_content(trace_id, "request-2"),
+        ])
+        .expect("write LLM request contents");
+
+    assert_eq!(
+        storage
+            .connection()
+            .borrow()
+            .query_row("SELECT COUNT(*) FROM llm_request_blocks", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .expect("read llm_request_blocks count"),
+        1
+    );
+    assert_eq!(
+        storage
+            .connection()
+            .borrow()
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('llm_request_block_refs')
+                 WHERE name IN ('trace_id', 'action_id', 'block_hash', 'block_kind')",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .expect("read compact ref schema"),
+        0
+    );
+    let page = storage
+        .llm_request_content_page(trace_id, "request-2", 4096)
+        .expect("read LLM request content")
+        .expect("content should exist");
+    assert_eq!(
+        page.body_json,
+        r#"{"messages":[{"content":"hello","role":"user"}],"model":"m"}"#
+    );
+    assert!(!page.truncated);
 }
 
 fn install_write_audit(storage: &SqliteStorage) {
@@ -191,4 +272,42 @@ fn evidence(id: u64) -> SemanticEvidence {
         id,
         role: "llm.payload".to_string(),
     }
+}
+
+fn llm_request_content(trace_id: TraceId, action_id: &str) -> LlmRequestContentWrite {
+    let body_json = r#"{"messages":[{"content":"hello","role":"user"}],"model":"m"}"#;
+    let block_json = r#"{"content":"hello","role":"user"}"#;
+    let block_hash = sha256_hex(block_json.as_bytes());
+    LlmRequestContentWrite {
+        manifest: LlmRequestManifest {
+            trace_id,
+            action_id: action_id.to_string(),
+            format_version: 1,
+            canonical_body_hash: sha256_hex(body_json.as_bytes()),
+            canonical_body_bytes: body_json.len() as u64,
+            skeleton_json: r#"{"messages":[{"$actrail_llm_block":0}],"model":"m"}"#.to_string(),
+        },
+        block_refs: vec![LlmRequestBlockRef {
+            trace_id,
+            action_id: action_id.to_string(),
+            ordinal: 0,
+            block_hash: block_hash.clone(),
+        }],
+        blocks: vec![LlmRequestBlock {
+            trace_id,
+            block_hash,
+            uncompressed_bytes: block_json.len() as u64,
+            encoded_bytes: block_json.as_bytes().to_vec(),
+        }],
+    }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut output = String::from("sha256:");
+    for byte in digest {
+        use std::fmt::Write as _;
+        write!(&mut output, "{byte:02x}").expect("writing to string cannot fail");
+    }
+    output
 }
