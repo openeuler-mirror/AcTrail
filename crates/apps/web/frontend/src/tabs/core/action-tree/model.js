@@ -338,6 +338,24 @@ function attributePriority(kind) {
       'sse.data_json_state',
     ];
   }
+  if (kind === 'command.invocation') {
+    return [
+      'command.failure.summary',
+      'command.exit_code',
+      'command.line',
+      'process.executable',
+      'cwd',
+    ];
+  }
+  if (kind === 'process.exec') {
+    return [
+      'process.failure.summary',
+      'process.exit_code',
+      'process.executable',
+      'command_line',
+      'cwd',
+    ];
+  }
   return [];
 }
 

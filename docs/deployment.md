@@ -31,8 +31,7 @@ python3 docs/preflight/platform_preflight.py --run-smoke --color always
 
 Required host capabilities are documented in [platform-requirements.md](platform-requirements.md). Distribution name is not enough; openEuler 24.03 and similar systems must still expose BTF, tracefs, permitted perf tracepoint attach, seccomp user notification, pidfd support, and any feature-specific kernel APIs such as fanotify permission events.
 
-The eBPF process fork path uses `sched/sched_process_fork`. The syscall tracepoint `syscalls/sys_enter_fork` is not a deployment prerequisite. Some architectures also omit compatibility fd-alias syscalls such as `syscalls/sys_enter_dup2`; AcTrail treats `dup2`/`dup3` fd-alias tracepoints as optional and continues with the core socket/file payload tracepoints when they are unavailable.
-Launch-time process seccomp resolves configured process-control names through the target architecture. For example, ARM64 targets that do not expose standalone `fork` or `vfork` syscalls use the available `clone`/`clone3` process-creation notifications instead of failing during filter construction.
+The eBPF process fork path uses `sched/sched_process_fork`. The syscall tracepoint `syscalls/sys_enter_fork` is not a deployment prerequisite. Some architectures also omit compatibility fd-alias syscalls such as `syscalls/sys_enter_dup2`; AcTrail treats `dup2`/`dup3` fd-alias tracepoints as optional and continues with the core socket/file payload tracepoints when they are unavailable. Launch-time process seccomp resolves configured process-control names through the target architecture. For example, ARM64 targets that do not expose standalone `fork` or `vfork` syscalls use the available `clone`/`clone3` process-creation notifications instead of failing during filter construction.
 
 ## Operator Config Layout
 
@@ -67,6 +66,7 @@ For a persistent deployment, review these fields first:
 | `socket_path` | Local Unix socket used by `actrailctl`; keep it private to the host. |
 | `socket_mode_octal` | File mode for the control socket. |
 | `control_pending_connection_max` | Maximum number of simultaneously pending control socket clients; keep the default `256` unless one daemon must coordinate many concurrently connecting agents. |
+| `active_trace_max` | Maximum number of simultaneously non-terminal traces admitted by one daemon. The default `128` admits 100 concurrent agent or local-command launches with headroom while bounding daemon collector state. |
 | `pid_file` | Used by `actraild start/stop/status/restart`. |
 | `storage_backend` | Storage backend implementation. Current supported value: `sqlite`. |
 | `storage_sqlite_path` | SQLite storage location; place it on a filesystem with enough space for payload retention. |
@@ -158,11 +158,7 @@ payload_stdio_retention_max_bytes_per_trace
 payload_socket_retention_max_bytes_per_trace
 ```
 
-Stdio payload storage is controlled before persistence by
-`payload_stdio_stdin_storage_mode`, `payload_stdio_stdout_storage_mode`, and
-`payload_stdio_stderr_storage_mode`. Use `drop` for streams that should not be
-stored, and `metadata-only` when only segment timing/process metadata should be
-kept.
+Stdio payload storage is controlled before persistence by `payload_stdio_stdin_storage_mode`, `payload_stdio_stdout_storage_mode`, and `payload_stdio_stderr_storage_mode`. Use `drop` for streams that should not be stored, and `metadata-only` when only segment timing/process metadata should be kept.
 
 Socket BPF direct-copy is controlled by `payload_socket_max_segment_bytes`; the current stable socket BPF event ABI caps that inline copy at `4095` bytes. Larger socket operations fall back to user-read when `payload_socket_capture_backend = bpf-copy-seccomp-fallback`; that path is capped by `payload_socket_max_operation_bytes`. The default operation cap is `4194304` bytes, so HTTP LLM requests up to 4MB are still captured as complete plaintext without forcing every small socket event to reserve a fixed multi-MB ringbuf record. Values above the configured operation cap are retained as partial/truncated payloads and must not be treated as complete `llm.request`. Vectored outbound socket syscalls (`writev` and `sendmsg`) are user-read fallback only because their payload is described by `iovec`/`msghdr` rather than a single linear buffer.
 

@@ -24,6 +24,7 @@ use model_core::ids::{ProfileName, RequestId, TraceId, TraceName};
 use model_core::process::SuppressedFdPurpose;
 
 use crate::output::format_reply;
+use crate::process_ref::process_ref;
 use crate::transport::ControlClientPort;
 use controlled::{ChildSetup, ControlledChild};
 use seccomp::{SeccompSetup, register_listener};
@@ -87,10 +88,11 @@ pub(crate) fn run_launch(
         None
     };
     let mut child = ControlledChild::spawn(command, child_setup)?;
+    let child_ref = process_ref(child.pid())?;
 
     let reply = match client.send(ControlCommand::TrackAdd(TrackAddCommand {
         request_id,
-        root_pid: child.pid(),
+        root: child_ref.clone(),
         display_name: request.display_name,
         profile_name: request.profile_name,
         tags: request.tags,
@@ -116,9 +118,14 @@ pub(crate) fn run_launch(
     };
     println!("{}", format_reply(&reply));
 
-    if let Err(error) =
-        register_seccomp_listener_if_needed(client, request_id, trace_id, seccomp_enabled, &child)
-    {
+    if let Err(error) = register_seccomp_listener_if_needed(
+        client,
+        request_id,
+        trace_id,
+        seccomp_enabled,
+        &child,
+        child_ref,
+    ) {
         child.terminate();
         remove_launch_root_best_effort(
             client,
@@ -198,6 +205,7 @@ fn register_seccomp_listener_if_needed(
     trace_id: TraceId,
     seccomp_enabled: bool,
     child: &ControlledChild,
+    child_ref: control_contract::command::ProcessRef,
 ) -> Result<(), String> {
     if !seccomp_enabled {
         return Ok(());
@@ -209,7 +217,7 @@ fn register_seccomp_listener_if_needed(
         client,
         next_request_id(request_id)?,
         trace_id,
-        child.pid(),
+        child_ref,
         listener_fd,
     )
 }

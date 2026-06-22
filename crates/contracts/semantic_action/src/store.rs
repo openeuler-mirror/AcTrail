@@ -3,7 +3,8 @@
 use model_core::ids::TraceId;
 
 use crate::model::{
-    FileObservationPath, FilePathSetPathPage, FilePathSetWrite, SemanticAction, SemanticActionLink,
+    FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
+    LlmRequestContentWrite, SemanticAction, SemanticActionLink,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -41,6 +42,11 @@ pub trait SemanticActionWriteStore {
         &mut self,
         path_sets: &[FilePathSetWrite],
     ) -> Result<(), SemanticActionStoreError>;
+
+    fn upsert_llm_request_contents(
+        &mut self,
+        contents: &[LlmRequestContentWrite],
+    ) -> Result<(), SemanticActionStoreError>;
 }
 
 pub trait SemanticActionReadStore {
@@ -61,4 +67,11 @@ pub trait SemanticActionReadStore {
         offset: usize,
         limit: usize,
     ) -> Result<Option<FilePathSetPathPage>, SemanticActionStoreError>;
+
+    fn llm_request_content_page(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+        max_bytes: usize,
+    ) -> Result<Option<LlmRequestContentPage>, SemanticActionStoreError>;
 }

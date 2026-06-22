@@ -130,7 +130,7 @@ static __always_inline int store_socket_payload_op(
     __u32 require_tracked_fd
 ) {
     __u64 pid_tgid = current_pid_tgid();
-    __u32 tgid = current_namespace_tgid();
+    __u32 tgid = pid_tgid >> 32;
     __u64 *trace_id = bpf_map_lookup_elem(&tracked_traces, &tgid);
     struct actrail_socket_payload_config *config = socket_payload_config();
     struct actrail_pending_socket_payload_op op = {};
@@ -195,7 +195,7 @@ static __always_inline int emit_socket_payload_completion(
 
 static __always_inline int emit_socket_payload_op(struct trace_event_raw_sys_exit *ctx) {
     __u64 pid_tgid = current_pid_tgid();
-    __u32 tgid = current_namespace_tgid();
+    __u32 tgid = pid_tgid >> 32;
     __u32 tid = (__u32)pid_tgid;
     struct actrail_pending_socket_payload_op *op =
         bpf_map_lookup_elem(&pending_socket_payload_ops, &pid_tgid);
@@ -305,7 +305,7 @@ static __always_inline int store_socket_payload_sendmsg_op(
     struct trace_event_raw_sys_enter *ctx
 ) {
     __u64 pid_tgid = current_pid_tgid();
-    __u32 tgid = current_namespace_tgid();
+    __u32 tgid = pid_tgid >> 32;
     __u64 *trace_id = bpf_map_lookup_elem(&tracked_traces, &tgid);
     struct actrail_socket_payload_config *config = socket_payload_config();
     struct actrail_pending_socket_payload_op op = {};
@@ -375,7 +375,7 @@ static __always_inline void socket_payload_track_connect_exit(
     struct trace_event_raw_sys_exit *ctx
 ) {
     __u64 pid_tgid = current_pid_tgid();
-    __u32 tgid = current_namespace_tgid();
+    __u32 tgid = pid_tgid >> 32;
     struct actrail_pending_net_op *op = bpf_map_lookup_elem(&pending_net_ops, &pid_tgid);
 
     if (!tgid || !op || op->kind != ACTRAIL_NET_CONNECT) {
@@ -390,7 +390,7 @@ static __always_inline void socket_payload_track_connect_exit(
 static __always_inline void socket_payload_track_accept_exit(
     struct trace_event_raw_sys_exit *ctx
 ) {
-    __u32 tgid = current_namespace_tgid();
+    __u32 tgid = current_tgid();
 
     if (!tgid || ctx->ret < 0) {
         return;
@@ -401,7 +401,7 @@ static __always_inline void socket_payload_track_accept_exit(
 static __always_inline void socket_payload_close_enter(
     struct trace_event_raw_sys_enter *ctx
 ) {
-    __u32 tgid = current_namespace_tgid();
+    __u32 tgid = current_tgid();
 
     if (!tgid) {
         return;
@@ -416,7 +416,7 @@ static __always_inline void socket_payload_dup_enter(
     __u32 mode
 ) {
     __u64 pid_tgid = current_pid_tgid();
-    __u32 tgid = current_namespace_tgid();
+    __u32 tgid = pid_tgid >> 32;
     struct actrail_socket_payload_config *config = socket_payload_config();
     struct actrail_pending_socket_dup_op op = {};
     __u32 source_fd = (__u32)ctx->args[source_fd_arg];
@@ -460,7 +460,7 @@ static __always_inline void socket_payload_dup_exit(
     struct trace_event_raw_sys_exit *ctx
 ) {
     __u64 pid_tgid = current_pid_tgid();
-    __u32 tgid = current_namespace_tgid();
+    __u32 tgid = pid_tgid >> 32;
     struct actrail_pending_socket_dup_op *op =
         bpf_map_lookup_elem(&pending_socket_dup_ops, &pid_tgid);
     __u32 new_fd;

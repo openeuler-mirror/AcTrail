@@ -7,7 +7,8 @@ use model_core::payload::PayloadSegment;
 use model_core::process::{ProcessIdentity, ProcessMembership};
 use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
 use semantic_action::{
-    FileObservationPath, FilePathSetPathPage, FilePathSetWrite, SemanticAction, SemanticActionLink,
+    FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
+    LlmRequestContentWrite, SemanticAction, SemanticActionLink,
 };
 use storage_core::{
     ExportLease, PayloadSegmentQuery, RetentionCandidate, SemanticActionChildPage,
@@ -181,6 +182,14 @@ impl StorageBackend for SqliteStorage {
             .map_err(StorageError::from)
     }
 
+    fn upsert_llm_request_contents(
+        &mut self,
+        contents: &[LlmRequestContentWrite],
+    ) -> Result<(), StorageError> {
+        semantic_action::SemanticActionWriteStore::upsert_llm_request_contents(self, contents)
+            .map_err(StorageError::from)
+    }
+
     fn list_semantic_actions(
         &self,
         trace_id: TraceId,
@@ -344,6 +353,18 @@ impl StorageBackend for SqliteStorage {
     ) -> Result<Option<FilePathSetPathPage>, StorageError> {
         semantic_action::SemanticActionReadStore::file_path_set_paths_page(
             self, trace_id, action_id, offset, limit,
+        )
+        .map_err(StorageError::from)
+    }
+
+    fn llm_request_content_page(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+        max_bytes: usize,
+    ) -> Result<Option<LlmRequestContentPage>, StorageError> {
+        semantic_action::SemanticActionReadStore::llm_request_content_page(
+            self, trace_id, action_id, max_bytes,
         )
         .map_err(StorageError::from)
     }

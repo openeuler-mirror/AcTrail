@@ -4,14 +4,29 @@ use std::collections::BTreeSet;
 use std::os::fd::RawFd;
 
 use model_core::ids::{ProfileName, RequestId, TraceId, TraceName};
-use model_core::process::InitialSuppressedFd;
+use model_core::process::{InitialSuppressedFd, NamespaceIdentity};
 
 use crate::selector::TraceSelector;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProcessRef {
+    pub namespace_pid: u32,
+    pub pid_namespace: NamespaceIdentity,
+}
+
+impl ProcessRef {
+    pub fn new(namespace_pid: u32, pid_namespace: NamespaceIdentity) -> Self {
+        Self {
+            namespace_pid,
+            pid_namespace,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TrackAddCommand {
     pub request_id: RequestId,
-    pub root_pid: u32,
+    pub root: ProcessRef,
     pub display_name: TraceName,
     pub profile_name: ProfileName,
     pub tags: BTreeSet<String>,
@@ -23,7 +38,7 @@ pub struct TrackAddCommand {
 pub struct RegisterSeccompListenerCommand {
     pub request_id: RequestId,
     pub trace_id: TraceId,
-    pub target_pid: u32,
+    pub target: ProcessRef,
     pub listener_fd: Option<RawFd>,
 }
 

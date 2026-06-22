@@ -6,6 +6,7 @@ pub const OPERATOR_CONFIG_TEMPLATE: &str = r#"# AcTrail default operator configu
 socket_path = /run/actrail/control.sock
 socket_mode_octal = 660
 control_pending_connection_max = 256
+active_trace_max = 128
 pid_file = /run/actrail/actraild.pid
 storage_backend = sqlite
 storage_sqlite_path = /var/lib/actrail/actrail.sqlite
@@ -161,7 +162,7 @@ content_owner = highest_consumed
 
 [semantic_retention.L0_llm_call]
 enabled = true
-request_content = full_provider_json
+request_content = canonical_blocks
 response_content = assembled_provider
 tool_calls = assembled_json
 usage = summary
@@ -198,16 +199,21 @@ path = /dev/pts/*
 operation = open
 operation = close
 operation = read
+operation = readv
 operation = write
-raw_event_retention = errors_only
+operation = writev
+operation = truncate
+raw_event_retention = summary
+summary_flush_interval_ms = 5000
 
 [file_observation.bulk_read]
 enabled = true
 mode = path_set
 raw_event_retention = errors_only
-min_unique_paths = 128
+min_unique_paths = 16
 max_paths_per_set = 4096
 path_set_chunk_max_paths = 256
+pending_event_max = 256
 
 [file_observation.enumerate]
 enabled = true

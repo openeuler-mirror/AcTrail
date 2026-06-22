@@ -35,5 +35,4 @@ python3 docs/preflight/claude_native_profile.py \
   --json-output /tmp/actrail-claude-native-profile.json
 ```
 
-`status=supported` means the host can run the Claude TLS capture example with the reported auto-plan provider. `status=profile_missing` means the executable stayed on the target host, but AcTrail still needs finder support for that runtime before the Claude payload case can pass. The JSON contains the package name/version, native package, arch, GNU build-id, SHA-256, OpenSSL symbol scan, and fast-plan error.
-needed to add that profile.
+`status=supported` means the host can run the Claude TLS capture example with the reported auto-plan provider. `status=profile_missing` means the executable stayed on the target host, but AcTrail still needs finder support for that runtime before the Claude payload case can pass. The JSON contains the package name/version, native package, arch, GNU build-id, SHA-256, OpenSSL symbol scan, and fast-plan error. needed to add that profile.

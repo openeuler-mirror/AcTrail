@@ -1,6 +1,7 @@
 //! File-descriptor I/O decoding for non-socket targets.
 
 use std::collections::BTreeMap;
+use std::os::unix::fs::FileTypeExt;
 use std::time::SystemTime;
 
 use collector_event::{RawCollectorEvent, RawEventEnvelope, RawObservationPayload};
@@ -12,7 +13,19 @@ use crate::decode::FileTracker;
 use crate::decode::{DecodeError, NET_EVENT_RECV, NET_EVENT_SEND};
 use crate::loader::KernelObservationEvent;
 use crate::maps::BindingStateMap;
-use crate::procfs::{FdObservation, FdTargetKind, resolve_fd_observation};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FdTargetKind {
+    Fifo,
+    UnixSocket,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FdObservation {
+    kind: FdTargetKind,
+    target: String,
+    metadata: BTreeMap<String, String>,
+}
 
 pub(super) fn operation(kind: u32) -> (&'static str, &'static str) {
     match kind {
@@ -31,7 +44,32 @@ pub(super) fn decode(
     file_tracker: &mut FileTracker,
 ) -> Result<Option<RawCollectorEvent>, DecodeError> {
     if bindings.trace_has_capability(event.trace_id, &Capability::FsAccessBasic) {
-        if let Some(path) = file_tracker.resolve_fd_path(event.pid, event.fd) {
+        if let Some(path) = file_tracker.resolve_fd_path(event.trace_id, &identity, event.fd) {
+            if let Some(kind) = tracked_path_ipc_kind(&path)
+                && ipc_capability_enabled(kind, bindings, event.trace_id)
+            {
+                let observation = FdObservation {
+                    kind,
+                    target: path,
+                    metadata: BTreeMap::from([(
+                        "fd_target_source".to_string(),
+                        "file_tracker".to_string(),
+                    )]),
+                };
+                let metadata = fd_io_metadata(&event, operation, direction, &observation);
+                return Ok(Some(RawCollectorEvent {
+                    envelope: RawEventEnvelope {
+                        observed_at: SystemTime::now(),
+                        process: identity,
+                        collector: CollectorName::new("ebpf"),
+                    },
+                    payload: RawObservationPayload::Ipc {
+                        channel: fd_channel(observation.kind).to_string(),
+                        peer: Some(observation.target),
+                        metadata,
+                    },
+                }));
+            }
             let metadata = tracked_file_metadata(&event, operation, direction, &path);
             return Ok(Some(RawCollectorEvent {
                 envelope: RawEventEnvelope {
@@ -47,30 +85,18 @@ pub(super) fn decode(
             }));
         }
     }
-    if !ipc_observation_enabled(bindings, event.trace_id) {
-        return Ok(None);
-    }
-    let observation = resolve_fd_observation(event.pid, event.fd)
-        .map_err(|error| DecodeError::new("fd_observation", error))?;
-    let Some(observation) = observation else {
-        return Ok(None);
-    };
-    let metadata = fd_io_metadata(&event, operation, direction, &observation);
-    if ipc_capability_enabled(observation.kind, bindings, event.trace_id) {
-        return Ok(Some(RawCollectorEvent {
-            envelope: RawEventEnvelope {
-                observed_at: SystemTime::now(),
-                process: identity,
-                collector: CollectorName::new("ebpf"),
-            },
-            payload: RawObservationPayload::Ipc {
-                channel: fd_channel(observation.kind).to_string(),
-                peer: Some(observation.target),
-                metadata,
-            },
-        }));
-    }
     Ok(None)
+}
+
+fn tracked_path_ipc_kind(path: &str) -> Option<FdTargetKind> {
+    let metadata = std::fs::metadata(path).ok()?;
+    if metadata.file_type().is_fifo() {
+        Some(FdTargetKind::Fifo)
+    } else if metadata.file_type().is_socket() {
+        Some(FdTargetKind::UnixSocket)
+    } else {
+        None
+    }
 }
 
 fn fd_io_metadata(
@@ -139,11 +165,8 @@ fn fd_io_size(kind: u32, result: i32) -> Option<u64> {
 
 fn fd_channel(kind: FdTargetKind) -> &'static str {
     match kind {
-        FdTargetKind::Pipe => "pipe",
         FdTargetKind::Fifo => "fifo",
         FdTargetKind::UnixSocket => "unix_socket",
-        FdTargetKind::Socket => "socket",
-        FdTargetKind::RegularFile | FdTargetKind::Other => "fd",
     }
 }
 
@@ -153,28 +176,16 @@ fn ipc_capability_enabled(
     trace_id: model_core::ids::TraceId,
 ) -> bool {
     match kind {
-        FdTargetKind::Pipe | FdTargetKind::Fifo => {
-            bindings.trace_has_capability(trace_id, &Capability::IpcPipeFifo)
-        }
+        FdTargetKind::Fifo => bindings.trace_has_capability(trace_id, &Capability::IpcPipeFifo),
         FdTargetKind::UnixSocket => {
             bindings.trace_has_capability(trace_id, &Capability::IpcUnixSocket)
         }
-        FdTargetKind::RegularFile | FdTargetKind::Socket | FdTargetKind::Other => false,
     }
-}
-
-fn ipc_observation_enabled(bindings: &BindingStateMap, trace_id: model_core::ids::TraceId) -> bool {
-    bindings.trace_has_capability(trace_id, &Capability::IpcPipeFifo)
-        || bindings.trace_has_capability(trace_id, &Capability::IpcUnixSocket)
 }
 
 fn fd_target_kind(kind: FdTargetKind) -> &'static str {
     match kind {
-        FdTargetKind::RegularFile => "regular_file",
-        FdTargetKind::Pipe => "pipe",
         FdTargetKind::Fifo => "fifo",
         FdTargetKind::UnixSocket => "unix_socket",
-        FdTargetKind::Socket => "socket",
-        FdTargetKind::Other => "other",
     }
 }

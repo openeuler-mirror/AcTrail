@@ -123,8 +123,13 @@ pub fn decode_stdio_payload(
     bindings: &BindingStateMap,
     identity_reader: &ProcfsIdentityReader,
 ) -> Result<RawPayloadSegment, DecodeError> {
-    let identity =
-        resolve_payload_identity(event.pid, event.pid_generation, bindings, identity_reader)?;
+    let identity = resolve_payload_identity(
+        event.trace_id,
+        event.pid,
+        event.pid_generation,
+        bindings,
+        identity_reader,
+    )?;
     let stream = stdio_stream(event.stream)?;
 
     Ok(RawPayloadSegment {
@@ -156,8 +161,13 @@ pub fn decode_socket_payload(
     bindings: &BindingStateMap,
     identity_reader: &ProcfsIdentityReader,
 ) -> Result<RawPayloadSegment, DecodeError> {
-    let identity =
-        resolve_payload_identity(event.pid, event.pid_generation, bindings, identity_reader)?;
+    let identity = resolve_payload_identity(
+        event.trace_id,
+        event.pid,
+        event.pid_generation,
+        bindings,
+        identity_reader,
+    )?;
 
     Ok(RawPayloadSegment {
         trace_id: event.trace_id,
@@ -275,12 +285,13 @@ pub fn decode_tls_diagnostic(event: KernelTlsDiagnosticEvent) -> TlsDiagnosticEv
 }
 
 fn resolve_payload_identity(
+    trace_id: TraceId,
     pid: u32,
     generation: u64,
     bindings: &BindingStateMap,
     identity_reader: &ProcfsIdentityReader,
 ) -> Result<model_core::process::ProcessIdentity, DecodeError> {
-    resolve_event_identity(pid, generation, bindings, identity_reader)
+    resolve_event_identity(trace_id, pid, generation, bindings, identity_reader)
         .map_err(|error| DecodeError::new("payload_identity", error))
 }
 

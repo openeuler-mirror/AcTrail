@@ -22,9 +22,22 @@
       <p class="detail-error">{{ panelError }}</p>
     </section>
 
+    <LlmInsightPanel
+      :detail="detail"
+      :request-content="llmRequestContent"
+      :request-loading="llmRequestLoading"
+      :request-error="llmRequestError"
+    />
+    <HttpInsightPanel :detail="detail" />
+    <CommandInsightPanel :detail="detail" />
+
     <section v-if="Object.keys(detailAttributes).length" class="detail-section">
       <h3>Attributes</h3>
-      <JsonTree :value="detailAttributes" />
+      <JsonTree
+        :value="detailAttributes"
+        :expanded-paths="jsonExpandedPaths('attributes')"
+        @toggle-node="updateJsonExpansion('attributes', $event)"
+      />
     </section>
 
     <section v-if="payloadText" class="detail-section">
@@ -60,7 +73,11 @@
 
     <section v-if="detailRawValue" class="detail-section">
       <h3>JSON</h3>
-      <JsonTree :value="detailRawValue" />
+      <JsonTree
+        :value="detailRawValue"
+        :expanded-paths="jsonExpandedPaths('raw')"
+        @toggle-node="updateJsonExpansion('raw', $event)"
+      />
     </section>
   </aside>
 </template>
@@ -69,8 +86,14 @@
 import { computed, ref, watch } from 'vue';
 import { ChevronDown, X } from '@lucide/vue';
 
-import { readActionFilePathSet, readPayload } from '../api';
+import { readActionFilePathSet, readActionLlmRequestContent, readPayload } from '../api';
+import CommandInsightPanel from './CommandInsightPanel.vue';
+import HttpInsightPanel from './HttpInsightPanel.vue';
 import JsonTree from './JsonTree.vue';
+import LlmInsightPanel from './LlmInsightPanel.vue';
+
+const LLM_REQUEST_DETAIL_MAX_BYTES = 128 * 1024;
+const EMPTY_JSON_EXPANDED_PATHS = new Set();
 
 const props = defineProps({
   detail: {
@@ -97,8 +120,13 @@ const filePathSetError = ref('');
 const filePathSetLoading = ref(false);
 const filePathSetNextOffset = ref(0);
 const filePathSetHasMore = ref(false);
+const llmRequestContent = ref(null);
+const llmRequestError = ref('');
+const llmRequestLoading = ref(false);
+const jsonExpansionByKey = ref(new Map());
 let activePayloadLoad = null;
 let activeFilePathSetLoad = null;
+let activeLlmRequestLoad = null;
 
 const detailTitle = computed(() => props.detail?.title ?? 'No selection');
 const detailKind = computed(() => props.detail?.kind ?? 'detail');
@@ -127,6 +155,7 @@ watch(
   ([nextDetail, traceId]) => {
     resetPayloadLoad();
     resetFilePathSetLoad();
+    resetLlmRequestLoad();
     if (nextDetail?.payloadId && traceId) {
       loadPayload(traceId, nextDetail.payloadId, activePayloadLoad);
     }
@@ -138,6 +167,13 @@ watch(
         offset: 0,
         append: false,
         token: activeFilePathSetLoad,
+      });
+    }
+    if (llmRequestActionId(nextDetail) && traceId) {
+      loadLlmRequestContent({
+        traceId,
+        actionId: llmRequestActionId(nextDetail),
+        token: activeLlmRequestLoad,
       });
     }
   },
@@ -160,6 +196,13 @@ function resetFilePathSetLoad() {
   filePathSetHasMore.value = false;
 }
 
+function resetLlmRequestLoad() {
+  activeLlmRequestLoad = Symbol();
+  llmRequestContent.value = null;
+  llmRequestError.value = '';
+  llmRequestLoading.value = false;
+}
+
 async function loadPayload(traceId, payloadId, token) {
   try {
     const payload = await readPayload(traceId, payloadId);
@@ -169,6 +212,26 @@ async function loadPayload(traceId, payloadId, token) {
   } catch (err) {
     if (activePayloadLoad === token) {
       payloadError.value = String(err.message ?? err);
+    }
+  }
+}
+
+async function loadLlmRequestContent({ traceId, actionId, token }) {
+  try {
+    llmRequestLoading.value = true;
+    const response = await readActionLlmRequestContent(traceId, actionId, {
+      maxBytes: LLM_REQUEST_DETAIL_MAX_BYTES,
+    });
+    if (activeLlmRequestLoad === token) {
+      llmRequestContent.value = response.content ?? null;
+    }
+  } catch (err) {
+    if (activeLlmRequestLoad === token) {
+      llmRequestError.value = String(err.message ?? err);
+    }
+  } finally {
+    if (activeLlmRequestLoad === token) {
+      llmRequestLoading.value = false;
     }
   }
 }
@@ -216,5 +279,42 @@ async function loadFilePathSetPage({ traceId, actionId, pageSize, offset, append
       filePathSetLoading.value = false;
     }
   }
+}
+
+function llmRequestActionId(detail) {
+  const action = detail?.raw;
+  if (action?.kind === 'llm.request') {
+    return action.id;
+  }
+  return null;
+}
+
+function jsonExpandedPaths(section) {
+  return jsonExpansionByKey.value.get(jsonExpansionKey(section)) ?? EMPTY_JSON_EXPANDED_PATHS;
+}
+
+function updateJsonExpansion(section, event) {
+  if (!event?.path) {
+    return;
+  }
+  const key = jsonExpansionKey(section);
+  const nextMap = new Map(jsonExpansionByKey.value);
+  const nextPaths = new Set(nextMap.get(key) ?? []);
+  if (event.expanded) {
+    nextPaths.add(event.path);
+  } else {
+    nextPaths.delete(event.path);
+  }
+  if (nextPaths.size) {
+    nextMap.set(key, nextPaths);
+  } else {
+    nextMap.delete(key);
+  }
+  jsonExpansionByKey.value = nextMap;
+}
+
+function jsonExpansionKey(section) {
+  const kind = props.detail?.raw?.kind ?? props.detail?.kind ?? 'detail';
+  return `${kind}:${section}`;
 }
 </script>

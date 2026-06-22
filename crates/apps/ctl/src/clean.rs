@@ -1,6 +1,9 @@
 //! Local cleanup for operator-configured runtime artifacts.
 
 use std::fs;
+use std::io;
+use std::os::unix::fs::FileTypeExt;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
 use config_core::daemon::OperatorConfig;
@@ -8,6 +11,8 @@ use config_core::daemon::OperatorConfig;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CleanArtifacts {
     entries: Vec<CleanEntry>,
+    daemon_pid_file: PathBuf,
+    daemon_socket_path: PathBuf,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -44,7 +49,11 @@ impl CleanArtifacts {
                 config.payload_config.tls.sync_event_socket_path.clone(),
             ));
         }
-        Self { entries }
+        Self {
+            entries,
+            daemon_pid_file: config.pid_file.clone(),
+            daemon_socket_path: config.socket_path.clone(),
+        }
     }
 }
 
@@ -67,6 +76,7 @@ impl CleanEntry {
 }
 
 pub(crate) fn run_clean(artifacts: CleanArtifacts) -> Result<i32, String> {
+    ensure_daemon_not_running(&artifacts)?;
     let mut stats = CleanStats::default();
     for node in build_clean_tree(artifacts.entries) {
         clean_node(&node, 0, &mut stats)?;
@@ -78,6 +88,77 @@ pub(crate) fn run_clean(artifacts: CleanArtifacts) -> Result<i32, String> {
         format_bytes(stats.freed_bytes)
     );
     Ok(i32::default())
+}
+
+fn ensure_daemon_not_running(artifacts: &CleanArtifacts) -> Result<(), String> {
+    if let Some(pid) = read_pid_file(&artifacts.daemon_pid_file)?
+        && process_exists(pid)?
+    {
+        return Err(format!(
+            "refusing to clean while actraild appears to be running pid={pid}; run `actraild stop` first"
+        ));
+    }
+    if socket_has_active_listener(&artifacts.daemon_socket_path)? {
+        return Err(format!(
+            "refusing to clean while actraild socket {} has an active listener; run `actraild stop` first",
+            artifacts.daemon_socket_path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn read_pid_file(path: &Path) -> Result<Option<u32>, String> {
+    let raw = match fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("read pid file {}: {error}", path.display())),
+    };
+    let pid = raw
+        .trim()
+        .parse::<u32>()
+        .map_err(|error| format!("invalid pid file {}: {error}", path.display()))?;
+    if pid == u32::default() {
+        return Err(format!(
+            "invalid pid file {}: pid must not be zero",
+            path.display()
+        ));
+    }
+    Ok(Some(pid))
+}
+
+fn process_exists(pid: u32) -> Result<bool, String> {
+    let raw_pid =
+        libc::pid_t::try_from(pid).map_err(|error| format!("invalid pid {pid}: {error}"))?;
+    let result = unsafe { libc::kill(raw_pid, libc::c_int::default()) };
+    if result == libc::c_int::default() {
+        return Ok(true);
+    }
+    match io::Error::last_os_error().raw_os_error() {
+        Some(errno) if errno == libc::ESRCH => Ok(false),
+        Some(errno) if errno == libc::EPERM => Ok(true),
+        Some(errno) => Err(format!("check pid={pid} failed with errno {errno}")),
+        None => Err(format!("check pid={pid} failed")),
+    }
+}
+
+fn socket_has_active_listener(path: &Path) -> Result<bool, String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(format!("inspect socket {}: {error}", path.display())),
+    };
+    if !metadata.file_type().is_socket() {
+        return Ok(false);
+    }
+    match UnixStream::connect(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => Ok(false),
+        Err(error) => Err(format!(
+            "refusing to clean because socket {} could not be verified stale: {error}",
+            path.display()
+        )),
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

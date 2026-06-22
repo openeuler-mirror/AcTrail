@@ -316,7 +316,7 @@ static __always_inline void cleanup_suppressed_fds_for_process(
 static __always_inline int suppressed_fd_close_enter(
     struct trace_event_raw_sys_enter *ctx
 ) {
-    __u32 pid = current_namespace_tgid();
+    __u32 pid = current_tgid();
     __u32 fd = (__u32)ctx->args[0];
     int suppressed;
 
@@ -340,7 +340,7 @@ static __always_inline int suppressed_fd_dup_enter(
     __u32 mode
 ) {
     __u64 pid_tgid = current_pid_tgid();
-    __u32 pid = current_namespace_tgid();
+    __u32 pid = pid_tgid >> 32;
     struct actrail_suppressed_fd_value *source;
     struct actrail_suppressed_fd_value *target;
     struct actrail_pending_suppressed_fd_dup_op op = {};
@@ -387,7 +387,7 @@ static __always_inline void suppressed_fd_dup_exit(
     struct trace_event_raw_sys_exit *ctx
 ) {
     __u64 pid_tgid = current_pid_tgid();
-    __u32 pid = current_namespace_tgid();
+    __u32 pid = pid_tgid >> 32;
     __u64 *generation = lookup_process_generation(pid);
     struct actrail_pending_suppressed_fd_dup_op *op =
         bpf_map_lookup_elem(&pending_suppressed_fd_dup_ops, &pid_tgid);

@@ -28,6 +28,7 @@ fn socket_payload_gate_persists_http_and_drops_non_http_bytes() {
         profiles,
         super::super::ebpf_config(false),
         payload_config,
+        super::super::DEFAULT_ACTIVE_TRACE_MAX,
         DiagnosticLogLevel::Info,
         super::super::seccomp_notify_disabled(),
         super::super::process_seccomp_disabled(),

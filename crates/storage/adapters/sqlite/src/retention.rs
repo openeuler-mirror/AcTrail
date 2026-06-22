@@ -113,6 +113,14 @@ impl RetentionStore for SqliteStorage {
             })?;
         transaction
             .execute(
+                "DELETE FROM file_path_set_action_refs WHERE trace_id = ?1",
+                params![trace_id.get()],
+            )
+            .map_err(|error| {
+                RetentionError::new("delete_file_path_set_action_refs", error.to_string())
+            })?;
+        transaction
+            .execute(
                 "DELETE FROM file_path_set_chunks WHERE trace_id = ?1",
                 params![trace_id.get()],
             )
@@ -131,6 +139,31 @@ impl RetentionStore for SqliteStorage {
                 params![trace_id.get()],
             )
             .map_err(|error| RetentionError::new("delete_file_paths", error.to_string()))?;
+        transaction
+            .execute(
+                "DELETE FROM llm_request_block_refs
+                 WHERE manifest_id IN (
+                     SELECT manifest_id FROM llm_request_manifests WHERE trace_id = ?1
+                 )",
+                params![trace_id.get()],
+            )
+            .map_err(|error| {
+                RetentionError::new("delete_llm_request_block_refs", error.to_string())
+            })?;
+        transaction
+            .execute(
+                "DELETE FROM llm_request_manifests WHERE trace_id = ?1",
+                params![trace_id.get()],
+            )
+            .map_err(|error| {
+                RetentionError::new("delete_llm_request_manifests", error.to_string())
+            })?;
+        transaction
+            .execute(
+                "DELETE FROM llm_request_blocks WHERE trace_id = ?1",
+                params![trace_id.get()],
+            )
+            .map_err(|error| RetentionError::new("delete_llm_request_blocks", error.to_string()))?;
         transaction
             .execute(
                 "DELETE FROM semantic_actions WHERE trace_id = ?1",

@@ -1,5 +1,8 @@
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
+use collector_event::{RawCollectorEvent, RawEventEnvelope, RawObservationPayload};
 use config_core::daemon::{ApplicationProtocolConfig, DiagnosticLogLevel, SseDataPolicy};
 use export_core::{
     ExportError, ExportPublishResult, ExportRuntime, SemanticActionExportRecord,
@@ -7,7 +10,7 @@ use export_core::{
 };
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use model_core::diagnostics::{DiagnosticKind, DiagnosticSeverity};
-use model_core::ids::{ProfileName, TraceName};
+use model_core::ids::{CollectorName, ProfileName, TraceName};
 use model_core::payload::{
     PayloadContentState, PayloadDirection, PayloadOperationCompletionState, PayloadSourceBoundary,
     PayloadStreamKey, PayloadTruncationState,
@@ -22,6 +25,7 @@ const FAILING_EXPORTER_NAME: &str = "test-failing-exporter";
 const FAILING_EXPORTER_QUEUE_CAPACITY: u32 = 4;
 const FAILING_EXPORTER_ERROR_CODE: &str = "test_exporter_unavailable";
 const FAILING_EXPORTER_ERROR_MESSAGE: &str = "forced exporter failure";
+const RECORDING_EXPORTER_NAME: &str = "test-recording-exporter";
 const LIVE_EXPORT_PAYLOAD_SEQUENCE: u64 = 1;
 const LIVE_EXPORT_OPERATION_OFFSET: u64 = 0;
 
@@ -37,6 +41,7 @@ fn live_exporter_failure_is_diagnostic_not_payload_failure() {
         profiles,
         super::ebpf_config(false),
         super::payload_config(true),
+        super::DEFAULT_ACTIVE_TRACE_MAX,
         DiagnosticLogLevel::Info,
         super::seccomp_notify_disabled(),
         super::process_seccomp_disabled(),
@@ -152,6 +157,72 @@ fn live_exporter_failure_is_diagnostic_not_payload_failure() {
     );
 }
 
+#[test]
+fn tty_summary_is_persisted_but_not_live_exported() {
+    let storage_path = std::env::temp_dir().join(format!(
+        "actrail-tty-live-export-test-{}.sqlite",
+        std::process::id()
+    ));
+    let profiles = DaemonProfileRegistry::new();
+    let mut wiring = super::super::build_runtime_wiring(
+        &super::test_storage_config(storage_path.clone()),
+        profiles,
+        super::ebpf_config(false),
+        super::payload_config(false),
+        super::DEFAULT_ACTIVE_TRACE_MAX,
+        DiagnosticLogLevel::Info,
+        super::seccomp_notify_disabled(),
+        super::process_seccomp_disabled(),
+        super::agent_invocation_disabled(),
+        super::SemanticRetentionConfig::default(),
+        super::FileObservationConfig::default(),
+        super::application_protocol_disabled(),
+        super::resource_metrics_disabled(),
+        super::workload_diagnostics_disabled(),
+        super::export_runtime_disabled(),
+        super::enforcement_disabled(),
+    )
+    .unwrap();
+    let exported = Arc::new(Mutex::new(Vec::new()));
+    wiring.attach_service.export_runtime = ExportRuntime::new(vec![Box::new(RecordingRoute {
+        actions: Arc::clone(&exported),
+    })]);
+
+    let trace_id = wiring.trace_runtime.reserve_trace_id();
+    let process = ProcessIdentity::new(920_100, 20_100, 20_100);
+    super::create_active_trace(
+        &mut wiring,
+        trace_id,
+        process.clone(),
+        ProfileName::new("tty-export"),
+        TraceName::new("tty-export"),
+        vec![CapabilityRequest::new(
+            Capability::FsAccessBasic,
+            RequestMode::Required,
+        )],
+        "ebpf",
+        vec![Capability::FsAccessBasic],
+    );
+
+    wiring
+        .attach_service
+        .process_live_event_batch(&mut wiring.trace_runtime, vec![raw_tty_write(process)])
+        .unwrap();
+
+    let actions = wiring
+        .attach_service
+        .storage
+        .list_semantic_actions(trace_id)
+        .unwrap();
+    assert!(
+        actions
+            .iter()
+            .any(|action| action.kind == SemanticActionKind::FileTtyIo)
+    );
+    assert!(exported.lock().unwrap().is_empty());
+    let _ = std::fs::remove_file(storage_path);
+}
+
 struct FailingRoute;
 
 impl SemanticActionExportRoute for FailingRoute {
@@ -174,6 +245,44 @@ impl SemanticActionExportRoute for FailingRoute {
             ExportError::new(FAILING_EXPORTER_ERROR_CODE, FAILING_EXPORTER_ERROR_MESSAGE)
                 .with_queue_capacity(FAILING_EXPORTER_QUEUE_CAPACITY),
         )
+    }
+}
+
+struct RecordingRoute {
+    actions: Arc<Mutex<Vec<SemanticActionKind>>>,
+}
+
+impl SemanticActionExportRoute for RecordingRoute {
+    fn name(&self) -> &'static str {
+        RECORDING_EXPORTER_NAME
+    }
+
+    fn publish(
+        &self,
+        record: SemanticActionExportRecord<'_>,
+    ) -> Result<ExportPublishResult, ExportError> {
+        self.actions.lock().unwrap().push(record.action.kind);
+        Ok(ExportPublishResult::delivered())
+    }
+}
+
+fn raw_tty_write(process: ProcessIdentity) -> RawCollectorEvent {
+    RawCollectorEvent {
+        envelope: RawEventEnvelope {
+            observed_at: SystemTime::UNIX_EPOCH,
+            process,
+            collector: CollectorName::new("test-file"),
+        },
+        payload: RawObservationPayload::File {
+            operation: "write".to_string(),
+            path: Some("/dev/tty".to_string()),
+            metadata: BTreeMap::from([
+                ("fd".to_string(), "1".to_string()),
+                ("fd_target".to_string(), "/dev/tty".to_string()),
+                ("result".to_string(), "128".to_string()),
+                ("size".to_string(), "128".to_string()),
+            ]),
+        },
     }
 }
 

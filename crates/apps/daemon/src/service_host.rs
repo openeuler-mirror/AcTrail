@@ -8,6 +8,7 @@ use control_contract::reply::{
     ControlError, ControlReply, DoctorReply, TraceListItem, TrackAddReply,
 };
 use control_contract::selector::TraceSelector;
+use model_core::trace::TraceLifecycleState;
 use uds_control_server::ControlService;
 
 use crate::runtime_wiring::DaemonRuntimeWiring;
@@ -93,11 +94,39 @@ where
 {
     fn handle(&mut self, command: ControlCommand) -> Result<ControlReply, ControlError> {
         match command {
-            ControlCommand::TrackAdd(command) => self
-                .wiring
-                .attach_service
-                .attach_existing(&mut self.wiring.trace_runtime, &command)
-                .map(ControlReply::TrackAdded),
+            ControlCommand::TrackAdd(command) => {
+                let active_trace_count = self
+                    .wiring
+                    .trace_runtime
+                    .list_trace_records()
+                    .into_iter()
+                    .filter(|trace| {
+                        !matches!(
+                            trace.lifecycle_state,
+                            TraceLifecycleState::Completed | TraceLifecycleState::Failed
+                        )
+                    })
+                    .count();
+                let active_trace_max =
+                    usize::try_from(self.wiring.active_trace_max).map_err(|error| {
+                        ControlError::new(
+                            "active_trace_limit",
+                            format!("active_trace_max overflow: {error}"),
+                        )
+                    })?;
+                if active_trace_count >= active_trace_max {
+                    return Err(ControlError::new(
+                        "active_trace_limit",
+                        format!(
+                            "active trace limit reached: {active_trace_count}/{active_trace_max}"
+                        ),
+                    ));
+                }
+                self.wiring
+                    .attach_service
+                    .attach_existing(&mut self.wiring.trace_runtime, &command)
+                    .map(ControlReply::TrackAdded)
+            }
             ControlCommand::RegisterSeccompListener(command) => {
                 self.wiring
                     .attach_service
@@ -164,6 +193,7 @@ mod tests {
     use std::os::fd::RawFd;
     use std::time::{Duration, SystemTime};
 
+    use config_core::daemon::DEFAULT_ACTIVE_TRACE_MAX;
     use control_contract::command::{ControlCommand, DoctorCommand, TrackAddCommand};
     use control_contract::reply::{ControlError, TrackAddReply};
     use model_core::ids::{RequestId, TraceId};
@@ -226,6 +256,7 @@ mod tests {
         let wiring = DaemonRuntimeWiring {
             trace_runtime: trace_runtime::TraceRuntime::new(Vec::new(), 1),
             attach_service: CountingAttachService::default(),
+            active_trace_max: DEFAULT_ACTIVE_TRACE_MAX,
             available_collectors: Vec::new(),
             loaded_policy_plugins: Vec::new(),
             storage_ready: true,

@@ -2,15 +2,19 @@
 
 use std::str::FromStr;
 
-pub const DEFAULT_FILE_BULK_READ_MIN_UNIQUE_PATHS: u32 = 128;
+pub const DEFAULT_FILE_BULK_READ_MIN_UNIQUE_PATHS: u32 = 16;
 pub const DEFAULT_FILE_BULK_READ_MAX_PATHS_PER_SET: u32 = 4096;
 pub const DEFAULT_FILE_BULK_READ_PATH_SET_CHUNK_MAX_PATHS: u32 = 256;
+pub const DEFAULT_FILE_BULK_READ_PENDING_EVENT_MAX: u32 = 256;
 pub const DEFAULT_FS_ENUMERATE_MIN_UNIQUE_PATHS: u32 = 2;
 pub const DEFAULT_FS_ENUMERATE_MAX_PATHS_PER_SET: u32 = 4096;
 pub const DEFAULT_FS_ENUMERATE_PATH_SET_CHUNK_MAX_PATHS: u32 = 256;
+pub const DEFAULT_FILE_TTY_SUMMARY_FLUSH_INTERVAL_MS: u32 = 5000;
 
 const DEFAULT_TTY_PATHS: &[&str] = &["/dev/tty", "/dev/pts/*"];
-const DEFAULT_TTY_OPERATIONS: &[&str] = &["open", "close", "read", "write"];
+const DEFAULT_TTY_OPERATIONS: &[&str] = &[
+    "open", "close", "read", "readv", "write", "writev", "truncate",
+];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileObservationConfig {
@@ -114,6 +118,7 @@ pub struct FileTtyObservationConfig {
     pub paths: Vec<String>,
     pub operations: Vec<String>,
     pub raw_event_retention: FileRawEventRetention,
+    pub summary_flush_interval_ms: u32,
 }
 
 impl Default for FileTtyObservationConfig {
@@ -128,19 +133,23 @@ impl Default for FileTtyObservationConfig {
                 .iter()
                 .map(|value| value.to_string())
                 .collect(),
-            raw_event_retention: FileRawEventRetention::ErrorsOnly,
+            raw_event_retention: FileRawEventRetention::Summary,
+            summary_flush_interval_ms: DEFAULT_FILE_TTY_SUMMARY_FLUSH_INTERVAL_MS,
         }
     }
 }
 
 impl FileTtyObservationConfig {
     pub fn matches(&self, path: &str, operation: &str) -> bool {
+        self.matches_path(path) && self.matches_operation(operation)
+    }
+
+    pub fn matches_operation(&self, operation: &str) -> bool {
         self.enabled
             && self
                 .operations
                 .iter()
                 .any(|candidate| candidate == operation)
-            && self.matches_path(path)
     }
 
     pub fn matches_path(&self, path: &str) -> bool {
@@ -156,6 +165,7 @@ pub struct FileBulkReadObservationConfig {
     pub min_unique_paths: u32,
     pub max_paths_per_set: u32,
     pub path_set_chunk_max_paths: u32,
+    pub pending_event_max: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -188,6 +198,7 @@ impl Default for FileBulkReadObservationConfig {
             min_unique_paths: DEFAULT_FILE_BULK_READ_MIN_UNIQUE_PATHS,
             max_paths_per_set: DEFAULT_FILE_BULK_READ_MAX_PATHS_PER_SET,
             path_set_chunk_max_paths: DEFAULT_FILE_BULK_READ_PATH_SET_CHUNK_MAX_PATHS,
+            pending_event_max: DEFAULT_FILE_BULK_READ_PENDING_EVENT_MAX,
         }
     }
 }

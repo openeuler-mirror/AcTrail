@@ -1,9 +1,6 @@
 # x86_64 BoringSSL Pattern Detector
 
-This note documents the x86_64 static-BoringSSL detector used by
-`tls-probe-point-finder/x86/`. It mirrors the existing AcTrail agent example
-logic and reports every related entry point it can derive, not only
-`SSL_write`.
+This note documents the x86_64 static-BoringSSL detector used by `tls-probe-point-finder/x86/`. It mirrors the existing AcTrail agent example logic and reports every related entry point it can derive, not only `SSL_write`.
 
 ## Signatures
 
@@ -37,10 +34,7 @@ SSL_write - SSL_read = 0xca0
 SSL_write fallback search window after SSL_read = 0x10000
 ```
 
-The primary anchor is a unique `SSL_read` match. The detector then validates the
-expected handshake location and expected write location. If the write delta does
-not match directly, it searches for a unique `SSL_write` signature in the
-documented window after `SSL_read`.
+The primary anchor is a unique `SSL_read` match. The detector then validates the expected handshake location and expected write location. If the write delta does not match directly, it searches for a unique `SSL_write` signature in the documented window after `SSL_read`.
 
 ## Output
 
@@ -52,6 +46,4 @@ symbol = SSL_read|0x...
 symbol = SSL_write|0x...
 ```
 
-The AcTrail runtime may attach only the supported subset. The finder output is
-intentionally broader so reviewers can inspect the complete relation that made
-the `SSL_write` offset credible.
+The AcTrail runtime may attach only the supported subset. The finder output is intentionally broader so reviewers can inspect the complete relation that made the `SSL_write` offset credible.

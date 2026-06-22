@@ -14,11 +14,12 @@ use config_core::daemon::{
     EbpfCollectorConfig, OPERATOR_CONFIG_TEMPLATE, OperatorConfig, PayloadConfig,
 };
 use config_core::provider_rules::ProviderRuleSetConfig;
-use control_contract::command::{ControlCommand, TrackAddCommand};
+use control_contract::command::{ControlCommand, ProcessRef, TrackAddCommand};
 use control_contract::reply::ControlReply;
 use daemon::{DaemonProfileRegistry, LocalDaemonServer};
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use model_core::ids::{ProfileName, RequestId, TraceId, TraceName};
+use model_core::process::NamespaceIdentity;
 use storage_factory::StorageConfig;
 
 use crate::args::{LiveVerificationConfig, workload_from_live_config};
@@ -55,6 +56,7 @@ pub fn run_live_verification(
             stdio: config.payload_stdio.clone(),
             socket: config.payload_socket.clone(),
         },
+        seccomp_defaults.active_trace_max,
         seccomp_defaults.diagnostic_log_level,
         seccomp_defaults.seccomp_notify,
         seccomp_defaults.process_seccomp,
@@ -338,7 +340,7 @@ fn track_workload(
         server,
         ControlCommand::TrackAdd(TrackAddCommand {
             request_id: RequestId::new(config.request_id_start),
-            root_pid,
+            root: process_ref(root_pid)?,
             display_name: TraceName::new(config.trace_name.clone()),
             profile_name: ProfileName::new(config.profile_name.clone()),
             tags: BTreeSet::new(),
@@ -350,6 +352,16 @@ fn track_workload(
         return Err("track add returned unexpected reply".to_string());
     };
     Ok(reply.trace_id)
+}
+
+fn process_ref(pid: u32) -> Result<ProcessRef, String> {
+    let namespace_path = format!("/proc/{pid}/ns/pid");
+    let pid_namespace = fs::read_link(&namespace_path)
+        .map_err(|error| format!("read {namespace_path}: {error}"))?;
+    Ok(ProcessRef::new(
+        pid,
+        NamespaceIdentity::new(pid_namespace.display().to_string()),
+    ))
 }
 
 fn verify_runtime_binding(

@@ -53,10 +53,14 @@ fn read_path_set_row(
 ) -> Result<Option<PathSetRow>, SemanticActionStoreError> {
     connection
         .query_row(
-            "SELECT path_set_id, action_id, state, unique_path_count,
-                    stored_path_count, chunking_scheme
-             FROM file_path_sets
-             WHERE trace_id = ?1 AND action_id = ?2",
+            "SELECT path_sets.path_set_id, action_refs.action_id, path_sets.state,
+                    path_sets.unique_path_count, path_sets.stored_path_count,
+                    path_sets.chunking_scheme
+             FROM file_path_set_action_refs action_refs
+             JOIN file_path_sets path_sets
+               ON path_sets.trace_id = action_refs.trace_id
+              AND path_sets.path_set_id = action_refs.path_set_id
+             WHERE action_refs.trace_id = ?1 AND action_refs.action_id = ?2",
             params![trace_id.get(), action_id],
             |row| {
                 let state = FilePathSetState::parse(&row.get::<_, String>("state")?)

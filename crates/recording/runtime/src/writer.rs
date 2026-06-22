@@ -103,7 +103,7 @@ impl<'a> RecordingWriter<'a> {
     ) -> Result<(), RecordingError> {
         SemanticActionExportRecorder::new(self.storage, export_runtime).publish_batch_for_trace(
             traces,
-            SemanticActionRecordBatch::new(actions, links, &[], &[]),
+            SemanticActionRecordBatch::new(actions, links, &[], &[], &[]),
             emitted_at,
             next_diagnostic_id,
         )

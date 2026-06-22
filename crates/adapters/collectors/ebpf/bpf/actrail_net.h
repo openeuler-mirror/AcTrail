@@ -3,17 +3,21 @@
 
 #include "actrail_runtime.h"
 
-static __always_inline int store_pending_net_op(
-    struct trace_event_raw_sys_enter *ctx,
-    __u32 kind,
-    __u32 fd_arg,
-    __u32 size_arg,
-    __u32 sockaddr_arg,
-    __u32 syscall_family
+static __always_inline __u64 net_descriptor(__u32 kind, __u32 syscall_family) {
+    return ((__u64)syscall_family << 32) | kind;
+}
+
+static __always_inline int store_pending_net_op_resolved(
+    __u64 descriptor,
+    __u32 fd,
+    __u64 requested_size,
+    __u64 sockaddr_ptr
 ) {
-    __u64 pid_tgid = current_pid_tgid();
-    __u32 tgid = current_namespace_tgid();
-    __u64 *trace_id = bpf_map_lookup_elem(&tracked_traces, &tgid);
+    __u32 tgid = 0;
+    __u32 tid = 0;
+    __u32 lookup_flags = 0;
+    __u64 *trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
+    __u64 pid_tgid = ((__u64)tgid << 32) | tid;
     struct actrail_pending_net_op op = {};
 
     if (!tgid) {
@@ -24,28 +28,29 @@ static __always_inline int store_pending_net_op(
     }
 
     op.trace_id = *trace_id;
-    op.kind = kind;
-    op.fd = (__u32)ctx->args[fd_arg];
+    op.kind = (__u32)descriptor;
+    op.fd = fd;
     if (is_suppressed_fd(tgid, op.fd)) {
         return 0;
     }
-    op.syscall_family = syscall_family;
-    op.requested_size =
-        size_arg < ACTRAIL_SYSCALL_ARG_MISSING ? (__u64)ctx->args[size_arg] : 0;
-    op.sockaddr_ptr =
-        sockaddr_arg < ACTRAIL_SYSCALL_ARG_MISSING ? (__u64)ctx->args[sockaddr_arg] : 0;
+    op.syscall_family = (__u32)(descriptor >> 32);
+    op.requested_size = requested_size;
+    op.sockaddr_ptr = sockaddr_ptr;
     bpf_map_update_elem(&pending_net_ops, &pid_tgid, &op, BPF_ANY);
     return 0;
 }
 
 static __always_inline int emit_pending_net_op(struct trace_event_raw_sys_exit *ctx) {
-    __u64 pid_tgid = current_pid_tgid();
-    __u32 tgid = current_namespace_tgid();
+    __u32 tgid = 0;
+    __u32 tid = 0;
+    __u32 lookup_flags = 0;
+    __u64 *trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
+    __u64 pid_tgid = ((__u64)tgid << 32) | tid;
     struct actrail_pending_net_op *op = bpf_map_lookup_elem(&pending_net_ops, &pid_tgid);
     struct actrail_event event;
     struct actrail_endpoint remote = {};
 
-    if (!tgid) {
+    if (!tgid || !trace_id) {
         return 0;
     }
     if (!op) {

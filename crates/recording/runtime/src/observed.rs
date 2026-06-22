@@ -104,10 +104,6 @@ pub(crate) struct ObservedRecordCommit {
 }
 
 impl ObservedRecordCommit {
-    pub(crate) fn semantic_actions(&self) -> &SemanticActionBatch {
-        &self.semantic_actions
-    }
-
     pub(crate) fn into_semantic_actions(self) -> SemanticActionBatch {
         self.semantic_actions
     }

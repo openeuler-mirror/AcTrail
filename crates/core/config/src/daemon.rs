@@ -41,17 +41,18 @@ pub use enforcement::{
 pub use export_factory::ExportConfig as RuntimeExportConfig;
 pub use file_observation::{
     DEFAULT_FILE_BULK_READ_MAX_PATHS_PER_SET, DEFAULT_FILE_BULK_READ_MIN_UNIQUE_PATHS,
-    DEFAULT_FS_ENUMERATE_MAX_PATHS_PER_SET, DEFAULT_FS_ENUMERATE_MIN_UNIQUE_PATHS,
-    FileBulkReadMode, FileBulkReadObservationConfig, FileMetadataRetention, FileObservationConfig,
-    FileRawEventRetention, FileTtyObservationConfig, FsEnumerateObservationConfig,
+    DEFAULT_FILE_BULK_READ_PENDING_EVENT_MAX, DEFAULT_FS_ENUMERATE_MAX_PATHS_PER_SET,
+    DEFAULT_FS_ENUMERATE_MIN_UNIQUE_PATHS, FileBulkReadMode, FileBulkReadObservationConfig,
+    FileMetadataRetention, FileObservationConfig, FileRawEventRetention, FileTtyObservationConfig,
+    FsEnumerateObservationConfig,
 };
 pub use logging::{
     DEFAULT_WORKLOAD_DIAGNOSTICS_ENABLED, DEFAULT_WORKLOAD_DIAGNOSTICS_INTERVAL_MS,
     DiagnosticLogLevel, WorkloadDiagnosticsConfig,
 };
 pub use operator::{
-    DEFAULT_CONTROL_PENDING_CONNECTION_MAX, DEFAULT_OPERATOR_CONFIG_PATH, OPERATOR_CONFIG_TEMPLATE,
-    OperatorConfig, OperatorConfigInitStatus,
+    DEFAULT_ACTIVE_TRACE_MAX, DEFAULT_CONTROL_PENDING_CONNECTION_MAX, DEFAULT_OPERATOR_CONFIG_PATH,
+    OPERATOR_CONFIG_TEMPLATE, OperatorConfig, OperatorConfigInitStatus,
 };
 pub use payload::{
     DisabledOrPath, PayloadConfig, PayloadRedactionPolicy, PayloadSocketCaptureBackend,

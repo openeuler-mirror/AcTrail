@@ -97,18 +97,20 @@ def require_llm_exchange(actions: str) -> None:
 def require_exported_llm_span(document: dict, marker: str) -> None:
     for span in otel_spans(document):
         attributes = otel_attributes(span)
-        body_json = attributes.get("llm.request.body_json", "")
         if (
             attributes.get("actrail.action.kind") == "llm.request"
             and attributes.get("actrail.action.completeness") == "complete"
             and attributes.get("actrail.action.status") == "success"
             and attributes.get("llm.request.payload_bytes")
             and attributes.get("llm.request.raw_payload_bytes")
-            and body_json
-            and marker in body_json
+            and attributes.get("llm.request.content_state") == "canonical_blocks"
+            and attributes.get("llm.request.canonical_body_hash")
+            and attributes.get("llm.request.block_count")
+            and marker in attributes.get("llm.request.message_preview", "")
             and attributes.get("payload.source_boundary") in {"TlsUserSpace", "Syscall"}
             and attributes.get("url.scheme") in {"http", "https"}
-            and not attributes.get("llm.request.payload_text")
+            and not attributes.get("llm.request.body_json")
+            and not attributes.get("llm.request.body_text")
             and not attributes.get("http.request.body_text")
             and not attributes.get("http.request.body_json")
             and (

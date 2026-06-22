@@ -8,6 +8,8 @@ mod bulk_read;
 mod common;
 #[path = "file/enumerate.rs"]
 mod enumerate;
+#[path = "file/fd.rs"]
+mod fd;
 #[path = "file/io.rs"]
 mod io;
 #[path = "file/summary.rs"]

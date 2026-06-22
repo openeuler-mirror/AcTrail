@@ -5,6 +5,7 @@ mod evidence;
 mod live_projection;
 mod provider;
 mod request;
+mod request_blocks;
 mod response;
 mod response_support;
 mod sse;

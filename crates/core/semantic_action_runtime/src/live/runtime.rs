@@ -5,7 +5,8 @@ use model_core::event::{DomainEvent, EventPayload};
 use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
 use semantic_action::{
-    FileObservationPath, FilePathSetWrite, SemanticAction, SemanticActionKind, SemanticActionLink,
+    FileObservationPath, FilePathSetWrite, LlmRequestContentWrite, SemanticAction,
+    SemanticActionKind, SemanticActionLink,
 };
 use std::time::SystemTime;
 
@@ -33,6 +34,8 @@ pub struct LiveSemanticActionOutput {
     pub links: Vec<SemanticActionLink>,
     pub file_observation_paths: Vec<FileObservationPath>,
     pub file_path_sets: Vec<FilePathSetWrite>,
+    pub llm_request_contents: Vec<LlmRequestContentWrite>,
+    pub deferred_events: Vec<DomainEvent>,
     pub retain_event: bool,
     pub raw_event_consumed: bool,
 }
@@ -44,6 +47,8 @@ impl Default for LiveSemanticActionOutput {
             links: Vec::new(),
             file_observation_paths: Vec::new(),
             file_path_sets: Vec::new(),
+            llm_request_contents: Vec::new(),
+            deferred_events: Vec::new(),
             retain_event: true,
             raw_event_consumed: false,
         }
@@ -57,6 +62,8 @@ impl LiveSemanticActionOutput {
         self.file_observation_paths
             .extend(other.file_observation_paths);
         self.file_path_sets.extend(other.file_path_sets);
+        self.llm_request_contents.extend(other.llm_request_contents);
+        self.deferred_events.extend(other.deferred_events);
         self.retain_event = self.retain_event && other.retain_event;
         self.raw_event_consumed = self.raw_event_consumed || other.raw_event_consumed;
     }
@@ -192,8 +199,8 @@ impl LiveSemanticActionRuntime {
         &mut self,
         segment: &PayloadSegment,
     ) -> LiveSemanticActionOutput {
-        let llm_actions = self.llm.observe_payload_segment(segment);
-        let mut output = if llm_actions.is_empty() {
+        let llm_output = self.llm.observe_payload_segment(segment);
+        let mut output = if llm_output.actions.is_empty() {
             LiveSemanticActionOutput::default()
         } else {
             self.file_access.observe_boundary(
@@ -202,7 +209,10 @@ impl LiveSemanticActionRuntime {
                 segment.observed_at,
             )
         };
-        for action in llm_actions {
+        output
+            .llm_request_contents
+            .extend(llm_output.llm_request_contents);
+        for action in llm_output.actions {
             let agent_actions = if action.kind == SemanticActionKind::LlmRequest {
                 self.agent.observe_llm_request(&action)
             } else {
@@ -245,6 +255,8 @@ impl LiveSemanticActionRuntime {
             links,
             file_observation_paths: Vec::new(),
             file_path_sets: file_output.file_path_sets,
+            llm_request_contents: Vec::new(),
+            deferred_events: file_output.deferred_events,
             retain_event: file_output.retain_event,
             raw_event_consumed: false,
         }
@@ -253,12 +265,7 @@ impl LiveSemanticActionRuntime {
 
 fn event_projects_semantic_action_boundary(event: &DomainEvent) -> bool {
     match &event.payload {
-        EventPayload::Process(payload) => {
-            matches!(
-                payload.operation.as_str(),
-                "exec" | "fork_attempt" | "fork" | "exit"
-            )
-        }
+        EventPayload::Process(_) => false,
         EventPayload::Application(payload) => is_http_protocol(&payload.protocol),
         EventPayload::Enforcement(_) => true,
         _ => false,

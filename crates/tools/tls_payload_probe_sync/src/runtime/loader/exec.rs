@@ -2,16 +2,20 @@
 
 use std::ffi::{CStr, CString, OsStr, OsString, c_char};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use tls_payload_sync::ENV_EVENT_SOCKET;
+use tls_payload_sync::{ENV_BINARY, ENV_EVENT_SOCKET, ENV_POINTS, ENV_PROVIDER};
 
+use crate::runtime::config;
 use crate::runtime::tls::dynamic::binding::resolver;
 
 const JAVA_TOOL_OPTIONS: &str = "JAVA_TOOL_OPTIONS";
 const LD_AUDIT: &str = "LD_AUDIT";
 const LD_PRELOAD: &str = "LD_PRELOAD";
+const PATH_ENV: &str = "PATH";
 const TLS_SYNC_PREFIX: &str = "TLS_PAYLOAD_SYNC_";
+const ACTRAIL_SYNC_RUNTIME_LIBRARY: &str = "libactrail_tls_payload_probe_sync.so";
 const ACTRAIL_AGENT_JAR_MARKER: &str = "actrail-java-payload-agent-";
 
 type ExecveFn = unsafe extern "C" fn(
@@ -66,10 +70,12 @@ pub(in crate::runtime) fn merge_exec_env(
     child_env: &[EnvEntry],
     current_env: &[EnvEntry],
 ) -> Vec<EnvEntry> {
+    let target_has_capture_plan = target_has_capture_plan(program.as_ref(), child_env, current_env);
     let mut merged = child_env.to_vec();
     merge_tls_sync_env(&mut merged, current_env);
+    strip_active_plan_env(&mut merged);
     merge_ld_preload(&mut merged, current_env);
-    merge_ld_audit(&mut merged, current_env);
+    merge_ld_audit(&mut merged, current_env, target_has_capture_plan);
     if is_java_executable(program.as_ref()) {
         merge_java_tool_options(&mut merged, current_env);
     }
@@ -102,21 +108,24 @@ fn merge_ld_preload(merged: &mut Vec<EnvEntry>, current_env: &[EnvEntry]) {
         append_missing_ld_preload_entries(&merged[position].value, &current.value);
 }
 
-fn merge_ld_audit(merged: &mut Vec<EnvEntry>, current_env: &[EnvEntry]) {
-    let Some(current) = current_env
-        .iter()
-        .rev()
-        .find(|entry| entry.key == LD_AUDIT)
-        .filter(|entry| !entry.value.is_empty())
-    else {
-        return;
-    };
-    let Some(position) = merged.iter().position(|entry| entry.key == LD_AUDIT) else {
-        merged.push(current.clone());
-        return;
-    };
-    merged[position].value =
-        append_missing_ld_preload_entries(&merged[position].value, &current.value);
+fn merge_ld_audit(
+    merged: &mut Vec<EnvEntry>,
+    current_env: &[EnvEntry],
+    target_has_capture_plan: bool,
+) {
+    let mut entries = Vec::new();
+    if let Some(existing) = env_value(merged, LD_AUDIT) {
+        append_loader_entries(&mut entries, existing, target_has_capture_plan, false);
+    }
+    if let Some(current) = env_value(current_env, LD_AUDIT) {
+        append_loader_entries(&mut entries, current, target_has_capture_plan, false);
+    }
+    if target_has_capture_plan {
+        if let Some(preload) = env_value(current_env, LD_PRELOAD) {
+            append_loader_entries(&mut entries, preload, true, true);
+        }
+    }
+    set_loader_env(merged, LD_AUDIT, &entries);
 }
 
 fn append_missing_ld_preload_entries(existing: &OsStr, current: &OsStr) -> OsString {
@@ -139,6 +148,61 @@ fn split_colon_entries(value: &[u8]) -> Vec<&[u8]> {
         .split(|byte| *byte == b':')
         .filter(|entry| !entry.is_empty())
         .collect()
+}
+
+fn append_loader_entries(
+    entries: &mut Vec<Vec<u8>>,
+    value: &OsStr,
+    include_actrail_runtime: bool,
+    actrail_runtime_only: bool,
+) {
+    for entry in split_colon_entries(value.as_bytes()) {
+        let actrail_runtime = is_actrail_sync_runtime_entry(entry);
+        if actrail_runtime_only && !actrail_runtime {
+            continue;
+        }
+        if !include_actrail_runtime && actrail_runtime {
+            continue;
+        }
+        if entries.iter().any(|existing| existing.as_slice() == entry) {
+            continue;
+        }
+        entries.push(entry.to_vec());
+    }
+}
+
+fn set_loader_env(merged: &mut Vec<EnvEntry>, key: &str, entries: &[Vec<u8>]) {
+    let position = merged.iter().position(|entry| entry.key == key);
+    if entries.is_empty() {
+        if let Some(position) = position {
+            merged.remove(position);
+        }
+        return;
+    }
+    let value = join_loader_entries(entries);
+    if let Some(position) = position {
+        merged[position].value = value;
+    } else {
+        merged.push(EnvEntry::from_os(OsString::from(key), value));
+    }
+}
+
+fn join_loader_entries(entries: &[Vec<u8>]) -> OsString {
+    let mut value = Vec::new();
+    for entry in entries {
+        if !value.is_empty() {
+            value.push(b':');
+        }
+        value.extend_from_slice(entry);
+    }
+    OsString::from_vec(value)
+}
+
+fn is_actrail_sync_runtime_entry(entry: &[u8]) -> bool {
+    entry
+        .rsplit(|byte| *byte == b'/')
+        .next()
+        .is_some_and(|name| name == ACTRAIL_SYNC_RUNTIME_LIBRARY.as_bytes())
 }
 
 fn merge_java_tool_options(merged: &mut Vec<EnvEntry>, current_env: &[EnvEntry]) {
@@ -198,6 +262,72 @@ fn actrail_java_agent_options(value: &OsStr) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn target_has_capture_plan(
+    program: &OsStr,
+    child_env: &[EnvEntry],
+    current_env: &[EnvEntry],
+) -> bool {
+    let Some(path) = resolve_exec_target(program, child_env, current_env) else {
+        return false;
+    };
+    matches!(config::runtime_plan_for_binary(&path), Ok(Some(_)))
+}
+
+fn resolve_exec_target(
+    program: &OsStr,
+    child_env: &[EnvEntry],
+    current_env: &[EnvEntry],
+) -> Option<PathBuf> {
+    if program.is_empty() {
+        return None;
+    }
+    let path = Path::new(program);
+    if program.as_bytes().contains(&b'/') {
+        let candidate = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir().ok()?.join(path)
+        };
+        return Some(canonical(candidate));
+    }
+    if let Some(candidate) = current_dir_candidate(path) {
+        return Some(candidate);
+    }
+    let path_value = env_value(child_env, PATH_ENV).or_else(|| env_value(current_env, PATH_ENV))?;
+    for directory in std::env::split_paths(path_value) {
+        let candidate = directory.join(path);
+        if candidate.is_file() {
+            return Some(canonical(candidate));
+        }
+    }
+    None
+}
+
+fn current_dir_candidate(path: &Path) -> Option<PathBuf> {
+    let candidate = std::env::current_dir().ok()?.join(path);
+    candidate.is_file().then(|| canonical(candidate))
+}
+
+fn canonical(path: PathBuf) -> PathBuf {
+    std::fs::canonicalize(&path).unwrap_or(path)
+}
+
+fn strip_active_plan_env(env: &mut Vec<EnvEntry>) {
+    env.retain(|entry| {
+        entry.key != OsStr::new(ENV_BINARY)
+            && entry.key != OsStr::new(ENV_PROVIDER)
+            && entry.key != OsStr::new(ENV_POINTS)
+    });
+}
+
+fn env_value<'a>(env: &'a [EnvEntry], key: &str) -> Option<&'a OsStr> {
+    env.iter()
+        .rev()
+        .find(|entry| entry.key == key)
+        .map(|entry| entry.value.as_os_str())
+        .filter(|value| !value.is_empty())
 }
 
 fn upsert_env(env: &mut Vec<EnvEntry>, entry: EnvEntry) {

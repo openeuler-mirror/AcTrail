@@ -86,6 +86,7 @@ impl StorageAttachService {
             output.links,
             output.file_observation_paths,
             output.file_path_sets,
+            output.llm_request_contents,
         )
     }
 

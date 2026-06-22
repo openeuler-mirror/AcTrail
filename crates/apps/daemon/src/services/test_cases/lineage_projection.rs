@@ -23,6 +23,7 @@ fn terminal_reconcile_projects_late_exec_through_process_lineage() {
         profiles,
         super::ebpf_config(false),
         super::payload_config(false),
+        super::DEFAULT_ACTIVE_TRACE_MAX,
         DiagnosticLogLevel::Info,
         super::seccomp_notify_disabled(),
         super::process_seccomp_disabled(),

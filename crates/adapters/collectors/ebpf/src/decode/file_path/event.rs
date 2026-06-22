@@ -8,11 +8,10 @@ use model_core::capability::Capability;
 use model_core::ids::CollectorName;
 
 use crate::decode::{
-    DecodeError, FILE_EVENT_CONTEXT, FILE_EVENT_MMAP, FILE_EVENT_OPEN, resolve_event_identity,
+    DecodeError, FILE_EVENT_CONTEXT, FILE_EVENT_MMAP, FILE_EVENT_OPEN, resolve_bound_event_identity,
 };
 use crate::loader::KernelFilePathEvent;
 use crate::maps::BindingStateMap;
-use crate::procfs::ProcfsIdentityReader;
 
 use super::state::{
     FILE_FD_MISSING, FILE_PHASE_EXIT, FILE_SYSCALL_CHDIR, FILE_SYSCALL_CLOSE, FILE_SYSCALL_CREAT,
@@ -21,13 +20,12 @@ use super::state::{
     FILE_SYSCALL_MMAP, FILE_SYSCALL_OPEN, FILE_SYSCALL_OPENAT, FILE_SYSCALL_OPENAT2,
     FILE_SYSCALL_RENAME, FILE_SYSCALL_RENAMEAT, FILE_SYSCALL_RENAMEAT2, FILE_SYSCALL_RMDIR,
     FILE_SYSCALL_TRUNCATE, FILE_SYSCALL_UNLINK, FILE_SYSCALL_UNLINKAT, FileSyscallOutcome,
-    FileTracker, PATH_FLAG_FAULT, PATH_FLAG_TRUNCATED,
+    FileTracker, PATH_FLAG_FAULT, PATH_FLAG_TRUNCATED, dup_target_fd, fcntl_duplicates_fd,
 };
 
 pub(in crate::decode) fn decode(
     event: KernelFilePathEvent,
     bindings: &BindingStateMap,
-    identity_reader: &ProcfsIdentityReader,
     tracker: &mut FileTracker,
 ) -> Result<Option<RawCollectorEvent>, DecodeError> {
     if event.kind == FILE_EVENT_MMAP {
@@ -38,12 +36,16 @@ pub(in crate::decode) fn decode(
         return Ok(None);
     }
 
+    let map_pid = event.pid;
+    let identity =
+        resolve_bound_event_identity(event.trace_id, map_pid, event.pid_generation, bindings)
+            .map_err(|error| DecodeError::new("file_identity", error))?;
     let is_exit = event.phase == FILE_PHASE_EXIT;
-    let outcome = tracker.record(event);
+    let outcome = tracker.record(event, identity.clone());
     let Some(outcome) = outcome else {
         return Ok(None);
     };
-    if outcome.enter.kind == FILE_EVENT_CONTEXT && outcome.enter.aux != FILE_SYSCALL_CLOSE {
+    if outcome.enter.kind == FILE_EVENT_CONTEXT && !observable_context_event(&outcome) {
         return Ok(None);
     }
     if outcome.enter.kind == FILE_EVENT_MMAP && !mmap_is_shared_writable(&outcome) {
@@ -53,20 +55,19 @@ pub(in crate::decode) fn decode(
         return Ok(None);
     }
 
-    let identity = resolve_event_identity(
-        outcome.enter.pid,
-        outcome.enter.pid_generation,
-        bindings,
-        identity_reader,
-    )
-    .map_err(|error| DecodeError::new("file_identity", error))?;
     let operation = file_operation(&outcome);
     let path = outcome
         .primary_path
         .resolved
         .clone()
-        .or_else(|| outcome.primary_path.raw.clone())
-        .or_else(|| outcome.fd_path.clone());
+        .or_else(|| outcome.fd_path.clone())
+        .or_else(|| {
+            if outcome.result < 0 {
+                outcome.primary_path.raw.clone()
+            } else {
+                None
+            }
+        });
     let metadata = file_metadata(&outcome, operation);
 
     Ok(Some(RawCollectorEvent {
@@ -88,6 +89,14 @@ fn file_operation(outcome: &FileSyscallOutcome) -> &'static str {
         FILE_EVENT_OPEN if open_truncates(&outcome.enter) => "truncate",
         FILE_EVENT_OPEN => "open",
         crate::decode::FILE_EVENT_CONTEXT if outcome.enter.aux == FILE_SYSCALL_CLOSE => "close",
+        crate::decode::FILE_EVENT_CONTEXT if outcome.enter.aux == FILE_SYSCALL_DUP => "dup",
+        crate::decode::FILE_EVENT_CONTEXT if outcome.enter.aux == FILE_SYSCALL_DUP2 => "dup2",
+        crate::decode::FILE_EVENT_CONTEXT if outcome.enter.aux == FILE_SYSCALL_DUP3 => "dup3",
+        crate::decode::FILE_EVENT_CONTEXT
+            if outcome.enter.aux == FILE_SYSCALL_FCNTL && fcntl_duplicates_fd(&outcome.enter) =>
+        {
+            "fcntl_dup"
+        }
         crate::decode::FILE_EVENT_CONTEXT => "context",
         crate::decode::FILE_EVENT_UNLINK if unlinkat_removes_directory(&outcome.enter) => "rmdir",
         crate::decode::FILE_EVENT_UNLINK => "unlink",
@@ -118,7 +127,6 @@ fn file_metadata(outcome: &FileSyscallOutcome, operation: &str) -> BTreeMap<Stri
     if let Some(raw_path) = &outcome.primary_path.raw {
         metadata.insert("raw_path".to_string(), raw_path.clone());
     }
-    insert_userspace_retry_metadata(&mut metadata, "path", &outcome.primary_path);
     if let Some(fd_path) = &outcome.fd_path {
         metadata.insert("fd_target".to_string(), fd_path.clone());
     }
@@ -131,7 +139,6 @@ fn file_metadata(outcome: &FileSyscallOutcome, operation: &str) -> BTreeMap<Stri
         if let Some(raw_path) = &target_path.raw {
             metadata.insert("raw_target_path".to_string(), raw_path.clone());
         }
-        insert_userspace_retry_metadata(&mut metadata, "target_path", target_path);
         metadata.insert(
             "target_path_resolution".to_string(),
             target_path.source.to_string(),
@@ -147,24 +154,6 @@ fn file_metadata(outcome: &FileSyscallOutcome, operation: &str) -> BTreeMap<Stri
     metadata
 }
 
-fn insert_userspace_retry_metadata(
-    metadata: &mut BTreeMap<String, String>,
-    prefix: &str,
-    path: &super::state::PathResolution,
-) {
-    if !path.userspace_retry {
-        return;
-    }
-    metadata.insert(
-        format!("{prefix}_retry_source"),
-        "process_vm_readv".to_string(),
-    );
-    metadata.insert(
-        format!("{prefix}_retry_truncated"),
-        path.userspace_retry_truncated.to_string(),
-    );
-}
-
 fn insert_fd_metadata(metadata: &mut BTreeMap<String, String>, outcome: &FileSyscallOutcome) {
     let event = &outcome.enter;
     let fd = match event.aux {
@@ -175,10 +164,26 @@ fn insert_fd_metadata(metadata: &mut BTreeMap<String, String>, outcome: &FileSys
         }
         FILE_SYSCALL_MMAP | FILE_SYSCALL_FTRUNCATE if event.fd != FILE_FD_MISSING => Some(event.fd),
         FILE_SYSCALL_CLOSE => Some(event.arg0 as u32),
+        FILE_SYSCALL_DUP | FILE_SYSCALL_DUP2 | FILE_SYSCALL_DUP3 => {
+            insert_dup_fd_metadata(metadata, outcome);
+            dup_target_fd(event, outcome.result)
+        }
+        FILE_SYSCALL_FCNTL if fcntl_duplicates_fd(event) => {
+            insert_dup_fd_metadata(metadata, outcome);
+            dup_target_fd(event, outcome.result)
+        }
         _ => None,
     };
     if let Some(fd) = fd {
         metadata.insert("fd".to_string(), fd.to_string());
+    }
+}
+
+fn insert_dup_fd_metadata(metadata: &mut BTreeMap<String, String>, outcome: &FileSyscallOutcome) {
+    let event = &outcome.enter;
+    metadata.insert("source_fd".to_string(), (event.arg0 as u32).to_string());
+    if let Some(target_fd) = dup_target_fd(event, outcome.result) {
+        metadata.insert("target_fd".to_string(), target_fd.to_string());
     }
 }
 
@@ -269,6 +274,14 @@ fn normalized_result(outcome: &FileSyscallOutcome) -> i64 {
         return 0;
     }
     outcome.result
+}
+
+fn observable_context_event(outcome: &FileSyscallOutcome) -> bool {
+    match outcome.enter.aux {
+        FILE_SYSCALL_CLOSE | FILE_SYSCALL_DUP | FILE_SYSCALL_DUP2 | FILE_SYSCALL_DUP3 => true,
+        FILE_SYSCALL_FCNTL => fcntl_duplicates_fd(&outcome.enter),
+        _ => false,
+    }
 }
 
 fn flag_enabled(flags: u32, flag: u32) -> bool {

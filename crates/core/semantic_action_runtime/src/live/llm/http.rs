@@ -1,14 +1,12 @@
+use std::collections::BTreeMap;
+
 use semantic_action::{
     SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionStatus,
     attr_keys as attrs,
 };
 
-use crate::live::actions::append_missing_evidence;
-
 const DIRECTION_ATTR: &str = "direction";
 const DIRECTION_INBOUND: &str = "inbound";
-const HTTP_RESPONSE_ACTION_ID_ATTR: &str = attrs::llm_call::HTTP_RESPONSE_ACTION_ID;
-const HTTP_RESPONSE_STATUS_CODE_ATTR: &str = attrs::http_response::STATUS_CODE;
 const HTTP_REQUEST_STREAM_ID_ATTR: &str = attrs::http_request::STREAM_ID;
 const PAYLOAD_SEQUENCE_ATTR: &str = attrs::payload::SEQUENCE;
 const PAYLOAD_STREAM_KEY_ATTR: &str = attrs::payload::STREAM_KEY;
@@ -18,7 +16,7 @@ const HTTP_MESSAGE_STREAM_ID_ATTR: &str = "stream_id";
 const HTTP_CLIENT_ERROR_MIN: u16 = 400;
 const HTTP_SERVER_ERROR_MAX: u16 = 599;
 
-pub(super) fn failed_call_for_open_request(
+pub(super) fn failed_response_for_open_request(
     http_response: &SemanticAction,
     request: &SemanticAction,
     call: &SemanticAction,
@@ -38,27 +36,117 @@ pub(super) fn failed_call_for_open_request(
         return None;
     }
 
-    let mut failed = call.clone();
-    failed.status = SemanticActionStatus::Error;
-    failed.completeness = SemanticActionCompleteness::Complete;
-    failed.end_time = Some(http_response.end_time.unwrap_or(http_response.start_time));
-    failed.attributes.insert(
-        HTTP_RESPONSE_ACTION_ID_ATTR.to_string(),
-        http_response.action_id.clone(),
+    let mut attributes = BTreeMap::new();
+    attributes.insert(attrs::llm_response::STREAM.to_string(), "false".to_string());
+    attributes.insert(attrs::llm_response::DONE.to_string(), "true".to_string());
+    attributes.insert(
+        attrs::llm_response::CHUNK_COUNT.to_string(),
+        "0".to_string(),
     );
-    if let Some(status_code) = http_response.attributes.get(STATUS_CODE_ATTR) {
-        failed.attributes.insert(
-            HTTP_RESPONSE_STATUS_CODE_ATTR.to_string(),
-            status_code.clone(),
+    attributes.insert(
+        attrs::llm_response::BODY_FORMAT.to_string(),
+        "http_error".to_string(),
+    );
+    if let Some(content_length) = http_response.attributes.get("content_length") {
+        attributes.insert(
+            attrs::llm_response::PAYLOAD_BYTES.to_string(),
+            content_length.clone(),
         );
     }
-    if let Some(reason) = http_response.attributes.get("reason") {
-        failed
-            .attributes
-            .insert(attrs::http_response::REASON.to_string(), reason.clone());
-    }
-    append_missing_evidence(&mut failed.evidence, &http_response.evidence);
-    Some(failed)
+    copy_request_attr_as(
+        request,
+        &mut attributes,
+        attrs::llm_request::MODEL,
+        attrs::llm_response::MODEL,
+    );
+    copy_request_attr(request, &mut attributes, attrs::url::SCHEME);
+    copy_request_attr(request, &mut attributes, attrs::url::PATH);
+    copy_request_attr(request, &mut attributes, attrs::server::ADDRESS);
+    copy_http_attr(
+        http_response,
+        &mut attributes,
+        "status_code",
+        attrs::http_response::STATUS_CODE,
+    );
+    copy_http_attr(
+        http_response,
+        &mut attributes,
+        "reason",
+        attrs::http_response::REASON,
+    );
+    copy_http_attr(
+        http_response,
+        &mut attributes,
+        "stream_id",
+        attrs::http_response::STREAM_ID,
+    );
+    copy_http_attr(
+        http_response,
+        &mut attributes,
+        "stream_key",
+        attrs::payload::STREAM_KEY,
+    );
+    copy_http_attr(
+        http_response,
+        &mut attributes,
+        "payload_sequence",
+        attrs::payload::SEQUENCE,
+    );
+    copy_http_attr(
+        http_response,
+        &mut attributes,
+        "payload_sequence",
+        attrs::payload::SEQUENCE_START,
+    );
+    copy_http_attr(
+        http_response,
+        &mut attributes,
+        "payload_sequence",
+        attrs::payload::SEQUENCE_END,
+    );
+    copy_http_attr(
+        http_response,
+        &mut attributes,
+        "source_boundary",
+        attrs::payload::SOURCE_BOUNDARY,
+    );
+    copy_http_attr(
+        http_response,
+        &mut attributes,
+        attrs::network::PROTOCOL_NAME,
+        attrs::network::PROTOCOL_NAME,
+    );
+    copy_http_attr(
+        http_response,
+        &mut attributes,
+        attrs::network::PROTOCOL_VERSION,
+        attrs::network::PROTOCOL_VERSION,
+    );
+    copy_http_attr(
+        http_response,
+        &mut attributes,
+        attrs::network::PROTOCOL_VERSION,
+        attrs::http_response::PROTOCOL,
+    );
+
+    let status = attributes
+        .get(attrs::http_response::STATUS_CODE)
+        .cloned()
+        .unwrap_or_else(|| "HTTP error".to_string());
+    Some(SemanticAction {
+        action_id: failed_response_action_id(http_response),
+        trace_id: http_response.trace_id,
+        kind: SemanticActionKind::LlmResponse,
+        title: format!("LLM response HTTP {status}"),
+        start_time: http_response.start_time,
+        end_time: http_response.end_time.or(Some(http_response.start_time)),
+        process: http_response.process.clone(),
+        status: SemanticActionStatus::Error,
+        completeness: SemanticActionCompleteness::Complete,
+        confidence_millis: None,
+        attributes,
+        evidence: http_response.evidence.clone(),
+    })
 }
 
 fn request_matches_http_response(
@@ -108,4 +196,40 @@ fn http_payload_sequence(action: &SemanticAction) -> Option<u64> {
 
 fn payload_sequence(action: &SemanticAction) -> Option<u64> {
     action.attributes.get(PAYLOAD_SEQUENCE_ATTR)?.parse().ok()
+}
+
+fn failed_response_action_id(http_response: &SemanticAction) -> String {
+    format!("{}:llm.response", http_response.action_id)
+}
+
+fn copy_request_attr(
+    request: &SemanticAction,
+    attributes: &mut BTreeMap<String, String>,
+    key: &'static str,
+) {
+    if let Some(value) = request.attributes.get(key) {
+        attributes.insert(key.to_string(), value.clone());
+    }
+}
+
+fn copy_request_attr_as(
+    request: &SemanticAction,
+    attributes: &mut BTreeMap<String, String>,
+    source_key: &'static str,
+    target_key: &'static str,
+) {
+    if let Some(value) = request.attributes.get(source_key) {
+        attributes.insert(target_key.to_string(), value.clone());
+    }
+}
+
+fn copy_http_attr(
+    http_response: &SemanticAction,
+    attributes: &mut BTreeMap<String, String>,
+    source_key: &'static str,
+    target_key: &'static str,
+) {
+    if let Some(value) = http_response.attributes.get(source_key) {
+        attributes.insert(target_key.to_string(), value.clone());
+    }
 }

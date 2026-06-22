@@ -10,7 +10,7 @@
           <strong>{{ selectedDetail.title }}</strong>
         </div>
       </div>
-      <div class="action-tree-canvas">
+      <div ref="actionTreeCanvas" class="action-tree-canvas">
         <ActionTreeNode
           v-if="treeModel.root"
           :key="traceKey"
@@ -20,6 +20,7 @@
           @select="selectNode"
           @expand="loadChildren"
           @load-more="loadMoreChildren"
+          @jump="jumpToNode"
         />
         <div v-else class="action-tree-empty">No action tree root</div>
       </div>
@@ -34,7 +35,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 
 import { readActionDetail, readActionTreeChildren } from '../../../api';
 import ActionTreeNode from '../../../components/ActionTreeNode.vue';
@@ -67,6 +68,7 @@ const props = defineProps({
 });
 
 const rootNode = ref(null);
+const actionTreeCanvas = ref(null);
 const selectedDetailId = ref(null);
 const selectedDetail = ref(null);
 const detailError = ref('');
@@ -114,6 +116,13 @@ async function selectNode(node) {
       detailError.value = String(err.message ?? err);
     }
   }
+}
+
+async function jumpToNode(node) {
+  const selectionId = node.detail?.selectionId ?? node.id;
+  await selectNode(node);
+  await nextTick();
+  scrollNodeIntoView(selectionId);
 }
 
 function fullActionDetail(currentDetail, action) {
@@ -251,6 +260,21 @@ function syncVisibleNode(visibleNode, targetNode) {
   visibleNode.loading = targetNode.loading;
   visibleNode.loadingMore = targetNode.loadingMore;
   visibleNode.error = targetNode.error;
+}
+
+function scrollNodeIntoView(nodeId) {
+  const canvas = actionTreeCanvas.value;
+  if (!canvas || !nodeId) {
+    return;
+  }
+  const target = Array.from(canvas.querySelectorAll('[data-action-node-id]')).find(
+    (element) => element.dataset.actionNodeId === nodeId,
+  );
+  target?.scrollIntoView({
+    block: 'center',
+    inline: 'center',
+    behavior: 'smooth',
+  });
 }
 </script>
 

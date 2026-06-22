@@ -7,15 +7,11 @@ use model_core::ids::{EventId, TraceId};
 use model_core::process::ProcessIdentity;
 use semantic_action::{
     FilePathSetState, FilePathSetWrite, SemanticAction, SemanticActionCompleteness,
-    SemanticActionKind, SemanticActionStatus, attr_keys as attrs, evidence_roles,
+    SemanticActionKind, SemanticActionStatus, attr_keys as attrs,
 };
 
-use super::common::{event_fd, event_result, event_size};
-use crate::live::actions::{
-    event_action_id, event_action_id_for_event_id, event_evidence, status_from_result,
-};
-
-const VALID_FALSE: &str = "false";
+use super::common::{FileSummaryPathAccumulator, event_fd, event_result, event_size};
+use crate::live::actions::event_action_id;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct BulkReadKey {
@@ -33,17 +29,13 @@ pub(super) struct BulkReadState {
     last_event_id: EventId,
     active: bool,
     mode: FileBulkReadMode,
-    max_paths_per_set: u32,
-    path_set_chunk_max_paths: u32,
-    path_order_by_path: BTreeMap<String, u32>,
-    path_overflow: bool,
+    paths: FileSummaryPathAccumulator,
     open_event_by_fd: BTreeMap<u32, EventId>,
-    pending_read_invalidations: BTreeMap<String, SemanticAction>,
+    pending_events: Vec<DomainEvent>,
     open_count: u64,
     close_count: u64,
     read_count: u64,
     bytes_read: u64,
-    error_count: u64,
 }
 
 impl BulkReadState {
@@ -62,17 +54,13 @@ impl BulkReadState {
             last_event_id: event.envelope.event_id,
             active: false,
             mode,
-            max_paths_per_set,
-            path_set_chunk_max_paths,
-            path_order_by_path: BTreeMap::new(),
-            path_overflow: false,
+            paths: FileSummaryPathAccumulator::new(max_paths_per_set, path_set_chunk_max_paths),
             open_event_by_fd: BTreeMap::new(),
-            pending_read_invalidations: BTreeMap::new(),
+            pending_events: Vec::new(),
             open_count: 0,
             close_count: 0,
             read_count: 0,
             bytes_read: 0,
-            error_count: 0,
         }
     }
 
@@ -92,8 +80,8 @@ impl BulkReadState {
         config: &FileBulkReadObservationConfig,
     ) {
         self.last_event_id = event.envelope.event_id;
-        if event_result(event).is_some_and(|result| result < 0) {
-            self.error_count = self.error_count.saturating_add(1);
+        if let Some(result) = event_result(event).filter(|result| *result < 0) {
+            self.paths.record_error(result, path);
         }
         match operation {
             "open" => {
@@ -115,44 +103,29 @@ impl BulkReadState {
                 self.bytes_read = self
                     .bytes_read
                     .saturating_add(event_size(event).unwrap_or(0));
-                if config.mode == FileBulkReadMode::PathSet {
-                    self.record_path(path);
+                if event_result(event).is_some_and(|result| result < 0) {
                     return;
                 }
-                self.record_path(path);
+                if config.mode == FileBulkReadMode::PathSet {
+                    self.paths.record_path(path);
+                    return;
+                }
+                self.paths.record_path(path);
             }
             _ => {}
         }
     }
 
-    pub(super) fn record_pending_read_invalidation(
-        &mut self,
-        event: &DomainEvent,
-        operation: &str,
-        path: &str,
-    ) {
-        if !matches!(operation, "read" | "readv") {
-            return;
-        }
-        let action_id = self.detailed_read_action_id(event);
-        let incoming = invalidated_read_action(event, &action_id, path);
-        self.pending_read_invalidations
-            .entry(action_id)
-            .and_modify(|existing| {
-                for evidence in &incoming.evidence {
-                    if !existing.evidence.contains(evidence) {
-                        existing.evidence.push(evidence.clone());
-                    }
-                }
-                existing.end_time = existing.end_time.max(incoming.end_time);
-            })
-            .or_insert(incoming);
+    pub(super) fn record_pending_event(&mut self, event: &DomainEvent) {
+        self.pending_events.push(event.clone());
     }
 
-    pub(super) fn take_pending_read_invalidations(&mut self) -> Vec<SemanticAction> {
-        std::mem::take(&mut self.pending_read_invalidations)
-            .into_values()
-            .collect()
+    pub(super) fn pending_event_count(&self) -> usize {
+        self.pending_events.len()
+    }
+
+    pub(super) fn take_pending_events(&mut self) -> Vec<DomainEvent> {
+        std::mem::take(&mut self.pending_events)
     }
 
     pub(super) fn action(
@@ -160,15 +133,10 @@ impl BulkReadState {
         end_time: SystemTime,
         completeness: SemanticActionCompleteness,
     ) -> SemanticAction {
-        let unique_path_count_state = if self.path_overflow {
-            "lower_bound"
-        } else {
-            "exact"
-        };
         let path_set_state = if completeness == SemanticActionCompleteness::Partial {
             FilePathSetState::Pending
         } else {
-            self.path_set_state()
+            self.paths.path_set_state()
         };
         let mut attributes = BTreeMap::from([
             (
@@ -193,7 +161,7 @@ impl BulkReadState {
             ),
             (
                 attrs::file_bulk_read::ERROR_COUNT.to_string(),
-                self.error_count.to_string(),
+                self.paths.error_count().to_string(),
             ),
             (
                 attrs::file_bulk_read::UNIQUE_PATH_COUNT.to_string(),
@@ -201,7 +169,7 @@ impl BulkReadState {
             ),
             (
                 attrs::file_bulk_read::UNIQUE_PATH_COUNT_STATE.to_string(),
-                unique_path_count_state.to_string(),
+                self.paths.unique_path_count_state().to_string(),
             ),
             (
                 attrs::file_bulk_read::STORED_PATH_COUNT.to_string(),
@@ -209,7 +177,7 @@ impl BulkReadState {
             ),
             (
                 attrs::file_bulk_read::PATH_OVERFLOW.to_string(),
-                self.path_overflow.to_string(),
+                self.paths.path_overflow().to_string(),
             ),
             (
                 attrs::file_bulk_read::FIRST_EVENT_ID.to_string(),
@@ -223,7 +191,7 @@ impl BulkReadState {
         if self.mode == FileBulkReadMode::PathSet {
             attributes.insert(
                 attrs::file_bulk_read::PATH_SET_ID.to_string(),
-                self.path_set_id(),
+                self.paths.path_set_id(None),
             );
             attributes.insert(
                 attrs::file_bulk_read::PATH_SET_STATE.to_string(),
@@ -231,7 +199,29 @@ impl BulkReadState {
             );
             attributes.insert(
                 attrs::file_bulk_read::CHUNKING_SCHEME.to_string(),
-                chunking_scheme_for(self.path_set_chunk_max_paths),
+                self.paths.chunking_scheme(),
+            );
+        }
+        if let Some(error_reason_counts) = self.paths.error_reason_counts_text() {
+            attributes.insert(
+                attrs::file_bulk_read::ERROR_REASON_COUNTS.to_string(),
+                error_reason_counts,
+            );
+            attributes.insert(
+                attrs::file_bulk_read::ERROR_UNIQUE_PATH_COUNT.to_string(),
+                self.error_stored_path_count().to_string(),
+            );
+            attributes.insert(
+                attrs::file_bulk_read::ERROR_UNIQUE_PATH_COUNT_STATE.to_string(),
+                self.paths.error_unique_path_count_state().to_string(),
+            );
+            attributes.insert(
+                attrs::file_bulk_read::ERROR_STORED_PATH_COUNT.to_string(),
+                self.error_stored_path_count().to_string(),
+            );
+            attributes.insert(
+                attrs::file_bulk_read::ERROR_PATH_OVERFLOW.to_string(),
+                self.paths.error_path_overflow().to_string(),
             );
         }
         SemanticAction {
@@ -242,7 +232,7 @@ impl BulkReadState {
             start_time: self.start_time,
             end_time: Some(end_time),
             process: self.process.clone(),
-            status: aggregate_status(self.error_count),
+            status: SemanticActionStatus::Success,
             completeness,
             confidence_millis: None,
             attributes,
@@ -251,103 +241,32 @@ impl BulkReadState {
     }
 
     pub(super) fn stored_path_count(&self) -> u64 {
-        self.path_order_by_path.len() as u64
+        self.paths.stored_path_count()
+    }
+
+    fn error_stored_path_count(&self) -> u64 {
+        self.paths.error_stored_path_count()
+    }
+
+    pub(super) fn should_activate(&self, min_unique_paths: u32) -> bool {
+        self.stored_path_count() >= u64::from(min_unique_paths)
+            || (self.paths.path_overflow()
+                && self.stored_path_count() > 0
+                && self.read_count >= u64::from(min_unique_paths))
     }
 
     pub(super) fn path_set_write(&self) -> Vec<FilePathSetWrite> {
         if self.mode != FileBulkReadMode::PathSet {
             return Vec::new();
         }
-        vec![FilePathSetWrite {
-            trace_id: self.trace_id,
-            action_id: self.action_id.clone(),
-            path_set_id: self.path_set_id(),
-            state: self.path_set_state(),
-            unique_path_count: self.stored_path_count(),
-            stored_path_count: self.stored_path_count(),
-            chunking_scheme: chunking_scheme_for(self.path_set_chunk_max_paths),
-            chunk_max_paths: self.path_set_chunk_max_paths,
-            paths: self.path_order_by_path.keys().cloned().collect(),
-        }]
-    }
-
-    fn record_path(&mut self, path: &str) {
-        if self.path_order_by_path.contains_key(path) {
-            return;
+        if self.stored_path_count() == 0 {
+            return Vec::new();
         }
-        if self.path_order_by_path.len() >= self.max_paths_per_set as usize {
-            self.path_overflow = true;
-            return;
-        }
-        let path_order = self.path_order_by_path.len() as u32;
-        self.path_order_by_path.insert(path.to_string(), path_order);
-    }
-
-    fn detailed_read_action_id(&self, event: &DomainEvent) -> String {
-        event_fd(event)
-            .and_then(|fd| self.open_event_by_fd.get(&fd).copied())
-            .map(|open_event_id| {
-                event_action_id_for_event_id(
-                    event.envelope.trace_id,
-                    open_event_id,
-                    SemanticActionKind::FileRead.as_str(),
-                )
-            })
-            .unwrap_or_else(|| event_action_id(event, SemanticActionKind::FileRead.as_str()))
-    }
-
-    fn path_set_id(&self) -> String {
-        format!("{}:path_set", self.action_id)
-    }
-
-    fn path_set_state(&self) -> FilePathSetState {
-        if self.path_overflow {
-            FilePathSetState::Overflow
-        } else {
-            FilePathSetState::Complete
-        }
+        self.paths
+            .path_set_write(self.trace_id, &self.action_id, None)
     }
 }
 
 pub(super) fn bulk_read_operation_candidate(operation: &str) -> bool {
     matches!(operation, "open" | "close" | "read" | "readv")
-}
-
-fn invalidated_read_action(event: &DomainEvent, action_id: &str, path: &str) -> SemanticAction {
-    let mut attributes = BTreeMap::from([
-        (attrs::file::PATH.to_string(), path.to_string()),
-        (
-            attrs::actrail::ACTION_VALID.to_string(),
-            VALID_FALSE.to_string(),
-        ),
-    ]);
-    if let Some(fd) = event_fd(event) {
-        attributes.insert(attrs::file::FD.to_string(), fd.to_string());
-    }
-    SemanticAction {
-        action_id: action_id.to_string(),
-        trace_id: event.envelope.trace_id,
-        kind: SemanticActionKind::FileRead,
-        title: path.to_string(),
-        start_time: event.envelope.observed_at,
-        end_time: Some(event.envelope.observed_at),
-        process: event.envelope.process.clone(),
-        status: status_from_result(event_result(event)),
-        completeness: SemanticActionCompleteness::Partial,
-        confidence_millis: None,
-        attributes,
-        evidence: vec![event_evidence(event, evidence_roles::file::READ)],
-    }
-}
-
-fn chunking_scheme_for(chunk_max_paths: u32) -> String {
-    format!("path-id-v1:chunk-max={chunk_max_paths}")
-}
-
-fn aggregate_status(error_count: u64) -> SemanticActionStatus {
-    if error_count == 0 {
-        SemanticActionStatus::Success
-    } else {
-        SemanticActionStatus::Error
-    }
 }

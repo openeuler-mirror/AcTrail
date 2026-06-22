@@ -155,7 +155,7 @@ mod upsert_tests;
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, SystemTime};
 
     use model_core::diagnostics::{DiagnosticKind, DiagnosticRecord, DiagnosticSeverity};
     use model_core::event::{
@@ -183,7 +183,7 @@ mod tests {
     const TEST_BUSY_TIMEOUT: Duration = Duration::from_millis(1);
 
     #[test]
-    fn initialize_migrates_legacy_second_timestamps_to_nanos() {
+    fn initialize_rejects_legacy_schema_without_current_version() {
         let connection = Connection::open_in_memory().unwrap();
         connection
             .execute_batch(
@@ -227,63 +227,7 @@ mod tests {
                 "#,
             )
             .unwrap();
-        let sample_time = UNIX_EPOCH + Duration::from_secs(1);
-        let legacy_seconds = sample_time.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
-        let expected_nanos =
-            i64::try_from(sample_time.duration_since(UNIX_EPOCH).unwrap().as_nanos()).unwrap();
-        connection
-            .execute(
-                "INSERT INTO traces (
-                    trace_id, root_pid, root_task_id, root_start_ticks, root_pid_namespace,
-                    root_generation, display_name, profile_name, tags, lifecycle_state, health,
-                    created_at, started_at, completed_at, failed_at
-                ) VALUES (1, 100, NULL, 200, NULL, 200, 'demo', 'default', '', 'completed', 'clean', ?1, ?1, ?1, NULL)",
-                [legacy_seconds],
-            )
-            .unwrap();
-        connection
-            .execute(
-                "INSERT INTO memberships (
-                    trace_id, pid, task_id, start_ticks, pid_namespace, generation,
-                    inherited_from_pid, inherited_from_task_id, inherited_from_start_ticks,
-                    inherited_from_pid_namespace, inherited_from_generation, capture_enabled,
-                    propagation_enabled, membership_state, exit_code, exit_observed_at
-                ) VALUES (1, 100, NULL, 200, NULL, 200, NULL, NULL, NULL, NULL, NULL, 1, 1, 'exited', 0, ?1)",
-                [legacy_seconds],
-            )
-            .unwrap();
-
-        crate::schema::initialize(&connection).unwrap();
-
-        let user_version: i64 = connection
-            .pragma_query_value(None, "user_version", |row| row.get(0))
-            .unwrap();
-        let created_at: i64 = connection
-            .query_row(
-                "SELECT created_at FROM traces WHERE trace_id = 1",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let exit_observed_at: i64 = connection
-            .query_row(
-                "SELECT exit_observed_at FROM memberships WHERE trace_id = 1",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let observed_at: Option<i64> = connection
-            .query_row(
-                "SELECT observed_at FROM memberships WHERE trace_id = 1",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-
-        assert_eq!(user_version, 1);
-        assert_eq!(created_at, expected_nanos);
-        assert_eq!(exit_observed_at, expected_nanos);
-        assert_eq!(observed_at, None);
+        assert!(crate::schema::initialize(&connection).is_err());
     }
 
     #[test]

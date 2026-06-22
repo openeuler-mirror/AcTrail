@@ -10,8 +10,8 @@ use model_core::payload::{
 };
 use model_core::process::ProcessIdentity;
 use semantic_action::{
-    SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionStatus,
-    attr_keys as attrs,
+    LlmRequestContentWrite, SemanticAction, SemanticActionCompleteness, SemanticActionKind,
+    SemanticActionStatus, attr_keys as attrs,
 };
 
 use crate::payload_projection::llm::{
@@ -33,6 +33,12 @@ pub(super) struct LiveLlmProjector {
     pending_responses: BTreeMap<LlmStreamKey, VecDeque<SemanticAction>>,
     open_calls_by_request: BTreeMap<(TraceId, String), SemanticAction>,
     open_action_versions: BTreeMap<(TraceId, String), SemanticAction>,
+}
+
+#[derive(Default)]
+pub(super) struct LiveLlmOutput {
+    pub(super) actions: Vec<SemanticAction>,
+    pub(super) llm_request_contents: Vec<LlmRequestContentWrite>,
 }
 
 impl LiveLlmProjector {
@@ -145,23 +151,20 @@ impl LlmStreamKey {
 }
 
 impl LiveLlmProjector {
-    pub(super) fn observe_payload_segment(
-        &mut self,
-        segment: &PayloadSegment,
-    ) -> Vec<SemanticAction> {
+    pub(super) fn observe_payload_segment(&mut self, segment: &PayloadSegment) -> LiveLlmOutput {
         if !self.config.llm_layer_enabled() {
-            return Vec::new();
+            return LiveLlmOutput::default();
         }
         if !plaintext_http_candidate(segment) {
-            return Vec::new();
+            return LiveLlmOutput::default();
         }
         let key = LiveStreamKey::from_segment(segment);
-        let actions = self
+        let output = self
             .streams
             .entry(key.clone())
             .or_default()
             .observe_segment(&self.config, &key, segment);
-        self.changed_actions(actions)
+        self.changed_actions(output)
     }
 
     pub(super) fn observe_http_message(&mut self, action: &SemanticAction) -> Vec<SemanticAction> {
@@ -171,14 +174,20 @@ impl LiveLlmProjector {
         let Some((request, call)) = self.take_open_request_for_http_response(action) else {
             return Vec::new();
         };
-        let Some(failed_call) = http::failed_call_for_open_request(action, &request, &call) else {
+        let Some(failed_response) = http::failed_response_for_open_request(action, &request, &call)
+        else {
             self.restore_open_request(request, call);
             return Vec::new();
         };
-        self.record_projected_action(&failed_call)
-            .then_some(failed_call)
-            .into_iter()
-            .collect()
+        let failed_call = call::llm_call_from_request_response(&request, Some(&failed_response));
+        let mut actions = Vec::new();
+        if self.record_projected_action(&failed_response) {
+            actions.push(failed_response);
+        }
+        if self.record_projected_action(&failed_call) {
+            actions.push(failed_call);
+        }
+        actions
     }
 
     pub(super) fn forget_trace(&mut self, trace_id: TraceId) {
@@ -230,12 +239,20 @@ impl LiveLlmProjector {
         finalized
     }
 
-    fn changed_actions(&mut self, actions: Vec<SemanticAction>) -> Vec<SemanticAction> {
-        let mut changed = Vec::new();
-        for action in actions {
+    fn changed_actions(&mut self, output: LiveLlmOutput) -> LiveLlmOutput {
+        let mut changed = LiveLlmOutput::default();
+        let mut request_contents = output
+            .llm_request_contents
+            .into_iter()
+            .map(|content| (content.manifest.action_id.clone(), content))
+            .collect::<BTreeMap<_, _>>();
+        for action in output.actions {
             let state_action = action_for_live_state(&action);
             if self.record_projected_action(&state_action) {
-                changed.push(action.clone());
+                if let Some(content) = request_contents.remove(&action.action_id) {
+                    changed.llm_request_contents.push(content);
+                }
+                changed.actions.push(action.clone());
             }
             match action.kind {
                 SemanticActionKind::LlmRequest => {
@@ -247,7 +264,7 @@ impl LiveLlmProjector {
                             .remove(&(state_action.trace_id, state_action.action_id.clone()));
                         self.remove_open_request(&state_action);
                         if self.record_projected_action(&call) {
-                            changed.push(call);
+                            changed.actions.push(call);
                         }
                     } else {
                         let call = call::llm_call_from_request_response(&state_action, None);
@@ -256,7 +273,7 @@ impl LiveLlmProjector {
                             call.clone(),
                         );
                         if self.record_projected_action(&call) {
-                            changed.push(call);
+                            changed.actions.push(call);
                         }
                     }
                 }
@@ -279,7 +296,7 @@ impl LiveLlmProjector {
                                 .remove(&(request.trace_id, request.action_id.clone()));
                         }
                         if self.record_projected_action(&call) {
-                            changed.push(call);
+                            changed.actions.push(call);
                         }
                     } else {
                         self.remember_pending_response(state_action.clone());
@@ -512,7 +529,7 @@ impl LiveStreamState {
         config: &SemanticRetentionConfig,
         key: &LiveStreamKey,
         segment: &PayloadSegment,
-    ) -> Vec<SemanticAction> {
+    ) -> LiveLlmOutput {
         self.append_segment(segment);
         match key.direction {
             LiveStreamDirection::Outbound => self.project_outbound_requests(config, &key.group),
@@ -540,8 +557,8 @@ impl LiveStreamState {
         &mut self,
         config: &SemanticRetentionConfig,
         key: &PayloadStreamGroupKey,
-    ) -> Vec<SemanticAction> {
-        let mut actions = Vec::new();
+    ) -> LiveLlmOutput {
+        let mut output = LiveLlmOutput::default();
         loop {
             if let Some(skip_len) = live_llm_request_prefix_skip_len(&self.buffer) {
                 self.evict_encoded_len(skip_len);
@@ -565,30 +582,33 @@ impl LiveStreamState {
             ) else {
                 break;
             };
-            actions.extend(projection.actions);
+            output.actions.extend(projection.actions);
+            output
+                .llm_request_contents
+                .extend(projection.llm_request_contents);
             self.evict_encoded_len(encoded_len);
             if self.buffer.is_empty() {
                 break;
             }
         }
-        actions
+        output
     }
 
     fn project_inbound_responses(
         &mut self,
         config: &SemanticRetentionConfig,
         key: &PayloadStreamGroupKey,
-    ) -> Vec<SemanticAction> {
+    ) -> LiveLlmOutput {
         self.discard_pending_raw_chunk_terminator();
         if self.partial_response_emitted && !self.completion_detector.seen() {
-            return Vec::new();
+            return LiveLlmOutput::default();
         }
 
-        let mut actions = Vec::new();
+        let mut output = LiveLlmOutput::default();
         while let Some(projection) = self.project_next_response(config, key) {
             let terminal = projection.terminal;
             let encoded_len = projection.encoded_len;
-            actions.extend(projection.actions);
+            output.actions.extend(projection.actions);
             if terminal {
                 self.pending_raw_chunk_terminator = projection.raw_response;
                 self.evict_encoded_len(encoded_len);
@@ -602,7 +622,7 @@ impl LiveStreamState {
                 break;
             }
         }
-        actions
+        output
     }
 
     fn project_next_response(

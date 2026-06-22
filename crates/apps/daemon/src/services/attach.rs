@@ -21,10 +21,10 @@ use config_core::daemon::{
     SemanticRetentionConfig,
 };
 use config_core::trace_snapshot::CaptureProfileSnapshot;
-use control_contract::command::TrackAddCommand;
+use control_contract::command::{ProcessRef, TrackAddCommand};
 use control_contract::reply::{ControlError, TrackAddReply};
 use ebpf_collector::EbpfCollector;
-use ebpf_collector::procfs::{ProcfsIdentityReader, ProcfsTreeSnapshotter};
+use ebpf_collector::procfs::{ProcfsIdentityReader, ProcfsTreeSnapshotter, resolve_namespaced_pid};
 use export_core::ExportRuntime;
 use model_core::capability::Capability;
 use model_core::diagnostics::{DiagnosticKind, DiagnosticRecord, DiagnosticSeverity};
@@ -127,12 +127,7 @@ impl StorageAttachService {
         profile_snapshot: CaptureProfileSnapshot,
         sensor_plan: SensorPlan,
     ) -> Result<(model_core::ids::TraceId, ProcessIdentity, DiagnosticKind), ControlError> {
-        let root_identity =
-            process_identity_contract::lookup::ProcessIdentityReader::read_identity(
-                &self.identity_reader,
-                command.root_pid,
-            )
-            .map_err(|error| ControlError::new("identity_lookup", format!("{:?}", error)))?;
+        let root_identity = resolve_process_ref(&command.root)?;
         let snapshot = process_tree_snapshot_contract::snapshot::ProcessTreeSnapshotter::snapshot(
             &self.snapshotter,
             &root_identity,
@@ -289,6 +284,7 @@ impl StorageAttachService {
             if let Err(error) = self.collector.bind_trace(&TraceBindingRequest {
                 trace_id,
                 root_identity: root_identity.clone(),
+                root_namespace_pid: command.root.namespace_pid,
                 profile_snapshot: profile_snapshot.clone(),
                 requested_capabilities,
                 initial_suppressed_fds: command.initial_suppressed_fds.clone(),
@@ -417,22 +413,24 @@ impl AttachService for StorageAttachService {
         trace_runtime: &mut trace_runtime::TraceRuntime,
         command: control_contract::command::RegisterSeccompListenerCommand,
     ) -> Result<(), ControlError> {
+        let target_identity = resolve_process_ref(&command.target)?;
+        let target_pid = target_identity.pid;
         let trace = trace_runtime
             .get_trace(command.trace_id)
             .ok_or_else(|| ControlError::new("seccomp_listener", "trace not found"))?;
         let target_known = trace.memberships.memberships().any(|membership| {
-            membership.identity.pid == command.target_pid
+            membership.identity.pid == target_pid
                 || membership
                     .inherited_from
                     .as_ref()
-                    .is_some_and(|parent| parent.pid == command.target_pid)
+                    .is_some_and(|parent| parent.pid == target_pid)
         });
         if !target_known {
             let inherited = self.process_seccomp.ensure_listener_target(
                 trace_runtime,
                 &self.identity_reader,
                 command.trace_id,
-                command.target_pid,
+                target_pid,
             )?;
             if let Some(identity) = inherited {
                 if self.collector.stats().active_bindings > 0 {
@@ -449,4 +447,9 @@ impl AttachService for StorageAttachService {
 
 fn recording_error_to_control(error: recording_runtime::RecordingError) -> ControlError {
     ControlError::new(error.stage, error.message)
+}
+
+fn resolve_process_ref(process: &ProcessRef) -> Result<ProcessIdentity, ControlError> {
+    resolve_namespaced_pid(process.namespace_pid, &process.pid_namespace)
+        .map_err(|error| ControlError::new("pid_resolution", error))
 }

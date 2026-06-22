@@ -1,6 +1,7 @@
 //! SQLite storage for semantic actions.
 
 mod command_fallback;
+mod llm_request_content;
 mod path_sets;
 mod query;
 mod root_tree;

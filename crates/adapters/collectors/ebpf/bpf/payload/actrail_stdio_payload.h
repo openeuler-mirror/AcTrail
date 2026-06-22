@@ -133,7 +133,7 @@ static __always_inline int store_stdio_payload_op(
     __u32 syscall
 ) {
     __u64 pid_tgid = current_pid_tgid();
-    __u32 tgid = current_namespace_tgid();
+    __u32 tgid = pid_tgid >> 32;
     __u64 *trace_id = bpf_map_lookup_elem(&tracked_traces, &tgid);
     struct actrail_stdio_payload_config *config = stdio_payload_config();
     struct actrail_pending_stdio_payload_op op = {};
@@ -173,7 +173,7 @@ static __always_inline int store_stdio_payload_op(
 
 static __always_inline int emit_stdio_payload_op(struct trace_event_raw_sys_exit *ctx) {
     __u64 pid_tgid = current_pid_tgid();
-    __u32 tgid = current_namespace_tgid();
+    __u32 tgid = pid_tgid >> 32;
     __u32 tid = (__u32)pid_tgid;
     struct actrail_pending_stdio_payload_op *op =
         bpf_map_lookup_elem(&pending_stdio_payload_ops, &pid_tgid);

@@ -26,6 +26,7 @@ use crate::provider_rules::ProviderRuleSetConfig;
 
 pub const DEFAULT_OPERATOR_CONFIG_PATH: &str = "/etc/actrail/actraild.conf";
 pub const DEFAULT_CONTROL_PENDING_CONNECTION_MAX: u32 = 256;
+pub const DEFAULT_ACTIVE_TRACE_MAX: u32 = 128;
 pub use template::OPERATOR_CONFIG_TEMPLATE;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -40,6 +41,7 @@ pub struct OperatorConfig {
     pub socket_path: PathBuf,
     pub socket_permissions: SocketPermissions,
     pub control_pending_connection_max: u32,
+    pub active_trace_max: u32,
     pub pid_file: PathBuf,
     pub storage: StorageConfig,
     pub export_config: ExportConfig,
@@ -165,6 +167,8 @@ impl OperatorConfig {
                 "control_pending_connection_max",
                 DEFAULT_CONTROL_PENDING_CONNECTION_MAX,
             )?,
+            active_trace_max: values
+                .optional_positive_u32("active_trace_max", DEFAULT_ACTIVE_TRACE_MAX)?,
             pid_file: PathBuf::from(values.required("pid_file")?),
             storage,
             export_config,

@@ -23,7 +23,9 @@ use collector_stats::CollectorStats;
 use config_core::daemon::{EbpfCollectorConfig, PayloadConfig};
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use model_core::ids::{CollectorName, TraceId};
-use model_core::process::{InitialSuppressedFd, ProcessIdentity, ProcessSuppressedFd};
+use model_core::process::{
+    InitialSuppressedFd, NamespaceIdentity, ProcessIdentity, ProcessSuppressedFd,
+};
 
 use crate::capability_probe::{EbpfProbeResult, probe};
 use crate::decode::FileTracker;
@@ -35,11 +37,11 @@ pub use crate::decode::{
     TlsPayloadDirectCapture,
 };
 use crate::loader::{
-    AttachPlan, EbpfProgramLoader, EbpfRuntime, LoaderError, PendingTlsPayloadOp, PidNamespace,
+    AttachPlan, EbpfProgramLoader, EbpfRuntime, LoaderError, PendingTlsPayloadOp,
     TlsPayloadDiagnostics,
 };
 use crate::maps::BindingStateMap;
-use crate::procfs::{ProcfsIdentityReader, read_pid_namespace_handle};
+use crate::procfs::{ProcfsIdentityReader, read_process_namespace_pid};
 use collector_dynamic_go_tls::DynamicGoTlsAttacher;
 
 pub struct EbpfCollector {
@@ -48,7 +50,6 @@ pub struct EbpfCollector {
     bindings: BindingStateMap,
     runtime: Option<EbpfRuntime>,
     identity_reader: ProcfsIdentityReader,
-    pid_namespace: Option<PidNamespace>,
     file_tracker: FileTracker,
     dynamic_go_tls: DynamicGoTlsAttacher,
     tls_capture_requests: Vec<TlsPayloadCaptureRequest>,
@@ -57,6 +58,7 @@ pub struct EbpfCollector {
     tls_diagnostic_events: Vec<TlsDiagnosticEvent>,
     socket_completions: Vec<SocketPayloadCompletion>,
     suppressed_fds: Vec<TraceSuppressedFd>,
+    active_pid_namespace: Option<NamespaceIdentity>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -86,7 +88,6 @@ impl EbpfCollector {
             bindings: BindingStateMap::default(),
             runtime: None,
             identity_reader: ProcfsIdentityReader,
-            pid_namespace: None,
             file_tracker: FileTracker::default(),
             dynamic_go_tls: DynamicGoTlsAttacher::new(&payload_config.tls),
             tls_capture_requests: Vec::new(),
@@ -95,6 +96,7 @@ impl EbpfCollector {
             tls_diagnostic_events: Vec::new(),
             socket_completions: Vec::new(),
             suppressed_fds: Vec::new(),
+            active_pid_namespace: None,
         }
     }
 
@@ -107,32 +109,38 @@ impl EbpfCollector {
         trace_id: TraceId,
         identities: impl IntoIterator<Item = ProcessIdentity>,
     ) -> Result<(), CollectorError> {
-        let mut seeded = Vec::new();
         for identity in identities {
-            self.ensure_pid_namespace(identity.pid)?;
+            let map_pid = self.map_pid_for_identity(&identity)?;
             self.runtime_mut()?
-                .track_pid(&identity, trace_id)
+                .track_pid(map_pid, &identity, trace_id)
                 .map_err(loader_error)?;
-            self.file_tracker.seed_process(identity.pid);
-            seeded.push(identity);
+            self.file_tracker.seed_process(
+                trace_id,
+                identity.clone(),
+                crate::procfs::read_process_cwd(identity.pid),
+            );
+            self.bindings
+                .track_with_map_pid(trace_id, identity, map_pid);
         }
-        self.bindings.track_many(trace_id, seeded);
         Ok(())
     }
 
     pub fn stop_tracking_process(&mut self, pid: u32) -> Result<(), CollectorError> {
-        let identity = self.bindings.tracked_identity(pid).cloned();
+        let tracked = self.bindings.by_host_pid(pid).cloned();
+        let map_pid = self
+            .bindings
+            .remove_pid(pid)
+            .map(|tracked| tracked.map_pid)
+            .unwrap_or(pid);
         if let Some(runtime) = self.runtime.as_mut() {
-            if let Some(identity) = identity {
+            if let Some(tracked) = tracked.as_ref() {
                 runtime
-                    .sweep_suppressed_fds_for_process(identity.pid, identity.generation)
+                    .sweep_suppressed_fds_for_process(map_pid, tracked.identity.generation)
                     .map_err(loader_error)?;
             }
-            cleanup_suppressed_fds_for_pid(runtime, &mut self.suppressed_fds, pid)?;
-            runtime.untrack_pid(pid).map_err(loader_error)?;
+            cleanup_suppressed_fds_for_pid(runtime, &mut self.suppressed_fds, map_pid)?;
+            runtime.untrack_pid(map_pid).map_err(loader_error)?;
         }
-        self.bindings.remove_pid(pid);
-        self.file_tracker.remove_process(pid);
         Ok(())
     }
 
@@ -191,28 +199,15 @@ impl EbpfCollector {
             active_binding_traces: self.bindings.trace_count(),
             attached_programs: runtime.attached_programs().to_vec(),
             last_raw_sample_count: runtime.last_raw_sample_count(),
-            tracked_trace_id: runtime.tracked_trace_id(pid).map_err(loader_error)?,
+            tracked_trace_id: runtime
+                .tracked_trace_id(
+                    self.bindings
+                        .by_host_pid(pid)
+                        .map(|tracked| tracked.map_pid)
+                        .unwrap_or(pid),
+                )
+                .map_err(loader_error)?,
         })
-    }
-
-    fn ensure_pid_namespace(&mut self, pid: u32) -> Result<(), CollectorError> {
-        let namespace = read_pid_namespace_handle(pid)
-            .map_err(|error| CollectorError::new("pid_namespace", error))?;
-        if let Some(active_namespace) = self.pid_namespace {
-            if active_namespace != namespace {
-                return Err(CollectorError::new(
-                    "pid_namespace",
-                    "current eBPF collector runtime supports one active PID namespace",
-                ));
-            }
-            return Ok(());
-        }
-
-        self.runtime_mut()?
-            .set_pid_namespace(namespace)
-            .map_err(loader_error)?;
-        self.pid_namespace = Some(namespace);
-        Ok(())
     }
 
     fn ensure_runtime_for_requests(
@@ -223,7 +218,6 @@ impl EbpfCollector {
             AttachPlan::from_requests(requests, self.loader.config(), self.loader.payload_config());
         if self.idle_runtime_needs_replan(&attach_plan) {
             self.runtime = None;
-            self.pid_namespace = None;
         }
         if self.runtime.is_none() {
             let runtime = self
@@ -280,11 +274,16 @@ impl EbpfCollector {
         &mut self,
         trace_id: TraceId,
         root_identity: &ProcessIdentity,
+        root_map_pid: u32,
         initial_fds: &[InitialSuppressedFd],
     ) -> Result<(), CollectorError> {
         for initial in initial_fds {
+            let map_identity = ProcessIdentity {
+                pid: root_map_pid,
+                ..root_identity.clone()
+            };
             let fd = ProcessSuppressedFd {
-                process: root_identity.clone(),
+                process: map_identity,
                 fd: initial.fd,
                 purpose: initial.purpose,
             };
@@ -294,6 +293,43 @@ impl EbpfCollector {
             self.suppressed_fds.push(TraceSuppressedFd { trace_id, fd });
         }
         Ok(())
+    }
+
+    fn ensure_active_pid_namespace(
+        &mut self,
+        identity: &ProcessIdentity,
+    ) -> Result<(), CollectorError> {
+        let namespace = identity.pid_namespace.clone().ok_or_else(|| {
+            CollectorError::new("pid_namespace", "root process has no PID namespace")
+        })?;
+        if self.bindings.trace_count() > 0
+            && self
+                .active_pid_namespace
+                .as_ref()
+                .is_some_and(|active| active != &namespace)
+        {
+            return Err(CollectorError::new(
+                "pid_namespace",
+                format!(
+                    "active eBPF runtime is already configured for {}; finish active traces before binding {}",
+                    self.active_pid_namespace
+                        .as_ref()
+                        .map(NamespaceIdentity::as_str)
+                        .unwrap_or("unknown"),
+                    namespace.as_str()
+                ),
+            ));
+        }
+        self.runtime_mut()?
+            .configure_pid_namespace_for_pid(identity.pid)
+            .map_err(loader_error)?;
+        self.active_pid_namespace = Some(namespace);
+        Ok(())
+    }
+
+    fn map_pid_for_identity(&self, identity: &ProcessIdentity) -> Result<u32, CollectorError> {
+        read_process_namespace_pid(identity.pid)
+            .map_err(|error| CollectorError::new("pid_namespace", error))
     }
 
     fn cleanup_suppressed_fds_for_process(
@@ -411,22 +447,22 @@ impl CollectorInstance for EbpfCollector {
         }
 
         self.ensure_runtime_for_requests(&request.requested_capabilities)?;
-        self.ensure_pid_namespace(request.root_identity.pid)?;
+        self.ensure_active_pid_namespace(&request.root_identity)?;
         let attached_capabilities = self.runtime_ref()?.attached_capabilities().clone();
+        let root_map_pid = request.root_namespace_pid;
         let runtime = self.runtime_mut()?;
         runtime
-            .track_pid(&request.root_identity, request.trace_id)
+            .track_pid(root_map_pid, &request.root_identity, request.trace_id)
             .map_err(loader_error)?;
         if let Err(error) = self.register_initial_suppressed_fds(
             request.trace_id,
             &request.root_identity,
+            root_map_pid,
             &request.initial_suppressed_fds,
         ) {
-            let _ = self.runtime_mut().and_then(|runtime| {
-                runtime
-                    .untrack_pid(request.root_identity.pid)
-                    .map_err(loader_error)
-            });
+            let _ = self
+                .runtime_mut()
+                .and_then(|runtime| runtime.untrack_pid(root_map_pid).map_err(loader_error));
             return Err(error);
         }
         self.bindings.set_trace_capabilities(
@@ -438,9 +474,22 @@ impl CollectorInstance for EbpfCollector {
                 .filter(|request| attached_capabilities.contains(&request.capability))
                 .map(|request| request.capability.clone()),
         );
-        self.bindings
-            .track(request.trace_id, request.root_identity.clone());
-        self.file_tracker.seed_process(request.root_identity.pid);
+        self.bindings.set_trace_pid_namespace(
+            request.trace_id,
+            request.root_identity.pid_namespace.clone().ok_or_else(|| {
+                CollectorError::new("pid_namespace", "root process has no PID namespace")
+            })?,
+        );
+        self.bindings.track_with_map_pid(
+            request.trace_id,
+            request.root_identity.clone(),
+            root_map_pid,
+        );
+        self.file_tracker.seed_process(
+            request.trace_id,
+            request.root_identity.clone(),
+            crate::procfs::read_process_cwd(request.root_identity.pid),
+        );
         Ok(TraceBindingHandle {
             collector: self.probe_result.descriptor.clone(),
             bound_at: SystemTime::now(),
@@ -451,15 +500,14 @@ impl CollectorInstance for EbpfCollector {
         if let Some(runtime) = self.runtime.as_mut() {
             cleanup_suppressed_fds_for_trace(runtime, &mut self.suppressed_fds, trace_id)?;
             for tracked in self.bindings.remove_trace(trace_id) {
-                runtime
-                    .untrack_pid(tracked.identity.pid)
-                    .map_err(loader_error)?;
-                self.file_tracker.remove_process(tracked.identity.pid);
+                runtime.untrack_pid(tracked.map_pid).map_err(loader_error)?;
             }
         } else {
-            for tracked in self.bindings.remove_trace(trace_id) {
-                self.file_tracker.remove_process(tracked.identity.pid);
-            }
+            let _ = self.bindings.remove_trace(trace_id);
+        }
+        self.file_tracker.remove_trace(trace_id);
+        if self.bindings.trace_count() == 0 {
+            self.active_pid_namespace = None;
         }
         Ok(())
     }

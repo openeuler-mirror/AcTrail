@@ -12,6 +12,78 @@ use super::LiveSemanticActionRuntime;
 use super::test_support::*;
 
 #[test]
+fn llm_request_projects_canonical_content_blocks() {
+    let mut runtime = runtime();
+    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+
+    let output = runtime.observe_payload_segment(&llm_payload_segment(agent));
+    let request = output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmRequest)
+        .expect("payload should project an llm.request action");
+
+    assert_eq!(
+        request
+            .attributes
+            .get("llm.request.content_state")
+            .map(String::as_str),
+        Some("canonical_blocks")
+    );
+    assert_eq!(
+        request
+            .attributes
+            .get("llm.request.message_preview")
+            .map(String::as_str),
+        Some("hello")
+    );
+    assert!(!request.attributes.contains_key("llm.request.body_json"));
+    assert_eq!(output.llm_request_contents.len(), 1);
+    let content = &output.llm_request_contents[0];
+    assert_eq!(content.manifest.action_id, request.action_id);
+    assert_eq!(content.manifest.format_version, 1);
+    assert!(!content.block_refs.is_empty());
+    assert!(!content.blocks.is_empty());
+}
+
+#[test]
+fn invalid_json_llm_request_is_shape_only() {
+    let mut runtime = runtime();
+    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let body = r#"{"model":"deepseek-chat","messages":"#;
+    let bytes = format!(
+        "POST /chat/completions HTTP/1.1\r\nHost: api.local\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    )
+    .into_bytes();
+    let mut segment = llm_payload_segment(agent);
+    let size = bytes.len() as u64;
+    segment.bytes = bytes;
+    segment.original_size = size;
+    segment.captured_size = size;
+    segment.operation_original_size = size;
+    segment.operation_captured_size = size;
+
+    let output = runtime.observe_payload_segment(&segment);
+    let request = output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmRequest)
+        .expect("lossy LLM request should still project an action");
+
+    assert_eq!(
+        request
+            .attributes
+            .get("llm.request.content_state")
+            .map(String::as_str),
+        Some("shape")
+    );
+    assert!(!request.attributes.contains_key("llm.request.body_text"));
+    assert!(output.llm_request_contents.is_empty());
+}
+
+#[test]
 fn llm_response_updates_one_action_with_multiple_sse_segments() {
     let mut runtime = runtime();
     let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);

@@ -2,10 +2,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use model_core::{ids::TraceId, process::ProcessIdentity};
+use model_core::{
+    ids::TraceId,
+    process::{NamespaceIdentity, ProcessIdentity},
+};
 use semantic_action::{
     SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkRole,
-    SemanticEvidenceKind, attr_keys as attrs,
+    SemanticEvidenceKind, attr_keys as attrs, evidence_roles,
 };
 use storage_core::StorageBackend;
 
@@ -81,7 +84,7 @@ impl ActionDisplayProjection {
             .map(|action| (action.action_id.clone(), action.clone()))
             .collect::<BTreeMap<_, _>>();
         let links = valid_links(links, &action_by_id);
-        let actions = legacy_llm_call::normalize_finalized_http_error_calls(actions, &links);
+        let mut actions = legacy_llm_call::normalize_finalized_http_error_calls(actions, &links);
         let action_by_id = actions
             .iter()
             .map(|action| (action.action_id.clone(), action.clone()))
@@ -89,7 +92,12 @@ impl ActionDisplayProjection {
         let links = valid_links(links, &action_by_id);
         let parent_links = selected_parent_links(&links);
         let root_links = selected_root_links(&links);
-        let parent_links = remove_cycles(parent_links);
+        let mut parent_links = remove_cycles(parent_links);
+        fold_triggered_vfork_attempts(&mut actions, &mut parent_links);
+        let action_by_id = actions
+            .iter()
+            .map(|action| (action.action_id.clone(), action.clone()))
+            .collect::<BTreeMap<_, _>>();
         let fallback_parents = fallback_display_parents(&actions, &parent_links);
         let children_by_parent = children_by_parent(
             &actions,
@@ -255,6 +263,110 @@ fn parent_path_reaches_child(
         current = &link.parent_action_id;
     }
     false
+}
+
+fn fold_triggered_vfork_attempts(
+    actions: &mut [SemanticAction],
+    parent_links: &mut BTreeMap<String, SemanticActionLink>,
+) {
+    let action_index_by_id = actions
+        .iter()
+        .enumerate()
+        .map(|(index, action)| (action.action_id.clone(), index))
+        .collect::<BTreeMap<_, _>>();
+    let mut children_by_parent = BTreeMap::<String, Vec<String>>::new();
+    for (child_id, link) in parent_links.iter() {
+        if action_index_by_id.contains_key(child_id) {
+            children_by_parent
+                .entry(link.parent_action_id.clone())
+                .or_default()
+                .push(child_id.clone());
+        }
+    }
+    for child_ids in children_by_parent.values_mut() {
+        child_ids.sort_by(|left, right| {
+            let left = &actions[action_index_by_id[left]];
+            let right = &actions[action_index_by_id[right]];
+            (left.start_time, left.action_id.as_str())
+                .cmp(&(right.start_time, right.action_id.as_str()))
+        });
+        let mut pending_vforks = Vec::<String>::new();
+        for child_id in child_ids {
+            let action_index = action_index_by_id[child_id];
+            let action = &actions[action_index];
+            if foldable_vfork_attempt(action) {
+                pending_vforks.push(child_id.clone());
+                continue;
+            }
+            if action.kind != SemanticActionKind::CommandInvocation
+                || !has_process_fork_evidence(action)
+            {
+                continue;
+            }
+            let Some(parent_process) = parent_process_from_action(action) else {
+                continue;
+            };
+            let Some(pending_index) = pending_vforks.iter().rposition(|fork_id| {
+                let fork_index = action_index_by_id[fork_id];
+                actions[fork_index].process == parent_process
+            }) else {
+                continue;
+            };
+            let fork_id = pending_vforks.remove(pending_index);
+            let fork_index = action_index_by_id[&fork_id];
+            let fork_start_time = actions[fork_index].start_time;
+            if let Some(link) = parent_links.get_mut(&fork_id) {
+                link.parent_action_id = child_id.clone();
+            }
+            if fork_start_time < actions[action_index].start_time {
+                actions[action_index].start_time = fork_start_time;
+            }
+        }
+    }
+}
+
+fn foldable_vfork_attempt(action: &SemanticAction) -> bool {
+    action.kind == SemanticActionKind::ProcessForkAttempt
+        && action
+            .attributes
+            .get("syscall")
+            .is_some_and(|syscall| syscall == "vfork")
+}
+
+fn has_process_fork_evidence(action: &SemanticAction) -> bool {
+    action
+        .evidence
+        .iter()
+        .any(|evidence| evidence.role == evidence_roles::process::FORK)
+}
+
+fn parent_process_from_action(action: &SemanticAction) -> Option<ProcessIdentity> {
+    if !action
+        .attributes
+        .get(attrs::process_parent::IDENTITY_STATE)
+        .is_some_and(|state| state == "observed")
+    {
+        return None;
+    }
+    let pid = parse_u32_attr(action, attrs::process_parent::PID)?;
+    let start_time_ticks = parse_u64_attr(action, attrs::process_parent::START_TIME_TICKS)?;
+    let generation = parse_u64_attr(action, attrs::process_parent::GENERATION)?;
+    let mut process = ProcessIdentity::new(pid, start_time_ticks, generation);
+    if let Some(task_id) = parse_u32_attr(action, attrs::process_parent::TASK_ID) {
+        process = process.with_task_id(task_id);
+    }
+    if let Some(pid_namespace) = action.attributes.get(attrs::process_parent::PID_NAMESPACE) {
+        process = process.with_namespace(NamespaceIdentity::new(pid_namespace.clone()));
+    }
+    Some(process)
+}
+
+fn parse_u32_attr(action: &SemanticAction, key: &str) -> Option<u32> {
+    action.attributes.get(key)?.parse().ok()
+}
+
+fn parse_u64_attr(action: &SemanticAction, key: &str) -> Option<u64> {
+    action.attributes.get(key)?.parse().ok()
 }
 
 fn children_by_parent(

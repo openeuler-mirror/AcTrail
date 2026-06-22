@@ -1,6 +1,6 @@
 //! Cross-layer semantic action records.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::SystemTime;
 
 use model_core::ids::TraceId;
@@ -226,6 +226,68 @@ pub struct FilePathSetWrite {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FilePathSetIdentity {
+    pub path_set_id: String,
+    pub path_set_hash: String,
+}
+
+pub fn file_path_set_identity_for_paths<I, P>(
+    state: FilePathSetState,
+    chunking_scheme: &str,
+    paths: I,
+) -> FilePathSetIdentity
+where
+    I: IntoIterator<Item = P>,
+    P: AsRef<str>,
+{
+    let sorted_paths = paths
+        .into_iter()
+        .map(|path| path.as_ref().to_string())
+        .collect::<BTreeSet<_>>();
+    let mut input = format!(
+        "file-path-set-v1\nstate:{}\nchunking:{}:",
+        state.as_str(),
+        chunking_scheme.len()
+    );
+    input.push_str(chunking_scheme);
+    input.push_str("\ncount:");
+    input.push_str(&sorted_paths.len().to_string());
+    input.push('\n');
+    for path in sorted_paths {
+        input.push_str(&path.len().to_string());
+        input.push(':');
+        input.push_str(&path);
+        input.push('\n');
+    }
+    let path_set_hash = stable_hash_bytes(input.as_bytes());
+    FilePathSetIdentity {
+        path_set_id: format!("file-path-set:{path_set_hash}"),
+        path_set_hash,
+    }
+}
+
+pub fn file_path_set_identity_for_overflow_scope(
+    chunking_scheme: &str,
+    scope: &str,
+) -> FilePathSetIdentity {
+    let mut input = format!(
+        "file-path-set-overflow-scope-v1\nchunking:{}:",
+        chunking_scheme.len()
+    );
+    input.push_str(chunking_scheme);
+    input.push_str("\nscope:");
+    input.push_str(&scope.len().to_string());
+    input.push(':');
+    input.push_str(scope);
+    input.push('\n');
+    let path_set_hash = stable_hash_bytes(input.as_bytes());
+    FilePathSetIdentity {
+        path_set_id: format!("file-path-set:{path_set_hash}"),
+        path_set_hash,
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FilePathSetPath {
     pub path_id: u64,
     pub path: String,
@@ -241,6 +303,63 @@ pub struct FilePathSetPathPage {
     pub chunking_scheme: String,
     pub paths: Vec<FilePathSetPath>,
     pub total_count: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LlmRequestManifest {
+    pub trace_id: TraceId,
+    pub action_id: String,
+    pub format_version: u32,
+    pub canonical_body_hash: String,
+    pub canonical_body_bytes: u64,
+    pub skeleton_json: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LlmRequestBlockRef {
+    pub trace_id: TraceId,
+    pub action_id: String,
+    pub ordinal: u32,
+    pub block_hash: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LlmRequestBlock {
+    pub trace_id: TraceId,
+    pub block_hash: String,
+    pub uncompressed_bytes: u64,
+    pub encoded_bytes: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LlmRequestContentWrite {
+    pub manifest: LlmRequestManifest,
+    pub block_refs: Vec<LlmRequestBlockRef>,
+    pub blocks: Vec<LlmRequestBlock>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LlmRequestContentPage {
+    pub trace_id: TraceId,
+    pub action_id: String,
+    pub format_version: u32,
+    pub canonical_body_hash: String,
+    pub canonical_body_bytes: u64,
+    pub returned_bytes: u64,
+    pub truncated: bool,
+    pub body_json: String,
+}
+
+const FNV_OFFSET_BASIS: u64 = 14_695_981_039_346_656_037;
+const FNV_PRIME: u64 = 1_099_511_628_211;
+
+fn stable_hash_bytes(bytes: &[u8]) -> String {
+    let mut hash = FNV_OFFSET_BASIS;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    format!("{hash:016x}")
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]

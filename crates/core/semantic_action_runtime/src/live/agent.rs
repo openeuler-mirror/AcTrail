@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 
 use super::actions::{
     ATTR_AGENT_IDENTITY_EVIDENCE_ACTION_ID, ATTR_AGENT_IDENTITY_SOURCE, ATTR_AGENT_IDENTITY_STATUS,
-    append_missing_evidence, event_evidence, process_exit_status,
+    append_missing_evidence, apply_process_exit_attributes, event_evidence, process_exit_status,
 };
 
 const AGENT_IDENTITY_STATUS_OBSERVED: &str = "observed";
@@ -60,6 +60,7 @@ impl AgentProjector {
             .map(|mut action| {
                 action.end_time = Some(event.envelope.observed_at);
                 action.status = process_exit_status(payload.metadata.get("exit_code"));
+                apply_process_exit_attributes(&mut action, payload.metadata.get("exit_code"));
                 action
                     .evidence
                     .push(event_evidence(event, evidence_roles::process::EXIT));

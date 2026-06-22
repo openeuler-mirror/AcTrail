@@ -40,9 +40,9 @@ impl<'a> ObservedRecordCommitCoordinator<'a> {
             |error| error,
             |commit| {
                 SemanticActionExportRecorder::new(self.storage, self.export_runtime)
-                    .publish_batch_for_trace(
+                    .publish_batches_by_trace(
                         traces,
-                        commit.semantic_actions().as_record_batch(),
+                        commit.into_semantic_actions(),
                         emitted_at,
                         next_diagnostic_id,
                     )
@@ -69,9 +69,9 @@ impl<'a> ObservedRecordCommitCoordinator<'a> {
             |error| error,
             |semantic_actions| {
                 SemanticActionExportRecorder::new(self.storage, self.export_runtime)
-                    .publish_batch_for_trace(
+                    .publish_batches_by_trace(
                         traces,
-                        semantic_actions.as_record_batch(),
+                        semantic_actions,
                         emitted_at,
                         next_diagnostic_id,
                     )

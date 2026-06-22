@@ -2,7 +2,9 @@
 
 use config_core::daemon::SemanticRetentionConfig;
 use model_core::payload::PayloadSegment;
-use semantic_action::{SemanticAction, SemanticActionKind, SemanticActionStatus};
+use semantic_action::{
+    LlmRequestContentWrite, SemanticAction, SemanticActionKind, SemanticActionStatus,
+};
 
 use crate::payload_projection::http::{
     request_prefix_skip_len, request_stream_id_hint, split_request, split_response,
@@ -17,6 +19,7 @@ use super::stream::PayloadStreamGroupKey;
 
 pub(crate) struct LiveLlmProjection {
     pub(crate) actions: Vec<SemanticAction>,
+    pub(crate) llm_request_contents: Vec<LlmRequestContentWrite>,
     pub(crate) encoded_len: usize,
     pub(crate) terminal: bool,
     pub(crate) raw_response: bool,
@@ -48,10 +51,18 @@ pub(crate) fn project_live_llm_request_message(
     let http = split_request(bytes)?;
     let encoded_len = http.encoded_len;
     let raw_bytes = bytes.get(..encoded_len)?;
-    let action =
+    let request =
         project_stream_llm_request_action(config, key, message_start, raw_bytes, http, segments);
+    let (actions, llm_request_contents) = match request {
+        Some(request) => (
+            vec![request.action],
+            request.content.into_iter().collect::<Vec<_>>(),
+        ),
+        None => (Vec::new(), Vec::new()),
+    };
     Some(LiveLlmProjection {
-        actions: action.into_iter().collect(),
+        actions,
+        llm_request_contents,
         encoded_len,
         terminal: true,
         raw_response: false,
@@ -79,6 +90,7 @@ pub(crate) fn project_live_llm_response_message(
         ) else {
             return can_evict.then_some(LiveLlmProjection {
                 actions: Vec::new(),
+                llm_request_contents: Vec::new(),
                 encoded_len,
                 terminal: true,
                 raw_response: false,
@@ -116,6 +128,7 @@ fn response_projection(
             .is_some_and(|action| action.status != SemanticActionStatus::InProgress);
     LiveLlmProjection {
         actions,
+        llm_request_contents: Vec::new(),
         encoded_len,
         terminal,
         raw_response,

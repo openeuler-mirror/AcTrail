@@ -30,6 +30,9 @@ pub mod agent_invocation {
 }
 
 pub mod command {
+    pub const EXIT_CODE: &str = "command.exit_code";
+    pub const FAILURE_KIND: &str = "command.failure.kind";
+    pub const FAILURE_SUMMARY: &str = "command.failure.summary";
     pub const LINE: &str = "command.line";
 }
 
@@ -56,6 +59,11 @@ pub mod file_bulk_read {
     pub const CLOSE_COUNT: &str = "file.bulk_read.close_count";
     pub const CHUNKING_SCHEME: &str = "file.bulk_read.chunking_scheme";
     pub const ERROR_COUNT: &str = "file.bulk_read.error_count";
+    pub const ERROR_PATH_OVERFLOW: &str = "file.bulk_read.error_path_overflow";
+    pub const ERROR_REASON_COUNTS: &str = "file.bulk_read.error_reason_counts";
+    pub const ERROR_STORED_PATH_COUNT: &str = "file.bulk_read.error_stored_path_count";
+    pub const ERROR_UNIQUE_PATH_COUNT: &str = "file.bulk_read.error_unique_path_count";
+    pub const ERROR_UNIQUE_PATH_COUNT_STATE: &str = "file.bulk_read.error_unique_path_count_state";
     pub const FIRST_EVENT_ID: &str = "file.bulk_read.first_event_id";
     pub const LAST_EVENT_ID: &str = "file.bulk_read.last_event_id";
     pub const MODE: &str = "file.bulk_read.mode";
@@ -73,6 +81,11 @@ pub mod fs_enumerate {
     pub const CHUNKING_SCHEME: &str = "fs.enumerate.chunking_scheme";
     pub const CLOSE_COUNT: &str = "fs.enumerate.close_count";
     pub const ERROR_COUNT: &str = "fs.enumerate.error_count";
+    pub const ERROR_PATH_OVERFLOW: &str = "fs.enumerate.error_path_overflow";
+    pub const ERROR_REASON_COUNTS: &str = "fs.enumerate.error_reason_counts";
+    pub const ERROR_STORED_PATH_COUNT: &str = "fs.enumerate.error_stored_path_count";
+    pub const ERROR_UNIQUE_PATH_COUNT: &str = "fs.enumerate.error_unique_path_count";
+    pub const ERROR_UNIQUE_PATH_COUNT_STATE: &str = "fs.enumerate.error_unique_path_count_state";
     pub const FIRST_EVENT_ID: &str = "fs.enumerate.first_event_id";
     pub const LAST_EVENT_ID: &str = "fs.enumerate.last_event_id";
     pub const OPEN_COUNT: &str = "fs.enumerate.open_count";
@@ -138,11 +151,14 @@ pub mod llm_call {
 }
 
 pub mod llm_request {
-    pub const BODY_JSON: &str = "llm.request.body_json";
-    pub const BODY_TEXT: &str = "llm.request.body_text";
+    pub const BLOCK_COUNT: &str = "llm.request.block_count";
+    pub const CANONICAL_BODY_BYTES: &str = "llm.request.canonical_body_bytes";
+    pub const CANONICAL_BODY_HASH: &str = "llm.request.canonical_body_hash";
+    pub const CONTENT_FORMAT_VERSION: &str = "llm.request.content_format_version";
+    pub const CONTENT_STATE: &str = "llm.request.content_state";
+    pub const MESSAGE_PREVIEW: &str = "llm.request.message_preview";
     pub const MODEL: &str = "llm.request.model";
     pub const PAYLOAD_BYTES: &str = "llm.request.payload_bytes";
-    pub const PAYLOAD_TEXT: &str = "llm.request.payload_text";
     pub const RAW_PAYLOAD_BYTES: &str = "llm.request.raw_payload_bytes";
 }
 
@@ -197,6 +213,9 @@ pub mod payload_aggregate {
 
 pub mod process {
     pub const EXECUTABLE: &str = "process.executable";
+    pub const EXIT_CODE: &str = "process.exit_code";
+    pub const FAILURE_KIND: &str = "process.failure.kind";
+    pub const FAILURE_SUMMARY: &str = "process.failure.summary";
     pub const OPERATION: &str = "process.operation";
 }
 

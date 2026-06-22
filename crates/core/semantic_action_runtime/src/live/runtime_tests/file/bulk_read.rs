@@ -35,14 +35,14 @@ fn bulk_read_threshold_emits_summary_and_writes_path_set_on_boundary() {
 
     let first_output =
         runtime.observe_event(&read_event(FILE_READ_EVENT_ID, process.clone(), PATH_A));
-    assert!(!first_output.raw_event_consumed);
-    assert!(first_output.retain_event);
-    let first_read = first_output
-        .actions
-        .iter()
-        .find(|action| action.kind == SemanticActionKind::FileRead)
-        .expect("pre-threshold read should project as a detailed file.read");
-    let first_read_action_id = first_read.action_id.clone();
+    assert!(first_output.raw_event_consumed);
+    assert!(!first_output.retain_event);
+    assert!(
+        first_output
+            .actions
+            .iter()
+            .all(|action| action.kind != SemanticActionKind::FileRead)
+    );
 
     let second_output = runtime.observe_event(&read_event(
         EventId::new(FILE_READ_EVENT_ID.get() + 1),
@@ -54,18 +54,13 @@ fn bulk_read_threshold_emits_summary_and_writes_path_set_on_boundary() {
     assert!(!second_output.retain_event);
     assert!(second_output.file_observation_paths.is_empty());
     assert!(second_output.file_path_sets.is_empty());
-    let invalidated_first_read = second_output
-        .actions
-        .iter()
-        .find(|action| action.action_id == first_read_action_id)
-        .expect("bulk activation should invalidate pre-threshold detailed file.read");
-    assert_eq!(invalidated_first_read.kind, SemanticActionKind::FileRead);
     assert_eq!(
-        invalidated_first_read
-            .attributes
-            .get(attrs::actrail::ACTION_VALID)
-            .map(String::as_str),
-        Some("false")
+        second_output
+            .actions
+            .iter()
+            .filter(|action| action.kind == SemanticActionKind::FileRead)
+            .count(),
+        0
     );
     let bulk = second_output
         .actions
@@ -98,6 +93,49 @@ fn bulk_read_threshold_emits_summary_and_writes_path_set_on_boundary() {
     assert_eq!(path_set.action_id, bulk_action_id);
     assert_eq!(path_set.state, FilePathSetState::Complete);
     assert_eq!(path_set.paths, expected_paths(&[PATH_A, PATH_B]));
+}
+
+#[test]
+fn short_read_burst_releases_detailed_reads_on_boundary() {
+    let mut runtime = bulk_runtime_with_min_unique_paths(false, 3);
+    let process = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+
+    let first_output =
+        runtime.observe_event(&read_event(FILE_READ_EVENT_ID, process.clone(), PATH_A));
+    assert!(first_output.raw_event_consumed);
+    assert!(!first_output.retain_event);
+    assert!(first_output.actions.is_empty());
+
+    let second_output = runtime.observe_event(&read_event(
+        EventId::new(FILE_READ_EVENT_ID.get() + 1),
+        process.clone(),
+        PATH_B,
+    ));
+    assert!(second_output.raw_event_consumed);
+    assert!(!second_output.retain_event);
+    assert!(second_output.actions.is_empty());
+
+    let boundary_output = runtime.observe_event(&write_event(
+        EventId::new(FILE_READ_EVENT_ID.get() + 2),
+        process,
+        WRITE_PATH,
+    ));
+    assert!(boundary_output.file_path_sets.is_empty());
+    assert!(
+        boundary_output
+            .actions
+            .iter()
+            .all(|action| action.kind != SemanticActionKind::FileBulkRead)
+    );
+    assert_eq!(
+        boundary_output
+            .actions
+            .iter()
+            .filter(|action| action.kind == SemanticActionKind::FileRead)
+            .count(),
+        2
+    );
+    assert_eq!(boundary_output.deferred_events.len(), 2);
 }
 
 #[test]
@@ -257,11 +295,13 @@ fn bulk_read_ignores_stdio_tty_and_raw_stdio_payload_until_real_boundary() {
         process.clone(),
         TTY_PATH,
     ));
+    assert!(tty_truncate_output.raw_event_consumed);
+    assert!(!tty_truncate_output.retain_event);
     assert!(
         tty_truncate_output
             .actions
             .iter()
-            .any(|action| action.kind == SemanticActionKind::FileModify)
+            .all(|action| action.kind != SemanticActionKind::FileModify)
     );
     assert_bulk_not_completed(&tty_truncate_output, &bulk_action_id);
 
@@ -395,6 +435,7 @@ fn pathless_write_event(event_id: EventId, process: ProcessIdentity) -> DomainEv
         unreachable!("write_event returns a file payload");
     };
     payload.path = None;
+    payload.metadata.remove("fd_target");
     event
 }
 

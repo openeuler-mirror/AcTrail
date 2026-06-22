@@ -42,9 +42,6 @@ const LIVE_STATE_OMITTED_ATTRIBUTES: &[&str] = &[
     attrs::http_response::BODY_TEXT,
     attrs::http_response::HEADERS_HPACK_BASE64,
     attrs::http_response::HEADERS_TEXT,
-    attrs::llm_request::BODY_JSON,
-    attrs::llm_request::BODY_TEXT,
-    attrs::llm_request::PAYLOAD_TEXT,
     attrs::llm_response::CONTENT_TEXT,
     attrs::llm_response::OUTPUT_TEXT,
     attrs::llm_response::PAYLOAD_TEXT,
@@ -115,6 +112,50 @@ pub(super) fn process_exit_status(exit_code: Option<&String>) -> SemanticActionS
     match exit_code.and_then(|value| value.parse::<i32>().ok()) {
         Some(0) | None => SemanticActionStatus::Success,
         Some(_) => SemanticActionStatus::Error,
+    }
+}
+
+pub(super) fn apply_process_exit_attributes(
+    action: &mut SemanticAction,
+    exit_code: Option<&String>,
+) {
+    let Some(exit_code) = exit_code else {
+        return;
+    };
+    action
+        .attributes
+        .insert(attrs::process::EXIT_CODE.to_string(), exit_code.clone());
+    if exit_code.parse::<i32>().ok().is_some_and(|code| code != 0) {
+        action.attributes.insert(
+            attrs::process::FAILURE_KIND.to_string(),
+            "nonzero_exit".to_string(),
+        );
+        action.attributes.insert(
+            attrs::process::FAILURE_SUMMARY.to_string(),
+            format!("exit code {exit_code}"),
+        );
+    }
+}
+
+pub(super) fn apply_command_exit_attributes(
+    action: &mut SemanticAction,
+    exit_code: Option<&String>,
+) {
+    let Some(exit_code) = exit_code else {
+        return;
+    };
+    action
+        .attributes
+        .insert(attrs::command::EXIT_CODE.to_string(), exit_code.clone());
+    if exit_code.parse::<i32>().ok().is_some_and(|code| code != 0) {
+        action.attributes.insert(
+            attrs::command::FAILURE_KIND.to_string(),
+            "nonzero_exit".to_string(),
+        );
+        action.attributes.insert(
+            attrs::command::FAILURE_SUMMARY.to_string(),
+            format!("exit code {exit_code}"),
+        );
     }
 }
 

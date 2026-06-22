@@ -41,8 +41,7 @@ This use case requires payload capture for the child LLM call. A command match i
 
 Goal: retain the LLM request and response bytes, derive an `llm.request` action from the outbound request, and derive an `llm.response` action from inbound JSON or SSE response payloads.
 
-For manual real-agent validation, start with [Example 08](examples/08.full-monitor-validation/README.md).
-Use a runtime-specific capture path when narrowing a failure:
+For manual real-agent validation, start with [Example 08](examples/08.full-monitor-validation/README.md). Use a runtime-specific capture path when narrowing a failure:
 
 | Target Runtime | Capture Path |
 | --- | --- |
@@ -140,8 +139,7 @@ resource_events=process_tree
 stdio_payloads=stderr:outbound,stdin:inbound,stdout:outbound
 ```
 
-The fork event comes from `sched/sched_process_fork`; a host does not need `syscalls/sys_enter_fork` for this path.
-Default process lifecycle capture suppresses process signal events such as `SIGCHLD`.
+The fork event comes from `sched/sched_process_fork`; a host does not need `syscalls/sys_enter_fork` for this path. Default process lifecycle capture suppresses process signal events such as `SIGCHLD`.
 
 ## OpenTelemetry Export
 

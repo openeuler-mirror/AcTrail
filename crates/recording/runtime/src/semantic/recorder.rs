@@ -25,6 +25,8 @@ impl<'a> SemanticActionRecorder<'a> {
         self.storage
             .upsert_file_observation_paths(batch.file_observation_paths())?;
         self.storage.upsert_file_path_sets(batch.file_path_sets())?;
+        self.storage
+            .upsert_llm_request_contents(batch.llm_request_contents())?;
         Ok(())
     }
 }

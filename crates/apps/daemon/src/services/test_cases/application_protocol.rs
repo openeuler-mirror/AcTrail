@@ -47,6 +47,7 @@ fn tls_payload_processing_keeps_llm_summary_without_payload_body_duplication() {
         profiles,
         super::ebpf_config(false),
         payload_config,
+        super::DEFAULT_ACTIVE_TRACE_MAX,
         DiagnosticLogLevel::Info,
         super::seccomp_notify_disabled(),
         super::process_seccomp_disabled(),
@@ -173,15 +174,31 @@ fn tls_payload_processing_keeps_llm_summary_without_payload_body_duplication() {
             .map(String::as_str),
         Some("test-model")
     );
-    let request_body_json = request
-        .attributes
-        .get("llm.request.body_json")
-        .expect("llm.request should retain complete provider request JSON");
-    assert!(request_body_json.contains(r#""messages":["#));
-    assert!(request_body_json.contains(r#""role":"user""#));
-    assert!(request_body_json.contains(r#""content":"hello""#));
-    assert!(request_body_json.contains(r#""stream":true"#));
-    assert!(!request.attributes.contains_key("llm.request.payload_text"));
+    assert_eq!(
+        request
+            .attributes
+            .get("llm.request.content_state")
+            .map(String::as_str),
+        Some("canonical_blocks")
+    );
+    assert!(
+        request
+            .attributes
+            .contains_key("llm.request.canonical_body_hash")
+    );
+    assert!(request.attributes.contains_key("llm.request.block_count"));
+    assert!(!request.attributes.contains_key("llm.request.body_json"));
+    assert!(!request.attributes.contains_key("llm.request.body_text"));
+    let request_content = wiring
+        .attach_service
+        .storage
+        .llm_request_content_page(trace_id, &request.action_id, 4096)
+        .unwrap()
+        .expect("llm.request should retain reconstructable provider request content");
+    assert!(request_content.body_json.contains(r#""messages":["#));
+    assert!(request_content.body_json.contains(r#""role":"user""#));
+    assert!(request_content.body_json.contains(r#""content":"hello""#));
+    assert!(request_content.body_json.contains(r#""stream":true"#));
     assert!(!request.attributes.contains_key("http.request.body_text"));
     assert!(!request.attributes.contains_key("http.request.body_json"));
 
@@ -266,6 +283,7 @@ fn payload_batch_retention_counts_prior_uncommitted_segments_and_rolls_back() {
         profiles,
         super::ebpf_config(false),
         payload_config,
+        super::DEFAULT_ACTIVE_TRACE_MAX,
         DiagnosticLogLevel::Info,
         super::seccomp_notify_disabled(),
         super::process_seccomp_disabled(),
@@ -352,6 +370,7 @@ fn tls_payload_processing_persists_http2_frame_and_data_events() {
         profiles,
         super::ebpf_config(false),
         super::payload_config(true),
+        super::DEFAULT_ACTIVE_TRACE_MAX,
         DiagnosticLogLevel::Info,
         super::seccomp_notify_disabled(),
         super::process_seccomp_disabled(),
@@ -454,6 +473,7 @@ fn http2_analyzer_ignores_http1_text_when_both_protocols_are_enabled() {
         profiles,
         super::ebpf_config(false),
         super::payload_config(true),
+        super::DEFAULT_ACTIVE_TRACE_MAX,
         DiagnosticLogLevel::Info,
         super::seccomp_notify_disabled(),
         super::process_seccomp_disabled(),

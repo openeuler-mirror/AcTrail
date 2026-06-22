@@ -8,6 +8,8 @@ license = "MulanPSL-2.0"
 model_core = { path = "../../../core/model" }
 rusqlite = { version = "0.31.0", features = ["bundled"] }
 semantic_action = { path = "../../../contracts/semantic_action" }
+serde_json = "1"
+sha2 = "0.10"
 storage_core = { path = "../../core" }
 store_read_contract = { path = "../../../contracts/store/read" }
 store_retention_contract = { path = "../../../contracts/store/retention" }

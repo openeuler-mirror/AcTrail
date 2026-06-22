@@ -66,11 +66,6 @@ The Markdown report contains:
 - raw per-run timings,
 - the traced `trace-N` id for observed runs.
 
-The threshold, alpha, bootstrap count, permutation count, and random seed are configured in `benchmark.conf` under `[statistics]`.
-The default threshold question is distribution-level: are observed samples credibly more than 5% slower than baseline samples?
-The benchmark does not pair iteration N in baseline with iteration N in observed mode, because real CLI and local OS scheduling noise do not give those positions a stable matched meaning.
-The 5% assessment uses `task_runtime_ms`, measured by `tests/performance/lib/timing_wrapper.py` directly around the target workload or CLI command in both baseline and observed modes.
-`outer_wall_ms` is reported only to show wrapper/control-plane cost such as `actrailctl launch`, trace registration, and daemon communication.
+The threshold, alpha, bootstrap count, permutation count, and random seed are configured in `benchmark.conf` under `[statistics]`. The default threshold question is distribution-level: are observed samples credibly more than 5% slower than baseline samples? The benchmark does not pair iteration N in baseline with iteration N in observed mode, because real CLI and local OS scheduling noise do not give those positions a stable matched meaning. The 5% assessment uses `task_runtime_ms`, measured by `tests/performance/lib/timing_wrapper.py` directly around the target workload or CLI command in both baseline and observed modes. `outer_wall_ms` is reported only to show wrapper/control-plane cost such as `actrailctl launch`, trace registration, and daemon communication.
 
-Treat a report as invalid if any run fails, times out, or the script reports a degraded trace for any reason other than the current `actrailctl launch` root `BootstrapGap` diagnostic.
-The script validates only diagnostics whose `trace_id` matches the observed run; daemon-global diagnostics are not used to fail a specific benchmark trace.
+Treat a report as invalid if any run fails, times out, or the script reports a degraded trace for any reason other than the current `actrailctl launch` root `BootstrapGap` diagnostic. The script validates only diagnostics whose `trace_id` matches the observed run; daemon-global diagnostics are not used to fail a specific benchmark trace.
