@@ -44,7 +44,7 @@ const NET_SYSCALL_SOCKET: u32 = 1;
 const NET_SYSCALL_FD_IO: u32 = 2;
 const PROC_COORD_TRACEPOINT_SIGNAL_GENERATE: u32 = 1;
 
-pub(crate) use file_path::FileTracker;
+pub(crate) use file_path::{FdIpcKind, FileTracker};
 pub use payload::{
     SOCKET_PAYLOAD_DIRECTION_INBOUND, SOCKET_PAYLOAD_DIRECTION_OUTBOUND,
     SOCKET_PAYLOAD_SYSCALL_READ, SOCKET_PAYLOAD_SYSCALL_RECVFROM, SOCKET_PAYLOAD_SYSCALL_SENDMSG,
@@ -193,23 +193,17 @@ fn decode_exec(
 
 fn decode_exit(
     event: KernelObservationEvent,
-    bindings: &mut BindingStateMap,
+    bindings: &BindingStateMap,
     identity_reader: &ProcfsIdentityReader,
 ) -> Result<Option<RawCollectorEvent>, DecodeError> {
-    let identity = match bindings
-        .remove_event_pid(event.trace_id, event.pid, event.pid_generation)
-        .map(|tracked| tracked.identity)
-    {
-        Some(identity) => identity,
-        None => resolve_event_identity(
-            event.trace_id,
-            event.pid,
-            event.pid_generation,
-            bindings,
-            identity_reader,
-        )
-        .map_err(|error| DecodeError::new("exit_identity", error))?,
-    };
+    let identity = resolve_event_identity(
+        event.trace_id,
+        event.pid,
+        event.pid_generation,
+        bindings,
+        identity_reader,
+    )
+    .map_err(|error| DecodeError::new("exit_identity", error))?;
 
     let mut metadata = BTreeMap::new();
     if event.result != 0 {
@@ -348,7 +342,7 @@ fn decode_net(
             collector: CollectorName::new("ebpf"),
         },
         payload: RawObservationPayload::Net {
-            transport: "unknown".to_string(),
+            transport: net_transport(event.kind).to_string(),
             local,
             remote,
             size: net_size(event.kind, event.result),
@@ -382,6 +376,13 @@ fn net_size(kind: u32, result: i32) -> Option<u64> {
         return None;
     }
     Some(result as u64)
+}
+
+fn net_transport(kind: u32) -> &'static str {
+    match kind {
+        NET_EVENT_BIND | NET_EVENT_LISTEN | NET_EVENT_CONNECT | NET_EVENT_ACCEPT => "tcp",
+        _ => "unknown",
+    }
 }
 
 fn net_syscall_family(raw: u32) -> &'static str {

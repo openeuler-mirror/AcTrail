@@ -52,6 +52,10 @@ static long (*bpf_get_ns_current_pid_tgid)(
 #define AF_INET 2
 #endif
 
+#ifndef AF_UNIX
+#define AF_UNIX 1
+#endif
+
 #ifndef AF_INET6
 #define AF_INET6 10
 #endif

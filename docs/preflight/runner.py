@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import argparse
 import os
-from pathlib import Path
 
 from .checks import (
     agent_tls_checks,
     kernel_checks,
     platform_checks,
-    release_binary_checks,
+    release_artifact_checks,
+    resolve_release_artifacts,
     shared_openssl_checks,
     tool_checks,
 )
@@ -21,15 +21,15 @@ from .smoke import runtime_smoke_checks
 def main() -> int:
     args = parse_args()
     color = Color(args.color)
-    bin_dir = Path.cwd() / args.bin_dir
+    artifacts = resolve_release_artifacts(args.bin_dir)
     sections: list[tuple[str, list[Check]]] = [
         ("Platform", platform_checks()),
-        ("Release Binaries", release_binary_checks(bin_dir)),
+        ("Release Artifacts", release_artifact_checks(artifacts)),
         ("Kernel Interfaces", kernel_checks()),
         ("Build And Example Tools", tool_checks()),
         ("Shared OpenSSL", shared_openssl_checks()),
         ("Agent Executable TLS", agent_tls_checks()),
-        ("Runtime Smoke", runtime_smoke_checks(bin_dir, args.run_smoke, args.verbose)),
+        ("Runtime Smoke", runtime_smoke_checks(artifacts, args.run_smoke, args.verbose)),
     ]
     print("AcTrail platform preflight")
     print()
@@ -43,7 +43,14 @@ def main() -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Print AcTrail platform readiness checks.")
-    parser.add_argument("--bin-dir", default=os.environ.get("ACTRAIL_BIN_DIR", "target/release"))
+    parser.add_argument(
+        "--bin-dir",
+        default=os.environ.get("ACTRAIL_BIN_DIR", "target/release"),
+        help=(
+            "release artifact directory, or a path to one release artifact; "
+            "defaults to ACTRAIL_BIN_DIR or target/release with PATH lookup for missing executables"
+        ),
+    )
     parser.add_argument(
         "--run-smoke",
         action="store_true",

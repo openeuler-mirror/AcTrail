@@ -27,6 +27,7 @@ mod tracepoint;
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
+use std::env;
 use std::ffi::OsStr;
 use std::os::fd::RawFd;
 use std::os::unix::fs::MetadataExt;
@@ -55,6 +56,7 @@ pub use tls::{PendingTlsPayloadOp, TlsPayloadDiagnosticCounter, TlsPayloadDiagno
 const ACTIVE_PID_NAMESPACE_KEY: u32 = 0;
 const PID_NAMESPACE_FIELD_SIZE: usize = std::mem::size_of::<u64>();
 const PID_NAMESPACE_VALUE_SIZE: usize = PID_NAMESPACE_FIELD_SIZE * 2;
+const LIBBPF_DEBUG_ENV: &str = "ACTRAIL_EBPF_LIBBPF_DEBUG";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LoaderError {
@@ -128,6 +130,9 @@ impl EbpfProgramLoader {
         environment::apply_memlock_rlimit(self.config.memlock_rlimit)?;
         let object_bytes = include_bytes!(env!("ACTRAIL_EBPF_OBJECT"));
         let mut builder = ObjectBuilder::default();
+        if libbpf_debug_enabled()? {
+            builder.debug(true);
+        }
         let mut open_object = builder
             .open_memory(object_bytes)
             .map_err(|error| LoaderError::new("open_object", error.to_string()))?;
@@ -144,6 +149,11 @@ impl EbpfProgramLoader {
         resize_map(
             &mut open_object,
             "pending_net_ops",
+            self.config.pending_operation_max_entries,
+        )?;
+        resize_map(
+            &mut open_object,
+            "pending_ipc_fd_pair_ops",
             self.config.pending_operation_max_entries,
         )?;
         resize_map(
@@ -232,6 +242,21 @@ impl EbpfProgramLoader {
             .load()
             .map_err(|error| LoaderError::new("load_object", error.to_string()))?;
         EbpfRuntime::from_object(object, &self.config, &effective_payload, attach_plan)
+    }
+}
+
+fn libbpf_debug_enabled() -> Result<bool, LoaderError> {
+    let Some(value) = env::var_os(LIBBPF_DEBUG_ENV) else {
+        return Ok(false);
+    };
+    let value = value.to_string_lossy().to_ascii_lowercase();
+    match value.as_str() {
+        "1" | "true" | "yes" | "on" => Ok(true),
+        "0" | "false" | "no" | "off" => Ok(false),
+        _ => Err(LoaderError::new(
+            "libbpf_debug_config",
+            format!("{LIBBPF_DEBUG_ENV} must be one of 1,true,yes,on,0,false,no,off; got {value}"),
+        )),
     }
 }
 

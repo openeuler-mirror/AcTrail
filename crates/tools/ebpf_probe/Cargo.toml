@@ -10,6 +10,7 @@ control_contract = { path = "../../contracts/control_plane" }
 daemon = { path = "../../apps/daemon" }
 libc = "0.2"
 model_core = { path = "../../core/model" }
+semantic_action = { path = "../../contracts/semantic_action" }
 storage_core = { path = "../../storage/core" }
 storage_factory = { path = "../../storage/factory" }
 uds_control_transport = { path = "../../adapters/control/uds/transport" }

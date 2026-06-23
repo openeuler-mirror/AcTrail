@@ -3,7 +3,7 @@
 use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
     FileObservationConfig, PayloadConfig, ProcessSeccompConfig, ResourceMetricsConfig,
-    SeccompNotifyConfig, SemanticRetentionConfig,
+    SeccompNotifyConfig, SemanticRetentionConfig, TraceFinalizationConfig,
 };
 use ebpf_collector::EbpfCollector;
 use ebpf_collector::procfs::{ProcfsIdentityReader, ProcfsTreeSnapshotter};
@@ -41,6 +41,7 @@ impl StorageAttachService {
         file_observation: FileObservationConfig,
         application_protocol: ApplicationProtocolConfig,
         resource_metrics: ResourceMetricsConfig,
+        trace_finalization: TraceFinalizationConfig,
         workload_diagnostics: WorkloadDiagnostics,
         enforcement: FanotifyEnforcementService,
         export_runtime: ExportRuntime,
@@ -58,6 +59,7 @@ impl StorageAttachService {
             file_observation,
             application_protocol,
             resource_metrics,
+            trace_finalization,
             workload_diagnostics,
             enforcement,
             export_runtime,
@@ -79,6 +81,7 @@ impl StorageAttachService {
         file_observation: FileObservationConfig,
         application_protocol: ApplicationProtocolConfig,
         resource_metrics: ResourceMetricsConfig,
+        trace_finalization: TraceFinalizationConfig,
         workload_diagnostics: WorkloadDiagnostics,
         enforcement: FanotifyEnforcementService,
         export_runtime: ExportRuntime,
@@ -108,6 +111,13 @@ impl StorageAttachService {
             application_protocol.http2_max_data_preview_bytes,
             semantic_retention.clone(),
         );
+        let finalization_traces_per_cycle = usize::try_from(trace_finalization.traces_per_cycle)
+            .map_err(|error| {
+                control_contract::reply::ControlError::new(
+                    "trace_finalization_config",
+                    format!("finalization_traces_per_cycle overflow: {error}"),
+                )
+            })?;
         let seccomp_notify = SeccompNotifyService::new(&seccomp_notify_config);
         let seccomp_tls = SeccompTlsService::new(&payload_config.tls, diagnostic_log_level);
         let tls_sync = TlsSyncService::new(&payload_config.tls)?;
@@ -161,6 +171,11 @@ impl StorageAttachService {
             workload_diagnostics,
             retained_payload_bytes_by_trace: Default::default(),
             finalized_terminal_traces: Default::default(),
+            pending_terminal_finalizations: Default::default(),
+            finalization_traces_per_cycle,
+            finalization_poll_interval: std::time::Duration::from_millis(
+                trace_finalization.poll_interval_ms,
+            ),
             diagnosed_terminal_open_memberships: Default::default(),
             provider_classifier,
             provider_classification_enabled,

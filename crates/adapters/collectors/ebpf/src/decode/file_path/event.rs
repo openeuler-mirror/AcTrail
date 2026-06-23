@@ -40,6 +40,9 @@ pub(in crate::decode) fn decode(
     let identity =
         resolve_bound_event_identity(event.trace_id, map_pid, event.pid_generation, bindings)
             .map_err(|error| DecodeError::new("file_identity", error))?;
+    if tracker.record_ipc_fd_pair(&event, identity.clone()) {
+        return Ok(None);
+    }
     let is_exit = event.phase == FILE_PHASE_EXIT;
     let outcome = tracker.record(event, identity.clone());
     let Some(outcome) = outcome else {

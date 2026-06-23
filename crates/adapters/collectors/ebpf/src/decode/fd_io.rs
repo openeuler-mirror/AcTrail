@@ -9,6 +9,7 @@ use model_core::capability::Capability;
 use model_core::ids::CollectorName;
 use model_core::process::ProcessIdentity;
 
+use crate::decode::FdIpcKind;
 use crate::decode::FileTracker;
 use crate::decode::{DecodeError, NET_EVENT_RECV, NET_EVENT_SEND};
 use crate::loader::KernelObservationEvent;
@@ -16,6 +17,7 @@ use crate::maps::BindingStateMap;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FdTargetKind {
+    Pipe,
     Fifo,
     UnixSocket,
 }
@@ -43,6 +45,31 @@ pub(super) fn decode(
     direction: &'static str,
     file_tracker: &mut FileTracker,
 ) -> Result<Option<RawCollectorEvent>, DecodeError> {
+    if let Some(kind) = file_tracker.resolve_fd_ipc_kind(event.trace_id, &identity, event.fd)
+        && ipc_capability_enabled(kind.into(), bindings, event.trace_id)
+    {
+        let observation = FdObservation {
+            kind: kind.into(),
+            target: anonymous_ipc_target(kind, &event),
+            metadata: BTreeMap::from([(
+                "fd_target_source".to_string(),
+                "ipc_fd_tracker".to_string(),
+            )]),
+        };
+        let metadata = fd_io_metadata(&event, operation, direction, &observation);
+        return Ok(Some(RawCollectorEvent {
+            envelope: RawEventEnvelope {
+                observed_at: SystemTime::now(),
+                process: identity,
+                collector: CollectorName::new("ebpf"),
+            },
+            payload: RawObservationPayload::Ipc {
+                channel: fd_channel(observation.kind).to_string(),
+                peer: Some(observation.target),
+                metadata,
+            },
+        }));
+    }
     if bindings.trace_has_capability(event.trace_id, &Capability::FsAccessBasic) {
         if let Some(path) = file_tracker.resolve_fd_path(event.trace_id, &identity, event.fd) {
             if let Some(kind) = tracked_path_ipc_kind(&path)
@@ -165,6 +192,7 @@ fn fd_io_size(kind: u32, result: i32) -> Option<u64> {
 
 fn fd_channel(kind: FdTargetKind) -> &'static str {
     match kind {
+        FdTargetKind::Pipe => "pipe",
         FdTargetKind::Fifo => "fifo",
         FdTargetKind::UnixSocket => "unix_socket",
     }
@@ -176,7 +204,9 @@ fn ipc_capability_enabled(
     trace_id: model_core::ids::TraceId,
 ) -> bool {
     match kind {
-        FdTargetKind::Fifo => bindings.trace_has_capability(trace_id, &Capability::IpcPipeFifo),
+        FdTargetKind::Pipe | FdTargetKind::Fifo => {
+            bindings.trace_has_capability(trace_id, &Capability::IpcPipeFifo)
+        }
         FdTargetKind::UnixSocket => {
             bindings.trace_has_capability(trace_id, &Capability::IpcUnixSocket)
         }
@@ -185,7 +215,22 @@ fn ipc_capability_enabled(
 
 fn fd_target_kind(kind: FdTargetKind) -> &'static str {
     match kind {
+        FdTargetKind::Pipe => "pipe",
         FdTargetKind::Fifo => "fifo",
         FdTargetKind::UnixSocket => "unix_socket",
+    }
+}
+
+fn anonymous_ipc_target(kind: FdIpcKind, event: &KernelObservationEvent) -> String {
+    let channel = fd_channel(kind.into());
+    format!("{channel}:pid:{}:fd:{}", event.pid, event.fd)
+}
+
+impl From<FdIpcKind> for FdTargetKind {
+    fn from(kind: FdIpcKind) -> Self {
+        match kind {
+            FdIpcKind::Pipe => Self::Pipe,
+            FdIpcKind::UnixSocket => Self::UnixSocket,
+        }
     }
 }

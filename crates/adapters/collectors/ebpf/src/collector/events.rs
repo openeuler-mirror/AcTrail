@@ -1,6 +1,7 @@
 //! Kernel ring event draining for the eBPF collector.
 
 use collector_instance::{CollectorError, CollectorPollBatch};
+use model_core::ids::TraceId;
 
 use crate::decode::{
     self, decode_file_path, decode_observation, decode_socket_payload,
@@ -10,6 +11,13 @@ use crate::decode::{
 use crate::loader::{KernelEvent, KernelObservationEvent};
 
 use super::{EbpfCollector, loader_error};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ExitRetire {
+    trace_id: TraceId,
+    map_pid: u32,
+    generation: u64,
+}
 
 impl EbpfCollector {
     pub fn poll_tls_payload_control_events(&mut self) -> Result<(), CollectorError> {
@@ -34,8 +42,20 @@ impl EbpfCollector {
             observations: Vec::new(),
             payload_segments: Vec::new(),
         };
+        let mut exit_retires = Vec::new();
         for event in raw_events {
+            let exit_retire = exit_retire_for_event(&event);
             self.handle_batch_event(event, &mut batch)?;
+            if let Some(exit_retire) = exit_retire {
+                exit_retires.push(exit_retire);
+            }
+        }
+        for exit_retire in exit_retires {
+            let _ = self.bindings.remove_event_pid(
+                exit_retire.trace_id,
+                exit_retire.map_pid,
+                exit_retire.generation,
+            );
         }
         Ok(batch)
     }
@@ -88,10 +108,13 @@ impl EbpfCollector {
                 self.apply_file_lifecycle_after_decode(&lifecycle_event)?;
             }
             KernelEvent::FilePath(event) => {
-                if let Some(event) = decode_file_path(event, &self.bindings, &mut self.file_tracker)
-                    .map_err(|error| CollectorError::new(error.stage, error.message))?
-                {
-                    batch.observations.push(event);
+                match decode_file_path(event, &self.bindings, &mut self.file_tracker) {
+                    Ok(Some(event)) => batch.observations.push(event),
+                    Ok(None) => {}
+                    Err(error) if error.stage == "file_identity" => {
+                        self.record_file_binding_gap_drop(&error.message);
+                    }
+                    Err(error) => return Err(CollectorError::new(error.stage, error.message)),
                 }
             }
             KernelEvent::StdioPayload(event) => {
@@ -118,14 +141,18 @@ impl EbpfCollector {
         match event.kind {
             decode::PROC_EVENT_EXIT => {
                 let map_pid = event.pid;
-                decode::resolve_bound_event_identity(
+                if decode::resolve_bound_event_identity(
                     event.trace_id,
                     map_pid,
                     event.pid_generation,
                     &self.bindings,
                 )
-                .map_err(|error| CollectorError::new("file_lifecycle_exit", error))?;
-                self.cleanup_suppressed_fds_for_process(map_pid, event.pid_generation)?;
+                .is_ok()
+                {
+                    self.cleanup_suppressed_fds_for_process(map_pid, event.pid_generation)?;
+                } else {
+                    self.record_exit_lifecycle_binding_gap();
+                }
             }
             _ => {}
         }
@@ -187,5 +214,26 @@ impl EbpfCollector {
             return Ok(());
         }
         self.attach_dynamic_go_tls(std::path::Path::new(&exec_filename.path))
+    }
+
+    fn record_file_binding_gap_drop(&mut self, _detail: &str) {
+        self.binding_gap_drops = self.binding_gap_drops.saturating_add(1);
+    }
+
+    fn record_exit_lifecycle_binding_gap(&mut self) {
+        self.binding_gap_lifecycle_skips = self.binding_gap_lifecycle_skips.saturating_add(1);
+    }
+}
+
+fn exit_retire_for_event(event: &KernelEvent) -> Option<ExitRetire> {
+    match event {
+        KernelEvent::Observation(event) if event.kind == decode::PROC_EVENT_EXIT => {
+            Some(ExitRetire {
+                trace_id: event.trace_id,
+                map_pid: event.pid,
+                generation: event.pid_generation,
+            })
+        }
+        _ => None,
     }
 }

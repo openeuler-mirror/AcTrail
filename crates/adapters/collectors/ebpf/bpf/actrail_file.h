@@ -53,6 +53,9 @@ enum actrail_file_syscall_id {
     ACTRAIL_FILE_SYSCALL_CHDIR = 20,
     ACTRAIL_FILE_SYSCALL_FCHDIR = 21,
     ACTRAIL_FILE_SYSCALL_OPENAT2 = 22,
+    ACTRAIL_FILE_SYSCALL_PIPE = 23,
+    ACTRAIL_FILE_SYSCALL_PIPE2 = 24,
+    ACTRAIL_FILE_SYSCALL_SOCKETPAIR = 25,
 };
 
 enum actrail_file_syscall_arg_count {
@@ -69,8 +72,16 @@ enum actrail_file_syscall_arg_count {
     ACTRAIL_FILE_SYSCALL_ARGC_OPEN = 3,
     ACTRAIL_FILE_SYSCALL_ARGC_OPENAT = 4,
     ACTRAIL_FILE_SYSCALL_ARGC_OPENAT2 = 4,
+    ACTRAIL_FILE_SYSCALL_ARGC_PIPE = 1,
+    ACTRAIL_FILE_SYSCALL_ARGC_PIPE2 = 2,
     ACTRAIL_FILE_SYSCALL_ARGC_RENAMEAT = 4,
+    ACTRAIL_FILE_SYSCALL_ARGC_SOCKETPAIR = 4,
     ACTRAIL_FILE_SYSCALL_ARGC_UNLINKAT = 3,
+};
+
+enum actrail_file_ipc_fd_kind {
+    ACTRAIL_FILE_IPC_FD_PIPE = 1,
+    ACTRAIL_FILE_IPC_FD_UNIX_SOCKET = 2,
 };
 
 enum actrail_file_enter_descriptor {
@@ -591,6 +602,82 @@ static __always_inline int emit_file_exit(
     event->trace_id = *trace_id;
     event->aux = syscall_id;
     bpf_ringbuf_submit(event, 0);
+    return 0;
+}
+
+static __always_inline int store_pending_ipc_fd_pair_op(
+    struct trace_event_raw_sys_enter *ctx,
+    __u32 kind,
+    __u32 fd_pair_arg,
+    __u32 domain
+) {
+    __u64 pid_tgid = current_pid_tgid();
+    __u32 tgid = pid_tgid >> 32;
+    __u64 *trace_id = bpf_map_lookup_elem(&tracked_traces, &tgid);
+    struct actrail_pending_ipc_fd_pair_op op = {};
+
+    if (!tgid || !trace_id || !ctx->args[fd_pair_arg]) {
+        return 0;
+    }
+
+    op.trace_id = *trace_id;
+    op.fd_pair_ptr = (__u64)ctx->args[fd_pair_arg];
+    op.kind = kind;
+    op.domain = domain;
+    bpf_map_update_elem(&pending_ipc_fd_pair_ops, &pid_tgid, &op, BPF_ANY);
+    return 0;
+}
+
+static __always_inline int emit_ipc_fd_pair_exit(
+    struct trace_event_raw_sys_exit *ctx,
+    __u32 syscall_id
+) {
+    __u64 pid_tgid = current_pid_tgid();
+    __u32 tgid = pid_tgid >> 32;
+    struct actrail_pending_ipc_fd_pair_op *op =
+        bpf_map_lookup_elem(&pending_ipc_fd_pair_ops, &pid_tgid);
+    struct actrail_file_event *event;
+    int fds[2] = {};
+
+    if (!tgid || !op) {
+        return 0;
+    }
+    if (ctx->ret != 0) {
+        bpf_map_delete_elem(&pending_ipc_fd_pair_ops, &pid_tgid);
+        return 0;
+    }
+    if (op->kind == ACTRAIL_FILE_IPC_FD_UNIX_SOCKET && op->domain != AF_UNIX) {
+        bpf_map_delete_elem(&pending_ipc_fd_pair_ops, &pid_tgid);
+        return 0;
+    }
+    if (bpf_probe_read_user(&fds, sizeof(fds), (void *)(unsigned long)op->fd_pair_ptr) != 0) {
+        bpf_map_delete_elem(&pending_ipc_fd_pair_ops, &pid_tgid);
+        return 0;
+    }
+    if (fds[0] < 0 || fds[1] < 0) {
+        bpf_map_delete_elem(&pending_ipc_fd_pair_ops, &pid_tgid);
+        return 0;
+    }
+
+    event = bpf_ringbuf_reserve(&events, ACTRAIL_FILE_EVENT_HEADER_SIZE, 0);
+    if (!event) {
+        bpf_map_delete_elem(&pending_ipc_fd_pair_ops, &pid_tgid);
+        return 0;
+    }
+
+    init_file_event_header(event, ACTRAIL_FILE_CONTEXT);
+    event->pid = tgid;
+    event->tid = (__u32)pid_tgid;
+    event->pid_generation = ensure_process_generation(tgid);
+    event->phase = ACTRAIL_FILE_PHASE_EXIT;
+    event->result = ctx->ret;
+    event->trace_id = op->trace_id;
+    event->aux = syscall_id;
+    event->fd = (__u32)fds[0];
+    event->arg0 = (__u32)fds[1];
+    event->arg1 = op->kind;
+    bpf_ringbuf_submit(event, 0);
+    bpf_map_delete_elem(&pending_ipc_fd_pair_ops, &pid_tgid);
     return 0;
 }
 

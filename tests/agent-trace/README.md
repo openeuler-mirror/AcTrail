@@ -15,13 +15,12 @@ python3 tests/agent-trace/run_case.py go-net-http
 
 `claude-code`, `opencode-bun`, and `xiaoo-rustls` require the corresponding real CLI or binary and working provider credentials in the environment. These agents may reach the LLM provider through HTTPS/TLS or through a plain HTTP endpoint/proxy; the E2E cases accept either complete `TlsUserSpace` payload rows or complete `Syscall/socket-syscall` plaintext rows. `langgraph-openai` requires a Python interpreter with `langgraph` and `requests`, plus `DEEPSEEK_API_KEY`; the default workload uses DeepSeek's OpenAI-compatible HTTPS API to exercise a real LangGraph-based Python agent without adding framework instrumentation.
 
-`xiaoo-http-proxy` is the real-agent plain HTTP coverage. Its automatic runner starts the generic OpenAI-compatible reverse provider shim from `tests/support/llm-http-proxy/`, writes a temporary xiaoO config under `target/agent-trace/xiaoo-http-proxy/`, and launches xiaoO against a local plain HTTP endpoint. The checked-in `xiaoo-http-proxy/xiaoo-config.toml` is for manual runs and defaults to `http://127.0.0.1:18098`; the proxy script uses the same address when started without arguments. The shim forwards to the configured HTTPS upstream provider using `DEEPSEEK_API_KEY`, while xiaoO only receives a dummy local API key. The pass condition requires complete inbound and outbound `Syscall/socket-syscall` payload rows plus complete `llm.call`, `llm.request`, and `llm.response` actions. This is not an `HTTP_PROXY`/CONNECT test; CONNECT would not expose the LLM request body to socket plaintext capture.
+`xiaoo-http-proxy` is the real-agent plain HTTP coverage. Its automatic runner starts the generic OpenAI-compatible provider shim from `tests/support/llm-http-proxy/`, writes a temporary xiaoO config under `target/agent-trace/xiaoo-http-proxy/`, and launches xiaoO against a local plain HTTP endpoint. The default workload uses `proxy_mode = local-stream`, so no upstream API key is required: the shim emits deterministic OpenAI-compatible SSE with a final JSON `finish_reason` chunk and no `data: [DONE]` marker. Set `proxy_mode = forward` to forward to the configured HTTPS upstream provider using `DEEPSEEK_API_KEY`, while xiaoO only receives a dummy local API key. The checked-in `xiaoo-http-proxy/xiaoo-config.toml` is for manual runs and defaults to `http://127.0.0.1:18098`; the proxy script uses the same address when started without arguments. The pass condition requires complete inbound and outbound `Syscall/socket-syscall` payload rows plus complete successful `llm.call`, `llm.request`, and `llm.response` actions, with no failed `llm.response` rows. This is not an `HTTP_PROXY`/CONNECT test; CONNECT would not expose the LLM request body to socket plaintext capture.
 
 Manual xiaoO HTTP proxy smoke path, using separate terminals for the long-running proxy and daemon commands:
 
 ```bash
-export DEEPSEEK_API_KEY=...
-python3 tests/support/llm-http-proxy/provider_proxy.py
+python3 tests/support/llm-http-proxy/provider_proxy.py --mode local-stream
 ```
 
 ```bash

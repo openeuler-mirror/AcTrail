@@ -331,25 +331,10 @@ impl StorageAttachService {
         trace_runtime: &TraceRuntime,
         trace_id: TraceId,
     ) -> Result<(), ControlError> {
-        let terminal = trace_runtime
-            .get_trace(trace_id)
-            .map(|entry| {
-                matches!(
-                    entry.trace.lifecycle_state,
-                    TraceLifecycleState::Completed | TraceLifecycleState::Failed
-                )
-            })
-            .ok_or_else(|| ControlError::new("persist_trace_state", "trace not found"))?;
         let trace_state = self.trace_state_record_for_persistence(trace_runtime, trace_id)?;
         RecordingWriter::new(self.storage.as_mut())
             .persist_trace_state(trace_state)
             .map_err(recording_error_to_control)?;
-
-        if terminal {
-            self.collector
-                .unbind_trace(trace_id)
-                .map_err(|error| ControlError::new(error.stage, error.message))?;
-        }
 
         Ok(())
     }

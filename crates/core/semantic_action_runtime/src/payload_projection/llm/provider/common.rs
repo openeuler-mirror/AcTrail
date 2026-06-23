@@ -330,7 +330,7 @@ impl ParsedSseResponseAccumulator {
         for tool_call in &event.tool_calls {
             self.tool_calls.apply_call_delta(tool_call.clone());
         }
-        self.done |= event.done;
+        self.done |= event.done || event.finish_reason.is_some();
     }
 
     pub(super) fn finish(

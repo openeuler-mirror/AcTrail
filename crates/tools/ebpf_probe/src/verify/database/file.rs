@@ -1,21 +1,51 @@
 //! File event assertions for live eBPF verification.
 
 use std::collections::HashSet;
+use std::path::Path;
 
 use model_core::event::{DomainEvent, EventPayload, FilePayload};
+use semantic_action::{SemanticAction, attr_keys as attrs};
 
-pub(super) fn observed(events: &[DomainEvent]) -> HashSet<String> {
-    events
+pub(super) fn observed(events: &[DomainEvent], actions: &[SemanticAction]) -> HashSet<String> {
+    let mut observed = events
         .iter()
         .filter_map(|event| match &event.payload {
             EventPayload::File(payload) => Some(payload.operation.clone()),
             _ => None,
         })
-        .collect()
+        .collect::<HashSet<_>>();
+    for action in actions {
+        match action.kind.as_str() {
+            "file.read" => {
+                observed.insert("read".to_string());
+            }
+            "file.write" => {
+                observed.insert("write".to_string());
+            }
+            "file.bulk_read" => {
+                if positive_u64_attribute(action, attrs::file_bulk_read::READ_COUNT) {
+                    observed.insert("read".to_string());
+                }
+            }
+            "file.modify" => {
+                if let Some(operation) = action
+                    .attributes
+                    .get(attrs::file::OPERATION)
+                    .or_else(|| action.attributes.get("operation"))
+                {
+                    observed.insert(operation.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    observed
 }
 
 pub(super) fn require(
     events: &[DomainEvent],
+    actions: &[SemanticAction],
+    expected_file_path: &Path,
     expected_mmap: Option<(u64, u64)>,
 ) -> Result<(), String> {
     let mut failures = Vec::new();
@@ -24,7 +54,7 @@ pub(super) fn require(
         let EventPayload::File(payload) = &event.payload else {
             continue;
         };
-        if payload.operation != "close" && payload.path.is_none() {
+        if payload.operation != "close" && payload.path.is_none() && !path_read_fault(payload) {
             failures.push(format!("{} missing path", payload.operation));
         }
         if payload.result.is_none() {
@@ -83,6 +113,7 @@ pub(super) fn require(
             expected_mmap_length, expected_mmap_offset
         ));
     }
+    require_workload_file_io(events, actions, expected_file_path, &mut failures);
     if failures.is_empty() {
         Ok(())
     } else {
@@ -124,4 +155,72 @@ fn require_metadata(payload: &FilePayload, key: &'static str, failures: &mut Vec
     if !payload.metadata.contains_key(key) {
         failures.push(format!("{} missing {key}", payload.operation));
     }
+}
+
+fn path_read_fault(payload: &FilePayload) -> bool {
+    payload
+        .metadata
+        .get("path_read_fault")
+        .is_some_and(|value| value == "true")
+}
+
+fn require_workload_file_io(
+    events: &[DomainEvent],
+    actions: &[SemanticAction],
+    expected_file_path: &Path,
+    failures: &mut Vec<String>,
+) {
+    let expected_path = expected_file_path.display().to_string();
+    for (operation, action_kind, bytes_key) in [
+        ("read", "file.read", attrs::file::BYTES_READ),
+        ("write", "file.write", attrs::file::BYTES_WRITTEN),
+    ] {
+        if has_file_event(events, operation, &expected_path)
+            || has_file_action(actions, action_kind, &expected_path, bytes_key)
+        {
+            continue;
+        }
+        failures.push(format!(
+            "workload file {operation} missing retained event or semantic action for {expected_path}"
+        ));
+    }
+}
+
+fn has_file_event(events: &[DomainEvent], operation: &str, expected_path: &str) -> bool {
+    events.iter().any(|event| {
+        let EventPayload::File(payload) = &event.payload else {
+            return false;
+        };
+        payload.operation == operation
+            && payload.path.as_deref() == Some(expected_path)
+            && payload
+                .metadata
+                .get("size")
+                .and_then(|value| value.parse::<u64>().ok())
+                .is_some_and(|size| size > 0)
+    })
+}
+
+fn has_file_action(
+    actions: &[SemanticAction],
+    action_kind: &str,
+    expected_path: &str,
+    bytes_key: &str,
+) -> bool {
+    actions.iter().any(|action| {
+        action.kind.as_str() == action_kind
+            && action
+                .attributes
+                .get(attrs::file::PATH)
+                .is_some_and(|path| path == expected_path)
+            && positive_u64_attribute(action, bytes_key)
+    })
+}
+
+fn positive_u64_attribute(action: &SemanticAction, key: &str) -> bool {
+    action
+        .attributes
+        .get(key)
+        .and_then(|value| value.parse::<u64>().ok())
+        .is_some_and(|value| value > 0)
 }

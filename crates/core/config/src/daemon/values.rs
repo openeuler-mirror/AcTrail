@@ -150,6 +150,30 @@ impl ConfigValues {
         Ok(value)
     }
 
+    pub(super) fn optional_positive_u64(
+        &self,
+        key: &'static str,
+        default: u64,
+    ) -> Result<u64, String> {
+        let Some(values) = self.values.get(key) else {
+            return Ok(default);
+        };
+        if values.len() != 1 {
+            return Err(format!("config key {key} must appear once"));
+        }
+        let raw = values
+            .first()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| format!("config key {key} must not be empty"))?;
+        let value = raw
+            .parse::<u64>()
+            .map_err(|error| format!("invalid {key}: {error}"))?;
+        if value == u64::default() {
+            return Err(format!("invalid {key}: value must be positive"));
+        }
+        Ok(value)
+    }
+
     pub(super) fn required_octal(&self, key: &'static str) -> Result<u32, String> {
         u32::from_str_radix(&self.required(key)?, 8)
             .map_err(|error| format!("invalid {key}: {error}"))

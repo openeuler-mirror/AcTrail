@@ -769,17 +769,65 @@ impl ResponseCompletionDetector {
 }
 
 fn response_completion_marker_seen(bytes: &[u8]) -> bool {
-    contains_subslice(bytes, b"[DONE]") || contains_subslice(bytes, b"message_stop")
+    contains_subslice(bytes, b"[DONE]")
+        || contains_subslice(bytes, b"message_stop")
+        || non_null_finish_reason_seen(bytes)
 }
 
 fn response_completion_tail(bytes: &[u8]) -> Vec<u8> {
-    let marker_window = b"message_stop".len().max(b"[DONE]".len());
+    let marker_window = b"message_stop"
+        .len()
+        .max(b"[DONE]".len())
+        .max(b"\"finish_reason\":null".len());
     let tail_len = marker_window.saturating_sub(1).min(bytes.len());
     bytes[bytes.len() - tail_len..].to_vec()
 }
 
 fn contains_subslice(bytes: &[u8], needle: &[u8]) -> bool {
     bytes.windows(needle.len()).any(|window| window == needle)
+}
+
+fn non_null_finish_reason_seen(bytes: &[u8]) -> bool {
+    const FINISH_REASON_KEY: &[u8] = b"\"finish_reason\"";
+
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        let Some(offset) = find_subslice(&bytes[cursor..], FINISH_REASON_KEY) else {
+            return false;
+        };
+        let value_start = cursor + offset + FINISH_REASON_KEY.len();
+        if finish_reason_value_is_non_null(&bytes[value_start..]) {
+            return true;
+        }
+        cursor = value_start;
+    }
+    false
+}
+
+fn finish_reason_value_is_non_null(bytes: &[u8]) -> bool {
+    let mut cursor = skip_ascii_whitespace(bytes, 0);
+    if bytes.get(cursor) != Some(&b':') {
+        return false;
+    }
+    cursor += 1;
+    cursor = skip_ascii_whitespace(bytes, cursor);
+    if cursor >= bytes.len() {
+        return false;
+    }
+    !bytes[cursor..].starts_with(b"null")
+}
+
+fn skip_ascii_whitespace(bytes: &[u8], mut cursor: usize) -> usize {
+    while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+        cursor += 1;
+    }
+    cursor
+}
+
+fn find_subslice(bytes: &[u8], needle: &[u8]) -> Option<usize> {
+    bytes
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 fn plaintext_http_candidate(segment: &PayloadSegment) -> bool {

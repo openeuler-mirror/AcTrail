@@ -15,10 +15,12 @@ use storage_factory::StorageConfig;
 
 use super::values::ConfigValues;
 use super::{
-    AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
+    AgentInvocationConfig, ApplicationProtocolConfig, DEFAULT_FINALIZATION_POLL_INTERVAL_MS,
+    DEFAULT_FINALIZATION_TRACES_PER_CYCLE, DiagnosticLogLevel, EbpfCollectorConfig,
     EnforcementConfig, FileObservationConfig, PayloadConfig, PayloadSocketConfig, PayloadTlsConfig,
     ProcessSeccompConfig, ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig,
-    SemanticRetentionConfig, SocketPermissions, SseDataPolicy, WorkloadDiagnosticsConfig,
+    SemanticRetentionConfig, SocketPermissions, SseDataPolicy, TraceFinalizationConfig,
+    WorkloadDiagnosticsConfig,
 };
 use crate::capture_profile::CaptureProfile;
 use crate::export::ExportConfig;
@@ -59,6 +61,7 @@ pub struct OperatorConfig {
     pub file_observation: FileObservationConfig,
     pub application_protocol: ApplicationProtocolConfig,
     pub resource_metrics: ResourceMetricsConfig,
+    pub trace_finalization: TraceFinalizationConfig,
     pub provider_rule_set: Option<ProviderRuleSetConfig>,
     pub enforcement: EnforcementConfig,
     pub startup_wait_ms: u64,
@@ -145,6 +148,16 @@ impl OperatorConfig {
         )?;
         let resource_metrics = sections::resource_metrics_config(values.node("resource_metrics"))?;
         validate_resource_metrics_config(&resource_metrics, &capabilities)?;
+        let trace_finalization = TraceFinalizationConfig {
+            traces_per_cycle: values.optional_positive_u32(
+                "finalization_traces_per_cycle",
+                DEFAULT_FINALIZATION_TRACES_PER_CYCLE,
+            )?,
+            poll_interval_ms: values.optional_positive_u64(
+                "finalization_poll_interval_ms",
+                DEFAULT_FINALIZATION_POLL_INTERVAL_MS,
+            )?,
+        };
         let enforcement = sections::enforcement_config(values.node("enforcement"))?;
         validate_enforcement_config(&enforcement, &capabilities)?;
         validate_seccomp_config(
@@ -198,6 +211,7 @@ impl OperatorConfig {
             file_observation,
             application_protocol,
             resource_metrics,
+            trace_finalization,
             provider_rule_set,
             enforcement,
             startup_wait_ms: values.required_positive_u64("startup_wait_ms")?,
