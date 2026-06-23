@@ -116,6 +116,7 @@ impl LlmProviderResponseParser for OpenAiCompatibleResponseParser {
             return LlmParsedSseEvent::default();
         };
         let texts = extract_response_texts(value);
+        let finish_reason = extract_finish_reason(value);
         let mut assembler = ToolCallAssembler::default();
         assembler.apply_value(value);
         LlmParsedSseEvent {
@@ -126,8 +127,8 @@ impl LlmProviderResponseParser for OpenAiCompatibleResponseParser {
             content_text: texts.content_text,
             reasoning_text: texts.reasoning_text,
             tool_calls: assembler.into_calls(),
-            done: event.done_marker,
-            finish_reason: extract_finish_reason(value),
+            done: event.done_marker || finish_reason.is_some(),
+            finish_reason,
         }
     }
 

@@ -101,6 +101,13 @@ struct actrail_pending_exit_op {
     __s32 code;
 };
 
+struct actrail_pending_ipc_fd_pair_op {
+    __u64 trace_id;
+    __u64 fd_pair_ptr;
+    __u32 kind;
+    __u32 domain;
+};
+
 struct actrail_pid_namespace {
     __u64 dev;
     __u64 ino;
@@ -195,6 +202,13 @@ struct {
     __type(key, __u64);
     __type(value, struct actrail_pending_net_op);
 } pending_net_ops SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1);
+    __type(key, __u64);
+    __type(value, struct actrail_pending_ipc_fd_pair_op);
+} pending_ipc_fd_pair_ops SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);

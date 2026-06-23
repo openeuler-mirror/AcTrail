@@ -101,9 +101,17 @@ const PLATFORM_OPTIONAL_TRACEPOINT_PROGRAMS: &[&str] = &[
     "handle_sys_exit_openat2",
     "handle_sys_enter_creat",
     "handle_sys_exit_creat",
+    "handle_sys_enter_pipe",
+    "handle_sys_exit_pipe",
 ];
 
 const FD_IO_IPC_PROGRAMS: &[&str] = &[
+    "handle_sys_enter_pipe",
+    "handle_sys_exit_pipe",
+    "handle_sys_enter_pipe2",
+    "handle_sys_exit_pipe2",
+    "handle_sys_enter_socketpair",
+    "handle_sys_exit_socketpair",
     "handle_sys_enter_write",
     "handle_sys_exit_write",
     "handle_sys_enter_read",

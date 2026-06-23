@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import select
 import shutil
@@ -42,7 +43,8 @@ def main() -> int:
     require_root()
     repo = repo_root()
     workload = read_config(resolve_path(args.workload_config, repo))
-    require_env(required(workload, "upstream_api_key_env"))
+    if proxy_mode(workload) == "forward":
+        require_env(required(workload, "upstream_api_key_env"))
     xiaoo_binary = resolve_xiaoo_binary(required(workload, "xiaoo_binary"))
     bin_dir = resolve_path(args.bin_dir, repo)
     actraild = require_binary(bin_dir, "actraild")
@@ -114,6 +116,7 @@ def main() -> int:
             float(required(workload, "drain_sleep_seconds")),
         )
         require_complete_llm_exchange(actions)
+        require_no_failed_llm_responses(actions)
         require_llm_exchange_graph(actions)
         web_tree = require_web_action_tree_projection(
             actrailweb,
@@ -169,6 +172,8 @@ def start_proxy(
     command = [
         sys.executable,
         str(proxy_script),
+        "--mode",
+        proxy_mode(workload),
         "--bind-host",
         required(workload, "proxy_bind_host"),
         "--bind-port",
@@ -187,6 +192,8 @@ def start_proxy(
         required(workload, "proxy_read_chunk_bytes"),
         "--response-chunk-delay-seconds",
         required(workload, "proxy_response_chunk_delay_seconds"),
+        "--local-stream-response-text",
+        required(workload, "local_stream_response_text"),
     ]
     process = subprocess.Popen(
         command,
@@ -249,6 +256,7 @@ def write_xiaoo_config(
             f"api_base = {toml_string(proxy_base_url)}",
             f"max_tokens = {required(workload, 'max_tokens')}",
             f"context_window = {required(workload, 'context_window')}",
+            f"reasoning_effort = {toml_string(required(workload, 'reasoning_effort'))}",
             "",
         ]
     )
@@ -277,6 +285,20 @@ def require_plain_http_otel_exchange(document: dict, workload: dict[str, str]) -
         raise RuntimeError("OTEL export did not contain a Syscall/plain-HTTP llm.response span")
 
 
+def require_no_failed_llm_responses(actions: str) -> None:
+    document = json.loads(actions)
+    failed = [
+        action
+        for action in document.get("actions", [])
+        if action.get("kind") == "llm.response" and action.get("status") != "success"
+    ]
+    if failed:
+        detail = ", ".join(
+            f"{action.get('action_id')}:{action.get('status')}" for action in failed[:5]
+        )
+        raise RuntimeError(f"actions contained failed llm.response rows: {detail}")
+
+
 def matching_otel_action(
     document: dict,
     kind: str,
@@ -303,6 +325,10 @@ def matching_otel_action(
 def require_no_tls_payload_rows(payloads: str) -> None:
     if "TlsUserSpace" in payloads:
         raise RuntimeError("plain HTTP proxy E2E unexpectedly produced TlsUserSpace payload rows")
+
+
+def proxy_mode(workload: dict[str, str]) -> str:
+    return workload.get("proxy_mode", "forward")
 
 
 def resolve_xiaoo_binary(configured: str) -> Path:

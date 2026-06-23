@@ -35,6 +35,18 @@ impl BindingStateMap {
         identity: ProcessIdentity,
         map_pid: u32,
     ) {
+        if let Some(previous) = self.by_pid.remove(&identity.pid) {
+            self.remove_indexes_for(&previous);
+        }
+        if let Some(previous_identity) = self.by_trace_map_pid.remove(&(trace_id, map_pid)) {
+            let previous = TrackedProcess {
+                trace_id,
+                identity: previous_identity,
+                map_pid,
+            };
+            self.by_pid.remove(&previous.identity.pid);
+            self.remove_indexes_for(&previous);
+        }
         self.by_pid.insert(
             identity.pid,
             TrackedProcess {
@@ -129,20 +141,7 @@ impl BindingStateMap {
 
     pub fn remove_pid(&mut self, pid: u32) -> Option<TrackedProcess> {
         let removed = self.by_pid.remove(&pid)?;
-        self.by_trace_map_pid
-            .remove(&(removed.trace_id, removed.map_pid));
-        if let Some(pids) = self.pids_by_trace.get_mut(&removed.trace_id) {
-            pids.remove(&pid);
-            if pids.is_empty() {
-                self.pids_by_trace.remove(&removed.trace_id);
-            }
-        }
-        if let Some(map_pids) = self.map_pids_by_trace.get_mut(&removed.trace_id) {
-            map_pids.remove(&removed.map_pid);
-            if map_pids.is_empty() {
-                self.map_pids_by_trace.remove(&removed.trace_id);
-            }
-        }
+        self.remove_indexes_for(&removed);
         Some(removed)
     }
 
@@ -178,5 +177,27 @@ impl BindingStateMap {
 
     pub fn trace_count(&self) -> usize {
         self.pids_by_trace.len()
+    }
+
+    fn remove_indexes_for(&mut self, tracked: &TrackedProcess) {
+        self.by_trace_map_pid
+            .remove(&(tracked.trace_id, tracked.map_pid));
+        self.by_trace_map_process.remove(&(
+            tracked.trace_id,
+            tracked.map_pid,
+            tracked.identity.generation,
+        ));
+        if let Some(pids) = self.pids_by_trace.get_mut(&tracked.trace_id) {
+            pids.remove(&tracked.identity.pid);
+            if pids.is_empty() {
+                self.pids_by_trace.remove(&tracked.trace_id);
+            }
+        }
+        if let Some(map_pids) = self.map_pids_by_trace.get_mut(&tracked.trace_id) {
+            map_pids.remove(&tracked.map_pid);
+            if map_pids.is_empty() {
+                self.map_pids_by_trace.remove(&tracked.trace_id);
+            }
+        }
     }
 }

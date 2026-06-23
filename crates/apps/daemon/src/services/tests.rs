@@ -11,7 +11,7 @@ use config_core::daemon::{
     EnforcementMarkStrategy, EnforcementScope, FileObservationConfig, MemlockRlimit,
     OPERATOR_CONFIG_TEMPLATE, OperatorConfig, PayloadConfig, ProcessSeccompConfig,
     ProcessSeccompSyscall, ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig,
-    SemanticRetentionConfig, SseDataPolicy,
+    SemanticRetentionConfig, SseDataPolicy, TraceFinalizationConfig,
 };
 use config_core::trace_snapshot::CaptureProfileSnapshot;
 use control_contract::command::{ControlCommand, ListTracesCommand, ProcessRef, TrackAddCommand};
@@ -80,6 +80,7 @@ fn attach_main_path_runs() {
         FileObservationConfig::default(),
         application_protocol_disabled(),
         resource_metrics_disabled(),
+        TraceFinalizationConfig::default(),
         workload_diagnostics_disabled(),
         export_runtime_disabled(),
         enforcement_disabled(),
@@ -139,6 +140,7 @@ fn launch_mode_suppresses_wrapper_bootstrap_gap() {
         FileObservationConfig::default(),
         application_protocol_disabled(),
         resource_metrics_disabled(),
+        TraceFinalizationConfig::default(),
         workload_diagnostics_disabled(),
         export_runtime_disabled(),
         enforcement_disabled(),
@@ -212,6 +214,7 @@ fn resource_metrics_sampler_persists_procfs_samples() {
             cpu_alert_percent_millis: None,
             memory_alert_rss_kb: None,
         },
+        TraceFinalizationConfig::default(),
         workload_diagnostics_disabled(),
         export_runtime_disabled(),
         enforcement_disabled(),

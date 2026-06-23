@@ -92,6 +92,9 @@ pub(crate) struct StorageAttachService {
     pub(super) workload_diagnostics: WorkloadDiagnostics,
     pub(super) retained_payload_bytes_by_trace: BTreeMap<model_core::ids::TraceId, u64>,
     pub(super) finalized_terminal_traces: BTreeSet<model_core::ids::TraceId>,
+    pub(super) pending_terminal_finalizations: BTreeSet<model_core::ids::TraceId>,
+    pub(super) finalization_traces_per_cycle: usize,
+    pub(super) finalization_poll_interval: Duration,
     pub(super) diagnosed_terminal_open_memberships:
         BTreeSet<(model_core::ids::TraceId, ProcessIdentity)>,
     pub(super) provider_classifier: Box<dyn ProviderClassifier>,
@@ -396,7 +399,16 @@ impl AttachService for StorageAttachService {
     }
 
     fn background_poll_timeout(&self) -> Result<Option<Duration>, ControlError> {
-        Ok(self.resource_metrics.poll_timeout())
+        let resource_timeout = self.resource_metrics.poll_timeout();
+        let finalization_timeout = (!self.pending_terminal_finalizations.is_empty())
+            .then_some(self.finalization_poll_interval);
+        Ok(match (resource_timeout, finalization_timeout) {
+            (Some(resource_timeout), Some(finalization_timeout)) => {
+                Some(resource_timeout.min(finalization_timeout))
+            }
+            (Some(timeout), None) | (None, Some(timeout)) => Some(timeout),
+            (None, None) => None,
+        })
     }
 
     fn remove_root(

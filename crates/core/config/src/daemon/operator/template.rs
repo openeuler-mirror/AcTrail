@@ -18,6 +18,9 @@ log_path = /var/log/actrail/actraild.log
 diagnostic_log_level = info
 workload_diagnostics_enabled = false
 workload_diagnostics_interval_ms = 1000
+# Terminal trace finalization runs after root capture removal so control replies stay responsive.
+finalization_traces_per_cycle = 1
+finalization_poll_interval_ms = 100
 
 graph_schema_version = manual-v1
 allow_active_trace_snapshot = true

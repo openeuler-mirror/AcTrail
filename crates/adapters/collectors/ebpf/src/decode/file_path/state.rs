@@ -38,6 +38,12 @@ pub(super) const FILE_SYSCALL_FCNTL: u32 = 19;
 pub(super) const FILE_SYSCALL_CHDIR: u32 = 20;
 pub(super) const FILE_SYSCALL_FCHDIR: u32 = 21;
 pub(super) const FILE_SYSCALL_OPENAT2: u32 = 22;
+pub(super) const FILE_SYSCALL_PIPE: u32 = 23;
+pub(super) const FILE_SYSCALL_PIPE2: u32 = 24;
+pub(super) const FILE_SYSCALL_SOCKETPAIR: u32 = 25;
+
+pub(crate) const FILE_IPC_KIND_PIPE: u64 = 1;
+pub(crate) const FILE_IPC_KIND_UNIX_SOCKET: u64 = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct FileSyscallOutcome {
@@ -79,6 +85,13 @@ pub(super) struct ProcessFileKey {
 pub(super) struct ProcessFileState {
     pub(super) cwd: Option<String>,
     pub(super) fds: BTreeMap<u32, String>,
+    pub(super) ipc_fds: BTreeMap<u32, FdIpcKind>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FdIpcKind {
+    Pipe,
+    UnixSocket,
 }
 
 impl FileTracker {
@@ -142,6 +155,55 @@ impl FileTracker {
             .get(&key)
             .and_then(|state| state.fds.get(&fd))
             .cloned()
+    }
+
+    pub(crate) fn resolve_fd_ipc_kind(
+        &self,
+        trace_id: TraceId,
+        process: &ProcessIdentity,
+        fd: u32,
+    ) -> Option<FdIpcKind> {
+        if fd == FILE_FD_MISSING {
+            return None;
+        }
+        let key = ProcessFileKey {
+            trace_id,
+            process: process.clone(),
+        };
+        self.processes
+            .get(&key)
+            .and_then(|state| state.ipc_fds.get(&fd))
+            .copied()
+    }
+
+    pub(super) fn record_ipc_fd_pair(
+        &mut self,
+        event: &KernelFilePathEvent,
+        process: ProcessIdentity,
+    ) -> bool {
+        if event.kind != crate::decode::FILE_EVENT_CONTEXT
+            || event.phase != FILE_PHASE_EXIT
+            || event.result != 0
+        {
+            return false;
+        }
+        let Some(kind) = ipc_kind_from_event(event) else {
+            return false;
+        };
+        if event.fd == FILE_FD_MISSING {
+            return true;
+        }
+        let Some(peer_fd) = u32::try_from(event.arg0).ok() else {
+            return true;
+        };
+        let process_key = ProcessFileKey {
+            trace_id: event.trace_id,
+            process,
+        };
+        let state = self.ensure_process(&process_key);
+        state.ipc_fds.insert(event.fd, kind);
+        state.ipc_fds.insert(peer_fd, kind);
+        true
     }
 
     pub(super) fn record(
@@ -215,9 +277,9 @@ impl FileTracker {
                     &process_key.process,
                     enter.arg0 as u32,
                 );
-                self.ensure_process(process_key)
-                    .fds
-                    .remove(&(enter.arg0 as u32));
+                let state = self.ensure_process(process_key);
+                state.fds.remove(&(enter.arg0 as u32));
+                state.ipc_fds.remove(&(enter.arg0 as u32));
                 path
             }
             FILE_SYSCALL_DUP | FILE_SYSCALL_DUP2 | FILE_SYSCALL_DUP3 => {
@@ -261,19 +323,27 @@ impl FileTracker {
         enter: &KernelFilePathEvent,
         result: i64,
     ) {
-        let Some(source) = self.resolve_fd_path(
+        let source = self.resolve_fd_path(
             process_key.trace_id,
             &process_key.process,
             enter.arg0 as u32,
-        ) else {
-            return;
-        };
+        );
+        let ipc_source = self.resolve_fd_ipc_kind(
+            process_key.trace_id,
+            &process_key.process,
+            enter.arg0 as u32,
+        );
         let Some(target_fd) = dup_target_fd(enter, result) else {
             return;
         };
-        self.ensure_process(process_key)
-            .fds
-            .insert(target_fd, source);
+        let state = self.ensure_process(process_key);
+        if let Some(source) = source {
+            state.fds.insert(target_fd, source);
+            state.ipc_fds.remove(&target_fd);
+        } else if let Some(kind) = ipc_source {
+            state.ipc_fds.insert(target_fd, kind);
+            state.fds.remove(&target_fd);
+        }
     }
 
     fn apply_rename(
@@ -455,4 +525,12 @@ pub(super) fn dup_target_fd(event: &KernelFilePathEvent, result: i64) -> Option<
 pub(super) fn fcntl_duplicates_fd(event: &KernelFilePathEvent) -> bool {
     i32::try_from(event.arg1)
         .is_ok_and(|command| matches!(command, libc::F_DUPFD | libc::F_DUPFD_CLOEXEC))
+}
+
+fn ipc_kind_from_event(event: &KernelFilePathEvent) -> Option<FdIpcKind> {
+    match (event.aux, event.arg1) {
+        (FILE_SYSCALL_PIPE | FILE_SYSCALL_PIPE2, FILE_IPC_KIND_PIPE) => Some(FdIpcKind::Pipe),
+        (FILE_SYSCALL_SOCKETPAIR, FILE_IPC_KIND_UNIX_SOCKET) => Some(FdIpcKind::UnixSocket),
+        _ => None,
+    }
 }

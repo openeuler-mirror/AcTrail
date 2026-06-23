@@ -19,7 +19,7 @@ use collector_binding::{
     CoverageGuardHandle, CoverageGuardRequest, TraceBindingHandle, TraceBindingRequest,
 };
 use collector_instance::{CollectorError, CollectorInstance, CollectorPollBatch};
-use collector_stats::CollectorStats;
+use collector_stats::{CollectorStats, DropCounter};
 use config_core::daemon::{EbpfCollectorConfig, PayloadConfig};
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use model_core::ids::{CollectorName, TraceId};
@@ -59,6 +59,8 @@ pub struct EbpfCollector {
     socket_completions: Vec<SocketPayloadCompletion>,
     suppressed_fds: Vec<TraceSuppressedFd>,
     active_pid_namespace: Option<NamespaceIdentity>,
+    binding_gap_drops: u64,
+    binding_gap_lifecycle_skips: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -97,6 +99,8 @@ impl EbpfCollector {
             socket_completions: Vec::new(),
             suppressed_fds: Vec::new(),
             active_pid_namespace: None,
+            binding_gap_drops: 0,
+            binding_gap_lifecycle_skips: 0,
         }
     }
 
@@ -130,6 +134,24 @@ impl EbpfCollector {
         let map_pid = self
             .bindings
             .remove_pid(pid)
+            .map(|tracked| tracked.map_pid)
+            .unwrap_or(pid);
+        if let Some(runtime) = self.runtime.as_mut() {
+            if let Some(tracked) = tracked.as_ref() {
+                runtime
+                    .sweep_suppressed_fds_for_process(map_pid, tracked.identity.generation)
+                    .map_err(loader_error)?;
+            }
+            cleanup_suppressed_fds_for_pid(runtime, &mut self.suppressed_fds, map_pid)?;
+            runtime.untrack_pid(map_pid).map_err(loader_error)?;
+        }
+        Ok(())
+    }
+
+    pub fn stop_kernel_tracking_process(&mut self, pid: u32) -> Result<(), CollectorError> {
+        let tracked = self.bindings.by_host_pid(pid).cloned();
+        let map_pid = tracked
+            .as_ref()
             .map(|tracked| tracked.map_pid)
             .unwrap_or(pid);
         if let Some(runtime) = self.runtime.as_mut() {
@@ -517,11 +539,24 @@ impl CollectorInstance for EbpfCollector {
     }
 
     fn stats(&self) -> CollectorStats {
+        let mut dropped = Vec::new();
+        if self.binding_gap_drops != 0 {
+            dropped.push(DropCounter {
+                reason: "ebpf_file_identity_binding_gap".to_string(),
+                count: self.binding_gap_drops,
+            });
+        }
+        if self.binding_gap_lifecycle_skips != 0 {
+            dropped.push(DropCounter {
+                reason: "ebpf_exit_lifecycle_binding_gap".to_string(),
+                count: self.binding_gap_lifecycle_skips,
+            });
+        }
         CollectorStats {
             collector_name: CollectorName::new("ebpf"),
             active_bindings: self.bindings.trace_count(),
             last_heartbeat_at: SystemTime::now(),
-            dropped: Vec::new(),
+            dropped,
         }
     }
 }

@@ -271,6 +271,51 @@ int handle_sys_exit_listen(struct trace_event_raw_sys_exit *ctx) {
     return emit_pending_net_op(ctx);
 }
 
+SEC("tracepoint/syscalls/sys_enter_pipe")
+int handle_sys_enter_pipe(struct trace_event_raw_sys_enter *ctx) {
+    return store_pending_ipc_fd_pair_op(
+        ctx,
+        ACTRAIL_FILE_IPC_FD_PIPE,
+        0,
+        0
+    );
+}
+
+SEC("tracepoint/syscalls/sys_exit_pipe")
+int handle_sys_exit_pipe(struct trace_event_raw_sys_exit *ctx) {
+    return emit_ipc_fd_pair_exit(ctx, ACTRAIL_FILE_SYSCALL_PIPE);
+}
+
+SEC("tracepoint/syscalls/sys_enter_pipe2")
+int handle_sys_enter_pipe2(struct trace_event_raw_sys_enter *ctx) {
+    return store_pending_ipc_fd_pair_op(
+        ctx,
+        ACTRAIL_FILE_IPC_FD_PIPE,
+        0,
+        0
+    );
+}
+
+SEC("tracepoint/syscalls/sys_exit_pipe2")
+int handle_sys_exit_pipe2(struct trace_event_raw_sys_exit *ctx) {
+    return emit_ipc_fd_pair_exit(ctx, ACTRAIL_FILE_SYSCALL_PIPE2);
+}
+
+SEC("tracepoint/syscalls/sys_enter_socketpair")
+int handle_sys_enter_socketpair(struct trace_event_raw_sys_enter *ctx) {
+    return store_pending_ipc_fd_pair_op(
+        ctx,
+        ACTRAIL_FILE_IPC_FD_UNIX_SOCKET,
+        3,
+        (__u32)ctx->args[0]
+    );
+}
+
+SEC("tracepoint/syscalls/sys_exit_socketpair")
+int handle_sys_exit_socketpair(struct trace_event_raw_sys_exit *ctx) {
+    return emit_ipc_fd_pair_exit(ctx, ACTRAIL_FILE_SYSCALL_SOCKETPAIR);
+}
+
 SEC("tracepoint/syscalls/sys_enter_write")
 int handle_sys_enter_write(struct trace_event_raw_sys_enter *ctx) {
     store_stdio_payload_op(ctx, ACTRAIL_STDIO_SYSCALL_WRITE);

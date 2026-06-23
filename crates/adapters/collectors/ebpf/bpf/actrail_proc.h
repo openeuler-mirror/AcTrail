@@ -11,7 +11,9 @@ static __always_inline int emit_pending_child_proc_op(__u32 child_kernel_pid) {
     __u32 child_pid = 0;
     struct actrail_pending_proc_op *op =
         bpf_map_lookup_elem(&pending_child_proc_ops, &child_kernel_pid);
-    struct actrail_event event;
+    struct actrail_event *event;
+    int tracked_trace_updated;
+    int process_generation_updated;
 
     if (!op) {
         return 0;
@@ -26,8 +28,36 @@ static __always_inline int emit_pending_child_proc_op(__u32 child_kernel_pid) {
         return 0;
     }
 
-    bpf_map_update_elem(&tracked_traces, &child_pid, &op->trace_id, BPF_ANY);
-    set_process_generation(child_pid, op->child_generation);
+    event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    if (!event) {
+        bpf_map_delete_elem(&pending_child_proc_ops, &child_kernel_pid);
+        return 0;
+    }
+
+    tracked_trace_updated = bpf_map_update_elem(
+        &tracked_traces,
+        &child_pid,
+        &op->trace_id,
+        BPF_NOEXIST
+    );
+    if (tracked_trace_updated != 0) {
+        bpf_ringbuf_discard(event, 0);
+        bpf_map_delete_elem(&pending_child_proc_ops, &child_kernel_pid);
+        return 0;
+    }
+
+    process_generation_updated = bpf_map_update_elem(
+        &process_generations,
+        &child_pid,
+        &op->child_generation,
+        BPF_ANY
+    );
+    if (process_generation_updated != 0) {
+        bpf_map_delete_elem(&tracked_traces, &child_pid);
+        bpf_ringbuf_discard(event, 0);
+        bpf_map_delete_elem(&pending_child_proc_ops, &child_kernel_pid);
+        return 0;
+    }
     inherit_suppressed_fds_for_child(
         op->parent_pid,
         op->parent_generation,
@@ -35,11 +65,11 @@ static __always_inline int emit_pending_child_proc_op(__u32 child_kernel_pid) {
         op->child_generation
     );
 
-    init_event(&event, ACTRAIL_PROC_FORK, op->parent_pid, op->trace_id);
-    event.aux = child_pid;
-    event.pid_generation = op->parent_generation;
-    event.aux_generation = op->child_generation;
-    emit_event(&event);
+    init_event(event, ACTRAIL_PROC_FORK, op->parent_pid, op->trace_id);
+    event->aux = child_pid;
+    event->pid_generation = op->parent_generation;
+    event->aux_generation = op->child_generation;
+    bpf_ringbuf_submit(event, 0);
     bpf_map_delete_elem(&pending_child_proc_ops, &child_kernel_pid);
     return 0;
 }

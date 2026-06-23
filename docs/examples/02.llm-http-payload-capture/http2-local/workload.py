@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import os
 import select
 import socket
@@ -347,7 +348,7 @@ def run_server(args: argparse.Namespace) -> int:
     listener.listen(args.listen_backlog)
     print(listener.getsockname()[1], flush=True)
 
-    with listener:
+    try:
         raw_conn, _ = listener.accept()
         with context.wrap_socket(raw_conn, server_side=True) as conn:
             conn.settimeout(args.socket_timeout_seconds)
@@ -355,7 +356,17 @@ def run_server(args: argparse.Namespace) -> int:
                 raise RuntimeError("client did not negotiate h2 over TLS ALPN")
             run_h2_exchange(conn, args.response_body.encode(), args.response_delay_seconds)
             time.sleep(args.post_response_hold_seconds)
+    finally:
+        close_listener(listener)
     return 0
+
+
+def close_listener(listener: socket.socket) -> None:
+    try:
+        listener.close()
+    except OSError as error:
+        if error.errno != errno.EBADF:
+            raise
 
 
 def parse_server_args(argv: list[str]) -> argparse.Namespace:

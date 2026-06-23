@@ -342,7 +342,6 @@ static __always_inline int suppressed_fd_dup_enter(
     __u64 pid_tgid = current_pid_tgid();
     __u32 pid = pid_tgid >> 32;
     struct actrail_suppressed_fd_value *source;
-    struct actrail_suppressed_fd_value *target;
     struct actrail_pending_suppressed_fd_dup_op op = {};
 
     if (!pid) {
@@ -352,17 +351,23 @@ static __always_inline int suppressed_fd_dup_enter(
     op.target_fd = has_target_fd ? target_fd : 0;
     op.mode = mode;
     source = lookup_suppressed_fd(pid, op.source_fd);
-    target = has_target_fd ? lookup_suppressed_fd(pid, op.target_fd) : 0;
     if (source) {
         op.source_suppressed = 1;
         op.source_value = *source;
+        bpf_map_update_elem(&pending_suppressed_fd_dup_ops, &pid_tgid, &op, BPF_ANY);
+        return 1;
     }
-    if (target) {
-        op.target_suppressed = 1;
-    }
-    if (!op.source_suppressed && !op.target_suppressed) {
+    if (!has_target_fd) {
         return 0;
     }
+    {
+        struct actrail_suppressed_fd_value *target = lookup_suppressed_fd(pid, op.target_fd);
+
+        if (!target) {
+            return 0;
+        }
+    }
+    op.target_suppressed = 1;
     bpf_map_update_elem(&pending_suppressed_fd_dup_ops, &pid_tgid, &op, BPF_ANY);
     return 1;
 }

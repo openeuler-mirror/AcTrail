@@ -8,7 +8,7 @@ use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
     EnforcementConfig, FileObservationConfig, PayloadConfig, ProcessSeccompConfig,
     ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig, SemanticRetentionConfig,
-    WorkloadDiagnosticsConfig,
+    TraceFinalizationConfig, WorkloadDiagnosticsConfig,
 };
 use config_core::provider_rules::ProviderRuleSetConfig;
 use control_contract::reply::ControlError;
@@ -59,6 +59,7 @@ impl LocalDaemonServer {
         file_observation: FileObservationConfig,
         application_protocol: ApplicationProtocolConfig,
         resource_metrics: ResourceMetricsConfig,
+        trace_finalization: TraceFinalizationConfig,
         workload_diagnostics_config: WorkloadDiagnosticsConfig,
         export_runtime: RuntimeExportConfig,
         enforcement: EnforcementConfig,
@@ -78,6 +79,7 @@ impl LocalDaemonServer {
             file_observation,
             application_protocol,
             resource_metrics,
+            trace_finalization,
             workload_diagnostics.clone(),
             export_runtime,
             enforcement,
@@ -103,6 +105,7 @@ impl LocalDaemonServer {
         file_observation: FileObservationConfig,
         application_protocol: ApplicationProtocolConfig,
         resource_metrics: ResourceMetricsConfig,
+        trace_finalization: TraceFinalizationConfig,
         workload_diagnostics_config: WorkloadDiagnosticsConfig,
         export_runtime: RuntimeExportConfig,
         enforcement: EnforcementConfig,
@@ -123,6 +126,7 @@ impl LocalDaemonServer {
             file_observation,
             application_protocol,
             resource_metrics,
+            trace_finalization,
             workload_diagnostics.clone(),
             export_runtime,
             enforcement,

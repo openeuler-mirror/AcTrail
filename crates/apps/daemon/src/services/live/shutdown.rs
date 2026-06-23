@@ -18,19 +18,60 @@ impl StorageAttachService {
         &mut self,
         trace_runtime: &TraceRuntime,
     ) -> Result<(), ControlError> {
-        let trace_ids = trace_runtime
-            .list_trace_records()
-            .into_iter()
-            .filter(|trace| {
-                matches!(
-                    trace.lifecycle_state,
-                    TraceLifecycleState::Completed | TraceLifecycleState::Failed
-                ) && !self.finalized_terminal_traces.contains(&trace.trace_id)
-            })
-            .map(|trace| trace.trace_id)
+        self.enqueue_terminal_finalizations_impl(trace_runtime);
+        self.progress_terminal_finalizations_impl(trace_runtime)
+    }
+
+    fn enqueue_terminal_finalizations_impl(&mut self, trace_runtime: &TraceRuntime) {
+        for trace in trace_runtime.list_trace_records() {
+            if terminal_lifecycle(trace.lifecycle_state)
+                && !self.finalized_terminal_traces.contains(&trace.trace_id)
+            {
+                self.pending_terminal_finalizations.insert(trace.trace_id);
+            }
+        }
+    }
+
+    fn enqueue_trace_finalization_if_terminal(
+        &mut self,
+        trace_runtime: &TraceRuntime,
+        trace_id: TraceId,
+    ) -> Result<(), ControlError> {
+        let trace = trace_runtime
+            .get_trace(trace_id)
+            .map(|entry| &entry.trace)
+            .ok_or_else(|| ControlError::new("terminal_trace", "trace not found"))?;
+        if terminal_lifecycle(trace.lifecycle_state)
+            && !self.finalized_terminal_traces.contains(&trace_id)
+        {
+            self.pending_terminal_finalizations.insert(trace_id);
+        }
+        Ok(())
+    }
+
+    fn progress_terminal_finalizations_impl(
+        &mut self,
+        trace_runtime: &TraceRuntime,
+    ) -> Result<(), ControlError> {
+        let trace_ids = self
+            .pending_terminal_finalizations
+            .iter()
+            .copied()
             .collect::<Vec<_>>();
+        let mut finalized_this_cycle = 0_usize;
 
         for trace_id in trace_ids {
+            if finalized_this_cycle >= self.finalization_traces_per_cycle {
+                break;
+            }
+            if self.finalized_terminal_traces.contains(&trace_id) {
+                self.pending_terminal_finalizations.remove(&trace_id);
+                continue;
+            }
+            if !trace_is_terminal(trace_runtime, trace_id)? {
+                self.pending_terminal_finalizations.remove(&trace_id);
+                continue;
+            }
             if terminal_trace_has_open_memberships(trace_runtime, trace_id)? {
                 continue;
             }
@@ -44,87 +85,14 @@ impl StorageAttachService {
             self.payload_body_retention_gate.forget_trace(trace_id);
             self.retained_payload_bytes_by_trace.remove(&trace_id);
             self.finalized_terminal_traces.insert(trace_id);
+            self.pending_terminal_finalizations.remove(&trace_id);
+            finalized_this_cycle += 1;
+            self.log_diagnostic(
+                DiagnosticLogLevel::Info,
+                format_args!("trace_finalization completed trace_id={trace_id}"),
+            );
         }
         Ok(())
-    }
-
-    fn drain_trace_shutdown_events_impl(
-        &mut self,
-        trace_runtime: &mut TraceRuntime,
-        trace_id: TraceId,
-    ) -> Result<(), ControlError> {
-        self.drain_tls_sync_events_impl(trace_runtime)?;
-        self.drain_seccomp_notifications_impl(trace_runtime)?;
-        if self.trace_uses_ebpf_collector(trace_runtime, trace_id)? {
-            if !self.collector_ready() {
-                return Err(ControlError::new(
-                    "track_remove",
-                    "cannot final-drain trace because the eBPF collector is not ready",
-                ));
-            }
-            if self.collector.stats().active_bindings == 0 {
-                if !self.trace_allows_missing_ebpf_binding(trace_runtime, trace_id)? {
-                    return Err(ControlError::new(
-                        "track_remove",
-                        "cannot final-drain trace because no eBPF bindings are active",
-                    ));
-                }
-                self.collector
-                    .poll_tls_payload_control_events()
-                    .map_err(|error| ControlError::new(error.stage, error.message))?;
-                self.log_tls_diagnostic_events_impl();
-            } else {
-                let batch = self
-                    .collector
-                    .poll_batch()
-                    .map_err(|error| ControlError::new(error.stage, error.message))?;
-                self.workload_diagnostics
-                    .record_collector_batch(batch.observations.len(), batch.payload_segments.len());
-                self.log_tls_diagnostic_events_impl();
-                self.process_live_event_batch(trace_runtime, batch.observations)?;
-                self.process_payload_segments_impl(trace_runtime, batch.payload_segments)?;
-            }
-        } else {
-            self.collector
-                .poll_tls_payload_control_events()
-                .map_err(|error| ControlError::new(error.stage, error.message))?;
-            self.log_tls_diagnostic_events_impl();
-        }
-        self.ingest_polled_seccomp_tls_controls_impl()?;
-        self.drain_seccomp_notifications_impl(trace_runtime)?;
-        self.flush_process_seccomp_observations_impl(trace_runtime)?;
-        self.persist_completed_seccomp_tls_operations_impl(trace_runtime)?;
-        self.persist_completed_seccomp_socket_operations_impl(trace_runtime)
-    }
-
-    fn trace_uses_ebpf_collector(
-        &self,
-        trace_runtime: &TraceRuntime,
-        trace_id: TraceId,
-    ) -> Result<bool, ControlError> {
-        let collector_name = self.collector.descriptor().name.clone();
-        let entry = trace_runtime
-            .get_trace(trace_id)
-            .ok_or_else(|| ControlError::new("track_remove", "trace not found"))?;
-        Ok(entry
-            .sensor_plan
-            .collectors
-            .iter()
-            .any(|collector| collector.collector_name == collector_name))
-    }
-
-    fn trace_allows_missing_ebpf_binding(
-        &self,
-        trace_runtime: &TraceRuntime,
-        trace_id: TraceId,
-    ) -> Result<bool, ControlError> {
-        let entry = trace_runtime
-            .get_trace(trace_id)
-            .ok_or_else(|| ControlError::new("track_remove", "trace not found"))?;
-        Ok(matches!(
-            entry.trace.lifecycle_state,
-            TraceLifecycleState::Completed | TraceLifecycleState::Failed
-        ))
     }
 
     pub(in crate::services) fn remove_root_impl(
@@ -138,10 +106,6 @@ impl StorageAttachService {
             .map(|entry| entry.trace.root_process_identity.clone())
             .ok_or_else(|| ControlError::new("track_remove", "trace not found"))?;
 
-        // Drain trace-bearing sources before disabling root capture. Descendant
-        // processes stay tracked while the trace is draining, so the normal
-        // live loop gets the first chance to consume their lifecycle exit events.
-        self.drain_trace_shutdown_events_impl(trace_runtime, trace_id)?;
         trace_runtime
             .track_remove_root(RootRemovalRequest {
                 trace_id,
@@ -149,19 +113,41 @@ impl StorageAttachService {
             })
             .map_err(|error| ControlError::new("track_remove", format!("{:?}", error)))?;
         self.collector
-            .stop_tracking_process(root_identity.pid)
+            .stop_kernel_tracking_process(root_identity.pid)
             .map_err(|error| ControlError::new(error.stage, error.message))?;
         self.persist_trace_state(trace_runtime, trace_id)?;
-        self.finalize_terminal_traces_impl(trace_runtime)?;
+        self.enqueue_trace_finalization_if_terminal(trace_runtime, trace_id)?;
+        let finalization_state = if self.pending_terminal_finalizations.contains(&trace_id) {
+            "queued"
+        } else {
+            "not_terminal"
+        };
         self.log_diagnostic(
             DiagnosticLogLevel::Info,
             format_args!(
-                "agent_launch closed trace_id={} pid={} generation={}",
-                trace_id, root_identity.pid, root_identity.generation
+                "agent_launch root_removed trace_id={} pid={} generation={} finalization={}",
+                trace_id, root_identity.pid, root_identity.generation, finalization_state
             ),
         );
         Ok(())
     }
+}
+
+fn trace_is_terminal(
+    trace_runtime: &TraceRuntime,
+    trace_id: TraceId,
+) -> Result<bool, ControlError> {
+    trace_runtime
+        .get_trace(trace_id)
+        .map(|entry| terminal_lifecycle(entry.trace.lifecycle_state))
+        .ok_or_else(|| ControlError::new("terminal_trace", "trace not found"))
+}
+
+fn terminal_lifecycle(lifecycle_state: TraceLifecycleState) -> bool {
+    matches!(
+        lifecycle_state,
+        TraceLifecycleState::Completed | TraceLifecycleState::Failed
+    )
 }
 
 fn terminal_trace_has_open_memberships(

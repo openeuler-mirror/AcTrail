@@ -69,21 +69,45 @@ def run(env) -> CaseResult:
         expected_found_detail("xiaoO executable is available", [f"path={selected}"]),
         "the case can launch a real xiaoO process",
     )
-    upstream_key_env = required(workload, "upstream_api_key_env")
-    if not env.has_env(upstream_key_env):
-        return skip_case(
-            result,
-            "upstream API key",
-            f"{upstream_key_env} is set",
-            [f"{upstream_key_env}=missing"],
-            "the local proxy needs a real upstream provider credential",
+    mode = proxy_mode(workload)
+    if mode not in {"forward", "local-stream"}:
+        result.status = FAIL
+        result.add_check(
+            "proxy mode",
+            FAIL,
+            expected_found_detail("proxy_mode is forward or local-stream", [f"proxy_mode={mode}"]),
+            "the xiaoO HTTP proxy case has an invalid workload mode",
         )
+        return result
     result.add_check(
-        "upstream API key",
+        "proxy mode",
         PASS,
-        expected_found_detail(f"{upstream_key_env} is set", [f"{upstream_key_env}=present"]),
-        "the local proxy can forward xiaoO requests to the real HTTPS provider",
+        expected_found_detail("proxy_mode is forward or local-stream", [f"proxy_mode={mode}"]),
+        "the local proxy mode is valid",
     )
+    if mode == "forward":
+        upstream_key_env = required(workload, "upstream_api_key_env")
+        if not env.has_env(upstream_key_env):
+            return skip_case(
+                result,
+                "upstream API key",
+                f"{upstream_key_env} is set",
+                [f"{upstream_key_env}=missing"],
+                "forward mode needs a real upstream provider credential",
+            )
+        result.add_check(
+            "upstream API key",
+            PASS,
+            expected_found_detail(f"{upstream_key_env} is set", [f"{upstream_key_env}=present"]),
+            "the local proxy can forward xiaoO requests to the real HTTPS provider",
+        )
+    else:
+        result.add_check(
+            "local stream endpoint",
+            PASS,
+            expected_found_detail("local-stream mode does not require an upstream API key", [mode]),
+            "the local proxy emits deterministic OpenAI-compatible SSE",
+        )
     run_direct_case(env, result, workload, selected)
     if any(check.status == FAIL for check in result.checks):
         result.status = FAIL
@@ -168,6 +192,10 @@ def select_xiaoo_binary(env, configured: str | None) -> Path | None:
         return env.resolve_executable_reference(configured)
     candidates = env.executable_candidates("xiaoo")
     return candidates[0] if candidates else None
+
+
+def proxy_mode(workload: dict[str, str]) -> str:
+    return workload.get("proxy_mode", "forward")
 
 
 def restore_env(name: str, value: str | None) -> None:

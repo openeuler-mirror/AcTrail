@@ -64,6 +64,24 @@ pub use payload::{
 pub use process::{ProcessSeccompConfig, ProcessSeccompSyscall, SeccompNotifyConfig};
 pub use resource::ResourceMetricsConfig;
 
+pub const DEFAULT_FINALIZATION_TRACES_PER_CYCLE: u32 = 1;
+pub const DEFAULT_FINALIZATION_POLL_INTERVAL_MS: u64 = 100;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TraceFinalizationConfig {
+    pub traces_per_cycle: u32,
+    pub poll_interval_ms: u64,
+}
+
+impl Default for TraceFinalizationConfig {
+    fn default() -> Self {
+        Self {
+            traces_per_cycle: DEFAULT_FINALIZATION_TRACES_PER_CYCLE,
+            poll_interval_ms: DEFAULT_FINALIZATION_POLL_INTERVAL_MS,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SocketPermissions {
     pub mode: u32,

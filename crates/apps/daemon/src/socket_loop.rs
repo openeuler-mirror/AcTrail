@@ -99,13 +99,7 @@ impl LocalDaemonServer {
             readiness.background_ready,
             event_fds.len(),
         );
-        if readiness.event_source_ready || readiness.background_ready {
-            let started = crate::services::workload_diagnostics::now();
-            let result = self.drain_live_events();
-            self.workload_diagnostics()
-                .record_drain_result(started.elapsed(), result.is_ok());
-            result.map_err(|error| DaemonRunError::new(error.code, error.message))?;
-        }
+        let mut ready_control_fds = readiness.control_ready_fds;
         if readiness.listener_ready {
             loop {
                 match listener.accept() {
@@ -120,14 +114,23 @@ impl LocalDaemonServer {
                         stream.set_nonblocking(true).map_err(|error| {
                             DaemonRunError::from_io("control_nonblocking", error)
                         })?;
-                        control_connections.push(UdsControlConnection::new(stream));
+                        let connection = UdsControlConnection::new(stream);
+                        ready_control_fds.push(connection.raw_fd());
+                        control_connections.push(connection);
                     }
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
                     Err(error) => return Err(DaemonRunError::from_io("accept", error)),
                 }
             }
         }
-        self.progress_control_connections(control_connections, &readiness.control_ready_fds);
+        self.progress_control_connections(control_connections, &ready_control_fds);
+        if readiness.event_source_ready || readiness.background_ready {
+            let started = crate::services::workload_diagnostics::now();
+            let result = self.drain_live_events();
+            self.workload_diagnostics()
+                .record_drain_result(started.elapsed(), result.is_ok());
+            result.map_err(|error| DaemonRunError::new(error.code, error.message))?;
+        }
         Ok(())
     }
 

@@ -8,7 +8,20 @@ This directory contains transfer-test preflight tooling. Run commands from the r
 python3 docs/preflight/platform_preflight.py --color always
 ```
 
-Use this mode to check the host, release binaries, toolchain, shared OpenSSL, and optional agent executables such as `claude` and `opencode`.
+Use this mode to check the host, release artifacts, toolchain, shared OpenSSL, and optional agent executables such as `claude` and `opencode`.
+
+By default, the scan looks for AcTrail release artifacts under `target/release` and then on `PATH` when an executable is missing there. Set `ACTRAIL_BIN_DIR` or pass `--bin-dir` to point at either a release artifact directory or one known release artifact path, for example:
+
+```bash
+python3 docs/preflight/platform_preflight.py --bin-dir /opt/actrail/bin
+python3 docs/preflight/platform_preflight.py --bin-dir /opt/actrail/bin/actraild
+```
+
+When a direct binary path such as `.../actraild` is supplied, preflight checks sibling release artifacts from that same directory.
+
+The TLS sync smoke also requires `libactrail_tls_payload_probe_sync.so` next to `actrailctl`, unless `TLS_PAYLOAD_SYNC_LIBRARY` points at a readable runtime library.
+
+When `--run-smoke` executes the eBPF live attach check, preflight runs the resolved `ebpf_probe` path with `ACTRAIL_EBPF_LIBBPF_DEBUG=1`. If the kernel rejects the embedded eBPF object, the failure row includes the actual probe path and a bounded libbpf/verifier log excerpt. Use `--verbose` to print the full captured stdout/stderr.
 
 Status symbols:
 

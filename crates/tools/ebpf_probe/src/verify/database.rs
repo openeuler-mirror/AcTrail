@@ -8,6 +8,7 @@ mod stdio;
 use model_core::event::{DomainEvent, EventPayload};
 use model_core::ids::TraceId;
 use std::collections::HashSet;
+use std::path::Path;
 use storage_core::{PayloadSegmentQuery, StorageOpenMode};
 use storage_factory::{StorageConfig, open_storage_backend};
 
@@ -20,6 +21,7 @@ pub(super) fn verify_database(
     expected_stdin: &str,
     expected_stdout: &str,
     expected_stderr: &str,
+    expected_file_path: &Path,
     expected_mmap: Option<(u64, u64)>,
     expect_resource_metrics: bool,
     expect_system_metrics: bool,
@@ -40,8 +42,14 @@ pub(super) fn verify_database(
             },
         )
         .map_err(|error| format!("query payloads failed: {}: {}", error.stage, error.message))?;
+    let semantic_actions = storage.list_semantic_actions(trace_id).map_err(|error| {
+        format!(
+            "query semantic actions failed: {}: {}",
+            error.stage, error.message
+        )
+    })?;
     let observed_process = observed_process_operations(&events);
-    let observed_file = file::observed(&events);
+    let observed_file = file::observed(&events, &semantic_actions);
     let observed_net = observed_net_operations(&events);
     let observed_ipc = observed_ipc_operations(&events);
     let observed_resource = observed_resource_scopes(&events);
@@ -80,7 +88,12 @@ pub(super) fn verify_database(
     )?;
     require_process_payloads(&events)?;
     reject_default_signal_payloads(&events)?;
-    file::require(&events, expected_mmap)?;
+    file::require(
+        &events,
+        &semantic_actions,
+        expected_file_path,
+        expected_mmap,
+    )?;
     require_net_payloads(&events)?;
     require_ipc_payloads(&events)?;
     require_provider_payloads(&events, expected_provider)?;
@@ -187,14 +200,40 @@ fn require_net_payloads(events: &[DomainEvent]) -> Result<(), String> {
             .get("operation")
             .map(String::as_str)
             .unwrap_or("unknown");
-        if payload.local.is_none() && payload.remote.is_none() {
-            failures.push(format!("{operation} missing local and remote endpoint"));
-        }
         if payload.result.is_none() {
             failures.push(format!("{operation} missing syscall result"));
         }
+        if !payload.metadata.contains_key("fd") {
+            failures.push(format!("{operation} missing fd"));
+        }
+        match operation {
+            "bind" if payload.local.is_none() => {
+                failures.push("bind missing local endpoint".to_string());
+            }
+            "connect" | "accept" if payload.remote.is_none() => {
+                failures.push(format!("{operation} missing remote endpoint"));
+            }
+            "send" | "recv" => {
+                let endpoint_source = payload
+                    .metadata
+                    .get("endpoint_source")
+                    .map(String::as_str)
+                    .unwrap_or("unknown");
+                if endpoint_source == "syscall_sockaddr"
+                    && payload.local.is_none()
+                    && payload.remote.is_none()
+                {
+                    failures.push(format!("{operation} missing syscall endpoint"));
+                }
+            }
+            _ => {}
+        }
         if matches!(operation, "send" | "recv") && payload.size.is_none() {
             failures.push(format!("{operation} missing transferred size"));
+        }
+        if matches!(operation, "send" | "recv") && !payload.metadata.contains_key("requested_size")
+        {
+            failures.push(format!("{operation} missing requested size"));
         }
     }
     if failures.is_empty() {

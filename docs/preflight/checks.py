@@ -14,7 +14,122 @@ from .common import FAIL, PASS, WARN, Check, last_line, read_text, run_command
 
 SUPPORTED_ARCHITECTURES = {"x86_64", "aarch64"}
 RELEASE_BINARIES = ("actraild", "actrailctl", "actrailviewer", "ebpf_probe")
+TLS_SYNC_LIBRARY = "libactrail_tls_payload_probe_sync.so"
+RELEASE_ARTIFACTS = RELEASE_BINARIES + (TLS_SYNC_LIBRARY,)
 OPENSSL_SYMBOLS = ("SSL_read", "SSL_write", "SSL_read_ex", "SSL_write_ex")
+
+
+@dataclass(frozen=True)
+class ResolvedArtifact:
+    name: str
+    path: Path | None
+    detail: str
+
+
+@dataclass(frozen=True)
+class ResolvedArtifacts:
+    spec: Path
+    values: dict[str, ResolvedArtifact]
+
+    def path(self, name: str) -> Path | None:
+        return self.values[name].path
+
+    def detail(self, name: str) -> str:
+        return self.values[name].detail
+
+
+def resolve_release_artifacts(bin_spec: str | Path) -> ResolvedArtifacts:
+    spec = normalize_bin_spec(bin_spec)
+    bad_file = spec.exists() and spec.is_file() and spec.name not in RELEASE_ARTIFACTS
+    direct_artifact = spec.name if spec.name in RELEASE_ARTIFACTS else None
+    candidate_dir = spec.parent if direct_artifact else spec
+    values: dict[str, ResolvedArtifact] = {}
+    for name in RELEASE_ARTIFACTS:
+        if bad_file:
+            values[name] = ResolvedArtifact(
+                name=name,
+                path=None,
+                detail=(
+                    f"{spec} is a file, but --bin-dir/ACTRAIL_BIN_DIR must be a directory "
+                    f"or one of: {', '.join(RELEASE_ARTIFACTS)}"
+                ),
+            )
+            continue
+        candidate = spec if direct_artifact == name else candidate_dir / name
+        source = "configured artifact" if direct_artifact == name else "configured directory"
+        if direct_artifact and direct_artifact != name:
+            source = f"sibling of configured {direct_artifact}"
+        values[name] = resolve_release_artifact(name, candidate, source)
+    return ResolvedArtifacts(spec=spec, values=values)
+
+
+def normalize_bin_spec(bin_spec: str | Path) -> Path:
+    path = Path(bin_spec).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    return path
+
+
+def resolve_release_artifact(name: str, candidate: Path, source: str) -> ResolvedArtifact:
+    if name == TLS_SYNC_LIBRARY:
+        return resolve_tls_sync_library(candidate, source)
+    if candidate.exists():
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return ResolvedArtifact(name=name, path=candidate.resolve(), detail=f"{candidate.resolve()} ({source})")
+        return ResolvedArtifact(
+            name=name,
+            path=None,
+            detail=f"{candidate} exists but is not an executable file",
+        )
+    path = shutil.which(name)
+    if path:
+        resolved = Path(path).resolve()
+        return ResolvedArtifact(name=name, path=resolved, detail=f"{resolved} (PATH; missing {candidate})")
+    return ResolvedArtifact(
+        name=name,
+        path=None,
+        detail=(
+            f"missing {candidate} and not found on PATH; run cargo build --release "
+            "or set ACTRAIL_BIN_DIR to a release directory or release binary path"
+        ),
+    )
+
+
+def resolve_tls_sync_library(candidate: Path, source: str) -> ResolvedArtifact:
+    env_path = os.environ.get("TLS_PAYLOAD_SYNC_LIBRARY")
+    if env_path:
+        path = normalize_bin_spec(env_path)
+        if path.is_file() and os.access(path, os.R_OK):
+            return ResolvedArtifact(
+                name=TLS_SYNC_LIBRARY,
+                path=path.resolve(),
+                detail=f"{path.resolve()} (TLS_PAYLOAD_SYNC_LIBRARY)",
+            )
+        return ResolvedArtifact(
+            name=TLS_SYNC_LIBRARY,
+            path=None,
+            detail=f"TLS_PAYLOAD_SYNC_LIBRARY={path} is not a readable file",
+        )
+    if candidate.exists():
+        if candidate.is_file() and os.access(candidate, os.R_OK):
+            return ResolvedArtifact(
+                name=TLS_SYNC_LIBRARY,
+                path=candidate.resolve(),
+                detail=f"{candidate.resolve()} ({source})",
+            )
+        return ResolvedArtifact(
+            name=TLS_SYNC_LIBRARY,
+            path=None,
+            detail=f"{candidate} exists but is not a readable file",
+        )
+    return ResolvedArtifact(
+        name=TLS_SYNC_LIBRARY,
+        path=None,
+        detail=(
+            f"missing {candidate}; build with cargo build --release -p tls_payload_probe_sync "
+            "or set TLS_PAYLOAD_SYNC_LIBRARY"
+        ),
+    )
 
 
 def platform_checks() -> list[Check]:
@@ -55,15 +170,15 @@ def read_os_release() -> str:
     )
 
 
-def release_binary_checks(bin_dir: Path) -> list[Check]:
+def release_artifact_checks(artifacts: ResolvedArtifacts) -> list[Check]:
     checks: list[Check] = []
-    for name in RELEASE_BINARIES:
-        path = bin_dir / name
+    for name in RELEASE_ARTIFACTS:
+        artifact = artifacts.values[name]
         checks.append(
             Check(
                 name,
-                PASS if path.exists() else FAIL,
-                str(path) if path.exists() else f"missing {path}; run cargo build --release",
+                PASS if artifact.path is not None else FAIL,
+                artifact.detail,
             )
         )
     return checks

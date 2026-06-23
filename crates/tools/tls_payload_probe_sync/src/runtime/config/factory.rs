@@ -74,28 +74,47 @@ fn optional_trace_id() -> Result<Option<u64>, String> {
 fn optional_event_transport(
     pending_byte_budget: usize,
 ) -> Result<Option<EventTransportConfig>, String> {
+    let socket_path = std::env::var_os(ENV_EVENT_SOCKET).map(std::path::PathBuf::from);
     if let Some(value) = std::env::var_os(ENV_EVENT_FD) {
         let fd = value
             .to_string_lossy()
             .parse::<i32>()
             .map_err(|error| format!("parse {ENV_EVENT_FD}: {error}"))?;
+        if fd < 0 {
+            return Err(format!("{ENV_EVENT_FD} must be non-negative: {fd}"));
+        }
         let write_buffer_bytes = required_event_write_buffer_bytes()?;
+        if !event_fd_is_open(fd) {
+            let Some(path) = socket_path else {
+                return Err(format!(
+                    "{ENV_EVENT_FD}={fd} is not open and {ENV_EVENT_SOCKET} is not set"
+                ));
+            };
+            return Ok(Some(EventTransportConfig::Socket {
+                path,
+                pending_byte_budget,
+                write_buffer_bytes,
+            }));
+        }
         return Ok(Some(EventTransportConfig::InheritedFd {
             fd,
             pending_byte_budget,
             write_buffer_bytes,
         }));
     }
-    let Some(value) = std::env::var_os(ENV_EVENT_SOCKET) else {
+    let Some(path) = socket_path else {
         return Ok(None);
     };
-    let path = std::path::PathBuf::from(value);
     let write_buffer_bytes = required_event_write_buffer_bytes()?;
     Ok(Some(EventTransportConfig::Socket {
         path,
         pending_byte_budget,
         write_buffer_bytes,
     }))
+}
+
+fn event_fd_is_open(fd: i32) -> bool {
+    (unsafe { libc::fcntl(fd, libc::F_GETFD) }) >= 0
 }
 
 fn required_event_write_buffer_bytes() -> Result<usize, String> {

@@ -54,8 +54,12 @@ def format_check(check: Check, color: Color) -> str:
     return f"  {color.status(check.status, symbol)} {check.name}: {check.detail} [{scope}]"
 
 
-def run_command(command: tuple[str, ...]) -> CommandResult:
-    result = subprocess.run(command, text=True, capture_output=True, check=False)
+def run_command(command: tuple[str, ...], env: dict[str, str] | None = None) -> CommandResult:
+    command_env = None
+    if env is not None:
+        command_env = os.environ.copy()
+        command_env.update(env)
+    result = subprocess.run(command, text=True, capture_output=True, check=False, env=command_env)
     return CommandResult(command, result.returncode, result.stdout, result.stderr)
 
 
