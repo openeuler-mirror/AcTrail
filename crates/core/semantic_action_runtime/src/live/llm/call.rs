@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::time::SystemTime;
 
 use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
@@ -15,6 +16,7 @@ pub(super) struct PendingLlmRequestMarker {
     pub(super) process: ProcessIdentity,
     pub(super) stream_key: String,
     pub(super) http_stream_id: Option<String>,
+    pub(super) start_time: SystemTime,
     pub(super) sequence_start: u64,
 }
 

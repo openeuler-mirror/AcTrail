@@ -76,13 +76,25 @@ pub(super) fn split_http1_request(bytes: &[u8]) -> Option<HttpRequestParts> {
             .then(|| value.trim().to_string())
     });
     let body_start = separator + HTTP1_HEADER_SEPARATOR.len();
-    let body_end = match http1_content_length(&header_text)? {
-        Some(length) => body_start.checked_add(length)?,
-        None => body_start,
+    let transfer_is_chunked = http1_header_value(&header_text, "transfer-encoding")
+        .map(|value| value.to_ascii_lowercase().contains("chunked"))
+        .unwrap_or(false);
+    let (body, body_end) = if transfer_is_chunked {
+        let chunked = parse_http1_chunked_body_prefix(&bytes[body_start..])?;
+        if !chunked.complete {
+            return None;
+        }
+        (chunked.body, body_start.checked_add(chunked.consumed_len)?)
+    } else {
+        let body_end = match http1_content_length(&header_text)? {
+            Some(length) => body_start.checked_add(length)?,
+            None => body_start,
+        };
+        if bytes.len() < body_end {
+            return None;
+        }
+        (bytes[body_start..body_end].to_vec(), body_end)
     };
-    if bytes.len() < body_end {
-        return None;
-    }
     Some(HttpRequestParts {
         protocol: "http/1.1",
         scheme: "https",
@@ -92,7 +104,7 @@ pub(super) fn split_http1_request(bytes: &[u8]) -> Option<HttpRequestParts> {
         stream_id: None,
         headers_text: Some(header_text.to_string()),
         headers_hpack_base64: None,
-        body: bytes[body_start..body_end].to_vec(),
+        body,
         encoded_len: body_end,
     })
 }

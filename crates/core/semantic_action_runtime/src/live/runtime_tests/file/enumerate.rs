@@ -414,5 +414,23 @@ fn completed_bulk_action<'a>(
 }
 
 fn expected_paths(paths: &[&str]) -> Vec<String> {
-    paths.iter().map(|path| (*path).to_string()).collect()
+    paths.iter().map(|path| canonical_test_path(path)).collect()
+}
+
+fn canonical_test_path(path: &str) -> String {
+    let mut parts = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                let _ = parts.pop();
+            }
+            _ => parts.push(part),
+        }
+    }
+    if parts.is_empty() {
+        "/".to_string()
+    } else {
+        format!("/{}", parts.join("/"))
+    }
 }

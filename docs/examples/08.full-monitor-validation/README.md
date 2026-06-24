@@ -122,6 +122,7 @@ launch 前可以先确认目标程序能生成完整 fast probe plan：
 ```bash
 target/release/tls-probe-point-finder fast --provider auto --source auto claude
 target/release/tls-probe-point-finder fast --provider auto --source auto opencode
+target/release/tls-probe-point-finder fast --provider auto --source auto traecli
 target/release/tls-probe-point-finder fast --provider auto --source auto xiaoo
 target/release/tls-probe-point-finder fast --provider auto --source auto /usr/bin/curl
 ```
@@ -146,6 +147,14 @@ opencode 示例：
 target/release/actrailctl --config docs/examples/08.full-monitor-validation/operator.conf launch \
   --name full-monitor-opencode \
   -- opencode run "请直接回答：“你好”"
+```
+
+traecli 示例：
+
+```bash
+target/release/actrailctl --config docs/examples/08.full-monitor-validation/operator.conf launch \
+  --name full-monitor-traecli \
+  -- traecli -p "请直接回答：“你好”"
 ```
 
 xiaoo 示例：
@@ -209,7 +218,9 @@ target/release/actrailviewer --config docs/examples/08.full-monitor-validation/o
 target/release/actrailviewer --config docs/examples/08.full-monitor-validation/operator.conf actions --trace-id trace-1 --head 120
 ```
 
-期望看到按时间排列的高层语义动作，例如 `process.exec`、`file.read`/`file.write`、`command.invocation`、`http.message`、`llm.call`、`llm.request` 和在 inbound response payload 被保留时生成的 `llm.response`。识别到 agent 后，对应 `command.invocation` 会带有 `invocation.kind=agent`；`llm.request`/`llm.response` 会挂在同一条 `llm.call` 下。流式 provider 的多段 SSE 会先作为 SSE/http evidence 落库，再聚合到同一条 `llm.response`。
+期望看到按时间排列的高层语义动作，例如 `process.exec`、`file.read`/`file.write`、`command.invocation`、`http.message`、`llm.call`、`llm.request` 和在 inbound response payload 被保留时生成的 `llm.response`。识别到 agent 后，对应 `command.invocation` 会带有 `invocation.kind=agent`；真实完整的 `llm.request`/`llm.response` 会挂在同一条 `llm.call` 下，并带有 `llm.call.request`、`llm.call.response` link。流式 provider 的多段 SSE 会先作为 SSE/http evidence 落库，再聚合到同一条 `llm.response`。
+
+如果只看到 `llm.response` 为 `success`/`complete`，但没有对应的 `llm.request` 或 `llm.call`，这是 response-only semantic partial：说明 inbound 响应语义已识别，但 outbound 请求没有被完整投影，不能算 full semantic pass。Case 08 的 full semantic acceptance 需要真实完整的 `llm.request`、`llm.response` 和闭合的 `llm.call`；不能用从 response 反推的 inferred request 代替。若 TLS/HTTP capture 存在但 `llm.*` 动作缺失，记为 capture PASS、semantic FAIL。
 
 查看进程树：
 

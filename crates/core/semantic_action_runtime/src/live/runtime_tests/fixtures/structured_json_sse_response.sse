@@ -1,0 +1,20 @@
+event: progress_notice
+data: ;Processing_REDACTED
+
+event: metadata
+data: {"model":"glm-5.1","session_id":"session-redacted","prompt_completion_id":0,"ab_versions":null,"app_version":"","ide_version":null,"ide_version_type":null}
+
+event: timing_cost
+data: {"name":"llm_raw_chat_v2","preprocess_timing":1,"postprocess_timing":1,"queue_timing":0,"platform_first_token_timing":1,"account_type":"","is_retry":false,"middleware_processing_time":1,"server_processing_time":1,"first_sse_event_time":1,"preprocessing_detail":{"check_risk":0,"build_llm_prompt":0,"chat_completion_prepare":0,"other":1},"platform_detail":{"preprocess_timing":1,"first_token_timing":1,"network_latency":1,"provider_first_token":0,"provider_network_latency":0,"other":0},"post_processing_detail":{"post_security_check":0,"other":1},"provider_model_name":"glm-5.1"}
+
+event: output
+data: {"response":"Hello","reasoning_content":null,"tool_calls":null,"multimodal_contents":null,"phase":null}
+
+event: output
+data: {"response":"!","reasoning_content":null,"tool_calls":null,"multimodal_contents":null,"phase":null}
+
+event: token_usage
+data: {"name":"","prompt_tokens":10,"completion_tokens":2,"total_tokens":12,"cache_creation_input_tokens":0,"cache_read_input_tokens":4,"reasoning_tokens":0,"prompt_tokens_total":0,"completion_tokens_total":0,"total_tokens_total":0,"cache_creation_input_tokens_total":0,"cache_read_input_tokens_total":0,"reasoning_tokens_total":0,"cluster":"redacted"}
+
+event: done
+data: {"finish_reason":"stop"}

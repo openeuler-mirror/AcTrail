@@ -1,6 +1,6 @@
 //! Live LLM projection from retained plaintext payload segments.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::SystemTime;
 
 use config_core::daemon::SemanticRetentionConfig;
@@ -65,7 +65,32 @@ struct LlmStreamKey {
 #[derive(Clone, Debug)]
 struct OpenLlmRequest {
     action: SemanticAction,
+    start_time: SystemTime,
     sequence_start: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct LlmActionOrder {
+    start_time: SystemTime,
+    sequence_start: u64,
+}
+
+impl LlmActionOrder {
+    fn from_action(action: &SemanticAction) -> Option<Self> {
+        Some(Self {
+            start_time: action.start_time,
+            sequence_start: call::payload_sequence_start(action)?,
+        })
+    }
+}
+
+impl OpenLlmRequest {
+    fn order(&self) -> LlmActionOrder {
+        LlmActionOrder {
+            start_time: self.start_time,
+            sequence_start: self.sequence_start,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -206,6 +231,14 @@ impl LiveLlmProjector {
         trace_id: TraceId,
         finished_at: SystemTime,
     ) -> Vec<SemanticAction> {
+        let trace_close_completed_response_ids = self
+            .open_action_versions
+            .iter()
+            .filter(|((candidate, _), action)| {
+                *candidate == trace_id && response_completes_on_trace_close(action)
+            })
+            .map(|(_, action)| action.action_id.clone())
+            .collect::<BTreeSet<_>>();
         let mut finalized = Vec::new();
         for ((candidate, _), action) in self.open_action_versions.iter_mut() {
             if *candidate != trace_id || action.status != SemanticActionStatus::InProgress {
@@ -219,8 +252,16 @@ impl LiveLlmProjector {
             ) {
                 continue;
             }
-            action.status = SemanticActionStatus::Error;
-            action.completeness = SemanticActionCompleteness::Partial;
+            let close_completed_successfully =
+                trace_close_completes_action(action, &trace_close_completed_response_ids);
+            if close_completed_successfully {
+                action.status = SemanticActionStatus::Success;
+                action.completeness = SemanticActionCompleteness::Complete;
+                mark_trace_close_completion_attributes(action);
+            } else {
+                action.status = SemanticActionStatus::Error;
+                action.completeness = SemanticActionCompleteness::Partial;
+            }
             action.end_time = Some(finished_at);
             action.attributes.insert(
                 attrs::actrail::ACTION_FINALIZED_ON_TRACE_CLOSE.to_string(),
@@ -337,10 +378,12 @@ impl LiveLlmProjector {
             .iter_mut()
             .find(|candidate| candidate.action.action_id == request.action_id)
         {
+            existing.start_time = request.start_time;
             existing.action = request;
             existing.sequence_start = sequence_start;
         } else {
             requests.push_back(OpenLlmRequest {
+                start_time: request.start_time,
                 action: request,
                 sequence_start,
             });
@@ -385,18 +428,21 @@ impl LiveLlmProjector {
         request: &SemanticAction,
     ) -> Option<SemanticAction> {
         let stream_key = LlmStreamKey::from_llm_request(request)?;
-        let request_sequence = call::payload_sequence_start(request)?;
+        let request_order = LlmActionOrder::from_action(request)?;
         let responses = self.pending_responses.get_mut(&stream_key)?;
         let selected = responses
             .iter()
             .enumerate()
             .filter(|(_, response)| {
-                call::payload_sequence_start(response)
-                    .is_some_and(|response_sequence| request_sequence <= response_sequence)
+                LlmActionOrder::from_action(response)
+                    .is_some_and(|response_order| request_order <= response_order)
             })
             .min_by_key(|(_, response)| {
                 (
-                    call::payload_sequence_start(response).unwrap_or_default(),
+                    LlmActionOrder::from_action(response).unwrap_or(LlmActionOrder {
+                        start_time: response.start_time,
+                        sequence_start: u64::MAX,
+                    }),
                     response.action_id.clone(),
                 )
             })
@@ -413,24 +459,26 @@ impl LiveLlmProjector {
         response: &SemanticAction,
     ) -> Option<SemanticAction> {
         let stream_key = LlmStreamKey::from_llm_response(response)?;
-        let response_sequence = call::payload_sequence_start(response)?;
-        self.take_open_request_before(&stream_key, response_sequence)
+        let response_order = LlmActionOrder::from_action(response)?;
+        self.take_open_request_before(&stream_key, response_order)
     }
 
     fn open_request_for_response(&self, response: &SemanticAction) -> Option<SemanticAction> {
         let stream_key = LlmStreamKey::from_llm_response(response)?;
-        let response_sequence = call::payload_sequence_start(response)?;
-        self.open_request_before(&stream_key, response_sequence)
+        let response_order = LlmActionOrder::from_action(response)?;
+        self.open_request_before(&stream_key, response_order)
     }
 
     fn take_open_request_for_http_response(
         &mut self,
         http_response: &SemanticAction,
     ) -> Option<(SemanticAction, SemanticAction)> {
-        let response_sequence = http_payload_sequence(http_response)?;
+        let response_order = LlmActionOrder {
+            start_time: http_response.start_time,
+            sequence_start: http_payload_sequence(http_response)?,
+        };
         for stream_key in LlmStreamKey::from_http_response_candidates(http_response) {
-            let Some(request) = self.take_open_request_before(&stream_key, response_sequence)
-            else {
+            let Some(request) = self.take_open_request_before(&stream_key, response_order) else {
                 continue;
             };
             let Some(call) = self
@@ -447,9 +495,9 @@ impl LiveLlmProjector {
     fn take_open_request_before(
         &mut self,
         stream_key: &LlmStreamKey,
-        response_sequence: u64,
+        response_order: LlmActionOrder,
     ) -> Option<SemanticAction> {
-        let selected = self.select_open_request_before(stream_key, response_sequence)?;
+        let selected = self.select_open_request_before(stream_key, response_order)?;
         let requests = self.open_requests.get_mut(stream_key)?;
         let request = requests.remove(selected)?.action;
         if requests.is_empty() {
@@ -461,9 +509,9 @@ impl LiveLlmProjector {
     fn open_request_before(
         &self,
         stream_key: &LlmStreamKey,
-        response_sequence: u64,
+        response_order: LlmActionOrder,
     ) -> Option<SemanticAction> {
-        let selected = self.select_open_request_before(stream_key, response_sequence)?;
+        let selected = self.select_open_request_before(stream_key, response_order)?;
         self.open_requests
             .get(stream_key)?
             .get(selected)
@@ -473,17 +521,17 @@ impl LiveLlmProjector {
     fn select_open_request_before(
         &self,
         stream_key: &LlmStreamKey,
-        response_sequence: u64,
+        response_order: LlmActionOrder,
     ) -> Option<usize> {
         let requests = self.open_requests.get(stream_key)?;
         let selected = requests
             .iter()
             .enumerate()
-            .filter(|(_, request)| request.sequence_start <= response_sequence)
-            .max_by_key(|(_, request)| (request.sequence_start, request.action.action_id.clone()))
+            .filter(|(_, request)| request.order() <= response_order)
+            .max_by_key(|(_, request)| (request.order(), request.action.action_id.clone()))
             .map(|(index, _)| index)?;
-        let request_sequence = requests.get(selected)?.sequence_start;
-        if self.pending_request_between(stream_key, request_sequence, response_sequence) {
+        let request_order = requests.get(selected)?.order();
+        if self.pending_request_between(stream_key, request_order, response_order) {
             return None;
         }
         Some(selected)
@@ -492,15 +540,18 @@ impl LiveLlmProjector {
     fn pending_request_between(
         &self,
         stream_key: &LlmStreamKey,
-        request_sequence: u64,
-        response_sequence: u64,
+        request_order: LlmActionOrder,
+        response_order: LlmActionOrder,
     ) -> bool {
         self.pending_request_markers()
             .iter()
             .filter(|pending| stream_key.matches_pending_request(pending))
             .any(|pending| {
-                request_sequence < pending.sequence_start
-                    && pending.sequence_start <= response_sequence
+                let pending_order = LlmActionOrder {
+                    start_time: pending.start_time,
+                    sequence_start: pending.sequence_start,
+                };
+                request_order < pending_order && pending_order <= response_order
             })
     }
 
@@ -513,12 +564,112 @@ impl LiveLlmProjector {
     }
 }
 
+fn response_completes_on_trace_close(action: &SemanticAction) -> bool {
+    action.kind == SemanticActionKind::LlmResponse
+        && action.status == SemanticActionStatus::InProgress
+        && action
+            .attributes
+            .get(attrs::llm_response::PROVIDER_ID)
+            .is_some_and(|value| value == "structured-json-sse")
+        && action
+            .attributes
+            .get(attrs::llm_response::STREAM)
+            .is_some_and(|value| value == "true")
+        && llm_response_is_sse(action)
+        && action
+            .attributes
+            .get(attrs::llm_response::DONE)
+            .is_some_and(|value| value == "false")
+        && successful_http_response(action)
+        && llm_response_has_observed_output(action)
+}
+
+fn trace_close_completes_action(
+    action: &SemanticAction,
+    completed_response_ids: &BTreeSet<String>,
+) -> bool {
+    match action.kind {
+        SemanticActionKind::LlmResponse => completed_response_ids.contains(&action.action_id),
+        SemanticActionKind::SseStream => action
+            .attributes
+            .get(attrs::llm_response::ACTION_ID)
+            .is_some_and(|response_id| completed_response_ids.contains(response_id)),
+        SemanticActionKind::LlmCall => {
+            action
+                .attributes
+                .get(attrs::llm_call::REQUEST_ACTION_ID)
+                .is_some_and(|request_id| !request_id.is_empty())
+                && action
+                    .attributes
+                    .get(attrs::llm_call::RESPONSE_ACTION_ID)
+                    .is_some_and(|response_id| completed_response_ids.contains(response_id))
+        }
+        _ => false,
+    }
+}
+
+fn mark_trace_close_completion_attributes(action: &mut SemanticAction) {
+    match action.kind {
+        SemanticActionKind::LlmResponse => {
+            action
+                .attributes
+                .insert(attrs::llm_response::DONE.to_string(), "true".to_string());
+        }
+        SemanticActionKind::SseStream => {
+            action
+                .attributes
+                .insert(attrs::sse::DONE.to_string(), "true".to_string());
+        }
+        _ => {}
+    }
+}
+
+fn llm_response_is_sse(action: &SemanticAction) -> bool {
+    action
+        .attributes
+        .get(attrs::llm_response::BODY_FORMAT)
+        .is_some_and(|value| value == "sse")
+        || action
+            .attributes
+            .get(attrs::http_response::BODY_FORMAT)
+            .is_some_and(|value| value == "sse")
+}
+
+fn successful_http_response(action: &SemanticAction) -> bool {
+    action
+        .attributes
+        .get(attrs::http_response::STATUS_CODE)
+        .and_then(|value| value.parse::<u16>().ok())
+        .is_some_and(|status| (200..300).contains(&status))
+}
+
+fn llm_response_has_observed_output(action: &SemanticAction) -> bool {
+    positive_usize_attr(action, attrs::llm_response::CHUNK_COUNT)
+        || attr_has_text(action, attrs::llm_response::CONTENT_TEXT)
+        || attr_has_text(action, attrs::llm_response::REASONING_TEXT)
+        || attr_has_text(action, attrs::llm_response::TOOL_CALLS_JSON)
+}
+
+fn attr_has_text(action: &SemanticAction, key: &str) -> bool {
+    action
+        .attributes
+        .get(key)
+        .is_some_and(|value| !value.is_empty())
+}
+
+fn positive_usize_attr(action: &SemanticAction, key: &str) -> bool {
+    action
+        .attributes
+        .get(key)
+        .and_then(|value| value.parse::<usize>().ok())
+        .is_some_and(|value| value > 0)
+}
+
 #[derive(Default)]
 struct LiveStreamState {
     buffer: Vec<u8>,
     base_offset: usize,
     segments: VecDeque<LiveSegmentRange>,
-    partial_response_emitted: bool,
     pending_raw_chunk_terminator: bool,
     completion_detector: ResponseCompletionDetector,
 }
@@ -600,9 +751,6 @@ impl LiveStreamState {
         key: &PayloadStreamGroupKey,
     ) -> LiveLlmOutput {
         self.discard_pending_raw_chunk_terminator();
-        if self.partial_response_emitted && !self.completion_detector.seen() {
-            return LiveLlmOutput::default();
-        }
 
         let mut output = LiveLlmOutput::default();
         while let Some(projection) = self.project_next_response(config, key) {
@@ -612,13 +760,11 @@ impl LiveStreamState {
             if terminal {
                 self.pending_raw_chunk_terminator = projection.raw_response;
                 self.evict_encoded_len(encoded_len);
-                self.partial_response_emitted = false;
                 self.completion_detector.rebuild(&self.buffer);
                 if self.buffer.is_empty() {
                     break;
                 }
             } else {
-                self.partial_response_emitted = true;
                 break;
             }
         }
@@ -697,6 +843,7 @@ impl LiveStreamState {
             process: key.process.clone(),
             stream_key: key.stream_key.clone(),
             http_stream_id: http_stream_id.map(|id| id.to_string()),
+            start_time: first.segment.observed_at,
             sequence_start: first.segment.sequence,
         })
     }
@@ -763,6 +910,7 @@ impl ResponseCompletionDetector {
         self.observe(bytes);
     }
 
+    #[cfg(test)]
     fn seen(&self) -> bool {
         self.seen
     }
@@ -772,13 +920,17 @@ fn response_completion_marker_seen(bytes: &[u8]) -> bool {
     contains_subslice(bytes, b"[DONE]")
         || contains_subslice(bytes, b"message_stop")
         || non_null_finish_reason_seen(bytes)
+        || contains_subslice(bytes, b"event: done")
+        || contains_subslice(bytes, b"event:done")
 }
 
 fn response_completion_tail(bytes: &[u8]) -> Vec<u8> {
     let marker_window = b"message_stop"
         .len()
         .max(b"[DONE]".len())
-        .max(b"\"finish_reason\":null".len());
+        .max(b"\"finish_reason\":null".len())
+        .max(b"event: done".len())
+        .max(b"event:done".len());
     let tail_len = marker_window.saturating_sub(1).min(bytes.len());
     bytes[bytes.len() - tail_len..].to_vec()
 }
@@ -845,8 +997,86 @@ fn suppress_repeated_in_progress_response(
     existing: &SemanticAction,
     candidate: &SemanticAction,
 ) -> bool {
-    existing.kind == SemanticActionKind::LlmResponse
-        && candidate.kind == SemanticActionKind::LlmResponse
-        && existing.status == SemanticActionStatus::InProgress
-        && candidate.status == SemanticActionStatus::InProgress
+    if existing.kind != SemanticActionKind::LlmResponse
+        || candidate.kind != SemanticActionKind::LlmResponse
+        || existing.status != SemanticActionStatus::InProgress
+        || candidate.status != SemanticActionStatus::InProgress
+    {
+        return false;
+    }
+    !llm_response_semantic_progress_changed(existing, candidate)
+}
+
+fn llm_response_semantic_progress_changed(
+    existing: &SemanticAction,
+    candidate: &SemanticAction,
+) -> bool {
+    const SEMANTIC_PROGRESS_ATTRS: &[&str] = &[
+        attrs::llm_response::PROVIDER_ID,
+        attrs::llm_response::MODEL,
+        attrs::llm_response::CONTENT_TEXT,
+        attrs::llm_response::REASONING_TEXT,
+        attrs::llm_response::TOOL_CALLS_JSON,
+        attrs::llm_response::CHUNK_COUNT,
+        attrs::llm_response::DONE,
+        attrs::llm_response::FINISH_REASON,
+        attrs::llm_response::PROMPT_TOKENS,
+        attrs::llm_response::COMPLETION_TOKENS,
+        attrs::llm_response::TOTAL_TOKENS,
+        attrs::llm_response::CACHED_PROMPT_TOKENS,
+        attrs::llm_response::REASONING_TOKENS,
+        attrs::llm_response::PROMPT_CACHE_HIT_TOKENS,
+        attrs::llm_response::PROMPT_CACHE_MISS_TOKENS,
+    ];
+
+    SEMANTIC_PROGRESS_ATTRS
+        .iter()
+        .any(|key| existing.attributes.get(*key) != candidate.attributes.get(*key))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finish_reason_null_sse_chunk_does_not_complete_response() {
+        let mut detector = ResponseCompletionDetector::default();
+
+        detector.observe(
+            br#"data: {"choices":[{"delta":{"content":"hello"},"finish_reason":null}]}
+
+"#,
+        );
+
+        assert!(!detector.seen());
+    }
+
+    #[test]
+    fn explicit_response_completion_markers_complete_response() {
+        for marker in [
+            b"data: [DONE]\n\n".as_slice(),
+            b"event: message_stop\n\n".as_slice(),
+            b"event: done\n\n".as_slice(),
+        ] {
+            let mut detector = ResponseCompletionDetector::default();
+
+            detector.observe(marker);
+
+            assert!(
+                detector.seen(),
+                "marker {marker:?} should complete response"
+            );
+        }
+    }
+
+    #[test]
+    fn split_done_event_marker_completes_response() {
+        let mut detector = ResponseCompletionDetector::default();
+
+        detector.observe(b"event: do");
+        assert!(!detector.seen());
+
+        detector.observe(b"ne\n\n");
+        assert!(detector.seen());
+    }
 }

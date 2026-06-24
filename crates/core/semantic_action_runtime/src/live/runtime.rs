@@ -265,7 +265,7 @@ impl LiveSemanticActionRuntime {
 
 fn event_projects_semantic_action_boundary(event: &DomainEvent) -> bool {
     match &event.payload {
-        EventPayload::Process(_) => false,
+        EventPayload::Process(payload) => payload.operation == "exit",
         EventPayload::Application(payload) => is_http_protocol(&payload.protocol),
         EventPayload::Enforcement(_) => true,
         _ => false,

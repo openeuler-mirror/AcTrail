@@ -35,11 +35,23 @@ Install native dependencies:
 
 ```bash
 # openEuler / Fedora / RHEL-like
-sudo dnf install -y clang llvm elfutils-devel zlib-devel pkgconf-pkg-config openssl-devel
+sudo dnf install -y clang llvm elfutils-devel zlib-devel pkgconf-pkg-config openssl-devel java-17-openjdk-devel
 
 # Debian / Ubuntu-like
-sudo apt-get install -y clang llvm libelf-dev zlib1g-dev pkg-config libssl-dev
+sudo apt-get install -y clang llvm libelf-dev zlib1g-dev pkg-config libssl-dev openjdk-17-jdk
 ```
+
+The release build also compiles the embedded Java JSSE payload agent used for
+Java HTTPS plaintext capture. Keep JDK 17+ `java` and `javac` on `PATH`; if the
+host has multiple JDKs, prepend the JDK 17+ `bin` directory before building:
+
+```bash
+export PATH="/path/to/jdk-17/bin:$PATH"
+```
+
+If Java JSSE payload capture is intentionally unavailable, build with
+`ACTRAIL_SKIP_JAVA_AGENT_BUILD=1`. Set `ACTRAIL_REQUIRE_JAVA_AGENT_BUILD=1` when
+this payload agent must be present and build failures should be fatal.
 
 Build release binaries:
 

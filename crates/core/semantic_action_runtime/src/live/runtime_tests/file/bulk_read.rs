@@ -135,6 +135,35 @@ fn short_read_burst_releases_detailed_reads_on_boundary() {
             .count(),
         2
     );
+    assert_eq!(boundary_output.deferred_events.len(), 0);
+}
+
+#[test]
+fn short_read_burst_retains_deferred_events_when_configured_full() {
+    let mut runtime = bulk_runtime_with_retention(false, 3, FileRawEventRetention::Full);
+    let process = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+
+    runtime.observe_event(&read_event(FILE_READ_EVENT_ID, process.clone(), PATH_A));
+    runtime.observe_event(&read_event(
+        EventId::new(FILE_READ_EVENT_ID.get() + 1),
+        process.clone(),
+        PATH_B,
+    ));
+
+    let boundary_output = runtime.observe_event(&write_event(
+        EventId::new(FILE_READ_EVENT_ID.get() + 2),
+        process,
+        WRITE_PATH,
+    ));
+
+    assert_eq!(
+        boundary_output
+            .actions
+            .iter()
+            .filter(|action| action.kind == SemanticActionKind::FileRead)
+            .count(),
+        2
+    );
     assert_eq!(boundary_output.deferred_events.len(), 2);
 }
 
@@ -392,9 +421,21 @@ fn bulk_runtime_with_min_unique_paths(
     agent_enabled: bool,
     min_unique_paths: u32,
 ) -> LiveSemanticActionRuntime {
+    bulk_runtime_with_retention(
+        agent_enabled,
+        min_unique_paths,
+        FileRawEventRetention::Summary,
+    )
+}
+
+fn bulk_runtime_with_retention(
+    agent_enabled: bool,
+    min_unique_paths: u32,
+    raw_event_retention: FileRawEventRetention,
+) -> LiveSemanticActionRuntime {
     let mut file_observation = FileObservationConfig::default();
     file_observation.bulk_read.mode = FileBulkReadMode::PathSet;
-    file_observation.bulk_read.raw_event_retention = FileRawEventRetention::Summary;
+    file_observation.bulk_read.raw_event_retention = raw_event_retention;
     file_observation.bulk_read.min_unique_paths = min_unique_paths;
     file_observation.bulk_read.max_paths_per_set = BULK_MAX_PATHS_PER_SET;
     LiveSemanticActionRuntime::new(

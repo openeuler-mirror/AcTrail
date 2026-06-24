@@ -5,6 +5,11 @@ use semantic_action::{
 
 use super::test_support::*;
 
+const STRUCTURED_REQUEST_SEGMENT_ID: model_core::payload::PayloadSegmentId =
+    model_core::payload::PayloadSegmentId::new(800);
+const STRUCTURED_REQUEST_OPERATION_ID: u64 = 800;
+const STRUCTURED_REQUEST_SEQUENCE: u64 = 800;
+
 #[test]
 fn process_exec_alone_does_not_mark_agent_identity() {
     let mut runtime = runtime();
@@ -156,6 +161,82 @@ fn llm_request_marks_child_agent_and_upgrades_only_direct_edge() {
             && link.parent_action_id == command.action_id
             && link.child_action_id == llm_call.action_id
     }));
+}
+
+#[test]
+fn structured_json_sse_request_marks_child_agent_invocation() {
+    let mut runtime = runtime();
+    let wrapper = ProcessIdentity::new(WRAPPER_PID, WRAPPER_START_TICKS, WRAPPER_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+
+    runtime.observe_event(&exec_event(
+        WRAPPER_EXEC_EVENT_ID,
+        wrapper.clone(),
+        None,
+        "/usr/bin/bash",
+    ));
+    runtime.observe_event(&exec_event(
+        AGENT_EXEC_EVENT_ID,
+        agent.clone(),
+        None,
+        "/root/.local/bin/external-agent",
+    ));
+    runtime.observe_event(&fork_event(AGENT_FORK_EVENT_ID, agent.clone(), wrapper));
+
+    let output = runtime.observe_payload_segment(&outbound_http1_payload_segment_with_bytes(
+        agent,
+        STRUCTURED_REQUEST_SEGMENT_ID,
+        STRUCTURED_REQUEST_OPERATION_ID,
+        STRUCTURED_REQUEST_SEQUENCE,
+        structured_json_sse_request_bytes(),
+    ));
+
+    let request = output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmRequest)
+        .expect("structured JSON/SSE payload evidence should emit llm.request");
+    assert_eq!(
+        request
+            .attributes
+            .get("llm.request.classifier_id")
+            .map(String::as_str),
+        Some("structured-json-sse")
+    );
+    let command = output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::CommandInvocation)
+        .expect("LLM evidence should label the command.invocation as agent");
+    assert_eq!(
+        command
+            .attributes
+            .get("invocation.kind")
+            .map(String::as_str),
+        Some("agent")
+    );
+    assert_eq!(
+        command
+            .attributes
+            .get("agent.invocation.trigger")
+            .map(String::as_str),
+        Some("child_llm_request")
+    );
+}
+
+fn structured_json_sse_request_bytes() -> Vec<u8> {
+    let body = concat!(
+        "{\"config_name\":\"default\",",
+        "\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}],",
+        "\"model_name\":\"glm-5.1\",",
+        "\"tools\":[]}"
+    );
+    format!(
+        "POST /v1/structured/stream HTTP/1.1\r\nHost: llm.example.test\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    )
+    .into_bytes()
 }
 
 #[test]
