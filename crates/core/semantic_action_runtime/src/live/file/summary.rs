@@ -124,7 +124,7 @@ impl FileSummaryProjector {
             let mut state = state;
             let pending_events = state.take_pending_events();
             let deferred_events =
-                retained_events(&pending_events, self.config.bulk_read.raw_event_retention);
+                retained_events(self.config.bulk_read.raw_event_retention, &pending_events);
             return FileSummaryOutput {
                 actions: Vec::new(),
                 file_observation_paths: Vec::new(),
@@ -174,8 +174,8 @@ impl FileSummaryProjector {
             } else {
                 let pending_events = state.take_pending_events();
                 output.deferred_events.extend(retained_events(
-                    &pending_events,
                     self.config.bulk_read.raw_event_retention,
+                    &pending_events,
                 ));
                 output.released_detailed_events.extend(pending_events);
             }
@@ -268,7 +268,7 @@ impl FileSummaryProjector {
             if state.pending_event_count() > self.config.bulk_read.pending_event_max as usize {
                 let pending_events = state.take_pending_events();
                 let deferred_events =
-                    retained_events(&pending_events, self.config.bulk_read.raw_event_retention);
+                    retained_events(self.config.bulk_read.raw_event_retention, &pending_events);
                 return FileSummaryOutput {
                     actions: Vec::new(),
                     file_observation_paths: Vec::new(),
@@ -293,11 +293,11 @@ impl FileSummaryProjector {
         let mut deferred_events = Vec::new();
         if activates_now {
             state.record_pending_event(event);
-            if self.config.bulk_read.raw_event_retention.retains_success() {
-                deferred_events.extend(state.take_pending_events());
-            } else {
-                let _ = state.take_pending_events();
-            }
+            let pending_events = state.take_pending_events();
+            deferred_events.extend(retained_events(
+                self.config.bulk_read.raw_event_retention,
+                &pending_events,
+            ));
         }
         let actions = if was_active {
             Vec::new()
@@ -322,19 +322,19 @@ impl FileSummaryProjector {
     }
 }
 
-fn should_retain_event(retention: FileRawEventRetention, event: &DomainEvent) -> bool {
-    match status_from_result(event_result(event)) {
-        SemanticActionStatus::Error => retention.retains_error(),
-        _ => retention.retains_success(),
-    }
-}
-
-fn retained_events(events: &[DomainEvent], retention: FileRawEventRetention) -> Vec<DomainEvent> {
+fn retained_events(retention: FileRawEventRetention, events: &[DomainEvent]) -> Vec<DomainEvent> {
     events
         .iter()
         .filter(|event| should_retain_event(retention, event))
         .cloned()
         .collect()
+}
+
+fn should_retain_event(retention: FileRawEventRetention, event: &DomainEvent) -> bool {
+    match status_from_result(event_result(event)) {
+        SemanticActionStatus::Error => retention.retains_error(),
+        _ => retention.retains_success(),
+    }
 }
 
 fn consume_tty_event() -> FileSummaryOutput {

@@ -374,6 +374,11 @@ static __always_inline int store_tls_payload_op(
         return 0;
     }
     if (op.direction == ACTRAIL_TLS_PAYLOAD_OUTBOUND &&
+        payload_tls_capture_backend() == ACTRAIL_TLS_BACKEND_BPF_COPY_SECCOMP_FALLBACK &&
+        op.capture_state == ACTRAIL_TLS_CAPTURE_STATE_NEEDS_SECCOMP) {
+        emit_tls_capture_request(&op, tgid, tid, op.requested_size);
+    }
+    if (op.direction == ACTRAIL_TLS_PAYLOAD_OUTBOUND &&
         payload_tls_capture_backend() == ACTRAIL_TLS_BACKEND_SECCOMP_USER_READ) {
         emit_tls_capture_request(&op, tgid, tid, op.requested_size);
     }

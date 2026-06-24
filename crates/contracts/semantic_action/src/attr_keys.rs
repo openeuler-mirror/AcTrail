@@ -151,14 +151,19 @@ pub mod llm_call {
 }
 
 pub mod llm_request {
+    pub const BODY_JSON: &str = "llm.request.body_json";
+    pub const BODY_TEXT: &str = "llm.request.body_text";
     pub const BLOCK_COUNT: &str = "llm.request.block_count";
     pub const CANONICAL_BODY_BYTES: &str = "llm.request.canonical_body_bytes";
     pub const CANONICAL_BODY_HASH: &str = "llm.request.canonical_body_hash";
+    pub const CLASSIFIER_ID: &str = "llm.request.classifier_id";
     pub const CONTENT_FORMAT_VERSION: &str = "llm.request.content_format_version";
     pub const CONTENT_STATE: &str = "llm.request.content_state";
     pub const MESSAGE_PREVIEW: &str = "llm.request.message_preview";
     pub const MODEL: &str = "llm.request.model";
     pub const PAYLOAD_BYTES: &str = "llm.request.payload_bytes";
+    pub const PAYLOAD_TEXT: &str = "llm.request.payload_text";
+    pub const PROTOCOL_ID: &str = "llm.request.protocol_id";
     pub const RAW_PAYLOAD_BYTES: &str = "llm.request.raw_payload_bytes";
 }
 

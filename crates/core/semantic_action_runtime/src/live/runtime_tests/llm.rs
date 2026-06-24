@@ -1,6 +1,7 @@
 use config_core::daemon::{
     AgentInvocationConfig, SemanticContentOwner, SemanticRetentionConfig, SseEventContentRetention,
 };
+use model_core::payload::PayloadSegmentId;
 use model_core::process::ProcessIdentity;
 use semantic_action::{
     SemanticActionCompleteness, SemanticActionKind, SemanticActionLinkRole, SemanticActionStatus,
@@ -10,6 +11,587 @@ use serde_json::Value;
 
 use super::LiveSemanticActionRuntime;
 use super::test_support::*;
+
+const STRUCTURED_JSON_SSE_RESPONSE: &str =
+    include_str!("fixtures/structured_json_sse_response.sse");
+const STRUCTURED_REQUEST_SEGMENT_ID: PayloadSegmentId = PayloadSegmentId::new(500);
+const STRUCTURED_RESPONSE_SEGMENT_ID: PayloadSegmentId = PayloadSegmentId::new(501);
+const STRUCTURED_NON_LLM_SEGMENT_ID: PayloadSegmentId = PayloadSegmentId::new(502);
+const STRUCTURED_REQUEST_OPERATION_ID: u64 = 500;
+const STRUCTURED_RESPONSE_OPERATION_ID: u64 = 501;
+const STRUCTURED_NON_LLM_OPERATION_ID: u64 = 502;
+const STRUCTURED_REQUEST_SEQUENCE: u64 = 500;
+const STRUCTURED_RESPONSE_SEQUENCE: u64 = 501;
+const STRUCTURED_NON_LLM_SEQUENCE: u64 = 502;
+
+#[test]
+fn structured_json_sse_request_emits_llm_request_with_classifier_metadata() {
+    let mut runtime = runtime();
+    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+
+    let output = runtime.observe_payload_segment(&outbound_http1_payload_segment_with_bytes(
+        agent,
+        STRUCTURED_REQUEST_SEGMENT_ID,
+        STRUCTURED_REQUEST_OPERATION_ID,
+        STRUCTURED_REQUEST_SEQUENCE,
+        structured_json_sse_relaxed_request_http_bytes(),
+    ));
+
+    let request = output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmRequest)
+        .expect("structured JSON/SSE request fixture should emit llm.request");
+    assert_eq!(
+        request
+            .attributes
+            .get("llm.request.classifier_id")
+            .map(String::as_str),
+        Some("structured-json-sse")
+    );
+    assert_eq!(
+        request
+            .attributes
+            .get("llm.request.protocol_id")
+            .map(String::as_str),
+        Some("structured-json-sse")
+    );
+    assert_eq!(
+        request
+            .attributes
+            .get("llm.request.model")
+            .map(String::as_str),
+        Some("glm-5.1")
+    );
+    assert_eq!(
+        request.attributes.get("url.path").map(String::as_str),
+        Some("/v1/structured/stream")
+    );
+}
+
+#[test]
+fn structured_json_sse_response_fixture_emits_llm_response_and_sse_stream() {
+    let mut runtime = runtime();
+    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+
+    let output = runtime.observe_payload_segment(&llm_response_payload_segment(
+        agent,
+        STRUCTURED_RESPONSE_SEGMENT_ID,
+        STRUCTURED_RESPONSE_OPERATION_ID,
+        STRUCTURED_RESPONSE_SEQUENCE,
+        structured_json_sse_response_http_bytes(),
+    ));
+
+    let response = output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmResponse)
+        .expect("structured JSON/SSE response fixture should emit llm.response");
+    assert_eq!(
+        response
+            .attributes
+            .get("llm.response.provider_id")
+            .map(String::as_str),
+        Some("structured-json-sse")
+    );
+    assert_eq!(
+        response
+            .attributes
+            .get("llm.response.model")
+            .map(String::as_str),
+        Some("glm-5.1")
+    );
+    assert_eq!(
+        response
+            .attributes
+            .get("llm.response.content_text")
+            .map(String::as_str),
+        Some("Hello!")
+    );
+    assert_eq!(
+        response
+            .attributes
+            .get("llm.response.prompt_tokens")
+            .map(String::as_str),
+        Some("10")
+    );
+
+    let stream = output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::SseStream)
+        .expect("structured JSON/SSE response fixture should emit sse.stream");
+    assert_eq!(
+        stream.attributes.get("sse.event_count").map(String::as_str),
+        Some("7")
+    );
+    assert_eq!(
+        stream
+            .attributes
+            .get("sse.content_delta_count")
+            .map(String::as_str),
+        Some("2")
+    );
+}
+
+#[test]
+fn structured_json_sse_request_response_updates_one_llm_call() {
+    let mut runtime = runtime();
+    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+
+    let request_output =
+        runtime.observe_payload_segment(&outbound_http1_payload_segment_with_bytes(
+            agent.clone(),
+            STRUCTURED_REQUEST_SEGMENT_ID,
+            STRUCTURED_REQUEST_OPERATION_ID,
+            STRUCTURED_REQUEST_SEQUENCE,
+            structured_json_sse_relaxed_request_http_bytes(),
+        ));
+    let request = request_output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmRequest)
+        .expect("structured request should emit llm.request");
+    let request_call = request_output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmCall)
+        .expect("structured request should emit llm.call");
+
+    let response_output = runtime.observe_payload_segment(&llm_response_payload_segment(
+        agent,
+        STRUCTURED_RESPONSE_SEGMENT_ID,
+        STRUCTURED_RESPONSE_OPERATION_ID,
+        STRUCTURED_RESPONSE_SEQUENCE,
+        structured_json_sse_response_http_bytes(),
+    ));
+
+    let response = response_output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmResponse)
+        .expect("structured response should emit llm.response");
+    let response_call = response_output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmCall)
+        .expect("structured response should update llm.call");
+    assert_eq!(response_call.action_id, request_call.action_id);
+    assert_eq!(
+        response_call
+            .attributes
+            .get("llm.call.request_action_id")
+            .map(String::as_str),
+        Some(request.action_id.as_str())
+    );
+    assert_eq!(
+        response_call
+            .attributes
+            .get("llm.call.response_action_id")
+            .map(String::as_str),
+        Some(response.action_id.as_str())
+    );
+    assert!(request_output.links.iter().any(|link| {
+        link.role == SemanticActionLinkRole::LlmCallRequest
+            && link.parent_action_id == request_call.action_id
+            && link.child_action_id == request.action_id
+    }));
+    assert!(response_output.links.iter().any(|link| {
+        link.role == SemanticActionLinkRole::LlmCallResponse
+            && link.parent_action_id == response_call.action_id
+            && link.child_action_id == response.action_id
+    }));
+}
+
+#[test]
+fn structured_json_sse_request_with_string_message_content_emits_llm_request() {
+    let mut runtime = runtime();
+    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let request = structured_json_sse_relaxed_request_http_bytes();
+
+    let output = runtime.observe_payload_segment(&outbound_http1_payload_segment_with_bytes(
+        agent,
+        STRUCTURED_REQUEST_SEGMENT_ID,
+        STRUCTURED_REQUEST_OPERATION_ID,
+        STRUCTURED_REQUEST_SEQUENCE,
+        request,
+    ));
+
+    let request = output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmRequest)
+        .expect("structured JSON request shape should emit llm.request");
+    assert_eq!(
+        request
+            .attributes
+            .get("llm.request.classifier_id")
+            .map(String::as_str),
+        Some("structured-json-sse")
+    );
+    assert_eq!(
+        request
+            .attributes
+            .get("llm.request.protocol_id")
+            .map(String::as_str),
+        Some("structured-json-sse")
+    );
+    assert_eq!(
+        request
+            .attributes
+            .get("llm.request.model")
+            .map(String::as_str),
+        Some("glm-5.1")
+    );
+}
+
+#[test]
+fn structured_json_sse_chunked_request_split_across_segments_emits_llm_request_and_call() {
+    let mut runtime = runtime();
+    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let body = structured_json_sse_request_body();
+    let request_head = format!(
+        "POST /v1/structured/stream HTTP/1.1\r\nHost: llm.example.test\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n",
+        body.len()
+    )
+    .into_bytes();
+    let request_segments = [
+        request_head,
+        body.as_bytes().to_vec(),
+        b"\r\n".to_vec(),
+        b"0\r\n\r\n".to_vec(),
+    ];
+
+    let mut final_output = None;
+    for (index, bytes) in request_segments.into_iter().enumerate() {
+        let output = runtime.observe_payload_segment(&outbound_http1_payload_segment_with_bytes(
+            agent.clone(),
+            response_segment_id(80 + index),
+            response_operation_id(80 + index),
+            response_sequence(80 + index),
+            bytes,
+        ));
+        final_output = Some(output);
+    }
+    let final_output = final_output.expect("request segments should be observed");
+    let request = final_output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmRequest)
+        .expect("complete chunked structured request should emit llm.request");
+    assert_eq!(
+        request
+            .attributes
+            .get("llm.request.protocol_id")
+            .map(String::as_str),
+        Some("structured-json-sse")
+    );
+    assert_eq!(
+        request
+            .attributes
+            .get("llm.request.model")
+            .map(String::as_str),
+        Some("glm-5.1")
+    );
+    let call = final_output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmCall)
+        .expect("complete chunked structured request should open llm.call");
+    assert_eq!(call.status, SemanticActionStatus::InProgress);
+    assert_eq!(
+        call.attributes
+            .get("llm.call.request_action_id")
+            .map(String::as_str),
+        Some(request.action_id.as_str())
+    );
+}
+
+#[test]
+fn non_llm_chunked_request_emits_no_llm_actions() {
+    let mut runtime = runtime();
+    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let body = r#"{"function":"chat","messages":[{"role":"user","content":"hello"}]}"#;
+    let bytes = format!(
+        "POST /api/config HTTP/1.1\r\nHost: api.enterprise.trae.cn\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{}\r\n0\r\n\r\n",
+        body.len(),
+        body
+    )
+    .into_bytes();
+
+    let output = runtime.observe_payload_segment(&outbound_http1_payload_segment_with_bytes(
+        agent,
+        response_segment_id(90),
+        response_operation_id(90),
+        response_sequence(90),
+        bytes,
+    ));
+
+    assert!(output.actions.iter().all(|action| {
+        action.kind != SemanticActionKind::LlmRequest
+            && action.kind != SemanticActionKind::LlmResponse
+            && action.kind != SemanticActionKind::LlmCall
+    }));
+}
+
+#[test]
+fn structured_json_sse_model_field_messages_without_context_emits_llm_request() {
+    let mut runtime = runtime();
+    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let body = concat!(
+        "{\"messages\":[",
+        "{\"role\":\"user\",\"content\":\"hello\"}",
+        "],\"model\":\"glm-5.1\"}"
+    );
+
+    let output = runtime.observe_payload_segment(&outbound_http1_payload_segment_with_bytes(
+        agent,
+        response_segment_id(94),
+        response_operation_id(94),
+        response_sequence(94),
+        http1_json_request_bytes("/v1/messages", "api.example.test", body),
+    ));
+
+    let request = output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmRequest)
+        .expect("model/messages structured request should emit llm.request");
+    assert_eq!(
+        request
+            .attributes
+            .get("llm.request.classifier_id")
+            .map(String::as_str),
+        Some("structured-json-sse")
+    );
+    assert_eq!(
+        request
+            .attributes
+            .get("llm.request.protocol_id")
+            .map(String::as_str),
+        Some("structured-json-sse")
+    );
+    assert_eq!(
+        request
+            .attributes
+            .get("llm.request.model")
+            .map(String::as_str),
+        Some("glm-5.1")
+    );
+}
+
+#[test]
+fn structured_json_sse_body_only_model_name_messages_with_context_emits_llm_request() {
+    let mut runtime = runtime();
+    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let body = structured_json_sse_request_body();
+
+    let output = runtime.observe_payload_segment(&outbound_http1_payload_segment_with_bytes(
+        agent,
+        response_segment_id(95),
+        response_operation_id(95),
+        response_sequence(95),
+        http2_request_bytes(7, body.as_bytes()),
+    ));
+
+    let request = output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmRequest)
+        .expect("body-only model_name/messages structured request should emit llm.request");
+    assert_eq!(
+        request
+            .attributes
+            .get("llm.request.protocol_id")
+            .map(String::as_str),
+        Some("structured-json-sse")
+    );
+    assert_eq!(
+        request
+            .attributes
+            .get("llm.request.model")
+            .map(String::as_str),
+        Some("glm-5.1")
+    );
+    assert!(!request.attributes.contains_key("url.path"));
+    assert!(!request.attributes.contains_key("server.address"));
+}
+
+#[test]
+fn structured_json_sse_model_name_messages_without_context_emits_no_llm_actions() {
+    let mut runtime = runtime();
+    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let body = concat!(
+        "{\"messages\":[",
+        "{\"role\":\"user\",\"content\":\"hello\"}",
+        "],\"model_name\":\"catalog-v1\"}"
+    );
+
+    let output = runtime.observe_payload_segment(&outbound_http1_payload_segment_with_bytes(
+        agent,
+        response_segment_id(96),
+        response_operation_id(96),
+        response_sequence(96),
+        http1_json_request_bytes("/api/ide/v2/llm_raw_chat", "api.enterprise.trae.cn", body),
+    ));
+
+    assert!(output.actions.iter().all(|action| {
+        action.kind != SemanticActionKind::LlmRequest
+            && action.kind != SemanticActionKind::LlmResponse
+            && action.kind != SemanticActionKind::LlmCall
+    }));
+}
+
+#[test]
+fn structured_json_sse_chunked_done_event_completes_response() {
+    let mut runtime = runtime();
+    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let first_body = concat!(
+        "event: metadata\n",
+        "data: {\"model\":\"glm-5.1\"}\n\n",
+        "event: output\n",
+        "data: {\"response\":\"你好\",\"reasoning_content\":null}\n\n",
+    );
+    let done_body = concat!("event: done\n", "data: {\"finish_reason\":\"stop\"}\n\n",);
+
+    for (index, bytes) in [
+        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n"
+            .to_vec(),
+        http_chunk_prefix(first_body),
+        first_body.as_bytes().to_vec(),
+        b"\r\n".to_vec(),
+        http_chunk_prefix(done_body),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        runtime.observe_payload_segment(&llm_response_payload_segment(
+            agent.clone(),
+            response_segment_id(index),
+            response_operation_id(index),
+            response_sequence(index),
+            bytes,
+        ));
+    }
+
+    let final_output = runtime.observe_payload_segment(&llm_response_payload_segment(
+        agent,
+        response_segment_id(5),
+        response_operation_id(5),
+        response_sequence(5),
+        done_body.as_bytes().to_vec(),
+    ));
+
+    let response = final_output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmResponse)
+        .expect("Trae done SSE event should complete llm.response");
+    assert_eq!(response.status, SemanticActionStatus::Success);
+    assert_eq!(response.completeness, SemanticActionCompleteness::Complete);
+    assert_eq!(
+        response
+            .attributes
+            .get("llm.response.done")
+            .map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(
+        response
+            .attributes
+            .get("llm.response.content_text")
+            .map(String::as_str),
+        Some("你好")
+    );
+
+    let stream = final_output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::SseStream)
+        .expect("Trae done SSE event should complete sse.stream");
+    assert_eq!(stream.status, SemanticActionStatus::Success);
+    assert_eq!(stream.completeness, SemanticActionCompleteness::Complete);
+    assert_eq!(
+        stream.attributes.get("sse.done").map(String::as_str),
+        Some("true")
+    );
+}
+
+#[test]
+fn structured_json_sse_non_llm_request_emits_no_llm_actions() {
+    let mut runtime = runtime();
+    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let body = r#"{"function":"chat"}"#;
+
+    let output = runtime.observe_payload_segment(&outbound_http1_payload_segment_with_bytes(
+        agent,
+        STRUCTURED_NON_LLM_SEGMENT_ID,
+        STRUCTURED_NON_LLM_OPERATION_ID,
+        STRUCTURED_NON_LLM_SEQUENCE,
+        http1_json_request_bytes(
+            "/api/ide/v1/cli/get_config_list",
+            "api.enterprise.trae.cn",
+            body,
+        ),
+    ));
+
+    assert!(output.actions.iter().all(|action| {
+        action.kind != SemanticActionKind::LlmRequest
+            && action.kind != SemanticActionKind::LlmResponse
+            && action.kind != SemanticActionKind::LlmCall
+    }));
+}
+
+fn structured_json_sse_response_http_bytes() -> Vec<u8> {
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{}",
+        STRUCTURED_JSON_SSE_RESPONSE.len(),
+        STRUCTURED_JSON_SSE_RESPONSE
+    )
+    .into_bytes()
+}
+
+fn http1_json_request_bytes(path: &str, host: &str, body: &str) -> Vec<u8> {
+    format!(
+        "POST {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    )
+    .into_bytes()
+}
+
+fn structured_json_sse_relaxed_request_http_bytes() -> Vec<u8> {
+    let body = structured_json_sse_request_body();
+    http1_json_request_bytes("/v1/structured/stream", "llm.example.test", body)
+}
+
+fn structured_json_sse_request_body() -> &'static str {
+    concat!(
+        "{\"messages\":[",
+        "{\"role\":\"system\",\"content\":\"system context redacted\"},",
+        "{\"role\":\"user\",\"content\":\"hello\"}",
+        "],\"model_name\":\"glm-5.1\",\"tools\":[]}"
+    )
+}
+
+fn http2_request_bytes(stream_id: u32, body: &[u8]) -> Vec<u8> {
+    let mut bytes = http2_frame(0x1, stream_id, b"\x82");
+    bytes.extend(http2_frame(0x0, stream_id, body));
+    bytes
+}
+
+fn http2_frame(frame_type: u8, stream_id: u32, payload: &[u8]) -> Vec<u8> {
+    let length = payload.len();
+    let mut frame = Vec::with_capacity(9 + length);
+    frame.push(((length >> 16) & 0xff) as u8);
+    frame.push(((length >> 8) & 0xff) as u8);
+    frame.push((length & 0xff) as u8);
+    frame.push(frame_type);
+    frame.push(0);
+    frame.extend_from_slice(&(stream_id & 0x7fff_ffff).to_be_bytes());
+    frame.extend_from_slice(payload);
+    frame
+}
 
 #[test]
 fn llm_request_projects_canonical_content_blocks() {
@@ -273,7 +855,7 @@ fn llm_response_stream_state_keeps_chunked_boundary_after_done() {
 }
 
 #[test]
-fn llm_response_suppresses_repeated_in_progress_updates() {
+fn llm_response_suppresses_repeated_in_progress_boundaries_and_emits_semantic_updates() {
     let mut runtime = runtime();
     let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
 
@@ -305,7 +887,12 @@ fn llm_response_suppresses_repeated_in_progress_updates() {
             .as_bytes()
             .to_vec(),
     ));
-    runtime.observe_payload_segment(&llm_response_payload_segment(
+    let first_response = first
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmResponse)
+        .expect("first semantic SSE chunk should emit llm.response");
+    let boundary = runtime.observe_payload_segment(&llm_response_payload_segment(
         agent.clone(),
         response_segment_id(3),
         response_operation_id(3),
@@ -330,22 +917,29 @@ fn llm_response_suppresses_repeated_in_progress_updates() {
         response_sequence(5),
         r#"data: {"model":"deepseek-v4-flash","choices":[{"delta":{"reasoning_content":"lo"}}]}
 
-"#
+        "#
         .as_bytes()
         .to_vec(),
     ));
 
     assert!(
-        first
-            .actions
-            .iter()
-            .any(|action| action.kind == SemanticActionKind::LlmResponse)
-    );
-    assert!(
-        second
+        boundary
             .actions
             .iter()
             .all(|action| action.kind != SemanticActionKind::LlmResponse)
+    );
+    let second_response = second
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmResponse)
+        .expect("new semantic SSE content should update llm.response");
+    assert_eq!(second_response.action_id, first_response.action_id);
+    assert_eq!(
+        second_response
+            .attributes
+            .get("llm.response.reasoning_text")
+            .map(String::as_str),
+        Some("hello")
     );
 }
 

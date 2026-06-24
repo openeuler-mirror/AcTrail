@@ -44,6 +44,7 @@ task_plan.md
 node_modules/
 crates/apps/web/frontend/dist/
 crates/apps/web/src/render/dist/
+crates/apps/ctl/java-agent/dist/
 
 
 # Added by cargo
@@ -52,4 +53,3 @@ crates/apps/web/src/render/dist/
 .codex/
 .codex
 .agents/
-

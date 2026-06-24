@@ -410,3 +410,112 @@ fn tls_library(raw: u32) -> Result<&'static str, ControlError> {
         )),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use model_core::ids::TraceId;
+    use process_identity_contract::lookup::IdentityLookupError;
+
+    struct UnusedIdentityReader;
+
+    impl ProcessIdentityReader for UnusedIdentityReader {
+        fn read_identity(&self, pid: u32) -> Result<ProcessIdentity, IdentityLookupError> {
+            panic!("identity reader should not be used for pid {pid}");
+        }
+    }
+
+    #[test]
+    fn seccomp_tls_large_operation_splits_into_successful_segments() {
+        const PID: u32 = 4321;
+        const TID: u32 = 4322;
+        const PID_GENERATION: u64 = 99;
+        const TRACE_ID: u64 = 7;
+        const OPERATION_ID: u64 = 10_000;
+        const STREAM_KEY: u64 = 0xfeed;
+        const SEGMENT_MAX: u32 = 4095;
+        const PAYLOAD_SIZE: usize = 9000;
+
+        let mut service = SeccompTlsService {
+            enabled: true,
+            diagnostics_enabled: false,
+            diagnostic_log_level: DiagnosticLogLevel::Info,
+            max_operation_bytes: PAYLOAD_SIZE as u32,
+            max_segment_bytes: SEGMENT_MAX,
+            max_pending_operations: 8,
+            captures: BTreeMap::new(),
+            completions: BTreeMap::new(),
+        };
+        let bytes = (0..PAYLOAD_SIZE)
+            .map(|index| index as u8)
+            .collect::<Vec<_>>();
+
+        service
+            .ingest_direct_captures(vec![TlsPayloadDirectCapture {
+                pid: PID,
+                tid: TID,
+                trace_id: TraceId::new(TRACE_ID),
+                operation_id: OPERATION_ID,
+                stream_key: STREAM_KEY,
+                direction: 1,
+                symbol: 7,
+                library: 4,
+                pid_generation: PID_GENERATION,
+                original_size: PAYLOAD_SIZE as u64,
+                captured_size: PAYLOAD_SIZE as u64,
+                flags: 0,
+                bytes,
+            }])
+            .unwrap();
+        service
+            .ingest_completions(vec![TlsPayloadCompletion {
+                pid: PID,
+                tid: TID,
+                trace_id: TraceId::new(TRACE_ID),
+                observed_ktime_ns: 1,
+                operation_id: OPERATION_ID,
+                stream_key: STREAM_KEY,
+                direction: 1,
+                symbol: 7,
+                library: 4,
+                pid_generation: PID_GENERATION,
+                completed_size: PAYLOAD_SIZE as u64,
+                failed: false,
+                buffer_ptr: 0x1234,
+            }])
+            .unwrap();
+
+        let segments = service.complete_operations(&UnusedIdentityReader).unwrap();
+
+        assert_eq!(segments.len(), 3);
+        assert_eq!(
+            segments
+                .iter()
+                .map(|segment| segment.operation_offset)
+                .collect::<Vec<_>>(),
+            vec![0, 4095, 8190]
+        );
+        assert_eq!(
+            segments
+                .iter()
+                .map(|segment| segment.captured_size)
+                .collect::<Vec<_>>(),
+            vec![4095, 4095, 810]
+        );
+        for segment in segments {
+            assert_eq!(segment.source_boundary, PayloadSourceBoundary::TlsUserSpace);
+            assert_eq!(segment.direction, PayloadDirection::Outbound);
+            assert_eq!(segment.operation_id, OPERATION_ID);
+            assert_eq!(segment.operation_original_size, PAYLOAD_SIZE as u64);
+            assert_eq!(segment.operation_captured_size, PAYLOAD_SIZE as u64);
+            assert_eq!(
+                segment.operation_completion_state,
+                PayloadOperationCompletionState::Success
+            );
+            assert_eq!(segment.truncation, PayloadTruncationState::Complete);
+            assert_eq!(segment.library, "go");
+            assert_eq!(segment.symbol, "crypto/tls.(*Conn).Write");
+        }
+    }
+}

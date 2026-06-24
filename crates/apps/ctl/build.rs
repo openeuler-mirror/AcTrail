@@ -8,6 +8,8 @@ const PREBUILT_JAVA_AGENT_ENV: &str = "ACTRAIL_JAVA_AGENT_PREBUILT_JAR";
 const SKIP_JAVA_AGENT_ENV: &str = "ACTRAIL_SKIP_JAVA_AGENT_BUILD";
 const REQUIRE_JAVA_AGENT_ENV: &str = "ACTRAIL_REQUIRE_JAVA_AGENT_BUILD";
 const JAVA_RELEASE_ENV: &str = "ACTRAIL_JAVA_AGENT_RELEASE";
+const JAVA_HOME_ENV: &str = "JAVA_HOME";
+const PATH_ENV: &str = "PATH";
 const JAVA_AGENT_SOURCE_DIR: &str = "java-agent/src/main/java";
 const JAVA_AGENT_BUILD_DIR: &str = "java-agent";
 const JAVA_AGENT_JAR_NAME: &str = "actrail-java-payload-agent.jar";
@@ -21,6 +23,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed={SKIP_JAVA_AGENT_ENV}");
     println!("cargo:rerun-if-env-changed={REQUIRE_JAVA_AGENT_ENV}");
     println!("cargo:rerun-if-env-changed={JAVA_RELEASE_ENV}");
+    println!("cargo:rerun-if-env-changed={JAVA_HOME_ENV}");
+    println!("cargo:rerun-if-env-changed={PATH_ENV}");
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR must be set"));
     let artifact_rs = out_dir.join("java_agent_artifact.rs");
@@ -145,7 +149,7 @@ fn build_java_agent(
         classes_dir.clone().into_os_string(),
     ];
     javac_args.extend(sources.iter().map(|path| OsString::from(path.as_os_str())));
-    run_tool("javac", &javac_args)?;
+    run_tool(&java_tool("javac"), &javac_args)?;
 
     let jar_args = vec![
         OsString::from("cfm"),
@@ -155,8 +159,22 @@ fn build_java_agent(
         classes_dir.into_os_string(),
         OsString::from("."),
     ];
-    run_tool("jar", &jar_args)?;
+    run_tool(&java_tool("jar"), &jar_args)?;
     Ok(jar_path)
+}
+
+fn java_tool(program: &str) -> OsString {
+    java_tool_with_home(program, env::var_os(JAVA_HOME_ENV))
+}
+
+fn java_tool_with_home(program: &str, java_home: Option<OsString>) -> OsString {
+    match java_home.filter(|value| !value.is_empty()) {
+        Some(home) => PathBuf::from(home)
+            .join("bin")
+            .join(program)
+            .into_os_string(),
+        None => OsString::from(program),
+    }
 }
 
 fn java_sources(source_dir: &Path) -> Result<Vec<PathBuf>, String> {
@@ -187,18 +205,19 @@ fn recreate_dir(path: &Path) -> Result<(), String> {
     fs::create_dir_all(path).map_err(|error| format!("create {}: {error}", path.display()))
 }
 
-fn run_tool(program: &str, args: &[OsString]) -> Result<(), String> {
+fn run_tool(program: &OsString, args: &[OsString]) -> Result<(), String> {
+    let program_label = program.to_string_lossy();
     let output = Command::new(program)
         .args(args)
         .output()
-        .map_err(|error| format!("run {program}: {error}"))?;
+        .map_err(|error| format!("run {program_label}: {error}"))?;
     if output.status.success() {
         return Ok(());
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
     Err(format!(
-        "{program} failed with status {}: {}{}{}",
+        "{program_label} failed with status {}: {}{}{}",
         output.status,
         stdout.trim(),
         if stdout.trim().is_empty() || stderr.trim().is_empty() {
@@ -226,4 +245,23 @@ fn write_artifact_unavailable(path: &Path, error: &str) {
          pub const JAVA_PAYLOAD_AGENT_BUILD_ERROR: Option<&'static str> = Some({error_literal});\n"
     );
     fs::write(path, raw).expect("write generated Java agent artifact descriptor");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn java_tool_uses_java_home_bin() {
+        let tool = java_tool_with_home("javac", Some(OsString::from("/opt/jdk-17")));
+
+        assert_eq!(PathBuf::from(tool), PathBuf::from("/opt/jdk-17/bin/javac"));
+    }
+
+    #[test]
+    fn java_tool_ignores_empty_java_home() {
+        let tool = java_tool_with_home("jar", Some(OsString::new()));
+
+        assert_eq!(tool, OsString::from("jar"));
+    }
 }

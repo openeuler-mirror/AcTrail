@@ -15,6 +15,7 @@ use serde_json::Value;
 use crate::payload_projection::http::HttpRequestParts;
 
 use super::evidence::{insert_payload_span_attributes, payload_aggregate_evidence};
+use super::provider::{LlmRequestParserInput, parse_json_request};
 use super::request_blocks::{FORMAT_VERSION, canonical_request_content, canonical_shape_metadata};
 use super::stream::PayloadStreamGroupKey;
 
@@ -31,7 +32,7 @@ pub(super) fn project_stream_llm_request_action(
     mut http: HttpRequestParts,
     segments: &[&PayloadSegment],
 ) -> Option<ProjectedLlmRequestAction> {
-    let body = parse_llm_request_body(&http.body)?;
+    let body = parse_llm_request_body(&http)?;
     let first = *segments.first()?;
     let action_id = llm_stream_action_id(key, message_start, first);
     http.scheme = plaintext_transport_scheme(first.source_boundary);
@@ -229,6 +230,16 @@ fn llm_attributes(
     if let Some(model) = body.model.as_deref() {
         attributes.insert(attrs::llm_request::MODEL.to_string(), model.to_string());
     }
+    attributes.insert(
+        attrs::llm_request::CLASSIFIER_ID.to_string(),
+        body.classifier_id.to_string(),
+    );
+    if let Some(protocol_id) = body.protocol_id {
+        attributes.insert(
+            attrs::llm_request::PROTOCOL_ID.to_string(),
+            protocol_id.to_string(),
+        );
+    }
     if let Some(content) = content {
         attributes.insert(
             attrs::llm_request::CONTENT_STATE.to_string(),
@@ -305,21 +316,22 @@ fn plaintext_transport_scheme(source_boundary: PayloadSourceBoundary) -> &'stati
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct LlmRequestBody {
     json_valid: bool,
+    classifier_id: &'static str,
+    protocol_id: Option<&'static str>,
     model: Option<String>,
     json: Option<Value>,
 }
 
-fn parse_llm_request_body(body: &[u8]) -> Option<LlmRequestBody> {
-    if let Ok(value) = serde_json::from_slice::<Value>(body)
-        && json_value_is_llm_request(&value)
-    {
-        let model = value
-            .get("model")
-            .and_then(Value::as_str)
-            .map(ToString::to_string);
+fn parse_llm_request_body(http: &HttpRequestParts) -> Option<LlmRequestBody> {
+    let body = &http.body;
+    if let Ok(value) = serde_json::from_slice::<Value>(body) {
+        let input = LlmRequestParserInput { json: &value };
+        let parsed = parse_json_request(&input)?;
         return Some(LlmRequestBody {
             json_valid: true,
-            model,
+            classifier_id: parsed.classifier_id,
+            protocol_id: parsed.protocol_id,
+            model: parsed.model,
             json: Some(value),
         });
     }
@@ -327,22 +339,14 @@ fn parse_llm_request_body(body: &[u8]) -> Option<LlmRequestBody> {
     if lossy_text_is_llm_request(&text) {
         Some(LlmRequestBody {
             json_valid: false,
+            classifier_id: "generic-json-request",
+            protocol_id: None,
             model: extract_json_string_lossy(&text, "model"),
             json: None,
         })
     } else {
         None
     }
-}
-
-fn json_value_is_llm_request(value: &Value) -> bool {
-    let Some(object) = value.as_object() else {
-        return false;
-    };
-    object.contains_key("model")
-        && (object.contains_key("messages")
-            || object.contains_key("prompt")
-            || object.contains_key("input"))
 }
 
 fn lossy_text_is_llm_request(text: &str) -> bool {

@@ -22,7 +22,7 @@ use super::io::{
     FileAccessKind, FileIoState, complete_close_action, open_backed_io_action, single_io_action,
 };
 use super::summary::{FileSummaryOutput, FileSummaryProjector};
-use crate::live::actions::{event_evidence, status_from_result};
+use crate::live::actions::{event_evidence, is_file_modify_operation, status_from_result};
 use crate::live::runtime::LiveSemanticActionOutput;
 
 pub(in crate::live) struct FileAccessProjector {
@@ -208,10 +208,10 @@ impl FileAccessProjector {
         match state.owner {
             FileFdOwner::FsEnumerate => {
                 let enumerate = self.enumerate.observe_close(event, state.path);
-                let mut output =
-                    live_output_from_enumerate(enumerate.clone(), enumerate.consumed_by_summary);
-                consume_successful_close(&mut output, event);
-                Some(output)
+                Some(live_output_from_enumerate(
+                    enumerate.clone(),
+                    enumerate.consumed_by_summary,
+                ))
             }
         }
     }
@@ -458,9 +458,12 @@ fn consume_successful_unprojectable_file_event(
     output: &mut LiveSemanticActionOutput,
     event: &DomainEvent,
 ) {
-    let EventPayload::File(_) = &event.payload else {
+    let EventPayload::File(payload) = &event.payload else {
         return;
     };
+    if is_file_modify_operation(&payload.operation) {
+        return;
+    }
     if event_result(event).is_some_and(|result| result < 0) {
         return;
     }

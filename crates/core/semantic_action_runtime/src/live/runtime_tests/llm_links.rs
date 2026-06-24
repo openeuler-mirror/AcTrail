@@ -194,6 +194,139 @@ fn pending_outbound_request_blocks_response_from_pairing_with_previous_request()
 }
 
 #[test]
+fn llm_call_pairs_response_by_observed_time_when_payload_sequences_are_direction_local() {
+    let mut runtime = runtime();
+    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let request_at = UNIX_EPOCH + Duration::from_millis(100);
+    let response_at = UNIX_EPOCH + Duration::from_millis(250);
+
+    let mut request_segment = llm_payload_segment(agent.clone());
+    request_segment.sequence = 900;
+    request_segment.observed_at = request_at;
+    let request_output = runtime.observe_payload_segment(&request_segment);
+    let request = request_output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmRequest)
+        .expect("request should project");
+    let request_call = request_output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmCall)
+        .expect("request should open an llm.call");
+
+    let mut response_segment = llm_response_payload_segment(
+        agent,
+        response_segment_id(24),
+        response_operation_id(24),
+        1,
+        json_response_bytes("direction local sequence"),
+    );
+    response_segment.observed_at = response_at;
+    let response_output = runtime.observe_payload_segment(&response_segment);
+    let response = response_output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmResponse)
+        .expect("response should project");
+    let response_call = response_output
+        .actions
+        .iter()
+        .find(|action| {
+            action.kind == SemanticActionKind::LlmCall && action.action_id == request_call.action_id
+        })
+        .expect("response should close the request call by observed time");
+
+    assert_eq!(response_call.status, SemanticActionStatus::Success);
+    assert_eq!(
+        response_call
+            .attributes
+            .get("llm.call.request_action_id")
+            .map(String::as_str),
+        Some(request.action_id.as_str())
+    );
+    assert_eq!(
+        response_call
+            .attributes
+            .get("llm.call.response_action_id")
+            .map(String::as_str),
+        Some(response.action_id.as_str())
+    );
+    assert!(response_output.links.iter().any(|link| {
+        link.role == SemanticActionLinkRole::LlmCallResponse
+            && link.parent_action_id == response_call.action_id
+            && link.child_action_id == response.action_id
+    }));
+}
+
+#[test]
+fn pending_outbound_request_between_by_observed_time_blocks_previous_request() {
+    let mut runtime = runtime();
+    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let first_request_at = UNIX_EPOCH + Duration::from_millis(100);
+    let pending_request_at = UNIX_EPOCH + Duration::from_millis(200);
+    let response_at = UNIX_EPOCH + Duration::from_millis(250);
+    let pending_request_tail_at = UNIX_EPOCH + Duration::from_millis(300);
+
+    let mut first_request = llm_payload_segment(agent.clone());
+    first_request.sequence = 100;
+    first_request.observed_at = first_request_at;
+    let first_request_output = runtime.observe_payload_segment(&first_request);
+    let first_call = first_request_output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmCall)
+        .expect("first request should create an llm.call");
+
+    let (mut request_head, mut request_tail) = split_request_segment(agent.clone());
+    request_head.sequence = 1;
+    request_head.observed_at = pending_request_at;
+    request_tail.sequence = 3;
+    request_tail.observed_at = pending_request_tail_at;
+    let pending_output = runtime.observe_payload_segment(&request_head);
+    assert!(pending_output.actions.is_empty());
+
+    let mut response_segment = llm_response_payload_segment(
+        agent.clone(),
+        response_segment_id(28),
+        response_operation_id(28),
+        2,
+        json_response_bytes("second request response"),
+    );
+    response_segment.observed_at = response_at;
+    let response_output = runtime.observe_payload_segment(&response_segment);
+    let response = response_output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmResponse)
+        .expect("response should project before pending request is complete");
+    assert!(response_output.links.iter().all(|link| {
+        link.role != SemanticActionLinkRole::LlmCallResponse
+            || link.parent_action_id != first_call.action_id
+    }));
+
+    let second_request_output = runtime.observe_payload_segment(&request_tail);
+    let second_call = second_request_output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmCall)
+        .expect("completed pending request should create an llm.call");
+    assert_ne!(second_call.action_id, first_call.action_id);
+    assert_eq!(
+        second_call
+            .attributes
+            .get("llm.call.response_action_id")
+            .map(String::as_str),
+        Some(response.action_id.as_str())
+    );
+    assert!(second_request_output.links.iter().any(|link| {
+        link.role == SemanticActionLinkRole::LlmCallResponse
+            && link.parent_action_id == second_call.action_id
+            && link.child_action_id == response.action_id
+    }));
+}
+
+#[test]
 fn llm_request_does_not_link_preceding_connect_tunnel_messages() {
     let mut runtime = runtime();
     let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
