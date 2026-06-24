@@ -15,13 +15,22 @@ use model_core::ids::{RequestId, TraceId};
 use crate::transport::ControlClientPort;
 use rules::{SeccompRule, append_rule, build_seccomp_rules};
 
-pub(super) struct SeccompSetup {
+pub(crate) struct SeccompSetup {
     rules: Vec<SeccompRule>,
     reserved_listener_fd: libc::c_int,
 }
 
+impl Clone for SeccompSetup {
+    fn clone(&self) -> Self {
+        Self {
+            rules: self.rules.clone(),
+            reserved_listener_fd: self.reserved_listener_fd,
+        }
+    }
+}
+
 impl SeccompSetup {
-    pub(super) fn new(
+    pub(crate) fn new(
         payload_tls_syscalls: Vec<PayloadTlsSeccompSyscall>,
         payload_socket_syscalls: Vec<PayloadSocketSeccompSyscall>,
         payload_socket_max_segment_bytes: u32,

@@ -1,11 +1,13 @@
 //! Launch command orchestration.
 
 #[path = "launch/controlled.rs"]
-mod controlled;
+pub(crate) mod controlled;
 #[path = "launch/java_agent.rs"]
 mod java_agent;
 #[path = "launch/seccomp.rs"]
-mod seccomp;
+pub(crate) mod seccomp;
+#[path = "launch/seccomp_mode.rs"]
+pub(crate) mod seccomp_mode;
 #[path = "launch/suppress.rs"]
 mod suppress;
 #[path = "launch/sync.rs"]
@@ -28,8 +30,14 @@ use crate::process_ref::process_ref;
 use crate::transport::ControlClientPort;
 use controlled::{ChildSetup, ControlledChild};
 use seccomp::{SeccompSetup, register_listener};
+use seccomp_mode::{LaunchSeccompMode, resolve_launch_seccomp};
 use suppress::InheritableSuppressedFd;
 use sync::{SyncLaunch, sync_launch, sync_launch_envs};
+
+use crate::platform_probe::{
+    LaunchPlatformReport, probe_seccomp_launch_capability, probe_tls_sync_runtime_library,
+};
+use linux_platform::capability_probe::{probe_no_new_privs, probe_unix_socket};
 
 pub(crate) struct LaunchRequest {
     pub display_name: TraceName,
@@ -45,6 +53,7 @@ pub(crate) struct LaunchRequest {
     pub process_seccomp_syscalls: Vec<ProcessSeccompSyscall>,
     pub seccomp_notify_reserved_listener_fd: u32,
     pub agent_invocation_commands: Vec<String>,
+    pub seccomp_mode: LaunchSeccompMode,
     pub argv: Vec<String>,
 }
 
@@ -55,12 +64,36 @@ pub(crate) fn run_launch(
 ) -> Result<i32, String> {
     let tls_sync_enabled =
         request.payload_tls_config.enabled && request.payload_tls_config.capture_backend.is_sync();
-    let payload_tls_seccomp_enabled = request.payload_tls_enabled && !tls_sync_enabled;
-    let seccomp_enabled = payload_tls_seccomp_enabled
-        || request.payload_socket_enabled
-        || request.process_seccomp_enabled;
+    let payload_tls_seccomp_configured = request.payload_tls_enabled && !tls_sync_enabled;
+    let probe = if matches!(request.seccomp_mode, LaunchSeccompMode::Auto | LaunchSeccompMode::Require) {
+        Some(run_platform_probe_from_launch(&request))
+    } else {
+        None
+    };
+    let effective = resolve_launch_seccomp(
+        request.seccomp_mode,
+        tls_sync_enabled,
+        payload_tls_seccomp_configured,
+        request.payload_socket_enabled,
+        request.process_seccomp_enabled,
+        probe.as_ref(),
+    )?;
+    if effective.degraded {
+        if let Some(detail) = &effective.degrade_detail {
+            eprintln!("actrailctl launch degraded: {detail}");
+        }
+    }
+    let payload_tls_seccomp_enabled = effective.payload_tls_seccomp_enabled;
+    let seccomp_enabled = effective.use_seccomp;
+    let payload_socket_enabled = effective.payload_socket_enabled;
+    let process_seccomp_enabled = effective.process_seccomp_enabled;
     let child_setup = if seccomp_enabled {
-        ChildSetup::Seccomp(seccomp_setup(&request, payload_tls_seccomp_enabled)?)
+        ChildSetup::Seccomp(seccomp_setup(
+            &request,
+            payload_tls_seccomp_enabled,
+            payload_socket_enabled,
+            process_seccomp_enabled,
+        )?)
     } else {
         ChildSetup::Plain
     };
@@ -174,18 +207,20 @@ pub(crate) fn run_launch(
 fn seccomp_setup(
     request: &LaunchRequest,
     payload_tls_seccomp_enabled: bool,
+    payload_socket_enabled: bool,
+    process_seccomp_enabled: bool,
 ) -> Result<SeccompSetup, String> {
     let payload_tls_seccomp_syscalls = if payload_tls_seccomp_enabled {
         request.payload_tls_seccomp_syscalls.clone()
     } else {
         Vec::new()
     };
-    let payload_socket_seccomp_syscalls = if request.payload_socket_enabled {
+    let payload_socket_seccomp_syscalls = if payload_socket_enabled {
         request.payload_socket_seccomp_syscalls.clone()
     } else {
         Vec::new()
     };
-    let process_seccomp_syscalls = if request.process_seccomp_enabled {
+    let process_seccomp_syscalls = if process_seccomp_enabled {
         request.process_seccomp_syscalls.clone()
     } else {
         Vec::new()
@@ -197,6 +232,40 @@ fn seccomp_setup(
         process_seccomp_syscalls,
         request.seccomp_notify_reserved_listener_fd,
     )
+}
+
+fn run_platform_probe_from_launch(request: &LaunchRequest) -> LaunchPlatformReport {
+    LaunchPlatformReport {
+        control_socket: linux_platform::capability_probe::CapabilityStatus::ok(
+            "control_socket",
+            "not checked for launch",
+        ),
+        tls_sync_socket: if tls_sync_enabled_request(request) {
+            probe_unix_socket(&request.payload_tls_config.sync_event_socket_path)
+        } else {
+            linux_platform::capability_probe::CapabilityStatus::ok(
+                "tls_sync_socket",
+                "disabled by launch request",
+            )
+        },
+        no_new_privs: probe_no_new_privs(),
+        seccomp_launch: probe_seccomp_launch_capability(
+            request.seccomp_notify_reserved_listener_fd,
+        ),
+        tls_sync_runtime_library: if tls_sync_enabled_request(request) {
+            probe_tls_sync_runtime_library(&request.payload_tls_config)
+        } else {
+            linux_platform::capability_probe::CapabilityStatus::ok(
+                "tls_sync_runtime_library",
+                "disabled by launch request",
+            )
+        },
+        daemon: None,
+    }
+}
+
+fn tls_sync_enabled_request(request: &LaunchRequest) -> bool {
+    request.payload_tls_config.enabled && request.payload_tls_config.capture_backend.is_sync()
 }
 
 fn register_seccomp_listener_if_needed(

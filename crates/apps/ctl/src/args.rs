@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use clap::{ArgAction, Args, Parser, Subcommand};
+use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use config_core::daemon::{
     DEFAULT_OPERATOR_CONFIG_PATH, OperatorConfig, PayloadSocketSeccompSyscall, PayloadTlsConfig,
     PayloadTlsSeccompSyscall, ProcessSeccompSyscall,
@@ -14,6 +14,7 @@ use control_contract::selector::TraceSelector;
 use model_core::ids::{ProfileName, RequestId, TraceId, TraceName};
 
 use crate::clean::CleanArtifacts;
+use crate::launch::seccomp_mode::LaunchSeccompMode;
 use crate::process_ref::process_ref;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -49,6 +50,7 @@ pub enum CtlCommand {
         process_seccomp_syscalls: Vec<ProcessSeccompSyscall>,
         seccomp_notify_reserved_listener_fd: u32,
         agent_invocation_commands: Vec<String>,
+        seccomp_mode: LaunchSeccompMode,
         argv: Vec<String>,
     },
     TrackRemove {
@@ -61,6 +63,11 @@ pub enum CtlCommand {
         artifacts: CleanArtifacts,
     },
     Doctor,
+    Probe {
+        operator_config: OperatorConfig,
+        json: bool,
+        skip_daemon: bool,
+    },
 }
 
 pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<CtlInvocation, String> {
@@ -142,6 +149,8 @@ enum CtlCommandArgs {
     Clean,
     #[command(about = "Check daemon control-plane readiness")]
     Doctor,
+    #[command(about = "Probe local launch prerequisites and optional daemon readiness")]
+    Probe(ProbeArgs),
 }
 
 impl CtlCommandArgs {
@@ -190,6 +199,7 @@ impl CtlCommandArgs {
                     process_seccomp_syscalls: seccomp_config.process_syscalls,
                     seccomp_notify_reserved_listener_fd: seccomp_config.reserved_listener_fd,
                     agent_invocation_commands: launch_agent_commands(config),
+                    seccomp_mode: args.seccomp_mode.into(),
                     argv: args.argv,
                 })
             }
@@ -205,6 +215,13 @@ impl CtlCommandArgs {
                 ),
             }),
             Self::Doctor => Ok(CtlCommand::Doctor),
+            Self::Probe(args) => Ok(CtlCommand::Probe {
+                operator_config: config
+                    .ok_or_else(|| "missing operator config for probe".to_string())?
+                    .clone(),
+                json: args.json,
+                skip_daemon: args.skip_daemon,
+            }),
         }
     }
 
@@ -296,6 +313,33 @@ struct TrackAddArgs {
 }
 
 #[derive(Clone, Debug, Args)]
+struct ProbeArgs {
+    #[arg(long = "json")]
+    json: bool,
+
+    #[arg(long = "skip-daemon")]
+    skip_daemon: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+enum LaunchSeccompModeArg {
+    #[default]
+    Auto,
+    Require,
+    Skip,
+}
+
+impl From<LaunchSeccompModeArg> for LaunchSeccompMode {
+    fn from(value: LaunchSeccompModeArg) -> Self {
+        match value {
+            LaunchSeccompModeArg::Auto => Self::Auto,
+            LaunchSeccompModeArg::Require => Self::Require,
+            LaunchSeccompModeArg::Skip => Self::Skip,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Args)]
 struct LaunchArgs {
     #[arg(long = "name", value_name = "NAME")]
     name: Option<String>,
@@ -305,6 +349,9 @@ struct LaunchArgs {
 
     #[arg(long = "tag", action = ArgAction::Append, value_name = "TAG")]
     tags: Vec<String>,
+
+    #[arg(long = "seccomp-mode", value_enum, default_value_t = LaunchSeccompModeArg::Auto)]
+    seccomp_mode: LaunchSeccompModeArg,
 
     #[arg(
         value_name = "COMMAND",

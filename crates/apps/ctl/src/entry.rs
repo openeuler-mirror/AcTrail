@@ -8,6 +8,9 @@ use crate::clean::run_clean;
 use crate::dispatch::dispatch;
 use crate::launch::{LaunchRequest, run_launch};
 use crate::output::format_reply;
+use crate::platform_probe::{
+    attach_daemon_status, print_platform_probe, print_platform_probe_json, run_platform_probe,
+};
 
 pub fn run_from_env() -> Result<i32, String> {
     let invocation = parse_args(std::env::args().skip(1))?;
@@ -44,6 +47,7 @@ pub fn run_from_env() -> Result<i32, String> {
             process_seccomp_syscalls,
             seccomp_notify_reserved_listener_fd,
             agent_invocation_commands,
+            seccomp_mode,
             argv,
         } => {
             let transport = UdsSocketTransport::new(required_socket_path(invocation.socket_path)?);
@@ -65,9 +69,29 @@ pub fn run_from_env() -> Result<i32, String> {
                     process_seccomp_syscalls,
                     seccomp_notify_reserved_listener_fd,
                     agent_invocation_commands,
+                    seccomp_mode,
                     argv,
                 },
             )
+        }
+        CtlCommand::Probe {
+            operator_config,
+            json,
+            skip_daemon,
+        } => {
+            let mut report = run_platform_probe(&operator_config);
+            if !skip_daemon {
+                let transport =
+                    UdsSocketTransport::new(required_socket_path(invocation.socket_path)?);
+                let mut client = UdsControlClient::new(transport);
+                attach_daemon_status(&mut report, &mut client);
+            }
+            if json {
+                print_platform_probe_json(&report);
+            } else {
+                print_platform_probe(&report);
+            }
+            Ok(i32::default())
         }
         command => {
             let transport = UdsSocketTransport::new(required_socket_path(invocation.socket_path)?);
