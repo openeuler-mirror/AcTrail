@@ -188,7 +188,7 @@ def opencode_config_replacements(tls_runtime: OpencodeTlsRuntime | None) -> dict
     return {
         "__OPENCODE_TLS_ENABLED__": "true",
         "__OPENCODE_SECCOMP_NOTIFY_ENABLED__": "true",
-        "__OPENCODE_TLS_REQUIRED_CAPABILITY__": "required_capability = tls-plaintext-payload",
+        "__OPENCODE_TLS_REQUIRED_CAPABILITY__": '"tls-plaintext-payload",',
     }
 
 

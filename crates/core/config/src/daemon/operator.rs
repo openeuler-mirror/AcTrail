@@ -1,35 +1,30 @@
 //! Operator-facing config file parsing for daemon and control CLI commands.
 
-#[path = "operator/sections.rs"]
-mod sections;
-#[path = "operator/template.rs"]
-mod template;
+#[path = "operator/document.rs"]
+mod document;
 
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
-use model_core::ids::ProfileName;
 use storage_factory::StorageConfig;
 
-use super::values::ConfigValues;
 use super::{
-    AgentInvocationConfig, ApplicationProtocolConfig, DEFAULT_FINALIZATION_POLL_INTERVAL_MS,
-    DEFAULT_FINALIZATION_TRACES_PER_CYCLE, DiagnosticLogLevel, EbpfCollectorConfig,
+    AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
     EnforcementConfig, FileObservationConfig, PayloadConfig, PayloadSocketConfig, PayloadTlsConfig,
     ProcessSeccompConfig, ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig,
     SemanticRetentionConfig, SocketPermissions, SseDataPolicy, TraceFinalizationConfig,
-    WorkloadDiagnosticsConfig,
+    WebServerConfig, WorkloadDiagnosticsConfig,
 };
 use crate::capture_profile::CaptureProfile;
 use crate::export::ExportConfig;
+use crate::framework::ConfigModel;
 use crate::provider_rules::ProviderRuleSetConfig;
 
 pub const DEFAULT_OPERATOR_CONFIG_PATH: &str = "/etc/actrail/actraild.conf";
 pub const DEFAULT_CONTROL_PENDING_CONNECTION_MAX: u32 = 256;
 pub const DEFAULT_ACTIVE_TRACE_MAX: u32 = 128;
-pub use template::OPERATOR_CONFIG_TEMPLATE;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OperatorConfigInitStatus {
@@ -46,6 +41,7 @@ pub struct OperatorConfig {
     pub active_trace_max: u32,
     pub pid_file: PathBuf,
     pub storage: StorageConfig,
+    pub web: WebServerConfig,
     pub export_config: ExportConfig,
     pub export_runtime: RuntimeExportConfig,
     pub log_path: PathBuf,
@@ -83,9 +79,10 @@ impl OperatorConfig {
                 Err(error) if error.kind() == ErrorKind::NotFound => false,
                 Err(error) => return Err(format!("inspect config {}: {error}", path.display())),
             };
-            Self::parse(OPERATOR_CONFIG_TEMPLATE)
+            let default_config = Self::default_hierarchical_template()?;
+            Self::parse(&default_config)
                 .map_err(|error| format!("validate default operator config: {error}"))?;
-            write_default_operator_config(path, WriteMode::Overwrite)?;
+            write_default_operator_config(path, WriteMode::Overwrite, &default_config)?;
             return Ok(if existed {
                 OperatorConfigInitStatus::Overwritten
             } else {
@@ -99,9 +96,10 @@ impl OperatorConfig {
                 Ok(OperatorConfigInitStatus::ExistingValid)
             }
             Err(error) if error.kind() == ErrorKind::NotFound => {
-                Self::parse(OPERATOR_CONFIG_TEMPLATE)
+                let default_config = Self::default_hierarchical_template()?;
+                Self::parse(&default_config)
                     .map_err(|error| format!("validate default operator config: {error}"))?;
-                write_default_operator_config(path, WriteMode::CreateNew)?;
+                write_default_operator_config(path, WriteMode::CreateNew, &default_config)?;
                 Ok(OperatorConfigInitStatus::Created)
             }
             Err(error) => Err(format!("read config {}: {error}", path.display())),
@@ -109,116 +107,17 @@ impl OperatorConfig {
     }
 
     pub fn parse(raw: &str) -> Result<Self, String> {
-        let values = ConfigValues::parse(raw)?;
-        let profile_name = ProfileName::new(values.required("profile_name")?);
-        let capabilities = values.capability_requests()?;
-        if capabilities.is_empty() {
-            return Err("at least one capability is required".to_string());
-        }
-        let diagnostic_log_level = values
-            .required("diagnostic_log_level")?
-            .parse::<DiagnosticLogLevel>()
-            .map_err(|error| format!("invalid diagnostic_log_level: {error}"))?;
-        let workload_diagnostics =
-            sections::workload_diagnostics_config(values.node("workload_diagnostics"))?;
-        let payload_tls = sections::payload_tls_config(values.node("payload_tls"))?;
-        let payload_stdio = sections::payload_stdio_config(values.node("payload_stdio"))?;
-        let payload_socket = sections::payload_socket_config(values.node("payload_socket"))?;
-        let payload_config = PayloadConfig {
-            tls: payload_tls,
-            stdio: payload_stdio,
-            socket: payload_socket,
-        };
-        let seccomp_notify = sections::seccomp_notify_config(values.node("seccomp_notify"))?;
-        let process_seccomp = sections::process_seccomp_config(values.node("process_seccomp"))?;
-        let agent_invocation = sections::agent_invocation_config(values.node("agent_invocation"))?;
-        let semantic_retention =
-            sections::semantic_retention_config(values.node("semantic_retention"))?;
-        let file_observation = sections::file_observation_config(values.node("file_observation"))?;
-        let application_protocol = sections::application_protocol_config(
-            values.node("application_protocol"),
-            values.node("application_http"),
-            values.node("application_http2"),
-        )?;
-        validate_application_protocol_config(
-            &application_protocol,
-            payload_config.tls.enabled,
-            payload_config.socket.enabled,
-            &capabilities,
-        )?;
-        let resource_metrics = sections::resource_metrics_config(values.node("resource_metrics"))?;
-        validate_resource_metrics_config(&resource_metrics, &capabilities)?;
-        let trace_finalization = TraceFinalizationConfig {
-            traces_per_cycle: values.optional_positive_u32(
-                "finalization_traces_per_cycle",
-                DEFAULT_FINALIZATION_TRACES_PER_CYCLE,
-            )?,
-            poll_interval_ms: values.optional_positive_u64(
-                "finalization_poll_interval_ms",
-                DEFAULT_FINALIZATION_POLL_INTERVAL_MS,
-            )?,
-        };
-        let enforcement = sections::enforcement_config(values.node("enforcement"))?;
-        validate_enforcement_config(&enforcement, &capabilities)?;
-        validate_seccomp_config(
-            &seccomp_notify,
-            &payload_config.tls,
-            &payload_config.socket,
-            &process_seccomp,
-            &capabilities,
-        )?;
-        let export_config = sections::export_config(&values, values.node("export"))?;
-        let export_runtime = RuntimeExportConfig::parse(raw)?;
-        let provider_rule_set = sections::provider_rule_set_config(values.node("provider"))?;
-        let storage = StorageConfig::parse(raw)?;
-        Ok(Self {
-            socket_path: PathBuf::from(values.required("socket_path")?),
-            socket_permissions: SocketPermissions {
-                mode: values.required_octal("socket_mode_octal")?,
-            },
-            control_pending_connection_max: values.optional_positive_u32(
-                "control_pending_connection_max",
-                DEFAULT_CONTROL_PENDING_CONNECTION_MAX,
-            )?,
-            active_trace_max: values
-                .optional_positive_u32("active_trace_max", DEFAULT_ACTIVE_TRACE_MAX)?,
-            pid_file: PathBuf::from(values.required("pid_file")?),
-            storage,
-            export_config,
-            export_runtime,
-            log_path: PathBuf::from(values.required("log_path")?),
-            diagnostic_log_level,
-            workload_diagnostics,
-            capture_profile: CaptureProfile::new(profile_name, capabilities),
-            ebpf_config: EbpfCollectorConfig {
-                enabled: values.required_bool("ebpf_enabled")?,
-                memlock_rlimit: values.required_memlock_rlimit("memlock_rlimit")?,
-                tracked_process_max_entries: values.required_u32("tracked_process_max_entries")?,
-                pending_operation_max_entries: values
-                    .required_u32("pending_operation_max_entries")?,
-                suppressed_fd_max_entries: values.required_u32("suppressed_fd_max_entries")?,
-                suppressed_fd_index_slots_per_process: values
-                    .required_u32("suppressed_fd_index_slots_per_process")?,
-                event_ring_buffer_max_bytes: values.required_u32("event_ring_buffer_max_bytes")?,
-                file_path_capture_enabled: values.required_bool("file_path_capture_enabled")?,
-                file_path_max_bytes: values.required_positive_u32("file_path_max_bytes")?,
-            },
-            payload_config,
-            seccomp_notify,
-            process_seccomp,
-            agent_invocation,
-            semantic_retention,
-            file_observation,
-            application_protocol,
-            resource_metrics,
-            trace_finalization,
-            provider_rule_set,
-            enforcement,
-            startup_wait_ms: values.required_positive_u64("startup_wait_ms")?,
-            shutdown_wait_ms: values.required_positive_u64("shutdown_wait_ms")?,
-            supervision_poll_interval_ms: values
-                .required_positive_u64("supervision_poll_interval_ms")?,
-        })
+        document::OperatorDocument::parse(raw)?.to_config()
+    }
+
+    pub fn default_hierarchical_template() -> Result<String, String> {
+        document::OperatorDocument::default_toml()
+    }
+
+    pub fn to_hierarchical_toml(&self) -> Result<String, String> {
+        document::OperatorDocument::from_config(self)
+            .to_toml()
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -228,7 +127,7 @@ enum WriteMode {
     Overwrite,
 }
 
-fn write_default_operator_config(path: &Path, mode: WriteMode) -> Result<(), String> {
+fn write_default_operator_config(path: &Path, mode: WriteMode, raw: &str) -> Result<(), String> {
     if let Some(parent) = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -253,7 +152,7 @@ fn write_default_operator_config(path: &Path, mode: WriteMode) -> Result<(), Str
     let mut file = options
         .open(path)
         .map_err(|error| format!("{action} config {}: {error}", path.display()))?;
-    file.write_all(OPERATOR_CONFIG_TEMPLATE.as_bytes())
+    file.write_all(raw.as_bytes())
         .map_err(|error| format!("write config {}: {error}", path.display()))
 }
 
@@ -385,4 +284,64 @@ fn capability_requested(capabilities: &[CapabilityRequest], capability: &Capabil
     capabilities
         .iter()
         .any(|request| request.mode != RequestMode::Disabled && request.capability == *capability)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OperatorConfig;
+
+    #[test]
+    fn hierarchical_default_template_parses() {
+        let raw = OperatorConfig::default_hierarchical_template()
+            .expect("render hierarchical default template");
+        let config = OperatorConfig::parse(&raw).expect("parse hierarchical default");
+
+        assert_eq!(
+            config.socket_path,
+            std::path::PathBuf::from("/run/actrail/control.sock")
+        );
+        assert_eq!(config.web.listen_addr.to_string(), "127.0.0.1:18080");
+        assert!(config.export_runtime.enabled);
+    }
+
+    #[test]
+    fn hierarchical_unknown_field_is_rejected() {
+        let raw = "[control]\nunexpected = true\n";
+        let error = OperatorConfig::parse(&raw).expect_err("unknown key must fail");
+        assert!(error.contains("unknown field"));
+        assert!(error.contains("unexpected"));
+    }
+
+    #[test]
+    fn effective_config_exports_as_hierarchical_toml() {
+        let raw = OperatorConfig::default_hierarchical_template()
+            .expect("render hierarchical default template");
+        let config = OperatorConfig::parse(&raw).expect("parse hierarchical default");
+        let exported = config
+            .to_hierarchical_toml()
+            .expect("export effective hierarchical config");
+        let reparsed = OperatorConfig::parse(&exported).expect("reparse effective export");
+
+        assert_eq!(reparsed, config);
+        assert!(exported.contains("[control]"));
+        assert!(exported.contains("[payload.tls]"));
+    }
+
+    #[test]
+    fn initialize_writes_hierarchical_template() {
+        let path = std::env::temp_dir().join(format!(
+            "actrail-hierarchical-config-test-{}.toml",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        OperatorConfig::initialize(&path, false).expect("initialize config");
+        let raw = std::fs::read_to_string(&path).expect("read initialized config");
+        let config = OperatorConfig::parse(&raw).expect("parse initialized config");
+        std::fs::remove_file(&path).expect("remove initialized config");
+
+        assert_eq!(config.web.listen_addr.to_string(), "127.0.0.1:18080");
+        assert!(raw.contains("[control]"));
+        assert!(raw.contains("[storage.sqlite]"));
+    }
 }

@@ -83,16 +83,34 @@ def read_operator_config(path: Path) -> dict[str, str]:
             continue
         key = key.strip()
         value = unquote(value.strip())
-        if section == "export" and key == "enabled":
-            key = "export_enabled"
-        elif section.startswith("export.routes.otel-jsonl.") and key == "path":
-            key = "export_otel_jsonl_path"
-        elif section.startswith("export."):
+        remapped = operator_config_key(section, key)
+        if remapped is None:
             continue
+        key = remapped
+        if key == "export_enabled":
+            key = "export_enabled"
         if key in values and key in SINGLE_VALUE_CONFIG_KEYS:
             raise RuntimeError(f"duplicate config key {key} in {path}")
         values.setdefault(key, value)
     return values
+
+
+def operator_config_key(section: str, key: str) -> str | None:
+    if section == "control" and key in {"socket_path", "pid_file", "log_path"}:
+        return key
+    if section == "storage.sqlite" and key == "path":
+        return "storage_sqlite_path"
+    if section == "export.snapshot" and key == "directory":
+        return "export_directory"
+    if section == "export.runtime" and key == "enabled":
+        return "export_enabled"
+    if section == "export.runtime.routes.otel_jsonl" and key == "path":
+        return "export_otel_jsonl_path"
+    if section == "payload.tls" and key == "sync_event_socket_path":
+        return "payload_tls_sync_event_socket_path"
+    if not section:
+        return key
+    return None
 
 
 def clean_configured_paths(values: dict[str, str]) -> None:

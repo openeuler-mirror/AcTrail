@@ -43,6 +43,13 @@ impl StorageConfig {
         Self::Sqlite(SqliteStorageConfig::direct_path(path))
     }
 
+    pub fn sqlite(path: impl AsRef<Path>, busy_timeout_ms: u64) -> Self {
+        Self::Sqlite(SqliteStorageConfig {
+            path: path.as_ref().to_path_buf(),
+            busy_timeout_ms,
+        })
+    }
+
     pub const fn backend(&self) -> StorageBackendKind {
         match self {
             Self::Sqlite(_) => StorageBackendKind::Sqlite,
@@ -52,6 +59,12 @@ impl StorageConfig {
     pub fn path(&self) -> &Path {
         match self {
             Self::Sqlite(config) => &config.path,
+        }
+    }
+
+    pub const fn sqlite_busy_timeout_ms(&self) -> u64 {
+        match self {
+            Self::Sqlite(config) => config.busy_timeout_ms,
         }
     }
 }

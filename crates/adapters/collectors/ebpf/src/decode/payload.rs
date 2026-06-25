@@ -120,7 +120,7 @@ pub struct SocketPayloadCompletion {
 
 pub fn decode_stdio_payload(
     event: KernelStdioPayloadEvent,
-    bindings: &BindingStateMap,
+    bindings: &mut BindingStateMap,
     identity_reader: &ProcfsIdentityReader,
 ) -> Result<RawPayloadSegment, DecodeError> {
     let identity = resolve_payload_identity(
@@ -158,7 +158,7 @@ pub fn decode_stdio_payload(
 
 pub fn decode_socket_payload(
     event: KernelSocketPayloadEvent,
-    bindings: &BindingStateMap,
+    bindings: &mut BindingStateMap,
     identity_reader: &ProcfsIdentityReader,
 ) -> Result<RawPayloadSegment, DecodeError> {
     let identity = resolve_payload_identity(
@@ -288,7 +288,7 @@ fn resolve_payload_identity(
     trace_id: TraceId,
     pid: u32,
     generation: u64,
-    bindings: &BindingStateMap,
+    bindings: &mut BindingStateMap,
     identity_reader: &ProcfsIdentityReader,
 ) -> Result<model_core::process::ProcessIdentity, DecodeError> {
     resolve_event_identity(trace_id, pid, generation, bindings, identity_reader)

@@ -1,5 +1,7 @@
 //! SQLite storage for semantic actions.
 
+use std::collections::BTreeMap;
+
 use model_core::ids::TraceId;
 use model_core::process::{NamespaceIdentity, ProcessIdentity};
 use rusqlite::{OptionalExtension, Row, params};
@@ -287,11 +289,14 @@ impl SemanticActionReadStore for SqliteStorage {
             })?;
         let mut actions = Vec::new();
         for row in rows {
-            let mut action = row.map_err(|error| {
+            let action = row.map_err(|error| {
                 SemanticActionStoreError::new("map_semantic_action", error.to_string())
             })?;
-            action.evidence = read_evidence(&connection, &action.action_id)?;
             actions.push(action);
+        }
+        let mut evidence = read_evidence_for_trace(&connection, trace_id)?;
+        for action in &mut actions {
+            action.evidence = evidence.remove(&action.action_id).unwrap_or_default();
         }
         Ok(actions)
     }
@@ -323,11 +328,16 @@ impl SemanticActionReadStore for SqliteStorage {
             })?;
         let mut links = Vec::new();
         for row in rows {
-            let mut link = row.map_err(|error| {
+            let link = row.map_err(|error| {
                 SemanticActionStoreError::new("map_semantic_action_link", error.to_string())
             })?;
-            link.evidence = read_link_evidence(&connection, &link)?;
             links.push(link);
+        }
+        let mut evidence = read_link_evidence_for_trace(&connection, trace_id)?;
+        for link in &mut links {
+            link.evidence = evidence
+                .remove(&LinkEvidenceKey::from_link(link))
+                .unwrap_or_default();
         }
         Ok(links)
     }
@@ -400,6 +410,42 @@ pub(super) fn read_evidence(
     })
 }
 
+fn read_evidence_for_trace(
+    connection: &rusqlite::Connection,
+    trace_id: TraceId,
+) -> Result<BTreeMap<String, Vec<SemanticEvidence>>, SemanticActionStoreError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT evidence.action_id, evidence.kind, evidence.evidence_id, evidence.role
+             FROM semantic_action_evidence evidence
+             JOIN semantic_actions action
+               ON action.action_id = evidence.action_id
+             WHERE action.trace_id = ?1
+             ORDER BY evidence.action_id ASC, evidence.evidence_order ASC",
+        )
+        .map_err(|error| {
+            SemanticActionStoreError::new(
+                "prepare_semantic_action_evidence_trace",
+                error.to_string(),
+            )
+        })?;
+    let rows = statement
+        .query_map(params![trace_id.get()], |row| {
+            Ok((row.get::<_, String>("action_id")?, evidence_from_row(row)?))
+        })
+        .map_err(|error| {
+            SemanticActionStoreError::new("query_semantic_action_evidence_trace", error.to_string())
+        })?;
+    let mut evidence = BTreeMap::<String, Vec<SemanticEvidence>>::new();
+    for row in rows {
+        let (action_id, item) = row.map_err(|error| {
+            SemanticActionStoreError::new("map_semantic_action_evidence_trace", error.to_string())
+        })?;
+        evidence.entry(action_id).or_default().push(item);
+    }
+    Ok(evidence)
+}
+
 pub(super) fn read_action_by_id(
     connection: &rusqlite::Connection,
     action_id: &str,
@@ -455,6 +501,47 @@ pub(super) fn read_link_evidence(
     rows.collect::<Result<Vec<_>, _>>().map_err(|error| {
         SemanticActionStoreError::new("map_semantic_action_link_evidence", error.to_string())
     })
+}
+
+fn read_link_evidence_for_trace(
+    connection: &rusqlite::Connection,
+    trace_id: TraceId,
+) -> Result<BTreeMap<LinkEvidenceKey, Vec<SemanticEvidence>>, SemanticActionStoreError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT trace_id, parent_action_id, child_action_id, role AS link_role,
+                    kind, evidence_id, evidence_role
+             FROM semantic_action_link_evidence
+             WHERE trace_id = ?1
+             ORDER BY parent_action_id ASC, child_action_id ASC, link_role ASC, evidence_order ASC",
+        )
+        .map_err(|error| {
+            SemanticActionStoreError::new(
+                "prepare_semantic_action_link_evidence_trace",
+                error.to_string(),
+            )
+        })?;
+    let rows = statement
+        .query_map(params![trace_id.get()], |row| {
+            Ok((LinkEvidenceKey::from_row(row)?, evidence_from_row(row)?))
+        })
+        .map_err(|error| {
+            SemanticActionStoreError::new(
+                "query_semantic_action_link_evidence_trace",
+                error.to_string(),
+            )
+        })?;
+    let mut evidence = BTreeMap::<LinkEvidenceKey, Vec<SemanticEvidence>>::new();
+    for row in rows {
+        let (key, item) = row.map_err(|error| {
+            SemanticActionStoreError::new(
+                "map_semantic_action_link_evidence_trace",
+                error.to_string(),
+            )
+        })?;
+        evidence.entry(key).or_default().push(item);
+    }
+    Ok(evidence)
 }
 
 pub(super) fn action_from_row(row: &Row<'_>) -> Result<SemanticAction, rusqlite::Error> {
@@ -532,4 +619,32 @@ pub(super) fn decode_link_confidence(
     value: String,
 ) -> Result<SemanticActionLinkConfidence, rusqlite::Error> {
     SemanticActionLinkConfidence::parse(&value).ok_or(rusqlite::Error::InvalidQuery)
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct LinkEvidenceKey {
+    trace_id: u64,
+    parent_action_id: String,
+    child_action_id: String,
+    role: String,
+}
+
+impl LinkEvidenceKey {
+    fn from_link(link: &SemanticActionLink) -> Self {
+        Self {
+            trace_id: link.trace_id.get(),
+            parent_action_id: link.parent_action_id.clone(),
+            child_action_id: link.child_action_id.clone(),
+            role: link.role.as_str().to_string(),
+        }
+    }
+
+    fn from_row(row: &Row<'_>) -> Result<Self, rusqlite::Error> {
+        Ok(Self {
+            trace_id: row.get("trace_id")?,
+            parent_action_id: row.get("parent_action_id")?,
+            child_action_id: row.get("child_action_id")?,
+            role: row.get("link_role")?,
+        })
+    }
 }

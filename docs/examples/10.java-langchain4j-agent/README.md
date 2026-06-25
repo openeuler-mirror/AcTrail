@@ -1,6 +1,6 @@
 # Java LangChain4j Agent
 
-This example launches a real Java workload using LangChain4j `OpenAiChatModel`. It calls an OpenAI-compatible external LLM provider through the JDK HTTP client over HTTPS. The workload does not use a local stub, replay server, HTTP relay, custom HTTP client, or protocol downgrade. AcTrail observes this path by enabling its launch-time JSSE Java agent (`payload_tls_java_agent_enabled = true`), which reports HTTPS plaintext through the normal tls-sync event socket.
+This example launches a real Java workload using LangChain4j `OpenAiChatModel`. It calls an OpenAI-compatible external LLM provider through the JDK HTTP client over HTTPS. The workload does not use a local stub, replay server, HTTP relay, custom HTTP client, or protocol downgrade. AcTrail observes this path by enabling its launch-time JSSE Java agent (`payload.tls.java_agent_enabled = true`), which reports HTTPS plaintext through the normal tls-sync event socket.
 
 Defaults target DeepSeek:
 

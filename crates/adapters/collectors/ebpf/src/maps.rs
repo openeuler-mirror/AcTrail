@@ -18,6 +18,7 @@ pub struct BindingStateMap {
     by_pid: BTreeMap<u32, TrackedProcess>,
     by_trace_map_pid: BTreeMap<(TraceId, u32), ProcessIdentity>,
     by_trace_map_process: BTreeMap<(TraceId, u32, u64), ProcessIdentity>,
+    resolved_by_trace_map_process: BTreeMap<(TraceId, u32, u64), ProcessIdentity>,
     pids_by_trace: BTreeMap<TraceId, BTreeSet<u32>>,
     map_pids_by_trace: BTreeMap<TraceId, BTreeSet<u32>>,
     pid_namespace_by_trace: BTreeMap<TraceId, NamespaceIdentity>,
@@ -131,6 +132,33 @@ impl BindingStateMap {
         self.by_trace_map_pid.get(&(trace_id, map_pid))
     }
 
+    pub fn cached_resolved_event_identity(
+        &self,
+        trace_id: TraceId,
+        map_pid: u32,
+        generation: u64,
+    ) -> Option<&ProcessIdentity> {
+        if generation == 0 {
+            return None;
+        }
+        self.resolved_by_trace_map_process
+            .get(&(trace_id, map_pid, generation))
+    }
+
+    pub fn cache_resolved_event_identity(
+        &mut self,
+        trace_id: TraceId,
+        map_pid: u32,
+        generation: u64,
+        identity: ProcessIdentity,
+    ) {
+        if generation == 0 {
+            return;
+        }
+        self.resolved_by_trace_map_process
+            .insert((trace_id, map_pid, generation), identity);
+    }
+
     pub fn trace_pid_namespace(&self, trace_id: TraceId) -> Option<&NamespaceIdentity> {
         self.pid_namespace_by_trace.get(&trace_id)
     }
@@ -166,6 +194,8 @@ impl BindingStateMap {
             }
         }
         self.by_trace_map_process
+            .retain(|(entry_trace_id, _, _), _| *entry_trace_id != trace_id);
+        self.resolved_by_trace_map_process
             .retain(|(entry_trace_id, _, _), _| *entry_trace_id != trace_id);
         let Some(pids) = self.pids_by_trace.remove(&trace_id) else {
             return Vec::new();

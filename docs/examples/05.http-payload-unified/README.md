@@ -6,7 +6,7 @@
 local HTTP workload -> libbpf eBPF collector -> AcTrail storage -> actrailviewer payload/Application events
 ```
 
-本例的 workload 不使用 TLS，也不需要外网或 API key。配置里仍启用 `payload_tls_enabled = true` 和 `payload_tls_capture_backend = tls-sync`，用于覆盖 TLS/socket 同时开启时，plain HTTP workload 仍能通过 socket plaintext 路径正常采集。它启动一个真实本地 TCP server/client workload，先发送一条非 HTTP socket 消息，再发送一条 HTTP/1.1 request/response。AcTrail 只保留识别为 HTTP 的 socket plaintext payload，并从相同 payload 派生 `Application` request/response rows。
+本例的 workload 不使用 TLS，也不需要外网或 API key。配置里仍启用 `payload.tls.enabled = true` 和 `payload.tls.capture_backend = tls-sync`，用于覆盖 TLS/socket 同时开启时，plain HTTP workload 仍能通过 socket plaintext 路径正常采集。它启动一个真实本地 TCP server/client workload，先发送一条非 HTTP socket 消息，再发送一条 HTTP/1.1 request/response。AcTrail 只保留识别为 HTTP 的 socket plaintext payload，并从相同 payload 派生 `Application` request/response rows。
 
 测试流程：
 
@@ -69,43 +69,43 @@ cargo build --release
 本例使用同目录的 `operator.conf`。关键配置是：
 
 ```text
-required_capability = proc-lifecycle
-required_capability = net-transport
-required_capability = tls-plaintext-payload
-required_capability = socket-plaintext-payload
-required_capability = net-application-plaintext-http
+capture.capabilities includes proc-lifecycle
+capture.capabilities includes net-transport
+capture.capabilities includes tls-plaintext-payload
+capture.capabilities includes socket-plaintext-payload
+capture.capabilities includes net-application-plaintext-http
 
-payload_tls_enabled = true
-payload_tls_capture_backend = tls-sync
-payload_tls_source = auto
-payload_tls_resolver = auto
-payload_tls_library = auto
-payload_tls_library_path = auto
-payload_tls_binary_path = disabled
-payload_tls_pattern_path = disabled
-payload_socket_enabled = true
-payload_socket_capture_backend = bpf-copy
-payload_socket_max_segment_bytes = 4095
-payload_socket_max_operation_bytes = 4194304
-payload_socket_ring_buffer_bytes = 2097152
-payload_socket_pending_operation_max_entries = 4096
-payload_socket_stream_state_max_entries = 4096
-payload_socket_retention_max_bytes_per_trace = 10485760
-payload_socket_redaction_policy = disabled
-payload_socket_http_sniff_max_bytes = 8192
-payload_socket_seccomp_syscall = write
-payload_socket_seccomp_syscall = sendto
+payload.tls.enabled = true
+payload.tls.capture_backend = tls-sync
+payload.tls.source = auto
+payload.tls.resolver = auto
+payload.tls.library = auto
+payload.tls.library_path = auto
+payload.tls.binary_path = disabled
+payload.tls.pattern_path = disabled
+payload.socket.enabled = true
+payload.socket.capture_backend = bpf-copy
+payload.socket.max_segment_bytes = 4095
+payload.socket.max_operation_bytes = 4194304
+payload.socket.ring_buffer_bytes = 2097152
+payload.socket.pending_operation_max_entries = 4096
+payload.socket.stream_state_max_entries = 4096
+payload.socket.retention_max_bytes_per_trace = 10485760
+payload.socket.redaction_policy = disabled
+payload.socket.http_sniff_max_bytes = 8192
+payload.socket.seccomp_syscall = write
+payload.socket.seccomp_syscall = sendto
 
-application_protocol_enabled = true
-application_protocol_http1_enabled = true
-application_protocol_http2_enabled = false
+application.enabled = true
+application.http1_enabled = true
+application.http2_enabled = false
 ```
 
 本例的通过条件仍是 `Syscall/socket-syscall` payload，而不是 TLS payload。`tls-sync` 开启后会等待 launch-time runtime 注入；本例使用 `track-add` attach 已运行的本地 plain HTTP workload，因此不会产生 `TlsUserSpace` 行。
 
-`payload_socket_max_segment_bytes = 4095` 是本例的 socket BPF direct-copy 上限。对于 `bpf-copy-seccomp-fallback` 配置，超过该 inline 上限的 outbound HTTP 候选会在 seccomp 暂停窗口由 daemon 读取用户态 buffer；`payload_socket_max_operation_bytes = 4194304` 表示 4MB 以内的 HTTP LLM request 仍可完整保留。不要把 4095 理解成业务请求大小上限，它只是稳定 eBPF socket event ABI 的 inline copy 上限。 如果目标 runtime 用 `writev` 或 `sendmsg` 发送 plain HTTP request，需要在同一配置段额外添加对应的 `payload_socket_seccomp_syscall`；这两个 syscall 的 payload 由 `iovec`/`msghdr` 描述，只走 seccomp user-read fallback，不走 BPF direct-copy。
+`payload.socket.max_segment_bytes = 4095` 是本例的 socket BPF direct-copy 上限。对于 `bpf-copy-seccomp-fallback` 配置，超过该 inline 上限的 outbound HTTP 候选会在 seccomp 暂停窗口由 daemon 读取用户态 buffer；`payload.socket.max_operation_bytes = 4194304` 表示 4MB 以内的 HTTP LLM request 仍可完整保留。不要把 4095 理解成业务请求大小上限，它只是稳定 eBPF socket event ABI 的 inline copy 上限。 如果目标 runtime 用 `writev` 或 `sendmsg` 发送 plain HTTP request，需要在同一配置段额外添加对应的 `payload.socket.seccomp_syscall`；这两个 syscall 的 payload 由 `iovec`/`msghdr` 描述，只走 seccomp user-read fallback，不走 BPF direct-copy。
 
-`payload_socket_http_sniff_max_bytes` 是单条 socket stream 在被判定为 HTTP 或非 HTTP 前最多暂存的字节数。被判定为非 HTTP 的 socket bytes 不会进入 payload storage。
+`payload.socket.http_sniff_max_bytes` 是单条 socket stream 在被判定为 HTTP 或非 HTTP 前最多暂存的字节数。被判定为非 HTTP 的 socket bytes 不会进入 payload storage。
 
 ## 4. 自动端到端验证
 

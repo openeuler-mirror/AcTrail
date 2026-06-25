@@ -9,3 +9,4 @@ pub use config::{
     ExportConfig, ExportDeliveryConfig, ExportOutputFile, ExportRouteConfig, ExportRouteKind,
     ExportRouteTargetConfig,
 };
+pub use export_otel_jsonl::OtelJsonlExporterConfig;

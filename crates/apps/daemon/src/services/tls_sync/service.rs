@@ -5,6 +5,7 @@ mod plan_store;
 #[path = "resolver.rs"]
 mod resolver;
 
+use std::collections::BTreeMap;
 use std::fs::{self, Permissions};
 use std::io::{ErrorKind, Read};
 use std::os::fd::{AsRawFd, RawFd};
@@ -125,6 +126,7 @@ impl TlsSyncService {
                     self.clients.push(TlsSyncClient {
                         stream,
                         buffer: Vec::new(),
+                        process_cache: BTreeMap::new(),
                     });
                 }
                 Err(error) if error.kind() == ErrorKind::WouldBlock => return Ok(()),
@@ -139,6 +141,7 @@ impl TlsSyncService {
 struct TlsSyncClient {
     stream: UnixStream,
     buffer: Vec<u8>,
+    process_cache: BTreeMap<TlsSyncProcessCacheKey, ProcessIdentity>,
 }
 
 impl TlsSyncClient {
@@ -203,7 +206,9 @@ impl TlsSyncClient {
             }
             match decode_event_line(&line).map_err(sync_event_error)? {
                 SyncEvent::Payload(event) => {
-                    if let Some(segment) = payload_segment(event, trace_runtime)? {
+                    if let Some(segment) =
+                        payload_segment(event, trace_runtime, &mut self.process_cache)?
+                    {
                         segments.push(segment);
                     }
                 }
@@ -217,9 +222,11 @@ impl TlsSyncClient {
 fn payload_segment(
     event: PayloadEvent,
     trace_runtime: &TraceRuntime,
+    process_cache: &mut BTreeMap<TlsSyncProcessCacheKey, ProcessIdentity>,
 ) -> Result<Option<RawPayloadSegment>, ControlError> {
     let trace_id = TraceId::new(event.trace_id);
-    let process = match resolve_tls_sync_process(trace_runtime, trace_id, event.pid) {
+    let process = match resolve_tls_sync_process(trace_runtime, trace_id, event.pid, process_cache)
+    {
         Ok(process) => process,
         Err(error) if stale_namespaced_pid_resolution(&error) => {
             tracing::warn!(
@@ -265,10 +272,18 @@ fn resolve_tls_sync_process(
     trace_runtime: &TraceRuntime,
     trace_id: TraceId,
     namespace_pid: u32,
+    process_cache: &mut BTreeMap<TlsSyncProcessCacheKey, ProcessIdentity>,
 ) -> Result<ProcessIdentity, ControlError> {
     let entry = trace_runtime
         .get_trace(trace_id)
         .ok_or_else(|| ControlError::new("tls_sync_pid_resolution", "trace not found"))?;
+    let cache_key = TlsSyncProcessCacheKey {
+        trace_id,
+        namespace_pid,
+    };
+    if let Some(process) = process_cache.get(&cache_key) {
+        return Ok(process.clone());
+    }
     let pid_namespace = entry
         .trace
         .root_process_identity
@@ -280,8 +295,16 @@ fn resolve_tls_sync_process(
                 "trace root process is missing PID namespace metadata",
             )
         })?;
-    resolve_namespaced_pid(namespace_pid, pid_namespace)
-        .map_err(|error| ControlError::new("tls_sync_pid_resolution", error))
+    let process = resolve_namespaced_pid(namespace_pid, pid_namespace)
+        .map_err(|error| ControlError::new("tls_sync_pid_resolution", error))?;
+    process_cache.insert(cache_key, process.clone());
+    Ok(process)
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct TlsSyncProcessCacheKey {
+    trace_id: TraceId,
+    namespace_pid: u32,
 }
 
 fn stale_namespaced_pid_resolution(error: &ControlError) -> bool {

@@ -193,7 +193,7 @@ fn decode_exec(
 
 fn decode_exit(
     event: KernelObservationEvent,
-    bindings: &BindingStateMap,
+    bindings: &mut BindingStateMap,
     identity_reader: &ProcfsIdentityReader,
 ) -> Result<Option<RawCollectorEvent>, DecodeError> {
     let identity = resolve_event_identity(
@@ -226,7 +226,7 @@ fn decode_exit(
 
 fn decode_signal(
     event: KernelObservationEvent,
-    bindings: &BindingStateMap,
+    bindings: &mut BindingStateMap,
     identity_reader: &ProcfsIdentityReader,
 ) -> Result<Option<RawCollectorEvent>, DecodeError> {
     let identity = resolve_event_identity(
@@ -266,7 +266,7 @@ fn decode_signal(
 
 fn decode_net(
     event: KernelObservationEvent,
-    bindings: &BindingStateMap,
+    bindings: &mut BindingStateMap,
     identity_reader: &ProcfsIdentityReader,
     file_tracker: &mut FileTracker,
 ) -> Result<Option<RawCollectorEvent>, DecodeError> {
@@ -416,7 +416,7 @@ fn format_endpoint(endpoint: &KernelEndpoint) -> Option<String> {
 
 fn resolve_parent_identity(
     event: &KernelObservationEvent,
-    bindings: &BindingStateMap,
+    bindings: &mut BindingStateMap,
     identity_reader: &ProcfsIdentityReader,
 ) -> Result<ProcessIdentity, DecodeError> {
     resolve_event_identity(
@@ -452,7 +452,7 @@ pub(crate) fn resolve_event_identity(
     trace_id: TraceId,
     pid: u32,
     generation: u64,
-    bindings: &BindingStateMap,
+    bindings: &mut BindingStateMap,
     identity_reader: &ProcfsIdentityReader,
 ) -> Result<ProcessIdentity, String> {
     if let Some(identity) = bindings
@@ -461,14 +461,22 @@ pub(crate) fn resolve_event_identity(
     {
         return Ok(identity);
     }
+    if let Some(identity) = bindings
+        .cached_resolved_event_identity(trace_id, pid, generation)
+        .cloned()
+    {
+        return Ok(identity);
+    }
     if let Some(namespace) = bindings.trace_pid_namespace(trace_id) {
         if let Ok(identity) = resolve_namespaced_pid(pid, namespace) {
-            return Ok(if generation == 0 {
+            let resolved = if generation == 0 {
                 identity
             } else {
                 ProcessIdentity::new(identity.pid, identity.start_time_ticks, generation)
                     .with_namespace(namespace.clone())
-            });
+            };
+            bindings.cache_resolved_event_identity(trace_id, pid, generation, resolved.clone());
+            return Ok(resolved);
         }
     }
     if generation != 0 {

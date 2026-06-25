@@ -7,4 +7,6 @@ license = "MulanPSL-2.0"
 [dependencies]
 export_factory = { path = "../../export/factory" }
 model_core = { path = "../model" }
+serde = { version = "1", features = ["derive"] }
 storage_factory = { path = "../../storage/factory" }
+toml = "0.8"
