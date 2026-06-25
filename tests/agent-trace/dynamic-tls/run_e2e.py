@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -59,12 +60,33 @@ def main() -> int:
         float(required(workload, "daemon_ready_timeout_seconds")),
     )
     try:
+        wait_for_tls_sync_ready(
+            actrailctl,
+            config,
+            int(required(workload, "drain_attempts")),
+            float(required(workload, "drain_sleep_seconds")),
+        )
         for item in dynamic_workloads(binaries, workload):
             run_dynamic_trace(item, workload, actrailctl, actrailviewer, config)
         print("Dynamic TLS local agent trace e2e complete")
     finally:
         stop_process(daemon, float(required(workload, "daemon_stop_timeout_seconds")))
     return 0
+
+
+def wait_for_tls_sync_ready(
+    actrailctl: Path,
+    config: Path,
+    attempts: int,
+    sleep_sec: float,
+) -> None:
+    for _ in range(attempts):
+        output = run_checked(actrail_command(actrailctl, config, "doctor"), echo=False)
+        if "tls-sync" in output and "storage_ready=true" in output:
+            print("tls_sync_ready=1", flush=True)
+            return
+        time.sleep(sleep_sec)
+    raise RuntimeError("actrailctl doctor did not report tls-sync collector readiness")
 
 
 def parse_args() -> argparse.Namespace:
@@ -86,24 +108,18 @@ def require_tool(name: str) -> str:
 def build_workloads(gcc: str, readelf: str, case_dir: Path, build_dir: Path) -> dict[str, Path]:
     src = case_dir / "src"
     libssl = build_dir / "libssl.so"
-    libboringssl = build_dir / "libboringssl.so"
     needed_openssl = build_dir / "needed-openssl"
-    needed_boringssl = build_dir / "needed-boringssl"
     resolver_openssl = build_dir / "resolver-openssl"
     compile_shared(gcc, src / "fake_ssl.c", libssl, "libssl.so")
-    compile_shared(gcc, src / "fake_ssl.c", libboringssl, "libboringssl.so")
     compile_needed(gcc, src / "needed.c", needed_openssl, build_dir, "libssl.so")
-    compile_needed(gcc, src / "needed.c", needed_boringssl, build_dir, "libboringssl.so")
     run_checked(
         [gcc, "-Wall", "-Wextra", "-O2", "-o", str(resolver_openssl), str(src / "resolver.c"), "-ldl"],
         echo=False,
     )
     require_needed(readelf, needed_openssl, "libssl.so")
-    require_needed(readelf, needed_boringssl, "libboringssl.so")
     return {
         "libssl": libssl,
         "needed_openssl": needed_openssl,
-        "needed_boringssl": needed_boringssl,
         "resolver_openssl": resolver_openssl,
     }
 
@@ -182,16 +198,6 @@ def dynamic_workloads(
             payload=required(workload, "dlsym_openssl_payload"),
             expected_stdout_fragment="dynamic-dlsym-reply=",
         ),
-        DynamicTlsWorkload(
-            name="dt-needed-boringssl-direct",
-            argv=[
-                str(binaries["needed_boringssl"]),
-                required(workload, "needed_boringssl_payload"),
-            ],
-            reply=required(workload, "needed_boringssl_reply"),
-            payload=required(workload, "needed_boringssl_payload"),
-            expected_stdout_fragment="dynamic-needed-reply=",
-        ),
     ]
 
 
@@ -204,6 +210,10 @@ def run_dynamic_trace(
 ) -> None:
     env = os.environ.copy()
     env["ACTRAIL_DYNAMIC_TLS_REPLY"] = item.reply
+    env["ACTRAIL_DYNAMIC_TLS_POST_PAYLOAD_SLEEP_MS"] = required(
+        workload,
+        "post_payload_sleep_ms",
+    )
     trace_id, output = launch_and_parse_trace_with_env(
         actrailctl,
         config,

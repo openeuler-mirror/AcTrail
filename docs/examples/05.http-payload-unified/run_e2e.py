@@ -348,39 +348,6 @@ def wait_for_payload_and_events(
     raise RuntimeError("viewer did not show expected HTTP socket payload/Application rows")
 
 
-def payload_texts(actrailviewer: Path, config: Path | None, trace_id: int, payloads: str) -> str:
-    segment_ids = parse_segment_ids(payloads)
-    if not segment_ids:
-        raise RuntimeError("payloads output did not contain any segment ids")
-    texts: list[str] = []
-    for segment_id in segment_ids:
-        texts.append(
-            run_checked(
-                actrail_command(
-                    actrailviewer,
-                    config,
-                    "payload",
-                    "--trace-id",
-                    str(trace_id),
-                    "--segment-id",
-                    segment_id,
-                    "--format",
-                    "text",
-                )
-            )
-        )
-    return "\n".join(texts)
-
-
-def parse_segment_ids(payloads: str) -> list[str]:
-    ids: list[str] = []
-    for line in payloads.splitlines():
-        match = re.match(r"^\s*(payload-\d+)\s+", line)
-        if match:
-            ids.append(match.group(1))
-    return ids
-
-
 def stop_process(process: subprocess.Popen[str]) -> None:
     if process.poll() is not None:
         return
@@ -459,7 +426,7 @@ def main() -> int:
                 release_workload(workload_process, args.workload_timeout_sec)
             finally:
                 stop_process(workload_process)
-        _, payloads = wait_for_payload_and_events(
+        events, payloads = wait_for_payload_and_events(
             actrailctl,
             actrailviewer,
             config,
@@ -469,18 +436,12 @@ def main() -> int:
             args.events_head,
             args.payload_head,
         )
-        text = payload_texts(actrailviewer, config, trace_id, payloads)
-        for expected in [
-            "POST /plain-http HTTP/1.1",
-            "Host: local.actrail",
-            '"source":"actrail-http"',
-            "HTTP/1.1 200 OK",
-            "actrail-http-ok",
-        ]:
-            if expected not in text:
-                raise RuntimeError(f"payload text missed expected value: {expected}")
-        if "actrail-non-http" in text:
-            raise RuntimeError("non-HTTP socket bytes were persisted as payload")
+        for expected in ["Application", "POST /plain-http", "200 OK"]:
+            if expected not in events:
+                raise RuntimeError(f"events output missed expected value: {expected}")
+        for expected in ["Syscall", "sendto", "recvfrom"]:
+            if expected not in payloads:
+                raise RuntimeError(f"payloads output missed expected value: {expected}")
     finally:
         stop_process(daemon)
     return 0

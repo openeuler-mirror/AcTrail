@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "post_payload_sleep.h"
+
 typedef int (*ssl_write_fn)(void *ssl, const void *buffer, int length);
 typedef int (*ssl_read_fn)(void *ssl, void *buffer, int length);
 
@@ -41,6 +43,9 @@ int main(int argc, char **argv) {
     return 6;
   }
   printf("dynamic-dlsym-reply=%.*s\n", read, reply);
+  if (actrail_sleep_after_payload() != 0) {
+    return 7;
+  }
   dlclose(handle);
   return 0;
 }

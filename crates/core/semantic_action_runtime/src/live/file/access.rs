@@ -154,11 +154,16 @@ impl FileAccessProjector {
         &mut self,
         event: &DomainEvent,
     ) -> LiveSemanticActionOutput {
-        self.observe_boundary(
+        let mut output = self.observe_boundary(
             event.envelope.trace_id,
             &event.envelope.process,
             event.envelope.observed_at,
-        )
+        );
+        if !matches!(event.payload, EventPayload::File(_)) {
+            output.retain_event = true;
+            output.raw_event_consumed = false;
+        }
+        output
     }
 
     pub(in crate::live) fn forget_trace(&mut self, trace_id: TraceId) {

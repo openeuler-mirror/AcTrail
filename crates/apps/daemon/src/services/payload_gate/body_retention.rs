@@ -72,6 +72,13 @@ impl PayloadBodyRetentionGate {
         &mut self,
         segment: &PayloadSegment,
     ) -> PayloadBodyRetentionDecision {
+        if tls_summary_segment(segment) {
+            return PayloadBodyRetentionDecision::remember(
+                PayloadBodyRetention::SummaryOnly,
+                PayloadSemanticLayer::Http,
+                None,
+            );
+        }
         if !plaintext_http_transport(segment) {
             return PayloadBodyRetentionDecision::transient(
                 PayloadBodyRetention::Full,
@@ -354,6 +361,13 @@ struct ClassifiedMessage {
     stream_id: Option<u32>,
     llm: bool,
     summary_only_safe: bool,
+}
+
+fn tls_summary_segment(segment: &PayloadSegment) -> bool {
+    segment
+        .protocol_hint
+        .as_deref()
+        .is_some_and(|hint| hint.starts_with("tls-summary;"))
 }
 
 fn plaintext_http_transport(segment: &PayloadSegment) -> bool {

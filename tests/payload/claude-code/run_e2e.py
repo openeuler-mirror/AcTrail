@@ -37,14 +37,15 @@ from export_checks import (  # noqa: E402
     export_trace_otel,
     require_exported_llm_response_span,
     require_exported_llm_span,
-    require_exported_payload_marker,
+    require_exported_payload_metadata,
     require_llm_exchange,
     require_llm_exchange_graph,
     wait_for_semantic_actions,
 )
 from payload_checks import (  # noqa: E402
     payload_texts,
-    require_non_empty_payload_text,
+    require_no_retained_payload_text,
+    retained_payload_text_bytes,
     require_tls_response_payloads,
     wait_for_llm_payloads,
 )
@@ -122,10 +123,10 @@ def main() -> int:
             payloads,
             int(required(workload_config, "payload_fetch_count")),
         )
-        require_non_empty_payload_text(text)
+        require_no_retained_payload_text(text)
         marker = required(workload_config, "prompt_marker")
         export_document = export_trace_json(actrailviewer, values, resolved_config, trace_id)
-        require_exported_payload_marker(export_document, marker)
+        require_exported_payload_metadata(export_document, accepted_payload_sources(tls_runtime))
         otel_document = export_trace_otel(actrailviewer, values, resolved_config, trace_id)
         require_exported_llm_span(otel_document, marker)
         require_exported_llm_response_span(otel_document)
@@ -136,9 +137,9 @@ def main() -> int:
         print(f"claude_code_trace_id={trace_id}")
         print(f"captured_payload_segments={payload_count}")
         print(f"captured_response_payload_segments={response_payload_count}")
-        print(f"captured_payload_text_bytes={len(text.encode('utf-8'))}")
+        print(f"retained_payload_text_bytes={retained_payload_text_bytes(text)}")
         print(f"exported_payload_nodes={count_payload_nodes(export_document)}")
-        print(f"exported_payload_marker={marker}")
+        print("exported_payload_body=omitted")
         print(f"semantic_action_rows={count_action_rows(actions)}")
         print(f"web_action_tree_reachable={web_tree['reachable_count']}")
         print(f"otel_semantic_spans={count_otel_spans(otel_document)}")

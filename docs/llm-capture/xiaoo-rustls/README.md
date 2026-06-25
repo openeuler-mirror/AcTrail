@@ -74,6 +74,12 @@ payload_tls_binary_path = disabled
 payload_tls_pattern_path = disabled
 payload_tls_sync_runtime_library_path = auto
 payload_tls_sync_match_limit = 8
+payload_tls_sync_flow_control_enabled = true
+payload_tls_sync_flow_sniff_bytes = 65536
+payload_tls_sync_flow_max_header_bytes = 16384
+payload_tls_sync_flow_large_transfer_bytes = 1048576
+payload_tls_sync_flow_unknown_stream_bytes = 65536
+payload_tls_sync_flow_h2_data_probe_bytes = 65536
 ```
 
 ## 4. Run Capture
@@ -96,7 +102,7 @@ Run a real xiaoO LLM prompt through `actrailctl launch`:
   launch \
   --name xiaoo-rustls-llm \
   -- \
-  "$XIAOO_BINARY" run \
+  "$XIAOO_BINARY" --cli run \
     --no-tools \
     --max-turns 1 \
     --prompt "请用一句话回答：xiaoO rustls 采集测试"

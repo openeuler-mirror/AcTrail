@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
+
+BASH_MARKER = "ACTRAIL_AGENT_TREE_OK"
 
 
 def require_claude_exec_span(document: dict) -> None:
@@ -21,9 +22,9 @@ def require_claude_llm_request_span(document: dict) -> None:
         raise RuntimeError("missing claude llm.request span")
 
 
-def require_claude_llm_tool_response_span(document: dict) -> None:
-    if find_claude_llm_tool_response_span(document) is None:
-        raise RuntimeError("missing claude llm.response span with parsed tool_calls_json")
+def require_claude_bash_command_span(document: dict) -> None:
+    if find_claude_bash_command_span(document) is None:
+        raise RuntimeError("missing successful Claude child Bash command span")
 
 
 def require_agent_command_span(document: dict) -> None:
@@ -67,7 +68,7 @@ def evidence_is_complete(document: dict) -> bool:
     return (
         find_claude_exec_span(document) is not None
         and find_claude_llm_request_span(document) is not None
-        and find_claude_llm_tool_response_span(document) is not None
+        and find_claude_bash_command_span(document) is not None
         and find_claude_agent_command_span(document) is not None
     )
 
@@ -144,38 +145,30 @@ def find_claude_llm_request_span(document: dict) -> dict | None:
     return None
 
 
-def find_claude_llm_tool_response_span(document: dict) -> dict | None:
+def find_claude_bash_command_span(document: dict) -> dict | None:
     exec_span = find_claude_exec_span(document)
     if exec_span is None:
         return None
     exec_pid = span_attrs(exec_span).get("process.pid", "")
     for span in spans(document):
         attrs = span_attrs(span)
-        if attrs.get("actrail.action.kind") != "llm.response":
+        if attrs.get("actrail.action.kind") != "command.invocation":
             continue
-        if attrs.get("process.pid") != exec_pid:
+        if attrs.get("actrail.action.status") != "success":
             continue
-        if tool_calls_include_bash_marker(attrs.get("llm.response.tool_calls_json", "")):
+        if attrs.get("actrail.action.completeness") != "complete":
+            continue
+        if attrs.get("process.parent.pid") != exec_pid:
+            continue
+        command_line = attrs.get("command.line", "")
+        if BASH_MARKER not in command_line or "printf" not in command_line:
+            continue
+        executable = executable_basename(
+            attrs.get("process.executable", "") or attrs.get("executable", "")
+        )
+        if executable in {"bash", "sh"} or "bash -c" in command_line or "sh -c" in command_line:
             return span
     return None
-
-
-def tool_calls_include_bash_marker(raw: str) -> bool:
-    if not raw:
-        return False
-    try:
-        tool_calls = json.loads(raw)
-    except json.JSONDecodeError:
-        return False
-    if not isinstance(tool_calls, list):
-        return False
-    for call in tool_calls:
-        function = call.get("function") if isinstance(call, dict) else None
-        if not isinstance(function, dict):
-            continue
-        if function.get("name") == "Bash" and "ACTRAIL_AGENT_TREE_OK" in str(function.get("arguments", "")):
-            return True
-    return False
 
 
 def find_claude_agent_command_span(document: dict) -> dict | None:

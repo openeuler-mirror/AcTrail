@@ -2,6 +2,7 @@
 
 mod config;
 mod decision;
+mod flow_control;
 mod hook;
 mod loader;
 mod maps;

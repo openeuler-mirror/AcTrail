@@ -31,7 +31,7 @@ Docker workload container
 
 ## 整体流程
 
-通过在主机启动 `actraild`，把主机 `/run/actrail` socket 目录挂载到 workload 容器，在容器内执行 `actrailctl launch -- xiaoo run -p "你好"`，然后回到主机侧检查 `actrailviewer`、`actrailweb` 和 `/var/lib/actrail/actrail.sqlite`，验证容器内 Agent 是否被完整观测。
+通过在主机启动 `actraild`，把主机 `/run/actrail` socket 目录挂载到 workload 容器，在容器内执行 `actrailctl launch -- xiaoo --cli run -p "你好"`，然后回到主机侧检查 `actrailviewer`、`actrailweb` 和 `/var/lib/actrail/actrail.sqlite`，验证容器内 Agent 是否被完整观测。
 
 ### 前提假设
 
@@ -127,7 +127,7 @@ docker exec \
   -e NO_PROXY=localhost,127.0.0.1,::1 \
   -e no_proxy=localhost,127.0.0.1,::1 \
   "$AGENT_CONTAINER" \
-  bash -lc 'source /root/api_key.sh && export PATH=/usr/local/bin:/root/.cargo/bin:$PATH && actrailctl launch -- /root/.cargo/bin/xiaoo run -p "你好"'
+  bash -lc 'source /root/api_key.sh && export PATH=/usr/local/bin:/root/.cargo/bin:$PATH && actrailctl launch -- /root/.cargo/bin/xiaoo --cli run -p "你好"'
 ```
 
 说明：这一步在已有 workload 容器内启动被观测 Agent；`actrailctl launch` 会在 child `exec` 前完成 AcTrail 注册、seccomp listener 准备和 TLS-sync preload 配置，真正的采集仍然由主机 `actraild` 完成。
@@ -281,7 +281,7 @@ docker exec -e ACTRAIL_REPO_IN_CONTAINER "$AGENT_CONTAINER" bash -lc '
 操作示例：
 
 ```bash
-docker exec -e HTTP_PROXY="$AGENT_PROXY" -e HTTPS_PROXY="$AGENT_PROXY" -e NO_PROXY=localhost,127.0.0.1,::1 "$AGENT_CONTAINER" bash -lc 'source /actual/key/env/file && export PATH=/usr/local/bin:/actual/agent/bin:$PATH && actrailctl launch -- /actual/agent/bin/xiaoo run -p "你好"'
+docker exec -e HTTP_PROXY="$AGENT_PROXY" -e HTTPS_PROXY="$AGENT_PROXY" -e NO_PROXY=localhost,127.0.0.1,::1 "$AGENT_CONTAINER" bash -lc 'source /actual/key/env/file && export PATH=/usr/local/bin:/actual/agent/bin:$PATH && actrailctl launch -- /actual/agent/bin/xiaoo --cli run -p "你好"'
 ```
 
 说明：密钥文件缺失应该直接失败，不要用 `source xxx || true` 掩盖，否则会把模型请求失败误判成 AcTrail 观测失败。
@@ -312,7 +312,7 @@ docker run --rm --name actrail-xiaoo \
   -e NO_PROXY=localhost,127.0.0.1,::1 \
   -e no_proxy=localhost,127.0.0.1,::1 \
   "$AGENT_RUNTIME_IMAGE" \
-  bash -lc 'source /run/secrets/xiaoo-env && export PATH=/usr/local/bin:/root/.cargo/bin:$PATH && actrailctl launch -- /root/.cargo/bin/xiaoo run -p "你好"'
+  bash -lc 'source /run/secrets/xiaoo-env && export PATH=/usr/local/bin:/root/.cargo/bin:$PATH && actrailctl launch -- /root/.cargo/bin/xiaoo --cli run -p "你好"'
 ```
 
 说明：这是“已有容器模式”的替代方案，不是同一次 trace 还要额外启动的第二个 workload 容器；如果镜像不是按“其他分支情况 6”生成的 `actrail-oe2403-xiaoo-runtime:latest`，把 `AGENT_RUNTIME_IMAGE` 改成你实际已经准备好的镜像名；`XIAOO_CONFIG_DIR` 和 `XIAOO_ENV_FILE` 必须指向主机上实际存在的配置目录和密钥环境文件。

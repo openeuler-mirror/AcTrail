@@ -10,13 +10,16 @@ mod runtime;
 
 pub use env::{
     ENV_BINARY, ENV_ENABLED, ENV_EVENT_FD, ENV_EVENT_SOCKET, ENV_EVENT_WRITE_BUFFER_BYTES,
-    ENV_EVENTS, ENV_MAX_PAYLOAD_BYTES, ENV_PLAN_BUNDLE, ENV_POINTS, ENV_PROVIDER, ENV_REDACTION,
-    ENV_RULES, ENV_TRACE_ID, EventFilter, RedactionMode, RuntimeEnvConfig, runtime_env,
-    runtime_env_for_plans,
+    ENV_EVENTS, ENV_FLOW_CONTROL_ENABLED, ENV_FLOW_H2_DATA_PROBE_BYTES,
+    ENV_FLOW_LARGE_TRANSFER_BYTES, ENV_FLOW_MAX_HEADER_BYTES, ENV_FLOW_SNIFF_BYTES,
+    ENV_FLOW_UNKNOWN_STREAM_BYTES, ENV_MAX_PAYLOAD_BYTES, ENV_PLAN_BUNDLE, ENV_POINTS,
+    ENV_PROVIDER, ENV_REDACTION, ENV_RULES, ENV_TRACE_ID, EventFilter, RedactionMode,
+    RuntimeEnvConfig, RuntimeFlowControlConfig, runtime_env, runtime_env_for_plans,
 };
 pub use error::{SyncError, SyncResult};
 pub use event::{
-    DecisionEvent, PayloadEvent, SyncEvent, decode_event_line, encode_event_line, write_event_line,
+    DecisionEvent, PayloadEvent, SummaryEvent, SyncEvent, decode_event_line, encode_event_line,
+    write_event_line,
 };
 pub use launch::{
     RuntimeLibraryPath, audit_env_value, audit_env_value_for_libraries, audit_libraries_for_plans,

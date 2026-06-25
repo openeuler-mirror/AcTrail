@@ -151,6 +151,10 @@ def parse_segment_ids(payloads: str) -> list[str]:
     return ids
 
 
-def require_non_empty_payload_text(text: str) -> None:
-    if not text:
-        raise RuntimeError("captured payload text was empty")
+def retained_payload_text_bytes(text: str) -> int:
+    return len(text.strip().encode("utf-8"))
+
+
+def require_no_retained_payload_text(text: str) -> None:
+    if retained_payload_text_bytes(text) != 0:
+        raise RuntimeError("captured Claude LLM payload text was retained")

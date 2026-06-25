@@ -296,6 +296,13 @@ fn queued_event_bytes(event: &SyncEvent) -> usize {
             .saturating_add(event.provider.len())
             .saturating_add(event.symbol.len())
             .saturating_add(event.action.len()),
+        SyncEvent::Summary(event) => event
+            .bytes
+            .len()
+            .saturating_add(event.provider.len())
+            .saturating_add(event.symbol.len())
+            .saturating_add(event.reason.len())
+            .saturating_add(event.protocol_hint.len()),
     }
 }
 

@@ -74,6 +74,7 @@ def main() -> int:
             "agent-xiaoo-http-proxy",
             [
                 str(xiaoo_binary),
+                "--cli",
                 "run",
                 "--config",
                 str(xiaoo_config),

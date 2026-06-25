@@ -24,7 +24,9 @@ use model_core::payload::{
 use model_core::process::ProcessIdentity;
 use payload_event::RawPayloadSegment;
 use tls_payload_core::PayloadDirection as SyncDirection;
-use tls_payload_sync::{PayloadEvent, SyncEvent, decode_event_line, decode_plan_lookup_request};
+use tls_payload_sync::{
+    PayloadEvent, SummaryEvent, SyncEvent, decode_event_line, decode_plan_lookup_request,
+};
 use trace_runtime::registry::TraceRuntime;
 
 use self::resolver::TlsSyncPlanResolver;
@@ -212,11 +214,71 @@ impl TlsSyncClient {
                         segments.push(segment);
                     }
                 }
+                SyncEvent::Summary(event) => {
+                    if let Some(segment) =
+                        summary_segment(event, trace_runtime, &mut self.process_cache)?
+                    {
+                        segments.push(segment);
+                    }
+                }
                 SyncEvent::Decision(_) => {}
             }
         }
         Ok(false)
     }
+}
+
+fn summary_segment(
+    event: SummaryEvent,
+    trace_runtime: &TraceRuntime,
+    process_cache: &mut BTreeMap<TlsSyncProcessCacheKey, ProcessIdentity>,
+) -> Result<Option<RawPayloadSegment>, ControlError> {
+    let trace_id = TraceId::new(event.trace_id);
+    let process = match resolve_tls_sync_process(trace_runtime, trace_id, event.pid, process_cache)
+    {
+        Ok(process) => process,
+        Err(error) if stale_namespaced_pid_resolution(&error) => {
+            tracing::warn!(
+                target: "actrail::tls_sync",
+                trace_id = trace_id.get(),
+                namespace_pid = event.pid,
+                error = %error.message,
+                "dropped stale TLS sync summary event after process exit"
+            );
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    };
+    let captured_size = event.bytes.len() as u64;
+    let original_size = event.observed_size.max(captured_size);
+    Ok(Some(RawPayloadSegment {
+        trace_id,
+        observed_at: SystemTime::now(),
+        process: process.clone(),
+        source_boundary: PayloadSourceBoundary::TlsUserSpace,
+        content_state: PayloadContentState::Plaintext,
+        direction: payload_direction(event.direction),
+        stream_key: PayloadStreamKey::new(format!(
+            "tls-sync:{}:{:x}",
+            process.pid, event.stream_key
+        )),
+        sequence: event.sequence,
+        original_size,
+        captured_size,
+        operation_id: event.sequence,
+        operation_offset: 0,
+        operation_original_size: original_size,
+        operation_captured_size: captured_size,
+        operation_completion_state: PayloadOperationCompletionState::Partial,
+        truncation: PayloadTruncationState::Truncated,
+        library: event.provider,
+        symbol: event.symbol,
+        protocol_hint: Some(format!(
+            "tls-summary;reason={};protocol={}",
+            event.reason, event.protocol_hint
+        )),
+        bytes: event.bytes,
+    }))
 }
 
 fn payload_segment(

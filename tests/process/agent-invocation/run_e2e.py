@@ -18,9 +18,9 @@ from pathlib import Path
 from otel_assertions import (
     evidence_is_complete,
     require_agent_command_span,
+    require_claude_bash_command_span,
     require_claude_exec_span,
     require_claude_llm_request_span,
-    require_claude_llm_tool_response_span,
 )
 
 
@@ -73,7 +73,7 @@ def main() -> int:
         )
         require_claude_exec_span(otel)
         require_claude_llm_request_span(otel)
-        require_claude_llm_tool_response_span(otel)
+        require_claude_bash_command_span(otel)
         require_agent_command_span(otel)
         print(f"agent_command_trace_id={launch.trace_id}")
         print(f"otel_output={required(workload, 'otel_output_path')}")
@@ -221,6 +221,7 @@ def run_agent_invocation(
         "xiaoo-calls-claude",
         "--",
         agent_command,
+        "--cli",
         "run",
         "-p",
         prompt,
@@ -325,7 +326,7 @@ def wait_for_otel(
         time.sleep(sleep_sec)
     raise RuntimeError(
         "OTEL export did not contain complete claude exec, llm.request, "
-        "tool-use llm.response, and agent command evidence"
+        "Claude child Bash command, and agent command evidence"
     )
 
 

@@ -5,6 +5,9 @@ use semantic_action::{
 
 use super::test_support::*;
 
+#[path = "process/http.rs"]
+mod http;
+
 const STRUCTURED_REQUEST_SEGMENT_ID: model_core::payload::PayloadSegmentId =
     model_core::payload::PayloadSegmentId::new(800);
 const STRUCTURED_REQUEST_OPERATION_ID: u64 = 800;

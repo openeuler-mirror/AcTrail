@@ -108,6 +108,12 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ProbeCommand
                     "--payload-tls-sync-socket-mode-octal",
                 )?,
                 sync_match_limit: required_u32(&flags, "--payload-tls-sync-match-limit")?,
+                sync_flow_control_enabled: true,
+                sync_flow_sniff_bytes: 65536,
+                sync_flow_max_header_bytes: 16384,
+                sync_flow_large_transfer_bytes: 1048576,
+                sync_flow_unknown_stream_bytes: 65536,
+                sync_flow_h2_data_probe_bytes: 65536,
                 java_agent_enabled: optional_bool(
                     &flags,
                     "--payload-tls-java-agent-enabled",

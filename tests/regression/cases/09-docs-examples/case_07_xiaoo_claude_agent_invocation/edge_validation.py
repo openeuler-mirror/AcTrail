@@ -21,6 +21,9 @@ class EdgeValidation:
     missing: list[str]
 
 
+BASH_MARKER = "ACTRAIL_AGENT_TREE_OK"
+
+
 def validate_agent_invocation_edge(
     path: Path,
     expected_xiaoo: str,
@@ -57,7 +60,7 @@ def validate_agent_invocation_edge(
         expected_child_command,
     )
     child_llm = find_llm_request_span(spans, edge.trace_id, child_pid)
-    child_tool_response = find_llm_tool_response_span(spans, edge.trace_id, child_pid)
+    child_bash_command = find_child_bash_command_span(spans, edge.trace_id, child_pid)
     facts = [
         f"otel_output={path}",
         f"agent command trace_id={edge.trace_id}",
@@ -111,14 +114,15 @@ def validate_agent_invocation_edge(
                 f"child llm.request pid={child_llm.attributes.get('process.pid')}",
             ]
         )
-    if child_tool_response is None:
-        missing.append("matching Claude llm.response span with parsed Bash tool_calls_json")
+    if child_bash_command is None:
+        missing.append("matching Claude child Bash command.invocation with marker")
     else:
         facts.extend(
             [
-                f"child llm.response action_id={child_tool_response.attributes.get('actrail.action.id')}",
-                f"child llm.response pid={child_tool_response.attributes.get('process.pid')}",
-                "child llm.response tool_calls_json includes Bash marker command",
+                f"child Bash command action_id={child_bash_command.attributes.get('actrail.action.id')}",
+                f"child Bash command pid={child_bash_command.attributes.get('process.pid')}",
+                f"child Bash command executable={child_bash_command.attributes.get('process.executable')}",
+                f"child Bash command line={child_bash_command.attributes.get('command.line')}",
             ]
         )
     if edge.attributes.get("agent.invocation.trigger") != "child_llm_request":
@@ -230,39 +234,36 @@ def find_llm_request_span(
     return None
 
 
-def find_llm_tool_response_span(
+def find_child_bash_command_span(
     spans: list[SpanRecord],
     trace_id: str,
     pid: str,
 ) -> SpanRecord | None:
     for span in spans:
         attributes = span.attributes
-        if (
-            span.trace_id == trace_id
-            and attributes.get("actrail.action.kind") == "llm.response"
-            and attributes.get("process.pid") == pid
-            and tool_calls_include_bash_marker(attributes.get("llm.response.tool_calls_json", ""))
-        ):
+        command_line = attributes.get("command.line", "")
+        executable = executable_basename(
+            attributes.get("process.executable", "") or attributes.get("executable", "")
+        )
+        if span.trace_id != trace_id:
+            continue
+        if attributes.get("actrail.action.kind") != "command.invocation":
+            continue
+        if attributes.get("actrail.action.status") != "success":
+            continue
+        if attributes.get("actrail.action.completeness") != "complete":
+            continue
+        if attributes.get("process.parent.pid") != pid:
+            continue
+        if BASH_MARKER not in command_line or "printf" not in command_line:
+            continue
+        if executable in {"bash", "sh"} or "bash -c" in command_line or "sh -c" in command_line:
             return span
     return None
 
 
-def tool_calls_include_bash_marker(raw: str) -> bool:
-    if not raw:
-        return False
-    try:
-        tool_calls = json.loads(raw)
-    except json.JSONDecodeError:
-        return False
-    if not isinstance(tool_calls, list):
-        return False
-    for call in tool_calls:
-        function = call.get("function") if isinstance(call, dict) else None
-        if not isinstance(function, dict):
-            continue
-        if function.get("name") == "Bash" and "ACTRAIL_AGENT_TREE_OK" in str(function.get("arguments", "")):
-            return True
-    return False
+def executable_basename(value: str) -> str:
+    return Path(value).name if value else ""
 
 
 def count_kind(spans: list[SpanRecord], kind: str) -> int:

@@ -248,7 +248,7 @@ Expected result: viewer output contains `Application request POST /plain-http`, 
 
 Doc: `docs/examples/06.xiaoo-tls-capture/README.md`
 
-Purpose: complete LLM request capture from a real `xiaoo run ...` launched through `actrailctl launch`. HTTPS/TLS traffic is captured through `tls-sync`; plain HTTP provider routes can be captured through socket plaintext.
+Purpose: complete LLM request capture from a real `xiaoo --cli run ...` launched through `actrailctl launch`. HTTPS/TLS traffic is captured through `tls-sync`; plain HTTP provider routes can be captured through socket plaintext.
 
 Preconditions:
 
@@ -268,10 +268,10 @@ target/release/actraild --config docs/examples/06.xiaoo-tls-capture/operator.con
 target/release/actrailctl --config docs/examples/06.xiaoo-tls-capture/operator.conf launch \
   --name xiaoo-tls-payload \
   -- \
-  xiaoo run --no-tools --max-turns 1 --prompt "请直接回答：你好"
+  xiaoo --cli run --no-tools --max-turns 1 --prompt "请直接回答：你好"
 ```
 
-If the xiaoO CLI under test uses `-p` instead of `--prompt`, run the same command with `xiaoo run -p "请直接回答：你好"`.
+If the xiaoO CLI under test uses `-p` instead of `--prompt`, run the same command with `xiaoo --cli run -p "请直接回答：你好"`.
 
 Verify:
 

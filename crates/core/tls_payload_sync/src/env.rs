@@ -22,17 +22,47 @@ pub const ENV_TRACE_ID: &str = "TLS_PAYLOAD_SYNC_TRACE_ID";
 pub const ENV_EVENT_SOCKET: &str = "TLS_PAYLOAD_SYNC_EVENT_SOCKET";
 pub const ENV_EVENT_FD: &str = "TLS_PAYLOAD_SYNC_EVENT_FD";
 pub const ENV_EVENT_WRITE_BUFFER_BYTES: &str = "TLS_PAYLOAD_SYNC_EVENT_WRITE_BUFFER_BYTES";
+pub const ENV_FLOW_CONTROL_ENABLED: &str = "TLS_PAYLOAD_SYNC_FLOW_CONTROL_ENABLED";
+pub const ENV_FLOW_SNIFF_BYTES: &str = "TLS_PAYLOAD_SYNC_FLOW_SNIFF_BYTES";
+pub const ENV_FLOW_MAX_HEADER_BYTES: &str = "TLS_PAYLOAD_SYNC_FLOW_MAX_HEADER_BYTES";
+pub const ENV_FLOW_LARGE_TRANSFER_BYTES: &str = "TLS_PAYLOAD_SYNC_FLOW_LARGE_TRANSFER_BYTES";
+pub const ENV_FLOW_UNKNOWN_STREAM_BYTES: &str = "TLS_PAYLOAD_SYNC_FLOW_UNKNOWN_STREAM_BYTES";
+pub const ENV_FLOW_H2_DATA_PROBE_BYTES: &str = "TLS_PAYLOAD_SYNC_FLOW_H2_DATA_PROBE_BYTES";
 
 #[derive(Clone, Debug)]
 pub struct RuntimeEnvConfig {
     pub rules: Vec<RewriteRule>,
     pub max_payload_bytes: usize,
+    pub flow_control: RuntimeFlowControlConfig,
     pub redaction: RedactionMode,
     pub events: EventFilter,
     pub trace_id: Option<u64>,
     pub event_socket_path: Option<PathBuf>,
     pub event_fd: Option<i32>,
     pub event_write_buffer_bytes: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeFlowControlConfig {
+    pub enabled: bool,
+    pub sniff_bytes: usize,
+    pub max_header_bytes: usize,
+    pub large_transfer_bytes: u64,
+    pub unknown_stream_bytes: u64,
+    pub h2_data_probe_bytes: u64,
+}
+
+impl Default for RuntimeFlowControlConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            sniff_bytes: 65536,
+            max_header_bytes: 16384,
+            large_transfer_bytes: 1048576,
+            unknown_stream_bytes: 65536,
+            h2_data_probe_bytes: 65536,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -104,6 +134,34 @@ pub fn runtime_env_for_plans(
         pair(ENV_ENABLED, "1"),
         pair(ENV_RULES, &encode_rules(&config.rules)),
         pair(ENV_MAX_PAYLOAD_BYTES, &config.max_payload_bytes.to_string()),
+        pair(
+            ENV_FLOW_CONTROL_ENABLED,
+            if config.flow_control.enabled {
+                "1"
+            } else {
+                "0"
+            },
+        ),
+        pair(
+            ENV_FLOW_SNIFF_BYTES,
+            &config.flow_control.sniff_bytes.to_string(),
+        ),
+        pair(
+            ENV_FLOW_MAX_HEADER_BYTES,
+            &config.flow_control.max_header_bytes.to_string(),
+        ),
+        pair(
+            ENV_FLOW_LARGE_TRANSFER_BYTES,
+            &config.flow_control.large_transfer_bytes.to_string(),
+        ),
+        pair(
+            ENV_FLOW_UNKNOWN_STREAM_BYTES,
+            &config.flow_control.unknown_stream_bytes.to_string(),
+        ),
+        pair(
+            ENV_FLOW_H2_DATA_PROBE_BYTES,
+            &config.flow_control.h2_data_probe_bytes.to_string(),
+        ),
         pair(ENV_REDACTION, config.redaction.as_str()),
         pair(ENV_EVENTS, &config.events.encode()),
     ];
@@ -166,7 +224,7 @@ mod tests {
 
     use super::{
         ENV_BINARY, ENV_EVENT_FD, ENV_PLAN_BUNDLE, EventFilter, RuntimeEnvConfig,
-        runtime_env_for_plans,
+        RuntimeFlowControlConfig, runtime_env_for_plans,
     };
 
     #[test]
@@ -174,6 +232,7 @@ mod tests {
         let config = RuntimeEnvConfig {
             rules: Vec::new(),
             max_payload_bytes: 4096,
+            flow_control: RuntimeFlowControlConfig::default(),
             redaction: super::RedactionMode::Redact,
             events: EventFilter::none(),
             trace_id: None,
@@ -199,6 +258,7 @@ mod tests {
         let config = RuntimeEnvConfig {
             rules: Vec::new(),
             max_payload_bytes: 4096,
+            flow_control: RuntimeFlowControlConfig::default(),
             redaction: super::RedactionMode::Redact,
             events: EventFilter::none(),
             trace_id: None,
@@ -223,6 +283,7 @@ mod tests {
         let config = RuntimeEnvConfig {
             rules: Vec::new(),
             max_payload_bytes: 4096,
+            flow_control: RuntimeFlowControlConfig::default(),
             redaction: super::RedactionMode::Redact,
             events: EventFilter::none(),
             trace_id: None,

@@ -3,6 +3,8 @@ import { chip, compactChips, compactRows, firstPresent, previewText } from '../d
 const USER_MESSAGE_ROLES = ['user', 'human'];
 const ASSISTANT_MESSAGE_ROLES = ['assistant'];
 const EMPTY_ARRAY = Object.freeze([]);
+const MESSAGE_CONTEXT_DEFAULT_LIMIT = 6;
+const TOOL_LIST_DEFAULT_LIMIT = 8;
 
 export { previewText } from '../detail/insight.js';
 
@@ -165,10 +167,11 @@ function requestInsight(action, requestContent) {
       tone: 'context',
       label: 'Message context',
       title: `${messages.length} message block${messages.length === 1 ? '' : 's'}`,
-      items: messages.slice(-6).map((message, index) => ({
+      itemLimit: MESSAGE_CONTEXT_DEFAULT_LIMIT,
+      items: messages.map((message, index) => ({
         id: `${message.index}-${index}`,
         title: messageTitle(message),
-        text: previewText(message.text, 260),
+        text: message.text,
       })),
     });
   }
@@ -180,7 +183,8 @@ function requestInsight(action, requestContent) {
       title: `${tools.length} tool${tools.length === 1 ? '' : 's'}`,
       collapsible: true,
       defaultCollapsed: true,
-      items: tools.slice(0, 8).map((tool, index) => ({
+      itemLimit: TOOL_LIST_DEFAULT_LIMIT,
+      items: tools.map((tool, index) => ({
         id: `${tool.name}-${index}`,
         title: tool.name,
         subtitle: tool.type,
@@ -218,7 +222,7 @@ function responseInsight(action) {
       title: `${toolCalls.length} proposed call${toolCalls.length === 1 ? '' : 's'}`,
       items: toolCalls.map((call, index) => ({
         id: call.id ?? `${call.name}-${index}`,
-        title: call.name,
+        title: `${call.name} #${index + 1}`,
         subtitle: call.type,
         text: call.argumentsText,
       })),

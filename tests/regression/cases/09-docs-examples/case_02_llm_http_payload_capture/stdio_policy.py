@@ -26,9 +26,15 @@ def curl_stdout_payload_is_stored_for_operator_config(path: Path) -> bool:
 def read_top_level_key_values(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     section = ""
+    array_depth = 0
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
+            continue
+        if array_depth:
+            array_depth += line.count("[") - line.count("]")
+            if array_depth < 0:
+                raise RuntimeError(f"invalid operator config array in {path}: {raw_line!r}")
             continue
         if line.startswith("[") and line.endswith("]"):
             section = line.strip("[]")
@@ -36,9 +42,14 @@ def read_top_level_key_values(path: Path) -> dict[str, str]:
         key, separator, value = line.partition("=")
         if separator != "=":
             raise RuntimeError(f"invalid operator config line: {raw_line!r}")
+        array_depth = value.count("[") - value.count("]")
+        if array_depth < 0:
+            raise RuntimeError(f"invalid operator config array in {path}: {raw_line!r}")
         remapped = operator_config_key(section, key.strip())
         if remapped is not None:
             values[remapped] = unquote(value.strip())
+    if array_depth:
+        raise RuntimeError(f"unterminated operator config array in {path}")
     return values
 
 

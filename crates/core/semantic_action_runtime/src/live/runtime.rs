@@ -1,14 +1,17 @@
 //! Live semantic action runtime.
 
+use std::collections::{BTreeMap, VecDeque};
+use std::time::SystemTime;
+
 use config_core::daemon::{AgentInvocationConfig, FileObservationConfig, SemanticRetentionConfig};
 use model_core::event::{DomainEvent, EventPayload};
 use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
+use model_core::process::ProcessIdentity;
 use semantic_action::{
     FileObservationPath, FilePathSetWrite, LlmRequestContentWrite, SemanticAction,
-    SemanticActionKind, SemanticActionLink,
+    SemanticActionKind, SemanticActionLink, attr_keys as attrs,
 };
-use std::time::SystemTime;
 
 use super::actions::{
     enforcement_action, file_modify_action, http_message_action, is_file_modify_operation,
@@ -20,10 +23,17 @@ use super::file::FileAccessProjector;
 use super::links::ActionLinkProjector;
 use super::llm::LiveLlmProjector;
 
+const HTTP_DIRECTION_ATTR: &str = "direction";
+const HTTP_PAYLOAD_SEQUENCE_ATTR: &str = "payload_sequence";
+const HTTP_STATUS_CODE_ATTR: &str = "status_code";
+const HTTP_STREAM_ID_ATTR: &str = "stream_id";
+const HTTP_STREAM_KEY_ATTR: &str = "stream_key";
+
 pub struct LiveSemanticActionRuntime {
     agent: AgentProjector,
     command: CommandProjector,
     file_access: FileAccessProjector,
+    http_exchange: HttpExchangeTracker,
     llm: LiveLlmProjector,
     links: ActionLinkProjector,
 }
@@ -83,6 +93,7 @@ impl LiveSemanticActionRuntime {
             agent: AgentProjector::new(enabled),
             command: CommandProjector::new(),
             file_access: FileAccessProjector::new(file_observation),
+            http_exchange: HttpExchangeTracker::default(),
             llm: LiveLlmProjector::new(semantic_retention),
             links: ActionLinkProjector::new(),
         }
@@ -169,7 +180,8 @@ impl LiveSemanticActionRuntime {
                 output
             }
             EventPayload::Application(payload) if is_http_protocol(&payload.protocol) => {
-                let action = http_message_action(event);
+                let mut action = http_message_action(event);
+                self.http_exchange.observe_http_message(&mut action);
                 output.actions.push(action.clone());
                 output
                     .actions
@@ -237,6 +249,7 @@ impl LiveSemanticActionRuntime {
         self.agent.forget_trace(trace_id);
         self.command.forget_trace(trace_id);
         self.file_access.forget_trace(trace_id);
+        self.http_exchange.forget_trace(trace_id);
         self.llm.forget_trace(trace_id);
         self.links.forget_trace(trace_id);
     }
@@ -261,6 +274,124 @@ impl LiveSemanticActionRuntime {
             raw_event_consumed: false,
         }
     }
+}
+
+#[derive(Default)]
+struct HttpExchangeTracker {
+    pending_by_stream: BTreeMap<HttpExchangeKey, VecDeque<PendingHttpRequest>>,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct HttpExchangeKey {
+    trace_id: TraceId,
+    process: ProcessIdentity,
+    stream_key: String,
+    stream_id: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct PendingHttpRequest {
+    action_id: String,
+    sequence: u64,
+}
+
+impl HttpExchangeTracker {
+    fn observe_http_message(&mut self, action: &mut SemanticAction) {
+        match http_message_direction_operation(action) {
+            Some(("outbound", "request")) => self.observe_request(action),
+            Some(("inbound", "response")) => self.annotate_response(action),
+            _ => {}
+        }
+    }
+
+    fn forget_trace(&mut self, trace_id: TraceId) {
+        self.pending_by_stream
+            .retain(|key, _| key.trace_id != trace_id);
+    }
+
+    fn observe_request(&mut self, action: &SemanticAction) {
+        let Some(key) = HttpExchangeKey::from_http_message(action) else {
+            return;
+        };
+        let Some(sequence) = http_payload_sequence(action) else {
+            return;
+        };
+        self.pending_by_stream
+            .entry(key)
+            .or_default()
+            .push_back(PendingHttpRequest {
+                action_id: action.action_id.clone(),
+                sequence,
+            });
+    }
+
+    fn annotate_response(&mut self, action: &mut SemanticAction) {
+        let Some(status_code) = http_status_code(action) else {
+            return;
+        };
+        let Some(response_sequence) = http_payload_sequence(action) else {
+            return;
+        };
+        let Some(key) = HttpExchangeKey::from_http_message(action) else {
+            return;
+        };
+        let Some(requests) = self.pending_by_stream.get_mut(&key) else {
+            return;
+        };
+        let Some(request) = requests.front() else {
+            return;
+        };
+        if request.sequence > response_sequence {
+            return;
+        }
+        action.attributes.insert(
+            attrs::http_response::REQUEST_ACTION_ID.to_string(),
+            request.action_id.clone(),
+        );
+        if final_http_response(status_code) {
+            requests.pop_front();
+        }
+        if requests.is_empty() {
+            self.pending_by_stream.remove(&key);
+        }
+    }
+}
+
+impl HttpExchangeKey {
+    fn from_http_message(action: &SemanticAction) -> Option<Self> {
+        if action.kind != SemanticActionKind::HttpMessage {
+            return None;
+        }
+        Some(Self {
+            trace_id: action.trace_id,
+            process: action.process.clone(),
+            stream_key: action.attributes.get(HTTP_STREAM_KEY_ATTR)?.clone(),
+            stream_id: action.attributes.get(HTTP_STREAM_ID_ATTR).cloned(),
+        })
+    }
+}
+
+fn http_message_direction_operation(action: &SemanticAction) -> Option<(&str, &str)> {
+    Some((
+        action.attributes.get(HTTP_DIRECTION_ATTR)?.as_str(),
+        action.attributes.get(attrs::http::OPERATION)?.as_str(),
+    ))
+}
+
+fn http_payload_sequence(action: &SemanticAction) -> Option<u64> {
+    action
+        .attributes
+        .get(HTTP_PAYLOAD_SEQUENCE_ATTR)?
+        .parse()
+        .ok()
+}
+
+fn http_status_code(action: &SemanticAction) -> Option<u16> {
+    action.attributes.get(HTTP_STATUS_CODE_ATTR)?.parse().ok()
+}
+
+fn final_http_response(status_code: u16) -> bool {
+    !(100..=199).contains(&status_code) || status_code == 101
 }
 
 fn event_projects_semantic_action_boundary(event: &DomainEvent) -> bool {

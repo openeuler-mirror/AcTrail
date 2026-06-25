@@ -30,9 +30,15 @@ def repo_root() -> Path:
 def read_config(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     section = ""
+    array_depth = 0
     for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
+            continue
+        if array_depth:
+            array_depth += line.count("[") - line.count("]")
+            if array_depth < 0:
+                raise RuntimeError(f"invalid config array in {path}: {raw}")
             continue
         if line.startswith("[") and line.endswith("]"):
             section = line.strip("[]")
@@ -40,15 +46,24 @@ def read_config(path: Path) -> dict[str, str]:
         key, separator, value = line.partition("=")
         if not separator:
             raise RuntimeError(f"invalid config line in {path}: {raw}")
+        array_depth = value.count("[") - value.count("]")
+        if array_depth < 0:
+            raise RuntimeError(f"invalid config array in {path}: {raw}")
         remapped = operator_config_key(section, key.strip())
         if remapped is not None:
             values[remapped] = unquote(value.strip())
+    if array_depth:
+        raise RuntimeError(f"unterminated config array in {path}")
     return values
 
 
 def operator_config_key(section: str, key: str) -> str | None:
     if section == "control" and key in {"socket_path", "pid_file", "log_path"}:
         return key
+    if section == "web" and key == "listen_addr":
+        return "web_listen_addr"
+    if section == "web" and key == "request_read_timeout_ms":
+        return "web_request_read_timeout_ms"
     if section == "storage.sqlite" and key == "path":
         return "storage_sqlite_path"
     if section == "export.snapshot" and key == "directory":

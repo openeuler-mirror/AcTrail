@@ -54,13 +54,13 @@ target/release/actrailctl --config docs/examples/06.xiaoo-tls-capture/operator.c
 target/release/actrailctl --config docs/examples/06.xiaoo-tls-capture/operator.conf launch \
   --name xiaoo-tls-payload \
   -- \
-  xiaoo run --no-tools --max-turns 1 --prompt "请直接回答：你好"
+  xiaoo --cli run --no-tools --max-turns 1 --prompt "请直接回答：你好"
 ```
 
 记录输出中的 trace id，例如 `trace-1`。如果被测 xiaoO CLI 使用 `-p` 传入 prompt，可将最后一行替换成：
 
 ```bash
-xiaoo run -p "请直接回答：你好"
+xiaoo --cli run -p "请直接回答：你好"
 ```
 
 ## 查看结果

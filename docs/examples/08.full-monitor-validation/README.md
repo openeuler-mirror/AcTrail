@@ -162,7 +162,7 @@ xiaoo 示例：
 ```bash
 target/release/actrailctl --config docs/examples/08.full-monitor-validation/operator.conf launch \
   --name full-monitor-xiaoo \
-  -- xiaoo run -p "请直接回答：“你好”"
+  -- xiaoo --cli run -p "请直接回答：“你好”"
 ```
 
 直接 HTTPS curl 验证：
@@ -276,6 +276,12 @@ rm -rf /tmp/actrail-full-monitor
 - `payload.tls.ring_buffer_bytes = 8388608`：保留给非 sync backend 和诊断尺寸兼容。
 - `payload.tls.retention_max_bytes_per_trace = 104857600`：每个 trace 的 TLS payload 保留预算。
 - `payload.tls.sync_match_limit = 8`：finder fast 每个 pattern 最多检查的匹配数量。
+- `payload.tls.sync_flow_control_enabled = true`：TLS runtime 侧启用快速大传输识别，非 LLM 大下载切换为 summary-only 上报。
+- `payload.tls.sync_flow_sniff_bytes = 65536`：每个 TLS stream 用于协议/内容快速判断的最大嗅探窗口。
+- `payload.tls.sync_flow_max_header_bytes = 16384`：HTTP/1 header boundary 搜索上限。
+- `payload.tls.sync_flow_large_transfer_bytes = 1048576`：Content-Length 或 HTTP/2 DATA 累计超过该阈值后判定为大传输。
+- `payload.tls.sync_flow_unknown_stream_bytes = 65536`：无法证明是 HTTP/文本流量时的最大继续采集窗口。
+- `payload.tls.sync_flow_h2_data_probe_bytes = 65536`：HTTP/2 DATA frame 的内容类型探测窗口。
 - `payload.socket.capture_backend = bpf-copy-seccomp-fallback`：socket payload 使用 BPF copy，并对大操作使用 seccomp fallback。
 - `payload.socket.http_sniff_max_bytes = 65536`：socket 明文 HTTP 嗅探预算。
 - `application.http.sse_data_policy = preview`：持久化 SSE data preview。

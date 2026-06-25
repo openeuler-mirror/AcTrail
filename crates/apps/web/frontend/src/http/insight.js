@@ -40,6 +40,11 @@ export function buildHttpDetailInsight(detail) {
       contentType: isResponse ? attrs.content_type : null,
       contentLength: isResponse ? attrs.content_length : null,
       bodyFormat: attrs['http.response.body_format'],
+      requestActionId: isResponse ? attrs['http.request.action_id'] : null,
+    }),
+    bodyBlock({
+      bodyText: attrs['http.body_text'],
+      operation,
     }),
   ]);
 
@@ -97,13 +102,14 @@ function endpointBlock({
   };
 }
 
-function statusBlock({ statusCode, reason, contentType, contentLength, bodyFormat }) {
-  if (!statusCode && !reason && !bodyFormat) {
+function statusBlock({ statusCode, reason, contentType, contentLength, bodyFormat, requestActionId }) {
+  if (!statusCode && !reason && !bodyFormat && !requestActionId) {
     return null;
   }
   const rows = compactRows({
     status_code: statusCode,
     reason,
+    request_action_id: requestActionId,
     content_type: contentType,
     content_length: contentLength,
     body_format: bodyFormat,
@@ -117,6 +123,20 @@ function statusBlock({ statusCode, reason, contentType, contentLength, bodyForma
     label: 'Response',
     title: statusCode ? `${statusCode}${reason ? ` ${reason}` : ''}` : 'response metadata',
     rows,
+  };
+}
+
+function bodyBlock({ bodyText, operation }) {
+  const text = String(bodyText ?? '').trim();
+  if (!text) {
+    return null;
+  }
+  return {
+    id: 'http-body',
+    tone: 'http',
+    label: 'Body',
+    title: operation === 'response' ? 'captured response body' : 'captured request body',
+    text,
   };
 }
 

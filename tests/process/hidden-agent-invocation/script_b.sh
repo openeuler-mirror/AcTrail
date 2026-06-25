@@ -12,7 +12,7 @@ max_turns=$3
 no_tools=$4
 prompt=$5
 
-args=(run --provider "$provider" --model "$model" --max-turns "$max_turns")
+args=(--cli run --provider "$provider" --model "$model" --max-turns "$max_turns")
 if [ "$no_tools" = "true" ]; then
   args+=(--no-tools)
 elif [ "$no_tools" != "false" ]; then

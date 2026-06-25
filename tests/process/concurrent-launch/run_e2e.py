@@ -339,7 +339,7 @@ def workload_command(
     if xiaoo is None:
         raise RuntimeError("xiaoo workload selected without a xiaoo binary")
     prompt = args.xiaoo_prompt_template.format(index=index, marker=marker)
-    command = [str(xiaoo), "run"]
+    command = [str(xiaoo), "--cli", "run"]
     if xiaoo_config is not None:
         command.extend(["--config", str(xiaoo_config)])
     if not args.xiaoo_enable_tools:
