@@ -25,21 +25,35 @@ def curl_stdout_payload_is_stored_for_operator_config(path: Path) -> bool:
 
 def read_top_level_key_values(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
-    in_section = False
+    section = ""
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
         if line.startswith("[") and line.endswith("]"):
-            in_section = True
-            continue
-        if in_section:
+            section = line.strip("[]")
             continue
         key, separator, value = line.partition("=")
         if separator != "=":
-            raise RuntimeError(f"invalid top-level operator config line: {raw_line!r}")
-        values[key.strip()] = value.strip()
+            raise RuntimeError(f"invalid operator config line: {raw_line!r}")
+        remapped = operator_config_key(section, key.strip())
+        if remapped is not None:
+            values[remapped] = unquote(value.strip())
     return values
+
+
+def operator_config_key(section: str, key: str) -> str | None:
+    if section == "payload.stdio":
+        return f"payload_stdio_{key}"
+    if not section:
+        return key
+    return None
+
+
+def unquote(value: str) -> str:
+    if len(value) >= 2 and value.startswith('"') and value.endswith('"'):
+        return value[1:-1]
+    return value
 
 
 def config_bool(config: Mapping[str, str], key: str) -> bool:

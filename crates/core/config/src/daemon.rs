@@ -1,7 +1,9 @@
 //! Daemon-wide configuration for storage, control plane, collectors, and diagnostics.
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::time::Duration;
 
 use storage_factory::StorageConfig;
 
@@ -23,8 +25,6 @@ mod payload;
 mod process;
 #[path = "daemon/resource.rs"]
 mod resource;
-#[path = "daemon/values.rs"]
-mod values;
 
 pub use agent::{
     AgentInvocationConfig, Http2DataContentRetention, HttpBodyRetention, HttpHeadersRetention,
@@ -52,7 +52,7 @@ pub use logging::{
 };
 pub use operator::{
     DEFAULT_ACTIVE_TRACE_MAX, DEFAULT_CONTROL_PENDING_CONNECTION_MAX, DEFAULT_OPERATOR_CONFIG_PATH,
-    OPERATOR_CONFIG_TEMPLATE, OperatorConfig, OperatorConfigInitStatus,
+    OperatorConfig, OperatorConfigInitStatus,
 };
 pub use payload::{
     DisabledOrPath, PayloadConfig, PayloadRedactionPolicy, PayloadSocketCaptureBackend,
@@ -71,6 +71,12 @@ pub const DEFAULT_FINALIZATION_POLL_INTERVAL_MS: u64 = 100;
 pub struct TraceFinalizationConfig {
     pub traces_per_cycle: u32,
     pub poll_interval_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WebServerConfig {
+    pub listen_addr: SocketAddr,
+    pub request_read_timeout: Option<Duration>,
 }
 
 impl Default for TraceFinalizationConfig {

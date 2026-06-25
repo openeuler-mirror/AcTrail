@@ -64,10 +64,10 @@ python3 docs/examples/04.fanotify-enforcement-e2e/run_e2e.py \
 核心配置由脚本生成，关键项等价于：
 
 ```conf
-profile_name = fanotify-enforcement-e2e
-required_capability = enforcement-file-permission-fanotify
+capture.profile_name = fanotify-enforcement-e2e
+capture.capabilities includes enforcement-file-permission-fanotify
 
-ebpf_enabled = false
+ebpf.enabled = false
 enforcement_enabled = true
 enforcement_backend = fanotify
 enforcement_scope = trace

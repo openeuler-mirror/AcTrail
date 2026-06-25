@@ -59,7 +59,7 @@ def write_resolved_operator_config(
         replacements = {
             TLS_ENABLED_PLACEHOLDER: "true",
             SECCOMP_NOTIFY_PLACEHOLDER: "true",
-            TLS_REQUIRED_CAPABILITY_PLACEHOLDER: "required_capability = tls-plaintext-payload",
+            TLS_REQUIRED_CAPABILITY_PLACEHOLDER: '"tls-plaintext-payload",',
         }
     for placeholder, value in replacements.items():
         if placeholder not in raw:

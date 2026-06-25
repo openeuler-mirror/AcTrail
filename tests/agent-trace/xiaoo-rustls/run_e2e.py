@@ -163,7 +163,7 @@ def xiaoo_config_replacements() -> dict[str, str]:
     return {
         "__XIAOO_TLS_ENABLED__": "true",
         "__XIAOO_SECCOMP_NOTIFY_ENABLED__": "true",
-        "__XIAOO_TLS_REQUIRED_CAPABILITY__": "required_capability = tls-plaintext-payload",
+        "__XIAOO_TLS_REQUIRED_CAPABILITY__": '"tls-plaintext-payload",',
     }
 
 

@@ -1,8 +1,6 @@
 use std::collections::BTreeSet;
 
-use config_core::daemon::{
-    EbpfCollectorConfig, OPERATOR_CONFIG_TEMPLATE, OperatorConfig, PayloadConfig,
-};
+use config_core::daemon::{EbpfCollectorConfig, OperatorConfig, PayloadConfig};
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 
 use super::AttachPlan;
@@ -376,13 +374,15 @@ fn file_path_programs_attach_before_process_programs() {
 }
 
 fn config() -> EbpfCollectorConfig {
-    OperatorConfig::parse(OPERATOR_CONFIG_TEMPLATE)
-        .expect("operator config template parses")
-        .ebpf_config
+    default_operator_config().ebpf_config
 }
 
 fn payload_config() -> PayloadConfig {
-    OperatorConfig::parse(OPERATOR_CONFIG_TEMPLATE)
-        .expect("operator config template parses")
-        .payload_config
+    default_operator_config().payload_config
+}
+
+fn default_operator_config() -> OperatorConfig {
+    let raw =
+        OperatorConfig::default_hierarchical_template().expect("operator config template renders");
+    OperatorConfig::parse(&raw).expect("operator config template parses")
 }

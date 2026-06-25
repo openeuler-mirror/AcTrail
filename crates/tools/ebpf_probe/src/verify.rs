@@ -10,9 +10,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use config_core::capture_profile::CaptureProfile;
-use config_core::daemon::{
-    EbpfCollectorConfig, OPERATOR_CONFIG_TEMPLATE, OperatorConfig, PayloadConfig,
-};
+use config_core::daemon::{EbpfCollectorConfig, OperatorConfig, PayloadConfig};
 use config_core::provider_rules::ProviderRuleSetConfig;
 use control_contract::command::{ControlCommand, ProcessRef, TrackAddCommand};
 use control_contract::reply::ControlReply;
@@ -34,7 +32,9 @@ pub fn run_live_verification(
         rules_path: config.provider_rules_path.clone(),
         unknown_provider_label: config.provider_unknown_provider_label.clone(),
     };
-    let seccomp_defaults = OperatorConfig::parse(OPERATOR_CONFIG_TEMPLATE)
+    let default_operator_config = OperatorConfig::default_hierarchical_template()
+        .map_err(|error| format!("render built-in operator defaults: {error}"))?;
+    let seccomp_defaults = OperatorConfig::parse(&default_operator_config)
         .map_err(|error| format!("parse built-in seccomp defaults: {error}"))?;
     let storage_config = StorageConfig::sqlite_path(&config.storage_path);
     let mut server = LocalDaemonServer::build_with_provider_rule_set(

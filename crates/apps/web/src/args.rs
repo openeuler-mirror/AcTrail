@@ -4,7 +4,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::time::Duration;
 
-use config_core::daemon::DEFAULT_OPERATOR_CONFIG_PATH;
+use config_core::daemon::{DEFAULT_OPERATOR_CONFIG_PATH, OperatorConfig};
 use storage_factory::StorageConfig;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -71,14 +71,11 @@ fn parse_flags(
 }
 
 fn load_config(path: &Path) -> Result<WebConfig, String> {
-    let raw = std::fs::read_to_string(path)
-        .map_err(|error| format!("read {}: {error}", path.display()))?;
-    let storage = StorageConfig::parse(&raw)?;
-    let values = ConfigValues::parse(&raw)?;
+    let config = OperatorConfig::load(path)?;
     Ok(WebConfig {
-        storage,
-        listen_addr: values.required_socket_addr("web_listen_addr")?,
-        request_read_timeout: values.required_duration_millis("web_request_read_timeout_ms")?,
+        storage: config.storage,
+        listen_addr: config.web.listen_addr,
+        request_read_timeout: config.web.request_read_timeout,
     })
 }
 
@@ -162,105 +159,6 @@ fn parse_addr(key: &'static str, raw: &str) -> Result<IpAddr, String> {
 fn parse_port(key: &'static str, raw: &str) -> Result<u16, String> {
     raw.parse::<u16>()
         .map_err(|error| format!("invalid {key}: {error}"))
-}
-
-struct ConfigValues {
-    values: std::collections::BTreeMap<String, String>,
-}
-
-impl ConfigValues {
-    fn parse(raw: &str) -> Result<Self, String> {
-        let mut values = std::collections::BTreeMap::new();
-        let mut inside_export_section = false;
-        for (line_index, line) in raw.lines().enumerate() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
-            }
-            if let Some(is_export_section) = parse_section_header(trimmed, line_index + 1)? {
-                inside_export_section = is_export_section;
-                continue;
-            }
-            if inside_export_section {
-                continue;
-            }
-            let (key, value) = trimmed
-                .split_once('=')
-                .ok_or_else(|| format!("invalid config line {}", line_index + 1))?;
-            let key = key.trim().to_string();
-            let value = unquote(value.trim())?;
-            if !matches!(
-                key.as_str(),
-                "web_listen_addr" | "web_request_read_timeout_ms"
-            ) {
-                continue;
-            }
-            if values.insert(key.clone(), value).is_some() {
-                return Err(format!("duplicate config key {key}"));
-            }
-        }
-        Ok(Self { values })
-    }
-
-    fn required(&self, key: &'static str) -> Result<String, String> {
-        self.values
-            .get(key)
-            .cloned()
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| format!("missing config key {key}"))
-    }
-
-    fn required_duration_millis(&self, key: &'static str) -> Result<Option<Duration>, String> {
-        parse_duration_millis(key, &self.required(key)?)
-    }
-
-    fn required_socket_addr(&self, key: &'static str) -> Result<SocketAddr, String> {
-        self.required(key)?
-            .parse::<SocketAddr>()
-            .map_err(|error| format!("invalid {key}: {error}"))
-    }
-}
-
-fn parse_section_header(line: &str, line_number: usize) -> Result<Option<bool>, String> {
-    if line.starts_with("[[") {
-        if !line.ends_with("]]") {
-            return Err(format!("invalid config section line {line_number}"));
-        }
-        if line == "[[export.routes]]" {
-            return Ok(Some(true));
-        }
-        return Err(format!("unsupported config section line {line_number}"));
-    }
-    if line.ends_with("]]") {
-        return Err(format!("invalid config section line {line_number}"));
-    }
-    if !(line.starts_with('[') || line.ends_with(']')) {
-        return Ok(None);
-    }
-    if !(line.starts_with('[') && line.ends_with(']')) {
-        return Err(format!("invalid config section line {line_number}"));
-    }
-    let section = &line[1..line.len() - 1];
-    if section == "export"
-        || section.starts_with("export.routes.")
-        || section == "semantic_retention"
-        || section.starts_with("semantic_retention.")
-        || section == "file_observation"
-        || section.starts_with("file_observation.")
-    {
-        return Ok(Some(true));
-    }
-    Err(format!("unsupported config section line {line_number}"))
-}
-
-fn unquote(value: &str) -> Result<String, String> {
-    if value.starts_with('"') || value.ends_with('"') {
-        if !(value.starts_with('"') && value.ends_with('"') && value.len() >= 2) {
-            return Err(format!("invalid quoted value {value}"));
-        }
-        return Ok(value[1..value.len() - 1].to_string());
-    }
-    Ok(value.to_string())
 }
 
 #[cfg(test)]

@@ -12,8 +12,8 @@
 这份配置会启用：
 
 - eBPF 进程生命周期、网络传输、文件路径、mmap、pipe/FIFO、Unix socket 观测。
-- TLS 明文 payload 采集，backend 为 `payload_tls_capture_backend = tls-sync`。
-- socket 明文 payload 采集，backend 为 `payload_socket_capture_backend = bpf-copy-seccomp-fallback`。
+- TLS 明文 payload 采集，backend 为 `payload.tls.capture_backend = tls-sync`。
+- socket 明文 payload 采集，backend 为 `payload.socket.capture_backend = bpf-copy-seccomp-fallback`。
 - stdin/stdout/stderr payload 采集。
 - HTTP/1.x、HTTP/2 frame/data、SSE preview 投影。
 - process seccomp exec context 和 LLM-evidence-driven agent identity 检测。
@@ -28,17 +28,17 @@
 此配置为了便于验证原始 payload，设置为：
 
 ```conf
-payload_tls_redaction_policy = disabled
-payload_stdio_redaction_policy = disabled
-payload_socket_redaction_policy = disabled
+payload.tls.redaction_policy = disabled
+payload.stdio.redaction_policy = disabled
+payload.socket.redaction_policy = disabled
 ```
 
 这会把 API key、Authorization header 等敏感内容持久化到 `/tmp/actrail-full-monitor/actrail.sqlite`。如果要降低风险，改成：
 
 ```conf
-payload_tls_redaction_policy = authorization-header
-payload_stdio_redaction_policy = authorization-header
-payload_socket_redaction_policy = authorization-header
+payload.tls.redaction_policy = authorization-header
+payload.stdio.redaction_policy = authorization-header
+payload.socket.redaction_policy = authorization-header
 ```
 
 ## 构建
@@ -270,18 +270,18 @@ rm -rf /tmp/actrail-full-monitor
 - `suppressed_fd_max_entries = 8192`：eBPF observation suppression fd map 容量，用于豁免 AcTrail 内部传输 fd。
 - `suppressed_fd_index_slots_per_process = 64`：每个进程用于 suppressed fd fork 继承和 exit 清理的索引槽数；该索引避免依赖低内核不支持的 eBPF map iteration helper。
 - `file_path_max_bytes = 255`：BPF 文件路径事件拷贝上限，不能超过当前编译 ABI 最大值。
-- `payload_tls_capture_backend = tls-sync`：通过 preload hook 同步采集 TLS 明文。
-- `payload_tls_max_operation_bytes = 16777216`：sync runtime 可接受的单次 TLS payload 操作上限；本例按 16MiB 配置，避免较大 LLM request 在进入语义投影前被截断，同时避免单次操作过度消耗每 trace 的 payload retention 预算。
+- `payload.tls.capture_backend = tls-sync`：通过 preload hook 同步采集 TLS 明文。
+- `payload.tls.max_operation_bytes = 16777216`：sync runtime 可接受的单次 TLS payload 操作上限；本例按 16MiB 配置，避免较大 LLM request 在进入语义投影前被截断，同时避免单次操作过度消耗每 trace 的 payload retention 预算。
 - TLS/HTTP body retention：观测到的 LLM request/response 保留 body 供语义投影使用；普通非 LLM HTTP payload 只保留 HTTP/application summary fact，不把 body bytes 写入 `payload_segments`。
-- `payload_tls_ring_buffer_bytes = 8388608`：保留给非 sync backend 和诊断尺寸兼容。
-- `payload_tls_retention_max_bytes_per_trace = 104857600`：每个 trace 的 TLS payload 保留预算。
-- `payload_tls_sync_match_limit = 8`：finder fast 每个 pattern 最多检查的匹配数量。
-- `payload_socket_capture_backend = bpf-copy-seccomp-fallback`：socket payload 使用 BPF copy，并对大操作使用 seccomp fallback。
-- `payload_socket_http_sniff_max_bytes = 65536`：socket 明文 HTTP 嗅探预算。
-- `application_http_sse_data_policy = preview`：持久化 SSE data preview。
-- `application_http_sse_max_data_bytes = 65536`：单条 SSE data preview 的大小预算。
-- `application_http2_max_frame_bytes = 65536`：HTTP/2 analyzer 接受的 frame 大小。
-- `application_http2_max_data_preview_bytes = 65536`：HTTP/2 DATA preview 大小预算；同时作为 HTTP/2 body retention 的 LLM 分类探测窗口，窗口内仍不能证明是 LLM 的 stream 会进入 summary-only，避免 Claude TUI 下载类大 payload 被完整入库。
-- `process_seccomp_max_args = 128`：exec argv 捕获数量上限。
-- `process_seccomp_max_arg_bytes = 8192`：exec argv 内容捕获字节上限。
-- `resource_metrics_interval_ms = 1000`：资源指标采样周期。
+- `payload.tls.ring_buffer_bytes = 8388608`：保留给非 sync backend 和诊断尺寸兼容。
+- `payload.tls.retention_max_bytes_per_trace = 104857600`：每个 trace 的 TLS payload 保留预算。
+- `payload.tls.sync_match_limit = 8`：finder fast 每个 pattern 最多检查的匹配数量。
+- `payload.socket.capture_backend = bpf-copy-seccomp-fallback`：socket payload 使用 BPF copy，并对大操作使用 seccomp fallback。
+- `payload.socket.http_sniff_max_bytes = 65536`：socket 明文 HTTP 嗅探预算。
+- `application.http.sse_data_policy = preview`：持久化 SSE data preview。
+- `application.http.sse_max_data_bytes = 65536`：单条 SSE data preview 的大小预算。
+- `application.http2.max_frame_bytes = 65536`：HTTP/2 analyzer 接受的 frame 大小。
+- `application.http2.max_data_preview_bytes = 65536`：HTTP/2 DATA preview 大小预算；同时作为 HTTP/2 body retention 的 LLM 分类探测窗口，窗口内仍不能证明是 LLM 的 stream 会进入 summary-only，避免 Claude TUI 下载类大 payload 被完整入库。
+- `process_seccomp.max_args = 128`：exec argv 捕获数量上限。
+- `process_seccomp.max_arg_bytes = 8192`：exec argv 内容捕获字节上限。
+- `resource_metrics.interval_ms = 1000`：资源指标采样周期。

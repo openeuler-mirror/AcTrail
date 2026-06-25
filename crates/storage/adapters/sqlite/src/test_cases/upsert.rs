@@ -6,8 +6,9 @@ use model_core::process::ProcessIdentity;
 use semantic_action::{
     FilePathSetState, FilePathSetWrite, LlmRequestBlock, LlmRequestBlockRef,
     LlmRequestContentWrite, LlmRequestManifest, SemanticAction, SemanticActionCompleteness,
-    SemanticActionKind, SemanticActionReadStore, SemanticActionStatus, SemanticActionWriteStore,
-    SemanticEvidence, SemanticEvidenceKind, file_path_set_identity_for_paths,
+    SemanticActionKind, SemanticActionLink, SemanticActionLinkConfidence, SemanticActionLinkRole,
+    SemanticActionReadStore, SemanticActionStatus, SemanticActionWriteStore, SemanticEvidence,
+    SemanticEvidenceKind, file_path_set_identity_for_paths,
 };
 use sha2::{Digest, Sha256};
 
@@ -196,6 +197,68 @@ fn llm_request_content_reconstructs_body_and_reuses_blocks() {
         r#"{"messages":[{"content":"hello","role":"user"}],"model":"m"}"#
     );
     assert!(!page.truncated);
+}
+
+#[test]
+fn semantic_action_lists_load_action_and_link_evidence() {
+    let mut storage = SqliteStorage::open_in_memory().expect("open in-memory sqlite storage");
+    let trace_id = TraceId::new(1);
+    let mut parent = action("parent", SemanticActionStatus::Success);
+    parent.evidence.push(evidence(10));
+    parent.evidence.push(evidence(11));
+    let mut child = action("child", SemanticActionStatus::Success);
+    child.evidence.push(evidence(12));
+    storage
+        .upsert_semantic_action(parent)
+        .expect("write parent action");
+    storage
+        .upsert_semantic_action(child)
+        .expect("write child action");
+
+    storage
+        .upsert_semantic_action_link(SemanticActionLink {
+            trace_id,
+            parent_action_id: "parent".to_string(),
+            child_action_id: "child".to_string(),
+            role: SemanticActionLinkRole::LlmCallResponse,
+            confidence: SemanticActionLinkConfidence::Observed,
+            valid: true,
+            evidence: vec![evidence(20), evidence(21)],
+            attributes: BTreeMap::new(),
+        })
+        .expect("write action link");
+
+    let actions = storage
+        .list_semantic_actions(trace_id)
+        .expect("list semantic actions");
+    let evidence_by_action = actions
+        .iter()
+        .map(|action| {
+            (
+                action.action_id.as_str(),
+                action
+                    .evidence
+                    .iter()
+                    .map(|evidence| evidence.id)
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(evidence_by_action["parent"], vec![10, 11]);
+    assert_eq!(evidence_by_action["child"], vec![12]);
+
+    let links = storage
+        .list_semantic_action_links(trace_id)
+        .expect("list semantic action links");
+    assert_eq!(links.len(), 1);
+    assert_eq!(
+        links[0]
+            .evidence
+            .iter()
+            .map(|evidence| evidence.id)
+            .collect::<Vec<_>>(),
+        vec![20, 21]
+    );
 }
 
 fn install_write_audit(storage: &SqliteStorage) {

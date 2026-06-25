@@ -37,13 +37,37 @@ def read_config(path: Path) -> dict[str, str]:
         if line.startswith("[") and line.endswith("]"):
             section = line.strip("[]")
             continue
-        if section.startswith("export"):
-            continue
         key, separator, value = line.partition("=")
         if not separator:
             raise RuntimeError(f"invalid config line in {path}: {raw}")
-        values[key.strip()] = value.strip()
+        remapped = operator_config_key(section, key.strip())
+        if remapped is not None:
+            values[remapped] = unquote(value.strip())
     return values
+
+
+def operator_config_key(section: str, key: str) -> str | None:
+    if section == "control" and key in {"socket_path", "pid_file", "log_path"}:
+        return key
+    if section == "storage.sqlite" and key == "path":
+        return "storage_sqlite_path"
+    if section == "export.snapshot" and key == "directory":
+        return "export_directory"
+    if section == "export.runtime" and key == "enabled":
+        return "export_enabled"
+    if section == "export.runtime.routes.otel_jsonl" and key == "path":
+        return "export_otel_jsonl_path"
+    if section == "payload.tls" and key == "sync_event_socket_path":
+        return "payload_tls_sync_event_socket_path"
+    if not section:
+        return key
+    return None
+
+
+def unquote(value: str) -> str:
+    if len(value) >= 2 and value.startswith('"') and value.endswith('"'):
+        return value[1:-1]
+    return value
 
 
 def required(values: dict[str, str], key: str) -> str:

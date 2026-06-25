@@ -119,13 +119,13 @@ impl EbpfCollector {
             }
             KernelEvent::StdioPayload(event) => {
                 batch.payload_segments.push(
-                    decode_stdio_payload(event, &self.bindings, &self.identity_reader)
+                    decode_stdio_payload(event, &mut self.bindings, &self.identity_reader)
                         .map_err(|error| CollectorError::new(error.stage, error.message))?,
                 );
             }
             KernelEvent::SocketPayload(event) => {
                 batch.payload_segments.push(
-                    decode_socket_payload(event, &self.bindings, &self.identity_reader)
+                    decode_socket_payload(event, &mut self.bindings, &self.identity_reader)
                         .map_err(|error| CollectorError::new(error.stage, error.message))?,
                 );
             }

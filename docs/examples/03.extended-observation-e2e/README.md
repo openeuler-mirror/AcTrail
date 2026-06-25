@@ -138,7 +138,7 @@ trace trace-<N> entered Active
 
 记录这里的 `<N>`。下面命令都用 `<N>` 表示实际 trace id 数字。
 
-本例启用了 `resource_metrics_enabled = true`，采样间隔由配置里的 `resource_metrics_interval_ms` 控制，示例值是 `1000`。如果你要确认 Resource rows，attach 成功后先等待至少一个采样间隔，再释放 workload。
+本例启用了 `resource_metrics.enabled = true`，采样间隔由配置里的 `resource_metrics.interval_ms` 控制，示例值是 `1000`。如果你要确认 Resource rows，attach 成功后先等待至少一个采样间隔，再释放 workload。
 
 ## 6. 释放 Workload
 
@@ -175,7 +175,7 @@ actrail-stdio-continue-e2e
 
 ## 7. 查看事件
 
-`actrailviewer` 通过 operator config 里的 `storage_sqlite_path` 读取 AcTrail storage，不需要先导出 JSON：
+`actrailviewer` 通过 operator config 里的 `storage.sqlite.path` 读取 AcTrail storage，不需要先导出 JSON：
 
 ```bash
 ./target/release/actrailviewer traces --config docs/examples/03.extended-observation-e2e/operator.conf
@@ -272,7 +272,7 @@ http://<ADDR>:<PORT>
 
 UI 会展示 trace 列表、指标摘要、agent-centered action swimlane/tree、搜索过滤和右侧详情。当前 Web 主视图从 `/api/traces/<TRACE_ID>/action-tree` 读取存储中的 semantic action/action-link；低层事件、payload 和 process snapshot 作为选中节点的 evidence/detail 展示。点击带 payload evidence 的节点会读取 `/api/traces/<TRACE_ID>/payloads/<SEGMENT_ID>` 并显示捕获文本。
 
-资源采样行仍由 `actrailviewer events` 验证，包括 `scope=process_tree`、root pid、CPU%、RSS、VSZ、sampler metadata，以及启用 `resource_metrics_include_system` 时的 host memory/load metadata。Web UI 会在 trace 指标和选中节点 JSON/detail 中展示这些数据；资源采样没有独立的旧版 Resources tab。
+资源采样行仍由 `actrailviewer events` 验证，包括 `scope=process_tree`、root pid、CPU%、RSS、VSZ、sampler metadata，以及启用 `resource_metrics.include_system` 时的 host memory/load metadata。Web UI 会在 trace 指标和选中节点 JSON/detail 中展示这些数据；资源采样没有独立的旧版 Resources tab。
 
 ## 10. 文件路径 syscall 事件
 

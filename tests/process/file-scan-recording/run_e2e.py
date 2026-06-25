@@ -91,10 +91,26 @@ def read_config(path: Path) -> dict[str, str]:
             continue
         key = key.strip()
         value = value.strip().strip('"')
-        if section.startswith("export.routes.otel-jsonl.") and key == "path":
-            key = "export_otel_jsonl_path"
-        values.setdefault(key, value)
+        remapped = operator_config_key(section, key)
+        if remapped is not None:
+            values.setdefault(remapped, value)
     return values
+
+
+def operator_config_key(section: str, key: str) -> str | None:
+    if section == "control" and key in {"socket_path", "pid_file", "log_path"}:
+        return key
+    if section == "storage.sqlite" and key == "path":
+        return "storage_sqlite_path"
+    if section == "export.snapshot" and key == "directory":
+        return "export_directory"
+    if section == "export.runtime.routes.otel_jsonl" and key == "path":
+        return "export_otel_jsonl_path"
+    if section == "payload.tls" and key == "sync_event_socket_path":
+        return "payload_tls_sync_event_socket_path"
+    if not section:
+        return key
+    return None
 
 
 def clean_paths(values: dict[str, str], scan_dir: Path) -> None:

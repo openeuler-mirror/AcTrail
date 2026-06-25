@@ -3,6 +3,7 @@
 pub mod capture_profile;
 pub mod daemon;
 pub mod export;
+pub mod framework;
 pub mod policy;
 pub mod provider_rules;
 pub mod retention;

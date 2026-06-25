@@ -9,9 +9,9 @@ use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, DEFAULT_ACTIVE_TRACE_MAX, DiagnosticLogLevel,
     EbpfCollectorConfig, EnforcementBackend, EnforcementConfig, EnforcementDecision,
     EnforcementMarkStrategy, EnforcementScope, FileObservationConfig, MemlockRlimit,
-    OPERATOR_CONFIG_TEMPLATE, OperatorConfig, PayloadConfig, ProcessSeccompConfig,
-    ProcessSeccompSyscall, ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig,
-    SemanticRetentionConfig, SseDataPolicy, TraceFinalizationConfig,
+    OperatorConfig, PayloadConfig, ProcessSeccompConfig, ProcessSeccompSyscall,
+    ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig, SemanticRetentionConfig,
+    SseDataPolicy, TraceFinalizationConfig,
 };
 use config_core::trace_snapshot::CaptureProfileSnapshot;
 use control_contract::command::{ControlCommand, ListTracesCommand, ProcessRef, TrackAddCommand};
@@ -337,10 +337,14 @@ fn ebpf_config(enabled: bool) -> EbpfCollectorConfig {
     }
 }
 
+fn default_operator_config() -> OperatorConfig {
+    let raw =
+        OperatorConfig::default_hierarchical_template().expect("operator config template renders");
+    OperatorConfig::parse(&raw).expect("operator config template parses")
+}
+
 fn payload_config(tls_enabled: bool) -> PayloadConfig {
-    let mut payload = OperatorConfig::parse(OPERATOR_CONFIG_TEMPLATE)
-        .expect("operator config template parses")
-        .payload_config;
+    let mut payload = default_operator_config().payload_config;
     payload.tls.enabled = tls_enabled;
     payload.tls.sync_event_socket_path = std::env::temp_dir().join(format!(
         "actrail-test-tls-sync-{}-{}.sock",
@@ -418,9 +422,7 @@ fn workload_diagnostics_disabled() -> super::workload_diagnostics::WorkloadDiagn
 }
 
 fn export_runtime_disabled() -> RuntimeExportConfig {
-    let mut config = OperatorConfig::parse(OPERATOR_CONFIG_TEMPLATE)
-        .unwrap()
-        .export_runtime;
+    let mut config = default_operator_config().export_runtime;
     config.enabled = false;
     config
 }
