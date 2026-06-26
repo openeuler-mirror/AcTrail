@@ -420,9 +420,11 @@ impl CaptureDocument {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct EbpfDocument {
-    /// "true" | "false" | "auto". Kept as a string so serde renders it as a
-    /// quoted TOML value and `deny_unknown_fields` does not need a custom
-    /// deserializer; parsed into `EbpfEnabledMode` in `to_config`.
+    /// "true" | "false" | "auto". Accepted as either a quoted string
+    /// (`enabled = "auto"`) or a bare boolean (`enabled = true`) for
+    /// backward compatibility with configs written before `auto` existed;
+    /// normalized to a string and parsed into `EbpfEnabledMode` in `to_config`.
+    #[serde(deserialize_with = "deserialize_ebpf_enabled", serialize_with = "serialize_ebpf_enabled")]
     pub enabled: String,
     pub memlock_rlimit: String,
     pub tracked_process_max_entries: u32,
@@ -478,4 +480,33 @@ impl EbpfDocument {
             )?,
         })
     }
+}
+
+/// Deserialize `ebpf.enabled` accepting either a bare boolean (`true`/`false`,
+/// the pre-`auto` form still present in shipped example configs) or a quoted
+/// string (`"true"`/`"false"`/`"auto"`). Both normalize to a string.
+fn deserialize_ebpf_enabled<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum EnabledValue {
+        Bool(bool),
+        String(String),
+    }
+    match EnabledValue::deserialize(deserializer)? {
+        EnabledValue::Bool(value) => Ok(value.to_string()),
+        EnabledValue::String(value) => Ok(value),
+    }
+}
+
+/// Serialize `ebpf.enabled` back as a quoted string so round-trips produce
+/// `enabled = "true"` regardless of how it was written.
+fn serialize_ebpf_enabled<S>(value: &str, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(value)
 }
