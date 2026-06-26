@@ -2,7 +2,7 @@
 
 This is a copy-paste-ready, step-by-step manual test for the degradation path described in [README.md](README.md). It assumes a host running Ubuntu-like glibc 2.39 with Docker, and an openEuler 24.03 image (glibc 2.38) for the workload container. Every step lists the command and the expected output so you can verify as you go.
 
-Test goals: verify that with the workload container **not** given `--security-opt seccomp=unconfined` and **no CAP_BPF**, AcTrail still (1) starts the host daemon under `ebpf_enabled = auto`, (2) reports `seccomp_launch=unavailable` from inside the container and recommends `skip`, (3) degrades `actrailctl launch` to tls-sync-only and captures TLS plaintext + `llm.*` semantic actions on the host.
+Test goals: verify that with the workload container **not** given `--security-opt seccomp=unconfined` and **no CAP_BPF**, AcTrail still (1) starts the host daemon under `[ebpf] enabled = "auto"`, (2) reports `seccomp_launch=unavailable` from inside the container and recommends `skip`, (3) degrades `actrailctl launch` to tls-sync-only and captures TLS plaintext + `llm.*` semantic actions on the host.
 
 > 中文版：[manual-test-walkthrough.zh.md](manual-test-walkthrough.zh.md)
 
@@ -136,15 +136,18 @@ If the host cannot run eBPF (no BTF / non-root / no tracefs), the daemon auto-de
 # 1.1 Create runtime directories
 install -d /etc/actrail /var/lib/actrail /run/actrail /var/log/actrail
 
-# 1.2 Install the restricted example config (ebpf_enabled=auto, process_seccomp=false, tls-sync on)
+# 1.2 Install the restricted example config (hierarchical TOML: ebpf enabled="auto",
+#     process_seccomp enabled=false, tls-sync on)
 install -m 0644 docs/examples/container-agent-restricted/operator.conf /etc/actrail/actraild.conf
 
-# 1.3 Confirm the key fields
-grep -nE 'ebpf_enabled|process_seccomp_enabled|payload_tls_capture_backend|payload_tls_binary_path|^socket_path|storage_sqlite_path|payload_tls_sync_event_socket_path|web_listen_addr' /etc/actrail/actraild.conf
-# Expect: ebpf_enabled = auto, process_seccomp_enabled = false,
-#         payload_tls_capture_backend = tls-sync, payload_tls_binary_path = disabled,
-#         socket_path = /run/actrail/control.sock,
-#         payload_tls_sync_event_socket_path = /run/actrail/tls-sync.sock
+# 1.3 Confirm the key fields (hierarchical TOML — keys live under [section] headers)
+grep -nE '^\[control\]|^\[ebpf\]|^\[process_seccomp\]|^\[payload.tls\]|^\[storage.sqlite\]|^socket_path|^enabled|^binary_path|^capture_backend|^sync_event_socket_path|^path' /etc/actrail/actraild.conf
+# Expect under [ebpf]:        enabled = "auto"
+# Expect under [process_seccomp]: enabled = false
+# Expect under [payload.tls]: enabled = true, capture_backend = "tls-sync", binary_path = "disabled",
+#                            sync_event_socket_path = "/run/actrail/tls-sync.sock"
+# Expect under [control]:     socket_path = "/run/actrail/control.sock"
+# Expect under [storage.sqlite]: path = "/var/lib/actrail/actrail.sqlite"
 
 # 1.4 Start the host daemon
 ./target/release/actraild --config /etc/actrail/actraild.conf start
@@ -191,7 +194,7 @@ head -12 /tmp/suggested.conf          # inspect the probe summary + key fields
 install -m 0644 /tmp/suggested.conf /etc/actrail/actraild.conf
 ```
 
-When run **inside the restricted container** (Step 5), the same flag reflects the container's probes: `seccomp_launch=unavailable` causes the suggested config to set `process_seccomp_enabled = false` and drop `proc-exec-context` from `required_capability`, so the host daemon starts without requiring seccomp. `--suggest-config` never writes a file itself — you redirect it.
+When run **inside the restricted container** (Step 5), the same flag reflects the container's probes: `seccomp_launch=unavailable` causes the suggested config to set `[process_seccomp] enabled = false` and drop `proc-exec-context` from `[capture] capabilities`, so the host daemon starts without requiring seccomp. `--suggest-config` never writes a file itself — you redirect it.
 
 </details>
 
@@ -579,10 +582,10 @@ The `/etc/actrail/actraild.conf` and runtime dirs are retained for the next run.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `invalid ebpf_enabled: expected true or false, got auto` | `target/release/actraild` is older than the `ebpf_enabled = auto` support. | Rebuild: `cargo build --release -p daemon -p ctl -p view -p web -p tls_payload_probe_sync` (Step 0.5). |
+| `invalid ebpf.enabled: expected true, false, or auto, got ...` | `target/release/actraild` is older than the `[ebpf] enabled = "auto"` support. | Rebuild: `cargo build --release -p daemon -p ctl -p view -p web -p tls_payload_probe_sync` (Step 0.5). |
 | `missing config key payload_stdio_capture_stdin` | Using a stale example config (e.g. old `container-agent-minimal/operator.conf`). | Use `docs/examples/container-agent-restricted/operator.conf` (it matches the current daemon). |
 | `GLIBC_2.39 not found` when running `actrailctl` in the container | Host-compiled binary depends on a newer glibc than the container has. | Build `actrailctl` + `.so` inside the container (Step 3). |
-| `tls-sync auto plan requires payload_tls_binary_path=disabled` | `payload_tls_binary_path` is set to a path under `tls-sync` backend. | It must be `disabled` under tls-sync. The restricted example config already sets this; do not change it. |
+| `tls-sync auto plan requires payload.tls.binary_path=disabled` | `[payload.tls] binary_path` is set to a path under tls-sync backend. | It must be `disabled` under tls-sync. The restricted example config already sets this; do not change it. |
 | `seccomp_launch=ok` in the container | The container was started with `--security-opt seccomp=unconfined`. | Recreate without that flag (Step 2.2). This test specifically requires the default profile. |
 | No TLS payload rows in `payload_segments` | Agent not started via `actrailctl launch`; `.so` missing; socket not mounted; or the agent's TLS library is not BoringSSL/rustls. | Re-check Steps 2.4, 3.4, 6.1; confirm the agent uses a supported TLS library. |
 | `curl` to the web UI returns `502` | Shell `http_proxy`/`https_proxy` intercepting localhost. | Use `curl --noproxy '*'` or `NO_PROXY=localhost,127.0.0.1`. |

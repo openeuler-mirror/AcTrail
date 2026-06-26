@@ -6,15 +6,15 @@ This example tests the **degradation path** that lets AcTrail keep observing an 
 
 | Function point | How it is verified here |
 | --- | --- |
-| eBPF on/off switch + auto detection | Host `actraild` runs with `ebpf_enabled = auto`. It probes eBPF at startup: on a host that can run eBPF it stays enabled; on a host that cannot it prints `actraild ebpf auto-degraded: ...` and continues instead of refusing to start. |
-| `actrailctl probe` self-check + recommended launch | Inside the restricted container, `probe` reports `seccomp_launch=unavailable` (default seccomp blocks `pidfd_getfd`), `recommended_seccomp_mode=skip`, and `launch_note` recommending `--seccomp-mode auto` for tls-sync-only launch — while `control_socket` and `tls_sync_socket` stay `ok`. `probe --suggest-config` prints a minimal operator config (to stdout) trimmed to the probe results: seccomp unavailable ⇒ `process_seccomp_enabled = false` and `proc-exec-context` dropped; works even with no config file yet. |
+| eBPF on/off switch + auto detection | Host `actraild` runs with `[ebpf] enabled = "auto"`. It probes eBPF at startup: on a host that can run eBPF it stays enabled; on a host that cannot it prints `actraild ebpf auto-degraded: ...` and continues instead of refusing to start. |
+| `actrailctl probe` self-check + recommended launch | Inside the restricted container, `probe` reports `seccomp_launch=unavailable` (default seccomp blocks `pidfd_getfd`), `recommended_seccomp_mode=skip`, and `launch_note` recommending `--seccomp-mode auto` for tls-sync-only launch — while `control_socket` and `tls_sync_socket` stay `ok`. `probe --suggest-config` prints a minimal operator config (to stdout) trimmed to the probe results: seccomp unavailable ⇒ `[process_seccomp] enabled = false` and `proc-exec-context` dropped; works even with no config file yet. |
 | `actrailctl launch` seccomp degradation | Default `--seccomp-mode auto` degrades to tls-sync-only launch (stderr prints `actrailctl launch degraded: ...; continuing with tls-sync-only launch`), the trace still enters Active, and the agent runs. `--seccomp-mode require` fails outright; `--seccomp-mode skip` succeeds. |
 | Capture without eBPF/seccomp privileges | Even with the container locked down, the host side still captures TLS plaintext (`boringssl SSL_read/SSL_write` or `rustls_*`) and `llm.*` semantic actions via the tls-sync backend, plus an action graph in the web UI. |
 
 ## Topology
 
 ```text
-host actraild  (ebpf_enabled = auto, process_seccomp_enabled = false, tls-sync enabled)
+host actraild  ([ebpf] enabled="auto", [process_seccomp] enabled=false, tls-sync enabled)
   -> /run/actrail/control.sock  +  /run/actrail/tls-sync.sock   (mounted RW into container)
   -> /var/lib/actrail/actrail.sqlite
   -> actrailviewer / actrailweb
@@ -36,7 +36,7 @@ The reason seccomp was originally required is that the socket/process capture pa
 │                                                                             │
 │  actraild                                                                    │
 │   │                                                                          │
-│   │ 1a. resolve_ebpf_collector_config(ebpf_enabled=auto)                     │
+│   │ 1a. resolve_ebpf_collector_config([ebpf] enabled="auto")                     │
 │   │     probe() → host can run eBPF? keep enabled                            │
 │   │                host cannot?     print "actraild ebpf auto-degraded: ..." │
 │   │                                  set ebpf_config.enabled=false, CONTINUE  │
@@ -128,7 +128,7 @@ The capture point moves from **kernel-mode syscall interception** (seccomp user-
 
 | Stage | Code | What it does |
 | --- | --- | --- |
-| 1a eBPF auto probe | `crates/apps/daemon/src/ebpf_resolve.rs` (`auto_follows_probe_result`) | `ebpf_enabled = auto` → `probe().reason_unavailable` ⇒ `config.enabled=false`, `auto_degraded=true`, returns Ok (daemon does not abort). |
+| 1a eBPF auto probe | `crates/apps/daemon/src/ebpf_resolve.rs` (`auto_follows_probe_result`) | `[ebpf] enabled = "auto"` → `probe().reason_unavailable` ⇒ `config.enabled=false`, `auto_degraded=true`, returns Ok (daemon does not abort). |
 | 1b bind sockets | `crates/apps/daemon/src/services/tls_sync/service.rs` (`TlsSyncService::new`) | Binds `/run/actrail/tls-sync.sock` (non-blocking `UnixListener`). |
 | 2 probe + degrade | `crates/apps/ctl/src/launch.rs` + `launch/seccomp_mode.rs` | `run_platform_probe_from_launch` → `resolve_launch_seccomp(Auto, unavailable)` ⇒ `use_seccomp=false`, `degraded=true`, prints the degrade line. |
 | 3 plain spawn + plan | `crates/apps/ctl/src/launch.rs` (`ChildSetup::Plain`, `seccomp_setup` skipped) + `launch/sync.rs` (`sync_launch`) | `tls_probe_point_finder::fast::resolve` finds `SSL_read/SSL_write`/`rustls_*` offsets; no seccomp filter installed. |
@@ -148,7 +148,7 @@ The capture point moves from **kernel-mode syscall interception** (seccomp user-
 
 ## Prerequisites
 
-- Host has release binaries built fresh from the current source: `actraild`, `actrailctl`, `actrailviewer`, `actrailweb`, `libactrail_tls_payload_probe_sync.so`. **Rebuild after every pull** — a stale `target/release/actraild` may predate `ebpf_enabled = auto` support and reject the config with `invalid ebpf_enabled: expected true or false, got auto`.
+- Host has release binaries built fresh from the current source: `actraild`, `actrailctl`, `actrailviewer`, `actrailweb`, `libactrail_tls_payload_probe_sync.so`. **Rebuild after every pull** — a stale `target/release/actraild` may predate `[ebpf] enabled = "auto"` support and reject the config with `invalid ebpf.enabled: expected true, false, or auto`.
 - Host can run eBPF (has `/sys/kernel/btf/vmlinux` and `/sys/kernel/tracing`). On such a host the auto probe keeps eBPF enabled; to simulate a host without eBPF, see "Simulate host without eBPF" below.
 - A workload image that already contains the agent binary (here `opencode`) and its config. `actrailctl` and the TLS-sync `.so` are built **inside the container** because the host-compiled binaries depend on the host glibc (e.g. Ubuntu 24.04 glibc 2.39) which is newer than the container's (openEuler 24.03 glibc 2.38); a host-built `actrailctl` fails with `GLIBC_2.39 not found`.
 
@@ -346,13 +346,13 @@ The SQLite store at `/var/lib/actrail/actrail.sqlite` is retained for later insp
 
 ## Notes
 
-- **`payload_tls_binary_path` must stay `disabled`** under `payload_tls_capture_backend = tls-sync`. The sync backend builds the probe plan dynamically at launch; a fixed binary path is rejected with `tls-sync auto plan requires payload_tls_binary_path=disabled and payload_tls_pattern_path=disabled`. The `binary_path` option is only a fallback for the non-sync executable-source path.
+- **`[payload.tls] binary_path` must stay `disabled`** under `[payload.tls] capture_backend = "tls-sync"`. The sync backend builds the probe plan dynamically at launch; a fixed binary path is rejected with `tls-sync auto plan requires payload.tls.binary_path=disabled`. The `binary_path` option is only a fallback for the non-sync executable-source path.
 - The agent here is `opencode` (Go + BoringSSL). AcTrail captures `boringssl SSL_read/SSL_write` plaintext for it. For a `rustls`-based agent (e.g. xiaoO) expect `rustls_buffer_plaintext` / `rustls_take_received_plaintext` instead. Either way `llm.*` semantic actions are projected on the host daemon side from the captured LLM HTTP/TLS application payload.
 - The container can still "see" `/sys/kernel/tracing` and `/sys/kernel/btf/vmlinux` through Docker's default `/sys` bind mount — that does **not** mean it can do eBPF: the container lacks `CAP_BPF`/`CAP_PERFMON`, and the real capture is on the host daemon regardless. The constraint this example exercises is the **default seccomp profile** blocking the launch-time `pidfd_getfd` path.
 
 ## Simulate host without eBPF
 
-On a host that *can* run eBPF (so `ebpf_enabled = auto` stays enabled and you do not see the degrade message), you can still confirm the auto-degrade code path does not refuse startup. The cleanest proof is a host or VM without BTF / without `CAP_BPF`. As a smoke check on a capable host, run the daemon in the foreground with a copy of the config and watch the startup line:
+On a host that *can* run eBPF (so `[ebpf] enabled = "auto"` stays enabled and you do not see the degrade message), you can still confirm the auto-degrade code path does not refuse startup. The cleanest proof is a host or VM without BTF / without `CAP_BPF`. As a smoke check on a capable host, run the daemon in the foreground with a copy of the config and watch the startup line:
 
 ```bash
 sudo ./target/release/actraild --config /etc/actrail/actraild.conf run

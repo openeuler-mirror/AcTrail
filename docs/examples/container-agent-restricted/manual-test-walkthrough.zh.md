@@ -4,7 +4,7 @@
 
 > English version: [manual-test-walkthrough.md](manual-test-walkthrough.md)
 
-测试目标：在工作负载容器**不**带 `--security-opt seccomp=unconfined`、**无** `CAP_BPF` 的前提下，验证 AcTrail 仍能 (1) 以 `ebpf_enabled = auto` 启动 host daemon；(2) 在容器内报告 `seccomp_launch=unavailable` 并推荐 `skip`；(3) 将 `actrailctl launch` 降级为 tls-sync-only，并在 host 侧采集到 TLS 明文 + `llm.*` 语义动作。
+测试目标：在工作负载容器**不**带 `--security-opt seccomp=unconfined`、**无** `CAP_BPF` 的前提下，验证 AcTrail 仍能 (1) 以 `[ebpf] enabled = "auto"` 启动 host daemon；(2) 在容器内报告 `seccomp_launch=unavailable` 并推荐 `skip`；(3) 将 `actrailctl launch` 降级为 tls-sync-only，并在 host 侧采集到 TLS 明文 + `llm.*` 语义动作。
 
 ## 每条命令在哪里执行
 
@@ -134,15 +134,17 @@ cargo build --release -p daemon -p ctl -p view -p web -p tls_payload_probe_sync
 # 1.1 创建运行时目录
 install -d /etc/actrail /var/lib/actrail /run/actrail /var/log/actrail
 
-# 1.2 安装受限示例配置（ebpf_enabled=auto、process_seccomp=false、tls-sync 开启）
+# 1.2 安装受限示例配置（hierarchical TOML：ebpf enabled="auto"、process_seccomp enabled=false、tls-sync 开启）
 install -m 0644 docs/examples/container-agent-restricted/operator.conf /etc/actrail/actraild.conf
 
-# 1.3 复核关键字段
-grep -nE 'ebpf_enabled|process_seccomp_enabled|payload_tls_capture_backend|payload_tls_binary_path|^socket_path|storage_sqlite_path|payload_tls_sync_event_socket_path|web_listen_addr' /etc/actrail/actraild.conf
-# 预期：ebpf_enabled = auto、process_seccomp_enabled = false、
-#       payload_tls_capture_backend = tls-sync、payload_tls_binary_path = disabled、
-#       socket_path = /run/actrail/control.sock、
-#       payload_tls_sync_event_socket_path = /run/actrail/tls-sync.sock
+# 1.3 复核关键字段（hierarchical TOML —— key 在 [section] 下）
+grep -nE '^\[control\]|^\[ebpf\]|^\[process_seccomp\]|^\[payload.tls\]|^\[storage.sqlite\]|^socket_path|^enabled|^binary_path|^capture_backend|^sync_event_socket_path|^path' /etc/actrail/actraild.conf
+# 预期 [ebpf] 下：          enabled = "auto"
+# 预期 [process_seccomp] 下：enabled = false
+# 预期 [payload.tls] 下：   enabled = true、capture_backend = "tls-sync"、binary_path = "disabled"、
+#                          sync_event_socket_path = "/run/actrail/tls-sync.sock"
+# 预期 [control] 下：       socket_path = "/run/actrail/control.sock"
+# 预期 [storage.sqlite] 下：path = "/var/lib/actrail/actrail.sqlite"
 
 # 1.4 启动 daemon
 ./target/release/actraild --config /etc/actrail/actraild.conf start
@@ -187,7 +189,7 @@ head -12 /tmp/suggested.conf          # 检查探测摘要 + 关键字段
 install -m 0644 /tmp/suggested.conf /etc/actrail/actraild.conf
 ```
 
-在**受限容器内**运行（Step 5）时，同一个 flag 反映容器的探测结果：`seccomp_launch=unavailable` 会使生成的配置设 `process_seccomp_enabled = false` 并从 `required_capability` 中去掉 `proc-exec-context`，从而 host daemon 无需 seccomp 即可启动。`--suggest-config` 本身从不写文件 —— 由你重定向落盘。
+在**受限容器内**运行（Step 5）时，同一个 flag 反映容器的探测结果：`seccomp_launch=unavailable` 会使生成的配置设 `[process_seccomp] enabled = false` 并从 `[capture] capabilities` 中去掉 `proc-exec-context`，从而 host daemon 无需 seccomp 即可启动。`--suggest-config` 本身从不写文件 —— 由你重定向落盘。
 
 </details>
 
@@ -574,10 +576,10 @@ rm -rf /tmp/actrail-agent-pkg /tmp/probe.json
 
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
-| `invalid ebpf_enabled: expected true or false, got auto` | `target/release/actraild` 早于 `ebpf_enabled = auto` 支持 | 重新编译：`cargo build --release -p daemon -p ctl -p view -p web -p tls_payload_probe_sync`（Step 0.5） |
+| `invalid ebpf.enabled`（非 true/false/auto） | `target/release/actraild` 早于 `[ebpf] enabled = "auto"` 支持 | 重新编译：`cargo build --release -p daemon -p ctl -p view -p web -p tls_payload_probe_sync`（Step 0.5） |
 | `missing config key payload_stdio_capture_stdin` | 用了过时的示例配置（如旧版 `container-agent-minimal/operator.conf`） | 改用 `docs/examples/container-agent-restricted/operator.conf`（与当前 daemon 匹配） |
 | 容器内运行 `actrailctl` 报 `GLIBC_2.39 not found` | 宿主机编译的产物依赖更新的 glibc | 在容器内编译 `actrailctl` + `.so`（Step 3） |
-| `tls-sync auto plan requires payload_tls_binary_path=disabled` | 在 tls-sync 后端下把 `payload_tls_binary_path` 设成了路径 | tls-sync 下必须为 `disabled`。受限示例配置已设好，勿改 |
+| `tls-sync auto plan requires payload.tls.binary_path=disabled` | 在 tls-sync 后端下把 `[payload.tls] binary_path` 设成了路径 | tls-sync 下必须为 `disabled`。受限示例配置已设好，勿改 |
 | 容器内 `seccomp_launch=ok` | 容器启动时带了 `--security-opt seccomp=unconfined` | 重建容器去掉该 flag（Step 2.2）。本测试特意需要默认 profile |
 | probe 报 `control_socket=unavailable` | 先建容器、后起 daemon，socket 没挂进去 | 先 Step 1 起 daemon，再 Step 2 建容器 |
 | `payload_segments` 无 TLS 行 | 没经 `actrailctl launch` 启动；`.so` 缺失；socket 没挂载；或 agent 的 TLS 库不是 BoringSSL/rustls | 逐项检查 Step 2.4、3.4、6.1；确认 agent 用受支持的 TLS 库 |
