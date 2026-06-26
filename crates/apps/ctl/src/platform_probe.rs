@@ -2,8 +2,8 @@
 
 use config_core::capture_profile::CaptureProfile;
 use config_core::daemon::{
-    DisabledOrPath, OperatorConfig, PayloadTlsConfig, PayloadTlsSeccompSyscall,
-    PayloadTlsSyncRuntimeLibraryPath,
+    DisabledOrPath, EbpfEnabledMode, OperatorConfig, PayloadTlsConfig,
+    PayloadTlsSeccompSyscall, PayloadTlsSyncRuntimeLibraryPath,
 };
 use control_contract::reply::DoctorReply;
 use linux_platform::capability_probe::{CapabilityStatus, probe_no_new_privs, probe_unix_socket};
@@ -276,12 +276,17 @@ pub fn suggest_config_text(
         }
     };
 
-    // ebpf: leave at the template default (enabled). The daemon probes eBPF
-    // at startup and the EbpfCollector self-reports unavailability; if the
-    // host cannot run eBPF the collector simply is not registered.
-    // (When auto mode is re-introduced, this is where ebpf.enabled_mode=auto
-    // would be set.)
-    let _ = ebpf_available;
+    // ebpf: suggest "auto" so the daemon probes eBPF at startup and
+    // auto-degrades (continuing without eBPF collection) when the host cannot
+    // run eBPF — rather than refusing to start. The probe's `ebpf_available`
+    // (from daemon doctor, when queried) is surfaced in the header comment
+    // below; it does not change the suggestion since "auto" handles both
+    // outcomes.
+    config.ebpf_config.enabled_mode = EbpfEnabledMode::Auto;
+    // `enabled` is the daemon-resolved effective flag; at config-suggestion
+    // time we have not run the host probe, so leave it false (matches the
+    // parse-time default for Auto). The daemon will set it at startup.
+    config.ebpf_config.enabled = false;
 
     // TLS plaintext capture: only when the tls-sync prerequisites are met.
     if !tls_sync_ready {
@@ -369,12 +374,12 @@ fn suggest_config_header(
     ));
     if let Some(daemon) = &report.daemon {
         lines.push(format!(
-            "#   daemon collectors     = {} (ebpf {})",
+            "#   daemon collectors     = {} (ebpf {}; [ebpf] enabled=\"auto\" probes at startup)",
             daemon.available_collectors.join(","),
-            if ebpf_available { "present" } else { "absent — host eBPF unavailable; daemon will not register the ebpf collector" }
+            if ebpf_available { "present" } else { "absent — host eBPF unavailable, auto will degrade" }
         ));
     } else {
-        lines.push("#   daemon                = not queried (--skip-daemon); ebpf availability unchecked here".into());
+        lines.push("#   daemon                = not queried (--skip-daemon); [ebpf] enabled=\"auto\" probes at startup".into());
     }
     lines.join("\n")
 }
@@ -492,5 +497,21 @@ mod tests {
         // header comment lines start with `#` and are ignored by the parser.
         let config = suggest_config_text(&all_ok_report(), None);
         OperatorConfig::parse(&config).expect("suggested config parses as valid OperatorConfig");
+    }
+
+    #[test]
+    fn suggest_config_sets_ebpf_auto() {
+        // The suggested config should set [ebpf] enabled = "auto" so the
+        // daemon probes eBPF at startup and auto-degrades when the host
+        // cannot run it, regardless of the current probe result.
+        let config = suggest_config_text(&all_ok_report(), None);
+        let parsed = OperatorConfig::parse(&config).expect("suggested config parses");
+        assert_eq!(
+            parsed.ebpf_config.enabled_mode,
+            config_core::daemon::EbpfEnabledMode::Auto
+        );
+        // enabled is the daemon-resolved flag; at suggestion time it stays
+        // false for Auto (the daemon sets it at startup).
+        assert!(!parsed.ebpf_config.enabled);
     }
 }
