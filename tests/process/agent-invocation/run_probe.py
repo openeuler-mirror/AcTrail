@@ -45,7 +45,7 @@ def parse_args() -> argparse.Namespace:
 
 def run_bare_xiaoo(workload: dict[str, str], prompt: str) -> None:
     agent_command = run_e2e.resolve_agent_command(run_e2e.required(workload, "agent_command"))
-    command = [agent_command, "run", "-p", prompt]
+    command = [agent_command, "--cli", "run", "-p", prompt]
     result, elapsed = run_command(command, float(run_e2e.required(workload, "launch_timeout_seconds")))
     print(result.stdout, end="")
     if result.stderr:
@@ -115,6 +115,7 @@ def run_strace_xiaoo(workload: dict[str, str], prompt: str) -> None:
         "timeout",
         run_e2e.required(workload, "launch_timeout_seconds"),
         agent_command,
+        "--cli",
         "run",
         "-p",
         prompt,

@@ -92,6 +92,7 @@ def require_complete_payload_rows_any(
     direction: str | None = None,
 ) -> int:
     count = 0
+    incomplete = 0
     for line in payloads.splitlines():
         if not re.match(r"^\s*payload-\d+\s+", line):
             continue
@@ -100,10 +101,14 @@ def require_complete_payload_rows_any(
         if not any(source in line and library in line for source, library in accepted):
             continue
         if "Truncated" in line or "success" not in line:
-            raise RuntimeError(f"payload row is not complete/successful: {line}")
+            incomplete += 1
+            continue
         count += 1
     if count == 0:
         detail = ", ".join(f"{source} {library}" for source, library in accepted)
         direction_text = f" {direction}" if direction is not None else ""
-        raise RuntimeError(f"no accepted{direction_text} payload rows found: {detail}")
+        raise RuntimeError(
+            f"no complete accepted{direction_text} payload rows found: {detail}; "
+            f"incomplete_matching_rows={incomplete}"
+        )
     return count

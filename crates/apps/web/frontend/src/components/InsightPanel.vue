@@ -54,8 +54,22 @@
 
           <pre v-if="block.text">{{ block.text }}</pre>
 
+          <div v-if="itemLimitControlVisible(block)" class="insight-item-controls">
+            <span>{{ itemLimitSummary(block) }}</span>
+            <label>
+              Show
+              <input
+                type="number"
+                :min="1"
+                :max="block.items.length"
+                :value="itemLimit(block)"
+                @input="updateItemLimit(block, $event)"
+              />
+            </label>
+          </div>
+
           <ul v-if="block.items?.length" class="insight-item-list">
-            <li v-for="item in block.items" :key="item.id">
+            <li v-for="(item, index) in visibleItems(block)" :key="itemKey(block, item, index)">
               <div>
                 <strong>{{ item.title }}</strong>
                 <span v-if="item.subtitle">{{ item.subtitle }}</span>
@@ -90,6 +104,8 @@ const props = defineProps({
 
 const collapsedBlocks = ref(new Map());
 const touchedBlocks = ref(new Set());
+const itemLimits = ref(new Map());
+const touchedItemLimits = ref(new Set());
 
 watch(
   () => props.insight,
@@ -107,6 +123,19 @@ watch(
       }
     }
     collapsedBlocks.value = next;
+    const nextLimits = new Map(itemLimits.value);
+    for (const block of insight?.blocks ?? []) {
+      if (!block.items?.length || !block.itemLimit) {
+        continue;
+      }
+      const key = blockKey(insight, block);
+      if (touchedItemLimits.value.has(key)) {
+        nextLimits.set(key, clampItemLimit(nextLimits.get(key), block));
+      } else {
+        nextLimits.set(key, defaultItemLimit(block));
+      }
+    }
+    itemLimits.value = nextLimits;
   },
   { immediate: true },
 );
@@ -135,6 +164,66 @@ function toggleBlock(block) {
 
 function blockKey(insight, block) {
   return `${insight?.instanceId ?? insight?.kind ?? insight?.heading ?? 'insight'}:${block?.id ?? 'block'}`;
+}
+
+function visibleItems(block) {
+  if (!block?.items?.length) {
+    return [];
+  }
+  if (!block.itemLimit) {
+    return block.items;
+  }
+  return block.items.slice(0, itemLimit(block));
+}
+
+function itemLimitControlVisible(block) {
+  return Boolean(block?.itemLimit && block?.items?.length > block.itemLimit);
+}
+
+function itemLimit(block) {
+  if (!block?.items?.length) {
+    return 0;
+  }
+  if (!block.itemLimit) {
+    return block.items.length;
+  }
+  const stored = itemLimits.value.get(blockKey(props.insight, block));
+  return stored === undefined ? defaultItemLimit(block) : clampItemLimit(stored, block);
+}
+
+function updateItemLimit(block, event) {
+  const key = blockKey(props.insight, block);
+  const next = new Map(itemLimits.value);
+  next.set(key, clampItemLimit(event.target.value, block));
+  itemLimits.value = next;
+  touchedItemLimits.value = new Set(touchedItemLimits.value).add(key);
+}
+
+function itemLimitSummary(block) {
+  return `Showing ${itemLimit(block)} of ${block.items.length}`;
+}
+
+function itemKey(block, item, index) {
+  return `${blockKey(props.insight, block)}:${item?.id ?? 'item'}:${index}`;
+}
+
+function defaultItemLimit(block) {
+  if (!block?.itemLimit) {
+    return block?.items?.length ?? 0;
+  }
+  return clampItemLimit(block.itemLimit, block);
+}
+
+function clampItemLimit(raw, block) {
+  const total = block?.items?.length ?? 0;
+  if (total <= 0) {
+    return 0;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) {
+    return Math.min(total, 1);
+  }
+  return Math.min(total, Math.max(1, parsed));
 }
 </script>
 
@@ -342,6 +431,41 @@ function blockKey(insight, block) {
   min-width: 0;
   margin: 0;
   overflow-wrap: anywhere;
+}
+
+.insight-item-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.insight-item-controls label {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.insight-item-controls input {
+  width: 64px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid #c8d7d5;
+  border-radius: 7px;
+  background: #ffffff;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.insight-item-controls input:focus {
+  outline: 2px solid rgba(15, 118, 110, 0.24);
+  border-color: var(--teal);
 }
 
 .insight-item-list {

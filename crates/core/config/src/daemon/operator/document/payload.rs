@@ -53,6 +53,12 @@ pub(super) struct PayloadTlsDocument {
     pub sync_event_socket_path: String,
     pub sync_socket_mode_octal: String,
     pub sync_match_limit: u32,
+    pub sync_flow_control_enabled: bool,
+    pub sync_flow_sniff_bytes: u32,
+    pub sync_flow_max_header_bytes: u32,
+    pub sync_flow_large_transfer_bytes: u64,
+    pub sync_flow_unknown_stream_bytes: u64,
+    pub sync_flow_h2_data_probe_bytes: u64,
     pub java_agent_enabled: bool,
 }
 
@@ -82,6 +88,12 @@ impl Default for PayloadTlsDocument {
             sync_event_socket_path: "/run/actrail/tls-sync.sock".to_string(),
             sync_socket_mode_octal: "660".to_string(),
             sync_match_limit: 8,
+            sync_flow_control_enabled: true,
+            sync_flow_sniff_bytes: 65536,
+            sync_flow_max_header_bytes: 16384,
+            sync_flow_large_transfer_bytes: 1048576,
+            sync_flow_unknown_stream_bytes: 65536,
+            sync_flow_h2_data_probe_bytes: 65536,
             java_agent_enabled: false,
         }
     }
@@ -117,6 +129,12 @@ impl PayloadTlsDocument {
             sync_event_socket_path: config.sync_event_socket_path.display().to_string(),
             sync_socket_mode_octal: format!("{:o}", config.sync_socket_mode),
             sync_match_limit: config.sync_match_limit,
+            sync_flow_control_enabled: config.sync_flow_control_enabled,
+            sync_flow_sniff_bytes: config.sync_flow_sniff_bytes,
+            sync_flow_max_header_bytes: config.sync_flow_max_header_bytes,
+            sync_flow_large_transfer_bytes: config.sync_flow_large_transfer_bytes,
+            sync_flow_unknown_stream_bytes: config.sync_flow_unknown_stream_bytes,
+            sync_flow_h2_data_probe_bytes: config.sync_flow_h2_data_probe_bytes,
             java_agent_enabled: config.java_agent_enabled,
         }
     }
@@ -166,6 +184,27 @@ impl PayloadTlsDocument {
             sync_match_limit: require_positive_u32(
                 "payload.tls.sync_match_limit",
                 self.sync_match_limit,
+            )?,
+            sync_flow_control_enabled: self.sync_flow_control_enabled,
+            sync_flow_sniff_bytes: require_positive_u32(
+                "payload.tls.sync_flow_sniff_bytes",
+                self.sync_flow_sniff_bytes,
+            )?,
+            sync_flow_max_header_bytes: require_positive_u32(
+                "payload.tls.sync_flow_max_header_bytes",
+                self.sync_flow_max_header_bytes,
+            )?,
+            sync_flow_large_transfer_bytes: require_positive_u64(
+                "payload.tls.sync_flow_large_transfer_bytes",
+                self.sync_flow_large_transfer_bytes,
+            )?,
+            sync_flow_unknown_stream_bytes: require_positive_u64(
+                "payload.tls.sync_flow_unknown_stream_bytes",
+                self.sync_flow_unknown_stream_bytes,
+            )?,
+            sync_flow_h2_data_probe_bytes: require_positive_u64(
+                "payload.tls.sync_flow_h2_data_probe_bytes",
+                self.sync_flow_h2_data_probe_bytes,
             )?,
             java_agent_enabled: self.java_agent_enabled,
         })

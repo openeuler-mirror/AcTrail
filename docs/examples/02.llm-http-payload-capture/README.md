@@ -137,6 +137,12 @@ payload.tls.sync_runtime_library_path = auto
 payload.tls.sync_event_socket_path = /tmp/actrail-http2-payload-tls-sync.sock
 payload.tls.sync_socket_mode_octal = "660"
 payload.tls.sync_match_limit = 8
+payload.tls.sync_flow_control_enabled = true
+payload.tls.sync_flow_sniff_bytes = 65536
+payload.tls.sync_flow_max_header_bytes = 16384
+payload.tls.sync_flow_large_transfer_bytes = 1048576
+payload.tls.sync_flow_unknown_stream_bytes = 65536
+payload.tls.sync_flow_h2_data_probe_bytes = 65536
 
 payload.stdio.enabled = true
 payload.stdio.capture_stdin = false

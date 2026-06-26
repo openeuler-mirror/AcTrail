@@ -297,6 +297,12 @@ pub struct PayloadTlsConfig {
     pub sync_event_socket_path: PathBuf,
     pub sync_socket_mode: u32,
     pub sync_match_limit: u32,
+    pub sync_flow_control_enabled: bool,
+    pub sync_flow_sniff_bytes: u32,
+    pub sync_flow_max_header_bytes: u32,
+    pub sync_flow_large_transfer_bytes: u64,
+    pub sync_flow_unknown_stream_bytes: u64,
+    pub sync_flow_h2_data_probe_bytes: u64,
     pub java_agent_enabled: bool,
 }
 

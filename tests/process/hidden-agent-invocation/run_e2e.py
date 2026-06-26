@@ -410,21 +410,32 @@ def run_checked(command: list[str], echo: bool = True) -> str:
 def read_config(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     section = ""
+    array_depth = 0
     for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
+            continue
+        if array_depth:
+            array_depth += line.count("[") - line.count("]")
+            if array_depth < 0:
+                raise RuntimeError(f"invalid config array in {path}: {raw}")
             continue
         if line.startswith("[") and line.endswith("]"):
             section = line.strip("[]")
             continue
         key, separator, value = line.partition("=")
         if not separator:
-            raise RuntimeError(f"invalid config line: {raw}")
+            raise RuntimeError(f"invalid config line in {path}: {raw}")
         key = key.strip()
+        array_depth = value.count("[") - value.count("]")
+        if array_depth < 0:
+            raise RuntimeError(f"invalid config array in {path}: {raw}")
         value = unquote(value.strip())
         remapped = operator_config_key(section, key)
         if remapped is not None:
             values[remapped] = value
+    if array_depth:
+        raise RuntimeError(f"unterminated config array in {path}")
     return values
 
 
@@ -441,6 +452,8 @@ def operator_config_key(section: str, key: str) -> str | None:
         return "export_otel_jsonl_path"
     if section == "payload.tls" and key == "sync_event_socket_path":
         return "payload_tls_sync_event_socket_path"
+    if section == "enforcement" and key == "rules_path":
+        return "enforcement_rules_path"
     if not section:
         return key
     return None

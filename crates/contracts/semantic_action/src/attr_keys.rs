@@ -135,6 +135,7 @@ pub mod http_response {
     pub const HEADERS_TEXT: &str = "http.response.headers_text";
     pub const PROTOCOL: &str = "http.response.protocol";
     pub const REASON: &str = "http.response.reason";
+    pub const REQUEST_ACTION_ID: &str = "http.request.action_id";
     pub const STATUS_CODE: &str = "http.response.status_code";
     pub const STREAM_ID: &str = "http.response.stream_id";
 }

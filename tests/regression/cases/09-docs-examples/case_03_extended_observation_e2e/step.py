@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
+import time
 
-from model import PASS, CaseResult
+from model import FAIL, PASS, CaseResult
 from workload_config import read_config, required
 
 from helpers import (
     add_expected_found_check,
-    actrail_command,
     clean_default_operator_state,
     communicate,
     evidence_rows,
@@ -18,7 +17,6 @@ from helpers import (
     fail_step,
     line_evidence,
     network_rows,
-    parse_trace_id,
     prefixed_line_evidence,
     record_process_artifacts,
     run_clean,
@@ -26,6 +24,7 @@ from helpers import (
     start_daemon,
     start_process,
     stop_process,
+    track_add,
     viewer,
     wait_for_output,
     write_stdin,
@@ -34,10 +33,10 @@ from helpers import (
 
 def run_extended_observation(env, result: CaseResult, workload: dict[str, str]) -> str:
     name = "docs 03 extended observation"
-    config = None
+    config = env.repo_root / "docs/examples/03.extended-observation-e2e/operator.conf"
     workload_config = env.repo_root / "docs/examples/03.extended-observation-e2e/workload.conf"
     target_values = read_config(workload_config)
-    result.begin_check(name, "running launch workflow")
+    result.begin_check(name, "running manual attach workflow")
     daemon = None
     target = None
     try:
@@ -47,26 +46,25 @@ def run_extended_observation(env, result: CaseResult, workload: dict[str, str]) 
         record_process_artifacts(result, daemon)
         target = start_process(
             env,
-            actrail_command(
-                env,
-                "actrailctl",
-                config,
-                "launch",
-                "--name",
-                "docs-extended-observation",
-                "--",
+            [
                 str(env.release_binary("ebpf_probe")),
                 "workload",
                 "--config",
                 str(workload_config),
-            ),
+            ],
         )
         output = wait_for_output(
             target,
             "waiting_for=" + required(target_values, "stdio_stdin_message"),
             float(required(workload, "extended_workload_ready_timeout_seconds")),
         )
-        trace_id = parse_trace_id(output)
+        trace_id = track_add(
+            env,
+            config,
+            parse_workload_pid(output),
+            "docs-extended-observation",
+            workload,
+        )
         time.sleep(float(required(workload, "extended_resource_sample_sleep_seconds")))
         write_stdin(target, required(target_values, "stdio_stdin_message") + "\n")
         wait_for_output(
@@ -80,79 +78,108 @@ def run_extended_observation(env, result: CaseResult, workload: dict[str, str]) 
             raise RuntimeError(f"extended workload failed\nstdout={stdout}\nstderr={stderr}")
         summary, events, network, payloads = wait_extended_views(env, config, trace_id, workload, target_values)
         result.stdout_tail = env.output_tail("\n".join((summary, events, network, payloads)))
+        completion_evidence = f"trace-{trace_id}; {line_evidence(summary, 'state=Completed')}"
         add_expected_found_check(
             result,
             f"{name} manual trace completion",
             "trace state Completed",
-            f"trace-{trace_id}; {line_evidence(summary, 'state=Completed')}",
+            completion_evidence,
             "viewer output contains documented process/file/network/resource/stdio evidence",
+            status=required_evidence_status(completion_evidence),
+        )
+        process_evidence = event_rows(
+            events,
+            [
+                ("fork row", "Process", "fork", ()),
+                ("exec row", "Process", "exec", ()),
+                ("exit row", "Process", "exit", ()),
+            ],
         )
         add_expected_found_check(
             result,
             f"{name} process lifecycle",
             "Process fork, exec, and exit rows",
-            event_rows(
-                events,
-                [
-                    ("fork row", "Process", "fork", ()),
-                    ("exec row", "Process", "exec", ()),
-                    ("exit row", "Process", "exit", ()),
-                ],
-            ),
+            process_evidence,
             "extended docs require process lifecycle observation",
+            status=required_evidence_status(process_evidence),
+        )
+        file_evidence = event_rows(
+            events,
+            [
+                ("file write row", "File", "write", (required(target_values, "file_path"),)),
+                ("mmap row", "File", "mmap_shared", ()),
+                ("mkdir row", "File", "mkdir", ()),
+                ("rename row", "File", "rename", ()),
+                ("unlink row", "File", "unlink", ()),
+                ("truncate row", "File", "truncate", ()),
+            ],
         )
         add_expected_found_check(
             result,
             f"{name} file and mmap",
-            "fifo/file path, mmap_shared, mkdir, rename, unlink, truncate",
-            event_rows(
-                events,
-                [
-                    ("fifo open row", "File", "open", (required(target_values, "fifo_path"),)),
-                    ("file write row", "File", "write", (required(target_values, "file_path"),)),
-                    ("mmap row", "File", "mmap_shared", ()),
-                    ("mkdir row", "File", "mkdir", ()),
-                    ("rename row", "File", "rename", ()),
-                    ("unlink row", "File", "unlink", ()),
-                    ("truncate row", "File", "truncate", ()),
-                ],
-            ),
+            "file path, mmap_shared, mkdir, rename, unlink, truncate",
+            file_evidence,
             "extended docs require file, path mutation, and mmap evidence",
+            status=required_evidence_status(file_evidence),
+        )
+        ipc_evidence = event_rows(
+            events,
+            [
+                ("pipe write row", "Ipc", "pipe", ("operation=write",)),
+                ("pipe read row", "Ipc", "pipe", ("operation=read",)),
+                ("fifo write row", "Ipc", "fifo", ("operation=write", required(target_values, "fifo_path"))),
+                ("fifo read row", "Ipc", "fifo", ("operation=read", required(target_values, "fifo_path"))),
+                ("unix socket write row", "Ipc", "unix_socket", ("operation=write",)),
+                ("unix socket read row", "Ipc", "unix_socket", ("operation=read",)),
+            ],
+        )
+        add_expected_found_check(
+            result,
+            f"{name} ipc",
+            "pipe, fifo, and unix_socket read/write rows",
+            ipc_evidence,
+            "extended docs require pipe, FIFO, and Unix socket IPC evidence",
+            status=required_evidence_status(ipc_evidence),
+        )
+        network_evidence = network_rows(
+            network,
+            [
+                ("connect row", "connect", ()),
+                ("accept row", "accept", ()),
+                ("send row", "send", ()),
+                ("recv row", "recv", ()),
+            ],
         )
         add_expected_found_check(
             result,
             f"{name} network",
             "connect, accept, send, and recv network rows",
-            network_rows(
-                network,
-                [
-                    ("connect row", "connect", ()),
-                    ("accept row", "accept", ()),
-                    ("send row", "send", ()),
-                    ("recv row", "recv", ()),
-                ],
-            ),
+            network_evidence,
             "extended docs require local TCP network evidence",
+            status=required_evidence_status(network_evidence),
+        )
+        resource_stdio_evidence = event_rows(
+            events,
+            [
+                ("resource process_tree row", "Resource", "process_tree", ()),
+            ],
+        ) + evidence_rows(
+            payloads,
+            [
+                ("stdio outbound payload row", ("Stdio", "outbound", "write")),
+                ("stdio inbound payload row", ("Stdio", "inbound", "read")),
+            ],
         )
         add_expected_found_check(
             result,
             f"{name} resource and stdio",
             "Resource process_tree event and Stdio payload rows",
-            event_rows(
-                events,
-                [
-                    ("resource process_tree row", "Resource", "process_tree", ()),
-                ],
-            )
-            + evidence_rows(
-                payloads,
-                [
-                    ("stdio outbound payload row", ("Stdio", "outbound", "write")),
-                    ("stdio inbound payload row", ("Stdio", "inbound", "read")),
-                ],
-            ),
+            resource_stdio_evidence,
             "extended docs require resource metrics and stdio payload evidence",
+            status=required_evidence_status(resource_stdio_evidence),
         )
+        stop_process(daemon, workload)
+        daemon = None
         verify_live_output = run_extended_verify_live(env, result, workload)
         result.stdout_tail = env.output_tail(result.stdout_tail + "\n" + verify_live_output)
         return PASS
@@ -161,6 +188,17 @@ def run_extended_observation(env, result: CaseResult, workload: dict[str, str]) 
     finally:
         stop_process(target, workload)
         stop_process(daemon, workload)
+
+
+def parse_workload_pid(output: str) -> int:
+    for line in output.splitlines():
+        if line.startswith("workload_pid="):
+            return int(line.split("=", 1)[1])
+    raise RuntimeError(f"extended workload did not report workload_pid\nstdout={output}")
+
+
+def required_evidence_status(evidence: str) -> str:
+    return FAIL if "missing " in evidence else PASS
 
 
 def wait_extended_views(

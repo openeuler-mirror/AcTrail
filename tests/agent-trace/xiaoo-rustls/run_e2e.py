@@ -67,6 +67,7 @@ def main() -> int:
             "agent-xiaoo-rustls",
             [
                 str(xiaoo_binary),
+                "--cli",
                 "run",
                 "--no-tools",
                 "--max-turns",

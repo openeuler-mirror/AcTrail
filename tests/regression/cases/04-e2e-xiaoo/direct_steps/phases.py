@@ -26,6 +26,7 @@ def run_xiaoo_launch_step(
                 "agent-xiaoo-rustls",
                 [
                     str(xiaoo_binary),
+                    "--cli",
                     "run",
                     "--no-tools",
                     "--max-turns",

@@ -249,15 +249,18 @@ def finish_claude_capture(
             payloads,
             int(module.required(workload, "payload_fetch_count")),
         ),
-        lambda text: expected_found_detail("payload text can be fetched", [f"captured_payload_text_bytes={len(text.encode('utf-8'))}"]),
-        "payload text can be fetched from captured segment ids",
+        lambda text: expected_found_detail(
+            "payload text fetch returns no retained body",
+            [f"retained_payload_text_bytes={module.retained_payload_text_bytes(text)}"],
+        ),
+        "payload text fetch confirms Claude LLM payload bodies are not retained",
     )
     run_step(
         result,
-        "non-empty payload text",
-        lambda: module.require_non_empty_payload_text(text),
-        expected_found_detail("payload text is non-empty", ["payload text is non-empty"]),
-        "captured payload text is available for marker/export validation",
+        "payload text omitted",
+        lambda: module.require_no_retained_payload_text(text),
+        expected_found_detail("payload text body is omitted", ["retained_payload_text_bytes=0"]),
+        "Claude LLM request/response body content is consumed into semantic actions instead of duplicated in payload storage",
     )
     marker = module.required(workload, "prompt_marker")
     export_document = run_step(
@@ -269,10 +272,13 @@ def finish_claude_capture(
     )
     run_step(
         result,
-        "exported payload marker",
-        lambda: module.require_exported_payload_marker(export_document, marker),
-        expected_found_detail("JSON graph export contains request marker", [f"exported_payload_marker={marker}"]),
-        "JSON graph export includes a Payload node with the request marker",
+        "exported payload metadata",
+        lambda: module.require_exported_payload_metadata(
+            export_document,
+            module.accepted_payload_sources(tls_runtime),
+        ),
+        expected_found_detail("JSON graph export contains payload metadata without body text", ["exported_payload_body=omitted"]),
+        "JSON graph export includes Payload metadata while omitting retained LLM body bytes",
     )
     otel_document = run_step(
         result,

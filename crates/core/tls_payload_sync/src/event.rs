@@ -11,6 +11,7 @@ const EVENT_VERSION: &str = "v1";
 const FIELD_SEPARATOR: char = '\t';
 const PAYLOAD_OPCODE: &str = "payload";
 const DECISION_OPCODE: &str = "decision";
+const SUMMARY_OPCODE: &str = "summary";
 const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -39,9 +40,26 @@ pub struct DecisionEvent {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SummaryEvent {
+    pub trace_id: u64,
+    pub pid: u32,
+    pub direction: PayloadDirection,
+    pub provider: String,
+    pub symbol: String,
+    pub stream_key: u64,
+    pub sequence: u64,
+    pub observed_size: u64,
+    pub emitted_size: u64,
+    pub reason: String,
+    pub protocol_hint: String,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SyncEvent {
     Payload(PayloadEvent),
     Decision(DecisionEvent),
+    Summary(SummaryEvent),
 }
 
 pub fn encode_event_line(event: &SyncEvent) -> Vec<u8> {
@@ -87,6 +105,27 @@ pub fn write_event_line(writer: &mut impl Write, event: &SyncEvent) -> SyncResul
             )?;
             write_hex(writer, event.reason.as_bytes())?;
         }
+        SyncEvent::Summary(event) => {
+            write_fields(
+                writer,
+                &[
+                    EVENT_VERSION,
+                    SUMMARY_OPCODE,
+                    &event.trace_id.to_string(),
+                    &event.pid.to_string(),
+                    event.direction.as_str(),
+                    &event.provider,
+                    &event.symbol,
+                    &event.stream_key.to_string(),
+                    &event.sequence.to_string(),
+                    &event.observed_size.to_string(),
+                    &event.emitted_size.to_string(),
+                    &event.reason,
+                    &event.protocol_hint,
+                ],
+            )?;
+            write_hex(writer, &event.bytes)?;
+        }
     }
     writer.write_all(b"\n").map_err(sync_io_error)
 }
@@ -102,6 +141,7 @@ pub fn decode_event_line(line: &[u8]) -> SyncResult<SyncEvent> {
     match fields.get(1).copied() {
         Some(PAYLOAD_OPCODE) => decode_payload(&fields),
         Some(DECISION_OPCODE) => decode_decision(&fields),
+        Some(SUMMARY_OPCODE) => decode_summary(&fields),
         _ => Err(SyncError::new("unknown sync event opcode")),
     }
 }
@@ -136,6 +176,25 @@ fn decode_decision(fields: &[&str]) -> SyncResult<SyncEvent> {
         sequence: parse(fields[8], "sequence")?,
         action: fields[9].to_string(),
         reason,
+    }))
+}
+
+fn decode_summary(fields: &[&str]) -> SyncResult<SyncEvent> {
+    require_len(fields, 14, SUMMARY_OPCODE)?;
+    Ok(SyncEvent::Summary(SummaryEvent {
+        trace_id: parse(fields[2], "trace_id")?,
+        pid: parse(fields[3], "pid")?,
+        direction: PayloadDirection::from_str(fields[4])
+            .map_err(|error| SyncError::new(error.to_string()))?,
+        provider: fields[5].to_string(),
+        symbol: fields[6].to_string(),
+        stream_key: parse(fields[7], "stream_key")?,
+        sequence: parse(fields[8], "sequence")?,
+        observed_size: parse(fields[9], "observed_size")?,
+        emitted_size: parse(fields[10], "emitted_size")?,
+        reason: fields[11].to_string(),
+        protocol_hint: fields[12].to_string(),
+        bytes: decode_hex(fields[13])?,
     }))
 }
 

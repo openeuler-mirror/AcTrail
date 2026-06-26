@@ -61,6 +61,7 @@ def run_agent_invocation(env, result: CaseResult, workload: dict[str, str]) -> s
     xiaoo_check = env.run(
         [
             str(xiaoo),
+            "--cli",
             "run",
             "--no-tools",
             "--max-turns",
@@ -127,7 +128,7 @@ def run_agent_invocation(env, result: CaseResult, workload: dict[str, str]) -> s
     add_expected_found_check(
         result,
         f"{name} OTEL invocation edge",
-        "one complete agent-labeled command.invocation plus Claude tool-use llm.response",
+        "one complete agent-labeled command.invocation plus Claude child Bash command",
         bullet_evidence(edge.facts + [f"missing: {item}" for item in edge.missing]),
         "docs example 07 must prove the direct launcher -> Claude semantic edge plus the xiaoO trace root",
         status=otel_status,

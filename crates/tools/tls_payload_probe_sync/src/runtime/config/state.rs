@@ -9,6 +9,8 @@ use tls_payload_core::{
 };
 use tls_payload_sync::{EventClient, SyncEvent};
 
+use crate::runtime::flow_control::{FlowControlConfig, FlowController, FlowDecision};
+
 use super::plan::RuntimePlan;
 use super::policy::{EventFilter, RedactionMode};
 
@@ -24,6 +26,7 @@ pub(in crate::runtime) struct HookPoint {
 pub(super) struct RuntimeConfigParts {
     pub(super) rules: Vec<RewriteRule>,
     pub(super) max_payload_bytes: usize,
+    pub(super) flow_control: FlowControlConfig,
     pub(super) redaction: RedactionMode,
     pub(super) events: EventFilter,
     pub(super) trace_id: Option<u64>,
@@ -67,11 +70,13 @@ impl EventTransportConfig {
 pub(in crate::runtime) struct RuntimeConfig {
     processor: Mutex<EqualLenRewriteProcessor>,
     max_payload_bytes: usize,
+    flow_control: FlowControlConfig,
     redaction: RedactionMode,
     events: EventFilter,
     trace_id: Option<u64>,
     event_transport: Option<EventTransportConfig>,
     event_client: Mutex<Option<EventClient>>,
+    flow_controller: Mutex<FlowController>,
     sequence: AtomicU64,
     symbol_providers: Mutex<BTreeMap<String, String>>,
 }
@@ -81,11 +86,13 @@ impl RuntimeConfig {
         Self {
             processor: Mutex::new(EqualLenRewriteProcessor::new(parts.rules)),
             max_payload_bytes: parts.max_payload_bytes,
+            flow_control: parts.flow_control,
             redaction: parts.redaction,
             events: parts.events,
             trace_id: parts.trace_id,
             event_transport: parts.event_transport,
             event_client: Mutex::new(None),
+            flow_controller: Mutex::new(FlowController::default()),
             sequence: AtomicU64::new(0),
             symbol_providers: Mutex::new(BTreeMap::new()),
         }
@@ -160,6 +167,20 @@ impl RuntimeConfig {
         client.send(event).map_err(|error| error.to_string())
     }
 
+    pub(in crate::runtime) fn classify_flow(
+        &self,
+        direction: PayloadDirection,
+        stream_key: usize,
+        payload: &[u8],
+    ) -> FlowDecision {
+        self.flow_controller
+            .lock()
+            .map(|mut controller| {
+                controller.observe(self.flow_control, direction, stream_key, payload)
+            })
+            .unwrap_or(FlowDecision::EmitPayload)
+    }
+
     pub(in crate::runtime) fn close_event_client(&self) -> Result<(), String> {
         let client = self
             .event_client
@@ -219,12 +240,21 @@ mod tests {
     use super::{HookPoint, RuntimeConfig, RuntimeConfigParts};
     use crate::runtime::config::plan::RuntimePlan;
     use crate::runtime::config::policy::{EventFilter, RedactionMode};
+    use crate::runtime::flow_control::FlowControlConfig;
 
     #[test]
     fn runtime_config_registers_provider_after_plan_install() {
         let config = RuntimeConfig::from_parts(RuntimeConfigParts {
             rules: Vec::new(),
             max_payload_bytes: 4096,
+            flow_control: FlowControlConfig {
+                enabled: true,
+                sniff_bytes: 65536,
+                max_header_bytes: 16384,
+                large_transfer_bytes: 1048576,
+                unknown_stream_bytes: 65536,
+                h2_data_probe_bytes: 65536,
+            },
             redaction: RedactionMode::Redact,
             events: EventFilter::parse(Some("")).expect("empty event filter"),
             trace_id: None,

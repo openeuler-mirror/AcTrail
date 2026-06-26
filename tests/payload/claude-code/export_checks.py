@@ -62,16 +62,42 @@ def export_trace_otel(
         return json.load(handle)
 
 
-def require_exported_payload_marker(document: dict, marker: str) -> None:
+def require_exported_payload_metadata(document: dict, accepted_sources: list[tuple[str, str]]) -> None:
     for node in payload_nodes(document):
         attributes = node.get("attributes", {})
         if (
             attributes.get("direction") == "Outbound"
-            and attributes.get("bytes_base64")
-            and marker in attributes.get("text", "")
+            and source_accepted(attributes, accepted_sources)
+            and positive_int(attributes.get("captured_size"))
+            and attributes.get("operation_completion_state") == "success"
+            and attributes.get("truncation") == "Complete"
+            and attributes.get("bytes_base64") == ""
+            and attributes.get("text") == ""
         ):
             return
-    raise RuntimeError(f"exported JSON payload nodes did not contain prompt marker {marker}")
+    detail = ", ".join(f"{source}/{library}" for source, library in accepted_sources)
+    raise RuntimeError(
+        "exported JSON payload nodes did not contain retained-body-free outbound payload metadata "
+        f"for accepted sources: {detail}"
+    )
+
+
+def source_accepted(attributes: dict, accepted_sources: list[tuple[str, str]]) -> bool:
+    source_boundary = attributes.get("source_boundary")
+    library = attributes.get("library")
+    return any(
+        source_boundary == accepted_source and library == accepted_library
+        for accepted_source, accepted_library in accepted_sources
+    )
+
+
+def positive_int(value: object) -> bool:
+    if value is None:
+        return False
+    try:
+        return int(value) > 0
+    except (TypeError, ValueError):
+        return False
 
 
 def wait_for_semantic_actions(

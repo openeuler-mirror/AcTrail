@@ -93,6 +93,7 @@ def run_xiaoo_availability_check(
     availability = env.run(
         [
             str(xiaoo_binary),
+            "--cli",
             "run",
             "--no-tools",
             "--max-turns",

@@ -7,7 +7,7 @@ Process shape:
 ```text
 agent_a
   -> bash script_b.sh
-       -> xiaoo run -p ...
+       -> xiaoo --cli run -p ...
 ```
 
 `agent_a` is compiled from `agent_a.c` during the test. It uses OpenSSL directly so launch-time TLS probe resolution has deterministic hook points for the root process.

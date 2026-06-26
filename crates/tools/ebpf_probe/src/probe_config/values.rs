@@ -97,6 +97,46 @@ impl ConfigValues {
         }
     }
 
+    fn optional_positive_u32(&self, key: &'static str, default: u32) -> Result<u32, String> {
+        let Some(values) = self.values.get(key) else {
+            return Ok(default);
+        };
+        if values.len() != 1 {
+            return Err(format!("config key {key} must appear once"));
+        }
+        let value = values
+            .first()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| format!("missing config key {key}"))?;
+        let parsed = value
+            .parse::<u32>()
+            .map_err(|error| format!("invalid {key}: {error}"))?;
+        if parsed == 0 {
+            return Err(format!("invalid {key}: value must be positive"));
+        }
+        Ok(parsed)
+    }
+
+    fn optional_positive_u64(&self, key: &'static str, default: u64) -> Result<u64, String> {
+        let Some(values) = self.values.get(key) else {
+            return Ok(default);
+        };
+        if values.len() != 1 {
+            return Err(format!("config key {key} must appear once"));
+        }
+        let value = values
+            .first()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| format!("missing config key {key}"))?;
+        let parsed = value
+            .parse::<u64>()
+            .map_err(|error| format!("invalid {key}: {error}"))?;
+        if parsed == 0 {
+            return Err(format!("invalid {key}: value must be positive"));
+        }
+        Ok(parsed)
+    }
+
     fn required_u32(&self, key: &'static str) -> Result<u32, String> {
         self.required(key)?
             .parse::<u32>()
@@ -332,6 +372,18 @@ impl ConfigValues {
             sync_event_socket_path: self.required_path("payload_tls_sync_event_socket_path")?,
             sync_socket_mode: self.required_octal("payload_tls_sync_socket_mode_octal")?,
             sync_match_limit: self.required_positive_u32("payload_tls_sync_match_limit")?,
+            sync_flow_control_enabled: self
+                .optional_bool("payload_tls_sync_flow_control_enabled", true)?,
+            sync_flow_sniff_bytes: self
+                .optional_positive_u32("payload_tls_sync_flow_sniff_bytes", 65536)?,
+            sync_flow_max_header_bytes: self
+                .optional_positive_u32("payload_tls_sync_flow_max_header_bytes", 16384)?,
+            sync_flow_large_transfer_bytes: self
+                .optional_positive_u64("payload_tls_sync_flow_large_transfer_bytes", 1048576)?,
+            sync_flow_unknown_stream_bytes: self
+                .optional_positive_u64("payload_tls_sync_flow_unknown_stream_bytes", 65536)?,
+            sync_flow_h2_data_probe_bytes: self
+                .optional_positive_u64("payload_tls_sync_flow_h2_data_probe_bytes", 65536)?,
             java_agent_enabled: self.optional_bool("payload_tls_java_agent_enabled", false)?,
         })
     }

@@ -1,8 +1,9 @@
 //! Shared synchronous payload decision execution.
 
 use tls_payload_core::{Decision, PayloadDirection};
-use tls_payload_sync::{DecisionEvent, PayloadEvent, SyncEvent};
+use tls_payload_sync::{DecisionEvent, PayloadEvent, SummaryEvent, SyncEvent};
 
+use crate::runtime::flow_control::{FlowDecision, FlowSummary};
 use crate::runtime::{config, output};
 
 pub(super) enum RuntimeAction {
@@ -102,21 +103,85 @@ pub(super) fn report_payload(
         return;
     };
     let provider = config.provider_for_symbol(symbol);
-    send_payload_event(
-        config, &provider, direction, symbol, stream_key, sequence, payload,
-    );
+    let flow_decision = config.classify_flow(direction, stream_key, payload);
+    match &flow_decision {
+        FlowDecision::EmitPayload => {
+            send_payload_event(
+                config, &provider, direction, symbol, stream_key, sequence, payload,
+            );
+        }
+        FlowDecision::EmitSummary(summary) => {
+            send_summary_event(
+                config,
+                &provider,
+                direction,
+                symbol,
+                stream_key,
+                sequence,
+                summary.clone(),
+            );
+        }
+        FlowDecision::DropBody => {}
+    }
     if !config.should_print_payload() {
         return;
     }
-    output::event_line(&format!(
-        "sync_payload: direction={} provider={} symbol={} stream=0x{:x} bytes={} preview={}\n",
-        direction.as_str(),
-        provider,
-        symbol,
-        stream_key,
-        payload.len(),
-        config.redact_payload(payload)
-    ));
+    match flow_decision {
+        FlowDecision::EmitPayload => output::event_line(&format!(
+            "sync_payload: direction={} provider={} symbol={} stream=0x{:x} bytes={} preview={}\n",
+            direction.as_str(),
+            provider,
+            symbol,
+            stream_key,
+            payload.len(),
+            config.redact_payload(payload)
+        )),
+        FlowDecision::EmitSummary(summary) => output::event_line(&format!(
+            "sync_payload_summary: direction={} provider={} symbol={} stream=0x{:x} observed_bytes={}\n",
+            direction.as_str(),
+            provider,
+            symbol,
+            stream_key,
+            summary.observed_size
+        )),
+        FlowDecision::DropBody => output::event_line(&format!(
+            "sync_payload_drop_body: direction={} provider={} symbol={} stream=0x{:x} bytes={}\n",
+            direction.as_str(),
+            provider,
+            symbol,
+            stream_key,
+            payload.len()
+        )),
+    }
+}
+
+fn send_summary_event(
+    config: &config::RuntimeConfig,
+    provider: &str,
+    direction: PayloadDirection,
+    symbol: &str,
+    stream_key: usize,
+    sequence: u64,
+    summary: FlowSummary,
+) {
+    let Some(trace_id) = config.trace_id() else {
+        return;
+    };
+    let event = SyncEvent::Summary(SummaryEvent {
+        trace_id,
+        pid: process_id(),
+        direction,
+        provider: provider.to_string(),
+        symbol: symbol.to_string(),
+        stream_key: stream_key as u64,
+        sequence,
+        observed_size: summary.observed_size,
+        emitted_size: summary.bytes.len() as u64,
+        reason: summary.reason.to_string(),
+        protocol_hint: summary.protocol_hint.to_string(),
+        bytes: summary.bytes,
+    });
+    send_event_or_drop(config, event);
 }
 
 pub(super) fn report_decision(

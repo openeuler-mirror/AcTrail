@@ -11,6 +11,21 @@
         </div>
       </div>
       <div ref="actionTreeCanvas" class="action-tree-canvas">
+        <svg
+          v-if="httpExchangeArcs.length"
+          class="http-exchange-overlay"
+          :width="arcOverlaySize.width"
+          :height="arcOverlaySize.height"
+          :viewBox="`0 0 ${arcOverlaySize.width} ${arcOverlaySize.height}`"
+          aria-hidden="true"
+        >
+          <path
+            v-for="arc in httpExchangeArcs"
+            :key="arc.id"
+            class="http-exchange-arc"
+            :d="arc.path"
+          />
+        </svg>
         <ActionTreeNode
           v-if="treeModel.root"
           :key="traceKey"
@@ -35,7 +50,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 import { readActionDetail, readActionTreeChildren } from '../../../api';
 import ActionTreeNode from '../../../components/ActionTreeNode.vue';
@@ -46,6 +61,7 @@ import {
   buildVisibleActionTreeModel,
   mergeActionTreeChildren,
 } from './model';
+import { buildHttpExchangeArcOverlay } from './httpExchangeArcs';
 import { TREE_NODE_TYPES, UI_LIMITS } from './config';
 
 const props = defineProps({
@@ -72,7 +88,12 @@ const actionTreeCanvas = ref(null);
 const selectedDetailId = ref(null);
 const selectedDetail = ref(null);
 const detailError = ref('');
+const httpExchangeArcs = ref([]);
+const arcOverlaySize = ref({ width: 0, height: 0 });
 let activeDetailLoad = null;
+let arcRefreshFrame = 0;
+let canvasMutationObserver = null;
+let canvasResizeObserver = null;
 
 const treeModel = computed(() =>
   rootNode.value
@@ -96,6 +117,24 @@ watch(
   },
   { immediate: true },
 );
+
+watch(
+  () => [props.traceKey, props.query, treeModel.value.root],
+  () => {
+    scheduleHttpExchangeArcRefresh();
+  },
+  { flush: 'post' },
+);
+
+onMounted(() => {
+  connectCanvasObservers();
+  scheduleHttpExchangeArcRefresh();
+});
+
+onBeforeUnmount(() => {
+  disconnectCanvasObservers();
+  cancelHttpExchangeArcRefresh();
+});
 
 async function selectNode(node) {
   const token = Symbol();
@@ -201,9 +240,11 @@ async function loadChildPage(visibleNode, target, offset, append) {
     target.hasMoreChildren = Boolean(childData?.has_more);
     target.hasChildren = target.totalChildren > 0 || target.children.length > 0;
     syncVisibleNode(visibleNode, target);
+    scheduleHttpExchangeArcRefresh();
   } catch (err) {
     target.error = String(err.message ?? err);
     syncVisibleNode(visibleNode, target);
+    scheduleHttpExchangeArcRefresh();
   } finally {
     if (append) {
       setLoadingMoreState(visibleNode, target, false);
@@ -262,6 +303,62 @@ function syncVisibleNode(visibleNode, targetNode) {
   visibleNode.error = targetNode.error;
 }
 
+function connectCanvasObservers() {
+  const canvas = actionTreeCanvas.value;
+  if (!canvas) {
+    return;
+  }
+  canvasMutationObserver = new MutationObserver(() => {
+    scheduleHttpExchangeArcRefresh();
+  });
+  canvasMutationObserver.observe(canvas, {
+    childList: true,
+    subtree: true,
+  });
+  if (typeof ResizeObserver !== 'undefined') {
+    canvasResizeObserver = new ResizeObserver(() => {
+      scheduleHttpExchangeArcRefresh();
+    });
+    canvasResizeObserver.observe(canvas);
+  }
+}
+
+function disconnectCanvasObservers() {
+  canvasMutationObserver?.disconnect();
+  canvasMutationObserver = null;
+  canvasResizeObserver?.disconnect();
+  canvasResizeObserver = null;
+}
+
+function scheduleHttpExchangeArcRefresh() {
+  cancelHttpExchangeArcRefresh();
+  arcRefreshFrame = window.requestAnimationFrame(async () => {
+    arcRefreshFrame = 0;
+    await nextTick();
+    refreshHttpExchangeArcs();
+  });
+}
+
+function cancelHttpExchangeArcRefresh() {
+  if (!arcRefreshFrame) {
+    return;
+  }
+  window.cancelAnimationFrame(arcRefreshFrame);
+  arcRefreshFrame = 0;
+}
+
+function refreshHttpExchangeArcs() {
+  const canvas = actionTreeCanvas.value;
+  if (!canvas || !treeModel.value.root) {
+    httpExchangeArcs.value = [];
+    arcOverlaySize.value = { width: 0, height: 0 };
+    return;
+  }
+  const overlay = buildHttpExchangeArcOverlay(treeModel.value.root, canvas);
+  httpExchangeArcs.value = overlay.arcs;
+  arcOverlaySize.value = overlay.size;
+}
+
 function scrollNodeIntoView(nodeId) {
   const canvas = actionTreeCanvas.value;
   if (!canvas || !nodeId) {
@@ -316,12 +413,38 @@ function scrollNodeIntoView(nodeId) {
 }
 
 .action-tree-canvas {
+  position: relative;
   width: max-content;
   min-width: 100%;
   padding: 34px 36px 32px;
 }
 
+.http-exchange-overlay {
+  position: absolute;
+  inset: 0 auto auto 0;
+  z-index: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.action-tree-canvas > .action-tree-node {
+  position: relative;
+  z-index: 1;
+}
+
+.http-exchange-arc {
+  fill: none;
+  stroke: rgba(13, 148, 136, 0.5);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 6 6;
+  vector-effect: non-scaling-stroke;
+}
+
 .action-tree-empty {
+  position: relative;
+  z-index: 1;
   width: var(--action-node-width);
   min-height: var(--action-node-min-height);
   display: grid;

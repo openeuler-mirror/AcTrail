@@ -32,7 +32,7 @@ target/release/actraild --config tests/agent-trace/xiaoo-http-proxy/operator.con
 export ACTRAIL_XIAOO_HTTP_PROXY_API_KEY=actrail-local-proxy-key
 target/release/actrailctl --config tests/agent-trace/xiaoo-http-proxy/operator.conf \
   launch --name agent-xiaoo-http-proxy -- \
-  xiaoo run --config tests/agent-trace/xiaoo-http-proxy/xiaoo-config.toml \
+  xiaoo --cli run --config tests/agent-trace/xiaoo-http-proxy/xiaoo-config.toml \
     --no-tools --max-turns 1 --prompt '请只输出 ACTRAIL_XIAOO_HTTP_PROXY_OK，不要解释'
 ```
 

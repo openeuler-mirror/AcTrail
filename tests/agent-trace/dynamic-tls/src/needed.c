@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "post_payload_sleep.h"
+
 int SSL_write(void *ssl, const void *buffer, int length);
 int SSL_read(void *ssl, void *buffer, int length);
 
@@ -29,5 +31,8 @@ int main(int argc, char **argv) {
     return 4;
   }
   printf("dynamic-needed-reply=%.*s\n", read, reply);
+  if (actrail_sleep_after_payload() != 0) {
+    return 5;
+  }
   return 0;
 }

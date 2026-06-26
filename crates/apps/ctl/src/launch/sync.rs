@@ -8,7 +8,7 @@ use config_core::daemon::{
 };
 use model_core::ids::TraceId;
 use tls_payload_sync::{
-    EventFilter, RedactionMode, RuntimeEnvConfig, RuntimeLibraryPath,
+    EventFilter, RedactionMode, RuntimeEnvConfig, RuntimeFlowControlConfig, RuntimeLibraryPath,
     audit_env_value_for_libraries, audit_libraries_for_plans, launch_command_for_plan,
     preload_env_value_for_libraries, runtime_env_for_plans, runtime_library_path,
     validate_native_backend_plan,
@@ -76,6 +76,18 @@ pub(super) fn sync_launch_envs(
             rules: Vec::new(),
             max_payload_bytes: usize::try_from(config.max_operation_bytes)
                 .map_err(|error| format!("payload_tls_max_operation_bytes overflow: {error}"))?,
+            flow_control: RuntimeFlowControlConfig {
+                enabled: config.sync_flow_control_enabled,
+                sniff_bytes: usize::try_from(config.sync_flow_sniff_bytes).map_err(|error| {
+                    format!("payload_tls_sync_flow_sniff_bytes overflow: {error}")
+                })?,
+                max_header_bytes: usize::try_from(config.sync_flow_max_header_bytes).map_err(
+                    |error| format!("payload_tls_sync_flow_max_header_bytes overflow: {error}"),
+                )?,
+                large_transfer_bytes: config.sync_flow_large_transfer_bytes,
+                unknown_stream_bytes: config.sync_flow_unknown_stream_bytes,
+                h2_data_probe_bytes: config.sync_flow_h2_data_probe_bytes,
+            },
             redaction: RedactionMode::Redact,
             events: EventFilter::none(),
             trace_id: Some(trace_id.get()),
