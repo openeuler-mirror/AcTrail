@@ -34,6 +34,12 @@ pub(super) fn trace_record_json(trace: &TraceRecord) -> String {
     output.push(',');
     json::field(
         &mut output,
+        "container_id",
+        &json::optional_string(trace.root_container_id.as_deref()),
+    );
+    output.push(',');
+    json::field(
+        &mut output,
         "state",
         &json::string(&format!("{:?}", trace.lifecycle_state)),
     );

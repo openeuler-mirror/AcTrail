@@ -1,6 +1,7 @@
 //! Shared domain nouns and stable value models.
 
 pub mod capability;
+pub mod container;
 pub mod diagnostics;
 pub mod event;
 pub mod ids;

@@ -66,12 +66,17 @@ fn render_otlp_json_compact(
         }
         spans.push(render_span(trace, action, links));
     }
-    let resource_attrs = vec![
+    let mut resource_attrs = vec![
         string_attr("service.name", service_name),
         string_attr("actrail.trace.display_name", trace.display_name.as_str()),
         string_attr("actrail.trace.profile_name", trace.profile_name.as_str()),
         int_attr("actrail.trace.id", trace.trace_id.get()),
     ];
+    // Emit the container the root agent ran in, when resolved. `container.id`
+    // is the OpenTelemetry semantic convention for this value.
+    if let Some(container_id) = trace.root_container_id.as_deref() {
+        resource_attrs.push(string_attr("container.id", container_id));
+    }
     format!(
         "{{\"resourceSpans\":[{{\"resource\":{{\"attributes\":[{}]}},\"scopeSpans\":[{{\"scope\":{{\"name\":\"actrail.semantic_actions\",\"version\":\"{}\"}},\"spans\":[{}]}}]}}]}}",
         resource_attrs.join(","),

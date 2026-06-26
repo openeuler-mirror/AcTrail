@@ -93,6 +93,9 @@ where
                 trace_id,
                 TrackTraceRequest {
                     root_identity: root_identity.clone(),
+                    // Generic attach path: container id is resolved host-side in
+                    // the daemon's `services/attach.rs`, not here.
+                    root_container_id: None,
                     display_name: request.display_name,
                     profile_snapshot: request.profile_snapshot,
                     tags: request.tags,

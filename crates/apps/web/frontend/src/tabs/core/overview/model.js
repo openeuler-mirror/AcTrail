@@ -9,6 +9,7 @@ export function buildOverviewSections(traceDetail, actionTree) {
         ['Name', trace.name],
         ['Profile', trace.profile],
         ['Root PID', trace.root_pid],
+        ['Container', trace.container_id],
         ['State', trace.state],
         ['Health', trace.health],
         ['Created', formatTime(trace.created_at)],
