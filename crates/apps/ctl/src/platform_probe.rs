@@ -1,6 +1,10 @@
 //! Local platform probes and launch recommendation for actrailctl.
 
-use config_core::daemon::{OperatorConfig, PayloadTlsConfig, PayloadTlsSeccompSyscall, PayloadTlsSyncRuntimeLibraryPath};
+use config_core::capture_profile::CaptureProfile;
+use config_core::daemon::{
+    DisabledOrPath, OperatorConfig, PayloadTlsConfig, PayloadTlsSeccompSyscall,
+    PayloadTlsSyncRuntimeLibraryPath,
+};
 use control_contract::reply::DoctorReply;
 use linux_platform::capability_probe::{CapabilityStatus, probe_no_new_privs, probe_unix_socket};
 use tls_payload_sync::RuntimeLibraryPath;
@@ -250,60 +254,81 @@ pub fn suggest_config_text(
         .map(|reply| reply.available_collectors.iter().any(|c| c == "ebpf"))
         .unwrap_or(false);
 
-    let mut config = config_core::daemon::OPERATOR_CONFIG_TEMPLATE.to_string();
+    // Start from the default hierarchical template (or the loaded config, if
+    // present, to preserve operator-chosen paths), parse it into an
+    // OperatorConfig, mutate the fields the probes inform, and re-render to
+    // TOML. This is far more robust than line-based patching of the template.
+    let template = match loaded {
+        Some(config) => match config.to_hierarchical_toml() {
+            Ok(toml) => toml,
+            Err(_) => OperatorConfig::default_hierarchical_template()
+                .unwrap_or_default(),
+        },
+        None => OperatorConfig::default_hierarchical_template()
+            .unwrap_or_default(),
+    };
+    let mut config = match OperatorConfig::parse(&template) {
+        Ok(config) => config,
+        Err(error) => {
+            return format!(
+                "# suggest-config: could not parse baseline template: {error}\n"
+            );
+        }
+    };
 
-    // Preserve operator-chosen paths from the loaded config, if any.
-    if let Some(loaded) = loaded {
-        replace_line(&mut config, "socket_path", &loaded.socket_path.display().to_string());
-        replace_line(&mut config, "pid_file", &loaded.pid_file.display().to_string());
-        replace_line(
-            &mut config,
-            "storage_sqlite_path",
-            &loaded.storage.path().display().to_string(),
-        );
-        replace_line(
-            &mut config,
-            "payload_tls_sync_event_socket_path",
-            &loaded
-                .payload_config
-                .tls
-                .sync_event_socket_path
-                .display()
-                .to_string(),
-        );
-    }
-
-    // ebpf: always auto — the daemon probes at startup and auto-degrades when
-    // the host cannot run eBPF. No reason to hard-disable here.
-    replace_line(&mut config, "ebpf_enabled", "auto");
+    // ebpf: leave at the template default (enabled). The daemon probes eBPF
+    // at startup and the EbpfCollector self-reports unavailability; if the
+    // host cannot run eBPF the collector simply is not registered.
+    // (When auto mode is re-introduced, this is where ebpf.enabled_mode=auto
+    // would be set.)
+    let _ = ebpf_available;
 
     // TLS plaintext capture: only when the tls-sync prerequisites are met.
     if !tls_sync_ready {
-        replace_line(&mut config, "payload_tls_enabled", "false");
+        config.payload_config.tls.enabled = false;
     }
     // payload_tls_binary_path MUST stay disabled under tls-sync (the sync
     // backend builds the probe plan dynamically at launch). Enforce it
     // regardless of probe results — a fixed path is rejected with
     // "tls-sync auto plan requires payload_tls_binary_path=disabled".
-    replace_line(&mut config, "payload_tls_binary_path", "disabled");
+    config.payload_config.tls.binary_path = DisabledOrPath::Disabled;
 
     // Launch-time process seccomp: only when the seccomp launch path is
     // actually usable. When unavailable (e.g. Docker default seccomp blocks
-    // pidfd_getfd), disable it so the daemon starts without requiring
-    // proc-exec-context.
+    // pidfd_getfd), disable it and drop the capabilities that require it so
+    // the daemon starts without requiring proc-exec-context.
     if !seccomp_available {
-        replace_line(&mut config, "process_seccomp_enabled", "false");
-        remove_lines(&mut config, "required_capability = proc-exec-context");
-        remove_lines(&mut config, "required_capability = fs-access-basic");
-        remove_lines(&mut config, "required_capability = fs-mmap");
-        remove_lines(&mut config, "required_capability = ipc-unix-socket");
-        remove_lines(&mut config, "required_capability = ipc-pipe-fifo");
-        remove_lines(&mut config, "required_capability = stdio-chunk");
-        remove_lines(&mut config, "required_capability = resource-metrics");
+        config.process_seccomp.enabled = false;
+        drop_seccomp_only_capabilities(&mut config.capture_profile);
     }
 
+    let body = config.to_hierarchical_toml().unwrap_or_else(|error| {
+        format!("# suggest-config: could not render config: {error}\n")
+    });
     let header = suggest_config_header(report, seccomp_available, tls_sync_ready, ebpf_available);
-    format!("{header}\n{config}")
+    format!("{header}\n{body}")
+}
+
+/// Drop capabilities from a capture profile that require launch-time process
+/// seccomp or host eBPF when those are unavailable. Keeps the trace startable
+/// in a restricted container (tls-sync + host eBPF carry the remaining load).
+fn drop_seccomp_only_capabilities(profile: &mut CaptureProfile) {
+    use model_core::capability::{Capability, RequestMode};
+    // These either require process seccomp (proc-exec-context) or are eBPF-only
+    // metadata channels that are opportunistic anyway. Drop them so the profile
+    // only declares what the restricted path can actually satisfy.
+    const DROP: &[Capability] = &[
+        Capability::ProcExecContext,
+        Capability::FsAccessBasic,
+        Capability::FsMmap,
+        Capability::IpcUnixSocket,
+        Capability::IpcPipeFifo,
+        Capability::StdioChunk,
+        Capability::ResourceMetrics,
+    ];
+    profile.capabilities.retain(|request| {
+        !DROP.contains(&request.capability) || request.mode == RequestMode::Opportunistic
+    });
 }
 
 fn suggest_config_header(
@@ -346,10 +371,10 @@ fn suggest_config_header(
         lines.push(format!(
             "#   daemon collectors     = {} (ebpf {})",
             daemon.available_collectors.join(","),
-            if ebpf_available { "present" } else { "absent → ebpf_enabled=auto will degrade at startup" }
+            if ebpf_available { "present" } else { "absent — host eBPF unavailable; daemon will not register the ebpf collector" }
         ));
     } else {
-        lines.push("#   daemon                = not queried (--skip-daemon); ebpf_enabled=auto lets the daemon probe at startup".into());
+        lines.push("#   daemon                = not queried (--skip-daemon); ebpf availability unchecked here".into());
     }
     lines.join("\n")
 }
@@ -360,40 +385,6 @@ fn capability_summary(status: &CapabilityStatus) -> String {
     } else {
         "unavailable".to_string()
     }
-}
-
-/// Replace the value of a `key = value` line (first match only).
-fn replace_line(config: &mut String, key: &str, value: &str) {
-    let needle = format!("{key} =");
-    let replacement = format!("{key} = {value}");
-    let mut found = false;
-    let updated = config
-        .lines()
-        .map(|line| {
-            if !found && line.trim_start().starts_with(&needle) && !line.trim_start().starts_with('#') {
-                found = true;
-                replacement.clone()
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    *config = if found {
-        updated
-    } else {
-        // Key not present in template; append it.
-        format!("{updated}\n{replacement}")
-    };
-}
-
-/// Remove every line that equals `line` (after trimming).
-fn remove_lines(config: &mut String, line: &str) {
-    *config = config
-        .lines()
-        .filter(|l| l.trim() != line)
-        .collect::<Vec<_>>()
-        .join("\n");
 }
 
 #[cfg(test)]
@@ -437,12 +428,19 @@ mod tests {
             ..all_ok_report()
         };
         let config = suggest_config_text(&report, None);
+        // Hierarchical TOML: [process_seccomp] enabled = false
         assert!(
-            config.contains("process_seccomp_enabled = false"),
+            config.contains("[process_seccomp]") && config.contains("enabled = false"),
             "process_seccomp must be disabled when seccomp unavailable"
         );
+        // proc-exec-context capability must be dropped from [capture].
+        let parsed = OperatorConfig::parse(&config).expect("suggested config parses");
         assert!(
-            !config.contains("required_capability = proc-exec-context"),
+            !parsed
+                .capture_profile
+                .capabilities
+                .iter()
+                .any(|r| r.capability == model_core::capability::Capability::ProcExecContext),
             "proc-exec-context must be dropped when seccomp unavailable"
         );
     }
@@ -450,8 +448,9 @@ mod tests {
     #[test]
     fn suggest_config_seccomp_available_keeps_process_seccomp() {
         let config = suggest_config_text(&all_ok_report(), None);
+        let parsed = OperatorConfig::parse(&config).expect("suggested config parses");
         assert!(
-            config.contains("process_seccomp_enabled = true"),
+            parsed.process_seccomp.enabled,
             "process_seccomp stays enabled when seccomp available"
         );
     }
@@ -467,8 +466,9 @@ mod tests {
             ..all_ok_report()
         };
         let config = suggest_config_text(&report, None);
+        let parsed = OperatorConfig::parse(&config).expect("suggested config parses");
         assert!(
-            config.contains("payload_tls_enabled = false"),
+            !parsed.payload_config.tls.enabled,
             "payload_tls must be disabled when tls-sync prerequisites are missing"
         );
     }
@@ -478,11 +478,11 @@ mod tests {
         // Regardless of probe results, payload_tls_binary_path must stay
         // disabled under the tls-sync backend.
         let config = suggest_config_text(&all_ok_report(), None);
-        assert!(config.contains("payload_tls_binary_path = disabled"));
-        assert!(
-            !config.contains("payload_tls_binary_path = /"),
-            "must not suggest a fixed binary path under tls-sync"
-        );
+        let parsed = OperatorConfig::parse(&config).expect("suggested config parses");
+        assert!(matches!(
+            parsed.payload_config.tls.binary_path,
+            config_core::daemon::DisabledOrPath::Disabled
+        ));
     }
 
     #[test]

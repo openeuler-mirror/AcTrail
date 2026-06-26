@@ -83,14 +83,17 @@ pub fn run_from_env() -> Result<i32, String> {
         } => {
             // For --suggest-config, probe must work without an existing config;
             // build a minimal report from defaults when none was loaded.
-            let default_config = || -> Result<OperatorConfig, String> {
-                OperatorConfig::parse(config_core::daemon::OPERATOR_CONFIG_TEMPLATE)
-                    .map_err(|error| format!("parse default template: {error}"))
+            let fallback_default = match operator_config.as_ref() {
+                None => Some(OperatorConfig::parse(
+                    &OperatorConfig::default_hierarchical_template()
+                        .map_err(|error| format!("render default template: {error}"))?,
+                )?),
+                Some(_) => None,
             };
-            let loaded = match &operator_config {
-                Some(config) => config,
-                None => &default_config()?,
-            };
+            let loaded = operator_config
+                .as_ref()
+                .or(fallback_default.as_ref())
+                .expect("loaded or fallback default is present");
             let mut report = run_platform_probe(loaded);
             // For --suggest-config with no config, socket_path may be None;
             // daemon query is best-effort then. Otherwise (--skip-daemon or
