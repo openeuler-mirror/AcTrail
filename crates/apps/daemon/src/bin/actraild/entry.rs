@@ -3,7 +3,9 @@
 use std::path::Path;
 
 use config_core::daemon::{OperatorConfig, OperatorConfigInitStatus};
-use daemon::{DaemonProfileRegistry, DaemonRunError, LocalDaemonServer};
+use daemon::{
+    DaemonProfileRegistry, DaemonRunError, LocalDaemonServer, resolve_ebpf_collector_config,
+};
 
 use crate::args::{AcTraildCommand, parse_args};
 use crate::process::{
@@ -78,13 +80,17 @@ fn initialize_operator_config(path: &Path, force: bool) -> Result<(), String> {
 
 fn run_foreground(config: &OperatorConfig) -> Result<(), String> {
     signals::install_shutdown_handlers()?;
+    let ebpf_resolution = resolve_ebpf_collector_config(config.ebpf_config.clone());
+    if let Some(detail) = &ebpf_resolution.degrade_detail {
+        eprintln!("actraild ebpf auto-degraded: {detail}");
+    }
     let mut profiles = DaemonProfileRegistry::new();
     profiles.insert_capture_profile(config.capture_profile.clone());
     let mut server = match &config.provider_rule_set {
         Some(provider_rule_set) => LocalDaemonServer::build_with_provider_rule_set(
             &config.storage,
             profiles,
-            config.ebpf_config.clone(),
+            ebpf_resolution.config.clone(),
             config.payload_config.clone(),
             config.active_trace_max,
             config.diagnostic_log_level,
@@ -104,7 +110,7 @@ fn run_foreground(config: &OperatorConfig) -> Result<(), String> {
         None => LocalDaemonServer::build(
             &config.storage,
             profiles,
-            config.ebpf_config.clone(),
+            ebpf_resolution.config.clone(),
             config.payload_config.clone(),
             config.active_trace_max,
             config.diagnostic_log_level,

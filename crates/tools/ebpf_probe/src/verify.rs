@@ -41,6 +41,7 @@ pub fn run_live_verification(
         &storage_config,
         verification_profiles(&config),
         EbpfCollectorConfig {
+            enabled_mode: config_core::daemon::EbpfEnabledMode::True,
             enabled: true,
             memlock_rlimit: config.memlock_rlimit,
             tracked_process_max_entries: config.tracked_process_max_entries,

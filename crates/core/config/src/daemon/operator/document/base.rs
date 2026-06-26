@@ -420,7 +420,10 @@ impl CaptureDocument {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct EbpfDocument {
-    pub enabled: bool,
+    /// "true" | "false" | "auto". Kept as a string so serde renders it as a
+    /// quoted TOML value and `deny_unknown_fields` does not need a custom
+    /// deserializer; parsed into `EbpfEnabledMode` in `to_config`.
+    pub enabled: String,
     pub memlock_rlimit: String,
     pub tracked_process_max_entries: u32,
     pub pending_operation_max_entries: u32,
@@ -434,7 +437,7 @@ pub(super) struct EbpfDocument {
 impl Default for EbpfDocument {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: "true".to_string(),
             memlock_rlimit: "inherit".to_string(),
             tracked_process_max_entries: 8192,
             pending_operation_max_entries: 8192,
@@ -449,8 +452,16 @@ impl Default for EbpfDocument {
 
 impl EbpfDocument {
     pub(super) fn to_config(&self) -> Result<EbpfCollectorConfig, String> {
+        let enabled_mode = self
+            .enabled
+            .parse::<EbpfEnabledMode>()
+            .map_err(|error| format!("ebpf.enabled: {error}"))?;
+        // At parse time `enabled` is true only for an explicit `true`; `auto`
+        // defers to daemon-side resolution (starts false).
+        let enabled = matches!(enabled_mode, EbpfEnabledMode::True);
         Ok(EbpfCollectorConfig {
-            enabled: self.enabled,
+            enabled_mode,
+            enabled,
             memlock_rlimit: parse_value::<MemlockRlimit>(
                 "ebpf.memlock_rlimit",
                 &self.memlock_rlimit,
