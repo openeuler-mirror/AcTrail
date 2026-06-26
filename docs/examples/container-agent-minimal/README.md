@@ -7,9 +7,9 @@ This example is the recommended host `actraild.conf` baseline when a workload co
 - Uses production socket paths under `/run/actrail` and SQLite under `/var/lib/actrail`.
 - Keeps TLS-sync enabled for LLM/plaintext capture.
 - Disables launch-time process seccomp (`process_seccomp_enabled = false`).
-- Sets `payload_tls_binary_path` so launch can fall back to a fixed probe plan when dynamic binary probing fails inside a restricted container.
+- Keeps `payload_tls_binary_path = disabled` because the tls-sync backend builds the probe plan dynamically at launch; a fixed path is rejected with `tls-sync auto plan requires payload_tls_binary_path=disabled`. (The `binary_path` option is only a fallback for the non-sync executable-source path.)
 
-Replace `/usr/local/bin/agent` with the actual agent binary path inside the container.
+For the full degradation chain — how a container with the default seccomp profile and no `CAP_BPF` still captures TLS plaintext via the tls-sync inline-hook path — see [container-agent-restricted](../container-agent-restricted/README.md#how-the-degraded-path-captures-tls-plaintext-without-seccomp).
 
 ## Recommended container workflow
 

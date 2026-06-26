@@ -64,9 +64,10 @@ pub enum CtlCommand {
     },
     Doctor,
     Probe {
-        operator_config: OperatorConfig,
+        operator_config: Option<OperatorConfig>,
         json: bool,
         skip_daemon: bool,
+        suggest_config: bool,
     },
 }
 
@@ -101,11 +102,19 @@ impl CtlCli {
             .init_config_path(config_path.clone(), explicit_config)?;
         let operator_config = if init_path.is_some() {
             None
+        } else if self.command.is_probe_suggest_config() {
+            // `probe --suggest-config` must work even before a config exists
+            // (first deploy). A missing/invalid config degrades to None.
+            load_operator_config(&config_path).ok()
         } else {
             Some(load_operator_config(&config_path)?)
         };
         let socket_path = if init_path.is_some() {
             None
+        } else if self.command.is_probe_suggest_config() && operator_config.is_none() {
+            // `probe --suggest-config` with no config: socket path unknown,
+            // daemon query becomes best-effort in entry.rs.
+            self.socket_path
         } else {
             Some(
                 self.socket_path
@@ -215,14 +224,22 @@ impl CtlCommandArgs {
                 ),
             }),
             Self::Doctor => Ok(CtlCommand::Doctor),
-            Self::Probe(args) => Ok(CtlCommand::Probe {
-                operator_config: config
-                    .ok_or_else(|| "missing operator config for probe".to_string())?
-                    .clone(),
-                json: args.json,
-                skip_daemon: args.skip_daemon,
-            }),
+            Self::Probe(args) => {
+                if args.suggest_config && args.json {
+                    return Err("--suggest-config and --json are mutually exclusive".to_string());
+                }
+                Ok(CtlCommand::Probe {
+                    operator_config: config.cloned(),
+                    json: args.json,
+                    skip_daemon: args.skip_daemon,
+                    suggest_config: args.suggest_config,
+                })
+            }
         }
+    }
+
+    fn is_probe_suggest_config(&self) -> bool {
+        matches!(self, Self::Probe(args) if args.suggest_config)
     }
 
     fn init_config_path(
@@ -319,6 +336,9 @@ struct ProbeArgs {
 
     #[arg(long = "skip-daemon")]
     skip_daemon: bool,
+
+    #[arg(long = "suggest-config")]
+    suggest_config: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
