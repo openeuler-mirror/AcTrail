@@ -16,7 +16,8 @@ use storage_factory::StorageConfig;
 use super::super::{
     AgentInvocationConfig, ApplicationProtocolConfig, DEFAULT_ACTIVE_TRACE_MAX,
     DEFAULT_CONTROL_PENDING_CONNECTION_MAX, DEFAULT_FINALIZATION_POLL_INTERVAL_MS,
-    DEFAULT_FINALIZATION_TRACES_PER_CYCLE, DisabledOrPath, EbpfCollectorConfig, EnforcementBackend,
+    DEFAULT_FINALIZATION_TRACES_PER_CYCLE, DisabledOrPath, EbpfCollectorConfig, EbpfEnabledMode,
+    EnforcementBackend,
     EnforcementConfig, EnforcementMarkStrategy, EnforcementScope, FileBulkReadObservationConfig,
     FileMetadataRetention, FileObservationConfig, FileRawEventRetention, FileTtyObservationConfig,
     FsEnumerateObservationConfig, Http2DataContentRetention, HttpBodyRetention,
@@ -206,7 +207,7 @@ impl OperatorDocument {
                 disabled_capabilities: disabled,
             },
             ebpf: EbpfDocument {
-                enabled: config.ebpf_config.enabled,
+                enabled: config.ebpf_config.enabled_mode.to_string(),
                 memlock_rlimit: memlock_rlimit_as_str(config.ebpf_config.memlock_rlimit),
                 tracked_process_max_entries: config.ebpf_config.tracked_process_max_entries,
                 pending_operation_max_entries: config.ebpf_config.pending_operation_max_entries,

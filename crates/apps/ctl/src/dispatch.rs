@@ -56,6 +56,12 @@ pub fn dispatch(
                 "clean is handled by the local actrailctl process",
             ));
         }
+        CtlCommand::Probe { .. } => {
+            return Err(ControlError::new(
+                "invalid_dispatch",
+                "probe is handled by the local actrailctl process",
+            ));
+        }
     };
 
     client.send(control_command)

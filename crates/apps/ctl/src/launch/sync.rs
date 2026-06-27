@@ -4,7 +4,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 use config_core::daemon::{
-    PayloadTlsConfig, PayloadTlsLibraryPath, PayloadTlsSyncRuntimeLibraryPath,
+    DisabledOrPath, PayloadTlsConfig, PayloadTlsLibraryPath, PayloadTlsSyncRuntimeLibraryPath,
 };
 use model_core::ids::TraceId;
 use tls_payload_sync::{
@@ -162,6 +162,26 @@ fn canonical_path(path: &std::path::Path) -> PathBuf {
 }
 
 fn resolve_plan(command: &[OsString], config: &PayloadTlsConfig) -> Result<ProbePointPlan, String> {
+    match try_resolve_plan(command, config) {
+        Ok(plan) => Ok(plan),
+        Err(primary_error) => match &config.binary_path {
+            DisabledOrPath::Path(path) => {
+                let fallback_command = vec![OsString::from(path.as_os_str())];
+                try_resolve_plan(&fallback_command, config).map_err(|fallback_error| {
+                    format!(
+                        "launch command probe failed ({primary_error}); payload_tls_binary_path fallback failed ({fallback_error})"
+                    )
+                })
+            }
+            DisabledOrPath::Disabled => Err(primary_error),
+        },
+    }
+}
+
+fn try_resolve_plan(
+    command: &[OsString],
+    config: &PayloadTlsConfig,
+) -> Result<ProbePointPlan, String> {
     let Some(program) = command.first() else {
         return Err("launch requires a command after --".to_string());
     };

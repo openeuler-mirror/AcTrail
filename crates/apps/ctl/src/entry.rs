@@ -8,6 +8,10 @@ use crate::clean::run_clean;
 use crate::dispatch::dispatch;
 use crate::launch::{LaunchRequest, run_launch};
 use crate::output::format_reply;
+use crate::platform_probe::{
+    attach_daemon_status, print_platform_probe, print_platform_probe_json, run_platform_probe,
+    suggest_config_text,
+};
 
 pub fn run_from_env() -> Result<i32, String> {
     let invocation = parse_args(std::env::args().skip(1))?;
@@ -44,6 +48,7 @@ pub fn run_from_env() -> Result<i32, String> {
             process_seccomp_syscalls,
             seccomp_notify_reserved_listener_fd,
             agent_invocation_commands,
+            seccomp_mode,
             argv,
         } => {
             let transport = UdsSocketTransport::new(required_socket_path(invocation.socket_path)?);
@@ -65,9 +70,58 @@ pub fn run_from_env() -> Result<i32, String> {
                     process_seccomp_syscalls,
                     seccomp_notify_reserved_listener_fd,
                     agent_invocation_commands,
+                    seccomp_mode,
                     argv,
                 },
             )
+        }
+        CtlCommand::Probe {
+            operator_config,
+            json,
+            skip_daemon,
+            suggest_config,
+        } => {
+            // For --suggest-config, probe must work without an existing config;
+            // build a minimal report from defaults when none was loaded.
+            let fallback_default = match operator_config.as_ref() {
+                None => Some(OperatorConfig::parse(
+                    &OperatorConfig::default_hierarchical_template()
+                        .map_err(|error| format!("render default template: {error}"))?,
+                )?),
+                Some(_) => None,
+            };
+            let loaded = operator_config
+                .as_ref()
+                .or(fallback_default.as_ref())
+                .expect("loaded or fallback default is present");
+            let mut report = run_platform_probe(loaded);
+            // For --suggest-config with no config, socket_path may be None;
+            // daemon query is best-effort then. Otherwise (--skip-daemon or
+            // normal probe) honor the explicit skip or require the socket.
+            let daemon_socket = if skip_daemon {
+                None
+            } else {
+                match required_socket_path(invocation.socket_path.clone()) {
+                    Ok(path) => Some(path),
+                    Err(_) if suggest_config => None,
+                    Err(error) => return Err(error),
+                }
+            };
+            if let Some(socket_path) = daemon_socket {
+                let transport = UdsSocketTransport::new(socket_path);
+                let mut client = UdsControlClient::new(transport);
+                attach_daemon_status(&mut report, &mut client);
+            }
+            if suggest_config {
+                print!("{}", suggest_config_text(&report, operator_config.as_ref()));
+                return Ok(i32::default());
+            }
+            if json {
+                print_platform_probe_json(&report);
+            } else {
+                print_platform_probe(&report);
+            }
+            Ok(i32::default())
         }
         command => {
             let transport = UdsSocketTransport::new(required_socket_path(invocation.socket_path)?);

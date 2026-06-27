@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime};
 use config_core::capture_profile::CaptureProfile;
 use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, DEFAULT_ACTIVE_TRACE_MAX, DiagnosticLogLevel,
-    EbpfCollectorConfig, EnforcementBackend, EnforcementConfig, EnforcementDecision,
+    EbpfCollectorConfig, EbpfEnabledMode, EnforcementBackend, EnforcementConfig, EnforcementDecision,
     EnforcementMarkStrategy, EnforcementScope, FileObservationConfig, MemlockRlimit,
     OperatorConfig, PayloadConfig, ProcessSeccompConfig, ProcessSeccompSyscall,
     ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig, SemanticRetentionConfig,
@@ -326,6 +326,11 @@ fn create_active_trace(
 
 fn ebpf_config(enabled: bool) -> EbpfCollectorConfig {
     EbpfCollectorConfig {
+        enabled_mode: if enabled {
+            EbpfEnabledMode::True
+        } else {
+            EbpfEnabledMode::False
+        },
         enabled,
         memlock_rlimit: MemlockRlimit::Inherit,
         tracked_process_max_entries: 64,

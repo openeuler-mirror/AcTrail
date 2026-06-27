@@ -15,13 +15,22 @@ pub(super) enum ChildSetup {
     Seccomp(SeccompSetup),
 }
 
-pub(super) struct ControlledChild {
+pub(crate) struct ControlledChild {
     pid: libc::pid_t,
     env_writer: Option<OwnedFd>,
     listener_fd: Option<OwnedFd>,
 }
 
 impl ControlledChild {
+    pub(crate) fn probe_seccomp_launch_path(setup: &SeccompSetup) -> Result<(), String> {
+        let mut child = Self::spawn(
+            vec![OsString::from("/bin/true")],
+            ChildSetup::Seccomp(setup.clone()),
+        )?;
+        child.terminate();
+        Ok(())
+    }
+
     pub(super) fn spawn(argv: Vec<OsString>, setup: ChildSetup) -> Result<Self, String> {
         let argv = cstring_argv(argv)?;
         let uses_seccomp = matches!(setup, ChildSetup::Seccomp(_));

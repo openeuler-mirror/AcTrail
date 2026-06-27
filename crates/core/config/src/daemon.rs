@@ -120,8 +120,54 @@ impl FromStr for MemlockRlimit {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EbpfEnabledMode {
+    True,
+    False,
+    Auto,
+}
+
+impl EbpfEnabledMode {
+    /// Whether the daemon should probe eBPF at startup and auto-degrade when
+    /// the host cannot run eBPF. Only `Auto` defers the decision.
+    pub fn defers_to_runtime(self) -> bool {
+        matches!(self, Self::Auto)
+    }
+}
+
+impl std::str::FromStr for EbpfEnabledMode {
+    type Err = String;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "true" => Ok(Self::True),
+            "false" => Ok(Self::False),
+            "auto" => Ok(Self::Auto),
+            _ => Err(format!(
+                "invalid ebpf.enabled: expected true, false, or auto, got {value}"
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for EbpfEnabledMode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = match self {
+            Self::True => "true",
+            Self::False => "false",
+            Self::Auto => "auto",
+        };
+        formatter.write_str(value)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EbpfCollectorConfig {
+    /// The operator-declared mode (true/false/auto). Parse-time only; the
+    /// daemon resolves `auto` against the host at startup.
+    pub enabled_mode: EbpfEnabledMode,
+    /// Effective enabled flag after daemon resolution. At parse time this is
+    /// `true` only when `enabled_mode == True`; `Auto` starts `false` and is
+    /// set by `resolve_ebpf_collector_config` based on the host probe.
     pub enabled: bool,
     pub memlock_rlimit: MemlockRlimit,
     pub tracked_process_max_entries: u32,

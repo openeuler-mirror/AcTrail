@@ -420,7 +420,12 @@ impl CaptureDocument {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct EbpfDocument {
-    pub enabled: bool,
+    /// "true" | "false" | "auto". Accepted as either a quoted string
+    /// (`enabled = "auto"`) or a bare boolean (`enabled = true`) for
+    /// backward compatibility with configs written before `auto` existed;
+    /// normalized to a string and parsed into `EbpfEnabledMode` in `to_config`.
+    #[serde(deserialize_with = "deserialize_ebpf_enabled", serialize_with = "serialize_ebpf_enabled")]
+    pub enabled: String,
     pub memlock_rlimit: String,
     pub tracked_process_max_entries: u32,
     pub pending_operation_max_entries: u32,
@@ -434,7 +439,7 @@ pub(super) struct EbpfDocument {
 impl Default for EbpfDocument {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: "true".to_string(),
             memlock_rlimit: "inherit".to_string(),
             tracked_process_max_entries: 8192,
             pending_operation_max_entries: 8192,
@@ -449,8 +454,16 @@ impl Default for EbpfDocument {
 
 impl EbpfDocument {
     pub(super) fn to_config(&self) -> Result<EbpfCollectorConfig, String> {
+        let enabled_mode = self
+            .enabled
+            .parse::<EbpfEnabledMode>()
+            .map_err(|error| format!("ebpf.enabled: {error}"))?;
+        // At parse time `enabled` is true only for an explicit `true`; `auto`
+        // defers to daemon-side resolution (starts false).
+        let enabled = matches!(enabled_mode, EbpfEnabledMode::True);
         Ok(EbpfCollectorConfig {
-            enabled: self.enabled,
+            enabled_mode,
+            enabled,
             memlock_rlimit: parse_value::<MemlockRlimit>(
                 "ebpf.memlock_rlimit",
                 &self.memlock_rlimit,
@@ -467,4 +480,33 @@ impl EbpfDocument {
             )?,
         })
     }
+}
+
+/// Deserialize `ebpf.enabled` accepting either a bare boolean (`true`/`false`,
+/// the pre-`auto` form still present in shipped example configs) or a quoted
+/// string (`"true"`/`"false"`/`"auto"`). Both normalize to a string.
+fn deserialize_ebpf_enabled<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum EnabledValue {
+        Bool(bool),
+        String(String),
+    }
+    match EnabledValue::deserialize(deserializer)? {
+        EnabledValue::Bool(value) => Ok(value.to_string()),
+        EnabledValue::String(value) => Ok(value),
+    }
+}
+
+/// Serialize `ebpf.enabled` back as a quoted string so round-trips produce
+/// `enabled = "true"` regardless of how it was written.
+fn serialize_ebpf_enabled<S>(value: &str, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(value)
 }

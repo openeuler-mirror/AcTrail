@@ -105,17 +105,25 @@ const PLATFORM_OPTIONAL_TRACEPOINT_PROGRAMS: &[&str] = &[
     "handle_sys_exit_pipe",
 ];
 
-const FD_IO_IPC_PROGRAMS: &[&str] = &[
+/// Programs that carry stdio chunk payloads: read/write on any fd. A trace
+/// that attaches only these (and not the pipe/socketpair programs) satisfies
+/// `StdioChunk` without satisfying `IpcPipeFifo`/`IpcUnixSocket`.
+const STDIO_PROGRAMS: &[&str] = &[
+    "handle_sys_enter_write",
+    "handle_sys_exit_write",
+    "handle_sys_enter_read",
+    "handle_sys_exit_read",
+];
+
+/// Programs that create IPC channels (pipe/pipe2/socketpair). Required for
+/// `IpcPipeFifo` and `IpcUnixSocket` to be considered satisfied.
+const IPC_PROGRAMS: &[&str] = &[
     "handle_sys_enter_pipe",
     "handle_sys_exit_pipe",
     "handle_sys_enter_pipe2",
     "handle_sys_exit_pipe2",
     "handle_sys_enter_socketpair",
     "handle_sys_exit_socketpair",
-    "handle_sys_enter_write",
-    "handle_sys_exit_write",
-    "handle_sys_enter_read",
-    "handle_sys_exit_read",
 ];
 
 const SOCKET_PAYLOAD_PROGRAMS: &[&str] = &[
@@ -356,9 +364,8 @@ fn capability_required_programs(capability: &Capability) -> Option<&'static [&'s
         Capability::NetTransport => Some(NET_TRANSPORT_PROGRAMS),
         Capability::FsAccessBasic => Some(FS_ACCESS_BASIC_FD_PROGRAMS),
         Capability::FsMmap => Some(FS_MMAP_PROGRAMS),
-        Capability::IpcPipeFifo | Capability::IpcUnixSocket | Capability::StdioChunk => {
-            Some(FD_IO_IPC_PROGRAMS)
-        }
+        Capability::StdioChunk => Some(STDIO_PROGRAMS),
+        Capability::IpcPipeFifo | Capability::IpcUnixSocket => Some(IPC_PROGRAMS),
         Capability::SocketPlaintextPayload => Some(SOCKET_PAYLOAD_PROGRAMS),
         Capability::TlsPlaintextPayload => Some(&[]),
         _ => None,
@@ -374,7 +381,8 @@ fn capability_programs(program_name: &str) -> Option<()> {
         FS_ACCESS_BASIC_CONTEXT_PROGRAMS,
         PROCESS_CONTEXT_PROGRAMS,
         PROCESS_SIGNAL_DIAGNOSTIC_PROGRAMS,
-        FD_IO_IPC_PROGRAMS,
+        STDIO_PROGRAMS,
+        IPC_PROGRAMS,
         SOCKET_PAYLOAD_PROGRAMS,
         FS_MMAP_PROGRAMS,
     ]
