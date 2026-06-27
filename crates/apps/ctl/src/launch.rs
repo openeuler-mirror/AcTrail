@@ -17,7 +17,8 @@ use std::collections::BTreeSet;
 use std::ffi::OsString;
 
 use config_core::daemon::{
-    PayloadSocketSeccompSyscall, PayloadTlsConfig, PayloadTlsSeccompSyscall, ProcessSeccompSyscall,
+    NetworkControlSeccompSyscall, PayloadSocketSeccompSyscall, PayloadTlsConfig,
+    PayloadTlsSeccompSyscall, ProcessSeccompSyscall,
 };
 use control_contract::command::{ControlCommand, TrackAddCommand, TrackRemoveCommand};
 use control_contract::reply::{ControlError, ControlReply};
@@ -51,6 +52,8 @@ pub(crate) struct LaunchRequest {
     pub payload_socket_max_segment_bytes: u32,
     pub process_seccomp_enabled: bool,
     pub process_seccomp_syscalls: Vec<ProcessSeccompSyscall>,
+    pub network_control_enabled: bool,
+    pub network_control_syscalls: Vec<NetworkControlSeccompSyscall>,
     pub seccomp_notify_reserved_listener_fd: u32,
     pub agent_invocation_commands: Vec<String>,
     pub seccomp_mode: LaunchSeccompMode,
@@ -65,7 +68,10 @@ pub(crate) fn run_launch(
     let tls_sync_enabled =
         request.payload_tls_config.enabled && request.payload_tls_config.capture_backend.is_sync();
     let payload_tls_seccomp_configured = request.payload_tls_enabled && !tls_sync_enabled;
-    let probe = if matches!(request.seccomp_mode, LaunchSeccompMode::Auto | LaunchSeccompMode::Require) {
+    let probe = if matches!(
+        request.seccomp_mode,
+        LaunchSeccompMode::Auto | LaunchSeccompMode::Require
+    ) {
         Some(run_platform_probe_from_launch(&request))
     } else {
         None
@@ -76,6 +82,7 @@ pub(crate) fn run_launch(
         payload_tls_seccomp_configured,
         request.payload_socket_enabled,
         request.process_seccomp_enabled,
+        request.network_control_enabled,
         probe.as_ref(),
     )?;
     if effective.degraded {
@@ -87,12 +94,14 @@ pub(crate) fn run_launch(
     let seccomp_enabled = effective.use_seccomp;
     let payload_socket_enabled = effective.payload_socket_enabled;
     let process_seccomp_enabled = effective.process_seccomp_enabled;
+    let network_control_enabled = effective.network_control_enabled;
     let child_setup = if seccomp_enabled {
         ChildSetup::Seccomp(seccomp_setup(
             &request,
             payload_tls_seccomp_enabled,
             payload_socket_enabled,
             process_seccomp_enabled,
+            network_control_enabled,
         )?)
     } else {
         ChildSetup::Plain
@@ -209,6 +218,7 @@ fn seccomp_setup(
     payload_tls_seccomp_enabled: bool,
     payload_socket_enabled: bool,
     process_seccomp_enabled: bool,
+    network_control_enabled: bool,
 ) -> Result<SeccompSetup, String> {
     let payload_tls_seccomp_syscalls = if payload_tls_seccomp_enabled {
         request.payload_tls_seccomp_syscalls.clone()
@@ -225,11 +235,17 @@ fn seccomp_setup(
     } else {
         Vec::new()
     };
+    let network_control_syscalls = if network_control_enabled {
+        request.network_control_syscalls.clone()
+    } else {
+        Vec::new()
+    };
     SeccompSetup::new(
         payload_tls_seccomp_syscalls,
         payload_socket_seccomp_syscalls,
         request.payload_socket_max_segment_bytes,
         process_seccomp_syscalls,
+        network_control_syscalls,
         request.seccomp_notify_reserved_listener_fd,
     )
 }

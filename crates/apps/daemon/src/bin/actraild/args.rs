@@ -7,12 +7,48 @@ use config_core::daemon::DEFAULT_OPERATOR_CONFIG_PATH;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AcTraildCommand {
-    Init { config_path: PathBuf, force: bool },
-    Run { config_path: PathBuf },
-    Start { config_path: PathBuf },
-    Stop { config_path: PathBuf },
-    Restart { config_path: PathBuf },
-    Status { config_path: PathBuf },
+    Init {
+        config_path: PathBuf,
+        force: bool,
+    },
+    Run {
+        config_path: PathBuf,
+    },
+    Start {
+        config_path: PathBuf,
+    },
+    Stop {
+        config_path: PathBuf,
+    },
+    Restart {
+        config_path: PathBuf,
+    },
+    Status {
+        config_path: PathBuf,
+    },
+    Plugin {
+        config_path: PathBuf,
+        command: PluginCommand,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PluginCommand {
+    Load {
+        manifest_path: PathBuf,
+        plugin_config_path: Option<PathBuf>,
+        instance_id: String,
+        host_grants: Vec<String>,
+        persist: bool,
+    },
+    Unload {
+        instance_id: String,
+        persist: bool,
+    },
+    List,
+    Status {
+        instance_id: String,
+    },
 }
 
 pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<AcTraildCommand, String> {
@@ -62,6 +98,8 @@ enum AcTraildCommandArgs {
     Restart,
     #[command(about = "Show daemon process state")]
     Status,
+    #[command(about = "Manage runtime plugin instances")]
+    Plugin(PluginArgs),
 }
 
 impl AcTraildCommandArgs {
@@ -83,8 +121,91 @@ impl AcTraildCommandArgs {
             Self::Stop => Ok(AcTraildCommand::Stop { config_path }),
             Self::Restart => Ok(AcTraildCommand::Restart { config_path }),
             Self::Status => Ok(AcTraildCommand::Status { config_path }),
+            Self::Plugin(args) => Ok(AcTraildCommand::Plugin {
+                config_path,
+                command: args.into_command(),
+            }),
         }
     }
+}
+
+#[derive(Clone, Debug, Args)]
+struct PluginArgs {
+    #[command(subcommand)]
+    command: PluginCommandArgs,
+}
+
+impl PluginArgs {
+    fn into_command(self) -> PluginCommand {
+        self.command.into_command()
+    }
+}
+
+#[derive(Clone, Debug, Subcommand)]
+enum PluginCommandArgs {
+    #[command(about = "Load a plugin instance into the running daemon")]
+    Load(PluginLoadArgs),
+    #[command(about = "Unload a plugin instance from the running daemon")]
+    Unload(PluginUnloadArgs),
+    #[command(about = "List active plugin instances from the running daemon")]
+    List,
+    #[command(about = "Show one active plugin instance from the running daemon")]
+    Status(PluginInstanceArgs),
+}
+
+impl PluginCommandArgs {
+    fn into_command(self) -> PluginCommand {
+        match self {
+            Self::Load(args) => PluginCommand::Load {
+                manifest_path: args.manifest_path,
+                plugin_config_path: args.plugin_config_path,
+                instance_id: args.instance_id,
+                host_grants: args.host_grants,
+                persist: args.persist,
+            },
+            Self::Unload(args) => PluginCommand::Unload {
+                instance_id: args.instance_id,
+                persist: args.persist,
+            },
+            Self::List => PluginCommand::List,
+            Self::Status(args) => PluginCommand::Status {
+                instance_id: args.instance_id,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug, Args)]
+struct PluginLoadArgs {
+    #[arg(long = "manifest", value_name = "PATH")]
+    manifest_path: PathBuf,
+
+    #[arg(long = "plugin-config", value_name = "PATH")]
+    plugin_config_path: Option<PathBuf>,
+
+    #[arg(long = "instance", value_name = "ID")]
+    instance_id: String,
+
+    #[arg(long = "grant", value_name = "CAPABILITY:VALUE")]
+    host_grants: Vec<String>,
+
+    #[arg(long = "persist")]
+    persist: bool,
+}
+
+#[derive(Clone, Debug, Args)]
+struct PluginUnloadArgs {
+    #[arg(long = "instance", value_name = "ID")]
+    instance_id: String,
+
+    #[arg(long = "persist")]
+    persist: bool,
+}
+
+#[derive(Clone, Debug, Args)]
+struct PluginInstanceArgs {
+    #[arg(long = "instance", value_name = "ID")]
+    instance_id: String,
 }
 
 #[derive(Clone, Debug, Args)]

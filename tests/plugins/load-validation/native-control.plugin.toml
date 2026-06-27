@@ -1,0 +1,15 @@
+[general]
+id = "native.control-disabled"
+api_version = "actrail.plugin.v1"
+role = "control-decider"
+runtime = "native-dylib"
+
+[host]
+capabilities = []
+
+[runtime.native-dylib]
+
+[plugin_config]
+format = "toml"
+schema_ref = ""
+required = false

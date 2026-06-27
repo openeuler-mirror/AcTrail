@@ -4,10 +4,7 @@ use std::time::SystemTime;
 
 use collector_event::{RawCollectorEvent, RawEventEnvelope, RawObservationPayload};
 use config_core::daemon::{ApplicationProtocolConfig, DiagnosticLogLevel, SseDataPolicy};
-use export_core::{
-    ExportError, ExportPublishResult, ExportRuntime, SemanticActionExportRecord,
-    SemanticActionExportRoute,
-};
+use export_core::ExportRuntime;
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use model_core::diagnostics::{DiagnosticKind, DiagnosticSeverity};
 use model_core::ids::{CollectorName, ProfileName, TraceName};
@@ -17,6 +14,10 @@ use model_core::payload::{
 };
 use model_core::process::ProcessIdentity;
 use payload_event::RawPayloadSegment;
+use plugin_system::{
+    ObservationBatch, ObservationConsumeReport, ObservationConsumer, PluginDroppedRecord,
+    PluginRuntimeError, PluginRuntimeKind,
+};
 use semantic_action::SemanticActionKind;
 
 use crate::profiles::DaemonProfileRegistry;
@@ -67,9 +68,10 @@ fn live_exporter_failure_is_diagnostic_not_payload_failure() {
         super::workload_diagnostics_disabled(),
         super::export_runtime_disabled(),
         super::enforcement_disabled(),
+        super::CommandControlConfig::default(),
     )
     .unwrap();
-    wiring.attach_service.export_runtime = ExportRuntime::new(vec![Box::new(FailingRoute)]);
+    wiring.attach_service.export_runtime = ExportRuntime::new(vec![Box::new(FailingConsumer)]);
 
     let trace_id = wiring.trace_runtime.reserve_trace_id();
     let process = ProcessIdentity::new(std::process::id(), 1, 1);
@@ -183,10 +185,11 @@ fn tty_summary_is_persisted_but_not_live_exported() {
         super::workload_diagnostics_disabled(),
         super::export_runtime_disabled(),
         super::enforcement_disabled(),
+        super::CommandControlConfig::default(),
     )
     .unwrap();
     let exported = Arc::new(Mutex::new(Vec::new()));
-    wiring.attach_service.export_runtime = ExportRuntime::new(vec![Box::new(RecordingRoute {
+    wiring.attach_service.export_runtime = ExportRuntime::new(vec![Box::new(RecordingConsumer {
         actions: Arc::clone(&exported),
     })]);
 
@@ -225,46 +228,79 @@ fn tty_summary_is_persisted_but_not_live_exported() {
     let _ = std::fs::remove_file(storage_path);
 }
 
-struct FailingRoute;
+struct FailingConsumer;
 
-impl SemanticActionExportRoute for FailingRoute {
-    fn name(&self) -> &'static str {
+impl ObservationConsumer for FailingConsumer {
+    fn instance_id(&self) -> &str {
         FAILING_EXPORTER_NAME
     }
 
-    fn publish(
+    fn plugin_id(&self) -> &str {
+        "test-failing"
+    }
+
+    fn runtime_kind(&self) -> PluginRuntimeKind {
+        PluginRuntimeKind::Builtin
+    }
+
+    fn consume(
         &self,
-        record: SemanticActionExportRecord<'_>,
-    ) -> Result<ExportPublishResult, ExportError> {
-        assert_eq!(record.trace.trace_id, record.action.trace_id);
+        batch: ObservationBatch<'_>,
+    ) -> Result<ObservationConsumeReport, PluginRuntimeError> {
         assert!(
-            record
-                .links
+            batch
+                .semantic_actions
                 .iter()
-                .all(|link| link.trace_id == record.action.trace_id)
+                .all(|action| action.trace_id == batch.trace.trace_id)
         );
-        Err(
-            ExportError::new(FAILING_EXPORTER_ERROR_CODE, FAILING_EXPORTER_ERROR_MESSAGE)
-                .with_queue_capacity(FAILING_EXPORTER_QUEUE_CAPACITY),
-        )
+        assert!(
+            batch
+                .semantic_links
+                .iter()
+                .all(|link| link.trace_id == batch.trace.trace_id)
+        );
+        Ok(ObservationConsumeReport {
+            dropped_records: vec![PluginDroppedRecord {
+                trace_id: batch.trace.trace_id,
+                plugin_instance: FAILING_EXPORTER_NAME.to_string(),
+                reason: format!("{FAILING_EXPORTER_ERROR_CODE}: {FAILING_EXPORTER_ERROR_MESSAGE}"),
+                queue_capacity: Some(FAILING_EXPORTER_QUEUE_CAPACITY),
+                dropped_records: u64::try_from(batch.semantic_actions.len()).unwrap_or(u64::MAX),
+            }],
+        })
     }
 }
 
-struct RecordingRoute {
+struct RecordingConsumer {
     actions: Arc<Mutex<Vec<SemanticActionKind>>>,
 }
 
-impl SemanticActionExportRoute for RecordingRoute {
-    fn name(&self) -> &'static str {
+impl ObservationConsumer for RecordingConsumer {
+    fn instance_id(&self) -> &str {
         RECORDING_EXPORTER_NAME
     }
 
-    fn publish(
+    fn plugin_id(&self) -> &str {
+        "test-recording"
+    }
+
+    fn runtime_kind(&self) -> PluginRuntimeKind {
+        PluginRuntimeKind::Builtin
+    }
+
+    fn consume(
         &self,
-        record: SemanticActionExportRecord<'_>,
-    ) -> Result<ExportPublishResult, ExportError> {
-        self.actions.lock().unwrap().push(record.action.kind);
-        Ok(ExportPublishResult::delivered())
+        batch: ObservationBatch<'_>,
+    ) -> Result<ObservationConsumeReport, PluginRuntimeError> {
+        assert!(
+            batch
+                .semantic_actions
+                .iter()
+                .all(|action| action.trace_id == batch.trace.trace_id)
+        );
+        let mut actions = self.actions.lock().unwrap();
+        actions.extend(batch.semantic_actions.iter().map(|action| action.kind));
+        Ok(ObservationConsumeReport::empty())
     }
 }
 

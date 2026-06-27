@@ -1,0 +1,17 @@
+[general]
+id = "wasm.component-context-query-unsupported"
+api_version = "actrail.plugin.v1"
+role = "observation-consumer"
+runtime = "wasm"
+
+[host]
+capabilities = ["context-query"]
+
+[runtime.wasm]
+artifact_path = "component-env-read.wat"
+abi = "wit-component"
+
+[plugin_config]
+format = "toml"
+schema_ref = ""
+required = false

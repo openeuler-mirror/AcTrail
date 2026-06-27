@@ -23,7 +23,6 @@ pub enum Capability {
     IpcPipeFifo,
     StdioChunk,
     PolicyIngestProcessing,
-    PolicyPluginHost,
     PolicyDecisionRecord,
     EnforcementFilePermissionFanotify,
 }

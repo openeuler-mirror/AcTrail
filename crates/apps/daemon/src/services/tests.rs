@@ -6,12 +6,12 @@ use std::time::{Duration, SystemTime};
 
 use config_core::capture_profile::CaptureProfile;
 use config_core::daemon::{
-    AgentInvocationConfig, ApplicationProtocolConfig, DEFAULT_ACTIVE_TRACE_MAX, DiagnosticLogLevel,
-    EbpfCollectorConfig, EbpfEnabledMode, EnforcementBackend, EnforcementConfig, EnforcementDecision,
-    EnforcementMarkStrategy, EnforcementScope, FileObservationConfig, MemlockRlimit,
-    OperatorConfig, PayloadConfig, ProcessSeccompConfig, ProcessSeccompSyscall,
-    ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig, SemanticRetentionConfig,
-    SseDataPolicy, TraceFinalizationConfig,
+    AgentInvocationConfig, ApplicationProtocolConfig, CommandControlConfig,
+    DEFAULT_ACTIVE_TRACE_MAX, DiagnosticLogLevel, EbpfCollectorConfig, EbpfEnabledMode,
+    EnforcementBackend, EnforcementConfig, EnforcementDecision, EnforcementMarkStrategy,
+    EnforcementScope, FileObservationConfig, MemlockRlimit, OperatorConfig, PayloadConfig,
+    ProcessSeccompConfig, ProcessSeccompSyscall, ResourceMetricsConfig, RuntimeExportConfig,
+    SeccompNotifyConfig, SemanticRetentionConfig, SseDataPolicy, TraceFinalizationConfig,
 };
 use config_core::trace_snapshot::CaptureProfileSnapshot;
 use control_contract::command::{ControlCommand, ListTracesCommand, ProcessRef, TrackAddCommand};
@@ -84,6 +84,7 @@ fn attach_main_path_runs() {
         workload_diagnostics_disabled(),
         export_runtime_disabled(),
         enforcement_disabled(),
+        CommandControlConfig::default(),
     )
     .unwrap();
     let mut host = DaemonServiceHost::new(wiring);
@@ -144,6 +145,7 @@ fn launch_mode_suppresses_wrapper_bootstrap_gap() {
         workload_diagnostics_disabled(),
         export_runtime_disabled(),
         enforcement_disabled(),
+        CommandControlConfig::default(),
     )
     .unwrap();
     let mut host = DaemonServiceHost::new(wiring);
@@ -218,6 +220,7 @@ fn resource_metrics_sampler_persists_procfs_samples() {
         workload_diagnostics_disabled(),
         export_runtime_disabled(),
         enforcement_disabled(),
+        CommandControlConfig::default(),
     )
     .unwrap();
 

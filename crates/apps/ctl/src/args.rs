@@ -6,8 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use config_core::daemon::{
-    DEFAULT_OPERATOR_CONFIG_PATH, OperatorConfig, PayloadSocketSeccompSyscall, PayloadTlsConfig,
-    PayloadTlsSeccompSyscall, ProcessSeccompSyscall,
+    DEFAULT_OPERATOR_CONFIG_PATH, NetworkControlSeccompSyscall, OperatorConfig,
+    PayloadSocketSeccompSyscall, PayloadTlsConfig, PayloadTlsSeccompSyscall, ProcessSeccompSyscall,
 };
 use control_contract::command::ProcessRef;
 use control_contract::selector::TraceSelector;
@@ -48,6 +48,8 @@ pub enum CtlCommand {
         payload_socket_max_segment_bytes: u32,
         process_seccomp_enabled: bool,
         process_seccomp_syscalls: Vec<ProcessSeccompSyscall>,
+        network_control_enabled: bool,
+        network_control_syscalls: Vec<NetworkControlSeccompSyscall>,
         seccomp_notify_reserved_listener_fd: u32,
         agent_invocation_commands: Vec<String>,
         seccomp_mode: LaunchSeccompMode,
@@ -206,6 +208,8 @@ impl CtlCommandArgs {
                         .payload_socket_max_segment_bytes,
                     process_seccomp_enabled: seccomp_config.process_enabled,
                     process_seccomp_syscalls: seccomp_config.process_syscalls,
+                    network_control_enabled: seccomp_config.network_enabled,
+                    network_control_syscalls: seccomp_config.network_syscalls,
                     seccomp_notify_reserved_listener_fd: seccomp_config.reserved_listener_fd,
                     agent_invocation_commands: launch_agent_commands(config),
                     seccomp_mode: args.seccomp_mode.into(),
@@ -287,6 +291,8 @@ struct LaunchSeccompConfig {
     payload_socket_max_segment_bytes: u32,
     process_enabled: bool,
     process_syscalls: Vec<ProcessSeccompSyscall>,
+    network_enabled: bool,
+    network_syscalls: Vec<NetworkControlSeccompSyscall>,
     reserved_listener_fd: u32,
 }
 
@@ -310,6 +316,8 @@ fn launch_seccomp_config(config: Option<&OperatorConfig>) -> Result<LaunchSeccom
         payload_socket_max_segment_bytes: config.payload_config.socket.max_segment_bytes,
         process_enabled: config.process_seccomp.enabled,
         process_syscalls: config.process_seccomp.syscalls.clone(),
+        network_enabled: config.network_control.enabled,
+        network_syscalls: config.network_control.syscalls.clone(),
         reserved_listener_fd: config.seccomp_notify.reserved_listener_fd,
     })
 }

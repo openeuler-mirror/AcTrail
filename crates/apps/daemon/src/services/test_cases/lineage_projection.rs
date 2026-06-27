@@ -36,6 +36,7 @@ fn terminal_reconcile_projects_late_exec_through_process_lineage() {
         super::workload_diagnostics_disabled(),
         super::export_runtime_disabled(),
         super::enforcement_disabled(),
+        super::CommandControlConfig::default(),
     )
     .unwrap();
 

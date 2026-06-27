@@ -3,11 +3,11 @@ use std::time::SystemTime;
 
 use export_core::{ExportRuntime, SemanticActionExportBatch};
 use model_core::ids::{DiagnosticId, TraceId};
+use model_core::payload::PayloadSegment;
 use model_core::trace::TraceRecord;
 use semantic_action::{SemanticAction, SemanticActionKind, SemanticActionLink};
 use storage_core::StorageBackend;
-
-use crate::diagnostics::export_drop_diagnostics;
+use storage_core::{PayloadRowLimit, PayloadSegmentQuery};
 
 use super::{RecordingError, SemanticActionBatch, SemanticActionRecordBatch};
 
@@ -44,11 +44,13 @@ impl<'a> SemanticActionExportRecorder<'a> {
             return Ok(());
         }
         let report = if batch.actions().iter().all(action_exportable) {
+            let payload_segments = self.payload_segments_for_export(trace.trace_id)?;
             self.export_runtime
                 .publish_semantic_actions(SemanticActionExportBatch {
                     trace,
                     actions: batch.actions(),
                     links: batch.links(),
+                    payload_segments: &payload_segments,
                 })?
         } else {
             let exportable_actions = exportable_actions(batch.actions());
@@ -56,19 +58,42 @@ impl<'a> SemanticActionExportRecorder<'a> {
                 return Ok(());
             }
             let exportable_links = exportable_links(&exportable_actions, batch.links());
+            let payload_segments = self.payload_segments_for_export(trace.trace_id)?;
             self.export_runtime
                 .publish_semantic_actions(SemanticActionExportBatch {
                     trace,
                     actions: &exportable_actions,
                     links: &exportable_links,
+                    payload_segments: &payload_segments,
                 })?
         };
         // Export backpressure is recorded after publish so collection can continue visibly.
-        let diagnostics = export_drop_diagnostics(report, emitted_at, next_diagnostic_id)?;
-        for diagnostic in diagnostics {
-            self.storage.append_diagnostic(diagnostic)?;
-        }
+        crate::writer::RecordingWriter::new(self.storage).persist_export_drop_report(
+            report,
+            emitted_at,
+            next_diagnostic_id,
+        )?;
         Ok(())
+    }
+
+    fn payload_segments_for_export(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<Vec<PayloadSegment>, RecordingError> {
+        let Some(limit) = self.export_runtime.payload_snapshot_limit() else {
+            return Ok(Vec::new());
+        };
+        self.storage
+            .list_payload_segments(
+                trace_id,
+                PayloadSegmentQuery {
+                    segment_id: None,
+                    direction: None,
+                    limit: Some(PayloadRowLimit::Head(limit)),
+                    include_bytes: true,
+                },
+            )
+            .map_err(|error| RecordingError::new(error.stage, error.message))
     }
 
     pub(crate) fn publish_batch_for_trace(

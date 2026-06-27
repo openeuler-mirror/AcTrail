@@ -2,7 +2,7 @@
 //!
 //! When `ebpf.enabled = "auto"`, the daemon probes the host at startup: if the
 //! host can run eBPF (BTF present, root, tracefs writable) the collector stays
-//! enabled; otherwise the daemon prints `actraild ebpf auto-degraded: ...` and
+//! enabled; otherwise the daemon logs `actraild ebpf auto-degraded` and
 //! continues without eBPF collection instead of refusing to start. `true` and
 //! `false` are honored as-is.
 
@@ -92,14 +92,15 @@ mod tests {
     fn auto_follows_probe_result() {
         let resolution = resolve_ebpf_collector_config(sample_config(EbpfEnabledMode::Auto));
         let probe = probe();
-        assert_eq!(resolution.config.enabled, probe.reason_unavailable.is_none());
+        assert_eq!(
+            resolution.config.enabled,
+            probe.reason_unavailable.is_none()
+        );
         assert_eq!(resolution.auto_degraded, probe.reason_unavailable.is_some());
         if let Some(reason) = probe.reason_unavailable {
             assert_eq!(
                 resolution.degrade_detail,
-                Some(format!(
-                    "{reason}; continuing without host eBPF collection"
-                ))
+                Some(format!("{reason}; continuing without host eBPF collection"))
             );
         }
     }

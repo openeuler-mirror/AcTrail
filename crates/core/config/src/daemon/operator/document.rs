@@ -14,24 +14,26 @@ use serde::{Deserialize, Serialize};
 use storage_factory::StorageConfig;
 
 use super::super::{
-    AgentInvocationConfig, ApplicationProtocolConfig, DEFAULT_ACTIVE_TRACE_MAX,
-    DEFAULT_CONTROL_PENDING_CONNECTION_MAX, DEFAULT_FINALIZATION_POLL_INTERVAL_MS,
-    DEFAULT_FINALIZATION_TRACES_PER_CYCLE, DisabledOrPath, EbpfCollectorConfig, EbpfEnabledMode,
-    EnforcementBackend,
-    EnforcementConfig, EnforcementMarkStrategy, EnforcementScope, FileBulkReadObservationConfig,
+    AgentInvocationConfig, ApplicationProtocolConfig, CommandControlConfig,
+    DEFAULT_ACTIVE_TRACE_MAX, DEFAULT_CONTROL_PENDING_CONNECTION_MAX,
+    DEFAULT_FINALIZATION_POLL_INTERVAL_MS, DEFAULT_FINALIZATION_TRACES_PER_CYCLE, DisabledOrPath,
+    EbpfCollectorConfig, EbpfEnabledMode, EnforcementBackend, EnforcementConfig,
+    EnforcementMarkStrategy, EnforcementScope, FileBulkReadObservationConfig,
     FileMetadataRetention, FileObservationConfig, FileRawEventRetention, FileTtyObservationConfig,
     FsEnumerateObservationConfig, Http2DataContentRetention, HttpBodyRetention,
     HttpHeadersRetention, L0LlmCallRetention, L1SseRetention, L2HttpRetention,
     L3Http2FrameRetention, L4PayloadRetention, LlmRequestContentRetention,
     LlmResponseContentRetention, LlmToolCallRetention, LlmUsageRetention, MemlockRlimit,
-    PayloadBodyContentRetention, PayloadConfig, PayloadRedactionPolicy,
-    PayloadSocketCaptureBackend, PayloadSocketConfig, PayloadSocketSeccompSyscall,
-    PayloadStdioConfig, PayloadStdioStorageMode, PayloadTlsCaptureBackend, PayloadTlsConfig,
-    PayloadTlsLibrary, PayloadTlsLibraryPath, PayloadTlsResolver, PayloadTlsSeccompSyscall,
-    PayloadTlsSource, PayloadTlsSyncRuntimeLibraryPath, ProcessSeccompConfig,
-    ProcessSeccompSyscall, ResourceMetricsConfig, SeccompNotifyConfig, SemanticContentOwner,
-    SemanticRetentionConfig, SocketPermissions, SseDataPolicy, SseEventContentRetention,
-    TraceFinalizationConfig, WebServerConfig, WorkloadDiagnosticsConfig,
+    NetworkControlConfig, NetworkControlSeccompSyscall, PayloadBodyContentRetention, PayloadConfig,
+    PayloadRedactionPolicy, PayloadSocketCaptureBackend, PayloadSocketConfig,
+    PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadStdioStorageMode,
+    PayloadTlsCaptureBackend, PayloadTlsConfig, PayloadTlsLibrary, PayloadTlsLibraryPath,
+    PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource,
+    PayloadTlsSyncRuntimeLibraryPath, ProcessSeccompConfig, ProcessSeccompSyscall,
+    ResourceMetricsConfig, SeccompNotifyConfig, SemanticContentOwner, SemanticRetentionConfig,
+    SocketPermissions, SseDataPolicy, SseEventContentRetention, StartupPluginFailurePolicy,
+    StartupPluginLoadConfig, StartupPluginsConfig, TraceFinalizationConfig, WebServerConfig,
+    WorkloadDiagnosticsConfig,
 };
 use super::{
     OperatorConfig, validate_application_protocol_config, validate_enforcement_config,
@@ -46,10 +48,14 @@ use crate::provider_rules::ProviderRuleSetConfig;
 mod app;
 #[path = "document/base.rs"]
 mod base;
+#[path = "document/command.rs"]
+mod command;
 #[path = "document/file.rs"]
 mod file;
 #[path = "document/helpers.rs"]
 mod helpers;
+#[path = "document/network.rs"]
+mod network;
 #[path = "document/payload.rs"]
 mod payload;
 #[path = "document/process.rs"]
@@ -59,8 +65,10 @@ mod semantic;
 
 use app::*;
 use base::*;
+use command::*;
 use file::*;
 use helpers::*;
+use network::*;
 use payload::*;
 use process::*;
 use semantic::*;
@@ -72,6 +80,7 @@ pub(super) struct OperatorDocument {
     storage: StorageDocument,
     web: WebDocument,
     export: ExportDocument,
+    plugins: PluginsDocument,
     capture: CaptureDocument,
     ebpf: EbpfDocument,
     payload: PayloadDocument,
@@ -84,6 +93,8 @@ pub(super) struct OperatorDocument {
     resource_metrics: ResourceMetricsDocument,
     provider: ProviderDocument,
     enforcement: EnforcementDocument,
+    command_control: CommandControlDocument,
+    network_control: NetworkControlDocument,
     supervision: SupervisionDocument,
 }
 
@@ -94,6 +105,7 @@ impl Default for OperatorDocument {
             storage: StorageDocument::default(),
             web: WebDocument::default(),
             export: ExportDocument::default(),
+            plugins: PluginsDocument::default(),
             capture: CaptureDocument::default(),
             ebpf: EbpfDocument::default(),
             payload: PayloadDocument::default(),
@@ -106,6 +118,8 @@ impl Default for OperatorDocument {
             resource_metrics: ResourceMetricsDocument::default(),
             provider: ProviderDocument::default(),
             enforcement: EnforcementDocument::default(),
+            command_control: CommandControlDocument::default(),
+            network_control: NetworkControlDocument::default(),
             supervision: SupervisionDocument::default(),
         }
     }
@@ -200,6 +214,7 @@ impl OperatorDocument {
                 },
                 runtime: RuntimeExportDocument::from_config(&config.export_runtime),
             },
+            plugins: PluginsDocument::from_config(&config.startup_plugins),
             capture: CaptureDocument {
                 profile_name: config.capture_profile.name.as_str().to_string(),
                 capabilities: required,
@@ -280,6 +295,22 @@ impl OperatorDocument {
                 audit_enabled: config.enforcement.audit_enabled,
                 event_buffer_bytes: config.enforcement.event_buffer_bytes,
             },
+            command_control: CommandControlDocument {
+                enabled: config.command_control.enabled,
+                rules_path: config.command_control.rules_path.display().to_string(),
+            },
+            network_control: NetworkControlDocument {
+                enabled: config.network_control.enabled,
+                rules_path: config.network_control.rules_path.display().to_string(),
+                syscalls: config
+                    .network_control
+                    .syscalls
+                    .iter()
+                    .copied()
+                    .map(network_control_seccomp_syscall_as_str)
+                    .map(str::to_string)
+                    .collect(),
+            },
             supervision: SupervisionDocument {
                 startup_wait_ms: config.startup_wait_ms,
                 shutdown_wait_ms: config.shutdown_wait_ms,
@@ -311,6 +342,8 @@ impl OperatorDocument {
         validate_resource_metrics_config(&resource_metrics, &capabilities)?;
         let enforcement = self.enforcement.to_config()?;
         validate_enforcement_config(&enforcement, &capabilities)?;
+        let command_control = self.command_control.to_config();
+        let network_control = self.network_control.to_config()?;
         validate_seccomp_config(
             &seccomp_notify,
             &payload_config.tls,
@@ -336,6 +369,7 @@ impl OperatorDocument {
             web: self.web.to_config()?,
             export_config: self.export.snapshot.to_config(),
             export_runtime: self.export.runtime.to_config()?,
+            startup_plugins: self.plugins.to_config()?,
             log_path: PathBuf::from(&self.control.log_path),
             diagnostic_log_level: parse_value(
                 "control.diagnostic_log_level",
@@ -358,6 +392,8 @@ impl OperatorDocument {
             trace_finalization: self.control.finalization.to_config()?,
             provider_rule_set: self.provider.to_config(),
             enforcement,
+            command_control,
+            network_control,
             startup_wait_ms: require_positive_u64(
                 "supervision.startup_wait_ms",
                 self.supervision.startup_wait_ms,

@@ -12,6 +12,8 @@ mod factory;
 mod helpers;
 #[path = "attach/logging.rs"]
 mod logging;
+#[path = "attach/plugins.rs"]
+mod plugins;
 
 use attach_runtime::snapshot_merge::merge_snapshot;
 use collector_binding::TraceBindingRequest;
@@ -31,6 +33,7 @@ use export_core::ExportRuntime;
 use model_core::capability::Capability;
 use model_core::diagnostics::{DiagnosticKind, DiagnosticRecord, DiagnosticSeverity};
 use model_core::process::ProcessIdentity;
+use plugin_system::PluginInstanceStatus;
 use provider_label::ProviderClassifier;
 use recording_runtime::{RecordingWriter, TraceStateRecord};
 use semantic_action_runtime::LiveSemanticActionRuntime;
@@ -41,7 +44,10 @@ use trace_runtime::sensor_plan::SensorPlan;
 use crate::profiles::DaemonProfileRegistry;
 use crate::service_host::AttachService;
 use crate::services::application_protocol::ApplicationProtocolAnalyzer;
+use crate::services::command_control::CommandControlService;
+use crate::services::control_runtime::ControlPluginRuntime;
 use crate::services::enforcement::FanotifyEnforcementService;
+use crate::services::network_control::NetworkControlService;
 use crate::services::payload_gate::{PayloadBodyRetentionGate, SocketHttpPayloadGate};
 use crate::services::process_seccomp::{ProcessSeccompObservation, ProcessSeccompService};
 use crate::services::resource_metrics::ResourceMetricsSampler;
@@ -83,12 +89,15 @@ pub(crate) struct StorageAttachService {
     pub(super) tls_sync: TlsSyncService,
     pub(super) seccomp_socket: SeccompSocketService,
     pub(super) process_seccomp: ProcessSeccompService,
+    pub(super) command_control: CommandControlService,
+    pub(super) network_control: NetworkControlService,
     pub(super) pending_process_seccomp_observations: Vec<ProcessSeccompObservation>,
     pub(super) semantic_retention: SemanticRetentionConfig,
     pub(super) file_observation: FileObservationConfig,
     pub(super) application_protocol: ApplicationProtocolAnalyzer,
     pub(super) resource_metrics: ResourceMetricsSampler,
     pub(super) enforcement: FanotifyEnforcementService,
+    pub(super) control_plugins: ControlPluginRuntime,
     pub(super) semantic_actions: LiveSemanticActionRuntime,
     pub(super) export_runtime: ExportRuntime,
     pub(super) workload_diagnostics: WorkloadDiagnostics,
@@ -398,9 +407,7 @@ impl AttachService for StorageAttachService {
         {
             fds.push(fd);
         }
-        if let Some(fd) = self.enforcement.event_poll_fd() {
-            fds.push(fd);
-        }
+        fds.extend(self.enforcement.event_poll_fds());
         fds.extend(self.tls_sync.event_poll_fds());
         fds.extend(self.seccomp_notify.event_poll_fds());
         Ok(fds)
@@ -462,6 +469,21 @@ impl AttachService for StorageAttachService {
             }
         }
         self.seccomp_notify.register_listener(command.listener_fd)
+    }
+
+    fn plugin_statuses(&self) -> Vec<PluginInstanceStatus> {
+        self.plugin_statuses_impl()
+    }
+
+    fn load_plugin(
+        &mut self,
+        command: control_contract::command::PluginLoadCommand,
+    ) -> Result<PluginInstanceStatus, ControlError> {
+        self.load_plugin_impl(command)
+    }
+
+    fn unload_plugin(&mut self, instance_id: &str) -> Result<PluginInstanceStatus, ControlError> {
+        self.unload_plugin_impl(instance_id)
     }
 }
 

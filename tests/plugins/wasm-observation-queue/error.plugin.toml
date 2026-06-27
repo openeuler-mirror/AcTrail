@@ -1,0 +1,22 @@
+[general]
+id = "wasm.observation-error-queue"
+api_version = "actrail.plugin.v1"
+role = "observation-consumer"
+runtime = "wasm"
+
+[host]
+capabilities = []
+
+[runtime.wasm]
+artifact_path = "error.wat"
+
+[runtime.wasm.resources]
+fuel_per_call = 2000000000
+
+[role.observation-consumer.resources]
+queue_capacity = 2
+
+[plugin_config]
+format = "toml"
+schema_ref = "queue-config.v1"
+required = true

@@ -1,0 +1,23 @@
+[general]
+id = "wasm.payload-read-denied"
+api_version = "actrail.plugin.v1"
+role = "observation-consumer"
+runtime = "wasm"
+
+[host]
+capabilities = []
+
+[runtime.wasm]
+artifact_path = "payload-read-denied.wat"
+
+[role.observation-consumer.resources]
+queue_capacity = 4
+
+[hostcall_limits.payload]
+ref_max_bytes = 9
+read_max_bytes = 64
+
+[plugin_config]
+format = "toml"
+schema_ref = ""
+required = false

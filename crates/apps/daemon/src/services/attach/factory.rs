@@ -1,9 +1,10 @@
 //! Construction for the storage-backed attach service.
 
 use config_core::daemon::{
-    AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
-    FileObservationConfig, PayloadConfig, ProcessSeccompConfig, ResourceMetricsConfig,
-    SeccompNotifyConfig, SemanticRetentionConfig, TraceFinalizationConfig,
+    AgentInvocationConfig, ApplicationProtocolConfig, CommandControlConfig, DiagnosticLogLevel,
+    EbpfCollectorConfig, FileObservationConfig, NetworkControlConfig, PayloadConfig,
+    ProcessSeccompConfig, ResourceMetricsConfig, SeccompNotifyConfig, SemanticRetentionConfig,
+    TraceFinalizationConfig,
 };
 use ebpf_collector::EbpfCollector;
 use ebpf_collector::procfs::{ProcfsIdentityReader, ProcfsTreeSnapshotter};
@@ -14,7 +15,10 @@ use storage_core::StorageBackend;
 
 use crate::profiles::DaemonProfileRegistry;
 use crate::services::application_protocol::ApplicationProtocolAnalyzer;
+use crate::services::command_control::CommandControlService;
+use crate::services::control_runtime::ControlPluginRuntime;
 use crate::services::enforcement::FanotifyEnforcementService;
+use crate::services::network_control::NetworkControlService;
 use crate::services::payload_gate::{PayloadBodyRetentionGate, SocketHttpPayloadGate};
 use crate::services::process_seccomp::ProcessSeccompService;
 use crate::services::resource_metrics::ResourceMetricsSampler;
@@ -44,6 +48,8 @@ impl StorageAttachService {
         trace_finalization: TraceFinalizationConfig,
         workload_diagnostics: WorkloadDiagnostics,
         enforcement: FanotifyEnforcementService,
+        command_control: CommandControlConfig,
+        network_control: NetworkControlConfig,
         export_runtime: ExportRuntime,
     ) -> Result<Self, control_contract::reply::ControlError> {
         Self::new_with_provider_classifier(
@@ -62,6 +68,8 @@ impl StorageAttachService {
             trace_finalization,
             workload_diagnostics,
             enforcement,
+            command_control,
+            network_control,
             export_runtime,
             Box::new(NoopProviderClassifier),
             false,
@@ -84,6 +92,8 @@ impl StorageAttachService {
         trace_finalization: TraceFinalizationConfig,
         workload_diagnostics: WorkloadDiagnostics,
         enforcement: FanotifyEnforcementService,
+        command_control_config: CommandControlConfig,
+        network_control_config: NetworkControlConfig,
         export_runtime: ExportRuntime,
         provider_classifier: Box<dyn ProviderClassifier>,
         provider_classification_enabled: bool,
@@ -123,6 +133,8 @@ impl StorageAttachService {
         let tls_sync = TlsSyncService::new(&payload_config.tls)?;
         let seccomp_socket = SeccompSocketService::new(&payload_config.socket);
         let process_seccomp = ProcessSeccompService::new(&process_seccomp_config);
+        let command_control = CommandControlService::new(&command_control_config)?;
+        let network_control = NetworkControlService::new(&network_control_config)?;
         Ok(Self {
             profiles,
             storage,
@@ -153,6 +165,8 @@ impl StorageAttachService {
             tls_sync,
             seccomp_socket,
             process_seccomp,
+            command_control,
+            network_control,
             pending_process_seccomp_observations: Vec::new(),
             semantic_retention: semantic_retention.clone(),
             file_observation: file_observation.clone(),
@@ -162,6 +176,7 @@ impl StorageAttachService {
             ),
             resource_metrics: ResourceMetricsSampler::new(resource_metrics),
             enforcement,
+            control_plugins: ControlPluginRuntime::new(),
             semantic_actions: LiveSemanticActionRuntime::new(
                 agent_invocation,
                 semantic_retention,

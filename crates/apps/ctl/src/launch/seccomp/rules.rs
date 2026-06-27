@@ -1,7 +1,8 @@
 //! Seccomp BPF rule generation for launch-time user notify.
 
 use config_core::daemon::{
-    PayloadSocketSeccompSyscall, PayloadTlsSeccompSyscall, ProcessSeccompSyscall,
+    NetworkControlSeccompSyscall, PayloadSocketSeccompSyscall, PayloadTlsSeccompSyscall,
+    ProcessSeccompSyscall,
 };
 use linux_platform::process_seccomp::{KernelProcessSyscall, effective_kernel_syscalls};
 
@@ -21,6 +22,7 @@ pub(super) fn build_seccomp_rules(
     payload_socket_syscalls: Vec<PayloadSocketSeccompSyscall>,
     payload_socket_max_segment_bytes: u32,
     process_syscalls: Vec<ProcessSeccompSyscall>,
+    network_syscalls: Vec<NetworkControlSeccompSyscall>,
 ) -> Result<Vec<SeccompRule>, String> {
     let mut rules = std::collections::BTreeSet::new();
     for syscall in payload_tls_syscalls {
@@ -42,6 +44,9 @@ pub(super) fn build_seccomp_rules(
         for kernel_syscall in kernel_syscalls {
             rules.insert(process_seccomp_rule(kernel_syscall)?);
         }
+    }
+    for syscall in network_syscalls {
+        rules.insert(network_control_syscall_rule(syscall)?);
     }
     Ok(rules.into_iter().collect())
 }
@@ -228,6 +233,17 @@ fn process_seccomp_rule(syscall: KernelProcessSyscall) -> Result<SeccompRule, St
         KernelProcessSyscall::Clone => SeccompRule::NotifyCloneProcess(syscall_number),
         _ => SeccompRule::Notify(syscall_number),
     })
+}
+
+fn network_control_syscall_rule(
+    syscall: NetworkControlSeccompSyscall,
+) -> Result<SeccompRule, String> {
+    let raw = match syscall {
+        NetworkControlSeccompSyscall::Connect => libc::SYS_connect,
+    };
+    u32::try_from(raw)
+        .map(SeccompRule::Notify)
+        .map_err(|error| format!("syscall number overflow: {error}"))
 }
 
 const SECCOMP_DATA_NR_OFFSET: u32 = 0;

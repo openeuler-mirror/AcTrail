@@ -1,0 +1,13 @@
+[general]
+id = "otel-jsonl"
+api_version = "actrail.plugin.v1"
+role = "observation-consumer"
+runtime = "builtin"
+
+[host]
+capabilities = []
+
+[plugin_config]
+format = "toml"
+schema_ref = "otel-jsonl.plugin-config.v1"
+required = true

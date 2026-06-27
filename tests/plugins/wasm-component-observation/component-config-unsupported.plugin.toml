@@ -1,0 +1,17 @@
+[general]
+id = "wasm.component-observation-config-unsupported"
+api_version = "actrail.plugin.v1"
+role = "observation-consumer"
+runtime = "wasm"
+
+[host]
+capabilities = []
+
+[runtime.wasm]
+artifact_path = "component.wat"
+abi = "wit-component"
+
+[plugin_config]
+format = "toml"
+schema_ref = "component-observation-config.v1"
+required = true

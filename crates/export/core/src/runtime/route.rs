@@ -3,7 +3,7 @@ use crate::{
     SemanticActionExportAdapter, SemanticActionExportRecord,
 };
 
-pub trait SemanticActionExportRoute {
+pub trait SemanticActionExportRoute: Send + Sync {
     fn name(&self) -> &'static str;
 
     fn publish(

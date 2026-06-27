@@ -1,0 +1,173 @@
+package actrail:plugin@0.1.0;
+
+interface types {
+  enum observation-event-family {
+    semantic-action,
+    semantic-action-link,
+    diagnostic,
+    trace-lifecycle,
+    resource-metric,
+    payload-metadata,
+  }
+
+  enum control-subject {
+    file-access,
+    command-execution,
+    network-action,
+  }
+
+  enum control-verdict {
+    allow,
+    deny,
+  }
+
+  enum decision-scope {
+    once,
+    reusable,
+  }
+
+  enum payload-read-status {
+    ok,
+    denied,
+    not-found,
+    truncated,
+  }
+
+  enum config-read-status {
+    ok,
+    not-configured,
+    too-large,
+  }
+
+  record payload-ref {
+    id: string,
+    trace-id: string,
+  }
+
+  record payload-chunk {
+    status: payload-read-status,
+    bytes: list<u8>,
+    offset: u64,
+    next-offset: option<u64>,
+    total-size-hint: option<u64>,
+    truncated: bool,
+    redaction-applied: bool,
+  }
+
+  record config-chunk {
+    status: config-read-status,
+    bytes: list<u8>,
+    offset: u64,
+    next-offset: option<u64>,
+    total-size-hint: option<u64>,
+    truncated: bool,
+  }
+
+  record semantic-action-record {
+    trace-id: string,
+    action-id: string,
+    kind: string,
+    summary: string,
+  }
+
+  record observation-batch {
+    trace-id: string,
+    families: list<observation-event-family>,
+    semantic-actions: list<semantic-action-record>,
+    payload-refs: list<payload-ref>,
+  }
+
+  record observation-report {
+    observed-records: u64,
+    dropped-records: u64,
+  }
+
+  record actor-process-identity {
+    pid: u32,
+    task-id: option<u32>,
+    generation: u64,
+    namespace: option<string>,
+  }
+
+  record decision-request {
+    decision-id: string,
+    trace-id: string,
+    task-id: option<string>,
+    subject: control-subject,
+    actor-process-identity: actor-process-identity,
+    operation: string,
+    target-summary: string,
+    context-ref: option<string>,
+  }
+
+  record decision-response {
+    verdict: control-verdict,
+    scope: decision-scope,
+    reason-code: option<string>,
+    reason-message: option<string>,
+  }
+
+  record decision-summary {
+    subject: control-subject,
+    operation: string,
+    target-summary: string,
+    decision-id: string,
+    trace-id: string,
+    actor-process-identity: string,
+  }
+
+  record file-policy-view {
+    rule-id: string,
+    decision: string,
+    operation: string,
+    path: string,
+    plugin-instance: option<string>,
+    timeout-ms: option<u64>,
+    concurrency-limit: option<u32>,
+    fallback: option<string>,
+  }
+
+  record file-policy-update {
+    rule-id: string,
+    decision: control-verdict,
+    operation: string,
+    path: string,
+  }
+
+  enum file-policy-write-status {
+    accepted,
+  }
+}
+
+interface host {
+  use types.{payload-ref, payload-chunk, config-chunk, decision-summary, file-policy-view, file-policy-update, file-policy-write-status};
+
+  read-config: func(offset: u64, max-bytes: u64) -> config-chunk;
+  read-payload: func(ref: payload-ref, offset: u64, max-bytes: u64) -> payload-chunk;
+  query-context: func(context-ref: string, query: string) -> result<decision-summary, string>;
+  file-policy-read: func(context-ref: string, query: string) -> result<file-policy-view, string>;
+  file-policy-write: func(context-ref: string, update: file-policy-update) -> result<file-policy-write-status, string>;
+  env-read: func(name: string, max-bytes: u64) -> result<string, string>;
+}
+
+interface observation-consumer {
+  use types.{observation-batch, observation-report};
+
+  consume: func(batch: observation-batch) -> result<observation-report, string>;
+}
+
+interface control-decider {
+  use types.{decision-request, decision-response};
+
+  decide: func(request: decision-request) -> result<decision-response, string>;
+}
+
+world observation-plugin {
+  import host;
+  export observation-consumer;
+}
+
+world control-plugin {
+  import host;
+  export control-decider;
+}

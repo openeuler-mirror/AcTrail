@@ -119,7 +119,10 @@ impl ProcessSeccompService {
         identity_reader: &impl ProcessIdentityReader,
         notification: &libc::seccomp_notif,
         continuation: &mut NotificationContinuation,
-        before_exec_continue: &mut impl FnMut(&ProcessSeccompExecCandidate) -> Result<(), ControlError>,
+        before_exec_continue: &mut impl FnMut(
+            &ProcessSeccompExecCandidate,
+            &mut NotificationContinuation,
+        ) -> Result<(), ControlError>,
     ) -> Result<Vec<ProcessSeccompObservation>, ControlError> {
         if !self.enabled {
             return Ok(Vec::new());
@@ -156,12 +159,42 @@ impl ProcessSeccompService {
                     return Ok(Vec::new());
                 };
                 let parent_pid = parent_pid(notification.pid)?;
-                before_exec_continue(&ProcessSeccompExecCandidate {
-                    pid: notification.pid,
-                    path: args.path.clone(),
-                    path_truncated: args.truncated,
-                    execveat_dirfd: None,
-                })?;
+                let trace_id = trace_runtime
+                    .find_membership_by_pid(notification.pid)
+                    .map(|(trace_id, _)| trace_id)
+                    .or_else(|| {
+                        parent_pid.and_then(|pid| {
+                            trace_runtime
+                                .find_membership_by_pid(pid)
+                                .map(|(trace_id, _)| trace_id)
+                        })
+                    });
+                before_exec_continue(
+                    &ProcessSeccompExecCandidate {
+                        pid: notification.pid,
+                        trace_id,
+                        process: process.clone(),
+                        syscall: syscall_name(syscall).to_string(),
+                        path: args.path.clone(),
+                        argv: args.argv.clone(),
+                        path_truncated: args.truncated,
+                        execveat_dirfd: None,
+                    },
+                    continuation,
+                )?;
+                if continuation.is_finished() {
+                    return Ok(vec![ProcessSeccompObservation {
+                        observed_at,
+                        process,
+                        parent_pid,
+                        syscall,
+                        details: ProcessSeccompObservationDetails::CommandControl {
+                            path: args.path,
+                            argv: args.argv,
+                            metadata: continuation.take_metadata(),
+                        },
+                    }]);
+                }
                 continuation.continue_now()?;
                 Ok(vec![ProcessSeccompObservation {
                     observed_at,
@@ -199,12 +232,42 @@ impl ProcessSeccompService {
                     return Ok(Vec::new());
                 };
                 let parent_pid = parent_pid(notification.pid)?;
-                before_exec_continue(&ProcessSeccompExecCandidate {
-                    pid: notification.pid,
-                    path: args.path.clone(),
-                    path_truncated: args.truncated,
-                    execveat_dirfd: Some(notification.data.args[0]),
-                })?;
+                let trace_id = trace_runtime
+                    .find_membership_by_pid(notification.pid)
+                    .map(|(trace_id, _)| trace_id)
+                    .or_else(|| {
+                        parent_pid.and_then(|pid| {
+                            trace_runtime
+                                .find_membership_by_pid(pid)
+                                .map(|(trace_id, _)| trace_id)
+                        })
+                    });
+                before_exec_continue(
+                    &ProcessSeccompExecCandidate {
+                        pid: notification.pid,
+                        trace_id,
+                        process: process.clone(),
+                        syscall: syscall_name(syscall).to_string(),
+                        path: args.path.clone(),
+                        argv: args.argv.clone(),
+                        path_truncated: args.truncated,
+                        execveat_dirfd: Some(notification.data.args[0]),
+                    },
+                    continuation,
+                )?;
+                if continuation.is_finished() {
+                    return Ok(vec![ProcessSeccompObservation {
+                        observed_at,
+                        process,
+                        parent_pid,
+                        syscall,
+                        details: ProcessSeccompObservationDetails::CommandControl {
+                            path: args.path,
+                            argv: args.argv,
+                            metadata: continuation.take_metadata(),
+                        },
+                    }]);
+                }
                 continuation.continue_now()?;
                 Ok(vec![ProcessSeccompObservation {
                     observed_at,
@@ -293,6 +356,18 @@ impl ProcessSeccompService {
                 clone3_args_ptr,
                 clone3_args_size,
             ),
+            ProcessSeccompObservationDetails::CommandControl {
+                path,
+                argv,
+                metadata,
+            } => self.command_control_event(
+                observation.observed_at,
+                process,
+                observation.parent_pid,
+                path,
+                argv,
+                metadata,
+            ),
         }
     }
 
@@ -359,6 +434,33 @@ impl ProcessSeccompService {
         }
         process_event(observed_at, process, "fork_attempt", None, metadata)
     }
+
+    fn command_control_event(
+        &self,
+        observed_at: SystemTime,
+        process: ProcessIdentity,
+        parent_pid: Option<u32>,
+        path: Option<String>,
+        argv: Vec<String>,
+        mut metadata: BTreeMap<String, String>,
+    ) -> RawCollectorEvent {
+        if let Some(parent_pid) = parent_pid {
+            metadata.insert(
+                PROCESS_METADATA_PARENT_PID.to_string(),
+                parent_pid.to_string(),
+            );
+        }
+        if let Some(path) = path.filter(|value| !value.is_empty()) {
+            metadata.insert("executable".to_string(), path.clone());
+            metadata.insert("exec.path".to_string(), path);
+        }
+        if !argv.is_empty() {
+            metadata.insert("argv".to_string(), argv.join("\n"));
+            metadata.insert("argv_count".to_string(), argv.len().to_string());
+            metadata.insert("command_line".to_string(), argv.join(" "));
+        }
+        process_event(observed_at, process, "command_control", None, metadata)
+    }
 }
 
 #[derive(Debug)]
@@ -373,7 +475,11 @@ pub(crate) struct ProcessSeccompObservation {
 #[derive(Debug)]
 pub(crate) struct ProcessSeccompExecCandidate {
     pub(crate) pid: u32,
+    pub(crate) trace_id: Option<TraceId>,
+    pub(crate) process: ProcessIdentity,
+    pub(crate) syscall: String,
     pub(crate) path: Option<String>,
+    pub(crate) argv: Vec<String>,
     pub(crate) path_truncated: bool,
     pub(crate) execveat_dirfd: Option<u64>,
 }
@@ -389,6 +495,11 @@ enum ProcessSeccompObservationDetails {
         flags: Option<u64>,
         clone3_args_ptr: Option<u64>,
         clone3_args_size: Option<u64>,
+    },
+    CommandControl {
+        path: Option<String>,
+        argv: Vec<String>,
+        metadata: BTreeMap<String, String>,
     },
 }
 

@@ -1,0 +1,16 @@
+[general]
+id = "wasm.observation-count"
+api_version = "actrail.plugin.v1"
+role = "observation-consumer"
+runtime = "wasm"
+
+[host]
+capabilities = []
+
+[runtime.wasm]
+artifact_path = "count.wat"
+
+[plugin_config]
+format = "toml"
+schema_ref = "wasm-observation-count.v1"
+required = true

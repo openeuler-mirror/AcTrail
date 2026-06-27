@@ -148,7 +148,7 @@ impl TraceIdentityResolver<'_> {
                 operation,
                 parent,
                 metadata,
-            } if operation == "exec" => {
+            } if operation == "exec" || operation == "command_control" => {
                 exec_effect(trace_runtime, raw_event, parent.as_ref(), metadata)
             }
             RawObservationPayload::Process {

@@ -104,7 +104,7 @@ diagnostic_log_level = info
 | `web.listen_addr` | `actrailweb --config` 使用的只读 Web UI 监听地址；可用 `--addr` 和 `--port` 临时覆盖 | 运行参数；来自配置文件 |
 | `web.request_read_timeout_ms` | `actrailweb` 等待单个 HTTP connection 发出请求行的最长时间；示例值 `1000` 用于避免浏览器空闲预连接阻塞 UI | 运行参数；来自配置文件 |
 | `export.snapshot.directory` | `actrailviewer export-json` 未显式传 `--output` 时，导出 JSON graph 的默认目录 | 验证产物；`actraild stop` 不删除 |
-| `[export]` / `[[export.routes]]` | 默认关闭的实时 `otel-jsonl` span sink；开启时每行写一个 OTLP span document | 验证产物；`actrailctl clean` 会清理启用 route 的输出文件 |
+| `[plugins.startup]` | 默认关闭的启动插件清单；需要实时 `otel-jsonl` span sink 时加载 OTEL JSONL 观测插件 | 验证产物；插件配置决定 JSONL 输出路径 |
 | `log_path` | `actraild start` 后台运行时 stdout/stderr 的追加写入位置，用来排查启动和运行失败 | 日志文件；`actraild stop` 不删除 |
 | `diagnostic_log_level` | daemon 诊断日志级别：`off`、`info`、`debug`；排查采集失败时临时设为 `debug` | 运行参数；来自配置文件 |
 

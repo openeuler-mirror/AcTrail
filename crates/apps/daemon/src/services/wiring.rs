@@ -2,10 +2,10 @@
 
 use collector_capability::CollectorDescriptor;
 use config_core::daemon::{
-    AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
-    EnforcementConfig, FileObservationConfig, PayloadConfig, ProcessSeccompConfig,
-    ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig, SemanticRetentionConfig,
-    TraceFinalizationConfig,
+    AgentInvocationConfig, ApplicationProtocolConfig, CommandControlConfig, DiagnosticLogLevel,
+    EbpfCollectorConfig, EnforcementConfig, FileObservationConfig, NetworkControlConfig,
+    PayloadConfig, ProcessSeccompConfig, ResourceMetricsConfig, RuntimeExportConfig,
+    SeccompNotifyConfig, SemanticRetentionConfig, TraceFinalizationConfig,
 };
 use config_core::provider_rules::ProviderRuleSetConfig;
 use control_contract::reply::ControlError;
@@ -52,6 +52,8 @@ pub(crate) fn build_runtime_wiring(
     workload_diagnostics: WorkloadDiagnostics,
     export_runtime: RuntimeExportConfig,
     enforcement: EnforcementConfig,
+    command_control: CommandControlConfig,
+    network_control: NetworkControlConfig,
 ) -> Result<DaemonRuntimeWiring<StorageAttachService>, ControlError> {
     build_runtime_wiring_with_attach_service(
         storage_config,
@@ -71,6 +73,8 @@ pub(crate) fn build_runtime_wiring(
         workload_diagnostics,
         export_runtime,
         enforcement,
+        command_control,
+        network_control,
         None,
     )
 }
@@ -93,6 +97,8 @@ pub(crate) fn build_runtime_wiring_with_provider_rule_set(
     workload_diagnostics: WorkloadDiagnostics,
     export_runtime: RuntimeExportConfig,
     enforcement: EnforcementConfig,
+    command_control: CommandControlConfig,
+    network_control: NetworkControlConfig,
     provider_rule_set: &ProviderRuleSetConfig,
 ) -> Result<DaemonRuntimeWiring<StorageAttachService>, ControlError> {
     let rules = load_rules(&provider_rule_set.rules_path)
@@ -116,6 +122,8 @@ pub(crate) fn build_runtime_wiring_with_provider_rule_set(
         workload_diagnostics,
         export_runtime,
         enforcement,
+        command_control,
+        network_control,
         Some(Box::new(classifier)),
     )
 }
@@ -138,6 +146,8 @@ fn build_runtime_wiring_with_attach_service(
     workload_diagnostics: WorkloadDiagnostics,
     export_runtime_config: RuntimeExportConfig,
     enforcement_config: EnforcementConfig,
+    command_control_config: CommandControlConfig,
+    network_control_config: NetworkControlConfig,
     provider_classifier: Option<Box<dyn ProviderClassifier>>,
 ) -> Result<DaemonRuntimeWiring<StorageAttachService>, ControlError> {
     let storage = open_storage_backend(storage_config, StorageOpenMode::ReadWrite)
@@ -174,6 +184,8 @@ fn build_runtime_wiring_with_attach_service(
             trace_finalization,
             workload_diagnostics.clone(),
             enforcement,
+            command_control_config.clone(),
+            network_control_config.clone(),
             export_runtime,
             provider_classifier,
             true,
@@ -194,6 +206,8 @@ fn build_runtime_wiring_with_attach_service(
             trace_finalization,
             workload_diagnostics.clone(),
             enforcement,
+            command_control_config.clone(),
+            network_control_config.clone(),
             export_runtime,
         )?,
     };

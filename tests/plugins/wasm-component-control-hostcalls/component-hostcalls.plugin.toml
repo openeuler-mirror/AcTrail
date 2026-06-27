@@ -1,0 +1,30 @@
+[general]
+id = "wasm.component-control-hostcalls"
+api_version = "actrail.plugin.v1"
+role = "control-decider"
+runtime = "wasm"
+
+[host]
+capabilities = ["context-query", "file-policy-read", "file-policy-write"]
+
+[runtime.wasm]
+artifact_path = "component-hostcalls.wasm"
+abi = "wit-component"
+
+[runtime.wasm.resources]
+fuel_per_call = 1000000
+memory_max_bytes = 2097152
+
+[role.control-decider.resources]
+concurrency_limit = 1
+
+[hostcall_limits.context]
+read_max_bytes = 1024
+
+[hostcall_limits.file_policy]
+read_max_bytes = 1024
+
+[plugin_config]
+format = "toml"
+schema_ref = ""
+required = false

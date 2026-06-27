@@ -1,0 +1,19 @@
+[general]
+id = "wasm.file-graylist-deadline"
+api_version = "actrail.plugin.v1"
+role = "control-decider"
+runtime = "wasm"
+
+[host]
+capabilities = []
+
+[runtime.wasm]
+artifact_path = "deadline.wat"
+
+[runtime.wasm.resources]
+fuel_per_call = 1000000000000
+
+[plugin_config]
+format = "toml"
+schema_ref = "wasm-file-graylist-deadline.v1"
+required = true

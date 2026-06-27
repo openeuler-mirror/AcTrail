@@ -5,6 +5,7 @@ use std::time::SystemTime;
 
 use model_core::ids::{TraceId, TraceName};
 use model_core::trace::{TraceHealth, TraceLifecycleState};
+use plugin_system::PluginInstanceStatus;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TraceListItem {
@@ -37,6 +38,8 @@ pub enum ControlReply {
     TrackRemoved,
     TraceList(Vec<TraceListItem>),
     Doctor(DoctorReply),
+    PluginList(Vec<PluginInstanceStatus>),
+    PluginStatus(PluginInstanceStatus),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -204,7 +204,7 @@ resource_metrics.memory_alert_rss_kb = disabled
 | `web.listen_addr` | `actrailweb --config` 使用的只读 Web UI 监听地址；可用 `--addr` 和 `--port` 临时覆盖 |
 | `web.request_read_timeout_ms` | `actrailweb` 等待单个 HTTP connection 发出请求行的最长时间；示例值 `1000` 用于避免浏览器空闲预连接阻塞 UI |
 | `export.snapshot.directory` | JSON export 默认目录；本例查看 payload 不需要 JSON export |
-| `[export]` / `[[export.routes]]` | 默认关闭的实时 `otel-jsonl` span sink；需要实时消费 semantic action span 时显式开启 |
+| `[plugins.startup]` | 默认关闭的启动插件清单；需要实时消费 semantic action span 时加载 OTEL JSONL 观测插件 |
 | `log_path` | `actraild start` 后台运行时 stdout/stderr 追加写入位置 |
 | `diagnostic_log_level` | 默认 `info`，避免逐 payload segment 打印调试日志；排查采集失败时临时改成 `debug`。`actraild start` 写入 `log_path`，`actraild ... run` 写入前台 stdout/stderr |
 

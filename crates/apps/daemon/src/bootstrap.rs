@@ -5,13 +5,16 @@ use std::os::fd::RawFd;
 use std::time::Duration;
 
 use config_core::daemon::{
-    AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
-    EnforcementConfig, FileObservationConfig, PayloadConfig, ProcessSeccompConfig,
-    ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig, SemanticRetentionConfig,
-    TraceFinalizationConfig, WorkloadDiagnosticsConfig,
+    AgentInvocationConfig, ApplicationProtocolConfig, CommandControlConfig, DiagnosticLogLevel,
+    EbpfCollectorConfig, EnforcementConfig, FileObservationConfig, NetworkControlConfig,
+    PayloadConfig, ProcessSeccompConfig, ResourceMetricsConfig, RuntimeExportConfig,
+    SeccompNotifyConfig, SemanticRetentionConfig, TraceFinalizationConfig,
+    WorkloadDiagnosticsConfig,
 };
 use config_core::provider_rules::ProviderRuleSetConfig;
+use control_contract::command::PluginLoadCommand;
 use control_contract::reply::ControlError;
+use plugin_system::PluginInstanceStatus;
 use storage_factory::StorageConfig;
 use uds_control_server::{UdsControlConnection, UdsControlServer};
 
@@ -63,6 +66,8 @@ impl LocalDaemonServer {
         workload_diagnostics_config: WorkloadDiagnosticsConfig,
         export_runtime: RuntimeExportConfig,
         enforcement: EnforcementConfig,
+        command_control: CommandControlConfig,
+        network_control: NetworkControlConfig,
     ) -> Result<Self, ControlError> {
         let workload_diagnostics = WorkloadDiagnostics::new(workload_diagnostics_config);
         let wiring = build_runtime_wiring(
@@ -83,6 +88,8 @@ impl LocalDaemonServer {
             workload_diagnostics.clone(),
             export_runtime,
             enforcement,
+            command_control,
+            network_control,
         )?;
         workload_diagnostics.start();
         Ok(Self {
@@ -109,6 +116,8 @@ impl LocalDaemonServer {
         workload_diagnostics_config: WorkloadDiagnosticsConfig,
         export_runtime: RuntimeExportConfig,
         enforcement: EnforcementConfig,
+        command_control: CommandControlConfig,
+        network_control: NetworkControlConfig,
         provider_rule_set: &ProviderRuleSetConfig,
     ) -> Result<Self, ControlError> {
         let workload_diagnostics = WorkloadDiagnostics::new(workload_diagnostics_config);
@@ -130,6 +139,8 @@ impl LocalDaemonServer {
             workload_diagnostics.clone(),
             export_runtime,
             enforcement,
+            command_control,
+            network_control,
             provider_rule_set,
         )?;
         workload_diagnostics.start();
@@ -141,6 +152,13 @@ impl LocalDaemonServer {
 
     pub fn handle_request(&mut self, request: &[u8]) -> Vec<u8> {
         self.server.handle_bytes(request)
+    }
+
+    pub fn load_plugin(
+        &mut self,
+        command: PluginLoadCommand,
+    ) -> Result<PluginInstanceStatus, ControlError> {
+        self.server.service_mut().load_plugin(command)
     }
 
     pub fn drain_live_events(&mut self) -> Result<(), ControlError> {

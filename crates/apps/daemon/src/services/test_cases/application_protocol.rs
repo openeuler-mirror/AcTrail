@@ -73,6 +73,7 @@ fn tls_payload_processing_keeps_llm_summary_without_payload_body_duplication() {
         super::workload_diagnostics_disabled(),
         super::export_runtime_disabled(),
         super::enforcement_disabled(),
+        super::CommandControlConfig::default(),
     )
     .unwrap();
 
@@ -297,6 +298,7 @@ fn payload_batch_retention_counts_prior_uncommitted_segments_and_rolls_back() {
         super::workload_diagnostics_disabled(),
         super::export_runtime_disabled(),
         super::enforcement_disabled(),
+        super::CommandControlConfig::default(),
     )
     .unwrap();
 
@@ -398,6 +400,7 @@ fn tls_payload_processing_persists_http2_frame_and_data_events() {
         super::workload_diagnostics_disabled(),
         super::export_runtime_disabled(),
         super::enforcement_disabled(),
+        super::CommandControlConfig::default(),
     )
     .unwrap();
 
@@ -502,6 +505,7 @@ fn http2_analyzer_ignores_http1_text_when_both_protocols_are_enabled() {
         super::workload_diagnostics_disabled(),
         super::export_runtime_disabled(),
         super::enforcement_disabled(),
+        super::CommandControlConfig::default(),
     )
     .unwrap();
 

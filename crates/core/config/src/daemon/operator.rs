@@ -6,16 +6,18 @@ mod document;
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use storage_factory::StorageConfig;
 
 use super::{
-    AgentInvocationConfig, ApplicationProtocolConfig, DiagnosticLogLevel, EbpfCollectorConfig,
-    EnforcementConfig, FileObservationConfig, PayloadConfig, PayloadSocketConfig, PayloadTlsConfig,
-    ProcessSeccompConfig, ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig,
-    SemanticRetentionConfig, SocketPermissions, SseDataPolicy, TraceFinalizationConfig,
-    WebServerConfig, WorkloadDiagnosticsConfig,
+    AgentInvocationConfig, ApplicationProtocolConfig, CommandControlConfig, DiagnosticLogLevel,
+    EbpfCollectorConfig, EnforcementConfig, FileObservationConfig, NetworkControlConfig,
+    PayloadConfig, PayloadSocketConfig, PayloadTlsConfig, ProcessSeccompConfig,
+    ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig, SemanticRetentionConfig,
+    SocketPermissions, SseDataPolicy, TraceFinalizationConfig, WebServerConfig,
+    WorkloadDiagnosticsConfig,
 };
 use crate::capture_profile::CaptureProfile;
 use crate::export::ExportConfig;
@@ -44,6 +46,7 @@ pub struct OperatorConfig {
     pub web: WebServerConfig,
     pub export_config: ExportConfig,
     pub export_runtime: RuntimeExportConfig,
+    pub startup_plugins: StartupPluginsConfig,
     pub log_path: PathBuf,
     pub diagnostic_log_level: DiagnosticLogLevel,
     pub workload_diagnostics: WorkloadDiagnosticsConfig,
@@ -60,9 +63,55 @@ pub struct OperatorConfig {
     pub trace_finalization: TraceFinalizationConfig,
     pub provider_rule_set: Option<ProviderRuleSetConfig>,
     pub enforcement: EnforcementConfig,
+    pub command_control: CommandControlConfig,
+    pub network_control: NetworkControlConfig,
     pub startup_wait_ms: u64,
     pub shutdown_wait_ms: u64,
     pub supervision_poll_interval_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StartupPluginFailurePolicy {
+    FailFast,
+    Continue,
+}
+
+impl StartupPluginFailurePolicy {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::FailFast => "fail-fast",
+            Self::Continue => "continue",
+        }
+    }
+}
+
+impl FromStr for StartupPluginFailurePolicy {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "fail-fast" => Ok(Self::FailFast),
+            "continue" => Ok(Self::Continue),
+            _ => Err("expected fail-fast or continue".to_string()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StartupPluginsConfig {
+    pub enabled: bool,
+    pub failure_policy: StartupPluginFailurePolicy,
+    pub load: Vec<StartupPluginLoadConfig>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StartupPluginLoadConfig {
+    pub instance_id: String,
+    pub enabled: bool,
+    pub failure_policy: Option<StartupPluginFailurePolicy>,
+    pub manifest_path: PathBuf,
+    pub plugin_config_path: Option<PathBuf>,
+    pub host_grants: Vec<String>,
 }
 
 impl OperatorConfig {

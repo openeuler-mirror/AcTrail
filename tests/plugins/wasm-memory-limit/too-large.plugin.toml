@@ -1,0 +1,20 @@
+[general]
+id = "wasm.memory-too-large"
+api_version = "actrail.plugin.v1"
+role = "control-decider"
+runtime = "wasm"
+
+[host]
+capabilities = []
+
+[runtime.wasm]
+artifact_path = "too-large.wat"
+
+[runtime.wasm.resources]
+fuel_per_call = 10000
+memory_max_bytes = 65536
+
+[plugin_config]
+format = "toml"
+schema_ref = "wasm-memory-limit.v1"
+required = true

@@ -1,8 +1,11 @@
 use model_core::ids::TraceId;
+use model_core::payload::PayloadSegment;
 use model_core::trace::TraceRecord;
 use semantic_action::{SemanticAction, SemanticActionLink};
 
-use crate::{ExportError, SemanticActionExportRoute};
+use plugin_system::{ObservationConsumer, PluginInstanceStatus};
+
+use crate::ExportError;
 
 use super::subscription::SemanticActionSubscriptionManager;
 
@@ -12,6 +15,7 @@ pub struct SemanticActionExportBatch<'a> {
     pub trace: &'a TraceRecord,
     pub actions: &'a [SemanticAction],
     pub links: &'a [SemanticActionLink],
+    pub payload_segments: &'a [PayloadSegment],
 }
 
 pub struct ExportRuntime {
@@ -19,9 +23,9 @@ pub struct ExportRuntime {
 }
 
 impl ExportRuntime {
-    pub fn new(routes: Vec<Box<dyn SemanticActionExportRoute>>) -> Self {
+    pub fn new(consumers: Vec<Box<dyn ObservationConsumer>>) -> Self {
         Self {
-            subscriptions: SemanticActionSubscriptionManager::new(routes),
+            subscriptions: SemanticActionSubscriptionManager::new(consumers),
         }
     }
 
@@ -31,6 +35,34 @@ impl ExportRuntime {
     ) -> Result<ExportPublishReport, ExportError> {
         validate_batch(&batch)?;
         Ok(self.subscriptions.publish_semantic_actions(batch))
+    }
+
+    pub fn consumer_instance_ids(&self) -> Vec<String> {
+        self.subscriptions.consumer_instance_ids()
+    }
+
+    pub fn plugin_statuses(&self) -> Vec<PluginInstanceStatus> {
+        self.subscriptions.plugin_statuses()
+    }
+
+    pub fn payload_snapshot_limit(&self) -> Option<usize> {
+        self.subscriptions.payload_snapshot_limit()
+    }
+
+    pub fn add_observation_consumer(
+        &mut self,
+        consumer: Box<dyn ObservationConsumer>,
+        warnings: Vec<String>,
+    ) -> Result<PluginInstanceStatus, ExportError> {
+        self.subscriptions
+            .add_observation_consumer(consumer, warnings)
+    }
+
+    pub fn remove_observation_consumer(
+        &mut self,
+        instance_id: &str,
+    ) -> Result<ObservationConsumerRemoval, ExportError> {
+        self.subscriptions.remove_observation_consumer(instance_id)
     }
 }
 
@@ -43,6 +75,12 @@ impl ExportPublishReport {
     pub(crate) fn from_dropped_records(dropped_records: Vec<ExportDroppedRecord>) -> Self {
         Self { dropped_records }
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ObservationConsumerRemoval {
+    pub status: PluginInstanceStatus,
+    pub drop_report: ExportPublishReport,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

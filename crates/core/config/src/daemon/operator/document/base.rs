@@ -230,7 +230,7 @@ pub(super) struct RuntimeExportDocument {
 impl Default for RuntimeExportDocument {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             routes: vec![RuntimeExportRouteDocument::default()],
         }
     }
@@ -357,6 +357,166 @@ impl Default for OtelJsonlRouteDocument {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
+pub(super) struct PluginsDocument {
+    pub startup: StartupPluginsDocument,
+}
+
+impl Default for PluginsDocument {
+    fn default() -> Self {
+        Self {
+            startup: StartupPluginsDocument::default(),
+        }
+    }
+}
+
+impl PluginsDocument {
+    pub(super) fn from_config(config: &StartupPluginsConfig) -> Self {
+        Self {
+            startup: StartupPluginsDocument::from_config(config),
+        }
+    }
+
+    pub(super) fn to_config(&self) -> Result<StartupPluginsConfig, String> {
+        self.startup.to_config()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct StartupPluginsDocument {
+    pub enabled: bool,
+    pub failure_policy: String,
+    pub load: Vec<StartupPluginLoadDocument>,
+}
+
+impl Default for StartupPluginsDocument {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            failure_policy: StartupPluginFailurePolicy::FailFast.as_str().to_string(),
+            load: Vec::new(),
+        }
+    }
+}
+
+impl StartupPluginsDocument {
+    pub(super) fn from_config(config: &StartupPluginsConfig) -> Self {
+        Self {
+            enabled: config.enabled,
+            failure_policy: config.failure_policy.as_str().to_string(),
+            load: config
+                .load
+                .iter()
+                .map(StartupPluginLoadDocument::from_config)
+                .collect(),
+        }
+    }
+
+    pub(super) fn to_config(&self) -> Result<StartupPluginsConfig, String> {
+        let failure_policy = parse_value::<StartupPluginFailurePolicy>(
+            "plugins.startup.failure_policy",
+            &self.failure_policy,
+        )?;
+        let mut load = Vec::new();
+        for item in &self.load {
+            load.push(item.to_config()?);
+        }
+        if self.enabled && load.iter().all(|item| !item.enabled) {
+            return Err(
+                "plugins.startup.enabled=true requires at least one enabled load entry".to_string(),
+            );
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for item in load.iter().filter(|item| item.enabled) {
+            if !seen.insert(item.instance_id.clone()) {
+                return Err(format!(
+                    "plugins.startup.load instance {} is duplicated",
+                    item.instance_id
+                ));
+            }
+        }
+        Ok(StartupPluginsConfig {
+            enabled: self.enabled,
+            failure_policy,
+            load,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct StartupPluginLoadDocument {
+    pub instance: String,
+    pub enabled: bool,
+    pub failure_policy: String,
+    pub manifest: String,
+    pub plugin_config: String,
+    pub host_grants: Vec<String>,
+}
+
+impl Default for StartupPluginLoadDocument {
+    fn default() -> Self {
+        Self {
+            instance: String::new(),
+            enabled: true,
+            failure_policy: String::new(),
+            manifest: String::new(),
+            plugin_config: String::new(),
+            host_grants: Vec::new(),
+        }
+    }
+}
+
+impl StartupPluginLoadDocument {
+    fn from_config(config: &StartupPluginLoadConfig) -> Self {
+        Self {
+            instance: config.instance_id.clone(),
+            enabled: config.enabled,
+            failure_policy: config
+                .failure_policy
+                .map(StartupPluginFailurePolicy::as_str)
+                .unwrap_or("")
+                .to_string(),
+            manifest: config.manifest_path.display().to_string(),
+            plugin_config: config
+                .plugin_config_path
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default(),
+            host_grants: config.host_grants.clone(),
+        }
+    }
+
+    fn to_config(&self) -> Result<StartupPluginLoadConfig, String> {
+        let failure_policy = if self.failure_policy.trim().is_empty() {
+            None
+        } else {
+            Some(parse_value::<StartupPluginFailurePolicy>(
+                "plugins.startup.load.failure_policy",
+                &self.failure_policy,
+            )?)
+        };
+        Ok(StartupPluginLoadConfig {
+            instance_id: required_non_empty("plugins.startup.load.instance", &self.instance)?
+                .to_string(),
+            enabled: self.enabled,
+            failure_policy,
+            manifest_path: PathBuf::from(required_non_empty(
+                "plugins.startup.load.manifest",
+                &self.manifest,
+            )?),
+            plugin_config_path: if self.plugin_config.trim().is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(&self.plugin_config))
+            },
+            host_grants: self.host_grants.clone(),
+        })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
 pub(super) struct CaptureDocument {
     pub profile_name: String,
     pub capabilities: Vec<String>,
@@ -424,7 +584,10 @@ pub(super) struct EbpfDocument {
     /// (`enabled = "auto"`) or a bare boolean (`enabled = true`) for
     /// backward compatibility with configs written before `auto` existed;
     /// normalized to a string and parsed into `EbpfEnabledMode` in `to_config`.
-    #[serde(deserialize_with = "deserialize_ebpf_enabled", serialize_with = "serialize_ebpf_enabled")]
+    #[serde(
+        deserialize_with = "deserialize_ebpf_enabled",
+        serialize_with = "serialize_ebpf_enabled"
+    )]
     pub enabled: String,
     pub memlock_rlimit: String,
     pub tracked_process_max_entries: u32,

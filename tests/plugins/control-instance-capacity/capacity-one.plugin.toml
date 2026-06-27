@@ -1,0 +1,22 @@
+[general]
+id = "wasm.file-graylist-capacity-one"
+api_version = "actrail.plugin.v1"
+role = "control-decider"
+runtime = "wasm"
+
+[host]
+capabilities = []
+
+[runtime.wasm]
+artifact_path = "../control-timeout/timeout.wat"
+
+[runtime.wasm.resources]
+fuel_per_call = 1000000000000
+
+[role.control-decider.resources]
+concurrency_limit = 1
+
+[plugin_config]
+format = "toml"
+schema_ref = "../control-timeout/wasm-file-graylist-timeout.v1"
+required = true

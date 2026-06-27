@@ -20,6 +20,7 @@ use recording_runtime::{RecordingWriter, TraceStateRecord};
 use trace_runtime::registry::TraceRuntime;
 
 use crate::services::attach::StorageAttachService;
+use crate::services::command_control::CommandControlOutcome;
 use crate::services::resource_metrics::COLLECTOR_NAME as RESOURCE_METRICS_COLLECTOR_NAME;
 use crate::services::workload_diagnostics::PayloadSegmentStage;
 
@@ -175,7 +176,7 @@ impl StorageAttachService {
 
     fn drain_seccomp_notifications_impl(
         &mut self,
-        trace_runtime: &TraceRuntime,
+        trace_runtime: &mut TraceRuntime,
     ) -> Result<(), ControlError> {
         let seccomp_notify = &mut self.seccomp_notify;
         let seccomp_tls = &mut self.seccomp_tls;
@@ -183,16 +184,50 @@ impl StorageAttachService {
         let tls_sync = &self.tls_sync;
         let collector = &mut self.collector;
         let mut process_observations = Vec::new();
+        let mut network_events = Vec::new();
         {
             let process_seccomp = &self.process_seccomp;
+            let command_control = &self.command_control;
+            let network_control = &self.network_control;
+            let control_plugins = &self.control_plugins;
             let identity_reader = &self.identity_reader;
             seccomp_notify.drain_notifications(|notification, continuation| {
+                network_events.extend(network_control.handle_notification(
+                    trace_runtime,
+                    identity_reader,
+                    notification,
+                    continuation,
+                    control_plugins,
+                )?);
                 process_observations.extend(process_seccomp.handle_notification(
                     trace_runtime,
                     identity_reader,
                     notification,
                     continuation,
-                    &mut |candidate| {
+                    &mut |candidate, continuation| {
+                        if let Some(trace_id) = candidate.trace_id {
+                            match command_control.decide_exec(
+                                trace_id,
+                                &candidate.process,
+                                candidate,
+                                control_plugins,
+                            )? {
+                                CommandControlOutcome::Continue => {}
+                                outcome => {
+                                    let metadata = command_control_metadata(&outcome);
+                                    continuation.set_metadata(metadata);
+                                    if matches!(
+                                        command_control_decision(&outcome),
+                                        config_core::daemon::EnforcementDecision::Deny
+                                    ) {
+                                        continuation.deny_errno(libc::EPERM)?;
+                                    } else {
+                                        continuation.continue_now()?;
+                                    }
+                                    return Ok(());
+                                }
+                            }
+                        }
                         if candidate.path_truncated {
                             return Ok(());
                         }
@@ -230,6 +265,7 @@ impl StorageAttachService {
             .extend(process_observations);
         self.process_seccomp
             .ensure_pending_observation_capacity(self.pending_process_seccomp_observations.len())?;
+        self.process_live_event_batch(trace_runtime, network_events)?;
         Ok(())
     }
 
@@ -289,10 +325,11 @@ impl StorageAttachService {
         trace_runtime: &trace_runtime::TraceRuntime,
     ) -> Result<(), ControlError> {
         let mut events = Vec::new();
-        for draft in self
-            .enforcement
-            .drain_due(trace_runtime, &self.identity_reader)?
-        {
+        for draft in self.enforcement.drain_due(
+            trace_runtime,
+            &self.identity_reader,
+            &self.control_plugins,
+        )? {
             let event = DomainEvent::new(
                 EventEnvelope {
                     event_id: self.next_event_id()?,
@@ -366,6 +403,63 @@ pub(super) fn next_diagnostic_id_from_seed(seed: &mut u64) -> Result<DiagnosticI
         .checked_add(1)
         .ok_or_else(|| ControlError::new("diagnostic_id_overflow", "diagnostic id overflow"))?;
     Ok(DiagnosticId::new(raw))
+}
+
+fn command_control_metadata(
+    outcome: &CommandControlOutcome,
+) -> std::collections::BTreeMap<String, String> {
+    let mut metadata = std::collections::BTreeMap::new();
+    metadata.insert("subject".to_string(), "command-execution".to_string());
+    metadata.insert("decision_source".to_string(), "sync-plugin".to_string());
+    metadata.insert(
+        "decision".to_string(),
+        command_control_decision(outcome).as_str().to_string(),
+    );
+    match outcome {
+        CommandControlOutcome::Continue => {}
+        CommandControlOutcome::Decision {
+            rule_id,
+            plugin_instance,
+            timeout_ms,
+            concurrency_limit,
+            ..
+        }
+        | CommandControlOutcome::DecisionError {
+            rule_id,
+            plugin_instance,
+            timeout_ms,
+            concurrency_limit,
+            ..
+        } => {
+            metadata.insert("rule_id".to_string(), rule_id.clone());
+            metadata.insert("plugin_instance".to_string(), plugin_instance.clone());
+            metadata.insert("plugin_timeout_ms".to_string(), timeout_ms.to_string());
+            metadata.insert(
+                "plugin_concurrency_limit".to_string(),
+                concurrency_limit.to_string(),
+            );
+        }
+    }
+    if let CommandControlOutcome::DecisionError { error, .. } = outcome {
+        metadata.insert("plugin_error".to_string(), error.clone());
+        let fallback_reason = if error == "concurrency_limit" {
+            "concurrency_limit"
+        } else {
+            "plugin_error"
+        };
+        metadata.insert("fallback_reason".to_string(), fallback_reason.to_string());
+    }
+    metadata
+}
+
+fn command_control_decision(
+    outcome: &CommandControlOutcome,
+) -> config_core::daemon::EnforcementDecision {
+    match outcome {
+        CommandControlOutcome::Continue => config_core::daemon::EnforcementDecision::Allow,
+        CommandControlOutcome::Decision { decision, .. }
+        | CommandControlOutcome::DecisionError { decision, .. } => *decision,
+    }
 }
 
 fn recording_error_to_control(error: recording_runtime::RecordingError) -> ControlError {

@@ -11,12 +11,16 @@ use storage_factory::StorageConfig;
 mod agent;
 #[path = "daemon/application.rs"]
 mod application;
+#[path = "daemon/command.rs"]
+mod command;
 #[path = "daemon/enforcement.rs"]
 mod enforcement;
 #[path = "daemon/observation/file.rs"]
 mod file_observation;
 #[path = "daemon/logging/config.rs"]
 mod logging;
+#[path = "daemon/network.rs"]
+mod network;
 #[path = "daemon/operator.rs"]
 mod operator;
 #[path = "daemon/payload.rs"]
@@ -34,6 +38,7 @@ pub use agent::{
     SseEventContentRetention,
 };
 pub use application::{ApplicationProtocolConfig, SseDataPolicy};
+pub use command::CommandControlConfig;
 pub use enforcement::{
     EnforcementBackend, EnforcementConfig, EnforcementDecision, EnforcementMarkStrategy,
     EnforcementScope,
@@ -50,9 +55,11 @@ pub use logging::{
     DEFAULT_WORKLOAD_DIAGNOSTICS_ENABLED, DEFAULT_WORKLOAD_DIAGNOSTICS_INTERVAL_MS,
     DiagnosticLogLevel, WorkloadDiagnosticsConfig,
 };
+pub use network::{NetworkControlConfig, NetworkControlSeccompSyscall};
 pub use operator::{
     DEFAULT_ACTIVE_TRACE_MAX, DEFAULT_CONTROL_PENDING_CONNECTION_MAX, DEFAULT_OPERATOR_CONFIG_PATH,
-    OperatorConfig, OperatorConfigInitStatus,
+    OperatorConfig, OperatorConfigInitStatus, StartupPluginFailurePolicy, StartupPluginLoadConfig,
+    StartupPluginsConfig,
 };
 pub use payload::{
     DisabledOrPath, PayloadConfig, PayloadRedactionPolicy, PayloadSocketCaptureBackend,

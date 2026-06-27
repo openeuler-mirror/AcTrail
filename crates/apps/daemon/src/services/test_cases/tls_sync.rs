@@ -43,6 +43,7 @@ fn tls_sync_payload_persists_without_child_membership() {
         super::workload_diagnostics_disabled(),
         super::export_runtime_disabled(),
         super::enforcement_disabled(),
+        super::CommandControlConfig::default(),
     )
     .unwrap();
 

@@ -1,0 +1,4 @@
+path = "/tmp/actrail-plugin-dynamic-builtin/live-spans.otlp.jsonl"
+overwrite_enabled = true
+queue_capacity = 128
+flush_every_spans = 1
