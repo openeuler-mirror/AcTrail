@@ -1,0 +1,5 @@
+source_url=git@gitcode.com:openeuler/AcTrail.git
+branch=master
+source_ref=refs/remotes/actrail_changelog/master
+last_commit=ad0d20f1f3ee3f1a958dede3f8bf55d645680e3b
+updated_at=2026-06-27T06:05:30+00:00

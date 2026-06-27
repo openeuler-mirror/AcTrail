@@ -1,0 +1,16 @@
+[general]
+id = "wasm.unsupported-config-format"
+api_version = "actrail.plugin.v1"
+role = "observation-consumer"
+runtime = "wasm"
+
+[host]
+capabilities = []
+
+[runtime.wasm]
+artifact_path = "../wasm-observation/count.wat"
+
+[plugin_config]
+format = "json"
+schema_ref = "unsupported-json-config.v1"
+required = true

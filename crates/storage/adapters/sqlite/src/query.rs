@@ -312,46 +312,51 @@ fn read_payload_segments(
         .direction
         .map(crate::records::encode_payload_direction);
     let segment_id = query.segment_id.map(|value| value.get());
+    let (order_direction, row_limit, reverse_rows) = payload_segment_query_limit(query.limit)?;
+    let sql = format!(
+        "SELECT * FROM payload_segments
+         WHERE trace_id = ?1
+           AND (?2 IS NULL OR segment_id = ?2)
+           AND (?3 IS NULL OR direction = ?3)
+         ORDER BY observed_at {order_direction}, segment_id {order_direction}
+         LIMIT ?4"
+    );
     let mut statement = connection
-        .prepare(
-            "SELECT * FROM payload_segments
-             WHERE trace_id = ?1
-               AND (?2 IS NULL OR segment_id = ?2)
-               AND (?3 IS NULL OR direction = ?3)
-             ORDER BY observed_at ASC, segment_id ASC",
-        )
+        .prepare(&sql)
         .map_err(|error| SnapshotError::new("prepare_payload_segments", error.to_string()))?;
     let rows = statement
         .query_map(
-            rusqlite::params![trace_id.get(), segment_id, direction],
+            rusqlite::params![trace_id.get(), segment_id, direction, row_limit],
             |row| payload_segment_from_row(row),
         )
         .map_err(|error| SnapshotError::new("query_payload_segments", error.to_string()))?;
     let mut segments = rows
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| SnapshotError::new("map_payload_segments", error.to_string()))?;
+    if reverse_rows {
+        segments.reverse();
+    }
     if !query.include_bytes {
         for segment in &mut segments {
             segment.bytes.clear();
         }
     }
-    Ok(limit_payload_segments(segments, query.limit))
+    Ok(segments)
 }
 
-fn limit_payload_segments(
-    mut segments: Vec<model_core::payload::PayloadSegment>,
+fn payload_segment_query_limit(
     limit: Option<PayloadRowLimit>,
-) -> Vec<model_core::payload::PayloadSegment> {
+) -> Result<(&'static str, i64, bool), SnapshotError> {
     match limit {
-        Some(PayloadRowLimit::Head(count)) => {
-            segments.truncate(count);
-            segments
-        }
-        Some(PayloadRowLimit::Tail(count)) if segments.len() > count => {
-            segments.split_off(segments.len() - count)
-        }
-        Some(PayloadRowLimit::Tail(_)) | None => segments,
+        Some(PayloadRowLimit::Head(count)) => Ok(("ASC", payload_row_limit_to_i64(count)?, false)),
+        Some(PayloadRowLimit::Tail(count)) => Ok(("DESC", payload_row_limit_to_i64(count)?, true)),
+        None => Ok(("ASC", -1, false)),
     }
+}
+
+fn payload_row_limit_to_i64(count: usize) -> Result<i64, SnapshotError> {
+    i64::try_from(count)
+        .map_err(|error| SnapshotError::new("payload_segment_limit", error.to_string()))
 }
 
 fn read_diagnostics(

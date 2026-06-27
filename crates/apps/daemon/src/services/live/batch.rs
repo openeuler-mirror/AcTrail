@@ -5,12 +5,10 @@ use std::collections::BTreeSet;
 use collector_event::{RawCollectorEvent, RawObservationPayload};
 use config_core::daemon::FileMetadataRetention;
 use control_contract::reply::ControlError;
-use ingest_runtime::IngestPipeline;
+use ingest_runtime::{AllowPolicy, IngestPipeline};
 use model_core::diagnostics::{DiagnosticKind, DiagnosticRecord};
 use model_core::event::{DomainEvent, EventPayload};
 use model_core::ids::TraceId;
-use plugin_policy_host::engine::PluginPolicyEngine;
-use plugin_policy_host::registry::PluginRegistry;
 use recording_runtime::{SemanticActionBatch, TraceStateRecord};
 use trace_runtime::registry::TraceRuntime;
 
@@ -44,10 +42,7 @@ impl StorageAttachService {
                 None
             };
             let diagnostic_id = self.next_diagnostic_id()?;
-            let pipeline = IngestPipeline::new(
-                PluginPolicyEngine::new(PluginRegistry::new()),
-                self.provider_classifier.as_ref(),
-            );
+            let pipeline = IngestPipeline::new(AllowPolicy, self.provider_classifier.as_ref());
             let outcome =
                 pipeline.process(raw_event, matched, event_id, label_event_id, diagnostic_id);
 

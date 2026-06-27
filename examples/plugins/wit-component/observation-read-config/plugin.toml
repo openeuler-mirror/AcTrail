@@ -1,0 +1,20 @@
+[general]
+id = "wasm.component-observation-config"
+api_version = "actrail.plugin.v1"
+role = "observation-consumer"
+runtime = "wasm"
+
+[host]
+capabilities = []
+
+[runtime.wasm]
+artifact_path = "component-config.wasm"
+abi = "wit-component"
+
+[hostcall_limits.plugin_config]
+read_max_bytes = 64
+
+[plugin_config]
+format = "toml"
+schema_ref = "component-observation-config.v1"
+required = true

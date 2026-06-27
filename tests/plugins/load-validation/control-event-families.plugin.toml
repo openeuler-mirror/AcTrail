@@ -1,0 +1,19 @@
+[general]
+id = "wasm.control-event-families"
+api_version = "actrail.plugin.v1"
+role = "control-decider"
+runtime = "wasm"
+
+[host]
+capabilities = []
+
+[runtime.wasm]
+artifact_path = "../control-timeout/timeout.wat"
+
+[role.observation-consumer.subscriptions]
+event_families = ["semantic-action"]
+
+[plugin_config]
+format = "toml"
+schema_ref = "../control-timeout/wasm-file-graylist-timeout.v1"
+required = true

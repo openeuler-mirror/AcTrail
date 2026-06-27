@@ -54,6 +54,7 @@ fn socket_payload_gate_persists_http_and_drops_non_http_bytes() {
         super::super::workload_diagnostics_disabled(),
         super::super::export_runtime_disabled(),
         super::super::enforcement_disabled(),
+        super::super::CommandControlConfig::default(),
     )
     .unwrap();
 

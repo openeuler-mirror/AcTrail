@@ -9,6 +9,7 @@ use control_contract::reply::{
 };
 use control_contract::selector::TraceSelector;
 use model_core::trace::TraceLifecycleState;
+use plugin_system::PluginInstanceStatus;
 use uds_control_server::ControlService;
 
 use crate::runtime_wiring::DaemonRuntimeWiring;
@@ -36,6 +37,12 @@ pub trait AttachService {
         trace_runtime: &mut trace_runtime::TraceRuntime,
         command: control_contract::command::RegisterSeccompListenerCommand,
     ) -> Result<(), ControlError>;
+    fn plugin_statuses(&self) -> Vec<PluginInstanceStatus>;
+    fn load_plugin(
+        &mut self,
+        command: control_contract::command::PluginLoadCommand,
+    ) -> Result<PluginInstanceStatus, ControlError>;
+    fn unload_plugin(&mut self, instance_id: &str) -> Result<PluginInstanceStatus, ControlError>;
 }
 
 pub trait AttachDebugService {
@@ -85,6 +92,16 @@ impl<A> DaemonServiceHost<A> {
         A: AttachDebugService,
     {
         self.wiring.attach_service.ebpf_debug_snapshot(pid)
+    }
+
+    pub fn load_plugin(
+        &mut self,
+        command: control_contract::command::PluginLoadCommand,
+    ) -> Result<PluginInstanceStatus, ControlError>
+    where
+        A: AttachService,
+    {
+        self.wiring.attach_service.load_plugin(command)
     }
 }
 
@@ -172,6 +189,34 @@ where
                 loaded_policy_plugins: self.wiring.loaded_policy_plugins.clone(),
                 storage_ready: self.wiring.storage_ready,
             })),
+            ControlCommand::PluginList(_) => Ok(ControlReply::PluginList(
+                self.wiring.attach_service.plugin_statuses(),
+            )),
+            ControlCommand::PluginStatus(command) => {
+                let status = self
+                    .wiring
+                    .attach_service
+                    .plugin_statuses()
+                    .into_iter()
+                    .find(|status| status.instance_id == command.instance_id)
+                    .ok_or_else(|| {
+                        ControlError::new(
+                            "plugin_not_found",
+                            format!("plugin instance {} not found", command.instance_id),
+                        )
+                    })?;
+                Ok(ControlReply::PluginStatus(status))
+            }
+            ControlCommand::PluginLoad(command) => self
+                .wiring
+                .attach_service
+                .load_plugin(command)
+                .map(ControlReply::PluginStatus),
+            ControlCommand::PluginUnload(command) => self
+                .wiring
+                .attach_service
+                .unload_plugin(&command.instance_id)
+                .map(ControlReply::PluginStatus),
         }
     }
 }
@@ -197,6 +242,7 @@ mod tests {
     use control_contract::command::{ControlCommand, DoctorCommand, TrackAddCommand};
     use control_contract::reply::{ControlError, TrackAddReply};
     use model_core::ids::{RequestId, TraceId};
+    use plugin_system::PluginInstanceStatus;
     use uds_control_server::ControlService;
 
     use crate::runtime_wiring::DaemonRuntimeWiring;
@@ -248,6 +294,24 @@ mod tests {
             _command: control_contract::command::RegisterSeccompListenerCommand,
         ) -> Result<(), ControlError> {
             Ok(())
+        }
+
+        fn plugin_statuses(&self) -> Vec<PluginInstanceStatus> {
+            Vec::new()
+        }
+
+        fn load_plugin(
+            &mut self,
+            _command: control_contract::command::PluginLoadCommand,
+        ) -> Result<PluginInstanceStatus, ControlError> {
+            Err(ControlError::new("unused", "unused"))
+        }
+
+        fn unload_plugin(
+            &mut self,
+            _instance_id: &str,
+        ) -> Result<PluginInstanceStatus, ControlError> {
+            Err(ControlError::new("unused", "unused"))
         }
     }
 

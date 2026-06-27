@@ -42,7 +42,10 @@ pub fn probe_no_new_privs() -> CapabilityStatus {
     if result < 0 {
         return CapabilityStatus::unavailable(
             "no_new_privs",
-            format!("prctl(PR_GET_NO_NEW_PRIVS): {}", std::io::Error::last_os_error()),
+            format!(
+                "prctl(PR_GET_NO_NEW_PRIVS): {}",
+                std::io::Error::last_os_error()
+            ),
         );
     }
     CapabilityStatus::ok("no_new_privs", format!("enabled={result}"))

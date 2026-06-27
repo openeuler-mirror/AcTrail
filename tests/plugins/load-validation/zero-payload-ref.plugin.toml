@@ -1,0 +1,19 @@
+[general]
+id = "wasm.zero-payload-ref"
+api_version = "actrail.plugin.v1"
+role = "observation-consumer"
+runtime = "wasm"
+
+[host]
+capabilities = []
+
+[runtime.wasm]
+artifact_path = "../wasm-observation/count.wat"
+
+[hostcall_limits.payload]
+ref_max_bytes = 0
+
+[plugin_config]
+format = "toml"
+schema_ref = ""
+required = false

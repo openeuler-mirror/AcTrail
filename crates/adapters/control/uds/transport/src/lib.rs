@@ -1,10 +1,13 @@
 //! Shared Unix-socket framing and socket-path support for control transport.
 
+mod plugin;
+
 use std::collections::BTreeSet;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use control_contract::command::{
-    ControlCommand, DoctorCommand, ListTracesCommand, ProcessRef, RegisterSeccompListenerCommand,
+    ControlCommand, DoctorCommand, ListTracesCommand, PluginListCommand, PluginLoadCommand,
+    PluginStatusCommand, PluginUnloadCommand, ProcessRef, RegisterSeccompListenerCommand,
     TrackAddCommand, TrackRemoveCommand,
 };
 use control_contract::reply::{
@@ -15,6 +18,11 @@ use model_core::ids::{ProfileName, RequestId, TraceId, TraceName};
 use model_core::process::{InitialSuppressedFd, NamespaceIdentity, SuppressedFdPurpose};
 use model_core::trace::{TraceHealth, TraceLifecycleState};
 use std::str::FromStr;
+
+use plugin::{
+    decode_plugin_status_v1, decode_plugin_status_v2, decode_plugin_statuses_v1,
+    decode_plugin_statuses_v2, encode_plugin_status_v2, encode_plugin_statuses_v2,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ControlCodecError {
@@ -73,6 +81,34 @@ pub fn encode_command(command: &ControlCommand) -> Vec<u8> {
         ControlCommand::Doctor(command) => {
             fields.push("doctor".to_string());
             fields.push(command.request_id.get().to_string());
+        }
+        ControlCommand::PluginList(command) => {
+            fields.push("plugin_list".to_string());
+            fields.push(command.request_id.get().to_string());
+        }
+        ControlCommand::PluginStatus(command) => {
+            fields.push("plugin_status".to_string());
+            fields.push(command.request_id.get().to_string());
+            fields.push(command.instance_id.clone());
+        }
+        ControlCommand::PluginLoad(command) => {
+            fields.push("plugin_load".to_string());
+            fields.push(command.request_id.get().to_string());
+            fields.push(command.manifest_path.clone());
+            if let Some(plugin_config_path) = &command.plugin_config_path {
+                fields.push("1".to_string());
+                fields.push(plugin_config_path.clone());
+            } else {
+                fields.push("0".to_string());
+            }
+            fields.push(command.instance_id.clone());
+            fields.push(command.host_grants.len().to_string());
+            fields.extend(command.host_grants.iter().cloned());
+        }
+        ControlCommand::PluginUnload(command) => {
+            fields.push("plugin_unload".to_string());
+            fields.push(command.request_id.get().to_string());
+            fields.push(command.instance_id.clone());
         }
     }
     encode_fields(&fields)
@@ -202,6 +238,43 @@ pub fn decode_command(bytes: &[u8]) -> Result<ControlCommand, ControlCodecError>
         "doctor" => Ok(ControlCommand::Doctor(DoctorCommand {
             request_id: RequestId::new(parse_u64(field(&fields, 1)?, "request_id")?),
         })),
+        "plugin_list" => Ok(ControlCommand::PluginList(PluginListCommand {
+            request_id: RequestId::new(parse_u64(field(&fields, 1)?, "request_id")?),
+        })),
+        "plugin_status" => Ok(ControlCommand::PluginStatus(PluginStatusCommand {
+            request_id: RequestId::new(parse_u64(field(&fields, 1)?, "request_id")?),
+            instance_id: field(&fields, 2)?.clone(),
+        })),
+        "plugin_load" => {
+            let has_plugin_config = field(&fields, 3)? == "1";
+            let (plugin_config_path, instance_offset) = if has_plugin_config {
+                (Some(field(&fields, 4)?.clone()), 5)
+            } else {
+                (None, 4)
+            };
+            let grant_offset = instance_offset + 1;
+            let host_grants = if fields.len() > grant_offset {
+                let grant_count = parse_usize(field(&fields, grant_offset)?, "plugin_grant_count")?;
+                let mut host_grants = Vec::new();
+                for offset in 0..grant_count {
+                    host_grants.push(field(&fields, grant_offset + 1 + offset)?.clone());
+                }
+                host_grants
+            } else {
+                Vec::new()
+            };
+            Ok(ControlCommand::PluginLoad(PluginLoadCommand {
+                request_id: RequestId::new(parse_u64(field(&fields, 1)?, "request_id")?),
+                manifest_path: field(&fields, 2)?.clone(),
+                plugin_config_path,
+                instance_id: field(&fields, instance_offset)?.clone(),
+                host_grants,
+            }))
+        }
+        "plugin_unload" => Ok(ControlCommand::PluginUnload(PluginUnloadCommand {
+            request_id: RequestId::new(parse_u64(field(&fields, 1)?, "request_id")?),
+            instance_id: field(&fields, 2)?.clone(),
+        })),
         _ => Err(ControlCodecError::new("decode", "unknown command opcode")),
     }
 }
@@ -239,6 +312,14 @@ pub fn encode_reply(reply: &Result<ControlReply, ControlError>) -> Vec<u8> {
             fields.push(reply.loaded_policy_plugins.len().to_string());
             fields.extend(reply.loaded_policy_plugins.iter().cloned());
             fields.push(reply.storage_ready.to_string());
+        }
+        Ok(ControlReply::PluginList(items)) => {
+            fields.push("reply_plugin_list_v2".to_string());
+            encode_plugin_statuses_v2(&mut fields, items);
+        }
+        Ok(ControlReply::PluginStatus(status)) => {
+            fields.push("reply_plugin_status_v2".to_string());
+            encode_plugin_status_v2(&mut fields, status);
         }
         Err(error) => {
             fields.push("error".to_string());
@@ -309,6 +390,22 @@ pub fn decode_reply(bytes: &[u8]) -> Result<Result<ControlReply, ControlError>, 
                 loaded_policy_plugins,
                 storage_ready,
             })))
+        }
+        "reply_plugin_list" => {
+            let (items, _) = decode_plugin_statuses_v1(&fields, 1)?;
+            Ok(Ok(ControlReply::PluginList(items)))
+        }
+        "reply_plugin_list_v2" => {
+            let (items, _) = decode_plugin_statuses_v2(&fields, 1)?;
+            Ok(Ok(ControlReply::PluginList(items)))
+        }
+        "reply_plugin_status" => {
+            let (status, _) = decode_plugin_status_v1(&fields, 1)?;
+            Ok(Ok(ControlReply::PluginStatus(status)))
+        }
+        "reply_plugin_status_v2" => {
+            let (status, _) = decode_plugin_status_v2(&fields, 1)?;
+            Ok(Ok(ControlReply::PluginStatus(status)))
         }
         "error" => Ok(Err(ControlError::new(
             field(&fields, 1)?,
@@ -483,6 +580,11 @@ fn system_time_to_secs(value: SystemTime) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use control_contract::reply::ControlReply;
+    use plugin_system::{
+        PluginHostcallMetrics, PluginInstanceStatus, PluginLifecycleState, PluginPurpose,
+        PluginRuntimeKind,
+    };
 
     #[test]
     fn track_add_v3_round_trips_process_ref_and_initial_suppressed_fds() {
@@ -502,5 +604,199 @@ mod tests {
         let decoded = decode_command(&encode_command(&command)).expect("decode command");
 
         assert_eq!(decoded, command);
+    }
+
+    #[test]
+    fn plugin_load_round_trips_host_grants() {
+        let command = ControlCommand::PluginLoad(PluginLoadCommand {
+            request_id: RequestId::new(9),
+            manifest_path: "/tmp/plugin.toml".to_string(),
+            plugin_config_path: None,
+            instance_id: "plugin.instance".to_string(),
+            host_grants: vec!["env-read:ACTRAIL_SECRET".to_string()],
+        });
+
+        let decoded = decode_command(&encode_command(&command)).expect("decode command");
+
+        assert_eq!(decoded, command);
+    }
+
+    #[test]
+    fn plugin_status_replies_use_v2_frames() {
+        let reply = Ok(ControlReply::PluginList(vec![
+            plugin_status("wasm.one", "plugin.one", vec!["payload-read".to_string()]),
+            plugin_status("wasm.two", "plugin.two", Vec::new()),
+        ]));
+
+        let fields = decode_fields(&encode_reply(&reply)).expect("decode encoded fields");
+
+        assert_eq!(fields[0], "reply_plugin_list_v2");
+        assert_eq!(fields[1], "2");
+        assert!(
+            fields[2]
+                .parse::<usize>()
+                .expect("first status field count")
+                > 0
+        );
+    }
+
+    #[test]
+    fn plugin_status_reply_v2_preserves_nonzero_metrics() {
+        let status = plugin_status_with_payload_read_calls("wasm.status", "plugin.status", 11);
+        let reply = Ok(ControlReply::PluginStatus(status.clone()));
+
+        let fields = decode_fields(&encode_reply(&reply)).expect("decode encoded fields");
+
+        assert_eq!(fields[0], "reply_plugin_status_v2");
+        let decoded = decode_reply(&encode_fields(&fields)).expect("decode v2 status reply");
+        let Ok(ControlReply::PluginStatus(item)) = decoded else {
+            panic!("expected plugin status");
+        };
+        assert_eq!(item.instance_id, status.instance_id);
+        assert_eq!(item.hostcall_metrics, status.hostcall_metrics);
+    }
+
+    #[test]
+    fn legacy_plugin_status_defaults_missing_hostcall_metrics() {
+        let mut fields = vec!["reply_plugin_status".to_string()];
+        push_legacy_status_fields(&mut fields, "legacy.status", "plugin.status");
+
+        let decoded = decode_reply(&encode_fields(&fields)).expect("decode legacy status");
+
+        let Ok(ControlReply::PluginStatus(item)) = decoded else {
+            panic!("expected plugin status");
+        };
+        assert_eq!(item.instance_id, "legacy.status");
+        assert_eq!(item.hostcall_metrics, PluginHostcallMetrics::default());
+    }
+
+    #[test]
+    fn legacy_plugin_status_list_defaults_missing_hostcall_metrics() {
+        let mut fields = vec!["reply_plugin_list".to_string(), "2".to_string()];
+        push_legacy_status_fields(&mut fields, "legacy.one", "plugin.one");
+        push_legacy_status_fields_with_grants(
+            &mut fields,
+            "legacy.two",
+            "plugin.two",
+            &[
+                "env-read:A",
+                "env-read:B",
+                "env-read:C",
+                "env-read:D",
+                "env-read:E",
+                "env-read:F",
+                "env-read:G",
+                "env-read:H",
+                "env-read:I",
+            ],
+        );
+
+        let decoded = decode_reply(&encode_fields(&fields)).expect("decode legacy reply");
+
+        let Ok(ControlReply::PluginList(items)) = decoded else {
+            panic!("expected plugin list");
+        };
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].instance_id, "legacy.one");
+        assert_eq!(items[1].instance_id, "legacy.two");
+        assert_eq!(items[0].hostcall_metrics, PluginHostcallMetrics::default());
+        assert_eq!(items[1].hostcall_metrics, PluginHostcallMetrics::default());
+    }
+
+    #[test]
+    fn v2_plugin_status_list_skips_future_status_fields() {
+        let mut fields = vec!["reply_plugin_list_v2".to_string(), "2".to_string()];
+        push_v2_status_fields_with_future_field(
+            &mut fields,
+            &plugin_status_with_payload_read_calls("v2.one", "plugin.one", 3),
+        );
+        push_v2_status_fields_with_future_field(
+            &mut fields,
+            &plugin_status_with_payload_read_calls("v2.two", "plugin.two", 5),
+        );
+
+        let decoded = decode_reply(&encode_fields(&fields)).expect("decode v2 reply");
+
+        let Ok(ControlReply::PluginList(items)) = decoded else {
+            panic!("expected plugin list");
+        };
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].instance_id, "v2.one");
+        assert_eq!(items[1].instance_id, "v2.two");
+        assert_eq!(items[0].hostcall_metrics.payload_read.calls, 3);
+        assert_eq!(items[1].hostcall_metrics.payload_read.calls, 5);
+    }
+
+    fn plugin_status(
+        instance_id: &str,
+        plugin_id: &str,
+        host_grants: Vec<String>,
+    ) -> PluginInstanceStatus {
+        PluginInstanceStatus {
+            instance_id: instance_id.to_string(),
+            plugin_id: plugin_id.to_string(),
+            purpose: PluginPurpose::ObservationConsumer,
+            runtime: PluginRuntimeKind::Wasm,
+            state: PluginLifecycleState::Active,
+            host_grants,
+            queue_depth: Some(0),
+            queue_capacity: Some(4),
+            observed_records: 7,
+            dropped_records: 0,
+            hostcall_metrics: PluginHostcallMetrics::default(),
+            last_error: None,
+            warnings: Vec::new(),
+        }
+    }
+
+    fn plugin_status_with_payload_read_calls(
+        instance_id: &str,
+        plugin_id: &str,
+        calls: u64,
+    ) -> PluginInstanceStatus {
+        let mut status = plugin_status(instance_id, plugin_id, Vec::new());
+        status.hostcall_metrics.payload_read.calls = calls;
+        status.hostcall_metrics.payload_read.bytes = calls * 10;
+        status.hostcall_metrics.payload_read.truncated = 1;
+        status
+    }
+
+    fn push_legacy_status_fields(fields: &mut Vec<String>, instance_id: &str, plugin_id: &str) {
+        push_legacy_status_fields_with_grants(fields, instance_id, plugin_id, &[]);
+    }
+
+    fn push_legacy_status_fields_with_grants(
+        fields: &mut Vec<String>,
+        instance_id: &str,
+        plugin_id: &str,
+        grants: &[&str],
+    ) {
+        fields.push(instance_id.to_string());
+        fields.push(plugin_id.to_string());
+        fields.push("observation-consumer".to_string());
+        fields.push("wasm".to_string());
+        fields.push("active".to_string());
+        fields.push(grants.len().to_string());
+        fields.extend(grants.iter().map(|grant| (*grant).to_string()));
+        fields.push("0".to_string());
+        fields.push("4".to_string());
+        fields.push("7".to_string());
+        fields.push("0".to_string());
+        fields.push("none".to_string());
+    }
+
+    fn push_v2_status_fields_with_future_field(
+        fields: &mut Vec<String>,
+        status: &PluginInstanceStatus,
+    ) {
+        let mut status_fields = Vec::new();
+        plugin::encode_plugin_status_v2(&mut status_fields, status);
+        let field_count = status_fields[0]
+            .parse::<usize>()
+            .expect("status field count");
+        let mut status_fields = status_fields.into_iter().skip(1).collect::<Vec<_>>();
+        status_fields.push("future-field".to_string());
+        fields.push((field_count + 1).to_string());
+        fields.extend(status_fields);
     }
 }

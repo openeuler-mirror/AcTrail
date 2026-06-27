@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["mode", "batch_max_events"],
+  "additionalProperties": false,
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": ["schema-valid"]
+    },
+    "batch_max_events": {
+      "type": "integer",
+      "minimum": 1
+    }
+  }
+}

@@ -1,13 +1,14 @@
 //! Shared ownership of seccomp user-notify listener file descriptors.
 
+use std::collections::BTreeMap;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 
 use config_core::daemon::SeccompNotifyConfig;
 use control_contract::reply::ControlError;
 
 use super::notify::{
-    ListenerReadiness, SeccompRecv, continue_notification, listener_readiness, recv_notification,
-    validate_seccomp_notif_abi,
+    ListenerReadiness, SeccompRecv, continue_notification, deny_notification_errno,
+    listener_readiness, recv_notification, validate_seccomp_notif_abi,
 };
 
 #[derive(Debug)]
@@ -100,6 +101,7 @@ pub(crate) struct NotificationContinuation {
     listener_fd: RawFd,
     notification_id: u64,
     continued: bool,
+    metadata: BTreeMap<String, String>,
 }
 
 impl NotificationContinuation {
@@ -108,6 +110,7 @@ impl NotificationContinuation {
             listener_fd,
             notification_id,
             continued: false,
+            metadata: BTreeMap::new(),
         }
     }
 
@@ -118,6 +121,27 @@ impl NotificationContinuation {
         continue_notification(self.listener_fd, self.notification_id)?;
         self.continued = true;
         Ok(())
+    }
+
+    pub(crate) fn deny_errno(&mut self, errno: i32) -> Result<(), ControlError> {
+        if self.continued {
+            return Ok(());
+        }
+        deny_notification_errno(self.listener_fd, self.notification_id, errno)?;
+        self.continued = true;
+        Ok(())
+    }
+
+    pub(crate) fn is_finished(&self) -> bool {
+        self.continued
+    }
+
+    pub(crate) fn set_metadata(&mut self, metadata: BTreeMap<String, String>) {
+        self.metadata = metadata;
+    }
+
+    pub(crate) fn take_metadata(&mut self) -> BTreeMap<String, String> {
+        std::mem::take(&mut self.metadata)
     }
 
     fn finish(&mut self) -> Result<(), ControlError> {

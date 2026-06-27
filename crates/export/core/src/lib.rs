@@ -11,5 +11,6 @@ pub use contract::{
 pub use delivery::{BestEffortDelivery, BestEffortDeliveryConfig, BestEffortSink};
 pub use runtime::{
     BestEffortSemanticActionRoute, BestEffortSemanticActionRouteConfig, ExportDroppedRecord,
-    ExportPublishReport, ExportRuntime, SemanticActionExportBatch, SemanticActionExportRoute,
+    ExportPublishReport, ExportRuntime, ObservationConsumerRemoval, SemanticActionExportBatch,
+    SemanticActionExportRoute,
 };

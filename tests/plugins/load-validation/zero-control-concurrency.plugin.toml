@@ -1,0 +1,19 @@
+[general]
+id = "wasm.zero-control-concurrency"
+api_version = "actrail.plugin.v1"
+role = "control-decider"
+runtime = "wasm"
+
+[host]
+capabilities = []
+
+[runtime.wasm]
+artifact_path = "../control-timeout/timeout.wat"
+
+[role.control-decider.resources]
+concurrency_limit = 0
+
+[plugin_config]
+format = "toml"
+schema_ref = "../control-timeout/wasm-file-graylist-timeout.v1"
+required = true

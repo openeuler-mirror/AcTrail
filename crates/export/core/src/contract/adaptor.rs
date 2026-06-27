@@ -1,6 +1,6 @@
 use crate::{ExportError, SemanticActionExportRecord};
 
-pub trait SemanticActionExportAdapter {
+pub trait SemanticActionExportAdapter: Send + Sync {
     type Message: Send + 'static;
 
     fn name(&self) -> &'static str;

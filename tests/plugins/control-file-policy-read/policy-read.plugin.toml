@@ -1,0 +1,19 @@
+[general]
+id = "wasm.file-policy-read"
+api_version = "actrail.plugin.v1"
+role = "control-decider"
+runtime = "wasm"
+
+[host]
+capabilities = ["file-policy-read"]
+
+[runtime.wasm]
+artifact_path = "policy-read.wat"
+
+[role.control-decider.resources]
+concurrency_limit = 1
+
+[plugin_config]
+format = "toml"
+schema_ref = ""
+required = false

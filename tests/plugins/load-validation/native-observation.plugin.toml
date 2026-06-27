@@ -1,0 +1,15 @@
+[general]
+id = "native.observation-disabled"
+api_version = "actrail.plugin.v1"
+role = "observation-consumer"
+runtime = "native-dylib"
+
+[host]
+capabilities = []
+
+[runtime.native-dylib]
+
+[plugin_config]
+format = "toml"
+schema_ref = ""
+required = false

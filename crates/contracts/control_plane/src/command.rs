@@ -60,10 +60,40 @@ pub struct DoctorCommand {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PluginListCommand {
+    pub request_id: RequestId,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PluginStatusCommand {
+    pub request_id: RequestId,
+    pub instance_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PluginLoadCommand {
+    pub request_id: RequestId,
+    pub manifest_path: String,
+    pub plugin_config_path: Option<String>,
+    pub instance_id: String,
+    pub host_grants: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PluginUnloadCommand {
+    pub request_id: RequestId,
+    pub instance_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ControlCommand {
     TrackAdd(TrackAddCommand),
     RegisterSeccompListener(RegisterSeccompListenerCommand),
     TrackRemove(TrackRemoveCommand),
     ListTraces(ListTracesCommand),
     Doctor(DoctorCommand),
+    PluginList(PluginListCommand),
+    PluginStatus(PluginStatusCommand),
+    PluginLoad(PluginLoadCommand),
+    PluginUnload(PluginUnloadCommand),
 }

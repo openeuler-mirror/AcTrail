@@ -52,7 +52,7 @@ The generated default keeps daemon runtime state and durable observation data ou
 | `payload_tls_sync_event_socket_path` | `/run/actrail/tls-sync.sock` |
 | `storage_sqlite_path` | `/var/lib/actrail/actrail.sqlite` |
 | `export_directory` | `/var/lib/actrail/export` |
-| live `otel-jsonl` route `path` | `/var/lib/actrail/export/live-spans.otlp.jsonl` |
+| live `otel-jsonl` plugin config `path` | `/var/lib/actrail/export/live-spans.otlp.jsonl` when explicitly loaded |
 | `log_path` | `/var/log/actrail/actraild.log` |
 | `workload_diagnostics_enabled` | `false` |
 | `workload_diagnostics_interval_ms` | `1000` |
@@ -76,7 +76,7 @@ For a persistent deployment, review these fields first:
 | `workload_diagnostics_enabled` | Enables periodic low-overhead daemon workload counter logs to help diagnose hot loops and projection/storage pressure. |
 | `workload_diagnostics_interval_ms` | Period between workload diagnostic log lines when workload diagnostics are enabled. |
 | `export_directory` | Default graph export directory when no explicit `--output` is passed. |
-| `[export]` / `[[export.routes]]` | Live export routes. The generated default enables one `otel-jsonl` route; disable it if a realtime span stream is not required. |
+| `[plugins.startup]` | Startup plugin load list. The generated default is disabled and loads no plugins. Add an `otel-jsonl` startup load entry only when a realtime span stream is required. |
 | `profile_name` and `required_capability` | Capability contract for traces created from this config. |
 | `*_retention_max_bytes_per_trace` | Payload storage safety limits. |
 | `export_payload_bytes_enabled` / `export_payload_text_enabled` | Whether raw payload bytes/text can appear in graph JSON export. |
@@ -85,7 +85,7 @@ AcTrail fails fast for unsupported required capabilities. Do not add broad fallb
 
 ## Capability Profiles
 
-The generated operator template is a broad collection profile similar to `docs/examples/08.full-monitor-validation/operator.conf`: process, file, IPC, stdio, TLS plaintext, socket plaintext, HTTP/1, HTTP/2, resource metrics, and live OTEL export are enabled by default. Enforcement remains disabled because it is not passive collection and depends on deployment-specific rules.
+The generated operator template is a broad collection profile similar to `docs/examples/08.full-monitor-validation/operator.conf`: process, file, IPC, stdio, TLS plaintext, socket plaintext, HTTP/1, HTTP/2, and resource metrics are enabled by default. Live OTEL export is not loaded by default; add an `otel-jsonl` plugin under `[plugins.startup]` or load it with `actraild plugin load` when a realtime span stream is required. Enforcement remains disabled because it is not passive collection and depends on deployment-specific rules.
 
 Use a narrow config for each deployment intent:
 

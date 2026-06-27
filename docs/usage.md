@@ -78,7 +78,7 @@ The generated default uses persistent Linux paths instead of `/tmp`:
 | `payload_tls_sync_event_socket_path` | `/run/actrail/tls-sync.sock` |
 | `storage_sqlite_path` | `/var/lib/actrail/actrail.sqlite` |
 | `export_directory` | `/var/lib/actrail/export` |
-| live `otel-jsonl` route `path` | `/var/lib/actrail/export/live-spans.otlp.jsonl` |
+| live `otel-jsonl` plugin config `path` | `/var/lib/actrail/export/live-spans.otlp.jsonl` when explicitly loaded |
 | `log_path` | `/var/log/actrail/actraild.log` |
 | `workload_diagnostics_enabled` | `false` |
 | `workload_diagnostics_interval_ms` | `1000` |
@@ -101,7 +101,7 @@ For docs examples, prefer the helper because it also removes documented workload
 python3 docs/examples/clean.py --example <example-name>
 ```
 
-`clean` only removes artifacts declared by the config or example metadata. It is meant to replace repeated manual `/tmp/actrail-*` deletion. When `[export] enabled = true`, enabled `otel-jsonl` route output files are also cleaned.
+`clean` only removes artifacts declared by the config or example metadata. It is meant to replace repeated manual `/tmp/actrail-*` deletion. When legacy `[export.runtime]` is enabled, enabled `otel-jsonl` route output files are also cleaned.
 
 ## 5. Start And Check The Daemon
 
@@ -197,26 +197,23 @@ Export OpenTelemetry OTLP JSON:
   --output /tmp/actrail-trace.otlp.json
 ```
 
-Payload bytes/text appear in JSON export only when the operator config enables `export_payload_bytes_enabled` or `export_payload_text_enabled`. Offline OTEL export emits semantic action spans at export time. For live span streaming, enable:
+Payload bytes/text appear in JSON export only when the operator config enables `export_payload_bytes_enabled` or `export_payload_text_enabled`. Offline OTEL export emits semantic action spans at export time. For live span streaming, load the OTEL JSONL observation plugin at startup:
 
 ```conf
-[export]
+[plugins.startup]
 enabled = true
+failure_policy = "fail-fast"
 
-[[export.routes]]
-name = "live-otel"
-kind = "otel-jsonl"
-delivery = "best-effort"
+[[plugins.startup.load]]
+instance = "live-otel"
 enabled = true
-
-[export.routes.otel-jsonl.live-otel]
-path = "/var/lib/actrail/export/live-spans.otlp.jsonl"
-overwrite_enabled = false
-queue_capacity = 1024
-flush_every_spans = 1
+failure_policy = "continue"
+manifest = "/etc/actrail/plugins/otel-jsonl/plugin.toml"
+plugin_config = "/etc/actrail/plugins/otel-jsonl/config.toml"
+host_grants = []
 ```
 
-The live file is compact JSONL: one OTLP JSON document per line, one span per document. Queue-full drops are reported as `RuntimeDropped` diagnostics; writer I/O errors fail the daemon instead of silently falling back.
+The plugin config owns the live JSONL path and queue settings. The live file is compact JSONL: one OTLP JSON document per line, one span per document. Queue-full drops are reported as `RuntimeDropped` diagnostics; writer I/O errors fail the plugin instead of silently falling back.
 
 ## 9. Real Agent Acceptance
 

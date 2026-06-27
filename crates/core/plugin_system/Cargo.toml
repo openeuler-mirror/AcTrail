@@ -1,0 +1,13 @@
+[package]
+name = "plugin_system"
+version.workspace = true
+edition = "2021"
+
+[dependencies]
+actrail_plugin_abi = { path = "../../plugin/abi" }
+model_core = { path = "../model" }
+semantic_action = { path = "../../contracts/semantic_action" }
+serde = { version = "1.0", features = ["derive"] }
+
+[dev-dependencies]
+wit-parser = "0.251.0"

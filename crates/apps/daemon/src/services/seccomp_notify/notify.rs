@@ -71,6 +71,28 @@ pub(crate) fn continue_notification(fd: libc::c_int, id: u64) -> Result<(), Cont
     Err(ControlError::new("seccomp_notif_send", error.to_string()))
 }
 
+pub(crate) fn deny_notification_errno(
+    fd: libc::c_int,
+    id: u64,
+    errno: i32,
+) -> Result<(), ControlError> {
+    let mut response = libc::seccomp_notif_resp {
+        id,
+        val: 0,
+        error: -errno,
+        flags: 0,
+    };
+    let result = unsafe { libc::ioctl(fd, seccomp_ioctl_notif_send(), &mut response) };
+    if result == 0 {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    if seccomp_notification_is_stale(&error) {
+        return Ok(());
+    }
+    Err(ControlError::new("seccomp_notif_send", error.to_string()))
+}
+
 pub(crate) fn validate_seccomp_notif_abi() -> Result<(), ControlError> {
     let mut sizes: libc::seccomp_notif_sizes = unsafe { std::mem::zeroed() };
     let result = unsafe {

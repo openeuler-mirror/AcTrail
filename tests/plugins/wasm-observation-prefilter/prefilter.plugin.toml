@@ -1,0 +1,22 @@
+[general]
+id = "wasm.observation-prefilter"
+api_version = "actrail.plugin.v1"
+role = "observation-consumer"
+runtime = "wasm"
+
+[host]
+capabilities = ["payload-read"]
+
+[runtime.wasm]
+artifact_path = "fail-if-called.wat"
+
+[role.observation-consumer.subscriptions]
+event_families = ["diagnostic"]
+
+[role.observation-consumer.resources]
+queue_capacity = 2
+
+[plugin_config]
+format = "toml"
+schema_ref = "prefilter-config.v1"
+required = true

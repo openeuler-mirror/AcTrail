@@ -1,6 +1,6 @@
 use std::time::SystemTime;
 
-use export_core::ExportRuntime;
+use export_core::{ExportPublishReport, ExportRuntime};
 use model_core::diagnostics::DiagnosticRecord;
 use model_core::event::DomainEvent;
 use model_core::ids::DiagnosticId;
@@ -8,6 +8,7 @@ use semantic_action::{SemanticAction, SemanticActionLink};
 use storage_core::StorageBackend;
 
 use crate::commit::ObservedRecordCommitCoordinator;
+use crate::diagnostics::export_drop_diagnostics;
 use crate::observed::{
     ObservedRecordBatch, ObservedRecordCommit, ObservedRecordRecorder, ObservedRecordWriteSession,
     TraceStateRecord,
@@ -47,6 +48,19 @@ impl<'a> RecordingWriter<'a> {
     ) -> Result<(), RecordingError> {
         self.persist_batch(ObservedRecordBatch::from_diagnostic(diagnostic))
             .map(|_| ())
+    }
+
+    pub fn persist_export_drop_report(
+        &mut self,
+        report: ExportPublishReport,
+        emitted_at: SystemTime,
+        next_diagnostic_id: impl FnMut() -> Result<DiagnosticId, RecordingError>,
+    ) -> Result<(), RecordingError> {
+        let diagnostics = export_drop_diagnostics(report, emitted_at, next_diagnostic_id)?;
+        for diagnostic in diagnostics {
+            self.storage.append_diagnostic(diagnostic)?;
+        }
+        Ok(())
     }
 
     pub fn persist_semantic_actions(

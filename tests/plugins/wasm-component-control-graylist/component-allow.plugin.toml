@@ -1,0 +1,26 @@
+[general]
+id = "wasm.component-file-graylist-allow"
+api_version = "actrail.plugin.v1"
+role = "control-decider"
+runtime = "wasm"
+
+[host]
+capabilities = []
+
+[runtime.wasm]
+artifact_path = "component-allow.wasm"
+abi = "wit-component"
+
+[runtime.wasm.resources]
+fuel_per_call = 1000000
+memory_max_bytes = 2097152
+
+[role.control-decider.resources]
+concurrency_limit = 1
+
+[hostcall_limits.plugin_config]
+read_max_bytes = 64
+
+[plugin_config]
+format = "toml"
+required = true

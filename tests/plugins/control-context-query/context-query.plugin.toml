@@ -1,0 +1,19 @@
+[general]
+id = "wasm.context-query"
+api_version = "actrail.plugin.v1"
+role = "control-decider"
+runtime = "wasm"
+
+[host]
+capabilities = ["context-query"]
+
+[runtime.wasm]
+artifact_path = "context-query.wat"
+
+[role.control-decider.resources]
+concurrency_limit = 1
+
+[plugin_config]
+format = "toml"
+schema_ref = ""
+required = false

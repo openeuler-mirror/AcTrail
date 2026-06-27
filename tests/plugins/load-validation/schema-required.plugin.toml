@@ -1,0 +1,16 @@
+[general]
+id = "wasm.schema-validation"
+api_version = "actrail.plugin.v1"
+role = "observation-consumer"
+runtime = "wasm"
+
+[host]
+capabilities = []
+
+[runtime.wasm]
+artifact_path = "../wasm-observation/count.wat"
+
+[plugin_config]
+format = "toml"
+schema_ref = "schema-required.schema.json"
+required = true

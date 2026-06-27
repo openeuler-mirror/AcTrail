@@ -1,0 +1,19 @@
+[general]
+id = "wasm.zero-observation-queue"
+api_version = "actrail.plugin.v1"
+role = "observation-consumer"
+runtime = "wasm"
+
+[host]
+capabilities = []
+
+[runtime.wasm]
+artifact_path = "../wasm-observation/count.wat"
+
+[role.observation-consumer.resources]
+queue_capacity = 0
+
+[plugin_config]
+format = "toml"
+schema_ref = ""
+required = false

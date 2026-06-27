@@ -11,7 +11,8 @@ use model_core::diagnostics::DiagnosticRecord;
 use model_core::event::DomainEvent;
 use model_core::ids::{DiagnosticId, EventId, TraceId};
 use model_core::process::ProcessIdentity;
-use policy_evaluate_contract::evaluate::PolicyEvaluator;
+use policy_evaluate_contract::decision::PolicyDecision;
+use policy_evaluate_contract::evaluate::{PolicyEvaluator, PolicyInput};
 use provider_label::ProviderClassifier;
 
 use crate::classify::classify_event;
@@ -29,6 +30,15 @@ pub struct IngestMatch {
 pub struct IngestOutcome {
     pub events: Vec<DomainEvent>,
     pub diagnostics: Vec<DiagnosticRecord>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AllowPolicy;
+
+impl PolicyEvaluator for AllowPolicy {
+    fn evaluate(&self, _input: &PolicyInput) -> PolicyDecision {
+        PolicyDecision::allow()
+    }
 }
 
 pub struct IngestPipeline<'a, P> {
@@ -109,12 +119,10 @@ mod tests {
     use collector_event::{RawCollectorEvent, RawEventEnvelope, RawObservationPayload};
     use model_core::ids::{CollectorName, DiagnosticId, EventId, TraceId};
     use model_core::process::ProcessIdentity;
-    use policy_evaluate_contract::decision::PolicyDecision;
-    use policy_evaluate_contract::evaluate::{PolicyEvaluator, PolicyInput};
     use provider_evidence::EvidenceBundle;
     use provider_label::{ProviderClassifier, ProviderLabelRecord};
 
-    use super::{IngestMatch, IngestPipeline};
+    use super::{AllowPolicy, IngestMatch, IngestPipeline};
 
     const PID: u32 = 100;
     const RAW_START_TICKS: u64 = 10;
@@ -124,14 +132,6 @@ mod tests {
     const TRACE_ID: u64 = 7;
     const EVENT_ID: u64 = 1;
     const DIAGNOSTIC_ID: u64 = 1;
-
-    struct AllowPolicy;
-
-    impl PolicyEvaluator for AllowPolicy {
-        fn evaluate(&self, _input: &PolicyInput) -> PolicyDecision {
-            PolicyDecision::allow()
-        }
-    }
 
     struct UnknownProvider;
 

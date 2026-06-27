@@ -1,0 +1,2 @@
+mode = "schema-valid"
+batch_max_events = 32

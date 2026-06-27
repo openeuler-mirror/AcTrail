@@ -2,8 +2,8 @@
 
 use config_core::capture_profile::CaptureProfile;
 use config_core::daemon::{
-    DisabledOrPath, EbpfEnabledMode, OperatorConfig, PayloadTlsConfig,
-    PayloadTlsSeccompSyscall, PayloadTlsSyncRuntimeLibraryPath,
+    DisabledOrPath, EbpfEnabledMode, OperatorConfig, PayloadTlsConfig, PayloadTlsSeccompSyscall,
+    PayloadTlsSyncRuntimeLibraryPath,
 };
 use control_contract::reply::DoctorReply;
 use linux_platform::capability_probe::{CapabilityStatus, probe_no_new_privs, probe_unix_socket};
@@ -34,7 +34,8 @@ pub fn run_platform_probe(config: &OperatorConfig) -> LaunchPlatformReport {
         CapabilityStatus::ok("tls_sync_socket", "disabled by operator config")
     };
     let no_new_privs = probe_no_new_privs();
-    let seccomp_launch = probe_seccomp_launch_capability(config.seccomp_notify.reserved_listener_fd);
+    let seccomp_launch =
+        probe_seccomp_launch_capability(config.seccomp_notify.reserved_listener_fd);
     let tls_sync_runtime_library = probe_tls_sync_runtime_library(&config.payload_config.tls);
     LaunchPlatformReport {
         control_socket,
@@ -51,6 +52,7 @@ pub fn probe_seccomp_launch_capability(reserved_listener_fd: u32) -> CapabilityS
         vec![PayloadTlsSeccompSyscall::Write],
         Vec::new(),
         4095,
+        Vec::new(),
         Vec::new(),
         reserved_listener_fd,
     ) {
@@ -95,7 +97,11 @@ pub fn attach_daemon_status(
 
 pub fn print_platform_probe(report: &LaunchPlatformReport) {
     for status in report.statuses() {
-        let marker = if status.available { "ok" } else { "unavailable" };
+        let marker = if status.available {
+            "ok"
+        } else {
+            "unavailable"
+        };
         println!("{}={} {}", status.name, marker, status.detail);
     }
     if let Some(daemon) = &report.daemon {
@@ -203,14 +209,19 @@ pub fn probe_tls_sync_runtime_library(config: &PayloadTlsConfig) -> CapabilitySt
     if !config.enabled || !config.capture_backend.is_sync() {
         return CapabilityStatus::ok("tls_sync_runtime_library", "disabled by operator config");
     }
-    let path = match tls_payload_sync::runtime_library_path(&match &config.sync_runtime_library_path
-    {
-        PayloadTlsSyncRuntimeLibraryPath::Auto => RuntimeLibraryPath::Auto,
-        PayloadTlsSyncRuntimeLibraryPath::Path(path) => RuntimeLibraryPath::Path(path.clone()),
-    }) {
-        Ok(path) => path,
-        Err(error) => return CapabilityStatus::unavailable("tls_sync_runtime_library", error.to_string()),
-    };
+    let path =
+        match tls_payload_sync::runtime_library_path(&match &config.sync_runtime_library_path {
+            PayloadTlsSyncRuntimeLibraryPath::Auto => RuntimeLibraryPath::Auto,
+            PayloadTlsSyncRuntimeLibraryPath::Path(path) => RuntimeLibraryPath::Path(path.clone()),
+        }) {
+            Ok(path) => path,
+            Err(error) => {
+                return CapabilityStatus::unavailable(
+                    "tls_sync_runtime_library",
+                    error.to_string(),
+                );
+            }
+        };
     if path.is_file() {
         CapabilityStatus::ok(
             "tls_sync_runtime_library",
@@ -261,18 +272,14 @@ pub fn suggest_config_text(
     let template = match loaded {
         Some(config) => match config.to_hierarchical_toml() {
             Ok(toml) => toml,
-            Err(_) => OperatorConfig::default_hierarchical_template()
-                .unwrap_or_default(),
+            Err(_) => OperatorConfig::default_hierarchical_template().unwrap_or_default(),
         },
-        None => OperatorConfig::default_hierarchical_template()
-            .unwrap_or_default(),
+        None => OperatorConfig::default_hierarchical_template().unwrap_or_default(),
     };
     let mut config = match OperatorConfig::parse(&template) {
         Ok(config) => config,
         Err(error) => {
-            return format!(
-                "# suggest-config: could not parse baseline template: {error}\n"
-            );
+            return format!("# suggest-config: could not parse baseline template: {error}\n");
         }
     };
 
@@ -307,9 +314,9 @@ pub fn suggest_config_text(
         drop_seccomp_only_capabilities(&mut config.capture_profile);
     }
 
-    let body = config.to_hierarchical_toml().unwrap_or_else(|error| {
-        format!("# suggest-config: could not render config: {error}\n")
-    });
+    let body = config
+        .to_hierarchical_toml()
+        .unwrap_or_else(|error| format!("# suggest-config: could not render config: {error}\n"));
     let header = suggest_config_header(report, seccomp_available, tls_sync_ready, ebpf_available);
     format!("{header}\n{body}")
 }
@@ -343,7 +350,9 @@ fn suggest_config_header(
     ebpf_available: bool,
 ) -> String {
     let mut lines = Vec::new();
-    lines.push("# AcTrail operator config — suggested by `actrailctl probe --suggest-config`.".into());
+    lines.push(
+        "# AcTrail operator config — suggested by `actrailctl probe --suggest-config`.".into(),
+    );
     lines.push("# This is a starting point trimmed to what the probes found available.".into());
     lines.push("# Review it before use, then: actrailctl probe --suggest-config > /etc/actrail/actraild.conf".into());
     lines.push("# (or redirect to a temp file and install -m 0644 it into place).".into());
@@ -365,18 +374,30 @@ fn suggest_config_header(
         "#   seccomp_launch        = {} ({}process seccomp {})",
         capability_summary(&report.seccomp_launch),
         if seccomp_available { "" } else { "→ " },
-        if seccomp_available { "enabled" } else { "disabled in suggested config" }
+        if seccomp_available {
+            "enabled"
+        } else {
+            "disabled in suggested config"
+        }
     ));
     lines.push(format!(
         "#   tls_sync_runtime_lib  = {} (TLS plaintext capture {})",
         capability_summary(&report.tls_sync_runtime_library),
-        if tls_sync_ready { "enabled" } else { "disabled in suggested config" }
+        if tls_sync_ready {
+            "enabled"
+        } else {
+            "disabled in suggested config"
+        }
     ));
     if let Some(daemon) = &report.daemon {
         lines.push(format!(
             "#   daemon collectors     = {} (ebpf {}; [ebpf] enabled=\"auto\" probes at startup)",
             daemon.available_collectors.join(","),
-            if ebpf_available { "present" } else { "absent — host eBPF unavailable, auto will degrade" }
+            if ebpf_available {
+                "present"
+            } else {
+                "absent — host eBPF unavailable, auto will degrade"
+            }
         ));
     } else {
         lines.push("#   daemon                = not queried (--skip-daemon); [ebpf] enabled=\"auto\" probes at startup".into());

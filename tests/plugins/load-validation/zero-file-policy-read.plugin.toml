@@ -1,0 +1,19 @@
+[general]
+id = "wasm.zero-file-policy-read"
+api_version = "actrail.plugin.v1"
+role = "control-decider"
+runtime = "wasm"
+
+[host]
+capabilities = ["file-policy-read"]
+
+[runtime.wasm]
+artifact_path = "../control-file-policy-read/policy-read.wat"
+
+[hostcall_limits.file_policy]
+read_max_bytes = 0
+
+[plugin_config]
+format = "toml"
+schema_ref = ""
+required = false

@@ -2,12 +2,15 @@
 
 pub(crate) mod application_protocol;
 pub(crate) mod attach;
+pub(crate) mod command_control;
+pub(crate) mod control_runtime;
 #[path = "services/logging/diagnostic.rs"]
 pub(crate) mod diagnostic_logging;
 pub(crate) mod enforcement;
 #[path = "services/identity/service.rs"]
 pub(crate) mod identity;
 pub(crate) mod live;
+pub(crate) mod network_control;
 pub(crate) mod payload;
 pub(crate) mod payload_gate;
 pub(crate) mod process_seccomp;

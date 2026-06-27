@@ -1,0 +1,22 @@
+[general]
+id = "wasm.network-deny"
+api_version = "actrail.plugin.v1"
+role = "control-decider"
+runtime = "wasm"
+
+[host]
+capabilities = []
+
+[runtime.wasm]
+artifact_path = "deny-network.wat"
+
+[runtime.wasm.resources]
+fuel_per_call = 1000000
+memory_max_bytes = 2097152
+
+[role.control-decider.resources]
+concurrency_limit = 1
+
+[plugin_config]
+format = "toml"
+required = false

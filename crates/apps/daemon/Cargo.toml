@@ -21,7 +21,8 @@ libc = "0.2"
 linux_platform = { path = "../../core/linux_platform" }
 model_core = { path = "../../core/model" }
 payload_event = { path = "../../contracts/payload/event" }
-plugin_policy_host = { path = "../../adapters/policy/plugin_host" }
+plugin_system = { path = "../../core/plugin_system" }
+plugin_wasm_runtime = { path = "../../core/plugin_wasm_runtime" }
 process_identity_contract = { path = "../../contracts/process/identity" }
 process_tree_snapshot_contract = { path = "../../contracts/process/tree_snapshot" }
 provider_evidence = { path = "../../contracts/provider_label/evidence" }
@@ -30,6 +31,8 @@ recording_runtime = { path = "../../recording/runtime" }
 rule_set_provider = { path = "../../adapters/provider/rule_set" }
 semantic_action = { path = "../../contracts/semantic_action" }
 semantic_action_runtime = { path = "../../core/semantic_action_runtime" }
+jsonschema = { version = "0.46.6", default-features = false }
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 storage_core = { path = "../../storage/core" }
 storage_factory = { path = "../../storage/factory" }
@@ -39,4 +42,6 @@ tls_payload_sync = { path = "../../core/tls_payload_sync" }
 tls_probe_point_finder = { path = "../../tools/tls_probe_point_finder" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
+toml = "0.8"
 uds_control_server = { path = "../../adapters/control/uds/server" }
+uds_control_client = { path = "../../adapters/control/uds/client" }

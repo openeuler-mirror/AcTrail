@@ -7,3 +7,5 @@ license = "MulanPSL-2.0"
 [dependencies]
 export_core = { path = "../../core" }
 export_otel_codec = { path = "../otel_codec" }
+plugin_system = { path = "../../../core/plugin_system" }
+toml = "0.8"

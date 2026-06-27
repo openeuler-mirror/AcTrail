@@ -320,14 +320,25 @@ fn label_detail(payload: &model_core::event::LabelPayload) -> String {
 }
 
 fn enforcement_detail(payload: &model_core::event::EnforcementPayload) -> String {
-    format!(
+    let metadata = payload
+        .metadata
+        .iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let base = format!(
         "decision={} path={} rule_id={} result={} backend={}",
         payload.decision,
         payload.path.clone().unwrap_or_default(),
         payload.rule_id.clone().unwrap_or_default(),
         payload.result,
         payload.backend
-    )
+    );
+    if metadata.is_empty() {
+        base
+    } else {
+        format!("{base} metadata={metadata}")
+    }
 }
 
 fn format_percent_millis(value: u64) -> String {

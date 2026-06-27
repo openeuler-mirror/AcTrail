@@ -1,0 +1,16 @@
+[general]
+id = "wasm.file-graylist-allow"
+api_version = "actrail.plugin.v1"
+role = "control-decider"
+runtime = "wasm"
+
+[host]
+capabilities = []
+
+[runtime.wasm]
+artifact_path = "allow-on-gray.wat"
+
+[plugin_config]
+format = "toml"
+schema_ref = "wasm-file-graylist-allow.v1"
+required = true

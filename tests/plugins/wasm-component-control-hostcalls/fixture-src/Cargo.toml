@@ -1,0 +1,15 @@
+[package]
+name = "actrail_component_control_hostcalls_fixture"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+actrail_plugin_abi = { path = "../../../../crates/plugin/abi" }
+wee_alloc = { version = "0.4", default-features = false }
+wit-bindgen = { version = "=0.57.1", default-features = false, features = ["macros", "realloc"] }
+
+[lib]
+crate-type = ["cdylib"]
+
+[workspace]

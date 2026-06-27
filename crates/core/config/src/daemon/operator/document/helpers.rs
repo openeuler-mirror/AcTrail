@@ -101,7 +101,6 @@ pub(super) fn capability_as_str(capability: &Capability) -> &'static str {
         Capability::IpcPipeFifo => "ipc-pipe-fifo",
         Capability::StdioChunk => "stdio-chunk",
         Capability::PolicyIngestProcessing => "policy-ingest-processing",
-        Capability::PolicyPluginHost => "policy-plugin-host",
         Capability::PolicyDecisionRecord => "policy-decision-record",
         Capability::EnforcementFilePermissionFanotify => "enforcement-file-permission-fanotify",
     }
@@ -242,6 +241,14 @@ pub(super) fn process_seccomp_syscall_as_str(value: &ProcessSeccompSyscall) -> &
         ProcessSeccompSyscall::Vfork => "vfork",
         ProcessSeccompSyscall::Clone => "clone",
         ProcessSeccompSyscall::Clone3 => "clone3",
+    }
+}
+
+pub(super) fn network_control_seccomp_syscall_as_str(
+    value: NetworkControlSeccompSyscall,
+) -> &'static str {
+    match value {
+        NetworkControlSeccompSyscall::Connect => "connect",
     }
 }
 
@@ -390,7 +397,6 @@ pub(super) fn parse_capability(raw: &str) -> Result<Capability, String> {
         "ipc-pipe-fifo" => Ok(Capability::IpcPipeFifo),
         "stdio-chunk" => Ok(Capability::StdioChunk),
         "policy-ingest-processing" => Ok(Capability::PolicyIngestProcessing),
-        "policy-plugin-host" => Ok(Capability::PolicyPluginHost),
         "policy-decision-record" => Ok(Capability::PolicyDecisionRecord),
         "enforcement-file-permission-fanotify" => Ok(Capability::EnforcementFilePermissionFanotify),
         other => Err(format!("unknown capability {other}")),

@@ -70,6 +70,8 @@ pub fn run_live_verification(
         seccomp_defaults.workload_diagnostics,
         seccomp_defaults.export_runtime,
         config.enforcement.clone(),
+        seccomp_defaults.command_control,
+        seccomp_defaults.network_control,
         &provider_rule_set,
     )
     .map_err(|error| format!("daemon build failed: {}: {}", error.code, error.message))?;
