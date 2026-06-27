@@ -72,6 +72,7 @@ impl TraceRuntime {
             request.profile_snapshot.profile_name.clone(),
             request.created_at,
         );
+        trace.root_container_id = request.root_container_id;
         for tag in request.tags {
             trace.add_tag(tag);
         }
@@ -397,6 +398,7 @@ mod tests {
         let root = ProcessIdentity::new(100, 1, 1);
         let request = TrackTraceRequest {
             root_identity: root.clone(),
+            root_container_id: None,
             display_name: TraceName::new("agent"),
             profile_snapshot: profile_snapshot(),
             tags: BTreeSet::new(),
@@ -436,6 +438,7 @@ mod tests {
         let root = ProcessIdentity::new(100, 1, 1);
         let request = TrackTraceRequest {
             root_identity: root.clone(),
+            root_container_id: None,
             display_name: TraceName::new("agent"),
             profile_snapshot: profile_snapshot(),
             tags: BTreeSet::new(),
@@ -473,6 +476,7 @@ mod tests {
         let root_after_exec = ProcessIdentity::new(100, 1, 2);
         let request = TrackTraceRequest {
             root_identity: root_before_exec.clone(),
+            root_container_id: None,
             display_name: TraceName::new("agent"),
             profile_snapshot: profile_snapshot(),
             tags: BTreeSet::new(),

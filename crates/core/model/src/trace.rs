@@ -44,6 +44,10 @@ impl TraceTiming {
 pub struct TraceRecord {
     pub trace_id: TraceId,
     pub root_process_identity: ProcessIdentity,
+    /// Readable, stable container id of the root process's container.
+    /// `None` = host process or a runtime not resolved by the collector.
+    /// 1:1 with `root_process_identity.pid_namespace`; resolved once at attach.
+    pub root_container_id: Option<String>,
     pub display_name: TraceName,
     pub profile_name: ProfileName,
     pub tags: BTreeSet<String>,
@@ -63,6 +67,7 @@ impl TraceRecord {
         Self {
             trace_id,
             root_process_identity,
+            root_container_id: None,
             display_name,
             profile_name,
             tags: BTreeSet::new(),

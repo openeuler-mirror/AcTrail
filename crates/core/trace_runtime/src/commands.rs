@@ -10,6 +10,9 @@ use model_core::process::ProcessIdentity;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TrackTraceRequest {
     pub root_identity: ProcessIdentity,
+    /// Container id of the root process, resolved host-side at attach.
+    /// `None` = host process or non-Docker runtime.
+    pub root_container_id: Option<String>,
     pub display_name: TraceName,
     pub profile_snapshot: CaptureProfileSnapshot,
     pub tags: BTreeSet<String>,

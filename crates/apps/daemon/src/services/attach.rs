@@ -24,7 +24,9 @@ use config_core::trace_snapshot::CaptureProfileSnapshot;
 use control_contract::command::{ProcessRef, TrackAddCommand};
 use control_contract::reply::{ControlError, TrackAddReply};
 use ebpf_collector::EbpfCollector;
-use ebpf_collector::procfs::{ProcfsIdentityReader, ProcfsTreeSnapshotter, resolve_namespaced_pid};
+use ebpf_collector::procfs::{
+    ProcfsIdentityReader, ProcfsTreeSnapshotter, read_container_identity, resolve_namespaced_pid,
+};
 use export_core::ExportRuntime;
 use model_core::capability::Capability;
 use model_core::diagnostics::{DiagnosticKind, DiagnosticRecord, DiagnosticSeverity};
@@ -131,6 +133,11 @@ impl StorageAttachService {
         sensor_plan: SensorPlan,
     ) -> Result<(model_core::ids::TraceId, ProcessIdentity, DiagnosticKind), ControlError> {
         let root_identity = resolve_process_ref(&command.root)?;
+        // Resolve the container id host-side from the already-resolved host pid.
+        // This sees the full `docker-<id>` cgroup path; a container-local
+        // `/proc/self/cgroup` may be masked to `0::/`). `None` = host/non-Docker.
+        let root_container_id =
+            read_container_identity(root_identity.pid).map(|identity| identity.container_id);
         let snapshot = process_tree_snapshot_contract::snapshot::ProcessTreeSnapshotter::snapshot(
             &self.snapshotter,
             &root_identity,
@@ -143,6 +150,7 @@ impl StorageAttachService {
                 trace_id,
                 TrackTraceRequest {
                     root_identity: root_identity.clone(),
+                    root_container_id,
                     display_name: command.display_name.clone(),
                     profile_snapshot,
                     tags: command.tags.clone(),

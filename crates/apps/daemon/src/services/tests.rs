@@ -289,6 +289,7 @@ fn create_active_trace(
             trace_id,
             TrackTraceRequest {
                 root_identity: process,
+                root_container_id: None,
                 display_name,
                 profile_snapshot,
                 tags: BTreeSet::new(),

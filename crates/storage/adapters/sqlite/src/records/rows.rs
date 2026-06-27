@@ -28,6 +28,7 @@ pub fn trace_from_row(row: &Row<'_>) -> Result<TraceRecord, SqlError> {
                 .map(NamespaceIdentity::new),
             generation: row.get("root_generation")?,
         },
+        root_container_id: row.get::<_, Option<String>>("root_container_id")?,
         display_name: model_core::ids::TraceName::new(row.get::<_, String>("display_name")?),
         profile_name: model_core::ids::ProfileName::new(row.get::<_, String>("profile_name")?),
         tags: decode_tags(&row.get::<_, String>("tags")?),

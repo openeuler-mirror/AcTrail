@@ -8,19 +8,31 @@
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, 1);
+    __uint(max_entries, 2);
     __type(key, __u32);
     __type(value, __u32);
 } fork_child_pid_offset SEC(".maps");
 
 SEC("tracepoint/sched/sched_process_fork")
-int handle_sched_process_fork(struct sched_process_fork_ctx *ctx) {
-    __u32 key = 0;
-    __u32 *child_pid_offset = bpf_map_lookup_elem(&fork_child_pid_offset, &key);
+int handle_sched_process_fork(void *ctx) {
+    __u32 child_key = 0;
+    __u32 parent_key = 1;
+    __u32 *child_pid_offset = bpf_map_lookup_elem(&fork_child_pid_offset, &child_key);
+    __u32 *parent_pid_offset = bpf_map_lookup_elem(&fork_child_pid_offset, &parent_key);
     __u32 parent_pid = 0;
     __u32 parent_tid = 0;
     __u32 lookup_flags = 0;
-    __u32 context_parent_pid = (__u32)ctx->parent_pid;
+    __u32 context_parent_pid = 0;
+    if (!parent_pid_offset || !child_pid_offset) {
+        return 0;
+    }
+    if (bpf_probe_read(
+            &context_parent_pid,
+            sizeof(context_parent_pid),
+            (void *)((__u64)ctx + *parent_pid_offset)
+        ) != 0) {
+        return 0;
+    }
     __u64 *trace_id = lookup_trace_for_context_pid(
         context_parent_pid,
         &parent_pid,
@@ -30,7 +42,7 @@ int handle_sched_process_fork(struct sched_process_fork_ctx *ctx) {
     struct actrail_pending_proc_op op = {};
     __u32 child_kernel_pid = 0;
 
-    if (!parent_pid || !trace_id || !child_pid_offset) {
+    if (!parent_pid || !trace_id) {
         return 0;
     }
     if (bpf_probe_read(

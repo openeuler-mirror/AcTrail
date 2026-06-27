@@ -30,9 +30,9 @@ impl TraceWriteStore for SqliteStorage {
             .execute(
                 "INSERT OR REPLACE INTO traces (
                     trace_id, root_pid, root_task_id, root_start_ticks, root_pid_namespace,
-                    root_generation, display_name, profile_name, tags, lifecycle_state, health,
-                    created_at, started_at, completed_at, failed_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                    root_container_id, root_generation, display_name, profile_name, tags,
+                    lifecycle_state, health, created_at, started_at, completed_at, failed_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
                 params![
                     trace.trace_id.get(),
                     trace.root_process_identity.pid,
@@ -43,6 +43,7 @@ impl TraceWriteStore for SqliteStorage {
                         .pid_namespace
                         .as_ref()
                         .map(|value| value.as_str().to_string()),
+                    trace.root_container_id.clone(),
                     trace.root_process_identity.generation,
                     trace.display_name.to_string(),
                     trace.profile_name.to_string(),

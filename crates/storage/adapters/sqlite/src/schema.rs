@@ -2,7 +2,7 @@
 
 use rusqlite::Connection;
 
-const SQLITE_SCHEMA_VERSION_CURRENT: i32 = 4;
+const SQLITE_SCHEMA_VERSION_CURRENT: i32 = 5;
 
 const CREATE_TABLES_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS traces (
@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS traces (
     root_task_id INTEGER,
     root_start_ticks INTEGER NOT NULL,
     root_pid_namespace TEXT,
+    root_container_id TEXT,
     root_generation INTEGER NOT NULL,
     display_name TEXT NOT NULL,
     profile_name TEXT NOT NULL,
