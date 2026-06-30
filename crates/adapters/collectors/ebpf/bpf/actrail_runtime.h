@@ -225,7 +225,7 @@ struct {
 } event_scratch SEC(".maps");
 #else
 struct {
-    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(type, ACTRAIL_BPF_MAP_TYPE_RINGBUF);
     __uint(max_entries, 1);
 } events SEC(".maps");
 #endif
@@ -368,7 +368,7 @@ static __always_inline __u32 current_kernel_tgid(void) {
 static __always_inline __u64 current_collector_pid_tgid(void) {
     __u32 key = ACTRAIL_ACTIVE_PID_NAMESPACE;
     struct actrail_pid_namespace *namespace = bpf_map_lookup_elem(&pid_namespace, &key);
-    struct bpf_pidns_info namespace_pid = {};
+    struct actrail_bpf_pidns_info namespace_pid = {};
 
     if (!namespace) {
         return 0;

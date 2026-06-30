@@ -4,11 +4,16 @@ use std::cell::RefCell;
 use std::ffi::OsStr;
 use std::path::Path;
 use std::rc::Rc;
+#[cfg(feature = "perf-buffer")]
+use std::sync::Arc;
+#[cfg(feature = "perf-buffer")]
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use libbpf_rs::{
-    Link, MapCore, MapFlags, MapHandle, Object, ObjectBuilder, RingBuffer, RingBufferBuilder,
-    UprobeOpts,
-};
+use libbpf_rs::{Link, MapCore, MapFlags, MapHandle, Object, ObjectBuilder, UprobeOpts};
+#[cfg(feature = "perf-buffer")]
+use libbpf_rs::{PerfBuffer, PerfBufferBuilder};
+#[cfg(not(feature = "perf-buffer"))]
+use libbpf_rs::{RingBuffer, RingBufferBuilder};
 use tls_probe_point_finder::{
     CaptureStrategy, PayloadDirection, ProbePoint, ProbePointPlan, TlsProvider,
 };
@@ -41,7 +46,7 @@ const SYMBOL_RUSTLS_TAKE_RECEIVED_PLAINTEXT: u32 = 6;
 
 const CONFIG_MAP_BYTES: usize = std::mem::size_of::<u32>() * 4;
 const RING_DIAGNOSTICS_KEY: u32 = 0;
-const RING_DIAGNOSTIC_WORDS: usize = 6;
+const RING_DIAGNOSTIC_WORDS: usize = 9;
 const RING_DIAGNOSTICS_BYTES: usize = std::mem::size_of::<u64>() * RING_DIAGNOSTIC_WORDS;
 const RING_DIAG_RESERVE_FAIL_EVENTS_INDEX: usize = 0;
 const RING_DIAG_RESERVE_FAIL_ACTUAL_BYTES_INDEX: usize = 1;
@@ -49,6 +54,9 @@ const RING_DIAG_RESERVE_FAIL_RESERVED_BYTES_INDEX: usize = 2;
 const RING_DIAG_READ_USER_FAIL_EVENTS_INDEX: usize = 3;
 const RING_DIAG_READ_USER_FAIL_ACTUAL_BYTES_INDEX: usize = 4;
 const RING_DIAG_READ_USER_FAIL_RESERVED_BYTES_INDEX: usize = 5;
+const RING_DIAG_OUTPUT_FAIL_EVENTS_INDEX: usize = 6;
+const RING_DIAG_OUTPUT_FAIL_ACTUAL_BYTES_INDEX: usize = 7;
+const RING_DIAG_OUTPUT_FAIL_RESERVED_BYTES_INDEX: usize = 8;
 
 pub(super) struct BpfPayloadRuntime {
     _object: Object,
@@ -56,7 +64,7 @@ pub(super) struct BpfPayloadRuntime {
     ring_diagnostics: MapHandle,
     events: Rc<RefCell<Vec<Vec<u8>>>>,
     segments: PayloadSegmentAssembler,
-    ring_buffer: RingBuffer<'static>,
+    event_buffer: EventBuffer,
 }
 
 impl BpfPayloadRuntime {
@@ -70,7 +78,11 @@ impl BpfPayloadRuntime {
         let mut open_object = builder
             .open_memory(object_bytes)
             .map_err(|error| ToolError::new(format!("open BPF object: {error}")))?;
-        resize_map(&mut open_object, "events", config.ring_buffer_bytes)?;
+        resize_map(
+            &mut open_object,
+            "events",
+            event_map_max_entries(config.ring_buffer_bytes)?,
+        )?;
         resize_map(&mut open_object, "pending_ops", config.pending_ops)?;
         let mut object = open_object
             .load()
@@ -79,17 +91,8 @@ impl BpfPayloadRuntime {
         let events_map = map_handle(&object, "events")?;
         let ring_diagnostics = map_handle(&object, "ring_diagnostics")?;
         let events = Rc::new(RefCell::new(Vec::new()));
-        let callback_events = Rc::clone(&events);
-        let mut ring_buffer_builder = RingBufferBuilder::new();
-        ring_buffer_builder
-            .add(&events_map, move |raw| {
-                callback_events.borrow_mut().push(raw.to_vec());
-                0
-            })
-            .map_err(|error| ToolError::new(format!("create ringbuf callback: {error}")))?;
-        let ring_buffer = ring_buffer_builder
-            .build()
-            .map_err(|error| ToolError::new(format!("build ringbuf: {error}")))?;
+        let event_buffer =
+            EventBuffer::build(&events_map, Rc::clone(&events), config.ring_buffer_bytes)?;
         let links = attach_plan(&mut object, plan, target_pid)?;
         if links.is_empty() {
             return Err(ToolError::new("BPF runtime did not attach any uprobes"));
@@ -100,14 +103,12 @@ impl BpfPayloadRuntime {
             ring_diagnostics,
             events,
             segments: PayloadSegmentAssembler::default(),
-            ring_buffer,
+            event_buffer,
         })
     }
 
     pub(super) fn poll_events(&mut self) -> ToolResult<Vec<CaptureEvent>> {
-        self.ring_buffer
-            .consume()
-            .map_err(|error| ToolError::new(format!("consume ringbuf: {error}")))?;
+        self.event_buffer.consume()?;
         let mut events = Vec::new();
         for raw in std::mem::take(&mut *self.events.borrow_mut()) {
             events.extend(self.segments.push(decode_segment(&raw)?)?);
@@ -134,7 +135,87 @@ impl BpfPayloadRuntime {
             read_user_fail_events: words[RING_DIAG_READ_USER_FAIL_EVENTS_INDEX],
             read_user_fail_actual_bytes: words[RING_DIAG_READ_USER_FAIL_ACTUAL_BYTES_INDEX],
             read_user_fail_reserved_bytes: words[RING_DIAG_READ_USER_FAIL_RESERVED_BYTES_INDEX],
+            output_fail_events: words[RING_DIAG_OUTPUT_FAIL_EVENTS_INDEX],
+            output_fail_actual_bytes: words[RING_DIAG_OUTPUT_FAIL_ACTUAL_BYTES_INDEX],
+            output_fail_reserved_bytes: words[RING_DIAG_OUTPUT_FAIL_RESERVED_BYTES_INDEX],
+            perf_lost_events: self.event_buffer.lost_count(),
         })
+    }
+}
+
+enum EventBuffer {
+    #[cfg(not(feature = "perf-buffer"))]
+    Ring(RingBuffer<'static>),
+    #[cfg(feature = "perf-buffer")]
+    Perf {
+        buffer: PerfBuffer<'static>,
+        lost: Arc<AtomicU64>,
+    },
+}
+
+impl EventBuffer {
+    fn build(
+        events_map: &MapHandle,
+        events: Rc<RefCell<Vec<Vec<u8>>>>,
+        buffer_bytes: u32,
+    ) -> ToolResult<Self> {
+        #[cfg(feature = "perf-buffer")]
+        {
+            let callback_events = Rc::clone(&events);
+            let lost = Arc::new(AtomicU64::new(0));
+            let callback_lost = Arc::clone(&lost);
+            let buffer = PerfBufferBuilder::new(events_map)
+                .sample_cb(move |_cpu, raw| {
+                    callback_events
+                        .borrow_mut()
+                        .push(perf_sample_payload(raw).to_vec());
+                })
+                .lost_cb(move |_cpu, count| {
+                    callback_lost.fetch_add(count, Ordering::Relaxed);
+                })
+                .pages(perf_pages_for_bytes(buffer_bytes)?)
+                .build()
+                .map_err(|error| ToolError::new(format!("build perfbuf: {error}")))?;
+            Ok(Self::Perf { buffer, lost })
+        }
+        #[cfg(not(feature = "perf-buffer"))]
+        {
+            let _ = buffer_bytes;
+            let callback_events = Rc::clone(&events);
+            let mut builder = RingBufferBuilder::new();
+            builder
+                .add(events_map, move |raw| {
+                    callback_events.borrow_mut().push(raw.to_vec());
+                    0
+                })
+                .map_err(|error| ToolError::new(format!("create ringbuf callback: {error}")))?;
+            let buffer = builder
+                .build()
+                .map_err(|error| ToolError::new(format!("build ringbuf: {error}")))?;
+            Ok(Self::Ring(buffer))
+        }
+    }
+
+    fn consume(&self) -> ToolResult<()> {
+        match self {
+            #[cfg(not(feature = "perf-buffer"))]
+            Self::Ring(buffer) => buffer
+                .consume()
+                .map_err(|error| ToolError::new(format!("consume ringbuf: {error}"))),
+            #[cfg(feature = "perf-buffer")]
+            Self::Perf { buffer, .. } => buffer
+                .consume()
+                .map_err(|error| ToolError::new(format!("consume perfbuf: {error}"))),
+        }
+    }
+
+    fn lost_count(&self) -> u64 {
+        match self {
+            #[cfg(not(feature = "perf-buffer"))]
+            Self::Ring(_) => 0,
+            #[cfg(feature = "perf-buffer")]
+            Self::Perf { lost, .. } => lost.load(Ordering::Relaxed),
+        }
     }
 }
 
@@ -149,6 +230,79 @@ fn resize_map(
         .ok_or_else(|| ToolError::new(format!("BPF map {map_name} is missing")))?;
     map.set_max_entries(max_entries)
         .map_err(|error| ToolError::new(format!("resize BPF map {map_name}: {error}")))
+}
+
+#[cfg(feature = "perf-buffer")]
+fn event_map_max_entries(_buffer_bytes: u32) -> ToolResult<u32> {
+    let cpus = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_CONF) };
+    if cpus <= 0 {
+        return Err(ToolError::new(format!(
+            "invalid configured CPU count {cpus}"
+        )));
+    }
+    u32::try_from(cpus).map_err(|error| ToolError::new(format!("CPU count overflow: {error}")))
+}
+
+#[cfg(not(feature = "perf-buffer"))]
+fn event_map_max_entries(buffer_bytes: u32) -> ToolResult<u32> {
+    Ok(buffer_bytes)
+}
+
+#[cfg(feature = "perf-buffer")]
+fn perf_pages_for_bytes(buffer_bytes: u32) -> ToolResult<usize> {
+    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if page_size <= 0 {
+        return Err(ToolError::new(format!(
+            "invalid system page size {page_size}"
+        )));
+    }
+    let page_size = usize::try_from(page_size)
+        .map_err(|error| ToolError::new(format!("page size overflow: {error}")))?;
+    let bytes = usize::try_from(buffer_bytes)
+        .map_err(|error| ToolError::new(format!("buffer size overflow: {error}")))?;
+    Ok(bytes.div_ceil(page_size).max(1).next_power_of_two())
+}
+
+#[cfg(feature = "perf-buffer")]
+fn perf_sample_payload(raw: &[u8]) -> &[u8] {
+    strip_perf_raw_size_prefix(raw)
+        .or_else(|| strip_perf_trailing_padding(raw))
+        .unwrap_or(raw)
+}
+
+#[cfg(feature = "perf-buffer")]
+fn strip_perf_raw_size_prefix(raw: &[u8]) -> Option<&[u8]> {
+    let declared_size = read_u32_optional(raw, 0)? as usize;
+    let payload = raw.get(4..)?;
+    let event = payload.get(..declared_size)?;
+    if payload_event_size(event)? == declared_size {
+        Some(event)
+    } else {
+        None
+    }
+}
+
+#[cfg(feature = "perf-buffer")]
+fn strip_perf_trailing_padding(raw: &[u8]) -> Option<&[u8]> {
+    let size = payload_event_size(raw)?;
+    raw.get(..size)
+}
+
+#[cfg(feature = "perf-buffer")]
+fn payload_event_size(raw: &[u8]) -> Option<usize> {
+    if read_u32_optional(raw, 0)? != EVENT_KIND_PAYLOAD {
+        return None;
+    }
+    let captured_size = read_u32_optional(raw, 28)? as usize;
+    let size = HEADER_BYTES.checked_add(captured_size)?;
+    if size <= raw.len() { Some(size) } else { None }
+}
+
+#[cfg(feature = "perf-buffer")]
+fn read_u32_optional(raw: &[u8], offset: usize) -> Option<u32> {
+    raw.get(offset..offset + std::mem::size_of::<u32>())
+        .and_then(|value| value.try_into().ok())
+        .map(u32::from_ne_bytes)
 }
 
 fn configure_probe_config(
@@ -403,5 +557,41 @@ fn direction(direction: u32) -> ToolResult<CaptureDirection> {
         _ => Err(ToolError::new(format!(
             "unknown BPF payload direction: {direction}"
         ))),
+    }
+}
+
+#[cfg(all(test, feature = "perf-buffer"))]
+mod tests {
+    use super::{HEADER_BYTES, perf_sample_payload};
+
+    #[test]
+    fn perf_sample_payload_strips_raw_size_prefix_with_padding() {
+        let event = payload_event(3);
+        let mut raw = Vec::new();
+        raw.extend_from_slice(&(event.len() as u32).to_ne_bytes());
+        raw.extend_from_slice(&event);
+        raw.extend_from_slice(&[0, 0, 0, 0]);
+
+        let payload = perf_sample_payload(&raw);
+
+        assert_eq!(payload, event.as_slice());
+    }
+
+    #[test]
+    fn perf_sample_payload_strips_trailing_padding() {
+        let event = payload_event(5);
+        let mut raw = event.clone();
+        raw.extend_from_slice(&[0, 0, 0]);
+
+        let payload = perf_sample_payload(&raw);
+
+        assert_eq!(payload, event.as_slice());
+    }
+
+    fn payload_event(captured_size: u32) -> Vec<u8> {
+        let mut event = vec![0; HEADER_BYTES + captured_size as usize];
+        event[0..4].copy_from_slice(&1_u32.to_ne_bytes());
+        event[28..32].copy_from_slice(&captured_size.to_ne_bytes());
+        event
     }
 }

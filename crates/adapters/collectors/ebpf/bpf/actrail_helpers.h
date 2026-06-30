@@ -12,7 +12,26 @@
 #define SEC(NAME) __attribute__((section(NAME), used))
 #define __uint(name, val) int (*name)[val]
 #define __type(name, val) val *name
+#ifndef __noinline
+#define __noinline __attribute__((noinline))
+#endif
 #define actrail_barrier_var(var) asm volatile("" : "+r"(var))
+
+#define ACTRAIL_BPF_FUNC_SEND_SIGNAL 109
+#define ACTRAIL_BPF_FUNC_PROBE_READ_USER 112
+#define ACTRAIL_BPF_FUNC_PROBE_READ_USER_STR 114
+#define ACTRAIL_BPF_FUNC_PROBE_READ_KERNEL_STR 115
+#define ACTRAIL_BPF_FUNC_GET_NS_CURRENT_PID_TGID 120
+#define ACTRAIL_BPF_FUNC_RINGBUF_OUTPUT 130
+#define ACTRAIL_BPF_FUNC_RINGBUF_RESERVE 131
+#define ACTRAIL_BPF_FUNC_RINGBUF_SUBMIT 132
+#define ACTRAIL_BPF_FUNC_RINGBUF_DISCARD 133
+#define ACTRAIL_BPF_MAP_TYPE_RINGBUF 27
+
+struct actrail_bpf_pidns_info {
+    __u32 pid;
+    __u32 tgid;
+};
 
 static void *(*bpf_map_lookup_elem)(void *map, const void *key) = (void *)BPF_FUNC_map_lookup_elem;
 static long (*bpf_map_update_elem)(void *map, const void *key, const void *value, __u64 flags) =
@@ -22,29 +41,33 @@ static __u64 (*bpf_get_current_pid_tgid)(void) = (void *)BPF_FUNC_get_current_pi
 static long (*bpf_get_current_comm)(void *buf, __u32 size_of_buf) =
     (void *)BPF_FUNC_get_current_comm;
 static __u64 (*bpf_ktime_get_ns)(void) = (void *)BPF_FUNC_ktime_get_ns;
+#ifndef ACTRAIL_EVENT_TRANSPORT_PERF
 static long (*bpf_ringbuf_output)(void *ringbuf, void *data, __u64 size, __u64 flags) =
-    (void *)BPF_FUNC_ringbuf_output;
+    (void *)ACTRAIL_BPF_FUNC_RINGBUF_OUTPUT;
 static void *(*bpf_ringbuf_reserve)(void *ringbuf, __u64 size, __u64 flags) =
-    (void *)BPF_FUNC_ringbuf_reserve;
-static void (*bpf_ringbuf_submit)(void *data, __u64 flags) = (void *)BPF_FUNC_ringbuf_submit;
-static void (*bpf_ringbuf_discard)(void *data, __u64 flags) = (void *)BPF_FUNC_ringbuf_discard;
+    (void *)ACTRAIL_BPF_FUNC_RINGBUF_RESERVE;
+static void (*bpf_ringbuf_submit)(void *data, __u64 flags) =
+    (void *)ACTRAIL_BPF_FUNC_RINGBUF_SUBMIT;
+static void (*bpf_ringbuf_discard)(void *data, __u64 flags) =
+    (void *)ACTRAIL_BPF_FUNC_RINGBUF_DISCARD;
+#endif
 static long (*bpf_perf_event_output)(void *ctx, void *map, __u64 flags, void *data, __u64 size) =
     (void *)BPF_FUNC_perf_event_output;
-static long (*bpf_send_signal)(__u32 sig) = (void *)BPF_FUNC_send_signal;
+static long (*bpf_send_signal)(__u32 sig) = (void *)ACTRAIL_BPF_FUNC_SEND_SIGNAL;
 static long (*bpf_probe_read_user)(void *dst, __u32 size, const void *unsafe_ptr) =
-    (void *)BPF_FUNC_probe_read_user;
+    (void *)ACTRAIL_BPF_FUNC_PROBE_READ_USER;
 static long (*bpf_probe_read_user_str)(void *dst, __u32 size, const void *unsafe_ptr) =
-    (void *)BPF_FUNC_probe_read_user_str;
+    (void *)ACTRAIL_BPF_FUNC_PROBE_READ_USER_STR;
 static long (*bpf_probe_read)(void *dst, __u32 size, const void *unsafe_ptr) =
     (void *)BPF_FUNC_probe_read;
 static long (*bpf_probe_read_kernel_str)(void *dst, __u32 size, const void *unsafe_ptr) =
-    (void *)BPF_FUNC_probe_read_kernel_str;
+    (void *)ACTRAIL_BPF_FUNC_PROBE_READ_KERNEL_STR;
 static long (*bpf_get_ns_current_pid_tgid)(
     __u64 dev,
     __u64 ino,
-    struct bpf_pidns_info *nsdata,
+    struct actrail_bpf_pidns_info *nsdata,
     __u32 size
-) = (void *)BPF_FUNC_get_ns_current_pid_tgid;
+) = (void *)ACTRAIL_BPF_FUNC_GET_NS_CURRENT_PID_TGID;
 
 #ifndef BPF_ANY
 #define BPF_ANY 0

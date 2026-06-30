@@ -3,10 +3,26 @@
 
 #include "tls_payload_probe_types.h"
 
+#ifdef TLS_PROBE_EVENT_TRANSPORT_PERF
 struct {
-    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u32);
+} events SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, struct tls_probe_event_scratch);
+} event_scratch SEC(".maps");
+#else
+struct {
+    __uint(type, TLS_PROBE_BPF_MAP_TYPE_RINGBUF);
     __uint(max_entries, TLS_PROBE_DEFAULT_RING_BUFFER_BYTES);
 } events SEC(".maps");
+#endif
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
@@ -109,6 +125,24 @@ static __always_inline void ring_diag_record_read_user_fail(
         TLS_PROBE_EVENT_HEADER_BYTES + (__u64)captured_size
     );
     __sync_fetch_and_add(&diag->read_user_fail_reserved_bytes, reserve_size);
+}
+
+static __always_inline void ring_diag_record_output_fail(
+    __u32 captured_size,
+    __u64 reserve_size
+) {
+    __u32 key = 0;
+    struct tls_probe_ring_diagnostics *diag = bpf_map_lookup_elem(&ring_diagnostics, &key);
+
+    if (!diag) {
+        return;
+    }
+    __sync_fetch_and_add(&diag->output_fail_events, 1);
+    __sync_fetch_and_add(
+        &diag->output_fail_actual_bytes,
+        TLS_PROBE_EVENT_HEADER_BYTES + (__u64)captured_size
+    );
+    __sync_fetch_and_add(&diag->output_fail_reserved_bytes, reserve_size);
 }
 
 #endif

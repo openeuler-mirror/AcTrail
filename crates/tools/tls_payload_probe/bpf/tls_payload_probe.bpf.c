@@ -10,7 +10,7 @@ int handle_ssl_write(struct pt_regs *ctx) {
         .direction = TLS_PROBE_DIRECTION_OUTBOUND,
         .flags = 0,
     };
-    return emit_payload(&op);
+    return emit_payload(ctx, &op);
 }
 
 SEC("uprobe")
@@ -23,7 +23,7 @@ int handle_ssl_write_ex(struct pt_regs *ctx) {
         .direction = TLS_PROBE_DIRECTION_OUTBOUND,
         .flags = 0,
     };
-    return emit_payload(&op);
+    return emit_payload(ctx, &op);
 }
 
 SEC("uprobe")
@@ -48,7 +48,7 @@ int handle_ssl_read_return(struct pt_regs *ctx) {
         bpf_map_delete_elem(&pending_ops, &key);
         return 0;
     }
-    return emit_pending_return(completed_size);
+    return emit_pending_return(ctx, completed_size);
 }
 
 SEC("uprobe")
@@ -83,12 +83,13 @@ int handle_ssl_read_ex_return(struct pt_regs *ctx) {
         bpf_map_delete_elem(&pending_ops, &key);
         return 0;
     }
-    return emit_pending_return(completed_size);
+    return emit_pending_return(ctx, completed_size);
 }
 
 SEC("uprobe")
 int handle_rustls_buffer_plaintext(struct pt_regs *ctx) {
     return emit_rustls_payload(
+        ctx,
         TLS_PROBE_ARG1(ctx),
         TLS_PROBE_ARG2(ctx),
         TLS_PROBE_SYMBOL_RUSTLS_BUFFER_PLAINTEXT
@@ -98,6 +99,7 @@ int handle_rustls_buffer_plaintext(struct pt_regs *ctx) {
 SEC("uprobe")
 int handle_rustls_take_received_plaintext(struct pt_regs *ctx) {
     return emit_rustls_payload(
+        ctx,
         TLS_PROBE_ARG1(ctx),
         TLS_PROBE_ARG2(ctx),
         TLS_PROBE_SYMBOL_RUSTLS_TAKE_RECEIVED_PLAINTEXT

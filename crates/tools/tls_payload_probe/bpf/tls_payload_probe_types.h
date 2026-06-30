@@ -75,6 +75,16 @@ struct tls_probe_emit_op {
     __u32 flags;
 };
 
+struct tls_probe_emit_segment {
+    struct tls_probe_emit_op op;
+    __u64 pid_tgid;
+    __u64 operation_time_ns;
+    __u64 segment_offset;
+    __u64 operation_size;
+    __u64 reserve_size;
+    __u32 captured_size;
+};
+
 struct tls_probe_chunk {
     __u64 pointer;
     __u64 length;
@@ -97,6 +107,10 @@ struct tls_probe_payload_event {
     __u8 bytes[TLS_PROBE_ABI_MAX_CAPTURE_BYTES];
 };
 
+struct tls_probe_event_scratch {
+    struct tls_probe_payload_event event;
+};
+
 struct tls_probe_ring_diagnostics {
     __u64 reserve_fail_events;
     __u64 reserve_fail_actual_bytes;
@@ -104,6 +118,9 @@ struct tls_probe_ring_diagnostics {
     __u64 read_user_fail_events;
     __u64 read_user_fail_actual_bytes;
     __u64 read_user_fail_reserved_bytes;
+    __u64 output_fail_events;
+    __u64 output_fail_actual_bytes;
+    __u64 output_fail_reserved_bytes;
 };
 
 #endif
