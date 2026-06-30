@@ -10,17 +10,23 @@ mod interpose;
 
 use crate::runtime::config::{self, RuntimePlan};
 use crate::runtime::tls::dynamic::binding;
-use crate::runtime::tls::dynamic::core::capture::{
-    SslReadExFn, SslReadFn, SslWriteExFn, SslWriteFn, abort_runtime, ssl_read_ex_with,
-    ssl_read_with, ssl_write_ex_with, ssl_write_with,
+use crate::runtime::tls::dynamic::core::{
+    OPENSSL_SSL_READ, OPENSSL_SSL_READ_EX, OPENSSL_SSL_WRITE, OPENSSL_SSL_WRITE_EX,
+    OPENSSL_SSL_WRITE_EX2,
+    capture::{
+        SslReadExFn, SslReadFn, SslWriteEx2Fn, SslWriteExFn, SslWriteFn, abort_runtime,
+        ssl_read_ex_with, ssl_read_with, ssl_write_ex_with, ssl_write_ex2_with, ssl_write_with,
+    },
 };
 use crate::runtime::{hook, maps, output, rustls};
 use interpose::{
     interposed_ssl_read, interposed_ssl_read_ex, interposed_ssl_write, interposed_ssl_write_ex,
+    interposed_ssl_write_ex2,
 };
 
 static SSL_WRITE_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
 static SSL_WRITE_EX_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
+static SSL_WRITE_EX2_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
 static SSL_READ_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
 static SSL_READ_EX_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
 static INSTALL_STATE: OnceLock<Mutex<InstallState>> = OnceLock::new();
@@ -135,14 +141,14 @@ fn install_plan_points(plan: &RuntimePlan) -> Result<bool, String> {
         && plan
             .points
             .iter()
-            .any(|point| point.symbol.as_str() == "SSL_read_ex");
+            .any(|point| point.symbol.as_str() == OPENSSL_SSL_READ_EX);
     let mut installed = false;
     for point in &plan.points {
-        if skip_ssl_read && point.symbol == "SSL_read" {
+        if skip_ssl_read && point.symbol == OPENSSL_SSL_READ {
             continue;
         }
         let mut address = maps::runtime_address(&plan.binary, point.file_offset)?;
-        if plan.provider == "openssl" && point.symbol == "SSL_read_ex" {
+        if plan.provider == "openssl" && point.symbol == OPENSSL_SSL_READ_EX {
             address = openssl_ssl_read_ex_impl(address);
         }
         let trampoline = if rustls::can_handle(&point.symbol) {
@@ -207,7 +213,11 @@ fn plan_uses_ssl_symbols(plan: &RuntimePlan) -> bool {
     plan.points.iter().any(|point| {
         matches!(
             point.symbol.as_str(),
-            "SSL_write" | "SSL_write_ex" | "SSL_read" | "SSL_read_ex"
+            OPENSSL_SSL_WRITE
+                | OPENSSL_SSL_WRITE_EX
+                | OPENSSL_SSL_WRITE_EX2
+                | OPENSSL_SSL_READ
+                | OPENSSL_SSL_READ_EX
         )
     })
 }
@@ -261,6 +271,23 @@ pub unsafe extern "C" fn SSL_write_ex(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn SSL_write_ex2(
+    ssl: *mut c_void,
+    buffer: *const c_void,
+    length: usize,
+    flags: u64,
+    written: *mut usize,
+) -> libc::c_int {
+    let capture = dynamic_tls_capture_enabled();
+    let original = unsafe { interposed_ssl_write_ex2(use_configured_openssl_symbol()) };
+    if capture {
+        unsafe { ssl_write_ex2_with(original, ssl, buffer, length, flags, written) }
+    } else {
+        unsafe { original(ssl, buffer, length, flags, written) }
+    }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn SSL_read(
     ssl: *mut c_void,
     buffer: *mut c_void,
@@ -303,6 +330,7 @@ fn use_configured_openssl_symbol() -> bool {
 pub(in crate::runtime) fn is_exported_ssl_entry(address: usize) -> bool {
     address == SSL_write as *const () as usize
         || address == SSL_write_ex as *const () as usize
+        || address == SSL_write_ex2 as *const () as usize
         || address == SSL_read as *const () as usize
         || address == SSL_read_ex as *const () as usize
 }
@@ -321,10 +349,11 @@ fn openssl_ssl_read_ex_impl(address: usize) -> usize {
 
 fn replacement_for_symbol(symbol: &str) -> Result<usize, String> {
     match symbol {
-        "SSL_write" => Ok(hook_ssl_write as *const () as usize),
-        "SSL_write_ex" => Ok(hook_ssl_write_ex as *const () as usize),
-        "SSL_read" => Ok(hook_ssl_read as *const () as usize),
-        "SSL_read_ex" => Ok(hook_ssl_read_ex as *const () as usize),
+        OPENSSL_SSL_WRITE => Ok(hook_ssl_write as *const () as usize),
+        OPENSSL_SSL_WRITE_EX => Ok(hook_ssl_write_ex as *const () as usize),
+        OPENSSL_SSL_WRITE_EX2 => Ok(hook_ssl_write_ex2 as *const () as usize),
+        OPENSSL_SSL_READ => Ok(hook_ssl_read as *const () as usize),
+        OPENSSL_SSL_READ_EX => Ok(hook_ssl_read_ex as *const () as usize),
         _ => Err(format!(
             "sync native rewrite does not support hook symbol yet: {symbol}"
         )),
@@ -336,10 +365,11 @@ fn set_original(symbol: &str, trampoline: usize) -> Result<(), String> {
         return Err(format!("refuse null original trampoline for {symbol}"));
     }
     match symbol {
-        "SSL_write" => SSL_WRITE_ORIGINAL.store(trampoline, Ordering::Release),
-        "SSL_write_ex" => SSL_WRITE_EX_ORIGINAL.store(trampoline, Ordering::Release),
-        "SSL_read" => SSL_READ_ORIGINAL.store(trampoline, Ordering::Release),
-        "SSL_read_ex" => SSL_READ_EX_ORIGINAL.store(trampoline, Ordering::Release),
+        OPENSSL_SSL_WRITE => SSL_WRITE_ORIGINAL.store(trampoline, Ordering::Release),
+        OPENSSL_SSL_WRITE_EX => SSL_WRITE_EX_ORIGINAL.store(trampoline, Ordering::Release),
+        OPENSSL_SSL_WRITE_EX2 => SSL_WRITE_EX2_ORIGINAL.store(trampoline, Ordering::Release),
+        OPENSSL_SSL_READ => SSL_READ_ORIGINAL.store(trampoline, Ordering::Release),
+        OPENSSL_SSL_READ_EX => SSL_READ_EX_ORIGINAL.store(trampoline, Ordering::Release),
         _ => return Err(format!("unknown original symbol slot: {symbol}")),
     }
     Ok(())
@@ -362,6 +392,17 @@ unsafe extern "C" fn hook_ssl_write_ex(
 ) -> libc::c_int {
     let original = unsafe { original_ssl_write_ex() };
     unsafe { ssl_write_ex_with(original, ssl, buffer, length, written) }
+}
+
+unsafe extern "C" fn hook_ssl_write_ex2(
+    ssl: *mut c_void,
+    buffer: *const c_void,
+    length: usize,
+    flags: u64,
+    written: *mut usize,
+) -> libc::c_int {
+    let original = unsafe { original_ssl_write_ex2() };
+    unsafe { ssl_write_ex2_with(original, ssl, buffer, length, flags, written) }
 }
 
 unsafe extern "C" fn hook_ssl_read(
@@ -393,7 +434,7 @@ fn configured_openssl_binary() -> Option<PathBuf> {
 unsafe fn original_ssl_write() -> SslWriteFn {
     let address = SSL_WRITE_ORIGINAL.load(Ordering::Acquire);
     if address == 0 {
-        abort_runtime("SSL_write original is not installed");
+        abort_runtime(&format!("{OPENSSL_SSL_WRITE} original is not installed"));
     }
     unsafe { std::mem::transmute(address) }
 }
@@ -401,7 +442,17 @@ unsafe fn original_ssl_write() -> SslWriteFn {
 unsafe fn original_ssl_write_ex() -> SslWriteExFn {
     let address = SSL_WRITE_EX_ORIGINAL.load(Ordering::Acquire);
     if address == 0 {
-        abort_runtime("SSL_write_ex original is not installed");
+        abort_runtime(&format!("{OPENSSL_SSL_WRITE_EX} original is not installed"));
+    }
+    unsafe { std::mem::transmute(address) }
+}
+
+unsafe fn original_ssl_write_ex2() -> SslWriteEx2Fn {
+    let address = SSL_WRITE_EX2_ORIGINAL.load(Ordering::Acquire);
+    if address == 0 {
+        abort_runtime(&format!(
+            "{OPENSSL_SSL_WRITE_EX2} original is not installed"
+        ));
     }
     unsafe { std::mem::transmute(address) }
 }
@@ -409,7 +460,7 @@ unsafe fn original_ssl_write_ex() -> SslWriteExFn {
 unsafe fn original_ssl_read() -> SslReadFn {
     let address = SSL_READ_ORIGINAL.load(Ordering::Acquire);
     if address == 0 {
-        abort_runtime("SSL_read original is not installed");
+        abort_runtime(&format!("{OPENSSL_SSL_READ} original is not installed"));
     }
     unsafe { std::mem::transmute(address) }
 }
@@ -417,7 +468,7 @@ unsafe fn original_ssl_read() -> SslReadFn {
 unsafe fn original_ssl_read_ex() -> SslReadExFn {
     let address = SSL_READ_EX_ORIGINAL.load(Ordering::Acquire);
     if address == 0 {
-        abort_runtime("SSL_read_ex original is not installed");
+        abort_runtime(&format!("{OPENSSL_SSL_READ_EX} original is not installed"));
     }
     unsafe { std::mem::transmute(address) }
 }

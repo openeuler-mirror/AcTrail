@@ -99,8 +99,8 @@ fn resolve_executable_symbols(
         }
     }
     if request.provider.allows(TlsProvider::OpenSsl) {
-        let symbols = image.unique_defined_symbol_values(openssl::SYMBOLS)?;
-        if has_all(&symbols, openssl::SYMBOLS) {
+        let symbols = image.unique_defined_symbol_values(openssl::PROBE_SYMBOLS)?;
+        if has_all(&symbols, openssl::REQUIRED_SYMBOLS) {
             let plan = plan_from_symbol_map(
                 image,
                 TlsProvider::OpenSsl,
@@ -283,8 +283,8 @@ fn resolve_first_openssl_library(
         if library.arch() != target.arch() {
             continue;
         }
-        let symbols = library.unique_defined_symbol_values(openssl::SYMBOLS)?;
-        if !has_all(&symbols, openssl::SYMBOLS) {
+        let symbols = library.unique_defined_symbol_values(openssl::PROBE_SYMBOLS)?;
+        if !has_all(&symbols, openssl::REQUIRED_SYMBOLS) {
             continue;
         }
         let plan = plan_from_symbol_map(
@@ -421,14 +421,15 @@ fn has_all(symbols: &BTreeMap<String, u64>, required: &[&str]) -> bool {
 
 fn direction_for_symbol(symbol: &str) -> PayloadDirection {
     match symbol {
-        rustls::RUNTIME_BUFFER_PLAINTEXT_SYMBOL | "SSL_write" | "SSL_write_ex" => {
-            PayloadDirection::Outbound
-        }
+        rustls::RUNTIME_BUFFER_PLAINTEXT_SYMBOL
+        | openssl::SSL_WRITE
+        | openssl::SSL_WRITE_EX
+        | openssl::SSL_WRITE_EX2 => PayloadDirection::Outbound,
         go_tls::WRITE_SYMBOL => PayloadDirection::Outbound,
         go_tls::RUNTIME_MEMMOVE_SYMBOL => PayloadDirection::Inbound,
         rustls::RUNTIME_TAKE_RECEIVED_PLAINTEXT_SYMBOL
-        | "SSL_read"
-        | "SSL_read_ex"
+        | openssl::SSL_READ
+        | openssl::SSL_READ_EX
         | "SSL_read_internal" => PayloadDirection::Inbound,
         _ => PayloadDirection::Control,
     }
@@ -439,7 +440,10 @@ fn attach_for_symbol(symbol: &str) -> AttachPoint {
         PayloadDirection::Inbound
             if matches!(
                 symbol,
-                "SSL_read" | "SSL_read_ex" | "SSL_read_internal" | go_tls::READ_SYMBOL
+                openssl::SSL_READ
+                    | openssl::SSL_READ_EX
+                    | "SSL_read_internal"
+                    | go_tls::READ_SYMBOL
             ) =>
         {
             AttachPoint::Return

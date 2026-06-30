@@ -196,7 +196,7 @@ fn payload_tls_syscall_number(syscall: PayloadTlsSeccompSyscall) -> Result<u32, 
 
 fn payload_socket_syscall_rule(
     syscall: PayloadSocketSeccompSyscall,
-    max_segment_bytes: u32,
+    _max_segment_bytes: u32,
 ) -> Result<SeccompRule, String> {
     let raw = match syscall {
         PayloadSocketSeccompSyscall::Write => libc::SYS_write,
@@ -210,12 +210,12 @@ fn payload_socket_syscall_rule(
         PayloadSocketSeccompSyscall::Write => SeccompRule::NotifySocketPayload {
             syscall: syscall_number,
             size_arg: 2,
-            min_size: max_segment_bytes,
+            min_size: 0,
         },
         PayloadSocketSeccompSyscall::Sendto => SeccompRule::NotifySocketPayload {
             syscall: syscall_number,
             size_arg: 2,
-            min_size: max_segment_bytes,
+            min_size: 0,
         },
         PayloadSocketSeccompSyscall::Writev | PayloadSocketSeccompSyscall::Sendmsg => {
             SeccompRule::Notify(syscall_number)

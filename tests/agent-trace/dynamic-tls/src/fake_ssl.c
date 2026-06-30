@@ -1,4 +1,5 @@
 #include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -22,6 +23,17 @@ ACTRAIL_PATCHABLE_ENTRY int SSL_write(void *ssl, const void *buffer, int length)
 ACTRAIL_PATCHABLE_ENTRY int SSL_write_ex(void *ssl, const void *buffer, size_t length, size_t *written) {
   (void)ssl;
   (void)buffer;
+  if (written != NULL) {
+    *written = length;
+  }
+  return 1;
+}
+
+ACTRAIL_PATCHABLE_ENTRY int SSL_write_ex2(void *ssl, const void *buffer, size_t length, uint64_t flags,
+                                          size_t *written) {
+  (void)ssl;
+  (void)buffer;
+  (void)flags;
   if (written != NULL) {
     *written = length;
   }

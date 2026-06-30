@@ -1,16 +1,12 @@
 //! Seccomp user-notify socket payload capture.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::time::SystemTime;
 
 use config_core::daemon::{PayloadSocketCaptureBackend, PayloadSocketConfig};
 use control_contract::reply::ControlError;
-use ebpf_collector::{
-    EbpfCollector, SOCKET_PAYLOAD_DIRECTION_OUTBOUND, SOCKET_PAYLOAD_SYSCALL_SENDMSG,
-    SOCKET_PAYLOAD_SYSCALL_SENDTO, SOCKET_PAYLOAD_SYSCALL_WRITE, SOCKET_PAYLOAD_SYSCALL_WRITEV,
-    SocketPayloadCompletion,
-};
+use ebpf_collector::{EbpfCollector, SOCKET_PAYLOAD_DIRECTION_OUTBOUND, SocketPayloadCompletion};
+use model_core::ids::TraceId;
 use model_core::payload::{
     PayloadContentState, PayloadDirection, PayloadOperationCompletionState, PayloadSourceBoundary,
     PayloadStreamKey, PayloadTruncationState,
@@ -19,10 +15,9 @@ use model_core::process::ProcessIdentity;
 use payload_event::RawPayloadSegment;
 use trace_runtime::registry::TraceRuntime;
 
+use super::http::{HTTP1_PROTOCOL_HINT, content_length_admission};
+use super::request::{SocketReadRequest, fd_is_socket, socket_symbol, tgid_from_status};
 use crate::services::payload_gate::socket_payload_prefix_is_http_candidate;
-use crate::services::seccomp_notify::{
-    read_iovec_payload, read_linear_payload, read_msghdr_iovec_payload, target_exited,
-};
 
 #[derive(Debug)]
 pub(crate) struct SeccompSocketService {
@@ -31,7 +26,9 @@ pub(crate) struct SeccompSocketService {
     max_segment_bytes: u32,
     http_sniff_max_bytes: u64,
     max_pending_operations: u32,
+    max_stream_states: u32,
     captures: BTreeMap<SocketCaptureKey, CapturedSocketOperation>,
+    continuations: BTreeMap<SocketContinuationKey, HttpBodyContinuation>,
 }
 
 impl SeccompSocketService {
@@ -43,7 +40,9 @@ impl SeccompSocketService {
             max_segment_bytes: config.max_segment_bytes,
             http_sniff_max_bytes: config.http_sniff_max_bytes,
             max_pending_operations: config.pending_operation_max_entries,
+            max_stream_states: config.stream_state_max_entries,
             captures: BTreeMap::new(),
+            continuations: BTreeMap::new(),
         }
     }
 
@@ -66,9 +65,6 @@ impl SeccompSocketService {
         let Some(request) = SocketReadRequest::from_notification(notification)? else {
             return Ok(());
         };
-        if request.skip_small_linear_payload(self.max_segment_bytes) {
-            return Ok(());
-        }
         if request.requires_socket_fd_check() && !fd_is_socket(notification.pid, request.fd)? {
             return Ok(());
         }
@@ -81,6 +77,17 @@ impl SeccompSocketService {
         if !membership.capture_enabled {
             return Ok(());
         }
+        let fd_generation = collector
+            .lookup_socket_fd_generation(tgid, request.fd)
+            .map_err(|error| ControlError::new(error.stage, error.message))?
+            .unwrap_or(0);
+        let stream_key = SocketContinuationKey {
+            trace_id: trace_id.get(),
+            pid: tgid,
+            fd: request.fd,
+            fd_generation,
+            direction: SOCKET_PAYLOAD_DIRECTION_OUTBOUND,
+        };
         let prefix_size = self
             .http_sniff_max_bytes
             .min(u64::from(self.max_operation_bytes))
@@ -91,16 +98,27 @@ impl SeccompSocketService {
         };
         let reached_sniff_limit =
             prefix.len() as u64 >= self.http_sniff_max_bytes.min(request.read_size_hint());
-        if !socket_payload_prefix_is_http_candidate(&prefix, reached_sniff_limit) {
-            return Ok(());
+        if request.skip_small_linear_payload(self.max_segment_bytes) {
+            if fd_generation != 0 {
+                self.record_small_http_prefix(&stream_key, &prefix)?;
+            }
+            return self.ensure_capacity();
         }
 
-        let Some(bytes) = request.read_payload(
-            tgid,
-            u64::from(self.max_operation_bytes),
-            self.max_operation_bytes,
-        )?
-        else {
+        let http_candidate = socket_payload_prefix_is_http_candidate(&prefix, reached_sniff_limit);
+        let capture_update = if http_candidate {
+            self.http_message_capture_update(&stream_key, fd_generation, &prefix)
+        } else {
+            let Some(continuation) = self.continuation_capture_update(&stream_key) else {
+                return Ok(());
+            };
+            continuation
+        };
+        let read_limit = capture_update
+            .read_limit()
+            .unwrap_or(u64::from(self.max_operation_bytes));
+
+        let Some(bytes) = request.read_payload(tgid, read_limit, self.max_operation_bytes)? else {
             return Ok(());
         };
         self.captures.insert(
@@ -115,9 +133,11 @@ impl SeccompSocketService {
                 trace_id,
                 process: membership.identity,
                 bytes,
+                protocol_hint: capture_update.protocol_hint(),
+                update: capture_update,
             },
         );
-        self.ensure_pending_capacity()
+        self.ensure_capacity()
     }
 
     pub(crate) fn complete_operations(
@@ -156,6 +176,7 @@ impl SeccompSocketService {
             } else {
                 PayloadTruncationState::Truncated
             };
+            let update = capture.update.clone();
             segments.push(RawPayloadSegment {
                 trace_id: capture.trace_id,
                 observed_at: SystemTime::now(),
@@ -178,12 +199,176 @@ impl SeccompSocketService {
                 truncation,
                 library: "socket-syscall".to_string(),
                 symbol: socket_symbol(completion.syscall)?.to_string(),
-                protocol_hint: None,
+                protocol_hint: capture.protocol_hint,
                 bytes: capture.bytes[..captured_len].to_vec(),
             });
+            self.apply_capture_update(
+                update,
+                operation_original_size,
+                operation_captured_size,
+                captured_len as u64,
+            )?;
         }
-        self.ensure_pending_capacity()?;
+        self.ensure_capacity()?;
         Ok(segments)
+    }
+
+    pub(crate) fn forget_trace(&mut self, trace_id: TraceId) {
+        self.continuations
+            .retain(|key, _| key.trace_id != trace_id.get());
+    }
+
+    fn record_small_http_prefix(
+        &mut self,
+        stream_key: &SocketContinuationKey,
+        prefix: &[u8],
+    ) -> Result<(), ControlError> {
+        let Some(admission) = content_length_admission(prefix) else {
+            return Ok(());
+        };
+        let remaining = admission
+            .content_length
+            .saturating_sub(admission.body_bytes_in_buffer);
+        if remaining == 0 {
+            self.continuations.remove(stream_key);
+            return Ok(());
+        }
+        let budget = u64::from(self.max_operation_bytes)
+            .saturating_sub(admission.body_bytes_in_buffer)
+            .min(remaining);
+        if budget == 0 {
+            self.continuations.remove(stream_key);
+            return Ok(());
+        }
+        self.continuations.insert(
+            stream_key.clone(),
+            HttpBodyContinuation {
+                remaining_body_bytes: remaining,
+                remaining_capture_budget_bytes: budget,
+            },
+        );
+        self.ensure_stream_capacity()
+    }
+
+    fn http_message_capture_update(
+        &self,
+        stream_key: &SocketContinuationKey,
+        fd_generation: u32,
+        prefix: &[u8],
+    ) -> SocketCaptureUpdate {
+        if fd_generation == 0 {
+            return SocketCaptureUpdate::None;
+        }
+        let Some(admission) = content_length_admission(prefix) else {
+            return SocketCaptureUpdate::None;
+        };
+        SocketCaptureUpdate::HttpMessage {
+            stream_key: stream_key.clone(),
+            content_length: admission.content_length,
+            header_len: admission.header_len,
+        }
+    }
+
+    fn continuation_capture_update(
+        &self,
+        stream_key: &SocketContinuationKey,
+    ) -> Option<SocketCaptureUpdate> {
+        let continuation = self.continuations.get(stream_key)?;
+        if continuation.remaining_body_bytes == 0
+            || continuation.remaining_capture_budget_bytes == 0
+        {
+            return None;
+        }
+        Some(SocketCaptureUpdate::Continuation {
+            stream_key: stream_key.clone(),
+            read_limit: continuation
+                .remaining_body_bytes
+                .min(continuation.remaining_capture_budget_bytes),
+        })
+    }
+
+    fn apply_capture_update(
+        &mut self,
+        update: SocketCaptureUpdate,
+        operation_original_size: u64,
+        operation_captured_size: u64,
+        captured_len: u64,
+    ) -> Result<(), ControlError> {
+        match update {
+            SocketCaptureUpdate::None => {}
+            SocketCaptureUpdate::HttpMessage {
+                stream_key,
+                content_length,
+                header_len,
+            } => {
+                if operation_original_size != operation_captured_size {
+                    self.continuations.remove(&stream_key);
+                    return Ok(());
+                }
+                let body_bytes = operation_original_size
+                    .saturating_sub(header_len)
+                    .min(content_length);
+                self.record_remaining_body(stream_key, content_length, body_bytes)?;
+            }
+            SocketCaptureUpdate::Continuation { stream_key, .. } => {
+                self.apply_continuation_progress(stream_key, captured_len);
+            }
+        }
+        Ok(())
+    }
+
+    fn record_remaining_body(
+        &mut self,
+        stream_key: SocketContinuationKey,
+        content_length: u64,
+        body_bytes_completed: u64,
+    ) -> Result<(), ControlError> {
+        let remaining = content_length.saturating_sub(body_bytes_completed);
+        if remaining == 0 {
+            self.continuations.remove(&stream_key);
+            return Ok(());
+        }
+        let budget = u64::from(self.max_operation_bytes)
+            .saturating_sub(body_bytes_completed)
+            .min(remaining);
+        if budget == 0 {
+            self.continuations.remove(&stream_key);
+            return Ok(());
+        }
+        self.continuations.insert(
+            stream_key,
+            HttpBodyContinuation {
+                remaining_body_bytes: remaining,
+                remaining_capture_budget_bytes: budget,
+            },
+        );
+        self.ensure_stream_capacity()
+    }
+
+    fn apply_continuation_progress(
+        &mut self,
+        stream_key: SocketContinuationKey,
+        captured_len: u64,
+    ) {
+        let Some(continuation) = self.continuations.get_mut(&stream_key) else {
+            return;
+        };
+        continuation.remaining_body_bytes = continuation
+            .remaining_body_bytes
+            .saturating_sub(captured_len);
+        continuation.remaining_capture_budget_bytes = continuation
+            .remaining_capture_budget_bytes
+            .saturating_sub(captured_len);
+        if continuation.remaining_body_bytes == 0
+            || continuation.remaining_capture_budget_bytes == 0
+        {
+            self.continuations.remove(&stream_key);
+        }
+    }
+
+    fn ensure_capacity(&self) -> Result<(), ControlError> {
+        self.ensure_pending_capacity()?;
+        self.ensure_stream_capacity()
     }
 
     fn ensure_pending_capacity(&self) -> Result<(), ControlError> {
@@ -204,13 +389,79 @@ impl SeccompSocketService {
         }
         Ok(())
     }
+
+    fn ensure_stream_capacity(&self) -> Result<(), ControlError> {
+        let limit = usize::try_from(self.max_stream_states).map_err(|error| {
+            ControlError::new(
+                "seccomp_socket_stream_state",
+                format!("stream state limit overflow: {error}"),
+            )
+        })?;
+        if self.continuations.len() > limit {
+            return Err(ControlError::new(
+                "seccomp_socket_stream_state",
+                format!(
+                    "socket HTTP continuation streams {} exceed configured limit {limit}",
+                    self.continuations.len()
+                ),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug)]
 struct CapturedSocketOperation {
-    trace_id: model_core::ids::TraceId,
+    trace_id: TraceId,
     process: ProcessIdentity,
     bytes: Vec<u8>,
+    protocol_hint: Option<String>,
+    update: SocketCaptureUpdate,
+}
+
+#[derive(Clone, Debug)]
+enum SocketCaptureUpdate {
+    None,
+    HttpMessage {
+        stream_key: SocketContinuationKey,
+        content_length: u64,
+        header_len: u64,
+    },
+    Continuation {
+        stream_key: SocketContinuationKey,
+        read_limit: u64,
+    },
+}
+
+impl SocketCaptureUpdate {
+    fn read_limit(&self) -> Option<u64> {
+        match self {
+            Self::None | Self::HttpMessage { .. } => None,
+            Self::Continuation { read_limit, .. } => Some(*read_limit),
+        }
+    }
+
+    fn protocol_hint(&self) -> Option<String> {
+        match self {
+            Self::Continuation { .. } => Some(HTTP1_PROTOCOL_HINT.to_string()),
+            Self::None | Self::HttpMessage { .. } => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct SocketContinuationKey {
+    trace_id: u64,
+    pid: u32,
+    fd: u32,
+    fd_generation: u32,
+    direction: u32,
+}
+
+#[derive(Clone, Debug)]
+struct HttpBodyContinuation {
+    remaining_body_bytes: u64,
+    remaining_capture_budget_bytes: u64,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -220,203 +471,4 @@ struct SocketCaptureKey {
     syscall: u32,
     buffer_ptr: u64,
     requested_size: u64,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct SocketReadRequest {
-    fd: u32,
-    syscall: u32,
-    key_buffer_ptr: u64,
-    key_requested_size: u64,
-    source: SocketPayloadSource,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum SocketPayloadSource {
-    Linear {
-        buffer_ptr: u64,
-        requested_size: u64,
-    },
-    Iovec {
-        iovec_ptr: u64,
-        iovec_count: usize,
-    },
-    MsgHdr {
-        msghdr_ptr: u64,
-    },
-}
-
-impl SocketReadRequest {
-    fn from_notification(notification: &libc::seccomp_notif) -> Result<Option<Self>, ControlError> {
-        let syscall = syscall_from_notification(notification)?;
-        let Some(syscall) = syscall else {
-            return Ok(None);
-        };
-        let fd = u32::try_from(notification.data.args[0]).map_err(|error| {
-            ControlError::new("seccomp_socket_args", format!("fd overflow: {error}"))
-        })?;
-        let key_buffer_ptr = notification.data.args[1];
-        let key_requested_size = key_requested_size(syscall, notification);
-        let source = match syscall {
-            SOCKET_PAYLOAD_SYSCALL_WRITE | SOCKET_PAYLOAD_SYSCALL_SENDTO => {
-                SocketPayloadSource::Linear {
-                    buffer_ptr: notification.data.args[1],
-                    requested_size: notification.data.args[2],
-                }
-            }
-            SOCKET_PAYLOAD_SYSCALL_WRITEV => SocketPayloadSource::Iovec {
-                iovec_ptr: notification.data.args[1],
-                iovec_count: usize::try_from(notification.data.args[2]).map_err(|error| {
-                    ControlError::new("seccomp_socket_args", format!("iovcnt overflow: {error}"))
-                })?,
-            },
-            SOCKET_PAYLOAD_SYSCALL_SENDMSG => SocketPayloadSource::MsgHdr {
-                msghdr_ptr: notification.data.args[1],
-            },
-            other => {
-                return Err(ControlError::new(
-                    "seccomp_socket_args",
-                    format!("unsupported socket payload syscall {other}"),
-                ));
-            }
-        };
-        Ok(Some(Self {
-            fd,
-            syscall,
-            key_buffer_ptr,
-            key_requested_size,
-            source,
-        }))
-    }
-
-    fn skip_small_linear_payload(&self, max_segment_bytes: u32) -> bool {
-        match self.source {
-            SocketPayloadSource::Linear { requested_size, .. } => {
-                requested_size <= u64::from(max_segment_bytes)
-            }
-            SocketPayloadSource::Iovec { .. } | SocketPayloadSource::MsgHdr { .. } => false,
-        }
-    }
-
-    fn requires_socket_fd_check(&self) -> bool {
-        matches!(
-            self.syscall,
-            SOCKET_PAYLOAD_SYSCALL_WRITE | SOCKET_PAYLOAD_SYSCALL_WRITEV
-        )
-    }
-
-    fn read_size_hint(&self) -> u64 {
-        match self.source {
-            SocketPayloadSource::Linear { requested_size, .. } => requested_size,
-            SocketPayloadSource::Iovec { .. } | SocketPayloadSource::MsgHdr { .. } => {
-                u64::from(u32::MAX)
-            }
-        }
-    }
-
-    fn read_payload(
-        &self,
-        pid: u32,
-        requested_size: u64,
-        max_operation_bytes: u32,
-    ) -> Result<Option<Vec<u8>>, ControlError> {
-        let max_bytes_u64 = requested_size.min(u64::from(max_operation_bytes));
-        let max_bytes_u32 = u32::try_from(max_bytes_u64).map_err(|error| {
-            ControlError::new(
-                "seccomp_socket_read",
-                format!("read size overflow: {error}"),
-            )
-        })?;
-        match self.source {
-            SocketPayloadSource::Linear {
-                buffer_ptr,
-                requested_size,
-            } => read_linear_payload(
-                pid,
-                buffer_ptr,
-                requested_size.min(max_bytes_u64),
-                max_operation_bytes,
-            ),
-            SocketPayloadSource::Iovec {
-                iovec_ptr,
-                iovec_count,
-            } => read_iovec_payload(pid, iovec_ptr, iovec_count, max_bytes_u32),
-            SocketPayloadSource::MsgHdr { msghdr_ptr } => {
-                read_msghdr_iovec_payload(pid, msghdr_ptr, max_bytes_u32)
-            }
-        }
-    }
-}
-
-fn syscall_from_notification(
-    notification: &libc::seccomp_notif,
-) -> Result<Option<u32>, ControlError> {
-    let raw = i64::from(notification.data.nr);
-    if raw == libc::SYS_write {
-        return Ok(Some(SOCKET_PAYLOAD_SYSCALL_WRITE));
-    }
-    if raw == libc::SYS_sendto {
-        return Ok(Some(SOCKET_PAYLOAD_SYSCALL_SENDTO));
-    }
-    if raw == libc::SYS_writev {
-        return Ok(Some(SOCKET_PAYLOAD_SYSCALL_WRITEV));
-    }
-    if raw == libc::SYS_sendmsg {
-        return Ok(Some(SOCKET_PAYLOAD_SYSCALL_SENDMSG));
-    }
-    Ok(None)
-}
-
-fn key_requested_size(syscall: u32, notification: &libc::seccomp_notif) -> u64 {
-    match syscall {
-        SOCKET_PAYLOAD_SYSCALL_SENDMSG => 0,
-        _ => notification.data.args[2],
-    }
-}
-
-fn fd_is_socket(pid: u32, fd: u32) -> Result<bool, ControlError> {
-    let path = PathBuf::from(format!("/proc/{pid}/fd/{fd}"));
-    let target = match std::fs::read_link(&path) {
-        Ok(target) => target,
-        // Target exited mid-capture; report "not a socket" so the caller skips this stale
-        // notification rather than crashing the daemon on a benign ENOENT.
-        Err(error) if target_exited(&error) => return Ok(false),
-        Err(error) => {
-            return Err(ControlError::new(
-                "seccomp_socket_fd",
-                format!("readlink {}: {error}", path.display()),
-            ));
-        }
-    };
-    Ok(target.to_string_lossy().starts_with("socket:["))
-}
-
-/// Returns `Ok(None)` when the target exited mid-capture (its `/proc` entry is gone).
-fn tgid_from_status(tid: u32) -> Result<Option<u32>, ControlError> {
-    let status = match std::fs::read_to_string(format!("/proc/{tid}/status")) {
-        Ok(status) => status,
-        Err(error) if target_exited(&error) => return Ok(None),
-        Err(error) => return Err(ControlError::new("seccomp_socket_tgid", error.to_string())),
-    };
-    let tgid = status
-        .lines()
-        .find_map(|line| line.strip_prefix("Tgid:"))
-        .map(str::trim)
-        .ok_or_else(|| ControlError::new("seccomp_socket_tgid", "missing Tgid"))?
-        .parse::<u32>()
-        .map_err(|error| ControlError::new("seccomp_socket_tgid", error.to_string()))?;
-    Ok(Some(tgid))
-}
-
-fn socket_symbol(syscall: u32) -> Result<&'static str, ControlError> {
-    match syscall {
-        SOCKET_PAYLOAD_SYSCALL_WRITE => Ok("write"),
-        SOCKET_PAYLOAD_SYSCALL_SENDTO => Ok("sendto"),
-        SOCKET_PAYLOAD_SYSCALL_WRITEV => Ok("writev"),
-        SOCKET_PAYLOAD_SYSCALL_SENDMSG => Ok("sendmsg"),
-        other => Err(ControlError::new(
-            "seccomp_socket_symbol",
-            format!("unsupported socket payload syscall {other}"),
-        )),
-    }
 }

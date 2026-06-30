@@ -6,10 +6,14 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use crate::runtime::tls::dynamic::core::{self, BindingSource, TlsFuncKind};
 use crate::runtime::{self, loader};
 
+#[cfg(not(target_arch = "aarch64"))]
 const SUPPORTED_LAV_CURRENT: c_uint = 1;
 const LA_FLG_BINDTO: c_uint = 0x01;
-const LA_FLG_BINDFROM: c_uint = 0x02;
 
+const ENV_AUDIT_OBJECT_ALLOWLIST: &str = "TLS_PAYLOAD_SYNC_AUDIT_OBJECT_ALLOWLIST";
+const DEFAULT_AUDIT_OBJECT_ALLOWLIST: &str =
+    "libssl.so,libssl.so.*,libboringssl.so,libboringssl.so.*";
+const OWN_RUNTIME_LIBRARY: &str = "libactrail_tls_payload_probe_sync.so";
 const OWN_RUNTIME_COOKIE: usize = 0xAC7A_11A0_0000_0001;
 
 const NAMESPACE_UNKNOWN: u8 = 0;
@@ -51,12 +55,21 @@ pub unsafe extern "C" fn la_objopen(
     cookie: *mut usize,
 ) -> c_uint {
     runtime::retry_initialize_after_loader_event();
-    if own_runtime_object(map.cast()) && !cookie.is_null() {
-        unsafe {
-            *cookie = OWN_RUNTIME_COOKIE;
+    with_object_name(map.cast(), 0, |name| {
+        if name == OWN_RUNTIME_LIBRARY {
+            if !cookie.is_null() {
+                unsafe {
+                    *cookie = OWN_RUNTIME_COOKIE;
+                }
+            }
+            return 0;
         }
-    }
-    LA_FLG_BINDTO | LA_FLG_BINDFROM
+        if audit_object_allowed(name) {
+            LA_FLG_BINDTO
+        } else {
+            0
+        }
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -85,19 +98,45 @@ fn audit_cookie(cookie: *mut usize) -> usize {
     unsafe { *cookie }
 }
 
-fn own_runtime_object(map: *mut LinkMap) -> bool {
+fn with_object_name<T>(map: *mut LinkMap, default: T, visit: impl FnOnce(&str) -> T) -> T {
     let Some(map) = (unsafe { map.as_ref() }) else {
-        return false;
+        return default;
     };
     if map.l_name.is_null() {
-        return false;
+        return default;
     }
     let Ok(path) = (unsafe { CStr::from_ptr(map.l_name) }).to_str() else {
-        return false;
+        return default;
     };
-    path.rsplit('/')
-        .next()
-        .is_some_and(|name| name == "libactrail_tls_payload_probe_sync.so")
+    visit(object_name(path))
+}
+
+fn object_name(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+fn audit_object_allowed(name: &str) -> bool {
+    let configured = std::env::var(ENV_AUDIT_OBJECT_ALLOWLIST).ok();
+    let patterns = configured
+        .as_deref()
+        .unwrap_or(DEFAULT_AUDIT_OBJECT_ALLOWLIST);
+    audit_object_allowed_by_patterns(name, patterns)
+}
+
+fn audit_object_allowed_by_patterns(name: &str, patterns: &str) -> bool {
+    patterns
+        .split(',')
+        .map(str::trim)
+        .filter(|pattern| !pattern.is_empty())
+        .any(|pattern| audit_object_pattern_matches(name, pattern))
+}
+
+fn audit_object_pattern_matches(name: &str, pattern: &str) -> bool {
+    if let Some(prefix) = pattern.strip_suffix('*') {
+        name.starts_with(prefix)
+    } else {
+        name == pattern
+    }
 }
 
 pub(in crate::runtime) fn is_audit_namespace() -> Result<bool, String> {
@@ -168,8 +207,16 @@ fn current_runtime_lmid() -> Result<libc::Lmid_t, String> {
 
 fn negotiate_audit_version(version: c_uint) -> c_uint {
     if version == 0 {
-        0
-    } else {
+        return 0;
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        // AArch64 glibc rejects pre-v2 audit modules after its register layout
+        // fix. We only use common callbacks, so accept the loader's current ABI.
+        version
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
         version.min(SUPPORTED_LAV_CURRENT)
     }
 }

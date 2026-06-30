@@ -65,16 +65,19 @@ fn detect_executable_provider(
 
 fn detect_executable_openssl(image: &ElfImage, args: &DetectArgs) -> ToolResult<CandidateReport> {
     let mut candidate = CandidateReport::new("executable", openssl::NAME);
-    candidate.exported_symbols =
-        exported_symbols(image, &names_with_extra(openssl::SYMBOLS, &args.symbols))?;
-    let symbols = image.unique_defined_symbol_values(openssl::SYMBOLS)?;
-    let missing = missing_symbols(openssl::SYMBOLS, &symbols);
+    candidate.exported_symbols = exported_symbols(
+        image,
+        &names_with_extra(openssl::PROBE_SYMBOLS, &args.symbols),
+    )?;
+    let symbols = image.unique_defined_symbol_values(openssl::PROBE_SYMBOLS)?;
+    let missing = missing_symbols(openssl::REQUIRED_SYMBOLS, &symbols);
     if !missing.is_empty() {
         candidate.exported_symbol_map = Some(MapStatusReport::missing("incomplete", &missing));
         candidate.status = CandidateStatus::Failed {
-            error:
-                "OpenSSL provider requires exported SSL_read/write and SSL_read_ex/write_ex symbols"
-                    .to_string(),
+            error: format!(
+                "OpenSSL provider requires exported SSL_read/write and SSL_read_ex/write_ex symbols; {} is optional",
+                openssl::OPTIONAL_PROBE_SYMBOLS.join(", ")
+            ),
         };
         return Ok(candidate);
     }
@@ -341,17 +344,10 @@ fn detect_openssl_library_candidate(
         };
         return report;
     }
-    report.exported_symbols =
-        match exported_symbols(&library, &names_with_extra(openssl::SYMBOLS, &args.symbols)) {
-            Ok(symbols) => symbols,
-            Err(error) => {
-                report.status = CandidateStatus::Failed {
-                    error: error.to_string(),
-                };
-                return report;
-            }
-        };
-    let symbols = match library.unique_defined_symbol_values(openssl::SYMBOLS) {
+    report.exported_symbols = match exported_symbols(
+        &library,
+        &names_with_extra(openssl::PROBE_SYMBOLS, &args.symbols),
+    ) {
         Ok(symbols) => symbols,
         Err(error) => {
             report.status = CandidateStatus::Failed {
@@ -360,7 +356,16 @@ fn detect_openssl_library_candidate(
             return report;
         }
     };
-    let missing = missing_symbols(openssl::SYMBOLS, &symbols);
+    let symbols = match library.unique_defined_symbol_values(openssl::PROBE_SYMBOLS) {
+        Ok(symbols) => symbols,
+        Err(error) => {
+            report.status = CandidateStatus::Failed {
+                error: error.to_string(),
+            };
+            return report;
+        }
+    };
+    let missing = missing_symbols(openssl::REQUIRED_SYMBOLS, &symbols);
     if !missing.is_empty() {
         report.endpoint_status = Some(MapStatusReport::missing("incomplete", &missing));
         report.status = CandidateStatus::Failed {
@@ -368,11 +373,10 @@ fn detect_openssl_library_candidate(
         };
         return report;
     }
-    for symbol in openssl::SYMBOLS {
-        let address = symbols
-            .get(*symbol)
-            .copied()
-            .expect("required symbol present");
+    for symbol in openssl::PROBE_SYMBOLS {
+        let Some(address) = symbols.get(*symbol).copied() else {
+            continue;
+        };
         let file_offset = match library.file_offset_for_virtual_address(address) {
             Ok(file_offset) => file_offset,
             Err(error) => {

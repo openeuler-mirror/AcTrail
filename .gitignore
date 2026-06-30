@@ -53,3 +53,4 @@ crates/apps/ctl/java-agent/dist/
 .codex/
 .codex
 .agents/
+plugins/

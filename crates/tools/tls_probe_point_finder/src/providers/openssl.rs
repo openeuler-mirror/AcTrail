@@ -11,7 +11,20 @@ use crate::{ToolError, ToolResult};
 pub(crate) const NAME: &str = "openssl";
 pub(crate) const LIBRARY: &str = "openssl";
 pub(crate) const RESOLVER: &str = "openssl-symbols";
-pub(crate) const SYMBOLS: &[&str] = &["SSL_read", "SSL_write", "SSL_read_ex", "SSL_write_ex"];
+pub(crate) const SSL_READ: &str = "SSL_read";
+pub(crate) const SSL_WRITE: &str = "SSL_write";
+pub(crate) const SSL_READ_EX: &str = "SSL_read_ex";
+pub(crate) const SSL_WRITE_EX: &str = "SSL_write_ex";
+pub(crate) const SSL_WRITE_EX2: &str = "SSL_write_ex2";
+pub(crate) const REQUIRED_SYMBOLS: &[&str] = &[SSL_READ, SSL_WRITE, SSL_READ_EX, SSL_WRITE_EX];
+pub(crate) const OPTIONAL_PROBE_SYMBOLS: &[&str] = &[SSL_WRITE_EX2];
+pub(crate) const PROBE_SYMBOLS: &[&str] = &[
+    SSL_READ,
+    SSL_WRITE,
+    SSL_READ_EX,
+    SSL_WRITE_EX,
+    SSL_WRITE_EX2,
+];
 
 const CONFIDENCE_USER_SPECIFIED: &str = "user-specified";
 const CONFIDENCE_DIRECT_NEEDED: &str = "direct-needed";

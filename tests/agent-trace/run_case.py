@@ -15,6 +15,7 @@ CASES = {
     "opencode-bun": "opencode-bun/run_e2e.py",
     "xiaoo-rustls": "xiaoo-rustls/run_e2e.py",
     "xiaoo-http-proxy": "xiaoo-http-proxy/run_e2e.py",
+    "agentscope-openai": "agentscope-openai/run_e2e.py",
     "langgraph-openai": "langgraph-openai/run_e2e.py",
     "go-net-http": "go-net-http/run_e2e.py",
     "java-netty-tcnative": "java-netty-tcnative/run_e2e.py",

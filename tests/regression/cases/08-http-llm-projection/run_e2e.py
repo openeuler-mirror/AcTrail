@@ -78,6 +78,10 @@ def main() -> int:
             ["Syscall", "socket-syscall", "Complete", "success"],
         )
         payload_count = require_complete_outbound_socket_payload_rows(payloads)
+        large_payload_size = require_large_outbound_socket_payload_row(
+            payloads,
+            int(required(settings, "request_padding_bytes")),
+        )
         actions = wait_for_actions(
             actrailviewer,
             config,
@@ -109,6 +113,7 @@ def main() -> int:
         print(f"http_llm_projection_trace_id={trace_id}")
         print(f"http_llm_projection_root_pid={workload_pid}")
         print(f"http_llm_projection_payload_segments={payload_count}")
+        print(f"http_llm_projection_large_outbound_payload_bytes={large_payload_size}")
         print(f"http_llm_projection_web_action_tree_reachable={web_tree['reachable_count']}")
         print(f"http_llm_projection_spans={span_count}")
         print(f"http_llm_projection_marker={marker}")
@@ -225,6 +230,22 @@ def require_complete_outbound_socket_payload_rows(payloads: str) -> int:
     if count == 0:
         raise RuntimeError("no complete outbound Syscall socket-syscall payload rows found")
     return count
+
+
+def require_large_outbound_socket_payload_row(payloads: str, minimum_size: int) -> int:
+    for line in payloads.splitlines():
+        if not re.match(r"^\s*payload-\d+\s+", line):
+            continue
+        if "outbound" not in line or "Syscall" not in line or "socket-syscall" not in line:
+            continue
+        for captured, original in re.findall(r"\b(\d+)/(\d+)\b", line):
+            captured_size = int(captured)
+            original_size = int(original)
+            if captured_size >= minimum_size and original_size >= minimum_size:
+                return captured_size
+    raise RuntimeError(
+        f"no outbound socket payload row was at least {minimum_size} bytes\n{payloads}"
+    )
 
 
 def resolve_path(raw: str, repo: Path) -> Path:

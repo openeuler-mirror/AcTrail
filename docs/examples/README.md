@@ -14,6 +14,7 @@ Use [08.full-monitor-validation](08.full-monitor-validation/README.md) for real 
 | `06.xiaoo-tls-capture` | [README](06.xiaoo-tls-capture/README.md) |
 | `07.xiaoo-claude-agent-invocation` | [README](07.xiaoo-claude-agent-invocation/README.md) |
 | `08.full-monitor-validation` | [README](08.full-monitor-validation/README.md) |
+| `09.agentscope-http-https` | [README](09.agentscope-http-https/README.md) |
 | `10.java-langchain4j-agent` | [README](10.java-langchain4j-agent/README.md) |
 | `container-agent-minimal` | [README](container-agent-minimal/README.md) — host daemon baseline config for container-side `actrailctl launch`. |
 | `container-agent-restricted` | [README](container-agent-restricted/README.md) — degradation test: container with default seccomp and no eBPF/CAP_BPF, proving probe/launch auto-degrade and tls-sync-only capture. |
