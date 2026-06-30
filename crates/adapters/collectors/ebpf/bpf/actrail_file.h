@@ -280,7 +280,7 @@ static __always_inline int emit_file_primary_path_enter(
         return 0;
     }
 
-    event = bpf_ringbuf_reserve(&events, ACTRAIL_FILE_EVENT_PRIMARY_PATH_SIZE, 0);
+    event = actrail_event_reserve(ACTRAIL_FILE_EVENT_PRIMARY_PATH_SIZE);
     if (!event) {
         return 0;
     }
@@ -295,7 +295,7 @@ static __always_inline int emit_file_primary_path_enter(
     event->fd = fd;
     fill_file_args(event, ctx, arg_count);
     read_file_path(event, path_ptr, ACTRAIL_FILE_PRIMARY_PATH);
-    bpf_ringbuf_submit(event, 0);
+    actrail_event_submit(ctx, event);
     return 0;
 }
 
@@ -324,7 +324,7 @@ static __always_inline int emit_file_full_path_enter(
         return 0;
     }
 
-    event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    event = actrail_event_reserve(sizeof(*event));
     if (!event) {
         return 0;
     }
@@ -342,7 +342,7 @@ static __always_inline int emit_file_full_path_enter(
         read_file_path(event, path_ptr, ACTRAIL_FILE_PRIMARY_PATH);
     }
     read_file_path(event, secondary_path_ptr, ACTRAIL_FILE_SECONDARY_PATH);
-    bpf_ringbuf_submit(event, 0);
+    actrail_event_submit(ctx, event);
     return 0;
 }
 
@@ -369,7 +369,7 @@ static __always_inline int emit_file_header_enter(
         return 0;
     }
 
-    event = bpf_ringbuf_reserve(&events, ACTRAIL_FILE_EVENT_HEADER_SIZE, 0);
+    event = actrail_event_reserve(ACTRAIL_FILE_EVENT_HEADER_SIZE);
     if (!event) {
         return 0;
     }
@@ -383,7 +383,7 @@ static __always_inline int emit_file_header_enter(
     event->aux = syscall_id;
     event->fd = fd;
     fill_file_args(event, ctx, arg_count);
-    bpf_ringbuf_submit(event, 0);
+    actrail_event_submit(ctx, event);
     return 0;
 }
 
@@ -588,7 +588,7 @@ static __always_inline int emit_file_exit(
         return 0;
     }
 
-    event = bpf_ringbuf_reserve(&events, ACTRAIL_FILE_EVENT_HEADER_SIZE, 0);
+    event = actrail_event_reserve(ACTRAIL_FILE_EVENT_HEADER_SIZE);
     if (!event) {
         return 0;
     }
@@ -601,7 +601,7 @@ static __always_inline int emit_file_exit(
     event->result = ctx->ret;
     event->trace_id = *trace_id;
     event->aux = syscall_id;
-    bpf_ringbuf_submit(event, 0);
+    actrail_event_submit(ctx, event);
     return 0;
 }
 
@@ -659,7 +659,7 @@ static __always_inline int emit_ipc_fd_pair_exit(
         return 0;
     }
 
-    event = bpf_ringbuf_reserve(&events, ACTRAIL_FILE_EVENT_HEADER_SIZE, 0);
+    event = actrail_event_reserve(ACTRAIL_FILE_EVENT_HEADER_SIZE);
     if (!event) {
         bpf_map_delete_elem(&pending_ipc_fd_pair_ops, &pid_tgid);
         return 0;
@@ -676,7 +676,7 @@ static __always_inline int emit_ipc_fd_pair_exit(
     event->fd = (__u32)fds[0];
     event->arg0 = (__u32)fds[1];
     event->arg1 = op->kind;
-    bpf_ringbuf_submit(event, 0);
+    actrail_event_submit(ctx, event);
     bpf_map_delete_elem(&pending_ipc_fd_pair_ops, &pid_tgid);
     return 0;
 }

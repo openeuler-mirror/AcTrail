@@ -76,7 +76,7 @@ int handle_sched_process_exec(struct sched_process_exec_ctx *ctx) {
     if (!pid) {
         return 0;
     }
-    emit_pending_child_proc_op(context_pid);
+    emit_pending_child_proc_op(ctx, context_pid);
     trace_id = lookup_trace_for_context_pid(context_pid, &pid, &tid, &lookup_flags);
     if (!trace_id) {
         return 0;
@@ -103,7 +103,7 @@ int handle_sched_process_exit(struct sched_process_exit_ctx *ctx) {
     if (pid != tid) {
         return 0;
     }
-    emit_pending_child_proc_op(context_pid);
+    emit_pending_child_proc_op(ctx, context_pid);
     trace_id = lookup_trace_for_context_pid(context_pid, &pid, &tid, &lookup_flags);
     if (!trace_id) {
         return 0;
@@ -111,7 +111,7 @@ int handle_sched_process_exit(struct sched_process_exit_ctx *ctx) {
 
     init_event(&event, ACTRAIL_PROC_EXIT, pid, *trace_id);
     attach_exit_code(&event, pid_tgid);
-    emit_event(&event);
+    emit_event(ctx, &event);
     cleanup_suppressed_fds_for_process(pid, event.pid_generation);
     bpf_map_delete_elem(&tracked_traces, &pid);
     delete_process_generation(pid);
@@ -146,7 +146,7 @@ int handle_signal_generate(struct signal_generate_ctx *ctx) {
     event.fd = (__u32)ctx->sig;
     event.reserved = (__u32)ctx->group;
     event.requested_size = (__u64)ctx->pid;
-    return emit_event(&event);
+    return emit_event(ctx, &event);
 }
 
 SEC("tracepoint/syscalls/sys_enter_connect")

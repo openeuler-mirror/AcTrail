@@ -77,7 +77,7 @@ static __always_inline int emit_file_openat2_enter(
         bpf_probe_read_user(&how, sizeof(how), (void *)(unsigned long)how_ptr);
     }
 
-    event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    event = actrail_event_reserve(sizeof(*event));
     if (!event) {
         return 0;
     }
@@ -96,7 +96,7 @@ static __always_inline int emit_file_openat2_enter(
     event->arg4 = how.resolve;
     event->arg5 = ctx->args[3];
     read_file_path(event, (__u64)ctx->args[1], ACTRAIL_FILE_PRIMARY_PATH);
-    bpf_ringbuf_submit(event, 0);
+    actrail_event_submit(ctx, event);
     return 0;
 }
 

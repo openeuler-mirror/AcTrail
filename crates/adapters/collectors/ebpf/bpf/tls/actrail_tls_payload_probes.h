@@ -4,6 +4,7 @@
 SEC("uprobe")
 int handle_ssl_write_enter(struct pt_regs *ctx) {
     return store_tls_payload_op(
+        ctx,
         tls_op_metadata(ACTRAIL_TLS_PAYLOAD_OUTBOUND, ACTRAIL_TLS_SYMBOL_SSL_WRITE),
         ACTRAIL_UPROBE_ARG1(ctx),
         ACTRAIL_UPROBE_ARG2(ctx),
@@ -20,6 +21,7 @@ int handle_ssl_write_exit(struct pt_regs *ctx) {
 SEC("uprobe")
 int handle_ssl_read_enter(struct pt_regs *ctx) {
     return store_tls_payload_op(
+        ctx,
         tls_op_metadata(ACTRAIL_TLS_PAYLOAD_INBOUND, ACTRAIL_TLS_SYMBOL_SSL_READ),
         ACTRAIL_UPROBE_ARG1(ctx),
         ACTRAIL_UPROBE_ARG2(ctx),
@@ -36,6 +38,7 @@ int handle_ssl_read_exit(struct pt_regs *ctx) {
 SEC("uprobe")
 int handle_ssl_write_ex_enter(struct pt_regs *ctx) {
     return store_tls_payload_op(
+        ctx,
         tls_op_metadata(ACTRAIL_TLS_PAYLOAD_OUTBOUND, ACTRAIL_TLS_SYMBOL_SSL_WRITE_EX),
         ACTRAIL_UPROBE_ARG1(ctx),
         ACTRAIL_UPROBE_ARG2(ctx),
@@ -52,6 +55,7 @@ int handle_ssl_write_ex_exit(struct pt_regs *ctx) {
 SEC("uprobe")
 int handle_ssl_read_ex_enter(struct pt_regs *ctx) {
     return store_tls_payload_op(
+        ctx,
         tls_op_metadata(ACTRAIL_TLS_PAYLOAD_INBOUND, ACTRAIL_TLS_SYMBOL_SSL_READ_EX),
         ACTRAIL_UPROBE_ARG1(ctx),
         ACTRAIL_UPROBE_ARG2(ctx),
@@ -68,6 +72,7 @@ int handle_ssl_read_ex_exit(struct pt_regs *ctx) {
 SEC("uprobe")
 int handle_rustls_write_enter(struct pt_regs *ctx) {
     return store_tls_payload_op(
+        ctx,
         tls_op_metadata(ACTRAIL_TLS_PAYLOAD_OUTBOUND, ACTRAIL_TLS_SYMBOL_RUSTLS_WRITE),
         ACTRAIL_UPROBE_ARG1(ctx),
         ACTRAIL_UPROBE_ARG2(ctx),
@@ -84,6 +89,7 @@ int handle_rustls_write_exit(struct pt_regs *ctx) {
 SEC("uprobe")
 int handle_rustls_write_vectored_enter(struct pt_regs *ctx) {
     return store_tls_payload_op(
+        ctx,
         tls_op_metadata(ACTRAIL_TLS_PAYLOAD_OUTBOUND, ACTRAIL_TLS_SYMBOL_RUSTLS_WRITE_VECTORED),
         ACTRAIL_UPROBE_ARG1(ctx),
         ACTRAIL_UPROBE_ARG2(ctx),
@@ -106,6 +112,7 @@ int handle_go_tls_write_enter(struct pt_regs *ctx) {
         return 0;
     }
     stored = store_tls_payload_op(
+        ctx,
         tls_op_metadata(ACTRAIL_TLS_PAYLOAD_OUTBOUND, ACTRAIL_TLS_SYMBOL_GO_CONN_WRITE),
         ACTRAIL_GO_UPROBE_ARG1(ctx),
         ACTRAIL_GO_UPROBE_ARG2(ctx),
@@ -115,7 +122,7 @@ int handle_go_tls_write_enter(struct pt_regs *ctx) {
     if (stored != 1) {
         return 0;
     }
-    return emit_tls_payload_completion(requested_size, 0);
+    return emit_tls_payload_completion(ctx, requested_size, 0);
 }
 
 SEC("uprobe")
@@ -173,6 +180,7 @@ int handle_go_tls_memmove_enter(struct pt_regs *ctx) {
         return 0;
     }
     stored = store_tls_payload_op(
+        ctx,
         tls_op_metadata(ACTRAIL_TLS_PAYLOAD_INBOUND, ACTRAIL_TLS_SYMBOL_GO_CONN_READ),
         read_state.stream_key,
         source_ptr,
@@ -182,7 +190,7 @@ int handle_go_tls_memmove_enter(struct pt_regs *ctx) {
     if (stored != 1) {
         return 0;
     }
-    return emit_tls_payload_completion(capture_size, 0);
+    return emit_tls_payload_completion(ctx, capture_size, 0);
 }
 
 #endif

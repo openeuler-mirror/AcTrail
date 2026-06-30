@@ -2,6 +2,7 @@
 #define ACTRAIL_TLS_PAYLOAD_COMPLETION_H
 
 static __always_inline void capture_tls_payload_after_completion(
+    void *ctx,
     const struct actrail_pending_tls_payload_op *op,
     __u32 tgid,
     __u32 tid,
@@ -18,12 +19,12 @@ static __always_inline void capture_tls_payload_after_completion(
 
     backend = payload_tls_capture_backend();
     if (backend == ACTRAIL_TLS_BACKEND_BPF_COPY_SECCOMP_FALLBACK &&
-        emit_tls_direct_capture(op, tgid, tid, completed_size) == 1) {
+        emit_tls_direct_capture(ctx, op, tgid, tid, completed_size) == 1) {
         return;
     }
     if (backend == ACTRAIL_TLS_BACKEND_BPF_COPY_SECCOMP_FALLBACK ||
         backend == ACTRAIL_TLS_BACKEND_SECCOMP_USER_READ) {
-        emit_tls_capture_request(op, tgid, tid, completed_size);
+        emit_tls_capture_request(ctx, op, tgid, tid, completed_size);
     }
 }
 

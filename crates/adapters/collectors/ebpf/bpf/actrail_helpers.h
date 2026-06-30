@@ -28,6 +28,8 @@ static void *(*bpf_ringbuf_reserve)(void *ringbuf, __u64 size, __u64 flags) =
     (void *)BPF_FUNC_ringbuf_reserve;
 static void (*bpf_ringbuf_submit)(void *data, __u64 flags) = (void *)BPF_FUNC_ringbuf_submit;
 static void (*bpf_ringbuf_discard)(void *data, __u64 flags) = (void *)BPF_FUNC_ringbuf_discard;
+static long (*bpf_perf_event_output)(void *ctx, void *map, __u64 flags, void *data, __u64 size) =
+    (void *)BPF_FUNC_perf_event_output;
 static long (*bpf_send_signal)(__u32 sig) = (void *)BPF_FUNC_send_signal;
 static long (*bpf_probe_read_user)(void *dst, __u32 size, const void *unsafe_ptr) =
     (void *)BPF_FUNC_probe_read_user;
@@ -46,6 +48,10 @@ static long (*bpf_get_ns_current_pid_tgid)(
 
 #ifndef BPF_ANY
 #define BPF_ANY 0
+#endif
+
+#ifndef BPF_F_CURRENT_CPU
+#define BPF_F_CURRENT_CPU 0xffffffffULL
 #endif
 
 #ifndef AF_INET

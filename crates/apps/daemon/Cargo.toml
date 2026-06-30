@@ -4,6 +4,10 @@ version.workspace = true
 edition = "2024"
 license = "MulanPSL-2.0"
 
+[features]
+default = []
+perf-buffer = ["ebpf_collector/perf-buffer"]
+
 [dependencies]
 attach_runtime = { path = "../../core/attach_runtime" }
 clap = { version = "4.6", features = ["derive"] }

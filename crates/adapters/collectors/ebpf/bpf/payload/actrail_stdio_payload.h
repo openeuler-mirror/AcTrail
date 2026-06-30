@@ -203,7 +203,7 @@ static __always_inline int emit_stdio_payload_op(struct trace_event_raw_sys_exit
         return 0;
     }
 
-    event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    event = actrail_event_reserve(sizeof(*event));
     if (!event) {
         bpf_map_delete_elem(&pending_stdio_payload_ops, &pid_tgid);
         return 0;
@@ -224,12 +224,12 @@ static __always_inline int emit_stdio_payload_op(struct trace_event_raw_sys_exit
     event->syscall = op->syscall;
     event->pid_generation = ensure_process_generation(tgid);
     if (bpf_probe_read_user(event->bytes, bounded_size, (void *)(unsigned long)op->buffer_ptr) != 0) {
-        bpf_ringbuf_discard(event, 0);
+        actrail_event_discard(event);
         bpf_map_delete_elem(&pending_stdio_payload_ops, &pid_tgid);
         return 0;
     }
 
-    bpf_ringbuf_submit(event, 0);
+    actrail_event_submit(ctx, event);
     bpf_map_delete_elem(&pending_stdio_payload_ops, &pid_tgid);
     return 0;
 }
