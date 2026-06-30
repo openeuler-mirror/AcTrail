@@ -98,6 +98,7 @@ pub struct EbpfRuntime {
     pending_tls_payload_ops: MapHandle,
     pending_tls_payload_ops_by_namespace: MapHandle,
     payload_tls_diagnostics: MapHandle,
+    payload_socket_fds: MapHandle,
     events: Rc<RefCell<Vec<Vec<u8>>>>,
     ring_buffer: RingBuffer<'static>,
     last_raw_sample_count: usize,
@@ -286,6 +287,7 @@ impl EbpfRuntime {
             "payload_tls_diagnostics",
             "payload_tls_diagnostics",
         )?;
+        let payload_socket_fds = map_handle(&object, "payload_socket_fds", "payload_socket_fds")?;
         let events_map = map_handle(&object, "events", "ring_buffer")?;
 
         let events = Rc::new(RefCell::new(Vec::new()));
@@ -353,6 +355,7 @@ impl EbpfRuntime {
             pending_tls_payload_ops,
             pending_tls_payload_ops_by_namespace,
             payload_tls_diagnostics,
+            payload_socket_fds,
             events,
             ring_buffer,
             last_raw_sample_count: 0,
@@ -452,6 +455,14 @@ impl EbpfRuntime {
                     })
             })
             .transpose()
+    }
+
+    pub fn lookup_socket_fd_generation(
+        &self,
+        pid: u32,
+        fd: u32,
+    ) -> Result<Option<u32>, LoaderError> {
+        socket::lookup_fd_generation(&self.payload_socket_fds, pid, fd)
     }
 
     pub fn attached_programs(&self) -> &[String] {

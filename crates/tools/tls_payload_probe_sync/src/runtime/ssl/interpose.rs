@@ -4,8 +4,10 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::runtime::tls::dynamic::binding::resolver;
-use crate::runtime::tls::dynamic::core::capture::{
-    SslReadExFn, SslReadFn, SslWriteExFn, SslWriteFn, abort_runtime,
+use crate::runtime::tls::dynamic::core::{
+    OPENSSL_SSL_READ_EX_NUL, OPENSSL_SSL_READ_NUL, OPENSSL_SSL_WRITE_EX_NUL,
+    OPENSSL_SSL_WRITE_EX2_NUL, OPENSSL_SSL_WRITE_NUL,
+    capture::{SslReadExFn, SslReadFn, SslWriteEx2Fn, SslWriteExFn, SslWriteFn, abort_runtime},
 };
 use crate::runtime::{loader, maps};
 
@@ -13,26 +15,32 @@ use super::configured_openssl_binary;
 
 static SSL_WRITE_NEXT: AtomicUsize = AtomicUsize::new(0);
 static SSL_WRITE_EX_NEXT: AtomicUsize = AtomicUsize::new(0);
+static SSL_WRITE_EX2_NEXT: AtomicUsize = AtomicUsize::new(0);
 static SSL_READ_NEXT: AtomicUsize = AtomicUsize::new(0);
 static SSL_READ_EX_NEXT: AtomicUsize = AtomicUsize::new(0);
 
 pub(super) unsafe fn interposed_ssl_write(capture: bool) -> SslWriteFn {
-    let address = interposed_symbol(capture, &SSL_WRITE_NEXT, b"SSL_write\0");
+    let address = interposed_symbol(capture, &SSL_WRITE_NEXT, OPENSSL_SSL_WRITE_NUL);
     unsafe { std::mem::transmute(address) }
 }
 
 pub(super) unsafe fn interposed_ssl_write_ex(capture: bool) -> SslWriteExFn {
-    let address = interposed_symbol(capture, &SSL_WRITE_EX_NEXT, b"SSL_write_ex\0");
+    let address = interposed_symbol(capture, &SSL_WRITE_EX_NEXT, OPENSSL_SSL_WRITE_EX_NUL);
+    unsafe { std::mem::transmute(address) }
+}
+
+pub(super) unsafe fn interposed_ssl_write_ex2(capture: bool) -> SslWriteEx2Fn {
+    let address = interposed_symbol(capture, &SSL_WRITE_EX2_NEXT, OPENSSL_SSL_WRITE_EX2_NUL);
     unsafe { std::mem::transmute(address) }
 }
 
 pub(super) unsafe fn interposed_ssl_read(capture: bool) -> SslReadFn {
-    let address = interposed_symbol(capture, &SSL_READ_NEXT, b"SSL_read\0");
+    let address = interposed_symbol(capture, &SSL_READ_NEXT, OPENSSL_SSL_READ_NUL);
     unsafe { std::mem::transmute(address) }
 }
 
 pub(super) unsafe fn interposed_ssl_read_ex(capture: bool) -> SslReadExFn {
-    let address = interposed_symbol(capture, &SSL_READ_EX_NEXT, b"SSL_read_ex\0");
+    let address = interposed_symbol(capture, &SSL_READ_EX_NEXT, OPENSSL_SSL_READ_EX_NUL);
     unsafe { std::mem::transmute(address) }
 }
 

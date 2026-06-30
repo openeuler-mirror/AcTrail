@@ -13,6 +13,8 @@ const SOCKET_PAYLOAD_CONFIG_FIELDS: usize = 3;
 const SOCKET_PAYLOAD_CONFIG_FIELD_SIZE: usize = std::mem::size_of::<u32>();
 const SOCKET_PAYLOAD_CONFIG_VALUE_SIZE: usize =
     SOCKET_PAYLOAD_CONFIG_FIELDS * SOCKET_PAYLOAD_CONFIG_FIELD_SIZE;
+const SOCKET_PAYLOAD_FD_KEY_FIELDS: usize = 2;
+const SOCKET_PAYLOAD_FD_KEY_SIZE: usize = SOCKET_PAYLOAD_FD_KEY_FIELDS * std::mem::size_of::<u32>();
 
 pub fn validate_payload_config(config: &PayloadSocketConfig) -> Result<(), LoaderError> {
     if !config.enabled {
@@ -75,4 +77,36 @@ fn payload_socket_config_value(
 
 fn bool_field(value: bool) -> u32 {
     if value { 1 } else { 0 }
+}
+
+pub(crate) fn lookup_fd_generation(
+    map: &MapHandle,
+    pid: u32,
+    fd: u32,
+) -> Result<Option<u32>, LoaderError> {
+    let key = socket_fd_key(pid, fd);
+    map.lookup(&key, MapFlags::ANY)
+        .map_err(|error| LoaderError::new("lookup_socket_fd_generation", error.to_string()))?
+        .map(|value| read_u32_value(&value))
+        .transpose()
+}
+
+fn socket_fd_key(pid: u32, fd: u32) -> [u8; SOCKET_PAYLOAD_FD_KEY_SIZE] {
+    let mut key = [0_u8; SOCKET_PAYLOAD_FD_KEY_SIZE];
+    key[..std::mem::size_of::<u32>()].copy_from_slice(&pid.to_ne_bytes());
+    key[std::mem::size_of::<u32>()..].copy_from_slice(&fd.to_ne_bytes());
+    key
+}
+
+fn read_u32_value(value: &[u8]) -> Result<u32, LoaderError> {
+    value
+        .get(..std::mem::size_of::<u32>())
+        .and_then(|bytes| bytes.try_into().ok())
+        .map(u32::from_ne_bytes)
+        .ok_or_else(|| {
+            LoaderError::new(
+                "lookup_socket_fd_generation",
+                format!("unexpected socket fd generation value size {}", value.len()),
+            )
+        })
 }

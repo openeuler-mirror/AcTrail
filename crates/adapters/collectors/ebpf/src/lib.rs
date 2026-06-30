@@ -204,6 +204,16 @@ impl EbpfCollector {
             .map_err(loader_error)
     }
 
+    pub fn lookup_socket_fd_generation(
+        &self,
+        pid: u32,
+        fd: u32,
+    ) -> Result<Option<u32>, CollectorError> {
+        self.runtime_ref()?
+            .lookup_socket_fd_generation(pid, fd)
+            .map_err(loader_error)
+    }
+
     pub fn take_tls_completions(&mut self) -> Vec<TlsPayloadCompletion> {
         std::mem::take(&mut self.tls_completions)
     }

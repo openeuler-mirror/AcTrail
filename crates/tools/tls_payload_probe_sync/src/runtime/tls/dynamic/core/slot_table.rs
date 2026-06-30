@@ -40,6 +40,7 @@ impl SlotTable {
 
 static SSL_WRITE_SLOTS: SlotTable = SlotTable::new();
 static SSL_WRITE_EX_SLOTS: SlotTable = SlotTable::new();
+static SSL_WRITE_EX2_SLOTS: SlotTable = SlotTable::new();
 static SSL_READ_SLOTS: SlotTable = SlotTable::new();
 static SSL_READ_EX_SLOTS: SlotTable = SlotTable::new();
 
@@ -55,6 +56,7 @@ fn table(kind: TlsFuncKind) -> &'static SlotTable {
     match kind {
         TlsFuncKind::SslWrite => &SSL_WRITE_SLOTS,
         TlsFuncKind::SslWriteEx => &SSL_WRITE_EX_SLOTS,
+        TlsFuncKind::SslWriteEx2 => &SSL_WRITE_EX2_SLOTS,
         TlsFuncKind::SslRead => &SSL_READ_SLOTS,
         TlsFuncKind::SslReadEx => &SSL_READ_EX_SLOTS,
     }

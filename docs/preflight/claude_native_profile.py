@@ -25,6 +25,15 @@ if str(TLS_RUNTIME_DIR) not in sys.path:
 from fast_plan import resolve_fast_probe_plan  # noqa: E402
 
 
+OPENSSL_PROFILE_SYMBOLS = (
+    "SSL_read",
+    "SSL_write",
+    "SSL_read_ex",
+    "SSL_write_ex",
+    "SSL_write_ex2",
+)
+
+
 def main() -> int:
     args = parse_args()
     workload = read_key_values(args.workload_config)
@@ -135,7 +144,7 @@ def exported_openssl_symbols(binary: Path) -> dict[str, bool]:
             continue
         if parts[3] == "FUNC" and parts[6] != "UND":
             symbols.add(parts[7].split("@", 1)[0])
-    return {symbol: symbol in symbols for symbol in ("SSL_read", "SSL_write", "SSL_read_ex", "SSL_write_ex")}
+    return {symbol: symbol in symbols for symbol in OPENSSL_PROFILE_SYMBOLS}
 
 
 def claude_package_info(binary: Path) -> dict[str, Any]:

@@ -16,7 +16,9 @@ SUPPORTED_ARCHITECTURES = {"x86_64", "aarch64"}
 RELEASE_BINARIES = ("actraild", "actrailctl", "actrailviewer", "ebpf_probe")
 TLS_SYNC_LIBRARY = "libactrail_tls_payload_probe_sync.so"
 RELEASE_ARTIFACTS = RELEASE_BINARIES + (TLS_SYNC_LIBRARY,)
-OPENSSL_SYMBOLS = ("SSL_read", "SSL_write", "SSL_read_ex", "SSL_write_ex")
+OPENSSL_REQUIRED_SYMBOLS = ("SSL_read", "SSL_write", "SSL_read_ex", "SSL_write_ex")
+OPENSSL_OPTIONAL_SYMBOLS = ("SSL_write_ex2",)
+OPENSSL_SYMBOLS = OPENSSL_REQUIRED_SYMBOLS + OPENSSL_OPTIONAL_SYMBOLS
 
 
 @dataclass(frozen=True)
@@ -432,10 +434,21 @@ def symbol_check(name: str, binary: Path, required: bool) -> Check:
     if result.returncode != 0:
         return Check(name, FAIL, last_line(result.stderr) or f"readelf -Ws failed for {binary}", required)
     symbols = elf_function_symbols(result.stdout)
-    missing = [symbol for symbol in OPENSSL_SYMBOLS if symbol not in symbols]
+    missing = [symbol for symbol in OPENSSL_REQUIRED_SYMBOLS if symbol not in symbols]
     if missing:
         return Check(name, FAIL, f"missing {', '.join(missing)} in {binary}", required)
-    return Check(name, PASS, f"{binary} exports {', '.join(OPENSSL_SYMBOLS)}", required)
+    optional_present = [symbol for symbol in OPENSSL_OPTIONAL_SYMBOLS if symbol in symbols]
+    optional_detail = (
+        f"; optional present: {', '.join(optional_present)}"
+        if optional_present
+        else f"; optional not exported: {', '.join(OPENSSL_OPTIONAL_SYMBOLS)}"
+    )
+    return Check(
+        name,
+        PASS,
+        f"{binary} exports required {', '.join(OPENSSL_REQUIRED_SYMBOLS)}{optional_detail}",
+        required,
+    )
 
 
 def elf_function_symbols(output: str) -> set[str]:

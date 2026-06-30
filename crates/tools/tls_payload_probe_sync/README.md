@@ -14,11 +14,22 @@ The CLI starts with these defaults:
 - `--redaction redact`
 - `--events target,payload,decision`
 
+The runtime keeps `LD_AUDIT` symbol-binding callbacks scoped to TLS provider
+objects. `TLS_PAYLOAD_SYNC_AUDIT_OBJECT_ALLOWLIST` can override the default
+comma-separated basename patterns:
+
+- `libssl.so`
+- `libssl.so.*`
+- `libboringssl.so`
+- `libboringssl.so.*`
+
+Patterns support exact matches or a trailing `*` prefix match.
+
 ## MVP Boundaries
 
 The first sync runtime supports equal-byte payload rewrite only:
 
-- outbound `SSL_write`, `SSL_write_ex`, and `rustls_buffer_plaintext`
+- outbound `SSL_write`, `SSL_write_ex`, optional `SSL_write_ex2`, and `rustls_buffer_plaintext`
 - inbound `SSL_read`, `SSL_read_ex`, and `rustls_take_received_plaintext`
 - Linux x86_64 and aarch64 native inline hooks
 - original TLS connection semantics

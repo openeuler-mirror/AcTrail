@@ -3,14 +3,19 @@ use std::ffi::c_void;
 use crate::runtime::ssl;
 
 use super::capture::{
-    SslReadExFn, SslReadFn, SslWriteExFn, SslWriteFn, abort_runtime, ssl_read_ex_with,
-    ssl_read_with, ssl_write_ex_with, ssl_write_with,
+    SslReadExFn, SslReadFn, SslWriteEx2Fn, SslWriteExFn, SslWriteFn, abort_runtime,
+    ssl_read_ex_with, ssl_read_with, ssl_write_ex_with, ssl_write_ex2_with, ssl_write_with,
 };
-use super::{SLOT_COUNT, TlsFuncKind, real_symbol_for_slot};
+use super::{
+    OPENSSL_SSL_READ, OPENSSL_SSL_READ_EX, OPENSSL_SSL_WRITE, OPENSSL_SSL_WRITE_EX,
+    OPENSSL_SSL_WRITE_EX2, SLOT_COUNT, TlsFuncKind, real_symbol_for_slot,
+};
 
 type SslWriteEntry = unsafe extern "C" fn(*mut c_void, *const c_void, libc::c_int) -> libc::c_int;
 type SslWriteExEntry =
     unsafe extern "C" fn(*mut c_void, *const c_void, usize, *mut usize) -> libc::c_int;
+type SslWriteEx2Entry =
+    unsafe extern "C" fn(*mut c_void, *const c_void, usize, u64, *mut usize) -> libc::c_int;
 type SslReadEntry = unsafe extern "C" fn(*mut c_void, *mut c_void, libc::c_int) -> libc::c_int;
 type SslReadExEntry =
     unsafe extern "C" fn(*mut c_void, *mut c_void, usize, *mut usize) -> libc::c_int;
@@ -19,6 +24,7 @@ pub(in crate::runtime) fn entry_for_slot(kind: TlsFuncKind, slot: usize) -> usiz
     match kind {
         TlsFuncKind::SslWrite => SSL_WRITE_ENTRIES[slot] as usize,
         TlsFuncKind::SslWriteEx => SSL_WRITE_EX_ENTRIES[slot] as usize,
+        TlsFuncKind::SslWriteEx2 => SSL_WRITE_EX2_ENTRIES[slot] as usize,
         TlsFuncKind::SslRead => SSL_READ_ENTRIES[slot] as usize,
         TlsFuncKind::SslReadEx => SSL_READ_EX_ENTRIES[slot] as usize,
     }
@@ -30,6 +36,9 @@ pub(in crate::runtime) fn is_managed_entry(address: usize) -> bool {
             .iter()
             .any(|entry| *entry as usize == address)
         || SSL_WRITE_EX_ENTRIES
+            .iter()
+            .any(|entry| *entry as usize == address)
+        || SSL_WRITE_EX2_ENTRIES
             .iter()
             .any(|entry| *entry as usize == address)
         || SSL_READ_ENTRIES
@@ -59,6 +68,17 @@ unsafe extern "C" fn ssl_write_ex_slot<const SLOT: usize>(
     unsafe { ssl_write_ex_with(original, ssl, buffer, length, written) }
 }
 
+unsafe extern "C" fn ssl_write_ex2_slot<const SLOT: usize>(
+    ssl: *mut c_void,
+    buffer: *const c_void,
+    length: usize,
+    flags: u64,
+    written: *mut usize,
+) -> libc::c_int {
+    let original = unsafe { real_ssl_write_ex2(SLOT) };
+    unsafe { ssl_write_ex2_with(original, ssl, buffer, length, flags, written) }
+}
+
 unsafe extern "C" fn ssl_read_slot<const SLOT: usize>(
     ssl: *mut c_void,
     buffer: *mut c_void,
@@ -79,26 +99,47 @@ unsafe extern "C" fn ssl_read_ex_slot<const SLOT: usize>(
 }
 
 unsafe fn real_ssl_write(slot: usize) -> SslWriteFn {
-    let address = real_symbol_for_slot(TlsFuncKind::SslWrite, slot)
-        .unwrap_or_else(|| abort_runtime("SSL_write dynamic slot has no real symbol"));
+    let address = real_symbol_for_slot(TlsFuncKind::SslWrite, slot).unwrap_or_else(|| {
+        abort_runtime(&format!(
+            "{OPENSSL_SSL_WRITE} dynamic slot has no real symbol"
+        ))
+    });
     unsafe { std::mem::transmute(address) }
 }
 
 unsafe fn real_ssl_write_ex(slot: usize) -> SslWriteExFn {
-    let address = real_symbol_for_slot(TlsFuncKind::SslWriteEx, slot)
-        .unwrap_or_else(|| abort_runtime("SSL_write_ex dynamic slot has no real symbol"));
+    let address = real_symbol_for_slot(TlsFuncKind::SslWriteEx, slot).unwrap_or_else(|| {
+        abort_runtime(&format!(
+            "{OPENSSL_SSL_WRITE_EX} dynamic slot has no real symbol"
+        ))
+    });
+    unsafe { std::mem::transmute(address) }
+}
+
+unsafe fn real_ssl_write_ex2(slot: usize) -> SslWriteEx2Fn {
+    let address = real_symbol_for_slot(TlsFuncKind::SslWriteEx2, slot).unwrap_or_else(|| {
+        abort_runtime(&format!(
+            "{OPENSSL_SSL_WRITE_EX2} dynamic slot has no real symbol"
+        ))
+    });
     unsafe { std::mem::transmute(address) }
 }
 
 unsafe fn real_ssl_read(slot: usize) -> SslReadFn {
-    let address = real_symbol_for_slot(TlsFuncKind::SslRead, slot)
-        .unwrap_or_else(|| abort_runtime("SSL_read dynamic slot has no real symbol"));
+    let address = real_symbol_for_slot(TlsFuncKind::SslRead, slot).unwrap_or_else(|| {
+        abort_runtime(&format!(
+            "{OPENSSL_SSL_READ} dynamic slot has no real symbol"
+        ))
+    });
     unsafe { std::mem::transmute(address) }
 }
 
 unsafe fn real_ssl_read_ex(slot: usize) -> SslReadExFn {
-    let address = real_symbol_for_slot(TlsFuncKind::SslReadEx, slot)
-        .unwrap_or_else(|| abort_runtime("SSL_read_ex dynamic slot has no real symbol"));
+    let address = real_symbol_for_slot(TlsFuncKind::SslReadEx, slot).unwrap_or_else(|| {
+        abort_runtime(&format!(
+            "{OPENSSL_SSL_READ_EX} dynamic slot has no real symbol"
+        ))
+    });
     unsafe { std::mem::transmute(address) }
 }
 
@@ -106,6 +147,7 @@ macro_rules! define_slot_entries {
     ($($slot:expr),+ $(,)?) => {
         static SSL_WRITE_ENTRIES: [SslWriteEntry; SLOT_COUNT] = [$(ssl_write_slot::<$slot>),+];
         static SSL_WRITE_EX_ENTRIES: [SslWriteExEntry; SLOT_COUNT] = [$(ssl_write_ex_slot::<$slot>),+];
+        static SSL_WRITE_EX2_ENTRIES: [SslWriteEx2Entry; SLOT_COUNT] = [$(ssl_write_ex2_slot::<$slot>),+];
         static SSL_READ_ENTRIES: [SslReadEntry; SLOT_COUNT] = [$(ssl_read_slot::<$slot>),+];
         static SSL_READ_EX_ENTRIES: [SslReadExEntry; SLOT_COUNT] = [$(ssl_read_ex_slot::<$slot>),+];
     };

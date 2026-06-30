@@ -24,7 +24,7 @@ target/debug/tls-probe-point-finder pattern codex --address 0x1a66950 --length 0
 
 `detect` resolves a command or path to a concrete ELF file, reads ELF metadata directly, and reports provider candidates:
 
-- `openssl` executable symbols: requires `SSL_read`, `SSL_write`, `SSL_read_ex`, and `SSL_write_ex`.
+- `openssl` executable symbols: requires `SSL_read`, `SSL_write`, `SSL_read_ex`, and `SSL_write_ex`; adds `SSL_write_ex2` to the probe plan when the target exports it.
 - `openssl` shared library symbols: reports user-specified, direct `DT_NEEDED`, and transitive `DT_NEEDED` `libssl.so*` candidates with separate confidence. Python executables are also checked by importing `_ssl` with `-S` and following that extension module's direct `DT_NEEDED` `libssl.so*` dependency; this handles native Python and uv virtualenv launchers that map OpenSSL only after `import _ssl`.
 - `boringssl` executable symbols: available with `--provider boringssl`; auto mode does not treat shared `SSL_*` names alone as proof of BoringSSL.
 - `boringssl` executable byte patterns: built-in x86_64/aarch64 related-entry detection for stripped static BoringSSL binaries.
@@ -43,7 +43,7 @@ Detection and rendering are separate. The detection command builds an internal r
 `fast` requires a complete payload closure before returning:
 
 - rustls requires both `rustls_buffer_plaintext` and `rustls_take_received_plaintext`.
-- OpenSSL requires `SSL_read`, `SSL_write`, `SSL_read_ex`, and `SSL_write_ex`.
+- OpenSSL requires `SSL_read`, `SSL_write`, `SSL_read_ex`, and `SSL_write_ex`. `SSL_write_ex2` is included as an optional outbound probe point when present.
 - BoringSSL static pattern probing must resolve the provider's related read/write entry set; a single isolated byte-pattern hit is not enough.
 - Go requires `crypto/tls.(*Conn).Write`, `crypto/tls.(*Conn).Read`, and `runtime.memmove` from `.gopclntab`. The generated plan marks `Conn.Read` as the read-side state point and `runtime.memmove` as the inbound copy point, so it does not require Go return uprobes.
 

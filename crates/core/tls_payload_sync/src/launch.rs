@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 
 use tls_probe_point_finder::ProbePointPlan;
+use tls_probe_point_finder::ProbeSource;
 
 use crate::{SyncError, SyncResult};
 
@@ -12,6 +13,7 @@ const NATIVE_INLINE_HOOK_ARCHES: &[&str] = &["x86_64", "aarch64"];
 const NATIVE_INLINE_HOOK_SYMBOLS: &[&str] = &[
     "SSL_write",
     "SSL_write_ex",
+    "SSL_write_ex2",
     "SSL_read",
     "SSL_read_ex",
     "rustls_buffer_plaintext",
@@ -107,10 +109,13 @@ pub fn audit_libraries_for_plans(
     runtime_libraries: &[PathBuf],
     plans: &[ProbePointPlan],
 ) -> Vec<PathBuf> {
-    if plans.is_empty() {
-        Vec::new()
-    } else {
+    if plans
+        .iter()
+        .any(|plan| plan.source == ProbeSource::SharedLibrary)
+    {
         runtime_libraries.to_vec()
+    } else {
+        Vec::new()
     }
 }
 

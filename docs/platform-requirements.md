@@ -34,7 +34,7 @@ For the full local runtime proof, run:
 python3 docs/preflight/platform_preflight.py --run-smoke --color always
 ```
 
-The smoke mode runs the documented local eBPF live attach, HTTP/2 TLS sync payload, and fanotify enforcement checks. It also scans `claude` and `opencode` if they are on `PATH`, resolves their runtime executable when possible, and checks whether the executable exports `SSL_read`, `SSL_write`, `SSL_read_ex`, and `SSL_write_ex`. Agent executable rows are marked `[optional]` because they only block the corresponding agent-specific example.
+The smoke mode runs the documented local eBPF live attach, HTTP/2 TLS sync payload, and fanotify enforcement checks. It also scans `claude` and `opencode` if they are on `PATH`, resolves their runtime executable when possible, and checks whether the executable exports the required OpenSSL symbols `SSL_read`, `SSL_write`, `SSL_read_ex`, and `SSL_write_ex`. OpenSSL `SSL_write_ex2` is reported as an optional outbound probe point when present. Agent executable rows are marked `[optional]` because they only block the corresponding agent-specific example.
 
 ## Required Capabilities
 
@@ -148,7 +148,7 @@ python3 docs/examples/clean.py --example http2-local
 Expected:
 
 - `actrailctl launch` reports `trace trace-1 entered Active`.
-- `actrailviewer payloads` shows `TlsUserSpace` rows with `LIBRARY=openssl`, outbound `SSL_write` or `SSL_write_ex`, inbound `SSL_read` or `SSL_read_ex`, `Complete`, and operation `success`.
+- `actrailviewer payloads` shows `TlsUserSpace` rows with `LIBRARY=openssl`, outbound `SSL_write`, `SSL_write_ex`, or `SSL_write_ex2`, inbound `SSL_read` or `SSL_read_ex`, `Complete`, and operation `success`.
 - `actrailviewer events` shows HTTP/2 `Application` rows such as `frame` and `data`.
 
 This preflight covers launch-time `tls-sync` runtime injection, the sync event socket, dynamic OpenSSL probe planning, and daemon-side payload ingestion. Seccomp user notification, `pidfd_open`, `pidfd_getfd`, and `process_vm_readv` are covered by process invocation and socket fallback examples when those paths are enabled.

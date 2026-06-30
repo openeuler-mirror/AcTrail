@@ -42,7 +42,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout-seconds", type=float, required=True)
     parser.add_argument(
         "--request-write-mode",
-        choices=["http-client", "single-syscall"],
+        choices=["http-client", "single-syscall", "split-syscall"],
         required=True,
     )
     parser.add_argument("--host-header", required=True)
@@ -81,6 +81,9 @@ def send_llm_request(args: argparse.Namespace, port: int) -> None:
     if args.request_write_mode == "single-syscall":
         send_single_syscall_request(args, port, body)
         return
+    if args.request_write_mode == "split-syscall":
+        send_split_syscall_request(args, port, body)
+        return
     conn = http.client.HTTPConnection(args.bind_host, port, timeout=args.timeout_seconds)
     conn.request(
         "POST",
@@ -102,25 +105,51 @@ def send_llm_request(args: argparse.Namespace, port: int) -> None:
 
 
 def send_single_syscall_request(args: argparse.Namespace, port: int, body: bytes) -> None:
-    request = (
+    header = request_header(args, body)
+    request = header + body
+    with socket.create_connection((args.bind_host, port), timeout=args.timeout_seconds) as client:
+        client.settimeout(args.timeout_seconds)
+        written = client.send(request)
+        print(f"client_send_1={written}", flush=True)
+        if written != len(request):
+            raise RuntimeError(f"single syscall request write was partial: {written}/{len(request)}")
+        response = read_http_response(client, args.response_read_chunk_bytes)
+    assert_expected_response(response, args.response_text)
+
+
+def send_split_syscall_request(args: argparse.Namespace, port: int, body: bytes) -> None:
+    header = request_header(args, body)
+    with socket.create_connection((args.bind_host, port), timeout=args.timeout_seconds) as client:
+        client.settimeout(args.timeout_seconds)
+        first = client.send(header)
+        print(f"client_send_1={first}", flush=True)
+        if first != len(header):
+            raise RuntimeError(f"split header write was partial: {first}/{len(header)}")
+        second = client.send(body)
+        print(f"client_send_2={second}", flush=True)
+        if second != len(body):
+            raise RuntimeError(f"split body write was partial: {second}/{len(body)}")
+        response = read_http_response(client, args.response_read_chunk_bytes)
+    assert_expected_response(response, args.response_text)
+
+
+def request_header(args: argparse.Namespace, body: bytes) -> bytes:
+    return (
         f"POST {args.path} HTTP/1.1\r\n"
         f"Host: {args.host_header}\r\n"
         f"Content-Type: {args.content_type}\r\n"
         f"Content-Length: {len(body)}\r\n"
         "Connection: close\r\n"
         "\r\n"
-    ).encode("ascii") + body
-    with socket.create_connection((args.bind_host, port), timeout=args.timeout_seconds) as client:
-        client.settimeout(args.timeout_seconds)
-        written = client.send(request)
-        if written != len(request):
-            raise RuntimeError(f"single syscall request write was partial: {written}/{len(request)}")
-        response = read_http_response(client, args.response_read_chunk_bytes)
+    ).encode("ascii")
+
+
+def assert_expected_response(response: "HttpResponse", response_text: str) -> None:
     print(f"http_status={response.status}", flush=True)
     print(f"http_response={response.body}", flush=True)
     if response.status != 200:
         raise RuntimeError(f"unexpected HTTP status {response.status}")
-    if response.body != args.response_text:
+    if response.body != response_text:
         raise RuntimeError("unexpected HTTP response body")
 
 

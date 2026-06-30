@@ -5,10 +5,17 @@ use tls_payload_core::PayloadDirection;
 use crate::runtime::decision::{RuntimeAction, decide_payload};
 use crate::runtime::{config, output};
 
+use super::{
+    OPENSSL_SSL_READ, OPENSSL_SSL_READ_EX, OPENSSL_SSL_WRITE, OPENSSL_SSL_WRITE_EX,
+    OPENSSL_SSL_WRITE_EX2,
+};
+
 pub(in crate::runtime) type SslWriteFn =
     unsafe extern "C" fn(*mut c_void, *const c_void, libc::c_int) -> libc::c_int;
 pub(in crate::runtime) type SslWriteExFn =
     unsafe extern "C" fn(*mut c_void, *const c_void, usize, *mut usize) -> libc::c_int;
+pub(in crate::runtime) type SslWriteEx2Fn =
+    unsafe extern "C" fn(*mut c_void, *const c_void, usize, u64, *mut usize) -> libc::c_int;
 pub(in crate::runtime) type SslReadFn =
     unsafe extern "C" fn(*mut c_void, *mut c_void, libc::c_int) -> libc::c_int;
 pub(in crate::runtime) type SslReadExFn =
@@ -24,12 +31,12 @@ pub(in crate::runtime) unsafe fn ssl_write_with(
         return unsafe { original(ssl, buffer, length) };
     }
     let Ok(length) = usize::try_from(length) else {
-        return tls_write_error("SSL_write", "negative payload length");
+        return tls_write_error(OPENSSL_SSL_WRITE, "negative payload length");
     };
     let payload = unsafe { std::slice::from_raw_parts(buffer.cast::<u8>(), length) };
     match decide_payload(
         PayloadDirection::Outbound,
-        "SSL_write",
+        OPENSSL_SSL_WRITE,
         ssl as usize,
         payload,
     ) {
@@ -41,7 +48,7 @@ pub(in crate::runtime) unsafe fn ssl_write_with(
                 length as libc::c_int,
             )
         },
-        RuntimeAction::Block => tls_write_error("SSL_write", "processor blocked payload"),
+        RuntimeAction::Block => tls_write_error(OPENSSL_SSL_WRITE, "processor blocked payload"),
     }
 }
 
@@ -58,13 +65,45 @@ pub(in crate::runtime) unsafe fn ssl_write_ex_with(
     let payload = unsafe { std::slice::from_raw_parts(buffer.cast::<u8>(), length) };
     match decide_payload(
         PayloadDirection::Outbound,
-        "SSL_write_ex",
+        OPENSSL_SSL_WRITE_EX,
         ssl as usize,
         payload,
     ) {
         RuntimeAction::Allow => unsafe { original(ssl, buffer, length, written) },
         RuntimeAction::Replace(replacement) => unsafe {
             original(ssl, replacement.as_ptr().cast::<c_void>(), length, written)
+        },
+        RuntimeAction::Block => 0,
+    }
+}
+
+pub(in crate::runtime) unsafe fn ssl_write_ex2_with(
+    original: SslWriteEx2Fn,
+    ssl: *mut c_void,
+    buffer: *const c_void,
+    length: usize,
+    flags: u64,
+    written: *mut usize,
+) -> libc::c_int {
+    if length == 0 || buffer.is_null() {
+        return unsafe { original(ssl, buffer, length, flags, written) };
+    }
+    let payload = unsafe { std::slice::from_raw_parts(buffer.cast::<u8>(), length) };
+    match decide_payload(
+        PayloadDirection::Outbound,
+        OPENSSL_SSL_WRITE_EX2,
+        ssl as usize,
+        payload,
+    ) {
+        RuntimeAction::Allow => unsafe { original(ssl, buffer, length, flags, written) },
+        RuntimeAction::Replace(replacement) => unsafe {
+            original(
+                ssl,
+                replacement.as_ptr().cast::<c_void>(),
+                length,
+                flags,
+                written,
+            )
         },
         RuntimeAction::Block => 0,
     }
@@ -81,9 +120,9 @@ pub(in crate::runtime) unsafe fn ssl_read_with(
         return result;
     }
     let Ok(length) = usize::try_from(result) else {
-        abort_runtime("SSL_read returned invalid length");
+        abort_runtime(&format!("{OPENSSL_SSL_READ} returned invalid length"));
     };
-    inbound_rewrite("SSL_read", ssl as usize, buffer.cast::<u8>(), length);
+    inbound_rewrite(OPENSSL_SSL_READ, ssl as usize, buffer.cast::<u8>(), length);
     result
 }
 
@@ -102,7 +141,12 @@ pub(in crate::runtime) unsafe fn ssl_read_ex_with(
     if completed == 0 {
         return result;
     }
-    inbound_rewrite("SSL_read_ex", ssl as usize, buffer.cast::<u8>(), completed);
+    inbound_rewrite(
+        OPENSSL_SSL_READ_EX,
+        ssl as usize,
+        buffer.cast::<u8>(),
+        completed,
+    );
     result
 }
 
