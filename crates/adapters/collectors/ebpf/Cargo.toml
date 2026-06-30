@@ -4,6 +4,10 @@ version.workspace = true
 edition = "2024"
 license = "MulanPSL-2.0"
 
+[features]
+default = []
+perf-buffer = []
+
 [dependencies]
 collector_binding = { path = "../../../contracts/collector/binding" }
 collector_capability = { path = "../../../contracts/collector/capability" }

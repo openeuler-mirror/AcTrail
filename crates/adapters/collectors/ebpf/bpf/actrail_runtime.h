@@ -113,6 +113,24 @@ struct actrail_pid_namespace {
     __u64 ino;
 };
 
+#ifdef ACTRAIL_EVENT_TRANSPORT_PERF
+enum actrail_event_transport_scratch {
+    ACTRAIL_EVENT_TRANSPORT_SCRATCH_BYTES = 8192,
+};
+
+struct actrail_event_scratch {
+    __u64 size;
+    __u8 bytes[ACTRAIL_EVENT_TRANSPORT_SCRATCH_BYTES];
+};
+#endif
+
+enum actrail_event_transport_diagnostic_counter {
+    ACTRAIL_EVENT_TRANSPORT_RESERVE_FAIL = 0,
+    ACTRAIL_EVENT_TRANSPORT_OUTPUT_FAIL = 1,
+    ACTRAIL_EVENT_TRANSPORT_OUTPUT_FAIL_BYTES = 2,
+    ACTRAIL_EVENT_TRANSPORT_DIAG_COUNTER_COUNT = 3,
+};
+
 struct tracepoint_common {
     __u16 common_type;
     __u8 common_flags;
@@ -191,10 +209,33 @@ struct {
     __type(value, struct actrail_pid_namespace);
 } pid_namespace SEC(".maps");
 
+#ifdef ACTRAIL_EVENT_TRANSPORT_PERF
+struct {
+    __uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u32);
+} events SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, struct actrail_event_scratch);
+} event_scratch SEC(".maps");
+#else
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
     __uint(max_entries, 1);
 } events SEC(".maps");
+#endif
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, ACTRAIL_EVENT_TRANSPORT_DIAG_COUNTER_COUNT);
+    __type(key, __u32);
+    __type(value, __u64);
+} event_transport_diagnostics SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
@@ -224,8 +265,96 @@ struct {
     __type(value, struct actrail_pending_exit_op);
 } pending_exit_ops SEC(".maps");
 
-static __always_inline int emit_event(struct actrail_event *event) {
-    return bpf_ringbuf_output(&events, event, sizeof(*event), 0);
+static __always_inline void event_transport_diag_inc(__u32 counter_id) {
+    __u64 *counter = bpf_map_lookup_elem(&event_transport_diagnostics, &counter_id);
+
+    if (!counter) {
+        return;
+    }
+    __sync_fetch_and_add(counter, 1);
+}
+
+static __always_inline void event_transport_diag_add(__u32 counter_id, __u64 value) {
+    __u64 *counter = bpf_map_lookup_elem(&event_transport_diagnostics, &counter_id);
+
+    if (!counter) {
+        return;
+    }
+    __sync_fetch_and_add(counter, value);
+}
+
+static __always_inline void *actrail_event_reserve(__u64 size) {
+#ifdef ACTRAIL_EVENT_TRANSPORT_PERF
+    __u32 key = 0;
+    struct actrail_event_scratch *scratch;
+
+    if (size > ACTRAIL_EVENT_TRANSPORT_SCRATCH_BYTES) {
+        event_transport_diag_inc(ACTRAIL_EVENT_TRANSPORT_RESERVE_FAIL);
+        return 0;
+    }
+    scratch = bpf_map_lookup_elem(&event_scratch, &key);
+    if (!scratch) {
+        event_transport_diag_inc(ACTRAIL_EVENT_TRANSPORT_RESERVE_FAIL);
+        return 0;
+    }
+    scratch->size = size;
+    return scratch->bytes;
+#else
+    void *event = bpf_ringbuf_reserve(&events, size, 0);
+
+    if (!event) {
+        event_transport_diag_inc(ACTRAIL_EVENT_TRANSPORT_RESERVE_FAIL);
+    }
+    return event;
+#endif
+}
+
+static __always_inline void actrail_event_discard(void *event) {
+#ifndef ACTRAIL_EVENT_TRANSPORT_PERF
+    bpf_ringbuf_discard(event, 0);
+#endif
+}
+
+static __always_inline int actrail_event_submit(void *ctx, void *event) {
+#ifdef ACTRAIL_EVENT_TRANSPORT_PERF
+    __u32 key = 0;
+    struct actrail_event_scratch *scratch = bpf_map_lookup_elem(&event_scratch, &key);
+    long result;
+
+    if (!scratch || scratch->size > ACTRAIL_EVENT_TRANSPORT_SCRATCH_BYTES) {
+        event_transport_diag_inc(ACTRAIL_EVENT_TRANSPORT_OUTPUT_FAIL);
+        return -1;
+    }
+    result = bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, event, scratch->size);
+    if (result != 0) {
+        event_transport_diag_inc(ACTRAIL_EVENT_TRANSPORT_OUTPUT_FAIL);
+        event_transport_diag_add(ACTRAIL_EVENT_TRANSPORT_OUTPUT_FAIL_BYTES, scratch->size);
+    }
+    return result;
+#else
+    bpf_ringbuf_submit(event, 0);
+    return 0;
+#endif
+}
+
+static __always_inline int emit_event(void *ctx, struct actrail_event *event) {
+#ifdef ACTRAIL_EVENT_TRANSPORT_PERF
+    long result = bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, event, sizeof(*event));
+
+    if (result != 0) {
+        event_transport_diag_inc(ACTRAIL_EVENT_TRANSPORT_OUTPUT_FAIL);
+        event_transport_diag_add(ACTRAIL_EVENT_TRANSPORT_OUTPUT_FAIL_BYTES, sizeof(*event));
+    }
+    return result;
+#else
+    long result = bpf_ringbuf_output(&events, event, sizeof(*event), 0);
+
+    if (result != 0) {
+        event_transport_diag_inc(ACTRAIL_EVENT_TRANSPORT_OUTPUT_FAIL);
+        event_transport_diag_add(ACTRAIL_EVENT_TRANSPORT_OUTPUT_FAIL_BYTES, sizeof(*event));
+    }
+    return result;
+#endif
 }
 
 static __always_inline __u64 current_kernel_pid_tgid(void) {

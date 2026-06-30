@@ -35,14 +35,14 @@ use std::path::Path;
 use std::rc::Rc;
 
 use config_core::daemon::{EbpfCollectorConfig, PayloadConfig};
-use libbpf_rs::{Link, MapCore, MapFlags, MapHandle, Object, ObjectBuilder, RingBuffer};
+use libbpf_rs::{Link, MapCore, MapFlags, MapHandle, Object, ObjectBuilder};
 use model_core::capability::Capability;
 use model_core::ids::TraceId;
 use model_core::process::{ProcessIdentity, ProcessSuppressedFd};
 
 pub use attach_plan::AttachPlan;
 use attach_plan::{configure_program_autoload, effective_config_for_attach_plan};
-use object::{build_ring_buffer, map_handle, resize_map, ring_buffer_max_bytes};
+use object::{EventBuffer, event_map_max_entries, map_handle, resize_map, ring_buffer_max_bytes};
 use ring_decode::decode_kernel_event;
 pub use ring_decode::{
     KernelEndpoint, KernelEvent, KernelFilePathEvent, KernelObservationEvent,
@@ -99,8 +99,9 @@ pub struct EbpfRuntime {
     pending_tls_payload_ops_by_namespace: MapHandle,
     payload_tls_diagnostics: MapHandle,
     payload_socket_fds: MapHandle,
+    event_transport_diagnostics: MapHandle,
     events: Rc<RefCell<Vec<Vec<u8>>>>,
-    ring_buffer: RingBuffer<'static>,
+    event_buffer: EventBuffer,
     last_raw_sample_count: usize,
 }
 
@@ -232,10 +233,11 @@ impl EbpfProgramLoader {
             "payload_socket_stream_sequences",
             effective_payload.socket.stream_state_max_entries,
         )?;
+        let event_buffer_bytes = ring_buffer_max_bytes(&self.config, &effective_payload);
         resize_map(
             &mut open_object,
             "events",
-            ring_buffer_max_bytes(&self.config, &effective_payload),
+            event_map_max_entries(event_buffer_bytes)?,
         )?;
         configure_program_autoload(&mut open_object, attach_plan)?;
 
@@ -288,10 +290,19 @@ impl EbpfRuntime {
             "payload_tls_diagnostics",
         )?;
         let payload_socket_fds = map_handle(&object, "payload_socket_fds", "payload_socket_fds")?;
-        let events_map = map_handle(&object, "events", "ring_buffer")?;
+        let event_transport_diagnostics = map_handle(
+            &object,
+            "event_transport_diagnostics",
+            "event_transport_diagnostics",
+        )?;
+        let events_map = map_handle(&object, "events", "event_buffer")?;
 
         let events = Rc::new(RefCell::new(Vec::new()));
-        let ring_buffer = build_ring_buffer(&events_map, Rc::clone(&events))?;
+        let event_buffer = EventBuffer::build(
+            &events_map,
+            Rc::clone(&events),
+            ring_buffer_max_bytes(config, payload),
+        )?;
         configure_collector_pid_namespace(&pid_namespace)?;
         fork::configure_child_pid_offset_map(&object, attach_plan)?;
         file::configure_file_config_map(&object, config)?;
@@ -356,22 +367,43 @@ impl EbpfRuntime {
             pending_tls_payload_ops_by_namespace,
             payload_tls_diagnostics,
             payload_socket_fds,
+            event_transport_diagnostics,
             events,
-            ring_buffer,
+            event_buffer,
             last_raw_sample_count: 0,
         })
     }
 
     pub fn poll_events(&mut self) -> Result<Vec<KernelEvent>, LoaderError> {
-        self.ring_buffer
-            .consume()
-            .map_err(|error| LoaderError::new("consume_ring_buffer", error.to_string()))?;
+        self.event_buffer.consume()?;
+        self.validate_event_transport()?;
         let raw_events = std::mem::take(&mut *self.events.borrow_mut());
         self.last_raw_sample_count = raw_events.len();
         raw_events
             .into_iter()
             .map(|raw| decode_kernel_event(&raw))
             .collect()
+    }
+
+    fn validate_event_transport(&self) -> Result<(), LoaderError> {
+        let perf_lost = self.event_buffer.lost_count();
+        let diagnostics = read_event_transport_diagnostics(&self.event_transport_diagnostics)?;
+        if perf_lost != 0
+            || diagnostics.reserve_fail != 0
+            || diagnostics.output_fail != 0
+            || diagnostics.output_fail_bytes != 0
+        {
+            return Err(LoaderError::new(
+                "event_transport_loss",
+                format!(
+                    "kernel event transport lost data: perf_lost={perf_lost}, reserve_fail={}, output_fail={}, output_fail_bytes={}",
+                    diagnostics.reserve_fail,
+                    diagnostics.output_fail,
+                    diagnostics.output_fail_bytes
+                ),
+            ));
+        }
+        Ok(())
     }
 
     pub fn track_pid(
@@ -495,11 +527,11 @@ impl EbpfRuntime {
     }
 
     pub fn event_poll_fd(&self) -> Result<RawFd, LoaderError> {
-        let fd = self.ring_buffer.epoll_fd();
+        let fd = self.event_buffer.epoll_fd();
         if fd < 0 {
             return Err(LoaderError::new(
                 "event_poll_fd",
-                format!("ring buffer returned invalid epoll fd {fd}"),
+                format!("event buffer returned invalid epoll fd {fd}"),
             ));
         }
         Ok(fd)
@@ -531,6 +563,47 @@ impl EbpfRuntime {
         }
         Ok(true)
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct EventTransportDiagnostics {
+    reserve_fail: u64,
+    output_fail: u64,
+    output_fail_bytes: u64,
+}
+
+fn read_event_transport_diagnostics(
+    map: &MapHandle,
+) -> Result<EventTransportDiagnostics, LoaderError> {
+    Ok(EventTransportDiagnostics {
+        reserve_fail: read_event_transport_counter(map, 0)?,
+        output_fail: read_event_transport_counter(map, 1)?,
+        output_fail_bytes: read_event_transport_counter(map, 2)?,
+    })
+}
+
+fn read_event_transport_counter(map: &MapHandle, counter_id: u32) -> Result<u64, LoaderError> {
+    map.lookup(&counter_id.to_ne_bytes(), MapFlags::ANY)
+        .map_err(|error| LoaderError::new("event_transport_diagnostics", error.to_string()))?
+        .map(|value| {
+            value
+                .get(..8)
+                .and_then(|raw| raw.try_into().ok())
+                .map(u64::from_ne_bytes)
+                .ok_or_else(|| {
+                    LoaderError::new(
+                        "event_transport_diagnostics",
+                        format!("unexpected counter size {}", value.len()),
+                    )
+                })
+        })
+        .transpose()?
+        .ok_or_else(|| {
+            LoaderError::new(
+                "event_transport_diagnostics",
+                format!("missing counter {counter_id}"),
+            )
+        })
 }
 
 fn configure_collector_pid_namespace(pid_namespace: &MapHandle) -> Result<(), LoaderError> {

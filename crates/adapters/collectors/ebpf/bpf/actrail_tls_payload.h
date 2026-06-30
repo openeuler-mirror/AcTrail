@@ -94,6 +94,14 @@ struct actrail_pending_tls_payload_op {
     __u32 capture_state;
 };
 
+struct actrail_tls_payload_op_args {
+    __u32 metadata;
+    __u64 stream_key;
+    __u64 buffer_ptr;
+    __u64 requested_size;
+    __u64 size_ptr;
+};
+
 struct actrail_go_tls_read_buffer_key {
     __u32 tgid;
     __u32 reserved;
@@ -271,13 +279,15 @@ static __always_inline __u64 positive_uprobe_isize(unsigned long value) {
 #include "tls/actrail_tls_payload_capture.h"
 #include "tls/actrail_tls_payload_diagnostics.h"
 
-static __always_inline int store_tls_payload_op(
-    __u32 metadata,
-    __u64 stream_key,
-    __u64 buffer_ptr,
-    __u64 requested_size,
-    __u64 size_ptr
+static __always_inline int store_tls_payload_op_args(
+    void *ctx,
+    const struct actrail_tls_payload_op_args *args
 ) {
+    __u32 metadata = args->metadata;
+    __u64 stream_key = args->stream_key;
+    __u64 buffer_ptr = args->buffer_ptr;
+    __u64 requested_size = args->requested_size;
+    __u64 size_ptr = args->size_ptr;
     __u64 host_pid_tgid = current_pid_tgid();
     __u64 namespace_pid_tgid = host_pid_tgid;
     __u32 tgid = 0;
@@ -294,6 +304,7 @@ static __always_inline int store_tls_payload_op(
     if (lookup_flags & ACTRAIL_TRACE_LOOKUP_FLAG_HOST_FALLBACK) {
         tls_diag_inc(ACTRAIL_TLS_DIAG_TRACE_LOOKUP_HOST_FALLBACK);
         emit_tls_payload_diagnostic_event(
+            ctx,
             ACTRAIL_TLS_DIAG_EVENT_TRACE_LOOKUP_HOST_FALLBACK,
             host_pid_tgid,
             namespace_pid_tgid,
@@ -306,6 +317,7 @@ static __always_inline int store_tls_payload_op(
     if (!trace_id) {
         tls_diag_inc(ACTRAIL_TLS_DIAG_TRACE_LOOKUP_MISS);
         emit_tls_payload_diagnostic_event(
+            ctx,
             ACTRAIL_TLS_DIAG_EVENT_TRACE_LOOKUP_MISS,
             host_pid_tgid,
             namespace_pid_tgid,
@@ -319,6 +331,7 @@ static __always_inline int store_tls_payload_op(
     if (!buffer_ptr) {
         tls_diag_inc(ACTRAIL_TLS_DIAG_EMPTY_BUFFER);
         emit_tls_payload_diagnostic_event(
+            ctx,
             ACTRAIL_TLS_DIAG_EVENT_EMPTY_BUFFER,
             host_pid_tgid,
             namespace_pid_tgid,
@@ -343,12 +356,13 @@ static __always_inline int store_tls_payload_op(
     op.capture_state = ACTRAIL_TLS_CAPTURE_STATE_NEEDS_SECCOMP;
     if (op.direction == ACTRAIL_TLS_PAYLOAD_OUTBOUND &&
         payload_tls_capture_backend() == ACTRAIL_TLS_BACKEND_BPF_COPY_SECCOMP_FALLBACK &&
-        emit_tls_direct_capture(&op, tgid, tid, op.requested_size) == 1) {
+        emit_tls_direct_capture(ctx, &op, tgid, tid, op.requested_size) == 1) {
         op.capture_state = ACTRAIL_TLS_CAPTURE_STATE_BPF_COPIED_FULL;
     }
     if (bpf_map_update_elem(&pending_tls_payload_ops, &host_pid_tgid, &op, BPF_ANY) != 0) {
         tls_diag_inc(ACTRAIL_TLS_DIAG_PENDING_UPDATE_FAIL);
         emit_tls_payload_diagnostic_event(
+            ctx,
             ACTRAIL_TLS_DIAG_EVENT_PENDING_UPDATE_FAIL,
             host_pid_tgid,
             namespace_pid_tgid,
@@ -362,6 +376,7 @@ static __always_inline int store_tls_payload_op(
     tls_diag_inc(ACTRAIL_TLS_DIAG_PENDING_UPDATE_OK);
     if (bpf_map_update_elem(&tls_pending_ns, &namespace_pid_tgid, &host_pid_tgid, BPF_ANY) != 0) {
         emit_tls_payload_diagnostic_event(
+            ctx,
             ACTRAIL_TLS_DIAG_EVENT_PENDING_NAMESPACE_UPDATE_FAIL,
             host_pid_tgid,
             namespace_pid_tgid,
@@ -376,18 +391,32 @@ static __always_inline int store_tls_payload_op(
     if (op.direction == ACTRAIL_TLS_PAYLOAD_OUTBOUND &&
         payload_tls_capture_backend() == ACTRAIL_TLS_BACKEND_BPF_COPY_SECCOMP_FALLBACK &&
         op.capture_state == ACTRAIL_TLS_CAPTURE_STATE_NEEDS_SECCOMP) {
-        emit_tls_capture_request(&op, tgid, tid, op.requested_size);
+        emit_tls_capture_request(ctx, &op, tgid, tid, op.requested_size);
     }
     if (op.direction == ACTRAIL_TLS_PAYLOAD_OUTBOUND &&
         payload_tls_capture_backend() == ACTRAIL_TLS_BACKEND_SECCOMP_USER_READ) {
-        emit_tls_capture_request(&op, tgid, tid, op.requested_size);
+        emit_tls_capture_request(ctx, &op, tgid, tid, op.requested_size);
     }
     return 1;
 }
 
+#define store_tls_payload_op(ctx_arg, metadata_arg, stream_key_arg, buffer_ptr_arg, requested_size_arg, size_ptr_arg) ({ \
+    struct actrail_tls_payload_op_args op_args = {}; \
+    op_args.metadata = (metadata_arg); \
+    op_args.stream_key = (stream_key_arg); \
+    op_args.buffer_ptr = (buffer_ptr_arg); \
+    op_args.requested_size = (requested_size_arg); \
+    op_args.size_ptr = (size_ptr_arg); \
+    store_tls_payload_op_args((ctx_arg), &op_args); \
+})
+
 #include "tls/actrail_tls_payload_completion.h"
 
-static __always_inline int emit_tls_payload_completion(__u64 completed_size, __u32 flags) {
+static __always_inline int emit_tls_payload_completion(
+    void *ctx,
+    __u64 completed_size,
+    __u32 flags
+) {
     __u64 host_pid_tgid = current_pid_tgid();
     __u64 namespace_pid_tgid = host_pid_tgid;
     __u32 tgid = host_pid_tgid >> 32;
@@ -404,6 +433,7 @@ static __always_inline int emit_tls_payload_completion(__u64 completed_size, __u
     if (!op) {
         tls_diag_inc(ACTRAIL_TLS_DIAG_COMPLETION_MISSING_PENDING);
         emit_tls_payload_diagnostic_event(
+            ctx,
             ACTRAIL_TLS_DIAG_EVENT_COMPLETION_MISSING_PENDING,
             host_pid_tgid,
             namespace_pid_tgid,
@@ -417,9 +447,9 @@ static __always_inline int emit_tls_payload_completion(__u64 completed_size, __u
         return 0;
     }
 
-    capture_tls_payload_after_completion(op, tgid, tid, completed_size, flags);
+    capture_tls_payload_after_completion(ctx, op, tgid, tid, completed_size, flags);
 
-    event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    event = actrail_event_reserve(sizeof(*event));
     if (!event) {
         tls_diag_inc(ACTRAIL_TLS_DIAG_COMPLETION_RESERVE_FAIL);
         bpf_map_delete_elem(&pending_tls_payload_ops, &host_pid_tgid);
@@ -441,7 +471,7 @@ static __always_inline int emit_tls_payload_completion(__u64 completed_size, __u
     event->library = op->library;
     event->pid_generation = op->pid_generation;
     event->buffer_ptr = op->buffer_ptr;
-    bpf_ringbuf_submit(event, 0);
+    actrail_event_submit(ctx, event);
     tls_diag_inc(ACTRAIL_TLS_DIAG_COMPLETION_SUBMIT_OK);
     bpf_map_delete_elem(&pending_tls_payload_ops, &host_pid_tgid);
     bpf_map_delete_elem(&tls_pending_ns, &namespace_pid_tgid);
@@ -452,9 +482,9 @@ static __always_inline int emit_tls_payload_completion_from_return(struct pt_reg
     int result = (int)ACTRAIL_UPROBE_RET(ctx);
 
     if (result <= 0) {
-        return emit_tls_payload_completion(0, ACTRAIL_TLS_PAYLOAD_COMPLETION_FAILED);
+        return emit_tls_payload_completion(ctx, 0, ACTRAIL_TLS_PAYLOAD_COMPLETION_FAILED);
     }
-    return emit_tls_payload_completion((__u64)result, 0);
+    return emit_tls_payload_completion(ctx, (__u64)result, 0);
 }
 
 static __always_inline int emit_tls_payload_completion_from_size_ptr(struct pt_regs *ctx) {
@@ -465,21 +495,21 @@ static __always_inline int emit_tls_payload_completion_from_size_ptr(struct pt_r
     long result = (long)ACTRAIL_UPROBE_RET(ctx);
 
     if (result != 1 || !op || !op->size_ptr) {
-        return emit_tls_payload_completion(0, ACTRAIL_TLS_PAYLOAD_COMPLETION_FAILED);
+        return emit_tls_payload_completion(ctx, 0, ACTRAIL_TLS_PAYLOAD_COMPLETION_FAILED);
     }
     if (bpf_probe_read_user(&written, sizeof(written), (void *)(unsigned long)op->size_ptr) != 0) {
-        return emit_tls_payload_completion(0, ACTRAIL_TLS_PAYLOAD_COMPLETION_FAILED);
+        return emit_tls_payload_completion(ctx, 0, ACTRAIL_TLS_PAYLOAD_COMPLETION_FAILED);
     }
-    return emit_tls_payload_completion(written, 0);
+    return emit_tls_payload_completion(ctx, written, 0);
 }
 
 static __always_inline int emit_tls_payload_completion_from_rust_result_usize(struct pt_regs *ctx) {
     __u64 result_tag = ACTRAIL_UPROBE_RET(ctx);
 
     if (result_tag != 0) {
-        return emit_tls_payload_completion(0, ACTRAIL_TLS_PAYLOAD_COMPLETION_FAILED);
+        return emit_tls_payload_completion(ctx, 0, ACTRAIL_TLS_PAYLOAD_COMPLETION_FAILED);
     }
-    return emit_tls_payload_completion(ACTRAIL_UPROBE_RET2(ctx), 0);
+    return emit_tls_payload_completion(ctx, ACTRAIL_UPROBE_RET2(ctx), 0);
 }
 
 #include "tls/actrail_tls_payload_probes.h"

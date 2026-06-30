@@ -76,7 +76,7 @@ static __always_inline int emit_pending_net_op(struct trace_event_raw_sys_exit *
     } else {
         event.remote = remote;
     }
-    emit_event(&event);
+    emit_event(ctx, &event);
     bpf_map_delete_elem(&pending_net_ops, &pid_tgid);
     return 0;
 }

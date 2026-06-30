@@ -7,7 +7,10 @@ enum actrail_proc_coord_syscall_id {
     ACTRAIL_PROC_COORD_TRACEPOINT_SIGNAL_GENERATE = 1,
 };
 
-static __always_inline int emit_pending_child_proc_op(__u32 child_kernel_pid) {
+static __always_inline int emit_pending_child_proc_op(
+    void *ctx,
+    __u32 child_kernel_pid
+) {
     __u32 child_pid = 0;
     struct actrail_pending_proc_op *op =
         bpf_map_lookup_elem(&pending_child_proc_ops, &child_kernel_pid);
@@ -28,7 +31,7 @@ static __always_inline int emit_pending_child_proc_op(__u32 child_kernel_pid) {
         return 0;
     }
 
-    event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    event = actrail_event_reserve(sizeof(*event));
     if (!event) {
         bpf_map_delete_elem(&pending_child_proc_ops, &child_kernel_pid);
         return 0;
@@ -41,7 +44,7 @@ static __always_inline int emit_pending_child_proc_op(__u32 child_kernel_pid) {
         BPF_NOEXIST
     );
     if (tracked_trace_updated != 0) {
-        bpf_ringbuf_discard(event, 0);
+        actrail_event_discard(event);
         bpf_map_delete_elem(&pending_child_proc_ops, &child_kernel_pid);
         return 0;
     }
@@ -54,7 +57,7 @@ static __always_inline int emit_pending_child_proc_op(__u32 child_kernel_pid) {
     );
     if (process_generation_updated != 0) {
         bpf_map_delete_elem(&tracked_traces, &child_pid);
-        bpf_ringbuf_discard(event, 0);
+        actrail_event_discard(event);
         bpf_map_delete_elem(&pending_child_proc_ops, &child_kernel_pid);
         return 0;
     }
@@ -69,7 +72,7 @@ static __always_inline int emit_pending_child_proc_op(__u32 child_kernel_pid) {
     event->aux = child_pid;
     event->pid_generation = op->parent_generation;
     event->aux_generation = op->child_generation;
-    bpf_ringbuf_submit(event, 0);
+    actrail_event_submit(ctx, event);
     bpf_map_delete_elem(&pending_child_proc_ops, &child_kernel_pid);
     return 0;
 }
@@ -84,7 +87,7 @@ static __always_inline int emit_exec_proc_event(
     __u32 filename_data_size;
     long filename_size;
 
-    event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    event = actrail_event_reserve(sizeof(*event));
     if (!event) {
         return -1;
     }
@@ -114,7 +117,7 @@ static __always_inline int emit_exec_proc_event(
         }
     }
 
-    bpf_ringbuf_submit(event, 0);
+    actrail_event_submit(ctx, event);
     return 0;
 }
 

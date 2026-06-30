@@ -160,6 +160,7 @@ static __always_inline int store_socket_payload_op(
 }
 
 static __always_inline int emit_socket_payload_completion(
+    void *ctx,
     struct actrail_pending_socket_payload_op *op,
     __u32 tgid,
     __u32 tid,
@@ -167,7 +168,7 @@ static __always_inline int emit_socket_payload_completion(
 ) {
     struct actrail_socket_payload_completion_event *event;
 
-    event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    event = actrail_event_reserve(sizeof(*event));
     if (!event) {
         return 0;
     }
@@ -189,7 +190,7 @@ static __always_inline int emit_socket_payload_completion(
     event->syscall = op->syscall;
     event->fd_generation = op->fd_generation;
 
-    bpf_ringbuf_submit(event, 0);
+    actrail_event_submit(ctx, event);
     return 0;
 }
 
@@ -213,7 +214,7 @@ static __always_inline int emit_socket_payload_op(struct trace_event_raw_sys_exi
     if ((op->syscall == ACTRAIL_SOCKET_SYSCALL_WRITEV
             || op->syscall == ACTRAIL_SOCKET_SYSCALL_SENDMSG)
         && payload_socket_user_read_enabled()) {
-        emit_socket_payload_completion(op, tgid, tid, original_size);
+        emit_socket_payload_completion(ctx, op, tgid, tid, original_size);
         bpf_map_delete_elem(&pending_socket_payload_ops, &pid_tgid);
         return 0;
     }
@@ -221,7 +222,7 @@ static __always_inline int emit_socket_payload_op(struct trace_event_raw_sys_exi
     if (op->direction == ACTRAIL_SOCKET_PAYLOAD_OUTBOUND
         && payload_socket_user_read_enabled()
         && original_size > limit) {
-        emit_socket_payload_completion(op, tgid, tid, original_size);
+        emit_socket_payload_completion(ctx, op, tgid, tid, original_size);
         bpf_map_delete_elem(&pending_socket_payload_ops, &pid_tgid);
         return 0;
     }
@@ -241,7 +242,7 @@ static __always_inline int emit_socket_payload_op(struct trace_event_raw_sys_exi
         return 0;
     }
 
-    event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    event = actrail_event_reserve(sizeof(*event));
     if (!event) {
         bpf_map_delete_elem(&pending_socket_payload_ops, &pid_tgid);
         return 0;
@@ -263,12 +264,12 @@ static __always_inline int emit_socket_payload_op(struct trace_event_raw_sys_exi
     event->fd_generation = op->fd_generation;
     event->pid_generation = ensure_process_generation(tgid);
     if (bpf_probe_read_user(event->bytes, bounded_size, (void *)(unsigned long)op->buffer_ptr) != 0) {
-        bpf_ringbuf_discard(event, 0);
+        actrail_event_discard(event);
         bpf_map_delete_elem(&pending_socket_payload_ops, &pid_tgid);
         return 0;
     }
 
-    bpf_ringbuf_submit(event, 0);
+    actrail_event_submit(ctx, event);
     bpf_map_delete_elem(&pending_socket_payload_ops, &pid_tgid);
     return 0;
 }

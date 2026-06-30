@@ -2,11 +2,16 @@
 #define ACTRAIL_TLS_PAYLOAD_CAPTURE_H
 
 static __always_inline int emit_tls_direct_capture(
+    void *ctx,
     const struct actrail_pending_tls_payload_op *op,
     __u32 tgid,
     __u32 tid,
     __u64 requested_size
 ) {
+#ifdef ACTRAIL_EVENT_TRANSPORT_PERF
+    tls_diag_inc(ACTRAIL_TLS_DIAG_DIRECT_COPY_TOO_LARGE);
+    return 0;
+#else
     __u64 bounded_size;
     __u32 capture_size;
     __u32 copy_limit = payload_tls_direct_copy_limit();
@@ -28,7 +33,7 @@ static __always_inline int emit_tls_direct_capture(
         return 0;
     }
 
-    event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    event = actrail_event_reserve(sizeof(*event));
     if (!event) {
         tls_diag_inc(ACTRAIL_TLS_DIAG_DIRECT_RESERVE_FAIL);
         return 0;
@@ -53,23 +58,25 @@ static __always_inline int emit_tls_direct_capture(
             bounded_size,
             (void *)(unsigned long)op->buffer_ptr
         ) != 0) {
-        bpf_ringbuf_discard(event, 0);
+        actrail_event_discard(event);
         tls_diag_inc(ACTRAIL_TLS_DIAG_DIRECT_READ_FAIL);
         return 0;
     }
-    bpf_ringbuf_submit(event, 0);
+    actrail_event_submit(ctx, event);
     tls_diag_inc(ACTRAIL_TLS_DIAG_DIRECT_SUBMIT_OK);
     return 1;
+#endif
 }
 
 static __always_inline int emit_tls_capture_request(
+    void *ctx,
     const struct actrail_pending_tls_payload_op *op,
     __u32 tgid,
     __u32 tid,
     __u64 requested_size
 ) {
     struct actrail_tls_capture_request_event *event =
-        bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+        actrail_event_reserve(sizeof(*event));
     if (!event) {
         tls_diag_inc(ACTRAIL_TLS_DIAG_CAPTURE_REQUEST_RESERVE_FAIL);
         return 0;
@@ -88,10 +95,10 @@ static __always_inline int emit_tls_capture_request(
     event->symbol = op->symbol;
     event->library = op->library;
     if (bpf_send_signal(ACTRAIL_TLS_CAPTURE_SIGSTOP) == 0) {
-        bpf_ringbuf_submit(event, 0);
+        actrail_event_submit(ctx, event);
         tls_diag_inc(ACTRAIL_TLS_DIAG_CAPTURE_REQUEST_SUBMIT_OK);
     } else {
-        bpf_ringbuf_discard(event, 0);
+        actrail_event_discard(event);
         tls_diag_inc(ACTRAIL_TLS_DIAG_CAPTURE_REQUEST_SIGNAL_FAIL);
     }
     return 0;
