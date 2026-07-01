@@ -1,5 +1,7 @@
 //! Top-level entry boundary for the control application.
 
+use std::path::Path;
+
 use config_core::daemon::{OperatorConfig, OperatorConfigInitStatus};
 use uds_control_client::{UdsControlClient, UdsSocketTransport};
 
@@ -16,8 +18,12 @@ use crate::platform_probe::{
 pub fn run_from_env() -> Result<i32, String> {
     let invocation = parse_args(std::env::args().skip(1))?;
     match invocation.command {
-        CtlCommand::Init { config_path, force } => {
-            match OperatorConfig::initialize(&config_path, force)? {
+        CtlCommand::Init {
+            config_path,
+            force,
+            patch_path,
+        } => {
+            match initialize_operator_config_file(&config_path, force, patch_path.as_deref())? {
                 OperatorConfigInitStatus::Created => {
                     println!("initialized config {}", config_path.display());
                 }
@@ -137,6 +143,36 @@ pub fn run_from_env() -> Result<i32, String> {
             Ok(i32::default())
         }
     }
+}
+
+fn initialize_operator_config_file(
+    path: &Path,
+    force: bool,
+    patch_path: Option<&Path>,
+) -> Result<OperatorConfigInitStatus, String> {
+    let existed = path.exists();
+    if existed && !force {
+        if let Some(patch_path) = patch_path {
+            return Err(format!(
+                "config {} already exists; pass --force to rewrite it with patch {}",
+                path.display(),
+                patch_path.display()
+            ));
+        }
+        OperatorConfig::load(path)
+            .map_err(|error| format!("validate config {}: {error}", path.display()))?;
+        return Ok(OperatorConfigInitStatus::ExistingValid);
+    }
+    let mut config = OperatorConfig::init()?;
+    if let Some(patch_path) = patch_path {
+        config = config.patch_file(patch_path)?;
+    }
+    config.dump_to_path(path, force)?;
+    Ok(if existed {
+        OperatorConfigInitStatus::Overwritten
+    } else {
+        OperatorConfigInitStatus::Created
+    })
 }
 
 fn required_socket_path(

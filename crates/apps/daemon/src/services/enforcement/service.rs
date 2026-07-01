@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::os::fd::RawFd;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::{Arc, Mutex};
 
 use collector_capability::CollectorDescriptor;
 use config_core::daemon::{EnforcementConfig, EnforcementDecision};
@@ -10,6 +11,11 @@ use control_contract::reply::ControlError;
 use ebpf_collector::procfs::ProcfsIdentityReader;
 use model_core::capability::{Capability, CapabilityDescriptor, CapabilityField, GuaranteeClass};
 use model_core::ids::CollectorName;
+use plugin_system::{
+    FilePolicyApplyRequest, FilePolicyApplyResult, FilePolicyHost, FilePolicyListFilter,
+    FilePolicyListResult, FilePolicyMatchDryRunRequest, FilePolicyMatchDryRunResult,
+    FilePolicyRulesApplyGrant, PluginRuntimeError,
+};
 use trace_runtime::registry::TraceRuntime;
 
 #[path = "service/audit.rs"]
@@ -32,7 +38,13 @@ use crate::services::control_runtime::ControlPluginRuntime;
 pub(in crate::services) const COLLECTOR_NAME: &str = "fanotify-enforcement";
 
 pub(in crate::services) struct FanotifyEnforcementService {
-    backend: Option<FanotifyBackend>,
+    backend: Option<Arc<Mutex<FanotifyBackend>>>,
+}
+
+#[derive(Clone)]
+pub(in crate::services) struct FanotifyFilePolicyHost {
+    backend: Option<Arc<Mutex<FanotifyBackend>>>,
+    control_plugins: ControlPluginRuntime,
 }
 
 impl FanotifyEnforcementService {
@@ -46,7 +58,7 @@ impl FanotifyEnforcementService {
         }
         FanotifyBackend::new(config)
             .map(|backend| Self {
-                backend: Some(backend),
+                backend: Some(Arc::new(Mutex::new(backend))),
             })
             .map_err(|message| ControlError::new("fanotify_enforcement", message))
     }
@@ -58,8 +70,33 @@ impl FanotifyEnforcementService {
     pub(in crate::services) fn event_poll_fds(&self) -> Vec<RawFd> {
         self.backend
             .as_ref()
-            .map(FanotifyBackend::event_poll_fds)
+            .and_then(|backend| backend.lock().ok().map(|backend| backend.event_poll_fds()))
             .unwrap_or_default()
+    }
+
+    pub(in crate::services) fn file_policy_host(
+        &self,
+        control_plugins: ControlPluginRuntime,
+    ) -> FanotifyFilePolicyHost {
+        FanotifyFilePolicyHost {
+            backend: self.backend.clone(),
+            control_plugins,
+        }
+    }
+
+    pub(in crate::services) fn remove_plugin_policy_owner(
+        &self,
+        instance_id: &str,
+    ) -> Result<(), ControlError> {
+        let Some(backend) = &self.backend else {
+            return Ok(());
+        };
+        let mut backend = backend.lock().map_err(|error| {
+            ControlError::new("fanotify_enforcement", format!("lock backend: {error}"))
+        })?;
+        backend
+            .remove_policy_owner(instance_id)
+            .map_err(|message| ControlError::new("fanotify_enforcement", message))
     }
 
     pub(in crate::services) fn drain_due(
@@ -70,10 +107,95 @@ impl FanotifyEnforcementService {
     ) -> Result<Vec<EnforcementEventDraft>, ControlError> {
         match self.backend.as_mut() {
             Some(backend) => backend
+                .lock()
+                .map_err(|error| {
+                    ControlError::new("fanotify_enforcement", format!("lock backend: {error}"))
+                })?
                 .drain_due(trace_runtime, identity_reader, control_plugins)
                 .map_err(|message| ControlError::new("fanotify_enforcement", message)),
             None => Ok(Vec::new()),
         }
+    }
+}
+
+impl FilePolicyHost for FanotifyFilePolicyHost {
+    fn rules_version_get(&self) -> Result<u64, PluginRuntimeError> {
+        let backend = self.lock_backend()?;
+        Ok(backend.rules.revision())
+    }
+
+    fn rules_list(
+        &self,
+        filter: FilePolicyListFilter,
+        cursor: Option<String>,
+        limit: u32,
+    ) -> Result<FilePolicyListResult, PluginRuntimeError> {
+        let backend = self.lock_backend()?;
+        Ok(backend.rules.list(filter, cursor.as_deref(), limit))
+    }
+
+    fn rules_match_dry_run(
+        &self,
+        request: FilePolicyMatchDryRunRequest,
+    ) -> Result<FilePolicyMatchDryRunResult, PluginRuntimeError> {
+        let backend = self.lock_backend()?;
+        backend
+            .rules
+            .match_dry_run(
+                request,
+                default_file_policy_decision(backend.default_decision),
+            )
+            .map_err(file_policy_error)
+    }
+
+    fn rules_validate(
+        &self,
+        owner_instance_id: &str,
+        grants: &[FilePolicyRulesApplyGrant],
+        request: &FilePolicyApplyRequest,
+    ) -> Result<FilePolicyApplyResult, PluginRuntimeError> {
+        let backend = self.lock_backend()?;
+        Ok(backend
+            .rules
+            .validate_apply(owner_instance_id, grants, request, |target| {
+                self.control_plugins.is_instance_index_active(target)
+            }))
+    }
+
+    fn rules_apply(
+        &self,
+        owner_instance_id: &str,
+        grants: &[FilePolicyRulesApplyGrant],
+        request: FilePolicyApplyRequest,
+    ) -> Result<FilePolicyApplyResult, PluginRuntimeError> {
+        let mut backend = self.lock_backend()?;
+        let (result, mark_directories) = backend
+            .rules
+            .apply(owner_instance_id, grants, request, |target| {
+                self.control_plugins.is_instance_index_active(target)
+            })
+            .map_err(file_policy_error)?;
+        backend
+            .mark_directories(mark_directories)
+            .map_err(file_policy_error)?;
+        backend.reusable_decisions.clear();
+        Ok(result)
+    }
+}
+
+impl FanotifyFilePolicyHost {
+    fn lock_backend(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, FanotifyBackend>, PluginRuntimeError> {
+        let Some(backend) = &self.backend else {
+            return Err(PluginRuntimeError::new(
+                "file_policy",
+                "fanotify enforcement is disabled",
+            ));
+        };
+        backend.lock().map_err(|error| {
+            PluginRuntimeError::new("file_policy", format!("lock backend: {error}"))
+        })
     }
 }
 
@@ -92,14 +214,36 @@ struct FanotifyBackend {
 
 impl FanotifyBackend {
     fn new(config: EnforcementConfig) -> Result<Self, String> {
-        let rules = EnforcementRules::load(&config.rules_path)?;
+        let mut rules = EnforcementRules::load(&config.rules_path)?;
         if rules.is_empty() {
             return Err(format!(
                 "enforcement rules {} must contain at least one rule",
                 config.rules_path.display()
             ));
         }
+        rules.install_builtin_allow_rules(
+            config
+                .builtin_rules
+                .iter()
+                .map(|rule| (rule.rule_id.clone(), rule.path.clone())),
+        )?;
         let handle = FanotifyHandle::new(config.event_buffer_bytes)?;
+        for mark in rules.builtin_ignore_marks() {
+            if !mark.path.exists() {
+                tracing::debug!(
+                    path = %mark.path.display(),
+                    "builtin fanotify ignore path does not exist yet"
+                );
+                continue;
+            }
+            if let Err(error) = handle.ignore_path(&mark.path, mark.recursive) {
+                tracing::warn!(
+                    path = %mark.path.display(),
+                    error = %error,
+                    "builtin fanotify ignore mark failed; user-space builtin allow remains active"
+                );
+            }
+        }
         let wake_fd = WakeFd::new()?;
         let (completion_tx, completion_rx) = mpsc::channel();
         for directory in rules.mark_directories() {
@@ -177,14 +321,6 @@ impl FanotifyBackend {
                     if let Some((key, decision)) = completion.cache_update {
                         self.reusable_decisions.insert(key, decision);
                     }
-                    if !completion.file_policy_updates.is_empty() {
-                        for update in completion.file_policy_updates {
-                            if let Some(directory) = self.rules.apply_file_policy_update(update)? {
-                                self.handle.mark_directory(&directory)?;
-                            }
-                        }
-                        self.reusable_decisions.clear();
-                    }
                     if let Some(draft) = completion.draft {
                         drafts.push(draft);
                     }
@@ -201,6 +337,33 @@ impl FanotifyBackend {
             }
         }
     }
+
+    fn mark_directories(&self, directories: Vec<std::path::PathBuf>) -> Result<(), String> {
+        for directory in directories {
+            self.handle.mark_directory(&directory)?;
+        }
+        Ok(())
+    }
+
+    fn remove_policy_owner(&mut self, instance_id: &str) -> Result<(), String> {
+        let directories = self.rules.remove_owner(instance_id)?;
+        self.mark_directories(directories)?;
+        self.reusable_decisions.clear();
+        Ok(())
+    }
+}
+
+fn default_file_policy_decision(
+    decision: EnforcementDecision,
+) -> plugin_system::FilePolicyDecision {
+    match decision {
+        EnforcementDecision::Allow => plugin_system::FilePolicyDecision::Allow,
+        EnforcementDecision::Deny => plugin_system::FilePolicyDecision::Deny,
+    }
+}
+
+fn file_policy_error(message: String) -> PluginRuntimeError {
+    PluginRuntimeError::new("file_policy", message)
 }
 
 pub(in crate::services) fn descriptor() -> CollectorDescriptor {

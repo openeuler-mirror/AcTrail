@@ -442,6 +442,7 @@ fn enforcement_disabled() -> EnforcementConfig {
         backend: EnforcementBackend::Fanotify,
         scope: EnforcementScope::Trace,
         rules_path: std::env::temp_dir().join("actrail-enforcement-disabled.conf"),
+        builtin_rules: Vec::new(),
         default_decision: EnforcementDecision::Allow,
         mark_strategy: EnforcementMarkStrategy::ParentDirectories,
         audit_enabled: true,

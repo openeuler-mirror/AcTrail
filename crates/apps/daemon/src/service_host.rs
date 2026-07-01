@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime};
 
 use control_contract::command::ControlCommand;
 use control_contract::reply::{
-    ControlError, ControlReply, DoctorReply, TraceListItem, TrackAddReply,
+    ControlError, ControlReply, DoctorReply, PluginCommandReply, TraceListItem, TrackAddReply,
 };
 use control_contract::selector::TraceSelector;
 use model_core::trace::TraceLifecycleState;
@@ -43,6 +43,10 @@ pub trait AttachService {
         command: control_contract::command::PluginLoadCommand,
     ) -> Result<PluginInstanceStatus, ControlError>;
     fn unload_plugin(&mut self, instance_id: &str) -> Result<PluginInstanceStatus, ControlError>;
+    fn handle_plugin_command(
+        &mut self,
+        command: control_contract::command::PluginCommandCommand,
+    ) -> Result<PluginCommandReply, ControlError>;
 }
 
 pub trait AttachDebugService {
@@ -217,6 +221,11 @@ where
                 .attach_service
                 .unload_plugin(&command.instance_id)
                 .map(ControlReply::PluginStatus),
+            ControlCommand::PluginCommand(command) => self
+                .wiring
+                .attach_service
+                .handle_plugin_command(command)
+                .map(ControlReply::PluginCommand),
         }
     }
 }
@@ -311,6 +320,13 @@ mod tests {
             &mut self,
             _instance_id: &str,
         ) -> Result<PluginInstanceStatus, ControlError> {
+            Err(ControlError::new("unused", "unused"))
+        }
+
+        fn handle_plugin_command(
+            &mut self,
+            _command: control_contract::command::PluginCommandCommand,
+        ) -> Result<PluginCommandReply, ControlError> {
             Err(ControlError::new("unused", "unused"))
         }
     }

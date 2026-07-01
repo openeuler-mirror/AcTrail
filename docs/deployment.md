@@ -41,7 +41,7 @@ Initialize the default full-collection operator config:
 sudo ./target/release/actraild init
 ```
 
-The default path is `/etc/actrail/actraild.conf`. `actrailctl init` performs the same initialization. If the file already exists, `init` loads and validates it, reports success or the validation error, and exits without rewriting it. Pass `--force` or `-f` to overwrite the target path with the current default template. For a local deployment config, pass `--output local/operator.conf` or `--config local/operator.conf`.
+The default path is `/etc/actrail/actraild.conf`. `actrailctl init` performs the same initialization. If the file already exists, `init` loads and validates it, reports success or the validation error, and exits without rewriting it. Pass `--force` or `-f` to overwrite the target path. For a local deployment config, pass `--output local/operator.conf` or `--config local/operator.conf`. To initialize from the default template plus a TOML fragment, pass `init --patch <patch.toml>`.
 
 The generated default keeps daemon runtime state and durable observation data out of `/tmp`:
 

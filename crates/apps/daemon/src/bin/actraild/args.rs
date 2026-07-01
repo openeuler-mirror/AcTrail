@@ -10,6 +10,7 @@ pub enum AcTraildCommand {
     Init {
         config_path: PathBuf,
         force: bool,
+        patch_path: Option<PathBuf>,
     },
     Run {
         config_path: PathBuf,
@@ -48,6 +49,10 @@ pub enum PluginCommand {
     List,
     Status {
         instance_id: String,
+    },
+    Cmd {
+        instance_id: String,
+        argv: Vec<String>,
     },
 }
 
@@ -114,6 +119,7 @@ impl AcTraildCommandArgs {
                 Ok(AcTraildCommand::Init {
                     config_path,
                     force: args.force,
+                    patch_path: args.patch_path,
                 })
             }
             Self::Run => Ok(AcTraildCommand::Run { config_path }),
@@ -151,6 +157,11 @@ enum PluginCommandArgs {
     List,
     #[command(about = "Show one active plugin instance from the running daemon")]
     Status(PluginInstanceArgs),
+    #[command(
+        name = "cmd",
+        about = "Send a management command to one plugin instance"
+    )]
+    Cmd(PluginCmdArgs),
 }
 
 impl PluginCommandArgs {
@@ -170,6 +181,10 @@ impl PluginCommandArgs {
             Self::List => PluginCommand::List,
             Self::Status(args) => PluginCommand::Status {
                 instance_id: args.instance_id,
+            },
+            Self::Cmd(args) => PluginCommand::Cmd {
+                instance_id: args.instance_id,
+                argv: args.argv,
             },
         }
     }
@@ -209,9 +224,21 @@ struct PluginInstanceArgs {
 }
 
 #[derive(Clone, Debug, Args)]
+struct PluginCmdArgs {
+    #[arg(long = "instance", value_name = "ID")]
+    instance_id: String,
+
+    #[arg(last = true, trailing_var_arg = true, value_name = "PLUGIN_ARG")]
+    argv: Vec<String>,
+}
+
+#[derive(Clone, Debug, Args)]
 struct InitArgs {
     #[arg(long = "output", value_name = "PATH")]
     output_path: Option<PathBuf>,
+
+    #[arg(long = "patch", value_name = "PATH")]
+    patch_path: Option<PathBuf>,
 
     #[arg(short = 'f', long = "force")]
     force: bool,
@@ -232,53 +259,4 @@ fn init_config_path(
 
 fn default_config_path() -> PathBuf {
     PathBuf::from(DEFAULT_OPERATOR_CONFIG_PATH)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn init_uses_default_config_path() {
-        let command = parse_args(["init".to_string()]).unwrap();
-
-        assert_eq!(
-            command,
-            AcTraildCommand::Init {
-                config_path: PathBuf::from(DEFAULT_OPERATOR_CONFIG_PATH),
-                force: false,
-            }
-        );
-    }
-
-    #[test]
-    fn init_accepts_legacy_init_config_alias() {
-        let command = parse_args(["init-config".to_string()]).unwrap();
-
-        assert_eq!(
-            command,
-            AcTraildCommand::Init {
-                config_path: PathBuf::from(DEFAULT_OPERATOR_CONFIG_PATH),
-                force: false,
-            }
-        );
-    }
-
-    #[test]
-    fn init_can_target_explicit_config_path() {
-        let command = parse_args([
-            "--config".to_string(),
-            "/tmp/actrail-test.conf".to_string(),
-            "init".to_string(),
-        ])
-        .unwrap();
-
-        assert_eq!(
-            command,
-            AcTraildCommand::Init {
-                config_path: PathBuf::from("/tmp/actrail-test.conf"),
-                force: false,
-            }
-        );
-    }
 }

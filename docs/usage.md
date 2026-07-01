@@ -65,7 +65,7 @@ Initialize the default full-collection operator config:
 sudo ./target/release/actraild init
 ```
 
-The default path is `/etc/actrail/actraild.conf`. `actrailctl init` performs the same initialization. If the file already exists, `init` loads and validates it, reports success or the validation error, and exits without rewriting it. Pass `--force` or `-f` to overwrite the target path with the current default template. For a local test config, pass `--output local/operator.conf` or `--config local/operator.conf`.
+The default path is `/etc/actrail/actraild.conf`. `actrailctl init` performs the same initialization. If the file already exists, `init` loads and validates it, reports success or the validation error, and exits without rewriting it. Pass `--force` or `-f` to overwrite the target path. For a local test config, pass `--output local/operator.conf` or `--config local/operator.conf`. To initialize from the default template plus a TOML fragment, pass `init --patch <patch.toml>`.
 
 Every runtime constant is explicit in the config. The generated default enables broad collection, but leaves blocking/enforcement disabled. Its socket plaintext fallback listens to `write`, `writev`, `sendto`, and `sendmsg`, so plain HTTP request bodies sent through vectored socket writes can produce `llm.request` evidence.
 

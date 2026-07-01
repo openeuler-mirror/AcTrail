@@ -6,12 +6,12 @@ use std::collections::BTreeSet;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use control_contract::command::{
-    ControlCommand, DoctorCommand, ListTracesCommand, PluginListCommand, PluginLoadCommand,
-    PluginStatusCommand, PluginUnloadCommand, ProcessRef, RegisterSeccompListenerCommand,
-    TrackAddCommand, TrackRemoveCommand,
+    ControlCommand, DoctorCommand, ListTracesCommand, PluginCommandCommand, PluginListCommand,
+    PluginLoadCommand, PluginStatusCommand, PluginUnloadCommand, ProcessRef,
+    RegisterSeccompListenerCommand, TrackAddCommand, TrackRemoveCommand,
 };
 use control_contract::reply::{
-    ControlError, ControlReply, DoctorReply, TraceListItem, TrackAddReply,
+    ControlError, ControlReply, DoctorReply, PluginCommandReply, TraceListItem, TrackAddReply,
 };
 use control_contract::selector::TraceSelector;
 use model_core::ids::{ProfileName, RequestId, TraceId, TraceName};
@@ -109,6 +109,13 @@ pub fn encode_command(command: &ControlCommand) -> Vec<u8> {
             fields.push("plugin_unload".to_string());
             fields.push(command.request_id.get().to_string());
             fields.push(command.instance_id.clone());
+        }
+        ControlCommand::PluginCommand(command) => {
+            fields.push("plugin_cmd_v1".to_string());
+            fields.push(command.request_id.get().to_string());
+            fields.push(command.instance_id.clone());
+            fields.push(command.argv.len().to_string());
+            fields.extend(command.argv.iter().cloned());
         }
     }
     encode_fields(&fields)
@@ -275,6 +282,18 @@ pub fn decode_command(bytes: &[u8]) -> Result<ControlCommand, ControlCodecError>
             request_id: RequestId::new(parse_u64(field(&fields, 1)?, "request_id")?),
             instance_id: field(&fields, 2)?.clone(),
         })),
+        "plugin_cmd_v1" => {
+            let arg_count = parse_usize(field(&fields, 3)?, "plugin_command_arg_count")?;
+            let mut argv = Vec::new();
+            for offset in 0..arg_count {
+                argv.push(field(&fields, 4 + offset)?.clone());
+            }
+            Ok(ControlCommand::PluginCommand(PluginCommandCommand {
+                request_id: RequestId::new(parse_u64(field(&fields, 1)?, "request_id")?),
+                instance_id: field(&fields, 2)?.clone(),
+                argv,
+            }))
+        }
         _ => Err(ControlCodecError::new("decode", "unknown command opcode")),
     }
 }
@@ -320,6 +339,13 @@ pub fn encode_reply(reply: &Result<ControlReply, ControlError>) -> Vec<u8> {
         Ok(ControlReply::PluginStatus(status)) => {
             fields.push("reply_plugin_status_v2".to_string());
             encode_plugin_status_v2(&mut fields, status);
+        }
+        Ok(ControlReply::PluginCommand(reply)) => {
+            fields.push("reply_plugin_command_v1".to_string());
+            fields.push(reply.instance_id.clone());
+            fields.push(reply.exit_code.to_string());
+            fields.push(reply.stdout.clone());
+            fields.push(reply.stderr.clone());
         }
         Err(error) => {
             fields.push("error".to_string());
@@ -407,6 +433,12 @@ pub fn decode_reply(bytes: &[u8]) -> Result<Result<ControlReply, ControlError>, 
             let (status, _) = decode_plugin_status_v2(&fields, 1)?;
             Ok(Ok(ControlReply::PluginStatus(status)))
         }
+        "reply_plugin_command_v1" => Ok(Ok(ControlReply::PluginCommand(PluginCommandReply {
+            instance_id: field(&fields, 1)?.clone(),
+            exit_code: parse_i32(field(&fields, 2)?, "exit_code")?,
+            stdout: field(&fields, 3)?.clone(),
+            stderr: field(&fields, 4)?.clone(),
+        }))),
         "error" => Ok(Err(ControlError::new(
             field(&fields, 1)?,
             field(&fields, 2)?,

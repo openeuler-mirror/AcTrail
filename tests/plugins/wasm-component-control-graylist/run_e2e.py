@@ -151,7 +151,7 @@ def main() -> int:
                     "--instance",
                     "wasm.component-control-hostgrant-rejected",
                 ],
-                "only query-context, file-policy-read, and file-policy-write grants are implemented for WIT component control plugins",
+                "only query-context and file-access/file-policy rule grants are implemented for WIT component control plugins",
             )
             GRAYLIST.run_checked(
                 [

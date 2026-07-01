@@ -1,0 +1,68 @@
+[control]
+socket_path = "/tmp/actrail-file-policy-demo/actrail.sock"
+pid_file = "/tmp/actrail-file-policy-demo/actraild.pid"
+log_path = "/tmp/actrail-file-policy-demo/actraild.log"
+
+[storage.sqlite]
+path = "/tmp/actrail-file-policy-demo/actrail.sqlite"
+
+[web]
+listen_addr = "127.0.0.1:18081"
+
+[export.snapshot]
+directory = "/tmp/actrail-file-policy-demo/export"
+payload_bytes_enabled = false
+payload_text_enabled = false
+
+[export.runtime]
+enabled = false
+
+[capture]
+profile_name = "file-policy-dynamic-demo"
+capabilities = ["enforcement-file-permission-fanotify"]
+
+[ebpf]
+enabled = false
+
+[payload.tls]
+enabled = false
+sync_event_socket_path = "/tmp/actrail-file-policy-demo/tls-sync.sock"
+
+[payload.stdio]
+enabled = false
+
+[payload.socket]
+enabled = false
+
+[seccomp_notify]
+enabled = false
+
+[process_seccomp]
+enabled = false
+
+[agent_invocation]
+enabled = false
+
+[application]
+enabled = false
+http1_enabled = false
+http2_enabled = false
+
+[application.http]
+sse_enabled = false
+sse_data_policy = "disabled"
+
+[resource_metrics]
+enabled = false
+
+[provider]
+rules_enabled = false
+
+[enforcement]
+enabled = true
+backend = "fanotify"
+scope = "trace"
+rules_path = "/tmp/actrail-file-policy-demo/rules.conf"
+default_decision = "allow"
+mark_strategy = "parent-directories"
+audit_enabled = true

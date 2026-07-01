@@ -5,7 +5,7 @@ role = "control-decider"
 runtime = "wasm"
 
 [host]
-capabilities = ["context-query", "file-policy-read", "file-policy-write"]
+capabilities = ["context-query", "file-access.current-match-get", "file-policy.rules.read", "file-policy.rules.match-dry-run", "file-policy.rules.apply"]
 
 [runtime.wasm]
 artifact_path = "component-hostcalls.wasm"

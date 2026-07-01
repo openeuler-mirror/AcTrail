@@ -1,14 +1,14 @@
 [general]
-id = "wasm.zero-file-policy-read"
+id = "wasm.zero-file-access.current-match-get"
 api_version = "actrail.plugin.v1"
 role = "control-decider"
 runtime = "wasm"
 
 [host]
-capabilities = ["file-policy-read"]
+capabilities = ["file-access.current-match-get"]
 
 [runtime.wasm]
-artifact_path = "../control-file-policy-read/policy-read.wat"
+artifact_path = "../control-file-access.current-match-get/policy-read.wat"
 
 [hostcall_limits.file_policy]
 read_max_bytes = 0

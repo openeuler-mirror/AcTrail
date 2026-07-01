@@ -63,6 +63,33 @@ impl FanotifyHandle {
         Ok(())
     }
 
+    pub(super) fn ignore_path(&self, path: &Path, recursive: bool) -> Result<(), String> {
+        let display_path = path.display().to_string();
+        let path = CString::new(path.as_os_str().as_encoded_bytes())
+            .map_err(|_| format!("fanotify ignore path contains interior NUL: {display_path}"))?;
+        let mask = if recursive {
+            libc::FAN_OPEN_PERM | libc::FAN_EVENT_ON_CHILD
+        } else {
+            libc::FAN_OPEN_PERM
+        };
+        let result = unsafe {
+            libc::fanotify_mark(
+                self.fd,
+                libc::FAN_MARK_ADD | libc::FAN_MARK_IGNORE_SURV,
+                mask,
+                libc::AT_FDCWD,
+                path.as_ptr(),
+            )
+        };
+        if result < 0 {
+            return Err(format!(
+                "fanotify ignore mark {display_path}: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) fn drain<F>(&self, mut handle: F) -> Result<(), String>
     where
         F: FnMut(PermissionMetadata) -> Result<(), String>,

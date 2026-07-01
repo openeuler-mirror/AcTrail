@@ -17,6 +17,7 @@
 | `wit-component/observation-payload-read` | `wasm` WIT component | `observation-consumer` | Rust 编写的 component 观测插件，读取 payload 数据。 |
 | `wit-component/control-graylist` | `wasm` WIT component | `control-decider` | Rust 编写的 component 控制插件，处理 fanotify 灰名单决策。 |
 | `wit-component/control-hostcalls` | `wasm` WIT component | `control-decider` | Rust 编写的 component 控制插件，使用 context 和 file-policy hostcall。 |
+| `wit-component/file-policy-dynamic` | `wasm` WIT component | `control-decider` | Rust 编写的动态文件策略插件，通过 `plugin cmd` 管理 allow/deny/gray 规则。 |
 
 ## 插件文件模型
 
@@ -84,7 +85,7 @@ target/release/actraild --config operator.conf plugin load \
 --grant env-read:ACTRAIL_PLUGIN_SECRET
 --grant payload-read:source=syscall
 --grant context-query
---grant file-policy-read
+--grant file-access.current-match-get
 ```
 
 ABI 文档入口见 [插件 ABI 文档索引](../../docs/plugins/abi/README.zh.md)。完整操作说明见 [插件操作手册](../../docs/plugins/operator-manual.zh.md)。

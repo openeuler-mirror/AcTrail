@@ -199,6 +199,7 @@ pub(super) struct EnforcementDocument {
     pub backend: String,
     pub scope: String,
     pub rules_path: String,
+    pub builtin_rules: Vec<EnforcementBuiltinRuleDocument>,
     pub default_decision: String,
     pub mark_strategy: String,
     pub audit_enabled: bool,
@@ -212,6 +213,7 @@ impl Default for EnforcementDocument {
             backend: "fanotify".to_string(),
             scope: "trace".to_string(),
             rules_path: "/etc/actrail/enforcement-rules.conf".to_string(),
+            builtin_rules: Vec::new(),
             default_decision: "allow".to_string(),
             mark_strategy: "parent-directories".to_string(),
             audit_enabled: true,
@@ -227,6 +229,11 @@ impl EnforcementDocument {
             backend: parse_value("enforcement.backend", &self.backend)?,
             scope: parse_value("enforcement.scope", &self.scope)?,
             rules_path: PathBuf::from(&self.rules_path),
+            builtin_rules: self
+                .builtin_rules
+                .iter()
+                .map(EnforcementBuiltinRuleDocument::to_config)
+                .collect::<Result<Vec<_>, _>>()?,
             default_decision: parse_value("enforcement.default_decision", &self.default_decision)?,
             mark_strategy: parse_value("enforcement.mark_strategy", &self.mark_strategy)?,
             audit_enabled: self.audit_enabled,
@@ -234,6 +241,44 @@ impl EnforcementDocument {
                 "enforcement.event_buffer_bytes",
                 self.event_buffer_bytes,
             )?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct EnforcementBuiltinRuleDocument {
+    pub rule_id: String,
+    pub path: String,
+}
+
+impl Default for EnforcementBuiltinRuleDocument {
+    fn default() -> Self {
+        Self {
+            rule_id: String::new(),
+            path: String::new(),
+        }
+    }
+}
+
+impl EnforcementBuiltinRuleDocument {
+    pub(super) fn from_config(config: &EnforcementBuiltinRuleConfig) -> Self {
+        Self {
+            rule_id: config.rule_id.clone(),
+            path: config.path.clone(),
+        }
+    }
+
+    fn to_config(&self) -> Result<EnforcementBuiltinRuleConfig, String> {
+        if self.rule_id.trim().is_empty() {
+            return Err("enforcement.builtin_rules.rule_id must not be empty".to_string());
+        }
+        if self.path.trim().is_empty() {
+            return Err("enforcement.builtin_rules.path must not be empty".to_string());
+        }
+        Ok(EnforcementBuiltinRuleConfig {
+            rule_id: self.rule_id.clone(),
+            path: self.path.clone(),
         })
     }
 }

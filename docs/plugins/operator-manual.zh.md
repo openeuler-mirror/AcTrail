@@ -168,7 +168,7 @@ required = false
 | 字段 | 类型 | 是否必填 | 取值/范围 | 默认值 | 说明 |
 | --- | --- | --- | --- | --- | --- |
 | `runtime.wasm.artifact_path` | string | `general.runtime = "wasm"` 时必填 | 非空路径；相对路径按 manifest 所在目录解析 | 无 | WASM artifact 路径。 |
-| `abi` | string enum | 否 | `legacy-module`、`wit-component` | `legacy-module` | WASM ABI。WIT component 插件必须写 `wit-component`。 |
+| `abi` | string enum | 否 | `legacy-module`、`wit-component` | `legacy-module` | WASM ABI。WIT component 插件必须写 `wit-component`。普通控制插件使用 `control-plugin` world；需要 `plugin cmd` 的控制插件使用 `managed-control-plugin` world。 |
 
 `[runtime.wasm.resources]` 字段：
 
@@ -207,10 +207,14 @@ required = false
 | `hostcall_limits.context.ref_max_bytes` | u32 | 否 | 正整数 | `query-context` context ref 最大字节数。 |
 | `hostcall_limits.context.query_max_bytes` | u32 | 否 | 正整数 | `query-context` query 最大字节数。 |
 | `hostcall_limits.context.read_max_bytes` | u32 | 否 | 正整数 | 单次 `query-context` 返回最大字节数。 |
-| `hostcall_limits.file_policy.context_ref_max_bytes` | u32 | 否 | 正整数 | `file-policy-read/write` context ref 最大字节数。 |
-| `hostcall_limits.file_policy.query_max_bytes` | u32 | 否 | 正整数 | `file-policy-read` query 最大字节数。 |
-| `hostcall_limits.file_policy.read_max_bytes` | u32 | 否 | 正整数 | `file-policy-read` 返回值和当前 `file-policy-write` update payload 最大字节数。 |
+| `hostcall_limits.file_policy.context_ref_max_bytes` | u32 | 否 | 正整数 | `file-access.current-match-get` context ref 最大字节数。 |
+| `hostcall_limits.file_policy.query_max_bytes` | u32 | 否 | 正整数 | `file-access.current-match-get` query 最大字节数。 |
+| `hostcall_limits.file_policy.read_max_bytes` | u32 | 否 | 正整数 | `file-access.current-match-get` 返回值，以及 core module `file_policy_rules_validate/apply` 二进制请求和响应最大字节数。 |
 | `hostcall_limits.plugin_config.read_max_bytes` | u32 | 否 | 正整数 | 单次 `read-config` 最大读取字节数。 |
+| `hostcall_limits.plugin_command.argv_max_count` | u32 | 否 | 正整数 | `actraild plugin cmd` 转发给插件的 argv 数量上限。 |
+| `hostcall_limits.plugin_command.arg_max_bytes` | u32 | 否 | 正整数 | `actraild plugin cmd` 单个 argv 最大字节数。 |
+| `hostcall_limits.plugin_command.output_max_bytes` | u32 | 否 | 正整数 | 插件管理命令 stdout + stderr 最大字节数。 |
+| `hostcall_limits.plugin_command.timeout_ms` | u64 | 否 | 正整数 | 插件管理命令单次调用的 wall-clock 超时，默认 `30000`。 |
 
 `[plugin_config]` 字段：
 
@@ -233,8 +237,10 @@ capability 取值：
 | `payload-read` | `--grant payload-read` 或 `--grant payload-read:source=<source>` | 观测插件读取 payload。`source` 当前支持 `syscall`、`tls-user-space`、`stdio`。 |
 | `env-read` | `--grant env-read:NAME` | 读取指定环境变量名。 |
 | `context-query` | `--grant context-query` | 控制插件读取当前待决策项的最小上下文。 |
-| `file-policy-read` | `--grant file-policy-read` | 可选能力。控制插件读取当前匹配的 graylist rule 视图，不是本次 allow/deny 决策的必需接口。 |
-| `file-policy-write` | `--grant file-policy-write` | 高级策略同步能力。用于插件主动更新 AcTrail 本地快路径策略，不是 gray 文件本次访问决策的常规接口。 |
+| `file-access.current-match-get` | `--grant file-access.current-match-get` | 可选能力。控制插件读取当前匹配的 graylist rule 视图，不是本次 allow/deny 决策的必需接口。 |
+| `file-policy.rules.read` | `--grant file-policy.rules.read` | 分页读取 AcTrail 当前维护的文件访问快路径规则。 |
+| `file-policy.rules.match-dry-run` | `--grant file-policy.rules.match-dry-run` | 对指定 path/op 执行 dry-run，查看当前会命中 allow、deny、gray 还是 default；不触发真实访问控制。 |
+| `file-policy.rules.apply` | `--grant file-policy.rules.apply:kind=<allow|deny|gray>,path=<绝对路径或/**范围>` | 高级策略同步能力。用于插件主动更新 AcTrail 本地快路径策略，不是 gray 文件本次访问决策的常规接口。 |
 | `network-egress` | 当前无可用 grant | manifest 中存在该 capability，但 host slot 还未实现。 |
 
 `actraild plugin load` 参数：
@@ -248,6 +254,22 @@ capability 取值：
 | `--persist` | flag | 否 | 将该插件实例写入 AcTrail 管理的持久化注册表，daemon 重启后自动恢复。推荐优先使用 `operator.conf` 里的 `[plugins.startup]` 表达固定启动清单。 |
 
 插件声明了 capability 但加载时没有对应 `--grant`，会加载失败。加载时授予了插件没有声明的能力，也会加载失败。
+
+`actraild plugin cmd` 参数：
+
+| 参数 | 类型 | 是否必填 | 说明 |
+| --- | --- | --- | --- |
+| `--instance ID` | string | 是 | 接收管理命令的已加载插件实例。 |
+| `-- PLUGIN_ARG...` | string list | 是 | `--` 后的参数原样转发给插件，由插件解释子命令语义。 |
+
+示例：
+
+```bash
+actraild --config operator.conf plugin cmd --instance file-policy.demo -- rule list
+actraild --config operator.conf plugin cmd --instance file-policy.demo -- rule upsert allow /tmp/a.txt --priority 10
+```
+
+`plugin cmd` 是管理面低频入口，不在 fanotify 文件访问热路径内。AcTrail 只负责实例定位、输入输出限制、超时和错误返回；插件自己的 CLI 子命令由插件实现。
 
 ## 启动时加载插件
 
@@ -271,7 +293,7 @@ instance = "gray-file-policy"
 enabled = true
 manifest = "/etc/actrail/plugins/gray-file-policy/plugin.toml"
 plugin_config = "/etc/actrail/plugins/gray-file-policy/config.toml"
-host_grants = ["context-query", "file-policy-read"]
+host_grants = ["context-query", "file-access.current-match-get"]
 ```
 
 字段说明：
@@ -296,7 +318,7 @@ host_grants = ["context-query", "file-policy-read"]
 | `fail-fast` | 插件加载失败则 daemon 启动失败。适合治理控制插件。 |
 | `continue` | 打印错误并继续启动 daemon。适合可选观测导出插件。 |
 
-`[export.runtime]` 是旧的实时导出入口，默认关闭。新配置应优先使用 `[plugins.startup]` 或运行后执行 `actraild plugin load`，让配置形态直接反映“观测消费者是插件实例”的内部模型。
+`[export.runtime]` 是兼容实时导出入口，默认关闭。配置观测导出时优先使用 `[plugins.startup]` 或运行后执行 `actraild plugin load`，让配置形态直接反映“观测消费者是插件实例”的内部模型。
 
 ## 插件自己的配置
 
@@ -409,7 +431,7 @@ target/release/actraild --config operator.conf plugin unload \
   --instance dynamic.otel-jsonl
 ```
 
-如果希望 daemon 重启后自动恢复插件，优先把它写入 `[plugins.startup]`。临时注册也可以在加载时加 `--persist`：
+如果希望 daemon 重启后自动恢复插件，优先把它写入 `[plugins.startup]`。运行时注册也可以在加载时加 `--persist`：
 
 ```bash
 target/release/actraild --config operator.conf plugin load \
@@ -457,20 +479,20 @@ sudo target/release/actraild --config operator.conf plugin load \
 2. AcTrail 把当前待决策项的最小字段传给插件。
 3. 插件返回本次决策结果：`allow` 或 `deny`。
 4. 插件同时返回复用范围：`once` 或 `reusable`。
-5. 如果返回 `reusable`，AcTrail 在当前 trace/task 范围内缓存这个决策；后续同一范围内命中同一规则时可以复用，不再调用插件。
+5. 如果返回 `reusable`，AcTrail 在当前 trace/task 范围内缓存这个决策；后续同一范围内命中同一规则时直接复用缓存结果。
 
-这个主流程不需要 `file-policy-read` 或 `file-policy-write`。插件只要根据 AcTrail 传入的当前待决策项就能判断，就不需要任何额外 grant。
+这个主流程不需要 `file-access.current-match-get` 或 `file-policy.rules.apply`。插件只要根据 AcTrail 传入的当前待决策项就能判断，就不需要任何额外 grant。
 
-如果插件确实需要知道当前匹配规则的细节，可以额外声明 `file-policy-read` 并在加载时授予：
+如果插件确实需要知道当前匹配规则的细节，可以额外声明 `file-access.current-match-get` 并在加载时授予：
 
 ```bash
 sudo target/release/actraild --config operator.conf plugin load \
   --manifest component-control.plugin.toml \
-  --grant file-policy-read \
+  --grant file-access.current-match-get \
   --instance wasm.component-control
 ```
 
-`file-policy-read` 只用于读取当前匹配规则视图，例如 rule id、fallback、timeout、path 等。它不是“读取被访问文件”，也不是灰名单判断的必需接口。
+`file-access.current-match-get` 只用于读取当前匹配规则视图，例如 rule id、fallback、timeout、path 等。它不是“读取被访问文件”，也不是灰名单判断的必需接口。
 
 查看插件状态：
 
@@ -503,7 +525,7 @@ gray-file          decision_source=sync-plugin-cache
 deny-file          decision_source=rule
 ```
 
-这说明第一次 gray 访问走了插件，后续同范围访问复用了插件之前返回的 reusable 决策。
+这说明第一次 gray 访问走了插件，后续同范围访问复用了插件已返回的 reusable 决策。
 
 灰名单控制流程：
 
@@ -541,14 +563,14 @@ sequenceDiagram
 
 ## 场景三：远端规则刷新后同步 AcTrail 快路径
 
-`file-policy-write` 更适合这个场景：某个文件控制插件连接了客户的远端策略服务。管理员在远端服务中刷新了白名单、灰名单或黑名单后，插件需要把新的策略结果同步给 AcTrail，让 fanotify 本地快路径尽快使用新规则，避免旧规则继续错误放行或拒绝。
+`file-policy.rules.apply` 适合这个场景：某个文件控制插件连接了客户的远端策略服务。管理员在远端服务中刷新了白名单、灰名单或黑名单后，插件需要把新的策略结果同步给 AcTrail，让 fanotify 本地快路径尽快使用新规则，避免本地快路径继续按过期规则放行或拒绝。
 
 这个流程和“碰到 gray 文件后询问 control-decider 插件”不是一回事：
 
 - gray 文件本次访问决策：插件返回 `allow/deny` 和 `once/reusable`。
 - 远端规则刷新同步：插件主动把策略变化提交给 AcTrail，让后续访问走更新后的本地快路径。
 
-当前实现中的 `file-policy-write` 还是受限版本，只支持在当前 graylist 决策上下文中对当前目标 path 提交本地 allow/deny upsert。未来如果要支持远端管理员主动刷新整套策略，需要扩展成更完整的策略管理 host slot，并且要有独立授权、审计、版本、回滚和 fanotify mark 更新机制。
+`file-policy.rules.apply` 是批量规则 patch 接口，支持 `upsert/delete/enable/disable`，按 `partial` 或 `AON` 应用 allow/deny/gray 规则。它不依赖 gray 文件访问的单次决策上下文。插件如果需要同步后读回确认，可以额外申请 `file-policy.rules.read`；如果需要检查某个 path/op 会命中哪条快路径规则，可以额外申请 `file-policy.rules.match-dry-run`。
 
 远端规则同步的目标流程需要有结果回报闭环：插件不能只把更新写给 AcTrail，还要把 AcTrail 的接受/拒绝结果逐层回报给远端策略服务，最终让管理员看到本次同步是否成功、失败原因和生效版本。
 
@@ -573,7 +595,7 @@ sequenceDiagram
   Admin->>PolicySvc: 更新白/灰/黑名单策略
   PolicySvc-->>Plugin: 推送策略变更或插件定期拉取
   Plugin->>Plugin: 校验远端策略版本和签名
-  Plugin->>Actrail: file-policy-write(policy-update)
+  Plugin->>Actrail: file-policy.rules.apply(rules patch)
   Actrail->>Actrail: 校验 schema、权限、版本、影响范围
   alt 更新被接受
     Actrail->>FastPath: 更新本地规则快照和 fanotify mark
@@ -591,7 +613,7 @@ sequenceDiagram
   Note over FastPath: 后续文件访问直接使用更新后的本地快路径
 ```
 
-这个图表达的是未来更完整的策略同步能力。它不应该混进前面的 graylist 本次访问决策图里。
+下图展示远端策略同步流程。该流程和 graylist 单次访问决策流程分离。
 
 ## 命令速查
 
@@ -656,7 +678,7 @@ actraild --config operator.conf plugin unload \
 - 用于 fanotify 灰名单决策的 WASM / WIT component control 插件；
 - 受限 command-execution 控制主体：显式 `exec <absolute-path>` 规则命中后，在继续前同步询问 control-decider；
 - 受限 network-action 控制主体：显式 TCP `connect <ip:port>` 规则命中后，在继续前同步询问 control-decider；
-- 插件自有配置 `read-config`，观测侧 `env-read` / `payload-read`，控制侧 `context-query` / `file-policy-read` / 受限 `file-policy-write`；
+- 插件自有配置 `read-config`，观测侧 `env-read` / `payload-read`，控制侧 `context-query` / `file-access.current-match-get` / `file-policy.rules.read` / `file-policy.rules.match-dry-run` / 受限 `file-policy.rules.apply`；
 - 通过 `[plugins.startup]` 配置 daemon 启动时加载的插件清单；
 - 通过 `--persist` 持久化运行时加载的插件实例。
 

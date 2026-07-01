@@ -127,26 +127,133 @@ interface types {
     fallback: option<string>,
   }
 
-  record file-policy-update {
-    rule-id: string,
-    decision: control-verdict,
-    operation: string,
-    path: string,
+  enum file-policy-decision {
+    default,
+    allow,
+    deny,
+    gray,
   }
 
-  enum file-policy-write-status {
+  enum file-policy-operation {
+    open,
+  }
+
+  enum file-policy-patch-op {
+    upsert,
+    delete,
+    enable,
+    disable,
+  }
+
+  enum file-policy-apply-mode {
+    partial,
+    aon,
+  }
+
+  enum file-policy-apply-status {
     accepted,
+    rejected,
+  }
+
+  record file-policy-rule-draft {
+    rule-id: option<string>,
+    decision: file-policy-decision,
+    operation: file-policy-operation,
+    path: string,
+    gray-target: option<u64>,
+    priority: s32,
+  }
+
+  record file-policy-patch-item {
+    op: file-policy-patch-op,
+    rule-id: option<string>,
+    rule: option<file-policy-rule-draft>,
+  }
+
+  record file-policy-apply-request {
+    base-revision: u64,
+    mutation-id: string,
+    reason: option<string>,
+    correlation-id: option<string>,
+    apply-mode: file-policy-apply-mode,
+    items: list<file-policy-patch-item>,
+  }
+
+  record file-policy-list-filter {
+    decision: option<file-policy-decision>,
+    path-prefix: option<string>,
+    operation: option<file-policy-operation>,
+  }
+
+  record file-policy-rule-view {
+    rule-id: string,
+    owner-instance-id: string,
+    decision: file-policy-decision,
+    operation: file-policy-operation,
+    path: string,
+    gray-target: option<u64>,
+    priority: s32,
+    enabled: bool,
+    updated-sequence: u64,
+  }
+
+  record file-policy-list-result {
+    rules: list<file-policy-rule-view>,
+    next-cursor: option<string>,
+    source-revision: u64,
+  }
+
+  record file-policy-match-dry-run-request {
+    path: string,
+    operation: file-policy-operation,
+  }
+
+  record file-policy-match-dry-run-result {
+    matched: bool,
+    decision: file-policy-decision,
+    rule-id: option<string>,
+    operation: file-policy-operation,
+    canonical-path: string,
+    source-revision: u64,
+  }
+
+  record plugin-command-request {
+    argv: list<string>,
+  }
+
+  record plugin-command-result {
+    exit-code: s32,
+    stdout: string,
+    stderr: string,
+  }
+
+  record file-policy-apply-error {
+    item-index: u32,
+    code: string,
+    message: string,
+  }
+
+  record file-policy-apply-result {
+    status: file-policy-apply-status,
+    new-revision: u64,
+    applied-count: u32,
+    rejected-count: u32,
+    errors: list<file-policy-apply-error>,
   }
 }
 
 interface host {
-  use types.{payload-ref, payload-chunk, config-chunk, decision-summary, file-policy-view, file-policy-update, file-policy-write-status};
+  use types.{payload-ref, payload-chunk, config-chunk, decision-summary, file-policy-view, file-policy-apply-request, file-policy-apply-result, file-policy-list-filter, file-policy-list-result, file-policy-match-dry-run-request, file-policy-match-dry-run-result};
 
   read-config: func(offset: u64, max-bytes: u64) -> config-chunk;
   read-payload: func(ref: payload-ref, offset: u64, max-bytes: u64) -> payload-chunk;
   query-context: func(context-ref: string, query: string) -> result<decision-summary, string>;
-  file-policy-read: func(context-ref: string, query: string) -> result<file-policy-view, string>;
-  file-policy-write: func(context-ref: string, update: file-policy-update) -> result<file-policy-write-status, string>;
+  file-access-current-match-get: func(context-ref: string, query: string) -> result<file-policy-view, string>;
+  file-policy-rules-version-get: func() -> result<u64, string>;
+  file-policy-rules-list: func(filter: file-policy-list-filter, cursor: option<string>, limit: u32) -> result<file-policy-list-result, string>;
+  file-policy-rules-match-dry-run: func(request: file-policy-match-dry-run-request) -> result<file-policy-match-dry-run-result, string>;
+  file-policy-rules-validate: func(request: file-policy-apply-request) -> result<file-policy-apply-result, string>;
+  file-policy-rules-apply: func(request: file-policy-apply-request) -> result<file-policy-apply-result, string>;
   env-read: func(name: string, max-bytes: u64) -> result<string, string>;
 }
 
@@ -162,6 +269,12 @@ interface control-decider {
   decide: func(request: decision-request) -> result<decision-response, string>;
 }
 
+interface management-command {
+  use types.{plugin-command-request, plugin-command-result};
+
+  handle-command: func(request: plugin-command-request) -> result<plugin-command-result, string>;
+}
+
 world observation-plugin {
   import host;
   export observation-consumer;
@@ -170,4 +283,10 @@ world observation-plugin {
 world control-plugin {
   import host;
   export control-decider;
+}
+
+world managed-control-plugin {
+  import host;
+  export control-decider;
+  export management-command;
 }

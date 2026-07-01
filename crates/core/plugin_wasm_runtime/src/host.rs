@@ -1,8 +1,10 @@
 use std::time::Instant;
 
 use plugin_system::{
-    CONTROL_DECISION_SUMMARY_QUERY, FILE_POLICY_MATCHED_RULE_QUERY, FilePolicyReadContext,
-    FilePolicyWriteUpdate, PluginRuntimeError,
+    CONTROL_DECISION_SUMMARY_QUERY, FILE_POLICY_MATCHED_RULE_QUERY, FilePolicyApplyMode,
+    FilePolicyApplyPrecondition, FilePolicyApplyRequest, FilePolicyDecision, FilePolicyListFilter,
+    FilePolicyMatchDryRunRequest, FilePolicyOperation, FilePolicyPatchItem, FilePolicyPatchOp,
+    FilePolicyReadContext, FilePolicyRuleDraft, PluginRuntimeError,
 };
 use wasmtime::component::Val;
 use wasmtime::{Caller, Engine, Linker, Memory};
@@ -25,6 +27,12 @@ const FILE_POLICY_READ_DENIED: i64 = -1;
 const FILE_POLICY_READ_NOT_FOUND: i64 = -2;
 const FILE_POLICY_READ_INVALID: i64 = -3;
 const FILE_POLICY_READ_TOO_LARGE: i64 = -4;
+const FILE_POLICY_RULES_DENIED: i64 = -1;
+const FILE_POLICY_RULES_NOT_FOUND: i64 = -2;
+const FILE_POLICY_RULES_INVALID: i64 = -3;
+const FILE_POLICY_RULES_TOO_LARGE: i64 = -4;
+const FILE_POLICY_RULES_REJECTED: i64 = -5;
+const FILE_POLICY_RULES_BINARY_VERSION: u8 = 1;
 mod component_config {
     pub mod status {
         pub const OK: &str = "ok";
@@ -42,13 +50,9 @@ mod component_config {
     }
 }
 
-mod hostcall_status {
-    pub const ACCEPTED: &str = "accepted";
-}
-
 mod legacy_policy_text {
     pub const CONTEXT_QUERY_SCHEMA_VERSION: &str = "context-query.v1";
-    pub const FILE_POLICY_READ_SCHEMA_VERSION: &str = "file-policy-read.v1";
+    pub const CURRENT_MATCH_SCHEMA_VERSION: &str = "file-access.current-match-get.v1";
 
     pub mod field {
         pub const VERSION: &str = "version";
@@ -65,20 +69,6 @@ mod legacy_policy_text {
         pub const DECISION_ID: &str = "decision_id";
         pub const TRACE_ID: &str = "trace_id";
         pub const ACTOR_PROCESS_IDENTITY: &str = "actor_process_identity";
-    }
-}
-
-mod file_policy_update {
-    pub mod field {
-        pub const RULE_ID: &str = "rule-id";
-        pub const DECISION: &str = "decision";
-        pub const OPERATION: &str = "operation";
-        pub const PATH: &str = "path";
-    }
-
-    pub mod decision {
-        pub const ALLOW: &str = "allow";
-        pub const DENY: &str = "deny";
     }
 }
 
@@ -153,7 +143,7 @@ pub(crate) fn host_linker(engine: &Engine) -> Result<Linker<WasmStoreState>, Plu
     linker
         .func_wrap(
             "actrail_host",
-            "file_policy_read",
+            "file_access_current_match_get",
             |mut caller: Caller<'_, WasmStoreState>,
              context_ptr: i32,
              context_len: i32,
@@ -162,7 +152,7 @@ pub(crate) fn host_linker(engine: &Engine) -> Result<Linker<WasmStoreState>, Plu
              out_ptr: i32,
              max_len: i32|
              -> i64 {
-                file_policy_read(
+                file_access_current_match_get(
                     &mut caller,
                     context_ptr,
                     context_len,
@@ -176,7 +166,127 @@ pub(crate) fn host_linker(engine: &Engine) -> Result<Linker<WasmStoreState>, Plu
         .map_err(|error| {
             PluginRuntimeError::new(
                 "wasm_runtime",
-                format!("define wasm file_policy_read hostcall failed: {error}"),
+                format!("define wasm file_access_current_match_get hostcall failed: {error}"),
+            )
+        })?;
+    linker
+        .func_wrap(
+            "actrail_host",
+            "file_policy_rules_version_get",
+            |caller: Caller<'_, WasmStoreState>| -> i64 { file_policy_rules_version_get(caller) },
+        )
+        .map_err(|error| {
+            PluginRuntimeError::new(
+                "wasm_runtime",
+                format!("define wasm file_policy_rules_version_get hostcall failed: {error}"),
+            )
+        })?;
+    linker
+        .func_wrap(
+            "actrail_host",
+            "file_policy_rules_list",
+            |mut caller: Caller<'_, WasmStoreState>,
+             filter_ptr: i32,
+             filter_len: i32,
+             cursor_ptr: i32,
+             cursor_len: i32,
+             limit: i32,
+             out_ptr: i32,
+             max_len: i32|
+             -> i64 {
+                file_policy_rules_list(
+                    &mut caller,
+                    filter_ptr,
+                    filter_len,
+                    cursor_ptr,
+                    cursor_len,
+                    limit,
+                    out_ptr,
+                    max_len,
+                )
+            },
+        )
+        .map_err(|error| {
+            PluginRuntimeError::new(
+                "wasm_runtime",
+                format!("define wasm file_policy_rules_list hostcall failed: {error}"),
+            )
+        })?;
+    linker
+        .func_wrap(
+            "actrail_host",
+            "file_policy_rules_match_dry_run",
+            |mut caller: Caller<'_, WasmStoreState>,
+             request_ptr: i32,
+             request_len: i32,
+             out_ptr: i32,
+             max_len: i32|
+             -> i64 {
+                file_policy_rules_match_dry_run(
+                    &mut caller,
+                    request_ptr,
+                    request_len,
+                    out_ptr,
+                    max_len,
+                )
+            },
+        )
+        .map_err(|error| {
+            PluginRuntimeError::new(
+                "wasm_runtime",
+                format!("define wasm file_policy_rules_match_dry_run hostcall failed: {error}"),
+            )
+        })?;
+    linker
+        .func_wrap(
+            "actrail_host",
+            "file_policy_rules_validate",
+            |mut caller: Caller<'_, WasmStoreState>,
+             patch_ptr: i32,
+             patch_len: i32,
+             out_ptr: i32,
+             max_len: i32|
+             -> i64 {
+                file_policy_rules_apply_or_validate(
+                    &mut caller,
+                    patch_ptr,
+                    patch_len,
+                    out_ptr,
+                    max_len,
+                    false,
+                )
+            },
+        )
+        .map_err(|error| {
+            PluginRuntimeError::new(
+                "wasm_runtime",
+                format!("define wasm file_policy_rules_validate hostcall failed: {error}"),
+            )
+        })?;
+    linker
+        .func_wrap(
+            "actrail_host",
+            "file_policy_rules_apply",
+            |mut caller: Caller<'_, WasmStoreState>,
+             patch_ptr: i32,
+             patch_len: i32,
+             out_ptr: i32,
+             max_len: i32|
+             -> i64 {
+                file_policy_rules_apply_or_validate(
+                    &mut caller,
+                    patch_ptr,
+                    patch_len,
+                    out_ptr,
+                    max_len,
+                    true,
+                )
+            },
+        )
+        .map_err(|error| {
+            PluginRuntimeError::new(
+                "wasm_runtime",
+                format!("define wasm file_policy_rules_apply hostcall failed: {error}"),
             )
         })?;
     Ok(linker)
@@ -312,20 +422,6 @@ fn set_component_config_chunk(results: &mut [Val], outcome: ComponentConfigReadO
 
 fn component_option_u64(value: Option<u64>) -> Val {
     Val::Option(value.map(|value| Box::new(Val::U64(value))))
-}
-
-fn set_component_string_error(results: &mut [Val], message: &str) {
-    let Some(result) = results.first_mut() else {
-        return;
-    };
-    *result = Val::Result(Err(Some(Box::new(Val::String(message.to_string())))));
-}
-
-fn set_component_enum_ok(results: &mut [Val], value: &str) {
-    let Some(result) = results.first_mut() else {
-        return;
-    };
-    *result = Val::Result(Ok(Some(Box::new(Val::Enum(value.to_string())))));
 }
 
 fn env_read(
@@ -563,7 +659,7 @@ fn context_query(
     i64::try_from(response_bytes.len()).unwrap_or(CONTEXT_QUERY_TOO_LARGE)
 }
 
-fn file_policy_read(
+fn file_access_current_match_get(
     caller: &mut Caller<'_, WasmStoreState>,
     context_ptr: i32,
     context_len: i32,
@@ -572,7 +668,11 @@ fn file_policy_read(
     out_ptr: i32,
     max_len: i32,
 ) -> i64 {
-    if !caller.data().host_grants().can_read_file_policy() {
+    if !caller
+        .data()
+        .host_grants()
+        .can_get_current_file_access_match()
+    {
         return FILE_POLICY_READ_DENIED;
     }
     let Ok(memory) = exported_memory(caller) else {
@@ -598,7 +698,7 @@ fn file_policy_read(
     let Ok((out_offset, max_len)) = guest_range(out_ptr, max_len) else {
         return FILE_POLICY_READ_INVALID;
     };
-    if max_len > caller.data().host_limits().file_policy_read_max_bytes {
+    if max_len > caller.data().host_limits().file_policy_io_max_bytes {
         return FILE_POLICY_READ_TOO_LARGE;
     }
     let mut context_bytes = vec![0_u8; context_len];
@@ -641,13 +741,430 @@ fn file_policy_read(
     i64::try_from(response_bytes.len()).unwrap_or(FILE_POLICY_READ_TOO_LARGE)
 }
 
+fn file_policy_rules_version_get(caller: Caller<'_, WasmStoreState>) -> i64 {
+    if !can_access_file_policy_rules(caller.data()) {
+        return FILE_POLICY_RULES_DENIED;
+    }
+    let Some(host) = caller.data().file_policy_host().cloned() else {
+        return FILE_POLICY_RULES_NOT_FOUND;
+    };
+    match host.rules_version_get() {
+        Ok(revision) => i64::try_from(revision).unwrap_or(FILE_POLICY_RULES_TOO_LARGE),
+        Err(_) => FILE_POLICY_RULES_INVALID,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn file_policy_rules_list(
+    caller: &mut Caller<'_, WasmStoreState>,
+    filter_ptr: i32,
+    filter_len: i32,
+    cursor_ptr: i32,
+    cursor_len: i32,
+    limit: i32,
+    out_ptr: i32,
+    max_len: i32,
+) -> i64 {
+    if !caller.data().host_grants().can_read_file_policy_rules() {
+        return FILE_POLICY_RULES_DENIED;
+    }
+    let Some(host) = caller.data().file_policy_host().cloned() else {
+        return FILE_POLICY_RULES_NOT_FOUND;
+    };
+    let Ok(memory) = exported_memory(caller) else {
+        return FILE_POLICY_RULES_INVALID;
+    };
+    let Ok(filter) = read_guest_bytes(caller, &memory, filter_ptr, filter_len) else {
+        return FILE_POLICY_RULES_INVALID;
+    };
+    if filter.len() > caller.data().host_limits().file_policy_io_max_bytes {
+        return FILE_POLICY_RULES_TOO_LARGE;
+    }
+    let Ok(cursor_bytes) = read_guest_bytes(caller, &memory, cursor_ptr, cursor_len) else {
+        return FILE_POLICY_RULES_INVALID;
+    };
+    if cursor_bytes.len() > caller.data().host_limits().file_policy_io_max_bytes {
+        return FILE_POLICY_RULES_TOO_LARGE;
+    }
+    let filter = match parse_file_policy_list_filter(&filter) {
+        Ok(filter) => filter,
+        Err(_) => return FILE_POLICY_RULES_INVALID,
+    };
+    let cursor = if cursor_bytes.is_empty() {
+        None
+    } else {
+        match String::from_utf8(cursor_bytes) {
+            Ok(cursor) => Some(cursor),
+            Err(_) => return FILE_POLICY_RULES_INVALID,
+        }
+    };
+    let limit = match u32::try_from(limit) {
+        Ok(limit) => limit,
+        Err(_) => return FILE_POLICY_RULES_INVALID,
+    };
+    let result = match host.rules_list(filter, cursor, limit) {
+        Ok(result) => result,
+        Err(_) => return FILE_POLICY_RULES_INVALID,
+    };
+    write_guest_response(
+        caller,
+        &memory,
+        out_ptr,
+        max_len,
+        &encode_file_policy_list_result(&result),
+    )
+}
+
+fn file_policy_rules_match_dry_run(
+    caller: &mut Caller<'_, WasmStoreState>,
+    request_ptr: i32,
+    request_len: i32,
+    out_ptr: i32,
+    max_len: i32,
+) -> i64 {
+    if !caller
+        .data()
+        .host_grants()
+        .can_match_dry_run_file_policy_rules()
+    {
+        return FILE_POLICY_RULES_DENIED;
+    }
+    let Some(host) = caller.data().file_policy_host().cloned() else {
+        return FILE_POLICY_RULES_NOT_FOUND;
+    };
+    let Ok(memory) = exported_memory(caller) else {
+        return FILE_POLICY_RULES_INVALID;
+    };
+    let Ok(request) = read_guest_bytes(caller, &memory, request_ptr, request_len) else {
+        return FILE_POLICY_RULES_INVALID;
+    };
+    if request.len() > caller.data().host_limits().file_policy_io_max_bytes {
+        return FILE_POLICY_RULES_TOO_LARGE;
+    }
+    let request = match parse_file_policy_match_dry_run_request(&request) {
+        Ok(request) => request,
+        Err(_) => return FILE_POLICY_RULES_INVALID,
+    };
+    let result = match host.rules_match_dry_run(request) {
+        Ok(result) => result,
+        Err(_) => return FILE_POLICY_RULES_INVALID,
+    };
+    write_guest_response(
+        caller,
+        &memory,
+        out_ptr,
+        max_len,
+        &encode_file_policy_match_dry_run_result(&result),
+    )
+}
+
+fn file_policy_rules_apply_or_validate(
+    caller: &mut Caller<'_, WasmStoreState>,
+    patch_ptr: i32,
+    patch_len: i32,
+    out_ptr: i32,
+    max_len: i32,
+    apply: bool,
+) -> i64 {
+    if apply && !caller.data().host_grants().can_apply_file_policy_rules() {
+        return FILE_POLICY_RULES_DENIED;
+    }
+    if !apply && !caller.data().host_grants().can_validate_file_policy_rules() {
+        return FILE_POLICY_RULES_DENIED;
+    }
+    let Some(host) = caller.data().file_policy_host().cloned() else {
+        return FILE_POLICY_RULES_NOT_FOUND;
+    };
+    let Some(owner) = caller
+        .data()
+        .file_policy_owner_instance_id()
+        .map(str::to_string)
+    else {
+        return FILE_POLICY_RULES_NOT_FOUND;
+    };
+    let grants = caller
+        .data()
+        .host_grants()
+        .file_policy_rules_apply_grants()
+        .to_vec();
+    let Ok(memory) = exported_memory(caller) else {
+        return FILE_POLICY_RULES_INVALID;
+    };
+    let Ok((patch_offset, patch_len)) = guest_range(patch_ptr, patch_len) else {
+        return FILE_POLICY_RULES_INVALID;
+    };
+    if patch_len > caller.data().host_limits().file_policy_io_max_bytes {
+        return FILE_POLICY_RULES_TOO_LARGE;
+    }
+    let Ok((out_offset, max_len)) = guest_range(out_ptr, max_len) else {
+        return FILE_POLICY_RULES_INVALID;
+    };
+    if max_len > caller.data().host_limits().file_policy_io_max_bytes {
+        return FILE_POLICY_RULES_TOO_LARGE;
+    }
+    let mut patch = vec![0_u8; patch_len];
+    if memory.read(&mut *caller, patch_offset, &mut patch).is_err() {
+        return FILE_POLICY_RULES_INVALID;
+    }
+    let request = match parse_file_policy_apply_request(&patch) {
+        Ok(request) => request,
+        Err(_) => return FILE_POLICY_RULES_INVALID,
+    };
+    let result = if apply {
+        host.rules_apply(&owner, &grants, request)
+    } else {
+        host.rules_validate(&owner, &grants, &request)
+    };
+    let result = match result {
+        Ok(result) => result,
+        Err(_) => return FILE_POLICY_RULES_REJECTED,
+    };
+    let response = encode_file_policy_apply_result(&result);
+    if response.len() > max_len {
+        return FILE_POLICY_RULES_TOO_LARGE;
+    }
+    if memory.write(&mut *caller, out_offset, &response).is_err() {
+        return FILE_POLICY_RULES_INVALID;
+    }
+    i64::try_from(response.len()).unwrap_or(FILE_POLICY_RULES_TOO_LARGE)
+}
+
+fn can_access_file_policy_rules(state: &WasmStoreState) -> bool {
+    state.host_grants().can_read_file_policy_rules()
+        || state.host_grants().can_match_dry_run_file_policy_rules()
+        || state.host_grants().can_validate_file_policy_rules()
+        || state.host_grants().can_apply_file_policy_rules()
+}
+
+fn parse_file_policy_list_filter(bytes: &[u8]) -> Result<FilePolicyListFilter, String> {
+    let mut cursor = BinaryCursor::new(bytes);
+    let version = cursor.read_u8()?;
+    if version != FILE_POLICY_RULES_BINARY_VERSION {
+        return Err(format!("unsupported file policy binary version {version}"));
+    }
+    let decision = match cursor.read_u8()? {
+        0 => None,
+        _ => Some(FilePolicyDecision::from_code(cursor.read_u8()?)?),
+    };
+    let operation = match cursor.read_u8()? {
+        0 => None,
+        _ => Some(FilePolicyOperation::from_code(cursor.read_u8()?)?),
+    };
+    let path_prefix = cursor.read_string_u16()?;
+    if !cursor.is_empty() {
+        return Err("file policy list filter has trailing bytes".to_string());
+    }
+    Ok(FilePolicyListFilter {
+        decision,
+        path_prefix,
+        operation,
+    })
+}
+
+fn parse_file_policy_match_dry_run_request(
+    bytes: &[u8],
+) -> Result<FilePolicyMatchDryRunRequest, String> {
+    let mut cursor = BinaryCursor::new(bytes);
+    let version = cursor.read_u8()?;
+    if version != FILE_POLICY_RULES_BINARY_VERSION {
+        return Err(format!("unsupported file policy binary version {version}"));
+    }
+    let operation = FilePolicyOperation::from_code(cursor.read_u8()?)?;
+    let path = cursor
+        .read_string_u16()?
+        .ok_or_else(|| "file policy dry-run path is required".to_string())?;
+    if !cursor.is_empty() {
+        return Err("file policy dry-run request has trailing bytes".to_string());
+    }
+    Ok(FilePolicyMatchDryRunRequest { path, operation })
+}
+
+fn parse_file_policy_apply_request(bytes: &[u8]) -> Result<FilePolicyApplyRequest, String> {
+    let mut cursor = BinaryCursor::new(bytes);
+    let version = cursor.read_u8()?;
+    if version != FILE_POLICY_RULES_BINARY_VERSION {
+        return Err(format!("unsupported file policy binary version {version}"));
+    }
+    let apply_mode = FilePolicyApplyMode::from_code(cursor.read_u8()?)?;
+    let base_revision = cursor.read_u64()?;
+    let item_count = cursor.read_u32()?;
+    let item_count = usize::try_from(item_count)
+        .map_err(|error| format!("file policy item count overflow: {error}"))?;
+    let mut items = Vec::with_capacity(item_count);
+    for _ in 0..item_count {
+        items.push(parse_file_policy_patch_item(&mut cursor)?);
+    }
+    if !cursor.is_empty() {
+        return Err("file policy patch has trailing bytes".to_string());
+    }
+    Ok(FilePolicyApplyRequest {
+        items,
+        precondition: FilePolicyApplyPrecondition {
+            base_revision,
+            mutation_id: String::new(),
+            reason: None,
+            correlation_id: None,
+            apply_mode,
+        },
+    })
+}
+
+fn parse_file_policy_patch_item(
+    cursor: &mut BinaryCursor<'_>,
+) -> Result<FilePolicyPatchItem, String> {
+    let op = FilePolicyPatchOp::from_code(cursor.read_u8()?)?;
+    let decision = FilePolicyDecision::from_code(cursor.read_u8()?)?;
+    let operation = FilePolicyOperation::from_code(cursor.read_u8()?)?;
+    let priority = cursor.read_i32()?;
+    let gray_target = match cursor.read_u64()? {
+        0 => None,
+        value => Some(value),
+    };
+    let rule_id = cursor.read_string_u16()?;
+    let path = cursor.read_string_u16()?;
+    let rule = matches!(op, FilePolicyPatchOp::Upsert).then(|| FilePolicyRuleDraft {
+        rule_id: rule_id.clone(),
+        decision,
+        operation,
+        path: path.unwrap_or_default(),
+        gray_target,
+        priority,
+    });
+    Ok(FilePolicyPatchItem { op, rule_id, rule })
+}
+
+fn encode_file_policy_apply_result(result: &plugin_system::FilePolicyApplyResult) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.push(result.status.code());
+    bytes.extend_from_slice(&result.new_revision.to_le_bytes());
+    bytes.extend_from_slice(&result.applied_count.to_le_bytes());
+    bytes.extend_from_slice(&result.rejected_count.to_le_bytes());
+    bytes.extend_from_slice(&(result.errors.len() as u32).to_le_bytes());
+    for error in &result.errors {
+        bytes.extend_from_slice(&error.item_index.to_le_bytes());
+        push_u16_bytes(&mut bytes, error.code.as_bytes());
+        push_u16_bytes(&mut bytes, error.message.as_bytes());
+    }
+    bytes
+}
+
+fn encode_file_policy_list_result(result: &plugin_system::FilePolicyListResult) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&result.source_revision.to_le_bytes());
+    push_u16_bytes(
+        &mut bytes,
+        result.next_cursor.as_deref().unwrap_or_default().as_bytes(),
+    );
+    bytes.extend_from_slice(&(result.rules.len() as u32).to_le_bytes());
+    for rule in &result.rules {
+        bytes.push(rule.decision.code());
+        bytes.push(rule.operation.code());
+        bytes.extend_from_slice(&rule.gray_target.unwrap_or_default().to_le_bytes());
+        bytes.extend_from_slice(&rule.priority.to_le_bytes());
+        bytes.push(u8::from(rule.enabled));
+        bytes.extend_from_slice(&rule.updated_sequence.to_le_bytes());
+        push_u16_bytes(&mut bytes, rule.rule_id.as_bytes());
+        push_u16_bytes(&mut bytes, rule.owner_instance_id.as_bytes());
+        push_u16_bytes(&mut bytes, rule.path.as_bytes());
+    }
+    bytes
+}
+
+fn encode_file_policy_match_dry_run_result(
+    result: &plugin_system::FilePolicyMatchDryRunResult,
+) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.push(u8::from(result.matched));
+    bytes.push(result.decision.code());
+    bytes.push(result.operation.code());
+    bytes.extend_from_slice(&result.source_revision.to_le_bytes());
+    push_u16_bytes(
+        &mut bytes,
+        result.rule_id.as_deref().unwrap_or_default().as_bytes(),
+    );
+    push_u16_bytes(&mut bytes, result.canonical_path.as_bytes());
+    bytes
+}
+
+fn push_u16_bytes(out: &mut Vec<u8>, bytes: &[u8]) {
+    let len = u16::try_from(bytes.len()).unwrap_or(u16::MAX);
+    out.extend_from_slice(&len.to_le_bytes());
+    out.extend_from_slice(&bytes[..usize::from(len)]);
+}
+
+struct BinaryCursor<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> BinaryCursor<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, offset: 0 }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.offset == self.bytes.len()
+    }
+
+    fn read_u8(&mut self) -> Result<u8, String> {
+        let bytes = self.read_exact(1)?;
+        Ok(bytes[0])
+    }
+
+    fn read_u16(&mut self) -> Result<u16, String> {
+        let bytes = self.read_exact(2)?;
+        Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
+    }
+
+    fn read_u32(&mut self) -> Result<u32, String> {
+        let bytes = self.read_exact(4)?;
+        Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+    }
+
+    fn read_u64(&mut self) -> Result<u64, String> {
+        let bytes = self.read_exact(8)?;
+        Ok(u64::from_le_bytes([
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        ]))
+    }
+
+    fn read_i32(&mut self) -> Result<i32, String> {
+        let bytes = self.read_exact(4)?;
+        Ok(i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+    }
+
+    fn read_string_u16(&mut self) -> Result<Option<String>, String> {
+        let len = usize::from(self.read_u16()?);
+        if len == 0 {
+            return Ok(None);
+        }
+        let bytes = self.read_exact(len)?;
+        let value = std::str::from_utf8(bytes)
+            .map_err(|error| format!("file policy string is not utf-8: {error}"))?;
+        Ok(Some(value.to_string()))
+    }
+
+    fn read_exact(&mut self, len: usize) -> Result<&'a [u8], String> {
+        let end = self
+            .offset
+            .checked_add(len)
+            .ok_or_else(|| "file policy binary offset overflow".to_string())?;
+        if end > self.bytes.len() {
+            return Err("file policy binary payload is truncated".to_string());
+        }
+        let bytes = &self.bytes[self.offset..end];
+        self.offset = end;
+        Ok(bytes)
+    }
+}
+
 pub(crate) fn matched_rule_response(context: &FilePolicyReadContext) -> String {
     let rule = &context.matched_rule;
     let mut response = String::new();
     push_context_field(
         &mut response,
         legacy_policy_text::field::VERSION,
-        legacy_policy_text::FILE_POLICY_READ_SCHEMA_VERSION,
+        legacy_policy_text::CURRENT_MATCH_SCHEMA_VERSION,
     );
     push_context_field(
         &mut response,
@@ -690,95 +1207,6 @@ pub(crate) fn matched_rule_response(context: &FilePolicyReadContext) -> String {
     }
     push_context_field(&mut response, legacy_policy_text::field::PATH, &rule.path);
     response
-}
-
-pub(crate) fn component_file_policy_write(
-    mut store: wasmtime::StoreContextMut<'_, WasmStoreState>,
-    params: &[Val],
-    results: &mut [Val],
-) {
-    if !store.data().host_grants().can_write_file_policy() {
-        set_component_string_error(results, "denied");
-        return;
-    }
-    let [Val::String(context_ref), Val::Record(update)] = params else {
-        set_component_string_error(results, "invalid");
-        return;
-    };
-    if context_ref.len() > store.data().host_limits().file_policy_context_ref_max_bytes {
-        set_component_string_error(results, "too-large");
-        return;
-    }
-    let Some(context) = store.data().file_policy_context() else {
-        set_component_string_error(results, "not-found");
-        return;
-    };
-    if context.context_ref != *context_ref {
-        set_component_string_error(results, "not-found");
-        return;
-    }
-    let update = match parse_current_file_policy_update(update, context) {
-        Ok(update) => update,
-        Err(error) => {
-            set_component_string_error(results, &error);
-            return;
-        }
-    };
-    store.data_mut().push_file_policy_update(update);
-    set_component_enum_ok(results, hostcall_status::ACCEPTED);
-}
-
-fn parse_current_file_policy_update(
-    fields: &[(String, Val)],
-    context: &FilePolicyReadContext,
-) -> Result<FilePolicyWriteUpdate, String> {
-    let rule_id = component_record_string(fields, file_policy_update::field::RULE_ID)
-        .ok_or_else(|| "invalid".to_string())?;
-    let decision = component_record_enum(fields, file_policy_update::field::DECISION)
-        .ok_or_else(|| "invalid".to_string())?;
-    if decision != file_policy_update::decision::ALLOW
-        && decision != file_policy_update::decision::DENY
-    {
-        return Err("unsupported".to_string());
-    }
-    let operation = component_record_string(fields, file_policy_update::field::OPERATION)
-        .ok_or_else(|| "invalid".to_string())?;
-    let path = component_record_string(fields, file_policy_update::field::PATH)
-        .ok_or_else(|| "invalid".to_string())?;
-    if operation != context.matched_rule.operation || path != context.matched_rule.path {
-        return Err("denied".to_string());
-    }
-    if rule_id.trim().is_empty() {
-        return Err("invalid".to_string());
-    }
-    Ok(FilePolicyWriteUpdate {
-        rule_id: rule_id.to_string(),
-        decision: decision.to_string(),
-        operation: operation.to_string(),
-        path: path.to_string(),
-    })
-}
-
-fn component_record_string<'a>(fields: &'a [(String, Val)], name: &str) -> Option<&'a str> {
-    fields.iter().find_map(|(key, value)| {
-        if key == name {
-            if let Val::String(value) = value {
-                return Some(value.as_str());
-            }
-        }
-        None
-    })
-}
-
-fn component_record_enum<'a>(fields: &'a [(String, Val)], name: &str) -> Option<&'a str> {
-    fields.iter().find_map(|(key, value)| {
-        if key == name {
-            if let Val::Enum(value) = value {
-                return Some(value.as_str());
-            }
-        }
-        None
-    })
 }
 
 pub(crate) fn decision_summary_response(context: &ControlContextSnapshot) -> String {
@@ -840,6 +1268,40 @@ fn exported_memory(caller: &mut Caller<'_, WasmStoreState>) -> Result<Memory, ()
         .get_export("memory")
         .and_then(|export| export.into_memory())
         .ok_or(())
+}
+
+fn read_guest_bytes(
+    caller: &mut Caller<'_, WasmStoreState>,
+    memory: &Memory,
+    ptr: i32,
+    len: i32,
+) -> Result<Vec<u8>, ()> {
+    let (offset, len) = guest_range(ptr, len)?;
+    let mut bytes = vec![0_u8; len];
+    memory.read(caller, offset, &mut bytes).map_err(|_| ())?;
+    Ok(bytes)
+}
+
+fn write_guest_response(
+    caller: &mut Caller<'_, WasmStoreState>,
+    memory: &Memory,
+    out_ptr: i32,
+    max_len: i32,
+    response: &[u8],
+) -> i64 {
+    let Ok((out_offset, max_len)) = guest_range(out_ptr, max_len) else {
+        return FILE_POLICY_RULES_INVALID;
+    };
+    if max_len > caller.data().host_limits().file_policy_io_max_bytes {
+        return FILE_POLICY_RULES_TOO_LARGE;
+    }
+    if response.len() > max_len {
+        return FILE_POLICY_RULES_TOO_LARGE;
+    }
+    if memory.write(caller, out_offset, response).is_err() {
+        return FILE_POLICY_RULES_INVALID;
+    }
+    i64::try_from(response.len()).unwrap_or(FILE_POLICY_RULES_TOO_LARGE)
 }
 
 fn guest_range(ptr: i32, len: i32) -> Result<(usize, usize), ()> {

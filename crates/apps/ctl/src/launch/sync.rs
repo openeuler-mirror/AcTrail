@@ -9,9 +9,9 @@ use config_core::daemon::{
 use model_core::ids::TraceId;
 use tls_payload_sync::{
     EventFilter, RedactionMode, RuntimeEnvConfig, RuntimeFlowControlConfig, RuntimeLibraryPath,
-    audit_env_value_for_libraries, audit_libraries_for_plans, launch_command_for_plan,
-    preload_env_value_for_libraries, runtime_env_for_plans, runtime_library_path,
-    validate_native_backend_plan,
+    audit_bind_now_env, audit_env_value_for_libraries, audit_libraries_for_plans,
+    launch_command_for_plan, preload_env_value_for_libraries, runtime_env_for_plans,
+    runtime_library_path, validate_native_backend_plan,
 };
 use tls_probe_point_finder::ProbePointPlan;
 use tls_probe_point_finder::fast::{ArchFilter, FastProbeRequest, ProviderFilter, SourceFilter};
@@ -113,6 +113,9 @@ pub(super) fn sync_launch_envs(
             audit_env_value_for_libraries(&launch.audit_libraries)
                 .map_err(|error| error.to_string())?,
         ));
+        if let Some(env) = audit_bind_now_env(&launch.audit_libraries) {
+            envs.push(env);
+        }
     }
     maybe_append_java_agent_env(launch.java_agent_env_required, &mut envs)?;
     Ok(envs)

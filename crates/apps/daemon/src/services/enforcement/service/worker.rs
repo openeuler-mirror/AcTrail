@@ -6,7 +6,7 @@ use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use plugin_system::{
     ControlDecisionBudget, ControlDecisionRequest, ControlDecisionResponse, ControlVerdict,
-    DecisionScope, FilePolicyWriteUpdate,
+    DecisionScope,
 };
 
 use super::audit::{
@@ -32,7 +32,6 @@ pub(super) struct PluginDecisionCompletion {
     pub(super) rule_id: String,
     pub(super) instance_id: String,
     pub(super) cache_update: Option<(ReusableDecisionKey, CachedDecision)>,
-    pub(super) file_policy_updates: Vec<FilePolicyWriteUpdate>,
     pub(super) draft: Option<EnforcementEventDraft>,
     pub(super) error: Option<String>,
 }
@@ -83,15 +82,16 @@ pub(super) fn complete_plugin_decision(pending: PendingPluginDecision) {
     } = pending;
 
     let completion_instance_id = instance_id.clone();
-    let plugin_result = catch_unwind(AssertUnwindSafe(|| {
-        control_plugins.decide(&instance_id, request, budget)
-    }));
-    let (decision, cache_update, file_policy_updates) = match plugin_result {
-        Ok(Ok(response)) => {
+    let plugin_result = control_plugins.is_instance_active(&instance_id).then(|| {
+        catch_unwind(AssertUnwindSafe(|| {
+            control_plugins.decide(&instance_id, request, budget)
+        }))
+    });
+    let (decision, cache_update) = match plugin_result {
+        Some(Ok(Ok(response))) if control_plugins.is_instance_active(&instance_id) => {
             let decision = enforcement_decision_from_response(&response);
             let cache_update = (response.scope == DecisionScope::Reusable)
                 .then_some((cache_key, CachedDecision { decision }));
-            let file_policy_updates = response.file_policy_updates.clone();
             (
                 Decision {
                     decision,
@@ -105,10 +105,27 @@ pub(super) fn complete_plugin_decision(pending: PendingPluginDecision) {
                     },
                 },
                 cache_update,
-                file_policy_updates,
             )
         }
-        Ok(Err(error)) => (
+        None | Some(Ok(Ok(_))) => (
+            Decision {
+                decision: EnforcementDecision::Deny,
+                rule: Some(&rule),
+                source: DecisionSource::SyncPluginFallback {
+                    instance_id,
+                    timeout_ms,
+                    concurrency_limit,
+                    reason: SyncPluginFallbackReason::PluginError,
+                    error: Some("control plugin unloaded during file-policy decision".to_string()),
+                    in_flight: None,
+                    instance_concurrency_limit: None,
+                    instance_in_flight: None,
+                    fallback: EnforcementDecision::Deny,
+                },
+            },
+            None,
+        ),
+        Some(Ok(Err(error))) => (
             Decision {
                 decision: fallback,
                 rule: Some(&rule),
@@ -125,9 +142,8 @@ pub(super) fn complete_plugin_decision(pending: PendingPluginDecision) {
                 },
             },
             None,
-            Vec::new(),
         ),
-        Err(_) => (
+        Some(Err(_)) => (
             Decision {
                 decision: fallback,
                 rule: Some(&rule),
@@ -144,7 +160,6 @@ pub(super) fn complete_plugin_decision(pending: PendingPluginDecision) {
                 },
             },
             None,
-            Vec::new(),
         ),
     };
 
@@ -152,7 +167,6 @@ pub(super) fn complete_plugin_decision(pending: PendingPluginDecision) {
         rule_id: rule.rule_id.clone(),
         instance_id: completion_instance_id,
         cache_update,
-        file_policy_updates,
         draft: None,
         error: None,
     };

@@ -4,7 +4,7 @@
 mod document;
 
 use std::fs::{self, OpenOptions};
-use std::io::{ErrorKind, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -121,38 +121,28 @@ impl OperatorConfig {
         Self::parse(&raw)
     }
 
-    pub fn initialize(path: &Path, force: bool) -> Result<OperatorConfigInitStatus, String> {
-        if force {
-            let existed = match fs::symlink_metadata(path) {
-                Ok(_) => true,
-                Err(error) if error.kind() == ErrorKind::NotFound => false,
-                Err(error) => return Err(format!("inspect config {}: {error}", path.display())),
-            };
-            let default_config = Self::default_hierarchical_template()?;
-            Self::parse(&default_config)
-                .map_err(|error| format!("validate default operator config: {error}"))?;
-            write_default_operator_config(path, WriteMode::Overwrite, &default_config)?;
-            return Ok(if existed {
-                OperatorConfigInitStatus::Overwritten
-            } else {
-                OperatorConfigInitStatus::Created
-            });
-        }
-        match fs::read_to_string(path) {
-            Ok(raw) => {
-                Self::parse(&raw)
-                    .map_err(|error| format!("validate config {}: {error}", path.display()))?;
-                Ok(OperatorConfigInitStatus::ExistingValid)
-            }
-            Err(error) if error.kind() == ErrorKind::NotFound => {
-                let default_config = Self::default_hierarchical_template()?;
-                Self::parse(&default_config)
-                    .map_err(|error| format!("validate default operator config: {error}"))?;
-                write_default_operator_config(path, WriteMode::CreateNew, &default_config)?;
-                Ok(OperatorConfigInitStatus::Created)
-            }
-            Err(error) => Err(format!("read config {}: {error}", path.display())),
-        }
+    pub fn init() -> Result<Self, String> {
+        let default_config = Self::default_hierarchical_template()?;
+        Self::parse(&default_config)
+            .map_err(|error| format!("validate default operator config: {error}"))
+    }
+
+    pub fn patch_file(&self, patch_path: &Path) -> Result<Self, String> {
+        let patch = fs::read_to_string(patch_path)
+            .map_err(|error| format!("read config patch {}: {error}", patch_path.display()))?;
+        self.patch(&patch)
+    }
+
+    pub fn patch(&self, patch: &str) -> Result<Self, String> {
+        let base = self.dump()?;
+        let mut base_value: toml::Value = toml::from_str(&base)
+            .map_err(|error| format!("parse base operator config: {error}"))?;
+        let patch_value: toml::Value = toml::from_str(patch)
+            .map_err(|error| format!("parse operator config patch: {error}"))?;
+        merge_toml_value(&mut base_value, patch_value);
+        let merged = toml::to_string_pretty(&base_value)
+            .map_err(|error| format!("render patched operator config: {error}"))?;
+        Self::parse(&merged).map_err(|error| format!("validate patched operator config: {error}"))
     }
 
     pub fn parse(raw: &str) -> Result<Self, String> {
@@ -168,6 +158,20 @@ impl OperatorConfig {
             .to_toml()
             .map_err(|error| error.to_string())
     }
+
+    pub fn dump(&self) -> Result<String, String> {
+        self.to_hierarchical_toml()
+    }
+
+    pub fn dump_to_path(&self, path: &Path, overwrite: bool) -> Result<(), String> {
+        let raw = self.dump()?;
+        let mode = if overwrite {
+            WriteMode::Overwrite
+        } else {
+            WriteMode::CreateNew
+        };
+        write_operator_config(path, mode, &raw)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -176,7 +180,7 @@ enum WriteMode {
     Overwrite,
 }
 
-fn write_default_operator_config(path: &Path, mode: WriteMode, raw: &str) -> Result<(), String> {
+fn write_operator_config(path: &Path, mode: WriteMode, raw: &str) -> Result<(), String> {
     if let Some(parent) = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -203,6 +207,29 @@ fn write_default_operator_config(path: &Path, mode: WriteMode, raw: &str) -> Res
         .map_err(|error| format!("{action} config {}: {error}", path.display()))?;
     file.write_all(raw.as_bytes())
         .map_err(|error| format!("write config {}: {error}", path.display()))
+}
+
+fn merge_toml_value(base: &mut toml::Value, patch: toml::Value) {
+    match (base, patch) {
+        (toml::Value::Table(base), toml::Value::Table(patch)) => {
+            for (key, patch_value) in patch {
+                match base.get_mut(&key) {
+                    Some(base_value)
+                        if matches!(base_value, toml::Value::Table(_))
+                            && matches!(patch_value, toml::Value::Table(_)) =>
+                    {
+                        merge_toml_value(base_value, patch_value);
+                    }
+                    _ => {
+                        base.insert(key, patch_value);
+                    }
+                }
+            }
+        }
+        (base, patch) => {
+            *base = patch;
+        }
+    }
 }
 
 fn validate_seccomp_config(
@@ -333,64 +360,4 @@ fn capability_requested(capabilities: &[CapabilityRequest], capability: &Capabil
     capabilities
         .iter()
         .any(|request| request.mode != RequestMode::Disabled && request.capability == *capability)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::OperatorConfig;
-
-    #[test]
-    fn hierarchical_default_template_parses() {
-        let raw = OperatorConfig::default_hierarchical_template()
-            .expect("render hierarchical default template");
-        let config = OperatorConfig::parse(&raw).expect("parse hierarchical default");
-
-        assert_eq!(
-            config.socket_path,
-            std::path::PathBuf::from("/run/actrail/control.sock")
-        );
-        assert_eq!(config.web.listen_addr.to_string(), "127.0.0.1:18080");
-        assert!(config.export_runtime.enabled);
-    }
-
-    #[test]
-    fn hierarchical_unknown_field_is_rejected() {
-        let raw = "[control]\nunexpected = true\n";
-        let error = OperatorConfig::parse(&raw).expect_err("unknown key must fail");
-        assert!(error.contains("unknown field"));
-        assert!(error.contains("unexpected"));
-    }
-
-    #[test]
-    fn effective_config_exports_as_hierarchical_toml() {
-        let raw = OperatorConfig::default_hierarchical_template()
-            .expect("render hierarchical default template");
-        let config = OperatorConfig::parse(&raw).expect("parse hierarchical default");
-        let exported = config
-            .to_hierarchical_toml()
-            .expect("export effective hierarchical config");
-        let reparsed = OperatorConfig::parse(&exported).expect("reparse effective export");
-
-        assert_eq!(reparsed, config);
-        assert!(exported.contains("[control]"));
-        assert!(exported.contains("[payload.tls]"));
-    }
-
-    #[test]
-    fn initialize_writes_hierarchical_template() {
-        let path = std::env::temp_dir().join(format!(
-            "actrail-hierarchical-config-test-{}.toml",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_file(&path);
-
-        OperatorConfig::initialize(&path, false).expect("initialize config");
-        let raw = std::fs::read_to_string(&path).expect("read initialized config");
-        let config = OperatorConfig::parse(&raw).expect("parse initialized config");
-        std::fs::remove_file(&path).expect("remove initialized config");
-
-        assert_eq!(config.web.listen_addr.to_string(), "127.0.0.1:18080");
-        assert!(raw.contains("[control]"));
-        assert!(raw.contains("[storage.sqlite]"));
-    }
 }

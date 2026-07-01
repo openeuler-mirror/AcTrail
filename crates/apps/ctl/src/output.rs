@@ -82,6 +82,12 @@ pub fn format_reply(reply: &ControlReply) -> String {
                 printable_warnings(&item.warnings)
             )
         }
+        ControlReply::PluginCommand(reply) => {
+            let mut output = String::new();
+            output.push_str(&reply.stdout);
+            output.push_str(&reply.stderr);
+            output
+        }
     }
 }
 

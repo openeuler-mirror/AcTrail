@@ -17,8 +17,8 @@ use super::super::{
     AgentInvocationConfig, ApplicationProtocolConfig, CommandControlConfig,
     DEFAULT_ACTIVE_TRACE_MAX, DEFAULT_CONTROL_PENDING_CONNECTION_MAX,
     DEFAULT_FINALIZATION_POLL_INTERVAL_MS, DEFAULT_FINALIZATION_TRACES_PER_CYCLE, DisabledOrPath,
-    EbpfCollectorConfig, EbpfEnabledMode, EnforcementBackend, EnforcementConfig,
-    EnforcementMarkStrategy, EnforcementScope, FileBulkReadObservationConfig,
+    EbpfCollectorConfig, EbpfEnabledMode, EnforcementBackend, EnforcementBuiltinRuleConfig,
+    EnforcementConfig, EnforcementMarkStrategy, EnforcementScope, FileBulkReadObservationConfig,
     FileMetadataRetention, FileObservationConfig, FileRawEventRetention, FileTtyObservationConfig,
     FsEnumerateObservationConfig, Http2DataContentRetention, HttpBodyRetention,
     HttpHeadersRetention, L0LlmCallRetention, L1SseRetention, L2HttpRetention,
@@ -289,6 +289,12 @@ impl OperatorDocument {
                 backend: enforcement_backend_as_str(config.enforcement.backend).to_string(),
                 scope: enforcement_scope_as_str(config.enforcement.scope).to_string(),
                 rules_path: config.enforcement.rules_path.display().to_string(),
+                builtin_rules: config
+                    .enforcement
+                    .builtin_rules
+                    .iter()
+                    .map(EnforcementBuiltinRuleDocument::from_config)
+                    .collect(),
                 default_decision: config.enforcement.default_decision.as_str().to_string(),
                 mark_strategy: enforcement_mark_strategy_as_str(config.enforcement.mark_strategy)
                     .to_string(),

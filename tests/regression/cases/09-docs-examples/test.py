@@ -20,6 +20,7 @@ from case_02_llm_http_payload_capture.step import (
 )
 from case_03_extended_observation_e2e.step import run_extended_observation
 from case_07_xiaoo_claude_agent_invocation.step import run_agent_invocation
+from case_08_full_monitor_validation.step import run_full_monitor_python_launch
 
 
 CASE_ID = "docs-examples"
@@ -56,6 +57,7 @@ def run(env) -> CaseResult:
         run_external_http2,
         run_extended_observation,
         run_agent_invocation,
+        run_full_monitor_python_launch,
     ):
         status = step(env, result, workload)
         if status == FAIL:

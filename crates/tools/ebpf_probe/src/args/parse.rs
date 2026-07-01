@@ -238,6 +238,7 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ProbeCommand
                 backend: required_enforcement_backend(&flags, "--enforcement-backend")?,
                 scope: required_enforcement_scope(&flags, "--enforcement-scope")?,
                 rules_path: required_path(&flags, "--enforcement-rules-path")?,
+                builtin_rules: Vec::new(),
                 default_decision: required_enforcement_decision(
                     &flags,
                     "--enforcement-default-decision",

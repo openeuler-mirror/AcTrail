@@ -32,10 +32,11 @@ ZERO_CONTROL_CONCURRENCY_MANIFEST = ROOT / "tests/plugins/load-validation/zero-c
 ZERO_PAYLOAD_REF_MANIFEST = ROOT / "tests/plugins/load-validation/zero-payload-ref.plugin.toml"
 ZERO_OBSERVATION_QUEUE_MANIFEST = ROOT / "tests/plugins/load-validation/zero-observation-queue.plugin.toml"
 ZERO_PLUGIN_CONFIG_READ_MANIFEST = RUN_DIR / "zero-plugin-config-read.plugin.toml"
+ZERO_PLUGIN_COMMAND_TIMEOUT_MANIFEST = RUN_DIR / "zero-plugin-command-timeout.plugin.toml"
 EMPTY_EVENT_FAMILIES_MANIFEST = ROOT / "tests/plugins/load-validation/empty-event-families.plugin.toml"
 CONTROL_EVENT_FAMILIES_MANIFEST = ROOT / "tests/plugins/load-validation/control-event-families.plugin.toml"
-FILE_POLICY_READ_MANIFEST = ROOT / "tests/plugins/control-file-policy-read/policy-read.plugin.toml"
-ZERO_FILE_POLICY_READ_MANIFEST = ROOT / "tests/plugins/load-validation/zero-file-policy-read.plugin.toml"
+FILE_ACCESS_CURRENT_MATCH_GET_MANIFEST = ROOT / "tests/plugins/control-file-policy-read/policy-read.plugin.toml"
+ZERO_FILE_ACCESS_CURRENT_MATCH_GET_MANIFEST = ROOT / "tests/plugins/load-validation/zero-file-policy-read.plugin.toml"
 CONTEXT_QUERY_MANIFEST = ROOT / "tests/plugins/control-context-query/context-query.plugin.toml"
 ZERO_CONTEXT_QUERY_MANIFEST = ROOT / "tests/plugins/load-validation/zero-context-query.plugin.toml"
 NATIVE_OBSERVATION_MANIFEST = ROOT / "tests/plugins/load-validation/native-observation.plugin.toml"
@@ -69,6 +70,7 @@ ZERO_CONTROL_CONCURRENCY_INSTANCE = "wasm.zero-control-concurrency"
 ZERO_PAYLOAD_REF_INSTANCE = "wasm.zero-payload-ref"
 ZERO_OBSERVATION_QUEUE_INSTANCE = "wasm.zero-observation-queue"
 ZERO_PLUGIN_CONFIG_READ_INSTANCE = "wasm.zero-plugin-config-read"
+ZERO_PLUGIN_COMMAND_TIMEOUT_INSTANCE = "wasm.zero-plugin-command-timeout"
 EMPTY_EVENT_FAMILIES_INSTANCE = "wasm.empty-event-families"
 CONTROL_EVENT_FAMILIES_INSTANCE = "wasm.control-event-families"
 DUPLICATE_EVENT_FAMILIES_INSTANCE = "wasm.duplicate-event-families"
@@ -76,8 +78,8 @@ DUPLICATE_CAPABILITIES_INSTANCE = "wasm.duplicate-capabilities"
 BUILTIN_WASM_ABI_INSTANCE = "builtin.invalid-wasm-abi"
 MISSING_WASM_ARTIFACT_INSTANCE = "wasm.missing-artifact"
 WHITESPACE_WASM_ARTIFACT_INSTANCE = "wasm.whitespace-artifact"
-UNGRANTED_FILE_POLICY_READ_INSTANCE = "wasm.ungranted-file-policy-read"
-ZERO_FILE_POLICY_READ_INSTANCE = "wasm.zero-file-policy-read"
+UNGRANTED_FILE_ACCESS_CURRENT_MATCH_GET_INSTANCE = "wasm.ungranted-file-access.current-match-get"
+ZERO_FILE_ACCESS_CURRENT_MATCH_GET_INSTANCE = "wasm.zero-file-access.current-match-get"
 UNGRANTED_CONTEXT_QUERY_INSTANCE = "wasm.ungranted-context-query"
 ZERO_CONTEXT_QUERY_INSTANCE = "wasm.zero-context-query"
 NATIVE_OBSERVATION_INSTANCE = "native.observation-disabled"
@@ -221,6 +223,30 @@ abi = "wit-component"
 
 [hostcall_limits.plugin_config]
 read_max_bytes = 0
+
+[plugin_config]
+format = "toml"
+schema_ref = ""
+required = false
+""",
+        encoding="utf-8",
+    )
+    ZERO_PLUGIN_COMMAND_TIMEOUT_MANIFEST.write_text(
+        f"""[general]
+id = "wasm.zero-plugin-command-timeout"
+api_version = "actrail.plugin.v1"
+role = "control-decider"
+runtime = "wasm"
+
+[host]
+capabilities = []
+
+[runtime.wasm]
+artifact_path = "{ROOT / "tests/plugins/wasm-component-control-graylist/component-allow.wasm"}"
+abi = "wit-component"
+
+[hostcall_limits.plugin_command]
+timeout_ms = 0
 
 [plugin_config]
 format = "toml"
@@ -661,6 +687,16 @@ def main() -> int:
         )
         assert_load_fails(
             actraild,
+            ZERO_PLUGIN_COMMAND_TIMEOUT_MANIFEST,
+            ZERO_PLUGIN_COMMAND_TIMEOUT_INSTANCE,
+            [
+                "plugin_manifest",
+                "hostcall_limits.plugin_command.timeout_ms",
+                "greater than zero",
+            ],
+        )
+        assert_load_fails(
+            actraild,
             EMPTY_EVENT_FAMILIES_MANIFEST,
             EMPTY_EVENT_FAMILIES_INSTANCE,
             ["plugin_manifest", "subscriptions.event_families", "must not be empty"],
@@ -705,14 +741,14 @@ def main() -> int:
         )
         assert_load_fails(
             actraild,
-            FILE_POLICY_READ_MANIFEST,
-            UNGRANTED_FILE_POLICY_READ_INSTANCE,
-            ["plugin_capability", "file-policy-read"],
+            FILE_ACCESS_CURRENT_MATCH_GET_MANIFEST,
+            UNGRANTED_FILE_ACCESS_CURRENT_MATCH_GET_INSTANCE,
+            ["plugin_capability", "file-access.current-match-get"],
         )
         assert_load_fails(
             actraild,
-            ZERO_FILE_POLICY_READ_MANIFEST,
-            ZERO_FILE_POLICY_READ_INSTANCE,
+            ZERO_FILE_ACCESS_CURRENT_MATCH_GET_MANIFEST,
+            ZERO_FILE_ACCESS_CURRENT_MATCH_GET_INSTANCE,
             ["plugin_manifest", "hostcall_limits.file_policy.read_max_bytes", "greater than zero"],
         )
         assert_load_fails(
@@ -790,6 +826,7 @@ def main() -> int:
         print("plugin_load_validation_zero_payload_ref=ok")
         print("plugin_load_validation_zero_observation_queue=ok")
         print("plugin_load_validation_zero_plugin_config_read=ok")
+        print("plugin_load_validation_zero_plugin_command_timeout=ok")
         print("plugin_load_validation_empty_event_families=ok")
         print("plugin_load_validation_control_event_families=ok")
         print("plugin_load_validation_duplicate_event_families=ok")
@@ -797,8 +834,8 @@ def main() -> int:
         print("plugin_load_validation_builtin_wasm_abi=ok")
         print("plugin_load_validation_missing_wasm_artifact=ok")
         print("plugin_load_validation_whitespace_wasm_artifact=ok")
-        print("plugin_load_validation_ungranted_file_policy_read=ok")
-        print("plugin_load_validation_zero_file_policy_read=ok")
+        print("plugin_load_validation_ungranted_current_match_get=ok")
+        print("plugin_load_validation_zero_current_match_get=ok")
         print("plugin_load_validation_ungranted_context_query=ok")
         print("plugin_load_validation_zero_context_query=ok")
         print("plugin_load_validation_native_observation_disabled=ok")

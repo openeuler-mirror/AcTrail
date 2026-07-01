@@ -477,6 +477,7 @@ impl ConfigValues {
             backend: self.required_enforcement_backend("enforcement_backend")?,
             scope: self.required_enforcement_scope("enforcement_scope")?,
             rules_path: self.required_path("enforcement_rules_path")?,
+            builtin_rules: Vec::new(),
             default_decision: self.required_enforcement_decision("enforcement_default_decision")?,
             mark_strategy: self.required_enforcement_mark_strategy("enforcement_mark_strategy")?,
             audit_enabled: self.required_bool("enforcement_audit_enabled")?,
