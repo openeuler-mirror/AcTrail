@@ -110,6 +110,10 @@ pub(crate) struct RingLostStats {
     pub(crate) read_user_fail_events: u64,
     pub(crate) read_user_fail_actual_bytes: u64,
     pub(crate) read_user_fail_reserved_bytes: u64,
+    pub(crate) output_fail_events: u64,
+    pub(crate) output_fail_actual_bytes: u64,
+    pub(crate) output_fail_reserved_bytes: u64,
+    pub(crate) perf_lost_events: u64,
 }
 
 pub(crate) fn payload_class(captured_bytes: usize) -> usize {

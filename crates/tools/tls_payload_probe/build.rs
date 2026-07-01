@@ -29,11 +29,25 @@ fn main() {
         "cargo:rustc-env=TLS_PAYLOAD_PROBE_BPF_OBJECT={}",
         object_path.display()
     );
+    let use_perf_buffer = env::var_os("CARGO_FEATURE_PERF_BUFFER").is_some();
+    let mut clang_args = vec!["-I", "bpf", bpf_target_arch];
+    if use_perf_buffer {
+        clang_args.push("-DTLS_PROBE_EVENT_TRANSPORT_PERF");
+    }
+    let _ = writeln!(
+        stdout,
+        "cargo:warning=tls-payload-probe event transport: {}",
+        if use_perf_buffer {
+            "perf-buffer"
+        } else {
+            "ring-buffer"
+        }
+    );
 
     libbpf_cargo::SkeletonBuilder::new()
         .source("bpf/tls_payload_probe.bpf.c")
         .obj(&object_path)
-        .clang_args(["-I", "bpf", bpf_target_arch])
+        .clang_args(clang_args)
         .build()
         .expect("failed to compile tls-payload-probe eBPF object");
 }

@@ -1,6 +1,6 @@
 # tls_payload_probe
 
-`tls-payload-probe` launches one target command, resolves TLS payload probe points with `tls_probe_point_finder fast`, attaches pid-specific eBPF uprobes with libbpf, copies plaintext payload bytes inside BPF with `bpf_probe_read_user`, and streams binary ring-buffer events to the CLI. The CLI reports raw payload-event metadata, then assembles HTTP/1.x plaintext into body fragments and complete messages. Streaming `text/event-stream` bodies are reassembled into SSE frames, and recognized LLM text events are reported as a separate text layer.
+`tls-payload-probe` launches one target command, resolves TLS payload probe points with `tls_probe_point_finder fast`, attaches pid-specific eBPF uprobes with libbpf, copies plaintext payload bytes inside BPF with `bpf_probe_read_user`, and streams binary payload events to the CLI. The CLI reports raw payload-event metadata, then assembles HTTP/1.x plaintext into body fragments and complete messages. Streaming `text/event-stream` bodies are reassembled into SSE frames, and recognized LLM text events are reported as a separate text layer.
 
 It does not use tracefs `uprobe_events`, ftrace `trace_pipe`, or user-space `process_vm_readv` payload reads.
 
@@ -15,6 +15,12 @@ Example:
 ```bash
 target/debug/tls-payload-probe probe --provider rustls -- \
   xiaoo run -p "请直接回答：你好"
+```
+
+Default builds use the ring-buffer transport. To force perfbuffer and avoid ringbuf maps/helpers in this tool's BPF object:
+
+```bash
+cargo build -p tls_payload_probe --features perf-buffer
 ```
 
 The first argument after `--` is the program inspected by finder fast mode. The target is spawned paused, BPF uprobes are attached to that pid, and then the target is resumed.
@@ -54,9 +60,9 @@ For streamed non-SSE HTTP bodies, projection caches body fragments by pid, strea
 
 ## BPF ABI
 
-The BPF payload event header is 72 bytes followed by a size-classed payload region. Ring-buffer records reserve `72 + class_size` bytes, where `class_size` is the smallest bucket that fits `captured_size`: `512`, `2048`, `4096`, `8192`, or `65535`. The single-event payload ABI maximum is `65535` bytes. `--ring-buffer-bytes` must be at least `--max-capture-bytes + 72`. OpenSSL/BoringSSL operations larger than one event are split into at most `8` ordered segments and reassembled before HTTP parsing. If the operation exceeds the configured segment budget, the last emitted segment carries the `truncated` flag and the HTTP assembler fails fast; the tool does not fall back to user-space reads. Rustls capture still emits one payload event per rustls payload/chunk path.
+The BPF payload event header is 72 bytes followed by a size-classed payload region. Ring-buffer records reserve `72 + class_size` bytes, where `class_size` is the smallest bucket that fits `captured_size`: `512`, `2048`, `4096`, `8192`, or `65535`. Perfbuffer builds use a per-cpu scratch event and submit `72 + captured_size` bytes with `bpf_perf_event_output`; `--ring-buffer-bytes` is converted to perf pages. The single-event payload ABI maximum is `65535` bytes. `--ring-buffer-bytes` must be at least `--max-capture-bytes + 72`. OpenSSL/BoringSSL operations larger than one event are split into at most `8` ordered segments and reassembled before HTTP parsing. If the operation exceeds the configured segment budget, the last emitted segment carries the `truncated` flag and the HTTP assembler fails fast; the tool does not fall back to user-space reads. Rustls capture still emits one payload event per rustls payload/chunk path.
 
-When `--ring-stats` is enabled, the CLI prints emitted record accounting and BPF loss counters after `target_exit`. `actual_bytes` uses `72 + captured_size`; `reserved_bytes` uses `72 + class_size`. Reserve failures are counted in BPF because those payloads never reach the userspace ring-buffer reader. User-memory read failures are also counted before the reserved record is discarded.
+When `--ring-stats` is enabled, the CLI prints emitted record accounting and BPF loss counters after `target_exit`. `actual_bytes` uses `72 + captured_size`; `reserved_bytes` uses `72 + class_size`. Reserve failures are counted in BPF because those payloads never reach userspace. User-memory read failures are also counted before the reserved record is discarded. Perfbuffer builds also report BPF output failures and perf lost callback counts.
 
 The BPF object is compiled for the host target architecture. x86_64 uses System V registers (`di`, `si`, `dx`, `cx`, `ax`); aarch64 uses `x0..x3` and `x0` return. `SSL_read` and `SSL_write` normalize their third argument as a positive `int`; `SSL_read` also normalizes its return value as a positive `int`. `SSL_read_ex` and `SSL_write_ex` treat the length argument as `size_t`.
 

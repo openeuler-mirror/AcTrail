@@ -105,6 +105,30 @@ impl RingStatsReporter {
             self.style.key("read_user_fail_reserved_bytes"),
             lost.read_user_fail_reserved_bytes
         );
+        let _ = writeln!(
+            output,
+            "    {} = {}",
+            self.style.key("output_fail_events"),
+            lost.output_fail_events
+        );
+        let _ = writeln!(
+            output,
+            "    {} = {}",
+            self.style.key("output_fail_actual_bytes"),
+            lost.output_fail_actual_bytes
+        );
+        let _ = writeln!(
+            output,
+            "    {} = {}",
+            self.style.key("output_fail_reserved_bytes"),
+            lost.output_fail_reserved_bytes
+        );
+        let _ = writeln!(
+            output,
+            "    {} = {}",
+            self.style.key("perf_lost_events"),
+            lost.perf_lost_events
+        );
         Output::stdout(&output)
     }
 }
