@@ -9,7 +9,8 @@ const SKIP_JAVA_AGENT_ENV: &str = "ACTRAIL_SKIP_JAVA_AGENT_BUILD";
 const REQUIRE_JAVA_AGENT_ENV: &str = "ACTRAIL_REQUIRE_JAVA_AGENT_BUILD";
 const JAVA_RELEASE_ENV: &str = "ACTRAIL_JAVA_AGENT_RELEASE";
 const JAVA_HOME_ENV: &str = "JAVA_HOME";
-const PATH_ENV: &str = "PATH";
+const JAVAC_ENV: &str = "ACTRAIL_JAVAC";
+const JAR_ENV: &str = "ACTRAIL_JAR";
 const JAVA_AGENT_SOURCE_DIR: &str = "java-agent/src/main/java";
 const JAVA_AGENT_BUILD_DIR: &str = "java-agent";
 const JAVA_AGENT_JAR_NAME: &str = "actrail-java-payload-agent.jar";
@@ -24,7 +25,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed={REQUIRE_JAVA_AGENT_ENV}");
     println!("cargo:rerun-if-env-changed={JAVA_RELEASE_ENV}");
     println!("cargo:rerun-if-env-changed={JAVA_HOME_ENV}");
-    println!("cargo:rerun-if-env-changed={PATH_ENV}");
+    println!("cargo:rerun-if-env-changed={JAVAC_ENV}");
+    println!("cargo:rerun-if-env-changed={JAR_ENV}");
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR must be set"));
     let artifact_rs = out_dir.join("java_agent_artifact.rs");
@@ -51,8 +53,9 @@ fn main() {
         Err(error) => {
             let message = format!(
                 "build embedded Java payload agent: {error}. \
-                 Use JDK 17+ on PATH, or set ACTRAIL_SKIP_JAVA_AGENT_BUILD=1 \
-                 when Java JSSE payload capture is intentionally unavailable."
+                 Use JDK 17+ via JAVA_HOME, {JAVAC_ENV}/{JAR_ENV}, or PATH; \
+                 set ACTRAIL_SKIP_JAVA_AGENT_BUILD=1 when Java JSSE payload \
+                 capture is intentionally unavailable."
             );
             if require_java_agent {
                 panic!("{message}");
@@ -149,7 +152,7 @@ fn build_java_agent(
         classes_dir.clone().into_os_string(),
     ];
     javac_args.extend(sources.iter().map(|path| OsString::from(path.as_os_str())));
-    run_tool(&java_tool("javac"), &javac_args)?;
+    run_tool(&java_tool("javac", JAVAC_ENV)?, &javac_args)?;
 
     let jar_args = vec![
         OsString::from("cfm"),
@@ -159,21 +162,39 @@ fn build_java_agent(
         classes_dir.into_os_string(),
         OsString::from("."),
     ];
-    run_tool(&java_tool("jar"), &jar_args)?;
+    run_tool(&java_tool("jar", JAR_ENV)?, &jar_args)?;
     Ok(jar_path)
 }
 
-fn java_tool(program: &str) -> OsString {
-    java_tool_with_home(program, env::var_os(JAVA_HOME_ENV))
+fn java_tool(program: &str, override_env: &str) -> Result<OsString, String> {
+    java_tool_from_config(
+        program,
+        env::var_os(override_env),
+        env::var_os(JAVA_HOME_ENV),
+    )
 }
 
-fn java_tool_with_home(program: &str, java_home: Option<OsString>) -> OsString {
+fn java_tool_from_config(
+    program: &str,
+    explicit_tool: Option<OsString>,
+    java_home: Option<OsString>,
+) -> Result<OsString, String> {
+    if let Some(tool) = explicit_tool.filter(|value| !value.is_empty()) {
+        let path = PathBuf::from(&tool);
+        if !path.is_absolute() {
+            return Err(format!(
+                "explicit Java tool path for {program} must be absolute: {}",
+                path.display()
+            ));
+        }
+        return Ok(tool);
+    }
     match java_home.filter(|value| !value.is_empty()) {
-        Some(home) => PathBuf::from(home)
+        Some(home) => Ok(PathBuf::from(home)
             .join("bin")
             .join(program)
-            .into_os_string(),
-        None => OsString::from(program),
+            .into_os_string()),
+        None => Ok(OsString::from(program)),
     }
 }
 
@@ -253,14 +274,16 @@ mod tests {
 
     #[test]
     fn java_tool_uses_java_home_bin() {
-        let tool = java_tool_with_home("javac", Some(OsString::from("/opt/jdk-17")));
+        let tool = java_tool_from_config("javac", None, Some(OsString::from("/opt/jdk-17")))
+            .expect("java home tool path");
 
         assert_eq!(PathBuf::from(tool), PathBuf::from("/opt/jdk-17/bin/javac"));
     }
 
     #[test]
     fn java_tool_ignores_empty_java_home() {
-        let tool = java_tool_with_home("jar", Some(OsString::new()));
+        let tool =
+            java_tool_from_config("jar", None, Some(OsString::new())).expect("path fallback tool");
 
         assert_eq!(tool, OsString::from("jar"));
     }

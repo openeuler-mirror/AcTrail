@@ -42,12 +42,17 @@ sudo apt-get install -y clang llvm libelf-dev zlib1g-dev pkg-config libssl-dev o
 ```
 
 The release build also compiles the embedded Java JSSE payload agent used for
-Java HTTPS plaintext capture. Keep JDK 17+ `java` and `javac` on `PATH`; if the
-host has multiple JDKs, prepend the JDK 17+ `bin` directory before building:
+Java HTTPS plaintext capture. Keep JDK 17+ `java`, `javac`, and `jar` on
+`PATH`, or set `JAVA_HOME` to a JDK 17+ installation:
 
 ```bash
-export PATH="/path/to/jdk-17/bin:$PATH"
+export JAVA_HOME="/path/to/jdk-17"
 ```
+
+For hermetic builds, set absolute tool paths with `ACTRAIL_JAVAC` and
+`ACTRAIL_JAR`. Cargo tracks `JAVA_HOME`, `ACTRAIL_JAVAC`, and `ACTRAIL_JAR` as
+Java-agent build inputs; changing `PATH` alone does not invalidate the existing
+`ctl` build artifact.
 
 If Java JSSE payload capture is intentionally unavailable, build with
 `ACTRAIL_SKIP_JAVA_AGENT_BUILD=1`. Set `ACTRAIL_REQUIRE_JAVA_AGENT_BUILD=1` when
