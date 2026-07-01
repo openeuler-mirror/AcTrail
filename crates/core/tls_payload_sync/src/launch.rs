@@ -60,6 +60,9 @@ pub fn run_with_runtime_libraries(
     );
     if !audit_libraries.is_empty() {
         child.env("LD_AUDIT", audit_env_value_for_libraries(audit_libraries)?);
+        if let Some((key, value)) = audit_bind_now_env(audit_libraries) {
+            child.env(key, value);
+        }
     }
     child
         .status()
@@ -103,6 +106,22 @@ pub fn preload_env_value_for_libraries(libraries: &[PathBuf]) -> SyncResult<OsSt
 
 pub fn audit_env_value_for_libraries(libraries: &[PathBuf]) -> SyncResult<OsString> {
     loader_env_value_for_libraries(libraries, "LD_AUDIT")
+}
+
+pub fn audit_bind_now_env(audit_libraries: &[PathBuf]) -> Option<(OsString, OsString)> {
+    if audit_libraries.is_empty() {
+        return None;
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        // AArch64 lazy audit binding can clobber x8, which carries hidden
+        // structure-return storage for PLT calls such as CPython _PyStatus.
+        Some((OsString::from("LD_BIND_NOW"), OsString::from("1")))
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        None
+    }
 }
 
 pub fn audit_libraries_for_plans(

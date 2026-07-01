@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use model_core::payload::{PayloadSegment, PayloadSourceBoundary};
 use plugin_system::{
-    FilePolicyReadContext, FilePolicyWriteUpdate, PluginHostGrants, PluginHostcallMetrics,
+    FilePolicyHost, FilePolicyReadContext, PluginHostGrants, PluginHostcallMetrics,
     PluginHostcallMetricsSource, PluginManifest, PluginPayloadReadMetrics, PluginRuntimeError,
 };
 use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder};
@@ -25,6 +25,10 @@ pub(crate) const DEFAULT_HOSTCALL_FILE_POLICY_CONTEXT_REF_MAX_BYTES: u32 = 128;
 pub(crate) const DEFAULT_HOSTCALL_FILE_POLICY_QUERY_MAX_BYTES: u32 = 128;
 pub(crate) const DEFAULT_HOSTCALL_FILE_POLICY_READ_MAX_BYTES: u32 = 1024;
 pub(crate) const DEFAULT_HOSTCALL_PLUGIN_CONFIG_READ_MAX_BYTES: u32 = 4096;
+pub(crate) const DEFAULT_HOSTCALL_PLUGIN_COMMAND_ARGV_MAX_COUNT: u32 = 32;
+pub(crate) const DEFAULT_HOSTCALL_PLUGIN_COMMAND_ARG_MAX_BYTES: u32 = 4096;
+pub(crate) const DEFAULT_HOSTCALL_PLUGIN_COMMAND_OUTPUT_MAX_BYTES: u32 = 64 * 1024;
+pub(crate) const DEFAULT_HOSTCALL_PLUGIN_COMMAND_TIMEOUT_MS: u64 = 30_000;
 
 pub(crate) struct WasmStoreState {
     limits: StoreLimits,
@@ -35,7 +39,8 @@ pub(crate) struct WasmStoreState {
     payload_snapshot: BTreeMap<String, PayloadSnapshotEntry>,
     control_context: Option<ControlContextSnapshot>,
     file_policy_context: Option<FilePolicyReadContext>,
-    file_policy_updates: Vec<FilePolicyWriteUpdate>,
+    file_policy_host: Option<Arc<dyn FilePolicyHost>>,
+    file_policy_owner_instance_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -50,8 +55,12 @@ pub(crate) struct WasmHostLimits {
     pub(crate) context_read_max_bytes: usize,
     pub(crate) file_policy_context_ref_max_bytes: usize,
     pub(crate) file_policy_query_max_bytes: usize,
-    pub(crate) file_policy_read_max_bytes: usize,
+    pub(crate) file_policy_io_max_bytes: usize,
     pub(crate) plugin_config_read_max_bytes: usize,
+    pub(crate) plugin_command_argv_max_count: usize,
+    pub(crate) plugin_command_arg_max_bytes: usize,
+    pub(crate) plugin_command_output_max_bytes: usize,
+    pub(crate) plugin_command_timeout_ms: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -156,7 +165,7 @@ pub(crate) fn host_limits(manifest: &PluginManifest) -> Result<WasmHostLimits, P
         .file_policy
         .query_max_bytes
         .unwrap_or(DEFAULT_HOSTCALL_FILE_POLICY_QUERY_MAX_BYTES);
-    let file_policy_read_max_bytes = manifest
+    let file_policy_io_max_bytes = manifest
         .hostcall_limits
         .file_policy
         .read_max_bytes
@@ -166,6 +175,26 @@ pub(crate) fn host_limits(manifest: &PluginManifest) -> Result<WasmHostLimits, P
         .plugin_config
         .read_max_bytes
         .unwrap_or(DEFAULT_HOSTCALL_PLUGIN_CONFIG_READ_MAX_BYTES);
+    let plugin_command_argv_max_count = manifest
+        .hostcall_limits
+        .plugin_command
+        .argv_max_count
+        .unwrap_or(DEFAULT_HOSTCALL_PLUGIN_COMMAND_ARGV_MAX_COUNT);
+    let plugin_command_arg_max_bytes = manifest
+        .hostcall_limits
+        .plugin_command
+        .arg_max_bytes
+        .unwrap_or(DEFAULT_HOSTCALL_PLUGIN_COMMAND_ARG_MAX_BYTES);
+    let plugin_command_output_max_bytes = manifest
+        .hostcall_limits
+        .plugin_command
+        .output_max_bytes
+        .unwrap_or(DEFAULT_HOSTCALL_PLUGIN_COMMAND_OUTPUT_MAX_BYTES);
+    let plugin_command_timeout_ms = manifest
+        .hostcall_limits
+        .plugin_command
+        .timeout_ms
+        .unwrap_or(DEFAULT_HOSTCALL_PLUGIN_COMMAND_TIMEOUT_MS);
     Ok(WasmHostLimits {
         env_name_max_bytes: usize::try_from(env_name_max_bytes).map_err(|error| {
             PluginRuntimeError::new(
@@ -230,14 +259,12 @@ pub(crate) fn host_limits(manifest: &PluginManifest) -> Result<WasmHostLimits, P
                 )
             },
         )?,
-        file_policy_read_max_bytes: usize::try_from(file_policy_read_max_bytes).map_err(
-            |error| {
-                PluginRuntimeError::new(
-                    "wasm_runtime",
-                    format!("file-policy read hostcall byte limit overflow: {error}"),
-                )
-            },
-        )?,
+        file_policy_io_max_bytes: usize::try_from(file_policy_io_max_bytes).map_err(|error| {
+            PluginRuntimeError::new(
+                "wasm_runtime",
+                format!("file-policy read hostcall byte limit overflow: {error}"),
+            )
+        })?,
         plugin_config_read_max_bytes: usize::try_from(plugin_config_read_max_bytes).map_err(
             |error| {
                 PluginRuntimeError::new(
@@ -246,6 +273,31 @@ pub(crate) fn host_limits(manifest: &PluginManifest) -> Result<WasmHostLimits, P
                 )
             },
         )?,
+        plugin_command_argv_max_count: usize::try_from(plugin_command_argv_max_count).map_err(
+            |error| {
+                PluginRuntimeError::new(
+                    "wasm_runtime",
+                    format!("plugin command argv count limit overflow: {error}"),
+                )
+            },
+        )?,
+        plugin_command_arg_max_bytes: usize::try_from(plugin_command_arg_max_bytes).map_err(
+            |error| {
+                PluginRuntimeError::new(
+                    "wasm_runtime",
+                    format!("plugin command arg byte limit overflow: {error}"),
+                )
+            },
+        )?,
+        plugin_command_output_max_bytes: usize::try_from(plugin_command_output_max_bytes).map_err(
+            |error| {
+                PluginRuntimeError::new(
+                    "wasm_runtime",
+                    format!("plugin command output byte limit overflow: {error}"),
+                )
+            },
+        )?,
+        plugin_command_timeout_ms,
     })
 }
 
@@ -334,12 +386,21 @@ impl WasmStoreState {
         self.file_policy_context = None;
     }
 
-    pub(crate) fn push_file_policy_update(&mut self, update: FilePolicyWriteUpdate) {
-        self.file_policy_updates.push(update);
+    pub(crate) fn file_policy_host(&self) -> Option<&Arc<dyn FilePolicyHost>> {
+        self.file_policy_host.as_ref()
     }
 
-    pub(crate) fn take_file_policy_updates(&mut self) -> Vec<FilePolicyWriteUpdate> {
-        std::mem::take(&mut self.file_policy_updates)
+    pub(crate) fn file_policy_owner_instance_id(&self) -> Option<&str> {
+        self.file_policy_owner_instance_id.as_deref()
+    }
+
+    pub(crate) fn set_file_policy_host(
+        &mut self,
+        owner_instance_id: impl Into<String>,
+        host: Option<Arc<dyn FilePolicyHost>>,
+    ) {
+        self.file_policy_owner_instance_id = host.as_ref().map(|_| owner_instance_id.into());
+        self.file_policy_host = host;
     }
 }
 
@@ -417,7 +478,8 @@ pub(crate) fn limited_store(
             payload_snapshot: BTreeMap::new(),
             control_context: None,
             file_policy_context: None,
-            file_policy_updates: Vec::new(),
+            file_policy_host: None,
+            file_policy_owner_instance_id: None,
         },
     );
     store.limiter(|state| &mut state.limits);

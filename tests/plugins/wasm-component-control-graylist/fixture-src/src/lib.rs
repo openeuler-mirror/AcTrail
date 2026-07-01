@@ -18,11 +18,13 @@ wit_bindgen::generate!({
 });
 
 use actrail::plugin::types::{ControlSubject, ControlVerdict, DecisionScope};
-use exports::actrail::plugin::control_decider::{DecisionRequest, DecisionResponse, Guest};
+use exports::actrail::plugin::control_decider::{
+    DecisionRequest, DecisionResponse, Guest as ControlGuest,
+};
 
 struct Component;
 
-impl Guest for Component {
+impl ControlGuest for Component {
     fn decide(request: DecisionRequest) -> Result<DecisionResponse, String> {
         wit_bindgen::rt::maybe_link_cabi_realloc();
         if !matches!(request.subject, ControlSubject::FileAccess) {

@@ -22,10 +22,10 @@ pub use event::{
     write_event_line,
 };
 pub use launch::{
-    RuntimeLibraryPath, audit_env_value, audit_env_value_for_libraries, audit_libraries_for_plans,
-    launch_command_for_plan, preload_env_value, preload_env_value_for_libraries, run_with_preload,
-    run_with_preload_libraries, run_with_runtime_libraries, runtime_library_path,
-    validate_native_backend_plan,
+    RuntimeLibraryPath, audit_bind_now_env, audit_env_value, audit_env_value_for_libraries,
+    audit_libraries_for_plans, launch_command_for_plan, preload_env_value,
+    preload_env_value_for_libraries, run_with_preload, run_with_preload_libraries,
+    run_with_runtime_libraries, runtime_library_path, validate_native_backend_plan,
 };
 pub use lookup::{
     PlanLookupRequest, PlanLookupResponse, decode_plan_lookup_request, decode_plan_lookup_response,

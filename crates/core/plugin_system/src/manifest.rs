@@ -243,6 +243,22 @@ impl PluginManifest {
             self.hostcall_limits.plugin_config.read_max_bytes,
             "hostcall_limits.plugin_config.read_max_bytes",
         )?;
+        validate_positive_u32(
+            self.hostcall_limits.plugin_command.argv_max_count,
+            "hostcall_limits.plugin_command.argv_max_count",
+        )?;
+        validate_positive_u32(
+            self.hostcall_limits.plugin_command.arg_max_bytes,
+            "hostcall_limits.plugin_command.arg_max_bytes",
+        )?;
+        validate_positive_u32(
+            self.hostcall_limits.plugin_command.output_max_bytes,
+            "hostcall_limits.plugin_command.output_max_bytes",
+        )?;
+        validate_positive_u64(
+            self.hostcall_limits.plugin_command.timeout_ms,
+            "hostcall_limits.plugin_command.timeout_ms",
+        )?;
         Ok(())
     }
 
@@ -425,6 +441,8 @@ pub struct PluginHostcallLimits {
     pub file_policy: PluginFilePolicyHostcallLimits,
     #[serde(default)]
     pub plugin_config: PluginConfigHostcallLimits,
+    #[serde(default)]
+    pub plugin_command: PluginCommandHostcallLimits,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -456,6 +474,15 @@ pub struct PluginFilePolicyHostcallLimits {
     pub context_ref_max_bytes: Option<u32>,
     pub query_max_bytes: Option<u32>,
     pub read_max_bytes: Option<u32>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginCommandHostcallLimits {
+    pub argv_max_count: Option<u32>,
+    pub arg_max_bytes: Option<u32>,
+    pub output_max_bytes: Option<u32>,
+    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -535,8 +562,18 @@ pub struct PluginConfigDeclaration {
 pub enum PluginCapability {
     PayloadRead,
     ContextQuery,
-    FilePolicyRead,
-    FilePolicyWrite,
+    #[serde(rename = "file-access.current-match-get")]
+    FileAccessCurrentMatchGet,
+    #[serde(rename = "file-access.current-context-query")]
+    FileAccessCurrentContextQuery,
+    #[serde(rename = "file-policy.rules.read")]
+    FilePolicyRulesRead,
+    #[serde(rename = "file-policy.rules.match-dry-run")]
+    FilePolicyRulesMatchDryRun,
+    #[serde(rename = "file-policy.rules.validate")]
+    FilePolicyRulesValidate,
+    #[serde(rename = "file-policy.rules.apply")]
+    FilePolicyRulesApply,
     NetworkEgress,
     EnvRead,
 }
@@ -546,8 +583,12 @@ impl PluginCapability {
         match self {
             Self::PayloadRead => "payload-read",
             Self::ContextQuery => "context-query",
-            Self::FilePolicyRead => "file-policy-read",
-            Self::FilePolicyWrite => "file-policy-write",
+            Self::FileAccessCurrentMatchGet => "file-access.current-match-get",
+            Self::FileAccessCurrentContextQuery => "file-access.current-context-query",
+            Self::FilePolicyRulesRead => "file-policy.rules.read",
+            Self::FilePolicyRulesMatchDryRun => "file-policy.rules.match-dry-run",
+            Self::FilePolicyRulesValidate => "file-policy.rules.validate",
+            Self::FilePolicyRulesApply => "file-policy.rules.apply",
             Self::NetworkEgress => "network-egress",
             Self::EnvRead => "env-read",
         }

@@ -12,6 +12,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gray-path", required=True)
     parser.add_argument("--denied-path", required=True)
     parser.add_argument("--gray-repeat", type=int, default=1)
+    parser.add_argument("--expect-gray-denied", action="store_true")
     return parser.parse_args()
 
 
@@ -31,8 +32,17 @@ def main() -> int:
     read_text(args.allowed_path)
     print("allowed=ok", flush=True)
     for index in range(args.gray_repeat):
-        read_text(args.gray_path)
         label = "gray" if index == 0 else f"gray{index + 1}"
+        try:
+            read_text(args.gray_path)
+        except PermissionError:
+            print(f"{label}=permission_denied", flush=True)
+            if args.expect_gray_denied:
+                continue
+            return 1
+        if args.expect_gray_denied:
+            print(f"{label}=unexpected_success", flush=True)
+            return 1
         print(f"{label}=ok", flush=True)
     try:
         read_text(args.denied_path)

@@ -51,6 +51,15 @@ pub(super) fn handle_permission_event(
     if metadata.mask & libc::FAN_OPEN_PERM == 0 {
         return Ok(());
     }
+    let observed_path = event_fd.display_path();
+    if observed_path
+        .as_deref()
+        .and_then(|path| rules.find_builtin_allow(Path::new(path)))
+        .is_some()
+    {
+        respond(fanotify_fd, event_fd.raw_fd(), true)?;
+        return Ok(());
+    }
     let Some((trace_id, process)) = traced_process(metadata.pid, trace_runtime, identity_reader)?
     else {
         respond(fanotify_fd, event_fd.raw_fd(), true)?;
@@ -61,7 +70,6 @@ pub(super) fn handle_permission_event(
         return Ok(());
     }
 
-    let observed_path = event_fd.display_path();
     let Some(rule) = observed_path
         .as_deref()
         .and_then(|path| rules.find_path(Path::new(path)))
@@ -417,7 +425,7 @@ fn control_decision_request(
     process: &ProcessIdentity,
     rule: &EnforcementRule,
 ) -> ControlDecisionRequest {
-    let file_policy_context = file_policy_read_context(rule);
+    let file_policy_context = current_file_access_match_context(rule);
     ControlDecisionRequest {
         decision_id: format!("{}:{trace_id}", rule.rule_id),
         trace_id: trace_id.to_string(),
@@ -430,7 +438,7 @@ fn control_decision_request(
     }
 }
 
-fn file_policy_read_context(rule: &EnforcementRule) -> Option<FilePolicyReadContext> {
+fn current_file_access_match_context(rule: &EnforcementRule) -> Option<FilePolicyReadContext> {
     let RuleDecision::SyncPlugin {
         instance_id,
         timeout_ms,

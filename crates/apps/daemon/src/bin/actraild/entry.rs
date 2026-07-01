@@ -1,17 +1,18 @@
 //! Top-level command execution for the daemon operator binary.
 
-use std::path::Path;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 
 use config_core::daemon::{
-    OperatorConfig, OperatorConfigInitStatus, StartupPluginFailurePolicy, StartupPluginLoadConfig,
+    EnforcementBuiltinRuleConfig, EnforcementConfig, OperatorConfig, OperatorConfigInitStatus,
+    StartupPluginFailurePolicy, StartupPluginLoadConfig,
 };
 use control_contract::command::{
-    ControlCommand, PluginListCommand, PluginLoadCommand, PluginStatusCommand, PluginUnloadCommand,
+    ControlCommand, PluginCommandCommand, PluginListCommand, PluginLoadCommand,
+    PluginStatusCommand, PluginUnloadCommand,
 };
 use control_contract::reply::ControlReply;
-use daemon::{
-    DaemonProfileRegistry, DaemonRunError, LocalDaemonServer, resolve_ebpf_collector_config,
-};
+use daemon::{DaemonProfileRegistry, LocalDaemonServer, resolve_ebpf_collector_config};
 use model_core::ids::RequestId;
 use plugin_system::PluginInstanceStatus;
 use uds_control_client::{UdsControlClient, UdsSocketTransport};
@@ -26,9 +27,11 @@ use crate::signals;
 
 pub fn run_from_env() -> Result<(), String> {
     match parse_args(std::env::args().skip(1))? {
-        AcTraildCommand::Init { config_path, force } => {
-            initialize_operator_config(&config_path, force)
-        }
+        AcTraildCommand::Init {
+            config_path,
+            force,
+            patch_path,
+        } => initialize_operator_config(&config_path, force, patch_path.as_deref()),
         AcTraildCommand::Run { config_path } => {
             let config = OperatorConfig::load(&config_path)?;
             run_foreground(&config_path, &config)
@@ -82,8 +85,12 @@ pub fn run_from_env() -> Result<(), String> {
     }
 }
 
-fn initialize_operator_config(path: &Path, force: bool) -> Result<(), String> {
-    match OperatorConfig::initialize(path, force)? {
+fn initialize_operator_config(
+    path: &Path,
+    force: bool,
+    patch_path: Option<&Path>,
+) -> Result<(), String> {
+    match initialize_operator_config_file(path, force, patch_path)? {
         OperatorConfigInitStatus::Created => println!("initialized config {}", path.display()),
         OperatorConfigInitStatus::ExistingValid => {
             println!("config {} already exists and is valid", path.display());
@@ -95,8 +102,41 @@ fn initialize_operator_config(path: &Path, force: bool) -> Result<(), String> {
     Ok(())
 }
 
+fn initialize_operator_config_file(
+    path: &Path,
+    force: bool,
+    patch_path: Option<&Path>,
+) -> Result<OperatorConfigInitStatus, String> {
+    let existed = path.exists();
+    if existed && !force {
+        if let Some(patch_path) = patch_path {
+            return Err(format!(
+                "config {} already exists; pass --force to rewrite it with patch {}",
+                path.display(),
+                patch_path.display()
+            ));
+        }
+        OperatorConfig::load(path)
+            .map_err(|error| format!("validate config {}: {error}", path.display()))?;
+        return Ok(OperatorConfigInitStatus::ExistingValid);
+    }
+    let mut config = OperatorConfig::init()?;
+    if let Some(patch_path) = patch_path {
+        config = config.patch_file(patch_path)?;
+    }
+    config.dump_to_path(path, force)?;
+    Ok(if existed {
+        OperatorConfigInitStatus::Overwritten
+    } else {
+        OperatorConfigInitStatus::Created
+    })
+}
+
 fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), String> {
     signals::install_shutdown_handlers()?;
+    write_pid_file(&config.pid_file, std::process::id())?;
+    let pid_written = true;
+    let enforcement = enforcement_with_builtin_rules(config_path, config)?;
     let ebpf_resolution = resolve_ebpf_collector_config(config.ebpf_config.clone());
     if let Some(detail) = &ebpf_resolution.degrade_detail {
         tracing::warn!(detail = %detail, "actraild ebpf auto-degraded");
@@ -121,7 +161,7 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
             config.trace_finalization,
             config.workload_diagnostics.clone(),
             config.export_runtime.clone(),
-            config.enforcement.clone(),
+            enforcement.clone(),
             config.command_control.clone(),
             config.network_control.clone(),
             provider_rule_set,
@@ -143,17 +183,40 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
             config.trace_finalization,
             config.workload_diagnostics.clone(),
             config.export_runtime.clone(),
-            config.enforcement.clone(),
+            enforcement.clone(),
             config.command_control.clone(),
             config.network_control.clone(),
         ),
     }
-    .map_err(|error| format!("daemon build failed: {}: {}", error.code, error.message))?;
-    load_configured_startup_plugins(&mut server, config)?;
-    load_persistent_plugins(&mut server, config_path)?;
+    .map_err(|error| {
+        cleanup_pid_file(config, pid_written).unwrap_or_else(|cleanup_error| {
+            tracing::warn!(
+                error = %cleanup_error,
+                "daemon runtime cleanup failed after build error"
+            );
+        });
+        format!("daemon build failed: {}: {}", error.code, error.message)
+    })?;
+    if let Err(error) = load_configured_startup_plugins(&mut server, config) {
+        cleanup_pid_file(config, pid_written).unwrap_or_else(|cleanup_error| {
+            tracing::warn!(
+                error = %cleanup_error,
+                "daemon runtime cleanup failed after startup plugin error"
+            );
+        });
+        return Err(error);
+    }
+    if let Err(error) = load_persistent_plugins(&mut server, config_path) {
+        cleanup_pid_file(config, pid_written).unwrap_or_else(|cleanup_error| {
+            tracing::warn!(
+                error = %cleanup_error,
+                "daemon runtime cleanup failed after persistent plugin error"
+            );
+        });
+        return Err(error);
+    }
 
     let mut socket_bound = false;
-    let mut pid_written = false;
     let result = server.serve_forever_until(
         &config.socket_path,
         config.socket_permissions,
@@ -161,8 +224,6 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
         signals::shutdown_requested,
         || {
             socket_bound = true;
-            write_pid_file(&config.pid_file, std::process::id()).map_err(run_error)?;
-            pid_written = true;
             println!(
                 "daemon listening socket={} storage={}",
                 config.socket_path.display(),
@@ -173,6 +234,8 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
     );
     let cleanup = if socket_bound {
         cleanup_runtime_files(config, pid_written)
+    } else if pid_written {
+        cleanup_pid_file(config, pid_written)
     } else {
         Ok(())
     };
@@ -283,7 +346,126 @@ fn run_plugin_command(
             print_plugin_status(&status);
             Ok(())
         }
+        PluginCommand::Cmd { instance_id, argv } => {
+            validate_plugin_instance_id(&instance_id)?;
+            if argv.is_empty() {
+                return Err("plugin_command: plugin argv must not be empty".to_string());
+            }
+            let reply = send_control_command(
+                config,
+                ControlCommand::PluginCommand(PluginCommandCommand {
+                    request_id: RequestId::new(1),
+                    instance_id,
+                    argv,
+                }),
+            )?;
+            let ControlReply::PluginCommand(reply) = reply else {
+                return Err("daemon returned unexpected plugin command reply".to_string());
+            };
+            if !reply.stdout.is_empty() {
+                print!("{}", reply.stdout);
+            }
+            if !reply.stderr.is_empty() {
+                eprint!("{}", reply.stderr);
+            }
+            if reply.exit_code == 0 {
+                Ok(())
+            } else {
+                Err(format!(
+                    "plugin command for {} exited with {}",
+                    reply.instance_id, reply.exit_code
+                ))
+            }
+        }
     }
+}
+
+fn enforcement_with_builtin_rules(
+    config_path: &Path,
+    config: &OperatorConfig,
+) -> Result<EnforcementConfig, String> {
+    let mut enforcement = config.enforcement.clone();
+    append_builtin_rule(&mut enforcement, "actrail.self.config", config_path)?;
+    append_builtin_rule(&mut enforcement, "actrail.self.pid", &config.pid_file)?;
+    append_builtin_rule(&mut enforcement, "actrail.self.socket", &config.socket_path)?;
+    append_builtin_rule(&mut enforcement, "actrail.self.log", &config.log_path)?;
+    append_builtin_rule(
+        &mut enforcement,
+        "actrail.self.storage",
+        config.storage.path(),
+    )?;
+    append_builtin_rule(
+        &mut enforcement,
+        "actrail.self.storage-wal",
+        &path_with_suffix(config.storage.path(), "-wal"),
+    )?;
+    append_builtin_rule(
+        &mut enforcement,
+        "actrail.self.storage-shm",
+        &path_with_suffix(config.storage.path(), "-shm"),
+    )?;
+    append_builtin_rule(
+        &mut enforcement,
+        "actrail.self.enforcement-rules",
+        &config.enforcement.rules_path,
+    )?;
+    append_builtin_rule(
+        &mut enforcement,
+        "actrail.self.command-control-rules",
+        &config.command_control.rules_path,
+    )?;
+    append_builtin_rule(
+        &mut enforcement,
+        "actrail.self.network-control-rules",
+        &config.network_control.rules_path,
+    )?;
+    append_builtin_rule(
+        &mut enforcement,
+        "actrail.self.payload-tls-sync-socket",
+        &config.payload_config.tls.sync_event_socket_path,
+    )?;
+    if let Some(provider_rule_set) = &config.provider_rule_set {
+        append_builtin_rule(
+            &mut enforcement,
+            "actrail.self.provider-rules",
+            &provider_rule_set.rules_path,
+        )?;
+    }
+    append_builtin_rule(
+        &mut enforcement,
+        "actrail.self.plugin-registry",
+        &plugin_registry::registry_path(config_path)?,
+    )?;
+    Ok(enforcement)
+}
+
+fn append_builtin_rule(
+    enforcement: &mut EnforcementConfig,
+    rule_id: &str,
+    path: &Path,
+) -> Result<(), String> {
+    enforcement
+        .builtin_rules
+        .push(EnforcementBuiltinRuleConfig {
+            rule_id: rule_id.to_string(),
+            path: absolute_runtime_path(path)?.display().to_string(),
+        });
+    Ok(())
+}
+
+fn absolute_runtime_path(path: &Path) -> Result<PathBuf, String> {
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+    std::env::current_dir()
+        .map(|current_dir| current_dir.join(path))
+        .map_err(|error| format!("resolve current directory for {}: {error}", path.display()))
+}
+
+fn path_with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut value = OsString::from(path.as_os_str());
+    value.push(suffix);
+    PathBuf::from(value)
 }
 
 fn validate_plugin_instance_id(instance_id: &str) -> Result<(), String> {
@@ -514,9 +696,7 @@ fn printable_warnings(warnings: &[String]) -> String {
 }
 
 fn cleanup_runtime_files(config: &OperatorConfig, pid_written: bool) -> Result<(), String> {
-    if pid_written {
-        remove_runtime_file(&config.pid_file)?;
-    }
+    cleanup_pid_file(config, pid_written)?;
     remove_runtime_file(&config.socket_path)?;
     if config.payload_config.tls.capture_backend.is_sync() {
         remove_runtime_file(&config.payload_config.tls.sync_event_socket_path)?;
@@ -524,9 +704,9 @@ fn cleanup_runtime_files(config: &OperatorConfig, pid_written: bool) -> Result<(
     Ok(())
 }
 
-fn run_error(error: String) -> DaemonRunError {
-    DaemonRunError {
-        stage: "ready".to_string(),
-        message: error,
+fn cleanup_pid_file(config: &OperatorConfig, pid_written: bool) -> Result<(), String> {
+    if pid_written {
+        remove_runtime_file(&config.pid_file)?;
     }
+    Ok(())
 }

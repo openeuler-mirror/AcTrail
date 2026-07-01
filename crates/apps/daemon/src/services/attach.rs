@@ -24,7 +24,7 @@ use config_core::daemon::{
 };
 use config_core::trace_snapshot::CaptureProfileSnapshot;
 use control_contract::command::{ProcessRef, TrackAddCommand};
-use control_contract::reply::{ControlError, TrackAddReply};
+use control_contract::reply::{ControlError, PluginCommandReply, TrackAddReply};
 use ebpf_collector::EbpfCollector;
 use ebpf_collector::procfs::{
     ProcfsIdentityReader, ProcfsTreeSnapshotter, read_container_identity, resolve_namespaced_pid,
@@ -484,6 +484,38 @@ impl AttachService for StorageAttachService {
 
     fn unload_plugin(&mut self, instance_id: &str) -> Result<PluginInstanceStatus, ControlError> {
         self.unload_plugin_impl(instance_id)
+    }
+
+    fn handle_plugin_command(
+        &mut self,
+        command: control_contract::command::PluginCommandCommand,
+    ) -> Result<PluginCommandReply, ControlError> {
+        if command.instance_id.trim().is_empty() {
+            return Err(ControlError::new(
+                "plugin_command",
+                "plugin instance id must not be empty",
+            ));
+        }
+        if command.argv.is_empty() {
+            return Err(ControlError::new(
+                "plugin_command",
+                "plugin command argv must not be empty",
+            ));
+        }
+        let response = self
+            .control_plugins
+            .handle_command(
+                &command.instance_id,
+                plugin_system::PluginCommandRequest { argv: command.argv },
+                plugin_system::PluginCommandBudget::default(),
+            )
+            .map_err(|error| ControlError::new(error.code, error.message))?;
+        Ok(PluginCommandReply {
+            instance_id: command.instance_id,
+            exit_code: response.exit_code,
+            stdout: response.stdout,
+            stderr: response.stderr,
+        })
     }
 }
 

@@ -5,8 +5,10 @@
 这个示例使用 Rust 编写 WebAssembly Component Model 插件，并在 fanotify 灰名单决策中使用以下 hostcall：
 
 - `query-context(c, decision-summary.v1)`：读取结构化 `decision-summary`。
-- `file-policy-read(f, matched-rule.v1)`：读取结构化 `file-policy-view`。
-- `file-policy-write(f, file-policy-update)`：提交结构化 `file-policy-update`，为当前匹配文件写入受限本地快路径规则，影响后续访问。
+- `file-access.current-match-get(f, matched-rule.v1)`：读取结构化 `file-policy-view`。
+- `file-policy-rules-version-get()` 和 `file-policy-rules-apply(request)`：读取策略版本，并把命中的灰名单目标 upsert 为 allow 快路径规则。
+- `file-policy-rules-list(filter, cursor, limit)`：分页读回已应用规则。
+- `file-policy-rules-match-dry-run(request)`：对当前目标执行 dry-run，确认会命中 allow 快路径规则。
 
 源码通过 `actrail_plugin_abi` 引用 `c`、`f`、`decision-summary.v1` 和 `matched-rule.v1`，避免在插件里重复硬编码 ABI 字符串。
 

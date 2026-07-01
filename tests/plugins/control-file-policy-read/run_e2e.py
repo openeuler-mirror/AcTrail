@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the WASM file-policy-read hostcall E2E."""
+"""Run the WASM file-access.current-match-get hostcall E2E."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[3]
 FIXTURE_DIR = ROOT / "tests/plugins/control-file-policy-read"
 GRAYLIST_DIR = ROOT / "tests/plugins/control-graylist"
 MANIFEST = FIXTURE_DIR / "policy-read.plugin.toml"
-INSTANCE = "wasm.file-policy-read"
+INSTANCE = "wasm.file-access.current-match-get"
 
 
 def load_graylist_helpers():
@@ -62,7 +62,7 @@ def wait_for_events(actrailctl: Path, actrailviewer: Path, config_path: Path, at
         if all(value in output for value in expected):
             return output
         time.sleep(sleep_sec)
-    raise RuntimeError("actrailviewer did not show expected file-policy-read events")
+    raise RuntimeError("actrailviewer did not show expected file-access.current-match-get events")
 
 
 def main() -> int:
@@ -74,7 +74,7 @@ def main() -> int:
     actrailviewer = cg.require_binary(bin_dir, "actrailviewer")
     agent_script = GRAYLIST_DIR / "agent.py"
 
-    with tempfile.TemporaryDirectory(prefix="actrail-control-file-policy-read-e2e-") as raw_tmp:
+    with tempfile.TemporaryDirectory(prefix="actrail-control-file-access.current-match-get-e2e-") as raw_tmp:
         tmp = Path(raw_tmp)
         allowed = tmp / "targets" / "allowed.txt"
         gray = tmp / "targets" / "gray.txt"
@@ -117,7 +117,7 @@ def main() -> int:
                     "--instance",
                     INSTANCE,
                     "--grant",
-                    "file-policy-read",
+                    "file-access.current-match-get",
                 ]
             )
             agent = subprocess.Popen(
@@ -147,7 +147,7 @@ def main() -> int:
                         "--pid",
                         str(pid),
                         "--name",
-                        "control-file-policy-read-e2e",
+                        "control-file-access.current-match-get-e2e",
                     ]
                 )
                 if agent.stdin is None:
@@ -183,8 +183,8 @@ def main() -> int:
                         ]
                     )
                 )
-                if status.get("host_grants") != "file-policy-read":
-                    raise RuntimeError(f"file-policy-read grant missing from status\n{status}")
+                if status.get("host_grants") != "file-access.current-match-get":
+                    raise RuntimeError(f"file-access.current-match-get grant missing from status\n{status}")
                 if int(status.get("observed_records", "0")) != 1:
                     raise RuntimeError(f"control plugin should only see the gray decision\n{status}")
                 cg.run_checked(
@@ -203,7 +203,7 @@ def main() -> int:
         finally:
             cg.stop_process(daemon)
 
-    print(f"control_file_policy_read_plugin_instance={INSTANCE}")
+    print(f"control_current_match_get_plugin_instance={INSTANCE}")
     return 0
 
 
@@ -211,5 +211,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as error:
-        print(f"control file-policy-read e2e failed: {error}", file=sys.stderr)
+        print(f"control file-access.current-match-get e2e failed: {error}", file=sys.stderr)
         raise SystemExit(1)

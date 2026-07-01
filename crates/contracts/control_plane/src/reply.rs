@@ -32,6 +32,14 @@ pub struct DoctorReply {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PluginCommandReply {
+    pub instance_id: String,
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ControlReply {
     TrackAdded(TrackAddReply),
     SeccompListenerRegistered,
@@ -40,6 +48,7 @@ pub enum ControlReply {
     Doctor(DoctorReply),
     PluginList(Vec<PluginInstanceStatus>),
     PluginStatus(PluginInstanceStatus),
+    PluginCommand(PluginCommandReply),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

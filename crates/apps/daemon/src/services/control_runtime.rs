@@ -1,23 +1,26 @@
 //! Runtime registry for synchronous control-decision plugins.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use control_contract::reply::ControlError;
 use plugin_system::{
     ControlDecider, ControlDecisionBudget, ControlDecisionRequest, ControlDecisionResponse,
-    PluginInstanceStatus, PluginLifecycleState, PluginPurpose, PluginRuntimeError,
+    PluginCommandBudget, PluginCommandRequest, PluginCommandResponse, PluginInstanceStatus,
+    PluginLifecycleState, PluginPurpose, PluginRuntimeError,
 };
 
 #[derive(Clone)]
 pub(in crate::services) struct ControlPluginRuntime {
     deciders: Arc<RwLock<Vec<Arc<ControlDeciderSlot>>>>,
+    next_instance_index: Arc<AtomicU64>,
 }
 
 impl ControlPluginRuntime {
     pub(in crate::services) fn new() -> Self {
         Self {
             deciders: Arc::new(RwLock::new(Vec::new())),
+            next_instance_index: Arc::new(AtomicU64::new(1)),
         }
     }
 
@@ -55,8 +58,13 @@ impl ControlPluginRuntime {
                 format!("plugin instance {instance_id} already exists"),
             ));
         }
+        let instance_index = self.next_instance_index.fetch_add(1, Ordering::Relaxed);
         let status = active_status(decider.as_ref(), 0, 0, None, warnings.clone());
-        deciders.push(Arc::new(ControlDeciderSlot::new(decider, warnings)));
+        deciders.push(Arc::new(ControlDeciderSlot::new(
+            decider,
+            warnings,
+            instance_index,
+        )));
         Ok(status)
     }
 
@@ -78,6 +86,7 @@ impl ControlPluginRuntime {
             ));
         };
         let slot = deciders.remove(index);
+        slot.active.store(false, Ordering::Relaxed);
         let mut status = slot.status();
         status.state = PluginLifecycleState::Stopped;
         Ok(status)
@@ -85,27 +94,22 @@ impl ControlPluginRuntime {
 
     pub(in crate::services) fn decide(
         &self,
-        instance_id: &str,
+        instance_id_or_index: &str,
         request: ControlDecisionRequest,
         budget: ControlDecisionBudget,
     ) -> Result<ControlDecisionResponse, PluginRuntimeError> {
-        let slot = {
-            let deciders = self
-                .deciders
-                .read()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let Some(slot) = deciders
-                .iter()
-                .find(|slot| slot.decider.instance_id() == instance_id)
-                .cloned()
-            else {
-                return Err(PluginRuntimeError::new(
-                    "plugin_runtime",
-                    format!("plugin instance {instance_id} not found"),
-                ));
-            };
-            slot
+        let Some(slot) = self.find_slot(instance_id_or_index) else {
+            return Err(PluginRuntimeError::new(
+                "plugin_runtime",
+                format!("plugin instance {instance_id_or_index} not found"),
+            ));
         };
+        if !slot.active.load(Ordering::Relaxed) {
+            return Err(PluginRuntimeError::new(
+                "plugin_runtime",
+                format!("plugin instance {instance_id_or_index} is not active"),
+            ));
+        }
         match slot.decider.decide(request, budget) {
             Ok(response) => {
                 slot.observed_records.fetch_add(1, Ordering::Relaxed);
@@ -124,20 +128,86 @@ impl ControlPluginRuntime {
         }
     }
 
+    pub(in crate::services) fn handle_command(
+        &self,
+        instance_id: &str,
+        request: PluginCommandRequest,
+        budget: PluginCommandBudget,
+    ) -> Result<PluginCommandResponse, PluginRuntimeError> {
+        let Some(slot) = self.find_slot(instance_id) else {
+            return Err(PluginRuntimeError::new(
+                "plugin_runtime",
+                format!("plugin instance {instance_id} not found"),
+            ));
+        };
+        if !slot.active.load(Ordering::Relaxed) {
+            return Err(PluginRuntimeError::new(
+                "plugin_runtime",
+                format!("plugin instance {instance_id} is not active"),
+            ));
+        }
+        match slot.decider.handle_command(request, budget) {
+            Ok(response) => {
+                if let Ok(mut last_error) = slot.last_error.lock() {
+                    *last_error = None;
+                }
+                Ok(response)
+            }
+            Err(error) => {
+                if let Ok(mut last_error) = slot.last_error.lock() {
+                    *last_error = Some(format!("{}: {}", error.code, error.message));
+                }
+                Err(error)
+            }
+        }
+    }
+
     pub(in crate::services) fn instance_concurrency_limit(&self, instance_id: &str) -> Option<u32> {
+        let Some(slot) = self.find_slot(instance_id) else {
+            return None;
+        };
+        Some(slot.decider.instance_concurrency_limit())
+    }
+
+    pub(in crate::services) fn is_instance_index_active(&self, instance_index: u64) -> bool {
+        let deciders = self
+            .deciders
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        deciders.iter().any(|slot| {
+            slot.instance_index == instance_index && slot.active.load(Ordering::Relaxed)
+        })
+    }
+
+    pub(in crate::services) fn is_instance_active(&self, instance_id_or_index: &str) -> bool {
+        self.find_slot(instance_id_or_index)
+            .is_some_and(|slot| slot.active.load(Ordering::Relaxed))
+    }
+
+    fn find_slot(&self, instance_id_or_index: &str) -> Option<Arc<ControlDeciderSlot>> {
         let deciders = self
             .deciders
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         deciders
             .iter()
-            .find(|slot| slot.decider.instance_id() == instance_id)
-            .map(|slot| slot.decider.instance_concurrency_limit())
+            .find(|slot| slot.decider.instance_id() == instance_id_or_index)
+            .cloned()
+            .or_else(|| {
+                instance_id_or_index.parse::<u64>().ok().and_then(|index| {
+                    deciders
+                        .iter()
+                        .find(|slot| slot.instance_index == index)
+                        .cloned()
+                })
+            })
     }
 }
 
 struct ControlDeciderSlot {
     decider: Box<dyn ControlDecider>,
+    instance_index: u64,
+    active: AtomicBool,
     observed_records: AtomicU64,
     dropped_records: AtomicU64,
     last_error: Mutex<Option<String>>,
@@ -145,9 +215,11 @@ struct ControlDeciderSlot {
 }
 
 impl ControlDeciderSlot {
-    fn new(decider: Box<dyn ControlDecider>, warnings: Vec<String>) -> Self {
+    fn new(decider: Box<dyn ControlDecider>, warnings: Vec<String>, instance_index: u64) -> Self {
         Self {
             decider,
+            instance_index,
+            active: AtomicBool::new(true),
             observed_records: AtomicU64::new(0),
             dropped_records: AtomicU64::new(0),
             last_error: Mutex::new(None),

@@ -86,6 +86,13 @@ pub struct PluginUnloadCommand {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PluginCommandCommand {
+    pub request_id: RequestId,
+    pub instance_id: String,
+    pub argv: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ControlCommand {
     TrackAdd(TrackAddCommand),
     RegisterSeccompListener(RegisterSeccompListenerCommand),
@@ -96,4 +103,5 @@ pub enum ControlCommand {
     PluginStatus(PluginStatusCommand),
     PluginLoad(PluginLoadCommand),
     PluginUnload(PluginUnloadCommand),
+    PluginCommand(PluginCommandCommand),
 }

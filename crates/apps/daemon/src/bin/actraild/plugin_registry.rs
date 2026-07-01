@@ -91,7 +91,7 @@ pub fn remove_instance(config_path: &Path, instance_id: &str) -> Result<PathBuf,
     Ok(path)
 }
 
-fn registry_path(config_path: &Path) -> Result<PathBuf, String> {
+pub(crate) fn registry_path(config_path: &Path) -> Result<PathBuf, String> {
     let config_path = fs::canonicalize(config_path)
         .map_err(|error| format!("canonicalize config {}: {error}", config_path.display()))?;
     let file_name = config_path

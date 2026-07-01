@@ -84,8 +84,15 @@ pub struct EnforcementConfig {
     pub backend: EnforcementBackend,
     pub scope: EnforcementScope,
     pub rules_path: PathBuf,
+    pub builtin_rules: Vec<EnforcementBuiltinRuleConfig>,
     pub default_decision: EnforcementDecision,
     pub mark_strategy: EnforcementMarkStrategy,
     pub audit_enabled: bool,
     pub event_buffer_bytes: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EnforcementBuiltinRuleConfig {
+    pub rule_id: String,
+    pub path: String,
 }

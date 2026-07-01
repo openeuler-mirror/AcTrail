@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import subprocess
 import sys
@@ -12,6 +13,7 @@ from pathlib import Path
 
 
 SAFE_TMP_PREFIX = "/tmp/actrail-"
+STORAGE_SQLITE_CLEAN_RE = re.compile(r"^- Clear storage_sqlite_path (?P<path>\S+)\b")
 CLEANABLE_PATH_KEYS = {
     "cert_directory",
     "fifo_path",
@@ -158,11 +160,23 @@ def clean_operator_config(actrailctl: Path, config: Path) -> None:
     if not config.exists():
         print(f"skipped missing operator config {config}")
         return
-    subprocess.run(
+    completed = subprocess.run(
         [str(actrailctl), "clean", "--config", str(config)],
         text=True,
-        check=True,
+        capture_output=True,
+        check=False,
     )
+    print(completed.stdout, end="")
+    print(completed.stderr, end="", file=sys.stderr)
+    if completed.returncode != 0:
+        raise subprocess.CalledProcessError(
+            completed.returncode,
+            completed.args,
+            output=completed.stdout,
+            stderr=completed.stderr,
+        )
+    for sqlite_path in cleaned_sqlite_paths(completed.stdout):
+        remove_sqlite_sidecars(sqlite_path)
 
 
 def clean_auxiliary_config(config: Path) -> None:
@@ -209,6 +223,20 @@ def remove_safe_tmp_path(path: Path) -> None:
         print(f"removed file {path}")
         return
     print(f"skipped missing auxiliary path {path}")
+
+
+def cleaned_sqlite_paths(output: str) -> list[Path]:
+    paths: list[Path] = []
+    for line in output.splitlines():
+        match = STORAGE_SQLITE_CLEAN_RE.match(line)
+        if match:
+            paths.append(Path(match.group("path")))
+    return paths
+
+
+def remove_sqlite_sidecars(path: Path) -> None:
+    for suffix in ("-wal", "-shm"):
+        remove_safe_tmp_path(Path(str(path) + suffix))
 
 
 if __name__ == "__main__":

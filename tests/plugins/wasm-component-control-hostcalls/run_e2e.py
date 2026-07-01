@@ -57,7 +57,7 @@ def wait_for_events(
         "deny-file",
         "decision_source=rule",
         "decision_source=sync-plugin",
-        "plugin-gray-allow",
+        "rule_id=fp-",
         f"plugin_instance={INSTANCE}",
         "plugin_timeout_ms=5000",
         "plugin_concurrency_limit=1",
@@ -136,9 +136,13 @@ def main() -> int:
                     "--grant",
                     "context-query",
                     "--grant",
-                    "file-policy-read",
+                    "file-access.current-match-get",
                     "--grant",
-                    "file-policy-write",
+                    "file-policy.rules.read",
+                    "--grant",
+                    "file-policy.rules.match-dry-run",
+                    "--grant",
+                    "file-policy.rules.apply:kind=allow,path=/tmp/**",
                     "--instance",
                     INSTANCE,
                 ]
@@ -185,7 +189,7 @@ def main() -> int:
                 if "gray=ok" not in agent_output:
                     raise RuntimeError("agent did not confirm gray component hostcall allow")
                 if "gray2=ok" not in agent_output:
-                    raise RuntimeError("agent did not confirm file-policy-write local allow")
+                    raise RuntimeError("agent did not confirm file-policy rules apply local allow")
                 if "denied=permission_denied" not in agent_output:
                     raise RuntimeError("agent did not confirm deny fast path")
                 viewer_output = wait_for_events(
@@ -210,10 +214,10 @@ def main() -> int:
                         ]
                     )
                 )
-                if status.get("host_grants") != "context-query,file-policy-read,file-policy-write":
+                if status.get("host_grants") != "context-query,file-access.current-match-get,file-policy.rules.read,file-policy.rules.match-dry-run,file-policy.rules.apply:kind=allow,path=/tmp/**":
                     raise RuntimeError(f"component host grants missing from status\n{status}")
                 if int(status.get("observed_records", "0")) != 1:
-                    raise RuntimeError(f"component plugin should only see gray decision\n{status}")
+                    raise RuntimeError(f"component plugin should only see first gray decision\n{status}")
                 if status.get("last_error", "") not in ("", "none"):
                     raise RuntimeError(f"component plugin reported last_error\n{status}")
                 GRAYLIST.run_checked(
@@ -227,6 +231,52 @@ def main() -> int:
                         INSTANCE,
                     ]
                 )
+                post_unload_agent = subprocess.Popen(
+                    [
+                        sys.executable,
+                        str(agent_script),
+                        "--allowed-path",
+                        str(allowed),
+                        "--gray-path",
+                        str(gray),
+                        "--denied-path",
+                        str(denied),
+                        "--expect-gray-denied",
+                    ],
+                    text=True,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                try:
+                    post_unload_pid = GRAYLIST.read_agent_pid(
+                        post_unload_agent, args.agent_timeout_sec
+                    )
+                    GRAYLIST.run_checked(
+                        [
+                            str(actrailctl),
+                            "--config",
+                            str(config),
+                            "track-add",
+                            "--pid",
+                            str(post_unload_pid),
+                            "--name",
+                            "component-control-hostcalls-unload-e2e",
+                        ]
+                    )
+                    if post_unload_agent.stdin is None:
+                        raise RuntimeError("post-unload agent stdin is not captured")
+                    post_unload_agent.stdin.write("go\n")
+                    post_unload_agent.stdin.flush()
+                    post_unload_output = GRAYLIST.wait_for_agent_output(
+                        post_unload_agent, args.agent_timeout_sec
+                    )
+                    if "gray=permission_denied" not in post_unload_output:
+                        raise RuntimeError(
+                            "post-unload gray access did not lose plugin-owned allow rule"
+                        )
+                finally:
+                    stop_process(post_unload_agent)
             finally:
                 stop_process(agent)
         finally:

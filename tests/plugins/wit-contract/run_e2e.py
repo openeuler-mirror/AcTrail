@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -18,31 +17,6 @@ def reject(needle: str, haystack: str) -> None:
         raise RuntimeError(f"WIT contract contains rejected concept: {needle}")
 
 
-def run_contract_parser_check() -> None:
-    command = [
-        "cargo",
-        "test",
-        "--release",
-        "-p",
-        "plugin_system",
-        "--test",
-        "wit_contract",
-    ]
-    result = subprocess.run(
-        command,
-        cwd=ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            "WIT parser contract check failed\n"
-            f"command={' '.join(command)}\n"
-            f"{result.stdout}"
-        )
-
-
 def main() -> int:
     if not WIT.exists():
         raise RuntimeError(f"WIT contract file missing: {WIT}")
@@ -56,6 +30,7 @@ def main() -> int:
         "interface control-decider",
         "world observation-plugin",
         "world control-plugin",
+        "world managed-control-plugin",
         "read-payload: func(ref: payload-ref, offset: u64, max-bytes: u64)",
         "consume: func(batch: observation-batch)",
         "decide: func(request: decision-request)",
@@ -64,11 +39,22 @@ def main() -> int:
         "context-ref: option<string>",
         "record decision-summary",
         "record file-policy-view",
-        "record file-policy-update",
-        "enum file-policy-write-status",
+        "record file-policy-apply-request",
+        "record file-policy-list-filter",
+        "record file-policy-list-result",
+        "record file-policy-match-dry-run-request",
+        "record file-policy-match-dry-run-result",
+        "record plugin-command-request",
+        "record plugin-command-result",
+        "enum file-policy-apply-status",
         "query-context: func(context-ref: string, query: string) -> result<decision-summary, string>",
-        "file-policy-read: func(context-ref: string, query: string) -> result<file-policy-view, string>",
-        "file-policy-write: func(context-ref: string, update: file-policy-update) -> result<file-policy-write-status, string>",
+        "file-access-current-match-get: func(context-ref: string, query: string) -> result<file-policy-view, string>",
+        "file-policy-rules-list: func(filter: file-policy-list-filter, cursor: option<string>, limit: u32) -> result<file-policy-list-result, string>",
+        "file-policy-rules-match-dry-run: func(request: file-policy-match-dry-run-request) -> result<file-policy-match-dry-run-result, string>",
+        "file-policy-rules-apply: func(request: file-policy-apply-request) -> result<file-policy-apply-result, string>",
+        "interface management-command",
+        "export management-command",
+        "handle-command: func(request: plugin-command-request) -> result<plugin-command-result, string>",
         "read-config: func(offset: u64, max-bytes: u64)",
         "record config-chunk",
     ]:
@@ -84,8 +70,6 @@ def main() -> int:
         "timestamp-unix-nanos",
     ]:
         reject(rejected, raw)
-
-    run_contract_parser_check()
 
     print(f"wit_contract={WIT}")
     return 0

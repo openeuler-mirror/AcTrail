@@ -4,7 +4,8 @@ use std::time::{Duration, Instant};
 
 use plugin_system::{
     ControlDecider, ControlDecisionBudget, ControlDecisionRequest, ControlDecisionResponse,
-    ControlVerdict, DecisionScope, PluginHostGrants, PluginHostcallMetricsSource, PluginManifest,
+    ControlVerdict, DecisionScope, FilePolicyHost, PluginCommandBudget, PluginCommandRequest,
+    PluginCommandResponse, PluginHostGrants, PluginHostcallMetricsSource, PluginManifest,
     PluginRuntimeError, PluginRuntimeKind, PluginWasmAbi,
 };
 use serde_json::{Map, Value, json};
@@ -45,7 +46,9 @@ pub fn build_wasm_control_decider(
     manifest: &PluginManifest,
     plugin_config: Option<&str>,
     host_grants: PluginHostGrants,
+    file_policy_host: Option<Arc<dyn FilePolicyHost>>,
 ) -> Result<WasmControlDecider, PluginRuntimeError> {
+    let instance_id = instance_id.into();
     let wasm = manifest.selected_wasm().ok_or_else(|| {
         PluginRuntimeError::new(
             "wasm_runtime",
@@ -59,6 +62,7 @@ pub fn build_wasm_control_decider(
                 manifest,
                 plugin_config.unwrap_or_default(),
                 host_grants,
+                file_policy_host,
             )?;
             Ok(WasmControlDecider::new(Box::new(decider)))
         }
@@ -68,6 +72,7 @@ pub fn build_wasm_control_decider(
                 manifest,
                 plugin_config,
                 host_grants,
+                file_policy_host,
             )?;
             Ok(WasmControlDecider::new(Box::new(decider)))
         }
@@ -116,6 +121,14 @@ impl ControlDecider for WasmControlDecider {
     ) -> Result<ControlDecisionResponse, PluginRuntimeError> {
         self.inner.decide(request, budget)
     }
+
+    fn handle_command(
+        &self,
+        request: PluginCommandRequest,
+        budget: PluginCommandBudget,
+    ) -> Result<PluginCommandResponse, PluginRuntimeError> {
+        self.inner.handle_command(request, budget)
+    }
 }
 
 struct LegacyWasmControlDecider {
@@ -130,10 +143,11 @@ struct LegacyWasmControlDecider {
 
 impl LegacyWasmControlDecider {
     fn load(
-        instance_id: impl Into<String>,
+        instance_id: String,
         manifest: &PluginManifest,
         plugin_config: &str,
         host_grants: PluginHostGrants,
+        file_policy_host: Option<Arc<dyn FilePolicyHost>>,
     ) -> Result<Self, PluginRuntimeError> {
         let artifact_path = manifest
             .selected_wasm()
@@ -168,11 +182,13 @@ impl LegacyWasmControlDecider {
                 host_grants.clone(),
                 host_limits.clone(),
                 Arc::clone(&hostcall_metrics),
+                instance_id.clone(),
+                file_policy_host.clone(),
             )?));
         }
 
         Ok(Self {
-            instance_id: instance_id.into(),
+            instance_id,
             plugin_id: manifest.id().to_string(),
             host_grants: host_grant_values,
             hostcall_metrics,
@@ -218,6 +234,8 @@ fn instantiate_control_state(
     host_grants: PluginHostGrants,
     host_limits: crate::engine::WasmHostLimits,
     hostcall_metrics: Arc<WasmHostcallMetrics>,
+    instance_id: String,
+    file_policy_host: Option<Arc<dyn FilePolicyHost>>,
 ) -> Result<WasmControlState, PluginRuntimeError> {
     let mut store = limited_store(
         &engine,
@@ -226,6 +244,9 @@ fn instantiate_control_state(
         host_limits,
         hostcall_metrics,
     );
+    store
+        .data_mut()
+        .set_file_policy_host(instance_id, file_policy_host);
     let linker = host_linker(&engine)?;
     let instance = linker.instantiate(&mut store, module).map_err(|error| {
         PluginRuntimeError::new(
@@ -460,7 +481,6 @@ fn decision_from_code(code: i64) -> Result<ControlDecisionResponse, PluginRuntim
         verdict,
         scope,
         reason: None,
-        file_policy_updates: Vec::new(),
     })
 }
 

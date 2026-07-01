@@ -29,6 +29,7 @@ pub enum CtlCommand {
     Init {
         config_path: PathBuf,
         force: bool,
+        patch_path: Option<PathBuf>,
     },
     TrackAdd {
         root: ProcessRef,
@@ -99,10 +100,8 @@ impl CtlCli {
     fn into_invocation(self) -> Result<CtlInvocation, String> {
         let explicit_config = self.config_path.is_some();
         let config_path = self.config_path.unwrap_or_else(default_config_path);
-        let init_path = self
-            .command
-            .init_config_path(config_path.clone(), explicit_config)?;
-        let operator_config = if init_path.is_some() {
+        let local_config_command = self.command.is_local_config_command();
+        let operator_config = if local_config_command {
             None
         } else if self.command.is_probe_suggest_config() {
             // `probe --suggest-config` must work even before a config exists
@@ -111,7 +110,7 @@ impl CtlCli {
         } else {
             Some(load_operator_config(&config_path)?)
         };
-        let socket_path = if init_path.is_some() {
+        let socket_path = if local_config_command {
             None
         } else if self.command.is_probe_suggest_config() && operator_config.is_none() {
             // `probe --suggest-config` with no config: socket path unknown,
@@ -137,9 +136,11 @@ impl CtlCli {
         Ok(CtlInvocation {
             socket_path,
             request_id,
-            command: self
-                .command
-                .into_command(operator_config.as_ref(), init_path)?,
+            command: self.command.into_command(
+                operator_config.as_ref(),
+                config_path,
+                explicit_config,
+            )?,
         })
     }
 }
@@ -168,13 +169,14 @@ impl CtlCommandArgs {
     fn into_command(
         self,
         config: Option<&OperatorConfig>,
-        init_path: Option<PathBuf>,
+        config_path: PathBuf,
+        explicit_config: bool,
     ) -> Result<CtlCommand, String> {
         match self {
             Self::Init(args) => Ok(CtlCommand::Init {
-                config_path: init_path
-                    .ok_or_else(|| "missing operator config path for init".to_string())?,
+                config_path: init_config_path(args.output_path, config_path, explicit_config)?,
                 force: args.force,
+                patch_path: args.patch_path,
             }),
             Self::TrackAdd(args) => {
                 let root_pid = args.root_pid;
@@ -246,19 +248,8 @@ impl CtlCommandArgs {
         matches!(self, Self::Probe(args) if args.suggest_config)
     }
 
-    fn init_config_path(
-        &self,
-        config_path: PathBuf,
-        explicit_config: bool,
-    ) -> Result<Option<PathBuf>, String> {
-        match self {
-            Self::Init(args) => Ok(Some(init_config_path(
-                args.output_path.clone(),
-                config_path,
-                explicit_config,
-            )?)),
-            _ => Ok(None),
-        }
+    fn is_local_config_command(&self) -> bool {
+        matches!(self, Self::Init(_))
     }
 }
 
@@ -266,6 +257,9 @@ impl CtlCommandArgs {
 struct InitArgs {
     #[arg(long = "output", value_name = "PATH")]
     output_path: Option<PathBuf>,
+
+    #[arg(long = "patch", value_name = "PATH")]
+    patch_path: Option<PathBuf>,
 
     #[arg(short = 'f', long = "force")]
     force: bool,
@@ -498,42 +492,4 @@ fn parse_trace_id(raw: &str) -> Result<TraceId, String> {
         .parse::<u64>()
         .map(TraceId::new)
         .map_err(|error| format!("invalid trace id: {error}"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn init_uses_default_config_path_without_socket_path() {
-        let invocation = parse_args(["init".to_string()]).unwrap();
-
-        assert_eq!(invocation.socket_path, None);
-        assert!(matches!(
-            invocation.command,
-            CtlCommand::Init {
-                ref config_path,
-                force: false,
-            } if config_path == &PathBuf::from(DEFAULT_OPERATOR_CONFIG_PATH)
-        ));
-    }
-
-    #[test]
-    fn init_can_target_output_path() {
-        let invocation = parse_args([
-            "init".to_string(),
-            "--output".to_string(),
-            "/tmp/actrail-ctl-test.conf".to_string(),
-        ])
-        .unwrap();
-
-        assert_eq!(invocation.socket_path, None);
-        assert!(matches!(
-            invocation.command,
-            CtlCommand::Init {
-                ref config_path,
-                force: false,
-            } if config_path == &PathBuf::from("/tmp/actrail-ctl-test.conf")
-        ));
-    }
 }

@@ -11,7 +11,6 @@ from workload_config import required
 from helpers import (
     add_expected_found_check,
     actrail_command,
-    clean_default_operator_state,
     communicate,
     event_rows,
     fail_step,
@@ -31,14 +30,13 @@ from helpers import (
 
 def run_quick_start(env, result: CaseResult, workload: dict[str, str]) -> str:
     name = "docs 01 quick-start"
-    config = None
+    config = env.repo_root / "docs/examples/01.quick-start/operator.conf"
     script = env.repo_root / "docs/examples/01.quick-start/lifecycle_network_target.py"
-    result.begin_check(name, "running launch workflow")
+    result.begin_check(name, "running launch workflow with docs config")
     daemon = None
     target = None
     try:
         run_clean(env, "quick-start", workload)
-        clean_default_operator_state(env, workload)
         daemon = start_daemon(env, config, workload)
         record_process_artifacts(result, daemon)
         process_env = {
@@ -63,7 +61,7 @@ def run_quick_start(env, result: CaseResult, workload: dict[str, str]) -> str:
                 env.python,
                 str(script),
                 "--config",
-                str(env.default_operator_config_path()),
+                str(config),
             ),
             extra_env=process_env,
         )

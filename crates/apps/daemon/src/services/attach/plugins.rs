@@ -82,11 +82,15 @@ impl StorageAttachService {
                     .map_err(|error| ControlError::new(error.code, error.message))
             }
             PluginPurpose::ControlDecider => {
+                let file_policy_host = self
+                    .enforcement
+                    .file_policy_host(self.control_plugins.clone());
                 let decider = build_control_decider_from_manifest(
                     &command.instance_id,
                     &manifest,
                     plugin_config_raw.as_deref(),
                     host_grants,
+                    Some(std::sync::Arc::new(file_policy_host)),
                 )?;
                 self.control_plugins.add_decider(decider, manifest_warnings)
             }
@@ -116,6 +120,7 @@ impl StorageAttachService {
             .iter()
             .any(|status| status.instance_id == instance_id)
         {
+            self.enforcement.remove_plugin_policy_owner(instance_id)?;
             return self.control_plugins.remove_decider(instance_id);
         }
         Err(ControlError::new(
@@ -186,14 +191,40 @@ fn validate_plugin_capability_grants(
                 ungranted.push(capability.as_str());
             }
             PluginCapability::ContextQuery => {}
-            PluginCapability::FilePolicyRead if !host_grants.can_read_file_policy() => {
+            PluginCapability::FileAccessCurrentMatchGet
+                if !host_grants.can_get_current_file_access_match() =>
+            {
                 ungranted.push(capability.as_str());
             }
-            PluginCapability::FilePolicyRead => {}
-            PluginCapability::FilePolicyWrite if !host_grants.can_write_file_policy() => {
+            PluginCapability::FileAccessCurrentMatchGet => {}
+            PluginCapability::FileAccessCurrentContextQuery
+                if !host_grants.can_query_current_file_access_context() =>
+            {
                 ungranted.push(capability.as_str());
             }
-            PluginCapability::FilePolicyWrite => {}
+            PluginCapability::FileAccessCurrentContextQuery => {}
+            PluginCapability::FilePolicyRulesRead if !host_grants.can_read_file_policy_rules() => {
+                ungranted.push(capability.as_str());
+            }
+            PluginCapability::FilePolicyRulesRead => {}
+            PluginCapability::FilePolicyRulesMatchDryRun
+                if !host_grants.can_match_dry_run_file_policy_rules() =>
+            {
+                ungranted.push(capability.as_str());
+            }
+            PluginCapability::FilePolicyRulesMatchDryRun => {}
+            PluginCapability::FilePolicyRulesValidate
+                if !host_grants.can_validate_file_policy_rules() =>
+            {
+                ungranted.push(capability.as_str());
+            }
+            PluginCapability::FilePolicyRulesValidate => {}
+            PluginCapability::FilePolicyRulesApply
+                if !host_grants.can_apply_file_policy_rules() =>
+            {
+                ungranted.push(capability.as_str());
+            }
+            PluginCapability::FilePolicyRulesApply => {}
             other => ungranted.push(other.as_str()),
         }
     }
@@ -332,6 +363,7 @@ fn build_control_decider_from_manifest(
     manifest: &PluginManifest,
     plugin_config: Option<&str>,
     host_grants: PluginHostGrants,
+    file_policy_host: Option<std::sync::Arc<dyn plugin_system::FilePolicyHost>>,
 ) -> Result<Box<dyn ControlDecider>, ControlError> {
     match manifest.runtime_kind() {
         PluginRuntimeKind::Wasm => {
@@ -340,6 +372,7 @@ fn build_control_decider_from_manifest(
                 manifest,
                 plugin_config,
                 host_grants,
+                file_policy_host,
             )
             .map_err(|error| ControlError::new(error.code, error.message))?;
             Ok(Box::new(decider))

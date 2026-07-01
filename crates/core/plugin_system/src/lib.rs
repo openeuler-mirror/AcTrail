@@ -10,23 +10,28 @@ mod status;
 
 pub use control::{
     ControlActorProcessIdentity, ControlDecider, ControlDecisionBudget, ControlDecisionRequest,
-    ControlDecisionResponse, ControlSubject, ControlVerdict, DecisionScope, FilePolicyMatchedRule,
-    FilePolicyReadContext, FilePolicyWriteUpdate, CONTROL_CURRENT_CONTEXT_TOKEN,
-    CONTROL_DECISION_SUMMARY_QUERY, FILE_POLICY_CURRENT_CONTEXT_TOKEN,
-    FILE_POLICY_MATCHED_RULE_QUERY, FILE_POLICY_WRITE_SCHEMA_VERSION,
+    ControlDecisionResponse, ControlSubject, ControlVerdict, DecisionScope, FilePolicyApplyError,
+    FilePolicyApplyMode, FilePolicyApplyPrecondition, FilePolicyApplyRequest,
+    FilePolicyApplyResult, FilePolicyApplyStatus, FilePolicyDecision, FilePolicyHost,
+    FilePolicyListFilter, FilePolicyListResult, FilePolicyMatchDryRunRequest,
+    FilePolicyMatchDryRunResult, FilePolicyMatchedRule, FilePolicyOperation, FilePolicyPatchItem,
+    FilePolicyPatchOp, FilePolicyReadContext, FilePolicyRuleDraft, FilePolicyRuleView,
+    PluginCommandBudget, PluginCommandRequest, PluginCommandResponse,
+    CONTROL_CURRENT_CONTEXT_TOKEN, CONTROL_DECISION_SUMMARY_QUERY,
+    FILE_POLICY_CURRENT_CONTEXT_TOKEN, FILE_POLICY_MATCHED_RULE_QUERY,
 };
 pub use diagnostics::{PluginDroppedRecord, PluginRuntimeError};
-pub use grants::{PluginHostGrant, PluginHostGrants};
+pub use grants::{FilePolicyRulesApplyGrant, PluginHostGrant, PluginHostGrants};
 pub use manifest::{
-    PluginBuiltinDeclaration, PluginCapability, PluginConfigDeclaration,
-    PluginConfigHostcallLimits, PluginContextHostcallLimits, PluginControlDeciderDeclaration,
-    PluginControlDeciderResources, PluginEnvHostcallLimits, PluginFilePolicyHostcallLimits,
-    PluginGeneralDeclaration, PluginHostDeclaration, PluginHostcallLimits, PluginManifest,
-    PluginManifestPolicy, PluginNativeDylibDeclaration, PluginObservationConsumerDeclaration,
-    PluginObservationConsumerResources, PluginPayloadHostcallLimits, PluginPurpose,
-    PluginRoleDeclaration, PluginRuntimeDeclaration, PluginRuntimeKind,
-    PluginSubscriptionDeclaration, PluginUnusedRuntimeSectionsPolicy, PluginWasmAbi,
-    PluginWasmDeclaration, PluginWasmResourceLimits, SUPPORTED_PLUGIN_API_VERSION,
+    PluginBuiltinDeclaration, PluginCapability, PluginCommandHostcallLimits,
+    PluginConfigDeclaration, PluginConfigHostcallLimits, PluginContextHostcallLimits,
+    PluginControlDeciderDeclaration, PluginControlDeciderResources, PluginEnvHostcallLimits,
+    PluginFilePolicyHostcallLimits, PluginGeneralDeclaration, PluginHostDeclaration,
+    PluginHostcallLimits, PluginManifest, PluginManifestPolicy, PluginNativeDylibDeclaration,
+    PluginObservationConsumerDeclaration, PluginObservationConsumerResources,
+    PluginPayloadHostcallLimits, PluginPurpose, PluginRoleDeclaration, PluginRuntimeDeclaration,
+    PluginRuntimeKind, PluginSubscriptionDeclaration, PluginUnusedRuntimeSectionsPolicy,
+    PluginWasmAbi, PluginWasmDeclaration, PluginWasmResourceLimits, SUPPORTED_PLUGIN_API_VERSION,
 };
 pub use observation::{
     ObservationBatch, ObservationConsumeReport, ObservationConsumer, ObservationEventFamily,

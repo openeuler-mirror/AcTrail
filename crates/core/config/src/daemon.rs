@@ -40,8 +40,8 @@ pub use agent::{
 pub use application::{ApplicationProtocolConfig, SseDataPolicy};
 pub use command::CommandControlConfig;
 pub use enforcement::{
-    EnforcementBackend, EnforcementConfig, EnforcementDecision, EnforcementMarkStrategy,
-    EnforcementScope,
+    EnforcementBackend, EnforcementBuiltinRuleConfig, EnforcementConfig, EnforcementDecision,
+    EnforcementMarkStrategy, EnforcementScope,
 };
 pub use export_factory::ExportConfig as RuntimeExportConfig;
 pub use file_observation::{

@@ -54,7 +54,14 @@ impl WitComponentObservationConsumer {
         plugin_config: Option<&str>,
         host_grants: PluginHostGrants,
     ) -> Result<Self, PluginRuntimeError> {
-        if host_grants.can_query_context() || host_grants.can_read_file_policy() {
+        if host_grants.can_query_context()
+            || host_grants.can_get_current_file_access_match()
+            || host_grants.can_query_current_file_access_context()
+            || host_grants.can_read_file_policy_rules()
+            || host_grants.can_match_dry_run_file_policy_rules()
+            || host_grants.can_validate_file_policy_rules()
+            || host_grants.can_apply_file_policy_rules()
+        {
             return Err(PluginRuntimeError::new(
                 "wasm_runtime",
                 "only env-read and payload-read grants are implemented for WIT component plugins",
@@ -517,14 +524,21 @@ impl ObservationConsumer for WitComponentObservationConsumer {
         let result = consume.call(&mut state.store, &[input], &mut results);
         state.store.data_mut().clear_payload_snapshot();
         result.map_err(|error| component_call_error(&mut state.store, error))?;
-        parse_observation_report(
+        let parsed = parse_observation_report(
             &self.instance_id,
             self.queue_capacity,
             batch.trace.trace_id,
             results.into_iter().next().ok_or_else(|| {
                 PluginRuntimeError::new("wasm_runtime", "wasm component consume returned no result")
             })?,
-        )
+        );
+        consume.post_return(&mut state.store).map_err(|error| {
+            PluginRuntimeError::new(
+                "wasm_runtime",
+                format!("wasm component consume post-return failed: {error}"),
+            )
+        })?;
+        parsed
     }
 }
 

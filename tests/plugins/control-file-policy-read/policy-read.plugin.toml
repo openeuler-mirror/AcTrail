@@ -1,11 +1,11 @@
 [general]
-id = "wasm.file-policy-read"
+id = "wasm.file-access.current-match-get"
 api_version = "actrail.plugin.v1"
 role = "control-decider"
 runtime = "wasm"
 
 [host]
-capabilities = ["file-policy-read"]
+capabilities = ["file-access.current-match-get"]
 
 [runtime.wasm]
 artifact_path = "policy-read.wat"

@@ -1,0 +1,14 @@
+[package]
+name = "actrail_component_file_policy_dynamic"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+wee_alloc = { version = "0.4", default-features = false }
+wit-bindgen = { version = "=0.57.1", default-features = false, features = ["macros", "realloc"] }
+
+[lib]
+crate-type = ["cdylib"]
+
+[workspace]
