@@ -37,3 +37,9 @@ impl Default for NetworkControlConfig {
         }
     }
 }
+
+impl NetworkControlConfig {
+    pub fn disabled() -> Self {
+        Self::default()
+    }
+}

@@ -243,7 +243,7 @@ mod tests {
 
     use config_core::daemon::DEFAULT_ACTIVE_TRACE_MAX;
     use control_contract::command::{ControlCommand, DoctorCommand, TrackAddCommand};
-    use control_contract::reply::{ControlError, TrackAddReply};
+    use control_contract::reply::{ControlError, PluginCommandReply, TrackAddReply};
     use model_core::ids::{RequestId, TraceId};
     use plugin_system::PluginInstanceStatus;
     use uds_control_server::ControlService;

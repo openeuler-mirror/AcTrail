@@ -91,6 +91,28 @@ pub struct EnforcementConfig {
     pub event_buffer_bytes: u32,
 }
 
+impl Default for EnforcementConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            backend: EnforcementBackend::Fanotify,
+            scope: EnforcementScope::Trace,
+            rules_path: PathBuf::from("/etc/actrail/enforcement-rules.conf"),
+            builtin_rules: Vec::new(),
+            default_decision: EnforcementDecision::Allow,
+            mark_strategy: EnforcementMarkStrategy::ParentDirectories,
+            audit_enabled: true,
+            event_buffer_bytes: 65_536,
+        }
+    }
+}
+
+impl EnforcementConfig {
+    pub fn disabled() -> Self {
+        Self::default()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EnforcementBuiltinRuleConfig {
     pub rule_id: String,

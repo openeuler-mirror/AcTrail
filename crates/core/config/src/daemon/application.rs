@@ -35,3 +35,36 @@ pub struct ApplicationProtocolConfig {
     pub http2_emit_data_preview: bool,
     pub http2_max_data_preview_bytes: u64,
 }
+
+impl Default for ApplicationProtocolConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            http1_enabled: true,
+            http2_enabled: true,
+            capture_host: true,
+            sse_enabled: true,
+            sse_data_policy: SseDataPolicy::Preview,
+            sse_max_buffer_bytes: 4_194_304,
+            sse_max_data_bytes: 65_536,
+            http2_max_frame_bytes: 65_536,
+            http2_max_connection_buffer_bytes: 4_194_304,
+            http2_emit_data_preview: true,
+            http2_max_data_preview_bytes: 65_536,
+        }
+    }
+}
+
+impl ApplicationProtocolConfig {
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            http1_enabled: false,
+            http2_enabled: false,
+            capture_host: false,
+            sse_enabled: false,
+            sse_data_policy: SseDataPolicy::Disabled,
+            ..Self::default()
+        }
+    }
+}

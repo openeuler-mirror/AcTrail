@@ -10,7 +10,7 @@ pub(super) struct NetworkControlDocument {
 
 impl Default for NetworkControlDocument {
     fn default() -> Self {
-        let config = NetworkControlConfig::default();
+        let config = NetworkControlConfig::disabled();
         Self {
             enabled: config.enabled,
             rules_path: config.rules_path.display().to_string(),
