@@ -49,6 +49,13 @@ impl FileObservationDocument {
                 max_paths_per_set: config.bulk_read.max_paths_per_set,
                 path_set_chunk_max_paths: config.bulk_read.path_set_chunk_max_paths,
                 pending_event_max: config.bulk_read.pending_event_max,
+                fast_path: FileBulkReadFastPathDocument {
+                    enabled: config.bulk_read.fast_path.enabled,
+                    scanner_commands: config.bulk_read.fast_path.scanner_commands.clone(),
+                    process_max_entries: config.bulk_read.fast_path.process_max_entries,
+                    fd_max_entries: config.bulk_read.fast_path.fd_max_entries,
+                    pending_op_max_entries: config.bulk_read.fast_path.pending_op_max_entries,
+                },
             },
             enumerate: FileEnumerateDocument {
                 enabled: config.enumerate.enabled,
@@ -156,6 +163,7 @@ pub(super) struct FileBulkReadDocument {
     pub max_paths_per_set: u32,
     pub path_set_chunk_max_paths: u32,
     pub pending_event_max: u32,
+    pub fast_path: FileBulkReadFastPathDocument,
 }
 
 impl Default for FileBulkReadDocument {
@@ -168,6 +176,7 @@ impl Default for FileBulkReadDocument {
             max_paths_per_set: 4096,
             path_set_chunk_max_paths: 256,
             pending_event_max: 256,
+            fast_path: FileBulkReadFastPathDocument::default(),
         }
     }
 }
@@ -196,6 +205,63 @@ impl FileBulkReadDocument {
             pending_event_max: require_positive_u32(
                 "file_observation.bulk_read.pending_event_max",
                 self.pending_event_max,
+            )?,
+            fast_path: self.fast_path.to_config()?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct FileBulkReadFastPathDocument {
+    pub enabled: bool,
+    pub scanner_commands: Vec<String>,
+    pub process_max_entries: u32,
+    pub fd_max_entries: u32,
+    pub pending_op_max_entries: u32,
+}
+
+impl Default for FileBulkReadFastPathDocument {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            scanner_commands: ["grep", "egrep", "fgrep", "rg", "find"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            process_max_entries: 4096,
+            fd_max_entries: 8192,
+            pending_op_max_entries: 8192,
+        }
+    }
+}
+
+impl FileBulkReadFastPathDocument {
+    pub(super) fn to_config(&self) -> Result<FileBulkReadFastPathConfig, String> {
+        if self
+            .scanner_commands
+            .iter()
+            .any(|command| command.trim().is_empty())
+        {
+            return Err(
+                "file_observation.bulk_read.fast_path.scanner_commands must not contain empty entries"
+                    .to_string(),
+            );
+        }
+        Ok(FileBulkReadFastPathConfig {
+            enabled: self.enabled,
+            scanner_commands: self.scanner_commands.clone(),
+            process_max_entries: require_positive_u32(
+                "file_observation.bulk_read.fast_path.process_max_entries",
+                self.process_max_entries,
+            )?,
+            fd_max_entries: require_positive_u32(
+                "file_observation.bulk_read.fast_path.fd_max_entries",
+                self.fd_max_entries,
+            )?,
+            pending_op_max_entries: require_positive_u32(
+                "file_observation.bulk_read.fast_path.pending_op_max_entries",
+                self.pending_op_max_entries,
             )?,
         })
     }

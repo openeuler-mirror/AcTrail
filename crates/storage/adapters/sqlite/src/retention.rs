@@ -1,5 +1,6 @@
 //! Terminal-trace cleanup and tombstone persistence.
 
+use model_core::trace::TraceLifecycleState;
 use rusqlite::params;
 use store_retention_contract::RetentionError;
 use store_retention_contract::cleanup::{RetentionCandidate, RetentionStore};
@@ -17,18 +18,25 @@ impl RetentionStore for SqliteStorage {
         let mut statement = connection
             .prepare(
                 "SELECT trace_id, lifecycle_state, health FROM traces
-                 WHERE lifecycle_state IN ('completed', 'failed')
+                 WHERE lifecycle_state IN (?1, ?2, ?3)
                  AND trace_id NOT IN (SELECT trace_id FROM tombstones)",
             )
             .map_err(|error| RetentionError::new("prepare_candidates", error.to_string()))?;
         let rows = statement
-            .query_map([], |row| {
-                Ok(RetentionCandidate {
-                    trace_id: model_core::ids::TraceId::new(row.get(0)?),
-                    lifecycle_state: decode_trace_lifecycle(&row.get::<_, String>(1)?)?,
-                    health: decode_trace_health(&row.get::<_, String>(2)?)?,
-                })
-            })
+            .query_map(
+                params![
+                    TraceLifecycleState::Completed.as_storage_str(),
+                    TraceLifecycleState::Exited.as_storage_str(),
+                    TraceLifecycleState::Failed.as_storage_str(),
+                ],
+                |row| {
+                    Ok(RetentionCandidate {
+                        trace_id: model_core::ids::TraceId::new(row.get(0)?),
+                        lifecycle_state: decode_trace_lifecycle(&row.get::<_, String>(1)?)?,
+                        health: decode_trace_health(&row.get::<_, String>(2)?)?,
+                    })
+                },
+            )
             .map_err(|error| RetentionError::new("query_candidates", error.to_string()))?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|error| RetentionError::new("map_candidates", error.to_string()))

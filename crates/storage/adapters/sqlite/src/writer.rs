@@ -31,8 +31,8 @@ impl TraceWriteStore for SqliteStorage {
                 "INSERT OR REPLACE INTO traces (
                     trace_id, root_pid, root_task_id, root_start_ticks, root_pid_namespace,
                     root_container_id, root_generation, display_name, profile_name, tags,
-                    lifecycle_state, health, created_at, started_at, completed_at, failed_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                    lifecycle_state, health, created_at, started_at, completed_at, exited_at, failed_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
                 params![
                     trace.trace_id.get(),
                     trace.root_process_identity.pid,
@@ -53,6 +53,7 @@ impl TraceWriteStore for SqliteStorage {
                     encode_time(trace.timings.created_at),
                     trace.timings.started_at.map(encode_time),
                     trace.timings.completed_at.map(encode_time),
+                    trace.timings.exited_at.map(encode_time),
                     trace.timings.failed_at.map(encode_time),
                 ],
             )

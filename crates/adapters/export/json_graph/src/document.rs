@@ -16,10 +16,12 @@ pub fn build_graph_document(
     include_payload_text: bool,
 ) -> GraphDocument {
     let completeness = match (snapshot.trace.lifecycle_state, snapshot.trace.health) {
-        (TraceLifecycleState::Completed, TraceHealth::Clean) => GraphCompleteness::Complete,
-        (TraceLifecycleState::Completed, TraceHealth::Degraded)
-        | (TraceLifecycleState::Failed, _)
-        | (_, TraceHealth::Degraded) => GraphCompleteness::Degraded,
+        (TraceLifecycleState::Failed, _) | (_, TraceHealth::Degraded) => {
+            GraphCompleteness::Degraded
+        }
+        (lifecycle_state, TraceHealth::Clean) if lifecycle_state.is_terminal() => {
+            GraphCompleteness::Complete
+        }
         _ => GraphCompleteness::Snapshot,
     };
 

@@ -150,6 +150,17 @@ impl EbpfCollector {
                 .is_ok()
                 {
                     self.cleanup_suppressed_fds_for_process(map_pid, event.pid_generation)?;
+                    if let Some(runtime) = self.runtime.as_ref() {
+                        runtime
+                            .unmark_file_bulk_read_fast_process(map_pid, event.pid_generation)
+                            .map_err(loader_error)?;
+                        runtime
+                            .sweep_file_bulk_read_fast_fds_for_process(
+                                map_pid,
+                                event.pid_generation,
+                            )
+                            .map_err(loader_error)?;
+                    }
                 } else {
                     self.record_exit_lifecycle_binding_gap();
                 }
@@ -194,10 +205,49 @@ impl EbpfCollector {
                 )
                 .map_err(|error| CollectorError::new("file_lifecycle_exec", error))?;
                 self.file_tracker.exec_process(event.trace_id, process);
+                self.configure_file_bulk_read_fast_process(event)?;
             }
             _ => {}
         }
         Ok(())
+    }
+
+    fn configure_file_bulk_read_fast_process(
+        &mut self,
+        event: &KernelObservationEvent,
+    ) -> Result<(), CollectorError> {
+        let Some(runtime) = self.runtime.as_ref() else {
+            return Ok(());
+        };
+        runtime
+            .unmark_file_bulk_read_fast_process(event.pid, event.pid_generation)
+            .map_err(loader_error)?;
+        if !self.file_bulk_read_fast_path.enabled {
+            return Ok(());
+        }
+        let Some(exec_filename) = &event.exec_filename else {
+            return Ok(());
+        };
+        if exec_filename.truncated {
+            return Ok(());
+        }
+        let Some(command) = std::path::Path::new(&exec_filename.path)
+            .file_name()
+            .and_then(|value| value.to_str())
+        else {
+            return Ok(());
+        };
+        if !self
+            .file_bulk_read_fast_path
+            .scanner_commands
+            .iter()
+            .any(|candidate| candidate == command)
+        {
+            return Ok(());
+        }
+        runtime
+            .mark_file_bulk_read_fast_process(event.pid, event.pid_generation, event.trace_id)
+            .map_err(loader_error)
     }
 
     fn maybe_attach_go_tls_after_exec(

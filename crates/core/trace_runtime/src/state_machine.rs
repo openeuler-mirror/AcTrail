@@ -39,6 +39,16 @@ pub fn complete_trace(
     Ok(())
 }
 
+pub fn exit_trace(
+    trace: &mut TraceRecord,
+    exited_at: SystemTime,
+) -> Result<(), StateTransitionError> {
+    require_transition(trace.lifecycle_state, TraceLifecycleState::Exited)?;
+    trace.lifecycle_state = TraceLifecycleState::Exited;
+    trace.timings.exited_at = Some(exited_at);
+    Ok(())
+}
+
 pub fn fail_trace(
     trace: &mut TraceRecord,
     failed_at: SystemTime,
@@ -63,11 +73,13 @@ fn require_transition(
             | (TraceLifecycleState::Starting, TraceLifecycleState::Failed)
             | (TraceLifecycleState::Active, TraceLifecycleState::Draining)
             | (TraceLifecycleState::Active, TraceLifecycleState::Completed)
+            | (TraceLifecycleState::Active, TraceLifecycleState::Exited)
             | (TraceLifecycleState::Active, TraceLifecycleState::Failed)
             | (
                 TraceLifecycleState::Draining,
                 TraceLifecycleState::Completed
             )
+            | (TraceLifecycleState::Draining, TraceLifecycleState::Exited)
             | (TraceLifecycleState::Draining, TraceLifecycleState::Failed)
     );
 

@@ -10,8 +10,7 @@ use semantic_action::{
     SemanticActionKind, SemanticActionStatus, attr_keys as attrs,
 };
 
-use super::common::FileSummaryPathAccumulator;
-use super::common::event_result;
+use super::super::shared::{FileSummaryPathAccumulator, event_result};
 use crate::live::actions::{event_action_id, status_from_result};
 
 #[derive(Clone, Debug, Eq, PartialEq)]

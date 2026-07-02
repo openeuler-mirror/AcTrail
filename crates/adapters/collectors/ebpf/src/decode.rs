@@ -40,8 +40,10 @@ pub const FILE_EVENT_RMDIR: u32 = 304;
 pub const FILE_EVENT_TRUNCATE: u32 = 305;
 pub const FILE_EVENT_MMAP: u32 = 306;
 pub const FILE_EVENT_CONTEXT: u32 = 307;
+pub const FILE_EVENT_READ_SUMMARY: u32 = 308;
 const NET_SYSCALL_SOCKET: u32 = 1;
 const NET_SYSCALL_FD_IO: u32 = 2;
+const NET_SYSCALL_FD_IO_WRITEV: u32 = 3;
 const PROC_COORD_TRACEPOINT_SIGNAL_GENERATE: u32 = 1;
 
 pub(crate) use file_path::{FdIpcKind, FileTracker};
@@ -295,7 +297,7 @@ fn decode_net(
         endpoint_source,
         "unresolved_fd_io" | "unresolved_socket_syscall"
     ) {
-        let (operation, direction) = fd_io::operation(event.kind);
+        let (operation, direction) = fd_io::operation(event.kind, event.aux);
         if let Some(event) = fd_io::decode(
             event.clone(),
             bindings,
@@ -389,6 +391,7 @@ fn net_syscall_family(raw: u32) -> &'static str {
     match raw {
         NET_SYSCALL_SOCKET => "socket",
         NET_SYSCALL_FD_IO => "fd_io",
+        NET_SYSCALL_FD_IO_WRITEV => "fd_io_writev",
         _ => "unknown",
     }
 }

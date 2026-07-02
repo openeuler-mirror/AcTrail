@@ -12,13 +12,13 @@ use semantic_action::{
     SemanticActionLinkRole, evidence_roles,
 };
 
-use super::bulk_read::bulk_read_operation_candidate;
-use super::common::{
-    event_fd, event_file_path, event_result, event_size, file_open_has_directory_flag,
+use super::super::shared::{
+    FileFdOwner, FileFdRegistry, event_fd, event_file_path, event_read_summary_count, event_result,
+    event_size, file_open_has_directory_flag,
 };
+use super::bulk_read::bulk_read_operation_candidate;
 use super::enumerate::{FsEnumerateOutput, FsEnumerateProjector};
-use super::fd::{FileFdOwner, FileFdRegistry};
-use super::io::{
+use super::io_action::{
     FileAccessKind, FileIoState, complete_close_action, open_backed_io_action, single_io_action,
 };
 use super::summary::{FileSummaryOutput, FileSummaryProjector};
@@ -118,7 +118,7 @@ impl FileAccessProjector {
                 self.observe_open(event);
                 LiveSemanticActionOutput::default()
             }
-            "read" | "readv" => self.observe_io(event, FileAccessKind::Read, None),
+            "read" | "readv" | "read_summary" => self.observe_io(event, FileAccessKind::Read, None),
             "write" | "writev" => self.observe_io(event, FileAccessKind::Write, file_modify_action),
             "close" => self.observe_close(event),
             _ => LiveSemanticActionOutput::default(),
@@ -251,7 +251,7 @@ impl FileAccessProjector {
                 self.observe_open(event);
                 LiveSemanticActionOutput::default()
             }
-            "read" | "readv" => self.observe_io(event, FileAccessKind::Read, None),
+            "read" | "readv" | "read_summary" => self.observe_io(event, FileAccessKind::Read, None),
             "write" | "writev" => self.observe_io(event, FileAccessKind::Write, None),
             "close" => self.observe_close(event),
             _ => LiveSemanticActionOutput::default(),
@@ -295,6 +295,7 @@ impl FileAccessProjector {
             return LiveSemanticActionOutput::default();
         };
         let bytes = event_size(event).unwrap_or_default();
+        let count = event_read_summary_count(event).unwrap_or(1);
         let status = status_from_result(event_result(event));
         let Some(fd) = event_fd(event) else {
             let action = single_io_action(event, kind, &path, bytes, status);
@@ -332,7 +333,7 @@ impl FileAccessProjector {
         let open_path = state.path.clone();
         let io = state.io_mut(kind);
         io.bytes = io.bytes.saturating_add(bytes);
-        io.count = io.count.saturating_add(1);
+        io.count = io.count.saturating_add(count);
         let mut action = io.action.clone().unwrap_or_else(|| {
             open_backed_io_action(event, kind, open_event_id, open_time, &open_path)
         });

@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 
-use model_core::event::{DomainEvent, EventPayload};
 use model_core::ids::TraceId;
 use semantic_action::{
     FilePathSetState, FilePathSetWrite, file_path_set_identity_for_overflow_scope,
@@ -8,7 +7,7 @@ use semantic_action::{
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct FileSummaryPathAccumulator {
+pub(in crate::live::file) struct FileSummaryPathAccumulator {
     max_paths_per_set: u32,
     path_set_chunk_max_paths: u32,
     path_order_by_path: BTreeMap<String, u32>,
@@ -20,7 +19,10 @@ pub(super) struct FileSummaryPathAccumulator {
 }
 
 impl FileSummaryPathAccumulator {
-    pub(super) fn new(max_paths_per_set: u32, path_set_chunk_max_paths: u32) -> Self {
+    pub(in crate::live::file) fn new(
+        max_paths_per_set: u32,
+        path_set_chunk_max_paths: u32,
+    ) -> Self {
         Self {
             max_paths_per_set,
             path_set_chunk_max_paths,
@@ -33,13 +35,13 @@ impl FileSummaryPathAccumulator {
         }
     }
 
-    pub(super) fn record_path(&mut self, path: &str) {
+    pub(in crate::live::file) fn record_path(&mut self, path: &str) {
         if record_stable_bounded_path(&mut self.path_order_by_path, self.max_paths_per_set, path) {
             self.path_overflow = true;
         }
     }
 
-    pub(super) fn record_error(&mut self, result: i32, path: &str) {
+    pub(in crate::live::file) fn record_error(&mut self, result: i32, path: &str) {
         self.error_count = self.error_count.saturating_add(1);
         let reason = syscall_error_reason(result);
         let count = self.error_reason_counts.entry(reason).or_insert(0);
@@ -53,39 +55,39 @@ impl FileSummaryPathAccumulator {
         }
     }
 
-    pub(super) fn stored_path_count(&self) -> u64 {
+    pub(in crate::live::file) fn stored_path_count(&self) -> u64 {
         self.path_order_by_path.len() as u64
     }
 
-    pub(super) fn error_stored_path_count(&self) -> u64 {
+    pub(in crate::live::file) fn error_stored_path_count(&self) -> u64 {
         self.error_path_order_by_path.len() as u64
     }
 
-    pub(super) fn error_count(&self) -> u64 {
+    pub(in crate::live::file) fn error_count(&self) -> u64 {
         self.error_count
     }
 
-    pub(super) fn path_overflow(&self) -> bool {
+    pub(in crate::live::file) fn path_overflow(&self) -> bool {
         self.path_overflow
     }
 
-    pub(super) fn error_path_overflow(&self) -> bool {
+    pub(in crate::live::file) fn error_path_overflow(&self) -> bool {
         self.error_path_overflow
     }
 
-    pub(super) fn unique_path_count_state(&self) -> &'static str {
+    pub(in crate::live::file) fn unique_path_count_state(&self) -> &'static str {
         count_state(self.path_overflow)
     }
 
-    pub(super) fn error_unique_path_count_state(&self) -> &'static str {
+    pub(in crate::live::file) fn error_unique_path_count_state(&self) -> &'static str {
         count_state(self.error_path_overflow)
     }
 
-    pub(super) fn chunking_scheme(&self) -> String {
+    pub(in crate::live::file) fn chunking_scheme(&self) -> String {
         chunking_scheme_for(self.path_set_chunk_max_paths)
     }
 
-    pub(super) fn path_set_state(&self) -> FilePathSetState {
+    pub(in crate::live::file) fn path_set_state(&self) -> FilePathSetState {
         if self.path_overflow {
             FilePathSetState::Overflow
         } else {
@@ -93,7 +95,7 @@ impl FileSummaryPathAccumulator {
         }
     }
 
-    pub(super) fn path_set_id(&self, overflow_scope: Option<&str>) -> String {
+    pub(in crate::live::file) fn path_set_id(&self, overflow_scope: Option<&str>) -> String {
         if self.path_set_state() == FilePathSetState::Overflow {
             let scope = overflow_scope
                 .filter(|path| path.starts_with('/'))
@@ -110,7 +112,7 @@ impl FileSummaryPathAccumulator {
         .path_set_id
     }
 
-    pub(super) fn path_set_write(
+    pub(in crate::live::file) fn path_set_write(
         &self,
         trace_id: TraceId,
         action_id: &str,
@@ -132,7 +134,7 @@ impl FileSummaryPathAccumulator {
         }]
     }
 
-    pub(super) fn error_reason_counts_text(&self) -> Option<String> {
+    pub(in crate::live::file) fn error_reason_counts_text(&self) -> Option<String> {
         if self.error_reason_counts.is_empty() {
             return None;
         }
@@ -140,68 +142,7 @@ impl FileSummaryPathAccumulator {
     }
 }
 
-pub(super) fn event_fd(event: &DomainEvent) -> Option<u32> {
-    let EventPayload::File(payload) = &event.payload else {
-        return None;
-    };
-    payload
-        .metadata
-        .get("fd")
-        .and_then(|value| value.parse::<u32>().ok())
-}
-
-pub(super) fn event_source_fd(event: &DomainEvent) -> Option<u32> {
-    event_metadata_u32(event, "source_fd")
-}
-
-pub(super) fn event_target_fd(event: &DomainEvent) -> Option<u32> {
-    event_metadata_u32(event, "target_fd")
-}
-
-pub(super) fn event_result(event: &DomainEvent) -> Option<i32> {
-    let EventPayload::File(payload) = &event.payload else {
-        return None;
-    };
-    payload.result
-}
-
-pub(super) fn event_size(event: &DomainEvent) -> Option<u64> {
-    let EventPayload::File(payload) = &event.payload else {
-        return None;
-    };
-    payload
-        .metadata
-        .get("size")
-        .and_then(|value| value.parse::<u64>().ok())
-}
-
-pub(super) fn event_file_path(event: &DomainEvent) -> Option<String> {
-    let EventPayload::File(payload) = &event.payload else {
-        return None;
-    };
-    payload_file_path(payload)
-}
-
-pub(super) fn payload_file_path(payload: &model_core::event::FilePayload) -> Option<String> {
-    payload
-        .path
-        .as_deref()
-        .or_else(|| payload.metadata.get("fd_target").map(String::as_str))
-        .and_then(canonical_file_path)
-}
-
-pub(super) fn file_open_has_directory_flag(payload: &model_core::event::FilePayload) -> bool {
-    let Some(flags) = payload
-        .metadata
-        .get("flags")
-        .and_then(|value| value.parse::<u64>().ok())
-    else {
-        return false;
-    };
-    flags & libc::O_DIRECTORY as u64 != 0
-}
-
-pub(super) fn record_stable_bounded_path(
+pub(in crate::live::file) fn record_stable_bounded_path(
     paths: &mut BTreeMap<String, u32>,
     max_paths: u32,
     path: &str,
@@ -231,7 +172,7 @@ pub(super) fn record_stable_bounded_path(
     true
 }
 
-pub(super) fn chunking_scheme_for(chunk_max_paths: u32) -> String {
+pub(in crate::live::file) fn chunking_scheme_for(chunk_max_paths: u32) -> String {
     format!("path-id-v1:chunk-max={chunk_max_paths}")
 }
 
@@ -249,39 +190,6 @@ fn format_reason_counts(reason_counts: &BTreeMap<String, u64>) -> String {
         .map(|(reason, count)| format!("{reason}={count}"))
         .collect::<Vec<_>>()
         .join(",")
-}
-
-fn event_metadata_u32(event: &DomainEvent, key: &str) -> Option<u32> {
-    let EventPayload::File(payload) = &event.payload else {
-        return None;
-    };
-    payload
-        .metadata
-        .get(key)
-        .and_then(|value| value.parse::<u32>().ok())
-}
-
-fn canonical_file_path(path: &str) -> Option<String> {
-    if path.is_empty() {
-        return None;
-    }
-    if !path.starts_with('/') {
-        return None;
-    }
-    let mut parts = Vec::new();
-    for part in path.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                let _ = parts.pop();
-            }
-            _ => parts.push(part),
-        }
-    }
-    if parts.is_empty() {
-        return Some("/".to_string());
-    }
-    Some(format!("/{}", parts.join("/")))
 }
 
 fn syscall_error_reason(result: i32) -> String {

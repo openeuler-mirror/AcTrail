@@ -1,5 +1,5 @@
-async function fetchJson(path) {
-  const response = await fetch(path);
+async function fetchJson(path, options = {}) {
+  const response = await fetch(path, options);
   if (!response.ok) {
     const body = await response.text();
     throw new Error(`${response.status} ${response.statusText}: ${body}`);
@@ -23,6 +23,10 @@ export function listTraces() {
 
 export function readTrace(traceId) {
   return fetchJson(`/api/traces/${traceId}`);
+}
+
+export function readTokenUsageStats({ fromMs, toMs, signal } = {}) {
+  return fetchJson(`/api/stats/token-usage?from_ms=${fromMs}&to_ms=${toMs}`, { signal });
 }
 
 export function readTraceSummary(traceId) {

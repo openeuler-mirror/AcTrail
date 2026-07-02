@@ -15,6 +15,8 @@ mod sync;
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use config_core::daemon::{
     NetworkControlSeccompSyscall, PayloadSocketSeccompSyscall, PayloadTlsConfig,
@@ -41,6 +43,7 @@ use crate::platform_probe::{
 use linux_platform::capability_probe::{probe_no_new_privs, probe_unix_socket};
 
 pub(crate) struct LaunchRequest {
+    pub control_socket_path: PathBuf,
     pub display_name: TraceName,
     pub profile_name: ProfileName,
     pub tags: BTreeSet<String>,
@@ -57,6 +60,7 @@ pub(crate) struct LaunchRequest {
     pub seccomp_notify_reserved_listener_fd: u32,
     pub agent_invocation_commands: Vec<String>,
     pub seccomp_mode: LaunchSeccompMode,
+    pub supervision_poll_interval_ms: u64,
     pub argv: Vec<String>,
 }
 
@@ -95,6 +99,11 @@ pub(crate) fn run_launch(
     let payload_socket_enabled = effective.payload_socket_enabled;
     let process_seccomp_enabled = effective.process_seccomp_enabled;
     let network_control_enabled = effective.network_control_enabled;
+    let launch_supervision_poll_interval = if seccomp_enabled {
+        Some(launch_supervision_poll_interval(&request)?)
+    } else {
+        None
+    };
     let child_setup = if seccomp_enabled {
         ChildSetup::Seccomp(seccomp_setup(
             &request,
@@ -176,6 +185,9 @@ pub(crate) fn run_launch(
         );
         return Err(error);
     }
+    if seccomp_enabled {
+        child.close_listener_fd();
+    }
     let envs = match launch_envs(
         trace_id,
         &request.payload_tls_config,
@@ -204,13 +216,28 @@ pub(crate) fn run_launch(
         );
         return Err(error);
     }
-    let child_result = child.wait();
-    remove_launch_root(
+    let child_result = if seccomp_enabled {
+        child.wait_with_monitor(
+            || control_socket_available(&request.control_socket_path),
+            launch_supervision_poll_interval
+                .expect("seccomp launch computed supervision poll interval"),
+        )
+    } else {
+        child.wait()
+    };
+    let remove_result = remove_launch_root(
         client,
         launch_remove_request_id(request_id, seccomp_enabled)?,
         trace_id,
-    )?;
-    child_result
+    );
+    match (child_result, remove_result) {
+        (Ok(status), Ok(())) => Ok(status),
+        (Ok(_), Err(error)) => Err(error),
+        (Err(error), Ok(())) => Err(error),
+        (Err(child_error), Err(remove_error)) => {
+            Err(format!("{child_error}; cleanup failed: {remove_error}"))
+        }
+    }
 }
 
 fn seccomp_setup(
@@ -372,6 +399,31 @@ fn remove_launch_root_best_effort(
     trace_id: TraceId,
 ) {
     let _ = remove_launch_root(client, request_id, trace_id);
+}
+
+fn control_socket_available(path: &Path) -> Result<bool, String> {
+    match std::os::unix::net::UnixStream::connect(path) {
+        Ok(_) => Ok(true),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+            ) =>
+        {
+            Ok(false)
+        }
+        Err(error) => Err(format!(
+            "check daemon control socket {}: {error}",
+            path.display()
+        )),
+    }
+}
+
+fn launch_supervision_poll_interval(request: &LaunchRequest) -> Result<Duration, String> {
+    if request.supervision_poll_interval_ms == 0 {
+        return Err("supervision.poll_interval_ms must be greater than 0".to_string());
+    }
+    Ok(Duration::from_millis(request.supervision_poll_interval_ms))
 }
 
 fn format_control_error(error: ControlError) -> String {

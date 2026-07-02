@@ -8,7 +8,7 @@ use semantic_action::{
     attr_keys as attrs, evidence_roles,
 };
 
-use super::common::event_fd;
+use super::super::shared::event_fd;
 use crate::live::actions::{event_action_id, event_action_id_for_event_id, event_evidence};
 
 #[derive(Clone, Copy)]

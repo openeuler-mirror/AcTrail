@@ -52,11 +52,11 @@ def run_full_monitor_python_launch(env, result: CaseResult, workload: dict[str, 
         add_expected_found_check(
             result,
             f"{name} process completed",
-            "Python launch prints sentinel and trace reaches Completed",
+            "Python launch prints sentinel and trace reaches Exited",
             "\n".join(
                 (
                     line_evidence(output, "ACTRAIL_FULL_MONITOR_PYTHON_OK"),
-                    line_evidence(summary, "state=Completed"),
+                    line_evidence(summary, "state=Exited"),
                 )
             ),
             "full-monitor config exercises launch-mode sync TLS audit injection on a simple Python process",

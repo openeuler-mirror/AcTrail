@@ -426,7 +426,11 @@ def verify_limit_rejection(actrailctl: Path, config: Path, pid: int) -> None:
 
 def clean_list_state(workload: str, line: str) -> bool:
     if workload == "xiaoo":
-        return " Active/Clean" in line or " Completed/Clean" in line
+        return (
+            " Active/Clean" in line
+            or " Completed/Clean" in line
+            or " Exited/Clean" in line
+        )
     return " Active/Clean" in line
 
 
@@ -476,7 +480,7 @@ def wait_for_completed_traces(storage: Path, trace_ids: list[int], timeout_sec: 
     while time.monotonic() < deadline:
         states = trace_states(storage, trace_ids)
         if len(states) == len(trace_ids) and all(
-            state == "completed" for state in states.values()
+            state in ("completed", "exited") for state in states.values()
         ):
             return
         time.sleep(0.2)

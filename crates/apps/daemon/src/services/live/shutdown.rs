@@ -24,7 +24,7 @@ impl StorageAttachService {
 
     fn enqueue_terminal_finalizations_impl(&mut self, trace_runtime: &TraceRuntime) {
         for trace in trace_runtime.list_trace_records() {
-            if terminal_lifecycle(trace.lifecycle_state)
+            if trace.lifecycle_state.is_terminal()
                 && !self.finalized_terminal_traces.contains(&trace.trace_id)
             {
                 self.pending_terminal_finalizations.insert(trace.trace_id);
@@ -41,7 +41,7 @@ impl StorageAttachService {
             .get_trace(trace_id)
             .map(|entry| &entry.trace)
             .ok_or_else(|| ControlError::new("terminal_trace", "trace not found"))?;
-        if terminal_lifecycle(trace.lifecycle_state)
+        if trace.lifecycle_state.is_terminal()
             && !self.finalized_terminal_traces.contains(&trace_id)
         {
             self.pending_terminal_finalizations.insert(trace_id);
@@ -139,15 +139,8 @@ fn trace_is_terminal(
 ) -> Result<bool, ControlError> {
     trace_runtime
         .get_trace(trace_id)
-        .map(|entry| terminal_lifecycle(entry.trace.lifecycle_state))
+        .map(|entry| entry.trace.lifecycle_state.is_terminal())
         .ok_or_else(|| ControlError::new("terminal_trace", "trace not found"))
-}
-
-fn terminal_lifecycle(lifecycle_state: TraceLifecycleState) -> bool {
-    matches!(
-        lifecycle_state,
-        TraceLifecycleState::Completed | TraceLifecycleState::Failed
-    )
 }
 
 fn terminal_trace_has_open_memberships(
@@ -180,6 +173,10 @@ fn terminal_trace_finished_at(
         TraceLifecycleState::Completed => trace.timings.completed_at.ok_or_else(|| {
             ControlError::new("terminal_trace", "completed trace missing completed_at")
         }),
+        TraceLifecycleState::Exited => trace
+            .timings
+            .exited_at
+            .ok_or_else(|| ControlError::new("terminal_trace", "exited trace missing exited_at")),
         TraceLifecycleState::Failed => trace
             .timings
             .failed_at

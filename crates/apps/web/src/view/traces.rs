@@ -41,7 +41,7 @@ pub(super) fn trace_record_json(trace: &TraceRecord) -> String {
     json::field(
         &mut output,
         "state",
-        &json::string(&format!("{:?}", trace.lifecycle_state)),
+        &json::string(trace.lifecycle_state.as_display_str()),
     );
     output.push(',');
     json::field(
@@ -84,6 +84,18 @@ pub(super) fn trace_record_json(trace: &TraceRecord) -> String {
         &mut output,
         "completed_at_unix_nanos",
         &json::optional_time_nanos(trace.timings.completed_at),
+    );
+    output.push(',');
+    json::field(
+        &mut output,
+        "exited_at",
+        &json::optional_time(trace.timings.exited_at),
+    );
+    output.push(',');
+    json::field(
+        &mut output,
+        "exited_at_unix_nanos",
+        &json::optional_time_nanos(trace.timings.exited_at),
     );
     output.push(',');
     json::field(

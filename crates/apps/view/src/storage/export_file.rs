@@ -5,7 +5,6 @@ use std::io::Write;
 use std::path::Path;
 
 use model_core::ids::TraceId;
-use model_core::trace::TraceLifecycleState;
 use storage_core::StorageBackend;
 
 pub(super) fn reject_active_trace_if_disabled(
@@ -20,10 +19,7 @@ pub(super) fn reject_active_trace_if_disabled(
         .get_trace(trace_id)
         .map_err(|error| format!("read trace failed: {}: {}", error.stage, error.message))?
         .ok_or_else(|| "trace not found in storage".to_string())?;
-    if matches!(
-        trace.lifecycle_state,
-        TraceLifecycleState::Starting | TraceLifecycleState::Active | TraceLifecycleState::Draining
-    ) {
+    if trace.lifecycle_state.is_active_or_draining() {
         return Err("active trace export is disabled by configuration".to_string());
     }
     Ok(())

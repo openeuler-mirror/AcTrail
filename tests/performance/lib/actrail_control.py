@@ -66,7 +66,7 @@ def wait_for_completed_summary(
             last_lock_error = str(error)
             time.sleep(sleep_seconds)
             continue
-        if "state=Completed" in summary:
+        if "state=Exited" in summary or "state=Completed" in summary:
             return summary
         time.sleep(sleep_seconds)
     if last_lock_error and not summary:

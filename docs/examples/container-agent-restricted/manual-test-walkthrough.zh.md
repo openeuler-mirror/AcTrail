@@ -473,13 +473,13 @@ echo "skip exit=$?"
 ./target/release/actrailctl --config /etc/actrail/actraild.conf list-traces
 ```
 
-预期：列表末尾是你刚启动的 trace，如 `trace-4 pid-<PID> pid=<PID> Completed/Clean`。
+预期：列表末尾是你刚启动的 trace，如 `trace-4 pid-<PID> pid=<PID> Exited/Clean`。
 
 ```bash
 # [host]
 # 7.2 将 TRACE_ID 设为 6.1 的 trace（auto 降级、完整提问的那次）。
 #     这些变量供 7.3、7.4 与 Step 8 使用 —— 请在同一 shell 中保持。
-TRACE_ID=trace-4        # <-- 替换为你的最新 Completed trace id
+TRACE_ID=trace-4        # <-- 替换为你的最新 Exited trace id
 TRACE_NUM=${TRACE_ID#trace-}
 echo "TRACE_ID=$TRACE_ID TRACE_NUM=$TRACE_NUM"
 ```
@@ -490,7 +490,7 @@ echo "TRACE_ID=$TRACE_ID TRACE_NUM=$TRACE_NUM"
 ./target/release/actrailviewer --config /etc/actrail/actraild.conf summary --trace-id "$TRACE_ID"
 ```
 
-预期：`state=Completed health=Clean`，`processes`、`events`、`network_events` 非零。
+预期：`state=Exited health=Clean`，`processes`、`events`、`network_events` 非零。
 
 ```bash
 # [host]

@@ -8,7 +8,6 @@ use control_contract::reply::{
     ControlError, ControlReply, DoctorReply, PluginCommandReply, TraceListItem, TrackAddReply,
 };
 use control_contract::selector::TraceSelector;
-use model_core::trace::TraceLifecycleState;
 use plugin_system::PluginInstanceStatus;
 use uds_control_server::ControlService;
 
@@ -121,12 +120,7 @@ where
                     .trace_runtime
                     .list_trace_records()
                     .into_iter()
-                    .filter(|trace| {
-                        !matches!(
-                            trace.lifecycle_state,
-                            TraceLifecycleState::Completed | TraceLifecycleState::Failed
-                        )
-                    })
+                    .filter(|trace| !trace.lifecycle_state.is_terminal())
                     .count();
                 let active_trace_max =
                     usize::try_from(self.wiring.active_trace_max).map_err(|error| {

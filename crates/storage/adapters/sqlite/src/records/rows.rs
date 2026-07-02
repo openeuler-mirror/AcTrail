@@ -38,6 +38,7 @@ pub fn trace_from_row(row: &Row<'_>) -> Result<TraceRecord, SqlError> {
             created_at: decode_time(row.get("created_at")?),
             started_at: row.get::<_, Option<i64>>("started_at")?.map(decode_time),
             completed_at: row.get::<_, Option<i64>>("completed_at")?.map(decode_time),
+            exited_at: row.get::<_, Option<i64>>("exited_at")?.map(decode_time),
             failed_at: row.get::<_, Option<i64>>("failed_at")?.map(decode_time),
         },
     })

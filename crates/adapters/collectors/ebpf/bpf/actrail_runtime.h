@@ -27,6 +27,7 @@ enum actrail_proc_event_kind {
     ACTRAIL_FILE_TRUNCATE = 305,
     ACTRAIL_FILE_MMAP = 306,
     ACTRAIL_FILE_CONTEXT = 307,
+    ACTRAIL_FILE_READ_SUMMARY = 308,
     ACTRAIL_STDIO_PAYLOAD = 400,
     ACTRAIL_SOCKET_PAYLOAD = 500,
     ACTRAIL_SOCKET_PAYLOAD_COMPLETION = 501,
@@ -39,6 +40,7 @@ enum actrail_pid_namespace_slot {
 enum actrail_net_syscall_family {
     ACTRAIL_NET_SYSCALL_SOCKET = 1,
     ACTRAIL_NET_SYSCALL_FD_IO = 2,
+    ACTRAIL_NET_SYSCALL_FD_IO_WRITEV = 3,
 };
 
 enum actrail_syscall_arg_slot {

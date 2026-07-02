@@ -57,14 +57,17 @@ pub fn run_from_env() -> Result<i32, String> {
             seccomp_notify_reserved_listener_fd,
             agent_invocation_commands,
             seccomp_mode,
+            supervision_poll_interval_ms,
             argv,
         } => {
-            let transport = UdsSocketTransport::new(required_socket_path(invocation.socket_path)?);
+            let socket_path = required_socket_path(invocation.socket_path)?;
+            let transport = UdsSocketTransport::new(socket_path.clone());
             let mut client = UdsControlClient::new(transport);
             run_launch(
                 &mut client,
                 invocation.request_id,
                 LaunchRequest {
+                    control_socket_path: socket_path,
                     display_name,
                     profile_name,
                     tags,
@@ -81,6 +84,7 @@ pub fn run_from_env() -> Result<i32, String> {
                     seccomp_notify_reserved_listener_fd,
                     agent_invocation_commands,
                     seccomp_mode,
+                    supervision_poll_interval_ms,
                     argv,
                 },
             )

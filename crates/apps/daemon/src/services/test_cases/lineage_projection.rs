@@ -83,7 +83,7 @@ fn terminal_reconcile_projects_late_exec_through_process_lineage() {
             .unwrap()
             .trace
             .lifecycle_state,
-        TraceLifecycleState::Completed
+        TraceLifecycleState::Exited
     );
 
     wiring

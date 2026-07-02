@@ -316,7 +316,7 @@ select kind, count(*) from semantic_actions where trace_id = $TRACE_NUM
 "
 ```
 
-Expected: `payload_segments` has `boringssl SSL_read/SSL_write` (opencode uses BoringSSL) or `rustls_*` rows; `semantic_actions` has `llm.request`, `llm.response`, `llm.call`, plus `command.invocation`, `process.exec`, `http.message`, `sse.stream`. The trace summary shows non-zero process/event/network counts and `state=Completed health=Clean`.
+Expected: `payload_segments` has `boringssl SSL_read/SSL_write` (opencode uses BoringSSL) or `rustls_*` rows; `semantic_actions` has `llm.request`, `llm.response`, `llm.call`, plus `command.invocation`, `process.exec`, `http.message`, `sse.stream`. The trace summary shows non-zero process/event/network counts and `state=Exited health=Clean`.
 
 ### 7. Verify the web UI action graph
 

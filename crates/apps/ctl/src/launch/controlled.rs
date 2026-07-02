@@ -7,6 +7,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::ExitStatusExt;
 use std::process::ExitStatus;
+use std::time::Duration;
 
 use super::seccomp::SeccompSetup;
 
@@ -76,6 +77,10 @@ impl ControlledChild {
         self.listener_fd.as_ref()
     }
 
+    pub(super) fn close_listener_fd(&mut self) {
+        self.listener_fd.take();
+    }
+
     pub(super) fn continue_with_envs(
         &mut self,
         envs: Vec<(OsString, OsString)>,
@@ -92,6 +97,26 @@ impl ControlledChild {
 
     pub(super) fn wait(self) -> Result<i32, String> {
         wait_child_exit(self.pid)
+    }
+
+    pub(super) fn wait_with_monitor(
+        mut self,
+        mut keep_waiting: impl FnMut() -> Result<bool, String>,
+        poll_interval: Duration,
+    ) -> Result<i32, String> {
+        loop {
+            if let Some(status) = try_wait_child_exit(self.pid)? {
+                return status;
+            }
+            let daemon_available = keep_waiting()
+                .map_err(|error| format!("launch supervision check failed: {error}"))?;
+            if !daemon_available {
+                terminate_child(self.pid);
+                self.env_writer.take();
+                return Err("daemon became unavailable during launch; terminated child".to_string());
+            }
+            std::thread::sleep(poll_interval);
+        }
     }
 
     pub(super) fn terminate(&mut self) {
@@ -358,6 +383,35 @@ fn wait_child_exit(child_pid: libc::pid_t) -> Result<i32, String> {
                 "launch child terminated by signal {}",
                 libc::WTERMSIG(status)
             ));
+        }
+    }
+}
+
+fn try_wait_child_exit(child_pid: libc::pid_t) -> Result<Option<Result<i32, String>>, String> {
+    let mut status = libc::c_int::default();
+    loop {
+        let result = unsafe { libc::waitpid(child_pid, &mut status, libc::WNOHANG) };
+        if result < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(format!("wait for launch child exit: {error}"));
+        }
+        if result == 0 {
+            return Ok(None);
+        }
+        if libc::WIFEXITED(status) {
+            let status = ExitStatus::from_raw(status);
+            return Ok(Some(status.code().ok_or_else(|| {
+                "launch child terminated without an exit code".to_string()
+            })));
+        }
+        if libc::WIFSIGNALED(status) {
+            return Ok(Some(Err(format!(
+                "launch child terminated by signal {}",
+                libc::WTERMSIG(status)
+            ))));
         }
     }
 }

@@ -229,8 +229,8 @@ def run_workload_observed(
     workload = parse_case_result(config, case, target_command, output)
     summary = wait_for_completed_summary(repo, config, operator, trace_id)
     diagnostics = read_diagnostics(operator, trace_id)
-    if "state=Completed" not in summary:
-        raise RuntimeError(f"trace trace-{trace_id} did not complete:\n{summary}")
+    if "state=Exited" not in summary:
+        raise RuntimeError(f"trace trace-{trace_id} did not exit:\n{summary}")
     if "health=Degraded" in summary and not diagnostics_only_bootstrap_gap(diagnostics):
         raise RuntimeError(f"trace trace-{trace_id} degraded:\n{summary}\n{diagnostics}")
     return BenchRun(

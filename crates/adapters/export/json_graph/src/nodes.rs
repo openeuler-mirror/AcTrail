@@ -15,7 +15,10 @@ use crate::event_attributes::{
 
 pub fn trace_node(trace: &TraceRecord) -> GraphNode {
     let mut attributes = BTreeMap::new();
-    attributes.insert("state".to_string(), format!("{:?}", trace.lifecycle_state));
+    attributes.insert(
+        "state".to_string(),
+        trace.lifecycle_state.as_display_str().to_string(),
+    );
     attributes.insert("health".to_string(), format!("{:?}", trace.health));
     attributes.insert("profile".to_string(), trace.profile_name.to_string());
 

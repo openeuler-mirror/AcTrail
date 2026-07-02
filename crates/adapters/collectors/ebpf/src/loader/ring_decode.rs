@@ -30,7 +30,7 @@ pub const TLS_PAYLOAD_CAPTURE_REQUEST_EVENT_KIND: u32 = 202;
 pub const TLS_PAYLOAD_DIRECT_CAPTURE_EVENT_KIND: u32 = 203;
 pub const TLS_PAYLOAD_DIAGNOSTIC_EVENT_KIND: u32 = 204;
 pub const FILE_EVENT_OPEN: u32 = 300;
-pub const FILE_EVENT_CONTEXT: u32 = 307;
+pub const FILE_EVENT_READ_SUMMARY: u32 = 308;
 pub const STDIO_PAYLOAD_EVENT_KIND: u32 = 400;
 pub const SOCKET_PAYLOAD_EVENT_KIND: u32 = 500;
 pub const SOCKET_PAYLOAD_COMPLETION_EVENT_KIND: u32 = 501;
@@ -136,7 +136,7 @@ pub fn decode_kernel_event(raw: &[u8]) -> Result<KernelEvent, LoaderError> {
         return decode_socket_payload_completion_event(raw)
             .map(KernelEvent::SocketPayloadCompletion);
     }
-    if (FILE_EVENT_OPEN..=FILE_EVENT_CONTEXT).contains(&kind) {
+    if (FILE_EVENT_OPEN..=FILE_EVENT_READ_SUMMARY).contains(&kind) {
         return decode_file_path_event(raw).map(KernelEvent::FilePath);
     }
     decode_observation_event(raw).map(KernelEvent::Observation)

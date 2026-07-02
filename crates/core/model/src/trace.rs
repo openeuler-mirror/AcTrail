@@ -1,6 +1,7 @@
 //! Trace lifecycle, health, and snapshot-ready runtime records.
 
 use std::collections::BTreeSet;
+use std::fmt;
 use std::time::SystemTime;
 
 use crate::ids::{ProfileName, TraceId, TraceName};
@@ -12,7 +13,84 @@ pub enum TraceLifecycleState {
     Active,
     Draining,
     Completed,
+    Exited,
     Failed,
+}
+
+impl TraceLifecycleState {
+    pub const STORAGE_STARTING: &'static str = "starting";
+    pub const STORAGE_ACTIVE: &'static str = "active";
+    pub const STORAGE_DRAINING: &'static str = "draining";
+    pub const STORAGE_COMPLETED: &'static str = "completed";
+    pub const STORAGE_EXITED: &'static str = "exited";
+    pub const STORAGE_FAILED: &'static str = "failed";
+
+    pub const DISPLAY_STARTING: &'static str = "Starting";
+    pub const DISPLAY_ACTIVE: &'static str = "Active";
+    pub const DISPLAY_DRAINING: &'static str = "Draining";
+    pub const DISPLAY_COMPLETED: &'static str = "Completed";
+    pub const DISPLAY_EXITED: &'static str = "Exited";
+    pub const DISPLAY_FAILED: &'static str = "Failed";
+
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Starting => Self::STORAGE_STARTING,
+            Self::Active => Self::STORAGE_ACTIVE,
+            Self::Draining => Self::STORAGE_DRAINING,
+            Self::Completed => Self::STORAGE_COMPLETED,
+            Self::Exited => Self::STORAGE_EXITED,
+            Self::Failed => Self::STORAGE_FAILED,
+        }
+    }
+
+    pub fn from_storage_str(raw: &str) -> Option<Self> {
+        match raw {
+            Self::STORAGE_STARTING => Some(Self::Starting),
+            Self::STORAGE_ACTIVE => Some(Self::Active),
+            Self::STORAGE_DRAINING => Some(Self::Draining),
+            Self::STORAGE_COMPLETED => Some(Self::Completed),
+            Self::STORAGE_EXITED => Some(Self::Exited),
+            Self::STORAGE_FAILED => Some(Self::Failed),
+            _ => None,
+        }
+    }
+
+    pub const fn as_display_str(self) -> &'static str {
+        match self {
+            Self::Starting => Self::DISPLAY_STARTING,
+            Self::Active => Self::DISPLAY_ACTIVE,
+            Self::Draining => Self::DISPLAY_DRAINING,
+            Self::Completed => Self::DISPLAY_COMPLETED,
+            Self::Exited => Self::DISPLAY_EXITED,
+            Self::Failed => Self::DISPLAY_FAILED,
+        }
+    }
+
+    pub fn from_display_str(raw: &str) -> Option<Self> {
+        match raw {
+            Self::DISPLAY_STARTING => Some(Self::Starting),
+            Self::DISPLAY_ACTIVE => Some(Self::Active),
+            Self::DISPLAY_DRAINING => Some(Self::Draining),
+            Self::DISPLAY_COMPLETED => Some(Self::Completed),
+            Self::DISPLAY_EXITED => Some(Self::Exited),
+            Self::DISPLAY_FAILED => Some(Self::Failed),
+            _ => None,
+        }
+    }
+
+    pub const fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Exited | Self::Failed)
+    }
+
+    pub const fn is_active_or_draining(self) -> bool {
+        matches!(self, Self::Starting | Self::Active | Self::Draining)
+    }
+}
+
+impl fmt::Display for TraceLifecycleState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_display_str())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -26,6 +104,7 @@ pub struct TraceTiming {
     pub created_at: SystemTime,
     pub started_at: Option<SystemTime>,
     pub completed_at: Option<SystemTime>,
+    pub exited_at: Option<SystemTime>,
     pub failed_at: Option<SystemTime>,
 }
 
@@ -35,6 +114,7 @@ impl TraceTiming {
             created_at,
             started_at: None,
             completed_at: None,
+            exited_at: None,
             failed_at: None,
         }
     }

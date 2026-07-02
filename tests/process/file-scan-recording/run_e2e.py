@@ -17,6 +17,8 @@ from pathlib import Path
 
 
 TRACE_RE = re.compile(r"trace trace-(\d+) entered Active")
+FAST_PATH_READ_COUNT_ATTR = "file.bulk_read.fp_read_count"
+FAST_PATH_SUMMARY_COUNT_ATTR = "file.bulk_read.fp_summary_count"
 
 
 def parse_args() -> argparse.Namespace:
@@ -230,7 +232,7 @@ def wait_for_completed_trace(storage: Path, trace_id: int, timeout_sec: float) -
                     "SELECT lifecycle_state, health FROM traces WHERE trace_id = ?",
                     (trace_id,),
                 ).fetchone()
-                if row == ("completed", "clean"):
+                if row in {("completed", "clean"), ("exited", "clean")}:
                     return
                 if row and row[0] == "failed":
                     raise RuntimeError(f"trace-{trace_id} failed health={row[1]}")
@@ -247,6 +249,8 @@ def verify_scan_recording(storage: Path, trace_id: int) -> None:
         )
         if bulk_count < 2:
             raise RuntimeError(f"expected at least two file.bulk_read actions, got {bulk_count}")
+        verify_fast_path_bulk_read(connection, trace_id)
+        verify_no_event_transport_loss(connection, trace_id)
         reused_path_set_count = scalar(
             connection,
             """
@@ -297,6 +301,76 @@ def verify_scan_recording(storage: Path, trace_id: int) -> None:
                 "aggregated scan process leaked command.contains_file_access -> file.read links: "
                 f"{leaked_read_links}"
             )
+
+
+def verify_fast_path_bulk_read(connection: sqlite3.Connection, trace_id: int) -> None:
+    rows = connection.execute(
+        """
+        SELECT attributes
+        FROM semantic_actions
+        WHERE trace_id = ? AND kind = 'file.bulk_read'
+        """,
+        (trace_id,),
+    ).fetchall()
+    summary_count = 0
+    read_count = 0
+    for (raw_attributes,) in rows:
+        attributes = decode_map(raw_attributes)
+        summary_count += int(attributes.get(FAST_PATH_SUMMARY_COUNT_ATTR, "0"))
+        read_count += int(attributes.get(FAST_PATH_READ_COUNT_ATTR, "0"))
+    if summary_count <= 0 or read_count <= 0:
+        raise RuntimeError(
+            "expected file.bulk_read actions to include fast-path read_summary counts, "
+            f"got summary_count={summary_count} read_count={read_count}"
+        )
+
+
+def verify_no_event_transport_loss(connection: sqlite3.Connection, trace_id: int) -> None:
+    loss_count = scalar(
+        connection,
+        """
+        SELECT COUNT(*)
+        FROM diagnostics
+        WHERE trace_id = ? AND kind = 'event_transport_loss'
+        """,
+        (trace_id,),
+    )
+    if loss_count != 0:
+        raise RuntimeError(f"expected no event_transport_loss diagnostics, got {loss_count}")
+
+
+def decode_map(raw: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line in raw.splitlines():
+        key, separator, value = line.partition("=")
+        if not separator:
+            continue
+        values[decode_escaped(key)] = decode_escaped(value)
+    return values
+
+
+def decode_escaped(raw: str) -> str:
+    output: list[str] = []
+    index = 0
+    while index < len(raw):
+        char = raw[index]
+        if char == "\\" and index + 1 < len(raw):
+            escaped = raw[index + 1]
+            if escaped == "n":
+                output.append("\n")
+                index += 2
+                continue
+            if escaped == "e":
+                output.append("=")
+                index += 2
+                continue
+            if escaped == "\\":
+                output.append("\\")
+                index += 2
+                continue
+        output.append(char)
+        index += 1
+    return "".join(output)
 
 
 def scalar(connection: sqlite3.Connection, sql: str, params: tuple[object, ...]) -> int:

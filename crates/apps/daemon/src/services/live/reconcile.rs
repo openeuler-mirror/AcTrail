@@ -30,12 +30,8 @@ impl StorageAttachService {
             .list_trace_records()
             .into_iter()
             .filter(|trace| {
-                matches!(
-                    trace.lifecycle_state,
-                    TraceLifecycleState::Draining
-                        | TraceLifecycleState::Completed
-                        | TraceLifecycleState::Failed
-                )
+                trace.lifecycle_state == TraceLifecycleState::Draining
+                    || trace.lifecycle_state.is_terminal()
             })
             .map(|trace| trace.trace_id)
             .collect::<Vec<_>>();
@@ -173,10 +169,7 @@ fn recording_error_to_control(error: recording_runtime::RecordingError) -> Contr
 }
 
 fn terminal_trace(trace_runtime: &TraceRuntime, trace_id: model_core::ids::TraceId) -> bool {
-    trace_runtime.get_trace(trace_id).is_some_and(|entry| {
-        matches!(
-            entry.trace.lifecycle_state,
-            TraceLifecycleState::Completed | TraceLifecycleState::Failed
-        )
-    })
+    trace_runtime
+        .get_trace(trace_id)
+        .is_some_and(|entry| entry.trace.lifecycle_state.is_terminal())
 }

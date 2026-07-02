@@ -10,7 +10,10 @@ use semantic_action::{
     SemanticActionKind, SemanticActionStatus, attr_keys as attrs,
 };
 
-use super::common::{FileSummaryPathAccumulator, event_fd, event_result, event_size};
+use super::super::shared::{
+    FileSummaryPathAccumulator, attr_keys as file_attrs, event_fd, event_read_summary_count,
+    event_result, event_size,
+};
 use crate::live::actions::event_action_id;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -36,6 +39,8 @@ pub(super) struct BulkReadState {
     close_count: u64,
     read_count: u64,
     bytes_read: u64,
+    fast_path_summary_count: u64,
+    fast_path_read_count: u64,
 }
 
 impl BulkReadState {
@@ -61,6 +66,8 @@ impl BulkReadState {
             close_count: 0,
             read_count: 0,
             bytes_read: 0,
+            fast_path_summary_count: 0,
+            fast_path_read_count: 0,
         }
     }
 
@@ -98,8 +105,14 @@ impl BulkReadState {
                     self.open_event_by_fd.remove(&fd);
                 }
             }
-            "read" | "readv" => {
-                self.read_count = self.read_count.saturating_add(1);
+            "read" | "readv" | "read_summary" => {
+                let read_count = event_read_summary_count(event).unwrap_or(1);
+                self.read_count = self.read_count.saturating_add(read_count);
+                if operation == "read_summary" {
+                    self.fast_path_summary_count = self.fast_path_summary_count.saturating_add(1);
+                    self.fast_path_read_count =
+                        self.fast_path_read_count.saturating_add(read_count);
+                }
                 self.bytes_read = self
                     .bytes_read
                     .saturating_add(event_size(event).unwrap_or(0));
@@ -202,6 +215,16 @@ impl BulkReadState {
                 self.paths.chunking_scheme(),
             );
         }
+        if self.fast_path_summary_count > 0 {
+            attributes.insert(
+                file_attrs::FAST_PATH_SUMMARY_COUNT.to_string(),
+                self.fast_path_summary_count.to_string(),
+            );
+            attributes.insert(
+                file_attrs::FAST_PATH_READ_COUNT.to_string(),
+                self.fast_path_read_count.to_string(),
+            );
+        }
         if let Some(error_reason_counts) = self.paths.error_reason_counts_text() {
             attributes.insert(
                 attrs::file_bulk_read::ERROR_REASON_COUNTS.to_string(),
@@ -268,5 +291,8 @@ impl BulkReadState {
 }
 
 pub(super) fn bulk_read_operation_candidate(operation: &str) -> bool {
-    matches!(operation, "open" | "close" | "read" | "readv")
+    matches!(
+        operation,
+        "open" | "close" | "read" | "readv" | "read_summary"
+    )
 }

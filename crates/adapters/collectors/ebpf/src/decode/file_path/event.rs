@@ -8,7 +8,8 @@ use model_core::capability::Capability;
 use model_core::ids::CollectorName;
 
 use crate::decode::{
-    DecodeError, FILE_EVENT_CONTEXT, FILE_EVENT_MMAP, FILE_EVENT_OPEN, resolve_bound_event_identity,
+    DecodeError, FILE_EVENT_CONTEXT, FILE_EVENT_MMAP, FILE_EVENT_OPEN, FILE_EVENT_READ_SUMMARY,
+    resolve_bound_event_identity,
 };
 use crate::loader::KernelFilePathEvent;
 use crate::maps::BindingStateMap;
@@ -40,6 +41,9 @@ pub(in crate::decode) fn decode(
     let identity =
         resolve_bound_event_identity(event.trace_id, map_pid, event.pid_generation, bindings)
             .map_err(|error| DecodeError::new("file_identity", error))?;
+    if event.kind == FILE_EVENT_READ_SUMMARY {
+        return decode_read_summary(event, identity, tracker);
+    }
     if tracker.record_ipc_fd_pair(&event, identity.clone()) {
         return Ok(None);
     }
@@ -85,6 +89,54 @@ pub(in crate::decode) fn decode(
             metadata,
         },
     }))
+}
+
+fn decode_read_summary(
+    event: KernelFilePathEvent,
+    identity: model_core::process::ProcessIdentity,
+    tracker: &mut FileTracker,
+) -> Result<Option<RawCollectorEvent>, DecodeError> {
+    let path = tracker.resolve_fd_path(event.trace_id, &identity, event.fd);
+    let mut metadata = BTreeMap::from([
+        ("operation".to_string(), "read_summary".to_string()),
+        ("result".to_string(), "0".to_string()),
+        ("syscall".to_string(), "read_summary".to_string()),
+        ("fd".to_string(), event.fd.to_string()),
+        ("read_count".to_string(), event.arg0.to_string()),
+        ("size".to_string(), event.arg1.to_string()),
+        ("bytes_read".to_string(), event.arg1.to_string()),
+        ("error_count".to_string(), event.arg2.to_string()),
+        ("fast_path".to_string(), "true".to_string()),
+    ]);
+    if let Some(first_ktime_ns) = nonzero_u64(event.arg3) {
+        metadata.insert("first_ktime_ns".to_string(), first_ktime_ns.to_string());
+    }
+    if let Some(last_ktime_ns) = nonzero_u64(event.arg4) {
+        metadata.insert("last_ktime_ns".to_string(), last_ktime_ns.to_string());
+    }
+    if let Some(path) = &path {
+        metadata.insert("fd_target".to_string(), path.clone());
+        metadata.insert("fd_target_source".to_string(), "file_tracker".to_string());
+        metadata.insert("fd_target_kind".to_string(), "regular_file".to_string());
+    } else {
+        metadata.insert("path_resolution".to_string(), "unresolved_fd".to_string());
+    }
+    Ok(Some(RawCollectorEvent {
+        envelope: RawEventEnvelope {
+            observed_at: SystemTime::now(),
+            process: identity,
+            collector: CollectorName::new("ebpf"),
+        },
+        payload: RawObservationPayload::File {
+            operation: "read_summary".to_string(),
+            path,
+            metadata,
+        },
+    }))
+}
+
+fn nonzero_u64(value: u64) -> Option<u64> {
+    (value != 0).then_some(value)
 }
 
 fn file_operation(outcome: &FileSyscallOutcome) -> &'static str {

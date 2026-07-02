@@ -81,8 +81,8 @@ def run_quick_start(env, result: CaseResult, workload: dict[str, str]) -> str:
         add_expected_found_check(
             result,
             f"{name} trace completion",
-            "trace state Completed",
-            f"trace-{trace_id}; {line_evidence(summary, 'state=Completed')}",
+            "trace state Exited",
+            f"trace-{trace_id}; {line_evidence(summary, 'state=Exited')}",
             "summary/process/network viewer output contains the documented lifecycle and loopback TCP evidence",
         )
         add_expected_found_check(
@@ -128,7 +128,7 @@ def wait_quick_start_views(env, config: Path | None, trace_id: int, workload: di
         events = viewer(env, config, "events", trace_id)
         network = viewer(env, config, "network", trace_id)
         if (
-            "Completed" in summary
+            ("Completed" in summary or "Exited" in summary)
             and all(fragment in events for fragment in ("Process", "fork", "exec", "exit"))
             and all(fragment in network for fragment in ("connect", "accept", "send", "recv"))
         ):

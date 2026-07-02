@@ -20,7 +20,7 @@ use collector_binding::{
 };
 use collector_instance::{CollectorError, CollectorInstance, CollectorPollBatch};
 use collector_stats::{CollectorStats, DropCounter};
-use config_core::daemon::{EbpfCollectorConfig, PayloadConfig};
+use config_core::daemon::{EbpfCollectorConfig, FileBulkReadFastPathConfig, PayloadConfig};
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use model_core::ids::{CollectorName, TraceId};
 use model_core::process::{
@@ -74,6 +74,7 @@ pub struct EbpfCollector {
     identity_reader: ProcfsIdentityReader,
     file_tracker: FileTracker,
     dynamic_go_tls: DynamicGoTlsAttacher,
+    file_bulk_read_fast_path: FileBulkReadFastPathConfig,
     tls_capture_requests: Vec<TlsPayloadCaptureRequest>,
     tls_completions: Vec<TlsPayloadCompletion>,
     tls_direct_captures: Vec<TlsPayloadDirectCapture>,
@@ -100,7 +101,11 @@ pub struct EbpfCollectorDebugSnapshot {
 }
 
 impl EbpfCollector {
-    pub fn new(config: EbpfCollectorConfig, payload_config: PayloadConfig) -> Self {
+    pub fn new(
+        config: EbpfCollectorConfig,
+        payload_config: PayloadConfig,
+        file_bulk_read_fast_path: FileBulkReadFastPathConfig,
+    ) -> Self {
         let mut probe_result = probe();
         if !config.enabled {
             probe_result.reason_unavailable =
@@ -108,12 +113,17 @@ impl EbpfCollector {
         }
         Self {
             probe_result: probe_result_for_config(probe_result, &payload_config),
-            loader: EbpfProgramLoader::new(config, payload_config.clone()),
+            loader: EbpfProgramLoader::new(
+                config,
+                payload_config.clone(),
+                file_bulk_read_fast_path.clone(),
+            ),
             bindings: BindingStateMap::default(),
             runtime: None,
             identity_reader: ProcfsIdentityReader,
             file_tracker: FileTracker::default(),
             dynamic_go_tls: DynamicGoTlsAttacher::new(&payload_config.tls),
+            file_bulk_read_fast_path,
             tls_capture_requests: Vec::new(),
             tls_completions: Vec::new(),
             tls_direct_captures: Vec::new(),
@@ -163,6 +173,12 @@ impl EbpfCollector {
                 runtime
                     .sweep_suppressed_fds_for_process(map_pid, tracked.identity.generation)
                     .map_err(loader_error)?;
+                runtime
+                    .unmark_file_bulk_read_fast_process(map_pid, tracked.identity.generation)
+                    .map_err(loader_error)?;
+                runtime
+                    .sweep_file_bulk_read_fast_fds_for_process(map_pid, tracked.identity.generation)
+                    .map_err(loader_error)?;
             }
             cleanup_suppressed_fds_for_pid(runtime, &mut self.suppressed_fds, map_pid)?;
             runtime.untrack_pid(map_pid).map_err(loader_error)?;
@@ -180,6 +196,12 @@ impl EbpfCollector {
             if let Some(tracked) = tracked.as_ref() {
                 runtime
                     .sweep_suppressed_fds_for_process(map_pid, tracked.identity.generation)
+                    .map_err(loader_error)?;
+                runtime
+                    .unmark_file_bulk_read_fast_process(map_pid, tracked.identity.generation)
+                    .map_err(loader_error)?;
+                runtime
+                    .sweep_file_bulk_read_fast_fds_for_process(map_pid, tracked.identity.generation)
                     .map_err(loader_error)?;
             }
             cleanup_suppressed_fds_for_pid(runtime, &mut self.suppressed_fds, map_pid)?;
@@ -239,6 +261,13 @@ impl EbpfCollector {
             .as_ref()
             .map(|runtime| runtime.tls_payload_diagnostics().map_err(loader_error))
             .transpose()
+    }
+
+    pub fn take_event_transport_loss_summaries(&mut self) -> Vec<String> {
+        self.runtime
+            .as_mut()
+            .map(EbpfRuntime::take_event_transport_loss_summaries)
+            .unwrap_or_default()
     }
 
     pub fn debug_snapshot_for_pid(

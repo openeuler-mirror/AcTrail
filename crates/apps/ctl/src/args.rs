@@ -54,6 +54,7 @@ pub enum CtlCommand {
         seccomp_notify_reserved_listener_fd: u32,
         agent_invocation_commands: Vec<String>,
         seccomp_mode: LaunchSeccompMode,
+        supervision_poll_interval_ms: u64,
         argv: Vec<String>,
     },
     TrackRemove {
@@ -215,6 +216,11 @@ impl CtlCommandArgs {
                     seccomp_notify_reserved_listener_fd: seccomp_config.reserved_listener_fd,
                     agent_invocation_commands: launch_agent_commands(config),
                     seccomp_mode: args.seccomp_mode.into(),
+                    supervision_poll_interval_ms: config
+                        .ok_or_else(|| {
+                            "missing operator config for launch supervision".to_string()
+                        })?
+                        .supervision_poll_interval_ms,
                     argv: args.argv,
                 })
             }

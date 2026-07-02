@@ -6,6 +6,9 @@ pub const DEFAULT_FILE_BULK_READ_MIN_UNIQUE_PATHS: u32 = 16;
 pub const DEFAULT_FILE_BULK_READ_MAX_PATHS_PER_SET: u32 = 4096;
 pub const DEFAULT_FILE_BULK_READ_PATH_SET_CHUNK_MAX_PATHS: u32 = 256;
 pub const DEFAULT_FILE_BULK_READ_PENDING_EVENT_MAX: u32 = 256;
+pub const DEFAULT_FILE_BULK_READ_FAST_PATH_PROCESS_MAX_ENTRIES: u32 = 4096;
+pub const DEFAULT_FILE_BULK_READ_FAST_PATH_FD_MAX_ENTRIES: u32 = 8192;
+pub const DEFAULT_FILE_BULK_READ_FAST_PATH_PENDING_OP_MAX_ENTRIES: u32 = 8192;
 pub const DEFAULT_FS_ENUMERATE_MIN_UNIQUE_PATHS: u32 = 2;
 pub const DEFAULT_FS_ENUMERATE_MAX_PATHS_PER_SET: u32 = 4096;
 pub const DEFAULT_FS_ENUMERATE_PATH_SET_CHUNK_MAX_PATHS: u32 = 256;
@@ -15,6 +18,8 @@ const DEFAULT_TTY_PATHS: &[&str] = &["/dev/tty", "/dev/pts/*"];
 const DEFAULT_TTY_OPERATIONS: &[&str] = &[
     "open", "close", "read", "readv", "write", "writev", "truncate",
 ];
+const DEFAULT_FILE_BULK_READ_FAST_PATH_SCANNER_COMMANDS: &[&str] =
+    &["grep", "egrep", "fgrep", "rg", "find"];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileObservationConfig {
@@ -166,6 +171,16 @@ pub struct FileBulkReadObservationConfig {
     pub max_paths_per_set: u32,
     pub path_set_chunk_max_paths: u32,
     pub pending_event_max: u32,
+    pub fast_path: FileBulkReadFastPathConfig,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FileBulkReadFastPathConfig {
+    pub enabled: bool,
+    pub scanner_commands: Vec<String>,
+    pub process_max_entries: u32,
+    pub fd_max_entries: u32,
+    pub pending_op_max_entries: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -199,6 +214,22 @@ impl Default for FileBulkReadObservationConfig {
             max_paths_per_set: DEFAULT_FILE_BULK_READ_MAX_PATHS_PER_SET,
             path_set_chunk_max_paths: DEFAULT_FILE_BULK_READ_PATH_SET_CHUNK_MAX_PATHS,
             pending_event_max: DEFAULT_FILE_BULK_READ_PENDING_EVENT_MAX,
+            fast_path: FileBulkReadFastPathConfig::default(),
+        }
+    }
+}
+
+impl Default for FileBulkReadFastPathConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            scanner_commands: DEFAULT_FILE_BULK_READ_FAST_PATH_SCANNER_COMMANDS
+                .iter()
+                .map(|value| value.to_string())
+                .collect(),
+            process_max_entries: DEFAULT_FILE_BULK_READ_FAST_PATH_PROCESS_MAX_ENTRIES,
+            fd_max_entries: DEFAULT_FILE_BULK_READ_FAST_PATH_FD_MAX_ENTRIES,
+            pending_op_max_entries: DEFAULT_FILE_BULK_READ_FAST_PATH_PENDING_OP_MAX_ENTRIES,
         }
     }
 }

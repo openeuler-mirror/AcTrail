@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "actrail_plugin_abi"
-version = "0.6.1"
+version = "0.6.2"
 
 [[package]]
 name = "addr2line"
@@ -149,7 +149,7 @@ dependencies = [
 
 [[package]]
 name = "attach_runtime"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "collector_binding",
  "collector_event",
@@ -357,7 +357,7 @@ dependencies = [
 
 [[package]]
 name = "collector_binding"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "collector_capability",
  "config_core",
@@ -366,21 +366,21 @@ dependencies = [
 
 [[package]]
 name = "collector_capability"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "collector_event"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "collector_instance"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "collector_binding",
  "collector_capability",
@@ -392,7 +392,7 @@ dependencies = [
 
 [[package]]
 name = "collector_stats"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "model_core",
 ]
@@ -405,7 +405,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "config_core"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "export_factory",
  "model_core",
@@ -416,7 +416,7 @@ dependencies = [
 
 [[package]]
 name = "control_contract"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "model_core",
  "plugin_system",
@@ -596,7 +596,7 @@ dependencies = [
 
 [[package]]
 name = "ctl"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "clap",
  "config_core",
@@ -611,7 +611,7 @@ dependencies = [
 
 [[package]]
 name = "daemon"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "attach_runtime",
  "clap",
@@ -684,7 +684,7 @@ dependencies = [
 
 [[package]]
 name = "ebpf_collector"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "collector_binding",
  "collector_capability",
@@ -704,7 +704,7 @@ dependencies = [
 
 [[package]]
 name = "ebpf_probe"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "config_core",
  "control_contract",
@@ -771,7 +771,7 @@ dependencies = [
 
 [[package]]
 name = "export_core"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "model_core",
  "plugin_system",
@@ -780,7 +780,7 @@ dependencies = [
 
 [[package]]
 name = "export_factory"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "export_core",
  "export_otel_jsonl",
@@ -790,7 +790,7 @@ dependencies = [
 
 [[package]]
 name = "export_otel_codec"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "model_core",
  "semantic_action",
@@ -799,7 +799,7 @@ dependencies = [
 
 [[package]]
 name = "export_otel_jsonl"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "export_core",
  "export_otel_codec",
@@ -957,14 +957,14 @@ dependencies = [
 
 [[package]]
 name = "graph_contract"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "graph_inspect"
-version = "0.6.1"
+version = "0.6.2"
 
 [[package]]
 name = "hashbrown"
@@ -1167,7 +1167,7 @@ dependencies = [
 
 [[package]]
 name = "ingest_runtime"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "collector_event",
  "model_core",
@@ -1220,7 +1220,7 @@ dependencies = [
 
 [[package]]
 name = "json_graph_export"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "graph_contract",
  "model_core",
@@ -1339,7 +1339,7 @@ checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
 name = "linux_platform"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "config_core",
  "libc",
@@ -1417,7 +1417,7 @@ dependencies = [
 
 [[package]]
 name = "model_core"
-version = "0.6.1"
+version = "0.6.2"
 
 [[package]]
 name = "nix"
@@ -1545,7 +1545,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "otel_export"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "export_otel_codec",
 ]
@@ -1581,18 +1581,18 @@ dependencies = [
 
 [[package]]
 name = "payload_binding"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "payload_capability"
-version = "0.6.1"
+version = "0.6.2"
 
 [[package]]
 name = "payload_event"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "model_core",
 ]
@@ -1617,7 +1617,7 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
 name = "plugin_system"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "actrail_plugin_abi",
  "model_core",
@@ -1628,7 +1628,7 @@ dependencies = [
 
 [[package]]
 name = "plugin_wasm_runtime"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "model_core",
  "plugin_system",
@@ -1639,7 +1639,7 @@ dependencies = [
 
 [[package]]
 name = "policy_evaluate_contract"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "model_core",
 ]
@@ -1676,25 +1676,25 @@ dependencies = [
 
 [[package]]
 name = "process_identity_contract"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "process_tree_snapshot_contract"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "provider_evidence"
-version = "0.6.1"
+version = "0.6.2"
 
 [[package]]
 name = "provider_label"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "provider_evidence",
 ]
@@ -1745,7 +1745,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "recording_runtime"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "export_core",
  "model_core",
@@ -1844,7 +1844,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "rule_set_provider"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "config_core",
  "provider_evidence",
@@ -1904,7 +1904,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "semantic_action"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "model_core",
  "serde_json",
@@ -1912,7 +1912,7 @@ dependencies = [
 
 [[package]]
 name = "semantic_action_runtime"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "config_core",
  "libc",
@@ -2033,11 +2033,11 @@ dependencies = [
 
 [[package]]
 name = "sqlite_inspect"
-version = "0.6.1"
+version = "0.6.2"
 
 [[package]]
 name = "sqlite_storage"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "model_core",
  "rusqlite",
@@ -2060,7 +2060,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "storage_core"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "model_core",
  "semantic_action",
@@ -2073,7 +2073,7 @@ dependencies = [
 
 [[package]]
 name = "storage_factory"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "sqlite_storage",
  "storage_core",
@@ -2081,32 +2081,32 @@ dependencies = [
 
 [[package]]
 name = "store_read_contract"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "store_retention_contract"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "store_snapshot_contract"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "store_tx_contract"
-version = "0.6.1"
+version = "0.6.2"
 
 [[package]]
 name = "store_write_contract"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "model_core",
 ]
@@ -2208,11 +2208,11 @@ dependencies = [
 
 [[package]]
 name = "tls_payload_core"
-version = "0.6.1"
+version = "0.6.2"
 
 [[package]]
 name = "tls_payload_probe"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "brotli",
  "clap",
@@ -2227,7 +2227,7 @@ dependencies = [
 
 [[package]]
 name = "tls_payload_probe_sync"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "clap",
  "libc",
@@ -2238,7 +2238,7 @@ dependencies = [
 
 [[package]]
 name = "tls_payload_sync"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "libc",
  "tls_payload_core",
@@ -2247,7 +2247,7 @@ dependencies = [
 
 [[package]]
 name = "tls_probe_point_finder"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "anstyle",
  "clap",
@@ -2297,7 +2297,7 @@ checksum = "5d99f8c9a7727884afe522e9bd5edbfc91a3312b36a77b5fb8926e4c31a41801"
 
 [[package]]
 name = "trace_runtime"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "collector_capability",
  "config_core",
@@ -2356,7 +2356,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "uds_control_client"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "control_contract",
  "libc",
@@ -2365,7 +2365,7 @@ dependencies = [
 
 [[package]]
 name = "uds_control_server"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "control_contract",
  "libc",
@@ -2375,7 +2375,7 @@ dependencies = [
 
 [[package]]
 name = "uds_control_transport"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "control_contract",
  "model_core",
@@ -2442,7 +2442,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "view"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "clap",
  "config_core",
@@ -2841,7 +2841,7 @@ dependencies = [
 
 [[package]]
 name = "web"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "config_core",
  "flate2",

@@ -39,6 +39,18 @@ pub(crate) struct TlsSyncService {
     max_line_bytes: usize,
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct TlsSyncDrain {
+    pub(crate) payload_segments: Vec<RawPayloadSegment>,
+    pub(crate) diagnostics: Vec<TlsSyncDiagnostic>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TlsSyncDiagnostic {
+    pub(crate) code: String,
+    pub(crate) message: String,
+}
+
 impl TlsSyncService {
     pub(crate) fn new(config: &PayloadTlsConfig) -> Result<Self, ControlError> {
         if !enabled(config) {
@@ -95,24 +107,34 @@ impl TlsSyncService {
     pub(crate) fn drain(
         &mut self,
         trace_runtime: &TraceRuntime,
-    ) -> Result<Vec<RawPayloadSegment>, ControlError> {
+    ) -> Result<TlsSyncDrain, ControlError> {
         self.accept_ready_clients()?;
-        let mut segments = Vec::new();
+        let mut drain = TlsSyncDrain::default();
         let mut retained_clients = Vec::new();
         for mut client in std::mem::take(&mut self.clients) {
-            let closed = client.read_events(
+            let result = client.read_events(
                 self.read_buffer_bytes,
                 self.max_line_bytes,
                 self.resolver.as_ref(),
                 trace_runtime,
-                &mut segments,
-            )?;
-            if !closed {
-                retained_clients.push(client);
+                &mut drain.payload_segments,
+            );
+            match result {
+                Ok(closed) => {
+                    if !closed {
+                        retained_clients.push(client);
+                    }
+                }
+                Err(error) => {
+                    drain.diagnostics.push(TlsSyncDiagnostic {
+                        code: error.code,
+                        message: error.message,
+                    });
+                }
             }
         }
         self.clients = retained_clients;
-        Ok(segments)
+        Ok(drain)
     }
 
     fn accept_ready_clients(&mut self) -> Result<(), ControlError> {
