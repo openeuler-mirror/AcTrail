@@ -9,7 +9,7 @@ pub(super) struct CommandControlDocument {
 
 impl Default for CommandControlDocument {
     fn default() -> Self {
-        let config = CommandControlConfig::default();
+        let config = CommandControlConfig::disabled();
         Self {
             enabled: config.enabled,
             rules_path: config.rules_path.display().to_string(),

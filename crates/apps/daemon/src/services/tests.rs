@@ -8,10 +8,9 @@ use config_core::capture_profile::CaptureProfile;
 use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, CommandControlConfig,
     DEFAULT_ACTIVE_TRACE_MAX, DiagnosticLogLevel, EbpfCollectorConfig, EbpfEnabledMode,
-    EnforcementBackend, EnforcementConfig, EnforcementDecision, EnforcementMarkStrategy,
-    EnforcementScope, FileObservationConfig, MemlockRlimit, OperatorConfig, PayloadConfig,
-    ProcessSeccompConfig, ProcessSeccompSyscall, ResourceMetricsConfig, RuntimeExportConfig,
-    SeccompNotifyConfig, SemanticRetentionConfig, SseDataPolicy, TraceFinalizationConfig,
+    EnforcementConfig, FileObservationConfig, MemlockRlimit, NetworkControlConfig, OperatorConfig,
+    PayloadConfig, ProcessSeccompConfig, ResourceMetricsConfig, RuntimeExportConfig,
+    SeccompNotifyConfig, SemanticRetentionConfig, TraceFinalizationConfig,
 };
 use config_core::trace_snapshot::CaptureProfileSnapshot;
 use control_contract::command::{ControlCommand, ListTracesCommand, ProcessRef, TrackAddCommand};
@@ -28,7 +27,7 @@ use uds_control_server::ControlService;
 use crate::profiles::DaemonProfileRegistry;
 use crate::service_host::DaemonServiceHost;
 
-use super::build_runtime_wiring;
+use super::{build_runtime_wiring, workload_diagnostics::WorkloadDiagnostics};
 
 #[path = "test_cases/application_protocol.rs"]
 mod application_protocol_tests;
@@ -73,18 +72,19 @@ fn attach_main_path_runs() {
         payload_config(false),
         DEFAULT_ACTIVE_TRACE_MAX,
         DiagnosticLogLevel::Info,
-        seccomp_notify_disabled(),
-        process_seccomp_disabled(),
-        agent_invocation_disabled(),
+        SeccompNotifyConfig::disabled(),
+        ProcessSeccompConfig::disabled(),
+        AgentInvocationConfig::disabled(),
         SemanticRetentionConfig::default(),
         FileObservationConfig::default(),
-        application_protocol_disabled(),
-        resource_metrics_disabled(),
+        ApplicationProtocolConfig::disabled(),
+        ResourceMetricsConfig::disabled(),
         TraceFinalizationConfig::default(),
-        workload_diagnostics_disabled(),
-        export_runtime_disabled(),
-        enforcement_disabled(),
-        CommandControlConfig::default(),
+        WorkloadDiagnostics::default(),
+        RuntimeExportConfig::disabled(),
+        EnforcementConfig::disabled(),
+        CommandControlConfig::disabled(),
+        NetworkControlConfig::disabled(),
     )
     .unwrap();
     let mut host = DaemonServiceHost::new(wiring);
@@ -134,18 +134,19 @@ fn launch_mode_suppresses_wrapper_bootstrap_gap() {
         payload_config(false),
         DEFAULT_ACTIVE_TRACE_MAX,
         DiagnosticLogLevel::Info,
-        seccomp_notify_disabled(),
-        process_seccomp_disabled(),
-        agent_invocation_disabled(),
+        SeccompNotifyConfig::disabled(),
+        ProcessSeccompConfig::disabled(),
+        AgentInvocationConfig::disabled(),
         SemanticRetentionConfig::default(),
         FileObservationConfig::default(),
-        application_protocol_disabled(),
-        resource_metrics_disabled(),
+        ApplicationProtocolConfig::disabled(),
+        ResourceMetricsConfig::disabled(),
         TraceFinalizationConfig::default(),
-        workload_diagnostics_disabled(),
-        export_runtime_disabled(),
-        enforcement_disabled(),
-        CommandControlConfig::default(),
+        WorkloadDiagnostics::default(),
+        RuntimeExportConfig::disabled(),
+        EnforcementConfig::disabled(),
+        CommandControlConfig::disabled(),
+        NetworkControlConfig::disabled(),
     )
     .unwrap();
     let mut host = DaemonServiceHost::new(wiring);
@@ -202,12 +203,12 @@ fn resource_metrics_sampler_persists_procfs_samples() {
         payload_config(false),
         DEFAULT_ACTIVE_TRACE_MAX,
         DiagnosticLogLevel::Info,
-        seccomp_notify_disabled(),
-        process_seccomp_disabled(),
-        agent_invocation_disabled(),
+        SeccompNotifyConfig::disabled(),
+        ProcessSeccompConfig::disabled(),
+        AgentInvocationConfig::disabled(),
         SemanticRetentionConfig::default(),
         FileObservationConfig::default(),
-        application_protocol_disabled(),
+        ApplicationProtocolConfig::disabled(),
         ResourceMetricsConfig {
             enabled: true,
             interval_ms: RESOURCE_TEST_INTERVAL.as_millis() as u64,
@@ -217,10 +218,11 @@ fn resource_metrics_sampler_persists_procfs_samples() {
             memory_alert_rss_kb: None,
         },
         TraceFinalizationConfig::default(),
-        workload_diagnostics_disabled(),
-        export_runtime_disabled(),
-        enforcement_disabled(),
-        CommandControlConfig::default(),
+        WorkloadDiagnostics::default(),
+        RuntimeExportConfig::disabled(),
+        EnforcementConfig::disabled(),
+        CommandControlConfig::disabled(),
+        NetworkControlConfig::disabled(),
     )
     .unwrap();
 
@@ -361,91 +363,4 @@ fn payload_config(tls_enabled: bool) -> PayloadConfig {
         TEST_SOCKET_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     ));
     payload
-}
-
-fn seccomp_notify_disabled() -> SeccompNotifyConfig {
-    SeccompNotifyConfig {
-        enabled: false,
-        reserved_listener_fd: 253,
-    }
-}
-
-fn process_seccomp_disabled() -> ProcessSeccompConfig {
-    ProcessSeccompConfig {
-        enabled: false,
-        syscalls: vec![
-            ProcessSeccompSyscall::Execve,
-            ProcessSeccompSyscall::Execveat,
-            ProcessSeccompSyscall::Fork,
-            ProcessSeccompSyscall::Vfork,
-            ProcessSeccompSyscall::Clone,
-            ProcessSeccompSyscall::Clone3,
-        ],
-        max_args: 64,
-        max_arg_bytes: 4096,
-        pending_max_entries: 128,
-    }
-}
-
-fn agent_invocation_disabled() -> AgentInvocationConfig {
-    AgentInvocationConfig {
-        enabled: false,
-        commands: vec![
-            "opencode".to_string(),
-            ".opencode".to_string(),
-            "claude".to_string(),
-        ],
-    }
-}
-
-fn application_protocol_disabled() -> ApplicationProtocolConfig {
-    ApplicationProtocolConfig {
-        enabled: false,
-        http1_enabled: false,
-        http2_enabled: false,
-        capture_host: false,
-        sse_enabled: false,
-        sse_data_policy: SseDataPolicy::Disabled,
-        sse_max_buffer_bytes: TEST_HTTP_BUFFER_BYTES,
-        sse_max_data_bytes: TEST_HTTP_BUFFER_BYTES,
-        http2_max_frame_bytes: TEST_HTTP2_MAX_FRAME_BYTES,
-        http2_max_connection_buffer_bytes: TEST_HTTP_BUFFER_BYTES,
-        http2_emit_data_preview: false,
-        http2_max_data_preview_bytes: TEST_HTTP2_PREVIEW_BYTES,
-    }
-}
-
-fn resource_metrics_disabled() -> ResourceMetricsConfig {
-    ResourceMetricsConfig {
-        enabled: false,
-        interval_ms: 1,
-        include_children: true,
-        include_system: true,
-        cpu_alert_percent_millis: None,
-        memory_alert_rss_kb: None,
-    }
-}
-
-fn workload_diagnostics_disabled() -> super::workload_diagnostics::WorkloadDiagnostics {
-    super::workload_diagnostics::WorkloadDiagnostics::default()
-}
-
-fn export_runtime_disabled() -> RuntimeExportConfig {
-    let mut config = default_operator_config().export_runtime;
-    config.enabled = false;
-    config
-}
-
-fn enforcement_disabled() -> EnforcementConfig {
-    EnforcementConfig {
-        enabled: false,
-        backend: EnforcementBackend::Fanotify,
-        scope: EnforcementScope::Trace,
-        rules_path: std::env::temp_dir().join("actrail-enforcement-disabled.conf"),
-        builtin_rules: Vec::new(),
-        default_decision: EnforcementDecision::Allow,
-        mark_strategy: EnforcementMarkStrategy::ParentDirectories,
-        audit_enabled: true,
-        event_buffer_bytes: 4096,
-    }
 }

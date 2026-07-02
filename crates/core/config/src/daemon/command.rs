@@ -16,3 +16,9 @@ impl Default for CommandControlConfig {
         }
     }
 }
+
+impl CommandControlConfig {
+    pub fn disabled() -> Self {
+        Self::default()
+    }
+}

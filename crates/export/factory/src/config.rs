@@ -16,6 +16,13 @@ impl ExportConfig {
         Self { enabled, routes }
     }
 
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            routes: Vec::new(),
+        }
+    }
+
     pub fn parse(raw: &str) -> Result<Self, String> {
         parse_export_config(raw)
     }

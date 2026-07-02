@@ -30,9 +30,9 @@ fn socket_payload_gate_persists_http_and_drops_non_http_bytes() {
         payload_config,
         super::super::DEFAULT_ACTIVE_TRACE_MAX,
         DiagnosticLogLevel::Info,
-        super::super::seccomp_notify_disabled(),
-        super::super::process_seccomp_disabled(),
-        super::super::agent_invocation_disabled(),
+        super::super::SeccompNotifyConfig::disabled(),
+        super::super::ProcessSeccompConfig::disabled(),
+        super::super::AgentInvocationConfig::disabled(),
         super::super::SemanticRetentionConfig::default(),
         super::super::FileObservationConfig::default(),
         ApplicationProtocolConfig {
@@ -49,12 +49,13 @@ fn socket_payload_gate_persists_http_and_drops_non_http_bytes() {
             http2_emit_data_preview: false,
             http2_max_data_preview_bytes: super::super::TEST_HTTP2_PREVIEW_BYTES,
         },
-        super::super::resource_metrics_disabled(),
+        super::super::ResourceMetricsConfig::disabled(),
         super::super::TraceFinalizationConfig::default(),
-        super::super::workload_diagnostics_disabled(),
-        super::super::export_runtime_disabled(),
-        super::super::enforcement_disabled(),
-        super::super::CommandControlConfig::default(),
+        super::super::WorkloadDiagnostics::default(),
+        super::super::RuntimeExportConfig::disabled(),
+        super::super::EnforcementConfig::disabled(),
+        super::super::CommandControlConfig::disabled(),
+        super::super::NetworkControlConfig::disabled(),
     )
     .unwrap();
 

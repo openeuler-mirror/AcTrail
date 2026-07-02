@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use model_core::ids::TraceId;
 use model_core::payload::PayloadSourceBoundary;
 use payload_event::RawPayloadSegment;
 
@@ -65,6 +66,10 @@ impl SocketHttpPayloadGate {
             }
         }
         Ok(admitted)
+    }
+
+    pub(in crate::services) fn forget_trace(&mut self, trace_id: TraceId) {
+        self.streams.retain(|key, _| key.trace_id != trace_id.get());
     }
 }
 

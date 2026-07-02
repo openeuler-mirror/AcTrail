@@ -8,6 +8,24 @@ pub struct AgentInvocationConfig {
     pub commands: Vec<String>,
 }
 
+impl Default for AgentInvocationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            commands: Vec::new(),
+        }
+    }
+}
+
+impl AgentInvocationConfig {
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            ..Self::default()
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SemanticRetentionConfig {
     pub content_owner: SemanticContentOwner,

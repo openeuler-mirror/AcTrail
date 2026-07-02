@@ -104,6 +104,8 @@ fn fs_access_basic_can_skip_file_path_programs() {
         "handle_sys_exit_read".to_string(),
         "handle_sys_enter_write".to_string(),
         "handle_sys_exit_write".to_string(),
+        "handle_sys_enter_writev".to_string(),
+        "handle_sys_exit_writev".to_string(),
     ]);
     assert!(attached.contains(&Capability::FsAccessBasic));
 }
@@ -173,10 +175,14 @@ fn fs_access_basic_context_does_not_grant_proc_lifecycle() {
         "handle_sys_exit_read".to_string(),
         "handle_sys_enter_write".to_string(),
         "handle_sys_exit_write".to_string(),
+        "handle_sys_enter_writev".to_string(),
+        "handle_sys_exit_writev".to_string(),
         "handle_sys_enter_open".to_string(),
         "handle_sys_exit_open".to_string(),
         "handle_sys_enter_openat".to_string(),
         "handle_sys_exit_openat".to_string(),
+        "handle_sys_enter_openat2".to_string(),
+        "handle_sys_exit_openat2".to_string(),
         "handle_sys_enter_creat".to_string(),
         "handle_sys_exit_creat".to_string(),
         "handle_sys_enter_unlinkat".to_string(),
