@@ -50,9 +50,7 @@ impl Capability {
             Self::StdioChunk => "stdio-chunk",
             Self::PolicyIngestProcessing => "policy-ingest-processing",
             Self::PolicyDecisionRecord => "policy-decision-record",
-            Self::EnforcementFilePermissionFanotify => {
-                "enforcement-file-permission-fanotify"
-            }
+            Self::EnforcementFilePermissionFanotify => "enforcement-file-permission-fanotify",
         }
     }
 }
@@ -82,9 +80,7 @@ impl std::str::FromStr for Capability {
             "stdio-chunk" => Ok(Self::StdioChunk),
             "policy-ingest-processing" => Ok(Self::PolicyIngestProcessing),
             "policy-decision-record" => Ok(Self::PolicyDecisionRecord),
-            "enforcement-file-permission-fanotify" => {
-                Ok(Self::EnforcementFilePermissionFanotify)
-            }
+            "enforcement-file-permission-fanotify" => Ok(Self::EnforcementFilePermissionFanotify),
             other => Err(format!("unknown capability {other}")),
         }
     }

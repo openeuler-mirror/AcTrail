@@ -593,7 +593,11 @@ mod tests {
         let result = wait_child_exit(child_pid);
         uninstall_signal_forwarding();
 
-        assert_eq!(result, Ok(143), "forwarded SIGTERM should reap child as 143");
+        assert_eq!(
+            result,
+            Ok(143),
+            "forwarded SIGTERM should reap child as 143"
+        );
 
         // No orphan: a second waitpid must fail (ECHILD) because it was reaped.
         let mut status = 0;

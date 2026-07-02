@@ -265,10 +265,7 @@ fn verification_profile(config: &LiveVerificationConfig) -> CaptureProfile {
             RequestMode::Required,
         ));
     }
-    CaptureProfile::new(
-        ProfileName::new(config.profile_name.clone()),
-        capabilities,
-    )
+    CaptureProfile::new(ProfileName::new(config.profile_name.clone()), capabilities)
 }
 
 fn spawn_workload(config: &LiveVerificationConfig) -> Result<std::process::Child, String> {

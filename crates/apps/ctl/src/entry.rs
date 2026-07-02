@@ -10,10 +10,10 @@ use uds_control_client::{UdsControlClient, UdsSocketTransport};
 use crate::args::{CtlCommand, parse_args};
 use crate::clean::run_clean;
 use crate::dispatch::dispatch;
-use crate::launch::{LaunchRequest, run_launch};
 use crate::launch::permission_policy::{
     contract_permission_mode, permission_decision_from_reply, resolve_deployment_permissions,
 };
+use crate::launch::{LaunchRequest, run_launch};
 use crate::output::format_reply;
 use crate::platform_probe::{
     LaunchPlatformReport, attach_daemon_status, print_platform_probe, print_platform_probe_json,
@@ -131,9 +131,7 @@ pub fn run_from_env() -> Result<i32, String> {
                             ResolveLaunchPermissionsCommand {
                                 request_id: invocation.request_id,
                                 profile_name: loaded.capture_profile.name.clone(),
-                                host_ebpf: contract_permission_mode(
-                                    ebpf_seccomp_policy.host_ebpf,
-                                ),
+                                host_ebpf: contract_permission_mode(ebpf_seccomp_policy.host_ebpf),
                                 seccomp_notify: contract_permission_mode(
                                     ebpf_seccomp_policy.seccomp_notify,
                                 ),

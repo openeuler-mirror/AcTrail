@@ -10,6 +10,7 @@ use flate2::write::GzEncoder;
 
 use crate::args::WebConfig;
 use crate::{render, view};
+use config_core::daemon::OperatorConfig;
 use storage_core::{SemanticActionChildPageQuery, StorageOpenMode};
 use storage_factory::{StorageConfig, open_storage_backend};
 
@@ -35,12 +36,7 @@ pub fn run_server(config: WebConfig) -> Result<(), String> {
         config.storage.path().display()
     );
     println!("actrailweb is running; press Ctrl-C to stop");
-    serve_listener(
-        listener,
-        config.storage,
-        config.request_read_timeout,
-        RequestBudget::Forever,
-    )
+    serve_listener_with_config(listener, config, RequestBudget::Forever)
 }
 
 pub fn serve_listener(
@@ -49,33 +45,61 @@ pub fn serve_listener(
     request_read_timeout: Option<Duration>,
     budget: RequestBudget,
 ) -> Result<(), String> {
+    let context = WebContext {
+        storage,
+        request_read_timeout,
+        operator_config_path: None,
+        operator_config: None,
+    };
+    serve_listener_context(listener, context, budget)
+}
+
+fn serve_listener_with_config(
+    listener: TcpListener,
+    config: WebConfig,
+    budget: RequestBudget,
+) -> Result<(), String> {
+    let context = WebContext {
+        storage: config.storage,
+        request_read_timeout: config.request_read_timeout,
+        operator_config_path: config.operator_config_path,
+        operator_config: config.operator_config,
+    };
+    serve_listener_context(listener, context, budget)
+}
+
+fn serve_listener_context(
+    listener: TcpListener,
+    context: WebContext,
+    budget: RequestBudget,
+) -> Result<(), String> {
     match budget {
         RequestBudget::Forever => loop {
             let (stream, _) = listener.accept().map_err(|error| error.to_string())?;
-            detach_connection(stream, storage.clone(), request_read_timeout);
+            detach_connection(stream, context.clone());
         },
         RequestBudget::Count(count) => {
             let mut handles = Vec::new();
             for _ in 0..count {
                 let (stream, _) = listener.accept().map_err(|error| error.to_string())?;
-                handles.push(spawn_connection(
-                    stream,
-                    storage.clone(),
-                    request_read_timeout,
-                ));
+                handles.push(spawn_connection(stream, context.clone()));
             }
             join_connections(handles)
         }
     }
 }
 
-fn detach_connection(
-    stream: TcpStream,
+#[derive(Clone)]
+struct WebContext {
     storage: StorageConfig,
     request_read_timeout: Option<Duration>,
-) {
+    operator_config_path: Option<std::path::PathBuf>,
+    operator_config: Option<OperatorConfig>,
+}
+
+fn detach_connection(stream: TcpStream, context: WebContext) {
     drop(thread::spawn(move || {
-        if let Err(error) = serve_stream(stream, &storage, request_read_timeout) {
+        if let Err(error) = serve_stream(stream, &context) {
             eprintln!("actrailweb request failed: {error}");
         }
     }));
@@ -98,12 +122,8 @@ fn validate_storage(storage: &StorageConfig) -> Result<(), String> {
         })
 }
 
-fn spawn_connection(
-    stream: TcpStream,
-    storage: StorageConfig,
-    request_read_timeout: Option<Duration>,
-) -> JoinHandle<Result<(), String>> {
-    thread::spawn(move || serve_stream(stream, &storage, request_read_timeout))
+fn spawn_connection(stream: TcpStream, context: WebContext) -> JoinHandle<Result<(), String>> {
+    thread::spawn(move || serve_stream(stream, &context))
 }
 
 fn join_connections(handles: Vec<JoinHandle<Result<(), String>>>) -> Result<(), String> {
@@ -116,16 +136,12 @@ fn join_connections(handles: Vec<JoinHandle<Result<(), String>>>) -> Result<(), 
     Ok(())
 }
 
-fn serve_stream(
-    mut stream: TcpStream,
-    storage: &StorageConfig,
-    request_read_timeout: Option<Duration>,
-) -> Result<(), String> {
+fn serve_stream(mut stream: TcpStream, context: &WebContext) -> Result<(), String> {
     stream
-        .set_read_timeout(request_read_timeout)
+        .set_read_timeout(context.request_read_timeout)
         .map_err(|error| format!("set request read timeout failed: {error}"))?;
     let request = read_request(&mut stream)?;
-    let response = match route(&request, storage) {
+    let response = match route(&request, context) {
         Ok(response) => response,
         Err(error) => Response::text(STATUS_INTERNAL_ERROR, error),
     };
@@ -183,7 +199,7 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
     })
 }
 
-fn route(request: &Request, storage: &StorageConfig) -> Result<Response, String> {
+fn route(request: &Request, context: &WebContext) -> Result<Response, String> {
     let (path, query) = split_request_target(&request.path);
     if path == "/api/cache/clear" {
         if request.method != "POST" {
@@ -193,6 +209,24 @@ fn route(request: &Request, storage: &StorageConfig) -> Result<Response, String>
             ));
         }
         return Ok(Response::json(view::clear_cache_json()?));
+    }
+    if path == "/api/plugins/runtime/unload" {
+        if request.method != "POST" {
+            return Ok(Response::text(
+                STATUS_METHOD_NOT_ALLOWED,
+                "POST required for /api/plugins/runtime/unload",
+            ));
+        }
+        return required_query_param(query, "instance_id")
+            .and_then(|instance_id| {
+                view::runtime_plugin_unload_json(
+                    context.operator_config_path.as_deref(),
+                    context.operator_config.as_ref(),
+                    &instance_id,
+                )
+            })
+            .map(Response::json)
+            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error)));
     }
     if request.method != "GET" {
         return Ok(Response::text(
@@ -204,13 +238,28 @@ fn route(request: &Request, storage: &StorageConfig) -> Result<Response, String>
         "/" => Ok(Response::html(render::html())),
         "/assets/app.css" => Ok(Response::css(render::css())),
         "/assets/app.js" => Ok(Response::javascript(render::javascript())),
-        "/api/traces" => view::traces_json(storage).map(Response::json),
+        "/api/traces" => view::traces_json(&context.storage).map(Response::json),
+        "/api/config/current" => view::current_config_json(
+            context.operator_config_path.as_deref(),
+            context.operator_config.as_ref(),
+        )
+        .map(Response::json),
+        "/api/plugins/enabled" => view::plugin_enablement_json(
+            context.operator_config_path.as_deref(),
+            context.operator_config.as_ref(),
+        )
+        .map(Response::json),
+        "/api/plugins/runtime" => view::runtime_plugin_status_json(
+            context.operator_config_path.as_deref(),
+            context.operator_config.as_ref(),
+        )
+        .map(Response::json),
         "/api/stats/token-usage" => match parse_token_usage_stats_query(query) {
-            Ok(query) => view::token_usage_stats_json(storage, query).map(Response::json),
+            Ok(query) => view::token_usage_stats_json(&context.storage, query).map(Response::json),
             Err(error) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
         },
         "/health" => Ok(Response::text(STATUS_OK, "ok")),
-        _ => route_trace_api(path, query, storage),
+        _ => route_trace_api(path, query, &context.storage),
     }
 }
 

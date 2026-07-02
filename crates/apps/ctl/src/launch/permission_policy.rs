@@ -111,10 +111,7 @@ mod tests {
                 CapabilityRequest::new(Capability::ProcLifecycle, RequestMode::Required),
                 CapabilityRequest::new(Capability::NetTransport, RequestMode::Required),
                 CapabilityRequest::new(Capability::ProcExecContext, RequestMode::Required),
-                CapabilityRequest::new(
-                    Capability::SocketPlaintextPayload,
-                    RequestMode::Required,
-                ),
+                CapabilityRequest::new(Capability::SocketPlaintextPayload, RequestMode::Required),
                 CapabilityRequest::new(Capability::FsAccessBasic, RequestMode::Opportunistic),
             ],
         )
@@ -270,12 +267,18 @@ mod tests {
 
         assert_eq!(decision.selected, DeploymentPermissions::new(true, false));
         assert!(!decision.degraded);
-        assert!(!selected.capabilities.iter().any(
-            |request| request.capability == Capability::ProcExecContext
-        ));
-        assert!(selected.capabilities.iter().any(
-            |request| request.capability == Capability::SocketPlaintextPayload
-        ));
+        assert!(
+            !selected
+                .capabilities
+                .iter()
+                .any(|request| request.capability == Capability::ProcExecContext)
+        );
+        assert!(
+            selected
+                .capabilities
+                .iter()
+                .any(|request| request.capability == Capability::SocketPlaintextPayload)
+        );
         assert!(selected.capabilities.iter().any(|request| {
             request.capability == Capability::FsAccessBasic
                 && request.mode == RequestMode::Opportunistic

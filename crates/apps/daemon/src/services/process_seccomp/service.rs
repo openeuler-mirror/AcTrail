@@ -50,25 +50,20 @@ impl ProcessSeccompService {
         self.enabled
     }
 
-    pub(crate) fn ensure_pending_observation_capacity(
-        &self,
-        pending_len: usize,
-    ) -> Result<(), ControlError> {
+    pub(crate) fn pending_observation_batch_size(&self) -> Result<usize, ControlError> {
         let limit = usize::try_from(self.pending_max_entries).map_err(|error| {
             ControlError::new(
                 "process_seccomp_pending",
-                format!("pending observation limit overflow: {error}"),
+                format!("pending observation batch size overflow: {error}"),
             )
         })?;
-        if pending_len > limit {
+        if limit == 0 {
             return Err(ControlError::new(
                 "process_seccomp_pending",
-                format!(
-                    "pending process seccomp observations {pending_len} exceed configured limit {limit}"
-                ),
+                "pending observation batch size must be positive",
             ));
         }
-        Ok(())
+        Ok(limit)
     }
 
     pub(crate) fn ensure_listener_target(
@@ -317,13 +312,13 @@ impl ProcessSeccompService {
     pub(crate) fn materialize_observation(
         &self,
         trace_runtime: &TraceRuntime,
-        observation: ProcessSeccompObservation,
+        observation: &ProcessSeccompObservation,
     ) -> RawCollectorEvent {
         let process = trace_runtime
             .find_membership_by_pid(observation.process.pid)
             .map(|(_, membership)| membership.identity)
             .unwrap_or_else(|| observation.process.clone());
-        match observation.details {
+        match &observation.details {
             ProcessSeccompObservationDetails::Exec {
                 args,
                 execveat_dirfd,
@@ -339,9 +334,9 @@ impl ProcessSeccompService {
                     observation.parent_pid,
                     parent,
                     observation.syscall,
-                    args,
-                    execveat_dirfd,
-                    execveat_flags,
+                    args.clone(),
+                    *execveat_dirfd,
+                    *execveat_flags,
                 )
             }
             ProcessSeccompObservationDetails::ForkAttempt {
@@ -352,9 +347,9 @@ impl ProcessSeccompService {
                 observation.observed_at,
                 process,
                 observation.syscall,
-                flags,
-                clone3_args_ptr,
-                clone3_args_size,
+                *flags,
+                *clone3_args_ptr,
+                *clone3_args_size,
             ),
             ProcessSeccompObservationDetails::CommandControl {
                 path,
@@ -364,9 +359,9 @@ impl ProcessSeccompService {
                 observation.observed_at,
                 process,
                 observation.parent_pid,
-                path,
-                argv,
-                metadata,
+                path.clone(),
+                argv.clone(),
+                metadata.clone(),
             ),
         }
     }

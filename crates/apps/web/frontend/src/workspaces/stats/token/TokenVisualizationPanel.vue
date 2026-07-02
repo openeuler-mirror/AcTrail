@@ -23,6 +23,7 @@
     <TokenCategoryBreakdown
       v-else-if="activeTab === TAB_IDS.category"
       :rows="breakdownByCategory"
+      :model-rows="breakdownByModel"
       :loading="loading"
     />
     <TokenByModelTable

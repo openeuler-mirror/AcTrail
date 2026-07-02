@@ -39,6 +39,13 @@ pub trait CollectorInstance {
         Ok(self.poll_batch()?.observations)
     }
     fn poll_batch(&mut self) -> Result<CollectorPollBatch, CollectorError>;
+    /// Drain the kernel transport buffer into userspace without decoding.
+    ///
+    /// Best-effort: call after expensive processing to shrink the ring-buffer
+    /// starvation window. Default is a no-op.
+    fn flush_transport(&mut self) -> Result<(), CollectorError> {
+        Ok(())
+    }
     fn stats(&self) -> CollectorStats;
 }
 

@@ -10,6 +10,7 @@
         align="end"
         :options="chartModes"
         :model-value="activeModeSelection"
+        :default-selected-ids="defaultChartModeIds"
         @update:model-value="activeModeSelection = $event"
       />
     </div>
@@ -55,6 +56,7 @@ const chartModes = Object.freeze([
   { id: 'bar', label: 'Histogram' },
   { id: 'kde', label: 'KDE' },
 ]);
+const defaultChartModeIds = Object.freeze(['line', 'bar']);
 
 const facetDefinitions = Object.freeze([
   { key: 'total', label: 'Total', field: 'total_tokens', color: 'var(--stats-chart-total)' },
@@ -74,11 +76,21 @@ const facetDefinitions = Object.freeze([
 ]);
 
 const activeBucket = ref(TOKEN_TIME_BUCKETS[0].id);
-const activeModeSelection = ref({ line: true, bar: false, kde: false });
+const activeModeSelection = ref({});
 const series = computed(() => buildTokenSeriesByBucket(props.requests, activeBucket.value));
-const activeModes = computed(() =>
-  chartModes.filter((mode) => Boolean(activeModeSelection.value[mode.id])).map((mode) => mode.id),
-);
+const activeModes = computed(() => {
+  const selection = activeChartModeSelection.value;
+  return chartModes.filter((mode) => Boolean(selection[mode.id])).map((mode) => mode.id);
+});
+const activeChartModeSelection = computed(() => {
+  const explicit = chartModes.some((mode) =>
+    Object.prototype.hasOwnProperty.call(activeModeSelection.value, mode.id),
+  );
+  if (explicit) {
+    return activeModeSelection.value;
+  }
+  return Object.fromEntries(chartModes.map((mode) => [mode.id, defaultChartModeIds.includes(mode.id)]));
+});
 const facets = computed(() => {
   const flags = categoryFlags(props.selectedCategories);
   return facetDefinitions.filter((facet) => facet.key === 'total' || flags[facet.key]);

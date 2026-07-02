@@ -251,6 +251,15 @@ impl EbpfCollector {
             .unwrap_or_default()
     }
 
+    pub fn flush_transport(&mut self) -> Result<(), CollectorError> {
+        self.runtime
+            .as_mut()
+            .map(EbpfRuntime::flush_transport)
+            .transpose()
+            .map(|_| ())
+            .map_err(loader_error)
+    }
+
     pub fn debug_snapshot_for_pid(
         &self,
         pid: u32,

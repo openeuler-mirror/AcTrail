@@ -113,8 +113,7 @@ impl PeerIdentity {
         let target = PeerPrincipal {
             uid: process_uid(process.pid)?,
             container_id: process_container_id(process.pid)?,
-            host_pid_namespace: target_pid_namespace
-                == process_pid_namespace(std::process::id())?,
+            host_pid_namespace: target_pid_namespace == process_pid_namespace(std::process::id())?,
             pid_namespace: target_pid_namespace,
         };
         if self.principal.matches(&target) {

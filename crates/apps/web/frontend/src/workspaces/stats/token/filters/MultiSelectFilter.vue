@@ -67,6 +67,10 @@ const props = defineProps({
     type: Object,
     required: true,
   },
+  defaultSelectedIds: {
+    type: Array,
+    default: () => [],
+  },
   showBulkActions: {
     type: Boolean,
     default: false,
@@ -87,11 +91,18 @@ const props = defineProps({
 });
 
 const emit = defineEmits(['update:modelValue']);
+const optionIds = computed(() => new Set(props.options.map((option) => option.id)));
+const hasExplicitSelection = computed(() =>
+  Object.keys(props.modelValue ?? {}).some((id) => optionIds.value.has(id)),
+);
+const defaultSelectedSet = computed(
+  () => new Set(props.defaultSelectedIds.filter((id) => optionIds.value.has(id))),
+);
 const selectedSet = computed(
   () =>
     new Set(
       props.options
-        .filter((option) => Boolean(props.modelValue?.[option.id]))
+        .filter((option) => isSelected(option.id))
         .map((option) => option.id),
     ),
 );
@@ -121,9 +132,16 @@ function selectionFromCurrentOptions(forceValue = null) {
   return Object.fromEntries(
     props.options.map((option) => [
       option.id,
-      forceValue === null ? Boolean(props.modelValue?.[option.id]) : forceValue,
+      forceValue === null ? isSelected(option.id) : forceValue,
     ]),
   );
+}
+
+function isSelected(optionId) {
+  if (hasExplicitSelection.value) {
+    return Boolean(props.modelValue?.[optionId]);
+  }
+  return defaultSelectedSet.value.has(optionId);
 }
 </script>
 

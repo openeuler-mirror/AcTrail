@@ -100,10 +100,7 @@ fn read_argv(
         return Ok(Vec::new());
     };
     if pointer_table.len() != table_size {
-        return Err(ControlError::new(
-            "process_seccomp_args",
-            "short argv pointer table read",
-        ));
+        *truncated = true;
     }
     let mut argv = Vec::new();
     for pointer_bytes in pointer_table.chunks_exact(pointer_size) {

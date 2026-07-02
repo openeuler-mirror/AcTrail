@@ -1,7 +1,7 @@
 //! Shared Unix-socket framing and socket-path support for control transport.
 
-mod plugin;
 mod permission;
+mod plugin;
 
 use std::collections::BTreeSet;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -643,18 +643,10 @@ mod tests {
 
     #[test]
     fn legacy_track_add_v1_and_v2_frames_remain_accepted() {
-        let v1 = vec![
-            "track_add",
-            "1",
-            "42",
-            "legacy-v1",
-            "default",
-            "false",
-            "0",
-        ]
-        .into_iter()
-        .map(str::to_string)
-        .collect::<Vec<_>>();
+        let v1 = vec!["track_add", "1", "42", "legacy-v1", "default", "false", "0"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
         let v2 = vec![
             "track_add_v2",
             "2",

@@ -67,9 +67,15 @@ impl LocalDaemonServer {
             )
         })?;
         let mut control_connections = Vec::new();
+        let mut drain_error_log = DrainErrorLog::default();
         on_ready()?;
         while !should_stop() {
-            self.serve_ready_cycle(&listener, &mut control_connections, pending_connection_max)?;
+            self.serve_ready_cycle(
+                &listener,
+                &mut control_connections,
+                pending_connection_max,
+                &mut drain_error_log,
+            )?;
         }
         Ok(())
     }
@@ -79,6 +85,7 @@ impl LocalDaemonServer {
         listener: &UnixListener,
         control_connections: &mut Vec<UdsControlConnection>,
         pending_connection_max: usize,
+        drain_error_log: &mut DrainErrorLog,
     ) -> Result<(), DaemonRunError> {
         let control_fds = control_connections
             .iter()
@@ -131,7 +138,10 @@ impl LocalDaemonServer {
             let result = self.drain_live_events();
             self.workload_diagnostics()
                 .record_drain_result(started.elapsed(), result.is_ok());
-            result.map_err(|error| DaemonRunError::new(error.code, error.message))?;
+            match &result {
+                Ok(()) => drain_error_log.record_success(),
+                Err(error) => drain_error_log.record_error(error),
+            }
         }
         Ok(())
     }
@@ -158,6 +168,46 @@ impl LocalDaemonServer {
     fn event_poll_fds(&mut self) -> Result<Vec<RawFd>, DaemonRunError> {
         self.control_event_poll_fds()
             .map_err(|error| DaemonRunError::new(error.code, error.message))
+    }
+}
+
+#[derive(Default)]
+struct DrainErrorLog {
+    last_error: Option<(String, String)>,
+    suppressed_repeats: u64,
+}
+
+impl DrainErrorLog {
+    fn record_success(&mut self) {
+        if self.suppressed_repeats > 0 {
+            tracing::warn!(
+                suppressed_repeats = self.suppressed_repeats,
+                "drain cycle recovered after suppressing repeated failures"
+            );
+        }
+        self.last_error = None;
+        self.suppressed_repeats = 0;
+    }
+
+    fn record_error(&mut self, error: &control_contract::reply::ControlError) {
+        let signature = (error.code.clone(), error.message.clone());
+        if self.last_error.as_ref() == Some(&signature) {
+            self.suppressed_repeats = self.suppressed_repeats.saturating_add(1);
+            return;
+        }
+        if self.suppressed_repeats > 0 {
+            tracing::warn!(
+                suppressed_repeats = self.suppressed_repeats,
+                "suppressed repeated drain cycle failures"
+            );
+        }
+        tracing::warn!(
+            error.code = %error.code,
+            error.message = %error.message,
+            "drain cycle failed; daemon continues, observation may be degraded"
+        );
+        self.last_error = Some(signature);
+        self.suppressed_repeats = 0;
     }
 }
 

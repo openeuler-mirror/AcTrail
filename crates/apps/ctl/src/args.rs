@@ -215,10 +215,7 @@ impl CtlCommandArgs {
                             "missing operator config for launch supervision".to_string()
                         })?
                         .supervision_poll_interval_ms,
-                    ebpf_seccomp_policy: ebpf_seccomp_policy(
-                        args.host_ebpf,
-                        args.seccomp_notify,
-                    ),
+                    ebpf_seccomp_policy: ebpf_seccomp_policy(args.host_ebpf, args.seccomp_notify),
                     argv: args.argv,
                 })
             }
@@ -243,10 +240,7 @@ impl CtlCommandArgs {
                     json: args.json,
                     skip_daemon: args.skip_daemon,
                     suggest_config: args.suggest_config,
-                    ebpf_seccomp_policy: ebpf_seccomp_policy(
-                        args.host_ebpf,
-                        args.seccomp_notify,
-                    ),
+                    ebpf_seccomp_policy: ebpf_seccomp_policy(args.host_ebpf, args.seccomp_notify),
                 })
             }
         }

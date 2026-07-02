@@ -21,6 +21,24 @@ export function listTraces() {
   return fetchJson('/api/traces');
 }
 
+export function readCurrentConfig() {
+  return fetchJson('/api/config/current');
+}
+
+export function readPluginEnablement() {
+  return fetchJson('/api/plugins/enabled');
+}
+
+export function readPluginRuntimeStatus() {
+  return fetchJson('/api/plugins/runtime');
+}
+
+export function unloadRuntimePlugin(instanceId) {
+  return fetchJson(`/api/plugins/runtime/unload?instance_id=${encodeURIComponent(instanceId)}`, {
+    method: 'POST',
+  });
+}
+
 export function readTrace(traceId) {
   return fetchJson(`/api/traces/${traceId}`);
 }

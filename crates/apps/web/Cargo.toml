@@ -11,8 +11,11 @@ path = "src/main.rs"
 
 [dependencies]
 config_core = { path = "../../core/config" }
+control_contract = { path = "../../contracts/control_plane" }
 model_core = { path = "../../core/model" }
+plugin_system = { path = "../../core/plugin_system" }
 semantic_action = { path = "../../contracts/semantic_action" }
 storage_core = { path = "../../storage/core" }
 storage_factory = { path = "../../storage/factory" }
+uds_control_client = { path = "../../adapters/control/uds/client" }
 flate2 = "1.1"

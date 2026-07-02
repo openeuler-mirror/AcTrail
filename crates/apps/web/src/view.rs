@@ -14,6 +14,8 @@ mod events;
 mod payloads;
 #[path = "view/projection_cache.rs"]
 mod projection_cache;
+#[path = "view/runtime_config.rs"]
+mod runtime_config;
 #[path = "view/stats.rs"]
 mod stats;
 #[path = "view/topology.rs"]
@@ -32,6 +34,35 @@ use storage_factory::{StorageConfig, open_storage_backend};
 use crate::json;
 
 pub(crate) use stats::TokenUsageStatsQuery;
+
+pub fn current_config_json(
+    config_path: Option<&std::path::Path>,
+    operator_config: Option<&config_core::daemon::OperatorConfig>,
+) -> Result<String, String> {
+    runtime_config::current_config_json(config_path, operator_config)
+}
+
+pub fn plugin_enablement_json(
+    config_path: Option<&std::path::Path>,
+    operator_config: Option<&config_core::daemon::OperatorConfig>,
+) -> Result<String, String> {
+    runtime_config::plugin_enablement_json(config_path, operator_config)
+}
+
+pub fn runtime_plugin_status_json(
+    config_path: Option<&std::path::Path>,
+    operator_config: Option<&config_core::daemon::OperatorConfig>,
+) -> Result<String, String> {
+    runtime_config::runtime_plugin_status_json(config_path, operator_config)
+}
+
+pub fn runtime_plugin_unload_json(
+    config_path: Option<&std::path::Path>,
+    operator_config: Option<&config_core::daemon::OperatorConfig>,
+    instance_id: &str,
+) -> Result<String, String> {
+    runtime_config::runtime_plugin_unload_json(config_path, operator_config, instance_id)
+}
 
 pub fn traces_json(storage_config: &StorageConfig) -> Result<String, String> {
     let storage = open_storage(storage_config)?;

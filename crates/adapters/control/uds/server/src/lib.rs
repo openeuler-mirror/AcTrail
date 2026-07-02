@@ -182,10 +182,7 @@ impl UdsControlConnection {
     }
 }
 
-fn inject_fds(
-    mut command: ControlCommand,
-    mut fds: Vec<RawFd>,
-) -> (ControlCommand, Option<RawFd>) {
+fn inject_fds(mut command: ControlCommand, mut fds: Vec<RawFd>) -> (ControlCommand, Option<RawFd>) {
     let mut injected = None;
     if let ControlCommand::RegisterSeccompListener(command) = &mut command {
         if !fds.is_empty() {
@@ -376,20 +373,22 @@ mod tests {
             calls: 0,
             last_peer: None,
         });
-        let command = ControlCommand::RegisterSeccompListener(
-            RegisterSeccompListenerCommand {
-                request_id: RequestId::new(9),
-                trace_id: TraceId::new(3),
-                target: ProcessRef::new(1, NamespaceIdentity::new("pid:[1]")),
-                listener_fd: None,
-            },
-        );
+        let command = ControlCommand::RegisterSeccompListener(RegisterSeccompListenerCommand {
+            request_id: RequestId::new(9),
+            trace_id: TraceId::new(3),
+            target: ProcessRef::new(1, NamespaceIdentity::new("pid:[1]")),
+            listener_fd: None,
+        });
         let request = uds_control_transport::encode_command(&command);
         let (_keepalive, transferred) = UnixStream::pair().unwrap();
         let transferred_fd = transferred.into_raw_fd();
 
         let reply = server.handle_bytes_with_fds(&request, vec![transferred_fd]);
-        assert!(uds_control_transport::decode_reply(&reply).unwrap().is_err());
+        assert!(
+            uds_control_transport::decode_reply(&reply)
+                .unwrap()
+                .is_err()
+        );
 
         let result = unsafe { libc::fcntl(transferred_fd, libc::F_GETFD) };
         assert_eq!(result, -1);
