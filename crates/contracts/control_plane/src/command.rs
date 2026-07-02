@@ -23,6 +23,33 @@ impl ProcessRef {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeploymentPermissionMode {
+    Auto,
+    Required,
+    Disabled,
+}
+
+impl DeploymentPermissionMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Required => "required",
+            Self::Disabled => "disabled",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolveLaunchPermissionsCommand {
+    pub request_id: RequestId,
+    pub profile_name: ProfileName,
+    pub host_ebpf: DeploymentPermissionMode,
+    pub seccomp_notify: DeploymentPermissionMode,
+    pub seccomp_notify_available: bool,
+    pub seccomp_notify_detail: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TrackAddCommand {
     pub request_id: RequestId,
@@ -94,6 +121,7 @@ pub struct PluginCommandCommand {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ControlCommand {
+    ResolveLaunchPermissions(ResolveLaunchPermissionsCommand),
     TrackAdd(TrackAddCommand),
     RegisterSeccompListener(RegisterSeccompListenerCommand),
     TrackRemove(TrackRemoveCommand),

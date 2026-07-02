@@ -6,6 +6,14 @@
 
 本文档的默认路径是“主机 + 一个已有 workload 容器”：主机负责采集和存储，容器只负责运行 `actrailctl launch -- <agent>` 和实际 Agent 进程。
 
+容器化部署通过 `--host-ebpf` 和 `--seccomp-notify` 两个独立权限轴，
+根据宿主机与容器的实际能力选择采集 profile。`auto` 会在能力不可用时
+明确降级，`required` 会直接失败，`disabled` 则保证不启用对应采集机制。
+
+> 权限矩阵、完整部署资产、seccomp profile 和验收测试见
+> [Container Permission Auto-Selection](../deploy/container-auto/README.md)；
+> 本文只说明单机 Docker 主流程。
+
 ## 说明什么东西
 
 本文档说明的是 AcTrail 在容器化 Agent 场景下的运行部署，不说明如何把 `actraild` 本身放进容器，也不说明如何通过 TCP 转发 AcTrail 控制 socket。
@@ -29,6 +37,17 @@ Docker workload container
   -> /run/actrail/control.sock and /run/actrail/tls-sync.sock mounted from host
 ```
 
+### Docker 权限模式简述
+
+| Docker seccomp 模式 | `--seccomp-notify auto` 的结果 | 用途 |
+| --- | --- | --- |
+| 默认 profile | notify 不可用时自动降级，保留 TLS-sync | 最小权限部署 |
+| `actrail-notify.json` | 启用 notify，同时保留 Docker 外层过滤 | 推荐的完整采集部署 |
+| `seccomp=unconfined` | 启用 notify，但关闭 Docker 外层过滤 | 可信测试、兼容性排障或明确接受更宽 syscall 面的环境 |
+
+三种方式都受支持。正常部署优先使用默认 profile 自动降级，或使用
+`actrail-notify.json` 获得完整采集；详细选择规则见专门部署文档。
+
 ## 整体流程
 
 通过在主机启动 `actraild`，把主机 `/run/actrail` socket 目录挂载到 workload 容器，在容器内执行 `actrailctl launch -- xiaoo --cli run -p "你好"`，然后回到主机侧检查 `actrailviewer`、`actrailweb` 和 `/var/lib/actrail/actrail.sqlite`，验证容器内 Agent 是否被完整观测。
@@ -39,12 +58,12 @@ Docker workload container
 - 主机默认配置路径是 `/etc/actrail/actraild.conf`，默认 socket 目录是 `/run/actrail`，默认 SQLite 路径是 `/var/lib/actrail/actrail.sqlite`。
 - 主机 `actraild` 配置启用了 TLS plaintext，并使用 TLS-sync 后端；如果不满足，先看“其他分支情况 5：主机配置没有启用 TLS-sync”。
 - 已有 workload 容器名通过 `AGENT_CONTAINER` 指定，并且这个容器里已经有 xiaoO、模型密钥、xiaoO 配置、`actrailctl` 和 `libactrail_tls_payload_probe_sync.so`；如果缺少 AcTrail 组件，先看“其他分支情况 2：容器内没有 AcTrail release 组件”。
-- workload 容器创建时已经挂载 `/run/actrail`；`--security-opt seccomp=unconfined` 仍是启用 launch-time socket/process seccomp 的推荐选项，但如果容器只能使用 Docker 默认 seccomp profile，可先通过 `actrailctl probe` 检查，并用默认的 `--seccomp-mode auto` 降级到 tls-sync-only launch；详见 [container-agent-minimal](../examples/container-agent-minimal/README.md)。
+- workload 容器创建时已经挂载 `/run/actrail`；按上表选择 Docker seccomp 模式，并用 `actrailctl probe` 检查实际结果；最小配置示例见 [container-agent-minimal](examples/container-agent-minimal/README.md)。
 - xiaoO 默认路径按 `/root/.cargo/bin/xiaoo` 和 `/root/api_key.sh` 书写；如果你的容器内路径不同，按“其他分支情况 3：Agent 路径、密钥或代理不同”调整。
 
 ### 具体步骤
 
-#### 1. 在主机编译 release 组件
+#### 1. 在兼容构建环境编译 release 组件
 
 操作：
 
@@ -53,9 +72,9 @@ cargo fmt --all
 cargo build --release -p daemon -p ctl -p view -p web -p tls_payload_probe_sync
 ```
 
-说明：这一步生成主机运行所需的 release 二进制；`actraild` 负责采集，`actrailviewer` 和 `actrailweb` 负责验证，`tls_payload_probe_sync` 是 TLS-sync 载荷捕获组件。
+说明：这一步生成运行所需的 release 二进制；`actraild` 负责采集，`actrailviewer` 和 `actrailweb` 负责验证，`tls_payload_probe_sync` 是 TLS-sync 载荷捕获组件。构建机可以不是部署服务器,但构建产物要求的 GLIBC 版本必须不高于服务器和 Agent 基础镜像提供的版本。若构建机更新,应在与目标系统兼容的构建容器/虚拟机中编译,再上传预编译产物;部署服务器本身不需要 cargo/clang。
 
-预期结果：`target/release/actraild`、`target/release/actrailctl`、`target/release/actrailviewer`、`target/release/actrailweb` 和 `target/release/libactrail_tls_payload_probe_sync.so` 存在，且构建过程没有生成需要保留的 debug 产物。
+预期结果：`target/release/actraild`、`target/release/actrailctl`、`target/release/actrailviewer`、`target/release/actrailweb` 和 `target/release/libactrail_tls_payload_probe_sync.so` 存在。上传后应先在目标环境运行 `actrailctl --help`、`actrailctl probe --help` 和 `ldd` 检查,确认二进制来自当前源码且没有 `GLIBC_2.xx not found`/缺失动态库。
 
 #### 2. 在主机启动 `actraild`
 
@@ -95,18 +114,28 @@ docker exec "$AGENT_CONTAINER" test -x /root/.cargo/bin/xiaoo
 
 ```bash
 docker exec "$AGENT_CONTAINER" \
-  actrailctl --config /etc/actrail/actraild.conf probe
+  actrailctl --config /etc/actrail/actraild.conf probe \
+    --host-ebpf auto \
+    --seccomp-notify auto
 ```
 
-说明：这一步在 launch 前检查容器内能否访问 control/TLS-sync socket、no_new_privs、seccomp launch 路径和 TLS-sync runtime library。默认还会向主机 daemon 发送 `doctor` 请求；如果只想做本地检查，可加 `--skip-daemon`。
+说明：这一步在 launch 前检查容器内能否访问 control/TLS-sync socket、no_new_privs、seccomp-notify launch 路径和 TLS-sync runtime library。ctl 把容器内的 seccomp 探测结果发送给 daemon；daemon 再结合自己的 host eBPF collector、配置和两个权限轴生成最终不可变 profile。`--skip-daemon` 只提供本地预览，不是 launch 的最终权限决策。
 
-预期结果：human 输出里 `control_socket` 和 `tls_sync_socket` 为 `ok`；如果 `seccomp_launch` 为 `unavailable` 且 `recommended_seccomp_mode=skip`，后续 `actrailctl launch` 在默认 `--seccomp-mode auto` 下会降级为 tls-sync-only，而不是直接失败。JSON 输出可用 `--json`。
+预期结果：human 输出包含 `deployment_permissions_requested`、`deployment_permissions_selected`、`deployment_permissions_degraded` 和最终 required capabilities；发生降级或配置裁剪时还会包含可机器解析的原因。JSON 输出包含相同的 `deployment_permissions` 对象。
+
+control 和 TLS-sync socket 在 accept 后读取内核 `SO_PEERCRED`。创建 trace
+的 container principal 会绑定到该 trace；另一个即使挂载了同一
+`/run/actrail` 的容器，也不能 remove/register 该 trace 或向它注入 TLS
+event。拒绝错误码固定为 `peer_identity`，daemon journald 中同时记录
+`actrail::peer_auth` 审计信息。host root 保留运维权限，普通 host uid 仍受
+socket 文件权限和 peer uid 校验约束。
 
 JSON 示例：
 
 ```bash
 docker exec "$AGENT_CONTAINER" \
-  actrailctl --config /etc/actrail/actraild.conf probe --json
+  actrailctl --config /etc/actrail/actraild.conf probe \
+    --host-ebpf auto --seccomp-notify auto --json
 ```
 
 #### 4. 检查 workload 容器的 Docker 运行选项
@@ -118,9 +147,9 @@ docker inspect "$AGENT_CONTAINER" --format '{{json .HostConfig.SecurityOpt}}'
 docker inspect "$AGENT_CONTAINER" --format '{{range .Mounts}}{{println .Destination "<-" .Source}}{{end}}'
 ```
 
-说明：这一步确认容器创建时是否禁用了 Docker 默认 seccomp profile，并确认 `/run/actrail` 和 `/etc/actrail` 是否从主机挂载进容器。
+说明：这一步确认容器使用的是 Docker 默认、AcTrail 定制还是 `unconfined` seccomp 模式，并确认 `/run/actrail` 和 `/etc/actrail` 是否从主机挂载进容器。
 
-预期结果：`SecurityOpt` 包含 `seccomp=unconfined` 时，launch 可以启用 socket/process seccomp；如果仍是 Docker 默认 profile，不一定阻塞 launch——先看第 3.1 步 `probe` 的 `recommended_seccomp_mode`。挂载列表里应能看到 `/run/actrail <- /run/actrail`，最好也能看到 `/etc/actrail <- /etc/actrail` 且只读；如果缺少 socket 挂载，不能靠 `docker exec` 补挂载，必须参考“其他分支情况 1”保留现有容器并新建一个带正确选项的 workload 容器。
+预期结果：`SecurityOpt` 包含定制 profile（`actrail-notify.json`）或 `seccomp=unconfined` 时，seccomp-notify 轴可用；正常部署推荐定制 profile，`unconfined` 仅用于可信测试、兼容性排障或明确接受更宽 syscall 面的环境。如果仍是 Docker 默认 profile，不一定阻塞 launch——`--seccomp-notify auto` 会自动降级，先看第 3.1 步 `probe` 的 `deployment_permissions_selected`。挂载列表里应能看到 `/run/actrail <- /run/actrail`，最好也能看到 `/etc/actrail <- /etc/actrail` 且只读；如果缺少 socket 挂载，不能靠 `docker exec` 补挂载，必须参考“其他分支情况 1”保留现有容器并新建一个带正确选项的 workload 容器。
 
 #### 5. 设置 Agent 出网代理
 
@@ -147,12 +176,12 @@ docker exec \
   -e NO_PROXY=localhost,127.0.0.1,::1 \
   -e no_proxy=localhost,127.0.0.1,::1 \
   "$AGENT_CONTAINER" \
-  bash -lc 'source /root/api_key.sh && export PATH=/usr/local/bin:/root/.cargo/bin:$PATH && actrailctl --config /etc/actrail/actraild.conf launch -- /root/.cargo/bin/xiaoo --cli run -p "你好"'
+  bash -lc 'source /root/api_key.sh && export PATH=/usr/local/bin:/root/.cargo/bin:$PATH && actrailctl --config /etc/actrail/actraild.conf launch --host-ebpf auto --seccomp-notify auto -- /root/.cargo/bin/xiaoo --cli run -p "你好"'
 ```
 
-说明：这一步在已有 workload 容器内启动被观测 Agent。`actrailctl launch` 默认使用 `--seccomp-mode auto`：若 seccomp launch 路径可用，则按 operator 配置启用 launch-time seccomp；若不可用（常见于 Docker 默认 seccomp profile），则自动降级为 tls-sync-only launch，并在 stderr 打印降级原因。显式要求 seccomp 时用 `--seccomp-mode require`；强制跳过 seccomp 时用 `--seccomp-mode skip`。真正的 eBPF/TLS-sync 采集仍由主机 `actraild` 完成。
+说明：这一步在已有 workload 容器内启动被观测 Agent。`host-ebpf × seccomp-notify` 根据真实权限选择四种不可变 profile snapshot。把任一轴设为 `required` 会在权限不可用时 fail-loud；设为 `disabled` 会保证该 trace 不绑定对应机制。新部署使用 `--host-ebpf`/`--seccomp-notify` 两个权限轴。完整规则见 [Container Permission Auto-Selection](../deploy/container-auto/README.md)。
 
-预期结果：命令输出中能看到 `trace trace-<N> entered Active` 或等价 trace 启动信息，xiaoO 正常完成请求。若使用 `--seccomp-mode require` 且出现 `pidfd_getfd seccomp listener: Operation not permitted`，改用默认 `--seccomp-mode auto`，或按“其他分支情况 1”新建带 `--security-opt seccomp=unconfined` 的 workload 容器。
+预期结果：命令输出中能看到 `trace trace-<N> entered Active` 或等价 trace 启动信息，xiaoO 正常完成请求。若使用 `--seccomp-notify required` 且出现 `pidfd_getfd seccomp listener: Operation not permitted`，说明容器没提供 seccomp-notify 能力；改用 `--seccomp-notify auto` 自动降级，或按“其他分支情况 1”新建带定制 profile `actrail-notify.json` 的 workload 容器。可信测试或兼容性排障可以改用 `seccomp=unconfined`，但这会关闭 Docker 外层 syscall 过滤。
 
 #### 7. 在主机查看 trace 摘要
 
@@ -218,7 +247,7 @@ curl -fsS "http://127.0.0.1:18080/api/traces/$TRACE_NUM/commands" | jq -r 'lengt
 
 ### 1. 现有容器缺少必需 Docker 选项
 
-如果容器没有 `/run/actrail` 挂载，或者 Docker seccomp 仍是默认 profile，不能通过 `docker exec` 动态修复；不要删除这个容器，因为它的 writable layer 里可能保存了 `actrailctl`、xiaoO、密钥、配置和其他只存在于容器内的状态。
+如果容器没有 `/run/actrail` 挂载，或者需要 seccomp-notify 但容器仍使用 Docker 默认 profile，不能通过 `docker exec` 动态修复；不要删除这个容器，因为它的 writable layer 里可能保存了 `actrailctl`、xiaoO、密钥、配置和其他只存在于容器内的状态。若接受 `--seccomp-notify auto` 降级，则默认 profile 本身不要求重建容器。
 
 操作：
 
@@ -227,16 +256,18 @@ printf '输入现有容器名: '
 read -r EXISTING_AGENT_CONTAINER
 test -n "$EXISTING_AGENT_CONTAINER"
 export AGENT_CONTAINER="${EXISTING_AGENT_CONTAINER}-actrail"
+export ACTRAIL_SECCOMP_PROFILE="$(pwd)/deploy/container-auto/seccomp/actrail-notify.json"
+test -f "$ACTRAIL_SECCOMP_PROFILE"
 docker run -d --name "$AGENT_CONTAINER" \
   --user 0:0 \
-  --security-opt seccomp=unconfined \
+  --security-opt "seccomp=$ACTRAIL_SECCOMP_PROFILE" \
   -v /run/actrail:/run/actrail \
   -v /etc/actrail:/etc/actrail:ro \
   openeuler/openeuler:24.03-lts-sp3 \
   tail -f /dev/null
 ```
 
-说明：这一步创建一个新的替代 workload 容器，不删除 `EXISTING_AGENT_CONTAINER`；`--user 0:0` 表示容器内以 root 运行，当前验证路径需要它来完成 launch-time seccomp user notification 和 pidfd 准备；`--security-opt seccomp=unconfined` 表示禁用 Docker 外层默认 seccomp profile，否则 Docker 会拦截 `pidfd_getfd`；`-v /run/actrail:/run/actrail` 是主机 daemon 与容器 ctl 通信的关键挂载。
+说明：这一步创建一个新的替代 workload 容器，不删除 `EXISTING_AGENT_CONTAINER`；`--user 0:0` 表示容器内以 root 运行，当前验证路径需要它来完成 launch-time seccomp user notification 和 pidfd 准备；`actrail-notify.json` 在保留 Docker 外层 seccomp 过滤的同时放行 AcTrail 所需的 `pidfd_getfd`；`-v /run/actrail:/run/actrail` 是主机 daemon 与容器 ctl 通信的关键挂载。可信测试或兼容性排障可以把定制 profile 参数替换成 `--security-opt seccomp=unconfined`，但这会关闭 Docker 外层 syscall 过滤。
 
 预期结果：旧容器仍然存在，新容器保持运行，新容器内 `test -S /run/actrail/control.sock` 和 `test -S /run/actrail/tls-sync.sock` 成功；之后需要把 xiaoO、密钥、配置和 AcTrail release 组件安装或迁移到新容器。
 
@@ -269,9 +300,9 @@ docker exec "$EXISTING_AGENT_CONTAINER" tar -C /root -cf - api_key.sh | docker e
 
 ### 2. 容器内没有 AcTrail release 组件
 
-如果容器内没有 `/usr/local/bin/actrailctl` 或 `/usr/local/bin/libactrail_tls_payload_probe_sync.so`，优先在目标容器 OS 内编译 release 组件，避免 glibc 不兼容。
+如果容器内没有 `/usr/local/bin/actrailctl` 或 `/usr/local/bin/libactrail_tls_payload_probe_sync.so`，优先在与目标容器 OS/GLIBC 兼容的独立构建环境中编译后复制进去。下面的“在目标容器内编译”只是一种兼容性兜底,不是要求生产 workload 容器安装 cargo/clang。
 
-操作：
+兜底操作：
 
 ```bash
 export ACTRAIL_REPO_IN_CONTAINER=/path/to/AcTrail
@@ -318,9 +349,11 @@ docker exec -e HTTP_PROXY="$AGENT_PROXY" -e HTTPS_PROXY="$AGENT_PROXY" -e NO_PRO
 export AGENT_RUNTIME_IMAGE=actrail-oe2403-xiaoo-runtime:latest
 export XIAOO_CONFIG_DIR=/path/to/xiaoo-config
 export XIAOO_ENV_FILE=/path/to/xiaoo-env-file
+export ACTRAIL_SECCOMP_PROFILE=/absolute/path/to/AcTrail/deploy/container-auto/seccomp/actrail-notify.json
+test -f "$ACTRAIL_SECCOMP_PROFILE"
 docker run --rm --name actrail-xiaoo \
   --user 0:0 \
-  --security-opt seccomp=unconfined \
+  --security-opt "seccomp=$ACTRAIL_SECCOMP_PROFILE" \
   -v /run/actrail:/run/actrail \
   -v /etc/actrail:/etc/actrail:ro \
   -v "$XIAOO_CONFIG_DIR:/root/.config/xiaoo:ro" \
@@ -335,7 +368,7 @@ docker run --rm --name actrail-xiaoo \
   bash -lc 'source /run/secrets/xiaoo-env && export PATH=/usr/local/bin:/root/.cargo/bin:$PATH && actrailctl launch -- /root/.cargo/bin/xiaoo --cli run -p "你好"'
 ```
 
-说明：这是“已有容器模式”的替代方案，不是同一次 trace 还要额外启动的第二个 workload 容器；如果镜像不是按“其他分支情况 6”生成的 `actrail-oe2403-xiaoo-runtime:latest`，把 `AGENT_RUNTIME_IMAGE` 改成你实际已经准备好的镜像名；`XIAOO_CONFIG_DIR` 和 `XIAOO_ENV_FILE` 必须指向主机上实际存在的配置目录和密钥环境文件。
+说明：这是“已有容器模式”的替代方案，不是同一次 trace 还要额外启动的第二个 workload 容器；如果镜像不是按“其他分支情况 6”生成的 `actrail-oe2403-xiaoo-runtime:latest`，把 `AGENT_RUNTIME_IMAGE` 改成你实际已经准备好的镜像名；`XIAOO_CONFIG_DIR`、`XIAOO_ENV_FILE` 和 `ACTRAIL_SECCOMP_PROFILE` 必须指向主机上实际存在的路径。可信测试或兼容性排障可以将定制 profile 替换为 `--security-opt seccomp=unconfined`，但正常部署推荐保留 Docker 外层过滤。
 
 预期结果：容器随 Agent 退出自动删除，主机 SQLite 中仍然保留 trace 数据。
 
@@ -346,12 +379,12 @@ docker run --rm --name actrail-xiaoo \
 操作：
 
 ```bash
-rg -n 'required_capability|payload_tls_enabled|payload_tls_capture_backend|payload_tls_sync_event_socket_path' /etc/actrail/actraild.conf
+rg -n '^\[capture\]|^\[payload\.tls\]|^capabilities|^enabled|^capture_backend|^binary_path|^sync_event_socket_path' /etc/actrail/actraild.conf
 ```
 
 说明：xiaoO/rustls 明文捕获依赖主机 daemon 的 TLS-sync 后端；semantic action 是 daemon 侧投影，但它依赖已经采集到的 LLM HTTP/TLS 应用载荷。
 
-预期结果：配置中包含 `required_capability = tls-plaintext-payload`、`payload_tls_enabled = true`、`payload_tls_capture_backend = tls-sync` 和 `payload_tls_sync_event_socket_path = /run/actrail/tls-sync.sock`；修改配置后需要重启 `actraild`，然后回到主流程第 2 步重新执行 `doctor` 检查。
+预期结果：`[capture] capabilities` 包含 `"tls-plaintext-payload"`；`[payload.tls]` 下包含 `enabled = true`、`capture_backend = "tls-sync"`、`binary_path = "disabled"` 和 `sync_event_socket_path = "/run/actrail/tls-sync.sock"`。修改配置后需要重启 `actraild`，然后回到主流程第 2 步重新执行 `doctor` 检查。
 
 ### 6. 必须打镜像保存环境
 
@@ -387,8 +420,8 @@ docker commit "$AGENT_CONTAINER" actrail-oe2403-xiaoo-runtime:latest
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
 | 容器内看不到 `/run/actrail/control.sock` | 主机 daemon 未启动，或容器创建时没有挂载 `/run/actrail`。 | 先启动主机 `actraild`，如果仍不存在就按“其他分支情况 1”保留旧容器并新建替代容器。 |
-| `pidfd_getfd seccomp listener: Operation not permitted` | Docker 默认 seccomp profile 拦截 launch-time pidfd 路径，且 launch 使用了 `--seccomp-mode require`。 | 改用默认 `--seccomp-mode auto` 做 tls-sync-only 降级；若需要 socket/process seccomp，按“其他分支情况 1”新建带 `--security-opt seccomp=unconfined` 的 workload 容器。 |
-| `launch command probe failed` 且 TLS payload 为空 | 容器内动态 TLS probe plan 失败，常见于受限环境或 agent 路径非常规。 | 在 operator 配置中设置 `payload_tls_binary_path` 为容器内 agent 绝对路径；参考 [container-agent-minimal](../examples/container-agent-minimal/operator.conf)。 |
+| `pidfd_getfd seccomp listener: Operation not permitted` | Docker 默认 seccomp profile 拦截 launch-time pidfd 路径，且 launch 使用了 `--seccomp-notify required`。 | 改用 `--seccomp-notify auto` 自动降级；若需要 seccomp-notify 轴，优先按“其他分支情况 1”使用定制 profile `actrail-notify.json`。`seccomp=unconfined` 仅用于可信测试、兼容性排障或明确接受更宽 syscall 面的环境。 |
+| `launch command probe failed` 且 TLS payload 为空 | 动态 TLS probe plan 无法识别当前 Agent/运行时,或 Agent 命令指向了包装脚本而非真实可执行文件。 | 保持 TLS-sync 的 `[payload.tls] binary_path = "disabled"`；先用真实 Agent 可执行文件运行 finder/probe,确认该运行时受支持。参考 [container-agent-minimal](examples/container-agent-minimal/operator.conf) 和 [container-agent-restricted](examples/container-agent-restricted/README.md)。 |
 | `actrailctl` 在主机能跑但在 openEuler 容器内不能跑 | 主机编译产物依赖了容器没有的较新 glibc。 | 按“其他分支情况 2”在目标容器 OS 内用 `cargo build --release` 编译。 |
 | 没有 TLS payload rows | 没有通过 `actrailctl launch` 启动，TLS-sync `.so` 缺失，socket 未挂载，或 rustls probe plan 不匹配 Agent 二进制。 | 逐项检查主流程第 3、6、8 步；必要时先验证 `tls-probe-point-finder` 对 Agent 二进制的支持。 |
 | 没有 `llm.*` semantic action | daemon 没收到可解析的 LLM HTTP/TLS 应用载荷。 | 先修复 TLS payload capture；semantic action 在主机 daemon 侧生成，不需要在容器内额外运行 semantic runtime。 |

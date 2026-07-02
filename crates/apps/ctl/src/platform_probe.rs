@@ -1,16 +1,18 @@
 //! Local platform probes and launch recommendation for actrailctl.
 
-use config_core::capture_profile::CaptureProfile;
+use config_core::capture_profile::{CaptureProfile, DeploymentPermissions};
 use config_core::daemon::{
     DisabledOrPath, EbpfEnabledMode, OperatorConfig, PayloadTlsConfig, PayloadTlsSeccompSyscall,
     PayloadTlsSyncRuntimeLibraryPath,
 };
 use control_contract::reply::DoctorReply;
 use linux_platform::capability_probe::{CapabilityStatus, probe_no_new_privs, probe_unix_socket};
+use model_core::capability::Capability;
 use tls_payload_sync::RuntimeLibraryPath;
 
 use crate::launch::controlled::ControlledChild;
 use crate::launch::seccomp::SeccompSetup;
+use crate::launch::permission_policy::PermissionDecision;
 use crate::output::format_reply;
 use crate::transport::ControlClientPort;
 
@@ -19,7 +21,7 @@ pub struct LaunchPlatformReport {
     pub control_socket: CapabilityStatus,
     pub tls_sync_socket: CapabilityStatus,
     pub no_new_privs: CapabilityStatus,
-    pub seccomp_launch: CapabilityStatus,
+    pub seccomp_notify: CapabilityStatus,
     pub tls_sync_runtime_library: CapabilityStatus,
     pub daemon: Option<DoctorReply>,
 }
@@ -34,20 +36,20 @@ pub fn run_platform_probe(config: &OperatorConfig) -> LaunchPlatformReport {
         CapabilityStatus::ok("tls_sync_socket", "disabled by operator config")
     };
     let no_new_privs = probe_no_new_privs();
-    let seccomp_launch =
-        probe_seccomp_launch_capability(config.seccomp_notify.reserved_listener_fd);
+    let seccomp_notify =
+        probe_seccomp_notify_capability(config.seccomp_notify.reserved_listener_fd);
     let tls_sync_runtime_library = probe_tls_sync_runtime_library(&config.payload_config.tls);
     LaunchPlatformReport {
         control_socket,
         tls_sync_socket,
         no_new_privs,
-        seccomp_launch,
+        seccomp_notify,
         tls_sync_runtime_library,
         daemon: None,
     }
 }
 
-pub fn probe_seccomp_launch_capability(reserved_listener_fd: u32) -> CapabilityStatus {
+pub fn probe_seccomp_notify_capability(reserved_listener_fd: u32) -> CapabilityStatus {
     let setup = match SeccompSetup::new(
         vec![PayloadTlsSeccompSyscall::Write],
         Vec::new(),
@@ -57,24 +59,25 @@ pub fn probe_seccomp_launch_capability(reserved_listener_fd: u32) -> CapabilityS
         reserved_listener_fd,
     ) {
         Ok(setup) => setup,
-        Err(error) => return CapabilityStatus::unavailable("seccomp_launch", error),
+        Err(error) => return CapabilityStatus::unavailable("seccomp_notify", error),
     };
-    match ControlledChild::probe_seccomp_launch_path(&setup) {
+    match ControlledChild::probe_seccomp_notify_path(&setup) {
         Ok(()) => CapabilityStatus::ok(
-            "seccomp_launch",
+            "seccomp_notify",
             "seccomp user notify and pidfd_getfd launch path available",
         ),
-        Err(error) => CapabilityStatus::unavailable("seccomp_launch", error),
+        Err(error) => CapabilityStatus::unavailable("seccomp_notify", error),
     }
 }
 
 pub fn attach_daemon_status(
     report: &mut LaunchPlatformReport,
     client: &mut impl ControlClientPort,
+    request_id: model_core::ids::RequestId,
 ) {
     match client.send(control_contract::command::ControlCommand::Doctor(
         control_contract::command::DoctorCommand {
-            request_id: model_core::ids::RequestId::new(1),
+            request_id,
         },
     )) {
         Ok(control_contract::reply::ControlReply::Doctor(reply)) => {
@@ -95,7 +98,10 @@ pub fn attach_daemon_status(
     }
 }
 
-pub fn print_platform_probe(report: &LaunchPlatformReport) {
+pub fn print_platform_probe(
+    report: &LaunchPlatformReport,
+    decision: &PermissionDecision,
+) {
     for status in report.statuses() {
         let marker = if status.available {
             "ok"
@@ -112,13 +118,49 @@ pub fn print_platform_probe(report: &LaunchPlatformReport) {
             ))
         );
     }
-    println!("launch_seccomp_mode={}", recommended_seccomp_mode(report));
+    print_permission_decision(decision);
+    println!(
+        "launch_seccomp_notify={}",
+        enabled_disabled(decision.selected.seccomp_notify)
+    );
     if let Some(note) = recommended_launch_note(report) {
         println!("launch_note={note}");
     }
 }
 
-pub fn print_platform_probe_json(report: &LaunchPlatformReport) {
+pub fn print_permission_decision(decision: &PermissionDecision) {
+    println!(
+        "deployment_permissions_requested=host_ebpf:{},seccomp_notify:{}",
+        decision.requested_host_ebpf.as_str(),
+        decision.requested_seccomp_notify.as_str()
+    );
+    println!(
+        "deployment_permissions_selected=host_ebpf:{},seccomp_notify:{}",
+        enabled_disabled(decision.selected.host_ebpf),
+        enabled_disabled(decision.selected.seccomp_notify)
+    );
+    println!("deployment_permissions_degraded={}", decision.degraded);
+    println!(
+        "deployment_required_capabilities={}",
+        decision
+            .required_capabilities
+            .iter()
+            .map(Capability::as_str)
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    if !decision.reasons.is_empty() {
+        println!(
+            "deployment_permission_reasons={}",
+            decision.reasons.join("|")
+        );
+    }
+}
+
+pub fn print_platform_probe_json(
+    report: &LaunchPlatformReport,
+    decision: &PermissionDecision,
+) {
     let daemon = report.daemon.as_ref().map(|reply| {
         format!(
             "{{\"collectors\":[{}],\"plugins\":[{}],\"storage_ready\":{}}}",
@@ -150,18 +192,37 @@ pub fn print_platform_probe_json(report: &LaunchPlatformReport) {
         })
         .collect::<Vec<_>>()
         .join(",");
+    let required_capabilities = decision
+        .required_capabilities
+        .iter()
+        .map(|capability| format!("\"{}\"", capability.as_str()))
+        .collect::<Vec<_>>()
+        .join(",");
+    let reasons = decision
+        .reasons
+        .iter()
+        .map(|reason| format!("\"{}\"", escape_json(reason)))
+        .collect::<Vec<_>>()
+        .join(",");
     println!(
-        "{{\"statuses\":[{}],\"recommended_seccomp_mode\":\"{}\",\"daemon\":{},\"launch_note\":\"{}\"}}",
+        "{{\"statuses\":[{}],\"deployment_permissions\":{{\"requested\":{{\"host_ebpf\":\"{}\",\"seccomp_notify\":\"{}\"}},\"selected\":{{\"host_ebpf\":{},\"seccomp_notify\":{}}},\"degraded\":{},\"required_capabilities\":[{}],\"reasons\":[{}]}},\"launch_seccomp_notify\":{},\"daemon\":{},\"launch_note\":\"{}\"}}",
         statuses,
-        recommended_seccomp_mode(report),
+        decision.requested_host_ebpf.as_str(),
+        decision.requested_seccomp_notify.as_str(),
+        decision.selected.host_ebpf,
+        decision.selected.seccomp_notify,
+        decision.degraded,
+        required_capabilities,
+        reasons,
+        decision.selected.seccomp_notify,
         daemon.unwrap_or_else(|| "null".to_string()),
         escape_json(&recommended_launch_note(report).unwrap_or_default())
     );
 }
 
 impl LaunchPlatformReport {
-    pub fn seccomp_launch_available(&self) -> bool {
-        self.seccomp_launch.available
+    pub fn seccomp_notify_available(&self) -> bool {
+        self.seccomp_notify.available
     }
 
     pub fn tls_sync_ready(&self) -> bool {
@@ -175,34 +236,30 @@ impl LaunchPlatformReport {
             &self.control_socket,
             &self.tls_sync_socket,
             &self.no_new_privs,
-            &self.seccomp_launch,
+            &self.seccomp_notify,
             &self.tls_sync_runtime_library,
         ]
     }
 }
 
-pub fn recommended_seccomp_mode(report: &LaunchPlatformReport) -> &'static str {
-    if report.seccomp_launch_available() {
-        "require"
-    } else {
-        "skip"
-    }
-}
-
 fn recommended_launch_note(report: &LaunchPlatformReport) -> Option<String> {
-    if report.seccomp_launch_available() {
+    if report.seccomp_notify_available() {
         return None;
     }
     if report.tls_sync_ready() {
         return Some(
-            "seccomp launch path unavailable; use --seccomp-mode auto (default) for tls-sync-only launch"
+            "seccomp-notify unavailable; use --seccomp-notify auto (default) to select a non-notify deployment"
                 .to_string(),
         );
     }
     Some(
-        "seccomp launch path unavailable and tls-sync prerequisites are incomplete; fix socket/runtime mounts before launch"
+        "seccomp-notify unavailable and tls-sync prerequisites are incomplete; fix socket/runtime mounts before launch"
             .to_string(),
     )
+}
+
+fn enabled_disabled(value: bool) -> &'static str {
+    if value { "enabled" } else { "disabled" }
 }
 
 pub fn probe_tls_sync_runtime_library(config: &PayloadTlsConfig) -> CapabilityStatus {
@@ -257,13 +314,12 @@ pub fn suggest_config_text(
     report: &LaunchPlatformReport,
     loaded: Option<&OperatorConfig>,
 ) -> String {
-    let seccomp_available = report.seccomp_launch_available();
+    let seccomp_available = report.seccomp_notify_available();
     let tls_sync_ready = report.tls_sync_ready();
     let ebpf_available = report
         .daemon
         .as_ref()
-        .map(|reply| reply.available_collectors.iter().any(|c| c == "ebpf"))
-        .unwrap_or(false);
+        .map(|reply| reply.available_collectors.iter().any(|c| c == "ebpf"));
 
     // Start from the default hierarchical template (or the loaded config, if
     // present, to preserve operator-chosen paths), parse it into an
@@ -311,36 +367,31 @@ pub fn suggest_config_text(
     // the daemon starts without requiring proc-exec-context.
     if !seccomp_available {
         config.process_seccomp.enabled = false;
-        drop_seccomp_only_capabilities(&mut config.capture_profile);
     }
+    trim_profile_to_available_permissions(
+        &mut config.capture_profile,
+        DeploymentPermissions::new(ebpf_available.unwrap_or(true), seccomp_available),
+    );
 
     let body = config
         .to_hierarchical_toml()
         .unwrap_or_else(|error| format!("# suggest-config: could not render config: {error}\n"));
-    let header = suggest_config_header(report, seccomp_available, tls_sync_ready, ebpf_available);
+    let header = suggest_config_header(
+        report,
+        seccomp_available,
+        tls_sync_ready,
+        ebpf_available.unwrap_or(false),
+    );
     format!("{header}\n{body}")
 }
 
-/// Drop capabilities from a capture profile that require launch-time process
-/// seccomp or host eBPF when those are unavailable. Keeps the trace startable
-/// in a restricted container (tls-sync + host eBPF carry the remaining load).
-fn drop_seccomp_only_capabilities(profile: &mut CaptureProfile) {
-    use model_core::capability::{Capability, RequestMode};
-    // These either require process seccomp (proc-exec-context) or are eBPF-only
-    // metadata channels that are opportunistic anyway. Drop them so the profile
-    // only declares what the restricted path can actually satisfy.
-    const DROP: &[Capability] = &[
-        Capability::ProcExecContext,
-        Capability::FsAccessBasic,
-        Capability::FsMmap,
-        Capability::IpcUnixSocket,
-        Capability::IpcPipeFifo,
-        Capability::StdioChunk,
-        Capability::ResourceMetrics,
-    ];
-    profile.capabilities.retain(|request| {
-        !DROP.contains(&request.capability) || request.mode == RequestMode::Opportunistic
-    });
+fn trim_profile_to_available_permissions(
+    profile: &mut CaptureProfile,
+    permissions: DeploymentPermissions,
+) {
+    let name = profile.name.clone();
+    *profile = profile.for_permissions(permissions);
+    profile.name = name;
 }
 
 fn suggest_config_header(
@@ -371,8 +422,8 @@ fn suggest_config_header(
         capability_summary(&report.no_new_privs)
     ));
     lines.push(format!(
-        "#   seccomp_launch        = {} ({}process seccomp {})",
-        capability_summary(&report.seccomp_launch),
+        "#   seccomp_notify        = {} ({}process seccomp {})",
+        capability_summary(&report.seccomp_notify),
         if seccomp_available { "" } else { "→ " },
         if seccomp_available {
             "enabled"
@@ -417,31 +468,12 @@ fn capability_summary(status: &CapabilityStatus) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn recommended_seccomp_mode_reflects_probe() {
-        let available = LaunchPlatformReport {
-            control_socket: CapabilityStatus::ok("control_socket", "ok"),
-            tls_sync_socket: CapabilityStatus::ok("tls_sync_socket", "ok"),
-            no_new_privs: CapabilityStatus::ok("no_new_privs", "ok"),
-            seccomp_launch: CapabilityStatus::ok("seccomp_launch", "ok"),
-            tls_sync_runtime_library: CapabilityStatus::ok("tls_sync_runtime_library", "ok"),
-            daemon: None,
-        };
-        assert_eq!(recommended_seccomp_mode(&available), "require");
-
-        let unavailable = LaunchPlatformReport {
-            seccomp_launch: CapabilityStatus::unavailable("seccomp_launch", "denied"),
-            ..available
-        };
-        assert_eq!(recommended_seccomp_mode(&unavailable), "skip");
-    }
-
     fn all_ok_report() -> LaunchPlatformReport {
         LaunchPlatformReport {
             control_socket: CapabilityStatus::ok("control_socket", "ok"),
             tls_sync_socket: CapabilityStatus::ok("tls_sync_socket", "ok"),
             no_new_privs: CapabilityStatus::ok("no_new_privs", "ok"),
-            seccomp_launch: CapabilityStatus::ok("seccomp_launch", "ok"),
+            seccomp_notify: CapabilityStatus::ok("seccomp_notify", "ok"),
             tls_sync_runtime_library: CapabilityStatus::ok("tls_sync_runtime_library", "ok"),
             daemon: None,
         }
@@ -450,7 +482,7 @@ mod tests {
     #[test]
     fn suggest_config_seccomp_unavailable_disables_process_seccomp() {
         let report = LaunchPlatformReport {
-            seccomp_launch: CapabilityStatus::unavailable("seccomp_launch", "denied"),
+            seccomp_notify: CapabilityStatus::unavailable("seccomp_notify", "denied"),
             ..all_ok_report()
         };
         let config = suggest_config_text(&report, None);
@@ -479,6 +511,27 @@ mod tests {
             parsed.process_seccomp.enabled,
             "process_seccomp stays enabled when seccomp available"
         );
+    }
+
+    #[test]
+    fn suggest_config_uses_permission_truth_table_for_missing_ebpf() {
+        let report = LaunchPlatformReport {
+            daemon: Some(DoctorReply {
+                available_collectors: vec!["tls-sync".to_string()],
+                loaded_policy_plugins: Vec::new(),
+                storage_ready: true,
+            }),
+            ..all_ok_report()
+        };
+        let config = suggest_config_text(&report, None);
+        let parsed = OperatorConfig::parse(&config).expect("suggested config parses");
+
+        assert!(!parsed.capture_profile.capabilities.iter().any(|request| {
+            request.capability == Capability::SocketPlaintextPayload
+        }));
+        assert!(parsed.capture_profile.capabilities.iter().any(|request| {
+            request.capability == Capability::ResourceMetrics
+        }));
     }
 
     #[test]

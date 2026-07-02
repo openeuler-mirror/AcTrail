@@ -7,6 +7,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::ExitStatusExt;
 use std::process::ExitStatus;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Duration;
 
 use super::seccomp::SeccompSetup;
@@ -23,7 +24,7 @@ pub(crate) struct ControlledChild {
 }
 
 impl ControlledChild {
-    pub(crate) fn probe_seccomp_launch_path(setup: &SeccompSetup) -> Result<(), String> {
+    pub(crate) fn probe_seccomp_notify_path(setup: &SeccompSetup) -> Result<(), String> {
         let mut child = Self::spawn(
             vec![OsString::from("/bin/true")],
             ChildSetup::Seccomp(setup.clone()),
@@ -96,7 +97,13 @@ impl ControlledChild {
     }
 
     pub(super) fn wait(self) -> Result<i32, String> {
-        wait_child_exit(self.pid)
+        // Forward SIGTERM/SIGINT to the agent while we block on it, so
+        // `docker stop` / Ctrl-C reach the agent instead of being swallowed
+        // by actrailctl. The agent is already exec'd and running here.
+        install_signal_forwarding(self.pid);
+        let result = wait_child_exit(self.pid);
+        uninstall_signal_forwarding();
+        result
     }
 
     pub(super) fn wait_with_monitor(
@@ -351,6 +358,46 @@ fn set_nonblocking(fd: libc::c_int) -> Result<(), String> {
     Ok(())
 }
 
+/// Host pid of the agent child to forward signals to. `0` means "no child
+/// installed" so the handler is a no-op outside of an active `wait`.
+static FORWARD_CHILD_PID: AtomicI32 = AtomicI32::new(0);
+
+/// Signal handler installed for SIGTERM/SIGINT while waiting on the agent.
+///
+/// MUST stay async-signal-safe: it only does an atomic load and `kill`. No
+/// allocation, no `println!`, no locks, no panics.
+extern "C" fn forward_signal(sig: libc::c_int) {
+    let pid = FORWARD_CHILD_PID.load(Ordering::Relaxed);
+    if pid > 0 {
+        unsafe {
+            libc::kill(pid, sig);
+        }
+    }
+}
+
+fn set_forward_handler(handler: libc::sighandler_t) {
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        action.sa_sigaction = handler;
+        libc::sigemptyset(&mut action.sa_mask);
+        // No SA_RESTART: let the blocking waitpid return EINTR so the
+        // wait loop re-enters after the signal has been forwarded.
+        action.sa_flags = 0;
+        libc::sigaction(libc::SIGTERM, &action, std::ptr::null_mut());
+        libc::sigaction(libc::SIGINT, &action, std::ptr::null_mut());
+    }
+}
+
+fn install_signal_forwarding(child_pid: libc::pid_t) {
+    FORWARD_CHILD_PID.store(child_pid, Ordering::Relaxed);
+    set_forward_handler(forward_signal as *const () as libc::sighandler_t);
+}
+
+fn uninstall_signal_forwarding() {
+    set_forward_handler(libc::SIG_DFL);
+    FORWARD_CHILD_PID.store(0, Ordering::Relaxed);
+}
+
 fn signal_child(child_pid: libc::pid_t, signal: libc::c_int) -> Result<(), String> {
     if unsafe { libc::kill(child_pid, signal) } != 0 {
         return Err(format!(
@@ -372,18 +419,25 @@ fn wait_child_exit(child_pid: libc::pid_t) -> Result<i32, String> {
             }
             return Err(format!("wait for launch child exit: {error}"));
         }
-        if libc::WIFEXITED(status) {
-            let status = ExitStatus::from_raw(status);
-            return status
-                .code()
-                .ok_or_else(|| "launch child terminated without an exit code".to_string());
+        if let Some(code) = exit_code_from_status(status) {
+            return Ok(code);
         }
-        if libc::WIFSIGNALED(status) {
-            return Err(format!(
-                "launch child terminated by signal {}",
-                libc::WTERMSIG(status)
-            ));
-        }
+        // Neither exited nor signaled (e.g. stopped/continued): keep waiting.
+    }
+}
+
+/// Map a terminated child's raw wait status to a process exit code.
+///
+/// Normal exit -> its own code. Killed by a signal -> `128 + signum`
+/// (shell convention), so `docker stop` and Ctrl-C surface as an expected
+/// termination rather than an error. `None` for a not-yet-terminated status.
+fn exit_code_from_status(status: libc::c_int) -> Option<i32> {
+    if libc::WIFEXITED(status) {
+        Some(libc::WEXITSTATUS(status))
+    } else if libc::WIFSIGNALED(status) {
+        Some(128 + libc::WTERMSIG(status))
+    } else {
+        None
     }
 }
 
@@ -428,5 +482,139 @@ fn terminate_child(child_pid: libc::pid_t) {
         if error.kind() != std::io::ErrorKind::Interrupted {
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        exit_code_from_status, install_signal_forwarding, uninstall_signal_forwarding,
+        wait_child_exit,
+    };
+    use std::ffi::CString;
+    use std::sync::Mutex;
+
+    // Tests that touch the process-wide signal disposition + FORWARD_CHILD_PID
+    // must not run concurrently with each other: one raises a process-wide
+    // SIGTERM, and both mutate the global pid. Serialize just those.
+    static SIGNAL_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    // --- exit_code_from_status: deterministic, synthetic wait statuses. ---
+    // The `assert!(libc::WIF…)` lines make these self-validating against the
+    // platform's wait-status encoding: a wrong synthetic status fails loudly
+    // rather than passing by accident.
+
+    #[test]
+    fn normal_exit_maps_to_its_code() {
+        let status: libc::c_int = 7 << 8; // exited with code 7
+        assert!(libc::WIFEXITED(status));
+        assert_eq!(exit_code_from_status(status), Some(7));
+
+        let status: libc::c_int = 0; // exited with code 0
+        assert!(libc::WIFEXITED(status));
+        assert_eq!(exit_code_from_status(status), Some(0));
+    }
+
+    #[test]
+    fn signal_death_maps_to_128_plus_signum() {
+        let status: libc::c_int = libc::SIGTERM; // killed by SIGTERM (15)
+        assert!(libc::WIFSIGNALED(status));
+        assert_eq!(exit_code_from_status(status), Some(128 + libc::SIGTERM));
+        assert_eq!(exit_code_from_status(status), Some(143));
+
+        let status: libc::c_int = libc::SIGKILL; // killed by SIGKILL (9)
+        assert!(libc::WIFSIGNALED(status));
+        assert_eq!(exit_code_from_status(status), Some(137));
+    }
+
+    // --- real-process tests: drive wait_child_exit + forwarding end-to-end. ---
+
+    /// Fork + exec a child running `argv[0] .. argv[n]`; return its pid.
+    fn spawn_exec_child(argv: &[&str]) -> libc::pid_t {
+        let cstrings: Vec<CString> = argv
+            .iter()
+            .map(|a| CString::new(*a).expect("NUL-free argv"))
+            .collect();
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "fork: {}", std::io::Error::last_os_error());
+        if pid == 0 {
+            // Child: exec the command directly. If exec fails, exit 127.
+            let mut pointers: Vec<*const libc::c_char> =
+                cstrings.iter().map(|c| c.as_ptr()).collect();
+            pointers.push(std::ptr::null());
+            unsafe {
+                libc::execvp(cstrings[0].as_ptr(), pointers.as_mut_ptr());
+                libc::_exit(127);
+            }
+        }
+        pid
+    }
+
+    /// Normal exit: `/bin/true` → 0.
+    #[test]
+    fn wait_child_exit_normal_zero() {
+        let pid = spawn_exec_child(&["/bin/true"]);
+        let code = wait_child_exit(pid).expect("wait should succeed for /bin/true");
+        assert_eq!(code, 0);
+    }
+
+    /// Normal exit with non-zero code: `sh -c 'exit 7'` → 7.
+    #[test]
+    fn wait_child_exit_normal_nonzero() {
+        let pid = spawn_exec_child(&["sh", "-c", "exit 7"]);
+        let code = wait_child_exit(pid).expect("wait should succeed for sh exit 7");
+        assert_eq!(code, 7);
+    }
+
+    /// Signal exit: a child that kills itself with SIGTERM must map to
+    /// `128 + 15 = 143` (shell convention), not be reported as an error.
+    #[test]
+    fn wait_child_exit_signal_maps_to_128_plus_signum() {
+        let pid = spawn_exec_child(&["sh", "-c", "kill -TERM $$"]);
+        let result = wait_child_exit(pid);
+        assert_eq!(result, Ok(143), "WIFSIGNALED should map to 128+signum");
+    }
+
+    /// End-to-end forwarding: install the forwarder for a long-lived child,
+    /// deliver SIGTERM to *this* process, and verify the handler forwards it to
+    /// the child and `wait_child_exit` reaps it as 143. Exercises the
+    /// async-signal-safe handler, the no-`SA_RESTART` install (waitpid must
+    /// surface EINTR so the retry loop re-enters), and the 128+signum mapping.
+    #[test]
+    fn signal_forwarding_delivers_sigterm_to_child() {
+        let _serialize = SIGNAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let child_pid = spawn_exec_child(&["sleep", "30"]);
+        install_signal_forwarding(child_pid);
+
+        // Deliver SIGTERM to ourselves; the handler forwards it to the child.
+        unsafe { libc::kill(libc::getpid(), libc::SIGTERM) };
+
+        // waitpid gets EINTR (no SA_RESTART), loop re-enters, child reaped.
+        let result = wait_child_exit(child_pid);
+        uninstall_signal_forwarding();
+
+        assert_eq!(result, Ok(143), "forwarded SIGTERM should reap child as 143");
+
+        // No orphan: a second waitpid must fail (ECHILD) because it was reaped.
+        let mut status = 0;
+        let rc = unsafe { libc::waitpid(child_pid, &mut status, libc::WNOHANG) };
+        assert!(rc < 0, "child should already be reaped (ECHILD), rc={rc}");
+    }
+
+    /// install/uninstall round-trip must clear the registered pid so a later
+    /// signal is not forwarded to a stale (possibly reused) pid.
+    #[test]
+    fn forwarding_pid_cleared_after_uninstall() {
+        use std::sync::atomic::Ordering;
+        let _serialize = SIGNAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(super::FORWARD_CHILD_PID.load(Ordering::Relaxed), 0);
+        install_signal_forwarding(999_999);
+        assert_eq!(super::FORWARD_CHILD_PID.load(Ordering::Relaxed), 999_999);
+        uninstall_signal_forwarding();
+        assert_eq!(
+            super::FORWARD_CHILD_PID.load(Ordering::Relaxed),
+            0,
+            "pid must be cleared after uninstall"
+        );
     }
 }

@@ -4,7 +4,7 @@ use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, CommandControlConfig, DiagnosticLogLevel,
     EbpfCollectorConfig, FileObservationConfig, NetworkControlConfig, PayloadConfig,
     ProcessSeccompConfig, ResourceMetricsConfig, SeccompNotifyConfig, SemanticRetentionConfig,
-    TraceFinalizationConfig,
+    TraceFinalizationConfig, launch_seccomp_requirements,
 };
 use ebpf_collector::EbpfCollector;
 use ebpf_collector::procfs::{ProcfsIdentityReader, ProcfsTreeSnapshotter};
@@ -113,6 +113,11 @@ impl StorageAttachService {
         let payload_socket_redaction_policy = payload_config.socket.redaction_policy;
         let payload_socket_retention_max_bytes_per_trace =
             payload_config.socket.retention_max_bytes_per_trace;
+        let launch_seccomp_requirements = launch_seccomp_requirements(
+            &payload_config,
+            &process_seccomp_config,
+            &network_control_config,
+        );
         let socket_payload_gate = SocketHttpPayloadGate::new(
             payload_config.socket.http_sniff_max_bytes,
             payload_config.socket.stream_state_max_entries,
@@ -137,6 +142,7 @@ impl StorageAttachService {
         let network_control = NetworkControlService::new(&network_control_config)?;
         Ok(Self {
             profiles,
+            launch_seccomp_requirements,
             storage,
             collector: EbpfCollector::new(
                 ebpf_config,

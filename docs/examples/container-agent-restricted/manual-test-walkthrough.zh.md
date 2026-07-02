@@ -4,7 +4,7 @@
 
 > English version: [manual-test-walkthrough.md](manual-test-walkthrough.md)
 
-测试目标：在工作负载容器**不**带 `--security-opt seccomp=unconfined`、**无** `CAP_BPF` 的前提下，验证 AcTrail 仍能 (1) 以 `[ebpf] enabled = "auto"` 启动 host daemon；(2) 在容器内报告 `seccomp_launch=unavailable` 并推荐 `skip`；(3) 将 `actrailctl launch` 降级为 tls-sync-only，并在 host 侧采集到 TLS 明文 + `llm.*` 语义动作。
+测试目标：在工作负载容器**不**带 `--security-opt seccomp=unconfined`、**无** `CAP_BPF` 的前提下，验证 AcTrail 仍能 (1) 以 `[ebpf] enabled = "auto"` 启动 host daemon；(2) 在容器内报告 `seccomp_notify=unavailable` 并推荐 `auto`；(3) 将 `actrailctl launch` 降级为 tls-sync-only，并在 host 侧采集到 TLS 明文 + `llm.*` 语义动作。
 
 ## 每条命令在哪里执行
 
@@ -189,7 +189,7 @@ head -12 /tmp/suggested.conf          # 检查探测摘要 + 关键字段
 install -m 0644 /tmp/suggested.conf /etc/actrail/actraild.conf
 ```
 
-在**受限容器内**运行（Step 5）时，同一个 flag 反映容器的探测结果：`seccomp_launch=unavailable` 会使生成的配置设 `[process_seccomp] enabled = false` 并从 `[capture] capabilities` 中去掉 `proc-exec-context`，从而 host daemon 无需 seccomp 即可启动。`--suggest-config` 本身从不写文件 —— 由你重定向落盘。
+在**受限容器内**运行（Step 5）时，同一个 flag 反映容器的探测结果：`seccomp_notify=unavailable` 会使生成的配置设 `[process_seccomp] enabled = false` 并从 `[capture] capabilities` 中去掉 `proc-exec-context`，从而 host daemon 无需 seccomp 即可启动。`--suggest-config` 本身从不写文件 —— 由你重定向落盘。
 
 </details>
 
@@ -304,17 +304,17 @@ EOF
 
 ```bash
 # [host → container]
-# 3.4 验证编译产物可运行且含 probe + seccomp-mode
+# 3.4 验证编译产物可运行且含 probe + seccomp-notify
 docker exec actrail-restricted /usr/local/bin/actrailctl --help | grep -iE "probe|launch"
 docker exec actrail-restricted /usr/local/bin/actrailctl launch --help | grep -i seccomp
-# -> --seccomp-mode <SECCOMP_MODE>  [default: auto] [possible values: auto, require, skip]
+# -> --seccomp-notify <SECCOMP_NOTIFY>  [possible values: auto, required, disabled]
 
 # 3.5 确认 glibc 兼容（无缺失库）
 docker exec actrail-restricted ldd /usr/local/bin/actrailctl | grep -i "not found" || echo "no missing libs"
 docker exec actrail-restricted ldd /usr/local/bin/libactrail_tls_payload_probe_sync.so | grep -i "not found" || echo "so: no missing libs"
 ```
 
-预期：`probe`、`launch` 子命令存在；`--seccomp-mode` 默认 `auto`；`ldd` 报告无缺失库。
+预期：`probe`、`launch` 子命令存在；`--seccomp-notify` 默认 `auto`；`ldd` 报告无缺失库。
 
 ---
 
@@ -351,7 +351,7 @@ docker exec actrail-restricted test -x /usr/local/bin/opencode && echo "opencode
 
 ---
 
-## Step 5 —— 运行 actrailctl probe（验证 seccomp 不可用 + 推荐 skip）
+## Step 5 —— 运行 actrailctl probe（验证 seccomp 不可用 + 推荐 auto 降级）
 
 ```bash
 # [host → container]
@@ -365,14 +365,14 @@ docker exec actrail-restricted \
 unix_socket=ok connected /run/actrail/control.sock
 unix_socket=ok connected /run/actrail/tls-sync.sock
 no_new_privs=ok enabled=0
-seccomp_launch=unavailable pidfd_getfd seccomp listener: Operation not permitted (os error 1)
+seccomp_notify=unavailable pidfd_getfd seccomp listener: Operation not permitted (os error 1)
 tls_sync_runtime_library=ok found /usr/local/bin/libactrail_tls_payload_probe_sync.so
 collectors=ebpf,tls-sync,application-protocol-analyzer plugins= storage_ready=true
-launch_seccomp_mode=skip
-launch_note=seccomp launch path unavailable; use --seccomp-mode auto (default) for tls-sync-only launch
+launch_seccomp_notify=disabled
+launch_note=seccomp-notify unavailable; use --seccomp-notify auto (default) to select a non-notify deployment
 ```
 
-关键行：`seccomp_launch=unavailable`（默认 seccomp 拦截 `pidfd_getfd`）、`launch_seccomp_mode=skip`、`launch_note` 推荐 `--seccomp-mode auto`。
+关键行：`seccomp_notify=unavailable`（默认 seccomp 拦截 `pidfd_getfd`）、`launch_seccomp_notify=disabled`、`launch_note` 推荐 `--seccomp-notify auto`。
 
 ```bash
 # [host → container]（probe --json 在容器内执行；输出重定向到宿主机文件）
@@ -389,12 +389,12 @@ import json
 d = json.load(open('/tmp/probe.json'))
 socks = [x for x in d['statuses'] if x['name'] == 'unix_socket']
 assert len(socks) == 2 and all(x['available'] for x in socks), "sockets not ok"
-sec = {x['name']: x for x in d['statuses']}['seccomp_launch']
-assert not sec['available'], "seccomp_launch should be unavailable"
+sec = {x['name']: x for x in d['statuses']}['seccomp_notify']
+assert not sec['available'], "seccomp_notify should be unavailable"
 assert 'pidfd_getfd' in sec['detail'] and 'Operation not permitted' in sec['detail']
 assert {x['name']: x for x in d['statuses']}['tls_sync_runtime_library']['available']
-assert d['recommended_seccomp_mode'] == 'skip'
-assert 'tls-sync-only' in d['launch_note']
+assert d['launch_seccomp_notify'] is False
+assert 'non-notify deployment' in d['launch_note']
 print("probe assertions ALL PASSED")
 PY
 ```
@@ -408,11 +408,11 @@ docker exec actrail-restricted \
   actrailctl --config /etc/actrail/actraild.conf probe --skip-daemon
 ```
 
-预期：本地检查相同，但无 `collectors=...` 行（跳过了 daemon doctor）。
+预期：本地状态检查相同，但无 `collectors=...` 行。此时权限选择仅为本地预览；launch 仍会向 daemon 请求最终 profile。
 
 ---
 
-## Step 6 —— 以 --seccomp-mode auto 启动（降级为 tls-sync-only）
+## Step 6 —— 以 --seccomp-notify auto 启动（降级为 tls-sync-only）
 
 ```bash
 # [host → container]
@@ -426,9 +426,10 @@ docker exec actrail-restricted bash -lc '
 '
 ```
 
-预期（stderr 前几行）：
+预期（权限输出后进入 active trace）：
 ```
-actrailctl launch degraded: pidfd_getfd seccomp listener: Operation not permitted (os error 1); continuing with tls-sync-only launch without socket/process seccomp
+deployment_permissions_degraded=true
+deployment_permission_reasons=seccomp_notify_unavailable: ...pidfd_getfd...
 trace trace-<N> entered Active
 ```
 随后 agent 运行（调用模型、打印响应）并以退出码 0 结束。
@@ -439,28 +440,28 @@ trace trace-<N> entered Active
 
 ```bash
 # [host → container]
-# 6.2 require —— 必须直接失败（不偷偷降级）
+# 6.2 required —— 必须直接失败（不偷偷降级）
 docker exec actrail-restricted bash -lc '
   export PATH=/usr/local/bin:$PATH
-  actrailctl --config /etc/actrail/actraild.conf launch --seccomp-mode require -- \
+  actrailctl --config /etc/actrail/actraild.conf launch --seccomp-notify required -- \
     /usr/local/bin/opencode run "hi"
 '
 # [host]
-echo "require exit=$?"
+echo "required exit=$?"
 # -> 非零退出，末行: "pidfd_getfd seccomp listener: Operation not permitted (os error 1)"
 ```
 
 ```bash
 # [host → container]
-# 6.3 skip —— 必须成功（本受限环境中等价于 auto）
+# 6.3 disabled —— 必须成功（本受限环境中选择结果与 auto 相同）
 docker exec actrail-restricted bash -lc '
   export PATH=/usr/local/bin:$PATH
-  actrailctl --config /etc/actrail/actraild.conf launch --seccomp-mode skip -- \
+  actrailctl --config /etc/actrail/actraild.conf launch --seccomp-notify disabled -- \
     /usr/local/bin/opencode run "说一个字: 好"
 '
 # [host]
-echo "skip exit=$?"
-# -> 退出 0，stderr: "actrailctl launch degraded: seccomp launch disabled by --seccomp-mode skip"
+echo "disabled exit=$?"
+# -> 退出 0，权限输出: deployment_permissions_degraded=false
 ```
 
 ---
@@ -580,7 +581,7 @@ rm -rf /tmp/actrail-agent-pkg /tmp/probe.json
 | `missing config key payload_stdio_capture_stdin` | 用了过时的示例配置（如旧版 `container-agent-minimal/operator.conf`） | 改用 `docs/examples/container-agent-restricted/operator.conf`（与当前 daemon 匹配） |
 | 容器内运行 `actrailctl` 报 `GLIBC_2.39 not found` | 宿主机编译的产物依赖更新的 glibc | 在容器内编译 `actrailctl` + `.so`（Step 3） |
 | `tls-sync auto plan requires payload.tls.binary_path=disabled` | 在 tls-sync 后端下把 `[payload.tls] binary_path` 设成了路径 | tls-sync 下必须为 `disabled`。受限示例配置已设好，勿改 |
-| 容器内 `seccomp_launch=ok` | 容器启动时带了 `--security-opt seccomp=unconfined` | 重建容器去掉该 flag（Step 2.2）。本测试特意需要默认 profile |
+| 容器内 `seccomp_notify=ok` | 容器启动时带了 `--security-opt seccomp=unconfined` | 重建容器去掉该 flag（Step 2.2）。本测试特意需要默认 profile |
 | probe 报 `control_socket=unavailable` | 先建容器、后起 daemon，socket 没挂进去 | 先 Step 1 起 daemon，再 Step 2 建容器 |
 | `payload_segments` 无 TLS 行 | 没经 `actrailctl launch` 启动；`.so` 缺失；socket 没挂载；或 agent 的 TLS 库不是 BoringSSL/rustls | 逐项检查 Step 2.4、3.4、6.1；确认 agent 用受支持的 TLS 库 |
 | web 的 `curl` 返回 `502` | shell 的 `http_proxy`/`https_proxy` 拦截了 localhost | 用 `curl --noproxy '*'` 或 `NO_PROXY=localhost,127.0.0.1` |

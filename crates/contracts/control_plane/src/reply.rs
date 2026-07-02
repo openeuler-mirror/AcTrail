@@ -3,7 +3,9 @@
 use std::collections::BTreeSet;
 use std::time::SystemTime;
 
-use model_core::ids::{TraceId, TraceName};
+use crate::command::DeploymentPermissionMode;
+use model_core::capability::Capability;
+use model_core::ids::{ProfileName, TraceId, TraceName};
 use model_core::trace::{TraceHealth, TraceLifecycleState};
 use plugin_system::PluginInstanceStatus;
 
@@ -25,6 +27,22 @@ pub struct TrackAddReply {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LaunchPermissionsReply {
+    pub requested_host_ebpf: DeploymentPermissionMode,
+    pub requested_seccomp_notify: DeploymentPermissionMode,
+    pub selected_host_ebpf: bool,
+    pub selected_seccomp_notify: bool,
+    pub selected_profile_name: ProfileName,
+    pub payload_tls_seccomp: bool,
+    pub payload_socket_seccomp: bool,
+    pub process_seccomp: bool,
+    pub network_control_seccomp: bool,
+    pub required_capabilities: Vec<Capability>,
+    pub degraded: bool,
+    pub reasons: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DoctorReply {
     pub available_collectors: Vec<String>,
     pub loaded_policy_plugins: Vec<String>,
@@ -41,6 +59,7 @@ pub struct PluginCommandReply {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ControlReply {
+    LaunchPermissions(LaunchPermissionsReply),
     TrackAdded(TrackAddReply),
     SeccompListenerRegistered,
     TrackRemoved,

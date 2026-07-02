@@ -28,7 +28,9 @@ use tls_payload_sync::{
     PayloadEvent, SummaryEvent, SyncEvent, decode_event_line, decode_plan_lookup_request,
 };
 use trace_runtime::registry::TraceRuntime;
+use uds_control_server::PeerCredentials;
 
+use crate::peer_identity::{PeerIdentity, peer_error};
 use self::resolver::TlsSyncPlanResolver;
 
 pub(crate) struct TlsSyncService {
@@ -126,6 +128,7 @@ impl TlsSyncService {
                     }
                 }
                 Err(error) => {
+                    audit_tls_peer_rejection(&client.peer, &error);
                     drain.diagnostics.push(TlsSyncDiagnostic {
                         code: error.code,
                         message: error.message,
@@ -144,11 +147,30 @@ impl TlsSyncService {
         loop {
             match listener.accept() {
                 Ok((stream, _)) => {
+                    let credentials = match PeerCredentials::from_stream(&stream) {
+                        Ok(credentials) => credentials,
+                        Err(error) => {
+                            tracing::warn!(
+                                target: "actrail::peer_auth",
+                                error = %error,
+                                "rejected TLS-sync connection without peer credentials"
+                            );
+                            continue;
+                        }
+                    };
+                    let peer = match PeerIdentity::resolve(credentials) {
+                        Ok(peer) => peer,
+                        Err(error) => {
+                            audit_tls_credentials_rejection(credentials, &error);
+                            continue;
+                        }
+                    };
                     stream
                         .set_nonblocking(true)
                         .map_err(|error| ControlError::new("tls_sync_client", error.to_string()))?;
                     self.clients.push(TlsSyncClient {
                         stream,
+                        peer,
                         buffer: Vec::new(),
                         process_cache: BTreeMap::new(),
                     });
@@ -164,6 +186,7 @@ impl TlsSyncService {
 
 struct TlsSyncClient {
     stream: UnixStream,
+    peer: PeerIdentity,
     buffer: Vec<u8>,
     process_cache: BTreeMap<TlsSyncProcessCacheKey, ProcessIdentity>,
 }
@@ -228,7 +251,9 @@ impl TlsSyncClient {
                 resolver.submit_lookup(&request.binary, response)?;
                 return Ok(true);
             }
-            match decode_event_line(&line).map_err(sync_event_error)? {
+            let event = decode_event_line(&line).map_err(sync_event_error)?;
+            authorize_sync_event(&self.peer, trace_runtime, &event)?;
+            match event {
                 SyncEvent::Payload(event) => {
                     if let Some(segment) =
                         payload_segment(event, trace_runtime, &mut self.process_cache)?
@@ -248,6 +273,51 @@ impl TlsSyncClient {
         }
         Ok(false)
     }
+}
+
+fn authorize_sync_event(
+    peer: &PeerIdentity,
+    trace_runtime: &TraceRuntime,
+    event: &SyncEvent,
+) -> Result<(), ControlError> {
+    let trace_id = match event {
+        SyncEvent::Payload(event) => TraceId::new(event.trace_id),
+        SyncEvent::Summary(event) => TraceId::new(event.trace_id),
+        SyncEvent::Decision(event) => TraceId::new(event.trace_id),
+    };
+    let trace = trace_runtime
+        .get_trace(trace_id)
+        .ok_or_else(|| peer_error(format!("TLS-sync event references unknown trace {trace_id}")))?;
+    let owner = trace
+        .owner
+        .as_ref()
+        .ok_or_else(|| peer_error(format!("trace {trace_id} has no live peer binding")))?;
+    peer.authorize_trace_owner(trace_id, owner)
+}
+
+fn audit_tls_peer_rejection(peer: &PeerIdentity, error: &ControlError) {
+    tracing::warn!(
+        target: "actrail::peer_auth",
+        peer_pid = peer.credentials.pid,
+        peer_uid = peer.credentials.uid,
+        peer_gid = peer.credentials.gid,
+        peer_container = peer.principal.container_id.as_deref().unwrap_or("host"),
+        error_code = %error.code,
+        error = %error.message,
+        "closed rejected TLS-sync peer"
+    );
+}
+
+fn audit_tls_credentials_rejection(credentials: PeerCredentials, error: &ControlError) {
+    tracing::warn!(
+        target: "actrail::peer_auth",
+        peer_pid = credentials.pid,
+        peer_uid = credentials.uid,
+        peer_gid = credentials.gid,
+        error_code = %error.code,
+        error = %error.message,
+        "rejected TLS-sync peer identity"
+    );
 }
 
 fn summary_segment(

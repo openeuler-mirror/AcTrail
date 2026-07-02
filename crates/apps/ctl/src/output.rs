@@ -4,6 +4,13 @@ use control_contract::reply::ControlReply;
 
 pub fn format_reply(reply: &ControlReply) -> String {
     match reply {
+        ControlReply::LaunchPermissions(reply) => format!(
+            "launch permissions profile={} host_ebpf={} seccomp_notify={} degraded={}",
+            reply.selected_profile_name,
+            reply.selected_host_ebpf,
+            reply.selected_seccomp_notify,
+            reply.degraded
+        ),
         ControlReply::TrackAdded(reply) => {
             format!("trace {} entered {}", reply.trace_id, reply.lifecycle_state)
         }

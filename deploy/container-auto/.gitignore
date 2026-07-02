@@ -1,0 +1,4 @@
+# Build artifacts copied in as the container-auto Docker build context.
+actrailctl
+libactrail_tls_payload_probe_sync.so
+__pycache__/

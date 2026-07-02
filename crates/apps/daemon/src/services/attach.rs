@@ -18,13 +18,21 @@ mod plugins;
 use attach_runtime::snapshot_merge::merge_snapshot;
 use collector_binding::TraceBindingRequest;
 use collector_instance::CollectorInstance;
+use config_core::capture_profile::{
+    DeploymentPermissionAvailability, DeploymentPermissionPolicy, LaunchSeccompRequirements,
+    PermissionMode, resolve_deployment_permissions,
+};
 use config_core::daemon::{
     DiagnosticLogLevel, FileObservationConfig, PayloadRedactionPolicy, PayloadStdioStorageMode,
     SemanticRetentionConfig,
 };
 use config_core::trace_snapshot::CaptureProfileSnapshot;
-use control_contract::command::{ProcessRef, TrackAddCommand};
-use control_contract::reply::{ControlError, PluginCommandReply, TrackAddReply};
+use control_contract::command::{
+    DeploymentPermissionMode, ProcessRef, ResolveLaunchPermissionsCommand, TrackAddCommand,
+};
+use control_contract::reply::{
+    ControlError, LaunchPermissionsReply, PluginCommandReply, TrackAddReply,
+};
 use ebpf_collector::EbpfCollector;
 use ebpf_collector::procfs::{
     ProcfsIdentityReader, ProcfsTreeSnapshotter, read_container_identity, resolve_namespaced_pid,
@@ -61,6 +69,7 @@ use self::helpers::{capability_requested, collector_capability_requests};
 
 pub(crate) struct StorageAttachService {
     pub(super) profiles: DaemonProfileRegistry,
+    pub(super) launch_seccomp_requirements: LaunchSeccompRequirements,
     pub(super) storage: Box<dyn StorageBackend>,
     pub(super) collector: EbpfCollector,
     pub(super) identity_reader: ProcfsIdentityReader,
@@ -338,6 +347,64 @@ impl StorageAttachService {
 }
 
 impl AttachService for StorageAttachService {
+    fn resolve_launch_permissions(
+        &mut self,
+        command: &ResolveLaunchPermissionsCommand,
+        host_ebpf_available: bool,
+    ) -> Result<LaunchPermissionsReply, ControlError> {
+        let profile = self
+            .profiles
+            .capture_profile(&command.profile_name)
+            .ok_or_else(|| {
+                ControlError::new("unknown_profile", "capture profile does not exist")
+            })?;
+        let policy = DeploymentPermissionPolicy {
+            host_ebpf: permission_mode(command.host_ebpf),
+            seccomp_notify: permission_mode(command.seccomp_notify),
+        };
+        let decision = resolve_deployment_permissions(
+            policy,
+            profile,
+            self.launch_seccomp_requirements,
+            &DeploymentPermissionAvailability {
+                host_ebpf: Some(host_ebpf_available),
+                seccomp_notify: Some(command.seccomp_notify_available),
+                seccomp_notify_detail: command.seccomp_notify_detail.clone(),
+            },
+        )
+        .map_err(|message| ControlError::new("deployment_permissions", message))?;
+        let selected_profile = decision.selected_profile(profile);
+        if self
+            .profiles
+            .capture_profile(&selected_profile.name)
+            .is_none()
+        {
+            return Err(ControlError::new(
+                "unknown_profile",
+                "daemon did not register the selected deployment profile",
+            ));
+        }
+        let effective_seccomp = self
+            .launch_seccomp_requirements
+            .enabled_by(decision.selected.seccomp_notify);
+        Ok(LaunchPermissionsReply {
+            requested_host_ebpf: contract_permission_mode(decision.requested_host_ebpf),
+            requested_seccomp_notify: contract_permission_mode(
+                decision.requested_seccomp_notify,
+            ),
+            selected_host_ebpf: decision.selected.host_ebpf,
+            selected_seccomp_notify: decision.selected.seccomp_notify,
+            selected_profile_name: selected_profile.name,
+            payload_tls_seccomp: effective_seccomp.payload_tls,
+            payload_socket_seccomp: effective_seccomp.payload_socket,
+            process_seccomp: effective_seccomp.process_seccomp,
+            network_control_seccomp: effective_seccomp.network_control,
+            required_capabilities: decision.required_capabilities,
+            degraded: decision.degraded,
+            reasons: decision.reasons,
+        })
+    }
+
     fn attach_existing(
         &mut self,
         trace_runtime: &mut trace_runtime::TraceRuntime,
@@ -349,8 +416,7 @@ impl AttachService for StorageAttachService {
             .ok_or_else(|| {
                 ControlError::new("unknown_profile", "capture profile does not exist")
             })?;
-        let captured_at = SystemTime::now();
-        let profile_snapshot = CaptureProfileSnapshot::from_profile(profile, captured_at);
+        let profile_snapshot = CaptureProfileSnapshot::from_profile(profile, SystemTime::now());
         if self.seccomp_tls.enabled()
             && !command.launch_mode
             && capability_requested(
@@ -516,6 +582,22 @@ impl AttachService for StorageAttachService {
             stdout: response.stdout,
             stderr: response.stderr,
         })
+    }
+}
+
+fn permission_mode(mode: DeploymentPermissionMode) -> PermissionMode {
+    match mode {
+        DeploymentPermissionMode::Auto => PermissionMode::Auto,
+        DeploymentPermissionMode::Required => PermissionMode::Required,
+        DeploymentPermissionMode::Disabled => PermissionMode::Disabled,
+    }
+}
+
+fn contract_permission_mode(mode: PermissionMode) -> DeploymentPermissionMode {
+    match mode {
+        PermissionMode::Auto => DeploymentPermissionMode::Auto,
+        PermissionMode::Required => DeploymentPermissionMode::Required,
+        PermissionMode::Disabled => DeploymentPermissionMode::Disabled,
     }
 }
 

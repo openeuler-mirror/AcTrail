@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
+use config_core::capture_profile::CaptureProfile;
 use config_core::daemon::{
     DEFAULT_OPERATOR_CONFIG_PATH, NetworkControlSeccompSyscall, OperatorConfig,
     PayloadSocketSeccompSyscall, PayloadTlsConfig, PayloadTlsSeccompSyscall, ProcessSeccompSyscall,
@@ -14,7 +15,7 @@ use control_contract::selector::TraceSelector;
 use model_core::ids::{ProfileName, RequestId, TraceId, TraceName};
 
 use crate::clean::CleanArtifacts;
-use crate::launch::seccomp_mode::LaunchSeccompMode;
+use crate::launch::permission_policy::{DeploymentPermissionPolicy, PermissionMode};
 use crate::process_ref::process_ref;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -39,22 +40,18 @@ pub enum CtlCommand {
     },
     Launch {
         display_name: TraceName,
-        profile_name: ProfileName,
+        capture_profile: CaptureProfile,
         tags: BTreeSet<String>,
-        payload_tls_enabled: bool,
         payload_tls_config: PayloadTlsConfig,
         payload_tls_seccomp_syscalls: Vec<PayloadTlsSeccompSyscall>,
-        payload_socket_enabled: bool,
         payload_socket_seccomp_syscalls: Vec<PayloadSocketSeccompSyscall>,
         payload_socket_max_segment_bytes: u32,
-        process_seccomp_enabled: bool,
         process_seccomp_syscalls: Vec<ProcessSeccompSyscall>,
-        network_control_enabled: bool,
         network_control_syscalls: Vec<NetworkControlSeccompSyscall>,
         seccomp_notify_reserved_listener_fd: u32,
         agent_invocation_commands: Vec<String>,
-        seccomp_mode: LaunchSeccompMode,
         supervision_poll_interval_ms: u64,
+        ebpf_seccomp_policy: DeploymentPermissionPolicy,
         argv: Vec<String>,
     },
     TrackRemove {
@@ -72,6 +69,7 @@ pub enum CtlCommand {
         json: bool,
         skip_daemon: bool,
         suggest_config: bool,
+        ebpf_seccomp_policy: DeploymentPermissionPolicy,
     },
 }
 
@@ -184,7 +182,7 @@ impl CtlCommandArgs {
                 Ok(CtlCommand::TrackAdd {
                     root: process_ref(root_pid)?,
                     display_name: trace_name(args.name, root_pid)?,
-                    profile_name: profile_name(args.profile_name, config)?,
+                    profile_name: configured_profile(config)?.name.clone(),
                     tags: args.tags.into_iter().collect(),
                 })
             }
@@ -194,33 +192,33 @@ impl CtlCommandArgs {
                     return Err("launch requires a command after --".to_string());
                 }
                 let seccomp_config = launch_seccomp_config(config)?;
+                let capture_profile = configured_profile(config)?.clone();
                 Ok(CtlCommand::Launch {
                     display_name: trace_name(args.name, root_pid)?,
-                    profile_name: profile_name(args.profile_name, config)?,
+                    capture_profile,
                     tags: args.tags.into_iter().collect(),
-                    payload_tls_enabled: seccomp_config.payload_tls_enabled,
                     payload_tls_config: config
                         .ok_or_else(|| "missing operator config for launch payload".to_string())?
                         .payload_config
                         .tls
                         .clone(),
                     payload_tls_seccomp_syscalls: seccomp_config.payload_tls_syscalls,
-                    payload_socket_enabled: seccomp_config.payload_socket_enabled,
                     payload_socket_seccomp_syscalls: seccomp_config.payload_socket_syscalls,
                     payload_socket_max_segment_bytes: seccomp_config
                         .payload_socket_max_segment_bytes,
-                    process_seccomp_enabled: seccomp_config.process_enabled,
                     process_seccomp_syscalls: seccomp_config.process_syscalls,
-                    network_control_enabled: seccomp_config.network_enabled,
                     network_control_syscalls: seccomp_config.network_syscalls,
                     seccomp_notify_reserved_listener_fd: seccomp_config.reserved_listener_fd,
                     agent_invocation_commands: launch_agent_commands(config),
-                    seccomp_mode: args.seccomp_mode.into(),
                     supervision_poll_interval_ms: config
                         .ok_or_else(|| {
                             "missing operator config for launch supervision".to_string()
                         })?
                         .supervision_poll_interval_ms,
+                    ebpf_seccomp_policy: ebpf_seccomp_policy(
+                        args.host_ebpf,
+                        args.seccomp_notify,
+                    ),
                     argv: args.argv,
                 })
             }
@@ -245,6 +243,10 @@ impl CtlCommandArgs {
                     json: args.json,
                     skip_daemon: args.skip_daemon,
                     suggest_config: args.suggest_config,
+                    ebpf_seccomp_policy: ebpf_seccomp_policy(
+                        args.host_ebpf,
+                        args.seccomp_notify,
+                    ),
                 })
             }
         }
@@ -284,14 +286,10 @@ fn launch_agent_commands(config: Option<&OperatorConfig>) -> Vec<String> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct LaunchSeccompConfig {
-    payload_tls_enabled: bool,
     payload_tls_syscalls: Vec<PayloadTlsSeccompSyscall>,
-    payload_socket_enabled: bool,
     payload_socket_syscalls: Vec<PayloadSocketSeccompSyscall>,
     payload_socket_max_segment_bytes: u32,
-    process_enabled: bool,
     process_syscalls: Vec<ProcessSeccompSyscall>,
-    network_enabled: bool,
     network_syscalls: Vec<NetworkControlSeccompSyscall>,
     reserved_listener_fd: u32,
 }
@@ -299,24 +297,10 @@ struct LaunchSeccompConfig {
 fn launch_seccomp_config(config: Option<&OperatorConfig>) -> Result<LaunchSeccompConfig, String> {
     let config = config.ok_or_else(|| "missing operator config for launch seccomp".to_string())?;
     Ok(LaunchSeccompConfig {
-        payload_tls_enabled: config.payload_config.tls.enabled
-            && config
-                .payload_config
-                .tls
-                .capture_backend
-                .requires_seccomp_notify(),
         payload_tls_syscalls: config.payload_config.tls.seccomp_syscalls.clone(),
-        payload_socket_enabled: config.payload_config.socket.enabled
-            && config
-                .payload_config
-                .socket
-                .capture_backend
-                .requires_seccomp_notify(),
         payload_socket_syscalls: config.payload_config.socket.seccomp_syscalls.clone(),
         payload_socket_max_segment_bytes: config.payload_config.socket.max_segment_bytes,
-        process_enabled: config.process_seccomp.enabled,
         process_syscalls: config.process_seccomp.syscalls.clone(),
-        network_enabled: config.network_control.enabled,
         network_syscalls: config.network_control.syscalls.clone(),
         reserved_listener_fd: config.seccomp_notify.reserved_listener_fd,
     })
@@ -329,9 +313,6 @@ struct TrackAddArgs {
 
     #[arg(long = "name", value_name = "NAME")]
     name: Option<String>,
-
-    #[arg(long = "profile-name", value_name = "PROFILE")]
-    profile_name: Option<String>,
 
     #[arg(long = "tag", action = ArgAction::Append, value_name = "TAG")]
     tags: Vec<String>,
@@ -347,22 +328,35 @@ struct ProbeArgs {
 
     #[arg(long = "suggest-config")]
     suggest_config: bool,
+
+    #[arg(
+        long = "host-ebpf",
+        value_enum,
+        help = "Host eBPF collector permission policy"
+    )]
+    host_ebpf: Option<PermissionModeArg>,
+
+    #[arg(
+        long = "seccomp-notify",
+        value_enum,
+        help = "Workload seccomp user-notify permission policy"
+    )]
+    seccomp_notify: Option<PermissionModeArg>,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
-enum LaunchSeccompModeArg {
-    #[default]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum PermissionModeArg {
     Auto,
-    Require,
-    Skip,
+    Required,
+    Disabled,
 }
 
-impl From<LaunchSeccompModeArg> for LaunchSeccompMode {
-    fn from(value: LaunchSeccompModeArg) -> Self {
+impl From<PermissionModeArg> for PermissionMode {
+    fn from(value: PermissionModeArg) -> Self {
         match value {
-            LaunchSeccompModeArg::Auto => Self::Auto,
-            LaunchSeccompModeArg::Require => Self::Require,
-            LaunchSeccompModeArg::Skip => Self::Skip,
+            PermissionModeArg::Auto => Self::Auto,
+            PermissionModeArg::Required => Self::Required,
+            PermissionModeArg::Disabled => Self::Disabled,
         }
     }
 }
@@ -372,14 +366,22 @@ struct LaunchArgs {
     #[arg(long = "name", value_name = "NAME")]
     name: Option<String>,
 
-    #[arg(long = "profile-name", value_name = "PROFILE")]
-    profile_name: Option<String>,
-
     #[arg(long = "tag", action = ArgAction::Append, value_name = "TAG")]
     tags: Vec<String>,
 
-    #[arg(long = "seccomp-mode", value_enum, default_value_t = LaunchSeccompModeArg::Auto)]
-    seccomp_mode: LaunchSeccompModeArg,
+    #[arg(
+        long = "host-ebpf",
+        value_enum,
+        help = "Host eBPF collector permission policy"
+    )]
+    host_ebpf: Option<PermissionModeArg>,
+
+    #[arg(
+        long = "seccomp-notify",
+        value_enum,
+        help = "Workload seccomp user-notify permission policy"
+    )]
+    seccomp_notify: Option<PermissionModeArg>,
 
     #[arg(
         value_name = "COMMAND",
@@ -388,6 +390,18 @@ struct LaunchArgs {
         allow_hyphen_values = true
     )]
     argv: Vec<String>,
+}
+
+fn ebpf_seccomp_policy(
+    host_ebpf: Option<PermissionModeArg>,
+    seccomp_notify: Option<PermissionModeArg>,
+) -> DeploymentPermissionPolicy {
+    DeploymentPermissionPolicy {
+        host_ebpf: host_ebpf.map(Into::into).unwrap_or(PermissionMode::Auto),
+        seccomp_notify: seccomp_notify
+            .map(Into::into)
+            .unwrap_or(PermissionMode::Auto),
+    }
 }
 
 #[derive(Clone, Debug, Args)]
@@ -435,17 +449,10 @@ fn generated_request_id() -> Result<RequestId, String> {
     Ok(RequestId::new(raw))
 }
 
-fn profile_name(
-    raw: Option<String>,
-    config: Option<&OperatorConfig>,
-) -> Result<ProfileName, String> {
-    match raw {
-        Some(value) if !value.is_empty() => Ok(ProfileName::new(value)),
-        Some(_) => Err("invalid --profile-name: value must not be empty".to_string()),
-        None => config
-            .map(|config| config.capture_profile.name.clone())
-            .ok_or_else(|| "missing --profile-name and operator config was not loaded".to_string()),
-    }
+fn configured_profile(config: Option<&OperatorConfig>) -> Result<&CaptureProfile, String> {
+    config
+        .map(|config| &config.capture_profile)
+        .ok_or_else(|| "missing operator config capture profile".to_string())
 }
 
 fn trace_name(raw: Option<String>, root_pid: u32) -> Result<TraceName, String> {
@@ -498,4 +505,62 @@ fn parse_trace_id(raw: &str) -> Result<TraceId, String> {
         .parse::<u64>()
         .map(TraceId::new)
         .map_err(|error| format!("invalid trace id: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn init_uses_default_config_path_without_socket_path() {
+        let invocation = parse_args(["init".to_string()]).unwrap();
+
+        assert_eq!(invocation.socket_path, None);
+        assert!(matches!(
+            invocation.command,
+            CtlCommand::Init {
+                ref config_path,
+                force: false,
+                ..
+            } if config_path == &PathBuf::from(DEFAULT_OPERATOR_CONFIG_PATH)
+        ));
+    }
+
+    #[test]
+    fn init_can_target_output_path() {
+        let invocation = parse_args([
+            "init".to_string(),
+            "--output".to_string(),
+            "/tmp/actrail-ctl-test.conf".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(invocation.socket_path, None);
+        assert!(matches!(
+            invocation.command,
+            CtlCommand::Init {
+                ref config_path,
+                force: false,
+                ..
+            } if config_path == &PathBuf::from("/tmp/actrail-ctl-test.conf")
+        ));
+    }
+
+    #[test]
+    fn deployment_permissions_default_to_full_auto() {
+        let policy = ebpf_seccomp_policy(None, None);
+
+        assert_eq!(policy, DeploymentPermissionPolicy::auto());
+    }
+
+    #[test]
+    fn explicit_permission_axes_are_independent() {
+        let policy = ebpf_seccomp_policy(
+            Some(PermissionModeArg::Required),
+            Some(PermissionModeArg::Disabled),
+        );
+
+        assert_eq!(policy.host_ebpf, PermissionMode::Required);
+        assert_eq!(policy.seccomp_notify, PermissionMode::Disabled);
+    }
 }

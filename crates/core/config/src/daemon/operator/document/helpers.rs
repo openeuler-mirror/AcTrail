@@ -81,29 +81,7 @@ pub(super) fn parse_duration_millis(
 }
 
 pub(super) fn capability_as_str(capability: &Capability) -> &'static str {
-    match capability {
-        Capability::ProcLifecycle => "proc-lifecycle",
-        Capability::ProcExecContext => "proc-exec-context",
-        Capability::FsAccessBasic => "fs-access-basic",
-        Capability::FsMmap => "fs-mmap",
-        Capability::FsExecAccess => "fs-exec-access",
-        Capability::NetTransport => "net-transport",
-        Capability::NetDns => "net-dns",
-        Capability::NetTlsMetadata => "net-tls-metadata",
-        Capability::NetProviderClassification => "net-provider-classification",
-        Capability::NetApplicationPlaintextHttp => "net-application-plaintext-http",
-        Capability::NetApplicationHttp2Frames => "net-application-http2-frames",
-        Capability::NetApplicationPlaintextWs => "net-application-plaintext-ws",
-        Capability::TlsPlaintextPayload => "tls-plaintext-payload",
-        Capability::SocketPlaintextPayload => "socket-plaintext-payload",
-        Capability::ResourceMetrics => "resource-metrics",
-        Capability::IpcUnixSocket => "ipc-unix-socket",
-        Capability::IpcPipeFifo => "ipc-pipe-fifo",
-        Capability::StdioChunk => "stdio-chunk",
-        Capability::PolicyIngestProcessing => "policy-ingest-processing",
-        Capability::PolicyDecisionRecord => "policy-decision-record",
-        Capability::EnforcementFilePermissionFanotify => "enforcement-file-permission-fanotify",
-    }
+    capability.as_str()
 }
 
 pub(super) fn diagnostic_log_level_as_str(value: super::super::DiagnosticLogLevel) -> &'static str {
@@ -377,28 +355,5 @@ pub(super) fn enforcement_mark_strategy_as_str(value: EnforcementMarkStrategy) -
 }
 
 pub(super) fn parse_capability(raw: &str) -> Result<Capability, String> {
-    match raw {
-        "proc-lifecycle" => Ok(Capability::ProcLifecycle),
-        "proc-exec-context" => Ok(Capability::ProcExecContext),
-        "fs-access-basic" => Ok(Capability::FsAccessBasic),
-        "fs-mmap" => Ok(Capability::FsMmap),
-        "fs-exec-access" => Ok(Capability::FsExecAccess),
-        "net-transport" => Ok(Capability::NetTransport),
-        "net-dns" => Ok(Capability::NetDns),
-        "net-tls-metadata" => Ok(Capability::NetTlsMetadata),
-        "net-provider-classification" => Ok(Capability::NetProviderClassification),
-        "net-application-plaintext-http" => Ok(Capability::NetApplicationPlaintextHttp),
-        "net-application-http2-frames" => Ok(Capability::NetApplicationHttp2Frames),
-        "net-application-plaintext-ws" => Ok(Capability::NetApplicationPlaintextWs),
-        "tls-plaintext-payload" => Ok(Capability::TlsPlaintextPayload),
-        "socket-plaintext-payload" => Ok(Capability::SocketPlaintextPayload),
-        "resource-metrics" => Ok(Capability::ResourceMetrics),
-        "ipc-unix-socket" => Ok(Capability::IpcUnixSocket),
-        "ipc-pipe-fifo" => Ok(Capability::IpcPipeFifo),
-        "stdio-chunk" => Ok(Capability::StdioChunk),
-        "policy-ingest-processing" => Ok(Capability::PolicyIngestProcessing),
-        "policy-decision-record" => Ok(Capability::PolicyDecisionRecord),
-        "enforcement-file-permission-fanotify" => Ok(Capability::EnforcementFilePermissionFanotify),
-        other => Err(format!("unknown capability {other}")),
-    }
+    raw.parse()
 }

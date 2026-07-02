@@ -59,7 +59,7 @@ pub use network::{NetworkControlConfig, NetworkControlSeccompSyscall};
 pub use operator::{
     DEFAULT_ACTIVE_TRACE_MAX, DEFAULT_CONTROL_PENDING_CONNECTION_MAX, DEFAULT_OPERATOR_CONFIG_PATH,
     OperatorConfig, OperatorConfigInitStatus, StartupPluginFailurePolicy, StartupPluginLoadConfig,
-    StartupPluginsConfig,
+    StartupPluginsConfig, launch_seccomp_requirements,
 };
 pub use payload::{
     DisabledOrPath, PayloadConfig, PayloadRedactionPolicy, PayloadSocketCaptureBackend,

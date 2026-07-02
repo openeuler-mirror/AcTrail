@@ -215,6 +215,12 @@ fn prepare_paths(config: &LiveVerificationConfig) -> Result<(), String> {
 
 fn verification_profiles(config: &LiveVerificationConfig) -> DaemonProfileRegistry {
     let mut profiles = DaemonProfileRegistry::new();
+    let profile = verification_profile(config);
+    profiles.insert_capture_profile(profile);
+    profiles
+}
+
+fn verification_profile(config: &LiveVerificationConfig) -> CaptureProfile {
     let mut capabilities = vec![
         CapabilityRequest::new(Capability::ProcLifecycle, RequestMode::Required),
         CapabilityRequest::new(Capability::NetTransport, RequestMode::Required),
@@ -259,11 +265,10 @@ fn verification_profiles(config: &LiveVerificationConfig) -> DaemonProfileRegist
             RequestMode::Required,
         ));
     }
-    profiles.insert_capture_profile(CaptureProfile::new(
+    CaptureProfile::new(
         ProfileName::new(config.profile_name.clone()),
         capabilities,
-    ));
-    profiles
+    )
 }
 
 fn spawn_workload(config: &LiveVerificationConfig) -> Result<std::process::Child, String> {
