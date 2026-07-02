@@ -19,7 +19,7 @@ use super::{
     SocketPermissions, SseDataPolicy, TraceFinalizationConfig, WebServerConfig,
     WorkloadDiagnosticsConfig,
 };
-use crate::capture_profile::CaptureProfile;
+use crate::capture_profile::{CaptureProfile, LaunchSeccompRequirements};
 use crate::export::ExportConfig;
 use crate::framework::ConfigModel;
 use crate::provider_rules::ProviderRuleSetConfig;
@@ -114,7 +114,37 @@ pub struct StartupPluginLoadConfig {
     pub host_grants: Vec<String>,
 }
 
+/// Derive the seccomp-notify capabilities a launch must install from the
+/// payload, process, and network config. A payload backend needs the notify
+/// path only when it is enabled *and* its capture backend cannot collect
+/// without it. Single source of truth shared by ctl and the daemon.
+pub fn launch_seccomp_requirements(
+    payload: &PayloadConfig,
+    process_seccomp: &ProcessSeccompConfig,
+    network_control: &NetworkControlConfig,
+) -> LaunchSeccompRequirements {
+    LaunchSeccompRequirements::new(
+        payload.tls.enabled && payload.tls.capture_backend.requires_seccomp_notify(),
+        payload.socket.enabled && payload.socket.capture_backend.requires_seccomp_notify(),
+        process_seccomp.enabled,
+        network_control.enabled,
+    )
+}
+
 impl OperatorConfig {
+    /// The seccomp-notify capabilities this config asks a launch to install.
+    /// Delegates to [`launch_seccomp_requirements`] so ctl and the daemon
+    /// derive identical requirements from one place.
+    pub fn launch_seccomp_requirements(
+        &self,
+    ) -> crate::capture_profile::LaunchSeccompRequirements {
+        launch_seccomp_requirements(
+            &self.payload_config,
+            &self.process_seccomp,
+            &self.network_control,
+        )
+    }
+
     pub fn load(path: &Path) -> Result<Self, String> {
         let raw = fs::read_to_string(path)
             .map_err(|error| format!("read config {}: {error}", path.display()))?;

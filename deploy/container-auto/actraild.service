@@ -1,0 +1,24 @@
+# AcTrail host daemon — Docker full permission auto-selection.
+# Install to /etc/systemd/system/actraild.service
+# (deploy/container-auto/install-host.sh does this).
+
+[Unit]
+Description=AcTrail host daemon (Docker permission auto-selection)
+Documentation=file:/etc/actrail/container-auto.conf
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/install -d -m 0755 -o root -g root /run/actrail
+ExecStartPre=/usr/bin/install -d -m 0750 -o root -g root /var/log/actrail
+ExecStartPre=/usr/bin/install -d -m 0750 -o root -g root /var/lib/actrail
+ExecStartPre=-/bin/rm -f /run/actrail/control.sock /run/actrail/tls-sync.sock /run/actrail/actraild.pid
+ExecStart=/usr/local/bin/actraild --config /etc/actrail/container-auto.conf run
+Restart=on-failure
+RestartSec=2
+# The daemon resolves [ebpf] enabled="auto" once at startup. Workload
+# seccomp-notify availability is resolved independently by each launch.
+
+[Install]
+WantedBy=multi-user.target

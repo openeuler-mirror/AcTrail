@@ -27,6 +27,69 @@ pub enum Capability {
     EnforcementFilePermissionFanotify,
 }
 
+impl Capability {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::ProcLifecycle => "proc-lifecycle",
+            Self::ProcExecContext => "proc-exec-context",
+            Self::FsAccessBasic => "fs-access-basic",
+            Self::FsMmap => "fs-mmap",
+            Self::FsExecAccess => "fs-exec-access",
+            Self::NetTransport => "net-transport",
+            Self::NetDns => "net-dns",
+            Self::NetTlsMetadata => "net-tls-metadata",
+            Self::NetProviderClassification => "net-provider-classification",
+            Self::NetApplicationPlaintextHttp => "net-application-plaintext-http",
+            Self::NetApplicationHttp2Frames => "net-application-http2-frames",
+            Self::NetApplicationPlaintextWs => "net-application-plaintext-ws",
+            Self::TlsPlaintextPayload => "tls-plaintext-payload",
+            Self::SocketPlaintextPayload => "socket-plaintext-payload",
+            Self::ResourceMetrics => "resource-metrics",
+            Self::IpcUnixSocket => "ipc-unix-socket",
+            Self::IpcPipeFifo => "ipc-pipe-fifo",
+            Self::StdioChunk => "stdio-chunk",
+            Self::PolicyIngestProcessing => "policy-ingest-processing",
+            Self::PolicyDecisionRecord => "policy-decision-record",
+            Self::EnforcementFilePermissionFanotify => {
+                "enforcement-file-permission-fanotify"
+            }
+        }
+    }
+}
+
+impl std::str::FromStr for Capability {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "proc-lifecycle" => Ok(Self::ProcLifecycle),
+            "proc-exec-context" => Ok(Self::ProcExecContext),
+            "fs-access-basic" => Ok(Self::FsAccessBasic),
+            "fs-mmap" => Ok(Self::FsMmap),
+            "fs-exec-access" => Ok(Self::FsExecAccess),
+            "net-transport" => Ok(Self::NetTransport),
+            "net-dns" => Ok(Self::NetDns),
+            "net-tls-metadata" => Ok(Self::NetTlsMetadata),
+            "net-provider-classification" => Ok(Self::NetProviderClassification),
+            "net-application-plaintext-http" => Ok(Self::NetApplicationPlaintextHttp),
+            "net-application-http2-frames" => Ok(Self::NetApplicationHttp2Frames),
+            "net-application-plaintext-ws" => Ok(Self::NetApplicationPlaintextWs),
+            "tls-plaintext-payload" => Ok(Self::TlsPlaintextPayload),
+            "socket-plaintext-payload" => Ok(Self::SocketPlaintextPayload),
+            "resource-metrics" => Ok(Self::ResourceMetrics),
+            "ipc-unix-socket" => Ok(Self::IpcUnixSocket),
+            "ipc-pipe-fifo" => Ok(Self::IpcPipeFifo),
+            "stdio-chunk" => Ok(Self::StdioChunk),
+            "policy-ingest-processing" => Ok(Self::PolicyIngestProcessing),
+            "policy-decision-record" => Ok(Self::PolicyDecisionRecord),
+            "enforcement-file-permission-fanotify" => {
+                Ok(Self::EnforcementFilePermissionFanotify)
+            }
+            other => Err(format!("unknown capability {other}")),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum RequestMode {
     Required,

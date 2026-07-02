@@ -3,6 +3,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use config_core::capture_profile::DeploymentPermissions;
 use config_core::daemon::{
     EnforcementBuiltinRuleConfig, EnforcementConfig, OperatorConfig, OperatorConfigInitStatus,
     StartupPluginFailurePolicy, StartupPluginLoadConfig,
@@ -143,6 +144,11 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
     }
     let mut profiles = DaemonProfileRegistry::new();
     profiles.insert_capture_profile(config.capture_profile.clone());
+    for permissions in DeploymentPermissions::ALL {
+        profiles.insert_capture_profile(
+            config.capture_profile.for_permissions(permissions),
+        );
+    }
     let mut server = match &config.provider_rule_set {
         Some(provider_rule_set) => LocalDaemonServer::build_with_provider_rule_set(
             &config.storage,

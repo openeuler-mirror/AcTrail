@@ -19,9 +19,13 @@ actrailctl --config /etc/actrail/actraild.conf probe
 actrailctl --config /etc/actrail/actraild.conf launch -- /usr/local/bin/agent ...
 ```
 
-`launch` defaults to `--seccomp-mode auto`. When Docker still applies a default seccomp profile and pidfd launch is unavailable, ctl degrades to tls-sync-only launch instead of failing immediately.
+`launch` defaults to `--seccomp-notify auto`. When Docker still applies a default seccomp profile and pidfd launch is unavailable, ctl degrades to tls-sync-only launch instead of failing immediately.
 
-For full socket/process seccomp capture from the container, keep `--security-opt seccomp=unconfined` on the workload container.
+For full socket/process seccomp capture, prefer
+`--security-opt seccomp=/path/to/actrail-notify.json`; it adds the syscall
+needed by AcTrail while retaining Docker's outer seccomp filtering.
+`--security-opt seccomp=unconfined` is also supported for trusted testing or
+compatibility diagnosis, but it removes Docker's outer syscall allowlist.
 
 ## Install on host
 

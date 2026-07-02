@@ -3,6 +3,7 @@
 pub(crate) mod bootstrap;
 pub(crate) mod control_loop;
 pub(crate) mod ebpf_resolve;
+pub(crate) mod peer_identity;
 pub(crate) mod profiles;
 pub(crate) mod runtime_wiring;
 pub(crate) mod service_host;

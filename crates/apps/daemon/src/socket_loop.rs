@@ -114,7 +114,9 @@ impl LocalDaemonServer {
                         stream.set_nonblocking(true).map_err(|error| {
                             DaemonRunError::from_io("control_nonblocking", error)
                         })?;
-                        let connection = UdsControlConnection::new(stream);
+                        let connection = UdsControlConnection::new(stream).map_err(|error| {
+                            DaemonRunError::from_io("control_peer_credentials", error)
+                        })?;
                         ready_control_fds.push(connection.raw_fd());
                         control_connections.push(connection);
                     }

@@ -9,6 +9,7 @@ This directory is the operator-facing documentation entrypoint. Run commands fro
 | [Usage Guide](usage.md) | Daily commands: build, preflight, clean, start, attach or launch, inspect, export, stop. |
 | [Deployment Guide](deployment.md) | Host prerequisites, config layout, daemon operation, storage/log handling, and transfer-test readiness. |
 | [Containerized Agent Deployment](containerized-agent-deployment.md) | Host daemon, not containerized, plus one Docker workload container, including required mounts, permissions, xiaoO launch, and host-side verification. |
+| [Container Permission Auto-Selection](../deploy/container-auto/README.md) | Optional host-eBPF × workload-seccomp-notify deployment bundle and acceptance test. |
 | [Use Cases](use-cases.md) | Which example to run for process trees, LLM payloads, HTTP semantics, enforcement, OTEL export, and performance checks. |
 | [LLM Request Canonical Blocks](llm-request-canonical-blocks.md) | L0 request-body retention model for reconstructable, trace-local deduplicated LLM request content. |
 | [Platform Requirements](platform-requirements.md) | Kernel, tracefs, BTF, seccomp, pidfd, fanotify, architecture, and failure interpretation. |

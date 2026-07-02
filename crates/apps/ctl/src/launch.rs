@@ -6,8 +6,8 @@ pub(crate) mod controlled;
 mod java_agent;
 #[path = "launch/seccomp.rs"]
 pub(crate) mod seccomp;
-#[path = "launch/seccomp_mode.rs"]
-pub(crate) mod seccomp_mode;
+#[path = "launch/permission_policy.rs"]
+pub(crate) mod permission_policy;
 #[path = "launch/suppress.rs"]
 mod suppress;
 #[path = "launch/sync.rs"]
@@ -18,14 +18,17 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use config_core::capture_profile::CaptureProfile;
 use config_core::daemon::{
     NetworkControlSeccompSyscall, PayloadSocketSeccompSyscall, PayloadTlsConfig,
     PayloadTlsSeccompSyscall, ProcessSeccompSyscall,
 };
-use control_contract::command::{ControlCommand, TrackAddCommand, TrackRemoveCommand};
+use control_contract::command::{
+    ControlCommand, ResolveLaunchPermissionsCommand, TrackAddCommand, TrackRemoveCommand,
+};
 use control_contract::reply::{ControlError, ControlReply};
 use control_contract::selector::TraceSelector;
-use model_core::ids::{ProfileName, RequestId, TraceId, TraceName};
+use model_core::ids::{RequestId, TraceId, TraceName};
 use model_core::process::SuppressedFdPurpose;
 
 use crate::output::format_reply;
@@ -33,34 +36,34 @@ use crate::process_ref::process_ref;
 use crate::transport::ControlClientPort;
 use controlled::{ChildSetup, ControlledChild};
 use seccomp::{SeccompSetup, register_listener};
-use seccomp_mode::{LaunchSeccompMode, resolve_launch_seccomp};
+use permission_policy::{
+    DeploymentPermissionPolicy, LaunchSeccompRequirements, contract_permission_mode,
+    permission_decision_from_reply,
+};
 use suppress::InheritableSuppressedFd;
 use sync::{SyncLaunch, sync_launch, sync_launch_envs};
 
 use crate::platform_probe::{
-    LaunchPlatformReport, probe_seccomp_launch_capability, probe_tls_sync_runtime_library,
+    LaunchPlatformReport, probe_seccomp_notify_capability, probe_tls_sync_runtime_library,
+    print_permission_decision,
 };
 use linux_platform::capability_probe::{probe_no_new_privs, probe_unix_socket};
 
 pub(crate) struct LaunchRequest {
     pub control_socket_path: PathBuf,
     pub display_name: TraceName,
-    pub profile_name: ProfileName,
+    pub capture_profile: CaptureProfile,
     pub tags: BTreeSet<String>,
-    pub payload_tls_enabled: bool,
     pub payload_tls_config: PayloadTlsConfig,
     pub payload_tls_seccomp_syscalls: Vec<PayloadTlsSeccompSyscall>,
-    pub payload_socket_enabled: bool,
     pub payload_socket_seccomp_syscalls: Vec<PayloadSocketSeccompSyscall>,
     pub payload_socket_max_segment_bytes: u32,
-    pub process_seccomp_enabled: bool,
     pub process_seccomp_syscalls: Vec<ProcessSeccompSyscall>,
-    pub network_control_enabled: bool,
     pub network_control_syscalls: Vec<NetworkControlSeccompSyscall>,
     pub seccomp_notify_reserved_listener_fd: u32,
     pub agent_invocation_commands: Vec<String>,
-    pub seccomp_mode: LaunchSeccompMode,
     pub supervision_poll_interval_ms: u64,
+    pub ebpf_seccomp_policy: DeploymentPermissionPolicy,
     pub argv: Vec<String>,
 }
 
@@ -71,34 +74,33 @@ pub(crate) fn run_launch(
 ) -> Result<i32, String> {
     let tls_sync_enabled =
         request.payload_tls_config.enabled && request.payload_tls_config.capture_backend.is_sync();
-    let payload_tls_seccomp_configured = request.payload_tls_enabled && !tls_sync_enabled;
-    let probe = if matches!(
-        request.seccomp_mode,
-        LaunchSeccompMode::Auto | LaunchSeccompMode::Require
-    ) {
-        Some(run_platform_probe_from_launch(&request))
-    } else {
-        None
+    let probe = run_platform_probe_from_launch(&request);
+    let permission_reply = client
+        .send(ControlCommand::ResolveLaunchPermissions(
+            ResolveLaunchPermissionsCommand {
+                request_id,
+                profile_name: request.capture_profile.name.clone(),
+                host_ebpf: contract_permission_mode(request.ebpf_seccomp_policy.host_ebpf),
+                seccomp_notify: contract_permission_mode(
+                    request.ebpf_seccomp_policy.seccomp_notify,
+                ),
+                seccomp_notify_available: probe.seccomp_notify_available(),
+                seccomp_notify_detail: probe.seccomp_notify.detail.clone(),
+            },
+        ))
+        .map_err(format_control_error)?;
+    let ControlReply::LaunchPermissions(permission_reply) = permission_reply else {
+        return Err("resolve launch permissions returned unexpected reply".to_string());
     };
-    let effective = resolve_launch_seccomp(
-        request.seccomp_mode,
-        tls_sync_enabled,
-        payload_tls_seccomp_configured,
-        request.payload_socket_enabled,
-        request.process_seccomp_enabled,
-        request.network_control_enabled,
-        probe.as_ref(),
-    )?;
-    if effective.degraded {
-        if let Some(detail) = &effective.degrade_detail {
-            eprintln!("actrailctl launch degraded: {detail}");
-        }
-    }
-    let payload_tls_seccomp_enabled = effective.payload_tls_seccomp_enabled;
-    let seccomp_enabled = effective.use_seccomp;
-    let payload_socket_enabled = effective.payload_socket_enabled;
-    let process_seccomp_enabled = effective.process_seccomp_enabled;
-    let network_control_enabled = effective.network_control_enabled;
+    let permissions = permission_decision_from_reply(&permission_reply);
+    print_permission_decision(&permissions);
+    let effective_seccomp = LaunchSeccompRequirements::new(
+        permission_reply.payload_tls_seccomp,
+        permission_reply.payload_socket_seccomp,
+        permission_reply.process_seccomp,
+        permission_reply.network_control_seccomp,
+    );
+    let seccomp_enabled = effective_seccomp.requires_seccomp_notify();
     let launch_supervision_poll_interval = if seccomp_enabled {
         Some(launch_supervision_poll_interval(&request)?)
     } else {
@@ -107,10 +109,10 @@ pub(crate) fn run_launch(
     let child_setup = if seccomp_enabled {
         ChildSetup::Seccomp(seccomp_setup(
             &request,
-            payload_tls_seccomp_enabled,
-            payload_socket_enabled,
-            process_seccomp_enabled,
-            network_control_enabled,
+            effective_seccomp.payload_tls,
+            effective_seccomp.payload_socket,
+            effective_seccomp.process_seccomp,
+            effective_seccomp.network_control,
         )?)
     } else {
         ChildSetup::Plain
@@ -141,11 +143,12 @@ pub(crate) fn run_launch(
     let mut child = ControlledChild::spawn(command, child_setup)?;
     let child_ref = process_ref(child.pid())?;
 
+    let track_add_request_id = next_request_id(request_id)?;
     let reply = match client.send(ControlCommand::TrackAdd(TrackAddCommand {
-        request_id,
+        request_id: track_add_request_id,
         root: child_ref.clone(),
         display_name: request.display_name,
-        profile_name: request.profile_name,
+        profile_name: permission_reply.selected_profile_name,
         tags: request.tags,
         launch_mode: true,
         initial_suppressed_fds: sync_event_fd
@@ -171,7 +174,7 @@ pub(crate) fn run_launch(
 
     if let Err(error) = register_seccomp_listener_if_needed(
         client,
-        request_id,
+        track_add_request_id,
         trace_id,
         seccomp_enabled,
         &child,
@@ -180,7 +183,7 @@ pub(crate) fn run_launch(
         child.terminate();
         remove_launch_root_best_effort(
             client,
-            launch_remove_request_id(request_id, seccomp_enabled)?,
+            launch_remove_request_id(track_add_request_id, seccomp_enabled)?,
             trace_id,
         );
         return Err(error);
@@ -200,7 +203,7 @@ pub(crate) fn run_launch(
             child.terminate();
             remove_launch_root_best_effort(
                 client,
-                launch_remove_request_id(request_id, seccomp_enabled)?,
+                launch_remove_request_id(track_add_request_id, seccomp_enabled)?,
                 trace_id,
             );
             return Err(error);
@@ -211,7 +214,7 @@ pub(crate) fn run_launch(
         child.terminate();
         remove_launch_root_best_effort(
             client,
-            launch_remove_request_id(request_id, seccomp_enabled)?,
+            launch_remove_request_id(track_add_request_id, seccomp_enabled)?,
             trace_id,
         );
         return Err(error);
@@ -227,7 +230,7 @@ pub(crate) fn run_launch(
     };
     let remove_result = remove_launch_root(
         client,
-        launch_remove_request_id(request_id, seccomp_enabled)?,
+        launch_remove_request_id(track_add_request_id, seccomp_enabled)?,
         trace_id,
     );
     match (child_result, remove_result) {
@@ -292,7 +295,7 @@ fn run_platform_probe_from_launch(request: &LaunchRequest) -> LaunchPlatformRepo
             )
         },
         no_new_privs: probe_no_new_privs(),
-        seccomp_launch: probe_seccomp_launch_capability(
+        seccomp_notify: probe_seccomp_notify_capability(
             request.seccomp_notify_reserved_listener_fd,
         ),
         tls_sync_runtime_library: if tls_sync_enabled_request(request) {

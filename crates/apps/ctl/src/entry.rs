@@ -3,16 +3,21 @@
 use std::path::Path;
 
 use config_core::daemon::{OperatorConfig, OperatorConfigInitStatus};
+use control_contract::command::{ControlCommand, ResolveLaunchPermissionsCommand};
+use control_contract::reply::{ControlReply, DoctorReply};
 use uds_control_client::{UdsControlClient, UdsSocketTransport};
 
 use crate::args::{CtlCommand, parse_args};
 use crate::clean::run_clean;
 use crate::dispatch::dispatch;
 use crate::launch::{LaunchRequest, run_launch};
+use crate::launch::permission_policy::{
+    contract_permission_mode, permission_decision_from_reply, resolve_deployment_permissions,
+};
 use crate::output::format_reply;
 use crate::platform_probe::{
-    attach_daemon_status, print_platform_probe, print_platform_probe_json, run_platform_probe,
-    suggest_config_text,
+    LaunchPlatformReport, attach_daemon_status, print_platform_probe, print_platform_probe_json,
+    run_platform_probe, suggest_config_text,
 };
 
 pub fn run_from_env() -> Result<i32, String> {
@@ -42,22 +47,18 @@ pub fn run_from_env() -> Result<i32, String> {
         CtlCommand::Clean { artifacts } => run_clean(artifacts),
         CtlCommand::Launch {
             display_name,
-            profile_name,
+            capture_profile,
             tags,
-            payload_tls_enabled,
             payload_tls_config,
             payload_tls_seccomp_syscalls,
-            payload_socket_enabled,
             payload_socket_seccomp_syscalls,
             payload_socket_max_segment_bytes,
-            process_seccomp_enabled,
             process_seccomp_syscalls,
-            network_control_enabled,
             network_control_syscalls,
             seccomp_notify_reserved_listener_fd,
             agent_invocation_commands,
-            seccomp_mode,
             supervision_poll_interval_ms,
+            ebpf_seccomp_policy,
             argv,
         } => {
             let socket_path = required_socket_path(invocation.socket_path)?;
@@ -69,22 +70,18 @@ pub fn run_from_env() -> Result<i32, String> {
                 LaunchRequest {
                     control_socket_path: socket_path,
                     display_name,
-                    profile_name,
+                    capture_profile,
                     tags,
-                    payload_tls_enabled,
                     payload_tls_config,
                     payload_tls_seccomp_syscalls,
-                    payload_socket_enabled,
                     payload_socket_seccomp_syscalls,
                     payload_socket_max_segment_bytes,
-                    process_seccomp_enabled,
                     process_seccomp_syscalls,
-                    network_control_enabled,
                     network_control_syscalls,
                     seccomp_notify_reserved_listener_fd,
                     agent_invocation_commands,
-                    seccomp_mode,
                     supervision_poll_interval_ms,
+                    ebpf_seccomp_policy,
                     argv,
                 },
             )
@@ -94,6 +91,7 @@ pub fn run_from_env() -> Result<i32, String> {
             json,
             skip_daemon,
             suggest_config,
+            ebpf_seccomp_policy,
         } => {
             // For --suggest-config, probe must work without an existing config;
             // build a minimal report from defaults when none was loaded.
@@ -121,19 +119,72 @@ pub fn run_from_env() -> Result<i32, String> {
                     Err(error) => return Err(error),
                 }
             };
-            if let Some(socket_path) = daemon_socket {
+            let daemon_decision = if let Some(socket_path) = daemon_socket {
                 let transport = UdsSocketTransport::new(socket_path);
                 let mut client = UdsControlClient::new(transport);
-                attach_daemon_status(&mut report, &mut client);
-            }
+                attach_daemon_status(&mut report, &mut client, invocation.request_id);
+                if suggest_config {
+                    None
+                } else {
+                    let reply = client
+                        .send(ControlCommand::ResolveLaunchPermissions(
+                            ResolveLaunchPermissionsCommand {
+                                request_id: invocation.request_id,
+                                profile_name: loaded.capture_profile.name.clone(),
+                                host_ebpf: contract_permission_mode(
+                                    ebpf_seccomp_policy.host_ebpf,
+                                ),
+                                seccomp_notify: contract_permission_mode(
+                                    ebpf_seccomp_policy.seccomp_notify,
+                                ),
+                                seccomp_notify_available: report.seccomp_notify_available(),
+                                seccomp_notify_detail: report.seccomp_notify.detail.clone(),
+                            },
+                        ))
+                        .map_err(|error| {
+                            format!(
+                                "resolve launch permissions failed: {}: {}",
+                                error.code, error.message
+                            )
+                        })?;
+                    let ControlReply::LaunchPermissions(reply) = reply else {
+                        return Err(
+                            "resolve launch permissions returned unexpected reply".to_string()
+                        );
+                    };
+                    Some(permission_decision_from_reply(&reply))
+                }
+            } else {
+                None
+            };
             if suggest_config {
                 print!("{}", suggest_config_text(&report, operator_config.as_ref()));
                 return Ok(i32::default());
             }
+            let launch_seccomp_requirements = loaded.launch_seccomp_requirements();
+            let decision = match daemon_decision {
+                Some(decision) => decision,
+                None => {
+                    let local_preview = LaunchPlatformReport {
+                        daemon: Some(DoctorReply {
+                            available_collectors: Vec::new(),
+                            loaded_policy_plugins: Vec::new(),
+                            storage_ready: false,
+                        }),
+                        ..report.clone()
+                    };
+                    resolve_deployment_permissions(
+                        ebpf_seccomp_policy,
+                        &loaded.capture_profile,
+                        launch_seccomp_requirements,
+                        Some(&local_preview),
+                    )?
+                }
+            };
             if json {
-                print_platform_probe_json(&report);
+                print_platform_probe_json(&report, &decision);
             } else {
-                print_platform_probe(&report);
+                print_platform_probe(&report, &decision);
             }
             Ok(i32::default())
         }

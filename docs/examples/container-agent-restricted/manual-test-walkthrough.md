@@ -2,7 +2,7 @@
 
 This is a copy-paste-ready, step-by-step manual test for the degradation path described in [README.md](README.md). It assumes a host running Ubuntu-like glibc 2.39 with Docker, and an openEuler 24.03 image (glibc 2.38) for the workload container. Every step lists the command and the expected output so you can verify as you go.
 
-Test goals: verify that with the workload container **not** given `--security-opt seccomp=unconfined` and **no CAP_BPF**, AcTrail still (1) starts the host daemon under `[ebpf] enabled = "auto"`, (2) reports `seccomp_launch=unavailable` from inside the container and recommends `skip`, (3) degrades `actrailctl launch` to tls-sync-only and captures TLS plaintext + `llm.*` semantic actions on the host.
+Test goals: verify that with the workload container **not** given `--security-opt seccomp=unconfined` and **no CAP_BPF**, AcTrail still (1) starts the host daemon under `[ebpf] enabled = "auto"`, (2) reports `seccomp_notify=unavailable` from inside the container and recommends `auto`, (3) degrades `actrailctl launch` to tls-sync-only and captures TLS plaintext + `llm.*` semantic actions on the host.
 
 > 中文版：[manual-test-walkthrough.zh.md](manual-test-walkthrough.zh.md)
 
@@ -194,7 +194,7 @@ head -12 /tmp/suggested.conf          # inspect the probe summary + key fields
 install -m 0644 /tmp/suggested.conf /etc/actrail/actraild.conf
 ```
 
-When run **inside the restricted container** (Step 5), the same flag reflects the container's probes: `seccomp_launch=unavailable` causes the suggested config to set `[process_seccomp] enabled = false` and drop `proc-exec-context` from `[capture] capabilities`, so the host daemon starts without requiring seccomp. `--suggest-config` never writes a file itself — you redirect it.
+When run **inside the restricted container** (Step 5), the same flag reflects the container's probes: `seccomp_notify=unavailable` causes the suggested config to set `[process_seccomp] enabled = false` and drop `proc-exec-context` from `[capture] capabilities`, so the host daemon starts without requiring seccomp. `--suggest-config` never writes a file itself — you redirect it.
 
 </details>
 
@@ -309,17 +309,17 @@ Expected: `Finished \`release\` profile [optimized] target(s) in ...`. This take
 
 ```bash
 # [host → container]
-# 3.4 Verify the built ctl runs and has probe + seccomp-mode
+# 3.4 Verify the built ctl runs and has probe + seccomp-notify
 docker exec actrail-restricted /usr/local/bin/actrailctl --help | grep -iE "probe|launch"
 docker exec actrail-restricted /usr/local/bin/actrailctl launch --help | grep -i seccomp
-# -> --seccomp-mode <SECCOMP_MODE>  [default: auto] [possible values: auto, require, skip]
+# -> --seccomp-notify <SECCOMP_NOTIFY>  [possible values: auto, required, disabled]
 
 # 3.5 Confirm glibc compatibility (no missing libs)
 docker exec actrail-restricted ldd /usr/local/bin/actrailctl | grep -i "not found" || echo "no missing libs"
 docker exec actrail-restricted ldd /usr/local/bin/libactrail_tls_payload_probe_sync.so | grep -i "not found" || echo "so: no missing libs"
 ```
 
-Expected: `probe` and `launch` subcommands present; `--seccomp-mode` default `auto`; `ldd` reports no missing libraries.
+Expected: `probe` and `launch` subcommands present; `--seccomp-notify` default `auto`; `ldd` reports no missing libraries.
 
 ---
 
@@ -357,7 +357,7 @@ docker exec actrail-restricted test -x /usr/local/bin/opencode && echo "opencode
 
 ---
 
-## Step 5 — Run actrailctl probe (verify seccomp unavailable + recommend skip)
+## Step 5 — Run actrailctl probe (verify seccomp unavailable + recommend auto degradation)
 
 ```bash
 # [host → container]
@@ -371,14 +371,14 @@ Expected:
 unix_socket=ok connected /run/actrail/control.sock
 unix_socket=ok connected /run/actrail/tls-sync.sock
 no_new_privs=ok enabled=0
-seccomp_launch=unavailable pidfd_getfd seccomp listener: Operation not permitted (os error 1)
+seccomp_notify=unavailable pidfd_getfd seccomp listener: Operation not permitted (os error 1)
 tls_sync_runtime_library=ok found /usr/local/bin/libactrail_tls_payload_probe_sync.so
 collectors=ebpf,tls-sync,application-protocol-analyzer plugins= storage_ready=true
-launch_seccomp_mode=skip
-launch_note=seccomp launch path unavailable; use --seccomp-mode auto (default) for tls-sync-only launch
+launch_seccomp_notify=disabled
+launch_note=seccomp-notify unavailable; use --seccomp-notify auto (default) to select a non-notify deployment
 ```
 
-The key lines: `seccomp_launch=unavailable` (default seccomp blocks `pidfd_getfd`), `launch_seccomp_mode=skip`, and `launch_note` recommending `--seccomp-mode auto`.
+The key lines: `seccomp_notify=unavailable` (default seccomp blocks `pidfd_getfd`), `launch_seccomp_notify=disabled`, and `launch_note` recommending `--seccomp-notify auto`.
 
 ```bash
 # [host → container]  (probe --json runs in the container; output is redirected to a HOST file)
@@ -395,12 +395,12 @@ import json
 d = json.load(open('/tmp/probe.json'))
 socks = [x for x in d['statuses'] if x['name'] == 'unix_socket']
 assert len(socks) == 2 and all(x['available'] for x in socks), "sockets not ok"
-sec = {x['name']: x for x in d['statuses']}['seccomp_launch']
-assert not sec['available'], "seccomp_launch should be unavailable"
+sec = {x['name']: x for x in d['statuses']}['seccomp_notify']
+assert not sec['available'], "seccomp_notify should be unavailable"
 assert 'pidfd_getfd' in sec['detail'] and 'Operation not permitted' in sec['detail']
 assert {x['name']: x for x in d['statuses']}['tls_sync_runtime_library']['available']
-assert d['recommended_seccomp_mode'] == 'skip'
-assert 'tls-sync-only' in d['launch_note']
+assert d['launch_seccomp_notify'] is False
+assert 'non-notify deployment' in d['launch_note']
 print("probe assertions ALL PASSED")
 PY
 ```
@@ -414,11 +414,11 @@ docker exec actrail-restricted \
   actrailctl --config /etc/actrail/actraild.conf probe --skip-daemon
 ```
 
-Expected: same local checks, but no `collectors=...` line (daemon doctor skipped).
+Expected: the same local status checks, but no `collectors=...` line. Permission selection is only a local preview; launch still asks the daemon for the final profile.
 
 ---
 
-## Step 6 — Launch with --seccomp-mode auto (degrades to tls-sync-only)
+## Step 6 — Launch with --seccomp-notify auto (degrades to tls-sync-only)
 
 ```bash
 # [host → container]
@@ -432,9 +432,10 @@ docker exec actrail-restricted bash -lc '
 '
 ```
 
-Expected (first lines on stderr):
+Expected (permission output followed by the active trace):
 ```
-actrailctl launch degraded: pidfd_getfd seccomp listener: Operation not permitted (os error 1); continuing with tls-sync-only launch without socket/process seccomp
+deployment_permissions_degraded=true
+deployment_permission_reasons=seccomp_notify_unavailable: ...pidfd_getfd...
 trace trace-<N> entered Active
 ```
 Then the agent runs (calls the model, prints a response) and exits 0.
@@ -445,28 +446,28 @@ Controls (same container) to contrast the three modes:
 
 ```bash
 # [host → container]
-# 6.2 require — must FAIL outright (no silent degradation)
+# 6.2 required — must FAIL outright (no silent degradation)
 docker exec actrail-restricted bash -lc '
   export PATH=/usr/local/bin:$PATH
-  actrailctl --config /etc/actrail/actraild.conf launch --seccomp-mode require -- \
+  actrailctl --config /etc/actrail/actraild.conf launch --seccomp-notify required -- \
     /usr/local/bin/opencode run "hi"
 '
 # [host]
-echo "require exit=$?"
+echo "required exit=$?"
 # -> non-zero exit, last line: "pidfd_getfd seccomp listener: Operation not permitted (os error 1)"
 ```
 
 ```bash
 # [host → container]
-# 6.3 skip — must succeed (equivalent to auto in this restricted env)
+# 6.3 disabled — must succeed (same selected seccomp axis as auto here)
 docker exec actrail-restricted bash -lc '
   export PATH=/usr/local/bin:$PATH
-  actrailctl --config /etc/actrail/actraild.conf launch --seccomp-mode skip -- \
+  actrailctl --config /etc/actrail/actraild.conf launch --seccomp-notify disabled -- \
     /usr/local/bin/opencode run "说一个字: 好"
 '
 # [host]
-echo "skip exit=$?"
-# -> exit 0, stderr: "actrailctl launch degraded: seccomp launch disabled by --seccomp-mode skip"
+echo "disabled exit=$?"
+# -> exit 0, permission output: deployment_permissions_degraded=false
 ```
 
 ---
@@ -586,6 +587,6 @@ The `/etc/actrail/actraild.conf` and runtime dirs are retained for the next run.
 | `missing config key payload_stdio_capture_stdin` | Using a stale example config (e.g. old `container-agent-minimal/operator.conf`). | Use `docs/examples/container-agent-restricted/operator.conf` (it matches the current daemon). |
 | `GLIBC_2.39 not found` when running `actrailctl` in the container | Host-compiled binary depends on a newer glibc than the container has. | Build `actrailctl` + `.so` inside the container (Step 3). |
 | `tls-sync auto plan requires payload.tls.binary_path=disabled` | `[payload.tls] binary_path` is set to a path under tls-sync backend. | It must be `disabled` under tls-sync. The restricted example config already sets this; do not change it. |
-| `seccomp_launch=ok` in the container | The container was started with `--security-opt seccomp=unconfined`. | Recreate without that flag (Step 2.2). This test specifically requires the default profile. |
+| `seccomp_notify=ok` in the container | The container was started with `--security-opt seccomp=unconfined`. | Recreate without that flag (Step 2.2). This test specifically requires the default profile. |
 | No TLS payload rows in `payload_segments` | Agent not started via `actrailctl launch`; `.so` missing; socket not mounted; or the agent's TLS library is not BoringSSL/rustls. | Re-check Steps 2.4, 3.4, 6.1; confirm the agent uses a supported TLS library. |
 | `curl` to the web UI returns `502` | Shell `http_proxy`/`https_proxy` intercepting localhost. | Use `curl --noproxy '*'` or `NO_PROXY=localhost,127.0.0.1`. |

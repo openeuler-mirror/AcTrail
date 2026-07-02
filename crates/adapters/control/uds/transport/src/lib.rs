@@ -1,6 +1,7 @@
 //! Shared Unix-socket framing and socket-path support for control transport.
 
 mod plugin;
+mod permission;
 
 use std::collections::BTreeSet;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -42,6 +43,9 @@ impl ControlCodecError {
 pub fn encode_command(command: &ControlCommand) -> Vec<u8> {
     let mut fields = Vec::new();
     match command {
+        ControlCommand::ResolveLaunchPermissions(command) => {
+            permission::encode_command(&mut fields, command);
+        }
         ControlCommand::TrackAdd(command) => {
             fields.push("track_add_v3".to_string());
             fields.push(command.request_id.get().to_string());
@@ -125,6 +129,7 @@ pub fn decode_command(bytes: &[u8]) -> Result<ControlCommand, ControlCodecError>
     let fields = decode_fields(bytes)?;
     let opcode = field(&fields, 0)?.as_str();
     match opcode {
+        "resolve_launch_permissions_v1" => permission::decode_command(&fields),
         "track_add" => {
             let request_id = RequestId::new(parse_u64(field(&fields, 1)?, "request_id")?);
             let root = unknown_process_ref(parse_u32(field(&fields, 2)?, "root_pid")?);
@@ -301,6 +306,9 @@ pub fn decode_command(bytes: &[u8]) -> Result<ControlCommand, ControlCodecError>
 pub fn encode_reply(reply: &Result<ControlReply, ControlError>) -> Vec<u8> {
     let mut fields = Vec::new();
     match reply {
+        Ok(ControlReply::LaunchPermissions(reply)) => {
+            permission::encode_reply(&mut fields, reply);
+        }
         Ok(ControlReply::TrackAdded(reply)) => {
             fields.push("reply_track_added".to_string());
             fields.push(reply.trace_id.get().to_string());
@@ -359,6 +367,7 @@ pub fn encode_reply(reply: &Result<ControlReply, ControlError>) -> Vec<u8> {
 pub fn decode_reply(bytes: &[u8]) -> Result<Result<ControlReply, ControlError>, ControlCodecError> {
     let fields = decode_fields(bytes)?;
     match field(&fields, 0)?.as_str() {
+        "reply_launch_permissions_v1" => permission::decode_reply(&fields).map(Ok),
         "reply_track_added" => Ok(Ok(ControlReply::TrackAdded(TrackAddReply {
             trace_id: TraceId::new(parse_u64(field(&fields, 1)?, "trace_id")?),
             lifecycle_state: parse_lifecycle(field(&fields, 2)?)?,
@@ -630,6 +639,44 @@ mod tests {
         let decoded = decode_command(&encode_command(&command)).expect("decode command");
 
         assert_eq!(decoded, command);
+    }
+
+    #[test]
+    fn legacy_track_add_v1_and_v2_frames_remain_accepted() {
+        let v1 = vec![
+            "track_add",
+            "1",
+            "42",
+            "legacy-v1",
+            "default",
+            "false",
+            "0",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        let v2 = vec![
+            "track_add_v2",
+            "2",
+            "42",
+            "legacy-v2",
+            "default",
+            "false",
+            "0",
+            "0",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+
+        assert!(matches!(
+            decode_command(&encode_fields(&v1)).expect("decode v1"),
+            ControlCommand::TrackAdd(_)
+        ));
+        assert!(matches!(
+            decode_command(&encode_fields(&v2)).expect("decode v2"),
+            ControlCommand::TrackAdd(_)
+        ));
     }
 
     #[test]

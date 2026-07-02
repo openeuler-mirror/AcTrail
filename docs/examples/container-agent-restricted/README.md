@@ -7,8 +7,8 @@ This example tests the **degradation path** that lets AcTrail keep observing an 
 | Function point | How it is verified here |
 | --- | --- |
 | eBPF on/off switch + auto detection | Host `actraild` runs with `[ebpf] enabled = "auto"`. It probes eBPF at startup: on a host that can run eBPF it stays enabled; on a host that cannot it prints `actraild ebpf auto-degraded: ...` and continues instead of refusing to start. |
-| `actrailctl probe` self-check + recommended launch | Inside the restricted container, `probe` reports `seccomp_launch=unavailable` (default seccomp blocks `pidfd_getfd`), `recommended_seccomp_mode=skip`, and `launch_note` recommending `--seccomp-mode auto` for tls-sync-only launch — while `control_socket` and `tls_sync_socket` stay `ok`. `probe --suggest-config` prints a minimal operator config (to stdout) trimmed to the probe results: seccomp unavailable ⇒ `[process_seccomp] enabled = false` and `proc-exec-context` dropped; works even with no config file yet. |
-| `actrailctl launch` seccomp degradation | Default `--seccomp-mode auto` degrades to tls-sync-only launch (stderr prints `actrailctl launch degraded: ...; continuing with tls-sync-only launch`), the trace still enters Active, and the agent runs. `--seccomp-mode require` fails outright; `--seccomp-mode skip` succeeds. |
+| `actrailctl probe` self-check + recommended launch | Inside the restricted container, `probe` reports `seccomp_notify=unavailable` (default seccomp blocks `pidfd_getfd`), `launch_seccomp_notify=disabled`, and `launch_note` recommending `--seccomp-notify auto` for a non-notify deployment — while `control_socket` and `tls_sync_socket` stay `ok`. `probe --suggest-config` prints a minimal operator config (to stdout) trimmed to the probe results: seccomp unavailable ⇒ `[process_seccomp] enabled = false` and `proc-exec-context` dropped; works even with no config file yet. |
+| `actrailctl launch` seccomp degradation | Default `--seccomp-notify auto` degrades to tls-sync-only launch (stderr reports that seccomp-notify was disabled by the resolved deployment policy), the trace still enters Active, and the agent runs. `--seccomp-notify required` fails outright; `--seccomp-notify disabled` succeeds. |
 | Capture without eBPF/seccomp privileges | Even with the container locked down, the host side still captures TLS plaintext (`boringssl SSL_read/SSL_write` or `rustls_*`) and `llm.*` semantic actions via the tls-sync backend, plus an action graph in the web UI. |
 
 ## Topology
@@ -20,8 +20,8 @@ host actraild  ([ebpf] enabled="auto", [process_seccomp] enabled=false, tls-sync
   -> actrailviewer / actrailweb
 
 Docker workload container  (default seccomp, no --security-opt seccomp=unconfined, no /sys/kernel)
-  -> actrailctl probe  (reports seccomp_launch=unavailable, recommends skip)
-  -> actrailctl launch --seccomp-mode auto -- <agent>   (degrades to tls-sync-only)
+  -> actrailctl probe  (reports seccomp_notify=unavailable, recommends auto)
+  -> actrailctl launch --seccomp-notify auto -- <agent>   (degrades to tls-sync-only)
   -> child agent in container PID namespace
 ```
 
@@ -59,15 +59,13 @@ The reason seccomp was originally required is that the socket/process capture pa
                                           │    (libc::write, no stdio)  │
 ┌──────────────────────────────────── container (default seccomp, no CAP_BPF)─┼─────┐
 │                                          │                             │     │
-│  actrailctl launch --seccomp-mode auto -- <agent>                        │     │
+│  actrailctl launch --seccomp-notify auto -- <agent>                        │     │
 │   │                                                                      │     │
-│   │ 2. run_platform_probe_from_launch(): probe_seccomp_launch_capability │     │
+│   │ 2. run_platform_probe_from_launch(): probe_seccomp_notify_capability │     │
 │   │      → pidfd_getfd → EPERM (default seccomp blocks it)               │     │
-│   │    resolve_launch_seccomp(Auto, unavailable):                        │     │
-│   │      use_seccomp=false, degraded=true                                │     │
-│   │      eprintln "actrailctl launch degraded: ...; continuing          │     │
-│   │                  with tls-sync-only launch without socket/process    │     │
-│   │                  seccomp"                                            │     │
+│   │    daemon resolves permission policy (auto, unavailable):            │     │
+│   │      selected.seccomp_notify=false, degraded=true                    │     │
+│   │      deployment_permission_reasons=seccomp_notify_unavailable: ...   │     │
 │   │                                                                      │     │
 │   │ 3. ChildSetup::Plain (no seccomp filter installed)                   │     │
 │   │    sync_launch(): probe-point finder resolves SSL_read/SSL_write     │     │
@@ -106,9 +104,9 @@ The reason seccomp was originally required is that the socket/process capture pa
 │   │                                                                 ▲          │
 │   │                                                                 └── step 5  │
 │   │                                                                              │
-│   │  (compare: --seccomp-mode require → resolve_launch_seccomp returns Err      │
-│   │   with the pidfd_getfd EPERM; --seccomp-mode skip → same Plain path,        │
-│   │   just skips the probe and prints "disabled by --seccomp-mode skip")       │
+│   │  (compare: --seccomp-notify required → permission resolution returns Err      │
+│   │   with the pidfd_getfd EPERM; --seccomp-notify disabled → same Plain path,    │
+│   │   selected explicitly by deployment policy)                                  │
 │   │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -130,7 +128,7 @@ The capture point moves from **kernel-mode syscall interception** (seccomp user-
 | --- | --- | --- |
 | 1a eBPF auto probe | `crates/apps/daemon/src/ebpf_resolve.rs` (`auto_follows_probe_result`) | `[ebpf] enabled = "auto"` → `probe().reason_unavailable` ⇒ `config.enabled=false`, `auto_degraded=true`, returns Ok (daemon does not abort). |
 | 1b bind sockets | `crates/apps/daemon/src/services/tls_sync/service.rs` (`TlsSyncService::new`) | Binds `/run/actrail/tls-sync.sock` (non-blocking `UnixListener`). |
-| 2 probe + degrade | `crates/apps/ctl/src/launch.rs` + `launch/seccomp_mode.rs` | `run_platform_probe_from_launch` → `resolve_launch_seccomp(Auto, unavailable)` ⇒ `use_seccomp=false`, `degraded=true`, prints the degrade line. |
+| 2 probe + degrade | `crates/apps/ctl/src/launch.rs` + `launch/permission_policy.rs` | The platform probe feeds permission resolution; `auto` plus unavailable seccomp-notify selects that axis off and records a machine-readable degradation reason. |
 | 3 plain spawn + plan | `crates/apps/ctl/src/launch.rs` (`ChildSetup::Plain`, `seccomp_setup` skipped) + `launch/sync.rs` (`sync_launch`) | `tls_probe_point_finder::fast::resolve` finds `SSL_read/SSL_write`/`rustls_*` offsets; no seccomp filter installed. |
 | 4 inherited event fd | `crates/apps/ctl/src/launch/suppress.rs` (`InheritableSuppressedFd`) | ctl connects to host `tls-sync.sock`, clears `FD_CLOEXEC` so the fd survives `exec`. |
 | 5 inject + hook | `crates/apps/ctl/src/launch/sync.rs` (`sync_launch_envs`, sets `LD_PRELOAD`) + `crates/tools/tls_payload_probe_sync/src/runtime/hook/{aarch64,x86_64}.rs` | `.so` preloaded into agent; installs inline hook (`mmap` trampoline, `mprotect` target page, write `LDR x16,[literal]; BR x16` at function entry). |
@@ -140,11 +138,11 @@ The capture point moves from **kernel-mode syscall interception** (seccomp user-
 
 ### The three seccomp modes, side by side
 
-| `--seccomp-mode` | seccomp available | seccomp unavailable (this example) |
+| `--seccomp-notify` | seccomp available | seccomp unavailable (this example) |
 | --- | --- | --- |
-| `auto` (default) | installs seccomp filter, full capture | **degrades**: `use_seccomp=false`, prints `...continuing with tls-sync-only launch`, trace enters Active, plaintext still captured via tls-sync |
-| `require` | installs seccomp filter, full capture | **fails outright**: `resolve_launch_seccomp` returns Err with the `pidfd_getfd ... Operation not permitted` detail |
-| `skip` | skips seccomp (tls-sync-only by choice) | skips seccomp (tls-sync-only), prints `disabled by --seccomp-mode skip` |
+| `auto` (default) | installs seccomp filter, full capture | **degrades**: selects seccomp-notify off, reports `seccomp_notify_unavailable`, trace enters Active, plaintext still captured via tls-sync |
+| `required` | installs seccomp filter, full capture | **fails outright** with the `pidfd_getfd ... Operation not permitted` detail |
+| `disabled` | skips seccomp (tls-sync-only by choice) | skips seccomp (tls-sync-only) by explicit deployment policy |
 
 ## Prerequisites
 
@@ -251,11 +249,11 @@ Expected (human output):
 unix_socket=ok connected /run/actrail/control.sock
 unix_socket=ok connected /run/actrail/tls-sync.sock
 no_new_privs=ok enabled=0
-seccomp_launch=unavailable pidfd_getfd seccomp listener: Operation not permitted (os error 1)
+seccomp_notify=unavailable pidfd_getfd seccomp listener: Operation not permitted (os error 1)
 tls_sync_runtime_library=ok found /usr/local/bin/libactrail_tls_payload_probe_sync.so
 collectors=ebpf,tls-sync,application-protocol-analyzer plugins= storage_ready=true
-launch_seccomp_mode=skip
-launch_note=seccomp launch path unavailable; use --seccomp-mode auto (default) for tls-sync-only launch
+launch_seccomp_notify=disabled
+launch_note=seccomp-notify unavailable; use --seccomp-notify auto (default) to select a non-notify deployment
 ```
 
 JSON assertions (run on the host):
@@ -267,15 +265,15 @@ import json
 d = json.load(open('/tmp/probe.json'))
 socks = [x for x in d['statuses'] if x['name'] == 'unix_socket']
 assert len(socks) == 2 and all(x['available'] for x in socks)
-sec = {x['name']: x for x in d['statuses']}['seccomp_launch']
+sec = {x['name']: x for x in d['statuses']}['seccomp_notify']
 assert not sec['available'] and 'pidfd_getfd' in sec['detail'] and 'Operation not permitted' in sec['detail']
-assert d['recommended_seccomp_mode'] == 'skip'
-assert 'tls-sync-only' in d['launch_note']
+assert d['launch_seccomp_notify'] is False
+assert 'non-notify deployment' in d['launch_note']
 print('probe OK')
 PY
 ```
 
-### 5. Launch the agent with --seccomp-mode auto (degrades to tls-sync-only)
+### 5. Launch the agent with --seccomp-notify auto (degrades to tls-sync-only)
 
 ```bash
 docker exec actrail-restricted bash -lc '
@@ -286,18 +284,18 @@ docker exec actrail-restricted bash -lc '
 '
 ```
 
-Expected: stderr begins with `actrailctl launch degraded: pidfd_getfd seccomp listener: Operation not permitted (os error 1); continuing with tls-sync-only launch without socket/process seccomp`, followed by `trace trace-<N> entered Active`, and the agent completes and exits 0.
+Expected: permission output includes `deployment_permissions_degraded=true` and `deployment_permission_reasons=seccomp_notify_unavailable: ...pidfd_getfd...`, followed by `trace trace-<N> entered Active`; the agent completes and exits 0.
 
 Controls (same container):
 
 ```bash
-# require: must FAIL (no silent degradation)
-docker exec actrail-restricted actrailctl --config /etc/actrail/actraild.conf launch --seccomp-mode require -- /usr/local/bin/opencode run "hi"
+# required: must FAIL (no silent degradation)
+docker exec actrail-restricted actrailctl --config /etc/actrail/actraild.conf launch --seccomp-notify required -- /usr/local/bin/opencode run "hi"
 # -> non-zero exit, "pidfd_getfd seccomp listener: Operation not permitted"
 
-# skip: must succeed
-docker exec actrail-restricted actrailctl --config /etc/actrail/actraild.conf launch --seccomp-mode skip -- /usr/local/bin/opencode run "说一个字: 好"
-# -> exit 0, "actrailctl launch degraded: seccomp launch disabled by --seccomp-mode skip"
+# disabled: must succeed
+docker exec actrail-restricted actrailctl --config /etc/actrail/actraild.conf launch --seccomp-notify disabled -- /usr/local/bin/opencode run "说一个字: 好"
+# -> exit 0, deployment_permissions_degraded=false
 ```
 
 ### 6. Verify host-side capture (tls-sync still delivers plaintext + semantics)

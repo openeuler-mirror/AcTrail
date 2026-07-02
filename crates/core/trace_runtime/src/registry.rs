@@ -14,11 +14,20 @@ use crate::sensor_plan::{NegotiationFailure, SensorPlan};
 use crate::state_machine;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TraceOwnerPrincipal {
+    pub uid: u32,
+    pub container_id: Option<String>,
+    pub pid_namespace: String,
+    pub host_pid_namespace: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TraceEntry {
     pub trace: TraceRecord,
     pub profile_snapshot: config_core::trace_snapshot::CaptureProfileSnapshot,
     pub sensor_plan: SensorPlan,
     pub memberships: MembershipIndex,
+    pub owner: Option<TraceOwnerPrincipal>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -26,6 +35,7 @@ pub enum RegistryError {
     TraceNotFound(TraceId),
     NegotiationFailed(Vec<NegotiationFailure>),
     RootMembershipMissing(TraceId),
+    OwnerAlreadyBound(TraceId),
     ParentMembershipMissing(ProcessIdentity),
     PropagationDisabled(ProcessIdentity),
     InvalidStateTransition(state_machine::StateTransitionError),
@@ -87,8 +97,25 @@ impl TraceRuntime {
                 profile_snapshot: request.profile_snapshot,
                 sensor_plan,
                 memberships,
+                owner: None,
             },
         );
+        Ok(())
+    }
+
+    pub fn bind_trace_owner(
+        &mut self,
+        trace_id: TraceId,
+        owner: TraceOwnerPrincipal,
+    ) -> Result<(), RegistryError> {
+        let entry = self
+            .traces
+            .get_mut(&trace_id)
+            .ok_or(RegistryError::TraceNotFound(trace_id))?;
+        if entry.owner.is_some() {
+            return Err(RegistryError::OwnerAlreadyBound(trace_id));
+        }
+        entry.owner = Some(owner);
         Ok(())
     }
 
@@ -354,6 +381,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::time::SystemTime;
 
+    use config_core::capture_profile::CaptureProfile;
     use collector_capability::CollectorDescriptor;
     use config_core::trace_snapshot::CaptureProfileSnapshot;
     use model_core::capability::{Capability, CapabilityRequest, RequestMode};
@@ -381,16 +409,14 @@ mod tests {
     }
 
     fn profile_snapshot() -> CaptureProfileSnapshot {
-        CaptureProfileSnapshot {
-            profile_name: ProfileName::new("default"),
-            captured_at: SystemTime::UNIX_EPOCH,
-            capability_requests: vec![CapabilityRequest::new(
+        let profile = CaptureProfile::new(
+            ProfileName::new("default"),
+            vec![CapabilityRequest::new(
                 Capability::ProcLifecycle,
                 RequestMode::Required,
             )],
-            classify_providers: false,
-            enable_payload_collectors: false,
-        }
+        );
+        CaptureProfileSnapshot::from_profile(&profile, SystemTime::UNIX_EPOCH)
     }
 
     #[test]
