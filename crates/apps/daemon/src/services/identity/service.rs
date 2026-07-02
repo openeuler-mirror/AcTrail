@@ -13,7 +13,7 @@ use model_core::process::{
 };
 use payload_event::RawPayloadSegment;
 use process_identity_contract::lookup::{IdentityLookupError, ProcessIdentityReader};
-use trace_runtime::registry::TraceRuntime;
+use trace_runtime::registry::{RegistryError, TraceRuntime};
 
 pub(crate) const PROCESS_METADATA_PARENT_PID: &str = "ppid";
 pub(crate) const PROCESS_METADATA_SECCOMP_OBSERVED: &str = "seccomp_observed";
@@ -183,7 +183,6 @@ fn fork_effect(
         raw_event.envelope.process.clone(),
         raw_event.envelope.observed_at,
     )
-    .map(Some)
 }
 
 fn exec_effect(
@@ -216,8 +215,7 @@ fn exec_effect(
                 &parent_match.process,
                 identity,
                 raw_event.envelope.observed_at,
-            )
-            .map(Some);
+            );
         }
     }
     if let Some(parent_pid) = metadata
@@ -232,8 +230,7 @@ fn exec_effect(
                 &parent_match.process,
                 identity,
                 raw_event.envelope.observed_at,
-            )
-            .map(Some);
+            );
         }
     }
     Ok(trace_runtime
@@ -271,14 +268,21 @@ fn insert_observed_child_match(
     parent: &ProcessIdentity,
     child: ProcessIdentity,
     observed_at: SystemTime,
-) -> Result<IngestMatch, ControlError> {
-    trace_runtime
-        .insert_observed_child(trace_id, parent, child.clone(), observed_at)
-        .map_err(|error| ControlError::new("insert_observed_child", format!("{error:?}")))?;
-    Ok(IngestMatch {
+) -> Result<Option<IngestMatch>, ControlError> {
+    match trace_runtime.insert_observed_child(trace_id, parent, child.clone(), observed_at) {
+        Ok(()) => {}
+        Err(RegistryError::PropagationDisabled(_)) => return Ok(None),
+        Err(error) => {
+            return Err(ControlError::new(
+                "insert_observed_child",
+                format!("{error:?}"),
+            ));
+        }
+    }
+    Ok(Some(IngestMatch {
         trace_id,
         process: child,
-    })
+    }))
 }
 
 fn exit_code(metadata: &BTreeMap<String, String>) -> Result<Option<i32>, ControlError> {

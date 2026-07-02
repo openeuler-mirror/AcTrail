@@ -4,21 +4,21 @@ use model_core::event::DomainEvent;
 use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 
-use super::common::{event_result, event_source_fd, event_target_fd};
+use super::{event_result, event_source_fd, event_target_fd};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum FileFdOwner {
+pub(in crate::live::file) enum FileFdOwner {
     FsEnumerate,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct FileFdState {
-    pub(super) owner: FileFdOwner,
-    pub(super) path: String,
+pub(in crate::live::file) struct FileFdState {
+    pub(in crate::live::file) owner: FileFdOwner,
+    pub(in crate::live::file) path: String,
 }
 
 #[derive(Default)]
-pub(super) struct FileFdRegistry {
+pub(in crate::live::file) struct FileFdRegistry {
     states: BTreeMap<FileFdKey, FileFdState>,
 }
 
@@ -30,7 +30,7 @@ struct FileFdKey {
 }
 
 impl FileFdRegistry {
-    pub(super) fn insert(
+    pub(in crate::live::file) fn insert(
         &mut self,
         event: &DomainEvent,
         fd: u32,
@@ -41,7 +41,11 @@ impl FileFdRegistry {
             .insert(FileFdKey::new(event, fd), FileFdState { owner, path });
     }
 
-    pub(super) fn close_state(&mut self, event: &DomainEvent, fd: u32) -> Option<FileFdState> {
+    pub(in crate::live::file) fn close_state(
+        &mut self,
+        event: &DomainEvent,
+        fd: u32,
+    ) -> Option<FileFdState> {
         let key = FileFdKey::new(event, fd);
         if event_result(event).is_some_and(|result| result < 0) {
             return self.states.get(&key).cloned();
@@ -49,7 +53,7 @@ impl FileFdRegistry {
         self.states.remove(&key)
     }
 
-    pub(super) fn duplicate(&mut self, event: &DomainEvent) {
+    pub(in crate::live::file) fn duplicate(&mut self, event: &DomainEvent) {
         if event_result(event).is_some_and(|result| result < 0) {
             return;
         }
@@ -70,7 +74,7 @@ impl FileFdRegistry {
         self.states.insert(target_key, state);
     }
 
-    pub(super) fn forget_trace(&mut self, trace_id: TraceId) {
+    pub(in crate::live::file) fn forget_trace(&mut self, trace_id: TraceId) {
         self.states.retain(|key, _| key.trace_id != trace_id);
     }
 }

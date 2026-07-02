@@ -315,10 +315,7 @@ impl TraceRuntime {
             .traces
             .get_mut(&trace_id)
             .ok_or(RegistryError::TraceNotFound(trace_id))?;
-        if matches!(
-            entry.trace.lifecycle_state,
-            TraceLifecycleState::Completed | TraceLifecycleState::Failed
-        ) {
+        if entry.trace.lifecycle_state.is_terminal() {
             return Ok(());
         }
 
@@ -338,8 +335,13 @@ impl TraceRuntime {
                         .map_err(RegistryError::InvalidStateTransition)?;
                 }
             } else if entry.memberships.capturable_members() == 0 {
-                state_machine::complete_trace(&mut entry.trace, observed_at)
-                    .map_err(RegistryError::InvalidStateTransition)?;
+                if matches!(root.state, MembershipState::Exited) {
+                    state_machine::exit_trace(&mut entry.trace, observed_at)
+                        .map_err(RegistryError::InvalidStateTransition)?;
+                } else {
+                    state_machine::complete_trace(&mut entry.trace, observed_at)
+                        .map_err(RegistryError::InvalidStateTransition)?;
+                }
             }
         }
 
@@ -432,7 +434,7 @@ mod tests {
     }
 
     #[test]
-    fn root_exit_completes_without_descendants() {
+    fn root_exit_marks_trace_exited_without_descendants() {
         let mut runtime = runtime();
         let trace_id = runtime.reserve_trace_id();
         let root = ProcessIdentity::new(100, 1, 1);
@@ -465,7 +467,7 @@ mod tests {
             .unwrap();
 
         let entry = runtime.get_trace(trace_id).unwrap();
-        assert_eq!(entry.trace.lifecycle_state, TraceLifecycleState::Completed);
+        assert_eq!(entry.trace.lifecycle_state, TraceLifecycleState::Exited);
     }
 
     #[test]

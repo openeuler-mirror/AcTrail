@@ -10,8 +10,8 @@ use semantic_action::{
     SemanticActionStatus,
 };
 
+use super::super::shared::{event_result, payload_file_path};
 use super::bulk_read::{BulkReadKey, BulkReadState, bulk_read_operation_candidate};
-use super::common::{event_result, payload_file_path};
 use super::tty::{TtyKey, TtyState};
 use crate::live::actions::status_from_result;
 

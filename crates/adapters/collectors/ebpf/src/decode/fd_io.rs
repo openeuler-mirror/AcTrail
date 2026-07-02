@@ -15,6 +15,8 @@ use crate::decode::{DecodeError, NET_EVENT_RECV, NET_EVENT_SEND};
 use crate::loader::KernelObservationEvent;
 use crate::maps::BindingStateMap;
 
+const NET_SYSCALL_FD_IO_WRITEV: u32 = 3;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FdTargetKind {
     Pipe,
@@ -29,10 +31,11 @@ struct FdObservation {
     metadata: BTreeMap<String, String>,
 }
 
-pub(super) fn operation(kind: u32) -> (&'static str, &'static str) {
-    match kind {
-        NET_EVENT_SEND => ("write", "outbound"),
-        NET_EVENT_RECV => ("read", "inbound"),
+pub(super) fn operation(kind: u32, syscall_family: u32) -> (&'static str, &'static str) {
+    match (kind, syscall_family) {
+        (NET_EVENT_SEND, NET_SYSCALL_FD_IO_WRITEV) => ("writev", "outbound"),
+        (NET_EVENT_SEND, _) => ("write", "outbound"),
+        (NET_EVENT_RECV, _) => ("read", "inbound"),
         _ => ("unknown", "unknown"),
     }
 }

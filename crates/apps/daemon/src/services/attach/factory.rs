@@ -138,7 +138,11 @@ impl StorageAttachService {
         Ok(Self {
             profiles,
             storage,
-            collector: EbpfCollector::new(ebpf_config, payload_config),
+            collector: EbpfCollector::new(
+                ebpf_config,
+                payload_config,
+                file_observation.bulk_read.fast_path.clone(),
+            ),
             identity_reader: ProcfsIdentityReader,
             snapshotter: ProcfsTreeSnapshotter,
             next_event_id: 0,

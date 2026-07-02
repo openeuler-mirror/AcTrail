@@ -50,6 +50,8 @@ const NET_TRANSPORT_PROGRAMS: &[&str] = &[
 ];
 
 const FS_ACCESS_BASIC_FD_PROGRAMS: &[&str] = &[
+    "handle_sys_enter_writev",
+    "handle_sys_exit_writev",
     "handle_sys_enter_write",
     "handle_sys_exit_write",
     "handle_sys_enter_read",

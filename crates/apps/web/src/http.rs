@@ -205,6 +205,10 @@ fn route(request: &Request, storage: &StorageConfig) -> Result<Response, String>
         "/assets/app.css" => Ok(Response::css(render::css())),
         "/assets/app.js" => Ok(Response::javascript(render::javascript())),
         "/api/traces" => view::traces_json(storage).map(Response::json),
+        "/api/stats/token-usage" => match parse_token_usage_stats_query(query) {
+            Ok(query) => view::token_usage_stats_json(storage, query).map(Response::json),
+            Err(error) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
+        },
         "/health" => Ok(Response::text(STATUS_OK, "ok")),
         _ => route_trace_api(path, query, storage),
     }
@@ -353,9 +357,24 @@ fn parse_llm_request_content_query(query: &str) -> Result<usize, String> {
     Ok(max_bytes)
 }
 
+fn parse_token_usage_stats_query(query: &str) -> Result<view::TokenUsageStatsQuery, String> {
+    let from_ms = required_query_u64(query, "from_ms")?;
+    let to_ms = required_query_u64(query, "to_ms")?;
+    if from_ms >= to_ms {
+        return Err("invalid token stats range: from_ms must be less than to_ms".to_string());
+    }
+    Ok(view::TokenUsageStatsQuery { from_ms, to_ms })
+}
+
 fn required_query_usize(query: &str, key: &'static str) -> Result<usize, String> {
     let raw = required_query_param(query, key)?;
     raw.parse::<usize>()
+        .map_err(|error| format!("invalid query parameter {key}: {error}"))
+}
+
+fn required_query_u64(query: &str, key: &'static str) -> Result<u64, String> {
+    let raw = required_query_param(query, key)?;
+    raw.parse::<u64>()
         .map_err(|error| format!("invalid query parameter {key}: {error}"))
 }
 

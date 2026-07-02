@@ -211,7 +211,7 @@ sudo target/release/actrailviewer --config /etc/actrail/actraild.conf export-ote
 
 HTTP trace 使用 `<HTTP_TRACE_ID>` 检查：
 
-- `summary` 显示 trace lifecycle 为 completed，health 为 clean。
+- `summary` 显示 trace lifecycle 为 exited，health 为 clean。
 - `processes` 显示 `actrailctl launch` 拉起的 uv/Python/AgentScope workload 进程。
 - `actrailctl launch` 命令输出包含 `agentscope_event=model_call_start`、`agentscope_event=tool_call_start`、`agentscope_event=tool_result_text_delta`、`actrail-agent-tool-ok` 和 `agentscope_final_text=ACTRAIL_AGENTSCOPE_HTTP_OK`。
 - `payloads` 中存在 complete/success 的 outbound 与 inbound `Syscall socket-syscall` payload。
@@ -221,7 +221,7 @@ HTTP trace 使用 `<HTTP_TRACE_ID>` 检查：
 
 HTTPS trace 使用 `<HTTPS_TRACE_ID>` 检查：
 
-- `summary` 显示 trace lifecycle 为 completed，health 为 clean。
+- `summary` 显示 trace lifecycle 为 exited，health 为 clean。
 - `processes` 显示 `actrailctl launch` 拉起的 uv/Python/AgentScope workload 进程。
 - `actrailctl launch` 命令输出包含 `agentscope_event=tool_call_start`、`agentscope_event=tool_result_text_delta`、`actrail-agent-tool-ok` 和 `agentscope_final_text=ACTRAIL_AGENTSCOPE_HTTPS_OK`。
 - `payloads` 中存在 complete/success 的 outbound 与 inbound `TlsUserSpace` payload。

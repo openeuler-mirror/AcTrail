@@ -188,7 +188,7 @@ fn known_event_size(kind: u32, size: usize) -> bool {
         2 => size == EXEC_EVENT_SIZE,
         201 | 202 | 204 => size == TLS_FIXED_EVENT_SIZE,
         203 => size == TLS_DIRECT_CAPTURE_EVENT_SIZE,
-        300..=307 => {
+        300..=308 => {
             matches!(
                 size,
                 FILE_EVENT_HEADER_SIZE | FILE_EVENT_PRIMARY_PATH_SIZE | FILE_EVENT_SIZE
@@ -205,7 +205,7 @@ fn known_event_size(kind: u32, size: usize) -> bool {
 fn known_event_kind(kind: u32) -> bool {
     matches!(
         kind,
-        1..=4 | 100..=105 | 201..=204 | 300..=307 | 400 | 500 | 501
+        1..=4 | 100..=105 | 201..=204 | 300..=308 | 400 | 500 | 501
     )
 }
 

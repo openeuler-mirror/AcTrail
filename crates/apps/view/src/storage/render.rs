@@ -27,10 +27,10 @@ pub(super) fn render_summary(snapshot: &SnapshotView) -> String {
         .filter(|event| is_network_event(event))
         .count();
     format!(
-        "Trace {} title={} state={:?} health={:?} profile={}\nroot_pid={} processes={} events={} network_events={} diagnostics={}",
+        "Trace {} title={} state={} health={:?} profile={}\nroot_pid={} processes={} events={} network_events={} diagnostics={}",
         snapshot.trace.trace_id,
         snapshot.trace.display_name,
-        snapshot.trace.lifecycle_state,
+        snapshot.trace.lifecycle_state.as_display_str(),
         snapshot.trace.health,
         snapshot.trace.profile_name,
         snapshot.trace.root_process_identity.pid,
@@ -48,7 +48,7 @@ pub(super) fn render_traces(traces: Vec<TraceRecord>, row_limit: Option<RowLimit
             trace.trace_id.to_string(),
             trace.display_name.to_string(),
             trace.root_process_identity.pid.to_string(),
-            format!("{:?}", trace.lifecycle_state),
+            trace.lifecycle_state.as_display_str().to_string(),
             format!("{:?}", trace.health),
             format_time(trace.timings.created_at),
         ]);

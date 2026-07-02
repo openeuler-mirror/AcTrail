@@ -1,5 +1,6 @@
 //! Runtime registry for synchronous control-decision plugins.
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -110,15 +111,19 @@ impl ControlPluginRuntime {
                 format!("plugin instance {instance_id_or_index} is not active"),
             ));
         }
-        match slot.decider.decide(request, budget) {
-            Ok(response) => {
+        let decision = catch_unwind(AssertUnwindSafe(|| slot.decider.decide(request, budget)))
+            .map_err(|_| {
+                PluginRuntimeError::new("plugin_panic", "control plugin panicked during decision")
+            });
+        match decision {
+            Ok(Ok(response)) => {
                 slot.observed_records.fetch_add(1, Ordering::Relaxed);
                 if let Ok(mut last_error) = slot.last_error.lock() {
                     *last_error = None;
                 }
                 Ok(response)
             }
-            Err(error) => {
+            Ok(Err(error)) | Err(error) => {
                 slot.dropped_records.fetch_add(1, Ordering::Relaxed);
                 if let Ok(mut last_error) = slot.last_error.lock() {
                     *last_error = Some(format!("{}: {}", error.code, error.message));

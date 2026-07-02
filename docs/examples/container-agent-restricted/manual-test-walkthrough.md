@@ -475,17 +475,17 @@ echo "skip exit=$?"
 
 ```bash
 # [host]
-# 7.1 List traces; pick the newest Completed one (from 6.1, the auto run)
+# 7.1 List traces; pick the newest Exited one (from 6.1, the auto run)
 ./target/release/actrailctl --config /etc/actrail/actraild.conf list-traces
 ```
 
-Expected: a list ending with the trace you just launched, e.g. `trace-4 pid-<PID> pid=<PID> Completed/Clean`.
+Expected: a list ending with the trace you just launched, e.g. `trace-4 pid-<PID> pid=<PID> Exited/Clean`.
 
 ```bash
 # [host]
 # 7.2 Set TRACE_ID to the trace from 6.1 (the auto-degraded, full-question run).
 #     These variables are used by 7.3, 7.4 and Step 8 — keep them in the same shell.
-TRACE_ID=trace-4        # <-- replace with your newest Completed trace id
+TRACE_ID=trace-4        # <-- replace with your newest Exited trace id
 TRACE_NUM=${TRACE_ID#trace-}
 echo "TRACE_ID=$TRACE_ID TRACE_NUM=$TRACE_NUM"
 ```
@@ -496,7 +496,7 @@ echo "TRACE_ID=$TRACE_ID TRACE_NUM=$TRACE_NUM"
 ./target/release/actrailviewer --config /etc/actrail/actraild.conf summary --trace-id "$TRACE_ID"
 ```
 
-Expected: `state=Completed health=Clean`, non-zero `processes`, `events`, `network_events`.
+Expected: `state=Exited health=Clean`, non-zero `processes`, `events`, `network_events`.
 
 ```bash
 # [host]

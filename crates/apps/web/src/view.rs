@@ -14,6 +14,8 @@ mod events;
 mod payloads;
 #[path = "view/projection_cache.rs"]
 mod projection_cache;
+#[path = "view/stats.rs"]
+mod stats;
 #[path = "view/topology.rs"]
 mod topology;
 #[path = "view/traces.rs"]
@@ -29,6 +31,8 @@ use storage_factory::{StorageConfig, open_storage_backend};
 
 use crate::json;
 
+pub(crate) use stats::TokenUsageStatsQuery;
+
 pub fn traces_json(storage_config: &StorageConfig) -> Result<String, String> {
     let storage = open_storage(storage_config)?;
     let traces = storage
@@ -39,6 +43,14 @@ pub fn traces_json(storage_config: &StorageConfig) -> Result<String, String> {
         .map(traces::trace_record_json)
         .collect::<Vec<_>>();
     Ok(format!("{{\"traces\":[{}]}}", rows.join(",")))
+}
+
+pub fn token_usage_stats_json(
+    storage_config: &StorageConfig,
+    query: stats::TokenUsageStatsQuery,
+) -> Result<String, String> {
+    let mut storage = open_storage(storage_config)?;
+    stats::token_usage_stats_json(storage.as_mut(), query)
 }
 
 pub fn trace_json(storage_config: &StorageConfig, trace_id: u64) -> Result<String, String> {

@@ -12,24 +12,11 @@ use model_core::trace::{TraceHealth, TraceLifecycleState};
 use rusqlite::Error as SqlError;
 
 pub fn encode_trace_lifecycle(value: TraceLifecycleState) -> &'static str {
-    match value {
-        TraceLifecycleState::Starting => "starting",
-        TraceLifecycleState::Active => "active",
-        TraceLifecycleState::Draining => "draining",
-        TraceLifecycleState::Completed => "completed",
-        TraceLifecycleState::Failed => "failed",
-    }
+    value.as_storage_str()
 }
 
 pub fn decode_trace_lifecycle(raw: &str) -> Result<TraceLifecycleState, SqlError> {
-    match raw {
-        "starting" => Ok(TraceLifecycleState::Starting),
-        "active" => Ok(TraceLifecycleState::Active),
-        "draining" => Ok(TraceLifecycleState::Draining),
-        "completed" => Ok(TraceLifecycleState::Completed),
-        "failed" => Ok(TraceLifecycleState::Failed),
-        _ => Err(SqlError::InvalidQuery),
-    }
+    TraceLifecycleState::from_storage_str(raw).ok_or(SqlError::InvalidQuery)
 }
 
 pub fn encode_trace_health(value: TraceHealth) -> &'static str {

@@ -47,9 +47,9 @@ pub use export_factory::ExportConfig as RuntimeExportConfig;
 pub use file_observation::{
     DEFAULT_FILE_BULK_READ_MAX_PATHS_PER_SET, DEFAULT_FILE_BULK_READ_MIN_UNIQUE_PATHS,
     DEFAULT_FILE_BULK_READ_PENDING_EVENT_MAX, DEFAULT_FS_ENUMERATE_MAX_PATHS_PER_SET,
-    DEFAULT_FS_ENUMERATE_MIN_UNIQUE_PATHS, FileBulkReadMode, FileBulkReadObservationConfig,
-    FileMetadataRetention, FileObservationConfig, FileRawEventRetention, FileTtyObservationConfig,
-    FsEnumerateObservationConfig,
+    DEFAULT_FS_ENUMERATE_MIN_UNIQUE_PATHS, FileBulkReadFastPathConfig, FileBulkReadMode,
+    FileBulkReadObservationConfig, FileMetadataRetention, FileObservationConfig,
+    FileRawEventRetention, FileTtyObservationConfig, FsEnumerateObservationConfig,
 };
 pub use logging::{
     DEFAULT_WORKLOAD_DIAGNOSTICS_ENABLED, DEFAULT_WORKLOAD_DIAGNOSTICS_INTERVAL_MS,

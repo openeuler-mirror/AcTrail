@@ -78,11 +78,11 @@ def run_extended_observation(env, result: CaseResult, workload: dict[str, str]) 
             raise RuntimeError(f"extended workload failed\nstdout={stdout}\nstderr={stderr}")
         summary, events, network, payloads = wait_extended_views(env, config, trace_id, workload, target_values)
         result.stdout_tail = env.output_tail("\n".join((summary, events, network, payloads)))
-        completion_evidence = f"trace-{trace_id}; {line_evidence(summary, 'state=Completed')}"
+        completion_evidence = f"trace-{trace_id}; {line_evidence(summary, 'state=Exited')}"
         add_expected_found_check(
             result,
             f"{name} manual trace completion",
-            "trace state Completed",
+            "trace state Exited",
             completion_evidence,
             "viewer output contains documented process/file/network/resource/stdio evidence",
             status=required_evidence_status(completion_evidence),
@@ -228,7 +228,7 @@ def wait_extended_views(
             "process_tree",
         )
         if (
-            "Completed" in summary
+            ("Completed" in summary or "Exited" in summary)
             and all(fragment in events for fragment in event_fragments)
             and all(fragment in network for fragment in ("connect", "accept", "send", "recv"))
             and "Stdio" in payloads

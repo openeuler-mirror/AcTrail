@@ -304,7 +304,7 @@ pub fn encode_reply(reply: &Result<ControlReply, ControlError>) -> Vec<u8> {
         Ok(ControlReply::TrackAdded(reply)) => {
             fields.push("reply_track_added".to_string());
             fields.push(reply.trace_id.get().to_string());
-            fields.push(format!("{:?}", reply.lifecycle_state));
+            fields.push(reply.lifecycle_state.as_display_str().to_string());
         }
         Ok(ControlReply::SeccompListenerRegistered) => {
             fields.push("reply_seccomp_listener_registered".to_string());
@@ -317,7 +317,7 @@ pub fn encode_reply(reply: &Result<ControlReply, ControlError>) -> Vec<u8> {
                 fields.push(item.trace_id.get().to_string());
                 fields.push(item.display_name.to_string());
                 fields.push(item.root_pid.to_string());
-                fields.push(format!("{:?}", item.lifecycle_state));
+                fields.push(item.lifecycle_state.as_display_str().to_string());
                 fields.push(format!("{:?}", item.health));
                 fields.push(system_time_to_secs(item.created_at).to_string());
                 fields.push(item.tags.len().to_string());
@@ -584,14 +584,8 @@ fn parse_bool(raw: &str, field_name: &str) -> Result<bool, ControlCodecError> {
 }
 
 fn parse_lifecycle(raw: &str) -> Result<TraceLifecycleState, ControlCodecError> {
-    match raw {
-        "Starting" => Ok(TraceLifecycleState::Starting),
-        "Active" => Ok(TraceLifecycleState::Active),
-        "Draining" => Ok(TraceLifecycleState::Draining),
-        "Completed" => Ok(TraceLifecycleState::Completed),
-        "Failed" => Ok(TraceLifecycleState::Failed),
-        _ => Err(ControlCodecError::new("decode", "invalid lifecycle state")),
-    }
+    TraceLifecycleState::from_display_str(raw)
+        .ok_or_else(|| ControlCodecError::new("decode", "invalid lifecycle state"))
 }
 
 fn parse_health(raw: &str) -> Result<TraceHealth, ControlCodecError> {

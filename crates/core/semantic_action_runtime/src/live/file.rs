@@ -1,20 +1,8 @@
 //! File access projection from file syscall events.
 
-#[path = "file/access.rs"]
-mod access;
-#[path = "file/bulk_read.rs"]
-mod bulk_read;
-#[path = "file/common.rs"]
-mod common;
-#[path = "file/enumerate.rs"]
-mod enumerate;
-#[path = "file/fd.rs"]
-mod fd;
-#[path = "file/io.rs"]
-mod io;
-#[path = "file/summary.rs"]
-mod summary;
-#[path = "file/tty.rs"]
-mod tty;
+#[path = "file/projection.rs"]
+mod projection;
+#[path = "file/shared.rs"]
+mod shared;
 
-pub(super) use access::FileAccessProjector;
+pub(super) use projection::FileAccessProjector;

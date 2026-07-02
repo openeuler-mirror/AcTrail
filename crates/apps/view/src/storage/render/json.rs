@@ -49,12 +49,13 @@ fn trace_json(trace: &TraceRecord) -> Value {
         "name": trace.display_name.to_string(),
         "profile": trace.profile_name.to_string(),
         "root_process": process_json(&trace.root_process_identity),
-        "state": format!("{:?}", trace.lifecycle_state),
+        "state": trace.lifecycle_state.as_display_str(),
         "health": format!("{:?}", trace.health),
         "tags": trace.tags.iter().collect::<Vec<_>>(),
         "created_at_unix_nanos": unix_nanos(trace.timings.created_at),
         "started_at_unix_nanos": trace.timings.started_at.and_then(unix_nanos),
         "completed_at_unix_nanos": trace.timings.completed_at.and_then(unix_nanos),
+        "exited_at_unix_nanos": trace.timings.exited_at.and_then(unix_nanos),
         "failed_at_unix_nanos": trace.timings.failed_at.and_then(unix_nanos),
     })
 }

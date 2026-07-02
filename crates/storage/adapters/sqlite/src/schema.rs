@@ -2,7 +2,8 @@
 
 use rusqlite::Connection;
 
-const SQLITE_SCHEMA_VERSION_CURRENT: i32 = 5;
+const SQLITE_SCHEMA_VERSION_CURRENT: i32 = 6;
+const SQLITE_SCHEMA_VERSION_BEFORE_EXITED_AT: i32 = 5;
 
 const CREATE_TABLES_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS traces (
@@ -21,6 +22,7 @@ CREATE TABLE IF NOT EXISTS traces (
     created_at INTEGER NOT NULL,
     started_at INTEGER,
     completed_at INTEGER,
+    exited_at INTEGER,
     failed_at INTEGER
 );
 
@@ -301,11 +303,22 @@ CREATE INDEX IF NOT EXISTS idx_file_path_set_action_refs_path_set ON file_path_s
 "#;
 
 pub fn initialize(connection: &Connection) -> Result<(), rusqlite::Error> {
-    validate_writable_schema_state(connection)?;
+    let version = user_version(connection)?;
+    validate_writable_schema_state(connection, version)?;
+    migrate_writable_schema(connection, version)?;
     connection.execute_batch(CREATE_TABLES_SQL)?;
     validate_current_schema(connection)?;
     connection.pragma_update(None, "user_version", SQLITE_SCHEMA_VERSION_CURRENT)?;
     migrate_query_indexes(connection)
+}
+
+fn migrate_writable_schema(connection: &Connection, version: i32) -> Result<(), rusqlite::Error> {
+    if version == SQLITE_SCHEMA_VERSION_BEFORE_EXITED_AT
+        && !column_exists(connection, "traces", "exited_at")?
+    {
+        connection.execute_batch("ALTER TABLE traces ADD COLUMN exited_at INTEGER;")?;
+    }
+    Ok(())
 }
 
 fn migrate_query_indexes(connection: &Connection) -> Result<(), rusqlite::Error> {
@@ -329,9 +342,14 @@ pub fn validate_read_schema(connection: &Connection) -> Result<(), rusqlite::Err
     Ok(())
 }
 
-fn validate_writable_schema_state(connection: &Connection) -> Result<(), rusqlite::Error> {
-    let version = user_version(connection)?;
+fn validate_writable_schema_state(
+    connection: &Connection,
+    version: i32,
+) -> Result<(), rusqlite::Error> {
     if version == SQLITE_SCHEMA_VERSION_CURRENT {
+        return Ok(());
+    }
+    if version == SQLITE_SCHEMA_VERSION_BEFORE_EXITED_AT {
         return Ok(());
     }
     if version == 0 && user_table_count(connection)? == 0 {
@@ -341,6 +359,7 @@ fn validate_writable_schema_state(connection: &Connection) -> Result<(), rusqlit
 }
 
 fn validate_current_schema(connection: &Connection) -> Result<(), rusqlite::Error> {
+    require_column(connection, "traces", "exited_at")?;
     require_column(connection, "file_path_sets", "path_set_hash")?;
     require_column(connection, "file_path_set_action_refs", "action_id")?;
     require_column(connection, "llm_request_manifests", "manifest_id")?;
@@ -366,12 +385,23 @@ fn require_column(
     table: &str,
     column: &str,
 ) -> Result<(), rusqlite::Error> {
+    if column_exists(connection, table, column)? {
+        return Ok(());
+    }
+    Err(rusqlite::Error::InvalidQuery)
+}
+
+fn column_exists(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+) -> Result<bool, rusqlite::Error> {
     let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
     let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
     for row in rows {
         if row? == column {
-            return Ok(());
+            return Ok(true);
         }
     }
-    Err(rusqlite::Error::InvalidQuery)
+    Ok(false)
 }

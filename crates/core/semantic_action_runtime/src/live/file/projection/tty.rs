@@ -9,7 +9,7 @@ use semantic_action::{
     attr_keys as attrs,
 };
 
-use super::common::{event_result, event_size};
+use super::super::shared::{event_result, event_size};
 use crate::live::actions::event_action_id;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]

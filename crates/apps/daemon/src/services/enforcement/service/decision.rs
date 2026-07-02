@@ -9,7 +9,6 @@ use ebpf_collector::procfs::ProcfsIdentityReader;
 use model_core::capability::Capability;
 use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
-use model_core::trace::TraceLifecycleState;
 use plugin_system::{
     CONTROL_CURRENT_CONTEXT_TOKEN, ControlActorProcessIdentity, ControlDecisionBudget,
     ControlDecisionRequest, ControlSubject, FILE_POLICY_CURRENT_CONTEXT_TOKEN,
@@ -113,12 +112,9 @@ pub(super) fn prune_reusable_decisions(
     reusable_decisions: &mut BTreeMap<ReusableDecisionKey, CachedDecision>,
 ) {
     reusable_decisions.retain(|key, _| {
-        trace_runtime.get_trace(key.trace_id).is_some_and(|entry| {
-            !matches!(
-                entry.trace.lifecycle_state,
-                TraceLifecycleState::Completed | TraceLifecycleState::Failed
-            )
-        })
+        trace_runtime
+            .get_trace(key.trace_id)
+            .is_some_and(|entry| !entry.trace.lifecycle_state.is_terminal())
     });
 }
 
