@@ -2844,11 +2844,14 @@ name = "web"
 version = "0.6.3"
 dependencies = [
  "config_core",
+ "control_contract",
  "flate2",
  "model_core",
+ "plugin_system",
  "semantic_action",
  "storage_core",
  "storage_factory",
+ "uds_control_client",
 ]
 
 [[package]]

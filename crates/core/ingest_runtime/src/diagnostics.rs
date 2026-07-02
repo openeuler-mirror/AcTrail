@@ -1,5 +1,8 @@
 //! Ingest-time diagnostic shaping and escalation boundaries.
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use collector_event::{RawCollectorEvent, RawObservationPayload};
 use model_core::diagnostics::{DiagnosticKind, DiagnosticRecord, DiagnosticSeverity};
 use model_core::ids::{DiagnosticId, TraceId};
 use model_core::policy::PolicyVerdict;
@@ -8,9 +11,9 @@ use policy_evaluate_contract::decision::PolicyDecision;
 
 pub fn identity_mismatch_diagnostic(
     diagnostic_id: DiagnosticId,
-    process: ProcessIdentity,
+    raw_event: &RawCollectorEvent,
 ) -> DiagnosticRecord {
-    DiagnosticRecord::new(
+    let mut diagnostic = DiagnosticRecord::new(
         diagnostic_id,
         None,
         DiagnosticKind::IdentityUnverified,
@@ -18,7 +21,14 @@ pub fn identity_mismatch_diagnostic(
         std::time::SystemTime::now(),
         "raw event could not be matched to an active trace",
     )
-    .with_process(process)
+    .with_process(raw_event.envelope.process.clone())
+    .with_metadata("raw.collector", raw_event.envelope.collector.as_str())
+    .with_metadata(
+        "raw.observed_at_unix_nanos",
+        system_time_unix_nanos(raw_event.envelope.observed_at),
+    );
+    add_payload_metadata(&mut diagnostic, &raw_event.payload);
+    diagnostic
 }
 
 pub fn policy_diagnostic(
@@ -53,4 +63,103 @@ pub fn policy_diagnostic(
             ]
         })
         .unwrap_or_default()
+}
+
+fn add_payload_metadata(diagnostic: &mut DiagnosticRecord, payload: &RawObservationPayload) {
+    match payload {
+        RawObservationPayload::Process {
+            operation,
+            parent,
+            metadata,
+        } => {
+            insert_metadata(diagnostic, "raw.payload_kind", "process");
+            insert_metadata(diagnostic, "raw.operation", operation);
+            if let Some(parent) = parent {
+                insert_metadata(diagnostic, "raw.parent.pid", parent.pid.to_string());
+                insert_metadata(
+                    diagnostic,
+                    "raw.parent.start_ticks",
+                    parent.start_time_ticks.to_string(),
+                );
+                insert_metadata(
+                    diagnostic,
+                    "raw.parent.generation",
+                    parent.generation.to_string(),
+                );
+            }
+            copy_metadata_keys(
+                diagnostic,
+                metadata,
+                &["ppid", "seccomp_observed", "exit_code"],
+            );
+        }
+        RawObservationPayload::File {
+            operation,
+            metadata,
+            ..
+        } => {
+            insert_metadata(diagnostic, "raw.payload_kind", "file");
+            insert_metadata(diagnostic, "raw.operation", operation);
+            copy_metadata_keys(diagnostic, metadata, &["syscall", "fd", "result"]);
+        }
+        RawObservationPayload::Net {
+            transport,
+            size,
+            result,
+            metadata,
+            ..
+        } => {
+            insert_metadata(diagnostic, "raw.payload_kind", "net");
+            insert_metadata(diagnostic, "raw.transport", transport);
+            if let Some(size) = size {
+                insert_metadata(diagnostic, "raw.size", size.to_string());
+            }
+            if let Some(result) = result {
+                insert_metadata(diagnostic, "raw.result", result.to_string());
+            }
+            copy_metadata_keys(diagnostic, metadata, &["operation", "syscall_family", "fd"]);
+        }
+        RawObservationPayload::Ipc {
+            channel, metadata, ..
+        } => {
+            insert_metadata(diagnostic, "raw.payload_kind", "ipc");
+            insert_metadata(diagnostic, "raw.channel", channel);
+            copy_metadata_keys(diagnostic, metadata, &["operation", "syscall", "result"]);
+        }
+        RawObservationPayload::Stdio {
+            stream, metadata, ..
+        } => {
+            insert_metadata(diagnostic, "raw.payload_kind", "stdio");
+            insert_metadata(diagnostic, "raw.stream", stream);
+            copy_metadata_keys(diagnostic, metadata, &["fd", "result"]);
+        }
+    }
+}
+
+fn copy_metadata_keys(
+    diagnostic: &mut DiagnosticRecord,
+    metadata: &std::collections::BTreeMap<String, String>,
+    keys: &[&str],
+) {
+    for key in keys {
+        if let Some(value) = metadata.get(*key) {
+            insert_metadata(diagnostic, format!("raw.metadata.{key}"), value);
+        }
+    }
+}
+
+fn insert_metadata(
+    diagnostic: &mut DiagnosticRecord,
+    key: impl Into<String>,
+    value: impl ToString,
+) {
+    diagnostic.metadata.insert(key.into(), value.to_string());
+}
+
+fn system_time_unix_nanos(value: SystemTime) -> String {
+    value
+        .duration_since(UNIX_EPOCH)
+        .expect("raw event observed_at must be after Unix epoch")
+        .as_nanos()
+        .to_string()
 }

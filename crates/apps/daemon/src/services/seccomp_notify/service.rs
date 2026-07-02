@@ -54,10 +54,6 @@ impl SeccompNotifyService {
             .collect()
     }
 
-    pub(crate) fn has_listeners(&self) -> bool {
-        !self.listeners.is_empty()
-    }
-
     pub(crate) fn drain_notifications(
         &mut self,
         mut handler: impl FnMut(

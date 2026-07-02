@@ -9,10 +9,7 @@ use model_core::ids::{ProfileName, RequestId};
 
 use super::{ControlCodecError, field, parse_bool, parse_u64, parse_usize};
 
-pub(super) fn encode_command(
-    fields: &mut Vec<String>,
-    command: &ResolveLaunchPermissionsCommand,
-) {
+pub(super) fn encode_command(fields: &mut Vec<String>, command: &ResolveLaunchPermissionsCommand) {
     fields.push("resolve_launch_permissions_v1".to_string());
     fields.push(command.request_id.get().to_string());
     fields.push(command.profile_name.to_string());
@@ -29,10 +26,7 @@ pub(super) fn decode_command(fields: &[String]) -> Result<ControlCommand, Contro
             profile_name: ProfileName::new(field(fields, 2)?),
             host_ebpf: parse_permission_mode(field(fields, 3)?)?,
             seccomp_notify: parse_permission_mode(field(fields, 4)?)?,
-            seccomp_notify_available: parse_bool(
-                field(fields, 5)?,
-                "seccomp_notify_available",
-            )?,
+            seccomp_notify_available: parse_bool(field(fields, 5)?, "seccomp_notify_available")?,
             seccomp_notify_detail: field(fields, 6)?.clone(),
         },
     ))
@@ -88,10 +82,7 @@ pub(super) fn decode_reply(fields: &[String]) -> Result<ControlReply, ControlCod
         payload_tls_seccomp: parse_bool(field(fields, 6)?, "payload_tls_seccomp")?,
         payload_socket_seccomp: parse_bool(field(fields, 7)?, "payload_socket_seccomp")?,
         process_seccomp: parse_bool(field(fields, 8)?, "process_seccomp")?,
-        network_control_seccomp: parse_bool(
-            field(fields, 9)?,
-            "network_control_seccomp",
-        )?,
+        network_control_seccomp: parse_bool(field(fields, 9)?, "network_control_seccomp")?,
         degraded: parse_bool(field(fields, 10)?, "degraded")?,
         required_capabilities,
         reasons,
@@ -119,16 +110,14 @@ mod tests {
 
     #[test]
     fn launch_permissions_v1_round_trips_command_and_reply() {
-        let command = ControlCommand::ResolveLaunchPermissions(
-            ResolveLaunchPermissionsCommand {
-                request_id: RequestId::new(6),
-                profile_name: ProfileName::new("container-auto"),
-                host_ebpf: DeploymentPermissionMode::Auto,
-                seccomp_notify: DeploymentPermissionMode::Required,
-                seccomp_notify_available: false,
-                seccomp_notify_detail: "pidfd_getfd denied".to_string(),
-            },
-        );
+        let command = ControlCommand::ResolveLaunchPermissions(ResolveLaunchPermissionsCommand {
+            request_id: RequestId::new(6),
+            profile_name: ProfileName::new("container-auto"),
+            host_ebpf: DeploymentPermissionMode::Auto,
+            seccomp_notify: DeploymentPermissionMode::Required,
+            seccomp_notify_available: false,
+            seccomp_notify_detail: "pidfd_getfd denied".to_string(),
+        });
         assert_eq!(
             decode_command(&encode_command(&command)).expect("decode command"),
             command
@@ -140,9 +129,7 @@ mod tests {
                 requested_seccomp_notify: DeploymentPermissionMode::Auto,
                 selected_host_ebpf: true,
                 selected_seccomp_notify: false,
-                selected_profile_name: ProfileName::new(
-                    "container-auto-ebpf-on-notify-off",
-                ),
+                selected_profile_name: ProfileName::new("container-auto-ebpf-on-notify-off"),
                 payload_tls_seccomp: false,
                 payload_socket_seccomp: false,
                 process_seccomp: false,

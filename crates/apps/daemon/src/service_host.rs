@@ -129,9 +129,10 @@ where
             error
         })?;
         let removed_trace = match &command {
-            ControlCommand::TrackRemove(command) => {
-                Some(resolve_trace_id(&self.wiring.trace_runtime, &command.selector)?)
-            }
+            ControlCommand::TrackRemove(command) => Some(resolve_trace_id(
+                &self.wiring.trace_runtime,
+                &command.selector,
+            )?),
             _ => None,
         };
         if let Err(error) = self.authorize_peer_command(&peer, &command, removed_trace) {
@@ -145,9 +146,7 @@ where
                 self.wiring
                     .trace_runtime
                     .bind_trace_owner(added.trace_id, peer.principal.trace_owner())
-                    .map_err(|error| {
-                        ControlError::new("bind_trace_owner", format!("{error:?}"))
-                    })?;
+                    .map_err(|error| ControlError::new("bind_trace_owner", format!("{error:?}")))?;
             }
             ControlReply::TraceList(items) if !peer.is_trusted_host_root() => {
                 items.retain(|item| {
@@ -360,11 +359,7 @@ fn control_command_name(command: &ControlCommand) -> &'static str {
     }
 }
 
-fn audit_peer_rejection(
-    peer: PeerCredentials,
-    command: &'static str,
-    error: &ControlError,
-) {
+fn audit_peer_rejection(peer: PeerCredentials, command: &'static str, error: &ControlError) {
     tracing::warn!(
         target: "actrail::peer_auth",
         peer_pid = peer.pid,
@@ -399,8 +394,8 @@ mod tests {
     use config_core::daemon::DEFAULT_ACTIVE_TRACE_MAX;
     use config_core::trace_snapshot::CaptureProfileSnapshot;
     use control_contract::command::{
-        ControlCommand, DeploymentPermissionMode, DoctorCommand,
-        ResolveLaunchPermissionsCommand, TrackAddCommand, TrackRemoveCommand,
+        ControlCommand, DeploymentPermissionMode, DoctorCommand, ResolveLaunchPermissionsCommand,
+        TrackAddCommand, TrackRemoveCommand,
     };
     use control_contract::reply::{
         ControlError, ControlReply, LaunchPermissionsReply, PluginCommandReply, TrackAddReply,

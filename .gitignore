@@ -54,3 +54,4 @@ crates/apps/ctl/java-agent/dist/
 .codex
 .agents/
 plugins/
+skills-lock.json

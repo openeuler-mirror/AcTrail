@@ -38,10 +38,7 @@ fn read_clone3_flags(notification: &libc::seccomp_notif) -> Result<Option<u64>, 
         return Ok(None);
     };
     if bytes.len() != CLONE3_FLAGS_SIZE {
-        return Err(ControlError::new(
-            "process_seccomp_clone3",
-            "short clone3 flags read",
-        ));
+        return Ok(None);
     }
     Ok(Some(u64::from_ne_bytes(
         bytes.try_into().expect("clone3 flags width"),

@@ -389,9 +389,7 @@ impl AttachService for StorageAttachService {
             .enabled_by(decision.selected.seccomp_notify);
         Ok(LaunchPermissionsReply {
             requested_host_ebpf: contract_permission_mode(decision.requested_host_ebpf),
-            requested_seccomp_notify: contract_permission_mode(
-                decision.requested_seccomp_notify,
-            ),
+            requested_seccomp_notify: contract_permission_mode(decision.requested_seccomp_notify),
             selected_host_ebpf: decision.selected.host_ebpf,
             selected_seccomp_notify: decision.selected.seccomp_notify,
             selected_profile_name: selected_profile.name,

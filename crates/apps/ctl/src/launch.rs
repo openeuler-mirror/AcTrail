@@ -4,10 +4,10 @@
 pub(crate) mod controlled;
 #[path = "launch/java_agent.rs"]
 mod java_agent;
-#[path = "launch/seccomp.rs"]
-pub(crate) mod seccomp;
 #[path = "launch/permission_policy.rs"]
 pub(crate) mod permission_policy;
+#[path = "launch/seccomp.rs"]
+pub(crate) mod seccomp;
 #[path = "launch/suppress.rs"]
 mod suppress;
 #[path = "launch/sync.rs"]
@@ -35,17 +35,17 @@ use crate::output::format_reply;
 use crate::process_ref::process_ref;
 use crate::transport::ControlClientPort;
 use controlled::{ChildSetup, ControlledChild};
-use seccomp::{SeccompSetup, register_listener};
 use permission_policy::{
     DeploymentPermissionPolicy, LaunchSeccompRequirements, contract_permission_mode,
     permission_decision_from_reply,
 };
+use seccomp::{SeccompSetup, register_listener};
 use suppress::InheritableSuppressedFd;
 use sync::{SyncLaunch, sync_launch, sync_launch_envs};
 
 use crate::platform_probe::{
-    LaunchPlatformReport, probe_seccomp_notify_capability, probe_tls_sync_runtime_library,
-    print_permission_decision,
+    LaunchPlatformReport, print_permission_decision, probe_seccomp_notify_capability,
+    probe_tls_sync_runtime_library,
 };
 use linux_platform::capability_probe::{probe_no_new_privs, probe_unix_socket};
 

@@ -381,8 +381,8 @@ mod tests {
     use std::collections::BTreeSet;
     use std::time::SystemTime;
 
-    use config_core::capture_profile::CaptureProfile;
     use collector_capability::CollectorDescriptor;
+    use config_core::capture_profile::CaptureProfile;
     use config_core::trace_snapshot::CaptureProfileSnapshot;
     use model_core::capability::{Capability, CapabilityRequest, RequestMode};
     use model_core::ids::{CollectorName, ProfileName, TraceName};

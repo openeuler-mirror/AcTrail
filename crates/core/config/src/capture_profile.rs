@@ -8,8 +8,7 @@ use model_core::ids::ProfileName;
 
 pub use permission::{
     DeploymentPermissionAvailability, DeploymentPermissionPolicy, DeploymentPermissions,
-    LaunchSeccompRequirements, PermissionDecision, PermissionMode,
-    resolve_deployment_permissions,
+    LaunchSeccompRequirements, PermissionDecision, PermissionMode, resolve_deployment_permissions,
 };
 
 /// Capabilities that only the host eBPF collector can provide. Dropped on the
@@ -70,8 +69,7 @@ impl CaptureProfile {
             .iter()
             .all(|capability| {
                 self.capabilities.iter().any(|request| {
-                    request.capability == *capability
-                        && request.mode == RequestMode::Required
+                    request.capability == *capability && request.mode == RequestMode::Required
                 })
             })
     }
@@ -85,8 +83,7 @@ impl CaptureProfile {
         ));
         profile.capabilities.retain(|request| {
             (permissions.host_ebpf || !is_ebpf_only_capability(&request.capability))
-                && (permissions.seccomp_notify
-                    || !is_seccomp_only_capability(&request.capability))
+                && (permissions.seccomp_notify || !is_seccomp_only_capability(&request.capability))
         });
         profile
     }
@@ -146,15 +143,11 @@ mod tests {
                 CapabilityRequest::new(Capability::ResourceMetrics, RequestMode::Opportunistic),
             ],
         );
-        let has = |p: &CaptureProfile, c: Capability| {
-            p.capabilities.iter().any(|r| r.capability == c)
-        };
+        let has =
+            |p: &CaptureProfile, c: Capability| p.capabilities.iter().any(|r| r.capability == c);
 
         let neither = profile.for_permissions(DeploymentPermissions::new(false, false));
-        assert_eq!(
-            neither.name.as_str(),
-            "container-auto-ebpf-off-notify-off"
-        );
+        assert_eq!(neither.name.as_str(), "container-auto-ebpf-off-notify-off");
         assert!(has(&neither, Capability::TlsPlaintextPayload));
         assert!(has(&neither, Capability::ResourceMetrics));
         assert!(!has(&neither, Capability::ProcLifecycle));
@@ -163,17 +156,13 @@ mod tests {
         assert!(!has(&neither, Capability::SocketPlaintextPayload));
 
         let ebpf_only = profile.for_permissions(DeploymentPermissions::new(true, false));
-        assert_eq!(
-            ebpf_only.name.as_str(),
-            "container-auto-ebpf-on-notify-off"
-        );
+        assert_eq!(ebpf_only.name.as_str(), "container-auto-ebpf-on-notify-off");
         assert!(has(&ebpf_only, Capability::ProcLifecycle));
         assert!(has(&ebpf_only, Capability::NetTransport));
         assert!(!has(&ebpf_only, Capability::ProcExecContext));
         assert!(has(&ebpf_only, Capability::SocketPlaintextPayload));
 
-        let notify_only =
-            profile.for_permissions(DeploymentPermissions::new(false, true));
+        let notify_only = profile.for_permissions(DeploymentPermissions::new(false, true));
         assert_eq!(
             notify_only.name.as_str(),
             "container-auto-ebpf-off-notify-on"
@@ -184,10 +173,7 @@ mod tests {
         assert!(!has(&notify_only, Capability::SocketPlaintextPayload));
 
         let both = profile.for_permissions(DeploymentPermissions::new(true, true));
-        assert_eq!(
-            both.name.as_str(),
-            "container-auto-ebpf-on-notify-on"
-        );
+        assert_eq!(both.name.as_str(), "container-auto-ebpf-on-notify-on");
         assert!(has(&both, Capability::ProcLifecycle));
         assert!(has(&both, Capability::ProcExecContext));
         assert!(has(&both, Capability::SocketPlaintextPayload));

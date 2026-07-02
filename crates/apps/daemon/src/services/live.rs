@@ -27,6 +27,22 @@ use crate::services::command_control::CommandControlOutcome;
 use crate::services::resource_metrics::COLLECTOR_NAME as RESOURCE_METRICS_COLLECTOR_NAME;
 use crate::services::workload_diagnostics::PayloadSegmentStage;
 
+/// Log and swallow recoverable errors from best-effort subsystems.
+///
+/// On the hot path this is a single `if let Err` branch — zero heap, zero
+/// string comparisons. The CPU predictor gets it right 99.999% of the time.
+#[inline]
+fn warn_best_effort(result: Result<(), ControlError>, label: &str) {
+    if let Err(error) = result {
+        tracing::warn!(
+            %label,
+            error.code = %error.code,
+            error.message = %error.message,
+            "best-effort observation subsystem error; drain cycle continues"
+        );
+    }
+}
+
 impl StorageAttachService {
     pub(super) fn drain_live_events_impl(
         &mut self,
@@ -44,18 +60,22 @@ impl StorageAttachService {
             self.collector
                 .poll_tls_payload_control_events()
                 .map_err(|error| ControlError::new(error.stage, error.message))?;
-            self.persist_event_transport_loss_diagnostics_impl(trace_runtime)?;
+            warn_best_effort(
+                self.persist_event_transport_loss_diagnostics_impl(trace_runtime),
+                "event_transport_loss_diag",
+            );
             self.log_tls_diagnostic_events_impl();
             self.ingest_polled_seccomp_tls_controls_impl()?;
             self.drain_seccomp_notifications_impl(trace_runtime)?;
-            self.flush_process_seccomp_observations_impl(trace_runtime)?;
+            self.materialize_process_seccomp_observations_impl(trace_runtime)?;
             self.persist_completed_seccomp_tls_operations_impl(trace_runtime)?;
             self.persist_completed_seccomp_socket_operations_impl(trace_runtime)?;
-            self.log_payload_tls_diagnostics_impl()?;
-            self.drain_enforcement_impl(trace_runtime)?;
+            warn_best_effort(self.log_payload_tls_diagnostics_impl(), "payload_tls_diag");
+            warn_best_effort(self.drain_enforcement_impl(trace_runtime), "enforcement");
             self.reconcile_draining_memberships_impl(trace_runtime)?;
             self.finalize_terminal_traces_impl(trace_runtime)?;
             self.forget_terminal_trace_state_impl(trace_runtime);
+            let _ = self.collector.flush_transport();
             return Ok(());
         }
 
@@ -64,7 +84,10 @@ impl StorageAttachService {
             .collector
             .poll_batch()
             .map_err(|error| ControlError::new(error.stage, error.message))?;
-        self.persist_event_transport_loss_diagnostics_impl(trace_runtime)?;
+        warn_best_effort(
+            self.persist_event_transport_loss_diagnostics_impl(trace_runtime),
+            "event_transport_loss_diag",
+        );
         self.workload_diagnostics
             .record_collector_batch(batch.observations.len(), batch.payload_segments.len());
         self.log_tls_diagnostic_events_impl();
@@ -72,14 +95,15 @@ impl StorageAttachService {
         self.process_payload_segments_impl(trace_runtime, batch.payload_segments)?;
         self.ingest_polled_seccomp_tls_controls_impl()?;
         self.drain_seccomp_notifications_impl(trace_runtime)?;
-        self.flush_process_seccomp_observations_if_idle(trace_runtime)?;
+        self.materialize_process_seccomp_observations_impl(trace_runtime)?;
         self.persist_completed_seccomp_tls_operations_impl(trace_runtime)?;
         self.persist_completed_seccomp_socket_operations_impl(trace_runtime)?;
-        self.log_payload_tls_diagnostics_impl()?;
-        self.drain_enforcement_impl(trace_runtime)?;
+        warn_best_effort(self.log_payload_tls_diagnostics_impl(), "payload_tls_diag");
+        warn_best_effort(self.drain_enforcement_impl(trace_runtime), "enforcement");
         self.reconcile_draining_memberships_impl(trace_runtime)?;
         self.finalize_terminal_traces_impl(trace_runtime)?;
         self.forget_terminal_trace_state_impl(trace_runtime);
+        let _ = self.collector.flush_transport();
         Ok(())
     }
 
@@ -127,7 +151,17 @@ impl StorageAttachService {
         &mut self,
         trace_runtime: &TraceRuntime,
     ) -> Result<(), ControlError> {
-        let drain = self.tls_sync.drain(trace_runtime)?;
+        let drain = match self.tls_sync.drain(trace_runtime) {
+            Ok(d) => d,
+            Err(error) => {
+                tracing::warn!(
+                    error.code = %error.code,
+                    error.message = %error.message,
+                    "TLS sync drain failed; skipping this cycle"
+                );
+                return Ok(());
+            }
+        };
         self.workload_diagnostics
             .record_payload_segments(PayloadSegmentStage::TlsSync, drain.payload_segments.len());
         self.persist_tls_sync_diagnostics_impl(trace_runtime, drain.diagnostics)?;
@@ -277,8 +311,8 @@ impl StorageAttachService {
         let seccomp_socket = &mut self.seccomp_socket;
         let tls_sync = &self.tls_sync;
         let collector = &mut self.collector;
-        let mut process_observations = Vec::new();
         let mut network_events = Vec::new();
+        let pending_process_observations = &mut self.pending_process_seccomp_observations;
         {
             let process_seccomp = &self.process_seccomp;
             let command_control = &self.command_control;
@@ -293,7 +327,7 @@ impl StorageAttachService {
                     continuation,
                     control_plugins,
                 )?);
-                process_observations.extend(process_seccomp.handle_notification(
+                pending_process_observations.extend(process_seccomp.handle_notification(
                     trace_runtime,
                     identity_reader,
                     notification,
@@ -355,48 +389,53 @@ impl StorageAttachService {
                 Ok(())
             })?;
         }
-        self.pending_process_seccomp_observations
-            .extend(process_observations);
-        self.process_seccomp
-            .ensure_pending_observation_capacity(self.pending_process_seccomp_observations.len())?;
         self.process_live_event_batch(trace_runtime, network_events)?;
         Ok(())
     }
 
-    fn flush_process_seccomp_observations_impl(
+    fn materialize_process_seccomp_observations_impl(
         &mut self,
         trace_runtime: &mut TraceRuntime,
     ) -> Result<(), ControlError> {
         if self.pending_process_seccomp_observations.is_empty() {
             return Ok(());
         }
-        let observations = std::mem::take(&mut self.pending_process_seccomp_observations);
-        let raw_events = observations
-            .into_iter()
-            .map(|observation| {
-                self.process_seccomp
-                    .materialize_observation(trace_runtime, observation)
-            })
-            .collect();
-        self.process_live_event_batch(trace_runtime, raw_events)
-    }
-
-    fn flush_process_seccomp_observations_if_idle(
-        &mut self,
-        trace_runtime: &mut TraceRuntime,
-    ) -> Result<(), ControlError> {
-        if self.seccomp_notify.has_listeners() {
-            return Ok(());
+        let batch_size = self.process_seccomp.pending_observation_batch_size()?;
+        while !self.pending_process_seccomp_observations.is_empty() {
+            let batch_len = self
+                .pending_process_seccomp_observations
+                .len()
+                .min(batch_size);
+            let raw_events = self.pending_process_seccomp_observations[..batch_len]
+                .iter()
+                .map(|observation| {
+                    self.process_seccomp
+                        .materialize_observation(trace_runtime, observation)
+                })
+                .collect();
+            self.process_live_event_batch(trace_runtime, raw_events)?;
+            self.pending_process_seccomp_observations.drain(..batch_len);
         }
-        self.flush_process_seccomp_observations_impl(trace_runtime)
+        Ok(())
     }
 
     fn drain_resource_metrics_impl(
         &mut self,
         trace_runtime: &trace_runtime::TraceRuntime,
     ) -> Result<(), ControlError> {
+        let drafts = match self.resource_metrics.drain_due(trace_runtime) {
+            Ok(d) => d,
+            Err(error) => {
+                tracing::warn!(
+                    error.code = %error.code,
+                    error.message = %error.message,
+                    "resource metrics sampling failed; skipping this cycle"
+                );
+                return Ok(());
+            }
+        };
         let mut events = Vec::new();
-        for draft in self.resource_metrics.drain_due(trace_runtime)? {
+        for draft in drafts {
             let event = DomainEvent::new(
                 EventEnvelope {
                     event_id: self.next_event_id()?,

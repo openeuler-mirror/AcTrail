@@ -190,9 +190,7 @@ pub fn resolve_deployment_permissions(
                 ));
             }
             None => {
-                return Err(
-                    "seccomp-notify required but platform probe was not run".to_string(),
-                );
+                return Err("seccomp-notify required but platform probe was not run".to_string());
             }
         },
         PermissionMode::Auto if !seccomp_notify_configured => {
@@ -217,19 +215,17 @@ pub fn resolve_deployment_permissions(
     };
 
     let selected = DeploymentPermissions::new(selected_host_ebpf, selected_seccomp_notify);
-    let degraded = (policy.host_ebpf == PermissionMode::Auto
-        && host_ebpf_configured
-        && !selected_host_ebpf)
-        || (policy.seccomp_notify == PermissionMode::Auto
-            && seccomp_notify_configured
-            && !selected_seccomp_notify);
+    let degraded =
+        (policy.host_ebpf == PermissionMode::Auto && host_ebpf_configured && !selected_host_ebpf)
+            || (policy.seccomp_notify == PermissionMode::Auto
+                && seccomp_notify_configured
+                && !selected_seccomp_notify);
 
     Ok(PermissionDecision {
         requested_host_ebpf: policy.host_ebpf,
         requested_seccomp_notify: policy.seccomp_notify,
         selected,
-        required_capabilities: configured_profile
-            .required_capabilities_for_permissions(selected),
+        required_capabilities: configured_profile.required_capabilities_for_permissions(selected),
         degraded,
         reasons,
     })

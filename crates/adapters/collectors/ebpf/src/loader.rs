@@ -438,6 +438,19 @@ impl EbpfRuntime {
             .collect()
     }
 
+    /// Drain the kernel transport buffer into userspace without decoding.
+    ///
+    /// Call this after a drain cycle's expensive processing to shrink the
+    /// starvation window — events that arrived while the pipeline was busy
+    /// are moved into the userspace raw buffer so the kernel ring buffer can
+    /// accept new submissions. The buffered bytes are decoded on the next
+    /// `poll_events()` call.
+    pub fn flush_transport(&mut self) -> Result<(), LoaderError> {
+        self.event_buffer.consume()?;
+        self.capture_event_transport_loss()?;
+        Ok(())
+    }
+
     fn capture_event_transport_loss(&mut self) -> Result<(), LoaderError> {
         let perf_lost = self.event_buffer.lost_count();
         let diagnostics = read_event_transport_diagnostics(&self.event_transport_diagnostics)?;

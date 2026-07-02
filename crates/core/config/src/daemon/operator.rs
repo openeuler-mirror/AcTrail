@@ -135,9 +135,7 @@ impl OperatorConfig {
     /// The seccomp-notify capabilities this config asks a launch to install.
     /// Delegates to [`launch_seccomp_requirements`] so ctl and the daemon
     /// derive identical requirements from one place.
-    pub fn launch_seccomp_requirements(
-        &self,
-    ) -> crate::capture_profile::LaunchSeccompRequirements {
+    pub fn launch_seccomp_requirements(&self) -> crate::capture_profile::LaunchSeccompRequirements {
         launch_seccomp_requirements(
             &self.payload_config,
             &self.process_seccomp,

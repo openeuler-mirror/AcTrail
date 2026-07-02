@@ -1,7 +1,7 @@
 //! Command-line input for actrailweb.
 
 use std::net::{IpAddr, SocketAddr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use config_core::daemon::{DEFAULT_OPERATOR_CONFIG_PATH, OperatorConfig};
@@ -12,6 +12,8 @@ pub struct WebConfig {
     pub storage: StorageConfig,
     pub listen_addr: SocketAddr,
     pub request_read_timeout: Option<Duration>,
+    pub operator_config_path: Option<PathBuf>,
+    pub operator_config: Option<OperatorConfig>,
 }
 
 const HELP_FLAG_SHORT: &str = "-h";
@@ -41,10 +43,26 @@ pub fn is_help_request(args: &[String]) -> bool {
 pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<WebConfig, String> {
     let flags = parse_flags(args)?;
     let config = load_optional_config(&flags)?;
+    let storage = resolve_storage_config(&flags, config.as_ref())?;
+    let listen_addr = resolve_listen_addr(&flags, config.as_ref())?;
+    let request_read_timeout = resolve_request_read_timeout(&flags, config.as_ref())?;
+    let operator_config = config
+        .as_ref()
+        .and_then(|config| config.operator_config.clone())
+        .map(|mut operator_config| {
+            operator_config.storage = storage.clone();
+            operator_config.web.listen_addr = listen_addr;
+            operator_config.web.request_read_timeout = request_read_timeout;
+            operator_config
+        });
     Ok(WebConfig {
-        storage: resolve_storage_config(&flags, config.as_ref())?,
-        listen_addr: resolve_listen_addr(&flags, config.as_ref())?,
-        request_read_timeout: resolve_request_read_timeout(&flags, config.as_ref())?,
+        storage,
+        listen_addr,
+        request_read_timeout,
+        operator_config_path: config
+            .as_ref()
+            .and_then(|config| config.operator_config_path.clone()),
+        operator_config,
     })
 }
 
@@ -73,9 +91,11 @@ fn parse_flags(
 fn load_config(path: &Path) -> Result<WebConfig, String> {
     let config = OperatorConfig::load(path)?;
     Ok(WebConfig {
-        storage: config.storage,
+        storage: config.storage.clone(),
         listen_addr: config.web.listen_addr,
         request_read_timeout: config.web.request_read_timeout,
+        operator_config_path: Some(path.to_path_buf()),
+        operator_config: Some(config),
     })
 }
 

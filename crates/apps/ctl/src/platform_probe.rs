@@ -11,8 +11,8 @@ use model_core::capability::Capability;
 use tls_payload_sync::RuntimeLibraryPath;
 
 use crate::launch::controlled::ControlledChild;
-use crate::launch::seccomp::SeccompSetup;
 use crate::launch::permission_policy::PermissionDecision;
+use crate::launch::seccomp::SeccompSetup;
 use crate::output::format_reply;
 use crate::transport::ControlClientPort;
 
@@ -76,9 +76,7 @@ pub fn attach_daemon_status(
     request_id: model_core::ids::RequestId,
 ) {
     match client.send(control_contract::command::ControlCommand::Doctor(
-        control_contract::command::DoctorCommand {
-            request_id,
-        },
+        control_contract::command::DoctorCommand { request_id },
     )) {
         Ok(control_contract::reply::ControlReply::Doctor(reply)) => {
             report.daemon = Some(reply);
@@ -98,10 +96,7 @@ pub fn attach_daemon_status(
     }
 }
 
-pub fn print_platform_probe(
-    report: &LaunchPlatformReport,
-    decision: &PermissionDecision,
-) {
+pub fn print_platform_probe(report: &LaunchPlatformReport, decision: &PermissionDecision) {
     for status in report.statuses() {
         let marker = if status.available {
             "ok"
@@ -157,10 +152,7 @@ pub fn print_permission_decision(decision: &PermissionDecision) {
     }
 }
 
-pub fn print_platform_probe_json(
-    report: &LaunchPlatformReport,
-    decision: &PermissionDecision,
-) {
+pub fn print_platform_probe_json(report: &LaunchPlatformReport, decision: &PermissionDecision) {
     let daemon = report.daemon.as_ref().map(|reply| {
         format!(
             "{{\"collectors\":[{}],\"plugins\":[{}],\"storage_ready\":{}}}",
@@ -526,12 +518,20 @@ mod tests {
         let config = suggest_config_text(&report, None);
         let parsed = OperatorConfig::parse(&config).expect("suggested config parses");
 
-        assert!(!parsed.capture_profile.capabilities.iter().any(|request| {
-            request.capability == Capability::SocketPlaintextPayload
-        }));
-        assert!(parsed.capture_profile.capabilities.iter().any(|request| {
-            request.capability == Capability::ResourceMetrics
-        }));
+        assert!(
+            !parsed
+                .capture_profile
+                .capabilities
+                .iter()
+                .any(|request| { request.capability == Capability::SocketPlaintextPayload })
+        );
+        assert!(
+            parsed
+                .capture_profile
+                .capabilities
+                .iter()
+                .any(|request| { request.capability == Capability::ResourceMetrics })
+        );
     }
 
     #[test]

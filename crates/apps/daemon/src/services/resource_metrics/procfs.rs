@@ -156,12 +156,16 @@ fn parse_proc_stat(raw: &str) -> Result<ProcStat, String> {
 fn read_proc_file_optional(path: String) -> Result<Option<String>, ControlError> {
     match fs::read_to_string(&path) {
         Ok(value) => Ok(Some(value)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) if proc_entry_gone(&error) => Ok(None),
         Err(error) => Err(ControlError::new(
             "resource_metrics_procfs",
             format!("read {path}: {error}"),
         )),
     }
+}
+
+fn proc_entry_gone(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::NotFound || error.raw_os_error() == Some(libc::ESRCH)
 }
 
 fn parse_u64(raw: &str, field: &str) -> Result<u64, String> {

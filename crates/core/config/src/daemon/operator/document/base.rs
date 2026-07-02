@@ -608,7 +608,7 @@ impl Default for EbpfDocument {
             pending_operation_max_entries: 8192,
             suppressed_fd_max_entries: 8192,
             suppressed_fd_index_slots_per_process: 64,
-            event_ring_buffer_max_bytes: 8388608,
+            event_ring_buffer_max_bytes: 33554432,
             file_path_capture_enabled: true,
             file_path_max_bytes: 255,
         }

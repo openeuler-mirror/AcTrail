@@ -68,10 +68,7 @@ where
         let Some(matched) = matched else {
             return IngestOutcome {
                 events: Vec::new(),
-                diagnostics: vec![identity_mismatch_diagnostic(
-                    diagnostic_id,
-                    raw_event.envelope.process,
-                )],
+                diagnostics: vec![identity_mismatch_diagnostic(diagnostic_id, &raw_event)],
             };
         };
 

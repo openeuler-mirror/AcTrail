@@ -30,8 +30,8 @@ use tls_payload_sync::{
 use trace_runtime::registry::TraceRuntime;
 use uds_control_server::PeerCredentials;
 
-use crate::peer_identity::{PeerIdentity, peer_error};
 use self::resolver::TlsSyncPlanResolver;
+use crate::peer_identity::{PeerIdentity, peer_error};
 
 pub(crate) struct TlsSyncService {
     listener: Option<UnixListener>,
@@ -285,9 +285,11 @@ fn authorize_sync_event(
         SyncEvent::Summary(event) => TraceId::new(event.trace_id),
         SyncEvent::Decision(event) => TraceId::new(event.trace_id),
     };
-    let trace = trace_runtime
-        .get_trace(trace_id)
-        .ok_or_else(|| peer_error(format!("TLS-sync event references unknown trace {trace_id}")))?;
+    let trace = trace_runtime.get_trace(trace_id).ok_or_else(|| {
+        peer_error(format!(
+            "TLS-sync event references unknown trace {trace_id}"
+        ))
+    })?;
     let owner = trace
         .owner
         .as_ref()
