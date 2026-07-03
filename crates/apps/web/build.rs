@@ -14,7 +14,8 @@ const FRONTEND_ENTRY_FILES: &[&str] = &[
     "package-lock.json",
     "vite.config.js",
 ];
-const DIST_ASSETS: &[&str] = &["index.html", "assets/app.css", "assets/app.js"];
+const REQUIRED_DIST_ASSETS: &[&str] = &["index.html", "assets/app.css", "assets/app.js"];
+const ASSET_TABLE_FILE: &str = "actrailweb-assets.rs";
 
 fn main() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -28,7 +29,7 @@ fn main() {
         None => build_frontend(&manifest_dir.join(FRONTEND_DIR), &dist_dir),
     }
 
-    for relative_path in DIST_ASSETS {
+    for relative_path in REQUIRED_DIST_ASSETS {
         let asset = dist_dir.join(relative_path);
         if !asset.is_file() {
             panic!(
@@ -37,43 +38,33 @@ fn main() {
             );
         }
     }
+    write_asset_table(&dist_dir, &out_dir.join(ASSET_TABLE_FILE));
 }
 
 fn copy_prebuilt_assets(source_dir: PathBuf, dist_dir: &Path) {
     if !source_dir.is_absolute() {
         panic!("{PREBUILT_ASSETS_ENV} must be an absolute path");
     }
+    if !source_dir.is_dir() {
+        panic!(
+            "{PREBUILT_ASSETS_ENV} must point to a directory, got {}",
+            source_dir.display()
+        );
+    }
     println!(
         "cargo:warning=using prebuilt actrailweb assets from {}",
         source_dir.display()
     );
-    for relative_path in DIST_ASSETS {
-        let source = source_dir.join(relative_path);
-        println!("cargo:rerun-if-changed={}", source.display());
-        if !source.is_file() {
+    emit_source_rerun_paths(&source_dir);
+    if dist_dir.exists() {
+        fs::remove_dir_all(dist_dir).unwrap_or_else(|error| {
             panic!(
-                "missing prebuilt actrailweb asset {}; regenerate the frontend dist before cargo build",
-                source.display()
-            );
-        }
-        let target = dist_dir.join(relative_path);
-        let parent = target
-            .parent()
-            .expect("actrailweb asset target has a parent directory");
-        fs::create_dir_all(parent).unwrap_or_else(|error| {
-            panic!(
-                "create actrailweb asset directory {}: {error}",
-                parent.display()
-            )
-        });
-        fs::copy(&source, &target).unwrap_or_else(|error| {
-            panic!(
-                "copy actrailweb asset {} to {}: {error}",
-                source.display(),
-                target.display()
+                "remove existing actrailweb asset directory {}: {error}",
+                dist_dir.display()
             )
         });
     }
+    copy_dir_all(&source_dir, dist_dir);
 }
 
 fn build_frontend(frontend_dir: &Path, dist_dir: &Path) {
@@ -119,6 +110,85 @@ fn emit_source_rerun_paths(path: &Path) {
                 )
             });
             emit_source_rerun_paths(&entry.path());
+        }
+    }
+}
+
+fn copy_dir_all(source: &Path, target: &Path) {
+    fs::create_dir_all(target)
+        .unwrap_or_else(|error| panic!("create directory {}: {error}", target.display()));
+    let entries = fs::read_dir(source)
+        .unwrap_or_else(|error| panic!("read directory {}: {error}", source.display()));
+    for entry in entries {
+        let entry = entry.unwrap_or_else(|error| {
+            panic!("read directory entry under {}: {error}", source.display())
+        });
+        let entry_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        if entry_path.is_dir() {
+            copy_dir_all(&entry_path, &target_path);
+        } else if entry_path.is_file() {
+            fs::copy(&entry_path, &target_path).unwrap_or_else(|error| {
+                panic!(
+                    "copy actrailweb asset {} to {}: {error}",
+                    entry_path.display(),
+                    target_path.display()
+                )
+            });
+        }
+    }
+}
+
+fn write_asset_table(dist_dir: &Path, target: &Path) {
+    let mut assets = collect_dist_assets(dist_dir);
+    assets.sort();
+
+    let mut output = String::from("static EMBEDDED_ASSETS: &[EmbeddedAsset] = &[\n");
+    for relative_path in assets {
+        let request_path = format!("/{}", relative_path.to_string_lossy().replace('\\', "/"));
+        let source_path = dist_dir.join(&relative_path);
+        output.push_str(&format!(
+            "    EmbeddedAsset {{ path: {request_path:?}, body: include_bytes!({:?}) }},\n",
+            source_path.display().to_string()
+        ));
+    }
+    output.push_str("];\n");
+    fs::write(target, output).unwrap_or_else(|error| {
+        panic!("write actrailweb asset table {}: {error}", target.display())
+    });
+}
+
+fn collect_dist_assets(dist_dir: &Path) -> Vec<PathBuf> {
+    let mut assets = Vec::new();
+    collect_dist_assets_inner(dist_dir, dist_dir, &mut assets);
+    assets
+}
+
+fn collect_dist_assets_inner(root: &Path, path: &Path, assets: &mut Vec<PathBuf>) {
+    let entries = fs::read_dir(path)
+        .unwrap_or_else(|error| panic!("read dist directory {}: {error}", path.display()));
+    for entry in entries {
+        let entry = entry.unwrap_or_else(|error| {
+            panic!(
+                "read dist directory entry under {}: {error}",
+                path.display()
+            )
+        });
+        let entry_path = entry.path();
+        if entry_path.is_dir() {
+            collect_dist_assets_inner(root, &entry_path, assets);
+        } else if entry_path.is_file() {
+            let relative_path = entry_path
+                .strip_prefix(root)
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "strip dist root {} from asset {}: {error}",
+                        root.display(),
+                        entry_path.display()
+                    )
+                })
+                .to_path_buf();
+            assets.push(relative_path);
         }
     }
 }

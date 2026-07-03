@@ -222,7 +222,7 @@ function badgeClass(column, cell) {
   position: sticky;
   top: 0;
   z-index: 1;
-  background: linear-gradient(180deg, #f4f9f8, #eef4f3);
+  background: var(--trace-table-header-bg);
   color: var(--muted);
   font-size: 11px;
   font-weight: 800;
@@ -248,16 +248,16 @@ function badgeClass(column, cell) {
 }
 
 .data-table tbody tr:nth-child(even) td {
-  background: rgba(15, 118, 110, 0.025);
+  background: var(--trace-table-row-alt-bg);
 }
 
 .data-row:hover td,
 .data-row:focus td {
-  background: #eef7f5;
+  background: var(--trace-table-row-hover-bg);
 }
 
 .data-row.is-selected td {
-  background: #e3f1ee;
+  background: var(--trace-table-row-selected-bg);
   box-shadow: inset 2px 0 0 var(--teal);
 }
 
@@ -283,10 +283,10 @@ function badgeClass(column, cell) {
   height: 18px;
   margin-right: 6px;
   padding: 0;
-  border: 1px solid #cfdedb;
+  border: 1px solid var(--trace-table-toggle-border);
   border-radius: 5px;
-  background: #f1f8f6;
-  color: var(--teal-deep);
+  background: var(--trace-table-toggle-bg);
+  color: var(--trace-interactive-text);
   vertical-align: -3px;
   cursor: pointer;
   transition: border-color 0.12s ease, background-color 0.12s ease;
@@ -294,7 +294,7 @@ function badgeClass(column, cell) {
 
 .tree-toggle:hover {
   border-color: var(--teal);
-  background: #e3f1ee;
+  background: var(--trace-table-toggle-hover-bg);
 }
 
 .tree-toggle-spacer {
@@ -308,7 +308,7 @@ function badgeClass(column, cell) {
 }
 
 .cell-empty {
-  color: #aab6b6;
+  color: var(--trace-table-empty-text);
 }
 
 .cell-badge {
@@ -324,9 +324,9 @@ function badgeClass(column, cell) {
 }
 
 .badge-kind {
-  border-color: #cfe0dd;
-  background: #f1f8f6;
-  color: var(--teal-deep);
+  border-color: var(--trace-badge-kind-border);
+  background: var(--trace-badge-kind-bg);
+  color: var(--trace-badge-kind-text);
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   font-size: 11px;
 }
@@ -339,21 +339,21 @@ function badgeClass(column, cell) {
 }
 
 .badge-status-success {
-  border-color: #b7e0cd;
-  background: #e7f6ee;
-  color: #0f7a4f;
+  border-color: var(--trace-badge-success-border);
+  background: var(--trace-badge-success-bg);
+  color: var(--trace-badge-success-text);
 }
 
 .badge-status-error {
-  border-color: #f3c2cb;
-  background: #fdecef;
-  color: var(--rose);
+  border-color: var(--trace-badge-error-border);
+  background: var(--trace-badge-error-bg);
+  color: var(--trace-badge-error-text);
 }
 
 .badge-status-in-progress {
-  border-color: #f3dbb0;
-  background: #fdf4e3;
-  color: #b06f04;
+  border-color: var(--trace-badge-progress-border);
+  background: var(--trace-badge-progress-bg);
+  color: var(--trace-badge-progress-text);
 }
 
 .badge-status-unknown {
@@ -363,9 +363,9 @@ function badgeClass(column, cell) {
 }
 
 .badge-duration {
-  border-color: #d8dfdf;
-  background: #edf2f1;
-  color: var(--teal-deep);
+  border-color: var(--trace-badge-duration-border);
+  background: var(--trace-badge-duration-bg);
+  color: var(--trace-badge-duration-text);
   font-variant-numeric: tabular-nums;
 }
 
@@ -390,10 +390,10 @@ function badgeClass(column, cell) {
 .load-all {
   height: 34px;
   padding: 0 16px;
-  border: 1px solid #bdd7d2;
+  border: 1px solid var(--trace-interactive-border);
   border-radius: 8px;
-  background: #eef7f5;
-  color: var(--teal-deep);
+  background: var(--trace-interactive-bg);
+  color: var(--trace-interactive-text);
   font-weight: 700;
   cursor: pointer;
   transition: border-color 0.12s ease, background-color 0.12s ease;
@@ -406,6 +406,6 @@ function badgeClass(column, cell) {
 .load-more:hover,
 .load-all:hover {
   border-color: var(--teal);
-  background: #e3f1ee;
+  background: var(--trace-interactive-hover-bg);
 }
 </style>

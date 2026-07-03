@@ -2849,6 +2849,7 @@ dependencies = [
  "model_core",
  "plugin_system",
  "semantic_action",
+ "serde_json",
  "storage_core",
  "storage_factory",
  "uds_control_client",

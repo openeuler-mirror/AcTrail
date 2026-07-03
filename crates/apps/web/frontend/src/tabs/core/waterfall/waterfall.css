@@ -49,7 +49,7 @@
 
 .tree-action:hover:not(:disabled) {
   border-color: var(--teal);
-  background: #eef7f5;
+  background: var(--trace-interactive-bg);
 }
 
 .tree-action:disabled {
@@ -94,7 +94,7 @@
 
 .wf-zoom-reset:hover {
   border-color: var(--teal);
-  background: #eef7f5;
+  background: var(--trace-interactive-bg);
 }
 
 .waterfall-legend {
@@ -202,11 +202,11 @@
 }
 
 .wf-row:hover {
-  background: #f3faf8;
+  background: var(--trace-waterfall-row-hover-bg);
 }
 
 .wf-row.selected {
-  background: #e7f5f1;
+  background: var(--trace-waterfall-row-selected-bg);
 }
 
 .wf-label {
@@ -407,7 +407,7 @@
 .wf-load-more:hover,
 .wf-load-all:hover {
   border-color: var(--teal);
-  background: #eef7f5;
+  background: var(--trace-interactive-bg);
 }
 
 .waterfall-empty {
@@ -429,9 +429,9 @@
   flex: 0 0 auto;
   padding: 1px 6px;
   border-radius: 999px;
-  background: #ede9fe;
-  border: 1px solid #c4b5fd;
-  color: #5b21b6;
+  background: var(--trace-waterfall-scope-bg);
+  border: 1px solid var(--trace-waterfall-scope-border);
+  color: var(--trace-waterfall-scope-text);
   font-size: 9px;
   font-weight: 800;
   white-space: nowrap;
@@ -440,7 +440,7 @@
 .wf-agent-context {
   min-width: 0;
   overflow: hidden;
-  color: #64748b;
+  color: var(--trace-waterfall-agent-text);
   font-size: 10px;
   font-weight: 600;
   text-overflow: ellipsis;
@@ -485,15 +485,15 @@
 }
 
 .wf-llm-message-request {
-  background: #f3f6f8;
-  border: 1px solid #dde4e8;
-  color: #334155;
+  background: var(--trace-waterfall-message-request-bg);
+  border: 1px solid var(--trace-waterfall-message-request-border);
+  color: var(--trace-waterfall-message-request-text);
 }
 
 .wf-llm-message-response {
-  background: #eef7f5;
-  border: 1px solid #cfe0dd;
-  color: var(--teal-deep);
+  background: var(--trace-waterfall-message-response-bg);
+  border: 1px solid var(--trace-waterfall-message-response-border);
+  color: var(--trace-waterfall-message-response-text);
 }
 
 .wf-llm-message-label {
@@ -520,22 +520,22 @@
 }
 
 .wf-bar-request {
-  --wf-color: #818cf8;
-  background: #818cf8;
+  --wf-color: var(--trace-waterfall-request-bar);
+  background: var(--trace-waterfall-request-bar);
 }
 
 .wf-bar-response {
-  --wf-color: #4338ca;
-  background: #4338ca;
+  --wf-color: var(--trace-waterfall-response-bar);
+  background: var(--trace-waterfall-response-bar);
 }
 
 .wf-bar-ttft {
-  --wf-color: #c7d2fe;
+  --wf-color: var(--trace-waterfall-ttft-bar);
   background: repeating-linear-gradient(
     45deg,
-    #eef2ff 0,
-    #eef2ff 4px,
-    #c7d2fe 4px,
-    #c7d2fe 8px
+    var(--trace-waterfall-ttft-stripe-a) 0,
+    var(--trace-waterfall-ttft-stripe-a) 4px,
+    var(--trace-waterfall-ttft-stripe-b) 4px,
+    var(--trace-waterfall-ttft-stripe-b) 8px
   );
 }

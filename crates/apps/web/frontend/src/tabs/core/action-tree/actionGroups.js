@@ -102,6 +102,11 @@ function actionGroupNode(children) {
     groupKey: childKind,
     title,
     meta: compactMeta([childKind, timeRange(started, ended), status]),
+    metaItems: compactMetaItems([
+      metaItem('kind', childKind),
+      metaItem('time', timeRange(started, ended)),
+      statusMetaItem(status),
+    ]),
     status,
     children,
     hasChildren: true,
@@ -178,6 +183,32 @@ function statusSummary(nodes) {
     return statuses.values().next().value;
   }
   return 'mixed';
+}
+
+function compactMetaItems(items) {
+  return items.filter((item) => item && item.label);
+}
+
+function metaItem(kind, label) {
+  const text = String(label ?? '').trim();
+  return text ? { kind, label: text } : null;
+}
+
+function statusMetaItem(status) {
+  const text = String(status ?? '').trim();
+  if (!text || successStatus(text)) {
+    return null;
+  }
+  return { kind: 'status', label: text };
+}
+
+function successStatus(status) {
+  return ['success', 'healthy', 'completed', 'complete', 'ok'].includes(
+    String(status ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/[\s-]+/g, '_'),
+  );
 }
 
 function timeRange(started, ended) {

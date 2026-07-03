@@ -206,7 +206,7 @@ function loadAll() {
 
 .tree-action:hover:not(:disabled) {
   border-color: var(--teal);
-  background: #eef7f5;
+  background: var(--trace-interactive-bg);
 }
 
 .tree-action:disabled {

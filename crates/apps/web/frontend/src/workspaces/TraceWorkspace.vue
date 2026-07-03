@@ -17,8 +17,11 @@
 
     <main class="workspace">
       <section class="metrics-strip">
-        <div v-for="metric in metrics" :key="metric.label" class="metric">
-          <span>{{ metric.label }}</span>
+        <div v-for="metric in metrics" :key="metric.key" class="metric" :class="`metric-${metric.key}`">
+          <span class="metric-icon" aria-hidden="true">
+            <component :is="metric.icon" :size="17" />
+          </span>
+          <span class="metric-label">{{ metric.label }}</span>
           <strong>{{ metric.value }}</strong>
         </div>
       </section>
@@ -43,6 +46,7 @@
 
 <script setup>
 import { computed, markRaw, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
+import { Activity, Boxes, Cpu, GitBranch } from '@lucide/vue';
 
 import {
   readActionTree,
@@ -80,6 +84,12 @@ const props = defineProps({
 const emit = defineEmits(['active-title', 'loading']);
 
 const tabs = TAB_DEFINITIONS;
+const METRIC_ICONS = Object.freeze({
+  events: markRaw(Activity),
+  payloads: markRaw(Boxes),
+  actions: markRaw(GitBranch),
+  processes: markRaw(Cpu),
+});
 const activeTab = ref(TAB_IDS.overview);
 const selectedTraceId = ref(null);
 const traceDetail = shallowRef(null);
@@ -123,10 +133,25 @@ const metrics = computed(() => {
   const counts = traceDetail.value?.counts ?? {};
   const semantic = actionTree.value?.summary ?? {};
   return [
-    { label: 'Events', value: counts.events ?? 0 },
-    { label: 'Payloads', value: counts.payloads ?? traceDetail.value?.payloads?.length ?? 0 },
-    { label: 'Actions', value: semantic.actions ?? actionTree.value?.actions?.length ?? 0 },
-    { label: 'Processes', value: traceDetail.value?.processes?.length ?? counts.process ?? 0 },
+    { key: 'events', label: 'Events', value: counts.events ?? 0, icon: METRIC_ICONS.events },
+    {
+      key: 'payloads',
+      label: 'Payloads',
+      value: counts.payloads ?? traceDetail.value?.payloads?.length ?? 0,
+      icon: METRIC_ICONS.payloads,
+    },
+    {
+      key: 'actions',
+      label: 'Actions',
+      value: semantic.actions ?? actionTree.value?.actions?.length ?? 0,
+      icon: METRIC_ICONS.actions,
+    },
+    {
+      key: 'processes',
+      label: 'Processes',
+      value: traceDetail.value?.processes?.length ?? counts.process ?? 0,
+      icon: METRIC_ICONS.processes,
+    },
   ];
 });
 

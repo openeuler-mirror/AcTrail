@@ -1,0 +1,207 @@
+.explore-page {
+  min-width: 0;
+  display: grid;
+  gap: var(--stats-section-gap);
+}
+
+.query-builder {
+  min-width: 0;
+  display: grid;
+  gap: var(--stats-space-md);
+  padding: var(--stats-panel-padding);
+  border: 1px solid var(--stats-border);
+  border-radius: var(--stats-radius-sm);
+  background: var(--stats-surface-strong);
+  box-shadow: var(--stats-shadow);
+}
+
+.query-head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--stats-space-md);
+}
+
+.query-head h3 {
+  margin: 0;
+  font-size: var(--stats-font-title);
+  font-weight: var(--stats-weight-medium);
+}
+
+.query-head p {
+  margin: 4px 0 0;
+  color: var(--stats-muted);
+  font-size: var(--stats-font-sm);
+}
+
+.query-state {
+  flex: 0 0 auto;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--stats-space-sm);
+  border: 1px solid var(--stats-border);
+  border-radius: var(--stats-radius-sm);
+  background: var(--stats-surface);
+  color: var(--stats-muted);
+  font-size: var(--stats-font-xs);
+}
+
+.query-controls {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  align-items: end;
+  gap: var(--stats-space-md);
+}
+
+.query-field {
+  grid-column: span 2;
+  display: grid;
+  gap: var(--stats-space-2xs);
+  color: var(--stats-muted);
+  font-size: var(--stats-font-xs);
+}
+
+.query-field.wide {
+  grid-column: span 3;
+}
+
+select {
+  width: 100%;
+  height: var(--stats-control-height-md);
+  padding: 0 var(--stats-space-sm);
+  border: 1px solid var(--stats-border);
+  border-radius: var(--stats-radius-sm);
+  background: var(--stats-surface);
+  color: var(--stats-text);
+  font: inherit;
+}
+
+.query-segment {
+  grid-column: span 3;
+  min-width: 0;
+  display: grid;
+  gap: var(--stats-space-2xs);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.query-segment legend {
+  padding: 0;
+  color: var(--stats-muted);
+  font-size: var(--stats-font-xs);
+}
+
+.query-segment > div {
+  min-width: 0;
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  gap: var(--stats-space-2xs);
+  padding: var(--stats-space-2xs);
+  border: 1px solid var(--stats-border);
+  border-radius: var(--stats-radius-sm);
+  background: var(--stats-surface);
+}
+
+.query-segment button {
+  min-height: calc(var(--stats-control-height-md) - 6px);
+  padding: 0 var(--stats-space-sm);
+  border: 0;
+  border-radius: calc(var(--stats-radius-sm) - 2px);
+  background: transparent;
+  color: var(--stats-muted);
+  cursor: pointer;
+  font: inherit;
+  white-space: nowrap;
+}
+
+.query-segment button.active {
+  background: var(--stats-accent);
+  color: var(--stats-on-accent);
+}
+
+.error {
+  padding: var(--stats-space-sm) var(--stats-space-md);
+  border: 1px solid rgba(190, 18, 60, 0.22);
+  border-radius: var(--stats-radius-sm);
+  background: rgba(190, 18, 60, 0.1);
+  color: var(--stats-danger);
+  font-size: var(--stats-font-sm);
+}
+
+.result-table {
+  min-width: 0;
+  overflow: auto;
+  border: 1px solid var(--stats-border);
+  border-radius: var(--stats-radius-sm);
+  background: var(--stats-surface-strong);
+}
+
+table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+  font-size: var(--stats-font-sm);
+}
+
+th,
+td {
+  padding: var(--stats-table-cell-padding);
+  border-bottom: 1px solid var(--stats-border);
+  text-align: left;
+}
+
+th {
+  color: var(--stats-muted);
+}
+
+.numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.empty {
+  min-height: 130px;
+  display: grid;
+  place-items: center;
+  color: var(--stats-muted);
+}
+
+@media (max-width: 940px) {
+  .query-controls {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .query-field,
+  .query-field.wide,
+  .query-segment {
+    grid-column: span 3;
+  }
+}
+
+@media (max-width: 680px) {
+  .query-head {
+    display: grid;
+  }
+
+  .query-controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .query-field,
+  .query-field.wide,
+  .query-segment {
+    grid-column: 1;
+  }
+}
+
+@media (max-width: 520px) {
+  .query-segment > div {
+    width: 100%;
+    overflow-x: auto;
+  }
+}

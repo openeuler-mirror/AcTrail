@@ -1,0 +1,27 @@
+.theme-granola,
+.app-theme-granola {
+  --bg: #faf8f2;
+  --surface: rgba(255, 251, 244, 0.7);
+  --surface-muted: rgba(255, 251, 244, 0.42);
+  --border: rgba(26, 24, 20, 0.08);
+  --text: #1a1814;
+  --muted: #6a5f52;
+  --teal: #b45837;
+  --teal-deep: #8f3f25;
+  --amber: #c08a5d;
+  --rose: #a33f2f;
+  --shadow:
+    0 14px 42px rgba(180, 88, 55, 0.13),
+    0 2px 10px rgba(26, 24, 20, 0.04);
+  --scrollbar-track: rgba(255, 251, 244, 0.58);
+  --scrollbar-thumb: rgba(180, 88, 55, 0.28);
+  --scrollbar-thumb-hover: rgba(180, 88, 55, 0.48);
+  --scrollbar-thumb-border: rgba(255, 251, 244, 0.58);
+  --scrollbar-corner: rgba(255, 251, 244, 0.58);
+}
+
+.theme-granola,
+.stats-theme-granola {
+  background: var(--stats-bg-gradient), var(--stats-bg-base);
+  color: var(--stats-text);
+}

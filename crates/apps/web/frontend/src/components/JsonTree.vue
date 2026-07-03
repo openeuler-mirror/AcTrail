@@ -194,14 +194,14 @@ function escapePathKey(key) {
   padding: 7px 8px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: #fbfcfc;
+  background: var(--trace-json-row-bg);
   color: var(--text);
   cursor: pointer;
 }
 
 .json-row:hover {
-  border-color: #8fc5be;
-  background: #f1fbf8;
+  border-color: var(--trace-json-row-hover-border);
+  background: var(--trace-json-row-hover-bg);
 }
 
 .json-row-main {
@@ -234,8 +234,8 @@ function escapePathKey(key) {
   overflow: auto;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: #101819;
-  color: #e6f2ef;
+  background: var(--trace-code-bg);
+  color: var(--trace-code-text);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
   line-height: 1.5;

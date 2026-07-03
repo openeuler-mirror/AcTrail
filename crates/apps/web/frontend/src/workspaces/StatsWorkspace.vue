@@ -1,6 +1,6 @@
 <template>
   <main class="stats-workspace">
-    <aside class="stats-rail" aria-label="Stats views">
+    <aside class="stats-rail" :aria-label="t('stats.rail.aria')">
       <button
         v-for="tab in tabs"
         :key="tab.id"
@@ -13,9 +13,8 @@
       </button>
     </aside>
     <section class="stats-content">
-      <TokenStatTab
-        v-if="activeTab === STATS_TAB_IDS.token"
-        :traces="traces"
+      <LlmRequestsWorkspace
+        v-if="activeTab === STATS_TAB_IDS.llmRequests"
         :query="query"
         @loading="$emit('loading', $event)"
         @open-trace="$emit('open-trace', $event)"
@@ -25,16 +24,18 @@
 </template>
 
 <script setup>
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 
-import TokenStatTab from './stats/TokenStatTab.vue';
+import { useLocale } from '../locale';
+import LlmRequestsWorkspace from './stats/llm/LlmRequestsWorkspace.vue';
 
 const STATS_TAB_IDS = Object.freeze({
-  token: 'token',
+  llmRequests: 'llm_requests',
 });
 
-const tabs = Object.freeze([
-  { id: STATS_TAB_IDS.token, label: 'Token' },
+const { t } = useLocale();
+const tabs = computed(() => [
+  { id: STATS_TAB_IDS.llmRequests, label: t('stats.rail.llmRequests') },
 ]);
 
 defineProps({
@@ -50,7 +51,7 @@ defineProps({
 
 defineEmits(['loading', 'open-trace']);
 
-const activeTab = ref(STATS_TAB_IDS.token);
+const activeTab = ref(STATS_TAB_IDS.llmRequests);
 </script>
 
 <style scoped>

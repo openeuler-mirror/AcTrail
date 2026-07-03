@@ -1,0 +1,76 @@
+.donut-chart {
+  position: relative;
+  min-width: 0;
+  min-height: 220px;
+  display: grid;
+  place-items: center;
+}
+
+.donut-svg {
+  width: min(240px, 100%);
+  height: 220px;
+  display: block;
+  overflow: visible;
+}
+
+.donut-slice,
+.donut-full {
+  fill: none;
+  stroke-width: 28;
+  transition: d 140ms ease, filter 140ms ease, stroke-width 140ms ease;
+}
+
+.donut-slice.active,
+.donut-full.active {
+  stroke-width: 34;
+  filter: drop-shadow(0 4px 10px rgba(15, 23, 42, 0.22));
+}
+
+.donut-hole {
+  fill: var(--stats-surface-strong);
+  stroke: var(--stats-border);
+}
+
+.donut-total {
+  fill: var(--stats-text);
+  font-size: var(--stats-font-display-sm);
+  font-weight: var(--stats-weight-medium);
+}
+
+.donut-label {
+  fill: var(--stats-muted);
+  font-size: var(--stats-font-sm);
+}
+
+.donut-tooltip {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  display: grid;
+  gap: 2px;
+  max-width: 220px;
+  padding: var(--stats-space-xs) var(--stats-space-sm);
+  border: 1px solid var(--stats-border);
+  border-radius: var(--stats-radius-sm);
+  background: var(--stats-surface);
+  color: var(--stats-text);
+  box-shadow: var(--stats-shadow);
+  font-size: var(--stats-font-xs);
+}
+
+.donut-tooltip strong,
+.donut-tooltip span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.donut-tooltip strong {
+  font-weight: var(--stats-weight-medium);
+}
+
+.donut-tooltip span {
+  color: var(--stats-muted);
+  font-variant-numeric: tabular-nums;
+}

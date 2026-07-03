@@ -70,6 +70,11 @@ function agentNode(traceDetail, observedAgent) {
     kindClass: 'agent-process',
     title: `AgentProcess:${title}`,
     meta: compactMeta([pidLabel(pid), trace?.state, trace?.health]),
+    metaItems: compactMetaItems([
+      metaItem('pid', pidLabel(pid)),
+      statusMetaItem(trace?.state),
+      statusMetaItem(trace?.health),
+    ]),
     status: trace?.health ?? trace?.state,
     children: [],
     hasChildren: false,
@@ -106,6 +111,7 @@ function actionNode(action) {
     title: display.label,
     durationBadge: display.durationBadge,
     meta: display.meta,
+    metaItems: display.metaItems,
     status: action.status,
     children: [],
     hasChildren: false,
@@ -248,7 +254,7 @@ function nodeMatchesQuery(node, query) {
 }
 
 function actionDisplay(action) {
-  const label = semanticActionLabel(action);
+  const label = actionCardLabel(action);
   const target = semanticActionTarget(action);
   const time = shortTime(action.start_time);
   return {
@@ -256,7 +262,64 @@ function actionDisplay(action) {
     target,
     durationBadge: action.duration ?? null,
     meta: compactMeta([target, time, action.status]),
+    metaItems: compactMetaItems([
+      metaItem(metaKind(action), target),
+      metaItem('time', time),
+      statusMetaItem(action.status),
+    ]),
   };
+}
+
+function actionCardLabel(action) {
+  if (action?.kind === 'llm.call') {
+    return 'LLM Call';
+  }
+  if (action?.kind === 'llm.request') {
+    return 'LLM Request';
+  }
+  if (action?.kind === 'llm.response') {
+    return 'LLM Response';
+  }
+  return semanticActionLabel(action);
+}
+
+function metaKind(action) {
+  if (action?.kind === 'llm.call' || action?.kind === 'llm.request' || action?.kind === 'llm.response') {
+    return 'model';
+  }
+  if (action?.kind?.startsWith('file.') || action?.kind === 'fs.enumerate') {
+    return 'path';
+  }
+  if (action?.kind === 'command.invocation' || action?.kind === 'agent.invocation') {
+    return 'command';
+  }
+  return 'target';
+}
+
+function compactMetaItems(items) {
+  return items.filter((item) => item && item.label);
+}
+
+function metaItem(kind, label) {
+  const text = String(label ?? '').trim();
+  return text ? { kind, label: text } : null;
+}
+
+function statusMetaItem(status) {
+  const text = String(status ?? '').trim();
+  if (!text || successStatus(text)) {
+    return null;
+  }
+  return { kind: 'status', label: text };
+}
+
+function successStatus(status) {
+  return ['success', 'healthy', 'completed', 'complete', 'ok'].includes(
+    String(status ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/[\s-]+/g, '_'),
+  );
 }
 
 function pidLabel(pid) {

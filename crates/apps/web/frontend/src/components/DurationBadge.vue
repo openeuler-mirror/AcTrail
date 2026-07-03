@@ -23,10 +23,10 @@ defineProps({
   align-items: center;
   min-height: 18px;
   padding: 0 6px;
-  border: 1px solid #d8dfdf;
+  border: 1px solid var(--trace-badge-duration-border);
   border-radius: 5px;
-  background: #edf2f1;
-  color: var(--teal-deep);
+  background: var(--trace-badge-duration-bg);
+  color: var(--trace-badge-duration-text);
   font-size: 10px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
@@ -35,8 +35,8 @@ defineProps({
 }
 
 .duration-badge.is-live {
-  border-color: #f3dbb0;
-  background: #fdf4e3;
-  color: #b06f04;
+  border-color: var(--trace-badge-progress-border);
+  background: var(--trace-badge-progress-bg);
+  color: var(--trace-badge-progress-text);
 }
 </style>
