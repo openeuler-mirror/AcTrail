@@ -102,4 +102,13 @@ static __always_inline __u64 tls_probe_positive_i32_size(unsigned long raw) {
     return (__u64)(__u32)value;
 }
 
+static __always_inline __u64 tls_probe_positive_isize_size(unsigned long raw) {
+    long value = (long)raw;
+
+    if (value <= 0) {
+        return 0;
+    }
+    return (__u64)value;
+}
+
 #endif

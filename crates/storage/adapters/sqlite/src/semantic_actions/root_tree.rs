@@ -6,24 +6,26 @@ use model_core::ids::TraceId;
 use rusqlite::types::Value;
 use rusqlite::{Connection, Row, params_from_iter};
 use semantic_action::{
-    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionStoreError,
-    attr_keys as attrs, link_roles,
+    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkRole,
+    SemanticActionStoreError,
 };
 
 use crate::SqliteStorage;
 use crate::records::decode_map;
+use crate::semantic_actions::codebook::sqlite::{
+    action_kind_code, decode_link_confidence, decode_link_role, link_role_code,
+    link_role_code_from_str,
+};
+use crate::semantic_actions::cold_fields::decode_text_from_row;
 use crate::semantic_actions::store::{
-    action_from_row, decode_link_confidence, decode_link_role, read_link_evidence,
+    ACTION_SELECT_COLUMNS, LINK_SELECT_COLUMNS, action_cold_field_join, action_from_row,
+    link_cold_field_join, read_link_evidence,
 };
 use crate::semantic_actions::tree::SemanticActionChildPageQuery;
-use crate::semantic_actions::tree_metadata::display_child_counts;
-
-const ACTION_INVALID_MARKER: &str = attrs::actrail::ACTION_VALID_FALSE_MARKER;
-const LINK_INVALID_MARKER: &str = attrs::actrail::LINK_VALID_FALSE_MARKER;
-const PARENT_CONFLICT_MARKER: &str = attrs::process_parent::IDENTITY_STATE_CONFLICT_MARKER;
-const AGENT_ROOT_ROLE: &str = link_roles::AGENT_PERFORMED_ACTION;
-const COMMAND_CONTAINS_COMMAND_ROLE: &str = link_roles::COMMAND_CONTAINS_COMMAND_INVOCATION;
-const COMMAND_KIND: &str = SemanticActionKind::CommandInvocation.as_str();
+use crate::semantic_actions::tree_metadata::{
+    display_child_counts, display_parent_link_absence_predicate, display_parent_link_value_count,
+    push_display_parent_link_values,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SemanticActionDisplayRootChildRow {
@@ -116,10 +118,12 @@ fn root_child_action_ids(
     limit: usize,
 ) -> Result<Vec<String>, SemanticActionStoreError> {
     let query = format!(
-        "SELECT action.action_id
+        "SELECT ids.action_id
          FROM semantic_actions action
+         JOIN semantic_action_ids ids
+           ON ids.action_key = action.action_key
          WHERE {}
-         ORDER BY action.start_time ASC, action.action_id ASC
+         ORDER BY action.start_time ASC, ids.action_id ASC
          LIMIT ? OFFSET ?",
         root_candidate_predicate(display_parent_roles)
     );
@@ -148,10 +152,14 @@ fn read_actions(
         return Ok(BTreeMap::new());
     }
     let query = format!(
-        "SELECT *
-         FROM semantic_actions
-         WHERE trace_id = ?
-           AND action_id IN ({})",
+        "SELECT {ACTION_SELECT_COLUMNS}
+         FROM semantic_actions action
+         JOIN semantic_action_ids ids
+           ON ids.action_key = action.action_key
+         {}
+         WHERE action.trace_id = ?
+           AND ids.action_id IN ({})",
+        action_cold_field_join(),
         sql_placeholders(action_ids.len())
     );
     let mut values = Vec::with_capacity(1 + action_ids.len());
@@ -185,43 +193,44 @@ fn read_root_links(
         return Ok(BTreeMap::new());
     }
     let query = format!(
-        "SELECT link.*
+        "SELECT {LINK_SELECT_COLUMNS}
          FROM semantic_action_links link
          JOIN semantic_actions parent
-           ON parent.trace_id = link.trace_id
-          AND parent.action_id = link.parent_action_id
+           ON parent.action_key = link.parent_action_key
+         JOIN semantic_action_ids parent_ids
+           ON parent_ids.action_key = link.parent_action_key
          JOIN semantic_actions child
-           ON child.trace_id = link.trace_id
-          AND child.action_id = link.child_action_id
+           ON child.action_key = link.child_action_key
+         JOIN semantic_action_ids child_ids
+           ON child_ids.action_key = link.child_action_key
+         {}
          WHERE link.trace_id = ?
-           AND link.child_action_id IN ({})
-           AND link.role IN ({})
-           AND link.valid = 1
-           AND instr(link.attributes, ?) = 0
-           AND instr(parent.attributes, ?) = 0
-           AND instr(child.attributes, ?) = 0
+           AND child_ids.action_id IN ({})
+           AND link.role_code IN ({})
+           AND link.link_valid_code = 1
+           AND parent.action_valid_code = 1
+           AND child.action_valid_code = 1
            AND NOT (
-             (link.role = ? OR link.role = ?)
-             AND instr(child.attributes, ?) > 0
+             (link.role_code = ? OR link.role_code = ?)
+             AND child.process_parent_conflict = 1
            )
-         ORDER BY child.start_time ASC, child.action_id ASC, link.role ASC, link.parent_action_id ASC",
+         ORDER BY child.start_time ASC, child_ids.action_id ASC, link.role_code ASC, parent_ids.action_id ASC",
+        link_cold_field_join(),
         sql_placeholders(action_ids.len()),
         sql_placeholders(root_link_roles.len())
     );
-    let mut values = Vec::with_capacity(1 + action_ids.len() + root_link_roles.len() + 6);
+    let mut values = Vec::with_capacity(1 + action_ids.len() + root_link_roles.len() + 2);
     values.push(trace_id_value(trace_id)?);
     values.extend(action_ids.iter().cloned().map(Value::Text));
-    values.extend(
-        root_link_roles
-            .iter()
-            .map(|role| Value::Text((*role).to_string())),
-    );
-    values.push(Value::Text(LINK_INVALID_MARKER.to_string()));
-    values.push(Value::Text(ACTION_INVALID_MARKER.to_string()));
-    values.push(Value::Text(ACTION_INVALID_MARKER.to_string()));
-    values.push(Value::Text(AGENT_ROOT_ROLE.to_string()));
-    values.push(Value::Text(COMMAND_CONTAINS_COMMAND_ROLE.to_string()));
-    values.push(Value::Text(PARENT_CONFLICT_MARKER.to_string()));
+    for role in root_link_roles {
+        values.push(Value::Integer(i64::from(link_role_code_from_str(role)?)));
+    }
+    values.push(Value::Integer(i64::from(link_role_code(
+        SemanticActionLinkRole::AgentPerformedAction,
+    ))));
+    values.push(Value::Integer(i64::from(link_role_code(
+        SemanticActionLinkRole::CommandContainsCommandInvocation,
+    ))));
 
     let mut statement = connection.prepare(&query).map_err(|error| {
         SemanticActionStoreError::new("prepare_semantic_action_root_links", error.to_string())
@@ -272,13 +281,15 @@ fn command_fallback_child_counts(
     if command_ids.is_empty() {
         return Ok(BTreeMap::new());
     }
-    let parent_filter = valid_display_parent_link_exists_predicate(display_parent_roles, "child");
+    let parent_filter = display_parent_link_absence_predicate(display_parent_roles, "child");
     let query = format!(
-        "SELECT command.action_id, COUNT(DISTINCT child.action_id)
+        "SELECT command_ids.action_id, COUNT(DISTINCT child.action_key)
          FROM semantic_actions command
+         JOIN semantic_action_ids command_ids
+           ON command_ids.action_key = command.action_key
          JOIN semantic_actions child
            ON child.trace_id = command.trace_id
-          AND child.kind != ?
+          AND child.kind_code != ?
           AND child.process_pid = command.process_pid
           AND child.process_task_id IS command.process_task_id
           AND child.process_start_ticks = command.process_start_ticks
@@ -287,25 +298,27 @@ fn command_fallback_child_counts(
           AND child.start_time >= command.start_time
           AND (command.end_time IS NULL OR child.start_time <= command.end_time)
          WHERE command.trace_id = ?
-           AND command.action_id IN ({})
-           AND command.kind = ?
-           AND instr(command.attributes, ?) = 0
-           AND instr(child.attributes, ?) = 0
+           AND command_ids.action_id IN ({})
+           AND command.kind_code = ?
+           AND command.action_valid_code = 1
+           AND child.action_valid_code = 1
            {}
-         GROUP BY command.action_id",
+         GROUP BY command_ids.action_id",
         sql_placeholders(command_ids.len()),
         parent_filter
     );
     let mut values = Vec::with_capacity(
-        4 + command_ids.len() + link_predicate_value_count(display_parent_roles),
+        3 + command_ids.len() + display_parent_link_value_count(display_parent_roles),
     );
-    values.push(Value::Text(COMMAND_KIND.to_string()));
+    values.push(Value::Integer(i64::from(action_kind_code(
+        SemanticActionKind::CommandInvocation,
+    ))));
     values.push(trace_id_value(trace_id)?);
     values.extend(command_ids.iter().cloned().map(Value::Text));
-    values.push(Value::Text(COMMAND_KIND.to_string()));
-    values.push(Value::Text(ACTION_INVALID_MARKER.to_string()));
-    values.push(Value::Text(ACTION_INVALID_MARKER.to_string()));
-    push_link_predicate_values(&mut values, display_parent_roles);
+    values.push(Value::Integer(i64::from(action_kind_code(
+        SemanticActionKind::CommandInvocation,
+    ))));
+    push_display_parent_link_values(&mut values, display_parent_roles)?;
 
     let mut statement = connection.prepare(&query).map_err(|error| {
         SemanticActionStoreError::new(
@@ -345,19 +358,19 @@ fn command_fallback_child_counts(
 }
 
 fn root_candidate_predicate(display_parent_roles: &[&str]) -> String {
-    let parent_filter = valid_display_parent_link_exists_predicate(display_parent_roles, "action");
+    let parent_filter = display_parent_link_absence_predicate(display_parent_roles, "action");
     format!(
         "action.trace_id = ?
-         AND instr(action.attributes, ?) = 0
+         AND action.action_valid_code = 1
          {}
          AND (
-           action.kind = ?
+           action.kind_code = ?
            OR NOT EXISTS (
              SELECT 1
              FROM semantic_actions command
              WHERE command.trace_id = action.trace_id
-               AND command.kind = ?
-               AND command.action_id != action.action_id
+               AND command.kind_code = ?
+               AND command.action_key != action.action_key
                AND command.process_pid = action.process_pid
                AND command.process_task_id IS action.process_task_id
                AND command.process_start_ticks = action.process_start_ticks
@@ -365,7 +378,7 @@ fn root_candidate_predicate(display_parent_roles: &[&str]) -> String {
                AND command.process_generation = action.process_generation
                AND command.start_time <= action.start_time
                AND (command.end_time IS NULL OR action.start_time <= command.end_time)
-               AND instr(command.attributes, ?) = 0
+               AND command.action_valid_code = 1
            )
          )",
         parent_filter
@@ -376,56 +389,16 @@ fn root_candidate_values(
     trace_id: TraceId,
     display_parent_roles: &[&str],
 ) -> Result<Vec<Value>, SemanticActionStoreError> {
-    let mut values = Vec::with_capacity(5 + link_predicate_value_count(display_parent_roles));
+    let mut values = Vec::with_capacity(3 + display_parent_link_value_count(display_parent_roles));
     values.push(trace_id_value(trace_id)?);
-    values.push(Value::Text(ACTION_INVALID_MARKER.to_string()));
-    push_link_predicate_values(&mut values, display_parent_roles);
-    values.push(Value::Text(COMMAND_KIND.to_string()));
-    values.push(Value::Text(COMMAND_KIND.to_string()));
-    values.push(Value::Text(ACTION_INVALID_MARKER.to_string()));
+    push_display_parent_link_values(&mut values, display_parent_roles)?;
+    values.push(Value::Integer(i64::from(action_kind_code(
+        SemanticActionKind::CommandInvocation,
+    ))));
+    values.push(Value::Integer(i64::from(action_kind_code(
+        SemanticActionKind::CommandInvocation,
+    ))));
     Ok(values)
-}
-
-fn valid_display_parent_link_exists_predicate(roles: &[&str], child_alias: &str) -> String {
-    if roles.is_empty() {
-        return String::new();
-    }
-    format!(
-        "AND NOT EXISTS (
-           SELECT 1
-           FROM semantic_action_links link
-           JOIN semantic_actions parent
-             ON parent.trace_id = link.trace_id
-            AND parent.action_id = link.parent_action_id
-           WHERE link.trace_id = {child_alias}.trace_id
-             AND link.child_action_id = {child_alias}.action_id
-             AND link.role IN ({})
-             AND link.valid = 1
-             AND instr(link.attributes, ?) = 0
-             AND instr(parent.attributes, ?) = 0
-             AND NOT (
-               (link.role = ? OR link.role = ?)
-               AND instr({child_alias}.attributes, ?) > 0
-             )
-         )",
-        sql_placeholders(roles.len())
-    )
-}
-
-fn push_link_predicate_values(values: &mut Vec<Value>, roles: &[&str]) {
-    if roles.is_empty() {
-        return;
-    }
-    values.extend(roles.iter().map(|role| Value::Text((*role).to_string())));
-    values.push(Value::Text(LINK_INVALID_MARKER.to_string()));
-    values.push(Value::Text(ACTION_INVALID_MARKER.to_string()));
-    values.push(Value::Text(AGENT_ROOT_ROLE.to_string()));
-    values.push(Value::Text(COMMAND_CONTAINS_COMMAND_ROLE.to_string()));
-    values.push(Value::Text(PARENT_CONFLICT_MARKER.to_string()));
-}
-
-fn link_predicate_value_count(roles: &[&str]) -> usize {
-    if roles.is_empty() { 0 } else { roles.len() + 5 }
 }
 
 fn root_link_from_row(row: &Row<'_>) -> Result<SemanticActionLink, rusqlite::Error> {
@@ -433,11 +406,11 @@ fn root_link_from_row(row: &Row<'_>) -> Result<SemanticActionLink, rusqlite::Err
         trace_id: TraceId::new(row.get("trace_id")?),
         parent_action_id: row.get("parent_action_id")?,
         child_action_id: row.get("child_action_id")?,
-        role: decode_link_role(row.get::<_, String>("role")?)?,
-        confidence: decode_link_confidence(row.get::<_, String>("confidence")?)?,
+        role: decode_link_role(row.get::<_, i64>("role_code")?)?,
+        confidence: decode_link_confidence(row.get::<_, i64>("confidence_code")?)?,
         valid: row.get("valid")?,
         evidence: Vec::new(),
-        attributes: decode_map(&row.get::<_, String>("attributes")?),
+        attributes: decode_map(&decode_text_from_row(row, "legacy_attributes")?),
     })
 }
 

@@ -6,6 +6,7 @@ pub mod query;
 pub mod records;
 pub mod retention;
 pub mod schema;
+mod schema_migrations;
 pub mod semantic_actions;
 pub mod transaction;
 pub mod writer;
@@ -165,6 +166,10 @@ mod tests {
     use model_core::process::{ProcessIdentity, ProcessMembership};
     use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
     use rusqlite::Connection;
+    use semantic_action::{
+        SemanticActionKind, SemanticActionLinkConfidence, SemanticActionLinkRole,
+        SemanticActionReadStore, SemanticActionStatus,
+    };
     use store_read_contract::diagnostics::DiagnosticReadStore;
     use store_read_contract::events::EventReadStore;
     use store_read_contract::traces::TraceReadStore;
@@ -333,6 +338,227 @@ mod tests {
         assert!(storage.get_trace(trace_id).is_err());
         assert!(storage.list_events(trace_id).is_err());
         assert!(storage.list_diagnostics(trace_id).is_err());
+    }
+
+    #[test]
+    fn open_migrates_v6_semantic_action_strings_to_codebook_columns() {
+        let path = temp_storage_path("semantic-codebook-v6");
+        cleanup_storage_files(&path);
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    r#"
+                    CREATE TABLE semantic_actions (
+                        action_id TEXT PRIMARY KEY,
+                        trace_id INTEGER NOT NULL,
+                        kind TEXT NOT NULL,
+                        title TEXT NOT NULL,
+                        start_time INTEGER NOT NULL,
+                        end_time INTEGER,
+                        process_pid INTEGER NOT NULL,
+                        process_task_id INTEGER,
+                        process_start_ticks INTEGER NOT NULL,
+                        process_pid_namespace TEXT,
+                        process_generation INTEGER NOT NULL,
+                        status TEXT NOT NULL,
+                        completeness TEXT NOT NULL,
+                        confidence_millis INTEGER,
+                        attributes TEXT NOT NULL
+                    );
+                    CREATE TABLE semantic_action_evidence (
+                        action_id TEXT NOT NULL,
+                        evidence_order INTEGER NOT NULL,
+                        kind TEXT NOT NULL,
+                        evidence_id INTEGER NOT NULL,
+                        role TEXT NOT NULL,
+                        PRIMARY KEY (action_id, evidence_order)
+                    );
+                    CREATE TABLE semantic_action_links (
+                        trace_id INTEGER NOT NULL,
+                        parent_action_id TEXT NOT NULL,
+                        child_action_id TEXT NOT NULL,
+                        role TEXT NOT NULL,
+                        confidence TEXT NOT NULL,
+                        valid INTEGER NOT NULL DEFAULT 1,
+                        attributes TEXT NOT NULL,
+                        PRIMARY KEY (trace_id, parent_action_id, child_action_id, role)
+                    );
+                    CREATE TABLE semantic_action_link_evidence (
+                        trace_id INTEGER NOT NULL,
+                        parent_action_id TEXT NOT NULL,
+                        child_action_id TEXT NOT NULL,
+                        role TEXT NOT NULL,
+                        evidence_order INTEGER NOT NULL,
+                        kind TEXT NOT NULL,
+                        evidence_id INTEGER NOT NULL,
+                        evidence_role TEXT NOT NULL,
+                        PRIMARY KEY (trace_id, parent_action_id, child_action_id, role, evidence_order)
+                    );
+                    CREATE TABLE file_observation_paths (
+                        trace_id INTEGER NOT NULL,
+                        action_id TEXT NOT NULL,
+                        path_order INTEGER NOT NULL,
+                        path TEXT NOT NULL,
+                        PRIMARY KEY (trace_id, action_id, path)
+                    );
+                    CREATE TABLE file_path_set_action_refs (
+                        trace_id INTEGER NOT NULL,
+                        action_id TEXT NOT NULL,
+                        path_set_id TEXT NOT NULL,
+                        PRIMARY KEY (trace_id, action_id)
+                    );
+                    CREATE TABLE llm_request_manifests (
+                        manifest_id INTEGER PRIMARY KEY,
+                        trace_id INTEGER NOT NULL,
+                        action_id TEXT NOT NULL,
+                        format_version INTEGER NOT NULL,
+                        canonical_body_hash BLOB NOT NULL,
+                        canonical_body_bytes INTEGER NOT NULL,
+                        skeleton_json TEXT NOT NULL,
+                        UNIQUE (trace_id, action_id)
+                    );
+                    INSERT INTO semantic_actions (
+                        action_id, trace_id, kind, title, start_time, end_time,
+                        process_pid, process_task_id, process_start_ticks,
+                        process_generation, status, completeness, confidence_millis, attributes
+                    ) VALUES
+                        ('parent', 1, 'command.invocation', 'command', 1, 2, 100, 10, 11, 0, 'success', 'complete', NULL, ''),
+                        ('child', 1, 'llm.call', 'call', 2, 3, 100, 10, 11, 0, 'success', 'complete', NULL, '');
+                    INSERT INTO semantic_action_evidence (
+                        action_id, evidence_order, kind, evidence_id, role
+                    ) VALUES ('child', 0, 'payload_segment', 42, 'llm.payload');
+                    INSERT INTO semantic_action_links (
+                        trace_id, parent_action_id, child_action_id, role, confidence, valid, attributes
+                    ) VALUES (1, 'parent', 'child', 'command.contains_llm_call', 'derived', 1, '');
+                    INSERT INTO semantic_action_link_evidence (
+                        trace_id, parent_action_id, child_action_id, role,
+                        evidence_order, kind, evidence_id, evidence_role
+                    ) VALUES (1, 'parent', 'child', 'command.contains_llm_call', 0, 'payload_segment', 43, 'llm.payload');
+                    INSERT INTO file_observation_paths (
+                        trace_id, action_id, path_order, path
+                    ) VALUES (1, 'child', 0, '/tmp/input');
+                    INSERT INTO file_path_set_action_refs (
+                        trace_id, action_id, path_set_id
+                    ) VALUES (1, 'child', 'path-set-1');
+                    INSERT INTO llm_request_manifests (
+                        manifest_id, trace_id, action_id, format_version,
+                        canonical_body_hash, canonical_body_bytes, skeleton_json
+                    ) VALUES (7, 1, 'child', 1, X'001122', 3, '{"ok":true}');
+                    PRAGMA user_version = 6;
+                    "#,
+                )
+                .unwrap();
+        }
+
+        let storage = SqliteStorage::open(&path).unwrap();
+        let version = storage
+            .connection()
+            .borrow()
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap();
+        assert_eq!(version, 7);
+        let legacy_kind_columns = storage
+            .connection()
+            .borrow()
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('semantic_actions')
+                 WHERE name = 'kind'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap();
+        assert_eq!(legacy_kind_columns, 0);
+
+        let actions = storage.list_semantic_actions(TraceId::new(1)).unwrap();
+        assert_eq!(actions.len(), 2);
+        assert_eq!(actions[0].kind, SemanticActionKind::CommandInvocation);
+        assert_eq!(actions[1].kind, SemanticActionKind::LlmCall);
+        assert_eq!(actions[1].status, SemanticActionStatus::Success);
+        assert_eq!(actions[1].evidence[0].id, 42);
+
+        let links = storage.list_semantic_action_links(TraceId::new(1)).unwrap();
+        assert_eq!(links.len(), 1);
+        assert_eq!(
+            links[0].role,
+            SemanticActionLinkRole::CommandContainsLlmCall
+        );
+        assert_eq!(links[0].confidence, SemanticActionLinkConfidence::Derived);
+        assert_eq!(links[0].evidence[0].id, 43);
+
+        for table in [
+            "file_observation_paths",
+            "file_path_set_action_refs",
+            "llm_request_manifests",
+        ] {
+            let legacy_action_id_columns = storage
+                .connection()
+                .borrow()
+                .query_row(
+                    &format!(
+                        "SELECT COUNT(*) FROM pragma_table_info('{table}')
+                         WHERE name = 'action_id'"
+                    ),
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap();
+            assert_eq!(legacy_action_id_columns, 0);
+        }
+
+        let migrated_path_action = storage
+            .connection()
+            .borrow()
+            .query_row(
+                "SELECT ids.action_id
+                 FROM file_observation_paths paths
+                 JOIN semantic_action_ids ids
+                   ON ids.action_key = paths.action_key
+                 WHERE paths.path = '/tmp/input'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        assert_eq!(migrated_path_action, "child");
+
+        let migrated_path_set_action = storage
+            .connection()
+            .borrow()
+            .query_row(
+                "SELECT ids.action_id
+                 FROM file_path_set_action_refs refs
+                 JOIN semantic_action_ids ids
+                   ON ids.action_key = refs.action_key
+                 WHERE refs.path_set_id = 'path-set-1'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        assert_eq!(migrated_path_set_action, "child");
+
+        let migrated_manifest = storage
+            .connection()
+            .borrow()
+            .query_row(
+                "SELECT manifest.manifest_id, ids.action_id, manifest.skeleton_json
+                 FROM llm_request_manifests manifest
+                 JOIN semantic_action_ids ids
+                   ON ids.action_key = manifest.action_key",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            migrated_manifest,
+            (7, "child".to_string(), "{\"ok\":true}".to_string())
+        );
+        cleanup_storage_files(&path);
     }
 
     fn temp_storage_path(name: &str) -> std::path::PathBuf {

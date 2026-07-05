@@ -3,12 +3,18 @@
 use model_core::ids::TraceId;
 use rusqlite::params_from_iter;
 use rusqlite::types::Value;
-use semantic_action::{SemanticAction, SemanticActionStoreError};
+use semantic_action::{SemanticAction, SemanticActionKind, SemanticActionStoreError};
 
 use crate::SqliteStorage;
 use crate::records::encode_time;
-use crate::semantic_actions::store::{action_from_row, read_evidence};
-use crate::semantic_actions::tree_metadata::invalidated_action_attrs;
+use crate::semantic_actions::codebook::sqlite::action_kind_code;
+use crate::semantic_actions::store::{
+    ACTION_SELECT_COLUMNS, action_cold_field_join, action_from_row, read_evidence,
+};
+use crate::semantic_actions::tree_metadata::{
+    display_parent_link_absence_predicate, display_parent_link_value_count,
+    invalidated_action_attrs, push_display_parent_link_values,
+};
 
 impl SqliteStorage {
     pub fn semantic_action_command_fallback_children(
@@ -27,27 +33,26 @@ impl SqliteStorage {
             return Ok(Vec::new());
         }
         let connection = self.connection().borrow();
+        let action_cold_join = action_cold_field_join();
+        let parent_filter = display_parent_link_absence_predicate(display_parent_roles, "action");
         let query = format!(
-            "SELECT child.*
-             FROM semantic_actions child
-             WHERE child.trace_id = ?
-               AND child.kind != 'command.invocation'
-               AND child.process_pid = ?
-               AND child.process_task_id IS ?
-               AND child.process_start_ticks = ?
-               AND child.process_pid_namespace IS ?
-               AND child.process_generation = ?
-               AND child.start_time >= ?
-               AND (? IS NULL OR child.start_time <= ?)
-               AND NOT EXISTS (
-                   SELECT 1 FROM semantic_action_links link
-                   WHERE link.trace_id = child.trace_id
-                     AND link.child_action_id = child.action_id
-                     AND link.valid = 1
-                     AND link.role IN ({})
-               )
-             ORDER BY child.start_time ASC, child.action_id ASC",
-            sql_placeholders(display_parent_roles.len())
+            "SELECT {ACTION_SELECT_COLUMNS}
+             FROM semantic_actions action
+             JOIN semantic_action_ids ids
+               ON ids.action_key = action.action_key
+             {action_cold_join}
+             WHERE action.trace_id = ?
+               AND action.kind_code != ?
+               AND action.process_pid = ?
+               AND action.process_task_id IS ?
+               AND action.process_start_ticks = ?
+               AND action.process_pid_namespace IS ?
+               AND action.process_generation = ?
+               AND action.start_time >= ?
+               AND (? IS NULL OR action.start_time <= ?)
+               AND action.action_valid_code = 1
+               {parent_filter}
+             ORDER BY action.start_time ASC, ids.action_id ASC",
         );
         let values = command_fallback_query_values(trace_id, command, display_parent_roles)?;
         let mut statement = connection.prepare(&query).map_err(|error| {
@@ -88,8 +93,12 @@ fn command_fallback_query_values(
     display_parent_roles: &[&str],
 ) -> Result<Vec<Value>, SemanticActionStoreError> {
     let end_time = command.end_time.map(encode_time);
-    let mut values = vec![
+    let mut values = Vec::with_capacity(10 + display_parent_link_value_count(display_parent_roles));
+    values.extend([
         trace_id_value(trace_id)?,
+        Value::Integer(i64::from(action_kind_code(
+            SemanticActionKind::CommandInvocation,
+        ))),
         Value::Integer(i64::from(command.process.pid)),
         command
             .process
@@ -119,12 +128,8 @@ fn command_fallback_query_values(
         Value::Integer(encode_time(command.start_time)),
         end_time.map_or(Value::Null, Value::Integer),
         end_time.map_or(Value::Null, Value::Integer),
-    ];
-    values.extend(
-        display_parent_roles
-            .iter()
-            .map(|role| Value::Text((*role).to_string())),
-    );
+    ]);
+    push_display_parent_link_values(&mut values, display_parent_roles)?;
     Ok(values)
 }
 
@@ -134,11 +139,4 @@ fn trace_id_value(trace_id: TraceId) -> Result<Value, SemanticActionStoreError> 
         .map_err(|error| {
             SemanticActionStoreError::new("semantic_action_trace_id_param", error.to_string())
         })
-}
-
-fn sql_placeholders(count: usize) -> String {
-    std::iter::repeat("?")
-        .take(count)
-        .collect::<Vec<_>>()
-        .join(",")
 }

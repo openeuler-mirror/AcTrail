@@ -7,16 +7,26 @@ use model_core::process::ProcessIdentity;
 use rusqlite::types::Value;
 use rusqlite::{Connection, Params, Row, params, params_from_iter};
 use semantic_action::{
-    SemanticAction, SemanticActionLink, SemanticActionStoreError, attr_keys as attrs,
+    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionStoreError,
+    attr_keys as attrs,
 };
 
 use crate::SqliteStorage;
 use crate::records::decode_map;
+use crate::semantic_actions::action_ids::resolve_action_key;
+use crate::semantic_actions::codebook::sqlite::{
+    action_kind_code, action_kind_code_from_str, decode_link_confidence, decode_link_role,
+    link_role_code_from_str,
+};
+use crate::semantic_actions::cold_fields::decode_text_from_row_with_prefix;
 use crate::semantic_actions::store::{
-    action_from_row, decode_link_confidence, decode_link_role, read_evidence,
+    ACTION_SELECT_COLUMNS, action_cold_field_join, action_from_row, link_cold_field_join,
+    read_evidence,
 };
 use crate::semantic_actions::tree_metadata::{
-    child_count_for_parent, invalidated_action_attrs, invalidated_link_attrs, load_child_metadata,
+    child_count_for_parent, effective_incoming_link_absence_predicate, effective_link_value_count,
+    invalidated_action_attrs, invalidated_link_attrs, load_child_metadata,
+    push_effective_link_values,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -64,17 +74,19 @@ impl SqliteStorage {
             params![trace_id.get()],
             "count_semantic_action_links",
         )?;
+        let root_predicate = effective_incoming_link_absence_predicate("action");
+        let root_query = format!(
+            "SELECT COUNT(*) FROM semantic_actions action
+             WHERE action.trace_id = ?
+             {root_predicate}"
+        );
+        let mut root_values = Vec::with_capacity(1 + effective_link_value_count(None));
+        root_values.push(trace_id_value(trace_id)?);
+        push_effective_link_values(&mut root_values, None)?;
         let roots = count_rows(
             &connection,
-            "SELECT COUNT(*) FROM semantic_actions action
-             WHERE action.trace_id = ?1
-             AND NOT EXISTS (
-                SELECT 1 FROM semantic_action_links link
-                WHERE link.trace_id = action.trace_id
-                AND link.child_action_id = action.action_id
-                AND link.valid = 1
-             )",
-            params![trace_id.get()],
+            &root_query,
+            params_from_iter(root_values),
             "count_semantic_action_roots",
         )?;
         Ok(SemanticActionSummary {
@@ -90,14 +102,19 @@ impl SqliteStorage {
     ) -> Result<Option<SemanticAction>, SemanticActionStoreError> {
         ensure_semantic_trace(self, trace_id)?;
         let connection = self.connection().borrow();
+        let action_cold_join = action_cold_field_join();
         let mut statement = connection
-            .prepare(
-                "SELECT * FROM semantic_actions
-                 WHERE trace_id = ?1
-                 AND kind = 'process.exec'
-                 AND attributes LIKE ?2
-                 ORDER BY start_time ASC, action_id ASC",
-            )
+            .prepare(&format!(
+                "SELECT {ACTION_SELECT_COLUMNS}
+                     FROM semantic_actions action
+                     JOIN semantic_action_ids ids
+                       ON ids.action_key = action.action_key
+                     {action_cold_join}
+                     WHERE action.trace_id = ?1
+                     AND action.kind_code = ?2
+                     AND action.agent_observed = 1
+                     ORDER BY action.start_time ASC, ids.action_id ASC"
+            ))
             .map_err(|error| {
                 SemanticActionStoreError::new("prepare_observed_agent_action", error.to_string())
             })?;
@@ -105,7 +122,7 @@ impl SqliteStorage {
             .query_map(
                 params![
                     trace_id.get(),
-                    format!("%{}%", attrs::agent::IDENTITY_STATUS_OBSERVED_MARKER)
+                    action_kind_code(SemanticActionKind::ProcessExec),
                 ],
                 action_from_row,
             )
@@ -198,19 +215,24 @@ impl SqliteStorage {
     ) -> Result<Option<SemanticAction>, SemanticActionStoreError> {
         ensure_semantic_trace(self, trace_id)?;
         let connection = self.connection().borrow();
+        let action_cold_join = action_cold_field_join();
         let mut statement = connection
-            .prepare(
-                "SELECT * FROM semantic_actions
-                 WHERE trace_id = ?1
-                   AND kind = ?2
-                   AND process_pid = ?3
-                   AND process_task_id IS ?4
-                   AND process_start_ticks = ?5
-                   AND process_pid_namespace IS ?6
-                   AND process_generation = ?7
-                 ORDER BY start_time ASC, action_id ASC
-                 LIMIT 1",
-            )
+            .prepare(&format!(
+                "SELECT {ACTION_SELECT_COLUMNS}
+                     FROM semantic_actions action
+                     JOIN semantic_action_ids ids
+                       ON ids.action_key = action.action_key
+                     {action_cold_join}
+                     WHERE action.trace_id = ?1
+                       AND action.kind_code = ?2
+                       AND action.process_pid = ?3
+                       AND action.process_task_id IS ?4
+                       AND action.process_start_ticks = ?5
+                       AND action.process_pid_namespace IS ?6
+                       AND action.process_generation = ?7
+                     ORDER BY action.start_time ASC, ids.action_id ASC
+                     LIMIT 1"
+            ))
             .map_err(|error| {
                 SemanticActionStoreError::new(
                     "prepare_semantic_action_for_process_kind",
@@ -220,7 +242,7 @@ impl SqliteStorage {
         let mut rows = statement
             .query(params![
                 trace_id.get(),
-                kind,
+                action_kind_code_from_str(kind)?,
                 process.pid,
                 process.task_id,
                 process.start_time_ticks,
@@ -288,36 +310,50 @@ impl SqliteStorage {
             String::new()
         } else {
             format!(
-                " AND child.kind IN ({})",
+                " AND action.kind_code IN ({})",
                 sql_placeholders(child_kinds.len())
             )
         };
         let connection = self.connection().borrow();
+        let Some(parent_action_key) = resolve_action_key(&connection, parent_action_id)? else {
+            return Ok(Vec::new());
+        };
         let page_filter = page.map(|_| " LIMIT ? OFFSET ?").unwrap_or_default();
+        let action_cold_join = action_cold_field_join();
+        let link_cold_join = link_cold_field_join();
         let query = format!(
-            "SELECT child.*,
-                    link.parent_action_id AS parent_action_id,
-                    link.child_action_id AS child_action_id,
-                    link.role AS role,
-                    link.confidence AS confidence,
+            "SELECT {ACTION_SELECT_COLUMNS},
+                    parent_ids.action_id AS parent_action_id,
+                    ids.action_id AS child_action_id,
+                    link.role_code AS role_code,
+                    link.confidence_code AS confidence_code,
                     link.valid AS valid,
-                    link.attributes AS link_attributes
+                    link.attributes AS link_legacy_attributes,
+                    link_attrs.encoding_code AS link_attributes_encoding_code,
+                    link_attrs.uncompressed_bytes AS link_attributes_uncompressed_bytes,
+                    link_attrs.value_hash AS link_attributes_value_hash,
+                    link_attrs.payload AS link_attributes_payload
              FROM semantic_action_links link
-             JOIN semantic_actions child
-               ON child.trace_id = link.trace_id
-              AND child.action_id = link.child_action_id
+             JOIN semantic_actions action
+               ON action.action_key = link.child_action_key
+             JOIN semantic_action_ids ids
+               ON ids.action_key = action.action_key
+             JOIN semantic_action_ids parent_ids
+               ON parent_ids.action_key = link.parent_action_key
+             {action_cold_join}
+             {link_cold_join}
              WHERE link.trace_id = ?
-               AND link.parent_action_id = ?
-               AND link.valid = 1
-               AND link.role IN ({})
+               AND link.parent_action_key = ?
+               AND link.link_valid_code = 1
+               AND link.role_code IN ({})
                {}
-             ORDER BY child.start_time ASC, child.action_id ASC, link.role ASC{}",
+             ORDER BY action.start_time ASC, ids.action_id ASC, link.role_code ASC{}",
             sql_placeholders(roles.len()),
             kind_filter,
             page_filter
         );
         let mut values =
-            role_and_kind_query_values(trace_id, parent_action_id, roles, child_kinds)?;
+            role_and_kind_query_values(trace_id, parent_action_key, roles, child_kinds)?;
         if let Some(page) = page {
             values.push(usize_value(page.limit, "semantic_action_child_limit")?);
             values.push(usize_value(page.offset, "semantic_action_child_offset")?);
@@ -340,7 +376,7 @@ impl SqliteStorage {
                 || !child.link.valid
                 || invalidated_link_attrs(
                     &child.link.attributes,
-                    child.link.role.as_str(),
+                    child.link.role,
                     &child.action.attributes,
                 )
                 || !seen.insert(child.action.action_id.clone())
@@ -381,6 +417,14 @@ fn usize_value(value: usize, stage: &'static str) -> Result<Value, SemanticActio
         .map_err(|error| SemanticActionStoreError::new(stage, error.to_string()))
 }
 
+fn trace_id_value(trace_id: TraceId) -> Result<Value, SemanticActionStoreError> {
+    i64::try_from(trace_id.get())
+        .map(Value::Integer)
+        .map_err(|error| {
+            SemanticActionStoreError::new("semantic_action_trace_id_param", error.to_string())
+        })
+}
+
 fn ensure_semantic_trace(
     storage: &SqliteStorage,
     trace_id: TraceId,
@@ -412,11 +456,15 @@ fn child_row_from_row(row: &Row<'_>) -> Result<SemanticActionChildRow, rusqlite:
         trace_id: action.trace_id,
         parent_action_id: row.get("parent_action_id")?,
         child_action_id: row.get("child_action_id")?,
-        role: decode_link_role(row.get::<_, String>("role")?)?,
-        confidence: decode_link_confidence(row.get::<_, String>("confidence")?)?,
+        role: decode_link_role(row.get::<_, i64>("role_code")?)?,
+        confidence: decode_link_confidence(row.get::<_, i64>("confidence_code")?)?,
         valid: row.get("valid")?,
         evidence: Vec::new(),
-        attributes: decode_map(&row.get::<_, String>("link_attributes")?),
+        attributes: decode_map(&decode_text_from_row_with_prefix(
+            row,
+            "link_legacy_attributes",
+            "link_attributes",
+        )?),
     };
     Ok(SemanticActionChildRow {
         action,
@@ -427,7 +475,7 @@ fn child_row_from_row(row: &Row<'_>) -> Result<SemanticActionChildRow, rusqlite:
 
 fn role_and_kind_query_values(
     trace_id: TraceId,
-    parent_action_id: &str,
+    parent_action_key: i64,
     roles: &[&str],
     child_kinds: &[&str],
 ) -> Result<Vec<Value>, SemanticActionStoreError> {
@@ -436,13 +484,13 @@ fn role_and_kind_query_values(
     })?;
     let mut values = Vec::with_capacity(2 + roles.len() + child_kinds.len());
     values.push(Value::Integer(trace_id));
-    values.push(Value::Text(parent_action_id.to_string()));
-    values.extend(roles.iter().map(|role| Value::Text((*role).to_string())));
-    values.extend(
-        child_kinds
-            .iter()
-            .map(|kind| Value::Text((*kind).to_string())),
-    );
+    values.push(Value::Integer(parent_action_key));
+    for role in roles {
+        values.push(Value::Integer(i64::from(link_role_code_from_str(role)?)));
+    }
+    for kind in child_kinds {
+        values.push(Value::Integer(i64::from(action_kind_code_from_str(kind)?)));
+    }
     Ok(values)
 }
 

@@ -12,6 +12,7 @@ python3 tests/agent-trace/run_case.py xiaoo-http-proxy
 python3 tests/agent-trace/run_case.py agentscope-openai
 python3 tests/agent-trace/run_case.py langgraph-openai
 python3 tests/agent-trace/run_case.py go-net-http
+python3 tests/agent-trace/run_case.py gnutls-nss-llm
 ```
 
 `claude-code`, `opencode-bun`, and `xiaoo-rustls` require the corresponding real CLI or binary and working provider credentials in the environment. These agents may reach the LLM provider through HTTPS/TLS or through a plain HTTP endpoint/proxy; the E2E cases accept either complete `TlsUserSpace` payload rows or complete `Syscall/socket-syscall` plaintext rows. `langgraph-openai` requires a Python interpreter with `langgraph` and `requests`, plus `DEEPSEEK_API_KEY`; the default workload uses DeepSeek's OpenAI-compatible HTTPS API to exercise a real LangGraph-based Python agent without adding framework instrumentation.
@@ -53,6 +54,8 @@ LANGGRAPH_PYTHON=/tmp/actrail-langgraph-system-venv/bin/python \
 ```
 
 For `go-net-http`, the runner builds multiple Go workloads under `tests/agent-trace/go-net-http/workloads/` and uses a generic full-monitor configuration. The test must not specify `go-pclntab`, `payload_tls_library = go`, or a Go binary path in the config. AcTrail resolves Go TLS probe points automatically when the child process execs. The default runtime path validates standard-library `net/http` and a small Go library wrapper. A cgo/OpenSSL workload is also built and checked with the automatic fast probe resolver; set `ACTRAIL_GO_OPENSSL_E2E=1` to run its provider traffic in an environment where the OpenSSL workload can reach the LLM endpoint.
+
+For `gnutls-nss-llm`, the runner builds controlled locator programs and test shared libraries that export GnuTLS `gnutls_record_send` / `gnutls_record_recv` and NSS/NSPR `PR_Write` / `PR_Read` plus `PR_Send` / `PR_Recv`. The locators emit an OpenAI-compatible HTTP/1.1 request and response through those symbols so AcTrail must produce complete `TlsUserSpace` payload rows, `http.message`, `llm.request`, `llm.response`, and `llm.call`. This is a controlled provider coverage case, not a claim that a third-party real agent using GnuTLS or NSS has been validated. Optional manual DeepSeek-based experiments must keep provider keys in environment variables such as `DEEPSEEK_API_KEY`; keys must not be written into repository files or test output.
 
 Expected proof:
 

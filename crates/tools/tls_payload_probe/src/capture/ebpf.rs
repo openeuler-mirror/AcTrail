@@ -33,6 +33,8 @@ const PROVIDER_OPENSSL: u32 = 1;
 const PROVIDER_BORINGSSL: u32 = 2;
 const PROVIDER_RUSTLS: u32 = 3;
 const PROVIDER_GO: u32 = 4;
+const PROVIDER_GNUTLS: u32 = 5;
+const PROVIDER_NSS: u32 = 6;
 
 const DIRECTION_OUTBOUND: u32 = 1;
 const DIRECTION_INBOUND: u32 = 2;
@@ -43,6 +45,12 @@ const SYMBOL_SSL_WRITE_EX: u32 = 3;
 const SYMBOL_SSL_READ_EX: u32 = 4;
 const SYMBOL_RUSTLS_BUFFER_PLAINTEXT: u32 = 5;
 const SYMBOL_RUSTLS_TAKE_RECEIVED_PLAINTEXT: u32 = 6;
+const SYMBOL_GNUTLS_RECORD_SEND: u32 = 7;
+const SYMBOL_GNUTLS_RECORD_RECV: u32 = 8;
+const SYMBOL_NSPR_PR_WRITE: u32 = 9;
+const SYMBOL_NSPR_PR_SEND: u32 = 10;
+const SYMBOL_NSPR_PR_READ: u32 = 11;
+const SYMBOL_NSPR_PR_RECV: u32 = 12;
 
 const CONFIG_MAP_BYTES: usize = std::mem::size_of::<u32>() * 4;
 const RING_DIAGNOSTICS_KEY: u32 = 0;
@@ -340,6 +348,9 @@ fn attach_plan(
         .map_err(|error| ToolError::new(format!("target pid overflow: {error}")))?;
     let mut links = Vec::new();
     for point in &plan.points {
+        if point.symbol == "SSL_write_ex2" {
+            continue;
+        }
         if point.direction == PayloadDirection::Control {
             continue;
         }
@@ -425,6 +436,12 @@ fn return_entry_program(point: &ProbePoint) -> ToolResult<&'static str> {
     match point.symbol.as_str() {
         "SSL_read" | "SSL_read_internal" => Ok("handle_ssl_read_enter"),
         "SSL_read_ex" => Ok("handle_ssl_read_ex_enter"),
+        "gnutls_record_send" => Ok("handle_gnutls_record_send_enter"),
+        "gnutls_record_recv" => Ok("handle_gnutls_record_recv_enter"),
+        "PR_Write" => Ok("handle_nspr_pr_write_enter"),
+        "PR_Send" => Ok("handle_nspr_pr_send_enter"),
+        "PR_Read" => Ok("handle_nspr_pr_read_enter"),
+        "PR_Recv" => Ok("handle_nspr_pr_recv_enter"),
         symbol => Err(ToolError::new(format!(
             "unsupported return-entry payload symbol: {symbol}"
         ))),
@@ -435,6 +452,12 @@ fn return_program(point: &ProbePoint) -> ToolResult<&'static str> {
     match point.symbol.as_str() {
         "SSL_read" | "SSL_read_internal" => Ok("handle_ssl_read_return"),
         "SSL_read_ex" => Ok("handle_ssl_read_ex_return"),
+        "gnutls_record_send" => Ok("handle_gnutls_record_send_return"),
+        "gnutls_record_recv" => Ok("handle_gnutls_record_recv_return"),
+        "PR_Write" => Ok("handle_nspr_pr_write_return"),
+        "PR_Send" => Ok("handle_nspr_pr_send_return"),
+        "PR_Read" => Ok("handle_nspr_pr_read_return"),
+        "PR_Recv" => Ok("handle_nspr_pr_recv_return"),
         symbol => Err(ToolError::new(format!(
             "unsupported return payload symbol: {symbol}"
         ))),
@@ -525,6 +548,8 @@ fn provider_id(provider: TlsProvider) -> u32 {
         TlsProvider::BoringSsl => PROVIDER_BORINGSSL,
         TlsProvider::Rustls => PROVIDER_RUSTLS,
         TlsProvider::Go => PROVIDER_GO,
+        TlsProvider::GnuTls => PROVIDER_GNUTLS,
+        TlsProvider::Nss => PROVIDER_NSS,
     }
 }
 
@@ -534,6 +559,8 @@ fn provider_name(provider: u32) -> &'static str {
         PROVIDER_BORINGSSL => "boringssl",
         PROVIDER_RUSTLS => "rustls",
         PROVIDER_GO => "go",
+        PROVIDER_GNUTLS => "gnutls",
+        PROVIDER_NSS => "nss",
         _ => "unknown",
     }
 }
@@ -546,6 +573,12 @@ fn symbol_name(symbol: u32) -> &'static str {
         SYMBOL_SSL_READ_EX => "SSL_read_ex",
         SYMBOL_RUSTLS_BUFFER_PLAINTEXT => "rustls_buffer_plaintext",
         SYMBOL_RUSTLS_TAKE_RECEIVED_PLAINTEXT => "rustls_take_received_plaintext",
+        SYMBOL_GNUTLS_RECORD_SEND => "gnutls_record_send",
+        SYMBOL_GNUTLS_RECORD_RECV => "gnutls_record_recv",
+        SYMBOL_NSPR_PR_WRITE => "PR_Write",
+        SYMBOL_NSPR_PR_SEND => "PR_Send",
+        SYMBOL_NSPR_PR_READ => "PR_Read",
+        SYMBOL_NSPR_PR_RECV => "PR_Recv",
         _ => "unknown",
     }
 }

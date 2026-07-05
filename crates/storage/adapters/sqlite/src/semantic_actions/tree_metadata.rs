@@ -4,12 +4,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use model_core::ids::TraceId;
 use rusqlite::types::Value;
-use rusqlite::{Connection, Row, params_from_iter};
+use rusqlite::{Connection, params_from_iter};
 use semantic_action::{
-    SemanticActionLink, SemanticActionStoreError, SemanticEvidence, attr_keys as attrs, link_roles,
+    SemanticActionLinkRole, SemanticActionStoreError, SemanticEvidence, attr_keys as attrs,
 };
 
-use crate::records::decode_map;
+use crate::semantic_actions::codebook::sqlite::{
+    LinkEvidenceKey, decode_link_role, link_role_code, link_role_code_from_str,
+};
 use crate::semantic_actions::store::evidence_from_row;
 use crate::semantic_actions::tree::SemanticActionChildRow;
 
@@ -62,17 +64,68 @@ pub(super) fn invalidated_action_attrs(
 
 pub(super) fn invalidated_link_attrs(
     link_attrs: &std::collections::BTreeMap<String, String>,
-    role: &str,
+    role: SemanticActionLinkRole,
     action_attrs: &std::collections::BTreeMap<String, String>,
 ) -> bool {
     link_attrs
         .get(attrs::actrail::LINK_VALID)
         .is_some_and(|value| value == "false")
-        || ((role == link_roles::AGENT_PERFORMED_ACTION
-            || role == link_roles::COMMAND_CONTAINS_COMMAND_INVOCATION)
+        || ((role == SemanticActionLinkRole::AgentPerformedAction
+            || role == SemanticActionLinkRole::CommandContainsCommandInvocation)
             && action_attrs
                 .get(attrs::process_parent::IDENTITY_STATE)
                 .is_some_and(|value| value == "conflict"))
+}
+
+pub(super) fn effective_incoming_link_absence_predicate(child_alias: &str) -> String {
+    effective_link_absence_predicate(child_alias, None)
+}
+
+pub(super) fn display_parent_link_absence_predicate(roles: &[&str], child_alias: &str) -> String {
+    if roles.is_empty() {
+        return String::new();
+    }
+    effective_link_absence_predicate(child_alias, Some(roles))
+}
+
+pub(super) fn push_display_parent_link_values(
+    values: &mut Vec<Value>,
+    roles: &[&str],
+) -> Result<(), SemanticActionStoreError> {
+    if roles.is_empty() {
+        return Ok(());
+    }
+    push_effective_link_values(values, Some(roles))
+}
+
+pub(super) fn push_effective_link_values(
+    values: &mut Vec<Value>,
+    roles: Option<&[&str]>,
+) -> Result<(), SemanticActionStoreError> {
+    if let Some(roles) = roles {
+        for role in roles {
+            values.push(Value::Integer(i64::from(link_role_code_from_str(role)?)));
+        }
+    }
+    values.push(Value::Integer(i64::from(link_role_code(
+        SemanticActionLinkRole::AgentPerformedAction,
+    ))));
+    values.push(Value::Integer(i64::from(link_role_code(
+        SemanticActionLinkRole::CommandContainsCommandInvocation,
+    ))));
+    Ok(())
+}
+
+pub(super) fn display_parent_link_value_count(roles: &[&str]) -> usize {
+    if roles.is_empty() {
+        0
+    } else {
+        effective_link_value_count(Some(roles))
+    }
+}
+
+pub(super) fn effective_link_value_count(roles: Option<&[&str]>) -> usize {
+    roles.map_or(2, |roles| roles.len() + 2)
 }
 
 fn read_evidence_for_actions(
@@ -83,9 +136,12 @@ fn read_evidence_for_actions(
         return Ok(BTreeMap::new());
     }
     let query = format!(
-        "SELECT action_id, kind, evidence_id, role FROM semantic_action_evidence
-         WHERE action_id IN ({})
-         ORDER BY action_id ASC, evidence_order ASC",
+        "SELECT ids.action_id, evidence.kind_code, evidence.evidence_id, evidence.role
+         FROM semantic_action_evidence evidence
+         JOIN semantic_action_ids ids
+           ON ids.action_key = evidence.action_key
+         WHERE ids.action_id IN ({})
+         ORDER BY ids.action_id ASC, evidence.evidence_order ASC",
         sql_placeholders(action_ids.len())
     );
     let values = action_ids
@@ -137,17 +193,24 @@ fn read_link_evidence_for_links(
         .collect::<BTreeSet<_>>();
     let roles = children
         .iter()
-        .map(|child| child.link.role.as_str().to_string())
+        .map(|child| link_role_code(child.link.role))
         .collect::<BTreeSet<_>>();
     let query = format!(
-        "SELECT trace_id, parent_action_id, child_action_id, role AS link_role,
-                kind, evidence_id, evidence_role
-         FROM semantic_action_link_evidence
-         WHERE trace_id = ?
-           AND parent_action_id IN ({})
-           AND child_action_id IN ({})
-           AND role IN ({})
-         ORDER BY parent_action_id ASC, child_action_id ASC, link_role ASC, evidence_order ASC",
+        "SELECT evidence.trace_id,
+                parent_ids.action_id AS parent_action_id,
+                child_ids.action_id AS child_action_id,
+                evidence.role_code AS link_role_code,
+                evidence.kind_code, evidence.evidence_id, evidence.evidence_role
+         FROM semantic_action_link_evidence evidence
+         JOIN semantic_action_ids parent_ids
+           ON parent_ids.action_key = evidence.parent_action_key
+         JOIN semantic_action_ids child_ids
+           ON child_ids.action_key = evidence.child_action_key
+         WHERE evidence.trace_id = ?
+           AND parent_ids.action_id IN ({})
+           AND child_ids.action_id IN ({})
+           AND evidence.role_code IN ({})
+         ORDER BY parent_ids.action_id ASC, child_ids.action_id ASC, link_role_code ASC, evidence.evidence_order ASC",
         sql_placeholders(parent_ids.len()),
         sql_placeholders(child_ids.len()),
         sql_placeholders(roles.len())
@@ -195,18 +258,22 @@ pub(super) fn display_child_counts(
     }
     let parent_action_ids = parent_action_ids.iter().cloned().collect::<BTreeSet<_>>();
     let query = format!(
-        "SELECT link.parent_action_id,
-                link.child_action_id,
-                link.role,
-                link.attributes AS link_attributes,
-                child.attributes AS child_attributes
+        "SELECT parent_ids.action_id AS parent_action_id,
+                child_ids.action_id AS child_action_id,
+                link.role_code,
+                link.link_valid_code,
+                child.action_valid_code,
+                child.process_parent_conflict
          FROM semantic_action_links link
          JOIN semantic_actions child
-           ON child.trace_id = link.trace_id
-          AND child.action_id = link.child_action_id
+           ON child.action_key = link.child_action_key
+         JOIN semantic_action_ids parent_ids
+           ON parent_ids.action_key = link.parent_action_key
+         JOIN semantic_action_ids child_ids
+           ON child_ids.action_key = link.child_action_key
          WHERE link.trace_id = ?
-           AND link.parent_action_id IN ({})
-           AND link.role IN ({})",
+           AND parent_ids.action_id IN ({})
+           AND link.role_code IN ({})",
         sql_placeholders(parent_action_ids.len()),
         sql_placeholders(roles.len())
     );
@@ -219,9 +286,10 @@ pub(super) fn display_child_counts(
             Ok((
                 row.get::<_, String>("parent_action_id")?,
                 row.get::<_, String>("child_action_id")?,
-                row.get::<_, String>("role")?,
-                decode_map(&row.get::<_, String>("link_attributes")?),
-                decode_map(&row.get::<_, String>("child_attributes")?),
+                decode_link_role(row.get::<_, i64>("role_code")?)?,
+                row.get::<_, i64>("link_valid_code")?,
+                row.get::<_, i64>("action_valid_code")?,
+                row.get::<_, i64>("process_parent_conflict")?,
             ))
         })
         .map_err(|error| {
@@ -229,13 +297,20 @@ pub(super) fn display_child_counts(
         })?;
     let mut children_by_parent = BTreeMap::<String, BTreeSet<String>>::new();
     for row in rows {
-        let (parent_action_id, child_action_id, role, link_attrs, action_attrs) =
-            row.map_err(|error| {
-                SemanticActionStoreError::new("map_semantic_action_child_count", error.to_string())
-            })?;
-        if !invalidated_action_attrs(&action_attrs)
-            && !invalidated_link_attrs(&link_attrs, &role, &action_attrs)
-        {
+        let (
+            parent_action_id,
+            child_action_id,
+            role,
+            link_valid_code,
+            action_valid_code,
+            process_parent_conflict,
+        ) = row.map_err(|error| {
+            SemanticActionStoreError::new("map_semantic_action_child_count", error.to_string())
+        })?;
+        let role_conflicted = (role == SemanticActionLinkRole::AgentPerformedAction
+            || role == SemanticActionLinkRole::CommandContainsCommandInvocation)
+            && process_parent_conflict == 1;
+        if action_valid_code == 1 && link_valid_code == 1 && !role_conflicted {
             children_by_parent
                 .entry(parent_action_id)
                 .or_default()
@@ -246,6 +321,29 @@ pub(super) fn display_child_counts(
         .into_iter()
         .map(|(parent_action_id, children)| (parent_action_id, children.len()))
         .collect())
+}
+
+fn effective_link_absence_predicate(child_alias: &str, roles: Option<&[&str]>) -> String {
+    let role_filter = roles
+        .map(|roles| format!("AND link.role_code IN ({})", sql_placeholders(roles.len())))
+        .unwrap_or_default();
+    format!(
+        "AND NOT EXISTS (
+           SELECT 1
+           FROM semantic_action_links link
+           JOIN semantic_actions parent
+             ON parent.action_key = link.parent_action_key
+           WHERE link.trace_id = {child_alias}.trace_id
+             AND link.child_action_key = {child_alias}.action_key
+             {role_filter}
+             AND link.link_valid_code = 1
+             AND parent.action_valid_code = 1
+             AND NOT (
+               (link.role_code = ? OR link.role_code = ?)
+               AND {child_alias}.process_parent_conflict = 1
+             )
+         )"
+    )
 }
 
 fn child_count_query_values(
@@ -259,7 +357,9 @@ fn child_count_query_values(
     let mut values = Vec::with_capacity(1 + parent_action_ids.len() + roles.len());
     values.push(Value::Integer(trace_id));
     values.extend(parent_action_ids.iter().cloned().map(Value::Text));
-    values.extend(roles.iter().map(|role| Value::Text((*role).to_string())));
+    for role in roles {
+        values.push(Value::Integer(i64::from(link_role_code_from_str(role)?)));
+    }
     Ok(values)
 }
 
@@ -267,7 +367,7 @@ fn link_evidence_query_values(
     trace_id: TraceId,
     parent_ids: &BTreeSet<String>,
     child_ids: &BTreeSet<String>,
-    roles: &BTreeSet<String>,
+    roles: &BTreeSet<i16>,
 ) -> Result<Vec<Value>, SemanticActionStoreError> {
     let trace_id = i64::try_from(trace_id.get()).map_err(|error| {
         SemanticActionStoreError::new("semantic_action_trace_id_param", error.to_string())
@@ -276,7 +376,7 @@ fn link_evidence_query_values(
     values.push(Value::Integer(trace_id));
     values.extend(parent_ids.iter().cloned().map(Value::Text));
     values.extend(child_ids.iter().cloned().map(Value::Text));
-    values.extend(roles.iter().cloned().map(Value::Text));
+    values.extend(roles.iter().map(|role| Value::Integer(i64::from(*role))));
     Ok(values)
 }
 
@@ -285,32 +385,4 @@ fn sql_placeholders(count: usize) -> String {
         .take(count)
         .collect::<Vec<_>>()
         .join(",")
-}
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct LinkEvidenceKey {
-    trace_id: u64,
-    parent_action_id: String,
-    child_action_id: String,
-    role: String,
-}
-
-impl LinkEvidenceKey {
-    fn from_link(link: &SemanticActionLink) -> Self {
-        Self {
-            trace_id: link.trace_id.get(),
-            parent_action_id: link.parent_action_id.clone(),
-            child_action_id: link.child_action_id.clone(),
-            role: link.role.as_str().to_string(),
-        }
-    }
-
-    fn from_row(row: &Row<'_>) -> Result<Self, rusqlite::Error> {
-        Ok(Self {
-            trace_id: row.get("trace_id")?,
-            parent_action_id: row.get("parent_action_id")?,
-            child_action_id: row.get("child_action_id")?,
-            role: row.get("link_role")?,
-        })
-    }
 }

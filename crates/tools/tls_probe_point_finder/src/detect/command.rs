@@ -4,7 +4,7 @@ use crate::ToolResult;
 use crate::args::{DetectArgs, ProviderChoice, SourceChoice, require_arch};
 use crate::binary::resolve_entry_elf;
 use crate::elf::ElfImage;
-use crate::providers::{boringssl, go_tls, openssl, rustls};
+use crate::providers::{boringssl, go_tls, legacy_tls, openssl, rustls};
 
 use super::assemble::{
     detected_offsets_report, exported_symbols, missing_symbols, names_with_extra,
@@ -59,6 +59,11 @@ fn detect_executable_provider(
         ProviderChoice::BoringSsl => detect_executable_boringssl(image, args, explicit),
         ProviderChoice::Rustls => detect_executable_rustls(image, args),
         ProviderChoice::Go => detect_executable_go(image),
+        ProviderChoice::GnuTls | ProviderChoice::Nss => Ok(CandidateReport::failed(
+            "executable",
+            provider_name(provider),
+            "executable detection is not implemented for this shared-library TLS provider",
+        )),
         ProviderChoice::Auto => unreachable!("auto provider is expanded before detection"),
     }
 }
@@ -263,13 +268,17 @@ fn detect_shared_libraries(
 ) -> (Vec<CandidateReport>, Vec<String>) {
     if matches!(
         args.provider,
-        ProviderChoice::BoringSsl | ProviderChoice::Rustls | ProviderChoice::Go
+        ProviderChoice::BoringSsl
+            | ProviderChoice::Rustls
+            | ProviderChoice::Go
+            | ProviderChoice::GnuTls
+            | ProviderChoice::Nss
     ) {
         return (
             vec![CandidateReport::failed(
                 "shared-library",
                 provider_name(args.provider),
-                "shared-library detection is only implemented for OpenSSL",
+                "shared-library detection is only implemented for OpenSSL; use fast resolution with an explicit library for this provider",
             )],
             Vec::new(),
         );
@@ -437,5 +446,7 @@ fn provider_name(provider: ProviderChoice) -> &'static str {
         ProviderChoice::BoringSsl => boringssl::NAME,
         ProviderChoice::Rustls => rustls::NAME,
         ProviderChoice::Go => go_tls::NAME,
+        ProviderChoice::GnuTls => legacy_tls::GNUTLS_NAME,
+        ProviderChoice::Nss => legacy_tls::NSS_NAME,
     }
 }

@@ -106,4 +106,154 @@ int handle_rustls_take_received_plaintext(struct pt_regs *ctx) {
     );
 }
 
+SEC("uprobe")
+int handle_gnutls_record_send_enter(struct pt_regs *ctx) {
+    struct tls_probe_pending_op op = {
+        .buffer_ptr = TLS_PROBE_ARG2(ctx),
+        .requested_size = TLS_PROBE_ARG3(ctx),
+        .size_ptr = TLS_PROBE_EMPTY_SIZE_POINTER,
+        .stream_key = TLS_PROBE_ARG1(ctx),
+        .symbol = TLS_PROBE_SYMBOL_GNUTLS_RECORD_SEND,
+        .direction = TLS_PROBE_DIRECTION_OUTBOUND,
+    };
+    return store_pending(&op);
+}
+
+SEC("uretprobe")
+int handle_gnutls_record_send_return(struct pt_regs *ctx) {
+    __u64 completed_size = tls_probe_positive_isize_size(TLS_PROBE_RET(ctx));
+
+    if (!completed_size) {
+        __u64 key = bpf_get_current_pid_tgid();
+        bpf_map_delete_elem(&pending_ops, &key);
+        return 0;
+    }
+    return emit_pending_return(ctx, completed_size);
+}
+
+SEC("uprobe")
+int handle_gnutls_record_recv_enter(struct pt_regs *ctx) {
+    struct tls_probe_pending_op op = {
+        .buffer_ptr = TLS_PROBE_ARG2(ctx),
+        .requested_size = TLS_PROBE_ARG3(ctx),
+        .size_ptr = TLS_PROBE_EMPTY_SIZE_POINTER,
+        .stream_key = TLS_PROBE_ARG1(ctx),
+        .symbol = TLS_PROBE_SYMBOL_GNUTLS_RECORD_RECV,
+        .direction = TLS_PROBE_DIRECTION_INBOUND,
+    };
+    return store_pending(&op);
+}
+
+SEC("uretprobe")
+int handle_gnutls_record_recv_return(struct pt_regs *ctx) {
+    __u64 completed_size = tls_probe_positive_isize_size(TLS_PROBE_RET(ctx));
+
+    if (!completed_size) {
+        __u64 key = bpf_get_current_pid_tgid();
+        bpf_map_delete_elem(&pending_ops, &key);
+        return 0;
+    }
+    return emit_pending_return(ctx, completed_size);
+}
+
+SEC("uprobe")
+int handle_nspr_pr_write_enter(struct pt_regs *ctx) {
+    struct tls_probe_pending_op op = {
+        .buffer_ptr = TLS_PROBE_ARG2(ctx),
+        .requested_size = tls_probe_positive_i32_size(TLS_PROBE_ARG3(ctx)),
+        .size_ptr = TLS_PROBE_EMPTY_SIZE_POINTER,
+        .stream_key = TLS_PROBE_ARG1(ctx),
+        .symbol = TLS_PROBE_SYMBOL_NSPR_PR_WRITE,
+        .direction = TLS_PROBE_DIRECTION_OUTBOUND,
+    };
+    return store_pending(&op);
+}
+
+SEC("uretprobe")
+int handle_nspr_pr_write_return(struct pt_regs *ctx) {
+    __u64 completed_size = tls_probe_positive_i32_size(TLS_PROBE_RET(ctx));
+
+    if (!completed_size) {
+        __u64 key = bpf_get_current_pid_tgid();
+        bpf_map_delete_elem(&pending_ops, &key);
+        return 0;
+    }
+    return emit_pending_return(ctx, completed_size);
+}
+
+SEC("uprobe")
+int handle_nspr_pr_send_enter(struct pt_regs *ctx) {
+    struct tls_probe_pending_op op = {
+        .buffer_ptr = TLS_PROBE_ARG2(ctx),
+        .requested_size = tls_probe_positive_i32_size(TLS_PROBE_ARG3(ctx)),
+        .size_ptr = TLS_PROBE_EMPTY_SIZE_POINTER,
+        .stream_key = TLS_PROBE_ARG1(ctx),
+        .symbol = TLS_PROBE_SYMBOL_NSPR_PR_SEND,
+        .direction = TLS_PROBE_DIRECTION_OUTBOUND,
+    };
+    return store_pending(&op);
+}
+
+SEC("uretprobe")
+int handle_nspr_pr_send_return(struct pt_regs *ctx) {
+    __u64 completed_size = tls_probe_positive_i32_size(TLS_PROBE_RET(ctx));
+
+    if (!completed_size) {
+        __u64 key = bpf_get_current_pid_tgid();
+        bpf_map_delete_elem(&pending_ops, &key);
+        return 0;
+    }
+    return emit_pending_return(ctx, completed_size);
+}
+
+SEC("uprobe")
+int handle_nspr_pr_read_enter(struct pt_regs *ctx) {
+    struct tls_probe_pending_op op = {
+        .buffer_ptr = TLS_PROBE_ARG2(ctx),
+        .requested_size = tls_probe_positive_i32_size(TLS_PROBE_ARG3(ctx)),
+        .size_ptr = TLS_PROBE_EMPTY_SIZE_POINTER,
+        .stream_key = TLS_PROBE_ARG1(ctx),
+        .symbol = TLS_PROBE_SYMBOL_NSPR_PR_READ,
+        .direction = TLS_PROBE_DIRECTION_INBOUND,
+    };
+    return store_pending(&op);
+}
+
+SEC("uretprobe")
+int handle_nspr_pr_read_return(struct pt_regs *ctx) {
+    __u64 completed_size = tls_probe_positive_i32_size(TLS_PROBE_RET(ctx));
+
+    if (!completed_size) {
+        __u64 key = bpf_get_current_pid_tgid();
+        bpf_map_delete_elem(&pending_ops, &key);
+        return 0;
+    }
+    return emit_pending_return(ctx, completed_size);
+}
+
+SEC("uprobe")
+int handle_nspr_pr_recv_enter(struct pt_regs *ctx) {
+    struct tls_probe_pending_op op = {
+        .buffer_ptr = TLS_PROBE_ARG2(ctx),
+        .requested_size = tls_probe_positive_i32_size(TLS_PROBE_ARG3(ctx)),
+        .size_ptr = TLS_PROBE_EMPTY_SIZE_POINTER,
+        .stream_key = TLS_PROBE_ARG1(ctx),
+        .symbol = TLS_PROBE_SYMBOL_NSPR_PR_RECV,
+        .direction = TLS_PROBE_DIRECTION_INBOUND,
+    };
+    return store_pending(&op);
+}
+
+SEC("uretprobe")
+int handle_nspr_pr_recv_return(struct pt_regs *ctx) {
+    __u64 completed_size = tls_probe_positive_i32_size(TLS_PROBE_RET(ctx));
+
+    if (!completed_size) {
+        __u64 key = bpf_get_current_pid_tgid();
+        bpf_map_delete_elem(&pending_ops, &key);
+        return 0;
+    }
+    return emit_pending_return(ctx, completed_size);
+}
+
 char LICENSE[] SEC("license") = "GPL";

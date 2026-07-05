@@ -3,6 +3,8 @@ use std::collections::BTreeSet;
 use rusqlite::{OptionalExtension, params};
 use semantic_action::{LlmRequestContentWrite, SemanticActionStoreError};
 
+use crate::semantic_actions::action_ids::require_action_key;
+
 const SHA256_PREFIX: &str = "sha256:";
 const SHA256_HEX_LEN: usize = 64;
 
@@ -21,11 +23,11 @@ fn upsert_llm_request_content(
     content: &LlmRequestContentWrite,
 ) -> Result<(), SemanticActionStoreError> {
     validate_content_shape(content)?;
-    require_action(connection, content)?;
+    let action_key = require_action(connection, content)?;
     for block in &content.blocks {
         upsert_block(connection, block)?;
     }
-    let manifest_id = write_manifest_once(connection, content)?;
+    let manifest_id = write_manifest_once(connection, action_key, content)?;
     let expected_refs = content
         .block_refs
         .iter()
@@ -87,12 +89,13 @@ fn validate_content_shape(
 fn require_action(
     connection: &rusqlite::Connection,
     content: &LlmRequestContentWrite,
-) -> Result<(), SemanticActionStoreError> {
+) -> Result<i64, SemanticActionStoreError> {
+    let action_key = require_action_key(connection, &content.manifest.action_id)?;
     let exists = connection
         .query_row(
             "SELECT 1 FROM semantic_actions
-             WHERE trace_id = ?1 AND action_id = ?2",
-            params![content.manifest.trace_id.get(), &content.manifest.action_id],
+             WHERE trace_id = ?1 AND action_key = ?2",
+            params![content.manifest.trace_id.get(), action_key],
             |_| Ok(()),
         )
         .optional()
@@ -101,7 +104,7 @@ fn require_action(
         })?
         .is_some();
     if exists {
-        Ok(())
+        Ok(action_key)
     } else {
         Err(SemanticActionStoreError::new(
             "llm_request_action_missing",
@@ -206,6 +209,7 @@ fn require_block_id(
 
 fn write_manifest_once(
     connection: &rusqlite::Connection,
+    action_key: i64,
     content: &LlmRequestContentWrite,
 ) -> Result<i64, SemanticActionStoreError> {
     let manifest = &content.manifest;
@@ -215,8 +219,8 @@ fn write_manifest_once(
             "SELECT manifest_id, format_version, canonical_body_hash,
                     canonical_body_bytes, skeleton_json
              FROM llm_request_manifests
-             WHERE trace_id = ?1 AND action_id = ?2",
-            params![manifest.trace_id.get(), &manifest.action_id],
+             WHERE trace_id = ?1 AND action_key = ?2",
+            params![manifest.trace_id.get(), action_key],
             |row| {
                 Ok((
                     row.get::<_, i64>("manifest_id")?,
@@ -249,12 +253,12 @@ fn write_manifest_once(
     connection
         .execute(
             "INSERT INTO llm_request_manifests (
-                trace_id, action_id, format_version, canonical_body_hash,
+                trace_id, action_key, format_version, canonical_body_hash,
                 canonical_body_bytes, skeleton_json
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 manifest.trace_id.get(),
-                &manifest.action_id,
+                action_key,
                 to_i64(manifest.format_version, "llm_request_format_version")?,
                 &expected_hash,
                 to_i64(manifest.canonical_body_bytes, "llm_request_body_bytes")?,

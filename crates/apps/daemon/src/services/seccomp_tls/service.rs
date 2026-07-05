@@ -391,6 +391,12 @@ fn tls_symbol(raw: u32) -> Result<&'static str, ControlError> {
         6 => Ok("rustls_plaintext_write_vectored"),
         7 => Ok("crypto/tls.(*Conn).Write"),
         8 => Ok("crypto/tls.(*Conn).Read"),
+        9 => Ok("gnutls_record_send"),
+        10 => Ok("gnutls_record_recv"),
+        11 => Ok("PR_Write"),
+        12 => Ok("PR_Send"),
+        13 => Ok("PR_Read"),
+        14 => Ok("PR_Recv"),
         other => Err(ControlError::new(
             "seccomp_tls_symbol",
             format!("unknown TLS symbol {other}"),
@@ -404,6 +410,8 @@ fn tls_library(raw: u32) -> Result<&'static str, ControlError> {
         2 => Ok("boringssl"),
         3 => Ok("rustls"),
         4 => Ok("go"),
+        5 => Ok("gnutls"),
+        6 => Ok("nss"),
         other => Err(ControlError::new(
             "seccomp_tls_library",
             format!("unknown TLS library {other}"),

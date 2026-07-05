@@ -112,3 +112,69 @@ pub(super) const GO_UPROBE_TARGETS: &[TlsUprobeTarget] = &[
         retprobe: false,
     },
 ];
+
+pub(super) const GNUTLS_UPROBE_TARGETS: &[TlsUprobeTarget] = &[
+    TlsUprobeTarget {
+        program: "handle_gnutls_record_send_enter",
+        symbol: "gnutls_record_send",
+        retprobe: false,
+    },
+    TlsUprobeTarget {
+        program: "handle_gnutls_record_send_exit",
+        symbol: "gnutls_record_send",
+        retprobe: true,
+    },
+    TlsUprobeTarget {
+        program: "handle_gnutls_record_recv_enter",
+        symbol: "gnutls_record_recv",
+        retprobe: false,
+    },
+    TlsUprobeTarget {
+        program: "handle_gnutls_record_recv_exit",
+        symbol: "gnutls_record_recv",
+        retprobe: true,
+    },
+];
+
+pub(super) const NSS_NSPR_UPROBE_TARGETS: &[TlsUprobeTarget] = &[
+    TlsUprobeTarget {
+        program: "handle_nspr_pr_write_enter",
+        symbol: "PR_Write",
+        retprobe: false,
+    },
+    TlsUprobeTarget {
+        program: "handle_nspr_pr_write_exit",
+        symbol: "PR_Write",
+        retprobe: true,
+    },
+    TlsUprobeTarget {
+        program: "handle_nspr_pr_send_enter",
+        symbol: "PR_Send",
+        retprobe: false,
+    },
+    TlsUprobeTarget {
+        program: "handle_nspr_pr_send_exit",
+        symbol: "PR_Send",
+        retprobe: true,
+    },
+    TlsUprobeTarget {
+        program: "handle_nspr_pr_read_enter",
+        symbol: "PR_Read",
+        retprobe: false,
+    },
+    TlsUprobeTarget {
+        program: "handle_nspr_pr_read_exit",
+        symbol: "PR_Read",
+        retprobe: true,
+    },
+    TlsUprobeTarget {
+        program: "handle_nspr_pr_recv_enter",
+        symbol: "PR_Recv",
+        retprobe: false,
+    },
+    TlsUprobeTarget {
+        program: "handle_nspr_pr_recv_exit",
+        symbol: "PR_Recv",
+        retprobe: true,
+    },
+];

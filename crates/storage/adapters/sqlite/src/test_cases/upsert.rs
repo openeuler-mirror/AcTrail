@@ -3,6 +3,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
+use model_core::trace::{TraceHealth, TraceLifecycleState};
 use semantic_action::{
     FilePathSetState, FilePathSetWrite, LlmRequestBlock, LlmRequestBlockRef,
     LlmRequestContentWrite, LlmRequestManifest, SemanticAction, SemanticActionCompleteness,
@@ -11,6 +12,8 @@ use semantic_action::{
     SemanticEvidenceKind, file_path_set_identity_for_paths,
 };
 use sha2::{Digest, Sha256};
+use store_retention_contract::cleanup::RetentionStore;
+use store_retention_contract::tombstone::TraceTombstone;
 
 use crate::SqliteStorage;
 
@@ -50,6 +53,160 @@ fn action_upsert_skips_unchanged_and_splits_row_from_evidence_writes() {
         .expect("write evidence-only action update");
     assert_eq!(audit_count(&storage, "semantic_actions"), 0);
     assert_eq!(audit_count(&storage, "semantic_action_evidence"), 3);
+}
+
+#[test]
+fn semantic_action_attributes_are_stored_as_compressed_cold_fields() {
+    let mut storage = SqliteStorage::open_in_memory().expect("open in-memory sqlite storage");
+    let trace_id = TraceId::new(1);
+    let long_value = "contains_llm_call;".repeat(512);
+
+    let mut parent = action("parent", SemanticActionStatus::Success);
+    parent
+        .attributes
+        .insert("large".to_string(), long_value.clone());
+    let mut child = action("child", SemanticActionStatus::Success);
+    child
+        .attributes
+        .insert("large".to_string(), long_value.clone());
+    storage
+        .upsert_semantic_action(parent)
+        .expect("write parent action");
+    storage
+        .upsert_semantic_action(child)
+        .expect("write child action");
+    storage
+        .upsert_semantic_action_link(SemanticActionLink {
+            trace_id,
+            parent_action_id: "parent".to_string(),
+            child_action_id: "child".to_string(),
+            role: SemanticActionLinkRole::LlmCallResponse,
+            confidence: SemanticActionLinkConfidence::Observed,
+            valid: true,
+            evidence: Vec::new(),
+            attributes: BTreeMap::from([("large".to_string(), long_value.clone())]),
+        })
+        .expect("write compressed link attributes");
+
+    let connection = storage.connection().borrow();
+    let (hot_attributes, action_uncompressed, action_payload) = connection
+        .query_row(
+            "SELECT action.attributes,
+                    cold.uncompressed_bytes,
+                    length(cold.payload)
+             FROM semantic_actions action
+             JOIN semantic_action_ids ids
+               ON ids.action_key = action.action_key
+             JOIN semantic_action_cold_fields cold
+               ON cold.owner_key = action.action_key
+             WHERE ids.action_id = 'parent'",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .expect("read compressed action attributes");
+    assert_eq!(hot_attributes, "");
+    assert!(action_payload < action_uncompressed);
+
+    let (link_hot_attributes, link_uncompressed, link_payload) = connection
+        .query_row(
+            "SELECT link.attributes,
+                    cold.uncompressed_bytes,
+                    length(cold.payload)
+             FROM semantic_action_links link
+             JOIN semantic_action_link_cold_fields cold
+               ON cold.trace_id = link.trace_id
+              AND cold.parent_action_key = link.parent_action_key
+              AND cold.child_action_key = link.child_action_key
+              AND cold.role_code = link.role_code",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .expect("read compressed link attributes");
+    assert_eq!(link_hot_attributes, "");
+    assert!(link_payload < link_uncompressed);
+    drop(connection);
+
+    let actions = storage
+        .list_semantic_actions(trace_id)
+        .expect("read semantic actions");
+    let parent = actions
+        .iter()
+        .find(|action| action.action_id == "parent")
+        .expect("parent action should be present");
+    assert_eq!(parent.attributes["large"], long_value);
+    let links = storage
+        .list_semantic_action_links(trace_id)
+        .expect("read semantic action links");
+    assert_eq!(links[0].attributes["large"], long_value);
+}
+
+#[test]
+fn purge_trace_removes_semantic_action_interning_and_cold_fields() {
+    let mut storage = SqliteStorage::open_in_memory().expect("open in-memory sqlite storage");
+    let trace_id = TraceId::new(1);
+    let long_value = "contains_llm_call;".repeat(512);
+
+    let mut parent = action("parent", SemanticActionStatus::Success);
+    parent
+        .attributes
+        .insert("large".to_string(), long_value.clone());
+    let mut child = action("child", SemanticActionStatus::Success);
+    child
+        .attributes
+        .insert("large".to_string(), long_value.clone());
+    storage
+        .upsert_semantic_action(parent)
+        .expect("write parent action");
+    storage
+        .upsert_semantic_action(child)
+        .expect("write child action");
+    storage
+        .upsert_semantic_action_link(SemanticActionLink {
+            trace_id,
+            parent_action_id: "parent".to_string(),
+            child_action_id: "child".to_string(),
+            role: SemanticActionLinkRole::LlmCallResponse,
+            confidence: SemanticActionLinkConfidence::Observed,
+            valid: true,
+            evidence: Vec::new(),
+            attributes: BTreeMap::from([("large".to_string(), long_value)]),
+        })
+        .expect("write link attributes");
+
+    assert!(row_count(&storage, "semantic_action_ids") > 0);
+    assert!(row_count(&storage, "semantic_action_cold_fields") > 0);
+    assert!(row_count(&storage, "semantic_action_link_cold_fields") > 0);
+
+    storage
+        .purge_trace(
+            trace_id,
+            TraceTombstone {
+                trace_id,
+                lifecycle_state: TraceLifecycleState::Completed,
+                health: TraceHealth::Degraded,
+                cleaned_at: UNIX_EPOCH,
+                cleanup_reason: "test".to_string(),
+            },
+        )
+        .expect("purge trace");
+
+    assert_eq!(row_count(&storage, "semantic_action_cold_fields"), 0);
+    assert_eq!(row_count(&storage, "semantic_action_link_cold_fields"), 0);
+    assert_eq!(row_count(&storage, "semantic_action_ids"), 0);
+    assert_eq!(row_count(&storage, "semantic_actions"), 0);
+    assert_eq!(row_count(&storage, "semantic_action_links"), 0);
 }
 
 #[test]
@@ -310,6 +467,15 @@ fn audit_count(storage: &SqliteStorage, table_name: &str) -> i64 {
             |row| row.get(0),
         )
         .expect("read write audit count")
+}
+
+fn row_count(storage: &SqliteStorage, table_name: &str) -> i64 {
+    let query = format!("SELECT COUNT(*) FROM {table_name}");
+    storage
+        .connection()
+        .borrow()
+        .query_row(&query, [], |row| row.get(0))
+        .expect("read sqlite table row count")
 }
 
 fn action(action_id: &str, status: SemanticActionStatus) -> SemanticAction {

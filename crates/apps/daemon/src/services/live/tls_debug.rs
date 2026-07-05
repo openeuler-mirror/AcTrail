@@ -23,11 +23,19 @@ const TLS_SYMBOL_RUSTLS_WRITE: u32 = 5;
 const TLS_SYMBOL_RUSTLS_WRITE_VECTORED: u32 = 6;
 const TLS_SYMBOL_GO_CONN_WRITE: u32 = 7;
 const TLS_SYMBOL_GO_CONN_READ: u32 = 8;
+const TLS_SYMBOL_GNUTLS_RECORD_SEND: u32 = 9;
+const TLS_SYMBOL_GNUTLS_RECORD_RECV: u32 = 10;
+const TLS_SYMBOL_NSPR_PR_WRITE: u32 = 11;
+const TLS_SYMBOL_NSPR_PR_SEND: u32 = 12;
+const TLS_SYMBOL_NSPR_PR_READ: u32 = 13;
+const TLS_SYMBOL_NSPR_PR_RECV: u32 = 14;
 
 const TLS_LIBRARY_OPENSSL: u32 = 1;
 const TLS_LIBRARY_BORINGSSL: u32 = 2;
 const TLS_LIBRARY_RUSTLS: u32 = 3;
 const TLS_LIBRARY_GO: u32 = 4;
+const TLS_LIBRARY_GNUTLS: u32 = 5;
+const TLS_LIBRARY_NSS: u32 = 6;
 
 impl StorageAttachService {
     pub(super) fn log_tls_diagnostic_events_impl(&mut self) {
@@ -92,6 +100,12 @@ fn tls_symbol(raw: u32) -> &'static str {
         TLS_SYMBOL_RUSTLS_WRITE_VECTORED => "rustls_write_vectored",
         TLS_SYMBOL_GO_CONN_WRITE => "go_conn_write",
         TLS_SYMBOL_GO_CONN_READ => "go_conn_read",
+        TLS_SYMBOL_GNUTLS_RECORD_SEND => "gnutls_record_send",
+        TLS_SYMBOL_GNUTLS_RECORD_RECV => "gnutls_record_recv",
+        TLS_SYMBOL_NSPR_PR_WRITE => "PR_Write",
+        TLS_SYMBOL_NSPR_PR_SEND => "PR_Send",
+        TLS_SYMBOL_NSPR_PR_READ => "PR_Read",
+        TLS_SYMBOL_NSPR_PR_RECV => "PR_Recv",
         _ => "unknown",
     }
 }
@@ -102,6 +116,8 @@ fn tls_library(raw: u32) -> &'static str {
         TLS_LIBRARY_BORINGSSL => "boringssl",
         TLS_LIBRARY_RUSTLS => "rustls",
         TLS_LIBRARY_GO => "go",
+        TLS_LIBRARY_GNUTLS => "gnutls",
+        TLS_LIBRARY_NSS => "nss",
         _ => "unknown",
     }
 }

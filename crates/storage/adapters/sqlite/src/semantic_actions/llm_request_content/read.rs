@@ -6,6 +6,8 @@ use semantic_action::{LlmRequestContentPage, SemanticActionStoreError};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
+use crate::semantic_actions::action_ids::resolve_action_key;
+
 const BLOCK_PLACEHOLDER_KEY: &str = "$actrail_llm_block";
 
 pub(in crate::semantic_actions) fn llm_request_content_page(
@@ -73,13 +75,16 @@ fn read_manifest(
     trace_id: TraceId,
     action_id: &str,
 ) -> Result<Option<ManifestRow>, SemanticActionStoreError> {
+    let Some(action_key) = resolve_action_key(connection, action_id)? else {
+        return Ok(None);
+    };
     connection
         .query_row(
             "SELECT manifest_id, format_version, canonical_body_hash,
                     canonical_body_bytes, skeleton_json
              FROM llm_request_manifests
-             WHERE trace_id = ?1 AND action_id = ?2",
-            params![trace_id.get(), action_id],
+             WHERE trace_id = ?1 AND action_key = ?2",
+            params![trace_id.get(), action_key],
             |row| {
                 let hash = row.get::<_, Vec<u8>>("canonical_body_hash")?;
                 Ok(ManifestRow {

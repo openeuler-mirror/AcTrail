@@ -2050,6 +2050,7 @@ dependencies = [
  "store_snapshot_contract",
  "store_tx_contract",
  "store_write_contract",
+ "zstd",
 ]
 
 [[package]]
