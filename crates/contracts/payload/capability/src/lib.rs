@@ -1,9 +1,7 @@
 //! Payload capability contracts and request modes.
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PayloadCapability {
-    PlaintextHttp,
-    PlaintextWebSocket,
-    Stdin,
-    IpcPayload,
-}
+mod capability;
+mod constants;
+
+pub use capability::PayloadCapability;
+pub use constants::DEFAULT_TLS_SYNC_FLOW_UNKNOWN_STREAM_BYTES;

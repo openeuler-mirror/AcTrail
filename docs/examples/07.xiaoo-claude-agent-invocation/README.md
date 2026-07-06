@@ -4,7 +4,7 @@
 
 这是 process/semantic trace 加 TLS plaintext evidence 示例。`payload.tls.enabled = true` 是必要条件，因为 agent 标签不由命令名直接触发；它需要先从 Claude 的出站 LLM request 生成 `llm.request` 证据。通过条件在导出的 OpenTelemetry trace 里：必须存在一条 seccomp 观测到的 `claude -p ...` `process.exec` span、一条同 pid 的 `llm.request` span，以及一条 child 为 Claude Code、`invocation.kind=agent` 的 `command.invocation` span。这个 command 的 `process.parent.pid` 是 Claude 的直接拉起进程，可能是 xiaoO，也可能是 xiaoO 工具链中的 bash/timeout/python wrapper。
 
-`operator.conf` 继承了 xiaoO TLS 捕获示例里的 stdio、socket 和 application HTTP/SSE 投影能力，并额外打开 process exec seccomp observation 和 agent identity projection。不要把这些 payload/application 项裁剪成只剩 `process_seccomp`：xiaoO 的第一轮 LLM 决策本身也要被完整观测，否则示例可能停在 xiaoO 第一轮，既看不到 Claude 子进程，也不会生成后续 agent 证据。这个示例不配置 `agent_invocation.command`；入口 xiaoO 可以由 launch 命令本身预热，Claude 子进程必须通过 runtime -> daemon 动态 lookup 得到 TLS sync probe plan。`payload.tls.ring_buffer_bytes = 8388608`、SSE/data preview 上限 `65536` 以及 socket/event ring buffer 值和 xiaoO TLS 示例保持一致，用来覆盖真实 streaming LLM 响应和工具调用 delta。
+`operator.conf` 继承了 xiaoO TLS 捕获示例里的 stdio、socket 和 application HTTP/SSE 投影能力，并额外打开 process exec seccomp observation 和 agent identity projection。不要把这些 payload/application 项裁剪成只剩 `process_seccomp`：xiaoO 的第一轮 LLM 决策本身也要被完整观测，否则示例可能停在 xiaoO 第一轮，既看不到 Claude 子进程，也不会生成后续 agent 证据。这个示例不配置 `agent_invocation.command`；入口 xiaoO 可以由 launch 命令本身预热，Claude 子进程必须通过 runtime -> daemon 动态 lookup 得到 TLS sync probe plan。payload、socket 和 HTTP/HTTP2 analyzer 的容量参数由 `operator.conf` 继承默认或按示例需要覆盖，不在 README 中重复列出。
 
 ## 文件
 

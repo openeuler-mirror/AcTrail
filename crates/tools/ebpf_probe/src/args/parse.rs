@@ -4,6 +4,7 @@ use config_core::daemon::{
     ApplicationProtocolConfig, EnforcementConfig, PayloadSocketConfig, PayloadStdioConfig,
     PayloadTlsConfig, ResourceMetricsConfig,
 };
+use payload_capability::DEFAULT_TLS_SYNC_FLOW_UNKNOWN_STREAM_BYTES;
 
 use crate::probe_config;
 
@@ -112,7 +113,7 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ProbeCommand
                 sync_flow_sniff_bytes: 65536,
                 sync_flow_max_header_bytes: 16384,
                 sync_flow_large_transfer_bytes: 1048576,
-                sync_flow_unknown_stream_bytes: 65536,
+                sync_flow_unknown_stream_bytes: DEFAULT_TLS_SYNC_FLOW_UNKNOWN_STREAM_BYTES,
                 sync_flow_h2_data_probe_bytes: 65536,
                 java_agent_enabled: optional_bool(
                     &flags,

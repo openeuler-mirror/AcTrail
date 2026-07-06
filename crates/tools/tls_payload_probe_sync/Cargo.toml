@@ -15,6 +15,7 @@ path = "src/bin/tls-payload-probe-sync.rs"
 [dependencies]
 clap = { version = "4.6", features = ["derive"] }
 libc = "0.2"
+payload_capability = { path = "../../contracts/payload/capability" }
 tls_payload_core = { path = "../tls_payload_core" }
 tls_payload_sync = { path = "../../core/tls_payload_sync" }
 tls_probe_point_finder = { path = "../tls_probe_point_finder" }

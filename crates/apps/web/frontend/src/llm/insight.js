@@ -330,7 +330,7 @@ function normalizeMessage(message, index) {
   return {
     index,
     role,
-    text: messageContentText(message?.content ?? message?.text ?? message?.input ?? message?.prompt),
+    text: requestMessageText(message),
   };
 }
 
@@ -462,11 +462,62 @@ function formatMessageLine(message, allowedRoles = null) {
     return '';
   }
   const prefix = message.role ? `[${message.role}] ` : '';
-  const content = messageContentText(message.content ?? message.text ?? message.input);
+  const content = requestMessageText(message);
   if (!content) {
     return '';
   }
   return `${prefix}${content}`.trim();
+}
+
+function requestMessageText(message) {
+  if (!message || typeof message !== 'object') {
+    return messageContentText(message);
+  }
+  return [
+    messageContentText(message.content ?? message.text ?? message.input ?? message.prompt),
+    reasoningContentText(message),
+    messageToolCallsText(message.tool_calls ?? message.toolCalls),
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+    .trim();
+}
+
+function reasoningContentText(message) {
+  const value = firstPresent(message.reasoning_content, message.reasoning, message.thinking);
+  const text = messageContentText(value);
+  return text ? `[reasoning]\n${text}` : '';
+}
+
+function messageToolCallsText(toolCalls) {
+  if (!Array.isArray(toolCalls)) {
+    return '';
+  }
+  return toolCalls
+    .map(formatMessageToolCall)
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function formatMessageToolCall(call, index) {
+  if (!call || typeof call !== 'object') {
+    return '';
+  }
+  const normalized = normalizeToolCall(call, index);
+  if (!normalized.name) {
+    return '';
+  }
+  const lines = [`[tool_call] ${normalized.name} #${index + 1}`];
+  if (normalized.id) {
+    lines.push(`id: ${normalized.id}`);
+  }
+  if (normalized.type) {
+    lines.push(`type: ${normalized.type}`);
+  }
+  if (normalized.argumentsText) {
+    lines.push(`arguments:\n${normalized.argumentsText}`);
+  }
+  return lines.join('\n');
 }
 
 function messageContentText(content) {

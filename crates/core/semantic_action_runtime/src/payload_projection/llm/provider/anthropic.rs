@@ -235,8 +235,10 @@ fn content_block_delta_event(value: &Value) -> LlmParsedSseEvent {
 }
 
 fn message_delta_event(value: &Value) -> LlmParsedSseEvent {
+    let finish_reason = value.get("delta").and_then(extract_finish_reason);
     LlmParsedSseEvent {
-        finish_reason: value.get("delta").and_then(extract_finish_reason),
+        done: finish_reason.is_some(),
+        finish_reason,
         ..LlmParsedSseEvent::default()
     }
 }

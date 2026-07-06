@@ -784,6 +784,68 @@ data: [DONE]
 }
 
 #[test]
+fn anthropic_sse_message_delta_stop_reason_completes_response() {
+    let mut runtime = runtime();
+    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let body = concat!(
+        "event: message_start\n",
+        r#"data: {"type":"message_start","message":{"model":"deepseek-v4-pro"}}"#,
+        "\n\n",
+        "event: content_block_delta\n",
+        r#"data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"done"}}"#,
+        "\n\n",
+        "event: message_delta\n",
+        r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#,
+        "\n\n",
+    );
+    let bytes = [
+        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n"
+            .as_slice(),
+        http_chunk_prefix(body).as_slice(),
+        body.as_bytes(),
+        b"\r\n",
+    ]
+    .concat();
+
+    let output = runtime.observe_payload_segment(&llm_response_payload_segment(
+        agent,
+        response_segment_id(70),
+        response_operation_id(70),
+        response_sequence(70),
+        bytes,
+    ));
+    let response = output
+        .actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::LlmResponse)
+        .expect("Anthropic message_delta stop_reason should emit llm.response");
+
+    assert_eq!(response.status, SemanticActionStatus::Success);
+    assert_eq!(response.completeness, SemanticActionCompleteness::Complete);
+    assert_eq!(
+        response
+            .attributes
+            .get("llm.response.provider_id")
+            .map(String::as_str),
+        Some("anthropic-messages")
+    );
+    assert_eq!(
+        response
+            .attributes
+            .get("llm.response.done")
+            .map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(
+        response
+            .attributes
+            .get("llm.response.content_text")
+            .map(String::as_str),
+        Some("done")
+    );
+}
+
+#[test]
 fn llm_response_stream_state_keeps_chunked_boundary_after_done() {
     let mut runtime = runtime();
     let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);

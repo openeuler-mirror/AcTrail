@@ -11,6 +11,7 @@ control_contract = { path = "../../contracts/control_plane" }
 libc = "0.2"
 linux_platform = { path = "../../core/linux_platform" }
 model_core = { path = "../../core/model" }
+payload_capability = { path = "../../contracts/payload/capability" }
 tls_payload_sync = { path = "../../core/tls_payload_sync" }
 tls_probe_point_finder = { path = "../../tools/tls_probe_point_finder" }
 uds_control_client = { path = "../../adapters/control/uds/client" }

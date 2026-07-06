@@ -1,3 +1,4 @@
+use payload_capability::DEFAULT_TLS_SYNC_FLOW_UNKNOWN_STREAM_BYTES;
 use tls_payload_sync::{
     ENV_ENABLED, ENV_EVENT_FD, ENV_EVENT_SOCKET, ENV_EVENT_WRITE_BUFFER_BYTES, ENV_EVENTS,
     ENV_FLOW_CONTROL_ENABLED, ENV_FLOW_H2_DATA_PROBE_BYTES, ENV_FLOW_LARGE_TRANSFER_BYTES,
@@ -59,7 +60,10 @@ fn flow_control_config() -> Result<FlowControlConfig, String> {
         sniff_bytes: optional_positive_usize(ENV_FLOW_SNIFF_BYTES, 65536)?,
         max_header_bytes: optional_positive_usize(ENV_FLOW_MAX_HEADER_BYTES, 16384)?,
         large_transfer_bytes: optional_positive_u64(ENV_FLOW_LARGE_TRANSFER_BYTES, 1048576)?,
-        unknown_stream_bytes: optional_positive_u64(ENV_FLOW_UNKNOWN_STREAM_BYTES, 65536)?,
+        unknown_stream_bytes: optional_positive_u64(
+            ENV_FLOW_UNKNOWN_STREAM_BYTES,
+            DEFAULT_TLS_SYNC_FLOW_UNKNOWN_STREAM_BYTES,
+        )?,
         h2_data_probe_bytes: optional_positive_u64(ENV_FLOW_H2_DATA_PROBE_BYTES, 65536)?,
     })
 }
