@@ -56,6 +56,8 @@ pub enum TlsProvider {
     BoringSsl,
     Rustls,
     Go,
+    GnuTls,
+    Nss,
 }
 
 impl TlsProvider {
@@ -65,6 +67,8 @@ impl TlsProvider {
             Self::BoringSsl => "boringssl",
             Self::Rustls => "rustls",
             Self::Go => "go",
+            Self::GnuTls => "gnutls",
+            Self::Nss => "nss",
         }
     }
 }

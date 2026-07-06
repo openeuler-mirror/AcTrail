@@ -131,6 +131,8 @@ pub(super) fn payload_tls_resolver_as_str(value: PayloadTlsResolver) -> &'static
         PayloadTlsResolver::BoringsslStatic => "boringssl-static",
         PayloadTlsResolver::RustlsSymbolMap => "rustls-symbol-map",
         PayloadTlsResolver::GoPclntab => "go-pclntab",
+        PayloadTlsResolver::GnutlsSymbols => "gnutls-symbols",
+        PayloadTlsResolver::NssNsprSymbols => "nss-nspr-symbols",
     }
 }
 
@@ -141,6 +143,8 @@ pub(super) fn payload_tls_library_as_str(value: PayloadTlsLibrary) -> &'static s
         PayloadTlsLibrary::Boringssl => "boringssl",
         PayloadTlsLibrary::Rustls => "rustls",
         PayloadTlsLibrary::Go => "go",
+        PayloadTlsLibrary::Gnutls => "gnutls",
+        PayloadTlsLibrary::Nss => "nss",
     }
 }
 

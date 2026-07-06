@@ -9,7 +9,7 @@ use crate::plan::{
     AttachPoint, CaptureStrategy, PayloadDirection, ProbeBinary, ProbePoint, ProbePointPlan,
     ProbeSource, TargetIdentity, TlsProvider,
 };
-use crate::providers::{boringssl, go_tls, openssl, rustls};
+use crate::providers::{boringssl, go_tls, legacy_tls, openssl, rustls};
 use crate::{ToolError, ToolResult};
 
 #[cfg(test)]
@@ -40,6 +40,8 @@ pub enum ProviderFilter {
     BoringSsl,
     Rustls,
     Go,
+    GnuTls,
+    Nss,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -61,6 +63,9 @@ pub fn resolve(request: FastProbeRequest) -> ToolResult<ProbePointPlan> {
         return Ok(plan);
     }
     if let Some(plan) = resolve_boringssl_shared_library(&image, &request)? {
+        return Ok(plan);
+    }
+    if let Some(plan) = resolve_legacy_tls_shared_library(&image, &request)? {
         return Ok(plan);
     }
     if let Some(plan) = resolve_recursive_shared_library(&image, &request)? {
@@ -175,6 +180,58 @@ fn resolve_boringssl_shared_library(
         return Ok(None);
     }
     resolve_first_boringssl_library(image, boringssl_library_candidates(image, request))
+}
+
+fn resolve_legacy_tls_shared_library(
+    image: &ElfImage,
+    request: &FastProbeRequest,
+) -> ToolResult<Option<ProbePointPlan>> {
+    if !request.source.allows_shared_library() {
+        return Ok(None);
+    }
+    if request.provider.allows(TlsProvider::GnuTls) {
+        let candidates = legacy_tls::explicit_or_current_shared_library_candidates(
+            image.path(),
+            &request.libraries,
+            "libgnutls",
+        );
+        if candidates.is_empty() && request.provider == ProviderFilter::GnuTls {
+            return Err(ToolError::new(
+                "GnuTLS shared-library fast resolution requires --library PATH",
+            ));
+        }
+        if let Some(plan) = resolve_first_required_symbol_library(
+            image,
+            candidates,
+            TlsProvider::GnuTls,
+            legacy_tls::GNUTLS_RESOLVER,
+            legacy_tls::GNUTLS_SYMBOLS,
+        )? {
+            return Ok(Some(plan));
+        }
+    }
+    if request.provider.allows(TlsProvider::Nss) {
+        let candidates = legacy_tls::explicit_or_current_shared_library_candidates(
+            image.path(),
+            &request.libraries,
+            "libnspr4",
+        );
+        if candidates.is_empty() && request.provider == ProviderFilter::Nss {
+            return Err(ToolError::new(
+                "NSS/NSPR shared-library fast resolution requires --library PATH",
+            ));
+        }
+        if let Some(plan) = resolve_first_required_symbol_library(
+            image,
+            candidates,
+            TlsProvider::Nss,
+            legacy_tls::NSS_RESOLVER,
+            legacy_tls::NSS_SYMBOLS,
+        )? {
+            return Ok(Some(plan));
+        }
+    }
+    Ok(None)
 }
 
 fn resolve_static_patterns(
@@ -332,6 +389,37 @@ fn resolve_first_boringssl_library(
     Ok(None)
 }
 
+fn resolve_first_required_symbol_library(
+    target: &ElfImage,
+    candidates: Vec<PathBuf>,
+    provider: TlsProvider,
+    resolver: &str,
+    required_symbols: &[&str],
+) -> ToolResult<Option<ProbePointPlan>> {
+    for candidate in candidates {
+        let library = ElfImage::parse(&candidate)?;
+        if library.arch() != target.arch() {
+            continue;
+        }
+        let symbols = library.unique_defined_symbol_values(required_symbols)?;
+        if !has_all(&symbols, required_symbols) {
+            continue;
+        }
+        let plan = plan_from_symbol_map(
+            &library,
+            provider,
+            ProbeSource::SharedLibrary,
+            resolver,
+            &symbols,
+        )?
+        .with_target(target);
+        if plan.has_payload_closure() {
+            return Ok(Some(plan));
+        }
+    }
+    Ok(None)
+}
+
 fn boringssl_library_candidates(image: &ElfImage, request: &FastProbeRequest) -> Vec<PathBuf> {
     let mut candidates = request
         .libraries
@@ -424,18 +512,27 @@ fn direction_for_symbol(symbol: &str) -> PayloadDirection {
         rustls::RUNTIME_BUFFER_PLAINTEXT_SYMBOL
         | openssl::SSL_WRITE
         | openssl::SSL_WRITE_EX
-        | openssl::SSL_WRITE_EX2 => PayloadDirection::Outbound,
+        | openssl::SSL_WRITE_EX2
+        | legacy_tls::GNUTLS_RECORD_SEND
+        | legacy_tls::NSPR_PR_WRITE
+        | legacy_tls::NSPR_PR_SEND => PayloadDirection::Outbound,
         go_tls::WRITE_SYMBOL => PayloadDirection::Outbound,
         go_tls::RUNTIME_MEMMOVE_SYMBOL => PayloadDirection::Inbound,
         rustls::RUNTIME_TAKE_RECEIVED_PLAINTEXT_SYMBOL
         | openssl::SSL_READ
         | openssl::SSL_READ_EX
-        | "SSL_read_internal" => PayloadDirection::Inbound,
+        | "SSL_read_internal"
+        | legacy_tls::GNUTLS_RECORD_RECV
+        | legacy_tls::NSPR_PR_READ
+        | legacy_tls::NSPR_PR_RECV => PayloadDirection::Inbound,
         _ => PayloadDirection::Control,
     }
 }
 
 fn attach_for_symbol(symbol: &str) -> AttachPoint {
+    if return_count_symbol(symbol) {
+        return AttachPoint::Return;
+    }
     match direction_for_symbol(symbol) {
         PayloadDirection::Inbound
             if matches!(
@@ -452,6 +549,18 @@ fn attach_for_symbol(symbol: &str) -> AttachPoint {
             AttachPoint::Entry
         }
     }
+}
+
+fn return_count_symbol(symbol: &str) -> bool {
+    matches!(
+        symbol,
+        legacy_tls::GNUTLS_RECORD_SEND
+            | legacy_tls::GNUTLS_RECORD_RECV
+            | legacy_tls::NSPR_PR_WRITE
+            | legacy_tls::NSPR_PR_SEND
+            | legacy_tls::NSPR_PR_READ
+            | legacy_tls::NSPR_PR_RECV
+    )
 }
 
 fn capture_for_symbol(symbol: &str) -> CaptureStrategy {
@@ -513,6 +622,8 @@ impl ProviderFilter {
             Self::BoringSsl => provider == TlsProvider::BoringSsl,
             Self::Rustls => provider == TlsProvider::Rustls,
             Self::Go => provider == TlsProvider::Go,
+            Self::GnuTls => provider == TlsProvider::GnuTls,
+            Self::Nss => provider == TlsProvider::Nss,
         }
     }
 }

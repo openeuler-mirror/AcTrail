@@ -87,6 +87,14 @@ impl RetentionStore for SqliteStorage {
             })?;
         transaction
             .execute(
+                "DELETE FROM semantic_action_link_cold_fields WHERE trace_id = ?1",
+                params![trace_id.get()],
+            )
+            .map_err(|error| {
+                RetentionError::new("delete_semantic_action_link_cold_fields", error.to_string())
+            })?;
+        transaction
+            .execute(
                 "DELETE FROM semantic_action_links WHERE trace_id = ?1",
                 params![trace_id.get()],
             )
@@ -95,8 +103,18 @@ impl RetentionStore for SqliteStorage {
             })?;
         transaction
             .execute(
-                "DELETE FROM semantic_action_evidence WHERE action_id IN (
-                    SELECT action_id FROM semantic_actions WHERE trace_id = ?1
+                "DELETE FROM semantic_action_cold_fields WHERE owner_key IN (
+                    SELECT action_key FROM semantic_actions WHERE trace_id = ?1
+                )",
+                params![trace_id.get()],
+            )
+            .map_err(|error| {
+                RetentionError::new("delete_semantic_action_cold_fields", error.to_string())
+            })?;
+        transaction
+            .execute(
+                "DELETE FROM semantic_action_evidence WHERE action_key IN (
+                    SELECT action_key FROM semantic_actions WHERE trace_id = ?1
                 )",
                 params![trace_id.get()],
             )
@@ -178,6 +196,14 @@ impl RetentionStore for SqliteStorage {
                 params![trace_id.get()],
             )
             .map_err(|error| RetentionError::new("delete_semantic_actions", error.to_string()))?;
+        transaction
+            .execute(
+                "DELETE FROM semantic_action_ids WHERE trace_id = ?1",
+                params![trace_id.get()],
+            )
+            .map_err(|error| {
+                RetentionError::new("delete_semantic_action_ids", error.to_string())
+            })?;
         transaction
             .execute(
                 "DELETE FROM diagnostics WHERE trace_id = ?1",

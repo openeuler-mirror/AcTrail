@@ -6,7 +6,10 @@ use rusqlite::types::Value;
 use semantic_action::{SemanticAction, SemanticActionStoreError};
 
 use crate::SqliteStorage;
-use crate::semantic_actions::store::{action_from_row, read_evidence};
+use crate::semantic_actions::codebook::sqlite::action_kind_code_from_str;
+use crate::semantic_actions::store::{
+    ACTION_SELECT_COLUMNS, action_cold_field_join, action_from_row, read_evidence,
+};
 
 impl SqliteStorage {
     pub fn semantic_actions_matching_kinds(
@@ -24,10 +27,15 @@ impl SqliteStorage {
             return Ok(Vec::new());
         }
         let query = format!(
-            "SELECT * FROM semantic_actions
-             WHERE trace_id = ?
-               AND kind IN ({})
-             ORDER BY start_time ASC, action_id ASC",
+            "SELECT {ACTION_SELECT_COLUMNS}
+             FROM semantic_actions action
+             JOIN semantic_action_ids ids
+               ON ids.action_key = action.action_key
+             {}
+             WHERE action.trace_id = ?
+               AND action.kind_code IN ({})
+             ORDER BY action.start_time ASC, ids.action_id ASC",
+            action_cold_field_join(),
             sql_placeholders(kinds.len())
         );
         let values = query_values(trace_id, kinds)?;
@@ -70,7 +78,9 @@ fn query_values(trace_id: TraceId, kinds: &[&str]) -> Result<Vec<Value>, Semanti
     })?;
     let mut values = Vec::with_capacity(1 + kinds.len());
     values.push(Value::Integer(trace_id));
-    values.extend(kinds.iter().map(|kind| Value::Text((*kind).to_string())));
+    for kind in kinds {
+        values.push(Value::Integer(i64::from(action_kind_code_from_str(kind)?)));
+    }
     Ok(values)
 }
 

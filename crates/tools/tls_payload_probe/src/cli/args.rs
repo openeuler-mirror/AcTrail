@@ -176,6 +176,9 @@ enum ProviderChoice {
     #[value(name = "boringssl")]
     BoringSsl,
     Rustls,
+    #[value(name = "gnutls")]
+    GnuTls,
+    Nss,
 }
 
 impl From<ProviderChoice> for ProviderFilter {
@@ -185,6 +188,8 @@ impl From<ProviderChoice> for ProviderFilter {
             ProviderChoice::OpenSsl => Self::OpenSsl,
             ProviderChoice::BoringSsl => Self::BoringSsl,
             ProviderChoice::Rustls => Self::Rustls,
+            ProviderChoice::GnuTls => Self::GnuTls,
+            ProviderChoice::Nss => Self::Nss,
         }
     }
 }

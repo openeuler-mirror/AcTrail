@@ -18,6 +18,12 @@ enum actrail_tls_payload_symbol {
     ACTRAIL_TLS_SYMBOL_RUSTLS_WRITE_VECTORED = 6,
     ACTRAIL_TLS_SYMBOL_GO_CONN_WRITE = 7,
     ACTRAIL_TLS_SYMBOL_GO_CONN_READ = 8,
+    ACTRAIL_TLS_SYMBOL_GNUTLS_RECORD_SEND = 9,
+    ACTRAIL_TLS_SYMBOL_GNUTLS_RECORD_RECV = 10,
+    ACTRAIL_TLS_SYMBOL_NSPR_PR_WRITE = 11,
+    ACTRAIL_TLS_SYMBOL_NSPR_PR_SEND = 12,
+    ACTRAIL_TLS_SYMBOL_NSPR_PR_READ = 13,
+    ACTRAIL_TLS_SYMBOL_NSPR_PR_RECV = 14,
 };
 
 enum actrail_tls_payload_library {
@@ -25,6 +31,8 @@ enum actrail_tls_payload_library {
     ACTRAIL_TLS_LIBRARY_BORINGSSL = 2,
     ACTRAIL_TLS_LIBRARY_RUSTLS = 3,
     ACTRAIL_TLS_LIBRARY_GO = 4,
+    ACTRAIL_TLS_LIBRARY_GNUTLS = 5,
+    ACTRAIL_TLS_LIBRARY_NSS = 6,
 };
 
 enum actrail_tls_completion_flags {
@@ -276,6 +284,15 @@ static __always_inline __u64 positive_uprobe_isize(unsigned long value) {
     return (__u64)signed_value;
 }
 
+static __always_inline __u64 positive_uprobe_i32(unsigned long value) {
+    __s32 signed_value = (__s32)(__u32)value;
+
+    if (signed_value <= 0) {
+        return 0;
+    }
+    return (__u64)(__u32)signed_value;
+}
+
 #include "tls/actrail_tls_payload_capture.h"
 #include "tls/actrail_tls_payload_diagnostics.h"
 
@@ -480,6 +497,15 @@ static __always_inline int emit_tls_payload_completion(
 
 static __always_inline int emit_tls_payload_completion_from_return(struct pt_regs *ctx) {
     int result = (int)ACTRAIL_UPROBE_RET(ctx);
+
+    if (result <= 0) {
+        return emit_tls_payload_completion(ctx, 0, ACTRAIL_TLS_PAYLOAD_COMPLETION_FAILED);
+    }
+    return emit_tls_payload_completion(ctx, (__u64)result, 0);
+}
+
+static __always_inline int emit_tls_payload_completion_from_isize_return(struct pt_regs *ctx) {
+    long result = (long)ACTRAIL_UPROBE_RET(ctx);
 
     if (result <= 0) {
         return emit_tls_payload_completion(ctx, 0, ACTRAIL_TLS_PAYLOAD_COMPLETION_FAILED);

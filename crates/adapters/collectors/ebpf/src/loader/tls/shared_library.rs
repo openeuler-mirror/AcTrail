@@ -1,4 +1,4 @@
-//! OpenSSL shared-library resolution.
+//! TLS shared-library resolution.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -9,6 +9,24 @@ use crate::loader::LoaderError;
 
 pub(super) fn resolve_openssl_library_path(
     config: &PayloadTlsConfig,
+) -> Result<PathBuf, LoaderError> {
+    resolve_library_path(config, "libssl.so", "OpenSSL")
+}
+
+pub(super) fn resolve_gnutls_library_path(
+    config: &PayloadTlsConfig,
+) -> Result<PathBuf, LoaderError> {
+    resolve_library_path(config, "libgnutls.so", "GnuTLS")
+}
+
+pub(super) fn resolve_nspr_library_path(config: &PayloadTlsConfig) -> Result<PathBuf, LoaderError> {
+    resolve_library_path(config, "libnspr4.so", "NSS/NSPR")
+}
+
+fn resolve_library_path(
+    config: &PayloadTlsConfig,
+    soname_prefix: &'static str,
+    label: &'static str,
 ) -> Result<PathBuf, LoaderError> {
     match &config.library_path {
         PayloadTlsLibraryPath::Path(path) => {
@@ -24,11 +42,14 @@ pub(super) fn resolve_openssl_library_path(
                 ))
             }
         }
-        PayloadTlsLibraryPath::Auto => resolve_openssl_library_path_from_ldconfig(),
+        PayloadTlsLibraryPath::Auto => resolve_library_path_from_ldconfig(soname_prefix, label),
     }
 }
 
-fn resolve_openssl_library_path_from_ldconfig() -> Result<PathBuf, LoaderError> {
+fn resolve_library_path_from_ldconfig(
+    soname_prefix: &'static str,
+    label: &'static str,
+) -> Result<PathBuf, LoaderError> {
     let output = Command::new("ldconfig")
         .arg("-p")
         .output()
@@ -43,7 +64,7 @@ fn resolve_openssl_library_path_from_ldconfig() -> Result<PathBuf, LoaderError> 
         .map_err(|error| LoaderError::new("payload_tls_library_path", error.to_string()))?;
     stdout
         .lines()
-        .filter(|line| line.contains("libssl.so"))
+        .filter(|line| line.contains(soname_prefix))
         .filter_map(|line| {
             line.rsplit_once("=>")
                 .map(|(_, path)| PathBuf::from(path.trim()))
@@ -52,7 +73,7 @@ fn resolve_openssl_library_path_from_ldconfig() -> Result<PathBuf, LoaderError> 
         .ok_or_else(|| {
             LoaderError::new(
                 "payload_tls_library_path",
-                "ldconfig did not return an existing libssl.so path",
+                format!("ldconfig did not return an existing {label} path"),
             )
         })
 }

@@ -6,8 +6,8 @@ use std::process::ExitStatus;
 use std::thread;
 use std::time::Instant;
 
-use tls_probe_point_finder::ProbePointPlan;
 use tls_probe_point_finder::fast::FastProbeRequest;
+use tls_probe_point_finder::{ProbePointPlan, TlsProvider};
 
 use crate::capture::config::{
     ABI_MAX_CAPTURE_BYTES, ABI_MAX_RUSTLS_CHUNKS, BPF_EVENT_HEADER_BYTES, CaptureConfig,
@@ -153,6 +153,11 @@ fn validate_plan(plan: &ProbePointPlan) -> ToolResult<()> {
     }
     if !plan.has_payload_closure() {
         return Err(ToolError::new("probe plan does not have payload closure"));
+    }
+    if plan.provider == TlsProvider::Go {
+        return Err(ToolError::new(
+            "standalone tls-payload-probe does not support Go crypto/tls plans",
+        ));
     }
     Ok(())
 }

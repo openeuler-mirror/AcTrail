@@ -10,12 +10,12 @@ mod elf;
 mod go;
 #[path = "tls/go/dynamic.rs"]
 mod go_dynamic;
-#[path = "tls/openssl.rs"]
-mod openssl;
 #[path = "tls/pending.rs"]
 mod pending;
 #[path = "tls/rustls.rs"]
 mod rustls;
+#[path = "tls/shared_library.rs"]
+mod shared_library;
 #[path = "tls/symbol_map.rs"]
 mod symbol_map;
 #[path = "tls/targets.rs"]
@@ -36,11 +36,13 @@ use boringssl::{
     find_pattern_offsets, resolve_bun_static_boringssl_offsets, resolve_static_boringssl_offsets,
 };
 use elf::{resolve_executable_symbol_offsets, resolve_shared_library_symbol_offsets};
-use openssl::resolve_openssl_library_path;
 use rustls::resolve_rustls_offsets;
+use shared_library::{
+    resolve_gnutls_library_path, resolve_nspr_library_path, resolve_openssl_library_path,
+};
 use targets::{
-    BORINGSSL_UPROBE_TARGETS, GO_UPROBE_TARGETS, OPENSSL_UPROBE_TARGETS, RUSTLS_UPROBE_TARGETS,
-    TlsUprobeTarget,
+    BORINGSSL_UPROBE_TARGETS, GNUTLS_UPROBE_TARGETS, GO_UPROBE_TARGETS, NSS_NSPR_UPROBE_TARGETS,
+    OPENSSL_UPROBE_TARGETS, RUSTLS_UPROBE_TARGETS, TlsUprobeTarget,
 };
 
 pub(super) use diagnostics::read_tls_payload_diagnostics;
@@ -56,6 +58,8 @@ const TLS_LIBRARY_OPENSSL: u32 = 1;
 const TLS_LIBRARY_BORINGSSL: u32 = 2;
 const TLS_LIBRARY_RUSTLS: u32 = 3;
 const TLS_LIBRARY_GO: u32 = 4;
+const TLS_LIBRARY_GNUTLS: u32 = 5;
+const TLS_LIBRARY_NSS: u32 = 6;
 const TLS_BACKEND_SECCOMP_USER_READ: u32 = 1;
 const TLS_BACKEND_BPF_COPY_SECCOMP_FALLBACK: u32 = 2;
 
@@ -101,6 +105,16 @@ pub fn validate_payload_config(config: &PayloadTlsConfig) -> Result<(), LoaderEr
         (PayloadTlsSource::Executable, PayloadTlsResolver::GoPclntab, PayloadTlsLibrary::Go) => {
             go::validate_config(config)
         }
+        (
+            PayloadTlsSource::SharedLibrary,
+            PayloadTlsResolver::GnutlsSymbols,
+            PayloadTlsLibrary::Gnutls,
+        ) => validate_disabled_executable_fields(config),
+        (
+            PayloadTlsSource::SharedLibrary,
+            PayloadTlsResolver::NssNsprSymbols,
+            PayloadTlsLibrary::Nss,
+        ) => validate_disabled_executable_fields(config),
         _ => Err(LoaderError::new(
             "payload_tls_config",
             "unsupported payload TLS source/resolver/library combination",
@@ -198,6 +212,8 @@ pub fn is_payload_tls_program(program_name: &str) -> bool {
     program_name.starts_with("handle_ssl_")
         || program_name.starts_with("handle_rustls_")
         || program_name.starts_with("handle_go_tls_")
+        || program_name.starts_with("handle_gnutls_")
+        || program_name.starts_with("handle_nspr_")
 }
 
 pub fn is_go_tls_program(program_name: &str) -> bool {
@@ -400,6 +416,42 @@ fn payload_tls_attach_points(
             let offsets = go::resolve_offsets(&binary_path, &target_symbols(GO_UPROBE_TARGETS))?;
             offset_attach_points(&binary_path, &offsets, GO_UPROBE_TARGETS, "Go crypto/tls")
         }
+        (
+            PayloadTlsSource::SharedLibrary,
+            PayloadTlsResolver::GnutlsSymbols,
+            PayloadTlsLibrary::Gnutls,
+        ) => {
+            let path = resolve_gnutls_library_path(config)?;
+            let offsets = resolve_shared_library_symbol_offsets(
+                &path,
+                &target_symbols(GNUTLS_UPROBE_TARGETS),
+                "GnuTLS shared library",
+            )?;
+            offset_attach_points(
+                &path,
+                &offsets,
+                GNUTLS_UPROBE_TARGETS,
+                "GnuTLS shared library",
+            )
+        }
+        (
+            PayloadTlsSource::SharedLibrary,
+            PayloadTlsResolver::NssNsprSymbols,
+            PayloadTlsLibrary::Nss,
+        ) => {
+            let path = resolve_nspr_library_path(config)?;
+            let offsets = resolve_shared_library_symbol_offsets(
+                &path,
+                &target_symbols(NSS_NSPR_UPROBE_TARGETS),
+                "NSS/NSPR shared library",
+            )?;
+            offset_attach_points(
+                &path,
+                &offsets,
+                NSS_NSPR_UPROBE_TARGETS,
+                "NSS/NSPR shared library",
+            )
+        }
         _ => Err(LoaderError::new(
             "payload_tls_config",
             "unsupported payload TLS attach resolver",
@@ -454,6 +506,8 @@ fn payload_tls_library_id(config: &PayloadTlsConfig) -> Result<u32, LoaderError>
         PayloadTlsLibrary::Boringssl => Ok(TLS_LIBRARY_BORINGSSL),
         PayloadTlsLibrary::Rustls => Ok(TLS_LIBRARY_RUSTLS),
         PayloadTlsLibrary::Go => Ok(TLS_LIBRARY_GO),
+        PayloadTlsLibrary::Gnutls => Ok(TLS_LIBRARY_GNUTLS),
+        PayloadTlsLibrary::Nss => Ok(TLS_LIBRARY_NSS),
     }
 }
 

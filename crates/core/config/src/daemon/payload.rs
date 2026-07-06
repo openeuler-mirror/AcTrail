@@ -10,6 +10,8 @@ pub enum PayloadTlsLibrary {
     Boringssl,
     Rustls,
     Go,
+    Gnutls,
+    Nss,
 }
 
 impl FromStr for PayloadTlsLibrary {
@@ -22,6 +24,8 @@ impl FromStr for PayloadTlsLibrary {
             "boringssl" => Ok(Self::Boringssl),
             "rustls" => Ok(Self::Rustls),
             "go" => Ok(Self::Go),
+            "gnutls" => Ok(Self::Gnutls),
+            "nss" => Ok(Self::Nss),
             other => Err(format!("unsupported payload TLS library {other}")),
         }
     }
@@ -56,6 +60,8 @@ pub enum PayloadTlsResolver {
     BoringsslStatic,
     RustlsSymbolMap,
     GoPclntab,
+    GnutlsSymbols,
+    NssNsprSymbols,
 }
 
 impl FromStr for PayloadTlsResolver {
@@ -70,6 +76,8 @@ impl FromStr for PayloadTlsResolver {
             "boringssl-static" => Ok(Self::BoringsslStatic),
             "rustls-symbol-map" => Ok(Self::RustlsSymbolMap),
             "go-pclntab" => Ok(Self::GoPclntab),
+            "gnutls-symbols" => Ok(Self::GnutlsSymbols),
+            "nss-nspr-symbols" => Ok(Self::NssNsprSymbols),
             other => Err(format!("unsupported payload TLS resolver {other}")),
         }
     }

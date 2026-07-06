@@ -2,8 +2,11 @@
 
 use rusqlite::Connection;
 
-const SQLITE_SCHEMA_VERSION_CURRENT: i32 = 6;
+use crate::semantic_actions::{codebook, storage_meta};
+
+const SQLITE_SCHEMA_VERSION_CURRENT: i32 = storage_meta::CURRENT_SCHEMA_VERSION;
 const SQLITE_SCHEMA_VERSION_BEFORE_EXITED_AT: i32 = 5;
+const SQLITE_SCHEMA_VERSION_BEFORE_SEMANTIC_CODEBOOK: i32 = 6;
 
 const CREATE_TABLES_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS traces (
@@ -100,10 +103,18 @@ CREATE TABLE IF NOT EXISTS payload_segments (
     bytes BLOB NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS semantic_actions (
-    action_id TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS semantic_action_ids (
+    action_key INTEGER PRIMARY KEY,
     trace_id INTEGER NOT NULL,
-    kind TEXT NOT NULL,
+    action_id TEXT NOT NULL UNIQUE,
+    action_id_hash BLOB NOT NULL,
+    UNIQUE (trace_id, action_id_hash, action_id)
+);
+
+CREATE TABLE IF NOT EXISTS semantic_actions (
+    action_key INTEGER PRIMARY KEY,
+    trace_id INTEGER NOT NULL,
+    kind_code INTEGER NOT NULL,
     title TEXT NOT NULL,
     start_time INTEGER NOT NULL,
     end_time INTEGER,
@@ -112,50 +123,77 @@ CREATE TABLE IF NOT EXISTS semantic_actions (
     process_start_ticks INTEGER NOT NULL,
     process_pid_namespace TEXT,
     process_generation INTEGER NOT NULL,
-    status TEXT NOT NULL,
-    completeness TEXT NOT NULL,
+    status_code INTEGER NOT NULL,
+    completeness_code INTEGER NOT NULL,
     confidence_millis INTEGER,
+    action_valid_code INTEGER NOT NULL DEFAULT 1,
+    agent_observed INTEGER NOT NULL DEFAULT 0,
+    process_parent_conflict INTEGER NOT NULL DEFAULT 0,
     attributes TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS semantic_action_evidence (
-    action_id TEXT NOT NULL,
+    action_key INTEGER NOT NULL,
     evidence_order INTEGER NOT NULL,
-    kind TEXT NOT NULL,
+    kind_code INTEGER NOT NULL,
     evidence_id INTEGER NOT NULL,
     role TEXT NOT NULL,
-    PRIMARY KEY (action_id, evidence_order)
+    PRIMARY KEY (action_key, evidence_order)
 );
 
 CREATE TABLE IF NOT EXISTS semantic_action_links (
     trace_id INTEGER NOT NULL,
-    parent_action_id TEXT NOT NULL,
-    child_action_id TEXT NOT NULL,
-    role TEXT NOT NULL,
-    confidence TEXT NOT NULL,
+    parent_action_key INTEGER NOT NULL,
+    child_action_key INTEGER NOT NULL,
+    role_code INTEGER NOT NULL,
+    confidence_code INTEGER NOT NULL,
     valid INTEGER NOT NULL DEFAULT 1,
+    link_valid_code INTEGER NOT NULL DEFAULT 1,
     attributes TEXT NOT NULL,
-    PRIMARY KEY (trace_id, parent_action_id, child_action_id, role)
+    PRIMARY KEY (trace_id, parent_action_key, child_action_key, role_code)
 );
 
 CREATE TABLE IF NOT EXISTS semantic_action_link_evidence (
     trace_id INTEGER NOT NULL,
-    parent_action_id TEXT NOT NULL,
-    child_action_id TEXT NOT NULL,
-    role TEXT NOT NULL,
+    parent_action_key INTEGER NOT NULL,
+    child_action_key INTEGER NOT NULL,
+    role_code INTEGER NOT NULL,
     evidence_order INTEGER NOT NULL,
-    kind TEXT NOT NULL,
+    kind_code INTEGER NOT NULL,
     evidence_id INTEGER NOT NULL,
     evidence_role TEXT NOT NULL,
-    PRIMARY KEY (trace_id, parent_action_id, child_action_id, role, evidence_order)
+    PRIMARY KEY (trace_id, parent_action_key, child_action_key, role_code, evidence_order)
+);
+
+CREATE TABLE IF NOT EXISTS semantic_action_cold_fields (
+    owner_key INTEGER NOT NULL,
+    field_code INTEGER NOT NULL,
+    encoding_code INTEGER NOT NULL,
+    uncompressed_bytes INTEGER NOT NULL,
+    value_hash BLOB NOT NULL,
+    payload BLOB NOT NULL,
+    PRIMARY KEY (owner_key, field_code)
+);
+
+CREATE TABLE IF NOT EXISTS semantic_action_link_cold_fields (
+    trace_id INTEGER NOT NULL,
+    parent_action_key INTEGER NOT NULL,
+    child_action_key INTEGER NOT NULL,
+    role_code INTEGER NOT NULL,
+    field_code INTEGER NOT NULL,
+    encoding_code INTEGER NOT NULL,
+    uncompressed_bytes INTEGER NOT NULL,
+    value_hash BLOB NOT NULL,
+    payload BLOB NOT NULL,
+    PRIMARY KEY (trace_id, parent_action_key, child_action_key, role_code, field_code)
 );
 
 CREATE TABLE IF NOT EXISTS file_observation_paths (
     trace_id INTEGER NOT NULL,
-    action_id TEXT NOT NULL,
+    action_key INTEGER NOT NULL,
     path_order INTEGER NOT NULL,
     path TEXT NOT NULL,
-    PRIMARY KEY (trace_id, action_id, path)
+    PRIMARY KEY (trace_id, action_key, path)
 );
 
 CREATE TABLE IF NOT EXISTS file_paths (
@@ -179,9 +217,9 @@ CREATE TABLE IF NOT EXISTS file_path_sets (
 
 CREATE TABLE IF NOT EXISTS file_path_set_action_refs (
     trace_id INTEGER NOT NULL,
-    action_id TEXT NOT NULL,
+    action_key INTEGER NOT NULL,
     path_set_id TEXT NOT NULL,
-    PRIMARY KEY (trace_id, action_id)
+    PRIMARY KEY (trace_id, action_key)
 );
 
 CREATE TABLE IF NOT EXISTS file_path_set_chunks (
@@ -206,12 +244,12 @@ CREATE TABLE IF NOT EXISTS file_path_set_chunk_refs (
 CREATE TABLE IF NOT EXISTS llm_request_manifests (
     manifest_id INTEGER PRIMARY KEY,
     trace_id INTEGER NOT NULL,
-    action_id TEXT NOT NULL,
+    action_key INTEGER NOT NULL,
     format_version INTEGER NOT NULL,
     canonical_body_hash BLOB NOT NULL,
     canonical_body_bytes INTEGER NOT NULL,
     skeleton_json TEXT NOT NULL,
-    UNIQUE (trace_id, action_id)
+    UNIQUE (trace_id, action_key)
 );
 
 CREATE TABLE IF NOT EXISTS llm_request_blocks (
@@ -269,18 +307,18 @@ CREATE INDEX IF NOT EXISTS idx_semantic_actions_trace_process_kind ON semantic_a
     process_start_ticks,
     process_pid_namespace,
     process_generation,
-    kind
+    kind_code
 );
 
 CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_child_role ON semantic_action_links (
     trace_id,
-    child_action_id,
-    role
+    child_action_key,
+    role_code
 );
 
 CREATE INDEX IF NOT EXISTS idx_file_observation_paths_action_order ON file_observation_paths (
     trace_id,
-    action_id,
+    action_key,
     path_order
 );
 
@@ -307,6 +345,9 @@ pub fn initialize(connection: &Connection) -> Result<(), rusqlite::Error> {
     validate_writable_schema_state(connection, version)?;
     migrate_writable_schema(connection, version)?;
     connection.execute_batch(CREATE_TABLES_SQL)?;
+    codebook::for_schema_version(SQLITE_SCHEMA_VERSION_CURRENT)
+        .and_then(|codebook| codebook.validate())
+        .map_err(|_| rusqlite::Error::InvalidQuery)?;
     validate_current_schema(connection)?;
     connection.pragma_update(None, "user_version", SQLITE_SCHEMA_VERSION_CURRENT)?;
     migrate_query_indexes(connection)
@@ -318,6 +359,9 @@ fn migrate_writable_schema(connection: &Connection, version: i32) -> Result<(), 
     {
         connection.execute_batch("ALTER TABLE traces ADD COLUMN exited_at INTEGER;")?;
     }
+    if version <= SQLITE_SCHEMA_VERSION_BEFORE_SEMANTIC_CODEBOOK {
+        crate::schema_migrations::semantic_codebook::migrate_semantic_action_codebook(connection)?;
+    }
     Ok(())
 }
 
@@ -326,11 +370,11 @@ fn migrate_query_indexes(connection: &Connection) -> Result<(), rusqlite::Error>
         "CREATE INDEX IF NOT EXISTS idx_events_trace_id ON events(trace_id);
          CREATE INDEX IF NOT EXISTS idx_payload_segments_trace_id ON payload_segments(trace_id);
          CREATE INDEX IF NOT EXISTS idx_semantic_actions_trace_start ON semantic_actions(trace_id, start_time);
-         CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_parent ON semantic_action_links(trace_id, parent_action_id);
-         CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_child ON semantic_action_links(trace_id, child_action_id);
-         CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_valid_parent ON semantic_action_links(trace_id, valid, parent_action_id);
-         CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_valid_child ON semantic_action_links(trace_id, valid, child_action_id);
-         CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_valid_role ON semantic_action_links(trace_id, valid, role);",
+         CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_parent ON semantic_action_links(trace_id, parent_action_key);
+         CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_child ON semantic_action_links(trace_id, child_action_key);
+         CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_valid_parent ON semantic_action_links(trace_id, valid, parent_action_key);
+         CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_valid_child ON semantic_action_links(trace_id, valid, child_action_key);
+         CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_valid_role ON semantic_action_links(trace_id, valid, role_code);",
     )
 }
 
@@ -338,6 +382,9 @@ pub fn validate_read_schema(connection: &Connection) -> Result<(), rusqlite::Err
     if user_version(connection)? != SQLITE_SCHEMA_VERSION_CURRENT {
         return Err(rusqlite::Error::InvalidQuery);
     }
+    codebook::for_schema_version(SQLITE_SCHEMA_VERSION_CURRENT)
+        .and_then(|codebook| codebook.validate())
+        .map_err(|_| rusqlite::Error::InvalidQuery)?;
     validate_current_schema(connection)?;
     Ok(())
 }
@@ -352,6 +399,9 @@ fn validate_writable_schema_state(
     if version == SQLITE_SCHEMA_VERSION_BEFORE_EXITED_AT {
         return Ok(());
     }
+    if version == SQLITE_SCHEMA_VERSION_BEFORE_SEMANTIC_CODEBOOK {
+        return Ok(());
+    }
     if version == 0 && user_table_count(connection)? == 0 {
         return Ok(());
     }
@@ -360,11 +410,44 @@ fn validate_writable_schema_state(
 
 fn validate_current_schema(connection: &Connection) -> Result<(), rusqlite::Error> {
     require_column(connection, "traces", "exited_at")?;
+    require_column(connection, "semantic_action_ids", "action_key")?;
+    require_column(connection, "semantic_action_ids", "action_id")?;
+    require_column(connection, "semantic_action_ids", "action_id_hash")?;
+    require_column(connection, "semantic_actions", "action_key")?;
+    require_column(connection, "semantic_actions", "kind_code")?;
+    require_column(connection, "semantic_actions", "status_code")?;
+    require_column(connection, "semantic_actions", "completeness_code")?;
+    require_column(connection, "semantic_actions", "action_valid_code")?;
+    require_column(connection, "semantic_actions", "agent_observed")?;
+    require_column(connection, "semantic_actions", "process_parent_conflict")?;
+    require_column(connection, "semantic_action_evidence", "action_key")?;
+    require_column(connection, "semantic_action_evidence", "kind_code")?;
+    require_column(connection, "semantic_action_links", "parent_action_key")?;
+    require_column(connection, "semantic_action_links", "child_action_key")?;
+    require_column(connection, "semantic_action_links", "role_code")?;
+    require_column(connection, "semantic_action_links", "confidence_code")?;
+    require_column(connection, "semantic_action_links", "link_valid_code")?;
+    require_column(
+        connection,
+        "semantic_action_link_evidence",
+        "parent_action_key",
+    )?;
+    require_column(
+        connection,
+        "semantic_action_link_evidence",
+        "child_action_key",
+    )?;
+    require_column(connection, "semantic_action_link_evidence", "role_code")?;
+    require_column(connection, "semantic_action_link_evidence", "kind_code")?;
+    require_column(connection, "file_observation_paths", "action_key")?;
     require_column(connection, "file_path_sets", "path_set_hash")?;
-    require_column(connection, "file_path_set_action_refs", "action_id")?;
+    require_column(connection, "file_path_set_action_refs", "action_key")?;
     require_column(connection, "llm_request_manifests", "manifest_id")?;
+    require_column(connection, "llm_request_manifests", "action_key")?;
     require_column(connection, "llm_request_blocks", "block_id")?;
-    require_column(connection, "llm_request_block_refs", "manifest_id")
+    require_column(connection, "llm_request_block_refs", "manifest_id")?;
+    require_column(connection, "semantic_action_cold_fields", "payload")?;
+    require_column(connection, "semantic_action_link_cold_fields", "payload")
 }
 
 fn user_version(connection: &Connection) -> Result<i32, rusqlite::Error> {

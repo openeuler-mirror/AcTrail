@@ -5,6 +5,8 @@ use semantic_action::{
     FilePathSetState, FilePathSetWrite, SemanticActionStoreError, file_path_set_identity_for_paths,
 };
 
+use crate::semantic_actions::action_ids::intern_action_id;
+
 use super::hash::{encode_path_ids, stable_hash_bytes, stable_hash_text};
 
 pub(in crate::semantic_actions) fn upsert_file_path_sets(
@@ -376,18 +378,15 @@ fn write_action_ref(
     connection: &rusqlite::Connection,
     path_set: &FilePathSetWrite,
 ) -> Result<(), SemanticActionStoreError> {
+    let action_key = intern_action_id(connection, path_set.trace_id.get(), &path_set.action_id)?;
     connection
         .execute(
             "INSERT INTO file_path_set_action_refs (
-                trace_id, action_id, path_set_id
+                trace_id, action_key, path_set_id
              ) VALUES (?1, ?2, ?3)
-             ON CONFLICT(trace_id, action_id) DO UPDATE SET
+             ON CONFLICT(trace_id, action_key) DO UPDATE SET
                 path_set_id = excluded.path_set_id",
-            params![
-                path_set.trace_id.get(),
-                &path_set.action_id,
-                &path_set.path_set_id,
-            ],
+            params![path_set.trace_id.get(), action_key, &path_set.path_set_id,],
         )
         .map(|_| ())
         .map_err(|error| {

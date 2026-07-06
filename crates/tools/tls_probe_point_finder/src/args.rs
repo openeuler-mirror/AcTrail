@@ -189,6 +189,9 @@ pub(crate) enum ProviderChoice {
     BoringSsl,
     Rustls,
     Go,
+    #[value(name = "gnutls")]
+    GnuTls,
+    Nss,
 }
 
 impl From<ProviderChoice> for ProviderFilter {
@@ -199,6 +202,8 @@ impl From<ProviderChoice> for ProviderFilter {
             ProviderChoice::BoringSsl => Self::BoringSsl,
             ProviderChoice::Rustls => Self::Rustls,
             ProviderChoice::Go => Self::Go,
+            ProviderChoice::GnuTls => Self::GnuTls,
+            ProviderChoice::Nss => Self::Nss,
         }
     }
 }
