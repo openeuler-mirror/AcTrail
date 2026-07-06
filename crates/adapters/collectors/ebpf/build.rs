@@ -59,6 +59,7 @@ fn main() {
     println!("cargo:rerun-if-changed=bpf/tls/actrail_tls_payload_probes.h");
     println!("cargo:rerun-if-changed=/proc/sys/kernel/osrelease");
     println!("cargo:rerun-if-changed=/sys/kernel/btf/vmlinux");
+    println!("cargo:rerun-if-env-changed=ACTRAIL_BPF_SYSTEM_INCLUDE");
     println!("cargo:rustc-check-cfg=cfg(actrail_event_transport_perf)");
     println!(
         "cargo:rustc-env=ACTRAIL_EBPF_OBJECT={}",
@@ -76,10 +77,17 @@ fn main() {
         transport.reason
     );
 
-    let mut clang_args = vec!["-I", "bpf", bpf_target_arch];
+    let mut clang_args = vec![
+        "-I".to_string(),
+        "bpf".to_string(),
+        bpf_target_arch.to_string(),
+    ];
+    if let Some(include) = target_system_include(&target_arch) {
+        clang_args.push(format!("-I{}", include.display()));
+    }
     if transport.transport == EventTransport::PerfBuffer {
         println!("cargo:rustc-cfg=actrail_event_transport_perf");
-        clang_args.push("-DACTRAIL_EVENT_TRANSPORT_PERF");
+        clang_args.push("-DACTRAIL_EVENT_TRANSPORT_PERF".to_string());
     }
 
     libbpf_cargo::SkeletonBuilder::new()
@@ -88,6 +96,19 @@ fn main() {
         .clang_args(clang_args)
         .build()
         .expect("failed to compile eBPF object");
+}
+
+fn target_system_include(target_arch: &str) -> Option<PathBuf> {
+    if let Some(path) = env::var_os("ACTRAIL_BPF_SYSTEM_INCLUDE") {
+        return Some(PathBuf::from(path));
+    }
+    let multiarch = match target_arch {
+        "x86_64" => "x86_64-linux-gnu",
+        "aarch64" => "aarch64-linux-gnu",
+        _ => return None,
+    };
+    let path = PathBuf::from("/usr/include").join(multiarch);
+    path.join("asm").is_dir().then_some(path)
 }
 
 fn select_event_transport() -> TransportChoice {
