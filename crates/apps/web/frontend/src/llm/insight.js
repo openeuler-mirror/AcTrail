@@ -140,6 +140,7 @@ function requestInsight(action, requestContent) {
   const attrs = action.attributes ?? {};
   const body = requestBodyFromContent(action, requestContent);
   const messages = requestMessages(body);
+  const newestMessages = messages.slice().reverse();
   const tools = requestTools(body);
   const lastMessage = messages.filter((message) => message.text).at(-1) ?? null;
   const fallbackMessage = llmRequestMessage(action, { preview: false });
@@ -168,7 +169,7 @@ function requestInsight(action, requestContent) {
       label: 'Message context',
       title: `${messages.length} message block${messages.length === 1 ? '' : 's'}`,
       itemLimit: MESSAGE_CONTEXT_DEFAULT_LIMIT,
-      items: messages.map((message, index) => ({
+      items: newestMessages.map((message, index) => ({
         id: `${message.index}-${index}`,
         title: messageTitle(message),
         text: message.text,
@@ -474,40 +475,88 @@ function messageContentText(content) {
   }
   if (Array.isArray(content)) {
     return content
-      .map((part) => {
-        if (typeof part === 'string') {
-          return part;
-        }
-        if (typeof part?.text === 'string') {
-          return part.text;
-        }
-        if (part?.type === 'text' && typeof part?.text === 'string') {
-          return part.text;
-        }
-        if (part?.type === 'input_text' && typeof part?.text === 'string') {
-          return part.text;
-        }
-        if (part?.type === 'output_text' && typeof part?.text === 'string') {
-          return part.text;
-        }
-        if (typeof part?.content === 'string') {
-          return part.content;
-        }
-        return '';
-      })
+      .map(messageContentPartText)
       .filter(Boolean)
-      .join(' ')
+      .join('\n\n')
       .trim();
   }
   if (content && typeof content === 'object') {
-    if (typeof content.text === 'string') {
-      return content.text.trim();
-    }
-    if (typeof content.content === 'string') {
-      return content.content.trim();
-    }
+    return messageContentPartText(content).trim();
   }
   return '';
+}
+
+function messageContentPartText(part) {
+  if (typeof part === 'string') {
+    return part.trim();
+  }
+  if (!part || typeof part !== 'object') {
+    return '';
+  }
+  if (typeof part.text === 'string' && part.text.trim()) {
+    return part.text.trim();
+  }
+  if (part.type === 'tool_use') {
+    return formatToolUseContentBlock(part);
+  }
+  if (part.type === 'tool_result') {
+    return formatToolResultContentBlock(part);
+  }
+  if (typeof part.content === 'string' && part.content.trim()) {
+    return part.content.trim();
+  }
+  if (typeof part.input === 'string' && part.input.trim()) {
+    return part.input.trim();
+  }
+  if (part.type === 'image_url' || part.type === 'input_image') {
+    return formatMediaContentBlock(part, 'image');
+  }
+  if (part.type === 'document' || part.type === 'input_file') {
+    return formatMediaContentBlock(part, 'document');
+  }
+  return stringifyContentBlock(part);
+}
+
+function formatToolUseContentBlock(part) {
+  const lines = [`[tool_use] ${String(part.name ?? part.type ?? 'tool').trim()}`];
+  if (part.id) {
+    lines.push(`id: ${part.id}`);
+  }
+  if (part.input !== undefined) {
+    lines.push(`input:\n${stringifyContentValue(part.input)}`);
+  }
+  return lines.join('\n');
+}
+
+function formatToolResultContentBlock(part) {
+  const lines = [`[tool_result] ${String(part.tool_use_id ?? part.id ?? 'tool').trim()}`];
+  if (part.is_error !== undefined) {
+    lines.push(`is_error: ${Boolean(part.is_error)}`);
+  }
+  if (part.content !== undefined) {
+    lines.push(stringifyContentValue(part.content));
+  }
+  return lines.join('\n');
+}
+
+function formatMediaContentBlock(part, label) {
+  const source = part.url ?? part.image_url?.url ?? part.source?.url ?? part.file_id ?? part.media_type ?? part.type;
+  return `[${label}] ${String(source ?? '').trim() || stringifyContentBlock(part)}`;
+}
+
+function stringifyContentBlock(part) {
+  const serialized = stringifyContentValue(part);
+  return serialized === '{}' ? '' : serialized;
+}
+
+function stringifyContentValue(value) {
+  if (typeof value === 'string') {
+    return value.trim();
+  }
+  if (value === undefined || value === null) {
+    return '';
+  }
+  return JSON.stringify(value, null, 2);
 }
 
 function openAiChoicesText(parsed) {

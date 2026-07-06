@@ -33,7 +33,9 @@ use storage_factory::{StorageConfig, open_storage_backend};
 
 use crate::json;
 
-pub(crate) use stats::TokenUsageStatsQuery;
+pub(crate) use stats::{
+    ExportView, LlmActivityQuery, LlmExportQuery, LlmRowsQuery, Rollup, TokenUsageStatsQuery,
+};
 
 pub fn current_config_json(
     config_path: Option<&std::path::Path>,
@@ -82,6 +84,42 @@ pub fn token_usage_stats_json(
 ) -> Result<String, String> {
     let mut storage = open_storage(storage_config)?;
     stats::token_usage_stats_json(storage.as_mut(), query)
+}
+
+pub fn llm_activity_json(
+    storage_config: &StorageConfig,
+    query: stats::LlmActivityQuery,
+) -> Result<String, String> {
+    let mut storage = open_storage(storage_config)?;
+    stats::llm_activity_json(storage.as_mut(), query)
+}
+
+pub fn llm_request_rows_json(
+    storage_config: &StorageConfig,
+    query: stats::LlmRowsQuery,
+) -> Result<String, String> {
+    let mut storage = open_storage(storage_config)?;
+    stats::llm_request_rows_json(storage.as_mut(), query)
+}
+
+pub fn llm_explore_json(
+    storage_config: &StorageConfig,
+    query: stats::LlmExploreQuery,
+) -> Result<String, String> {
+    let mut storage = open_storage(storage_config)?;
+    stats::llm_explore_json(storage.as_mut(), query)
+}
+
+pub fn llm_export_csv(
+    storage_config: &StorageConfig,
+    query: stats::LlmExportQuery,
+) -> Result<String, String> {
+    let mut storage = open_storage(storage_config)?;
+    stats::llm_export_csv(storage.as_mut(), query)
+}
+
+pub fn parse_llm_explore_query(body: &str) -> Result<stats::LlmExploreQuery, String> {
+    stats::parse_explore_query(body)
 }
 
 pub fn trace_json(storage_config: &StorageConfig, trace_id: u64) -> Result<String, String> {

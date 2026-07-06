@@ -77,9 +77,16 @@
             </button>
           </span>
         </span>
-        <span class="action-card-meta">
-          <span>{{ node.kind }}</span>
-          <span v-if="node.meta">{{ node.meta }}</span>
+        <span v-if="cardMetaItems.length" class="action-card-meta">
+          <span
+            v-for="item in cardMetaItems"
+            :key="`${item.kind}:${item.label}`"
+            class="action-meta-chip"
+            :class="`meta-${item.kind}`"
+            :title="item.label"
+          >
+            {{ item.label }}
+          </span>
         </span>
       </div>
 
@@ -90,9 +97,11 @@
             :depth="depth + 1"
             :force-expanded="forceExpanded"
             :selected-id="selectedId"
+            :expanded-ids="expandedIds"
             :llm-call-nav="llmCallNavigation(index)"
             @select="$emit('select', $event)"
             @expand="$emit('expand', $event)"
+            @set-expanded="$emit('set-expanded', $event)"
             @load-more="$emit('load-more', $event)"
             @jump="$emit('jump', $event)"
           />
@@ -141,9 +150,13 @@ const props = defineProps({
     type: Object,
     default: null,
   },
+  expandedIds: {
+    type: Object,
+    default: () => new Set(),
+  },
 });
 
-const emit = defineEmits(['select', 'expand', 'load-more', 'jump']);
+const emit = defineEmits(['select', 'expand', 'set-expanded', 'load-more', 'jump']);
 const expanded = ref(false);
 const prefetchSentinel = ref(null);
 let prefetchObserver = null;
@@ -152,8 +165,19 @@ const showLlmCallJump = computed(
   () => props.node.kind === 'llm.call' && (props.llmCallNav?.previous || props.llmCallNav?.next),
 );
 const statusMarker = computed(() => statusDescriptor(props.node.status));
+const cardMetaItems = computed(() => {
+  if (Array.isArray(props.node.metaItems) && props.node.metaItems.length) {
+    return props.node.metaItems.filter((item) => item?.label);
+  }
+  const fallback = String(props.node.meta ?? '').trim();
+  return fallback ? [{ kind: 'summary', label: fallback }] : [];
+});
 const childrenVisible = computed(
-  () => hasChildren.value && (expanded.value || (props.forceExpanded && props.node.childrenLoaded)),
+  () =>
+    hasChildren.value &&
+    (expanded.value ||
+      props.expandedIds?.has?.(props.node.id) ||
+      (props.forceExpanded && props.node.childrenLoaded)),
 );
 const prefetchSentinelIndex = computed(() => {
   if (!props.node.hasMoreChildren || !props.node.children.length) {
@@ -196,10 +220,12 @@ function selectNode() {
 
 function toggleExpanded() {
   if (hasChildren.value) {
+    const nextExpanded = !childrenVisible.value;
     if (!props.node.childrenLoaded && !props.node.loading) {
       emit('expand', props.node);
     }
-    expanded.value = !expanded.value;
+    expanded.value = nextExpanded;
+    emit('set-expanded', { node: props.node, expanded: nextExpanded });
   }
 }
 
@@ -324,11 +350,11 @@ function statusDescriptor(status) {
   display: grid;
   place-items: center;
   padding: 0;
-  border: 1px solid #f4c56d;
+  border: 1px solid var(--trace-action-jump-border);
   border-radius: 7px;
-  background: #fff8e7;
-  color: #92400e;
-  box-shadow: 0 4px 10px rgba(146, 64, 14, 0.12);
+  background: var(--trace-action-jump-bg);
+  color: var(--trace-action-jump-text);
+  box-shadow: var(--trace-action-jump-shadow);
   cursor: pointer;
   transition:
     background-color 130ms ease,
@@ -338,26 +364,20 @@ function statusDescriptor(status) {
 }
 
 .llm-call-jump-controls button:hover:not(:disabled) {
-  border-color: var(--amber);
-  background: #ffefd0;
-  box-shadow:
-    0 0 0 3px rgba(245, 158, 11, 0.16),
-    0 8px 18px rgba(146, 64, 14, 0.18);
+  border-color: var(--teal);
+  background: var(--trace-action-jump-hover-bg);
+  box-shadow: var(--trace-action-jump-hover-shadow);
   transform: translateX(-2px);
 }
 
 .llm-call-jump-controls button:active:not(:disabled) {
   transform: translateX(-1px) translateY(1px);
-  box-shadow:
-    0 0 0 2px rgba(245, 158, 11, 0.14),
-    inset 0 1px 2px rgba(146, 64, 14, 0.2);
+  box-shadow: var(--trace-action-jump-active-shadow);
 }
 
 .llm-call-jump-controls button:focus-visible {
   outline: none;
-  box-shadow:
-    0 0 0 3px rgba(245, 158, 11, 0.22),
-    0 8px 18px rgba(146, 64, 14, 0.18);
+  box-shadow: var(--trace-action-jump-focus-shadow);
 }
 
 .llm-call-jump-controls button:disabled {
@@ -391,12 +411,12 @@ function statusDescriptor(status) {
   align-content: start;
   gap: 8px;
   padding: 11px 12px 11px 14px;
-  border: 1px solid var(--border);
-  border-left: 4px solid var(--teal);
+  border: 1px solid var(--trace-action-card-border);
+  border-left: 4px solid var(--trace-action-card-left-border);
   border-radius: 8px;
-  background: var(--surface);
+  background: var(--trace-action-card-bg);
   box-shadow: var(--shadow);
-  color: var(--text);
+  color: var(--trace-action-card-text);
   font-size: 13px;
   line-height: 1.35;
   text-align: left;
@@ -417,31 +437,23 @@ function statusDescriptor(status) {
 .action-card:hover {
   transform: translateY(-1px);
   box-shadow:
-    0 10px 24px rgba(15, 118, 110, 0.11),
-    var(--shadow);
+    var(--trace-action-card-hover-shadow);
 }
 
 .action-card:active {
   transform: translateY(1px);
   box-shadow:
-    0 3px 9px rgba(15, 23, 42, 0.16),
-    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+    var(--trace-action-card-active-shadow);
 }
 
 .action-card:focus-visible {
   box-shadow:
-    0 0 0 3px rgba(15, 118, 110, 0.22),
-    var(--shadow);
+    var(--trace-action-card-focus-shadow);
 }
 
 .action-tree-node.is-selected > .action-tree-branch > .action-card {
-  background:
-    linear-gradient(180deg, rgba(240, 253, 250, 0.98), rgba(232, 247, 244, 0.98)),
-    var(--surface);
-  box-shadow:
-    0 0 0 2px rgba(15, 118, 110, 0.24),
-    0 14px 32px rgba(15, 118, 110, 0.18),
-    0 4px 10px rgba(15, 23, 42, 0.12);
+  background: var(--trace-action-card-selected-bg);
+  box-shadow: var(--trace-action-card-selected-shadow);
   transform: translateY(-2px);
 }
 
@@ -451,101 +463,78 @@ function statusDescriptor(status) {
   inset: 5px;
   z-index: -1;
   border-radius: 6px;
-  box-shadow: inset 0 0 0 1px rgba(13, 148, 136, 0.12);
+  box-shadow: var(--trace-action-card-selected-inset);
   pointer-events: none;
 }
 
 .action-tree-node.is-selected > .action-tree-branch > .action-card:active {
   transform: translateY(0);
   box-shadow:
-    0 0 0 2px rgba(15, 118, 110, 0.22),
-    0 6px 16px rgba(15, 118, 110, 0.16),
-    inset 0 1px 2px rgba(15, 23, 42, 0.12);
+    var(--trace-action-card-active-shadow);
 }
 
 .action-tree-node.is-match > .action-tree-branch > .action-card {
-  background: #fffbeb;
+  background: var(--trace-action-card-match-bg);
 }
 
 .action-tree-node.node-agent > .action-tree-branch > .action-card {
-  border-color: #8fc5be;
-  border-left-color: var(--teal-deep);
-  background: #f1fbf8;
+  border-color: var(--trace-action-agent-border);
+  border-left-color: var(--trace-action-agent-left-border);
+  background: var(--trace-action-agent-bg);
   font-weight: 800;
 }
 
 .action-tree-node.kind-llm-response > .action-tree-branch > .action-card,
 .action-tree-node.kind-llm-request > .action-tree-branch > .action-card,
 .action-tree-node.kind-llm-call > .action-tree-branch > .action-card {
-  border-left-color: var(--amber);
+  border-left-color: var(--trace-action-llm-left-border);
 }
 
 .action-tree-node.visual-agent-call > .action-tree-branch > .action-card {
-  border-color: #b8c7e8;
-  border-left-color: #3158a3;
-  background: #f3f6fc;
+  border-color: var(--trace-action-call-border);
+  border-left-color: var(--trace-action-call-left-border);
+  background: var(--trace-action-call-bg);
 }
 
 .action-tree-node.visual-agent-call.is-selected > .action-tree-branch > .action-card {
-  border-color: #3158a3;
-  background:
-    linear-gradient(180deg, rgba(243, 246, 252, 0.98), rgba(232, 239, 250, 0.98)),
-    #f3f6fc;
-  box-shadow:
-    0 0 0 2px rgba(49, 88, 163, 0.24),
-    0 14px 32px rgba(49, 88, 163, 0.17),
-    0 4px 10px rgba(15, 23, 42, 0.12);
+  border-color: var(--trace-action-call-left-border);
+  background: var(--trace-action-call-selected-bg);
+  box-shadow: var(--trace-action-call-selected-shadow);
 }
 
 .action-tree-node.node-actionGroup > .action-tree-branch > .action-card,
 .action-tree-node.visual-action-group > .action-tree-branch > .action-card {
-  border-color: #c8d7d5;
-  border-left-color: #475569;
-  background: #f7f9f9;
+  border-color: var(--trace-action-group-border);
+  border-left-color: var(--trace-action-group-left-border);
+  background: var(--trace-action-group-bg);
 }
 
 .action-tree-node.node-actionGroup.is-selected > .action-tree-branch > .action-card,
 .action-tree-node.visual-action-group.is-selected > .action-tree-branch > .action-card {
-  border-color: #475569;
-  background:
-    linear-gradient(180deg, rgba(248, 250, 252, 0.98), rgba(238, 242, 247, 0.98)),
-    #f7f9f9;
-  box-shadow:
-    0 0 0 2px rgba(71, 85, 105, 0.2),
-    0 14px 30px rgba(71, 85, 105, 0.14),
-    0 4px 10px rgba(15, 23, 42, 0.12);
+  border-color: var(--trace-action-group-left-border);
+  background: var(--trace-action-group-selected-bg);
+  box-shadow: var(--trace-action-group-selected-shadow);
 }
 
 .action-tree-node.status-error > .action-tree-branch > .action-card {
-  border-color: #fca5a5;
-  border-left-color: #dc2626;
-  background:
-    linear-gradient(180deg, rgba(255, 247, 247, 0.98), rgba(254, 242, 242, 0.98)),
-    var(--surface);
-  box-shadow:
-    0 0 0 1px rgba(220, 38, 38, 0.12),
-    var(--shadow);
+  border-color: var(--trace-action-error-border);
+  border-left-color: var(--trace-action-error-left-border);
+  background: var(--trace-action-error-bg);
+  box-shadow: var(--trace-action-error-shadow);
 }
 
 .action-tree-node.status-error > .action-tree-branch > .action-card:hover,
 .action-tree-node.status-error.is-selected > .action-tree-branch > .action-card {
-  border-color: #dc2626;
+  border-color: var(--trace-action-error-left-border);
 }
 
 .action-tree-node.status-error > .action-tree-branch > .action-card:hover {
-  box-shadow:
-    0 10px 24px rgba(220, 38, 38, 0.14),
-    var(--shadow);
+  box-shadow: var(--trace-action-error-hover-shadow);
 }
 
 .action-tree-node.status-error.is-selected > .action-tree-branch > .action-card {
-  background:
-    linear-gradient(180deg, rgba(255, 241, 242, 0.99), rgba(254, 226, 226, 0.99)),
-    var(--surface);
-  box-shadow:
-    0 0 0 2px rgba(220, 38, 38, 0.24),
-    0 14px 32px rgba(220, 38, 38, 0.17),
-    0 4px 10px rgba(15, 23, 42, 0.12);
+  background: var(--trace-action-error-selected-bg);
+  box-shadow: var(--trace-action-error-selected-shadow);
 }
 
 .action-card-top {
@@ -581,7 +570,7 @@ function statusDescriptor(status) {
   padding: 0;
   border: 1px solid currentColor;
   border-radius: 999px;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  box-shadow: var(--trace-action-status-inset);
 }
 
 .action-status-marker svg {
@@ -589,27 +578,27 @@ function statusDescriptor(status) {
 }
 
 .action-status-marker.tone-success {
-  background: #ecfdf3;
-  color: #047857;
-  border-color: #86efac;
+  background: var(--trace-action-status-success-bg);
+  color: var(--trace-action-status-success-text);
+  border-color: var(--trace-action-status-success-border);
 }
 
 .action-status-marker.tone-error {
-  background: #fff1f2;
-  color: #be123c;
-  border-color: #fb7185;
+  background: var(--trace-action-status-error-bg);
+  color: var(--trace-action-status-error-text);
+  border-color: var(--trace-action-status-error-border);
 }
 
 .action-status-marker.tone-progress {
-  background: #fffbeb;
-  color: #b45309;
-  border-color: #facc15;
+  background: var(--trace-action-status-progress-bg);
+  color: var(--trace-action-status-progress-text);
+  border-color: var(--trace-action-status-progress-border);
 }
 
 .action-status-marker.tone-unknown {
-  background: #f8fafc;
-  color: #475569;
-  border-color: #cbd5e1;
+  background: var(--trace-action-status-unknown-bg);
+  color: var(--trace-action-status-unknown-text);
+  border-color: var(--trace-action-status-unknown-border);
 }
 
 .action-card-toggle {
@@ -618,10 +607,10 @@ function statusDescriptor(status) {
   place-items: center;
   width: 22px;
   height: 22px;
-  border: 1px solid #c8d7d5;
+  border: 1px solid var(--trace-action-toggle-border);
   border-radius: 6px;
-  background: #f8fbfa;
-  color: var(--teal-deep);
+  background: var(--trace-action-toggle-bg);
+  color: var(--trace-action-toggle-color);
   cursor: pointer;
   padding: 0;
   transition:
@@ -633,32 +622,67 @@ function statusDescriptor(status) {
 
 .action-card-toggle:hover {
   border-color: var(--teal);
-  background: #e8f7f4;
-  box-shadow: 0 4px 10px rgba(15, 118, 110, 0.14);
+  background: var(--trace-action-toggle-hover-bg);
+  box-shadow: var(--trace-action-toggle-hover-shadow);
 }
 
 .action-card-toggle:active {
   transform: translateY(1px);
-  box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.16);
+  box-shadow: var(--trace-action-toggle-active-shadow);
 }
 
 .action-card-toggle:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.22);
+  box-shadow: var(--trace-action-toggle-focus-shadow);
 }
 
 .action-card-meta {
   min-width: 0;
-  display: grid;
-  gap: 2px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
 }
 
-.action-card-meta span {
+.action-meta-chip {
   min-width: 0;
-  overflow-wrap: anywhere;
+  max-width: 100%;
+  min-height: 20px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  overflow: hidden;
+  border: 1px solid var(--trace-badge-kind-border);
+  border-radius: 6px;
+  background: var(--trace-badge-kind-bg);
+  color: var(--trace-badge-kind-text);
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.action-meta-chip.meta-model,
+.action-meta-chip.meta-path,
+.action-meta-chip.meta-command,
+.action-meta-chip.meta-target {
+  flex: 1 1 100%;
+  justify-content: flex-start;
+}
+
+.action-meta-chip.meta-time,
+.action-meta-chip.meta-pid,
+.action-meta-chip.meta-kind,
+.action-meta-chip.meta-summary {
+  flex: 0 1 auto;
+  color: var(--muted);
+}
+
+.action-meta-chip.meta-status {
+  border-color: var(--trace-badge-progress-border);
+  background: var(--trace-badge-progress-bg);
+  color: var(--trace-badge-progress-text);
 }
 
 .action-child-lane {
@@ -673,28 +697,28 @@ function statusDescriptor(status) {
 .action-child-lane > .action-tree-node::before {
   content: "";
   position: absolute;
-  border-color: #9bbebb;
+  border-color: var(--trace-action-edge);
 }
 
 .action-tree-node.is-expanded > .action-tree-branch::after {
   left: var(--action-node-width);
   top: var(--action-node-center-y);
   width: calc(var(--action-lane-gap) / 2);
-  border-top: 1px solid #9bbebb;
+  border-top: 1px solid var(--trace-action-edge);
 }
 
 .action-child-lane::before {
   left: calc(var(--action-lane-gap) / -2);
   top: var(--action-node-center-y);
   bottom: var(--action-node-center-y);
-  border-left: 1px solid #9bbebb;
+  border-left: 1px solid var(--trace-action-edge);
 }
 
 .action-child-lane > .action-tree-node::before {
   left: calc(var(--action-lane-gap) / -2);
   top: var(--action-node-center-y);
   width: calc(var(--action-lane-gap) / 2);
-  border-top: 1px solid #9bbebb;
+  border-top: 1px solid var(--trace-action-edge);
 }
 
 .action-node-state {
@@ -703,18 +727,18 @@ function statusDescriptor(status) {
   display: grid;
   align-items: center;
   padding: 8px 10px;
-  border: 1px dashed #bdd7d2;
+  border: 1px dashed var(--trace-action-empty-border);
   border-radius: 8px;
-  background: #fbfcfc;
+  background: var(--trace-action-empty-bg);
   color: var(--muted);
   font-size: 12px;
   font-weight: 700;
 }
 
 .action-node-state.error {
-  border-color: #fecdd3;
-  background: #fff1f2;
-  color: var(--rose);
+  border-color: var(--trace-action-node-error-border);
+  background: var(--trace-action-node-error-bg);
+  color: var(--trace-action-node-error-text);
 }
 
 .action-prefetch-sentinel {

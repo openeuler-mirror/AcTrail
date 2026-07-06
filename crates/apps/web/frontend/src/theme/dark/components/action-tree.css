@@ -1,0 +1,107 @@
+.theme-dark,
+.app-theme-dark {
+  --trace-action-tree-bg: #121212;
+  --trace-action-tree-grid: rgba(123, 223, 242, 0.06);
+  --trace-action-tree-header-bg: linear-gradient(180deg, rgba(32, 32, 32, 0.98), rgba(32, 32, 32, 0.86));
+  --trace-action-tree-arc: rgba(123, 223, 242, 0.52);
+  --trace-action-edge: #596466;
+  --trace-action-card-bg: #202020;
+  --trace-action-card-text: #f5f5f5;
+  --trace-action-card-border: #3d3d3d;
+  --trace-action-card-left-border: #7bdff2;
+  --trace-action-card-hover-shadow:
+    0 0 0 1px rgba(123, 223, 242, 0.24),
+    0 12px 24px rgba(0, 0, 0, 0.28);
+  --trace-action-card-active-shadow:
+    0 0 0 1px rgba(123, 223, 242, 0.18),
+    inset 0 1px 2px rgba(0, 0, 0, 0.42);
+  --trace-action-card-focus-shadow:
+    0 0 0 3px rgba(123, 223, 242, 0.22),
+    0 0 0 1px rgba(123, 223, 242, 0.38);
+  --trace-action-card-selected-bg:
+    linear-gradient(180deg, rgba(25, 40, 45, 0.98), rgba(24, 32, 36, 0.98)),
+    #202020;
+  --trace-action-card-selected-shadow:
+    0 0 0 2px rgba(123, 223, 242, 0.3),
+    0 18px 34px rgba(0, 0, 0, 0.34);
+  --trace-action-card-selected-inset: inset 0 0 0 1px rgba(123, 223, 242, 0.14);
+  --trace-action-card-match-bg: #1d2c31;
+  --trace-action-agent-bg: #1d2927;
+  --trace-action-agent-border: #335a55;
+  --trace-action-agent-left-border: #7bdff2;
+  --trace-action-llm-left-border: #a78bfa;
+  --trace-action-call-bg: #202430;
+  --trace-action-call-border: #3f5179;
+  --trace-action-call-left-border: #7bdff2;
+  --trace-action-call-selected-bg:
+    linear-gradient(180deg, rgba(36, 44, 65, 0.98), rgba(28, 34, 48, 0.98)),
+    #202430;
+  --trace-action-call-selected-shadow:
+    0 0 0 2px rgba(123, 223, 242, 0.28),
+    0 18px 34px rgba(0, 0, 0, 0.34);
+  --trace-action-group-bg: #202020;
+  --trace-action-group-border: #454545;
+  --trace-action-group-left-border: #a0a0a0;
+  --trace-action-group-selected-bg:
+    linear-gradient(180deg, rgba(42, 42, 42, 0.98), rgba(34, 34, 34, 0.98)),
+    #202020;
+  --trace-action-group-selected-shadow:
+    0 0 0 2px rgba(160, 160, 160, 0.24),
+    0 18px 34px rgba(0, 0, 0, 0.3);
+  --trace-action-error-bg:
+    linear-gradient(180deg, rgba(55, 28, 31, 0.98), rgba(40, 24, 26, 0.98)),
+    #202020;
+  --trace-action-error-border: rgba(255, 107, 107, 0.48);
+  --trace-action-error-left-border: #ff6b6b;
+  --trace-action-error-shadow:
+    0 0 0 1px rgba(255, 107, 107, 0.18),
+    0 14px 28px rgba(0, 0, 0, 0.28);
+  --trace-action-error-selected-bg:
+    linear-gradient(180deg, rgba(67, 32, 36, 0.99), rgba(45, 26, 29, 0.99)),
+    #202020;
+  --trace-action-error-selected-shadow:
+    0 0 0 2px rgba(255, 107, 107, 0.34),
+    0 18px 34px rgba(0, 0, 0, 0.34);
+  --trace-action-error-hover-shadow:
+    0 10px 24px rgba(255, 122, 146, 0.16),
+    0 0 0 transparent;
+  --trace-action-jump-bg: #172327;
+  --trace-action-jump-hover-bg: #1d3036;
+  --trace-action-jump-border: rgba(123, 223, 242, 0.38);
+  --trace-action-jump-text: #b8f2ff;
+  --trace-action-jump-shadow: 0 4px 10px rgba(0, 0, 0, 0.24);
+  --trace-action-jump-hover-shadow:
+    0 0 0 3px rgba(123, 223, 242, 0.16),
+    0 8px 18px rgba(0, 0, 0, 0.26);
+  --trace-action-jump-active-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.42);
+  --trace-action-jump-focus-shadow:
+    0 0 0 3px rgba(123, 223, 242, 0.24),
+    0 8px 18px rgba(0, 0, 0, 0.26);
+  --trace-action-toggle-bg: #252525;
+  --trace-action-toggle-hover-bg: #1e2c31;
+  --trace-action-toggle-border: #444444;
+  --trace-action-toggle-color: #b8f2ff;
+  --trace-action-toggle-hover-shadow: 0 4px 10px rgba(0, 0, 0, 0.22);
+  --trace-action-toggle-active-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.42);
+  --trace-action-toggle-focus-shadow: 0 0 0 3px rgba(123, 223, 242, 0.2);
+  --trace-action-empty-bg: #202020;
+  --trace-action-empty-border: #3d3d3d;
+  --trace-action-node-error-bg: #30191d;
+  --trace-action-node-error-border: rgba(255, 107, 107, 0.48);
+  --trace-action-node-error-text: #ff8a8a;
+  --trace-action-selected-strip-bg: rgba(32, 32, 32, 0.92);
+  --trace-action-selected-strip-border: #3d3d3d;
+  --trace-action-status-success-bg: #142820;
+  --trace-action-status-success-text: #34d399;
+  --trace-action-status-success-border: #26795e;
+  --trace-action-status-error-bg: #30191d;
+  --trace-action-status-error-text: #ff8a8a;
+  --trace-action-status-error-border: #8d343d;
+  --trace-action-status-progress-bg: #302914;
+  --trace-action-status-progress-text: #ffc9ad;
+  --trace-action-status-progress-border: rgba(255, 176, 136, 0.38);
+  --trace-action-status-unknown-bg: #282828;
+  --trace-action-status-unknown-text: #a0a0a0;
+  --trace-action-status-unknown-border: #4a4a4a;
+  --trace-action-status-inset: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}

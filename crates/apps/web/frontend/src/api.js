@@ -47,6 +47,39 @@ export function readTokenUsageStats({ fromMs, toMs, signal } = {}) {
   return fetchJson(`/api/stats/token-usage?from_ms=${fromMs}&to_ms=${toMs}`, { signal });
 }
 
+export function readLlmRequestsActivity({ fromMs, toMs, rollup, signal } = {}) {
+  const rollupQuery = rollup && rollup !== 'auto' ? `&rollup=${encodeURIComponent(rollup)}` : '';
+  return fetchJson(`/api/stats/llm-requests/activity?from_ms=${fromMs}&to_ms=${toMs}${rollupQuery}`, { signal });
+}
+
+export function readLlmRequestRows({ fromMs, toMs, offset = 0, limit = 50, signal } = {}) {
+  return fetchJson(
+    `/api/stats/llm-requests/rows?from_ms=${fromMs}&to_ms=${toMs}&offset=${offset}&limit=${limit}`,
+    { signal },
+  );
+}
+
+export function runLlmRequestsExplore(query, { signal } = {}) {
+  return fetchJson('/api/stats/llm-requests/explore', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(query),
+    signal,
+  });
+}
+
+export async function readLlmRequestsCsv({ fromMs, toMs, view = 'rows', signal } = {}) {
+  const response = await fetch(
+    `/api/stats/llm-requests/export.csv?from_ms=${fromMs}&to_ms=${toMs}&view=${encodeURIComponent(view)}`,
+    { signal },
+  );
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`${response.status} ${response.statusText}: ${body}`);
+  }
+  return response.text();
+}
+
 export function readTraceSummary(traceId) {
   return fetchJson(`/api/traces/${traceId}/summary`);
 }

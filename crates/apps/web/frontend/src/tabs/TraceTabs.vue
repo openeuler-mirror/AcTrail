@@ -31,29 +31,32 @@ defineEmits(['update:modelValue']);
 <style scoped>
 .tab-strip {
   display: flex;
-  gap: 4px;
+  gap: var(--stats-space-xs, 4px);
   min-width: 0;
   overflow-x: auto;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  padding: var(--stats-space-sm, 10px) var(--stats-space-lg, 12px);
+  border-bottom: 1px solid var(--stats-border, var(--border));
+  background: var(--stats-surface-bar, var(--surface));
+  backdrop-filter: var(--stats-glass-filter, none);
 }
 
 .tab-button {
   flex: 0 0 auto;
-  height: 34px;
-  padding: 0 12px;
+  height: var(--stats-control-height-md, 34px);
+  padding: 0 var(--stats-segment-padding-x, 12px);
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--stats-radius-sm, 8px);
   background: transparent;
-  color: var(--muted);
+  color: var(--stats-muted, var(--muted));
   cursor: pointer;
+  font-size: var(--stats-font-sm, inherit);
+  font-weight: var(--stats-weight-medium, inherit);
 }
 
 .tab-button:hover,
 .tab-button.active {
-  border-color: #bdd7d2;
-  background: #eef7f5;
-  color: var(--teal-deep);
+  border-color: var(--trace-interactive-border);
+  background: var(--trace-interactive-bg);
+  color: var(--trace-interactive-text);
 }
 </style>

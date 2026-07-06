@@ -1,6 +1,6 @@
 //! Small HTTP boundary for the read-only web UI.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -11,8 +11,16 @@ use flate2::write::GzEncoder;
 use crate::args::WebConfig;
 use crate::{render, view};
 use config_core::daemon::OperatorConfig;
-use storage_core::{SemanticActionChildPageQuery, StorageOpenMode};
+use storage_core::StorageOpenMode;
 use storage_factory::{StorageConfig, open_storage_backend};
+
+#[path = "http/query.rs"]
+mod query;
+use query::{
+    parse_action_tree_page, parse_llm_activity_query, parse_llm_export_query,
+    parse_llm_request_content_query, parse_llm_rows_query, parse_token_usage_stats_query,
+    parse_u64, percent_decode, required_query_param,
+};
 
 const STATUS_OK: &str = "200 OK";
 const STATUS_BAD_REQUEST: &str = "400 Bad Request";
@@ -178,6 +186,7 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
         return Err(format!("invalid HTTP request line {request_line:?}"));
     }
     let mut accepts_gzip = false;
+    let mut content_length = 0usize;
     loop {
         let mut header = String::new();
         reader
@@ -186,16 +195,31 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
         if header == "\r\n" || header == "\n" || header.is_empty() {
             break;
         }
-        if header.to_ascii_lowercase().starts_with("accept-encoding:")
-            && header.to_ascii_lowercase().contains("gzip")
-        {
+        let lower = header.to_ascii_lowercase();
+        if lower.starts_with("accept-encoding:") && lower.contains("gzip") {
             accepts_gzip = true;
         }
+        if lower.starts_with("content-length:") {
+            let (_, raw) = header
+                .split_once(':')
+                .ok_or_else(|| format!("invalid Content-Length header {header:?}"))?;
+            content_length = raw
+                .trim()
+                .parse::<usize>()
+                .map_err(|error| format!("invalid Content-Length header: {error}"))?;
+        }
+    }
+    let mut body = vec![0u8; content_length];
+    if content_length > 0 {
+        reader.read_exact(&mut body).map_err(|error| {
+            format!("read HTTP request body failed for {content_length} bytes: {error}")
+        })?;
     }
     Ok(Request {
         method: parts[0].to_string(),
         path: parts[1].to_string(),
         accepts_gzip,
+        body,
     })
 }
 
@@ -228,16 +252,32 @@ fn route(request: &Request, context: &WebContext) -> Result<Response, String> {
             .map(Response::json)
             .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error)));
     }
+    if path == "/api/stats/llm-requests/explore" {
+        if request.method != "POST" {
+            return Ok(Response::text(
+                STATUS_METHOD_NOT_ALLOWED,
+                "POST required for /api/stats/llm-requests/explore",
+            ));
+        }
+        return String::from_utf8(request.body.clone())
+            .map_err(|error| format!("invalid UTF-8 explore request body: {error}"))
+            .and_then(|body| view::parse_llm_explore_query(&body))
+            .and_then(|query| view::llm_explore_json(&context.storage, query))
+            .map(Response::json)
+            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error)));
+    }
     if request.method != "GET" {
         return Ok(Response::text(
             STATUS_METHOD_NOT_ALLOWED,
             "only GET is supported",
         ));
     }
+    if path == "/" || path.starts_with("/assets/") {
+        return Ok(render::asset(path)
+            .map(Response::static_asset)
+            .unwrap_or_else(|| Response::text(STATUS_NOT_FOUND, "not found")));
+    }
     match path {
-        "/" => Ok(Response::html(render::html())),
-        "/assets/app.css" => Ok(Response::css(render::css())),
-        "/assets/app.js" => Ok(Response::javascript(render::javascript())),
         "/api/traces" => view::traces_json(&context.storage).map(Response::json),
         "/api/config/current" => view::current_config_json(
             context.operator_config_path.as_deref(),
@@ -256,6 +296,18 @@ fn route(request: &Request, context: &WebContext) -> Result<Response, String> {
         .map(Response::json),
         "/api/stats/token-usage" => match parse_token_usage_stats_query(query) {
             Ok(query) => view::token_usage_stats_json(&context.storage, query).map(Response::json),
+            Err(error) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
+        },
+        "/api/stats/llm-requests/activity" => match parse_llm_activity_query(query) {
+            Ok(query) => view::llm_activity_json(&context.storage, query).map(Response::json),
+            Err(error) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
+        },
+        "/api/stats/llm-requests/rows" => match parse_llm_rows_query(query) {
+            Ok(query) => view::llm_request_rows_json(&context.storage, query).map(Response::json),
+            Err(error) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
+        },
+        "/api/stats/llm-requests/export.csv" => match parse_llm_export_query(query) {
+            Ok(query) => view::llm_export_csv(&context.storage, query).map(Response::csv),
             Err(error) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
         },
         "/health" => Ok(Response::text(STATUS_OK, "ok")),
@@ -389,90 +441,11 @@ fn split_request_target(target: &str) -> (&str, &str) {
         .unwrap_or((target, ""))
 }
 
-fn parse_action_tree_page(query: &str) -> Result<SemanticActionChildPageQuery, String> {
-    let offset = required_query_usize(query, "offset")?;
-    let limit = required_query_usize(query, "limit")?;
-    if limit == usize::default() {
-        return Err("invalid query parameter limit: value must be positive".to_string());
-    }
-    Ok(SemanticActionChildPageQuery { offset, limit })
-}
-
-fn parse_llm_request_content_query(query: &str) -> Result<usize, String> {
-    let max_bytes = required_query_usize(query, "max_bytes")?;
-    if max_bytes == usize::default() {
-        return Err("invalid query parameter max_bytes: value must be positive".to_string());
-    }
-    Ok(max_bytes)
-}
-
-fn parse_token_usage_stats_query(query: &str) -> Result<view::TokenUsageStatsQuery, String> {
-    let from_ms = required_query_u64(query, "from_ms")?;
-    let to_ms = required_query_u64(query, "to_ms")?;
-    if from_ms >= to_ms {
-        return Err("invalid token stats range: from_ms must be less than to_ms".to_string());
-    }
-    Ok(view::TokenUsageStatsQuery { from_ms, to_ms })
-}
-
-fn required_query_usize(query: &str, key: &'static str) -> Result<usize, String> {
-    let raw = required_query_param(query, key)?;
-    raw.parse::<usize>()
-        .map_err(|error| format!("invalid query parameter {key}: {error}"))
-}
-
-fn required_query_u64(query: &str, key: &'static str) -> Result<u64, String> {
-    let raw = required_query_param(query, key)?;
-    raw.parse::<u64>()
-        .map_err(|error| format!("invalid query parameter {key}: {error}"))
-}
-
-fn required_query_param(query: &str, key: &'static str) -> Result<String, String> {
-    for part in query.split('&').filter(|part| !part.is_empty()) {
-        let Some((candidate, value)) = part.split_once('=') else {
-            continue;
-        };
-        if candidate == key {
-            return percent_decode(value)
-                .map_err(|error| format!("invalid query parameter {key}: {error}"));
-        }
-    }
-    Err(format!("missing query parameter {key}"))
-}
-
-fn parse_u64(value: &str) -> Result<u64, String> {
-    value
-        .parse::<u64>()
-        .map_err(|error| format!("invalid numeric path segment {value}: {error}"))
-}
-
-fn percent_decode(value: &str) -> Result<String, String> {
-    let bytes = value.as_bytes();
-    let mut output = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] != b'%' {
-            output.push(bytes[index]);
-            index += 1;
-            continue;
-        }
-        let Some(hex) = bytes.get(index + 1..index + 3) else {
-            return Err(format!("invalid percent escape in {value}"));
-        };
-        let text = std::str::from_utf8(hex)
-            .map_err(|error| format!("invalid percent escape in {value}: {error}"))?;
-        let decoded = u8::from_str_radix(text, 16)
-            .map_err(|error| format!("invalid percent escape %{text}: {error}"))?;
-        output.push(decoded);
-        index += 3;
-    }
-    String::from_utf8(output).map_err(|error| format!("invalid path utf-8: {error}"))
-}
-
 struct Request {
     method: String,
     path: String,
     accepts_gzip: bool,
+    body: Vec<u8>,
 }
 
 struct Response {
@@ -483,20 +456,8 @@ struct Response {
 }
 
 impl Response {
-    fn html(body: String) -> Self {
-        Self::text_bytes(STATUS_OK, "text/html; charset=utf-8", body.into_bytes())
-    }
-
-    fn css(body: String) -> Self {
-        Self::text_bytes(STATUS_OK, "text/css; charset=utf-8", body.into_bytes())
-    }
-
-    fn javascript(body: String) -> Self {
-        Self::text_bytes(
-            STATUS_OK,
-            "application/javascript; charset=utf-8",
-            body.into_bytes(),
-        )
+    fn static_asset(asset: render::StaticAsset) -> Self {
+        Self::text_bytes(STATUS_OK, asset.content_type, asset.body.to_vec())
     }
 
     fn json(body: String) -> Self {
@@ -505,6 +466,10 @@ impl Response {
             "application/json; charset=utf-8",
             body.into_bytes(),
         )
+    }
+
+    fn csv(body: String) -> Self {
+        Self::text_bytes(STATUS_OK, "text/csv; charset=utf-8", body.into_bytes())
     }
 
     fn text(status: &'static str, body: impl Into<String>) -> Self {

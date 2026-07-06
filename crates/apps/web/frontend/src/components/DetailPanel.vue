@@ -1,5 +1,5 @@
 <template>
-  <aside class="detail-panel">
+  <aside v-if="shouldRender" class="detail-panel">
     <div class="detail-header">
       <div>
         <span>{{ detailKind }}</span>
@@ -108,6 +108,10 @@ const props = defineProps({
     type: String,
     default: '',
   },
+  hideWhenEmpty: {
+    type: Boolean,
+    default: false,
+  },
 });
 
 defineEmits(['clear']);
@@ -134,6 +138,7 @@ const detailRows = computed(() => Object.entries(props.detail?.rows ?? {}));
 const detailAttributes = computed(() => props.detail?.attributes ?? {});
 const detailRawValue = computed(() => props.detail?.raw ?? null);
 const panelError = computed(() => props.error || payloadError.value || filePathSetError.value);
+const shouldRender = computed(() => !props.hideWhenEmpty || Boolean(props.detail || panelError.value));
 const hasFilePathSet = computed(
   () => Boolean(filePathSetMeta.value) || filePathSetPaths.value.length > 0 || filePathSetLoading.value,
 );

@@ -1,0 +1,257 @@
+.theme-arc-glass,
+.app-theme-arc-glass {
+  --workspace-tab-active-border: rgba(139, 92, 246, 0.34);
+  --workspace-tab-active-bg: rgba(255, 255, 255, 0.74);
+  --workspace-tab-active-color: #0f0f14;
+  --border: rgba(15, 15, 20, 0.08);
+  --bg: #fafaff;
+  --surface: rgba(255, 255, 255, 0.6);
+  --surface-muted: rgba(255, 255, 255, 0.42);
+  --text: #0f0f14;
+  --muted: #5a5a68;
+  --teal: #8b5cf6;
+  --teal-deep: #6d40d6;
+  --amber: #e58a4f;
+  --rose: #d9468f;
+  --shadow:
+    0 8px 32px rgba(15, 15, 20, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  --scrollbar-track: rgba(255, 255, 255, 0.42);
+  --scrollbar-thumb: rgba(139, 92, 246, 0.28);
+  --scrollbar-thumb-hover: rgba(139, 92, 246, 0.5);
+  --scrollbar-thumb-border: rgba(255, 255, 255, 0.42);
+  --scrollbar-corner: rgba(255, 255, 255, 0.42);
+}
+
+.theme-arc-glass,
+.stats-theme-arc-glass,
+.stats-theme.stats-theme-arc-glass {
+  --stats-bg-base: #fafaff;
+  --stats-bg-gradient:
+    radial-gradient(at 20% 0%, #ffe0f0 0%, transparent 50%),
+    radial-gradient(at 80% 30%, #d4e4ff 0%, transparent 50%),
+    radial-gradient(at 50% 100%, #e0d4ff 0%, transparent 50%);
+  --stats-surface: rgba(255, 255, 255, 0.6);
+  --stats-surface-strong: rgba(255, 255, 255, 0.85);
+  --stats-surface-soft: rgba(255, 255, 255, 0.42);
+  --stats-surface-bar: rgba(255, 255, 255, 0.72);
+  --stats-text: #0f0f14;
+  --stats-muted: #5a5a68;
+  --stats-border: rgba(255, 255, 255, 0.5);
+  --stats-border-strong: rgba(15, 15, 20, 0.08);
+  --stats-accent: #8b5cf6;
+  --stats-accent-soft: #c4b5fd;
+  --stats-accent-muted: rgba(196, 181, 253, 0.32);
+  --stats-accent-faint: rgba(196, 181, 253, 0.2);
+  --stats-on-accent: #ffffff;
+  --stats-danger: #d9468f;
+  --stats-on-danger: #ffffff;
+  --stats-chart-1: #8b5cf6;
+  --stats-chart-2: #3b82f6;
+  --stats-chart-3: #d9468f;
+  --stats-chart-4: #14b8a6;
+  --stats-chart-5: #f59e0b;
+  --stats-chart-6: #6366f1;
+  --stats-chart-7: #64748b;
+  --stats-chart-8: #10b981;
+  --stats-chart-total: var(--stats-chart-1);
+  --stats-chart-input: #3b82f6;
+  --stats-chart-output: #8b5cf6;
+  --stats-chart-reasoning: #d9468f;
+  --stats-chart-cache-hit: #10b981;
+  --stats-chart-cache-miss: #f59e0b;
+  --stats-shadow:
+    0 8px 32px rgba(15, 15, 20, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  --stats-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  --stats-glass-filter: blur(20px) saturate(160%);
+  --stats-control-filter: blur(12px) saturate(155%);
+  --stats-serif: "PP Neue Montreal", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --stats-body-font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --stats-heading-font: var(--stats-serif);
+  --stats-value-font: var(--stats-serif);
+  --stats-space-2xs: 4px;
+  --stats-space-xs: 7px;
+  --stats-space-sm: 9px;
+  --stats-space-md: 12px;
+  --stats-space-lg: 15px;
+  --stats-space-xl: 18px;
+  --stats-space-2xl: 24px;
+  --stats-space-3xl: 32px;
+  --stats-section-gap: 44px;
+  --stats-section-gap-mobile: 30px;
+  --stats-panel-padding: 22px;
+  --stats-viewport-padding: 36px 32px 56px;
+  --stats-viewport-padding-mobile: 24px 16px 42px;
+  --stats-radius-sm: 14px;
+  --stats-radius-md: 18px;
+  --stats-radius-lg: 22px;
+  --stats-control-height-sm: 30px;
+  --stats-control-height-md: 38px;
+  --stats-control-height-lg: 44px;
+  --stats-font-xs: 12px;
+  --stats-font-sm: 13px;
+  --stats-font-md: 15px;
+  --stats-font-ui: 15px;
+  --stats-font-title: 17px;
+  --stats-font-display-sm: 20px;
+  --stats-font-display-md: 26px;
+  --stats-font-display-lg: 36px;
+  --stats-line-height-tight: 1.08;
+  --stats-weight-regular: 400;
+  --stats-weight-medium: 500;
+  --stats-chip-padding: 8px 12px;
+  --stats-segment-padding-x: 13px;
+  --stats-action-padding-x: 22px;
+  --stats-table-cell-padding: 12px 16px;
+  --stats-chart-line-width: 2.8;
+  --stats-chart-point-stroke-width: 1.4;
+  --stats-chart-donut-width: 32;
+  --stats-chart-bar-radius: 6px;
+  --trace-action-tree-bg: #fafaff;
+  --trace-action-tree-grid: rgba(139, 92, 246, 0.08);
+  --trace-action-tree-header-bg: rgba(255, 255, 255, 0.72);
+  --trace-action-tree-arc: rgba(139, 92, 246, 0.42);
+  --trace-action-edge: rgba(139, 92, 246, 0.34);
+  --trace-action-card-bg: rgba(255, 255, 255, 0.66);
+  --trace-action-card-text: #0f0f14;
+  --trace-action-card-border: rgba(255, 255, 255, 0.5);
+  --trace-action-card-left-border: #8b5cf6;
+  --trace-action-card-hover-shadow:
+    0 12px 36px rgba(15, 15, 20, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  --trace-action-card-active-shadow:
+    0 6px 18px rgba(15, 15, 20, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  --trace-action-card-focus-shadow:
+    0 0 0 3px rgba(139, 92, 246, 0.24),
+    0 8px 32px rgba(15, 15, 20, 0.08);
+  --trace-action-card-selected-bg:
+    linear-gradient(135deg, rgba(196, 181, 253, 0.46), rgba(212, 228, 255, 0.36)),
+    rgba(255, 255, 255, 0.8);
+  --trace-action-card-selected-shadow:
+    0 0 0 2px rgba(139, 92, 246, 0.2),
+    0 16px 42px rgba(15, 15, 20, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  --trace-action-card-selected-inset: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  --trace-action-card-match-bg: rgba(255, 224, 240, 0.58);
+  --trace-action-agent-bg: rgba(212, 228, 255, 0.58);
+  --trace-action-agent-border: rgba(59, 130, 246, 0.22);
+  --trace-action-agent-left-border: #3b82f6;
+  --trace-action-llm-left-border: #8b5cf6;
+  --trace-action-call-bg: rgba(224, 212, 255, 0.58);
+  --trace-action-call-border: rgba(139, 92, 246, 0.24);
+  --trace-action-call-left-border: #8b5cf6;
+  --trace-action-call-selected-bg:
+    linear-gradient(135deg, rgba(224, 212, 255, 0.68), rgba(212, 228, 255, 0.42)),
+    rgba(255, 255, 255, 0.82);
+  --trace-action-call-selected-shadow:
+    0 0 0 2px rgba(139, 92, 246, 0.2),
+    0 16px 42px rgba(15, 15, 20, 0.12);
+  --trace-action-group-bg: rgba(255, 255, 255, 0.48);
+  --trace-action-group-border: rgba(15, 15, 20, 0.08);
+  --trace-action-group-left-border: #5a5a68;
+  --trace-action-group-selected-bg:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.74), rgba(224, 212, 255, 0.36)),
+    rgba(255, 255, 255, 0.76);
+  --trace-action-group-selected-shadow:
+    0 0 0 2px rgba(15, 15, 20, 0.06),
+    0 14px 36px rgba(15, 15, 20, 0.1);
+  --trace-action-error-bg: rgba(255, 224, 240, 0.64);
+  --trace-action-error-border: rgba(217, 70, 143, 0.24);
+  --trace-action-error-left-border: #d9468f;
+  --trace-action-error-shadow:
+    0 0 0 1px rgba(217, 70, 143, 0.12),
+    0 8px 32px rgba(15, 15, 20, 0.08);
+  --trace-action-error-selected-bg:
+    linear-gradient(135deg, rgba(255, 224, 240, 0.76), rgba(224, 212, 255, 0.34)),
+    rgba(255, 255, 255, 0.82);
+  --trace-action-error-selected-shadow:
+    0 0 0 2px rgba(217, 70, 143, 0.22),
+    0 16px 42px rgba(15, 15, 20, 0.12);
+  --trace-action-jump-bg: rgba(255, 255, 255, 0.64);
+  --trace-action-jump-hover-bg: rgba(196, 181, 253, 0.3);
+  --trace-action-jump-border: rgba(139, 92, 246, 0.26);
+  --trace-action-jump-text: #5b35b5;
+  --trace-action-toggle-bg: rgba(255, 255, 255, 0.6);
+  --trace-action-toggle-hover-bg: rgba(196, 181, 253, 0.22);
+  --trace-action-toggle-border: rgba(15, 15, 20, 0.08);
+  --trace-action-empty-bg: rgba(255, 255, 255, 0.56);
+  --trace-action-empty-border: rgba(15, 15, 20, 0.08);
+  --trace-action-node-error-bg: rgba(255, 224, 240, 0.64);
+  --trace-action-node-error-border: rgba(217, 70, 143, 0.24);
+  --trace-action-node-error-text: #b83277;
+  --trace-action-selected-strip-bg: rgba(255, 255, 255, 0.74);
+  --trace-action-selected-strip-border: rgba(139, 92, 246, 0.22);
+  --trace-action-status-success-bg: rgba(16, 185, 129, 0.14);
+  --trace-action-status-success-text: #047857;
+  --trace-action-status-success-border: rgba(16, 185, 129, 0.26);
+  --trace-action-status-error-bg: rgba(217, 70, 143, 0.14);
+  --trace-action-status-error-text: #b83277;
+  --trace-action-status-error-border: rgba(217, 70, 143, 0.26);
+  --trace-action-status-progress-bg: rgba(245, 158, 11, 0.14);
+  --trace-action-status-progress-text: #9a5a00;
+  --trace-action-status-progress-border: rgba(245, 158, 11, 0.26);
+  --trace-action-status-unknown-bg: rgba(255, 255, 255, 0.48);
+  --trace-action-status-unknown-text: #5a5a68;
+  --trace-action-status-unknown-border: rgba(15, 15, 20, 0.08);
+  background: var(--stats-bg-gradient), var(--stats-bg-base);
+  color: var(--stats-text);
+}
+
+.theme-arc-glass .topbar,
+.app-theme-arc-glass .topbar {
+  margin: 10px 14px 0;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 4px 16px rgba(15, 15, 20, 0.08);
+  backdrop-filter: blur(20px) saturate(160%);
+}
+
+.theme-arc-glass .search-box:focus-within,
+.theme-arc-glass .icon-button:hover,
+.app-theme-arc-glass .search-box:focus-within,
+.app-theme-arc-glass .icon-button:hover {
+  border-color: #8b5cf6;
+  box-shadow:
+    0 0 0 2px rgba(139, 92, 246, 0.2),
+    0 8px 24px rgba(15, 15, 20, 0.08);
+}
+
+.theme-arc-glass .global-tab-strip,
+.app-theme-arc-glass .global-tab-strip {
+  margin: 10px auto 0;
+  width: fit-content;
+  max-width: calc(100% - 28px);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 4px 16px rgba(15, 15, 20, 0.08);
+}
+
+@media (max-width: 760px) {
+  .theme-arc-glass,
+  .stats-theme-arc-glass,
+  .stats-theme.stats-theme-arc-glass {
+    --stats-bg-gradient:
+      radial-gradient(at 15% 0%, #ffe0f0 0%, transparent 52%),
+      radial-gradient(at 80% 100%, #d4e4ff 0%, transparent 56%);
+    --stats-glass-filter: blur(8px) saturate(135%);
+    --stats-control-filter: blur(8px) saturate(135%);
+    --stats-section-gap: var(--stats-section-gap-mobile);
+    --stats-panel-padding: 16px;
+    --stats-viewport-padding: var(--stats-viewport-padding-mobile);
+  }
+
+  .theme-arc-glass .topbar,
+  .app-theme-arc-glass .topbar {
+    border-radius: 24px;
+  }
+
+  .theme-arc-glass .global-tab-strip,
+  .app-theme-arc-glass .global-tab-strip {
+    width: auto;
+    border-radius: 24px;
+  }
+}

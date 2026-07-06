@@ -245,9 +245,9 @@ function clampItemLimit(raw, block) {
   display: inline-grid;
   gap: 1px;
   padding: 6px 8px;
-  border: 1px solid #bdd7d2;
+  border: 1px solid var(--trace-insight-chip-border);
   border-radius: 8px;
-  background: #f6fbfa;
+  background: var(--trace-insight-chip-bg);
 }
 
 .insight-chip small {
@@ -272,41 +272,41 @@ function clampItemLimit(raw, block) {
 .insight-block {
   min-width: 0;
   padding: 11px;
-  border: 1px solid #c8d7d5;
+  border: 1px solid var(--trace-insight-block-border);
   border-left: 4px solid var(--teal);
   border-radius: 8px;
-  background: #fbfcfc;
-  box-shadow: 0 7px 18px rgba(15, 23, 42, 0.06);
+  background: var(--trace-insight-block-bg);
+  box-shadow: var(--trace-insight-block-shadow);
 }
 
 .insight-block.tone-tools {
-  border-left-color: var(--amber);
-  background: #fffaf0;
+  border-left-color: var(--trace-insight-tools-border);
+  background: var(--trace-insight-tools-bg);
 }
 
 .insight-block.tone-reasoning {
-  border-left-color: #3158a3;
-  background: #f5f7fc;
+  border-left-color: var(--trace-insight-reasoning-border);
+  background: var(--trace-insight-reasoning-bg);
 }
 
 .insight-block.tone-response {
-  border-left-color: #16a34a;
-  background: #f4fbf6;
+  border-left-color: var(--trace-insight-response-border);
+  background: var(--trace-insight-response-bg);
 }
 
 .insight-block.tone-context {
-  border-left-color: #64748b;
-  background: #f8fafc;
+  border-left-color: var(--trace-insight-context-border);
+  background: var(--trace-insight-context-bg);
 }
 
 .insight-block.tone-http {
-  border-left-color: #0f766e;
-  background: #f3fbf9;
+  border-left-color: var(--trace-insight-http-border);
+  background: var(--trace-insight-http-bg);
 }
 
 .insight-block.tone-status {
-  border-left-color: #b45309;
-  background: #fff8ed;
+  border-left-color: var(--trace-insight-status-border);
+  background: var(--trace-insight-status-bg);
 }
 
 .insight-block header {
@@ -364,22 +364,23 @@ function clampItemLimit(raw, block) {
 
 .insight-block-toggle:hover .insight-block-chevron,
 .insight-block-toggle:focus-visible .insight-block-chevron {
-  border-color: rgba(180, 83, 9, 0.55);
-  background: rgba(251, 191, 36, 0.22);
+  border-color: var(--trace-insight-chevron-hover-border);
+  background: var(--trace-insight-chevron-hover-bg);
   transform: translateX(1px);
 }
 
 .insight-block-toggle:focus-visible {
-  outline: 2px solid rgba(15, 118, 110, 0.35);
+  outline: 2px solid var(--trace-insight-focus-outline);
   outline-offset: 4px;
 }
 
 .insight-block-chevron {
   box-sizing: content-box;
   padding: 2px;
-  border: 1px solid rgba(180, 83, 9, 0.28);
+  border: 1px solid var(--trace-insight-chevron-border);
   border-radius: 5px;
-  color: #92400e;
+  background: var(--trace-insight-chevron-bg);
+  color: var(--trace-insight-chevron-text);
   transition:
     transform 0.14s ease,
     background-color 0.14s ease,
@@ -405,10 +406,10 @@ function clampItemLimit(raw, block) {
   margin: 8px 0 0;
   padding: 10px;
   overflow: auto;
-  border: 1px solid rgba(15, 23, 42, 0.08);
+  border: 1px solid var(--trace-code-border);
   border-radius: 8px;
-  background: #101819;
-  color: #e6f2ef;
+  background: var(--trace-code-bg);
+  color: var(--trace-code-text);
   font-size: 12px;
   line-height: 1.48;
   white-space: pre-wrap;
@@ -455,16 +456,16 @@ function clampItemLimit(raw, block) {
   width: 64px;
   height: 28px;
   padding: 0 8px;
-  border: 1px solid #c8d7d5;
+  border: 1px solid var(--trace-insight-input-border);
   border-radius: 7px;
-  background: #ffffff;
+  background: var(--trace-insight-input-bg);
   color: var(--text);
   font-size: 12px;
   font-weight: 700;
 }
 
 .insight-item-controls input:focus {
-  outline: 2px solid rgba(15, 118, 110, 0.24);
+  outline: 2px solid var(--trace-insight-focus-outline);
   border-color: var(--teal);
 }
 
@@ -479,9 +480,9 @@ function clampItemLimit(raw, block) {
 .insight-item-list li {
   min-width: 0;
   padding: 8px;
-  border: 1px solid rgba(15, 23, 42, 0.08);
+  border: 1px solid var(--trace-insight-item-border);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.7);
+  background: var(--trace-insight-item-bg);
 }
 
 .insight-item-list li > div {

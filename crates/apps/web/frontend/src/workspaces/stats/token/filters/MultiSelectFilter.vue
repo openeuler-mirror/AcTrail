@@ -5,12 +5,12 @@
         <span>{{ title }}</span>
         <strong>{{ selectedSummary }}</strong>
       </div>
-      <div v-if="showBulkActions" class="bulk-actions" aria-label="Bulk selection">
+      <div v-if="showBulkActions" class="bulk-actions" :aria-label="t('stats.filters.bulkActions')">
         <button
           type="button"
           :disabled="disabled || !options.length"
-          title="Select all"
-          aria-label="Select all"
+          :title="t('stats.filters.selectAll')"
+          :aria-label="t('stats.filters.selectAll')"
           @click="selectAll"
         >
           <CheckCheck :size="14" aria-hidden="true" />
@@ -18,8 +18,8 @@
         <button
           type="button"
           :disabled="disabled || !options.length"
-          title="Clear selection"
-          aria-label="Clear selection"
+          :title="t('stats.filters.clearSelection')"
+          :aria-label="t('stats.filters.clearSelection')"
           @click="clearSelection"
         >
           <X :size="14" aria-hidden="true" />
@@ -46,13 +46,15 @@
         <span class="option-label">{{ option.label }}</span>
       </label>
     </div>
-    <div v-else class="filter-empty">{{ emptyLabel }}</div>
+    <div v-else class="filter-empty">{{ effectiveEmptyLabel }}</div>
   </section>
 </template>
 
 <script setup>
 import { computed } from 'vue';
 import { Check, CheckCheck, X } from '@lucide/vue';
+
+import { useLocale } from '../../../../locale';
 
 const props = defineProps({
   title: {
@@ -77,7 +79,7 @@ const props = defineProps({
   },
   emptyLabel: {
     type: String,
-    default: 'No options yet',
+    default: '',
   },
   disabled: {
     type: Boolean,
@@ -91,6 +93,7 @@ const props = defineProps({
 });
 
 const emit = defineEmits(['update:modelValue']);
+const { t } = useLocale();
 const optionIds = computed(() => new Set(props.options.map((option) => option.id)));
 const hasExplicitSelection = computed(() =>
   Object.keys(props.modelValue ?? {}).some((id) => optionIds.value.has(id)),
@@ -113,6 +116,7 @@ const selectedSummary = computed(() => {
   }
   return `${selectedSet.value.size}/${props.options.length}`;
 });
+const effectiveEmptyLabel = computed(() => props.emptyLabel || t('stats.filters.noOptions'));
 
 function toggleOption(optionId, checked) {
   const next = selectionFromCurrentOptions();
