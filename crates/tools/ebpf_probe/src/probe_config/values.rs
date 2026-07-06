@@ -11,6 +11,7 @@ use config_core::daemon::{
     PayloadTlsLibrary, PayloadTlsLibraryPath, PayloadTlsResolver, PayloadTlsSeccompSyscall,
     PayloadTlsSource, PayloadTlsSyncRuntimeLibraryPath, ResourceMetricsConfig, SseDataPolicy,
 };
+use payload_capability::DEFAULT_TLS_SYNC_FLOW_UNKNOWN_STREAM_BYTES;
 
 use crate::args::MmapWorkloadConfig;
 
@@ -380,8 +381,10 @@ impl ConfigValues {
                 .optional_positive_u32("payload_tls_sync_flow_max_header_bytes", 16384)?,
             sync_flow_large_transfer_bytes: self
                 .optional_positive_u64("payload_tls_sync_flow_large_transfer_bytes", 1048576)?,
-            sync_flow_unknown_stream_bytes: self
-                .optional_positive_u64("payload_tls_sync_flow_unknown_stream_bytes", 65536)?,
+            sync_flow_unknown_stream_bytes: self.optional_positive_u64(
+                "payload_tls_sync_flow_unknown_stream_bytes",
+                DEFAULT_TLS_SYNC_FLOW_UNKNOWN_STREAM_BYTES,
+            )?,
             sync_flow_h2_data_probe_bytes: self
                 .optional_positive_u64("payload_tls_sync_flow_h2_data_probe_bytes", 65536)?,
             java_agent_enabled: self.optional_bool("payload_tls_java_agent_enabled", false)?,

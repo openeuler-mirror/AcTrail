@@ -265,29 +265,17 @@ rm -rf /tmp/actrail-full-monitor
 
 ## 关键配置
 
-- `diagnostic_log_level = info`：默认只保留 agent launch started/closed 这类粗粒度诊断，不打印逐 payload segment 的 debug 诊断。
-- `event_ring_buffer_max_bytes = 8388608`：高流量观测使用的 eBPF event ring 大小。
-- `suppressed_fd_max_entries = 8192`：eBPF observation suppression fd map 容量，用于豁免 AcTrail 内部传输 fd。
-- `suppressed_fd_index_slots_per_process = 64`：每个进程用于 suppressed fd fork 继承和 exit 清理的索引槽数；该索引避免依赖低内核不支持的 eBPF map iteration helper。
-- `file_path_max_bytes = 255`：BPF 文件路径事件拷贝上限，不能超过当前编译 ABI 最大值。
-- `payload.tls.capture_backend = tls-sync`：通过 preload hook 同步采集 TLS 明文。
-- `payload.tls.max_operation_bytes = 16777216`：sync runtime 可接受的单次 TLS payload 操作上限；本例按 16MiB 配置，避免较大 LLM request 在进入语义投影前被截断，同时避免单次操作过度消耗每 trace 的 payload retention 预算。
-- TLS/HTTP body retention：观测到的 LLM request/response 保留 body 供语义投影使用；普通非 LLM HTTP payload 只保留 HTTP/application summary fact，不把 body bytes 写入 `payload_segments`。
-- `payload.tls.ring_buffer_bytes = 8388608`：保留给非 sync backend 和诊断尺寸兼容。
-- `payload.tls.retention_max_bytes_per_trace = 104857600`：每个 trace 的 TLS payload 保留预算。
-- `payload.tls.sync_match_limit = 8`：finder fast 每个 pattern 最多检查的匹配数量。
-- `payload.tls.sync_flow_control_enabled = true`：TLS runtime 侧启用快速大传输识别，非 LLM 大下载切换为 summary-only 上报。
-- `payload.tls.sync_flow_sniff_bytes = 65536`：每个 TLS stream 用于协议/内容快速判断的最大嗅探窗口。
-- `payload.tls.sync_flow_max_header_bytes = 16384`：HTTP/1 header boundary 搜索上限。
-- `payload.tls.sync_flow_large_transfer_bytes = 1048576`：Content-Length 或 HTTP/2 DATA 累计超过该阈值后判定为大传输。
-- `payload.tls.sync_flow_unknown_stream_bytes = 65536`：无法证明是 HTTP/文本流量时的最大继续采集窗口。
-- `payload.tls.sync_flow_h2_data_probe_bytes = 65536`：HTTP/2 DATA frame 的内容类型探测窗口。
-- `payload.socket.capture_backend = bpf-copy-seccomp-fallback`：socket payload 使用 BPF copy，并对大操作使用 seccomp fallback。
-- `payload.socket.http_sniff_max_bytes = 65536`：socket 明文 HTTP 嗅探预算。
-- `application.http.sse_data_policy = preview`：持久化 SSE data preview。
-- `application.http.sse_max_data_bytes = 65536`：单条 SSE data preview 的大小预算。
-- `application.http2.max_frame_bytes = 65536`：HTTP/2 analyzer 接受的 frame 大小。
-- `application.http2.max_data_preview_bytes = 65536`：HTTP/2 DATA preview 大小预算；同时作为 HTTP/2 body retention 的 LLM 分类探测窗口，窗口内仍不能证明是 LLM 的 stream 会进入 summary-only，避免 Claude TUI 下载类大 payload 被完整入库。
-- `process_seccomp.max_args = 128`：exec argv 捕获数量上限。
-- `process_seccomp.max_arg_bytes = 8192`：exec argv 内容捕获字节上限。
-- `resource_metrics.interval_ms = 1000`：资源指标采样周期。
+`operator.conf` 是 sparse 配置；未写出的采集能力、payload 预算、HTTP/HTTP2/SSE analyzer、process seccomp 和 resource metrics 参数都继承 `actrailctl init` 生成的默认值。查看当前版本的具体默认值：
+
+```bash
+target/release/actrailctl init --output /tmp/actrail-default.conf --force
+```
+
+本例只覆盖运行目录和验证场景相关的开关：
+
+- `control.socket_path = ...`、`pid_file = ...`、`log_path = ...`：把 daemon 运行时文件放到 `/tmp/actrail-full-monitor/`。
+- `storage.sqlite.path = ...`、`export.snapshot.directory = ...`：把验证数据和导出文件放到同一临时目录。
+- `export.runtime.enabled = true`：开启 live OTEL JSONL 导出。
+- `payload.tls.sync_event_socket_path = ...`：为本例使用独立的 TLS sync event socket。
+- `enforcement.rules_path = ...`：为本例使用独立的 enforcement rules 路径。
+- `capture.profile_name = "full-monitor"`：给 trace 标记本示例 profile；采集能力集合继承默认 full-monitor 配置。

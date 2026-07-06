@@ -3,6 +3,7 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+use payload_capability::DEFAULT_TLS_SYNC_FLOW_UNKNOWN_STREAM_BYTES;
 use tls_payload_core::RewriteRule;
 use tls_probe_point_finder::ProbePointPlan;
 
@@ -59,7 +60,7 @@ impl Default for RuntimeFlowControlConfig {
             sniff_bytes: 65536,
             max_header_bytes: 16384,
             large_transfer_bytes: 1048576,
-            unknown_stream_bytes: 65536,
+            unknown_stream_bytes: DEFAULT_TLS_SYNC_FLOW_UNKNOWN_STREAM_BYTES,
             h2_data_probe_bytes: 65536,
         }
     }

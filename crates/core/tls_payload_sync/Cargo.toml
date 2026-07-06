@@ -6,5 +6,6 @@ license = "MulanPSL-2.0"
 
 [dependencies]
 libc = "0.2"
+payload_capability = { path = "../../contracts/payload/capability" }
 tls_payload_core = { path = "../../tools/tls_payload_core" }
 tls_probe_point_finder = { path = "../../tools/tls_probe_point_finder" }

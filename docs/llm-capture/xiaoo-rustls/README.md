@@ -63,23 +63,12 @@ XIAOO_CONFIG=/tmp/actrail-xiaoo-rustls.conf
 cp docs/llm-capture/xiaoo-rustls/operator.conf "$XIAOO_CONFIG"
 ```
 
-The template uses auto TLS fields because `tls-sync` launch resolves the actual executable rustls plan at startup:
+The template is sparse: fields omitted from `docs/llm-capture/xiaoo-rustls/operator.conf` inherit the operator defaults. `tls-sync` launch resolves the actual executable rustls plan at startup, so the guide only pins the xiaoO-specific runtime paths and retention budget:
 
 ```text
-payload_tls_capture_backend = tls-sync
-payload_tls_source = auto
-payload_tls_resolver = auto
-payload_tls_library = auto
-payload_tls_binary_path = disabled
-payload_tls_pattern_path = disabled
-payload_tls_sync_runtime_library_path = auto
-payload_tls_sync_match_limit = 8
-payload_tls_sync_flow_control_enabled = true
-payload_tls_sync_flow_sniff_bytes = 65536
-payload_tls_sync_flow_max_header_bytes = 16384
-payload_tls_sync_flow_large_transfer_bytes = 1048576
-payload_tls_sync_flow_unknown_stream_bytes = 65536
-payload_tls_sync_flow_h2_data_probe_bytes = 65536
+payload.tls.sync_event_socket_path = "/tmp/actrail-xiaoo-rustls-tls-sync.sock"
+payload.tls.retention_max_bytes_per_trace = 10485760
+payload.tls.redaction_policy = "authorization-header"
 ```
 
 ## 4. Run Capture

@@ -94,19 +94,15 @@ test -n "${DEEPSEEK_API_KEY:-}"
 docs/examples/02.llm-http-payload-capture/external-openai-compatible/http1-operator.conf
 ```
 
-它使用单独 `/tmp` 路径，避免和 quick start 或其他手动验证冲突。至少确认这些 key：
+它使用单独 `/tmp` 路径，避免和 quick start 或其他手动验证冲突。这个配置继承 operator 默认值；只需要确认本例关心的路径、能力和采集面：
 
 ```text
 socket_path = /tmp/actrail-llm-http-http1.sock
 pid_file = /tmp/actrail-llm-http-http1.pid
-storage_backend = sqlite
 storage.sqlite.path = /tmp/actrail-llm-http-http1.sqlite
-storage.sqlite.busy_timeout_ms = 5000
 web.listen_addr = 127.0.0.1:18080
-web.request_read_timeout_ms = "1000"
 export.snapshot.directory = /tmp/actrail-llm-http-http1-export
 log_path = /tmp/actrail-llm-http-http1.log
-diagnostic_log_level = info
 
 capture.capabilities includes proc-lifecycle
 capture.capabilities includes net-transport
@@ -116,80 +112,34 @@ capture.capabilities includes stdio-chunk
 capture.capabilities includes net-application-plaintext-http
 capture.capabilities includes net-application-http2-frames
 
-file_path_capture_enabled = false
-
 payload.tls.enabled = true
 payload.tls.capture_backend = tls-sync
 payload.tls.source = auto
 payload.tls.resolver = auto
-payload.tls.library = auto
-payload.tls.library_path = auto
-payload.tls.binary_path = disabled
-payload.tls.pattern_path = disabled
-payload.tls.max_segment_bytes = 4095
-payload.tls.max_operation_bytes = 4194304
-payload.tls.ring_buffer_bytes = 1048576
-payload.tls.pending_operation_max_entries = 4096
-payload.tls.diagnostics_enabled = false
-payload.tls.retention_max_bytes_per_trace = 10485760
 payload.tls.redaction_policy = authorization-header
 payload.tls.sync_runtime_library_path = auto
 payload.tls.sync_event_socket_path = /tmp/actrail-http2-payload-tls-sync.sock
-payload.tls.sync_socket_mode_octal = "660"
-payload.tls.sync_match_limit = 8
-payload.tls.sync_flow_control_enabled = true
-payload.tls.sync_flow_sniff_bytes = 65536
-payload.tls.sync_flow_max_header_bytes = 16384
-payload.tls.sync_flow_large_transfer_bytes = 1048576
-payload.tls.sync_flow_unknown_stream_bytes = 65536
-payload.tls.sync_flow_h2_data_probe_bytes = 65536
 
 payload.stdio.enabled = true
 payload.stdio.capture_stdin = false
 payload.stdio.capture_stdout = true
 payload.stdio.capture_stderr = true
-payload.stdio.stdin_storage_mode = full
 payload.stdio.stdout_storage_mode = drop
 payload.stdio.stderr_storage_mode = metadata-only
-payload.stdio.max_segment_bytes = 4095
-payload.stdio.ring_buffer_bytes = 1048576
-payload.stdio.pending_operation_max_entries = 4096
-payload.stdio.stream_state_max_entries = 4096
-payload.stdio.retention_max_bytes_per_trace = 10485760
 payload.stdio.redaction_policy = authorization-header
 
 payload.socket.enabled = true
 payload.socket.capture_backend = bpf-copy-seccomp-fallback
-payload.socket.max_segment_bytes = 4095
-payload.socket.max_operation_bytes = 4194304
-payload.socket.ring_buffer_bytes = 2097152
-payload.socket.pending_operation_max_entries = 4096
-payload.socket.stream_state_max_entries = 4096
-payload.socket.retention_max_bytes_per_trace = 10485760
 payload.socket.redaction_policy = authorization-header
-payload.socket.http_sniff_max_bytes = 8192
 payload.socket.seccomp_syscall = write
 payload.socket.seccomp_syscall = sendto
 
 application.enabled = true
 application.http1_enabled = true
 application.http2_enabled = true
-application.http.capture_host = true
 application.http.sse_enabled = false
 application.http.sse_data_policy = disabled
-application.http.sse_max_buffer_bytes = 4194304
-application.http.sse_max_data_bytes = 4096
-application.http2.max_frame_bytes = 16384
-application.http2.max_connection_buffer_bytes = 1048576
 application.http2.emit_data_preview = false
-application.http2.max_data_preview_bytes = 4096
-
-resource_metrics.enabled = false
-resource_metrics.interval_ms = 1000
-resource_metrics.include_children = true
-resource_metrics.include_system = true
-resource_metrics.cpu_alert_percent_millis = disabled
-resource_metrics.memory_alert_rss_kb = disabled
 ```
 
 关键路径含义：
@@ -198,19 +148,15 @@ resource_metrics.memory_alert_rss_kb = disabled
 | --- | --- |
 | `socket_path` | `actraild` 控制面 Unix Domain Socket；`actrailctl` 通过它 attach trace |
 | `pid_file` | `actraild start/stop/status/restart` 的进程状态依据 |
-| `storage_backend` | Storage backend 实现；当前支持值为 `sqlite` |
 | `storage.sqlite.path` | AcTrail storage 路径；当 `storage_backend = sqlite` 时，payload segments 会写入这里 |
-| `storage.sqlite.busy_timeout_ms` | daemon 写 SQLite 时等待临时锁释放的最长时间 |
 | `web.listen_addr` | `actrailweb --config` 使用的只读 Web UI 监听地址；可用 `--addr` 和 `--port` 临时覆盖 |
-| `web.request_read_timeout_ms` | `actrailweb` 等待单个 HTTP connection 发出请求行的最长时间；示例值 `1000` 用于避免浏览器空闲预连接阻塞 UI |
 | `export.snapshot.directory` | JSON export 默认目录；本例查看 payload 不需要 JSON export |
 | `[plugins.startup]` | 默认关闭的启动插件清单；需要实时消费 semantic action span 时加载 OTEL JSONL 观测插件 |
 | `log_path` | `actraild start` 后台运行时 stdout/stderr 追加写入位置 |
-| `diagnostic_log_level` | 默认 `info`，避免逐 payload segment 打印调试日志；排查采集失败时临时改成 `debug`。`actraild start` 写入 `log_path`，`actraild ... run` 写入前台 stdout/stderr |
 
 本例默认不把 payload 原文写入 JSON graph，也不启用实时 OTEL JSONL。如果要通过 `actrailviewer export-json` 直接导出 payload 内容，显式设置 `export_payload_bytes_enabled = true` 和/或 `export_payload_text_enabled = true`。
 
-TLS payload 相关配置含义：
+关键观测配置含义：
 
 | Key | 用途 |
 | --- | --- |
@@ -220,34 +166,17 @@ TLS payload 相关配置含义：
 | `capture.capabilities includes net-application-plaintext-http` | 要求 daemon 从 TLS plaintext payload 派生 HTTP/1.x semantic events |
 | `payload.tls.enabled` | 启用 TLS plaintext payload capture |
 | `payload.tls.capture_backend` | 固定为 `tls-sync`；TLS plaintext 由 preload runtime 在 TLS 明文边界同步上报 |
-| `payload.tls.source` | 本例使用 `auto`；`actrailctl launch` 在 exec 前解析目标进程实际 TLS plan |
-| `payload.tls.resolver` | 本例使用 `auto`；runtime 支持 OpenSSL/BoringSSL/rustls/Go 等已实现 provider 的自动 plan |
-| `payload.tls.library` | 本例使用 `auto`；不手工限定 OpenSSL |
-| `payload.tls.library_path` | `auto` 表示不强制候选库路径；如需固定一个动态 TLS 库，可显式配置绝对路径 |
-| `payload.tls.binary_path` / `payload.tls.pattern_path` | `tls-sync` 自动 plan 不从配置读取目标 binary 或 symbol map，固定写 `disabled` |
-| `payload.tls.max_segment_bytes` | 非 sync TLS 后端的单个 payload segment 最大复制字节数；`tls-sync` 下保留该 key 以保持配置面完整 |
-| `payload.tls.max_operation_bytes` | 单次 TLS plaintext operation 最大保留字节数；LLM 请求超过该值会显示截断 |
-| `payload.tls.seccomp_syscall` / `seccomp_notify.reserved_listener_fd` | 旧 TLS seccomp 后端和 socket large-payload fallback 的 seccomp 配置；`tls-sync` 不依赖这些 syscall 捕获 TLS plaintext |
-| `payload.tls.diagnostics_enabled` | TLS payload 内部计数和元数据事件开关；常规验证保持 `false`，排查时再开启 |
-| `payload.tls.retention_max_bytes_per_trace` | 单个 trace 可保留的 payload 字节上限 |
+| `payload.tls.source` / `payload.tls.resolver` | 本例使用 `auto`；`actrailctl launch` 在 exec 前解析目标进程实际 TLS plan |
 | `payload.tls.redaction_policy` | `authorization-header` 会在入库前改写 Authorization header |
 | `application.enabled` | 启用应用层 analyzer；它只处理已保留的 plaintext payload，不读取密文 syscall bytes |
 | `application.http1_enabled` | 启用 HTTP/1.x request/response semantic analyzer |
 | `application.http2_enabled` | external provider 配置同时启用 HTTP/2 frame/DATA facts，避免协议协商和代理路径变化时只剩单通道证据 |
-| `application.http.capture_host` | 把 HTTP/1.x `Host` header 写入 semantic metadata，便于 viewer/web 过滤 |
 | `application.http.sse_enabled` | 本例关闭；需要观察 streaming response 时可启用 SSE event 派生 |
-| `application.http.sse_max_buffer_bytes` | 单个 trace/stream/direction 的 HTTP/SSE 解析缓冲上限；默认 `4194304` |
-| `application.http.sse_max_data_bytes` | SSE preview 模式下单条 `data:` 预览最大字节数；本例关闭 preview 但仍显式配置 |
-| `application.http2.max_frame_bytes` | 单个 HTTP/2 frame payload 的最大解析长度；本例保留显式值以避免隐藏默认 |
-| `application.http2.max_connection_buffer_bytes` | 单个 trace/process/stream 的 HTTP/2 connection buffer 上限 |
 | `application.http2.emit_data_preview` | 本例关闭；启用后可把 UTF-8 DATA frame body preview 写入 metadata |
-| `application.http2.max_data_preview_bytes` | 启用 DATA preview 时单条 preview 的最大字节数；同时作为 HTTP/2 body retention 的 LLM 分类探测窗口，窗口内仍不能证明是 LLM 的 stream 会进入 summary-only |
 
 external provider 配置使用宽采集面：`payload.tls.enabled = true`、`payload.socket.enabled = true`、`payload.stdio.enabled = true`。通过条件仍然是 TLS plaintext payload 和从 plaintext 派生的 Application rows；socket payload 和 stdio payload 是排障侧证据，不能替代 `POST /chat/completions` plaintext 捕获。HTTPS 经过 HTTP proxy 时，socket payload 常见内容是 `CONNECT` 或 TLS 密文；stdio payload 只能证明 curl 收到了 provider 响应。
 
 如果只想做最小 TLS plaintext 验证，可以关闭 socket/stdio capability 和对应 `payload.socket.*`、`payload.stdio.*` 开关；但 regression 和跨环境排障应保留宽采集面，避免 TLS join 失败时缺少证据。
-
-本例不验证资源采样，因此 `resource_metrics.enabled = false`。这些 `resource_metrics.*` key 仍显式保留在配置里，避免运行时行为依赖隐藏默认值。
 
 ## 4. 启动 Daemon
 

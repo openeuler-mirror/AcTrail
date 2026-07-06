@@ -46,7 +46,9 @@ pub(super) fn parsed_events_to_response(
         }
     }
     let tool_calls = assembler.into_calls();
-    let done = parsed_events.iter().any(|event| event.done);
+    let done = parsed_events
+        .iter()
+        .any(|event| event.done || event.finish_reason.is_some());
     if content_chunks.is_empty() && reasoning_chunks.is_empty() && tool_calls.is_empty() && !done {
         return None;
     }

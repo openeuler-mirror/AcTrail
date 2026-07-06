@@ -118,6 +118,7 @@ mod tests {
         PayloadTlsLibrary, PayloadTlsLibraryPath, PayloadTlsResolver, PayloadTlsSource,
         PayloadTlsSyncRuntimeLibraryPath,
     };
+    use payload_capability::DEFAULT_TLS_SYNC_FLOW_UNKNOWN_STREAM_BYTES;
 
     use super::{
         JAVA_TOOL_OPTIONS, append_java_tool_options, java_agent_env_required,
@@ -226,7 +227,7 @@ mod tests {
             sync_flow_sniff_bytes: 65536,
             sync_flow_max_header_bytes: 16384,
             sync_flow_large_transfer_bytes: 1048576,
-            sync_flow_unknown_stream_bytes: 65536,
+            sync_flow_unknown_stream_bytes: DEFAULT_TLS_SYNC_FLOW_UNKNOWN_STREAM_BYTES,
             sync_flow_h2_data_probe_bytes: 65536,
             java_agent_enabled,
         }
