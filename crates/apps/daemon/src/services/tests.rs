@@ -117,6 +117,56 @@ fn attach_main_path_runs() {
 }
 
 #[test]
+fn direct_track_add_rejects_a_launch_only_profile() {
+    let storage_path = std::env::temp_dir().join(format!(
+        "actrail-launch-profile-admission-test-{}.sqlite",
+        std::process::id()
+    ));
+    let mut profiles = DaemonProfileRegistry::new();
+    profiles.insert_launch_profile(CaptureProfile::new(
+        ProfileName::new("snapshot-ebpf-off-notify-off"),
+        Vec::new(),
+    ));
+    let wiring = build_runtime_wiring(
+        &test_storage_config(storage_path),
+        profiles,
+        ebpf_config(false),
+        payload_config(false),
+        DEFAULT_ACTIVE_TRACE_MAX,
+        DiagnosticLogLevel::Info,
+        SeccompNotifyConfig::disabled(),
+        ProcessSeccompConfig::disabled(),
+        AgentInvocationConfig::disabled(),
+        SemanticRetentionConfig::default(),
+        FileObservationConfig::default(),
+        ApplicationProtocolConfig::disabled(),
+        ResourceMetricsConfig::disabled(),
+        TraceFinalizationConfig::default(),
+        WorkloadDiagnostics::default(),
+        RuntimeExportConfig::disabled(),
+        EnforcementConfig::disabled(),
+        CommandControlConfig::disabled(),
+        NetworkControlConfig::disabled(),
+    )
+    .unwrap();
+    let mut host = DaemonServiceHost::new(wiring);
+
+    let error = host
+        .handle(ControlCommand::TrackAdd(TrackAddCommand {
+            request_id: RequestId::new(1),
+            root: test_process_ref(std::process::id()),
+            display_name: TraceName::new("direct-derived-profile"),
+            profile_name: ProfileName::new("snapshot-ebpf-off-notify-off"),
+            tags: BTreeSet::new(),
+            launch_mode: false,
+            initial_suppressed_fds: Vec::new(),
+        }))
+        .unwrap_err();
+
+    assert_eq!(error.code, "launch_admission");
+}
+
+#[test]
 fn launch_mode_suppresses_wrapper_bootstrap_gap() {
     let storage_path = std::env::temp_dir().join(format!(
         "actrail-launch-bootstrap-gap-test-{}.sqlite",

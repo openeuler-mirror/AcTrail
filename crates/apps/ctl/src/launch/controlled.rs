@@ -5,8 +5,6 @@ use std::io::Read;
 use std::io::Write;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::process::ExitStatusExt;
-use std::process::ExitStatus;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Duration;
 
@@ -100,10 +98,8 @@ impl ControlledChild {
         // Forward SIGTERM/SIGINT to the agent while we block on it, so
         // `docker stop` / Ctrl-C reach the agent instead of being swallowed
         // by actrailctl. The agent is already exec'd and running here.
-        install_signal_forwarding(self.pid);
-        let result = wait_child_exit(self.pid);
-        uninstall_signal_forwarding();
-        result
+        let _signal_forwarding = SignalForwardingGuard::install(self.pid);
+        wait_child_exit(self.pid)
     }
 
     pub(super) fn wait_with_monitor(
@@ -111,9 +107,10 @@ impl ControlledChild {
         mut keep_waiting: impl FnMut() -> Result<bool, String>,
         poll_interval: Duration,
     ) -> Result<i32, String> {
+        let _signal_forwarding = SignalForwardingGuard::install(self.pid);
         loop {
             if let Some(status) = try_wait_child_exit(self.pid)? {
-                return status;
+                return Ok(status);
             }
             let daemon_available = keep_waiting()
                 .map_err(|error| format!("launch supervision check failed: {error}"))?;
@@ -362,6 +359,21 @@ fn set_nonblocking(fd: libc::c_int) -> Result<(), String> {
 /// installed" so the handler is a no-op outside of an active `wait`.
 static FORWARD_CHILD_PID: AtomicI32 = AtomicI32::new(0);
 
+struct SignalForwardingGuard;
+
+impl SignalForwardingGuard {
+    fn install(child_pid: libc::pid_t) -> Self {
+        install_signal_forwarding(child_pid);
+        Self
+    }
+}
+
+impl Drop for SignalForwardingGuard {
+    fn drop(&mut self) {
+        uninstall_signal_forwarding();
+    }
+}
+
 /// Signal handler installed for SIGTERM/SIGINT while waiting on the agent.
 ///
 /// MUST stay async-signal-safe: it only does an atomic load and `kill`. No
@@ -441,7 +453,7 @@ fn exit_code_from_status(status: libc::c_int) -> Option<i32> {
     }
 }
 
-fn try_wait_child_exit(child_pid: libc::pid_t) -> Result<Option<Result<i32, String>>, String> {
+fn try_wait_child_exit(child_pid: libc::pid_t) -> Result<Option<i32>, String> {
     let mut status = libc::c_int::default();
     loop {
         let result = unsafe { libc::waitpid(child_pid, &mut status, libc::WNOHANG) };
@@ -455,17 +467,8 @@ fn try_wait_child_exit(child_pid: libc::pid_t) -> Result<Option<Result<i32, Stri
         if result == 0 {
             return Ok(None);
         }
-        if libc::WIFEXITED(status) {
-            let status = ExitStatus::from_raw(status);
-            return Ok(Some(status.code().ok_or_else(|| {
-                "launch child terminated without an exit code".to_string()
-            })));
-        }
-        if libc::WIFSIGNALED(status) {
-            return Ok(Some(Err(format!(
-                "launch child terminated by signal {}",
-                libc::WTERMSIG(status)
-            ))));
+        if let Some(code) = exit_code_from_status(status) {
+            return Ok(Some(code));
         }
     }
 }
@@ -488,11 +491,12 @@ fn terminate_child(child_pid: libc::pid_t) {
 #[cfg(test)]
 mod tests {
     use super::{
-        exit_code_from_status, install_signal_forwarding, uninstall_signal_forwarding,
-        wait_child_exit,
+        ControlledChild, exit_code_from_status, install_signal_forwarding,
+        uninstall_signal_forwarding, wait_child_exit,
     };
     use std::ffi::CString;
     use std::sync::Mutex;
+    use std::time::Duration;
 
     // Tests that touch the process-wide signal disposition + FORWARD_CHILD_PID
     // must not run concurrently with each other: one raises a process-wide
@@ -603,6 +607,30 @@ mod tests {
         let mut status = 0;
         let rc = unsafe { libc::waitpid(child_pid, &mut status, libc::WNOHANG) };
         assert!(rc < 0, "child should already be reaped (ECHILD), rc={rc}");
+    }
+
+    #[test]
+    fn monitored_wait_forwards_sigterm_to_child() {
+        let _serialize = SIGNAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let child_pid = spawn_exec_child(&["sleep", "30"]);
+        let signaler = std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_millis(25));
+            unsafe { libc::kill(libc::getpid(), libc::SIGTERM) };
+        });
+        let child = ControlledChild {
+            pid: child_pid,
+            env_writer: None,
+            listener_fd: None,
+        };
+
+        let result = child.wait_with_monitor(|| Ok(true), Duration::from_millis(1));
+        signaler.join().expect("signal sender");
+
+        assert_eq!(
+            result,
+            Ok(143),
+            "monitored seccomp launch should forward and surface SIGTERM"
+        );
     }
 
     /// install/uninstall round-trip must clear the registered pid so a later

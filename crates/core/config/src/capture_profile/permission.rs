@@ -138,7 +138,7 @@ pub fn resolve_deployment_permissions(
         PermissionMode::Disabled => false,
         PermissionMode::Required if !host_ebpf_configured => {
             return Err(
-                "host eBPF required but capture profile does not require proc-lifecycle and net-transport"
+                "host eBPF required but capture profile does not request an eBPF-backed capability"
                     .to_string(),
             );
         }

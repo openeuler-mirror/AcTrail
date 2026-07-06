@@ -155,6 +155,17 @@ Run the complete matrix acceptance test with:
 sudo BIN_DIR=target/release deploy/container-auto/e2e.sh
 ```
 
+The test starts its own daemon with config, sockets, database, logs, image
+context, image tags, and container names under a unique temporary namespace.
+Cleanup stops only that daemon and removes only those temporary assets; it does
+not install or replace `/etc/actrail`, `/usr/local/bin`, the systemd service, or
+an existing AcTrail database.
+
 The same test also starts two isolated workload containers and verifies that
-container B cannot list, remove, register a seccomp listener for, or inject a
-TLS event into container A's trace.
+container B cannot list, remove, distinguish the existence of, register a
+seccomp listener for, or inject a TLS event into container A's trace.
+
+On Debian/Ubuntu ARM64 builders, the eBPF build automatically adds
+`/usr/include/aarch64-linux-gnu` when it contains the target `asm` headers.
+Nonstandard sysroots can set `ACTRAIL_BPF_SYSTEM_INCLUDE` explicitly; no
+host-level `/usr/include/asm` symlink is required.

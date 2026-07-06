@@ -65,13 +65,9 @@ impl CaptureProfile {
     }
 
     pub fn supports_host_ebpf_observation(&self) -> bool {
-        [Capability::ProcLifecycle, Capability::NetTransport]
-            .iter()
-            .all(|capability| {
-                self.capabilities.iter().any(|request| {
-                    request.capability == *capability && request.mode == RequestMode::Required
-                })
-            })
+        self.capabilities.iter().any(|request| {
+            request.mode != RequestMode::Disabled && is_ebpf_only_capability(&request.capability)
+        })
     }
 
     pub fn for_permissions(&self, permissions: DeploymentPermissions) -> Self {
@@ -107,24 +103,73 @@ mod tests {
     use super::*;
 
     #[test]
-    fn host_ebpf_contract_requires_process_and_network_observation() {
-        let incomplete = CaptureProfile::new(
-            ProfileName::new("incomplete"),
+    fn any_enabled_ebpf_capability_requests_host_observation() {
+        let file_scan = CaptureProfile::new(
+            ProfileName::new("file-scan"),
             vec![CapabilityRequest::new(
-                Capability::ProcLifecycle,
+                Capability::FsAccessBasic,
                 RequestMode::Required,
             )],
         );
-        assert!(!incomplete.supports_host_ebpf_observation());
+        assert!(file_scan.supports_host_ebpf_observation());
 
-        let host_observe = CaptureProfile::new(
-            ProfileName::new("host-observe"),
-            vec![
-                CapabilityRequest::new(Capability::ProcLifecycle, RequestMode::Required),
-                CapabilityRequest::new(Capability::NetTransport, RequestMode::Required),
-            ],
+        let opportunistic_dns = CaptureProfile::new(
+            ProfileName::new("opportunistic-dns"),
+            vec![CapabilityRequest::new(
+                Capability::NetDns,
+                RequestMode::Opportunistic,
+            )],
         );
-        assert!(host_observe.supports_host_ebpf_observation());
+        assert!(opportunistic_dns.supports_host_ebpf_observation());
+
+        let disabled_ebpf = CaptureProfile::new(
+            ProfileName::new("disabled-ebpf"),
+            vec![CapabilityRequest::new(
+                Capability::ProcLifecycle,
+                RequestMode::Disabled,
+            )],
+        );
+        assert!(!disabled_ebpf.supports_host_ebpf_observation());
+
+        let tls_only = CaptureProfile::new(
+            ProfileName::new("tls-only"),
+            vec![CapabilityRequest::new(
+                Capability::TlsPlaintextPayload,
+                RequestMode::Required,
+            )],
+        );
+        assert!(!tls_only.supports_host_ebpf_observation());
+    }
+
+    #[test]
+    fn partial_ebpf_profile_participates_in_auto_permission_resolution() {
+        let profile = CaptureProfile::new(
+            ProfileName::new("file-scan"),
+            vec![CapabilityRequest::new(
+                Capability::FsAccessBasic,
+                RequestMode::Required,
+            )],
+        );
+
+        let decision = resolve_deployment_permissions(
+            DeploymentPermissionPolicy::auto(),
+            &profile,
+            LaunchSeccompRequirements::default(),
+            &DeploymentPermissionAvailability {
+                host_ebpf: Some(true),
+                seccomp_notify: Some(false),
+                seccomp_notify_detail: "not needed".to_string(),
+            },
+        )
+        .expect("partial eBPF profile should resolve");
+
+        assert!(decision.selected.host_ebpf);
+        assert!(!decision.selected.seccomp_notify);
+        assert!(!decision.degraded);
+        assert_eq!(
+            decision.required_capabilities,
+            vec![Capability::FsAccessBasic]
+        );
     }
 
     #[test]

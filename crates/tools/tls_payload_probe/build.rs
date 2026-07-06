@@ -26,13 +26,24 @@ fn main() {
     }
     let _ = writeln!(
         stdout,
+        "cargo:rerun-if-env-changed=ACTRAIL_BPF_SYSTEM_INCLUDE"
+    );
+    let _ = writeln!(
+        stdout,
         "cargo:rustc-env=TLS_PAYLOAD_PROBE_BPF_OBJECT={}",
         object_path.display()
     );
     let use_perf_buffer = env::var_os("CARGO_FEATURE_PERF_BUFFER").is_some();
-    let mut clang_args = vec!["-I", "bpf", bpf_target_arch];
+    let mut clang_args = vec![
+        "-I".to_string(),
+        "bpf".to_string(),
+        bpf_target_arch.to_string(),
+    ];
+    if let Some(include) = target_system_include(&target_arch) {
+        clang_args.push(format!("-I{}", include.display()));
+    }
     if use_perf_buffer {
-        clang_args.push("-DTLS_PROBE_EVENT_TRANSPORT_PERF");
+        clang_args.push("-DTLS_PROBE_EVENT_TRANSPORT_PERF".to_string());
     }
     let _ = writeln!(
         stdout,
@@ -50,4 +61,17 @@ fn main() {
         .clang_args(clang_args)
         .build()
         .expect("failed to compile tls-payload-probe eBPF object");
+}
+
+fn target_system_include(target_arch: &str) -> Option<PathBuf> {
+    if let Some(path) = env::var_os("ACTRAIL_BPF_SYSTEM_INCLUDE") {
+        return Some(PathBuf::from(path));
+    }
+    let multiarch = match target_arch {
+        "x86_64" => "x86_64-linux-gnu",
+        "aarch64" => "aarch64-linux-gnu",
+        _ => return None,
+    };
+    let path = PathBuf::from("/usr/include").join(multiarch);
+    path.join("asm").is_dir().then_some(path)
 }

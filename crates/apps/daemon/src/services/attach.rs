@@ -408,6 +408,12 @@ impl AttachService for StorageAttachService {
         trace_runtime: &mut trace_runtime::TraceRuntime,
         command: &TrackAddCommand,
     ) -> Result<TrackAddReply, ControlError> {
+        if !command.launch_mode && self.profiles.is_launch_only_profile(&command.profile_name) {
+            return Err(ControlError::new(
+                "launch_admission",
+                "deployment-derived profiles require a daemon launch permission admission",
+            ));
+        }
         let profile = self
             .profiles
             .capture_profile(&command.profile_name)

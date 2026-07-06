@@ -4,6 +4,8 @@ use control_contract::command::ProcessRef;
 use control_contract::reply::ControlError;
 use ebpf_collector::procfs::{parse_container_identity, resolve_namespaced_pid};
 use model_core::ids::TraceId;
+use model_core::process::ProcessIdentity;
+use process_identity_contract::lookup::ProcessIdentityReader;
 use trace_runtime::TraceOwnerPrincipal;
 use uds_control_server::PeerCredentials;
 
@@ -78,16 +80,26 @@ impl PeerPrincipal {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PeerIdentity {
     pub(crate) credentials: PeerCredentials,
+    pub(crate) process: ProcessIdentity,
     pub(crate) principal: PeerPrincipal,
 }
 
 impl PeerIdentity {
     pub(crate) fn resolve(credentials: PeerCredentials) -> Result<Self, ControlError> {
+        let process = ebpf_collector::procfs::ProcfsIdentityReader
+            .read_identity(credentials.pid)
+            .map_err(|error| {
+                peer_error(format!(
+                    "resolve peer process identity for pid {}: {error:?}",
+                    credentials.pid
+                ))
+            })?;
         let container_id = process_container_id(credentials.pid)?;
         let pid_namespace = process_pid_namespace(credentials.pid)?;
         let host_pid_namespace = pid_namespace == process_pid_namespace(std::process::id())?;
         Ok(Self {
             credentials,
+            process,
             principal: PeerPrincipal {
                 uid: credentials.uid,
                 container_id,
