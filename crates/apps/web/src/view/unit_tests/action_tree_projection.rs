@@ -227,6 +227,486 @@ fn file_read_covered_by_bulk_read_is_not_displayed() {
     );
 }
 
+#[test]
+fn mcp_tool_call_is_command_child_and_llm_call_sibling() {
+    let client = ProcessIdentity::new(48, 100, 100);
+    let server = ProcessIdentity::new(49, 101, 101);
+    let command = action(
+        "command",
+        SemanticActionKind::CommandInvocation,
+        "claude",
+        client.clone(),
+        1,
+    );
+    let llm_call = llm_call_with_response("llm-call", "llm-response", client.clone(), 2);
+    let llm_response = llm_response("llm-response", client, 3, 80);
+    let mcp = mcp_tool_call("mcp-tool", server, 4);
+    let links = vec![
+        link(
+            "command",
+            "llm-call",
+            SemanticActionLinkRole::CommandContainsLlmCall,
+        ),
+        link(
+            "llm-call",
+            "llm-response",
+            SemanticActionLinkRole::LlmCallResponse,
+        ),
+        link(
+            "command",
+            "mcp-tool",
+            SemanticActionLinkRole::CommandContainsMcpToolCall,
+        ),
+    ];
+
+    let projection = ActionDisplayProjection::new(
+        vec![
+            command.clone(),
+            llm_call.clone(),
+            llm_response.clone(),
+            mcp.clone(),
+        ],
+        links,
+    );
+
+    assert_eq!(
+        action_ids(&projection.children("command")),
+        vec![llm_call.action_id, mcp.action_id]
+    );
+    assert_eq!(
+        projection.children("command")[1]
+            .link
+            .as_ref()
+            .map(|link| link.role),
+        Some(SemanticActionLinkRole::CommandContainsMcpToolCall)
+    );
+    assert_eq!(
+        action_ids(&projection.children("llm-call")),
+        vec![llm_response.action_id]
+    );
+    assert!(projection.children("mcp-tool").is_empty());
+    assert!(projection.children("llm-response").is_empty());
+}
+
+#[test]
+fn mcp_server_command_replaces_pid_only_wrapper_command() {
+    let client = ProcessIdentity::new(50, 100, 100);
+    let pid_only_server = ProcessIdentity::new(51, 101, 101);
+    let observed_server = ProcessIdentity::new(51, 101, 101_001);
+    let command_line = "/usr/bin/python3 mcp_stdio_recorder.py";
+    let command = action(
+        "command",
+        SemanticActionKind::CommandInvocation,
+        "claude",
+        client,
+        1,
+    );
+    let mut wrapper = action(
+        "server-wrapper",
+        SemanticActionKind::CommandInvocation,
+        command_line,
+        pid_only_server,
+        2,
+    );
+    wrapper
+        .attributes
+        .insert("command.line".to_string(), command_line.to_string());
+    let mut mcp_server = action(
+        "server-mcp",
+        SemanticActionKind::CommandInvocation,
+        command_line,
+        observed_server,
+        3,
+    );
+    mcp_server
+        .attributes
+        .insert("command.line".to_string(), command_line.to_string());
+    mcp_server
+        .attributes
+        .insert("invocation.kind".to_string(), "mcp".to_string());
+    let links = vec![
+        link(
+            "command",
+            "server-wrapper",
+            SemanticActionLinkRole::CommandContainsCommandInvocation,
+        ),
+        link(
+            "command",
+            "server-mcp",
+            SemanticActionLinkRole::CommandContainsCommandInvocation,
+        ),
+    ];
+
+    let projection =
+        ActionDisplayProjection::new(vec![command.clone(), wrapper.clone()], links.clone());
+    assert_eq!(
+        action_ids(&projection.children("command")),
+        vec!["server-wrapper".to_string()]
+    );
+
+    let projection =
+        ActionDisplayProjection::new(vec![command, wrapper, mcp_server.clone()], links);
+
+    assert!(
+        projection
+            .actions
+            .iter()
+            .all(|action| action.action_id != "server-wrapper")
+    );
+    assert_eq!(
+        action_ids(&projection.children("command")),
+        vec![mcp_server.action_id]
+    );
+}
+
+#[test]
+fn mcp_server_command_replaces_pid_only_process_exec() {
+    let client = ProcessIdentity::new(50, 100, 100);
+    let pid_only_server = ProcessIdentity::new(51, 101, 101);
+    let observed_server = ProcessIdentity::new(51, 101, 101_001);
+    let command_line = "/usr/bin/python3 mcp_stdio_recorder.py";
+    let command = action(
+        "command",
+        SemanticActionKind::CommandInvocation,
+        "claude",
+        client,
+        1,
+    );
+    let mut process_exec = action(
+        "server-exec",
+        SemanticActionKind::ProcessExec,
+        "/usr/bin/python3",
+        pid_only_server,
+        2,
+    );
+    process_exec
+        .attributes
+        .insert("command_line".to_string(), command_line.to_string());
+    let mut mcp_server = action(
+        "server-mcp",
+        SemanticActionKind::CommandInvocation,
+        command_line,
+        observed_server,
+        3,
+    );
+    mcp_server
+        .attributes
+        .insert("command.line".to_string(), command_line.to_string());
+    mcp_server
+        .attributes
+        .insert("invocation.kind".to_string(), "mcp".to_string());
+    let links = vec![link(
+        "command",
+        "server-mcp",
+        SemanticActionLinkRole::CommandContainsCommandInvocation,
+    )];
+
+    let projection =
+        ActionDisplayProjection::new(vec![command, process_exec, mcp_server.clone()], links);
+
+    assert!(
+        projection
+            .actions
+            .iter()
+            .all(|action| action.action_id != "server-exec")
+    );
+    assert_eq!(
+        action_ids(&projection.children("command")),
+        vec![mcp_server.action_id]
+    );
+    assert_eq!(
+        action_ids(&projection.children(ROOT_PARENT_ID)),
+        vec!["command".to_string()]
+    );
+}
+
+#[test]
+fn mcp_request_response_stdio_children_nest_by_client_perspective() {
+    let client = ProcessIdentity::new(50, 100, 100);
+    let server = ProcessIdentity::new(51, 101, 101);
+    let command = action(
+        "command",
+        SemanticActionKind::CommandInvocation,
+        "claude",
+        client,
+        1,
+    );
+    let mcp = mcp_tool_call("mcp-tool", server.clone(), 2);
+    let request = action(
+        "mcp-tool:request",
+        SemanticActionKind::McpRequest,
+        "MCP request emit_probe",
+        server.clone(),
+        3,
+    );
+    let stdout = action(
+        "mcp-tool:stdout",
+        SemanticActionKind::McpStdout,
+        "MCP stdout emit_probe",
+        server.clone(),
+        4,
+    );
+    let response = action(
+        "mcp-tool:response",
+        SemanticActionKind::McpResponse,
+        "MCP response emit_probe",
+        server.clone(),
+        5,
+    );
+    let stdin = action(
+        "mcp-tool:stdin",
+        SemanticActionKind::McpStdin,
+        "MCP stdin emit_probe",
+        server,
+        6,
+    );
+    let links = vec![
+        link(
+            "command",
+            "mcp-tool",
+            SemanticActionLinkRole::CommandContainsMcpToolCall,
+        ),
+        link(
+            "mcp-tool",
+            "mcp-tool:request",
+            SemanticActionLinkRole::McpToolCallRequest,
+        ),
+        link(
+            "mcp-tool:request",
+            "mcp-tool:stdout",
+            SemanticActionLinkRole::McpRequestStdout,
+        ),
+        link(
+            "mcp-tool",
+            "mcp-tool:response",
+            SemanticActionLinkRole::McpToolCallResponse,
+        ),
+        link(
+            "mcp-tool:response",
+            "mcp-tool:stdin",
+            SemanticActionLinkRole::McpResponseStdin,
+        ),
+    ];
+
+    let projection = ActionDisplayProjection::new(
+        vec![
+            command.clone(),
+            mcp.clone(),
+            request.clone(),
+            stdout.clone(),
+            response.clone(),
+            stdin.clone(),
+        ],
+        links,
+    );
+
+    assert_eq!(
+        action_ids(&projection.children("command")),
+        vec![mcp.action_id.clone()]
+    );
+    assert_eq!(
+        action_ids(&projection.children("mcp-tool")),
+        vec![request.action_id.clone(), response.action_id.clone()]
+    );
+    assert_eq!(
+        action_ids(&projection.children("mcp-tool:request")),
+        vec![stdout.action_id]
+    );
+    assert_eq!(
+        action_ids(&projection.children("mcp-tool:response")),
+        vec![stdin.action_id]
+    );
+}
+
+#[test]
+fn remote_mcp_request_response_nest_client_transport_children() {
+    let client = ProcessIdentity::new(55, 105, 105);
+    let command = action(
+        "command",
+        SemanticActionKind::CommandInvocation,
+        "claude",
+        client.clone(),
+        1,
+    );
+    let mut mcp = mcp_tool_call("remote-mcp-tool", client.clone(), 2);
+    mcp.attributes.insert(
+        attrs::mcp::TRANSPORT.to_string(),
+        "streamable_http".to_string(),
+    );
+    let request = action(
+        "remote-mcp-tool:request",
+        SemanticActionKind::McpRequest,
+        "MCP request emit_remote_marker",
+        client.clone(),
+        3,
+    );
+    let client_send = action(
+        "remote-mcp-tool:client_send",
+        SemanticActionKind::McpClientSend,
+        "MCP client send emit_remote_marker",
+        client.clone(),
+        4,
+    );
+    let response = action(
+        "remote-mcp-tool:response",
+        SemanticActionKind::McpResponse,
+        "MCP response emit_remote_marker",
+        client.clone(),
+        5,
+    );
+    let client_receive = action(
+        "remote-mcp-tool:client_receive",
+        SemanticActionKind::McpClientReceive,
+        "MCP client receive emit_remote_marker",
+        client,
+        6,
+    );
+    let links = vec![
+        link(
+            "command",
+            "remote-mcp-tool",
+            SemanticActionLinkRole::CommandContainsMcpToolCall,
+        ),
+        link(
+            "remote-mcp-tool",
+            "remote-mcp-tool:request",
+            SemanticActionLinkRole::McpToolCallRequest,
+        ),
+        link(
+            "remote-mcp-tool",
+            "remote-mcp-tool:response",
+            SemanticActionLinkRole::McpToolCallResponse,
+        ),
+        link(
+            "remote-mcp-tool:request",
+            "remote-mcp-tool:client_send",
+            SemanticActionLinkRole::McpRequestClientSend,
+        ),
+        link(
+            "remote-mcp-tool:response",
+            "remote-mcp-tool:client_receive",
+            SemanticActionLinkRole::McpResponseClientReceive,
+        ),
+    ];
+
+    let projection = ActionDisplayProjection::new(
+        vec![
+            command.clone(),
+            mcp.clone(),
+            request.clone(),
+            client_send.clone(),
+            response.clone(),
+            client_receive.clone(),
+        ],
+        links,
+    );
+
+    assert_eq!(
+        action_ids(&projection.children("command")),
+        vec![mcp.action_id.clone()]
+    );
+    assert_eq!(
+        action_ids(&projection.children("remote-mcp-tool")),
+        vec![request.action_id.clone(), response.action_id.clone()]
+    );
+    assert_eq!(
+        action_ids(&projection.children("remote-mcp-tool:request")),
+        vec![client_send.action_id]
+    );
+    assert_eq!(
+        action_ids(&projection.children("remote-mcp-tool:response")),
+        vec![client_receive.action_id]
+    );
+}
+
+#[test]
+fn mcp_additional_stdio_children_use_action_id_attributes_for_valid_links() {
+    let server = ProcessIdentity::new(52, 101, 101);
+    let mcp = mcp_tool_call("mcp-tool", server.clone(), 1);
+    let request = action(
+        "mcp-tool:request",
+        SemanticActionKind::McpRequest,
+        "MCP request verify_marker",
+        server.clone(),
+        2,
+    );
+    let response = action(
+        "mcp-tool:response",
+        SemanticActionKind::McpResponse,
+        "MCP response verify_marker",
+        server.clone(),
+        3,
+    );
+    let mut ping_stdout = action(
+        "mcp-tool:stdout:2",
+        SemanticActionKind::McpStdout,
+        "MCP stdout verify_marker",
+        server.clone(),
+        4,
+    );
+    ping_stdout.attributes.insert(
+        attrs::mcp::REQUEST_ACTION_ID.to_string(),
+        request.action_id.clone(),
+    );
+    let mut ping_stdin = action(
+        "mcp-tool:stdin:2",
+        SemanticActionKind::McpStdin,
+        "MCP stdin verify_marker",
+        server,
+        5,
+    );
+    ping_stdin.attributes.insert(
+        attrs::mcp::RESPONSE_ACTION_ID.to_string(),
+        response.action_id.clone(),
+    );
+    let links = vec![
+        link(
+            "mcp-tool",
+            "mcp-tool:request",
+            SemanticActionLinkRole::McpToolCallRequest,
+        ),
+        link(
+            "mcp-tool",
+            "mcp-tool:response",
+            SemanticActionLinkRole::McpToolCallResponse,
+        ),
+        link(
+            "mcp-tool:request",
+            "mcp-tool:stdout:2",
+            SemanticActionLinkRole::McpRequestStdout,
+        ),
+        link(
+            "mcp-tool:response",
+            "mcp-tool:stdin:2",
+            SemanticActionLinkRole::McpResponseStdin,
+        ),
+    ];
+
+    let projection = ActionDisplayProjection::new(
+        vec![
+            mcp,
+            request.clone(),
+            response.clone(),
+            ping_stdout.clone(),
+            ping_stdin.clone(),
+        ],
+        links,
+    );
+
+    assert_eq!(
+        action_ids(&projection.children("mcp-tool")),
+        vec![request.action_id.clone(), response.action_id.clone()]
+    );
+    assert_eq!(
+        action_ids(&projection.children("mcp-tool:request")),
+        vec![ping_stdout.action_id]
+    );
+    assert_eq!(
+        action_ids(&projection.children("mcp-tool:response")),
+        vec![ping_stdin.action_id]
+    );
+}
+
 fn action(
     id: &str,
     kind: SemanticActionKind,
@@ -449,6 +929,24 @@ fn file_read(
         id: event_id,
         role: SemanticActionKind::FileRead.as_str().to_string(),
     });
+    action
+}
+
+fn mcp_tool_call(id: &str, process: ProcessIdentity, start_millis: u64) -> SemanticAction {
+    let mut action = action(
+        id,
+        SemanticActionKind::McpToolCall,
+        "MCP tool emit_probe",
+        process,
+        start_millis,
+    );
+    action.attributes.insert(
+        attrs::mcp::SERVER_NAME.to_string(),
+        "actrail_probe".to_string(),
+    );
+    action
+        .attributes
+        .insert(attrs::mcp::TOOL_NAME.to_string(), "emit_probe".to_string());
     action
 }
 

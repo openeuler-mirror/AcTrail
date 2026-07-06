@@ -71,7 +71,8 @@ pub(super) fn invalidated_link_attrs(
         .get(attrs::actrail::LINK_VALID)
         .is_some_and(|value| value == "false")
         || ((role == SemanticActionLinkRole::AgentPerformedAction
-            || role == SemanticActionLinkRole::CommandContainsCommandInvocation)
+            || role == SemanticActionLinkRole::CommandContainsCommandInvocation
+            || role == SemanticActionLinkRole::CommandContainsMcpToolCall)
             && action_attrs
                 .get(attrs::process_parent::IDENTITY_STATE)
                 .is_some_and(|value| value == "conflict"))
@@ -113,6 +114,9 @@ pub(super) fn push_effective_link_values(
     values.push(Value::Integer(i64::from(link_role_code(
         SemanticActionLinkRole::CommandContainsCommandInvocation,
     ))));
+    values.push(Value::Integer(i64::from(link_role_code(
+        SemanticActionLinkRole::CommandContainsMcpToolCall,
+    ))));
     Ok(())
 }
 
@@ -125,7 +129,7 @@ pub(super) fn display_parent_link_value_count(roles: &[&str]) -> usize {
 }
 
 pub(super) fn effective_link_value_count(roles: Option<&[&str]>) -> usize {
-    roles.map_or(2, |roles| roles.len() + 2)
+    roles.map_or(3, |roles| roles.len() + 3)
 }
 
 fn read_evidence_for_actions(
@@ -308,7 +312,8 @@ pub(super) fn display_child_counts(
             SemanticActionStoreError::new("map_semantic_action_child_count", error.to_string())
         })?;
         let role_conflicted = (role == SemanticActionLinkRole::AgentPerformedAction
-            || role == SemanticActionLinkRole::CommandContainsCommandInvocation)
+            || role == SemanticActionLinkRole::CommandContainsCommandInvocation
+            || role == SemanticActionLinkRole::CommandContainsMcpToolCall)
             && process_parent_conflict == 1;
         if action_valid_code == 1 && link_valid_code == 1 && !role_conflicted {
             children_by_parent
@@ -339,7 +344,7 @@ fn effective_link_absence_predicate(child_alias: &str, roles: Option<&[&str]>) -
              AND link.link_valid_code = 1
              AND parent.action_valid_code = 1
              AND NOT (
-               (link.role_code = ? OR link.role_code = ?)
+               (link.role_code = ? OR link.role_code = ? OR link.role_code = ?)
                AND {child_alias}.process_parent_conflict = 1
              )
          )"

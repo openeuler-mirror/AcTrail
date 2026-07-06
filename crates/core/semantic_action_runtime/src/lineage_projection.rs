@@ -16,6 +16,4 @@ pub const LINK_SOURCE_PROCESS_LINEAGE: &str = "process_lineage";
 const ATTR_AGENT_ACTION_SEQUENCE: &str = attrs::agent::PERFORMED_ACTION_SEQUENCE;
 const ATTR_AGENT_IDENTITY_STATUS: &str = attrs::agent::IDENTITY_STATUS;
 const ATTR_LINK_VALID: &str = attrs::actrail::LINK_VALID;
-const ATTR_PROCESS_PARENT_IDENTITY_STATE: &str = attrs::process_parent::IDENTITY_STATE;
 const LINK_VALID_FALSE: &str = "false";
-const PROCESS_PARENT_IDENTITY_STATE_CONFLICT: &str = "conflict";

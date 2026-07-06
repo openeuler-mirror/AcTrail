@@ -7,7 +7,8 @@ use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use semantic_action::{
     SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionLink,
-    SemanticActionLinkConfidence, SemanticActionLinkRole, attr_keys as attrs, evidence_roles,
+    SemanticActionLinkConfidence, SemanticActionLinkRole, SemanticEvidence, attr_keys as attrs,
+    evidence_roles,
 };
 
 use super::actions::{
@@ -26,11 +27,13 @@ const AGENT_IDENTITY_STATUS_OBSERVED: &str = "observed";
 const AGENT_INVOCATION_TRIGGER_CHILD_LLM_REQUEST: &str = "child_llm_request";
 const ATTR_INVOCATION_KIND: &str = attrs::invocation::KIND;
 const INVOCATION_KIND_AGENT: &str = "agent";
+const INVOCATION_KIND_MCP: &str = "mcp";
 
 pub(super) struct CommandProjector {
     commands: BTreeMap<(TraceId, ProcessIdentity), SemanticAction>,
     fork_edges: BTreeMap<(TraceId, ProcessIdentity), ForkProcessEdge>,
     linked_execs: BTreeSet<CommandExecLinkKey>,
+    mcp_invocations: BTreeMap<(TraceId, ProcessIdentity), McpInvocationEvidence>,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -40,12 +43,18 @@ struct CommandExecLinkKey {
     child_action_id: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct McpInvocationEvidence {
+    evidence: Vec<SemanticEvidence>,
+}
+
 impl CommandProjector {
     pub(super) fn new() -> Self {
         Self {
             commands: BTreeMap::new(),
             fork_edges: BTreeMap::new(),
             linked_execs: BTreeSet::new(),
+            mcp_invocations: BTreeMap::new(),
         }
     }
 
@@ -63,11 +72,51 @@ impl CommandProjector {
             merge_existing_command(&mut action, existing);
         }
         apply_agent_invocation_label(&mut action, process_action, None);
+        if let Some(evidence) = self.mcp_invocations.get(&key) {
+            apply_mcp_invocation_label(&mut action, evidence);
+        }
         self.commands.insert(key, action.clone());
         let link = self.command_exec_link(&action, process_action, event);
         LiveSemanticActionOutput {
             actions: vec![action],
             links: link.into_iter().collect(),
+            file_observation_paths: Vec::new(),
+            file_path_sets: Vec::new(),
+            llm_request_contents: Vec::new(),
+            deferred_events: Vec::new(),
+            retain_event: true,
+            raw_event_consumed: false,
+        }
+    }
+
+    pub(super) fn observe_mcp_tool_call(
+        &mut self,
+        action: &SemanticAction,
+    ) -> LiveSemanticActionOutput {
+        if action.kind != SemanticActionKind::McpToolCall {
+            return LiveSemanticActionOutput::default();
+        }
+        let key = command_key(action.trace_id, &action.process);
+        let evidence = self
+            .mcp_invocations
+            .entry(key.clone())
+            .or_insert_with(|| McpInvocationEvidence {
+                evidence: action.evidence.clone(),
+            })
+            .clone();
+
+        let Some(mut command) = self.commands.get(&key).cloned() else {
+            return LiveSemanticActionOutput::default();
+        };
+        let previous = command.clone();
+        apply_mcp_invocation_label(&mut command, &evidence);
+        if command == previous {
+            return LiveSemanticActionOutput::default();
+        }
+        self.commands.insert(key, command.clone());
+        LiveSemanticActionOutput {
+            actions: vec![command],
+            links: Vec::new(),
             file_observation_paths: Vec::new(),
             file_path_sets: Vec::new(),
             llm_request_contents: Vec::new(),
@@ -168,6 +217,8 @@ impl CommandProjector {
         self.fork_edges
             .retain(|(candidate, _), _| *candidate != trace_id);
         self.linked_execs.retain(|key| key.trace_id != trace_id);
+        self.mcp_invocations
+            .retain(|(candidate, _), _| *candidate != trace_id);
     }
 
     fn command_exec_link(
@@ -195,6 +246,20 @@ impl CommandProjector {
             attributes: BTreeMap::new(),
         })
     }
+}
+
+fn apply_mcp_invocation_label(action: &mut SemanticAction, evidence: &McpInvocationEvidence) {
+    if !action
+        .attributes
+        .get(ATTR_INVOCATION_KIND)
+        .is_some_and(|kind| kind == INVOCATION_KIND_AGENT)
+    {
+        action.attributes.insert(
+            ATTR_INVOCATION_KIND.to_string(),
+            INVOCATION_KIND_MCP.to_string(),
+        );
+    }
+    append_missing_evidence(&mut action.evidence, &evidence.evidence);
 }
 
 fn command_key(trace_id: TraceId, process: &ProcessIdentity) -> (TraceId, ProcessIdentity) {

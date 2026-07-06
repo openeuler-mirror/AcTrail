@@ -19,6 +19,21 @@ pub enum SemanticActionKind {
     LlmCall,
     LlmRequest,
     LlmResponse,
+    McpToolCall,
+    /// MCP JSON-RPC request role. For stdio transport this is the AI
+    /// agent/client process stdout and the MCP server process stdin.
+    McpRequest,
+    /// MCP JSON-RPC response role. For stdio transport this is the AI
+    /// agent/client process stdin and the MCP server process stdout.
+    McpResponse,
+    /// Client-to-server remote MCP transport payload.
+    McpClientSend,
+    /// Server-to-client remote MCP transport payload.
+    McpClientReceive,
+    /// Stdio bytes read by the AI agent/client process from the MCP server.
+    McpStdin,
+    /// Stdio bytes written by the AI agent/client process to the MCP server.
+    McpStdout,
     SseStream,
     SseEvent,
     EnforcementDecision,
@@ -41,6 +56,13 @@ impl SemanticActionKind {
             Self::LlmCall => "llm.call",
             Self::LlmRequest => "llm.request",
             Self::LlmResponse => "llm.response",
+            Self::McpToolCall => "mcp.tool_call",
+            Self::McpRequest => "mcp.request",
+            Self::McpResponse => "mcp.response",
+            Self::McpClientSend => "mcp.client_send",
+            Self::McpClientReceive => "mcp.client_receive",
+            Self::McpStdin => "mcp.stdin",
+            Self::McpStdout => "mcp.stdout",
             Self::SseStream => "sse.stream",
             Self::SseEvent => "sse.event",
             Self::EnforcementDecision => "enforcement.decision",
@@ -63,6 +85,13 @@ impl SemanticActionKind {
             "llm.call" => Some(Self::LlmCall),
             "llm.request" => Some(Self::LlmRequest),
             "llm.response" => Some(Self::LlmResponse),
+            "mcp.tool_call" => Some(Self::McpToolCall),
+            "mcp.request" => Some(Self::McpRequest),
+            "mcp.response" => Some(Self::McpResponse),
+            "mcp.client_send" => Some(Self::McpClientSend),
+            "mcp.client_receive" => Some(Self::McpClientReceive),
+            "mcp.stdin" => Some(Self::McpStdin),
+            "mcp.stdout" => Some(Self::McpStdout),
             "sse.stream" => Some(Self::SseStream),
             "sse.event" => Some(Self::SseEvent),
             "enforcement.decision" => Some(Self::EnforcementDecision),
@@ -370,6 +399,7 @@ pub enum SemanticActionLinkRole {
     CommandContainsProcessExec,
     CommandContainsCommandInvocation,
     CommandContainsLlmCall,
+    CommandContainsMcpToolCall,
     FileWriteContainsFileEvent,
     AgentInvocationExec,
     AgentInvocationChildLlmRequest,
@@ -380,6 +410,20 @@ pub enum SemanticActionLinkRole {
     LlmResponseHttpMessage,
     LlmResponseSseStream,
     SseStreamEvent,
+    McpToolCallRequest,
+    McpToolCallResponse,
+    /// Links a protocol-level MCP request to the client-side stdout bytes that
+    /// carried it into the MCP server stdin.
+    McpRequestStdout,
+    /// Links a protocol-level MCP response to the client-side stdin bytes read
+    /// from the MCP server stdout.
+    McpResponseStdin,
+    /// Links a protocol-level remote MCP request to the client-side HTTP
+    /// request payload sent to the MCP server.
+    McpRequestClientSend,
+    /// Links a protocol-level remote MCP response to the client-side HTTP
+    /// response payload received from the MCP server.
+    McpResponseClientReceive,
 }
 
 impl SemanticActionLinkRole {
@@ -391,6 +435,7 @@ impl SemanticActionLinkRole {
             Self::CommandContainsProcessExec => "command.contains_process_exec",
             Self::CommandContainsCommandInvocation => "command.contains_command_invocation",
             Self::CommandContainsLlmCall => "command.contains_llm_call",
+            Self::CommandContainsMcpToolCall => "command.contains_mcp_tool_call",
             Self::FileWriteContainsFileEvent => "file.write.contains_file_event",
             Self::AgentInvocationExec => "agent.invocation.exec",
             Self::AgentInvocationChildLlmRequest => "agent.invocation.child_llm_request",
@@ -401,6 +446,12 @@ impl SemanticActionLinkRole {
             Self::LlmResponseHttpMessage => "llm.response.http_message",
             Self::LlmResponseSseStream => "llm.response.sse_stream",
             Self::SseStreamEvent => "sse.stream.event",
+            Self::McpToolCallRequest => "mcp.tool_call.request",
+            Self::McpToolCallResponse => "mcp.tool_call.response",
+            Self::McpRequestStdout => "mcp.request.stdout",
+            Self::McpResponseStdin => "mcp.response.stdin",
+            Self::McpRequestClientSend => "mcp.request.client_send",
+            Self::McpResponseClientReceive => "mcp.response.client_receive",
         }
     }
 
@@ -414,6 +465,7 @@ impl SemanticActionLinkRole {
             "command.contains_process_exec" => Some(Self::CommandContainsProcessExec),
             "command.contains_command_invocation" => Some(Self::CommandContainsCommandInvocation),
             "command.contains_llm_call" => Some(Self::CommandContainsLlmCall),
+            "command.contains_mcp_tool_call" => Some(Self::CommandContainsMcpToolCall),
             "file.write.contains_file_event" => Some(Self::FileWriteContainsFileEvent),
             "agent.invocation.exec" => Some(Self::AgentInvocationExec),
             "agent.invocation.child_llm_request" => Some(Self::AgentInvocationChildLlmRequest),
@@ -424,6 +476,12 @@ impl SemanticActionLinkRole {
             "llm.response.http_message" => Some(Self::LlmResponseHttpMessage),
             "llm.response.sse_stream" => Some(Self::LlmResponseSseStream),
             "sse.stream.event" => Some(Self::SseStreamEvent),
+            "mcp.tool_call.request" => Some(Self::McpToolCallRequest),
+            "mcp.tool_call.response" => Some(Self::McpToolCallResponse),
+            "mcp.request.stdout" => Some(Self::McpRequestStdout),
+            "mcp.response.stdin" => Some(Self::McpResponseStdin),
+            "mcp.request.client_send" => Some(Self::McpRequestClientSend),
+            "mcp.response.client_receive" => Some(Self::McpResponseClientReceive),
             _ => None,
         }
     }
@@ -462,4 +520,126 @@ pub struct SemanticActionLink {
     pub valid: bool,
     pub evidence: Vec<SemanticEvidence>,
     pub attributes: BTreeMap<String, String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SemanticActionKind, SemanticActionLinkRole};
+    use crate::{attr_keys, evidence_roles, link_roles};
+
+    #[test]
+    fn mcp_remote_client_message_kinds_round_trip() {
+        assert_eq!(
+            SemanticActionKind::McpClientSend.as_str(),
+            "mcp.client_send"
+        );
+        assert_eq!(
+            SemanticActionKind::parse("mcp.client_send"),
+            Some(SemanticActionKind::McpClientSend)
+        );
+        assert_eq!(
+            SemanticActionKind::McpClientReceive.as_str(),
+            "mcp.client_receive"
+        );
+        assert_eq!(
+            SemanticActionKind::parse("mcp.client_receive"),
+            Some(SemanticActionKind::McpClientReceive)
+        );
+    }
+
+    #[test]
+    fn command_contains_mcp_tool_call_role_round_trips() {
+        assert_eq!(
+            SemanticActionLinkRole::CommandContainsMcpToolCall.as_str(),
+            "command.contains_mcp_tool_call"
+        );
+        assert_eq!(
+            SemanticActionLinkRole::parse("command.contains_mcp_tool_call"),
+            Some(SemanticActionLinkRole::CommandContainsMcpToolCall)
+        );
+        assert_eq!(
+            link_roles::COMMAND_CONTAINS_MCP_TOOL_CALL,
+            "command.contains_mcp_tool_call"
+        );
+    }
+
+    #[test]
+    fn mcp_tool_call_child_roles_round_trip() {
+        assert_eq!(
+            SemanticActionLinkRole::McpToolCallRequest.as_str(),
+            "mcp.tool_call.request"
+        );
+        assert_eq!(
+            SemanticActionLinkRole::parse("mcp.tool_call.request"),
+            Some(SemanticActionLinkRole::McpToolCallRequest)
+        );
+        assert_eq!(
+            SemanticActionLinkRole::McpToolCallResponse.as_str(),
+            "mcp.tool_call.response"
+        );
+        assert_eq!(
+            SemanticActionLinkRole::parse("mcp.tool_call.response"),
+            Some(SemanticActionLinkRole::McpToolCallResponse)
+        );
+        assert_eq!(
+            SemanticActionLinkRole::McpRequestStdout.as_str(),
+            "mcp.request.stdout"
+        );
+        assert_eq!(
+            SemanticActionLinkRole::parse("mcp.request.stdout"),
+            Some(SemanticActionLinkRole::McpRequestStdout)
+        );
+        assert_eq!(
+            SemanticActionLinkRole::McpResponseStdin.as_str(),
+            "mcp.response.stdin"
+        );
+        assert_eq!(
+            SemanticActionLinkRole::parse("mcp.response.stdin"),
+            Some(SemanticActionLinkRole::McpResponseStdin)
+        );
+        assert_eq!(
+            SemanticActionLinkRole::McpRequestClientSend.as_str(),
+            "mcp.request.client_send"
+        );
+        assert_eq!(
+            SemanticActionLinkRole::parse("mcp.request.client_send"),
+            Some(SemanticActionLinkRole::McpRequestClientSend)
+        );
+        assert_eq!(
+            SemanticActionLinkRole::McpResponseClientReceive.as_str(),
+            "mcp.response.client_receive"
+        );
+        assert_eq!(
+            SemanticActionLinkRole::parse("mcp.response.client_receive"),
+            Some(SemanticActionLinkRole::McpResponseClientReceive)
+        );
+        assert_eq!(
+            link_roles::MCP_REQUEST_CLIENT_SEND,
+            "mcp.request.client_send"
+        );
+        assert_eq!(
+            link_roles::MCP_RESPONSE_CLIENT_RECEIVE,
+            "mcp.response.client_receive"
+        );
+    }
+
+    #[test]
+    fn mcp_remote_client_payload_constants_are_public() {
+        assert_eq!(
+            attr_keys::mcp::CLIENT_SEND_ACTION_ID,
+            "mcp.client_send.action_id"
+        );
+        assert_eq!(
+            attr_keys::mcp::CLIENT_RECEIVE_ACTION_ID,
+            "mcp.client_receive.action_id"
+        );
+        assert_eq!(
+            evidence_roles::mcp::CLIENT_SEND_PAYLOAD,
+            "mcp.client_send.payload"
+        );
+        assert_eq!(
+            evidence_roles::mcp::CLIENT_RECEIVE_PAYLOAD,
+            "mcp.client_receive.payload"
+        );
+    }
 }

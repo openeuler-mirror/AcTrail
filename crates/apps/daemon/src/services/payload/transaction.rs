@@ -210,17 +210,6 @@ impl PayloadTransactionContext<'_> {
             return Ok(SemanticActionBatch::default());
         }
         let policy = self.policy.for_segment(&raw)?;
-        if matches!(policy.stdio_storage_mode, PayloadStdioStorageMode::Drop) {
-            self.log_payload_diagnostic(format_args!(
-                "payload_persist drop_stdio_storage_policy trace_id={} pid={} generation={} stream={} operation_id={}",
-                raw.trace_id,
-                raw.process.pid,
-                raw.process.generation,
-                raw.protocol_hint.as_deref().unwrap_or("unknown"),
-                raw.operation_id
-            ));
-            return Ok(SemanticActionBatch::default());
-        }
 
         self.mark_semantic_projection_dirty(raw.trace_id);
 
@@ -256,6 +245,42 @@ impl PayloadTransactionContext<'_> {
         segment.redaction = redaction;
         segment.bytes = bytes;
         let analysis_segment = segment.clone();
+        if matches!(policy.stdio_storage_mode, PayloadStdioStorageMode::Drop) {
+            let started = crate::services::workload_diagnostics::now();
+            let semantic_actions =
+                self.observe_semantic_actions_for_payload_segment(&analysis_segment);
+            self.workload_diagnostics.record_payload_transaction_phase(
+                PayloadTransactionPhase::SemanticObserve,
+                started.elapsed(),
+                semantic_actions.actions().len(),
+            );
+            self.payload_body_retention_gate
+                .apply(&analysis_segment, body_retention);
+            let started = crate::services::workload_diagnostics::now();
+            let semantic_action_count = semantic_actions.actions().len();
+            let semantic_actions = session
+                .persist_semantic_actions(semantic_actions)
+                .map_err(recording_error_to_control)?;
+            self.workload_diagnostics.record_payload_transaction_phase(
+                PayloadTransactionPhase::SegmentPersist,
+                started.elapsed(),
+                semantic_actions.actions().len(),
+            );
+            self.log_payload_diagnostic(format_args!(
+                "payload_persist drop_stdio_storage_policy trace_id={} pid={} generation={} stream={} captured_bytes={} semantic_actions={} operation_id={}",
+                raw.trace_id,
+                matched.process.pid,
+                matched.process.generation,
+                analysis_segment
+                    .protocol_hint
+                    .as_deref()
+                    .unwrap_or("unknown"),
+                analysis_segment.captured_size,
+                semantic_action_count,
+                raw.operation_id
+            ));
+            return Ok(semantic_actions);
+        }
         let mut stored_segment = segment;
         if should_clear_transport_payload_body(
             &stored_segment,

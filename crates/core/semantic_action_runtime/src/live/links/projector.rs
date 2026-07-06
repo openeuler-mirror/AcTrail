@@ -6,6 +6,7 @@ use super::agent::AgentPerformedActionLinkProjector;
 use super::command::CommandChildActionLinkProjector;
 use super::http::HttpMessageLinkProjector;
 use super::llm::LlmExchangeLinkProjector;
+use super::mcp::McpLinkProjector;
 use super::sse::SseLinkProjector;
 use crate::live::actions::action_for_live_state;
 
@@ -14,6 +15,7 @@ pub(in crate::live) struct ActionLinkProjector {
     command: CommandChildActionLinkProjector,
     http: HttpMessageLinkProjector,
     llm_exchange: LlmExchangeLinkProjector,
+    mcp: McpLinkProjector,
     sse: SseLinkProjector,
 }
 
@@ -24,6 +26,7 @@ impl ActionLinkProjector {
             command: CommandChildActionLinkProjector::default(),
             http: HttpMessageLinkProjector::default(),
             llm_exchange: LlmExchangeLinkProjector::default(),
+            mcp: McpLinkProjector::default(),
             sse: SseLinkProjector::default(),
         }
     }
@@ -49,6 +52,7 @@ impl ActionLinkProjector {
         for action in &state_actions {
             links.extend(self.http.observe_action(action));
             links.extend(self.llm_exchange.observe_action(action));
+            links.extend(self.mcp.observe_action(action));
             links.extend(self.sse.observe_action(action));
             links.extend(self.agent.link_child_action(action));
             links.extend(self.command.link_child_action(action));
@@ -68,6 +72,7 @@ impl ActionLinkProjector {
         self.command.forget_trace(trace_id);
         self.http.forget_trace(trace_id);
         self.llm_exchange.forget_trace(trace_id);
+        self.mcp.forget_trace(trace_id);
         self.sse.forget_trace(trace_id);
     }
 }

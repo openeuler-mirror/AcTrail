@@ -36,6 +36,7 @@ pub(super) fn invalid_link(
             .get(LINK_VALID_ATTR)
             .is_some_and(|value| value == VALID_FALSE)
         || invalid_llm_call_child_link(link, parent, child)
+        || invalid_mcp_child_link(link, parent, child)
         || invalid_parent_identity_link(link, child)
         || invalid_response_http_link(link, parent, child, action_by_id)
 }
@@ -69,9 +70,100 @@ fn call_references_action(call: &SemanticAction, attr: &str, child: &SemanticAct
             .is_some_and(|action_id| action_id == &child.action_id)
 }
 
+fn invalid_mcp_child_link(
+    link: &SemanticActionLink,
+    parent: &SemanticAction,
+    child: &SemanticAction,
+) -> bool {
+    match link.role {
+        SemanticActionLinkRole::McpToolCallRequest => {
+            parent.kind != SemanticActionKind::McpToolCall
+                || child.kind != SemanticActionKind::McpRequest
+                || !mcp_child_references_parent(
+                    child,
+                    attrs::mcp::TOOL_CALL_ACTION_ID,
+                    parent,
+                    &format!("{}:request", parent.action_id),
+                )
+        }
+        SemanticActionLinkRole::McpToolCallResponse => {
+            parent.kind != SemanticActionKind::McpToolCall
+                || child.kind != SemanticActionKind::McpResponse
+                || !mcp_child_references_parent(
+                    child,
+                    attrs::mcp::TOOL_CALL_ACTION_ID,
+                    parent,
+                    &format!("{}:response", parent.action_id),
+                )
+        }
+        SemanticActionLinkRole::McpRequestStdout => {
+            parent.kind != SemanticActionKind::McpRequest
+                || child.kind != SemanticActionKind::McpStdout
+                || !mcp_child_references_parent(
+                    child,
+                    attrs::mcp::REQUEST_ACTION_ID,
+                    parent,
+                    &mcp_sibling_action_id(&parent.action_id, "request", "stdout"),
+                )
+        }
+        SemanticActionLinkRole::McpRequestClientSend => {
+            parent.kind != SemanticActionKind::McpRequest
+                || child.kind != SemanticActionKind::McpClientSend
+                || !mcp_child_references_parent(
+                    child,
+                    attrs::mcp::REQUEST_ACTION_ID,
+                    parent,
+                    &mcp_sibling_action_id(&parent.action_id, "request", "client_send"),
+                )
+        }
+        SemanticActionLinkRole::McpResponseStdin => {
+            parent.kind != SemanticActionKind::McpResponse
+                || child.kind != SemanticActionKind::McpStdin
+                || !mcp_child_references_parent(
+                    child,
+                    attrs::mcp::RESPONSE_ACTION_ID,
+                    parent,
+                    &mcp_sibling_action_id(&parent.action_id, "response", "stdin"),
+                )
+        }
+        SemanticActionLinkRole::McpResponseClientReceive => {
+            parent.kind != SemanticActionKind::McpResponse
+                || child.kind != SemanticActionKind::McpClientReceive
+                || !mcp_child_references_parent(
+                    child,
+                    attrs::mcp::RESPONSE_ACTION_ID,
+                    parent,
+                    &mcp_sibling_action_id(&parent.action_id, "response", "client_receive"),
+                )
+        }
+        _ => false,
+    }
+}
+
+fn mcp_child_references_parent(
+    child: &SemanticAction,
+    attr: &str,
+    parent: &SemanticAction,
+    fallback_child_action_id: &str,
+) -> bool {
+    child
+        .attributes
+        .get(attr)
+        .is_some_and(|action_id| action_id == &parent.action_id)
+        || child.action_id == fallback_child_action_id
+}
+
+fn mcp_sibling_action_id(action_id: &str, from_suffix: &str, to_suffix: &str) -> String {
+    let parent = action_id
+        .strip_suffix(&format!(":{from_suffix}"))
+        .unwrap_or(action_id);
+    format!("{parent}:{to_suffix}")
+}
+
 fn invalid_parent_identity_link(link: &SemanticActionLink, child: &SemanticAction) -> bool {
     (link.role == SemanticActionLinkRole::AgentPerformedAction
-        || link.role == SemanticActionLinkRole::CommandContainsCommandInvocation)
+        || link.role == SemanticActionLinkRole::CommandContainsCommandInvocation
+        || link.role == SemanticActionLinkRole::CommandContainsMcpToolCall)
         && child
             .attributes
             .get(PROCESS_PARENT_IDENTITY_STATE_ATTR)

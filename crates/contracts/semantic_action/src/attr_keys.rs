@@ -194,6 +194,36 @@ pub mod llm_response {
     pub const TOTAL_TOKENS: &str = "llm.response.total_tokens";
 }
 
+pub mod llm_tool_call {
+    pub const ID: &str = "llm.tool_call.id";
+    pub const NAME: &str = "llm.tool_call.name";
+}
+
+pub mod mcp {
+    pub const CLIENT_PID: &str = "mcp.client.pid";
+    pub const CLIENT_RECEIVE_ACTION_ID: &str = "mcp.client_receive.action_id";
+    pub const CLIENT_SEND_ACTION_ID: &str = "mcp.client_send.action_id";
+    pub const EVIDENCE_MODE: &str = "mcp.evidence.mode";
+    pub const EXCHANGE_INDEX: &str = "mcp.exchange.index";
+    pub const EXECUTION_STATUS: &str = "mcp.execution.status";
+    pub const MESSAGE_DIRECTION: &str = "mcp.message.direction";
+    pub const MESSAGE_ID: &str = "mcp.message.id";
+    pub const MESSAGE_METHOD: &str = "mcp.message.method";
+    pub const MESSAGE_SEQUENCE: &str = "mcp.message.sequence";
+    pub const REQUEST_ACTION_ID: &str = "mcp.request.action_id";
+    pub const REQUEST_ID: &str = "mcp.request.id";
+    pub const RESPONSE_ACTION_ID: &str = "mcp.response.action_id";
+    pub const SERVER_NAME: &str = "mcp.server.name";
+    pub const SESSION_ID: &str = "mcp.session.id";
+    pub const STDIN_ACTION_ID: &str = "mcp.stdin.action_id";
+    pub const STDOUT_ACTION_ID: &str = "mcp.stdout.action_id";
+    pub const TOOL_CALL_ACTION_ID: &str = "mcp.tool_call.action_id";
+    pub const TOOL_CALL_REQUEST_ID: &str = "mcp.tool_call.request_id";
+    pub const TOOL_ID: &str = "mcp.tool.id";
+    pub const TOOL_NAME: &str = "mcp.tool.name";
+    pub const TRANSPORT: &str = "mcp.transport";
+}
+
 pub mod network {
     pub const PROTOCOL_NAME: &str = "network.protocol.name";
     pub const PROTOCOL_VERSION: &str = "network.protocol.version";

@@ -12,17 +12,17 @@
       </div>
       <div ref="actionTreeCanvas" class="action-tree-canvas">
         <svg
-          v-if="httpExchangeArcs.length"
-          class="http-exchange-overlay"
+          v-if="messagePairArcs.length"
+          class="message-pair-overlay"
           :width="arcOverlaySize.width"
           :height="arcOverlaySize.height"
           :viewBox="`0 0 ${arcOverlaySize.width} ${arcOverlaySize.height}`"
           aria-hidden="true"
         >
           <path
-            v-for="arc in httpExchangeArcs"
+            v-for="arc in messagePairArcs"
             :key="arc.id"
-            class="http-exchange-arc"
+            :class="arc.className"
             :d="arc.path"
           />
         </svg>
@@ -90,7 +90,7 @@ import {
   buildVisibleActionTreeModel,
   mergeActionTreeChildren,
 } from './model';
-import { buildHttpExchangeArcOverlay } from './httpExchangeArcs';
+import { buildMessagePairArcOverlay } from './httpExchangeArcs';
 import { TREE_NODE_TYPES, UI_LIMITS } from './config';
 
 const props = defineProps({
@@ -117,10 +117,10 @@ const actionTreeCanvas = ref(null);
 const selectedDetailId = ref(null);
 const selectedDetail = ref(null);
 const detailError = ref('');
+const messagePairArcs = ref([]);
 const expandedNodeIds = ref(new Set());
 const llmNavigationBusy = ref(false);
 const llmNavigationError = ref('');
-const httpExchangeArcs = ref([]);
 const arcOverlaySize = ref({ width: 0, height: 0 });
 let activeDetailLoad = null;
 let arcRefreshFrame = 0;
@@ -156,19 +156,19 @@ watch(
 watch(
   () => [props.traceKey, props.query, treeModel.value.root],
   () => {
-    scheduleHttpExchangeArcRefresh();
+    scheduleMessagePairArcRefresh();
   },
   { flush: 'post' },
 );
 
 onMounted(() => {
   connectCanvasObservers();
-  scheduleHttpExchangeArcRefresh();
+  scheduleMessagePairArcRefresh();
 });
 
 onBeforeUnmount(() => {
   disconnectCanvasObservers();
-  cancelHttpExchangeArcRefresh();
+  cancelMessagePairArcRefresh();
 });
 
 async function selectNode(node) {
@@ -443,11 +443,11 @@ async function loadChildPage(visibleNode, target, offset, append, { throwOnError
     target.hasMoreChildren = Boolean(childData?.has_more);
     target.hasChildren = target.totalChildren > 0 || target.children.length > 0;
     syncVisibleNode(visibleNode, target);
-    scheduleHttpExchangeArcRefresh();
+    scheduleMessagePairArcRefresh();
   } catch (err) {
     target.error = String(err.message ?? err);
     syncVisibleNode(visibleNode, target);
-    scheduleHttpExchangeArcRefresh();
+    scheduleMessagePairArcRefresh();
     if (throwOnError) {
       throw err;
     }
@@ -515,7 +515,7 @@ function connectCanvasObservers() {
     return;
   }
   canvasMutationObserver = new MutationObserver(() => {
-    scheduleHttpExchangeArcRefresh();
+    scheduleMessagePairArcRefresh();
   });
   canvasMutationObserver.observe(canvas, {
     childList: true,
@@ -523,7 +523,7 @@ function connectCanvasObservers() {
   });
   if (typeof ResizeObserver !== 'undefined') {
     canvasResizeObserver = new ResizeObserver(() => {
-      scheduleHttpExchangeArcRefresh();
+      scheduleMessagePairArcRefresh();
     });
     canvasResizeObserver.observe(canvas);
   }
@@ -536,16 +536,16 @@ function disconnectCanvasObservers() {
   canvasResizeObserver = null;
 }
 
-function scheduleHttpExchangeArcRefresh() {
-  cancelHttpExchangeArcRefresh();
+function scheduleMessagePairArcRefresh() {
+  cancelMessagePairArcRefresh();
   arcRefreshFrame = window.requestAnimationFrame(async () => {
     arcRefreshFrame = 0;
     await nextTick();
-    refreshHttpExchangeArcs();
+    refreshMessagePairArcs();
   });
 }
 
-function cancelHttpExchangeArcRefresh() {
+function cancelMessagePairArcRefresh() {
   if (!arcRefreshFrame) {
     return;
   }
@@ -553,15 +553,15 @@ function cancelHttpExchangeArcRefresh() {
   arcRefreshFrame = 0;
 }
 
-function refreshHttpExchangeArcs() {
+function refreshMessagePairArcs() {
   const canvas = actionTreeCanvas.value;
   if (!canvas || !treeModel.value.root) {
-    httpExchangeArcs.value = [];
+    messagePairArcs.value = [];
     arcOverlaySize.value = { width: 0, height: 0 };
     return;
   }
-  const overlay = buildHttpExchangeArcOverlay(treeModel.value.root, canvas);
-  httpExchangeArcs.value = overlay.arcs;
+  const overlay = buildMessagePairArcOverlay(treeModel.value.root, canvas);
+  messagePairArcs.value = overlay.arcs;
   arcOverlaySize.value = overlay.size;
 }
 
@@ -633,7 +633,7 @@ function scrollNodeIntoView(nodeId) {
   padding: 34px 36px 132px;
 }
 
-.http-exchange-overlay {
+.message-pair-overlay {
   position: absolute;
   inset: 0 auto auto 0;
   z-index: 0;
@@ -649,6 +649,16 @@ function scrollNodeIntoView(nodeId) {
 .http-exchange-arc {
   fill: none;
   stroke: var(--trace-action-tree-arc);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 6 6;
+  vector-effect: non-scaling-stroke;
+}
+
+.mcp-exchange-arc {
+  fill: none;
+  stroke: rgba(124, 58, 237, 0.5);
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;

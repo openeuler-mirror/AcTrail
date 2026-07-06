@@ -29,6 +29,16 @@ pub mod llm_response {
     pub const PAYLOAD: &str = "llm.response.payload";
 }
 
+pub mod mcp {
+    pub const CLIENT_RECEIVE_PAYLOAD: &str = "mcp.client_receive.payload";
+    pub const CLIENT_SEND_PAYLOAD: &str = "mcp.client_send.payload";
+    pub const REQUEST_PAYLOAD: &str = "mcp.request.payload";
+    pub const RESPONSE_PAYLOAD: &str = "mcp.response.payload";
+    pub const STDIN_PAYLOAD: &str = "mcp.stdin.payload";
+    pub const STDOUT_PAYLOAD: &str = "mcp.stdout.payload";
+    pub const TOOL_CALL_PAYLOAD: &str = "mcp.tool_call.payload";
+}
+
 pub mod process {
     use super::SemanticActionKind;
 

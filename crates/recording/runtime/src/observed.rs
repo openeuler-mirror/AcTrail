@@ -189,6 +189,14 @@ impl<'a> ObservedRecordWriteSession<'a> {
         .map(ObservedRecordCommit::into_semantic_actions)
     }
 
+    pub fn persist_semantic_actions(
+        &mut self,
+        semantic_actions: SemanticActionBatch,
+    ) -> Result<SemanticActionBatch, RecordingError> {
+        self.persist_batch(ObservedRecordBatch::from_semantic_actions(semantic_actions))
+            .map(ObservedRecordCommit::into_semantic_actions)
+    }
+
     pub fn persist_event(
         &mut self,
         event: DomainEvent,

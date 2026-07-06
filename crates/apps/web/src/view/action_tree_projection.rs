@@ -176,15 +176,98 @@ fn load_semantic_action_links(
 }
 
 fn valid_actions(actions: Vec<SemanticAction>) -> Vec<SemanticAction> {
+    let mcp_server_wrapper_action_ids = mcp_server_wrapper_action_ids(&actions);
     let actions = actions
         .into_iter()
-        .filter(|action| !invalidated_action(action))
+        .filter(|action| {
+            !invalidated_action(action)
+                && !mcp_server_wrapper_action_ids.contains(&action.action_id)
+        })
         .collect::<Vec<_>>();
     let bulk_read_ranges = bulk_read_ranges(&actions);
     actions
         .into_iter()
         .filter(|action| !bulk_read_covered_file_read(action, &bulk_read_ranges))
         .collect()
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct ProcessCoreKey {
+    trace_id: TraceId,
+    pid: u32,
+    task_id: Option<u32>,
+    start_time_ticks: u64,
+    pid_namespace: Option<String>,
+}
+
+fn mcp_server_wrapper_action_ids(actions: &[SemanticAction]) -> BTreeSet<String> {
+    let mut mcp_server_commands = BTreeSet::<(ProcessCoreKey, String)>::new();
+    for action in actions
+        .iter()
+        .filter(|action| is_mcp_server_command(action))
+    {
+        let Some(command_line) = command_line(action) else {
+            continue;
+        };
+        mcp_server_commands.insert((process_core_key(action), command_line));
+    }
+    if mcp_server_commands.is_empty() {
+        return BTreeSet::new();
+    }
+    actions
+        .iter()
+        .filter(|action| mcp_server_wrapper_action(action))
+        .filter_map(|action| {
+            let command_line = command_line(action)?;
+            mcp_server_commands
+                .contains(&(process_core_key(action), command_line))
+                .then(|| action.action_id.clone())
+        })
+        .collect()
+}
+
+fn is_mcp_server_command(action: &SemanticAction) -> bool {
+    action.kind == SemanticActionKind::CommandInvocation
+        && action
+            .attributes
+            .get(attrs::invocation::KIND)
+            .is_some_and(|kind| kind == "mcp")
+}
+
+fn unclassified_command_invocation(action: &SemanticAction) -> bool {
+    action.kind == SemanticActionKind::CommandInvocation
+        && !action.attributes.contains_key(attrs::invocation::KIND)
+}
+
+fn mcp_server_wrapper_action(action: &SemanticAction) -> bool {
+    unclassified_command_invocation(action) || action.kind == SemanticActionKind::ProcessExec
+}
+
+fn process_core_key(action: &SemanticAction) -> ProcessCoreKey {
+    ProcessCoreKey {
+        trace_id: action.trace_id,
+        pid: action.process.pid,
+        task_id: action.process.task_id,
+        start_time_ticks: action.process.start_time_ticks,
+        pid_namespace: action
+            .process
+            .pid_namespace
+            .as_ref()
+            .map(|namespace| namespace.as_str().to_string()),
+    }
+}
+
+fn command_line(action: &SemanticAction) -> Option<String> {
+    [
+        attrs::command::LINE,
+        attrs::agent_child::COMMAND_LINE,
+        "command_line",
+    ]
+    .iter()
+    .find_map(|key| {
+        let value = action.attributes.get(*key)?.trim();
+        (!value.is_empty()).then(|| value.to_string())
+    })
 }
 
 fn valid_links(

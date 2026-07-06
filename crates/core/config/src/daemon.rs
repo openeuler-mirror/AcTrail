@@ -62,8 +62,9 @@ pub use operator::{
     StartupPluginsConfig, launch_seccomp_requirements,
 };
 pub use payload::{
-    DisabledOrPath, PayloadConfig, PayloadRedactionPolicy, PayloadSocketCaptureBackend,
-    PayloadSocketConfig, PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadStdioStorageMode,
+    DEFAULT_MCP_PARSE_BUFFER_MAX_BYTES, DisabledOrPath, PayloadConfig, PayloadMcpConfig,
+    PayloadRedactionPolicy, PayloadSocketCaptureBackend, PayloadSocketConfig,
+    PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadStdioStorageMode,
     PayloadTlsCaptureBackend, PayloadTlsConfig, PayloadTlsLibrary, PayloadTlsLibraryPath,
     PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource,
     PayloadTlsSyncRuntimeLibraryPath,

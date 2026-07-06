@@ -389,3 +389,62 @@ fn capability_requested(capabilities: &[CapabilityRequest], capability: &Capabil
         .iter()
         .any(|request| request.mode != RequestMode::Disabled && request.capability == *capability)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::OperatorConfig;
+    use crate::daemon::PayloadMcpConfig;
+
+    #[test]
+    fn default_operator_template_includes_mcp_parse_buffer_limit() {
+        let raw = OperatorConfig::default_hierarchical_template()
+            .expect("default operator config template renders");
+
+        assert!(
+            raw.contains("[payload.mcp]\nparse_buffer_max_bytes = 4194304"),
+            "default template should include payload.mcp.parse_buffer_max_bytes"
+        );
+        let config = OperatorConfig::parse(&raw).expect("default operator config parses");
+        assert_eq!(
+            config.payload_config.mcp,
+            PayloadMcpConfig {
+                parse_buffer_max_bytes: 4_194_304,
+            }
+        );
+    }
+
+    #[test]
+    fn custom_mcp_parse_buffer_limit_round_trips_through_operator_parse() {
+        let raw = OperatorConfig::default_hierarchical_template()
+            .expect("default operator config template renders")
+            .replace(
+                "parse_buffer_max_bytes = 4194304",
+                "parse_buffer_max_bytes = 12345",
+            );
+
+        let config = OperatorConfig::parse(&raw).expect("custom operator config parses");
+
+        assert_eq!(config.payload_config.mcp.parse_buffer_max_bytes, 12345);
+        assert!(
+            config
+                .to_hierarchical_toml()
+                .expect("operator config renders")
+                .contains("[payload.mcp]\nparse_buffer_max_bytes = 12345")
+        );
+    }
+
+    #[test]
+    fn zero_mcp_parse_buffer_limit_fails_validation() {
+        let raw = OperatorConfig::default_hierarchical_template()
+            .expect("default operator config template renders")
+            .replace(
+                "parse_buffer_max_bytes = 4194304",
+                "parse_buffer_max_bytes = 0",
+            );
+
+        let error = OperatorConfig::parse(&raw).expect_err("zero parse buffer limit should fail");
+
+        assert!(error.contains("payload.mcp.parse_buffer_max_bytes"));
+        assert!(error.contains("value must be positive"));
+    }
+}

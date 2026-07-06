@@ -1,6 +1,8 @@
 use std::time::{Duration, SystemTime};
 
-use config_core::daemon::{AgentInvocationConfig, FileObservationConfig, SemanticRetentionConfig};
+use config_core::daemon::{
+    AgentInvocationConfig, FileObservationConfig, PayloadMcpConfig, SemanticRetentionConfig,
+};
 use model_core::event::{DomainEvent, EventPayload};
 use model_core::ids::EventId;
 use model_core::process::ProcessIdentity;
@@ -363,6 +365,7 @@ fn tty_unlisted_operation_is_consumed_without_direct_file_action() {
         },
         SemanticRetentionConfig::default(),
         file_observation,
+        PayloadMcpConfig::default(),
     );
     let process = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
     let event = tty_file_event(
