@@ -79,6 +79,12 @@ impl RetentionStore for SqliteStorage {
             .map_err(|error| RetentionError::new("delete_events", error.to_string()))?;
         transaction
             .execute(
+                "DELETE FROM payload_segments WHERE trace_id = ?1",
+                params![trace_id.get()],
+            )
+            .map_err(|error| RetentionError::new("delete_payload_segments", error.to_string()))?;
+        transaction
+            .execute(
                 "DELETE FROM semantic_action_link_evidence WHERE trace_id = ?1",
                 params![trace_id.get()],
             )

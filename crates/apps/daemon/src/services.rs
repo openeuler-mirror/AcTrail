@@ -15,6 +15,7 @@ pub(crate) mod payload;
 pub(crate) mod payload_gate;
 pub(crate) mod process_seccomp;
 pub(crate) mod resource_metrics;
+pub(crate) mod retention;
 pub(crate) mod seccomp_notify;
 pub(crate) mod seccomp_socket;
 pub(crate) mod seccomp_tls;
@@ -28,4 +29,9 @@ pub(crate) mod workload_diagnostics;
 #[cfg(test)]
 pub(crate) mod tests;
 
-pub(crate) use wiring::{build_runtime_wiring, build_runtime_wiring_with_provider_rule_set};
+#[cfg(test)]
+pub(crate) use wiring::build_runtime_wiring;
+pub(crate) use wiring::{
+    build_runtime_wiring_with_provider_rule_set_and_storage_retention,
+    build_runtime_wiring_with_storage_retention,
+};

@@ -94,6 +94,7 @@ impl FinalizationDocument {
 pub(super) struct StorageDocument {
     pub backend: String,
     pub sqlite: SqliteStorageDocument,
+    pub retention: StorageRetentionDocument,
 }
 
 impl Default for StorageDocument {
@@ -101,6 +102,7 @@ impl Default for StorageDocument {
         Self {
             backend: "sqlite".to_string(),
             sqlite: SqliteStorageDocument::default(),
+            retention: StorageRetentionDocument::default(),
         }
     }
 }
@@ -136,6 +138,63 @@ impl Default for SqliteStorageDocument {
             path: "/var/lib/actrail/actrail.sqlite".to_string(),
             busy_timeout_ms: 5000,
         }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct StorageRetentionDocument {
+    pub enabled: bool,
+    pub max_trace_age: String,
+    pub sweep_interval: String,
+    pub min_terminal_age: String,
+    pub max_traces_per_sweep: u32,
+    pub protected_tags: Vec<String>,
+    pub checkpoint_after_sweep: bool,
+}
+
+impl Default for StorageRetentionDocument {
+    fn default() -> Self {
+        let config = StorageRetentionConfig::default();
+        Self::from_config(&config)
+    }
+}
+
+impl StorageRetentionDocument {
+    pub(super) fn from_config(config: &StorageRetentionConfig) -> Self {
+        Self {
+            enabled: config.enabled,
+            max_trace_age: duration_as_string(config.max_trace_age),
+            sweep_interval: duration_as_string(config.sweep_interval),
+            min_terminal_age: duration_as_string(config.min_terminal_age),
+            max_traces_per_sweep: config.max_traces_per_sweep,
+            protected_tags: config.protected_tags.clone(),
+            checkpoint_after_sweep: config.checkpoint_after_sweep,
+        }
+    }
+
+    pub(super) fn to_config(&self) -> Result<StorageRetentionConfig, String> {
+        Ok(StorageRetentionConfig {
+            enabled: self.enabled,
+            max_trace_age: parse_required_duration(
+                "storage.retention.max_trace_age",
+                &self.max_trace_age,
+            )?,
+            sweep_interval: parse_required_duration(
+                "storage.retention.sweep_interval",
+                &self.sweep_interval,
+            )?,
+            min_terminal_age: parse_required_duration(
+                "storage.retention.min_terminal_age",
+                &self.min_terminal_age,
+            )?,
+            max_traces_per_sweep: require_positive_u32(
+                "storage.retention.max_traces_per_sweep",
+                self.max_traces_per_sweep,
+            )?,
+            protected_tags: self.protected_tags.clone(),
+            checkpoint_after_sweep: self.checkpoint_after_sweep,
+        })
     }
 }
 

@@ -80,6 +80,77 @@ pub(super) fn parse_duration_millis(
     Ok(Some(Duration::from_millis(value)))
 }
 
+pub(super) fn parse_required_duration(key: &'static str, raw: &str) -> Result<Duration, String> {
+    let raw = required_non_empty(key, raw)?;
+    if let Some(number) = raw.strip_suffix("min") {
+        return duration_from_secs_unit(key, raw, number, 60);
+    }
+    if let Some(number) = raw.strip_suffix("ms") {
+        let value = parse_positive_duration_number(key, raw, number)?;
+        return Ok(Duration::from_millis(value));
+    }
+    if let Some(number) = raw.strip_suffix('s') {
+        return duration_from_secs_unit(key, raw, number, 1);
+    }
+    if let Some(number) = raw.strip_suffix('m') {
+        return duration_from_secs_unit(key, raw, number, 60);
+    }
+    if let Some(number) = raw.strip_suffix('h') {
+        return duration_from_secs_unit(key, raw, number, 60 * 60);
+    }
+    if let Some(number) = raw.strip_suffix('d') {
+        return duration_from_secs_unit(key, raw, number, 24 * 60 * 60);
+    }
+    Err(format!(
+        "invalid {key}: expected a duration with unit ms, s, m, min, h, or d"
+    ))
+}
+
+pub(super) fn duration_as_string(value: Duration) -> String {
+    let millis = value.as_millis();
+    if value.subsec_nanos() == 0 {
+        let seconds = value.as_secs();
+        if seconds % (24 * 60 * 60) == 0 {
+            return format!("{}d", seconds / (24 * 60 * 60));
+        }
+        if seconds % (60 * 60) == 0 {
+            return format!("{}h", seconds / (60 * 60));
+        }
+        if seconds % 60 == 0 {
+            return format!("{}m", seconds / 60);
+        }
+        return format!("{seconds}s");
+    }
+    format!("{millis}ms")
+}
+
+fn duration_from_secs_unit(
+    key: &'static str,
+    raw: &str,
+    number: &str,
+    multiplier: u64,
+) -> Result<Duration, String> {
+    let value = parse_positive_duration_number(key, raw, number)?;
+    value
+        .checked_mul(multiplier)
+        .map(Duration::from_secs)
+        .ok_or_else(|| format!("invalid {key}: duration overflow"))
+}
+
+fn parse_positive_duration_number(
+    key: &'static str,
+    raw: &str,
+    number: &str,
+) -> Result<u64, String> {
+    let value = number
+        .parse::<u64>()
+        .map_err(|error| format!("invalid {key} duration {raw}: {error}"))?;
+    if value == u64::default() {
+        return Err(format!("invalid {key}: duration must be positive"));
+    }
+    Ok(value)
+}
+
 pub(super) fn capability_as_str(capability: &Capability) -> &'static str {
     capability.as_str()
 }

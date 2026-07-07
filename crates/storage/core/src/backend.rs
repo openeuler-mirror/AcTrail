@@ -225,4 +225,5 @@ pub trait StorageBackend {
         trace_id: TraceId,
         tombstone: TraceTombstone,
     ) -> Result<(), StorageError>;
+    fn checkpoint(&mut self) -> Result<(), StorageError>;
 }

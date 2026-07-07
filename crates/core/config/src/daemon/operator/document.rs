@@ -33,7 +33,7 @@ use super::super::{
     ProcessSeccompSyscall, ResourceMetricsConfig, SeccompNotifyConfig, SemanticContentOwner,
     SemanticRetentionConfig, SocketPermissions, SseDataPolicy, SseEventContentRetention,
     StartupPluginFailurePolicy, StartupPluginLoadConfig, StartupPluginsConfig,
-    TraceFinalizationConfig, WebServerConfig, WorkloadDiagnosticsConfig,
+    StorageRetentionConfig, TraceFinalizationConfig, WebServerConfig, WorkloadDiagnosticsConfig,
 };
 use super::{
     OperatorConfig, validate_application_protocol_config, validate_enforcement_config,
@@ -175,6 +175,7 @@ impl OperatorDocument {
                 path: config.storage.path().display().to_string(),
                 busy_timeout_ms: config.storage.sqlite_busy_timeout_ms(),
             },
+            retention: StorageRetentionDocument::from_config(&config.storage_retention),
         };
         Self {
             control: ControlDocument {
@@ -373,6 +374,7 @@ impl OperatorDocument {
             )?,
             pid_file: PathBuf::from(&self.control.pid_file),
             storage: self.storage.to_config()?,
+            storage_retention: self.storage.retention.to_config()?,
             web: self.web.to_config()?,
             export_config: self.export.snapshot.to_config(),
             export_runtime: self.export.runtime.to_config()?,

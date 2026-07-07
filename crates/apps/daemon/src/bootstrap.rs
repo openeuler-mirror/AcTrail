@@ -8,7 +8,7 @@ use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, CommandControlConfig, DiagnosticLogLevel,
     EbpfCollectorConfig, EnforcementConfig, FileObservationConfig, NetworkControlConfig,
     PayloadConfig, ProcessSeccompConfig, ResourceMetricsConfig, RuntimeExportConfig,
-    SeccompNotifyConfig, SemanticRetentionConfig, TraceFinalizationConfig,
+    SeccompNotifyConfig, SemanticRetentionConfig, StorageRetentionConfig, TraceFinalizationConfig,
     WorkloadDiagnosticsConfig,
 };
 use config_core::provider_rules::ProviderRuleSetConfig;
@@ -23,7 +23,10 @@ use crate::runtime_wiring::DaemonRuntimeWiring;
 use crate::service_host::{AttachService, DaemonServiceHost};
 use crate::services::attach::StorageAttachService;
 use crate::services::workload_diagnostics::WorkloadDiagnostics;
-use crate::services::{build_runtime_wiring, build_runtime_wiring_with_provider_rule_set};
+use crate::services::{
+    build_runtime_wiring_with_provider_rule_set_and_storage_retention,
+    build_runtime_wiring_with_storage_retention,
+};
 
 pub struct DaemonBootstrap<A> {
     wiring: DaemonRuntimeWiring<A>,
@@ -62,6 +65,7 @@ impl LocalDaemonServer {
         file_observation: FileObservationConfig,
         application_protocol: ApplicationProtocolConfig,
         resource_metrics: ResourceMetricsConfig,
+        storage_retention: StorageRetentionConfig,
         trace_finalization: TraceFinalizationConfig,
         workload_diagnostics_config: WorkloadDiagnosticsConfig,
         export_runtime: RuntimeExportConfig,
@@ -70,7 +74,7 @@ impl LocalDaemonServer {
         network_control: NetworkControlConfig,
     ) -> Result<Self, ControlError> {
         let workload_diagnostics = WorkloadDiagnostics::new(workload_diagnostics_config);
-        let wiring = build_runtime_wiring(
+        let wiring = build_runtime_wiring_with_storage_retention(
             storage_config,
             profiles,
             ebpf_config,
@@ -84,6 +88,7 @@ impl LocalDaemonServer {
             file_observation,
             application_protocol,
             resource_metrics,
+            storage_retention,
             trace_finalization,
             workload_diagnostics.clone(),
             export_runtime,
@@ -112,6 +117,7 @@ impl LocalDaemonServer {
         file_observation: FileObservationConfig,
         application_protocol: ApplicationProtocolConfig,
         resource_metrics: ResourceMetricsConfig,
+        storage_retention: StorageRetentionConfig,
         trace_finalization: TraceFinalizationConfig,
         workload_diagnostics_config: WorkloadDiagnosticsConfig,
         export_runtime: RuntimeExportConfig,
@@ -121,7 +127,7 @@ impl LocalDaemonServer {
         provider_rule_set: &ProviderRuleSetConfig,
     ) -> Result<Self, ControlError> {
         let workload_diagnostics = WorkloadDiagnostics::new(workload_diagnostics_config);
-        let wiring = build_runtime_wiring_with_provider_rule_set(
+        let wiring = build_runtime_wiring_with_provider_rule_set_and_storage_retention(
             storage_config,
             profiles,
             ebpf_config,
@@ -135,6 +141,7 @@ impl LocalDaemonServer {
             file_observation,
             application_protocol,
             resource_metrics,
+            storage_retention,
             trace_finalization,
             workload_diagnostics.clone(),
             export_runtime,
