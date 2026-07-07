@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 use std::time::SystemTime;
 
-use config_core::daemon::{AgentInvocationConfig, FileObservationConfig, SemanticRetentionConfig};
+use config_core::daemon::{
+    AgentInvocationConfig, FileObservationConfig, PayloadMcpConfig, SemanticRetentionConfig,
+};
 use model_core::event::{
     ApplicationPayload, DomainEvent, EventEnvelope, EventFlags, EventKind, EventPayload,
     FilePayload, ProcessPayload,
@@ -71,6 +73,23 @@ pub(super) fn runtime() -> LiveSemanticActionRuntime {
         },
         SemanticRetentionConfig::default(),
         FileObservationConfig::default(),
+        PayloadMcpConfig::default(),
+    )
+}
+
+pub(super) fn runtime_with_mcp_parse_buffer_max_bytes(
+    parse_buffer_max_bytes: u64,
+) -> LiveSemanticActionRuntime {
+    LiveSemanticActionRuntime::new(
+        AgentInvocationConfig {
+            enabled: true,
+            commands: vec!["xiaoo".to_string()],
+        },
+        SemanticRetentionConfig::default(),
+        FileObservationConfig::default(),
+        PayloadMcpConfig {
+            parse_buffer_max_bytes,
+        },
     )
 }
 
@@ -383,6 +402,42 @@ pub(super) fn outbound_http1_payload_segment_with_bytes(
         sequence,
         bytes,
     )
+}
+
+pub(super) fn stdio_payload_segment_with_bytes(
+    process: ProcessIdentity,
+    direction: PayloadDirection,
+    segment_id: PayloadSegmentId,
+    operation_id: u64,
+    sequence: u64,
+    stream_key: &str,
+    bytes: Vec<u8>,
+) -> PayloadSegment {
+    let size = bytes.len() as u64;
+    PayloadSegment {
+        segment_id,
+        trace_id: TRACE_ID,
+        observed_at: observed_at(),
+        process,
+        source_boundary: PayloadSourceBoundary::Stdio,
+        content_state: PayloadContentState::Plaintext,
+        direction,
+        stream_key: PayloadStreamKey::new(stream_key),
+        sequence,
+        original_size: size,
+        captured_size: size,
+        operation_id,
+        operation_offset: PAYLOAD_OFFSET,
+        operation_original_size: size,
+        operation_captured_size: size,
+        operation_completion_state: PayloadOperationCompletionState::Success,
+        truncation: PayloadTruncationState::Complete,
+        redaction: PayloadRedactionState::Unredacted,
+        library: "stdio".to_string(),
+        symbol: "stdio_payload".to_string(),
+        protocol_hint: None,
+        bytes,
+    }
 }
 
 pub(super) fn response_segment_id(index: usize) -> PayloadSegmentId {

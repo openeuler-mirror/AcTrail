@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::live::process_parent::{parent_identity_has_conflict, parent_process_from_action};
 use model_core::ids::TraceId;
 use model_core::process::ProcessMembership;
 use semantic_action::{
@@ -9,9 +10,8 @@ use semantic_action::{
 
 use super::index::LineageIndex;
 use super::{
-    ATTR_AGENT_ACTION_SEQUENCE, ATTR_LINK_SOURCE, ATTR_LINK_VALID,
-    ATTR_PROCESS_PARENT_IDENTITY_STATE, LINK_SOURCE_PROCESS_LINEAGE, LINK_VALID_FALSE,
-    PROCESS_PARENT_IDENTITY_STATE_CONFLICT,
+    ATTR_AGENT_ACTION_SEQUENCE, ATTR_LINK_SOURCE, ATTR_LINK_VALID, LINK_SOURCE_PROCESS_LINEAGE,
+    LINK_VALID_FALSE,
 };
 
 pub fn derive_lineage_links(
@@ -74,6 +74,7 @@ fn derive_command_link(
     }
     let start = match action.kind {
         SemanticActionKind::CommandInvocation => index.parent_process(&action.process),
+        SemanticActionKind::McpToolCall => parent_process_from_action(action),
         _ => Some(action.process.clone()),
     }?;
     let parent = index.nearest_command(&start, action.start_time, &action.action_id)?;
@@ -258,6 +259,10 @@ fn command_child_role(action: &SemanticAction) -> Option<SemanticActionLinkRole>
             .then_some(SemanticActionLinkRole::CommandContainsLlmCall)
     })
     .or_else(|| {
+        (action.kind == SemanticActionKind::McpToolCall)
+            .then_some(SemanticActionLinkRole::CommandContainsMcpToolCall)
+    })
+    .or_else(|| {
         (action.kind == SemanticActionKind::AgentInvocation)
             .then_some(SemanticActionLinkRole::CommandContainsCommandInvocation)
     })
@@ -292,13 +297,6 @@ fn is_nested_file_write_event(action: &SemanticAction) -> bool {
         )
 }
 
-fn parent_identity_has_conflict(action: &SemanticAction) -> bool {
-    action
-        .attributes
-        .get(ATTR_PROCESS_PARENT_IDENTITY_STATE)
-        .is_some_and(|state| state == PROCESS_PARENT_IDENTITY_STATE_CONFLICT)
-}
-
 fn valid_link(link: &SemanticActionLink) -> bool {
     link.valid
         && !link
@@ -321,6 +319,7 @@ fn derived_role(role: SemanticActionLinkRole) -> bool {
             | SemanticActionLinkRole::CommandContainsProcessForkAttempt
             | SemanticActionLinkRole::CommandContainsCommandInvocation
             | SemanticActionLinkRole::CommandContainsLlmCall
+            | SemanticActionLinkRole::CommandContainsMcpToolCall
     )
 }
 

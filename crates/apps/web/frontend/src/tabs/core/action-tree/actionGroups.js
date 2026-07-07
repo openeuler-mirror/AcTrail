@@ -1,9 +1,17 @@
-import { TREE_NODE_TYPES, UI_LIMITS } from './config';
-import { compactMeta, compactRows, kindClass, shortTime } from './common';
+import { TREE_NODE_TYPES, UI_LIMITS } from './config.js';
+import { compactMeta, compactRows, kindClass, shortTime } from './common.js';
 
 const GROUP_KIND = 'action.group';
 const SAME_KIND_RULE = 'same-kind';
-const NON_GROUPABLE_KINDS = new Set(['llm.call', 'llm.request', 'llm.response']);
+const NON_GROUPABLE_KINDS = new Set([
+  'llm.call',
+  'llm.request',
+  'llm.response',
+  'mcp.stdin',
+  'mcp.stdout',
+  'mcp.client_send',
+  'mcp.client_receive',
+]);
 
 export function groupActionNodes(nodes) {
   const minActions = UI_LIMITS.actionGroupMinActions;
@@ -20,7 +28,7 @@ export function groupActionNodes(nodes) {
       grouped.push(node);
       continue;
     }
-    if (run.length && run[0].kind !== node.kind) {
+    if (run.length && groupCandidateKey(run[0]) !== groupCandidateKey(node)) {
       flushRun(grouped, run, minActions);
       run = [];
     }
@@ -85,12 +93,13 @@ function actionGroupNode(children) {
   const first = children[0];
   const last = children[children.length - 1];
   const childKind = first.kind;
+  const groupKey = actionGroupKey(first);
   const started = nodeStartTime(first);
   const ended = nodeEndTime(last);
   const status = statusSummary(children);
   const label = first.semanticLabel || first.title || childKind;
   const title = `${label} (${children.length})`;
-  const id = `group:${SAME_KIND_RULE}:${childKind}:${first.id}:${last.id}`;
+  const id = `group:${SAME_KIND_RULE}:${groupKey}:${first.id}:${last.id}`;
   return {
     id,
     nodeType: TREE_NODE_TYPES.actionGroup,
@@ -99,7 +108,7 @@ function actionGroupNode(children) {
     kindClass: kindClass(GROUP_KIND),
     visualClass: 'action-group',
     groupRule: SAME_KIND_RULE,
-    groupKey: childKind,
+    groupKey,
     title,
     meta: compactMeta([childKind, timeRange(started, ended), status]),
     metaItems: compactMetaItems([
@@ -123,6 +132,7 @@ function actionGroupNode(children) {
       kind: GROUP_KIND,
       rows: compactRows({
         group_rule: SAME_KIND_RULE,
+        semantic_label: label,
         child_kind: childKind,
         actions: children.length,
         started,
@@ -132,6 +142,8 @@ function actionGroupNode(children) {
       raw: {
         kind: GROUP_KIND,
         group_rule: SAME_KIND_RULE,
+        group_key: groupKey,
+        semantic_label: label,
         child_kind: childKind,
         start_time: started,
         end_time: ended,
@@ -159,7 +171,7 @@ function groupCandidateKey(node) {
     return node.groupKey;
   }
   if (sameKindCandidate(node)) {
-    return node.kind;
+    return actionGroupKey(node);
   }
   return '';
 }
@@ -172,6 +184,10 @@ function groupCandidateActions(node) {
     return [node];
   }
   return [];
+}
+
+function actionGroupKey(node) {
+  return `${node.kind}:${node.semanticLabel || node.title || node.kind}`;
 }
 
 function statusSummary(nodes) {

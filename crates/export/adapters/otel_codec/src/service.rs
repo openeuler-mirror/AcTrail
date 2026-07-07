@@ -178,6 +178,13 @@ fn span_kind(kind: SemanticActionKind) -> &'static str {
         | SemanticActionKind::FileTtyIo
         | SemanticActionKind::FileBulkRead
         | SemanticActionKind::FsEnumerate
+        | SemanticActionKind::McpToolCall
+        | SemanticActionKind::McpRequest
+        | SemanticActionKind::McpResponse
+        | SemanticActionKind::McpClientSend
+        | SemanticActionKind::McpClientReceive
+        | SemanticActionKind::McpStdin
+        | SemanticActionKind::McpStdout
         | SemanticActionKind::SseStream
         | SemanticActionKind::SseEvent
         | SemanticActionKind::EnforcementDecision => "SPAN_KIND_INTERNAL",
@@ -237,6 +244,7 @@ fn link_invalidated_by_child_parent_identity(
             link.role,
             SemanticActionLinkRole::AgentPerformedAction
                 | SemanticActionLinkRole::CommandContainsCommandInvocation
+                | SemanticActionLinkRole::CommandContainsMcpToolCall
         )
 }
 
@@ -249,6 +257,13 @@ fn link_is_parent_child(role: SemanticActionLinkRole) -> bool {
             | SemanticActionLinkRole::CommandContainsProcessExec
             | SemanticActionLinkRole::CommandContainsCommandInvocation
             | SemanticActionLinkRole::CommandContainsLlmCall
+            | SemanticActionLinkRole::CommandContainsMcpToolCall
+            | SemanticActionLinkRole::McpToolCallRequest
+            | SemanticActionLinkRole::McpToolCallResponse
+            | SemanticActionLinkRole::McpRequestStdout
+            | SemanticActionLinkRole::McpResponseStdin
+            | SemanticActionLinkRole::McpRequestClientSend
+            | SemanticActionLinkRole::McpResponseClientReceive
             | SemanticActionLinkRole::FileWriteContainsFileEvent
             | SemanticActionLinkRole::AgentInvocationExec
             | SemanticActionLinkRole::AgentInvocationChildLlmRequest
@@ -265,6 +280,13 @@ enum ParentRolePriority {
     CommandContainsProcessExec,
     CommandContainsCommandInvocation,
     CommandContainsLlmCall,
+    CommandContainsMcpToolCall,
+    McpToolCallRequest,
+    McpToolCallResponse,
+    McpRequestStdout,
+    McpResponseStdin,
+    McpRequestClientSend,
+    McpResponseClientReceive,
     AgentPerformedAction,
     CommandContainsProcessForkAttempt,
     CommandContainsFileAccess,
@@ -290,6 +312,17 @@ fn parent_role_priority(role: SemanticActionLinkRole) -> ParentRolePriority {
         }
         SemanticActionLinkRole::CommandContainsLlmCall => {
             ParentRolePriority::CommandContainsLlmCall
+        }
+        SemanticActionLinkRole::CommandContainsMcpToolCall => {
+            ParentRolePriority::CommandContainsMcpToolCall
+        }
+        SemanticActionLinkRole::McpToolCallRequest => ParentRolePriority::McpToolCallRequest,
+        SemanticActionLinkRole::McpToolCallResponse => ParentRolePriority::McpToolCallResponse,
+        SemanticActionLinkRole::McpRequestStdout => ParentRolePriority::McpRequestStdout,
+        SemanticActionLinkRole::McpResponseStdin => ParentRolePriority::McpResponseStdin,
+        SemanticActionLinkRole::McpRequestClientSend => ParentRolePriority::McpRequestClientSend,
+        SemanticActionLinkRole::McpResponseClientReceive => {
+            ParentRolePriority::McpResponseClientReceive
         }
         SemanticActionLinkRole::CommandContainsProcessForkAttempt => {
             ParentRolePriority::CommandContainsProcessForkAttempt
@@ -359,4 +392,271 @@ fn unix_nanos(value: SystemTime) -> u128 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    use model_core::ids::{ProfileName, TraceId, TraceName};
+    use model_core::process::ProcessIdentity;
+    use model_core::trace::TraceRecord;
+    use semantic_action::{
+        SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionLink,
+        SemanticActionLinkConfidence, SemanticActionLinkRole, SemanticActionStatus,
+        attr_keys as attrs,
+    };
+    use serde_json::Value;
+
+    use super::render_otlp_json;
+
+    #[test]
+    fn parent_identity_conflict_hides_mcp_parent_span_link() {
+        let trace_id = TraceId::new(1);
+        let client = ProcessIdentity::new(100, 1, 1);
+        let server = ProcessIdentity::new(101, 2, 2);
+        let command = action(
+            trace_id,
+            "command",
+            SemanticActionKind::CommandInvocation,
+            client.clone(),
+            1,
+        );
+        let mut mcp = action(
+            trace_id,
+            "mcp-tool",
+            SemanticActionKind::McpToolCall,
+            server,
+            2,
+        );
+        mcp.attributes.insert(
+            attrs::process_parent::IDENTITY_STATE.to_string(),
+            "conflict".to_string(),
+        );
+        let document = render_otlp_json(
+            &trace(trace_id, client),
+            &[command, mcp],
+            &[link(
+                trace_id,
+                "command",
+                "mcp-tool",
+                SemanticActionLinkRole::CommandContainsMcpToolCall,
+            )],
+        )
+        .expect("render otlp json");
+        let document: Value = serde_json::from_str(&document).expect("valid otlp json");
+        let spans = document
+            .pointer("/resourceSpans/0/scopeSpans/0/spans")
+            .and_then(Value::as_array)
+            .expect("spans array");
+        let mcp_span = spans
+            .iter()
+            .find(|span| span.get("name").and_then(Value::as_str) == Some("mcp-tool"))
+            .expect("mcp span");
+
+        assert!(mcp_span.get("parentSpanId").is_none());
+    }
+
+    #[test]
+    fn remote_mcp_tool_call_attributes_export_to_otel_span() {
+        let trace_id = TraceId::new(2);
+        let client = ProcessIdentity::new(200, 3, 3);
+        let mut mcp = action(
+            trace_id,
+            "remote-mcp-tool",
+            SemanticActionKind::McpToolCall,
+            client.clone(),
+            1,
+        );
+        mcp.attributes.insert(
+            attrs::mcp::TRANSPORT.to_string(),
+            "streamable_http".to_string(),
+        );
+        mcp.attributes.insert(
+            attrs::mcp::TOOL_NAME.to_string(),
+            "actrail_remote_probe.emit_remote_marker".to_string(),
+        );
+        mcp.attributes
+            .insert(attrs::mcp::REQUEST_ID.to_string(), "81".to_string());
+        mcp.attributes
+            .insert(attrs::mcp::CLIENT_PID.to_string(), client.pid.to_string());
+        mcp.attributes
+            .insert(attrs::http_request::METHOD.to_string(), "POST".to_string());
+        mcp.attributes.insert(
+            attrs::server::ADDRESS.to_string(),
+            "remote.example.test".to_string(),
+        );
+        mcp.attributes
+            .insert(attrs::url::PATH.to_string(), "/mcp".to_string());
+
+        let document =
+            render_otlp_json(&trace(trace_id, client), &[mcp], &[]).expect("render otlp json");
+        let document: Value = serde_json::from_str(&document).expect("valid otlp json");
+        let span = document
+            .pointer("/resourceSpans/0/scopeSpans/0/spans/0")
+            .expect("mcp span");
+        let attrs = span
+            .get("attributes")
+            .and_then(Value::as_array)
+            .expect("span attributes");
+
+        assert_eq!(
+            span_attr(attrs, "actrail.action.kind"),
+            Some("mcp.tool_call")
+        );
+        assert_eq!(span_attr(attrs, "mcp.transport"), Some("streamable_http"));
+        assert_eq!(
+            span_attr(attrs, "mcp.tool.name"),
+            Some("actrail_remote_probe.emit_remote_marker")
+        );
+        assert_eq!(span_attr(attrs, "http.request.method"), Some("POST"));
+        assert_eq!(
+            span_attr(attrs, "server.address"),
+            Some("remote.example.test")
+        );
+        assert_eq!(span_attr(attrs, "url.path"), Some("/mcp"));
+    }
+
+    #[test]
+    fn remote_mcp_client_payload_links_export_as_parent_span_links() {
+        let trace_id = TraceId::new(3);
+        let client = ProcessIdentity::new(201, 4, 4);
+        let request = action(
+            trace_id,
+            "remote-mcp-tool:request",
+            SemanticActionKind::McpRequest,
+            client.clone(),
+            1,
+        );
+        let client_send = action(
+            trace_id,
+            "remote-mcp-tool:client_send",
+            SemanticActionKind::McpClientSend,
+            client.clone(),
+            2,
+        );
+        let response = action(
+            trace_id,
+            "remote-mcp-tool:response",
+            SemanticActionKind::McpResponse,
+            client.clone(),
+            3,
+        );
+        let client_receive = action(
+            trace_id,
+            "remote-mcp-tool:client_receive",
+            SemanticActionKind::McpClientReceive,
+            client.clone(),
+            4,
+        );
+
+        let document = render_otlp_json(
+            &trace(trace_id, client),
+            &[request, client_send, response, client_receive],
+            &[
+                link(
+                    trace_id,
+                    "remote-mcp-tool:request",
+                    "remote-mcp-tool:client_send",
+                    SemanticActionLinkRole::McpRequestClientSend,
+                ),
+                link(
+                    trace_id,
+                    "remote-mcp-tool:response",
+                    "remote-mcp-tool:client_receive",
+                    SemanticActionLinkRole::McpResponseClientReceive,
+                ),
+            ],
+        )
+        .expect("render otlp json");
+        let document: Value = serde_json::from_str(&document).expect("valid otlp json");
+        let spans = document
+            .pointer("/resourceSpans/0/scopeSpans/0/spans")
+            .and_then(Value::as_array)
+            .expect("spans array");
+        let client_send_span = span_named(spans, "remote-mcp-tool:client_send");
+        let client_receive_span = span_named(spans, "remote-mcp-tool:client_receive");
+        let request_span_id = super::otel_span_id("remote-mcp-tool:request");
+        let response_span_id = super::otel_span_id("remote-mcp-tool:response");
+
+        assert_eq!(
+            client_send_span.get("parentSpanId").and_then(Value::as_str),
+            Some(request_span_id.as_str())
+        );
+        assert_eq!(
+            client_receive_span
+                .get("parentSpanId")
+                .and_then(Value::as_str),
+            Some(response_span_id.as_str())
+        );
+    }
+
+    fn trace(trace_id: TraceId, process: ProcessIdentity) -> TraceRecord {
+        TraceRecord::new(
+            trace_id,
+            process,
+            TraceName::new("test trace"),
+            ProfileName::new("test"),
+            UNIX_EPOCH,
+        )
+    }
+
+    fn action(
+        trace_id: TraceId,
+        action_id: &str,
+        kind: SemanticActionKind,
+        process: ProcessIdentity,
+        start_millis: u64,
+    ) -> SemanticAction {
+        SemanticAction {
+            action_id: action_id.to_string(),
+            trace_id,
+            kind,
+            title: action_id.to_string(),
+            start_time: UNIX_EPOCH + Duration::from_millis(start_millis),
+            end_time: Some(UNIX_EPOCH + Duration::from_millis(start_millis + 1)),
+            process,
+            status: SemanticActionStatus::Success,
+            completeness: SemanticActionCompleteness::Complete,
+            confidence_millis: None,
+            attributes: BTreeMap::new(),
+            evidence: Vec::new(),
+        }
+    }
+
+    fn link(
+        trace_id: TraceId,
+        parent_action_id: &str,
+        child_action_id: &str,
+        role: SemanticActionLinkRole,
+    ) -> SemanticActionLink {
+        SemanticActionLink {
+            trace_id,
+            parent_action_id: parent_action_id.to_string(),
+            child_action_id: child_action_id.to_string(),
+            role,
+            confidence: SemanticActionLinkConfidence::Observed,
+            valid: true,
+            evidence: Vec::new(),
+            attributes: BTreeMap::new(),
+        }
+    }
+
+    fn span_attr<'a>(attrs: &'a [Value], key: &str) -> Option<&'a str> {
+        attrs.iter().find_map(|attr| {
+            let candidate = attr.get("key").and_then(Value::as_str)?;
+            if candidate != key {
+                return None;
+            }
+            attr.pointer("/value/stringValue").and_then(Value::as_str)
+        })
+    }
+
+    fn span_named<'a>(spans: &'a [Value], name: &str) -> &'a Value {
+        spans
+            .iter()
+            .find(|span| span.get("name").and_then(Value::as_str) == Some(name))
+            .expect("span by name")
+    }
 }

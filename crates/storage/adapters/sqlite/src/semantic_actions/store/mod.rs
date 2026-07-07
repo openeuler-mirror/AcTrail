@@ -6,15 +6,16 @@ use model_core::ids::TraceId;
 use rusqlite::{OptionalExtension, params};
 use semantic_action::{
     FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
-    LlmRequestContentWrite, SemanticAction, SemanticActionLink, SemanticActionReadStore,
-    SemanticActionStoreError, SemanticActionWriteStore, SemanticEvidence,
+    LlmRequestContentWrite, SemanticAction, SemanticActionKind, SemanticActionLink,
+    SemanticActionReadStore, SemanticActionStoreError, SemanticActionWriteStore, SemanticEvidence,
+    attr_keys as attrs,
 };
 
 use crate::SqliteStorage;
 use crate::records::encode_map;
 use crate::semantic_actions::action_ids::{intern_action_id, require_action_key};
 use crate::semantic_actions::codebook::sqlite::{
-    LinkEvidenceKey, evidence_kind_code, link_confidence_code, link_role_code,
+    LinkEvidenceKey, action_kind_code, evidence_kind_code, link_confidence_code, link_role_code,
 };
 use crate::semantic_actions::cold_fields::upsert_link_attributes;
 use crate::semantic_actions::storage_meta::current;
@@ -76,15 +77,15 @@ impl SemanticActionWriteStore for SqliteStorage {
         if let Some(existing) = existing.as_ref() {
             action = merge_action(existing.clone(), action)?;
         }
+        if action.kind == SemanticActionKind::McpToolCall {
+            enrich_mcp_parent_attrs_from_existing_actions(&connection, &mut action)?;
+        }
         let row_changed = existing
             .as_ref()
             .is_none_or(|existing| !action_row_matches(existing, &action));
         let evidence_changed = existing
             .as_ref()
             .is_none_or(|existing| existing.evidence != action.evidence);
-        if !row_changed && !evidence_changed {
-            return Ok(());
-        }
         if row_changed {
             let action_key =
                 intern_action_id(&connection, action.trace_id.get(), &action.action_id)?;
@@ -93,6 +94,7 @@ impl SemanticActionWriteStore for SqliteStorage {
         if evidence_changed {
             replace_action_evidence(&connection, &action)?;
         }
+        backfill_mcp_parent_attrs(&connection, &action)?;
         Ok(())
     }
 
@@ -249,6 +251,171 @@ impl SemanticActionWriteStore for SqliteStorage {
             contents,
         )
     }
+}
+
+fn enrich_mcp_parent_attrs_from_existing_actions(
+    connection: &rusqlite::Connection,
+    action: &mut SemanticAction,
+) -> Result<(), SemanticActionStoreError> {
+    if action.attributes.contains_key(attrs::process_parent::PID) {
+        return Ok(());
+    }
+    let Some(parent_attrs) = read_same_process_parent_attrs(connection, action)? else {
+        return Ok(());
+    };
+    extend_parent_attrs(&mut action.attributes, &parent_attrs);
+    Ok(())
+}
+
+fn read_same_process_parent_attrs(
+    connection: &rusqlite::Connection,
+    action: &SemanticAction,
+) -> Result<Option<BTreeMap<String, String>>, SemanticActionStoreError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT ids.action_id
+             FROM semantic_actions action
+             JOIN semantic_action_ids ids
+               ON ids.action_key = action.action_key
+             WHERE action.trace_id = ?1
+               AND process_pid = ?2
+               AND process_generation = ?3
+               AND kind_code IN (?4, ?5)
+             ORDER BY
+               CASE kind_code WHEN ?5 THEN 0 ELSE 1 END,
+               start_time ASC,
+               ids.action_id ASC",
+        )
+        .map_err(|error| {
+            SemanticActionStoreError::new("prepare_mcp_parent_attr_lookup", error.to_string())
+        })?;
+    let rows = statement
+        .query_map(
+            params![
+                action.trace_id.get(),
+                action.process.pid,
+                action.process.generation,
+                action_kind_code(SemanticActionKind::ProcessExec),
+                action_kind_code(SemanticActionKind::CommandInvocation),
+            ],
+            |row| row.get::<_, String>("action_id"),
+        )
+        .map_err(|error| {
+            SemanticActionStoreError::new("query_mcp_parent_attr_lookup", error.to_string())
+        })?;
+    for row in rows {
+        let action_id = row.map_err(|error| {
+            SemanticActionStoreError::new("map_mcp_parent_attr_lookup", error.to_string())
+        })?;
+        let Some(existing) = read_action_by_id(connection, &action_id)? else {
+            continue;
+        };
+        if let Some(parent_attrs) = parent_attrs_from_map(&existing.attributes) {
+            return Ok(Some(parent_attrs));
+        }
+    }
+    Ok(None)
+}
+
+fn backfill_mcp_parent_attrs(
+    connection: &rusqlite::Connection,
+    action: &SemanticAction,
+) -> Result<(), SemanticActionStoreError> {
+    if !matches!(
+        action.kind,
+        SemanticActionKind::ProcessExec | SemanticActionKind::CommandInvocation
+    ) {
+        return Ok(());
+    }
+    let Some(parent_attrs) = parent_attrs_from_map(&action.attributes) else {
+        return Ok(());
+    };
+
+    let updates = {
+        let mut statement = connection
+            .prepare(
+                "SELECT ids.action_id
+                 FROM semantic_actions action
+                 JOIN semantic_action_ids ids
+                   ON ids.action_key = action.action_key
+                 WHERE action.trace_id = ?1
+                   AND process_pid = ?2
+                   AND process_generation = ?3
+                   AND kind_code = ?4",
+            )
+            .map_err(|error| {
+                SemanticActionStoreError::new("prepare_mcp_parent_attr_backfill", error.to_string())
+            })?;
+        let rows = statement
+            .query_map(
+                params![
+                    action.trace_id.get(),
+                    action.process.pid,
+                    action.process.generation,
+                    action_kind_code(SemanticActionKind::McpToolCall),
+                ],
+                |row| row.get::<_, String>("action_id"),
+            )
+            .map_err(|error| {
+                SemanticActionStoreError::new("query_mcp_parent_attr_backfill", error.to_string())
+            })?;
+        let mut updates = Vec::new();
+        for row in rows {
+            let action_id = row.map_err(|error| {
+                SemanticActionStoreError::new("map_mcp_parent_attr_backfill", error.to_string())
+            })?;
+            let Some(mut mcp_action) = read_action_by_id(connection, &action_id)? else {
+                continue;
+            };
+            if extend_parent_attrs(&mut mcp_action.attributes, &parent_attrs) {
+                updates.push(mcp_action);
+            }
+        }
+        updates
+    };
+
+    for action in updates {
+        let action_key = require_action_key(connection, &action.action_id)?;
+        write_action_row(connection, action_key, &action)?;
+    }
+    Ok(())
+}
+
+fn parent_attrs_from_map(
+    attributes: &BTreeMap<String, String>,
+) -> Option<BTreeMap<String, String>> {
+    let parent_pid = attributes
+        .get(attrs::process_parent::PID)
+        .filter(|value| !value.is_empty())?;
+    let mut parent_attrs = BTreeMap::new();
+    for key in [
+        attrs::process_parent::PID,
+        attrs::process_parent::GENERATION,
+        attrs::process_parent::START_TIME_TICKS,
+        attrs::process_parent::PID_NAMESPACE,
+        attrs::process_parent::TASK_ID,
+        attrs::process_parent::IDENTITY_STATE,
+    ] {
+        if let Some(value) = attributes.get(key) {
+            parent_attrs.insert(key.to_string(), value.clone());
+        }
+    }
+    parent_attrs.insert(attrs::mcp::CLIENT_PID.to_string(), parent_pid.clone());
+    Some(parent_attrs)
+}
+
+fn extend_parent_attrs(
+    attributes: &mut BTreeMap<String, String>,
+    parent_attrs: &BTreeMap<String, String>,
+) -> bool {
+    let mut changed = false;
+    for (key, value) in parent_attrs {
+        if attributes.get(key) != Some(value) {
+            attributes.insert(key.clone(), value.clone());
+            changed = true;
+        }
+    }
+    changed
 }
 
 impl SemanticActionReadStore for SqliteStorage {

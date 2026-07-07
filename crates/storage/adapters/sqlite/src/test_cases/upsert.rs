@@ -9,7 +9,7 @@ use semantic_action::{
     LlmRequestContentWrite, LlmRequestManifest, SemanticAction, SemanticActionCompleteness,
     SemanticActionKind, SemanticActionLink, SemanticActionLinkConfidence, SemanticActionLinkRole,
     SemanticActionReadStore, SemanticActionStatus, SemanticActionWriteStore, SemanticEvidence,
-    SemanticEvidenceKind, file_path_set_identity_for_paths,
+    SemanticEvidenceKind, attr_keys as attrs, file_path_set_identity_for_paths,
 };
 use sha2::{Digest, Sha256};
 use store_retention_contract::cleanup::RetentionStore;
@@ -418,6 +418,88 @@ fn semantic_action_lists_load_action_and_link_evidence() {
     );
 }
 
+#[test]
+fn mcp_action_inherits_existing_same_process_parent_attrs() {
+    let mut storage = SqliteStorage::open_in_memory().expect("open in-memory sqlite storage");
+    let trace_id = TraceId::new(1);
+
+    let mut command = action("command", SemanticActionStatus::Success);
+    command.kind = SemanticActionKind::CommandInvocation;
+    command.attributes.extend(parent_attrs());
+    storage
+        .upsert_semantic_action(command)
+        .expect("write command action");
+
+    let mut mcp = action("mcp", SemanticActionStatus::Success);
+    mcp.kind = SemanticActionKind::McpToolCall;
+    mcp.attributes
+        .insert(attrs::mcp::TOOL_NAME.to_string(), "emit_probe".to_string());
+    storage
+        .upsert_semantic_action(mcp)
+        .expect("write mcp action");
+
+    let actions = storage
+        .list_semantic_actions(trace_id)
+        .expect("list semantic actions");
+    let mcp = actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::McpToolCall)
+        .expect("mcp action should exist");
+    assert_eq!(
+        mcp.attributes
+            .get(attrs::process_parent::PID)
+            .map(String::as_str),
+        Some("200")
+    );
+    assert_eq!(
+        mcp.attributes
+            .get(attrs::mcp::CLIENT_PID)
+            .map(String::as_str),
+        Some("200")
+    );
+}
+
+#[test]
+fn parent_action_backfills_existing_same_process_mcp_action() {
+    let mut storage = SqliteStorage::open_in_memory().expect("open in-memory sqlite storage");
+    let trace_id = TraceId::new(1);
+
+    let mut mcp = action("mcp", SemanticActionStatus::Success);
+    mcp.kind = SemanticActionKind::McpToolCall;
+    mcp.attributes
+        .insert(attrs::mcp::TOOL_NAME.to_string(), "emit_probe".to_string());
+    storage
+        .upsert_semantic_action(mcp)
+        .expect("write mcp action");
+
+    let mut command = action("command", SemanticActionStatus::Success);
+    command.kind = SemanticActionKind::CommandInvocation;
+    command.attributes.extend(parent_attrs());
+    storage
+        .upsert_semantic_action(command)
+        .expect("write command action");
+
+    let actions = storage
+        .list_semantic_actions(trace_id)
+        .expect("list semantic actions");
+    let mcp = actions
+        .iter()
+        .find(|action| action.kind == SemanticActionKind::McpToolCall)
+        .expect("mcp action should exist");
+    assert_eq!(
+        mcp.attributes
+            .get(attrs::process_parent::PID)
+            .map(String::as_str),
+        Some("200")
+    );
+    assert_eq!(
+        mcp.attributes
+            .get(attrs::mcp::CLIENT_PID)
+            .map(String::as_str),
+        Some("200")
+    );
+}
+
 fn install_write_audit(storage: &SqliteStorage) {
     storage
         .connection()
@@ -501,6 +583,28 @@ fn evidence(id: u64) -> SemanticEvidence {
         id,
         role: "llm.payload".to_string(),
     }
+}
+
+fn parent_attrs() -> BTreeMap<String, String> {
+    BTreeMap::from([
+        (attrs::process_parent::PID.to_string(), "200".to_string()),
+        (
+            attrs::process_parent::GENERATION.to_string(),
+            "2".to_string(),
+        ),
+        (
+            attrs::process_parent::START_TIME_TICKS.to_string(),
+            "2".to_string(),
+        ),
+        (
+            attrs::process_parent::PID_NAMESPACE.to_string(),
+            "pid:[parent]".to_string(),
+        ),
+        (
+            attrs::process_parent::IDENTITY_STATE.to_string(),
+            "observed".to_string(),
+        ),
+    ])
 }
 
 fn llm_request_content(trace_id: TraceId, action_id: &str) -> LlmRequestContentWrite {

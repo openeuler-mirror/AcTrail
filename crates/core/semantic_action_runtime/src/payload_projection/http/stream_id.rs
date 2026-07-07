@@ -3,7 +3,7 @@ use super::{
     http2_stream_id_is_valid, split_http1_request,
 };
 
-pub(in crate::payload_projection) fn request_stream_id_hint(bytes: &[u8]) -> Option<Option<u32>> {
+pub(crate) fn request_stream_id_hint(bytes: &[u8]) -> Option<Option<u32>> {
     if split_http1_request(bytes).is_some() || looks_like_http1_request_prefix(bytes) {
         return Some(None);
     }

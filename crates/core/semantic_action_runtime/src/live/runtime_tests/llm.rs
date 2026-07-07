@@ -1,5 +1,6 @@
 use config_core::daemon::{
-    AgentInvocationConfig, SemanticContentOwner, SemanticRetentionConfig, SseEventContentRetention,
+    AgentInvocationConfig, PayloadMcpConfig, SemanticContentOwner, SemanticRetentionConfig,
+    SseEventContentRetention,
 };
 use model_core::payload::PayloadSegmentId;
 use model_core::process::ProcessIdentity;
@@ -1366,6 +1367,7 @@ fn parsed_sse_storage_config_keeps_provider_events_on_sse_stream_action() {
         },
         semantic_retention,
         config_core::daemon::FileObservationConfig::default(),
+        PayloadMcpConfig::default(),
     );
     let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
 
