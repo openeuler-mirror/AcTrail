@@ -75,6 +75,7 @@ impl StorageAttachService {
             self.reconcile_draining_memberships_impl(trace_runtime)?;
             self.finalize_terminal_traces_impl(trace_runtime)?;
             self.forget_terminal_trace_state_impl(trace_runtime);
+            self.sweep_storage_retention_impl(trace_runtime)?;
             let _ = self.collector.flush_transport();
             return Ok(());
         }
@@ -103,6 +104,7 @@ impl StorageAttachService {
         self.reconcile_draining_memberships_impl(trace_runtime)?;
         self.finalize_terminal_traces_impl(trace_runtime)?;
         self.forget_terminal_trace_state_impl(trace_runtime);
+        self.sweep_storage_retention_impl(trace_runtime)?;
         let _ = self.collector.flush_transport();
         Ok(())
     }

@@ -30,6 +30,11 @@ mod process;
 #[path = "daemon/resource.rs"]
 mod resource;
 
+pub use crate::retention::{
+    DEFAULT_STORAGE_RETENTION_ENABLED, DEFAULT_STORAGE_RETENTION_MAX_TRACE_AGE,
+    DEFAULT_STORAGE_RETENTION_MIN_TERMINAL_AGE, DEFAULT_STORAGE_RETENTION_SWEEP_INTERVAL,
+    DEFAULT_STORAGE_RETENTION_TRACES_PER_SWEEP, StorageRetentionConfig,
+};
 pub use agent::{
     AgentInvocationConfig, Http2DataContentRetention, HttpBodyRetention, HttpHeadersRetention,
     L0LlmCallRetention, L1SseRetention, L2HttpRetention, L3Http2FrameRetention, L4PayloadRetention,

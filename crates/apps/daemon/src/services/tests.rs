@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use config_core::capture_profile::CaptureProfile;
 use config_core::daemon::{
@@ -10,7 +10,7 @@ use config_core::daemon::{
     DEFAULT_ACTIVE_TRACE_MAX, DiagnosticLogLevel, EbpfCollectorConfig, EbpfEnabledMode,
     EnforcementConfig, FileObservationConfig, MemlockRlimit, NetworkControlConfig, OperatorConfig,
     PayloadConfig, ProcessSeccompConfig, ResourceMetricsConfig, RuntimeExportConfig,
-    SeccompNotifyConfig, SemanticRetentionConfig, TraceFinalizationConfig,
+    SeccompNotifyConfig, SemanticRetentionConfig, StorageRetentionConfig, TraceFinalizationConfig,
 };
 use config_core::trace_snapshot::CaptureProfileSnapshot;
 use control_contract::command::{ControlCommand, ListTracesCommand, ProcessRef, TrackAddCommand};
@@ -18,7 +18,8 @@ use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use model_core::event::EventPayload;
 use model_core::ids::{CollectorName, ProfileName, RequestId, TraceName};
 use model_core::process::{NamespaceIdentity, ProcessIdentity};
-use model_core::trace::TraceHealth;
+use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
+use storage_core::TraceFilter;
 use storage_factory::StorageConfig;
 use trace_runtime::commands::TrackTraceRequest;
 use trace_runtime::sensor_plan::{CollectorPlan, SensorPlan};
@@ -27,7 +28,10 @@ use uds_control_server::ControlService;
 use crate::profiles::DaemonProfileRegistry;
 use crate::service_host::DaemonServiceHost;
 
-use super::{build_runtime_wiring, workload_diagnostics::WorkloadDiagnostics};
+use super::{
+    build_runtime_wiring, build_runtime_wiring_with_storage_retention,
+    workload_diagnostics::WorkloadDiagnostics,
+};
 
 #[path = "test_cases/application_protocol.rs"]
 mod application_protocol_tests;
@@ -321,8 +325,229 @@ fn resource_metrics_sampler_persists_procfs_samples() {
     );
 }
 
+#[test]
+fn storage_retention_purges_expired_terminal_trace() {
+    let storage_path = std::env::temp_dir().join(format!(
+        "actrail-retention-expired-test-{}.sqlite",
+        std::process::id()
+    ));
+    let mut wiring = retention_wiring(storage_path, retention_test_config());
+    let trace_id = model_core::ids::TraceId::new(1);
+    let trace = terminal_trace(
+        trace_id,
+        UNIX_EPOCH + Duration::from_secs(1),
+        BTreeSet::new(),
+    );
+    wiring
+        .attach_service
+        .storage
+        .create_trace(trace)
+        .expect("write expired trace");
+
+    wiring
+        .attach_service
+        .drain_live_events_impl(&mut wiring.trace_runtime)
+        .expect("run retention sweep");
+
+    assert!(
+        wiring
+            .attach_service
+            .storage
+            .list_traces(&TraceFilter::default())
+            .expect("list traces")
+            .is_empty()
+    );
+    assert!(wiring.attach_service.storage.get_trace(trace_id).is_err());
+}
+
+#[test]
+fn storage_retention_keeps_recent_terminal_trace() {
+    let storage_path = std::env::temp_dir().join(format!(
+        "actrail-retention-recent-test-{}.sqlite",
+        std::process::id()
+    ));
+    let mut wiring = retention_wiring(storage_path, retention_test_config());
+    let trace_id = model_core::ids::TraceId::new(1);
+    let trace = terminal_trace(trace_id, SystemTime::now(), BTreeSet::new());
+    wiring
+        .attach_service
+        .storage
+        .create_trace(trace)
+        .expect("write recent trace");
+
+    wiring
+        .attach_service
+        .drain_live_events_impl(&mut wiring.trace_runtime)
+        .expect("run retention sweep");
+
+    assert_eq!(
+        wiring
+            .attach_service
+            .storage
+            .list_traces(&TraceFilter::default())
+            .expect("list traces")
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn storage_retention_keeps_active_and_protected_traces() {
+    let storage_path = std::env::temp_dir().join(format!(
+        "actrail-retention-protected-test-{}.sqlite",
+        std::process::id()
+    ));
+    let mut wiring = retention_wiring(storage_path, retention_test_config());
+    let active_trace_id = model_core::ids::TraceId::new(1);
+    let protected_trace_id = model_core::ids::TraceId::new(2);
+    let active_trace = TraceRecord::new(
+        active_trace_id,
+        ProcessIdentity::new(100, 1, 1),
+        TraceName::new("active"),
+        ProfileName::new("snapshot"),
+        UNIX_EPOCH,
+    );
+    let mut tags = BTreeSet::new();
+    tags.insert("retain".to_string());
+    let protected_trace = terminal_trace(
+        protected_trace_id,
+        UNIX_EPOCH + Duration::from_secs(1),
+        tags,
+    );
+    wiring
+        .attach_service
+        .storage
+        .create_trace(active_trace)
+        .expect("write active trace");
+    wiring
+        .attach_service
+        .storage
+        .create_trace(protected_trace)
+        .expect("write protected trace");
+
+    wiring
+        .attach_service
+        .drain_live_events_impl(&mut wiring.trace_runtime)
+        .expect("run retention sweep");
+
+    let traces = wiring
+        .attach_service
+        .storage
+        .list_traces(&TraceFilter::default())
+        .expect("list traces");
+    assert_eq!(traces.len(), 2);
+    assert!(traces.iter().any(|trace| trace.trace_id == active_trace_id));
+    assert!(
+        traces
+            .iter()
+            .any(|trace| trace.trace_id == protected_trace_id)
+    );
+}
+
 pub(super) fn test_storage_config(path: std::path::PathBuf) -> StorageConfig {
     StorageConfig::sqlite_path(path)
+}
+
+pub(super) fn seccomp_notify_disabled() -> SeccompNotifyConfig {
+    SeccompNotifyConfig::disabled()
+}
+
+pub(super) fn process_seccomp_disabled() -> ProcessSeccompConfig {
+    ProcessSeccompConfig::disabled()
+}
+
+pub(super) fn agent_invocation_disabled() -> AgentInvocationConfig {
+    AgentInvocationConfig::disabled()
+}
+
+pub(super) fn application_protocol_disabled() -> ApplicationProtocolConfig {
+    ApplicationProtocolConfig::disabled()
+}
+
+pub(super) fn resource_metrics_disabled() -> ResourceMetricsConfig {
+    ResourceMetricsConfig::disabled()
+}
+
+pub(super) fn workload_diagnostics_disabled() -> WorkloadDiagnostics {
+    WorkloadDiagnostics::default()
+}
+
+pub(super) fn export_runtime_disabled() -> RuntimeExportConfig {
+    RuntimeExportConfig::disabled()
+}
+
+pub(super) fn enforcement_disabled() -> EnforcementConfig {
+    EnforcementConfig::disabled()
+}
+
+pub(super) fn network_control_disabled() -> NetworkControlConfig {
+    NetworkControlConfig::disabled()
+}
+
+fn retention_test_config() -> StorageRetentionConfig {
+    StorageRetentionConfig {
+        enabled: true,
+        max_trace_age: Duration::from_secs(2 * 60),
+        sweep_interval: Duration::from_millis(1),
+        min_terminal_age: Duration::from_secs(1),
+        max_traces_per_sweep: 10,
+        protected_tags: vec!["retain".to_string(), "pinned".to_string()],
+        checkpoint_after_sweep: true,
+    }
+}
+
+fn retention_wiring(
+    storage_path: std::path::PathBuf,
+    storage_retention: StorageRetentionConfig,
+) -> crate::runtime_wiring::DaemonRuntimeWiring<super::attach::StorageAttachService> {
+    cleanup_storage_files(&storage_path);
+    build_runtime_wiring_with_storage_retention(
+        &test_storage_config(storage_path),
+        DaemonProfileRegistry::new(),
+        ebpf_config(false),
+        payload_config(false),
+        DEFAULT_ACTIVE_TRACE_MAX,
+        DiagnosticLogLevel::Info,
+        SeccompNotifyConfig::disabled(),
+        ProcessSeccompConfig::disabled(),
+        AgentInvocationConfig::disabled(),
+        SemanticRetentionConfig::default(),
+        FileObservationConfig::default(),
+        ApplicationProtocolConfig::disabled(),
+        ResourceMetricsConfig::disabled(),
+        storage_retention,
+        TraceFinalizationConfig::default(),
+        WorkloadDiagnostics::default(),
+        RuntimeExportConfig::disabled(),
+        EnforcementConfig::disabled(),
+        CommandControlConfig::disabled(),
+        NetworkControlConfig::disabled(),
+    )
+    .expect("build retention test wiring")
+}
+
+fn cleanup_storage_files(path: &std::path::Path) {
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{}", path.display(), suffix));
+    }
+}
+
+fn terminal_trace(
+    trace_id: model_core::ids::TraceId,
+    completed_at: SystemTime,
+    tags: BTreeSet<String>,
+) -> TraceRecord {
+    let mut trace = TraceRecord::new(
+        trace_id,
+        ProcessIdentity::new(100, 1, 1),
+        TraceName::new(format!("trace-{}", trace_id.get())),
+        ProfileName::new("snapshot"),
+        completed_at,
+    );
+    trace.lifecycle_state = TraceLifecycleState::Completed;
+    trace.timings.completed_at = Some(completed_at);
+    trace.tags = tags;
+    trace
 }
 
 fn create_active_trace(

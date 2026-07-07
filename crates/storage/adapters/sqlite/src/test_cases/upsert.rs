@@ -2,6 +2,11 @@ use std::collections::BTreeMap;
 use std::time::{Duration, UNIX_EPOCH};
 
 use model_core::ids::TraceId;
+use model_core::payload::{
+    PayloadContentState, PayloadDirection, PayloadOperationCompletionState, PayloadRedactionState,
+    PayloadSegment, PayloadSegmentId, PayloadSourceBoundary, PayloadStreamKey,
+    PayloadTruncationState,
+};
 use model_core::process::ProcessIdentity;
 use model_core::trace::{TraceHealth, TraceLifecycleState};
 use semantic_action::{
@@ -14,6 +19,7 @@ use semantic_action::{
 use sha2::{Digest, Sha256};
 use store_retention_contract::cleanup::RetentionStore;
 use store_retention_contract::tombstone::TraceTombstone;
+use store_write_contract::payloads::PayloadWriteStore;
 
 use crate::SqliteStorage;
 
@@ -207,6 +213,32 @@ fn purge_trace_removes_semantic_action_interning_and_cold_fields() {
     assert_eq!(row_count(&storage, "semantic_action_ids"), 0);
     assert_eq!(row_count(&storage, "semantic_actions"), 0);
     assert_eq!(row_count(&storage, "semantic_action_links"), 0);
+}
+
+#[test]
+fn purge_trace_removes_payload_segments() {
+    let mut storage = SqliteStorage::open_in_memory().expect("open in-memory sqlite storage");
+    let trace_id = TraceId::new(1);
+    storage
+        .append_payload_segment(payload_segment(trace_id))
+        .expect("write payload segment");
+
+    assert_eq!(row_count(&storage, "payload_segments"), 1);
+
+    storage
+        .purge_trace(
+            trace_id,
+            TraceTombstone {
+                trace_id,
+                lifecycle_state: TraceLifecycleState::Completed,
+                health: TraceHealth::Clean,
+                cleaned_at: UNIX_EPOCH,
+                cleanup_reason: "test".to_string(),
+            },
+        )
+        .expect("purge trace");
+
+    assert_eq!(row_count(&storage, "payload_segments"), 0);
 }
 
 #[test]
@@ -582,6 +614,33 @@ fn evidence(id: u64) -> SemanticEvidence {
         kind: SemanticEvidenceKind::PayloadSegment,
         id,
         role: "llm.payload".to_string(),
+    }
+}
+
+fn payload_segment(trace_id: TraceId) -> PayloadSegment {
+    PayloadSegment {
+        segment_id: PayloadSegmentId::new(1),
+        trace_id,
+        observed_at: UNIX_EPOCH + Duration::from_millis(10),
+        process: ProcessIdentity::new(100, 1, 1),
+        source_boundary: PayloadSourceBoundary::TlsUserSpace,
+        content_state: PayloadContentState::Plaintext,
+        direction: PayloadDirection::Outbound,
+        stream_key: PayloadStreamKey::new("stream"),
+        sequence: 1,
+        original_size: 5,
+        captured_size: 5,
+        operation_id: 1,
+        operation_offset: 0,
+        operation_original_size: 5,
+        operation_captured_size: 5,
+        operation_completion_state: PayloadOperationCompletionState::Success,
+        truncation: PayloadTruncationState::Complete,
+        redaction: PayloadRedactionState::NotRequired,
+        library: "test".to_string(),
+        symbol: "SSL_write".to_string(),
+        protocol_hint: None,
+        bytes: b"hello".to_vec(),
     }
 }
 

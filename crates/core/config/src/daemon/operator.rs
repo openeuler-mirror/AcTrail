@@ -16,8 +16,8 @@ use super::{
     EbpfCollectorConfig, EnforcementConfig, FileObservationConfig, NetworkControlConfig,
     PayloadConfig, PayloadSocketConfig, PayloadTlsConfig, ProcessSeccompConfig,
     ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig, SemanticRetentionConfig,
-    SocketPermissions, SseDataPolicy, TraceFinalizationConfig, WebServerConfig,
-    WorkloadDiagnosticsConfig,
+    SocketPermissions, SseDataPolicy, StorageRetentionConfig, TraceFinalizationConfig,
+    WebServerConfig, WorkloadDiagnosticsConfig,
 };
 use crate::capture_profile::{CaptureProfile, LaunchSeccompRequirements};
 use crate::export::ExportConfig;
@@ -43,6 +43,7 @@ pub struct OperatorConfig {
     pub active_trace_max: u32,
     pub pid_file: PathBuf,
     pub storage: StorageConfig,
+    pub storage_retention: StorageRetentionConfig,
     pub web: WebServerConfig,
     pub export_config: ExportConfig,
     pub export_runtime: RuntimeExportConfig,
@@ -392,6 +393,8 @@ fn capability_requested(capabilities: &[CapabilityRequest], capability: &Capabil
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::OperatorConfig;
     use crate::daemon::PayloadMcpConfig;
 
@@ -446,5 +449,82 @@ mod tests {
 
         assert!(error.contains("payload.mcp.parse_buffer_max_bytes"));
         assert!(error.contains("value must be positive"));
+    }
+
+    #[test]
+    fn default_operator_template_includes_storage_retention() {
+        let raw = OperatorConfig::default_hierarchical_template()
+            .expect("default operator config template renders");
+
+        assert!(
+            raw.contains("[storage.retention]\nenabled = true\nmax_trace_age = \"7d\""),
+            "default template should include storage.retention.max_trace_age=7d"
+        );
+        assert!(
+            raw.contains("sweep_interval = \"1m\""),
+            "default template should include a one minute retention sweep interval"
+        );
+        assert!(
+            raw.contains("min_terminal_age = \"30s\""),
+            "default template should include a short terminal-state safety window"
+        );
+
+        let config = OperatorConfig::parse(&raw).expect("default operator config parses");
+        assert_eq!(
+            config.storage_retention.max_trace_age,
+            Duration::from_secs(7 * 24 * 60 * 60)
+        );
+        assert_eq!(
+            config.storage_retention.min_terminal_age,
+            Duration::from_secs(30)
+        );
+    }
+
+    #[test]
+    fn storage_retention_can_be_shortened_to_two_minutes_for_tests() {
+        let config = OperatorConfig::init()
+            .expect("default operator config initializes")
+            .patch(
+                r#"
+[storage.retention]
+max_trace_age = "2m"
+sweep_interval = "1s"
+min_terminal_age = "1s"
+max_traces_per_sweep = 2
+"#,
+            )
+            .expect("storage retention patch parses");
+
+        assert_eq!(
+            config.storage_retention.max_trace_age,
+            Duration::from_secs(2 * 60)
+        );
+        assert_eq!(
+            config.storage_retention.sweep_interval,
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            config.storage_retention.min_terminal_age,
+            Duration::from_secs(1)
+        );
+        assert_eq!(config.storage_retention.max_traces_per_sweep, 2);
+
+        let rendered = config
+            .to_hierarchical_toml()
+            .expect("operator config renders");
+        assert!(rendered.contains("max_trace_age = \"2m\""));
+    }
+
+    #[test]
+    fn storage_retention_duration_without_unit_fails_validation() {
+        let raw = OperatorConfig::default_hierarchical_template()
+            .expect("default operator config template renders")
+            .replace("max_trace_age = \"7d\"", "max_trace_age = \"2\"");
+
+        let error = OperatorConfig::parse(&raw)
+            .expect_err("duration without explicit unit should fail validation");
+
+        assert!(error.contains("storage.retention.max_trace_age"));
+        assert!(error.contains("expected a duration with unit"));
     }
 }

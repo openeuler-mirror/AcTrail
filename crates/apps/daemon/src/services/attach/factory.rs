@@ -4,7 +4,7 @@ use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, CommandControlConfig, DiagnosticLogLevel,
     EbpfCollectorConfig, FileObservationConfig, NetworkControlConfig, PayloadConfig,
     ProcessSeccompConfig, ResourceMetricsConfig, SeccompNotifyConfig, SemanticRetentionConfig,
-    TraceFinalizationConfig, launch_seccomp_requirements,
+    StorageRetentionConfig, TraceFinalizationConfig, launch_seccomp_requirements,
 };
 use ebpf_collector::EbpfCollector;
 use ebpf_collector::procfs::{ProcfsIdentityReader, ProcfsTreeSnapshotter};
@@ -22,6 +22,7 @@ use crate::services::network_control::NetworkControlService;
 use crate::services::payload_gate::{PayloadBodyRetentionGate, SocketHttpPayloadGate};
 use crate::services::process_seccomp::ProcessSeccompService;
 use crate::services::resource_metrics::ResourceMetricsSampler;
+use crate::services::retention::StorageRetentionService;
 use crate::services::seccomp_notify::SeccompNotifyService;
 use crate::services::seccomp_socket::SeccompSocketService;
 use crate::services::seccomp_tls::SeccompTlsService;
@@ -45,6 +46,7 @@ impl StorageAttachService {
         file_observation: FileObservationConfig,
         application_protocol: ApplicationProtocolConfig,
         resource_metrics: ResourceMetricsConfig,
+        storage_retention: StorageRetentionConfig,
         trace_finalization: TraceFinalizationConfig,
         workload_diagnostics: WorkloadDiagnostics,
         enforcement: FanotifyEnforcementService,
@@ -65,6 +67,7 @@ impl StorageAttachService {
             file_observation,
             application_protocol,
             resource_metrics,
+            storage_retention,
             trace_finalization,
             workload_diagnostics,
             enforcement,
@@ -89,6 +92,7 @@ impl StorageAttachService {
         file_observation: FileObservationConfig,
         application_protocol: ApplicationProtocolConfig,
         resource_metrics: ResourceMetricsConfig,
+        storage_retention_config: StorageRetentionConfig,
         trace_finalization: TraceFinalizationConfig,
         workload_diagnostics: WorkloadDiagnostics,
         enforcement: FanotifyEnforcementService,
@@ -186,6 +190,7 @@ impl StorageAttachService {
                 semantic_retention.clone(),
             ),
             resource_metrics: ResourceMetricsSampler::new(resource_metrics),
+            storage_retention: StorageRetentionService::new(storage_retention_config),
             enforcement,
             control_plugins: ControlPluginRuntime::new(),
             semantic_actions: LiveSemanticActionRuntime::new(

@@ -427,6 +427,13 @@ impl StorageBackend for SqliteStorage {
     ) -> Result<(), StorageError> {
         RetentionStore::purge_trace(self, trace_id, tombstone).map_err(StorageError::from)
     }
+
+    fn checkpoint(&mut self) -> Result<(), StorageError> {
+        self.connection()
+            .borrow_mut()
+            .execute_batch("PRAGMA wal_checkpoint(PASSIVE);")
+            .map_err(|error| StorageError::new("sqlite_checkpoint", error.to_string()))
+    }
 }
 
 fn convert_child_rows(

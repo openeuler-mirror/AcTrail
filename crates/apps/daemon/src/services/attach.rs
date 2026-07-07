@@ -59,6 +59,7 @@ use crate::services::network_control::NetworkControlService;
 use crate::services::payload_gate::{PayloadBodyRetentionGate, SocketHttpPayloadGate};
 use crate::services::process_seccomp::{ProcessSeccompObservation, ProcessSeccompService};
 use crate::services::resource_metrics::ResourceMetricsSampler;
+use crate::services::retention::StorageRetentionService;
 use crate::services::seccomp_notify::SeccompNotifyService;
 use crate::services::seccomp_socket::SeccompSocketService;
 use crate::services::seccomp_tls::SeccompTlsService;
@@ -105,6 +106,7 @@ pub(crate) struct StorageAttachService {
     pub(super) file_observation: FileObservationConfig,
     pub(super) application_protocol: ApplicationProtocolAnalyzer,
     pub(super) resource_metrics: ResourceMetricsSampler,
+    pub(super) storage_retention: StorageRetentionService,
     pub(super) enforcement: FanotifyEnforcementService,
     pub(super) control_plugins: ControlPluginRuntime,
     pub(super) semantic_actions: LiveSemanticActionRuntime,
@@ -484,16 +486,14 @@ impl AttachService for StorageAttachService {
     }
 
     fn background_poll_timeout(&self) -> Result<Option<Duration>, ControlError> {
-        let resource_timeout = self.resource_metrics.poll_timeout();
-        let finalization_timeout = (!self.pending_terminal_finalizations.is_empty())
-            .then_some(self.finalization_poll_interval);
-        Ok(match (resource_timeout, finalization_timeout) {
-            (Some(resource_timeout), Some(finalization_timeout)) => {
-                Some(resource_timeout.min(finalization_timeout))
-            }
-            (Some(timeout), None) | (None, Some(timeout)) => Some(timeout),
-            (None, None) => None,
-        })
+        let mut timeout = self.resource_metrics.poll_timeout();
+        timeout = min_optional_timeout(
+            timeout,
+            (!self.pending_terminal_finalizations.is_empty())
+                .then_some(self.finalization_poll_interval),
+        );
+        timeout = min_optional_timeout(timeout, self.storage_retention.poll_timeout());
+        Ok(timeout)
     }
 
     fn remove_root(
@@ -612,4 +612,12 @@ fn recording_error_to_control(error: recording_runtime::RecordingError) -> Contr
 fn resolve_process_ref(process: &ProcessRef) -> Result<ProcessIdentity, ControlError> {
     resolve_namespaced_pid(process.namespace_pid, &process.pid_namespace)
         .map_err(|error| ControlError::new("pid_resolution", error))
+}
+
+fn min_optional_timeout(left: Option<Duration>, right: Option<Duration>) -> Option<Duration> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(timeout), None) | (None, Some(timeout)) => Some(timeout),
+        (None, None) => None,
+    }
 }

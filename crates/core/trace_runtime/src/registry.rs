@@ -276,6 +276,10 @@ impl TraceRuntime {
         self.traces.get(&trace_id)
     }
 
+    pub fn forget_trace(&mut self, trace_id: TraceId) -> Option<TraceEntry> {
+        self.traces.remove(&trace_id)
+    }
+
     pub fn find_membership(
         &self,
         identity: &ProcessIdentity,
