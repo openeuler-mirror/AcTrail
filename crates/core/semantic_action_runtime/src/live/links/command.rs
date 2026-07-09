@@ -5,7 +5,7 @@ use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use semantic_action::{
     SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkConfidence,
-    SemanticActionLinkRole, attr_keys as attrs,
+    SemanticActionLinkRole,
 };
 
 use super::super::process_parent::{
@@ -73,18 +73,18 @@ impl CommandChildActionLinkProjector {
         }
         if parent_identity_has_conflict(action) {
             self.remove_pending_child(action);
-            let Some(role) = command_child_role(action) else {
-                return Vec::new();
-            };
             return invalidate_child_links(
                 &self.emitted_links,
                 action.trace_id,
                 &action.action_id,
-                role,
+                SemanticActionLinkRole::CommandContainsCommandInvocation,
                 &action.evidence,
             );
         }
-        let Some(command) = self.command_for_child_action(action) else {
+        let Some(parent_process) = parent_command_process(action) else {
+            return Vec::new();
+        };
+        let Some(command) = self.command_for_parent(action.trace_id, parent_process.clone()) else {
             self.remember_pending(action);
             return Vec::new();
         };
@@ -209,43 +209,6 @@ impl CommandChildActionLinkProjector {
                 return None;
             }
             candidate = edge.parent.clone()?;
-        }
-    }
-
-    fn command_for_child_action(&self, action: &SemanticAction) -> Option<SemanticAction> {
-        if action.kind == SemanticActionKind::McpToolCall {
-            if let Some(parent_process) = parent_process_from_action(action) {
-                return self.command_for_parent(action.trace_id, parent_process);
-            }
-            return self.command_for_mcp_client_pid(action);
-        }
-        let parent_process = parent_command_process(action)?;
-        self.command_for_parent(action.trace_id, parent_process)
-    }
-
-    fn command_for_mcp_client_pid(&self, action: &SemanticAction) -> Option<SemanticAction> {
-        let client_pid = action
-            .attributes
-            .get(attrs::mcp::CLIENT_PID)?
-            .parse::<u32>()
-            .ok()?;
-        let mut candidates = self
-            .commands_by_process
-            .iter()
-            .filter(|((trace_id, process), command)| {
-                *trace_id == action.trace_id
-                    && process.pid == client_pid
-                    && command.start_time <= action.start_time
-                    && command
-                        .end_time
-                        .is_none_or(|end_time| action.start_time <= end_time)
-            })
-            .map(|(_, command)| command.clone())
-            .collect::<Vec<_>>();
-        if candidates.len() == 1 {
-            candidates.pop()
-        } else {
-            None
         }
     }
 
@@ -442,10 +405,6 @@ fn command_child_role(action: &SemanticAction) -> Option<SemanticActionLinkRole>
             .then_some(SemanticActionLinkRole::CommandContainsLlmCall)
     })
     .or_else(|| {
-        (action.kind == SemanticActionKind::McpToolCall)
-            .then_some(SemanticActionLinkRole::CommandContainsMcpToolCall)
-    })
-    .or_else(|| {
         (action.kind == SemanticActionKind::AgentInvocation)
             .then_some(SemanticActionLinkRole::CommandContainsCommandInvocation)
     })
@@ -462,94 +421,7 @@ fn parent_command_process(action: &SemanticAction) -> Option<ProcessIdentity> {
         | SemanticActionKind::ProcessForkAttempt
         | SemanticActionKind::LlmCall
         | SemanticActionKind::AgentInvocation => Some(action.process.clone()),
-        SemanticActionKind::McpToolCall => parent_process_from_action(action),
         SemanticActionKind::CommandInvocation => parent_process_from_action(action),
         _ => None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-    use std::time::{Duration, UNIX_EPOCH};
-
-    use model_core::ids::TraceId;
-    use model_core::process::ProcessIdentity;
-    use semantic_action::{
-        SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionLinkRole,
-        SemanticActionStatus, attr_keys as attrs,
-    };
-
-    use super::CommandChildActionLinkProjector;
-
-    #[test]
-    fn mcp_tool_call_links_to_command_by_client_pid_without_parent_identity() {
-        let mut projector = CommandChildActionLinkProjector::default();
-        let client = ProcessIdentity::new(5100, 9100, 10_100);
-        let server = ProcessIdentity::new(5101, 9101, 10_101);
-        let command = action(
-            "client-command",
-            SemanticActionKind::CommandInvocation,
-            client.clone(),
-            1,
-        );
-        let mut mcp = action("mcp-tool", SemanticActionKind::McpToolCall, server, 2);
-        mcp.attributes
-            .insert(attrs::mcp::CLIENT_PID.to_string(), client.pid.to_string());
-
-        projector.observe_action(&command);
-        let links = projector.link_child_action(&mcp);
-
-        assert!(links.iter().any(|link| {
-            link.role == SemanticActionLinkRole::CommandContainsMcpToolCall
-                && link.parent_action_id == command.action_id
-                && link.child_action_id == mcp.action_id
-        }));
-    }
-
-    #[test]
-    fn mcp_tool_call_does_not_link_by_unmatched_client_pid() {
-        let mut projector = CommandChildActionLinkProjector::default();
-        let client = ProcessIdentity::new(5200, 9200, 10_200);
-        let server = ProcessIdentity::new(5201, 9201, 10_201);
-        let command = action(
-            "client-command",
-            SemanticActionKind::CommandInvocation,
-            client,
-            1,
-        );
-        let mut mcp = action("mcp-tool", SemanticActionKind::McpToolCall, server, 2);
-        mcp.attributes
-            .insert(attrs::mcp::CLIENT_PID.to_string(), "5299".to_string());
-
-        projector.observe_action(&command);
-        let links = projector.link_child_action(&mcp);
-
-        assert!(links.iter().all(|link| {
-            link.role != SemanticActionLinkRole::CommandContainsMcpToolCall
-                || link.child_action_id != mcp.action_id
-        }));
-    }
-
-    fn action(
-        action_id: &str,
-        kind: SemanticActionKind,
-        process: ProcessIdentity,
-        start_millis: u64,
-    ) -> SemanticAction {
-        SemanticAction {
-            action_id: action_id.to_string(),
-            trace_id: TraceId::new(1),
-            kind,
-            title: action_id.to_string(),
-            start_time: UNIX_EPOCH + Duration::from_millis(start_millis),
-            end_time: None,
-            process,
-            status: SemanticActionStatus::InProgress,
-            completeness: SemanticActionCompleteness::Partial,
-            confidence_millis: None,
-            attributes: BTreeMap::new(),
-            evidence: Vec::new(),
-        }
     }
 }

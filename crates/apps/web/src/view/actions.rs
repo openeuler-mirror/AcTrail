@@ -5,7 +5,7 @@ use std::path::Path;
 use model_core::ids::TraceId;
 use semantic_action::{
     FilePathSetPath, FilePathSetPathPage, LlmRequestContentPage, SemanticAction,
-    SemanticActionLink, SemanticEvidence, SemanticEvidenceKind,
+    SemanticActionLink, SemanticEvidence,
 };
 use storage_core::{
     SemanticActionChildPageQuery, SemanticActionSummary, StorageBackend, StorageError,
@@ -218,7 +218,7 @@ fn render_action_json(action: &SemanticAction, lite: bool) -> String {
         action.attributes.clone()
     };
     let evidence = if lite {
-        lite_evidence_json(&action.evidence)
+        "[]".to_string()
     } else {
         evidence_json(&action.evidence)
     };
@@ -335,20 +335,6 @@ fn evidence_json(evidence: &[SemanticEvidence]) -> String {
     format!("[{}]", rows.join(","))
 }
 
-fn lite_evidence_json(evidence: &[SemanticEvidence]) -> String {
-    let retained = evidence
-        .iter()
-        .filter(|evidence| {
-            matches!(
-                evidence.kind,
-                SemanticEvidenceKind::PayloadSegment | SemanticEvidenceKind::PayloadAggregate
-            )
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    evidence_json(&retained)
-}
-
 fn child_state_json(action: &SemanticAction, child_count: usize) -> String {
     format!(
         "{{\"id\":{},\"has_children\":{},\"child_count\":{}}}",
@@ -373,52 +359,4 @@ fn storage_error(stage: &str, error: StorageError) -> String {
 
 fn bool_json(value: bool) -> &'static str {
     if value { "true" } else { "false" }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-    use std::time::SystemTime;
-
-    use model_core::ids::TraceId;
-    use model_core::process::ProcessIdentity;
-    use semantic_action::{
-        SemanticActionCompleteness, SemanticActionKind, SemanticActionStatus, SemanticEvidence,
-        SemanticEvidenceKind, evidence_roles,
-    };
-
-    use super::*;
-
-    #[test]
-    fn action_json_lite_keeps_payload_evidence_for_mcp_transport_details() {
-        let action = SemanticAction {
-            action_id: "mcp-tool:client_send".to_string(),
-            trace_id: TraceId::new(7),
-            kind: SemanticActionKind::McpClientSend,
-            title: "MCP client send".to_string(),
-            start_time: SystemTime::UNIX_EPOCH,
-            end_time: Some(SystemTime::UNIX_EPOCH),
-            process: ProcessIdentity::new(11, 22, 33),
-            status: SemanticActionStatus::Success,
-            completeness: SemanticActionCompleteness::Complete,
-            confidence_millis: None,
-            attributes: BTreeMap::new(),
-            evidence: vec![SemanticEvidence {
-                kind: SemanticEvidenceKind::PayloadSegment,
-                id: 42,
-                role: evidence_roles::mcp::CLIENT_SEND_PAYLOAD.to_string(),
-            }],
-        };
-
-        let json = action_json_lite(&action);
-
-        assert!(
-            json.contains("\"role\":\"mcp.client_send.payload\""),
-            "lite action JSON should retain payload evidence role: {json}"
-        );
-        assert!(
-            json.contains("\"id\":42"),
-            "lite action JSON should retain payload segment id: {json}"
-        );
-    }
 }

@@ -1,6 +1,6 @@
 use config_core::daemon::{
     AgentInvocationConfig, FileBulkReadMode, FileObservationConfig, FileRawEventRetention,
-    PayloadMcpConfig, SemanticRetentionConfig,
+    SemanticRetentionConfig,
 };
 use model_core::event::{
     DomainEvent, EventEnvelope, EventFlags, EventKind, EventPayload, ResourcePayload, StdioPayload,
@@ -449,7 +449,6 @@ fn bulk_runtime_with_retention(
         },
         SemanticRetentionConfig::default(),
         file_observation,
-        PayloadMcpConfig::default(),
     )
 }
 

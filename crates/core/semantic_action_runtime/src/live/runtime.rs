@@ -3,9 +3,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::time::SystemTime;
 
-use config_core::daemon::{
-    AgentInvocationConfig, FileObservationConfig, PayloadMcpConfig, SemanticRetentionConfig,
-};
+use config_core::daemon::{AgentInvocationConfig, FileObservationConfig, SemanticRetentionConfig};
 use model_core::event::{DomainEvent, EventPayload};
 use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
@@ -24,7 +22,6 @@ use super::command::CommandProjector;
 use super::file::FileAccessProjector;
 use super::links::ActionLinkProjector;
 use super::llm::LiveLlmProjector;
-use super::mcp::LiveMcpProjector;
 
 const HTTP_DIRECTION_ATTR: &str = "direction";
 const HTTP_PAYLOAD_SEQUENCE_ATTR: &str = "payload_sequence";
@@ -38,7 +35,6 @@ pub struct LiveSemanticActionRuntime {
     file_access: FileAccessProjector,
     http_exchange: HttpExchangeTracker,
     llm: LiveLlmProjector,
-    mcp: LiveMcpProjector,
     links: ActionLinkProjector,
 }
 
@@ -88,7 +84,6 @@ impl LiveSemanticActionRuntime {
         config: AgentInvocationConfig,
         semantic_retention: SemanticRetentionConfig,
         file_observation: FileObservationConfig,
-        mcp_config: PayloadMcpConfig,
     ) -> Self {
         let AgentInvocationConfig {
             enabled,
@@ -100,15 +95,13 @@ impl LiveSemanticActionRuntime {
             file_access: FileAccessProjector::new(file_observation),
             http_exchange: HttpExchangeTracker::default(),
             llm: LiveLlmProjector::new(semantic_retention),
-            mcp: LiveMcpProjector::new(mcp_config),
             links: ActionLinkProjector::new(),
         }
     }
 
     pub fn observe_event(&mut self, event: &DomainEvent) -> LiveSemanticActionOutput {
-        let mcp_actions = self.mcp.observe_event(event);
         if let EventPayload::File(payload) = &event.payload {
-            let mut output = if is_file_modify_operation(&payload.operation) {
+            return if is_file_modify_operation(&payload.operation) {
                 let file_action = file_modify_action(event);
                 let mut output = self
                     .file_access
@@ -127,15 +120,16 @@ impl LiveSemanticActionRuntime {
                     output.actions.insert(insert_at, file_action);
                 }
                 output
+                    .links
+                    .extend(self.links.observe_actions(&output.actions));
+                output
             } else {
-                self.file_access.observe_file_event(event, None)
+                let mut output = self.file_access.observe_file_event(event, None);
+                output
+                    .links
+                    .extend(self.links.observe_actions(&output.actions));
+                output
             };
-            output.actions.extend(mcp_actions);
-            observe_mcp_tool_call_actions(&mut output, &mut self.command);
-            output
-                .links
-                .extend(self.links.observe_actions(&output.actions));
-            return output;
         }
 
         let mut output = if event_projects_semantic_action_boundary(event) {
@@ -143,8 +137,6 @@ impl LiveSemanticActionRuntime {
         } else {
             LiveSemanticActionOutput::default()
         };
-        output.actions.extend(mcp_actions);
-        observe_mcp_tool_call_actions(&mut output, &mut self.command);
         match &event.payload {
             EventPayload::Process(payload) if payload.operation == "exec" => {
                 let actions = self
@@ -220,9 +212,7 @@ impl LiveSemanticActionRuntime {
         segment: &PayloadSegment,
     ) -> LiveSemanticActionOutput {
         let llm_output = self.llm.observe_payload_segment(segment);
-        self.mcp.observe_llm_actions(&llm_output.actions);
-        let mcp_actions = self.mcp.observe_payload_segment(segment);
-        let mut output = if llm_output.actions.is_empty() && mcp_actions.is_empty() {
+        let mut output = if llm_output.actions.is_empty() {
             LiveSemanticActionOutput::default()
         } else {
             self.file_access.observe_boundary(
@@ -249,10 +239,6 @@ impl LiveSemanticActionRuntime {
                 );
             }
         }
-        for action in &mcp_actions {
-            output.extend(self.command.observe_mcp_tool_call(action));
-        }
-        output.actions.extend(mcp_actions);
         output
             .links
             .extend(self.links.observe_actions(&output.actions));
@@ -265,7 +251,6 @@ impl LiveSemanticActionRuntime {
         self.file_access.forget_trace(trace_id);
         self.http_exchange.forget_trace(trace_id);
         self.llm.forget_trace(trace_id);
-        self.mcp.forget_trace(trace_id);
         self.links.forget_trace(trace_id);
     }
 
@@ -275,7 +260,6 @@ impl LiveSemanticActionRuntime {
         finished_at: SystemTime,
     ) -> LiveSemanticActionOutput {
         let mut actions = self.llm.finalize_trace(trace_id, finished_at);
-        actions.extend(self.mcp.finalize_trace(trace_id, finished_at));
         let file_output = self.file_access.finalize_trace(trace_id, finished_at);
         actions.extend(file_output.actions);
         let links = self.links.observe_actions(&actions);
@@ -289,16 +273,6 @@ impl LiveSemanticActionRuntime {
             retain_event: file_output.retain_event,
             raw_event_consumed: false,
         }
-    }
-}
-
-fn observe_mcp_tool_call_actions(
-    output: &mut LiveSemanticActionOutput,
-    command: &mut CommandProjector,
-) {
-    let actions = output.actions.clone();
-    for action in &actions {
-        output.extend(command.observe_mcp_tool_call(action));
     }
 }
 
@@ -456,10 +430,6 @@ mod llm_link_tests;
 #[cfg(test)]
 #[path = "runtime_tests/llm_non_llm.rs"]
 mod llm_non_llm_tests;
-
-#[cfg(test)]
-#[path = "runtime_tests/mcp.rs"]
-mod mcp_tests;
 
 #[cfg(test)]
 #[path = "runtime_tests/file.rs"]

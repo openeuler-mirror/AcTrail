@@ -6,8 +6,7 @@ mod command;
 mod file;
 mod links;
 mod llm;
-mod mcp;
-pub(crate) mod process_parent;
+mod process_parent;
 mod runtime;
 
 pub use runtime::{LiveSemanticActionOutput, LiveSemanticActionRuntime};

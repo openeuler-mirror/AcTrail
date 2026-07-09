@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 
 use config_core::daemon::{
     AgentInvocationConfig, FileBulkReadMode, FileObservationConfig, FileRawEventRetention,
-    PayloadMcpConfig, SemanticRetentionConfig,
+    SemanticRetentionConfig,
 };
 use model_core::event::{DomainEvent, EventPayload};
 use model_core::ids::EventId;
@@ -315,7 +315,6 @@ fn enumerate_runtime(agent_enabled: bool) -> LiveSemanticActionRuntime {
         },
         SemanticRetentionConfig::default(),
         file_observation,
-        PayloadMcpConfig::default(),
     )
 }
 

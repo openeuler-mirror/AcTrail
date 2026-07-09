@@ -1,5 +1,3 @@
-import { mcpActionMeta } from '../mcp/messageClassification.js';
-
 const FILE_ACTION_KINDS = new Set([
   'file.read',
   'file.write',
@@ -13,9 +11,6 @@ export function semanticActionLabel(action) {
   if (action?.kind === 'command.invocation') {
     if (action.attributes?.['invocation.kind'] === 'agent') {
       return 'tool.call:agent.invoke';
-    }
-    if (action.attributes?.['invocation.kind'] === 'mcp') {
-      return 'tool.call:mcp_server';
     }
     return 'tool.call:bash.exec';
   }
@@ -39,27 +34,6 @@ export function semanticActionLabel(action) {
   }
   if (action?.kind === 'agent.invocation') {
     return 'tool.call:agent.invoke';
-  }
-  if (action?.kind === 'mcp.tool_call') {
-    return 'tool.call:mcp';
-  }
-  if (action?.kind === 'mcp.request') {
-    return 'mcp.request';
-  }
-  if (action?.kind === 'mcp.response') {
-    return 'mcp.response';
-  }
-  if (action?.kind === 'mcp.client_send') {
-    return 'mcp.client_send';
-  }
-  if (action?.kind === 'mcp.client_receive') {
-    return 'mcp.client_receive';
-  }
-  if (action?.kind === 'mcp.stdin') {
-    return 'mcp.stdin';
-  }
-  if (action?.kind === 'mcp.stdout') {
-    return 'mcp.stdout';
   }
   if (action?.kind === 'llm.call') {
     return 'llm.call';
@@ -95,35 +69,8 @@ export function semanticActionTarget(action) {
   if (action?.kind === 'agent.invocation') {
     return attributes['agent.child.command_line'] ?? attributes['agent.child.executable'] ?? action.title;
   }
-  if (
-    action?.kind === 'mcp.tool_call' ||
-    action?.kind === 'mcp.request' ||
-    action?.kind === 'mcp.response' ||
-    action?.kind === 'mcp.client_send' ||
-    action?.kind === 'mcp.client_receive' ||
-    action?.kind === 'mcp.stdin' ||
-    action?.kind === 'mcp.stdout'
-  ) {
-    const server = attributes['mcp.server.name'];
-    const tool = attributes['mcp.tool.name'];
-    const requestId = attributes['mcp.request.id'];
-    const target = (() => {
-      if (server && tool) {
-        return String(tool).startsWith(`${server}.`) ? tool : `${server}.${tool}`;
-      }
-      return tool ?? server ?? action.title;
-    })();
-    if (action?.kind !== 'mcp.tool_call' && requestId) {
-      return `${target} #${requestId}`;
-    }
-    return target;
-  }
   if (action?.kind === 'llm.call' || action?.kind === 'llm.request' || action?.kind === 'llm.response') {
     return attributes['llm.call.model'] ?? attributes['llm.request.model'] ?? attributes['llm.response.model'] ?? attributes.model;
   }
   return '';
-}
-
-export function semanticActionMeta(action) {
-  return mcpActionMeta(action);
 }

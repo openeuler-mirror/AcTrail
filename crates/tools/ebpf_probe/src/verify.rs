@@ -10,7 +10,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use config_core::capture_profile::CaptureProfile;
-use config_core::daemon::{EbpfCollectorConfig, OperatorConfig, PayloadConfig, PayloadMcpConfig};
+use config_core::daemon::{EbpfCollectorConfig, OperatorConfig, PayloadConfig};
 use config_core::provider_rules::ProviderRuleSetConfig;
 use control_contract::command::{ControlCommand, ProcessRef, TrackAddCommand};
 use control_contract::reply::ControlReply;
@@ -56,7 +56,6 @@ pub fn run_live_verification(
             tls: config.payload_tls.clone(),
             stdio: config.payload_stdio.clone(),
             socket: config.payload_socket.clone(),
-            mcp: PayloadMcpConfig::default(),
         },
         seccomp_defaults.active_trace_max,
         seccomp_defaults.diagnostic_log_level,

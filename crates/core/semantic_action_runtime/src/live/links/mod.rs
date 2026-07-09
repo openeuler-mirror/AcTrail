@@ -4,7 +4,6 @@ mod agent;
 mod command;
 mod http;
 mod llm;
-mod mcp;
 mod projector;
 mod shared;
 mod sse;
