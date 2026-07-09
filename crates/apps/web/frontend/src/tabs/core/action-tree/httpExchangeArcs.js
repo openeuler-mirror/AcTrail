@@ -1,8 +1,4 @@
-import { TREE_NODE_TYPES } from './config.js';
-import {
-  classifyMcpMessage,
-  mcpJsonRpcPairKey,
-} from '../../../mcp/messageClassification.js';
+import { TREE_NODE_TYPES } from './config';
 
 const HTTP_REQUEST_ACTION_ID_ATTR = 'http.request.action_id';
 const HTTP_DIRECTION_ATTR = 'direction';
@@ -11,25 +7,35 @@ const HTTP_OUTBOUND_DIRECTION = 'outbound';
 const HTTP_INBOUND_DIRECTION = 'inbound';
 const HTTP_REQUEST_OPERATION = 'request';
 const HTTP_RESPONSE_OPERATION = 'response';
-const HTTP_ARC_CLASS = 'http-exchange-arc';
-
-const MCP_ARC_CLASS = 'mcp-exchange-arc';
 
 export function buildHttpExchangeArcOverlay(root, canvas) {
-  return buildMessagePairArcOverlay(root, canvas);
-}
-
-export function buildMessagePairArcOverlay(root, canvas) {
   if (!root || !canvas) {
     return emptyOverlay();
   }
   const actionNodes = visibleActionNodes(root);
   const actionNodeById = new Map(actionNodes.map((node) => [node.id, node]));
   const elementByActionId = visibleActionElementById(canvas);
-  const arcs = [
-    ...httpExchangeArcs({ actionNodes, actionNodeById, elementByActionId, canvas }),
-    ...mcpJsonRpcExchangeArcs({ actionNodes, elementByActionId, canvas }),
-  ];
+  const arcs = [];
+  for (const responseNode of actionNodes) {
+    const responseAttrs = rawAttributes(responseNode);
+    const requestActionId = responseAttrs[HTTP_REQUEST_ACTION_ID_ATTR];
+    if (!requestActionId || !httpResponseNode(responseNode)) {
+      continue;
+    }
+    const requestNode = actionNodeById.get(requestActionId);
+    if (!requestNode || !httpRequestNode(requestNode)) {
+      continue;
+    }
+    const requestElement = elementByActionId.get(requestActionId);
+    const responseElement = elementByActionId.get(responseNode.id);
+    if (!requestElement || !responseElement) {
+      continue;
+    }
+    const arc = httpExchangeArc(canvas, requestNode, requestElement, responseNode, responseElement);
+    if (arc) {
+      arcs.push(arc);
+    }
+  }
   return {
     arcs,
     size: {
@@ -37,92 +43,6 @@ export function buildMessagePairArcOverlay(root, canvas) {
       height: Math.max(canvas.scrollHeight, canvas.clientHeight, 1),
     },
   };
-}
-
-function httpExchangeArcs({ actionNodes, actionNodeById, elementByActionId, canvas }) {
-  const arcs = [];
-  for (const targetNode of actionNodes) {
-    const targetAttrs = rawAttributes(targetNode);
-    const sourceActionId = targetAttrs[HTTP_REQUEST_ACTION_ID_ATTR];
-    if (!sourceActionId || !httpResponseNode(targetNode)) {
-      continue;
-    }
-    const sourceNode = actionNodeById.get(sourceActionId);
-    if (!sourceNode || !httpRequestNode(sourceNode)) {
-      continue;
-    }
-    const sourceElement = elementByActionId.get(sourceActionId);
-    const targetElement = elementByActionId.get(targetNode.id);
-    if (!sourceElement || !targetElement) {
-      continue;
-    }
-    const arc = messagePairArc({
-      canvas,
-      sourceNode,
-      sourceElement,
-      targetNode,
-      targetElement,
-      className: HTTP_ARC_CLASS,
-    });
-    if (arc) {
-      arcs.push(arc);
-    }
-  }
-  return arcs;
-}
-
-function mcpJsonRpcExchangeArcs({ actionNodes, elementByActionId, canvas }) {
-  const requestNodesByKey = new Map();
-  for (const node of actionNodes) {
-    const attrs = rawAttributes(node);
-    const classification = classifyMcpMessage(node.kind, attrs);
-    if (!classification.isTransportMessage || classification.jsonRpcRole !== 'request') {
-      continue;
-    }
-    const key = mcpJsonRpcPairKey(attrs);
-    if (!key) {
-      continue;
-    }
-    const nodes = requestNodesByKey.get(key) ?? [];
-    nodes.push(node);
-    requestNodesByKey.set(key, nodes);
-  }
-
-  const arcs = [];
-  const pairedRequestIds = new Set();
-  for (const targetNode of actionNodes) {
-    const attrs = rawAttributes(targetNode);
-    const classification = classifyMcpMessage(targetNode.kind, attrs);
-    if (!classification.isTransportMessage || classification.jsonRpcRole !== 'response') {
-      continue;
-    }
-    const key = mcpJsonRpcPairKey(attrs);
-    if (!key) {
-      continue;
-    }
-    const sourceNode = (requestNodesByKey.get(key) ?? []).find((node) => !pairedRequestIds.has(node.id));
-    if (!sourceNode) {
-      continue;
-    }
-    const sourceElement = elementByActionId.get(sourceNode.id);
-    const targetElement = elementByActionId.get(targetNode.id);
-    if (!sourceElement || !targetElement) {
-      continue;
-    }
-    const arc = messagePairArc({
-      canvas,
-      sourceNode,
-      sourceElement,
-      targetNode,
-      targetElement,
-      className: MCP_ARC_CLASS,
-    });
-    if (arc) {
-      arcs.push(arc);
-      pairedRequestIds.add(sourceNode.id);
-    }
-  }
-  return arcs;
 }
 
 function emptyOverlay() {
@@ -183,17 +103,16 @@ function httpResponseNode(node) {
   );
 }
 
-function messagePairArc({ canvas, sourceNode, sourceElement, targetNode, targetElement, className }) {
+function httpExchangeArc(canvas, requestNode, requestElement, responseNode, responseElement) {
   const canvasRect = canvas.getBoundingClientRect();
-  const sourceRect = nodeCardRect(sourceElement);
-  const targetRect = nodeCardRect(targetElement);
-  if (!sourceRect || !targetRect) {
+  const requestRect = nodeCardRect(requestElement);
+  const responseRect = nodeCardRect(responseElement);
+  if (!requestRect || !responseRect) {
     return null;
   }
   return {
-    id: `${sourceNode.id}->${targetNode.id}`,
-    className,
-    path: exchangeArcPath(sourceRect, targetRect, canvasRect),
+    id: `${requestNode.id}->${responseNode.id}`,
+    path: exchangeArcPath(requestRect, responseRect, canvasRect),
   };
 }
 

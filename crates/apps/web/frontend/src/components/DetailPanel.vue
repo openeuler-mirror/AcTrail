@@ -30,12 +30,6 @@
     />
     <HttpInsightPanel :detail="detail" />
     <CommandInsightPanel :detail="detail" />
-    <McpInsightPanel
-      :detail="detail"
-      :payload-text="payloadText"
-      :payload-loading="payloadLoading"
-      :payload-error="mcpPayloadError"
-    />
 
     <section v-if="Object.keys(detailAttributes).length" class="detail-section">
       <h3>Attributes</h3>
@@ -46,7 +40,7 @@
       />
     </section>
 
-    <section v-if="payloadText && !isMcpPayloadDetail" class="detail-section">
+    <section v-if="payloadText" class="detail-section">
       <h3>Payload</h3>
       <pre>{{ payloadText }}</pre>
     </section>
@@ -97,8 +91,6 @@ import CommandInsightPanel from './CommandInsightPanel.vue';
 import HttpInsightPanel from './HttpInsightPanel.vue';
 import JsonTree from './JsonTree.vue';
 import LlmInsightPanel from './LlmInsightPanel.vue';
-import McpInsightPanel from './McpInsightPanel.vue';
-import { mcpPayloadEvidenceIds } from '../mcp/payloadEvidence';
 
 const LLM_REQUEST_DETAIL_MAX_BYTES = 128 * 1024;
 const EMPTY_JSON_EXPANDED_PATHS = new Set();
@@ -126,7 +118,6 @@ defineEmits(['clear']);
 
 const payloadText = ref('');
 const payloadError = ref('');
-const payloadLoading = ref(false);
 const filePathSetMeta = ref(null);
 const filePathSetPaths = ref([]);
 const filePathSetError = ref('');
@@ -146,18 +137,7 @@ const detailKind = computed(() => props.detail?.kind ?? 'detail');
 const detailRows = computed(() => Object.entries(props.detail?.rows ?? {}));
 const detailAttributes = computed(() => props.detail?.attributes ?? {});
 const detailRawValue = computed(() => props.detail?.raw ?? null);
-const MCP_PAYLOAD_DETAIL_KINDS = new Set([
-  'mcp.request',
-  'mcp.response',
-  'mcp.client_send',
-  'mcp.client_receive',
-  'mcp.stdin',
-  'mcp.stdout',
-]);
-const isMcpPayloadDetail = computed(() => MCP_PAYLOAD_DETAIL_KINDS.has(props.detail?.raw?.kind));
-const mcpPayloadError = computed(() => (isMcpPayloadDetail.value ? payloadError.value : ''));
-const genericPayloadError = computed(() => (isMcpPayloadDetail.value ? '' : payloadError.value));
-const panelError = computed(() => props.error || genericPayloadError.value || filePathSetError.value);
+const panelError = computed(() => props.error || payloadError.value || filePathSetError.value);
 const shouldRender = computed(() => !props.hideWhenEmpty || Boolean(props.detail || panelError.value));
 const hasFilePathSet = computed(
   () => Boolean(filePathSetMeta.value) || filePathSetPaths.value.length > 0 || filePathSetLoading.value,
@@ -181,9 +161,8 @@ watch(
     resetPayloadLoad();
     resetFilePathSetLoad();
     resetLlmRequestLoad();
-    const payloadIds = detailPayloadIds(nextDetail);
-    if (payloadIds.length && traceId) {
-      loadPayloads(traceId, payloadIds, activePayloadLoad);
+    if (nextDetail?.payloadId && traceId) {
+      loadPayload(traceId, nextDetail.payloadId, activePayloadLoad);
     }
     if (nextDetail?.filePathSetActionId && traceId) {
       loadFilePathSetPage({
@@ -210,7 +189,6 @@ function resetPayloadLoad() {
   activePayloadLoad = Symbol();
   payloadText.value = '';
   payloadError.value = '';
-  payloadLoading.value = false;
 }
 
 function resetFilePathSetLoad() {
@@ -230,22 +208,15 @@ function resetLlmRequestLoad() {
   llmRequestLoading.value = false;
 }
 
-async function loadPayloads(traceId, payloadIds, token) {
+async function loadPayload(traceId, payloadId, token) {
   try {
-    payloadLoading.value = true;
-    const payloads = await Promise.all(
-      payloadIds.map((payloadId) => readPayload(traceId, payloadId)),
-    );
+    const payload = await readPayload(traceId, payloadId);
     if (activePayloadLoad === token) {
-      payloadText.value = payloads.map((payload) => payload.text ?? '').join('');
+      payloadText.value = payload.text ?? '';
     }
   } catch (err) {
     if (activePayloadLoad === token) {
       payloadError.value = String(err.message ?? err);
-    }
-  } finally {
-    if (activePayloadLoad === token) {
-      payloadLoading.value = false;
     }
   }
 }
@@ -321,13 +292,6 @@ function llmRequestActionId(detail) {
     return action.id;
   }
   return null;
-}
-
-function detailPayloadIds(detail) {
-  if (detail?.payloadId !== null && detail?.payloadId !== undefined) {
-    return [detail.payloadId];
-  }
-  return mcpPayloadEvidenceIds(detail?.raw);
 }
 
 function jsonExpandedPaths(section) {

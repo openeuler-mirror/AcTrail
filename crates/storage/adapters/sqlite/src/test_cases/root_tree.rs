@@ -16,7 +16,6 @@ const DISPLAY_PARENT_ROLES: &[&str] = &[
     "command.contains_process_exec",
     "command.contains_file_access",
     "command.contains_llm_call",
-    "command.contains_mcp_tool_call",
     "command.contains_command_invocation",
 ];
 const ROOT_LINK_ROLES: &[&str] = &["agent.performed_action"];
@@ -371,66 +370,6 @@ fn command_fallback_children_use_effective_display_link_validity() {
         .expect("read command fallback children");
     assert_eq!(fallback_children.len(), 1);
     assert_eq!(fallback_children[0].action_id, "http");
-}
-
-#[test]
-fn parent_identity_conflict_hides_mcp_tool_call_child() {
-    let mut storage = SqliteStorage::open_in_memory().expect("open in-memory sqlite storage");
-    let trace_id = TraceId::new(7);
-    let client = ProcessIdentity::new(700, 1, 1);
-    let server = ProcessIdentity::new(701, 2, 2);
-    write_action(
-        &mut storage,
-        action(
-            trace_id,
-            "command",
-            SemanticActionKind::CommandInvocation,
-            client,
-            1,
-        ),
-    );
-    let mut mcp = action(
-        trace_id,
-        "mcp-tool",
-        SemanticActionKind::McpToolCall,
-        server,
-        2,
-    );
-    mcp.attributes.insert(
-        "process.parent.identity_state".to_string(),
-        "conflict".to_string(),
-    );
-    write_action(&mut storage, mcp);
-    write_link(
-        &mut storage,
-        link(
-            trace_id,
-            "command",
-            "mcp-tool",
-            SemanticActionLinkRole::CommandContainsMcpToolCall,
-        ),
-    );
-
-    assert_eq!(
-        storage
-            .semantic_action_child_count(trace_id, "command", DISPLAY_PARENT_ROLES)
-            .expect("count command children"),
-        0
-    );
-    let page = storage
-        .semantic_action_children_page(
-            trace_id,
-            "command",
-            DISPLAY_PARENT_ROLES,
-            DISPLAY_PARENT_ROLES,
-            SemanticActionChildPageQuery {
-                offset: 0,
-                limit: 10,
-            },
-        )
-        .expect("read command children");
-    assert_eq!(page.total_count, 0);
-    assert!(page.rows.is_empty());
 }
 
 fn write_action(storage: &mut SqliteStorage, action: SemanticAction) {

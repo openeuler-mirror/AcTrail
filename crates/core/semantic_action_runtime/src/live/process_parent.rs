@@ -137,14 +137,14 @@ pub(super) fn apply_fork_parent(
     }
 }
 
-pub(crate) fn parent_identity_has_conflict(action: &SemanticAction) -> bool {
+pub(super) fn parent_identity_has_conflict(action: &SemanticAction) -> bool {
     action
         .attributes
         .get(ATTR_PROCESS_PARENT_IDENTITY_STATE)
         .is_some_and(|state| state == PROCESS_PARENT_IDENTITY_STATE_CONFLICT)
 }
 
-pub(crate) fn parent_process_from_action(action: &SemanticAction) -> Option<ProcessIdentity> {
+pub(super) fn parent_process_from_action(action: &SemanticAction) -> Option<ProcessIdentity> {
     if !parent_identity_is_observed(action) {
         return None;
     }

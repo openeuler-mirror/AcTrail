@@ -25,7 +25,7 @@ use super::super::{
     L1SseRetention, L2HttpRetention, L3Http2FrameRetention, L4PayloadRetention,
     LlmRequestContentRetention, LlmResponseContentRetention, LlmToolCallRetention,
     LlmUsageRetention, MemlockRlimit, NetworkControlConfig, NetworkControlSeccompSyscall,
-    PayloadBodyContentRetention, PayloadConfig, PayloadMcpConfig, PayloadRedactionPolicy,
+    PayloadBodyContentRetention, PayloadConfig, PayloadRedactionPolicy,
     PayloadSocketCaptureBackend, PayloadSocketConfig, PayloadSocketSeccompSyscall,
     PayloadStdioConfig, PayloadStdioStorageMode, PayloadTlsCaptureBackend, PayloadTlsConfig,
     PayloadTlsLibrary, PayloadTlsLibraryPath, PayloadTlsResolver, PayloadTlsSeccompSyscall,
@@ -335,7 +335,6 @@ impl OperatorDocument {
             tls: self.payload.tls.to_config()?,
             stdio: self.payload.stdio.to_config()?,
             socket: self.payload.socket.to_config()?,
-            mcp: self.payload.mcp.to_config()?,
         };
         let seccomp_notify = self.seccomp_notify.to_config();
         let process_seccomp = self.process_seccomp.to_config()?;

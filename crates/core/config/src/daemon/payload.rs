@@ -3,8 +3,6 @@
 use std::path::PathBuf;
 use std::str::FromStr;
 
-pub const DEFAULT_MCP_PARSE_BUFFER_MAX_BYTES: u64 = 4_194_304;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PayloadTlsLibrary {
     Auto,
@@ -348,23 +346,9 @@ pub struct PayloadSocketConfig {
     pub seccomp_syscalls: Vec<PayloadSocketSeccompSyscall>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PayloadMcpConfig {
-    pub parse_buffer_max_bytes: u64,
-}
-
-impl Default for PayloadMcpConfig {
-    fn default() -> Self {
-        Self {
-            parse_buffer_max_bytes: DEFAULT_MCP_PARSE_BUFFER_MAX_BYTES,
-        }
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PayloadConfig {
     pub tls: PayloadTlsConfig,
     pub stdio: PayloadStdioConfig,
     pub socket: PayloadSocketConfig,
-    pub mcp: PayloadMcpConfig,
 }

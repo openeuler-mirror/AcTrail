@@ -4,8 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build",
-    "test": "node --test src/tabs/core/action-tree/actionGroups.test.js src/tabs/core/action-tree/httpExchangeArcs.test.js src/mcp/insight.test.js src/mcp/payloadEvidence.test.js src/tabs/actionLabels.test.js"
+    "build": "vite build"
   },
   "dependencies": {
     "@lucide/vue": "1.17.0",

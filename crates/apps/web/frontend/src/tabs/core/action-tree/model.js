@@ -1,7 +1,7 @@
 import { GRAPH_LANES, TREE_NODE_TYPES, UI_LIMITS } from './config';
 import { compactMeta, compactRows, kindClass, shortTime } from './common';
 import { groupActionNodes, mergeActionTreeChildren } from './actionGroups';
-import { semanticActionLabel, semanticActionMeta, semanticActionTarget } from '../../actionLabels';
+import { semanticActionLabel, semanticActionTarget } from '../../actionLabels';
 
 export { mergeActionTreeChildren };
 
@@ -16,7 +16,6 @@ const PROCESS_PARENT_IDENTITY_STATE_CONFLICT = 'conflict';
 const PARENT_IDENTITY_LINK_ROLES = new Set([
   'agent.performed_action',
   'command.contains_command_invocation',
-  'command.contains_mcp_tool_call',
 ]);
 
 export function buildActionTreeRootNode({ traceDetail, rootData }) {
@@ -257,13 +256,12 @@ function nodeMatchesQuery(node, query) {
 function actionDisplay(action) {
   const label = actionCardLabel(action);
   const target = semanticActionTarget(action);
-  const actionMeta = semanticActionMeta(action);
   const time = shortTime(action.start_time);
   return {
     label,
     target,
     durationBadge: action.duration ?? null,
-    meta: compactMeta([target, actionMeta, time, action.status]),
+    meta: compactMeta([target, time, action.status]),
     metaItems: compactMetaItems([
       metaItem(metaKind(action), target),
       metaItem('time', time),
@@ -401,57 +399,6 @@ function attributePriority(kind) {
       'llm.response.finish_reason',
       'sse.done',
       'sse.data_json_state',
-    ];
-  }
-  if (kind === 'mcp.tool_call') {
-    return [
-      'mcp.server.name',
-      'mcp.tool.name',
-      'mcp.execution.status',
-      'mcp.transport',
-      'mcp.request.id',
-      'mcp.request.action_id',
-      'mcp.response.action_id',
-      'mcp.client_send.action_id',
-      'mcp.client_receive.action_id',
-      'mcp.evidence.mode',
-      'llm.response.action_id',
-      'llm.tool_call.id',
-      'llm.tool_call.name',
-      'mcp.client.pid',
-    ];
-  }
-  if (kind === 'mcp.request' || kind === 'mcp.response') {
-    return [
-      'mcp.server.name',
-      'mcp.tool.name',
-      'mcp.request.id',
-      'mcp.transport',
-      'mcp.tool_call.action_id',
-      'mcp.stdin.action_id',
-      'mcp.stdout.action_id',
-      'mcp.client_send.action_id',
-      'mcp.client_receive.action_id',
-      'mcp.client.pid',
-    ];
-  }
-  if (
-    kind === 'mcp.stdin' ||
-    kind === 'mcp.stdout' ||
-    kind === 'mcp.client_send' ||
-    kind === 'mcp.client_receive'
-  ) {
-    return [
-      'mcp.server.name',
-      'mcp.tool.name',
-      'mcp.request.id',
-      'mcp.transport',
-      'mcp.tool_call.action_id',
-      'mcp.request.action_id',
-      'mcp.response.action_id',
-      'mcp.client_send.action_id',
-      'mcp.client_receive.action_id',
-      'payload.stream_key',
     ];
   }
   if (kind === 'command.invocation') {
