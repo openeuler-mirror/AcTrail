@@ -17,7 +17,6 @@ from common import (  # noqa: E402
     export_otel,
     launch_and_parse_trace,
     read_config,
-    render_config,
     repo_root,
     require_binary,
     require_complete_llm_exchange,
@@ -47,23 +46,22 @@ def main() -> int:
     actrailweb = require_binary(bin_dir, "actrailweb")
     tls_probe_point_finder = require_binary(bin_dir, "tls-probe-point-finder")
     xiaoo_binary = resolve_xiaoo_binary(required(workload, "xiaoo_binary"))
-    require_xiaoo_auto_tls_plan(xiaoo_binary, workload, tls_probe_point_finder)
-    resolved_config = Path(required(workload, "resolved_config_path"))
-    render_config(
-        Path(args.config_template),
-        resolved_config,
-        xiaoo_config_replacements(),
+    tls_runtime = resolve_optional_xiaoo_tls_runtime(
+        xiaoo_binary,
+        workload,
+        tls_probe_point_finder,
     )
-    clean_configured_paths(actrailctl, resolved_config)
+    config = Path(args.config)
+    clean_configured_paths(actrailctl, config)
     daemon = start_daemon(
         actraild,
-        resolved_config,
+        config,
         float(required(workload, "daemon_ready_timeout_seconds")),
     )
     try:
         trace_id, output = launch_and_parse_trace(
             actrailctl,
-            resolved_config,
+            config,
             "agent-xiaoo-rustls",
             [
                 str(xiaoo_binary),
@@ -82,21 +80,21 @@ def main() -> int:
         payloads = wait_for_payloads_any(
             actrailctl,
             actrailviewer,
-            resolved_config,
+            config,
             trace_id,
             int(required(workload, "drain_attempts")),
             float(required(workload, "drain_sleep_seconds")),
             required(workload, "payload_head"),
-            accepted_payload_fragments(),
+            accepted_payload_fragments(tls_runtime),
         )
         payload_count = require_complete_payload_rows_any(
             payloads,
-            accepted_payload_sources(),
+            accepted_payload_sources(tls_runtime),
             direction="outbound",
         )
         actions = wait_for_llm_exchange_actions(
             actrailviewer,
-            resolved_config,
+            config,
             trace_id,
             int(required(workload, "drain_attempts")),
             float(required(workload, "drain_sleep_seconds")),
@@ -105,7 +103,7 @@ def main() -> int:
         require_llm_exchange_graph(actions)
         web_tree = require_web_action_tree_projection(
             actrailweb,
-            resolved_config,
+            config,
             trace_id,
             float(required(workload, "daemon_ready_timeout_seconds")),
             float(required(workload, "drain_sleep_seconds")),
@@ -113,7 +111,7 @@ def main() -> int:
         )
         otel = export_otel(
             actrailviewer,
-            resolved_config,
+            config,
             trace_id,
             Path(required(workload, "otel_output_path")),
         )
@@ -135,7 +133,7 @@ def parse_args() -> argparse.Namespace:
     case_dir = Path(__file__).resolve().parent
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bin-dir", default=os.environ.get("ACTRAIL_BIN_DIR", "target/release"))
-    parser.add_argument("--config-template", default=str(case_dir / "operator.conf"))
+    parser.add_argument("--config", default=str(case_dir / "operator.patch.conf"))
     parser.add_argument("--workload-config", default=str(case_dir / "workload.conf"))
     return parser.parse_args()
 
@@ -151,31 +149,31 @@ def resolve_xiaoo_binary(configured: str) -> Path:
     return require_executable(path)
 
 
-def require_xiaoo_auto_tls_plan(
+def resolve_optional_xiaoo_tls_runtime(
     xiaoo_binary: Path,
     workload: dict[str, str],
     tls_probe_point_finder: Path,
-) -> None:
-    plan = resolve_rustls_probe_plan(xiaoo_binary, workload, tls_probe_point_finder)
+) -> object | None:
+    try:
+        plan = resolve_rustls_probe_plan(xiaoo_binary, workload, tls_probe_point_finder)
+    except Exception as error:
+        print(f"xiaoo_rustls_auto_plan=disabled {error}")
+        return None
     print(f"xiaoo_rustls_auto_plan={plan.detail}")
+    return plan
 
 
-def xiaoo_config_replacements() -> dict[str, str]:
-    return {
-        "__XIAOO_TLS_ENABLED__": "true",
-        "__XIAOO_SECCOMP_NOTIFY_ENABLED__": "true",
-        "__XIAOO_TLS_REQUIRED_CAPABILITY__": '"tls-plaintext-payload",',
-    }
+def accepted_payload_sources(tls_runtime: object | None) -> list[tuple[str, str]]:
+    sources = [("Syscall", "socket-syscall")]
+    if tls_runtime is not None:
+        sources.insert(0, ("TlsUserSpace", "rustls"))
+    return sources
 
 
-def accepted_payload_sources() -> list[tuple[str, str]]:
-    return [("TlsUserSpace", "rustls")]
-
-
-def accepted_payload_fragments() -> list[list[str]]:
+def accepted_payload_fragments(tls_runtime: object | None) -> list[list[str]]:
     return [
         [source, library, "outbound", "Complete", "success"]
-        for source, library in accepted_payload_sources()
+        for source, library in accepted_payload_sources(tls_runtime)
     ]
 
 

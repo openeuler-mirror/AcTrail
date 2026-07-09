@@ -7,7 +7,7 @@
 | 文档 | 适用对象 | 内容 |
 | --- | --- | --- |
 | [插件操作手册](operator-manual.zh.md) | 运维和插件使用者 | 插件加载、卸载、列表、状态查看、manifest、插件配置和授权。 |
-| [插件 ABI 文档索引](abi/README.zh.md) | 插件作者 | WASM core module、WIT component、观测消费者和控制决策 ABI。 |
+| [插件 ABI 文档索引](abi/README.zh.md) | 插件作者 | WASM core module、WIT component、观测消费者、控制决策和 LLM codec ABI。 |
 
 ## ABI 文档
 
@@ -16,6 +16,7 @@
 | [WASM Core Module ABI](abi/wasm-core-module.zh.md) | 普通 WASM module 的内存、导出函数和 hostcall 约定。 |
 | [观测消费者 ABI](abi/observation-consumer.zh.md) | `observation-consumer` 插件的输入、返回值和消费语义。 |
 | [控制决策 ABI](abi/control-decider.zh.md) | `control-decider` 插件的同步决策输入、返回值、hostcall 和性能约束。 |
+| [LLM Codec ABI](abi/llm-codec.zh.md) | `llm-codec` 插件的 request/SSE 解码入口、输出格式和失败回退语义。 |
 
 ## 示例入口
 

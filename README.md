@@ -12,16 +12,17 @@ Use it when an agent's own logs are not enough. AcTrail answers:
 - Which low-level payload, HTTP, or process event proves a higher-level action?
 - Which observations were complete, partial, blocked, or degraded?
 
+![AcTrail evidence-to-action trail](./images/actrail-readme__evidence-to-action__candidate.drawio.svg)
+
 ## Install
 
 Install from source when developing or testing a checkout:
 
 ```bash
-cargo build --release
-sudo ./scripts/install-release.sh /usr/local/bin
+./scripts/install-release.sh /usr/local/bin
 ```
 
-The install script copies the release binaries into the destination directory. Use another directory if you do not want to install into `/usr/local/bin`.
+The install script checks build dependencies, installs the actrailweb frontend dependencies with `npm ci`, builds missing release binaries, and copies them into the destination directory. It uses `sudo` only for the final copy when the destination directory requires elevated permissions. Use another directory if you do not want to install into `/usr/local/bin`.
 
 RPM packages are published from the latest release page:
 

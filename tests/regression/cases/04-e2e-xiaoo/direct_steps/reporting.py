@@ -4,6 +4,8 @@ from __future__ import annotations
 
 
 def xiaoo_tls_detail(tls_runtime) -> str:
+    if tls_runtime is None:
+        return "xiaoo_tls_runtime=disabled"
     return f"xiaoo_tls_runtime={tls_runtime.detail}"
 
 

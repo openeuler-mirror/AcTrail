@@ -3,7 +3,7 @@
 use tls_payload_core::{Decision, PayloadDirection};
 use tls_payload_sync::{DecisionEvent, PayloadEvent, SummaryEvent, SyncEvent};
 
-use crate::runtime::flow_control::{FlowDecision, FlowSummary};
+use crate::runtime::flow_control::{FlowDecision, FlowEmission, FlowSummary};
 use crate::runtime::{config, output};
 
 pub(super) enum RuntimeAction {
@@ -121,6 +121,13 @@ pub(super) fn report_payload(
                 summary.clone(),
             );
         }
+        FlowDecision::EmitMany(emissions) => {
+            for emission in emissions {
+                send_flow_emission(
+                    config, &provider, direction, symbol, stream_key, sequence, emission,
+                );
+            }
+        }
         FlowDecision::DropBody => {}
     }
     if !config.should_print_payload() {
@@ -144,6 +151,29 @@ pub(super) fn report_payload(
             stream_key,
             summary.observed_size
         )),
+        FlowDecision::EmitMany(emissions) => {
+            for emission in emissions {
+                match emission {
+                    FlowEmission::Payload(bytes) => output::event_line(&format!(
+                        "sync_payload: direction={} provider={} symbol={} stream=0x{:x} bytes={} preview={}\n",
+                        direction.as_str(),
+                        provider,
+                        symbol,
+                        stream_key,
+                        bytes.len(),
+                        config.redact_payload(&bytes)
+                    )),
+                    FlowEmission::Summary(summary) => output::event_line(&format!(
+                        "sync_payload_summary: direction={} provider={} symbol={} stream=0x{:x} observed_bytes={}\n",
+                        direction.as_str(),
+                        provider,
+                        symbol,
+                        stream_key,
+                        summary.observed_size
+                    )),
+                }
+            }
+        }
         FlowDecision::DropBody => output::event_line(&format!(
             "sync_payload_drop_body: direction={} provider={} symbol={} stream=0x{:x} bytes={}\n",
             direction.as_str(),
@@ -152,6 +182,35 @@ pub(super) fn report_payload(
             stream_key,
             payload.len()
         )),
+    }
+}
+
+fn send_flow_emission(
+    config: &config::RuntimeConfig,
+    provider: &str,
+    direction: PayloadDirection,
+    symbol: &str,
+    stream_key: usize,
+    sequence: u64,
+    emission: &FlowEmission,
+) {
+    match emission {
+        FlowEmission::Payload(bytes) => {
+            send_payload_event(
+                config, provider, direction, symbol, stream_key, sequence, bytes,
+            );
+        }
+        FlowEmission::Summary(summary) => {
+            send_summary_event(
+                config,
+                provider,
+                direction,
+                symbol,
+                stream_key,
+                sequence,
+                summary.clone(),
+            );
+        }
     }
 }
 

@@ -29,6 +29,12 @@ fn resolve_command_or_path(path: &Path) -> ToolResult<PathBuf> {
     if !raw.contains('/') {
         return resolve_from_path(&raw);
     }
+    if is_proc_namespace_path(path) {
+        if path.is_file() {
+            return Ok(path.to_path_buf());
+        }
+        return Err(ToolError::new(format!("not a file: {}", path.display())));
+    }
     let resolved = fs::canonicalize(path)
         .map_err(|error| ToolError::new(format!("cannot resolve {}: {error}", path.display())))?;
     if !resolved.is_file() {
@@ -38,6 +44,11 @@ fn resolve_command_or_path(path: &Path) -> ToolResult<PathBuf> {
         )));
     }
     Ok(resolved)
+}
+
+fn is_proc_namespace_path(path: &Path) -> bool {
+    let raw = path.as_os_str().to_string_lossy();
+    raw.starts_with("/proc/") && (raw.contains("/root/") || raw.contains("/fd/"))
 }
 
 fn resolve_from_path(command: &str) -> ToolResult<PathBuf> {

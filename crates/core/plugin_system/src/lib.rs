@@ -3,6 +3,7 @@
 mod control;
 mod diagnostics;
 mod grants;
+mod llm_codec;
 mod manifest;
 mod observation;
 mod runtime;
@@ -22,6 +23,10 @@ pub use control::{
 };
 pub use diagnostics::{PluginDroppedRecord, PluginRuntimeError};
 pub use grants::{FilePolicyRulesApplyGrant, PluginHostGrant, PluginHostGrants};
+pub use llm_codec::{
+    LlmCodecDecoded, LlmCodecOutcome, LlmCodecPlugin, LlmCodecPluginStatus, LlmCodecRequest,
+    LlmCodecSseEvent,
+};
 pub use manifest::{
     PluginBuiltinDeclaration, PluginCapability, PluginCommandHostcallLimits,
     PluginConfigDeclaration, PluginConfigHostcallLimits, PluginContextHostcallLimits,

@@ -5,6 +5,10 @@ use std::collections::BTreeMap;
 use crate::elf::{Arch, ElfImage};
 use crate::{ToolError, ToolResult};
 
+#[cfg(test)]
+#[path = "boringssl/tests.rs"]
+mod tests;
+
 pub(crate) const NAME: &str = "boringssl";
 pub(crate) const LIBRARY: &str = "boringssl";
 pub(crate) const SYMBOLS: &[&str] = &[
@@ -31,6 +35,12 @@ const X86_64_READ_PATTERN: &[u8] = &[
 const X86_64_WRITE_PATTERN: &[u8] = &[
     0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x53, 0x48, 0x83, 0xec,
     0x18, 0x41, 0x89, 0xd7, 0x49, 0x89, 0xf6, 0x48, 0x89, 0xfb,
+];
+const BORINGSSL_IDENTITY_MARKERS: &[&[u8]] = &[
+    b"vendor/boringssl/",
+    b"OPENSSL_internal",
+    b"BoringSSLError",
+    b"openssl_is_boringssl",
 ];
 const X86_64_READ_HANDSHAKE_DELTA: usize = 0x6f0;
 const X86_64_WRITE_READ_DELTA: usize = 0xca0;
@@ -77,6 +87,13 @@ pub(crate) struct OffsetAddress {
     pub(crate) virtual_address: u64,
 }
 
+#[derive(Debug)]
+struct X86_64Offsets {
+    handshake: Option<usize>,
+    read: usize,
+    write: usize,
+}
+
 pub(crate) fn map_symbols(arch: Arch) -> &'static [&'static str] {
     match arch {
         Arch::Aarch64 => MAP_SYMBOLS_AARCH64,
@@ -99,17 +116,14 @@ fn detect_x86_64(image: &ElfImage, match_limit: usize) -> ToolResult<StaticPatte
     let handshake_matches = find_all(data, X86_64_HANDSHAKE_PATTERN);
     let read_matches = find_all(data, X86_64_READ_PATTERN);
     let write_matches = find_all(data, X86_64_WRITE_PATTERN);
-    let read_offset = require_single(&read_matches, "SSL_read")?;
-    let handshake_offset = resolve_x86_64_handshake(data, &handshake_matches, read_offset)?;
-    let write_offset = resolve_x86_64_write(data, &write_matches, read_offset)?;
-    let offsets = offsets_with_addresses(
-        image,
-        &[
-            ("SSL_do_handshake", handshake_offset),
-            ("SSL_read", read_offset),
-            ("SSL_write", write_offset),
-        ],
-    )?;
+    let resolved = resolve_x86_64_offsets(data, &handshake_matches, &read_matches, &write_matches)?;
+    let mut resolved_offsets = Vec::new();
+    if let Some(handshake_offset) = resolved.handshake {
+        resolved_offsets.push(("SSL_do_handshake", handshake_offset));
+    }
+    resolved_offsets.push(("SSL_read", resolved.read));
+    resolved_offsets.push(("SSL_write", resolved.write));
+    let offsets = offsets_with_addresses(image, &resolved_offsets)?;
     Ok(StaticPatternDetection {
         arch_label: "x86_64",
         matches: vec![
@@ -140,6 +154,26 @@ fn detect_x86_64(image: &ElfImage, match_limit: usize) -> ToolResult<StaticPatte
         ],
         map_symbols: map_from_offsets(&offsets, MAP_SYMBOLS_X86_64),
         offsets,
+    })
+}
+
+fn resolve_x86_64_offsets(
+    data: &[u8],
+    handshake_matches: &[usize],
+    read_matches: &[usize],
+    write_matches: &[usize],
+) -> ToolResult<X86_64Offsets> {
+    let read = require_single(read_matches, "SSL_read")?;
+    let write = resolve_x86_64_write(data, write_matches, read)?;
+    let handshake = match resolve_x86_64_handshake(data, handshake_matches, read) {
+        Ok(offset) => Some(offset),
+        Err(_) if has_boringssl_identity(data) => None,
+        Err(error) => return Err(error),
+    };
+    Ok(X86_64Offsets {
+        handshake,
+        read,
+        write,
     })
 }
 
@@ -245,6 +279,14 @@ fn resolve_x86_64_write(
         "BoringSSL SSL_write nearby pattern match count={}",
         nearby.len()
     )))
+}
+
+fn has_boringssl_identity(data: &[u8]) -> bool {
+    let has_vendor_path = contains_bytes(data, BORINGSSL_IDENTITY_MARKERS[0]);
+    let has_openssl_error = contains_bytes(data, BORINGSSL_IDENTITY_MARKERS[1]);
+    let has_boring_error = contains_bytes(data, BORINGSSL_IDENTITY_MARKERS[2]);
+    let has_boring_flag = contains_bytes(data, BORINGSSL_IDENTITY_MARKERS[3]);
+    has_vendor_path || has_boring_flag || (has_openssl_error && has_boring_error)
 }
 
 fn require_related(
@@ -359,4 +401,8 @@ fn find_all(data: &[u8], pattern: &[u8]) -> Vec<usize> {
         start = offset + 1;
     }
     offsets
+}
+
+fn contains_bytes(data: &[u8], pattern: &[u8]) -> bool {
+    !find_all(data, pattern).is_empty()
 }

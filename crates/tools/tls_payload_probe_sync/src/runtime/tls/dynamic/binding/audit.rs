@@ -1,10 +1,13 @@
 use std::ffi::{CStr, c_void};
+#[cfg(target_env = "gnu")]
 use std::mem::MaybeUninit;
 use std::os::raw::{c_char, c_uint};
 use std::sync::atomic::{AtomicU8, Ordering};
 
+use crate::runtime;
+#[cfg(target_env = "gnu")]
+use crate::runtime::loader;
 use crate::runtime::tls::dynamic::core::{self, BindingSource, TlsFuncKind};
-use crate::runtime::{self, loader};
 
 #[cfg(not(target_arch = "aarch64"))]
 const SUPPORTED_LAV_CURRENT: c_uint = 1;
@@ -13,7 +16,7 @@ const LA_FLG_BINDTO: c_uint = 0x01;
 const ENV_AUDIT_OBJECT_ALLOWLIST: &str = "TLS_PAYLOAD_SYNC_AUDIT_OBJECT_ALLOWLIST";
 const DEFAULT_AUDIT_OBJECT_ALLOWLIST: &str =
     "libssl.so,libssl.so.*,libboringssl.so,libboringssl.so.*";
-const OWN_RUNTIME_LIBRARY: &str = "libactrail_tls_payload_probe_sync.so";
+const OWN_RUNTIME_LIBRARY_PREFIX: &str = "libactrail_tls_payload_probe_sync";
 const OWN_RUNTIME_COOKIE: usize = 0xAC7A_11A0_0000_0001;
 
 const NAMESPACE_UNKNOWN: u8 = 0;
@@ -21,6 +24,11 @@ const NAMESPACE_BASE: u8 = 1;
 const NAMESPACE_NON_BASE: u8 = 2;
 
 static NAMESPACE_STATE: AtomicU8 = AtomicU8::new(NAMESPACE_UNKNOWN);
+
+#[cfg(target_env = "gnu")]
+type LinkMapId = libc::Lmid_t;
+#[cfg(not(target_env = "gnu"))]
+type LinkMapId = libc::c_long;
 
 #[repr(C)]
 pub(in crate::runtime) struct Elf64Sym {
@@ -51,12 +59,12 @@ pub unsafe extern "C" fn la_version(version: c_uint) -> c_uint {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn la_objopen(
     map: *mut c_void,
-    _lmid: libc::Lmid_t,
+    _lmid: LinkMapId,
     cookie: *mut usize,
 ) -> c_uint {
     runtime::retry_initialize_after_loader_event();
     with_object_name(map.cast(), 0, |name| {
-        if name == OWN_RUNTIME_LIBRARY {
+        if name.starts_with(OWN_RUNTIME_LIBRARY_PREFIX) {
             if !cookie.is_null() {
                 unsafe {
                     *cookie = OWN_RUNTIME_COOKIE;
@@ -140,14 +148,22 @@ fn audit_object_pattern_matches(name: &str, pattern: &str) -> bool {
 }
 
 pub(in crate::runtime) fn is_audit_namespace() -> Result<bool, String> {
-    if let Some(is_audit) = cached_namespace_state() {
-        return Ok(is_audit);
+    #[cfg(not(target_env = "gnu"))]
+    {
+        return Ok(false);
     }
-    let is_audit = detect_current_namespace_is_audit()?;
-    store_namespace_state(is_audit);
-    Ok(is_audit)
+    #[cfg(target_env = "gnu")]
+    {
+        if let Some(is_audit) = cached_namespace_state() {
+            return Ok(is_audit);
+        }
+        let is_audit = detect_current_namespace_is_audit()?;
+        store_namespace_state(is_audit);
+        Ok(is_audit)
+    }
 }
 
+#[cfg(target_env = "gnu")]
 fn cached_namespace_state() -> Option<bool> {
     match NAMESPACE_STATE.load(Ordering::Acquire) {
         NAMESPACE_BASE => Some(false),
@@ -165,11 +181,13 @@ fn store_namespace_state(is_audit: bool) {
     NAMESPACE_STATE.store(state, Ordering::Release);
 }
 
+#[cfg(target_env = "gnu")]
 fn detect_current_namespace_is_audit() -> Result<bool, String> {
     let lmid = current_runtime_lmid()?;
     Ok(lmid != libc::LM_ID_BASE as libc::Lmid_t)
 }
 
+#[cfg(target_env = "gnu")]
 fn current_runtime_lmid() -> Result<libc::Lmid_t, String> {
     let mut info = MaybeUninit::<libc::Dl_info>::zeroed();
     let address = current_runtime_lmid as *const () as *const c_void;

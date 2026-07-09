@@ -121,7 +121,9 @@ fn loaded_tls_symbol(symbol: &'static [u8]) -> Option<usize> {
 fn is_tls_library_candidate(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name.contains(".so") && name != "libactrail_tls_payload_probe_sync.so")
+        .is_some_and(|name| {
+            name.contains(".so") && !name.starts_with("libactrail_tls_payload_probe_sync")
+        })
 }
 
 fn symbol_name(symbol: &'static [u8]) -> &'static str {

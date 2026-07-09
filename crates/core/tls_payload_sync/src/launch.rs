@@ -1,14 +1,22 @@
 //! Target process launch helpers for preloaded sync TLS runtime.
 
 use std::ffi::{OsStr, OsString};
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 
 use tls_probe_point_finder::ProbePointPlan;
 use tls_probe_point_finder::ProbeSource;
 
+use crate::env::{
+    ENV_DEPENDENCY_GUARD_DIR, ENV_LIBRARY_PATH_PREFIX, ENV_LIBRARY_PATH_PREFIX_GLIBC,
+    ENV_LIBRARY_PATH_PREFIX_MUSL, ENV_RUNTIME_GLIBC_LIBRARY, ENV_RUNTIME_MUSL_LIBRARY,
+    ENV_SYSTEM_LIBRARY_DIRS, RUNTIME_GLIBC_LIBRARY_NAME, RUNTIME_MUSL_LIBRARY_NAME,
+};
 use crate::{SyncError, SyncResult};
 
+const LD_LIBRARY_PATH: &str = "LD_LIBRARY_PATH";
+const LIBGCC_S: &str = "libgcc_s.so.1";
 const NATIVE_INLINE_HOOK_ARCHES: &[&str] = &["x86_64", "aarch64"];
 const NATIVE_INLINE_HOOK_SYMBOLS: &[&str] = &[
     "SSL_write",
@@ -24,6 +32,25 @@ const NATIVE_INLINE_HOOK_SYMBOLS: &[&str] = &[
 pub enum RuntimeLibraryPath {
     Auto,
     Path(PathBuf),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeLibrarySet {
+    pub glibc: PathBuf,
+    pub musl: Option<PathBuf>,
+}
+
+impl RuntimeLibrarySet {
+    pub fn library_for(&self, family: crate::LibcFamily) -> SyncResult<PathBuf> {
+        match family {
+            crate::LibcFamily::Glibc => Ok(self.glibc.clone()),
+            crate::LibcFamily::Musl => self.musl.clone().ok_or_else(|| {
+                SyncError::new(format!(
+                    "musl TLS sync runtime library not found; build {RUNTIME_MUSL_LIBRARY_NAME} with scripts/build-tls-sync-runtimes.sh or set {ENV_RUNTIME_MUSL_LIBRARY}"
+                ))
+            }),
+        }
+    }
 }
 
 pub fn run_with_preload(
@@ -54,6 +81,12 @@ pub fn run_with_runtime_libraries(
     let mut child = Command::new(program);
     child.args(&command[1..]);
     child.envs(envs);
+    if let Some((key, value)) = runtime_dependency_library_path_env(preload_libraries)? {
+        child.env(key, value);
+    }
+    if let Some((key, value)) = runtime_dependency_library_path_prefix_env(preload_libraries)? {
+        child.env(key, value);
+    }
     child.env(
         "LD_PRELOAD",
         preload_env_value_for_libraries(preload_libraries)?,
@@ -71,25 +104,81 @@ pub fn run_with_runtime_libraries(
 
 pub fn runtime_library_path(requested: &RuntimeLibraryPath) -> SyncResult<PathBuf> {
     match requested {
-        RuntimeLibraryPath::Path(path) => return Ok(path.clone()),
+        RuntimeLibraryPath::Path(path) => return canonical_runtime_library(path),
         RuntimeLibraryPath::Auto => {}
     }
     if let Some(path) = std::env::var_os("TLS_PAYLOAD_SYNC_LIBRARY") {
-        return Ok(PathBuf::from(path));
+        return canonical_runtime_library(&PathBuf::from(path));
     }
     let executable = std::env::current_exe()
         .map_err(|error| SyncError::new(format!("resolve current executable: {error}")))?;
     let directory = executable
         .parent()
         .ok_or_else(|| SyncError::new("current executable has no parent directory"))?;
-    let library = directory.join("libactrail_tls_payload_probe_sync.so");
+    let library = directory.join(RUNTIME_GLIBC_LIBRARY_NAME);
     if !library.is_file() {
         return Err(SyncError::new(format!(
             "sync runtime library not found: {}",
             library.display()
         )));
     }
-    Ok(library)
+    canonical_runtime_library(&library)
+}
+
+pub fn runtime_library_set(requested: &RuntimeLibraryPath) -> SyncResult<RuntimeLibrarySet> {
+    let glibc = runtime_library_path(requested)?;
+    let musl = runtime_musl_library_path(&glibc)?;
+    Ok(RuntimeLibrarySet { glibc, musl })
+}
+
+pub fn runtime_musl_library_path(glibc_library: &Path) -> SyncResult<Option<PathBuf>> {
+    if let Some(path) = std::env::var_os(ENV_RUNTIME_MUSL_LIBRARY) {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return canonical_runtime_library(&path).map(Some);
+        }
+        return Err(SyncError::new(format!(
+            "{ENV_RUNTIME_MUSL_LIBRARY} is not a file: {}",
+            path.display()
+        )));
+    }
+    let Some(directory) = glibc_library.parent() else {
+        return Ok(None);
+    };
+    let candidate = directory.join(RUNTIME_MUSL_LIBRARY_NAME);
+    if candidate.is_file() {
+        return canonical_runtime_library(&candidate).map(Some);
+    }
+    Ok(None)
+}
+
+fn canonical_runtime_library(path: &Path) -> SyncResult<PathBuf> {
+    if !path.is_file() {
+        return Err(SyncError::new(format!(
+            "sync runtime library not found: {}",
+            path.display()
+        )));
+    }
+    std::fs::canonicalize(path).map_err(|error| {
+        SyncError::new(format!(
+            "cannot resolve sync runtime library {}: {error}",
+            path.display()
+        ))
+    })
+}
+
+pub fn runtime_library_envs(libraries: &RuntimeLibrarySet) -> Vec<(OsString, OsString)> {
+    let mut envs = vec![(
+        OsString::from(ENV_RUNTIME_GLIBC_LIBRARY),
+        libraries.glibc.as_os_str().to_os_string(),
+    )];
+    if let Some(musl) = &libraries.musl {
+        envs.push((
+            OsString::from(ENV_RUNTIME_MUSL_LIBRARY),
+            musl.as_os_str().to_os_string(),
+        ));
+    }
+    envs
 }
 
 pub fn preload_env_value(library: &Path) -> SyncResult<OsString> {
@@ -106,6 +195,79 @@ pub fn preload_env_value_for_libraries(libraries: &[PathBuf]) -> SyncResult<OsSt
 
 pub fn audit_env_value_for_libraries(libraries: &[PathBuf]) -> SyncResult<OsString> {
     loader_env_value_for_libraries(libraries, "LD_AUDIT")
+}
+
+pub fn runtime_dependency_library_path_env(
+    libraries: &[PathBuf],
+) -> SyncResult<Option<(OsString, OsString)>> {
+    let report = runtime_dependency_report(libraries)?;
+    if report.library_path_prefix.is_empty() {
+        return Ok(None);
+    }
+    let mut value = join_paths(&report.library_path_prefix);
+    let Some(existing) = std::env::var_os(LD_LIBRARY_PATH).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    value.push(":");
+    value.push(existing);
+    Ok(Some((OsString::from(LD_LIBRARY_PATH), value)))
+}
+
+pub fn runtime_dependency_library_path_prefix_env(
+    libraries: &[PathBuf],
+) -> SyncResult<Option<(OsString, OsString)>> {
+    let report = runtime_dependency_report(libraries)?;
+    if report.library_path_prefix.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some((
+        OsString::from(ENV_LIBRARY_PATH_PREFIX),
+        join_paths(&report.library_path_prefix),
+    )))
+}
+
+pub fn runtime_dependency_library_path_prefix_glibc_env(
+    libraries: &[PathBuf],
+) -> SyncResult<Option<(OsString, OsString)>> {
+    let report = runtime_dependency_report(libraries)?;
+    if report.library_path_prefix.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some((
+        OsString::from(ENV_LIBRARY_PATH_PREFIX_GLIBC),
+        join_paths(&report.library_path_prefix),
+    )))
+}
+
+pub fn runtime_dependency_library_path_prefix_musl_env(
+    paths: &[PathBuf],
+) -> Option<(OsString, OsString)> {
+    if paths.is_empty() {
+        return None;
+    }
+    Some((
+        OsString::from(ENV_LIBRARY_PATH_PREFIX_MUSL),
+        join_paths(paths),
+    ))
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeDependencyReport {
+    pub guarded_libraries: Vec<PathBuf>,
+    pub library_path_prefix: Vec<PathBuf>,
+}
+
+pub fn runtime_dependency_report(libraries: &[PathBuf]) -> SyncResult<RuntimeDependencyReport> {
+    let guarded_dependencies = runtime_dependency_preload_libraries(libraries)?;
+    let library_path_prefix = runtime_dependency_guard_directories(&guarded_dependencies)?;
+    let guarded_libraries = guarded_dependencies
+        .iter()
+        .map(|library| library.source.clone())
+        .collect();
+    Ok(RuntimeDependencyReport {
+        guarded_libraries,
+        library_path_prefix,
+    })
 }
 
 pub fn audit_bind_now_env(audit_libraries: &[PathBuf]) -> Option<(OsString, OsString)> {
@@ -136,6 +298,225 @@ pub fn audit_libraries_for_plans(
     } else {
         Vec::new()
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RuntimeDependencyLibrary {
+    source: PathBuf,
+    loader_name: OsString,
+}
+
+fn runtime_dependency_preload_libraries(
+    libraries: &[PathBuf],
+) -> SyncResult<Vec<RuntimeDependencyLibrary>> {
+    let mut guards = Vec::new();
+    if runtime_libraries_need(libraries, LIBGCC_S)? {
+        let libgcc = resolve_system_library(LIBGCC_S)?;
+        guards.push(libgcc);
+    }
+    Ok(guards)
+}
+
+fn runtime_dependency_guard_directories(
+    libraries: &[RuntimeDependencyLibrary],
+) -> SyncResult<Vec<PathBuf>> {
+    let mut directories = Vec::new();
+    for library in libraries {
+        let directory = prepare_dependency_guard_directory(library)?;
+        if !directories.iter().any(|existing| existing == &directory) {
+            directories.push(directory);
+        }
+    }
+    Ok(directories)
+}
+
+fn prepare_dependency_guard_directory(library: &RuntimeDependencyLibrary) -> SyncResult<PathBuf> {
+    validate_loader_name(&library.loader_name)?;
+    let loader_name = library.loader_name.as_os_str();
+    let source = &library.source;
+    let directory = dependency_guard_base_dir().join(format!(
+        "{}-{:016x}",
+        sanitize_file_name(loader_name),
+        dependency_guard_hash(library)?
+    ));
+    std::fs::create_dir_all(&directory).map_err(|error| {
+        SyncError::new(format!(
+            "cannot create runtime dependency guard directory {}: {error}",
+            directory.display()
+        ))
+    })?;
+    let target = directory.join(loader_name);
+    let temporary = directory.join(format!(
+        ".{}.{}.tmp",
+        sanitize_file_name(loader_name),
+        std::process::id()
+    ));
+    std::fs::copy(source, &temporary).map_err(|error| {
+        SyncError::new(format!(
+            "cannot copy runtime dependency {} as {} to {}: {error}",
+            source.display(),
+            loader_name.to_string_lossy(),
+            temporary.display()
+        ))
+    })?;
+    std::fs::rename(&temporary, &target).map_err(|error| {
+        let _ = std::fs::remove_file(&temporary);
+        SyncError::new(format!(
+            "cannot install runtime dependency guard {}: {error}",
+            target.display()
+        ))
+    })?;
+    Ok(directory)
+}
+
+fn dependency_guard_base_dir() -> PathBuf {
+    std::env::var_os(ENV_DEPENDENCY_GUARD_DIR)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("actrail-tls-runtime-deps"))
+}
+
+fn dependency_guard_hash(library: &RuntimeDependencyLibrary) -> SyncResult<u64> {
+    let metadata = std::fs::metadata(&library.source).map_err(|error| {
+        SyncError::new(format!(
+            "cannot stat runtime dependency {}: {error}",
+            library.source.display()
+        ))
+    })?;
+    let mut hash = 0xcbf29ce484222325u64;
+    hash_bytes(&mut hash, library.loader_name.as_os_str().as_bytes());
+    hash_bytes(&mut hash, b"\0");
+    hash_bytes(&mut hash, library.source.as_os_str().as_bytes());
+    hash_bytes(&mut hash, &metadata.len().to_le_bytes());
+    if let Ok(modified) = metadata.modified() {
+        if let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH) {
+            hash_bytes(&mut hash, &duration.as_secs().to_le_bytes());
+            hash_bytes(&mut hash, &duration.subsec_nanos().to_le_bytes());
+        }
+    }
+    Ok(hash)
+}
+
+fn validate_loader_name(loader_name: &OsStr) -> SyncResult<()> {
+    let mut components = Path::new(loader_name).components();
+    if matches!(components.next(), Some(std::path::Component::Normal(_)))
+        && components.next().is_none()
+    {
+        Ok(())
+    } else {
+        Err(SyncError::new(format!(
+            "runtime dependency loader name must be a file name: {}",
+            loader_name.to_string_lossy()
+        )))
+    }
+}
+
+fn hash_bytes(hash: &mut u64, bytes: &[u8]) {
+    for byte in bytes {
+        *hash ^= u64::from(*byte);
+        *hash = hash.wrapping_mul(0x100000001b3);
+    }
+}
+
+fn sanitize_file_name(file_name: &OsStr) -> String {
+    file_name
+        .as_bytes()
+        .iter()
+        .map(|byte| {
+            let byte = *byte;
+            if byte.is_ascii_alphanumeric() || byte == b'.' || byte == b'_' || byte == b'-' {
+                char::from(byte)
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn runtime_libraries_need(libraries: &[PathBuf], needed: &str) -> SyncResult<bool> {
+    let needle = needed.as_bytes();
+    for library in libraries {
+        let bytes = std::fs::read(library).map_err(|error| {
+            SyncError::new(format!(
+                "cannot inspect runtime library {}: {error}",
+                library.display()
+            ))
+        })?;
+        if bytes.windows(needle.len()).any(|window| window == needle) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn resolve_system_library(name: &str) -> SyncResult<RuntimeDependencyLibrary> {
+    for directory in system_library_dirs() {
+        let candidate = directory.join(name);
+        if candidate.is_file() {
+            let source = std::fs::canonicalize(&candidate).map_err(|error| {
+                SyncError::new(format!(
+                    "cannot resolve system runtime dependency {}: {error}",
+                    candidate.display()
+                ))
+            })?;
+            return Ok(RuntimeDependencyLibrary {
+                source,
+                loader_name: OsString::from(name),
+            });
+        }
+    }
+    Err(SyncError::new(format!(
+        "runtime library needs {name}, but no system copy was found; set {ENV_LIBRARY_PATH_PREFIX} or {ENV_SYSTEM_LIBRARY_DIRS}"
+    )))
+}
+
+fn system_library_dirs() -> Vec<PathBuf> {
+    if let Some(value) = std::env::var_os(ENV_SYSTEM_LIBRARY_DIRS) {
+        return std::env::split_paths(&value).collect();
+    }
+    default_system_library_dirs()
+        .iter()
+        .map(PathBuf::from)
+        .collect()
+}
+
+#[cfg(target_arch = "x86_64")]
+fn default_system_library_dirs() -> &'static [&'static str] {
+    &[
+        "/lib/x86_64-linux-gnu",
+        "/usr/lib/x86_64-linux-gnu",
+        "/lib64",
+        "/usr/lib64",
+        "/lib",
+        "/usr/lib",
+    ]
+}
+
+#[cfg(target_arch = "aarch64")]
+fn default_system_library_dirs() -> &'static [&'static str] {
+    &[
+        "/lib/aarch64-linux-gnu",
+        "/usr/lib/aarch64-linux-gnu",
+        "/lib64",
+        "/usr/lib64",
+        "/lib",
+        "/usr/lib",
+    ]
+}
+
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+fn default_system_library_dirs() -> &'static [&'static str] {
+    &["/lib", "/usr/lib"]
+}
+
+fn join_paths(paths: &[PathBuf]) -> OsString {
+    let mut value = OsString::new();
+    for path in paths {
+        if !value.is_empty() {
+            value.push(":");
+        }
+        value.push(path);
+    }
+    value
 }
 
 fn loader_env_value_for_libraries(libraries: &[PathBuf], env_name: &str) -> SyncResult<OsString> {

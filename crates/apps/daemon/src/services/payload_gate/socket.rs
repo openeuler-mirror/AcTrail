@@ -183,14 +183,13 @@ fn sniff_http_protocol(bytes: &[u8]) -> SocketSniffOutcome {
     if HTTP2_CONNECTION_PREFACE.starts_with(bytes) {
         return SocketSniffOutcome::NeedMore;
     }
-    let text = match std::str::from_utf8(bytes) {
-        Ok(text) => text,
-        Err(_) => return SocketSniffOutcome::Reject,
-    };
-    let Some(line_end) = text.find('\n') else {
+    let Some(line_end) = bytes.iter().position(|byte| *byte == b'\n') else {
         return SocketSniffOutcome::NeedMore;
     };
-    let first_line = text[..line_end].trim_end_matches('\r').trim();
+    let first_line = match std::str::from_utf8(&bytes[..line_end]) {
+        Ok(text) => text.trim_end_matches('\r').trim(),
+        Err(_) => return SocketSniffOutcome::Reject,
+    };
     if first_line.starts_with("HTTP/") {
         return SocketSniffOutcome::Accept("http/1.x".to_string());
     }

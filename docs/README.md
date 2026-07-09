@@ -12,6 +12,7 @@ This directory is the operator-facing documentation entrypoint. Run commands fro
 | [Container Permission Auto-Selection](../deploy/container-auto/README.md) | Optional host-eBPF × workload-seccomp-notify deployment bundle and acceptance test. |
 | [Use Cases](use-cases.md) | Which example to run for process trees, LLM payloads, HTTP semantics, enforcement, OTEL export, and performance checks. |
 | [LLM Request Canonical Blocks](llm-request-canonical-blocks.md) | L0 request-body retention model for reconstructable, trace-local deduplicated LLM request content. |
+| [Plugin System](plugins/README.zh.md) | Runtime plugin loading, manifest fields, WASM ABI, observation/control plugins, and LLM codec plugins. |
 | [Platform Requirements](platform-requirements.md) | Kernel, tracefs, BTF, seccomp, pidfd, fanotify, architecture, and failure interpretation. |
 | [Examples Checklist](examples/TESTING.md) | QA handoff checklist for examples under `docs/examples/` and the real agent trace suite under `tests/agent-trace/`. |
 | [Preflight Tools](preflight/README.md) | One-command platform scan and local smoke run. |

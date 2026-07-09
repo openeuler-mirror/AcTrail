@@ -40,7 +40,7 @@ target/release/actrailctl --config tests/agent-trace/xiaoo-http-proxy/operator.c
     --no-tools --max-turns 1 --prompt '请只输出 ACTRAIL_XIAOO_HTTP_PROXY_OK，不要解释'
 ```
 
-For `xiaoo-rustls`, the runner requires `tls-probe-point-finder fast` to return a complete rustls plan for the selected xiaoO binary. Stripped x86_64 builds are supported through the checked rustls static patterns when both `rustls_buffer_plaintext` and `rustls_take_received_plaintext` are found. A socket-only HTTP CONNECT trace is not accepted for this case because it does not prove HTTPS request-body plaintext capture.
+For `xiaoo-rustls`, the runner records the `tls-probe-point-finder fast` rustls result for the selected xiaoO binary, then validates the actual default provider route. HTTPS routes require complete `TlsUserSpace` request payload evidence; plain HTTP routes require complete `Syscall/socket-syscall` request payload evidence. A socket-only HTTP CONNECT trace is not accepted because it does not prove request-body plaintext capture.
 
 The `opencode-bun` case is pinned in `opencode-bun/workload.conf` to `deepseek/deepseek-chat`. This keeps the case independent from the local opencode default model and avoids stale provider keys. In a proxy-only network, keep the shell's local proxy environment active. The case validates `tls-probe-point-finder fast --provider auto --source auto` before launch; the resolved operator config keeps `payload_tls_source`, `payload_tls_resolver`, and `payload_tls_library` set to `auto`.
 

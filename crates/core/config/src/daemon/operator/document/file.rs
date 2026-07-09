@@ -111,7 +111,7 @@ impl Default for FileTtyDocument {
     fn default() -> Self {
         Self {
             enabled: true,
-            paths: ["/dev/tty", "/dev/pts/*"]
+            paths: ["/dev/tty", "/dev/pts/*", "/dev/ptmx"]
                 .into_iter()
                 .map(str::to_string)
                 .collect(),

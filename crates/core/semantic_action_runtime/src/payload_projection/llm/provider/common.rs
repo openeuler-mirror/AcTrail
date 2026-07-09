@@ -73,14 +73,15 @@ pub(super) fn extract_token_usage(value: &Value) -> Option<LlmTokenUsage> {
     let completion_tokens = token_count(usage.get("completion_tokens"))
         .or_else(|| token_count(usage.get("output_tokens")));
     let total_tokens = token_count(usage.get("total_tokens"));
-    let cached_prompt_tokens = usage
-        .get("prompt_tokens_details")
-        .and_then(Value::as_object)
-        .and_then(|details| token_count(details.get("cached_tokens")));
-    let reasoning_tokens = usage
-        .get("completion_tokens_details")
-        .and_then(Value::as_object)
-        .and_then(|details| token_count(details.get("reasoning_tokens")));
+    let cached_prompt_tokens =
+        token_count_from_details(usage, "prompt_tokens_details", "cached_tokens")
+            .or_else(|| token_count_from_details(usage, "input_tokens_details", "cached_tokens"));
+    let reasoning_tokens =
+        token_count_from_details(usage, "completion_tokens_details", "reasoning_tokens")
+            .or_else(|| {
+                token_count_from_details(usage, "output_tokens_details", "reasoning_tokens")
+            })
+            .or_else(|| token_count(usage.get("reasoning_tokens")));
     let prompt_cache_hit_tokens = token_count(usage.get("prompt_cache_hit_tokens"));
     let prompt_cache_miss_tokens = token_count(usage.get("prompt_cache_miss_tokens"));
     let usage = LlmTokenUsage {
@@ -119,6 +120,17 @@ fn token_count(value: Option<&Value>) -> Option<u64> {
         Value::String(text) => text.parse().ok(),
         _ => None,
     }
+}
+
+fn token_count_from_details(
+    usage: &Map<String, Value>,
+    details_key: &str,
+    count_key: &str,
+) -> Option<u64> {
+    usage
+        .get(details_key)
+        .and_then(Value::as_object)
+        .and_then(|details| token_count(details.get(count_key)))
 }
 
 pub(super) fn extract_finish_reason(value: &Value) -> Option<String> {

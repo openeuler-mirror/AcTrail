@@ -4,8 +4,6 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-use tls_payload_sync::RuntimePlanDescriptor;
-
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct BinaryPlanKey {
     path: PathBuf,
@@ -16,8 +14,15 @@ pub(super) struct BinaryPlanKey {
 
 #[derive(Clone, Debug)]
 pub(super) enum BinaryPlanRecord {
-    Found(RuntimePlanDescriptor),
+    Found(BinaryPlanDescriptor),
     Unsupported(String),
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct BinaryPlanDescriptor {
+    pub(super) binary: PathBuf,
+    pub(super) provider: String,
+    pub(super) points: String,
 }
 
 pub(super) trait BinaryPlanStore {
@@ -32,7 +37,7 @@ pub(super) struct InMemoryBinaryPlanStore {
 
 impl BinaryPlanKey {
     pub(super) fn for_path(path: &Path) -> std::io::Result<Self> {
-        let path = canonical(path);
+        let path = cache_path(path);
         let metadata = std::fs::metadata(&path)?;
         let build_id = tls_probe_point_finder::elf_build_id(&path).ok().flatten();
         Ok(Self {
@@ -65,4 +70,17 @@ impl BinaryPlanStore for InMemoryBinaryPlanStore {
 
 fn canonical(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn cache_path(path: &Path) -> PathBuf {
+    if is_proc_namespace_path(path) {
+        path.to_path_buf()
+    } else {
+        canonical(path)
+    }
+}
+
+fn is_proc_namespace_path(path: &Path) -> bool {
+    let raw = path.as_os_str().to_string_lossy();
+    raw.starts_with("/proc/") && (raw.contains("/root/") || raw.contains("/fd/"))
 }

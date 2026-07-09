@@ -15,10 +15,12 @@ use crate::runtime::tls::dynamic::binding::resolver;
 use crate::runtime::{config, maps, output, ssl};
 
 type DlopenFn = unsafe extern "C" fn(*const libc::c_char, libc::c_int) -> *mut c_void;
+#[cfg(target_env = "gnu")]
 type DlmopenFn =
     unsafe extern "C" fn(libc::Lmid_t, *const libc::c_char, libc::c_int) -> *mut c_void;
 
 static DLOPEN_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
+#[cfg(target_env = "gnu")]
 static DLMOPEN_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
 static SCANNED_LIBRARIES: OnceLock<Mutex<BTreeSet<PathBuf>>> = OnceLock::new();
 
@@ -136,7 +138,7 @@ fn is_probe_library_candidate(path: &Path) -> bool {
 fn is_own_runtime_library(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name == "libactrail_tls_payload_probe_sync.so")
+        .is_some_and(|name| name.starts_with("libactrail_tls_payload_probe_sync"))
 }
 
 fn canonical(path: &Path) -> PathBuf {
@@ -159,6 +161,7 @@ pub unsafe extern "C" fn dlopen(filename: *const libc::c_char, flags: libc::c_in
 }
 
 #[unsafe(no_mangle)]
+#[cfg(target_env = "gnu")]
 pub unsafe extern "C" fn dlmopen(
     namespace: libc::Lmid_t,
     filename: *const libc::c_char,
@@ -255,6 +258,7 @@ fn original_dlopen() -> Option<DlopenFn> {
         .map(|address| unsafe { std::mem::transmute::<usize, DlopenFn>(address) })
 }
 
+#[cfg(target_env = "gnu")]
 fn original_dlmopen() -> Option<DlmopenFn> {
     original_symbol(&DLMOPEN_ORIGINAL, b"dlmopen\0")
         .map(|address| unsafe { std::mem::transmute::<usize, DlmopenFn>(address) })

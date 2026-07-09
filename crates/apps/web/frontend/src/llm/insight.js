@@ -420,13 +420,13 @@ function normalizeToolCall(call, index) {
     id: call?.id,
     name: String(fn?.name ?? call?.name ?? call?.tool_name ?? 'tool').trim(),
     type: String(call?.type ?? fn?.type ?? 'function'),
-    argumentsText: formatToolArguments(args, index),
+    argumentsText: formatToolArguments(args),
   };
 }
 
-function formatToolArguments(args, index) {
+function formatToolArguments(args) {
   if (args === undefined || args === null || args === '') {
-    return `call ${index + 1}`;
+    return '';
   }
   if (typeof args === 'string') {
     return args.trim();

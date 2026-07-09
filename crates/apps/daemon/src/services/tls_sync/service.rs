@@ -4,6 +4,8 @@
 mod plan_store;
 #[path = "resolver.rs"]
 mod resolver;
+#[path = "root_path.rs"]
+mod root_path;
 
 use std::collections::BTreeMap;
 use std::fs::{self, Permissions};
@@ -31,6 +33,7 @@ use trace_runtime::registry::TraceRuntime;
 use uds_control_server::PeerCredentials;
 
 use self::resolver::TlsSyncPlanResolver;
+use self::root_path::PeerRootResolver;
 use crate::peer_identity::{PeerIdentity, peer_error};
 
 pub(crate) struct TlsSyncService {
@@ -170,6 +173,7 @@ impl TlsSyncService {
                         .map_err(|error| ControlError::new("tls_sync_client", error.to_string()))?;
                     self.clients.push(TlsSyncClient {
                         stream,
+                        path_root: PeerRootResolver::new(peer.credentials.pid),
                         peer,
                         buffer: Vec::new(),
                         process_cache: BTreeMap::new(),
@@ -186,6 +190,7 @@ impl TlsSyncService {
 
 struct TlsSyncClient {
     stream: UnixStream,
+    path_root: PeerRootResolver,
     peer: PeerIdentity,
     buffer: Vec<u8>,
     process_cache: BTreeMap<TlsSyncProcessCacheKey, ProcessIdentity>,
@@ -248,7 +253,8 @@ impl TlsSyncClient {
                 response
                     .set_nonblocking(false)
                     .map_err(|error| ControlError::new("tls_sync_plan", error.to_string()))?;
-                resolver.submit_lookup(&request.binary, response)?;
+                let peer_root = self.path_root.duplicate();
+                resolver.submit_lookup(&request.binary, peer_root, response)?;
                 return Ok(true);
             }
             let event = decode_event_line(&line).map_err(sync_event_error)?;

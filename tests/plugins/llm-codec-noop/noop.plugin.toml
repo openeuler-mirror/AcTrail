@@ -1,0 +1,31 @@
+[general]
+# Stable plugin id used by plugin status output.
+id = "llm-codec-noop"
+# Manifest schema version supported by the daemon.
+api_version = "actrail.plugin.v1"
+# Exercises the LLM codec registry without decoding any payload.
+role = "llm-codec"
+# LLM codec plugins currently run as WASM core modules.
+runtime = "wasm"
+
+[host]
+# No hostcalls are needed for this no-op codec.
+capabilities = []
+
+[runtime.wasm]
+# Relative to this manifest file.
+artifact_path = "noop.wat"
+# `llm-codec` supports the legacy core module ABI.
+abi = "legacy-module"
+
+[runtime.wasm.resources]
+# Small explicit budget for one no-op decode call.
+fuel_per_call = 1000000
+# Explicit memory cap for deterministic load validation.
+memory_max_bytes = 1048576
+
+[plugin_config]
+# No plugin config is required for this fixture.
+format = "toml"
+schema_ref = ""
+required = false

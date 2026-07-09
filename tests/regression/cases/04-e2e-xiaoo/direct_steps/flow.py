@@ -61,7 +61,7 @@ def run_loaded_xiaoo_case(env, result: CaseResult, module, configured: str | Non
         "tls probe finder binary",
         lambda: module.require_binary(env.bin_dir, "tls-probe-point-finder"),
         lambda path: expected_found_detail("tls-probe-point-finder release binary exists", [f"path={path}"]),
-        "xiaoO rustls capture uses finder fast before launch",
+        "TLS runtime discovery is attempted before launch when the xiaoO route uses HTTPS",
     )
     xiaoo_binary = run_step(
         result,
@@ -73,27 +73,27 @@ def run_loaded_xiaoo_case(env, result: CaseResult, module, configured: str | Non
     tls_runtime = run_step(
         result,
         "xiaoO TLS runtime",
-        lambda: module.resolve_rustls_probe_plan(
+        lambda: module.resolve_optional_xiaoo_tls_runtime(
             xiaoo_binary,
             workload,
             tls_probe_point_finder,
         ),
         lambda tls: expected_found_detail(
-            "TLS runtime discovery chooses the capture source",
+            "TLS runtime discovery result is recorded",
             [xiaoo_tls_detail(tls)],
         ),
-        "finder fast must resolve rustls plaintext hooks before HTTPS payload capture starts",
+        "plain HTTP xiaoO routes can pass through socket plaintext even when rustls hooks are unused",
     )
-    resolved_config = None
+    resolved_config = case_dir / "operator.patch.conf"
     run_step(
         result,
-        "default operator config",
-        lambda: module.read_config(env.default_operator_config_path()),
+        "operator patch config",
+        lambda: module.read_config(resolved_config),
         lambda values: expected_found_detail(
-            "default operator config can be parsed",
-            [f"keys={len(values)}", f"path={env.default_operator_config_path()}"],
+            "sparse operator patch config can be parsed",
+            [f"keys={len(values)}", f"path={resolved_config}"],
         ),
-        "the case uses the static default config and launch-time TLS auto discovery",
+        "the case keeps only xiaoO-specific config differences and inherits operator defaults",
     )
     run_step(
         result,
@@ -168,7 +168,7 @@ def finish_xiaoo_capture(
             int(module.required(workload, "drain_attempts")),
             float(module.required(workload, "drain_sleep_seconds")),
             module.required(workload, "payload_head"),
-            module.accepted_payload_fragments(),
+            module.accepted_payload_fragments(tls_runtime),
         ),
         lambda rows: expected_found_detail(
             "viewer returns accepted payload rows",
@@ -182,7 +182,7 @@ def finish_xiaoo_capture(
         "payload capture",
         lambda: module.require_complete_payload_rows_any(
             payloads,
-            module.accepted_payload_sources(),
+            module.accepted_payload_sources(tls_runtime),
             direction="outbound",
         ),
         lambda count: expected_found_detail("complete outbound payload segments exist", [f"xiaoo_payload_segments={count}"]),

@@ -1,14 +1,16 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include <ctype.h>
 #include <errno.h>
+#include <netdb.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
-#include <netdb.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -19,10 +21,17 @@ static const int HTTP_SUCCESS_MAX_EXCLUSIVE = 300;
 static const int CHILD_EXEC_FAILED = 127;
 static const int MSEC_PER_SEC = 1000;
 static const int NSEC_PER_MSEC = 1000000;
+static const size_t CONNECT_RESPONSE_MAX_BYTES = 8192;
 
 struct Buffer {
     char *data;
     size_t len;
+};
+
+struct ProxyConfig {
+    int enabled;
+    char host[256];
+    char port[16];
 };
 
 struct Args {
@@ -230,6 +239,177 @@ static int connect_tcp(const char *host, const char *port) {
     return fd;
 }
 
+static int token_matches_host(const char *token, size_t token_len, const char *host) {
+    size_t host_len = strlen(host);
+    if (token_len == 0) {
+        return 0;
+    }
+    if (token_len == 1 && token[0] == '*') {
+        return 1;
+    }
+    if (host_len == token_len && strncasecmp(host, token, token_len) == 0) {
+        return 1;
+    }
+    if (token[0] == '.') {
+        return host_len > token_len &&
+               strncasecmp(host + host_len - token_len, token, token_len) == 0;
+    }
+    return host_len > token_len && host[host_len - token_len - 1] == '.' &&
+           strncasecmp(host + host_len - token_len, token, token_len) == 0;
+}
+
+static int no_proxy_matches(const char *host) {
+    const char *raw = getenv("NO_PROXY");
+    if (raw == NULL || raw[0] == '\0') {
+        raw = getenv("no_proxy");
+    }
+    if (raw == NULL || raw[0] == '\0') {
+        return 0;
+    }
+    const char *cursor = raw;
+    while (*cursor != '\0') {
+        while (*cursor == ' ' || *cursor == '\t' || *cursor == ',') {
+            cursor++;
+        }
+        const char *start = cursor;
+        while (*cursor != '\0' && *cursor != ',') {
+            cursor++;
+        }
+        const char *end = cursor;
+        while (end > start && isspace((unsigned char)end[-1])) {
+            end--;
+        }
+        if (token_matches_host(start, (size_t)(end - start), host)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static const char *https_proxy_env(void) {
+    const char *names[] = {"HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"};
+    for (size_t index = 0; index < sizeof(names) / sizeof(names[0]); index++) {
+        const char *value = getenv(names[index]);
+        if (value != NULL && value[0] != '\0') {
+            return value;
+        }
+    }
+    return NULL;
+}
+
+static struct ProxyConfig parse_http_proxy(const char *raw) {
+    struct ProxyConfig proxy = {0};
+    if (raw == NULL || raw[0] == '\0') {
+        return proxy;
+    }
+    const char *cursor = raw;
+    const char *scheme = strstr(cursor, "://");
+    if (scheme != NULL) {
+        if ((size_t)(scheme - cursor) != 4 || strncasecmp(cursor, "http", 4) != 0) {
+            die("only http:// proxy URLs are supported for HTTPS CONNECT");
+        }
+        cursor = scheme + 3;
+    }
+    const char *path = strchr(cursor, '/');
+    size_t authority_len = path == NULL ? strlen(cursor) : (size_t)(path - cursor);
+    if (authority_len == 0 || authority_len >= sizeof(proxy.host) + sizeof(proxy.port)) {
+        die("invalid proxy authority");
+    }
+    const char *authority_end = cursor + authority_len;
+    if (memchr(cursor, '@', authority_len) != NULL) {
+        die("proxy credentials are not supported");
+    }
+    const char *colon = NULL;
+    for (const char *scan = authority_end; scan > cursor; scan--) {
+        if (scan[-1] == ':') {
+            colon = scan - 1;
+            break;
+        }
+    }
+    size_t host_len = colon == NULL ? authority_len : (size_t)(colon - cursor);
+    const char *port_start = colon == NULL ? "80" : colon + 1;
+    size_t port_len = colon == NULL ? 2 : (size_t)(authority_end - port_start);
+    if (host_len == 0 || host_len >= sizeof(proxy.host) || port_len == 0 ||
+        port_len >= sizeof(proxy.port)) {
+        die("invalid proxy host or port");
+    }
+    memcpy(proxy.host, cursor, host_len);
+    proxy.host[host_len] = '\0';
+    memcpy(proxy.port, port_start, port_len);
+    proxy.port[port_len] = '\0';
+    proxy.enabled = 1;
+    return proxy;
+}
+
+static void write_all_fd(int fd, const char *data, size_t len) {
+    size_t written = 0;
+    while (written < len) {
+        ssize_t result = write(fd, data + written, len - written);
+        if (result > 0) {
+            written += (size_t)result;
+            continue;
+        }
+        if (result < 0 && errno == EINTR) {
+            continue;
+        }
+        die_errno("proxy CONNECT write failed");
+    }
+}
+
+static void establish_connect_tunnel(int fd, const struct Args *args) {
+    struct Buffer request = {0};
+    buffer_append_cstr(&request, "CONNECT ");
+    buffer_append_cstr(&request, args->api_host);
+    buffer_append_cstr(&request, ":");
+    buffer_append_cstr(&request, args->api_port);
+    buffer_append_cstr(&request, " HTTP/1.1\r\nHost: ");
+    buffer_append_cstr(&request, args->api_host);
+    buffer_append_cstr(&request, ":");
+    buffer_append_cstr(&request, args->api_port);
+    buffer_append_cstr(&request, "\r\nProxy-Connection: Keep-Alive\r\n\r\n");
+    write_all_fd(fd, request.data, request.len);
+    free(request.data);
+
+    struct Buffer response = {0};
+    char chunk[256];
+    while (response.len < CONNECT_RESPONSE_MAX_BYTES) {
+        ssize_t read_bytes = read(fd, chunk, sizeof(chunk));
+        if (read_bytes > 0) {
+            buffer_append(&response, chunk, (size_t)read_bytes);
+            if (strstr(response.data, "\r\n\r\n") != NULL) {
+                break;
+            }
+            continue;
+        }
+        if (read_bytes < 0 && errno == EINTR) {
+            continue;
+        }
+        free(response.data);
+        die_errno("proxy CONNECT read failed");
+    }
+    if (response.len >= CONNECT_RESPONSE_MAX_BYTES || response.data == NULL) {
+        free(response.data);
+        die("proxy CONNECT response header too large");
+    }
+    char *space = strchr(response.data, ' ');
+    int status = space == NULL ? 0 : atoi(space + 1);
+    free(response.data);
+    if (status < HTTP_SUCCESS_MIN || status >= HTTP_SUCCESS_MAX_EXCLUSIVE) {
+        die("proxy CONNECT failed");
+    }
+}
+
+static int connect_https_socket(const struct Args *args) {
+    const char *proxy_env = https_proxy_env();
+    if (proxy_env == NULL || no_proxy_matches(args->api_host)) {
+        return connect_tcp(args->api_host, args->api_port);
+    }
+    struct ProxyConfig proxy = parse_http_proxy(proxy_env);
+    int fd = connect_tcp(proxy.host, proxy.port);
+    establish_connect_tunnel(fd, args);
+    return fd;
+}
+
 static void ssl_write_all(SSL *ssl, const char *data, size_t len) {
     size_t written = 0;
     while (written < len) {
@@ -243,7 +423,7 @@ static void ssl_write_all(SSL *ssl, const char *data, size_t len) {
 }
 
 static struct Buffer https_post(const struct Args *args, const char *api_key) {
-    int fd = connect_tcp(args->api_host, args->api_port);
+    int fd = connect_https_socket(args);
     SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
     if (ctx == NULL) {
         die("create SSL context failed");

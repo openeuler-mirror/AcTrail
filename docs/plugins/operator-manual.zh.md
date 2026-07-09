@@ -154,7 +154,7 @@ required = false
 | --- | --- | --- | --- | --- |
 | `id` | string | 是 | 非空字符串 | 插件 ID。内置 `otel-jsonl` 插件使用 `id = "otel-jsonl"`。 |
 | `api_version` | string | 是 | 当前只支持 `actrail.plugin.v1` | manifest 协议版本。 |
-| `role` | string enum | 是 | `observation-consumer`、`control-decider` | 插件角色。观测插件消费观测数据；控制插件参与治理决策。 |
+| `role` | string enum | 是 | `observation-consumer`、`control-decider`、`llm-codec` | 插件角色。观测插件消费观测数据；控制插件参与治理决策；LLM codec 插件在标准 LLM 语义投影前解码非标准 request body 或 SSE event data。 |
 | `runtime` | string enum | 是 | `builtin`、`wasm`、`native-dylib` | 插件运行时类型。当前 `native-dylib` 仍未启用。 |
 
 `[host]` 字段：
@@ -194,6 +194,8 @@ required = false
 | 字段 | 类型 | 是否必填 | 取值/范围 | 说明 |
 | --- | --- | --- | --- | --- |
 | `concurrency_limit` | u32 | 否 | 正整数 | 控制插件实例级并发上限。 |
+
+`llm-codec` 角色没有 `[role.llm-codec]` 配置表。它必须使用 `general.runtime = "wasm"` 和 `runtime.wasm.abi = "legacy-module"`，并且不能同时声明 `[role.observation-consumer]` 或 `[role.control-decider]`。功能层 ABI 见 [LLM Codec ABI](abi/llm-codec.zh.md)。
 
 `[hostcall_limits.*]` 字段：
 
@@ -309,7 +311,7 @@ host_grants = ["context-query", "file-access.current-match-get"]
 | `plugins.startup.load[].plugin_config` | path 或空字符串 | 空 | 插件自己的配置文件；manifest 要求配置时必填。 |
 | `plugins.startup.load[].host_grants` | string array | `[]` | 授予插件的 host capability，语义与 `actraild plugin load --grant` 一致。 |
 
-启动清单不在 operator 配置里重复声明插件角色。AcTrail 读取 manifest 后按 `role` 挂到对应内部插槽：`observation-consumer` 进入观测消费插槽，`control-decider` 进入控制决策插槽。
+启动清单不在 operator 配置里重复声明插件角色。AcTrail 读取 manifest 后按 `role` 挂到对应内部插槽：`observation-consumer` 进入观测消费插槽，`control-decider` 进入控制决策插槽，`llm-codec` 进入 LLM payload 解码插槽。
 
 失败策略：
 
@@ -338,6 +340,74 @@ read-config(offset: u64, max-bytes: u64) -> config-chunk
 ```
 
 AcTrail 在插件加载时读取并校验配置。运行时配置是插件按需读取的，不会被 AcTrail 塞进每一批观测数据，也不会塞进每一次 fanotify 文件访问请求。
+
+## 场景：动态加载 LLM codec 插件
+
+这个场景用于把某个非标准 LLM wire payload 解码为 AcTrail 已支持的标准 request 或 SSE event。插件加载前，AcTrail 仍会保留原始 HTTP payload；插件加载后，命中的 request body 或 SSE event data 会先经过 codec，再进入标准 `llm.request` / `llm.response` 语义投影。
+
+manifest 示例：
+
+```toml
+[general]
+id = "vendor.llm-codec"
+api_version = "actrail.plugin.v1"
+role = "llm-codec"
+runtime = "wasm"
+
+[host]
+capabilities = []
+
+[runtime.wasm]
+artifact_path = "vendor-codec.wasm"
+abi = "legacy-module"
+
+[runtime.wasm.resources]
+fuel_per_call = 50000000
+memory_max_bytes = 67108864
+
+[plugin_config]
+format = "toml"
+schema_ref = ""
+required = false
+```
+
+加载插件：
+
+```bash
+target/release/actraild --config operator.conf plugin load \
+  --manifest vendor-codec/plugin.toml \
+  --instance vendor.llm-codec
+```
+
+查看插件状态：
+
+```bash
+target/release/actraild --config operator.conf plugin status \
+  --instance vendor.llm-codec
+```
+
+重点状态字段：
+
+```text
+purpose=llm-codec
+runtime=wasm
+state=active
+last_error=none
+```
+
+`llm-codec` 插件不需要 host grant。它只能处理 AcTrail 已经捕获并正在投影的 HTTP request body 或 SSE event data，不能主动读取其他 payload，也不能参与 fanotify 文件访问治理。
+
+失败回退语义：
+
+| 情况 | 行为 |
+| --- | --- |
+| 没有加载 codec 插件 | 使用原始 HTTP/SSE body 进入标准投影。 |
+| codec 返回 `no_match` | 继续调用后续 codec；没有 codec 命中时使用原始 body。 |
+| codec trap、fuel 耗尽或输出非法 JSON | 本次 codec 调用失败，AcTrail 继续原路径，不删除原始 payload。 |
+
+功能层输入输出格式见 [LLM Codec ABI](abi/llm-codec.zh.md)。
+
+可复制的最小 no-op 示例见 [examples/plugins/wasm-legacy/llm-codec-noop](../../examples/plugins/wasm-legacy/llm-codec-noop/README.zh.md)。
 
 ## 场景一：动态加载 OTEL JSONL 观测插件
 

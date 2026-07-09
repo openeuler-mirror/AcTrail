@@ -10,6 +10,8 @@
 | `wasm-legacy/observation-count` | `wasm` core module | `observation-consumer` | 最小观测消费者 ABI，使用手写 `.wat` 模块统计观测记录。 |
 | `wasm-legacy/observation-env-read` | `wasm` core module | `observation-consumer` | 观测插件通过显式授权读取指定环境变量。 |
 | `wasm-legacy/observation-payload-read` | `wasm` core module | `observation-consumer` | 观测插件通过显式授权读取保留的 payload 数据。 |
+| `wasm-legacy/llm-codec-noop` | `wasm` core module | `llm-codec` | 最小 LLM codec ABI，始终返回 `no_match`，用于验证加载和失败回退语义。 |
+| `wasm-legacy/llm-codec-qoder` | `wasm` core module | `llm-codec` | Qoder CLI LLM request/SSE codec，展示特定 agent 解码逻辑如何只存在于插件内。 |
 | `wasm-legacy/control-graylist` | `wasm` core module | `control-decider` | fanotify 灰名单文件访问同步决策。 |
 | `wasm-legacy/control-command-deny` | `wasm` core module | `control-decider` | 显式命令执行策略命中后拒绝执行。 |
 | `wasm-legacy/control-network-deny` | `wasm` core module | `control-decider` | 显式 TCP connect 策略命中后拒绝连接。 |
@@ -43,7 +45,7 @@ runtime = "wasm"
 artifact_path = "count.wat"
 ```
 
-WASM core module 的固定导出、可选导出和输入写入流程见 [WASM Core Module ABI](../../docs/plugins/abi/wasm-core-module.zh.md)。观测消费者语义见 [观测消费者 ABI](../../docs/plugins/abi/observation-consumer.zh.md)，控制决策语义见 [控制决策 ABI](../../docs/plugins/abi/control-decider.zh.md)。
+WASM core module 的固定导出、可选导出和输入写入流程见 [WASM Core Module ABI](../../docs/plugins/abi/wasm-core-module.zh.md)。观测消费者语义见 [观测消费者 ABI](../../docs/plugins/abi/observation-consumer.zh.md)，控制决策语义见 [控制决策 ABI](../../docs/plugins/abi/control-decider.zh.md)，LLM codec 语义见 [LLM Codec ABI](../../docs/plugins/abi/llm-codec.zh.md)。
 
 ## WIT Component 示例
 

@@ -21,6 +21,10 @@ CASES = {
     "gnutls-nss-llm": "gnutls-nss-llm/run_e2e.py",
     "java-netty-tcnative": "java-netty-tcnative/run_e2e.py",
     "dynamic-tls": "dynamic-tls/run_e2e.py",
+    "namespaced-tls-lookup": "namespaced-tls-lookup/run_e2e.py",
+    "polluted-env-wrapper": "polluted-env-wrapper/run_e2e.py",
+    "multi-libc-wrapper": "multi-libc-wrapper/run_e2e.py",
+    "tls-flow-reset": "tls-flow-reset/run_e2e.py",
 }
 
 

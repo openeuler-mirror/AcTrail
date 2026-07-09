@@ -18,11 +18,13 @@ pub struct WebConfig {
 
 const HELP_FLAG_SHORT: &str = "-h";
 const HELP_FLAG_LONG: &str = "--help";
+const HELP_COMMAND: &str = "help";
 
 pub const HELP_TEXT: &str = "\
 Read AcTrail traces through a read-only web UI
 
 Usage:
+  actrailweb help
   actrailweb [--config <PATH>] [--addr <ADDR>] [--port <PORT>] [--request-read-timeout-ms <MILLIS|disabled>]
   actrailweb --storage-path <PATH> --addr <ADDR> --port <PORT> --request-read-timeout-ms <MILLIS|disabled>
 
@@ -32,12 +34,13 @@ Options:
   --addr <ADDR>                     Listen address or operator config override
   --port <PORT>                     Listen port or operator config override
   --request-read-timeout-ms <VALUE> Request read timeout in milliseconds, or disabled
-  -h, --help                        Print help
+  help, -h, --help                  Print help
 ";
 
 pub fn is_help_request(args: &[String]) -> bool {
     args.iter()
         .any(|arg| matches!(arg.as_str(), HELP_FLAG_SHORT | HELP_FLAG_LONG))
+        || matches!(args, [command] if command == HELP_COMMAND)
 }
 
 pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<WebConfig, String> {
@@ -295,9 +298,14 @@ mod tests {
     }
 
     #[test]
-    fn help_request_recognizes_short_and_long_flags() {
+    fn help_request_recognizes_short_long_flags_and_help_command() {
         assert!(super::is_help_request(&["-h".to_string()]));
         assert!(super::is_help_request(&["--help".to_string()]));
+        assert!(super::is_help_request(&["help".to_string()]));
+        assert!(!super::is_help_request(&[
+            "--storage-path".to_string(),
+            "help".to_string()
+        ]));
         assert!(!super::is_help_request(&["--config".to_string()]));
     }
 }
