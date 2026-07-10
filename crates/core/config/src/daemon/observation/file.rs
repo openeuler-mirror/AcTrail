@@ -14,7 +14,7 @@ pub const DEFAULT_FS_ENUMERATE_MAX_PATHS_PER_SET: u32 = 4096;
 pub const DEFAULT_FS_ENUMERATE_PATH_SET_CHUNK_MAX_PATHS: u32 = 256;
 pub const DEFAULT_FILE_TTY_SUMMARY_FLUSH_INTERVAL_MS: u32 = 5000;
 
-const DEFAULT_TTY_PATHS: &[&str] = &["/dev/tty", "/dev/pts/*"];
+const DEFAULT_TTY_PATHS: &[&str] = &["/dev/tty", "/dev/pts/*", "/dev/ptmx"];
 const DEFAULT_TTY_OPERATIONS: &[&str] = &[
     "open", "close", "read", "readv", "write", "writev", "truncate",
 ];

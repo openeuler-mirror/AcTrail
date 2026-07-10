@@ -10,6 +10,7 @@ use crate::payload_projection::http::{
     request_prefix_skip_len, request_stream_id_hint, split_request, split_response,
 };
 
+use super::codec::LlmCodecRegistry;
 use super::request::project_stream_llm_request_action;
 use super::response::{
     project_raw_chunked_stream_llm_response_actions, project_raw_stream_llm_response_actions,
@@ -43,6 +44,7 @@ pub(crate) fn live_llm_http_response_message_len(bytes: &[u8]) -> Option<usize> 
 
 pub(crate) fn project_live_llm_request_message(
     config: &SemanticRetentionConfig,
+    codecs: &LlmCodecRegistry,
     key: &PayloadStreamGroupKey,
     message_start: usize,
     bytes: &[u8],
@@ -51,8 +53,15 @@ pub(crate) fn project_live_llm_request_message(
     let http = split_request(bytes)?;
     let encoded_len = http.encoded_len;
     let raw_bytes = bytes.get(..encoded_len)?;
-    let request =
-        project_stream_llm_request_action(config, key, message_start, raw_bytes, http, segments);
+    let request = project_stream_llm_request_action(
+        config,
+        codecs,
+        key,
+        message_start,
+        raw_bytes,
+        http,
+        segments,
+    );
     let (actions, llm_request_contents) = match request {
         Some(request) => (
             vec![request.action],
@@ -71,6 +80,7 @@ pub(crate) fn project_live_llm_request_message(
 
 pub(crate) fn project_live_llm_response_message(
     config: &SemanticRetentionConfig,
+    codecs: &LlmCodecRegistry,
     key: &PayloadStreamGroupKey,
     message_start: usize,
     bytes: &[u8],
@@ -82,6 +92,7 @@ pub(crate) fn project_live_llm_response_message(
         let can_evict = http_response_can_evict(&http);
         let Some(actions) = project_stream_llm_response_message_actions(
             config,
+            codecs,
             key,
             message_start,
             raw_bytes,
@@ -99,9 +110,14 @@ pub(crate) fn project_live_llm_response_message(
         return Some(response_projection(actions, encoded_len, can_evict, false));
     }
 
-    if let Some(projection) =
-        project_raw_chunked_stream_llm_response_actions(config, key, message_start, bytes, segments)
-    {
+    if let Some(projection) = project_raw_chunked_stream_llm_response_actions(
+        config,
+        codecs,
+        key,
+        message_start,
+        bytes,
+        segments,
+    ) {
         return Some(response_projection(
             projection.actions,
             projection.encoded_len,
@@ -110,8 +126,14 @@ pub(crate) fn project_live_llm_response_message(
         ));
     }
 
-    let actions =
-        project_raw_stream_llm_response_actions(config, key, message_start, bytes, segments)?;
+    let actions = project_raw_stream_llm_response_actions(
+        config,
+        codecs,
+        key,
+        message_start,
+        bytes,
+        segments,
+    )?;
     Some(response_projection(actions, bytes.len(), true, false))
 }
 

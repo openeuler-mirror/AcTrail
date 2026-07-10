@@ -171,39 +171,62 @@ impl SeccompSocketService {
             } else {
                 PayloadOperationCompletionState::Partial
             };
-            let truncation = if operation_captured_size == operation_original_size {
-                PayloadTruncationState::Complete
-            } else {
-                PayloadTruncationState::Truncated
-            };
-            let update = capture.update.clone();
-            segments.push(RawPayloadSegment {
-                trace_id: capture.trace_id,
-                observed_at: SystemTime::now(),
-                process: capture.process,
-                source_boundary: PayloadSourceBoundary::Syscall,
-                content_state: PayloadContentState::Plaintext,
-                direction: PayloadDirection::Outbound,
-                stream_key: PayloadStreamKey::new(format!(
-                    "socket:{}:{}:{}",
-                    completion.pid, completion.fd, completion.fd_generation
-                )),
-                sequence: completion.sequence,
-                original_size: operation_original_size,
-                captured_size: operation_captured_size,
-                operation_id: completion.sequence,
-                operation_offset: 0,
-                operation_original_size,
-                operation_captured_size,
-                operation_completion_state: completion_state,
-                truncation,
-                library: "socket-syscall".to_string(),
-                symbol: socket_symbol(completion.syscall)?.to_string(),
-                protocol_hint: capture.protocol_hint,
-                bytes: capture.bytes[..captured_len].to_vec(),
-            });
+            let captured_bytes = &capture.bytes[..captured_len];
+            let segment_max = usize::try_from(self.max_segment_bytes).map_err(|error| {
+                ControlError::new(
+                    "seccomp_socket_segment",
+                    format!("segment size overflow: {error}"),
+                )
+            })?;
+            if segment_max == 0 {
+                return Err(ControlError::new(
+                    "seccomp_socket_segment",
+                    "payload_socket_max_segment_bytes must be positive",
+                ));
+            }
+            for (index, chunk) in captured_bytes.chunks(segment_max).enumerate() {
+                let offset = index.checked_mul(segment_max).ok_or_else(|| {
+                    ControlError::new("seccomp_socket_segment", "offset overflow")
+                })?;
+                let final_chunk = offset + chunk.len() >= captured_bytes.len();
+                let truncation = if final_chunk && operation_captured_size < operation_original_size
+                {
+                    PayloadTruncationState::Truncated
+                } else {
+                    PayloadTruncationState::Complete
+                };
+                segments.push(RawPayloadSegment {
+                    trace_id: capture.trace_id,
+                    observed_at: SystemTime::now(),
+                    process: capture.process.clone(),
+                    source_boundary: PayloadSourceBoundary::Syscall,
+                    content_state: PayloadContentState::Plaintext,
+                    direction: PayloadDirection::Outbound,
+                    stream_key: PayloadStreamKey::new(format!(
+                        "socket:{}:{}:{}",
+                        completion.pid, completion.fd, completion.fd_generation
+                    )),
+                    sequence: completion.sequence + index as u64,
+                    original_size: if truncation == PayloadTruncationState::Truncated {
+                        operation_original_size.saturating_sub(offset as u64)
+                    } else {
+                        chunk.len() as u64
+                    },
+                    captured_size: chunk.len() as u64,
+                    operation_id: completion.sequence,
+                    operation_offset: offset as u64,
+                    operation_original_size,
+                    operation_captured_size,
+                    operation_completion_state: completion_state,
+                    truncation,
+                    library: "socket-syscall".to_string(),
+                    symbol: socket_symbol(completion.syscall)?.to_string(),
+                    protocol_hint: capture.protocol_hint.clone(),
+                    bytes: chunk.to_vec(),
+                });
+            }
             self.apply_capture_update(
-                update,
+                capture.update,
                 operation_original_size,
                 operation_captured_size,
                 captured_len as u64,

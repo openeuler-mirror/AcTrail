@@ -156,6 +156,26 @@ impl PluginManifest {
                     );
                 }
             }
+            PluginPurpose::LlmCodec => {
+                if self.role.observation_consumer.is_some() {
+                    return Err(
+                        "role.observation-consumer is unused when general.role = \"llm-codec\""
+                            .to_string(),
+                    );
+                }
+                if self.role.control_decider.is_some() {
+                    return Err(
+                        "role.control-decider is unused when general.role = \"llm-codec\""
+                            .to_string(),
+                    );
+                }
+                if self.runtime_kind() != PluginRuntimeKind::Wasm {
+                    return Err(
+                        "general.role = \"llm-codec\" requires general.runtime = \"wasm\""
+                            .to_string(),
+                    );
+                }
+            }
         }
         Ok(())
     }
@@ -503,6 +523,7 @@ pub struct PluginSubscriptionDeclaration {
 pub enum PluginPurpose {
     ObservationConsumer,
     ControlDecider,
+    LlmCodec,
 }
 
 impl PluginPurpose {
@@ -510,6 +531,7 @@ impl PluginPurpose {
         match self {
             Self::ObservationConsumer => "observation-consumer",
             Self::ControlDecider => "control-decider",
+            Self::LlmCodec => "llm-codec",
         }
     }
 
@@ -517,6 +539,7 @@ impl PluginPurpose {
         match value {
             "observation-consumer" => Ok(Self::ObservationConsumer),
             "control-decider" => Ok(Self::ControlDecider),
+            "llm-codec" => Ok(Self::LlmCodec),
             _ => Err(format!("unknown plugin role {value}")),
         }
     }

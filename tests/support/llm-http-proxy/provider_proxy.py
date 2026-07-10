@@ -38,6 +38,7 @@ DEFAULT_MODE = "forward"
 MODE_FORWARD = "forward"
 MODE_LOCAL_STREAM = "local-stream"
 DEFAULT_LOCAL_STREAM_RESPONSE_TEXT = "ACTRAIL_XIAOO_HTTP_PROXY_OK"
+DEFAULT_LOCAL_STREAM_REASONING_TOKENS = 0
 
 
 @dataclass(frozen=True)
@@ -53,6 +54,7 @@ class ProxyConfig:
     read_chunk_bytes: int
     response_chunk_delay_seconds: float
     local_stream_response_text: str
+    local_stream_reasoning_tokens: int
 
 
 def main() -> int:
@@ -137,6 +139,12 @@ def parse_args() -> ProxyConfig:
         default=DEFAULT_LOCAL_STREAM_RESPONSE_TEXT,
         help="assistant content emitted by local-stream mode",
     )
+    parser.add_argument(
+        "--local-stream-reasoning-tokens",
+        type=int,
+        default=DEFAULT_LOCAL_STREAM_REASONING_TOKENS,
+        help="reasoning token count emitted in local-stream usage metadata",
+    )
     args = parser.parse_args()
     if args.bind_port < 0:
         raise RuntimeError("--bind-port must be non-negative")
@@ -148,6 +156,8 @@ def parse_args() -> ProxyConfig:
         raise RuntimeError("--response-chunk-delay-seconds must be non-negative")
     if args.mode == MODE_LOCAL_STREAM and not args.local_stream_response_text:
         raise RuntimeError("--local-stream-response-text must be non-empty")
+    if args.local_stream_reasoning_tokens < 0:
+        raise RuntimeError("--local-stream-reasoning-tokens must be non-negative")
     return ProxyConfig(
         mode=args.mode,
         bind_host=args.bind_host,
@@ -160,6 +170,7 @@ def parse_args() -> ProxyConfig:
         read_chunk_bytes=args.read_chunk_bytes,
         response_chunk_delay_seconds=args.response_chunk_delay_seconds,
         local_stream_response_text=args.local_stream_response_text,
+        local_stream_reasoning_tokens=args.local_stream_reasoning_tokens,
     )
 
 
@@ -233,7 +244,11 @@ def respond_local_stream(
 ) -> None:
     request = parse_json_body(body)
     model = str(request.get("model") or "actrail-local-stream")
-    chunks = local_stream_chunks(model, config.local_stream_response_text)
+    chunks = local_stream_chunks(
+        model,
+        config.local_stream_response_text,
+        config.local_stream_reasoning_tokens,
+    )
     handler.send_response(200, "OK")
     handler.send_header("Content-Type", "text/event-stream")
     handler.send_header("Cache-Control", "no-cache")
@@ -273,7 +288,11 @@ def parse_json_body(body: bytes) -> dict:
     return value
 
 
-def local_stream_chunks(model: str, response_text: str) -> list[dict]:
+def local_stream_chunks(
+    model: str,
+    response_text: str,
+    reasoning_tokens: int,
+) -> list[dict]:
     chunks = [
         {
             "id": "chatcmpl-actrail-local",
@@ -307,6 +326,9 @@ def local_stream_chunks(model: str, response_text: str) -> list[dict]:
                 "prompt_tokens": 1,
                 "completion_tokens": len(response_text),
                 "total_tokens": len(response_text) + 1,
+                "output_tokens_details": {
+                    "reasoning_tokens": reasoning_tokens,
+                },
             },
         }
     )

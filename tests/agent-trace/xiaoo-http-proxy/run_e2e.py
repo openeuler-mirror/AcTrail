@@ -195,6 +195,8 @@ def start_proxy(
         required(workload, "proxy_response_chunk_delay_seconds"),
         "--local-stream-response-text",
         required(workload, "local_stream_response_text"),
+        "--local-stream-reasoning-tokens",
+        required(workload, "local_stream_reasoning_tokens"),
     ]
     process = subprocess.Popen(
         command,
@@ -284,6 +286,14 @@ def require_plain_http_otel_exchange(document: dict, workload: dict[str, str]) -
     )
     if response is None:
         raise RuntimeError("OTEL export did not contain a Syscall/plain-HTTP llm.response span")
+    response_attrs = otel_attrs(response)
+    expected_reasoning_tokens = required(workload, "local_stream_reasoning_tokens")
+    if response_attrs.get("llm.response.reasoning_tokens") != expected_reasoning_tokens:
+        raise RuntimeError(
+            "OTEL llm.response reasoning token mismatch: "
+            f"expected {expected_reasoning_tokens}, "
+            f"found {response_attrs.get('llm.response.reasoning_tokens')}"
+        )
 
 
 def require_no_failed_llm_responses(actions: str) -> None:

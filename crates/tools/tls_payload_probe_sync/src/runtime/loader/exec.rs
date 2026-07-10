@@ -5,17 +5,21 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use tls_payload_sync::{ENV_BINARY, ENV_EVENT_SOCKET, ENV_POINTS, ENV_PROVIDER};
+use tls_payload_sync::{
+    ENV_BINARY, ENV_EVENT_SOCKET, ENV_LIBRARY_PATH_PREFIX, ENV_LIBRARY_PATH_PREFIX_GLIBC,
+    ENV_LIBRARY_PATH_PREFIX_MUSL, ENV_POINTS, ENV_PROVIDER, ENV_RUNTIME_GLIBC_LIBRARY,
+    ENV_RUNTIME_MUSL_LIBRARY, LibcFamily, RUNTIME_GLIBC_LIBRARY_NAME, RUNTIME_MUSL_LIBRARY_NAME,
+};
 
-use crate::runtime::config;
 use crate::runtime::tls::dynamic::binding::resolver;
+use crate::runtime::{config, output};
 
 const JAVA_TOOL_OPTIONS: &str = "JAVA_TOOL_OPTIONS";
 const LD_AUDIT: &str = "LD_AUDIT";
+const LD_LIBRARY_PATH: &str = "LD_LIBRARY_PATH";
 const LD_PRELOAD: &str = "LD_PRELOAD";
 const PATH_ENV: &str = "PATH";
 const TLS_SYNC_PREFIX: &str = "TLS_PAYLOAD_SYNC_";
-const ACTRAIL_SYNC_RUNTIME_LIBRARY: &str = "libactrail_tls_payload_probe_sync.so";
 const ACTRAIL_AGENT_JAR_MARKER: &str = "actrail-java-payload-agent-";
 
 type ExecveFn = unsafe extern "C" fn(
@@ -35,10 +39,24 @@ type ExecvpeFn = unsafe extern "C" fn(
     *const *const libc::c_char,
     *const *const libc::c_char,
 ) -> libc::c_int;
+type PosixSpawnFn = unsafe extern "C" fn(
+    *mut libc::pid_t,
+    *const libc::c_char,
+    *const libc::posix_spawn_file_actions_t,
+    *const libc::posix_spawnattr_t,
+    *const *const libc::c_char,
+    *const *const libc::c_char,
+) -> libc::c_int;
 
 static EXECVE_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
 static EXECVEAT_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
 static EXECVPE_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
+static POSIX_SPAWN_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
+static POSIX_SPAWNP_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
+
+unsafe extern "C" {
+    static mut environ: *mut *mut libc::c_char;
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::runtime) struct EnvEntry {
@@ -47,39 +65,49 @@ pub(in crate::runtime) struct EnvEntry {
 }
 
 impl EnvEntry {
-    #[cfg(test)]
-    pub(in crate::runtime) fn new(key: impl Into<OsString>, value: impl Into<OsString>) -> Self {
-        Self {
-            key: key.into(),
-            value: value.into(),
-        }
-    }
-
-    #[cfg(test)]
-    pub(in crate::runtime) fn key(&self) -> &OsStr {
-        &self.key
-    }
-
     fn from_os(key: OsString, value: OsString) -> Self {
         Self { key, value }
     }
 }
 
-pub(in crate::runtime) fn merge_exec_env(
-    program: impl AsRef<OsStr>,
+fn merge_exec_env_checked(
+    program: &OsStr,
     child_env: &[EnvEntry],
     current_env: &[EnvEntry],
-) -> Vec<EnvEntry> {
-    let target_has_capture_plan = target_has_capture_plan(program.as_ref(), child_env, current_env);
+) -> Result<Vec<EnvEntry>, String> {
+    merge_exec_env_inner(program, child_env, current_env, true)
+}
+
+fn merge_exec_env_inner(
+    program: &OsStr,
+    child_env: &[EnvEntry],
+    current_env: &[EnvEntry],
+    fail_on_unknown_runtime: bool,
+) -> Result<Vec<EnvEntry>, String> {
+    let target = resolve_exec_target(program, child_env, current_env);
+    let target_has_capture_plan = target_has_capture_plan(target.as_deref());
+    let runtime_family = target_runtime_family(
+        program,
+        target.as_deref(),
+        child_env,
+        current_env,
+        fail_on_unknown_runtime,
+    )?;
     let mut merged = child_env.to_vec();
     merge_tls_sync_env(&mut merged, current_env);
     strip_active_plan_env(&mut merged);
-    merge_ld_preload(&mut merged, current_env);
-    merge_ld_audit(&mut merged, current_env, target_has_capture_plan);
-    if is_java_executable(program.as_ref()) {
+    merge_ld_library_path_prefix(&mut merged, current_env, runtime_family);
+    merge_ld_preload(&mut merged, current_env, runtime_family)?;
+    merge_ld_audit(
+        &mut merged,
+        current_env,
+        runtime_family,
+        target_has_capture_plan,
+    )?;
+    if is_java_executable(program) {
         merge_java_tool_options(&mut merged, current_env);
     }
-    merged
+    Ok(merged)
 }
 
 fn merge_tls_sync_env(merged: &mut Vec<EnvEntry>, current_env: &[EnvEntry]) {
@@ -91,56 +119,212 @@ fn merge_tls_sync_env(merged: &mut Vec<EnvEntry>, current_env: &[EnvEntry]) {
     }
 }
 
-fn merge_ld_preload(merged: &mut Vec<EnvEntry>, current_env: &[EnvEntry]) {
-    let Some(current) = current_env
-        .iter()
-        .rev()
-        .find(|entry| entry.key == LD_PRELOAD)
-        .filter(|entry| !entry.value.is_empty())
-    else {
-        return;
+fn merge_ld_library_path_prefix(
+    merged: &mut Vec<EnvEntry>,
+    current_env: &[EnvEntry],
+    family: LibcFamily,
+) {
+    let existing_entries = env_value(merged, LD_LIBRARY_PATH)
+        .map(|existing| {
+            split_colon_entries(existing.as_bytes())
+                .into_iter()
+                .map(Vec::from)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let mut entries = match family {
+        LibcFamily::Glibc => {
+            let Some(prefix) = glibc_library_path_prefix(current_env) else {
+                return;
+            };
+            let mut entries = split_colon_entries(prefix.as_bytes())
+                .into_iter()
+                .map(Vec::from)
+                .collect::<Vec<_>>();
+            append_loader_entry_bytes(&mut entries, existing_entries);
+            entries
+        }
+        LibcFamily::Musl => {
+            let glibc_prefix = glibc_library_path_prefix(current_env)
+                .map(|prefix| {
+                    split_colon_entries(prefix.as_bytes())
+                        .into_iter()
+                        .map(Vec::from)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let mut entries = existing_entries
+                .into_iter()
+                .filter(|entry| !glibc_prefix.iter().any(|prefix| prefix == entry))
+                .collect::<Vec<_>>();
+            if let Some(prefix) = env_value(current_env, ENV_LIBRARY_PATH_PREFIX_MUSL) {
+                let mut prefixed = split_colon_entries(prefix.as_bytes())
+                    .into_iter()
+                    .map(Vec::from)
+                    .collect::<Vec<_>>();
+                append_loader_entry_bytes(&mut prefixed, entries);
+                entries = prefixed;
+            }
+            entries
+        }
     };
-    let Some(position) = merged.iter().position(|entry| entry.key == LD_PRELOAD) else {
-        merged.push(current.clone());
-        return;
+    dedup_loader_entries(&mut entries);
+    set_loader_env(merged, LD_LIBRARY_PATH, &entries);
+}
+
+fn glibc_library_path_prefix<'a>(current_env: &'a [EnvEntry]) -> Option<&'a OsStr> {
+    env_value(current_env, ENV_LIBRARY_PATH_PREFIX_GLIBC)
+        .or_else(|| env_value(current_env, ENV_LIBRARY_PATH_PREFIX))
+}
+
+fn merge_ld_preload(
+    merged: &mut Vec<EnvEntry>,
+    current_env: &[EnvEntry],
+    family: LibcFamily,
+) -> Result<(), String> {
+    let selected_runtime = selected_runtime_library(current_env, family)?;
+    let mut entries = env_value(merged, LD_PRELOAD)
+        .map(|existing| loader_entries_without_actrail_runtime(existing, current_env))
+        .unwrap_or_default();
+    if let Some(current) = env_value(current_env, LD_PRELOAD) {
+        append_loader_entry_bytes(
+            &mut entries,
+            loader_entries_without_actrail_runtime(current, current_env),
+        );
+    }
+    append_loader_entry_bytes(&mut entries, vec![selected_runtime.as_bytes().to_vec()]);
+    dedup_loader_entries(&mut entries);
+    set_loader_env(merged, LD_PRELOAD, &entries);
+    Ok(())
+}
+
+fn selected_runtime_library(
+    current_env: &[EnvEntry],
+    family: LibcFamily,
+) -> Result<OsString, String> {
+    let key = match family {
+        LibcFamily::Glibc => ENV_RUNTIME_GLIBC_LIBRARY,
+        LibcFamily::Musl => ENV_RUNTIME_MUSL_LIBRARY,
     };
-    merged[position].value =
-        append_missing_ld_preload_entries(&merged[position].value, &current.value);
+    if let Some(path) = env_value(current_env, key) {
+        let path = path.to_os_string();
+        if Path::new(&path).is_file() {
+            return Ok(path);
+        }
+        return Err(format!(
+            "{key} is not visible in target namespace: {}",
+            path.to_string_lossy()
+        ));
+    }
+    if family == LibcFamily::Glibc {
+        if let Some(path) = current_actrail_runtime(current_env) {
+            return Ok(path);
+        }
+    }
+    Err(format!(
+        "{} TLS sync runtime library is not configured; set {key}",
+        family.as_str()
+    ))
+}
+
+fn current_actrail_runtime(current_env: &[EnvEntry]) -> Option<OsString> {
+    env_value(current_env, LD_PRELOAD)?
+        .as_bytes()
+        .split(|byte| *byte == b':')
+        .find(|entry| is_actrail_sync_runtime_entry(entry, current_env))
+        .map(|entry| OsString::from_vec(entry.to_vec()))
+}
+
+fn loader_entries_without_actrail_runtime(value: &OsStr, current_env: &[EnvEntry]) -> Vec<Vec<u8>> {
+    split_colon_entries(value.as_bytes())
+        .into_iter()
+        .filter(|entry| !is_actrail_sync_runtime_entry(entry, current_env))
+        .map(Vec::from)
+        .collect()
+}
+
+fn append_loader_entry_bytes(entries: &mut Vec<Vec<u8>>, candidates: Vec<Vec<u8>>) {
+    for candidate in candidates {
+        if candidate.is_empty() {
+            continue;
+        }
+        if entries.iter().any(|existing| existing == &candidate) {
+            continue;
+        }
+        entries.push(candidate);
+    }
+}
+
+fn dedup_loader_entries(entries: &mut Vec<Vec<u8>>) {
+    let mut deduped = Vec::new();
+    for entry in std::mem::take(entries) {
+        if deduped.iter().any(|existing| existing == &entry) {
+            continue;
+        }
+        deduped.push(entry);
+    }
+    *entries = deduped;
 }
 
 fn merge_ld_audit(
     merged: &mut Vec<EnvEntry>,
     current_env: &[EnvEntry],
+    family: LibcFamily,
     target_has_capture_plan: bool,
-) {
+) -> Result<(), String> {
+    if family == LibcFamily::Musl {
+        set_loader_env(merged, LD_AUDIT, &[]);
+        return Ok(());
+    }
     let mut entries = Vec::new();
     if let Some(existing) = env_value(merged, LD_AUDIT) {
-        append_loader_entries(&mut entries, existing, target_has_capture_plan, false);
+        append_loader_entries(
+            &mut entries,
+            existing,
+            current_env,
+            target_has_capture_plan,
+            false,
+        );
     }
     if let Some(current) = env_value(current_env, LD_AUDIT) {
-        append_loader_entries(&mut entries, current, target_has_capture_plan, false);
+        append_loader_entries(
+            &mut entries,
+            current,
+            current_env,
+            target_has_capture_plan,
+            false,
+        );
     }
     if target_has_capture_plan {
-        if let Some(preload) = env_value(current_env, LD_PRELOAD) {
-            append_loader_entries(&mut entries, preload, true, true);
-        }
+        let selected_runtime = selected_runtime_library(current_env, family)?;
+        append_loader_entry_bytes(&mut entries, vec![selected_runtime.as_bytes().to_vec()]);
     }
     set_loader_env(merged, LD_AUDIT, &entries);
+    Ok(())
 }
 
-fn append_missing_ld_preload_entries(existing: &OsStr, current: &OsStr) -> OsString {
-    let existing_entries = split_colon_entries(existing.as_bytes());
-    let mut value = existing.as_bytes().to_vec();
-    for entry in split_colon_entries(current.as_bytes()) {
-        if existing_entries.contains(&entry) {
-            continue;
+fn target_runtime_family(
+    program: &OsStr,
+    target: Option<&Path>,
+    child_env: &[EnvEntry],
+    current_env: &[EnvEntry],
+    fail_on_unknown_runtime: bool,
+) -> Result<LibcFamily, String> {
+    let path_value = env_value(child_env, PATH_ENV).or_else(|| env_value(current_env, PATH_ENV));
+    let Some(target) = target else {
+        if fail_on_unknown_runtime {
+            return Err(format!(
+                "cannot resolve exec target {} for TLS sync runtime selection",
+                program.to_string_lossy()
+            ));
         }
-        if !value.is_empty() {
-            value.push(b':');
-        }
-        value.extend_from_slice(entry);
+        return Ok(LibcFamily::Glibc);
+    };
+    match tls_payload_sync::target_runtime_for_path(target, path_value) {
+        Ok(runtime) => Ok(runtime.libc),
+        Err(error) if fail_on_unknown_runtime => Err(error.to_string()),
+        Err(_) => Ok(LibcFamily::Glibc),
     }
-    OsString::from_vec(value)
 }
 
 fn split_colon_entries(value: &[u8]) -> Vec<&[u8]> {
@@ -153,11 +337,12 @@ fn split_colon_entries(value: &[u8]) -> Vec<&[u8]> {
 fn append_loader_entries(
     entries: &mut Vec<Vec<u8>>,
     value: &OsStr,
+    current_env: &[EnvEntry],
     include_actrail_runtime: bool,
     actrail_runtime_only: bool,
 ) {
     for entry in split_colon_entries(value.as_bytes()) {
-        let actrail_runtime = is_actrail_sync_runtime_entry(entry);
+        let actrail_runtime = is_actrail_sync_runtime_entry(entry, current_env);
         if actrail_runtime_only && !actrail_runtime {
             continue;
         }
@@ -198,11 +383,21 @@ fn join_loader_entries(entries: &[Vec<u8>]) -> OsString {
     OsString::from_vec(value)
 }
 
-fn is_actrail_sync_runtime_entry(entry: &[u8]) -> bool {
+fn is_actrail_sync_runtime_entry(entry: &[u8], current_env: &[EnvEntry]) -> bool {
+    if env_value(current_env, ENV_RUNTIME_GLIBC_LIBRARY)
+        .is_some_and(|path| path.as_bytes() == entry)
+        || env_value(current_env, ENV_RUNTIME_MUSL_LIBRARY)
+            .is_some_and(|path| path.as_bytes() == entry)
+    {
+        return true;
+    }
     entry
         .rsplit(|byte| *byte == b'/')
         .next()
-        .is_some_and(|name| name == ACTRAIL_SYNC_RUNTIME_LIBRARY.as_bytes())
+        .is_some_and(|name| {
+            name == RUNTIME_GLIBC_LIBRARY_NAME.as_bytes()
+                || name == RUNTIME_MUSL_LIBRARY_NAME.as_bytes()
+        })
 }
 
 fn merge_java_tool_options(merged: &mut Vec<EnvEntry>, current_env: &[EnvEntry]) {
@@ -264,14 +459,8 @@ fn actrail_java_agent_options(value: &OsStr) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn target_has_capture_plan(
-    program: &OsStr,
-    child_env: &[EnvEntry],
-    current_env: &[EnvEntry],
-) -> bool {
-    let Some(path) = resolve_exec_target(program, child_env, current_env) else {
-        return false;
-    };
+fn target_has_capture_plan(path: Option<&Path>) -> bool {
+    let Some(path) = path else { return false };
     matches!(config::runtime_plan_for_binary(&path), Ok(Some(_)))
 }
 
@@ -359,10 +548,11 @@ pub unsafe extern "C" fn execve(
     let Some(original) = original_execve() else {
         return missing_original();
     };
-    let Some(env) = merged_envp_for_exec(filename, envp) else {
-        return unsafe { original(filename, argv, envp) };
-    };
-    unsafe { original(filename, argv, env.as_ptr()) }
+    match merged_envp_for_exec(filename, envp) {
+        Ok(Some(env)) => unsafe { original(filename, argv, env.as_ptr()) },
+        Ok(None) => unsafe { original(filename, argv, envp) },
+        Err(error) => exec_env_error(error),
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -376,10 +566,11 @@ pub unsafe extern "C" fn execveat(
     let Some(original) = original_execveat() else {
         return missing_original();
     };
-    let Some(env) = merged_envp_for_exec(pathname, envp) else {
-        return unsafe { original(dirfd, pathname, argv, envp, flags) };
-    };
-    unsafe { original(dirfd, pathname, argv, env.as_ptr(), flags) }
+    match merged_envp_for_execveat(dirfd, pathname, flags, envp) {
+        Ok(Some(env)) => unsafe { original(dirfd, pathname, argv, env.as_ptr(), flags) },
+        Ok(None) => unsafe { original(dirfd, pathname, argv, envp, flags) },
+        Err(error) => exec_env_error(error),
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -391,29 +582,157 @@ pub unsafe extern "C" fn execvpe(
     let Some(original) = original_execvpe() else {
         return missing_original();
     };
-    let Some(env) = merged_envp_for_exec(file, envp) else {
-        return unsafe { original(file, argv, envp) };
+    match merged_envp_for_exec(file, envp) {
+        Ok(Some(env)) => unsafe { original(file, argv, env.as_ptr()) },
+        Ok(None) => unsafe { original(file, argv, envp) },
+        Err(error) => exec_env_error(error),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn execv(
+    path: *const libc::c_char,
+    argv: *const *const libc::c_char,
+) -> libc::c_int {
+    let Some(original) = original_execve() else {
+        return missing_original();
     };
-    unsafe { original(file, argv, env.as_ptr()) }
+    let envp = current_environ();
+    match merged_envp_for_exec(path, envp) {
+        Ok(Some(env)) => unsafe { original(path, argv, env.as_ptr()) },
+        Ok(None) => unsafe { original(path, argv, envp) },
+        Err(error) => exec_env_error(error),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn execvp(
+    file: *const libc::c_char,
+    argv: *const *const libc::c_char,
+) -> libc::c_int {
+    let Some(original) = original_execvpe() else {
+        return missing_original();
+    };
+    let envp = current_environ();
+    match merged_envp_for_exec(file, envp) {
+        Ok(Some(env)) => unsafe { original(file, argv, env.as_ptr()) },
+        Ok(None) => unsafe { original(file, argv, envp) },
+        Err(error) => exec_env_error(error),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn posix_spawn(
+    pid: *mut libc::pid_t,
+    path: *const libc::c_char,
+    file_actions: *const libc::posix_spawn_file_actions_t,
+    attrp: *const libc::posix_spawnattr_t,
+    argv: *const *const libc::c_char,
+    envp: *const *const libc::c_char,
+) -> libc::c_int {
+    let Some(original) = original_posix_spawn() else {
+        return libc::ENOSYS;
+    };
+    match merged_envp_for_exec(path, envp) {
+        Ok(Some(env)) => unsafe { original(pid, path, file_actions, attrp, argv, env.as_ptr()) },
+        Ok(None) => unsafe { original(pid, path, file_actions, attrp, argv, envp) },
+        Err(error) => posix_spawn_env_error(error),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn posix_spawnp(
+    pid: *mut libc::pid_t,
+    file: *const libc::c_char,
+    file_actions: *const libc::posix_spawn_file_actions_t,
+    attrp: *const libc::posix_spawnattr_t,
+    argv: *const *const libc::c_char,
+    envp: *const *const libc::c_char,
+) -> libc::c_int {
+    let Some(original) = original_posix_spawnp() else {
+        return libc::ENOSYS;
+    };
+    match merged_envp_for_exec(file, envp) {
+        Ok(Some(env)) => unsafe { original(pid, file, file_actions, attrp, argv, env.as_ptr()) },
+        Ok(None) => unsafe { original(pid, file, file_actions, attrp, argv, envp) },
+        Err(error) => posix_spawn_env_error(error),
+    }
 }
 
 fn merged_envp_for_exec(
     program: *const libc::c_char,
     child_envp: *const *const libc::c_char,
-) -> Option<OwnedEnvp> {
+) -> Result<Option<OwnedEnvp>, String> {
     if program.is_null() {
-        return None;
+        return Ok(None);
     }
     let program = unsafe { CStr::from_ptr(program) };
     let program = OsStr::from_bytes(program.to_bytes());
     if std::env::var_os(ENV_EVENT_SOCKET).is_none() {
-        return None;
+        return Ok(None);
     }
     let child = unsafe { envp_entries(child_envp) };
     let current = current_env_entries();
-    Some(OwnedEnvp::from_entries(&merge_exec_env(
-        program, &child, &current,
-    )))
+    merge_exec_env_checked(program, &child, &current).map(|env| Some(OwnedEnvp::from_entries(&env)))
+}
+
+fn merged_envp_for_execveat(
+    dirfd: libc::c_int,
+    pathname: *const libc::c_char,
+    flags: libc::c_int,
+    child_envp: *const *const libc::c_char,
+) -> Result<Option<OwnedEnvp>, String> {
+    if pathname.is_null() {
+        return Ok(None);
+    }
+    let pathname = unsafe { CStr::from_ptr(pathname) };
+    let program = execveat_detection_program(dirfd, pathname, flags);
+    if std::env::var_os(ENV_EVENT_SOCKET).is_none() {
+        return Ok(None);
+    }
+    let child = unsafe { envp_entries(child_envp) };
+    let current = current_env_entries();
+    merge_exec_env_checked(program.as_os_str(), &child, &current)
+        .map(|env| Some(OwnedEnvp::from_entries(&env)))
+}
+
+fn execveat_detection_program(dirfd: libc::c_int, pathname: &CStr, flags: libc::c_int) -> OsString {
+    let path = OsStr::from_bytes(pathname.to_bytes());
+    if !path.is_empty() && (path.as_bytes()[0] == b'/' || dirfd == libc::AT_FDCWD) {
+        return path.to_os_string();
+    }
+    if path.is_empty() && (flags & libc::AT_EMPTY_PATH) == 0 {
+        return path.to_os_string();
+    }
+    let mut resolved = OsString::from(format!("/proc/self/fd/{dirfd}"));
+    if !path.is_empty() {
+        resolved.push("/");
+        resolved.push(path);
+    }
+    resolved
+}
+
+fn exec_env_error(error: String) -> libc::c_int {
+    output::error_line(&format!("tls_payload_probe_sync exec env error: {error}\n"));
+    set_errno(libc::ENOENT);
+    -1
+}
+
+fn posix_spawn_env_error(error: String) -> libc::c_int {
+    output::error_line(&format!(
+        "tls_payload_probe_sync posix_spawn env error: {error}\n"
+    ));
+    libc::ENOENT
+}
+
+fn set_errno(value: libc::c_int) {
+    unsafe {
+        *libc::__errno_location() = value;
+    }
+}
+
+fn current_environ() -> *const *const libc::c_char {
+    unsafe { environ.cast_const().cast() }
 }
 
 unsafe fn envp_entries(envp: *const *const libc::c_char) -> Vec<EnvEntry> {
@@ -514,6 +833,16 @@ fn original_execveat() -> Option<ExecveatFn> {
 fn original_execvpe() -> Option<ExecvpeFn> {
     original_symbol(&EXECVPE_ORIGINAL, b"execvpe\0")
         .map(|address| unsafe { std::mem::transmute::<usize, ExecvpeFn>(address) })
+}
+
+fn original_posix_spawn() -> Option<PosixSpawnFn> {
+    original_symbol(&POSIX_SPAWN_ORIGINAL, b"posix_spawn\0")
+        .map(|address| unsafe { std::mem::transmute::<usize, PosixSpawnFn>(address) })
+}
+
+fn original_posix_spawnp() -> Option<PosixSpawnFn> {
+    original_symbol(&POSIX_SPAWNP_ORIGINAL, b"posix_spawnp\0")
+        .map(|address| unsafe { std::mem::transmute::<usize, PosixSpawnFn>(address) })
 }
 
 fn original_symbol(cache: &AtomicUsize, symbol: &[u8]) -> Option<usize> {

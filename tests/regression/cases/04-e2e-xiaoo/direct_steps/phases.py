@@ -96,7 +96,7 @@ def run_xiaoo_actions_step(
             "semantic actions",
             FAIL,
             str(error),
-            "xiaoO rustls capture resolved TLS hooks, so llm.request/llm.response projection is required",
+            "xiaoO provider traffic must project to llm.request/llm.response through TLS or socket plaintext",
         )
         raise StepFailure(str(error)) from error
     result.add_check(

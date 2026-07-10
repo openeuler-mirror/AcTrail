@@ -15,10 +15,10 @@ use semantic_action::{
 };
 
 use crate::payload_projection::llm::{
-    LiveLlmProjection, PayloadStreamGroupKey, live_llm_http_response_message_len,
-    live_llm_request_message_len, live_llm_request_prefix_skip_len,
-    live_llm_request_stream_id_hint, project_live_llm_request_message,
-    project_live_llm_response_message,
+    LiveLlmProjection, LlmCodecPlugin, LlmCodecPluginStatus, LlmCodecRegistry,
+    PayloadStreamGroupKey, live_llm_http_response_message_len, live_llm_request_message_len,
+    live_llm_request_prefix_skip_len, live_llm_request_stream_id_hint,
+    project_live_llm_request_message, project_live_llm_response_message,
 };
 
 use super::actions::action_for_live_state;
@@ -28,6 +28,7 @@ mod http;
 
 pub(super) struct LiveLlmProjector {
     config: SemanticRetentionConfig,
+    codecs: LlmCodecRegistry,
     streams: BTreeMap<LiveStreamKey, LiveStreamState>,
     open_requests: BTreeMap<LlmStreamKey, VecDeque<OpenLlmRequest>>,
     pending_responses: BTreeMap<LlmStreamKey, VecDeque<SemanticAction>>,
@@ -45,12 +46,30 @@ impl LiveLlmProjector {
     pub(super) fn new(config: SemanticRetentionConfig) -> Self {
         Self {
             config,
+            codecs: LlmCodecRegistry::default(),
             streams: BTreeMap::new(),
             open_requests: BTreeMap::new(),
             pending_responses: BTreeMap::new(),
             open_calls_by_request: BTreeMap::new(),
             open_action_versions: BTreeMap::new(),
         }
+    }
+}
+
+impl LiveLlmProjector {
+    pub(super) fn register_codec(
+        &mut self,
+        plugin: std::sync::Arc<dyn LlmCodecPlugin>,
+    ) -> Result<(), String> {
+        self.codecs.register(plugin)
+    }
+
+    pub(super) fn unregister_codec(&mut self, instance_id: &str) -> bool {
+        self.codecs.unregister(instance_id)
+    }
+
+    pub(super) fn codec_statuses(&self) -> Vec<LlmCodecPluginStatus> {
+        self.codecs.statuses()
     }
 }
 
@@ -188,7 +207,7 @@ impl LiveLlmProjector {
             .streams
             .entry(key.clone())
             .or_default()
-            .observe_segment(&self.config, &key, segment);
+            .observe_segment(&self.config, &self.codecs, &key, segment);
         self.changed_actions(output)
     }
 
@@ -678,13 +697,18 @@ impl LiveStreamState {
     fn observe_segment(
         &mut self,
         config: &SemanticRetentionConfig,
+        codecs: &LlmCodecRegistry,
         key: &LiveStreamKey,
         segment: &PayloadSegment,
     ) -> LiveLlmOutput {
         self.append_segment(segment);
         match key.direction {
-            LiveStreamDirection::Outbound => self.project_outbound_requests(config, &key.group),
-            LiveStreamDirection::Inbound => self.project_inbound_responses(config, &key.group),
+            LiveStreamDirection::Outbound => {
+                self.project_outbound_requests(config, codecs, &key.group)
+            }
+            LiveStreamDirection::Inbound => {
+                self.project_inbound_responses(config, codecs, &key.group)
+            }
         }
     }
 
@@ -707,6 +731,7 @@ impl LiveStreamState {
     fn project_outbound_requests(
         &mut self,
         config: &SemanticRetentionConfig,
+        codecs: &LlmCodecRegistry,
         key: &PayloadStreamGroupKey,
     ) -> LiveLlmOutput {
         let mut output = LiveLlmOutput::default();
@@ -726,6 +751,7 @@ impl LiveStreamState {
             let segments = self.segments_for_range(message_start, message_end);
             let Some(projection) = project_live_llm_request_message(
                 config,
+                codecs,
                 key,
                 message_start,
                 &self.buffer,
@@ -748,12 +774,13 @@ impl LiveStreamState {
     fn project_inbound_responses(
         &mut self,
         config: &SemanticRetentionConfig,
+        codecs: &LlmCodecRegistry,
         key: &PayloadStreamGroupKey,
     ) -> LiveLlmOutput {
         self.discard_pending_raw_chunk_terminator();
 
         let mut output = LiveLlmOutput::default();
-        while let Some(projection) = self.project_next_response(config, key) {
+        while let Some(projection) = self.project_next_response(config, codecs, key) {
             let terminal = projection.terminal;
             let encoded_len = projection.encoded_len;
             output.actions.extend(projection.actions);
@@ -774,6 +801,7 @@ impl LiveStreamState {
     fn project_next_response(
         &self,
         config: &SemanticRetentionConfig,
+        codecs: &LlmCodecRegistry,
         key: &PayloadStreamGroupKey,
     ) -> Option<LiveLlmProjection> {
         let encoded_len =
@@ -781,7 +809,14 @@ impl LiveStreamState {
         let message_start = self.base_offset;
         let message_end = message_start + encoded_len;
         let segments = self.segments_for_range(message_start, message_end);
-        project_live_llm_response_message(config, key, message_start, &self.buffer, &segments)
+        project_live_llm_response_message(
+            config,
+            codecs,
+            key,
+            message_start,
+            &self.buffer,
+            &segments,
+        )
     }
 
     fn segments_for_range(&self, start: usize, end: usize) -> Vec<&PayloadSegment> {

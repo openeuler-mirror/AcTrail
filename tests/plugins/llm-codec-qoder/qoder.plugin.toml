@@ -1,0 +1,31 @@
+[general]
+# Stable plugin id used by plugin status output.
+id = "test.qoder-llm-codec"
+# Manifest schema version supported by the daemon.
+api_version = "actrail.plugin.v1"
+# Registers this WASM module as an LLM request/SSE codec.
+role = "llm-codec"
+# LLM codec plugins currently run as WASM core modules.
+runtime = "wasm"
+
+[host]
+# The codec only receives the payload currently being projected.
+capabilities = []
+
+[runtime.wasm]
+# `llm-codec` supports the legacy core module ABI.
+abi = "legacy-module"
+# Relative to this manifest file.
+artifact_path = "qoder_llm_codec.wasm"
+
+[runtime.wasm.resources]
+# Large request bodies need a higher fuel budget than the no-op fixture.
+fuel_per_call = 500000000
+# Keep the memory cap explicit; decoded request bodies can be large.
+memory_max_bytes = 67108864
+
+[plugin_config]
+# This fixture has no runtime config.
+format = "toml"
+schema_ref = ""
+required = false

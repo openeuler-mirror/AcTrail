@@ -172,7 +172,13 @@ unsafe extern "C" fn collect_libc_mapping(
 fn is_libc_path(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name == "libc.so.6" || name.starts_with("libc-"))
+        .is_some_and(|name| {
+            name == "libc.so.6"
+                || name == "libc.so"
+                || name.starts_with("libc-")
+                || name.starts_with("libc.musl-")
+                || (name.starts_with("ld-musl-") && name.ends_with(".so.1"))
+        })
         && path.is_file()
 }
 

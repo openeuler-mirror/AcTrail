@@ -1,0 +1,33 @@
+[general]
+# Stable plugin id shown by `actraild plugin list/status`.
+id = "llm-codec-noop"
+# Manifest schema version supported by the current daemon.
+api_version = "actrail.plugin.v1"
+# LLM codec plugins run before standard LLM request/response projection.
+role = "llm-codec"
+# The current llm-codec implementation supports only WASM core modules.
+runtime = "wasm"
+
+[host]
+# This no-op codec does not need hostcalls. It only receives the request body
+# or SSE event data that AcTrail is already projecting.
+capabilities = []
+
+[runtime.wasm]
+# Relative paths are resolved from this manifest directory.
+artifact_path = "noop.wat"
+# `llm-codec` currently uses the legacy core module ABI, not WIT component ABI.
+abi = "legacy-module"
+
+[runtime.wasm.resources]
+# Fuel bounds one decode call. The no-op module is tiny, so a small budget is enough.
+fuel_per_call = 1000000
+# One 64 KiB page is enough for this no-op module; keep the cap explicit.
+memory_max_bytes = 1048576
+
+[plugin_config]
+# The manifest must declare plugin config handling even when no config is needed.
+format = "toml"
+# Empty schema_ref is allowed only because required=false and no config is passed.
+schema_ref = ""
+required = false

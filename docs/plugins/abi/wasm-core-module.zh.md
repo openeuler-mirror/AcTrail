@@ -8,6 +8,7 @@
 
 - [观测消费者 ABI](observation-consumer.zh.md)
 - [控制决策 ABI](control-decider.zh.md)
+- [LLM Codec ABI](llm-codec.zh.md)
 
 ## 导出约定
 
@@ -45,6 +46,7 @@ sequenceDiagram
 
 - 观测消费者需要导出 `actrail_observation_consume`。
 - 控制决策插件需要导出 `actrail_control_decide`。
+- LLM codec 插件需要导出 `actrail_llm_codec_decode_request`、`actrail_llm_codec_decode_sse_event` 或 `actrail_llm_codec_decode` 中至少一个入口。
 
 ## 输入写入流程
 

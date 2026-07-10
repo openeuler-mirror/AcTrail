@@ -14,6 +14,7 @@ use serde_json::Value;
 
 use crate::payload_projection::http::HttpRequestParts;
 
+use super::codec::LlmCodecRegistry;
 use super::evidence::{insert_payload_span_attributes, payload_aggregate_evidence};
 use super::provider::{LlmRequestParserInput, parse_json_request};
 use super::request_blocks::{FORMAT_VERSION, canonical_request_content, canonical_shape_metadata};
@@ -26,13 +27,14 @@ pub(crate) struct ProjectedLlmRequestAction {
 
 pub(super) fn project_stream_llm_request_action(
     config: &SemanticRetentionConfig,
+    codecs: &LlmCodecRegistry,
     key: &PayloadStreamGroupKey,
     message_start: usize,
     raw_bytes: &[u8],
     mut http: HttpRequestParts,
     segments: &[&PayloadSegment],
 ) -> Option<ProjectedLlmRequestAction> {
-    let body = parse_llm_request_body(&http)?;
+    let body = parse_llm_request_body(&http, codecs)?;
     let first = *segments.first()?;
     let action_id = llm_stream_action_id(key, message_start, first);
     http.scheme = plaintext_transport_scheme(first.source_boundary);
@@ -234,7 +236,7 @@ fn llm_attributes(
         attrs::llm_request::CLASSIFIER_ID.to_string(),
         body.classifier_id.to_string(),
     );
-    if let Some(protocol_id) = body.protocol_id {
+    if let Some(protocol_id) = &body.protocol_id {
         attributes.insert(
             attrs::llm_request::PROTOCOL_ID.to_string(),
             protocol_id.to_string(),
@@ -316,36 +318,73 @@ fn plaintext_transport_scheme(source_boundary: PayloadSourceBoundary) -> &'stati
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct LlmRequestBody {
     json_valid: bool,
-    classifier_id: &'static str,
-    protocol_id: Option<&'static str>,
+    classifier_id: String,
+    protocol_id: Option<String>,
     model: Option<String>,
     json: Option<Value>,
 }
 
-fn parse_llm_request_body(http: &HttpRequestParts) -> Option<LlmRequestBody> {
-    let body = &http.body;
-    if let Ok(value) = serde_json::from_slice::<Value>(body) {
-        let input = LlmRequestParserInput { json: &value };
-        let parsed = parse_json_request(&input)?;
-        return Some(LlmRequestBody {
-            json_valid: true,
-            classifier_id: parsed.classifier_id,
-            protocol_id: parsed.protocol_id,
-            model: parsed.model,
-            json: Some(value),
-        });
-    }
-    let text = String::from_utf8_lossy(body);
-    if lossy_text_is_llm_request(&text) {
-        Some(LlmRequestBody {
-            json_valid: false,
-            classifier_id: "generic-json-request",
-            protocol_id: None,
-            model: extract_json_string_lossy(&text, "model"),
-            json: None,
-        })
-    } else {
-        None
+fn parse_llm_request_body(
+    http: &HttpRequestParts,
+    codecs: &LlmCodecRegistry,
+) -> Option<LlmRequestBody> {
+    LlmRequestBodyParser { codecs }.parse(http)
+}
+
+struct LlmRequestBodyParser<'a> {
+    codecs: &'a LlmCodecRegistry,
+}
+
+impl LlmRequestBodyParser<'_> {
+    fn parse(&self, http: &HttpRequestParts) -> Option<LlmRequestBody> {
+        let body = &http.body;
+        if let Some(decoded) = self.codecs.decode_request(http)
+            && let Ok(value) = serde_json::from_slice::<Value>(&decoded.body)
+        {
+            let input = LlmRequestParserInput { json: &value };
+            let parsed = parse_json_request(&input);
+            let classifier_id = decoded.classifier_id.or_else(|| {
+                parsed
+                    .as_ref()
+                    .map(|parsed| parsed.classifier_id.to_string())
+            })?;
+            return Some(LlmRequestBody {
+                json_valid: true,
+                classifier_id,
+                protocol_id: decoded.protocol_id.or_else(|| {
+                    parsed
+                        .as_ref()
+                        .and_then(|parsed| parsed.protocol_id.map(ToString::to_string))
+                }),
+                model: decoded
+                    .model
+                    .or_else(|| parsed.and_then(|parsed| parsed.model)),
+                json: Some(value),
+            });
+        }
+        if let Ok(value) = serde_json::from_slice::<Value>(body) {
+            let input = LlmRequestParserInput { json: &value };
+            let parsed = parse_json_request(&input)?;
+            return Some(LlmRequestBody {
+                json_valid: true,
+                classifier_id: parsed.classifier_id.to_string(),
+                protocol_id: parsed.protocol_id.map(ToString::to_string),
+                model: parsed.model,
+                json: Some(value),
+            });
+        }
+        let text = String::from_utf8_lossy(body);
+        if lossy_text_is_llm_request(&text) {
+            Some(LlmRequestBody {
+                json_valid: false,
+                classifier_id: "generic-json-request".to_string(),
+                protocol_id: None,
+                model: extract_json_string_lossy(&text, "model"),
+                json: None,
+            })
+        } else {
+            None
+        }
     }
 }
 

@@ -151,7 +151,6 @@ def require_web_action_tree_projection(
     values = read_config(operator_config_path(config))
     host = web_host(required(values, "web_listen_addr"))
     port = reserve_local_port(host)
-    request_read_timeout_ms = required(values, "web_request_read_timeout_ms")
     process = subprocess.Popen(
         actrail_command(
             actrailweb,
@@ -160,8 +159,6 @@ def require_web_action_tree_projection(
             host,
             "--port",
             str(port),
-            "--request-read-timeout-ms",
-            request_read_timeout_ms,
         ),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

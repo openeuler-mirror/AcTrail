@@ -1,6 +1,7 @@
 //! Plugin lifecycle operations for the storage-backed attach service.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use control_contract::command::PluginLoadCommand;
@@ -8,7 +9,7 @@ use control_contract::reply::ControlError;
 use export_core::ExportPublishReport;
 use plugin_system::{
     ControlDecider, PluginCapability, PluginHostGrant, PluginHostGrants, PluginInstanceStatus,
-    PluginManifest, PluginPurpose, PluginRuntimeKind,
+    PluginLifecycleState, PluginManifest, PluginPurpose, PluginRuntimeKind,
 };
 use recording_runtime::{RecordingError, RecordingWriter};
 
@@ -20,6 +21,26 @@ impl StorageAttachService {
     pub(super) fn plugin_statuses_impl(&self) -> Vec<PluginInstanceStatus> {
         let mut statuses = self.export_runtime.plugin_statuses();
         statuses.extend(self.control_plugins.plugin_statuses());
+        statuses.extend(
+            self.semantic_actions
+                .llm_codec_statuses()
+                .into_iter()
+                .map(|status| PluginInstanceStatus {
+                    instance_id: status.instance_id,
+                    plugin_id: status.plugin_id,
+                    purpose: PluginPurpose::LlmCodec,
+                    runtime: PluginRuntimeKind::Wasm,
+                    state: PluginLifecycleState::Active,
+                    host_grants: Vec::new(),
+                    queue_depth: None,
+                    queue_capacity: None,
+                    observed_records: 0,
+                    dropped_records: 0,
+                    hostcall_metrics: Default::default(),
+                    last_error: None,
+                    warnings: Vec::new(),
+                }),
+        );
         statuses
     }
 
@@ -94,6 +115,38 @@ impl StorageAttachService {
                 )?;
                 self.control_plugins.add_decider(decider, manifest_warnings)
             }
+            PluginPurpose::LlmCodec => {
+                let codec = plugin_wasm_runtime::build_wasm_llm_codec_plugin(
+                    &command.instance_id,
+                    &manifest,
+                    plugin_config_raw.as_deref(),
+                    host_grants,
+                )
+                .map_err(|error| ControlError::new(error.code, error.message))?;
+                let status = PluginInstanceStatus {
+                    instance_id: command.instance_id.clone(),
+                    plugin_id: manifest.id().to_string(),
+                    purpose: PluginPurpose::LlmCodec,
+                    runtime: codec.runtime_kind(),
+                    state: PluginLifecycleState::Active,
+                    host_grants: codec.host_grants(),
+                    queue_depth: None,
+                    queue_capacity: None,
+                    observed_records: 0,
+                    dropped_records: 0,
+                    hostcall_metrics: codec
+                        .hostcall_metrics_source()
+                        .as_ref()
+                        .map(|metrics| metrics.snapshot())
+                        .unwrap_or_default(),
+                    last_error: None,
+                    warnings: manifest_warnings,
+                };
+                self.semantic_actions
+                    .register_llm_codec(Arc::new(codec))
+                    .map_err(|message| ControlError::new("plugin_runtime", message))?;
+                Ok(status)
+            }
         }
     }
 
@@ -122,6 +175,29 @@ impl StorageAttachService {
         {
             self.enforcement.remove_plugin_policy_owner(instance_id)?;
             return self.control_plugins.remove_decider(instance_id);
+        }
+        if let Some(existing) = self
+            .semantic_actions
+            .llm_codec_statuses()
+            .into_iter()
+            .find(|status| status.instance_id == instance_id)
+            && self.semantic_actions.unregister_llm_codec(instance_id)
+        {
+            return Ok(PluginInstanceStatus {
+                instance_id: existing.instance_id,
+                plugin_id: existing.plugin_id,
+                purpose: PluginPurpose::LlmCodec,
+                runtime: PluginRuntimeKind::Wasm,
+                state: PluginLifecycleState::Stopped,
+                host_grants: Vec::new(),
+                queue_depth: None,
+                queue_capacity: None,
+                observed_records: 0,
+                dropped_records: 0,
+                hostcall_metrics: Default::default(),
+                last_error: None,
+                warnings: Vec::new(),
+            });
         }
         Err(ControlError::new(
             "plugin_not_found",

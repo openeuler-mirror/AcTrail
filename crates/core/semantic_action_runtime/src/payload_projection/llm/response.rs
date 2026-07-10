@@ -7,6 +7,7 @@ use semantic_action::{SemanticAction, SemanticActionKind};
 use crate::payload_projection::http::HttpResponseParts;
 
 use super::body::parse_llm_response_body;
+use super::codec::LlmCodecRegistry;
 use super::response_support::{
     llm_raw_stream_action_id, llm_response_attributes, llm_response_completeness,
     llm_response_status, llm_response_title, llm_stream_action_id, payload_evidence,
@@ -25,13 +26,14 @@ pub(super) struct RawChunkedResponseProjection {
 
 pub(super) fn project_stream_llm_response_message_actions(
     config: &SemanticRetentionConfig,
+    codecs: &LlmCodecRegistry,
     key: &PayloadStreamGroupKey,
     message_start: usize,
     raw_bytes: &[u8],
     mut http: HttpResponseParts,
     segments: &[&PayloadSegment],
 ) -> Option<Vec<SemanticAction>> {
-    let body = parse_llm_response_body(&http.body)?;
+    let body = parse_llm_response_body(&http.body, codecs)?;
     let first = *segments.first()?;
     http.scheme = plaintext_transport_scheme(first.source_boundary);
     let attributes = llm_response_attributes(config, segments, raw_bytes, &http, &body);
@@ -58,13 +60,14 @@ pub(super) fn project_stream_llm_response_message_actions(
 
 pub(super) fn project_raw_chunked_stream_llm_response_actions(
     config: &SemanticRetentionConfig,
+    codecs: &LlmCodecRegistry,
     key: &PayloadStreamGroupKey,
     message_start: usize,
     bytes: &[u8],
     segments: &[&PayloadSegment],
 ) -> Option<RawChunkedResponseProjection> {
     let chunked = parse_chunked_body_prefix(bytes)?;
-    let body = parse_llm_response_body(&chunked.body)?;
+    let body = parse_llm_response_body(&chunked.body, codecs)?;
     let first = *segments.first()?;
     let attributes = raw_llm_response_attributes(config, segments, &chunked.body, &body);
     let response = SemanticAction {
@@ -93,12 +96,13 @@ pub(super) fn project_raw_chunked_stream_llm_response_actions(
 
 pub(super) fn project_raw_stream_llm_response_actions(
     config: &SemanticRetentionConfig,
+    codecs: &LlmCodecRegistry,
     key: &PayloadStreamGroupKey,
     message_start: usize,
     bytes: &[u8],
     segments: &[&PayloadSegment],
 ) -> Option<Vec<SemanticAction>> {
-    let body = parse_llm_response_body(bytes)?;
+    let body = parse_llm_response_body(bytes, codecs)?;
     let first = *segments.first()?;
     let attributes = raw_llm_response_attributes(config, segments, bytes, &body);
     let response = SemanticAction {

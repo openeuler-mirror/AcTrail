@@ -8,6 +8,7 @@ license = "MulanPSL-2.0"
 config_core = { path = "../config" }
 libc = "0.2"
 model_core = { path = "../model" }
+plugin_system = { path = "../plugin_system" }
 semantic_action = { path = "../../contracts/semantic_action" }
 serde_json = "1"
 sha2 = "0.10"

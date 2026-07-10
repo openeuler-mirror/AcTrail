@@ -1,0 +1,35 @@
+[general]
+# Stable plugin id shown by `actraild plugin list/status`.
+id = "qoder-llm-codec"
+# Manifest schema version supported by the current daemon.
+api_version = "actrail.plugin.v1"
+# Register this module as an LLM request/SSE codec.
+role = "llm-codec"
+# The current llm-codec implementation supports WASM core modules.
+runtime = "wasm"
+
+[host]
+# The codec receives only the request body or SSE event data currently being
+# projected. It does not need payload-read or any other hostcall capability.
+capabilities = []
+
+[runtime.wasm]
+# `llm-codec` currently uses the legacy core module ABI, not WIT component ABI.
+abi = "legacy-module"
+# Relative paths are resolved from this manifest directory.
+artifact_path = "qoder_llm_codec.wasm"
+
+[runtime.wasm.resources]
+# Qoder request bodies can be large, so the decode call needs a larger fuel
+# budget than minimal no-op fixtures.
+fuel_per_call = 500000000
+# Keep the memory cap explicit; decoded request JSON can be large.
+memory_max_bytes = 67108864
+
+[plugin_config]
+# This codec has no runtime config. The manifest still declares config handling
+# so load-time validation has an explicit contract.
+format = "toml"
+# Empty schema_ref is allowed only because required=false and no config is passed.
+schema_ref = ""
+required = false

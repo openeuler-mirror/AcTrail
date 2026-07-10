@@ -4,6 +4,7 @@
 #include "actrail_socket_payload_types.h"
 
 #define ACTRAIL_LINUX_EINPROGRESS 115
+#define ACTRAIL_SOCKET_PAYLOAD_DIRECT_CHUNK_MAX 16
 
 static __always_inline struct actrail_socket_payload_config *socket_payload_config(void) {
     __u32 key = 0;
@@ -194,16 +195,111 @@ static __always_inline int emit_socket_payload_completion(
     return 0;
 }
 
+static __always_inline int emit_socket_payload_direct_chunk(
+    void *ctx,
+    struct actrail_pending_socket_payload_op *op,
+    __u32 tgid,
+    __u32 tid,
+    __u64 offset,
+    __u64 original_size,
+    __u32 capture_size,
+    __u32 flags
+) {
+    struct actrail_socket_payload_event *event;
+
+    event = actrail_event_reserve(sizeof(*event));
+    if (!event) {
+        return 0;
+    }
+
+    event->kind = ACTRAIL_SOCKET_PAYLOAD;
+    event->pid = tgid;
+    event->tid = tid;
+    event->direction = op->direction;
+    event->trace_id = op->trace_id;
+    event->observed_ktime_ns = bpf_ktime_get_ns();
+    event->sequence =
+        next_socket_payload_sequence(tgid, op->direction, op->fd, op->fd_generation);
+    event->fd = op->fd;
+    event->original_size = (__u32)original_size;
+    event->captured_size = capture_size;
+    event->flags = flags;
+    event->syscall = op->syscall;
+    event->fd_generation = op->fd_generation;
+    event->pid_generation = ensure_process_generation(tgid);
+    if (bpf_probe_read_user(
+            event->bytes,
+            capture_size,
+            (void *)(unsigned long)(op->buffer_ptr + offset)
+        ) != 0) {
+        actrail_event_discard(event);
+        return 0;
+    }
+
+    actrail_event_submit(ctx, event);
+    return 0;
+}
+
+static __always_inline int emit_socket_payload_direct_chunks(
+    void *ctx,
+    struct actrail_pending_socket_payload_op *op,
+    __u32 tgid,
+    __u32 tid,
+    __u64 original_size,
+    __u32 limit
+) {
+    __u64 offset = 0;
+
+#pragma unroll
+    for (__u32 index = 0; index < ACTRAIL_SOCKET_PAYLOAD_DIRECT_CHUNK_MAX; index++) {
+        __u64 remaining;
+        __u64 bounded_size;
+        __u64 segment_original_size;
+        __u32 capture_size;
+        __u32 flags = 0;
+
+        if (offset >= original_size) {
+            break;
+        }
+        remaining = original_size - offset;
+        bounded_size = remaining;
+        if (bounded_size > limit) {
+            bounded_size = limit;
+        }
+        actrail_barrier_var(bounded_size);
+        bounded_size &= ACTRAIL_SOCKET_PAYLOAD_COPY_MAX_BYTES;
+        capture_size = (__u32)bounded_size;
+        if (!capture_size) {
+            break;
+        }
+
+        segment_original_size = bounded_size;
+        if (remaining > bounded_size && index == ACTRAIL_SOCKET_PAYLOAD_DIRECT_CHUNK_MAX - 1) {
+            flags = ACTRAIL_SOCKET_PAYLOAD_TRUNCATED;
+            segment_original_size = remaining;
+        }
+        emit_socket_payload_direct_chunk(
+            ctx,
+            op,
+            tgid,
+            tid,
+            offset,
+            segment_original_size,
+            capture_size,
+            flags
+        );
+        offset += bounded_size;
+    }
+    return 0;
+}
+
 static __always_inline int emit_socket_payload_op(struct trace_event_raw_sys_exit *ctx) {
     __u64 pid_tgid = current_pid_tgid();
     __u32 tgid = pid_tgid >> 32;
     __u32 tid = (__u32)pid_tgid;
     struct actrail_pending_socket_payload_op *op =
         bpf_map_lookup_elem(&pending_socket_payload_ops, &pid_tgid);
-    struct actrail_socket_payload_event *event;
     __u64 original_size = (__u64)ctx->ret;
-    __u64 bounded_size;
-    __u32 capture_size;
     __u32 limit = payload_socket_capture_limit();
 
     if (!tgid || !op || ctx->ret <= 0 || !limit) {
@@ -227,49 +323,7 @@ static __always_inline int emit_socket_payload_op(struct trace_event_raw_sys_exi
         return 0;
     }
 
-    bounded_size = original_size & ACTRAIL_SOCKET_PAYLOAD_COPY_MAX_BYTES;
-    if (original_size > ACTRAIL_SOCKET_PAYLOAD_COPY_MAX_BYTES) {
-        bounded_size = ACTRAIL_SOCKET_PAYLOAD_COPY_MAX_BYTES;
-    }
-    if (bounded_size > limit) {
-        bounded_size = limit;
-    }
-    actrail_barrier_var(bounded_size);
-    bounded_size &= ACTRAIL_SOCKET_PAYLOAD_COPY_MAX_BYTES;
-    capture_size = (__u32)bounded_size;
-    if (!capture_size) {
-        bpf_map_delete_elem(&pending_socket_payload_ops, &pid_tgid);
-        return 0;
-    }
-
-    event = actrail_event_reserve(sizeof(*event));
-    if (!event) {
-        bpf_map_delete_elem(&pending_socket_payload_ops, &pid_tgid);
-        return 0;
-    }
-
-    event->kind = ACTRAIL_SOCKET_PAYLOAD;
-    event->pid = tgid;
-    event->tid = tid;
-    event->direction = op->direction;
-    event->trace_id = op->trace_id;
-    event->observed_ktime_ns = bpf_ktime_get_ns();
-    event->sequence =
-        next_socket_payload_sequence(tgid, op->direction, op->fd, op->fd_generation);
-    event->fd = op->fd;
-    event->original_size = (__u32)original_size;
-    event->captured_size = capture_size;
-    event->flags = original_size > bounded_size ? ACTRAIL_SOCKET_PAYLOAD_TRUNCATED : 0;
-    event->syscall = op->syscall;
-    event->fd_generation = op->fd_generation;
-    event->pid_generation = ensure_process_generation(tgid);
-    if (bpf_probe_read_user(event->bytes, bounded_size, (void *)(unsigned long)op->buffer_ptr) != 0) {
-        actrail_event_discard(event);
-        bpf_map_delete_elem(&pending_socket_payload_ops, &pid_tgid);
-        return 0;
-    }
-
-    actrail_event_submit(ctx, event);
+    emit_socket_payload_direct_chunks(ctx, op, tgid, tid, original_size, limit);
     bpf_map_delete_elem(&pending_socket_payload_ops, &pid_tgid);
     return 0;
 }

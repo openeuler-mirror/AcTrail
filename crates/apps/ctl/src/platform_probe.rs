@@ -258,23 +258,51 @@ pub fn probe_tls_sync_runtime_library(config: &PayloadTlsConfig) -> CapabilitySt
     if !config.enabled || !config.capture_backend.is_sync() {
         return CapabilityStatus::ok("tls_sync_runtime_library", "disabled by operator config");
     }
-    let path =
-        match tls_payload_sync::runtime_library_path(&match &config.sync_runtime_library_path {
-            PayloadTlsSyncRuntimeLibraryPath::Auto => RuntimeLibraryPath::Auto,
-            PayloadTlsSyncRuntimeLibraryPath::Path(path) => RuntimeLibraryPath::Path(path.clone()),
-        }) {
-            Ok(path) => path,
-            Err(error) => {
-                return CapabilityStatus::unavailable(
-                    "tls_sync_runtime_library",
-                    error.to_string(),
-                );
-            }
-        };
+    let libraries = match tls_payload_sync::runtime_library_set(&match &config
+        .sync_runtime_library_path
+    {
+        PayloadTlsSyncRuntimeLibraryPath::Auto => RuntimeLibraryPath::Auto,
+        PayloadTlsSyncRuntimeLibraryPath::Path(path) => RuntimeLibraryPath::Path(path.clone()),
+    }) {
+        Ok(libraries) => libraries,
+        Err(error) => {
+            return CapabilityStatus::unavailable("tls_sync_runtime_library", error.to_string());
+        }
+    };
+    let path = &libraries.glibc;
     if path.is_file() {
+        let dependency_detail =
+            match tls_payload_sync::runtime_dependency_report(std::slice::from_ref(&path)) {
+                Ok(report) if report.guarded_libraries.is_empty() => {
+                    "dependency_guard=none".to_string()
+                }
+                Ok(report) => format!(
+                    "dependency_guard={}",
+                    report
+                        .guarded_libraries
+                        .iter()
+                        .map(|library| library.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                ),
+                Err(error) => {
+                    return CapabilityStatus::unavailable(
+                        "tls_sync_runtime_library",
+                        format!("{}; dependency guard failed: {error}", path.display()),
+                    );
+                }
+            };
+        let musl_detail = libraries
+            .musl
+            .as_ref()
+            .map(|path| format!("musl_runtime={}", path.display()))
+            .unwrap_or_else(|| "musl_runtime=missing".to_string());
         CapabilityStatus::ok(
             "tls_sync_runtime_library",
-            format!("found {}", path.display()),
+            format!(
+                "glibc_runtime={}; {musl_detail}; {dependency_detail}",
+                path.display()
+            ),
         )
     } else {
         CapabilityStatus::unavailable(

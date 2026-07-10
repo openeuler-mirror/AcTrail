@@ -9,6 +9,7 @@
 | [WASM Core Module ABI](wasm-core-module.zh.md) | 承载层 | 使用普通 WebAssembly module 的插件 | 说明 `memory`、`actrail_alloc`、可选 `actrail_plugin_init`，以及 AcTrail 如何把输入数据写入插件内存。 |
 | [观测消费者 ABI](observation-consumer.zh.md) | 功能层 | `observation-consumer` 插件 | 说明观测 batch 的消费入口、输入语义和返回约定。 |
 | [控制决策 ABI](control-decider.zh.md) | 功能层 | `control-decider` 插件 | 说明同步治理决策入口、请求语义、返回码和 `once` / `reusable`。 |
+| [LLM Codec ABI](llm-codec.zh.md) | 功能层 | `llm-codec` 插件 | 说明 LLM request body 和 SSE event data 的可选解码入口、输出 JSON 和失败回退语义。 |
 
 ## 按插件类型阅读
 
@@ -16,13 +17,14 @@
 | --- | --- |
 | WASM core module 观测消费者 | [WASM Core Module ABI](wasm-core-module.zh.md) + [观测消费者 ABI](observation-consumer.zh.md) |
 | WASM core module 控制决策插件 | [WASM Core Module ABI](wasm-core-module.zh.md) + [控制决策 ABI](control-decider.zh.md) |
+| WASM core module LLM codec 插件 | [WASM Core Module ABI](wasm-core-module.zh.md) + [LLM Codec ABI](llm-codec.zh.md) |
 | WIT component 观测消费者 | [观测消费者 ABI](observation-consumer.zh.md) |
 | WIT component 控制决策插件 | [控制决策 ABI](control-decider.zh.md) |
 | 内置插件 | 先看具体插件说明；内置插件不需要实现 WASM ABI。 |
 
 ## 阅读顺序
 
-1. 先确认插件用途：观测消费还是控制决策。
+1. 先确认插件用途：观测消费、控制决策还是 LLM codec。
 2. 再确认运行形态：WASM core module、WIT component 或内置插件。
 3. 如果是 WASM core module，先读承载层 ABI，再读对应功能层 ABI。
 4. 如果是 WIT component，直接读对应功能层 ABI；底层导出由 component model 处理。
@@ -37,7 +39,7 @@ AcTrail 当前把“插件用途”和“运行形态”分开看。插件用途
 
 | 运行形态 | 插件产物 | 调用边界 | 适合场景 |
 | --- | --- | --- | --- |
-| WASM core module | 普通 `.wasm` 或 `.wat` module | AcTrail 通过导出函数、线性内存和整数返回码调用插件。 | 需要直接理解底层 ABI、写最小示例、或使用不依赖 WIT component 的 WASM 工具链。 |
+| WASM core module | 普通 `.wasm` 或 `.wat` module | AcTrail 通过导出函数、线性内存和整数返回码调用插件。 | 需要直接理解底层 ABI、写最小示例、使用不依赖 WIT component 的 WASM 工具链，或实现当前只支持 core module 的 `llm-codec` 插件。 |
 | WIT component | WASM component `.wasm` | AcTrail 按 WIT 接口调用插件，参数和返回值是结构化类型。 | 面向正式插件开发，接口更清晰，适合 Rust 等支持 component model 的语言工具链。 |
 | 内置插件 | 编译进 AcTrail 的 Rust 代码 | AcTrail 直接调用进程内 Rust 实现，不经过 WASM ABI。 | AcTrail 自带能力，例如内置 OTEL JSONL exporter。 |
 
@@ -60,6 +62,7 @@ flowchart LR
         Host[插件宿主]
         Obs[观测消费入口]
         Ctrl[控制决策入口]
+        Codec[LLM codec 入口]
     end
 
     subgraph B[WASM core module 插件]
@@ -79,8 +82,10 @@ flowchart LR
 
     Host --> Obs
     Host --> Ctrl
+    Host --> Codec
     Obs --> CoreAlloc
     Ctrl --> CoreAlloc
+    Codec --> CoreAlloc
     CoreAlloc --> CoreMemory
     CoreMemory --> CoreEntry
     Obs --> WitInterface

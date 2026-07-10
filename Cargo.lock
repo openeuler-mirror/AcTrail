@@ -1920,6 +1920,7 @@ dependencies = [
  "config_core",
  "libc",
  "model_core",
+ "plugin_system",
  "semantic_action",
  "serde_json",
  "sha2",

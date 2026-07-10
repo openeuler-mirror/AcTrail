@@ -9,6 +9,6 @@ export DEEPSEEK_API_KEY=...
 python3 tests/support/llm-http-proxy/provider_proxy.py
 ```
 
-For deterministic local streaming coverage, run with `--mode local-stream`. That mode does not call an upstream provider. It emits an OpenAI-compatible `text/event-stream` response whose terminal JSON chunk carries `finish_reason="stop"` and intentionally omits a `data: [DONE]` sentinel, matching endpoints that close streams this way.
+For deterministic local streaming coverage, run with `--mode local-stream`. That mode does not call an upstream provider. It emits an OpenAI-compatible `text/event-stream` response whose terminal JSON chunk carries `finish_reason="stop"` and usage metadata, including configurable `output_tokens_details.reasoning_tokens`, and intentionally omits a `data: [DONE]` sentinel, matching endpoints that close streams this way.
 
 Every default can be overridden through CLI flags. Automated E2E cases pass their values from their workload config, so they can use a random local port without changing the manual fixed-port config.

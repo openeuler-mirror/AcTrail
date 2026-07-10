@@ -13,6 +13,8 @@ use semantic_action::{
     SemanticActionKind, SemanticActionLink, attr_keys as attrs,
 };
 
+use crate::payload_projection::llm::{LlmCodecPlugin, LlmCodecPluginStatus};
+
 use super::actions::{
     enforcement_action, file_modify_action, http_message_action, is_file_modify_operation,
     is_http_protocol, process_exec_action, process_fork_attempt_action,
@@ -205,6 +207,21 @@ impl LiveSemanticActionRuntime {
                 output
             }
         }
+    }
+
+    pub fn register_llm_codec(
+        &mut self,
+        plugin: std::sync::Arc<dyn LlmCodecPlugin>,
+    ) -> Result<(), String> {
+        self.llm.register_codec(plugin)
+    }
+
+    pub fn unregister_llm_codec(&mut self, instance_id: &str) -> bool {
+        self.llm.unregister_codec(instance_id)
+    }
+
+    pub fn llm_codec_statuses(&self) -> Vec<LlmCodecPluginStatus> {
+        self.llm.codec_statuses()
     }
 
     pub fn observe_payload_segment(

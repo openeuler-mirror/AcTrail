@@ -7,13 +7,14 @@ use semantic_action::{
 };
 use serde_json::{Map, Value};
 
+use super::codec::{LlmCodecRegistry, NormalizedSseEvent, SseCodecEvent};
 use super::provider::{parse_json_response, parse_sse_response, tool_calls_json};
 
 const SSE_DONE_MARKER: &str = "[DONE]";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct LlmResponseBody {
-    pub(super) provider_id: &'static str,
+    pub(super) provider_id: String,
     pub(super) json_valid: bool,
     pub(super) model: Option<String>,
     pub(super) content_text: Option<String>,
@@ -43,28 +44,11 @@ pub(super) struct SseEvent {
     pub(super) has_tool_delta: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct RawSseEvent {
-    index: usize,
-    event_type: Option<String>,
-    id: Option<String>,
-    data: String,
-    json: Option<Value>,
-    done_marker: bool,
-}
-
-pub(super) fn parse_llm_response_body(body: &[u8]) -> Option<LlmResponseBody> {
-    let text = String::from_utf8_lossy(body).into_owned();
-    if let Some(sse) = parse_sse_response_body(&text) {
-        return Some(sse);
-    }
-    let json = serde_json::from_slice::<Value>(body).ok();
-    let value = json.as_ref()?;
-    let parsed = parse_json_response(LlmJsonResponseInput {
-        text: &text,
-        json: value,
-    })?;
-    Some(response_body(true, parsed, Vec::new()))
+pub(super) fn parse_llm_response_body(
+    body: &[u8],
+    codecs: &LlmCodecRegistry,
+) -> Option<LlmResponseBody> {
+    LlmResponseBodyParser { codecs }.parse(body)
 }
 
 pub(super) fn sse_events_json(
@@ -84,14 +68,87 @@ pub(super) fn sse_events_json(
     (!values.is_empty()).then(|| Value::Array(values).to_string())
 }
 
-fn parse_sse_response_body(text: &str) -> Option<LlmResponseBody> {
-    let raw_events = parse_sse_events(text);
-    if raw_events.is_empty() {
-        return None;
+struct LlmResponseBodyParser<'a> {
+    codecs: &'a LlmCodecRegistry,
+}
+
+impl LlmResponseBodyParser<'_> {
+    fn parse(&self, body: &[u8]) -> Option<LlmResponseBody> {
+        let text = String::from_utf8_lossy(body).into_owned();
+        if let Some(sse) = self.parse_sse_response_body(&text) {
+            return Some(sse);
+        }
+        let json = serde_json::from_slice::<Value>(body).ok();
+        let value = json.as_ref()?;
+        let parsed = parse_json_response(LlmJsonResponseInput {
+            text: &text,
+            json: value,
+        })?;
+        Some(response_body(true, parsed, Vec::new()))
     }
-    let provider_events = raw_events
+
+    fn parse_sse_response_body(&self, text: &str) -> Option<LlmResponseBody> {
+        let raw_events = parse_sse_events(text);
+        if raw_events.is_empty() {
+            return None;
+        }
+        if let Some((provider_id, normalized)) = self.normalized_sse_events(&raw_events) {
+            return decoded_sse_response(text, raw_events, provider_id, normalized);
+        }
+        let provider_events = raw_events
+            .iter()
+            .map(provider_sse_event)
+            .collect::<Vec<_>>();
+        let parsed = parse_sse_response(LlmSseResponseInput {
+            text,
+            events: &provider_events,
+        })?;
+        let events = raw_events
+            .into_iter()
+            .zip(parsed.events)
+            .map(|(raw, parsed)| sse_event(raw, parsed))
+            .collect();
+        Some(response_body(false, parsed.response, events))
+    }
+
+    fn normalized_sse_events(
+        &self,
+        raw_events: &[SseCodecEvent],
+    ) -> Option<(Option<String>, Vec<NormalizedSseEvent>)> {
+        let mut decoded_any = false;
+        let mut provider_id = None;
+        let mut normalized = Vec::with_capacity(raw_events.len());
+        for event in raw_events {
+            if let Some(decoded) = self.codecs.decode_sse_event(event) {
+                let data = String::from_utf8(decoded.body).ok()?;
+                let trimmed = data.trim();
+                provider_id = provider_id.or(decoded.provider_id);
+                normalized.push(NormalizedSseEvent {
+                    index: event.index,
+                    event_type: event.event_type.clone(),
+                    id: event.id.clone(),
+                    json: serde_json::from_str::<Value>(trimmed).ok(),
+                    done_marker: trimmed == SSE_DONE_MARKER,
+                    data,
+                });
+                decoded_any = true;
+            } else {
+                normalized.push(normalized_event_from_raw(event));
+            }
+        }
+        decoded_any.then_some((provider_id, normalized))
+    }
+}
+
+fn decoded_sse_response(
+    text: &str,
+    raw_events: Vec<SseCodecEvent>,
+    provider_id: Option<String>,
+    normalized: Vec<NormalizedSseEvent>,
+) -> Option<LlmResponseBody> {
+    let provider_events = normalized
         .iter()
-        .map(provider_sse_event)
+        .map(provider_normalized_sse_event)
         .collect::<Vec<_>>();
     let parsed = parse_sse_response(LlmSseResponseInput {
         text,
@@ -102,7 +159,11 @@ fn parse_sse_response_body(text: &str) -> Option<LlmResponseBody> {
         .zip(parsed.events)
         .map(|(raw, parsed)| sse_event(raw, parsed))
         .collect();
-    Some(response_body(false, parsed.response, events))
+    let mut body = response_body(false, parsed.response, events);
+    if let Some(provider_id) = provider_id {
+        body.provider_id = provider_id;
+    }
+    Some(body)
 }
 
 fn response_body(
@@ -112,7 +173,7 @@ fn response_body(
 ) -> LlmResponseBody {
     let tool_calls_json = tool_calls_json(&parsed.tool_calls);
     LlmResponseBody {
-        provider_id: parsed.provider_id,
+        provider_id: parsed.provider_id.to_string(),
         json_valid,
         model: parsed.model,
         content_text: parsed.content_text,
@@ -126,7 +187,7 @@ fn response_body(
     }
 }
 
-fn parse_sse_events(text: &str) -> Vec<RawSseEvent> {
+fn parse_sse_events(text: &str) -> Vec<SseCodecEvent> {
     let mut items = Vec::new();
     for block in text.split("\n\n").filter(|block| !block.trim().is_empty()) {
         let mut data_lines = Vec::new();
@@ -157,9 +218,9 @@ fn raw_sse_event(
     event_type: Option<String>,
     id: Option<String>,
     data: String,
-) -> RawSseEvent {
+) -> SseCodecEvent {
     let trimmed = data.trim();
-    RawSseEvent {
+    SseCodecEvent {
         index,
         event_type,
         id,
@@ -169,7 +230,7 @@ fn raw_sse_event(
     }
 }
 
-fn provider_sse_event(event: &RawSseEvent) -> ProviderSseEvent<'_> {
+fn provider_sse_event(event: &SseCodecEvent) -> ProviderSseEvent<'_> {
     ProviderSseEvent {
         index: event.index,
         event_type: event.event_type.as_deref(),
@@ -180,7 +241,29 @@ fn provider_sse_event(event: &RawSseEvent) -> ProviderSseEvent<'_> {
     }
 }
 
-fn sse_event(raw: RawSseEvent, parsed: LlmParsedSseEvent) -> SseEvent {
+fn provider_normalized_sse_event(event: &NormalizedSseEvent) -> ProviderSseEvent<'_> {
+    ProviderSseEvent {
+        index: event.index,
+        event_type: event.event_type.as_deref(),
+        id: event.id.as_deref(),
+        data: &event.data,
+        json: event.json.as_ref(),
+        done_marker: event.done_marker,
+    }
+}
+
+fn normalized_event_from_raw(event: &SseCodecEvent) -> NormalizedSseEvent {
+    NormalizedSseEvent {
+        index: event.index,
+        event_type: event.event_type.clone(),
+        id: event.id.clone(),
+        data: event.data.clone(),
+        json: event.json.clone(),
+        done_marker: event.done_marker,
+    }
+}
+
+fn sse_event(raw: SseCodecEvent, parsed: LlmParsedSseEvent) -> SseEvent {
     let tool_calls_json = tool_calls_json(&parsed.tool_calls);
     SseEvent {
         index: raw.index,
