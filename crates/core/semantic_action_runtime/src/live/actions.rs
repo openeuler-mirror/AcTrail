@@ -15,13 +15,8 @@ pub(super) const ATTR_AGENT_IDENTITY_EVIDENCE_ACTION_ID: &str =
 pub(super) const ATTR_AGENT_INVOCATION_TRIGGER: &str = attrs::agent_invocation::TRIGGER;
 pub(super) const ATTR_AGENT_INVOCATION_EVIDENCE_ACTION_ID: &str =
     attrs::agent_invocation::EVIDENCE_ACTION_ID;
-pub(super) const ATTR_PROCESS_PARENT_GENERATION: &str = attrs::process_parent::GENERATION;
+pub(super) const ATTR_PROCESS_PARENT_ID: &str = attrs::process_parent::ID;
 pub(super) const ATTR_PROCESS_PARENT_IDENTITY_STATE: &str = attrs::process_parent::IDENTITY_STATE;
-pub(super) const ATTR_PROCESS_PARENT_PID: &str = attrs::process_parent::PID;
-pub(super) const ATTR_PROCESS_PARENT_PID_NAMESPACE: &str = attrs::process_parent::PID_NAMESPACE;
-pub(super) const ATTR_PROCESS_PARENT_START_TIME_TICKS: &str =
-    attrs::process_parent::START_TIME_TICKS;
-pub(super) const ATTR_PROCESS_PARENT_TASK_ID: &str = attrs::process_parent::TASK_ID;
 pub(super) const PROCESS_PARENT_IDENTITY_STATE_CONFLICT: &str = "conflict";
 pub(super) const PROCESS_PARENT_IDENTITY_STATE_OBSERVED: &str = "observed";
 
@@ -68,7 +63,7 @@ pub(super) fn process_exec_action(event: &DomainEvent) -> SemanticAction {
         title: payload
             .executable
             .clone()
-            .unwrap_or_else(|| format!("exec pid {}", event.envelope.process.pid)),
+            .unwrap_or_else(|| format!("exec {}", event.envelope.process)),
         start_time: event.envelope.observed_at,
         end_time: None,
         process: event.envelope.process.clone(),
@@ -317,24 +312,7 @@ pub(super) fn insert_parent_identity_attributes(
     attributes: &mut std::collections::BTreeMap<String, String>,
     parent: &ProcessIdentity,
 ) {
-    attributes.insert(ATTR_PROCESS_PARENT_PID.to_string(), parent.pid.to_string());
-    if let Some(task_id) = parent.task_id {
-        attributes.insert(ATTR_PROCESS_PARENT_TASK_ID.to_string(), task_id.to_string());
-    }
-    attributes.insert(
-        ATTR_PROCESS_PARENT_START_TIME_TICKS.to_string(),
-        parent.start_time_ticks.to_string(),
-    );
-    if let Some(pid_namespace) = &parent.pid_namespace {
-        attributes.insert(
-            ATTR_PROCESS_PARENT_PID_NAMESPACE.to_string(),
-            pid_namespace.as_str().to_string(),
-        );
-    }
-    attributes.insert(
-        ATTR_PROCESS_PARENT_GENERATION.to_string(),
-        parent.generation.to_string(),
-    );
+    attributes.insert(ATTR_PROCESS_PARENT_ID.to_string(), parent.get().to_string());
     attributes.insert(
         ATTR_PROCESS_PARENT_IDENTITY_STATE.to_string(),
         PROCESS_PARENT_IDENTITY_STATE_OBSERVED.to_string(),
@@ -364,10 +342,9 @@ pub(super) fn process_action_id(
     suffix: &str,
 ) -> String {
     format!(
-        "trace:{}:process:{}:{}:{}",
+        "trace:{}:process:{}:{}",
         trace_id.get(),
-        process.pid,
-        process.generation,
+        process.get(),
         suffix
     )
 }

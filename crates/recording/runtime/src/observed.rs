@@ -2,7 +2,7 @@ use model_core::diagnostics::DiagnosticRecord;
 use model_core::event::DomainEvent;
 use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
-use model_core::process::ProcessMembership;
+use model_core::process::{ProcessMembership, ProcessRecord};
 use model_core::trace::TraceRecord;
 use storage_core::StorageBackend;
 
@@ -15,6 +15,7 @@ pub(crate) struct ObservedRecordBatch {
     diagnostics: Vec<DiagnosticRecord>,
     semantic_actions: SemanticActionBatch,
     trace_states: Vec<TraceStateRecord>,
+    process_records: Vec<ProcessRecord>,
 }
 
 impl ObservedRecordBatch {
@@ -23,6 +24,7 @@ impl ObservedRecordBatch {
         diagnostics: Vec<DiagnosticRecord>,
         semantic_actions: SemanticActionBatch,
         trace_states: Vec<TraceStateRecord>,
+        process_records: Vec<ProcessRecord>,
     ) -> Self {
         Self {
             events,
@@ -30,6 +32,7 @@ impl ObservedRecordBatch {
             diagnostics,
             semantic_actions,
             trace_states,
+            process_records,
         }
     }
 
@@ -44,6 +47,7 @@ impl ObservedRecordBatch {
             diagnostics: Vec::new(),
             semantic_actions,
             trace_states: Vec::new(),
+            process_records: Vec::new(),
         }
     }
 
@@ -54,6 +58,7 @@ impl ObservedRecordBatch {
             diagnostics: Vec::new(),
             semantic_actions,
             trace_states: Vec::new(),
+            process_records: Vec::new(),
         }
     }
 
@@ -64,16 +69,21 @@ impl ObservedRecordBatch {
             diagnostics: Vec::new(),
             semantic_actions,
             trace_states: Vec::new(),
+            process_records: Vec::new(),
         }
     }
 
-    pub(crate) fn from_trace_state(trace_state: TraceStateRecord) -> Self {
+    pub(crate) fn from_trace_state(
+        trace_state: TraceStateRecord,
+        process_records: Vec<ProcessRecord>,
+    ) -> Self {
         Self {
             events: Vec::new(),
             payload_segments: Vec::new(),
             diagnostics: Vec::new(),
             semantic_actions: SemanticActionBatch::default(),
             trace_states: vec![trace_state],
+            process_records,
         }
     }
 
@@ -84,6 +94,7 @@ impl ObservedRecordBatch {
             diagnostics: vec![diagnostic],
             semantic_actions: SemanticActionBatch::default(),
             trace_states: Vec::new(),
+            process_records: Vec::new(),
         }
     }
 }
@@ -128,8 +139,12 @@ impl<'a> ObservedRecordRecorder<'a> {
             diagnostics,
             semantic_actions,
             trace_states,
+            process_records,
         } = batch;
 
+        for record in process_records {
+            self.storage.upsert_process_record(record)?;
+        }
         for event in events {
             self.storage.append_event(event)?;
         }
@@ -168,6 +183,23 @@ impl<'a> ObservedRecordWriteSession<'a> {
         self.storage
             .retained_payload_bytes(trace_id)
             .map_err(RecordingError::from)
+    }
+
+    pub fn persist_process_record(&mut self, record: ProcessRecord) -> Result<(), RecordingError> {
+        self.storage
+            .upsert_process_record(record)
+            .map_err(RecordingError::from)
+    }
+
+    pub fn persist_trace_state(
+        &mut self,
+        trace_state: TraceStateRecord,
+    ) -> Result<(), RecordingError> {
+        self.persist_batch(ObservedRecordBatch::from_trace_state(
+            trace_state,
+            Vec::new(),
+        ))
+        .map(|_| ())
     }
 
     pub(crate) fn persist_batch(

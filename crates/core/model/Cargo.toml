@@ -5,3 +5,4 @@ edition = "2024"
 license = "MulanPSL-2.0"
 
 [dependencies]
+process_identity = { path = "../process_identity" }

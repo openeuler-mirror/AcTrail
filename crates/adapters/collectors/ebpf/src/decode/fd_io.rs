@@ -7,7 +7,7 @@ use std::time::SystemTime;
 use collector_event::{RawCollectorEvent, RawEventEnvelope, RawObservationPayload};
 use model_core::capability::Capability;
 use model_core::ids::CollectorName;
-use model_core::process::ProcessIdentity;
+use model_core::process::ProcessObservation;
 
 use crate::decode::FdIpcKind;
 use crate::decode::FileTracker;
@@ -43,7 +43,7 @@ pub(super) fn operation(kind: u32, syscall_family: u32) -> (&'static str, &'stat
 pub(super) fn decode(
     event: KernelObservationEvent,
     bindings: &BindingStateMap,
-    identity: ProcessIdentity,
+    identity: ProcessObservation,
     operation: &'static str,
     direction: &'static str,
     file_tracker: &mut FileTracker,

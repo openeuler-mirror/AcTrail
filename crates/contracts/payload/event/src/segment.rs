@@ -7,13 +7,13 @@ use model_core::payload::{
     PayloadContentState, PayloadDirection, PayloadOperationCompletionState, PayloadSourceBoundary,
     PayloadStreamKey, PayloadTruncationState,
 };
-use model_core::process::ProcessIdentity;
+use model_core::process::ProcessObservation;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RawPayloadSegment {
     pub trace_id: TraceId,
     pub observed_at: SystemTime,
-    pub process: ProcessIdentity,
+    pub process: ProcessObservation,
     pub source_boundary: PayloadSourceBoundary,
     pub content_state: PayloadContentState,
     pub direction: PayloadDirection,

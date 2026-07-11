@@ -27,7 +27,7 @@ const STRUCTURED_NON_LLM_SEQUENCE: u64 = 502;
 #[test]
 fn structured_json_sse_request_emits_llm_request_with_classifier_metadata() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
 
     let output = runtime.observe_payload_segment(&outbound_http1_payload_segment_with_bytes(
         agent,
@@ -72,7 +72,7 @@ fn structured_json_sse_request_emits_llm_request_with_classifier_metadata() {
 #[test]
 fn structured_json_sse_response_fixture_emits_llm_response_and_sse_stream() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
 
     let output = runtime.observe_payload_segment(&llm_response_payload_segment(
         agent,
@@ -137,7 +137,7 @@ fn structured_json_sse_response_fixture_emits_llm_response_and_sse_stream() {
 #[test]
 fn structured_json_sse_request_response_updates_one_llm_call() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
 
     let request_output =
         runtime.observe_payload_segment(&outbound_http1_payload_segment_with_bytes(
@@ -206,7 +206,7 @@ fn structured_json_sse_request_response_updates_one_llm_call() {
 #[test]
 fn structured_json_sse_request_with_string_message_content_emits_llm_request() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
     let request = structured_json_sse_relaxed_request_http_bytes();
 
     let output = runtime.observe_payload_segment(&outbound_http1_payload_segment_with_bytes(
@@ -248,7 +248,7 @@ fn structured_json_sse_request_with_string_message_content_emits_llm_request() {
 #[test]
 fn structured_json_sse_chunked_request_split_across_segments_emits_llm_request_and_call() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
     let body = structured_json_sse_request_body();
     let request_head = format!(
         "POST /v1/structured/stream HTTP/1.1\r\nHost: llm.example.test\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n",
@@ -310,7 +310,7 @@ fn structured_json_sse_chunked_request_split_across_segments_emits_llm_request_a
 #[test]
 fn non_llm_chunked_request_emits_no_llm_actions() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
     let body = r#"{"function":"chat","messages":[{"role":"user","content":"hello"}]}"#;
     let bytes = format!(
         "POST /api/config HTTP/1.1\r\nHost: api.enterprise.trae.cn\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{}\r\n0\r\n\r\n",
@@ -337,7 +337,7 @@ fn non_llm_chunked_request_emits_no_llm_actions() {
 #[test]
 fn structured_json_sse_model_field_messages_without_context_emits_llm_request() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
     let body = concat!(
         "{\"messages\":[",
         "{\"role\":\"user\",\"content\":\"hello\"}",
@@ -383,7 +383,7 @@ fn structured_json_sse_model_field_messages_without_context_emits_llm_request() 
 #[test]
 fn structured_json_sse_body_only_model_name_messages_with_context_emits_llm_request() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
     let body = structured_json_sse_request_body();
 
     let output = runtime.observe_payload_segment(&outbound_http1_payload_segment_with_bytes(
@@ -420,7 +420,7 @@ fn structured_json_sse_body_only_model_name_messages_with_context_emits_llm_requ
 #[test]
 fn structured_json_sse_model_name_messages_without_context_emits_no_llm_actions() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
     let body = concat!(
         "{\"messages\":[",
         "{\"role\":\"user\",\"content\":\"hello\"}",
@@ -445,7 +445,7 @@ fn structured_json_sse_model_name_messages_without_context_emits_no_llm_actions(
 #[test]
 fn structured_json_sse_chunked_done_event_completes_response() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
     let first_body = concat!(
         "event: metadata\n",
         "data: {\"model\":\"glm-5.1\"}\n\n",
@@ -520,7 +520,7 @@ fn structured_json_sse_chunked_done_event_completes_response() {
 #[test]
 fn structured_json_sse_non_llm_request_emits_no_llm_actions() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
     let body = r#"{"function":"chat"}"#;
 
     let output = runtime.observe_payload_segment(&outbound_http1_payload_segment_with_bytes(
@@ -596,7 +596,7 @@ fn http2_frame(frame_type: u8, stream_id: u32, payload: &[u8]) -> Vec<u8> {
 #[test]
 fn llm_request_projects_canonical_content_blocks() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
 
     let output = runtime.observe_payload_segment(&llm_payload_segment(agent));
     let request = output
@@ -631,7 +631,7 @@ fn llm_request_projects_canonical_content_blocks() {
 #[test]
 fn invalid_json_llm_request_is_shape_only() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
     let body = r#"{"model":"deepseek-chat","messages":"#;
     let bytes = format!(
         "POST /chat/completions HTTP/1.1\r\nHost: api.local\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
@@ -668,7 +668,7 @@ fn invalid_json_llm_request_is_shape_only() {
 #[test]
 fn llm_response_updates_one_action_with_multiple_sse_segments() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
 
     let mut first_response = None;
     for (index, bytes) in [
@@ -786,7 +786,7 @@ data: [DONE]
 #[test]
 fn anthropic_sse_message_delta_stop_reason_completes_response() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
     let body = concat!(
         "event: message_start\n",
         r#"data: {"type":"message_start","message":{"model":"deepseek-v4-pro"}}"#,
@@ -848,7 +848,7 @@ fn anthropic_sse_message_delta_stop_reason_completes_response() {
 #[test]
 fn llm_response_stream_state_keeps_chunked_boundary_after_done() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
 
     let first_body = concat!(
         r#"data: {"model":"deepseek-v4-flash","choices":[{"delta":{"content":"first"}}]}"#,
@@ -919,7 +919,7 @@ fn llm_response_stream_state_keeps_chunked_boundary_after_done() {
 #[test]
 fn llm_response_suppresses_repeated_in_progress_boundaries_and_emits_semantic_updates() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
 
     for (index, bytes) in [
         b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n"
@@ -1008,7 +1008,7 @@ fn llm_response_suppresses_repeated_in_progress_boundaries_and_emits_semantic_up
 #[test]
 fn llm_response_stream_state_evicts_completed_messages() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
 
     let first_body = r#"{"model":"deepseek-chat","choices":[{"message":{"content":"first"}}]}"#;
     let first_bytes = format!(
@@ -1069,7 +1069,7 @@ fn llm_response_stream_state_evicts_completed_messages() {
 #[test]
 fn raw_llm_responses_use_distinct_action_ids_after_evict() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
 
     let first = runtime.observe_payload_segment(&llm_response_payload_segment(
         agent.clone(),
@@ -1147,7 +1147,7 @@ fn raw_llm_responses_use_distinct_action_ids_after_evict() {
 #[test]
 fn llm_response_projects_sse_stream_summary_without_event_actions() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
 
     let sse = concat!(
         "data: {\"model\":\"deepseek-v4-flash\",\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking\"}}]}\n\n",
@@ -1367,7 +1367,7 @@ fn parsed_sse_storage_config_keeps_provider_events_on_sse_stream_action() {
         semantic_retention,
         config_core::daemon::FileObservationConfig::default(),
     );
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
 
     let sse = concat!(
         "data: {\"model\":\"deepseek-v4-flash\",\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking\"}}]}\n\n",

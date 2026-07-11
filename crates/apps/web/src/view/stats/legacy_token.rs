@@ -63,6 +63,7 @@ pub(crate) fn token_usage_stats_json(
                 error.stage, error.message
             )
         })?;
+    let process_display = traces::ProcessDisplayIndex::load(storage)?;
     let trace_by_id = traces
         .iter()
         .map(|trace| (trace.trace_id.get(), trace))
@@ -78,7 +79,12 @@ pub(crate) fn token_usage_stats_json(
             .then_with(|| left.trace_id.cmp(&right.trace_id))
             .then_with(|| left.response_action_id.cmp(&right.response_action_id))
     });
-    Ok(token_usage_json(query, &trace_by_id, &rows))
+    Ok(token_usage_json(
+        query,
+        &process_display,
+        &trace_by_id,
+        &rows,
+    ))
 }
 
 fn token_usage_rows_for_trace(
@@ -221,13 +227,14 @@ fn optional_u64_attr(action: &SemanticAction, key: &str) -> Result<Option<u64>, 
 
 fn token_usage_json(
     query: TokenUsageStatsQuery,
+    process_display: &traces::ProcessDisplayIndex,
     trace_by_id: &BTreeMap<u64, &TraceRecord>,
     rows: &[TokenUsageRow],
 ) -> String {
     let request_rows = rows.iter().map(token_usage_row_json).collect::<Vec<_>>();
     let trace_rows = trace_by_id
         .values()
-        .map(|trace| traces::trace_record_json(trace))
+        .map(|trace| process_display.render_trace(trace))
         .collect::<Vec<_>>();
     let mut output = String::from("{");
     json::field(&mut output, "range", &range_json(query));

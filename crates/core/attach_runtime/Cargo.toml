@@ -10,6 +10,6 @@ collector_event = { path = "../../contracts/collector/event" }
 collector_instance = { path = "../../contracts/collector/instance" }
 config_core = { path = "../config" }
 model_core = { path = "../model" }
-process_identity_contract = { path = "../../contracts/process/identity" }
+process_identity = { path = "../process_identity" }
 process_tree_snapshot_contract = { path = "../../contracts/process/tree_snapshot" }
 trace_runtime = { path = "../trace_runtime" }

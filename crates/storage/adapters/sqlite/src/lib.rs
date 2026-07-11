@@ -6,7 +6,6 @@ pub mod query;
 pub mod records;
 pub mod retention;
 pub mod schema;
-mod schema_migrations;
 pub mod semantic_actions;
 pub mod transaction;
 pub mod writer;
@@ -18,7 +17,11 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use model_core::ids::TraceId;
-use rusqlite::{Connection, OpenFlags};
+use model_core::process::{
+    HostProcessCoordinates, NamespaceIdentity, NamespaceProcessCoordinates, ProcessIdentity,
+    ProcessRecord, ProcessResolutionState,
+};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Row};
 
 pub use config::{
     SQLITE_DEFAULT_BUSY_TIMEOUT_MS, SQLITE_STORAGE_CONFIG_PREFIX, SqliteStorageConfig,
@@ -105,12 +108,180 @@ impl SqliteStorage {
         )
     }
 
+    pub fn reserve_process_id_block(&mut self, count: u64) -> Result<(u64, u64), rusqlite::Error> {
+        if count == 0 {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let mut connection = self.connection().borrow_mut();
+        let transaction = connection.transaction()?;
+        let start = transaction.query_row(
+            "SELECT next_process_id FROM process_id_sequence WHERE singleton = 1",
+            [],
+            |row| row.get::<_, u64>(0),
+        )?;
+        let end = start
+            .checked_add(count)
+            .ok_or(rusqlite::Error::InvalidQuery)?;
+        transaction.execute(
+            "UPDATE process_id_sequence SET next_process_id = ?1 WHERE singleton = 1",
+            [end],
+        )?;
+        transaction.commit()?;
+        Ok((start, end))
+    }
+
+    pub fn upsert_process_record(&mut self, record: &ProcessRecord) -> Result<(), rusqlite::Error> {
+        let mut connection = self.connection().borrow_mut();
+        if !connection.is_autocommit() {
+            return Self::upsert_process_record_on(&connection, record);
+        }
+        let transaction = connection.transaction()?;
+        Self::upsert_process_record_on(&transaction, record)?;
+        transaction.commit()
+    }
+
+    fn upsert_process_record_on(
+        connection: &Connection,
+        record: &ProcessRecord,
+    ) -> Result<(), rusqlite::Error> {
+        let host = record.host.as_ref();
+        connection.execute(
+            "INSERT INTO processes (
+                process_id, host_pid, host_task_id, host_start_ticks,
+                host_start_boottime_ns, resolution_state
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(process_id) DO UPDATE SET
+                host_pid = excluded.host_pid,
+                host_task_id = excluded.host_task_id,
+                host_start_ticks = excluded.host_start_ticks,
+                host_start_boottime_ns = excluded.host_start_boottime_ns,
+                resolution_state = excluded.resolution_state",
+            rusqlite::params![
+                record.identity.get(),
+                host.map(|value| value.pid),
+                host.and_then(|value| value.task_id),
+                host.map(|value| value.start_time_ticks),
+                host.and_then(|value| value.start_boottime_ns),
+                ProcessRecordCodec::resolution_state_name(record.resolution_state),
+            ],
+        )?;
+        for namespace in &record.namespaces {
+            connection.execute(
+                "INSERT OR IGNORE INTO process_namespace_aliases (
+                    process_id, pid_namespace, namespace_pid, namespace_start_ticks
+                 ) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![
+                    record.identity.get(),
+                    namespace.pid_namespace.as_str(),
+                    namespace.pid,
+                    namespace.start_time_ticks,
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn get_process_record(
+        &self,
+        identity: ProcessIdentity,
+    ) -> Result<Option<ProcessRecord>, rusqlite::Error> {
+        let connection = self.connection().borrow();
+        let mut record = connection
+            .query_row(
+                "SELECT process_id, host_pid, host_task_id, host_start_ticks,
+                        host_start_boottime_ns, resolution_state
+                 FROM processes WHERE process_id = ?1",
+                [identity.get()],
+                ProcessRecordCodec::from_row,
+            )
+            .optional()?;
+        if let Some(record) = &mut record {
+            ProcessRecordCodec::load_namespaces(&connection, record)?;
+        }
+        Ok(record)
+    }
+
+    pub fn list_process_records(&self) -> Result<Vec<ProcessRecord>, rusqlite::Error> {
+        let connection = self.connection().borrow();
+        let mut statement = connection.prepare(
+            "SELECT process_id, host_pid, host_task_id, host_start_ticks,
+                    host_start_boottime_ns, resolution_state
+             FROM processes ORDER BY process_id",
+        )?;
+        let rows = statement.query_map([], ProcessRecordCodec::from_row)?;
+        let mut records = rows.collect::<Result<Vec<_>, _>>()?;
+        for record in &mut records {
+            ProcessRecordCodec::load_namespaces(&connection, record)?;
+        }
+        Ok(records)
+    }
+
     pub(crate) fn connection(&self) -> &Rc<RefCell<Connection>> {
         &self.connection
     }
 
     pub(crate) fn export_leases(&self) -> &Rc<RefCell<BTreeSet<TraceId>>> {
         &self.export_leases
+    }
+}
+
+struct ProcessRecordCodec;
+
+impl ProcessRecordCodec {
+    fn from_row(row: &Row<'_>) -> Result<ProcessRecord, rusqlite::Error> {
+        let identity = ProcessIdentity::new(row.get(0)?);
+        let host_pid = row.get::<_, Option<u32>>(1)?;
+        let host = host_pid.map(|pid| HostProcessCoordinates {
+            pid,
+            task_id: row.get(2).expect("host task id column"),
+            start_time_ticks: row
+                .get::<_, Option<u64>>(3)
+                .expect("host start ticks column")
+                .unwrap_or(0),
+            start_boottime_ns: row.get(4).expect("host boot time column"),
+        });
+        Ok(ProcessRecord {
+            identity,
+            host,
+            namespaces: BTreeSet::new(),
+            resolution_state: Self::parse_resolution_state(row.get::<_, String>(5)?.as_str())?,
+        })
+    }
+
+    fn load_namespaces(
+        connection: &Connection,
+        record: &mut ProcessRecord,
+    ) -> Result<(), rusqlite::Error> {
+        let mut aliases = connection.prepare(
+            "SELECT pid_namespace, namespace_pid, namespace_start_ticks
+         FROM process_namespace_aliases WHERE process_id = ?1",
+        )?;
+        let rows = aliases.query_map([record.identity.get()], |row| {
+            Ok(NamespaceProcessCoordinates::new(
+                NamespaceIdentity::new(row.get::<_, String>(0)?),
+                row.get(1)?,
+                row.get(2)?,
+            ))
+        })?;
+        record.namespaces = rows.collect::<Result<_, _>>()?;
+        Ok(())
+    }
+
+    fn resolution_state_name(state: ProcessResolutionState) -> &'static str {
+        match state {
+            ProcessResolutionState::Provisional => "provisional",
+            ProcessResolutionState::Resolved => "resolved",
+            ProcessResolutionState::Conflicted => "conflicted",
+        }
+    }
+
+    fn parse_resolution_state(value: &str) -> Result<ProcessResolutionState, rusqlite::Error> {
+        match value {
+            "provisional" => Ok(ProcessResolutionState::Provisional),
+            "resolved" => Ok(ProcessResolutionState::Resolved),
+            "conflicted" => Ok(ProcessResolutionState::Conflicted),
+            _ => Err(rusqlite::Error::InvalidQuery),
+        }
     }
 }
 
@@ -166,10 +337,6 @@ mod tests {
     use model_core::process::{ProcessIdentity, ProcessMembership};
     use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
     use rusqlite::Connection;
-    use semantic_action::{
-        SemanticActionKind, SemanticActionLinkConfidence, SemanticActionLinkRole,
-        SemanticActionReadStore, SemanticActionStatus,
-    };
     use store_read_contract::diagnostics::DiagnosticReadStore;
     use store_read_contract::events::EventReadStore;
     use store_read_contract::traces::TraceReadStore;
@@ -251,7 +418,7 @@ mod tests {
         storage
             .create_trace(TraceRecord::new(
                 trace_id,
-                ProcessIdentity::new(100, 200, 200),
+                ProcessIdentity::new(200),
                 TraceName::new("wal-reader"),
                 ProfileName::new("snapshot"),
                 SystemTime::UNIX_EPOCH,
@@ -268,7 +435,7 @@ mod tests {
     fn sqlite_round_trip_and_purge_are_consistent() {
         let mut storage = SqliteStorage::open_in_memory().unwrap();
         let trace_id = TraceId::new(1);
-        let process = ProcessIdentity::new(100, 200, 200);
+        let process = ProcessIdentity::new(200);
         let mut trace = TraceRecord::new(
             trace_id,
             process.clone(),
@@ -341,223 +508,19 @@ mod tests {
     }
 
     #[test]
-    fn open_migrates_v6_semantic_action_strings_to_codebook_columns() {
+    fn open_rejects_v6_semantic_action_schema() {
         let path = temp_storage_path("semantic-codebook-v6");
         cleanup_storage_files(&path);
-        {
-            let connection = Connection::open(&path).unwrap();
-            connection
-                .execute_batch(
-                    r#"
-                    CREATE TABLE semantic_actions (
-                        action_id TEXT PRIMARY KEY,
-                        trace_id INTEGER NOT NULL,
-                        kind TEXT NOT NULL,
-                        title TEXT NOT NULL,
-                        start_time INTEGER NOT NULL,
-                        end_time INTEGER,
-                        process_pid INTEGER NOT NULL,
-                        process_task_id INTEGER,
-                        process_start_ticks INTEGER NOT NULL,
-                        process_pid_namespace TEXT,
-                        process_generation INTEGER NOT NULL,
-                        status TEXT NOT NULL,
-                        completeness TEXT NOT NULL,
-                        confidence_millis INTEGER,
-                        attributes TEXT NOT NULL
-                    );
-                    CREATE TABLE semantic_action_evidence (
-                        action_id TEXT NOT NULL,
-                        evidence_order INTEGER NOT NULL,
-                        kind TEXT NOT NULL,
-                        evidence_id INTEGER NOT NULL,
-                        role TEXT NOT NULL,
-                        PRIMARY KEY (action_id, evidence_order)
-                    );
-                    CREATE TABLE semantic_action_links (
-                        trace_id INTEGER NOT NULL,
-                        parent_action_id TEXT NOT NULL,
-                        child_action_id TEXT NOT NULL,
-                        role TEXT NOT NULL,
-                        confidence TEXT NOT NULL,
-                        valid INTEGER NOT NULL DEFAULT 1,
-                        attributes TEXT NOT NULL,
-                        PRIMARY KEY (trace_id, parent_action_id, child_action_id, role)
-                    );
-                    CREATE TABLE semantic_action_link_evidence (
-                        trace_id INTEGER NOT NULL,
-                        parent_action_id TEXT NOT NULL,
-                        child_action_id TEXT NOT NULL,
-                        role TEXT NOT NULL,
-                        evidence_order INTEGER NOT NULL,
-                        kind TEXT NOT NULL,
-                        evidence_id INTEGER NOT NULL,
-                        evidence_role TEXT NOT NULL,
-                        PRIMARY KEY (trace_id, parent_action_id, child_action_id, role, evidence_order)
-                    );
-                    CREATE TABLE file_observation_paths (
-                        trace_id INTEGER NOT NULL,
-                        action_id TEXT NOT NULL,
-                        path_order INTEGER NOT NULL,
-                        path TEXT NOT NULL,
-                        PRIMARY KEY (trace_id, action_id, path)
-                    );
-                    CREATE TABLE file_path_set_action_refs (
-                        trace_id INTEGER NOT NULL,
-                        action_id TEXT NOT NULL,
-                        path_set_id TEXT NOT NULL,
-                        PRIMARY KEY (trace_id, action_id)
-                    );
-                    CREATE TABLE llm_request_manifests (
-                        manifest_id INTEGER PRIMARY KEY,
-                        trace_id INTEGER NOT NULL,
-                        action_id TEXT NOT NULL,
-                        format_version INTEGER NOT NULL,
-                        canonical_body_hash BLOB NOT NULL,
-                        canonical_body_bytes INTEGER NOT NULL,
-                        skeleton_json TEXT NOT NULL,
-                        UNIQUE (trace_id, action_id)
-                    );
-                    INSERT INTO semantic_actions (
-                        action_id, trace_id, kind, title, start_time, end_time,
-                        process_pid, process_task_id, process_start_ticks,
-                        process_generation, status, completeness, confidence_millis, attributes
-                    ) VALUES
-                        ('parent', 1, 'command.invocation', 'command', 1, 2, 100, 10, 11, 0, 'success', 'complete', NULL, ''),
-                        ('child', 1, 'llm.call', 'call', 2, 3, 100, 10, 11, 0, 'success', 'complete', NULL, '');
-                    INSERT INTO semantic_action_evidence (
-                        action_id, evidence_order, kind, evidence_id, role
-                    ) VALUES ('child', 0, 'payload_segment', 42, 'llm.payload');
-                    INSERT INTO semantic_action_links (
-                        trace_id, parent_action_id, child_action_id, role, confidence, valid, attributes
-                    ) VALUES (1, 'parent', 'child', 'command.contains_llm_call', 'derived', 1, '');
-                    INSERT INTO semantic_action_link_evidence (
-                        trace_id, parent_action_id, child_action_id, role,
-                        evidence_order, kind, evidence_id, evidence_role
-                    ) VALUES (1, 'parent', 'child', 'command.contains_llm_call', 0, 'payload_segment', 43, 'llm.payload');
-                    INSERT INTO file_observation_paths (
-                        trace_id, action_id, path_order, path
-                    ) VALUES (1, 'child', 0, '/tmp/input');
-                    INSERT INTO file_path_set_action_refs (
-                        trace_id, action_id, path_set_id
-                    ) VALUES (1, 'child', 'path-set-1');
-                    INSERT INTO llm_request_manifests (
-                        manifest_id, trace_id, action_id, format_version,
-                        canonical_body_hash, canonical_body_bytes, skeleton_json
-                    ) VALUES (7, 1, 'child', 1, X'001122', 3, '{"ok":true}');
-                    PRAGMA user_version = 6;
-                    "#,
-                )
-                .unwrap();
-        }
-
-        let storage = SqliteStorage::open(&path).unwrap();
-        let version = storage
-            .connection()
-            .borrow()
-            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
-            .unwrap();
-        assert_eq!(version, 7);
-        let legacy_kind_columns = storage
-            .connection()
-            .borrow()
-            .query_row(
-                "SELECT COUNT(*) FROM pragma_table_info('semantic_actions')
-                 WHERE name = 'kind'",
-                [],
-                |row| row.get::<_, i64>(0),
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE legacy_schema_marker (id INTEGER PRIMARY KEY);
+                 PRAGMA user_version = 6;",
             )
             .unwrap();
-        assert_eq!(legacy_kind_columns, 0);
+        drop(connection);
 
-        let actions = storage.list_semantic_actions(TraceId::new(1)).unwrap();
-        assert_eq!(actions.len(), 2);
-        assert_eq!(actions[0].kind, SemanticActionKind::CommandInvocation);
-        assert_eq!(actions[1].kind, SemanticActionKind::LlmCall);
-        assert_eq!(actions[1].status, SemanticActionStatus::Success);
-        assert_eq!(actions[1].evidence[0].id, 42);
-
-        let links = storage.list_semantic_action_links(TraceId::new(1)).unwrap();
-        assert_eq!(links.len(), 1);
-        assert_eq!(
-            links[0].role,
-            SemanticActionLinkRole::CommandContainsLlmCall
-        );
-        assert_eq!(links[0].confidence, SemanticActionLinkConfidence::Derived);
-        assert_eq!(links[0].evidence[0].id, 43);
-
-        for table in [
-            "file_observation_paths",
-            "file_path_set_action_refs",
-            "llm_request_manifests",
-        ] {
-            let legacy_action_id_columns = storage
-                .connection()
-                .borrow()
-                .query_row(
-                    &format!(
-                        "SELECT COUNT(*) FROM pragma_table_info('{table}')
-                         WHERE name = 'action_id'"
-                    ),
-                    [],
-                    |row| row.get::<_, i64>(0),
-                )
-                .unwrap();
-            assert_eq!(legacy_action_id_columns, 0);
-        }
-
-        let migrated_path_action = storage
-            .connection()
-            .borrow()
-            .query_row(
-                "SELECT ids.action_id
-                 FROM file_observation_paths paths
-                 JOIN semantic_action_ids ids
-                   ON ids.action_key = paths.action_key
-                 WHERE paths.path = '/tmp/input'",
-                [],
-                |row| row.get::<_, String>(0),
-            )
-            .unwrap();
-        assert_eq!(migrated_path_action, "child");
-
-        let migrated_path_set_action = storage
-            .connection()
-            .borrow()
-            .query_row(
-                "SELECT ids.action_id
-                 FROM file_path_set_action_refs refs
-                 JOIN semantic_action_ids ids
-                   ON ids.action_key = refs.action_key
-                 WHERE refs.path_set_id = 'path-set-1'",
-                [],
-                |row| row.get::<_, String>(0),
-            )
-            .unwrap();
-        assert_eq!(migrated_path_set_action, "child");
-
-        let migrated_manifest = storage
-            .connection()
-            .borrow()
-            .query_row(
-                "SELECT manifest.manifest_id, ids.action_id, manifest.skeleton_json
-                 FROM llm_request_manifests manifest
-                 JOIN semantic_action_ids ids
-                   ON ids.action_key = manifest.action_key",
-                [],
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                    ))
-                },
-            )
-            .unwrap();
-        assert_eq!(
-            migrated_manifest,
-            (7, "child".to_string(), "{\"ok\":true}".to_string())
-        );
+        assert!(SqliteStorage::open(&path).is_err());
         cleanup_storage_files(&path);
     }
 

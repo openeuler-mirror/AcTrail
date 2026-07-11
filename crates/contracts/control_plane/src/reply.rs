@@ -1,6 +1,7 @@
 //! Control-plane reply and error contracts.
 
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 use std::time::SystemTime;
 
 use crate::command::DeploymentPermissionMode;
@@ -43,6 +44,28 @@ pub struct LaunchPermissionsReply {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LaunchTlsPlanDescriptor {
+    pub target: PathBuf,
+    pub binary: PathBuf,
+    pub provider: String,
+    pub source: String,
+    pub points: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LaunchTlsPlanStatus {
+    Found(LaunchTlsPlanDescriptor),
+    Unsupported { reason: String },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LaunchTlsPlanReply {
+    pub status: LaunchTlsPlanStatus,
+    pub cache_hit: bool,
+    pub resolve_elapsed_micros: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DoctorReply {
     pub available_collectors: Vec<String>,
     pub loaded_policy_plugins: Vec<String>,
@@ -60,6 +83,7 @@ pub struct PluginCommandReply {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ControlReply {
     LaunchPermissions(LaunchPermissionsReply),
+    LaunchTlsPlan(LaunchTlsPlanReply),
     TrackAdded(TrackAddReply),
     SeccompListenerRegistered,
     TrackRemoved,

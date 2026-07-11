@@ -1,7 +1,7 @@
 //! Matching observations to traces and process identities.
 
 use model_core::ids::TraceId;
-use model_core::process::{ProcessIdentity, ProcessMembership};
+use model_core::process::{ProcessIdentity, ProcessMembership, ProcessObservation};
 
 use crate::IngestMatch;
 
@@ -15,16 +15,22 @@ pub fn match_membership(
         .map(|membership| IngestMatch {
             trace_id: membership.trace_id,
             process: membership.identity,
+            parent: None,
         })
 }
 
 pub fn match_by_pid(
     trace_id: TraceId,
-    observed: &ProcessIdentity,
+    observed: &ProcessObservation,
     root_pid: u32,
 ) -> Option<IngestMatch> {
-    (observed.pid == root_pid).then(|| IngestMatch {
+    (observed
+        .host
+        .as_ref()
+        .is_some_and(|host| host.pid == root_pid))
+    .then(|| IngestMatch {
         trace_id,
-        process: observed.clone(),
+        process: ProcessIdentity::new(u64::from(root_pid)),
+        parent: None,
     })
 }

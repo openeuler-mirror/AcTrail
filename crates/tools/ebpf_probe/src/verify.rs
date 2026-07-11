@@ -2,6 +2,10 @@
 
 #[path = "verify/database.rs"]
 mod database;
+#[path = "verify/error.rs"]
+mod error;
+#[path = "verify/lock.rs"]
+mod lock;
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -22,20 +26,23 @@ use storage_factory::StorageConfig;
 
 use crate::args::{LiveVerificationConfig, workload_from_live_config};
 use crate::report::LiveVerificationReport;
+pub use error::{LiveVerificationError, LiveVerificationStage};
 
 pub fn run_live_verification(
     config: LiveVerificationConfig,
-) -> Result<LiveVerificationReport, String> {
-    prepare_paths(&config)?;
+) -> Result<LiveVerificationReport, LiveVerificationError> {
+    let setup = |message| LiveVerificationError::new(LiveVerificationStage::Setup, message);
+    let _run_lock = lock::LiveVerificationLock::acquire(&config.storage_path).map_err(setup)?;
+    prepare_paths(&config).map_err(setup)?;
 
     let provider_rule_set = ProviderRuleSetConfig {
         rules_path: config.provider_rules_path.clone(),
         unknown_provider_label: config.provider_unknown_provider_label.clone(),
     };
     let default_operator_config = OperatorConfig::default_hierarchical_template()
-        .map_err(|error| format!("render built-in operator defaults: {error}"))?;
+        .map_err(|error| setup(format!("render built-in operator defaults: {error}")))?;
     let seccomp_defaults = OperatorConfig::parse(&default_operator_config)
-        .map_err(|error| format!("parse built-in seccomp defaults: {error}"))?;
+        .map_err(|error| setup(format!("parse built-in seccomp defaults: {error}")))?;
     let storage_config = StorageConfig::sqlite_path(&config.storage_path);
     let mut server = LocalDaemonServer::build_with_provider_rule_set(
         &storage_config,
@@ -75,23 +82,42 @@ pub fn run_live_verification(
         seccomp_defaults.network_control,
         &provider_rule_set,
     )
-    .map_err(|error| format!("daemon build failed: {}: {}", error.code, error.message))?;
+    .map_err(|error| {
+        setup(format!(
+            "daemon build failed: {}: {}",
+            error.code, error.message
+        ))
+    })?;
 
-    let mut child = spawn_workload(&config)?;
+    let mut child = spawn_workload(&config).map_err(setup)?;
     let root_pid = child.id();
-    let trace_id = match run_workload_under_trace(&mut server, &config, &mut child, root_pid) {
+    let trace_id = match load_and_attach(&mut server, &config, root_pid) {
         Ok(trace_id) => trace_id,
         Err(error) => {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(error);
+            return Err(LiveVerificationError::new(
+                LiveVerificationStage::LoadAttach,
+                error,
+            ));
         }
     };
+    if let Err(error) = run_workload_and_drain(&mut server, &config, &mut child) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(LiveVerificationError::new(
+            LiveVerificationStage::WorkloadEventDrain,
+            error,
+        ));
+    }
 
     let final_snapshot = server.ebpf_debug_snapshot(root_pid).map_err(|error| {
-        format!(
-            "eBPF debug snapshot failed: {}: {}",
-            error.code, error.message
+        LiveVerificationError::new(
+            LiveVerificationStage::WorkloadEventDrain,
+            format!(
+                "eBPF debug snapshot failed: {}: {}",
+                error.code, error.message
+            ),
         )
     })?;
     let debug_description = format!(
@@ -115,17 +141,29 @@ pub fn run_live_verification(
         config.resource_metrics.enabled,
         config.resource_metrics.include_system,
     )
-    .map_err(|error| format!("{error}; {debug_description}"))
+    .map_err(|error| {
+        LiveVerificationError::new(
+            LiveVerificationStage::RetainedObservation,
+            format!("{error}; {debug_description}"),
+        )
+    })
 }
 
-fn run_workload_under_trace(
+fn load_and_attach(
     server: &mut LocalDaemonServer,
     config: &LiveVerificationConfig,
-    child: &mut std::process::Child,
     root_pid: u32,
 ) -> Result<TraceId, String> {
     let trace_id = track_workload(server, config, root_pid)?;
     verify_runtime_binding(server, root_pid, trace_id)?;
+    Ok(trace_id)
+}
+
+fn run_workload_and_drain(
+    server: &mut LocalDaemonServer,
+    config: &LiveVerificationConfig,
+    child: &mut std::process::Child,
+) -> Result<(), String> {
     drain_resource_metrics_if_enabled(server, config)?;
     write_child_line(child, &config.stdio_stdin_message)?;
     read_child_until_events_ready(child, &config.stdio_stdout_message)?;
@@ -143,7 +181,7 @@ fn run_workload_under_trace(
     server
         .drain_live_events()
         .map_err(|error| format!("final drain failed: {}: {}", error.code, error.message))?;
-    Ok(trace_id)
+    Ok(())
 }
 
 fn drain_resource_metrics_if_enabled(

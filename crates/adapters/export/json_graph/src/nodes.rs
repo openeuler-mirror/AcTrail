@@ -55,7 +55,7 @@ pub fn process_node(membership: &ProcessMembership) -> GraphNode {
     GraphNode {
         id: process_node_id(membership),
         kind: GraphNodeKind::Process,
-        title: format!("pid {}", membership.identity.pid),
+        title: membership.identity.to_string(),
         attributes,
     }
 }
@@ -151,10 +151,7 @@ pub fn diagnostic_node(diagnostic: &DiagnosticRecord) -> GraphNode {
 }
 
 pub fn process_node_id(membership: &ProcessMembership) -> String {
-    format!(
-        "process:{}:{}",
-        membership.identity.pid, membership.identity.generation
-    )
+    format!("process:{}", membership.identity.get())
 }
 
 fn base64_encode(bytes: &[u8]) -> String {

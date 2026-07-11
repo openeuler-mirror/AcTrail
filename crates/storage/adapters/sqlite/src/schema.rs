@@ -5,18 +5,36 @@ use rusqlite::Connection;
 use crate::semantic_actions::{codebook, storage_meta};
 
 const SQLITE_SCHEMA_VERSION_CURRENT: i32 = storage_meta::CURRENT_SCHEMA_VERSION;
-const SQLITE_SCHEMA_VERSION_BEFORE_EXITED_AT: i32 = 5;
-const SQLITE_SCHEMA_VERSION_BEFORE_SEMANTIC_CODEBOOK: i32 = 6;
-
 const CREATE_TABLES_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS process_id_sequence (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    next_process_id INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS processes (
+    process_id INTEGER PRIMARY KEY,
+    host_pid INTEGER,
+    host_task_id INTEGER,
+    host_start_ticks INTEGER,
+    host_start_boottime_ns INTEGER,
+    resolution_state TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS process_namespace_aliases (
+    process_id INTEGER NOT NULL,
+    pid_namespace TEXT NOT NULL,
+    namespace_pid INTEGER NOT NULL,
+    namespace_start_ticks INTEGER NOT NULL,
+    PRIMARY KEY (process_id, pid_namespace, namespace_pid, namespace_start_ticks),
+    UNIQUE (pid_namespace, namespace_pid, namespace_start_ticks)
+);
+
+INSERT OR IGNORE INTO process_id_sequence (singleton, next_process_id) VALUES (1, 1);
+
 CREATE TABLE IF NOT EXISTS traces (
     trace_id INTEGER PRIMARY KEY,
-    root_pid INTEGER NOT NULL,
-    root_task_id INTEGER,
-    root_start_ticks INTEGER NOT NULL,
-    root_pid_namespace TEXT,
+    root_process_id INTEGER NOT NULL,
     root_container_id TEXT,
-    root_generation INTEGER NOT NULL,
     display_name TEXT NOT NULL,
     profile_name TEXT NOT NULL,
     tags TEXT NOT NULL,
@@ -31,16 +49,8 @@ CREATE TABLE IF NOT EXISTS traces (
 
 CREATE TABLE IF NOT EXISTS memberships (
     trace_id INTEGER NOT NULL,
-    pid INTEGER NOT NULL,
-    task_id INTEGER,
-    start_ticks INTEGER NOT NULL,
-    pid_namespace TEXT,
-    generation INTEGER NOT NULL,
-    inherited_from_pid INTEGER,
-    inherited_from_task_id INTEGER,
-    inherited_from_start_ticks INTEGER,
-    inherited_from_pid_namespace TEXT,
-    inherited_from_generation INTEGER,
+    process_id INTEGER NOT NULL,
+    inherited_from_process_id INTEGER,
     observed_at INTEGER,
     capture_enabled INTEGER NOT NULL,
     propagation_enabled INTEGER NOT NULL,
@@ -48,18 +58,14 @@ CREATE TABLE IF NOT EXISTS memberships (
     exit_code INTEGER,
     exit_observed_at INTEGER,
     exit_observation_source TEXT,
-    PRIMARY KEY (trace_id, pid, start_ticks, generation)
+    PRIMARY KEY (trace_id, process_id)
 );
 
 CREATE TABLE IF NOT EXISTS events (
     event_id INTEGER PRIMARY KEY,
     trace_id INTEGER NOT NULL,
     observed_at INTEGER NOT NULL,
-    process_pid INTEGER NOT NULL,
-    process_task_id INTEGER,
-    process_start_ticks INTEGER NOT NULL,
-    process_pid_namespace TEXT,
-    process_generation INTEGER NOT NULL,
+    process_id INTEGER NOT NULL,
     collector TEXT NOT NULL,
     kind TEXT NOT NULL,
     bootstrap_observed INTEGER NOT NULL,
@@ -78,11 +84,7 @@ CREATE TABLE IF NOT EXISTS payload_segments (
     segment_id INTEGER PRIMARY KEY,
     trace_id INTEGER NOT NULL,
     observed_at INTEGER NOT NULL,
-    process_pid INTEGER NOT NULL,
-    process_task_id INTEGER,
-    process_start_ticks INTEGER NOT NULL,
-    process_pid_namespace TEXT,
-    process_generation INTEGER NOT NULL,
+    process_id INTEGER NOT NULL,
     source_boundary TEXT NOT NULL,
     content_state TEXT NOT NULL,
     direction TEXT NOT NULL,
@@ -118,11 +120,7 @@ CREATE TABLE IF NOT EXISTS semantic_actions (
     title TEXT NOT NULL,
     start_time INTEGER NOT NULL,
     end_time INTEGER,
-    process_pid INTEGER NOT NULL,
-    process_task_id INTEGER,
-    process_start_ticks INTEGER NOT NULL,
-    process_pid_namespace TEXT,
-    process_generation INTEGER NOT NULL,
+    process_id INTEGER NOT NULL,
     status_code INTEGER NOT NULL,
     completeness_code INTEGER NOT NULL,
     confidence_millis INTEGER,
@@ -271,11 +269,7 @@ CREATE TABLE IF NOT EXISTS llm_request_block_refs (
 CREATE TABLE IF NOT EXISTS diagnostics (
     diagnostic_id INTEGER PRIMARY KEY,
     trace_id INTEGER,
-    process_pid INTEGER,
-    process_task_id INTEGER,
-    process_start_ticks INTEGER,
-    process_pid_namespace TEXT,
-    process_generation INTEGER,
+    process_id INTEGER,
     kind TEXT NOT NULL,
     severity TEXT NOT NULL,
     emitted_at INTEGER NOT NULL,
@@ -293,22 +287,18 @@ CREATE TABLE IF NOT EXISTS tombstones (
 
 CREATE INDEX IF NOT EXISTS idx_memberships_trace_parent ON memberships (
     trace_id,
-    inherited_from_pid,
-    inherited_from_task_id,
-    inherited_from_start_ticks,
-    inherited_from_pid_namespace,
-    inherited_from_generation
+    inherited_from_process_id
 );
 
 CREATE INDEX IF NOT EXISTS idx_semantic_actions_trace_process_kind ON semantic_actions (
     trace_id,
-    process_pid,
-    process_task_id,
-    process_start_ticks,
-    process_pid_namespace,
-    process_generation,
+    process_id,
     kind_code
 );
+
+CREATE INDEX IF NOT EXISTS idx_processes_host_pid ON processes (host_pid);
+CREATE INDEX IF NOT EXISTS idx_process_alias_namespace_pid
+    ON process_namespace_aliases (pid_namespace, namespace_pid);
 
 CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_child_role ON semantic_action_links (
     trace_id,
@@ -343,7 +333,6 @@ CREATE INDEX IF NOT EXISTS idx_file_path_set_action_refs_path_set ON file_path_s
 pub fn initialize(connection: &Connection) -> Result<(), rusqlite::Error> {
     let version = user_version(connection)?;
     validate_writable_schema_state(connection, version)?;
-    migrate_writable_schema(connection, version)?;
     connection.execute_batch(CREATE_TABLES_SQL)?;
     codebook::for_schema_version(SQLITE_SCHEMA_VERSION_CURRENT)
         .and_then(|codebook| codebook.validate())
@@ -351,18 +340,6 @@ pub fn initialize(connection: &Connection) -> Result<(), rusqlite::Error> {
     validate_current_schema(connection)?;
     connection.pragma_update(None, "user_version", SQLITE_SCHEMA_VERSION_CURRENT)?;
     migrate_query_indexes(connection)
-}
-
-fn migrate_writable_schema(connection: &Connection, version: i32) -> Result<(), rusqlite::Error> {
-    if version == SQLITE_SCHEMA_VERSION_BEFORE_EXITED_AT
-        && !column_exists(connection, "traces", "exited_at")?
-    {
-        connection.execute_batch("ALTER TABLE traces ADD COLUMN exited_at INTEGER;")?;
-    }
-    if version <= SQLITE_SCHEMA_VERSION_BEFORE_SEMANTIC_CODEBOOK {
-        crate::schema_migrations::semantic_codebook::migrate_semantic_action_codebook(connection)?;
-    }
-    Ok(())
 }
 
 fn migrate_query_indexes(connection: &Connection) -> Result<(), rusqlite::Error> {
@@ -396,12 +373,6 @@ fn validate_writable_schema_state(
     if version == SQLITE_SCHEMA_VERSION_CURRENT {
         return Ok(());
     }
-    if version == SQLITE_SCHEMA_VERSION_BEFORE_EXITED_AT {
-        return Ok(());
-    }
-    if version == SQLITE_SCHEMA_VERSION_BEFORE_SEMANTIC_CODEBOOK {
-        return Ok(());
-    }
     if version == 0 && user_table_count(connection)? == 0 {
         return Ok(());
     }
@@ -409,6 +380,12 @@ fn validate_writable_schema_state(
 }
 
 fn validate_current_schema(connection: &Connection) -> Result<(), rusqlite::Error> {
+    require_column(connection, "processes", "process_id")?;
+    require_column(connection, "process_namespace_aliases", "process_id")?;
+    require_column(connection, "traces", "root_process_id")?;
+    require_column(connection, "memberships", "process_id")?;
+    require_column(connection, "events", "process_id")?;
+    require_column(connection, "payload_segments", "process_id")?;
     require_column(connection, "traces", "exited_at")?;
     require_column(connection, "semantic_action_ids", "action_key")?;
     require_column(connection, "semantic_action_ids", "action_id")?;

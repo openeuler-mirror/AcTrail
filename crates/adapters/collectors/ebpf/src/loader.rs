@@ -8,8 +8,6 @@ mod attach_plan;
 mod environment;
 #[path = "loader/file.rs"]
 mod file;
-#[path = "loader/fork.rs"]
-mod fork;
 #[path = "loader/object.rs"]
 mod object;
 #[path = "loader/ring_decode.rs"]
@@ -38,7 +36,7 @@ use config_core::daemon::{EbpfCollectorConfig, FileBulkReadFastPathConfig, Paylo
 use libbpf_rs::{Link, MapCore, MapFlags, MapHandle, Object, ObjectBuilder};
 use model_core::capability::Capability;
 use model_core::ids::TraceId;
-use model_core::process::{ProcessIdentity, ProcessSuppressedFd};
+use model_core::process::{KernelProcessCoordinates, ProcessSuppressedFd};
 
 pub use attach_plan::AttachPlan;
 use attach_plan::{configure_program_autoload, effective_config_for_attach_plan};
@@ -102,7 +100,7 @@ pub struct EbpfRuntime {
     attached_programs: Vec<String>,
     attached_capabilities: BTreeSet<Capability>,
     tracked_traces: MapHandle,
-    process_generations: MapHandle,
+    process_start_times: MapHandle,
     pid_namespace: MapHandle,
     suppressed_fds: MapHandle,
     suppressed_fd_index: MapHandle,
@@ -169,7 +167,7 @@ impl EbpfProgramLoader {
         )?;
         resize_map(
             &mut open_object,
-            "process_generations",
+            "process_start_times",
             self.config.tracked_process_max_entries,
         )?;
         resize_map(
@@ -310,8 +308,8 @@ impl EbpfRuntime {
         attach_plan: &AttachPlan,
     ) -> Result<Self, LoaderError> {
         let tracked_traces = map_handle(&object, "tracked_traces", "tracked_map")?;
-        let process_generations =
-            map_handle(&object, "process_generations", "process_generation_map")?;
+        let process_start_times =
+            map_handle(&object, "process_start_times", "process_start_time_map")?;
         let pid_namespace = map_handle(&object, "pid_namespace", "pid_namespace_map")?;
         let suppressed_fds = map_handle(&object, "suppressed_fds", "suppressed_fds")?;
         let suppressed_fd_index =
@@ -353,7 +351,6 @@ impl EbpfRuntime {
             ring_buffer_max_bytes(config, payload),
         )?;
         configure_collector_pid_namespace(&pid_namespace)?;
-        fork::configure_child_pid_offset_map(&object, attach_plan)?;
         file::configure_file_config_map(&object, config)?;
         suppressed_fd::configure_config_map(&object, config)?;
         tls::configure_payload_tls_map(&object, &payload.tls)?;
@@ -407,7 +404,7 @@ impl EbpfRuntime {
             attached_programs,
             attached_capabilities,
             tracked_traces,
-            process_generations,
+            process_start_times,
             pid_namespace,
             suppressed_fds,
             suppressed_fd_index,
@@ -478,7 +475,7 @@ impl EbpfRuntime {
     pub fn track_pid(
         &self,
         map_pid: u32,
-        identity: &ProcessIdentity,
+        kernel_start_time: u64,
         trace_id: TraceId,
     ) -> Result<(), LoaderError> {
         let key = map_pid.to_ne_bytes();
@@ -486,9 +483,9 @@ impl EbpfRuntime {
         self.tracked_traces
             .update(&key, &value, MapFlags::ANY)
             .map_err(|error| LoaderError::new("track_pid", error.to_string()))?;
-        self.process_generations
-            .update(&key, &identity.generation.to_ne_bytes(), MapFlags::ANY)
-            .map_err(|error| LoaderError::new("track_pid_generation", error.to_string()))
+        self.process_start_times
+            .update(&key, &kernel_start_time.to_ne_bytes(), MapFlags::ANY)
+            .map_err(|error| LoaderError::new("track_pid_start_time", error.to_string()))
     }
 
     pub fn configure_pid_namespace_for_pid(&self, pid: u32) -> Result<(), LoaderError> {
@@ -510,7 +507,11 @@ impl EbpfRuntime {
         )
     }
 
-    pub fn unsuppress_fd(&self, process: &ProcessIdentity, fd: i32) -> Result<(), LoaderError> {
+    pub fn unsuppress_fd(
+        &self,
+        process: &KernelProcessCoordinates,
+        fd: i32,
+    ) -> Result<(), LoaderError> {
         suppressed_fd::unsuppress_fd(
             &self.suppressed_fds,
             &self.suppressed_fd_index,
@@ -586,9 +587,9 @@ impl EbpfRuntime {
         self.tracked_traces
             .delete(&key)
             .map_err(|error| LoaderError::new("untrack_pid", error.to_string()))?;
-        self.process_generations
+        self.process_start_times
             .delete(&key)
-            .map_err(|error| LoaderError::new("untrack_pid_generation", error.to_string()))
+            .map_err(|error| LoaderError::new("untrack_pid_start_time", error.to_string()))
     }
 
     pub fn mark_file_bulk_read_fast_process(

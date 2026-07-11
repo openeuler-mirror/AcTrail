@@ -83,9 +83,9 @@ def main() -> int:
             str(agent_a_binary),
         )
         print(f"hidden_agent_trace_id={launch.trace_id}")
-        print(f"agent_a_pid={proof.agent_a_pid}")
-        print(f"xiaoo_pid={proof.xiaoo_pid}")
-        print(f"script_b_parent_pid={proof.script_b_parent_pid}")
+        print(f"agent_a_process_id={proof.agent_a_process_id}")
+        print(f"xiaoo_process_id={proof.xiaoo_process_id}")
+        print(f"script_b_parent_process_id={proof.script_b_parent_process_id}")
         print("hidden agent invocation e2e complete")
         output_path.unlink(missing_ok=True)
         success = True

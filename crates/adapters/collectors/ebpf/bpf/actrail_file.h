@@ -173,7 +173,7 @@ static __always_inline int emit_file_primary_path_enter(
     init_file_event_primary_path(event, kind);
     event->pid = tgid;
     event->tid = (__u32)pid_tgid;
-    generation = ensure_process_generation(tgid);
+    generation = current_process_start_time(tgid);
     event->pid_generation = generation;
     event->phase = ACTRAIL_FILE_PHASE_ENTER;
     event->trace_id = *trace_id;
@@ -219,7 +219,7 @@ static __always_inline int emit_file_full_path_enter(
     init_file_event(event, kind);
     event->pid = tgid;
     event->tid = (__u32)pid_tgid;
-    event->pid_generation = ensure_process_generation(tgid);
+    event->pid_generation = current_process_start_time(tgid);
     event->phase = ACTRAIL_FILE_PHASE_ENTER;
     event->trace_id = *trace_id;
     event->aux = syscall_id;
@@ -264,7 +264,7 @@ static __always_inline int emit_file_header_enter(
     init_file_event_header(event, kind);
     event->pid = tgid;
     event->tid = (__u32)pid_tgid;
-    event->pid_generation = ensure_process_generation(tgid);
+    event->pid_generation = current_process_start_time(tgid);
     event->phase = ACTRAIL_FILE_PHASE_ENTER;
     event->trace_id = *trace_id;
     event->aux = syscall_id;
@@ -484,7 +484,7 @@ static __always_inline int emit_file_exit(
     init_file_event_header(event, kind);
     event->pid = tgid;
     event->tid = (__u32)pid_tgid;
-    generation = ensure_process_generation(tgid);
+    generation = current_process_start_time(tgid);
     event->pid_generation = generation;
     event->phase = ACTRAIL_FILE_PHASE_EXIT;
     event->result = ctx->ret;
@@ -569,7 +569,7 @@ static __always_inline int emit_ipc_fd_pair_exit(
     init_file_event_header(event, ACTRAIL_FILE_CONTEXT);
     event->pid = tgid;
     event->tid = (__u32)pid_tgid;
-    event->pid_generation = ensure_process_generation(tgid);
+    event->pid_generation = current_process_start_time(tgid);
     event->phase = ACTRAIL_FILE_PHASE_EXIT;
     event->result = ctx->ret;
     event->trace_id = op->trace_id;

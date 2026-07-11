@@ -7,6 +7,7 @@ use control_contract::reply::{ControlError, ControlReply};
 use model_core::ids::RequestId;
 
 use crate::args::CtlCommand;
+use crate::tls_plan::query_launch_tls_plan_reply;
 use crate::transport::ControlClientPort;
 
 pub fn dispatch(
@@ -38,6 +39,10 @@ pub fn dispatch(
             selector,
         }),
         CtlCommand::Doctor => ControlCommand::Doctor(DoctorCommand { request_id }),
+        CtlCommand::TlsPlanQuery { binary } => {
+            return query_launch_tls_plan_reply(client, request_id, &binary)
+                .map(ControlReply::LaunchTlsPlan);
+        }
         CtlCommand::Init { .. } => {
             return Err(ControlError::new(
                 "invalid_dispatch",

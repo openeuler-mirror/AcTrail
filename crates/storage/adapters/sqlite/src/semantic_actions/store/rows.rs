@@ -1,5 +1,5 @@
 use model_core::ids::TraceId;
-use model_core::process::{NamespaceIdentity, ProcessIdentity};
+use model_core::process::ProcessIdentity;
 use rusqlite::Row;
 use semantic_action::{SemanticAction, SemanticActionLink, SemanticEvidence, attr_keys as attrs};
 
@@ -20,15 +20,7 @@ pub(in crate::semantic_actions) fn action_from_row(
         title: row.get("title")?,
         start_time: decode_time(row.get("start_time")?),
         end_time: row.get::<_, Option<i64>>("end_time")?.map(decode_time),
-        process: ProcessIdentity {
-            pid: row.get("process_pid")?,
-            task_id: row.get("process_task_id")?,
-            start_time_ticks: row.get("process_start_ticks")?,
-            pid_namespace: row
-                .get::<_, Option<String>>("process_pid_namespace")?
-                .map(NamespaceIdentity::new),
-            generation: row.get("process_generation")?,
-        },
+        process: ProcessIdentity::new(row.get("process_id")?),
         status: decode_status(row.get::<_, i64>("status_code")?)?,
         completeness: decode_completeness(row.get::<_, i64>("completeness_code")?)?,
         confidence_millis: row.get("confidence_millis")?,

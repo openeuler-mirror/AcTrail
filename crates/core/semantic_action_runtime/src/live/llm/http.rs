@@ -319,7 +319,7 @@ mod tests {
             title: action_id.to_string(),
             start_time,
             end_time: None,
-            process: ProcessIdentity::new(4242, 1, 0),
+            process: ProcessIdentity::new(0),
             status: SemanticActionStatus::InProgress,
             completeness: SemanticActionCompleteness::Partial,
             confidence_millis: None,

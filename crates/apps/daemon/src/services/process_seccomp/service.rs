@@ -8,8 +8,9 @@ use config_core::daemon::{ProcessSeccompConfig, ProcessSeccompSyscall};
 use control_contract::reply::ControlError;
 use linux_platform::process_seccomp::KernelProcessSyscall;
 use model_core::ids::{CollectorName, TraceId};
-use model_core::process::ProcessIdentity;
-use process_identity_contract::lookup::ProcessIdentityReader;
+use model_core::process::{ProcessIdentity, ProcessObservation};
+use process_identity::ProcessIdentityManager;
+use process_identity::ProcessIdentityReader;
 use trace_runtime::registry::TraceRuntime;
 
 use super::clone_flags::{clone_flags, is_thread_clone};
@@ -69,23 +70,34 @@ impl ProcessSeccompService {
     pub(crate) fn ensure_listener_target(
         &self,
         trace_runtime: &mut trace_runtime::TraceRuntime,
+        process_registry: &ProcessIdentityManager,
         identity_reader: &impl ProcessIdentityReader,
         trace_id: TraceId,
         target_pid: u32,
     ) -> Result<Option<ProcessIdentity>, ControlError> {
-        if trace_runtime
-            .find_membership_by_pid(target_pid)
+        if process_registry
+            .active_host_pid(target_pid)
+            .and_then(|process| trace_runtime.find_membership(&process))
             .is_some_and(|(found_trace_id, _)| found_trace_id == trace_id)
         {
             return Ok(None);
         }
-        let Some(target_identity) = identity(trace_runtime, identity_reader, target_pid)? else {
+        let Some(target_identity) =
+            identity(trace_runtime, process_registry, identity_reader, target_pid)?
+        else {
             return Ok(None);
         };
         let Some(ppid) = parent_pid(target_pid)? else {
             return Ok(None);
         };
-        let Some((parent_trace_id, parent)) = trace_runtime.find_membership_by_pid(ppid) else {
+        let Some(parent_identity) = process_registry.active_host_pid(ppid) else {
+            return Err(ControlError::new(
+                "seccomp_listener",
+                "seccomp listener target parent identity is unknown",
+            ));
+        };
+        let Some((parent_trace_id, parent)) = trace_runtime.find_membership(&parent_identity)
+        else {
             return Err(ControlError::new(
                 "seccomp_listener",
                 "seccomp listener target parent is not part of the trace",
@@ -111,6 +123,7 @@ impl ProcessSeccompService {
     pub(crate) fn handle_notification(
         &self,
         trace_runtime: &TraceRuntime,
+        process_registry: &ProcessIdentityManager,
         identity_reader: &impl ProcessIdentityReader,
         notification: &libc::seccomp_notif,
         continuation: &mut NotificationContinuation,
@@ -148,22 +161,25 @@ impl ProcessSeccompService {
                     self.max_args,
                     self.max_arg_bytes,
                 )?;
-                let Some(process) = identity(trace_runtime, identity_reader, notification.pid)?
+                let Some(process) = identity(
+                    trace_runtime,
+                    process_registry,
+                    identity_reader,
+                    notification.pid,
+                )?
                 else {
                     continuation.continue_now()?;
                     return Ok(Vec::new());
                 };
                 let parent_pid = parent_pid(notification.pid)?;
-                let trace_id = trace_runtime
-                    .find_membership_by_pid(notification.pid)
-                    .map(|(trace_id, _)| trace_id)
-                    .or_else(|| {
-                        parent_pid.and_then(|pid| {
-                            trace_runtime
-                                .find_membership_by_pid(pid)
-                                .map(|(trace_id, _)| trace_id)
-                        })
-                    });
+                let trace_id =
+                    trace_for_host_pid(trace_runtime, process_registry, notification.pid).or_else(
+                        || {
+                            parent_pid.and_then(|pid| {
+                                trace_for_host_pid(trace_runtime, process_registry, pid)
+                            })
+                        },
+                    );
                 before_exec_continue(
                     &ProcessSeccompExecCandidate {
                         pid: notification.pid,
@@ -221,22 +237,25 @@ impl ProcessSeccompService {
                     self.max_args,
                     self.max_arg_bytes,
                 )?;
-                let Some(process) = identity(trace_runtime, identity_reader, notification.pid)?
+                let Some(process) = identity(
+                    trace_runtime,
+                    process_registry,
+                    identity_reader,
+                    notification.pid,
+                )?
                 else {
                     continuation.continue_now()?;
                     return Ok(Vec::new());
                 };
                 let parent_pid = parent_pid(notification.pid)?;
-                let trace_id = trace_runtime
-                    .find_membership_by_pid(notification.pid)
-                    .map(|(trace_id, _)| trace_id)
-                    .or_else(|| {
-                        parent_pid.and_then(|pid| {
-                            trace_runtime
-                                .find_membership_by_pid(pid)
-                                .map(|(trace_id, _)| trace_id)
-                        })
-                    });
+                let trace_id =
+                    trace_for_host_pid(trace_runtime, process_registry, notification.pid).or_else(
+                        || {
+                            parent_pid.and_then(|pid| {
+                                trace_for_host_pid(trace_runtime, process_registry, pid)
+                            })
+                        },
+                    );
                 before_exec_continue(
                     &ProcessSeccompExecCandidate {
                         pid: notification.pid,
@@ -286,7 +305,12 @@ impl ProcessSeccompService {
                     continuation.continue_now()?;
                     return Ok(Vec::new());
                 }
-                let Some(process) = identity(trace_runtime, identity_reader, notification.pid)?
+                let Some(process) = identity(
+                    trace_runtime,
+                    process_registry,
+                    identity_reader,
+                    notification.pid,
+                )?
                 else {
                     continuation.continue_now()?;
                     return Ok(Vec::new());
@@ -311,13 +335,14 @@ impl ProcessSeccompService {
 
     pub(crate) fn materialize_observation(
         &self,
-        trace_runtime: &TraceRuntime,
+        _trace_runtime: &TraceRuntime,
+        process_registry: &ProcessIdentityManager,
         observation: &ProcessSeccompObservation,
     ) -> RawCollectorEvent {
-        let process = trace_runtime
-            .find_membership_by_pid(observation.process.pid)
-            .map(|(_, membership)| membership.identity)
-            .unwrap_or_else(|| observation.process.clone());
+        let process = process_registry
+            .record(observation.process)
+            .expect("seccomp observation process record must exist")
+            .observation();
         match &observation.details {
             ProcessSeccompObservationDetails::Exec {
                 args,
@@ -326,8 +351,9 @@ impl ProcessSeccompService {
             } => {
                 let parent = observation
                     .parent_pid
-                    .and_then(|pid| trace_runtime.find_membership_by_pid(pid))
-                    .map(|(_, membership)| membership.identity);
+                    .and_then(|pid| process_registry.active_host_pid(pid))
+                    .and_then(|identity| process_registry.record(identity))
+                    .map(|record| record.observation());
                 self.exec_event(
                     observation.observed_at,
                     process,
@@ -369,9 +395,9 @@ impl ProcessSeccompService {
     fn exec_event(
         &self,
         observed_at: SystemTime,
-        process: ProcessIdentity,
+        process: ProcessObservation,
         parent_pid: Option<u32>,
-        parent: Option<ProcessIdentity>,
+        parent: Option<ProcessObservation>,
         syscall: ProcessSeccompSyscall,
         args: ExecArgs,
         execveat_dirfd: Option<u64>,
@@ -407,7 +433,7 @@ impl ProcessSeccompService {
     fn fork_attempt_event(
         &self,
         observed_at: SystemTime,
-        process: ProcessIdentity,
+        process: ProcessObservation,
         syscall: ProcessSeccompSyscall,
         flags: Option<u64>,
         clone3_args_ptr: Option<u64>,
@@ -433,7 +459,7 @@ impl ProcessSeccompService {
     fn command_control_event(
         &self,
         observed_at: SystemTime,
-        process: ProcessIdentity,
+        process: ProcessObservation,
         parent_pid: Option<u32>,
         path: Option<String>,
         argv: Vec<String>,
@@ -500,10 +526,11 @@ enum ProcessSeccompObservationDetails {
 
 fn identity(
     trace_runtime: &TraceRuntime,
+    process_registry: &ProcessIdentityManager,
     identity_reader: &impl ProcessIdentityReader,
     pid: u32,
 ) -> Result<Option<ProcessIdentity>, ControlError> {
-    TraceIdentityResolver::new(trace_runtime).runtime_or_read_pid_identity(
+    TraceIdentityResolver::new(trace_runtime, process_registry).runtime_or_read_pid_identity(
         identity_reader,
         pid,
         "process_seccomp_identity",
@@ -531,9 +558,9 @@ fn skip_missing_exec_candidate(pid: u32, path: &ExecPath) -> bool {
 
 fn process_event(
     observed_at: SystemTime,
-    process: ProcessIdentity,
+    process: ProcessObservation,
     operation: &str,
-    parent: Option<ProcessIdentity>,
+    parent: Option<ProcessObservation>,
     metadata: BTreeMap<String, String>,
 ) -> RawCollectorEvent {
     RawCollectorEvent {
@@ -548,4 +575,15 @@ fn process_event(
             metadata,
         },
     }
+}
+
+fn trace_for_host_pid(
+    trace_runtime: &TraceRuntime,
+    process_registry: &ProcessIdentityManager,
+    pid: u32,
+) -> Option<TraceId> {
+    process_registry
+        .active_host_pid(pid)
+        .and_then(|identity| trace_runtime.find_membership(&identity))
+        .map(|(trace_id, _)| trace_id)
 }

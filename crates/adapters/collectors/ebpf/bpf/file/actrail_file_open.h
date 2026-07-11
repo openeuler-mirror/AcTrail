@@ -85,7 +85,7 @@ static __always_inline int emit_file_openat2_enter(
     init_file_event(event, ACTRAIL_FILE_OPEN);
     event->pid = tgid;
     event->tid = (__u32)pid_tgid;
-    event->pid_generation = ensure_process_generation(tgid);
+    event->pid_generation = current_process_start_time(tgid);
     event->phase = ACTRAIL_FILE_PHASE_ENTER;
     event->trace_id = *trace_id;
     event->aux = ACTRAIL_FILE_SYSCALL_OPENAT2;

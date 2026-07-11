@@ -4,15 +4,18 @@ mod permission;
 mod plugin;
 
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use control_contract::command::{
     ControlCommand, DoctorCommand, ListTracesCommand, PluginCommandCommand, PluginListCommand,
     PluginLoadCommand, PluginStatusCommand, PluginUnloadCommand, ProcessRef,
-    RegisterSeccompListenerCommand, TrackAddCommand, TrackRemoveCommand,
+    RegisterSeccompListenerCommand, ResolveLaunchTlsPlanCommand, TrackAddCommand,
+    TrackRemoveCommand,
 };
 use control_contract::reply::{
-    ControlError, ControlReply, DoctorReply, PluginCommandReply, TraceListItem, TrackAddReply,
+    ControlError, ControlReply, DoctorReply, LaunchTlsPlanDescriptor, LaunchTlsPlanReply,
+    LaunchTlsPlanStatus, PluginCommandReply, TraceListItem, TrackAddReply,
 };
 use control_contract::selector::TraceSelector;
 use model_core::ids::{ProfileName, RequestId, TraceId, TraceName};
@@ -45,6 +48,11 @@ pub fn encode_command(command: &ControlCommand) -> Vec<u8> {
     match command {
         ControlCommand::ResolveLaunchPermissions(command) => {
             permission::encode_command(&mut fields, command);
+        }
+        ControlCommand::ResolveLaunchTlsPlan(command) => {
+            fields.push("resolve_launch_tls_plan_v1".to_string());
+            fields.push(command.request_id.get().to_string());
+            fields.push(command.binary.display().to_string());
         }
         ControlCommand::TrackAdd(command) => {
             fields.push("track_add_v3".to_string());
@@ -130,6 +138,12 @@ pub fn decode_command(bytes: &[u8]) -> Result<ControlCommand, ControlCodecError>
     let opcode = field(&fields, 0)?.as_str();
     match opcode {
         "resolve_launch_permissions_v1" => permission::decode_command(&fields),
+        "resolve_launch_tls_plan_v1" => Ok(ControlCommand::ResolveLaunchTlsPlan(
+            ResolveLaunchTlsPlanCommand {
+                request_id: RequestId::new(parse_u64(field(&fields, 1)?, "request_id")?),
+                binary: PathBuf::from(field(&fields, 2)?),
+            },
+        )),
         "track_add" => {
             let request_id = RequestId::new(parse_u64(field(&fields, 1)?, "request_id")?);
             let root = unknown_process_ref(parse_u32(field(&fields, 2)?, "root_pid")?);
@@ -309,6 +323,25 @@ pub fn encode_reply(reply: &Result<ControlReply, ControlError>) -> Vec<u8> {
         Ok(ControlReply::LaunchPermissions(reply)) => {
             permission::encode_reply(&mut fields, reply);
         }
+        Ok(ControlReply::LaunchTlsPlan(reply)) => {
+            fields.push("reply_launch_tls_plan_v1".to_string());
+            fields.push(reply.cache_hit.to_string());
+            fields.push(reply.resolve_elapsed_micros.to_string());
+            match &reply.status {
+                LaunchTlsPlanStatus::Found(plan) => {
+                    fields.push("found".to_string());
+                    fields.push(plan.target.display().to_string());
+                    fields.push(plan.binary.display().to_string());
+                    fields.push(plan.provider.clone());
+                    fields.push(plan.source.clone());
+                    fields.push(plan.points.clone());
+                }
+                LaunchTlsPlanStatus::Unsupported { reason } => {
+                    fields.push("unsupported".to_string());
+                    fields.push(reason.clone());
+                }
+            }
+        }
         Ok(ControlReply::TrackAdded(reply)) => {
             fields.push("reply_track_added".to_string());
             fields.push(reply.trace_id.get().to_string());
@@ -368,6 +401,31 @@ pub fn decode_reply(bytes: &[u8]) -> Result<Result<ControlReply, ControlError>, 
     let fields = decode_fields(bytes)?;
     match field(&fields, 0)?.as_str() {
         "reply_launch_permissions_v1" => permission::decode_reply(&fields).map(Ok),
+        "reply_launch_tls_plan_v1" => {
+            let status = match field(&fields, 3)?.as_str() {
+                "found" => LaunchTlsPlanStatus::Found(LaunchTlsPlanDescriptor {
+                    target: PathBuf::from(field(&fields, 4)?),
+                    binary: PathBuf::from(field(&fields, 5)?),
+                    provider: field(&fields, 6)?.clone(),
+                    source: field(&fields, 7)?.clone(),
+                    points: field(&fields, 8)?.clone(),
+                }),
+                "unsupported" => LaunchTlsPlanStatus::Unsupported {
+                    reason: field(&fields, 4)?.clone(),
+                },
+                _ => {
+                    return Err(ControlCodecError::new(
+                        "decode",
+                        "invalid launch TLS plan status",
+                    ));
+                }
+            };
+            Ok(Ok(ControlReply::LaunchTlsPlan(LaunchTlsPlanReply {
+                cache_hit: parse_bool(field(&fields, 1)?, "cache_hit")?,
+                resolve_elapsed_micros: parse_u64(field(&fields, 2)?, "resolve_elapsed_micros")?,
+                status,
+            })))
+        }
         "reply_track_added" => Ok(Ok(ControlReply::TrackAdded(TrackAddReply {
             trace_id: TraceId::new(parse_u64(field(&fields, 1)?, "trace_id")?),
             lifecycle_state: parse_lifecycle(field(&fields, 2)?)?,

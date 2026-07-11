@@ -278,9 +278,7 @@ fn read_memberships(
     trace_id: model_core::ids::TraceId,
 ) -> Result<Vec<model_core::process::ProcessMembership>, SnapshotError> {
     let mut statement = connection
-        .prepare(
-            "SELECT * FROM memberships WHERE trace_id = ?1 ORDER BY pid ASC, start_ticks ASC, generation ASC",
-        )
+        .prepare("SELECT * FROM memberships WHERE trace_id = ?1 ORDER BY process_id ASC")
         .map_err(|error| SnapshotError::new("prepare_memberships", error.to_string()))?;
     let rows = statement
         .query_map(params![trace_id.get()], membership_from_row)
@@ -377,8 +375,7 @@ fn read_diagnostics(
 
 fn matches_filter(trace: &model_core::trace::TraceRecord, filter: &TraceFilter) -> bool {
     (filter.trace_ids.is_empty() || filter.trace_ids.contains(&trace.trace_id))
-        && (filter.root_pids.is_empty()
-            || filter.root_pids.contains(&trace.root_process_identity.pid))
+        && filter.root_pids.is_empty()
         && (filter.tags.is_empty() || filter.tags.iter().all(|tag| trace.tags.contains(tag)))
         && (filter.names.is_empty() || filter.names.contains(&trace.display_name))
 }

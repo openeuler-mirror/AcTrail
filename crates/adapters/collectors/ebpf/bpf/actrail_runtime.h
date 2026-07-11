@@ -63,6 +63,8 @@ struct actrail_event {
     __u32 kind;
     __u32 pid;
     __u32 aux;
+    __u32 host_pid;
+    __u32 aux_host_pid;
     __s32 result;
     __u64 trace_id;
     __u64 observed_ktime_ns;
@@ -96,8 +98,16 @@ struct actrail_pending_proc_op {
     __u64 parent_generation;
     __u64 child_generation;
     __u32 parent_pid;
+    __u32 parent_host_pid;
+    __u32 child_host_pid;
     __u32 lookup_flags;
 };
+
+struct task_struct {
+    int pid;
+    int tgid;
+    __u64 start_boottime;
+} __attribute__((preserve_access_index));
 
 struct actrail_pending_exit_op {
     __s32 code;
@@ -202,7 +212,7 @@ struct {
     __uint(max_entries, 1);
     __type(key, __u32);
     __type(value, __u64);
-} process_generations SEC(".maps");
+} process_start_times SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
@@ -472,41 +482,38 @@ static __always_inline __u64 *lookup_trace_for_context_pid(
     return trace_id;
 }
 
-static __always_inline __u64 ensure_process_generation(__u32 pid) {
-    __u64 *generation;
-    __u64 generated;
+static __noinline __u64 current_process_start_time(__u32 pid) {
+    __u64 *cached_start_time;
 
     if (!pid) {
         return 0;
     }
-    generation = bpf_map_lookup_elem(&process_generations, &pid);
-    if (generation) {
-        return *generation;
+    cached_start_time = bpf_map_lookup_elem(&process_start_times, &pid);
+    if (cached_start_time) {
+        return *cached_start_time;
     }
-    generated = bpf_ktime_get_ns();
-    bpf_map_update_elem(&process_generations, &pid, &generated, BPF_ANY);
-    return generated;
+    return 0;
 }
 
-static __always_inline void set_process_generation(__u32 pid, __u64 generation) {
-    if (!pid || !generation) {
+static __always_inline void set_process_start_time(__u32 pid, __u64 start_time) {
+    if (!pid || !start_time) {
         return;
     }
-    bpf_map_update_elem(&process_generations, &pid, &generation, BPF_ANY);
+    bpf_map_update_elem(&process_start_times, &pid, &start_time, BPF_ANY);
 }
 
-static __always_inline void delete_process_generation(__u32 pid) {
+static __always_inline void delete_process_start_time(__u32 pid) {
     if (!pid) {
         return;
     }
-    bpf_map_delete_elem(&process_generations, &pid);
+    bpf_map_delete_elem(&process_start_times, &pid);
 }
 
-static __always_inline __u64 *lookup_process_generation(__u32 pid) {
+static __always_inline __u64 *lookup_process_start_time(__u32 pid) {
     if (!pid) {
         return 0;
     }
-    return bpf_map_lookup_elem(&process_generations, &pid);
+    return bpf_map_lookup_elem(&process_start_times, &pid);
 }
 
 #include "actrail_suppressed_fd.h"
@@ -520,9 +527,10 @@ static __always_inline void init_event(
     __builtin_memset(event, 0, sizeof(*event));
     event->kind = kind;
     event->pid = pid;
+    event->host_pid = current_kernel_tgid();
     event->trace_id = trace_id;
     event->observed_ktime_ns = bpf_ktime_get_ns();
-    event->pid_generation = ensure_process_generation(pid);
+    event->pid_generation = current_process_start_time(pid);
 }
 
 static __always_inline void read_endpoint(__u64 user_ptr, struct actrail_endpoint *endpoint) {

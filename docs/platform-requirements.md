@@ -34,7 +34,7 @@ For the full local runtime proof, run:
 python3 docs/preflight/platform_preflight.py --run-smoke --color always
 ```
 
-The smoke mode runs the documented local eBPF live attach, HTTP/2 TLS sync payload, and fanotify enforcement checks. It also scans `claude` and `opencode` if they are on `PATH`, resolves their runtime executable when possible, and checks whether the executable exports the required OpenSSL symbols `SSL_read`, `SSL_write`, `SSL_read_ex`, and `SSL_write_ex`. OpenSSL `SSL_write_ex2` is reported as an optional outbound probe point when present. Agent executable rows are marked `[optional]` because they only block the corresponding agent-specific example.
+The smoke mode runs the documented staged eBPF verification, HTTP/2 TLS sync payload, and fanotify enforcement checks. It also scans `claude` and `opencode` if they are on `PATH`, resolves their runtime executable when possible, and checks whether the executable exports the required OpenSSL symbols `SSL_read`, `SSL_write`, `SSL_read_ex`, and `SSL_write_ex`. OpenSSL `SSL_write_ex2` is reported as an optional outbound probe point when present. Agent executable rows are marked `[optional]` because they only block the corresponding agent-specific example.
 
 ## Required Capabilities
 
@@ -105,6 +105,9 @@ python3 docs/examples/clean.py --example extended-observation
 Expected result includes:
 
 ```text
+verification_stage=load_attach status=passed
+verification_stage=workload_event_drain status=passed
+verification_stage=retained_observation status=passed
 live verification passed
 process_events=exec,exit,fork
 file_events=...
@@ -114,6 +117,8 @@ resource_events=process_tree
 provider_events=actrail-local-tcp
 stdio_payloads=stderr:outbound,stdin:inbound,stdout:outbound
 ```
+
+Platform preflight renders those stages separately. A retained-observation assertion does not imply that eBPF program attachment failed. The workload/event-drain stage proves execution and draining, while required operation coverage is checked from retained raw events or semantic evidence in the final stage.
 
 If this fails before attach, do not ask testers to edit configs by hand. Treat it as a platform prerequisite failure or an implementation failure. AcTrail's process fork observation uses `sched/sched_process_fork`; the syscall tracepoint `syscalls/sys_enter_fork` is not required for this preflight. Default process lifecycle capture suppresses process signal events such as `SIGCHLD`. Some target kernels do not expose compatibility fd-alias tracepoints such as `syscalls/sys_enter_dup2`. AcTrail treats `dup2`/`dup3` alias tracepoints as optional: their absence can reduce fd alias fidelity, but it must not block process, network, file, or socket-payload collection. For launch-time process seccomp, config values such as `fork` and `vfork` are resolved through the target architecture's syscall map. Architectures without standalone `fork` or `vfork` syscalls use the available process-creation syscalls such as `clone` and `clone3`; emitted trace metadata still records the actual syscall that fired.
 

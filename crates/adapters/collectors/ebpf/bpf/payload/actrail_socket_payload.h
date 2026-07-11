@@ -152,6 +152,7 @@ static __always_inline int store_socket_payload_op(
     op.trace_id = *trace_id;
     op.buffer_ptr = (__u64)ctx->args[buffer_arg];
     op.requested_size = (__u64)ctx->args[size_arg];
+    op.pid_generation = current_process_start_time(tgid);
     op.fd = fd;
     op.fd_generation = fd_generation;
     op.direction = direction;
@@ -185,7 +186,7 @@ static __always_inline int emit_socket_payload_completion(
     event->completed_size = completed_size;
     event->requested_size = op->requested_size;
     event->buffer_ptr = op->buffer_ptr;
-    event->pid_generation = ensure_process_generation(tgid);
+    event->pid_generation = op->pid_generation;
     event->fd = op->fd;
     event->flags = 0;
     event->syscall = op->syscall;
@@ -195,17 +196,26 @@ static __always_inline int emit_socket_payload_completion(
     return 0;
 }
 
-static __always_inline int emit_socket_payload_direct_chunk(
+struct actrail_socket_payload_chunk {
+    __u64 offset;
+    __u64 original_size;
+    __u32 capture_size;
+    __u32 flags;
+    __u32 tgid;
+    __u32 tid;
+};
+
+static __noinline int emit_socket_payload_direct_chunk(
     void *ctx,
     struct actrail_pending_socket_payload_op *op,
-    __u32 tgid,
-    __u32 tid,
-    __u64 offset,
-    __u64 original_size,
-    __u32 capture_size,
-    __u32 flags
+    const struct actrail_socket_payload_chunk *chunk
 ) {
     struct actrail_socket_payload_event *event;
+    __u32 capture_size = chunk->capture_size & ACTRAIL_SOCKET_PAYLOAD_COPY_MAX_BYTES;
+
+    if (!capture_size) {
+        return 0;
+    }
 
     event = actrail_event_reserve(sizeof(*event));
     if (!event) {
@@ -213,24 +223,24 @@ static __always_inline int emit_socket_payload_direct_chunk(
     }
 
     event->kind = ACTRAIL_SOCKET_PAYLOAD;
-    event->pid = tgid;
-    event->tid = tid;
+    event->pid = chunk->tgid;
+    event->tid = chunk->tid;
     event->direction = op->direction;
     event->trace_id = op->trace_id;
     event->observed_ktime_ns = bpf_ktime_get_ns();
     event->sequence =
-        next_socket_payload_sequence(tgid, op->direction, op->fd, op->fd_generation);
+        next_socket_payload_sequence(chunk->tgid, op->direction, op->fd, op->fd_generation);
     event->fd = op->fd;
-    event->original_size = (__u32)original_size;
+    event->original_size = (__u32)chunk->original_size;
     event->captured_size = capture_size;
-    event->flags = flags;
+    event->flags = chunk->flags;
     event->syscall = op->syscall;
     event->fd_generation = op->fd_generation;
-    event->pid_generation = ensure_process_generation(tgid);
+    event->pid_generation = op->pid_generation;
     if (bpf_probe_read_user(
             event->bytes,
             capture_size,
-            (void *)(unsigned long)(op->buffer_ptr + offset)
+            (void *)(unsigned long)(op->buffer_ptr + chunk->offset)
         ) != 0) {
         actrail_event_discard(event);
         return 0;
@@ -257,6 +267,7 @@ static __always_inline int emit_socket_payload_direct_chunks(
         __u64 segment_original_size;
         __u32 capture_size;
         __u32 flags = 0;
+        struct actrail_socket_payload_chunk chunk = {};
 
         if (offset >= original_size) {
             break;
@@ -278,16 +289,13 @@ static __always_inline int emit_socket_payload_direct_chunks(
             flags = ACTRAIL_SOCKET_PAYLOAD_TRUNCATED;
             segment_original_size = remaining;
         }
-        emit_socket_payload_direct_chunk(
-            ctx,
-            op,
-            tgid,
-            tid,
-            offset,
-            segment_original_size,
-            capture_size,
-            flags
-        );
+        chunk.offset = offset;
+        chunk.original_size = segment_original_size;
+        chunk.capture_size = capture_size;
+        chunk.flags = flags;
+        chunk.tgid = tgid;
+        chunk.tid = tid;
+        emit_socket_payload_direct_chunk(ctx, op, &chunk);
         offset += bounded_size;
     }
     return 0;
@@ -376,6 +384,7 @@ static __always_inline int store_socket_payload_sendmsg_op(
     op.trace_id = *trace_id;
     op.buffer_ptr = (__u64)ctx->args[1];
     op.requested_size = 0;
+    op.pid_generation = current_process_start_time(tgid);
     op.fd = fd;
     op.fd_generation = socket_payload_fd_generation(tgid, fd);
     op.direction = ACTRAIL_SOCKET_PAYLOAD_OUTBOUND;

@@ -3,14 +3,14 @@
 use std::collections::BTreeSet;
 
 use collector_event::RawCollectorEvent;
-use model_core::process::ProcessIdentity;
+use model_core::process::ProcessObservation;
 use process_tree_snapshot_contract::snapshot::TreeSnapshot;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IdentityMergeSummary {
-    pub snapshot_only: BTreeSet<ProcessIdentity>,
-    pub live_only: BTreeSet<ProcessIdentity>,
-    pub observed_in_both: BTreeSet<ProcessIdentity>,
+    pub snapshot_only: BTreeSet<ProcessObservation>,
+    pub live_only: BTreeSet<ProcessObservation>,
+    pub observed_in_both: BTreeSet<ProcessObservation>,
 }
 
 pub fn merge_identities(

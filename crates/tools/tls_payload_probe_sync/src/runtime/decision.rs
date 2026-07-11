@@ -1,5 +1,7 @@
 //! Shared synchronous payload decision execution.
 
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+
 use tls_payload_core::{Decision, PayloadDirection};
 use tls_payload_sync::{DecisionEvent, PayloadEvent, SummaryEvent, SyncEvent};
 
@@ -226,9 +228,14 @@ fn send_summary_event(
     let Some(trace_id) = config.trace_id() else {
         return;
     };
+    let Some((pid, start_time_ticks, pid_namespace)) = PROCESS_METADATA_CACHE.current() else {
+        return;
+    };
     let event = SyncEvent::Summary(SummaryEvent {
         trace_id,
-        pid: process_id(),
+        pid,
+        start_time_ticks,
+        pid_namespace,
         direction,
         provider: provider.to_string(),
         symbol: symbol.to_string(),
@@ -281,9 +288,14 @@ fn send_payload_event(
     let Some(trace_id) = config.trace_id() else {
         return;
     };
+    let Some((pid, start_time_ticks, pid_namespace)) = PROCESS_METADATA_CACHE.current() else {
+        return;
+    };
     let event = SyncEvent::Payload(PayloadEvent {
         trace_id,
-        pid: process_id(),
+        pid,
+        start_time_ticks,
+        pid_namespace,
         direction,
         provider: provider.to_string(),
         symbol: symbol.to_string(),
@@ -307,9 +319,14 @@ fn send_decision_event(
     let Some(trace_id) = config.trace_id() else {
         return;
     };
+    let Some((pid, start_time_ticks, pid_namespace)) = PROCESS_METADATA_CACHE.current() else {
+        return;
+    };
     let event = SyncEvent::Decision(DecisionEvent {
         trace_id,
-        pid: process_id(),
+        pid,
+        start_time_ticks,
+        pid_namespace,
         direction,
         provider: provider.to_string(),
         symbol: symbol.to_string(),
@@ -329,6 +346,44 @@ fn send_event_or_drop(config: &config::RuntimeConfig, event: SyncEvent) {
     }
 }
 
-fn process_id() -> u32 {
-    unsafe { libc::getpid() as u32 }
+struct ProcessMetadataCache {
+    pid: AtomicU32,
+    start_ticks: AtomicU64,
+    namespace_inode: AtomicU64,
+}
+
+static PROCESS_METADATA_CACHE: ProcessMetadataCache = ProcessMetadataCache {
+    pid: AtomicU32::new(0),
+    start_ticks: AtomicU64::new(0),
+    namespace_inode: AtomicU64::new(0),
+};
+
+impl ProcessMetadataCache {
+    fn current(&self) -> Option<(u32, u64, String)> {
+        let pid = unsafe { libc::getpid() as u32 };
+        if self.pid.load(Ordering::Acquire) == pid {
+            let start_time_ticks = self.start_ticks.load(Ordering::Relaxed);
+            let namespace_inode = self.namespace_inode.load(Ordering::Relaxed);
+            if start_time_ticks != 0 && namespace_inode != 0 {
+                return Some((pid, start_time_ticks, format!("pid:[{namespace_inode}]")));
+            }
+        }
+
+        let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
+        let fields = stat.rsplit_once(") ")?.1.split_whitespace();
+        let start_time_ticks = fields.skip(19).next()?.parse().ok()?;
+        let pid_namespace = std::fs::read_link("/proc/self/ns/pid").ok()?;
+        let pid_namespace = pid_namespace.to_str()?;
+        let namespace_inode = pid_namespace
+            .strip_prefix("pid:[")?
+            .strip_suffix(']')?
+            .parse::<u64>()
+            .ok()?;
+
+        self.start_ticks.store(start_time_ticks, Ordering::Relaxed);
+        self.namespace_inode
+            .store(namespace_inode, Ordering::Relaxed);
+        self.pid.store(pid, Ordering::Release);
+        Some((pid, start_time_ticks, pid_namespace.to_string()))
+    }
 }

@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import os
+from pathlib import Path
 
 from .checks import (
+    ResolvedArtifacts,
     agent_tls_checks,
     kernel_checks,
     platform_checks,
@@ -16,6 +19,10 @@ from .checks import (
 )
 from .common import FAIL, PASS, WARN, Check, Color, format_check
 from .smoke import runtime_smoke_checks
+
+
+DEFAULT_SMOKE_LOCK_PATH = "/tmp/actrail-platform-preflight-smoke.lock"
+DEFAULT_EBPF_SMOKE_CONFIG = "docs/examples/03.extended-observation-e2e/observation.conf"
 
 
 def main() -> int:
@@ -29,7 +36,16 @@ def main() -> int:
         ("Build And Example Tools", tool_checks()),
         ("Shared OpenSSL", shared_openssl_checks()),
         ("Agent Executable TLS", agent_tls_checks()),
-        ("Runtime Smoke", runtime_smoke_checks(artifacts, args.run_smoke, args.verbose)),
+        (
+            "Runtime Smoke",
+            locked_runtime_smoke_checks(
+                artifacts,
+                args.run_smoke,
+                args.verbose,
+                Path(args.smoke_lock_path),
+                args.ebpf_smoke_config,
+            ),
+        ),
     ]
     print("AcTrail platform preflight")
     print()
@@ -67,7 +83,58 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="print captured stdout/stderr when a runtime smoke command fails",
     )
+    parser.add_argument(
+        "--ebpf-smoke-config",
+        default=os.environ.get("ACTRAIL_PREFLIGHT_EBPF_CONFIG", DEFAULT_EBPF_SMOKE_CONFIG),
+        help=(
+            "verify-live config for the eBPF smoke; defaults to "
+            "ACTRAIL_PREFLIGHT_EBPF_CONFIG or " + DEFAULT_EBPF_SMOKE_CONFIG
+        ),
+    )
+    parser.add_argument(
+        "--smoke-lock-path",
+        default=os.environ.get("ACTRAIL_PREFLIGHT_SMOKE_LOCK_PATH", DEFAULT_SMOKE_LOCK_PATH),
+        help=(
+            "exclusive lock file for --run-smoke; defaults to "
+            "ACTRAIL_PREFLIGHT_SMOKE_LOCK_PATH or " + DEFAULT_SMOKE_LOCK_PATH
+        ),
+    )
     return parser.parse_args()
+
+
+def locked_runtime_smoke_checks(
+    artifacts: ResolvedArtifacts,
+    run_smoke: bool,
+    verbose: bool,
+    lock_path: Path,
+    ebpf_config: str,
+) -> list[Check]:
+    if not run_smoke:
+        return runtime_smoke_checks(artifacts, run_smoke, verbose, ebpf_config)
+    flags = os.O_CREAT | os.O_RDWR | os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(lock_path, flags, 0o600)
+    except OSError as error:
+        return [Check("runtime smoke isolation", FAIL, f"open lock {lock_path}: {error}")]
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            owner = os.read(descriptor, 256).decode("utf-8", errors="replace").strip()
+            detail = f"another --run-smoke owns {lock_path}"
+            if owner:
+                detail += f" ({owner})"
+            return [Check("runtime smoke isolation", FAIL, detail)]
+        owner = f"pid={os.getpid()} cwd={Path.cwd()}"
+        os.ftruncate(descriptor, 0)
+        os.write(descriptor, owner.encode("utf-8"))
+        os.fsync(descriptor)
+        return runtime_smoke_checks(artifacts, run_smoke, verbose, ebpf_config)
+    finally:
+        os.close(descriptor)
 
 
 def summarize(sections: list[tuple[str, list[Check]]], color: Color) -> int:

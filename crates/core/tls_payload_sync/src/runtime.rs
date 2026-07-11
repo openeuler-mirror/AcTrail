@@ -323,6 +323,8 @@ mod tests {
         let event = SyncEvent::Decision(DecisionEvent {
             trace_id: 7,
             pid: 42,
+            start_time_ticks: 99,
+            pid_namespace: "pid:[7]".to_string(),
             direction: PayloadDirection::Outbound,
             provider: "rustls".to_string(),
             symbol: "write".to_string(),

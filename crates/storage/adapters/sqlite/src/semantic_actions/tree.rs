@@ -225,11 +225,7 @@ impl SqliteStorage {
                      {action_cold_join}
                      WHERE action.trace_id = ?1
                        AND action.kind_code = ?2
-                       AND action.process_pid = ?3
-                       AND action.process_task_id IS ?4
-                       AND action.process_start_ticks = ?5
-                       AND action.process_pid_namespace IS ?6
-                       AND action.process_generation = ?7
+                       AND action.process_id = ?3
                      ORDER BY action.start_time ASC, ids.action_id ASC
                      LIMIT 1"
             ))
@@ -243,14 +239,7 @@ impl SqliteStorage {
             .query(params![
                 trace_id.get(),
                 action_kind_code_from_str(kind)?,
-                process.pid,
-                process.task_id,
-                process.start_time_ticks,
-                process
-                    .pid_namespace
-                    .as_ref()
-                    .map(|namespace| namespace.as_str().to_string()),
-                process.generation,
+                process.get(),
             ])
             .map_err(|error| {
                 SemanticActionStoreError::new(

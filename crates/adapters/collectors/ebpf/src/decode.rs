@@ -14,13 +14,12 @@ use std::time::SystemTime;
 use collector_event::{RawCollectorEvent, RawEventEnvelope, RawObservationPayload};
 use model_core::capability::Capability;
 use model_core::ids::{CollectorName, TraceId};
-use model_core::process::ProcessIdentity;
-use process_identity_contract::lookup::ProcessIdentityReader;
+use model_core::process::{
+    HostProcessCoordinates, NamespaceProcessCoordinates, ProcessObservation,
+};
 
 use crate::loader::{KernelEndpoint, KernelObservationEvent};
 use crate::maps::BindingStateMap;
-use crate::process_context::lifecycle_metadata;
-use crate::procfs::{ProcfsIdentityReader, resolve_namespaced_pid};
 
 pub const PROC_EVENT_FORK: u32 = 1;
 pub const PROC_EVENT_EXEC: u32 = 2;
@@ -83,30 +82,25 @@ impl DecodeError {
 pub(crate) fn decode_observation(
     event: KernelObservationEvent,
     bindings: &mut BindingStateMap,
-    identity_reader: &ProcfsIdentityReader,
     file_tracker: &mut FileTracker,
 ) -> Result<Option<RawCollectorEvent>, DecodeError> {
     let lifecycle_requested =
         bindings.trace_has_capability(event.trace_id, &Capability::ProcLifecycle);
     match event.kind {
-        PROC_EVENT_FORK => maybe_lifecycle_event(
-            lifecycle_requested,
-            decode_fork(event, bindings, identity_reader)?,
-        ),
-        PROC_EVENT_EXEC => maybe_lifecycle_event(
-            lifecycle_requested,
-            decode_exec(event, bindings, identity_reader)?,
-        ),
-        PROC_EVENT_EXIT => maybe_lifecycle_event(
-            lifecycle_requested,
-            decode_exit(event, bindings, identity_reader)?,
-        ),
-        PROC_EVENT_SIGNAL => maybe_lifecycle_event(
-            lifecycle_requested,
-            decode_signal(event, bindings, identity_reader)?,
-        ),
+        PROC_EVENT_FORK => {
+            maybe_lifecycle_event(lifecycle_requested, decode_fork(event, bindings)?)
+        }
+        PROC_EVENT_EXEC => {
+            maybe_lifecycle_event(lifecycle_requested, decode_exec(event, bindings)?)
+        }
+        PROC_EVENT_EXIT => {
+            maybe_lifecycle_event(lifecycle_requested, decode_exit(event, bindings)?)
+        }
+        PROC_EVENT_SIGNAL => {
+            maybe_lifecycle_event(lifecycle_requested, decode_signal(event, bindings)?)
+        }
         NET_EVENT_CONNECT | NET_EVENT_ACCEPT | NET_EVENT_SEND | NET_EVENT_RECV | NET_EVENT_BIND
-        | NET_EVENT_LISTEN => decode_net(event, bindings, identity_reader, file_tracker),
+        | NET_EVENT_LISTEN => decode_net(event, bindings, file_tracker),
         other => Err(DecodeError::new(
             "decode_observation",
             format!("unknown kernel event kind {other}"),
@@ -124,30 +118,40 @@ fn maybe_lifecycle_event(
 fn decode_fork(
     event: KernelObservationEvent,
     bindings: &mut BindingStateMap,
-    identity_reader: &ProcfsIdentityReader,
 ) -> Result<Option<RawCollectorEvent>, DecodeError> {
-    let parent_identity = resolve_parent_identity(&event, bindings, identity_reader)?;
-    let child_identity = resolve_event_identity(
+    let parent = resolve_event_observation(
+        event.trace_id,
+        event.pid,
+        event.host_pid,
+        event.pid_generation,
+        bindings,
+    )
+    .map_err(|error| DecodeError::new("parent_identity", error))?;
+    let child = resolve_event_observation(
         event.trace_id,
         event.aux,
+        event.aux_host_pid,
         event.aux_generation,
         bindings,
-        identity_reader,
     )
     .map_err(|error| DecodeError::new("fork_identity", error))?;
-    let metadata = lifecycle_metadata(event.aux);
-    bindings.track_with_map_pid(event.trace_id, child_identity.clone(), event.aux);
+    bindings.track_with_map_pid(
+        event.trace_id,
+        child.clone(),
+        event.aux,
+        event.aux_generation,
+    );
 
     Ok(Some(RawCollectorEvent {
         envelope: RawEventEnvelope {
             observed_at: SystemTime::now(),
-            process: child_identity,
+            process: child,
             collector: CollectorName::new("ebpf"),
         },
         payload: RawObservationPayload::Process {
             operation: "fork".to_string(),
-            parent: Some(parent_identity),
-            metadata,
+            parent: Some(parent),
+            metadata: BTreeMap::new(),
         },
     }))
 }
@@ -155,18 +159,22 @@ fn decode_fork(
 fn decode_exec(
     event: KernelObservationEvent,
     bindings: &mut BindingStateMap,
-    identity_reader: &ProcfsIdentityReader,
 ) -> Result<Option<RawCollectorEvent>, DecodeError> {
-    let identity = resolve_event_identity(
+    let observation = resolve_event_observation(
         event.trace_id,
         event.pid,
+        event.host_pid,
         event.pid_generation,
         bindings,
-        identity_reader,
     )
     .map_err(|error| DecodeError::new("exec_identity", error))?;
-    bindings.track_with_map_pid(event.trace_id, identity.clone(), event.pid);
-    let mut metadata = lifecycle_metadata(event.pid);
+    bindings.track_with_map_pid(
+        event.trace_id,
+        observation.clone(),
+        event.pid,
+        event.pid_generation,
+    );
+    let mut metadata = BTreeMap::new();
     if let Some(exec_filename) = event.exec_filename {
         metadata.insert("executable".to_string(), exec_filename.path.clone());
         metadata.insert("exec_filename".to_string(), exec_filename.path);
@@ -182,7 +190,7 @@ fn decode_exec(
     Ok(Some(RawCollectorEvent {
         envelope: RawEventEnvelope {
             observed_at: SystemTime::now(),
-            process: identity,
+            process: observation,
             collector: CollectorName::new("ebpf"),
         },
         payload: RawObservationPayload::Process {
@@ -196,14 +204,13 @@ fn decode_exec(
 fn decode_exit(
     event: KernelObservationEvent,
     bindings: &mut BindingStateMap,
-    identity_reader: &ProcfsIdentityReader,
 ) -> Result<Option<RawCollectorEvent>, DecodeError> {
-    let identity = resolve_event_identity(
+    let observation = resolve_event_observation(
         event.trace_id,
         event.pid,
+        event.host_pid,
         event.pid_generation,
         bindings,
-        identity_reader,
     )
     .map_err(|error| DecodeError::new("exit_identity", error))?;
 
@@ -215,7 +222,7 @@ fn decode_exit(
     Ok(Some(RawCollectorEvent {
         envelope: RawEventEnvelope {
             observed_at: SystemTime::now(),
-            process: identity,
+            process: observation,
             collector: CollectorName::new("ebpf"),
         },
         payload: RawObservationPayload::Process {
@@ -229,14 +236,13 @@ fn decode_exit(
 fn decode_signal(
     event: KernelObservationEvent,
     bindings: &mut BindingStateMap,
-    identity_reader: &ProcfsIdentityReader,
 ) -> Result<Option<RawCollectorEvent>, DecodeError> {
-    let identity = resolve_event_identity(
+    let observation = resolve_event_observation(
         event.trace_id,
         event.pid,
+        event.host_pid,
         event.pid_generation,
         bindings,
-        identity_reader,
     )
     .map_err(|error| DecodeError::new("process_coordination_identity", error))?;
     let mut metadata = BTreeMap::from([
@@ -255,7 +261,7 @@ fn decode_signal(
     Ok(Some(RawCollectorEvent {
         envelope: RawEventEnvelope {
             observed_at: SystemTime::now(),
-            process: identity,
+            process: observation,
             collector: CollectorName::new("ebpf"),
         },
         payload: RawObservationPayload::Process {
@@ -269,15 +275,14 @@ fn decode_signal(
 fn decode_net(
     event: KernelObservationEvent,
     bindings: &mut BindingStateMap,
-    identity_reader: &ProcfsIdentityReader,
     file_tracker: &mut FileTracker,
 ) -> Result<Option<RawCollectorEvent>, DecodeError> {
-    let identity = resolve_event_identity(
+    let observation = resolve_event_observation(
         event.trace_id,
         event.pid,
+        event.host_pid,
         event.pid_generation,
         bindings,
-        identity_reader,
     )
     .map_err(|error| DecodeError::new("net_identity", error))?;
 
@@ -301,7 +306,7 @@ fn decode_net(
         if let Some(event) = fd_io::decode(
             event.clone(),
             bindings,
-            identity.clone(),
+            observation.clone(),
             operation,
             direction,
             file_tracker,
@@ -340,7 +345,7 @@ fn decode_net(
     Ok(Some(RawCollectorEvent {
         envelope: RawEventEnvelope {
             observed_at: SystemTime::now(),
-            process: identity,
+            process: observation,
             collector: CollectorName::new("ebpf"),
         },
         payload: RawObservationPayload::Net {
@@ -417,75 +422,39 @@ fn format_endpoint(endpoint: &KernelEndpoint) -> Option<String> {
     }
 }
 
-fn resolve_parent_identity(
-    event: &KernelObservationEvent,
-    bindings: &mut BindingStateMap,
-    identity_reader: &ProcfsIdentityReader,
-) -> Result<ProcessIdentity, DecodeError> {
-    resolve_event_identity(
-        event.trace_id,
-        event.pid,
-        event.pid_generation,
-        bindings,
-        identity_reader,
-    )
-    .map_err(|error| DecodeError::new("parent_identity", error))
-}
-
-pub(crate) fn resolve_bound_event_identity(
+pub(crate) fn resolve_bound_event_observation(
     trace_id: TraceId,
     map_pid: u32,
     generation: u64,
     bindings: &BindingStateMap,
-) -> Result<ProcessIdentity, String> {
-    bindings
-        .tracked_event_identity(trace_id, map_pid, generation)
-        .cloned()
-        .ok_or_else(|| {
-            format!(
-                "process identity for trace {} map pid {} generation {} is not bound",
-                trace_id.get(),
-                map_pid,
-                generation
-            )
-        })
+) -> Result<ProcessObservation, String> {
+    resolve_event_observation(trace_id, map_pid, 0, generation, bindings)
 }
 
-pub(crate) fn resolve_event_identity(
+pub(crate) fn resolve_event_observation(
     trace_id: TraceId,
-    pid: u32,
-    generation: u64,
-    bindings: &mut BindingStateMap,
-    identity_reader: &ProcfsIdentityReader,
-) -> Result<ProcessIdentity, String> {
-    if let Some(identity) = bindings
-        .tracked_event_identity(trace_id, pid, generation)
+    namespace_pid: u32,
+    host_pid: u32,
+    kernel_start_time: u64,
+    bindings: &BindingStateMap,
+) -> Result<ProcessObservation, String> {
+    if let Some(observation) = bindings
+        .tracked_event_observation(trace_id, namespace_pid, kernel_start_time)
         .cloned()
     {
-        return Ok(identity);
+        return Ok(observation);
     }
-    if let Some(identity) = bindings
-        .cached_resolved_event_identity(trace_id, pid, generation)
-        .cloned()
-    {
-        return Ok(identity);
-    }
-    if let Some(namespace) = bindings.trace_pid_namespace(trace_id) {
-        if let Ok(identity) = resolve_namespaced_pid(pid, namespace) {
-            let resolved = if generation == 0 {
-                identity
-            } else {
-                ProcessIdentity::new(identity.pid, identity.start_time_ticks, generation)
-                    .with_namespace(namespace.clone())
-            };
-            bindings.cache_resolved_event_identity(trace_id, pid, generation, resolved.clone());
-            return Ok(resolved);
+    let namespace = bindings
+        .trace_pid_namespace(trace_id)
+        .ok_or_else(|| format!("trace {} has no PID namespace binding", trace_id.get()))?;
+    let namespace = NamespaceProcessCoordinates::new(namespace.clone(), namespace_pid, 0);
+    let mut observation = ProcessObservation::namespace(namespace);
+    if host_pid != 0 {
+        let mut host = HostProcessCoordinates::new(host_pid, 0);
+        if kernel_start_time != 0 {
+            host = host.with_start_boottime_ns(kernel_start_time);
         }
+        observation.host = Some(host);
     }
-    if generation != 0 {
-        return Ok(ProcessIdentity::new(pid, generation, generation));
-    }
-    identity_reader
-        .read_identity(pid)
-        .map_err(|error| format!("{:?}", error))
+    Ok(observation)
 }

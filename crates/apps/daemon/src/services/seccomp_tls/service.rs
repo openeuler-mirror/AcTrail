@@ -12,9 +12,9 @@ use model_core::payload::{
     PayloadContentState, PayloadDirection, PayloadOperationCompletionState, PayloadSourceBoundary,
     PayloadStreamKey, PayloadTruncationState,
 };
-use model_core::process::ProcessIdentity;
+use model_core::process::{HostProcessCoordinates, ProcessObservation};
 use payload_event::RawPayloadSegment;
-use process_identity_contract::lookup::{IdentityLookupError, ProcessIdentityReader};
+use process_identity::{IdentityLookupError, ProcessIdentityReader};
 
 use crate::services::diagnostic_logging;
 use crate::services::seccomp_notify::{read_iovec_payload, read_linear_payload};
@@ -352,12 +352,11 @@ fn continue_stopped_process(pid: u32) -> Result<(), ControlError> {
 fn tls_completion_identity(
     completion: &TlsPayloadCompletion,
     identity_reader: &impl ProcessIdentityReader,
-) -> Result<Option<ProcessIdentity>, ControlError> {
+) -> Result<Option<ProcessObservation>, ControlError> {
     if completion.pid_generation != 0 {
-        return Ok(Some(ProcessIdentity::new(
-            completion.pid,
-            completion.pid_generation,
-            completion.pid_generation,
+        return Ok(Some(ProcessObservation::host(
+            HostProcessCoordinates::new(completion.pid, 0)
+                .with_start_boottime_ns(completion.pid_generation),
         )));
     }
     match identity_reader.read_identity(completion.pid) {
@@ -424,12 +423,12 @@ mod tests {
     use super::*;
 
     use model_core::ids::TraceId;
-    use process_identity_contract::lookup::IdentityLookupError;
+    use process_identity::IdentityLookupError;
 
     struct UnusedIdentityReader;
 
     impl ProcessIdentityReader for UnusedIdentityReader {
-        fn read_identity(&self, pid: u32) -> Result<ProcessIdentity, IdentityLookupError> {
+        fn read_identity(&self, pid: u32) -> Result<ProcessObservation, IdentityLookupError> {
             panic!("identity reader should not be used for pid {pid}");
         }
     }

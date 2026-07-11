@@ -50,7 +50,7 @@ static __always_inline int emit_pending_child_proc_op(
     }
 
     process_generation_updated = bpf_map_update_elem(
-        &process_generations,
+        &process_start_times,
         &child_pid,
         &op->child_generation,
         BPF_ANY
@@ -70,6 +70,8 @@ static __always_inline int emit_pending_child_proc_op(
 
     init_event(event, ACTRAIL_PROC_FORK, op->parent_pid, op->trace_id);
     event->aux = child_pid;
+    event->host_pid = op->parent_host_pid;
+    event->aux_host_pid = op->child_host_pid;
     event->pid_generation = op->parent_generation;
     event->aux_generation = op->child_generation;
     actrail_event_submit(ctx, event);

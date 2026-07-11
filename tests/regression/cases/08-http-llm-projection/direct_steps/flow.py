@@ -103,20 +103,20 @@ def finish_http_projection_capture(
     )
     run_step(
         result,
-        "launch root pid",
-        lambda: require_launch_root_summary(
+        "launch root identity",
+        lambda: require_launch_root_identity(
             module,
             actrailviewer,
             config,
             trace_id,
             workload_pid,
         ),
-        lambda summary: expected_found_detail(
-            "trace root pid is the launched workload",
+        lambda root: expected_found_detail(
+            "trace root identity owns the launched workload namespace PID",
             [
                 f"trace_id=trace-{trace_id}",
                 f"workload_pid={workload_pid}",
-                root_pid_fact(summary),
+                *root.facts(workload_pid),
             ],
         ),
         "actrailctl launch should track the launched process as the trace root",
@@ -300,23 +300,15 @@ def run_http_projection_launch_step(
     return trace_id, workload_pid
 
 
-def root_pid_fact(summary: str) -> str:
-    for item in summary.split():
-        if item.startswith("root_pid="):
-            return item
-    return "root_pid=missing"
-
-
-def require_launch_root_summary(
+def require_launch_root_identity(
     module,
     actrailviewer: Path,
     config: Path | None,
     trace_id: int,
     workload_pid: int,
-) -> str:
+):
     summary = module.trace_summary(actrailviewer, config, trace_id)
-    module.require_launch_root_pid(summary, workload_pid)
-    return summary
+    return module.require_launch_root_identity(config, trace_id, summary, workload_pid)
 
 
 def http_projection_output_summary(

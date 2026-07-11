@@ -103,7 +103,7 @@ mod tests {
     fn sample_trace() -> TraceRecord {
         TraceRecord::new(
             TraceId::new(1),
-            ProcessIdentity::new(100, 200, 1),
+            ProcessIdentity::new(1),
             TraceName::new("agent"),
             ProfileName::new("default"),
             SystemTime::UNIX_EPOCH,

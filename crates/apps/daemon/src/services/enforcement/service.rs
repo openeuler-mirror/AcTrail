@@ -16,6 +16,7 @@ use plugin_system::{
     FilePolicyListResult, FilePolicyMatchDryRunRequest, FilePolicyMatchDryRunResult,
     FilePolicyRulesApplyGrant, PluginRuntimeError,
 };
+use process_identity::ProcessIdentityManager;
 use trace_runtime::registry::TraceRuntime;
 
 #[path = "service/audit.rs"]
@@ -102,6 +103,7 @@ impl FanotifyEnforcementService {
     pub(in crate::services) fn drain_due(
         &mut self,
         trace_runtime: &TraceRuntime,
+        process_registry: &ProcessIdentityManager,
         identity_reader: &ProcfsIdentityReader,
         control_plugins: &ControlPluginRuntime,
     ) -> Result<Vec<EnforcementEventDraft>, ControlError> {
@@ -111,7 +113,12 @@ impl FanotifyEnforcementService {
                 .map_err(|error| {
                     ControlError::new("fanotify_enforcement", format!("lock backend: {error}"))
                 })?
-                .drain_due(trace_runtime, identity_reader, control_plugins)
+                .drain_due(
+                    trace_runtime,
+                    process_registry,
+                    identity_reader,
+                    control_plugins,
+                )
                 .map_err(|message| ControlError::new("fanotify_enforcement", message)),
             None => Ok(Vec::new()),
         }
@@ -270,6 +277,7 @@ impl FanotifyBackend {
     fn drain_due(
         &mut self,
         trace_runtime: &TraceRuntime,
+        process_registry: &ProcessIdentityManager,
         identity_reader: &ProcfsIdentityReader,
         control_plugins: &ControlPluginRuntime,
     ) -> Result<Vec<EnforcementEventDraft>, String> {
@@ -295,6 +303,7 @@ impl FanotifyBackend {
                 default_decision,
                 audit_enabled,
                 trace_runtime,
+                process_registry,
                 identity_reader,
                 control_plugins,
                 reusable_decisions,

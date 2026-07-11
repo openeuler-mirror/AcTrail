@@ -20,8 +20,7 @@ pub mod agent {
 pub mod agent_child {
     pub const COMMAND_LINE: &str = "agent.child.command_line";
     pub const EXECUTABLE: &str = "agent.child.executable";
-    pub const GENERATION: &str = "agent.child.generation";
-    pub const PID: &str = "agent.child.pid";
+    pub const PROCESS_ID: &str = "agent.child.process_id";
 }
 
 pub mod agent_invocation {
@@ -226,13 +225,9 @@ pub mod process {
 }
 
 pub mod process_parent {
-    pub const GENERATION: &str = "process.parent.generation";
+    pub const ID: &str = "process.parent.id";
     pub const IDENTITY_STATE: &str = "process.parent.identity_state";
     pub const IDENTITY_STATE_CONFLICT_MARKER: &str = "process.parent.identity_state=conflict";
-    pub const PID: &str = "process.parent.pid";
-    pub const PID_NAMESPACE: &str = "process.parent.pid_namespace";
-    pub const START_TIME_TICKS: &str = "process.parent.start_time_ticks";
-    pub const TASK_ID: &str = "process.parent.task_id";
 }
 
 pub mod server {

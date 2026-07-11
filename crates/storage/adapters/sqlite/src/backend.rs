@@ -4,7 +4,7 @@ use model_core::diagnostics::DiagnosticRecord;
 use model_core::event::DomainEvent;
 use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
-use model_core::process::{ProcessIdentity, ProcessMembership};
+use model_core::process::{ProcessIdentity, ProcessMembership, ProcessRecord};
 use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
 use semantic_action::{
     FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
@@ -65,6 +65,29 @@ impl StorageBackend for SqliteStorage {
     fn next_payload_segment_id_seed(&self) -> Result<u64, StorageError> {
         SqliteStorage::next_payload_segment_id_seed(self)
             .map_err(|error| StorageError::new("payload_segment_id_seed", error.to_string()))
+    }
+
+    fn reserve_process_id_block(&mut self, count: u64) -> Result<(u64, u64), StorageError> {
+        SqliteStorage::reserve_process_id_block(self, count)
+            .map_err(|error| StorageError::new("reserve_process_id_block", error.to_string()))
+    }
+
+    fn upsert_process_record(&mut self, record: ProcessRecord) -> Result<(), StorageError> {
+        SqliteStorage::upsert_process_record(self, &record)
+            .map_err(|error| StorageError::new("upsert_process_record", error.to_string()))
+    }
+
+    fn get_process_record(
+        &self,
+        identity: ProcessIdentity,
+    ) -> Result<Option<ProcessRecord>, StorageError> {
+        SqliteStorage::get_process_record(self, identity)
+            .map_err(|error| StorageError::new("get_process_record", error.to_string()))
+    }
+
+    fn list_process_records(&self) -> Result<Vec<ProcessRecord>, StorageError> {
+        SqliteStorage::list_process_records(self)
+            .map_err(|error| StorageError::new("list_process_records", error.to_string()))
     }
 
     fn begin(&mut self) -> Result<Box<dyn StorageTransaction>, StorageError> {

@@ -455,7 +455,7 @@ fn llm_stream_action_id(
     format!(
         "trace:{}:payload-stream:{}:{}:{}:llm.request",
         segment.trace_id.get(),
-        key.process.pid,
+        key.process.get(),
         key.stream_key,
         message_start
     )

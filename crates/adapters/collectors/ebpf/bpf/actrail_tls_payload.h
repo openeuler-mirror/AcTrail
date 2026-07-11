@@ -366,7 +366,7 @@ static __always_inline int store_tls_payload_op_args(
     op.buffer_ptr = buffer_ptr;
     op.requested_size = requested_size;
     op.size_ptr = size_ptr;
-    op.pid_generation = ensure_process_generation(tgid);
+    op.pid_generation = current_process_start_time(tgid);
     op.direction = metadata & 0xffff;
     op.symbol = metadata >> 16;
     op.library = payload_tls_library();

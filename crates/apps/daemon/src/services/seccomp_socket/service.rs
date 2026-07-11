@@ -11,8 +11,9 @@ use model_core::payload::{
     PayloadContentState, PayloadDirection, PayloadOperationCompletionState, PayloadSourceBoundary,
     PayloadStreamKey, PayloadTruncationState,
 };
-use model_core::process::ProcessIdentity;
+use model_core::process::ProcessObservation;
 use payload_event::RawPayloadSegment;
+use process_identity::ProcessIdentityManager;
 use trace_runtime::registry::TraceRuntime;
 
 use super::http::{HTTP1_PROTOCOL_HINT, content_length_admission};
@@ -50,6 +51,7 @@ impl SeccompSocketService {
         &mut self,
         collector: &EbpfCollector,
         trace_runtime: &TraceRuntime,
+        process_registry: &ProcessIdentityManager,
         notification: &libc::seccomp_notif,
     ) -> Result<(), ControlError> {
         if !self.enabled {
@@ -71,7 +73,10 @@ impl SeccompSocketService {
         let Some(tgid) = tgid_from_status(notification.pid)? else {
             return Ok(());
         };
-        let Some((trace_id, membership)) = trace_runtime.find_membership_by_pid(tgid) else {
+        let Some(identity) = process_registry.active_host_pid(tgid) else {
+            return Ok(());
+        };
+        let Some((trace_id, membership)) = trace_runtime.find_membership(&identity) else {
             return Ok(());
         };
         if !membership.capture_enabled {
@@ -131,7 +136,12 @@ impl SeccompSocketService {
             },
             CapturedSocketOperation {
                 trace_id,
-                process: membership.identity,
+                process: process_registry
+                    .record(membership.identity)
+                    .ok_or_else(|| {
+                        ControlError::new("seccomp_socket", "process record is missing")
+                    })?
+                    .observation(),
                 bytes,
                 protocol_hint: capture_update.protocol_hint(),
                 update: capture_update,
@@ -436,7 +446,7 @@ impl SeccompSocketService {
 #[derive(Clone, Debug)]
 struct CapturedSocketOperation {
     trace_id: TraceId,
-    process: ProcessIdentity,
+    process: ProcessObservation,
     bytes: Vec<u8>,
     protocol_hint: Option<String>,
     update: SocketCaptureUpdate,

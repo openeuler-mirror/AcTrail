@@ -1,95 +1,14 @@
-//! Process identity and membership semantics.
+//! Logical process identity, OS coordinates, and trace membership semantics.
 
 use std::time::SystemTime;
 
+pub use process_identity::{
+    HostProcessCoordinates, InitialSuppressedFd, KernelProcessCoordinates, NamespaceIdentity,
+    NamespaceProcessCoordinates, ProcessIdentity, ProcessObservation, ProcessRecord,
+    ProcessResolutionState, ProcessSuppressedFd, SuppressedFdPurpose,
+};
+
 use crate::ids::TraceId;
-
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct NamespaceIdentity(String);
-
-impl NamespaceIdentity {
-    pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct ProcessIdentity {
-    pub pid: u32,
-    pub task_id: Option<u32>,
-    pub start_time_ticks: u64,
-    pub pid_namespace: Option<NamespaceIdentity>,
-    pub generation: u64,
-}
-
-impl ProcessIdentity {
-    pub fn new(pid: u32, start_time_ticks: u64, generation: u64) -> Self {
-        Self {
-            pid,
-            task_id: None,
-            start_time_ticks,
-            pid_namespace: None,
-            generation,
-        }
-    }
-
-    pub fn with_task_id(mut self, task_id: u32) -> Self {
-        self.task_id = Some(task_id);
-        self
-    }
-
-    pub fn with_namespace(mut self, pid_namespace: NamespaceIdentity) -> Self {
-        self.pid_namespace = Some(pid_namespace);
-        self
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SuppressedFdPurpose {
-    TlsSyncEvent,
-    InternalUpload,
-    InternalControl,
-}
-
-impl SuppressedFdPurpose {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::TlsSyncEvent => "tls-sync-event",
-            Self::InternalUpload => "internal-upload",
-            Self::InternalControl => "internal-control",
-        }
-    }
-}
-
-impl std::str::FromStr for SuppressedFdPurpose {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "tls-sync-event" => Ok(Self::TlsSyncEvent),
-            "internal-upload" => Ok(Self::InternalUpload),
-            "internal-control" => Ok(Self::InternalControl),
-            _ => Err(format!("unknown suppressed fd purpose {value}")),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct InitialSuppressedFd {
-    pub fd: i32,
-    pub purpose: SuppressedFdPurpose,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ProcessSuppressedFd {
-    pub process: ProcessIdentity,
-    pub fd: i32,
-    pub purpose: SuppressedFdPurpose,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MembershipState {
@@ -148,6 +67,19 @@ impl ProcessMembership {
             trace_id,
             identity,
             inherited_from: Some(inherited_from),
+            observed_at: Some(observed_at),
+            capture_enabled: true,
+            propagation_enabled: true,
+            state: MembershipState::Starting,
+            exit_status: None,
+        }
+    }
+
+    pub fn observed(trace_id: TraceId, identity: ProcessIdentity, observed_at: SystemTime) -> Self {
+        Self {
+            trace_id,
+            identity,
+            inherited_from: None,
             observed_at: Some(observed_at),
             capture_enabled: true,
             propagation_enabled: true,

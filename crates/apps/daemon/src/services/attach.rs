@@ -14,8 +14,9 @@ mod helpers;
 mod logging;
 #[path = "attach/plugins.rs"]
 mod plugins;
+#[path = "attach/preflight.rs"]
+mod preflight;
 
-use attach_runtime::snapshot_merge::merge_snapshot;
 use collector_binding::TraceBindingRequest;
 use collector_instance::CollectorInstance;
 use config_core::capture_profile::{
@@ -28,10 +29,11 @@ use config_core::daemon::{
 };
 use config_core::trace_snapshot::CaptureProfileSnapshot;
 use control_contract::command::{
-    DeploymentPermissionMode, ProcessRef, ResolveLaunchPermissionsCommand, TrackAddCommand,
+    DeploymentPermissionMode, ProcessRef, ResolveLaunchPermissionsCommand,
+    ResolveLaunchTlsPlanCommand, TrackAddCommand,
 };
 use control_contract::reply::{
-    ControlError, LaunchPermissionsReply, PluginCommandReply, TrackAddReply,
+    ControlError, LaunchPermissionsReply, LaunchTlsPlanReply, PluginCommandReply, TrackAddReply,
 };
 use ebpf_collector::EbpfCollector;
 use ebpf_collector::procfs::{
@@ -40,8 +42,10 @@ use ebpf_collector::procfs::{
 use export_core::ExportRuntime;
 use model_core::capability::Capability;
 use model_core::diagnostics::{DiagnosticKind, DiagnosticRecord, DiagnosticSeverity};
-use model_core::process::ProcessIdentity;
+use model_core::process::{ProcessIdentity, ProcessObservation, ProcessRecord};
 use plugin_system::PluginInstanceStatus;
+use process_identity::ProcessIdentityError;
+use process_identity::ProcessIdentityManager;
 use provider_label::ProviderClassifier;
 use recording_runtime::{RecordingWriter, TraceStateRecord};
 use semantic_action_runtime::LiveSemanticActionRuntime;
@@ -72,7 +76,10 @@ pub(crate) struct StorageAttachService {
     pub(super) profiles: DaemonProfileRegistry,
     pub(super) launch_seccomp_requirements: LaunchSeccompRequirements,
     pub(super) storage: Box<dyn StorageBackend>,
+    pub(super) process_registry: ProcessIdentityManager,
     pub(super) collector: EbpfCollector,
+    pub(super) host_ebpf_preflight:
+        BTreeMap<model_core::ids::ProfileName, preflight::EbpfPreflightReport>,
     pub(super) identity_reader: ProcfsIdentityReader,
     pub(super) snapshotter: ProcfsTreeSnapshotter,
     pub(super) next_event_id: u64,
@@ -124,12 +131,52 @@ pub(crate) struct StorageAttachService {
 }
 
 impl StorageAttachService {
+    pub(super) fn resolve_process_observation(
+        &mut self,
+        observation: ProcessObservation,
+    ) -> Result<(ProcessIdentity, Option<ProcessRecord>), ControlError> {
+        let resolution = loop {
+            match self.process_registry.resolve_or_create(observation.clone()) {
+                Ok(resolution) => break resolution,
+                Err(ProcessIdentityError::IdBlockExhausted) => {
+                    let block_size = factory::process_id_block_size()?;
+                    let (block_start, block_end) = self
+                        .storage
+                        .reserve_process_id_block(block_size)
+                        .map_err(|error| ControlError::new(error.stage, error.message))?;
+                    self.process_registry
+                        .install_reserved_block(block_start, block_end)
+                        .map_err(|error| {
+                            ControlError::new("process_id_block_install", format!("{error:?}"))
+                        })?;
+                }
+                Err(error) => {
+                    return Err(ControlError::new(
+                        "process_identity_resolution",
+                        format!("{error:?}"),
+                    ));
+                }
+            }
+        };
+        let changed = resolution.created || resolution.enriched;
+        let record = changed
+            .then(|| self.process_registry.record(resolution.identity).cloned())
+            .flatten();
+        Ok((resolution.identity, record))
+    }
+
     pub(crate) fn collector_name(&self) -> String {
         self.collector.descriptor().name.to_string()
     }
 
     pub(crate) fn collector_ready(&self) -> bool {
         self.collector.probe_result().reason_unavailable.is_none()
+    }
+
+    pub(crate) fn any_host_ebpf_preflight_available(&self) -> bool {
+        self.host_ebpf_preflight
+            .values()
+            .any(|report| report.available)
     }
 
     pub(crate) fn collector_descriptor(&self) -> collector_capability::CollectorDescriptor {
@@ -151,16 +198,23 @@ impl StorageAttachService {
         command: &TrackAddCommand,
         profile_snapshot: CaptureProfileSnapshot,
         sensor_plan: SensorPlan,
-    ) -> Result<(model_core::ids::TraceId, ProcessIdentity, DiagnosticKind), ControlError> {
-        let root_identity = resolve_process_ref(&command.root)?;
+    ) -> Result<BootstrapSnapshot, ControlError> {
+        let root_observation = resolve_process_ref(&command.root)?;
+        let root_host_pid = root_observation
+            .host
+            .as_ref()
+            .map(|host| host.pid)
+            .ok_or_else(|| ControlError::new("pid_resolution", "root host PID is missing"))?;
+        let (root_identity, root_record) =
+            self.resolve_process_observation(root_observation.clone())?;
         // Resolve the container id host-side from the already-resolved host pid.
         // This sees the full `docker-<id>` cgroup path; a container-local
         // `/proc/self/cgroup` may be masked to `0::/`). `None` = host/non-Docker.
         let root_container_id =
-            read_container_identity(root_identity.pid).map(|identity| identity.container_id);
+            read_container_identity(root_host_pid).map(|identity| identity.container_id);
         let snapshot = process_tree_snapshot_contract::snapshot::ProcessTreeSnapshotter::snapshot(
             &self.snapshotter,
-            &root_identity,
+            &root_observation,
         )
         .map_err(|error| ControlError::new("snapshot", error))?;
 
@@ -180,21 +234,48 @@ impl StorageAttachService {
             )
             .map_err(|error| ControlError::new("create_trace", format!("{:?}", error)))?;
 
-        let merge_result = merge_snapshot(trace_id, &root_identity, &snapshot, &[]);
-        for membership in merge_result.memberships {
+        let mut process_records = BTreeMap::new();
+        if let Some(record) = root_record {
+            process_records.insert(record.identity, record);
+        }
+        let mut bootstrap_partial = false;
+        for process in snapshot.processes {
+            let (identity, record) = self.resolve_process_observation(process.identity)?;
+            if let Some(record) = record {
+                process_records.insert(record.identity, record);
+            }
+            if identity == root_identity {
+                continue;
+            }
+            let Some(parent_observation) = process.parent else {
+                bootstrap_partial = true;
+                continue;
+            };
+            let (parent, parent_record) = self.resolve_process_observation(parent_observation)?;
+            if let Some(record) = parent_record {
+                process_records.insert(record.identity, record);
+            }
+            let membership = model_core::process::ProcessMembership::inherited(
+                trace_id,
+                identity,
+                parent,
+                snapshot.captured_at,
+            );
             trace_runtime
                 .insert_membership(trace_id, membership)
                 .map_err(|error| ControlError::new("insert_membership", format!("{:?}", error)))?;
         }
-        Ok((
+        Ok(BootstrapSnapshot {
             trace_id,
             root_identity,
-            if merge_result.bootstrap_partial {
+            root_observation,
+            process_records: process_records.into_values().collect(),
+            diagnostic_kind: if bootstrap_partial {
                 DiagnosticKind::BootstrapPartial
             } else {
                 DiagnosticKind::BootstrapGap
             },
-        ))
+        })
     }
 
     fn finalize_trace(
@@ -202,6 +283,7 @@ impl StorageAttachService {
         trace_runtime: &mut trace_runtime::TraceRuntime,
         trace_id: model_core::ids::TraceId,
         root_identity: ProcessIdentity,
+        process_records: Vec<ProcessRecord>,
         launch_mode: bool,
         diagnostic_kind: DiagnosticKind,
         diagnostic_message: &'static str,
@@ -226,7 +308,7 @@ impl StorageAttachService {
             entry.memberships.memberships().cloned().collect(),
         );
         RecordingWriter::new(self.storage.as_mut())
-            .persist_trace_state(trace_state)
+            .persist_trace_state_with_process_records(trace_state, process_records)
             .map_err(recording_error_to_control)?;
         if emit_bootstrap_diagnostic {
             let diagnostic = DiagnosticRecord::new(
@@ -246,11 +328,10 @@ impl StorageAttachService {
             self.log_diagnostic(
                 DiagnosticLogLevel::Info,
                 format_args!(
-                    "agent_launch started trace_id={} name={} pid={} generation={}",
+                    "agent_launch started trace_id={} name={} process_id={}",
                     trace_id,
                     trace.display_name,
-                    trace.root_process_identity.pid,
-                    trace.root_process_identity.generation
+                    trace.root_process_identity.get()
                 ),
             );
         }
@@ -268,14 +349,15 @@ impl StorageAttachService {
         profile_snapshot: CaptureProfileSnapshot,
         sensor_plan: SensorPlan,
     ) -> Result<TrackAddReply, ControlError> {
-        let (trace_id, root_identity, diagnostic_kind) =
+        let bootstrap =
             self.bootstrap_snapshot(trace_runtime, command, profile_snapshot, sensor_plan)?;
         self.finalize_trace(
             trace_runtime,
-            trace_id,
-            root_identity,
+            bootstrap.trace_id,
+            bootstrap.root_identity,
+            bootstrap.process_records,
             command.launch_mode,
-            diagnostic_kind,
+            bootstrap.diagnostic_kind,
             "snapshot-only attach completed without eBPF coverage guard",
         )
     }
@@ -294,51 +376,63 @@ impl StorageAttachService {
             &collector_name,
         );
         let uses_ebpf_collector = !requested_capabilities.is_empty();
-        let (trace_id, root_identity, diagnostic_kind) = self.bootstrap_snapshot(
+        let bootstrap = self.bootstrap_snapshot(
             trace_runtime,
             command,
             profile_snapshot.clone(),
             sensor_plan,
         )?;
 
-        let member_identities = trace_runtime
-            .get_trace(trace_id)
+        let member_processes = trace_runtime
+            .get_trace(bootstrap.trace_id)
             .ok_or_else(|| {
                 ControlError::new("trace_missing", "trace disappeared during bootstrap")
             })?
             .memberships
             .memberships()
-            .map(|membership| membership.identity.clone())
-            .collect::<Vec<_>>();
+            .map(|membership| {
+                self.process_registry
+                    .record(membership.identity)
+                    .cloned()
+                    .ok_or_else(|| {
+                        ControlError::new(
+                            "process_registry",
+                            format!("missing process record {}", membership.identity.get()),
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         if uses_ebpf_collector {
             if let Err(error) = self.collector.bind_trace(&TraceBindingRequest {
-                trace_id,
-                root_identity: root_identity.clone(),
+                trace_id: bootstrap.trace_id,
+                root_identity: bootstrap.root_identity,
+                root_observation: bootstrap.root_observation.clone(),
                 root_namespace_pid: command.root.namespace_pid,
                 profile_snapshot: profile_snapshot.clone(),
                 requested_capabilities,
                 initial_suppressed_fds: command.initial_suppressed_fds.clone(),
             }) {
-                let _ = trace_runtime.fail_trace(trace_id, SystemTime::now());
+                let _ = trace_runtime.fail_trace(bootstrap.trace_id, SystemTime::now());
                 return Err(ControlError::new(error.stage, error.message));
             }
 
             if let Err(error) = self
                 .collector
-                .seed_trace_memberships(trace_id, member_identities)
+                .seed_trace_memberships(bootstrap.trace_id, member_processes)
             {
-                let _ = trace_runtime.fail_trace(trace_id, SystemTime::now());
+                let _ = trace_runtime.fail_trace(bootstrap.trace_id, SystemTime::now());
                 return Err(ControlError::new(error.stage, error.message));
             }
         }
 
         self.finalize_trace(
             trace_runtime,
-            trace_id,
-            root_identity,
+            bootstrap.trace_id,
+            bootstrap.root_identity,
+            bootstrap.process_records,
             command.launch_mode,
-            diagnostic_kind,
+            bootstrap.diagnostic_kind,
             if uses_ebpf_collector {
                 "snapshot bootstrap completed before live eBPF tracking and remains gap-marked"
             } else {
@@ -349,6 +443,19 @@ impl StorageAttachService {
 }
 
 impl AttachService for StorageAttachService {
+    fn host_pid_for_process(&self, process: ProcessIdentity) -> Result<u32, ControlError> {
+        self.process_registry
+            .record(process)
+            .and_then(|record| record.host.as_ref())
+            .map(|host| host.pid)
+            .ok_or_else(|| {
+                ControlError::new(
+                    "process_host_pid",
+                    format!("process {} has no host PID", process.get()),
+                )
+            })
+    }
+
     fn resolve_launch_permissions(
         &mut self,
         command: &ResolveLaunchPermissionsCommand,
@@ -403,6 +510,17 @@ impl AttachService for StorageAttachService {
             degraded: decision.degraded,
             reasons: decision.reasons,
         })
+    }
+
+    fn host_ebpf_available_for_profile(&self, profile_name: &model_core::ids::ProfileName) -> bool {
+        self.host_ebpf_preflight_available_for_profile(profile_name)
+    }
+
+    fn resolve_launch_tls_plan(
+        &mut self,
+        command: &ResolveLaunchTlsPlanCommand,
+    ) -> Result<LaunchTlsPlanReply, ControlError> {
+        self.tls_sync.resolve_launch_plan(&command.binary)
     }
 
     fn attach_existing(
@@ -510,31 +628,43 @@ impl AttachService for StorageAttachService {
         trace_runtime: &mut trace_runtime::TraceRuntime,
         command: control_contract::command::RegisterSeccompListenerCommand,
     ) -> Result<(), ControlError> {
-        let target_identity = resolve_process_ref(&command.target)?;
-        let target_pid = target_identity.pid;
+        let target_observation = resolve_process_ref(&command.target)?;
+        let target_pid = target_observation
+            .host
+            .as_ref()
+            .map(|host| host.pid)
+            .ok_or_else(|| ControlError::new("seccomp_listener", "target host PID is missing"))?;
+        let (target_identity, target_record) =
+            self.resolve_process_observation(target_observation)?;
         let trace = trace_runtime
             .get_trace(command.trace_id)
             .ok_or_else(|| ControlError::new("seccomp_listener", "trace not found"))?;
-        let target_known = trace.memberships.memberships().any(|membership| {
-            membership.identity.pid == target_pid
-                || membership
-                    .inherited_from
-                    .as_ref()
-                    .is_some_and(|parent| parent.pid == target_pid)
-        });
+        let target_known = trace
+            .memberships
+            .memberships()
+            .any(|membership| membership.identity == target_identity);
         if !target_known {
             let inherited = self.process_seccomp.ensure_listener_target(
                 trace_runtime,
+                &self.process_registry,
                 &self.identity_reader,
                 command.trace_id,
                 target_pid,
             )?;
             if let Some(identity) = inherited {
+                let record = target_record
+                    .or_else(|| self.process_registry.record(identity).cloned())
+                    .ok_or_else(|| {
+                        ControlError::new("process_registry", "listener process record is missing")
+                    })?;
                 if self.collector.stats().active_bindings > 0 {
                     self.collector
-                        .seed_trace_memberships(command.trace_id, std::iter::once(identity))
+                        .seed_trace_memberships(command.trace_id, std::iter::once(record.clone()))
                         .map_err(|error| ControlError::new(error.stage, error.message))?;
                 }
+                self.storage
+                    .upsert_process_record(record)
+                    .map_err(|error| ControlError::new(error.stage, error.message))?;
                 self.persist_trace_state(trace_runtime, command.trace_id)?;
             }
         }
@@ -609,9 +739,17 @@ fn recording_error_to_control(error: recording_runtime::RecordingError) -> Contr
     ControlError::new(error.stage, error.message)
 }
 
-fn resolve_process_ref(process: &ProcessRef) -> Result<ProcessIdentity, ControlError> {
+fn resolve_process_ref(process: &ProcessRef) -> Result<ProcessObservation, ControlError> {
     resolve_namespaced_pid(process.namespace_pid, &process.pid_namespace)
         .map_err(|error| ControlError::new("pid_resolution", error))
+}
+
+struct BootstrapSnapshot {
+    trace_id: model_core::ids::TraceId,
+    root_identity: ProcessIdentity,
+    root_observation: ProcessObservation,
+    process_records: Vec<ProcessRecord>,
+    diagnostic_kind: DiagnosticKind,
 }
 
 fn min_optional_timeout(left: Option<Duration>, right: Option<Duration>) -> Option<Duration> {

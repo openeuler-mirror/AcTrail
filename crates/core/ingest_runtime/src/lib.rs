@@ -24,6 +24,7 @@ use crate::policy_gate::apply_policy;
 pub struct IngestMatch {
     pub trace_id: TraceId,
     pub process: ProcessIdentity,
+    pub parent: Option<ProcessIdentity>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -72,9 +73,13 @@ where
             };
         };
 
-        let mut raw_event = raw_event;
-        raw_event.envelope.process = matched.process.clone();
-        let mut event = normalize_event(raw_event, matched.trace_id, event_id);
+        let mut event = normalize_event(
+            raw_event,
+            matched.trace_id,
+            matched.process,
+            matched.parent,
+            event_id,
+        );
         let policy_decision = apply_policy(&self.policy_evaluator, matched.trace_id, &event);
         let diagnostics = policy_diagnostic(
             diagnostic_id,
@@ -115,7 +120,7 @@ mod tests {
 
     use collector_event::{RawCollectorEvent, RawEventEnvelope, RawObservationPayload};
     use model_core::ids::{CollectorName, DiagnosticId, EventId, TraceId};
-    use model_core::process::ProcessIdentity;
+    use model_core::process::{HostProcessCoordinates, ProcessIdentity, ProcessObservation};
     use provider_evidence::EvidenceBundle;
     use provider_label::{ProviderClassifier, ProviderLabelRecord};
 
@@ -123,7 +128,6 @@ mod tests {
 
     const PID: u32 = 100;
     const RAW_START_TICKS: u64 = 10;
-    const RAW_GENERATION: u64 = RAW_START_TICKS;
     const MATCHED_START_TICKS: u64 = 20;
     const MATCHED_GENERATION: u64 = MATCHED_START_TICKS;
     const TRACE_ID: u64 = 7;
@@ -140,8 +144,9 @@ mod tests {
 
     #[test]
     fn matched_process_identity_is_used_for_persisted_event() {
-        let raw_process = ProcessIdentity::new(PID, RAW_START_TICKS, RAW_GENERATION);
-        let matched_process = ProcessIdentity::new(PID, MATCHED_START_TICKS, MATCHED_GENERATION);
+        let raw_process =
+            ProcessObservation::host(HostProcessCoordinates::new(PID, RAW_START_TICKS));
+        let matched_process = ProcessIdentity::new(MATCHED_GENERATION);
         let raw_event = RawCollectorEvent {
             envelope: RawEventEnvelope {
                 observed_at: SystemTime::UNIX_EPOCH,
@@ -160,6 +165,7 @@ mod tests {
             Some(IngestMatch {
                 trace_id: TraceId::new(TRACE_ID),
                 process: matched_process.clone(),
+                parent: None,
             }),
             EventId::new(EVENT_ID),
             None,

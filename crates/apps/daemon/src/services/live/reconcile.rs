@@ -11,7 +11,7 @@ use model_core::event::{
 use model_core::ids::CollectorName;
 use model_core::process::{ExitObservationSource, ExitStatus, MembershipState, ProcessIdentity};
 use model_core::trace::TraceLifecycleState;
-use process_identity_contract::lookup::{IdentityLookupError, ProcessIdentityReader};
+use process_identity::{IdentityLookupError, ProcessIdentityReader};
 use recording_runtime::RecordingWriter;
 use trace_runtime::registry::TraceRuntime;
 
@@ -112,9 +112,18 @@ impl StorageAttachService {
             SystemTime::now(),
             "terminal trace still has a live process membership",
         )
-        .with_process(identity.clone())
-        .with_metadata("pid", identity.pid.to_string())
-        .with_metadata("generation", identity.generation.to_string());
+        .with_process(*identity)
+        .with_metadata("process_id", identity.get().to_string());
+        let diagnostic = match self
+            .process_registry
+            .record(*identity)
+            .and_then(|record| record.host.as_ref())
+        {
+            Some(host) => diagnostic
+                .with_metadata("host_pid", host.pid.to_string())
+                .with_metadata("start_time_ticks", host.start_time_ticks.to_string()),
+            None => diagnostic,
+        };
         RecordingWriter::new(self.storage.as_mut())
             .persist_diagnostic(diagnostic)
             .map_err(recording_error_to_control)
@@ -151,12 +160,17 @@ impl StorageAttachService {
     }
 
     fn process_membership_is_gone(&self, identity: &ProcessIdentity) -> bool {
-        match self.identity_reader.read_identity(identity.pid) {
-            Ok(current) => {
-                current.start_time_ticks != identity.start_time_ticks
-                    || identity.pid_namespace.is_some()
-                        && current.pid_namespace != identity.pid_namespace
-            }
+        let Some(record) = self.process_registry.record(*identity) else {
+            return false;
+        };
+        let Some(host) = record.host.as_ref() else {
+            return false;
+        };
+        match self.identity_reader.read_identity(host.pid) {
+            Ok(current) => current
+                .host
+                .as_ref()
+                .is_none_or(|current_host| current_host.start_time_ticks != host.start_time_ticks),
             Err(IdentityLookupError::NotFound { .. }) => true,
             Err(IdentityLookupError::PermissionDenied { .. })
             | Err(IdentityLookupError::Incomplete { .. }) => false,

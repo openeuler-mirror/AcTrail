@@ -6,31 +6,24 @@
 #include "payload/actrail_socket_payload.h"
 #include "payload/actrail_stdio_payload.h"
 
-struct {
-    __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, 2);
-    __type(key, __u32);
-    __type(value, __u32);
-} fork_child_pid_offset SEC(".maps");
-
-SEC("tracepoint/sched/sched_process_fork")
-int handle_sched_process_fork(void *ctx) {
-    __u32 child_key = 0;
-    __u32 parent_key = 1;
-    __u32 *child_pid_offset = bpf_map_lookup_elem(&fork_child_pid_offset, &child_key);
-    __u32 *parent_pid_offset = bpf_map_lookup_elem(&fork_child_pid_offset, &parent_key);
+SEC("raw_tracepoint/sched_process_fork")
+int handle_sched_process_fork(struct bpf_raw_tracepoint_args *ctx) {
+    struct task_struct *parent_task = (struct task_struct *)ctx->args[0];
+    struct task_struct *child_task = (struct task_struct *)ctx->args[1];
     __u32 parent_pid = 0;
     __u32 parent_tid = 0;
     __u32 lookup_flags = 0;
     __u32 context_parent_pid = 0;
-    if (!parent_pid_offset || !child_pid_offset) {
+    __u32 parent_host_pid = 0;
+    __u32 child_host_pid = 0;
+    __u64 child_start_boottime_ns = 0;
+    if (!parent_task || !child_task) {
         return 0;
     }
-    if (bpf_probe_read(
-            &context_parent_pid,
-            sizeof(context_parent_pid),
-            (void *)((__u64)ctx + *parent_pid_offset)
-        ) != 0) {
+    if (ACTRAIL_CORE_READ(&context_parent_pid, parent_task, pid) != 0 ||
+        ACTRAIL_CORE_READ(&parent_host_pid, parent_task, tgid) != 0 ||
+        ACTRAIL_CORE_READ(&child_host_pid, child_task, tgid) != 0 ||
+        ACTRAIL_CORE_READ(&child_start_boottime_ns, child_task, start_boottime) != 0) {
         return 0;
     }
     __u64 *trace_id = lookup_trace_for_context_pid(
@@ -40,26 +33,21 @@ int handle_sched_process_fork(void *ctx) {
         &lookup_flags
     );
     struct actrail_pending_proc_op op = {};
-    __u32 child_kernel_pid = 0;
+    __u32 child_kernel_pid = child_host_pid;
 
     if (!parent_pid || !trace_id) {
         return 0;
     }
-    if (bpf_probe_read(
-            &child_kernel_pid,
-            sizeof(child_kernel_pid),
-            (void *)((__u64)(void *)ctx + *child_pid_offset)
-        ) != 0) {
-        return 0;
-    }
-    if (!child_kernel_pid) {
+    if (!child_kernel_pid || !child_start_boottime_ns) {
         return 0;
     }
 
     op.trace_id = *trace_id;
-    op.parent_generation = ensure_process_generation(parent_pid);
-    op.child_generation = bpf_ktime_get_ns();
+    op.parent_generation = current_process_start_time(parent_pid);
+    op.child_generation = child_start_boottime_ns;
     op.parent_pid = parent_pid;
+    op.parent_host_pid = parent_host_pid;
+    op.child_host_pid = child_host_pid;
     op.lookup_flags = lookup_flags;
     bpf_map_update_elem(&pending_child_proc_ops, &child_kernel_pid, &op, BPF_ANY);
     return 0;
@@ -115,7 +103,7 @@ int handle_sched_process_exit(struct sched_process_exit_ctx *ctx) {
     cleanup_suppressed_fds_for_process(pid, event.pid_generation);
     delete_file_bulk_read_fast_process(pid, event.pid_generation);
     bpf_map_delete_elem(&tracked_traces, &pid);
-    delete_process_generation(pid);
+    delete_process_start_time(pid);
     return 0;
 }
 

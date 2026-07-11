@@ -16,7 +16,7 @@ pub struct LiveVerificationReport {
 
 pub fn format_live_verification_report(report: &LiveVerificationReport) -> String {
     format!(
-        "live verification passed\ntrace_id={}\nprocess_events={}\nfile_events={}\nnet_events={}\nipc_events={}\nresource_events={}\nprovider_events={}\nstdio_payloads={}",
+        "verification_stage=load_attach status=passed\nverification_stage=workload_event_drain status=passed\nverification_stage=retained_observation status=passed\nlive verification passed\ntrace_id={}\nprocess_events={}\nfile_events={}\nnet_events={}\nipc_events={}\nresource_events={}\nprovider_events={}\nstdio_payloads={}",
         report.trace_id,
         report.process_events.join(","),
         report.file_events.join(","),

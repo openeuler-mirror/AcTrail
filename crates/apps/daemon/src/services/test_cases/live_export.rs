@@ -75,7 +75,7 @@ fn live_exporter_failure_is_diagnostic_not_payload_failure() {
     wiring.attach_service.export_runtime = ExportRuntime::new(vec![Box::new(FailingConsumer)]);
 
     let trace_id = wiring.trace_runtime.reserve_trace_id();
-    let process = ProcessIdentity::new(std::process::id(), 1, 1);
+    let process = ProcessIdentity::new(1);
     super::create_active_trace(
         &mut wiring,
         trace_id,
@@ -102,7 +102,7 @@ fn live_exporter_failure_is_diagnostic_not_payload_failure() {
     wiring
         .attach_service
         .process_payload_segment_impl(
-            &wiring.trace_runtime,
+            &mut wiring.trace_runtime,
             raw_tls_http_segment(trace_id, process, request.into_bytes()),
         )
         .unwrap();
@@ -196,7 +196,7 @@ fn tty_summary_is_persisted_but_not_live_exported() {
     })]);
 
     let trace_id = wiring.trace_runtime.reserve_trace_id();
-    let process = ProcessIdentity::new(920_100, 20_100, 20_100);
+    let process = ProcessIdentity::new(20_100);
     super::create_active_trace(
         &mut wiring,
         trace_id,
@@ -310,7 +310,7 @@ fn raw_tty_write(process: ProcessIdentity) -> RawCollectorEvent {
     RawCollectorEvent {
         envelope: RawEventEnvelope {
             observed_at: SystemTime::UNIX_EPOCH,
-            process,
+            process: super::test_process_observation(process),
             collector: CollectorName::new("test-file"),
         },
         payload: RawObservationPayload::File {
@@ -334,7 +334,7 @@ fn raw_tls_http_segment(
     RawPayloadSegment {
         trace_id,
         observed_at: SystemTime::UNIX_EPOCH,
-        process,
+        process: super::test_process_observation(process),
         source_boundary: PayloadSourceBoundary::TlsUserSpace,
         content_state: PayloadContentState::Plaintext,
         direction: PayloadDirection::Outbound,

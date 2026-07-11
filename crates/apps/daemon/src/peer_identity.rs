@@ -4,8 +4,8 @@ use control_contract::command::ProcessRef;
 use control_contract::reply::ControlError;
 use ebpf_collector::procfs::{parse_container_identity, resolve_namespaced_pid};
 use model_core::ids::TraceId;
-use model_core::process::ProcessIdentity;
-use process_identity_contract::lookup::ProcessIdentityReader;
+use model_core::process::ProcessObservation;
+use process_identity::ProcessIdentityReader;
 use trace_runtime::TraceOwnerPrincipal;
 use uds_control_server::PeerCredentials;
 
@@ -80,7 +80,7 @@ impl PeerPrincipal {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PeerIdentity {
     pub(crate) credentials: PeerCredentials,
-    pub(crate) process: ProcessIdentity,
+    pub(crate) process: ProcessObservation,
     pub(crate) principal: PeerPrincipal,
 }
 
@@ -121,10 +121,15 @@ impl PeerIdentity {
         }
         let process = resolve_namespaced_pid(target.namespace_pid, &target.pid_namespace)
             .map_err(|error| peer_error(format!("resolve target process: {error}")))?;
-        let target_pid_namespace = process_pid_namespace(process.pid)?;
+        let host_pid = process
+            .host
+            .as_ref()
+            .map(|host| host.pid)
+            .ok_or_else(|| peer_error("resolved target has no host PID"))?;
+        let target_pid_namespace = process_pid_namespace(host_pid)?;
         let target = PeerPrincipal {
-            uid: process_uid(process.pid)?,
-            container_id: process_container_id(process.pid)?,
+            uid: process_uid(host_pid)?,
+            container_id: process_container_id(host_pid)?,
             host_pid_namespace: target_pid_namespace == process_pid_namespace(std::process::id())?,
             pid_namespace: target_pid_namespace,
         };
@@ -136,7 +141,7 @@ impl PeerIdentity {
                 self.credentials.pid,
                 self.credentials.uid,
                 display_container(self.principal.container_id.as_deref()),
-                process.pid,
+                host_pid,
                 target.uid,
                 display_container(target.container_id.as_deref())
             )))

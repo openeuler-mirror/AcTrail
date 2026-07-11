@@ -3,7 +3,7 @@
 use model_core::diagnostics::DiagnosticRecord;
 use model_core::event::{DomainEvent, EventEnvelope, EventFlags};
 use model_core::payload::{PayloadSegment, PayloadSegmentId, PayloadStreamKey};
-use model_core::process::{ExitStatus, NamespaceIdentity, ProcessIdentity, ProcessMembership};
+use model_core::process::{ExitStatus, ProcessIdentity, ProcessMembership};
 use model_core::trace::{TraceRecord, TraceTiming};
 use rusqlite::{Error as SqlError, Row};
 
@@ -19,15 +19,7 @@ use crate::records::{
 pub fn trace_from_row(row: &Row<'_>) -> Result<TraceRecord, SqlError> {
     Ok(TraceRecord {
         trace_id: model_core::ids::TraceId::new(row.get::<_, u64>("trace_id")?),
-        root_process_identity: ProcessIdentity {
-            pid: row.get("root_pid")?,
-            task_id: row.get("root_task_id")?,
-            start_time_ticks: row.get("root_start_ticks")?,
-            pid_namespace: row
-                .get::<_, Option<String>>("root_pid_namespace")?
-                .map(NamespaceIdentity::new),
-            generation: row.get("root_generation")?,
-        },
+        root_process_identity: ProcessIdentity::new(row.get("root_process_id")?),
         root_container_id: row.get::<_, Option<String>>("root_container_id")?,
         display_name: model_core::ids::TraceName::new(row.get::<_, String>("display_name")?),
         profile_name: model_core::ids::ProfileName::new(row.get::<_, String>("profile_name")?),
@@ -61,28 +53,10 @@ pub fn membership_from_row(row: &Row<'_>) -> Result<ProcessMembership, SqlError>
 
     Ok(ProcessMembership {
         trace_id: model_core::ids::TraceId::new(row.get("trace_id")?),
-        identity: ProcessIdentity {
-            pid: row.get("pid")?,
-            task_id: row.get("task_id")?,
-            start_time_ticks: row.get("start_ticks")?,
-            pid_namespace: row
-                .get::<_, Option<String>>("pid_namespace")?
-                .map(NamespaceIdentity::new),
-            generation: row.get("generation")?,
-        },
-        inherited_from: row.get::<_, Option<u32>>("inherited_from_pid")?.map(|pid| {
-            ProcessIdentity {
-                pid,
-                task_id: row.get("inherited_from_task_id").ok().flatten(),
-                start_time_ticks: row.get("inherited_from_start_ticks").unwrap_or_default(),
-                pid_namespace: row
-                    .get::<_, Option<String>>("inherited_from_pid_namespace")
-                    .ok()
-                    .flatten()
-                    .map(NamespaceIdentity::new),
-                generation: row.get("inherited_from_generation").unwrap_or_default(),
-            }
-        }),
+        identity: ProcessIdentity::new(row.get("process_id")?),
+        inherited_from: row
+            .get::<_, Option<u64>>("inherited_from_process_id")?
+            .map(ProcessIdentity::new),
         observed_at: row.get::<_, Option<i64>>("observed_at")?.map(decode_time),
         capture_enabled: i64_to_bool(row.get("capture_enabled")?),
         propagation_enabled: i64_to_bool(row.get("propagation_enabled")?),
@@ -96,15 +70,7 @@ pub fn event_from_row(row: &Row<'_>) -> Result<DomainEvent, SqlError> {
         event_id: model_core::ids::EventId::new(row.get("event_id")?),
         trace_id: model_core::ids::TraceId::new(row.get("trace_id")?),
         observed_at: decode_time(row.get("observed_at")?),
-        process: ProcessIdentity {
-            pid: row.get("process_pid")?,
-            task_id: row.get("process_task_id")?,
-            start_time_ticks: row.get("process_start_ticks")?,
-            pid_namespace: row
-                .get::<_, Option<String>>("process_pid_namespace")?
-                .map(NamespaceIdentity::new),
-            generation: row.get("process_generation")?,
-        },
+        process: ProcessIdentity::new(row.get("process_id")?),
         collector: model_core::ids::CollectorName::new(row.get::<_, String>("collector")?),
         kind: decode_event_kind(&row.get::<_, String>("kind")?)?,
         flags: EventFlags {
@@ -136,15 +102,7 @@ pub fn payload_segment_from_row(row: &Row<'_>) -> Result<PayloadSegment, SqlErro
         segment_id: PayloadSegmentId::new(row.get("segment_id")?),
         trace_id: model_core::ids::TraceId::new(row.get("trace_id")?),
         observed_at: decode_time(row.get("observed_at")?),
-        process: ProcessIdentity {
-            pid: row.get("process_pid")?,
-            task_id: row.get("process_task_id")?,
-            start_time_ticks: row.get("process_start_ticks")?,
-            pid_namespace: row
-                .get::<_, Option<String>>("process_pid_namespace")?
-                .map(NamespaceIdentity::new),
-            generation: row.get("process_generation")?,
-        },
+        process: ProcessIdentity::new(row.get("process_id")?),
         source_boundary: decode_payload_source_boundary(&row.get::<_, String>("source_boundary")?)?,
         content_state: decode_payload_content_state(&row.get::<_, String>("content_state")?)?,
         direction: decode_payload_direction(&row.get::<_, String>("direction")?)?,
@@ -175,18 +133,8 @@ pub fn diagnostic_from_row(row: &Row<'_>) -> Result<DiagnosticRecord, SqlError> 
             .get::<_, Option<u64>>("trace_id")?
             .map(model_core::ids::TraceId::new),
         process: row
-            .get::<_, Option<u32>>("process_pid")?
-            .map(|pid| ProcessIdentity {
-                pid,
-                task_id: row.get("process_task_id").ok().flatten(),
-                start_time_ticks: row.get("process_start_ticks").unwrap_or_default(),
-                pid_namespace: row
-                    .get::<_, Option<String>>("process_pid_namespace")
-                    .ok()
-                    .flatten()
-                    .map(NamespaceIdentity::new),
-                generation: row.get("process_generation").unwrap_or_default(),
-            }),
+            .get::<_, Option<u64>>("process_id")?
+            .map(ProcessIdentity::new),
         kind: decode_diagnostic_kind(&row.get::<_, String>("kind")?)?,
         severity: decode_diagnostic_severity(&row.get::<_, String>("severity")?)?,
         emitted_at: decode_time(row.get("emitted_at")?),

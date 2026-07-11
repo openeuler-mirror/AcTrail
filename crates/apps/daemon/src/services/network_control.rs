@@ -11,13 +11,15 @@ use control_contract::reply::ControlError;
 use model_core::ids::{CollectorName, TraceId};
 use model_core::process::ProcessIdentity;
 use plugin_system::{
-    CONTROL_CURRENT_CONTEXT_TOKEN, ControlActorProcessIdentity, ControlDecisionBudget,
-    ControlDecisionRequest, ControlSubject, ControlVerdict,
+    CONTROL_CURRENT_CONTEXT_TOKEN, ControlDecisionBudget, ControlDecisionRequest, ControlSubject,
+    ControlVerdict,
 };
-use process_identity_contract::lookup::ProcessIdentityReader;
+use process_identity::ProcessIdentityManager;
+use process_identity::ProcessIdentityReader;
 use trace_runtime::registry::TraceRuntime;
 
 use crate::services::control_runtime::ControlPluginRuntime;
+use crate::services::identity::ControlActorIdentityResolver;
 use crate::services::identity::TraceIdentityResolver;
 use crate::services::seccomp_notify::{
     NotificationContinuation, read_process_bytes, target_exited,
@@ -49,6 +51,7 @@ impl NetworkControlService {
     pub(in crate::services) fn handle_notification(
         &self,
         trace_runtime: &TraceRuntime,
+        process_registry: &ProcessIdentityManager,
         identity_reader: &impl ProcessIdentityReader,
         notification: &libc::seccomp_notif,
         continuation: &mut NotificationContinuation,
@@ -68,28 +71,38 @@ impl NetworkControlService {
         let Some(rule) = self.rules.find_endpoint(&remote.endpoint) else {
             return Ok(Vec::new());
         };
-        let Some(candidate) =
-            self.candidate(trace_runtime, identity_reader, notification, remote)?
+        let Some(candidate) = self.candidate(
+            trace_runtime,
+            process_registry,
+            identity_reader,
+            notification,
+            remote,
+        )?
         else {
             return Ok(Vec::new());
         };
-        let outcome = self.decide_connect(&candidate, control_plugins, rule)?;
+        let outcome = self.decide_connect(&candidate, process_registry, control_plugins, rule)?;
         if network_control_decision(&outcome) == EnforcementDecision::Deny {
             continuation.deny_errno(libc::EPERM)?;
         } else {
             continuation.continue_now()?;
         }
-        Ok(vec![network_control_event(candidate, outcome)])
+        Ok(vec![network_control_event(
+            candidate,
+            outcome,
+            process_registry,
+        )?])
     }
 
     fn candidate(
         &self,
         trace_runtime: &TraceRuntime,
+        process_registry: &ProcessIdentityManager,
         identity_reader: &impl ProcessIdentityReader,
         notification: &libc::seccomp_notif,
         remote: NetworkRemote,
     ) -> Result<Option<NetworkConnectCandidate>, ControlError> {
-        let resolver = TraceIdentityResolver::new(trace_runtime);
+        let resolver = TraceIdentityResolver::new(trace_runtime, process_registry);
         let Some(process) = resolver.runtime_or_read_pid_identity(
             identity_reader,
             notification.pid,
@@ -99,15 +112,15 @@ impl NetworkControlService {
             return Ok(None);
         };
         let parent_pid = parent_pid(notification.pid)?;
-        let trace_id = trace_runtime
-            .find_membership_by_pid(notification.pid)
+        let trace_id = process_registry
+            .active_host_pid(notification.pid)
+            .and_then(|identity| trace_runtime.find_membership(&identity))
             .map(|(trace_id, _)| trace_id)
             .or_else(|| {
-                parent_pid.and_then(|pid| {
-                    trace_runtime
-                        .find_membership_by_pid(pid)
-                        .map(|(trace_id, _)| trace_id)
-                })
+                parent_pid
+                    .and_then(|pid| process_registry.active_host_pid(pid))
+                    .and_then(|identity| trace_runtime.find_membership(&identity))
+                    .map(|(trace_id, _)| trace_id)
             });
         let Some(trace_id) = trace_id else {
             return Ok(None);
@@ -123,6 +136,7 @@ impl NetworkControlService {
     fn decide_connect(
         &self,
         candidate: &NetworkConnectCandidate,
+        process_registry: &ProcessIdentityManager,
         control_plugins: &ControlPluginRuntime,
         rule: &NetworkControlRule,
     ) -> Result<NetworkControlOutcome, ControlError> {
@@ -136,7 +150,7 @@ impl NetworkControlService {
                 error: "concurrency_limit".to_string(),
             });
         }
-        let result = self.decide_rule(candidate, control_plugins, rule);
+        let result = self.decide_rule(candidate, process_registry, control_plugins, rule);
         self.release_rule(&rule.rule_id);
         result
     }
@@ -144,6 +158,7 @@ impl NetworkControlService {
     fn decide_rule(
         &self,
         candidate: &NetworkConnectCandidate,
+        process_registry: &ProcessIdentityManager,
         control_plugins: &ControlPluginRuntime,
         rule: &NetworkControlRule,
     ) -> Result<NetworkControlOutcome, ControlError> {
@@ -151,7 +166,8 @@ impl NetworkControlService {
             decision_id: format!("{}:{}", rule.rule_id, candidate.trace_id),
             trace_id: candidate.trace_id.to_string(),
             subject: ControlSubject::NetworkAction,
-            actor_process_identity: actor_process_identity(&candidate.process),
+            actor_process_identity: ControlActorIdentityResolver::new(process_registry)
+                .resolve(candidate.process)?,
             operation: "connect".to_string(),
             target_summary: format!(
                 "remote={} family={} fd={}",
@@ -424,7 +440,8 @@ fn parse_sockaddr_in6(bytes: &[u8]) -> Result<NetworkRemote, ControlError> {
 fn network_control_event(
     candidate: NetworkConnectCandidate,
     outcome: NetworkControlOutcome,
-) -> RawCollectorEvent {
+    process_registry: &ProcessIdentityManager,
+) -> Result<RawCollectorEvent, ControlError> {
     let mut metadata = network_control_metadata(&outcome);
     metadata.insert("operation".to_string(), "connect".to_string());
     metadata.insert("remote".to_string(), candidate.remote.endpoint.to_string());
@@ -433,10 +450,14 @@ fn network_control_event(
         candidate.remote.family.to_string(),
     );
     metadata.insert("fd".to_string(), candidate.fd.to_string());
-    RawCollectorEvent {
+    let process = process_registry
+        .record(candidate.process)
+        .ok_or_else(|| ControlError::new("network_control", "process record is missing"))?
+        .observation();
+    Ok(RawCollectorEvent {
         envelope: RawEventEnvelope {
             observed_at: SystemTime::now(),
-            process: candidate.process,
+            process,
             collector: CollectorName::new(NETWORK_CONTROL_COLLECTOR_NAME),
         },
         payload: RawObservationPayload::Net {
@@ -448,7 +469,7 @@ fn network_control_event(
                 .then_some(-libc::EPERM),
             metadata,
         },
-    }
+    })
 }
 
 fn network_control_metadata(outcome: &NetworkControlOutcome) -> BTreeMap<String, String> {
@@ -535,19 +556,6 @@ fn positive_u32(label: &str, value: &str) -> Result<u32, String> {
         return Err(format!("{label} must be greater than zero"));
     }
     Ok(parsed)
-}
-
-fn actor_process_identity(process: &ProcessIdentity) -> ControlActorProcessIdentity {
-    let namespace = process
-        .pid_namespace
-        .as_ref()
-        .map(|namespace| namespace.as_str().to_string());
-    ControlActorProcessIdentity {
-        pid: process.pid,
-        task_id: process.task_id,
-        generation: process.generation,
-        namespace,
-    }
 }
 
 fn parent_pid(pid: u32) -> Result<Option<u32>, ControlError> {

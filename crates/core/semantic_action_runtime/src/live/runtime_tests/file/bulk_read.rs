@@ -31,7 +31,7 @@ const STALE_FD_BULK_MIN_UNIQUE_PATHS: u32 = 1;
 #[test]
 fn bulk_read_threshold_emits_summary_and_writes_path_set_on_boundary() {
     let mut runtime = bulk_runtime(false);
-    let process = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let process = ProcessIdentity::new(AGENT_GENERATION);
 
     let first_output =
         runtime.observe_event(&read_event(FILE_READ_EVENT_ID, process.clone(), PATH_A));
@@ -98,7 +98,7 @@ fn bulk_read_threshold_emits_summary_and_writes_path_set_on_boundary() {
 #[test]
 fn short_read_burst_releases_detailed_reads_on_boundary() {
     let mut runtime = bulk_runtime_with_min_unique_paths(false, 3);
-    let process = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let process = ProcessIdentity::new(AGENT_GENERATION);
 
     let first_output =
         runtime.observe_event(&read_event(FILE_READ_EVENT_ID, process.clone(), PATH_A));
@@ -141,7 +141,7 @@ fn short_read_burst_releases_detailed_reads_on_boundary() {
 #[test]
 fn short_read_burst_retains_deferred_events_when_configured_full() {
     let mut runtime = bulk_runtime_with_retention(false, 3, FileRawEventRetention::Full);
-    let process = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let process = ProcessIdentity::new(AGENT_GENERATION);
 
     runtime.observe_event(&read_event(FILE_READ_EVENT_ID, process.clone(), PATH_A));
     runtime.observe_event(&read_event(
@@ -170,7 +170,7 @@ fn short_read_burst_retains_deferred_events_when_configured_full() {
 #[test]
 fn bulk_read_boundary_completes_current_burst_before_next_action() {
     let mut runtime = bulk_runtime(true);
-    let process = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let process = ProcessIdentity::new(AGENT_GENERATION);
 
     runtime.observe_event(&exec_event(
         AGENT_EXEC_EVENT_ID,
@@ -278,7 +278,7 @@ fn bulk_read_boundary_completes_current_burst_before_next_action() {
 #[test]
 fn bulk_read_ignores_stdio_tty_and_raw_stdio_payload_until_real_boundary() {
     let mut runtime = bulk_runtime(false);
-    let process = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let process = ProcessIdentity::new(AGENT_GENERATION);
 
     runtime.observe_event(&read_event(
         EventId::new(FILE_READ_EVENT_ID.get() + 20),
@@ -371,7 +371,7 @@ fn bulk_read_ignores_stdio_tty_and_raw_stdio_payload_until_real_boundary() {
 #[test]
 fn bulk_read_consumed_io_does_not_reuse_stale_fd_path_for_later_write() {
     let mut runtime = bulk_runtime_with_min_unique_paths(false, STALE_FD_BULK_MIN_UNIQUE_PATHS);
-    let process = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let process = ProcessIdentity::new(AGENT_GENERATION);
 
     runtime.observe_event(&open_event(
         EventId::new(FILE_READ_EVENT_ID.get() + 30),

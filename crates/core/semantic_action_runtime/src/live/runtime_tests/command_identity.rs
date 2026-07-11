@@ -9,8 +9,8 @@ use super::test_support::*;
 #[test]
 fn llm_request_does_not_create_agent_invocation_from_pid_only_parent() {
     let mut runtime = runtime();
-    let parent = ProcessIdentity::new(WRAPPER_PID, WRAPPER_START_TICKS, WRAPPER_GENERATION);
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let parent = ProcessIdentity::new(WRAPPER_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
 
     runtime.observe_event(&exec_event(
         WRAPPER_EXEC_EVENT_ID,
@@ -27,7 +27,7 @@ fn llm_request_does_not_create_agent_invocation_from_pid_only_parent() {
     if let EventPayload::Process(payload) = &mut child_exec.payload {
         payload
             .metadata
-            .insert("ppid".to_string(), parent.pid.to_string());
+            .insert("ppid".to_string(), parent.get().to_string());
     }
     runtime.observe_event(&child_exec);
     let output = runtime.observe_payload_segment(&llm_payload_segment(agent));
@@ -42,9 +42,9 @@ fn llm_request_does_not_create_agent_invocation_from_pid_only_parent() {
 #[test]
 fn llm_request_does_not_create_agent_invocation_from_conflicting_parent_edges() {
     let mut runtime = runtime();
-    let first_parent = ProcessIdentity::new(WRAPPER_PID, WRAPPER_START_TICKS, WRAPPER_GENERATION);
-    let second_parent = ProcessIdentity::new(ROOT_PID, ROOT_START_TICKS, ROOT_GENERATION);
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let first_parent = ProcessIdentity::new(WRAPPER_GENERATION);
+    let second_parent = ProcessIdentity::new(ROOT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
 
     runtime.observe_event(&exec_event(
         WRAPPER_EXEC_EVENT_ID,
@@ -87,8 +87,8 @@ fn llm_request_does_not_create_agent_invocation_from_conflicting_parent_edges() 
 #[test]
 fn command_invocation_does_not_link_child_command_with_pid_only_parent() {
     let mut runtime = runtime();
-    let parent = ProcessIdentity::new(WRAPPER_PID, WRAPPER_START_TICKS, WRAPPER_GENERATION);
-    let child = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let parent = ProcessIdentity::new(WRAPPER_GENERATION);
+    let child = ProcessIdentity::new(AGENT_GENERATION);
 
     runtime.observe_event(&exec_event(
         WRAPPER_EXEC_EVENT_ID,
@@ -100,7 +100,7 @@ fn command_invocation_does_not_link_child_command_with_pid_only_parent() {
     if let EventPayload::Process(payload) = &mut child_event.payload {
         payload
             .metadata
-            .insert("ppid".to_string(), parent.pid.to_string());
+            .insert("ppid".to_string(), parent.get().to_string());
     }
     let child_output = runtime.observe_event(&child_event);
     let child_command = child_output
@@ -118,8 +118,8 @@ fn command_invocation_does_not_link_child_command_with_pid_only_parent() {
 #[test]
 fn agent_performed_action_does_not_link_pid_only_child_command_invocation() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
-    let child = ProcessIdentity::new(WRAPPER_PID, WRAPPER_START_TICKS, WRAPPER_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
+    let child = ProcessIdentity::new(WRAPPER_GENERATION);
 
     runtime.observe_event(&exec_event(
         AGENT_EXEC_EVENT_ID,
@@ -138,7 +138,7 @@ fn agent_performed_action_does_not_link_pid_only_child_command_invocation() {
     if let EventPayload::Process(payload) = &mut child_event.payload {
         payload
             .metadata
-            .insert("ppid".to_string(), agent.pid.to_string());
+            .insert("ppid".to_string(), agent.get().to_string());
     }
     let output = runtime.observe_event(&child_event);
     let command = output
@@ -157,9 +157,9 @@ fn agent_performed_action_does_not_link_pid_only_child_command_invocation() {
 #[test]
 fn command_invocation_does_not_link_reused_parent_pid() {
     let mut runtime = runtime();
-    let old_parent = ProcessIdentity::new(WRAPPER_PID, WRAPPER_START_TICKS, WRAPPER_GENERATION);
-    let reused_parent = ProcessIdentity::new(WRAPPER_PID, AGENT_START_TICKS, AGENT_GENERATION);
-    let child = ProcessIdentity::new(ROOT_PID, ROOT_START_TICKS, ROOT_GENERATION);
+    let old_parent = ProcessIdentity::new(WRAPPER_GENERATION);
+    let reused_parent = ProcessIdentity::new(AGENT_GENERATION);
+    let child = ProcessIdentity::new(ROOT_GENERATION);
 
     runtime.observe_event(&exec_event(
         WRAPPER_EXEC_EVENT_ID,
@@ -199,9 +199,9 @@ fn command_invocation_does_not_link_reused_parent_pid() {
 #[test]
 fn command_invocation_parent_identity_conflict_invalidates_emitted_child_link() {
     let mut runtime = runtime();
-    let old_parent = ProcessIdentity::new(WRAPPER_PID, WRAPPER_START_TICKS, WRAPPER_GENERATION);
-    let conflicting_parent = ProcessIdentity::new(ROOT_PID, ROOT_START_TICKS, ROOT_GENERATION);
-    let child = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let old_parent = ProcessIdentity::new(WRAPPER_GENERATION);
+    let conflicting_parent = ProcessIdentity::new(ROOT_GENERATION);
+    let child = ProcessIdentity::new(AGENT_GENERATION);
 
     let parent_output = runtime.observe_event(&exec_event(
         WRAPPER_EXEC_EVENT_ID,
@@ -260,7 +260,7 @@ fn command_invocation_parent_identity_conflict_invalidates_emitted_child_link() 
     assert!(
         conflict_command
             .attributes
-            .get("process.parent.pid")
+            .get("process.parent.id")
             .is_none()
     );
     let invalidated = conflict_output
@@ -282,9 +282,9 @@ fn command_invocation_parent_identity_conflict_invalidates_emitted_child_link() 
 #[test]
 fn command_invocation_pre_exec_parent_conflict_is_not_overwritten() {
     let mut runtime = runtime();
-    let first_parent = ProcessIdentity::new(WRAPPER_PID, WRAPPER_START_TICKS, WRAPPER_GENERATION);
-    let second_parent = ProcessIdentity::new(ROOT_PID, ROOT_START_TICKS, ROOT_GENERATION);
-    let child = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let first_parent = ProcessIdentity::new(WRAPPER_GENERATION);
+    let second_parent = ProcessIdentity::new(ROOT_GENERATION);
+    let child = ProcessIdentity::new(AGENT_GENERATION);
 
     runtime.observe_event(&exec_event(
         WRAPPER_EXEC_EVENT_ID,
@@ -327,7 +327,7 @@ fn command_invocation_pre_exec_parent_conflict_is_not_overwritten() {
             .map(String::as_str),
         Some("conflict")
     );
-    assert!(child_command.attributes.get("process.parent.pid").is_none());
+    assert!(child_command.attributes.get("process.parent.id").is_none());
     assert!(child_output.links.iter().all(|link| {
         link.role != SemanticActionLinkRole::CommandContainsCommandInvocation
             || link.child_action_id != child_command.action_id
@@ -337,7 +337,7 @@ fn command_invocation_pre_exec_parent_conflict_is_not_overwritten() {
 #[test]
 fn command_invocation_state_is_trace_scoped() {
     let mut runtime = runtime();
-    let process = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let process = ProcessIdentity::new(AGENT_GENERATION);
 
     runtime.observe_event(&exec_event(
         AGENT_EXEC_EVENT_ID,

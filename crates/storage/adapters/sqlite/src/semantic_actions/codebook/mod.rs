@@ -192,12 +192,6 @@ impl ActionStatusCodes {
         }
     }
 
-    pub(crate) fn code_from_str(self, value: &str) -> Result<i16, CodebookError> {
-        SemanticActionStatus::parse(value)
-            .map(|status| self.code(status))
-            .ok_or_else(|| CodebookError::unknown("semantic_action_status", value))
-    }
-
     pub(crate) fn decode(self, code: i64) -> Result<SemanticActionStatus, CodebookError> {
         let code = i16::try_from(code)
             .map_err(|_| CodebookError::unknown("semantic_action_status_code", code))?;
@@ -234,12 +228,6 @@ impl ActionCompletenessCodes {
             SemanticActionCompleteness::Partial => self.partial,
             SemanticActionCompleteness::Inferred => self.inferred,
         }
-    }
-
-    pub(crate) fn code_from_str(self, value: &str) -> Result<i16, CodebookError> {
-        SemanticActionCompleteness::parse(value)
-            .map(|completeness| self.code(completeness))
-            .ok_or_else(|| CodebookError::unknown("semantic_action_completeness", value))
     }
 
     pub(crate) fn decode(self, code: i64) -> Result<SemanticActionCompleteness, CodebookError> {
@@ -279,12 +267,6 @@ impl EvidenceKindCodes {
             SemanticEvidenceKind::PayloadAggregate => self.payload_aggregate,
             SemanticEvidenceKind::PayloadSegment => self.payload_segment,
         }
-    }
-
-    pub(crate) fn code_from_str(self, value: &str) -> Result<i16, CodebookError> {
-        SemanticEvidenceKind::parse(value)
-            .map(|kind| self.code(kind))
-            .ok_or_else(|| CodebookError::unknown("semantic_evidence_kind", value))
     }
 
     pub(crate) fn decode(self, code: i64) -> Result<SemanticEvidenceKind, CodebookError> {
@@ -506,12 +488,6 @@ impl LinkConfidenceCodes {
             SemanticActionLinkConfidence::Observed => self.observed,
             SemanticActionLinkConfidence::Derived => self.derived,
         }
-    }
-
-    pub(crate) fn code_from_str(self, value: &str) -> Result<i16, CodebookError> {
-        SemanticActionLinkConfidence::parse(value)
-            .map(|confidence| self.code(confidence))
-            .ok_or_else(|| CodebookError::unknown("semantic_action_link_confidence", value))
     }
 
     pub(crate) fn decode(self, code: i64) -> Result<SemanticActionLinkConfidence, CodebookError> {

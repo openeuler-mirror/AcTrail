@@ -123,7 +123,7 @@ static __always_inline struct actrail_suppressed_fd_value *lookup_suppressed_fd(
     __u32 pid,
     __u32 fd
 ) {
-    __u64 *generation = lookup_process_generation(pid);
+    __u64 *generation = lookup_process_start_time(pid);
     struct actrail_suppressed_fd_key key = {};
 
     if (!generation) {
@@ -237,7 +237,7 @@ static __always_inline int upsert_suppressed_fd_for_generation(
 }
 
 static __always_inline void delete_suppressed_fd(__u32 pid, __u32 fd) {
-    __u64 *generation = lookup_process_generation(pid);
+    __u64 *generation = lookup_process_start_time(pid);
 
     if (!generation) {
         return;
@@ -393,7 +393,7 @@ static __always_inline void suppressed_fd_dup_exit(
 ) {
     __u64 pid_tgid = current_pid_tgid();
     __u32 pid = pid_tgid >> 32;
-    __u64 *generation = lookup_process_generation(pid);
+    __u64 *generation = lookup_process_start_time(pid);
     struct actrail_pending_suppressed_fd_dup_op *op =
         bpf_map_lookup_elem(&pending_suppressed_fd_dup_ops, &pid_tgid);
     __u32 new_fd;

@@ -20,7 +20,7 @@ use super::test_support::*;
 #[test]
 fn llm_response_links_to_request_and_http_response_message() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
     let request_output = runtime.observe_payload_segment(&llm_payload_segment(agent.clone()));
     let request = request_output
         .actions
@@ -91,7 +91,7 @@ fn llm_response_links_to_request_and_http_response_message() {
 #[test]
 fn later_llm_request_does_not_link_to_previous_response() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
     runtime.observe_payload_segment(&llm_payload_segment(agent.clone()));
 
     let body = r#"{"model":"deepseek-chat","choices":[{"message":{"content":"first"}}]}"#;
@@ -143,7 +143,7 @@ fn later_llm_request_does_not_link_to_previous_response() {
 #[test]
 fn pending_outbound_request_blocks_response_from_pairing_with_previous_request() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
     let first_request_output = runtime.observe_payload_segment(&llm_payload_segment(agent.clone()));
     let first_call = first_request_output
         .actions
@@ -196,7 +196,7 @@ fn pending_outbound_request_blocks_response_from_pairing_with_previous_request()
 #[test]
 fn llm_call_pairs_response_by_observed_time_when_payload_sequences_are_direction_local() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
     let request_at = UNIX_EPOCH + Duration::from_millis(100);
     let response_at = UNIX_EPOCH + Duration::from_millis(250);
 
@@ -262,7 +262,7 @@ fn llm_call_pairs_response_by_observed_time_when_payload_sequences_are_direction
 #[test]
 fn pending_outbound_request_between_by_observed_time_blocks_previous_request() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
     let first_request_at = UNIX_EPOCH + Duration::from_millis(100);
     let pending_request_at = UNIX_EPOCH + Duration::from_millis(200);
     let response_at = UNIX_EPOCH + Duration::from_millis(250);
@@ -329,7 +329,7 @@ fn pending_outbound_request_between_by_observed_time_blocks_previous_request() {
 #[test]
 fn llm_request_does_not_link_preceding_connect_tunnel_messages() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
     let connect_output =
         runtime.observe_event(&http_connect_event(HTTP_CONNECT_EVENT_ID, agent.clone()));
     let connect = connect_output
@@ -366,7 +366,7 @@ fn llm_request_does_not_link_preceding_connect_tunnel_messages() {
 #[test]
 fn raw_llm_response_links_only_to_current_http_response_message() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
     let stale_response = http_response_event_with(
         EventId::new(30),
         agent.clone(),
@@ -452,7 +452,7 @@ fn raw_llm_response_links_only_to_current_http_response_message() {
 #[test]
 fn llm_call_ends_on_matching_http_error_response() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
     let request_output = runtime.observe_payload_segment(&llm_payload_segment(agent.clone()));
     let request_call = request_output
         .actions
@@ -510,7 +510,7 @@ fn llm_call_ends_on_matching_http_error_response() {
 #[test]
 fn llm_call_ends_on_http_error_with_direction_local_payload_sequence() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
     let request_at = UNIX_EPOCH + Duration::from_millis(100);
     let response_at = UNIX_EPOCH + Duration::from_millis(250);
     let trace_close_at = UNIX_EPOCH + Duration::from_secs(10);

@@ -18,15 +18,9 @@ use super::LiveSemanticActionRuntime;
 
 pub(super) const TRACE_ID: TraceId = TraceId::new(42);
 pub(super) const OTHER_TRACE_ID: TraceId = TraceId::new(43);
-pub(super) const ROOT_PID: u32 = 1000;
-pub(super) const WRAPPER_PID: u32 = 1001;
-pub(super) const AGENT_PID: u32 = 1002;
 pub(super) const ROOT_GENERATION: u64 = 7000;
 pub(super) const WRAPPER_GENERATION: u64 = 7001;
 pub(super) const AGENT_GENERATION: u64 = 7002;
-pub(super) const ROOT_START_TICKS: u64 = 5000;
-pub(super) const WRAPPER_START_TICKS: u64 = 5001;
-pub(super) const AGENT_START_TICKS: u64 = 5002;
 pub(super) const ROOT_EXEC_EVENT_ID: EventId = EventId::new(10);
 pub(super) const WRAPPER_EXEC_EVENT_ID: EventId = EventId::new(11);
 pub(super) const AGENT_EXEC_EVENT_ID: EventId = EventId::new(12);
@@ -82,7 +76,7 @@ pub(super) fn exec_event(
 ) -> DomainEvent {
     let mut metadata = BTreeMap::new();
     if let Some(parent) = &parent {
-        metadata.insert("ppid".to_string(), parent.pid.to_string());
+        metadata.insert("ppid".to_string(), parent.get().to_string());
     }
     metadata.insert("command_line".to_string(), executable.to_string());
     process_event(
@@ -139,8 +133,8 @@ pub(super) fn fork_event(
     parent: ProcessIdentity,
 ) -> DomainEvent {
     let metadata = BTreeMap::from([
-        ("ppid".to_string(), parent.pid.to_string()),
-        ("stat_ppid".to_string(), parent.pid.to_string()),
+        ("ppid".to_string(), parent.get().to_string()),
+        ("stat_ppid".to_string(), parent.get().to_string()),
     ]);
     process_event(
         event_id,

@@ -313,6 +313,9 @@ File ... mmap_shared path=/tmp/actrail-extended-observation.mmap result=0 ...
 期望输出：
 
 ```text
+verification_stage=load_attach status=passed
+verification_stage=workload_event_drain status=passed
+verification_stage=retained_observation status=passed
 live verification passed
 trace_id=trace-1
 process_events=exec,exit,fork

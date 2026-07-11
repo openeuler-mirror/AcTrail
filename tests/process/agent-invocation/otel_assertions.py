@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-BASH_MARKER = "ACTRAIL_AGENT_TREE_OK"
+PROCESS_ID_ATTR = "actrail.process.id"
+PARENT_PROCESS_ID_ATTR = "process.parent.id"
+CHILD_PROCESS_ID_ATTR = "agent.child.process_id"
 
 
 def require_claude_exec_span(document: dict) -> None:
@@ -10,11 +12,8 @@ def require_claude_exec_span(document: dict) -> None:
     if span is None:
         raise RuntimeError("missing claude process.exec span")
     attrs = span_attrs(span)
-    if attrs.get("seccomp_observed") != "true":
-        raise RuntimeError("claude process.exec span was not marked seccomp_observed=true")
-    command_line = attrs.get("command_line", "")
-    if "claude" not in command_line or "-p" not in command_line:
-        raise RuntimeError(f"claude command_line missing expected argv: {command_line}")
+    if not attrs.get(PROCESS_ID_ATTR) or not is_claude_executable(span, attrs):
+        raise RuntimeError("claude process.exec span has no logical process identity")
 
 
 def require_claude_llm_request_span(document: dict) -> None:
@@ -40,17 +39,20 @@ def require_agent_command_span(document: dict) -> None:
     attrs = span_attrs(span)
     exec_attrs = span_attrs(exec_span)
     llm_attrs = span_attrs(llm_span)
-    exec_pid = exec_attrs.get("process.pid", "")
-    parent_pid = attrs.get("process.parent.pid", "")
-    child_pid = attrs.get("agent.child.pid", "")
-    child = attrs.get("agent.child.command_line", "") or attrs.get("command.line", "")
+    exec_process_id = exec_attrs.get(PROCESS_ID_ATTR, "")
+    parent_process_id = attrs.get(PARENT_PROCESS_ID_ATTR, "")
+    child_process_id = attrs.get(CHILD_PROCESS_ID_ATTR, "")
+    child_executable = attrs.get("agent.child.executable", "")
     trigger = attrs.get("agent.invocation.trigger", "")
     evidence_id = attrs.get("agent.invocation.evidence_action_id", "")
     llm_action_id = llm_attrs.get("actrail.action.id", "")
-    if child_pid != exec_pid:
-        raise RuntimeError(f"agent command child pid {child_pid} does not match claude pid {exec_pid}")
-    if llm_attrs.get("process.pid", "") != child_pid:
-        raise RuntimeError("agent command evidence is not from the Claude child pid")
+    if child_process_id != exec_process_id:
+        raise RuntimeError(
+            "agent command child process ID "
+            f"{child_process_id} does not match Claude process ID {exec_process_id}"
+        )
+    if llm_attrs.get(PROCESS_ID_ATTR, "") != child_process_id:
+        raise RuntimeError("agent command evidence is not from the Claude child process")
     if trigger != "child_llm_request":
         raise RuntimeError(f"agent command trigger is not child_llm_request: {trigger}")
     if not evidence_id or evidence_id != llm_action_id:
@@ -58,10 +60,13 @@ def require_agent_command_span(document: dict) -> None:
             "agent command evidence_action_id does not point to Claude llm.request: "
             f"edge={evidence_id}; llm={llm_action_id}"
         )
-    if not parent_pid or parent_pid == child_pid:
-        raise RuntimeError(f"agent command parent pid is not a direct external launcher: {parent_pid}")
-    if "claude" not in child:
-        raise RuntimeError(f"agent command child is not claude: {child}")
+    if not parent_process_id or parent_process_id == child_process_id:
+        raise RuntimeError(
+            "agent command parent process is not a direct external launcher: "
+            f"{parent_process_id}"
+        )
+    if executable_basename(child_executable) != "claude":
+        raise RuntimeError(f"agent command child is not claude: {child_executable}")
 
 
 def evidence_is_complete(document: dict) -> bool:
@@ -74,41 +79,27 @@ def evidence_is_complete(document: dict) -> bool:
 
 
 def find_claude_exec_span(document: dict) -> dict | None:
-    fallback: list[dict] = []
+    agent_command = find_claude_agent_command_span(document)
+    child_process_id = (
+        span_attrs(agent_command).get(CHILD_PROCESS_ID_ATTR, "") if agent_command else ""
+    )
     for span in spans(document):
         attrs = span_attrs(span)
-        if attrs.get("actrail.action.kind") != "process.exec":
-            continue
-        if attrs.get("seccomp_observed") != "true":
-            continue
-        if not is_claude_prompt_exec(span, attrs):
-            continue
-        if is_claude_executable(span, attrs):
+        if (
+            attrs.get("actrail.action.kind") == "process.exec"
+            and attrs.get(PROCESS_ID_ATTR) == child_process_id
+            and is_claude_executable(span, attrs)
+        ):
             return span
-        fallback.append(span)
-    for span in fallback:
+    for span in spans(document):
         attrs = span_attrs(span)
-        if has_llm_request_for_pid(document, attrs.get("process.pid", "")):
+        if (
+            attrs.get("actrail.action.kind") == "process.exec"
+            and attrs.get("agent.identity.status") == "observed"
+            and is_claude_executable(span, attrs)
+        ):
             return span
-    if fallback:
-        return fallback[0]
     return None
-
-
-def is_claude_prompt_exec(span: dict, attrs: dict[str, str]) -> bool:
-    command_line = attrs.get("command_line", "")
-    argv = attrs.get("argv", "")
-    if "-p" not in command_line and "\n-p\n" not in argv:
-        return False
-    executable_candidates = [
-        span.get("name", ""),
-        attrs.get("process.executable", ""),
-        attrs.get("executable", ""),
-        attrs.get("exec.path", ""),
-    ]
-    if any(executable_basename(value) == "claude" for value in executable_candidates):
-        return True
-    return "\nclaude\n-p" in argv or "/claude\n-p" in argv
 
 
 def is_claude_executable(span: dict, attrs: dict[str, str]) -> bool:
@@ -121,26 +112,16 @@ def is_claude_executable(span: dict, attrs: dict[str, str]) -> bool:
     return any(executable_basename(value) == "claude" for value in executable_candidates)
 
 
-def has_llm_request_for_pid(document: dict, pid: str) -> bool:
-    if not pid:
-        return False
-    for span in spans(document):
-        attrs = span_attrs(span)
-        if attrs.get("actrail.action.kind") == "llm.request" and attrs.get("process.pid") == pid:
-            return True
-    return False
-
-
 def find_claude_llm_request_span(document: dict) -> dict | None:
     exec_span = find_claude_exec_span(document)
     if exec_span is None:
         return None
-    exec_pid = span_attrs(exec_span).get("process.pid", "")
+    exec_process_id = span_attrs(exec_span).get(PROCESS_ID_ATTR, "")
     for span in spans(document):
         attrs = span_attrs(span)
         if attrs.get("actrail.action.kind") != "llm.request":
             continue
-        if attrs.get("process.pid") == exec_pid:
+        if attrs.get(PROCESS_ID_ATTR) == exec_process_id:
             return span
     return None
 
@@ -149,7 +130,7 @@ def find_claude_bash_command_span(document: dict) -> dict | None:
     exec_span = find_claude_exec_span(document)
     if exec_span is None:
         return None
-    exec_pid = span_attrs(exec_span).get("process.pid", "")
+    exec_process_id = span_attrs(exec_span).get(PROCESS_ID_ATTR, "")
     for span in spans(document):
         attrs = span_attrs(span)
         if attrs.get("actrail.action.kind") != "command.invocation":
@@ -158,15 +139,12 @@ def find_claude_bash_command_span(document: dict) -> dict | None:
             continue
         if attrs.get("actrail.action.completeness") != "complete":
             continue
-        if attrs.get("process.parent.pid") != exec_pid:
-            continue
-        command_line = attrs.get("command.line", "")
-        if BASH_MARKER not in command_line or "printf" not in command_line:
+        if attrs.get(PARENT_PROCESS_ID_ATTR) != exec_process_id:
             continue
         executable = executable_basename(
             attrs.get("process.executable", "") or attrs.get("executable", "")
         )
-        if executable in {"bash", "sh"} or "bash -c" in command_line or "sh -c" in command_line:
+        if executable in {"bash", "sh"}:
             return span
     return None
 
@@ -179,10 +157,9 @@ def find_claude_agent_command_span(document: dict) -> dict | None:
         if attrs.get("invocation.kind") != "agent":
             continue
         child_executable = attrs.get("agent.child.executable", "")
-        child_command = attrs.get("agent.child.command_line", "") or attrs.get("command.line", "")
         if executable_basename(child_executable) != "claude":
             continue
-        if "-p" not in child_command:
+        if not attrs.get(CHILD_PROCESS_ID_ATTR):
             continue
         return span
     return None

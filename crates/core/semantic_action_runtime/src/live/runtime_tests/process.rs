@@ -16,7 +16,7 @@ const STRUCTURED_REQUEST_SEQUENCE: u64 = 800;
 #[test]
 fn process_exec_alone_does_not_mark_agent_identity() {
     let mut runtime = runtime();
-    let process = ProcessIdentity::new(ROOT_PID, ROOT_START_TICKS, ROOT_GENERATION);
+    let process = ProcessIdentity::new(ROOT_GENERATION);
     let output = runtime.observe_event(&exec_event(
         ROOT_EXEC_EVENT_ID,
         process.clone(),
@@ -83,9 +83,9 @@ fn process_exec_alone_does_not_mark_agent_identity() {
 #[test]
 fn llm_request_marks_child_agent_and_upgrades_only_direct_edge() {
     let mut runtime = runtime();
-    let root = ProcessIdentity::new(ROOT_PID, ROOT_START_TICKS, ROOT_GENERATION);
-    let wrapper = ProcessIdentity::new(WRAPPER_PID, WRAPPER_START_TICKS, WRAPPER_GENERATION);
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let root = ProcessIdentity::new(ROOT_GENERATION);
+    let wrapper = ProcessIdentity::new(WRAPPER_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
 
     runtime.observe_event(&exec_event(
         ROOT_EXEC_EVENT_ID,
@@ -133,12 +133,12 @@ fn llm_request_marks_child_agent_and_upgrades_only_direct_edge() {
         .find(|action| action.kind == SemanticActionKind::CommandInvocation)
         .expect("LLM evidence should label the child command.invocation as agent");
     assert_eq!(
-        command.attributes.get("process.parent.pid").cloned(),
-        Some(WRAPPER_PID.to_string())
+        command.attributes.get("process.parent.id").cloned(),
+        Some(wrapper.get().to_string())
     );
     assert_eq!(
-        command.attributes.get("agent.child.pid").cloned(),
-        Some(AGENT_PID.to_string())
+        command.attributes.get("agent.child.process_id").cloned(),
+        Some(agent.get().to_string())
     );
     assert_eq!(
         command
@@ -169,8 +169,8 @@ fn llm_request_marks_child_agent_and_upgrades_only_direct_edge() {
 #[test]
 fn structured_json_sse_request_marks_child_agent_invocation() {
     let mut runtime = runtime();
-    let wrapper = ProcessIdentity::new(WRAPPER_PID, WRAPPER_START_TICKS, WRAPPER_GENERATION);
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let wrapper = ProcessIdentity::new(WRAPPER_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
 
     runtime.observe_event(&exec_event(
         WRAPPER_EXEC_EVENT_ID,
@@ -245,8 +245,8 @@ fn structured_json_sse_request_bytes() -> Vec<u8> {
 #[test]
 fn llm_request_labels_late_exec_command_as_agent() {
     let mut runtime = runtime();
-    let parent = ProcessIdentity::new(WRAPPER_PID, WRAPPER_START_TICKS, WRAPPER_GENERATION);
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let parent = ProcessIdentity::new(WRAPPER_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
 
     runtime.observe_event(&exec_event(
         WRAPPER_EXEC_EVENT_ID,
@@ -285,8 +285,8 @@ fn llm_request_labels_late_exec_command_as_agent() {
         .find(|action| action.kind == SemanticActionKind::CommandInvocation)
         .expect("late exec should project a command.invocation");
     assert_eq!(
-        command.attributes.get("process.parent.pid").cloned(),
-        Some(parent.pid.to_string())
+        command.attributes.get("process.parent.id").cloned(),
+        Some(parent.get().to_string())
     );
     assert_eq!(
         command
@@ -302,7 +302,7 @@ fn llm_request_labels_late_exec_command_as_agent() {
             .all(|action| action.kind != SemanticActionKind::AgentInvocation)
     );
 
-    let conflicting_parent = ProcessIdentity::new(ROOT_PID, ROOT_START_TICKS, ROOT_GENERATION);
+    let conflicting_parent = ProcessIdentity::new(ROOT_GENERATION);
     let conflict_output = runtime.observe_event(&fork_event(
         AGENT_SECOND_FORK_EVENT_ID,
         command.process.clone(),
@@ -332,7 +332,7 @@ fn llm_request_labels_late_exec_command_as_agent() {
 #[test]
 fn llm_request_links_to_http_message_on_same_payload_aggregate() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
     let llm_output = runtime.observe_payload_segment(&llm_payload_segment(agent.clone()));
     let llm_request = llm_output
         .actions
@@ -363,8 +363,8 @@ fn llm_request_links_to_http_message_on_same_payload_aggregate() {
 #[test]
 fn agent_performed_action_links_child_command_invocation() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
-    let child = ProcessIdentity::new(WRAPPER_PID, WRAPPER_START_TICKS, WRAPPER_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
+    let child = ProcessIdentity::new(WRAPPER_GENERATION);
 
     runtime.observe_event(&exec_event(
         AGENT_EXEC_EVENT_ID,
@@ -437,9 +437,9 @@ fn agent_performed_action_links_child_command_invocation() {
     assert_eq!(
         refreshed_command
             .attributes
-            .get("process.parent.pid")
+            .get("process.parent.id")
             .cloned(),
-        Some(AGENT_PID.to_string())
+        Some(agent.get().to_string())
     );
     assert_eq!(
         link.attributes
@@ -448,7 +448,7 @@ fn agent_performed_action_links_child_command_invocation() {
         Some(SECOND_AGENT_ACTION_SEQUENCE)
     );
 
-    let conflicting_parent = ProcessIdentity::new(ROOT_PID, ROOT_START_TICKS, ROOT_GENERATION);
+    let conflicting_parent = ProcessIdentity::new(ROOT_GENERATION);
     let conflict_output = runtime.observe_event(&fork_event(
         AGENT_SECOND_FORK_EVENT_ID,
         child,
@@ -468,7 +468,7 @@ fn agent_performed_action_links_child_command_invocation() {
 #[test]
 fn agent_performed_action_links_process_fork_attempt() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
 
     runtime.observe_event(&exec_event(
         AGENT_EXEC_EVENT_ID,

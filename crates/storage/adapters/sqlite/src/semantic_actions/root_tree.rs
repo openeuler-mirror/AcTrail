@@ -290,11 +290,7 @@ fn command_fallback_child_counts(
          JOIN semantic_actions child
            ON child.trace_id = command.trace_id
           AND child.kind_code != ?
-          AND child.process_pid = command.process_pid
-          AND child.process_task_id IS command.process_task_id
-          AND child.process_start_ticks = command.process_start_ticks
-          AND child.process_pid_namespace IS command.process_pid_namespace
-          AND child.process_generation = command.process_generation
+          AND child.process_id = command.process_id
           AND child.start_time >= command.start_time
           AND (command.end_time IS NULL OR child.start_time <= command.end_time)
          WHERE command.trace_id = ?
@@ -371,11 +367,7 @@ fn root_candidate_predicate(display_parent_roles: &[&str]) -> String {
              WHERE command.trace_id = action.trace_id
                AND command.kind_code = ?
                AND command.action_key != action.action_key
-               AND command.process_pid = action.process_pid
-               AND command.process_task_id IS action.process_task_id
-               AND command.process_start_ticks = action.process_start_ticks
-               AND command.process_pid_namespace IS action.process_pid_namespace
-               AND command.process_generation = action.process_generation
+               AND command.process_id = action.process_id
                AND command.start_time <= action.start_time
                AND (command.end_time IS NULL OR action.start_time <= command.end_time)
                AND command.action_valid_code = 1

@@ -19,6 +19,7 @@
 
 #define ACTRAIL_BPF_FUNC_SEND_SIGNAL 109
 #define ACTRAIL_BPF_FUNC_PROBE_READ_USER 112
+#define ACTRAIL_BPF_FUNC_PROBE_READ_KERNEL 113
 #define ACTRAIL_BPF_FUNC_PROBE_READ_USER_STR 114
 #define ACTRAIL_BPF_FUNC_PROBE_READ_KERNEL_STR 115
 #define ACTRAIL_BPF_FUNC_GET_NS_CURRENT_PID_TGID 120
@@ -56,6 +57,8 @@ static long (*bpf_perf_event_output)(void *ctx, void *map, __u64 flags, void *da
 static long (*bpf_send_signal)(__u32 sig) = (void *)ACTRAIL_BPF_FUNC_SEND_SIGNAL;
 static long (*bpf_probe_read_user)(void *dst, __u32 size, const void *unsafe_ptr) =
     (void *)ACTRAIL_BPF_FUNC_PROBE_READ_USER;
+static long (*bpf_probe_read_kernel)(void *dst, __u32 size, const void *unsafe_ptr) =
+    (void *)ACTRAIL_BPF_FUNC_PROBE_READ_KERNEL;
 static long (*bpf_probe_read_user_str)(void *dst, __u32 size, const void *unsafe_ptr) =
     (void *)ACTRAIL_BPF_FUNC_PROBE_READ_USER_STR;
 static long (*bpf_probe_read)(void *dst, __u32 size, const void *unsafe_ptr) =
@@ -68,6 +71,13 @@ static long (*bpf_get_ns_current_pid_tgid)(
     struct actrail_bpf_pidns_info *nsdata,
     __u32 size
 ) = (void *)ACTRAIL_BPF_FUNC_GET_NS_CURRENT_PID_TGID;
+
+#define ACTRAIL_CORE_READ(dst, source, field) \
+    bpf_probe_read_kernel( \
+        (dst), \
+        sizeof(*(dst)), \
+        __builtin_preserve_access_index(&(source)->field) \
+    )
 
 #ifndef BPF_ANY
 #define BPF_ANY 0

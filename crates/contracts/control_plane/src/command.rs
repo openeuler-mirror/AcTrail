@@ -2,6 +2,7 @@
 
 use std::collections::BTreeSet;
 use std::os::fd::RawFd;
+use std::path::PathBuf;
 
 use model_core::ids::{ProfileName, RequestId, TraceId, TraceName};
 use model_core::process::{InitialSuppressedFd, NamespaceIdentity};
@@ -48,6 +49,12 @@ pub struct ResolveLaunchPermissionsCommand {
     pub seccomp_notify: DeploymentPermissionMode,
     pub seccomp_notify_available: bool,
     pub seccomp_notify_detail: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolveLaunchTlsPlanCommand {
+    pub request_id: RequestId,
+    pub binary: PathBuf,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -122,6 +129,7 @@ pub struct PluginCommandCommand {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ControlCommand {
     ResolveLaunchPermissions(ResolveLaunchPermissionsCommand),
+    ResolveLaunchTlsPlan(ResolveLaunchTlsPlanCommand),
     TrackAdd(TrackAddCommand),
     RegisterSeccompListener(RegisterSeccompListenerCommand),
     TrackRemove(TrackRemoveCommand),

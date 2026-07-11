@@ -6,23 +6,25 @@ use std::path::PathBuf;
 use config_core::daemon::{
     DisabledOrPath, PayloadTlsConfig, PayloadTlsLibraryPath, PayloadTlsSyncRuntimeLibraryPath,
 };
+use model_core::ids::RequestId;
 use model_core::ids::TraceId;
 use tls_payload_sync::{
     EventFilter, LibcFamily, RedactionMode, RuntimeEnvConfig, RuntimeFlowControlConfig,
-    RuntimeLibraryPath, RuntimeLibrarySet, audit_bind_now_env, audit_env_value_for_libraries,
-    audit_libraries_for_plans, launch_command_for_plan, preload_env_value_for_libraries,
-    resolve_target_runtime, runtime_env_for_plans, runtime_library_envs, runtime_library_set,
-    validate_native_backend_plan,
+    RuntimeLibraryPath, RuntimeLibrarySet, RuntimePlanDescriptor, audit_bind_now_env,
+    audit_env_value_for_libraries, launch_command_for_plan_descriptor,
+    preload_env_value_for_libraries, resolve_program_path, resolve_target_runtime,
+    runtime_env_for_plan_descriptors, runtime_library_envs, runtime_library_set,
 };
-use tls_probe_point_finder::ProbePointPlan;
-use tls_probe_point_finder::fast::{ArchFilter, FastProbeRequest, ProviderFilter, SourceFilter};
 
 use super::java_agent::{java_agent_env_required, maybe_append_java_agent_env};
 use super::suppress::InheritableSuppressedFd;
+use super::timing::LaunchTiming;
+use crate::tls_plan::{QueriedLaunchTlsPlan, query_launch_tls_plan};
+use crate::transport::ControlClientPort;
 
 pub(super) struct SyncLaunch {
     pub(super) command: Vec<OsString>,
-    plans: Vec<ProbePointPlan>,
+    plans: Vec<RuntimePlanDescriptor>,
     runtime_libraries: RuntimeLibrarySet,
     initial_runtime_family: LibcFamily,
     preload_libraries: Vec<PathBuf>,
@@ -31,36 +33,100 @@ pub(super) struct SyncLaunch {
 }
 
 pub(super) fn sync_launch(
+    client: &mut impl ControlClientPort,
+    request_id: RequestId,
     argv: Vec<String>,
     config: &PayloadTlsConfig,
     agent_commands: &[String],
+    timing: &mut LaunchTiming,
 ) -> Result<SyncLaunch, String> {
     if argv.is_empty() {
         return Err("launch requires a command after --".to_string());
     }
     validate_resolver_inputs(config)?;
+    timing.mark("sync.validate_resolver_inputs");
     let raw_command = argv.into_iter().map(OsString::from).collect::<Vec<_>>();
-    let (command, launch_plan) = match resolve_native_plan(&raw_command, config) {
+    let (command, launch_plan) = match resolve_daemon_plan(client, request_id, &raw_command, config)
+    {
         Ok(plan) => {
-            let command =
-                launch_command_for_plan(&raw_command, &plan).map_err(|error| error.to_string())?;
+            let command = launch_command_for_plan_descriptor(&raw_command, &plan.descriptor)
+                .map_err(|error| error.to_string())?;
+            timing.mark_detail(
+                "sync.resolve_launch_plan",
+                format_args!(
+                    "result=ok provider={} source={} binary={} cache={} daemon_elapsed_us={}",
+                    plan.descriptor.provider,
+                    plan.source,
+                    plan.descriptor.binary.display(),
+                    if plan.cache_hit { "hit" } else { "miss" },
+                    plan.resolve_elapsed_micros
+                ),
+            );
             (command, Some(plan))
         }
-        Err(_) => (raw_command, None),
+        Err(error) => {
+            timing.mark_detail(
+                "sync.resolve_launch_plan",
+                format_args!("result=miss error={error}"),
+            );
+            (raw_command, None)
+        }
     };
     let runtime_libraries = runtime_libraries(config)?;
+    timing.mark_detail(
+        "sync.runtime_libraries",
+        format_args!(
+            "glibc={} musl={}",
+            runtime_libraries.glibc.display(),
+            runtime_libraries
+                .musl
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "none".to_string())
+        ),
+    );
     let initial_runtime_family = initial_runtime_family(&command)?;
+    timing.mark_detail(
+        "sync.initial_runtime_family",
+        format_args!("family={}", initial_runtime_family.as_str()),
+    );
     let preload_libraries = sync_preload_libraries(&runtime_libraries, initial_runtime_family)?;
+    timing.mark_detail(
+        "sync.preload_libraries",
+        format_args!("count={}", preload_libraries.len()),
+    );
     let audit_libraries = if initial_runtime_family == LibcFamily::Glibc {
         launch_plan
             .as_ref()
-            .map(|plan| audit_libraries_for_plans(&preload_libraries, std::slice::from_ref(plan)))
+            .map(|plan| audit_libraries_for_plan_source(&preload_libraries, &plan.source))
             .unwrap_or_default()
     } else {
         Vec::new()
     };
-    let plans = bundle_plans(launch_plan, config, agent_commands);
+    timing.mark_detail(
+        "sync.audit_libraries",
+        format_args!("count={}", audit_libraries.len()),
+    );
+    let plans = bundle_plans(
+        client,
+        request_id,
+        launch_plan.as_ref(),
+        config,
+        agent_commands,
+    );
+    timing.mark_detail(
+        "sync.bundle_plans",
+        format_args!(
+            "count={} agent_command_count={}",
+            plans.len(),
+            agent_commands.len()
+        ),
+    );
     let java_agent_env_required = java_agent_env_required(config);
+    timing.mark_detail(
+        "sync.java_agent_env_required",
+        format_args!("enabled={java_agent_env_required}"),
+    );
     Ok(SyncLaunch {
         command,
         plans,
@@ -78,10 +144,12 @@ pub(super) fn sync_launch_envs(
     socket_max_segment_bytes: u32,
     launch: &SyncLaunch,
     sync_event_fd: Option<&InheritableSuppressedFd>,
+    timing: &mut LaunchTiming,
 ) -> Result<Vec<(OsString, OsString)>, String> {
     let sync_event_fd = sync_event_fd
         .ok_or_else(|| "TLS sync launch requires an inherited event fd".to_string())?;
-    let mut envs = runtime_env_for_plans(
+    timing.mark("sync_env.require_event_fd");
+    let mut envs = runtime_env_for_plan_descriptors(
         &RuntimeEnvConfig {
             rules: Vec::new(),
             max_payload_bytes: usize::try_from(config.max_operation_bytes)
@@ -112,12 +180,24 @@ pub(super) fn sync_launch_envs(
         &launch.plans,
     )
     .map_err(|error| error.to_string())?;
+    timing.mark_detail(
+        "sync_env.runtime_env_for_plans",
+        format_args!("plan_count={} env_count={}", launch.plans.len(), envs.len()),
+    );
     envs.extend(runtime_library_envs(&launch.runtime_libraries));
+    timing.mark_detail(
+        "sync_env.runtime_library_envs",
+        format_args!("env_count={}", envs.len()),
+    );
     envs.push((
         OsString::from("LD_PRELOAD"),
         preload_env_value_for_libraries(&launch.preload_libraries)
             .map_err(|error| error.to_string())?,
     ));
+    timing.mark_detail(
+        "sync_env.ld_preload",
+        format_args!("env_count={}", envs.len()),
+    );
     let glibc_preload = vec![launch.runtime_libraries.glibc.clone()];
     if launch.initial_runtime_family == LibcFamily::Glibc {
         if let Some(env) =
@@ -133,12 +213,20 @@ pub(super) fn sync_launch_envs(
             envs.push(env);
         }
     }
+    timing.mark_detail(
+        "sync_env.runtime_dependency_paths",
+        format_args!("env_count={}", envs.len()),
+    );
     if let Some(env) =
         tls_payload_sync::runtime_dependency_library_path_prefix_glibc_env(&glibc_preload)
             .map_err(|error| error.to_string())?
     {
         envs.push(env);
     }
+    timing.mark_detail(
+        "sync_env.runtime_dependency_paths_glibc",
+        format_args!("env_count={}", envs.len()),
+    );
     if !launch.audit_libraries.is_empty() {
         envs.push((
             OsString::from("LD_AUDIT"),
@@ -149,43 +237,92 @@ pub(super) fn sync_launch_envs(
             envs.push(env);
         }
     }
+    timing.mark_detail("sync_env.audit", format_args!("env_count={}", envs.len()));
     maybe_append_java_agent_env(launch.java_agent_env_required, &mut envs)?;
+    timing.mark_detail(
+        "sync_env.java_agent",
+        format_args!("env_count={}", envs.len()),
+    );
     Ok(envs)
 }
 
 fn bundle_plans(
-    launch_plan: Option<ProbePointPlan>,
+    client: &mut impl ControlClientPort,
+    request_id: RequestId,
+    launch_plan: Option<&QueriedLaunchTlsPlan>,
     config: &PayloadTlsConfig,
     agent_commands: &[String],
-) -> Vec<ProbePointPlan> {
-    let mut plans = launch_plan.into_iter().collect::<Vec<_>>();
+) -> Vec<RuntimePlanDescriptor> {
+    let mut plans = launch_plan
+        .map(|plan| plan.descriptor.clone())
+        .into_iter()
+        .collect::<Vec<_>>();
     for command in agent_commands {
         let candidate = vec![OsString::from(command)];
-        let Ok(plan) = resolve_native_plan(&candidate, config) else {
+        let Ok(plan) = resolve_daemon_plan(client, request_id, &candidate, config) else {
             continue;
         };
-        if contains_plan(&plans, &plan) {
+        if contains_plan(&plans, &plan.descriptor) {
             continue;
         }
-        plans.push(plan);
+        plans.push(plan.descriptor);
     }
     plans
 }
 
-fn resolve_native_plan(
+fn resolve_daemon_plan(
+    client: &mut impl ControlClientPort,
+    request_id: RequestId,
     command: &[OsString],
     config: &PayloadTlsConfig,
-) -> Result<ProbePointPlan, String> {
-    let plan = resolve_plan(command, config)?;
-    validate_native_backend_plan(&plan).map_err(|error| error.to_string())?;
-    Ok(plan)
+) -> Result<QueriedLaunchTlsPlan, String> {
+    match try_resolve_daemon_plan(client, request_id, command) {
+        Ok(plan) => Ok(plan),
+        Err(primary_error) => match &config.binary_path {
+            DisabledOrPath::Path(path) => {
+                query_launch_tls_plan(client, request_id, path)
+                    .map_err(|fallback_error| {
+                        format!(
+                            "launch command probe failed ({primary_error}); payload_tls_binary_path fallback failed ({fallback_error})"
+                        )
+                    })
+                    .and_then(|plan| {
+                        plan.ok_or_else(|| {
+                            format!(
+                                "launch command probe failed ({primary_error}); payload_tls_binary_path fallback did not return a plan"
+                            )
+                        })
+                    })
+            }
+            DisabledOrPath::Disabled => Err(primary_error),
+        },
+    }
 }
 
-fn contains_plan(plans: &[ProbePointPlan], candidate: &ProbePointPlan) -> bool {
-    let candidate_path = canonical_path(&candidate.binary.path);
+fn try_resolve_daemon_plan(
+    client: &mut impl ControlClientPort,
+    request_id: RequestId,
+    command: &[OsString],
+) -> Result<QueriedLaunchTlsPlan, String> {
+    let binary = resolve_command_binary(command)?;
+    query_launch_tls_plan(client, request_id, &binary)
+        .and_then(|plan| plan.ok_or_else(|| "daemon returned no TLS launch plan".to_string()))
+}
+
+fn resolve_command_binary(command: &[OsString]) -> Result<PathBuf, String> {
+    let Some(program) = command.first() else {
+        return Err("launch requires a command after --".to_string());
+    };
+    let path = std::env::var_os("PATH");
+    resolve_program_path(program, path.as_ref().map(|value| value.as_os_str()))
+        .map_err(|error| error.to_string())
+}
+
+fn contains_plan(plans: &[RuntimePlanDescriptor], candidate: &RuntimePlanDescriptor) -> bool {
+    let candidate_path = canonical_path(&candidate.binary);
     plans
         .iter()
-        .any(|plan| canonical_path(&plan.binary.path) == candidate_path)
+        .any(|plan| canonical_path(&plan.binary) == candidate_path)
 }
 
 fn sync_preload_libraries(
@@ -199,44 +336,16 @@ fn sync_preload_libraries(
     ])
 }
 
-fn canonical_path(path: &std::path::Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
-}
-
-fn resolve_plan(command: &[OsString], config: &PayloadTlsConfig) -> Result<ProbePointPlan, String> {
-    match try_resolve_plan(command, config) {
-        Ok(plan) => Ok(plan),
-        Err(primary_error) => match &config.binary_path {
-            DisabledOrPath::Path(path) => {
-                let fallback_command = vec![OsString::from(path.as_os_str())];
-                try_resolve_plan(&fallback_command, config).map_err(|fallback_error| {
-                    format!(
-                        "launch command probe failed ({primary_error}); payload_tls_binary_path fallback failed ({fallback_error})"
-                    )
-                })
-            }
-            DisabledOrPath::Disabled => Err(primary_error),
-        },
+fn audit_libraries_for_plan_source(runtime_libraries: &[PathBuf], source: &str) -> Vec<PathBuf> {
+    if source == "shared-library" {
+        runtime_libraries.to_vec()
+    } else {
+        Vec::new()
     }
 }
 
-fn try_resolve_plan(
-    command: &[OsString],
-    config: &PayloadTlsConfig,
-) -> Result<ProbePointPlan, String> {
-    let Some(program) = command.first() else {
-        return Err("launch requires a command after --".to_string());
-    };
-    tls_probe_point_finder::fast::resolve(FastProbeRequest {
-        binary: program.into(),
-        arch: ArchFilter::Auto,
-        provider: ProviderFilter::Auto,
-        source: SourceFilter::Auto,
-        match_limit: match_limit(config)?,
-        libraries: library_candidates(config),
-        library_search_dirs: Vec::new(),
-    })
-    .map_err(|error| error.to_string())
+fn canonical_path(path: &std::path::Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn runtime_libraries(config: &PayloadTlsConfig) -> Result<RuntimeLibrarySet, String> {

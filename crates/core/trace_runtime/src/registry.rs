@@ -9,7 +9,7 @@ use model_core::process::{ExitStatus, MembershipState, ProcessIdentity, ProcessM
 use model_core::trace::{TraceLifecycleState, TraceRecord};
 
 use crate::commands::{RootRemovalRequest, TrackTraceRequest};
-use crate::membership::{MembershipIndex, MembershipInsertResult, MembershipRefreshResult};
+use crate::membership::MembershipIndex;
 use crate::sensor_plan::{NegotiationFailure, SensorPlan};
 use crate::state_machine;
 
@@ -142,14 +142,7 @@ impl TraceRuntime {
             .traces
             .get_mut(&trace_id)
             .ok_or(RegistryError::TraceNotFound(trace_id))?;
-        if let MembershipInsertResult::PidReused { stale_identity } =
-            entry.memberships.insert(membership)
-        {
-            if let Some(stale) = entry.memberships.get_mut(&stale_identity) {
-                stale.mark_identity_stale();
-            }
-            state_machine::degrade_trace(&mut entry.trace);
-        }
+        entry.memberships.insert(membership);
         Ok(())
     }
 
@@ -179,7 +172,7 @@ impl TraceRuntime {
             parent.identity.clone(),
             observed_at,
         );
-        let _ = entry.memberships.insert(membership);
+        entry.memberships.insert(membership);
         Ok(())
     }
 
@@ -212,7 +205,7 @@ impl TraceRuntime {
             parent.identity.clone(),
             observed_at,
         );
-        let _ = entry.memberships.insert(membership);
+        entry.memberships.insert(membership);
         Ok(())
     }
 
@@ -291,40 +284,6 @@ impl TraceRuntime {
                 .cloned()
                 .map(|membership| (*trace_id, membership))
         })
-    }
-
-    pub fn find_membership_by_pid(&self, pid: u32) -> Option<(TraceId, ProcessMembership)> {
-        self.traces.iter().find_map(|(trace_id, entry)| {
-            entry
-                .memberships
-                .by_pid(pid)
-                .cloned()
-                .map(|membership| (*trace_id, membership))
-        })
-    }
-
-    pub fn refresh_process_identity(
-        &mut self,
-        refreshed_identity: ProcessIdentity,
-    ) -> Option<(TraceId, ProcessIdentity)> {
-        for (trace_id, entry) in &mut self.traces {
-            match entry
-                .memberships
-                .refresh_active_pid_identity(refreshed_identity.clone())
-            {
-                MembershipRefreshResult::Missing => {}
-                MembershipRefreshResult::Unchanged => {
-                    return Some((*trace_id, refreshed_identity));
-                }
-                MembershipRefreshResult::Refreshed { ref stale_identity } => {
-                    if entry.trace.root_process_identity == *stale_identity {
-                        entry.trace.root_process_identity = refreshed_identity.clone();
-                    }
-                    return Some((*trace_id, refreshed_identity));
-                }
-            }
-        }
-        None
     }
 
     pub fn list_trace_records(&self) -> Vec<&TraceRecord> {
@@ -427,7 +386,7 @@ mod tests {
     fn track_remove_keeps_trace_draining_when_descendant_exists() {
         let mut runtime = runtime();
         let trace_id = runtime.reserve_trace_id();
-        let root = ProcessIdentity::new(100, 1, 1);
+        let root = ProcessIdentity::new(1);
         let request = TrackTraceRequest {
             root_identity: root.clone(),
             root_container_id: None,
@@ -448,7 +407,7 @@ mod tests {
             .inherit_process(
                 trace_id,
                 &root,
-                ProcessIdentity::new(101, 2, 1),
+                ProcessIdentity::new(2),
                 SystemTime::UNIX_EPOCH,
             )
             .unwrap();
@@ -467,7 +426,7 @@ mod tests {
     fn root_exit_marks_trace_exited_without_descendants() {
         let mut runtime = runtime();
         let trace_id = runtime.reserve_trace_id();
-        let root = ProcessIdentity::new(100, 1, 1);
+        let root = ProcessIdentity::new(1);
         let request = TrackTraceRequest {
             root_identity: root.clone(),
             root_container_id: None,
@@ -498,37 +457,5 @@ mod tests {
 
         let entry = runtime.get_trace(trace_id).unwrap();
         assert_eq!(entry.trace.lifecycle_state, TraceLifecycleState::Exited);
-    }
-
-    #[test]
-    fn root_exec_refresh_updates_trace_root_identity() {
-        let mut runtime = runtime();
-        let trace_id = runtime.reserve_trace_id();
-        let root_before_exec = ProcessIdentity::new(100, 1, 1);
-        let root_after_exec = ProcessIdentity::new(100, 1, 2);
-        let request = TrackTraceRequest {
-            root_identity: root_before_exec.clone(),
-            root_container_id: None,
-            display_name: TraceName::new("agent"),
-            profile_snapshot: profile_snapshot(),
-            tags: BTreeSet::new(),
-            created_at: SystemTime::UNIX_EPOCH,
-        };
-        let plan = SensorPlan::negotiate(&request.profile_snapshot, &runtime.collectors).unwrap();
-
-        runtime
-            .create_starting_trace(trace_id, request, plan)
-            .unwrap();
-        runtime
-            .activate_trace(trace_id, SystemTime::UNIX_EPOCH)
-            .unwrap();
-        runtime.refresh_process_identity(root_after_exec.clone());
-
-        let entry = runtime.get_trace(trace_id).unwrap();
-        assert_eq!(entry.trace.root_process_identity, root_after_exec);
-        assert_eq!(
-            entry.memberships.get(&root_before_exec).unwrap().state,
-            model_core::process::MembershipState::IdentityStale
-        );
     }
 }

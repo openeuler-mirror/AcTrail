@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use model_core::event::{DomainEvent, EventPayload, FilePayload};
-use semantic_action::{SemanticAction, attr_keys as attrs};
+use semantic_action::{SemanticAction, SemanticEvidenceKind, attr_keys as attrs, evidence_roles};
 
 pub(super) fn observed(events: &[DomainEvent], actions: &[SemanticAction]) -> HashSet<String> {
     let mut observed = events
@@ -15,6 +15,12 @@ pub(super) fn observed(events: &[DomainEvent], actions: &[SemanticAction]) -> Ha
         })
         .collect::<HashSet<_>>();
     for action in actions {
+        if action.evidence.iter().any(|evidence| {
+            evidence.kind == SemanticEvidenceKind::Event
+                && evidence.role == evidence_roles::file::OPEN
+        }) {
+            observed.insert("open".to_string());
+        }
         match action.kind.as_str() {
             "file.read" => {
                 observed.insert("read".to_string());

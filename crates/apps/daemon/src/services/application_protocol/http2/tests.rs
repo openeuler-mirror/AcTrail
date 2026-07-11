@@ -191,7 +191,7 @@ fn payload_segment_for_trace(
         segment_id: PayloadSegmentId::new(0),
         trace_id,
         observed_at: SystemTime::UNIX_EPOCH,
-        process: ProcessIdentity::new(std::process::id(), 1, 1),
+        process: ProcessIdentity::new(1),
         source_boundary: PayloadSourceBoundary::TlsUserSpace,
         content_state: PayloadContentState::Plaintext,
         direction,

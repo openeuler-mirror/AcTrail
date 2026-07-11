@@ -29,8 +29,7 @@ use write::{action_row_matches, link_valid_code, replace_action_evidence, write_
 
 pub(super) const ACTION_SELECT_COLUMNS: &str = "ids.action_id AS action_id,
     action.trace_id, action.kind_code, action.title, action.start_time, action.end_time,
-    action.process_pid, action.process_task_id, action.process_start_ticks,
-    action.process_pid_namespace, action.process_generation, action.status_code,
+    action.process_id, action.status_code,
     action.completeness_code, action.confidence_millis, action.attributes AS legacy_attributes,
     action_attrs.encoding_code AS attributes_encoding_code,
     action_attrs.uncompressed_bytes AS attributes_uncompressed_bytes,

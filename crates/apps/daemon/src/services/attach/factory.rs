@@ -9,6 +9,7 @@ use config_core::daemon::{
 use ebpf_collector::EbpfCollector;
 use ebpf_collector::procfs::{ProcfsIdentityReader, ProcfsTreeSnapshotter};
 use export_core::ExportRuntime;
+use process_identity::ProcessIdentityManager;
 use provider_label::ProviderClassifier;
 use semantic_action_runtime::LiveSemanticActionRuntime;
 use storage_core::StorageBackend;
@@ -81,7 +82,7 @@ impl StorageAttachService {
 
     pub(in crate::services) fn new_with_provider_classifier(
         profiles: DaemonProfileRegistry,
-        storage: Box<dyn StorageBackend>,
+        mut storage: Box<dyn StorageBackend>,
         ebpf_config: EbpfCollectorConfig,
         payload_config: PayloadConfig,
         diagnostic_log_level: DiagnosticLogLevel,
@@ -102,6 +103,19 @@ impl StorageAttachService {
         provider_classifier: Box<dyn ProviderClassifier>,
         provider_classification_enabled: bool,
     ) -> Result<Self, control_contract::reply::ControlError> {
+        let process_records = storage.list_process_records().map_err(storage_error)?;
+        let block_size = process_id_block_size()?;
+        let (block_start, block_end) = storage
+            .reserve_process_id_block(block_size)
+            .map_err(storage_error)?;
+        let process_registry =
+            ProcessIdentityManager::with_reserved_block(block_start, block_end, process_records)
+                .map_err(|error| {
+                    control_contract::reply::ControlError::new(
+                        "process_registry_init",
+                        format!("{error:?}"),
+                    )
+                })?;
         let payload_tls_enabled = payload_config.tls.enabled;
         let payload_tls_redaction_policy = payload_config.tls.redaction_policy;
         let payload_tls_retention_max_bytes_per_trace =
@@ -148,11 +162,13 @@ impl StorageAttachService {
             profiles,
             launch_seccomp_requirements,
             storage,
+            process_registry,
             collector: EbpfCollector::new(
                 ebpf_config,
                 payload_config,
                 file_observation.bulk_read.fast_path.clone(),
             ),
+            host_ebpf_preflight: Default::default(),
             identity_reader: ProcfsIdentityReader,
             snapshotter: ProcfsTreeSnapshotter,
             next_event_id: 0,
@@ -211,4 +227,31 @@ impl StorageAttachService {
             provider_classification_enabled,
         })
     }
+}
+
+pub(super) const DEFAULT_PROCESS_ID_BLOCK_SIZE: u64 = 4096;
+const PROCESS_ID_BLOCK_SIZE_ENV: &str = "ACTRAIL_PROCESS_ID_BLOCK_SIZE";
+
+pub(super) fn process_id_block_size() -> Result<u64, control_contract::reply::ControlError> {
+    let Some(value) = std::env::var_os(PROCESS_ID_BLOCK_SIZE_ENV) else {
+        return Ok(DEFAULT_PROCESS_ID_BLOCK_SIZE);
+    };
+    let value = value.to_string_lossy();
+    let parsed = value.parse::<u64>().map_err(|error| {
+        control_contract::reply::ControlError::new(
+            "process_id_block_size",
+            format!("invalid {PROCESS_ID_BLOCK_SIZE_ENV}={value}: {error}"),
+        )
+    })?;
+    if parsed == 0 {
+        return Err(control_contract::reply::ControlError::new(
+            "process_id_block_size",
+            format!("{PROCESS_ID_BLOCK_SIZE_ENV} must be greater than zero"),
+        ));
+    }
+    Ok(parsed)
+}
+
+fn storage_error(error: storage_core::StorageError) -> control_contract::reply::ControlError {
+    control_contract::reply::ControlError::new(error.stage, error.message)
 }
