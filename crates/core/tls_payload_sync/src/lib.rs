@@ -18,7 +18,8 @@ pub use env::{
     ENV_PLAN_BUNDLE, ENV_POINTS, ENV_PROVIDER, ENV_REDACTION, ENV_RULES, ENV_RUNTIME_GLIBC_LIBRARY,
     ENV_RUNTIME_MUSL_LIBRARY, ENV_SYSTEM_LIBRARY_DIRS, ENV_TRACE_ID, EventFilter,
     RUNTIME_GLIBC_LIBRARY_NAME, RUNTIME_MUSL_LIBRARY_NAME, RedactionMode, RuntimeEnvConfig,
-    RuntimeFlowControlConfig, runtime_env, runtime_env_for_plans,
+    RuntimeFlowControlConfig, runtime_env, runtime_env_for_plan_descriptors, runtime_env_for_plans,
+    runtime_plan_descriptor_bundle,
 };
 pub use error::{SyncError, SyncResult};
 pub use event::{
@@ -28,9 +29,10 @@ pub use event::{
 pub use launch::{
     RuntimeLibraryPath, RuntimeLibrarySet, audit_bind_now_env, audit_env_value,
     audit_env_value_for_libraries, audit_libraries_for_plans, launch_command_for_plan,
-    preload_env_value, preload_env_value_for_libraries, run_with_preload,
-    run_with_preload_libraries, run_with_runtime_libraries, runtime_dependency_library_path_env,
-    runtime_dependency_library_path_prefix_env, runtime_dependency_library_path_prefix_glibc_env,
+    launch_command_for_plan_descriptor, preload_env_value, preload_env_value_for_libraries,
+    run_with_preload, run_with_preload_libraries, run_with_runtime_libraries,
+    runtime_dependency_library_path_env, runtime_dependency_library_path_prefix_env,
+    runtime_dependency_library_path_prefix_glibc_env,
     runtime_dependency_library_path_prefix_musl_env, runtime_dependency_report,
     runtime_library_envs, runtime_library_path, runtime_library_set, runtime_musl_library_path,
     validate_native_backend_plan,

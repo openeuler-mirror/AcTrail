@@ -7,8 +7,8 @@ use super::test_support::*;
 #[test]
 fn command_invocation_links_child_command_invocation() {
     let mut runtime = runtime();
-    let parent = ProcessIdentity::new(WRAPPER_PID, WRAPPER_START_TICKS, WRAPPER_GENERATION);
-    let child = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let parent = ProcessIdentity::new(WRAPPER_GENERATION);
+    let child = ProcessIdentity::new(AGENT_GENERATION);
 
     let parent_output = runtime.observe_event(&exec_event(
         WRAPPER_EXEC_EVENT_ID,
@@ -57,8 +57,8 @@ fn command_invocation_links_child_command_invocation() {
 #[test]
 fn command_invocation_links_pending_child_command_invocation() {
     let mut runtime = runtime();
-    let parent = ProcessIdentity::new(WRAPPER_PID, WRAPPER_START_TICKS, WRAPPER_GENERATION);
-    let child = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let parent = ProcessIdentity::new(WRAPPER_GENERATION);
+    let child = ProcessIdentity::new(AGENT_GENERATION);
 
     runtime.observe_event(&fork_event(
         AGENT_FORK_EVENT_ID,
@@ -107,8 +107,8 @@ fn command_invocation_links_pending_child_command_invocation() {
 #[test]
 fn command_invocation_links_when_fork_parent_arrives_after_exec() {
     let mut runtime = runtime();
-    let parent = ProcessIdentity::new(WRAPPER_PID, WRAPPER_START_TICKS, WRAPPER_GENERATION);
-    let child = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let parent = ProcessIdentity::new(WRAPPER_GENERATION);
+    let child = ProcessIdentity::new(AGENT_GENERATION);
 
     let parent_output = runtime.observe_event(&exec_event(
         WRAPPER_EXEC_EVENT_ID,
@@ -126,7 +126,7 @@ fn command_invocation_links_when_fork_parent_arrives_after_exec() {
     if let EventPayload::Process(payload) = &mut child_exec.payload {
         payload
             .metadata
-            .insert("ppid".to_string(), parent.pid.to_string());
+            .insert("ppid".to_string(), parent.get().to_string());
     }
     let child_exec_output = runtime.observe_event(&child_exec);
     let child_command = child_exec_output
@@ -172,9 +172,9 @@ fn command_invocation_links_when_fork_parent_arrives_after_exec() {
     assert_eq!(
         refreshed_child_command
             .attributes
-            .get("process.parent.pid")
+            .get("process.parent.id")
             .cloned(),
-        Some(parent.pid.to_string())
+        Some(parent.get().to_string())
     );
     assert!(duplicate_exec_output.links.iter().all(|link| {
         link.role != SemanticActionLinkRole::CommandContainsCommandInvocation
@@ -185,8 +185,8 @@ fn command_invocation_links_when_fork_parent_arrives_after_exec() {
 #[test]
 fn command_invocation_links_when_fork_parent_arrives_before_exec() {
     let mut runtime = runtime();
-    let parent = ProcessIdentity::new(WRAPPER_PID, WRAPPER_START_TICKS, WRAPPER_GENERATION);
-    let child = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let parent = ProcessIdentity::new(WRAPPER_GENERATION);
+    let child = ProcessIdentity::new(AGENT_GENERATION);
 
     let parent_output = runtime.observe_event(&exec_event(
         WRAPPER_EXEC_EVENT_ID,
@@ -227,8 +227,8 @@ fn command_invocation_links_when_fork_parent_arrives_before_exec() {
 #[test]
 fn command_invocation_labels_child_agent_and_contains_llm_call() {
     let mut runtime = runtime();
-    let parent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
-    let child = ProcessIdentity::new(WRAPPER_PID, WRAPPER_START_TICKS, WRAPPER_GENERATION);
+    let parent = ProcessIdentity::new(AGENT_GENERATION);
+    let child = ProcessIdentity::new(WRAPPER_GENERATION);
 
     runtime.observe_event(&exec_event(
         AGENT_EXEC_EVENT_ID,
@@ -276,8 +276,8 @@ fn command_invocation_labels_child_agent_and_contains_llm_call() {
         .find(|action| action.kind == SemanticActionKind::CommandInvocation)
         .expect("child LLM request should label the child command invocation");
     assert_eq!(
-        command.attributes.get("process.parent.pid").cloned(),
-        Some(parent.pid.to_string())
+        command.attributes.get("process.parent.id").cloned(),
+        Some(parent.get().to_string())
     );
     assert_eq!(
         command

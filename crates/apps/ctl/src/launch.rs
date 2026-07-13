@@ -12,6 +12,8 @@ pub(crate) mod seccomp;
 mod suppress;
 #[path = "launch/sync.rs"]
 mod sync;
+#[path = "launch/timing.rs"]
+mod timing;
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -42,6 +44,7 @@ use permission_policy::{
 use seccomp::{SeccompSetup, register_listener};
 use suppress::InheritableSuppressedFd;
 use sync::{SyncLaunch, sync_launch, sync_launch_envs};
+use timing::LaunchTiming;
 
 use crate::platform_probe::{
     LaunchPlatformReport, print_permission_decision, probe_seccomp_notify_capability,
@@ -72,9 +75,24 @@ pub(crate) fn run_launch(
     request_id: RequestId,
     request: LaunchRequest,
 ) -> Result<i32, String> {
+    let mut timing = LaunchTiming::from_env();
+    timing.mark("start");
     let tls_sync_enabled =
         request.payload_tls_config.enabled && request.payload_tls_config.capture_backend.is_sync();
+    timing.mark_detail(
+        "classify_launch",
+        format_args!("tls_sync_enabled={tls_sync_enabled}"),
+    );
     let probe = run_platform_probe_from_launch(&request);
+    timing.mark_detail(
+        "platform_probe",
+        format_args!(
+            "seccomp_notify_available={} tls_sync_socket={} tls_sync_runtime_library={}",
+            probe.seccomp_notify_available(),
+            probe.tls_sync_socket.available,
+            probe.tls_sync_runtime_library.available
+        ),
+    );
     let permission_reply = client
         .send(ControlCommand::ResolveLaunchPermissions(
             ResolveLaunchPermissionsCommand {
@@ -89,6 +107,7 @@ pub(crate) fn run_launch(
             },
         ))
         .map_err(format_control_error)?;
+    timing.mark("resolve_launch_permissions");
     let ControlReply::LaunchPermissions(permission_reply) = permission_reply else {
         return Err("resolve launch permissions returned unexpected reply".to_string());
     };
@@ -101,6 +120,16 @@ pub(crate) fn run_launch(
         permission_reply.network_control_seccomp,
     );
     let seccomp_enabled = effective_seccomp.requires_seccomp_notify();
+    timing.mark_detail(
+        "permission_decision",
+        format_args!(
+            "seccomp_enabled={seccomp_enabled} payload_tls_seccomp={} payload_socket_seccomp={} process_seccomp={} network_control_seccomp={}",
+            effective_seccomp.payload_tls,
+            effective_seccomp.payload_socket,
+            effective_seccomp.process_seccomp,
+            effective_seccomp.network_control
+        ),
+    );
     let launch_supervision_poll_interval = if seccomp_enabled {
         Some(launch_supervision_poll_interval(&request)?)
     } else {
@@ -117,21 +146,30 @@ pub(crate) fn run_launch(
     } else {
         ChildSetup::Plain
     };
+    timing.mark("build_child_setup");
 
     let raw_argv = request.argv;
     let sync_launch = if tls_sync_enabled {
         Some(sync_launch(
+            client,
+            request_id,
             raw_argv.clone(),
             &request.payload_tls_config,
             &request.agent_invocation_commands,
+            &mut timing,
         )?)
     } else {
         None
     };
+    timing.mark_detail("sync_launch", format_args!("enabled={tls_sync_enabled}"));
     let command = sync_launch
         .as_ref()
         .map(|launch| launch.command.clone())
         .unwrap_or_else(|| raw_argv.into_iter().map(OsString::from).collect());
+    timing.mark_detail(
+        "resolve_launch_command",
+        format_args!("argc={}", command.len()),
+    );
     let mut sync_event_fd = if tls_sync_enabled {
         Some(InheritableSuppressedFd::connect_unix_socket(
             &request.payload_tls_config.sync_event_socket_path,
@@ -140,8 +178,14 @@ pub(crate) fn run_launch(
     } else {
         None
     };
+    timing.mark_detail(
+        "connect_sync_event_socket",
+        format_args!("enabled={tls_sync_enabled}"),
+    );
     let mut child = ControlledChild::spawn(command, child_setup)?;
+    timing.mark_detail("spawn_stopped_child", format_args!("pid={}", child.pid()));
     let child_ref = process_ref(child.pid())?;
+    timing.mark("resolve_child_process_ref");
 
     let track_add_request_id = next_request_id(request_id)?;
     let reply = match client.send(ControlCommand::TrackAdd(TrackAddCommand {
@@ -163,6 +207,7 @@ pub(crate) fn run_launch(
             return Err(format_control_error(error));
         }
     };
+    timing.mark("track_add");
     let trace_id = match track_added_trace_id(&reply) {
         Ok(trace_id) => trace_id,
         Err(error) => {
@@ -171,6 +216,7 @@ pub(crate) fn run_launch(
         }
     };
     println!("{}", format_reply(&reply));
+    timing.mark_detail("track_added", format_args!("trace_id={trace_id}"));
 
     if let Err(error) = register_seccomp_listener_if_needed(
         client,
@@ -188,15 +234,24 @@ pub(crate) fn run_launch(
         );
         return Err(error);
     }
+    timing.mark_detail(
+        "register_seccomp_listener",
+        format_args!("enabled={seccomp_enabled}"),
+    );
     if seccomp_enabled {
         child.close_listener_fd();
     }
+    timing.mark_detail(
+        "close_listener_fd",
+        format_args!("enabled={seccomp_enabled}"),
+    );
     let envs = match launch_envs(
         trace_id,
         &request.payload_tls_config,
         request.payload_socket_max_segment_bytes,
         sync_launch.as_ref(),
         sync_event_fd.as_ref(),
+        &mut timing,
     ) {
         Ok(envs) => envs,
         Err(error) => {
@@ -209,7 +264,12 @@ pub(crate) fn run_launch(
             return Err(error);
         }
     };
+    timing.mark_detail("launch_envs", format_args!("count={}", envs.len()));
     drop(sync_event_fd.take());
+    timing.mark_detail(
+        "drop_sync_event_fd_parent_copy",
+        format_args!("enabled={tls_sync_enabled}"),
+    );
     if let Err(error) = child.continue_with_envs(envs) {
         child.terminate();
         remove_launch_root_best_effort(
@@ -219,6 +279,7 @@ pub(crate) fn run_launch(
         );
         return Err(error);
     }
+    timing.mark("continue_child");
     let child_result = if seccomp_enabled {
         child.wait_with_monitor(
             || control_socket_available(&request.control_socket_path),
@@ -228,11 +289,13 @@ pub(crate) fn run_launch(
     } else {
         child.wait()
     };
+    timing.mark("child_wait_finished");
     let remove_result = remove_launch_root(
         client,
         launch_remove_request_id(track_add_request_id, seccomp_enabled)?,
         trace_id,
     );
+    timing.mark("remove_launch_root");
     match (child_result, remove_result) {
         (Ok(status), Ok(())) => Ok(status),
         (Ok(_), Err(error)) => Err(error),
@@ -343,6 +406,7 @@ fn launch_envs(
     payload_socket_max_segment_bytes: u32,
     sync_launch: Option<&SyncLaunch>,
     sync_event_fd: Option<&InheritableSuppressedFd>,
+    timing: &mut LaunchTiming,
 ) -> Result<Vec<(OsString, OsString)>, String> {
     match sync_launch {
         Some(sync_launch) => sync_launch_envs(
@@ -351,6 +415,7 @@ fn launch_envs(
             payload_socket_max_segment_bytes,
             sync_launch,
             sync_event_fd,
+            timing,
         ),
         None => Ok(Vec::new()),
     }

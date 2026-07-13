@@ -20,7 +20,7 @@ mod enumerate_tests;
 #[test]
 fn startup_file_read_is_projected_and_linked_when_agent_is_observed_later() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
 
     runtime.observe_event(&exec_event(
         AGENT_EXEC_EVENT_ID,
@@ -140,9 +140,8 @@ fn startup_file_read_is_projected_and_linked_when_agent_is_observed_later() {
 #[test]
 fn command_process_file_read_links_under_command_invocation() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
-    let command_process =
-        ProcessIdentity::new(WRAPPER_PID, WRAPPER_START_TICKS, WRAPPER_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
+    let command_process = ProcessIdentity::new(WRAPPER_GENERATION);
 
     runtime.observe_event(&exec_event(
         AGENT_EXEC_EVENT_ID,
@@ -217,7 +216,7 @@ fn command_process_file_read_links_under_command_invocation() {
 #[test]
 fn tty_write_is_consumed_by_summary_without_file_modify_duplication() {
     let mut runtime = runtime();
-    let process = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let process = ProcessIdentity::new(AGENT_GENERATION);
     let event = tty_write_event(FILE_READ_EVENT_ID, process, SystemTime::UNIX_EPOCH);
 
     let output = runtime.observe_event(&event);
@@ -245,7 +244,7 @@ fn tty_write_is_consumed_by_summary_without_file_modify_duplication() {
 #[test]
 fn tty_summary_is_throttled_between_flush_intervals() {
     let mut runtime = runtime();
-    let process = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let process = ProcessIdentity::new(AGENT_GENERATION);
 
     let first = runtime.observe_event(&tty_write_event(
         EventId::new(FILE_READ_EVENT_ID.get() + 100),
@@ -319,7 +318,7 @@ fn tty_summary_is_throttled_between_flush_intervals() {
 #[test]
 fn tty_truncate_is_consumed_by_summary_without_file_modify_duplication() {
     let mut runtime = runtime();
-    let process = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let process = ProcessIdentity::new(AGENT_GENERATION);
     let event = tty_file_event(
         FILE_READ_EVENT_ID,
         process,
@@ -364,7 +363,7 @@ fn tty_unlisted_operation_is_consumed_without_direct_file_action() {
         SemanticRetentionConfig::default(),
         file_observation,
     );
-    let process = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let process = ProcessIdentity::new(AGENT_GENERATION);
     let event = tty_file_event(
         FILE_READ_EVENT_ID,
         process,
@@ -384,7 +383,7 @@ fn tty_unlisted_operation_is_consumed_without_direct_file_action() {
 #[test]
 fn tty_error_event_is_summary_only_without_raw_retention() {
     let mut runtime = runtime();
-    let process = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let process = ProcessIdentity::new(AGENT_GENERATION);
     let event = tty_file_event(
         FILE_READ_EVENT_ID,
         process,

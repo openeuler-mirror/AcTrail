@@ -20,7 +20,7 @@ const LATER_LLM_RESPONSE_SEQUENCE: u64 = 1001;
 #[test]
 fn non_llm_http_request_does_not_block_later_llm_request() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
 
     let first = runtime.observe_payload_segment(&non_llm_outbound_request(agent.clone()));
     assert_no_llm_actions(&first.actions);
@@ -42,7 +42,7 @@ fn non_llm_http_request_does_not_block_later_llm_request() {
 #[test]
 fn non_llm_http_response_does_not_block_later_llm_response() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
 
     let first = runtime.observe_payload_segment(&non_llm_inbound_response(agent.clone()));
     assert_no_llm_actions(&first.actions);

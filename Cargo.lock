@@ -156,7 +156,7 @@ dependencies = [
  "collector_instance",
  "config_core",
  "model_core",
- "process_identity_contract",
+ "process_identity",
  "process_tree_snapshot_contract",
  "trace_runtime",
 ]
@@ -634,7 +634,7 @@ dependencies = [
  "payload_event",
  "plugin_system",
  "plugin_wasm_runtime",
- "process_identity_contract",
+ "process_identity",
  "process_tree_snapshot_contract",
  "provider_evidence",
  "provider_label",
@@ -699,7 +699,7 @@ dependencies = [
  "libc",
  "model_core",
  "payload_event",
- "process_identity_contract",
+ "process_identity",
  "process_tree_snapshot_contract",
  "tls_probe_point_finder",
 ]
@@ -1421,6 +1421,9 @@ dependencies = [
 [[package]]
 name = "model_core"
 version = "0.7.0"
+dependencies = [
+ "process_identity",
+]
 
 [[package]]
 name = "nix"
@@ -1678,11 +1681,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "process_identity_contract"
+name = "process_identity"
 version = "0.7.0"
-dependencies = [
- "model_core",
-]
 
 [[package]]
 name = "process_tree_snapshot_contract"

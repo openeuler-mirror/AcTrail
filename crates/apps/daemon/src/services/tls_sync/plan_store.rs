@@ -22,6 +22,7 @@ pub(super) enum BinaryPlanRecord {
 pub(super) struct BinaryPlanDescriptor {
     pub(super) binary: PathBuf,
     pub(super) provider: String,
+    pub(super) source: String,
     pub(super) points: String,
 }
 

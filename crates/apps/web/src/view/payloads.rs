@@ -32,7 +32,11 @@ fn payload_base_json(segment: &PayloadSegment) -> String {
         &json::string(&segment.segment_id.to_string()),
     );
     output.push(',');
-    json::field(&mut output, "pid", &json::number(segment.process.pid));
+    json::field(
+        &mut output,
+        "process_id",
+        &json::number(segment.process.get()),
+    );
     output.push(',');
     json::field(&mut output, "observed_at", &json::time(segment.observed_at));
     output.push(',');

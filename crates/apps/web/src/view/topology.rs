@@ -5,9 +5,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use model_core::event::{DomainEvent, EventPayload};
 use model_core::payload::PayloadSegment;
-use model_core::process::ProcessMembership;
+use model_core::process::{ProcessIdentity, ProcessMembership};
 
 use crate::json;
+use crate::view::traces::ProcessDisplayIndex;
 
 struct TimelineRow {
     observed_at: SystemTime,
@@ -15,36 +16,32 @@ struct TimelineRow {
     json: String,
 }
 
-pub(super) fn process_tree_json(memberships: &[ProcessMembership]) -> String {
+pub(super) fn process_tree_json(
+    memberships: &[ProcessMembership],
+    process_display: &ProcessDisplayIndex,
+) -> String {
     let parents = memberships
         .iter()
-        .map(|membership| {
-            (
-                membership.identity.pid,
-                membership.inherited_from.as_ref().map(|parent| parent.pid),
-            )
-        })
+        .map(|membership| (membership.identity, membership.inherited_from))
         .collect::<BTreeMap<_, _>>();
-    let mut children = BTreeMap::<u32, usize>::new();
+    let mut children = BTreeMap::<ProcessIdentity, usize>::new();
     for parent in parents.values().flatten() {
         *children.entry(*parent).or_default() += 1;
     }
     let mut rows = memberships.iter().collect::<Vec<_>>();
     rows.sort_by_key(|membership| {
         (
-            process_depth(membership.identity.pid, &parents),
-            membership
-                .inherited_from
-                .as_ref()
-                .map(|parent| parent.pid)
-                .unwrap_or(membership.identity.pid),
-            membership.identity.pid,
+            process_depth(membership.identity, &parents),
+            membership.inherited_from.unwrap_or(membership.identity),
+            membership.identity,
         )
     });
     format!(
         "[{}]",
         rows.iter()
-            .map(|membership| process_tree_node_json(membership, &parents, &children))
+            .map(|membership| {
+                process_tree_node_json(membership, &parents, &children, process_display)
+            })
             .collect::<Vec<_>>()
             .join(",")
     )
@@ -82,22 +79,43 @@ pub(super) fn timeline_json(events: &[DomainEvent], payloads: &[PayloadSegment])
 
 fn process_tree_node_json(
     membership: &ProcessMembership,
-    parents: &BTreeMap<u32, Option<u32>>,
-    children: &BTreeMap<u32, usize>,
+    parents: &BTreeMap<ProcessIdentity, Option<ProcessIdentity>>,
+    children: &BTreeMap<ProcessIdentity, usize>,
+    process_display: &ProcessDisplayIndex,
 ) -> String {
     let mut output = String::from("{");
-    json::field(&mut output, "pid", &json::number(membership.identity.pid));
+    json::field(
+        &mut output,
+        "process_id",
+        &json::number(membership.identity.get()),
+    );
+    output.push(',');
+    json::field(
+        &mut output,
+        "pid",
+        &json::optional_number(process_display.host_pid(membership.identity)),
+    );
+    output.push(',');
+    json::field(
+        &mut output,
+        "parent_process_id",
+        &json::optional_number(membership.inherited_from.map(|parent| parent.get())),
+    );
     output.push(',');
     json::field(
         &mut output,
         "parent_pid",
-        &json::optional_number(membership.inherited_from.as_ref().map(|parent| parent.pid)),
+        &json::optional_number(
+            membership
+                .inherited_from
+                .and_then(|parent| process_display.host_pid(parent)),
+        ),
     );
     output.push(',');
     json::field(
         &mut output,
         "depth",
-        &json::number(process_depth(membership.identity.pid, parents)),
+        &json::number(process_depth(membership.identity, parents)),
     );
     output.push(',');
     json::field(
@@ -105,7 +123,7 @@ fn process_tree_node_json(
         "children",
         &json::number(
             children
-                .get(&membership.identity.pid)
+                .get(&membership.identity)
                 .copied()
                 .unwrap_or_default(),
         ),
@@ -116,12 +134,6 @@ fn process_tree_node_json(
         "state",
         &json::string(&format!("{:?}", membership.state)),
     );
-    output.push(',');
-    json::field(
-        &mut output,
-        "generation",
-        &json::number(membership.identity.generation),
-    );
     output.push('}');
     output
 }
@@ -131,7 +143,7 @@ fn event_timeline_json(event: &DomainEvent) -> String {
         "event",
         event.envelope.event_id.get(),
         event.envelope.observed_at,
-        event.envelope.process.pid,
+        event.envelope.process,
         event_lane(&event.payload),
         &event_title(&event.payload),
         &event_summary(&event.payload),
@@ -143,7 +155,7 @@ fn payload_timeline_json(segment: &PayloadSegment) -> String {
         "payload",
         segment.segment_id.get(),
         segment.observed_at,
-        segment.process.pid,
+        segment.process,
         "payload",
         &format!("{:?} {:?}", segment.source_boundary, segment.direction),
         segment.protocol_hint.as_deref().unwrap_or(&segment.symbol),
@@ -154,7 +166,7 @@ fn timeline_row_json(
     kind: &str,
     id: u64,
     observed_at: SystemTime,
-    pid: u32,
+    process: ProcessIdentity,
     lane: &str,
     title: &str,
     summary: &str,
@@ -172,7 +184,7 @@ fn timeline_row_json(
         &json::time_nanos(observed_at),
     );
     output.push(',');
-    json::field(&mut output, "pid", &json::number(pid));
+    json::field(&mut output, "process_id", &json::number(process.get()));
     output.push(',');
     json::field(&mut output, "lane", &json::string(lane));
     output.push(',');
@@ -183,9 +195,12 @@ fn timeline_row_json(
     output
 }
 
-fn process_depth(pid: u32, parents: &BTreeMap<u32, Option<u32>>) -> usize {
+fn process_depth(
+    process: ProcessIdentity,
+    parents: &BTreeMap<ProcessIdentity, Option<ProcessIdentity>>,
+) -> usize {
     let mut depth = 0;
-    let mut current = pid;
+    let mut current = process;
     let mut visited = BTreeSet::new();
     while let Some(Some(parent)) = parents.get(&current) {
         if !visited.insert(current) {

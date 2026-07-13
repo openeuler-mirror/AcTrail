@@ -42,9 +42,9 @@ fn terminal_reconcile_projects_late_exec_through_process_lineage() {
     .unwrap();
 
     let trace_id = wiring.trace_runtime.reserve_trace_id();
-    let root = ProcessIdentity::new(910_100, 10_100, 10_100);
-    let helper = ProcessIdentity::new(910_101, 10_101, 10_101);
-    let base64 = ProcessIdentity::new(910_102, 10_102, 10_102);
+    let root = ProcessIdentity::new(10_100);
+    let helper = ProcessIdentity::new(10_101);
+    let base64 = ProcessIdentity::new(10_102);
     super::create_active_trace(
         &mut wiring,
         trace_id,
@@ -58,6 +58,7 @@ fn terminal_reconcile_projects_late_exec_through_process_lineage() {
         "ebpf",
         vec![Capability::ProcLifecycle],
     );
+    let root_identity = process_identity(&wiring, root);
 
     wiring
         .attach_service
@@ -100,13 +101,14 @@ fn terminal_reconcile_projects_late_exec_through_process_lineage() {
             )],
         )
         .unwrap();
+    let base64_identity = process_identity(&wiring, base64);
     wiring
         .attach_service
         .reconcile_draining_memberships_impl(&mut wiring.trace_runtime)
         .unwrap();
     wiring
         .attach_service
-        .finalize_terminal_traces_impl(&wiring.trace_runtime)
+        .finalize_terminal_traces_impl(&mut wiring.trace_runtime)
         .unwrap();
 
     let memberships = wiring
@@ -116,7 +118,7 @@ fn terminal_reconcile_projects_late_exec_through_process_lineage() {
         .unwrap();
     let base64_membership = memberships
         .iter()
-        .find(|membership| membership.identity == base64)
+        .find(|membership| membership.identity == base64_identity)
         .expect("late base64 membership persisted");
     assert_eq!(base64_membership.state, MembershipState::Exited);
     assert_eq!(
@@ -135,13 +137,14 @@ fn terminal_reconcile_projects_late_exec_through_process_lineage() {
     let root_command = actions
         .iter()
         .find(|action| {
-            action.kind == SemanticActionKind::CommandInvocation && action.process == root
+            action.kind == SemanticActionKind::CommandInvocation && action.process == root_identity
         })
         .expect("root command action");
     let base64_command = actions
         .iter()
         .find(|action| {
-            action.kind == SemanticActionKind::CommandInvocation && action.process == base64
+            action.kind == SemanticActionKind::CommandInvocation
+                && action.process == base64_identity
         })
         .expect("base64 command action");
     let links = wiring
@@ -167,7 +170,7 @@ fn raw_exec(
     metadata.insert("executable".to_string(), executable.to_string());
     metadata.insert("command_line".to_string(), command_line.to_string());
     if let Some(parent) = &parent {
-        metadata.insert("ppid".to_string(), parent.pid.to_string());
+        metadata.insert("ppid".to_string(), parent.get().to_string());
     }
     raw_process_event(process, "exec", parent, metadata, observed_second)
 }
@@ -203,10 +206,23 @@ fn raw_process_event(
     metadata: BTreeMap<String, String>,
     observed_second: u64,
 ) -> RawCollectorEvent {
+    let mut process_observation = super::test_process_observation(process);
+    process_observation.host = Some(model_core::process::HostProcessCoordinates::new(
+        u32::try_from(process.get()).expect("test process PID"),
+        process.get(),
+    ));
+    let parent = parent.map(|parent| {
+        let mut observation = super::test_process_observation(parent);
+        observation.host = Some(model_core::process::HostProcessCoordinates::new(
+            u32::try_from(parent.get()).expect("test parent PID"),
+            parent.get(),
+        ));
+        observation
+    });
     RawCollectorEvent {
         envelope: RawEventEnvelope {
             observed_at: SystemTime::UNIX_EPOCH + Duration::from_secs(observed_second),
-            process,
+            process: process_observation,
             collector: CollectorName::new("test-process"),
         },
         payload: RawObservationPayload::Process {
@@ -215,4 +231,18 @@ fn raw_process_event(
             metadata,
         },
     }
+}
+
+fn process_identity(
+    wiring: &crate::runtime_wiring::DaemonRuntimeWiring<
+        crate::services::attach::StorageAttachService,
+    >,
+    process: ProcessIdentity,
+) -> ProcessIdentity {
+    wiring
+        .attach_service
+        .process_registry
+        .lookup(&super::test_process_observation(process))
+        .unwrap()
+        .expect("test process identity")
 }

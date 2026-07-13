@@ -21,7 +21,6 @@ pub fn identity_mismatch_diagnostic(
         std::time::SystemTime::now(),
         "raw event could not be matched to an active trace",
     )
-    .with_process(raw_event.envelope.process.clone())
     .with_metadata("raw.collector", raw_event.envelope.collector.as_str())
     .with_metadata(
         "raw.observed_at_unix_nanos",
@@ -75,17 +74,7 @@ fn add_payload_metadata(diagnostic: &mut DiagnosticRecord, payload: &RawObservat
             insert_metadata(diagnostic, "raw.payload_kind", "process");
             insert_metadata(diagnostic, "raw.operation", operation);
             if let Some(parent) = parent {
-                insert_metadata(diagnostic, "raw.parent.pid", parent.pid.to_string());
-                insert_metadata(
-                    diagnostic,
-                    "raw.parent.start_ticks",
-                    parent.start_time_ticks.to_string(),
-                );
-                insert_metadata(
-                    diagnostic,
-                    "raw.parent.generation",
-                    parent.generation.to_string(),
-                );
+                add_observation_metadata(diagnostic, "raw.parent", parent);
             }
             copy_metadata_keys(
                 diagnostic,
@@ -133,6 +122,36 @@ fn add_payload_metadata(diagnostic: &mut DiagnosticRecord, payload: &RawObservat
             insert_metadata(diagnostic, "raw.stream", stream);
             copy_metadata_keys(diagnostic, metadata, &["fd", "result"]);
         }
+    }
+}
+
+fn add_observation_metadata(
+    diagnostic: &mut DiagnosticRecord,
+    prefix: &str,
+    observation: &model_core::process::ProcessObservation,
+) {
+    if let Some(host) = &observation.host {
+        insert_metadata(diagnostic, format!("{prefix}.host_pid"), host.pid);
+        insert_metadata(
+            diagnostic,
+            format!("{prefix}.start_ticks"),
+            host.start_time_ticks,
+        );
+        if let Some(start_boottime_ns) = host.start_boottime_ns {
+            insert_metadata(
+                diagnostic,
+                format!("{prefix}.start_boottime_ns"),
+                start_boottime_ns,
+            );
+        }
+    }
+    if let Some(namespace) = &observation.namespace {
+        insert_metadata(
+            diagnostic,
+            format!("{prefix}.pid_namespace"),
+            namespace.pid_namespace.as_str(),
+        );
+        insert_metadata(diagnostic, format!("{prefix}.namespace_pid"), namespace.pid);
     }
 }
 

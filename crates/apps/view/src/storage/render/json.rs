@@ -130,11 +130,7 @@ fn evidence_json(evidence: &SemanticEvidence) -> Value {
 
 fn process_json(process: &ProcessIdentity) -> Value {
     json!({
-        "pid": process.pid,
-        "task_id": process.task_id,
-        "start_time_ticks": process.start_time_ticks,
-        "pid_namespace": process.pid_namespace.as_ref().map(|value| value.as_str()),
-        "generation": process.generation,
+        "process_id": process.get(),
     })
 }
 

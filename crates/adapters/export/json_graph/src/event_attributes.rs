@@ -94,24 +94,7 @@ pub fn insert_process_identity(
     prefix: &str,
     identity: &ProcessIdentity,
 ) {
-    attributes.insert(format!("{prefix}pid"), identity.pid.to_string());
-    if let Some(task_id) = identity.task_id {
-        attributes.insert(format!("{prefix}task_id"), task_id.to_string());
-    }
-    attributes.insert(
-        format!("{prefix}start_time_ticks"),
-        identity.start_time_ticks.to_string(),
-    );
-    if let Some(namespace) = &identity.pid_namespace {
-        attributes.insert(
-            format!("{prefix}pid_namespace"),
-            namespace.as_str().to_string(),
-        );
-    }
-    attributes.insert(
-        format!("{prefix}generation"),
-        identity.generation.to_string(),
-    );
+    attributes.insert(format!("{prefix}process_id"), identity.get().to_string());
 }
 
 pub fn insert_time(attributes: &mut BTreeMap<String, String>, prefix: &str, time: SystemTime) {

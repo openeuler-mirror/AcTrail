@@ -27,13 +27,13 @@ pub(super) fn render_summary(snapshot: &SnapshotView) -> String {
         .filter(|event| is_network_event(event))
         .count();
     format!(
-        "Trace {} title={} state={} health={:?} profile={}\nroot_pid={} processes={} events={} network_events={} diagnostics={}",
+        "Trace {} title={} state={} health={:?} profile={}\nroot_process_id={} processes={} events={} network_events={} diagnostics={}",
         snapshot.trace.trace_id,
         snapshot.trace.display_name,
         snapshot.trace.lifecycle_state.as_display_str(),
         snapshot.trace.health,
         snapshot.trace.profile_name,
-        snapshot.trace.root_process_identity.pid,
+        snapshot.trace.root_process_identity.get(),
         snapshot.memberships.len(),
         snapshot.events.len(),
         net_count,
@@ -42,12 +42,19 @@ pub(super) fn render_summary(snapshot: &SnapshotView) -> String {
 }
 
 pub(super) fn render_traces(traces: Vec<TraceRecord>, row_limit: Option<RowLimit>) -> String {
-    let mut table = Table::new(&["TRACE", "NAME", "ROOT_PID", "STATE", "HEALTH", "CREATED"]);
+    let mut table = Table::new(&[
+        "TRACE",
+        "NAME",
+        "ROOT_PROCESS",
+        "STATE",
+        "HEALTH",
+        "CREATED",
+    ]);
     for trace in limit_vec(traces, row_limit) {
         table.push(vec![
             trace.trace_id.to_string(),
             trace.display_name.to_string(),
-            trace.root_process_identity.pid.to_string(),
+            trace.root_process_identity.get().to_string(),
             trace.lifecycle_state.as_display_str().to_string(),
             format!("{:?}", trace.health),
             format_time(trace.timings.created_at),
@@ -67,20 +74,19 @@ pub(super) fn render_processes(
     memberships: Vec<ProcessMembership>,
     row_limit: Option<RowLimit>,
 ) -> String {
-    let mut table = Table::new(&["PID", "STATE", "EXIT", "GENERATION", "PARENT_PID"]);
+    let mut table = Table::new(&["PROCESS", "STATE", "EXIT", "PARENT_PROCESS"]);
     for membership in limit_vec(memberships, row_limit) {
         table.push(vec![
-            membership.identity.pid.to_string(),
+            membership.identity.get().to_string(),
             format!("{:?}", membership.state),
             membership
                 .exit_status
                 .and_then(|status| status.code)
                 .map(|code| code.to_string())
                 .unwrap_or_default(),
-            membership.identity.generation.to_string(),
             membership
                 .inherited_from
-                .map(|parent| parent.pid.to_string())
+                .map(|parent| parent.get().to_string())
                 .unwrap_or_default(),
         ]);
     }
@@ -88,12 +94,12 @@ pub(super) fn render_processes(
 }
 
 pub(super) fn render_events(events: Vec<DomainEvent>, row_limit: Option<RowLimit>) -> String {
-    let mut table = Table::new(&["EVENT", "DOMAIN", "PID", "OPERATION", "DETAIL"]);
+    let mut table = Table::new(&["EVENT", "DOMAIN", "PROCESS", "OPERATION", "DETAIL"]);
     for event in limit_vec(events, row_limit) {
         table.push(vec![
             event.envelope.event_id.to_string(),
             format!("{:?}", event.envelope.kind),
-            event.envelope.process.pid.to_string(),
+            event.envelope.process.get().to_string(),
             event_operation(&event),
             event_detail(&event),
         ]);
@@ -124,7 +130,7 @@ pub(super) fn render_semantic_actions(
     let mut table = Table::new(&[
         "ACTION",
         "KIND",
-        "PID",
+        "PROCESS",
         "STATUS",
         "COMPLETENESS",
         "EVIDENCE",
@@ -134,7 +140,7 @@ pub(super) fn render_semantic_actions(
         table.push(vec![
             action.action_id,
             action.kind.as_str().to_string(),
-            action.process.pid.to_string(),
+            action.process.get().to_string(),
             action.status.as_str().to_string(),
             action.completeness.as_str().to_string(),
             action.evidence.len().to_string(),
@@ -217,7 +223,7 @@ fn process_detail(payload: &model_core::event::ProcessPayload) -> String {
         "fork" => payload
             .parent
             .as_ref()
-            .map(|parent| format!("parent={}", parent.pid))
+            .map(|parent| format!("parent={}", parent.get()))
             .unwrap_or_default(),
         "exec" => payload
             .executable

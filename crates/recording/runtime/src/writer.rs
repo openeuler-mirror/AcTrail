@@ -4,6 +4,7 @@ use export_core::{ExportPublishReport, ExportRuntime};
 use model_core::diagnostics::DiagnosticRecord;
 use model_core::event::DomainEvent;
 use model_core::ids::DiagnosticId;
+use model_core::process::ProcessRecord;
 use semantic_action::{SemanticAction, SemanticActionLink};
 use storage_core::StorageBackend;
 
@@ -38,8 +39,23 @@ impl<'a> RecordingWriter<'a> {
         &mut self,
         trace_state: TraceStateRecord,
     ) -> Result<(), RecordingError> {
-        self.persist_batch(ObservedRecordBatch::from_trace_state(trace_state))
-            .map(|_| ())
+        self.persist_batch(ObservedRecordBatch::from_trace_state(
+            trace_state,
+            Vec::new(),
+        ))
+        .map(|_| ())
+    }
+
+    pub fn persist_trace_state_with_process_records(
+        &mut self,
+        trace_state: TraceStateRecord,
+        process_records: Vec<ProcessRecord>,
+    ) -> Result<(), RecordingError> {
+        self.persist_batch(ObservedRecordBatch::from_trace_state(
+            trace_state,
+            process_records,
+        ))
+        .map(|_| ())
     }
 
     pub fn persist_diagnostic(
@@ -78,6 +94,7 @@ impl<'a> RecordingWriter<'a> {
         diagnostics: Vec<DiagnosticRecord>,
         semantic_actions: SemanticActionBatch,
         trace_states: Vec<TraceStateRecord>,
+        process_records: Vec<ProcessRecord>,
         traces: &dyn TraceRecordLookup,
         emitted_at: SystemTime,
         next_diagnostic_id: impl FnMut() -> Result<DiagnosticId, RecordingError>,
@@ -87,6 +104,7 @@ impl<'a> RecordingWriter<'a> {
             diagnostics,
             semantic_actions,
             trace_states,
+            process_records,
         );
         ObservedRecordCommitCoordinator::new(self.storage, export_runtime)
             .persist_batch_then_export(batch, traces, emitted_at, next_diagnostic_id)

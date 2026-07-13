@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use model_core::ids::TraceId;
 use model_core::payload::PayloadSourceBoundary;
+use model_core::process::ProcessObservation;
 use payload_event::RawPayloadSegment;
 
 const HTTP2_CONNECTION_PREFACE: &[u8] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
@@ -76,7 +77,7 @@ impl SocketHttpPayloadGate {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct SocketStreamKey {
     trace_id: u64,
-    pid: u32,
+    process: ProcessObservation,
     stream_key: String,
 }
 
@@ -84,7 +85,7 @@ impl SocketStreamKey {
     fn from_segment(segment: &RawPayloadSegment) -> Self {
         Self {
             trace_id: segment.trace_id.get(),
-            pid: segment.process.pid,
+            process: segment.process.clone(),
             stream_key: segment.stream_key.to_string(),
         }
     }

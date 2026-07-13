@@ -13,7 +13,7 @@ use super::{ActionDisplayProjection, DisplayChild, ROOT_PARENT_ID};
 
 #[test]
 fn orphan_http_message_falls_back_to_same_process_command() {
-    let process = ProcessIdentity::new(42, 100, 100);
+    let process = ProcessIdentity::new(100);
     let command = action(
         "command",
         SemanticActionKind::CommandInvocation,
@@ -44,7 +44,7 @@ fn orphan_http_message_falls_back_to_same_process_command() {
 
 #[test]
 fn semantic_link_parent_wins_over_same_process_fallback() {
-    let process = ProcessIdentity::new(43, 100, 100);
+    let process = ProcessIdentity::new(100);
     let command = action(
         "command",
         SemanticActionKind::CommandInvocation,
@@ -94,7 +94,7 @@ fn semantic_link_parent_wins_over_same_process_fallback() {
 
 #[test]
 fn stale_llm_response_http_links_are_not_display_parents() {
-    let process = ProcessIdentity::new(44, 100, 100);
+    let process = ProcessIdentity::new(100);
     let first_response = llm_response("response-1", process.clone(), 3, 42);
     let second_response = llm_response("response-2", process.clone(), 5, 44);
     let stale_http = http_response("http-404", process.clone(), 1, 40, "404");
@@ -138,7 +138,7 @@ fn stale_llm_response_http_links_are_not_display_parents() {
 
 #[test]
 fn finalized_llm_call_uses_matching_http_error_response_time() {
-    let process = ProcessIdentity::new(45, 100, 100);
+    let process = ProcessIdentity::new(100);
     let call = finalized_llm_call("call", "request", process.clone(), 1, 600_000);
     let request = llm_request("request", process.clone(), 1);
     let http_request = http_request("http-request", process.clone(), 2, 10);
@@ -177,7 +177,7 @@ fn finalized_llm_call_uses_matching_http_error_response_time() {
 
 #[test]
 fn stale_llm_call_response_link_is_not_displayed() {
-    let process = ProcessIdentity::new(46, 100, 100);
+    let process = ProcessIdentity::new(100);
     let call = llm_call_with_response("call", "response-current", process.clone(), 1);
     let stale_response = llm_response("response-stale", process.clone(), 2, 50);
     let current_response = llm_response("response-current", process, 3, 51);
@@ -205,7 +205,7 @@ fn stale_llm_call_response_link_is_not_displayed() {
 
 #[test]
 fn file_read_covered_by_bulk_read_is_not_displayed() {
-    let process = ProcessIdentity::new(47, 100, 100);
+    let process = ProcessIdentity::new(100);
     let bulk = bulk_read("bulk", process.clone(), 1, 70, 72);
     let covered = file_read("covered-read", process.clone(), 2, 70);
     let outside = file_read("outside-read", process, 3, 73);

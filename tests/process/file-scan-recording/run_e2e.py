@@ -15,6 +15,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from action_snapshot import ActionRecord, SemanticActionSnapshot  # noqa: E402
+
 
 TRACE_RE = re.compile(r"trace trace-(\d+) entered Active")
 FAST_PATH_READ_COUNT_ATTR = "file.bulk_read.fp_read_count"
@@ -37,6 +40,7 @@ def main() -> int:
     bin_dir = (repo / args.bin_dir).resolve()
     actraild = require_binary(bin_dir, "actraild")
     actrailctl = require_binary(bin_dir, "actrailctl")
+    actrailviewer = require_binary(bin_dir, "actrailviewer")
     require_tool("rg")
     config = Path(args.config).resolve()
     values = read_config(config)
@@ -55,7 +59,7 @@ def main() -> int:
         wait_for_daemon(daemon, args.ready_timeout_sec)
         trace_id, output = run_scan_workload(actrailctl, config, scan_dir, args.ready_timeout_sec)
         wait_for_completed_trace(storage, trace_id, args.completion_timeout_sec)
-        verify_scan_recording(storage, trace_id)
+        verify_scan_recording(storage, actrailviewer, config, trace_id)
         print(f"file scan recording e2e passed trace=trace-{trace_id}")
         print(output, end="")
         return 0
@@ -240,61 +244,48 @@ def wait_for_completed_trace(storage: Path, trace_id: int, timeout_sec: float) -
     raise RuntimeError(f"trace-{trace_id} did not complete cleanly")
 
 
-def verify_scan_recording(storage: Path, trace_id: int) -> None:
-    with sqlite3.connect(storage) as connection:
-        bulk_count = scalar(
-            connection,
-            "SELECT COUNT(*) FROM semantic_actions WHERE trace_id = ? AND kind = 'file.bulk_read'",
-            (trace_id,),
+def verify_scan_recording(
+    storage: Path,
+    actrailviewer: Path,
+    config: Path,
+    trace_id: int,
+) -> None:
+    snapshot = SemanticActionSnapshot.load(actrailviewer, config, trace_id)
+    bulk_actions = snapshot.actions("file.bulk_read")
+    if len(bulk_actions) < 2:
+        raise RuntimeError(
+            f"expected at least two file.bulk_read actions, got {len(bulk_actions)}"
         )
-        if bulk_count < 2:
-            raise RuntimeError(f"expected at least two file.bulk_read actions, got {bulk_count}")
-        verify_fast_path_bulk_read(connection, trace_id)
+    with sqlite3.connect(storage) as connection:
+        verify_fast_path_bulk_read(bulk_actions)
         verify_no_event_transport_loss(connection, trace_id)
+        action_ids = tuple(action.action_id for action in bulk_actions)
+        placeholders = ",".join("?" for _ in action_ids)
         reused_path_set_count = scalar(
             connection,
-            """
+            f"""
             SELECT COUNT(*)
             FROM (
                 SELECT refs.path_set_id
                 FROM file_path_set_action_refs refs
-                JOIN semantic_actions action
-                  ON action.trace_id = refs.trace_id
-                 AND action.action_id = refs.action_id
-                WHERE refs.trace_id = ? AND action.kind = 'file.bulk_read'
+                JOIN semantic_action_ids ids
+                  ON ids.action_key = refs.action_key
+                WHERE refs.trace_id = ?
+                  AND ids.action_id IN ({placeholders})
                 GROUP BY refs.path_set_id
                 HAVING COUNT(*) >= 2
             )
             """,
-            (trace_id,),
+            (trace_id, *action_ids),
         )
         if reused_path_set_count < 1:
             raise RuntimeError("expected repeated bulk reads to share a canonical path set")
-        leaked_read_links = scalar(
-            connection,
-            """
-            SELECT COUNT(*)
-            FROM semantic_action_links link
-            JOIN semantic_actions child
-              ON child.trace_id = link.trace_id
-             AND child.action_id = link.child_action_id
-            WHERE link.trace_id = ?
-              AND link.role = 'command.contains_file_access'
-              AND child.kind = 'file.read'
-              AND EXISTS (
-                  SELECT 1
-                  FROM semantic_actions bulk
-                  WHERE bulk.trace_id = child.trace_id
-                    AND bulk.kind = 'file.bulk_read'
-                    AND bulk.process_pid = child.process_pid
-                    AND COALESCE(bulk.process_task_id, -1) = COALESCE(child.process_task_id, -1)
-                    AND bulk.process_start_ticks = child.process_start_ticks
-                    AND COALESCE(bulk.process_pid_namespace, '') =
-                        COALESCE(child.process_pid_namespace, '')
-                    AND bulk.process_generation = child.process_generation
-              )
-            """,
-            (trace_id,),
+        bulk_processes = {action.process_id for action in bulk_actions}
+        leaked_read_links = sum(
+            child.process_id in bulk_processes
+            for child in snapshot.valid_linked_children(
+                "command.contains_file_access", "file.read"
+            )
         )
         if leaked_read_links != 0:
             raise RuntimeError(
@@ -303,21 +294,12 @@ def verify_scan_recording(storage: Path, trace_id: int) -> None:
             )
 
 
-def verify_fast_path_bulk_read(connection: sqlite3.Connection, trace_id: int) -> None:
-    rows = connection.execute(
-        """
-        SELECT attributes
-        FROM semantic_actions
-        WHERE trace_id = ? AND kind = 'file.bulk_read'
-        """,
-        (trace_id,),
-    ).fetchall()
+def verify_fast_path_bulk_read(actions: tuple[ActionRecord, ...]) -> None:
     summary_count = 0
     read_count = 0
-    for (raw_attributes,) in rows:
-        attributes = decode_map(raw_attributes)
-        summary_count += int(attributes.get(FAST_PATH_SUMMARY_COUNT_ATTR, "0"))
-        read_count += int(attributes.get(FAST_PATH_READ_COUNT_ATTR, "0"))
+    for action in actions:
+        summary_count += int(action.attributes.get(FAST_PATH_SUMMARY_COUNT_ATTR, "0"))
+        read_count += int(action.attributes.get(FAST_PATH_READ_COUNT_ATTR, "0"))
     if summary_count <= 0 or read_count <= 0:
         raise RuntimeError(
             "expected file.bulk_read actions to include fast-path read_summary counts, "
@@ -337,40 +319,6 @@ def verify_no_event_transport_loss(connection: sqlite3.Connection, trace_id: int
     )
     if loss_count != 0:
         raise RuntimeError(f"expected no event_transport_loss diagnostics, got {loss_count}")
-
-
-def decode_map(raw: str) -> dict[str, str]:
-    values: dict[str, str] = {}
-    for line in raw.splitlines():
-        key, separator, value = line.partition("=")
-        if not separator:
-            continue
-        values[decode_escaped(key)] = decode_escaped(value)
-    return values
-
-
-def decode_escaped(raw: str) -> str:
-    output: list[str] = []
-    index = 0
-    while index < len(raw):
-        char = raw[index]
-        if char == "\\" and index + 1 < len(raw):
-            escaped = raw[index + 1]
-            if escaped == "n":
-                output.append("\n")
-                index += 2
-                continue
-            if escaped == "e":
-                output.append("=")
-                index += 2
-                continue
-            if escaped == "\\":
-                output.append("\\")
-                index += 2
-                continue
-        output.append(char)
-        index += 1
-    return "".join(output)
 
 
 def scalar(connection: sqlite3.Connection, sql: str, params: tuple[object, ...]) -> int:

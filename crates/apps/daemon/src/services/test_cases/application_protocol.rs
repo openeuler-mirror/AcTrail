@@ -79,7 +79,7 @@ fn tls_payload_processing_keeps_llm_summary_without_payload_body_duplication() {
     .unwrap();
 
     let trace_id = wiring.trace_runtime.reserve_trace_id();
-    let process = ProcessIdentity::new(std::process::id(), 1, 1);
+    let process = ProcessIdentity::new(1);
     super::create_active_trace(
         &mut wiring,
         trace_id,
@@ -107,7 +107,7 @@ fn tls_payload_processing_keeps_llm_summary_without_payload_body_duplication() {
     wiring
         .attach_service
         .process_payload_segment_impl(
-            &wiring.trace_runtime,
+            &mut wiring.trace_runtime,
             raw_tls_segment(
                 trace_id,
                 process.clone(),
@@ -131,7 +131,7 @@ fn tls_payload_processing_keeps_llm_summary_without_payload_body_duplication() {
     wiring
         .attach_service
         .process_payload_segment_impl(
-            &wiring.trace_runtime,
+            &mut wiring.trace_runtime,
             raw_tls_segment(
                 trace_id,
                 process,
@@ -305,7 +305,7 @@ fn payload_batch_retention_counts_prior_uncommitted_segments_and_rolls_back() {
     .unwrap();
 
     let trace_id = wiring.trace_runtime.reserve_trace_id();
-    let process = ProcessIdentity::new(std::process::id(), 1, 1);
+    let process = ProcessIdentity::new(1);
     super::create_active_trace(
         &mut wiring,
         trace_id,
@@ -322,7 +322,7 @@ fn payload_batch_retention_counts_prior_uncommitted_segments_and_rolls_back() {
 
     let segment_bytes = vec![b'a'; RETENTION_BATCH_SEGMENT_BYTES as usize];
     let result = wiring.attach_service.process_payload_segments_impl(
-        &wiring.trace_runtime,
+        &mut wiring.trace_runtime,
         vec![
             raw_tls_segment(
                 trace_id,
@@ -408,7 +408,7 @@ fn tls_payload_processing_persists_http2_frame_and_data_events() {
     .unwrap();
 
     let trace_id = wiring.trace_runtime.reserve_trace_id();
-    let process = ProcessIdentity::new(std::process::id(), 1, 1);
+    let process = ProcessIdentity::new(1);
     super::create_active_trace(
         &mut wiring,
         trace_id,
@@ -439,7 +439,7 @@ fn tls_payload_processing_persists_http2_frame_and_data_events() {
     wiring
         .attach_service
         .process_payload_segment_impl(
-            &wiring.trace_runtime,
+            &mut wiring.trace_runtime,
             raw_tls_segment(trace_id, process, PayloadDirection::Outbound, 0, bytes),
         )
         .unwrap();
@@ -514,7 +514,7 @@ fn http2_analyzer_ignores_http1_text_when_both_protocols_are_enabled() {
     .unwrap();
 
     let trace_id = wiring.trace_runtime.reserve_trace_id();
-    let process = ProcessIdentity::new(std::process::id(), 1, 1);
+    let process = ProcessIdentity::new(1);
     super::create_active_trace(
         &mut wiring,
         trace_id,
@@ -539,7 +539,7 @@ fn http2_analyzer_ignores_http1_text_when_both_protocols_are_enabled() {
     wiring
         .attach_service
         .process_payload_segment_impl(
-            &wiring.trace_runtime,
+            &mut wiring.trace_runtime,
             raw_tls_segment(
                 trace_id,
                 process,
@@ -576,7 +576,7 @@ fn raw_tls_segment(
     RawPayloadSegment {
         trace_id,
         observed_at: SystemTime::UNIX_EPOCH,
-        process,
+        process: super::test_process_observation(process),
         source_boundary: PayloadSourceBoundary::TlsUserSpace,
         content_state: PayloadContentState::Plaintext,
         direction,

@@ -7,7 +7,7 @@ use super::fixtures::*;
 #[test]
 fn outbound_http1_request_resync_does_not_merge_body_prefix_with_next_request() {
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
 
     let prefix = outbound_payload_segment_with_bytes(
         agent.clone(),

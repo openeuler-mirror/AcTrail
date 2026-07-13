@@ -6,24 +6,31 @@ use std::time::{Duration, SystemTime};
 
 use control_contract::command::{ControlCommand, TrackAddCommand};
 use control_contract::reply::{
-    ControlError, ControlReply, DoctorReply, PluginCommandReply, TraceListItem, TrackAddReply,
+    ControlError, ControlReply, DoctorReply, LaunchTlsPlanReply, PluginCommandReply, TraceListItem,
+    TrackAddReply,
 };
 use control_contract::selector::TraceSelector;
 use model_core::ids::{ProfileName, RequestId};
 use model_core::process::ProcessIdentity;
 use plugin_system::PluginInstanceStatus;
-use process_identity_contract::lookup::ProcessIdentityReader;
+use process_identity::ProcessIdentityReader;
 use uds_control_server::{ControlService, PeerCredentials};
 
 use crate::peer_identity::{PeerIdentity, peer_error};
 use crate::runtime_wiring::DaemonRuntimeWiring;
 
 pub trait AttachService {
+    fn host_pid_for_process(&self, process: ProcessIdentity) -> Result<u32, ControlError>;
     fn resolve_launch_permissions(
         &mut self,
         command: &control_contract::command::ResolveLaunchPermissionsCommand,
         host_ebpf_available: bool,
     ) -> Result<control_contract::reply::LaunchPermissionsReply, ControlError>;
+    fn host_ebpf_available_for_profile(&self, profile_name: &ProfileName) -> bool;
+    fn resolve_launch_tls_plan(
+        &mut self,
+        command: &control_contract::command::ResolveLaunchTlsPlanCommand,
+    ) -> Result<LaunchTlsPlanReply, ControlError>;
     fn attach_existing(
         &mut self,
         trace_runtime: &mut trace_runtime::TraceRuntime,
@@ -73,7 +80,7 @@ struct LaunchAdmission {
 
 pub struct DaemonServiceHost<A> {
     wiring: DaemonRuntimeWiring<A>,
-    pending_launch_admissions: BTreeMap<ProcessIdentity, LaunchAdmission>,
+    pending_launch_admissions: BTreeMap<model_core::process::ProcessObservation, LaunchAdmission>,
 }
 
 impl<A> DaemonServiceHost<A> {
@@ -214,14 +221,18 @@ where
             ControlCommand::ResolveLaunchPermissions(command) => {
                 let host_ebpf_available = self
                     .wiring
-                    .available_collectors
-                    .iter()
-                    .any(|collector| collector == "ebpf");
+                    .attach_service
+                    .host_ebpf_available_for_profile(&command.profile_name);
                 self.wiring
                     .attach_service
                     .resolve_launch_permissions(&command, host_ebpf_available)
                     .map(ControlReply::LaunchPermissions)
             }
+            ControlCommand::ResolveLaunchTlsPlan(command) => self
+                .wiring
+                .attach_service
+                .resolve_launch_tls_plan(&command)
+                .map(ControlReply::LaunchTlsPlan),
             ControlCommand::TrackAdd(command) => {
                 let active_trace_count = self
                     .wiring
@@ -275,19 +286,24 @@ where
                         command
                             .selector
                             .as_ref()
-                            .map(|selector| selector.matches(trace))
+                            .map(|selector| selector.matches(trace, None))
                             .unwrap_or(true)
                     })
-                    .map(|trace| TraceListItem {
-                        trace_id: trace.trace_id,
-                        display_name: trace.display_name.clone(),
-                        root_pid: trace.root_process_identity.pid,
-                        lifecycle_state: trace.lifecycle_state,
-                        health: trace.health,
-                        tags: trace.tags.clone(),
-                        created_at: trace.timings.created_at,
+                    .map(|trace| {
+                        Ok(TraceListItem {
+                            trace_id: trace.trace_id,
+                            display_name: trace.display_name.clone(),
+                            root_pid: self
+                                .wiring
+                                .attach_service
+                                .host_pid_for_process(trace.root_process_identity)?,
+                            lifecycle_state: trace.lifecycle_state,
+                            health: trace.health,
+                            tags: trace.tags.clone(),
+                            created_at: trace.timings.created_at,
+                        })
                     })
-                    .collect();
+                    .collect::<Result<Vec<_>, ControlError>>()?;
                 Ok(ControlReply::TraceList(items))
             }
             ControlCommand::Doctor(_) => Ok(ControlReply::Doctor(DoctorReply {
@@ -377,9 +393,16 @@ where
     fn prune_stale_launch_admissions(&mut self) {
         let identity_reader = ebpf_collector::procfs::ProcfsIdentityReader;
         self.pending_launch_admissions.retain(|process, _| {
+            let Some(host) = process.host.as_ref() else {
+                return false;
+            };
             identity_reader
-                .read_identity(process.pid)
-                .is_ok_and(|current| current == *process)
+                .read_identity(host.pid)
+                .is_ok_and(|current| {
+                    current.host.as_ref().is_some_and(|current_host| {
+                        current_host.start_time_ticks == host.start_time_ticks
+                    })
+                })
         });
     }
 
@@ -390,7 +413,8 @@ where
         removed_trace: Option<model_core::ids::TraceId>,
     ) -> Result<(), ControlError> {
         match command {
-            ControlCommand::ResolveLaunchPermissions(_) => Ok(()),
+            ControlCommand::ResolveLaunchPermissions(_)
+            | ControlCommand::ResolveLaunchTlsPlan(_) => Ok(()),
             ControlCommand::TrackAdd(command) => peer.authorize_process_ref(&command.root),
             ControlCommand::RegisterSeccompListener(command) => {
                 peer.authorize_process_ref(&command.target)?;
@@ -429,7 +453,7 @@ where
             .trace_runtime
             .list_trace_records()
             .into_iter()
-            .filter(|trace| selector.matches(trace))
+            .filter(|trace| selector.matches(trace, None))
             .find_map(|trace| {
                 let owner = self
                     .wiring
@@ -473,6 +497,7 @@ fn next_request_id(request_id: RequestId) -> Result<RequestId, ControlError> {
 fn control_command_name(command: &ControlCommand) -> &'static str {
     match command {
         ControlCommand::ResolveLaunchPermissions(_) => "resolve_launch_permissions",
+        ControlCommand::ResolveLaunchTlsPlan(_) => "resolve_launch_tls_plan",
         ControlCommand::TrackAdd(_) => "track_add",
         ControlCommand::RegisterSeccompListener(_) => "register_seccomp_listener",
         ControlCommand::TrackRemove(_) => "track_remove",
@@ -506,7 +531,7 @@ fn resolve_trace_id(
     runtime
         .list_trace_records()
         .into_iter()
-        .find(|trace| selector.matches(trace))
+        .find(|trace| selector.matches(trace, None))
         .map(|trace| trace.trace_id)
         .ok_or_else(|| ControlError::new("not_found", "no trace matched selector"))
 }
@@ -525,7 +550,8 @@ mod tests {
         ResolveLaunchPermissionsCommand, TrackAddCommand,
     };
     use control_contract::reply::{
-        ControlError, ControlReply, LaunchPermissionsReply, PluginCommandReply, TrackAddReply,
+        ControlError, ControlReply, LaunchPermissionsReply, LaunchTlsPlanReply,
+        LaunchTlsPlanStatus, PluginCommandReply, TrackAddReply,
     };
     use control_contract::selector::TraceSelector;
     use model_core::ids::{ProfileName, RequestId, TraceId, TraceName};
@@ -585,6 +611,11 @@ mod tests {
     }
 
     impl AttachService for CountingAttachService {
+        fn host_pid_for_process(&self, process: ProcessIdentity) -> Result<u32, ControlError> {
+            u32::try_from(process.get())
+                .map_err(|error| ControlError::new("test_process", error.to_string()))
+        }
+
         fn resolve_launch_permissions(
             &mut self,
             command: &control_contract::command::ResolveLaunchPermissionsCommand,
@@ -604,6 +635,23 @@ mod tests {
                 required_capabilities: Vec::new(),
                 degraded: false,
                 reasons: Vec::new(),
+            })
+        }
+
+        fn host_ebpf_available_for_profile(&self, _profile_name: &ProfileName) -> bool {
+            true
+        }
+
+        fn resolve_launch_tls_plan(
+            &mut self,
+            _command: &control_contract::command::ResolveLaunchTlsPlanCommand,
+        ) -> Result<LaunchTlsPlanReply, ControlError> {
+            Ok(LaunchTlsPlanReply {
+                status: LaunchTlsPlanStatus::Unsupported {
+                    reason: "unused".to_string(),
+                },
+                cache_hit: false,
+                resolve_elapsed_micros: 0,
             })
         }
 
@@ -844,7 +892,7 @@ mod tests {
             .create_starting_trace(
                 trace_id,
                 TrackTraceRequest {
-                    root_identity: ProcessIdentity::new(101, 1, 1),
+                    root_identity: ProcessIdentity::new(1),
                     root_container_id: Some("container-a".to_string()),
                     display_name: TraceName::new("owned"),
                     profile_snapshot,
@@ -870,7 +918,7 @@ mod tests {
                 uid: 0,
                 gid: 0,
             },
-            process: ProcessIdentity::new(201, 1, 1),
+            process: model_core::process::ProcessObservation::default(),
             principal: owner,
         };
         assert_eq!(
@@ -883,7 +931,7 @@ mod tests {
                 uid: 0,
                 gid: 0,
             },
-            process: ProcessIdentity::new(202, 1, 1),
+            process: model_core::process::ProcessObservation::default(),
             principal: PeerPrincipal {
                 uid: 0,
                 container_id: Some("container-b".to_string()),
@@ -911,7 +959,7 @@ mod tests {
                 uid: 0,
                 gid: 0,
             },
-            process: ProcessIdentity::new(1, 1, 1),
+            process: model_core::process::ProcessObservation::default(),
             principal: PeerPrincipal {
                 uid: 0,
                 container_id: None,

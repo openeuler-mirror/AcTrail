@@ -10,10 +10,10 @@ use model_core::capability::Capability;
 use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use plugin_system::{
-    CONTROL_CURRENT_CONTEXT_TOKEN, ControlActorProcessIdentity, ControlDecisionBudget,
-    ControlDecisionRequest, ControlSubject, FILE_POLICY_CURRENT_CONTEXT_TOKEN,
-    FilePolicyMatchedRule, FilePolicyReadContext,
+    CONTROL_CURRENT_CONTEXT_TOKEN, ControlDecisionBudget, ControlDecisionRequest, ControlSubject,
+    FILE_POLICY_CURRENT_CONTEXT_TOKEN, FilePolicyMatchedRule, FilePolicyReadContext,
 };
+use process_identity::ProcessIdentityManager;
 use trace_runtime::registry::TraceRuntime;
 
 use super::audit::{
@@ -28,6 +28,7 @@ use crate::services::enforcement::fanotify::{PermissionEventFd, PermissionMetada
 use crate::services::enforcement::rules::{
     EnforcementRule, EnforcementRules, FileKey, RuleDecision,
 };
+use crate::services::identity::ControlActorIdentityResolver;
 use crate::services::identity::TraceIdentityResolver;
 
 pub(super) fn handle_permission_event(
@@ -37,6 +38,7 @@ pub(super) fn handle_permission_event(
     default_decision: EnforcementDecision,
     audit_enabled: bool,
     trace_runtime: &TraceRuntime,
+    process_registry: &ProcessIdentityManager,
     identity_reader: &ProcfsIdentityReader,
     control_plugins: &ControlPluginRuntime,
     reusable_decisions: &mut BTreeMap<ReusableDecisionKey, CachedDecision>,
@@ -59,7 +61,12 @@ pub(super) fn handle_permission_event(
         respond(fanotify_fd, event_fd.raw_fd(), true)?;
         return Ok(());
     }
-    let Some((trace_id, process)) = traced_process(metadata.pid, trace_runtime, identity_reader)?
+    let Some((trace_id, process)) = traced_process(
+        metadata.pid,
+        trace_runtime,
+        process_registry,
+        identity_reader,
+    )?
     else {
         respond(fanotify_fd, event_fd.raw_fd(), true)?;
         return Ok(());
@@ -96,6 +103,7 @@ pub(super) fn handle_permission_event(
         rule,
         trace_id,
         process,
+        process_registry,
         control_plugins,
         reusable_decisions,
         in_flight_by_rule,
@@ -121,16 +129,15 @@ pub(super) fn prune_reusable_decisions(
 fn traced_process(
     pid: i32,
     trace_runtime: &TraceRuntime,
+    process_registry: &ProcessIdentityManager,
     identity_reader: &ProcfsIdentityReader,
 ) -> Result<Option<(TraceId, ProcessIdentity)>, String> {
     let Ok(pid) = u32::try_from(pid) else {
         return Ok(None);
     };
-    let resolved = match TraceIdentityResolver::new(trace_runtime).read_and_match_pid(
-        identity_reader,
-        pid,
-        "fanotify_identity",
-    ) {
+    let resolved = match TraceIdentityResolver::new(trace_runtime, process_registry)
+        .read_and_match_pid(identity_reader, pid, "fanotify_identity")
+    {
         Ok(resolved) => resolved,
         Err(_) => return Ok(None),
     };
@@ -160,6 +167,7 @@ fn handle_rule_permission_event(
     rule: &EnforcementRule,
     trace_id: TraceId,
     process: ProcessIdentity,
+    process_registry: &ProcessIdentityManager,
     control_plugins: &ControlPluginRuntime,
     reusable_decisions: &mut BTreeMap<ReusableDecisionKey, CachedDecision>,
     in_flight_by_rule: &mut BTreeMap<String, u32>,
@@ -196,6 +204,7 @@ fn handle_rule_permission_event(
             rule,
             trace_id,
             process,
+            process_registry,
             control_plugins,
             reusable_decisions,
             in_flight_by_rule,
@@ -220,6 +229,7 @@ fn handle_sync_plugin_rule(
     rule: &EnforcementRule,
     trace_id: TraceId,
     process: ProcessIdentity,
+    process_registry: &ProcessIdentityManager,
     control_plugins: &ControlPluginRuntime,
     reusable_decisions: &mut BTreeMap<ReusableDecisionKey, CachedDecision>,
     in_flight_by_rule: &mut BTreeMap<String, u32>,
@@ -331,7 +341,7 @@ fn handle_sync_plugin_rule(
     } else {
         (None, None)
     };
-    let request = control_decision_request(trace_id, &process, rule);
+    let request = control_decision_request(trace_id, &process, process_registry, rule)?;
     let pending = PendingPluginDecision {
         fanotify_fd,
         wake_fd,
@@ -419,19 +429,22 @@ pub(super) fn release_in_flight(in_flight_by_rule: &mut BTreeMap<String, u32>, r
 fn control_decision_request(
     trace_id: TraceId,
     process: &ProcessIdentity,
+    process_registry: &ProcessIdentityManager,
     rule: &EnforcementRule,
-) -> ControlDecisionRequest {
+) -> Result<ControlDecisionRequest, String> {
     let file_policy_context = current_file_access_match_context(rule);
-    ControlDecisionRequest {
+    Ok(ControlDecisionRequest {
         decision_id: format!("{}:{trace_id}", rule.rule_id),
         trace_id: trace_id.to_string(),
         subject: ControlSubject::FileAccess,
-        actor_process_identity: actor_process_identity(process),
+        actor_process_identity: ControlActorIdentityResolver::new(process_registry)
+            .resolve(*process)
+            .map_err(|error| error.message)?,
         operation: rule.operation.clone(),
         target_summary: rule.path.display().to_string(),
         context_ref: Some(CONTROL_CURRENT_CONTEXT_TOKEN.to_string()),
         file_policy_context,
-    }
+    })
 }
 
 fn current_file_access_match_context(rule: &EnforcementRule) -> Option<FilePolicyReadContext> {
@@ -457,17 +470,4 @@ fn current_file_access_match_context(rule: &EnforcementRule) -> Option<FilePolic
             fallback: Some(fallback.as_str().to_string()),
         },
     })
-}
-
-fn actor_process_identity(process: &ProcessIdentity) -> ControlActorProcessIdentity {
-    let namespace = process
-        .pid_namespace
-        .as_ref()
-        .map(|namespace| namespace.as_str().to_string());
-    ControlActorProcessIdentity {
-        pid: process.pid,
-        task_id: process.task_id,
-        generation: process.generation,
-        namespace,
-    }
 }

@@ -13,6 +13,7 @@ use config_core::daemon::{
 use control_contract::command::ProcessRef;
 use control_contract::selector::TraceSelector;
 use model_core::ids::{ProfileName, RequestId, TraceId, TraceName};
+use tls_payload_sync::resolve_program_path;
 
 use crate::clean::CleanArtifacts;
 use crate::launch::permission_policy::{DeploymentPermissionPolicy, PermissionMode};
@@ -70,6 +71,9 @@ pub enum CtlCommand {
         skip_daemon: bool,
         suggest_config: bool,
         ebpf_seccomp_policy: DeploymentPermissionPolicy,
+    },
+    TlsPlanQuery {
+        binary: PathBuf,
     },
 }
 
@@ -162,6 +166,8 @@ enum CtlCommandArgs {
     Doctor,
     #[command(about = "Probe local launch prerequisites and optional daemon readiness")]
     Probe(ProbeArgs),
+    #[command(about = "Inspect daemon-side TLS launch plan resolution")]
+    TlsPlan(TlsPlanArgs),
 }
 
 impl CtlCommandArgs {
@@ -243,6 +249,7 @@ impl CtlCommandArgs {
                     ebpf_seccomp_policy: ebpf_seccomp_policy(args.host_ebpf, args.seccomp_notify),
                 })
             }
+            Self::TlsPlan(args) => args.into_command(),
         }
     }
 
@@ -298,6 +305,48 @@ fn launch_seccomp_config(config: Option<&OperatorConfig>) -> Result<LaunchSeccom
         network_syscalls: config.network_control.syscalls.clone(),
         reserved_listener_fd: config.seccomp_notify.reserved_listener_fd,
     })
+}
+
+#[derive(Clone, Debug, Args)]
+struct TlsPlanArgs {
+    #[command(subcommand)]
+    command: TlsPlanCommandArgs,
+}
+
+impl TlsPlanArgs {
+    fn into_command(self) -> Result<CtlCommand, String> {
+        match self.command {
+            TlsPlanCommandArgs::Query(args) => {
+                let Some(program) = args.argv.first() else {
+                    return Err("tls-plan query requires a command after --".to_string());
+                };
+                let path = std::env::var_os("PATH");
+                let binary = resolve_program_path(
+                    std::ffi::OsStr::new(program),
+                    path.as_ref().map(|value| value.as_os_str()),
+                )
+                .map_err(|error| error.to_string())?;
+                Ok(CtlCommand::TlsPlanQuery { binary })
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Subcommand)]
+enum TlsPlanCommandArgs {
+    #[command(about = "Query daemon-side TLS launch plan resolution without running the command")]
+    Query(TlsPlanQueryArgs),
+}
+
+#[derive(Clone, Debug, Args)]
+struct TlsPlanQueryArgs {
+    #[arg(
+        value_name = "COMMAND",
+        required = true,
+        trailing_var_arg = true,
+        allow_hyphen_values = true
+    )]
+    argv: Vec<String>,
 }
 
 #[derive(Clone, Debug, Args)]

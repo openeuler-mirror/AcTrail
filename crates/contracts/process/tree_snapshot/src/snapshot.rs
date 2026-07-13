@@ -2,19 +2,19 @@
 
 use std::time::SystemTime;
 
-use model_core::process::ProcessIdentity;
+use model_core::process::ProcessObservation;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProcessSnapshot {
-    pub identity: ProcessIdentity,
-    pub parent: Option<ProcessIdentity>,
+    pub identity: ProcessObservation,
+    pub parent: Option<ProcessObservation>,
     pub executable: Option<String>,
     pub current_working_directory: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TreeSnapshot {
-    pub root: ProcessIdentity,
+    pub root: ProcessObservation,
     pub captured_at: SystemTime,
     pub processes: Vec<ProcessSnapshot>,
 }
@@ -22,5 +22,5 @@ pub struct TreeSnapshot {
 pub trait ProcessTreeSnapshotter {
     type Error;
 
-    fn snapshot(&self, root: &ProcessIdentity) -> Result<TreeSnapshot, Self::Error>;
+    fn snapshot(&self, root: &ProcessObservation) -> Result<TreeSnapshot, Self::Error>;
 }

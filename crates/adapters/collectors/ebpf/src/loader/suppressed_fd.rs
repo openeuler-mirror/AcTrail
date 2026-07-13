@@ -5,7 +5,7 @@ use std::ffi::OsStr;
 use config_core::daemon::EbpfCollectorConfig;
 use libbpf_rs::{MapCore, MapFlags, MapHandle, Object};
 use model_core::ids::TraceId;
-use model_core::process::{ProcessIdentity, ProcessSuppressedFd, SuppressedFdPurpose};
+use model_core::process::{KernelProcessCoordinates, ProcessSuppressedFd, SuppressedFdPurpose};
 
 use super::LoaderError;
 
@@ -119,7 +119,7 @@ pub(crate) fn unsuppress_fd(
     suppressed_fds: &MapHandle,
     suppressed_fd_index: &MapHandle,
     index_slots_per_process: u32,
-    process: &ProcessIdentity,
+    process: &KernelProcessCoordinates,
     fd: i32,
 ) -> Result<(), LoaderError> {
     let fd = suppressed_fd_u32(fd)?;
@@ -128,7 +128,7 @@ pub(crate) fn unsuppress_fd(
         suppressed_fd_index,
         index_slots_per_process,
         process.pid,
-        process.generation,
+        process.start_time,
         fd,
     )?;
     if suppressed_fds
@@ -209,11 +209,11 @@ pub(crate) fn sweep_trace(
 fn upsert_index(
     suppressed_fd_index: &MapHandle,
     index_slots_per_process: u32,
-    process: &ProcessIdentity,
+    process: &KernelProcessCoordinates,
     fd: u32,
     value: &[u8; SUPPRESSED_FD_VALUE_SIZE],
 ) -> Result<(), LoaderError> {
-    if process.generation == 0 {
+    if process.start_time == 0 {
         return Err(LoaderError::new(
             "suppress_fd",
             "suppressed fd index requires a non-zero process generation",
@@ -221,7 +221,7 @@ fn upsert_index(
     }
     let index_value = suppressed_fd_index_value(fd, value)?;
     for slot in 0..index_slots_per_process {
-        let key = suppressed_fd_index_key(process.pid, process.generation, slot);
+        let key = suppressed_fd_index_key(process.pid, process.start_time, slot);
         match suppressed_fd_index
             .lookup(&key, MapFlags::ANY)
             .map_err(|error| LoaderError::new("lookup_suppressed_fd_index", error.to_string()))?
@@ -243,7 +243,7 @@ fn upsert_index(
         "suppress_fd_index",
         format!(
             "suppressed fd index slots exhausted for pid {} generation {}: configured slots {}",
-            process.pid, process.generation, index_slots_per_process
+            process.pid, process.start_time, index_slots_per_process
         ),
     ))
 }
@@ -288,10 +288,10 @@ fn suppressed_fd_u32(fd: i32) -> Result<u32, LoaderError> {
 }
 
 fn suppressed_fd_key(
-    process: &ProcessIdentity,
+    process: &KernelProcessCoordinates,
     fd: u32,
 ) -> Result<[u8; SUPPRESSED_FD_KEY_SIZE], LoaderError> {
-    if process.generation == 0 {
+    if process.start_time == 0 {
         return Err(LoaderError::new(
             "suppress_fd",
             "suppressed fd requires a non-zero process generation",
@@ -300,7 +300,7 @@ fn suppressed_fd_key(
     let mut key = [0_u8; SUPPRESSED_FD_KEY_SIZE];
     key[0..4].copy_from_slice(&process.pid.to_ne_bytes());
     key[4..8].copy_from_slice(&fd.to_ne_bytes());
-    key[8..16].copy_from_slice(&process.generation.to_ne_bytes());
+    key[8..16].copy_from_slice(&process.start_time.to_ne_bytes());
     Ok(key)
 }
 

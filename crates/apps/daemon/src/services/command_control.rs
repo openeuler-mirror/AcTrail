@@ -9,11 +9,13 @@ use control_contract::reply::ControlError;
 use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use plugin_system::{
-    CONTROL_CURRENT_CONTEXT_TOKEN, ControlActorProcessIdentity, ControlDecisionBudget,
-    ControlDecisionRequest, ControlSubject, ControlVerdict,
+    CONTROL_CURRENT_CONTEXT_TOKEN, ControlDecisionBudget, ControlDecisionRequest, ControlSubject,
+    ControlVerdict,
 };
+use process_identity::ProcessIdentityManager;
 
 use crate::services::control_runtime::ControlPluginRuntime;
+use crate::services::identity::ControlActorIdentityResolver;
 use crate::services::process_seccomp::ProcessSeccompExecCandidate;
 
 #[derive(Debug)]
@@ -41,6 +43,7 @@ impl CommandControlService {
         &self,
         trace_id: TraceId,
         process: &ProcessIdentity,
+        process_registry: &ProcessIdentityManager,
         candidate: &ProcessSeccompExecCandidate,
         control_plugins: &ControlPluginRuntime,
     ) -> Result<CommandControlOutcome, ControlError> {
@@ -63,7 +66,14 @@ impl CommandControlService {
                 error: "concurrency_limit".to_string(),
             });
         }
-        let result = self.decide_rule(trace_id, process, candidate, control_plugins, rule);
+        let result = self.decide_rule(
+            trace_id,
+            process,
+            process_registry,
+            candidate,
+            control_plugins,
+            rule,
+        );
         self.release_rule(&rule.rule_id);
         result
     }
@@ -72,6 +82,7 @@ impl CommandControlService {
         &self,
         trace_id: TraceId,
         process: &ProcessIdentity,
+        process_registry: &ProcessIdentityManager,
         candidate: &ProcessSeccompExecCandidate,
         control_plugins: &ControlPluginRuntime,
         rule: &CommandControlRule,
@@ -80,7 +91,8 @@ impl CommandControlService {
             decision_id: format!("{}:{trace_id}", rule.rule_id),
             trace_id: trace_id.to_string(),
             subject: ControlSubject::CommandExecution,
-            actor_process_identity: actor_process_identity(process),
+            actor_process_identity: ControlActorIdentityResolver::new(process_registry)
+                .resolve(*process)?,
             operation: candidate.syscall.clone(),
             target_summary: command_target_summary(candidate),
             context_ref: Some(CONTROL_CURRENT_CONTEXT_TOKEN.to_string()),
@@ -322,17 +334,4 @@ fn command_target_summary(candidate: &ProcessSeccompExecCandidate) -> String {
         candidate.path.as_deref().unwrap_or_default(),
         argv
     )
-}
-
-fn actor_process_identity(process: &ProcessIdentity) -> ControlActorProcessIdentity {
-    let namespace = process
-        .pid_namespace
-        .as_ref()
-        .map(|namespace| namespace.as_str().to_string());
-    ControlActorProcessIdentity {
-        pid: process.pid,
-        task_id: process.task_id,
-        generation: process.generation,
-        namespace,
-    }
 }

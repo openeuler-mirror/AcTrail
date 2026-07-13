@@ -4,84 +4,73 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use model_core::capability::Capability;
 use model_core::ids::TraceId;
-use model_core::process::{NamespaceIdentity, ProcessIdentity};
+use model_core::process::{NamespaceIdentity, ProcessObservation};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TrackedProcess {
     pub trace_id: TraceId,
-    pub identity: ProcessIdentity,
+    pub observation: ProcessObservation,
     pub map_pid: u32,
+    pub kernel_start_time: u64,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct BindingStateMap {
-    by_pid: BTreeMap<u32, TrackedProcess>,
-    by_trace_map_pid: BTreeMap<(TraceId, u32), ProcessIdentity>,
-    by_trace_map_process: BTreeMap<(TraceId, u32, u64), ProcessIdentity>,
-    resolved_by_trace_map_process: BTreeMap<(TraceId, u32, u64), ProcessIdentity>,
-    pids_by_trace: BTreeMap<TraceId, BTreeSet<u32>>,
+    by_host_pid: BTreeMap<u32, TrackedProcess>,
+    by_trace_map_pid: BTreeMap<(TraceId, u32), TrackedProcess>,
+    by_trace_map_process: BTreeMap<(TraceId, u32, u64), ProcessObservation>,
+    host_pids_by_trace: BTreeMap<TraceId, BTreeSet<u32>>,
     map_pids_by_trace: BTreeMap<TraceId, BTreeSet<u32>>,
     pid_namespace_by_trace: BTreeMap<TraceId, NamespaceIdentity>,
     capabilities_by_trace: BTreeMap<TraceId, BTreeSet<Capability>>,
 }
 
 impl BindingStateMap {
-    pub fn track(&mut self, trace_id: TraceId, identity: ProcessIdentity) {
-        self.track_with_map_pid(trace_id, identity.clone(), identity.pid);
-    }
-
     pub fn track_with_map_pid(
         &mut self,
         trace_id: TraceId,
-        identity: ProcessIdentity,
+        observation: ProcessObservation,
         map_pid: u32,
+        kernel_start_time: u64,
     ) {
-        if let Some(previous) = self.by_pid.remove(&identity.pid) {
+        let host_pid = observation.host.as_ref().map(|host| host.pid);
+        if let Some(host_pid) = host_pid
+            && let Some(previous) = self.by_host_pid.remove(&host_pid)
+        {
             self.remove_indexes_for(&previous);
         }
-        if let Some(previous_identity) = self.by_trace_map_pid.remove(&(trace_id, map_pid)) {
-            let previous = TrackedProcess {
-                trace_id,
-                identity: previous_identity,
-                map_pid,
-            };
-            self.by_pid.remove(&previous.identity.pid);
+        if let Some(previous) = self.by_trace_map_pid.remove(&(trace_id, map_pid)) {
+            if let Some(previous_host_pid) = previous.observation.host.as_ref().map(|host| host.pid)
+            {
+                self.by_host_pid.remove(&previous_host_pid);
+            }
             self.remove_indexes_for(&previous);
         }
-        self.by_pid.insert(
-            identity.pid,
-            TrackedProcess {
-                trace_id,
-                identity: identity.clone(),
-                map_pid,
-            },
-        );
-        self.by_trace_map_pid
-            .insert((trace_id, map_pid), identity.clone());
+
+        let tracked = TrackedProcess {
+            trace_id,
+            observation: observation.clone(),
+            map_pid,
+            kernel_start_time,
+        };
+        if let Some(host_pid) = host_pid {
+            self.by_host_pid.insert(host_pid, tracked.clone());
+            self.host_pids_by_trace
+                .entry(trace_id)
+                .or_default()
+                .insert(host_pid);
+        }
+        self.by_trace_map_pid.insert((trace_id, map_pid), tracked);
         self.by_trace_map_process
-            .insert((trace_id, map_pid, identity.generation), identity.clone());
-        self.pids_by_trace
-            .entry(trace_id)
-            .or_default()
-            .insert(identity.pid);
+            .insert((trace_id, map_pid, kernel_start_time), observation.clone());
         self.map_pids_by_trace
             .entry(trace_id)
             .or_default()
             .insert(map_pid);
-        if let Some(namespace) = identity.pid_namespace.clone() {
+        if let Some(namespace) = observation.namespace {
             self.pid_namespace_by_trace
                 .entry(trace_id)
-                .or_insert(namespace);
-        }
-    }
-
-    pub fn track_many(
-        &mut self,
-        trace_id: TraceId,
-        identities: impl IntoIterator<Item = ProcessIdentity>,
-    ) {
-        for identity in identities {
-            self.track(trace_id, identity);
+                .or_insert(namespace.pid_namespace);
         }
     }
 
@@ -101,74 +90,35 @@ impl BindingStateMap {
     pub fn trace_has_capability(&self, trace_id: TraceId, capability: &Capability) -> bool {
         self.capabilities_by_trace
             .get(&trace_id)
-            .map(|capabilities| capabilities.contains(capability))
-            .unwrap_or(false)
-    }
-
-    pub fn tracked_identity(&self, pid: u32) -> Option<&ProcessIdentity> {
-        self.by_pid.get(&pid).map(|entry| &entry.identity)
+            .is_some_and(|capabilities| capabilities.contains(capability))
     }
 
     pub fn by_host_pid(&self, pid: u32) -> Option<&TrackedProcess> {
-        self.by_pid.get(&pid)
+        self.by_host_pid.get(&pid)
     }
 
-    pub fn tracked_event_identity(
+    pub fn tracked_event_observation(
         &self,
         trace_id: TraceId,
         map_pid: u32,
-        generation: u64,
-    ) -> Option<&ProcessIdentity> {
-        if generation != 0
-            && let Some(identity) = self
+        kernel_start_time: u64,
+    ) -> Option<&ProcessObservation> {
+        if kernel_start_time != 0 {
+            return self
                 .by_trace_map_process
-                .get(&(trace_id, map_pid, generation))
-        {
-            return Some(identity);
+                .get(&(trace_id, map_pid, kernel_start_time));
         }
-        if generation != 0 {
-            return None;
-        }
-        self.by_trace_map_pid.get(&(trace_id, map_pid))
-    }
-
-    pub fn cached_resolved_event_identity(
-        &self,
-        trace_id: TraceId,
-        map_pid: u32,
-        generation: u64,
-    ) -> Option<&ProcessIdentity> {
-        if generation == 0 {
-            return None;
-        }
-        self.resolved_by_trace_map_process
-            .get(&(trace_id, map_pid, generation))
-    }
-
-    pub fn cache_resolved_event_identity(
-        &mut self,
-        trace_id: TraceId,
-        map_pid: u32,
-        generation: u64,
-        identity: ProcessIdentity,
-    ) {
-        if generation == 0 {
-            return;
-        }
-        self.resolved_by_trace_map_process
-            .insert((trace_id, map_pid, generation), identity);
+        self.by_trace_map_pid
+            .get(&(trace_id, map_pid))
+            .map(|tracked| &tracked.observation)
     }
 
     pub fn trace_pid_namespace(&self, trace_id: TraceId) -> Option<&NamespaceIdentity> {
         self.pid_namespace_by_trace.get(&trace_id)
     }
 
-    pub fn tracked_trace(&self, pid: u32) -> Option<TraceId> {
-        self.by_pid.get(&pid).map(|entry| entry.trace_id)
-    }
-
-    pub fn remove_pid(&mut self, pid: u32) -> Option<TrackedProcess> {
-        let removed = self.by_pid.remove(&pid)?;
+    pub fn remove_pid(&mut self, host_pid: u32) -> Option<TrackedProcess> {
+        let removed = self.by_host_pid.remove(&host_pid)?;
         self.remove_indexes_for(&removed);
         Some(removed)
     }
@@ -177,36 +127,40 @@ impl BindingStateMap {
         &mut self,
         trace_id: TraceId,
         map_pid: u32,
-        generation: u64,
+        kernel_start_time: u64,
     ) -> Option<TrackedProcess> {
-        let identity = self
-            .tracked_event_identity(trace_id, map_pid, generation)?
-            .clone();
-        self.remove_pid(identity.pid)
+        let tracked = self.by_trace_map_pid.get(&(trace_id, map_pid))?.clone();
+        if kernel_start_time != 0 && tracked.kernel_start_time != kernel_start_time {
+            return None;
+        }
+        if let Some(host_pid) = tracked.observation.host.as_ref().map(|host| host.pid) {
+            self.by_host_pid.remove(&host_pid);
+        }
+        self.remove_indexes_for(&tracked);
+        Some(tracked)
     }
 
     pub fn remove_trace(&mut self, trace_id: TraceId) -> Vec<TrackedProcess> {
         self.capabilities_by_trace.remove(&trace_id);
         self.pid_namespace_by_trace.remove(&trace_id);
-        if let Some(map_pids) = self.map_pids_by_trace.remove(&trace_id) {
-            for map_pid in map_pids {
-                self.by_trace_map_pid.remove(&(trace_id, map_pid));
-            }
-        }
         self.by_trace_map_process
             .retain(|(entry_trace_id, _, _), _| *entry_trace_id != trace_id);
-        self.resolved_by_trace_map_process
-            .retain(|(entry_trace_id, _, _), _| *entry_trace_id != trace_id);
-        let Some(pids) = self.pids_by_trace.remove(&trace_id) else {
-            return Vec::new();
-        };
-        pids.into_iter()
-            .filter_map(|pid| self.by_pid.remove(&pid))
-            .collect()
+        let map_pids = self.map_pids_by_trace.remove(&trace_id).unwrap_or_default();
+        let removed = map_pids
+            .into_iter()
+            .filter_map(|map_pid| self.by_trace_map_pid.remove(&(trace_id, map_pid)))
+            .collect::<Vec<_>>();
+        for tracked in &removed {
+            if let Some(host_pid) = tracked.observation.host.as_ref().map(|host| host.pid) {
+                self.by_host_pid.remove(&host_pid);
+            }
+        }
+        self.host_pids_by_trace.remove(&trace_id);
+        removed
     }
 
     pub fn trace_count(&self) -> usize {
-        self.pids_by_trace.len()
+        self.map_pids_by_trace.len()
     }
 
     fn remove_indexes_for(&mut self, tracked: &TrackedProcess) {
@@ -215,12 +169,14 @@ impl BindingStateMap {
         self.by_trace_map_process.remove(&(
             tracked.trace_id,
             tracked.map_pid,
-            tracked.identity.generation,
+            tracked.kernel_start_time,
         ));
-        if let Some(pids) = self.pids_by_trace.get_mut(&tracked.trace_id) {
-            pids.remove(&tracked.identity.pid);
-            if pids.is_empty() {
-                self.pids_by_trace.remove(&tracked.trace_id);
+        if let Some(host_pid) = tracked.observation.host.as_ref().map(|host| host.pid)
+            && let Some(host_pids) = self.host_pids_by_trace.get_mut(&tracked.trace_id)
+        {
+            host_pids.remove(&host_pid);
+            if host_pids.is_empty() {
+                self.host_pids_by_trace.remove(&tracked.trace_id);
             }
         }
         if let Some(map_pids) = self.map_pids_by_trace.get_mut(&tracked.trace_id) {

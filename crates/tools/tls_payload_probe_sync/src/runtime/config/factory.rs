@@ -159,6 +159,7 @@ fn optional_event_transport(
         }
         return Ok(Some(EventTransportConfig::InheritedFd {
             fd,
+            reconnect_path: socket_path,
             pending_byte_budget,
             write_buffer_bytes,
         }));

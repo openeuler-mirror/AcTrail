@@ -27,7 +27,7 @@ model_core = { path = "../../core/model" }
 payload_event = { path = "../../contracts/payload/event" }
 plugin_system = { path = "../../core/plugin_system" }
 plugin_wasm_runtime = { path = "../../core/plugin_wasm_runtime" }
-process_identity_contract = { path = "../../contracts/process/identity" }
+process_identity = { path = "../../core/process_identity" }
 process_tree_snapshot_contract = { path = "../../contracts/process/tree_snapshot" }
 provider_evidence = { path = "../../contracts/provider_label/evidence" }
 provider_label = { path = "../../contracts/provider_label/label" }

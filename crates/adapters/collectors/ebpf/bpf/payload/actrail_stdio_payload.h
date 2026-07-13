@@ -222,7 +222,7 @@ static __always_inline int emit_stdio_payload_op(struct trace_event_raw_sys_exit
     event->flags = original_size > bounded_size ? ACTRAIL_STDIO_PAYLOAD_TRUNCATED : 0;
     event->fd = op->fd;
     event->syscall = op->syscall;
-    event->pid_generation = ensure_process_generation(tgid);
+    event->pid_generation = current_process_start_time(tgid);
     if (bpf_probe_read_user(event->bytes, bounded_size, (void *)(unsigned long)op->buffer_ptr) != 0) {
         actrail_event_discard(event);
         bpf_map_delete_elem(&pending_stdio_payload_ops, &pid_tgid);

@@ -281,7 +281,7 @@ fn resource_metrics_sampler_persists_procfs_samples() {
     .unwrap();
 
     let trace_id = wiring.trace_runtime.reserve_trace_id();
-    let process = ProcessIdentity::new(std::process::id(), 1, 1);
+    let process = ProcessIdentity::new(1);
     create_active_trace(
         &mut wiring,
         trace_id,
@@ -402,7 +402,7 @@ fn storage_retention_keeps_active_and_protected_traces() {
     let protected_trace_id = model_core::ids::TraceId::new(2);
     let active_trace = TraceRecord::new(
         active_trace_id,
-        ProcessIdentity::new(100, 1, 1),
+        ProcessIdentity::new(1),
         TraceName::new("active"),
         ProfileName::new("snapshot"),
         UNIX_EPOCH,
@@ -446,42 +446,6 @@ fn storage_retention_keeps_active_and_protected_traces() {
 
 pub(super) fn test_storage_config(path: std::path::PathBuf) -> StorageConfig {
     StorageConfig::sqlite_path(path)
-}
-
-pub(super) fn seccomp_notify_disabled() -> SeccompNotifyConfig {
-    SeccompNotifyConfig::disabled()
-}
-
-pub(super) fn process_seccomp_disabled() -> ProcessSeccompConfig {
-    ProcessSeccompConfig::disabled()
-}
-
-pub(super) fn agent_invocation_disabled() -> AgentInvocationConfig {
-    AgentInvocationConfig::disabled()
-}
-
-pub(super) fn application_protocol_disabled() -> ApplicationProtocolConfig {
-    ApplicationProtocolConfig::disabled()
-}
-
-pub(super) fn resource_metrics_disabled() -> ResourceMetricsConfig {
-    ResourceMetricsConfig::disabled()
-}
-
-pub(super) fn workload_diagnostics_disabled() -> WorkloadDiagnostics {
-    WorkloadDiagnostics::default()
-}
-
-pub(super) fn export_runtime_disabled() -> RuntimeExportConfig {
-    RuntimeExportConfig::disabled()
-}
-
-pub(super) fn enforcement_disabled() -> EnforcementConfig {
-    EnforcementConfig::disabled()
-}
-
-pub(super) fn network_control_disabled() -> NetworkControlConfig {
-    NetworkControlConfig::disabled()
 }
 
 fn retention_test_config() -> StorageRetentionConfig {
@@ -539,7 +503,7 @@ fn terminal_trace(
 ) -> TraceRecord {
     let mut trace = TraceRecord::new(
         trace_id,
-        ProcessIdentity::new(100, 1, 1),
+        ProcessIdentity::new(1),
         TraceName::new(format!("trace-{}", trace_id.get())),
         ProfileName::new("snapshot"),
         completed_at,
@@ -560,6 +524,31 @@ fn create_active_trace(
     collector_name: &str,
     collector_capabilities: Vec<Capability>,
 ) {
+    let mut observation = test_process_observation(process);
+    if process.get() == 1 {
+        observation.host = Some(model_core::process::HostProcessCoordinates::new(
+            std::process::id(),
+            1,
+        ));
+    }
+    let resolution = wiring
+        .attach_service
+        .process_registry
+        .resolve_or_create(observation)
+        .expect("register test process observation");
+    let process = resolution.identity;
+    wiring
+        .attach_service
+        .storage
+        .upsert_process_record(
+            wiring
+                .attach_service
+                .process_registry
+                .record(process)
+                .expect("test process record")
+                .clone(),
+        )
+        .expect("persist test process record");
     let profile = CaptureProfile::new(profile_name.clone(), capability_requests);
     let captured_at = SystemTime::UNIX_EPOCH;
     let profile_snapshot = CaptureProfileSnapshot::from_profile(&profile, captured_at);
@@ -602,6 +591,17 @@ fn create_active_trace(
             .upsert_membership(membership)
             .unwrap();
     }
+}
+
+fn test_process_observation(process: ProcessIdentity) -> model_core::process::ProcessObservation {
+    let token = process.get();
+    model_core::process::ProcessObservation::namespace(
+        model_core::process::NamespaceProcessCoordinates::new(
+            model_core::process::NamespaceIdentity::new("pid:[test]"),
+            u32::try_from(token).expect("test process token fits u32"),
+            token,
+        ),
+    )
 }
 
 fn ebpf_config(enabled: bool) -> EbpfCollectorConfig {

@@ -32,6 +32,10 @@ impl DaemonProfileRegistry {
         self.capture_profiles.get(name)
     }
 
+    pub fn capture_profiles(&self) -> impl Iterator<Item = (&ProfileName, &CaptureProfile)> {
+        self.capture_profiles.iter()
+    }
+
     pub fn is_launch_only_profile(&self, name: &ProfileName) -> bool {
         self.launch_only_profiles.contains(name)
     }

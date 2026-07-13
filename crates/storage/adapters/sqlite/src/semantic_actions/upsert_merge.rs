@@ -37,16 +37,14 @@ fn validate_action_merge(
         return Err(SemanticActionStoreError::new(
             "merge_semantic_action",
             format!(
-                "semantic action id collision for {}: existing kind={} trace={} pid={} generation={}, incoming kind={} trace={} pid={} generation={}",
+                "semantic action id collision for {}: existing kind={} trace={} process={}, incoming kind={} trace={} process={}",
                 incoming.action_id,
                 existing.kind.as_str(),
                 existing.trace_id,
-                existing.process.pid,
-                existing.process.generation,
+                existing.process,
                 incoming.kind.as_str(),
                 incoming.trace_id,
-                incoming.process.pid,
-                incoming.process.generation,
+                incoming.process,
             ),
         ));
     }

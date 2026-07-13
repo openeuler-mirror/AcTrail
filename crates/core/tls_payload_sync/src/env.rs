@@ -8,7 +8,7 @@ use tls_payload_core::RewriteRule;
 use tls_probe_point_finder::ProbePointPlan;
 
 use crate::SyncResult;
-use crate::plan::{encode_points, runtime_plan_bundle};
+use crate::plan::{RuntimePlanDescriptor, encode_points, encode_runtime_plan};
 
 pub const ENV_ENABLED: &str = "TLS_PAYLOAD_SYNC_ENABLED";
 pub const ENV_BINARY: &str = "TLS_PAYLOAD_SYNC_BINARY";
@@ -140,6 +140,22 @@ pub fn runtime_env_for_plans(
     config: &RuntimeEnvConfig,
     plans: &[ProbePointPlan],
 ) -> SyncResult<Vec<(OsString, OsString)>> {
+    let mut descriptors = Vec::new();
+    for plan in plans {
+        descriptors.push(RuntimePlanDescriptor {
+            target: plan.target.binary.clone(),
+            binary: plan.binary.path.clone(),
+            provider: plan.provider.as_str().to_string(),
+            points: encode_points(plan)?,
+        });
+    }
+    runtime_env_for_plan_descriptors(config, &descriptors)
+}
+
+pub fn runtime_env_for_plan_descriptors(
+    config: &RuntimeEnvConfig,
+    plans: &[RuntimePlanDescriptor],
+) -> SyncResult<Vec<(OsString, OsString)>> {
     let mut env = vec![
         pair(ENV_ENABLED, "1"),
         pair(ENV_RULES, &encode_rules(&config.rules)),
@@ -176,11 +192,14 @@ pub fn runtime_env_for_plans(
         pair(ENV_EVENTS, &config.events.encode()),
     ];
     if let Some(plan) = plans.first() {
-        env.push(pair(ENV_BINARY, &plan.binary.path.display().to_string()));
-        env.push(pair(ENV_PROVIDER, plan.provider.as_str()));
-        env.push(pair(ENV_POINTS, &encode_points(plan)?));
+        env.push(pair(ENV_BINARY, &plan.binary.display().to_string()));
+        env.push(pair(ENV_PROVIDER, &plan.provider));
+        env.push(pair(ENV_POINTS, &plan.points));
     }
-    env.push(pair(ENV_PLAN_BUNDLE, &runtime_plan_bundle(plans)?));
+    env.push(pair(
+        ENV_PLAN_BUNDLE,
+        &runtime_plan_descriptor_bundle(plans),
+    ));
     if let Some(trace_id) = config.trace_id {
         env.push(pair(ENV_TRACE_ID, &trace_id.to_string()));
     }
@@ -194,6 +213,14 @@ pub fn runtime_env_for_plans(
         env.push(pair(ENV_EVENT_WRITE_BUFFER_BYTES, &bytes.to_string()));
     }
     Ok(env)
+}
+
+pub fn runtime_plan_descriptor_bundle(plans: &[RuntimePlanDescriptor]) -> String {
+    plans
+        .iter()
+        .map(encode_runtime_plan)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn pair(key: &str, value: &str) -> (OsString, OsString) {

@@ -11,7 +11,7 @@ use model_core::event::{
 };
 use model_core::ids::{CollectorName, EventId, TraceId};
 use model_core::payload::{PayloadRedactionState, PayloadSegment, PayloadSegmentId};
-use model_core::process::ProcessIdentity;
+use model_core::process::{ProcessIdentity, ProcessMembership};
 use payload_event::RawPayloadSegment;
 use recording_runtime::{
     ObservedRecordWriteSession, RecordingError, RecordingWriter, SemanticActionBatch,
@@ -25,11 +25,9 @@ use crate::services::application_protocol::{
 };
 use crate::services::attach::StorageAttachService;
 use crate::services::diagnostic_logging;
-use crate::services::identity::TraceIdentityResolver;
 use crate::services::live::next_diagnostic_id_from_seed;
 use crate::services::payload_gate::{
     PayloadBodyRetention, PayloadBodyRetentionDecision, PayloadBodyRetentionGate,
-    SocketHttpPayloadGate,
 };
 use crate::services::semantic_actions::LiveTraceRecordLookup;
 use crate::services::workload_diagnostics::{PayloadTransactionPhase, WorkloadDiagnostics};
@@ -44,7 +42,7 @@ impl StorageAttachService {
     #[cfg(test)]
     pub(in crate::services) fn process_payload_segment_impl(
         &mut self,
-        trace_runtime: &TraceRuntime,
+        trace_runtime: &mut TraceRuntime,
         raw: RawPayloadSegment,
     ) -> Result<(), ControlError> {
         self.process_payload_segments_impl(trace_runtime, vec![raw])
@@ -52,13 +50,46 @@ impl StorageAttachService {
 
     pub(in crate::services) fn process_payload_segments_impl(
         &mut self,
-        trace_runtime: &TraceRuntime,
+        trace_runtime: &mut TraceRuntime,
         raw_segments: Vec<RawPayloadSegment>,
     ) -> Result<(), ControlError> {
         if raw_segments.is_empty() {
             return Ok(());
         }
         let raw_segment_count = raw_segments.len();
+        let mut admitted = Vec::new();
+        for raw in raw_segments {
+            admitted.extend(
+                self.socket_payload_gate
+                    .admit(raw)
+                    .map_err(|error| ControlError::new("socket_payload_gate", error))?,
+            );
+        }
+        let mut resolved_segments = Vec::with_capacity(admitted.len());
+        let mut process_records = BTreeMap::new();
+        let mut membership_trace_ids = BTreeSet::new();
+        for raw in admitted {
+            let (process, record) = self.resolve_process_observation(raw.process.clone())?;
+            if let Some(record) = record {
+                process_records.insert(record.identity, record);
+            }
+            if trace_runtime.find_membership(&process).is_none() {
+                trace_runtime
+                    .insert_membership(
+                        raw.trace_id,
+                        ProcessMembership::observed(raw.trace_id, process, raw.observed_at),
+                    )
+                    .map_err(|error| {
+                        ControlError::new("payload_membership", format!("{error:?}"))
+                    })?;
+                membership_trace_ids.insert(raw.trace_id);
+            }
+            resolved_segments.push(ResolvedRawPayloadSegment { raw, process });
+        }
+        let membership_trace_states = membership_trace_ids
+            .into_iter()
+            .map(|trace_id| self.trace_state_record_for_persistence(trace_runtime, trace_id))
+            .collect::<Result<Vec<_>, _>>()?;
         let traces = LiveTraceRecordLookup::new(trace_runtime);
         let next_diagnostic_id = &mut self.next_diagnostic_id;
         let mut semantic_action_count = 0usize;
@@ -68,7 +99,6 @@ impl StorageAttachService {
         let result = {
             let mut context = PayloadTransactionContext {
                 trace_runtime,
-                socket_payload_gate: &mut self.socket_payload_gate,
                 payload_body_retention_gate: &mut self.payload_body_retention_gate,
                 semantic_retention: &self.semantic_retention,
                 application_protocol: &mut self.application_protocol,
@@ -108,8 +138,14 @@ impl StorageAttachService {
                             .map_err(control_error_to_recording)
                     },
                     |session| {
+                        for record in process_records.into_values() {
+                            session.persist_process_record(record)?;
+                        }
+                        for trace_state in membership_trace_states {
+                            session.persist_trace_state(trace_state)?;
+                        }
                         let semantic_actions = context
-                            .process_payload_segments(session, raw_segments)
+                            .process_payload_segments(session, resolved_segments)
                             .map_err(control_error_to_recording)?;
                         semantic_action_count = semantic_actions.actions().len();
                         semantic_link_count = semantic_actions.links().len();
@@ -136,7 +172,6 @@ impl StorageAttachService {
 
 struct PayloadTransactionContext<'a> {
     trace_runtime: &'a TraceRuntime,
-    socket_payload_gate: &'a mut SocketHttpPayloadGate,
     payload_body_retention_gate: &'a mut PayloadBodyRetentionGate,
     semantic_retention: &'a SemanticRetentionConfig,
     application_protocol: &'a mut ApplicationProtocolAnalyzer,
@@ -155,26 +190,10 @@ impl PayloadTransactionContext<'_> {
     fn process_payload_segments(
         &mut self,
         session: &mut ObservedRecordWriteSession<'_>,
-        raw_segments: Vec<RawPayloadSegment>,
+        raw_segments: Vec<ResolvedRawPayloadSegment>,
     ) -> Result<SemanticActionBatch, ControlError> {
         let mut semantic_actions = SemanticActionBatch::default();
         for raw in raw_segments {
-            semantic_actions.extend(self.process_admitted_payload_segment(session, raw)?);
-        }
-        Ok(semantic_actions)
-    }
-
-    fn process_admitted_payload_segment(
-        &mut self,
-        session: &mut ObservedRecordWriteSession<'_>,
-        raw: RawPayloadSegment,
-    ) -> Result<SemanticActionBatch, ControlError> {
-        let admitted = self
-            .socket_payload_gate
-            .admit(raw)
-            .map_err(|error| ControlError::new("socket_payload_gate", error))?;
-        let mut semantic_actions = SemanticActionBatch::default();
-        for raw in admitted {
             semantic_actions.extend(self.persist_payload_segment(session, raw)?);
         }
         Ok(semantic_actions)
@@ -183,27 +202,27 @@ impl PayloadTransactionContext<'_> {
     fn persist_payload_segment(
         &mut self,
         session: &mut ObservedRecordWriteSession<'_>,
-        raw: RawPayloadSegment,
+        resolved: ResolvedRawPayloadSegment,
     ) -> Result<SemanticActionBatch, ControlError> {
-        let Some(matched) = TraceIdentityResolver::new(self.trace_runtime).payload_process(&raw)
+        let raw = resolved.raw;
+        let Some((matched_trace_id, membership)) =
+            self.trace_runtime.find_membership(&resolved.process)
         else {
             self.log_payload_diagnostic(format_args!(
-                "payload_persist drop_membership_miss trace_id={} pid={} generation={} source={:?} operation_id={}",
+                "payload_persist drop_membership_miss trace_id={} process_id={} source={:?} operation_id={}",
                 raw.trace_id,
-                raw.process.pid,
-                raw.process.generation,
+                resolved.process.get(),
                 raw.source_boundary,
                 raw.operation_id
             ));
             return Ok(SemanticActionBatch::default());
         };
-        if matched.trace_id != raw.trace_id {
+        if matched_trace_id != raw.trace_id {
             self.log_payload_diagnostic(format_args!(
-                "payload_persist drop_trace_mismatch raw_trace_id={} matched_trace_id={} pid={} generation={} source={:?} operation_id={}",
+                "payload_persist drop_trace_mismatch raw_trace_id={} matched_trace_id={} process_id={} source={:?} operation_id={}",
                 raw.trace_id,
-                matched.trace_id,
-                raw.process.pid,
-                raw.process.generation,
+                matched_trace_id,
+                resolved.process.get(),
                 raw.source_boundary,
                 raw.operation_id
             ));
@@ -212,10 +231,9 @@ impl PayloadTransactionContext<'_> {
         let policy = self.policy.for_segment(&raw)?;
         if matches!(policy.stdio_storage_mode, PayloadStdioStorageMode::Drop) {
             self.log_payload_diagnostic(format_args!(
-                "payload_persist drop_stdio_storage_policy trace_id={} pid={} generation={} stream={} operation_id={}",
+                "payload_persist drop_stdio_storage_policy trace_id={} process_id={} stream={} operation_id={}",
                 raw.trace_id,
-                raw.process.pid,
-                raw.process.generation,
+                resolved.process.get(),
                 raw.protocol_hint.as_deref().unwrap_or("unknown"),
                 raw.operation_id
             ));
@@ -228,7 +246,7 @@ impl PayloadTransactionContext<'_> {
             segment_id: self.next_payload_segment_id()?,
             trace_id: raw.trace_id,
             observed_at: raw.observed_at,
-            process: matched.process.clone(),
+            process: membership.identity,
             source_boundary: raw.source_boundary,
             content_state: raw.content_state,
             direction: raw.direction,
@@ -306,10 +324,9 @@ impl PayloadTransactionContext<'_> {
         self.retained_payload_transaction
             .record_persisted(raw.trace_id, next_retained_bytes);
         self.log_payload_diagnostic(format_args!(
-            "payload_persist stored trace_id={} pid={} generation={} source={:?} captured_bytes={} retained_body_bytes={} operation_id={}",
+            "payload_persist stored trace_id={} process_id={} source={:?} captured_bytes={} retained_body_bytes={} operation_id={}",
             raw.trace_id,
-            matched.process.pid,
-            matched.process.generation,
+            membership.identity.get(),
             raw.source_boundary,
             stored_captured_size,
             retained_body_bytes,
@@ -342,7 +359,7 @@ impl PayloadTransactionContext<'_> {
             session,
             raw.trace_id,
             raw.observed_at,
-            matched.process,
+            membership.identity,
             application_drafts,
         )?;
         self.workload_diagnostics.record_payload_transaction_phase(
@@ -454,6 +471,11 @@ impl PayloadTransactionContext<'_> {
             output.llm_request_contents,
         )
     }
+}
+
+struct ResolvedRawPayloadSegment {
+    raw: RawPayloadSegment,
+    process: ProcessIdentity,
 }
 
 fn recording_error_to_control(error: RecordingError) -> ControlError {

@@ -30,8 +30,8 @@ pub(super) fn event_json(event: &DomainEvent) -> String {
     output.push(',');
     json::field(
         &mut output,
-        "pid",
-        &json::number(event.envelope.process.pid),
+        "process_id",
+        &json::number(event.envelope.process.get()),
     );
     output.push(',');
     json::field(
@@ -61,7 +61,11 @@ pub(super) fn event_json(event: &DomainEvent) -> String {
 
 pub(super) fn process_json(membership: &ProcessMembership) -> String {
     let mut output = String::from("{");
-    json::field(&mut output, "pid", &json::number(membership.identity.pid));
+    json::field(
+        &mut output,
+        "process_id",
+        &json::number(membership.identity.get()),
+    );
     output.push(',');
     json::field(
         &mut output,
@@ -71,8 +75,8 @@ pub(super) fn process_json(membership: &ProcessMembership) -> String {
     output.push(',');
     json::field(
         &mut output,
-        "parent_pid",
-        &json::optional_number(membership.inherited_from.as_ref().map(|parent| parent.pid)),
+        "parent_process_id",
+        &json::optional_number(membership.inherited_from.map(|parent| parent.get())),
     );
     output.push(',');
     json::field(

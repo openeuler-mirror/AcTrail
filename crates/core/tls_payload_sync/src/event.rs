@@ -7,7 +7,7 @@ use tls_payload_core::PayloadDirection;
 
 use crate::{SyncError, SyncResult};
 
-const EVENT_VERSION: &str = "v1";
+const EVENT_VERSION: &str = "v2";
 const FIELD_SEPARATOR: char = '\t';
 const PAYLOAD_OPCODE: &str = "payload";
 const DECISION_OPCODE: &str = "decision";
@@ -18,6 +18,8 @@ const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
 pub struct PayloadEvent {
     pub trace_id: u64,
     pub pid: u32,
+    pub start_time_ticks: u64,
+    pub pid_namespace: String,
     pub direction: PayloadDirection,
     pub provider: String,
     pub symbol: String,
@@ -30,6 +32,8 @@ pub struct PayloadEvent {
 pub struct DecisionEvent {
     pub trace_id: u64,
     pub pid: u32,
+    pub start_time_ticks: u64,
+    pub pid_namespace: String,
     pub direction: PayloadDirection,
     pub provider: String,
     pub symbol: String,
@@ -43,6 +47,8 @@ pub struct DecisionEvent {
 pub struct SummaryEvent {
     pub trace_id: u64,
     pub pid: u32,
+    pub start_time_ticks: u64,
+    pub pid_namespace: String,
     pub direction: PayloadDirection,
     pub provider: String,
     pub symbol: String,
@@ -78,6 +84,8 @@ pub fn write_event_line(writer: &mut impl Write, event: &SyncEvent) -> SyncResul
                     PAYLOAD_OPCODE,
                     &event.trace_id.to_string(),
                     &event.pid.to_string(),
+                    &event.start_time_ticks.to_string(),
+                    &event.pid_namespace,
                     event.direction.as_str(),
                     &event.provider,
                     &event.symbol,
@@ -95,6 +103,8 @@ pub fn write_event_line(writer: &mut impl Write, event: &SyncEvent) -> SyncResul
                     DECISION_OPCODE,
                     &event.trace_id.to_string(),
                     &event.pid.to_string(),
+                    &event.start_time_ticks.to_string(),
+                    &event.pid_namespace,
                     event.direction.as_str(),
                     &event.provider,
                     &event.symbol,
@@ -113,6 +123,8 @@ pub fn write_event_line(writer: &mut impl Write, event: &SyncEvent) -> SyncResul
                     SUMMARY_OPCODE,
                     &event.trace_id.to_string(),
                     &event.pid.to_string(),
+                    &event.start_time_ticks.to_string(),
+                    &event.pid_namespace,
                     event.direction.as_str(),
                     &event.provider,
                     &event.symbol,
@@ -147,54 +159,60 @@ pub fn decode_event_line(line: &[u8]) -> SyncResult<SyncEvent> {
 }
 
 fn decode_payload(fields: &[&str]) -> SyncResult<SyncEvent> {
-    require_len(fields, 10, PAYLOAD_OPCODE)?;
+    require_len(fields, 12, PAYLOAD_OPCODE)?;
     Ok(SyncEvent::Payload(PayloadEvent {
         trace_id: parse(fields[2], "trace_id")?,
         pid: parse(fields[3], "pid")?,
-        direction: PayloadDirection::from_str(fields[4])
+        start_time_ticks: parse(fields[4], "start_time_ticks")?,
+        pid_namespace: fields[5].to_string(),
+        direction: PayloadDirection::from_str(fields[6])
             .map_err(|error| SyncError::new(error.to_string()))?,
-        provider: fields[5].to_string(),
-        symbol: fields[6].to_string(),
-        stream_key: parse(fields[7], "stream_key")?,
-        sequence: parse(fields[8], "sequence")?,
-        bytes: decode_hex(fields[9])?,
+        provider: fields[7].to_string(),
+        symbol: fields[8].to_string(),
+        stream_key: parse(fields[9], "stream_key")?,
+        sequence: parse(fields[10], "sequence")?,
+        bytes: decode_hex(fields[11])?,
     }))
 }
 
 fn decode_decision(fields: &[&str]) -> SyncResult<SyncEvent> {
-    require_len(fields, 11, DECISION_OPCODE)?;
-    let reason = String::from_utf8(decode_hex(fields[10])?)
+    require_len(fields, 13, DECISION_OPCODE)?;
+    let reason = String::from_utf8(decode_hex(fields[12])?)
         .map_err(|error| SyncError::new(format!("decision reason utf8: {error}")))?;
     Ok(SyncEvent::Decision(DecisionEvent {
         trace_id: parse(fields[2], "trace_id")?,
         pid: parse(fields[3], "pid")?,
-        direction: PayloadDirection::from_str(fields[4])
+        start_time_ticks: parse(fields[4], "start_time_ticks")?,
+        pid_namespace: fields[5].to_string(),
+        direction: PayloadDirection::from_str(fields[6])
             .map_err(|error| SyncError::new(error.to_string()))?,
-        provider: fields[5].to_string(),
-        symbol: fields[6].to_string(),
-        stream_key: parse(fields[7], "stream_key")?,
-        sequence: parse(fields[8], "sequence")?,
-        action: fields[9].to_string(),
+        provider: fields[7].to_string(),
+        symbol: fields[8].to_string(),
+        stream_key: parse(fields[9], "stream_key")?,
+        sequence: parse(fields[10], "sequence")?,
+        action: fields[11].to_string(),
         reason,
     }))
 }
 
 fn decode_summary(fields: &[&str]) -> SyncResult<SyncEvent> {
-    require_len(fields, 14, SUMMARY_OPCODE)?;
+    require_len(fields, 16, SUMMARY_OPCODE)?;
     Ok(SyncEvent::Summary(SummaryEvent {
         trace_id: parse(fields[2], "trace_id")?,
         pid: parse(fields[3], "pid")?,
-        direction: PayloadDirection::from_str(fields[4])
+        start_time_ticks: parse(fields[4], "start_time_ticks")?,
+        pid_namespace: fields[5].to_string(),
+        direction: PayloadDirection::from_str(fields[6])
             .map_err(|error| SyncError::new(error.to_string()))?,
-        provider: fields[5].to_string(),
-        symbol: fields[6].to_string(),
-        stream_key: parse(fields[7], "stream_key")?,
-        sequence: parse(fields[8], "sequence")?,
-        observed_size: parse(fields[9], "observed_size")?,
-        emitted_size: parse(fields[10], "emitted_size")?,
-        reason: fields[11].to_string(),
-        protocol_hint: fields[12].to_string(),
-        bytes: decode_hex(fields[13])?,
+        provider: fields[7].to_string(),
+        symbol: fields[8].to_string(),
+        stream_key: parse(fields[9], "stream_key")?,
+        sequence: parse(fields[10], "sequence")?,
+        observed_size: parse(fields[11], "observed_size")?,
+        emitted_size: parse(fields[12], "emitted_size")?,
+        reason: fields[13].to_string(),
+        protocol_hint: fields[14].to_string(),
+        bytes: decode_hex(fields[15])?,
     }))
 }
 

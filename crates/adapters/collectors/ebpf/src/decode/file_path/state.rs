@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use model_core::ids::TraceId;
-use model_core::process::ProcessIdentity;
+use model_core::process::ProcessObservation;
 
 use crate::loader::KernelFilePathEvent;
 
@@ -78,7 +78,7 @@ struct PendingKey {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct ProcessFileKey {
     trace_id: TraceId,
-    process: ProcessIdentity,
+    process: ProcessObservation,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -98,7 +98,7 @@ impl FileTracker {
     pub(crate) fn seed_process(
         &mut self,
         trace_id: TraceId,
-        process: ProcessIdentity,
+        process: ProcessObservation,
         cwd: Option<String>,
     ) {
         let key = ProcessFileKey { trace_id, process };
@@ -111,8 +111,8 @@ impl FileTracker {
     pub(crate) fn inherit_process(
         &mut self,
         trace_id: TraceId,
-        parent: &ProcessIdentity,
-        child: ProcessIdentity,
+        parent: &ProcessObservation,
+        child: ProcessObservation,
     ) {
         let parent_key = ProcessFileKey {
             trace_id,
@@ -126,7 +126,7 @@ impl FileTracker {
         self.processes.insert(child_key, inherited);
     }
 
-    pub(crate) fn exec_process(&mut self, trace_id: TraceId, process: ProcessIdentity) {
+    pub(crate) fn exec_process(&mut self, trace_id: TraceId, process: ProcessObservation) {
         let key = ProcessFileKey { trace_id, process };
         self.processes.entry(key).or_default();
     }
@@ -141,7 +141,7 @@ impl FileTracker {
     pub(crate) fn resolve_fd_path(
         &self,
         trace_id: TraceId,
-        process: &ProcessIdentity,
+        process: &ProcessObservation,
         fd: u32,
     ) -> Option<String> {
         if fd == FILE_FD_MISSING {
@@ -160,7 +160,7 @@ impl FileTracker {
     pub(crate) fn resolve_fd_ipc_kind(
         &self,
         trace_id: TraceId,
-        process: &ProcessIdentity,
+        process: &ProcessObservation,
         fd: u32,
     ) -> Option<FdIpcKind> {
         if fd == FILE_FD_MISSING {
@@ -179,7 +179,7 @@ impl FileTracker {
     pub(super) fn record_ipc_fd_pair(
         &mut self,
         event: &KernelFilePathEvent,
-        process: ProcessIdentity,
+        process: ProcessObservation,
     ) -> bool {
         if event.kind != crate::decode::FILE_EVENT_CONTEXT
             || event.phase != FILE_PHASE_EXIT
@@ -209,7 +209,7 @@ impl FileTracker {
     pub(super) fn record(
         &mut self,
         event: KernelFilePathEvent,
-        process: ProcessIdentity,
+        process: ProcessObservation,
     ) -> Option<FileSyscallOutcome> {
         match event.phase {
             FILE_PHASE_ENTER => {

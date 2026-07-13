@@ -24,7 +24,7 @@ pub fn process_edges(trace: &TraceRecord, memberships: &[ProcessMembership]) -> 
             let from = membership
                 .inherited_from
                 .as_ref()
-                .map(|identity| format!("process:{}:{}", identity.pid, identity.generation))
+                .map(|identity| format!("process:{}", identity.get()))
                 .unwrap_or_else(|| format!("trace:{}", trace.trace_id.get()));
 
             GraphEdge {

@@ -282,29 +282,6 @@ fn require_process_payloads(events: &[DomainEvent]) -> Result<(), String> {
                 if payload.operation == "exec" && payload.executable.is_some()
         )
     });
-    let exec_with_context = events.iter().any(|event| {
-        matches!(
-            &event.payload,
-            EventPayload::Process(payload)
-                if payload.operation == "exec"
-                    && payload.metadata.contains_key("command_line")
-                    && payload.metadata.contains_key("cwd")
-                    && payload.metadata.contains_key("uid_effective")
-                    && payload.metadata.contains_key("gid_effective")
-        )
-    });
-    let exec_with_resource_context = events.iter().any(|event| {
-        matches!(
-            &event.payload,
-            EventPayload::Process(payload)
-                if payload.operation == "exec"
-                    && payload.metadata.contains_key("vm_size_kb")
-                    && payload.metadata.contains_key("vm_rss_kb")
-                    && payload.metadata.contains_key("threads")
-                    && payload.metadata.contains_key("process_group_id")
-                    && payload.metadata.contains_key("session_id")
-        )
-    });
     let exit_without_code = events.iter().any(|event| {
         matches!(
             &event.payload,
@@ -313,13 +290,12 @@ fn require_process_payloads(events: &[DomainEvent]) -> Result<(), String> {
         )
     });
 
-    if exec_with_executable && exec_with_context && exec_with_resource_context && !exit_without_code
-    {
+    if exec_with_executable && !exit_without_code {
         Ok(())
     } else {
         Err(format!(
-            "missing lifecycle payload details: exec_executable={}, exec_context={}, exec_resource_context={}, all_exit_codes={}",
-            exec_with_executable, exec_with_context, exec_with_resource_context, !exit_without_code
+            "missing lifecycle payload details: exec_executable={}, all_exit_codes={}",
+            exec_with_executable, !exit_without_code
         ))
     }
 }

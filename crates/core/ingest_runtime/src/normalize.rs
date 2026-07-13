@@ -5,10 +5,13 @@ use model_core::event::{
     IpcPayload, NetPayload, ProcessPayload, StdioPayload,
 };
 use model_core::ids::{EventId, TraceId};
+use model_core::process::ProcessIdentity;
 
 pub fn normalize_event(
     raw_event: collector_event::RawCollectorEvent,
     trace_id: TraceId,
+    process: ProcessIdentity,
+    parent: Option<ProcessIdentity>,
     event_id: EventId,
 ) -> DomainEvent {
     let kind = match &raw_event.payload {
@@ -22,7 +25,7 @@ pub fn normalize_event(
         event_id,
         trace_id,
         observed_at: raw_event.envelope.observed_at,
-        process: raw_event.envelope.process,
+        process,
         collector: raw_event.envelope.collector,
         kind,
         flags: EventFlags::clean(),
@@ -31,7 +34,7 @@ pub fn normalize_event(
     let payload = match raw_event.payload {
         collector_event::RawObservationPayload::Process {
             operation,
-            parent,
+            parent: _,
             metadata,
         } => {
             let executable = metadata

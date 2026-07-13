@@ -2,10 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use model_core::{
-    ids::TraceId,
-    process::{NamespaceIdentity, ProcessIdentity},
-};
+use model_core::{ids::TraceId, process::ProcessIdentity};
 use semantic_action::{
     SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkRole,
     SemanticEvidenceKind, attr_keys as attrs, evidence_roles,
@@ -348,21 +345,7 @@ fn parent_process_from_action(action: &SemanticAction) -> Option<ProcessIdentity
     {
         return None;
     }
-    let pid = parse_u32_attr(action, attrs::process_parent::PID)?;
-    let start_time_ticks = parse_u64_attr(action, attrs::process_parent::START_TIME_TICKS)?;
-    let generation = parse_u64_attr(action, attrs::process_parent::GENERATION)?;
-    let mut process = ProcessIdentity::new(pid, start_time_ticks, generation);
-    if let Some(task_id) = parse_u32_attr(action, attrs::process_parent::TASK_ID) {
-        process = process.with_task_id(task_id);
-    }
-    if let Some(pid_namespace) = action.attributes.get(attrs::process_parent::PID_NAMESPACE) {
-        process = process.with_namespace(NamespaceIdentity::new(pid_namespace.clone()));
-    }
-    Some(process)
-}
-
-fn parse_u32_attr(action: &SemanticAction, key: &str) -> Option<u32> {
-    action.attributes.get(key)?.parse().ok()
+    parse_u64_attr(action, attrs::process_parent::ID).map(ProcessIdentity::new)
 }
 
 fn parse_u64_attr(action: &SemanticAction, key: &str) -> Option<u64> {

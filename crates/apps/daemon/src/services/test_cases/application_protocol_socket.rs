@@ -60,7 +60,7 @@ fn socket_payload_gate_persists_http_and_drops_non_http_bytes() {
     .unwrap();
 
     let trace_id = wiring.trace_runtime.reserve_trace_id();
-    let process = ProcessIdentity::new(std::process::id(), 1, 1);
+    let process = ProcessIdentity::new(1);
     super::super::create_active_trace(
         &mut wiring,
         trace_id,
@@ -81,7 +81,7 @@ fn socket_payload_gate_persists_http_and_drops_non_http_bytes() {
     wiring
         .attach_service
         .process_payload_segment_impl(
-            &wiring.trace_runtime,
+            &mut wiring.trace_runtime,
             raw_socket_segment(
                 trace_id,
                 process.clone(),
@@ -112,7 +112,7 @@ fn socket_payload_gate_persists_http_and_drops_non_http_bytes() {
     wiring
         .attach_service
         .process_payload_segment_impl(
-            &wiring.trace_runtime,
+            &mut wiring.trace_runtime,
             raw_socket_segment(
                 trace_id,
                 process,
@@ -163,7 +163,7 @@ fn raw_socket_segment(
     RawPayloadSegment {
         trace_id,
         observed_at: SystemTime::UNIX_EPOCH,
-        process,
+        process: super::super::test_process_observation(process),
         source_boundary: PayloadSourceBoundary::Syscall,
         content_state: PayloadContentState::Plaintext,
         direction,

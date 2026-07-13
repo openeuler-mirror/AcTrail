@@ -8,14 +8,15 @@ use collector_instance::{CollectorError, CollectorInstance};
 use config_core::trace_snapshot::CaptureProfileSnapshot;
 use model_core::ids::{TraceId, TraceName};
 use model_core::process::ProcessIdentity;
-use process_identity_contract::lookup::{IdentityLookupError, ProcessIdentityReader};
+use process_identity::{IdentityLookupError, ProcessIdentityReader};
+use process_identity::{ProcessIdentityError, ProcessIdentityManager};
 use process_tree_snapshot_contract::snapshot::ProcessTreeSnapshotter;
 use trace_runtime::commands::TrackTraceRequest;
 use trace_runtime::registry::{RegistryError, TraceRuntime};
 use trace_runtime::sensor_plan::SensorPlan;
 
 use crate::coverage_guard::BootstrapTimings;
-use crate::snapshot_merge::{SnapshotMergeResult, merge_snapshot};
+use crate::snapshot_merge::SnapshotMergeResult;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AttachRequest {
@@ -42,6 +43,7 @@ pub enum BootstrapError {
     Collector(CollectorError),
     Snapshot(String),
     Runtime(RegistryError),
+    ProcessIdentityManager(ProcessIdentityError),
 }
 
 pub struct BootstrapCoordinator<'a, C, I, S>
@@ -53,6 +55,7 @@ where
     collector: &'a mut C,
     identity_reader: &'a I,
     snapshotter: &'a S,
+    process_registry: &'a mut ProcessIdentityManager,
 }
 
 impl<'a, C, I, S> BootstrapCoordinator<'a, C, I, S>
@@ -61,11 +64,17 @@ where
     I: ProcessIdentityReader,
     S: ProcessTreeSnapshotter,
 {
-    pub fn new(collector: &'a mut C, identity_reader: &'a I, snapshotter: &'a S) -> Self {
+    pub fn new(
+        collector: &'a mut C,
+        identity_reader: &'a I,
+        snapshotter: &'a S,
+        process_registry: &'a mut ProcessIdentityManager,
+    ) -> Self {
         Self {
             collector,
             identity_reader,
             snapshotter,
+            process_registry,
         }
     }
 
@@ -74,10 +83,15 @@ where
         runtime: &mut TraceRuntime,
         request: AttachRequest,
     ) -> Result<BootstrapResult, BootstrapError> {
-        let root_identity = self
+        let root_observation = self
             .identity_reader
             .read_identity(request.root_pid)
             .map_err(BootstrapError::IdentityLookup)?;
+        let root_identity = self
+            .process_registry
+            .resolve_or_create(root_observation.clone())
+            .map_err(BootstrapError::ProcessIdentityManager)?
+            .identity;
 
         let trace_id = runtime.reserve_trace_id();
         let guard = self
@@ -85,6 +99,7 @@ where
             .install_coverage_guard(&CoverageGuardRequest {
                 trace_id,
                 root_identity: root_identity.clone(),
+                root_observation: root_observation.clone(),
             })
             .map_err(BootstrapError::Collector)?;
 
@@ -108,7 +123,7 @@ where
         let snapshot_started_at = SystemTime::now();
         let snapshot = self
             .snapshotter
-            .snapshot(&root_identity)
+            .snapshot(&root_observation)
             .map_err(|_| BootstrapError::Snapshot("snapshot failed".to_string()))?;
         let snapshot_finished_at = SystemTime::now();
         let live_events = self
@@ -118,7 +133,15 @@ where
         let SnapshotMergeResult {
             memberships,
             bootstrap_partial,
-        } = merge_snapshot(trace_id, &root_identity, &snapshot, &live_events);
+            process_records: _,
+        } = crate::snapshot_merge::merge_snapshot(
+            trace_id,
+            &root_identity,
+            &snapshot,
+            &live_events,
+            self.process_registry,
+        )
+        .map_err(BootstrapError::ProcessIdentityManager)?;
 
         for membership in memberships {
             runtime

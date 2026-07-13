@@ -31,9 +31,8 @@ static WRITE_PATH: OnceLock<String> = OnceLock::new();
 #[test]
 fn directory_enumeration_projects_fs_enumerate_and_path_set() {
     let mut runtime = enumerate_runtime(true);
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
-    let command_process =
-        ProcessIdentity::new(WRAPPER_PID, WRAPPER_START_TICKS, WRAPPER_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
+    let command_process = ProcessIdentity::new(WRAPPER_GENERATION);
 
     runtime.observe_event(&exec_event(
         AGENT_EXEC_EVENT_ID,
@@ -156,7 +155,7 @@ fn directory_enumeration_projects_fs_enumerate_and_path_set() {
 #[test]
 fn directory_enumeration_and_bulk_read_run_until_shared_boundary() {
     let mut runtime = enumerate_runtime(false);
-    let process = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let process = ProcessIdentity::new(AGENT_GENERATION);
 
     runtime.observe_event(&read_event(
         EventId::new(FILE_READ_EVENT_ID.get() + 200),
@@ -243,7 +242,7 @@ fn directory_enumeration_and_bulk_read_run_until_shared_boundary() {
 #[test]
 fn regular_file_open_does_not_project_fs_enumerate() {
     let mut runtime = enumerate_runtime(false);
-    let process = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let process = ProcessIdentity::new(AGENT_GENERATION);
 
     for offset in 0..ENUMERATE_MIN_UNIQUE_PATHS {
         let output = runtime.observe_event(&regular_open_event(

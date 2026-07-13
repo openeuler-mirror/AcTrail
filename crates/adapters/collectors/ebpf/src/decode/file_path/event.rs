@@ -9,7 +9,7 @@ use model_core::ids::CollectorName;
 
 use crate::decode::{
     DecodeError, FILE_EVENT_CONTEXT, FILE_EVENT_MMAP, FILE_EVENT_OPEN, FILE_EVENT_READ_SUMMARY,
-    resolve_bound_event_identity,
+    resolve_bound_event_observation,
 };
 use crate::loader::KernelFilePathEvent;
 use crate::maps::BindingStateMap;
@@ -39,7 +39,7 @@ pub(in crate::decode) fn decode(
 
     let map_pid = event.pid;
     let identity =
-        resolve_bound_event_identity(event.trace_id, map_pid, event.pid_generation, bindings)
+        resolve_bound_event_observation(event.trace_id, map_pid, event.pid_generation, bindings)
             .map_err(|error| DecodeError::new("file_identity", error))?;
     if event.kind == FILE_EVENT_READ_SUMMARY {
         return decode_read_summary(event, identity, tracker);
@@ -93,7 +93,7 @@ pub(in crate::decode) fn decode(
 
 fn decode_read_summary(
     event: KernelFilePathEvent,
-    identity: model_core::process::ProcessIdentity,
+    identity: model_core::process::ProcessObservation,
     tracker: &mut FileTracker,
 ) -> Result<Option<RawCollectorEvent>, DecodeError> {
     let path = tracker.resolve_fd_path(event.trace_id, &identity, event.fd);

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use tls_payload_core::{
@@ -37,6 +37,7 @@ pub(super) struct RuntimeConfigParts {
 pub(super) enum EventTransportConfig {
     InheritedFd {
         fd: i32,
+        reconnect_path: Option<PathBuf>,
         pending_byte_budget: usize,
         write_buffer_bytes: usize,
     },
@@ -48,14 +49,31 @@ pub(super) enum EventTransportConfig {
 }
 
 impl EventTransportConfig {
-    fn connect(&self) -> Result<EventClient, String> {
+    fn connect(&self, reconnect: bool) -> Result<EventClient, String> {
         match self {
             Self::InheritedFd {
                 fd,
+                reconnect_path,
                 pending_byte_budget,
                 write_buffer_bytes,
-            } => EventClient::connect_inherited_fd(*fd, *pending_byte_budget, *write_buffer_bytes)
-                .map_err(|error| format!("connect inherited sync event fd {fd}: {error}")),
+            } => {
+                if reconnect {
+                    let path = reconnect_path.as_ref().ok_or_else(|| {
+                        "forked sync runtime requires TLS_PAYLOAD_SYNC_EVENT_SOCKET to reconnect"
+                            .to_string()
+                    })?;
+                    EventClient::connect(path, *pending_byte_budget, *write_buffer_bytes).map_err(
+                        |error| format!("reconnect sync event socket {}: {error}", path.display()),
+                    )
+                } else {
+                    EventClient::connect_inherited_fd(
+                        *fd,
+                        *pending_byte_budget,
+                        *write_buffer_bytes,
+                    )
+                    .map_err(|error| format!("connect inherited sync event fd {fd}: {error}"))
+                }
+            }
             Self::Socket {
                 path,
                 pending_byte_budget,
@@ -76,6 +94,7 @@ pub(in crate::runtime) struct RuntimeConfig {
     trace_id: Option<u64>,
     event_transport: Option<EventTransportConfig>,
     event_client: Mutex<Option<EventClient>>,
+    event_client_pid: AtomicU32,
     flow_controller: Mutex<FlowController>,
     sequence: AtomicU64,
     symbol_providers: Mutex<BTreeMap<String, String>>,
@@ -92,6 +111,7 @@ impl RuntimeConfig {
             trace_id: parts.trace_id,
             event_transport: parts.event_transport,
             event_client: Mutex::new(None),
+            event_client_pid: AtomicU32::new(0),
             flow_controller: Mutex::new(FlowController::default()),
             sequence: AtomicU64::new(0),
             symbol_providers: Mutex::new(BTreeMap::new()),
@@ -151,15 +171,22 @@ impl RuntimeConfig {
     }
 
     pub(in crate::runtime) fn send_event(&self, event: SyncEvent) -> Result<(), String> {
+        let current_pid = std::process::id();
         let mut client = self
             .event_client
             .lock()
             .map_err(|_| "sync event client mutex poisoned".to_string())?;
+        let previous_pid = self.event_client_pid.load(Ordering::Acquire);
+        let reconnect = previous_pid != 0 && previous_pid != current_pid;
+        if reconnect {
+            *client = None;
+        }
         if client.is_none() {
             let Some(transport) = &self.event_transport else {
                 return Ok(());
             };
-            *client = Some(transport.connect()?);
+            *client = Some(transport.connect(reconnect)?);
+            self.event_client_pid.store(current_pid, Ordering::Release);
         }
         let Some(client) = client.as_ref() else {
             return Ok(());

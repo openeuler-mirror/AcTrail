@@ -4,12 +4,12 @@ use std::collections::BTreeMap;
 use std::time::SystemTime;
 
 use model_core::ids::CollectorName;
-use model_core::process::ProcessIdentity;
+use model_core::process::ProcessObservation;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RawEventEnvelope {
     pub observed_at: SystemTime,
-    pub process: ProcessIdentity,
+    pub process: ProcessObservation,
     pub collector: CollectorName,
 }
 
@@ -17,7 +17,7 @@ pub struct RawEventEnvelope {
 pub enum RawObservationPayload {
     Process {
         operation: String,
-        parent: Option<ProcessIdentity>,
+        parent: Option<ProcessObservation>,
         metadata: BTreeMap<String, String>,
     },
     File {

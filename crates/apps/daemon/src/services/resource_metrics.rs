@@ -12,6 +12,7 @@ use model_core::capability::Capability;
 use model_core::event::ResourcePayload;
 use model_core::ids::TraceId;
 use model_core::process::{MembershipState, ProcessIdentity};
+use process_identity::ProcessIdentityManager;
 use trace_runtime::registry::TraceEntry;
 
 use self::procfs::{
@@ -60,6 +61,7 @@ impl ResourceMetricsSampler {
     pub(super) fn drain_due(
         &mut self,
         trace_runtime: &trace_runtime::TraceRuntime,
+        process_registry: &ProcessIdentityManager,
     ) -> Result<Vec<ResourceSampleDraft>, ControlError> {
         let Some(next_sample_at) = self.next_sample_at else {
             return Ok(Vec::new());
@@ -69,12 +71,13 @@ impl ResourceMetricsSampler {
             return Ok(Vec::new());
         }
         self.next_sample_at = Some(now + Duration::from_millis(self.config.interval_ms));
-        self.collect_samples(trace_runtime, now, SystemTime::now())
+        self.collect_samples(trace_runtime, process_registry, now, SystemTime::now())
     }
 
     fn collect_samples(
         &mut self,
         trace_runtime: &trace_runtime::TraceRuntime,
+        process_registry: &ProcessIdentityManager,
         sampled_at: Instant,
         observed_at: SystemTime,
     ) -> Result<Vec<ResourceSampleDraft>, ControlError> {
@@ -90,9 +93,14 @@ impl ResourceMetricsSampler {
             }
             let identities = sample_identities(entry, self.config.include_children);
             active_identities.extend(identities.iter().cloned());
-            if let Some(draft) =
-                self.collect_trace_sample(entry, identities, sampled_at, observed_at, units)?
-            {
+            if let Some(draft) = self.collect_trace_sample(
+                entry,
+                identities,
+                process_registry,
+                sampled_at,
+                observed_at,
+                units,
+            )? {
                 drafts.push(draft);
             }
         }
@@ -105,6 +113,7 @@ impl ResourceMetricsSampler {
         &mut self,
         entry: &TraceEntry,
         identities: Vec<ProcessIdentity>,
+        process_registry: &ProcessIdentityManager,
         sampled_at: Instant,
         observed_at: SystemTime,
         units: SystemUnits,
@@ -116,12 +125,23 @@ impl ResourceMetricsSampler {
         let mut sampled_processes = 0_usize;
         let mut root_threads = None;
         let mut root_comm = None;
+        let root_host_pid = process_registry
+            .record(root)
+            .and_then(|record| record.host.as_ref())
+            .map(|host| host.pid);
 
         for identity in identities {
-            let Some(stat) = read_proc_stat(identity.pid)? else {
+            let Some(host_pid) = process_registry
+                .record(identity)
+                .and_then(|record| record.host.as_ref())
+                .map(|host| host.pid)
+            else {
                 continue;
             };
-            let Some(memory) = read_proc_memory(identity.pid, units.page_size_kb)? else {
+            let Some(stat) = read_proc_stat(host_pid)? else {
+                continue;
+            };
+            let Some(memory) = read_proc_memory(host_pid, units.page_size_kb)? else {
                 continue;
             };
             total_cpu_percent_millis = total_cpu_percent_millis.saturating_add(
@@ -201,7 +221,9 @@ impl ResourceMetricsSampler {
                 } else {
                     "process".to_string()
                 },
-                subject: format!("pid:{}", root.pid),
+                subject: root_host_pid
+                    .map(|pid| format!("pid:{pid}"))
+                    .unwrap_or_else(|| root.to_string()),
                 cpu_percent_millis: Some(total_cpu_percent_millis),
                 rss_kb: Some(total_rss_kb),
                 virtual_memory_kb: Some(total_virtual_memory_kb),

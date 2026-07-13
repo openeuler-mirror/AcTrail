@@ -1,6 +1,6 @@
 //! Batched live-event persistence for deferred seccomp observations.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use collector_event::{RawCollectorEvent, RawObservationPayload};
 use config_core::daemon::FileMetadataRetention;
@@ -9,11 +9,12 @@ use ingest_runtime::{AllowPolicy, IngestPipeline};
 use model_core::diagnostics::{DiagnosticKind, DiagnosticRecord};
 use model_core::event::{DomainEvent, EventPayload};
 use model_core::ids::TraceId;
+use model_core::process::{ProcessIdentity, ProcessRecord};
 use recording_runtime::{SemanticActionBatch, TraceStateRecord};
 use trace_runtime::registry::TraceRuntime;
 
 use crate::services::attach::StorageAttachService;
-use crate::services::identity::TraceIdentityResolver;
+use crate::services::identity::RuntimeProcessEventApplier;
 
 impl StorageAttachService {
     pub(in crate::services) fn process_live_event_batch(
@@ -31,7 +32,27 @@ impl StorageAttachService {
         let mut batch = LiveEventBatch::default();
         for raw_event in raw_events {
             let observed_at = raw_event.envelope.observed_at;
-            let matched = TraceIdentityResolver::apply_runtime_effects(trace_runtime, &raw_event)?;
+            let parent_observation = match &raw_event.payload {
+                RawObservationPayload::Process { parent, .. } => parent.clone(),
+                _ => None,
+            };
+            let (process, process_record) =
+                self.resolve_process_observation(raw_event.envelope.process.clone())?;
+            if let Some(record) = process_record {
+                batch.process_records.insert(record.identity, record);
+            }
+            let parent = parent_observation
+                .map(|observation| self.resolve_process_observation(observation))
+                .transpose()?;
+            if let Some((_, Some(record))) = &parent {
+                batch
+                    .process_records
+                    .insert(record.identity, record.clone());
+            }
+            let parent = parent.map(|(identity, _)| identity);
+            let matched =
+                RuntimeProcessEventApplier::new(trace_runtime, &mut self.process_registry)
+                    .apply(&raw_event, process, parent)?;
             let matched_trace_id = matched.as_ref().map(|matched| matched.trace_id);
             let event_id = self.next_event_id()?;
             let label_event_id = if self.provider_classification_enabled
@@ -157,6 +178,7 @@ impl StorageAttachService {
             batch.diagnostics,
             batch.semantic_actions,
             trace_states,
+            batch.process_records.into_values().collect(),
         )
     }
 
@@ -214,4 +236,5 @@ struct LiveEventBatch {
     diagnostics: Vec<DiagnosticRecord>,
     semantic_actions: SemanticActionBatch,
     trace_ids: BTreeSet<TraceId>,
+    process_records: BTreeMap<ProcessIdentity, ProcessRecord>,
 }

@@ -318,7 +318,7 @@ pub(super) fn llm_stream_action_id(
     format!(
         "trace:{}:payload-stream:{}:{}:{}:llm.response",
         segment.trace_id.get(),
-        key.process.pid,
+        key.process.get(),
         key.stream_key,
         message_start
     )
@@ -332,7 +332,7 @@ pub(super) fn llm_raw_stream_action_id(
     format!(
         "trace:{}:payload-stream:{}:{}:{}:raw:llm.response",
         segment.trace_id.get(),
-        key.process.pid,
+        key.process.get(),
         key.stream_key,
         message_start
     )

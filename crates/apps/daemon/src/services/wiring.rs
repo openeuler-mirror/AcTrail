@@ -266,8 +266,12 @@ fn build_runtime_wiring_with_attach_service(
     };
     attach_service.set_id_seeds(event_id_seed, diagnostic_id_seed);
     attach_service.set_payload_segment_id_seed(payload_segment_id_seed);
+    attach_service.preflight_host_ebpf();
     let mut available_collectors = Vec::new();
-    if ebpf_config.enabled && attach_service.collector_ready() {
+    if ebpf_config.enabled
+        && attach_service.collector_ready()
+        && attach_service.any_host_ebpf_preflight_available()
+    {
         available_collectors.push(attach_service.collector_name());
     }
     if payload_config.tls.enabled && payload_config.tls.capture_backend.is_sync() {

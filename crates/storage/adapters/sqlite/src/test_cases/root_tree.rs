@@ -24,8 +24,8 @@ const ROOT_LINK_ROLES: &[&str] = &["agent.performed_action"];
 fn display_root_children_are_paged_without_full_projection_semantics_leaking() {
     let mut storage = SqliteStorage::open_in_memory().expect("open in-memory sqlite storage");
     let trace_id = TraceId::new(1);
-    let agent_process = ProcessIdentity::new(100, 1, 1);
-    let command_process = ProcessIdentity::new(101, 2, 1);
+    let agent_process = ProcessIdentity::new(1);
+    let command_process = ProcessIdentity::new(1);
 
     write_action(
         &mut storage,
@@ -143,7 +143,7 @@ fn display_root_children_are_paged_without_full_projection_semantics_leaking() {
 fn invalid_display_parent_link_does_not_remove_action_from_display_root() {
     let mut storage = SqliteStorage::open_in_memory().expect("open in-memory sqlite storage");
     let trace_id = TraceId::new(2);
-    let process = ProcessIdentity::new(200, 1, 1);
+    let process = ProcessIdentity::new(1);
     write_action(
         &mut storage,
         action(
@@ -194,7 +194,7 @@ fn invalid_display_parent_link_does_not_remove_action_from_display_root() {
 fn semantic_action_summary_uses_effective_link_validity_for_roots() {
     let mut storage = SqliteStorage::open_in_memory().expect("open in-memory sqlite storage");
     let trace_id = TraceId::new(3);
-    let process = ProcessIdentity::new(300, 1, 1);
+    let process = ProcessIdentity::new(1);
     write_action(
         &mut storage,
         action(
@@ -238,7 +238,7 @@ fn semantic_action_summary_uses_effective_link_validity_for_roots() {
 fn semantic_action_summary_ignores_incoming_links_from_invalid_parent_actions() {
     let mut storage = SqliteStorage::open_in_memory().expect("open in-memory sqlite storage");
     let trace_id = TraceId::new(4);
-    let process = ProcessIdentity::new(400, 1, 1);
+    let process = ProcessIdentity::new(1);
     let mut parent = action(
         trace_id,
         "invalid-parent",
@@ -280,7 +280,7 @@ fn semantic_action_summary_ignores_incoming_links_from_invalid_parent_actions() 
 fn semantic_action_summary_ignores_conflict_invalidated_incoming_links() {
     let mut storage = SqliteStorage::open_in_memory().expect("open in-memory sqlite storage");
     let trace_id = TraceId::new(5);
-    let process = ProcessIdentity::new(500, 1, 1);
+    let process = ProcessIdentity::new(1);
     write_action(
         &mut storage,
         action(
@@ -323,7 +323,7 @@ fn semantic_action_summary_ignores_conflict_invalidated_incoming_links() {
 fn command_fallback_children_use_effective_display_link_validity() {
     let mut storage = SqliteStorage::open_in_memory().expect("open in-memory sqlite storage");
     let trace_id = TraceId::new(6);
-    let process = ProcessIdentity::new(600, 1, 1);
+    let process = ProcessIdentity::new(1);
     let mut command = action(
         trace_id,
         "command",

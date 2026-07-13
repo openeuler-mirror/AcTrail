@@ -18,11 +18,10 @@ pub(super) fn write_action_row(
     connection
         .execute(
             "INSERT OR REPLACE INTO semantic_actions (
-                action_key, trace_id, kind_code, title, start_time, end_time, process_pid,
-                process_task_id, process_start_ticks, process_pid_namespace,
-                process_generation, status_code, completeness_code, confidence_millis,
+                action_key, trace_id, kind_code, title, start_time, end_time, process_id,
+                status_code, completeness_code, confidence_millis,
                 action_valid_code, agent_observed, process_parent_conflict, attributes
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 action_key,
                 action.trace_id.get(),
@@ -30,15 +29,7 @@ pub(super) fn write_action_row(
                 &action.title,
                 encode_time(action.start_time),
                 action.end_time.map(encode_time),
-                action.process.pid,
-                action.process.task_id,
-                action.process.start_time_ticks,
-                action
-                    .process
-                    .pid_namespace
-                    .as_ref()
-                    .map(|value| value.as_str().to_string()),
-                action.process.generation,
+                action.process.get(),
                 action_status_code(action.status),
                 action_completeness_code(action.completeness),
                 action.confidence_millis,

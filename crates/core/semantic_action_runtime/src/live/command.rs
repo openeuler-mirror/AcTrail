@@ -293,12 +293,8 @@ fn apply_agent_invocation_label(
         );
     }
     action.attributes.insert(
-        attrs::agent_child::PID.to_string(),
-        process_action.process.pid.to_string(),
-    );
-    action.attributes.insert(
-        attrs::agent_child::GENERATION.to_string(),
-        process_action.process.generation.to_string(),
+        attrs::agent_child::PROCESS_ID.to_string(),
+        process_action.process.get().to_string(),
     );
     copy_process_attr(
         process_action,

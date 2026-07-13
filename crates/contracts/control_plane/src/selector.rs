@@ -12,10 +12,10 @@ pub enum TraceSelector {
 }
 
 impl TraceSelector {
-    pub fn matches(&self, trace: &TraceRecord) -> bool {
+    pub fn matches(&self, trace: &TraceRecord, root_host_pid: Option<u32>) -> bool {
         match self {
             Self::TraceId(expected) => trace.trace_id == *expected,
-            Self::RootPid(expected) => trace.root_process_identity.pid == *expected,
+            Self::RootPid(expected) => root_host_pid == Some(*expected),
             Self::Tag(expected) => trace.tags.contains(expected),
             Self::Name(expected) => trace.display_name == *expected,
         }

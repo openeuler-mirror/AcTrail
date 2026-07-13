@@ -9,14 +9,13 @@ use model_core::payload::{
 };
 use payload_event::RawPayloadSegment;
 
-use crate::decode::{DecodeError, resolve_event_identity};
+use crate::decode::{DecodeError, resolve_event_observation};
 use crate::loader::{
     KernelSocketPayloadCompletionEvent, KernelSocketPayloadEvent, KernelStdioPayloadEvent,
     KernelTlsCaptureRequestEvent, KernelTlsCompletionEvent, KernelTlsDiagnosticEvent,
     KernelTlsDirectCaptureEvent,
 };
 use crate::maps::BindingStateMap;
-use crate::procfs::ProcfsIdentityReader;
 
 const STDIO_PAYLOAD_DIRECTION_INBOUND: u32 = 1;
 const STDIO_PAYLOAD_DIRECTION_OUTBOUND: u32 = 2;
@@ -120,16 +119,10 @@ pub struct SocketPayloadCompletion {
 
 pub fn decode_stdio_payload(
     event: KernelStdioPayloadEvent,
-    bindings: &mut BindingStateMap,
-    identity_reader: &ProcfsIdentityReader,
+    bindings: &BindingStateMap,
 ) -> Result<RawPayloadSegment, DecodeError> {
-    let identity = resolve_payload_identity(
-        event.trace_id,
-        event.pid,
-        event.pid_generation,
-        bindings,
-        identity_reader,
-    )?;
+    let identity =
+        resolve_payload_identity(event.trace_id, event.pid, event.pid_generation, bindings)?;
     let stream = stdio_stream(event.stream)?;
 
     Ok(RawPayloadSegment {
@@ -158,16 +151,10 @@ pub fn decode_stdio_payload(
 
 pub fn decode_socket_payload(
     event: KernelSocketPayloadEvent,
-    bindings: &mut BindingStateMap,
-    identity_reader: &ProcfsIdentityReader,
+    bindings: &BindingStateMap,
 ) -> Result<RawPayloadSegment, DecodeError> {
-    let identity = resolve_payload_identity(
-        event.trace_id,
-        event.pid,
-        event.pid_generation,
-        bindings,
-        identity_reader,
-    )?;
+    let identity =
+        resolve_payload_identity(event.trace_id, event.pid, event.pid_generation, bindings)?;
 
     Ok(RawPayloadSegment {
         trace_id: event.trace_id,
@@ -288,10 +275,9 @@ fn resolve_payload_identity(
     trace_id: TraceId,
     pid: u32,
     generation: u64,
-    bindings: &mut BindingStateMap,
-    identity_reader: &ProcfsIdentityReader,
-) -> Result<model_core::process::ProcessIdentity, DecodeError> {
-    resolve_event_identity(trace_id, pid, generation, bindings, identity_reader)
+    bindings: &BindingStateMap,
+) -> Result<model_core::process::ProcessObservation, DecodeError> {
+    resolve_event_observation(trace_id, pid, 0, generation, bindings)
         .map_err(|error| DecodeError::new("payload_identity", error))
 }
 

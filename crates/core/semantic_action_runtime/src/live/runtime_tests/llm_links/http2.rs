@@ -10,7 +10,7 @@ fn pending_outbound_request_on_other_http2_stream_does_not_block_response() {
     const PENDING_HTTP2_STREAM_ID: u32 = 3;
 
     let mut runtime = runtime();
-    let agent = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let agent = ProcessIdentity::new(AGENT_GENERATION);
     let first_request_output = runtime.observe_payload_segment(&http2_llm_request_segment(
         agent.clone(),
         response_segment_id(30),

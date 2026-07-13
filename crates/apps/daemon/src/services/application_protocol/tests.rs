@@ -13,8 +13,6 @@ use super::ApplicationProtocolAnalyzer;
 
 const TEST_TRACE_ID: TraceId = TraceId::new(1);
 const OTHER_TRACE_ID: TraceId = TraceId::new(2);
-const TEST_PID: u32 = 1000;
-const TEST_START_TICKS: u64 = 2000;
 const TEST_GENERATION: u64 = 3000;
 const TEST_REQUEST_SEGMENT_ID: PayloadSegmentId = PayloadSegmentId::new(10);
 const TEST_BINARY_SEGMENT_ID: PayloadSegmentId = PayloadSegmentId::new(11);
@@ -465,7 +463,7 @@ fn payload_segment_on_stream(
         segment_id,
         trace_id,
         observed_at: SystemTime::UNIX_EPOCH,
-        process: ProcessIdentity::new(TEST_PID, TEST_START_TICKS, TEST_GENERATION),
+        process: ProcessIdentity::new(TEST_GENERATION),
         source_boundary: PayloadSourceBoundary::TlsUserSpace,
         content_state: PayloadContentState::Plaintext,
         direction,

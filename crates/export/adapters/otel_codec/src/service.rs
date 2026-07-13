@@ -95,18 +95,8 @@ fn render_span(
         string_attr("actrail.action.kind", action.kind.as_str()),
         string_attr("actrail.action.status", action.status.as_str()),
         string_attr("actrail.action.completeness", action.completeness.as_str()),
-        int_attr("process.pid", u64::from(action.process.pid)),
-        int_attr("actrail.process.generation", action.process.generation),
+        int_attr("actrail.process.id", action.process.get()),
     ];
-    if let Some(task_id) = action.process.task_id {
-        attrs.push(int_attr("process.thread.id", u64::from(task_id)));
-    }
-    if let Some(namespace) = &action.process.pid_namespace {
-        attrs.push(string_attr(
-            "actrail.process.pid_namespace",
-            namespace.as_str(),
-        ));
-    }
     if let Some(confidence) = action.confidence_millis {
         attrs.push(int_attr(
             "actrail.action.confidence_millis",

@@ -1,6 +1,6 @@
 //! User-facing output projection for control responses.
 
-use control_contract::reply::ControlReply;
+use control_contract::reply::{ControlReply, LaunchTlsPlanStatus};
 
 pub fn format_reply(reply: &ControlReply) -> String {
     match reply {
@@ -11,6 +11,24 @@ pub fn format_reply(reply: &ControlReply) -> String {
             reply.selected_seccomp_notify,
             reply.degraded
         ),
+        ControlReply::LaunchTlsPlan(reply) => match &reply.status {
+            LaunchTlsPlanStatus::Found(plan) => format!(
+                "tls plan cache={} daemon_elapsed_us={} target={} binary={} provider={} source={} point_count={}",
+                if reply.cache_hit { "hit" } else { "miss" },
+                reply.resolve_elapsed_micros,
+                plan.target.display(),
+                plan.binary.display(),
+                plan.provider,
+                plan.source,
+                point_count(&plan.points)
+            ),
+            LaunchTlsPlanStatus::Unsupported { reason } => format!(
+                "tls plan cache={} daemon_elapsed_us={} unsupported={}",
+                if reply.cache_hit { "hit" } else { "miss" },
+                reply.resolve_elapsed_micros,
+                reason
+            ),
+        },
         ControlReply::TrackAdded(reply) => {
             format!("trace {} entered {}", reply.trace_id, reply.lifecycle_state)
         }
@@ -94,6 +112,14 @@ pub fn format_reply(reply: &ControlReply) -> String {
             output.push_str(&reply.stderr);
             output
         }
+    }
+}
+
+fn point_count(points: &str) -> usize {
+    if points.is_empty() {
+        0
+    } else {
+        points.split(';').count()
     }
 }
 

@@ -20,13 +20,16 @@ from .common import (
 
 
 TRACE_RE = re.compile(r"trace trace-(\d+) entered Active")
+VERIFY_STAGE_FAILURE_RE = re.compile(
+    r"^verification_stage=([a-z_]+) status=failed$", re.MULTILINE
+)
+EBPF_ERROR_STAGE_RE = re.compile(
+    r"(?:control command failed|daemon build failed):\s*([a-z0-9_-]+):",
+    re.IGNORECASE,
+)
 EBPF_LIBBPF_DEBUG_ENV = "ACTRAIL_EBPF_LIBBPF_DEBUG"
 EBPF_DEBUG_LINE_LIMIT = 12
 EBPF_DEBUG_CHAR_LIMIT = 1800
-EBPF_LOAD_LOG_DELIMITERS = (
-    "-- begin prog load log --",
-    "-- end prog load log --",
-)
 EBPF_NON_FATAL_LIBBPF_MARKERS = ("skipping optional step",)
 EBPF_VERIFIER_MARKERS = (
     "bitwise operator",
@@ -37,16 +40,29 @@ EBPF_VERIFIER_MARKERS = (
     "reg type unsupported",
     "unbounded",
 )
+EBPF_STAGE_CHECKS = (
+    ("load_attach", "eBPF program load and attach"),
+    ("workload_event_drain", "verification workload execution and event drain"),
+    ("retained_observation", "retained observation and semantic evidence"),
+)
 
 
-def runtime_smoke_checks(artifacts: ResolvedArtifacts, run_smoke: bool, verbose: bool) -> list[Check]:
+def runtime_smoke_checks(
+    artifacts: ResolvedArtifacts,
+    run_smoke: bool,
+    verbose: bool,
+    ebpf_config: str,
+) -> list[Check]:
     if not run_smoke:
         return [
-            Check(
-                "eBPF live attach",
-                WARN,
-                "skipped; run python3 docs/preflight/platform_preflight.py --run-smoke",
-            ),
+            *[
+                Check(
+                    name,
+                    WARN,
+                    "skipped; run python3 docs/preflight/platform_preflight.py --run-smoke",
+                )
+                for _, name in EBPF_STAGE_CHECKS
+            ],
             Check(
                 "TLS sync payload",
                 WARN,
@@ -65,19 +81,18 @@ def runtime_smoke_checks(artifacts: ResolvedArtifacts, run_smoke: bool, verbose:
             ),
         ]
     return [
-        ebpf_smoke(artifacts, verbose),
+        *ebpf_smoke(artifacts, verbose, ebpf_config),
         tls_sync_smoke(artifacts, verbose),
         fanotify_smoke(artifacts, verbose),
     ]
 
 
-def ebpf_smoke(artifacts: ResolvedArtifacts, verbose: bool) -> Check:
+def ebpf_smoke(artifacts: ResolvedArtifacts, verbose: bool, config: str) -> list[Check]:
     ebpf_probe = artifacts.path("ebpf_probe")
     actrailctl = artifacts.path("actrailctl")
     if ebpf_probe is None or actrailctl is None:
-        return Check(
-            "eBPF live attach",
-            FAIL,
+        return failed_ebpf_stage_checks(
+            "setup",
             missing_detail(artifacts, ("ebpf_probe", "actrailctl")),
         )
     clean = run_command(
@@ -91,19 +106,23 @@ def ebpf_smoke(artifacts: ResolvedArtifacts, verbose: bool) -> Check:
         )
     )
     if clean.returncode != 0:
-        return failed_command("eBPF live attach", clean, verbose)
+        failure = failed_command("eBPF verification setup", clean, verbose)
+        return failed_ebpf_stage_checks("setup", failure.detail)
     command = (
         str(ebpf_probe),
         "verify-live",
         "--config",
-        "docs/examples/03.extended-observation-e2e/observation.conf",
+        config,
     )
     result = run_command(command, env={EBPF_LIBBPF_DEBUG_ENV: "1"})
     if result.returncode != 0:
         return failed_ebpf_command(ebpf_probe, result, verbose)
     if "live verification passed" not in result.stdout:
-        return Check("eBPF live attach", FAIL, "verify-live did not print live verification passed")
-    return Check("eBPF live attach", PASS, "verify-live completed")
+        return failed_ebpf_stage_checks(
+            "retained_observation",
+            "verify-live did not print live verification passed",
+        )
+    return [Check(name, PASS, "verify-live completed") for _, name in EBPF_STAGE_CHECKS]
 
 
 def tls_sync_smoke(artifacts: ResolvedArtifacts, verbose: bool) -> Check:
@@ -226,11 +245,39 @@ def parse_trace_id(output: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def failed_ebpf_command(ebpf_probe: Path, result: CommandResult, verbose: bool) -> Check:
+def failed_ebpf_command(ebpf_probe: Path, result: CommandResult, verbose: bool) -> list[Check]:
     if verbose:
         print_command_failure(result)
     detail = summarize_ebpf_debug_output(result)
-    return Check("eBPF live attach", FAIL, f"{ebpf_probe}: {detail}")
+    stage = parse_verify_failure_stage(result)
+    return failed_ebpf_stage_checks(stage or "setup", f"{ebpf_probe}: {detail}")
+
+
+def parse_verify_failure_stage(result: CommandResult) -> str | None:
+    combined = "\n".join(part for part in (result.stderr, result.stdout) if part)
+    match = VERIFY_STAGE_FAILURE_RE.search(combined)
+    return match.group(1) if match else None
+
+
+def failed_ebpf_stage_checks(stage: str, detail: str) -> list[Check]:
+    if stage == "setup":
+        return [
+            Check("eBPF verification setup", FAIL, detail),
+            *[Check(name, WARN, "skipped after setup failure") for _, name in EBPF_STAGE_CHECKS],
+        ]
+    stages = [value for value, _ in EBPF_STAGE_CHECKS]
+    if stage not in stages:
+        return [Check("eBPF verification", FAIL, detail)]
+    failed_index = stages.index(stage)
+    checks = []
+    for index, (_, name) in enumerate(EBPF_STAGE_CHECKS):
+        if index < failed_index:
+            checks.append(Check(name, PASS, f"completed before {stage} failure"))
+        elif index == failed_index:
+            checks.append(Check(name, FAIL, detail))
+        else:
+            checks.append(Check(name, WARN, f"skipped after {stage} failure"))
+    return checks
 
 
 def summarize_ebpf_debug_output(result: CommandResult) -> str:
@@ -239,21 +286,31 @@ def summarize_ebpf_debug_output(result: CommandResult) -> str:
     if not lines:
         return f"exit={result.returncode}"
     primary = primary_ebpf_error_line(lines)
-    error_lines = [line for line in lines if is_ebpf_error_line(line)]
-    if error_lines:
-        debug = bounded_error_excerpt(error_lines, primary)
-        if primary is not None and primary not in error_lines:
-            return f"{bounded_text(primary)}; libbpf/verifier: {debug}"
-        return f"libbpf/verifier: {debug}"
-    return bounded_text(primary or lines[-1])
+    if primary is None:
+        return bounded_text(lines[-1])
+    stage = ebpf_error_stage(primary)
+    if stage == "load_object":
+        verifier_lines = [line for line in lines if is_verifier_diagnostic_line(line)]
+        if verifier_lines:
+            verifier = bounded_error_excerpt(verifier_lines, primary)
+            return f"{bounded_text(primary)}; verifier: {verifier}"
+    if stage in ("open_object", "load_object"):
+        libbpf_lines = [line for line in lines if is_libbpf_error_line(line)]
+        if libbpf_lines:
+            libbpf = bounded_error_excerpt(libbpf_lines, primary)
+            return f"{bounded_text(primary)}; libbpf: {libbpf}"
+    return bounded_text(primary)
 
 
 def primary_ebpf_error_line(lines: list[str]) -> str | None:
     for line in reversed(lines):
-        if is_verifier_diagnostic_line(line):
-            return line
+        if line.startswith("verification_error="):
+            return line.removeprefix("verification_error=")
     for line in reversed(lines):
         if is_command_error_line(line):
+            return line
+    for line in reversed(lines):
+        if is_verifier_diagnostic_line(line):
             return line
     return last_meaningful_line(lines)
 
@@ -265,15 +322,14 @@ def last_meaningful_line(lines: list[str]) -> str | None:
     return None
 
 
-def is_ebpf_error_line(line: str) -> bool:
+def ebpf_error_stage(line: str) -> str | None:
+    match = EBPF_ERROR_STAGE_RE.search(line)
+    return match.group(1).lower() if match else None
+
+
+def is_libbpf_error_line(line: str) -> bool:
     lowered = line.lower()
-    if is_ebpf_noise_line(line):
-        return False
-    if is_verifier_diagnostic_line(line) or is_command_error_line(line):
-        return True
-    if lowered.startswith("processed "):
-        return True
-    if "libbpf:" not in lowered:
+    if is_ebpf_noise_line(line) or "libbpf:" not in lowered:
         return False
     return any(
         marker in lowered
@@ -283,7 +339,6 @@ def is_ebpf_error_line(line: str) -> bool:
             "denied",
             "invalid",
             "permission",
-            "processed ",
         )
     )
 
@@ -315,9 +370,7 @@ def is_command_error_line(line: str) -> bool:
 
 def is_ebpf_noise_line(line: str) -> bool:
     lowered = line.lower()
-    return any(marker in lowered for marker in EBPF_LOAD_LOG_DELIMITERS) or any(
-        marker in lowered for marker in EBPF_NON_FATAL_LIBBPF_MARKERS
-    )
+    return any(marker in lowered for marker in EBPF_NON_FATAL_LIBBPF_MARKERS)
 
 
 def bounded_error_excerpt(lines: list[str], primary: str | None) -> str:

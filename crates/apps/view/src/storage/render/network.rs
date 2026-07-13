@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::time::SystemTime;
 
 use model_core::event::{DomainEvent, EventPayload, LabelPayload, NetPayload};
+use model_core::process::ProcessIdentity;
 
 use crate::command::RowLimit;
 use crate::table::Table;
@@ -56,7 +57,7 @@ struct NetworkRow {
 
 struct PendingLabelTarget {
     row_index: usize,
-    pid: u32,
+    process: ProcessIdentity,
     observed_at: SystemTime,
 }
 
@@ -65,7 +66,7 @@ fn network_rows(events: Vec<DomainEvent>) -> Vec<NetworkRow> {
     let mut pending_label_target = None;
 
     for event in events {
-        let event_pid = event.envelope.process.pid;
+        let event_process = event.envelope.process;
         let observed_at = event.envelope.observed_at;
         match event.payload {
             EventPayload::Net(payload) => {
@@ -75,7 +76,7 @@ fn network_rows(events: Vec<DomainEvent>) -> Vec<NetworkRow> {
                 let result = network_result(&operation, &payload);
                 rows.push(NetworkRow {
                     event_id: event.envelope.event_id.to_string(),
-                    pid: event.envelope.process.pid.to_string(),
+                    pid: event.envelope.process.get().to_string(),
                     provider: String::new(),
                     side: network_side(&operation, &payload),
                     operation,
@@ -85,7 +86,7 @@ fn network_rows(events: Vec<DomainEvent>) -> Vec<NetworkRow> {
                 });
                 pending_label_target = Some(PendingLabelTarget {
                     row_index: rows.len() - 1,
-                    pid: event_pid,
+                    process: event_process,
                     observed_at,
                 });
             }
@@ -93,7 +94,7 @@ fn network_rows(events: Vec<DomainEvent>) -> Vec<NetworkRow> {
                 if let Some(target) = pending_label_target.take() {
                     if label_belongs_to_row(
                         &label,
-                        event_pid,
+                        event_process,
                         observed_at,
                         &rows[target.row_index],
                         &target,
@@ -111,12 +112,12 @@ fn network_rows(events: Vec<DomainEvent>) -> Vec<NetworkRow> {
 
 fn label_belongs_to_row(
     label: &LabelPayload,
-    event_pid: u32,
+    event_process: ProcessIdentity,
     observed_at: SystemTime,
     row: &NetworkRow,
     target: &PendingLabelTarget,
 ) -> bool {
-    event_pid == target.pid
+    event_process == target.process
         && observed_at == target.observed_at
         && evidence_matches("operation", &row.operation, &label.evidence)
         && evidence_matches("local", &row.local, &label.evidence)
@@ -192,8 +193,6 @@ mod tests {
     const NET_EVENT_ID_RAW: u64 = 10;
     const LABEL_EVENT_ID_RAW: u64 = 11;
     const PID: u32 = 4242;
-    const START_TIME_TICKS: u64 = 9000;
-    const PROCESS_GENERATION: u64 = 1;
     const CONFIDENCE_MILLIS: u16 = 950;
 
     #[test]
@@ -254,7 +253,7 @@ mod tests {
             event_id,
             trace_id: TraceId::new(TRACE_ID_RAW),
             observed_at,
-            process: ProcessIdentity::new(PID, START_TIME_TICKS, PROCESS_GENERATION),
+            process: ProcessIdentity::new(PID as u64),
             collector: CollectorName::new("ebpf"),
             kind,
             flags: EventFlags::clean(),

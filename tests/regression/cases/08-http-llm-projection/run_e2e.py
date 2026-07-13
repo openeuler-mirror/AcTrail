@@ -28,6 +28,7 @@ from common import (  # noqa: E402
     required,
     run_checked,
     start_daemon,
+    StoredTraceRoot,
     stop_process,
     wait_for_actions,
     wait_for_payloads,
@@ -66,7 +67,7 @@ def main() -> int:
             raise RuntimeError("workload did not report completion")
         workload_pid = parse_workload_pid(output)
         summary = trace_summary(actrailviewer, config, trace_id)
-        require_launch_root_pid(summary, workload_pid)
+        root = require_launch_root_identity(config, trace_id, summary, workload_pid)
         payloads = wait_for_payloads(
             actrailctl,
             actrailviewer,
@@ -111,7 +112,8 @@ def main() -> int:
         require_http_llm_span(otel, marker, required(settings, "model"))
         emit_llm_otel_evidence(otel, int(required(settings, "evidence_text_max_chars")))
         print(f"http_llm_projection_trace_id={trace_id}")
-        print(f"http_llm_projection_root_pid={workload_pid}")
+        print(f"http_llm_projection_root_process_id={root.process_id}")
+        print(f"http_llm_projection_root_namespace_pid={workload_pid}")
         print(f"http_llm_projection_payload_segments={payload_count}")
         print(f"http_llm_projection_large_outbound_payload_bytes={large_payload_size}")
         print(f"http_llm_projection_web_action_tree_reachable={web_tree['reachable_count']}")
@@ -209,12 +211,19 @@ def trace_summary(actrailviewer: Path, config: Path | None, trace_id: int) -> st
     )
 
 
-def require_launch_root_pid(summary: str, workload_pid: int) -> None:
-    expected = f"root_pid={workload_pid}"
-    if expected not in summary:
-        raise RuntimeError(
-            f"launch trace root pid did not match workload pid {workload_pid}\n{summary}"
-        )
+def require_launch_root_identity(
+    config: Path | None,
+    trace_id: int,
+    summary: str,
+    workload_pid: int,
+) -> StoredTraceRoot:
+    if config is None:
+        raise RuntimeError("HTTP projection root identity check requires an operator config")
+    operator = read_config(config)
+    root = StoredTraceRoot.load(Path(required(operator, "storage_sqlite_path")), trace_id)
+    root.require_summary(summary)
+    root.require_namespace_pid(workload_pid)
+    return root
 
 
 def require_complete_outbound_socket_payload_rows(payloads: str) -> int:

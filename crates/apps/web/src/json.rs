@@ -56,23 +56,7 @@ pub fn string_array(values: impl IntoIterator<Item = String>) -> String {
 
 pub fn process(identity: &ProcessIdentity) -> String {
     let mut output = String::from("{");
-    field(&mut output, "pid", &number(identity.pid));
-    output.push(',');
-    field(&mut output, "task_id", &optional_number(identity.task_id));
-    output.push(',');
-    field(
-        &mut output,
-        "start_time_ticks",
-        &number(identity.start_time_ticks),
-    );
-    output.push(',');
-    field(&mut output, "generation", &number(identity.generation));
-    output.push(',');
-    field(
-        &mut output,
-        "pid_namespace",
-        &optional_string(identity.pid_namespace.as_ref().map(|value| value.as_str())),
-    );
+    field(&mut output, "process_id", &number(identity.get()));
     output.push('}');
     output
 }

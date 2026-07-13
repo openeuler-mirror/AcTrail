@@ -15,10 +15,10 @@ const TRACE_ID: TraceId = TraceId::new(7);
 
 #[test]
 fn derives_command_link_through_transient_helper_process() {
-    let agent = ProcessIdentity::new(100, 1000, 1000);
-    let bash = ProcessIdentity::new(101, 1001, 1001);
-    let helper = ProcessIdentity::new(102, 1002, 1002);
-    let base64 = ProcessIdentity::new(103, 1003, 1003);
+    let agent = ProcessIdentity::new(1000);
+    let bash = ProcessIdentity::new(1001);
+    let helper = ProcessIdentity::new(1002);
+    let base64 = ProcessIdentity::new(1003);
     let memberships = vec![
         ProcessMembership::root(TRACE_ID, agent.clone(), time(0)),
         ProcessMembership::inherited(TRACE_ID, bash.clone(), agent.clone(), time(1)),
@@ -59,8 +59,8 @@ fn derives_command_link_through_transient_helper_process() {
 
 #[test]
 fn observed_parent_link_blocks_lineage_derived_parent() {
-    let parent = ProcessIdentity::new(200, 2000, 2000);
-    let child = ProcessIdentity::new(201, 2001, 2001);
+    let parent = ProcessIdentity::new(2000);
+    let child = ProcessIdentity::new(2001);
     let memberships = vec![
         ProcessMembership::root(TRACE_ID, parent.clone(), time(0)),
         ProcessMembership::inherited(TRACE_ID, child.clone(), parent.clone(), time(1)),
@@ -91,8 +91,8 @@ fn observed_parent_link_blocks_lineage_derived_parent() {
 
 #[test]
 fn stale_lineage_link_is_invalidated_when_parent_changes() {
-    let parent = ProcessIdentity::new(300, 3000, 3000);
-    let child = ProcessIdentity::new(301, 3001, 3001);
+    let parent = ProcessIdentity::new(3000);
+    let child = ProcessIdentity::new(3001);
     let memberships = vec![
         ProcessMembership::root(TRACE_ID, parent.clone(), time(0)),
         ProcessMembership::inherited(TRACE_ID, child.clone(), parent.clone(), time(1)),

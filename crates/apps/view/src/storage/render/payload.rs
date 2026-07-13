@@ -8,7 +8,7 @@ use crate::table::Table;
 pub(super) fn render_payloads(segments: Vec<PayloadSegment>) -> String {
     let mut table = Table::new(&[
         "SEGMENT",
-        "PID",
+        "PROCESS",
         "DIRECTION",
         "STATE",
         "SIZE",
@@ -21,7 +21,7 @@ pub(super) fn render_payloads(segments: Vec<PayloadSegment>) -> String {
     for segment in segments {
         table.push(vec![
             segment.segment_id.to_string(),
-            segment.process.pid.to_string(),
+            segment.process.get().to_string(),
             payload_direction(segment.direction).to_string(),
             format!("{:?}", segment.content_state),
             format!("{}/{}", segment.captured_size, segment.original_size),

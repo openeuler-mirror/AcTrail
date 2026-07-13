@@ -13,6 +13,7 @@ use crate::env::{
     ENV_LIBRARY_PATH_PREFIX_MUSL, ENV_RUNTIME_GLIBC_LIBRARY, ENV_RUNTIME_MUSL_LIBRARY,
     ENV_SYSTEM_LIBRARY_DIRS, RUNTIME_GLIBC_LIBRARY_NAME, RUNTIME_MUSL_LIBRARY_NAME,
 };
+use crate::plan::RuntimePlanDescriptor;
 use crate::{SyncError, SyncResult};
 
 const LD_LIBRARY_PATH: &str = "LD_LIBRARY_PATH";
@@ -592,14 +593,25 @@ pub fn launch_command_for_plan(
     command: &[OsString],
     plan: &ProbePointPlan,
 ) -> SyncResult<Vec<OsString>> {
+    launch_command_for_binary(command, &plan.binary.path)
+}
+
+pub fn launch_command_for_plan_descriptor(
+    command: &[OsString],
+    plan: &RuntimePlanDescriptor,
+) -> SyncResult<Vec<OsString>> {
+    launch_command_for_binary(command, &plan.binary)
+}
+
+fn launch_command_for_binary(command: &[OsString], binary: &Path) -> SyncResult<Vec<OsString>> {
     let Some(program) = command.first() else {
         return Err(SyncError::new("probe command is empty"));
     };
     let entry = resolve_command_path(program)?;
-    let plan_binary = std::fs::canonicalize(&plan.binary.path).map_err(|error| {
+    let plan_binary = std::fs::canonicalize(binary).map_err(|error| {
         SyncError::new(format!(
             "cannot resolve probe binary {}: {error}",
-            plan.binary.path.display()
+            binary.display()
         ))
     })?;
     if hidden_sibling_binary(&entry).is_some_and(|sibling| sibling == plan_binary) {

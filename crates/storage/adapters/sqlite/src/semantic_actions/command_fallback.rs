@@ -43,11 +43,7 @@ impl SqliteStorage {
              {action_cold_join}
              WHERE action.trace_id = ?
                AND action.kind_code != ?
-               AND action.process_pid = ?
-               AND action.process_task_id IS ?
-               AND action.process_start_ticks = ?
-               AND action.process_pid_namespace IS ?
-               AND action.process_generation = ?
+               AND action.process_id = ?
                AND action.start_time >= ?
                AND (? IS NULL OR action.start_time <= ?)
                AND action.action_valid_code = 1
@@ -93,35 +89,15 @@ fn command_fallback_query_values(
     display_parent_roles: &[&str],
 ) -> Result<Vec<Value>, SemanticActionStoreError> {
     let end_time = command.end_time.map(encode_time);
-    let mut values = Vec::with_capacity(10 + display_parent_link_value_count(display_parent_roles));
+    let mut values = Vec::with_capacity(6 + display_parent_link_value_count(display_parent_roles));
     values.extend([
         trace_id_value(trace_id)?,
         Value::Integer(i64::from(action_kind_code(
             SemanticActionKind::CommandInvocation,
         ))),
-        Value::Integer(i64::from(command.process.pid)),
-        command
-            .process
-            .task_id
-            .map(|task_id| Value::Integer(i64::from(task_id)))
-            .unwrap_or(Value::Null),
-        Value::Integer(
-            i64::try_from(command.process.start_time_ticks).map_err(|error| {
-                SemanticActionStoreError::new(
-                    "semantic_action_command_fallback_start_ticks",
-                    error.to_string(),
-                )
-            })?,
-        ),
-        command
-            .process
-            .pid_namespace
-            .as_ref()
-            .map(|namespace| Value::Text(namespace.as_str().to_string()))
-            .unwrap_or(Value::Null),
-        Value::Integer(i64::try_from(command.process.generation).map_err(|error| {
+        Value::Integer(i64::try_from(command.process.get()).map_err(|error| {
             SemanticActionStoreError::new(
-                "semantic_action_command_fallback_generation",
+                "semantic_action_command_fallback_process_id",
                 error.to_string(),
             )
         })?),

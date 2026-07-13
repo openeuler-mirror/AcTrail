@@ -6,6 +6,7 @@ use control_contract::reply::ControlError;
 use model_core::diagnostics::DiagnosticRecord;
 use model_core::event::DomainEvent;
 use model_core::ids::TraceId;
+use model_core::process::ProcessRecord;
 use model_core::trace::TraceRecord;
 use recording_runtime::{
     RecordingError, RecordingWriter, SemanticActionBatch, TraceRecordLookup, TraceStateRecord,
@@ -34,6 +35,7 @@ impl StorageAttachService {
         diagnostics: Vec<DiagnosticRecord>,
         semantic_actions: SemanticActionBatch,
         trace_states: Vec<TraceStateRecord>,
+        process_records: Vec<ProcessRecord>,
     ) -> Result<(), ControlError> {
         let event_count = events.len();
         let diagnostic_count = diagnostics.len();
@@ -50,6 +52,7 @@ impl StorageAttachService {
                 diagnostics,
                 semantic_actions,
                 trace_states,
+                process_records,
                 &traces,
                 SystemTime::now(),
                 || {

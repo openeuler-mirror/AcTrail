@@ -16,14 +16,13 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::time::SystemTime;
 
 use config_core::daemon::{PayloadTlsCaptureBackend, PayloadTlsConfig};
-use control_contract::reply::ControlError;
-use ebpf_collector::procfs::resolve_namespaced_pid;
+use control_contract::reply::{ControlError, LaunchTlsPlanReply};
 use model_core::ids::TraceId;
 use model_core::payload::{
     PayloadContentState, PayloadDirection, PayloadOperationCompletionState, PayloadSourceBoundary,
     PayloadStreamKey, PayloadTruncationState,
 };
-use model_core::process::ProcessIdentity;
+use model_core::process::{NamespaceIdentity, NamespaceProcessCoordinates, ProcessObservation};
 use payload_event::RawPayloadSegment;
 use tls_payload_core::PayloadDirection as SyncDirection;
 use tls_payload_sync::{
@@ -107,6 +106,19 @@ impl TlsSyncService {
             return Ok(());
         };
         resolver.prewarm(binary)
+    }
+
+    pub(crate) fn resolve_launch_plan(
+        &self,
+        binary: &std::path::Path,
+    ) -> Result<LaunchTlsPlanReply, ControlError> {
+        let Some(resolver) = &self.resolver else {
+            return Err(ControlError::new(
+                "tls_sync_plan",
+                "TLS sync plan resolver is disabled",
+            ));
+        };
+        resolver.resolve_launch_plan(binary)
     }
 
     pub(crate) fn drain(
@@ -193,7 +205,7 @@ struct TlsSyncClient {
     path_root: PeerRootResolver,
     peer: PeerIdentity,
     buffer: Vec<u8>,
-    process_cache: BTreeMap<TlsSyncProcessCacheKey, ProcessIdentity>,
+    process_cache: BTreeMap<TlsSyncProcessCacheKey, ProcessObservation>,
 }
 
 impl TlsSyncClient {
@@ -261,16 +273,12 @@ impl TlsSyncClient {
             authorize_sync_event(&self.peer, trace_runtime, &event)?;
             match event {
                 SyncEvent::Payload(event) => {
-                    if let Some(segment) =
-                        payload_segment(event, trace_runtime, &mut self.process_cache)?
-                    {
+                    if let Some(segment) = payload_segment(event, &mut self.process_cache)? {
                         segments.push(segment);
                     }
                 }
                 SyncEvent::Summary(event) => {
-                    if let Some(segment) =
-                        summary_segment(event, trace_runtime, &mut self.process_cache)?
-                    {
+                    if let Some(segment) = summary_segment(event, &mut self.process_cache)? {
                         segments.push(segment);
                     }
                 }
@@ -330,25 +338,16 @@ fn audit_tls_credentials_rejection(credentials: PeerCredentials, error: &Control
 
 fn summary_segment(
     event: SummaryEvent,
-    trace_runtime: &TraceRuntime,
-    process_cache: &mut BTreeMap<TlsSyncProcessCacheKey, ProcessIdentity>,
+    process_cache: &mut BTreeMap<TlsSyncProcessCacheKey, ProcessObservation>,
 ) -> Result<Option<RawPayloadSegment>, ControlError> {
     let trace_id = TraceId::new(event.trace_id);
-    let process = match resolve_tls_sync_process(trace_runtime, trace_id, event.pid, process_cache)
-    {
-        Ok(process) => process,
-        Err(error) if stale_namespaced_pid_resolution(&error) => {
-            tracing::warn!(
-                target: "actrail::tls_sync",
-                trace_id = trace_id.get(),
-                namespace_pid = event.pid,
-                error = %error.message,
-                "dropped stale TLS sync summary event after process exit"
-            );
-            return Ok(None);
-        }
-        Err(error) => return Err(error),
-    };
+    let process = resolve_tls_sync_process(
+        trace_id,
+        event.pid,
+        event.start_time_ticks,
+        &event.pid_namespace,
+        process_cache,
+    )?;
     let captured_size = event.bytes.len() as u64;
     let original_size = event.observed_size.max(captured_size);
     Ok(Some(RawPayloadSegment {
@@ -358,10 +357,7 @@ fn summary_segment(
         source_boundary: PayloadSourceBoundary::TlsUserSpace,
         content_state: PayloadContentState::Plaintext,
         direction: payload_direction(event.direction),
-        stream_key: PayloadStreamKey::new(format!(
-            "tls-sync:{}:{:x}",
-            process.pid, event.stream_key
-        )),
+        stream_key: PayloadStreamKey::new(format!("tls-sync:{}:{:x}", event.pid, event.stream_key)),
         sequence: event.sequence,
         original_size,
         captured_size,
@@ -383,25 +379,16 @@ fn summary_segment(
 
 fn payload_segment(
     event: PayloadEvent,
-    trace_runtime: &TraceRuntime,
-    process_cache: &mut BTreeMap<TlsSyncProcessCacheKey, ProcessIdentity>,
+    process_cache: &mut BTreeMap<TlsSyncProcessCacheKey, ProcessObservation>,
 ) -> Result<Option<RawPayloadSegment>, ControlError> {
     let trace_id = TraceId::new(event.trace_id);
-    let process = match resolve_tls_sync_process(trace_runtime, trace_id, event.pid, process_cache)
-    {
-        Ok(process) => process,
-        Err(error) if stale_namespaced_pid_resolution(&error) => {
-            tracing::warn!(
-                target: "actrail::tls_sync",
-                trace_id = trace_id.get(),
-                namespace_pid = event.pid,
-                error = %error.message,
-                "dropped stale TLS sync payload event after process exit"
-            );
-            return Ok(None);
-        }
-        Err(error) => return Err(error),
-    };
+    let process = resolve_tls_sync_process(
+        trace_id,
+        event.pid,
+        event.start_time_ticks,
+        &event.pid_namespace,
+        process_cache,
+    )?;
     let captured_size = event.bytes.len() as u64;
     Ok(Some(RawPayloadSegment {
         trace_id,
@@ -410,10 +397,7 @@ fn payload_segment(
         source_boundary: PayloadSourceBoundary::TlsUserSpace,
         content_state: PayloadContentState::Plaintext,
         direction: payload_direction(event.direction),
-        stream_key: PayloadStreamKey::new(format!(
-            "tls-sync:{}:{:x}",
-            process.pid, event.stream_key
-        )),
+        stream_key: PayloadStreamKey::new(format!("tls-sync:{}:{:x}", event.pid, event.stream_key)),
         sequence: event.sequence,
         original_size: captured_size,
         captured_size,
@@ -431,49 +415,42 @@ fn payload_segment(
 }
 
 fn resolve_tls_sync_process(
-    trace_runtime: &TraceRuntime,
     trace_id: TraceId,
     namespace_pid: u32,
-    process_cache: &mut BTreeMap<TlsSyncProcessCacheKey, ProcessIdentity>,
-) -> Result<ProcessIdentity, ControlError> {
-    let entry = trace_runtime
-        .get_trace(trace_id)
-        .ok_or_else(|| ControlError::new("tls_sync_pid_resolution", "trace not found"))?;
+    start_time_ticks: u64,
+    pid_namespace: &str,
+    process_cache: &mut BTreeMap<TlsSyncProcessCacheKey, ProcessObservation>,
+) -> Result<ProcessObservation, ControlError> {
     let cache_key = TlsSyncProcessCacheKey {
         trace_id,
         namespace_pid,
+        start_time_ticks,
+        pid_namespace: pid_namespace.to_string(),
     };
     if let Some(process) = process_cache.get(&cache_key) {
         return Ok(process.clone());
     }
-    let pid_namespace = entry
-        .trace
-        .root_process_identity
-        .pid_namespace
-        .as_ref()
-        .ok_or_else(|| {
-            ControlError::new(
-                "tls_sync_pid_resolution",
-                "trace root process is missing PID namespace metadata",
-            )
-        })?;
-    let process = resolve_namespaced_pid(namespace_pid, pid_namespace)
-        .map_err(|error| ControlError::new("tls_sync_pid_resolution", error))?;
+    if start_time_ticks == 0 || pid_namespace.is_empty() {
+        return Err(ControlError::new(
+            "tls_sync_pid_resolution",
+            "TLS sync event process metadata is incomplete",
+        ));
+    }
+    let process = ProcessObservation::namespace(NamespaceProcessCoordinates::new(
+        NamespaceIdentity::new(pid_namespace),
+        namespace_pid,
+        start_time_ticks,
+    ));
     process_cache.insert(cache_key, process.clone());
     Ok(process)
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct TlsSyncProcessCacheKey {
     trace_id: TraceId,
     namespace_pid: u32,
-}
-
-fn stale_namespaced_pid_resolution(error: &ControlError) -> bool {
-    error.code == "tls_sync_pid_resolution"
-        && error
-            .message
-            .starts_with("no host process matched namespace pid ")
+    start_time_ticks: u64,
+    pid_namespace: String,
 }
 
 fn payload_direction(direction: SyncDirection) -> PayloadDirection {

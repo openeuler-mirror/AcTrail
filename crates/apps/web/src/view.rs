@@ -68,12 +68,13 @@ pub fn runtime_plugin_unload_json(
 
 pub fn traces_json(storage_config: &StorageConfig) -> Result<String, String> {
     let storage = open_storage(storage_config)?;
+    let process_display = traces::ProcessDisplayIndex::load(storage.as_ref())?;
     let traces = storage
         .list_traces(&TraceFilter::default())
         .map_err(|error| format!("list traces failed: {}: {}", error.stage, error.message))?;
     let rows = traces
         .iter()
-        .map(traces::trace_record_json)
+        .map(|trace| process_display.render_trace(trace))
         .collect::<Vec<_>>();
     Ok(format!("{{\"traces\":[{}]}}", rows.join(",")))
 }
@@ -124,6 +125,7 @@ pub fn parse_llm_explore_query(body: &str) -> Result<stats::LlmExploreQuery, Str
 
 pub fn trace_json(storage_config: &StorageConfig, trace_id: u64) -> Result<String, String> {
     let mut storage = open_storage(storage_config)?;
+    let process_display = traces::ProcessDisplayIndex::load(storage.as_ref())?;
     let trace_id = TraceId::new(trace_id);
     let snapshot = read_snapshot(storage.as_mut(), trace_id)?;
     let payloads = storage
@@ -155,14 +157,14 @@ pub fn trace_json(storage_config: &StorageConfig, trace_id: u64) -> Result<Strin
         .iter()
         .map(payloads::payload_json_row)
         .collect::<Vec<_>>();
-    let process_tree = topology::process_tree_json(&snapshot.memberships);
+    let process_tree = topology::process_tree_json(&snapshot.memberships, &process_display);
     let timeline = topology::timeline_json(&snapshot.events, &payloads);
 
     let mut output = String::from("{");
     json::field(
         &mut output,
         "trace",
-        &traces::trace_record_json(&snapshot.trace),
+        &process_display.render_trace(&snapshot.trace),
     );
     output.push(',');
     json::field(
@@ -200,6 +202,7 @@ pub fn trace_json(storage_config: &StorageConfig, trace_id: u64) -> Result<Strin
 
 pub fn trace_summary_json(storage_config: &StorageConfig, trace_id: u64) -> Result<String, String> {
     let storage = open_storage(storage_config)?;
+    let process_display = traces::ProcessDisplayIndex::load(storage.as_ref())?;
     let trace_id = TraceId::new(trace_id);
     let trace = storage
         .get_trace(trace_id)
@@ -226,7 +229,7 @@ pub fn trace_summary_json(storage_config: &StorageConfig, trace_id: u64) -> Resu
     let counts = events::event_counts_from_variants(&variant_counts);
 
     let mut output = String::from("{");
-    json::field(&mut output, "trace", &traces::trace_record_json(&trace));
+    json::field(&mut output, "trace", &process_display.render_trace(&trace));
     output.push(',');
     json::field(
         &mut output,
@@ -288,13 +291,14 @@ pub fn trace_processes_json(
     trace_id: u64,
 ) -> Result<String, String> {
     let mut storage = open_storage(storage_config)?;
+    let process_display = traces::ProcessDisplayIndex::load(storage.as_ref())?;
     let snapshot = read_snapshot(storage.as_mut(), TraceId::new(trace_id))?;
     let processes = snapshot
         .memberships
         .iter()
         .map(events::process_json)
         .collect::<Vec<_>>();
-    let process_tree = topology::process_tree_json(&snapshot.memberships);
+    let process_tree = topology::process_tree_json(&snapshot.memberships, &process_display);
     Ok(format!(
         "{{\"processes\":[{}],\"process_tree\":{}}}",
         processes.join(","),

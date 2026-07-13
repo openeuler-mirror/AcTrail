@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import select
 import shutil
 import signal
@@ -15,8 +14,7 @@ import sys
 import time
 from pathlib import Path
 
-
-TRACE_RE = re.compile(r"trace trace-(\d+) entered Active")
+from launch_session import LaunchSession
 
 
 def parse_args() -> argparse.Namespace:
@@ -83,7 +81,7 @@ def main() -> int:
         stderr=subprocess.PIPE,
         start_new_session=True,
     )
-    launches: list[subprocess.Popen[str]] = []
+    launches: list[LaunchSession] = []
     trace_ids: list[int] = []
     markers = [expected_marker(args.workload, index) for index in range(args.concurrency)]
     try:
@@ -100,8 +98,8 @@ def main() -> int:
                     xiaoo_configs[index] if xiaoo_configs else None,
                 )
             )
-        for process in launches:
-            trace_ids.append(wait_for_trace(process, args.ready_timeout_sec))
+        for launch in launches:
+            trace_ids.append(launch.wait_for_trace(args.ready_timeout_sec))
         wait_for_active_traces(Path(values["storage_sqlite_path"]), trace_ids, args.ready_timeout_sec)
         list_output = run_checked([str(actrailctl), "--config", str(config), "list-traces"])
         for trace_id in trace_ids:
@@ -116,7 +114,7 @@ def main() -> int:
             verify_limit_rejection(
                 actrailctl,
                 config,
-                first_root_pid(Path(values["storage_sqlite_path"]), trace_ids),
+                first_root_host_pid(Path(values["storage_sqlite_path"]), trace_ids),
             )
         outputs = wait_for_launches(launches, args.completion_timeout_sec)
         wait_for_completed_traces(
@@ -127,13 +125,10 @@ def main() -> int:
         verify_launch_outputs(args.workload, outputs, markers)
         verify_payload_markers(Path(values["storage_sqlite_path"]), args.workload, trace_ids, markers)
         print(f"concurrent launch e2e passed traces={','.join(f'trace-{tid}' for tid in trace_ids)}")
-        for output in outputs:
-            print(output, end="")
         return 0
     finally:
-        for process in launches:
-            if process.poll() is None:
-                process.terminate()
+        for launch in launches:
+            launch.terminate()
         stop_daemon(daemon)
         print_daemon_stderr(daemon)
 
@@ -301,7 +296,7 @@ def spawn_launch(
     index: int,
     marker: str,
     xiaoo_config: Path | None,
-) -> subprocess.Popen[str]:
+) -> LaunchSession:
     command = workload_command(xiaoo, args, index, marker, xiaoo_config)
     script = (
         f"printf '{marker}_START\\n'; "
@@ -310,20 +305,21 @@ def spawn_launch(
     )
     if args.workload == "shell":
         command = ["sh", "-c", script]
-    return subprocess.Popen(
-        [
-            str(actrailctl),
-            "--config",
-            str(config),
-            "launch",
-            "--name",
-            f"{args.workload}-{index}",
-            "--",
-            *command,
-        ],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+    return LaunchSession(
+        subprocess.Popen(
+            [
+                str(actrailctl),
+                "--config",
+                str(config),
+                "launch",
+                "--name",
+                f"{args.workload}-{index}",
+                "--",
+                *command,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
     )
 
 
@@ -358,24 +354,6 @@ def expected_marker(workload: str, index: int) -> str:
     if workload == "xiaoo":
         return f"ACTRAIL_XIAOO_{index}"
     return f"ACTRAIL_CONCURRENT_{index}"
-
-
-def wait_for_trace(process: subprocess.Popen[str], timeout_sec: float) -> int:
-    deadline = time.monotonic() + timeout_sec
-    assert process.stdout is not None
-    buffered = ""
-    while time.monotonic() < deadline:
-        line = read_line(process, deadline)
-        if line:
-            buffered += line
-            print(line, end="")
-            match = TRACE_RE.search(buffered)
-            if match:
-                return int(match.group(1))
-        if process.poll() is not None:
-            stderr = process.stderr.read() if process.stderr else ""
-            raise RuntimeError(f"launch exited before trace id stdout={buffered} stderr={stderr}")
-    raise RuntimeError(f"timed out waiting for trace id stdout={buffered}")
 
 
 def read_line(process: subprocess.Popen[str], deadline: float) -> str:
@@ -434,15 +412,24 @@ def clean_list_state(workload: str, line: str) -> bool:
     return " Active/Clean" in line
 
 
-def first_root_pid(storage: Path, trace_ids: list[int]) -> int:
+def first_root_host_pid(storage: Path, trace_ids: list[int]) -> int:
     placeholders = ",".join("?" for _ in trace_ids)
     with sqlite3.connect(storage) as connection:
         row = connection.execute(
-            f"SELECT root_pid FROM traces WHERE trace_id IN ({placeholders}) ORDER BY trace_id LIMIT 1",
+            f"""
+            SELECT process.host_pid
+            FROM traces trace
+            JOIN processes process
+              ON process.process_id = trace.root_process_id
+            WHERE trace.trace_id IN ({placeholders})
+              AND process.host_pid IS NOT NULL
+            ORDER BY trace.trace_id
+            LIMIT 1
+            """,
             trace_ids,
         ).fetchone()
     if row is None:
-        raise RuntimeError(f"missing root pid for traces {trace_ids}")
+        raise RuntimeError(f"missing resolved root host PID for traces {trace_ids}")
     return int(row[0])
 
 
@@ -457,21 +444,14 @@ def wait_for_active_traces(storage: Path, trace_ids: list[int], timeout_sec: flo
 
 
 def wait_for_launches(
-    launches: list[subprocess.Popen[str]],
+    launches: list[LaunchSession],
     timeout_sec: float,
 ) -> list[str]:
     outputs: list[str] = []
     deadline = time.monotonic() + timeout_sec
-    for process in launches:
+    for launch in launches:
         remaining = max(0.1, deadline - time.monotonic())
-        stdout, stderr = process.communicate(timeout=remaining)
-        if stderr:
-            print(stderr, end="", file=sys.stderr)
-        if process.returncode != 0:
-            raise RuntimeError(
-                f"launch failed exit={process.returncode}\nstdout={stdout}\nstderr={stderr}"
-            )
-        outputs.append(stdout)
+        outputs.append(launch.wait_for_completion(remaining))
     return outputs
 
 

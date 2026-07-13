@@ -35,6 +35,7 @@ from .process import (
     start_daemon,
     stop_process,
 )
+from .process_identity import StoredTraceRoot
 
 __all__ = [
     "DEFAULT_OPERATOR_CONFIG_PATH",
@@ -63,6 +64,7 @@ __all__ = [
     "required",
     "run_checked",
     "start_daemon",
+    "StoredTraceRoot",
     "stop_process",
     "wait_for_actions",
     "wait_for_llm_exchange_actions",

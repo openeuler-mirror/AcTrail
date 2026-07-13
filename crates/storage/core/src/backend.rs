@@ -6,7 +6,7 @@ use model_core::diagnostics::DiagnosticRecord;
 use model_core::event::DomainEvent;
 use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
-use model_core::process::{ProcessIdentity, ProcessMembership};
+use model_core::process::{ProcessIdentity, ProcessMembership, ProcessRecord};
 use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
 use semantic_action::{
     FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
@@ -68,6 +68,13 @@ pub trait StorageBackend {
     fn next_event_id_seed(&self) -> Result<u64, StorageError>;
     fn next_diagnostic_id_seed(&self) -> Result<u64, StorageError>;
     fn next_payload_segment_id_seed(&self) -> Result<u64, StorageError>;
+    fn reserve_process_id_block(&mut self, count: u64) -> Result<(u64, u64), StorageError>;
+    fn upsert_process_record(&mut self, record: ProcessRecord) -> Result<(), StorageError>;
+    fn get_process_record(
+        &self,
+        identity: ProcessIdentity,
+    ) -> Result<Option<ProcessRecord>, StorageError>;
+    fn list_process_records(&self) -> Result<Vec<ProcessRecord>, StorageError>;
 
     fn begin(&mut self) -> Result<Box<dyn StorageTransaction>, StorageError>;
 

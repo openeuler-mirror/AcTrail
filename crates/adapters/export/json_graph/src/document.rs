@@ -80,7 +80,7 @@ mod tests {
     #[test]
     fn net_event_export_preserves_payload_and_endpoint_resource() {
         let trace_id = TraceId::new(1);
-        let process = ProcessIdentity::new(100, 200, 1);
+        let process = ProcessIdentity::new(1);
         let trace = TraceRecord::new(
             trace_id,
             process.clone(),

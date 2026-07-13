@@ -151,7 +151,7 @@ impl StorageAttachService {
 
     fn drain_tls_sync_events_impl(
         &mut self,
-        trace_runtime: &TraceRuntime,
+        trace_runtime: &mut TraceRuntime,
     ) -> Result<(), ControlError> {
         let drain = match self.tls_sync.drain(trace_runtime) {
             Ok(d) => d,
@@ -255,12 +255,13 @@ impl StorageAttachService {
             diagnostics,
             SemanticActionBatch::default(),
             trace_states,
+            Vec::new(),
         )
     }
 
     fn persist_completed_seccomp_tls_operations_impl(
         &mut self,
-        trace_runtime: &TraceRuntime,
+        trace_runtime: &mut TraceRuntime,
     ) -> Result<(), ControlError> {
         let payload_segments = self
             .seccomp_tls
@@ -272,7 +273,7 @@ impl StorageAttachService {
 
     fn persist_completed_seccomp_socket_operations_impl(
         &mut self,
-        trace_runtime: &TraceRuntime,
+        trace_runtime: &mut TraceRuntime,
     ) -> Result<(), ControlError> {
         let completions = self.collector.take_socket_completions();
         let payload_segments = self.seccomp_socket.complete_operations(completions)?;
@@ -324,6 +325,7 @@ impl StorageAttachService {
             seccomp_notify.drain_notifications(|notification, continuation| {
                 network_events.extend(network_control.handle_notification(
                     trace_runtime,
+                    &self.process_registry,
                     identity_reader,
                     notification,
                     continuation,
@@ -331,6 +333,7 @@ impl StorageAttachService {
                 )?);
                 pending_process_observations.extend(process_seccomp.handle_notification(
                     trace_runtime,
+                    &self.process_registry,
                     identity_reader,
                     notification,
                     continuation,
@@ -339,6 +342,7 @@ impl StorageAttachService {
                             match command_control.decide_exec(
                                 trace_id,
                                 &candidate.process,
+                                &self.process_registry,
                                 candidate,
                                 control_plugins,
                             )? {
@@ -386,7 +390,12 @@ impl StorageAttachService {
                 )?);
                 let tls_consumed = seccomp_tls.handle_notification(collector, notification)?;
                 if !tls_consumed {
-                    seccomp_socket.handle_notification(collector, trace_runtime, notification)?;
+                    seccomp_socket.handle_notification(
+                        collector,
+                        trace_runtime,
+                        &self.process_registry,
+                        notification,
+                    )?;
                 }
                 Ok(())
             })?;
@@ -411,8 +420,11 @@ impl StorageAttachService {
             let raw_events = self.pending_process_seccomp_observations[..batch_len]
                 .iter()
                 .map(|observation| {
-                    self.process_seccomp
-                        .materialize_observation(trace_runtime, observation)
+                    self.process_seccomp.materialize_observation(
+                        trace_runtime,
+                        &self.process_registry,
+                        observation,
+                    )
                 })
                 .collect();
             self.process_live_event_batch(trace_runtime, raw_events)?;
@@ -425,7 +437,10 @@ impl StorageAttachService {
         &mut self,
         trace_runtime: &trace_runtime::TraceRuntime,
     ) -> Result<(), ControlError> {
-        let drafts = match self.resource_metrics.drain_due(trace_runtime) {
+        let drafts = match self
+            .resource_metrics
+            .drain_due(trace_runtime, &self.process_registry)
+        {
             Ok(d) => d,
             Err(error) => {
                 tracing::warn!(
@@ -462,6 +477,7 @@ impl StorageAttachService {
         let mut events = Vec::new();
         for draft in self.enforcement.drain_due(
             trace_runtime,
+            &self.process_registry,
             &self.identity_reader,
             &self.control_plugins,
         )? {

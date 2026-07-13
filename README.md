@@ -4,6 +4,10 @@
 
 AcTrail records what an AI-agent process tree actually did on Linux/WSL, then links the evidence back to traceable actions: process launches, file and IPC activity, network connections, TLS/plaintext payloads, HTTP semantics, LLM requests and responses, resource samples, and policy decisions.
 
+## Targeted for
+
+![Why self-reported trace is not enough](./images/figure1-agent-log-gap-zh-cn.drawio.svg)
+
 Use it when an agent's own logs are not enough. AcTrail answers:
 
 - What process tree ran, and which commands did it spawn?
@@ -48,9 +52,9 @@ The fastest path is the default local workflow:
 
 ```mermaid
 flowchart LR
-    Init["actraild init"] --> Start["actraild start"]
-    Start --> Launch["actrailctl launch"]
-    Launch --> Web["actrailweb"]
+    Init["actraild init<br/>(create config file)"] --> Start["actraild start<br>(prepare for observation)"]
+    Start --> Launch["actrailctl launch<br>(start and observe an agent)"]
+    Launch --> Web["actrailweb<br/>(view the traces)"]
 ```
 
 The default config enables broad collection and can persist sensitive plaintext payloads, including prompts, API keys, Authorization headers, and model responses. Use it first on a disposable development host or workload.

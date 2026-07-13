@@ -6,11 +6,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+PROCESS_ID_ATTR = "actrail.process.id"
+PARENT_PROCESS_ID_ATTR = "process.parent.id"
+CHILD_PROCESS_ID_ATTR = "agent.child.process_id"
+
+
 @dataclass(frozen=True)
 class HiddenAgentProof:
-    agent_a_pid: str
-    xiaoo_pid: str
-    script_b_parent_pid: str
+    agent_a_process_id: str
+    xiaoo_process_id: str
+    script_b_parent_process_id: str
 
 
 def validate_hidden_agent_actions(
@@ -22,35 +27,37 @@ def validate_hidden_agent_actions(
     if agent_a is None:
         raise RuntimeError("missing agent A process.exec")
     agent_a_attrs = span_attrs(agent_a)
-    agent_a_pid = required_attr(agent_a_attrs, "process.pid")
+    agent_a_process_id = required_attr(agent_a_attrs, PROCESS_ID_ATTR)
     require_agent_identity(agent_a_attrs, "agent A")
-    if find_llm_request_for_pid(document, agent_a_pid) is None:
+    if find_llm_request_for_process(document, agent_a_process_id) is None:
         raise RuntimeError("missing agent A llm.request")
 
     xiaoo = find_xiaoo_exec_with_identity(document)
     if xiaoo is None:
         raise RuntimeError("missing xiaoo process.exec with agent identity")
     xiaoo_attrs = span_attrs(xiaoo)
-    xiaoo_pid = required_attr(xiaoo_attrs, "process.pid")
-    if find_llm_request_for_pid(document, xiaoo_pid) is None:
+    xiaoo_process_id = required_attr(xiaoo_attrs, PROCESS_ID_ATTR)
+    if find_llm_request_for_process(document, xiaoo_process_id) is None:
         raise RuntimeError("missing xiaoo llm.request")
 
-    invocation = find_agent_command_for_child_pid(document, xiaoo_pid)
+    invocation = find_agent_command_for_child_process(document, xiaoo_process_id)
     if invocation is None:
         raise RuntimeError("missing direct script B -> xiaoo agent command")
     invocation_attrs = span_attrs(invocation)
-    parent_pid = required_attr(invocation_attrs, "process.parent.pid")
-    if parent_pid == agent_a_pid:
+    parent_process_id = required_attr(invocation_attrs, PARENT_PROCESS_ID_ATTR)
+    if parent_process_id == agent_a_process_id:
         raise RuntimeError("agent command incorrectly used ancestor agent A as parent")
-    parent_command = process_command_line_for_pid(document, parent_pid)
+    parent_command = process_command_line(document, parent_process_id)
     if Path(script_b_path).name not in parent_command:
         raise RuntimeError(f"agent command parent is not script B: {parent_command}")
-    if find_agent_command_with_parent_child(document, agent_a_pid, xiaoo_pid) is not None:
+    if find_agent_command_with_parent_child(
+        document, agent_a_process_id, xiaoo_process_id
+    ) is not None:
         raise RuntimeError("unexpected ancestor agent A -> xiaoo agent command")
     return HiddenAgentProof(
-        agent_a_pid=agent_a_pid,
-        xiaoo_pid=xiaoo_pid,
-        script_b_parent_pid=parent_pid,
+        agent_a_process_id=agent_a_process_id,
+        xiaoo_process_id=xiaoo_process_id,
+        script_b_parent_process_id=parent_process_id,
     )
 
 
@@ -68,47 +75,49 @@ def hidden_agent_evidence_is_complete(
         return False
     if agent_a_attrs.get("agent.identity.source") != "llm.request":
         return False
-    agent_a_pid = agent_a_attrs.get("process.pid", "")
-    xiaoo_pid = span_attrs(xiaoo).get("process.pid", "")
-    invocation = find_agent_command_for_child_pid(document, xiaoo_pid)
+    agent_a_process_id = agent_a_attrs.get(PROCESS_ID_ATTR, "")
+    xiaoo_process_id = span_attrs(xiaoo).get(PROCESS_ID_ATTR, "")
+    invocation = find_agent_command_for_child_process(document, xiaoo_process_id)
     if invocation is None:
         return False
     invocation_attrs = span_attrs(invocation)
-    parent_pid = invocation_attrs.get("process.parent.pid", "")
+    parent_process_id = invocation_attrs.get(PARENT_PROCESS_ID_ATTR, "")
     return (
-        bool(agent_a_pid)
-        and bool(xiaoo_pid)
-        and find_llm_request_for_pid(document, agent_a_pid) is not None
-        and find_llm_request_for_pid(document, xiaoo_pid) is not None
-        and parent_pid != agent_a_pid
-        and Path(script_b_path).name in process_command_line_for_pid(document, parent_pid)
+        bool(agent_a_process_id)
+        and bool(xiaoo_process_id)
+        and find_llm_request_for_process(document, agent_a_process_id) is not None
+        and find_llm_request_for_process(document, xiaoo_process_id) is not None
+        and parent_process_id != agent_a_process_id
+        and Path(script_b_path).name in process_command_line(document, parent_process_id)
     )
 
 
 def describe_hidden_agent_evidence(document: dict, script_b_path: str, agent_a_path: str) -> str:
     agent_a = find_agent_a_exec(document, agent_a_path)
     xiaoo = find_xiaoo_exec_with_identity(document)
-    agent_a_pid = span_attrs(agent_a).get("process.pid", "") if agent_a else ""
-    xiaoo_pid = span_attrs(xiaoo).get("process.pid", "") if xiaoo else ""
+    agent_a_process_id = span_attrs(agent_a).get(PROCESS_ID_ATTR, "") if agent_a else ""
+    xiaoo_process_id = span_attrs(xiaoo).get(PROCESS_ID_ATTR, "") if xiaoo else ""
     lines = [
-        f"agent_a_exec={bool(agent_a)} pid={agent_a_pid} identity={identity_status(agent_a)}",
-        f"xiaoo_exec={bool(xiaoo)} pid={xiaoo_pid} identity={identity_status(xiaoo)}",
-        f"agent_a_llm={find_llm_request_for_pid(document, agent_a_pid) is not None}",
-        f"xiaoo_llm={find_llm_request_for_pid(document, xiaoo_pid) is not None}",
+        f"agent_a_exec={bool(agent_a)} process_id={agent_a_process_id} identity={identity_status(agent_a)}",
+        f"xiaoo_exec={bool(xiaoo)} process_id={xiaoo_process_id} identity={identity_status(xiaoo)}",
+        f"agent_a_llm={find_llm_request_for_process(document, agent_a_process_id) is not None}",
+        f"xiaoo_llm={find_llm_request_for_process(document, xiaoo_process_id) is not None}",
     ]
-    invocation = find_agent_command_for_child_pid(document, xiaoo_pid)
+    invocation = find_agent_command_for_child_process(document, xiaoo_process_id)
     if invocation is None:
         lines.append("xiaoo_invocation=false")
     else:
         attrs = span_attrs(invocation)
-        parent_pid = attrs.get("process.parent.pid", "")
+        parent_process_id = attrs.get(PARENT_PROCESS_ID_ATTR, "")
         lines.append(
             "xiaoo_invocation=true "
-            f"parent_pid={parent_pid} "
-            f"parent_command_has_script_b={Path(script_b_path).name in process_command_line_for_pid(document, parent_pid)}"
+            f"parent_process_id={parent_process_id} "
+            f"parent_command_has_script_b={Path(script_b_path).name in process_command_line(document, parent_process_id)}"
         )
-    lines.append(f"llm_pids={','.join(llm_request_pids(document))}")
-    lines.append(f"invocation_children={','.join(agent_command_child_pids(document))}")
+    lines.append(f"llm_process_ids={','.join(llm_request_process_ids(document))}")
+    lines.append(
+        f"invocation_child_process_ids={','.join(agent_command_child_process_ids(document))}"
+    )
     return "\n".join(lines)
 
 
@@ -141,32 +150,32 @@ def find_xiaoo_exec_with_identity(document: dict) -> dict | None:
     return None
 
 
-def find_llm_request_for_pid(document: dict, pid: str) -> dict | None:
+def find_llm_request_for_process(document: dict, process_id: str) -> dict | None:
     for span in spans(document):
         attrs = span_attrs(span)
         if attrs.get("actrail.action.kind") != "llm.request":
             continue
-        if attrs.get("process.pid") == pid:
+        if attrs.get(PROCESS_ID_ATTR) == process_id:
             return span
     return None
 
 
-def find_agent_command_for_child_pid(document: dict, child_pid: str) -> dict | None:
+def find_agent_command_for_child_process(document: dict, child_process_id: str) -> dict | None:
     for span in spans(document):
         attrs = span_attrs(span)
         if attrs.get("actrail.action.kind") != "command.invocation":
             continue
         if attrs.get("invocation.kind") != "agent":
             continue
-        if attrs.get("agent.child.pid") == child_pid:
+        if attrs.get(CHILD_PROCESS_ID_ATTR) == child_process_id:
             return span
     return None
 
 
 def find_agent_command_with_parent_child(
     document: dict,
-    parent_pid: str,
-    child_pid: str,
+    parent_process_id: str,
+    child_process_id: str,
 ) -> dict | None:
     for span in spans(document):
         attrs = span_attrs(span)
@@ -174,7 +183,10 @@ def find_agent_command_with_parent_child(
             continue
         if attrs.get("invocation.kind") != "agent":
             continue
-        if attrs.get("process.parent.pid") == parent_pid and attrs.get("agent.child.pid") == child_pid:
+        if (
+            attrs.get(PARENT_PROCESS_ID_ATTR) == parent_process_id
+            and attrs.get(CHILD_PROCESS_ID_ATTR) == child_process_id
+        ):
             return span
     return None
 
@@ -193,33 +205,33 @@ def identity_status(span: dict | None) -> str:
     return attrs.get("agent.identity.status", "none")
 
 
-def llm_request_pids(document: dict) -> list[str]:
-    pids = []
+def llm_request_process_ids(document: dict) -> list[str]:
+    process_ids = []
     for span in spans(document):
         attrs = span_attrs(span)
         if attrs.get("actrail.action.kind") == "llm.request":
-            pids.append(attrs.get("process.pid", ""))
-    return pids
+            process_ids.append(attrs.get(PROCESS_ID_ATTR, ""))
+    return process_ids
 
 
-def agent_command_child_pids(document: dict) -> list[str]:
-    pids = []
+def agent_command_child_process_ids(document: dict) -> list[str]:
+    process_ids = []
     for span in spans(document):
         attrs = span_attrs(span)
         if (
             attrs.get("actrail.action.kind") == "command.invocation"
             and attrs.get("invocation.kind") == "agent"
         ):
-            pids.append(attrs.get("agent.child.pid", ""))
-    return pids
+            process_ids.append(attrs.get(CHILD_PROCESS_ID_ATTR, ""))
+    return process_ids
 
 
-def process_command_line_for_pid(document: dict, pid: str) -> str:
+def process_command_line(document: dict, process_id: str) -> str:
     for span in spans(document):
         attrs = span_attrs(span)
         if attrs.get("actrail.action.kind") != "process.exec":
             continue
-        if attrs.get("process.pid") == pid:
+        if attrs.get(PROCESS_ID_ATTR) == process_id:
             return attrs.get("command_line", "")
     return ""
 

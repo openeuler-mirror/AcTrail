@@ -216,7 +216,7 @@ static __always_inline int store_file_bulk_read_fast_read_op(
     __u64 pid_tgid = current_pid_tgid();
     __u32 pid = pid_tgid >> 32;
     __u32 fd = (__u32)ctx->args[0];
-    __u64 *generation = lookup_process_generation(pid);
+    __u64 *generation = lookup_process_start_time(pid);
     struct actrail_file_bulk_read_fast_fd_stats *stats;
     struct actrail_pending_file_bulk_read_fast_op op = {};
 
@@ -271,7 +271,7 @@ static __always_inline int store_file_bulk_read_fast_close_op(
     __u64 pid_tgid = current_pid_tgid();
     __u32 pid = pid_tgid >> 32;
     __u32 fd = (__u32)ctx->args[0];
-    __u64 *generation = lookup_process_generation(pid);
+    __u64 *generation = lookup_process_start_time(pid);
     struct actrail_file_bulk_read_fast_fd_stats *stats;
     struct actrail_pending_file_bulk_read_fast_op op = {};
 
@@ -319,7 +319,7 @@ static __always_inline int store_file_bulk_read_fast_dup_op(
 ) {
     __u64 pid_tgid = current_pid_tgid();
     __u32 pid = pid_tgid >> 32;
-    __u64 *generation = lookup_process_generation(pid);
+    __u64 *generation = lookup_process_start_time(pid);
     struct actrail_pending_file_bulk_read_fast_op op = {};
 
     if (!pid || !generation) {

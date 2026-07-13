@@ -106,6 +106,14 @@ impl StorageAttachService {
             .get_trace(trace_id)
             .map(|entry| entry.trace.root_process_identity.clone())
             .ok_or_else(|| ControlError::new("track_remove", "trace not found"))?;
+        let root_host_pid = self
+            .process_registry
+            .record(root_identity)
+            .and_then(|record| record.host.as_ref())
+            .map(|host| host.pid)
+            .ok_or_else(|| {
+                ControlError::new("track_remove", "root process has no resolved host PID")
+            })?;
 
         trace_runtime
             .track_remove_root(RootRemovalRequest {
@@ -114,7 +122,7 @@ impl StorageAttachService {
             })
             .map_err(|error| ControlError::new("track_remove", format!("{:?}", error)))?;
         self.collector
-            .stop_kernel_tracking_process(root_identity.pid)
+            .stop_kernel_tracking_process(root_host_pid)
             .map_err(|error| ControlError::new(error.stage, error.message))?;
         self.persist_trace_state(trace_runtime, trace_id)?;
         self.enqueue_trace_finalization_if_terminal(trace_runtime, trace_id)?;
@@ -126,8 +134,8 @@ impl StorageAttachService {
         self.log_diagnostic(
             DiagnosticLogLevel::Info,
             format_args!(
-                "agent_launch root_removed trace_id={} pid={} generation={} finalization={}",
-                trace_id, root_identity.pid, root_identity.generation, finalization_state
+                "agent_launch root_removed trace_id={} process_id={} host_pid={} finalization={}",
+                trace_id, root_identity, root_host_pid, finalization_state
             ),
         );
         Ok(())

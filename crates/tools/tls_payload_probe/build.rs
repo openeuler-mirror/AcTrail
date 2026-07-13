@@ -54,7 +54,6 @@ fn main() {
             "ring-buffer"
         }
     );
-
     libbpf_cargo::SkeletonBuilder::new()
         .source("bpf/tls_payload_probe.bpf.c")
         .obj(&object_path)

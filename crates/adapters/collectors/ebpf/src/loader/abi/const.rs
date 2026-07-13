@@ -4,7 +4,7 @@ pub(super) const PROC_EXEC_EVENT_KIND: u32 = 2;
 // Should be same with struct actrail_endpoint in bpf/actrail_runtime.h.
 pub(super) const KERNEL_ENDPOINT_SIZE: usize = 24;
 // Should be same with the packed prefix before local/remote endpoints in struct actrail_event.
-pub(super) const KERNEL_OBSERVATION_HEADER_SIZE: usize = 64;
+pub(super) const KERNEL_OBSERVATION_HEADER_SIZE: usize = 72;
 // Should be same with sizeof(struct actrail_event) in bpf/actrail_runtime.h.
 pub(super) const KERNEL_OBSERVATION_EVENT_SIZE: usize =
     KERNEL_OBSERVATION_HEADER_SIZE + KERNEL_ENDPOINT_SIZE * 2;

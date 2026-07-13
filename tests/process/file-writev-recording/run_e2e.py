@@ -15,6 +15,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from action_snapshot import SemanticActionSnapshot  # noqa: E402
+
 
 TRACE_RE = re.compile(r"trace trace-(\d+) entered Active")
 EXPECTED_BYTES = len(b"alpha-beta\n") + len(b"gamma-delta\n")
@@ -37,6 +40,7 @@ def main() -> int:
     bin_dir = (repo / args.bin_dir).resolve()
     actraild = require_binary(bin_dir, "actraild")
     actrailctl = require_binary(bin_dir, "actrailctl")
+    actrailviewer = require_binary(bin_dir, "actrailviewer")
     require_tool("python3")
     config = Path("/tmp/actrail-file-writev-recording.conf")
     storage = Path("/tmp/actrail-file-writev-recording.sqlite")
@@ -56,7 +60,9 @@ def main() -> int:
             actrailctl, config, output_path, args.ready_timeout_sec
         )
         wait_for_clean_trace(storage, trace_id, args.completion_timeout_sec)
-        verify_writev_recording(storage, trace_id, output_path)
+        verify_writev_recording(
+            storage, actrailviewer, config, trace_id, output_path
+        )
         print(f"file writev recording e2e passed trace=trace-{trace_id}")
         print(output, end="")
         return 0
@@ -194,7 +200,13 @@ def wait_for_clean_trace(storage: Path, trace_id: int, timeout_sec: float) -> No
     raise RuntimeError(f"trace-{trace_id} did not complete cleanly")
 
 
-def verify_writev_recording(storage: Path, trace_id: int, output_path: Path) -> None:
+def verify_writev_recording(
+    storage: Path,
+    actrailviewer: Path,
+    config: Path,
+    trace_id: int,
+    output_path: Path,
+) -> None:
     if output_path.read_bytes() != b"alpha-beta\ngamma-delta\n":
         raise RuntimeError(f"unexpected writev output in {output_path}")
     with sqlite3.connect(storage) as connection:
@@ -211,18 +223,13 @@ def verify_writev_recording(storage: Path, trace_id: int, output_path: Path) -> 
         ).fetchone()[0]
         if writev_raw_count < 2:
             raise RuntimeError(f"expected at least two raw file writev events, got {writev_raw_count}")
-        rows = connection.execute(
-            """
-            SELECT attributes
-            FROM semantic_actions
-            WHERE trace_id = ? AND kind = 'file.write'
-            """,
-            (trace_id,),
-        ).fetchall()
+        actions = SemanticActionSnapshot.load(actrailviewer, config, trace_id).actions(
+            "file.write"
+        )
         bytes_written = 0
         write_actions = 0
-        for (raw_attributes,) in rows:
-            attributes = decode_map(raw_attributes)
+        for action in actions:
+            attributes = action.attributes
             if attributes.get("file.path") != str(output_path):
                 continue
             write_actions += 1
@@ -232,40 +239,6 @@ def verify_writev_recording(storage: Path, trace_id: int, output_path: Path) -> 
                 "missing file.write action bytes for regular-file writev: "
                 f"actions={write_actions} bytes={bytes_written}"
             )
-
-
-def decode_map(raw: str) -> dict[str, str]:
-    values: dict[str, str] = {}
-    for line in raw.splitlines():
-        key, separator, value = line.partition("=")
-        if not separator:
-            continue
-        values[decode_escaped(key)] = decode_escaped(value)
-    return values
-
-
-def decode_escaped(raw: str) -> str:
-    output: list[str] = []
-    index = 0
-    while index < len(raw):
-        char = raw[index]
-        if char == "\\" and index + 1 < len(raw):
-            escaped = raw[index + 1]
-            if escaped == "n":
-                output.append("\n")
-                index += 2
-                continue
-            if escaped == "e":
-                output.append("=")
-                index += 2
-                continue
-            if escaped == "\\":
-                output.append("\\")
-                index += 2
-                continue
-        output.append(char)
-        index += 1
-    return "".join(output)
 
 
 def stop_daemon(process: subprocess.Popen[str]) -> None:

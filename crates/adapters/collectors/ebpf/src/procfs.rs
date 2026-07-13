@@ -5,8 +5,10 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 use model_core::container::{ContainerIdentity, ContainerRuntime};
-use model_core::process::{NamespaceIdentity, ProcessIdentity};
-use process_identity_contract::lookup::{IdentityLookupError, ProcessIdentityReader};
+use model_core::process::{
+    HostProcessCoordinates, NamespaceIdentity, NamespaceProcessCoordinates, ProcessObservation,
+};
+use process_identity::{IdentityLookupError, ProcessIdentityReader};
 use process_tree_snapshot_contract::snapshot::{
     ProcessSnapshot, ProcessTreeSnapshotter, TreeSnapshot,
 };
@@ -21,12 +23,16 @@ struct ProcStatRecord {
 pub struct ProcfsIdentityReader;
 
 impl ProcessIdentityReader for ProcfsIdentityReader {
-    fn read_identity(&self, pid: u32) -> Result<ProcessIdentity, IdentityLookupError> {
+    fn read_identity(&self, pid: u32) -> Result<ProcessObservation, IdentityLookupError> {
         let stat = read_stat(pid)?;
         let pid_namespace = read_pid_namespace(pid);
         Ok(
-            ProcessIdentity::new(stat.pid, stat.start_time_ticks, stat.start_time_ticks)
-                .with_namespace(pid_namespace),
+            ProcessObservation::host(HostProcessCoordinates::new(stat.pid, stat.start_time_ticks))
+                .with_namespace(NamespaceProcessCoordinates::new(
+                    pid_namespace,
+                    read_nspid_last(pid).ok().flatten().unwrap_or(stat.pid),
+                    stat.start_time_ticks,
+                )),
         )
     }
 }
@@ -34,7 +40,7 @@ impl ProcessIdentityReader for ProcfsIdentityReader {
 pub fn resolve_namespaced_pid(
     namespace_pid: u32,
     pid_namespace: &NamespaceIdentity,
-) -> Result<ProcessIdentity, String> {
+) -> Result<ProcessObservation, String> {
     if pid_namespace.as_str() == "unknown" {
         return Err("pid namespace is unknown; namespaced PID cannot be resolved".to_string());
     }
@@ -55,8 +61,12 @@ pub fn resolve_namespaced_pid(
             continue;
         };
         matches.push(
-            ProcessIdentity::new(stat.pid, stat.start_time_ticks, stat.start_time_ticks)
-                .with_namespace(pid_namespace.clone()),
+            ProcessObservation::host(HostProcessCoordinates::new(stat.pid, stat.start_time_ticks))
+                .with_namespace(NamespaceProcessCoordinates::new(
+                    pid_namespace.clone(),
+                    namespace_pid,
+                    stat.start_time_ticks,
+                )),
         );
     }
 
@@ -84,32 +94,28 @@ pub struct ProcfsTreeSnapshotter;
 impl ProcessTreeSnapshotter for ProcfsTreeSnapshotter {
     type Error = String;
 
-    fn snapshot(&self, root: &ProcessIdentity) -> Result<TreeSnapshot, Self::Error> {
+    fn snapshot(&self, root: &ProcessObservation) -> Result<TreeSnapshot, Self::Error> {
+        let root_pid = root
+            .host
+            .as_ref()
+            .map(|host| host.pid)
+            .ok_or_else(|| "process tree snapshot requires a host PID".to_string())?;
         let stats = scan_proc_stats()?;
-        if !stats.contains_key(&root.pid) {
-            return Err(format!("root pid {} is not visible in /proc", root.pid));
+        if !stats.contains_key(&root_pid) {
+            return Err(format!("root pid {root_pid} is not visible in /proc"));
         }
 
-        let descendants = descendant_pids(root.pid, &stats);
+        let descendants = descendant_pids(root_pid, &stats);
         let mut processes = Vec::new();
         for pid in descendants {
             let Some(stat) = stats.get(&pid) else {
                 continue;
             };
-            let identity =
-                ProcessIdentity::new(stat.pid, stat.start_time_ticks, stat.start_time_ticks)
-                    .with_namespace(read_pid_namespace(stat.pid));
-            let parent = if stat.pid == root.pid {
+            let identity = process_observation(stat);
+            let parent = if stat.pid == root_pid {
                 None
             } else {
-                stats.get(&stat.ppid).map(|parent| {
-                    ProcessIdentity::new(
-                        parent.pid,
-                        parent.start_time_ticks,
-                        parent.start_time_ticks,
-                    )
-                    .with_namespace(read_pid_namespace(parent.pid))
-                })
+                stats.get(&stat.ppid).map(process_observation)
             };
             processes.push(ProcessSnapshot {
                 identity,
@@ -126,6 +132,15 @@ impl ProcessTreeSnapshotter for ProcfsTreeSnapshotter {
             processes,
         })
     }
+}
+
+fn process_observation(stat: &ProcStatRecord) -> ProcessObservation {
+    ProcessObservation::host(HostProcessCoordinates::new(stat.pid, stat.start_time_ticks))
+        .with_namespace(NamespaceProcessCoordinates::new(
+            read_pid_namespace(stat.pid),
+            read_nspid_last(stat.pid).ok().flatten().unwrap_or(stat.pid),
+            stat.start_time_ticks,
+        ))
 }
 
 fn scan_proc_stats() -> Result<BTreeMap<u32, ProcStatRecord>, String> {
@@ -345,7 +360,7 @@ fn proc_entry_gone(error: &std::io::Error) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use process_identity_contract::lookup::ProcessIdentityReader;
+    use process_identity::ProcessIdentityReader;
     use process_tree_snapshot_contract::snapshot::ProcessTreeSnapshotter;
 
     use std::path::PathBuf;
@@ -433,8 +448,9 @@ mod tests {
         let identity = ProcfsIdentityReader
             .read_identity(std::process::id())
             .unwrap();
-        assert_eq!(identity.pid, std::process::id());
-        assert!(identity.start_time_ticks > 0);
+        let host = identity.host.expect("host coordinates");
+        assert_eq!(host.pid, std::process::id());
+        assert!(host.start_time_ticks > 0);
     }
 
     #[test]
@@ -443,11 +459,12 @@ mod tests {
             .read_identity(std::process::id())
             .unwrap();
         let snapshot = ProcfsTreeSnapshotter.snapshot(&identity).unwrap();
-        assert!(
-            snapshot
-                .processes
-                .iter()
-                .any(|process| process.identity.pid == std::process::id())
-        );
+        assert!(snapshot.processes.iter().any(|process| {
+            process
+                .identity
+                .host
+                .as_ref()
+                .is_some_and(|host| host.pid == std::process::id())
+        }));
     }
 }

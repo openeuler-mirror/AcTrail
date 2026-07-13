@@ -19,6 +19,21 @@ struct ExitRetire {
     generation: u64,
 }
 
+impl ExitRetire {
+    fn from_event(event: &KernelEvent) -> Option<Self> {
+        match event {
+            KernelEvent::Observation(event) if event.kind == decode::PROC_EVENT_EXIT => {
+                Some(Self {
+                    trace_id: event.trace_id,
+                    map_pid: event.pid,
+                    generation: event.pid_generation,
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
 impl EbpfCollector {
     pub fn poll_tls_payload_control_events(&mut self) -> Result<(), CollectorError> {
         let Some(runtime) = self.runtime.as_mut() else {
@@ -44,7 +59,7 @@ impl EbpfCollector {
         };
         let mut exit_retires = Vec::new();
         for event in raw_events {
-            let exit_retire = exit_retire_for_event(&event);
+            let exit_retire = ExitRetire::from_event(&event);
             self.handle_batch_event(event, &mut batch)?;
             if let Some(exit_retire) = exit_retire {
                 exit_retires.push(exit_retire);
@@ -95,13 +110,9 @@ impl EbpfCollector {
                 self.maybe_attach_go_tls_after_exec(&event)?;
                 let lifecycle_event = event.clone();
                 self.apply_file_lifecycle_before_decode(&lifecycle_event)?;
-                if let Some(event) = decode_observation(
-                    event,
-                    &mut self.bindings,
-                    &self.identity_reader,
-                    &mut self.file_tracker,
-                )
-                .map_err(|error| CollectorError::new(error.stage, error.message))?
+                if let Some(event) =
+                    decode_observation(event, &mut self.bindings, &mut self.file_tracker)
+                        .map_err(|error| CollectorError::new(error.stage, error.message))?
                 {
                     batch.observations.push(event);
                 }
@@ -119,13 +130,13 @@ impl EbpfCollector {
             }
             KernelEvent::StdioPayload(event) => {
                 batch.payload_segments.push(
-                    decode_stdio_payload(event, &mut self.bindings, &self.identity_reader)
+                    decode_stdio_payload(event, &self.bindings)
                         .map_err(|error| CollectorError::new(error.stage, error.message))?,
                 );
             }
             KernelEvent::SocketPayload(event) => {
                 batch.payload_segments.push(
-                    decode_socket_payload(event, &mut self.bindings, &self.identity_reader)
+                    decode_socket_payload(event, &self.bindings)
                         .map_err(|error| CollectorError::new(error.stage, error.message))?,
                 );
             }
@@ -141,7 +152,7 @@ impl EbpfCollector {
         match event.kind {
             decode::PROC_EVENT_EXIT => {
                 let map_pid = event.pid;
-                if decode::resolve_bound_event_identity(
+                if decode::resolve_bound_event_observation(
                     event.trace_id,
                     map_pid,
                     event.pid_generation,
@@ -178,14 +189,14 @@ impl EbpfCollector {
             decode::PROC_EVENT_FORK => {
                 let parent_map_pid = event.pid;
                 let child_map_pid = event.aux;
-                let parent = decode::resolve_bound_event_identity(
+                let parent = decode::resolve_bound_event_observation(
                     event.trace_id,
                     parent_map_pid,
                     event.pid_generation,
                     &self.bindings,
                 )
                 .map_err(|error| CollectorError::new("file_lifecycle_parent", error))?;
-                let child = decode::resolve_bound_event_identity(
+                let child = decode::resolve_bound_event_observation(
                     event.trace_id,
                     child_map_pid,
                     event.aux_generation,
@@ -197,7 +208,7 @@ impl EbpfCollector {
             }
             decode::PROC_EVENT_EXEC => {
                 let map_pid = event.pid;
-                let process = decode::resolve_bound_event_identity(
+                let process = decode::resolve_bound_event_observation(
                     event.trace_id,
                     map_pid,
                     event.pid_generation,
@@ -272,18 +283,5 @@ impl EbpfCollector {
 
     fn record_exit_lifecycle_binding_gap(&mut self) {
         self.binding_gap_lifecycle_skips = self.binding_gap_lifecycle_skips.saturating_add(1);
-    }
-}
-
-fn exit_retire_for_event(event: &KernelEvent) -> Option<ExitRetire> {
-    match event {
-        KernelEvent::Observation(event) if event.kind == decode::PROC_EVENT_EXIT => {
-            Some(ExitRetire {
-                trace_id: event.trace_id,
-                map_pid: event.pid,
-                generation: event.pid_generation,
-            })
-        }
-        _ => None,
     }
 }

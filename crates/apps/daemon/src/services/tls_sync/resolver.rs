@@ -5,9 +5,12 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use config_core::daemon::{PayloadTlsConfig, PayloadTlsLibraryPath};
-use control_contract::reply::ControlError;
+use control_contract::reply::{
+    ControlError, LaunchTlsPlanDescriptor, LaunchTlsPlanReply, LaunchTlsPlanStatus,
+};
 use tls_payload_sync::{
     PlanLookupResponse, RuntimePlanDescriptor, encode_points, validate_native_backend_plan,
 };
@@ -28,12 +31,24 @@ struct PlanLookupJob {
     runtime_binary: PathBuf,
     peer_root: Option<Result<PeerRootHandle, String>>,
     response: Option<UnixStream>,
+    control_response: Option<Sender<LaunchPlanLookupOutcome>>,
 }
 
 struct TlsSyncPlanWorker {
     store: Box<dyn BinaryPlanStore + Send>,
     config: PayloadTlsConfig,
     match_limit: usize,
+}
+
+struct PlanLookupOutcome {
+    response: PlanLookupResponse,
+    cache_hit: bool,
+    elapsed: Duration,
+    source: Option<String>,
+}
+
+struct LaunchPlanLookupOutcome {
+    reply: LaunchTlsPlanReply,
 }
 
 impl TlsSyncPlanResolver {
@@ -64,6 +79,7 @@ impl TlsSyncPlanResolver {
                 runtime_binary: binary.to_path_buf(),
                 peer_root: Some(peer_root),
                 response: Some(response),
+                control_response: None,
             })
             .map_err(|error| ControlError::new("tls_sync_plan_worker", error.to_string()))
     }
@@ -74,7 +90,27 @@ impl TlsSyncPlanResolver {
                 runtime_binary: binary.to_path_buf(),
                 peer_root: None,
                 response: None,
+                control_response: None,
             })
+            .map_err(|error| ControlError::new("tls_sync_plan_worker", error.to_string()))
+    }
+
+    pub(super) fn resolve_launch_plan(
+        &self,
+        binary: &Path,
+    ) -> Result<LaunchTlsPlanReply, ControlError> {
+        let (sender, receiver) = mpsc::channel();
+        self.requests
+            .send(PlanLookupJob {
+                runtime_binary: binary.to_path_buf(),
+                peer_root: None,
+                response: None,
+                control_response: Some(sender),
+            })
+            .map_err(|error| ControlError::new("tls_sync_plan_worker", error.to_string()))?;
+        receiver
+            .recv()
+            .map(|outcome| outcome.reply)
             .map_err(|error| ControlError::new("tls_sync_plan_worker", error.to_string()))
     }
 }
@@ -82,13 +118,18 @@ impl TlsSyncPlanResolver {
 impl TlsSyncPlanWorker {
     fn run(mut self, receiver: Receiver<PlanLookupJob>) {
         for mut job in receiver {
-            let response = self.lookup(&job.runtime_binary, job.peer_root);
+            let outcome = self.lookup(&job.runtime_binary, job.peer_root);
             let Some(response_stream) = job.response.as_mut() else {
+                if let Some(sender) = job.control_response {
+                    let _ = sender.send(LaunchPlanLookupOutcome {
+                        reply: launch_reply_for_outcome(outcome),
+                    });
+                }
                 continue;
             };
-            if let Err(error) =
-                response_stream.write_all(&tls_payload_sync::encode_plan_lookup_response(&response))
-            {
+            if let Err(error) = response_stream.write_all(
+                &tls_payload_sync::encode_plan_lookup_response(&outcome.response),
+            ) {
                 tracing::warn!(
                     target: "actrail::tls_sync",
                     binary = %job.runtime_binary.display(),
@@ -103,7 +144,8 @@ impl TlsSyncPlanWorker {
         &mut self,
         runtime_binary: &Path,
         peer_root: Option<Result<PeerRootHandle, String>>,
-    ) -> PlanLookupResponse {
+    ) -> PlanLookupOutcome {
+        let started = Instant::now();
         let peer_root = match peer_root {
             Some(Ok(root)) => Some(root),
             Some(Err(reason)) => {
@@ -113,7 +155,7 @@ impl TlsSyncPlanWorker {
                     reason = %reason,
                     "TLS sync plan lookup path resolution failed"
                 );
-                return PlanLookupResponse::Unsupported { reason };
+                return unsupported_outcome(reason, started);
             }
             None => None,
         };
@@ -126,7 +168,7 @@ impl TlsSyncPlanWorker {
                     reason = %reason,
                     "TLS sync plan lookup path resolution failed"
                 );
-                return PlanLookupResponse::Unsupported { reason };
+                return unsupported_outcome(reason, started);
             }
         };
         let key = match BinaryPlanKey::for_path(&probe_binary) {
@@ -139,22 +181,26 @@ impl TlsSyncPlanWorker {
                     error = %error,
                     "TLS sync plan lookup probe binary stat failed"
                 );
-                return PlanLookupResponse::Unsupported {
-                    reason: format!(
+                return unsupported_outcome(
+                    format!(
                         "stat probe binary runtime={} probe={}: {error}",
                         runtime_binary.display(),
                         probe_binary.display()
                     ),
-                };
+                    started,
+                );
             }
         };
         match self.store.get(&key) {
-            Ok(Some(cached)) => return response_for_record(cached, runtime_binary, &probe_binary),
+            Ok(Some(cached)) => {
+                return outcome_for_record(cached, runtime_binary, &probe_binary, true, started);
+            }
             Ok(None) => {}
             Err(error) => {
-                return PlanLookupResponse::Unsupported {
-                    reason: format!("load cached probe plan {}: {error}", key.path().display()),
-                };
+                return unsupported_outcome(
+                    format!("load cached probe plan {}: {error}", key.path().display()),
+                    started,
+                );
             }
         }
         let cached = match self.resolve_plan(key.path()) {
@@ -170,13 +216,17 @@ impl TlsSyncPlanWorker {
                 BinaryPlanRecord::Unsupported(error.message)
             }
         };
-        let response = response_for_record(cached.clone(), runtime_binary, &probe_binary);
+        let outcome = outcome_for_record(
+            cached.clone(),
+            runtime_binary,
+            &probe_binary,
+            false,
+            started,
+        );
         if let Err(error) = self.store.put(key, cached) {
-            return PlanLookupResponse::Unsupported {
-                reason: format!("store probe plan: {error}"),
-            };
+            return unsupported_outcome(format!("store probe plan: {error}"), started);
         }
-        response
+        outcome
     }
 
     fn resolve_plan(&self, binary: &Path) -> Result<BinaryPlanDescriptor, ControlError> {
@@ -195,6 +245,7 @@ impl TlsSyncPlanWorker {
         Ok(BinaryPlanDescriptor {
             binary: plan.binary.path.clone(),
             provider: plan.provider.as_str().to_string(),
+            source: plan.source.as_str().to_string(),
             points: encode_points(&plan)
                 .map_err(|error| ControlError::new("tls_sync_plan", error.to_string()))?,
         })
@@ -211,20 +262,66 @@ fn probe_binary_path(
     }
 }
 
-fn response_for_record(
+fn outcome_for_record(
     record: BinaryPlanRecord,
     runtime_binary: &Path,
     probe_binary: &Path,
-) -> PlanLookupResponse {
+    cache_hit: bool,
+    started: Instant,
+) -> PlanLookupOutcome {
     match record {
-        BinaryPlanRecord::Found(plan) => PlanLookupResponse::Found(RuntimePlanDescriptor {
-            target: runtime_binary.to_path_buf(),
-            binary: runtime_view_binary(&plan.binary, runtime_binary, probe_binary),
+        BinaryPlanRecord::Found(plan) => {
+            let source = plan.source.clone();
+            PlanLookupOutcome {
+                response: PlanLookupResponse::Found(RuntimePlanDescriptor {
+                    target: runtime_binary.to_path_buf(),
+                    binary: runtime_view_binary(&plan.binary, runtime_binary, probe_binary),
+                    provider: plan.provider,
+                    points: plan.points,
+                }),
+                cache_hit,
+                elapsed: started.elapsed(),
+                source: Some(source),
+            }
+        }
+        BinaryPlanRecord::Unsupported(reason) => PlanLookupOutcome {
+            response: PlanLookupResponse::Unsupported { reason },
+            cache_hit,
+            elapsed: started.elapsed(),
+            source: None,
+        },
+    }
+}
+
+fn unsupported_outcome(reason: String, started: Instant) -> PlanLookupOutcome {
+    PlanLookupOutcome {
+        response: PlanLookupResponse::Unsupported { reason },
+        cache_hit: false,
+        elapsed: started.elapsed(),
+        source: None,
+    }
+}
+
+fn launch_reply_for_outcome(outcome: PlanLookupOutcome) -> LaunchTlsPlanReply {
+    let status = match outcome.response {
+        PlanLookupResponse::Found(plan) => LaunchTlsPlanStatus::Found(LaunchTlsPlanDescriptor {
+            target: plan.target,
+            binary: plan.binary,
             provider: plan.provider,
+            source: outcome.source.unwrap_or_else(|| "unknown".to_string()),
             points: plan.points,
         }),
-        BinaryPlanRecord::Unsupported(reason) => PlanLookupResponse::Unsupported { reason },
+        PlanLookupResponse::Unsupported { reason } => LaunchTlsPlanStatus::Unsupported { reason },
+    };
+    LaunchTlsPlanReply {
+        status,
+        cache_hit: outcome.cache_hit,
+        resolve_elapsed_micros: duration_micros(outcome.elapsed),
     }
+}
+
+fn duration_micros(duration: Duration) -> u64 {
+    u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
 }
 
 fn runtime_view_binary(plan_binary: &Path, runtime_binary: &Path, probe_binary: &Path) -> PathBuf {

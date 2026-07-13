@@ -13,7 +13,6 @@ use storage_core::PayloadSegmentQuery;
 
 use crate::profiles::DaemonProfileRegistry;
 
-const TEST_SYNC_CHILD_PID_OFFSET: u32 = 10_000;
 const TLS_SYNC_PAYLOAD_SEQUENCE: u64 = 1;
 const TLS_SYNC_OPERATION_OFFSET: u64 = 0;
 const TLS_SYNC_PAYLOAD: &[u8] = b"hello";
@@ -49,7 +48,7 @@ fn tls_sync_payload_persists_without_child_membership() {
     .unwrap();
 
     let trace_id = wiring.trace_runtime.reserve_trace_id();
-    let root = ProcessIdentity::new(std::process::id(), 1, 1);
+    let root = ProcessIdentity::new(1);
     super::create_active_trace(
         &mut wiring,
         trace_id,
@@ -63,14 +62,20 @@ fn tls_sync_payload_persists_without_child_membership() {
         "tls-sync",
         vec![Capability::TlsPlaintextPayload],
     );
-    let sync_process = ProcessIdentity::new(sync_child_pid(), 0, 0);
+    let sync_process = ProcessIdentity::new(0);
     wiring
         .attach_service
         .process_payload_segment_impl(
-            &wiring.trace_runtime,
+            &mut wiring.trace_runtime,
             raw_tls_sync_segment(trace_id, sync_process.clone()),
         )
         .unwrap();
+    let sync_identity = wiring
+        .attach_service
+        .process_registry
+        .lookup(&super::test_process_observation(sync_process))
+        .unwrap()
+        .expect("TLS sync process identity");
 
     let segments = wiring
         .attach_service
@@ -86,7 +91,7 @@ fn tls_sync_payload_persists_without_child_membership() {
         )
         .unwrap();
     assert_eq!(segments.len(), 1);
-    assert_eq!(segments[0].process, sync_process);
+    assert_eq!(segments[0].process, sync_identity);
     assert_eq!(
         segments[0].source_boundary,
         PayloadSourceBoundary::TlsUserSpace
@@ -96,12 +101,6 @@ fn tls_sync_payload_persists_without_child_membership() {
     assert_eq!(segments[0].original_size, TLS_SYNC_PAYLOAD.len() as u64);
 }
 
-fn sync_child_pid() -> u32 {
-    std::process::id()
-        .checked_add(TEST_SYNC_CHILD_PID_OFFSET)
-        .unwrap_or(TEST_SYNC_CHILD_PID_OFFSET)
-}
-
 fn raw_tls_sync_segment(
     trace_id: model_core::ids::TraceId,
     process: ProcessIdentity,
@@ -109,7 +108,7 @@ fn raw_tls_sync_segment(
     RawPayloadSegment {
         trace_id,
         observed_at: SystemTime::UNIX_EPOCH,
-        process,
+        process: super::test_process_observation(process),
         source_boundary: PayloadSourceBoundary::TlsUserSpace,
         content_state: PayloadContentState::Plaintext,
         direction: PayloadDirection::Outbound,

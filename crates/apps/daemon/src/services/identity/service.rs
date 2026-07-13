@@ -7,12 +7,12 @@ use collector_event::{RawCollectorEvent, RawObservationPayload};
 use control_contract::reply::ControlError;
 use ingest_runtime::IngestMatch;
 use model_core::ids::TraceId;
-use model_core::payload::PayloadSourceBoundary;
 use model_core::process::{
     ExitObservationSource, ExitStatus, MembershipState, ProcessIdentity, ProcessMembership,
 };
-use payload_event::RawPayloadSegment;
-use process_identity_contract::lookup::{IdentityLookupError, ProcessIdentityReader};
+use plugin_system::ControlActorProcessIdentity;
+use process_identity::ProcessIdentityManager;
+use process_identity::{IdentityLookupError, ProcessIdentityReader};
 use trace_runtime::registry::{RegistryError, TraceRuntime};
 
 pub(crate) const PROCESS_METADATA_PARENT_PID: &str = "ppid";
@@ -31,6 +31,7 @@ impl ResolvedTraceProcess {
         IngestMatch {
             trace_id: self.trace_id,
             process: self.process,
+            parent: None,
         }
     }
 
@@ -45,26 +46,24 @@ impl ResolvedTraceProcess {
 
 pub(crate) struct TraceIdentityResolver<'a> {
     trace_runtime: &'a TraceRuntime,
+    process_registry: &'a ProcessIdentityManager,
 }
 
 impl<'a> TraceIdentityResolver<'a> {
-    pub(crate) fn new(trace_runtime: &'a TraceRuntime) -> Self {
-        Self { trace_runtime }
+    pub(crate) fn new(
+        trace_runtime: &'a TraceRuntime,
+        process_registry: &'a ProcessIdentityManager,
+    ) -> Self {
+        Self {
+            trace_runtime,
+            process_registry,
+        }
     }
 
-    pub(crate) fn match_observed_process(
-        &self,
-        observed: &ProcessIdentity,
-    ) -> Option<ResolvedTraceProcess> {
+    pub(crate) fn match_process(&self, process: ProcessIdentity) -> Option<ResolvedTraceProcess> {
         self.trace_runtime
-            .find_membership(observed)
-            .map(resolved_trace_process)
-    }
-
-    pub(crate) fn match_pid(&self, pid: u32) -> Option<ResolvedTraceProcess> {
-        self.trace_runtime
-            .find_membership_by_pid(pid)
-            .map(resolved_trace_process)
+            .find_membership(&process)
+            .map(Self::resolved_trace_process)
     }
 
     pub(crate) fn read_and_match_pid(
@@ -73,16 +72,10 @@ impl<'a> TraceIdentityResolver<'a> {
         pid: u32,
         error_stage: &'static str,
     ) -> Result<Option<ResolvedTraceProcess>, ControlError> {
-        let Some(identity) = self.read_pid_identity(identity_reader, pid, error_stage)? else {
+        let Some(process) = self.read_pid_process(identity_reader, pid, error_stage)? else {
             return Ok(None);
         };
-        Ok(self.match_observed_process(&identity))
-    }
-
-    pub(crate) fn payload_process(&self, raw: &RawPayloadSegment) -> Option<ResolvedTraceProcess> {
-        self.match_observed_process(&raw.process)
-            .or_else(|| self.tls_userspace_pid_match(raw))
-            .or_else(|| self.direct_trace_scoped_tls_sync_process(raw))
+        Ok(self.match_process(process))
     }
 
     pub(crate) fn runtime_or_read_pid_identity(
@@ -91,218 +84,228 @@ impl<'a> TraceIdentityResolver<'a> {
         pid: u32,
         error_stage: &'static str,
     ) -> Result<Option<ProcessIdentity>, ControlError> {
-        if let Some(resolved) = self.match_pid(pid) {
-            return Ok(Some(resolved.process));
+        if let Some(process) = self.process_registry.active_host_pid(pid) {
+            return Ok(Some(process));
         }
-        self.read_pid_identity(identity_reader, pid, error_stage)
+        self.read_pid_process(identity_reader, pid, error_stage)
     }
 
-    fn tls_userspace_pid_match(&self, raw: &RawPayloadSegment) -> Option<ResolvedTraceProcess> {
-        if raw.source_boundary != PayloadSourceBoundary::TlsUserSpace {
-            return None;
-        }
-        self.match_pid(raw.process.pid)
-    }
-
-    fn direct_trace_scoped_tls_sync_process(
-        &self,
-        raw: &RawPayloadSegment,
-    ) -> Option<ResolvedTraceProcess> {
-        if raw.source_boundary != PayloadSourceBoundary::TlsUserSpace {
-            return None;
-        }
-        self.trace_runtime
-            .get_trace(raw.trace_id)
-            .map(|_| ResolvedTraceProcess {
-                trace_id: raw.trace_id,
-                process: raw.process.clone(),
-                capture_enabled: true,
-                state: MembershipState::Active,
-            })
-    }
-
-    fn read_pid_identity(
+    fn read_pid_process(
         &self,
         identity_reader: &impl ProcessIdentityReader,
         pid: u32,
         error_stage: &'static str,
     ) -> Result<Option<ProcessIdentity>, ControlError> {
-        match identity_reader.read_identity(pid) {
-            Ok(identity) => Ok(Some(identity)),
-            Err(IdentityLookupError::NotFound { .. }) => Ok(None),
-            Err(error) => Err(ControlError::new(error_stage, format!("{error:?}"))),
+        let observation = match identity_reader.read_identity(pid) {
+            Ok(observation) => observation,
+            Err(IdentityLookupError::NotFound { .. }) => return Ok(None),
+            Err(error) => return Err(ControlError::new(error_stage, format!("{error:?}"))),
+        };
+        self.process_registry
+            .lookup(&observation)
+            .map_err(|error| ControlError::new(error_stage, format!("{error:?}")))
+    }
+
+    fn resolved_trace_process(
+        (trace_id, membership): (TraceId, ProcessMembership),
+    ) -> ResolvedTraceProcess {
+        ResolvedTraceProcess {
+            trace_id,
+            process: membership.identity,
+            capture_enabled: membership.capture_enabled,
+            state: membership.state,
         }
     }
 }
 
-impl TraceIdentityResolver<'_> {
-    pub(crate) fn apply_runtime_effects(
-        trace_runtime: &mut TraceRuntime,
+pub(crate) struct RuntimeProcessEventApplier<'a> {
+    trace_runtime: &'a mut TraceRuntime,
+    process_manager: &'a mut ProcessIdentityManager,
+}
+
+impl<'a> RuntimeProcessEventApplier<'a> {
+    pub(crate) fn new(
+        trace_runtime: &'a mut TraceRuntime,
+        process_manager: &'a mut ProcessIdentityManager,
+    ) -> Self {
+        Self {
+            trace_runtime,
+            process_manager,
+        }
+    }
+
+    pub(crate) fn apply(
+        &mut self,
         raw_event: &RawCollectorEvent,
+        process: ProcessIdentity,
+        parent: Option<ProcessIdentity>,
     ) -> Result<Option<IngestMatch>, ControlError> {
         match &raw_event.payload {
-            RawObservationPayload::Process {
-                operation, parent, ..
-            } if operation == "fork" => fork_effect(trace_runtime, raw_event, parent.as_ref()),
-            RawObservationPayload::Process {
-                operation,
-                parent,
-                metadata,
-            } if operation == "exec" || operation == "command_control" => {
-                exec_effect(trace_runtime, raw_event, parent.as_ref(), metadata)
+            RawObservationPayload::Process { operation, .. } if operation == "fork" => {
+                self.apply_fork(raw_event, process, parent)
             }
             RawObservationPayload::Process {
                 operation,
                 metadata,
                 ..
-            } if operation == "exit" => exit_effect(trace_runtime, raw_event, metadata),
-            _ => Ok(TraceIdentityResolver::new(trace_runtime)
-                .match_observed_process(&raw_event.envelope.process)
-                .map(ResolvedTraceProcess::into_ingest_match)),
+            } if operation == "exec" || operation == "command_control" => {
+                self.apply_exec(raw_event, process, parent, metadata)
+            }
+            RawObservationPayload::Process {
+                operation,
+                metadata,
+                ..
+            } if operation == "exit" => self.apply_exit(raw_event, process, metadata),
+            _ => Ok(
+                TraceIdentityResolver::new(self.trace_runtime, self.process_manager)
+                    .match_process(process)
+                    .map(ResolvedTraceProcess::into_ingest_match),
+            ),
         }
     }
-}
 
-fn fork_effect(
-    trace_runtime: &mut TraceRuntime,
-    raw_event: &RawCollectorEvent,
-    parent: Option<&ProcessIdentity>,
-) -> Result<Option<IngestMatch>, ControlError> {
-    let Some(parent_identity) = parent else {
-        return Ok(None);
-    };
-    let Some(parent_match) =
-        TraceIdentityResolver::new(trace_runtime).match_observed_process(parent_identity)
-    else {
-        return Ok(None);
-    };
-    insert_observed_child_match(
-        trace_runtime,
-        parent_match.trace_id,
-        parent_identity,
-        raw_event.envelope.process.clone(),
-        raw_event.envelope.observed_at,
-    )
-}
+    fn apply_fork(
+        &mut self,
+        raw_event: &RawCollectorEvent,
+        child: ProcessIdentity,
+        parent: Option<ProcessIdentity>,
+    ) -> Result<Option<IngestMatch>, ControlError> {
+        let Some(parent) = parent else {
+            return Ok(None);
+        };
+        let Some((trace_id, _)) = self.trace_runtime.find_membership(&parent) else {
+            return Ok(None);
+        };
+        self.insert_child(trace_id, parent, child, raw_event.envelope.observed_at)
+    }
 
-fn exec_effect(
-    trace_runtime: &mut TraceRuntime,
-    raw_event: &RawCollectorEvent,
-    parent: Option<&ProcessIdentity>,
-    metadata: &BTreeMap<String, String>,
-) -> Result<Option<IngestMatch>, ControlError> {
-    let identity = raw_event.envelope.process.clone();
-    if metadata
-        .get(PROCESS_METADATA_SECCOMP_OBSERVED)
-        .is_some_and(|value| value == "true")
-    {
-        if let Some(matched) = TraceIdentityResolver::new(trace_runtime).match_pid(identity.pid) {
+    fn apply_exec(
+        &mut self,
+        raw_event: &RawCollectorEvent,
+        process: ProcessIdentity,
+        parent: Option<ProcessIdentity>,
+        metadata: &BTreeMap<String, String>,
+    ) -> Result<Option<IngestMatch>, ControlError> {
+        if let Some(matched) = TraceIdentityResolver::new(self.trace_runtime, self.process_manager)
+            .match_process(process)
+        {
             return Ok(Some(matched.into_ingest_match()));
         }
+        let parent = parent.or_else(|| {
+            metadata
+                .get(PROCESS_METADATA_PARENT_PID)
+                .and_then(|value| value.parse::<u32>().ok())
+                .and_then(|pid| self.process_manager.active_host_pid(pid))
+        });
+        let Some(parent) = parent else {
+            return Ok(None);
+        };
+        let Some((trace_id, _)) = self.trace_runtime.find_membership(&parent) else {
+            return Ok(None);
+        };
+        self.insert_child(trace_id, parent, process, raw_event.envelope.observed_at)
     }
-    if let Some(matched) =
-        TraceIdentityResolver::new(trace_runtime).match_observed_process(&identity)
-    {
-        return Ok(Some(matched.into_ingest_match()));
+
+    fn apply_exit(
+        &mut self,
+        raw_event: &RawCollectorEvent,
+        process: ProcessIdentity,
+        metadata: &BTreeMap<String, String>,
+    ) -> Result<Option<IngestMatch>, ControlError> {
+        let Some((trace_id, membership)) = self.trace_runtime.find_membership(&process) else {
+            return Ok(None);
+        };
+        self.trace_runtime
+            .mark_process_exited(
+                trace_id,
+                &process,
+                ExitStatus {
+                    code: Self::exit_code(metadata)?,
+                    observed_at: raw_event.envelope.observed_at,
+                    source: Some(ExitObservationSource::Event),
+                },
+            )
+            .map_err(|error| ControlError::new("mark_process_exited", format!("{error:?}")))?;
+        self.process_manager.mark_exited(process);
+        Ok(Some(
+            TraceIdentityResolver::resolved_trace_process((trace_id, membership))
+                .into_ingest_match(),
+        ))
     }
-    if let Some(parent_identity) = parent {
-        if let Some(parent_match) =
-            TraceIdentityResolver::new(trace_runtime).match_pid(parent_identity.pid)
+
+    fn insert_child(
+        &mut self,
+        trace_id: TraceId,
+        parent: ProcessIdentity,
+        child: ProcessIdentity,
+        observed_at: SystemTime,
+    ) -> Result<Option<IngestMatch>, ControlError> {
+        match self
+            .trace_runtime
+            .insert_observed_child(trace_id, &parent, child, observed_at)
         {
-            return insert_observed_child_match(
-                trace_runtime,
-                parent_match.trace_id,
-                &parent_match.process,
-                identity,
-                raw_event.envelope.observed_at,
-            );
+            Ok(()) => {}
+            Err(RegistryError::PropagationDisabled(_)) => return Ok(None),
+            Err(error) => {
+                return Err(ControlError::new(
+                    "insert_observed_child",
+                    format!("{error:?}"),
+                ));
+            }
         }
+        Ok(Some(IngestMatch {
+            trace_id,
+            process: child,
+            parent: Some(parent),
+        }))
     }
-    if let Some(parent_pid) = metadata
-        .get(PROCESS_METADATA_PARENT_PID)
-        .and_then(|value| value.parse().ok())
-    {
-        if let Some(parent_match) = TraceIdentityResolver::new(trace_runtime).match_pid(parent_pid)
-        {
-            return insert_observed_child_match(
-                trace_runtime,
-                parent_match.trace_id,
-                &parent_match.process,
-                identity,
-                raw_event.envelope.observed_at,
-            );
-        }
+
+    fn exit_code(metadata: &BTreeMap<String, String>) -> Result<Option<i32>, ControlError> {
+        metadata
+            .get("exit_code")
+            .map(|value| {
+                value
+                    .parse::<i32>()
+                    .map_err(|error| ControlError::new("exit_code", error.to_string()))
+            })
+            .transpose()
     }
-    Ok(trace_runtime
-        .refresh_process_identity(identity)
-        .map(|(trace_id, process)| IngestMatch { trace_id, process }))
 }
 
-fn exit_effect(
-    trace_runtime: &mut TraceRuntime,
-    raw_event: &RawCollectorEvent,
-    metadata: &BTreeMap<String, String>,
-) -> Result<Option<IngestMatch>, ControlError> {
-    let Some(matched) = TraceIdentityResolver::new(trace_runtime)
-        .match_observed_process(&raw_event.envelope.process)
-    else {
-        return Ok(None);
-    };
-    trace_runtime
-        .mark_process_exited(
-            matched.trace_id,
-            &matched.process,
-            ExitStatus {
-                code: exit_code(metadata)?,
-                observed_at: raw_event.envelope.observed_at,
-                source: Some(ExitObservationSource::Event),
-            },
-        )
-        .map_err(|error| ControlError::new("mark_process_exited", format!("{error:?}")))?;
-    Ok(Some(matched.into_ingest_match()))
+pub(crate) struct ControlActorIdentityResolver<'a> {
+    process_manager: &'a ProcessIdentityManager,
 }
 
-fn insert_observed_child_match(
-    trace_runtime: &mut TraceRuntime,
-    trace_id: TraceId,
-    parent: &ProcessIdentity,
-    child: ProcessIdentity,
-    observed_at: SystemTime,
-) -> Result<Option<IngestMatch>, ControlError> {
-    match trace_runtime.insert_observed_child(trace_id, parent, child.clone(), observed_at) {
-        Ok(()) => {}
-        Err(RegistryError::PropagationDisabled(_)) => return Ok(None),
-        Err(error) => {
-            return Err(ControlError::new(
-                "insert_observed_child",
-                format!("{error:?}"),
-            ));
-        }
+impl<'a> ControlActorIdentityResolver<'a> {
+    pub(crate) fn new(process_manager: &'a ProcessIdentityManager) -> Self {
+        Self { process_manager }
     }
-    Ok(Some(IngestMatch {
-        trace_id,
-        process: child,
-    }))
-}
 
-fn exit_code(metadata: &BTreeMap<String, String>) -> Result<Option<i32>, ControlError> {
-    metadata
-        .get("exit_code")
-        .map(|value| {
-            value
-                .parse::<i32>()
-                .map_err(|error| ControlError::new("exit_code", error.to_string()))
+    pub(crate) fn resolve(
+        &self,
+        process: ProcessIdentity,
+    ) -> Result<ControlActorProcessIdentity, ControlError> {
+        let record = self.process_manager.record(process).ok_or_else(|| {
+            ControlError::new(
+                "control_process_identity",
+                format!("process record {} is missing", process.get()),
+            )
+        })?;
+        let host = record.host.as_ref().ok_or_else(|| {
+            ControlError::new(
+                "control_process_identity",
+                format!("process {} has no host coordinates", process.get()),
+            )
+        })?;
+        Ok(ControlActorProcessIdentity {
+            pid: host.pid,
+            task_id: host.task_id,
+            generation: host.start_boottime_ns.unwrap_or(host.start_time_ticks),
+            namespace: record
+                .namespaces
+                .iter()
+                .next()
+                .map(|value| value.pid_namespace.as_str().to_string()),
         })
-        .transpose()
-}
-
-fn resolved_trace_process(
-    (trace_id, membership): (TraceId, ProcessMembership),
-) -> ResolvedTraceProcess {
-    ResolvedTraceProcess {
-        trace_id,
-        process: membership.identity,
-        capture_enabled: membership.capture_enabled,
-        state: membership.state,
     }
 }

@@ -6,12 +6,10 @@ use model_core::event::{
     ApplicationPayload, ControlPayload, EnforcementPayload, EventPayload, FilePayload, IpcPayload,
     LabelPayload, LossPayload, NetPayload, ProcessPayload, ResourcePayload, StdioPayload,
 };
-use model_core::process::{NamespaceIdentity, ProcessIdentity};
+use model_core::process::ProcessIdentity;
 use rusqlite::Error as SqlError;
 
-use crate::records::helpers::{
-    decode_bytes, decode_map, encode_bytes, encode_map, escape, unescape,
-};
+use crate::records::helpers::{decode_bytes, decode_map, encode_bytes, encode_map};
 
 pub fn encode_event_payload(payload: &EventPayload) -> (String, String, String) {
     match payload {
@@ -356,50 +354,11 @@ pub fn decode_event_payload(
 }
 
 pub fn encode_process_identity_inline(identity: &ProcessIdentity) -> String {
-    format!(
-        "{}|{}|{}|{}|{}",
-        identity.pid,
-        identity
-            .task_id
-            .map(|value| value.to_string())
-            .unwrap_or_default(),
-        identity.start_time_ticks,
-        identity
-            .pid_namespace
-            .as_ref()
-            .map(|value| escape(value.as_str()))
-            .unwrap_or_default(),
-        identity.generation
-    )
+    identity.get().to_string()
 }
 
 pub(crate) fn decode_process_identity_inline(raw: &str) -> Result<ProcessIdentity, SqlError> {
-    let mut parts = raw.split('|');
-    let pid = parts
-        .next()
-        .and_then(|value| value.parse::<u32>().ok())
-        .ok_or(SqlError::InvalidQuery)?;
-    let task_id = parts
-        .next()
-        .filter(|value| !value.is_empty())
-        .and_then(|value| value.parse::<u32>().ok());
-    let start_time_ticks = parts
-        .next()
-        .and_then(|value| value.parse::<u64>().ok())
-        .ok_or(SqlError::InvalidQuery)?;
-    let pid_namespace = parts
-        .next()
-        .filter(|value| !value.is_empty())
-        .map(|value| NamespaceIdentity::new(unescape(value)));
-    let generation = parts
-        .next()
-        .and_then(|value| value.parse::<u64>().ok())
-        .ok_or(SqlError::InvalidQuery)?;
-    Ok(ProcessIdentity {
-        pid,
-        task_id,
-        start_time_ticks,
-        pid_namespace,
-        generation,
-    })
+    raw.parse::<u64>()
+        .map(ProcessIdentity::new)
+        .map_err(|_| SqlError::InvalidQuery)
 }

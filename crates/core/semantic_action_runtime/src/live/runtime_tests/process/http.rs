@@ -8,7 +8,7 @@ use super::super::test_support::*;
 #[test]
 fn http_response_references_preceding_http_request_action() {
     let mut runtime = runtime();
-    let process = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let process = ProcessIdentity::new(AGENT_GENERATION);
 
     let request_output =
         runtime.observe_event(&http_request_event(HTTP_REQUEST_EVENT_ID, process.clone()));
@@ -38,7 +38,7 @@ fn http_response_references_preceding_http_request_action() {
 #[test]
 fn http_informational_response_keeps_request_for_final_response() {
     let mut runtime = runtime();
-    let process = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let process = ProcessIdentity::new(AGENT_GENERATION);
 
     let request_output =
         runtime.observe_event(&http_request_event(HTTP_REQUEST_EVENT_ID, process.clone()));
@@ -113,7 +113,7 @@ fn http_informational_response_keeps_request_for_final_response() {
 #[test]
 fn http_response_matches_request_on_same_http2_stream_id() {
     let mut runtime = runtime();
-    let process = ProcessIdentity::new(AGENT_PID, AGENT_START_TICKS, AGENT_GENERATION);
+    let process = ProcessIdentity::new(AGENT_GENERATION);
 
     let stream_three_output = runtime.observe_event(&http_request_event_with(
         EventId::new(2_015),
