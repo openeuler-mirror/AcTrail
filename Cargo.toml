@@ -2,6 +2,7 @@
 members = [
     "crates/apps/daemon",
     "crates/apps/ctl",
+    "crates/apps/cluster",
     "crates/apps/view",
     "crates/apps/web",
     "crates/core/model",
