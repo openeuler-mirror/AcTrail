@@ -16,6 +16,8 @@ use libbpf_rs::{PerfBuffer, PerfBufferBuilder};
 use libbpf_rs::{RingBuffer, RingBufferBuilder};
 
 use super::LoaderError;
+#[cfg(any(feature = "perf-buffer", actrail_event_transport_perf))]
+use super::abi::{EXEC_EVENT_SIZE, KERNEL_OBSERVATION_EVENT_SIZE};
 
 pub(crate) fn ring_buffer_max_bytes(config: &EbpfCollectorConfig, payload: &PayloadConfig) -> u32 {
     let mut max_bytes = config.event_ring_buffer_max_bytes;
@@ -168,8 +170,6 @@ fn strip_perf_trailing_padding(raw: &[u8]) -> Option<&[u8]> {
 
 #[cfg(any(feature = "perf-buffer", actrail_event_transport_perf))]
 fn known_event_size(kind: u32, size: usize) -> bool {
-    const OBSERVATION_EVENT_SIZE: usize = 112;
-    const EXEC_EVENT_SIZE: usize = 632;
     const TLS_FIXED_EVENT_SIZE: usize = 80;
     const TLS_DIRECT_CAPTURE_EVENT_SIZE: usize = 80 + 4_194_304;
     const FILE_EVENT_HEADER_SIZE: usize = 128;
@@ -184,7 +184,7 @@ fn known_event_size(kind: u32, size: usize) -> bool {
     }
 
     match kind {
-        1 | 3 | 4 | 100..=105 => size == OBSERVATION_EVENT_SIZE,
+        1 | 3 | 4 | 100..=105 => size == KERNEL_OBSERVATION_EVENT_SIZE,
         2 => size == EXEC_EVENT_SIZE,
         201 | 202 | 204 => size == TLS_FIXED_EVENT_SIZE,
         203 => size == TLS_DIRECT_CAPTURE_EVENT_SIZE,
@@ -282,17 +282,18 @@ pub(crate) fn resize_map(
 #[cfg(all(test, any(feature = "perf-buffer", actrail_event_transport_perf)))]
 mod tests {
     use super::perf_sample_payload;
+    use crate::loader::abi::{EXEC_EVENT_SIZE, KERNEL_OBSERVATION_EVENT_SIZE};
 
     #[test]
     fn perf_sample_payload_strips_raw_size_prefix() {
         let mut raw = Vec::new();
-        raw.extend_from_slice(&112u32.to_ne_bytes());
+        raw.extend_from_slice(&(KERNEL_OBSERVATION_EVENT_SIZE as u32).to_ne_bytes());
         raw.extend_from_slice(&1u32.to_ne_bytes());
-        raw.resize(116, 0);
+        raw.resize(KERNEL_OBSERVATION_EVENT_SIZE + 4, 0);
 
         let payload = perf_sample_payload(&raw);
 
-        assert_eq!(payload.len(), 112);
+        assert_eq!(payload.len(), KERNEL_OBSERVATION_EVENT_SIZE);
         assert_eq!(&payload[..4], &1u32.to_ne_bytes());
     }
 
@@ -300,11 +301,11 @@ mod tests {
     fn perf_sample_payload_keeps_unprefixed_event() {
         let mut raw = Vec::new();
         raw.extend_from_slice(&1u32.to_ne_bytes());
-        raw.resize(112, 0);
+        raw.resize(KERNEL_OBSERVATION_EVENT_SIZE, 0);
 
         let payload = perf_sample_payload(&raw);
 
-        assert_eq!(payload.len(), 112);
+        assert_eq!(payload.len(), KERNEL_OBSERVATION_EVENT_SIZE);
         assert_eq!(&payload[..4], &1u32.to_ne_bytes());
     }
 
@@ -312,11 +313,11 @@ mod tests {
     fn perf_sample_payload_strips_trailing_observation_padding() {
         let mut raw = Vec::new();
         raw.extend_from_slice(&103u32.to_ne_bytes());
-        raw.resize(116, 0);
+        raw.resize(KERNEL_OBSERVATION_EVENT_SIZE + 4, 0);
 
         let payload = perf_sample_payload(&raw);
 
-        assert_eq!(payload.len(), 112);
+        assert_eq!(payload.len(), KERNEL_OBSERVATION_EVENT_SIZE);
         assert_eq!(&payload[..4], &103u32.to_ne_bytes());
     }
 
@@ -324,11 +325,11 @@ mod tests {
     fn perf_sample_payload_strips_trailing_exec_padding() {
         let mut raw = Vec::new();
         raw.extend_from_slice(&2u32.to_ne_bytes());
-        raw.resize(636, 0);
+        raw.resize(EXEC_EVENT_SIZE + 4, 0);
 
         let payload = perf_sample_payload(&raw);
 
-        assert_eq!(payload.len(), 632);
+        assert_eq!(payload.len(), EXEC_EVENT_SIZE);
         assert_eq!(&payload[..4], &2u32.to_ne_bytes());
     }
 }

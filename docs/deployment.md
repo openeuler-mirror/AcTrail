@@ -54,6 +54,8 @@ The generated default keeps daemon runtime state and durable observation data ou
 | `export_directory` | `/var/lib/actrail/export` |
 | live `otel-jsonl` plugin config `path` | `/var/lib/actrail/export/live-spans.otlp.jsonl` when explicitly loaded |
 | `log_path` | `/var/log/actrail/actraild.log` |
+| `supervision.startup_wait_ms` | `30000` |
+| `supervision.shutdown_wait_ms` | `5000` |
 | `workload_diagnostics_enabled` | `false` |
 | `workload_diagnostics_interval_ms` | `1000` |
 
@@ -72,6 +74,8 @@ For a persistent deployment, review these fields first:
 | `storage_sqlite_path` | SQLite storage location; place it on a filesystem with enough space for payload retention. |
 | `storage_sqlite_busy_timeout_ms` | SQLite busy timeout for daemon writes. Keep this positive; increase it only when long-running readers share the same storage. |
 | `log_path` | Daemon background stdout/stderr log. |
+| `supervision.startup_wait_ms` | Maximum time that `start` or `restart` waits for both the PID file and control socket. The default is 30 seconds. |
+| `supervision.shutdown_wait_ms` | Grace period for stopping a daemon, including cleanup after a startup failure, before forced termination. |
 | `diagnostic_log_level` | Daemon diagnostic verbosity: `off`, `info`, or `debug`. Use `debug` only while collecting failure evidence. |
 | `workload_diagnostics_enabled` | Enables periodic low-overhead daemon workload counter logs to help diagnose hot loops and projection/storage pressure. |
 | `workload_diagnostics_interval_ms` | Period between workload diagnostic log lines when workload diagnostics are enabled. |
@@ -113,6 +117,21 @@ Background mode:
 ```
 
 When `--config` is omitted, `actraild` and `actrailctl` load `/etc/actrail/actraild.conf`. If that file is missing or invalid, they fail with the config path and validation/read error.
+
+`start` and `restart` report success only after both the configured PID file and control socket exist. Before binding the control socket, the daemon opens its configured services, runs the host eBPF load preflight for each capture profile, and loads startup plugins. These operations are part of `supervision.startup_wait_ms`; the generated default allows 30 seconds.
+
+If readiness exceeds that limit or initialization fails, the operator terminates the spawned daemon, waits up to `supervision.shutdown_wait_ms`, force-stops it if necessary, and removes its PID and runtime socket files. The error identifies the readiness paths, whether the startup child exited or was stopped, and the configured `log_path`. A failed `start` therefore does not leave a child continuing initialization in the background.
+
+Increase the startup limit only when successful preflight is consistently slower on the deployment host:
+
+```toml
+[supervision]
+startup_wait_ms = 60000
+shutdown_wait_ms = 5000
+poll_interval_ms = 100
+```
+
+For an unexpected timeout, inspect `log_path` first. Repeated eBPF load failures, invalid plugin configuration, or storage errors require fixing the underlying startup failure rather than increasing the limit.
 
 Foreground mode for a supervisor:
 

@@ -6,7 +6,7 @@ use std::os::unix::fs::FileTypeExt;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use config_core::daemon::OperatorConfig;
@@ -49,10 +49,10 @@ pub fn start_daemon(config_path: &Path, config: &OperatorConfig) -> Result<(), S
             Ok(())
         });
     }
-    let mut child = command
+    let child = command
         .spawn()
         .map_err(|error| format!("spawn actraild: {error}"))?;
-    wait_until_started(&mut child, config)
+    DaemonStartSupervisor::new(child, config).wait_until_ready()
 }
 
 pub fn stop_daemon(config: &OperatorConfig) -> Result<(), String> {
@@ -115,6 +115,20 @@ pub fn remove_runtime_file(path: &Path) -> Result<(), String> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(format!("remove {}: {error}", path.display())),
     }
+}
+
+pub(super) fn cleanup_runtime_files(
+    config: &OperatorConfig,
+    pid_written: bool,
+) -> Result<(), String> {
+    if pid_written {
+        remove_runtime_file(&config.pid_file)?;
+    }
+    remove_runtime_file(&config.socket_path)?;
+    if config.payload_config.tls.capture_backend.is_sync() {
+        remove_runtime_file(&config.payload_config.tls.sync_event_socket_path)?;
+    }
+    Ok(())
 }
 
 fn create_parent_directory(path: &Path, label: &str) -> Result<(), String> {
@@ -194,38 +208,157 @@ fn ensure_auxiliary_socket_available(label: &str, path: &Path) -> Result<(), Str
     }
 }
 
-fn wait_until_started(
-    child: &mut std::process::Child,
-    config: &OperatorConfig,
-) -> Result<(), String> {
-    let wait_for = Duration::from_millis(config.startup_wait_ms);
-    let poll_every = Duration::from_millis(config.supervision_poll_interval_ms);
-    let started_at = Instant::now();
-    while started_at.elapsed() < wait_for {
-        if let Some(status) = child
+struct DaemonStartSupervisor<'a> {
+    child: Child,
+    config: &'a OperatorConfig,
+}
+
+impl<'a> DaemonStartSupervisor<'a> {
+    fn new(child: Child, config: &'a OperatorConfig) -> Self {
+        Self { child, config }
+    }
+
+    fn wait_until_ready(mut self) -> Result<(), String> {
+        match self.wait_for_readiness() {
+            Ok(()) => Ok(()),
+            Err(start_error) => match self.stop_after_failure() {
+                Ok(outcome) => Err(format!(
+                    "{start_error}; startup_child={}; log={}",
+                    outcome.as_str(),
+                    self.config.log_path.display()
+                )),
+                Err(stop_error) => Err(format!(
+                    "{start_error}; startup child cleanup failed: {stop_error}; log={}",
+                    self.config.log_path.display()
+                )),
+            },
+        }
+    }
+
+    fn wait_for_readiness(&mut self) -> Result<(), String> {
+        let wait_for = Duration::from_millis(self.config.startup_wait_ms);
+        let poll_every = Duration::from_millis(self.config.supervision_poll_interval_ms);
+        let started_at = Instant::now();
+        while started_at.elapsed() < wait_for {
+            if let Some(status) = self
+                .child
+                .try_wait()
+                .map_err(|error| format!("check actraild child status: {error}"))?
+            {
+                return Err(format!("actraild exited before ready with status {status}"));
+            }
+            if self.config.socket_path.exists() && self.config.pid_file.exists() {
+                println!(
+                    "actraild started pid={} socket={}",
+                    self.child.id(),
+                    self.config.socket_path.display()
+                );
+                return Ok(());
+            }
+            std::thread::sleep(poll_every.min(wait_for.saturating_sub(started_at.elapsed())));
+        }
+        Err(format!(
+            "actraild did not become ready within {} ms; readiness requires pid_file={} and socket={}; initialization before socket binding includes configured collector preflight and startup plugin loading",
+            self.config.startup_wait_ms,
+            self.config.pid_file.display(),
+            self.config.socket_path.display()
+        ))
+    }
+
+    fn stop_after_failure(&mut self) -> Result<StartupChildOutcome, String> {
+        if self
+            .child
             .try_wait()
-            .map_err(|error| format!("check actraild child status: {error}"))?
+            .map_err(|error| format!("check failed actraild child status: {error}"))?
+            .is_some()
         {
+            cleanup_runtime_files(self.config, true)?;
+            return Ok(StartupChildOutcome::AlreadyExited);
+        }
+
+        let pid = self.child.id();
+        if let Err(signal_error) = signal_process(pid, libc::SIGTERM) {
+            let force_stopped = self.force_stop_if_running(pid).map_err(|force_error| {
+                format!("signal failed actraild child pid={pid}: {signal_error}; {force_error}")
+            })?;
+            cleanup_runtime_files(self.config, true)?;
+            return Ok(if force_stopped {
+                StartupChildOutcome::ForceStopped
+            } else {
+                StartupChildOutcome::Terminated
+            });
+        }
+        let wait_for = Duration::from_millis(self.config.shutdown_wait_ms);
+        let poll_every = Duration::from_millis(self.config.supervision_poll_interval_ms);
+        let started_at = Instant::now();
+        while started_at.elapsed() < wait_for {
+            if self
+                .child
+                .try_wait()
+                .map_err(|error| format!("wait for failed actraild child pid={pid}: {error}"))?
+                .is_some()
+            {
+                cleanup_runtime_files(self.config, true)?;
+                return Ok(StartupChildOutcome::Terminated);
+            }
+            std::thread::sleep(poll_every.min(wait_for.saturating_sub(started_at.elapsed())));
+        }
+
+        let force_stopped = self.force_stop_if_running(pid)?;
+        cleanup_runtime_files(self.config, true)?;
+        Ok(if force_stopped {
+            StartupChildOutcome::ForceStopped
+        } else {
+            StartupChildOutcome::Terminated
+        })
+    }
+
+    fn force_stop_if_running(&mut self, pid: u32) -> Result<bool, String> {
+        if self
+            .child
+            .try_wait()
+            .map_err(|error| format!("check timed-out actraild child pid={pid}: {error}"))?
+            .is_some()
+        {
+            return Ok(false);
+        }
+        if let Err(kill_error) = self.child.kill() {
+            if self
+                .child
+                .try_wait()
+                .map_err(|error| {
+                    format!("recheck failed force-stop actraild child pid={pid}: {error}")
+                })?
+                .is_some()
+            {
+                return Ok(false);
+            }
             return Err(format!(
-                "actraild exited before ready with status {status}; log={}",
-                config.log_path.display()
+                "force-stop failed actraild child pid={pid}: {kill_error}"
             ));
         }
-        if config.socket_path.exists() && config.pid_file.exists() {
-            println!(
-                "actraild started pid={} socket={}",
-                child.id(),
-                config.socket_path.display()
-            );
-            return Ok(());
-        }
-        std::thread::sleep(poll_every);
+        self.child
+            .wait()
+            .map_err(|error| format!("reap force-stopped actraild child pid={pid}: {error}"))?;
+        Ok(true)
     }
-    Err(format!(
-        "actraild did not become ready within {} ms; log={}",
-        config.startup_wait_ms,
-        config.log_path.display()
-    ))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StartupChildOutcome {
+    AlreadyExited,
+    Terminated,
+    ForceStopped,
+}
+
+impl StartupChildOutcome {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::AlreadyExited => "already-exited",
+            Self::Terminated => "terminated-after-startup-failure",
+            Self::ForceStopped => "force-stopped-after-startup-failure",
+        }
+    }
 }
 
 fn wait_until_stopped(pid: u32, config: &OperatorConfig) -> Result<(), String> {

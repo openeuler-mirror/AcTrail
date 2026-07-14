@@ -294,7 +294,7 @@ pub(super) struct SupervisionDocument {
 impl Default for SupervisionDocument {
     fn default() -> Self {
         Self {
-            startup_wait_ms: 5000,
+            startup_wait_ms: 30_000,
             shutdown_wait_ms: 5000,
             poll_interval_ms: 100,
         }

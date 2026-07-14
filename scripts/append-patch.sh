@@ -6,9 +6,9 @@ usage() {
 Usage:
   scripts/append-patch.sh --target-dir <rpm-source-dir> --name <patch-name> [options]
 
-Generates an RPM patch against the Source0 tarball in an RPM source package
-directory, copies the patch into that directory, and appends a PatchNNNN line
-to the spec file by default.
+Generates an incremental Git-format RPM patch against Source0 plus the patches
+already listed in the spec, copies the patch into the RPM source directory, and
+appends a PatchNNNN line to the spec file by default.
 
 Required:
   --target-dir <dir>       RPM source package directory, for example ../src-AcTrail
@@ -34,8 +34,9 @@ Default preserve paths:
   crates/apps/web/frontend/dist
   crates/apps/ctl/java-agent/dist
 
-The generated patch uses a/... and b/... paths. When the spec is updated, the
-script also ensures %autosetup uses -p1 so RPM applies the patch correctly.
+The generated patch uses a/... and b/... paths and carries binary data plus file
+mode changes. When the spec is updated, the script ensures %autosetup uses
+`-S git -p1`; the RPM package must declare `BuildRequires: git`.
 USAGE
 }
 
@@ -158,19 +159,25 @@ archive_top_dir() {
 copy_working_tree() {
   local source_dir="$1"
   local new_root="$2"
-  local path
+  local working_tree_patch
 
-  (
-    cd "$source_dir"
-    git ls-files -z |
-      while IFS= read -r -d '' path; do
-        if [ ! -e "$path" ] && [ ! -L "$path" ]; then
-          continue
-        fi
-        mkdir -p "$new_root/$(dirname "$path")"
-        cp -a "$path" "$new_root/$path"
-      done
-  )
+  git -C "$source_dir" archive --format=tar HEAD | tar -xf - -C "$new_root"
+  working_tree_patch="$(dirname "$new_root")/working-tree.patch"
+  git -C "$source_dir" diff --binary --full-index --no-ext-diff HEAD -- >"$working_tree_patch"
+  if [ ! -s "$working_tree_patch" ]; then
+    return
+  fi
+
+  git -c core.autocrlf=false -c core.safecrlf=false -C "$new_root" init --quiet
+  git -c core.autocrlf=false -c core.safecrlf=false -C "$new_root" add --force --all
+  git -c user.name=actrail-patch -c user.email=actrail-patch@localhost \
+    -c commit.gpgsign=false \
+    -C "$new_root" commit --quiet --allow-empty -m head
+  git -c core.autocrlf=false -c core.safecrlf=false -C "$new_root" \
+    apply --index --binary -p1 "$working_tree_patch" ||
+    fail "failed to apply tracked working-tree changes over HEAD"
+  rm -rf "$new_root/.git"
+  rm -f "$working_tree_patch"
 }
 
 preserve_source0_paths() {
@@ -204,7 +211,8 @@ write_patch() {
   set +e
   (
     cd "$trees_dir"
-    diff -ruN a b
+    git -c core.autocrlf=false -c core.safecrlf=false \
+      diff --no-index --binary --full-index --no-renames --no-prefix a b
   ) > "$raw_patch"
   diff_status=$?
   set -e
@@ -215,11 +223,55 @@ write_patch() {
   if [ "$diff_status" -eq 0 ]; then
     fail "no differences found between Source0 and requested source tree"
   fi
-  if grep -q '^Binary files ' "$raw_patch"; then
-    fail "binary differences detected; regular RPM patch files cannot carry them safely"
+  cp "$raw_patch" "$output_patch"
+}
+
+existing_patch_files() {
+  local spec_path="$1"
+
+  awk '
+    /^[[:space:]]*Patch[0-9]*[[:space:]]*:/ {
+      value = substr($0, index($0, ":") + 1)
+      sub(/^[[:space:]]+/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      split(value, fields, /[[:space:]]+/)
+      if (fields[1] != "") {
+        print fields[1]
+      }
+    }
+  ' "$spec_path"
+}
+
+apply_existing_patches() {
+  local target_dir="$1"
+  local spec_path="$2"
+  local old_root="$3"
+  local patch_ref patch_path
+  local patch_refs=()
+
+  mapfile -t patch_refs < <(existing_patch_files "$spec_path")
+  if [ "${#patch_refs[@]}" -eq 0 ]; then
+    return
   fi
 
-  cp "$raw_patch" "$output_patch"
+  git -c core.autocrlf=false -c core.safecrlf=false -C "$old_root" init --quiet
+  git -c core.autocrlf=false -c core.safecrlf=false -C "$old_root" add --force --all
+  git -c user.name=actrail-patch -c user.email=actrail-patch@localhost \
+    -c commit.gpgsign=false \
+    -C "$old_root" commit --quiet --allow-empty -m source0
+
+  for patch_ref in "${patch_refs[@]}"; do
+    if [[ "$patch_ref" == *"%{"* ]]; then
+      fail "existing Patch entry contains an unsupported RPM macro: $patch_ref"
+    fi
+    patch_path="$target_dir/${patch_ref##*/}"
+    [ -f "$patch_path" ] || fail "existing patch file does not exist: $patch_path"
+    git -c core.autocrlf=false -c core.safecrlf=false -C "$old_root" \
+      apply --index --binary -p1 "$patch_path" ||
+      fail "failed to apply existing patch to Source0 baseline: $patch_path"
+  done
+
+  rm -rf "$old_root/.git"
 }
 
 existing_patch_count() {
@@ -228,7 +280,7 @@ existing_patch_count() {
   sed -nE 's/^[[:space:]]*Patch[0-9]*[[:space:]]*:.*/patch/p' "$spec_path" | wc -l
 }
 
-ensure_spec_patch_strip() {
+ensure_spec_patch_setup() {
   local input_path="$1"
   local output_path="$2"
   local existing_count="$3"
@@ -241,22 +293,32 @@ ensure_spec_patch_strip() {
     /^[[:space:]]*%autosetup([[:space:]]|$)/ {
       seen = 1
 
-      if ($0 ~ /(^|[[:space:]])-p1([^0-9]|$)/) {
-        print
-        next
-      }
-
-      if ($0 ~ /(^|[[:space:]])-p([[:space:]]|$)/ || $0 ~ /(^|[[:space:]])-p[0-9]+([^0-9]|$)/) {
+      line = $0
+      if (line !~ /(^|[[:space:]])-p1([^0-9]|$)/ &&
+          (line ~ /(^|[[:space:]])-p([[:space:]]|$)/ || line ~ /(^|[[:space:]])-p[0-9]+([^0-9]|$)/)) {
         print "unsupported existing %autosetup patch strip level: " $0 > "/dev/stderr"
         exit 4
       }
 
-      if (existing_count > 0) {
+      if (line !~ /(^|[[:space:]])-p1([^0-9]|$)/ && existing_count > 0) {
         print "spec already has Patch lines but %autosetup has no explicit -p level" > "/dev/stderr"
         exit 5
       }
 
-      print $0 " -p1"
+      if (line !~ /(^|[[:space:]])-p1([^0-9]|$)/) {
+        line = line " -p1"
+      }
+
+      if (line ~ /(^|[[:space:]])-S/ &&
+          line !~ /(^|[[:space:]])-S([[:space:]]+)?git([[:space:]]|$)/) {
+        print "unsupported existing %autosetup patch backend: " $0 > "/dev/stderr"
+        exit 7
+      }
+      if (line !~ /(^|[[:space:]])-S([[:space:]]+)?git([[:space:]]|$)/) {
+        line = line " -S git"
+      }
+
+      print line
       next
     }
 
@@ -277,6 +339,7 @@ ensure_spec_patch_strip() {
     4) fail "$input_path uses %autosetup with a patch strip level other than -p1" ;;
     5) fail "$input_path has existing patches without an explicit %autosetup -p level; set it manually before appending" ;;
     6) fail "$input_path has no %autosetup line" ;;
+    7) fail "$input_path uses a %autosetup patch backend other than git" ;;
     *) fail "failed to update %autosetup patch strip level in $input_path" ;;
   esac
 }
@@ -507,6 +570,10 @@ top_dir="$(archive_top_dir "$base_tar")"
 tar -xzf "$base_tar" -C "$base_extract"
 cp -a "$base_extract/$top_dir/." "$old_root/"
 
+if [ -n "$spec_path" ]; then
+  apply_existing_patches "$target_dir" "$spec_path" "$old_root"
+fi
+
 case "$source_mode" in
   git-archive)
     git -C "$source_dir" archive --format=tar "$treeish" | tar -xf - -C "$new_root"
@@ -526,7 +593,7 @@ if [ "$update_spec" -eq 1 ]; then
   existing_count="$(existing_patch_count "$spec_path")"
   inserted_spec="$staging_dir/inserted-$(basename "$spec_path")"
   insert_patch_line "$spec_path" "$patch_tag" "$patch_file" "$inserted_spec"
-  ensure_spec_patch_strip "$inserted_spec" "$generated_spec" "$existing_count"
+  ensure_spec_patch_setup "$inserted_spec" "$generated_spec" "$existing_count"
 fi
 
 cp "$generated_patch" "$target_patch"
