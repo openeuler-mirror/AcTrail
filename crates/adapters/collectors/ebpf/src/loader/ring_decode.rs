@@ -112,7 +112,7 @@ pub struct KernelFilePathEvent {
 pub fn decode_kernel_event(raw: &[u8]) -> Result<KernelEvent, LoaderError> {
     let Some(kind) = read_u32(raw, 0) else {
         return Err(LoaderError::new(
-            "decode_ring_buffer",
+            "decode_kernel_event",
             format!("unexpected empty kernel event size {}", raw.len()),
         ));
     };
@@ -151,7 +151,7 @@ fn decode_observation_event(raw: &[u8]) -> Result<KernelObservationEvent, Loader
     }
     if raw.len() != KERNEL_OBSERVATION_EVENT_SIZE {
         return Err(LoaderError::new(
-            "decode_ring_buffer",
+            "decode_kernel_event",
             format!(
                 "unexpected kernel event size {}, expected {}",
                 raw.len(),

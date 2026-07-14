@@ -119,7 +119,7 @@ Use foreground mode when running under a supervisor:
 ./target/release/actraild --config <operator.conf> run
 ```
 
-`actraild start` writes logs to the config's `log_path`. `actrailctl doctor` verifies control-plane readiness; it does not prove that every configured collector has already observed target activity.
+`actraild start` writes logs to the config's `log_path` and succeeds only after both the PID file and control socket exist. The startup wait includes configured collector preflight and startup plugin loading. If `supervision.startup_wait_ms` expires, the spawned daemon is stopped and its runtime files are cleaned; inspect `log_path` before changing the generated 30-second default. `actrailctl doctor` verifies control-plane readiness; it does not prove that every configured collector has already observed target activity.
 
 ## 6. Attach Or Launch
 

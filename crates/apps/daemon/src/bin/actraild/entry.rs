@@ -21,8 +21,8 @@ use uds_control_client::{UdsControlClient, UdsSocketTransport};
 use crate::args::{AcTraildCommand, PluginCommand, parse_args};
 use crate::plugin_registry;
 use crate::process::{
-    DaemonProcessState, remove_runtime_file, start_daemon, status_daemon, stop_daemon,
-    write_pid_file,
+    DaemonProcessState, cleanup_runtime_files, remove_runtime_file, start_daemon, status_daemon,
+    stop_daemon, write_pid_file,
 };
 use crate::signals;
 
@@ -699,15 +699,6 @@ fn printable_warnings(warnings: &[String]) -> String {
     } else {
         warnings.join(";")
     }
-}
-
-fn cleanup_runtime_files(config: &OperatorConfig, pid_written: bool) -> Result<(), String> {
-    cleanup_pid_file(config, pid_written)?;
-    remove_runtime_file(&config.socket_path)?;
-    if config.payload_config.tls.capture_backend.is_sync() {
-        remove_runtime_file(&config.payload_config.tls.sync_event_socket_path)?;
-    }
-    Ok(())
 }
 
 fn cleanup_pid_file(config: &OperatorConfig, pid_written: bool) -> Result<(), String> {
