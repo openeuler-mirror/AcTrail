@@ -12,12 +12,12 @@ use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use storage_factory::StorageConfig;
 
 use super::{
-    AgentInvocationConfig, ApplicationProtocolConfig, CommandControlConfig, DiagnosticLogLevel,
-    EbpfCollectorConfig, EnforcementConfig, FileObservationConfig, NetworkControlConfig,
-    PayloadConfig, PayloadSocketConfig, PayloadTlsConfig, ProcessSeccompConfig,
-    ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig, SemanticRetentionConfig,
-    SocketPermissions, SseDataPolicy, StorageRetentionConfig, TraceFinalizationConfig,
-    WebServerConfig, WorkloadDiagnosticsConfig,
+    AgentInvocationConfig, ApplicationProtocolConfig, ClusterConfig, CommandControlConfig,
+    DiagnosticLogLevel, EbpfCollectorConfig, EnforcementConfig, FileObservationConfig,
+    NetworkControlConfig, PayloadConfig, PayloadSocketConfig, PayloadTlsConfig,
+    ProcessSeccompConfig, ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig,
+    SemanticRetentionConfig, SocketPermissions, SseDataPolicy, StorageRetentionConfig,
+    TraceFinalizationConfig, WebServerConfig, WorkloadDiagnosticsConfig,
 };
 use crate::capture_profile::{CaptureProfile, LaunchSeccompRequirements};
 use crate::export::ExportConfig;
@@ -45,6 +45,7 @@ pub struct OperatorConfig {
     pub storage: StorageConfig,
     pub storage_retention: StorageRetentionConfig,
     pub web: WebServerConfig,
+    pub cluster: ClusterConfig,
     pub export_config: ExportConfig,
     pub export_runtime: RuntimeExportConfig,
     pub startup_plugins: StartupPluginsConfig,
@@ -423,6 +424,52 @@ mod tests {
         assert_eq!(
             config.storage_retention.min_terminal_age,
             Duration::from_secs(30)
+        );
+    }
+
+    #[test]
+    fn default_operator_template_includes_cluster_sections_for_init() {
+        let raw = OperatorConfig::default_hierarchical_template()
+            .expect("default operator config template renders");
+
+        assert!(raw.contains("[cluster]\n"));
+        assert!(raw.contains("[cluster.report]\n"));
+        assert!(raw.contains("[cluster.center]\n"));
+        assert!(raw.contains("center_host = \"\""));
+        assert!(raw.contains("center_port = 0"));
+        assert!(raw.contains("listen_host = \"\""));
+        assert!(raw.contains("listen_port = 0"));
+
+        OperatorConfig::parse(&raw).expect("default operator config parses");
+    }
+
+    #[test]
+    fn cluster_report_config_parses_center_ip_and_trace_uid_includes_node_ip() {
+        let config = OperatorConfig::init()
+            .expect("default operator config initializes")
+            .patch(
+                r#"
+[cluster]
+enabled = true
+cluster_id = "prod"
+node_id = "node-a"
+node_name = "worker-a-01"
+node_ip = "node-ip-from-config"
+
+[cluster.report]
+enabled = true
+center_host = "center-host-from-config"
+center_port = 1
+"#,
+            )
+            .expect("cluster report patch parses");
+
+        assert!(config.cluster.enabled);
+        assert!(config.cluster.report.enabled);
+        assert_eq!(config.cluster.report.center_host, "center-host-from-config");
+        assert_eq!(
+            config.cluster.trace_uid("trace-12"),
+            "prod/node-ip-from-config/node-a/trace-12"
         );
     }
 

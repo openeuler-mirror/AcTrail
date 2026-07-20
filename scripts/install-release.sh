@@ -35,6 +35,7 @@ release_dir="target/release"
 binaries=(
   actraild
   actrailctl
+  actrailcluster
   actrailviewer
   actrailweb
 )
@@ -89,6 +90,7 @@ if [[ "$missing_release_binary" -eq 1 ]]; then
   run cargo build --release \
     --bin actraild \
     --bin actrailctl \
+    --bin actrailcluster \
     --bin actrailviewer \
     --bin actrailweb
 fi

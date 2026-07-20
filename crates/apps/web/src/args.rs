@@ -10,6 +10,7 @@ use storage_factory::StorageConfig;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WebConfig {
     pub storage: StorageConfig,
+    pub cluster_root: Option<PathBuf>,
     pub listen_addr: SocketAddr,
     pub request_read_timeout: Option<Duration>,
     pub operator_config_path: Option<PathBuf>,
@@ -27,10 +28,12 @@ Usage:
   actrailweb help
   actrailweb [--config <PATH>] [--addr <ADDR>] [--port <PORT>] [--request-read-timeout-ms <MILLIS|disabled>]
   actrailweb --storage-path <PATH> --addr <ADDR> --port <PORT> --request-read-timeout-ms <MILLIS|disabled>
+  actrailweb cluster [--config <PATH>] [--cluster-root <PATH>] [--addr <ADDR>] [--port <PORT>] [--request-read-timeout-ms <MILLIS|disabled>]
 
 Options:
   --config <PATH>                   Operator config path; defaults to /etc/actrail/actraild.conf
   --storage-path <PATH>             Storage path when no operator config is used
+  --cluster-root <PATH>             Cluster center root directory; defaults to [cluster.center].root_dir
   --addr <ADDR>                     Listen address or operator config override
   --port <PORT>                     Listen port or operator config override
   --request-read-timeout-ms <VALUE> Request read timeout in milliseconds, or disabled
@@ -44,9 +47,13 @@ pub fn is_help_request(args: &[String]) -> bool {
 }
 
 pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<WebConfig, String> {
-    let flags = parse_flags(args)?;
+    let (mode, flags) = parse_command_and_flags(args)?;
     let config = load_optional_config(&flags)?;
     let storage = resolve_storage_config(&flags, config.as_ref())?;
+    let cluster_root = match mode {
+        WebMode::Storage => None,
+        WebMode::Cluster => Some(resolve_cluster_root(&flags, config.as_ref())?),
+    };
     let listen_addr = resolve_listen_addr(&flags, config.as_ref())?;
     let request_read_timeout = resolve_request_read_timeout(&flags, config.as_ref())?;
     let operator_config = config
@@ -60,6 +67,7 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<WebConfig, S
         });
     Ok(WebConfig {
         storage,
+        cluster_root,
         listen_addr,
         request_read_timeout,
         operator_config_path: config
@@ -67,6 +75,27 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<WebConfig, S
             .and_then(|config| config.operator_config_path.clone()),
         operator_config,
     })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WebMode {
+    Storage,
+    Cluster,
+}
+
+fn parse_command_and_flags(
+    args: impl IntoIterator<Item = String>,
+) -> Result<(WebMode, std::collections::BTreeMap<String, String>), String> {
+    let mut args = args.into_iter();
+    let mode = match args.next() {
+        Some(command) if command == "cluster" => WebMode::Cluster,
+        Some(first) => {
+            return parse_flags(std::iter::once(first).chain(args))
+                .map(|flags| (WebMode::Storage, flags));
+        }
+        None => WebMode::Storage,
+    };
+    parse_flags(args).map(|flags| (mode, flags))
 }
 
 fn parse_flags(
@@ -80,7 +109,12 @@ fn parse_flags(
             .ok_or_else(|| format!("missing value for {flag}"))?;
         if !matches!(
             flag.as_str(),
-            "--config" | "--storage-path" | "--addr" | "--port" | "--request-read-timeout-ms"
+            "--config"
+                | "--storage-path"
+                | "--cluster-root"
+                | "--addr"
+                | "--port"
+                | "--request-read-timeout-ms"
         ) {
             return Err(format!("unknown actrailweb flag {flag}"));
         }
@@ -95,6 +129,7 @@ fn load_config(path: &Path) -> Result<WebConfig, String> {
     let config = OperatorConfig::load(path)?;
     Ok(WebConfig {
         storage: config.storage.clone(),
+        cluster_root: None,
         listen_addr: config.web.listen_addr,
         request_read_timeout: config.web.request_read_timeout,
         operator_config_path: Some(path.to_path_buf()),
@@ -127,6 +162,22 @@ fn resolve_storage_config(
     config
         .map(|config| config.storage.clone())
         .ok_or_else(|| "missing required flag --storage-path".to_string())
+}
+
+fn resolve_cluster_root(
+    flags: &std::collections::BTreeMap<String, String>,
+    config: Option<&WebConfig>,
+) -> Result<PathBuf, String> {
+    if let Some(path) = flags.get("--cluster-root") {
+        if path.is_empty() {
+            return Err("--cluster-root must not be empty".to_string());
+        }
+        return Ok(PathBuf::from(path));
+    }
+    config
+        .and_then(|config| config.operator_config.as_ref())
+        .map(|config| config.cluster.center.root_dir.clone())
+        .ok_or_else(|| "missing required flag --cluster-root".to_string())
 }
 
 fn resolve_listen_addr(

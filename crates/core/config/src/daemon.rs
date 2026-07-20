@@ -11,6 +11,8 @@ use storage_factory::StorageConfig;
 mod agent;
 #[path = "daemon/application.rs"]
 mod application;
+#[path = "daemon/cluster.rs"]
+mod cluster;
 #[path = "daemon/command.rs"]
 mod command;
 #[path = "daemon/enforcement.rs"]
@@ -43,6 +45,12 @@ pub use agent::{
     SseEventContentRetention,
 };
 pub use application::{ApplicationProtocolConfig, SseDataPolicy};
+pub use cluster::{
+    ClusterCenterConfig, ClusterConfig, ClusterReportConfig,
+    DEFAULT_CLUSTER_REPORT_BATCH_MAX_TRACES, DEFAULT_CLUSTER_REPORT_BUNDLE_RETENTION_DAYS,
+    DEFAULT_CLUSTER_REPORT_INTERVAL_SECS, DEFAULT_CLUSTER_REPORT_MAX_RETRY_BACKOFF_SECS,
+    DEFAULT_CLUSTER_REPORT_RETRY_BACKOFF_SECS, DEFAULT_CLUSTER_REPORT_UPLOAD_TIMEOUT_SECS,
+};
 pub use command::CommandControlConfig;
 pub use enforcement::{
     EnforcementBackend, EnforcementBuiltinRuleConfig, EnforcementConfig, EnforcementDecision,

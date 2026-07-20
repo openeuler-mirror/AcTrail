@@ -14,26 +14,27 @@ use serde::{Deserialize, Serialize};
 use storage_factory::StorageConfig;
 
 use super::super::{
-    AgentInvocationConfig, ApplicationProtocolConfig, CommandControlConfig,
-    DEFAULT_ACTIVE_TRACE_MAX, DEFAULT_CONTROL_PENDING_CONNECTION_MAX,
-    DEFAULT_FINALIZATION_POLL_INTERVAL_MS, DEFAULT_FINALIZATION_TRACES_PER_CYCLE, DisabledOrPath,
-    EbpfCollectorConfig, EbpfEnabledMode, EnforcementBackend, EnforcementBuiltinRuleConfig,
-    EnforcementConfig, EnforcementMarkStrategy, EnforcementScope, FileBulkReadFastPathConfig,
-    FileBulkReadObservationConfig, FileMetadataRetention, FileObservationConfig,
-    FileRawEventRetention, FileTtyObservationConfig, FsEnumerateObservationConfig,
-    Http2DataContentRetention, HttpBodyRetention, HttpHeadersRetention, L0LlmCallRetention,
-    L1SseRetention, L2HttpRetention, L3Http2FrameRetention, L4PayloadRetention,
-    LlmRequestContentRetention, LlmResponseContentRetention, LlmToolCallRetention,
-    LlmUsageRetention, MemlockRlimit, NetworkControlConfig, NetworkControlSeccompSyscall,
-    PayloadBodyContentRetention, PayloadConfig, PayloadRedactionPolicy,
-    PayloadSocketCaptureBackend, PayloadSocketConfig, PayloadSocketSeccompSyscall,
-    PayloadStdioConfig, PayloadStdioStorageMode, PayloadTlsCaptureBackend, PayloadTlsConfig,
-    PayloadTlsLibrary, PayloadTlsLibraryPath, PayloadTlsResolver, PayloadTlsSeccompSyscall,
-    PayloadTlsSource, PayloadTlsSyncRuntimeLibraryPath, ProcessSeccompConfig,
-    ProcessSeccompSyscall, ResourceMetricsConfig, SeccompNotifyConfig, SemanticContentOwner,
-    SemanticRetentionConfig, SocketPermissions, SseDataPolicy, SseEventContentRetention,
-    StartupPluginFailurePolicy, StartupPluginLoadConfig, StartupPluginsConfig,
-    StorageRetentionConfig, TraceFinalizationConfig, WebServerConfig, WorkloadDiagnosticsConfig,
+    AgentInvocationConfig, ApplicationProtocolConfig, ClusterCenterConfig, ClusterConfig,
+    ClusterReportConfig, CommandControlConfig, DEFAULT_ACTIVE_TRACE_MAX,
+    DEFAULT_CONTROL_PENDING_CONNECTION_MAX, DEFAULT_FINALIZATION_POLL_INTERVAL_MS,
+    DEFAULT_FINALIZATION_TRACES_PER_CYCLE, DisabledOrPath, EbpfCollectorConfig, EbpfEnabledMode,
+    EnforcementBackend, EnforcementBuiltinRuleConfig, EnforcementConfig, EnforcementMarkStrategy,
+    EnforcementScope, FileBulkReadFastPathConfig, FileBulkReadObservationConfig,
+    FileMetadataRetention, FileObservationConfig, FileRawEventRetention, FileTtyObservationConfig,
+    FsEnumerateObservationConfig, Http2DataContentRetention, HttpBodyRetention,
+    HttpHeadersRetention, L0LlmCallRetention, L1SseRetention, L2HttpRetention,
+    L3Http2FrameRetention, L4PayloadRetention, LlmRequestContentRetention,
+    LlmResponseContentRetention, LlmToolCallRetention, LlmUsageRetention, MemlockRlimit,
+    NetworkControlConfig, NetworkControlSeccompSyscall, PayloadBodyContentRetention, PayloadConfig,
+    PayloadRedactionPolicy, PayloadSocketCaptureBackend, PayloadSocketConfig,
+    PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadStdioStorageMode,
+    PayloadTlsCaptureBackend, PayloadTlsConfig, PayloadTlsLibrary, PayloadTlsLibraryPath,
+    PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource,
+    PayloadTlsSyncRuntimeLibraryPath, ProcessSeccompConfig, ProcessSeccompSyscall,
+    ResourceMetricsConfig, SeccompNotifyConfig, SemanticContentOwner, SemanticRetentionConfig,
+    SocketPermissions, SseDataPolicy, SseEventContentRetention, StartupPluginFailurePolicy,
+    StartupPluginLoadConfig, StartupPluginsConfig, StorageRetentionConfig, TraceFinalizationConfig,
+    WebServerConfig, WorkloadDiagnosticsConfig,
 };
 use super::{
     OperatorConfig, validate_application_protocol_config, validate_enforcement_config,
@@ -48,6 +49,8 @@ use crate::provider_rules::ProviderRuleSetConfig;
 mod app;
 #[path = "document/base.rs"]
 mod base;
+#[path = "document/cluster.rs"]
+mod cluster;
 #[path = "document/command.rs"]
 mod command;
 #[path = "document/file.rs"]
@@ -65,6 +68,7 @@ mod semantic;
 
 use app::*;
 use base::*;
+use cluster::*;
 use command::*;
 use file::*;
 use helpers::*;
@@ -79,6 +83,7 @@ pub(super) struct OperatorDocument {
     control: ControlDocument,
     storage: StorageDocument,
     web: WebDocument,
+    cluster: ClusterDocument,
     export: ExportDocument,
     plugins: PluginsDocument,
     capture: CaptureDocument,
@@ -104,6 +109,7 @@ impl Default for OperatorDocument {
             control: ControlDocument::default(),
             storage: StorageDocument::default(),
             web: WebDocument::default(),
+            cluster: ClusterDocument::default(),
             export: ExportDocument::default(),
             plugins: PluginsDocument::default(),
             capture: CaptureDocument::default(),
@@ -205,6 +211,7 @@ impl OperatorDocument {
                     .map(|duration| duration.as_millis().to_string())
                     .unwrap_or_else(|| "disabled".to_string()),
             },
+            cluster: ClusterDocument::from_config(&config.cluster),
             export: ExportDocument {
                 snapshot: SnapshotExportDocument {
                     graph_schema_version: config.export_config.graph_schema_version.clone(),
@@ -375,6 +382,7 @@ impl OperatorDocument {
             storage: self.storage.to_config()?,
             storage_retention: self.storage.retention.to_config()?,
             web: self.web.to_config()?,
+            cluster: self.cluster.to_config()?,
             export_config: self.export.snapshot.to_config(),
             export_runtime: self.export.runtime.to_config()?,
             startup_plugins: self.plugins.to_config()?,

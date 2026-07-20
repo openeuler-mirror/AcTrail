@@ -6,6 +6,8 @@ mod action_tree_projection;
 mod action_tree_roles;
 #[path = "view/actions.rs"]
 mod actions;
+#[path = "view/cluster.rs"]
+pub(crate) mod cluster;
 #[path = "view/commands.rs"]
 mod commands;
 #[path = "view/events.rs"]
