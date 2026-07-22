@@ -187,22 +187,10 @@ impl EbpfCollector {
     ) -> Result<(), CollectorError> {
         match event.kind {
             decode::PROC_EVENT_FORK => {
-                let parent_map_pid = event.pid;
-                let child_map_pid = event.aux;
-                let parent = decode::resolve_bound_event_observation(
-                    event.trace_id,
-                    parent_map_pid,
-                    event.pid_generation,
-                    &self.bindings,
-                )
-                .map_err(|error| CollectorError::new("file_lifecycle_parent", error))?;
-                let child = decode::resolve_bound_event_observation(
-                    event.trace_id,
-                    child_map_pid,
-                    event.aux_generation,
-                    &self.bindings,
-                )
-                .map_err(|error| CollectorError::new("file_lifecycle_child", error))?;
+                let parent = decode::fork_parent_observation(event, &self.bindings)
+                    .map_err(|error| CollectorError::new(error.stage, error.message))?;
+                let child = decode::fork_child_observation(event, &self.bindings)
+                    .map_err(|error| CollectorError::new(error.stage, error.message))?;
                 self.file_tracker
                     .inherit_process(event.trace_id, &parent, child);
             }

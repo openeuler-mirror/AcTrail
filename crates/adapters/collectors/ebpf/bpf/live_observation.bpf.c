@@ -17,6 +17,7 @@ int handle_sched_process_fork(struct bpf_raw_tracepoint_args *ctx) {
     __u32 parent_host_pid = 0;
     __u32 child_host_pid = 0;
     __u64 child_start_boottime_ns = 0;
+    __u64 inherited_trace_id = 0;
     if (!parent_task || !child_task) {
         return 0;
     }
@@ -32,25 +33,59 @@ int handle_sched_process_fork(struct bpf_raw_tracepoint_args *ctx) {
         &parent_tid,
         &lookup_flags
     );
-    struct actrail_pending_proc_op op = {};
+    struct actrail_fork_trace_binding binding = {};
+    struct actrail_event event = {};
     __u32 child_kernel_pid = child_host_pid;
 
-    if (!parent_pid || !trace_id) {
+    if (trace_id) {
+        inherited_trace_id = *trace_id;
+    } else {
+        struct actrail_fork_trace_binding *parent_binding =
+            bpf_map_lookup_elem(&fork_trace_bindings, &parent_host_pid);
+
+        if (parent_binding) {
+            inherited_trace_id = parent_binding->trace_id;
+            parent_pid = parent_host_pid;
+            lookup_flags = ACTRAIL_TRACE_LOOKUP_FLAG_HOST_FALLBACK;
+        }
+    }
+
+    if (!parent_pid || !inherited_trace_id) {
         return 0;
     }
     if (!child_kernel_pid || !child_start_boottime_ns) {
         return 0;
     }
+    if (child_host_pid == parent_host_pid) {
+        return 0;
+    }
 
-    op.trace_id = *trace_id;
-    op.parent_generation = current_process_start_time(parent_pid);
-    op.child_generation = child_start_boottime_ns;
-    op.parent_pid = parent_pid;
-    op.parent_host_pid = parent_host_pid;
-    op.child_host_pid = child_host_pid;
-    op.lookup_flags = lookup_flags;
-    bpf_map_update_elem(&pending_child_proc_ops, &child_kernel_pid, &op, BPF_ANY);
-    return 0;
+    binding.trace_id = inherited_trace_id;
+    binding.parent_generation = current_process_start_time(parent_pid);
+    binding.child_generation = child_start_boottime_ns;
+    binding.parent_pid = parent_pid;
+
+    /* sched_process_fork runs before wake_up_new_task().  Publish the child
+     * binding here so its first post-fork syscall is already controlled. */
+    if (bpf_map_update_elem(
+            &fork_trace_bindings,
+            &child_kernel_pid,
+            &binding,
+            BPF_ANY) != 0) {
+        event_transport_diag_inc(ACTRAIL_FORK_IDENTITY_PUBLISH_FAIL);
+        return 0;
+    }
+    init_event(&event, ACTRAIL_PROC_FORK, parent_pid, inherited_trace_id);
+    event.aux = 0;
+    event.reserved = ACTRAIL_PROC_FORK_CHILD_HOST_ONLY;
+    if (lookup_flags & ACTRAIL_TRACE_LOOKUP_FLAG_HOST_FALLBACK) {
+        event.reserved |= ACTRAIL_PROC_FORK_PARENT_HOST_ONLY;
+    }
+    event.host_pid = parent_host_pid;
+    event.aux_host_pid = child_host_pid;
+    event.pid_generation = binding.parent_generation;
+    event.aux_generation = child_start_boottime_ns;
+    return emit_event(ctx, &event);
 }
 
 SEC("tracepoint/sched/sched_process_exec")
@@ -64,7 +99,7 @@ int handle_sched_process_exec(struct sched_process_exec_ctx *ctx) {
     if (!pid) {
         return 0;
     }
-    emit_pending_child_proc_op(ctx, context_pid);
+    finalize_fork_trace_binding(current_kernel_tgid());
     trace_id = lookup_trace_for_context_pid(context_pid, &pid, &tid, &lookup_flags);
     if (!trace_id) {
         return 0;
@@ -79,24 +114,34 @@ int handle_sched_process_exit(struct sched_process_exit_ctx *ctx) {
     __u32 tid = 0;
     __u32 lookup_flags = 0;
     __u64 pid_tgid;
+    __u64 kernel_pid_tgid = current_kernel_pid_tgid();
     __u64 *trace_id;
     __u32 context_pid = (__u32)ctx->pid;
+    __u32 host_pid = kernel_pid_tgid >> 32;
+    __u32 host_tid = (__u32)kernel_pid_tgid;
     struct actrail_event event;
 
     trace_id = lookup_trace_for_context_pid(context_pid, &pid, &tid, &lookup_flags);
     pid_tgid = ((__u64)pid << 32) | tid;
     if (!pid) {
+        if (host_pid && host_pid == host_tid) {
+            bpf_map_delete_elem(&fork_trace_bindings, &host_pid);
+        }
         return 0;
     }
     if (pid != tid) {
         return 0;
     }
-    emit_pending_child_proc_op(ctx, context_pid);
-    trace_id = lookup_trace_for_context_pid(context_pid, &pid, &tid, &lookup_flags);
     if (!trace_id) {
+        finalize_fork_trace_binding(host_pid);
+        trace_id = lookup_trace_for_context_pid(context_pid, &pid, &tid, &lookup_flags);
+    }
+    if (!trace_id) {
+        if (host_pid) {
+            bpf_map_delete_elem(&fork_trace_bindings, &host_pid);
+        }
         return 0;
     }
-
     init_event(&event, ACTRAIL_PROC_EXIT, pid, *trace_id);
     attach_exit_code(&event, pid_tgid);
     emit_event(ctx, &event);
@@ -104,6 +149,9 @@ int handle_sched_process_exit(struct sched_process_exit_ctx *ctx) {
     delete_file_bulk_read_fast_process(pid, event.pid_generation);
     bpf_map_delete_elem(&tracked_traces, &pid);
     delete_process_start_time(pid);
+    if (host_pid) {
+        bpf_map_delete_elem(&fork_trace_bindings, &host_pid);
+    }
     return 0;
 }
 

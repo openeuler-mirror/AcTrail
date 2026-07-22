@@ -84,10 +84,10 @@ flush_every_spans = 1
 
 [capture]
 profile_name = "fanotify-enforcement-e2e"
-capabilities = ["enforcement-file-permission-fanotify"]
+capabilities = ["proc-lifecycle", "enforcement-file-permission-fanotify"]
 
 [ebpf]
-enabled = false
+enabled = true
 memlock_rlimit = "inherit"
 tracked_process_max_entries = 4096
 pending_operation_max_entries = 4096
@@ -258,7 +258,7 @@ def wait_for_agent_output(process: subprocess.Popen[str], timeout_sec: float) ->
         if line:
             print(line, end="")
             lines.append(line)
-            if "denied=" in line:
+            if "pre_exec_redirection=" in line:
                 break
         if process.poll() is not None:
             break
@@ -299,7 +299,15 @@ def wait_for_enforcement_events(
         output = run_checked(
             [str(actrailviewer), "events", "--config", str(config_path), "--trace-id", "1"]
         )
-        if all(value in output for value in ["Enforcement", "allow-file", "deny-file"]):
+        if all(
+            value in output
+            for value in [
+                "Enforcement",
+                "allow-file",
+                "deny-file",
+                "deny-pre-exec-redirection",
+            ]
+        ):
             return output
         time.sleep(sleep_sec)
     raise RuntimeError("actrailviewer did not show expected enforcement events")
@@ -330,11 +338,18 @@ def main() -> int:
         tmp = Path(raw_tmp)
         allowed = tmp / "targets" / "allowed.txt"
         denied = tmp / "targets" / "denied.txt"
+        pre_exec_denied = tmp / "targets" / "pre-exec-denied.txt"
         rules = tmp / "rules.conf"
         config = tmp / "operator.conf"
         write_text(allowed, "allowed\n")
         write_text(denied, "denied\n")
-        write_text(rules, f"allow-file allow open {allowed}\ndeny-file deny open {denied}\n")
+        write_text(pre_exec_denied, "pre-exec denied\n")
+        write_text(
+            rules,
+            f"allow-file allow open {allowed}\n"
+            f"deny-file deny open {denied}\n"
+            f"deny-pre-exec-redirection deny open {pre_exec_denied}\n",
+        )
         write_text(config, operator_config(tmp, rules))
 
         daemon = subprocess.Popen(
@@ -353,6 +368,8 @@ def main() -> int:
                     str(allowed),
                     "--denied-path",
                     str(denied),
+                    "--pre-exec-denied-path",
+                    str(pre_exec_denied),
                 ],
                 text=True,
                 stdin=subprocess.PIPE,
@@ -380,6 +397,10 @@ def main() -> int:
                     raise RuntimeError("agent did not confirm allowed file access")
                 if "denied=permission_denied" not in agent_output:
                     raise RuntimeError("agent did not confirm denied file access")
+                if "pre_exec_redirection=permission_denied" not in agent_output:
+                    raise RuntimeError(
+                        "agent did not confirm fork-before-exec redirection was denied"
+                    )
                 viewer_output = wait_for_enforcement_events(
                     actrailctl,
                     actrailviewer,

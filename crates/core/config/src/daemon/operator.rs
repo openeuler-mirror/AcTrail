@@ -452,11 +452,17 @@ fn validate_enforcement_config(
     config: &EnforcementConfig,
     capabilities: &[CapabilityRequest],
 ) -> Result<(), String> {
-    if capability_requested(capabilities, &Capability::EnforcementFilePermissionFanotify)
-        && !config.enabled
-    {
+    let enforcement_requested =
+        capability_requested(capabilities, &Capability::EnforcementFilePermissionFanotify);
+    if enforcement_requested && !config.enabled {
         return Err(
             "enforcement-file-permission-fanotify requires enforcement_enabled=true".to_string(),
+        );
+    }
+    if enforcement_requested && !capability_requested(capabilities, &Capability::ProcLifecycle) {
+        return Err(
+            "enforcement-file-permission-fanotify requires proc-lifecycle so forked children are controlled before exec"
+                .to_string(),
         );
     }
     Ok(())

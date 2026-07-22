@@ -417,7 +417,13 @@ impl StorageAttachService {
                 Ok(())
             })?;
         }
-        self.persist_enforcement_outcomes(trace_runtime, enforcement_outcomes)?;
+        self.persist_enforcement_outcomes(
+            trace_runtime,
+            crate::services::enforcement::EnforcementDrain {
+                outcomes: enforcement_outcomes,
+                process_records: Vec::new(),
+            },
+        )?;
         self.process_live_event_batch(trace_runtime, network_events)?;
         Ok(())
     }
@@ -492,20 +498,25 @@ impl StorageAttachService {
         &mut self,
         trace_runtime: &trace_runtime::TraceRuntime,
     ) -> Result<(), ControlError> {
-        let outcomes = self.enforcement.drain_due(
+        let drain = self.enforcement.drain_due(
             trace_runtime,
-            &self.process_registry,
+            &mut self.process_registry,
             &self.identity_reader,
+            &self.collector,
             &self.control_plugins,
         )?;
-        self.persist_enforcement_outcomes(trace_runtime, outcomes)
+        self.persist_enforcement_outcomes(trace_runtime, drain)
     }
 
     fn persist_enforcement_outcomes(
         &mut self,
         trace_runtime: &TraceRuntime,
-        outcomes: Vec<crate::services::enforcement::EnforcementOutcomeDraft>,
+        drain: crate::services::enforcement::EnforcementDrain,
     ) -> Result<(), ControlError> {
+        let crate::services::enforcement::EnforcementDrain {
+            outcomes,
+            process_records,
+        } = drain;
         let mut events = Vec::new();
         for outcome in outcomes {
             if let Some(alert) = outcome.boundary_alert {
@@ -555,7 +566,11 @@ impl StorageAttachService {
             );
             events.push(event);
         }
-        self.persist_observed_event_batch(trace_runtime, events)
+        self.persist_observed_event_batch_with_process_records(
+            trace_runtime,
+            events,
+            process_records,
+        )
     }
 
     pub(super) fn next_diagnostic_id(&mut self) -> Result<DiagnosticId, ControlError> {

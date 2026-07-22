@@ -64,6 +64,7 @@ pub struct EbpfCollector {
     active_pid_namespace: Option<NamespaceIdentity>,
     binding_gap_drops: u64,
     binding_gap_lifecycle_skips: u64,
+    clock_ticks_per_second: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -78,6 +79,51 @@ pub struct EbpfCollectorDebugSnapshot {
     pub attached_programs: Vec<String>,
     pub last_raw_sample_count: usize,
     pub tracked_trace_id: Option<TraceId>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ForkTraceLookup {
+    Unavailable,
+    Unbound,
+    Bound(KernelForkTraceBinding),
+    IntegrityFailure { failed_publications: u64 },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KernelForkTraceBinding {
+    trace_id: TraceId,
+    host_pid: u32,
+    start_boottime_ns: u64,
+    start_time_ticks: u64,
+}
+
+impl KernelForkTraceBinding {
+    pub fn trace_id(&self) -> TraceId {
+        self.trace_id
+    }
+
+    pub fn validate_and_enrich(
+        &self,
+        mut observation: ProcessObservation,
+    ) -> Result<ProcessObservation, CollectorError> {
+        let host = observation.host.as_mut().ok_or_else(|| {
+            CollectorError::new(
+                "fork_trace_identity",
+                "procfs observation has no host coordinates",
+            )
+        })?;
+        if host.pid != self.host_pid || host.start_time_ticks != self.start_time_ticks {
+            return Err(CollectorError::new(
+                "fork_trace_identity",
+                format!(
+                    "kernel fork binding generation mismatch for host PID {}",
+                    self.host_pid
+                ),
+            ));
+        }
+        host.start_boottime_ns = Some(self.start_boottime_ns);
+        Ok(observation)
+    }
 }
 
 impl EbpfCollector {
@@ -112,7 +158,50 @@ impl EbpfCollector {
             active_pid_namespace: None,
             binding_gap_drops: 0,
             binding_gap_lifecycle_skips: 0,
+            clock_ticks_per_second: clock_ticks_per_second(),
         }
+    }
+
+    pub fn fork_trace_lookup(&self, host_pid: u32) -> Result<ForkTraceLookup, CollectorError> {
+        let Some(runtime) = self.runtime.as_ref() else {
+            return Ok(ForkTraceLookup::Unavailable);
+        };
+        let binding = runtime.fork_trace_binding(host_pid).map_err(loader_error)?;
+        let Some(binding) = binding else {
+            let failed_publications = runtime
+                .fork_identity_publish_failures()
+                .map_err(loader_error)?;
+            return if failed_publications == 0 {
+                Ok(ForkTraceLookup::Unbound)
+            } else {
+                Ok(ForkTraceLookup::IntegrityFailure {
+                    failed_publications,
+                })
+            };
+        };
+        let clock_ticks_per_second = self.clock_ticks_per_second.ok_or_else(|| {
+            CollectorError::new(
+                "fork_trace_identity",
+                "sysconf(_SC_CLK_TCK) did not return a positive value",
+            )
+        })?;
+        let start_time_ticks = u64::try_from(
+            u128::from(binding.child_start_boottime_ns)
+                .saturating_mul(u128::from(clock_ticks_per_second))
+                / 1_000_000_000_u128,
+        )
+        .map_err(|_| {
+            CollectorError::new(
+                "fork_trace_identity",
+                "fork start generation does not fit procfs clock ticks",
+            )
+        })?;
+        Ok(ForkTraceLookup::Bound(KernelForkTraceBinding {
+            trace_id: binding.trace_id,
+            host_pid,
+            start_boottime_ns: binding.child_start_boottime_ns,
+            start_time_ticks,
+        }))
     }
 
     pub fn probe_result(&self) -> &EbpfProbeResult {
@@ -218,6 +307,7 @@ impl EbpfCollector {
             .map(|tracked| tracked.map_pid)
             .unwrap_or(pid);
         if let Some(runtime) = self.runtime.as_mut() {
+            runtime.untrack_fork_host_pid(pid).map_err(loader_error)?;
             if let Some(tracked) = tracked.as_ref() {
                 runtime
                     .sweep_suppressed_fds_for_process(map_pid, tracked.kernel_start_time)
@@ -242,6 +332,7 @@ impl EbpfCollector {
             .map(|tracked| tracked.map_pid)
             .unwrap_or(pid);
         if let Some(runtime) = self.runtime.as_mut() {
+            runtime.untrack_fork_host_pid(pid).map_err(loader_error)?;
             if let Some(tracked) = tracked.as_ref() {
                 runtime
                     .sweep_suppressed_fds_for_process(map_pid, tracked.kernel_start_time)
@@ -703,6 +794,7 @@ impl CollectorInstance for EbpfCollector {
 
     fn unbind_trace(&mut self, trace_id: TraceId) -> Result<(), CollectorError> {
         if let Some(runtime) = self.runtime.as_mut() {
+            runtime.untrack_fork_trace(trace_id).map_err(loader_error)?;
             cleanup_suppressed_fds_for_trace(runtime, &mut self.suppressed_fds, trace_id)?;
             for tracked in self.bindings.remove_trace(trace_id) {
                 runtime.untrack_pid(tracked.map_pid).map_err(loader_error)?;
@@ -746,6 +838,11 @@ impl CollectorInstance for EbpfCollector {
 
 fn loader_error(error: LoaderError) -> CollectorError {
     CollectorError::new(error.stage, error.message)
+}
+
+fn clock_ticks_per_second() -> Option<u64> {
+    let value = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+    (value > 0).then_some(value as u64)
 }
 
 fn probe_result_for_config(

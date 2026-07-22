@@ -128,8 +128,21 @@ impl FileTracker {
     }
 
     pub(crate) fn exec_process(&mut self, trace_id: TraceId, process: ProcessObservation) {
-        let key = ProcessFileKey { trace_id, process };
-        self.processes.entry(key).or_default();
+        let key = ProcessFileKey {
+            trace_id,
+            process: process.clone(),
+        };
+        if self.processes.contains_key(&key) {
+            return;
+        }
+        let provisional = process.host.clone().map(|host| ProcessFileKey {
+            trace_id,
+            process: ProcessObservation::host(host),
+        });
+        let state = provisional
+            .and_then(|provisional| self.processes.remove(&provisional))
+            .unwrap_or_default();
+        self.processes.insert(key, state);
     }
 
     pub(crate) fn remove_trace(&mut self, trace_id: TraceId) {
@@ -513,6 +526,54 @@ fn absolute_path(path: &str) -> Option<String> {
         return None;
     }
     Some(lexically_normalize_path(path))
+}
+
+#[cfg(test)]
+mod tests {
+    use model_core::ids::TraceId;
+    use model_core::process::{
+        HostProcessCoordinates, NamespaceIdentity, NamespaceProcessCoordinates, ProcessObservation,
+    };
+
+    use super::{FileTracker, ProcessFileKey};
+
+    #[test]
+    fn exec_enrichment_preserves_state_inherited_by_host_only_fork() {
+        let trace_id = TraceId::new(3);
+        let parent = ProcessObservation::host(
+            HostProcessCoordinates::new(100, 0).with_start_boottime_ns(10),
+        );
+        let child_host = ProcessObservation::host(
+            HostProcessCoordinates::new(200, 0).with_start_boottime_ns(20),
+        );
+        let child_enriched = child_host
+            .clone()
+            .with_namespace(NamespaceProcessCoordinates::new(
+                NamespaceIdentity::new("pid:[3]"),
+                2,
+                0,
+            ));
+        let mut tracker = FileTracker::default();
+        tracker.seed_process(trace_id, parent.clone(), Some("/work".to_string()));
+        tracker.inherit_process(trace_id, &parent, child_host.clone());
+
+        tracker.exec_process(trace_id, child_enriched.clone());
+
+        assert!(!tracker.processes.contains_key(&ProcessFileKey {
+            trace_id,
+            process: child_host,
+        }));
+        assert_eq!(
+            tracker
+                .processes
+                .get(&ProcessFileKey {
+                    trace_id,
+                    process: child_enriched,
+                })
+                .and_then(|state| state.cwd.as_deref()),
+            Some("/work")
+        );
+    }
 }
 
 fn open_requests_creation(event: &KernelFilePathEvent) -> bool {

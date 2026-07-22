@@ -19,7 +19,7 @@ enabled = false
 
 [capture]
 profile_name = "file-policy-dynamic-demo"
-capabilities = ["enforcement-file-permission-fanotify"]
+capabilities = ["proc-lifecycle", "enforcement-file-permission-fanotify"]
 
 [ebpf]
 enabled = false

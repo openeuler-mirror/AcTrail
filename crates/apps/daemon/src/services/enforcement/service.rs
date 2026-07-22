@@ -10,9 +10,11 @@ use collector_capability::CollectorDescriptor;
 use config_core::capture_profile::FileEnforcementSeccompRequirements;
 use config_core::daemon::{EnforcementConfig, EnforcementDecision};
 use control_contract::reply::ControlError;
+use ebpf_collector::EbpfCollector;
 use ebpf_collector::procfs::ProcfsIdentityReader;
 use model_core::capability::{Capability, CapabilityDescriptor, CapabilityField, GuaranteeClass};
 use model_core::ids::CollectorName;
+use model_core::process::{ProcessIdentity, ProcessRecord};
 use plugin_system::{
     FilePolicyApplyRequest, FilePolicyApplyResult, FilePolicyHost, FilePolicyListFilter,
     FilePolicyListResult, FilePolicyMatchDryRunRequest, FilePolicyMatchDryRunResult,
@@ -41,6 +43,11 @@ use super::rules::EnforcementRules;
 use crate::services::control_runtime::ControlPluginRuntime;
 
 pub(in crate::services) const COLLECTOR_NAME: &str = "fanotify-enforcement";
+
+pub(in crate::services) struct EnforcementDrain {
+    pub(in crate::services) outcomes: Vec<EnforcementOutcomeDraft>,
+    pub(in crate::services) process_records: Vec<ProcessRecord>,
+}
 
 pub(in crate::services) struct FanotifyEnforcementService {
     backend: Option<Arc<Mutex<FanotifyBackend>>>,
@@ -132,10 +139,11 @@ impl FanotifyEnforcementService {
     pub(in crate::services) fn drain_due(
         &mut self,
         trace_runtime: &TraceRuntime,
-        process_registry: &ProcessIdentityManager,
+        process_registry: &mut ProcessIdentityManager,
         identity_reader: &ProcfsIdentityReader,
+        collector: &EbpfCollector,
         control_plugins: &ControlPluginRuntime,
-    ) -> Result<Vec<EnforcementOutcomeDraft>, ControlError> {
+    ) -> Result<EnforcementDrain, ControlError> {
         match self.backend.as_mut() {
             Some(backend) => backend
                 .lock()
@@ -146,10 +154,14 @@ impl FanotifyEnforcementService {
                     trace_runtime,
                     process_registry,
                     identity_reader,
+                    collector,
                     control_plugins,
                 )
                 .map_err(|message| ControlError::new("fanotify_enforcement", message)),
-            None => Ok(Vec::new()),
+            None => Ok(EnforcementDrain {
+                outcomes: Vec::new(),
+                process_records: Vec::new(),
+            }),
         }
     }
 
@@ -330,11 +342,13 @@ impl FanotifyBackend {
     fn drain_due(
         &mut self,
         trace_runtime: &TraceRuntime,
-        process_registry: &ProcessIdentityManager,
+        process_registry: &mut ProcessIdentityManager,
         identity_reader: &ProcfsIdentityReader,
+        collector: &EbpfCollector,
         control_plugins: &ControlPluginRuntime,
-    ) -> Result<Vec<EnforcementOutcomeDraft>, String> {
+    ) -> Result<EnforcementDrain, String> {
         let mut drafts = Vec::new();
+        let mut fork_identity_records = BTreeMap::<ProcessIdentity, ProcessRecord>::new();
         self.wake_fd.drain()?;
         self.drain_plugin_completions(&mut drafts)?;
         prune_reusable_decisions(trace_runtime, &mut self.reusable_decisions);
@@ -358,6 +372,7 @@ impl FanotifyBackend {
                 trace_runtime,
                 process_registry,
                 identity_reader,
+                collector,
                 control_plugins,
                 reusable_decisions,
                 in_flight_by_rule,
@@ -365,10 +380,14 @@ impl FanotifyBackend {
                 completion_tx.clone(),
                 metadata,
                 &mut drafts,
+                &mut fork_identity_records,
             )
         })?;
         self.drain_plugin_completions(&mut drafts)?;
-        Ok(drafts)
+        Ok(EnforcementDrain {
+            outcomes: drafts,
+            process_records: fork_identity_records.into_values().collect(),
+        })
     }
 
     fn drain_plugin_completions(

@@ -123,14 +123,29 @@ impl StorageAttachService {
         trace_runtime: &TraceRuntime,
         events: Vec<DomainEvent>,
     ) -> Result<(), ControlError> {
-        if events.is_empty() {
+        self.persist_observed_event_batch_with_process_records(trace_runtime, events, Vec::new())
+    }
+
+    pub(super) fn persist_observed_event_batch_with_process_records(
+        &mut self,
+        trace_runtime: &TraceRuntime,
+        events: Vec<DomainEvent>,
+        process_records: Vec<ProcessRecord>,
+    ) -> Result<(), ControlError> {
+        if events.is_empty() && process_records.is_empty() {
             return Ok(());
         }
         let input_events = events.len();
         let mut retained_events = 0usize;
         let mut semantic_action_count = 0usize;
         let mut semantic_link_count = 0usize;
-        let mut batch = LiveEventBatch::default();
+        let mut batch = LiveEventBatch {
+            process_records: process_records
+                .into_iter()
+                .map(|record| (record.identity, record))
+                .collect(),
+            ..LiveEventBatch::default()
+        };
         for event in events {
             self.mark_semantic_projection_dirty(event.envelope.trace_id);
             let output = self.semantic_actions.observe_event(&event);

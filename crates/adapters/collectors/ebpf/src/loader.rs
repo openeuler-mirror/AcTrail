@@ -60,6 +60,10 @@ const FILE_BULK_READ_FAST_PROCESS_VALUE_SIZE: usize = std::mem::size_of::<u64>()
 const FILE_BULK_READ_FAST_FD_KEY_SIZE: usize =
     std::mem::size_of::<u32>() + std::mem::size_of::<u32>() + std::mem::size_of::<u64>();
 const LIBBPF_DEBUG_ENV: &str = "ACTRAIL_EBPF_LIBBPF_DEBUG";
+const FORK_TRACE_BINDING_TRACE_ID_OFFSET: usize = 0;
+const FORK_TRACE_BINDING_CHILD_GENERATION_OFFSET: usize = 16;
+const FORK_TRACE_BINDING_VALUE_SIZE: usize = 32;
+const FORK_IDENTITY_PUBLISH_FAIL_COUNTER: u32 = 3;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LoaderError {
@@ -74,6 +78,12 @@ impl LoaderError {
             message: message.into(),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ForkTraceBinding {
+    pub(crate) trace_id: TraceId,
+    pub(crate) child_start_boottime_ns: u64,
 }
 
 pub struct EbpfProgramLoader {
@@ -101,6 +111,7 @@ pub struct EbpfRuntime {
     attached_capabilities: BTreeSet<Capability>,
     tracked_traces: MapHandle,
     process_start_times: MapHandle,
+    fork_trace_bindings: MapHandle,
     pid_namespace: MapHandle,
     suppressed_fds: MapHandle,
     suppressed_fd_index: MapHandle,
@@ -182,8 +193,8 @@ impl EbpfProgramLoader {
         )?;
         resize_map(
             &mut open_object,
-            "pending_child_proc_ops",
-            self.config.pending_operation_max_entries,
+            "fork_trace_bindings",
+            self.config.tracked_process_max_entries,
         )?;
         resize_map(
             &mut open_object,
@@ -310,6 +321,8 @@ impl EbpfRuntime {
         let tracked_traces = map_handle(&object, "tracked_traces", "tracked_map")?;
         let process_start_times =
             map_handle(&object, "process_start_times", "process_start_time_map")?;
+        let fork_trace_bindings =
+            map_handle(&object, "fork_trace_bindings", "fork_trace_bindings")?;
         let pid_namespace = map_handle(&object, "pid_namespace", "pid_namespace_map")?;
         let suppressed_fds = map_handle(&object, "suppressed_fds", "suppressed_fds")?;
         let suppressed_fd_index =
@@ -405,6 +418,7 @@ impl EbpfRuntime {
             attached_capabilities,
             tracked_traces,
             process_start_times,
+            fork_trace_bindings,
             pid_namespace,
             suppressed_fds,
             suppressed_fd_index,
@@ -557,6 +571,57 @@ impl EbpfRuntime {
                     })
             })
             .transpose()
+    }
+
+    pub(crate) fn fork_trace_binding(
+        &self,
+        host_pid: u32,
+    ) -> Result<Option<ForkTraceBinding>, LoaderError> {
+        let key = host_pid.to_ne_bytes();
+        self.fork_trace_bindings
+            .lookup(&key, MapFlags::ANY)
+            .map_err(|error| LoaderError::new("fork_trace_binding", error.to_string()))?
+            .map(|value| parse_fork_trace_binding(&value))
+            .transpose()
+    }
+
+    pub(crate) fn fork_identity_publish_failures(&self) -> Result<u64, LoaderError> {
+        read_event_transport_counter(
+            &self.event_transport_diagnostics,
+            FORK_IDENTITY_PUBLISH_FAIL_COUNTER,
+        )
+    }
+
+    pub(crate) fn untrack_fork_host_pid(&self, host_pid: u32) -> Result<(), LoaderError> {
+        let key = host_pid.to_ne_bytes();
+        if self
+            .fork_trace_bindings
+            .lookup(&key, MapFlags::ANY)
+            .map_err(|error| LoaderError::new("fork_trace_binding", error.to_string()))?
+            .is_some()
+        {
+            self.fork_trace_bindings
+                .delete(&key)
+                .map_err(|error| LoaderError::new("fork_trace_binding", error.to_string()))?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn untrack_fork_trace(&self, trace_id: TraceId) -> Result<(), LoaderError> {
+        for key in self.fork_trace_bindings.keys().collect::<Vec<_>>() {
+            let binding = self
+                .fork_trace_bindings
+                .lookup(&key, MapFlags::ANY)
+                .map_err(|error| LoaderError::new("fork_trace_binding", error.to_string()))?
+                .map(|value| parse_fork_trace_binding(&value))
+                .transpose()?;
+            if binding.is_some_and(|binding| binding.trace_id == trace_id) {
+                self.fork_trace_bindings
+                    .delete(&key)
+                    .map_err(|error| LoaderError::new("fork_trace_binding", error.to_string()))?;
+            }
+        }
+        Ok(())
     }
 
     pub fn lookup_socket_fd_generation(
@@ -727,6 +792,34 @@ fn read_event_transport_counter(map: &MapHandle, counter_id: u32) -> Result<u64,
                 format!("missing counter {counter_id}"),
             )
         })
+}
+
+fn parse_fork_trace_binding(value: &[u8]) -> Result<ForkTraceBinding, LoaderError> {
+    if value.len() != FORK_TRACE_BINDING_VALUE_SIZE {
+        return Err(LoaderError::new(
+            "fork_trace_binding",
+            format!("unexpected fork trace binding size {}", value.len()),
+        ));
+    }
+    let trace_id = value[FORK_TRACE_BINDING_TRACE_ID_OFFSET..][..8]
+        .try_into()
+        .map(u64::from_ne_bytes)
+        .map(TraceId::new)
+        .map_err(|_| LoaderError::new("fork_trace_binding", "invalid trace id field"))?;
+    let child_start_boottime_ns = value[FORK_TRACE_BINDING_CHILD_GENERATION_OFFSET..][..8]
+        .try_into()
+        .map(u64::from_ne_bytes)
+        .map_err(|_| LoaderError::new("fork_trace_binding", "invalid child generation field"))?;
+    if trace_id.get() == 0 || child_start_boottime_ns == 0 {
+        return Err(LoaderError::new(
+            "fork_trace_binding",
+            "fork trace binding contains an empty identity",
+        ));
+    }
+    Ok(ForkTraceBinding {
+        trace_id,
+        child_start_boottime_ns,
+    })
 }
 
 fn file_bulk_read_fast_process_key(
