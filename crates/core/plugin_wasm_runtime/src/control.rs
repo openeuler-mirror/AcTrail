@@ -6,7 +6,7 @@ use plugin_system::{
     ControlDecider, ControlDecisionBudget, ControlDecisionRequest, ControlDecisionResponse,
     ControlVerdict, DecisionScope, FilePolicyHost, PluginCommandBudget, PluginCommandRequest,
     PluginCommandResponse, PluginHostGrants, PluginHostcallMetricsSource, PluginManifest,
-    PluginRuntimeError, PluginRuntimeKind, PluginWasmAbi,
+    PluginRuntimeError, PluginRuntimeKind, PluginWasmAbi, RuntimePluginConfig,
 };
 use serde_json::{Map, Value, json};
 use wasmtime::{Engine, Memory, Module, TypedFunc};
@@ -128,6 +128,21 @@ impl ControlDecider for WasmControlDecider {
         budget: PluginCommandBudget,
     ) -> Result<PluginCommandResponse, PluginRuntimeError> {
         self.inner.handle_command(request, budget)
+    }
+
+    fn runtime_config(&self) -> Result<RuntimePluginConfig, PluginRuntimeError> {
+        self.inner.runtime_config()
+    }
+
+    fn validate_runtime_config(
+        &self,
+        config_json: &str,
+    ) -> Result<Vec<String>, PluginRuntimeError> {
+        self.inner.validate_runtime_config(config_json)
+    }
+
+    fn submit_runtime_config(&self, config_json: &str) -> Result<(), PluginRuntimeError> {
+        self.inner.submit_runtime_config(config_json)
     }
 }
 

@@ -1,5 +1,6 @@
 //! Concrete daemon services backed by procfs bootstrap and storage persistence.
 
+pub(crate) mod alert_ingress;
 pub(crate) mod application_protocol;
 pub(crate) mod attach;
 pub(crate) mod command_control;
@@ -13,6 +14,7 @@ pub(crate) mod live;
 pub(crate) mod network_control;
 pub(crate) mod payload;
 pub(crate) mod payload_gate;
+pub(crate) mod post_trace;
 pub(crate) mod process_seccomp;
 pub(crate) mod resource_metrics;
 pub(crate) mod retention;

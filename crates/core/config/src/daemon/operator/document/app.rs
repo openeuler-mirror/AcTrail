@@ -204,12 +204,14 @@ pub(super) struct EnforcementDocument {
     pub mark_strategy: String,
     pub audit_enabled: bool,
     pub event_buffer_bytes: u32,
+    pub seccomp_syscalls: Vec<String>,
+    pub seccomp_path_max_bytes: u32,
 }
 
 impl Default for EnforcementDocument {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             backend: "fanotify".to_string(),
             scope: "trace".to_string(),
             rules_path: "/etc/actrail/enforcement-rules.conf".to_string(),
@@ -218,6 +220,8 @@ impl Default for EnforcementDocument {
             mark_strategy: "parent-directories".to_string(),
             audit_enabled: true,
             event_buffer_bytes: 65536,
+            seccomp_syscalls: vec!["mkdir".to_string(), "rmdir".to_string()],
+            seccomp_path_max_bytes: 4096,
         }
     }
 }
@@ -240,6 +244,15 @@ impl EnforcementDocument {
             event_buffer_bytes: require_positive_u32(
                 "enforcement.event_buffer_bytes",
                 self.event_buffer_bytes,
+            )?,
+            seccomp_syscalls: self
+                .seccomp_syscalls
+                .iter()
+                .map(|raw| parse_value("enforcement.seccomp_syscalls", raw))
+                .collect::<Result<Vec<_>, _>>()?,
+            seccomp_path_max_bytes: require_positive_u32(
+                "enforcement.seccomp_path_max_bytes",
+                self.seccomp_path_max_bytes,
             )?,
         })
     }

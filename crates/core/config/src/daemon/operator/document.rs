@@ -17,10 +17,19 @@ use super::super::{
     AgentInvocationConfig, ApplicationProtocolConfig, ClusterCenterConfig, ClusterConfig,
     ClusterReportConfig, CommandControlConfig, DEFAULT_ACTIVE_TRACE_MAX,
     DEFAULT_CONTROL_PENDING_CONNECTION_MAX, DEFAULT_FINALIZATION_POLL_INTERVAL_MS,
-    DEFAULT_FINALIZATION_TRACES_PER_CYCLE, DisabledOrPath, EbpfCollectorConfig, EbpfEnabledMode,
+    DEFAULT_FINALIZATION_SETTLE_DELAY_MS, DEFAULT_FINALIZATION_TRACES_PER_CYCLE,
+    DEFAULT_PLUGIN_ALERT_DRAIN_TIMEOUT_MS, DEFAULT_PLUGIN_ALERT_QUEUE_CAPACITY,
+    DEFAULT_PLUGIN_ALERT_WRITES_PER_CYCLE, DEFAULT_PLUGIN_DISCOVERY_DIRECTORY,
+    DEFAULT_PLUGIN_DISCOVERY_MANIFEST_MAX_BYTES, DEFAULT_PLUGIN_DISCOVERY_MAX_PACKAGES,
+    DEFAULT_POST_TRACE_ADMISSION_TIMEOUT_MS, DEFAULT_POST_TRACE_BROKER_QUEUE_CAPACITY,
+    DEFAULT_POST_TRACE_BROKER_REPLY_TIMEOUT_MS, DEFAULT_POST_TRACE_EXECUTION_TIMEOUT_MS,
+    DEFAULT_POST_TRACE_MAX_IN_FLIGHT_TASKS, DEFAULT_POST_TRACE_REQUESTS_PER_CYCLE,
+    DEFAULT_POST_TRACE_SHUTDOWN_DRAIN_TIMEOUT_MS, DEFAULT_WEB_ALERTS_LIMIT,
+    DEFAULT_WEB_ALERTS_MAX_LIMIT, DisabledOrPath, EbpfCollectorConfig, EbpfEnabledMode,
     EnforcementBackend, EnforcementBuiltinRuleConfig, EnforcementConfig, EnforcementMarkStrategy,
-    EnforcementScope, FileBulkReadFastPathConfig, FileBulkReadObservationConfig,
-    FileMetadataRetention, FileObservationConfig, FileRawEventRetention, FileTtyObservationConfig,
+    EnforcementScope, EnforcementSeccompSyscall, FileBulkReadFastPathConfig,
+    FileBulkReadObservationConfig, FileMetadataRetention, FileObservationConfig,
+    FileRawEventRetention, FileTtyObservationConfig,
     FsEnumerateObservationConfig, Http2DataContentRetention, HttpBodyRetention,
     HttpHeadersRetention, L0LlmCallRetention, L1SseRetention, L2HttpRetention,
     L3Http2FrameRetention, L4PayloadRetention, LlmRequestContentRetention,
@@ -30,10 +39,11 @@ use super::super::{
     PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadStdioStorageMode,
     PayloadTlsCaptureBackend, PayloadTlsConfig, PayloadTlsLibrary, PayloadTlsLibraryPath,
     PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource,
-    PayloadTlsSyncRuntimeLibraryPath, ProcessSeccompConfig, ProcessSeccompSyscall,
-    ResourceMetricsConfig, SeccompNotifyConfig, SemanticContentOwner, SemanticRetentionConfig,
-    SocketPermissions, SseDataPolicy, SseEventContentRetention, StartupPluginFailurePolicy,
-    StartupPluginLoadConfig, StartupPluginsConfig, StorageRetentionConfig, TraceFinalizationConfig,
+    PayloadTlsSyncRuntimeLibraryPath, PluginAlertRuntimeConfig, PluginDiscoveryConfig,
+    PostTraceRuntimeConfig, ProcessSeccompConfig, ProcessSeccompSyscall, ResourceMetricsConfig,
+    SeccompNotifyConfig, SemanticContentOwner, SemanticRetentionConfig, SocketPermissions,
+    SseDataPolicy, SseEventContentRetention, StartupPluginFailurePolicy, StartupPluginLoadConfig,
+    StartupPluginsConfig, StorageRetentionConfig, TraceFinalizationConfig, WebAlertsConfig,
     WebServerConfig, WorkloadDiagnosticsConfig,
 };
 use super::{
@@ -61,6 +71,8 @@ mod helpers;
 mod network;
 #[path = "document/payload.rs"]
 mod payload;
+#[path = "document/plugin/mod.rs"]
+mod plugin;
 #[path = "document/process.rs"]
 mod process;
 #[path = "document/semantic.rs"]
@@ -74,6 +86,7 @@ use file::*;
 use helpers::*;
 use network::*;
 use payload::*;
+use plugin::*;
 use process::*;
 use semantic::*;
 
@@ -200,6 +213,34 @@ impl OperatorDocument {
                 finalization: FinalizationDocument {
                     traces_per_cycle: config.trace_finalization.traces_per_cycle,
                     poll_interval_ms: config.trace_finalization.poll_interval_ms,
+                    settle_delay_ms: config.trace_finalization.settle_delay_ms,
+                    post_trace: PostTraceDocument {
+                        max_in_flight_tasks: config
+                            .trace_finalization
+                            .post_trace
+                            .max_in_flight_tasks,
+                        broker_queue_capacity: config
+                            .trace_finalization
+                            .post_trace
+                            .broker_queue_capacity,
+                        requests_per_cycle: config.trace_finalization.post_trace.requests_per_cycle,
+                        broker_reply_timeout_ms: config
+                            .trace_finalization
+                            .post_trace
+                            .broker_reply_timeout_ms,
+                        admission_timeout_ms: config
+                            .trace_finalization
+                            .post_trace
+                            .admission_timeout_ms,
+                        execution_timeout_ms: config
+                            .trace_finalization
+                            .post_trace
+                            .execution_timeout_ms,
+                        shutdown_drain_timeout_ms: config
+                            .trace_finalization
+                            .post_trace
+                            .shutdown_drain_timeout_ms,
+                    },
                 },
             },
             storage,
@@ -210,6 +251,10 @@ impl OperatorDocument {
                     .request_read_timeout
                     .map(|duration| duration.as_millis().to_string())
                     .unwrap_or_else(|| "disabled".to_string()),
+                alerts: WebAlertsDocument {
+                    default_limit: config.web.alerts.default_limit,
+                    max_limit: config.web.alerts.max_limit,
+                },
             },
             cluster: ClusterDocument::from_config(&config.cluster),
             export: ExportDocument {
@@ -222,7 +267,11 @@ impl OperatorDocument {
                 },
                 runtime: RuntimeExportDocument::from_config(&config.export_runtime),
             },
-            plugins: PluginsDocument::from_config(&config.startup_plugins),
+            plugins: PluginsDocument::from_config(
+                &config.plugin_discovery,
+                &config.plugin_alert_runtime,
+                &config.startup_plugins,
+            ),
             capture: CaptureDocument {
                 profile_name: config.capture_profile.name.as_str().to_string(),
                 capabilities: required,
@@ -308,6 +357,14 @@ impl OperatorDocument {
                     .to_string(),
                 audit_enabled: config.enforcement.audit_enabled,
                 event_buffer_bytes: config.enforcement.event_buffer_bytes,
+                seccomp_syscalls: config
+                    .enforcement
+                    .seccomp_syscalls
+                    .iter()
+                    .map(enforcement_seccomp_syscall_as_str)
+                    .map(str::to_string)
+                    .collect(),
+                seccomp_path_max_bytes: config.enforcement.seccomp_path_max_bytes,
             },
             command_control: CommandControlDocument {
                 enabled: config.command_control.enabled,
@@ -363,8 +420,10 @@ impl OperatorDocument {
             &payload_config.tls,
             &payload_config.socket,
             &process_seccomp,
+            &enforcement,
             &capabilities,
         )?;
+        let (plugin_discovery, plugin_alert_runtime, startup_plugins) = self.plugins.to_config()?;
         Ok(OperatorConfig {
             socket_path: PathBuf::from(&self.control.socket_path),
             socket_permissions: SocketPermissions {
@@ -385,7 +444,9 @@ impl OperatorDocument {
             cluster: self.cluster.to_config()?,
             export_config: self.export.snapshot.to_config(),
             export_runtime: self.export.runtime.to_config()?,
-            startup_plugins: self.plugins.to_config()?,
+            plugin_discovery,
+            plugin_alert_runtime,
+            startup_plugins,
             log_path: PathBuf::from(&self.control.log_path),
             diagnostic_log_level: parse_value(
                 "control.diagnostic_log_level",

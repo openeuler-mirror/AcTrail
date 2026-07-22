@@ -1,6 +1,6 @@
 //! Userspace state for raw file syscall events.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use model_core::ids::TraceId;
@@ -85,6 +85,7 @@ pub(super) struct ProcessFileKey {
 pub(super) struct ProcessFileState {
     pub(super) cwd: Option<String>,
     pub(super) fds: BTreeMap<u32, String>,
+    creation_requested_fds: BTreeSet<u32>,
     pub(super) ipc_fds: BTreeMap<u32, FdIpcKind>,
 }
 
@@ -174,6 +175,24 @@ impl FileTracker {
             .get(&key)
             .and_then(|state| state.ipc_fds.get(&fd))
             .copied()
+    }
+
+    pub(crate) fn fd_creation_requested(
+        &self,
+        trace_id: TraceId,
+        process: &ProcessObservation,
+        fd: u32,
+    ) -> bool {
+        if fd == FILE_FD_MISSING {
+            return false;
+        }
+        let key = ProcessFileKey {
+            trace_id,
+            process: process.clone(),
+        };
+        self.processes
+            .get(&key)
+            .is_some_and(|state| state.creation_requested_fds.contains(&fd))
     }
 
     pub(super) fn record_ipc_fd_pair(
@@ -266,9 +285,14 @@ impl FileTracker {
             FILE_SYSCALL_OPEN | FILE_SYSCALL_OPENAT | FILE_SYSCALL_CREAT | FILE_SYSCALL_OPENAT2 => {
                 let fd = u32::try_from(result).ok()?;
                 let path = resolved_absolute_path(primary_path)?;
-                self.ensure_process(process_key)
-                    .fds
-                    .insert(fd, path.clone());
+                let creation_requested = open_requests_creation(enter);
+                let state = self.ensure_process(process_key);
+                state.fds.insert(fd, path.clone());
+                if creation_requested {
+                    state.creation_requested_fds.insert(fd);
+                } else {
+                    state.creation_requested_fds.remove(&fd);
+                }
                 Some(path)
             }
             FILE_SYSCALL_CLOSE => {
@@ -279,6 +303,7 @@ impl FileTracker {
                 );
                 let state = self.ensure_process(process_key);
                 state.fds.remove(&(enter.arg0 as u32));
+                state.creation_requested_fds.remove(&(enter.arg0 as u32));
                 state.ipc_fds.remove(&(enter.arg0 as u32));
                 path
             }
@@ -333,16 +358,27 @@ impl FileTracker {
             &process_key.process,
             enter.arg0 as u32,
         );
+        let creation_requested = self.fd_creation_requested(
+            process_key.trace_id,
+            &process_key.process,
+            enter.arg0 as u32,
+        );
         let Some(target_fd) = dup_target_fd(enter, result) else {
             return;
         };
         let state = self.ensure_process(process_key);
         if let Some(source) = source {
             state.fds.insert(target_fd, source);
+            if creation_requested {
+                state.creation_requested_fds.insert(target_fd);
+            } else {
+                state.creation_requested_fds.remove(&target_fd);
+            }
             state.ipc_fds.remove(&target_fd);
         } else if let Some(kind) = ipc_source {
             state.ipc_fds.insert(target_fd, kind);
             state.fds.remove(&target_fd);
+            state.creation_requested_fds.remove(&target_fd);
         }
     }
 
@@ -477,6 +513,15 @@ fn absolute_path(path: &str) -> Option<String> {
         return None;
     }
     Some(lexically_normalize_path(path))
+}
+
+fn open_requests_creation(event: &KernelFilePathEvent) -> bool {
+    match event.aux {
+        FILE_SYSCALL_CREAT => true,
+        FILE_SYSCALL_OPEN => event.arg1 & libc::O_CREAT as u64 != 0,
+        FILE_SYSCALL_OPENAT | FILE_SYSCALL_OPENAT2 => event.arg2 & libc::O_CREAT as u64 != 0,
+        _ => false,
+    }
 }
 
 fn pending_key(event: &KernelFilePathEvent) -> PendingKey {

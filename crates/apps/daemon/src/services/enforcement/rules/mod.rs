@@ -5,6 +5,7 @@ mod scope;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use config_core::daemon::EnforcementDecision;
@@ -36,6 +37,7 @@ pub(super) struct FileKey {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct EnforcementRule {
+    pub(super) owner_instance_id: String,
     pub rule_id: String,
     pub decision: RuleDecision,
     pub operation: String,
@@ -71,9 +73,14 @@ pub(super) struct EnforcementRules {
 
 impl EnforcementRules {
     pub(super) fn load(path: &Path) -> Result<Self, String> {
-        let raw = fs::read_to_string(path)
-            .map_err(|error| format!("read enforcement rules {}: {error}", path.display()))?;
-        Self::parse(&raw)
+        match fs::read_to_string(path) {
+            Ok(raw) => Self::parse(&raw),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(Self::empty()),
+            Err(error) => Err(format!(
+                "read enforcement rules {}: {error}",
+                path.display()
+            )),
+        }
     }
 
     pub(super) fn parse(raw: &str) -> Result<Self, String> {
@@ -99,17 +106,29 @@ impl EnforcementRules {
         Ok(store)
     }
 
-    pub(super) fn find_path(&self, path: &Path) -> Option<&EnforcementRule> {
+    pub(super) fn find_path(
+        &self,
+        operation: FilePolicyOperation,
+        path: &Path,
+    ) -> Option<&EnforcementRule> {
         self.effective_rules
             .iter()
-            .find(|rule| rule.matches_path(path))
+            .find(|rule| rule.matches_path(operation, path))
             .map(|rule| &rule.rule)
+    }
+
+    pub(super) fn has_operation_rules(&self, operation: FilePolicyOperation) -> bool {
+        self.effective_rules
+            .iter()
+            .any(|rule| rule.operation.matches(operation))
     }
 
     pub(super) fn find_builtin_allow(&self, path: &Path) -> Option<&EnforcementRule> {
         self.effective_rules
             .iter()
-            .find(|rule| rule.is_builtin_allow() && rule.matches_path(path))
+            .find(|rule| {
+                rule.is_builtin_allow() && rule.matches_path(FilePolicyOperation::Open, path)
+            })
             .map(|rule| &rule.rule)
     }
 
@@ -121,10 +140,6 @@ impl EnforcementRules {
             self.insert_builtin_allow_rule(rule_id, path)?;
         }
         self.rebuild_effective()
-    }
-
-    pub(super) fn is_empty(&self) -> bool {
-        self.effective_rules.is_empty()
     }
 
     pub(super) fn mark_directories(&self) -> impl Iterator<Item = &PathBuf> {
@@ -185,10 +200,9 @@ impl EnforcementRules {
     ) -> Result<FilePolicyMatchDryRunResult, String> {
         let path = normalized_scope(&request.path)?;
         let canonical_path = path.display_path();
-        let matched = self
-            .effective_rules
-            .iter()
-            .find(|rule| rule.operation == request.operation && rule.scope.contains_scope(&path));
+        let matched = self.effective_rules.iter().find(|rule| {
+            rule.operation.matches(request.operation) && rule.scope.contains_scope(&path)
+        });
         Ok(FilePolicyMatchDryRunResult {
             matched: matched.is_some(),
             decision: matched
@@ -342,7 +356,7 @@ impl EnforcementRules {
             tier: RuleTier::Static,
             identity: RuleIdentityKind::Static,
             decision,
-            operation: FilePolicyOperation::Open,
+            operation: FilePolicyOperation::from_wire(&rule.operation)?,
             scope: PathScope::Exact(rule.path.clone()),
             gray_target: None,
             priority: 0,
@@ -371,6 +385,7 @@ impl EnforcementRules {
         }
         let scope = absolute_scope(&path)?;
         let rule = EnforcementRule {
+            owner_instance_id: BUILTIN_POLICY_OWNER.to_string(),
             rule_id: rule_id.clone(),
             decision: RuleDecision::Local(EnforcementDecision::Allow),
             operation: FilePolicyOperation::Open.as_str().to_string(),
@@ -455,6 +470,7 @@ impl EnforcementRules {
                     1,
                     self.next_rule_id,
                 )?;
+                draft_rule.validate_mark_directories()?;
                 self.validate_not_stale_upsert(owner_instance_id, base_revision, &draft_rule)?;
             }
             FilePolicyPatchOp::Delete | FilePolicyPatchOp::Enable | FilePolicyPatchOp::Disable => {

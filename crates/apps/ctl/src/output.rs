@@ -112,6 +112,20 @@ pub fn format_reply(reply: &ControlReply) -> String {
             output.push_str(&reply.stderr);
             output
         }
+        ControlReply::PluginConfig(reply) => format!(
+            "instance={} plugin_id={} editable={} config={} schema={}",
+            reply.instance_id,
+            reply.plugin_id,
+            reply.editable,
+            reply.config_json,
+            reply.schema_json
+        ),
+        ControlReply::PluginConfigValidation(reply) => format!(
+            "instance={} valid={} errors={}",
+            reply.instance_id,
+            reply.valid,
+            printable_warnings(&reply.errors)
+        ),
     }
 }
 

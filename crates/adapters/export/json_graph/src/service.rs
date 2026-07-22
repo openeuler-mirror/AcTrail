@@ -2,7 +2,7 @@
 
 use graph_contract::document::GraphDocument;
 use model_core::ids::TraceId;
-use storage_core::{SnapshotView, StorageBackend};
+use storage_core::{SnapshotView, StorageBackend, TraceLeasePurpose};
 
 use crate::document::build_graph_document;
 use crate::serialize::to_json;
@@ -68,7 +68,7 @@ impl<'a> JsonGraphExportService<'a> {
     fn read_snapshot_with_lease(&mut self, trace_id: TraceId) -> Result<SnapshotView, ExportError> {
         let lease = self
             .storage
-            .acquire_export_lease(trace_id)
+            .acquire_trace_lease(trace_id, TraceLeasePurpose::Export)
             .map_err(|error| ExportError::new(error.stage, error.message))?;
         let snapshot_result = self
             .storage
@@ -76,7 +76,7 @@ impl<'a> JsonGraphExportService<'a> {
             .map_err(|error| ExportError::new(error.stage, error.message));
         let release_result = self
             .storage
-            .release_export_lease(lease)
+            .release_trace_lease(lease)
             .map_err(|error| ExportError::new(error.stage, error.message));
 
         match (snapshot_result, release_result) {

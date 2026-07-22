@@ -5,7 +5,9 @@ use export_core::{ExportRuntime, SemanticActionExportBatch};
 use model_core::ids::{DiagnosticId, TraceId};
 use model_core::payload::PayloadSegment;
 use model_core::trace::TraceRecord;
-use semantic_action::{SemanticAction, SemanticActionKind, SemanticActionLink};
+use semantic_action::{
+    FileObservationPath, SemanticAction, SemanticActionKind, SemanticActionLink,
+};
 use storage_core::StorageBackend;
 use storage_core::{PayloadRowLimit, PayloadSegmentQuery};
 
@@ -50,6 +52,7 @@ impl<'a> SemanticActionExportRecorder<'a> {
                     trace,
                     actions: batch.actions(),
                     links: batch.links(),
+                    file_observation_paths: batch.file_observation_paths(),
                     payload_segments: &payload_segments,
                 })?
         } else {
@@ -58,12 +61,15 @@ impl<'a> SemanticActionExportRecorder<'a> {
                 return Ok(());
             }
             let exportable_links = exportable_links(&exportable_actions, batch.links());
+            let exportable_paths =
+                exportable_paths(&exportable_actions, batch.file_observation_paths());
             let payload_segments = self.payload_segments_for_export(trace.trace_id)?;
             self.export_runtime
                 .publish_semantic_actions(SemanticActionExportBatch {
                     trace,
                     actions: &exportable_actions,
                     links: &exportable_links,
+                    file_observation_paths: &exportable_paths,
                     payload_segments: &payload_segments,
                 })?
         };
@@ -157,6 +163,21 @@ fn exportable_links(
     links
         .iter()
         .filter(|link| exportable_child_ids.contains(link.child_action_id.as_str()))
+        .cloned()
+        .collect()
+}
+
+fn exportable_paths(
+    exportable_actions: &[SemanticAction],
+    paths: &[FileObservationPath],
+) -> Vec<FileObservationPath> {
+    let exportable_action_ids = exportable_actions
+        .iter()
+        .map(|action| action.action_id.as_str())
+        .collect::<BTreeSet<_>>();
+    paths
+        .iter()
+        .filter(|path| exportable_action_ids.contains(path.action_id.as_str()))
         .cloned()
         .collect()
 }

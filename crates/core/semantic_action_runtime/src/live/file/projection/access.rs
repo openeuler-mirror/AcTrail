@@ -79,6 +79,10 @@ impl FileAccessProjector {
             self.fd_registry.duplicate(event);
             return consumed_lifecycle_output();
         }
+        if payload.operation == "open" && file_modify_action.is_some() {
+            self.observe_open(event);
+            return LiveSemanticActionOutput::default();
+        }
         if payload.operation == "open" && file_open_has_directory_flag(payload) {
             if let Some(output) = self.observe_directory_open(event) {
                 return output;

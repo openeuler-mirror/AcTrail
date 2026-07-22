@@ -29,13 +29,16 @@ impl TraceWriteStore for SqliteStorage {
             .borrow_mut()
             .execute(
                 "INSERT OR REPLACE INTO traces (
-                    trace_id, root_process_id, root_container_id, display_name, profile_name, tags,
-                    lifecycle_state, health, created_at, started_at, completed_at, exited_at, failed_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                    trace_id, alert_token, root_process_id, root_container_id, root_working_directory,
+                    display_name, profile_name, tags, lifecycle_state, health, created_at,
+                    started_at, completed_at, exited_at, failed_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 params![
                     trace.trace_id.get(),
+                    trace.alert_token.as_bytes().as_slice(),
                     trace.root_process_identity.get(),
                     trace.root_container_id.clone(),
+                    trace.root_working_directory.clone(),
                     trace.display_name.to_string(),
                     trace.profile_name.to_string(),
                     encode_tags(&trace.tags),

@@ -1,11 +1,11 @@
 [general]
 id = "wasm.file-policy-dynamic"
-api_version = "actrail.plugin.v1"
+api_version = "actrail.plugin.v2"
 role = "control-decider"
 runtime = "wasm"
 
 [host]
-capabilities = ["file-policy.rules.read", "file-policy.rules.match-dry-run", "file-policy.rules.apply"]
+capabilities = ["file-policy.rules.read", "file-policy.rules.match-dry-run", "file-policy.rules.validate", "file-policy.rules.apply"]
 
 [runtime.wasm]
 artifact_path = "component-file-policy-dynamic.wasm"
@@ -21,6 +21,9 @@ concurrency_limit = 1
 [hostcall_limits.file_policy]
 read_max_bytes = 8192
 
+[hostcall_limits.plugin_config]
+read_max_bytes = 65536
+
 [hostcall_limits.plugin_command]
 argv_max_count = 16
 arg_max_bytes = 4096
@@ -28,6 +31,7 @@ output_max_bytes = 65536
 timeout_ms = 30000
 
 [plugin_config]
-format = "toml"
-schema_ref = ""
-required = false
+format = "json"
+schema_ref = "config.schema.json"
+required = true
+runtime_managed = true

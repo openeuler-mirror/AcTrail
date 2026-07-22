@@ -1,4 +1,4 @@
-package actrail:plugin@0.1.0;
+package actrail:plugin@0.2.0;
 
 interface types {
   enum observation-event-family {
@@ -39,6 +39,34 @@ interface types {
     too-large,
   }
 
+  enum file-change-kind {
+    created,
+    modified,
+    deleted,
+    unknown,
+  }
+
+  enum path-observation-state {
+    complete,
+    unavailable,
+  }
+
+  enum trace-lifecycle-state {
+    starting,
+    active,
+    draining,
+    completed,
+    exited,
+    failed,
+  }
+
+  enum trace-file-state-status {
+    exists,
+    not-found,
+    inaccessible,
+    unavailable,
+  }
+
   record payload-ref {
     id: string,
     trace-id: string,
@@ -63,15 +91,32 @@ interface types {
     truncated: bool,
   }
 
+  record trace-context {
+    working-directory: option<string>,
+    alert-token: option<list<u8>>,
+  }
+
+  record file-change-record {
+    operation: string,
+    change-kind: file-change-kind,
+    successful: bool,
+    path: option<string>,
+    path-state: path-observation-state,
+  }
+
   record semantic-action-record {
-    trace-id: string,
     action-id: string,
     kind: string,
-    summary: string,
+    status: string,
+    completeness: string,
+    file-change: option<file-change-record>,
   }
 
   record observation-batch {
+    batch-id: string,
     trace-id: string,
+    trace-sequence: u64,
+    lifecycle-transition: option<trace-lifecycle-state>,
     families: list<observation-event-family>,
     semantic-actions: list<semantic-action-record>,
     payload-refs: list<payload-ref>,
@@ -135,7 +180,10 @@ interface types {
   }
 
   enum file-policy-operation {
+    any,
     open,
+    mkdir,
+    rmdir,
   }
 
   enum file-policy-patch-op {
@@ -227,6 +275,37 @@ interface types {
     stderr: string,
   }
 
+  record post-trace-task {
+    trace-id: string,
+  }
+
+  record trace-analysis-context {
+    terminal-at: u64,
+    working-directory: option<string>,
+  }
+
+  record trace-action-page {
+    actions: list<semantic-action-record>,
+    next-offset: option<u64>,
+  }
+
+  record trace-file-state {
+    status: trace-file-state-status,
+    checked-at: u64,
+    file-kind: option<string>,
+  }
+
+  record alert-draft {
+    definition-key: string,
+    payload-json: string,
+  }
+
+  record alert-write-request {
+    trace-id: string,
+    alert-token: list<u8>,
+    draft: alert-draft,
+  }
+
   record file-policy-apply-error {
     item-index: u32,
     code: string,
@@ -257,6 +336,31 @@ interface host {
   env-read: func(name: string, max-bytes: u64) -> result<string, string>;
 }
 
+interface observation-context-read {
+  use types.{trace-context};
+
+  trace-context-get: func() -> result<trace-context, string>;
+}
+
+interface trace-analysis-read {
+  use types.{trace-analysis-context, trace-action-page};
+
+  context-get: func() -> result<trace-analysis-context, string>;
+  semantic-actions-list: func(offset: option<u64>, limit: u32) -> result<trace-action-page, string>;
+}
+
+interface trace-file-state-read {
+  use types.{trace-file-state};
+
+  get: func(action-id: string) -> result<trace-file-state, string>;
+}
+
+interface alert-write {
+  use types.{alert-write-request};
+
+  submit: func(request: alert-write-request) -> result<_, string>;
+}
+
 interface observation-consumer {
   use types.{observation-batch, observation-report};
 
@@ -275,9 +379,33 @@ interface management-command {
   handle-command: func(request: plugin-command-request) -> result<plugin-command-result, string>;
 }
 
+interface runtime-config {
+  get: func() -> result<string, string>;
+  validate: func(config-json: string) -> result<list<string>, string>;
+  submit: func(config-json: string) -> result<_, string>;
+}
+
+interface post-trace-analyzer {
+  use types.{post-trace-task};
+
+  analyze: func(task: post-trace-task) -> result<_, string>;
+}
+
 world observation-plugin {
   import host;
+  import observation-context-read;
+  import alert-write;
   export observation-consumer;
+}
+
+world post-trace-observation-plugin {
+  import host;
+  import observation-context-read;
+  import trace-analysis-read;
+  import trace-file-state-read;
+  import alert-write;
+  export observation-consumer;
+  export post-trace-analyzer;
 }
 
 world control-plugin {
@@ -289,4 +417,5 @@ world managed-control-plugin {
   import host;
   export control-decider;
   export management-command;
+  export runtime-config;
 }

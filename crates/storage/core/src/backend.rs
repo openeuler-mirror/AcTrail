@@ -2,6 +2,10 @@
 
 use std::collections::BTreeMap;
 
+use alert_contract::{
+    AlertDefinition, AlertDefinitionId, AlertDraft, AlertId, AlertListLimit, AlertStoreError,
+    AlertView,
+};
 use model_core::diagnostics::DiagnosticRecord;
 use model_core::event::DomainEvent;
 use model_core::ids::TraceId;
@@ -10,12 +14,12 @@ use model_core::process::{ProcessIdentity, ProcessMembership, ProcessRecord};
 use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
 use semantic_action::{
     FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
-    LlmRequestContentWrite, SemanticAction, SemanticActionLink,
+    LlmRequestContentWrite, SemanticAction, SemanticActionLink, SemanticActionPage,
 };
 
 use crate::{
-    ExportLease, PayloadSegmentQuery, RetentionCandidate, SnapshotView, StorageError,
-    StorageTransaction, TraceFilter, TraceTombstone,
+    PayloadSegmentQuery, RetentionCandidate, SnapshotView, StorageError, StorageTransaction,
+    TraceFilter, TraceLease, TraceLeasePurpose, TraceTombstone,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -114,6 +118,26 @@ pub trait StorageBackend {
     fn append_diagnostic(&mut self, diagnostic: DiagnosticRecord) -> Result<(), StorageError>;
     fn list_diagnostics(&self, trace_id: TraceId) -> Result<Vec<DiagnosticRecord>, StorageError>;
 
+    fn register_alert_definition(
+        &mut self,
+        definition: &AlertDefinition,
+    ) -> Result<AlertDefinitionId, AlertStoreError>;
+    fn submit_alert(
+        &mut self,
+        trace_id: TraceId,
+        alert_token: &model_core::trace::TraceAlertToken,
+        producer_plugin_id: &str,
+        draft: &AlertDraft,
+        created_at: std::time::SystemTime,
+    ) -> Result<alert_contract::AlertSubmitOutcome, AlertStoreError>;
+    fn latest_alerts(&self, limit: AlertListLimit) -> Result<Vec<AlertView>, AlertStoreError>;
+    fn get_alert(&self, alert_id: AlertId) -> Result<Option<AlertView>, AlertStoreError>;
+    fn trace_alerts(
+        &self,
+        trace_id: TraceId,
+        limit: AlertListLimit,
+    ) -> Result<Vec<AlertView>, AlertStoreError>;
+
     fn upsert_semantic_action(&mut self, action: SemanticAction) -> Result<(), StorageError>;
     fn upsert_semantic_action_link(&mut self, link: SemanticActionLink)
     -> Result<(), StorageError>;
@@ -129,6 +153,17 @@ pub trait StorageBackend {
     ) -> Result<(), StorageError>;
     fn list_semantic_actions(&self, trace_id: TraceId)
     -> Result<Vec<SemanticAction>, StorageError>;
+    fn semantic_actions_page(
+        &self,
+        trace_id: TraceId,
+        offset: usize,
+        limit: usize,
+    ) -> Result<SemanticActionPage, StorageError>;
+    fn list_file_observation_paths(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+    ) -> Result<Vec<FileObservationPath>, StorageError>;
     fn list_semantic_action_links(
         &self,
         trace_id: TraceId,
@@ -222,9 +257,13 @@ pub trait StorageBackend {
         roles: &[&str],
     ) -> Result<usize, StorageError>;
 
-    fn acquire_export_lease(&mut self, trace_id: TraceId) -> Result<ExportLease, StorageError>;
-    fn release_export_lease(&mut self, lease: ExportLease) -> Result<(), StorageError>;
-    fn read_snapshot(&self, lease: &ExportLease) -> Result<SnapshotView, StorageError>;
+    fn acquire_trace_lease(
+        &mut self,
+        trace_id: TraceId,
+        purpose: TraceLeasePurpose,
+    ) -> Result<TraceLease, StorageError>;
+    fn release_trace_lease(&mut self, lease: TraceLease) -> Result<(), StorageError>;
+    fn read_snapshot(&self, lease: &TraceLease) -> Result<SnapshotView, StorageError>;
 
     fn list_terminal_candidates(&self) -> Result<Vec<RetentionCandidate>, StorageError>;
     fn purge_trace(

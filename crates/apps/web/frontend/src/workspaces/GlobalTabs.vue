@@ -97,6 +97,11 @@ defineEmits(['update:modelValue']);
   color: var(--workspace-tab-active-color);
 }
 
+.global-tab-button:focus-visible {
+  outline: 2px solid var(--workspace-tab-active-color);
+  outline-offset: 2px;
+}
+
 .global-tab-button:hover {
   transform: translateY(-1px);
 }

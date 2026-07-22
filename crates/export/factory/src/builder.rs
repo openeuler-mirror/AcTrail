@@ -4,7 +4,9 @@ use export_otel_jsonl::{
     build_otel_jsonl_observation_consumer_instance_with_subscriptions,
     parse_otel_jsonl_plugin_config,
 };
-use plugin_system::PluginHostGrants;
+use std::sync::Arc;
+
+use plugin_system::{AlertHost, PluginHostGrants, PostTraceHost};
 use plugin_system::{ObservationConsumer, PluginManifest, PluginPurpose, PluginRuntimeKind};
 
 use crate::{ExportConfig, ExportDeliveryConfig, ExportRouteTargetConfig};
@@ -42,6 +44,8 @@ pub fn build_observation_consumer_from_manifest(
     manifest: &PluginManifest,
     plugin_config: Option<&str>,
     host_grants: PluginHostGrants,
+    post_trace_host: Option<Arc<dyn PostTraceHost>>,
+    alert_host: Option<Arc<dyn AlertHost>>,
 ) -> Result<Box<dyn ObservationConsumer>, ExportError> {
     if manifest.role() != PluginPurpose::ObservationConsumer {
         return Err(ExportError::new(
@@ -61,6 +65,8 @@ pub fn build_observation_consumer_from_manifest(
                 manifest,
                 plugin_config,
                 host_grants,
+                post_trace_host,
+                alert_host,
             )
             .map_err(|error| ExportError::new(error.code, error.message))?;
             Ok(Box::new(consumer))

@@ -61,36 +61,55 @@ impl FilePolicyDecision {
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum FilePolicyOperation {
+    Any,
     Open,
+    Mkdir,
+    Rmdir,
 }
 
 impl FilePolicyOperation {
     pub fn code(self) -> u8 {
         match self {
+            Self::Any => control_abi::file_policy::operation_code::ANY,
             Self::Open => control_abi::file_policy::operation_code::OPEN,
+            Self::Mkdir => control_abi::file_policy::operation_code::MKDIR,
+            Self::Rmdir => control_abi::file_policy::operation_code::RMDIR,
         }
     }
 
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Any => "any",
             Self::Open => "open",
+            Self::Mkdir => "mkdir",
+            Self::Rmdir => "rmdir",
         }
     }
 
     pub fn from_code(code: u8) -> Result<Self, String> {
         match code {
+            control_abi::file_policy::operation_code::ANY => Ok(Self::Any),
             control_abi::file_policy::operation_code::OPEN => Ok(Self::Open),
+            control_abi::file_policy::operation_code::MKDIR => Ok(Self::Mkdir),
+            control_abi::file_policy::operation_code::RMDIR => Ok(Self::Rmdir),
             _ => Err(format!("unsupported file policy operation code {code}")),
         }
     }
 
     pub fn from_wire(value: &str) -> Result<Self, String> {
         match value {
+            "any" => Ok(Self::Any),
             "open" => Ok(Self::Open),
+            "mkdir" => Ok(Self::Mkdir),
+            "rmdir" => Ok(Self::Rmdir),
             other => Err(format!(
-                "unsupported file policy operation {other}; expected open"
+                "unsupported file policy operation {other}; expected any, open, mkdir, or rmdir"
             )),
         }
+    }
+
+    pub fn matches(self, actual: Self) -> bool {
+        self == Self::Any || self == actual
     }
 }
 
@@ -420,6 +439,11 @@ pub struct PluginCommandBudget {
     pub output_max_bytes: Option<usize>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimePluginConfig {
+    pub config_json: String,
+}
+
 pub trait ControlDecider: Send + Sync {
     fn instance_id(&self) -> &str;
 
@@ -453,6 +477,30 @@ pub trait ControlDecider: Send + Sync {
         Err(PluginRuntimeError::new(
             "plugin_command",
             "plugin does not support management commands",
+        ))
+    }
+
+    fn runtime_config(&self) -> Result<RuntimePluginConfig, PluginRuntimeError> {
+        Err(PluginRuntimeError::new(
+            "plugin_config",
+            "plugin does not expose runtime-managed configuration",
+        ))
+    }
+
+    fn validate_runtime_config(
+        &self,
+        _config_json: &str,
+    ) -> Result<Vec<String>, PluginRuntimeError> {
+        Err(PluginRuntimeError::new(
+            "plugin_config",
+            "plugin does not expose runtime-managed configuration",
+        ))
+    }
+
+    fn submit_runtime_config(&self, _config_json: &str) -> Result<(), PluginRuntimeError> {
+        Err(PluginRuntimeError::new(
+            "plugin_config",
+            "plugin does not expose runtime-managed configuration",
         ))
     }
 }

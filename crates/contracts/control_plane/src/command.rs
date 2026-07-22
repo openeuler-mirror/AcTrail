@@ -127,6 +127,26 @@ pub struct PluginCommandCommand {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PluginConfigGetCommand {
+    pub request_id: RequestId,
+    pub instance_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PluginConfigValidateCommand {
+    pub request_id: RequestId,
+    pub instance_id: String,
+    pub config_json: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PluginConfigUpdateCommand {
+    pub request_id: RequestId,
+    pub instance_id: String,
+    pub config_json: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ControlCommand {
     ResolveLaunchPermissions(ResolveLaunchPermissionsCommand),
     ResolveLaunchTlsPlan(ResolveLaunchTlsPlanCommand),
@@ -140,4 +160,7 @@ pub enum ControlCommand {
     PluginLoad(PluginLoadCommand),
     PluginUnload(PluginUnloadCommand),
     PluginCommand(PluginCommandCommand),
+    PluginConfigGet(PluginConfigGetCommand),
+    PluginConfigValidate(PluginConfigValidateCommand),
+    PluginConfigUpdate(PluginConfigUpdateCommand),
 }

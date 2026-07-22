@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 actrail_plugin_abi = { path = "../../plugin/abi" }
+alert_contract = { path = "../../contracts/alert" }
 model_core = { path = "../model" }
 semantic_action = { path = "../../contracts/semantic_action" }
 serde = { version = "1.0", features = ["derive"] }

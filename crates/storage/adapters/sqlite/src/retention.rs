@@ -47,10 +47,10 @@ impl RetentionStore for SqliteStorage {
         trace_id: model_core::ids::TraceId,
         tombstone: TraceTombstone,
     ) -> Result<(), RetentionError> {
-        if self.export_leases().borrow().contains(&trace_id) {
+        if self.trace_leases().borrow().protects(trace_id) {
             return Err(RetentionError::new(
                 "purge_trace",
-                "active export lease blocks purge",
+                "active trace lease blocks purge",
             ));
         }
         let mut connection = self.connection().borrow_mut();

@@ -6,7 +6,7 @@ use std::time::SystemTime;
 use collector_capability::CollectorDescriptor;
 use model_core::ids::{TraceId, TraceName};
 use model_core::process::{ExitStatus, MembershipState, ProcessIdentity, ProcessMembership};
-use model_core::trace::{TraceLifecycleState, TraceRecord};
+use model_core::trace::{TraceAlertToken, TraceLifecycleState, TraceRecord};
 
 use crate::commands::{RootRemovalRequest, TrackTraceRequest};
 use crate::membership::MembershipIndex;
@@ -39,6 +39,7 @@ pub enum RegistryError {
     ParentMembershipMissing(ProcessIdentity),
     PropagationDisabled(ProcessIdentity),
     InvalidStateTransition(state_machine::StateTransitionError),
+    AlertTokenGenerationFailed(String),
 }
 
 pub struct TraceRuntime {
@@ -75,14 +76,19 @@ impl TraceRuntime {
         request: TrackTraceRequest,
         sensor_plan: SensorPlan,
     ) -> Result<(), RegistryError> {
+        let mut alert_token = [0_u8; TraceAlertToken::BYTE_COUNT];
+        getrandom::fill(&mut alert_token)
+            .map_err(|error| RegistryError::AlertTokenGenerationFailed(error.to_string()))?;
         let mut trace = TraceRecord::new(
             trace_id,
+            TraceAlertToken::new(alert_token),
             request.root_identity.clone(),
             request.display_name,
             request.profile_snapshot.profile_name.clone(),
             request.created_at,
         );
         trace.root_container_id = request.root_container_id;
+        trace.root_working_directory = request.root_working_directory;
         for tag in request.tags {
             trace.add_tag(tag);
         }
@@ -390,6 +396,7 @@ mod tests {
         let request = TrackTraceRequest {
             root_identity: root.clone(),
             root_container_id: None,
+            root_working_directory: None,
             display_name: TraceName::new("agent"),
             profile_snapshot: profile_snapshot(),
             tags: BTreeSet::new(),
@@ -430,6 +437,7 @@ mod tests {
         let request = TrackTraceRequest {
             root_identity: root.clone(),
             root_container_id: None,
+            root_working_directory: None,
             display_name: TraceName::new("agent"),
             profile_snapshot: profile_snapshot(),
             tags: BTreeSet::new(),

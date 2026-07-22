@@ -2,7 +2,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use config_core::daemon::{OperatorConfig, StartupPluginLoadConfig};
-use control_contract::command::{ControlCommand, PluginListCommand, PluginUnloadCommand};
+use control_contract::command::{ControlCommand, PluginListCommand};
 use control_contract::reply::{ControlError, ControlReply};
 use model_core::ids::RequestId;
 use uds_control_client::{UdsControlClient, UdsSocketTransport};
@@ -166,53 +166,6 @@ pub(crate) fn runtime_plugin_status_json(
         Ok(_) => Err("daemon returned unexpected reply for plugin list".to_string()),
         Err(error) => Ok(runtime_unavailable_json(config_path, config, &error)),
     }
-}
-
-pub(crate) fn runtime_plugin_unload_json(
-    config_path: Option<&Path>,
-    operator_config: Option<&OperatorConfig>,
-    instance_id: &str,
-) -> Result<String, String> {
-    let Some(config) = operator_config else {
-        return Ok(unavailable_json());
-    };
-    if instance_id.trim().is_empty() {
-        return Err("plugin instance id must not be empty".to_string());
-    }
-
-    let mut client = UdsControlClient::new(UdsSocketTransport::new(config.socket_path.clone()));
-    let reply = client
-        .send(ControlCommand::PluginUnload(PluginUnloadCommand {
-            request_id: web_request_id()?,
-            instance_id: instance_id.to_string(),
-        }))
-        .map_err(|error| {
-            format!(
-                "daemon plugin unload failed: {}: {}",
-                error.code, error.message
-            )
-        })?;
-
-    let ControlReply::PluginStatus(status) = reply else {
-        return Err("daemon returned unexpected reply for plugin unload".to_string());
-    };
-
-    let mut output = String::from("{");
-    json::field(&mut output, "available", &json::boolean(true));
-    output.push(',');
-    json::field(&mut output, "source", &source_json(config_path));
-    output.push(',');
-    json::field(
-        &mut output,
-        "socket_path",
-        &json::string(&config.socket_path.display().to_string()),
-    );
-    output.push(',');
-    json::field(&mut output, "unloaded", &json::boolean(true));
-    output.push(',');
-    json::field(&mut output, "plugin", &runtime_plugin_json(&status));
-    output.push('}');
-    Ok(output)
 }
 
 fn plugin_json(config: &OperatorConfig, plugin: &StartupPluginLoadConfig) -> String {

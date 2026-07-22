@@ -1,6 +1,6 @@
 [general]
 id = "wasm.payload-read-denied"
-api_version = "actrail.plugin.v1"
+api_version = "actrail.plugin.v2"
 role = "observation-consumer"
 runtime = "wasm"
 

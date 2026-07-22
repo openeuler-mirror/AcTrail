@@ -100,7 +100,10 @@ pub(super) fn decode(
                     },
                 }));
             }
-            let metadata = tracked_file_metadata(&event, operation, direction, &path);
+            let creation_requested =
+                file_tracker.fd_creation_requested(event.trace_id, &identity, event.fd);
+            let metadata =
+                tracked_file_metadata(&event, operation, direction, &path, creation_requested);
             return Ok(Some(RawCollectorEvent {
                 envelope: RawEventEnvelope {
                     observed_at: SystemTime::now(),
@@ -164,6 +167,7 @@ fn tracked_file_metadata(
     operation: &str,
     direction: &str,
     path: &str,
+    creation_requested: bool,
 ) -> BTreeMap<String, String> {
     let mut metadata = BTreeMap::from([
         ("operation".to_string(), operation.to_string()),
@@ -182,6 +186,9 @@ fn tracked_file_metadata(
     }
     if let Some(size) = fd_io_size(event.kind, event.result) {
         metadata.insert("size".to_string(), size.to_string());
+    }
+    if creation_requested {
+        metadata.insert("fd_creation_requested".to_string(), "true".to_string());
     }
     metadata
 }

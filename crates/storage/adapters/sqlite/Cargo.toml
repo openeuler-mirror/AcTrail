@@ -5,6 +5,7 @@ edition = "2024"
 license = "MulanPSL-2.0"
 
 [dependencies]
+alert_contract = { path = "../../../contracts/alert" }
 model_core = { path = "../../../core/model" }
 rusqlite = { version = "0.31.0", features = ["bundled"] }
 semantic_action = { path = "../../../contracts/semantic_action" }

@@ -1,0 +1,50 @@
+[general]
+id = "actrail.file-leakage"
+api_version = "actrail.plugin.v2"
+role = "observation-consumer"
+runtime = "wasm"
+
+[host]
+capabilities = ["trace-file-state-read", "alert-write"]
+
+[runtime.wasm]
+artifact_path = "actrail_file_leakage_plugin.wasm"
+abi = "wit-component"
+
+[runtime.wasm.resources]
+fuel_per_call = 50000000
+memory_max_bytes = 67108864
+
+[role.observation-consumer]
+delivery = "trace-consistent"
+
+[role.observation-consumer.subscriptions]
+event_families = ["semantic-action", "trace-lifecycle"]
+
+[role.observation-consumer.resources]
+queue_capacity = 4096
+
+[role.observation-consumer.post-trace]
+trigger = "trace-terminal"
+
+[hostcall_limits.plugin_config]
+read_max_bytes = 4096
+
+[hostcall_limits.trace_file_state]
+query_max_count = 4096
+timeout_ms = 5000
+
+[hostcall_limits.alert]
+payload_max_bytes = 65536
+
+[outputs.alerts.file-leakage]
+kind = "file.leakage"
+title = "存在文件泄露"
+severity = "medium"
+payload_schema_id = "actrail.file-leakage.payload.v1"
+payload_schema_ref = "file-leakage.payload.v1.schema.json"
+
+[plugin_config]
+format = "json"
+schema_ref = "file-leakage.config.v1.schema.json"
+required = true

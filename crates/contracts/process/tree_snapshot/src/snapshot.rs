@@ -19,6 +19,15 @@ pub struct TreeSnapshot {
     pub processes: Vec<ProcessSnapshot>,
 }
 
+impl TreeSnapshot {
+    pub fn root_working_directory(&self) -> Option<&str> {
+        self.processes
+            .iter()
+            .find(|process| process.identity == self.root)
+            .and_then(|process| process.current_working_directory.as_deref())
+    }
+}
+
 pub trait ProcessTreeSnapshotter {
     type Error;
 

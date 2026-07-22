@@ -40,6 +40,8 @@
   --stats-accent-faint: #eef7f5;
   --stats-on-accent: #ffffff;
   --stats-danger: var(--rose);
+  --stats-warning: #8a5a00;
+  --stats-critical: #971b36;
   --stats-on-danger: #ffffff;
   --stats-chart-1: var(--teal);
   --stats-chart-2: #2563eb;

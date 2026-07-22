@@ -21,6 +21,20 @@ export function listTraces() {
   return fetchJson('/api/traces');
 }
 
+export function listAlerts(limit = null) {
+  const query = limit == null ? '' : `?limit=${encodeURIComponent(limit)}`;
+  return fetchJson(`/api/alerts${query}`);
+}
+
+export function readAlert(alertId) {
+  return fetchJson(`/api/alerts/${encodeURIComponent(alertId)}`);
+}
+
+export function readTraceAlerts(traceId, limit = null) {
+  const query = limit == null ? '' : `?limit=${encodeURIComponent(limit)}`;
+  return fetchJson(`/api/traces/${encodeURIComponent(traceId)}/alerts${query}`);
+}
+
 export function readCurrentConfig() {
   return fetchJson('/api/config/current');
 }
@@ -33,9 +47,49 @@ export function readPluginRuntimeStatus() {
   return fetchJson('/api/plugins/runtime');
 }
 
+export function readPluginCatalog() {
+  return fetchJson('/api/plugins/catalog');
+}
+
+export function loadDiscoveredPlugin(packageKey, options) {
+  return fetchJson(`/api/plugins/catalog/load?package=${encodeURIComponent(packageKey)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(options),
+  });
+}
+
 export function unloadRuntimePlugin(instanceId) {
   return fetchJson(`/api/plugins/runtime/unload?instance_id=${encodeURIComponent(instanceId)}`, {
     method: 'POST',
+  });
+}
+
+export function sendRuntimePluginCommand(instanceId, argv) {
+  return fetchJson(`/api/plugins/runtime/command?instance_id=${encodeURIComponent(instanceId)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ argv }),
+  });
+}
+
+export function readRuntimePluginConfig(instanceId) {
+  return fetchJson(`/api/plugins/runtime/config?instance_id=${encodeURIComponent(instanceId)}`);
+}
+
+export function validateRuntimePluginConfig(instanceId, config) {
+  return fetchJson(`/api/plugins/runtime/config/validate?instance_id=${encodeURIComponent(instanceId)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ config }),
+  });
+}
+
+export function updateRuntimePluginConfig(instanceId, config) {
+  return fetchJson(`/api/plugins/runtime/config?instance_id=${encodeURIComponent(instanceId)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ config }),
   });
 }
 

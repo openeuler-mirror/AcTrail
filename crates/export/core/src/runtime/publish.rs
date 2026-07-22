@@ -1,9 +1,9 @@
 use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
 use model_core::trace::TraceRecord;
-use semantic_action::{SemanticAction, SemanticActionLink};
+use semantic_action::{FileObservationPath, SemanticAction, SemanticActionLink};
 
-use plugin_system::{ObservationConsumer, PluginInstanceStatus};
+use plugin_system::{ObservationConsumer, PluginInstanceStatus, PluginRuntimeError, PostTraceTask};
 
 use crate::ExportError;
 
@@ -15,6 +15,7 @@ pub struct SemanticActionExportBatch<'a> {
     pub trace: &'a TraceRecord,
     pub actions: &'a [SemanticAction],
     pub links: &'a [SemanticActionLink],
+    pub file_observation_paths: &'a [FileObservationPath],
     pub payload_segments: &'a [PayloadSegment],
 }
 
@@ -39,6 +40,26 @@ impl ExportRuntime {
 
     pub fn consumer_instance_ids(&self) -> Vec<String> {
         self.subscriptions.consumer_instance_ids()
+    }
+
+    pub fn post_trace_instance_ids(&self) -> Vec<String> {
+        self.subscriptions.post_trace_instance_ids()
+    }
+
+    pub fn enqueue_post_trace(
+        &self,
+        instance_id: &str,
+        task: PostTraceTask,
+    ) -> Result<(), ExportError> {
+        self.subscriptions.enqueue_post_trace(instance_id, task)
+    }
+
+    pub fn cancel_post_trace(&self, instance_id: &str) -> Result<(), ExportError> {
+        self.subscriptions.cancel_post_trace(instance_id)
+    }
+
+    pub fn drain_post_trace_completions(&self) -> Vec<PostTraceCompletion> {
+        self.subscriptions.drain_post_trace_completions()
     }
 
     pub fn plugin_statuses(&self) -> Vec<PluginInstanceStatus> {
@@ -92,6 +113,13 @@ pub struct ExportDroppedRecord {
     pub dropped_records: u64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PostTraceCompletion {
+    pub trace_id: TraceId,
+    pub instance_id: String,
+    pub result: Result<(), PluginRuntimeError>,
+}
+
 fn validate_batch(batch: &SemanticActionExportBatch<'_>) -> Result<(), ExportError> {
     for action in batch.actions {
         if action.trace_id != batch.trace.trace_id {
@@ -106,6 +134,24 @@ fn validate_batch(batch: &SemanticActionExportBatch<'_>) -> Result<(), ExportErr
             return Err(ExportError::new(
                 EXPORT_RUNTIME_ERROR,
                 "semantic action link trace_id does not match export trace",
+            ));
+        }
+    }
+    for path in batch.file_observation_paths {
+        if path.trace_id != batch.trace.trace_id {
+            return Err(ExportError::new(
+                EXPORT_RUNTIME_ERROR,
+                "file observation path trace_id does not match export trace",
+            ));
+        }
+        if !batch
+            .actions
+            .iter()
+            .any(|action| action.action_id == path.action_id)
+        {
+            return Err(ExportError::new(
+                EXPORT_RUNTIME_ERROR,
+                "file observation path references an action outside the export batch",
             ));
         }
     }

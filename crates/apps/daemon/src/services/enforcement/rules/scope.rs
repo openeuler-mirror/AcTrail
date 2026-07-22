@@ -51,6 +51,20 @@ impl PathScope {
                 let parent = path.parent().ok_or_else(|| {
                     format!("enforcement rule {} has no parent path", path.display())
                 })?;
+                let metadata = fs::metadata(parent).map_err(|error| {
+                    format!(
+                        "fanotify open coverage requires existing parent directory {} for {}: {error}",
+                        parent.display(),
+                        path.display()
+                    )
+                })?;
+                if !metadata.is_dir() {
+                    return Err(format!(
+                        "fanotify open coverage parent {} for {} is not a directory",
+                        parent.display(),
+                        path.display()
+                    ));
+                }
                 directories.insert(parent.to_path_buf());
             }
             Self::Recursive(base) => collect_existing_directories(base, directories)?,
@@ -125,9 +139,12 @@ fn collect_existing_directories(
     directories: &mut BTreeSet<PathBuf>,
 ) -> Result<(), String> {
     directories.insert(root.to_path_buf());
-    for entry in
-        fs::read_dir(root).map_err(|error| format!("read_dir {}: {error}", root.display()))?
-    {
+    for entry in fs::read_dir(root).map_err(|error| {
+        format!(
+            "fanotify recursive open coverage requires existing directory {}: {error}",
+            root.display()
+        )
+    })? {
         let entry = entry.map_err(|error| format!("read_dir {}: {error}", root.display()))?;
         let path = entry.path();
         if path.is_dir() {

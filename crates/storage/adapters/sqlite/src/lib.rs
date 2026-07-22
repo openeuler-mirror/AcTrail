@@ -1,5 +1,6 @@
 //! SQLite-backed storage adapter.
 
+pub mod alerts;
 pub mod backend;
 pub mod config;
 pub mod query;
@@ -16,7 +17,6 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
-use model_core::ids::TraceId;
 use model_core::process::{
     HostProcessCoordinates, NamespaceIdentity, NamespaceProcessCoordinates, ProcessIdentity,
     ProcessRecord, ProcessResolutionState,
@@ -30,7 +30,7 @@ pub use config::{
 #[derive(Clone)]
 pub struct SqliteStorage {
     connection: Rc<RefCell<Connection>>,
-    export_leases: Rc<RefCell<BTreeSet<TraceId>>>,
+    trace_leases: Rc<RefCell<crate::query::TraceLeaseRegistry>>,
 }
 
 impl SqliteStorage {
@@ -40,7 +40,7 @@ impl SqliteStorage {
         schema::initialize(&connection)?;
         Ok(Self {
             connection: Rc::new(RefCell::new(connection)),
-            export_leases: Rc::new(RefCell::new(BTreeSet::new())),
+            trace_leases: Rc::new(RefCell::new(crate::query::TraceLeaseRegistry::new())),
         })
     }
 
@@ -53,7 +53,7 @@ impl SqliteStorage {
         schema::initialize(&connection)?;
         Ok(Self {
             connection: Rc::new(RefCell::new(connection)),
-            export_leases: Rc::new(RefCell::new(BTreeSet::new())),
+            trace_leases: Rc::new(RefCell::new(crate::query::TraceLeaseRegistry::new())),
         })
     }
 
@@ -62,7 +62,7 @@ impl SqliteStorage {
         schema::validate_read_schema(&connection)?;
         Ok(Self {
             connection: Rc::new(RefCell::new(connection)),
-            export_leases: Rc::new(RefCell::new(BTreeSet::new())),
+            trace_leases: Rc::new(RefCell::new(crate::query::TraceLeaseRegistry::new())),
         })
     }
 
@@ -71,7 +71,7 @@ impl SqliteStorage {
         schema::initialize(&connection)?;
         Ok(Self {
             connection: Rc::new(RefCell::new(connection)),
-            export_leases: Rc::new(RefCell::new(BTreeSet::new())),
+            trace_leases: Rc::new(RefCell::new(crate::query::TraceLeaseRegistry::new())),
         })
     }
 
@@ -220,8 +220,8 @@ impl SqliteStorage {
         &self.connection
     }
 
-    pub(crate) fn export_leases(&self) -> &Rc<RefCell<BTreeSet<TraceId>>> {
-        &self.export_leases
+    pub(crate) fn trace_leases(&self) -> &Rc<RefCell<crate::query::TraceLeaseRegistry>> {
+        &self.trace_leases
     }
 }
 
@@ -335,7 +335,7 @@ mod tests {
     };
     use model_core::ids::{CollectorName, DiagnosticId, EventId, ProfileName, TraceId, TraceName};
     use model_core::process::{ProcessIdentity, ProcessMembership};
-    use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
+    use model_core::trace::{TraceAlertToken, TraceHealth, TraceLifecycleState, TraceRecord};
     use rusqlite::Connection;
     use store_read_contract::diagnostics::DiagnosticReadStore;
     use store_read_contract::events::EventReadStore;
@@ -418,6 +418,7 @@ mod tests {
         storage
             .create_trace(TraceRecord::new(
                 trace_id,
+                TraceAlertToken::new([1; 32]),
                 ProcessIdentity::new(200),
                 TraceName::new("wal-reader"),
                 ProfileName::new("snapshot"),
@@ -438,6 +439,7 @@ mod tests {
         let process = ProcessIdentity::new(200);
         let mut trace = TraceRecord::new(
             trace_id,
+            TraceAlertToken::new([1; 32]),
             process.clone(),
             TraceName::new("demo"),
             ProfileName::new("snapshot"),
@@ -481,13 +483,18 @@ mod tests {
             ))
             .unwrap();
 
-        let lease = storage.acquire_export_lease(trace_id).unwrap();
+        let lease = storage
+            .acquire_trace_lease(
+                trace_id,
+                store_snapshot_contract::lease::TraceLeasePurpose::Export,
+            )
+            .unwrap();
         let snapshot = storage.read_snapshot(&lease).unwrap();
         assert_eq!(snapshot.trace.trace_id, trace_id);
         assert_eq!(snapshot.memberships.len(), 1);
         assert_eq!(snapshot.events.len(), 1);
         assert_eq!(snapshot.diagnostics.len(), 1);
-        storage.release_export_lease(lease).unwrap();
+        storage.release_trace_lease(lease).unwrap();
 
         storage
             .purge_trace(

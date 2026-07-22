@@ -2,7 +2,7 @@
 # Stable plugin id used by plugin status output.
 id = "test.qoder-llm-codec"
 # Manifest schema version supported by the daemon.
-api_version = "actrail.plugin.v1"
+api_version = "actrail.plugin.v2"
 # Registers this WASM module as an LLM request/SSE codec.
 role = "llm-codec"
 # LLM codec plugins currently run as WASM core modules.

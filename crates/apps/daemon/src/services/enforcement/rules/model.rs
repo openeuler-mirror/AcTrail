@@ -1,4 +1,5 @@
-use std::path::Path;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 use config_core::daemon::EnforcementDecision;
 use plugin_system::{
@@ -74,6 +75,7 @@ impl StoredPolicyRule {
             return Err("file policy rule decision cannot be default".to_string());
         }
         let rule = EnforcementRule {
+            owner_instance_id: owner_instance_id.clone(),
             rule_id: rule_id.clone(),
             decision: rule_decision(decision, gray_target)?,
             operation: operation.as_str().to_string(),
@@ -132,8 +134,8 @@ impl StoredPolicyRule {
         )
     }
 
-    pub(super) fn matches_path(&self, path: &Path) -> bool {
-        self.operation == FilePolicyOperation::Open && self.scope.matches_path(path)
+    pub(super) fn matches_path(&self, operation: FilePolicyOperation, path: &Path) -> bool {
+        self.operation.matches(operation) && self.scope.matches_path(path)
     }
 
     pub(super) fn is_host_auto(&self) -> bool {
@@ -153,7 +155,21 @@ impl StoredPolicyRule {
     }
 
     pub(super) fn contributes_mark_directories(&self) -> bool {
-        self.tier != RuleTier::Builtin
+        self.tier != RuleTier::Builtin && self.operation.matches(FilePolicyOperation::Open)
+    }
+
+    pub(super) fn validate_mark_directories(&self) -> Result<(), String> {
+        if !self.contributes_mark_directories() {
+            return Ok(());
+        }
+        self.scope
+            .collect_mark_directories(&mut BTreeSet::<PathBuf>::new())
+            .map_err(|error| {
+                format!(
+                    "operation {} requires fanotify open coverage: {error}",
+                    self.operation.as_str()
+                )
+            })
     }
 
     pub(super) fn matches_filter(&self, filter: &FilePolicyListFilter) -> bool {
@@ -211,7 +227,7 @@ pub(super) fn parse_rule(raw: &str) -> Result<EnforcementRule, String> {
             path,
         ),
         _ => Err(
-            "expected: <rule_id> <allow|deny> open <absolute-path> or <rule_id> gray sync-plugin <instance> timeout-ms <positive-ms> concurrency <positive-limit> fallback <allow|deny> open <absolute-path>"
+            "expected: <rule_id> <allow|deny> <any|open|mkdir|rmdir> <absolute-path> or <rule_id> gray sync-plugin <instance> timeout-ms <positive-ms> concurrency <positive-limit> fallback <allow|deny> <any|open|mkdir|rmdir> <absolute-path>"
                 .to_string(),
         ),
     }
@@ -292,6 +308,7 @@ fn parse_local_rule(
 ) -> Result<EnforcementRule, String> {
     let operation = FilePolicyOperation::from_wire(operation)?;
     Ok(EnforcementRule {
+        owner_instance_id: super::STATIC_POLICY_OWNER.to_string(),
         rule_id: rule_id.to_string(),
         decision: RuleDecision::Local(decision.parse::<EnforcementDecision>()?),
         operation: operation.as_str().to_string(),
@@ -313,6 +330,7 @@ fn parse_sync_plugin_rule(
         return Err("sync-plugin instance id must not be empty".to_string());
     }
     Ok(EnforcementRule {
+        owner_instance_id: super::STATIC_POLICY_OWNER.to_string(),
         rule_id: rule_id.to_string(),
         decision: RuleDecision::SyncPlugin {
             instance_id: instance_id.to_string(),

@@ -41,6 +41,8 @@
   --stats-accent-faint: rgba(123, 223, 242, 0.08);
   --stats-on-accent: #181818;
   --stats-danger: #ff7a92;
+  --stats-warning: #f1c75b;
+  --stats-critical: #ff3f68;
   --stats-on-danger: #181818;
   --stats-chart-1: #7bdff2;
   --stats-chart-2: #a78bfa;

@@ -43,6 +43,8 @@ pub(super) fn encode_reply(fields: &mut Vec<String>, reply: &LaunchPermissionsRe
     fields.push(reply.payload_socket_seccomp.to_string());
     fields.push(reply.process_seccomp.to_string());
     fields.push(reply.network_control_seccomp.to_string());
+    fields.push(reply.file_mkdir_seccomp.to_string());
+    fields.push(reply.file_rmdir_seccomp.to_string());
     fields.push(reply.degraded.to_string());
     fields.push(reply.required_capabilities.len().to_string());
     fields.extend(
@@ -56,8 +58,8 @@ pub(super) fn encode_reply(fields: &mut Vec<String>, reply: &LaunchPermissionsRe
 }
 
 pub(super) fn decode_reply(fields: &[String]) -> Result<ControlReply, ControlCodecError> {
-    let capability_count = parse_usize(field(fields, 11)?, "required_capability_count")?;
-    let mut cursor = 12;
+    let capability_count = parse_usize(field(fields, 13)?, "required_capability_count")?;
+    let mut cursor = 14;
     let mut required_capabilities = Vec::new();
     for _ in 0..capability_count {
         required_capabilities.push(
@@ -83,7 +85,9 @@ pub(super) fn decode_reply(fields: &[String]) -> Result<ControlReply, ControlCod
         payload_socket_seccomp: parse_bool(field(fields, 7)?, "payload_socket_seccomp")?,
         process_seccomp: parse_bool(field(fields, 8)?, "process_seccomp")?,
         network_control_seccomp: parse_bool(field(fields, 9)?, "network_control_seccomp")?,
-        degraded: parse_bool(field(fields, 10)?, "degraded")?,
+        file_mkdir_seccomp: parse_bool(field(fields, 10)?, "file_mkdir_seccomp")?,
+        file_rmdir_seccomp: parse_bool(field(fields, 11)?, "file_rmdir_seccomp")?,
+        degraded: parse_bool(field(fields, 12)?, "degraded")?,
         required_capabilities,
         reasons,
     }))
@@ -134,6 +138,8 @@ mod tests {
                 payload_socket_seccomp: false,
                 process_seccomp: false,
                 network_control_seccomp: false,
+                file_mkdir_seccomp: false,
+                file_rmdir_seccomp: false,
                 required_capabilities: vec![
                     Capability::ProcLifecycle,
                     Capability::SocketPlaintextPayload,

@@ -1,22 +1,39 @@
+use std::sync::mpsc::{Receiver, Sender, channel};
+
 use model_core::payload::PayloadSegment;
-use plugin_system::{ObservationConsumer, PluginInstanceStatus, PluginLifecycleState};
+use plugin_system::{
+    ObservationConsumer, PluginInstanceStatus, PluginLifecycleState, PostTraceTask,
+};
 
 use crate::ExportError;
 
 use super::subscription_slot::{DropAccumulator, ObservationConsumerSlot};
-use super::{ExportPublishReport, ObservationConsumerRemoval, SemanticActionExportBatch};
+use super::{
+    ExportPublishReport, ObservationConsumerRemoval, PostTraceCompletion, SemanticActionExportBatch,
+};
 
 pub(crate) struct SemanticActionSubscriptionManager {
     consumers: Vec<ObservationConsumerSlot>,
+    post_trace_completion_sender: Sender<PostTraceCompletion>,
+    post_trace_completion_receiver: Receiver<PostTraceCompletion>,
 }
 
 impl SemanticActionSubscriptionManager {
     pub(crate) fn new(consumers: Vec<Box<dyn ObservationConsumer>>) -> Self {
+        let (post_trace_completion_sender, post_trace_completion_receiver) = channel();
         Self {
             consumers: consumers
                 .into_iter()
-                .map(|consumer| ObservationConsumerSlot::new(consumer, Vec::new()))
+                .map(|consumer| {
+                    ObservationConsumerSlot::new(
+                        consumer,
+                        Vec::new(),
+                        post_trace_completion_sender.clone(),
+                    )
+                })
                 .collect(),
+            post_trace_completion_sender,
+            post_trace_completion_receiver,
         }
     }
 
@@ -25,6 +42,50 @@ impl SemanticActionSubscriptionManager {
             .iter()
             .map(|slot| slot.instance_id().to_string())
             .collect()
+    }
+
+    pub(crate) fn post_trace_instance_ids(&self) -> Vec<String> {
+        self.consumers
+            .iter()
+            .filter(|slot| slot.has_post_trace_analyzer())
+            .map(|slot| slot.instance_id().to_string())
+            .collect()
+    }
+
+    pub(crate) fn enqueue_post_trace(
+        &self,
+        instance_id: &str,
+        task: PostTraceTask,
+    ) -> Result<(), ExportError> {
+        let slot = self
+            .consumers
+            .iter()
+            .find(|slot| slot.instance_id() == instance_id)
+            .ok_or_else(|| {
+                ExportError::new(
+                    "post_trace_plugin_missing",
+                    format!("post-trace plugin instance {instance_id} not found"),
+                )
+            })?;
+        slot.enqueue_post_trace(task)
+    }
+
+    pub(crate) fn cancel_post_trace(&self, instance_id: &str) -> Result<(), ExportError> {
+        let slot = self
+            .consumers
+            .iter()
+            .find(|slot| slot.instance_id() == instance_id)
+            .ok_or_else(|| {
+                ExportError::new(
+                    "post_trace_plugin_missing",
+                    format!("post-trace plugin instance {instance_id} not found"),
+                )
+            })?;
+        slot.cancel_post_trace()
+    }
+
+    pub(crate) fn drain_post_trace_completions(&self) -> Vec<PostTraceCompletion> {
+        self.post_trace_completion_receiver.try_iter().collect()
     }
 
     pub(crate) fn plugin_statuses(&self) -> Vec<PluginInstanceStatus> {
@@ -56,7 +117,11 @@ impl SemanticActionSubscriptionManager {
                 format!("plugin instance {instance_id} already exists"),
             ));
         }
-        let slot = ObservationConsumerSlot::new(consumer, warnings);
+        let slot = ObservationConsumerSlot::new(
+            consumer,
+            warnings,
+            self.post_trace_completion_sender.clone(),
+        );
         let status = slot.status(PluginLifecycleState::Active);
         self.consumers.push(slot);
         Ok(status)

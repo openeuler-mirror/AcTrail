@@ -16,7 +16,7 @@ use semantic_action::{
 use crate::payload_projection::llm::{LlmCodecPlugin, LlmCodecPluginStatus};
 
 use super::actions::{
-    enforcement_action, file_modify_action, http_message_action, is_file_modify_operation,
+    enforcement_action, file_modify_action, http_message_action, is_file_modify_event,
     is_http_protocol, process_exec_action, process_fork_attempt_action,
 };
 use super::agent::AgentProjector;
@@ -102,9 +102,19 @@ impl LiveSemanticActionRuntime {
     }
 
     pub fn observe_event(&mut self, event: &DomainEvent) -> LiveSemanticActionOutput {
-        if let EventPayload::File(payload) = &event.payload {
-            return if is_file_modify_operation(&payload.operation) {
+        if matches!(&event.payload, EventPayload::File(_)) {
+            return if is_file_modify_event(event) {
                 let file_action = file_modify_action(event);
+                let file_observation_path = file_action
+                    .attributes
+                    .get(attrs::file::PATH)
+                    .cloned()
+                    .map(|path| FileObservationPath {
+                        trace_id: file_action.trace_id,
+                        action_id: file_action.action_id.clone(),
+                        path_order: 0,
+                        path,
+                    });
                 let mut output = self
                     .file_access
                     .observe_file_event(event, Some(&file_action));
@@ -120,6 +130,9 @@ impl LiveSemanticActionRuntime {
                         })
                         .count();
                     output.actions.insert(insert_at, file_action);
+                    if let Some(path) = file_observation_path {
+                        output.file_observation_paths.push(path);
+                    }
                 }
                 output
                     .links

@@ -27,6 +27,12 @@ use crate::provider_rules::ProviderRuleSetConfig;
 pub const DEFAULT_OPERATOR_CONFIG_PATH: &str = "/etc/actrail/actraild.conf";
 pub const DEFAULT_CONTROL_PENDING_CONNECTION_MAX: u32 = 256;
 pub const DEFAULT_ACTIVE_TRACE_MAX: u32 = 128;
+pub const DEFAULT_PLUGIN_DISCOVERY_DIRECTORY: &str = "~/.actrail/plugins";
+pub const DEFAULT_PLUGIN_DISCOVERY_MAX_PACKAGES: u32 = 128;
+pub const DEFAULT_PLUGIN_DISCOVERY_MANIFEST_MAX_BYTES: u64 = 262_144;
+pub const DEFAULT_PLUGIN_ALERT_QUEUE_CAPACITY: u32 = 1024;
+pub const DEFAULT_PLUGIN_ALERT_WRITES_PER_CYCLE: u32 = 256;
+pub const DEFAULT_PLUGIN_ALERT_DRAIN_TIMEOUT_MS: u64 = 30_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OperatorConfigInitStatus {
@@ -48,6 +54,8 @@ pub struct OperatorConfig {
     pub cluster: ClusterConfig,
     pub export_config: ExportConfig,
     pub export_runtime: RuntimeExportConfig,
+    pub plugin_discovery: PluginDiscoveryConfig,
+    pub plugin_alert_runtime: PluginAlertRuntimeConfig,
     pub startup_plugins: StartupPluginsConfig,
     pub log_path: PathBuf,
     pub diagnostic_log_level: DiagnosticLogLevel,
@@ -70,6 +78,70 @@ pub struct OperatorConfig {
     pub startup_wait_ms: u64,
     pub shutdown_wait_ms: u64,
     pub supervision_poll_interval_ms: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PluginDiscoveryConfig {
+    pub directory: PathBuf,
+    pub max_packages: u32,
+    pub manifest_max_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PluginAlertRuntimeConfig {
+    pub queue_capacity: u32,
+    pub writes_per_cycle: u32,
+    pub drain_timeout_ms: u64,
+}
+
+impl Default for PluginAlertRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            queue_capacity: DEFAULT_PLUGIN_ALERT_QUEUE_CAPACITY,
+            writes_per_cycle: DEFAULT_PLUGIN_ALERT_WRITES_PER_CYCLE,
+            drain_timeout_ms: DEFAULT_PLUGIN_ALERT_DRAIN_TIMEOUT_MS,
+        }
+    }
+}
+
+impl PluginDiscoveryConfig {
+    pub fn resolved_directory(&self) -> Result<PathBuf, String> {
+        if self.directory.is_absolute() {
+            return Ok(self.directory.clone());
+        }
+        let raw = self.directory.to_str().ok_or_else(|| {
+            format!(
+                "plugins.discovery.directory is not UTF-8: {}",
+                self.directory.display()
+            )
+        })?;
+        let suffix = if raw == "~" {
+            ""
+        } else if let Some(suffix) = raw.strip_prefix("~/") {
+            suffix
+        } else {
+            return Err(format!(
+                "plugins.discovery.directory must be absolute or start with ~/: {raw}"
+            ));
+        };
+        let home = std::env::var_os("HOME")
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                "plugins.discovery.directory uses ~/ but HOME is not available".to_string()
+            })?;
+        let home = PathBuf::from(home);
+        if !home.is_absolute() {
+            return Err(format!(
+                "HOME must be absolute to resolve plugins.discovery.directory: {}",
+                home.display()
+            ));
+        }
+        Ok(if suffix.is_empty() {
+            home
+        } else {
+            home.join(suffix)
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -267,6 +339,7 @@ fn validate_seccomp_config(
     payload_tls: &PayloadTlsConfig,
     payload_socket: &PayloadSocketConfig,
     process_seccomp: &ProcessSeccompConfig,
+    enforcement: &EnforcementConfig,
     capabilities: &[CapabilityRequest],
 ) -> Result<(), String> {
     if payload_tls.enabled
@@ -287,6 +360,9 @@ fn validate_seccomp_config(
         return Err(
             "process_seccomp_enabled=true requires seccomp_notify_enabled=true".to_string(),
         );
+    }
+    if enforcement.enabled && !enforcement.seccomp_syscalls.is_empty() && !notify.enabled {
+        return Err("enforcement seccomp syscalls require seccomp_notify_enabled=true".to_string());
     }
     if capability_requested(capabilities, &Capability::ProcExecContext) && !process_seccomp.enabled
     {

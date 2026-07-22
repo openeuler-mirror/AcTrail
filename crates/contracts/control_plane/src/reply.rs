@@ -38,6 +38,8 @@ pub struct LaunchPermissionsReply {
     pub payload_socket_seccomp: bool,
     pub process_seccomp: bool,
     pub network_control_seccomp: bool,
+    pub file_mkdir_seccomp: bool,
+    pub file_rmdir_seccomp: bool,
     pub required_capabilities: Vec<Capability>,
     pub degraded: bool,
     pub reasons: Vec<String>,
@@ -81,6 +83,22 @@ pub struct PluginCommandReply {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PluginConfigReply {
+    pub instance_id: String,
+    pub plugin_id: String,
+    pub editable: bool,
+    pub config_json: String,
+    pub schema_json: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PluginConfigValidationReply {
+    pub instance_id: String,
+    pub valid: bool,
+    pub errors: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ControlReply {
     LaunchPermissions(LaunchPermissionsReply),
     LaunchTlsPlan(LaunchTlsPlanReply),
@@ -92,6 +110,8 @@ pub enum ControlReply {
     PluginList(Vec<PluginInstanceStatus>),
     PluginStatus(PluginInstanceStatus),
     PluginCommand(PluginCommandReply),
+    PluginConfig(PluginConfigReply),
+    PluginConfigValidation(PluginConfigValidationReply),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

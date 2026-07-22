@@ -48,6 +48,8 @@ impl StorageAttachService {
         &mut self,
         trace_runtime: &mut TraceRuntime,
     ) -> Result<(), ControlError> {
+        self.drain_alert_ingress_impl()?;
+        self.drain_post_trace_runtime_impl()?;
         self.drain_resource_metrics_impl(trace_runtime)?;
         self.drain_tls_sync_events_impl(trace_runtime)?;
         let stats = self.collector.stats();
@@ -315,14 +317,29 @@ impl StorageAttachService {
         let tls_sync = &self.tls_sync;
         let collector = &mut self.collector;
         let mut network_events = Vec::new();
+        let mut enforcement_outcomes = Vec::new();
         let pending_process_observations = &mut self.pending_process_seccomp_observations;
         {
             let process_seccomp = &self.process_seccomp;
             let command_control = &self.command_control;
             let network_control = &self.network_control;
             let control_plugins = &self.control_plugins;
+            let enforcement = &mut self.enforcement;
             let identity_reader = &self.identity_reader;
             seccomp_notify.drain_notifications(|notification, continuation| {
+                if let Some(outcome) = enforcement.handle_seccomp_notification(
+                    trace_runtime,
+                    &self.process_registry,
+                    identity_reader,
+                    control_plugins,
+                    notification,
+                    continuation,
+                )? {
+                    enforcement_outcomes.push(outcome);
+                }
+                if continuation.is_finished() {
+                    return Ok(());
+                }
                 network_events.extend(network_control.handle_notification(
                     trace_runtime,
                     &self.process_registry,
@@ -400,6 +417,7 @@ impl StorageAttachService {
                 Ok(())
             })?;
         }
+        self.persist_enforcement_outcomes(trace_runtime, enforcement_outcomes)?;
         self.process_live_event_batch(trace_runtime, network_events)?;
         Ok(())
     }
@@ -474,19 +492,58 @@ impl StorageAttachService {
         &mut self,
         trace_runtime: &trace_runtime::TraceRuntime,
     ) -> Result<(), ControlError> {
-        let mut events = Vec::new();
-        for draft in self.enforcement.drain_due(
+        let outcomes = self.enforcement.drain_due(
             trace_runtime,
             &self.process_registry,
             &self.identity_reader,
             &self.control_plugins,
-        )? {
+        )?;
+        self.persist_enforcement_outcomes(trace_runtime, outcomes)
+    }
+
+    fn persist_enforcement_outcomes(
+        &mut self,
+        trace_runtime: &TraceRuntime,
+        outcomes: Vec<crate::services::enforcement::EnforcementOutcomeDraft>,
+    ) -> Result<(), ControlError> {
+        let mut events = Vec::new();
+        for outcome in outcomes {
+            if let Some(alert) = outcome.boundary_alert {
+                let alert_token = trace_runtime
+                    .get_trace(outcome.trace_id)
+                    .map(|entry| entry.trace.alert_token.clone());
+                match alert_token {
+                    Some(alert_token) => {
+                        if let Err(error) = self.alert_ingress.submit_file_access_boundary_alert(
+                            outcome.trace_id,
+                            alert_token,
+                            alert,
+                        ) {
+                            tracing::warn!(
+                                trace_id = %outcome.trace_id,
+                                error.code = %error.code,
+                                error.message = %error.message,
+                                "file access boundary alert queue admission failed"
+                            );
+                        }
+                    }
+                    None => {
+                        tracing::warn!(
+                            trace_id = %outcome.trace_id,
+                            "file access boundary alert lost its trace runtime before queue admission"
+                        );
+                    }
+                }
+            }
+            let Some(draft) = outcome.audit else {
+                continue;
+            };
             let event = DomainEvent::new(
                 EventEnvelope {
                     event_id: self.next_event_id()?,
-                    trace_id: draft.trace_id,
-                    observed_at: draft.observed_at,
-                    process: draft.process,
+                    trace_id: outcome.trace_id,
+                    observed_at: outcome.observed_at,
+                    process: outcome.process,
                     collector: CollectorName::new(crate::services::enforcement::COLLECTOR_NAME),
                     kind: EventKind::Enforcement,
                     flags: EventFlags {

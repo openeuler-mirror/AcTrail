@@ -8,7 +8,8 @@ use model_core::ids::ProfileName;
 
 pub use permission::{
     DeploymentPermissionAvailability, DeploymentPermissionPolicy, DeploymentPermissions,
-    LaunchSeccompRequirements, PermissionDecision, PermissionMode, resolve_deployment_permissions,
+    FileEnforcementSeccompRequirements, LaunchSeccompRequirements, PermissionDecision,
+    PermissionMode, resolve_deployment_permissions,
 };
 
 /// Capabilities that only the host eBPF collector can provide. Dropped on the

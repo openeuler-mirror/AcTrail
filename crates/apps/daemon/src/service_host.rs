@@ -6,8 +6,8 @@ use std::time::{Duration, SystemTime};
 
 use control_contract::command::{ControlCommand, TrackAddCommand};
 use control_contract::reply::{
-    ControlError, ControlReply, DoctorReply, LaunchTlsPlanReply, PluginCommandReply, TraceListItem,
-    TrackAddReply,
+    ControlError, ControlReply, DoctorReply, LaunchTlsPlanReply, PluginCommandReply,
+    PluginConfigReply, PluginConfigValidationReply, TraceListItem, TrackAddReply,
 };
 use control_contract::selector::TraceSelector;
 use model_core::ids::{ProfileName, RequestId};
@@ -42,6 +42,7 @@ pub trait AttachService {
     ) -> Result<(), ControlError>;
     fn event_poll_fds(&self) -> Result<Vec<RawFd>, ControlError>;
     fn background_poll_timeout(&self) -> Result<Option<Duration>, ControlError>;
+    fn shutdown(&mut self) -> Result<(), ControlError>;
     fn remove_root(
         &mut self,
         trace_runtime: &mut trace_runtime::TraceRuntime,
@@ -63,6 +64,17 @@ pub trait AttachService {
         &mut self,
         command: control_contract::command::PluginCommandCommand,
     ) -> Result<PluginCommandReply, ControlError>;
+    fn plugin_config(&self, instance_id: &str) -> Result<PluginConfigReply, ControlError>;
+    fn validate_plugin_config(
+        &self,
+        instance_id: &str,
+        config_json: &str,
+    ) -> Result<PluginConfigValidationReply, ControlError>;
+    fn update_plugin_config(
+        &mut self,
+        instance_id: &str,
+        config_json: &str,
+    ) -> Result<PluginConfigReply, ControlError>;
 }
 
 pub trait AttachDebugService {
@@ -112,6 +124,13 @@ impl<A> DaemonServiceHost<A> {
         A: AttachService,
     {
         self.wiring.attach_service.background_poll_timeout()
+    }
+
+    pub fn shutdown(&mut self) -> Result<(), ControlError>
+    where
+        A: AttachService,
+    {
+        self.wiring.attach_service.shutdown()
     }
 
     pub fn ebpf_debug_snapshot(
@@ -344,6 +363,21 @@ where
                 .attach_service
                 .handle_plugin_command(command)
                 .map(ControlReply::PluginCommand),
+            ControlCommand::PluginConfigGet(command) => self
+                .wiring
+                .attach_service
+                .plugin_config(&command.instance_id)
+                .map(ControlReply::PluginConfig),
+            ControlCommand::PluginConfigValidate(command) => self
+                .wiring
+                .attach_service
+                .validate_plugin_config(&command.instance_id, &command.config_json)
+                .map(ControlReply::PluginConfigValidation),
+            ControlCommand::PluginConfigUpdate(command) => self
+                .wiring
+                .attach_service
+                .update_plugin_config(&command.instance_id, &command.config_json)
+                .map(ControlReply::PluginConfig),
         }
     }
 }
@@ -429,7 +463,10 @@ where
             | ControlCommand::PluginStatus(_)
             | ControlCommand::PluginLoad(_)
             | ControlCommand::PluginUnload(_)
-            | ControlCommand::PluginCommand(_) => {
+            | ControlCommand::PluginCommand(_)
+            | ControlCommand::PluginConfigGet(_)
+            | ControlCommand::PluginConfigValidate(_)
+            | ControlCommand::PluginConfigUpdate(_) => {
                 if peer.is_trusted_host_root() {
                     Ok(())
                 } else {
@@ -508,6 +545,9 @@ fn control_command_name(command: &ControlCommand) -> &'static str {
         ControlCommand::PluginLoad(_) => "plugin_load",
         ControlCommand::PluginUnload(_) => "plugin_unload",
         ControlCommand::PluginCommand(_) => "plugin_command",
+        ControlCommand::PluginConfigGet(_) => "plugin_config_get",
+        ControlCommand::PluginConfigValidate(_) => "plugin_config_validate",
+        ControlCommand::PluginConfigUpdate(_) => "plugin_config_update",
     }
 }
 
@@ -632,6 +672,8 @@ mod tests {
                 payload_socket_seccomp: false,
                 process_seccomp: false,
                 network_control_seccomp: false,
+                file_mkdir_seccomp: false,
+                file_rmdir_seccomp: false,
                 required_capabilities: Vec::new(),
                 degraded: false,
                 reasons: Vec::new(),
@@ -679,6 +721,10 @@ mod tests {
             Ok(None)
         }
 
+        fn shutdown(&mut self) -> Result<(), ControlError> {
+            Ok(())
+        }
+
         fn remove_root(
             &mut self,
             _trace_runtime: &mut trace_runtime::TraceRuntime,
@@ -718,6 +764,26 @@ mod tests {
             &mut self,
             _command: control_contract::command::PluginCommandCommand,
         ) -> Result<PluginCommandReply, ControlError> {
+            Err(ControlError::new("unused", "unused"))
+        }
+
+        fn plugin_config(&self, _instance_id: &str) -> Result<PluginConfigReply, ControlError> {
+            Err(ControlError::new("unused", "unused"))
+        }
+
+        fn validate_plugin_config(
+            &self,
+            _instance_id: &str,
+            _config_json: &str,
+        ) -> Result<PluginConfigValidationReply, ControlError> {
+            Err(ControlError::new("unused", "unused"))
+        }
+
+        fn update_plugin_config(
+            &mut self,
+            _instance_id: &str,
+            _config_json: &str,
+        ) -> Result<PluginConfigReply, ControlError> {
             Err(ControlError::new("unused", "unused"))
         }
     }
@@ -894,6 +960,7 @@ mod tests {
                 TrackTraceRequest {
                     root_identity: ProcessIdentity::new(1),
                     root_container_id: Some("container-a".to_string()),
+                    root_working_directory: None,
                     display_name: TraceName::new("owned"),
                     profile_snapshot,
                     tags: BTreeSet::new(),

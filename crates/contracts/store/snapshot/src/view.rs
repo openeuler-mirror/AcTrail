@@ -20,6 +20,6 @@ pub struct SnapshotView {
 pub trait SnapshotStore {
     fn read_snapshot(
         &self,
-        lease: &crate::lease::ExportLease,
+        lease: &crate::lease::TraceLease,
     ) -> Result<SnapshotView, SnapshotError>;
 }

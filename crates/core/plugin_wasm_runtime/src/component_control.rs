@@ -11,7 +11,7 @@ use plugin_system::{
     FilePolicyMatchDryRunResult, FilePolicyOperation, FilePolicyPatchItem, FilePolicyPatchOp,
     FilePolicyRuleDraft, FilePolicyRuleView, PluginCommandBudget, PluginCommandRequest,
     PluginCommandResponse, PluginHostGrants, PluginHostcallMetricsSource, PluginManifest,
-    PluginRuntimeError, PluginRuntimeKind,
+    PluginRuntimeError, PluginRuntimeKind, RuntimePluginConfig,
 };
 use wasmtime::component::{Component, Func, Linker as ComponentLinker, Val};
 use wasmtime::{AsContextMut, Engine};
@@ -26,13 +26,17 @@ use crate::engine::{
 use crate::host::component_read_config;
 
 mod component_abi {
-    pub const CONTROL_DECIDER_EXPORT: &str = "actrail:plugin/control-decider@0.1.0";
+    pub const CONTROL_DECIDER_EXPORT: &str = "actrail:plugin/control-decider@0.2.0";
     pub const CONTROL_DECIDE_EXPORT: &str = "decide";
-    pub const MANAGEMENT_COMMAND_EXPORT: &str = "actrail:plugin/management-command@0.1.0";
+    pub const MANAGEMENT_COMMAND_EXPORT: &str = "actrail:plugin/management-command@0.2.0";
     pub const MANAGEMENT_HANDLE_COMMAND_EXPORT: &str = "handle-command";
     pub const MANAGEMENT_HANDLE_COMMAND_FLAT_EXPORT: &str =
-        "actrail:plugin/management-command@0.1.0#handle-command";
-    pub const HOST_IMPORT: &str = "actrail:plugin/host@0.1.0";
+        "actrail:plugin/management-command@0.2.0#handle-command";
+    pub const RUNTIME_CONFIG_EXPORT: &str = "actrail:plugin/runtime-config@0.2.0";
+    pub const RUNTIME_CONFIG_GET_EXPORT: &str = "get";
+    pub const RUNTIME_CONFIG_VALIDATE_EXPORT: &str = "validate";
+    pub const RUNTIME_CONFIG_SUBMIT_EXPORT: &str = "submit";
+    pub const HOST_IMPORT: &str = "actrail:plugin/host@0.2.0";
 
     pub mod host_import {
         pub const READ_CONFIG: &str = "read-config";
@@ -246,17 +250,19 @@ impl WitComponentControlDecider {
                     )
                 })?;
             let handle_command = find_management_handle_command(&instance, &mut store);
+            let runtime_config = RuntimeConfigFunctions::find(&instance, &mut store)?;
             states.push(Mutex::new(WitComponentControlState {
                 engine: engine.clone(),
                 store,
                 decide,
                 handle_command,
+                runtime_config,
                 fuel_per_call,
                 deadline_generation: Arc::new(AtomicU64::new(0)),
             }));
         }
 
-        Ok(Self {
+        let decider = Self {
             instance_id,
             plugin_id: manifest.id().to_string(),
             host_grants: host_grant_values,
@@ -264,7 +270,17 @@ impl WitComponentControlDecider {
             states,
             next_state: AtomicUsize::new(0),
             instance_concurrency_limit,
-        })
+        };
+        if manifest.plugin_config.runtime_managed {
+            let initial_config = plugin_config.ok_or_else(|| {
+                PluginRuntimeError::new(
+                    "plugin_config",
+                    "runtime-managed plugin configuration requires an initial JSON document",
+                )
+            })?;
+            decider.submit_runtime_config(initial_config)?;
+        }
+        Ok(decider)
     }
 
     fn lock_state(&self) -> Result<MutexGuard<'_, WitComponentControlState>, PluginRuntimeError> {
@@ -1057,6 +1073,34 @@ impl ControlDecider for WitComponentControlDecider {
         }
         Ok(response)
     }
+
+    fn runtime_config(&self) -> Result<RuntimePluginConfig, PluginRuntimeError> {
+        let mut state = self.lock_state()?;
+        let functions = state.runtime_config.clone().ok_or_else(|| {
+            PluginRuntimeError::new("plugin_config", "plugin does not export runtime-config")
+        })?;
+        let config_json = functions.get(&mut state)?;
+        Ok(RuntimePluginConfig { config_json })
+    }
+
+    fn validate_runtime_config(
+        &self,
+        config_json: &str,
+    ) -> Result<Vec<String>, PluginRuntimeError> {
+        let mut state = self.lock_state()?;
+        let functions = state.runtime_config.clone().ok_or_else(|| {
+            PluginRuntimeError::new("plugin_config", "plugin does not export runtime-config")
+        })?;
+        functions.validate(&mut state, config_json)
+    }
+
+    fn submit_runtime_config(&self, config_json: &str) -> Result<(), PluginRuntimeError> {
+        let mut state = self.lock_state()?;
+        let functions = state.runtime_config.clone().ok_or_else(|| {
+            PluginRuntimeError::new("plugin_config", "plugin does not export runtime-config")
+        })?;
+        functions.submit(&mut state, config_json)
+    }
 }
 
 fn validate_plugin_command_request(
@@ -1108,8 +1152,164 @@ struct WitComponentControlState {
     store: WasmStore,
     decide: Func,
     handle_command: Option<Func>,
+    runtime_config: Option<RuntimeConfigFunctions>,
     fuel_per_call: u64,
     deadline_generation: Arc<AtomicU64>,
+}
+
+#[derive(Clone)]
+struct RuntimeConfigFunctions {
+    get: Func,
+    validate: Func,
+    submit: Func,
+}
+
+impl RuntimeConfigFunctions {
+    fn find(
+        instance: &wasmtime::component::Instance,
+        store: &mut WasmStore,
+    ) -> Result<Option<Self>, PluginRuntimeError> {
+        let Some(interface) = instance.get_export_index(
+            store.as_context_mut(),
+            None,
+            component_abi::RUNTIME_CONFIG_EXPORT,
+        ) else {
+            return Ok(None);
+        };
+        let mut required = |name: &str| {
+            instance
+                .get_export_index(store.as_context_mut(), Some(&interface), name)
+                .and_then(|export| instance.get_func(store.as_context_mut(), &export))
+                .ok_or_else(|| {
+                    PluginRuntimeError::new(
+                        "wasm_runtime",
+                        format!("runtime-config export missing function {name}"),
+                    )
+                })
+        };
+        Ok(Some(Self {
+            get: required(component_abi::RUNTIME_CONFIG_GET_EXPORT)?,
+            validate: required(component_abi::RUNTIME_CONFIG_VALIDATE_EXPORT)?,
+            submit: required(component_abi::RUNTIME_CONFIG_SUBMIT_EXPORT)?,
+        }))
+    }
+
+    fn get(&self, state: &mut WitComponentControlState) -> Result<String, PluginRuntimeError> {
+        let result = self.call(state, &self.get, &[], "get")?;
+        let config = parse_runtime_config_string(result, "get")?;
+        let max_bytes = state
+            .store
+            .data()
+            .host_limits()
+            .plugin_config_read_max_bytes;
+        if config.len() > max_bytes {
+            return Err(PluginRuntimeError::new(
+                "plugin_config",
+                format!("runtime config exceeded {max_bytes} bytes"),
+            ));
+        }
+        Ok(config)
+    }
+
+    fn validate(
+        &self,
+        state: &mut WitComponentControlState,
+        config_json: &str,
+    ) -> Result<Vec<String>, PluginRuntimeError> {
+        Self::validate_input(state, config_json)?;
+        let result = self.call(
+            state,
+            &self.validate,
+            &[Val::String(config_json.to_string())],
+            "validate",
+        )?;
+        let errors = parse_runtime_config_errors(result)?;
+        let output_bytes = errors.iter().map(String::len).sum::<usize>();
+        let max_bytes = state
+            .store
+            .data()
+            .host_limits()
+            .plugin_command_output_max_bytes;
+        if output_bytes > max_bytes {
+            return Err(PluginRuntimeError::new(
+                "plugin_config",
+                format!("runtime config validation output exceeded {max_bytes} bytes"),
+            ));
+        }
+        Ok(errors)
+    }
+
+    fn submit(
+        &self,
+        state: &mut WitComponentControlState,
+        config_json: &str,
+    ) -> Result<(), PluginRuntimeError> {
+        Self::validate_input(state, config_json)?;
+        let result = self.call(
+            state,
+            &self.submit,
+            &[Val::String(config_json.to_string())],
+            "submit",
+        )?;
+        parse_runtime_config_unit(result)
+    }
+
+    fn validate_input(
+        state: &WitComponentControlState,
+        config_json: &str,
+    ) -> Result<(), PluginRuntimeError> {
+        let max_bytes = state
+            .store
+            .data()
+            .host_limits()
+            .plugin_config_read_max_bytes;
+        if config_json.len() > max_bytes {
+            return Err(PluginRuntimeError::new(
+                "plugin_config",
+                format!("runtime config input exceeded {max_bytes} bytes"),
+            ));
+        }
+        Ok(())
+    }
+
+    fn call(
+        &self,
+        state: &mut WitComponentControlState,
+        function: &Func,
+        params: &[Val],
+        operation: &str,
+    ) -> Result<Val, PluginRuntimeError> {
+        reset_fuel(&mut state.store, state.fuel_per_call)?;
+        reset_epoch_deadline_unbounded(&mut state.store);
+        let timeout_ms = Some(state.store.data().host_limits().plugin_command_timeout_ms);
+        let started_at = Instant::now();
+        let generation = state.deadline_generation.clone();
+        let deadline = arm_epoch_timeout(
+            state.engine.clone(),
+            &mut state.store,
+            timeout_ms,
+            &generation,
+        );
+        let mut results = [Val::Result(Ok(None))];
+        let result = function.call(&mut state.store, params, &mut results);
+        disarm_epoch_timeout(&mut state.store, deadline, &generation);
+        if let Err(error) = result {
+            return Err(call_timeout_error(
+                &mut state.store,
+                &format!("wasm component runtime-config {operation}"),
+                error,
+                timeout_ms,
+                started_at,
+            ));
+        }
+        function.post_return(&mut state.store).map_err(|error| {
+            PluginRuntimeError::new(
+                "wasm_runtime",
+                format!("runtime-config {operation} post-return failed: {error}"),
+            )
+        })?;
+        Ok(results.into_iter().next().expect("one result slot"))
+    }
 }
 
 fn plugin_command_request_val(request: &PluginCommandRequest) -> Val {
@@ -1503,6 +1703,69 @@ fn parse_plugin_command_response(value: Val) -> Result<PluginCommandResponse, Pl
             .map(str::to_string)
             .map_err(|error| PluginRuntimeError::new("wasm_runtime", error))?,
     })
+}
+
+fn runtime_config_result(value: Val, operation: &str) -> Result<Option<Val>, PluginRuntimeError> {
+    match value {
+        Val::Result(Ok(value)) => Ok(value.map(|value| *value)),
+        Val::Result(Err(Some(error))) => {
+            let message = match *error {
+                Val::String(message) => message,
+                other => format!("{other:?}"),
+            };
+            Err(PluginRuntimeError::new(
+                "plugin_config",
+                format!("runtime-config {operation} failed: {message}"),
+            ))
+        }
+        Val::Result(Err(None)) => Err(PluginRuntimeError::new(
+            "plugin_config",
+            format!("runtime-config {operation} failed without an error message"),
+        )),
+        other => Err(PluginRuntimeError::new(
+            "wasm_runtime",
+            format!("runtime-config {operation} returned invalid result {other:?}"),
+        )),
+    }
+}
+
+fn parse_runtime_config_string(value: Val, operation: &str) -> Result<String, PluginRuntimeError> {
+    match runtime_config_result(value, operation)? {
+        Some(Val::String(value)) => Ok(value),
+        other => Err(PluginRuntimeError::new(
+            "wasm_runtime",
+            format!("runtime-config {operation} returned invalid payload {other:?}"),
+        )),
+    }
+}
+
+fn parse_runtime_config_errors(value: Val) -> Result<Vec<String>, PluginRuntimeError> {
+    match runtime_config_result(value, "validate")? {
+        Some(Val::List(values)) => values
+            .into_iter()
+            .map(|value| match value {
+                Val::String(value) => Ok(value),
+                other => Err(PluginRuntimeError::new(
+                    "wasm_runtime",
+                    format!("runtime-config validate returned invalid error {other:?}"),
+                )),
+            })
+            .collect(),
+        other => Err(PluginRuntimeError::new(
+            "wasm_runtime",
+            format!("runtime-config validate returned invalid payload {other:?}"),
+        )),
+    }
+}
+
+fn parse_runtime_config_unit(value: Val) -> Result<(), PluginRuntimeError> {
+    match runtime_config_result(value, "submit")? {
+        None => Ok(()),
+        other => Err(PluginRuntimeError::new(
+            "wasm_runtime",
+            format!("runtime-config submit returned invalid payload {other:?}"),
+        )),
+    }
 }
 
 fn decision_field_enum(fields: &[(String, Val)], name: &str) -> Result<String, PluginRuntimeError> {

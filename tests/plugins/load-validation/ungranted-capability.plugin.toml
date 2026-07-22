@@ -1,6 +1,6 @@
 [general]
 id = "wasm.ungranted-capability"
-api_version = "actrail.plugin.v1"
+api_version = "actrail.plugin.v2"
 role = "observation-consumer"
 runtime = "wasm"
 

@@ -5,10 +5,10 @@ use std::path::PathBuf;
 
 use config_core::daemon::{
     DisabledOrPath, EnforcementBackend, EnforcementDecision, EnforcementMarkStrategy,
-    EnforcementScope, MemlockRlimit, PayloadRedactionPolicy, PayloadSocketCaptureBackend,
-    PayloadSocketSeccompSyscall, PayloadStdioStorageMode, PayloadTlsCaptureBackend,
-    PayloadTlsLibrary, PayloadTlsLibraryPath, PayloadTlsResolver, PayloadTlsSeccompSyscall,
-    PayloadTlsSource, PayloadTlsSyncRuntimeLibraryPath, SseDataPolicy,
+    EnforcementScope, EnforcementSeccompSyscall, MemlockRlimit, PayloadRedactionPolicy,
+    PayloadSocketCaptureBackend, PayloadSocketSeccompSyscall, PayloadStdioStorageMode,
+    PayloadTlsCaptureBackend, PayloadTlsLibrary, PayloadTlsLibraryPath, PayloadTlsResolver,
+    PayloadTlsSeccompSyscall, PayloadTlsSource, PayloadTlsSyncRuntimeLibraryPath, SseDataPolicy,
 };
 
 use super::super::MmapWorkloadConfig;
@@ -238,6 +238,22 @@ pub(super) fn required_payload_socket_seccomp_syscalls(
         .map(|value| {
             value
                 .parse::<PayloadSocketSeccompSyscall>()
+                .map_err(|error| format!("invalid {flag}: {error}"))
+        })
+        .collect()
+}
+
+pub(super) fn required_enforcement_seccomp_syscalls(
+    flags: &BTreeMap<String, String>,
+    flag: &'static str,
+) -> Result<Vec<EnforcementSeccompSyscall>, String> {
+    required(flags, flag)?
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            value
+                .parse::<EnforcementSeccompSyscall>()
                 .map_err(|error| format!("invalid {flag}: {error}"))
         })
         .collect()

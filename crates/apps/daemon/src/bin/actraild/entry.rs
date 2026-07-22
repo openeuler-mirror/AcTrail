@@ -163,6 +163,7 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
             config.application_protocol.clone(),
             config.resource_metrics.clone(),
             config.storage_retention.clone(),
+            config.plugin_alert_runtime,
             config.trace_finalization,
             config.workload_diagnostics.clone(),
             config.export_runtime.clone(),
@@ -186,6 +187,7 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
             config.application_protocol.clone(),
             config.resource_metrics.clone(),
             config.storage_retention.clone(),
+            config.plugin_alert_runtime,
             config.trace_finalization,
             config.workload_diagnostics.clone(),
             config.export_runtime.clone(),
@@ -238,6 +240,7 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
             Ok(())
         },
     );
+    let shutdown = server.shutdown();
     let cleanup = if socket_bound {
         cleanup_runtime_files(config, pid_written)
     } else if pid_written {
@@ -245,17 +248,26 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
     } else {
         Ok(())
     };
-    match (result, cleanup) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(error), Ok(())) => Err(format!(
+    let mut failures = Vec::new();
+    if let Err(error) = result {
+        failures.push(format!(
             "daemon run failed: {}: {}",
             error.stage, error.message
-        )),
-        (Ok(()), Err(error)) => Err(error),
-        (Err(error), Err(cleanup_error)) => Err(format!(
-            "daemon run failed: {}: {}; cleanup failed: {}",
-            error.stage, error.message, cleanup_error
-        )),
+        ));
+    }
+    if let Err(error) = shutdown {
+        failures.push(format!(
+            "daemon shutdown failed: {}: {}",
+            error.code, error.message
+        ));
+    }
+    if let Err(error) = cleanup {
+        failures.push(format!("daemon cleanup failed: {error}"));
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
     }
 }
 

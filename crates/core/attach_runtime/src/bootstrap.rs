@@ -103,6 +103,13 @@ where
             })
             .map_err(BootstrapError::Collector)?;
 
+        let snapshot_started_at = SystemTime::now();
+        let snapshot = self
+            .snapshotter
+            .snapshot(&root_observation)
+            .map_err(|_| BootstrapError::Snapshot("snapshot failed".to_string()))?;
+        let snapshot_finished_at = SystemTime::now();
+        let root_working_directory = snapshot.root_working_directory().map(str::to_string);
         runtime
             .create_starting_trace(
                 trace_id,
@@ -111,6 +118,7 @@ where
                     // Generic attach path: container id is resolved host-side in
                     // the daemon's `services/attach.rs`, not here.
                     root_container_id: None,
+                    root_working_directory,
                     display_name: request.display_name,
                     profile_snapshot: request.profile_snapshot,
                     tags: request.tags,
@@ -119,13 +127,6 @@ where
                 request.sensor_plan,
             )
             .map_err(BootstrapError::Runtime)?;
-
-        let snapshot_started_at = SystemTime::now();
-        let snapshot = self
-            .snapshotter
-            .snapshot(&root_observation)
-            .map_err(|_| BootstrapError::Snapshot("snapshot failed".to_string()))?;
-        let snapshot_finished_at = SystemTime::now();
         let live_events = self
             .collector
             .poll_events()

@@ -8,14 +8,15 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use control_contract::command::{
-    ControlCommand, DoctorCommand, ListTracesCommand, PluginCommandCommand, PluginListCommand,
-    PluginLoadCommand, PluginStatusCommand, PluginUnloadCommand, ProcessRef,
-    RegisterSeccompListenerCommand, ResolveLaunchTlsPlanCommand, TrackAddCommand,
-    TrackRemoveCommand,
+    ControlCommand, DoctorCommand, ListTracesCommand, PluginCommandCommand, PluginConfigGetCommand,
+    PluginConfigUpdateCommand, PluginConfigValidateCommand, PluginListCommand, PluginLoadCommand,
+    PluginStatusCommand, PluginUnloadCommand, ProcessRef, RegisterSeccompListenerCommand,
+    ResolveLaunchTlsPlanCommand, TrackAddCommand, TrackRemoveCommand,
 };
 use control_contract::reply::{
     ControlError, ControlReply, DoctorReply, LaunchTlsPlanDescriptor, LaunchTlsPlanReply,
-    LaunchTlsPlanStatus, PluginCommandReply, TraceListItem, TrackAddReply,
+    LaunchTlsPlanStatus, PluginCommandReply, PluginConfigReply, PluginConfigValidationReply,
+    TraceListItem, TrackAddReply,
 };
 use control_contract::selector::TraceSelector;
 use model_core::ids::{ProfileName, RequestId, TraceId, TraceName};
@@ -128,6 +129,23 @@ pub fn encode_command(command: &ControlCommand) -> Vec<u8> {
             fields.push(command.instance_id.clone());
             fields.push(command.argv.len().to_string());
             fields.extend(command.argv.iter().cloned());
+        }
+        ControlCommand::PluginConfigGet(command) => {
+            fields.push("plugin_config_get_v1".to_string());
+            fields.push(command.request_id.get().to_string());
+            fields.push(command.instance_id.clone());
+        }
+        ControlCommand::PluginConfigValidate(command) => {
+            fields.push("plugin_config_validate_v1".to_string());
+            fields.push(command.request_id.get().to_string());
+            fields.push(command.instance_id.clone());
+            fields.push(command.config_json.clone());
+        }
+        ControlCommand::PluginConfigUpdate(command) => {
+            fields.push("plugin_config_update_v1".to_string());
+            fields.push(command.request_id.get().to_string());
+            fields.push(command.instance_id.clone());
+            fields.push(command.config_json.clone());
         }
     }
     encode_fields(&fields)
@@ -313,6 +331,24 @@ pub fn decode_command(bytes: &[u8]) -> Result<ControlCommand, ControlCodecError>
                 argv,
             }))
         }
+        "plugin_config_get_v1" => Ok(ControlCommand::PluginConfigGet(PluginConfigGetCommand {
+            request_id: RequestId::new(parse_u64(field(&fields, 1)?, "request_id")?),
+            instance_id: field(&fields, 2)?.clone(),
+        })),
+        "plugin_config_validate_v1" => Ok(ControlCommand::PluginConfigValidate(
+            PluginConfigValidateCommand {
+                request_id: RequestId::new(parse_u64(field(&fields, 1)?, "request_id")?),
+                instance_id: field(&fields, 2)?.clone(),
+                config_json: field(&fields, 3)?.clone(),
+            },
+        )),
+        "plugin_config_update_v1" => Ok(ControlCommand::PluginConfigUpdate(
+            PluginConfigUpdateCommand {
+                request_id: RequestId::new(parse_u64(field(&fields, 1)?, "request_id")?),
+                instance_id: field(&fields, 2)?.clone(),
+                config_json: field(&fields, 3)?.clone(),
+            },
+        )),
         _ => Err(ControlCodecError::new("decode", "unknown command opcode")),
     }
 }
@@ -387,6 +423,21 @@ pub fn encode_reply(reply: &Result<ControlReply, ControlError>) -> Vec<u8> {
             fields.push(reply.exit_code.to_string());
             fields.push(reply.stdout.clone());
             fields.push(reply.stderr.clone());
+        }
+        Ok(ControlReply::PluginConfig(reply)) => {
+            fields.push("reply_plugin_config_v1".to_string());
+            fields.push(reply.instance_id.clone());
+            fields.push(reply.plugin_id.clone());
+            fields.push(reply.editable.to_string());
+            fields.push(reply.config_json.clone());
+            fields.push(reply.schema_json.clone());
+        }
+        Ok(ControlReply::PluginConfigValidation(reply)) => {
+            fields.push("reply_plugin_config_validation_v1".to_string());
+            fields.push(reply.instance_id.clone());
+            fields.push(reply.valid.to_string());
+            fields.push(reply.errors.len().to_string());
+            fields.extend(reply.errors.iter().cloned());
         }
         Err(error) => {
             fields.push("error".to_string());
@@ -506,6 +557,27 @@ pub fn decode_reply(bytes: &[u8]) -> Result<Result<ControlReply, ControlError>, 
             stdout: field(&fields, 3)?.clone(),
             stderr: field(&fields, 4)?.clone(),
         }))),
+        "reply_plugin_config_v1" => Ok(Ok(ControlReply::PluginConfig(PluginConfigReply {
+            instance_id: field(&fields, 1)?.clone(),
+            plugin_id: field(&fields, 2)?.clone(),
+            editable: parse_bool(field(&fields, 3)?, "editable")?,
+            config_json: field(&fields, 4)?.clone(),
+            schema_json: field(&fields, 5)?.clone(),
+        }))),
+        "reply_plugin_config_validation_v1" => {
+            let error_count = parse_usize(field(&fields, 3)?, "plugin_config_error_count")?;
+            let mut errors = Vec::with_capacity(error_count);
+            for offset in 0..error_count {
+                errors.push(field(&fields, 4 + offset)?.clone());
+            }
+            Ok(Ok(ControlReply::PluginConfigValidation(
+                PluginConfigValidationReply {
+                    instance_id: field(&fields, 1)?.clone(),
+                    valid: parse_bool(field(&fields, 2)?, "valid")?,
+                    errors,
+                },
+            )))
+        }
         "error" => Ok(Err(ControlError::new(
             field(&fields, 1)?,
             field(&fields, 2)?,

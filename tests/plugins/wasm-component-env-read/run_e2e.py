@@ -138,7 +138,15 @@ def assert_unsupported_component_grant_fails(actraild: Path) -> None:
     )
     if load.returncode == 0:
         raise RuntimeError("component plugin load unexpectedly accepted context-query grant")
-    missing = [value for value in ("wasm_runtime", "only env-read", "WIT component") if value not in load.stdout]
+    missing = [
+        value
+        for value in (
+            "wasm_runtime",
+            "requested WIT component host grants",
+            "not implemented",
+        )
+        if value not in load.stdout
+    ]
     if missing:
         raise RuntimeError(f"unsupported component grant error missed {missing}\n{load.stdout}")
 

@@ -2,7 +2,7 @@
 # Stable plugin id shown by `actraild plugin list/status`.
 id = "qoder-llm-codec"
 # Manifest schema version supported by the current daemon.
-api_version = "actrail.plugin.v1"
+api_version = "actrail.plugin.v2"
 # Register this module as an LLM request/SSE codec.
 role = "llm-codec"
 # The current llm-codec implementation supports WASM core modules.

@@ -8,7 +8,7 @@ use control_contract::reply::ControlError;
 use plugin_system::{
     ControlDecider, ControlDecisionBudget, ControlDecisionRequest, ControlDecisionResponse,
     PluginCommandBudget, PluginCommandRequest, PluginCommandResponse, PluginInstanceStatus,
-    PluginLifecycleState, PluginPurpose, PluginRuntimeError,
+    PluginLifecycleState, PluginPurpose, PluginRuntimeError, RuntimePluginConfig,
 };
 
 #[derive(Clone)]
@@ -167,6 +167,33 @@ impl ControlPluginRuntime {
         }
     }
 
+    pub(in crate::services) fn runtime_config(
+        &self,
+        instance_id: &str,
+    ) -> Result<RuntimePluginConfig, PluginRuntimeError> {
+        self.active_slot(instance_id)?.decider.runtime_config()
+    }
+
+    pub(in crate::services) fn validate_runtime_config(
+        &self,
+        instance_id: &str,
+        config_json: &str,
+    ) -> Result<Vec<String>, PluginRuntimeError> {
+        self.active_slot(instance_id)?
+            .decider
+            .validate_runtime_config(config_json)
+    }
+
+    pub(in crate::services) fn submit_runtime_config(
+        &self,
+        instance_id: &str,
+        config_json: &str,
+    ) -> Result<(), PluginRuntimeError> {
+        self.active_slot(instance_id)?
+            .decider
+            .submit_runtime_config(config_json)
+    }
+
     pub(in crate::services) fn instance_concurrency_limit(&self, instance_id: &str) -> Option<u32> {
         let Some(slot) = self.find_slot(instance_id) else {
             return None;
@@ -206,6 +233,25 @@ impl ControlPluginRuntime {
                         .cloned()
                 })
             })
+    }
+
+    fn active_slot(
+        &self,
+        instance_id: &str,
+    ) -> Result<Arc<ControlDeciderSlot>, PluginRuntimeError> {
+        let slot = self.find_slot(instance_id).ok_or_else(|| {
+            PluginRuntimeError::new(
+                "plugin_runtime",
+                format!("plugin instance {instance_id} not found"),
+            )
+        })?;
+        if !slot.active.load(Ordering::Relaxed) {
+            return Err(PluginRuntimeError::new(
+                "plugin_runtime",
+                format!("plugin instance {instance_id} is not active"),
+            ));
+        }
+        Ok(slot)
     }
 }
 

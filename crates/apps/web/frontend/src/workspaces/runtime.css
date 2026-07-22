@@ -17,6 +17,10 @@
   gap: var(--stats-section-gap);
 }
 
+.plugins-runtime-content {
+  width: min(100%, var(--plugins-shell-max-width));
+}
+
 .runtime-hero,
 .runtime-panel,
 .runtime-metric {
@@ -58,7 +62,7 @@
 }
 
 .runtime-source {
-  max-width: min(520px, 45%);
+  max-width: min(32.5rem, 45%);
   padding: var(--stats-chip-padding);
   border: 1px solid var(--stats-border);
   border-radius: var(--stats-radius-md);
@@ -95,27 +99,16 @@
   opacity: 0.55;
 }
 
-.runtime-danger-icon-button {
-  flex: 0 0 auto;
-  width: var(--stats-control-height);
-  height: var(--stats-control-height);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--stats-danger);
-  border-radius: var(--stats-radius-md);
-  background: var(--stats-danger);
-  color: var(--stats-on-danger);
-  cursor: pointer;
+.runtime-refresh-button {
+  width: auto;
+  gap: var(--stats-space-sm);
+  padding: 0 var(--stats-space-lg);
 }
 
-.runtime-danger-icon-button:hover:not(:disabled) {
-  opacity: 0.86;
-}
-
-.runtime-danger-icon-button:disabled {
-  cursor: progress;
-  opacity: 0.55;
+.runtime-panel-header .runtime-refresh-button span {
+  color: inherit;
+  font-size: var(--stats-font-sm);
+  text-transform: none;
 }
 
 .runtime-metrics {
@@ -147,12 +140,19 @@
   line-height: var(--stats-line-height-tight);
 }
 
-.config-layout,
+.config-layout {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 3fr);
+  gap: var(--stats-space-2xl);
+}
+
 .plugins-layout {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(240px, 0.34fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 5fr);
   gap: var(--stats-space-2xl);
 }
 
@@ -167,6 +167,10 @@
   gap: var(--stats-space-2xl);
 }
 
+.plugins-panel {
+  container: plugin-panel / inline-size;
+}
+
 .runtime-side {
   padding: var(--stats-panel-padding);
   align-self: start;
@@ -177,6 +181,18 @@
 }
 
 .runtime-side-heading:not(:first-child) {
+  margin-top: var(--stats-space-3xl);
+}
+
+.plugins-runtime-side {
+  min-width: 0;
+}
+
+.runtime-side-section {
+  min-width: 0;
+}
+
+.plugins-runtime-side .runtime-side-section + .runtime-side-section {
   margin-top: var(--stats-space-3xl);
 }
 
@@ -231,7 +247,7 @@
 }
 
 .startup-plugin-list {
-  max-height: 260px;
+  max-height: 16.25rem;
   overflow: auto;
   display: grid;
   gap: var(--stats-space-sm);
@@ -276,7 +292,7 @@
 
 .runtime-rows {
   display: grid;
-  grid-template-columns: minmax(88px, auto) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
   gap: var(--stats-space-sm) var(--stats-space-lg);
   margin: 0;
   font-size: var(--stats-font-md);
@@ -311,7 +327,7 @@
 }
 
 .runtime-empty p {
-  max-width: 620px;
+  max-width: 38.75rem;
   margin: var(--stats-space-sm) 0 0;
   color: var(--stats-muted);
   font-size: var(--stats-font-md);
@@ -319,7 +335,7 @@
 }
 
 .config-document-panel {
-  min-height: 520px;
+  min-height: 32.5rem;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
 }
@@ -402,15 +418,11 @@
   background: var(--stats-surface-strong);
 }
 
-.plugin-runtime-item > .runtime-danger-icon-button {
-  margin: var(--stats-space-lg) var(--stats-space-lg) 0 0;
-}
-
 .plugin-runtime-summary {
   min-width: 0;
-  min-height: 72px;
+  min-height: calc(var(--stats-control-height-lg) + var(--stats-space-2xl));
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(0, auto);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
   align-items: center;
   gap: var(--stats-space-lg);
   padding: var(--stats-space-lg) var(--stats-space-xl);
@@ -419,6 +431,11 @@
 
 .plugin-runtime-summary:hover {
   background: var(--stats-surface-bar);
+}
+
+.plugin-runtime-summary:focus-visible {
+  outline: 2px solid var(--stats-accent);
+  outline-offset: calc(-1 * var(--stats-space-xs));
 }
 
 .plugin-runtime-summary::marker {
@@ -431,12 +448,32 @@
   gap: var(--stats-space-2xs);
 }
 
+.plugin-runtime-main small {
+  color: var(--stats-muted);
+  font-size: var(--stats-font-xs);
+  font-weight: var(--stats-weight-medium);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .plugin-runtime-main strong,
 .plugin-runtime-main span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.plugin-runtime-disclosure[open] .plugin-runtime-main strong,
+.plugin-runtime-disclosure[open] .plugin-runtime-main span {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.plugin-runtime-main code {
+  color: var(--stats-text);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: inherit;
 }
 
 .plugin-runtime-main strong {
@@ -459,6 +496,12 @@
   gap: var(--stats-space-sm);
 }
 
+.plugin-runtime-badges > * {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
 .plugin-runtime-chip {
   min-height: var(--stats-control-height-sm);
   display: inline-flex;
@@ -479,58 +522,79 @@
   color: var(--stats-accent);
 }
 
-.state-switch {
-  min-height: var(--stats-control-height-sm);
+.plugin-lifecycle-control {
+  min-width: max-content;
+  display: grid;
+  justify-items: stretch;
+  align-content: start;
+  gap: var(--stats-space-sm);
+  margin: var(--stats-space-lg) var(--stats-space-lg) var(--stats-space-lg) 0;
+}
+
+.plugin-runtime-state,
+.plugin-lifecycle-action {
+  min-height: var(--stats-control-height-md);
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: var(--stats-space-sm);
-  padding: 0 var(--stats-space-md);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface-soft);
-  color: var(--stats-muted);
+  padding: var(--stats-space-sm) var(--stats-space-md);
+  border: 1px solid var(--stats-border-strong);
+  border-radius: var(--stats-radius-md);
+  font: inherit;
   font-size: var(--stats-font-sm);
   font-weight: var(--stats-weight-medium);
 }
 
-.state-switch.active {
+.plugin-runtime-state {
+  background: var(--stats-surface-soft);
+  color: var(--stats-muted);
+}
+
+.plugin-runtime-state i {
+  width: var(--stats-space-sm);
+  height: var(--stats-space-sm);
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.plugin-runtime-state.active {
   border-color: var(--stats-accent-soft);
   background: var(--stats-accent-muted);
   color: var(--stats-accent);
 }
 
-.state-switch-track {
-  width: 28px;
-  height: 16px;
-  display: inline-flex;
-  align-items: center;
-  padding: 2px;
-  border-radius: 999px;
-  background: var(--stats-border-strong);
-}
-
-.state-switch-thumb {
-  width: 12px;
-  height: 12px;
-  border-radius: 999px;
+.plugin-lifecycle-action {
   background: var(--stats-surface);
-  transform: translateX(0);
+  color: var(--stats-text);
+  cursor: pointer;
 }
 
-.state-switch.active .state-switch-track {
-  background: var(--stats-accent);
+.plugin-lifecycle-action:hover:not(:disabled) {
+  border-color: var(--stats-accent-soft);
+  background: var(--stats-accent-faint);
 }
 
-.state-switch.active .state-switch-thumb {
-  transform: translateX(12px);
+.plugin-lifecycle-action.danger {
+  color: var(--stats-danger);
+}
+
+.plugin-lifecycle-action:focus-visible {
+  outline: 2px solid var(--stats-accent);
+  outline-offset: var(--stats-space-xs);
+}
+
+.plugin-lifecycle-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .plugin-runtime-details {
   display: grid;
-  grid-template-columns: minmax(120px, auto) minmax(0, 1fr);
-  gap: var(--stats-space-sm) var(--stats-space-xl);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 5fr);
+  gap: var(--stats-space-md) var(--stats-space-2xl);
   margin: 0;
-  padding: 0 var(--stats-space-xl) var(--stats-space-xl) calc(var(--stats-space-xl) + var(--stats-space-lg));
+  padding: var(--stats-space-xl) var(--stats-space-2xl) var(--stats-space-2xl) calc(var(--stats-space-2xl) + var(--stats-space-lg));
   color: var(--stats-text);
   font-size: var(--stats-font-md);
   border-top: 1px solid var(--stats-border);
@@ -538,6 +602,7 @@
 
 .plugin-runtime-details dt {
   color: var(--stats-muted);
+  font-size: var(--stats-font-sm);
 }
 
 .plugin-runtime-details dd {
@@ -616,7 +681,7 @@
 }
 
 .runtime-inline-empty {
-  min-height: 180px;
+  min-height: 11.25rem;
   padding: var(--stats-panel-padding);
 }
 
@@ -634,17 +699,59 @@
 
 .runtime-inline-empty span,
 .runtime-compact-empty span {
-  max-width: 620px;
+  max-width: 38.75rem;
   overflow-wrap: anywhere;
 }
 
-@media (max-width: 1100px) {
+@media (max-width: 68.75rem) {
   .runtime-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .plugins-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .plugins-runtime-side {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--stats-space-2xl);
+  }
+
+  .plugins-runtime-side .runtime-side-section + .runtime-side-section {
+    margin-top: 0;
+  }
+
+  .plugins-runtime-side .startup-plugin-details {
+    grid-column: 1 / -1;
+    margin-top: 0;
+  }
 }
 
-@media (max-width: 760px) {
+@container plugin-panel (max-width: 46rem) {
+  .plugin-runtime-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .plugin-runtime-item {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .plugin-runtime-details {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .plugin-lifecycle-control {
+    width: calc(100% - (2 * var(--stats-space-xl)));
+    margin: 0 var(--stats-space-xl) var(--stats-space-xl);
+  }
+
+  .plugin-runtime-badges {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 47.5rem) {
   .runtime-workspace {
     height: auto;
     min-height: calc(100vh - var(--topbar-height) - var(--global-tabs-height));
@@ -664,21 +771,16 @@
     max-width: 100%;
   }
 
-  .config-layout,
-  .plugins-layout {
+  .config-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .plugins-runtime-side {
     grid-template-columns: minmax(0, 1fr);
   }
 
   .config-document-panel {
-    min-height: 420px;
-  }
-
-  .plugin-runtime-summary {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .plugin-runtime-badges {
-    justify-content: flex-start;
+    min-height: 26.25rem;
   }
 
   .plugin-runtime-details {

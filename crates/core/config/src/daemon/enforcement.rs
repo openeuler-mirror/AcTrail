@@ -3,6 +3,24 @@
 use std::path::PathBuf;
 use std::str::FromStr;
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum EnforcementSeccompSyscall {
+    Mkdir,
+    Rmdir,
+}
+
+impl FromStr for EnforcementSeccompSyscall {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "mkdir" => Ok(Self::Mkdir),
+            "rmdir" => Ok(Self::Rmdir),
+            other => Err(format!("expected mkdir or rmdir, got {other}")),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EnforcementBackend {
     Fanotify,
@@ -89,12 +107,14 @@ pub struct EnforcementConfig {
     pub mark_strategy: EnforcementMarkStrategy,
     pub audit_enabled: bool,
     pub event_buffer_bytes: u32,
+    pub seccomp_syscalls: Vec<EnforcementSeccompSyscall>,
+    pub seccomp_path_max_bytes: u32,
 }
 
 impl Default for EnforcementConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             backend: EnforcementBackend::Fanotify,
             scope: EnforcementScope::Trace,
             rules_path: PathBuf::from("/etc/actrail/enforcement-rules.conf"),
@@ -103,13 +123,21 @@ impl Default for EnforcementConfig {
             mark_strategy: EnforcementMarkStrategy::ParentDirectories,
             audit_enabled: true,
             event_buffer_bytes: 65_536,
+            seccomp_syscalls: vec![
+                EnforcementSeccompSyscall::Mkdir,
+                EnforcementSeccompSyscall::Rmdir,
+            ],
+            seccomp_path_max_bytes: 4_096,
         }
     }
 }
 
 impl EnforcementConfig {
     pub fn disabled() -> Self {
-        Self::default()
+        Self {
+            enabled: false,
+            ..Self::default()
+        }
     }
 }
 

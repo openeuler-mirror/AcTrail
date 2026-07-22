@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::os::fd::RawFd;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 #[path = "attach/debug.rs"]
 mod debug;
@@ -12,6 +12,8 @@ mod factory;
 mod helpers;
 #[path = "attach/logging.rs"]
 mod logging;
+#[path = "attach/plugin_config.rs"]
+mod plugin_config;
 #[path = "attach/plugins.rs"]
 mod plugins;
 #[path = "attach/preflight.rs"]
@@ -55,12 +57,14 @@ use trace_runtime::sensor_plan::SensorPlan;
 
 use crate::profiles::DaemonProfileRegistry;
 use crate::service_host::AttachService;
+use crate::services::alert_ingress::AlertIngress;
 use crate::services::application_protocol::ApplicationProtocolAnalyzer;
 use crate::services::command_control::CommandControlService;
 use crate::services::control_runtime::ControlPluginRuntime;
 use crate::services::enforcement::FanotifyEnforcementService;
 use crate::services::network_control::NetworkControlService;
 use crate::services::payload_gate::{PayloadBodyRetentionGate, SocketHttpPayloadGate};
+use crate::services::post_trace::{PostTraceBroker, PostTraceCoordinator};
 use crate::services::process_seccomp::{ProcessSeccompObservation, ProcessSeccompService};
 use crate::services::resource_metrics::ResourceMetricsSampler;
 use crate::services::retention::StorageRetentionService;
@@ -116,14 +120,20 @@ pub(crate) struct StorageAttachService {
     pub(super) storage_retention: StorageRetentionService,
     pub(super) enforcement: FanotifyEnforcementService,
     pub(super) control_plugins: ControlPluginRuntime,
+    plugin_configs: plugin_config::PluginConfigManager,
     pub(super) semantic_actions: LiveSemanticActionRuntime,
     pub(super) export_runtime: ExportRuntime,
+    pub(super) alert_ingress: AlertIngress,
+    pub(super) post_trace_broker: PostTraceBroker,
+    pub(super) post_trace_coordinator: PostTraceCoordinator,
     pub(super) workload_diagnostics: WorkloadDiagnostics,
     pub(super) retained_payload_bytes_by_trace: BTreeMap<model_core::ids::TraceId, u64>,
     pub(super) finalized_terminal_traces: BTreeSet<model_core::ids::TraceId>,
     pub(super) pending_terminal_finalizations: BTreeSet<model_core::ids::TraceId>,
+    pub(super) terminal_finalization_queued_at: BTreeMap<model_core::ids::TraceId, Instant>,
     pub(super) finalization_traces_per_cycle: usize,
     pub(super) finalization_poll_interval: Duration,
+    pub(super) terminal_settle_delay: Duration,
     pub(super) diagnosed_terminal_open_memberships:
         BTreeSet<(model_core::ids::TraceId, ProcessIdentity)>,
     pub(super) provider_classifier: Box<dyn ProviderClassifier>,
@@ -217,6 +227,7 @@ impl StorageAttachService {
             &root_observation,
         )
         .map_err(|error| ControlError::new("snapshot", error))?;
+        let root_working_directory = snapshot.root_working_directory().map(str::to_string);
 
         let trace_id = trace_runtime.reserve_trace_id();
         trace_runtime
@@ -225,6 +236,7 @@ impl StorageAttachService {
                 TrackTraceRequest {
                     root_identity: root_identity.clone(),
                     root_container_id,
+                    root_working_directory,
                     display_name: command.display_name.clone(),
                     profile_snapshot,
                     tags: command.tags.clone(),
@@ -471,10 +483,13 @@ impl AttachService for StorageAttachService {
             host_ebpf: permission_mode(command.host_ebpf),
             seccomp_notify: permission_mode(command.seccomp_notify),
         };
+        let launch_seccomp_requirements = self
+            .launch_seccomp_requirements
+            .with_file_enforcement(self.enforcement.seccomp_requirements()?);
         let decision = resolve_deployment_permissions(
             policy,
             profile,
-            self.launch_seccomp_requirements,
+            launch_seccomp_requirements,
             &DeploymentPermissionAvailability {
                 host_ebpf: Some(host_ebpf_available),
                 seccomp_notify: Some(command.seccomp_notify_available),
@@ -493,9 +508,8 @@ impl AttachService for StorageAttachService {
                 "daemon did not register the selected deployment profile",
             ));
         }
-        let effective_seccomp = self
-            .launch_seccomp_requirements
-            .enabled_by(decision.selected.seccomp_notify);
+        let effective_seccomp =
+            launch_seccomp_requirements.enabled_by(decision.selected.seccomp_notify);
         Ok(LaunchPermissionsReply {
             requested_host_ebpf: contract_permission_mode(decision.requested_host_ebpf),
             requested_seccomp_notify: contract_permission_mode(decision.requested_seccomp_notify),
@@ -506,6 +520,8 @@ impl AttachService for StorageAttachService {
             payload_socket_seccomp: effective_seccomp.payload_socket,
             process_seccomp: effective_seccomp.process_seccomp,
             network_control_seccomp: effective_seccomp.network_control,
+            file_mkdir_seccomp: effective_seccomp.file_enforcement.mkdir,
+            file_rmdir_seccomp: effective_seccomp.file_enforcement.rmdir,
             required_capabilities: decision.required_capabilities,
             degraded: decision.degraded,
             reasons: decision.reasons,
@@ -600,6 +616,8 @@ impl AttachService for StorageAttachService {
         fds.extend(self.enforcement.event_poll_fds());
         fds.extend(self.tls_sync.event_poll_fds());
         fds.extend(self.seccomp_notify.event_poll_fds());
+        fds.push(self.alert_ingress.event_poll_fd());
+        fds.push(self.post_trace_broker.event_poll_fd());
         Ok(fds)
     }
 
@@ -607,11 +625,18 @@ impl AttachService for StorageAttachService {
         let mut timeout = self.resource_metrics.poll_timeout();
         timeout = min_optional_timeout(
             timeout,
-            (!self.pending_terminal_finalizations.is_empty())
-                .then_some(self.finalization_poll_interval),
+            (!self.pending_terminal_finalizations.is_empty()
+                || self.post_trace_coordinator.has_running_tasks()
+                || self.alert_ingress.has_outstanding_writes()?)
+            .then_some(self.finalization_poll_interval),
         );
         timeout = min_optional_timeout(timeout, self.storage_retention.poll_timeout());
         Ok(timeout)
+    }
+
+    fn shutdown(&mut self) -> Result<(), ControlError> {
+        self.shutdown_post_trace_runtime_impl()?;
+        self.shutdown_alert_ingress_impl()
     }
 
     fn remove_root(
@@ -716,6 +741,29 @@ impl AttachService for StorageAttachService {
             stdout: response.stdout,
             stderr: response.stderr,
         })
+    }
+
+    fn plugin_config(
+        &self,
+        instance_id: &str,
+    ) -> Result<control_contract::reply::PluginConfigReply, ControlError> {
+        self.plugin_config_impl(instance_id)
+    }
+
+    fn validate_plugin_config(
+        &self,
+        instance_id: &str,
+        config_json: &str,
+    ) -> Result<control_contract::reply::PluginConfigValidationReply, ControlError> {
+        self.validate_plugin_config_impl(instance_id, config_json)
+    }
+
+    fn update_plugin_config(
+        &mut self,
+        instance_id: &str,
+        config_json: &str,
+    ) -> Result<control_contract::reply::PluginConfigReply, ControlError> {
+        self.update_plugin_config_impl(instance_id, config_json)
     }
 }
 

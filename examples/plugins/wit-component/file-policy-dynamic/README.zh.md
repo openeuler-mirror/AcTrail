@@ -1,353 +1,259 @@
-# 动态文件策略插件示例
+# 动态文件访问策略插件
 
-这个示例演示一个 WIT Component 控制插件如何在运行中管理文件访问规则：
+这个 WIT Component 控制插件允许操作人员在 actrailweb 中维护文件访问路由。插件实例在内存中持有自己的配置，并把配置中的规则发布给 actraild；actraild 再把这些规则与静态规则、内置规则以及其他插件规则合并，形成实际生效的文件访问路由表。
 
-- 通过 `actraild plugin cmd` 给插件发送管理命令；
-- 插件把 allow、deny、gray 规则提交给 AcTrail；
-- 被 AcTrail 跟踪的进程访问这些文件时，可以看到放行、拒绝或进入 gray 决策的结果。
+配置和管理命令是两个独立入口：
 
-下面的流程假设你在仓库根目录执行命令。
+```text
+Web Configuration -> 插件 config submit  -> 插件内存配置 -> actraild 路由合并
+Web Plugin command -> 插件 command handler -> 插件内存配置 -> actraild 路由合并
+```
+
+命令执行成功后，Web 会重新查询插件当前配置。`help`、`rule list` 和 `rule dry-run` 等命令不会修改配置，刷新后内容保持不变；`rule upsert` 和 `rule delete` 会修改同一份插件内存配置，刷新后 Configuration 面板会显示新状态。
 
 ## 前置条件
 
-需要先有 release 二进制：
+- Linux 主机支持 fanotify permission events 和 seccomp user notification。
+- actraild 以 root 或具有等价 `CAP_SYS_ADMIN` 权限的身份运行。
+- 已安装 release 二进制和官方插件包。
+- actraild 配置启用了 `enforcement-file-permission-fanotify` capture capability。
+- `[seccomp_notify]` 中 `enabled = true`。
+- `[enforcement]` 中 `enabled = true`。`seccomp_syscalls` 默认允许策略使用 `mkdir` 和 `rmdir`，`seccomp_path_max_bytes` 默认是 `4096`。只有 trace 启动时合并路由表中存在对应操作的有效规则，actrailctl 才会安装该操作的 seccomp 通知过滤器；没有目录操作规则时不会增加这条通知开销。`rules_path` 指向的静态规则文件可以不存在或不包含规则；没有匹配规则时使用 `default_decision`，默认值 `allow` 会直接放行。
 
-```bash
-cargo build --release
-```
-
-fanotify 文件访问控制需要 root 或等价的 `CAP_SYS_ADMIN` 权限。下面命令统一用 `sudo` 演示。
-
-这个示例目录已经包含编译好的插件产物：
-
-```text
-examples/plugins/wit-component/file-policy-dynamic/component-file-policy-dynamic.wasm
-```
-
-首次试用不需要重新编译 `.wasm`。
-
-## 1. 准备测试目录
-
-```bash
-export DEMO_DIR=/tmp/actrail-file-policy-demo
-export CONFIG=$DEMO_DIR/operator.conf
-export RULES=$DEMO_DIR/rules.conf
-export TARGETS=$DEMO_DIR/targets
-export INSTANCE=wasm.file-policy-dynamic
-
-rm -rf "$DEMO_DIR"
-mkdir -p "$TARGETS"
-
-printf 'allow\n' > "$TARGETS/allow.txt"
-printf 'deny\n' > "$TARGETS/deny.txt"
-printf 'gray allow\n' > "$TARGETS/gray-allow-1.txt"
-printf 'gray deny\n' > "$TARGETS/gray-deny-1.txt"
-printf 'bootstrap\n' > "$TARGETS/.bootstrap"
-printf 'bootstrap allow open %s/.bootstrap\n' "$TARGETS" > "$RULES"
-```
-
-现象：`/tmp/actrail-file-policy-demo/targets/` 下有四个用于验证的文本文件，`rules.conf` 里有一条 bootstrap allow 规则。`operator.conf`、socket、SQLite、log 和 rules 不放在 `targets/` 里，避免 daemon 自己读写运行文件时触发本示例的 fanotify permission path。
-
-## 2. 生成 demo 配置
-
-使用默认配置模板，再应用本示例的 patch：
-
-```bash
-sudo target/release/actraild --config "$CONFIG" init \
-  --patch examples/plugins/wit-component/file-policy-dynamic/operator.patch.toml \
-  --force
-```
-
-预期输出：
+release 安装程序把候选插件安装到：
 
 ```text
-initialized config /tmp/actrail-file-policy-demo/operator.conf
+~/.actrail/plugins/file-policy-dynamic/
+├── component-file-policy-dynamic.wasm
+├── config.schema.json
+├── file-policy-dynamic.config.json
+└── file-policy-dynamic.plugin.toml
 ```
 
-现象：`operator.conf` 和 `rules.conf` 都在 demo 目录里。patch 只改本示例需要的路径、capability 和 enforcement 开关；默认配置里的其他字段仍由当前版本的 AcTrail 模板提供。`bootstrap` 规则只用于让 enforcement 服务有一个启动时规则，后续 allow、deny、gray 规则都由插件动态写入到 `targets/` 下。
+安装只创建候选包，不会自动加载插件。
 
-## 3. 启动 daemon
+## 通过 actrailweb 加载插件
 
-```bash
-sudo target/release/actraild --config "$CONFIG" start
-```
+1. 启动 actraild 和 actrailweb。
+2. 打开 actrailweb，进入 **Plugins**。
+3. 点击 **Refresh**，找到 `wasm.file-policy-dynamic` 候选插件。
+4. 点击 **Configure & load**。
+5. 填写易于识别的实例 ID，例如 `wasm.file-policy-dynamic`。
+6. 在 **Writable file-policy scopes** 中添加插件可以发布规则的绝对路径范围。
+7. 为该范围选择需要授权的 `allow`、`deny` 和 `gray` 决策类型。
+8. 点击加载按钮。
 
-预期现象：命令返回成功，daemon 在后台运行。
-
-检查 daemon 状态：
-
-```bash
-sudo target/release/actraild --config "$CONFIG" status
-```
-
-预期输出显示 daemon 正在运行。
-
-再检查 control socket：
-
-```bash
-sudo target/release/actrailctl --config "$CONFIG" doctor
-```
-
-现象：`doctor` 成功返回；如果 control socket 未就绪，会报连接错误。
-
-## 4. 加载插件
-
-```bash
-sudo target/release/actraild --config "$CONFIG" plugin load \
-  --manifest examples/plugins/wit-component/file-policy-dynamic/plugin.toml \
-  --grant file-policy.rules.read \
-  --grant file-policy.rules.match-dry-run \
-  --grant "file-policy.rules.apply:kind=allow,path=$TARGETS/**" \
-  --grant "file-policy.rules.apply:kind=deny,path=$TARGETS/**" \
-  --grant "file-policy.rules.apply:kind=gray,path=$TARGETS/**" \
-  --instance "$INSTANCE"
-```
-
-预期输出：
+路径范围支持精确路径和递归范围。例如：
 
 ```text
-loaded instance=wasm.file-policy-dynamic
-warnings=none
+/srv/agent/workspace/**
 ```
 
-确认插件已加载：
+这个授权允许插件为 `/srv/agent/workspace/` 下的文件发布规则。配置面板中的规则仍会逐条接受校验；插件不能用配置或命令越过加载时授予的范围和决策类型。
 
-```bash
-sudo target/release/actraild --config "$CONFIG" plugin list
-```
+加载成功后，**Loaded plugin instances** 中会分别显示：
 
-预期能看到一行 `wasm.file-policy-dynamic`，状态为 `active`。
+- **Instance ID**：本次加载的实例标识，例如 `wasm.file-policy-dynamic`。
+- **Plugin ID**：插件类型标识，同一插件类型的不同实例共享此值。
+- **Host grants**：本实例获得的只读能力列表和可写策略范围。
 
-## 5. 下发 allow 规则并验证
+## 通过 Configuration 管理规则
 
-把 `allow.txt` 设置为 allow：
+展开已加载实例，再展开 **Configuration**。配置来自插件当前内存，而不是 actraild 路由表的反向映射。
 
-```bash
-sudo target/release/actraild --config "$CONFIG" plugin cmd \
-  --instance "$INSTANCE" -- \
-  rule upsert allow "$TARGETS/allow.txt" --priority 10
-```
+每条规则包含：
 
-预期输出类似：
+| 字段 | 是否必填 | 说明 |
+| --- | --- | --- |
+| `rule_id` | 新规则可省略 | 插件拥有的稳定规则 ID。提交新规则时由插件生成，例如 `dynamic-1`。 |
+| `decision` | 是 | `allow`、`deny` 或 `gray`。 |
+| `operation` | 否 | `any`、`open`、`mkdir` 或 `rmdir`。默认 `any`，同时匹配文件打开、目录创建和目录删除。 |
+| `path` | 是 | 要匹配的绝对文件或目录路径。必须位于加载时授予的 scope 内。 |
+| `priority` | 是 | 路由优先级，数值越大优先级越高。默认值为 `10`。 |
+| `gray_target` | gray 必填 | 接收同步判定的控制插件实例索引；非 gray 规则不能填写。 |
+
+提交过程分为两步：
+
+1. 修改字段后点击 **Test configuration**。actrailweb 后端、actraild 的 JSON Schema 校验以及插件语义校验都会执行。
+2. 校验成功后 **Update configuration** 才会启用。点击后，配置提交给插件；插件验证并发布路由成功后才更新内存配置。
+
+如果规则超出 Host grants、gray 规则缺少 `gray_target`、规则 ID 重复或路径无效，测试或更新会返回明确错误，插件内存配置保持原值。
+
+单次配置文档的大小上限由 manifest 中的 `hostcall_limits.plugin_config.read_max_bytes` 控制；官方包默认允许 `65536` 字节。超过上限时，查询、校验和提交都会直接失败。
+
+## 通过 Plugin command 管理同一份配置
+
+展开 **Plugin command**，每行输入一个参数。例如新增 deny 规则时输入：
 
 ```text
-accepted revision=1 applied=1 path=/tmp/actrail-file-policy-demo/targets/allow.txt
+rule
+upsert
+deny
+/srv/agent/workspace/private.txt
+--operation
+open
+--priority
+20
 ```
 
-查看 dry-run 命中结果：
+发送成功后，Web 自动重新读取 Configuration。新规则会带有插件生成的稳定 ID。
 
-```bash
-sudo target/release/actraild --config "$CONFIG" plugin cmd \
-  --instance "$INSTANCE" -- \
-  rule dry-run "$TARGETS/allow.txt"
-```
-
-预期输出包含：
+列出插件内存中的规则：
 
 ```text
-matched=true decision=allow
+rule
+list
 ```
 
-用一个被 AcTrail 跟踪的进程访问文件：
-
-```bash
-sudo target/release/actrailctl --config "$CONFIG" launch -- \
-  python3 -c "open('$TARGETS/allow.txt', 'r', encoding='utf-8').read(); print('allow_read=ok')"
-```
-
-预期输出包含：
+输出示例：
 
 ```text
-allow_read=ok
+dynamic-1 deny open /srv/agent/workspace/private.txt priority=20
 ```
 
-## 6. 下发 deny 规则并验证
-
-```bash
-sudo target/release/actraild --config "$CONFIG" plugin cmd \
-  --instance "$INSTANCE" -- \
-  rule upsert deny "$TARGETS/deny.txt" --priority 10
-```
-
-预期输出类似：
+删除规则：
 
 ```text
-accepted revision=2 applied=1 path=/tmp/actrail-file-policy-demo/targets/deny.txt
+rule
+delete
+dynamic-1
 ```
 
-访问被拒绝的文件：
-
-```bash
-sudo target/release/actrailctl --config "$CONFIG" launch -- \
-  python3 -c "open('$TARGETS/deny.txt', 'r', encoding='utf-8').read(); print('deny_read=unexpected_ok')"
-```
-
-预期现象：命令返回非 0，Python 报 `PermissionError` 或 `Permission denied`。这说明 fanotify enforcement 拒绝了本次 open。
-
-## 7. 下发 gray 规则并验证
-
-这个 demo 假设当前 daemon 只加载了这一个控制插件。控制插件实例索引从 `1` 开始，因此 gray 规则使用 `--gray-target 1`。
-
-```bash
-sudo target/release/actraild --config "$CONFIG" plugin cmd \
-  --instance "$INSTANCE" -- \
-  rule upsert gray "$TARGETS/gray-allow-1.txt" --priority 10 --gray-target 1
-
-sudo target/release/actraild --config "$CONFIG" plugin cmd \
-  --instance "$INSTANCE" -- \
-  rule upsert gray "$TARGETS/gray-deny-1.txt" --priority 10 --gray-target 1
-```
-
-预期输出类似：
+查看帮助：
 
 ```text
-accepted revision=3 applied=1 path=/tmp/actrail-file-policy-demo/targets/gray-allow-1.txt
-accepted revision=4 applied=1 path=/tmp/actrail-file-policy-demo/targets/gray-deny-1.txt
+help
 ```
 
-访问 hash 为偶数的 gray 文件：
-
-```bash
-sudo target/release/actrailctl --config "$CONFIG" launch -- \
-  python3 -c "open('$TARGETS/gray-allow-1.txt', 'r', encoding='utf-8').read(); print('gray_allow_read=ok')"
-```
-
-预期输出包含：
+查看某个路径在 actraild 当前合并路由表中的匹配结果：
 
 ```text
-gray_allow_read=ok
+rule
+dry-run
+/srv/agent/workspace/private.txt
+--operation
+open
 ```
 
-访问 hash 为奇数的 gray 文件：
-
-```bash
-sudo target/release/actrailctl --config "$CONFIG" launch -- \
-  python3 -c "open('$TARGETS/gray-deny-1.txt', 'r', encoding='utf-8').read(); print('gray_deny_read=unexpected_ok')"
-```
-
-预期现象：命令返回非 0，Python 报 `PermissionError` 或 `Permission denied`。
-
-这个插件用路径 hash 的奇偶性模拟“外部动态分析服务”的结论：偶数 allow，奇数 deny。
-上面的两个文件名只在 `DEMO_DIR=/tmp/actrail-file-policy-demo` 时保证这个结果；如果修改了 demo 目录，hash 奇偶性也可能变化。
-
-## 8. 查看和删除规则
-
-列出当前规则：
-
-```bash
-sudo target/release/actraild --config "$CONFIG" plugin cmd \
-  --instance "$INSTANCE" -- \
-  rule list
-```
-
-输出形状类似：
-
-```text
-revision=4
-bootstrap allow /tmp/actrail-file-policy-demo/targets/.bootstrap priority=0
-fp-1 allow /tmp/actrail-file-policy-demo/targets/allow.txt priority=10
-fp-2 deny /tmp/actrail-file-policy-demo/targets/deny.txt priority=10
-fp-3 gray /tmp/actrail-file-policy-demo/targets/gray-allow-1.txt priority=10
-fp-4 gray /tmp/actrail-file-policy-demo/targets/gray-deny-1.txt priority=10
-```
-
-删除规则时使用 `rule list` 输出里的真实 rule id。比如删除 deny 规则：
-
-```bash
-sudo target/release/actraild --config "$CONFIG" plugin cmd \
-  --instance "$INSTANCE" -- \
-  rule delete fp-2
-```
-
-预期输出类似：
-
-```text
-accepted revision=5 deleted=fp-2
-```
-
-再次 dry-run：
-
-```bash
-sudo target/release/actraild --config "$CONFIG" plugin cmd \
-  --instance "$INSTANCE" -- \
-  rule dry-run "$TARGETS/deny.txt"
-```
-
-预期输出包含：
-
-```text
-matched=false decision=allow
-```
-
-因为本 demo 的 `default_decision = "allow"`，删除 deny 规则后，访问 `deny.txt` 会恢复放行。
-
-## 9. 清理
-
-卸载插件：
-
-```bash
-sudo target/release/actraild --config "$CONFIG" plugin unload --instance "$INSTANCE"
-```
-
-预期输出：
-
-```text
-unloaded instance=wasm.file-policy-dynamic
-```
-
-停止 daemon：
-
-```bash
-sudo target/release/actraild --config "$CONFIG" stop
-```
-
-删除 demo 目录：
-
-```bash
-sudo rm -rf "$DEMO_DIR"
-```
+`rule dry-run` 只查询实际生效路由，不修改插件配置。
 
 ## 命令参考
 
-插件支持的管理命令：
+| 命令 | 是否修改配置 | 作用 |
+| --- | --- | --- |
+| `help` | 否 | 显示插件支持的命令。 |
+| `rule list` | 否 | 列出插件当前内存配置中的规则。 |
+| `rule dry-run <path> [--operation open\|mkdir\|rmdir]` | 否 | 查询 actraild 合并后的路由匹配结果；省略 operation 时查询 `open`。 |
+| `rule upsert allow <path> [--operation any\|open\|mkdir\|rmdir] [--priority N]` | 是 | 新增 allow 规则；省略 operation 时使用 `any`。 |
+| `rule upsert deny <path> [--operation any\|open\|mkdir\|rmdir] [--priority N]` | 是 | 新增 deny 规则；省略 operation 时使用 `any`。 |
+| `rule upsert gray <path> [--operation any\|open\|mkdir\|rmdir] [--priority N] --gray-target INDEX` | 是 | 新增 gray 规则；省略 operation 时使用 `any`。 |
+| `rule delete <rule-id>` | 是 | 删除插件配置中的指定规则。 |
 
-| 命令 | 作用 |
-| --- | --- |
-| `rule upsert allow <path> [--priority N]` | 新增或更新 allow 规则。 |
-| `rule upsert deny <path> [--priority N]` | 新增或更新 deny 规则。 |
-| `rule upsert gray <path> [--priority N] --gray-target INDEX` | 新增或更新 gray 规则，命中后交给指定控制插件实例决策。 |
-| `rule list` | 列出插件写入 AcTrail 的文件策略规则。 |
-| `rule dry-run <path>` | 查看指定路径当前会命中哪条规则，不触发真实文件访问。 |
-| `rule delete <rule-id>` | 删除指定规则；`rule-id` 来自 `rule list` 输出。 |
+## 验证实际访问结果
 
-`actraild plugin cmd --instance "$INSTANCE" -- ...` 中的 `--` 是分隔符：前面是 AcTrail 的参数，后面是原样传给插件的命令参数。
+策略只作用于启用了 fanotify enforcement capability 的 AcTrail trace。普通的未跟踪进程不受 trace-scoped 策略影响。
 
-## 从源码重新构建插件
+目录操作的 seccomp filter 在 trace 启动时确定。请先加载插件并提交 `mkdir`/`rmdir`/`any` 规则，再启动 agent；运行中的 trace 无法追加 seccomp filter，因此之后新增的目录操作规则只对后续启动的 trace 生效。删除规则后，已经安装的 filter 会继续存在到该 trace 结束，但 daemon 会直接放行没有匹配规则的通知。
 
-只有修改了 `fixture-src/` 里的 Rust 源码时才需要重新构建：
+下面假设配置中已有：
+
+- `/srv/agent/workspace/public.txt` 的 allow 规则；
+- `/srv/agent/workspace/private.txt` 的 deny 规则。
+
+用真实 agent 通过 AcTrail 启动，并要求它读取两个文件：
+
+```bash
+sudo target/release/actrailctl launch --config /etc/actrail/actraild.conf \
+  --name dynamic-file-policy-check -- \
+  xiaoo --cli run -p \
+  'Read /srv/agent/workspace/public.txt and /srv/agent/workspace/private.txt. Report the result for each path and do not modify either file.'
+```
+
+预期结果：allow 文件可读取，deny 文件返回 `Permission denied`。
+
+查看该 trace 的审计事件：
+
+```bash
+sudo target/release/actrailviewer events \
+  --config /etc/actrail/actraild.conf \
+  --trace-id 1
+```
+
+输出中应包含类似记录：
+
+```text
+Enforcement open decision=allow path=/srv/agent/workspace/public.txt rule_id=dynamic-2 result=allowed backend=fanotify
+Enforcement open decision=deny path=/srv/agent/workspace/private.txt rule_id=dynamic-1 result=denied backend=fanotify
+```
+
+deny 和 gray-plugin deny 还会异步生成 `file.access.boundary-violation` 告警。打开 **Stats → Alerts** 可以查看按时间倒序排列的告警；告警写入不参与文件访问判定。
+
+要验证目录创建阻断，把一条 deny 规则的 `operation` 设为 `mkdir`，路径设为 `/srv/agent/workspace/new-directory`，然后运行真实 agent：
+
+```bash
+sudo target/release/actrailctl launch -- \
+  opencode run '请确认 /srv/agent/workspace/new-directory 是否可以创建。'
+```
+
+预期结果：agent 收到 `Permission denied`，目标目录不存在；该 trace 的 enforcement 审计记录 `mkdir decision=deny`，**Stats → Alerts** 出现对应的 `file.access.boundary-violation`。如果同时加载 file-leakage 插件，它会在 trace 结束后的独立异步计算中写入自己的告警，两类告警互不替代。
+
+## 无 Web 环境下加载
+
+CLI 加载时必须同时提供 JSON 配置文件、自动能力授权和参数化写入范围：
+
+```bash
+export INSTANCE=wasm.file-policy-dynamic
+export TARGET_SCOPE=/srv/agent/workspace/**
+
+sudo target/release/actraild --config /etc/actrail/actraild.conf plugin load \
+  --manifest examples/plugins/wit-component/file-policy-dynamic/plugin.toml \
+  --plugin-config examples/plugins/wit-component/file-policy-dynamic/file-policy-dynamic.config.json \
+  --grant file-policy.rules.read \
+  --grant file-policy.rules.match-dry-run \
+  --grant file-policy.rules.validate \
+  --grant "file-policy.rules.apply:kind=allow,path=$TARGET_SCOPE" \
+  --grant "file-policy.rules.apply:kind=deny,path=$TARGET_SCOPE" \
+  --grant "file-policy.rules.apply:kind=gray,path=$TARGET_SCOPE" \
+  --instance "$INSTANCE"
+```
+
+CLI 命令与 Web 的 Plugin command 使用同一个插件 command handler：
+
+```bash
+sudo target/release/actraild --config /etc/actrail/actraild.conf plugin cmd \
+  --instance "$INSTANCE" -- help
+```
+
+## 卸载插件
+
+在 actrailweb 的 **Loaded plugin instances** 中点击实例右侧的 **Unload plugin**。卸载实例会移除该插件实例发布到 actraild 的路由；其他插件、静态配置和内置路由不受影响。
+
+无 Web 环境时可以执行：
+
+```bash
+sudo target/release/actraild --config /etc/actrail/actraild.conf plugin unload \
+  --instance wasm.file-policy-dynamic
+```
+
+## 从源码构建插件
+
+只有修改 `fixture-src/` 下的插件源码或 WIT contract 时才需要重新构建：
 
 ```bash
 rustup target add wasm32-wasip2
 cd examples/plugins/wit-component/file-policy-dynamic/fixture-src
 cargo build --release --target wasm32-wasip2
-cp target/wasm32-wasip2/release/actrail_component_file_policy_dynamic.wasm ../component-file-policy-dynamic.wasm
+cp target/wasm32-wasip2/release/actrail_component_file_policy_dynamic.wasm \
+  ../component-file-policy-dynamic.wasm
 ```
-
-## 自动端到端验证
-
-人工流程跑通后，可以用 E2E 脚本做回归验证：
-
-```bash
-sudo env ACTRAIL_BIN_DIR=target/release python3 tests/plugins/file-policy-dynamic/run_e2e.py
-```
-
-该脚本会启动真实 daemon，加载真实插件，验证 allow、deny、规则列表、规则删除、dry-run 和 gray hash 决策。
 
 ## 文件说明
 
 | 文件 | 说明 |
 | --- | --- |
-| `plugin.toml` | 插件 manifest。 |
-| `component-file-policy-dynamic.wasm` | 可直接加载的 WIT Component 插件产物。 |
+| `plugin.toml` | 插件 manifest，声明 runtime-managed JSON 配置和 Host capabilities。 |
+| `file-policy-dynamic.config.json` | 默认插件配置，初始规则列表为空。 |
+| `config.schema.json` | Web 与 actraild 使用的 JSON Schema。 |
+| `component-file-policy-dynamic.wasm` | 可加载的 WIT Component 插件产物。 |
 | `fixture-src/` | 插件 Rust 源码。 |
-| `README.zh.md` | 本说明文档。 |
+| `README.zh.md` | 面向产品用户和运维人员的操作说明。 |

@@ -1,0 +1,6 @@
+{
+  "include_trace_working_directory": true,
+  "additional_allowed_roots": [],
+  "trace_state_max_count": 256,
+  "candidate_max_count": 4096
+}

@@ -11,13 +11,14 @@ use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use plugin_system::{
     CONTROL_CURRENT_CONTEXT_TOKEN, ControlDecisionBudget, ControlDecisionRequest, ControlSubject,
-    FILE_POLICY_CURRENT_CONTEXT_TOKEN, FilePolicyMatchedRule, FilePolicyReadContext,
+    FILE_POLICY_CURRENT_CONTEXT_TOKEN, FilePolicyMatchedRule, FilePolicyOperation,
+    FilePolicyReadContext,
 };
 use process_identity::ProcessIdentityManager;
 use trace_runtime::registry::TraceRuntime;
 
 use super::audit::{
-    Decision, DecisionSource, EnforcementEventDraft, SyncPluginFallbackReason, event_draft,
+    Decision, DecisionSource, EnforcementOutcomeDraft, SyncPluginFallbackReason, outcome_draft,
 };
 use super::worker::{
     CachedDecision, PendingPluginDecision, PluginDecisionCompletion, ReusableDecisionKey,
@@ -46,7 +47,7 @@ pub(super) fn handle_permission_event(
     in_flight_by_instance: &mut BTreeMap<String, u32>,
     completion_tx: Sender<PluginDecisionCompletion>,
     metadata: PermissionMetadata,
-    drafts: &mut Vec<EnforcementEventDraft>,
+    drafts: &mut Vec<EnforcementOutcomeDraft>,
 ) -> Result<(), String> {
     let event_fd = PermissionEventFd::new(metadata.fd);
     if metadata.mask & libc::FAN_OPEN_PERM == 0 {
@@ -78,14 +79,14 @@ pub(super) fn handle_permission_event(
 
     let Some(rule) = observed_path
         .as_deref()
-        .and_then(|path| rules.find_path(Path::new(path)))
+        .and_then(|path| rules.find_path(FilePolicyOperation::Open, Path::new(path)))
     else {
         let decision = Decision {
             decision: default_decision,
             rule: None,
             source: DecisionSource::Default,
         };
-        return respond_and_audit(
+        return respond_and_capture(
             fanotify_fd,
             event_fd,
             trace_id,
@@ -146,7 +147,7 @@ fn traced_process(
         .map(|process| (process.trace_id, process.process)))
 }
 
-fn trace_requests_enforcement(trace_runtime: &TraceRuntime, trace_id: TraceId) -> bool {
+pub(super) fn trace_requests_enforcement(trace_runtime: &TraceRuntime, trace_id: TraceId) -> bool {
     trace_runtime
         .get_trace(trace_id)
         .map(|entry| {
@@ -175,10 +176,10 @@ fn handle_rule_permission_event(
     completion_tx: Sender<PluginDecisionCompletion>,
     audit_enabled: bool,
     observed_path: Option<String>,
-    drafts: &mut Vec<EnforcementEventDraft>,
+    drafts: &mut Vec<EnforcementOutcomeDraft>,
 ) -> Result<(), String> {
     match &rule.decision {
-        RuleDecision::Local(decision) => respond_and_audit(
+        RuleDecision::Local(decision) => respond_and_capture(
             fanotify_fd,
             event_fd,
             trace_id,
@@ -241,14 +242,15 @@ fn handle_sync_plugin_rule(
     timeout_ms: u64,
     concurrency_limit: u32,
     fallback: EnforcementDecision,
-    drafts: &mut Vec<EnforcementEventDraft>,
+    drafts: &mut Vec<EnforcementOutcomeDraft>,
 ) -> Result<(), String> {
     let cache_key = ReusableDecisionKey {
         trace_id,
         rule_id: rule.rule_id.clone(),
+        operation: FilePolicyOperation::Open,
     };
     if let Some(cached) = reusable_decisions.get(&cache_key) {
-        return respond_and_audit(
+        return respond_and_capture(
             fanotify_fd,
             event_fd,
             trace_id,
@@ -271,7 +273,7 @@ fn handle_sync_plugin_rule(
         .copied()
         .unwrap_or_default();
     if in_flight >= concurrency_limit {
-        return respond_and_audit(
+        return respond_and_capture(
             fanotify_fd,
             event_fd,
             trace_id,
@@ -305,7 +307,7 @@ fn handle_sync_plugin_rule(
         .instance_concurrency_limit(instance_id)
         .unwrap_or(concurrency_limit);
     if instance_in_flight >= instance_concurrency_limit {
-        return respond_and_audit(
+        return respond_and_capture(
             fanotify_fd,
             event_fd,
             trace_id,
@@ -341,7 +343,14 @@ fn handle_sync_plugin_rule(
     } else {
         (None, None)
     };
-    let request = control_decision_request(trace_id, &process, process_registry, rule)?;
+    let request = control_decision_request(
+        trace_id,
+        &process,
+        process_registry,
+        rule,
+        FilePolicyOperation::Open,
+        observed_path.as_deref(),
+    )?;
     let pending = PendingPluginDecision {
         fanotify_fd,
         wake_fd,
@@ -369,7 +378,7 @@ fn handle_sync_plugin_rule(
     Ok(())
 }
 
-fn respond_and_audit(
+fn respond_and_capture(
     fanotify_fd: RawFd,
     event_fd: PermissionEventFd,
     trace_id: TraceId,
@@ -377,23 +386,29 @@ fn respond_and_audit(
     decision: Decision<'_>,
     audit_enabled: bool,
     observed_path: Option<String>,
-    drafts: &mut Vec<EnforcementEventDraft>,
+    drafts: &mut Vec<EnforcementOutcomeDraft>,
 ) -> Result<(), String> {
     respond(
         fanotify_fd,
         event_fd.raw_fd(),
         matches!(decision.decision, EnforcementDecision::Allow),
     )?;
-    if audit_enabled {
-        let (file_key, audit_metadata_error) = audit_metadata(&event_fd);
-        drafts.push(event_draft(
-            trace_id,
-            process,
-            decision,
-            file_key,
-            observed_path,
-            audit_metadata_error,
-        ));
+    let (file_key, audit_metadata_error) = if audit_enabled {
+        audit_metadata(&event_fd)
+    } else {
+        (None, None)
+    };
+    if let Some(draft) = outcome_draft(
+        trace_id,
+        process,
+        decision,
+        audit_enabled,
+        FilePolicyOperation::Open,
+        file_key,
+        observed_path,
+        audit_metadata_error,
+    ) {
+        drafts.push(draft);
     }
     Ok(())
 }
@@ -405,7 +420,7 @@ fn audit_metadata(event_fd: &PermissionEventFd) -> (Option<FileKey>, Option<Stri
     }
 }
 
-fn reserve_in_flight(
+pub(super) fn reserve_in_flight(
     in_flight_by_rule: &mut BTreeMap<String, u32>,
     rule_id: &str,
 ) -> Result<(), String> {
@@ -426,11 +441,13 @@ pub(super) fn release_in_flight(in_flight_by_rule: &mut BTreeMap<String, u32>, r
     }
 }
 
-fn control_decision_request(
+pub(super) fn control_decision_request(
     trace_id: TraceId,
     process: &ProcessIdentity,
     process_registry: &ProcessIdentityManager,
     rule: &EnforcementRule,
+    operation: FilePolicyOperation,
+    observed_path: Option<&str>,
 ) -> Result<ControlDecisionRequest, String> {
     let file_policy_context = current_file_access_match_context(rule);
     Ok(ControlDecisionRequest {
@@ -440,8 +457,10 @@ fn control_decision_request(
         actor_process_identity: ControlActorIdentityResolver::new(process_registry)
             .resolve(*process)
             .map_err(|error| error.message)?,
-        operation: rule.operation.clone(),
-        target_summary: rule.path.display().to_string(),
+        operation: operation.as_str().to_string(),
+        target_summary: observed_path
+            .map(str::to_string)
+            .unwrap_or_else(|| rule.path.display().to_string()),
         context_ref: Some(CONTROL_CURRENT_CONTEXT_TOKEN.to_string()),
         file_policy_context,
     })

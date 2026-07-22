@@ -131,7 +131,7 @@ def write_dynamic_validation_inputs() -> None:
     BUILTIN_HOST_CAPABILITY_MANIFEST.write_text(
         """[general]
 id = "otel-jsonl"
-api_version = "actrail.plugin.v1"
+api_version = "actrail.plugin.v2"
 role = "observation-consumer"
 runtime = "builtin"
 
@@ -159,7 +159,7 @@ required = true
     BUILTIN_ARTIFACT_PATH_MANIFEST.write_text(
         """[general]
 id = "otel-jsonl"
-api_version = "actrail.plugin.v1"
+api_version = "actrail.plugin.v2"
 role = "observation-consumer"
 runtime = "builtin"
 
@@ -190,7 +190,7 @@ required = true
     NETWORK_EGRESS_MANIFEST.write_text(
         f"""[general]
 id = "wasm.future-network-egress"
-api_version = "actrail.plugin.v1"
+api_version = "actrail.plugin.v2"
 role = "observation-consumer"
 runtime = "wasm"
 
@@ -210,7 +210,7 @@ required = false
     ZERO_PLUGIN_CONFIG_READ_MANIFEST.write_text(
         f"""[general]
 id = "wasm.zero-plugin-config-read"
-api_version = "actrail.plugin.v1"
+api_version = "actrail.plugin.v2"
 role = "observation-consumer"
 runtime = "wasm"
 
@@ -234,7 +234,7 @@ required = false
     ZERO_PLUGIN_COMMAND_TIMEOUT_MANIFEST.write_text(
         f"""[general]
 id = "wasm.zero-plugin-command-timeout"
-api_version = "actrail.plugin.v1"
+api_version = "actrail.plugin.v2"
 role = "control-decider"
 runtime = "wasm"
 
@@ -258,7 +258,7 @@ required = false
     DUPLICATE_EVENT_FAMILIES_MANIFEST.write_text(
         f"""[general]
 id = "wasm.duplicate-event-families"
-api_version = "actrail.plugin.v1"
+api_version = "actrail.plugin.v2"
 role = "observation-consumer"
 runtime = "wasm"
 
@@ -281,7 +281,7 @@ required = false
     DUPLICATE_CAPABILITIES_MANIFEST.write_text(
         f"""[general]
 id = "wasm.duplicate-capabilities"
-api_version = "actrail.plugin.v1"
+api_version = "actrail.plugin.v2"
 role = "observation-consumer"
 runtime = "wasm"
 
@@ -301,7 +301,7 @@ required = false
     BUILTIN_WASM_ABI_MANIFEST.write_text(
         """[general]
 id = "otel-jsonl"
-api_version = "actrail.plugin.v1"
+api_version = "actrail.plugin.v2"
 role = "observation-consumer"
 runtime = "builtin"
 
@@ -320,7 +320,7 @@ required = false
     MISSING_WASM_ARTIFACT_MANIFEST.write_text(
         """[general]
 id = "wasm.missing-artifact"
-api_version = "actrail.plugin.v1"
+api_version = "actrail.plugin.v2"
 role = "observation-consumer"
 runtime = "wasm"
 
@@ -337,7 +337,7 @@ required = false
     WHITESPACE_WASM_ARTIFACT_MANIFEST.write_text(
         """[general]
 id = "wasm.whitespace-artifact"
-api_version = "actrail.plugin.v1"
+api_version = "actrail.plugin.v2"
 role = "observation-consumer"
 runtime = "wasm"
 
@@ -357,7 +357,7 @@ required = false
     EMPTY_SCHEMA_REF_MANIFEST.write_text(
         f"""[general]
 id = "wasm.empty-schema-ref"
-api_version = "actrail.plugin.v1"
+api_version = "actrail.plugin.v2"
 role = "observation-consumer"
 runtime = "wasm"
 

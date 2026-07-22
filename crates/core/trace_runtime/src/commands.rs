@@ -13,6 +13,7 @@ pub struct TrackTraceRequest {
     /// Container id of the root process, resolved host-side at attach.
     /// `None` = host process or non-Docker runtime.
     pub root_container_id: Option<String>,
+    pub root_working_directory: Option<String>,
     pub display_name: TraceName,
     pub profile_snapshot: CaptureProfileSnapshot,
     pub tags: BTreeSet<String>,
