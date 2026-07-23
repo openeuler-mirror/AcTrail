@@ -30,10 +30,14 @@ The currently supported and tested deployment target is one Linux host using
 Docker:
 
 - `actraild`, storage, viewer, and web run on the host;
-- one observed agent container runs `actrailctl launch`;
-- host control and TLS-sync Unix sockets are mounted into that container;
-- the isolation acceptance case temporarily starts a second container only to
-  verify that one container cannot operate on another container's trace.
+- one or more observed agent containers each run their own
+  `actrailctl launch`;
+- the same host control and TLS-sync Unix sockets are mounted into every
+  observed container;
+- concurrent traces from different container PID namespaces are collected by
+  the same host eBPF instance and remain independently attributable;
+- the isolation acceptance cases verify both concurrent collection and that
+  one container cannot operate on another container's trace.
 
 This change does not claim support for Kubernetes, Podman, direct
 containerd/CRI-O operation, multi-host control, TCP socket forwarding, or a
@@ -42,6 +46,37 @@ containerized `actraild`.
 The final permission matrix and cross-container isolation E2E passed on
 x86_64 and ARM64 (Oracle A1) Docker hosts after the daemon-side
 permission-resolution rework.
+
+## Multiple Containers on One Host
+
+Run exactly one host `actraild` for a control-socket path and mount its socket
+directory into every workload container:
+
+```text
+host actraild
+├── /run/actrail/control.sock
+├── /run/actrail/tls-sync.sock
+├── container A -> actrailctl launch -> trace A
+└── container B -> actrailctl launch -> trace B
+```
+
+The socket paths are shared listeners, not per-container files. Accepted
+connections are authenticated with kernel `SO_PEERCRED`, and each trace is
+bound to the creating container principal. Consequently, sharing the mounts
+does not merge traces and does not let one container control or inject
+TLS-sync data into another container's trace.
+
+The eBPF collector uses host PID/TID values for internal map keys, so identical
+container-local PIDs from different PID namespaces do not collide. Each trace
+also stores its own PID namespace identity; emitted events retain
+container-local PID coordinates for the viewer while host PID coordinates
+remain available for attribution.
+
+Every workload must invoke `actrailctl launch` for the agent root process.
+Mounting the sockets alone does not automatically trace every process in a
+container. Concurrent capacity is bounded by `[control].active_trace_max`,
+`[control].pending_connection_max`, and the configured eBPF process/pending
+map sizes. A second daemon cannot bind the same Unix socket paths.
 
 ## Selection Matrix
 
@@ -164,6 +199,21 @@ an existing AcTrail database.
 The same test also starts two isolated workload containers and verifies that
 container B cannot list, remove, distinguish the existence of, register a
 seccomp listener for, or inject a TLS event into container A's trace.
+
+Run the real-agent concurrent-collection acceptance case with:
+
+```bash
+sudo python3 tests/agent-trace/multi-container-xiaoo/run_e2e.py
+```
+
+It runs two real xiaoO processes in separate Docker PID namespaces, holds both
+traces Active concurrently, and requires independent eBPF process/network
+evidence, task-specific `file.read`/`file.write` actions, and successful
+`llm.call`, `llm.request`, and `llm.response` actions. The two containers use
+different trace names and tasks; the second starts 10 seconds after the first
+while retaining an overlapping Active window. On a trusted legacy Docker/runc
+host that cannot load the current versioned seccomp profile, add
+`--seccomp-profile unconfined` only for compatibility testing.
 
 On Debian/Ubuntu ARM64 builders, the eBPF build automatically adds
 `/usr/include/aarch64-linux-gnu` when it contains the target `asm` headers.

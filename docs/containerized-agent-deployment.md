@@ -2,9 +2,9 @@
 
 ## 文档目标
 
-本文档说明如何在主机侧运行 AcTrail daemon、viewer、web 和 SQLite 存储，同时在一个 Docker workload 容器内运行被观测的 Agent，并通过容器内的 `actrailctl launch` 让主机 daemon 采集容器内 Agent 的进程、网络、TLS 明文载荷和语义动作。
+本文档说明如何在主机侧运行 AcTrail daemon、viewer、web 和 SQLite 存储，同时在一个或多个 Docker workload 容器内运行被观测的 Agent，并通过各容器内的 `actrailctl launch` 让同一个主机 daemon 采集所有 Agent 的进程、网络、TLS/Socket 明文载荷和语义动作。
 
-本文档的默认路径是“主机 + 一个已有 workload 容器”：主机负责采集和存储，容器只负责运行 `actrailctl launch -- <agent>` 和实际 Agent 进程。
+本文档先以“主机 + 一个已有 workload 容器”说明操作步骤；多个容器复用同一套主机 socket 和配置，分别执行相同的 probe/launch 流程即可。主机负责统一采集和存储，容器只负责运行 `actrailctl launch -- <agent>` 和实际 Agent 进程。
 
 容器化部署通过 `--host-ebpf` 和 `--seccomp-notify` 两个独立权限轴，
 根据宿主机与容器的实际能力选择采集 profile。`auto` 会在能力不可用时
@@ -18,7 +18,7 @@
 
 本文档说明的是 AcTrail 在容器化 Agent 场景下的运行部署，不说明如何把 `actraild` 本身放进容器，也不说明如何通过 TCP 转发 AcTrail 控制 socket。
 
-运行时只有一个被观测 workload 容器；主机上的 `actraild`、`actrailviewer`、`actrailweb` 不是容器；如果你额外使用 build 容器编译 release 产物，它也不属于这次被观测的运行拓扑。
+运行时可以有多个被观测 workload 容器；主机上的 `actraild`、`actrailviewer`、`actrailweb` 不是容器；如果你额外使用 build 容器编译 release 产物，它也不属于这次被观测的运行拓扑。
 
 主机侧组件负责 eBPF、seccomp、TLS-sync、PID namespace 映射、SQLite 写入和 semantic action 投影。容器侧组件只需要 `actrailctl`、`libactrail_tls_payload_probe_sync.so`、Agent 二进制和 Agent 自己的配置/密钥。
 
@@ -26,16 +26,36 @@
 
 ```text
 host actraild
-  -> host eBPF/seccomp/TLS-sync collector
-  -> host semantic action runtime
+  -> one host eBPF/seccomp/TLS-sync collector
+  -> one host semantic action runtime
   -> host /var/lib/actrail/actrail.sqlite
   -> host actrailviewer / actrailweb
-
-Docker workload container
-  -> actrailctl launch -- /path/to/agent ...
-  -> child agent process in container PID namespace
-  -> /run/actrail/control.sock and /run/actrail/tls-sync.sock mounted from host
+  -> /run/actrail/control.sock + /run/actrail/tls-sync.sock
+       ├─ Docker workload A -> actrailctl launch -> trace A
+       └─ Docker workload B -> actrailctl launch -> trace B
 ```
+
+### 同一宿主机部署多个 workload 容器
+
+同一路径的 `control.sock` 和 `tls-sync.sock` 是支持多个连接的监听 socket，
+不是每个容器独占的资源。所有 workload 容器都挂载主机同一个
+`/run/actrail` 目录即可，不会因为容器数量增加而发生 socket 文件名冲突。
+需要避免的是启动第二个 `actraild` 去绑定同一组 socket 路径。
+
+每个容器必须为自己的 Agent 执行一次 `actrailctl launch`。daemon 在 accept
+后读取内核 `SO_PEERCRED`，把创建者的 container principal 固定到 trace；
+其他容器即使挂载相同 socket，也不能控制该 trace 或向其中注入 TLS-sync
+数据。eBPF 内部使用宿主机 PID/TID 作为 map key，因此不同 PID namespace
+中都叫 PID 1 的进程不会碰撞；每条 trace 另存自己的 PID namespace，
+页面和导出事件仍显示正确的容器内 PID。
+
+多容器采集的容量由 `[control].active_trace_max`、
+`[control].pending_connection_max` 以及 `[ebpf]` 的
+`tracked_process_max_entries`、`pending_operation_max_entries` 等 map
+容量共同限制。生产配置应按并发 trace 数和所有 trace 的进程总量留出余量。
+LLM 调用数据按 trace 分流：HTTPS 可由 TLS-sync 捕获，普通 HTTP 或 syscall
+明文由 socket payload 路径捕获，随后分别投影为各自的
+`llm.call`、`llm.request` 和 `llm.response`。
 
 ### Docker 权限模式简述
 
@@ -50,7 +70,7 @@ Docker workload container
 
 ## 整体流程
 
-通过在主机启动 `actraild`，把主机 `/run/actrail` socket 目录挂载到 workload 容器，在容器内执行 `actrailctl launch -- xiaoo --cli run -p "你好"`，然后回到主机侧检查 `actrailviewer`、`actrailweb` 和 `/var/lib/actrail/actrail.sqlite`，验证容器内 Agent 是否被完整观测。
+通过在主机启动一个 `actraild`，把主机 `/run/actrail` socket 目录挂载到每个 workload 容器，在各容器内执行 `actrailctl launch -- xiaoo --cli run -p "你好"`，然后回到主机侧检查 `actrailviewer`、`actrailweb` 和 `/var/lib/actrail/actrail.sqlite`，验证各容器内 Agent 是否被完整观测且 trace 没有串线。
 
 ### 前提假设
 

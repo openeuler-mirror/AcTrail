@@ -38,10 +38,6 @@ enum actrail_proc_event_flag {
     ACTRAIL_PROC_FORK_PARENT_HOST_ONLY = 2,
 };
 
-enum actrail_pid_namespace_slot {
-    ACTRAIL_ACTIVE_PID_NAMESPACE = 0,
-};
-
 enum actrail_net_syscall_family {
     ACTRAIL_NET_SYSCALL_SOCKET = 1,
     ACTRAIL_NET_SYSCALL_FD_IO = 2,
@@ -218,11 +214,11 @@ struct {
 } process_start_times SEC(".maps");
 
 struct {
-    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 1);
-    __type(key, __u32);
+    __type(key, __u64);
     __type(value, struct actrail_pid_namespace);
-} pid_namespace SEC(".maps");
+} trace_pid_namespaces SEC(".maps");
 
 #ifdef ACTRAIL_EVENT_TRANSPORT_PERF
 struct {
@@ -380,12 +376,12 @@ static __always_inline __u32 current_kernel_tgid(void) {
     return current_kernel_pid_tgid() >> 32;
 }
 
-static __always_inline __u64 current_collector_pid_tgid(void) {
-    __u32 key = ACTRAIL_ACTIVE_PID_NAMESPACE;
-    struct actrail_pid_namespace *namespace = bpf_map_lookup_elem(&pid_namespace, &key);
+static __always_inline __u64 current_trace_pid_tgid(__u64 trace_id) {
+    struct actrail_pid_namespace *namespace =
+        bpf_map_lookup_elem(&trace_pid_namespaces, &trace_id);
     struct actrail_bpf_pidns_info namespace_pid = {};
 
-    if (!namespace) {
+    if (!trace_id || !namespace) {
         return 0;
     }
     if (bpf_get_ns_current_pid_tgid(
@@ -399,32 +395,16 @@ static __always_inline __u64 current_collector_pid_tgid(void) {
 }
 
 static __always_inline __u64 current_pid_tgid(void) {
-    return current_collector_pid_tgid();
+    return current_kernel_pid_tgid();
 }
 
 static __always_inline __u32 current_tgid(void) {
     return current_pid_tgid() >> 32;
 }
 
-static __always_inline __u64 current_trace_pid_tgid(void) {
-    __u64 collector_pid_tgid = current_pid_tgid();
-
-    if (collector_pid_tgid) {
-        return collector_pid_tgid;
-    }
-    return current_kernel_pid_tgid();
-}
-
-static __always_inline __u32 current_trace_tgid(void) {
-    return current_trace_pid_tgid() >> 32;
-}
-
-static __always_inline __u64 current_namespace_pid_tgid(void) {
-    return current_collector_pid_tgid();
-}
-
-static __always_inline __u32 current_namespace_tgid(void) {
-    return current_namespace_pid_tgid() >> 32;
+static __always_inline __u32 current_trace_tgid(__u64 trace_id) {
+    __u64 pid_tgid = current_trace_pid_tgid(trace_id);
+    return pid_tgid ? pid_tgid >> 32 : current_kernel_tgid();
 }
 
 static __always_inline __u64 *lookup_current_trace(
@@ -432,34 +412,22 @@ static __always_inline __u64 *lookup_current_trace(
     __u32 *tid,
     __u32 *flags
 ) {
-    __u64 collector_pid_tgid = current_pid_tgid();
-    __u32 lookup_tgid = collector_pid_tgid >> 32;
+    __u64 kernel_pid_tgid = current_kernel_pid_tgid();
+    __u32 kernel_tgid = kernel_pid_tgid >> 32;
     __u64 *trace_id = 0;
 
     *flags = 0;
-    if (collector_pid_tgid) {
-        trace_id = bpf_map_lookup_elem(&tracked_traces, &lookup_tgid);
-        if (trace_id) {
-            *tgid = lookup_tgid;
-            *tid = (__u32)collector_pid_tgid;
-            return trace_id;
-        }
-    }
-
-    __u64 kernel_pid_tgid = current_kernel_pid_tgid();
-    __u32 kernel_tgid = kernel_pid_tgid >> 32;
-    if (kernel_pid_tgid && kernel_pid_tgid != collector_pid_tgid) {
+    if (kernel_pid_tgid) {
         trace_id = bpf_map_lookup_elem(&tracked_traces, &kernel_tgid);
         if (trace_id) {
             *tgid = kernel_tgid;
             *tid = (__u32)kernel_pid_tgid;
-            *flags = ACTRAIL_TRACE_LOOKUP_FLAG_HOST_FALLBACK;
             return trace_id;
         }
     }
 
-    *tgid = lookup_tgid;
-    *tid = (__u32)collector_pid_tgid;
+    *tgid = kernel_tgid;
+    *tid = (__u32)kernel_pid_tgid;
     return 0;
 }
 
@@ -539,8 +507,8 @@ static __always_inline void init_event(
 ) {
     __builtin_memset(event, 0, sizeof(*event));
     event->kind = kind;
-    event->pid = pid;
-    event->host_pid = current_kernel_tgid();
+    event->pid = current_trace_tgid(trace_id);
+    event->host_pid = pid;
     event->trace_id = trace_id;
     event->observed_ktime_ns = bpf_ktime_get_ns();
     event->pid_generation = current_process_start_time(pid);

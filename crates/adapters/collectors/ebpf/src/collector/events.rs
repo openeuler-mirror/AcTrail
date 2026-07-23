@@ -25,7 +25,7 @@ impl ExitRetire {
             KernelEvent::Observation(event) if event.kind == decode::PROC_EVENT_EXIT => {
                 Some(Self {
                     trace_id: event.trace_id,
-                    map_pid: event.pid,
+                    map_pid: decode::event_map_pid(event.pid, event.host_pid),
                     generation: event.pid_generation,
                 })
             }
@@ -151,7 +151,7 @@ impl EbpfCollector {
     ) -> Result<(), CollectorError> {
         match event.kind {
             decode::PROC_EVENT_EXIT => {
-                let map_pid = event.pid;
+                let map_pid = decode::event_map_pid(event.pid, event.host_pid);
                 if decode::resolve_bound_event_observation(
                     event.trace_id,
                     map_pid,
@@ -195,7 +195,7 @@ impl EbpfCollector {
                     .inherit_process(event.trace_id, &parent, child);
             }
             decode::PROC_EVENT_EXEC => {
-                let map_pid = event.pid;
+                let map_pid = decode::event_map_pid(event.pid, event.host_pid);
                 let process = decode::resolve_bound_event_observation(
                     event.trace_id,
                     map_pid,
@@ -218,8 +218,9 @@ impl EbpfCollector {
         let Some(runtime) = self.runtime.as_ref() else {
             return Ok(());
         };
+        let map_pid = decode::event_map_pid(event.pid, event.host_pid);
         runtime
-            .unmark_file_bulk_read_fast_process(event.pid, event.pid_generation)
+            .unmark_file_bulk_read_fast_process(map_pid, event.pid_generation)
             .map_err(loader_error)?;
         if !self.file_bulk_read_fast_path.enabled {
             return Ok(());
@@ -245,7 +246,7 @@ impl EbpfCollector {
             return Ok(());
         }
         runtime
-            .mark_file_bulk_read_fast_process(event.pid, event.pid_generation, event.trace_id)
+            .mark_file_bulk_read_fast_process(map_pid, event.pid_generation, event.trace_id)
             .map_err(loader_error)
     }
 

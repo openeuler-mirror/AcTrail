@@ -314,10 +314,6 @@ static __always_inline int store_tls_payload_op_args(
     struct actrail_pending_tls_payload_op op = {};
 
     tls_diag_inc(ACTRAIL_TLS_DIAG_ENTER_TOTAL);
-    if (!namespace_pid_tgid) {
-        namespace_pid_tgid = host_pid_tgid;
-        tls_diag_inc(ACTRAIL_TLS_DIAG_NAMESPACE_FALLBACK);
-    }
     if (lookup_flags & ACTRAIL_TRACE_LOOKUP_FLAG_HOST_FALLBACK) {
         tls_diag_inc(ACTRAIL_TLS_DIAG_TRACE_LOOKUP_HOST_FALLBACK);
         emit_tls_payload_diagnostic_event(
@@ -344,6 +340,11 @@ static __always_inline int store_tls_payload_op_args(
             buffer_ptr
         );
         return 0;
+    }
+    namespace_pid_tgid = current_trace_pid_tgid(*trace_id);
+    if (!namespace_pid_tgid) {
+        namespace_pid_tgid = host_pid_tgid;
+        tls_diag_inc(ACTRAIL_TLS_DIAG_NAMESPACE_FALLBACK);
     }
     if (!buffer_ptr) {
         tls_diag_inc(ACTRAIL_TLS_DIAG_EMPTY_BUFFER);
@@ -443,11 +444,13 @@ static __always_inline int emit_tls_payload_completion(
     struct actrail_tls_completion_event *event;
 
     tls_diag_inc(ACTRAIL_TLS_DIAG_COMPLETION_TOTAL);
-    if (!namespace_pid_tgid) {
-        namespace_pid_tgid = host_pid_tgid;
-    }
-
     if (!op) {
+        __u32 lookup_flags = 0;
+        __u64 *trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
+
+        if (trace_id) {
+            namespace_pid_tgid = current_trace_pid_tgid(*trace_id);
+        }
         tls_diag_inc(ACTRAIL_TLS_DIAG_COMPLETION_MISSING_PENDING);
         emit_tls_payload_diagnostic_event(
             ctx,
@@ -462,6 +465,10 @@ static __always_inline int emit_tls_payload_completion(
         bpf_map_delete_elem(&pending_tls_payload_ops, &host_pid_tgid);
         bpf_map_delete_elem(&tls_pending_ns, &namespace_pid_tgid);
         return 0;
+    }
+    namespace_pid_tgid = current_trace_pid_tgid(op->trace_id);
+    if (!namespace_pid_tgid) {
+        namespace_pid_tgid = host_pid_tgid;
     }
 
     capture_tls_payload_after_completion(ctx, op, tgid, tid, completed_size, flags);
