@@ -1,5 +1,7 @@
 //! Query-side mapping from rows to storage-contract results.
 
+use std::collections::BTreeMap;
+
 use rusqlite::params;
 use store_read_contract::ReadError;
 use store_read_contract::diagnostics::DiagnosticReadStore;
@@ -8,7 +10,9 @@ use store_read_contract::filters::TraceFilter;
 use store_read_contract::payloads::{PayloadReadStore, PayloadRowLimit, PayloadSegmentQuery};
 use store_read_contract::traces::TraceReadStore;
 use store_snapshot_contract::SnapshotError;
-use store_snapshot_contract::lease::{ExportLease, SnapshotLeaseStore};
+use store_snapshot_contract::lease::{
+    SnapshotLeaseStore, TraceLease, TraceLeasePurpose, TraceLeaseToken,
+};
 use store_snapshot_contract::view::{SnapshotStore, SnapshotView};
 
 use crate::SqliteStorage;
@@ -16,6 +20,53 @@ use crate::records::{
     decode_trace_health, diagnostic_from_row, event_from_row, membership_from_row,
     payload_segment_from_row, trace_from_row,
 };
+
+pub(crate) struct TraceLeaseRegistry {
+    next_token: u64,
+    leases: BTreeMap<TraceLeaseToken, (model_core::ids::TraceId, TraceLeasePurpose)>,
+}
+
+impl TraceLeaseRegistry {
+    pub(crate) const fn new() -> Self {
+        Self {
+            next_token: 1,
+            leases: BTreeMap::new(),
+        }
+    }
+
+    fn acquire(
+        &mut self,
+        trace_id: model_core::ids::TraceId,
+        purpose: TraceLeasePurpose,
+    ) -> Result<TraceLeaseToken, SnapshotError> {
+        let token = TraceLeaseToken::new(self.next_token);
+        self.next_token = self
+            .next_token
+            .checked_add(1)
+            .ok_or_else(|| SnapshotError::new("acquire_lease", "trace lease token exhausted"))?;
+        self.leases.insert(token, (trace_id, purpose));
+        Ok(token)
+    }
+
+    fn release(&mut self, lease: &TraceLease) -> bool {
+        if !self.contains(lease) {
+            return false;
+        }
+        self.leases.remove(&lease.token).is_some()
+    }
+
+    pub(crate) fn protects(&self, trace_id: model_core::ids::TraceId) -> bool {
+        self.leases
+            .values()
+            .any(|(leased_trace_id, _)| *leased_trace_id == trace_id)
+    }
+
+    fn contains(&self, lease: &TraceLease) -> bool {
+        self.leases
+            .get(&lease.token)
+            .is_some_and(|identity| *identity == (lease.trace_id, lease.purpose))
+    }
+}
 
 impl TraceReadStore for SqliteStorage {
     fn get_trace(
@@ -119,38 +170,50 @@ impl DiagnosticReadStore for SqliteStorage {
 }
 
 impl SnapshotLeaseStore for SqliteStorage {
-    fn acquire_export_lease(
+    fn acquire_trace_lease(
         &mut self,
         trace_id: model_core::ids::TraceId,
-    ) -> Result<ExportLease, SnapshotError> {
+        purpose: TraceLeasePurpose,
+    ) -> Result<TraceLease, SnapshotError> {
         if self.is_purged(trace_id) {
             return Err(SnapshotError::new("acquire_lease", "trace has been purged"));
         }
-        let mut leases = self.export_leases().borrow_mut();
-        if !leases.insert(trace_id) {
-            return Err(SnapshotError::new(
-                "acquire_lease",
-                "export lease already held",
-            ));
-        }
-        Ok(ExportLease {
+        let token = self
+            .trace_leases()
+            .borrow_mut()
+            .acquire(trace_id, purpose)?;
+        Ok(TraceLease {
+            token,
             trace_id,
+            purpose,
             granted_at: std::time::SystemTime::now(),
         })
     }
 
-    fn release_export_lease(&mut self, lease: ExportLease) -> Result<(), SnapshotError> {
-        let removed = self.export_leases().borrow_mut().remove(&lease.trace_id);
+    fn release_trace_lease(&mut self, lease: TraceLease) -> Result<(), SnapshotError> {
+        let removed = self.trace_leases().borrow_mut().release(&lease);
         if removed {
             Ok(())
         } else {
-            Err(SnapshotError::new("release_lease", "export lease not held"))
+            Err(SnapshotError::new(
+                "release_lease",
+                "trace lease token or identity is not active",
+            ))
         }
     }
 }
 
 impl SnapshotStore for SqliteStorage {
-    fn read_snapshot(&self, lease: &ExportLease) -> Result<SnapshotView, SnapshotError> {
+    fn read_snapshot(&self, lease: &TraceLease) -> Result<SnapshotView, SnapshotError> {
+        if lease.purpose != TraceLeasePurpose::Export {
+            return Err(SnapshotError::new(
+                "snapshot",
+                "snapshot reads require an export-purpose trace lease",
+            ));
+        }
+        if !self.trace_leases().borrow().contains(lease) {
+            return Err(SnapshotError::new("snapshot", "trace lease is not active"));
+        }
         if self.is_purged(lease.trace_id) {
             return Err(SnapshotError::new("snapshot", "trace has been purged"));
         }

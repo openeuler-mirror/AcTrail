@@ -8,6 +8,8 @@ mod action_tree_roles;
 mod actions;
 #[path = "view/cluster.rs"]
 pub(crate) mod cluster;
+#[path = "view/alerts.rs"]
+mod alerts;
 #[path = "view/commands.rs"]
 mod commands;
 #[path = "view/events.rs"]
@@ -29,12 +31,13 @@ use model_core::ids::TraceId;
 use model_core::payload::PayloadSegmentId;
 use storage_core::{
     PayloadSegmentQuery, SemanticActionChildPageQuery, SnapshotView, StorageBackend,
-    StorageOpenMode, TraceFilter,
+    StorageOpenMode, TraceFilter, TraceLeasePurpose,
 };
 use storage_factory::{StorageConfig, open_storage_backend};
 
 use crate::json;
 
+pub(crate) use alerts::{AlertProjection, AlertProjectionError};
 pub(crate) use stats::{
     ExportView, LlmActivityQuery, LlmExportQuery, LlmRowsQuery, Rollup, TokenUsageStatsQuery,
 };
@@ -58,14 +61,6 @@ pub fn runtime_plugin_status_json(
     operator_config: Option<&config_core::daemon::OperatorConfig>,
 ) -> Result<String, String> {
     runtime_config::runtime_plugin_status_json(config_path, operator_config)
-}
-
-pub fn runtime_plugin_unload_json(
-    config_path: Option<&std::path::Path>,
-    operator_config: Option<&config_core::daemon::OperatorConfig>,
-    instance_id: &str,
-) -> Result<String, String> {
-    runtime_config::runtime_plugin_unload_json(config_path, operator_config, instance_id)
 }
 
 pub fn traces_json(storage_config: &StorageConfig) -> Result<String, String> {
@@ -444,16 +439,18 @@ fn read_snapshot(
     storage: &mut dyn StorageBackend,
     trace_id: TraceId,
 ) -> Result<SnapshotView, String> {
-    let lease = storage.acquire_export_lease(trace_id).map_err(|error| {
-        format!(
-            "acquire snapshot lease failed: {}: {}",
-            error.stage, error.message
-        )
-    })?;
+    let lease = storage
+        .acquire_trace_lease(trace_id, TraceLeasePurpose::Export)
+        .map_err(|error| {
+            format!(
+                "acquire snapshot lease failed: {}: {}",
+                error.stage, error.message
+            )
+        })?;
     let snapshot = storage
         .read_snapshot(&lease)
         .map_err(|error| format!("read snapshot failed: {}: {}", error.stage, error.message));
-    let release = storage.release_export_lease(lease).map_err(|error| {
+    let release = storage.release_trace_lease(lease).map_err(|error| {
         format!(
             "release snapshot lease failed: {}: {}",
             error.stage, error.message

@@ -5,11 +5,12 @@ use std::path::PathBuf;
 
 use config_core::daemon::{
     ApplicationProtocolConfig, EnforcementBackend, EnforcementConfig, EnforcementDecision,
-    EnforcementMarkStrategy, EnforcementScope, MemlockRlimit, PayloadRedactionPolicy,
-    PayloadSocketCaptureBackend, PayloadSocketConfig, PayloadSocketSeccompSyscall,
-    PayloadStdioConfig, PayloadStdioStorageMode, PayloadTlsCaptureBackend, PayloadTlsConfig,
-    PayloadTlsLibrary, PayloadTlsLibraryPath, PayloadTlsResolver, PayloadTlsSeccompSyscall,
-    PayloadTlsSource, PayloadTlsSyncRuntimeLibraryPath, ResourceMetricsConfig, SseDataPolicy,
+    EnforcementMarkStrategy, EnforcementScope, EnforcementSeccompSyscall, MemlockRlimit,
+    PayloadRedactionPolicy, PayloadSocketCaptureBackend, PayloadSocketConfig,
+    PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadStdioStorageMode,
+    PayloadTlsCaptureBackend, PayloadTlsConfig, PayloadTlsLibrary, PayloadTlsLibraryPath,
+    PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource,
+    PayloadTlsSyncRuntimeLibraryPath, ResourceMetricsConfig, SseDataPolicy,
 };
 use payload_capability::DEFAULT_TLS_SYNC_FLOW_UNKNOWN_STREAM_BYTES;
 
@@ -39,6 +40,7 @@ impl ConfigValues {
                 key.as_str(),
                 "payload_tls_seccomp_syscall"
                     | "payload_socket_seccomp_syscall"
+                    | "enforcement_seccomp_syscall"
                     | "process_seccomp_syscall"
                     | "agent_invocation_command"
             ) && values.contains_key(&key)
@@ -257,6 +259,20 @@ impl ConfigValues {
                 value
                     .parse::<PayloadSocketSeccompSyscall>()
                     .map_err(|error| format!("invalid payload_socket_seccomp_syscall: {error}"))
+            })
+            .collect()
+    }
+
+    fn enforcement_seccomp_syscalls(&self) -> Result<Vec<EnforcementSeccompSyscall>, String> {
+        let Some(values) = self.values.get("enforcement_seccomp_syscall") else {
+            return Err("missing config key enforcement_seccomp_syscall".to_string());
+        };
+        values
+            .iter()
+            .map(|value| {
+                value
+                    .parse::<EnforcementSeccompSyscall>()
+                    .map_err(|error| format!("invalid enforcement_seccomp_syscall: {error}"))
             })
             .collect()
     }
@@ -485,6 +501,9 @@ impl ConfigValues {
             mark_strategy: self.required_enforcement_mark_strategy("enforcement_mark_strategy")?,
             audit_enabled: self.required_bool("enforcement_audit_enabled")?,
             event_buffer_bytes: self.required_positive_u32("enforcement_event_buffer_bytes")?,
+            seccomp_syscalls: self.enforcement_seccomp_syscalls()?,
+            seccomp_path_max_bytes: self
+                .required_positive_u32("enforcement_seccomp_path_max_bytes")?,
         })
     }
 

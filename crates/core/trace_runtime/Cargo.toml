@@ -7,4 +7,5 @@ license = "MulanPSL-2.0"
 [dependencies]
 collector_capability = { path = "../../contracts/collector/capability" }
 config_core = { path = "../config" }
+getrandom = "0.3"
 model_core = { path = "../model" }

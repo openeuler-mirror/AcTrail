@@ -1,4 +1,4 @@
-//! Read-only web UI for AcTrail SQLite stores.
+//! AcTrail storage UI and local plugin administration boundary.
 
 #[path = "args.rs"]
 mod args;
@@ -6,6 +6,8 @@ mod args;
 mod http;
 #[path = "json.rs"]
 mod json;
+#[path = "plugins/mod.rs"]
+mod plugins;
 #[path = "render.rs"]
 mod render;
 #[path = "view.rs"]

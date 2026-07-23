@@ -2,7 +2,7 @@
 # Stable plugin id used by plugin status output.
 id = "llm-codec-noop"
 # Manifest schema version supported by the daemon.
-api_version = "actrail.plugin.v1"
+api_version = "actrail.plugin.v2"
 # Exercises the LLM codec registry without decoding any payload.
 role = "llm-codec"
 # LLM codec plugins currently run as WASM core modules.

@@ -6,8 +6,8 @@ mod rules;
 use std::os::fd::{AsRawFd, OwnedFd};
 
 use config_core::daemon::{
-    NetworkControlSeccompSyscall, PayloadSocketSeccompSyscall, PayloadTlsSeccompSyscall,
-    ProcessSeccompSyscall,
+    EnforcementSeccompSyscall, NetworkControlSeccompSyscall, PayloadSocketSeccompSyscall,
+    PayloadTlsSeccompSyscall, ProcessSeccompSyscall,
 };
 use control_contract::command::{ControlCommand, ProcessRef, RegisterSeccompListenerCommand};
 use control_contract::reply::ControlError;
@@ -37,6 +37,7 @@ impl SeccompSetup {
         payload_socket_max_segment_bytes: u32,
         process_syscalls: Vec<ProcessSeccompSyscall>,
         network_syscalls: Vec<NetworkControlSeccompSyscall>,
+        file_enforcement_syscalls: Vec<EnforcementSeccompSyscall>,
         reserved_listener_fd: u32,
     ) -> Result<Self, String> {
         let reserved_listener_fd = i32::try_from(reserved_listener_fd)
@@ -47,6 +48,7 @@ impl SeccompSetup {
             payload_socket_max_segment_bytes,
             process_syscalls,
             network_syscalls,
+            file_enforcement_syscalls,
         )?;
         Ok(Self {
             rules,

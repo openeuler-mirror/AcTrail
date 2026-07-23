@@ -63,6 +63,8 @@ impl WorkloadDiagnosticsDocument {
 pub(super) struct FinalizationDocument {
     pub traces_per_cycle: u32,
     pub poll_interval_ms: u64,
+    pub settle_delay_ms: u64,
+    pub post_trace: PostTraceDocument,
 }
 
 impl Default for FinalizationDocument {
@@ -70,7 +72,86 @@ impl Default for FinalizationDocument {
         Self {
             traces_per_cycle: DEFAULT_FINALIZATION_TRACES_PER_CYCLE,
             poll_interval_ms: DEFAULT_FINALIZATION_POLL_INTERVAL_MS,
+            settle_delay_ms: DEFAULT_FINALIZATION_SETTLE_DELAY_MS,
+            post_trace: PostTraceDocument::default(),
         }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct PostTraceDocument {
+    pub max_in_flight_tasks: u32,
+    pub broker_queue_capacity: u32,
+    pub requests_per_cycle: u32,
+    pub broker_reply_timeout_ms: u64,
+    pub admission_timeout_ms: u64,
+    pub execution_timeout_ms: u64,
+    pub shutdown_drain_timeout_ms: u64,
+}
+
+impl Default for PostTraceDocument {
+    fn default() -> Self {
+        Self {
+            max_in_flight_tasks: DEFAULT_POST_TRACE_MAX_IN_FLIGHT_TASKS,
+            broker_queue_capacity: DEFAULT_POST_TRACE_BROKER_QUEUE_CAPACITY,
+            requests_per_cycle: DEFAULT_POST_TRACE_REQUESTS_PER_CYCLE,
+            broker_reply_timeout_ms: DEFAULT_POST_TRACE_BROKER_REPLY_TIMEOUT_MS,
+            admission_timeout_ms: DEFAULT_POST_TRACE_ADMISSION_TIMEOUT_MS,
+            execution_timeout_ms: DEFAULT_POST_TRACE_EXECUTION_TIMEOUT_MS,
+            shutdown_drain_timeout_ms: DEFAULT_POST_TRACE_SHUTDOWN_DRAIN_TIMEOUT_MS,
+        }
+    }
+}
+
+impl PostTraceDocument {
+    fn to_config(&self) -> Result<PostTraceRuntimeConfig, String> {
+        let broker_queue_capacity = require_positive_u32(
+            "control.finalization.post_trace.broker_queue_capacity",
+            self.broker_queue_capacity,
+        )?;
+        let requests_per_cycle = require_positive_u32(
+            "control.finalization.post_trace.requests_per_cycle",
+            self.requests_per_cycle,
+        )?;
+        if requests_per_cycle > broker_queue_capacity {
+            return Err(
+                "control.finalization.post_trace.requests_per_cycle must not exceed broker_queue_capacity"
+                    .to_string(),
+            );
+        }
+        let broker_reply_timeout_ms = require_positive_u64(
+            "control.finalization.post_trace.broker_reply_timeout_ms",
+            self.broker_reply_timeout_ms,
+        )?;
+        let shutdown_drain_timeout_ms = require_positive_u64(
+            "control.finalization.post_trace.shutdown_drain_timeout_ms",
+            self.shutdown_drain_timeout_ms,
+        )?;
+        if shutdown_drain_timeout_ms <= broker_reply_timeout_ms {
+            return Err(
+                "control.finalization.post_trace.shutdown_drain_timeout_ms must exceed broker_reply_timeout_ms to reserve cancellation time"
+                    .to_string(),
+            );
+        }
+        Ok(PostTraceRuntimeConfig {
+            max_in_flight_tasks: require_positive_u32(
+                "control.finalization.post_trace.max_in_flight_tasks",
+                self.max_in_flight_tasks,
+            )?,
+            broker_queue_capacity,
+            requests_per_cycle,
+            broker_reply_timeout_ms,
+            admission_timeout_ms: require_positive_u64(
+                "control.finalization.post_trace.admission_timeout_ms",
+                self.admission_timeout_ms,
+            )?,
+            execution_timeout_ms: require_positive_u64(
+                "control.finalization.post_trace.execution_timeout_ms",
+                self.execution_timeout_ms,
+            )?,
+            shutdown_drain_timeout_ms,
+        })
     }
 }
 
@@ -85,6 +166,11 @@ impl FinalizationDocument {
                 "control.finalization.poll_interval_ms",
                 self.poll_interval_ms,
             )?,
+            settle_delay_ms: require_positive_u64(
+                "control.finalization.settle_delay_ms",
+                self.settle_delay_ms,
+            )?,
+            post_trace: self.post_trace.to_config()?,
         })
     }
 }
@@ -203,6 +289,7 @@ impl StorageRetentionDocument {
 pub(super) struct WebDocument {
     pub listen_addr: String,
     pub request_read_timeout_ms: String,
+    pub alerts: WebAlertsDocument,
 }
 
 impl Default for WebDocument {
@@ -210,7 +297,38 @@ impl Default for WebDocument {
         Self {
             listen_addr: "127.0.0.1:18080".to_string(),
             request_read_timeout_ms: "1000".to_string(),
+            alerts: WebAlertsDocument::default(),
         }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct WebAlertsDocument {
+    pub default_limit: u32,
+    pub max_limit: u32,
+}
+
+impl Default for WebAlertsDocument {
+    fn default() -> Self {
+        Self {
+            default_limit: DEFAULT_WEB_ALERTS_LIMIT,
+            max_limit: DEFAULT_WEB_ALERTS_MAX_LIMIT,
+        }
+    }
+}
+
+impl WebAlertsDocument {
+    fn to_config(&self) -> Result<WebAlertsConfig, String> {
+        let default_limit = require_positive_u32("web.alerts.default_limit", self.default_limit)?;
+        let max_limit = require_positive_u32("web.alerts.max_limit", self.max_limit)?;
+        if default_limit > max_limit {
+            return Err("web.alerts.default_limit must not exceed max_limit".to_string());
+        }
+        Ok(WebAlertsConfig {
+            default_limit,
+            max_limit,
+        })
     }
 }
 
@@ -225,6 +343,7 @@ impl WebDocument {
                 "web.request_read_timeout_ms",
                 &self.request_read_timeout_ms,
             )?,
+            alerts: self.alerts.to_config()?,
         })
     }
 }
@@ -416,166 +535,6 @@ impl Default for OtelJsonlRouteDocument {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
-pub(super) struct PluginsDocument {
-    pub startup: StartupPluginsDocument,
-}
-
-impl Default for PluginsDocument {
-    fn default() -> Self {
-        Self {
-            startup: StartupPluginsDocument::default(),
-        }
-    }
-}
-
-impl PluginsDocument {
-    pub(super) fn from_config(config: &StartupPluginsConfig) -> Self {
-        Self {
-            startup: StartupPluginsDocument::from_config(config),
-        }
-    }
-
-    pub(super) fn to_config(&self) -> Result<StartupPluginsConfig, String> {
-        self.startup.to_config()
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(default, deny_unknown_fields)]
-pub(super) struct StartupPluginsDocument {
-    pub enabled: bool,
-    pub failure_policy: String,
-    pub load: Vec<StartupPluginLoadDocument>,
-}
-
-impl Default for StartupPluginsDocument {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            failure_policy: StartupPluginFailurePolicy::FailFast.as_str().to_string(),
-            load: Vec::new(),
-        }
-    }
-}
-
-impl StartupPluginsDocument {
-    pub(super) fn from_config(config: &StartupPluginsConfig) -> Self {
-        Self {
-            enabled: config.enabled,
-            failure_policy: config.failure_policy.as_str().to_string(),
-            load: config
-                .load
-                .iter()
-                .map(StartupPluginLoadDocument::from_config)
-                .collect(),
-        }
-    }
-
-    pub(super) fn to_config(&self) -> Result<StartupPluginsConfig, String> {
-        let failure_policy = parse_value::<StartupPluginFailurePolicy>(
-            "plugins.startup.failure_policy",
-            &self.failure_policy,
-        )?;
-        let mut load = Vec::new();
-        for item in &self.load {
-            load.push(item.to_config()?);
-        }
-        if self.enabled && load.iter().all(|item| !item.enabled) {
-            return Err(
-                "plugins.startup.enabled=true requires at least one enabled load entry".to_string(),
-            );
-        }
-        let mut seen = std::collections::BTreeSet::new();
-        for item in load.iter().filter(|item| item.enabled) {
-            if !seen.insert(item.instance_id.clone()) {
-                return Err(format!(
-                    "plugins.startup.load instance {} is duplicated",
-                    item.instance_id
-                ));
-            }
-        }
-        Ok(StartupPluginsConfig {
-            enabled: self.enabled,
-            failure_policy,
-            load,
-        })
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(default, deny_unknown_fields)]
-pub(super) struct StartupPluginLoadDocument {
-    pub instance: String,
-    pub enabled: bool,
-    pub failure_policy: String,
-    pub manifest: String,
-    pub plugin_config: String,
-    pub host_grants: Vec<String>,
-}
-
-impl Default for StartupPluginLoadDocument {
-    fn default() -> Self {
-        Self {
-            instance: String::new(),
-            enabled: true,
-            failure_policy: String::new(),
-            manifest: String::new(),
-            plugin_config: String::new(),
-            host_grants: Vec::new(),
-        }
-    }
-}
-
-impl StartupPluginLoadDocument {
-    fn from_config(config: &StartupPluginLoadConfig) -> Self {
-        Self {
-            instance: config.instance_id.clone(),
-            enabled: config.enabled,
-            failure_policy: config
-                .failure_policy
-                .map(StartupPluginFailurePolicy::as_str)
-                .unwrap_or("")
-                .to_string(),
-            manifest: config.manifest_path.display().to_string(),
-            plugin_config: config
-                .plugin_config_path
-                .as_ref()
-                .map(|path| path.display().to_string())
-                .unwrap_or_default(),
-            host_grants: config.host_grants.clone(),
-        }
-    }
-
-    fn to_config(&self) -> Result<StartupPluginLoadConfig, String> {
-        let failure_policy = if self.failure_policy.trim().is_empty() {
-            None
-        } else {
-            Some(parse_value::<StartupPluginFailurePolicy>(
-                "plugins.startup.load.failure_policy",
-                &self.failure_policy,
-            )?)
-        };
-        Ok(StartupPluginLoadConfig {
-            instance_id: required_non_empty("plugins.startup.load.instance", &self.instance)?
-                .to_string(),
-            enabled: self.enabled,
-            failure_policy,
-            manifest_path: PathBuf::from(required_non_empty(
-                "plugins.startup.load.manifest",
-                &self.manifest,
-            )?),
-            plugin_config_path: if self.plugin_config.trim().is_empty() {
-                None
-            } else {
-                Some(PathBuf::from(&self.plugin_config))
-            },
-            host_grants: self.host_grants.clone(),
-        })
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(default, deny_unknown_fields)]
 pub(super) struct CaptureDocument {
     pub profile_name: String,
     pub capabilities: Vec<String>,
@@ -601,6 +560,7 @@ impl Default for CaptureDocument {
                 "net-application-plaintext-http",
                 "net-application-http2-frames",
                 "resource-metrics",
+                "enforcement-file-permission-fanotify",
             ]
             .into_iter()
             .map(str::to_string)

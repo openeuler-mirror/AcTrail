@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "actrail.file-leakage.config.v1",
+  "type": "object",
+  "required": [
+    "include_trace_working_directory",
+    "additional_allowed_roots",
+    "trace_state_max_count",
+    "candidate_max_count"
+  ],
+  "properties": {
+    "include_trace_working_directory": {
+      "type": "boolean",
+      "title": "Allow trace working directory",
+      "description": "Treat each trace working directory and its descendants as allowed paths."
+    },
+    "additional_allowed_roots": {
+      "type": "array",
+      "title": "Additional allowed roots",
+      "description": "Absolute directory or file paths excluded from file-leakage candidates.",
+      "items": { "type": "string", "minLength": 1, "pattern": "^/" },
+      "uniqueItems": true
+    },
+    "trace_state_max_count": {
+      "type": "integer",
+      "title": "Trace state capacity",
+      "minimum": 1,
+      "maximum": 4096,
+      "readOnly": true
+    },
+    "candidate_max_count": {
+      "type": "integer",
+      "title": "Candidate capacity per trace",
+      "minimum": 1,
+      "maximum": 4096,
+      "readOnly": true
+    }
+  },
+  "additionalProperties": false
+}

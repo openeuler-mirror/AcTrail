@@ -9,6 +9,7 @@ default = []
 perf-buffer = ["ebpf_collector/perf-buffer"]
 
 [dependencies]
+alert_contract = { path = "../../contracts/alert" }
 attach_runtime = { path = "../../core/attach_runtime" }
 clap = { version = "4.6", features = ["derive"] }
 collector_binding = { path = "../../contracts/collector/binding" }

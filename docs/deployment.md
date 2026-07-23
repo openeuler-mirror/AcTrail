@@ -10,9 +10,9 @@ AcTrail has three runtime surfaces:
 | --- | --- | --- |
 | Daemon | `actraild` | Loads collectors, receives control requests, writes storage. |
 | Control CLI | `actrailctl` | Starts traces, launches children, lists/removes traces, cleans local artifacts. |
-| Read-only views | `actrailviewer`, `actrailweb` | Reads storage, renders events/payloads/actions, exports JSON or OTEL. |
+| Views and local administration | `actrailviewer`, `actrailweb` | Reads storage and renders observations; `actrailweb` can also scan and explicitly load/unload local plugin packages through the daemon control socket. |
 
-Run one daemon per operator config. Keep each deployment's `socket_path`, `pid_file`, `storage_sqlite_path`, `log_path`, `export_directory`, and enabled `otel-jsonl` route path unique.
+Run one daemon per operator config. Keep each deployment's `socket_path`, `pid_file`, `storage_sqlite_path`, `log_path`, `export_directory`, plugin discovery directory, and enabled `otel-jsonl` route path unique.
 
 ## Host Preconditions
 
@@ -52,6 +52,7 @@ The generated default keeps daemon runtime state and durable observation data ou
 | `payload_tls_sync_event_socket_path` | `/run/actrail/tls-sync.sock` |
 | `storage_sqlite_path` | `/var/lib/actrail/actrail.sqlite` |
 | `export_directory` | `/var/lib/actrail/export` |
+| `plugins.discovery.directory` | `~/.actrail/plugins` |
 | live `otel-jsonl` plugin config `path` | `/var/lib/actrail/export/live-spans.otlp.jsonl` when explicitly loaded |
 | `log_path` | `/var/log/actrail/actraild.log` |
 | `supervision.startup_wait_ms` | `30000` |
@@ -80,12 +81,17 @@ For a persistent deployment, review these fields first:
 | `workload_diagnostics_enabled` | Enables periodic low-overhead daemon workload counter logs to help diagnose hot loops and projection/storage pressure. |
 | `workload_diagnostics_interval_ms` | Period between workload diagnostic log lines when workload diagnostics are enabled. |
 | `export_directory` | Default graph export directory when no explicit `--output` is passed. |
+| `[plugins.discovery]` | Bounded package discovery for the Plugins Web workspace. The default directory is `~/.actrail/plugins`; it is resolved from the `actrailweb` process `HOME`, so use an absolute path when service identities differ. Discovery never loads a package. |
 | `[plugins.startup]` | Startup plugin load list. The generated default is disabled and loads no plugins. Add an `otel-jsonl` startup load entry only when a realtime span stream is required. |
 | `profile_name` and `required_capability` | Capability contract for traces created from this config. |
 | `*_retention_max_bytes_per_trace` | Payload storage safety limits. |
 | `export_payload_bytes_enabled` / `export_payload_text_enabled` | Whether raw payload bytes/text can appear in graph JSON export. |
 
 AcTrail fails fast for unsupported required capabilities. Do not add broad fallback configs that silently reduce coverage.
+
+`scripts/install-release.sh` builds and installs two official packages under `${ACTRAIL_PLUGIN_DIR:-$HOME/.actrail/plugins}`: `file-leakage/` provides post-trace leakage detection, and `file-policy-dynamic/` manages dynamic allow, deny, and gray file rules. Installation only makes these packages discoverable. The generated startup list remains empty and disabled; use the local Plugins Web workspace or the plugin CLI to load a package explicitly.
+
+The dynamic file-policy plugin requests `file-policy.rules.apply`, whose grants must include allowed rule decisions and absolute path scopes. Select the candidate in the Web workspace, configure those grants in the load dialog, and load the instance. The daemon validates the submitted grants before activating the plugin. Web lifecycle operations are privileged daemon administration, so run `actrailweb` as an authorized local administrator and keep its listener on a trusted interface.
 
 ## Capability Profiles
 

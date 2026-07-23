@@ -17,7 +17,10 @@ pub mod file_policy {
     }
 
     pub mod operation_code {
+        pub const ANY: u8 = 0;
         pub const OPEN: u8 = 1;
+        pub const MKDIR: u8 = 2;
+        pub const RMDIR: u8 = 3;
     }
 
     pub mod patch_op_code {

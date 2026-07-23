@@ -2,7 +2,7 @@
 # Stable plugin id shown by `actraild plugin list/status`.
 id = "llm-codec-noop"
 # Manifest schema version supported by the current daemon.
-api_version = "actrail.plugin.v1"
+api_version = "actrail.plugin.v2"
 # LLM codec plugins run before standard LLM request/response projection.
 role = "llm-codec"
 # The current llm-codec implementation supports only WASM core modules.

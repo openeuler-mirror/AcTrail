@@ -3,8 +3,9 @@
 use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, CommandControlConfig, DiagnosticLogLevel,
     EbpfCollectorConfig, FileObservationConfig, NetworkControlConfig, PayloadConfig,
-    ProcessSeccompConfig, ResourceMetricsConfig, SeccompNotifyConfig, SemanticRetentionConfig,
-    StorageRetentionConfig, TraceFinalizationConfig, launch_seccomp_requirements,
+    PluginAlertRuntimeConfig, ProcessSeccompConfig, ResourceMetricsConfig, SeccompNotifyConfig,
+    SemanticRetentionConfig, StorageRetentionConfig, TraceFinalizationConfig,
+    launch_seccomp_requirements,
 };
 use ebpf_collector::EbpfCollector;
 use ebpf_collector::procfs::{ProcfsIdentityReader, ProcfsTreeSnapshotter};
@@ -15,12 +16,14 @@ use semantic_action_runtime::LiveSemanticActionRuntime;
 use storage_core::StorageBackend;
 
 use crate::profiles::DaemonProfileRegistry;
+use crate::services::alert_ingress::AlertIngress;
 use crate::services::application_protocol::ApplicationProtocolAnalyzer;
 use crate::services::command_control::CommandControlService;
 use crate::services::control_runtime::ControlPluginRuntime;
 use crate::services::enforcement::FanotifyEnforcementService;
 use crate::services::network_control::NetworkControlService;
 use crate::services::payload_gate::{PayloadBodyRetentionGate, SocketHttpPayloadGate};
+use crate::services::post_trace::{PostTraceBroker, PostTraceCoordinator};
 use crate::services::process_seccomp::ProcessSeccompService;
 use crate::services::resource_metrics::ResourceMetricsSampler;
 use crate::services::retention::StorageRetentionService;
@@ -48,6 +51,7 @@ impl StorageAttachService {
         application_protocol: ApplicationProtocolConfig,
         resource_metrics: ResourceMetricsConfig,
         storage_retention: StorageRetentionConfig,
+        plugin_alert_runtime: PluginAlertRuntimeConfig,
         trace_finalization: TraceFinalizationConfig,
         workload_diagnostics: WorkloadDiagnostics,
         enforcement: FanotifyEnforcementService,
@@ -69,6 +73,7 @@ impl StorageAttachService {
             application_protocol,
             resource_metrics,
             storage_retention,
+            plugin_alert_runtime,
             trace_finalization,
             workload_diagnostics,
             enforcement,
@@ -94,6 +99,7 @@ impl StorageAttachService {
         application_protocol: ApplicationProtocolConfig,
         resource_metrics: ResourceMetricsConfig,
         storage_retention_config: StorageRetentionConfig,
+        plugin_alert_runtime: PluginAlertRuntimeConfig,
         trace_finalization: TraceFinalizationConfig,
         workload_diagnostics: WorkloadDiagnostics,
         enforcement: FanotifyEnforcementService,
@@ -158,6 +164,9 @@ impl StorageAttachService {
         let process_seccomp = ProcessSeccompService::new(&process_seccomp_config);
         let command_control = CommandControlService::new(&command_control_config)?;
         let network_control = NetworkControlService::new(&network_control_config)?;
+        let post_trace_broker = PostTraceBroker::new(trace_finalization.post_trace)?;
+        let post_trace_coordinator = PostTraceCoordinator::new(trace_finalization.post_trace)?;
+        let alert_ingress = AlertIngress::new(plugin_alert_runtime, storage.as_mut())?;
         Ok(Self {
             profiles,
             launch_seccomp_requirements,
@@ -208,19 +217,27 @@ impl StorageAttachService {
             storage_retention: StorageRetentionService::new(storage_retention_config),
             enforcement,
             control_plugins: ControlPluginRuntime::new(),
+            plugin_configs: Default::default(),
             semantic_actions: LiveSemanticActionRuntime::new(
                 agent_invocation,
                 semantic_retention,
                 file_observation,
             ),
             export_runtime,
+            alert_ingress,
+            post_trace_broker,
+            post_trace_coordinator,
             workload_diagnostics,
             retained_payload_bytes_by_trace: Default::default(),
             finalized_terminal_traces: Default::default(),
             pending_terminal_finalizations: Default::default(),
+            terminal_finalization_queued_at: Default::default(),
             finalization_traces_per_cycle,
             finalization_poll_interval: std::time::Duration::from_millis(
                 trace_finalization.poll_interval_ms,
+            ),
+            terminal_settle_delay: std::time::Duration::from_millis(
+                trace_finalization.settle_delay_ms,
             ),
             diagnosed_terminal_open_memberships: Default::default(),
             provider_classifier,

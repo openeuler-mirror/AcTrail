@@ -7,75 +7,48 @@ enum actrail_proc_coord_syscall_id {
     ACTRAIL_PROC_COORD_TRACEPOINT_SIGNAL_GENERATE = 1,
 };
 
-static __always_inline int emit_pending_child_proc_op(
-    void *ctx,
-    __u32 child_kernel_pid
-) {
+static __always_inline int finalize_fork_trace_binding(__u32 child_kernel_pid) {
     __u32 child_pid = 0;
-    struct actrail_pending_proc_op *op =
-        bpf_map_lookup_elem(&pending_child_proc_ops, &child_kernel_pid);
-    struct actrail_event *event;
+    struct actrail_fork_trace_binding *binding =
+        bpf_map_lookup_elem(&fork_trace_bindings, &child_kernel_pid);
     int tracked_trace_updated;
     int process_generation_updated;
 
-    if (!op) {
+    if (!binding) {
         return 0;
     }
-    if (op->lookup_flags & ACTRAIL_TRACE_LOOKUP_FLAG_HOST_FALLBACK) {
-        child_pid = child_kernel_pid;
-    } else {
-        child_pid = current_tgid();
-    }
+    child_pid = current_tgid();
     if (!child_pid) {
-        bpf_map_delete_elem(&pending_child_proc_ops, &child_kernel_pid);
         return 0;
     }
-
-    event = actrail_event_reserve(sizeof(*event));
-    if (!event) {
-        bpf_map_delete_elem(&pending_child_proc_ops, &child_kernel_pid);
-        return 0;
-    }
-
+    /* Equal host and namespace PIDs still require promotion from the
+     * fork-only binding into the normal lifecycle maps. */
     tracked_trace_updated = bpf_map_update_elem(
         &tracked_traces,
         &child_pid,
-        &op->trace_id,
-        BPF_NOEXIST
+        &binding->trace_id,
+        BPF_ANY
     );
     if (tracked_trace_updated != 0) {
-        actrail_event_discard(event);
-        bpf_map_delete_elem(&pending_child_proc_ops, &child_kernel_pid);
         return 0;
     }
 
     process_generation_updated = bpf_map_update_elem(
         &process_start_times,
         &child_pid,
-        &op->child_generation,
+        &binding->child_generation,
         BPF_ANY
     );
     if (process_generation_updated != 0) {
         bpf_map_delete_elem(&tracked_traces, &child_pid);
-        actrail_event_discard(event);
-        bpf_map_delete_elem(&pending_child_proc_ops, &child_kernel_pid);
         return 0;
     }
     inherit_suppressed_fds_for_child(
-        op->parent_pid,
-        op->parent_generation,
+        binding->parent_pid,
+        binding->parent_generation,
         child_pid,
-        op->child_generation
+        binding->child_generation
     );
-
-    init_event(event, ACTRAIL_PROC_FORK, op->parent_pid, op->trace_id);
-    event->aux = child_pid;
-    event->host_pid = op->parent_host_pid;
-    event->aux_host_pid = op->child_host_pid;
-    event->pid_generation = op->parent_generation;
-    event->aux_generation = op->child_generation;
-    actrail_event_submit(ctx, event);
-    bpf_map_delete_elem(&pending_child_proc_ops, &child_kernel_pid);
     return 0;
 }
 

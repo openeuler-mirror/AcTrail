@@ -120,6 +120,8 @@ pub(super) fn live_config_keys() -> BTreeSet<&'static str> {
         "enforcement_mark_strategy",
         "enforcement_audit_enabled",
         "enforcement_event_buffer_bytes",
+        "enforcement_seccomp_syscall",
+        "enforcement_seccomp_path_max_bytes",
         "provider_rules_path",
         "provider_unknown_provider_label",
         "provider_expected_provider",

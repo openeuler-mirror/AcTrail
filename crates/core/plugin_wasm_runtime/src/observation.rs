@@ -2,9 +2,10 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use plugin_system::{
-    DEFAULT_OBSERVATION_QUEUE_CAPACITY, ObservationBatch, ObservationConsumeReport,
+    AlertHost, DEFAULT_OBSERVATION_QUEUE_CAPACITY, ObservationBatch, ObservationConsumeReport,
     ObservationConsumer, ObservationEventFamily, PluginHostGrants, PluginHostcallMetricsSource,
-    PluginManifest, PluginRuntimeError, PluginRuntimeKind, PluginWasmAbi,
+    PluginManifest, PluginRuntimeError, PluginRuntimeKind, PluginWasmAbi, PostTraceAnalyzer,
+    PostTraceHost,
 };
 use serde_json::json;
 use wasmtime::{Memory, Module, TypedFunc};
@@ -22,6 +23,8 @@ pub fn build_wasm_observation_consumer(
     manifest: &PluginManifest,
     plugin_config: Option<&str>,
     host_grants: PluginHostGrants,
+    post_trace_host: Option<Arc<dyn PostTraceHost>>,
+    alert_host: Option<Arc<dyn AlertHost>>,
 ) -> Result<WasmObservationConsumer, PluginRuntimeError> {
     let wasm = manifest.selected_wasm().ok_or_else(|| {
         PluginRuntimeError::new(
@@ -45,6 +48,8 @@ pub fn build_wasm_observation_consumer(
                 manifest,
                 plugin_config,
                 host_grants,
+                post_trace_host,
+                alert_host,
             )?;
             Ok(WasmObservationConsumer::new(Box::new(consumer)))
         }
@@ -92,6 +97,10 @@ impl ObservationConsumer for WasmObservationConsumer {
 
     fn subscribed_event_families(&self) -> Vec<ObservationEventFamily> {
         self.inner.subscribed_event_families()
+    }
+
+    fn post_trace_analyzer(&self) -> Option<&dyn PostTraceAnalyzer> {
+        self.inner.post_trace_analyzer()
     }
 
     fn consume(

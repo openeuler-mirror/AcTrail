@@ -31,6 +31,8 @@ mod payload;
 mod process;
 #[path = "daemon/resource.rs"]
 mod resource;
+#[path = "daemon/finalization/config.rs"]
+mod trace_finalization;
 
 pub use crate::retention::{
     DEFAULT_STORAGE_RETENTION_ENABLED, DEFAULT_STORAGE_RETENTION_MAX_TRACE_AGE,
@@ -54,7 +56,7 @@ pub use cluster::{
 pub use command::CommandControlConfig;
 pub use enforcement::{
     EnforcementBackend, EnforcementBuiltinRuleConfig, EnforcementConfig, EnforcementDecision,
-    EnforcementMarkStrategy, EnforcementScope,
+    EnforcementMarkStrategy, EnforcementScope, EnforcementSeccompSyscall,
 };
 pub use export_factory::ExportConfig as RuntimeExportConfig;
 pub use file_observation::{
@@ -71,8 +73,12 @@ pub use logging::{
 pub use network::{NetworkControlConfig, NetworkControlSeccompSyscall};
 pub use operator::{
     DEFAULT_ACTIVE_TRACE_MAX, DEFAULT_CONTROL_PENDING_CONNECTION_MAX, DEFAULT_OPERATOR_CONFIG_PATH,
-    OperatorConfig, OperatorConfigInitStatus, StartupPluginFailurePolicy, StartupPluginLoadConfig,
-    StartupPluginsConfig, launch_seccomp_requirements,
+    DEFAULT_PLUGIN_ALERT_DRAIN_TIMEOUT_MS, DEFAULT_PLUGIN_ALERT_QUEUE_CAPACITY,
+    DEFAULT_PLUGIN_ALERT_WRITES_PER_CYCLE, DEFAULT_PLUGIN_DISCOVERY_DIRECTORY,
+    DEFAULT_PLUGIN_DISCOVERY_MANIFEST_MAX_BYTES, DEFAULT_PLUGIN_DISCOVERY_MAX_PACKAGES,
+    OperatorConfig, OperatorConfigInitStatus, PluginAlertRuntimeConfig, PluginDiscoveryConfig,
+    StartupPluginFailurePolicy, StartupPluginLoadConfig, StartupPluginsConfig,
+    launch_seccomp_requirements,
 };
 pub use payload::{
     DisabledOrPath, PayloadConfig, PayloadRedactionPolicy, PayloadSocketCaptureBackend,
@@ -83,20 +89,48 @@ pub use payload::{
 };
 pub use process::{ProcessSeccompConfig, ProcessSeccompSyscall, SeccompNotifyConfig};
 pub use resource::ResourceMetricsConfig;
+pub use trace_finalization::{
+    DEFAULT_POST_TRACE_ADMISSION_TIMEOUT_MS, DEFAULT_POST_TRACE_BROKER_QUEUE_CAPACITY,
+    DEFAULT_POST_TRACE_BROKER_REPLY_TIMEOUT_MS, DEFAULT_POST_TRACE_EXECUTION_TIMEOUT_MS,
+    DEFAULT_POST_TRACE_MAX_IN_FLIGHT_TASKS, DEFAULT_POST_TRACE_REQUESTS_PER_CYCLE,
+    DEFAULT_POST_TRACE_SHUTDOWN_DRAIN_TIMEOUT_MS, PostTraceRuntimeConfig,
+};
 
 pub const DEFAULT_FINALIZATION_TRACES_PER_CYCLE: u32 = 1;
 pub const DEFAULT_FINALIZATION_POLL_INTERVAL_MS: u64 = 100;
+pub const DEFAULT_FINALIZATION_SETTLE_DELAY_MS: u64 = 250;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TraceFinalizationConfig {
     pub traces_per_cycle: u32,
     pub poll_interval_ms: u64,
+    pub settle_delay_ms: u64,
+    pub post_trace: PostTraceRuntimeConfig,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WebServerConfig {
     pub listen_addr: SocketAddr,
     pub request_read_timeout: Option<Duration>,
+    pub alerts: WebAlertsConfig,
+}
+
+pub const DEFAULT_WEB_ALERTS_LIMIT: u32 = 30;
+pub const DEFAULT_WEB_ALERTS_MAX_LIMIT: u32 = 300;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WebAlertsConfig {
+    pub default_limit: u32,
+    pub max_limit: u32,
+}
+
+impl Default for WebAlertsConfig {
+    fn default() -> Self {
+        Self {
+            default_limit: DEFAULT_WEB_ALERTS_LIMIT,
+            max_limit: DEFAULT_WEB_ALERTS_MAX_LIMIT,
+        }
+    }
 }
 
 impl Default for TraceFinalizationConfig {
@@ -104,6 +138,8 @@ impl Default for TraceFinalizationConfig {
         Self {
             traces_per_cycle: DEFAULT_FINALIZATION_TRACES_PER_CYCLE,
             poll_interval_ms: DEFAULT_FINALIZATION_POLL_INTERVAL_MS,
+            settle_delay_ms: DEFAULT_FINALIZATION_SETTLE_DELAY_MS,
+            post_trace: PostTraceRuntimeConfig::default(),
         }
     }
 }

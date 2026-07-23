@@ -10,6 +10,7 @@ name = "actrailweb"
 path = "src/main.rs"
 
 [dependencies]
+alert_contract = { path = "../../contracts/alert" }
 config_core = { path = "../../core/config" }
 control_contract = { path = "../../contracts/control_plane" }
 model_core = { path = "../../core/model" }
@@ -20,4 +21,6 @@ storage_factory = { path = "../../storage/factory" }
 uds_control_client = { path = "../../adapters/control/uds/client" }
 flate2 = "1.1"
 rusqlite = { version = "0.31.0", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+toml = "0.8"

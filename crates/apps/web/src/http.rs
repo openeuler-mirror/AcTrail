@@ -1,4 +1,4 @@
-//! Small HTTP boundary for the read-only web UI.
+//! Small HTTP boundary for storage views and local plugin administration.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -14,12 +14,16 @@ use config_core::daemon::OperatorConfig;
 use storage_core::StorageOpenMode;
 use storage_factory::{StorageConfig, open_storage_backend};
 
+#[path = "http/alerts.rs"]
+mod alerts;
+#[path = "http/plugins.rs"]
+mod plugins;
 #[path = "http/query.rs"]
 mod query;
 use query::{
     parse_action_tree_page, parse_llm_activity_query, parse_llm_export_query,
     parse_llm_request_content_query, parse_llm_rows_query, parse_token_usage_stats_query,
-    parse_u64, percent_decode, required_query_param,
+    parse_u64, percent_decode,
 };
 
 const STATUS_OK: &str = "200 OK";
@@ -68,6 +72,7 @@ pub fn serve_listener(
         storage,
         cluster_root: None,
         request_read_timeout,
+        alerts: Default::default(),
         operator_config_path: None,
         operator_config: None,
     };
@@ -83,6 +88,7 @@ fn serve_listener_with_config(
         storage: config.storage,
         cluster_root: config.cluster_root,
         request_read_timeout: config.request_read_timeout,
+        alerts: config.alerts,
         operator_config_path: config.operator_config_path,
         operator_config: config.operator_config,
     };
@@ -115,6 +121,7 @@ struct WebContext {
     storage: StorageConfig,
     cluster_root: Option<std::path::PathBuf>,
     request_read_timeout: Option<Duration>,
+    alerts: config_core::daemon::WebAlertsConfig,
     operator_config_path: Option<std::path::PathBuf>,
     operator_config: Option<OperatorConfig>,
 }
@@ -248,24 +255,6 @@ fn route(request: &Request, context: &WebContext) -> Result<Response, String> {
         }
         return Ok(Response::json(view::clear_cache_json()?));
     }
-    if path == "/api/plugins/runtime/unload" {
-        if request.method != "POST" {
-            return Ok(Response::text(
-                STATUS_METHOD_NOT_ALLOWED,
-                "POST required for /api/plugins/runtime/unload",
-            ));
-        }
-        return required_query_param(query, "instance_id")
-            .and_then(|instance_id| {
-                view::runtime_plugin_unload_json(
-                    context.operator_config_path.as_deref(),
-                    context.operator_config.as_ref(),
-                    &instance_id,
-                )
-            })
-            .map(Response::json)
-            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error)));
-    }
     if path == "/api/stats/llm-requests/explore" {
         if request.method != "POST" {
             return Ok(Response::text(
@@ -280,6 +269,14 @@ fn route(request: &Request, context: &WebContext) -> Result<Response, String> {
             .map(Response::json)
             .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error)));
     }
+    if let Some(response) = plugins::PluginHttp::new(
+        context.operator_config_path.as_deref(),
+        context.operator_config.as_ref(),
+    )
+    .route(&request.method, path, query, &request.body)
+    {
+        return response;
+    }
     if request.method != "GET" {
         return Ok(Response::text(
             STATUS_METHOD_NOT_ALLOWED,
@@ -290,6 +287,11 @@ fn route(request: &Request, context: &WebContext) -> Result<Response, String> {
         return Ok(render::asset(path)
             .map(Response::static_asset)
             .unwrap_or_else(|| Response::text(STATUS_NOT_FOUND, "not found")));
+    }
+    if let Some(response) =
+        alerts::AlertHttp::new(&context.storage, context.alerts).route(path, query)
+    {
+        return response;
     }
     match path {
         "/api/traces" => match &context.cluster_root {

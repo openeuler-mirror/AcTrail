@@ -66,11 +66,28 @@ impl DeploymentPermissionPolicy {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct FileEnforcementSeccompRequirements {
+    pub mkdir: bool,
+    pub rmdir: bool,
+}
+
+impl FileEnforcementSeccompRequirements {
+    pub const fn new(mkdir: bool, rmdir: bool) -> Self {
+        Self { mkdir, rmdir }
+    }
+
+    pub const fn required(self) -> bool {
+        self.mkdir || self.rmdir
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct LaunchSeccompRequirements {
     pub payload_tls: bool,
     pub payload_socket: bool,
     pub process_seccomp: bool,
     pub network_control: bool,
+    pub file_enforcement: FileEnforcementSeccompRequirements,
 }
 
 impl LaunchSeccompRequirements {
@@ -85,11 +102,24 @@ impl LaunchSeccompRequirements {
             payload_socket,
             process_seccomp,
             network_control,
+            file_enforcement: FileEnforcementSeccompRequirements::new(false, false),
         }
     }
 
+    pub const fn with_file_enforcement(
+        mut self,
+        file_enforcement: FileEnforcementSeccompRequirements,
+    ) -> Self {
+        self.file_enforcement = file_enforcement;
+        self
+    }
+
     pub const fn requires_seccomp_notify(self) -> bool {
-        self.payload_tls || self.payload_socket || self.process_seccomp || self.network_control
+        self.payload_tls
+            || self.payload_socket
+            || self.process_seccomp
+            || self.network_control
+            || self.file_enforcement.required()
     }
 
     pub const fn enabled_by(self, seccomp_notify: bool) -> Self {

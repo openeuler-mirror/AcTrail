@@ -17,6 +17,8 @@
   --stats-accent-faint: rgba(228, 184, 148, 0.2);
   --stats-on-accent: #fffaf1;
   --stats-danger: #a33f2f;
+  --stats-warning: #8a5a00;
+  --stats-critical: #7a1b2c;
   --stats-on-danger: #fffaf1;
   --stats-chart-1: #b45837;
   --stats-chart-2: #0f766e;
@@ -112,6 +114,7 @@
   --stats-visualization-min-height: 560px;
   --stats-request-panel-min-height: 380px;
   --stats-shell-max-width: 1120px;
+  --plugins-shell-max-width: 1480px;
   --stats-sidebar-width: 176px;
   --trace-action-tree-bg: var(--bg);
   --trace-action-tree-grid: rgba(15, 118, 110, 0.06);

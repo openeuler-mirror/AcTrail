@@ -1,5 +1,6 @@
 //! AcTrail plugin-system protocol and runtime boundaries.
 
+mod alert;
 mod control;
 mod diagnostics;
 mod grants;
@@ -9,6 +10,7 @@ mod observation;
 mod runtime;
 mod status;
 
+pub use alert::AlertHost;
 pub use control::{
     ControlActorProcessIdentity, ControlDecider, ControlDecisionBudget, ControlDecisionRequest,
     ControlDecisionResponse, ControlSubject, ControlVerdict, DecisionScope, FilePolicyApplyError,
@@ -17,7 +19,7 @@ pub use control::{
     FilePolicyListFilter, FilePolicyListResult, FilePolicyMatchDryRunRequest,
     FilePolicyMatchDryRunResult, FilePolicyMatchedRule, FilePolicyOperation, FilePolicyPatchItem,
     FilePolicyPatchOp, FilePolicyReadContext, FilePolicyRuleDraft, FilePolicyRuleView,
-    PluginCommandBudget, PluginCommandRequest, PluginCommandResponse,
+    PluginCommandBudget, PluginCommandRequest, PluginCommandResponse, RuntimePluginConfig,
     CONTROL_CURRENT_CONTEXT_TOKEN, CONTROL_DECISION_SUMMARY_QUERY,
     FILE_POLICY_CURRENT_CONTEXT_TOKEN, FILE_POLICY_MATCHED_RULE_QUERY,
 };
@@ -28,18 +30,23 @@ pub use llm_codec::{
     LlmCodecSseEvent,
 };
 pub use manifest::{
-    PluginBuiltinDeclaration, PluginCapability, PluginCommandHostcallLimits,
-    PluginConfigDeclaration, PluginConfigHostcallLimits, PluginContextHostcallLimits,
-    PluginControlDeciderDeclaration, PluginControlDeciderResources, PluginEnvHostcallLimits,
-    PluginFilePolicyHostcallLimits, PluginGeneralDeclaration, PluginHostDeclaration,
-    PluginHostcallLimits, PluginManifest, PluginManifestPolicy, PluginNativeDylibDeclaration,
-    PluginObservationConsumerDeclaration, PluginObservationConsumerResources,
-    PluginPayloadHostcallLimits, PluginPurpose, PluginRoleDeclaration, PluginRuntimeDeclaration,
-    PluginRuntimeKind, PluginSubscriptionDeclaration, PluginUnusedRuntimeSectionsPolicy,
-    PluginWasmAbi, PluginWasmDeclaration, PluginWasmResourceLimits, SUPPORTED_PLUGIN_API_VERSION,
+    PluginAlertDefinitionDeclaration, PluginAlertHostcallLimits, PluginBuiltinDeclaration,
+    PluginCapability, PluginCommandHostcallLimits, PluginConfigDeclaration,
+    PluginConfigHostcallLimits, PluginContextHostcallLimits, PluginControlDeciderDeclaration,
+    PluginControlDeciderResources, PluginEnvHostcallLimits, PluginFilePolicyHostcallLimits,
+    PluginGeneralDeclaration, PluginHostDeclaration, PluginHostcallLimits, PluginManifest,
+    PluginManifestPolicy, PluginNativeDylibDeclaration, PluginObservationConsumerDeclaration,
+    PluginObservationConsumerResources, PluginObservationDelivery, PluginOutputsDeclaration,
+    PluginPayloadHostcallLimits, PluginPostTraceDeclaration, PluginPostTraceTrigger, PluginPurpose,
+    PluginRoleDeclaration, PluginRuntimeDeclaration, PluginRuntimeKind,
+    PluginSubscriptionDeclaration, PluginTraceAnalysisHostcallLimits,
+    PluginTraceFileStateHostcallLimits, PluginUnusedRuntimeSectionsPolicy, PluginWasmAbi,
+    PluginWasmDeclaration, PluginWasmResourceLimits, SUPPORTED_PLUGIN_API_VERSION,
 };
 pub use observation::{
     ObservationBatch, ObservationConsumeReport, ObservationConsumer, ObservationEventFamily,
+    PostTraceAnalyzer, PostTraceHost, PostTraceTask, TraceAnalysisAction, TraceAnalysisActionPage,
+    TraceAnalysisContext, TraceAnalysisFileChange, TraceFileState, TraceFileStateStatus,
     DEFAULT_OBSERVATION_EVENT_FAMILIES, DEFAULT_OBSERVATION_QUEUE_CAPACITY,
 };
 pub use runtime::{BuiltinPluginInstance, PluginInstanceId};

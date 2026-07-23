@@ -15,7 +15,7 @@ use crate::services::attach::StorageAttachService;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct RetentionSweepReport {
     pub purged_traces: usize,
-    pub skipped_export_leases: usize,
+    pub skipped_active_leases: usize,
 }
 
 pub(crate) struct StorageRetentionService {
@@ -72,7 +72,7 @@ impl StorageRetentionService {
 
         let mut report = RetentionSweepReport {
             purged_traces: 0,
-            skipped_export_leases: 0,
+            skipped_active_leases: 0,
         };
         for candidate in candidates.into_iter().take(max_traces) {
             let trace_id = candidate.trace.trace_id;
@@ -96,13 +96,13 @@ impl StorageRetentionService {
                     report.purged_traces += 1;
                     tracing::info!(%trace_id, "retention purged expired trace");
                 }
-                Err(error) if is_export_lease_error(&error) => {
-                    report.skipped_export_leases += 1;
+                Err(error) if is_active_lease_error(&error) => {
+                    report.skipped_active_leases += 1;
                     tracing::debug!(
                         %trace_id,
                         error.stage = %error.stage,
                         error.message = %error.message,
-                        "retention skipped trace with active export lease"
+                        "retention skipped trace with an active lease"
                     );
                 }
                 Err(error) => {
@@ -184,8 +184,8 @@ fn trace_finished_at(trace: &TraceRecord) -> Option<SystemTime> {
     .or(Some(trace.timings.created_at))
 }
 
-fn is_export_lease_error(error: &storage_core::StorageError) -> bool {
-    error.stage == "purge_trace" && error.message == "active export lease blocks purge"
+fn is_active_lease_error(error: &storage_core::StorageError) -> bool {
+    error.stage == "purge_trace" && error.message == "active trace lease blocks purge"
 }
 
 fn duration_label(duration: Duration) -> String {
@@ -219,10 +219,10 @@ impl StorageAttachService {
         else {
             return Ok(());
         };
-        if report.purged_traces > 0 || report.skipped_export_leases > 0 {
+        if report.purged_traces > 0 || report.skipped_active_leases > 0 {
             tracing::info!(
                 purged_traces = report.purged_traces,
-                skipped_export_leases = report.skipped_export_leases,
+                skipped_active_leases = report.skipped_active_leases,
                 "retention sweep completed"
             );
         }

@@ -38,6 +38,7 @@ members = [
     "crates/contracts/store/tx",
     "crates/storage/core",
     "crates/contracts/semantic_action",
+    "crates/contracts/alert",
     "crates/export/adapters/otel_codec",
     "crates/export/adapters/otel_jsonl",
     "crates/export/core",
@@ -63,5 +64,5 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.7.0"
+version = "0.7.1"
 rust-version = "1.90"

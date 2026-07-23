@@ -4,7 +4,8 @@ use model_core::diagnostics::DiagnosticRecord;
 use model_core::event::{DomainEvent, EventEnvelope, EventFlags};
 use model_core::payload::{PayloadSegment, PayloadSegmentId, PayloadStreamKey};
 use model_core::process::{ExitStatus, ProcessIdentity, ProcessMembership};
-use model_core::trace::{TraceRecord, TraceTiming};
+use model_core::trace::{TraceAlertToken, TraceRecord, TraceTiming};
+use rusqlite::types::Type;
 use rusqlite::{Error as SqlError, Row};
 
 use crate::records::{
@@ -17,10 +18,24 @@ use crate::records::{
 };
 
 pub fn trace_from_row(row: &Row<'_>) -> Result<TraceRecord, SqlError> {
+    let alert_token_column = row.as_ref().column_index("alert_token")?;
+    let alert_token_bytes = row.get::<_, Vec<u8>>(alert_token_column)?;
+    let alert_token = TraceAlertToken::from_slice(&alert_token_bytes).ok_or_else(|| {
+        SqlError::FromSqlConversionFailure(
+            alert_token_column,
+            Type::Blob,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "trace alert token must contain exactly 32 bytes",
+            )),
+        )
+    })?;
     Ok(TraceRecord {
         trace_id: model_core::ids::TraceId::new(row.get::<_, u64>("trace_id")?),
+        alert_token,
         root_process_identity: ProcessIdentity::new(row.get("root_process_id")?),
         root_container_id: row.get::<_, Option<String>>("root_container_id")?,
+        root_working_directory: row.get::<_, Option<String>>("root_working_directory")?,
         display_name: model_core::ids::TraceName::new(row.get::<_, String>("display_name")?),
         profile_name: model_core::ids::ProfileName::new(row.get::<_, String>("profile_name")?),
         tags: decode_tags(&row.get::<_, String>("tags")?),

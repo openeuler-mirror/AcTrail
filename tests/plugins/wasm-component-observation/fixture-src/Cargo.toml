@@ -11,4 +11,8 @@ wit-bindgen = { version = "=0.57.1", default-features = false, features = ["macr
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+default = []
+require-config = []
+
 [workspace]

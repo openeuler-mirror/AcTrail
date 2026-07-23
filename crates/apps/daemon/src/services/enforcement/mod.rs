@@ -5,5 +5,6 @@ mod rules;
 mod service;
 
 pub(super) use service::{
-    COLLECTOR_NAME, FanotifyEnforcementService, descriptor as enforcement_descriptor,
+    COLLECTOR_NAME, EnforcementDrain, FanotifyEnforcementService,
+    descriptor as enforcement_descriptor,
 };

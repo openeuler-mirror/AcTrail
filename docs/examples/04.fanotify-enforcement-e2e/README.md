@@ -65,9 +65,9 @@ python3 docs/examples/04.fanotify-enforcement-e2e/run_e2e.py \
 
 ```conf
 capture.profile_name = fanotify-enforcement-e2e
-capture.capabilities includes enforcement-file-permission-fanotify
+capture.capabilities includes both proc-lifecycle and enforcement-file-permission-fanotify
 
-ebpf.enabled = false
+ebpf.enabled = true
 enforcement_enabled = true
 enforcement_backend = fanotify
 enforcement_scope = trace

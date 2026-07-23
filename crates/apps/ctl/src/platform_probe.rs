@@ -56,6 +56,7 @@ pub fn probe_seccomp_notify_capability(reserved_listener_fd: u32) -> CapabilityS
         4095,
         Vec::new(),
         Vec::new(),
+        Vec::new(),
         reserved_listener_fd,
     ) {
         Ok(setup) => setup,

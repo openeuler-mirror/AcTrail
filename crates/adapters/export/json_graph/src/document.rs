@@ -72,7 +72,7 @@ mod tests {
     };
     use model_core::ids::{CollectorName, EventId, ProfileName, TraceId, TraceName};
     use model_core::process::{ProcessIdentity, ProcessMembership};
-    use model_core::trace::TraceRecord;
+    use model_core::trace::{TraceAlertToken, TraceRecord};
     use storage_core::SnapshotView;
 
     use super::build_graph_document;
@@ -83,6 +83,7 @@ mod tests {
         let process = ProcessIdentity::new(1);
         let trace = TraceRecord::new(
             trace_id,
+            TraceAlertToken::new([1; 32]),
             process.clone(),
             TraceName::new("demo"),
             ProfileName::new("default"),

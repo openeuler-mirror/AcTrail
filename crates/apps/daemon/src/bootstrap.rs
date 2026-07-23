@@ -7,9 +7,9 @@ use std::time::Duration;
 use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, CommandControlConfig, DiagnosticLogLevel,
     EbpfCollectorConfig, EnforcementConfig, FileObservationConfig, NetworkControlConfig,
-    PayloadConfig, ProcessSeccompConfig, ResourceMetricsConfig, RuntimeExportConfig,
-    SeccompNotifyConfig, SemanticRetentionConfig, StorageRetentionConfig, TraceFinalizationConfig,
-    WorkloadDiagnosticsConfig,
+    PayloadConfig, PluginAlertRuntimeConfig, ProcessSeccompConfig, ResourceMetricsConfig,
+    RuntimeExportConfig, SeccompNotifyConfig, SemanticRetentionConfig, StorageRetentionConfig,
+    TraceFinalizationConfig, WorkloadDiagnosticsConfig,
 };
 use config_core::provider_rules::ProviderRuleSetConfig;
 use control_contract::command::PluginLoadCommand;
@@ -66,6 +66,7 @@ impl LocalDaemonServer {
         application_protocol: ApplicationProtocolConfig,
         resource_metrics: ResourceMetricsConfig,
         storage_retention: StorageRetentionConfig,
+        plugin_alert_runtime: PluginAlertRuntimeConfig,
         trace_finalization: TraceFinalizationConfig,
         workload_diagnostics_config: WorkloadDiagnosticsConfig,
         export_runtime: RuntimeExportConfig,
@@ -89,6 +90,7 @@ impl LocalDaemonServer {
             application_protocol,
             resource_metrics,
             storage_retention,
+            plugin_alert_runtime,
             trace_finalization,
             workload_diagnostics.clone(),
             export_runtime,
@@ -118,6 +120,7 @@ impl LocalDaemonServer {
         application_protocol: ApplicationProtocolConfig,
         resource_metrics: ResourceMetricsConfig,
         storage_retention: StorageRetentionConfig,
+        plugin_alert_runtime: PluginAlertRuntimeConfig,
         trace_finalization: TraceFinalizationConfig,
         workload_diagnostics_config: WorkloadDiagnosticsConfig,
         export_runtime: RuntimeExportConfig,
@@ -142,6 +145,7 @@ impl LocalDaemonServer {
             application_protocol,
             resource_metrics,
             storage_retention,
+            plugin_alert_runtime,
             trace_finalization,
             workload_diagnostics.clone(),
             export_runtime,
@@ -170,6 +174,10 @@ impl LocalDaemonServer {
 
     pub fn drain_live_events(&mut self) -> Result<(), ControlError> {
         self.server.service_mut().drain_live_events()
+    }
+
+    pub fn shutdown(&mut self) -> Result<(), ControlError> {
+        self.server.service_mut().shutdown()
     }
 
     pub fn ebpf_debug_snapshot(

@@ -1,0 +1,9 @@
+[package]
+name = "alert_contract"
+version.workspace = true
+edition = "2024"
+license = "MulanPSL-2.0"
+
+[dependencies]
+model_core = { path = "../../core/model" }
+serde = { version = "1.0", features = ["derive"] }

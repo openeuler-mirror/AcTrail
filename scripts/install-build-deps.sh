@@ -33,7 +33,7 @@ Environment:
   ACTRAIL_SUDO                    Privilege command for non-root users. Defaults to sudo.
 
 Default native packages:
-  dnf:     clang llvm elfutils-devel zlib-devel pkgconf-pkg-config openssl-devel
+  dnf:     clang llvm elfutils-devel zlib-devel pkgconf openssl-devel musl-gcc musl-devel
   apt-get: clang llvm libelf-dev zlib1g-dev pkg-config libssl-dev musl-tools
 
 Default frontend packages:
@@ -128,7 +128,7 @@ detect_package_manager() {
 package_list() {
   case "$1" in
     dnf)
-      printf '%s\n' "${ACTRAIL_DNF_PACKAGES:-clang llvm elfutils-devel zlib-devel pkgconf-pkg-config openssl-devel}"
+      printf '%s\n' "${ACTRAIL_DNF_PACKAGES:-clang llvm elfutils-devel zlib-devel pkgconf openssl-devel musl-gcc musl-devel}"
       ;;
     apt-get)
       printf '%s\n' "${ACTRAIL_APT_PACKAGES:-clang llvm libelf-dev zlib1g-dev pkg-config libssl-dev musl-tools}"

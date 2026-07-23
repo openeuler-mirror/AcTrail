@@ -1,6 +1,6 @@
 [general]
 id = "wasm.component-env-read"
-api_version = "actrail.plugin.v1"
+api_version = "actrail.plugin.v2"
 role = "observation-consumer"
 runtime = "wasm"
 
@@ -8,7 +8,7 @@ runtime = "wasm"
 capabilities = ["env-read"]
 
 [runtime.wasm]
-artifact_path = "component-env-read.wat"
+artifact_path = "component-env-read.wasm"
 abi = "wit-component"
 
 [plugin_config]

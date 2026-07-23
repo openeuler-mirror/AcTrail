@@ -4,8 +4,9 @@ use model_core::event::{DomainEvent, EventPayload};
 use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use semantic_action::{
-    SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionStatus,
-    SemanticEvidence, SemanticEvidenceKind, attr_keys as attrs, evidence_roles,
+    FileChangeKind, SemanticAction, SemanticActionCompleteness, SemanticActionKind,
+    SemanticActionStatus, SemanticEvidence, SemanticEvidenceKind, attr_keys as attrs,
+    evidence_roles,
 };
 
 pub(super) const ATTR_AGENT_IDENTITY_STATUS: &str = attrs::agent::IDENTITY_STATUS;
@@ -163,6 +164,10 @@ pub(super) fn file_modify_action(event: &DomainEvent) -> SemanticAction {
         attrs::file::OPERATION.to_string(),
         payload.operation.clone(),
     );
+    attributes.insert(
+        attrs::file::CHANGE_KIND.to_string(),
+        file_change_kind(payload).as_str().to_string(),
+    );
     if let Some(path) = &payload.path {
         attributes.insert(attrs::file::PATH.to_string(), path.clone());
     }
@@ -287,6 +292,48 @@ pub(super) fn is_file_modify_operation(operation: &str) -> bool {
         operation,
         "write" | "writev" | "truncate" | "unlink" | "rename" | "mkdir" | "rmdir" | "mmap_shared"
     )
+}
+
+pub(super) fn is_file_modify_event(event: &DomainEvent) -> bool {
+    let EventPayload::File(payload) = &event.payload else {
+        return false;
+    };
+    is_file_modify_operation(&payload.operation)
+        || (payload.operation == "open" && file_change_kind(payload) == FileChangeKind::Created)
+}
+
+fn file_change_kind(payload: &model_core::event::FilePayload) -> FileChangeKind {
+    if open_requests_creation(payload) {
+        return FileChangeKind::Created;
+    }
+    match payload.operation.as_str() {
+        "mkdir" => FileChangeKind::Created,
+        "unlink" | "rmdir" => FileChangeKind::Deleted,
+        "write" | "writev" | "truncate" | "rename" | "mmap_shared" => FileChangeKind::Modified,
+        _ => FileChangeKind::Unknown,
+    }
+}
+
+fn open_requests_creation(payload: &model_core::event::FilePayload) -> bool {
+    if payload
+        .metadata
+        .get("fd_creation_requested")
+        .is_some_and(|value| value == "true")
+    {
+        return true;
+    }
+    if payload
+        .metadata
+        .get("syscall")
+        .is_some_and(|name| name == "creat")
+    {
+        return true;
+    }
+    payload
+        .metadata
+        .get("flags")
+        .and_then(|raw| raw.parse::<i32>().ok())
+        .is_some_and(|flags| flags & libc::O_CREAT != 0)
 }
 
 pub(super) fn event_evidence(event: &DomainEvent, role: &str) -> SemanticEvidence {

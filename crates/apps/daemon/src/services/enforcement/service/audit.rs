@@ -5,14 +5,20 @@ use config_core::daemon::EnforcementDecision;
 use model_core::event::EnforcementPayload;
 use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
-use plugin_system::DecisionScope;
+use plugin_system::{DecisionScope, FilePolicyOperation};
 
+use crate::services::alert_ingress::{FileAccessBoundaryAlert, FileAccessDenySource};
 use crate::services::enforcement::rules::{EnforcementRule, FileKey};
 
-pub(in crate::services) struct EnforcementEventDraft {
+pub(in crate::services) struct EnforcementOutcomeDraft {
     pub trace_id: TraceId,
     pub observed_at: SystemTime,
     pub process: ProcessIdentity,
+    pub audit: Option<EnforcementAuditDraft>,
+    pub boundary_alert: Option<FileAccessBoundaryAlert>,
+}
+
+pub(in crate::services) struct EnforcementAuditDraft {
     pub metadata_partial: bool,
     pub payload: EnforcementPayload,
 }
@@ -68,14 +74,46 @@ impl SyncPluginFallbackReason {
     }
 }
 
-pub(super) fn event_draft(
+pub(super) fn outcome_draft(
     trace_id: TraceId,
     process: ProcessIdentity,
     decision: Decision<'_>,
+    audit_enabled: bool,
+    operation: FilePolicyOperation,
     file_key: Option<FileKey>,
     fallback_path: Option<String>,
     audit_metadata_error: Option<String>,
-) -> EnforcementEventDraft {
+) -> Option<EnforcementOutcomeDraft> {
+    let boundary_alert = boundary_alert(&decision, operation, &process, fallback_path.as_deref());
+    if !audit_enabled && boundary_alert.is_none() {
+        return None;
+    }
+    let observed_at = SystemTime::now();
+    let audit = audit_enabled.then(|| {
+        audit_draft(
+            decision,
+            operation,
+            file_key,
+            fallback_path,
+            audit_metadata_error,
+        )
+    });
+    Some(EnforcementOutcomeDraft {
+        trace_id,
+        observed_at,
+        process,
+        audit,
+        boundary_alert,
+    })
+}
+
+fn audit_draft(
+    decision: Decision<'_>,
+    operation: FilePolicyOperation,
+    file_key: Option<FileKey>,
+    fallback_path: Option<String>,
+    audit_metadata_error: Option<String>,
+) -> EnforcementAuditDraft {
     let metadata_partial = audit_metadata_error.is_some();
     let mut metadata = BTreeMap::from([("scope".to_string(), "trace".to_string())]);
     if let Some(file_key) = file_key {
@@ -86,14 +124,11 @@ pub(super) fn event_draft(
         metadata.insert("audit_metadata_error".to_string(), error);
     }
     insert_decision_source_metadata(&mut metadata, &decision.source);
-    EnforcementEventDraft {
-        trace_id,
-        observed_at: SystemTime::now(),
-        process,
+    EnforcementAuditDraft {
         metadata_partial,
         payload: EnforcementPayload {
             backend: "fanotify".to_string(),
-            operation: "open".to_string(),
+            operation: operation.as_str().to_string(),
             decision: decision.decision.as_str().to_string(),
             path: decision
                 .rule
@@ -108,6 +143,49 @@ pub(super) fn event_draft(
             metadata,
         },
     }
+}
+
+fn boundary_alert(
+    decision: &Decision<'_>,
+    operation: FilePolicyOperation,
+    process: &ProcessIdentity,
+    observed_path: Option<&str>,
+) -> Option<FileAccessBoundaryAlert> {
+    if decision.decision != EnforcementDecision::Deny {
+        return None;
+    }
+    let rule = decision.rule?;
+    let (source, decider_plugin_instance_id, plugin_reason) = match &decision.source {
+        DecisionSource::Rule => (FileAccessDenySource::FastPathDeny, None, None),
+        DecisionSource::SyncPlugin {
+            instance_id,
+            reason,
+            ..
+        } => (
+            FileAccessDenySource::GrayPluginDeny,
+            Some(instance_id.clone()),
+            reason.clone(),
+        ),
+        DecisionSource::SyncPluginCache { instance_id } => (
+            FileAccessDenySource::GrayPluginCacheDeny,
+            Some(instance_id.clone()),
+            None,
+        ),
+        DecisionSource::Default | DecisionSource::SyncPluginFallback { .. } => return None,
+    };
+    Some(FileAccessBoundaryAlert::new(
+        operation.as_str().to_string(),
+        observed_path
+            .map(str::to_string)
+            .unwrap_or_else(|| rule.path.display().to_string()),
+        rule.path.display().to_string(),
+        rule.rule_id.clone(),
+        rule.owner_instance_id.clone(),
+        process.get(),
+        source,
+        decider_plugin_instance_id,
+        plugin_reason,
+    ))
 }
 
 fn insert_decision_source_metadata(

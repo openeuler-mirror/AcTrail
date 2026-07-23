@@ -1,6 +1,6 @@
 //! Trace shutdown draining before root removal and collector unbind.
 
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use collector_instance::CollectorInstance;
 use config_core::daemon::DiagnosticLogLevel;
@@ -16,7 +16,7 @@ use crate::services::attach::StorageAttachService;
 impl StorageAttachService {
     pub(in crate::services) fn finalize_terminal_traces_impl(
         &mut self,
-        trace_runtime: &TraceRuntime,
+        trace_runtime: &mut TraceRuntime,
     ) -> Result<(), ControlError> {
         self.enqueue_terminal_finalizations_impl(trace_runtime);
         self.progress_terminal_finalizations_impl(trace_runtime)
@@ -27,7 +27,7 @@ impl StorageAttachService {
             if trace.lifecycle_state.is_terminal()
                 && !self.finalized_terminal_traces.contains(&trace.trace_id)
             {
-                self.pending_terminal_finalizations.insert(trace.trace_id);
+                self.queue_terminal_finalization(trace.trace_id);
             }
         }
     }
@@ -44,14 +44,21 @@ impl StorageAttachService {
         if trace.lifecycle_state.is_terminal()
             && !self.finalized_terminal_traces.contains(&trace_id)
         {
-            self.pending_terminal_finalizations.insert(trace_id);
+            self.queue_terminal_finalization(trace_id);
         }
         Ok(())
     }
 
+    fn queue_terminal_finalization(&mut self, trace_id: TraceId) {
+        self.pending_terminal_finalizations.insert(trace_id);
+        self.terminal_finalization_queued_at
+            .entry(trace_id)
+            .or_insert_with(Instant::now);
+    }
+
     fn progress_terminal_finalizations_impl(
         &mut self,
-        trace_runtime: &TraceRuntime,
+        trace_runtime: &mut TraceRuntime,
     ) -> Result<(), ControlError> {
         let trace_ids = self
             .pending_terminal_finalizations
@@ -66,20 +73,43 @@ impl StorageAttachService {
             }
             if self.finalized_terminal_traces.contains(&trace_id) {
                 self.pending_terminal_finalizations.remove(&trace_id);
+                self.terminal_finalization_queued_at.remove(&trace_id);
                 continue;
             }
             if !trace_is_terminal(trace_runtime, trace_id)? {
                 self.pending_terminal_finalizations.remove(&trace_id);
+                self.terminal_finalization_queued_at.remove(&trace_id);
+                continue;
+            }
+            if self
+                .terminal_finalization_queued_at
+                .get(&trace_id)
+                .is_some_and(|queued_at| queued_at.elapsed() < self.terminal_settle_delay)
+            {
                 continue;
             }
             if terminal_trace_has_open_memberships(trace_runtime, trace_id)? {
                 continue;
             }
-            let finished_at = terminal_trace_finished_at(trace_runtime, trace_id)?;
-            self.finalize_semantic_projection_for_trace(trace_runtime, trace_id, finished_at)?;
-            self.collector
-                .unbind_trace(trace_id)
-                .map_err(|error| ControlError::new(error.stage, error.message))?;
+            if !self.post_trace_coordinator.barrier_ready(trace_id) {
+                let finished_at = terminal_trace_finished_at(trace_runtime, trace_id)?;
+                self.finalize_semantic_projection_for_trace(trace_runtime, trace_id, finished_at)?;
+                self.collector
+                    .unbind_trace(trace_id)
+                    .map_err(|error| ControlError::new(error.stage, error.message))?;
+                self.post_trace_coordinator.mark_barrier_ready(trace_id);
+            }
+            let post_trace_instances = self.export_runtime.post_trace_instance_ids();
+            let admission = self.post_trace_coordinator.admit_trace(
+                trace_id,
+                &post_trace_instances,
+                &self.export_runtime,
+                self.storage.as_mut(),
+            )?;
+            self.persist_post_trace_issues(admission.timeout_diagnostics)?;
+            if !admission.all_admitted {
+                continue;
+            }
             self.application_protocol.forget_trace(trace_id);
             self.semantic_actions.forget_trace(trace_id);
             self.socket_payload_gate.forget_trace(trace_id);
@@ -87,10 +117,17 @@ impl StorageAttachService {
             self.retained_payload_bytes_by_trace.remove(&trace_id);
             self.finalized_terminal_traces.insert(trace_id);
             self.pending_terminal_finalizations.remove(&trace_id);
+            self.terminal_finalization_queued_at.remove(&trace_id);
+            self.post_trace_coordinator.mark_trace_finalized(trace_id);
+            trace_runtime.forget_trace(trace_id);
             finalized_this_cycle += 1;
             self.log_diagnostic(
                 DiagnosticLogLevel::Info,
-                format_args!("trace_finalization completed trace_id={trace_id}"),
+                format_args!(
+                    "trace_finalization completed trace_id={} post_trace_tasks={}",
+                    trace_id,
+                    post_trace_instances.len()
+                ),
             );
         }
         Ok(())

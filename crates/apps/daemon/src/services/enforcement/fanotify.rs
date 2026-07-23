@@ -42,12 +42,9 @@ impl FanotifyHandle {
     }
 
     pub(super) fn mark_directory(&self, path: &Path) -> Result<(), String> {
-        let path = CString::new(path.as_os_str().as_encoded_bytes()).map_err(|_| {
-            format!(
-                "fanotify_mark path contains interior NUL: {}",
-                path.display()
-            )
-        })?;
+        let display_path = path.display().to_string();
+        let path = CString::new(path.as_os_str().as_encoded_bytes())
+            .map_err(|_| format!("fanotify_mark path contains interior NUL: {display_path}"))?;
         let result = unsafe {
             libc::fanotify_mark(
                 self.fd,
@@ -58,7 +55,32 @@ impl FanotifyHandle {
             )
         };
         if result < 0 {
-            return Err(format!("fanotify_mark: {}", io::Error::last_os_error()));
+            return Err(format!(
+                "fanotify_mark {display_path}: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn unmark_directory(&self, path: &Path) -> Result<(), String> {
+        let display_path = path.display().to_string();
+        let path = CString::new(path.as_os_str().as_encoded_bytes())
+            .map_err(|_| format!("fanotify unmark path contains interior NUL: {display_path}"))?;
+        let result = unsafe {
+            libc::fanotify_mark(
+                self.fd,
+                libc::FAN_MARK_REMOVE,
+                libc::FAN_OPEN_PERM | libc::FAN_EVENT_ON_CHILD,
+                libc::AT_FDCWD,
+                path.as_ptr(),
+            )
+        };
+        if result < 0 {
+            return Err(format!(
+                "fanotify unmark {display_path}: {}",
+                io::Error::last_os_error()
+            ));
         }
         Ok(())
     }

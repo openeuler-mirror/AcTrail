@@ -4,7 +4,7 @@ use model_core::ids::TraceId;
 
 use crate::model::{
     FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
-    LlmRequestContentWrite, SemanticAction, SemanticActionLink,
+    LlmRequestContentWrite, SemanticAction, SemanticActionLink, SemanticActionPage,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -54,6 +54,19 @@ pub trait SemanticActionReadStore {
         &self,
         trace_id: TraceId,
     ) -> Result<Vec<SemanticAction>, SemanticActionStoreError>;
+
+    fn semantic_actions_page(
+        &self,
+        trace_id: TraceId,
+        offset: usize,
+        limit: usize,
+    ) -> Result<SemanticActionPage, SemanticActionStoreError>;
+
+    fn list_file_observation_paths(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+    ) -> Result<Vec<FileObservationPath>, SemanticActionStoreError>;
 
     fn list_semantic_action_links(
         &self,

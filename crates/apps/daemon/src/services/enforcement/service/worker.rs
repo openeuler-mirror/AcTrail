@@ -6,11 +6,11 @@ use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use plugin_system::{
     ControlDecisionBudget, ControlDecisionRequest, ControlDecisionResponse, ControlVerdict,
-    DecisionScope,
+    DecisionScope, FilePolicyOperation,
 };
 
 use super::audit::{
-    Decision, DecisionSource, EnforcementEventDraft, SyncPluginFallbackReason, event_draft,
+    Decision, DecisionSource, EnforcementOutcomeDraft, SyncPluginFallbackReason, outcome_draft,
 };
 use super::wake::notify_wake_fd;
 use crate::services::control_runtime::ControlPluginRuntime;
@@ -21,6 +21,7 @@ use crate::services::enforcement::rules::{EnforcementRule, FileKey};
 pub(super) struct ReusableDecisionKey {
     pub(super) trace_id: TraceId,
     pub(super) rule_id: String,
+    pub(super) operation: FilePolicyOperation,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -32,7 +33,7 @@ pub(super) struct PluginDecisionCompletion {
     pub(super) rule_id: String,
     pub(super) instance_id: String,
     pub(super) cache_update: Option<(ReusableDecisionKey, CachedDecision)>,
-    pub(super) draft: Option<EnforcementEventDraft>,
+    pub(super) draft: Option<EnforcementOutcomeDraft>,
     pub(super) error: Option<String>,
 }
 
@@ -175,17 +176,18 @@ pub(super) fn complete_plugin_decision(pending: PendingPluginDecision) {
         event_fd.raw_fd(),
         matches!(decision.decision, EnforcementDecision::Allow),
     ) {
-        Ok(()) if audit_enabled => {
-            completion.draft = Some(event_draft(
+        Ok(()) => {
+            completion.draft = outcome_draft(
                 trace_id,
                 process,
                 decision,
+                audit_enabled,
+                FilePolicyOperation::Open,
                 file_key,
                 observed_path,
                 audit_metadata_error,
-            ));
+            );
         }
-        Ok(()) => {}
         Err(error) => {
             completion.cache_update = None;
             completion.error = Some(error);

@@ -26,7 +26,7 @@ Install from source when developing or testing a checkout:
 ./scripts/install-release.sh /usr/local/bin
 ```
 
-The install script checks build dependencies, installs the actrailweb frontend dependencies with `npm ci`, builds missing release binaries, and copies them into the destination directory. It uses `sudo` only for the final copy when the destination directory requires elevated permissions. Use another directory if you do not want to install into `/usr/local/bin`.
+The install script checks build dependencies, installs the actrailweb frontend dependencies with `npm ci`, builds missing release binaries, and copies them into the destination directory. It also builds the official file-leakage source from `examples/plugins/` and installs that disabled package under `${ACTRAIL_PLUGIN_DIR:-$HOME/.actrail/plugins}`. Installation makes the plugin discoverable but does not load it; use the Plugins Web workspace to refresh and explicitly load it. The script uses `sudo` only for copies whose destination requires elevated permissions. Use another binary or plugin directory when needed, and keep the configured plugin discovery path aligned with the user that runs `actrailweb`.
 
 RPM packages are published from the latest release page:
 
@@ -125,7 +125,7 @@ flowchart LR
 | `actraild` | Runs collection, analysis, trace lifecycle, storage writes, and live export. |
 | `actrailctl` | Initializes config, checks daemon readiness, launches traced workloads, lists traces, and cleans runtime artifacts. |
 | `actrailviewer` | Reads storage from the CLI for summaries, events, payloads, actions, diagnostics, JSON, and OTEL. |
-| `actrailweb` | Reads storage through a read-only Web UI centered on semantic action evidence. |
+| `actrailweb` | Reads storage and provides a local Plugins administration workspace for explicit discovery, load, and unload. |
 
 ## Safety Notes
 

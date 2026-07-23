@@ -1,6 +1,6 @@
 [general]
 id = "native.observation-disabled"
-api_version = "actrail.plugin.v1"
+api_version = "actrail.plugin.v2"
 role = "observation-consumer"
 runtime = "native-dylib"
 

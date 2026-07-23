@@ -1,10 +1,10 @@
 <template>
   <main class="runtime-workspace">
-    <div class="runtime-content">
+    <div class="runtime-content plugins-runtime-content">
       <section class="runtime-hero">
         <div>
-          <span>Startup Plugins</span>
-          <h2>Plugin enablement</h2>
+          <span>Installed Plugins</span>
+          <h2>Plugin candidates and loaded instances</h2>
         </div>
         <div class="runtime-source">{{ sourceLabel }}</div>
       </section>
@@ -16,46 +16,50 @@
         </div>
       </section>
 
-      <div v-if="loading && !plugins" class="runtime-panel loading-panel">
+      <div v-if="loading && !catalog" class="runtime-panel loading-panel">
         <span class="loading-spinner" aria-hidden="true"></span>
-        <p>Loading plugin status...</p>
+        <p>Scanning the plugin directory...</p>
       </div>
 
-      <section v-else-if="!plugins?.available" class="runtime-panel runtime-empty">
-        <h2>Plugin status unavailable</h2>
-        <p>{{ plugins?.reason ?? error }}</p>
+      <section v-else-if="!catalog?.available" class="runtime-panel runtime-empty">
+        <h2>Plugin discovery unavailable</h2>
+        <p>{{ catalog?.reason ?? error }}</p>
       </section>
 
       <section v-else class="plugins-layout">
-        <aside class="runtime-panel runtime-side">
-          <div class="runtime-side-heading">Source</div>
-          <dl class="runtime-rows">
-            <dt>Mode</dt>
-            <dd>{{ plugins.source?.mode ?? 'unknown' }}</dd>
-            <dt>Path</dt>
-            <dd>{{ plugins.source?.path ?? 'n/a' }}</dd>
-          </dl>
+        <aside class="runtime-panel runtime-side plugins-runtime-side">
+          <section class="runtime-side-section">
+            <div class="runtime-side-heading">Discovery</div>
+            <dl class="runtime-rows">
+              <dt>Directory</dt>
+              <dd>{{ catalog.directory }}</dd>
+              <dt>Packages</dt>
+              <dd>{{ catalog.package_count }}</dd>
+              <dt>Runtime</dt>
+              <dd>{{ catalog.runtime_available ? 'Available' : 'Unavailable' }}</dd>
+            </dl>
+          </section>
 
-          <div class="runtime-side-heading">Startup</div>
-          <dl class="runtime-rows">
-            <dt>Global</dt>
-            <dd>{{ plugins.global_enabled ? 'Enabled' : 'Disabled' }}</dd>
-            <dt>Policy</dt>
-            <dd>{{ plugins.global_failure_policy }}</dd>
-            <dt>Configured</dt>
-            <dd>{{ plugins.configured_count }}</dd>
-            <dt>Effective</dt>
-            <dd>{{ plugins.enabled_count }}</dd>
-          </dl>
+          <section class="runtime-side-section">
+            <div class="runtime-side-heading">Startup</div>
+            <dl class="runtime-rows">
+              <dt>Global</dt>
+              <dd>{{ startup?.global_enabled ? 'Enabled' : 'Disabled' }}</dd>
+              <dt>Configured</dt>
+              <dd>{{ startup?.configured_count ?? 0 }}</dd>
+              <dt>Effective</dt>
+              <dd>{{ startup?.enabled_count ?? 0 }}</dd>
+            </dl>
+          </section>
 
           <details class="startup-plugin-details">
             <summary>
               <span>Startup load list</span>
-              <strong>{{ filteredPlugins.length }}</strong>
+              <strong>{{ filteredStartupPlugins.length }}</strong>
             </summary>
-            <div v-if="filteredPlugins.length === 0" class="startup-plugin-empty">None</div>
+            <div v-if="filteredStartupPlugins.length === 0" class="startup-plugin-empty">None</div>
             <ul v-else class="startup-plugin-list">
-              <li v-for="plugin in filteredPlugins" :key="plugin.instance_id">
+              <li v-for="plugin in filteredStartupPlugins" :key="plugin.instance_id">
                 <div>
                   <strong>{{ plugin.instance_id }}</strong>
                   <span>{{ plugin.effective_enabled ? 'Enabled' : 'Disabled' }}</span>
@@ -70,27 +74,17 @@
           <section class="runtime-panel plugins-panel">
             <header class="runtime-panel-header">
               <div>
-                <span>Runtime instances</span>
+                <span>Loaded plugin instances</span>
                 <strong>{{ runtimeSummary }}</strong>
               </div>
-              <button
-                class="runtime-icon-button"
-                type="button"
-                :disabled="loading"
-                title="Refresh plugin status"
-                aria-label="Refresh plugin status"
-                @click="loadPlugins"
-              >
-                <RefreshCw :size="16" aria-hidden="true" />
-              </button>
             </header>
-            <div v-if="!runtimeStatus?.available" class="runtime-inline-empty">
+            <div v-if="!catalog.runtime_available" class="runtime-inline-empty">
               <strong>Runtime status unavailable</strong>
-              <span>{{ runtimeStatus?.reason ?? 'No runtime status loaded' }}</span>
+              <span>{{ catalog.runtime_error ?? 'The daemon is unavailable.' }}</span>
             </div>
             <div v-else-if="filteredRuntimePlugins.length === 0" class="runtime-compact-empty">
-              <strong>No runtime plugins</strong>
-              <span>The daemon currently reports no loaded plugin instances.</span>
+              <strong>No loaded plugin instances</strong>
+              <span>Load a candidate below to create a runtime instance.</span>
             </div>
             <div v-else class="plugin-runtime-list">
               <article
@@ -101,35 +95,26 @@
                 <details class="plugin-runtime-disclosure">
                   <summary class="plugin-runtime-summary">
                     <span class="plugin-runtime-main">
+                      <small>Instance ID</small>
                       <strong>{{ plugin.instance_id }}</strong>
-                      <span>{{ plugin.plugin_id }}</span>
+                      <span>Plugin <code>{{ plugin.plugin_id }}</code></span>
                     </span>
                     <span class="plugin-runtime-badges">
-                      <span
-                        class="state-switch"
-                        :class="{ active: plugin.state === 'active' }"
-                        role="switch"
-                        :aria-checked="plugin.state === 'active'"
-                        aria-disabled="true"
-                      >
-                        <span class="state-switch-track" aria-hidden="true">
-                          <span class="state-switch-thumb"></span>
-                        </span>
-                        <span>{{ plugin.state }}</span>
-                      </span>
                       <span class="plugin-runtime-chip primary">{{ purposeLabel(plugin.purpose) }}</span>
                       <span class="plugin-runtime-chip">{{ plugin.runtime }}</span>
                     </span>
                   </summary>
                   <dl class="plugin-runtime-details">
-                    <dt>Purpose</dt>
-                    <dd>{{ plugin.purpose }}</dd>
+                    <dt>Instance ID</dt>
+                    <dd>{{ plugin.instance_id }}</dd>
+                    <dt>Plugin ID</dt>
+                    <dd>{{ plugin.plugin_id }}</dd>
                     <dt>Records</dt>
                     <dd>{{ recordsText(plugin) }}</dd>
                     <dt>Queue</dt>
                     <dd>{{ queueText(plugin) }}</dd>
                     <dt>Host grants</dt>
-                    <dd>{{ hostGrantText(plugin.host_grants) }}</dd>
+                    <dd><PluginGrantList :items="plugin.host_grants" /></dd>
                     <dt>Payload reads</dt>
                     <dd>{{ payloadReadText(plugin) }}</dd>
                     <dt>Last error</dt>
@@ -137,17 +122,115 @@
                     <dt>Warnings</dt>
                     <dd>{{ warningText(plugin.warnings) }}</dd>
                   </dl>
+                  <PluginConfigPanel
+                    :instance-id="plugin.instance_id"
+                    :refresh-nonce="configRefreshNonces[plugin.instance_id] ?? 0"
+                    @updated="refreshPlugins"
+                  />
+                  <PluginCommandForm
+                    :instance-id="plugin.instance_id"
+                    :purpose="plugin.purpose"
+                    @completed="refreshPluginConfig(plugin.instance_id)"
+                  />
                 </details>
-                <button
-                  class="runtime-danger-icon-button"
-                  type="button"
-                  :disabled="loading || unloadingInstances[plugin.instance_id]"
-                  title="Unload plugin"
-                  aria-label="Unload plugin"
-                  @click="unloadPlugin(plugin.instance_id)"
-                >
-                  <Trash2 :size="16" aria-hidden="true" />
-                </button>
+                <div class="plugin-lifecycle-control">
+                  <span class="plugin-runtime-state active"><i aria-hidden="true"></i>Active</span>
+                  <button
+                    class="plugin-lifecycle-action danger"
+                    type="button"
+                    :disabled="loading || unloadingInstances[plugin.instance_id]"
+                    :aria-label="`Unload plugin instance ${plugin.instance_id}`"
+                    @click="requestUnload(plugin)"
+                  >
+                    {{ unloadingInstances[plugin.instance_id] ? 'Unloading…' : 'Unload' }}
+                  </button>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section class="runtime-panel plugins-panel">
+            <header class="runtime-panel-header">
+              <div>
+                <span>Plugin candidates</span>
+                <strong>{{ packageSummary }}</strong>
+              </div>
+              <button
+                class="runtime-icon-button runtime-refresh-button"
+                type="button"
+                :disabled="loading"
+                title="Rescan plugin directory"
+                aria-label="Rescan plugin directory"
+                @click="refreshPlugins"
+              >
+                <RefreshCw :size="16" aria-hidden="true" />
+                <span>Refresh</span>
+              </button>
+            </header>
+            <div v-if="filteredPackages.length === 0" class="runtime-compact-empty">
+              <strong>No plugin candidates</strong>
+              <span>All discovered packages are loaded, or no packages match the current filter.</span>
+            </div>
+            <div v-else class="plugin-runtime-list">
+              <article
+                v-for="plugin in filteredPackages"
+                :key="plugin.package_key"
+                class="plugin-runtime-item"
+              >
+                <details class="plugin-runtime-disclosure">
+                  <summary class="plugin-runtime-summary">
+                    <span class="plugin-runtime-main">
+                      <small>Plugin ID</small>
+                      <strong>{{ plugin.plugin_id ?? 'unavailable' }}</strong>
+                      <span>Default instance <code>{{ plugin.plugin_id ?? 'unavailable' }}</code></span>
+                    </span>
+                    <span class="plugin-runtime-badges">
+                      <span v-if="!canLoad(plugin)" class="plugin-runtime-chip">
+                        {{ packageState(plugin) }}
+                      </span>
+                      <span class="plugin-runtime-chip">{{ plugin.package_key }}</span>
+                      <span v-if="plugin.purpose" class="plugin-runtime-chip primary">
+                        {{ purposeLabel(plugin.purpose) }}
+                      </span>
+                      <span v-if="plugin.runtime" class="plugin-runtime-chip">{{ plugin.runtime }}</span>
+                    </span>
+                  </summary>
+                  <dl class="plugin-runtime-details">
+                    <dt>Plugin ID</dt>
+                    <dd>{{ plugin.plugin_id ?? 'unavailable' }}</dd>
+                    <dt>Default instance ID</dt>
+                    <dd>{{ plugin.plugin_id ?? 'unavailable' }}</dd>
+                    <dt>Package path</dt>
+                    <dd>{{ plugin.package_path }}</dd>
+                    <dt>Manifest</dt>
+                    <dd>{{ plugin.manifest_path ?? 'invalid package' }}</dd>
+                    <dt>Config</dt>
+                    <dd>{{ plugin.plugin_config_path ?? 'none' }}</dd>
+                    <dt>Capabilities</dt>
+                    <dd><PluginGrantList :items="plugin.requested_capabilities" /></dd>
+                    <dt>Loaded instances</dt>
+                    <dd>{{ loadedInstanceText(plugin) }}</dd>
+                    <dt>Load availability</dt>
+                    <dd>{{ loadAvailabilityText(plugin) }}</dd>
+                    <dt>Issue</dt>
+                    <dd>{{ plugin.issue ?? 'none' }}</dd>
+                    <dt>Warnings</dt>
+                    <dd>{{ warningText(plugin.warnings) }}</dd>
+                  </dl>
+                </details>
+                <div class="plugin-lifecycle-control">
+                  <span class="plugin-runtime-state inactive"><i aria-hidden="true"></i>Unloaded</span>
+                  <button
+                    class="plugin-lifecycle-action"
+                    type="button"
+                    :disabled="loading || !canLoad(plugin) || loadingPackages[plugin.package_key]"
+                    :title="loadAvailabilityText(plugin)"
+                    :aria-label="`Load ${plugin.plugin_id ?? plugin.package_key}`"
+                    @click="openLoadDialog(plugin)"
+                  >
+                    {{ loadingPackages[plugin.package_key] ? 'Loading…' : loadActionLabel(plugin) }}
+                  </button>
+                </div>
               </article>
             </div>
           </section>
@@ -155,15 +238,41 @@
       </section>
     </div>
 
+    <PluginLoadDialog
+      v-if="selectedLoadPlugin"
+      :open="Boolean(selectedLoadPlugin)"
+      :plugin="selectedLoadPlugin"
+      :busy="Boolean(loadingPackages[selectedLoadPlugin.package_key])"
+      @close="selectedLoadPlugin = null"
+      @submit="loadPlugin(selectedLoadPlugin, $event)"
+    />
+    <PluginUnloadDialog
+      v-if="selectedUnloadPlugin"
+      :open="Boolean(selectedUnloadPlugin)"
+      :plugin="selectedUnloadPlugin"
+      :busy="Boolean(unloadingInstances[selectedUnloadPlugin.instance_id])"
+      @close="selectedUnloadPlugin = null"
+      @confirm="unloadPlugin(selectedUnloadPlugin.instance_id)"
+    />
     <div v-if="error" class="error-bar">{{ error }}</div>
   </main>
 </template>
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { RefreshCw, Trash2 } from '@lucide/vue';
+import { RefreshCw } from '@lucide/vue';
 
-import { readPluginEnablement, readPluginRuntimeStatus, unloadRuntimePlugin } from '../api';
+import {
+  loadDiscoveredPlugin,
+  readPluginCatalog,
+  readPluginEnablement,
+  unloadRuntimePlugin,
+} from '../api';
+import PluginCommandForm from './plugins/PluginCommandForm.vue';
+import PluginConfigPanel from './plugins/PluginConfigPanel.vue';
+import PluginGrantList from './plugins/PluginGrantList.vue';
+import PluginLoadDialog from './plugins/PluginLoadDialog.vue';
+import PluginUnloadDialog from './plugins/PluginUnloadDialog.vue';
 
 const props = defineProps({
   query: {
@@ -178,112 +287,129 @@ const props = defineProps({
 
 const emit = defineEmits(['loading']);
 
-const plugins = ref(null);
-const runtimeStatus = ref(null);
+const startup = ref(null);
+const catalog = ref(null);
 const error = ref('');
 const loading = ref(false);
+const loadingPackages = ref({});
 const unloadingInstances = ref({});
-let activeLoad = null;
+const selectedLoadPlugin = ref(null);
+const selectedUnloadPlugin = ref(null);
+const configRefreshNonces = ref({});
+let activeRefresh = null;
+
+function refreshPluginConfig(instanceId) {
+  configRefreshNonces.value = {
+    ...configRefreshNonces.value,
+    [instanceId]: (configRefreshNonces.value[instanceId] ?? 0) + 1,
+  };
+}
 
 const metrics = computed(() => [
-  { label: 'Startup', value: plugins.value?.global_enabled ? 'Enabled' : 'Disabled' },
-  { label: 'Configured', value: plugins.value?.configured_count ?? 0 },
-  { label: 'Effective', value: plugins.value?.enabled_count ?? 0 },
-  { label: 'Runtime active', value: runtimeStatus.value?.active_count ?? 0 },
+  { label: 'Installed', value: catalog.value?.package_count ?? 0 },
+  { label: 'Candidates', value: candidatePackages.value.length },
+  { label: 'Loadable', value: candidatePackages.value.filter(canLoad).length },
+  { label: 'Loaded instances', value: catalog.value?.runtime_plugin_count ?? 0 },
 ]);
 
-const filteredPlugins = computed(() => {
-  const rows = plugins.value?.plugins ?? [];
-  const needle = props.query.trim().toLowerCase();
-  if (!needle) {
-    return rows;
-  }
-  return rows.filter((plugin) =>
-    [
-      plugin.instance_id,
-      plugin.manifest_path,
-      plugin.plugin_config_path,
-      plugin.effective_failure_policy,
-      hostGrantText(plugin.host_grants),
-      plugin.effective_enabled ? 'enabled' : 'disabled',
-      plugin.configured_enabled ? 'configured enabled' : 'configured disabled',
-    ]
-      .filter(Boolean)
-      .some((value) => String(value).toLowerCase().includes(needle)),
-  );
-});
-const sourceLabel = computed(() => plugins.value?.source?.path ?? plugins.value?.source?.mode ?? 'Loading');
-const filteredRuntimePlugins = computed(() => {
-  const rows = runtimeStatus.value?.plugins ?? [];
-  const needle = props.query.trim().toLowerCase();
-  if (!needle) {
-    return rows;
-  }
-  return rows.filter((plugin) =>
-    [
-      plugin.instance_id,
-      plugin.plugin_id,
-      plugin.state,
-      plugin.purpose,
-      plugin.runtime,
-      queueText(plugin),
-      recordsText(plugin),
-      warningText(plugin.warnings),
-    ]
-      .filter(Boolean)
-      .some((value) => String(value).toLowerCase().includes(needle)),
-  );
-});
+const filteredStartupPlugins = computed(() => filterRows(startup.value?.plugins ?? [], [
+  'instance_id',
+  'manifest_path',
+  'plugin_config_path',
+]));
+
+const candidatePackages = computed(() => (catalog.value?.packages ?? []).filter(
+  (plugin) => !packageLoaded(plugin),
+));
+
+const filteredPackages = computed(() => filterRows(candidatePackages.value, [
+  'package_key',
+  'package_path',
+  'plugin_id',
+  'purpose',
+  'runtime',
+  'issue',
+]));
+
+const filteredRuntimePlugins = computed(() => filterRows(catalog.value?.runtime_plugins ?? [], [
+  'instance_id',
+  'plugin_id',
+  'state',
+  'purpose',
+  'runtime',
+]));
+
+const sourceLabel = computed(() => catalog.value?.directory ?? 'Scanning');
+const packageSummary = computed(() => `${filteredPackages.value.length}/${candidatePackages.value.length} candidates`);
 const runtimeSummary = computed(() => {
-  if (!runtimeStatus.value?.available) {
+  if (!catalog.value?.runtime_available) {
     return 'Unavailable';
   }
-  return `${filteredRuntimePlugins.value.length}/${runtimeStatus.value.plugin_count} rows`;
+  return `${filteredRuntimePlugins.value.length}/${catalog.value.runtime_plugin_count} rows`;
 });
 
-onMounted(loadPlugins);
+onMounted(refreshPlugins);
 
 watch(
   () => props.refreshNonce,
-  () => {
-    loadPlugins();
-  },
+  refreshPlugins,
 );
 
 watch(
   loading,
-  (value) => {
-    emit('loading', value);
-  },
+  (value) => emit('loading', value),
   { immediate: true },
 );
 
-onBeforeUnmount(() => {
-  emit('loading', false);
-});
+onBeforeUnmount(() => emit('loading', false));
 
-async function loadPlugins() {
-  const loadToken = Symbol('plugin-load');
-  activeLoad = loadToken;
+async function refreshPlugins() {
+  const refreshToken = Symbol('plugin-refresh');
+  activeRefresh = refreshToken;
   loading.value = true;
   error.value = '';
   try {
-    const [enablement, runtime] = await Promise.all([
+    const [startupStatus, catalogStatus] = await Promise.all([
       readPluginEnablement(),
-      readPluginRuntimeStatus(),
+      readPluginCatalog(),
     ]);
-    if (activeLoad === loadToken) {
-      plugins.value = enablement;
-      runtimeStatus.value = runtime;
+    if (activeRefresh === refreshToken) {
+      startup.value = startupStatus;
+      catalog.value = catalogStatus;
     }
   } catch (err) {
-    if (activeLoad === loadToken) {
+    if (activeRefresh === refreshToken) {
       error.value = String(err.message ?? err);
     }
   } finally {
-    if (activeLoad === loadToken) {
+    if (activeRefresh === refreshToken) {
       loading.value = false;
     }
+  }
+}
+
+function openLoadDialog(plugin) {
+  selectedLoadPlugin.value = plugin;
+}
+
+function requestUnload(plugin) {
+  selectedUnloadPlugin.value = plugin;
+}
+
+async function loadPlugin(plugin, options) {
+  const packageKey = plugin.package_key;
+  loadingPackages.value = { ...loadingPackages.value, [packageKey]: true };
+  error.value = '';
+  try {
+    await loadDiscoveredPlugin(packageKey, options);
+    selectedLoadPlugin.value = null;
+    await refreshPlugins();
+  } catch (err) {
+    error.value = String(err.message ?? err);
+  } finally {
+    const next = { ...loadingPackages.value };
+    delete next[packageKey];
+    loadingPackages.value = next;
   }
 }
 
@@ -292,7 +418,8 @@ async function unloadPlugin(instanceId) {
   error.value = '';
   try {
     await unloadRuntimePlugin(instanceId);
-    await loadPlugins();
+    selectedUnloadPlugin.value = null;
+    await refreshPlugins();
   } catch (err) {
     error.value = String(err.message ?? err);
   } finally {
@@ -302,14 +429,69 @@ async function unloadPlugin(instanceId) {
   }
 }
 
-function hostGrantText(grants) {
-  return grants?.length ? grants.join(', ') : 'none';
+function filterRows(rows, fields) {
+  const needle = props.query.trim().toLowerCase();
+  if (!needle) {
+    return rows;
+  }
+  return rows.filter((row) => fields
+    .map((field) => row[field])
+    .concat(row.requested_capabilities ?? [], row.loaded_instances ?? [], row.warnings ?? [])
+    .filter(Boolean)
+    .some((value) => String(value).toLowerCase().includes(needle)));
+}
+
+function canLoad(plugin) {
+  return Boolean(
+    catalog.value?.runtime_available
+      && plugin.activation_ready
+      && !packageLoaded(plugin),
+  );
+}
+
+function packageLoaded(plugin) {
+  return (plugin.loaded_instances?.length ?? 0) > 0;
+}
+
+function packageState(plugin) {
+  if (plugin.issue) {
+    return 'requires attention';
+  }
+  if (!catalog.value?.runtime_available) {
+    return 'runtime unavailable';
+  }
+  if (plugin.parameterized_host_grants?.length) {
+    return 'grant configuration required';
+  }
+  return 'ready to load';
+}
+
+function loadAvailabilityText(plugin) {
+  if (!plugin.activation_ready) {
+    return plugin.issue ?? 'Plugin package is not loadable';
+  }
+  if (!catalog.value?.runtime_available) {
+    return catalog.value?.runtime_error ?? 'Daemon plugin runtime is unavailable';
+  }
+  if (plugin.parameterized_host_grants?.length) {
+    return 'Configure instance identity and scoped permissions before loading';
+  }
+  return 'Ready to load through actrailweb';
+}
+
+function loadActionLabel(plugin) {
+  return plugin.parameterized_host_grants?.length ? 'Configure & load' : 'Load plugin';
+}
+
+function loadedInstanceText(plugin) {
+  if (plugin.loaded_instances == null) {
+    return 'runtime unavailable';
+  }
+  return plugin.loaded_instances.length ? plugin.loaded_instances.join(', ') : 'none';
 }
 
 function queueText(plugin) {
-  const depth = plugin.queue_depth ?? 'none';
-  const capacity = plugin.queue_capacity ?? 'none';
-  return `${depth}/${capacity}`;
+  return `${plugin.queue_depth ?? 'none'}/${plugin.queue_capacity ?? 'none'}`;
 }
 
 function recordsText(plugin) {

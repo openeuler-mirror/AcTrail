@@ -96,13 +96,14 @@ mod tests {
 
     use model_core::ids::{ProfileName, TraceId, TraceName};
     use model_core::process::ProcessIdentity;
-    use model_core::trace::{TraceLifecycleState, TraceRecord};
+    use model_core::trace::{TraceAlertToken, TraceLifecycleState, TraceRecord};
 
     use super::{begin_draining, complete_trace, start_trace};
 
     fn sample_trace() -> TraceRecord {
         TraceRecord::new(
             TraceId::new(1),
+            TraceAlertToken::new([1; 32]),
             ProcessIdentity::new(1),
             TraceName::new("agent"),
             ProfileName::new("default"),

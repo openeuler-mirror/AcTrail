@@ -305,6 +305,15 @@ pub(super) fn network_control_seccomp_syscall_as_str(
     }
 }
 
+pub(super) fn enforcement_seccomp_syscall_as_str(
+    value: &EnforcementSeccompSyscall,
+) -> &'static str {
+    match value {
+        EnforcementSeccompSyscall::Mkdir => "mkdir",
+        EnforcementSeccompSyscall::Rmdir => "rmdir",
+    }
+}
+
 pub(super) fn semantic_content_owner_as_str(value: SemanticContentOwner) -> &'static str {
     match value {
         SemanticContentOwner::HighestConsumed => "highest_consumed",

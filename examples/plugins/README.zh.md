@@ -17,6 +17,7 @@
 | `wasm-legacy/control-network-deny` | `wasm` core module | `control-decider` | 显式 TCP connect 策略命中后拒绝连接。 |
 | `wit-component/observation-read-config` | `wasm` WIT component | `observation-consumer` | Rust 编写的 component 观测插件，按需读取插件配置。 |
 | `wit-component/observation-payload-read` | `wasm` WIT component | `observation-consumer` | Rust 编写的 component 观测插件，读取 payload 数据。 |
+| `wit-component/file-leakage` | `wasm` WIT component | `observation-consumer` | 运行期间只保存成功写操作的越界候选，trace 终态后检查残留并异步追加独立告警；release 会安装但默认不加载。 |
 | `wit-component/control-graylist` | `wasm` WIT component | `control-decider` | Rust 编写的 component 控制插件，处理 fanotify 灰名单决策。 |
 | `wit-component/control-hostcalls` | `wasm` WIT component | `control-decider` | Rust 编写的 component 控制插件，使用 context 和 file-policy hostcall。 |
 | `wit-component/file-policy-dynamic` | `wasm` WIT component | `control-decider` | Rust 编写的动态文件策略插件，通过 `plugin cmd` 管理 allow/deny/gray 规则。 |

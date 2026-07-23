@@ -9,8 +9,9 @@ use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, CommandControlConfig,
     DEFAULT_ACTIVE_TRACE_MAX, DiagnosticLogLevel, EbpfCollectorConfig, EbpfEnabledMode,
     EnforcementConfig, FileObservationConfig, MemlockRlimit, NetworkControlConfig, OperatorConfig,
-    PayloadConfig, ProcessSeccompConfig, ResourceMetricsConfig, RuntimeExportConfig,
-    SeccompNotifyConfig, SemanticRetentionConfig, StorageRetentionConfig, TraceFinalizationConfig,
+    PayloadConfig, PluginAlertRuntimeConfig, ProcessSeccompConfig, ResourceMetricsConfig,
+    RuntimeExportConfig, SeccompNotifyConfig, SemanticRetentionConfig, StorageRetentionConfig,
+    TraceFinalizationConfig,
 };
 use config_core::trace_snapshot::CaptureProfileSnapshot;
 use control_contract::command::{ControlCommand, ListTracesCommand, ProcessRef, TrackAddCommand};
@@ -18,7 +19,7 @@ use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use model_core::event::EventPayload;
 use model_core::ids::{CollectorName, ProfileName, RequestId, TraceName};
 use model_core::process::{NamespaceIdentity, ProcessIdentity};
-use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
+use model_core::trace::{TraceAlertToken, TraceHealth, TraceLifecycleState, TraceRecord};
 use storage_core::TraceFilter;
 use storage_factory::StorageConfig;
 use trace_runtime::commands::TrackTraceRequest;
@@ -402,6 +403,7 @@ fn storage_retention_keeps_active_and_protected_traces() {
     let protected_trace_id = model_core::ids::TraceId::new(2);
     let active_trace = TraceRecord::new(
         active_trace_id,
+        TraceAlertToken::new([1; 32]),
         ProcessIdentity::new(1),
         TraceName::new("active"),
         ProfileName::new("snapshot"),
@@ -480,6 +482,7 @@ fn retention_wiring(
         ApplicationProtocolConfig::disabled(),
         ResourceMetricsConfig::disabled(),
         storage_retention,
+        PluginAlertRuntimeConfig::default(),
         TraceFinalizationConfig::default(),
         WorkloadDiagnostics::default(),
         RuntimeExportConfig::disabled(),
@@ -503,6 +506,7 @@ fn terminal_trace(
 ) -> TraceRecord {
     let mut trace = TraceRecord::new(
         trace_id,
+        TraceAlertToken::new([1; 32]),
         ProcessIdentity::new(1),
         TraceName::new(format!("trace-{}", trace_id.get())),
         ProfileName::new("snapshot"),
@@ -559,6 +563,7 @@ fn create_active_trace(
             TrackTraceRequest {
                 root_identity: process,
                 root_container_id: None,
+                root_working_directory: None,
                 display_name,
                 profile_snapshot,
                 tags: BTreeSet::new(),

@@ -36,14 +36,14 @@ sudo target/release/actraild --config operator.conf run
 
 ## 运行模型总览
 
-WASM 插件的“代码”是 `.wasm` 编译产物。它类似可分发包：插件作者用 Rust、C/C++、TinyGo 或其他能输出 WebAssembly Component Model 的语言编译出 `.wasm`，AcTrail 只加载这个编译产物，不加载源码。
+WASM 插件的“代码”是 `.wasm` 编译产物。它类似可分发包：插件作者用 Rust、C/C++、TinyGo 或其他能输出 WebAssembly Component Model 的语言编译出 `.wasm`，AcTrail 只加载这个编译产物，不加载源码。仓库内随 release 构建的官方示例插件源码统一位于 `examples/plugins/`。
 
 一个典型插件部署目录：
 
 ```text
-/opt/actrail/plugins/my-control-plugin/
-  plugin.toml
-  plugin.config.toml
+~/.actrail/plugins/my-control-plugin/
+  my-control-plugin.plugin.toml
+  my-control-plugin.config.toml
   component-hostcalls.wasm
 ```
 
@@ -61,7 +61,7 @@ abi = "wit-component"
 `artifact_path` 可以是相对路径或绝对路径。相对路径按 manifest 文件所在目录解析。上面的例子会加载：
 
 ```text
-/opt/actrail/plugins/my-control-plugin/component-hostcalls.wasm
+~/.actrail/plugins/my-control-plugin/component-hostcalls.wasm
 ```
 
 整体结构：
@@ -272,6 +272,55 @@ actraild --config operator.conf plugin cmd --instance file-policy.demo -- rule u
 ```
 
 `plugin cmd` 是管理面低频入口，不在 fanotify 文件访问热路径内。AcTrail 只负责实例定位、输入输出限制、超时和错误返回；插件自己的 CLI 子命令由插件实现。
+
+## 已安装、已发现与已加载
+
+插件目录、startup 清单和运行实例是三种不同状态：
+
+- **已安装**：完整插件包存在于插件目录中，但不会因此获得执行权限。
+- **已发现**：`actrailweb` 的 Plugins 工作区刷新后，本次有界扫描识别出包。扫描没有加载副作用。
+- **已加载**：管理员通过 Web 或 CLI 显式请求加载，并且 daemon 完成 manifest、配置、capability 和 runtime 校验。
+
+默认发现配置如下：
+
+```toml
+[plugins.discovery]
+directory = "~/.actrail/plugins"
+max_packages = 128
+manifest_max_bytes = 262144
+
+[plugins.startup]
+enabled = false
+failure_policy = "fail-fast"
+load = []
+```
+
+| 字段 | 默认值 | 说明 |
+| --- | --- | --- |
+| `plugins.discovery.directory` | `~/.actrail/plugins` | Web backend 扫描的插件根目录。只接受绝对路径或 `~/` 前缀；`~` 按 `actrailweb` 进程的 `HOME` 解析。 |
+| `plugins.discovery.max_packages` | `128` | 单次扫描允许的直接子目录上限；超过时整次扫描明确失败。 |
+| `plugins.discovery.manifest_max_bytes` | `262144` | 单个 manifest 的字节上限。 |
+
+插件和 daemon 内建告警共用独立的异步写入队列：
+
+```toml
+[plugins.alerts]
+queue_capacity = 1024
+writes_per_cycle = 256
+drain_timeout_ms = 30000
+```
+
+`queue_capacity` 限制尚未写入底座的请求数，`writes_per_cycle` 限制 daemon 每轮处理量，`drain_timeout_ms` 用于插件卸载和 daemon 关闭时排空已经接收的请求。插件告警与 daemon 内建告警使用同一组容量和单轮写入限制。告警是独立 `alerts` 表中的追加记录，不是 semantic action；该队列不参与 trace 终态判断，也不阻止 storage retention 清理 trace 数据。trace alert token 用于后续提交授权，因此告警提交不要求 trace 仍处于活动状态。
+
+发现目录的每个直接子目录代表一个包。包内必须恰好有一个 `*.plugin.toml`；manifest 要求配置时，配置文件名必须与 manifest 基名一致，例如 `demo.plugin.toml` 对应 `demo.config.json`。artifact、配置 schema 和 alert payload schema 必须位于同一包内，不能通过相对路径逃逸。
+
+Plugins 工作区的刷新按钮每次都重新扫描目录，因此新复制的未加载包会出现，已删除的未加载包会消失。加载请求只发送包名 key，Web backend 会再次扫描并解析路径；浏览器不能提供任意 manifest 或配置路径。已经加载的包即使随后从目录中删除，其运行实例也不会被隐式停止，仍显示在 Runtime instances 中，直到管理员显式卸载。
+
+Web 加载对话框自动列出不需要参数的 manifest capability，并以只读方式展示；`env-read`、`file-policy.rules.apply` 等参数化权限必须由管理员填写具体变量名、规则类型或绝对路径范围。Web 后端先把结构化配置转换为 grant，daemon 再执行最终校验。没有可用 grant 格式的 capability 会明确阻止加载。daemon 的插件管理 socket 仍要求 host-root peer，因此使用 Web 加载/卸载时，`actrailweb` 必须以能通过该校验的本机管理员身份运行；不要把这个管理入口暴露到不受信任网络。
+
+release 安装脚本把两个官方插件包放到 `${ACTRAIL_PLUGIN_DIR:-$HOME/.actrail/plugins}`：`file-leakage/` 用于 trace 结束后的文件泄漏检测，`file-policy-dynamic/` 用于动态管理 allow、deny 和 gray 文件规则。`ACTRAIL_PLUGIN_DIR` 必须是绝对路径，并应与实际运行 `actrailweb` 的 `plugins.discovery.directory` 解析结果一致。复制完成后两个插件都仍是未加载候选；打开 Web 并刷新后才能看到它们。
+
+`file-policy-dynamic` 需要为 `file-policy.rules.apply` 指定可写规则类型和路径范围。在 Plugins 页面点击该候选的 **Configure & load**，填写实例 ID，添加一个或多个绝对路径，并为每个路径选择 allow、deny、gray 中允许写入的规则类型。加载成功后，实例详情中的 **Plugin command** 可以直接发送规则管理命令。
 
 ## 启动时加载插件
 

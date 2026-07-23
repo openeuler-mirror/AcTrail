@@ -7,6 +7,33 @@ use std::time::SystemTime;
 use crate::ids::{ProfileName, TraceId, TraceName};
 use crate::process::ProcessIdentity;
 
+const TRACE_ALERT_TOKEN_BYTES: usize = 32;
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct TraceAlertToken([u8; TRACE_ALERT_TOKEN_BYTES]);
+
+impl TraceAlertToken {
+    pub const BYTE_COUNT: usize = TRACE_ALERT_TOKEN_BYTES;
+
+    pub const fn new(bytes: [u8; TRACE_ALERT_TOKEN_BYTES]) -> Self {
+        Self(bytes)
+    }
+
+    pub const fn as_bytes(&self) -> &[u8; TRACE_ALERT_TOKEN_BYTES] {
+        &self.0
+    }
+
+    pub fn from_slice(bytes: &[u8]) -> Option<Self> {
+        bytes.try_into().ok().map(Self)
+    }
+}
+
+impl fmt::Debug for TraceAlertToken {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("TraceAlertToken([redacted])")
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TraceLifecycleState {
     Starting,
@@ -123,11 +150,14 @@ impl TraceTiming {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TraceRecord {
     pub trace_id: TraceId,
+    pub alert_token: TraceAlertToken,
     pub root_process_identity: ProcessIdentity,
     /// Readable, stable container id of the root process's container.
     /// `None` = host process or a runtime not resolved by the collector.
     /// 1:1 with `root_process_identity.pid_namespace`; resolved once at attach.
     pub root_container_id: Option<String>,
+    /// Working directory captured from the root process during attach bootstrap.
+    pub root_working_directory: Option<String>,
     pub display_name: TraceName,
     pub profile_name: ProfileName,
     pub tags: BTreeSet<String>,
@@ -139,6 +169,7 @@ pub struct TraceRecord {
 impl TraceRecord {
     pub fn new(
         trace_id: TraceId,
+        alert_token: TraceAlertToken,
         root_process_identity: ProcessIdentity,
         display_name: TraceName,
         profile_name: ProfileName,
@@ -146,8 +177,10 @@ impl TraceRecord {
     ) -> Self {
         Self {
             trace_id,
+            alert_token,
             root_process_identity,
             root_container_id: None,
+            root_working_directory: None,
             display_name,
             profile_name,
             tags: BTreeSet::new(),

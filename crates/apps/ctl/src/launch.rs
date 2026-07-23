@@ -22,8 +22,8 @@ use std::time::Duration;
 
 use config_core::capture_profile::CaptureProfile;
 use config_core::daemon::{
-    NetworkControlSeccompSyscall, PayloadSocketSeccompSyscall, PayloadTlsConfig,
-    PayloadTlsSeccompSyscall, ProcessSeccompSyscall,
+    EnforcementSeccompSyscall, NetworkControlSeccompSyscall, PayloadSocketSeccompSyscall,
+    PayloadTlsConfig, PayloadTlsSeccompSyscall, ProcessSeccompSyscall,
 };
 use control_contract::command::{
     ControlCommand, ResolveLaunchPermissionsCommand, TrackAddCommand, TrackRemoveCommand,
@@ -38,8 +38,8 @@ use crate::process_ref::process_ref;
 use crate::transport::ControlClientPort;
 use controlled::{ChildSetup, ControlledChild};
 use permission_policy::{
-    DeploymentPermissionPolicy, LaunchSeccompRequirements, contract_permission_mode,
-    permission_decision_from_reply,
+    DeploymentPermissionPolicy, FileEnforcementSeccompRequirements, LaunchSeccompRequirements,
+    contract_permission_mode, permission_decision_from_reply,
 };
 use seccomp::{SeccompSetup, register_listener};
 use suppress::InheritableSuppressedFd;
@@ -63,6 +63,7 @@ pub(crate) struct LaunchRequest {
     pub payload_socket_max_segment_bytes: u32,
     pub process_seccomp_syscalls: Vec<ProcessSeccompSyscall>,
     pub network_control_syscalls: Vec<NetworkControlSeccompSyscall>,
+    pub file_enforcement_syscalls: Vec<EnforcementSeccompSyscall>,
     pub seccomp_notify_reserved_listener_fd: u32,
     pub agent_invocation_commands: Vec<String>,
     pub supervision_poll_interval_ms: u64,
@@ -118,16 +119,22 @@ pub(crate) fn run_launch(
         permission_reply.payload_socket_seccomp,
         permission_reply.process_seccomp,
         permission_reply.network_control_seccomp,
-    );
+    )
+    .with_file_enforcement(FileEnforcementSeccompRequirements::new(
+        permission_reply.file_mkdir_seccomp,
+        permission_reply.file_rmdir_seccomp,
+    ));
     let seccomp_enabled = effective_seccomp.requires_seccomp_notify();
     timing.mark_detail(
         "permission_decision",
         format_args!(
-            "seccomp_enabled={seccomp_enabled} payload_tls_seccomp={} payload_socket_seccomp={} process_seccomp={} network_control_seccomp={}",
+            "seccomp_enabled={seccomp_enabled} payload_tls_seccomp={} payload_socket_seccomp={} process_seccomp={} network_control_seccomp={} file_mkdir_seccomp={} file_rmdir_seccomp={}",
             effective_seccomp.payload_tls,
             effective_seccomp.payload_socket,
             effective_seccomp.process_seccomp,
-            effective_seccomp.network_control
+            effective_seccomp.network_control,
+            effective_seccomp.file_enforcement.mkdir,
+            effective_seccomp.file_enforcement.rmdir,
         ),
     );
     let launch_supervision_poll_interval = if seccomp_enabled {
@@ -142,6 +149,7 @@ pub(crate) fn run_launch(
             effective_seccomp.payload_socket,
             effective_seccomp.process_seccomp,
             effective_seccomp.network_control,
+            effective_seccomp.file_enforcement,
         )?)
     } else {
         ChildSetup::Plain
@@ -312,6 +320,7 @@ fn seccomp_setup(
     payload_socket_enabled: bool,
     process_seccomp_enabled: bool,
     network_control_enabled: bool,
+    file_enforcement: FileEnforcementSeccompRequirements,
 ) -> Result<SeccompSetup, String> {
     let payload_tls_seccomp_syscalls = if payload_tls_seccomp_enabled {
         request.payload_tls_seccomp_syscalls.clone()
@@ -333,12 +342,22 @@ fn seccomp_setup(
     } else {
         Vec::new()
     };
+    let file_enforcement_syscalls = request
+        .file_enforcement_syscalls
+        .iter()
+        .copied()
+        .filter(|syscall| match syscall {
+            EnforcementSeccompSyscall::Mkdir => file_enforcement.mkdir,
+            EnforcementSeccompSyscall::Rmdir => file_enforcement.rmdir,
+        })
+        .collect();
     SeccompSetup::new(
         payload_tls_seccomp_syscalls,
         payload_socket_seccomp_syscalls,
         request.payload_socket_max_segment_bytes,
         process_seccomp_syscalls,
         network_control_syscalls,
+        file_enforcement_syscalls,
         request.seccomp_notify_reserved_listener_fd,
     )
 }

@@ -39,6 +39,12 @@ cargo build --release --locked
 - `@lucide/vue` 1.17.0: ISC.
 - `vite` 5.4.21 and `@vitejs/plugin-vue` 5.2.4: MIT.
 
+## Alert refresh
+
+The Alerts page polls for new alerts while it remains open. The default interval is one second. Product users can change the interval, in whole seconds, with the **Auto refresh** control in the Alerts page header. The browser stores that preference locally under `actrail.alerts.poll-interval-seconds`; it does not change daemon or Web server configuration.
+
+New-alert notifications appear in the upper-right notification stack and remain visible for eight seconds by default. To change the duration for the current browser profile, set `actrail.notifications.duration-ms` in the browser's local storage to a positive number of milliseconds, then reload the page. This preference affects only the browser display; it does not change alert persistence or polling.
+
 ## Layout constants
 
 `src/tabs/core/action-tree/config.js` contains action tree node types, lane labels, and UI limits:

@@ -6,8 +6,8 @@ use model_core::ids::TraceId;
 use rusqlite::{OptionalExtension, params};
 use semantic_action::{
     FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
-    LlmRequestContentWrite, SemanticAction, SemanticActionLink, SemanticActionReadStore,
-    SemanticActionStoreError, SemanticActionWriteStore, SemanticEvidence,
+    LlmRequestContentWrite, SemanticAction, SemanticActionLink, SemanticActionPage,
+    SemanticActionReadStore, SemanticActionStoreError, SemanticActionWriteStore, SemanticEvidence,
 };
 
 use crate::SqliteStorage;
@@ -293,6 +293,115 @@ impl SemanticActionReadStore for SqliteStorage {
             action.evidence = evidence.remove(&action.action_id).unwrap_or_default();
         }
         Ok(actions)
+    }
+
+    fn semantic_actions_page(
+        &self,
+        trace_id: TraceId,
+        offset: usize,
+        limit: usize,
+    ) -> Result<SemanticActionPage, SemanticActionStoreError> {
+        if limit == 0 {
+            return Err(SemanticActionStoreError::new(
+                "semantic_actions_page",
+                "limit must be greater than zero",
+            ));
+        }
+        if self.is_purged(trace_id) {
+            return Err(SemanticActionStoreError::new(
+                "semantic_actions_page",
+                "trace has been purged",
+            ));
+        }
+        let fetch_limit = limit.checked_add(1).ok_or_else(|| {
+            SemanticActionStoreError::new("semantic_actions_page", "limit overflow")
+        })?;
+        let connection = self.connection().borrow();
+        let action_cold_join = action_cold_field_join();
+        let mut statement = connection
+            .prepare(&format!(
+                "SELECT {ACTION_SELECT_COLUMNS}
+                 FROM semantic_actions action
+                 JOIN semantic_action_ids ids
+                   ON ids.action_key = action.action_key
+                 {action_cold_join}
+                 WHERE action.trace_id = ?1
+                 ORDER BY action.start_time ASC, ids.action_id ASC
+                 LIMIT ?2 OFFSET ?3"
+            ))
+            .map_err(|error| {
+                SemanticActionStoreError::new("prepare_semantic_actions_page", error.to_string())
+            })?;
+        let rows = statement
+            .query_map(
+                params![trace_id.get(), fetch_limit, offset],
+                action_from_row,
+            )
+            .map_err(|error| {
+                SemanticActionStoreError::new("query_semantic_actions_page", error.to_string())
+            })?;
+        let mut actions = rows.collect::<Result<Vec<_>, _>>().map_err(|error| {
+            SemanticActionStoreError::new("map_semantic_actions_page", error.to_string())
+        })?;
+        let has_more = actions.len() > limit;
+        actions.truncate(limit);
+        for action in &mut actions {
+            action.evidence = read_evidence(&connection, &action.action_id)?;
+        }
+        let next_offset = if has_more {
+            Some(offset.checked_add(limit).ok_or_else(|| {
+                SemanticActionStoreError::new("semantic_actions_page", "offset overflow")
+            })?)
+        } else {
+            None
+        };
+        Ok(SemanticActionPage {
+            actions,
+            next_offset,
+        })
+    }
+
+    fn list_file_observation_paths(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+    ) -> Result<Vec<FileObservationPath>, SemanticActionStoreError> {
+        if self.is_purged(trace_id) {
+            return Err(SemanticActionStoreError::new(
+                "list_file_observation_paths",
+                "trace has been purged",
+            ));
+        }
+        let connection = self.connection().borrow();
+        let mut statement = connection
+            .prepare(
+                "SELECT path.trace_id, ids.action_id, path.path_order, path.path
+                 FROM file_observation_paths path
+                 JOIN semantic_action_ids ids ON ids.action_key = path.action_key
+                 WHERE path.trace_id = ?1 AND ids.action_id = ?2
+                 ORDER BY path.path_order ASC, path.path ASC",
+            )
+            .map_err(|error| {
+                SemanticActionStoreError::new(
+                    "prepare_file_observation_path_list",
+                    error.to_string(),
+                )
+            })?;
+        let rows = statement
+            .query_map(params![trace_id.get(), action_id], |row| {
+                Ok(FileObservationPath {
+                    trace_id: TraceId::new(row.get(0)?),
+                    action_id: row.get(1)?,
+                    path_order: row.get(2)?,
+                    path: row.get(3)?,
+                })
+            })
+            .map_err(|error| {
+                SemanticActionStoreError::new("query_file_observation_path_list", error.to_string())
+            })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|error| {
+            SemanticActionStoreError::new("map_file_observation_path_list", error.to_string())
+        })
     }
 
     fn list_semantic_action_links(

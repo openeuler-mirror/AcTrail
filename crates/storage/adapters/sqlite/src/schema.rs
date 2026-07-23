@@ -33,8 +33,10 @@ INSERT OR IGNORE INTO process_id_sequence (singleton, next_process_id) VALUES (1
 
 CREATE TABLE IF NOT EXISTS traces (
     trace_id INTEGER PRIMARY KEY,
+    alert_token BLOB NOT NULL,
     root_process_id INTEGER NOT NULL,
     root_container_id TEXT,
+    root_working_directory TEXT,
     display_name TEXT NOT NULL,
     profile_name TEXT NOT NULL,
     tags TEXT NOT NULL,
@@ -334,6 +336,7 @@ pub fn initialize(connection: &Connection) -> Result<(), rusqlite::Error> {
     let version = user_version(connection)?;
     validate_writable_schema_state(connection, version)?;
     connection.execute_batch(CREATE_TABLES_SQL)?;
+    connection.execute_batch(crate::alerts::schema::CREATE_SQL)?;
     codebook::for_schema_version(SQLITE_SCHEMA_VERSION_CURRENT)
         .and_then(|codebook| codebook.validate())
         .map_err(|_| rusqlite::Error::InvalidQuery)?;
@@ -380,9 +383,12 @@ fn validate_writable_schema_state(
 }
 
 fn validate_current_schema(connection: &Connection) -> Result<(), rusqlite::Error> {
+    crate::alerts::schema::validate(connection)?;
     require_column(connection, "processes", "process_id")?;
     require_column(connection, "process_namespace_aliases", "process_id")?;
+    require_column(connection, "traces", "alert_token")?;
     require_column(connection, "traces", "root_process_id")?;
+    require_column(connection, "traces", "root_working_directory")?;
     require_column(connection, "memberships", "process_id")?;
     require_column(connection, "events", "process_id")?;
     require_column(connection, "payload_segments", "process_id")?;

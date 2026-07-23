@@ -2,6 +2,45 @@
 
 use control_contract::reply::ControlError;
 
+pub(crate) struct RemoteCString {
+    pub(crate) value: Option<String>,
+    pub(crate) truncated: bool,
+}
+
+pub(crate) fn read_c_string(
+    pid: u32,
+    remote_addr: u64,
+    max_bytes: u32,
+) -> Result<RemoteCString, ControlError> {
+    if remote_addr == 0 {
+        return Ok(RemoteCString {
+            value: None,
+            truncated: false,
+        });
+    }
+    let max_bytes = usize::try_from(max_bytes)
+        .map_err(|error| ControlError::new("seccomp_read", format!("size overflow: {error}")))?;
+    let Some(bytes) = read_process_bytes(pid, remote_addr, max_bytes)? else {
+        return Ok(RemoteCString {
+            value: None,
+            truncated: false,
+        });
+    };
+    let end = bytes.iter().position(|byte| *byte == 0);
+    let truncated = end.is_none();
+    let value = match end {
+        Some(end) => &bytes[..end],
+        None => bytes.as_slice(),
+    };
+    let value = String::from_utf8(value.to_vec()).map_err(|error| {
+        ControlError::new("seccomp_read", format!("path is not valid UTF-8: {error}"))
+    })?;
+    Ok(RemoteCString {
+        value: Some(value),
+        truncated,
+    })
+}
+
 /// Errno from a capture-time read of a traced target that means the target already exited:
 /// `ESRCH` from `process_vm_readv`, or `ENOENT` from a `/proc/<pid>` read. The seccomp capture
 /// window is stale; the notification must be continued rather than crashing the daemon, so reads

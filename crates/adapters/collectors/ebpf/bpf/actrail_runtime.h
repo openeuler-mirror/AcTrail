@@ -33,6 +33,11 @@ enum actrail_proc_event_kind {
     ACTRAIL_SOCKET_PAYLOAD_COMPLETION = 501,
 };
 
+enum actrail_proc_event_flag {
+    ACTRAIL_PROC_FORK_CHILD_HOST_ONLY = 1,
+    ACTRAIL_PROC_FORK_PARENT_HOST_ONLY = 2,
+};
+
 enum actrail_pid_namespace_slot {
     ACTRAIL_ACTIVE_PID_NAMESPACE = 0,
 };
@@ -93,14 +98,11 @@ struct actrail_pending_net_op {
     __u64 sockaddr_ptr;
 };
 
-struct actrail_pending_proc_op {
+struct actrail_fork_trace_binding {
     __u64 trace_id;
     __u64 parent_generation;
     __u64 child_generation;
     __u32 parent_pid;
-    __u32 parent_host_pid;
-    __u32 child_host_pid;
-    __u32 lookup_flags;
 };
 
 struct task_struct {
@@ -140,7 +142,8 @@ enum actrail_event_transport_diagnostic_counter {
     ACTRAIL_EVENT_TRANSPORT_RESERVE_FAIL = 0,
     ACTRAIL_EVENT_TRANSPORT_OUTPUT_FAIL = 1,
     ACTRAIL_EVENT_TRANSPORT_OUTPUT_FAIL_BYTES = 2,
-    ACTRAIL_EVENT_TRANSPORT_DIAG_COUNTER_COUNT = 3,
+    ACTRAIL_FORK_IDENTITY_PUBLISH_FAIL = 3,
+    ACTRAIL_EVENT_TRANSPORT_DIAG_COUNTER_COUNT = 4,
 };
 
 struct tracepoint_common {
@@ -267,8 +270,8 @@ struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 1);
     __type(key, __u32);
-    __type(value, struct actrail_pending_proc_op);
-} pending_child_proc_ops SEC(".maps");
+    __type(value, struct actrail_fork_trace_binding);
+} fork_trace_bindings SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
@@ -496,6 +499,11 @@ static __always_inline __u64 current_process_start_time(__u32 pid) {
     cached_start_time = bpf_map_lookup_elem(&process_start_times, &pid);
     if (cached_start_time) {
         return *cached_start_time;
+    }
+    struct actrail_fork_trace_binding *binding =
+        bpf_map_lookup_elem(&fork_trace_bindings, &pid);
+    if (binding) {
+        return binding->child_generation;
     }
     return 0;
 }

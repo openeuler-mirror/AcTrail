@@ -51,6 +51,7 @@ import { Activity, Boxes, Cpu, GitBranch } from '@lucide/vue';
 import {
   readActionTree,
   readActionTreeRoot,
+  readTraceAlerts,
   readCommands,
   readTraceDiagnostics,
   readTraceEvents,
@@ -81,7 +82,7 @@ const props = defineProps({
   },
 });
 
-const emit = defineEmits(['active-title', 'loading']);
+const emit = defineEmits(['active-title', 'loading', 'selection-consumed']);
 
 const tabs = TAB_DEFINITIONS;
 const METRIC_ICONS = Object.freeze({
@@ -209,10 +210,15 @@ watch(
     if (!target?.traceId) {
       return;
     }
+    if (target.tabId && tabs.some((tab) => tab.id === target.tabId)) {
+      activeTab.value = target.tabId;
+    }
     if (!traceIdMatches(selectedTraceId.value, target.traceId)) {
       selectedTraceId.value = target.traceId;
     }
+    emit('selection-consumed');
   },
+  { immediate: true },
 );
 
 watch(
@@ -317,6 +323,8 @@ async function ensureTracePartForActiveTab() {
     await ensureTracePart(traceId, 'processes', readTraceProcesses);
   } else if (activeTab.value === TAB_IDS.diagnostics) {
     await ensureTracePart(traceId, 'diagnostics', readTraceDiagnostics);
+  } else if (activeTab.value === TAB_IDS.alerts) {
+    await ensureTracePart(traceId, 'alerts', readTraceAlerts);
   }
 }
 

@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Dynamic file policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["rules"],
+  "properties": {
+    "rules": {
+      "title": "File access routes",
+      "description": "Rules owned by this plugin instance and projected into AcTrail enforcement.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["decision", "path", "priority"],
+        "properties": {
+          "rule_id": {
+            "title": "Rule ID",
+            "description": "Stable route identity. Leave empty when adding a rule so the plugin can generate it; keep the returned ID unchanged when editing that rule.",
+            "type": "string",
+            "minLength": 1
+          },
+          "decision": {
+            "title": "Decision",
+            "description": "Allow or deny the matching file operation, or delegate it to a synchronous control plugin with gray.",
+            "type": "string",
+            "enum": ["allow", "deny", "gray"]
+          },
+          "operation": {
+            "title": "Operation",
+            "description": "Any applies the route to open, directory creation, and directory removal.",
+            "type": "string",
+            "enum": ["any", "open", "mkdir", "rmdir"],
+            "default": "any"
+          },
+          "path": {
+            "title": "Path",
+            "description": "Absolute file or directory path matched by this rule. It must be within a writable file-policy scope granted when the plugin was loaded.",
+            "type": "string",
+            "minLength": 1,
+            "examples": ["/srv/agent/workspace/private.txt"]
+          },
+          "priority": {
+            "title": "Priority",
+            "description": "Higher values take precedence when more than one route matches the same path.",
+            "type": "integer",
+            "default": 10
+          },
+          "gray_target": {
+            "title": "Gray target instance index",
+            "description": "Required only for gray decisions. This is the loaded control-plugin instance index that makes the synchronous decision.",
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    }
+  }
+}

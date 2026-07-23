@@ -17,23 +17,52 @@ def reject(needle: str, haystack: str) -> None:
         raise RuntimeError(f"WIT contract contains rejected concept: {needle}")
 
 
+def record_body(name: str, wit: str) -> str:
+    marker = f"record {name} {{"
+    start = wit.find(marker)
+    if start < 0:
+        raise RuntimeError(f"WIT contract missing record: {name}")
+    end = wit.find("\n  }", start)
+    if end < 0:
+        raise RuntimeError(f"WIT contract record is not closed: {name}")
+    return wit[start:end]
+
+
 def main() -> int:
     if not WIT.exists():
         raise RuntimeError(f"WIT contract file missing: {WIT}")
     raw = WIT.read_text(encoding="utf-8")
 
     for required in [
-        "package actrail:plugin@0.1.0;",
+        "package actrail:plugin@0.2.0;",
         "interface types",
         "interface host",
+        "interface observation-context-read",
+        "interface trace-analysis-read",
+        "interface trace-file-state-read",
+        "interface alert-write",
         "interface observation-consumer",
+        "interface post-trace-analyzer",
         "interface control-decider",
         "world observation-plugin",
+        "world post-trace-observation-plugin",
         "world control-plugin",
         "world managed-control-plugin",
         "read-payload: func(ref: payload-ref, offset: u64, max-bytes: u64)",
         "consume: func(batch: observation-batch)",
+        "analyze: func(task: post-trace-task)",
+        "semantic-actions-list: func(offset: option<u64>, limit: u32)",
+        "get: func(action-id: string) -> result<trace-file-state, string>",
+        "submit: func(request: alert-write-request) -> result<_, string>",
         "decide: func(request: decision-request)",
+        "record file-change-record",
+        "change-kind: file-change-kind",
+        "lifecycle-transition: option<trace-lifecycle-state>",
+        "record alert-draft",
+        "record alert-write-request",
+        "alert-token: option<list<u8>>",
+        "definition-key: string",
+        "payload-json: string",
         "record actor-process-identity",
         "actor-process-identity: actor-process-identity",
         "context-ref: option<string>",
@@ -70,6 +99,22 @@ def main() -> int:
         "timestamp-unix-nanos",
     ]:
         reject(rejected, raw)
+
+    semantic_action = record_body("semantic-action-record", raw)
+    for duplicated in ["trace-id:", "summary:"]:
+        reject(duplicated, semantic_action)
+
+    alert_draft = record_body("alert-draft", raw)
+    for duplicated in [
+        "plugin",
+        "config",
+        "evidence",
+        "action-id",
+        "title",
+        "severity",
+        "kind:",
+    ]:
+        reject(duplicated, alert_draft)
 
     print(f"wit_contract={WIT}")
     return 0

@@ -110,6 +110,35 @@ pub enum SemanticActionCompleteness {
     Inferred,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FileChangeKind {
+    Created,
+    Modified,
+    Deleted,
+    Unknown,
+}
+
+impl FileChangeKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::Modified => "modified",
+            Self::Deleted => "deleted",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "created" => Some(Self::Created),
+            "modified" => Some(Self::Modified),
+            "deleted" => Some(Self::Deleted),
+            "unknown" => Some(Self::Unknown),
+            _ => None,
+        }
+    }
+}
+
 impl SemanticActionCompleteness {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -176,6 +205,20 @@ pub struct SemanticAction {
     pub confidence_millis: Option<u16>,
     pub attributes: BTreeMap<String, String>,
     pub evidence: Vec<SemanticEvidence>,
+}
+
+impl SemanticAction {
+    pub fn file_change_kind(&self) -> Option<FileChangeKind> {
+        self.attributes
+            .get(crate::attr_keys::file::CHANGE_KIND)
+            .and_then(|raw| FileChangeKind::parse(raw))
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SemanticActionPage {
+    pub actions: Vec<SemanticAction>,
+    pub next_offset: Option<usize>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

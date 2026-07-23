@@ -10,7 +10,8 @@ use control_contract::reply::LaunchPermissionsReply;
 use crate::platform_probe::LaunchPlatformReport;
 
 pub use config_core::capture_profile::{
-    DeploymentPermissionPolicy, LaunchSeccompRequirements, PermissionDecision, PermissionMode,
+    DeploymentPermissionPolicy, FileEnforcementSeccompRequirements, LaunchSeccompRequirements,
+    PermissionDecision, PermissionMode,
 };
 
 pub fn contract_permission_mode(mode: PermissionMode) -> DeploymentPermissionMode {

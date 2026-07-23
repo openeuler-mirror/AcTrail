@@ -6,6 +6,7 @@ use model_core::trace::TraceRecord;
 use semantic_action::{SemanticAction, SemanticActionLink};
 use storage_core::{
     PayloadSegmentQuery, SnapshotView, StorageBackend, StorageOpenMode, TraceFilter,
+    TraceLeasePurpose,
 };
 use storage_factory::{StorageConfig, open_storage_backend};
 
@@ -80,14 +81,16 @@ pub(super) fn read_snapshot(
     requested: Option<TraceId>,
 ) -> Result<SnapshotView, String> {
     let trace_id = resolve_trace_id(storage, requested)?;
-    let lease = storage.acquire_export_lease(trace_id).map_err(|error| {
-        format!(
-            "acquire snapshot lease failed: {}: {}",
-            error.stage, error.message
-        )
-    })?;
+    let lease = storage
+        .acquire_trace_lease(trace_id, TraceLeasePurpose::Export)
+        .map_err(|error| {
+            format!(
+                "acquire snapshot lease failed: {}: {}",
+                error.stage, error.message
+            )
+        })?;
     let snapshot = storage.read_snapshot(&lease);
-    let release = storage.release_export_lease(lease);
+    let release = storage.release_trace_lease(lease);
     match (snapshot, release) {
         (Ok(snapshot), Ok(())) => Ok(snapshot),
         (Err(error), Ok(())) => Err(format!(

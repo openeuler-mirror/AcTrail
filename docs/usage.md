@@ -78,6 +78,7 @@ The generated default uses persistent Linux paths instead of `/tmp`:
 | `payload_tls_sync_event_socket_path` | `/run/actrail/tls-sync.sock` |
 | `storage_sqlite_path` | `/var/lib/actrail/actrail.sqlite` |
 | `export_directory` | `/var/lib/actrail/export` |
+| `plugins.discovery.directory` | `~/.actrail/plugins` |
 | live `otel-jsonl` plugin config `path` | `/var/lib/actrail/export/live-spans.otlp.jsonl` when explicitly loaded |
 | `log_path` | `/var/log/actrail/actraild.log` |
 | `workload_diagnostics_enabled` | `false` |
@@ -245,7 +246,7 @@ The opencode case also shows proxy tunnel facts such as `CONNECT api.deepseek.co
 
 ## 10. Web UI
 
-Start the read-only Web UI from an operator config:
+Start the Web UI from an operator config:
 
 ```bash
 ./target/release/actrailweb --config <operator.conf>
@@ -257,7 +258,9 @@ Override address or port for a local run:
 ./target/release/actrailweb --config <operator.conf> --addr 127.0.0.1 --port 18080
 ```
 
-`actrailweb` reads storage; it does not start collection by itself.
+`actrailweb` reads storage; it does not start collection by itself. Its Plugins workspace is also a local administration surface: Refresh performs a fresh bounded scan of `plugins.discovery.directory` (default `~/.actrail/plugins`), Load explicitly activates a discovered package, and Unload stops a runtime instance. Merely copying a package into the directory never loads it, and the generated startup list is empty and disabled.
+
+Plugin load/unload is still authorized by the daemon control socket. Run `actrailweb` as a host administrator when using those controls, keep the listener on a trusted interface, and set an absolute discovery path if the installer and Web process use different `HOME` values.
 
 The current UI is centered on the semantic action graph: the left rail selects a trace, the main canvas renders the agent process and recursively expanded action/evidence swimlanes, and the right panel shows rows, payload text, attributes, and raw JSON for the selected node. It reads low-level trace snapshots for counts/details and `/api/traces/<TRACE_ID>/action-tree` for stored semantic action links; the browser does not invent semantic relationships that were not emitted by the observation pipeline.
 

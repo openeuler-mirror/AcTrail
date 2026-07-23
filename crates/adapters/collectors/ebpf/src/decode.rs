@@ -25,6 +25,8 @@ pub const PROC_EVENT_FORK: u32 = 1;
 pub const PROC_EVENT_EXEC: u32 = 2;
 pub const PROC_EVENT_EXIT: u32 = 3;
 pub const PROC_EVENT_SIGNAL: u32 = 4;
+pub(crate) const PROC_FORK_CHILD_HOST_ONLY: u32 = 1;
+pub(crate) const PROC_FORK_PARENT_HOST_ONLY: u32 = 2;
 pub const NET_EVENT_CONNECT: u32 = 100;
 pub const NET_EVENT_ACCEPT: u32 = 101;
 pub const NET_EVENT_SEND: u32 = 102;
@@ -119,28 +121,16 @@ fn decode_fork(
     event: KernelObservationEvent,
     bindings: &mut BindingStateMap,
 ) -> Result<Option<RawCollectorEvent>, DecodeError> {
-    let parent = resolve_event_observation(
-        event.trace_id,
-        event.pid,
-        event.host_pid,
-        event.pid_generation,
-        bindings,
-    )
-    .map_err(|error| DecodeError::new("parent_identity", error))?;
-    let child = resolve_event_observation(
-        event.trace_id,
-        event.aux,
-        event.aux_host_pid,
-        event.aux_generation,
-        bindings,
-    )
-    .map_err(|error| DecodeError::new("fork_identity", error))?;
-    bindings.track_with_map_pid(
-        event.trace_id,
-        child.clone(),
-        event.aux,
-        event.aux_generation,
-    );
+    let parent = fork_parent_observation(&event, bindings)?;
+    let child = fork_child_observation(&event, bindings)?;
+    if event.reserved & PROC_FORK_CHILD_HOST_ONLY == 0 {
+        bindings.track_with_map_pid(
+            event.trace_id,
+            child.clone(),
+            event.aux,
+            event.aux_generation,
+        );
+    }
 
     Ok(Some(RawCollectorEvent {
         envelope: RawEventEnvelope {
@@ -154,6 +144,58 @@ fn decode_fork(
             metadata: BTreeMap::new(),
         },
     }))
+}
+
+pub(crate) fn fork_parent_observation(
+    event: &KernelObservationEvent,
+    bindings: &BindingStateMap,
+) -> Result<ProcessObservation, DecodeError> {
+    if event.reserved & PROC_FORK_PARENT_HOST_ONLY != 0 {
+        if event.host_pid == 0 || event.pid_generation == 0 {
+            return Err(DecodeError::new(
+                "parent_identity",
+                "host-only fork parent requires host PID and start boottime",
+            ));
+        }
+        return Ok(ProcessObservation::host(
+            HostProcessCoordinates::new(event.host_pid, 0)
+                .with_start_boottime_ns(event.pid_generation),
+        ));
+    }
+    resolve_event_observation(
+        event.trace_id,
+        event.pid,
+        event.host_pid,
+        event.pid_generation,
+        bindings,
+    )
+    .map_err(|error| DecodeError::new("parent_identity", error))
+}
+
+pub(crate) fn fork_child_observation(
+    event: &KernelObservationEvent,
+    bindings: &BindingStateMap,
+) -> Result<ProcessObservation, DecodeError> {
+    if event.reserved & PROC_FORK_CHILD_HOST_ONLY != 0 {
+        if event.aux_host_pid == 0 || event.aux_generation == 0 {
+            return Err(DecodeError::new(
+                "fork_identity",
+                "host-only fork event requires child host PID and start boottime",
+            ));
+        }
+        return Ok(ProcessObservation::host(
+            HostProcessCoordinates::new(event.aux_host_pid, 0)
+                .with_start_boottime_ns(event.aux_generation),
+        ));
+    }
+    resolve_event_observation(
+        event.trace_id,
+        event.aux,
+        event.aux_host_pid,
+        event.aux_generation,
+        bindings,
+    )
+    .map_err(|error| DecodeError::new("fork_identity", error))
 }
 
 fn decode_exec(
@@ -457,4 +499,112 @@ pub(crate) fn resolve_event_observation(
         observation.host = Some(host);
     }
     Ok(observation)
+}
+
+#[cfg(test)]
+mod tests {
+    use model_core::ids::TraceId;
+    use model_core::process::{
+        HostProcessCoordinates, NamespaceIdentity, NamespaceProcessCoordinates, ProcessObservation,
+    };
+
+    use crate::loader::{KernelEndpoint, KernelObservationEvent};
+    use crate::maps::BindingStateMap;
+
+    use super::{
+        PROC_EVENT_EXEC, PROC_EVENT_FORK, PROC_FORK_CHILD_HOST_ONLY, decode_exec, decode_fork,
+    };
+
+    #[test]
+    fn eager_fork_keeps_host_identity_out_of_the_namespace_binding_index() {
+        let trace_id = TraceId::new(17);
+        let parent = ProcessObservation::host(
+            HostProcessCoordinates::new(4100, 0).with_start_boottime_ns(100),
+        )
+        .with_namespace(NamespaceProcessCoordinates::new(
+            NamespaceIdentity::new("pid:[17]"),
+            41,
+            0,
+        ));
+        let mut bindings = BindingStateMap::default();
+        bindings.set_trace_pid_namespace(trace_id, NamespaceIdentity::new("pid:[17]"));
+        bindings.track_with_map_pid(trace_id, parent, 41, 100);
+
+        let event = KernelObservationEvent {
+            kind: PROC_EVENT_FORK,
+            pid: 41,
+            aux: 0,
+            host_pid: 4100,
+            aux_host_pid: 4200,
+            result: 0,
+            trace_id,
+            observed_ktime_ns: 0,
+            fd: 0,
+            reserved: PROC_FORK_CHILD_HOST_ONLY,
+            requested_size: 0,
+            pid_generation: 100,
+            aux_generation: 200,
+            local: empty_endpoint(),
+            remote: empty_endpoint(),
+            exec_filename: None,
+        };
+
+        let decoded = decode_fork(event, &mut bindings)
+            .expect("decode eager fork")
+            .expect("fork observation");
+        assert_eq!(
+            decoded.envelope.process,
+            ProcessObservation::host(
+                HostProcessCoordinates::new(4200, 0).with_start_boottime_ns(200)
+            )
+        );
+        assert!(
+            bindings
+                .tracked_event_observation(trace_id, 4200, 200)
+                .is_none(),
+            "host PID must not collide with a namespace-PID binding"
+        );
+
+        let exec = KernelObservationEvent {
+            kind: PROC_EVENT_EXEC,
+            pid: 42,
+            aux: 0,
+            host_pid: 4200,
+            aux_host_pid: 0,
+            result: 0,
+            trace_id,
+            observed_ktime_ns: 0,
+            fd: 0,
+            reserved: 0,
+            requested_size: 0,
+            pid_generation: 200,
+            aux_generation: 0,
+            local: empty_endpoint(),
+            remote: empty_endpoint(),
+            exec_filename: None,
+        };
+        let enriched = decode_exec(exec, &mut bindings)
+            .expect("decode exec")
+            .expect("exec observation")
+            .envelope
+            .process;
+        assert_eq!(enriched.host.as_ref().map(|host| host.pid), Some(4200));
+        assert_eq!(
+            enriched.namespace.as_ref().map(|namespace| namespace.pid),
+            Some(42)
+        );
+        assert_eq!(
+            bindings.tracked_event_observation(trace_id, 42, 200),
+            Some(&enriched)
+        );
+    }
+
+    fn empty_endpoint() -> KernelEndpoint {
+        KernelEndpoint {
+            family: 0,
+            port_be: 0,
+            addr4_be: 0,
+            addr6: [0; 16],
+        }
+    }
 }

@@ -1,5 +1,9 @@
 //! Unified storage backend implementation for SQLite.
 
+use alert_contract::{
+    AlertDefinition, AlertDefinitionId, AlertDefinitionStore, AlertDraft, AlertId, AlertListLimit,
+    AlertReadStore, AlertStoreError, AlertView, AlertWriteStore,
+};
 use model_core::diagnostics::DiagnosticRecord;
 use model_core::event::DomainEvent;
 use model_core::ids::TraceId;
@@ -8,13 +12,13 @@ use model_core::process::{ProcessIdentity, ProcessMembership, ProcessRecord};
 use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
 use semantic_action::{
     FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
-    LlmRequestContentWrite, SemanticAction, SemanticActionLink,
+    LlmRequestContentWrite, SemanticAction, SemanticActionLink, SemanticActionPage,
 };
 use storage_core::{
-    ExportLease, PayloadSegmentQuery, RetentionCandidate, SemanticActionChildPage,
-    SemanticActionChildPageQuery, SemanticActionChildRow, SemanticActionDisplayRootChildPage,
-    SemanticActionDisplayRootChildRow, SemanticActionSummary, SnapshotView, StorageBackend,
-    StorageError, StorageTransaction, TraceFilter, TraceTombstone,
+    PayloadSegmentQuery, RetentionCandidate, SemanticActionChildPage, SemanticActionChildPageQuery,
+    SemanticActionChildRow, SemanticActionDisplayRootChildPage, SemanticActionDisplayRootChildRow,
+    SemanticActionSummary, SnapshotView, StorageBackend, StorageError, StorageTransaction,
+    TraceFilter, TraceLease, TraceLeasePurpose, TraceTombstone,
 };
 use store_read_contract::diagnostics::DiagnosticReadStore;
 use store_read_contract::events::EventReadStore;
@@ -176,6 +180,47 @@ impl StorageBackend for SqliteStorage {
         DiagnosticReadStore::list_diagnostics(self, trace_id).map_err(StorageError::from)
     }
 
+    fn register_alert_definition(
+        &mut self,
+        definition: &AlertDefinition,
+    ) -> Result<AlertDefinitionId, AlertStoreError> {
+        AlertDefinitionStore::register_alert_definition(self, definition)
+    }
+
+    fn submit_alert(
+        &mut self,
+        trace_id: TraceId,
+        alert_token: &model_core::trace::TraceAlertToken,
+        producer_plugin_id: &str,
+        draft: &AlertDraft,
+        created_at: std::time::SystemTime,
+    ) -> Result<alert_contract::AlertSubmitOutcome, AlertStoreError> {
+        AlertWriteStore::submit_alert(
+            self,
+            trace_id,
+            alert_token,
+            producer_plugin_id,
+            draft,
+            created_at,
+        )
+    }
+
+    fn latest_alerts(&self, limit: AlertListLimit) -> Result<Vec<AlertView>, AlertStoreError> {
+        AlertReadStore::latest_alerts(self, limit)
+    }
+
+    fn get_alert(&self, alert_id: AlertId) -> Result<Option<AlertView>, AlertStoreError> {
+        AlertReadStore::get_alert(self, alert_id)
+    }
+
+    fn trace_alerts(
+        &self,
+        trace_id: TraceId,
+        limit: AlertListLimit,
+    ) -> Result<Vec<AlertView>, AlertStoreError> {
+        AlertReadStore::trace_alerts(self, trace_id, limit)
+    }
+
     fn upsert_semantic_action(&mut self, action: SemanticAction) -> Result<(), StorageError> {
         semantic_action::SemanticActionWriteStore::upsert_semantic_action(self, action)
             .map_err(StorageError::from)
@@ -219,6 +264,29 @@ impl StorageBackend for SqliteStorage {
     ) -> Result<Vec<SemanticAction>, StorageError> {
         semantic_action::SemanticActionReadStore::list_semantic_actions(self, trace_id)
             .map_err(StorageError::from)
+    }
+
+    fn semantic_actions_page(
+        &self,
+        trace_id: TraceId,
+        offset: usize,
+        limit: usize,
+    ) -> Result<SemanticActionPage, StorageError> {
+        semantic_action::SemanticActionReadStore::semantic_actions_page(
+            self, trace_id, offset, limit,
+        )
+        .map_err(StorageError::from)
+    }
+
+    fn list_file_observation_paths(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+    ) -> Result<Vec<FileObservationPath>, StorageError> {
+        semantic_action::SemanticActionReadStore::list_file_observation_paths(
+            self, trace_id, action_id,
+        )
+        .map_err(StorageError::from)
     }
 
     fn list_semantic_action_links(
@@ -427,15 +495,19 @@ impl StorageBackend for SqliteStorage {
             .map_err(StorageError::from)
     }
 
-    fn acquire_export_lease(&mut self, trace_id: TraceId) -> Result<ExportLease, StorageError> {
-        SnapshotLeaseStore::acquire_export_lease(self, trace_id).map_err(StorageError::from)
+    fn acquire_trace_lease(
+        &mut self,
+        trace_id: TraceId,
+        purpose: TraceLeasePurpose,
+    ) -> Result<TraceLease, StorageError> {
+        SnapshotLeaseStore::acquire_trace_lease(self, trace_id, purpose).map_err(StorageError::from)
     }
 
-    fn release_export_lease(&mut self, lease: ExportLease) -> Result<(), StorageError> {
-        SnapshotLeaseStore::release_export_lease(self, lease).map_err(StorageError::from)
+    fn release_trace_lease(&mut self, lease: TraceLease) -> Result<(), StorageError> {
+        SnapshotLeaseStore::release_trace_lease(self, lease).map_err(StorageError::from)
     }
 
-    fn read_snapshot(&self, lease: &ExportLease) -> Result<SnapshotView, StorageError> {
+    fn read_snapshot(&self, lease: &TraceLease) -> Result<SnapshotView, StorageError> {
         SnapshotStore::read_snapshot(self, lease).map_err(StorageError::from)
     }
 

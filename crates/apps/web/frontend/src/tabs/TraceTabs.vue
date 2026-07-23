@@ -59,4 +59,9 @@ defineEmits(['update:modelValue']);
   background: var(--trace-interactive-bg);
   color: var(--trace-interactive-text);
 }
+
+.tab-button:focus-visible {
+  outline: 2px solid var(--stats-accent, var(--trace-interactive-text));
+  outline-offset: var(--stats-space-xs, 4px);
+}
 </style>

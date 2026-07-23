@@ -1,21 +1,22 @@
 use std::collections::BTreeMap;
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
+use std::sync::mpsc::{Sender, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
+use super::subscription_worker::{
+    ObservationWorkItem, ObservationWorkerControl, QueuedObservationBatch, run_observation_worker,
+};
+use super::{
+    ExportDroppedRecord, ExportPublishReport, PostTraceCompletion, SemanticActionExportBatch,
+};
 use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
-use model_core::trace::TraceRecord;
 use plugin_system::{
     ObservationBatch, ObservationConsumeReport, ObservationConsumer, ObservationEventFamily,
     PluginHostcallMetricsSource, PluginInstanceStatus, PluginLifecycleState, PluginPurpose,
-    PluginRuntimeKind,
+    PluginRuntimeKind, PostTraceTask,
 };
-use semantic_action::{SemanticAction, SemanticActionLink};
-
-use super::{ExportDroppedRecord, ExportPublishReport, SemanticActionExportBatch};
 
 #[derive(Default)]
 pub(super) struct DropAccumulator {
@@ -79,10 +80,15 @@ pub(super) struct ObservationConsumerSlot {
     queue_capacity: Option<u32>,
     delivery: ObservationDelivery,
     metrics: Arc<ObservationConsumerMetrics>,
+    has_post_trace_analyzer: bool,
 }
 
 impl ObservationConsumerSlot {
-    pub(super) fn new(consumer: Box<dyn ObservationConsumer>, warnings: Vec<String>) -> Self {
+    pub(super) fn new(
+        consumer: Box<dyn ObservationConsumer>,
+        warnings: Vec<String>,
+        post_trace_completion_sender: Sender<PostTraceCompletion>,
+    ) -> Self {
         let instance_id = consumer.instance_id().to_string();
         let plugin_id = consumer.plugin_id().to_string();
         let runtime = consumer.runtime_kind();
@@ -90,6 +96,7 @@ impl ObservationConsumerSlot {
         let hostcall_metrics = consumer.hostcall_metrics_source();
         let event_families = consumer.subscribed_event_families();
         let payload_snapshot_limit = consumer.payload_snapshot_limit();
+        let has_post_trace_analyzer = consumer.post_trace_analyzer().is_some();
         let metrics = Arc::new(ObservationConsumerMetrics {
             observed_records: AtomicU64::new(0),
             dropped_records: AtomicU64::new(0),
@@ -101,16 +108,22 @@ impl ObservationConsumerSlot {
             PluginRuntimeKind::Builtin => (None, ObservationDelivery::Inline(consumer)),
             PluginRuntimeKind::Wasm | PluginRuntimeKind::NativeDylib => {
                 let queue_capacity = consumer.observation_queue_capacity();
+                let consumer = Arc::<dyn ObservationConsumer>::from(consumer);
                 let (sender, receiver) = sync_channel(queue_capacity as usize);
                 let worker_metrics = Arc::clone(&metrics);
+                let worker_consumer = Arc::clone(&consumer);
+                let control = Arc::new(ObservationWorkerControl::default());
+                let worker_control = Arc::clone(&control);
                 let worker_instance_id = instance_id.clone();
                 let worker = thread::spawn(move || {
                     run_observation_worker(
-                        consumer,
+                        worker_consumer,
                         receiver,
                         worker_metrics,
+                        worker_control,
                         worker_instance_id,
                         Some(queue_capacity),
+                        post_trace_completion_sender,
                     );
                 });
                 (
@@ -118,6 +131,8 @@ impl ObservationConsumerSlot {
                     ObservationDelivery::Queued {
                         sender: Some(sender),
                         worker: Some(worker),
+                        consumer,
+                        control,
                     },
                 )
             }
@@ -134,6 +149,7 @@ impl ObservationConsumerSlot {
             queue_capacity,
             delivery,
             metrics,
+            has_post_trace_analyzer,
         }
     }
 
@@ -143,6 +159,85 @@ impl ObservationConsumerSlot {
 
     pub(super) fn payload_snapshot_limit(&self) -> Option<usize> {
         self.payload_snapshot_limit
+    }
+
+    pub(super) fn has_post_trace_analyzer(&self) -> bool {
+        self.has_post_trace_analyzer
+    }
+
+    pub(super) fn enqueue_post_trace(&self, task: PostTraceTask) -> Result<(), crate::ExportError> {
+        if !self.has_post_trace_analyzer {
+            return Err(crate::ExportError::new(
+                "post_trace_plugin_contract",
+                format!(
+                    "plugin instance {} does not export a post-trace analyzer",
+                    self.instance_id
+                ),
+            ));
+        }
+        let ObservationDelivery::Queued {
+            sender: Some(sender),
+            ..
+        } = &self.delivery
+        else {
+            return Err(crate::ExportError::new(
+                "post_trace_plugin_contract",
+                format!(
+                    "plugin instance {} has no asynchronous worker",
+                    self.instance_id
+                ),
+            ));
+        };
+        if !self.try_reserve_queue_slot() {
+            return Err(crate::ExportError::new(
+                "post_trace_queue_full",
+                format!("plugin instance {} queue is full", self.instance_id),
+            ));
+        }
+        match sender.try_send(ObservationWorkItem::PostTrace(task)) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(_)) => {
+                self.release_queue_slot();
+                Err(crate::ExportError::new(
+                    "post_trace_queue_full",
+                    format!("plugin instance {} queue is full", self.instance_id),
+                ))
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                self.release_queue_slot();
+                Err(crate::ExportError::new(
+                    "post_trace_queue_stopped",
+                    format!("plugin instance {} queue is stopped", self.instance_id),
+                ))
+            }
+        }
+    }
+
+    pub(super) fn cancel_post_trace(&self) -> Result<(), crate::ExportError> {
+        let ObservationDelivery::Queued {
+            consumer, control, ..
+        } = &self.delivery
+        else {
+            return Err(crate::ExportError::new(
+                "post_trace_plugin_contract",
+                format!(
+                    "plugin instance {} has no asynchronous worker",
+                    self.instance_id
+                ),
+            ));
+        };
+        let analyzer = consumer.post_trace_analyzer().ok_or_else(|| {
+            crate::ExportError::new(
+                "post_trace_plugin_contract",
+                format!(
+                    "plugin instance {} does not export a post-trace analyzer",
+                    self.instance_id
+                ),
+            )
+        })?;
+        control.request_cancellation();
+        analyzer.cancel_post_trace();
+        Ok(())
     }
 
     pub(super) fn receives_semantic_action_batch(&self) -> bool {
@@ -195,6 +290,7 @@ impl ObservationConsumerSlot {
                     trace: batch.trace,
                     semantic_actions: batch.actions,
                     semantic_links: batch.links,
+                    file_observation_paths: batch.file_observation_paths,
                     payload_segments,
                 };
                 consume_observation_batch(
@@ -237,7 +333,17 @@ impl ObservationConsumerSlot {
     }
 
     pub(super) fn stop(&mut self) {
-        if let ObservationDelivery::Queued { sender, worker } = &mut self.delivery {
+        if let ObservationDelivery::Queued {
+            sender,
+            worker,
+            consumer,
+            control,
+        } = &mut self.delivery
+        {
+            if let Some(analyzer) = consumer.post_trace_analyzer() {
+                control.request_cancellation();
+                analyzer.cancel_post_trace();
+            }
             sender.take();
             if let Some(worker) = worker.take()
                 && worker.join().is_err()
@@ -286,29 +392,24 @@ impl Drop for ObservationConsumerSlot {
 enum ObservationDelivery {
     Inline(Box<dyn ObservationConsumer>),
     Queued {
-        sender: Option<SyncSender<QueuedObservationBatch>>,
+        sender: Option<SyncSender<ObservationWorkItem>>,
         worker: Option<JoinHandle<()>>,
+        consumer: Arc<dyn ObservationConsumer>,
+        control: Arc<ObservationWorkerControl>,
     },
 }
 
-struct ObservationConsumerMetrics {
-    observed_records: AtomicU64,
-    dropped_records: AtomicU64,
-    queue_depth: AtomicU64,
-    last_error: Mutex<Option<String>>,
-    pending_dropped_records: Mutex<Vec<ExportDroppedRecord>>,
-}
-
-struct QueuedObservationBatch {
-    trace: TraceRecord,
-    semantic_actions: Vec<SemanticAction>,
-    semantic_links: Vec<SemanticActionLink>,
-    payload_segments: Vec<PayloadSegment>,
+pub(super) struct ObservationConsumerMetrics {
+    pub(super) observed_records: AtomicU64,
+    pub(super) dropped_records: AtomicU64,
+    pub(super) queue_depth: AtomicU64,
+    pub(super) last_error: Mutex<Option<String>>,
+    pub(super) pending_dropped_records: Mutex<Vec<ExportDroppedRecord>>,
 }
 
 fn enqueue_observation_batch(
     slot: &ObservationConsumerSlot,
-    sender: &SyncSender<QueuedObservationBatch>,
+    sender: &SyncSender<ObservationWorkItem>,
     batch: &SemanticActionExportBatch<'_>,
     payload_segments: &[PayloadSegment],
     dropped: &mut DropAccumulator,
@@ -331,9 +432,10 @@ fn enqueue_observation_batch(
         trace: batch.trace.clone(),
         semantic_actions: batch.actions.to_vec(),
         semantic_links: batch.links.to_vec(),
+        file_observation_paths: batch.file_observation_paths.to_vec(),
         payload_segments: payload_segments.to_vec(),
     };
-    match sender.try_send(queued_batch) {
+    match sender.try_send(ObservationWorkItem::Batch(queued_batch)) {
         Ok(()) => {}
         Err(TrySendError::Full(_)) => {
             slot.release_queue_slot();
@@ -407,61 +509,7 @@ fn consume_observation_batch(
     }
 }
 
-fn run_observation_worker(
-    consumer: Box<dyn ObservationConsumer>,
-    receiver: Receiver<QueuedObservationBatch>,
-    metrics: Arc<ObservationConsumerMetrics>,
-    instance_id: String,
-    queue_capacity: Option<u32>,
-) {
-    while let Ok(batch) = receiver.recv() {
-        let action_count = u64::try_from(batch.semantic_actions.len()).unwrap_or(u64::MAX);
-        let trace_id = batch.trace.trace_id;
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            let observation_batch = ObservationBatch {
-                trace: &batch.trace,
-                semantic_actions: &batch.semantic_actions,
-                semantic_links: &batch.semantic_links,
-                payload_segments: &batch.payload_segments,
-            };
-            consumer.consume(observation_batch)
-        }));
-        match result {
-            Ok(Ok(report)) => record_successful_consume(&metrics, action_count, report, true),
-            Ok(Err(error)) => {
-                let reason = format!("{}: {}", error.code, error.message);
-                record_pending_drop(
-                    &metrics,
-                    ExportDroppedRecord {
-                        trace_id,
-                        exporter: instance_id.clone(),
-                        reason: reason.clone(),
-                        queue_capacity,
-                        dropped_records: action_count,
-                    },
-                );
-                record_consume_error(&metrics, action_count, reason);
-            }
-            Err(panic) => {
-                let reason = format!("plugin consumer panicked: {}", panic_message(&panic));
-                record_pending_drop(
-                    &metrics,
-                    ExportDroppedRecord {
-                        trace_id,
-                        exporter: instance_id.clone(),
-                        reason: reason.clone(),
-                        queue_capacity,
-                        dropped_records: action_count,
-                    },
-                );
-                record_panic_error(&metrics, action_count, reason);
-            }
-        }
-        metrics.queue_depth.fetch_sub(1, Ordering::Relaxed);
-    }
-}
-
-fn record_successful_consume(
+pub(super) fn record_successful_consume(
     metrics: &ObservationConsumerMetrics,
     observed_records: u64,
     report: ObservationConsumeReport,
@@ -493,7 +541,7 @@ fn record_successful_consume(
     }
 }
 
-fn record_consume_error(
+pub(super) fn record_consume_error(
     metrics: &ObservationConsumerMetrics,
     dropped_records: u64,
     reason: String,
@@ -504,14 +552,7 @@ fn record_consume_error(
     store_last_error(metrics, Some(reason));
 }
 
-fn record_panic_error(metrics: &ObservationConsumerMetrics, dropped_records: u64, reason: String) {
-    metrics
-        .dropped_records
-        .fetch_add(dropped_records, Ordering::Relaxed);
-    store_last_error(metrics, Some(reason));
-}
-
-fn record_pending_drop(metrics: &ObservationConsumerMetrics, drop: ExportDroppedRecord) {
+pub(super) fn record_pending_drop(metrics: &ObservationConsumerMetrics, drop: ExportDroppedRecord) {
     if drop.dropped_records == u64::default() {
         return;
     }
@@ -520,17 +561,7 @@ fn record_pending_drop(metrics: &ObservationConsumerMetrics, drop: ExportDropped
     }
 }
 
-fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
-    if let Some(message) = panic.downcast_ref::<&str>() {
-        return (*message).to_string();
-    }
-    if let Some(message) = panic.downcast_ref::<String>() {
-        return message.clone();
-    }
-    "non-string panic payload".to_string()
-}
-
-fn store_last_error(metrics: &ObservationConsumerMetrics, error: Option<String>) {
+pub(super) fn store_last_error(metrics: &ObservationConsumerMetrics, error: Option<String>) {
     if let Ok(mut last_error) = metrics.last_error.lock() {
         *last_error = error;
     }
