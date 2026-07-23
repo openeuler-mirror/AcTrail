@@ -482,7 +482,12 @@ static __always_inline __u64 *lookup_trace_for_context_pid(
     return trace_id;
 }
 
-static __noinline __u64 current_process_start_time(__u32 pid) {
+/*
+ * Keep this lookup inlined. Older verifiers can reject nested calls from
+ * large payload subprograms while backtracking scalar precision, reporting
+ * a stack slot equal to the number of allocated slots.
+ */
+static __always_inline __u64 current_process_start_time(__u32 pid) {
     __u64 *cached_start_time;
 
     if (!pid) {
