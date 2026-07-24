@@ -23,8 +23,8 @@ use config_core::daemon::{EbpfCollectorConfig, FileBulkReadFastPathConfig, Paylo
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use model_core::ids::{CollectorName, TraceId};
 use model_core::process::{
-    InitialSuppressedFd, KernelProcessCoordinates, NamespaceIdentity, ProcessObservation,
-    ProcessRecord, ProcessSuppressedFd,
+    InitialSuppressedFd, KernelProcessCoordinates, ProcessObservation, ProcessRecord,
+    ProcessSuppressedFd,
 };
 
 use crate::capability_probe::{EbpfProbeResult, probe};
@@ -41,7 +41,6 @@ use crate::loader::{
     TlsPayloadDiagnostics,
 };
 use crate::maps::BindingStateMap;
-use crate::procfs::read_process_namespace_pid;
 use collector_dynamic_go_tls::DynamicGoTlsAttacher;
 
 #[cfg(test)]
@@ -61,7 +60,6 @@ pub struct EbpfCollector {
     tls_diagnostic_events: Vec<TlsDiagnosticEvent>,
     socket_completions: Vec<SocketPayloadCompletion>,
     suppressed_fds: Vec<TraceSuppressedFd>,
-    active_pid_namespace: Option<NamespaceIdentity>,
     binding_gap_drops: u64,
     binding_gap_lifecycle_skips: u64,
     clock_ticks_per_second: Option<u64>,
@@ -155,7 +153,6 @@ impl EbpfCollector {
             tls_diagnostic_events: Vec::new(),
             socket_completions: Vec::new(),
             suppressed_fds: Vec::new(),
-            active_pid_namespace: None,
             binding_gap_drops: 0,
             binding_gap_lifecycle_skips: 0,
             clock_ticks_per_second: clock_ticks_per_second(),
@@ -527,37 +524,14 @@ impl EbpfCollector {
         Ok(())
     }
 
-    fn ensure_active_pid_namespace(
+    fn register_trace_pid_namespace(
         &mut self,
+        trace_id: TraceId,
         observation: &ProcessObservation,
     ) -> Result<(), CollectorError> {
-        let namespace = observation
-            .namespace
-            .as_ref()
-            .map(|value| value.pid_namespace.clone())
-            .ok_or_else(|| {
-                CollectorError::new("pid_namespace", "root process has no PID namespace")
-            })?;
-        if self.bindings.trace_count() > 0
-            && self
-                .active_pid_namespace
-                .as_ref()
-                .is_some_and(|active| active != &namespace)
-        {
-            return Err(CollectorError::new(
-                "pid_namespace",
-                format!(
-                    "active eBPF runtime is already configured for {}; finish active traces before binding {}",
-                    self.active_pid_namespace
-                        .as_ref()
-                        .map(NamespaceIdentity::as_str)
-                        .unwrap_or("unknown"),
-                    namespace.as_str()
-                ),
-            ));
-        }
         self.runtime_mut()?
-            .configure_pid_namespace_for_pid(
+            .register_trace_pid_namespace(
+                trace_id,
                 observation
                     .host
                     .as_ref()
@@ -565,7 +539,6 @@ impl EbpfCollector {
                     .ok_or_else(|| CollectorError::new("host_pid", "root host PID is missing"))?,
             )
             .map_err(loader_error)?;
-        self.active_pid_namespace = Some(namespace);
         Ok(())
     }
 
@@ -573,14 +546,11 @@ impl EbpfCollector {
         &self,
         observation: &ProcessObservation,
     ) -> Result<u32, CollectorError> {
-        read_process_namespace_pid(
-            observation
-                .host
-                .as_ref()
-                .map(|host| host.pid)
-                .ok_or_else(|| CollectorError::new("host_pid", "host PID is missing"))?,
-        )
-        .map_err(|error| CollectorError::new("pid_namespace", error))
+        observation
+            .host
+            .as_ref()
+            .map(|host| host.pid)
+            .ok_or_else(|| CollectorError::new("host_pid", "host PID is missing"))
     }
 
     fn cleanup_suppressed_fds_for_process(
@@ -732,14 +702,23 @@ impl CollectorInstance for EbpfCollector {
         }
 
         self.ensure_runtime_for_requests(&request.requested_capabilities)?;
-        self.ensure_active_pid_namespace(&request.root_observation)?;
         let root_start_time = kernel_start_time(&request.root_observation)?;
+        let root_map_pid = self.map_pid_for_observation(&request.root_observation)?;
+        let root_pid_namespace = request
+            .root_observation
+            .namespace
+            .as_ref()
+            .map(|value| value.pid_namespace.clone())
+            .ok_or_else(|| {
+                CollectorError::new("pid_namespace", "root process has no PID namespace")
+            })?;
         let attached_capabilities = self.runtime_ref()?.attached_capabilities().clone();
-        let root_map_pid = request.root_namespace_pid;
+        self.register_trace_pid_namespace(request.trace_id, &request.root_observation)?;
         let runtime = self.runtime_mut()?;
-        runtime
-            .track_pid(root_map_pid, root_start_time, request.trace_id)
-            .map_err(loader_error)?;
+        if let Err(error) = runtime.track_pid(root_map_pid, root_start_time, request.trace_id) {
+            let _ = runtime.unregister_trace_pid_namespace(request.trace_id);
+            return Err(loader_error(error));
+        }
         if let Err(error) = self.register_initial_suppressed_fds(
             request.trace_id,
             root_start_time,
@@ -749,6 +728,11 @@ impl CollectorInstance for EbpfCollector {
             let _ = self
                 .runtime_mut()
                 .and_then(|runtime| runtime.untrack_pid(root_map_pid).map_err(loader_error));
+            let _ = self.runtime_mut().and_then(|runtime| {
+                runtime
+                    .unregister_trace_pid_namespace(request.trace_id)
+                    .map_err(loader_error)
+            });
             return Err(error);
         }
         self.bindings.set_trace_capabilities(
@@ -760,17 +744,8 @@ impl CollectorInstance for EbpfCollector {
                 .filter(|request| attached_capabilities.contains(&request.capability))
                 .map(|request| request.capability.clone()),
         );
-        self.bindings.set_trace_pid_namespace(
-            request.trace_id,
-            request
-                .root_observation
-                .namespace
-                .as_ref()
-                .map(|value| value.pid_namespace.clone())
-                .ok_or_else(|| {
-                    CollectorError::new("pid_namespace", "root process has no PID namespace")
-                })?,
-        );
+        self.bindings
+            .set_trace_pid_namespace(request.trace_id, root_pid_namespace);
         self.bindings.track_with_map_pid(
             request.trace_id,
             request.root_observation.clone(),
@@ -799,13 +774,13 @@ impl CollectorInstance for EbpfCollector {
             for tracked in self.bindings.remove_trace(trace_id) {
                 runtime.untrack_pid(tracked.map_pid).map_err(loader_error)?;
             }
+            runtime
+                .unregister_trace_pid_namespace(trace_id)
+                .map_err(loader_error)?;
         } else {
             let _ = self.bindings.remove_trace(trace_id);
         }
         self.file_tracker.remove_trace(trace_id);
-        if self.bindings.trace_count() == 0 {
-            self.active_pid_namespace = None;
-        }
         Ok(())
     }
 

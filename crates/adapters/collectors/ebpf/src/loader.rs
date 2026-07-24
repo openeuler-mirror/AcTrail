@@ -51,7 +51,6 @@ pub use ring_decode::{
 use tls::GoTlsAttachOutcome;
 pub use tls::{PendingTlsPayloadOp, TlsPayloadDiagnosticCounter, TlsPayloadDiagnostics};
 
-const ACTIVE_PID_NAMESPACE_KEY: u32 = 0;
 const PID_NAMESPACE_FIELD_SIZE: usize = std::mem::size_of::<u64>();
 const PID_NAMESPACE_VALUE_SIZE: usize = PID_NAMESPACE_FIELD_SIZE * 2;
 const FILE_BULK_READ_FAST_PROCESS_KEY_SIZE: usize =
@@ -112,7 +111,7 @@ pub struct EbpfRuntime {
     tracked_traces: MapHandle,
     process_start_times: MapHandle,
     fork_trace_bindings: MapHandle,
-    pid_namespace: MapHandle,
+    trace_pid_namespaces: MapHandle,
     suppressed_fds: MapHandle,
     suppressed_fd_index: MapHandle,
     suppressed_fd_index_slots_per_process: u32,
@@ -179,6 +178,11 @@ impl EbpfProgramLoader {
         resize_map(
             &mut open_object,
             "process_start_times",
+            self.config.tracked_process_max_entries,
+        )?;
+        resize_map(
+            &mut open_object,
+            "trace_pid_namespaces",
             self.config.tracked_process_max_entries,
         )?;
         resize_map(
@@ -323,7 +327,8 @@ impl EbpfRuntime {
             map_handle(&object, "process_start_times", "process_start_time_map")?;
         let fork_trace_bindings =
             map_handle(&object, "fork_trace_bindings", "fork_trace_bindings")?;
-        let pid_namespace = map_handle(&object, "pid_namespace", "pid_namespace_map")?;
+        let trace_pid_namespaces =
+            map_handle(&object, "trace_pid_namespaces", "trace_pid_namespaces_map")?;
         let suppressed_fds = map_handle(&object, "suppressed_fds", "suppressed_fds")?;
         let suppressed_fd_index =
             map_handle(&object, "suppressed_fd_index", "suppressed_fd_index")?;
@@ -363,7 +368,6 @@ impl EbpfRuntime {
             Rc::clone(&events),
             ring_buffer_max_bytes(config, payload),
         )?;
-        configure_collector_pid_namespace(&pid_namespace)?;
         file::configure_file_config_map(&object, config)?;
         suppressed_fd::configure_config_map(&object, config)?;
         tls::configure_payload_tls_map(&object, &payload.tls)?;
@@ -419,7 +423,7 @@ impl EbpfRuntime {
             tracked_traces,
             process_start_times,
             fork_trace_bindings,
-            pid_namespace,
+            trace_pid_namespaces,
             suppressed_fds,
             suppressed_fd_index,
             suppressed_fd_index_slots_per_process: config.suppressed_fd_index_slots_per_process,
@@ -502,9 +506,33 @@ impl EbpfRuntime {
             .map_err(|error| LoaderError::new("track_pid_start_time", error.to_string()))
     }
 
-    pub fn configure_pid_namespace_for_pid(&self, pid: u32) -> Result<(), LoaderError> {
+    pub fn register_trace_pid_namespace(
+        &self,
+        trace_id: TraceId,
+        pid: u32,
+    ) -> Result<(), LoaderError> {
         let namespace = read_pid_namespace_for_pid(pid)?;
-        write_pid_namespace_map(&self.pid_namespace, namespace, "trace_pid_namespace")
+        write_trace_pid_namespace(
+            &self.trace_pid_namespaces,
+            trace_id,
+            namespace,
+            "trace_pid_namespace",
+        )
+    }
+
+    pub fn unregister_trace_pid_namespace(&self, trace_id: TraceId) -> Result<(), LoaderError> {
+        let key = trace_id.get().to_ne_bytes();
+        if self
+            .trace_pid_namespaces
+            .lookup(&key, MapFlags::ANY)
+            .map_err(|error| LoaderError::new("trace_pid_namespace", error.to_string()))?
+            .is_none()
+        {
+            return Ok(());
+        }
+        self.trace_pid_namespaces
+            .delete(&key)
+            .map_err(|error| LoaderError::new("trace_pid_namespace", error.to_string()))
     }
 
     pub fn suppress_fd(
@@ -848,37 +876,28 @@ fn parse_file_bulk_read_fast_fd_key(raw: &[u8]) -> Option<FileBulkReadFastFdKey>
     })
 }
 
-fn configure_collector_pid_namespace(pid_namespace: &MapHandle) -> Result<(), LoaderError> {
-    let namespace = read_collector_pid_namespace()?;
-    write_pid_namespace_map(pid_namespace, namespace, "collector_pid_namespace")
-}
-
-fn read_collector_pid_namespace() -> Result<PidNamespace, LoaderError> {
-    let pid = std::process::id();
-    read_pid_namespace_for_pid(pid)
-}
-
 fn read_pid_namespace_for_pid(pid: u32) -> Result<PidNamespace, LoaderError> {
     let path = format!("/proc/{pid}/ns/pid");
     let metadata = std::fs::metadata(&path)
-        .map_err(|error| LoaderError::new("collector_pid_namespace", error.to_string()))?;
+        .map_err(|error| LoaderError::new("trace_pid_namespace", error.to_string()))?;
     Ok(PidNamespace {
         dev: metadata.dev(),
         ino: metadata.ino(),
     })
 }
 
-fn write_pid_namespace_map(
-    pid_namespace: &MapHandle,
+fn write_trace_pid_namespace(
+    trace_pid_namespaces: &MapHandle,
+    trace_id: TraceId,
     namespace: PidNamespace,
     stage: &'static str,
 ) -> Result<(), LoaderError> {
-    let key = ACTIVE_PID_NAMESPACE_KEY.to_ne_bytes();
+    let key = trace_id.get().to_ne_bytes();
     let mut value = [0_u8; PID_NAMESPACE_VALUE_SIZE];
     value[0..PID_NAMESPACE_FIELD_SIZE].copy_from_slice(&namespace.dev.to_ne_bytes());
     value[PID_NAMESPACE_FIELD_SIZE..PID_NAMESPACE_VALUE_SIZE]
         .copy_from_slice(&namespace.ino.to_ne_bytes());
-    pid_namespace
+    trace_pid_namespaces
         .update(&key, &value, MapFlags::ANY)
         .map_err(|error| LoaderError::new(stage, error.to_string()))
 }

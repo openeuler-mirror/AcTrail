@@ -127,7 +127,7 @@ fn decode_fork(
         bindings.track_with_map_pid(
             event.trace_id,
             child.clone(),
-            event.aux,
+            event_map_pid(event.aux, event.aux_host_pid),
             event.aux_generation,
         );
     }
@@ -213,7 +213,7 @@ fn decode_exec(
     bindings.track_with_map_pid(
         event.trace_id,
         observation.clone(),
-        event.pid,
+        event_map_pid(event.pid, event.host_pid),
         event.pid_generation,
     );
     let mut metadata = BTreeMap::new();
@@ -473,6 +473,14 @@ pub(crate) fn resolve_bound_event_observation(
     resolve_event_observation(trace_id, map_pid, 0, generation, bindings)
 }
 
+pub(crate) fn event_map_pid(namespace_pid: u32, host_pid: u32) -> u32 {
+    if host_pid != 0 {
+        host_pid
+    } else {
+        namespace_pid
+    }
+}
+
 pub(crate) fn resolve_event_observation(
     trace_id: TraceId,
     namespace_pid: u32,
@@ -480,8 +488,9 @@ pub(crate) fn resolve_event_observation(
     kernel_start_time: u64,
     bindings: &BindingStateMap,
 ) -> Result<ProcessObservation, String> {
+    let map_pid = event_map_pid(namespace_pid, host_pid);
     if let Some(observation) = bindings
-        .tracked_event_observation(trace_id, namespace_pid, kernel_start_time)
+        .tracked_event_observation(trace_id, map_pid, kernel_start_time)
         .cloned()
     {
         return Ok(observation);

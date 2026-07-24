@@ -29,15 +29,13 @@ pub(crate) fn lookup_pending_payload_op(
     let Some(tgid) = read_tgid(tid)? else {
         return Ok(None);
     };
-    let namespace_key = ((tgid as u64) << 32) | u64::from(tid);
-    let Some(host_key) = namespace_index
-        .lookup(&namespace_key.to_ne_bytes(), MapFlags::ANY)
+    let host_pid_tgid = ((tgid as u64) << 32) | u64::from(tid);
+    let host_key = namespace_index
+        .lookup(&host_pid_tgid.to_ne_bytes(), MapFlags::ANY)
         .map_err(|error| LoaderError::new("lookup_pending_tls_payload_op", error.to_string()))?
         .map(|value| read_u64_value(&value))
         .transpose()?
-    else {
-        return Ok(None);
-    };
+        .unwrap_or(host_pid_tgid);
     operations
         .lookup(&host_key.to_ne_bytes(), MapFlags::ANY)
         .map_err(|error| LoaderError::new("lookup_pending_tls_payload_op", error.to_string()))?
