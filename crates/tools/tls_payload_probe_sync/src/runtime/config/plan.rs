@@ -3,9 +3,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use tls_payload_sync::{
-    ENV_BINARY, ENV_EVENT_SOCKET, ENV_PLAN_BUNDLE, ENV_POINTS, ENV_PROVIDER, PlanLookupResponse,
-    RuntimePlanDescriptor, decode_runtime_plan, lookup_runtime_plan,
+    ENV_EVENT_SOCKET, ENV_PLAN_BUNDLE, PlanLookupResponse, RuntimePlanDescriptor,
+    decode_runtime_plan, lookup_runtime_plan,
 };
+use tls_probe_point_finder::BinaryIdentity;
 
 use crate::runtime::maps;
 
@@ -17,7 +18,9 @@ static PLAN_CACHE: OnceLock<Mutex<BTreeMap<PathBuf, Option<RuntimePlan>>>> = Onc
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::runtime) struct RuntimePlan {
     pub(in crate::runtime) target: PathBuf,
+    pub(in crate::runtime) target_identity: BinaryIdentity,
     pub(in crate::runtime) binary: PathBuf,
+    pub(in crate::runtime) binary_identity: BinaryIdentity,
     pub(in crate::runtime) provider: String,
     pub(in crate::runtime) points: Vec<HookPoint>,
 }
@@ -59,10 +62,6 @@ pub(in crate::runtime) fn prefetch_runtime_plan_for_binary(binary: &Path) -> Res
     store_cached_plan(binary, plan)
 }
 
-fn required_env(name: &str) -> Result<String, String> {
-    std::env::var(name).map_err(|_| format!("missing required runtime env {name}"))
-}
-
 fn cached_plan(binary: &Path) -> Result<Option<Option<RuntimePlan>>, String> {
     let cache = PLAN_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
     cache
@@ -86,27 +85,7 @@ fn resolve_current_runtime_plan(current_exe: &Path) -> Result<Option<RuntimePlan
             return Ok(Some(plan));
         }
     }
-    if let Some(plan) = legacy_runtime_plan(current_exe)? {
-        return Ok(Some(plan));
-    }
     lookup_daemon_plan_for_current_process(current_exe)
-}
-
-fn legacy_runtime_plan(current_exe: &Path) -> Result<Option<RuntimePlan>, String> {
-    let Some(binary) = std::env::var_os(ENV_BINARY) else {
-        return Ok(None);
-    };
-    let plan = RuntimePlan {
-        target: PathBuf::from(binary.clone()),
-        binary: PathBuf::from(binary),
-        provider: required_env(ENV_PROVIDER)?,
-        points: parse_points(&required_env(ENV_POINTS)?)?,
-    };
-    if plan_matches_current_process(&plan, current_exe) {
-        Ok(Some(plan))
-    } else {
-        Ok(None)
-    }
 }
 
 fn lookup_daemon_plan_for_current_process(
@@ -197,7 +176,9 @@ fn parse_bundle_plan(value: &str) -> Result<RuntimePlan, String> {
 fn descriptor_to_runtime_plan(plan: RuntimePlanDescriptor) -> Result<RuntimePlan, String> {
     Ok(RuntimePlan {
         target: plan.target,
+        target_identity: plan.target_identity,
         binary: plan.binary,
+        binary_identity: plan.binary_identity,
         provider: plan.provider,
         points: parse_points(&plan.points)?,
     })
@@ -217,6 +198,16 @@ fn plan_matches_current_process(plan: &RuntimePlan, current_exe: &Path) -> bool 
     if !same_binary(&plan.target, current_exe) {
         return false;
     }
+    if !identity_matches(current_exe, &plan.target_identity) {
+        return false;
+    }
+    if same_binary(&plan.binary, current_exe) {
+        if plan.binary_identity != plan.target_identity {
+            return false;
+        }
+    } else if !identity_matches(&plan.binary, &plan.binary_identity) {
+        return false;
+    }
     if !(same_binary(&plan.binary, current_exe) || mapped_probe_binary(&plan.binary)) {
         return false;
     }
@@ -232,12 +223,19 @@ fn plan_matches_probe_binary(plan: &RuntimePlan, binary: &Path) -> bool {
     if !same_binary(&plan.binary, binary) {
         return false;
     }
+    if !identity_matches(binary, &plan.binary_identity) {
+        return false;
+    }
     if plan.provider == "openssl" && !plan.requires_inline_hooks() {
         return true;
     }
     plan.points
         .iter()
         .all(|point| maps::runtime_address(&plan.binary, point.file_offset).is_ok())
+}
+
+fn identity_matches(path: &Path, expected: &BinaryIdentity) -> bool {
+    tls_probe_point_finder::elf_identity(path).is_ok_and(|actual| &actual == expected)
 }
 
 fn mapped_probe_binary(binary: &Path) -> bool {

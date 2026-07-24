@@ -7,28 +7,36 @@ use std::path::Path;
 
 mod args;
 mod binary;
+mod binary_identity;
 mod detect;
 mod elf;
 pub mod fast;
 mod pattern_cmd;
 mod plan;
-mod providers;
+mod probe_detector;
 mod reporter;
 
 use args::{Command, parse_args};
+pub use binary_identity::{
+    BinaryIdentity, BinaryIdentityError, BinaryIdentityRegion, BinaryIdentityResolver,
+    BinaryIdentityTypeCode,
+};
 pub use plan::{
     AttachPoint, CaptureStrategy, PayloadDirection, ProbeBinary, ProbePoint, ProbePointPlan,
     ProbeSource, TargetIdentity, TlsProvider,
 };
 
-pub const GO_TLS_WRITE_SYMBOL: &str = providers::go_tls::WRITE_SYMBOL;
-pub const GO_TLS_READ_SYMBOL: &str = providers::go_tls::READ_SYMBOL;
-pub const GO_RUNTIME_MEMMOVE_SYMBOL: &str = providers::go_tls::RUNTIME_MEMMOVE_SYMBOL;
+pub const GO_TLS_WRITE_SYMBOL: &str = probe_detector::detector::tls::go_tls::WRITE_SYMBOL;
+pub const GO_TLS_READ_SYMBOL: &str = probe_detector::detector::tls::go_tls::READ_SYMBOL;
+pub const GO_RUNTIME_MEMMOVE_SYMBOL: &str =
+    probe_detector::detector::tls::go_tls::RUNTIME_MEMMOVE_SYMBOL;
 
-pub fn elf_build_id(binary_path: &Path) -> ToolResult<Option<String>> {
-    Ok(elf::ElfImage::parse(binary_path)?
-        .build_id()
-        .map(ToString::to_string))
+pub fn elf_identity(binary_path: &Path) -> ToolResult<BinaryIdentity> {
+    Ok(elf::ElfImage::parse(binary_path)?.identity().clone())
+}
+
+pub fn elf_identity_from_bytes(data: &[u8]) -> ToolResult<BinaryIdentity> {
+    elf::ElfImage::identity_from_data(data)
 }
 
 pub fn resolve_go_pclntab_file_offsets(
@@ -36,7 +44,11 @@ pub fn resolve_go_pclntab_file_offsets(
     required_symbols: &[&str],
 ) -> ToolResult<BTreeMap<String, u64>> {
     let image = elf::ElfImage::parse(binary_path)?;
-    let symbols = providers::go_tls::resolve_pclntab_symbols(&image, required_symbols)?
+    let detector = probe_detector::detector::tls::go_tls::GoTlsProbeDetector::try_new(
+        probe_detector::detector::tls::go_tls::GoTlsProbeDetectorConfig::default(),
+    )?;
+    let symbols = detector
+        .resolve(&image, required_symbols)?
         .ok_or_else(|| ToolError::new("missing Go crypto/tls pclntab symbols"))?;
     required_symbols
         .iter()
@@ -97,6 +109,18 @@ impl Error for ToolError {}
 
 impl From<std::io::Error> for ToolError {
     fn from(error: std::io::Error) -> Self {
+        Self::new(error.to_string())
+    }
+}
+
+impl From<probe_detector::contract::detector::DetectorConfigError> for ToolError {
+    fn from(error: probe_detector::contract::detector::DetectorConfigError) -> Self {
+        Self::new(error.to_string())
+    }
+}
+
+impl From<BinaryIdentityError> for ToolError {
+    fn from(error: BinaryIdentityError) -> Self {
         Self::new(error.to_string())
     }
 }

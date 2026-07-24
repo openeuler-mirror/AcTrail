@@ -107,6 +107,9 @@ impl EbpfCollector {
     ) -> Result<(), CollectorError> {
         match event {
             KernelEvent::Observation(event) => {
+                if self.is_superseded_fork_event(&event) {
+                    return Ok(());
+                }
                 self.maybe_attach_go_tls_after_exec(&event)?;
                 let lifecycle_event = event.clone();
                 self.apply_file_lifecycle_before_decode(&lifecycle_event)?;
@@ -143,6 +146,15 @@ impl EbpfCollector {
             other => self.handle_control_event(other),
         }
         Ok(())
+    }
+
+    fn is_superseded_fork_event(&self, event: &KernelObservationEvent) -> bool {
+        event.kind == decode::PROC_EVENT_FORK
+            && event.aux_host_pid != 0
+            && self
+                .bindings
+                .by_host_pid(event.aux_host_pid)
+                .is_some_and(|binding| binding.trace_id != event.trace_id)
     }
 
     fn apply_file_lifecycle_before_decode(

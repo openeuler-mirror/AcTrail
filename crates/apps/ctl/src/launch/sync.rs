@@ -10,8 +10,8 @@ use model_core::ids::RequestId;
 use model_core::ids::TraceId;
 use tls_payload_sync::{
     EventFilter, LibcFamily, RedactionMode, RuntimeEnvConfig, RuntimeFlowControlConfig,
-    RuntimeLibraryPath, RuntimeLibrarySet, RuntimePlanDescriptor, audit_bind_now_env,
-    audit_env_value_for_libraries, launch_command_for_plan_descriptor,
+    RuntimeLibraryPath, RuntimeLibrarySet, RuntimePlanDescriptor, TargetRuntime,
+    audit_bind_now_env, audit_env_value_for_libraries, launch_command_for_plan_descriptor,
     preload_env_value_for_libraries, resolve_program_path, resolve_target_runtime,
     runtime_env_for_plan_descriptors, runtime_library_envs, runtime_library_set,
 };
@@ -25,11 +25,22 @@ use crate::transport::ControlClientPort;
 pub(super) struct SyncLaunch {
     pub(super) command: Vec<OsString>,
     plans: Vec<RuntimePlanDescriptor>,
-    runtime_libraries: RuntimeLibrarySet,
-    initial_runtime_family: LibcFamily,
+    runtime_libraries: Option<RuntimeLibrarySet>,
+    initial_runtime_family: Option<LibcFamily>,
     preload_libraries: Vec<PathBuf>,
     audit_libraries: Vec<PathBuf>,
+    direct_probe_plan: Option<RuntimePlanDescriptor>,
     java_agent_env_required: bool,
+}
+
+impl SyncLaunch {
+    pub(super) const fn requires_sync_runtime(&self) -> bool {
+        self.direct_probe_plan.is_none()
+    }
+
+    pub(super) fn direct_probe_plan(&self) -> Option<&RuntimePlanDescriptor> {
+        self.direct_probe_plan.as_ref()
+    }
 }
 
 pub(super) fn sync_launch(
@@ -72,6 +83,39 @@ pub(super) fn sync_launch(
             (raw_command, None)
         }
     };
+    let initial_runtime = initial_runtime(&command)?;
+    if initial_runtime.is_static() {
+        let direct_probe_plan = launch_plan
+            .as_ref()
+            .map(|plan| plan.descriptor.clone())
+            .ok_or_else(|| {
+                format!(
+                    "static ELF {} requires a resolved native TLS probe plan",
+                    initial_runtime.path.display()
+                )
+            })?;
+        timing.mark_detail(
+            "sync.initial_runtime",
+            format_args!(
+                "kind=static binary={} provider={}",
+                initial_runtime.path.display(),
+                direct_probe_plan.provider
+            ),
+        );
+        return Ok(SyncLaunch {
+            command,
+            plans: Vec::new(),
+            runtime_libraries: None,
+            initial_runtime_family: None,
+            preload_libraries: Vec::new(),
+            audit_libraries: Vec::new(),
+            direct_probe_plan: Some(direct_probe_plan),
+            java_agent_env_required: false,
+        });
+    }
+    let initial_runtime_family = initial_runtime
+        .libc
+        .ok_or_else(|| "dynamic TLS target has no libc family".to_string())?;
     let runtime_libraries = runtime_libraries(config)?;
     timing.mark_detail(
         "sync.runtime_libraries",
@@ -85,7 +129,6 @@ pub(super) fn sync_launch(
                 .unwrap_or_else(|| "none".to_string())
         ),
     );
-    let initial_runtime_family = initial_runtime_family(&command)?;
     timing.mark_detail(
         "sync.initial_runtime_family",
         format_args!("family={}", initial_runtime_family.as_str()),
@@ -130,10 +173,11 @@ pub(super) fn sync_launch(
     Ok(SyncLaunch {
         command,
         plans,
-        runtime_libraries,
-        initial_runtime_family,
+        runtime_libraries: Some(runtime_libraries),
+        initial_runtime_family: Some(initial_runtime_family),
         preload_libraries,
         audit_libraries,
+        direct_probe_plan: None,
         java_agent_env_required,
     })
 }
@@ -146,6 +190,9 @@ pub(super) fn sync_launch_envs(
     sync_event_fd: Option<&InheritableSuppressedFd>,
     timing: &mut LaunchTiming,
 ) -> Result<Vec<(OsString, OsString)>, String> {
+    if !launch.requires_sync_runtime() {
+        return Ok(Vec::new());
+    }
     let sync_event_fd = sync_event_fd
         .ok_or_else(|| "TLS sync launch requires an inherited event fd".to_string())?;
     timing.mark("sync_env.require_event_fd");
@@ -184,7 +231,14 @@ pub(super) fn sync_launch_envs(
         "sync_env.runtime_env_for_plans",
         format_args!("plan_count={} env_count={}", launch.plans.len(), envs.len()),
     );
-    envs.extend(runtime_library_envs(&launch.runtime_libraries));
+    let runtime_libraries = launch
+        .runtime_libraries
+        .as_ref()
+        .ok_or_else(|| "TLS sync launch has no runtime library set".to_string())?;
+    let initial_runtime_family = launch
+        .initial_runtime_family
+        .ok_or_else(|| "TLS sync launch has no runtime family".to_string())?;
+    envs.extend(runtime_library_envs(runtime_libraries));
     timing.mark_detail(
         "sync_env.runtime_library_envs",
         format_args!("env_count={}", envs.len()),
@@ -198,8 +252,8 @@ pub(super) fn sync_launch_envs(
         "sync_env.ld_preload",
         format_args!("env_count={}", envs.len()),
     );
-    let glibc_preload = vec![launch.runtime_libraries.glibc.clone()];
-    if launch.initial_runtime_family == LibcFamily::Glibc {
+    let glibc_preload = vec![runtime_libraries.glibc.clone()];
+    if initial_runtime_family == LibcFamily::Glibc {
         if let Some(env) =
             tls_payload_sync::runtime_dependency_library_path_env(&launch.preload_libraries)
                 .map_err(|error| error.to_string())?
@@ -356,13 +410,12 @@ fn runtime_libraries(config: &PayloadTlsConfig) -> Result<RuntimeLibrarySet, Str
     .map_err(|error| error.to_string())
 }
 
-fn initial_runtime_family(command: &[OsString]) -> Result<LibcFamily, String> {
+fn initial_runtime(command: &[OsString]) -> Result<TargetRuntime, String> {
     let Some(program) = command.first() else {
         return Err("launch requires a command after --".to_string());
     };
     let path = std::env::var_os("PATH");
     resolve_target_runtime(program, path.as_ref().map(|value| value.as_os_str()))
-        .map(|target| target.libc)
         .map_err(|error| format!("TLS sync runtime target detection failed: {error}"))
 }
 

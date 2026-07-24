@@ -255,21 +255,36 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 fn message_preview(body: &Value) -> Option<String> {
-    let mut parts = Vec::new();
     if let Some(messages) = body.get("messages").and_then(Value::as_array) {
-        for message in messages {
-            if !message_role_is_user(message) {
-                continue;
-            }
-            collect_text(message.get("content").unwrap_or(message), &mut parts);
+        if let Some(preview) = latest_user_message_preview(messages) {
+            return Some(preview);
         }
     }
-    if parts.is_empty() {
-        collect_text(body.get("input").unwrap_or(&Value::Null), &mut parts);
+    if let Some(input) = body.get("input").and_then(Value::as_array)
+        && let Some(preview) = latest_user_message_preview(input)
+    {
+        return Some(preview);
     }
+    let mut parts = Vec::new();
+    collect_text(body.get("input").unwrap_or(&Value::Null), &mut parts);
     if parts.is_empty() {
         collect_text(body.get("prompt").unwrap_or(&Value::Null), &mut parts);
     }
+    preview_from_parts(parts)
+}
+
+fn latest_user_message_preview(messages: &[Value]) -> Option<String> {
+    messages.iter().rev().find_map(|message| {
+        if !message_role_is_user(message) {
+            return None;
+        }
+        let mut parts = Vec::new();
+        collect_text(message.get("content").unwrap_or(message), &mut parts);
+        preview_from_parts(parts)
+    })
+}
+
+fn preview_from_parts(parts: Vec<String>) -> Option<String> {
     let joined = parts
         .into_iter()
         .map(|part| part.trim().to_string())

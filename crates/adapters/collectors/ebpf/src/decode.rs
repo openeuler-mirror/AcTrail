@@ -134,6 +134,7 @@ fn decode_fork(
 
     Ok(Some(RawCollectorEvent {
         envelope: RawEventEnvelope {
+            trace_id: Some(event.trace_id),
             observed_at: SystemTime::now(),
             process: child,
             collector: CollectorName::new("ebpf"),
@@ -231,6 +232,7 @@ fn decode_exec(
 
     Ok(Some(RawCollectorEvent {
         envelope: RawEventEnvelope {
+            trace_id: Some(event.trace_id),
             observed_at: SystemTime::now(),
             process: observation,
             collector: CollectorName::new("ebpf"),
@@ -263,6 +265,7 @@ fn decode_exit(
 
     Ok(Some(RawCollectorEvent {
         envelope: RawEventEnvelope {
+            trace_id: Some(event.trace_id),
             observed_at: SystemTime::now(),
             process: observation,
             collector: CollectorName::new("ebpf"),
@@ -302,6 +305,7 @@ fn decode_signal(
     }
     Ok(Some(RawCollectorEvent {
         envelope: RawEventEnvelope {
+            trace_id: Some(event.trace_id),
             observed_at: SystemTime::now(),
             process: observation,
             collector: CollectorName::new("ebpf"),
@@ -386,6 +390,7 @@ fn decode_net(
 
     Ok(Some(RawCollectorEvent {
         envelope: RawEventEnvelope {
+            trace_id: Some(event.trace_id),
             observed_at: SystemTime::now(),
             process: observation,
             collector: CollectorName::new("ebpf"),
@@ -525,7 +530,7 @@ mod tests {
     };
 
     #[test]
-    fn eager_fork_keeps_host_identity_out_of_the_namespace_binding_index() {
+    fn eager_fork_defers_tracking_until_namespace_identity_is_available() {
         let trace_id = TraceId::new(17);
         let parent = ProcessObservation::host(
             HostProcessCoordinates::new(4100, 0).with_start_boottime_ns(100),
@@ -603,8 +608,14 @@ mod tests {
             Some(42)
         );
         assert_eq!(
-            bindings.tracked_event_observation(trace_id, 42, 200),
+            bindings.tracked_event_observation(trace_id, 4200, 200),
             Some(&enriched)
+        );
+        assert!(
+            bindings
+                .tracked_event_observation(trace_id, 42, 200)
+                .is_none(),
+            "events with host identity must use the host-PID binding key"
         );
     }
 

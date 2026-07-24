@@ -5,6 +5,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::loader::LoaderError;
+use tls_probe_point_finder::{BinaryIdentity, BinaryIdentityTypeCode};
 
 use super::elf::ElfImage;
 
@@ -22,11 +23,13 @@ pub(super) fn resolve_executable_symbol_offsets(
 ) -> Result<BTreeMap<String, usize>, LoaderError> {
     let binary = fs::read(binary_path)
         .map_err(|error| LoaderError::new("payload_tls_binary_path", error.to_string()))?;
+    let target_identity = tls_probe_point_finder::elf_identity_from_bytes(&binary)
+        .map_err(|error| LoaderError::new("payload_tls_binary_path", error.to_string()))?;
     let elf = ElfImage::parse(&binary)?;
     let symbol_map = fs::read_to_string(symbol_map_path)
         .map_err(|error| LoaderError::new("payload_tls_pattern_path", error.to_string()))?;
     let symbols = ExecutableSymbolMap::parse(&symbol_map, spec.label)?;
-    symbols.validate(required_symbols, elf.build_id(), &spec)?;
+    symbols.validate(required_symbols, &target_identity, &spec)?;
 
     required_symbols
         .iter()
@@ -47,7 +50,7 @@ struct ExecutableSymbolMap {
     resolver: String,
     library: String,
     arch: String,
-    build_id: String,
+    identity: BinaryIdentity,
     symbols: BTreeMap<String, u64>,
 }
 
@@ -56,7 +59,8 @@ impl ExecutableSymbolMap {
         let mut resolver = None;
         let mut library = None;
         let mut arch = None;
-        let mut build_id = None;
+        let mut identity_type_code = None;
+        let mut identity = None;
         let mut symbols = BTreeMap::new();
         for (line_index, line) in raw.lines().enumerate() {
             let trimmed = line.trim();
@@ -75,7 +79,19 @@ impl ExecutableSymbolMap {
                 "resolver" => resolver = Some(value.to_string()),
                 "library" => library = Some(value.to_string()),
                 "arch" => arch = Some(value.to_string()),
-                "build_id" => build_id = Some(normalize_build_id(value, label)?),
+                "identity_type_code" => {
+                    let code = value.parse::<u16>().map_err(|error| {
+                        LoaderError::new(
+                            "payload_tls_pattern_path",
+                            format!("invalid {label} identity type code: {error}"),
+                        )
+                    })?;
+                    identity_type_code =
+                        Some(BinaryIdentityTypeCode::parse(code).map_err(|error| {
+                            LoaderError::new("payload_tls_pattern_path", error.to_string())
+                        })?);
+                }
+                "identity" => identity = Some(value.to_string()),
                 "symbol" => {
                     let (symbol, virtual_address) = parse_symbol(value, label)?;
                     if symbols.insert(symbol.clone(), virtual_address).is_some() {
@@ -109,12 +125,21 @@ impl ExecutableSymbolMap {
             arch: arch.ok_or_else(|| {
                 LoaderError::new("payload_tls_pattern_path", format!("missing {label} arch"))
             })?,
-            build_id: build_id.ok_or_else(|| {
-                LoaderError::new(
-                    "payload_tls_pattern_path",
-                    format!("missing {label} build_id"),
-                )
-            })?,
+            identity: BinaryIdentity::try_new(
+                identity_type_code.ok_or_else(|| {
+                    LoaderError::new(
+                        "payload_tls_pattern_path",
+                        format!("missing {label} identity_type_code"),
+                    )
+                })?,
+                identity.ok_or_else(|| {
+                    LoaderError::new(
+                        "payload_tls_pattern_path",
+                        format!("missing {label} identity"),
+                    )
+                })?,
+            )
+            .map_err(|error| LoaderError::new("payload_tls_pattern_path", error.to_string()))?,
             symbols,
         })
     }
@@ -122,7 +147,7 @@ impl ExecutableSymbolMap {
     fn validate(
         &self,
         required_symbols: &[&str],
-        target_build_id: Option<&str>,
+        target_identity: &BinaryIdentity,
         spec: &ExecutableSymbolMapSpec,
     ) -> Result<(), LoaderError> {
         if self.resolver != spec.resolver {
@@ -154,23 +179,18 @@ impl ExecutableSymbolMap {
                 ),
             ));
         }
-        match target_build_id {
-            Some(target) if target == self.build_id => {}
-            Some(target) => {
-                return Err(LoaderError::new(
-                    "payload_tls_pattern_path",
-                    format!(
-                        "{} symbol-map build_id {} does not match target build_id {}",
-                        spec.label, self.build_id, target
-                    ),
-                ));
-            }
-            None => {
-                return Err(LoaderError::new(
-                    "payload_tls_binary_path",
-                    "target executable has no GNU build-id note",
-                ));
-            }
+        if target_identity != &self.identity {
+            return Err(LoaderError::new(
+                "payload_tls_pattern_path",
+                format!(
+                    "{} symbol-map identity {}:{} does not match target identity {}:{}",
+                    spec.label,
+                    self.identity.identity_type_code.code(),
+                    self.identity.identity,
+                    target_identity.identity_type_code.code(),
+                    target_identity.identity
+                ),
+            ));
         }
         for symbol in required_symbols {
             if !self.symbols.contains_key(*symbol) {
@@ -215,28 +235,4 @@ fn parse_hex_u64(value: &str, label: &str) -> Result<u64, LoaderError> {
             format!("invalid {label} symbol address: {error}"),
         )
     })
-}
-
-fn normalize_build_id(value: &str, label: &str) -> Result<String, LoaderError> {
-    let normalized = value
-        .chars()
-        .filter(|character| !character.is_whitespace() && *character != ':')
-        .collect::<String>()
-        .to_ascii_lowercase();
-    if normalized.is_empty() || normalized.len() % 2 != 0 {
-        return Err(LoaderError::new(
-            "payload_tls_pattern_path",
-            format!("{label} build_id must contain complete hex bytes"),
-        ));
-    }
-    if !normalized
-        .chars()
-        .all(|character| character.is_ascii_hexdigit())
-    {
-        return Err(LoaderError::new(
-            "payload_tls_pattern_path",
-            format!("{label} build_id must be hexadecimal"),
-        ));
-    }
-    Ok(normalized)
 }

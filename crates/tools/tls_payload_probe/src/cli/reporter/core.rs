@@ -17,12 +17,13 @@ pub(crate) struct Reporter {
     http_sequence: usize,
     fragment_sequence: usize,
     sse_sequence: usize,
+    pub(super) websocket_sequence: usize,
     pub(super) llm_request_sequence: usize,
     pub(super) llm_delta_sequence: usize,
     pub(super) llm_message_sequence: usize,
     pub(super) style: Style,
     redaction: RedactionMode,
-    events: EventFilter,
+    pub(super) events: EventFilter,
 }
 
 impl Reporter {
@@ -32,6 +33,7 @@ impl Reporter {
             http_sequence: 0,
             fragment_sequence: 0,
             sse_sequence: 0,
+            websocket_sequence: 0,
             llm_request_sequence: 0,
             llm_delta_sequence: 0,
             llm_message_sequence: 0,

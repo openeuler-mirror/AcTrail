@@ -4,6 +4,8 @@
 mod boringssl;
 #[path = "tls/diagnostics.rs"]
 mod diagnostics;
+#[path = "tls/dynamic.rs"]
+mod dynamic;
 #[path = "tls/elf.rs"]
 mod elf;
 #[path = "tls/go/resolve.rs"]
@@ -47,6 +49,8 @@ use targets::{
 
 pub(super) use diagnostics::read_tls_payload_diagnostics;
 pub use diagnostics::{TlsPayloadDiagnosticCounter, TlsPayloadDiagnostics};
+pub use dynamic::DynamicTlsProbePlan;
+pub(super) use dynamic::attach_programs as attach_dynamic_tls_programs;
 pub(super) use go_dynamic::{GoTlsAttachOutcome, attach_programs as attach_go_tls_programs};
 pub use pending::PendingTlsPayloadOp;
 pub(super) use pending::lookup_pending_payload_op;
@@ -218,6 +222,14 @@ pub fn is_payload_tls_program(program_name: &str) -> bool {
 
 pub fn is_go_tls_program(program_name: &str) -> bool {
     program_name.starts_with("handle_go_tls_")
+}
+
+pub fn is_dynamic_tls_program(program_name: &str) -> bool {
+    is_go_tls_program(program_name)
+        || matches!(
+            program_name,
+            "handle_rustls_buffer_plaintext" | "handle_rustls_take_received_plaintext"
+        )
 }
 
 fn validate_disabled_executable_fields(config: &PayloadTlsConfig) -> Result<(), LoaderError> {

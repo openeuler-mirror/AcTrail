@@ -11,6 +11,7 @@ static __always_inline int finalize_fork_trace_binding(__u32 child_kernel_pid) {
     __u32 child_pid = 0;
     struct actrail_fork_trace_binding *binding =
         bpf_map_lookup_elem(&fork_trace_bindings, &child_kernel_pid);
+    __u64 *explicit_trace_id;
     int tracked_trace_updated;
     int process_generation_updated;
 
@@ -19,6 +20,11 @@ static __always_inline int finalize_fork_trace_binding(__u32 child_kernel_pid) {
     }
     child_pid = current_tgid();
     if (!child_pid) {
+        return 0;
+    }
+    explicit_trace_id = bpf_map_lookup_elem(&tracked_traces, &child_pid);
+    if (explicit_trace_id) {
+        bpf_map_delete_elem(&fork_trace_bindings, &child_kernel_pid);
         return 0;
     }
     /* Equal host and namespace PIDs still require promotion from the

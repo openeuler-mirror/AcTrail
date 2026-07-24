@@ -208,7 +208,7 @@ impl AttachPlan {
     pub fn should_load_program(&self, program_name: &str) -> Result<bool, LoaderError> {
         if tls::is_payload_tls_program(program_name) {
             return Ok(self.contains(&Capability::TlsPlaintextPayload)
-                || (self.dynamic_go_tls_enabled && tls::is_go_tls_program(program_name)));
+                || (self.dynamic_go_tls_enabled && tls::is_dynamic_tls_program(program_name)));
         }
         if capability_programs(program_name).is_none() {
             return Err(LoaderError::new(

@@ -1,10 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
 
 use crate::capture::{
     AssembledHttp, CaptureConfig, CaptureDirection, HttpBody, HttpBodyFragment, HttpDecodeConfig,
-    SseFrame, decoded_text_from_headers,
+    SseFrame, WebSocketMessage, decoded_text_from_headers,
 };
 use crate::{ToolError, ToolResult};
 
@@ -18,6 +18,7 @@ use super::outbound::{
 pub(crate) struct LlmProjector {
     routes: HashMap<LlmStreamKey, ParserKind>,
     http_bodies: HashMap<HttpStreamKey, Vec<u8>>,
+    websocket_rounds: HashSet<WebSocketRoundKey>,
     responses: ResponsesParser,
     chat_completions: ChatCompletionsParser,
     anthropic_messages: AnthropicMessagesParser,
@@ -30,6 +31,7 @@ impl LlmProjector {
         Self {
             routes: HashMap::new(),
             http_bodies: HashMap::new(),
+            websocket_rounds: HashSet::new(),
             responses: ResponsesParser::default(),
             chat_completions: ChatCompletionsParser::default(),
             anthropic_messages: AnthropicMessagesParser::default(),
@@ -113,12 +115,45 @@ impl LlmProjector {
         ))
     }
 
+    pub(crate) fn push_websocket_message(&mut self, message: &WebSocketMessage) -> Vec<LlmOutput> {
+        let Some(text) = message.text() else {
+            return Vec::new();
+        };
+        let Ok(value) = serde_json::from_str::<Value>(text) else {
+            return Vec::new();
+        };
+        if message.direction == CaptureDirection::Outbound {
+            let Some(request) = ResponsesRequestParser::parse_websocket(message, &value) else {
+                return Vec::new();
+            };
+            self.responses
+                .start_websocket_round(message.pid, message.stream_key);
+            self.websocket_rounds
+                .insert(WebSocketRoundKey::from_message(message));
+            return vec![request];
+        }
+        let round = WebSocketRoundKey::from_message(message);
+        if !message.path.ends_with("/responses") || !self.websocket_rounds.contains(&round) {
+            return Vec::new();
+        }
+        let output = if ResponsesParser::matches_websocket(&value) {
+            self.responses.push_websocket(message, &value)
+        } else {
+            Vec::new()
+        };
+        if is_websocket_terminal(&value) {
+            self.websocket_rounds.remove(&round);
+        }
+        output
+    }
+
     pub(crate) fn finish(&mut self) -> Vec<LlmOutput> {
         let mut output = self.responses.finish();
         output.extend(self.chat_completions.finish());
         output.extend(self.anthropic_messages.finish());
         self.routes.clear();
         self.http_bodies.clear();
+        self.websocket_rounds.clear();
         output
     }
 
@@ -203,6 +238,21 @@ struct HttpStreamKey {
     direction: CaptureDirection,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct WebSocketRoundKey {
+    pid: u32,
+    stream_key: u64,
+}
+
+impl WebSocketRoundKey {
+    fn from_message(message: &WebSocketMessage) -> Self {
+        Self {
+            pid: message.pid,
+            stream_key: message.stream_key,
+        }
+    }
+}
+
 impl HttpStreamKey {
     fn from_fragment(fragment: &HttpBodyFragment) -> Self {
         Self {
@@ -251,4 +301,14 @@ fn project_outbound_request(message: &AssembledHttp, value: &Value) -> Vec<LlmOu
         .or_else(|| AnthropicMessagesRequestParser::parse(message, value))
         .into_iter()
         .collect()
+}
+
+fn is_websocket_terminal(value: &Value) -> bool {
+    matches!(
+        value.get("type").and_then(Value::as_str),
+        Some("response.completed")
+            | Some("response.failed")
+            | Some("response.incomplete")
+            | Some("response.cancelled")
+    )
 }

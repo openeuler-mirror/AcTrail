@@ -636,6 +636,7 @@ mod tests {
             tags: BTreeSet::new(),
             launch_mode: true,
             initial_suppressed_fds: Vec::new(),
+            tls_probe_plan: None,
         })
     }
 

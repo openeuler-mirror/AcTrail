@@ -4,7 +4,7 @@ use clap::error::ErrorKind;
 
 use crate::capture::{
     CaptureEvent, HttpAssembler, HttpAssemblyOutput, ProbeSession, RingStatsCollector,
-    SseAssembler, SseFrameEvent,
+    SseAssembler, SseFrameEvent, WebSocketAssembler,
 };
 use crate::cli::args::{Command, try_parse_args};
 use crate::cli::output::{Output, write_error};
@@ -48,6 +48,7 @@ fn run_command(command: Command) -> ToolResult<()> {
             let mut assembler = HttpAssembler::new(&config);
             let mut sse_assembler = SseAssembler::new(&config);
             let mut llm_projector = LlmProjector::new(&config);
+            let mut websocket_assembler = WebSocketAssembler::new(&config);
             let mut reporter = Reporter::new(reporter_config);
             let mut ring_stats = reporter_config.ring_stats.then(RingStatsCollector::default);
             let result = ProbeSession::run(config, |event: CaptureEvent| {
@@ -62,6 +63,12 @@ fn run_command(command: Command) -> ToolResult<()> {
                         &mut llm_projector,
                         output,
                     )?;
+                }
+                for message in websocket_assembler.push(&event) {
+                    reporter.websocket_message(&message)?;
+                    for output in llm_projector.push_websocket_message(&message) {
+                        reporter.llm_output(&output)?;
+                    }
                 }
                 Ok(())
             })?;
@@ -79,6 +86,7 @@ fn run_command(command: Command) -> ToolResult<()> {
             for output in llm_projector.finish() {
                 reporter.llm_output(&output)?;
             }
+            websocket_assembler.finish();
             reporter.target_exit(result.status)?;
             if let Some(stats) = ring_stats {
                 RingStatsReporter::new().ring_stats(&stats.finish(result.ring_lost_stats))?;

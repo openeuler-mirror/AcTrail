@@ -42,6 +42,10 @@ impl Style {
         self.paint(ANSI_BOLD_MAGENTA, &format!("sse_frame #{sequence}"))
     }
 
+    pub(super) fn websocket_label(self, sequence: usize) -> String {
+        self.paint(ANSI_BOLD_MAGENTA, &format!("websocket_message #{sequence}"))
+    }
+
     pub(super) fn llm_delta_label(self, sequence: usize) -> String {
         self.paint(ANSI_BOLD_GREEN, &format!("llm_delta #{sequence}"))
     }

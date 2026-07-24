@@ -49,7 +49,9 @@ pub use ring_decode::{
     KernelTlsDirectCaptureEvent,
 };
 use tls::GoTlsAttachOutcome;
-pub use tls::{PendingTlsPayloadOp, TlsPayloadDiagnosticCounter, TlsPayloadDiagnostics};
+pub use tls::{
+    DynamicTlsProbePlan, PendingTlsPayloadOp, TlsPayloadDiagnosticCounter, TlsPayloadDiagnostics,
+};
 
 const PID_NAMESPACE_FIELD_SIZE: usize = std::mem::size_of::<u64>();
 const PID_NAMESPACE_VALUE_SIZE: usize = PID_NAMESPACE_FIELD_SIZE * 2;
@@ -778,6 +780,18 @@ impl EbpfRuntime {
             self.attached_programs.push(program_name);
         }
         Ok(true)
+    }
+
+    pub fn attach_dynamic_tls_plan(
+        &mut self,
+        plan: &DynamicTlsProbePlan,
+    ) -> Result<(), LoaderError> {
+        let links = tls::attach_dynamic_tls_programs(&mut self._object, plan)?;
+        for (link, program_name) in links {
+            self._links.push(link);
+            self.attached_programs.push(program_name);
+        }
+        Ok(())
     }
 }
 

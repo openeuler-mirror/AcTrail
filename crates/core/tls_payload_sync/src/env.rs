@@ -144,7 +144,9 @@ pub fn runtime_env_for_plans(
     for plan in plans {
         descriptors.push(RuntimePlanDescriptor {
             target: plan.target.binary.clone(),
+            target_identity: plan.target.identity.clone(),
             binary: plan.binary.path.clone(),
+            binary_identity: plan.binary.identity.clone(),
             provider: plan.provider.as_str().to_string(),
             points: encode_points(plan)?,
         });
@@ -191,11 +193,6 @@ pub fn runtime_env_for_plan_descriptors(
         pair(ENV_REDACTION, config.redaction.as_str()),
         pair(ENV_EVENTS, &config.events.encode()),
     ];
-    if let Some(plan) = plans.first() {
-        env.push(pair(ENV_BINARY, &plan.binary.display().to_string()));
-        env.push(pair(ENV_PROVIDER, &plan.provider));
-        env.push(pair(ENV_POINTS, &plan.points));
-    }
     env.push(pair(
         ENV_PLAN_BUNDLE,
         &runtime_plan_descriptor_bundle(plans),
@@ -255,8 +252,9 @@ mod tests {
     use std::path::PathBuf;
 
     use tls_probe_point_finder::{
-        AttachPoint, CaptureStrategy, PayloadDirection as FinderDirection, ProbeBinary, ProbePoint,
-        ProbePointPlan, ProbeSource, TargetIdentity, TlsProvider,
+        AttachPoint, BinaryIdentity, BinaryIdentityTypeCode, CaptureStrategy,
+        PayloadDirection as FinderDirection, ProbeBinary, ProbePoint, ProbePointPlan, ProbeSource,
+        TargetIdentity, TlsProvider,
     };
 
     use super::{
@@ -341,7 +339,10 @@ mod tests {
             target: TargetIdentity {
                 binary: PathBuf::from(path),
                 architecture: "x86_64".to_string(),
-                build_id: None,
+                identity: BinaryIdentity {
+                    identity_type_code: BinaryIdentityTypeCode::GnuBuildId,
+                    identity: "00".to_string(),
+                },
             },
             provider,
             source: ProbeSource::Executable,
@@ -349,7 +350,10 @@ mod tests {
             binary: ProbeBinary {
                 path: PathBuf::from(path),
                 architecture: "x86_64".to_string(),
-                build_id: None,
+                identity: BinaryIdentity {
+                    identity_type_code: BinaryIdentityTypeCode::GnuBuildId,
+                    identity: "00".to_string(),
+                },
             },
             points: vec![
                 point("write", FinderDirection::Outbound),

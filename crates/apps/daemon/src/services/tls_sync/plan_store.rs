@@ -4,12 +4,16 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+use tls_probe_point_finder::BinaryIdentity;
+use tls_probe_point_finder::fast::ProbeConsumer;
+
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct BinaryPlanKey {
     path: PathBuf,
     len: u64,
     modified: Option<(u64, u32)>,
-    build_id: Option<String>,
+    identity: BinaryIdentity,
+    consumer: ProbeConsumer,
 }
 
 #[derive(Clone, Debug)]
@@ -21,6 +25,8 @@ pub(super) enum BinaryPlanRecord {
 #[derive(Clone, Debug)]
 pub(super) struct BinaryPlanDescriptor {
     pub(super) binary: PathBuf,
+    pub(super) target_identity: BinaryIdentity,
+    pub(super) binary_identity: BinaryIdentity,
     pub(super) provider: String,
     pub(super) source: String,
     pub(super) points: String,
@@ -37,10 +43,11 @@ pub(super) struct InMemoryBinaryPlanStore {
 }
 
 impl BinaryPlanKey {
-    pub(super) fn for_path(path: &Path) -> std::io::Result<Self> {
+    pub(super) fn for_path(path: &Path, consumer: ProbeConsumer) -> Result<Self, String> {
         let path = cache_path(path);
-        let metadata = std::fs::metadata(&path)?;
-        let build_id = tls_probe_point_finder::elf_build_id(&path).ok().flatten();
+        let metadata = std::fs::metadata(&path).map_err(|error| error.to_string())?;
+        let identity =
+            tls_probe_point_finder::elf_identity(&path).map_err(|error| error.to_string())?;
         Ok(Self {
             path,
             len: metadata.len(),
@@ -49,7 +56,8 @@ impl BinaryPlanKey {
                 .ok()
                 .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
                 .map(|duration| (duration.as_secs(), duration.subsec_nanos())),
-            build_id,
+            identity,
+            consumer,
         })
     }
 

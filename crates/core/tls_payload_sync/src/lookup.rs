@@ -9,7 +9,7 @@ use crate::plan::{
 };
 use crate::{SyncError, SyncResult};
 
-const LOOKUP_VERSION: &str = "v1";
+const LOOKUP_VERSION: &str = "v2";
 const FIELD_SEPARATOR: char = '\t';
 const REQUEST_OPCODE: &str = "plan.lookup";
 const FOUND_OPCODE: &str = "plan.found";

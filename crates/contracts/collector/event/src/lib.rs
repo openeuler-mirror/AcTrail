@@ -3,11 +3,12 @@
 use std::collections::BTreeMap;
 use std::time::SystemTime;
 
-use model_core::ids::CollectorName;
+use model_core::ids::{CollectorName, TraceId};
 use model_core::process::ProcessObservation;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RawEventEnvelope {
+    pub trace_id: Option<TraceId>,
     pub observed_at: SystemTime,
     pub process: ProcessObservation,
     pub collector: CollectorName,

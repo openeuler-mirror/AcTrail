@@ -106,6 +106,8 @@ fn tls_symbol(raw: u32) -> &'static str {
         TLS_SYMBOL_NSPR_PR_SEND => "PR_Send",
         TLS_SYMBOL_NSPR_PR_READ => "PR_Read",
         TLS_SYMBOL_NSPR_PR_RECV => "PR_Recv",
+        15 => "rustls_buffer_plaintext",
+        16 => "rustls_take_received_plaintext",
         _ => "unknown",
     }
 }

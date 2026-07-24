@@ -62,10 +62,7 @@ pub(crate) fn print_fast_probe_plan(plan: &ProbePointPlan) -> ToolResult<()> {
     reporter.block("target", |reporter| {
         reporter.field("binary", plan.target.binary.display());
         reporter.field("architecture", &plan.target.architecture);
-        reporter.field(
-            "build_id",
-            plan.target.build_id.as_deref().unwrap_or("not_found"),
-        );
+        reporter.binary_identity(&plan.target.identity);
     });
     reporter.block("probe_plan", |reporter| {
         reporter.field("provider", plan.provider.as_str());
@@ -74,10 +71,7 @@ pub(crate) fn print_fast_probe_plan(plan: &ProbePointPlan) -> ToolResult<()> {
         reporter.block("binary", |reporter| {
             reporter.field("path", plan.binary.path.display());
             reporter.field("architecture", &plan.binary.architecture);
-            reporter.field(
-                "build_id",
-                plan.binary.build_id.as_deref().unwrap_or("not_found"),
-            );
+            reporter.binary_identity(&plan.binary.identity);
         });
         reporter.block("points", |reporter| {
             for point in &plan.points {
@@ -114,7 +108,7 @@ impl Reporter {
         self.block("target", |reporter| {
             reporter.field("binary", &target.binary);
             reporter.field("architecture", &target.architecture);
-            reporter.field("build_id", &target.build_id);
+            reporter.binary_identity(&target.identity);
         });
     }
 
@@ -130,8 +124,8 @@ impl Reporter {
                     if let Some(architecture) = &library.architecture {
                         reporter.field("architecture", architecture);
                     }
-                    if let Some(build_id) = &library.build_id {
-                        reporter.field("build_id", build_id);
+                    if let Some(identity) = &library.identity {
+                        reporter.binary_identity(identity);
                     }
                 });
             }
@@ -194,7 +188,7 @@ impl Reporter {
             }
             match &candidate.status {
                 CandidateStatus::Matched => reporter.field("status", "matched"),
-                CandidateStatus::Available => reporter.field("status", "available"),
+                CandidateStatus::Ambiguous => reporter.field("status", "ambiguous"),
                 CandidateStatus::Failed { error } => {
                     reporter.field("status", "failed");
                     reporter.field("error", error);
@@ -258,7 +252,7 @@ impl Reporter {
             reporter.field("resolver", &symbol_map.resolver);
             reporter.field("library", &symbol_map.library);
             reporter.field("arch", &symbol_map.arch);
-            reporter.field("build_id", &symbol_map.build_id);
+            reporter.binary_identity(&symbol_map.identity);
             if !symbol_map.symbols.is_empty() {
                 reporter.block("symbols", |reporter| {
                     for (symbol, address) in &symbol_map.symbols {
@@ -267,6 +261,11 @@ impl Reporter {
                 });
             }
         });
+    }
+
+    fn binary_identity(&mut self, identity: &crate::BinaryIdentity) {
+        self.field("identity_type_code", identity.identity_type_code.code());
+        self.field("identity", &identity.identity);
     }
 
     fn map_status(&mut self, label: &str, status: &MapStatusReport) {

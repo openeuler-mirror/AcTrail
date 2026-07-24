@@ -81,6 +81,16 @@ impl BpfPayloadRuntime {
         plan: &ProbePointPlan,
         target_pid: u32,
     ) -> ToolResult<Self> {
+        let actual_identity = tls_probe_point_finder::elf_identity(&plan.binary.path)?;
+        if actual_identity != plan.binary.identity {
+            return Err(ToolError::new(format!(
+                "probe binary identity changed before attach: expected {}:{} actual {}:{}",
+                plan.binary.identity.identity_type_code.code(),
+                plan.binary.identity.identity,
+                actual_identity.identity_type_code.code(),
+                actual_identity.identity,
+            )));
+        }
         let object_bytes = include_bytes!(env!("TLS_PAYLOAD_PROBE_BPF_OBJECT"));
         let mut builder = ObjectBuilder::default();
         let mut open_object = builder

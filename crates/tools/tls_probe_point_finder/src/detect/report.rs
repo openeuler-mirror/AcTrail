@@ -1,5 +1,6 @@
 //! Detection report data returned by provider resolution.
 
+use crate::BinaryIdentity;
 use crate::elf::ElfImage;
 
 pub(crate) struct DetectReport {
@@ -24,7 +25,11 @@ impl DetectReport {
                     "{}/{}: {}",
                     candidate.source, candidate.provider, error
                 )),
-                CandidateStatus::Matched | CandidateStatus::Available => None,
+                CandidateStatus::Ambiguous => Some(format!(
+                    "{}/{}: ambiguous detector match",
+                    candidate.source, candidate.provider
+                )),
+                CandidateStatus::Matched => None,
             })
             .collect::<Vec<_>>();
         if failures.is_empty() {
@@ -38,7 +43,7 @@ impl DetectReport {
 pub(crate) struct TargetReport {
     pub(crate) binary: String,
     pub(crate) architecture: String,
-    pub(crate) build_id: String,
+    pub(crate) identity: BinaryIdentity,
 }
 
 impl TargetReport {
@@ -46,7 +51,7 @@ impl TargetReport {
         Self {
             binary: image.path().display().to_string(),
             architecture: image.arch().as_str().to_string(),
-            build_id: image.build_id().unwrap_or("not_found").to_string(),
+            identity: image.identity().clone(),
         }
     }
 }
@@ -102,7 +107,7 @@ pub(crate) struct LibraryReport {
     pub(crate) confidence: String,
     pub(crate) note: Option<String>,
     pub(crate) architecture: Option<String>,
-    pub(crate) build_id: Option<String>,
+    pub(crate) identity: Option<BinaryIdentity>,
 }
 
 pub(crate) struct ExportedSymbolReport {
@@ -122,15 +127,6 @@ pub(crate) struct ExportedSymbolEntry {
 pub(crate) struct MapStatusReport {
     pub(crate) status: String,
     pub(crate) fields: Vec<(String, String)>,
-}
-
-impl MapStatusReport {
-    pub(crate) fn missing(status: &str, missing: &[String]) -> Self {
-        Self {
-            status: status.to_string(),
-            fields: vec![("missing".to_string(), missing.join(","))],
-        }
-    }
 }
 
 pub(crate) struct DemangledSymbolReport {
@@ -182,12 +178,12 @@ pub(crate) struct SymbolMapReport {
     pub(crate) resolver: String,
     pub(crate) library: String,
     pub(crate) arch: String,
-    pub(crate) build_id: String,
+    pub(crate) identity: BinaryIdentity,
     pub(crate) symbols: Vec<(String, String)>,
 }
 
 pub(crate) enum CandidateStatus {
     Matched,
-    Available,
+    Ambiguous,
     Failed { error: String },
 }

@@ -20,6 +20,7 @@ pub(crate) enum ReportEvent {
     Payload,
     Http,
     Sse,
+    Websocket,
     Llm,
     Target,
 }
@@ -29,6 +30,7 @@ pub(crate) struct EventFilter {
     payload: bool,
     http: bool,
     sse: bool,
+    websocket: bool,
     llm: bool,
     target: bool,
 }
@@ -45,6 +47,7 @@ impl EventFilter {
                 ReportEvent::Payload => filter.payload = true,
                 ReportEvent::Http => filter.http = true,
                 ReportEvent::Sse => filter.sse = true,
+                ReportEvent::Websocket => filter.websocket = true,
                 ReportEvent::Llm => filter.llm = true,
                 ReportEvent::Target => filter.target = true,
             }
@@ -68,6 +71,10 @@ impl EventFilter {
         self.llm
     }
 
+    pub(crate) fn websocket(self) -> bool {
+        self.websocket
+    }
+
     pub(crate) fn target(self) -> bool {
         self.target
     }
@@ -77,6 +84,7 @@ impl EventFilter {
             payload: true,
             http: true,
             sse: true,
+            websocket: true,
             llm: true,
             target: true,
         }
@@ -87,6 +95,7 @@ impl EventFilter {
             payload: false,
             http: false,
             sse: false,
+            websocket: false,
             llm: false,
             target: false,
         }

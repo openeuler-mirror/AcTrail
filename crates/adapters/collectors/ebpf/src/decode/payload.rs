@@ -40,6 +40,8 @@ const TLS_PAYLOAD_COMPLETION_FAILED: u32 = 2;
 pub struct TlsPayloadCompletion {
     pub pid: u32,
     pub tid: u32,
+    pub host_pid: u32,
+    pub host_tid: u32,
     pub trace_id: TraceId,
     pub observed_ktime_ns: u64,
     pub operation_id: u64,
@@ -57,6 +59,8 @@ pub struct TlsPayloadCompletion {
 pub struct TlsPayloadCaptureRequest {
     pub pid: u32,
     pub tid: u32,
+    pub host_pid: u32,
+    pub host_tid: u32,
     pub trace_id: TraceId,
     pub operation_id: u64,
     pub stream_key: u64,
@@ -72,6 +76,8 @@ pub struct TlsPayloadCaptureRequest {
 pub struct TlsPayloadDirectCapture {
     pub pid: u32,
     pub tid: u32,
+    pub host_pid: u32,
+    pub host_tid: u32,
     pub trace_id: TraceId,
     pub operation_id: u64,
     pub stream_key: u64,
@@ -105,6 +111,8 @@ pub struct TlsDiagnosticEvent {
 pub struct SocketPayloadCompletion {
     pub pid: u32,
     pub tid: u32,
+    pub host_pid: u32,
+    pub host_tid: u32,
     pub trace_id: TraceId,
     pub sequence: u64,
     pub direction: u32,
@@ -121,8 +129,13 @@ pub fn decode_stdio_payload(
     event: KernelStdioPayloadEvent,
     bindings: &BindingStateMap,
 ) -> Result<RawPayloadSegment, DecodeError> {
-    let identity =
-        resolve_payload_identity(event.trace_id, event.pid, event.pid_generation, bindings)?;
+    let identity = resolve_payload_identity(
+        event.trace_id,
+        event.pid,
+        event.host_pid,
+        event.pid_generation,
+        bindings,
+    )?;
     let stream = stdio_stream(event.stream)?;
 
     Ok(RawPayloadSegment {
@@ -153,8 +166,13 @@ pub fn decode_socket_payload(
     event: KernelSocketPayloadEvent,
     bindings: &BindingStateMap,
 ) -> Result<RawPayloadSegment, DecodeError> {
-    let identity =
-        resolve_payload_identity(event.trace_id, event.pid, event.pid_generation, bindings)?;
+    let identity = resolve_payload_identity(
+        event.trace_id,
+        event.pid,
+        event.host_pid,
+        event.pid_generation,
+        bindings,
+    )?;
 
     Ok(RawPayloadSegment {
         trace_id: event.trace_id,
@@ -189,6 +207,8 @@ pub fn decode_socket_payload_completion(
     SocketPayloadCompletion {
         pid: event.pid,
         tid: event.tid,
+        host_pid: event.host_pid,
+        host_tid: event.host_tid,
         trace_id: event.trace_id,
         sequence: event.sequence,
         direction: event.direction,
@@ -206,6 +226,8 @@ pub fn decode_tls_capture_request(event: KernelTlsCaptureRequestEvent) -> TlsPay
     TlsPayloadCaptureRequest {
         pid: event.pid,
         tid: event.tid,
+        host_pid: event.host_pid,
+        host_tid: event.host_tid,
         trace_id: event.trace_id,
         operation_id: event.operation_id,
         stream_key: event.stream_key,
@@ -222,6 +244,8 @@ pub fn decode_tls_completion(event: KernelTlsCompletionEvent) -> TlsPayloadCompl
     TlsPayloadCompletion {
         pid: event.pid,
         tid: event.tid,
+        host_pid: event.host_pid,
+        host_tid: event.host_tid,
         trace_id: event.trace_id,
         observed_ktime_ns: event.observed_ktime_ns,
         operation_id: event.operation_id,
@@ -240,6 +264,8 @@ pub fn decode_tls_direct_capture(event: KernelTlsDirectCaptureEvent) -> TlsPaylo
     TlsPayloadDirectCapture {
         pid: event.pid,
         tid: event.tid,
+        host_pid: event.host_pid,
+        host_tid: event.host_tid,
         trace_id: event.trace_id,
         operation_id: event.operation_id,
         stream_key: event.stream_key,
@@ -274,10 +300,11 @@ pub fn decode_tls_diagnostic(event: KernelTlsDiagnosticEvent) -> TlsDiagnosticEv
 fn resolve_payload_identity(
     trace_id: TraceId,
     pid: u32,
+    host_pid: u32,
     generation: u64,
     bindings: &BindingStateMap,
 ) -> Result<model_core::process::ProcessObservation, DecodeError> {
-    resolve_event_observation(trace_id, pid, 0, generation, bindings)
+    resolve_event_observation(trace_id, pid, host_pid, generation, bindings)
         .map_err(|error| DecodeError::new("payload_identity", error))
 }
 

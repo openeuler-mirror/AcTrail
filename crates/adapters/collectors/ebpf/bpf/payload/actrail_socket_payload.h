@@ -168,6 +168,7 @@ static __always_inline int emit_socket_payload_completion(
     __u32 tid,
     __u64 completed_size
 ) {
+    __u64 kernel_pid_tgid = current_kernel_pid_tgid();
     struct actrail_socket_payload_completion_event *event;
 
     event = actrail_event_reserve(sizeof(*event));
@@ -191,6 +192,8 @@ static __always_inline int emit_socket_payload_completion(
     event->flags = 0;
     event->syscall = op->syscall;
     event->fd_generation = op->fd_generation;
+    event->host_pid = kernel_pid_tgid >> 32;
+    event->host_tid = (__u32)kernel_pid_tgid;
 
     actrail_event_submit(ctx, event);
     return 0;
@@ -211,6 +214,7 @@ static __noinline int emit_socket_payload_direct_chunk(
     const struct actrail_socket_payload_chunk *chunk
 ) {
     struct actrail_socket_payload_event *event;
+    __u64 kernel_pid_tgid = current_kernel_pid_tgid();
     __u32 capture_size = chunk->capture_size & ACTRAIL_SOCKET_PAYLOAD_COPY_MAX_BYTES;
 
     if (!capture_size) {
@@ -237,6 +241,8 @@ static __noinline int emit_socket_payload_direct_chunk(
     event->syscall = op->syscall;
     event->fd_generation = op->fd_generation;
     event->pid_generation = op->pid_generation;
+    event->host_pid = kernel_pid_tgid >> 32;
+    event->host_tid = (__u32)kernel_pid_tgid;
     if (bpf_probe_read_user(
             event->bytes,
             capture_size,

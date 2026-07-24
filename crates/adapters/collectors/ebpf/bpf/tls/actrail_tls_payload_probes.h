@@ -104,6 +104,26 @@ int handle_rustls_write_vectored_exit(struct pt_regs *ctx) {
 }
 
 SEC("uprobe")
+int handle_rustls_buffer_plaintext(struct pt_regs *ctx) {
+    return emit_rustls_internal_payload(
+        ctx,
+        ACTRAIL_UPROBE_ARG1(ctx),
+        ACTRAIL_UPROBE_ARG2(ctx),
+        ACTRAIL_TLS_SYMBOL_RUSTLS_BUFFER_PLAINTEXT
+    );
+}
+
+SEC("uprobe")
+int handle_rustls_take_received_plaintext(struct pt_regs *ctx) {
+    return emit_rustls_internal_payload(
+        ctx,
+        ACTRAIL_UPROBE_ARG1(ctx),
+        ACTRAIL_UPROBE_ARG2(ctx),
+        ACTRAIL_TLS_SYMBOL_RUSTLS_TAKE_RECEIVED_PLAINTEXT
+    );
+}
+
+SEC("uprobe")
 int handle_go_tls_write_enter(struct pt_regs *ctx) {
     __u64 requested_size = positive_uprobe_isize(ACTRAIL_GO_UPROBE_ARG3(ctx));
     int stored = 0;

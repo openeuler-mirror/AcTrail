@@ -10,7 +10,7 @@ This document maps common operator questions to the AcTrail feature path and the
 | Did one agent silently launch another agent? | `actrailctl launch` plus process seccomp exec context, TLS/plaintext LLM evidence, and `agent.invocation` semantic action. | [Example 07](examples/07.xiaoo-claude-agent-invocation/README.md) |
 | What LLM request and response did a real agent exchange? | Full-monitor payload capture plus HTTP/SSE and `llm.request`/`llm.response` semantic assembly. | [Example 08](examples/08.full-monitor-validation/README.md) |
 | What LLM request and response did opencode exchange? | Bun/static-BoringSSL executable TLS payload capture plus proxy-aware HTTP semantics. | `python3 tests/agent-trace/run_case.py opencode-bun` |
-| What outbound LLM request did a Rust/rustls agent send? | `tls-sync` with a rustls probe plan from finder fast, symbols, or a build-id-checked pattern. | [Example 06](examples/06.xiaoo-tls-capture/README.md) |
+| What outbound LLM request did a Rust/rustls agent send? | `tls-sync` with a rustls probe plan from finder fast, symbols, or a BinaryIdentity-checked pattern. | [Example 06](examples/06.xiaoo-tls-capture/README.md) |
 | What outbound LLM request did a LangGraph Python agent send? | eBPF dynamic OpenSSL shared-library TLS payload capture around an OpenAI-compatible HTTPS call. | `python3 tests/agent-trace/run_case.py langgraph-openai` |
 | What HTTP request/response did a non-TLS local service exchange? | Socket plaintext payload with HTTP sniffing and HTTP/1.x application analyzer. | [Example 05](examples/05.http-payload-unified/README.md) |
 | Did file enforcement actually block the target? | Fanotify permission backend plus client-side stdout and Enforcement events. | [Example 04](examples/04.fanotify-enforcement-e2e/README.md) |
@@ -48,7 +48,7 @@ For manual real-agent validation, start with [Example 08](examples/08.full-monit
 | Dynamic OpenSSL | `payload_tls_source = shared-library`, `payload_tls_resolver = openssl-symbols`; use eBPF for Python `_ssl` because `libssl` is loaded after process startup. |
 | Node/OpenSSL executable | `tls-sync` auto plan via `payload_tls_source = auto`, `payload_tls_resolver = auto`, and `payload_tls_library = auto`. |
 | Bun/static-BoringSSL | `tls-sync` auto plan via finder fast; BoringSSL-specific static detection is an implementation detail, not an operator config value in current examples. |
-| Rust/rustls | `tls-sync` auto plan with finder fast resolving rustls plaintext points from symbols, debuginfo, or supported build-id-checked patterns. |
+| Rust/rustls | `tls-sync` auto plan with finder fast resolving rustls plaintext points from symbols, debuginfo, or supported BinaryIdentity-checked patterns. |
 | Go `crypto/tls` | `payload_tls_source = executable`, `payload_tls_resolver = go-pclntab`, `payload_tls_library = go`, `payload_tls_capture_backend = bpf-copy-seccomp-fallback`; captures `crypto/tls.(*Conn).Write` outbound and `crypto/tls.(*Conn).Read` inbound through the Go runtime copy path. |
 | Plain HTTP endpoint/proxy | `payload_socket_enabled = true`, `payload_socket_capture_backend = bpf-copy-seccomp-fallback`, plus HTTP/1.x application parsing. |
 

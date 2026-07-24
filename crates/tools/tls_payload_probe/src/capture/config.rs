@@ -6,6 +6,8 @@ use std::time::Duration;
 
 use tls_probe_point_finder::fast::{ArchFilter, ProviderFilter, SourceFilter};
 
+use super::WebSocketConfig;
+
 pub(crate) const DEFAULT_MAX_CAPTURE_BYTES: usize = 65_535;
 pub(crate) const ABI_MAX_CAPTURE_BYTES: usize = 65_535;
 pub(crate) const DEFAULT_RING_BUFFER_BYTES: u32 = 4_194_304;
@@ -20,6 +22,9 @@ pub(crate) const DEFAULT_ASSEMBLE_BUFFER_BYTES: usize = 4_194_304;
 pub(crate) const DEFAULT_DECODE_INPUT_BYTES: usize = 1_048_576;
 pub(crate) const DEFAULT_DECODE_OUTPUT_BYTES: usize = 4_194_304;
 pub(crate) const DEFAULT_DECODE_READER_BUFFER_BYTES: usize = 4_096;
+pub(crate) const DEFAULT_WEBSOCKET_FRAME_BUFFER_BYTES: usize = 4_194_304;
+pub(crate) const DEFAULT_WEBSOCKET_MESSAGE_BYTES: usize = 4_194_304;
+pub(crate) const DEFAULT_WEBSOCKET_DECODED_BYTES: usize = 4_194_304;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CaptureConfig {
@@ -35,6 +40,7 @@ pub(crate) struct CaptureConfig {
     pub(crate) decode_input_bytes: usize,
     pub(crate) decode_output_bytes: usize,
     pub(crate) decode_reader_buffer_bytes: usize,
+    pub(crate) websocket: WebSocketConfig,
     pub(crate) arch: ArchFilter,
     pub(crate) provider: ProviderFilter,
     pub(crate) source: SourceFilter,

@@ -292,6 +292,18 @@ impl TraceRuntime {
         })
     }
 
+    pub fn find_membership_in_trace(
+        &self,
+        trace_id: TraceId,
+        identity: &ProcessIdentity,
+    ) -> Option<ProcessMembership> {
+        self.traces
+            .get(&trace_id)?
+            .memberships
+            .get(identity)
+            .cloned()
+    }
+
     pub fn list_trace_records(&self) -> Vec<&TraceRecord> {
         self.traces.values().map(|entry| &entry.trace).collect()
     }

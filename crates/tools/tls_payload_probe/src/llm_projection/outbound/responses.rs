@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use crate::capture::{AssembledHttp, CaptureDirection};
+use crate::capture::{AssembledHttp, CaptureDirection, WebSocketMessage};
 
 use super::super::model::{LlmOutput, LlmRequestItem, LlmRequestSchema, request};
 use super::common::{
@@ -11,6 +11,8 @@ use super::common::{
 const PATH_RESPONSES: &str = "/responses";
 const LABEL_INPUT: &str = "input";
 const LABEL_INSTRUCTIONS: &str = "instructions";
+const EVENT_RESPONSE_CREATE: &str = "response.create";
+const JSON_FIELD_TYPE: &str = "type";
 
 #[derive(Debug, Default)]
 pub(in crate::llm_projection) struct ResponsesRequestParser;
@@ -25,6 +27,28 @@ impl ResponsesRequestParser {
         {
             return None;
         }
+        Self::project(message.pid, message.stream_key, message.direction, value)
+    }
+
+    pub(in crate::llm_projection) fn parse_websocket(
+        message: &WebSocketMessage,
+        value: &Value,
+    ) -> Option<LlmOutput> {
+        if message.direction != CaptureDirection::Outbound
+            || !message.path.ends_with(PATH_RESPONSES)
+            || value.get(JSON_FIELD_TYPE).and_then(Value::as_str) != Some(EVENT_RESPONSE_CREATE)
+        {
+            return None;
+        }
+        Self::project(message.pid, message.stream_key, message.direction, value)
+    }
+
+    fn project(
+        pid: u32,
+        stream_key: u64,
+        direction: CaptureDirection,
+        value: &Value,
+    ) -> Option<LlmOutput> {
         let mut items = Vec::new();
         if let Some(instructions) = string_field(value, JSON_FIELD_INSTRUCTIONS) {
             items.push(LlmRequestItem {
@@ -37,9 +61,9 @@ impl ResponsesRequestParser {
             return None;
         }
         Some(request(
-            message.pid,
-            message.stream_key,
-            message.direction,
+            pid,
+            stream_key,
+            direction,
             LlmRequestSchema::OpenAiResponses,
             model(value),
             stream(value),

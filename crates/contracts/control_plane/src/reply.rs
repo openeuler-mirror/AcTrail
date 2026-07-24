@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 use crate::command::DeploymentPermissionMode;
+use model_core::binary_identity::BinaryIdentity;
 use model_core::capability::Capability;
 use model_core::ids::{ProfileName, TraceId, TraceName};
 use model_core::trace::{TraceHealth, TraceLifecycleState};
@@ -48,7 +49,9 @@ pub struct LaunchPermissionsReply {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LaunchTlsPlanDescriptor {
     pub target: PathBuf,
+    pub target_identity: BinaryIdentity,
     pub binary: PathBuf,
+    pub binary_identity: BinaryIdentity,
     pub provider: String,
     pub source: String,
     pub points: String,

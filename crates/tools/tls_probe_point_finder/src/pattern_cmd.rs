@@ -54,7 +54,7 @@ pub(crate) fn run(args: PatternArgs) -> ToolResult<PatternReport> {
         target: TargetReport {
             binary: image.path().display().to_string(),
             architecture: image.arch().as_str().to_string(),
-            build_id: image.build_id().unwrap_or("not_found").to_string(),
+            identity: image.identity().clone(),
         },
         address: format!("0x{:x}", args.address),
         file_offset: format!("0x{file_offset:x}"),

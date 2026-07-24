@@ -8,6 +8,8 @@ use super::{read_u32, read_u64};
 pub struct KernelTlsCompletionEvent {
     pub pid: u32,
     pub tid: u32,
+    pub host_pid: u32,
+    pub host_tid: u32,
     pub direction: u32,
     pub trace_id: TraceId,
     pub observed_ktime_ns: u64,
@@ -25,6 +27,8 @@ pub struct KernelTlsCompletionEvent {
 pub struct KernelTlsCaptureRequestEvent {
     pub pid: u32,
     pub tid: u32,
+    pub host_pid: u32,
+    pub host_tid: u32,
     pub direction: u32,
     pub trace_id: TraceId,
     pub observed_ktime_ns: u64,
@@ -41,6 +45,8 @@ pub struct KernelTlsCaptureRequestEvent {
 pub struct KernelTlsDirectCaptureEvent {
     pub pid: u32,
     pub tid: u32,
+    pub host_pid: u32,
+    pub host_tid: u32,
     pub direction: u32,
     pub trace_id: TraceId,
     pub observed_ktime_ns: u64,
@@ -76,6 +82,8 @@ pub struct KernelTlsDiagnosticEvent {
 pub struct KernelStdioPayloadEvent {
     pub pid: u32,
     pub tid: u32,
+    pub host_pid: u32,
+    pub host_tid: u32,
     pub direction: u32,
     pub trace_id: TraceId,
     pub observed_ktime_ns: u64,
@@ -94,6 +102,8 @@ pub struct KernelStdioPayloadEvent {
 pub struct KernelSocketPayloadEvent {
     pub pid: u32,
     pub tid: u32,
+    pub host_pid: u32,
+    pub host_tid: u32,
     pub direction: u32,
     pub trace_id: TraceId,
     pub observed_ktime_ns: u64,
@@ -112,6 +122,8 @@ pub struct KernelSocketPayloadEvent {
 pub struct KernelSocketPayloadCompletionEvent {
     pub pid: u32,
     pub tid: u32,
+    pub host_pid: u32,
+    pub host_tid: u32,
     pub direction: u32,
     pub trace_id: TraceId,
     pub observed_ktime_ns: u64,
@@ -129,7 +141,7 @@ pub struct KernelSocketPayloadCompletionEvent {
 pub(super) fn decode_tls_capture_request_event(
     raw: &[u8],
 ) -> Result<KernelTlsCaptureRequestEvent, LoaderError> {
-    const TLS_CAPTURE_REQUEST_EVENT_SIZE: usize = 80;
+    const TLS_CAPTURE_REQUEST_EVENT_SIZE: usize = 88;
     if raw.len() != TLS_CAPTURE_REQUEST_EVENT_SIZE {
         return Err(LoaderError::new(
             "decode_tls_capture_request",
@@ -153,13 +165,15 @@ pub(super) fn decode_tls_capture_request_event(
         pid_generation: read_u64(raw, 64).expect("event length checked"),
         symbol: read_u32(raw, 72).expect("event length checked"),
         library: read_u32(raw, 76).expect("event length checked"),
+        host_pid: read_u32(raw, 80).expect("event length checked"),
+        host_tid: read_u32(raw, 84).expect("event length checked"),
     })
 }
 
 pub(super) fn decode_tls_completion_event(
     raw: &[u8],
 ) -> Result<KernelTlsCompletionEvent, LoaderError> {
-    const TLS_COMPLETION_EVENT_SIZE: usize = 80;
+    const TLS_COMPLETION_EVENT_SIZE: usize = 88;
     if raw.len() != TLS_COMPLETION_EVENT_SIZE {
         return Err(LoaderError::new(
             "decode_tls_completion",
@@ -184,13 +198,15 @@ pub(super) fn decode_tls_completion_event(
         library: read_u32(raw, 60).expect("event length checked"),
         pid_generation: read_u64(raw, 64).expect("event length checked"),
         buffer_ptr: read_u64(raw, 72).expect("event length checked"),
+        host_pid: read_u32(raw, 80).expect("event length checked"),
+        host_tid: read_u32(raw, 84).expect("event length checked"),
     })
 }
 
 pub(super) fn decode_tls_direct_capture_event(
     raw: &[u8],
 ) -> Result<KernelTlsDirectCaptureEvent, LoaderError> {
-    const TLS_DIRECT_CAPTURE_HEADER_SIZE: usize = 80;
+    const TLS_DIRECT_CAPTURE_HEADER_SIZE: usize = 88;
     const TLS_DIRECT_CAPTURE_ABI_MAX_BYTES: usize = 4_194_304;
     const TLS_DIRECT_CAPTURE_EVENT_SIZE: usize =
         TLS_DIRECT_CAPTURE_HEADER_SIZE + TLS_DIRECT_CAPTURE_ABI_MAX_BYTES;
@@ -225,6 +241,8 @@ pub(super) fn decode_tls_direct_capture_event(
         symbol: read_u32(raw, 60).expect("event length checked"),
         library: read_u32(raw, 64).expect("event length checked"),
         pid_generation: read_u64(raw, 72).expect("event length checked"),
+        host_pid: read_u32(raw, 80).expect("event length checked"),
+        host_tid: read_u32(raw, 84).expect("event length checked"),
         bytes: raw[TLS_DIRECT_CAPTURE_HEADER_SIZE
             ..TLS_DIRECT_CAPTURE_HEADER_SIZE + captured_size as usize]
             .to_vec(),
@@ -268,7 +286,7 @@ pub(super) fn decode_tls_diagnostic_event(
 pub(super) fn decode_stdio_payload_event(
     raw: &[u8],
 ) -> Result<KernelStdioPayloadEvent, LoaderError> {
-    const STDIO_EVENT_HEADER_SIZE: usize = 72;
+    const STDIO_EVENT_HEADER_SIZE: usize = 80;
     const STDIO_PAYLOAD_ABI_MAX_BYTES: usize = 4096;
     const STDIO_EVENT_SIZE: usize = STDIO_EVENT_HEADER_SIZE + STDIO_PAYLOAD_ABI_MAX_BYTES;
     if raw.len() != STDIO_EVENT_SIZE {
@@ -302,6 +320,8 @@ pub(super) fn decode_stdio_payload_event(
         fd: read_u32(raw, 56).expect("event length checked"),
         syscall: read_u32(raw, 60).expect("event length checked"),
         pid_generation: read_u64(raw, 64).expect("event length checked"),
+        host_pid: read_u32(raw, 72).expect("event length checked"),
+        host_tid: read_u32(raw, 76).expect("event length checked"),
         bytes: raw[STDIO_EVENT_HEADER_SIZE..STDIO_EVENT_HEADER_SIZE + captured_size as usize]
             .to_vec(),
     })
@@ -310,7 +330,7 @@ pub(super) fn decode_stdio_payload_event(
 pub(super) fn decode_socket_payload_event(
     raw: &[u8],
 ) -> Result<KernelSocketPayloadEvent, LoaderError> {
-    const SOCKET_EVENT_HEADER_SIZE: usize = 72;
+    const SOCKET_EVENT_HEADER_SIZE: usize = 80;
     const SOCKET_PAYLOAD_ABI_MAX_BYTES: usize = 4_096;
     const SOCKET_EVENT_SIZE: usize = SOCKET_EVENT_HEADER_SIZE + SOCKET_PAYLOAD_ABI_MAX_BYTES;
     if raw.len() != SOCKET_EVENT_SIZE {
@@ -344,6 +364,8 @@ pub(super) fn decode_socket_payload_event(
         syscall: read_u32(raw, 56).expect("event length checked"),
         fd_generation: read_u32(raw, 60).expect("event length checked"),
         pid_generation: read_u64(raw, 64).expect("event length checked"),
+        host_pid: read_u32(raw, 72).expect("event length checked"),
+        host_tid: read_u32(raw, 76).expect("event length checked"),
         bytes: raw[SOCKET_EVENT_HEADER_SIZE..SOCKET_EVENT_HEADER_SIZE + captured_size as usize]
             .to_vec(),
     })
@@ -352,7 +374,7 @@ pub(super) fn decode_socket_payload_event(
 pub(super) fn decode_socket_payload_completion_event(
     raw: &[u8],
 ) -> Result<KernelSocketPayloadCompletionEvent, LoaderError> {
-    const SOCKET_COMPLETION_EVENT_SIZE: usize = 88;
+    const SOCKET_COMPLETION_EVENT_SIZE: usize = 96;
     if raw.len() != SOCKET_COMPLETION_EVENT_SIZE {
         return Err(LoaderError::new(
             "decode_socket_payload_completion",
@@ -378,5 +400,7 @@ pub(super) fn decode_socket_payload_completion_event(
         flags: read_u32(raw, 76).expect("event length checked"),
         syscall: read_u32(raw, 80).expect("event length checked"),
         fd_generation: read_u32(raw, 84).expect("event length checked"),
+        host_pid: read_u32(raw, 88).expect("event length checked"),
+        host_tid: read_u32(raw, 92).expect("event length checked"),
     })
 }

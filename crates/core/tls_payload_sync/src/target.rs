@@ -36,8 +36,14 @@ impl LibcFamily {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TargetRuntime {
     pub path: PathBuf,
-    pub interpreter: PathBuf,
-    pub libc: LibcFamily,
+    pub interpreter: Option<PathBuf>,
+    pub libc: Option<LibcFamily>,
+}
+
+impl TargetRuntime {
+    pub const fn is_static(&self) -> bool {
+        self.interpreter.is_none()
+    }
 }
 
 pub fn resolve_target_runtime(
@@ -115,6 +121,13 @@ fn target_runtime_for_path_inner(
             path.display()
         ))
     })?;
+    let Some(interpreter) = interpreter else {
+        return Ok(TargetRuntime {
+            path: path.to_path_buf(),
+            interpreter: None,
+            libc: None,
+        });
+    };
     let interpreter = PathBuf::from(interpreter);
     let libc = libc_family_for_interpreter(&interpreter).ok_or_else(|| {
         SyncError::new(format!(
@@ -125,8 +138,8 @@ fn target_runtime_for_path_inner(
     })?;
     Ok(TargetRuntime {
         path: path.to_path_buf(),
-        interpreter,
-        libc,
+        interpreter: Some(interpreter),
+        libc: Some(libc),
     })
 }
 
@@ -204,7 +217,7 @@ fn env_shebang_target(tokens: Vec<&str>) -> SyncResult<&str> {
     Err(SyncError::new("/usr/bin/env shebang has no target command"))
 }
 
-fn elf_interpreter(data: &[u8]) -> Result<String, String> {
+fn elf_interpreter(data: &[u8]) -> Result<Option<String>, String> {
     validate_elf64(data)?;
     let phoff = read_u64(data, ELF64_E_PHOFF)?;
     let phentsize = usize::from(read_u16(data, ELF64_E_PHENTSIZE)?);
@@ -230,9 +243,10 @@ fn elf_interpreter(data: &[u8]) -> Result<String, String> {
         let raw = raw.strip_suffix(b"\0").unwrap_or(raw);
         return std::str::from_utf8(raw)
             .map(str::to_string)
+            .map(Some)
             .map_err(|error| format!("PT_INTERP is not UTF-8: {error}"));
     }
-    Err("ELF has no PT_INTERP".to_string())
+    Ok(None)
 }
 
 fn validate_elf64(data: &[u8]) -> Result<(), String> {

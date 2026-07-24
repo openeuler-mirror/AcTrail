@@ -137,6 +137,17 @@ fn openssl_interpose_already_covers(
 }
 
 fn install_plan_points(plan: &RuntimePlan) -> Result<bool, String> {
+    let actual_identity = tls_probe_point_finder::elf_identity(&plan.binary)
+        .map_err(|error| format!("resolve TLS hook binary identity: {error}"))?;
+    if actual_identity != plan.binary_identity {
+        return Err(format!(
+            "TLS hook binary identity changed before attach: expected {}:{} actual {}:{}",
+            plan.binary_identity.identity_type_code.code(),
+            plan.binary_identity.identity,
+            actual_identity.identity_type_code.code(),
+            actual_identity.identity,
+        ));
+    }
     let skip_ssl_read = plan.provider == "openssl"
         && plan
             .points

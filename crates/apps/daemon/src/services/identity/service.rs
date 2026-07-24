@@ -66,6 +66,16 @@ impl<'a> TraceIdentityResolver<'a> {
             .map(Self::resolved_trace_process)
     }
 
+    pub(crate) fn match_process_in_trace(
+        &self,
+        trace_id: TraceId,
+        process: ProcessIdentity,
+    ) -> Option<ResolvedTraceProcess> {
+        self.trace_runtime
+            .find_membership_in_trace(trace_id, &process)
+            .map(|membership| Self::resolved_trace_process((trace_id, membership)))
+    }
+
     pub(crate) fn read_and_match_pid(
         &self,
         identity_reader: &impl ProcessIdentityReader,
@@ -156,11 +166,9 @@ impl<'a> RuntimeProcessEventApplier<'a> {
                 metadata,
                 ..
             } if operation == "exit" => self.apply_exit(raw_event, process, metadata),
-            _ => Ok(
-                TraceIdentityResolver::new(self.trace_runtime, self.process_manager)
-                    .match_process(process)
-                    .map(ResolvedTraceProcess::into_ingest_match),
-            ),
+            _ => Ok(self
+                .match_process_for_event(raw_event, process)
+                .map(ResolvedTraceProcess::into_ingest_match)),
         }
     }
 
@@ -173,10 +181,15 @@ impl<'a> RuntimeProcessEventApplier<'a> {
         let Some(parent) = parent else {
             return Ok(None);
         };
-        let Some((trace_id, _)) = self.trace_runtime.find_membership(&parent) else {
+        let Some(matched_parent) = self.match_process_for_event(raw_event, parent) else {
             return Ok(None);
         };
-        self.insert_child(trace_id, parent, child, raw_event.envelope.observed_at)
+        self.insert_child(
+            matched_parent.trace_id,
+            parent,
+            child,
+            raw_event.envelope.observed_at,
+        )
     }
 
     fn apply_exec(
@@ -186,9 +199,7 @@ impl<'a> RuntimeProcessEventApplier<'a> {
         parent: Option<ProcessIdentity>,
         metadata: &BTreeMap<String, String>,
     ) -> Result<Option<IngestMatch>, ControlError> {
-        if let Some(matched) = TraceIdentityResolver::new(self.trace_runtime, self.process_manager)
-            .match_process(process)
-        {
+        if let Some(matched) = self.match_process_for_event(raw_event, process) {
             return Ok(Some(matched.into_ingest_match()));
         }
         let parent = parent.or_else(|| {
@@ -200,10 +211,15 @@ impl<'a> RuntimeProcessEventApplier<'a> {
         let Some(parent) = parent else {
             return Ok(None);
         };
-        let Some((trace_id, _)) = self.trace_runtime.find_membership(&parent) else {
+        let Some(matched_parent) = self.match_process_for_event(raw_event, parent) else {
             return Ok(None);
         };
-        self.insert_child(trace_id, parent, process, raw_event.envelope.observed_at)
+        self.insert_child(
+            matched_parent.trace_id,
+            parent,
+            process,
+            raw_event.envelope.observed_at,
+        )
     }
 
     fn apply_exit(
@@ -212,9 +228,10 @@ impl<'a> RuntimeProcessEventApplier<'a> {
         process: ProcessIdentity,
         metadata: &BTreeMap<String, String>,
     ) -> Result<Option<IngestMatch>, ControlError> {
-        let Some((trace_id, membership)) = self.trace_runtime.find_membership(&process) else {
+        let Some(matched) = self.match_process_for_event(raw_event, process) else {
             return Ok(None);
         };
+        let trace_id = matched.trace_id;
         self.trace_runtime
             .mark_process_exited(
                 trace_id,
@@ -227,10 +244,19 @@ impl<'a> RuntimeProcessEventApplier<'a> {
             )
             .map_err(|error| ControlError::new("mark_process_exited", format!("{error:?}")))?;
         self.process_manager.mark_exited(process);
-        Ok(Some(
-            TraceIdentityResolver::resolved_trace_process((trace_id, membership))
-                .into_ingest_match(),
-        ))
+        Ok(Some(matched.into_ingest_match()))
+    }
+
+    fn match_process_for_event(
+        &self,
+        raw_event: &RawCollectorEvent,
+        process: ProcessIdentity,
+    ) -> Option<ResolvedTraceProcess> {
+        let resolver = TraceIdentityResolver::new(self.trace_runtime, self.process_manager);
+        match raw_event.envelope.trace_id {
+            Some(trace_id) => resolver.match_process_in_trace(trace_id, process),
+            None => resolver.match_process(process),
+        }
     }
 
     fn insert_child(

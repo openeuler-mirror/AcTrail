@@ -221,6 +221,7 @@ fn raw_process_event(
     });
     RawCollectorEvent {
         envelope: RawEventEnvelope {
+            trace_id: None,
             observed_at: SystemTime::UNIX_EPOCH + Duration::from_secs(observed_second),
             process: process_observation,
             collector: CollectorName::new("test-process"),

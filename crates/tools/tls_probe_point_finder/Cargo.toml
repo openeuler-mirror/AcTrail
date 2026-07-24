@@ -11,4 +11,6 @@ path = "src/bin/tls-probe-point-finder.rs"
 [dependencies]
 anstyle = "1.0"
 clap = { version = "4.6", features = ["derive"] }
+model_core = { path = "../../core/model" }
 rustc-demangle = "0.1"
+sha2 = "0.10"

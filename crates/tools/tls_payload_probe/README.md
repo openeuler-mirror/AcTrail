@@ -1,6 +1,6 @@
 # tls_payload_probe
 
-`tls-payload-probe` launches one target command, resolves TLS payload probe points with `tls_probe_point_finder fast`, attaches pid-specific eBPF uprobes with libbpf, copies plaintext payload bytes inside BPF with `bpf_probe_read_user`, and streams binary payload events to the CLI. The CLI reports raw payload-event metadata, then assembles HTTP/1.x plaintext into body fragments and complete messages. Streaming `text/event-stream` bodies are reassembled into SSE frames, and recognized LLM text events are reported as a separate text layer.
+`tls-payload-probe` launches one target command, resolves TLS payload probe points with `tls_probe_point_finder fast`, attaches pid-specific eBPF uprobes with libbpf, copies plaintext payload bytes inside BPF with `bpf_probe_read_user`, and streams binary payload events to the CLI. The CLI reports raw payload-event metadata, then assembles HTTP/1.x plaintext into body fragments and complete messages. WebSocket upgrades are followed into complete logical messages, including client mask removal, fragmentation, control-frame interleaving, and negotiated `permessage-deflate`. Streaming `text/event-stream` bodies are reassembled into SSE frames, and recognized LLM text events are reported as a separate text layer.
 
 It does not use tracefs `uprobe_events`, ftrace `trace_pipe`, or user-space `process_vm_readv` payload reads.
 
@@ -40,21 +40,26 @@ These constants live in `src/capture/config.rs` and are surfaced by CLI flags:
 - `--decode-input-bytes`: `1048576`
 - `--decode-output-bytes`: `4194304`
 - `--decode-reader-buffer-bytes`: `4096`
+- `--websocket-frame-buffer-bytes`: `4194304`
+- `--websocket-message-bytes`: `4194304`
+- `--websocket-decoded-bytes`: `4194304`
 - `--redaction`: `redact`
 - `--events`: all event groups
 - `--ring-stats`: disabled
 
 `--library` and `--library-search-dir` are passed through to finder fast mode for OpenSSL shared-library resolution. Probe does not run the full finder report path.
 
-`--redaction none` prints assembled HTTP text without masking headers or bearer tokens. `--events llm` prints only LLM projection events. Multiple event groups can be selected with comma-separated values, for example `--events http,sse,llm`. Supported groups are `payload`, `http`, `sse`, `llm`, and `target`. Event filtering only controls printing; upstream payload capture, HTTP assembly, SSE framing, and LLM projection still run so downstream groups remain available.
+`--redaction none` prints assembled HTTP and WebSocket text without masking headers or bearer tokens. `--events llm` prints only LLM projection events. Multiple event groups can be selected with comma-separated values, for example `--events http,websocket,sse,llm`. Supported groups are `payload`, `http`, `websocket`, `sse`, `llm`, and `target`. Event filtering only controls printing; upstream payload capture and protocol assembly still run so downstream groups remain available.
 
 Raw `payload_event` lines do not print captured payload bytes. Incremental textual HTTP bodies are reported as `http_body_fragment` entries as soon as parseable body bytes arrive. Complete HTTP/1.x records are printed as `http_message` entries; if a body was already reported through fragments, the final message prints a streamed summary instead of repeating the body.
+
+After an HTTP `101 Switching Protocols`, WebSocket wire bytes are bound to the first valid bidirectional frame stream for that target process. Complete text and binary messages are reported as `websocket_message`; client masks are removed before reporting, and compressed messages are decoded only within the configured message and decoded-size limits. Protocol, limit, or decompression failures discard that WebSocket connection without terminating the target process.
 
 Chunked bodies are dechunked before display. `gzip`, `deflate`, `zstd`, and `br` bodies are decoded only when the compressed input is within `--decode-input-bytes` and decoded output stays within `--decode-output-bytes`; otherwise the message reports the explicit decode state instead of printing compressed bytes. If the target exits before an HTTP body is complete, the CLI prints a `partial` body state instead of treating capture as a probe failure.
 
 For `text/event-stream`, HTTP body fragments print only a summary. The SSE assembler queues each fragment by pid, stream, and direction, reports each complete frame as `sse_frame`, emits inbound streaming text chunks as `llm_delta`, and emits inbound accumulated response text as `llm_message`. Complete frame boundaries are reported immediately; any remaining parseable partial frame is reported during shutdown as best effort.
 
-LLM projection separates outbound request projection from inbound response projection. Outbound HTTP request bodies are projected as `llm_request` when the request matches Anthropic Messages, OpenAI Chat Completions, or OpenAI Responses schemas. Inbound OpenAI Responses streams match `response.output_text.delta` / `response.output_text.done`. Inbound Chat Completions streams match `choices[].delta.content`, `choices[].message.content`, `[DONE]`, or non-null `choices[].finish_reason`. Inbound Anthropic/Claude Messages responses match non-stream JSON objects with `type=message` and `content[].type=text`, and Anthropic Messages SSE streams match `content_block_delta`, `content_block_stop`, `message_delta`, and `message_stop`.
+LLM projection separates outbound request projection from inbound response projection. Outbound HTTP request bodies are projected as `llm_request` when the request matches Anthropic Messages, OpenAI Chat Completions, or OpenAI Responses schemas. OpenAI Responses WebSocket messages use the same schema parser: outbound `response.create` messages produce `llm_request`, while inbound `response.output_text.delta`, `response.output_text.done`, and `response.completed` messages produce `llm_delta` and the completed `llm_message`. Inbound Chat Completions streams match `choices[].delta.content`, `choices[].message.content`, `[DONE]`, or non-null `choices[].finish_reason`. Inbound Anthropic/Claude Messages responses match non-stream JSON objects with `type=message` and `content[].type=text`, and Anthropic Messages SSE streams match `content_block_delta`, `content_block_stop`, `message_delta`, and `message_stop`.
 
 For streamed non-SSE HTTP bodies, projection caches body fragments by pid, stream, and direction, then uses the same `--decode-input-bytes`, `--decode-output-bytes`, and `--decode-reader-buffer-bytes` limits as HTTP reporting before parsing JSON. Projection parsers live under `src/llm_projection/inbound/` and `src/llm_projection/outbound/`; `capture/assembly/sse.rs` only assembles SSE frames and exposes frame data to the projection layer.
 
