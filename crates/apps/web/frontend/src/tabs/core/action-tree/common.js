@@ -16,6 +16,6 @@ export function shortTime(value) {
   if (!value) {
     return '';
   }
-  const date = new Date(value);
+  const date = new Date(Number(value));
   return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString();
 }
