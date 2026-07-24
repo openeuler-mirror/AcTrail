@@ -130,7 +130,7 @@ function actionNode(action) {
         completeness: action.completeness,
         pid: action.process?.pid,
         evidence: action.evidence?.length,
-        started: action.start_time,
+        started: shortTime(action.start_time),
         duration: action.duration,
       }),
       attributes: previewAttributes(action.kind, action.attributes),
