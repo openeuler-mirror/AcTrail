@@ -5,12 +5,14 @@ use crate::component_observation::wire::{system_time_millis, trace_analysis_acti
 use crate::engine::WasmStoreState;
 
 const TRACE_ANALYSIS_IMPORT: &str = "actrail:plugin/trace-analysis-read@0.2.0";
+const TRACE_ACTIVITY_IMPORT: &str = "actrail:plugin/trace-activity-read@0.2.0";
 const TRACE_FILE_STATE_IMPORT: &str = "actrail:plugin/trace-file-state-read@0.2.0";
 
 pub(super) fn register_post_trace_interfaces(
     linker: &mut ComponentLinker<WasmStoreState>,
 ) -> Result<(), PluginRuntimeError> {
     register_trace_analysis(linker)?;
+    register_trace_activity(linker)?;
     register_file_state(linker)
 }
 
@@ -75,6 +77,279 @@ fn register_trace_analysis(
         )
         .map_err(link_error)?;
     Ok(())
+}
+
+fn register_trace_activity(
+    linker: &mut ComponentLinker<WasmStoreState>,
+) -> Result<(), PluginRuntimeError> {
+    let mut interface = linker.instance(TRACE_ACTIVITY_IMPORT).map_err(link_error)?;
+    interface
+        .func_new("context-get", |store, _ty, _params, results| {
+            let result = activity_host(store.data()).and_then(|(host, trace_id)| {
+                let context = host.activity_context(trace_id)?;
+                Ok(Val::Record(vec![
+                    (
+                        "root-container-id".to_string(),
+                        option_string(context.root_container_id),
+                    ),
+                    (
+                        "root-process-id".to_string(),
+                        Val::String(context.root_process_id),
+                    ),
+                    (
+                        "display-name".to_string(),
+                        Val::String(context.display_name),
+                    ),
+                    (
+                        "profile-name".to_string(),
+                        Val::String(context.profile_name),
+                    ),
+                ]))
+            });
+            set_result(results, result);
+            Ok(())
+        })
+        .map_err(link_error)?;
+    interface
+        .func_new("llm-exchanges-list", |mut store, _ty, params, results| {
+            let result = activity_page_request(store.data(), params, "llm-exchanges-list")
+                .and_then(|(host, trace_id, offset, limit)| {
+                    let page = host.llm_exchanges_page(trace_id, offset, limit)?;
+                    account_activity_rows(store.data_mut(), page.exchanges.len())?;
+                    Ok(Val::Record(vec![
+                        (
+                            "exchanges".to_string(),
+                            Val::List(
+                                page.exchanges
+                                    .iter()
+                                    .map(llm_exchange_val)
+                                    .collect::<Result<Vec<_>, _>>()?,
+                            ),
+                        ),
+                        (
+                            "next-offset".to_string(),
+                            option_u64(page.next_offset.and_then(|value| value.try_into().ok())),
+                        ),
+                    ]))
+                });
+            set_result(results, result);
+            Ok(())
+        })
+        .map_err(link_error)?;
+    interface
+        .func_new(
+            "command-executions-list",
+            |mut store, _ty, params, results| {
+                let result = activity_page_request(store.data(), params, "command-executions-list")
+                    .and_then(|(host, trace_id, offset, limit)| {
+                        let page = host.command_executions_page(trace_id, offset, limit)?;
+                        account_activity_rows(store.data_mut(), page.commands.len())?;
+                        Ok(Val::Record(vec![
+                            (
+                                "commands".to_string(),
+                                Val::List(
+                                    page.commands
+                                        .iter()
+                                        .map(command_execution_val)
+                                        .collect::<Result<Vec<_>, _>>()?,
+                                ),
+                            ),
+                            (
+                                "next-offset".to_string(),
+                                option_u64(
+                                    page.next_offset.and_then(|value| value.try_into().ok()),
+                                ),
+                            ),
+                        ]))
+                    });
+                set_result(results, result);
+                Ok(())
+            },
+        )
+        .map_err(link_error)?;
+    Ok(())
+}
+
+fn activity_host(
+    state: &WasmStoreState,
+) -> Result<
+    (
+        std::sync::Arc<dyn plugin_system::PostTraceHost>,
+        model_core::ids::TraceId,
+    ),
+    PluginRuntimeError,
+> {
+    require_grant(
+        state.host_grants().can_read_trace_activity(),
+        "trace-activity-read",
+    )?;
+    current_task(state)
+}
+
+fn activity_page_request(
+    state: &WasmStoreState,
+    params: &[Val],
+    operation: &str,
+) -> Result<PageRequest, PluginRuntimeError> {
+    let (host, trace_id) = activity_host(state)?;
+    let [offset, Val::U32(limit)] = params else {
+        return Err(invalid_params(operation));
+    };
+    let offset = option_u64_value(offset)?
+        .map(|value| usize::try_from(value).map_err(limit_overflow))
+        .transpose()?
+        .unwrap_or_default();
+    let limit = usize::try_from(*limit).map_err(limit_overflow)?;
+    let task = state
+        .post_trace_task()
+        .ok_or_else(|| missing_task(operation))?;
+    if limit == 0 || limit > task.limits.activity_page_max_count {
+        return Err(PluginRuntimeError::new(
+            "post_trace_host",
+            format!("{operation} page limit is zero or exceeds the grant"),
+        ));
+    }
+    Ok((host, trace_id, offset, limit))
+}
+
+fn account_activity_rows(
+    state: &mut WasmStoreState,
+    row_count: usize,
+) -> Result<(), PluginRuntimeError> {
+    let task = state.post_trace_task_mut().ok_or_else(|| {
+        PluginRuntimeError::new("post_trace_host", "post-trace task context is unavailable")
+    })?;
+    task.activity_rows_read = task
+        .activity_rows_read
+        .checked_add(row_count)
+        .ok_or_else(|| {
+            PluginRuntimeError::new("post_trace_host", "activity read counter overflow")
+        })?;
+    if task.activity_rows_read > task.limits.activity_total_max_count {
+        return Err(PluginRuntimeError::new(
+            "post_trace_host",
+            "trace activity total read limit exceeded",
+        ));
+    }
+    Ok(())
+}
+
+fn llm_exchange_val(exchange: &plugin_system::TraceLlmExchange) -> Result<Val, PluginRuntimeError> {
+    Ok(Val::Record(vec![
+        (
+            "call-action-id".to_string(),
+            Val::String(exchange.call_action_id.clone()),
+        ),
+        (
+            "request-action-id".to_string(),
+            Val::String(exchange.request_action_id.clone()),
+        ),
+        (
+            "response-action-id".to_string(),
+            option_string(exchange.response_action_id.clone()),
+        ),
+        (
+            "process-id".to_string(),
+            Val::String(exchange.process_id.clone()),
+        ),
+        ("model".to_string(), option_string(exchange.model.clone())),
+        (
+            "server-address".to_string(),
+            option_string(exchange.server_address.clone()),
+        ),
+        (
+            "url-path".to_string(),
+            option_string(exchange.url_path.clone()),
+        ),
+        (
+            "started-at".to_string(),
+            Val::U64(system_time_millis(exchange.started_at)?),
+        ),
+        (
+            "completed-at".to_string(),
+            option_time(exchange.completed_at)?,
+        ),
+        (
+            "request-body-bytes".to_string(),
+            Val::U64(exchange.request_body_bytes),
+        ),
+        (
+            "request-raw-bytes".to_string(),
+            option_u64(exchange.request_raw_bytes),
+        ),
+        (
+            "request-complete".to_string(),
+            Val::Bool(exchange.request_complete),
+        ),
+        (
+            "response-body-bytes".to_string(),
+            option_u64(exchange.response_body_bytes),
+        ),
+        (
+            "response-raw-bytes".to_string(),
+            option_u64(exchange.response_raw_bytes),
+        ),
+        (
+            "response-complete".to_string(),
+            Val::Bool(exchange.response_complete),
+        ),
+    ]))
+}
+
+fn command_execution_val(
+    command: &plugin_system::TraceCommandExecution,
+) -> Result<Val, PluginRuntimeError> {
+    Ok(Val::Record(vec![
+        (
+            "action-id".to_string(),
+            Val::String(command.action_id.clone()),
+        ),
+        (
+            "process-id".to_string(),
+            Val::String(command.process_id.clone()),
+        ),
+        (
+            "executable".to_string(),
+            option_string(command.executable.clone()),
+        ),
+        (
+            "command-line".to_string(),
+            option_string(command.command_line.clone()),
+        ),
+        (
+            "started-at".to_string(),
+            Val::U64(system_time_millis(command.started_at)?),
+        ),
+        ("ended-at".to_string(), option_time(command.ended_at)?),
+        (
+            "status".to_string(),
+            Val::String(command.status.as_str().to_string()),
+        ),
+        (
+            "exit-code".to_string(),
+            Val::Option(command.exit_code.map(Val::S32).map(Box::new)),
+        ),
+        (
+            "agent-action-id".to_string(),
+            option_string(command.agent_action_id.clone()),
+        ),
+        (
+            "parent-command-action-id".to_string(),
+            option_string(command.parent_command_action_id.clone()),
+        ),
+        (
+            "top-level-agent-child".to_string(),
+            Val::Bool(command.top_level_agent_child),
+        ),
+    ]))
+}
+
+fn option_string(value: Option<String>) -> Val {
+    Val::Option(value.map(Val::String).map(Box::new))
+}
+
+fn option_time(value: Option<std::time::SystemTime>) -> Result<Val, PluginRuntimeError> {
+    value.map(system_time_millis).transpose().map(option_u64)
 }
 
 fn register_file_state(

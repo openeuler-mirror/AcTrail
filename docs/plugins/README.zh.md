@@ -7,6 +7,7 @@
 | 文档 | 适用对象 | 内容 |
 | --- | --- | --- |
 | [插件操作手册](operator-manual.zh.md) | 运维和插件使用者 | 插件加载、卸载、列表、状态查看、manifest、插件配置和授权。 |
+| [请求/响应增长与长命令告警插件使用手册](activity-anomaly-manual.zh.md) | 安全运维和告警使用者 | 阈值配置、插件管理、真实 Agent 验证和告警查询。 |
 | [插件 ABI 文档索引](abi/README.zh.md) | 插件作者 | WASM core module、WIT component、观测消费者、控制决策和 LLM codec ABI。 |
 
 ## ABI 文档

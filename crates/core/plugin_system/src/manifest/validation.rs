@@ -375,6 +375,14 @@ impl PluginManifest {
                 "hostcall_limits.trace_analysis.action_total_max_count",
             ),
             (
+                self.hostcall_limits.trace_activity.page_max_count,
+                "hostcall_limits.trace_activity.page_max_count",
+            ),
+            (
+                self.hostcall_limits.trace_activity.total_max_count,
+                "hostcall_limits.trace_activity.total_max_count",
+            ),
+            (
                 self.hostcall_limits.trace_file_state.query_max_count,
                 "hostcall_limits.trace_file_state.query_max_count",
             ),

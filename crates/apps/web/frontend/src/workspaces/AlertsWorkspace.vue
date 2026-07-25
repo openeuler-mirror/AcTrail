@@ -68,6 +68,7 @@
               <span class="severity" :class="`severity-${alert.severity}`">{{ alert.severity }}</span>
             </span>
             <span class="alert-row-kind">{{ alert.kind }}</span>
+            <span v-if="alertSummary(alert)" class="alert-row-summary">{{ alertSummary(alert) }}</span>
             <span class="alert-row-footer">
               <span>trace-{{ alert.trace_id }}</span>
               <time>{{ formatTime(alert.created_at) }}</time>
@@ -100,7 +101,8 @@
             <div><dt>{{ t('alerts.definition') }}</dt><dd>{{ selectedAlert.definition_key }}</dd></div>
           </dl>
 
-          <section v-if="residualFiles.length" class="alert-payload-panel residual-files">
+          <ActivityAlertDetail v-if="isActivityAlert" :alert="selectedAlert" />
+          <section v-else-if="residualFiles.length" class="alert-payload-panel residual-files">
             <h3>{{ t('alerts.residualFiles') }}</h3>
             <ul>
               <li v-for="path in residualFiles" :key="path"><code>{{ path }}</code></li>
@@ -110,6 +112,11 @@
             <h3>{{ t('alerts.payload') }}</h3>
             <JsonTree :value="selectedAlert.payload" />
           </section>
+
+          <details v-if="isActivityAlert" class="alert-payload-panel raw-payload">
+            <summary>{{ t('alerts.rawPayload') }}</summary>
+            <JsonTree :value="selectedAlert.payload" />
+          </details>
         </template>
         <p v-else class="alerts-empty">{{ t('alerts.select') }}</p>
       </main>
@@ -122,6 +129,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { RefreshCw, Settings2 } from '@lucide/vue';
 
 import { listAlerts, readAlert } from '../api';
+import ActivityAlertDetail from '../components/ActivityAlertDetail.vue';
 import JsonTree from '../components/JsonTree.vue';
 import { useLocale } from '../locale';
 
@@ -158,6 +166,11 @@ const error = ref('');
 const pollIntervalSeconds = ref(initialPollIntervalSeconds);
 const pollIntervalInput = ref(String(initialPollIntervalSeconds));
 const selectedSeverity = ref('all');
+const activityAlertKinds = new Set([
+  'llm.request.growth',
+  'llm.response.growth',
+  'command.duration.exceeded',
+]);
 let loadToken = null;
 let detailToken = null;
 let pollTimer = null;
@@ -184,6 +197,7 @@ const residualFiles = computed(() =>
     ? selectedAlert.value.payload.residual_files
     : [],
 );
+const isActivityAlert = computed(() => activityAlertKinds.has(selectedAlert.value?.kind));
 
 watch(
   () => [props.refreshNonce, props.activationNonce],
@@ -306,6 +320,59 @@ async function loadDetail(alertId) {
 
 function openTrace(traceId) {
   emit('open-trace', { traceId });
+}
+
+function alertSummary(alert) {
+  if (!activityAlertKinds.has(alert?.kind)) {
+    return '';
+  }
+  const payload = alert.payload ?? {};
+  const finding = Array.isArray(payload.findings) ? payload.findings[0] : null;
+  if (!finding) {
+    return '';
+  }
+  if (alert.kind === 'command.duration.exceeded') {
+    const command = finding.command_line || finding.executable || t('alerts.activity.unknownCommand');
+    return `${command} · ${formatCompactDuration(finding.duration_ms)} > ${formatCompactDuration(payload.maximum_duration_ms)}`;
+  }
+  const direction = alert.kind === 'llm.response.growth'
+    ? t('alerts.activity.response')
+    : t('alerts.activity.request');
+  if (finding.reason === 'relative-growth') {
+    return `${direction} ${formatCompactBytes(finding.observed_bytes)} · ${formatCompactRatio(finding.observed_ratio_per_mille)} ≥ ${formatCompactRatio(payload.ratio_per_mille)}`;
+  }
+  return `${direction} ${formatCompactBytes(finding.observed_bytes)} ≥ ${formatCompactBytes(payload.hard_limit_bytes)}`;
+}
+
+function formatCompactBytes(value) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes)) return '—';
+  if (Math.abs(bytes) < 1024) return `${formatNumber(bytes)} B`;
+  const units = ['KiB', 'MiB', 'GiB', 'TiB'];
+  let scaled = bytes;
+  let unitIndex = -1;
+  do {
+    scaled /= 1024;
+    unitIndex += 1;
+  } while (Math.abs(scaled) >= 1024 && unitIndex < units.length - 1);
+  return `${formatNumber(scaled, 2)} ${units[unitIndex]}`;
+}
+
+function formatCompactDuration(value) {
+  const milliseconds = Number(value);
+  if (!Number.isFinite(milliseconds)) return '—';
+  return milliseconds < 1000
+    ? `${formatNumber(milliseconds)} ms`
+    : `${formatNumber(milliseconds / 1000, 2)} s`;
+}
+
+function formatCompactRatio(value) {
+  const perMille = Number(value);
+  return Number.isFinite(perMille) ? `${formatNumber(perMille / 1000, 2)}×` : '—';
+}
+
+function formatNumber(value, maximumFractionDigits = 0) {
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits }).format(value);
 }
 
 function formatTime(timestamp) {

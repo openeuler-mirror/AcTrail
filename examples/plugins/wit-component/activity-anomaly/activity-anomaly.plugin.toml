@@ -1,0 +1,64 @@
+[general]
+id = "actrail.activity-anomaly"
+api_version = "actrail.plugin.v2"
+role = "observation-consumer"
+runtime = "wasm"
+
+[host]
+capabilities = ["trace-activity-read", "alert-write"]
+
+[runtime.wasm]
+artifact_path = "actrail_activity_anomaly_plugin.wasm"
+abi = "wit-component"
+
+[runtime.wasm.resources]
+fuel_per_call = 50000000
+memory_max_bytes = 67108864
+
+[role.observation-consumer]
+delivery = "trace-consistent"
+
+[role.observation-consumer.subscriptions]
+event_families = ["semantic-action", "trace-lifecycle"]
+
+[role.observation-consumer.resources]
+queue_capacity = 4096
+
+[role.observation-consumer.post-trace]
+trigger = "trace-terminal"
+
+[hostcall_limits.plugin_config]
+read_max_bytes = 16384
+
+[hostcall_limits.trace_activity]
+page_max_count = 256
+total_max_count = 65536
+
+[hostcall_limits.alert]
+payload_max_bytes = 65536
+
+[outputs.alerts.llm-request-growth]
+kind = "llm.request.growth"
+title = "LLM 请求体异常增长"
+severity = "medium"
+payload_schema_id = "actrail.activity-anomaly.llm-growth.payload.v1"
+payload_schema_ref = "llm-growth.payload.v1.schema.json"
+
+[outputs.alerts.llm-response-growth]
+kind = "llm.response.growth"
+title = "LLM 响应体异常增长"
+severity = "medium"
+payload_schema_id = "actrail.activity-anomaly.llm-growth.payload.v1"
+payload_schema_ref = "llm-growth.payload.v1.schema.json"
+
+[outputs.alerts.command-duration-exceeded]
+kind = "command.duration.exceeded"
+title = "Agent 命令执行时间过长"
+severity = "medium"
+payload_schema_id = "actrail.activity-anomaly.command-duration.payload.v1"
+payload_schema_ref = "command-duration.payload.v1.schema.json"
+
+[plugin_config]
+format = "json"
+schema_ref = "activity-anomaly.config.v1.schema.json"
+required = true

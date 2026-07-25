@@ -117,6 +117,60 @@ pub struct TraceAnalysisActionPage {
     pub next_offset: Option<usize>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TraceActivityContext {
+    pub root_container_id: Option<String>,
+    pub root_process_id: String,
+    pub display_name: String,
+    pub profile_name: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TraceLlmExchange {
+    pub call_action_id: String,
+    pub request_action_id: String,
+    pub response_action_id: Option<String>,
+    pub process_id: String,
+    pub model: Option<String>,
+    pub server_address: Option<String>,
+    pub url_path: Option<String>,
+    pub started_at: SystemTime,
+    pub completed_at: Option<SystemTime>,
+    pub request_body_bytes: u64,
+    pub request_raw_bytes: Option<u64>,
+    pub request_complete: bool,
+    pub response_body_bytes: Option<u64>,
+    pub response_raw_bytes: Option<u64>,
+    pub response_complete: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TraceLlmExchangePage {
+    pub exchanges: Vec<TraceLlmExchange>,
+    pub next_offset: Option<usize>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TraceCommandExecution {
+    pub action_id: String,
+    pub process_id: String,
+    pub executable: Option<String>,
+    pub command_line: Option<String>,
+    pub started_at: SystemTime,
+    pub ended_at: Option<SystemTime>,
+    pub status: SemanticActionStatus,
+    pub exit_code: Option<i32>,
+    pub agent_action_id: Option<String>,
+    pub parent_command_action_id: Option<String>,
+    pub top_level_agent_child: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TraceCommandExecutionPage {
+    pub commands: Vec<TraceCommandExecution>,
+    pub next_offset: Option<usize>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TraceFileStateStatus {
     Exists,
@@ -144,6 +198,25 @@ pub trait PostTraceHost: Send + Sync {
         offset: usize,
         limit: usize,
     ) -> Result<TraceAnalysisActionPage, PluginRuntimeError>;
+
+    fn activity_context(
+        &self,
+        trace_id: model_core::ids::TraceId,
+    ) -> Result<TraceActivityContext, PluginRuntimeError>;
+
+    fn llm_exchanges_page(
+        &self,
+        trace_id: model_core::ids::TraceId,
+        offset: usize,
+        limit: usize,
+    ) -> Result<TraceLlmExchangePage, PluginRuntimeError>;
+
+    fn command_executions_page(
+        &self,
+        trace_id: model_core::ids::TraceId,
+        offset: usize,
+        limit: usize,
+    ) -> Result<TraceCommandExecutionPage, PluginRuntimeError>;
 
     fn file_state(
         &self,
