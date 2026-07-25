@@ -16,16 +16,6 @@ __pycache__/
 .env
 
 **/tests/
-!/tests/
-!/tests/payload/
-!/tests/payload/**
-!/tests/performance/
-!/tests/performance/**
-!/tests/regression/
-!/tests/regression/**
-/tests/manual/
-/tests/**/__pycache__/
-/tests/**/*.pyc
 
 **/__pycache__/
 

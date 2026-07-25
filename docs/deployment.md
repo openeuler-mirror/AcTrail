@@ -55,6 +55,7 @@ The generated default keeps daemon runtime state and durable observation data ou
 | `plugins.discovery.directory` | `~/.actrail/plugins` |
 | live `otel-jsonl` plugin config `path` | `/var/lib/actrail/export/live-spans.otlp.jsonl` when explicitly loaded |
 | `log_path` | `/var/log/actrail/actraild.log` |
+| `control.finalization.shutdown_drain_timeout_ms` | `30000` |
 | `supervision.startup_wait_ms` | `30000` |
 | `supervision.shutdown_wait_ms` | `5000` |
 | `workload_diagnostics_enabled` | `false` |
@@ -75,8 +76,9 @@ For a persistent deployment, review these fields first:
 | `storage_sqlite_path` | SQLite storage location; place it on a filesystem with enough space for payload retention. |
 | `storage_sqlite_busy_timeout_ms` | SQLite busy timeout for daemon writes. Keep this positive; increase it only when long-running readers share the same storage. |
 | `log_path` | Daemon background stdout/stderr log. |
+| `control.finalization.shutdown_drain_timeout_ms` | Maximum time the daemon spends draining terminal trace finalization during shutdown. It must be at least `control.finalization.settle_delay_ms`. A timeout marks affected traces degraded, persists a diagnostic, and makes shutdown fail visibly. |
 | `supervision.startup_wait_ms` | Maximum time that `start` or `restart` waits for both the PID file and control socket. The default is 30 seconds. |
-| `supervision.shutdown_wait_ms` | Grace period for stopping a daemon, including cleanup after a startup failure, before forced termination. |
+| `supervision.shutdown_wait_ms` | Time the supervising CLI waits for a daemon process to exit. Startup-failure cleanup may force-stop the child after this budget; a normal `stop` returns an error without force-killing a daemon that is still draining. |
 | `diagnostic_log_level` | Daemon diagnostic verbosity: `off`, `info`, or `debug`. Use `debug` only while collecting failure evidence. |
 | `workload_diagnostics_enabled` | Enables periodic low-overhead daemon workload counter logs to help diagnose hot loops and projection/storage pressure. |
 | `workload_diagnostics_interval_ms` | Period between workload diagnostic log lines when workload diagnostics are enabled. |
@@ -151,6 +153,10 @@ Stop or restart:
 ./target/release/actraild --config local/operator.conf stop
 ./target/release/actraild --config local/operator.conf restart
 ```
+
+On `SIGTERM`, the daemon stops accepting new control work, continues draining captured events, finalizes every terminal trace, and only then closes post-trace admission and drains post-trace work and plugin alert writes. `stop` reports success only after that sequence has completed and the process has exited. If terminal trace finalization exceeds `control.finalization.shutdown_drain_timeout_ms`, the daemon records a `trace_finalization_shutdown_timeout` diagnostic, marks the affected trace degraded, and exits with a shutdown error. Any remaining nonterminal semantic actions are therefore surfaced as degraded evidence rather than a clean shutdown.
+
+The supervising CLI and the daemon use separate budgets. Set `supervision.shutdown_wait_ms` high enough for the expected drain time when workloads or post-trace plugins routinely need more than the generated five-second wait. A supervision timeout does not force-kill a normally stopping daemon; inspect `log_path`, wait for the process to finish its bounded drain, and correct any reported finalization, post-trace, alert, or storage error.
 
 Clean local runtime artifacts when intentionally resetting a test deployment:
 

@@ -64,6 +64,7 @@ pub(super) struct FinalizationDocument {
     pub traces_per_cycle: u32,
     pub poll_interval_ms: u64,
     pub settle_delay_ms: u64,
+    pub shutdown_drain_timeout_ms: u64,
     pub post_trace: PostTraceDocument,
 }
 
@@ -73,6 +74,7 @@ impl Default for FinalizationDocument {
             traces_per_cycle: DEFAULT_FINALIZATION_TRACES_PER_CYCLE,
             poll_interval_ms: DEFAULT_FINALIZATION_POLL_INTERVAL_MS,
             settle_delay_ms: DEFAULT_FINALIZATION_SETTLE_DELAY_MS,
+            shutdown_drain_timeout_ms: DEFAULT_FINALIZATION_SHUTDOWN_DRAIN_TIMEOUT_MS,
             post_trace: PostTraceDocument::default(),
         }
     }
@@ -157,6 +159,18 @@ impl PostTraceDocument {
 
 impl FinalizationDocument {
     pub(super) fn to_config(&self) -> Result<TraceFinalizationConfig, String> {
+        let settle_delay_ms =
+            require_positive_u64("control.finalization.settle_delay_ms", self.settle_delay_ms)?;
+        let shutdown_drain_timeout_ms = require_positive_u64(
+            "control.finalization.shutdown_drain_timeout_ms",
+            self.shutdown_drain_timeout_ms,
+        )?;
+        if shutdown_drain_timeout_ms < settle_delay_ms {
+            return Err(
+                "control.finalization.shutdown_drain_timeout_ms must be at least settle_delay_ms"
+                    .to_string(),
+            );
+        }
         Ok(TraceFinalizationConfig {
             traces_per_cycle: require_positive_u32(
                 "control.finalization.traces_per_cycle",
@@ -166,10 +180,8 @@ impl FinalizationDocument {
                 "control.finalization.poll_interval_ms",
                 self.poll_interval_ms,
             )?,
-            settle_delay_ms: require_positive_u64(
-                "control.finalization.settle_delay_ms",
-                self.settle_delay_ms,
-            )?,
+            settle_delay_ms,
+            shutdown_drain_timeout_ms,
             post_trace: self.post_trace.to_config()?,
         })
     }

@@ -42,7 +42,10 @@ pub trait AttachService {
     ) -> Result<(), ControlError>;
     fn event_poll_fds(&self) -> Result<Vec<RawFd>, ControlError>;
     fn background_poll_timeout(&self) -> Result<Option<Duration>, ControlError>;
-    fn shutdown(&mut self) -> Result<(), ControlError>;
+    fn shutdown(
+        &mut self,
+        trace_runtime: &mut trace_runtime::TraceRuntime,
+    ) -> Result<(), ControlError>;
     fn remove_root(
         &mut self,
         trace_runtime: &mut trace_runtime::TraceRuntime,
@@ -130,7 +133,9 @@ impl<A> DaemonServiceHost<A> {
     where
         A: AttachService,
     {
-        self.wiring.attach_service.shutdown()
+        self.wiring
+            .attach_service
+            .shutdown(&mut self.wiring.trace_runtime)
     }
 
     pub fn ebpf_debug_snapshot(
@@ -722,7 +727,10 @@ mod tests {
             Ok(None)
         }
 
-        fn shutdown(&mut self) -> Result<(), ControlError> {
+        fn shutdown(
+            &mut self,
+            _trace_runtime: &mut trace_runtime::TraceRuntime,
+        ) -> Result<(), ControlError> {
             Ok(())
         }
 

@@ -7,6 +7,7 @@ import shutil
 from pathlib import Path
 
 from tests.v2.common.actrail_runtime import ActrailRuntime, CommandResult
+from tests.v2.common.errors import AgentBinaryNotFoundError
 
 from .config import ProbeClaudeLLMConfig
 
@@ -22,8 +23,12 @@ class ProbeClaudeLLMTask:
         return self._runtime.run(
             self._command(),
             timeout_seconds=self._config.launch_timeout_seconds,
-            environment=self._environment(),
+            environment=self.environment(),
         )
+
+    @property
+    def binary(self) -> Path:
+        return self._claude
 
     def _command(self) -> list[Path | str]:
         return [
@@ -47,7 +52,12 @@ class ProbeClaudeLLMTask:
 
     def _resolve_claude(self) -> Path:
         if self._config.claude_binary is not None:
-            return self._config.claude_binary
+            if self._is_executable(self._config.claude_binary):
+                return self._config.claude_binary
+            raise AgentBinaryNotFoundError(
+                f"configured Claude executable is unavailable: "
+                f"{self._config.claude_binary}"
+            )
         discovered = shutil.which("claude")
         if discovered:
             return Path(discovered)
@@ -60,13 +70,17 @@ class ProbeClaudeLLMTask:
             homes.add(Path(pwd.getpwnam(invoking_user).pw_dir))
         for home in homes:
             candidate = home / ".local/bin/claude"
-            if candidate.is_file():
+            if self._is_executable(candidate):
                 return candidate
-        raise RuntimeError(
+        raise AgentBinaryNotFoundError(
             "Claude executable not found; set CLAUDE_E2E_BINARY to its path"
         )
 
-    def _environment(self) -> dict[str, str]:
+    @staticmethod
+    def _is_executable(path: Path) -> bool:
+        return path.is_file() and os.access(path, os.X_OK)
+
+    def environment(self) -> dict[str, str]:
         environment = os.environ.copy()
         for parent in self._claude.resolve().parents:
             if parent.name == ".local":

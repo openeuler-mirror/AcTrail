@@ -7,6 +7,7 @@ import shutil
 from pathlib import Path
 
 from tests.v2.common.actrail_runtime import ActrailRuntime, CommandResult
+from tests.v2.common.errors import AgentBinaryNotFoundError
 
 from .config import ProbeCodexLLMConfig
 
@@ -22,8 +23,12 @@ class ProbeCodexLLMTask:
         return self._runtime.run(
             self._command(),
             timeout_seconds=self._config.launch_timeout_seconds,
-            environment=self._environment(),
+            environment=self.environment(),
         )
+
+    @property
+    def binary(self) -> Path:
+        return self._codex
 
     def _command(self) -> list[Path | str]:
         return [
@@ -45,7 +50,12 @@ class ProbeCodexLLMTask:
 
     def _resolve_codex(self) -> Path:
         if self._config.codex_binary is not None:
-            return self._config.codex_binary
+            if self._is_executable(self._config.codex_binary):
+                return self._config.codex_binary
+            raise AgentBinaryNotFoundError(
+                f"configured Codex executable is unavailable: "
+                f"{self._config.codex_binary}"
+            )
         discovered = shutil.which("codex")
         if discovered:
             return Path(discovered)
@@ -58,13 +68,17 @@ class ProbeCodexLLMTask:
             homes.add(Path(pwd.getpwnam(invoking_user).pw_dir))
         for home in homes:
             candidate = home / ".local/bin/codex"
-            if candidate.is_file():
+            if self._is_executable(candidate):
                 return candidate
-        raise RuntimeError(
+        raise AgentBinaryNotFoundError(
             "Codex executable not found; set CODEX_E2E_BINARY to its path"
         )
 
-    def _environment(self) -> dict[str, str]:
+    @staticmethod
+    def _is_executable(path: Path) -> bool:
+        return path.is_file() and os.access(path, os.X_OK)
+
+    def environment(self) -> dict[str, str]:
         environment = os.environ.copy()
         for parent in self._codex.resolve().parents:
             if parent.name == ".codex":

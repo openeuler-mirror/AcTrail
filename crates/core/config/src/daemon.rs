@@ -99,12 +99,14 @@ pub use trace_finalization::{
 pub const DEFAULT_FINALIZATION_TRACES_PER_CYCLE: u32 = 1;
 pub const DEFAULT_FINALIZATION_POLL_INTERVAL_MS: u64 = 100;
 pub const DEFAULT_FINALIZATION_SETTLE_DELAY_MS: u64 = 250;
+pub const DEFAULT_FINALIZATION_SHUTDOWN_DRAIN_TIMEOUT_MS: u64 = 30_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TraceFinalizationConfig {
     pub traces_per_cycle: u32,
     pub poll_interval_ms: u64,
     pub settle_delay_ms: u64,
+    pub shutdown_drain_timeout_ms: u64,
     pub post_trace: PostTraceRuntimeConfig,
 }
 
@@ -139,6 +141,7 @@ impl Default for TraceFinalizationConfig {
             traces_per_cycle: DEFAULT_FINALIZATION_TRACES_PER_CYCLE,
             poll_interval_ms: DEFAULT_FINALIZATION_POLL_INTERVAL_MS,
             settle_delay_ms: DEFAULT_FINALIZATION_SETTLE_DELAY_MS,
+            shutdown_drain_timeout_ms: DEFAULT_FINALIZATION_SHUTDOWN_DRAIN_TIMEOUT_MS,
             post_trace: PostTraceRuntimeConfig::default(),
         }
     }
