@@ -74,6 +74,7 @@ pub enum PluginCapability {
     PayloadRead,
     ContextQuery,
     TraceAnalysisRead,
+    TraceActivityRead,
     TraceFileStateRead,
     AlertWrite,
     #[serde(rename = "file-access.current-match-get")]
@@ -98,6 +99,7 @@ impl PluginCapability {
             Self::PayloadRead => "payload-read",
             Self::ContextQuery => "context-query",
             Self::TraceAnalysisRead => "trace-analysis-read",
+            Self::TraceActivityRead => "trace-activity-read",
             Self::TraceFileStateRead => "trace-file-state-read",
             Self::AlertWrite => "alert-write",
             Self::FileAccessCurrentMatchGet => "file-access.current-match-get",

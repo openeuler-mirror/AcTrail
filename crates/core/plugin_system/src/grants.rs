@@ -10,6 +10,7 @@ pub struct PluginHostGrants {
     payload_read_sources: BTreeSet<String>,
     context_query: bool,
     trace_analysis_read: bool,
+    trace_activity_read: bool,
     trace_file_state_read: bool,
     alert_write: bool,
     file_access_current_match_get: bool,
@@ -42,6 +43,7 @@ impl PluginHostGrants {
                 }
                 PluginHostGrant::ContextQuery => grants.allow_context_query(),
                 PluginHostGrant::TraceAnalysisRead => grants.allow_trace_analysis_read(),
+                PluginHostGrant::TraceActivityRead => grants.allow_trace_activity_read(),
                 PluginHostGrant::TraceFileStateRead => grants.allow_trace_file_state_read(),
                 PluginHostGrant::AlertWrite => grants.allow_alert_write(),
                 PluginHostGrant::FileAccessCurrentMatchGet => {
@@ -114,6 +116,14 @@ impl PluginHostGrants {
 
     pub fn can_read_trace_analysis(&self) -> bool {
         self.trace_analysis_read
+    }
+
+    pub fn allow_trace_activity_read(&mut self) {
+        self.trace_activity_read = true;
+    }
+
+    pub fn can_read_trace_activity(&self) -> bool {
+        self.trace_activity_read
     }
 
     pub fn allow_trace_file_state_read(&mut self) {
@@ -221,6 +231,9 @@ impl PluginHostGrants {
         if self.trace_analysis_read {
             values.push(PluginHostGrant::TraceAnalysisRead.to_wire());
         }
+        if self.trace_activity_read {
+            values.push(PluginHostGrant::TraceActivityRead.to_wire());
+        }
         if self.trace_file_state_read {
             values.push(PluginHostGrant::TraceFileStateRead.to_wire());
         }
@@ -262,6 +275,7 @@ impl PluginHostGrants {
             && self.payload_read_sources.is_empty()
             && !self.context_query
             && !self.trace_analysis_read
+            && !self.trace_activity_read
             && !self.trace_file_state_read
             && !self.alert_write
             && !self.file_access_current_match_get
@@ -282,6 +296,7 @@ pub enum PluginHostGrant {
     },
     ContextQuery,
     TraceAnalysisRead,
+    TraceActivityRead,
     TraceFileStateRead,
     AlertWrite,
     FileAccessCurrentMatchGet,
@@ -309,6 +324,9 @@ impl PluginHostGrant {
         if raw == "trace-analysis-read" {
             return Ok(Self::TraceAnalysisRead);
         }
+        if raw == "trace-activity-read" {
+            return Ok(Self::TraceActivityRead);
+        }
         if raw == "trace-file-state-read" {
             return Ok(Self::TraceFileStateRead);
         }
@@ -332,7 +350,7 @@ impl PluginHostGrant {
         }
         let Some((kind, value)) = raw.split_once(':') else {
             return Err(format!(
-                "invalid plugin host grant {raw}; expected payload-read, payload-read:source=syscall, payload-read:source=tls-user-space, payload-read:source=stdio, context-query, trace-analysis-read, trace-file-state-read, alert-write, file-access.current-match-get, file-access.current-context-query, file-policy.rules.read, file-policy.rules.match-dry-run, file-policy.rules.validate, file-policy.rules.apply:kind=allow,path=/abs/**, or env-read:NAME"
+                "invalid plugin host grant {raw}; expected payload-read, payload-read:source=syscall, payload-read:source=tls-user-space, payload-read:source=stdio, context-query, trace-analysis-read, trace-activity-read, trace-file-state-read, alert-write, file-access.current-match-get, file-access.current-context-query, file-policy.rules.read, file-policy.rules.match-dry-run, file-policy.rules.validate, file-policy.rules.apply:kind=allow,path=/abs/**, or env-read:NAME"
             ));
         };
         match kind {
@@ -355,7 +373,7 @@ impl PluginHostGrant {
             }
             "file-policy.rules.apply" => parse_file_policy_rules_apply_grant(value),
             other => Err(format!(
-                "unsupported plugin host grant {other}; supported grants: payload-read, payload-read:source=syscall, payload-read:source=tls-user-space, payload-read:source=stdio, context-query, trace-analysis-read, trace-file-state-read, alert-write, file-access.current-match-get, file-access.current-context-query, file-policy.rules.read, file-policy.rules.match-dry-run, file-policy.rules.validate, file-policy.rules.apply:kind=allow,path=/abs/**, env-read:NAME"
+                "unsupported plugin host grant {other}; supported grants: payload-read, payload-read:source=syscall, payload-read:source=tls-user-space, payload-read:source=stdio, context-query, trace-analysis-read, trace-activity-read, trace-file-state-read, alert-write, file-access.current-match-get, file-access.current-context-query, file-policy.rules.read, file-policy.rules.match-dry-run, file-policy.rules.validate, file-policy.rules.apply:kind=allow,path=/abs/**, env-read:NAME"
             )),
         }
     }
@@ -365,6 +383,7 @@ impl PluginHostGrant {
             Self::PayloadRead | Self::PayloadReadSource { .. } => PluginCapability::PayloadRead,
             Self::ContextQuery => PluginCapability::ContextQuery,
             Self::TraceAnalysisRead => PluginCapability::TraceAnalysisRead,
+            Self::TraceActivityRead => PluginCapability::TraceActivityRead,
             Self::TraceFileStateRead => PluginCapability::TraceFileStateRead,
             Self::AlertWrite => PluginCapability::AlertWrite,
             Self::FileAccessCurrentMatchGet => PluginCapability::FileAccessCurrentMatchGet,
@@ -383,6 +402,7 @@ impl PluginHostGrant {
             Self::PayloadReadSource { source } => format!("payload-read:source={source}"),
             Self::ContextQuery => "context-query".to_string(),
             Self::TraceAnalysisRead => "trace-analysis-read".to_string(),
+            Self::TraceActivityRead => "trace-activity-read".to_string(),
             Self::TraceFileStateRead => "trace-file-state-read".to_string(),
             Self::AlertWrite => "alert-write".to_string(),
             Self::FileAccessCurrentMatchGet => "file-access.current-match-get".to_string(),

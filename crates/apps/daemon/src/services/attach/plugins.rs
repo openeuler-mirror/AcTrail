@@ -484,6 +484,10 @@ fn validate_plugin_capability_grants(
                 ungranted.push(capability.as_str());
             }
             PluginCapability::TraceAnalysisRead => {}
+            PluginCapability::TraceActivityRead if !host_grants.can_read_trace_activity() => {
+                ungranted.push(capability.as_str());
+            }
+            PluginCapability::TraceActivityRead => {}
             PluginCapability::TraceFileStateRead if !host_grants.can_read_trace_file_state() => {
                 ungranted.push(capability.as_str());
             }

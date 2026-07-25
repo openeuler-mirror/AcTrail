@@ -26,6 +26,8 @@ const POST_TRACE_ANALYZER_EXPORT: &str = "actrail:plugin/post-trace-analyzer@0.2
 const POST_TRACE_ANALYZE_EXPORT: &str = "analyze";
 const DEFAULT_ACTION_PAGE_MAX_COUNT: u32 = 256;
 const DEFAULT_ACTION_TOTAL_MAX_COUNT: u32 = 16_384;
+const DEFAULT_ACTIVITY_PAGE_MAX_COUNT: u32 = 256;
+const DEFAULT_ACTIVITY_TOTAL_MAX_COUNT: u32 = 65_536;
 const DEFAULT_FILE_STATE_QUERY_MAX_COUNT: u32 = 4096;
 
 pub(crate) struct WitComponentObservationConsumer {
@@ -50,8 +52,9 @@ impl WitComponentObservationConsumer {
         post_trace_host: Option<Arc<dyn PostTraceHost>>,
         alert_host: Option<Arc<dyn AlertHost>>,
     ) -> Result<Self, PluginRuntimeError> {
-        let post_trace_granted =
-            host_grants.can_read_trace_analysis() || host_grants.can_read_trace_file_state();
+        let post_trace_granted = host_grants.can_read_trace_analysis()
+            || host_grants.can_read_trace_activity()
+            || host_grants.can_read_trace_file_state();
         if host_grants.can_query_context()
             || host_grants.can_get_current_file_access_match()
             || host_grants.can_query_current_file_access_context()
@@ -400,6 +403,22 @@ fn post_trace_limits(manifest: &PluginManifest) -> Result<PostTraceCallLimits, P
                 .unwrap_or(DEFAULT_ACTION_TOTAL_MAX_COUNT),
         )
         .map_err(limit_error("action total"))?,
+        activity_page_max_count: usize::try_from(
+            manifest
+                .hostcall_limits
+                .trace_activity
+                .page_max_count
+                .unwrap_or(DEFAULT_ACTIVITY_PAGE_MAX_COUNT),
+        )
+        .map_err(limit_error("activity page"))?,
+        activity_total_max_count: usize::try_from(
+            manifest
+                .hostcall_limits
+                .trace_activity
+                .total_max_count
+                .unwrap_or(DEFAULT_ACTIVITY_TOTAL_MAX_COUNT),
+        )
+        .map_err(limit_error("activity total"))?,
         file_state_query_max_count: usize::try_from(
             manifest
                 .hostcall_limits

@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 use control_contract::reply::ControlError;
 use model_core::ids::TraceId;
 use plugin_system::{
-    PluginRuntimeError, PostTraceHost, TraceAnalysisActionPage, TraceAnalysisContext,
-    TraceFileState,
+    PluginRuntimeError, PostTraceHost, TraceActivityContext, TraceAnalysisActionPage,
+    TraceAnalysisContext, TraceCommandExecutionPage, TraceFileState, TraceLlmExchangePage,
 };
 
 #[derive(Clone)]
@@ -111,6 +111,57 @@ impl PostTraceHost for PostTraceHostClient {
         }
     }
 
+    fn activity_context(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<TraceActivityContext, PluginRuntimeError> {
+        match self.request(
+            BrokerOperation::ActivityContext { trace_id },
+            self.reply_timeout,
+        )? {
+            BrokerResponse::ActivityContext(context) => Ok(context),
+            _ => Err(invalid_broker_response()),
+        }
+    }
+
+    fn llm_exchanges_page(
+        &self,
+        trace_id: TraceId,
+        offset: usize,
+        limit: usize,
+    ) -> Result<TraceLlmExchangePage, PluginRuntimeError> {
+        match self.request(
+            BrokerOperation::LlmExchangesPage {
+                trace_id,
+                offset,
+                limit,
+            },
+            self.reply_timeout,
+        )? {
+            BrokerResponse::LlmExchangesPage(page) => Ok(page),
+            _ => Err(invalid_broker_response()),
+        }
+    }
+
+    fn command_executions_page(
+        &self,
+        trace_id: TraceId,
+        offset: usize,
+        limit: usize,
+    ) -> Result<TraceCommandExecutionPage, PluginRuntimeError> {
+        match self.request(
+            BrokerOperation::CommandExecutionsPage {
+                trace_id,
+                offset,
+                limit,
+            },
+            self.reply_timeout,
+        )? {
+            BrokerResponse::CommandExecutionsPage(page) => Ok(page),
+            _ => Err(invalid_broker_response()),
+        }
+    }
+
     fn file_state(
         &self,
         trace_id: TraceId,
@@ -151,6 +202,19 @@ pub(super) enum BrokerOperation {
         offset: usize,
         limit: usize,
     },
+    ActivityContext {
+        trace_id: TraceId,
+    },
+    LlmExchangesPage {
+        trace_id: TraceId,
+        offset: usize,
+        limit: usize,
+    },
+    CommandExecutionsPage {
+        trace_id: TraceId,
+        offset: usize,
+        limit: usize,
+    },
     FileState {
         trace_id: TraceId,
         action_id: String,
@@ -160,6 +224,9 @@ pub(super) enum BrokerOperation {
 pub(super) enum BrokerResponse {
     AnalysisContext(TraceAnalysisContext),
     SemanticActionsPage(TraceAnalysisActionPage),
+    ActivityContext(TraceActivityContext),
+    LlmExchangesPage(TraceLlmExchangePage),
+    CommandExecutionsPage(TraceCommandExecutionPage),
     FileState(TraceFileState),
 }
 

@@ -38,6 +38,8 @@ pub(crate) struct ObservationTraceContext {
 pub(crate) struct PostTraceCallLimits {
     pub(crate) action_page_max_count: usize,
     pub(crate) action_total_max_count: usize,
+    pub(crate) activity_page_max_count: usize,
+    pub(crate) activity_total_max_count: usize,
     pub(crate) file_state_query_max_count: usize,
 }
 
@@ -45,6 +47,7 @@ pub(crate) struct PostTraceTaskContext {
     pub(crate) trace_id: TraceId,
     pub(crate) limits: PostTraceCallLimits,
     pub(crate) action_rows_read: usize,
+    pub(crate) activity_rows_read: usize,
     pub(crate) file_state_queries: usize,
 }
 
@@ -206,6 +209,7 @@ impl WasmStoreState {
             trace_id,
             limits,
             action_rows_read: 0,
+            activity_rows_read: 0,
             file_state_queries: 0,
         });
     }

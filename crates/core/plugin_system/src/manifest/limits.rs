@@ -18,6 +18,8 @@ pub struct PluginHostcallLimits {
     #[serde(default)]
     pub trace_analysis: PluginTraceAnalysisHostcallLimits,
     #[serde(default)]
+    pub trace_activity: PluginTraceActivityHostcallLimits,
+    #[serde(default)]
     pub trace_file_state: PluginTraceFileStateHostcallLimits,
     #[serde(default)]
     pub alert: PluginAlertHostcallLimits,
@@ -74,6 +76,13 @@ pub struct PluginConfigHostcallLimits {
 pub struct PluginTraceAnalysisHostcallLimits {
     pub action_page_max_count: Option<u32>,
     pub action_total_max_count: Option<u32>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginTraceActivityHostcallLimits {
+    pub page_max_count: Option<u32>,
+    pub total_max_count: Option<u32>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]

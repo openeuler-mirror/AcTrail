@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "actrail.activity-anomaly.config.v1",
+  "type": "object",
+  "required": [
+    "request_growth",
+    "response_growth",
+    "command_duration",
+    "page_size",
+    "trace_state_max_count",
+    "finding_max_count"
+  ],
+  "properties": {
+    "request_growth": { "$ref": "#/$defs/growthRule" },
+    "response_growth": { "$ref": "#/$defs/growthRule" },
+    "command_duration": {
+      "type": "object",
+      "required": ["enabled", "maximum_duration_ms"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "maximum_duration_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 604800000
+        }
+      },
+      "additionalProperties": false
+    },
+    "page_size": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 256,
+      "readOnly": true
+    },
+    "trace_state_max_count": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4096,
+      "readOnly": true
+    },
+    "finding_max_count": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4096,
+      "readOnly": true
+    }
+  },
+  "$defs": {
+    "growthRule": {
+      "type": "object",
+      "required": [
+        "enabled",
+        "window_size",
+        "minimum_samples",
+        "ratio_per_mille",
+        "minimum_growth_bytes",
+        "minimum_current_bytes",
+        "hard_limit_bytes"
+      ],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "window_size": { "type": "integer", "minimum": 1, "maximum": 64 },
+        "minimum_samples": { "type": "integer", "minimum": 1, "maximum": 64 },
+        "ratio_per_mille": {
+          "type": "integer",
+          "minimum": 1001,
+          "maximum": 100000
+        },
+        "minimum_growth_bytes": { "type": "integer", "minimum": 1 },
+        "minimum_current_bytes": { "type": "integer", "minimum": 1 },
+        "hard_limit_bytes": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

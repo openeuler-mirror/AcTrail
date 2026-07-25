@@ -39,15 +39,17 @@ pub use manifest::{
     PluginObservationConsumerResources, PluginObservationDelivery, PluginOutputsDeclaration,
     PluginPayloadHostcallLimits, PluginPostTraceDeclaration, PluginPostTraceTrigger, PluginPurpose,
     PluginRoleDeclaration, PluginRuntimeDeclaration, PluginRuntimeKind,
-    PluginSubscriptionDeclaration, PluginTraceAnalysisHostcallLimits,
-    PluginTraceFileStateHostcallLimits, PluginUnusedRuntimeSectionsPolicy, PluginWasmAbi,
-    PluginWasmDeclaration, PluginWasmResourceLimits, SUPPORTED_PLUGIN_API_VERSION,
+    PluginSubscriptionDeclaration, PluginTraceActivityHostcallLimits,
+    PluginTraceAnalysisHostcallLimits, PluginTraceFileStateHostcallLimits,
+    PluginUnusedRuntimeSectionsPolicy, PluginWasmAbi, PluginWasmDeclaration,
+    PluginWasmResourceLimits, SUPPORTED_PLUGIN_API_VERSION,
 };
 pub use observation::{
     ObservationBatch, ObservationConsumeReport, ObservationConsumer, ObservationEventFamily,
-    PostTraceAnalyzer, PostTraceHost, PostTraceTask, TraceAnalysisAction, TraceAnalysisActionPage,
-    TraceAnalysisContext, TraceAnalysisFileChange, TraceFileState, TraceFileStateStatus,
-    DEFAULT_OBSERVATION_EVENT_FAMILIES, DEFAULT_OBSERVATION_QUEUE_CAPACITY,
+    PostTraceAnalyzer, PostTraceHost, PostTraceTask, TraceActivityContext, TraceAnalysisAction,
+    TraceAnalysisActionPage, TraceAnalysisContext, TraceAnalysisFileChange, TraceCommandExecution,
+    TraceCommandExecutionPage, TraceFileState, TraceFileStateStatus, TraceLlmExchange,
+    TraceLlmExchangePage, DEFAULT_OBSERVATION_EVENT_FAMILIES, DEFAULT_OBSERVATION_QUEUE_CAPACITY,
 };
 pub use runtime::{BuiltinPluginInstance, PluginInstanceId};
 pub use status::{

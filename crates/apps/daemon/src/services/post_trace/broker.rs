@@ -8,14 +8,15 @@ use config_core::daemon::PostTraceRuntimeConfig;
 use control_contract::reply::ControlError;
 use model_core::ids::TraceId;
 use plugin_system::{
-    PluginManifest, PluginRuntimeError, TraceAnalysisActionPage, TraceFileState,
-    TraceFileStateStatus,
+    PluginManifest, PluginRuntimeError, TraceActivityContext, TraceAnalysisActionPage,
+    TraceCommandExecutionPage, TraceFileState, TraceFileStateStatus, TraceLlmExchangePage,
 };
 use semantic_action::{SemanticActionKind, SemanticActionStatus};
 use storage_core::StorageBackend;
 
 use super::facts::{
-    analysis_context, observed_host_path, project_analysis_action, read_file_state,
+    activity_context as project_activity_context, analysis_context, observed_host_path,
+    project_analysis_action, project_command_executions, project_llm_exchanges, read_file_state,
     storage_runtime_error, trace_missing,
 };
 use super::protocol::{
@@ -156,6 +157,23 @@ impl PostTraceBroker {
             } => self
                 .analysis_action_page(storage, trace_id, offset, limit)
                 .map(BrokerResponse::SemanticActionsPage),
+            BrokerOperation::ActivityContext { trace_id } => self
+                .activity_context(storage, trace_id)
+                .map(BrokerResponse::ActivityContext),
+            BrokerOperation::LlmExchangesPage {
+                trace_id,
+                offset,
+                limit,
+            } => self
+                .llm_exchanges_page(storage, trace_id, offset, limit)
+                .map(BrokerResponse::LlmExchangesPage),
+            BrokerOperation::CommandExecutionsPage {
+                trace_id,
+                offset,
+                limit,
+            } => self
+                .command_executions_page(storage, trace_id, offset, limit)
+                .map(BrokerResponse::CommandExecutionsPage),
             BrokerOperation::FileState {
                 trace_id,
                 action_id,
@@ -205,6 +223,90 @@ impl PostTraceBroker {
         Ok(TraceAnalysisActionPage {
             actions,
             next_offset: page.next_offset,
+        })
+    }
+
+    fn activity_context(
+        &self,
+        storage: &mut dyn StorageBackend,
+        trace_id: TraceId,
+    ) -> Result<TraceActivityContext, PluginRuntimeError> {
+        let trace = storage
+            .get_trace(trace_id)
+            .map_err(storage_runtime_error)?
+            .ok_or_else(|| trace_missing(trace_id))?;
+        analysis_context(&trace)?;
+        Ok(project_activity_context(&trace))
+    }
+
+    fn llm_exchanges_page(
+        &self,
+        storage: &mut dyn StorageBackend,
+        trace_id: TraceId,
+        offset: usize,
+        limit: usize,
+    ) -> Result<TraceLlmExchangePage, PluginRuntimeError> {
+        let trace = storage
+            .get_trace(trace_id)
+            .map_err(storage_runtime_error)?
+            .ok_or_else(|| trace_missing(trace_id))?;
+        analysis_context(&trace)?;
+        let actions = storage
+            .semantic_actions_matching_kinds(
+                trace_id,
+                &[
+                    SemanticActionKind::LlmCall.as_str(),
+                    SemanticActionKind::LlmRequest.as_str(),
+                    SemanticActionKind::LlmResponse.as_str(),
+                ],
+            )
+            .map_err(storage_runtime_error)?;
+        let exchanges = project_llm_exchanges(actions)?;
+        let total = exchanges.len();
+        let page = exchanges
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .collect::<Vec<_>>();
+        let next = offset.checked_add(page.len()).filter(|next| *next < total);
+        Ok(TraceLlmExchangePage {
+            exchanges: page,
+            next_offset: next,
+        })
+    }
+
+    fn command_executions_page(
+        &self,
+        storage: &mut dyn StorageBackend,
+        trace_id: TraceId,
+        offset: usize,
+        limit: usize,
+    ) -> Result<TraceCommandExecutionPage, PluginRuntimeError> {
+        let trace = storage
+            .get_trace(trace_id)
+            .map_err(storage_runtime_error)?
+            .ok_or_else(|| trace_missing(trace_id))?;
+        analysis_context(&trace)?;
+        let actions = storage
+            .semantic_actions_matching_kinds(
+                trace_id,
+                &[SemanticActionKind::CommandInvocation.as_str()],
+            )
+            .map_err(storage_runtime_error)?;
+        let links = storage
+            .list_semantic_action_links(trace_id)
+            .map_err(storage_runtime_error)?;
+        let commands = project_command_executions(actions, &links)?;
+        let total = commands.len();
+        let page = commands
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .collect::<Vec<_>>();
+        let next = offset.checked_add(page.len()).filter(|next| *next < total);
+        Ok(TraceCommandExecutionPage {
+            commands: page,
+            next_offset: next,
         })
     }
 

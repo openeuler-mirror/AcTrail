@@ -1,0 +1,27 @@
+{
+  "request_growth": {
+    "enabled": true,
+    "window_size": 5,
+    "minimum_samples": 3,
+    "ratio_per_mille": 2000,
+    "minimum_growth_bytes": 65536,
+    "minimum_current_bytes": 131072,
+    "hard_limit_bytes": 2097152
+  },
+  "response_growth": {
+    "enabled": true,
+    "window_size": 5,
+    "minimum_samples": 3,
+    "ratio_per_mille": 3000,
+    "minimum_growth_bytes": 262144,
+    "minimum_current_bytes": 524288,
+    "hard_limit_bytes": 4194304
+  },
+  "command_duration": {
+    "enabled": true,
+    "maximum_duration_ms": 60000
+  },
+  "page_size": 256,
+  "trace_state_max_count": 256,
+  "finding_max_count": 100
+}

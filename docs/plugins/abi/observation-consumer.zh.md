@@ -113,6 +113,27 @@ WIT component 观测插件收到的是结构化 `observation-batch` record：
 
 插件如果需要读取 payload 内容，必须在 manifest 声明 `payload-read` capability，并在加载时获得对应 `--grant`。插件如果只需要 action 摘要，不需要额外 payload 授权。
 
+## Trace 终态分析
+
+WIT component 可以在 manifest 中声明 `[role.observation-consumer.post-trace]`。这要求 `delivery = "trace-consistent"`，并订阅 `semantic-action` 与 `trace-lifecycle`。trace 被持久化为终态后，宿主调用：
+
+```wit
+analyze: func(task: post-trace-task) -> result<_, string>
+```
+
+终态接口按 capability 分权：
+
+| capability / import | 可读数据 | 约束 |
+| --- | --- | --- |
+| `trace-analysis-read` | 通用 action 摘要 | 只能读取当前终态 trace，受分页和总行数限制。 |
+| `trace-file-state-read` | 成功文件写 action 对应的终态文件状态 | 只能按当前 trace 的 action ID 查询，受次数和超时限制。 |
+| `trace-activity-read` | LLM exchange 字节计数、命令行与起止时间、trace 容器归属 | 不包含请求/响应正文；只能读取当前终态 trace，受分页和总行数限制。 |
+| `alert-write` | 无读取能力；向独立告警队列提交 manifest 已声明的告警 | 请求必须携带当前 trace 授权 token。 |
+
+`trace-activity-read` 将 `llm.call`、request 和可选 response 组合为一条 LLM exchange，并提供命令行、起止时间、Agent 顶层子命令标记和容器归属。
+
+终态 hostcall 仅处理当前授权 trace，不在被观测进程的同步路径上，也不支持跨 trace 查询。
+
 ## 与控制决策的区别
 
 观测消费者是异步消费模型。它适合把观测数据写入文件、上报外部平台或做后处理。它不应该用于决定当前文件访问、命令执行或网络连接是否放行；这类同步治理逻辑属于 [控制决策 ABI](control-decider.zh.md)。

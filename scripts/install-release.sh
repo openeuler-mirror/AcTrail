@@ -10,8 +10,8 @@ DESTDIR defaults to /usr/local/bin.
 
 The script installs/checks build dependencies, runs cargo build --release when
 target/release is incomplete, builds TLS sync preload runtimes, then copies the
-release binaries, runtimes, and the installed-but-disabled file-leakage and
-dynamic file-policy plugins.
+release binaries, runtimes, and the installed-but-disabled file-leakage,
+activity-anomaly, and dynamic file-policy plugins.
 
 Environment:
   ACTRAIL_SUDO  Privilege command for installing into system directories.
@@ -45,6 +45,9 @@ plugin_root="${ACTRAIL_PLUGIN_DIR:-$plugin_home/.actrail/plugins}"
 file_leakage_install_dir="$plugin_root/file-leakage"
 file_leakage_source_dir="$script_dir/../examples/plugins/wit-component/file-leakage"
 file_leakage_artifact="$file_leakage_source_dir/target/wasm32-wasip2/release/actrail_file_leakage_plugin.wasm"
+activity_anomaly_install_dir="$plugin_root/activity-anomaly"
+activity_anomaly_source_dir="$script_dir/../examples/plugins/wit-component/activity-anomaly"
+activity_anomaly_artifact="$activity_anomaly_source_dir/target/wasm32-wasip2/release/actrail_activity_anomaly_plugin.wasm"
 file_policy_install_dir="$plugin_root/file-policy-dynamic"
 file_policy_source_dir="$script_dir/../examples/plugins/wit-component/file-policy-dynamic"
 file_policy_fixture_dir="$file_policy_source_dir/fixture-src"
@@ -140,6 +143,12 @@ run cargo build --release --target wasm32-wasip2 \
   exit 1
 }
 run cargo build --release --target wasm32-wasip2 \
+  --manifest-path "$activity_anomaly_source_dir/Cargo.toml"
+[[ -f "$activity_anomaly_artifact" ]] || {
+  echo "missing plugin artifact $activity_anomaly_artifact" >&2
+  exit 1
+}
+run cargo build --release --target wasm32-wasip2 \
   --manifest-path "$file_policy_fixture_dir/Cargo.toml"
 [[ -f "$file_policy_artifact" ]] || {
   echo "missing plugin artifact $file_policy_artifact" >&2
@@ -151,6 +160,7 @@ mapfile -t plugin_install < <(install_prefix "$plugin_root")
 
 run "${binary_install[@]}" install -d "$dest_dir"
 run "${plugin_install[@]}" install -d "$file_leakage_install_dir"
+run "${plugin_install[@]}" install -d "$activity_anomaly_install_dir"
 run "${plugin_install[@]}" install -d "$file_policy_install_dir"
 
 for binary in "${binaries[@]}"; do
@@ -182,6 +192,18 @@ done
 run "${plugin_install[@]}" install -m 0644 \
   "$file_leakage_artifact" \
   "$file_leakage_install_dir/actrail_file_leakage_plugin.wasm"
+for asset in \
+  activity-anomaly.plugin.toml \
+  activity-anomaly.config.json \
+  activity-anomaly.config.v1.schema.json \
+  llm-growth.payload.v1.schema.json \
+  command-duration.payload.v1.schema.json; do
+  run "${plugin_install[@]}" install -m 0644 \
+    "$activity_anomaly_source_dir/$asset" "$activity_anomaly_install_dir/$asset"
+done
+run "${plugin_install[@]}" install -m 0644 \
+  "$activity_anomaly_artifact" \
+  "$activity_anomaly_install_dir/actrail_activity_anomaly_plugin.wasm"
 run "${plugin_install[@]}" install -m 0644 \
   "$file_policy_source_dir/plugin.toml" \
   "$file_policy_install_dir/file-policy-dynamic.plugin.toml"

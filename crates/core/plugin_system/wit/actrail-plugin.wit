@@ -289,6 +289,55 @@ interface types {
     next-offset: option<u64>,
   }
 
+  record trace-activity-context {
+    root-container-id: option<string>,
+    root-process-id: string,
+    display-name: string,
+    profile-name: string,
+  }
+
+  record llm-exchange-record {
+    call-action-id: string,
+    request-action-id: string,
+    response-action-id: option<string>,
+    process-id: string,
+    model: option<string>,
+    server-address: option<string>,
+    url-path: option<string>,
+    started-at: u64,
+    completed-at: option<u64>,
+    request-body-bytes: u64,
+    request-raw-bytes: option<u64>,
+    request-complete: bool,
+    response-body-bytes: option<u64>,
+    response-raw-bytes: option<u64>,
+    response-complete: bool,
+  }
+
+  record llm-exchange-page {
+    exchanges: list<llm-exchange-record>,
+    next-offset: option<u64>,
+  }
+
+  record command-execution-record {
+    action-id: string,
+    process-id: string,
+    executable: option<string>,
+    command-line: option<string>,
+    started-at: u64,
+    ended-at: option<u64>,
+    status: string,
+    exit-code: option<s32>,
+    agent-action-id: option<string>,
+    parent-command-action-id: option<string>,
+    top-level-agent-child: bool,
+  }
+
+  record command-execution-page {
+    commands: list<command-execution-record>,
+    next-offset: option<u64>,
+  }
+
   record trace-file-state {
     status: trace-file-state-status,
     checked-at: u64,
@@ -349,6 +398,14 @@ interface trace-analysis-read {
   semantic-actions-list: func(offset: option<u64>, limit: u32) -> result<trace-action-page, string>;
 }
 
+interface trace-activity-read {
+  use types.{trace-activity-context, llm-exchange-page, command-execution-page};
+
+  context-get: func() -> result<trace-activity-context, string>;
+  llm-exchanges-list: func(offset: option<u64>, limit: u32) -> result<llm-exchange-page, string>;
+  command-executions-list: func(offset: option<u64>, limit: u32) -> result<command-execution-page, string>;
+}
+
 interface trace-file-state-read {
   use types.{trace-file-state};
 
@@ -403,6 +460,15 @@ world post-trace-observation-plugin {
   import observation-context-read;
   import trace-analysis-read;
   import trace-file-state-read;
+  import alert-write;
+  export observation-consumer;
+  export post-trace-analyzer;
+}
+
+world activity-anomaly-plugin {
+  import host;
+  import observation-context-read;
+  import trace-activity-read;
   import alert-write;
   export observation-consumer;
   export post-trace-analyzer;
