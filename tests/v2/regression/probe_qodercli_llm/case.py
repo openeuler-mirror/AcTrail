@@ -6,12 +6,12 @@ from tests.v2.common.llm_trace_assertion import LLMTraceAssertion
 from tests.v2.common.test_case import TestCase, TestResult, TestStatus
 from tests.v2.common.testing_context import TestingContextSingleton
 
-from .config import ProbeCodexLLMConfig
-from .task import ProbeCodexLLMTask
+from .config import ProbeQoderCliLLMConfig
+from .task import ProbeQoderCliLLMTask
 
 
-class ProbeCodexLLMCase(TestCase):
-    def __init__(self, config: ProbeCodexLLMConfig):
+class ProbeQoderCliLLMCase(TestCase):
+    def __init__(self, config: ProbeQoderCliLLMConfig):
         self._config = config
 
     def run(self, test_context: TestingContextSingleton) -> TestResult:
@@ -25,17 +25,17 @@ class ProbeCodexLLMCase(TestCase):
                 test_context.output,
             )
             try:
-                task = ProbeCodexLLMTask(self._config, runtime)
+                task = ProbeQoderCliLLMTask(self._config, runtime)
             except AgentBinaryNotFoundError as error:
                 return TestResult(TestStatus.SKIPPED, str(error))
             if not test_context.check_agent_availability(
-                "codex",
+                "qodercli",
                 task.binary,
                 task.environment(),
             ):
                 return TestResult(
                     TestStatus.SKIPPED,
-                    "Codex external availability check failed",
+                    "qodercli external availability check failed",
                 )
 
             lifecycle = runtime.prepare()
@@ -47,12 +47,12 @@ class ProbeCodexLLMCase(TestCase):
             launch = task.run()
             if launch.returncode != 0:
                 raise AssertionError(
-                    f"nested actrailctl launch exited with {launch.returncode}\n"
+                    f"actrailctl launch exited with {launch.returncode}\n"
                     f"{launch.output[-4000:]}"
                 )
-            results["nested_launch"] = TestResult(
+            results["launch"] = TestResult(
                 TestStatus.PASSED,
-                "wrapper launch, inner launch, and Codex exited successfully",
+                "actrailctl launch and qodercli exited successfully",
             )
 
             assertion = LLMTraceAssertion(
@@ -61,33 +61,46 @@ class ProbeCodexLLMCase(TestCase):
                 self._config.drain_attempts,
                 self._config.drain_interval_seconds,
             )
-            assertion.require_answer_marker(launch, "Codex")
+            assertion.require_answer_marker(launch, "qodercli")
             results["answer_marker"] = TestResult(
                 TestStatus.PASSED,
-                f"Codex stdout answer contains {task.marker}",
+                f"qodercli stdout answer contains {task.marker}",
             )
 
             trace_id = assertion.require_trace_id(
                 launch,
-                expected_count=2,
-                selected_index=1,
+                expected_count=1,
+                selected_index=0,
             )
-            request_count, response_count = assertion.wait_and_require_exchange(trace_id)
+            stopped = runtime.stop()
+            if stopped is None or stopped.returncode != 0:
+                returncode = None if stopped is None else stopped.returncode
+                raise AssertionError(
+                    f"actraild safe stop exited with {returncode}"
+                )
+            results["runtime_stop"] = TestResult(
+                TestStatus.PASSED,
+                "actraild drained trace finalization and stopped successfully",
+            )
+
+            request_count, response_count = assertion.require_finalized_exchange(
+                trace_id
+            )
             results["llm_exchange"] = TestResult(
                 TestStatus.PASSED,
-                f"trace-{trace_id} has {request_count} paired request(s), "
-                f"{response_count} response(s), and captured markers",
+                f"trace-{trace_id} has {request_count} terminal paired request(s), "
+                f"{response_count} response(s), and a linked marker exchange",
             )
             return TestResult(
                 TestStatus.COMPOSITE,
-                "Codex launch and LLM capture",
+                "qodercli launch and LLM capture",
                 results,
             )
         except Exception as error:
             results["failure"] = TestResult(TestStatus.FAILED, str(error))
             return TestResult(
                 TestStatus.COMPOSITE,
-                "Codex launch and LLM capture",
+                "qodercli launch and LLM capture",
                 results,
             )
         finally:

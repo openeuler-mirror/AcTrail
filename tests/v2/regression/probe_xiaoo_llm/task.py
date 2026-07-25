@@ -7,6 +7,7 @@ import shutil
 from pathlib import Path
 
 from tests.v2.common.actrail_runtime import ActrailRuntime, CommandResult
+from tests.v2.common.errors import AgentBinaryNotFoundError
 
 from .config import ProbeXiaooLLMConfig
 
@@ -22,8 +23,12 @@ class ProbeXiaooLLMTask:
         return self._runtime.run(
             self._command(),
             timeout_seconds=self._config.launch_timeout_seconds,
-            environment=self._environment(),
+            environment=self.environment(),
         )
+
+    @property
+    def binary(self) -> Path:
+        return self._xiaoo
 
     def _command(self) -> list[Path | str]:
         return [
@@ -42,7 +47,12 @@ class ProbeXiaooLLMTask:
 
     def _resolve_xiaoo(self) -> Path:
         if self._config.xiaoo_binary is not None:
-            return self._config.xiaoo_binary
+            if self._is_executable(self._config.xiaoo_binary):
+                return self._config.xiaoo_binary
+            raise AgentBinaryNotFoundError(
+                f"configured xiaoO executable is unavailable: "
+                f"{self._config.xiaoo_binary}"
+            )
         discovered = shutil.which("xiaoo")
         if discovered:
             return Path(discovered)
@@ -55,13 +65,17 @@ class ProbeXiaooLLMTask:
             homes.add(Path(pwd.getpwnam(invoking_user).pw_dir))
         for home in homes:
             candidate = home / ".cargo/bin/xiaoo"
-            if candidate.is_file():
+            if self._is_executable(candidate):
                 return candidate
-        raise RuntimeError(
+        raise AgentBinaryNotFoundError(
             "xiaoO executable not found; set XIAOO_E2E_BINARY to its path"
         )
 
-    def _environment(self) -> dict[str, str]:
+    @staticmethod
+    def _is_executable(path: Path) -> bool:
+        return path.is_file() and os.access(path, os.X_OK)
+
+    def environment(self) -> dict[str, str]:
         environment = os.environ.copy()
         resolved = self._xiaoo.resolve()
         for parent in resolved.parents:

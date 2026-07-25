@@ -239,6 +239,9 @@ impl StorageAttachService {
             terminal_settle_delay: std::time::Duration::from_millis(
                 trace_finalization.settle_delay_ms,
             ),
+            finalization_shutdown_drain_timeout: std::time::Duration::from_millis(
+                trace_finalization.shutdown_drain_timeout_ms,
+            ),
             diagnosed_terminal_open_memberships: Default::default(),
             provider_classifier,
             provider_classification_enabled,

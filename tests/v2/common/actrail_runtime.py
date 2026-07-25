@@ -4,6 +4,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from .output import TestOutput
+
 
 @dataclass(frozen=True)
 class CommandResult:
@@ -18,10 +20,17 @@ class CommandResult:
 
 
 class ActrailRuntime:
-    def __init__(self, repo: Path, bin_dir: Path, command_timeout_seconds: int):
+    def __init__(
+        self,
+        repo: Path,
+        bin_dir: Path,
+        command_timeout_seconds: int,
+        output: TestOutput,
+    ):
         self._repo = repo
         self._bin_dir = bin_dir if bin_dir.is_absolute() else repo / bin_dir
         self._command_timeout_seconds = command_timeout_seconds
+        self._output = output
         self.actraild = self._require_binary("actraild")
         self.actrailctl = self._require_binary("actrailctl")
         self.actrailviewer = self._require_binary("actrailviewer")
@@ -41,7 +50,8 @@ class ActrailRuntime:
         if not self._started:
             return None
         result = self.run([self.actraild, "stop"])
-        self._started = False
+        if result.returncode == 0:
+            self._started = False
         return result
 
     def run(
@@ -62,10 +72,8 @@ class ActrailRuntime:
             timeout=timeout_seconds or self._command_timeout_seconds,
             check=False,
         )
-        if echo and completed.stdout:
-            print(completed.stdout, end="", flush=True)
-        if echo and completed.stderr:
-            print(completed.stderr, end="", flush=True)
+        if echo:
+            self._output.command_output(completed.stdout, completed.stderr)
         return CommandResult(
             argv=command,
             returncode=completed.returncode,

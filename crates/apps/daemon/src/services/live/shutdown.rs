@@ -13,7 +13,124 @@ use trace_runtime::registry::TraceRuntime;
 
 use crate::services::attach::StorageAttachService;
 
+use super::RuntimeDropDiagnosticDraft;
+
 impl StorageAttachService {
+    pub(in crate::services) fn shutdown_impl(
+        &mut self,
+        trace_runtime: &mut TraceRuntime,
+    ) -> Result<(), ControlError> {
+        let mut failures = Vec::new();
+        if let Err(error) = self.drain_terminal_finalizations_for_shutdown(trace_runtime) {
+            failures.push(format!(
+                "terminal finalization: {}: {}",
+                error.code, error.message
+            ));
+        }
+        if let Err(error) = self.shutdown_post_trace_runtime_impl() {
+            failures.push(format!(
+                "post-trace drain: {}: {}",
+                error.code, error.message
+            ));
+        }
+        if let Err(error) = self.shutdown_alert_ingress_impl() {
+            failures.push(format!("alert drain: {}: {}", error.code, error.message));
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(ControlError::new("daemon_shutdown", failures.join("; ")))
+        }
+    }
+
+    fn drain_terminal_finalizations_for_shutdown(
+        &mut self,
+        trace_runtime: &mut TraceRuntime,
+    ) -> Result<(), ControlError> {
+        let started_at = Instant::now();
+        let mut previous_pending_count = usize::MAX;
+        loop {
+            self.drain_live_events_impl(trace_runtime)?;
+            let pending_count = self.pending_terminal_finalizations.len();
+            if pending_count == 0 {
+                return Ok(());
+            }
+            let elapsed = started_at.elapsed();
+            if elapsed >= self.finalization_shutdown_drain_timeout {
+                return self.fail_shutdown_with_pending_finalizations(trace_runtime, elapsed);
+            }
+            if pending_count < previous_pending_count {
+                previous_pending_count = pending_count;
+                continue;
+            }
+            previous_pending_count = pending_count;
+            let remaining = self
+                .finalization_shutdown_drain_timeout
+                .saturating_sub(elapsed);
+            let sleep_for = self.finalization_poll_interval.min(remaining);
+            if sleep_for.is_zero() {
+                std::thread::yield_now();
+            } else {
+                std::thread::sleep(sleep_for);
+            }
+        }
+    }
+
+    fn fail_shutdown_with_pending_finalizations(
+        &mut self,
+        trace_runtime: &mut TraceRuntime,
+        elapsed: std::time::Duration,
+    ) -> Result<(), ControlError> {
+        let trace_ids = self
+            .pending_terminal_finalizations
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        let trace_list = trace_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let message = format!(
+            "daemon shutdown left {} terminal trace(s) pending after {}ms: {}",
+            trace_ids.len(),
+            elapsed.as_millis(),
+            trace_list
+        );
+        let mut trace_states = Vec::with_capacity(trace_ids.len());
+        for trace_id in &trace_ids {
+            trace_runtime.mark_degraded(*trace_id).map_err(|error| {
+                ControlError::new(
+                    "trace_finalization_shutdown_timeout",
+                    format!("{message}; mark {trace_id} degraded failed: {error:?}"),
+                )
+            })?;
+            trace_states.push(self.trace_state_record_for_persistence(trace_runtime, *trace_id)?);
+        }
+        let drafts = trace_ids
+            .into_iter()
+            .map(|trace_id| RuntimeDropDiagnosticDraft {
+                trace_id: Some(trace_id),
+                code: "trace_finalization_shutdown_timeout".to_string(),
+                message: message.clone(),
+            })
+            .collect();
+        self.persist_runtime_drop_diagnostics(trace_runtime, drafts, trace_states)
+            .map_err(|error| {
+                ControlError::new(
+                    "trace_finalization_shutdown_timeout",
+                    format!(
+                        "{message}; persist timeout diagnostics failed: {}: {}",
+                        error.code, error.message
+                    ),
+                )
+            })?;
+        Err(ControlError::new(
+            "trace_finalization_shutdown_timeout",
+            message,
+        ))
+    }
+
     pub(in crate::services) fn finalize_terminal_traces_impl(
         &mut self,
         trace_runtime: &mut TraceRuntime,

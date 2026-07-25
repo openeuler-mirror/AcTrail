@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from tests.v2.common.actrail_runtime import ActrailRuntime
+from tests.v2.common.errors import AgentBinaryNotFoundError
 from tests.v2.common.llm_trace_assertion import LLMTraceAssertion
 from tests.v2.common.test_case import TestCase, TestResult, TestStatus
 from tests.v2.common.testing_context import TestingContextSingleton
@@ -14,7 +15,6 @@ class ProbeClaudeLLMCase(TestCase):
         self._config = config
 
     def run(self, test_context: TestingContextSingleton) -> TestResult:
-        del test_context
         results: dict[str, TestResult] = {}
         runtime: ActrailRuntime | None = None
         try:
@@ -22,14 +22,28 @@ class ProbeClaudeLLMCase(TestCase):
                 self._config.repo,
                 self._config.bin_dir,
                 self._config.command_timeout_seconds,
+                test_context.output,
             )
+            try:
+                task = ProbeClaudeLLMTask(self._config, runtime)
+            except AgentBinaryNotFoundError as error:
+                return TestResult(TestStatus.SKIPPED, str(error))
+            if not test_context.check_agent_availability(
+                "claude",
+                task.binary,
+                task.environment(),
+            ):
+                return TestResult(
+                    TestStatus.SKIPPED,
+                    "Claude external availability check failed",
+                )
+
             lifecycle = runtime.prepare()
             results["runtime_lifecycle"] = TestResult(
                 TestStatus.PASSED,
                 f"{len(lifecycle)} lifecycle commands completed",
             )
 
-            task = ProbeClaudeLLMTask(self._config, runtime)
             launch = task.run()
             if launch.returncode != 0:
                 raise AssertionError(
@@ -58,22 +72,35 @@ class ProbeClaudeLLMCase(TestCase):
                 expected_count=1,
                 selected_index=0,
             )
-            request_count, response_count = assertion.wait_and_require_exchange(trace_id)
+            stopped = runtime.stop()
+            if stopped is None or stopped.returncode != 0:
+                returncode = None if stopped is None else stopped.returncode
+                raise AssertionError(
+                    f"actraild safe stop exited with {returncode}"
+                )
+            results["runtime_stop"] = TestResult(
+                TestStatus.PASSED,
+                "actraild drained trace finalization and stopped successfully",
+            )
+
+            request_count, response_count = assertion.require_finalized_exchange(
+                trace_id
+            )
             results["llm_exchange"] = TestResult(
                 TestStatus.PASSED,
-                f"trace-{trace_id} has {request_count} paired request(s), "
-                f"{response_count} response(s), and captured markers",
+                f"trace-{trace_id} has {request_count} terminal paired request(s), "
+                f"{response_count} response(s), and a linked marker exchange",
             )
             return TestResult(
                 TestStatus.COMPOSITE,
-                "Claude launch and LLM capture passed",
+                "Claude launch and LLM capture",
                 results,
             )
         except Exception as error:
             results["failure"] = TestResult(TestStatus.FAILED, str(error))
             return TestResult(
                 TestStatus.COMPOSITE,
-                "Claude launch and LLM capture failed",
+                "Claude launch and LLM capture",
                 results,
             )
         finally:

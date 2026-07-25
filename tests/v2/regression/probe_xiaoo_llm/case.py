@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from tests.v2.common.actrail_runtime import ActrailRuntime
+from tests.v2.common.errors import AgentBinaryNotFoundError
 from tests.v2.common.llm_trace_assertion import LLMTraceAssertion
 from tests.v2.common.test_case import TestCase, TestResult, TestStatus
 from tests.v2.common.testing_context import TestingContextSingleton
@@ -14,7 +15,6 @@ class ProbeXiaooLLMCase(TestCase):
         self._config = config
 
     def run(self, test_context: TestingContextSingleton) -> TestResult:
-        del test_context
         results: dict[str, TestResult] = {}
         runtime: ActrailRuntime | None = None
         try:
@@ -22,14 +22,28 @@ class ProbeXiaooLLMCase(TestCase):
                 self._config.repo,
                 self._config.bin_dir,
                 self._config.command_timeout_seconds,
+                test_context.output,
             )
+            try:
+                task = ProbeXiaooLLMTask(self._config, runtime)
+            except AgentBinaryNotFoundError as error:
+                return TestResult(TestStatus.SKIPPED, str(error))
+            if not test_context.check_agent_availability(
+                "xiaoo",
+                task.binary,
+                task.environment(),
+            ):
+                return TestResult(
+                    TestStatus.SKIPPED,
+                    "xiaoO external availability check failed",
+                )
+
             lifecycle = runtime.prepare()
             results["runtime_lifecycle"] = TestResult(
                 TestStatus.PASSED,
                 f"{len(lifecycle)} lifecycle commands completed",
             )
 
-            task = ProbeXiaooLLMTask(self._config, runtime)
             launch = task.run()
             if launch.returncode != 0:
                 raise AssertionError(
@@ -66,14 +80,14 @@ class ProbeXiaooLLMCase(TestCase):
             )
             return TestResult(
                 TestStatus.COMPOSITE,
-                "xiaoO launch and LLM capture passed",
+                "xiaoO launch and LLM capture",
                 results,
             )
         except Exception as error:
             results["failure"] = TestResult(TestStatus.FAILED, str(error))
             return TestResult(
                 TestStatus.COMPOSITE,
-                "xiaoO launch and LLM capture failed",
+                "xiaoO launch and LLM capture",
                 results,
             )
         finally:
