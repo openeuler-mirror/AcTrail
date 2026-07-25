@@ -25,6 +25,7 @@ use super::actions::action_for_live_state;
 
 mod call;
 mod http;
+mod websocket;
 
 pub(super) struct LiveLlmProjector {
     config: SemanticRetentionConfig,
@@ -34,12 +35,20 @@ pub(super) struct LiveLlmProjector {
     pending_responses: BTreeMap<LlmStreamKey, VecDeque<SemanticAction>>,
     open_calls_by_request: BTreeMap<(TraceId, String), SemanticAction>,
     open_action_versions: BTreeMap<(TraceId, String), SemanticAction>,
+    websocket: websocket::WebSocketLlmAdapter,
 }
 
 #[derive(Default)]
 pub(super) struct LiveLlmOutput {
     pub(super) actions: Vec<SemanticAction>,
     pub(super) llm_request_contents: Vec<LlmRequestContentWrite>,
+}
+
+impl LiveLlmOutput {
+    fn extend(&mut self, other: Self) {
+        self.actions.extend(other.actions);
+        self.llm_request_contents.extend(other.llm_request_contents);
+    }
 }
 
 impl LiveLlmProjector {
@@ -52,6 +61,7 @@ impl LiveLlmProjector {
             pending_responses: BTreeMap::new(),
             open_calls_by_request: BTreeMap::new(),
             open_action_versions: BTreeMap::new(),
+            websocket: websocket::WebSocketLlmAdapter::default(),
         }
     }
 }
@@ -202,13 +212,12 @@ impl LiveLlmProjector {
         if !plaintext_http_candidate(segment) {
             return LiveLlmOutput::default();
         }
-        let key = LiveStreamKey::from_segment(segment);
-        let output = self
-            .streams
-            .entry(key.clone())
-            .or_default()
-            .observe_segment(&self.config, &self.codecs, &key, segment);
-        self.changed_actions(output)
+        let synthetic = self.websocket.observe(segment);
+        let mut changed = self.observe_http_payload(segment);
+        for candidate in &synthetic {
+            changed.extend(self.observe_http_payload(candidate));
+        }
+        changed
     }
 
     pub(super) fn observe_http_message(&mut self, action: &SemanticAction) -> Vec<SemanticAction> {
@@ -235,6 +244,7 @@ impl LiveLlmProjector {
     }
 
     pub(super) fn forget_trace(&mut self, trace_id: TraceId) {
+        self.websocket.forget_trace(trace_id);
         self.streams.retain(|key, _| key.group.trace_id != trace_id);
         self.open_requests.retain(|key, _| key.trace_id != trace_id);
         self.pending_responses
@@ -250,6 +260,7 @@ impl LiveLlmProjector {
         trace_id: TraceId,
         finished_at: SystemTime,
     ) -> Vec<SemanticAction> {
+        self.websocket.forget_trace(trace_id);
         let trace_close_completed_response_ids = self
             .open_action_versions
             .iter()
@@ -297,6 +308,16 @@ impl LiveLlmProjector {
         self.open_action_versions
             .retain(|(candidate, _), _| *candidate != trace_id);
         finalized
+    }
+
+    fn observe_http_payload(&mut self, segment: &PayloadSegment) -> LiveLlmOutput {
+        let key = LiveStreamKey::from_segment(segment);
+        let output = self
+            .streams
+            .entry(key.clone())
+            .or_default()
+            .observe_segment(&self.config, &self.codecs, &key, segment);
+        self.changed_actions(output)
     }
 
     fn changed_actions(&mut self, output: LiveLlmOutput) -> LiveLlmOutput {

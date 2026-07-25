@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use std::os::fd::RawFd;
 use std::path::PathBuf;
 
+use model_core::binary_identity::BinaryIdentity;
 use model_core::ids::{ProfileName, RequestId, TraceId, TraceName};
 use model_core::process::{InitialSuppressedFd, NamespaceIdentity};
 
@@ -58,6 +59,16 @@ pub struct ResolveLaunchTlsPlanCommand {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LaunchTlsProbePlan {
+    pub target: PathBuf,
+    pub target_identity: BinaryIdentity,
+    pub binary: PathBuf,
+    pub binary_identity: BinaryIdentity,
+    pub provider: String,
+    pub points: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TrackAddCommand {
     pub request_id: RequestId,
     pub root: ProcessRef,
@@ -66,6 +77,7 @@ pub struct TrackAddCommand {
     pub tags: BTreeSet<String>,
     pub launch_mode: bool,
     pub initial_suppressed_fds: Vec<InitialSuppressedFd>,
+    pub tls_probe_plan: Option<LaunchTlsProbePlan>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

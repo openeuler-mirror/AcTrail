@@ -73,7 +73,10 @@ impl StorageAttachService {
             if let Some(record) = record {
                 process_records.insert(record.identity, record);
             }
-            if trace_runtime.find_membership(&process).is_none() {
+            if trace_runtime
+                .find_membership_in_trace(raw.trace_id, &process)
+                .is_none()
+            {
                 trace_runtime
                     .insert_membership(
                         raw.trace_id,
@@ -205,8 +208,9 @@ impl PayloadTransactionContext<'_> {
         resolved: ResolvedRawPayloadSegment,
     ) -> Result<SemanticActionBatch, ControlError> {
         let raw = resolved.raw;
-        let Some((matched_trace_id, membership)) =
-            self.trace_runtime.find_membership(&resolved.process)
+        let Some(membership) = self
+            .trace_runtime
+            .find_membership_in_trace(raw.trace_id, &resolved.process)
         else {
             self.log_payload_diagnostic(format_args!(
                 "payload_persist drop_membership_miss trace_id={} process_id={} source={:?} operation_id={}",
@@ -217,17 +221,6 @@ impl PayloadTransactionContext<'_> {
             ));
             return Ok(SemanticActionBatch::default());
         };
-        if matched_trace_id != raw.trace_id {
-            self.log_payload_diagnostic(format_args!(
-                "payload_persist drop_trace_mismatch raw_trace_id={} matched_trace_id={} process_id={} source={:?} operation_id={}",
-                raw.trace_id,
-                matched_trace_id,
-                resolved.process.get(),
-                raw.source_boundary,
-                raw.operation_id
-            ));
-            return Ok(SemanticActionBatch::default());
-        }
         let policy = self.policy.for_segment(&raw)?;
         if matches!(policy.stdio_storage_mode, PayloadStdioStorageMode::Drop) {
             self.log_payload_diagnostic(format_args!(

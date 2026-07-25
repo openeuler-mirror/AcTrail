@@ -57,6 +57,7 @@ fn main() {
     println!("cargo:rerun-if-changed=bpf/tls/actrail_tls_payload_completion.h");
     println!("cargo:rerun-if-changed=bpf/tls/actrail_tls_payload_diagnostics.h");
     println!("cargo:rerun-if-changed=bpf/tls/actrail_tls_payload_probes.h");
+    println!("cargo:rerun-if-changed=bpf/tls/actrail_tls_rustls_internal.h");
     println!("cargo:rerun-if-changed=/proc/sys/kernel/osrelease");
     println!("cargo:rerun-if-changed=/sys/kernel/btf/vmlinux");
     println!("cargo:rerun-if-env-changed=ACTRAIL_BPF_SYSTEM_INCLUDE");

@@ -6,7 +6,7 @@ flowchart TD
 
   subgraph FAST["fast::resolve(binary, provider=auto, source=auto)"]
     FAST_IN["输入 binary path 或 executable name"]
-    FAST_ELF["解析 entry ELF、build-id、architecture"]
+    FAST_ELF["解析 entry ELF、BinaryIdentity、architecture"]
     FAST_CANDIDATES["同级 resolver 候选；数字只表示尝试顺序"]
     FAST_R1["1. rustls executable symbol resolver"]
     FAST_R2["2. OpenSSL executable symbol resolver"]
@@ -45,7 +45,7 @@ flowchart TD
 
   subgraph PLAN_STORE["daemon binary plan storage"]
     STORE_REQ["TlsSyncPlanResolver 收到 plan lookup 或 prewarm"]
-    STORE_KEY["按 canonical path、size、mtime、build-id 构造 BinaryPlanKey"]
+    STORE_KEY["按 canonical path、size、mtime、BinaryIdentity 构造 BinaryPlanKey"]
     STORE_GET["BinaryPlanStore::get"]
     STORE_HIT{"缓存命中 Found 或 Unsupported"}
     STORE_RESOLVE["未命中：调用 fast::resolve(binary)"]

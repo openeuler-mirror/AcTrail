@@ -66,6 +66,8 @@ struct actrail_stdio_payload_event {
     __u32 fd;
     __u32 syscall;
     __u64 pid_generation;
+    __u32 host_pid;
+    __u32 host_tid;
     __u8 bytes[ACTRAIL_STDIO_PAYLOAD_ABI_MAX_BYTES];
 };
 
@@ -173,6 +175,7 @@ static __always_inline int store_stdio_payload_op(
 
 static __always_inline int emit_stdio_payload_op(struct trace_event_raw_sys_exit *ctx) {
     __u64 pid_tgid = current_pid_tgid();
+    __u64 kernel_pid_tgid = current_kernel_pid_tgid();
     __u32 tgid = pid_tgid >> 32;
     __u32 tid = (__u32)pid_tgid;
     struct actrail_pending_stdio_payload_op *op =
@@ -223,6 +226,8 @@ static __always_inline int emit_stdio_payload_op(struct trace_event_raw_sys_exit
     event->fd = op->fd;
     event->syscall = op->syscall;
     event->pid_generation = current_process_start_time(tgid);
+    event->host_pid = kernel_pid_tgid >> 32;
+    event->host_tid = (__u32)kernel_pid_tgid;
     if (bpf_probe_read_user(event->bytes, bounded_size, (void *)(unsigned long)op->buffer_ptr) != 0) {
         actrail_event_discard(event);
         bpf_map_delete_elem(&pending_stdio_payload_ops, &pid_tgid);

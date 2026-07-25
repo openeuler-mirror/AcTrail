@@ -456,6 +456,7 @@ fn network_control_event(
         .observation();
     Ok(RawCollectorEvent {
         envelope: RawEventEnvelope {
+            trace_id: Some(candidate.trace_id),
             observed_at: SystemTime::now(),
             process,
             collector: CollectorName::new(NETWORK_CONTROL_COLLECTOR_NAME),

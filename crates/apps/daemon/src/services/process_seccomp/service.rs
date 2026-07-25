@@ -565,6 +565,7 @@ fn process_event(
 ) -> RawCollectorEvent {
     RawCollectorEvent {
         envelope: RawEventEnvelope {
+            trace_id: None,
             observed_at,
             process,
             collector: CollectorName::new(PROCESS_SECCOMP_COLLECTOR_NAME),

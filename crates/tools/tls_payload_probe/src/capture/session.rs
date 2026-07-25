@@ -6,7 +6,7 @@ use std::process::ExitStatus;
 use std::thread;
 use std::time::Instant;
 
-use tls_probe_point_finder::fast::FastProbeRequest;
+use tls_probe_point_finder::fast::{FastProbeRequest, ProbeConsumer};
 use tls_probe_point_finder::{ProbePointPlan, TlsProvider};
 
 use crate::capture::config::{
@@ -124,6 +124,21 @@ fn validate_config(config: &CaptureConfig) -> ToolResult<()> {
             "decode_reader_buffer_bytes must be positive",
         ));
     }
+    if config.websocket.max_frame_buffer_bytes == 0 {
+        return Err(ToolError::new(
+            "websocket.max_frame_buffer_bytes must be positive",
+        ));
+    }
+    if config.websocket.max_message_bytes == 0 {
+        return Err(ToolError::new(
+            "websocket.max_message_bytes must be positive",
+        ));
+    }
+    if config.websocket.max_decoded_bytes == 0 {
+        return Err(ToolError::new(
+            "websocket.max_decoded_bytes must be positive",
+        ));
+    }
     Ok(())
 }
 
@@ -131,15 +146,18 @@ fn resolve_plan(config: &CaptureConfig) -> ToolResult<ProbePointPlan> {
     let Some(program) = config.command.first() else {
         return Err(ToolError::new("probe command is empty"));
     };
-    tls_probe_point_finder::fast::resolve(FastProbeRequest {
-        binary: program.into(),
-        arch: config.arch,
-        provider: config.provider,
-        source: config.source,
-        match_limit: config.match_limit,
-        libraries: config.libraries.clone(),
-        library_search_dirs: config.library_search_dirs.clone(),
-    })
+    tls_probe_point_finder::fast::resolve_for_consumer(
+        FastProbeRequest {
+            binary: program.into(),
+            arch: config.arch,
+            provider: config.provider,
+            source: config.source,
+            match_limit: config.match_limit,
+            libraries: config.libraries.clone(),
+            library_search_dirs: config.library_search_dirs.clone(),
+        },
+        ProbeConsumer::Standalone,
+    )
     .map_err(Into::into)
 }
 

@@ -3,6 +3,8 @@
 pub mod capability_probe;
 #[path = "collector/dynamic_go_tls.rs"]
 mod collector_dynamic_go_tls;
+#[path = "collector/dynamic_tls.rs"]
+mod collector_dynamic_tls;
 #[path = "collector/events.rs"]
 mod collector_events;
 pub mod decode;
@@ -42,6 +44,7 @@ use crate::loader::{
 };
 use crate::maps::BindingStateMap;
 use collector_dynamic_go_tls::DynamicGoTlsAttacher;
+use collector_dynamic_tls::DynamicTlsAttacher;
 
 #[cfg(test)]
 mod tests;
@@ -53,6 +56,7 @@ pub struct EbpfCollector {
     runtime: Option<EbpfRuntime>,
     file_tracker: FileTracker,
     dynamic_go_tls: DynamicGoTlsAttacher,
+    dynamic_tls: DynamicTlsAttacher,
     file_bulk_read_fast_path: FileBulkReadFastPathConfig,
     tls_capture_requests: Vec<TlsPayloadCaptureRequest>,
     tls_completions: Vec<TlsPayloadCompletion>,
@@ -146,6 +150,7 @@ impl EbpfCollector {
             runtime: None,
             file_tracker: FileTracker::default(),
             dynamic_go_tls: DynamicGoTlsAttacher::new(&payload_config.tls),
+            dynamic_tls: DynamicTlsAttacher::default(),
             file_bulk_read_fast_path,
             tls_capture_requests: Vec::new(),
             tls_completions: Vec::new(),

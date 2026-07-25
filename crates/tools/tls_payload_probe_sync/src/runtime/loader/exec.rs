@@ -94,6 +94,10 @@ fn merge_exec_env_inner(
         fail_on_unknown_runtime,
     )?;
     let mut merged = child_env.to_vec();
+    let Some(runtime_family) = runtime_family else {
+        strip_tls_sync_for_static_target(&mut merged, current_env);
+        return Ok(merged);
+    };
     merge_tls_sync_env(&mut merged, current_env);
     strip_active_plan_env(&mut merged);
     merge_ld_library_path_prefix(&mut merged, current_env, runtime_family);
@@ -309,7 +313,7 @@ fn target_runtime_family(
     child_env: &[EnvEntry],
     current_env: &[EnvEntry],
     fail_on_unknown_runtime: bool,
-) -> Result<LibcFamily, String> {
+) -> Result<Option<LibcFamily>, String> {
     let path_value = env_value(child_env, PATH_ENV).or_else(|| env_value(current_env, PATH_ENV));
     let Some(target) = target else {
         if fail_on_unknown_runtime {
@@ -318,13 +322,23 @@ fn target_runtime_family(
                 program.to_string_lossy()
             ));
         }
-        return Ok(LibcFamily::Glibc);
+        return Ok(Some(LibcFamily::Glibc));
     };
     match tls_payload_sync::target_runtime_for_path(target, path_value) {
         Ok(runtime) => Ok(runtime.libc),
         Err(error) if fail_on_unknown_runtime => Err(error.to_string()),
-        Err(_) => Ok(LibcFamily::Glibc),
+        Err(_) => Ok(Some(LibcFamily::Glibc)),
     }
+}
+
+fn strip_tls_sync_for_static_target(merged: &mut Vec<EnvEntry>, current_env: &[EnvEntry]) {
+    for key in [LD_PRELOAD, LD_AUDIT] {
+        let entries = env_value(merged, key)
+            .map(|value| loader_entries_without_actrail_runtime(value, current_env))
+            .unwrap_or_default();
+        set_loader_env(merged, key, &entries);
+    }
+    merged.retain(|entry| !os_str_starts_with(&entry.key, TLS_SYNC_PREFIX));
 }
 
 fn split_colon_entries(value: &[u8]) -> Vec<&[u8]> {

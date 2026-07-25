@@ -29,6 +29,7 @@ pub fn dispatch(
             tags,
             launch_mode: false,
             initial_suppressed_fds: Vec::new(),
+            tls_probe_plan: None,
         }),
         CtlCommand::TrackRemove { selector } => ControlCommand::TrackRemove(TrackRemoveCommand {
             request_id,

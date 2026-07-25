@@ -26,7 +26,8 @@ use config_core::daemon::{
     PayloadTlsConfig, PayloadTlsSeccompSyscall, ProcessSeccompSyscall,
 };
 use control_contract::command::{
-    ControlCommand, ResolveLaunchPermissionsCommand, TrackAddCommand, TrackRemoveCommand,
+    ControlCommand, LaunchTlsProbePlan, ResolveLaunchPermissionsCommand, TrackAddCommand,
+    TrackRemoveCommand,
 };
 use control_contract::reply::{ControlError, ControlReply};
 use control_contract::selector::TraceSelector;
@@ -124,7 +125,8 @@ pub(crate) fn run_launch(
         permission_reply.file_mkdir_seccomp,
         permission_reply.file_rmdir_seccomp,
     ));
-    let seccomp_enabled = effective_seccomp.requires_seccomp_notify();
+    let seccomp_enabled =
+        permission_reply.selected_seccomp_notify && effective_seccomp.requires_seccomp_notify();
     timing.mark_detail(
         "permission_decision",
         format_args!(
@@ -178,7 +180,10 @@ pub(crate) fn run_launch(
         "resolve_launch_command",
         format_args!("argc={}", command.len()),
     );
-    let mut sync_event_fd = if tls_sync_enabled {
+    let sync_runtime_required = sync_launch
+        .as_ref()
+        .is_some_and(SyncLaunch::requires_sync_runtime);
+    let mut sync_event_fd = if sync_runtime_required {
         Some(InheritableSuppressedFd::connect_unix_socket(
             &request.payload_tls_config.sync_event_socket_path,
             SuppressedFdPurpose::TlsSyncEvent,
@@ -188,7 +193,7 @@ pub(crate) fn run_launch(
     };
     timing.mark_detail(
         "connect_sync_event_socket",
-        format_args!("enabled={tls_sync_enabled}"),
+        format_args!("enabled={sync_runtime_required}"),
     );
     let mut child = ControlledChild::spawn(command, child_setup)?;
     timing.mark_detail("spawn_stopped_child", format_args!("pid={}", child.pid()));
@@ -208,6 +213,17 @@ pub(crate) fn run_launch(
             .map(InheritableSuppressedFd::initial_suppressed_fd)
             .into_iter()
             .collect(),
+        tls_probe_plan: sync_launch
+            .as_ref()
+            .and_then(SyncLaunch::direct_probe_plan)
+            .map(|plan| LaunchTlsProbePlan {
+                target: plan.target.clone(),
+                target_identity: plan.target_identity.clone(),
+                binary: plan.binary.clone(),
+                binary_identity: plan.binary_identity.clone(),
+                provider: plan.provider.clone(),
+                points: plan.points.clone(),
+            }),
     })) {
         Ok(reply) => reply,
         Err(error) => {
@@ -276,7 +292,7 @@ pub(crate) fn run_launch(
     drop(sync_event_fd.take());
     timing.mark_detail(
         "drop_sync_event_fd_parent_copy",
-        format_args!("enabled={tls_sync_enabled}"),
+        format_args!("enabled={sync_runtime_required}"),
     );
     if let Err(error) = child.continue_with_envs(envs) {
         child.terminate();

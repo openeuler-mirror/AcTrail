@@ -60,7 +60,8 @@ static __always_inline int tls_probe_event_submit(
 static __always_inline int submit_reserved_payload(
     void *ctx,
     struct tls_probe_payload_event *event,
-    struct tls_probe_emit_segment *segment
+    struct tls_probe_emit_segment *segment,
+    __u32 captured_size
 ) {
     if (!event) {
         return 0;
@@ -72,7 +73,7 @@ static __always_inline int submit_reserved_payload(
     event->provider = tls_probe_provider();
     event->symbol = segment->op.symbol;
     event->flags = segment->op.flags;
-    event->captured_size = segment->captured_size;
+    event->captured_size = captured_size;
     event->requested_size = segment->op.requested_size;
     event->observed_ktime_ns = segment->operation_time_ns;
     event->stream_key = segment->op.stream_key;
@@ -80,14 +81,14 @@ static __always_inline int submit_reserved_payload(
     event->operation_size = segment->operation_size;
     if (bpf_probe_read_user(
             event->bytes,
-            segment->captured_size,
+            captured_size,
             (void *)(unsigned long)(segment->op.buffer_ptr + segment->segment_offset)
         ) != 0) {
-        ring_diag_record_read_user_fail(segment->captured_size, segment->reserve_size);
+        ring_diag_record_read_user_fail(captured_size, segment->reserve_size);
         tls_probe_event_discard(event);
         return 0;
     }
-    return tls_probe_event_submit(ctx, event, segment->captured_size, segment->reserve_size);
+    return tls_probe_event_submit(ctx, event, captured_size, segment->reserve_size);
 }
 
 static __always_inline int emit_payload_segment(void *ctx, struct tls_probe_emit_segment *segment) {
@@ -103,26 +104,26 @@ static __always_inline int emit_payload_segment(void *ctx, struct tls_probe_emit
     if (captured_size <= TLS_PROBE_PAYLOAD_CLASS_512) {
         segment->reserve_size = TLS_PROBE_EVENT_HEADER_BYTES + TLS_PROBE_PAYLOAD_CLASS_512;
         event = tls_probe_event_reserve(captured_size, segment->reserve_size);
-        return submit_reserved_payload(ctx, event, segment);
+        return submit_reserved_payload(ctx, event, segment, captured_size);
     }
     if (captured_size <= TLS_PROBE_PAYLOAD_CLASS_2048) {
         segment->reserve_size = TLS_PROBE_EVENT_HEADER_BYTES + TLS_PROBE_PAYLOAD_CLASS_2048;
         event = tls_probe_event_reserve(captured_size, segment->reserve_size);
-        return submit_reserved_payload(ctx, event, segment);
+        return submit_reserved_payload(ctx, event, segment, captured_size);
     }
     if (captured_size <= TLS_PROBE_PAYLOAD_CLASS_4096) {
         segment->reserve_size = TLS_PROBE_EVENT_HEADER_BYTES + TLS_PROBE_PAYLOAD_CLASS_4096;
         event = tls_probe_event_reserve(captured_size, segment->reserve_size);
-        return submit_reserved_payload(ctx, event, segment);
+        return submit_reserved_payload(ctx, event, segment, captured_size);
     }
     if (captured_size <= TLS_PROBE_PAYLOAD_CLASS_8192) {
         segment->reserve_size = TLS_PROBE_EVENT_HEADER_BYTES + TLS_PROBE_PAYLOAD_CLASS_8192;
         event = tls_probe_event_reserve(captured_size, segment->reserve_size);
-        return submit_reserved_payload(ctx, event, segment);
+        return submit_reserved_payload(ctx, event, segment, captured_size);
     }
     segment->reserve_size = TLS_PROBE_EVENT_HEADER_BYTES + TLS_PROBE_ABI_MAX_CAPTURE_BYTES;
     event = tls_probe_event_reserve(captured_size, segment->reserve_size);
-    return submit_reserved_payload(ctx, event, segment);
+    return submit_reserved_payload(ctx, event, segment, captured_size);
 }
 
 static __always_inline int emit_payload_segment_fixed(void *ctx, struct tls_probe_emit_segment *segment) {
@@ -137,7 +138,7 @@ static __always_inline int emit_payload_segment_fixed(void *ctx, struct tls_prob
     segment->captured_size = captured_size;
     segment->reserve_size = TLS_PROBE_EVENT_HEADER_BYTES + TLS_PROBE_ABI_MAX_CAPTURE_BYTES;
     event = tls_probe_event_reserve(captured_size, segment->reserve_size);
-    return submit_reserved_payload(ctx, event, segment);
+    return submit_reserved_payload(ctx, event, segment, captured_size);
 }
 
 static __always_inline int emit_payload_single(void *ctx, struct tls_probe_emit_op *op) {

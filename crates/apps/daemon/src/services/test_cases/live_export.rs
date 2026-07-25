@@ -309,6 +309,7 @@ impl ObservationConsumer for RecordingConsumer {
 fn raw_tty_write(process: ProcessIdentity) -> RawCollectorEvent {
     RawCollectorEvent {
         envelope: RawEventEnvelope {
+            trace_id: None,
             observed_at: SystemTime::UNIX_EPOCH,
             process: super::test_process_observation(process),
             collector: CollectorName::new("test-file"),

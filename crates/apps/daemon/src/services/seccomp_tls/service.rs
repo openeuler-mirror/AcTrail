@@ -94,7 +94,7 @@ impl SeccompTlsService {
     ) -> Result<(), ControlError> {
         for request in requests {
             let read_result = self.capture_stopped_request(&request);
-            let continue_result = continue_stopped_process(request.pid);
+            let continue_result = continue_stopped_process(request.host_pid);
             continue_result?;
             read_result?;
         }
@@ -288,7 +288,7 @@ impl SeccompTlsService {
         request: &TlsPayloadCaptureRequest,
     ) -> Result<(), ControlError> {
         let Some(bytes) = self.capture_request_bytes(
-            request.pid,
+            request.host_pid,
             request.symbol,
             request.buffer_ptr,
             request.requested_size,
@@ -355,11 +355,11 @@ fn tls_completion_identity(
 ) -> Result<Option<ProcessObservation>, ControlError> {
     if completion.pid_generation != 0 {
         return Ok(Some(ProcessObservation::host(
-            HostProcessCoordinates::new(completion.pid, 0)
+            HostProcessCoordinates::new(completion.host_pid, 0)
                 .with_start_boottime_ns(completion.pid_generation),
         )));
     }
-    match identity_reader.read_identity(completion.pid) {
+    match identity_reader.read_identity(completion.host_pid) {
         Ok(identity) => Ok(Some(identity)),
         Err(IdentityLookupError::NotFound { .. }) => Ok(None),
         Err(error) => Err(ControlError::new(
@@ -396,6 +396,8 @@ fn tls_symbol(raw: u32) -> Result<&'static str, ControlError> {
         12 => Ok("PR_Send"),
         13 => Ok("PR_Read"),
         14 => Ok("PR_Recv"),
+        15 => Ok("rustls_buffer_plaintext"),
+        16 => Ok("rustls_take_received_plaintext"),
         other => Err(ControlError::new(
             "seccomp_tls_symbol",
             format!("unknown TLS symbol {other}"),

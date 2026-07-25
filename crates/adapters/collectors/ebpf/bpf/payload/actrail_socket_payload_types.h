@@ -83,6 +83,8 @@ struct actrail_socket_payload_event {
     __u32 syscall;
     __u32 fd_generation;
     __u64 pid_generation;
+    __u32 host_pid;
+    __u32 host_tid;
     __u8 bytes[ACTRAIL_SOCKET_PAYLOAD_ABI_MAX_BYTES];
 };
 
@@ -102,6 +104,8 @@ struct actrail_socket_payload_completion_event {
     __u32 flags;
     __u32 syscall;
     __u32 fd_generation;
+    __u32 host_pid;
+    __u32 host_tid;
 };
 
 struct {

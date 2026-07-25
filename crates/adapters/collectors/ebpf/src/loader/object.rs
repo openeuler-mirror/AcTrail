@@ -170,14 +170,15 @@ fn strip_perf_trailing_padding(raw: &[u8]) -> Option<&[u8]> {
 
 #[cfg(any(feature = "perf-buffer", actrail_event_transport_perf))]
 fn known_event_size(kind: u32, size: usize) -> bool {
-    const TLS_FIXED_EVENT_SIZE: usize = 80;
-    const TLS_DIRECT_CAPTURE_EVENT_SIZE: usize = 80 + 4_194_304;
+    const TLS_PAYLOAD_FIXED_EVENT_SIZE: usize = 88;
+    const TLS_DIAGNOSTIC_EVENT_SIZE: usize = 80;
+    const TLS_DIRECT_CAPTURE_EVENT_SIZE: usize = 88 + 4_194_304;
     const FILE_EVENT_HEADER_SIZE: usize = 128;
     const FILE_EVENT_PRIMARY_PATH_SIZE: usize = FILE_EVENT_HEADER_SIZE + 256;
     const FILE_EVENT_SIZE: usize = FILE_EVENT_HEADER_SIZE + 256 * 2;
-    const STDIO_EVENT_SIZE: usize = 72 + 4_096;
-    const SOCKET_EVENT_SIZE: usize = 72 + 4_096;
-    const SOCKET_COMPLETION_EVENT_SIZE: usize = 88;
+    const STDIO_EVENT_SIZE: usize = 80 + 4_096;
+    const SOCKET_EVENT_SIZE: usize = 80 + 4_096;
+    const SOCKET_COMPLETION_EVENT_SIZE: usize = 96;
 
     if !known_event_kind(kind) {
         return false;
@@ -186,8 +187,9 @@ fn known_event_size(kind: u32, size: usize) -> bool {
     match kind {
         1 | 3 | 4 | 100..=105 => size == KERNEL_OBSERVATION_EVENT_SIZE,
         2 => size == EXEC_EVENT_SIZE,
-        201 | 202 | 204 => size == TLS_FIXED_EVENT_SIZE,
+        201 | 202 => size == TLS_PAYLOAD_FIXED_EVENT_SIZE,
         203 => size == TLS_DIRECT_CAPTURE_EVENT_SIZE,
+        204 => size == TLS_DIAGNOSTIC_EVENT_SIZE,
         300..=308 => {
             matches!(
                 size,

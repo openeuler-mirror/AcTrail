@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use crate::capture::{CaptureDirection, SseFrame};
+use crate::capture::{CaptureDirection, SseFrame, WebSocketMessage};
 
 pub(super) const DEFAULT_STREAM_INDEX: u64 = 0;
 pub(super) const JSON_FIELD_CONTENT: &str = "content";
@@ -131,6 +131,22 @@ impl LlmKey {
     pub(super) fn from_responses_frame(frame: &SseFrame, value: &Value) -> Self {
         Self::from_frame_indices(
             frame,
+            value
+                .get(JSON_FIELD_OUTPUT_INDEX)
+                .and_then(Value::as_u64)
+                .unwrap_or(DEFAULT_STREAM_INDEX),
+            value
+                .get(JSON_FIELD_CONTENT_INDEX)
+                .and_then(Value::as_u64)
+                .unwrap_or(DEFAULT_STREAM_INDEX),
+        )
+    }
+
+    pub(super) fn from_responses_websocket(message: &WebSocketMessage, value: &Value) -> Self {
+        Self::from_indices(
+            message.pid,
+            message.stream_key,
+            message.direction,
             value
                 .get(JSON_FIELD_OUTPUT_INDEX)
                 .and_then(Value::as_u64)

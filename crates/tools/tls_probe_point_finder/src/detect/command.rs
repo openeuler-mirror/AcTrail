@@ -4,449 +4,230 @@ use crate::ToolResult;
 use crate::args::{DetectArgs, ProviderChoice, SourceChoice, require_arch};
 use crate::binary::resolve_entry_elf;
 use crate::elf::ElfImage;
-use crate::providers::{boringssl, go_tls, legacy_tls, openssl, rustls};
-
-use super::assemble::{
-    detected_offsets_report, exported_symbols, missing_symbols, names_with_extra,
-    pattern_matches_report, rustls_detected_offsets_report, rustls_pattern_matches_report,
-    symbol_map_report,
+use crate::plan::{ProbeSource, TargetIdentity, TlsProvider};
+use crate::probe_detector::contract::candidate::ProbeCandidate;
+use crate::probe_detector::contract::detection::{
+    DetectionEvidence, DetectionOutcome, DetectionRequest, ProbeConsumer, ProbeContext,
 };
+use crate::probe_detector::contract::detector::ProbeDetector;
+use crate::probe_detector::detector::tls::{TlsProbeDetector, TlsProbeDetectorConfig};
+
 use super::report::*;
 
 pub(crate) fn run(args: DetectArgs) -> ToolResult<DetectReport> {
     let binary = resolve_entry_elf(&args.binary)?;
     let image = ElfImage::parse(&binary)?;
     require_arch(image.arch(), args.arch, image.path())?;
-    let mut report = DetectReport {
+    let target = TargetIdentity {
+        binary: image.path().to_path_buf(),
+        architecture: image.arch().as_str().to_string(),
+        identity: image.identity().clone(),
+    };
+    let request = DetectionRequest {
+        requested_provider: provider(args.provider),
+        requested_source: source(args.source),
+        libraries: args.libraries,
+        library_search_dirs: args.library_search_dirs,
+        consumer: ProbeConsumer::PlanOnly,
+    };
+    let context = ProbeContext::executable(&target, &image, &request);
+    let detector =
+        TlsProbeDetector::try_new(TlsProbeDetectorConfig::for_diagnostics(args.match_limit))?;
+    let outcome = detector
+        .detect(&context)
+        .map_err(|error| crate::ToolError::new(error.to_string()))?;
+    let mut candidates = Vec::new();
+    OutcomeProjector::new(&mut candidates).project(&outcome);
+    Ok(DetectReport {
         target: TargetReport::from_image(&image),
         notices: Vec::new(),
-        candidates: Vec::new(),
-    };
+        candidates,
+    })
+}
 
-    if matches!(args.source, SourceChoice::Auto | SourceChoice::Executable) {
-        for provider in providers(args.provider) {
-            let explicit = args.provider != ProviderChoice::Auto;
-            let candidate = detect_executable_provider(&image, provider, &args, explicit)
-                .unwrap_or_else(|error| {
-                    CandidateReport::failed(
-                        "executable",
-                        provider_name(provider),
-                        error.to_string(),
-                    )
-                });
-            report.candidates.push(candidate);
+struct OutcomeProjector<'a> {
+    reports: &'a mut Vec<CandidateReport>,
+}
+
+impl<'a> OutcomeProjector<'a> {
+    fn new(reports: &'a mut Vec<CandidateReport>) -> Self {
+        Self { reports }
+    }
+
+    fn project(&mut self, outcome: &DetectionOutcome) {
+        match outcome {
+            DetectionOutcome::Matched(candidate) => {
+                if candidate.evidence.children.is_empty() {
+                    self.reports.push(Self::matched(candidate));
+                } else {
+                    for child in &candidate.evidence.children {
+                        self.project(child);
+                    }
+                }
+            }
+            DetectionOutcome::NoMatch(evidence) => self.project_no_match(evidence),
+            DetectionOutcome::Inapplicable(_) => {}
+            DetectionOutcome::Ambiguous(ambiguous) => {
+                for candidate in &ambiguous.candidates {
+                    let mut report = Self::matched(candidate);
+                    report.status = CandidateStatus::Ambiguous;
+                    self.reports.push(report);
+                }
+            }
+            DetectionOutcome::Collected(evidence) => {
+                for child in &evidence.children {
+                    self.project(child);
+                }
+            }
         }
     }
-    if matches!(
-        args.source,
-        SourceChoice::Auto | SourceChoice::SharedLibrary
-    ) {
-        let (mut candidates, notices) = detect_shared_libraries(&image, &args);
-        report.notices.extend(notices);
-        report.candidates.append(&mut candidates);
-    }
-    Ok(report)
-}
 
-fn detect_executable_provider(
-    image: &ElfImage,
-    provider: ProviderChoice,
-    args: &DetectArgs,
-    explicit: bool,
-) -> ToolResult<CandidateReport> {
-    match provider {
-        ProviderChoice::OpenSsl => detect_executable_openssl(image, args),
-        ProviderChoice::BoringSsl => detect_executable_boringssl(image, args, explicit),
-        ProviderChoice::Rustls => detect_executable_rustls(image, args),
-        ProviderChoice::Go => detect_executable_go(image),
-        ProviderChoice::GnuTls | ProviderChoice::Nss => Ok(CandidateReport::failed(
-            "executable",
-            provider_name(provider),
-            "executable detection is not implemented for this shared-library TLS provider",
-        )),
-        ProviderChoice::Auto => unreachable!("auto provider is expanded before detection"),
-    }
-}
-
-fn detect_executable_openssl(image: &ElfImage, args: &DetectArgs) -> ToolResult<CandidateReport> {
-    let mut candidate = CandidateReport::new("executable", openssl::NAME);
-    candidate.exported_symbols = exported_symbols(
-        image,
-        &names_with_extra(openssl::PROBE_SYMBOLS, &args.symbols),
-    )?;
-    let symbols = image.unique_defined_symbol_values(openssl::PROBE_SYMBOLS)?;
-    let missing = missing_symbols(openssl::REQUIRED_SYMBOLS, &symbols);
-    if !missing.is_empty() {
-        candidate.exported_symbol_map = Some(MapStatusReport::missing("incomplete", &missing));
-        candidate.status = CandidateStatus::Failed {
-            error: format!(
-                "OpenSSL provider requires exported SSL_read/write and SSL_read_ex/write_ex symbols; {} is optional",
-                openssl::OPTIONAL_PROBE_SYMBOLS.join(", ")
-            ),
-        };
-        return Ok(candidate);
-    }
-    candidate.symbol_map = Some(symbol_map_report(
-        openssl::RESOLVER,
-        openssl::LIBRARY,
-        image.arch(),
-        image.build_id(),
-        &symbols,
-    )?);
-    candidate.status = CandidateStatus::Matched;
-    Ok(candidate)
-}
-
-fn detect_executable_boringssl(
-    image: &ElfImage,
-    args: &DetectArgs,
-    explicit: bool,
-) -> ToolResult<CandidateReport> {
-    let mut candidate = CandidateReport::new("executable", boringssl::NAME);
-    candidate.exported_symbols =
-        exported_symbols(image, &names_with_extra(boringssl::SYMBOLS, &args.symbols))?;
-    let map_symbols = boringssl::map_symbols(image.arch());
-    let symbols = image.unique_defined_symbol_values(map_symbols)?;
-    let missing = missing_symbols(map_symbols, &symbols);
-    if missing.is_empty() && explicit {
-        candidate.symbol_map = Some(symbol_map_report(
-            boringssl::SYMBOL_MAP_RESOLVER,
-            boringssl::LIBRARY,
-            image.arch(),
-            image.build_id(),
-            &symbols,
-        )?);
-        candidate.status = CandidateStatus::Matched;
-        return Ok(candidate);
-    }
-    candidate.exported_symbol_map = if missing.is_empty() {
-        Some(MapStatusReport {
-            status: "skipped".to_string(),
-            fields: vec![(
-                "reason".to_string(),
-                "shared SSL_* names do not prove BoringSSL in auto mode".to_string(),
-            )],
-        })
-    } else {
-        Some(MapStatusReport::missing("incomplete", &missing))
-    };
-    match boringssl::detect_static_patterns(image, args.match_limit) {
-        Ok(detection) => {
-            candidate.pattern_matches = Some(pattern_matches_report(&detection));
-            candidate.detected_offsets = detected_offsets_report(&detection);
-            candidate.runtime_config = vec![
-                ("payload_tls_source".to_string(), "executable".to_string()),
-                (
-                    "payload_tls_resolver".to_string(),
-                    boringssl::STATIC_RESOLVER.to_string(),
-                ),
-                (
-                    "payload_tls_library".to_string(),
-                    boringssl::LIBRARY.to_string(),
-                ),
-                (
-                    "payload_tls_binary_path".to_string(),
-                    image.path().display().to_string(),
-                ),
-                (
-                    "payload_tls_pattern_path".to_string(),
-                    "disabled".to_string(),
-                ),
-            ];
-            candidate.symbol_map = Some(symbol_map_report(
-                boringssl::SYMBOL_MAP_RESOLVER,
-                boringssl::LIBRARY,
-                image.arch(),
-                image.build_id(),
-                &detection.map_symbols,
-            )?);
-            candidate.status = CandidateStatus::Matched;
+    fn project_no_match(&mut self, evidence: &DetectionEvidence) {
+        if !evidence.children.is_empty() {
+            for child in &evidence.children {
+                self.project(child);
+            }
+            return;
         }
-        Err(error) => {
-            candidate.status = CandidateStatus::Failed {
-                error: error.to_string(),
-            };
-        }
+        let provider = evidence.detector_path.display();
+        self.reports.push(CandidateReport::failed(
+            "auto",
+            &provider,
+            evidence
+                .rejection
+                .clone()
+                .unwrap_or_else(|| "detector did not match".to_string()),
+        ));
     }
-    Ok(candidate)
-}
 
-fn detect_executable_rustls(image: &ElfImage, args: &DetectArgs) -> ToolResult<CandidateReport> {
-    let mut candidate = CandidateReport::new("executable", rustls::NAME);
-    if !args.symbols.is_empty() {
-        candidate.exported_symbols = exported_symbols(image, &args.symbols)?;
-    }
-    match rustls::resolve_demangled_plaintext_symbols(image)? {
-        Some(symbols) => {
-            candidate.demangled_symbols = Some(DemangledSymbolReport {
-                status: "matched".to_string(),
-                source: "elf-symbol-table".to_string(),
-                binary: image.path().display().to_string(),
-                targets: symbols
-                    .targets
+    fn matched(candidate: &ProbeCandidate) -> CandidateReport {
+        let mut report =
+            CandidateReport::new(candidate.source.as_str(), candidate.provider.as_str());
+        if candidate.source == ProbeSource::SharedLibrary {
+            report.library = Some(LibraryReport {
+                path: candidate.binary.path.display().to_string(),
+                confidence: "detector-match".to_string(),
+                note: None,
+                architecture: Some(candidate.binary.architecture.clone()),
+                identity: Some(candidate.binary.identity.clone()),
+            });
+        }
+        report.endpoints = candidate
+            .points
+            .iter()
+            .map(|point| EndpointReport {
+                symbol: point.symbol.clone(),
+                virtual_address: format!("0x{:x}", point.virtual_address),
+                file_offset: format!("0x{:x}", point.file_offset),
+            })
+            .collect();
+        if !candidate.evidence.patterns.is_empty() {
+            report.pattern_matches = Some(PatternMatchesReport {
+                arch: candidate.evidence.architecture.clone(),
+                entries: candidate
+                    .evidence
+                    .patterns
                     .iter()
-                    .map(|target| DemangledSymbolTargetReport {
-                        symbol: target.symbol.clone(),
-                        address: format!("0x{:x}", target.address),
-                        runtime_symbol: target.runtime_symbol.to_string(),
+                    .map(|pattern| PatternMatchReport {
+                        pattern_id: pattern.pattern_id.clone(),
+                        symbol: pattern.symbol.clone(),
+                        library: candidate.provider.as_str().to_string(),
+                        resolver: candidate.resolver.clone(),
+                        pattern_length: pattern.pattern_length.to_string(),
+                        match_count: pattern.match_count,
+                        matches: pattern
+                            .shown_matches
+                            .iter()
+                            .map(|found| OffsetAddressReport {
+                                file_offset: format!("0x{:x}", found.file_offset),
+                                virtual_address: format!("0x{:x}", found.virtual_address),
+                            })
+                            .collect(),
                     })
                     .collect(),
             });
-            candidate.symbol_map = Some(symbol_map_report(
-                rustls::RESOLVER,
-                rustls::LIBRARY,
-                image.arch(),
-                image.build_id(),
-                &symbols.runtime_symbols,
-            )?);
-            candidate.status = CandidateStatus::Matched;
         }
-        None => match rustls::detect_static_patterns(image, args.match_limit) {
-            Ok(detection) => {
-                candidate.pattern_matches = Some(rustls_pattern_matches_report(&detection));
-                candidate.detected_offsets = rustls_detected_offsets_report(&detection);
-                candidate.symbol_map = Some(symbol_map_report(
-                    rustls::RESOLVER,
-                    rustls::LIBRARY,
-                    image.arch(),
-                    image.build_id(),
-                    &detection.map_symbols,
-                )?);
-                candidate.status = CandidateStatus::Matched;
-            }
-            Err(error) => {
-                candidate.status = CandidateStatus::Failed {
-                    error: error.to_string(),
-                };
-            }
-        },
-    }
-    Ok(candidate)
-}
-
-fn detect_executable_go(image: &ElfImage) -> ToolResult<CandidateReport> {
-    let mut candidate = CandidateReport::new("executable", go_tls::NAME);
-    let Some(symbols) = go_tls::resolve_pclntab_symbols(image, go_tls::SYMBOLS)? else {
-        candidate.endpoint_status = Some(MapStatusReport::missing(
-            "incomplete",
-            &go_tls::SYMBOLS
-                .iter()
-                .map(|symbol| (*symbol).to_string())
-                .collect::<Vec<_>>(),
-        ));
-        candidate.status = CandidateStatus::Failed {
-            error: "Go pclntab is missing required crypto/tls endpoints".to_string(),
-        };
-        return Ok(candidate);
-    };
-    for symbol in go_tls::SYMBOLS {
-        let address = symbols
-            .get(*symbol)
-            .copied()
-            .expect("required Go symbol present");
-        let file_offset = image.file_offset_for_virtual_address(address)?;
-        candidate.endpoints.push(EndpointReport {
-            symbol: (*symbol).to_string(),
-            virtual_address: format!("0x{address:x}"),
-            file_offset: format!("0x{file_offset:x}"),
-        });
-    }
-    candidate.symbol_map = Some(symbol_map_report(
-        go_tls::RESOLVER,
-        go_tls::LIBRARY,
-        image.arch(),
-        image.build_id(),
-        &symbols,
-    )?);
-    candidate.status = CandidateStatus::Matched;
-    Ok(candidate)
-}
-
-fn detect_shared_libraries(
-    image: &ElfImage,
-    args: &DetectArgs,
-) -> (Vec<CandidateReport>, Vec<String>) {
-    if matches!(
-        args.provider,
-        ProviderChoice::BoringSsl
-            | ProviderChoice::Rustls
-            | ProviderChoice::Go
-            | ProviderChoice::GnuTls
-            | ProviderChoice::Nss
-    ) {
-        return (
-            vec![CandidateReport::failed(
-                "shared-library",
-                provider_name(args.provider),
-                "shared-library detection is only implemented for OpenSSL; use fast resolution with an explicit library for this provider",
-            )],
-            Vec::new(),
-        );
-    }
-    let search =
-        match openssl::library_candidates(image, &args.libraries, &args.library_search_dirs) {
-            Ok(search) => search,
-            Err(error) => {
-                return (
-                    vec![CandidateReport::failed(
-                        "shared-library",
-                        openssl::NAME,
-                        error.to_string(),
-                    )],
-                    Vec::new(),
-                );
-            }
-        };
-    if search.candidates.is_empty() {
-        let candidates = if args.source == SourceChoice::SharedLibrary {
-            vec![CandidateReport::failed(
-                "shared-library",
-                openssl::NAME,
-                "no libssl shared-library candidates found",
-            )]
-        } else {
-            Vec::new()
-        };
-        return (candidates, search.notices);
-    }
-    let candidates = search
-        .candidates
-        .iter()
-        .map(|candidate| detect_openssl_library_candidate(image, candidate, args))
-        .collect();
-    (candidates, search.notices)
-}
-
-fn detect_openssl_library_candidate(
-    target: &ElfImage,
-    candidate: &openssl::LibraryCandidate,
-    args: &DetectArgs,
-) -> CandidateReport {
-    let mut report = CandidateReport::new("shared-library", openssl::NAME);
-    report.library = Some(LibraryReport {
-        path: candidate.path.display().to_string(),
-        confidence: candidate.confidence.to_string(),
-        note: candidate.note.clone(),
-        architecture: None,
-        build_id: None,
-    });
-    let library = match ElfImage::parse(&candidate.path) {
-        Ok(library) => library,
-        Err(error) => {
-            report.status = CandidateStatus::Failed {
-                error: error.to_string(),
-            };
-            return report;
-        }
-    };
-    if let Some(library_report) = &mut report.library {
-        library_report.architecture = Some(library.arch().as_str().to_string());
-        library_report.build_id = Some(library.build_id().unwrap_or("not_found").to_string());
-    }
-    if library.arch() != target.arch() {
-        report.status = CandidateStatus::Failed {
-            error: format!(
-                "OpenSSL shared library architecture {} does not match target architecture {}",
-                library.arch().as_str(),
-                target.arch().as_str()
+        report.detected_offsets = candidate
+            .points
+            .iter()
+            .map(|point| DetectedOffsetReport {
+                symbol: point.symbol.clone(),
+                file_offset: format!("0x{:x}", point.file_offset),
+                virtual_address: format!("0x{:x}", point.virtual_address),
+            })
+            .collect();
+        let consumer = &candidate.capability.consumer;
+        report.runtime_config = vec![
+            (
+                "detector_path".to_string(),
+                candidate.detector_path.display(),
             ),
-        };
-        return report;
-    }
-    report.exported_symbols = match exported_symbols(
-        &library,
-        &names_with_extra(openssl::PROBE_SYMBOLS, &args.symbols),
-    ) {
-        Ok(symbols) => symbols,
-        Err(error) => {
-            report.status = CandidateStatus::Failed {
-                error: error.to_string(),
-            };
-            return report;
-        }
-    };
-    let symbols = match library.unique_defined_symbol_values(openssl::PROBE_SYMBOLS) {
-        Ok(symbols) => symbols,
-        Err(error) => {
-            report.status = CandidateStatus::Failed {
-                error: error.to_string(),
-            };
-            return report;
-        }
-    };
-    let missing = missing_symbols(openssl::REQUIRED_SYMBOLS, &symbols);
-    if !missing.is_empty() {
-        report.endpoint_status = Some(MapStatusReport::missing("incomplete", &missing));
-        report.status = CandidateStatus::Failed {
-            error: "OpenSSL shared library is missing required endpoints".to_string(),
-        };
-        return report;
-    }
-    for symbol in openssl::PROBE_SYMBOLS {
-        let Some(address) = symbols.get(*symbol).copied() else {
-            continue;
-        };
-        let file_offset = match library.file_offset_for_virtual_address(address) {
-            Ok(file_offset) => file_offset,
-            Err(error) => {
-                report.status = CandidateStatus::Failed {
-                    error: error.to_string(),
-                };
-                return report;
-            }
-        };
-        report.endpoints.push(EndpointReport {
-            symbol: (*symbol).to_string(),
-            virtual_address: format!("0x{address:x}"),
-            file_offset: format!("0x{file_offset:x}"),
+            (
+                "capability_architecture".to_string(),
+                consumer.key.architecture.clone(),
+            ),
+            (
+                "capability_provider".to_string(),
+                consumer.key.provider.as_str().to_string(),
+            ),
+            (
+                "capability_source".to_string(),
+                consumer.key.source.as_str().to_string(),
+            ),
+            (
+                "capability_resolver".to_string(),
+                consumer.key.resolver.clone(),
+            ),
+            (
+                "capability_consumer".to_string(),
+                consumer.key.consumer.as_str().to_string(),
+            ),
+            (
+                "capability_supported".to_string(),
+                consumer.supported.to_string(),
+            ),
+            (
+                "capability_validation".to_string(),
+                consumer.validation_status.clone(),
+            ),
+        ];
+        report.symbol_map = Some(SymbolMapReport {
+            resolver: candidate.resolver.clone(),
+            library: candidate.provider.as_str().to_string(),
+            arch: candidate.binary.architecture.clone(),
+            identity: candidate.binary.identity.clone(),
+            symbols: candidate
+                .points
+                .iter()
+                .map(|point| {
+                    (
+                        point.symbol.clone(),
+                        format!("0x{:x}", point.virtual_address),
+                    )
+                })
+                .collect(),
         });
+        report.status = CandidateStatus::Matched;
+        report
     }
-    report.runtime_config = vec![
-        (
-            "payload_tls_source".to_string(),
-            "shared-library".to_string(),
-        ),
-        (
-            "payload_tls_resolver".to_string(),
-            openssl::RESOLVER.to_string(),
-        ),
-        (
-            "payload_tls_library".to_string(),
-            openssl::LIBRARY.to_string(),
-        ),
-        (
-            "payload_tls_library_path".to_string(),
-            candidate.path.display().to_string(),
-        ),
-    ];
-    report.status = if candidate.counts_as_match || args.source == SourceChoice::SharedLibrary {
-        CandidateStatus::Matched
-    } else {
-        CandidateStatus::Available
-    };
-    report
 }
 
-fn providers(choice: ProviderChoice) -> Vec<ProviderChoice> {
+fn provider(choice: ProviderChoice) -> Option<TlsProvider> {
     match choice {
-        ProviderChoice::Auto => vec![
-            ProviderChoice::OpenSsl,
-            ProviderChoice::BoringSsl,
-            ProviderChoice::Rustls,
-            ProviderChoice::Go,
-        ],
-        provider => vec![provider],
+        ProviderChoice::Auto => None,
+        ProviderChoice::OpenSsl => Some(TlsProvider::OpenSsl),
+        ProviderChoice::BoringSsl => Some(TlsProvider::BoringSsl),
+        ProviderChoice::Rustls => Some(TlsProvider::Rustls),
+        ProviderChoice::Go => Some(TlsProvider::Go),
+        ProviderChoice::GnuTls => Some(TlsProvider::GnuTls),
+        ProviderChoice::Nss => Some(TlsProvider::Nss),
     }
 }
 
-fn provider_name(provider: ProviderChoice) -> &'static str {
-    match provider {
-        ProviderChoice::Auto => "auto",
-        ProviderChoice::OpenSsl => openssl::NAME,
-        ProviderChoice::BoringSsl => boringssl::NAME,
-        ProviderChoice::Rustls => rustls::NAME,
-        ProviderChoice::Go => go_tls::NAME,
-        ProviderChoice::GnuTls => legacy_tls::GNUTLS_NAME,
-        ProviderChoice::Nss => legacy_tls::NSS_NAME,
+fn source(choice: SourceChoice) -> Option<ProbeSource> {
+    match choice {
+        SourceChoice::Auto => None,
+        SourceChoice::Executable => Some(ProbeSource::Executable),
+        SourceChoice::SharedLibrary => Some(ProbeSource::SharedLibrary),
     }
 }

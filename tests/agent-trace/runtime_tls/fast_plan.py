@@ -15,7 +15,8 @@ ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 @dataclass(frozen=True)
 class FastProbePlan:
     provider: str
-    build_id: str
+    identity_type_code: int
+    identity: str
     architecture: str
     symbols: dict[str, str]
     detail: str
@@ -56,7 +57,18 @@ def resolve_fast_probe_plan(
 
 def parse_finder_plan(output: str) -> FastProbePlan:
     provider = required_match(output, r"(?m)^\s*provider = ([A-Za-z0-9_.-]+)\s*$", "provider")
-    build_id = required_match(output, r"(?m)^\s*build_id = ([0-9a-fA-F]+)\s*$", "build_id")
+    identity_type_code = int(
+        required_match(
+            output,
+            r"(?m)^\s*identity_type_code = ([0-9]+)\s*$",
+            "identity_type_code",
+        )
+    )
+    identity = required_match(
+        output,
+        r"(?m)^\s*identity = ([0-9a-fA-F]+)\s*$",
+        "identity",
+    ).lower()
     architecture = required_match(
         output,
         r"(?m)^\s*architecture = ([A-Za-z0-9_.-]+)\s*$",
@@ -75,12 +87,13 @@ def parse_finder_plan(output: str) -> FastProbePlan:
             symbols[current_symbol] = address_match.group(1)
     return FastProbePlan(
         provider=provider,
-        build_id=build_id.lower(),
+        identity_type_code=identity_type_code,
+        identity=identity,
         architecture=architecture,
         symbols=symbols,
         detail=(
             f"tls-probe-point-finder fast resolved provider={provider} "
-            f"build_id={build_id.lower()}"
+            f"identity={identity_type_code}:{identity}"
         ),
     )
 

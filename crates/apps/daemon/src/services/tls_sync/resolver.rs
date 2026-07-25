@@ -15,7 +15,7 @@ use tls_payload_sync::{
     PlanLookupResponse, RuntimePlanDescriptor, encode_points, validate_native_backend_plan,
 };
 use tls_probe_point_finder::fast::{
-    ArchFilter, FastProbeRequest, ProviderFilter, SourceFilter, resolve,
+    ArchFilter, FastProbeRequest, ProbeConsumer, ProviderFilter, SourceFilter, resolve_for_consumer,
 };
 
 use super::plan_store::{
@@ -29,6 +29,7 @@ pub(super) struct TlsSyncPlanResolver {
 
 struct PlanLookupJob {
     runtime_binary: PathBuf,
+    consumer: ProbeConsumer,
     peer_root: Option<Result<PeerRootHandle, String>>,
     response: Option<UnixStream>,
     control_response: Option<Sender<LaunchPlanLookupOutcome>>,
@@ -77,6 +78,7 @@ impl TlsSyncPlanResolver {
         self.requests
             .send(PlanLookupJob {
                 runtime_binary: binary.to_path_buf(),
+                consumer: ProbeConsumer::Sync,
                 peer_root: Some(peer_root),
                 response: Some(response),
                 control_response: None,
@@ -88,6 +90,7 @@ impl TlsSyncPlanResolver {
         self.requests
             .send(PlanLookupJob {
                 runtime_binary: binary.to_path_buf(),
+                consumer: ProbeConsumer::Sync,
                 peer_root: None,
                 response: None,
                 control_response: None,
@@ -103,6 +106,7 @@ impl TlsSyncPlanResolver {
         self.requests
             .send(PlanLookupJob {
                 runtime_binary: binary.to_path_buf(),
+                consumer: ProbeConsumer::Daemon,
                 peer_root: None,
                 response: None,
                 control_response: Some(sender),
@@ -118,7 +122,7 @@ impl TlsSyncPlanResolver {
 impl TlsSyncPlanWorker {
     fn run(mut self, receiver: Receiver<PlanLookupJob>) {
         for mut job in receiver {
-            let outcome = self.lookup(&job.runtime_binary, job.peer_root);
+            let outcome = self.lookup(&job.runtime_binary, job.consumer, job.peer_root);
             let Some(response_stream) = job.response.as_mut() else {
                 if let Some(sender) = job.control_response {
                     let _ = sender.send(LaunchPlanLookupOutcome {
@@ -143,6 +147,7 @@ impl TlsSyncPlanWorker {
     fn lookup(
         &mut self,
         runtime_binary: &Path,
+        consumer: ProbeConsumer,
         peer_root: Option<Result<PeerRootHandle, String>>,
     ) -> PlanLookupOutcome {
         let started = Instant::now();
@@ -171,7 +176,7 @@ impl TlsSyncPlanWorker {
                 return unsupported_outcome(reason, started);
             }
         };
-        let key = match BinaryPlanKey::for_path(&probe_binary) {
+        let key = match BinaryPlanKey::for_path(&probe_binary, consumer) {
             Ok(key) => key,
             Err(error) => {
                 tracing::warn!(
@@ -203,7 +208,7 @@ impl TlsSyncPlanWorker {
                 );
             }
         }
-        let cached = match self.resolve_plan(key.path()) {
+        let cached = match self.resolve_plan(key.path(), consumer) {
             Ok(plan) => BinaryPlanRecord::Found(plan),
             Err(error) => {
                 tracing::warn!(
@@ -229,21 +234,30 @@ impl TlsSyncPlanWorker {
         outcome
     }
 
-    fn resolve_plan(&self, binary: &Path) -> Result<BinaryPlanDescriptor, ControlError> {
-        let plan = resolve(FastProbeRequest {
-            binary: binary.to_path_buf(),
-            arch: ArchFilter::Auto,
-            provider: ProviderFilter::Auto,
-            source: SourceFilter::Auto,
-            match_limit: self.match_limit,
-            libraries: library_candidates(&self.config),
-            library_search_dirs: Vec::new(),
-        })
+    fn resolve_plan(
+        &self,
+        binary: &Path,
+        consumer: ProbeConsumer,
+    ) -> Result<BinaryPlanDescriptor, ControlError> {
+        let plan = resolve_for_consumer(
+            FastProbeRequest {
+                binary: binary.to_path_buf(),
+                arch: ArchFilter::Auto,
+                provider: ProviderFilter::Auto,
+                source: SourceFilter::Auto,
+                match_limit: self.match_limit,
+                libraries: library_candidates(&self.config),
+                library_search_dirs: Vec::new(),
+            },
+            consumer,
+        )
         .map_err(|error| ControlError::new("tls_sync_plan", error.to_string()))?;
         validate_native_backend_plan(&plan)
             .map_err(|error| ControlError::new("tls_sync_plan", error.to_string()))?;
         Ok(BinaryPlanDescriptor {
             binary: plan.binary.path.clone(),
+            target_identity: plan.target.identity.clone(),
+            binary_identity: plan.binary.identity.clone(),
             provider: plan.provider.as_str().to_string(),
             source: plan.source.as_str().to_string(),
             points: encode_points(&plan)
@@ -275,7 +289,9 @@ fn outcome_for_record(
             PlanLookupOutcome {
                 response: PlanLookupResponse::Found(RuntimePlanDescriptor {
                     target: runtime_binary.to_path_buf(),
+                    target_identity: plan.target_identity,
                     binary: runtime_view_binary(&plan.binary, runtime_binary, probe_binary),
+                    binary_identity: plan.binary_identity,
                     provider: plan.provider,
                     points: plan.points,
                 }),
@@ -306,7 +322,9 @@ fn launch_reply_for_outcome(outcome: PlanLookupOutcome) -> LaunchTlsPlanReply {
     let status = match outcome.response {
         PlanLookupResponse::Found(plan) => LaunchTlsPlanStatus::Found(LaunchTlsPlanDescriptor {
             target: plan.target,
+            target_identity: plan.target_identity,
             binary: plan.binary,
+            binary_identity: plan.binary_identity,
             provider: plan.provider,
             source: outcome.source.unwrap_or_else(|| "unknown".to_string()),
             points: plan.points,

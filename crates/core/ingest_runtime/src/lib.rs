@@ -149,6 +149,7 @@ mod tests {
         let matched_process = ProcessIdentity::new(MATCHED_GENERATION);
         let raw_event = RawCollectorEvent {
             envelope: RawEventEnvelope {
+                trace_id: None,
                 observed_at: SystemTime::UNIX_EPOCH,
                 process: raw_process,
                 collector: CollectorName::new("process-seccomp"),

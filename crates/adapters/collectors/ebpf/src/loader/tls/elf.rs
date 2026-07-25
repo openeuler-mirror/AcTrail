@@ -19,7 +19,6 @@ const ELF_PROGRAM_HEADER_COUNT_FIELD: usize = 56;
 const ELF_SECTION_HEADER_TABLE_ENTRY_SIZE_FIELD: usize = 58;
 const ELF_SECTION_HEADER_COUNT_FIELD: usize = 60;
 const ELF_PROGRAM_HEADER_LOAD: u32 = 1;
-const ELF_PROGRAM_HEADER_NOTE: u32 = 4;
 const ELF_PROGRAM_HEADER_TYPE_FIELD: usize = 0;
 const ELF_PROGRAM_HEADER_FLAGS_FIELD: usize = 4;
 const ELF_PROGRAM_HEADER_FILE_OFFSET_FIELD: usize = 8;
@@ -38,13 +37,6 @@ const ELF_SYMBOL_SECTION_INDEX_FIELD: usize = 6;
 const ELF_SYMBOL_VALUE_FIELD: usize = 8;
 const ELF_SYMBOL_TABLE_ENTRY_SIZE: usize = 24;
 const ELF_SECTION_UNDEFINED: u16 = 0;
-const ELF_NOTE_GNU_BUILD_ID: u32 = 3;
-const ELF_NOTE_NAME_GNU: &[u8] = b"GNU\0";
-const ELF_NOTE_HEADER_SIZE: usize = 12;
-const ELF_NOTE_NAME_SIZE_FIELD: usize = 0;
-const ELF_NOTE_DESCRIPTION_SIZE_FIELD: usize = 4;
-const ELF_NOTE_TYPE_FIELD: usize = 8;
-const ELF_NOTE_ALIGNMENT: usize = 4;
 
 pub(super) fn resolve_executable_symbol_offsets(
     binary_path: &Path,
@@ -85,7 +77,6 @@ fn resolve_symbol_offsets(
 }
 
 pub(super) struct ElfImage {
-    build_id: Option<String>,
     load_segments: Vec<LoadSegment>,
 }
 
@@ -96,7 +87,6 @@ impl ElfImage {
         let program_header_entry_size = read_u16(data, ELF_PROGRAM_HEADER_ENTRY_SIZE_FIELD)? as u64;
         let program_header_count = read_u16(data, ELF_PROGRAM_HEADER_COUNT_FIELD)? as u64;
         let mut load_segments = Vec::new();
-        let mut build_id = None;
         for index in 0..program_header_count {
             let offset = checked_table_offset(
                 program_header_offset,
@@ -117,11 +107,6 @@ impl ElfImage {
                     file_size,
                     executable: flags & ELF_PROGRAM_HEADER_EXECUTABLE != 0,
                 });
-            } else if header_type == ELF_PROGRAM_HEADER_NOTE {
-                let note = bounded(data, segment_offset, file_size)?;
-                if let Some(found) = parse_build_id_note(note)? {
-                    build_id = Some(found);
-                }
             }
         }
         if load_segments.is_empty() {
@@ -130,14 +115,7 @@ impl ElfImage {
                 "target executable has no ELF load segments",
             ));
         }
-        Ok(Self {
-            build_id,
-            load_segments,
-        })
-    }
-
-    pub(super) fn build_id(&self) -> Option<&str> {
-        self.build_id.as_deref()
+        Ok(Self { load_segments })
     }
 
     pub(super) fn executable_file_offset(
@@ -329,32 +307,6 @@ fn string_at(data: &[u8], offset: u32) -> Result<Option<&str>, LoaderError> {
     Ok(Some(value))
 }
 
-fn parse_build_id_note(data: &[u8]) -> Result<Option<String>, LoaderError> {
-    let mut offset = 0_usize;
-    while offset + ELF_NOTE_HEADER_SIZE <= data.len() {
-        let name_size = read_u32(data, offset + ELF_NOTE_NAME_SIZE_FIELD)? as usize;
-        let description_size = read_u32(data, offset + ELF_NOTE_DESCRIPTION_SIZE_FIELD)? as usize;
-        let note_type = read_u32(data, offset + ELF_NOTE_TYPE_FIELD)?;
-        offset += ELF_NOTE_HEADER_SIZE;
-        let name = bounded_usize(data, offset, name_size)?;
-        offset = align_note_offset(offset, name_size)?;
-        let description = bounded_usize(data, offset, description_size)?;
-        offset = align_note_offset(offset, description_size)?;
-        if note_type == ELF_NOTE_GNU_BUILD_ID && name == ELF_NOTE_NAME_GNU {
-            return Ok(Some(hex_bytes(description)));
-        }
-    }
-    Ok(None)
-}
-
-fn align_note_offset(offset: usize, size: usize) -> Result<usize, LoaderError> {
-    offset
-        .checked_add(size)
-        .and_then(|value| value.checked_add(ELF_NOTE_ALIGNMENT - 1))
-        .map(|value| value & !(ELF_NOTE_ALIGNMENT - 1))
-        .ok_or_else(|| LoaderError::new("payload_tls_binary_path", "ELF note overflow"))
-}
-
 fn checked_table_offset(
     table_offset: u64,
     entry_size: u64,
@@ -368,13 +320,6 @@ fn checked_table_offset(
                 .ok_or_else(|| LoaderError::new("payload_tls_binary_path", message))?,
         )
         .ok_or_else(|| LoaderError::new("payload_tls_binary_path", message))
-}
-
-fn hex_bytes(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>()
 }
 
 fn bounded(data: &[u8], offset: u64, size: u64) -> Result<&[u8], LoaderError> {

@@ -38,6 +38,7 @@ use control_contract::reply::{
     ControlError, LaunchPermissionsReply, LaunchTlsPlanReply, PluginCommandReply, TrackAddReply,
 };
 use ebpf_collector::EbpfCollector;
+use ebpf_collector::loader::DynamicTlsProbePlan;
 use ebpf_collector::procfs::{
     ProcfsIdentityReader, ProcfsTreeSnapshotter, read_container_identity, resolve_namespaced_pid,
 };
@@ -427,6 +428,21 @@ impl StorageAttachService {
             }) {
                 let _ = trace_runtime.fail_trace(bootstrap.trace_id, SystemTime::now());
                 return Err(ControlError::new(error.stage, error.message));
+            }
+
+            if let Some(plan) = &command.tls_probe_plan {
+                let plan = DynamicTlsProbePlan {
+                    target: plan.target.clone(),
+                    target_identity: plan.target_identity.clone(),
+                    binary: plan.binary.clone(),
+                    binary_identity: plan.binary_identity.clone(),
+                    provider: plan.provider.clone(),
+                    points: plan.points.clone(),
+                };
+                if let Err(error) = self.collector.attach_dynamic_tls_plan(&plan) {
+                    let _ = trace_runtime.fail_trace(bootstrap.trace_id, SystemTime::now());
+                    return Err(ControlError::new(error.stage, error.message));
+                }
             }
 
             if let Err(error) = self

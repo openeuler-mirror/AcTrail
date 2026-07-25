@@ -1,19 +1,18 @@
 //! Fast probe-point resolution for payload capture startup.
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::binary::resolve_entry_elf;
 use crate::elf::{Arch, ElfImage};
-use crate::plan::{
-    AttachPoint, CaptureStrategy, PayloadDirection, ProbeBinary, ProbePoint, ProbePointPlan,
-    ProbeSource, TargetIdentity, TlsProvider,
+use crate::plan::{ProbePointPlan, ProbeSource, TargetIdentity, TlsProvider};
+use crate::probe_detector::contract::detection::{
+    DetectionOutcome, DetectionRequest, ProbeContext,
 };
-use crate::providers::{boringssl, go_tls, legacy_tls, openssl, rustls};
+use crate::probe_detector::contract::detector::ProbeDetector;
+use crate::probe_detector::detector::tls::{TlsProbeDetector, TlsProbeDetectorConfig};
 use crate::{ToolError, ToolResult};
 
-#[cfg(test)]
-mod tests;
+pub use crate::probe_detector::contract::detection::ProbeConsumer;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FastProbeRequest {
@@ -52,537 +51,51 @@ pub enum SourceFilter {
 }
 
 pub fn resolve(request: FastProbeRequest) -> ToolResult<ProbePointPlan> {
+    resolve_for_consumer(request, ProbeConsumer::PlanOnly)
+}
+
+pub fn resolve_for_consumer(
+    request: FastProbeRequest,
+    consumer: ProbeConsumer,
+) -> ToolResult<ProbePointPlan> {
     let binary = resolve_entry_elf(&request.binary)?;
     let image = ElfImage::parse(&binary)?;
     require_arch(image.arch(), request.arch, image.path())?;
-
-    if let Some(plan) = resolve_executable_symbols(&image, &request)? {
-        return Ok(plan);
-    }
-    if let Some(plan) = resolve_direct_shared_library(&image, &request)? {
-        return Ok(plan);
-    }
-    if let Some(plan) = resolve_boringssl_shared_library(&image, &request)? {
-        return Ok(plan);
-    }
-    if let Some(plan) = resolve_legacy_tls_shared_library(&image, &request)? {
-        return Ok(plan);
-    }
-    if let Some(plan) = resolve_recursive_shared_library(&image, &request)? {
-        return Ok(plan);
-    }
-    if let Some(plan) = resolve_executable_go(&image, &request)? {
-        return Ok(plan);
-    }
-    if let Some(plan) = resolve_static_patterns(&image, &request)? {
-        return Ok(plan);
-    }
-    Err(ToolError::new(
-        "no supported TLS payload probe points found",
-    ))
-}
-
-fn resolve_executable_symbols(
-    image: &ElfImage,
-    request: &FastProbeRequest,
-) -> ToolResult<Option<ProbePointPlan>> {
-    if !request.source.allows_executable() {
-        return Ok(None);
-    }
-    if request.provider.allows(TlsProvider::Rustls) {
-        if let Some(symbols) = rustls::resolve_demangled_plaintext_symbols(image)? {
-            let plan = plan_from_symbol_map(
-                image,
-                TlsProvider::Rustls,
-                ProbeSource::Executable,
-                rustls::RESOLVER,
-                &symbols.runtime_symbols,
-            )?;
-            if plan.has_payload_closure() {
-                return Ok(Some(plan));
-            }
-        }
-    }
-    if request.provider.allows(TlsProvider::OpenSsl) {
-        let symbols = image.unique_defined_symbol_values(openssl::PROBE_SYMBOLS)?;
-        if has_all(&symbols, openssl::REQUIRED_SYMBOLS) {
-            let plan = plan_from_symbol_map(
-                image,
-                TlsProvider::OpenSsl,
-                ProbeSource::Executable,
-                openssl::RESOLVER,
-                &symbols,
-            )?;
-            if plan.has_payload_closure() {
-                return Ok(Some(plan));
-            }
-        }
-    }
-    if request.provider == ProviderFilter::BoringSsl {
-        let symbols = image.unique_defined_symbol_values(boringssl::map_symbols(image.arch()))?;
-        if has_all(&symbols, boringssl::map_symbols(image.arch())) {
-            let probe_symbols = boringssl_probe_symbols(&symbols);
-            let plan = plan_from_symbol_map(
-                image,
-                TlsProvider::BoringSsl,
-                ProbeSource::Executable,
-                boringssl::SYMBOL_MAP_RESOLVER,
-                &probe_symbols,
-            )?;
-            if plan.has_payload_closure() {
-                return Ok(Some(plan));
-            }
-        }
-    }
-    Ok(None)
-}
-
-fn resolve_executable_go(
-    image: &ElfImage,
-    request: &FastProbeRequest,
-) -> ToolResult<Option<ProbePointPlan>> {
-    if !request.source.allows_executable() || !request.provider.allows(TlsProvider::Go) {
-        return Ok(None);
-    }
-    let Some(symbols) = go_tls::resolve_pclntab_symbols(image, go_tls::SYMBOLS)? else {
-        return Ok(None);
-    };
-    let plan = plan_from_symbol_map(
-        image,
-        TlsProvider::Go,
-        ProbeSource::Executable,
-        go_tls::RESOLVER,
-        &symbols,
-    )?;
-    Ok(plan.has_payload_closure().then_some(plan))
-}
-
-fn resolve_direct_shared_library(
-    image: &ElfImage,
-    request: &FastProbeRequest,
-) -> ToolResult<Option<ProbePointPlan>> {
-    if !request.source.allows_shared_library() || !request.provider.allows(TlsProvider::OpenSsl) {
-        return Ok(None);
-    }
-    let search = openssl::direct_library_candidates(
-        image,
-        &request.libraries,
-        &request.library_search_dirs,
-    )?;
-    resolve_first_openssl_library(image, search.candidates)
-}
-
-fn resolve_boringssl_shared_library(
-    image: &ElfImage,
-    request: &FastProbeRequest,
-) -> ToolResult<Option<ProbePointPlan>> {
-    if !request.source.allows_shared_library() || !request.provider.allows(TlsProvider::BoringSsl) {
-        return Ok(None);
-    }
-    resolve_first_boringssl_library(image, boringssl_library_candidates(image, request))
-}
-
-fn resolve_legacy_tls_shared_library(
-    image: &ElfImage,
-    request: &FastProbeRequest,
-) -> ToolResult<Option<ProbePointPlan>> {
-    if !request.source.allows_shared_library() {
-        return Ok(None);
-    }
-    if request.provider.allows(TlsProvider::GnuTls) {
-        let candidates = legacy_tls::explicit_or_current_shared_library_candidates(
-            image.path(),
-            &request.libraries,
-            "libgnutls",
-        );
-        if candidates.is_empty() && request.provider == ProviderFilter::GnuTls {
-            return Err(ToolError::new(
-                "GnuTLS shared-library fast resolution requires --library PATH",
-            ));
-        }
-        if let Some(plan) = resolve_first_required_symbol_library(
-            image,
-            candidates,
-            TlsProvider::GnuTls,
-            legacy_tls::GNUTLS_RESOLVER,
-            legacy_tls::GNUTLS_SYMBOLS,
-        )? {
-            return Ok(Some(plan));
-        }
-    }
-    if request.provider.allows(TlsProvider::Nss) {
-        let candidates = legacy_tls::explicit_or_current_shared_library_candidates(
-            image.path(),
-            &request.libraries,
-            "libnspr4",
-        );
-        if candidates.is_empty() && request.provider == ProviderFilter::Nss {
-            return Err(ToolError::new(
-                "NSS/NSPR shared-library fast resolution requires --library PATH",
-            ));
-        }
-        if let Some(plan) = resolve_first_required_symbol_library(
-            image,
-            candidates,
-            TlsProvider::Nss,
-            legacy_tls::NSS_RESOLVER,
-            legacy_tls::NSS_SYMBOLS,
-        )? {
-            return Ok(Some(plan));
-        }
-    }
-    Ok(None)
-}
-
-fn resolve_static_patterns(
-    image: &ElfImage,
-    request: &FastProbeRequest,
-) -> ToolResult<Option<ProbePointPlan>> {
-    if !request.source.allows_executable() {
-        return Ok(None);
-    }
-    if request.provider.allows(TlsProvider::Rustls) {
-        match rustls::detect_static_patterns(image, request.match_limit) {
-            Ok(detection) => {
-                let plan = plan_from_detected_offsets(
-                    image,
-                    TlsProvider::Rustls,
-                    ProbeSource::Executable,
-                    rustls::RESOLVER,
-                    detection
-                        .offsets
-                        .iter()
-                        .map(|offset| {
-                            (
-                                offset.symbol.to_string(),
-                                offset.virtual_address,
-                                offset.file_offset as u64,
-                            )
-                        })
-                        .collect(),
-                )?;
-                if plan.has_payload_closure() {
-                    return Ok(Some(plan));
-                }
-            }
-            Err(error) if request.provider == ProviderFilter::Rustls => return Err(error),
-            Err(_) => {}
-        }
-    }
-    if request.provider.allows(TlsProvider::BoringSsl) {
-        match boringssl::detect_static_patterns(image, request.match_limit) {
-            Ok(detection) => {
-                let plan = plan_from_detected_offsets(
-                    image,
-                    TlsProvider::BoringSsl,
-                    ProbeSource::Executable,
-                    boringssl::STATIC_RESOLVER,
-                    boringssl_static_probe_offsets(&detection),
-                )?;
-                if plan.has_payload_closure() {
-                    return Ok(Some(plan));
-                }
-            }
-            Err(error) if request.provider == ProviderFilter::BoringSsl => return Err(error),
-            Err(_) => {}
-        }
-    }
-    Ok(None)
-}
-
-fn boringssl_probe_symbols(symbols: &BTreeMap<String, u64>) -> BTreeMap<String, u64> {
-    symbols
-        .iter()
-        .filter(|(symbol, _)| is_boringssl_payload_symbol(symbol))
-        .map(|(symbol, address)| (symbol.clone(), *address))
-        .collect()
-}
-
-fn boringssl_static_probe_offsets(
-    detection: &boringssl::StaticPatternDetection,
-) -> Vec<(String, u64, u64)> {
-    detection
-        .offsets
-        .iter()
-        .filter(|offset| is_boringssl_payload_symbol(offset.symbol))
-        .map(|offset| {
-            (
-                offset.symbol.to_string(),
-                offset.virtual_address,
-                offset.file_offset as u64,
-            )
-        })
-        .collect()
-}
-
-fn is_boringssl_payload_symbol(symbol: &str) -> bool {
-    matches!(symbol, "SSL_read" | "SSL_write")
-}
-
-fn resolve_recursive_shared_library(
-    image: &ElfImage,
-    request: &FastProbeRequest,
-) -> ToolResult<Option<ProbePointPlan>> {
-    if !request.source.allows_shared_library() || !request.provider.allows(TlsProvider::OpenSsl) {
-        return Ok(None);
-    }
-    let search =
-        openssl::library_candidates(image, &request.libraries, &request.library_search_dirs)?;
-    resolve_first_openssl_library(image, search.candidates)
-}
-
-fn resolve_first_openssl_library(
-    target: &ElfImage,
-    candidates: Vec<openssl::LibraryCandidate>,
-) -> ToolResult<Option<ProbePointPlan>> {
-    for candidate in candidates {
-        let library = ElfImage::parse(&candidate.path)?;
-        if library.arch() != target.arch() {
-            continue;
-        }
-        let symbols = library.unique_defined_symbol_values(openssl::PROBE_SYMBOLS)?;
-        if !has_all(&symbols, openssl::REQUIRED_SYMBOLS) {
-            continue;
-        }
-        let plan = plan_from_symbol_map(
-            &library,
-            TlsProvider::OpenSsl,
-            ProbeSource::SharedLibrary,
-            openssl::RESOLVER,
-            &symbols,
-        )?
-        .with_target(target);
-        if plan.has_payload_closure() {
-            return Ok(Some(plan));
-        }
-    }
-    Ok(None)
-}
-
-fn resolve_first_boringssl_library(
-    target: &ElfImage,
-    candidates: Vec<PathBuf>,
-) -> ToolResult<Option<ProbePointPlan>> {
-    for candidate in candidates {
-        let library = ElfImage::parse(&candidate)?;
-        if library.arch() != target.arch() {
-            continue;
-        }
-        let symbols =
-            library.unique_defined_symbol_values(boringssl::map_symbols(library.arch()))?;
-        if !has_all(&symbols, boringssl::map_symbols(library.arch())) {
-            continue;
-        }
-        let probe_symbols = boringssl_probe_symbols(&symbols);
-        let plan = plan_from_symbol_map(
-            &library,
-            TlsProvider::BoringSsl,
-            ProbeSource::SharedLibrary,
-            boringssl::SHARED_SYMBOL_MAP_RESOLVER,
-            &probe_symbols,
-        )?
-        .with_target(target);
-        if plan.has_payload_closure() {
-            return Ok(Some(plan));
-        }
-    }
-    Ok(None)
-}
-
-fn resolve_first_required_symbol_library(
-    target: &ElfImage,
-    candidates: Vec<PathBuf>,
-    provider: TlsProvider,
-    resolver: &str,
-    required_symbols: &[&str],
-) -> ToolResult<Option<ProbePointPlan>> {
-    for candidate in candidates {
-        let library = ElfImage::parse(&candidate)?;
-        if library.arch() != target.arch() {
-            continue;
-        }
-        let symbols = library.unique_defined_symbol_values(required_symbols)?;
-        if !has_all(&symbols, required_symbols) {
-            continue;
-        }
-        let plan = plan_from_symbol_map(
-            &library,
-            provider,
-            ProbeSource::SharedLibrary,
-            resolver,
-            &symbols,
-        )?
-        .with_target(target);
-        if plan.has_payload_closure() {
-            return Ok(Some(plan));
-        }
-    }
-    Ok(None)
-}
-
-fn boringssl_library_candidates(image: &ElfImage, request: &FastProbeRequest) -> Vec<PathBuf> {
-    let mut candidates = request
-        .libraries
-        .iter()
-        .filter(|path| request.provider == ProviderFilter::BoringSsl || !is_libssl_path(path))
-        .cloned()
-        .collect::<Vec<_>>();
-    if is_shared_object_path(image.path()) {
-        if request.provider == ProviderFilter::BoringSsl || !is_libssl_path(image.path()) {
-            candidates.push(image.path().to_path_buf());
-        }
-    }
-    candidates
-}
-
-fn is_shared_object_path(path: &std::path::Path) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.contains(".so"))
-}
-
-fn is_libssl_path(path: &std::path::Path) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with("libssl") && name.contains(".so"))
-}
-
-fn plan_from_symbol_map(
-    image: &ElfImage,
-    provider: TlsProvider,
-    source: ProbeSource,
-    resolver: &str,
-    symbols: &BTreeMap<String, u64>,
-) -> ToolResult<ProbePointPlan> {
-    let mut points = Vec::new();
-    for (symbol, virtual_address) in symbols {
-        points.push(ProbePoint {
-            symbol: symbol.clone(),
-            direction: direction_for_symbol(symbol),
-            attach: attach_for_symbol(symbol),
-            capture: capture_for_symbol(symbol),
-            virtual_address: *virtual_address,
-            file_offset: image.file_offset_for_virtual_address(*virtual_address)?,
-        });
-    }
-    Ok(ProbePointPlan {
-        target: target_identity(image),
-        provider,
-        source,
-        resolver: resolver.to_string(),
-        binary: probe_binary(image),
-        points,
-    })
-}
-
-fn plan_from_detected_offsets(
-    image: &ElfImage,
-    provider: TlsProvider,
-    source: ProbeSource,
-    resolver: &str,
-    offsets: Vec<(String, u64, u64)>,
-) -> ToolResult<ProbePointPlan> {
-    let points = offsets
-        .into_iter()
-        .map(|(symbol, virtual_address, file_offset)| ProbePoint {
-            direction: direction_for_symbol(&symbol),
-            attach: attach_for_symbol(&symbol),
-            capture: capture_for_symbol(&symbol),
-            symbol,
-            virtual_address,
-            file_offset,
-        })
-        .collect();
-    Ok(ProbePointPlan {
-        target: target_identity(image),
-        provider,
-        source,
-        resolver: resolver.to_string(),
-        binary: probe_binary(image),
-        points,
-    })
-}
-
-fn has_all(symbols: &BTreeMap<String, u64>, required: &[&str]) -> bool {
-    required.iter().all(|symbol| symbols.contains_key(*symbol))
-}
-
-fn direction_for_symbol(symbol: &str) -> PayloadDirection {
-    match symbol {
-        rustls::RUNTIME_BUFFER_PLAINTEXT_SYMBOL
-        | openssl::SSL_WRITE
-        | openssl::SSL_WRITE_EX
-        | openssl::SSL_WRITE_EX2
-        | legacy_tls::GNUTLS_RECORD_SEND
-        | legacy_tls::NSPR_PR_WRITE
-        | legacy_tls::NSPR_PR_SEND => PayloadDirection::Outbound,
-        go_tls::WRITE_SYMBOL => PayloadDirection::Outbound,
-        go_tls::RUNTIME_MEMMOVE_SYMBOL => PayloadDirection::Inbound,
-        rustls::RUNTIME_TAKE_RECEIVED_PLAINTEXT_SYMBOL
-        | openssl::SSL_READ
-        | openssl::SSL_READ_EX
-        | "SSL_read_internal"
-        | legacy_tls::GNUTLS_RECORD_RECV
-        | legacy_tls::NSPR_PR_READ
-        | legacy_tls::NSPR_PR_RECV => PayloadDirection::Inbound,
-        _ => PayloadDirection::Control,
-    }
-}
-
-fn attach_for_symbol(symbol: &str) -> AttachPoint {
-    if return_count_symbol(symbol) {
-        return AttachPoint::Return;
-    }
-    match direction_for_symbol(symbol) {
-        PayloadDirection::Inbound
-            if matches!(
-                symbol,
-                openssl::SSL_READ
-                    | openssl::SSL_READ_EX
-                    | "SSL_read_internal"
-                    | go_tls::READ_SYMBOL
-            ) =>
-        {
-            AttachPoint::Return
-        }
-        PayloadDirection::Inbound | PayloadDirection::Outbound | PayloadDirection::Control => {
-            AttachPoint::Entry
-        }
-    }
-}
-
-fn return_count_symbol(symbol: &str) -> bool {
-    matches!(
-        symbol,
-        legacy_tls::GNUTLS_RECORD_SEND
-            | legacy_tls::GNUTLS_RECORD_RECV
-            | legacy_tls::NSPR_PR_WRITE
-            | legacy_tls::NSPR_PR_SEND
-            | legacy_tls::NSPR_PR_READ
-            | legacy_tls::NSPR_PR_RECV
-    )
-}
-
-fn capture_for_symbol(symbol: &str) -> CaptureStrategy {
-    match attach_for_symbol(symbol) {
-        AttachPoint::Entry => CaptureStrategy::EntryBuffer,
-        AttachPoint::Return => CaptureStrategy::ReturnBufferFromEntryState,
-    }
-}
-
-fn target_identity(image: &ElfImage) -> TargetIdentity {
-    TargetIdentity {
+    let target = TargetIdentity {
         binary: image.path().to_path_buf(),
         architecture: image.arch().as_str().to_string(),
-        build_id: image.build_id().map(ToString::to_string),
-    }
-}
-
-fn probe_binary(image: &ElfImage) -> ProbeBinary {
-    ProbeBinary {
-        path: image.path().to_path_buf(),
-        architecture: image.arch().as_str().to_string(),
-        build_id: image.build_id().map(ToString::to_string),
+        identity: image.identity().clone(),
+    };
+    let detection_request = DetectionRequest {
+        requested_provider: request.provider.requested_provider(),
+        requested_source: request.source.requested_source(),
+        libraries: request.libraries,
+        library_search_dirs: request.library_search_dirs,
+        consumer,
+    };
+    let context = ProbeContext::executable(&target, &image, &detection_request);
+    let detector = TlsProbeDetector::try_new(TlsProbeDetectorConfig::with_match_limit(
+        request.match_limit,
+    ))?;
+    match detector
+        .detect(&context)
+        .map_err(|error| ToolError::new(error.to_string()))?
+    {
+        DetectionOutcome::Matched(candidate) => Ok(candidate.into_plan()),
+        DetectionOutcome::Ambiguous(ambiguous) => Err(ToolError::new(format!(
+            "ambiguous TLS probe detection: {}",
+            ambiguous
+                .candidates
+                .iter()
+                .map(|candidate| candidate.detector_path.display())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))),
+        DetectionOutcome::Inapplicable(_)
+        | DetectionOutcome::NoMatch(_)
+        | DetectionOutcome::Collected(_) => Err(ToolError::new(
+            "no supported TLS payload probe points found",
+        )),
     }
 }
 
@@ -615,36 +128,25 @@ impl ArchFilter {
 }
 
 impl ProviderFilter {
-    fn allows(self, provider: TlsProvider) -> bool {
+    fn requested_provider(self) -> Option<TlsProvider> {
         match self {
-            Self::Auto => true,
-            Self::OpenSsl => provider == TlsProvider::OpenSsl,
-            Self::BoringSsl => provider == TlsProvider::BoringSsl,
-            Self::Rustls => provider == TlsProvider::Rustls,
-            Self::Go => provider == TlsProvider::Go,
-            Self::GnuTls => provider == TlsProvider::GnuTls,
-            Self::Nss => provider == TlsProvider::Nss,
+            Self::Auto => None,
+            Self::OpenSsl => Some(TlsProvider::OpenSsl),
+            Self::BoringSsl => Some(TlsProvider::BoringSsl),
+            Self::Rustls => Some(TlsProvider::Rustls),
+            Self::Go => Some(TlsProvider::Go),
+            Self::GnuTls => Some(TlsProvider::GnuTls),
+            Self::Nss => Some(TlsProvider::Nss),
         }
     }
 }
 
 impl SourceFilter {
-    fn allows_executable(self) -> bool {
-        matches!(self, Self::Auto | Self::Executable)
-    }
-
-    fn allows_shared_library(self) -> bool {
-        matches!(self, Self::Auto | Self::SharedLibrary)
-    }
-}
-
-trait WithTarget {
-    fn with_target(self, target: &ElfImage) -> Self;
-}
-
-impl WithTarget for ProbePointPlan {
-    fn with_target(mut self, target: &ElfImage) -> Self {
-        self.target = target_identity(target);
-        self
+    fn requested_source(self) -> Option<ProbeSource> {
+        match self {
+            Self::Auto => None,
+            Self::Executable => Some(ProbeSource::Executable),
+            Self::SharedLibrary => Some(ProbeSource::SharedLibrary),
+        }
     }
 }

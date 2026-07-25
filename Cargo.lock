@@ -1944,6 +1944,7 @@ name = "semantic_action_runtime"
 version = "0.7.1"
 dependencies = [
  "config_core",
+ "flate2",
  "libc",
  "model_core",
  "plugin_system",
@@ -2286,7 +2287,9 @@ version = "0.7.1"
 dependencies = [
  "anstyle",
  "clap",
+ "model_core",
  "rustc-demangle",
+ "sha2",
 ]
 
 [[package]]

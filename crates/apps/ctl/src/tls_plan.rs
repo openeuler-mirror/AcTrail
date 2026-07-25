@@ -46,7 +46,9 @@ pub(crate) fn queried_plan_from_reply(
         LaunchTlsPlanStatus::Found(plan) => Ok(Some(QueriedLaunchTlsPlan {
             descriptor: RuntimePlanDescriptor {
                 target: plan.target,
+                target_identity: plan.target_identity,
                 binary: plan.binary,
+                binary_identity: plan.binary_identity,
                 provider: plan.provider,
                 points: plan.points,
             },

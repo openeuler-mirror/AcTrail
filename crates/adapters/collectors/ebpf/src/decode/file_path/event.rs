@@ -29,6 +29,7 @@ pub(in crate::decode) fn decode(
     bindings: &BindingStateMap,
     tracker: &mut FileTracker,
 ) -> Result<Option<RawCollectorEvent>, DecodeError> {
+    let trace_id = event.trace_id;
     if event.kind == FILE_EVENT_MMAP {
         if !bindings.trace_has_capability(event.trace_id, &Capability::FsMmap) {
             return Ok(None);
@@ -79,6 +80,7 @@ pub(in crate::decode) fn decode(
 
     Ok(Some(RawCollectorEvent {
         envelope: RawEventEnvelope {
+            trace_id: Some(trace_id),
             observed_at: SystemTime::now(),
             process: identity,
             collector: CollectorName::new("ebpf"),
@@ -123,6 +125,7 @@ fn decode_read_summary(
     }
     Ok(Some(RawCollectorEvent {
         envelope: RawEventEnvelope {
+            trace_id: Some(event.trace_id),
             observed_at: SystemTime::now(),
             process: identity,
             collector: CollectorName::new("ebpf"),

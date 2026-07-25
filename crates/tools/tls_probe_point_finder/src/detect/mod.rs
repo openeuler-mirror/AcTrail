@@ -1,6 +1,5 @@
 //! TLS provider detection modules.
 
-mod assemble;
 mod command;
 mod report;
 

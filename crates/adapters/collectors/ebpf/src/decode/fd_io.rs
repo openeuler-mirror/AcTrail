@@ -62,6 +62,7 @@ pub(super) fn decode(
         let metadata = fd_io_metadata(&event, operation, direction, &observation);
         return Ok(Some(RawCollectorEvent {
             envelope: RawEventEnvelope {
+                trace_id: Some(event.trace_id),
                 observed_at: SystemTime::now(),
                 process: identity,
                 collector: CollectorName::new("ebpf"),
@@ -89,6 +90,7 @@ pub(super) fn decode(
                 let metadata = fd_io_metadata(&event, operation, direction, &observation);
                 return Ok(Some(RawCollectorEvent {
                     envelope: RawEventEnvelope {
+                        trace_id: Some(event.trace_id),
                         observed_at: SystemTime::now(),
                         process: identity,
                         collector: CollectorName::new("ebpf"),
@@ -106,6 +108,7 @@ pub(super) fn decode(
                 tracked_file_metadata(&event, operation, direction, &path, creation_requested);
             return Ok(Some(RawCollectorEvent {
                 envelope: RawEventEnvelope {
+                    trace_id: Some(event.trace_id),
                     observed_at: SystemTime::now(),
                     process: identity,
                     collector: CollectorName::new("ebpf"),

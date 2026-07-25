@@ -18,12 +18,15 @@ pub(super) const ELF_SECTION_HEADER_COUNT_FIELD: usize = 60;
 pub(super) const ELF_SECTION_NAME_TABLE_INDEX_FIELD: usize = 62;
 
 pub(super) const ELF_PROGRAM_HEADER_TYPE_FIELD: usize = 0;
+pub(super) const ELF_PROGRAM_HEADER_FLAGS_FIELD: usize = 4;
 pub(super) const ELF_PROGRAM_HEADER_FILE_OFFSET_FIELD: usize = 8;
 pub(super) const ELF_PROGRAM_HEADER_VADDR_FIELD: usize = 16;
 pub(super) const ELF_PROGRAM_HEADER_FILE_SIZE_FIELD: usize = 32;
 pub(super) const ELF_PROGRAM_HEADER_LOAD: u32 = 1;
 pub(super) const ELF_PROGRAM_HEADER_DYNAMIC: u32 = 2;
+pub(super) const ELF_PROGRAM_HEADER_INTERP: u32 = 3;
 pub(super) const ELF_PROGRAM_HEADER_NOTE: u32 = 4;
+pub(super) const ELF_PROGRAM_HEADER_FLAG_EXECUTE: u32 = 1;
 
 pub(super) const ELF_SECTION_HEADER_NAME_FIELD: usize = 0;
 pub(super) const ELF_SECTION_HEADER_TYPE_FIELD: usize = 4;

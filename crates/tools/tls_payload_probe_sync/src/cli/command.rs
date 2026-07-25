@@ -5,7 +5,7 @@ use tls_payload_sync::{
     RuntimeEnvConfig, RuntimeLibraryPath, audit_libraries_for_plans, launch_command_for_plan,
     run_with_runtime_libraries, runtime_env, runtime_library_path, validate_native_backend_plan,
 };
-use tls_probe_point_finder::fast::FastProbeRequest;
+use tls_probe_point_finder::fast::{FastProbeRequest, ProbeConsumer, resolve_for_consumer};
 
 use crate::cli::args::{Command, parse_args};
 use crate::cli::output::{Output, write_error};
@@ -45,15 +45,18 @@ fn run_probe(config: crate::cli::config::ProbeConfig) -> ToolResult<()> {
     let Some(program) = config.command.first() else {
         return Err(ToolError::new("probe command is empty"));
     };
-    let plan = tls_probe_point_finder::fast::resolve(FastProbeRequest {
-        binary: program.into(),
-        arch: config.arch,
-        provider: config.provider,
-        source: config.source,
-        match_limit: config.match_limit,
-        libraries: config.libraries.clone(),
-        library_search_dirs: config.library_search_dirs.clone(),
-    })?;
+    let plan = resolve_for_consumer(
+        FastProbeRequest {
+            binary: program.into(),
+            arch: config.arch,
+            provider: config.provider,
+            source: config.source,
+            match_limit: config.match_limit,
+            libraries: config.libraries.clone(),
+            library_search_dirs: config.library_search_dirs.clone(),
+        },
+        ProbeConsumer::Sync,
+    )?;
     validate_native_backend_plan(&plan)?;
     reporter::target(&plan)?;
     let library = runtime_library_path(&RuntimeLibraryPath::Auto)?;

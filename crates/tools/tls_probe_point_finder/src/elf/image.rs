@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::binary_identity::{BinaryIdentity, BinaryIdentityRegion, BinaryIdentityResolver};
 use crate::{ToolError, ToolResult};
 
 use super::constants::*;
@@ -22,13 +23,21 @@ impl Arch {
             Self::X86_64 => "x86_64",
         }
     }
+
+    fn machine(self) -> u16 {
+        match self {
+            Self::Aarch64 => ELF_MACHINE_AARCH64,
+            Self::X86_64 => ELF_MACHINE_X86_64,
+        }
+    }
 }
 
 pub(crate) struct ElfImage {
     pub(super) path: PathBuf,
     pub(super) data: Vec<u8>,
     pub(super) arch: Arch,
-    pub(super) build_id: Option<String>,
+    pub(super) identity: BinaryIdentity,
+    pub(super) has_interpreter: bool,
     pub(super) load_segments: Vec<LoadSegment>,
     pub(super) dynamic_segments: Vec<SegmentRange>,
     pub(super) sections: Vec<ElfSection>,
@@ -40,18 +49,17 @@ impl ElfImage {
             .map_err(|error| ToolError::new(format!("cannot read {}: {error}", path.display())))?;
         validate_header(&data)?;
         let arch = parse_arch(&data)?;
+        let has_interpreter = has_program_header_type(&data, ELF_PROGRAM_HEADER_INTERP)?;
         let load_segments = parse_load_segments(&data)?;
         let dynamic_segments = parse_dynamic_segments(&data)?;
         let sections = parse_sections(&data)?;
-        let build_id = match parse_program_build_id(&data)? {
-            Some(found) => Some(found),
-            None => parse_section_build_id(&data, &sections)?,
-        };
+        let identity = Self::resolve_identity(&data, arch, &load_segments, &sections)?;
         Ok(Self {
             path: path.to_path_buf(),
             data,
             arch,
-            build_id,
+            identity,
+            has_interpreter,
             load_segments,
             dynamic_segments,
             sections,
@@ -70,8 +78,47 @@ impl ElfImage {
         self.arch
     }
 
-    pub(crate) fn build_id(&self) -> Option<&str> {
-        self.build_id.as_deref()
+    pub(crate) fn identity(&self) -> &BinaryIdentity {
+        &self.identity
+    }
+
+    pub(crate) fn has_interpreter(&self) -> bool {
+        self.has_interpreter
+    }
+
+    pub(crate) fn identity_from_data(data: &[u8]) -> ToolResult<BinaryIdentity> {
+        validate_header(data)?;
+        let arch = parse_arch(data)?;
+        let load_segments = parse_load_segments(data)?;
+        let sections = parse_sections(data)?;
+        Self::resolve_identity(data, arch, &load_segments, &sections)
+    }
+
+    fn resolve_identity(
+        data: &[u8],
+        arch: Arch,
+        load_segments: &[LoadSegment],
+        sections: &[ElfSection],
+    ) -> ToolResult<BinaryIdentity> {
+        let build_id = match parse_program_build_id(data)? {
+            Some(found) => Some(found),
+            None => parse_section_build_id(data, sections)?,
+        };
+        let identity_regions = load_segments
+            .iter()
+            .filter(|segment| segment.executable)
+            .map(|segment| BinaryIdentityRegion {
+                file_offset: segment.file_offset,
+                virtual_address: segment.virtual_address,
+                file_size: segment.file_size,
+            })
+            .collect::<Vec<_>>();
+        BinaryIdentityResolver::resolve(
+            build_id.as_deref(),
+            data,
+            arch.machine(),
+            &identity_regions,
+        )
     }
 
     pub(crate) fn file_offset_for_virtual_address(&self, virtual_address: u64) -> ToolResult<u64> {
@@ -116,6 +163,7 @@ pub(super) struct LoadSegment {
     file_offset: u64,
     virtual_address: u64,
     file_size: u64,
+    executable: bool,
 }
 
 impl LoadSegment {
@@ -187,6 +235,9 @@ fn parse_load_segments(data: &[u8]) -> ToolResult<Vec<LoadSegment>> {
                 file_offset: read_u64(header, ELF_PROGRAM_HEADER_FILE_OFFSET_FIELD)?,
                 virtual_address: read_u64(header, ELF_PROGRAM_HEADER_VADDR_FIELD)?,
                 file_size: read_u64(header, ELF_PROGRAM_HEADER_FILE_SIZE_FIELD)?,
+                executable: read_u32(header, ELF_PROGRAM_HEADER_FLAGS_FIELD)?
+                    & ELF_PROGRAM_HEADER_FLAG_EXECUTE
+                    != 0,
             });
         }
         Ok(())
@@ -209,6 +260,15 @@ fn parse_dynamic_segments(data: &[u8]) -> ToolResult<Vec<SegmentRange>> {
         Ok(())
     })?;
     Ok(segments)
+}
+
+fn has_program_header_type(data: &[u8], expected_type: u32) -> ToolResult<bool> {
+    let mut found = false;
+    for_program_header(data, |header| {
+        found |= read_u32(header, ELF_PROGRAM_HEADER_TYPE_FIELD)? == expected_type;
+        Ok(())
+    })?;
+    Ok(found)
 }
 
 fn for_program_header<F>(data: &[u8], mut visit: F) -> ToolResult<()>

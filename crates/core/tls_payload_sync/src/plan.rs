@@ -2,14 +2,18 @@
 
 use std::path::PathBuf;
 
-use tls_probe_point_finder::{PayloadDirection as FinderDirection, ProbePointPlan};
+use tls_probe_point_finder::{
+    BinaryIdentity, BinaryIdentityTypeCode, PayloadDirection as FinderDirection, ProbePointPlan,
+};
 
 use crate::{SyncError, SyncResult};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimePlanDescriptor {
     pub target: PathBuf,
+    pub target_identity: BinaryIdentity,
     pub binary: PathBuf,
+    pub binary_identity: BinaryIdentity,
     pub provider: String,
     pub points: String,
 }
@@ -17,7 +21,9 @@ pub struct RuntimePlanDescriptor {
 pub fn runtime_plan_descriptor(plan: &ProbePointPlan) -> SyncResult<RuntimePlanDescriptor> {
     Ok(RuntimePlanDescriptor {
         target: plan.target.binary.clone(),
+        target_identity: plan.target.identity.clone(),
         binary: plan.binary.path.clone(),
+        binary_identity: plan.binary.identity.clone(),
         provider: plan.provider.as_str().to_string(),
         points: encode_points(plan)?,
     })
@@ -33,9 +39,25 @@ pub fn runtime_plan_bundle(plans: &[ProbePointPlan]) -> SyncResult<String> {
 
 pub fn encode_runtime_plan(plan: &RuntimePlanDescriptor) -> String {
     format!(
-        "{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}|{}|{}|{}",
         encode_hex(plan.target.display().to_string().as_bytes()),
+        encode_hex(
+            plan.target_identity
+                .identity_type_code
+                .code()
+                .to_string()
+                .as_bytes()
+        ),
+        encode_hex(plan.target_identity.identity.as_bytes()),
         encode_hex(plan.binary.display().to_string().as_bytes()),
+        encode_hex(
+            plan.binary_identity
+                .identity_type_code
+                .code()
+                .to_string()
+                .as_bytes()
+        ),
+        encode_hex(plan.binary_identity.identity.as_bytes()),
         encode_hex(plan.provider.as_bytes()),
         encode_hex(plan.points.as_bytes())
     )
@@ -48,11 +70,13 @@ pub fn decode_runtime_plan(value: &str) -> SyncResult<RuntimePlanDescriptor> {
             .next()
             .ok_or_else(|| SyncError::new(format!("invalid runtime plan item: {value}")))?,
     )?;
+    let target_identity = decode_binary_identity(&mut parts, value, "target")?;
     let binary = decode_hex_string(
         parts
             .next()
             .ok_or_else(|| SyncError::new(format!("invalid runtime plan item: {value}")))?,
     )?;
+    let binary_identity = decode_binary_identity(&mut parts, value, "binary")?;
     let provider = decode_hex_string(
         parts
             .next()
@@ -70,10 +94,35 @@ pub fn decode_runtime_plan(value: &str) -> SyncResult<RuntimePlanDescriptor> {
     }
     Ok(RuntimePlanDescriptor {
         target: PathBuf::from(target),
+        target_identity,
         binary: PathBuf::from(binary),
+        binary_identity,
         provider,
         points,
     })
+}
+
+fn decode_binary_identity<'a>(
+    parts: &mut impl Iterator<Item = &'a str>,
+    value: &str,
+    label: &str,
+) -> SyncResult<BinaryIdentity> {
+    let type_code = decode_hex_string(parts.next().ok_or_else(|| {
+        SyncError::new(format!(
+            "invalid runtime plan {label} identity type: {value}"
+        ))
+    })?)?
+    .parse::<u16>()
+    .map_err(|error| SyncError::new(format!("invalid {label} identity type code: {error}")))?;
+    let identity = decode_hex_string(parts.next().ok_or_else(|| {
+        SyncError::new(format!("invalid runtime plan {label} identity: {value}"))
+    })?)?;
+    BinaryIdentity::try_new(
+        BinaryIdentityTypeCode::parse(type_code)
+            .map_err(|error| SyncError::new(error.to_string()))?,
+        identity,
+    )
+    .map_err(|error| SyncError::new(error.to_string()))
 }
 
 pub fn encode_points(plan: &ProbePointPlan) -> SyncResult<String> {

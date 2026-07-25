@@ -24,6 +24,8 @@ enum actrail_tls_payload_symbol {
     ACTRAIL_TLS_SYMBOL_NSPR_PR_SEND = 12,
     ACTRAIL_TLS_SYMBOL_NSPR_PR_READ = 13,
     ACTRAIL_TLS_SYMBOL_NSPR_PR_RECV = 14,
+    ACTRAIL_TLS_SYMBOL_RUSTLS_BUFFER_PLAINTEXT = 15,
+    ACTRAIL_TLS_SYMBOL_RUSTLS_TAKE_RECEIVED_PLAINTEXT = 16,
 };
 
 enum actrail_tls_payload_library {
@@ -110,6 +112,15 @@ struct actrail_tls_payload_op_args {
     __u64 size_ptr;
 };
 
+struct actrail_tls_immediate_payload_args {
+    __u32 direction;
+    __u32 symbol;
+    __u32 library;
+    __u64 stream_key;
+    __u64 buffer_ptr;
+    __u64 requested_size;
+};
+
 struct actrail_go_tls_read_buffer_key {
     __u32 tgid;
     __u32 reserved;
@@ -136,6 +147,8 @@ struct actrail_tls_completion_event {
     __u32 library;
     __u64 pid_generation;
     __u64 buffer_ptr;
+    __u32 host_pid;
+    __u32 host_tid;
 };
 
 struct actrail_tls_capture_request_event {
@@ -152,6 +165,8 @@ struct actrail_tls_capture_request_event {
     __u64 pid_generation;
     __u32 symbol;
     __u32 library;
+    __u32 host_pid;
+    __u32 host_tid;
 };
 
 struct actrail_tls_direct_capture_event {
@@ -170,6 +185,8 @@ struct actrail_tls_direct_capture_event {
     __u32 library;
     __u32 reserved;
     __u64 pid_generation;
+    __u32 host_pid;
+    __u32 host_tid;
     __u8 bytes[ACTRAIL_TLS_PAYLOAD_DIRECT_COPY_ABI_BYTES];
 };
 
@@ -436,6 +453,7 @@ static __always_inline int emit_tls_payload_completion(
     __u32 flags
 ) {
     __u64 host_pid_tgid = current_pid_tgid();
+    __u64 kernel_pid_tgid = current_kernel_pid_tgid();
     __u64 namespace_pid_tgid = host_pid_tgid;
     __u32 tgid = host_pid_tgid >> 32;
     __u32 tid = (__u32)host_pid_tgid;
@@ -495,6 +513,8 @@ static __always_inline int emit_tls_payload_completion(
     event->library = op->library;
     event->pid_generation = op->pid_generation;
     event->buffer_ptr = op->buffer_ptr;
+    event->host_pid = kernel_pid_tgid >> 32;
+    event->host_tid = (__u32)kernel_pid_tgid;
     actrail_event_submit(ctx, event);
     tls_diag_inc(ACTRAIL_TLS_DIAG_COMPLETION_SUBMIT_OK);
     bpf_map_delete_elem(&pending_tls_payload_ops, &host_pid_tgid);
@@ -545,6 +565,55 @@ static __always_inline int emit_tls_payload_completion_from_rust_result_usize(st
     return emit_tls_payload_completion(ctx, ACTRAIL_UPROBE_RET2(ctx), 0);
 }
 
+static __always_inline int emit_tls_immediate_payload_args(
+    void *ctx,
+    const struct actrail_tls_immediate_payload_args *args
+) {
+    __u32 direction = args->direction;
+    __u32 symbol = args->symbol;
+    __u32 library = args->library;
+    __u64 stream_key = args->stream_key;
+    __u64 buffer_ptr = args->buffer_ptr;
+    __u64 requested_size = args->requested_size;
+    __u64 host_pid_tgid = current_pid_tgid();
+    __u32 tgid = host_pid_tgid >> 32;
+    __u32 tid = (__u32)host_pid_tgid;
+    struct actrail_pending_tls_payload_op *op;
+    int stored = store_tls_payload_op(
+        ctx,
+        tls_op_metadata(direction, symbol),
+        stream_key,
+        buffer_ptr,
+        requested_size,
+        0
+    );
+
+    if (stored != 1) {
+        return 0;
+    }
+    op = bpf_map_lookup_elem(&pending_tls_payload_ops, &host_pid_tgid);
+    if (!op) {
+        return 0;
+    }
+    op->library = library;
+    if (direction == ACTRAIL_TLS_PAYLOAD_INBOUND) {
+        emit_tls_capture_request(ctx, op, tgid, tid, requested_size);
+    }
+    return emit_tls_payload_completion(ctx, requested_size, 0);
+}
+
+#define emit_tls_immediate_payload(ctx_arg, direction_arg, symbol_arg, library_arg, stream_key_arg, buffer_ptr_arg, requested_size_arg) ({ \
+    struct actrail_tls_immediate_payload_args immediate_args = {}; \
+    immediate_args.direction = (direction_arg); \
+    immediate_args.symbol = (symbol_arg); \
+    immediate_args.library = (library_arg); \
+    immediate_args.stream_key = (stream_key_arg); \
+    immediate_args.buffer_ptr = (buffer_ptr_arg); \
+    immediate_args.requested_size = (requested_size_arg); \
+    emit_tls_immediate_payload_args((ctx_arg), &immediate_args); \
+})
+
+#include "tls/actrail_tls_rustls_internal.h"
 #include "tls/actrail_tls_payload_probes.h"
 
 #endif

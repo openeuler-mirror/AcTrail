@@ -2,6 +2,8 @@
 
 use std::path::PathBuf;
 
+use crate::BinaryIdentity;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProbePointPlan {
     pub target: TargetIdentity,
@@ -30,14 +32,14 @@ impl ProbePointPlan {
 pub struct TargetIdentity {
     pub binary: PathBuf,
     pub architecture: String,
-    pub build_id: Option<String>,
+    pub identity: BinaryIdentity,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProbeBinary {
     pub path: PathBuf,
     pub architecture: String,
-    pub build_id: Option<String>,
+    pub identity: BinaryIdentity,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -549,6 +549,16 @@ fn loader_env_value_for_libraries(libraries: &[PathBuf], env_name: &str) -> Sync
 }
 
 pub fn validate_native_backend_plan(plan: &ProbePointPlan) -> SyncResult<()> {
+    validate_identity(&plan.target.binary, &plan.target.identity, "target")?;
+    if plan.target.binary == plan.binary.path {
+        if plan.target.identity != plan.binary.identity {
+            return Err(SyncError::new(
+                "target and probe identities disagree for the same binary",
+            ));
+        }
+    } else {
+        validate_identity(&plan.binary.path, &plan.binary.identity, "probe")?;
+    }
     let build_arch = std::env::consts::ARCH;
     if !NATIVE_INLINE_HOOK_ARCHES.contains(&build_arch) {
         return Err(SyncError::new(format!(
@@ -581,6 +591,25 @@ pub fn validate_native_backend_plan(plan: &ProbePointPlan) -> SyncResult<()> {
     Ok(())
 }
 
+fn validate_identity(
+    path: &Path,
+    expected: &tls_probe_point_finder::BinaryIdentity,
+    label: &str,
+) -> SyncResult<()> {
+    let actual = tls_probe_point_finder::elf_identity(path)
+        .map_err(|error| SyncError::new(format!("resolve {label} binary identity: {error}")))?;
+    if &actual == expected {
+        return Ok(());
+    }
+    Err(SyncError::new(format!(
+        "{label} binary identity changed: expected {}:{} actual {}:{}",
+        expected.identity_type_code.code(),
+        expected.identity,
+        actual.identity_type_code.code(),
+        actual.identity,
+    )))
+}
+
 fn is_native_inline_hook_symbol(symbol: &str) -> bool {
     NATIVE_INLINE_HOOK_SYMBOLS.contains(&symbol)
 }
@@ -600,6 +629,36 @@ pub fn launch_command_for_plan_descriptor(
     command: &[OsString],
     plan: &RuntimePlanDescriptor,
 ) -> SyncResult<Vec<OsString>> {
+    let actual_target_identity = tls_probe_point_finder::elf_identity(&plan.target)
+        .map_err(|error| SyncError::new(format!("resolve target binary identity: {error}")))?;
+    if actual_target_identity != plan.target_identity {
+        return Err(SyncError::new(format!(
+            "target binary identity changed before launch: expected {}:{} actual {}:{}",
+            plan.target_identity.identity_type_code.code(),
+            plan.target_identity.identity,
+            actual_target_identity.identity_type_code.code(),
+            actual_target_identity.identity,
+        )));
+    }
+    if plan.target == plan.binary {
+        if plan.target_identity != plan.binary_identity {
+            return Err(SyncError::new(
+                "target and probe identities disagree for the same binary",
+            ));
+        }
+    } else {
+        let actual_identity = tls_probe_point_finder::elf_identity(&plan.binary)
+            .map_err(|error| SyncError::new(format!("resolve probe binary identity: {error}")))?;
+        if actual_identity != plan.binary_identity {
+            return Err(SyncError::new(format!(
+                "probe binary identity changed before launch: expected {}:{} actual {}:{}",
+                plan.binary_identity.identity_type_code.code(),
+                plan.binary_identity.identity,
+                actual_identity.identity_type_code.code(),
+                actual_identity.identity,
+            )));
+        }
+    }
     launch_command_for_binary(command, &plan.binary)
 }
 
@@ -656,8 +715,8 @@ mod tests {
     use std::path::PathBuf;
 
     use tls_probe_point_finder::{
-        AttachPoint, CaptureStrategy, PayloadDirection, ProbeBinary, ProbePoint, ProbePointPlan,
-        ProbeSource, TargetIdentity, TlsProvider,
+        AttachPoint, BinaryIdentity, BinaryIdentityTypeCode, CaptureStrategy, PayloadDirection,
+        ProbeBinary, ProbePoint, ProbePointPlan, ProbeSource, TargetIdentity, TlsProvider,
     };
 
     use super::{
@@ -765,7 +824,10 @@ mod tests {
             target: TargetIdentity {
                 binary: PathBuf::from("/tmp/target"),
                 architecture: architecture.to_string(),
-                build_id: None,
+                identity: BinaryIdentity {
+                    identity_type_code: BinaryIdentityTypeCode::GnuBuildId,
+                    identity: "00".to_string(),
+                },
             },
             provider: TlsProvider::OpenSsl,
             source: ProbeSource::Executable,
@@ -773,7 +835,10 @@ mod tests {
             binary: ProbeBinary {
                 path: PathBuf::from("/tmp/target"),
                 architecture: architecture.to_string(),
-                build_id: None,
+                identity: BinaryIdentity {
+                    identity_type_code: BinaryIdentityTypeCode::GnuBuildId,
+                    identity: "00".to_string(),
+                },
             },
             points,
         }

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use crate::capture::SseFrame;
+use crate::capture::{CaptureDirection, SseFrame, WebSocketMessage};
 
 use super::super::model::{
     JSON_FIELD_CONTENT, JSON_FIELD_TEXT, LlmAccumulator, LlmKey, LlmMessageStatus, LlmOutput,
@@ -29,8 +29,16 @@ pub(in crate::llm_projection) struct ResponsesParser {
 
 impl ResponsesParser {
     pub(in crate::llm_projection) fn matches(frame: &SseFrame, value: &Value) -> bool {
+        Self::matches_event(event_type(frame, value))
+    }
+
+    pub(in crate::llm_projection) fn matches_websocket(value: &Value) -> bool {
+        Self::matches_event(value.get(JSON_FIELD_TYPE).and_then(Value::as_str))
+    }
+
+    fn matches_event(event: Option<&str>) -> bool {
         matches!(
-            event_type(frame, value),
+            event,
             Some(EVENT_OUTPUT_TEXT_DELTA)
                 | Some(EVENT_OUTPUT_TEXT_DONE)
                 | Some(EVENT_CONTENT_PART_DONE)
@@ -45,15 +53,41 @@ impl ResponsesParser {
         frame: &SseFrame,
         value: &Value,
     ) -> Vec<LlmOutput> {
-        match event_type(frame, value) {
-            Some(EVENT_OUTPUT_TEXT_DELTA) => self.push_delta(frame, value),
-            Some(EVENT_OUTPUT_TEXT_DONE) => self.finish_output_text(frame, value),
-            Some(EVENT_CONTENT_PART_DONE) => self.validate_content_part(frame, value),
-            Some(EVENT_OUTPUT_ITEM_DONE) => self.validate_output_item(frame, value),
-            Some(EVENT_RESPONSE_IN_PROGRESS) => {
-                self.validate_response_snapshot(frame, value, false)
-            }
-            Some(EVENT_RESPONSE_COMPLETED) => self.validate_response_snapshot(frame, value, true),
+        self.push_event(
+            LlmKey::from_responses_frame(frame, value),
+            event_type(frame, value),
+            value,
+        )
+    }
+
+    pub(in crate::llm_projection) fn push_websocket(
+        &mut self,
+        message: &WebSocketMessage,
+        value: &Value,
+    ) -> Vec<LlmOutput> {
+        self.push_event(
+            LlmKey::from_responses_websocket(message, value),
+            value.get(JSON_FIELD_TYPE).and_then(Value::as_str),
+            value,
+        )
+    }
+
+    pub(in crate::llm_projection) fn start_websocket_round(&mut self, pid: u32, stream_key: u64) {
+        self.streams.retain(|key, _| {
+            key.pid != pid
+                || key.stream_key != stream_key
+                || key.direction != CaptureDirection::Inbound
+        });
+    }
+
+    fn push_event(&mut self, key: LlmKey, event: Option<&str>, value: &Value) -> Vec<LlmOutput> {
+        match event {
+            Some(EVENT_OUTPUT_TEXT_DELTA) => self.push_delta(key, value),
+            Some(EVENT_OUTPUT_TEXT_DONE) => self.finish_output_text(key, value),
+            Some(EVENT_CONTENT_PART_DONE) => self.validate_content_part(key, value),
+            Some(EVENT_OUTPUT_ITEM_DONE) => self.validate_output_item(key, value),
+            Some(EVENT_RESPONSE_IN_PROGRESS) => self.validate_response_snapshot(key, value, false),
+            Some(EVENT_RESPONSE_COMPLETED) => self.validate_response_snapshot(key, value, true),
             _ => Vec::new(),
         }
     }
@@ -78,11 +112,10 @@ impl ResponsesParser {
         output
     }
 
-    fn push_delta(&mut self, frame: &SseFrame, value: &Value) -> Vec<LlmOutput> {
+    fn push_delta(&mut self, key: LlmKey, value: &Value) -> Vec<LlmOutput> {
         let Some(delta_text) = text_field(value, JSON_FIELD_DELTA) else {
             return Vec::new();
         };
-        let key = LlmKey::from_responses_frame(frame, value);
         self.streams
             .entry(key)
             .or_default()
@@ -91,22 +124,19 @@ impl ResponsesParser {
         vec![delta(key, delta_text)]
     }
 
-    fn finish_output_text(&mut self, frame: &SseFrame, value: &Value) -> Vec<LlmOutput> {
-        let key = LlmKey::from_responses_frame(frame, value);
+    fn finish_output_text(&mut self, key: LlmKey, value: &Value) -> Vec<LlmOutput> {
         let expected = text_field(value, JSON_FIELD_TEXT);
         self.finish_with_expected(key, expected, None, true)
     }
 
-    fn validate_content_part(&mut self, frame: &SseFrame, value: &Value) -> Vec<LlmOutput> {
-        let key = LlmKey::from_responses_frame(frame, value);
+    fn validate_content_part(&mut self, key: LlmKey, value: &Value) -> Vec<LlmOutput> {
         let expected = value
             .get(JSON_FIELD_PART)
             .and_then(|part| text_field(part, JSON_FIELD_TEXT));
         self.finish_with_expected(key, expected, Some("response.content_part.done"), true)
     }
 
-    fn validate_output_item(&mut self, frame: &SseFrame, value: &Value) -> Vec<LlmOutput> {
-        let key = LlmKey::from_responses_frame(frame, value);
+    fn validate_output_item(&mut self, key: LlmKey, value: &Value) -> Vec<LlmOutput> {
         let expected = output_item_text(value);
         self.finish_with_expected(
             key,
@@ -118,11 +148,10 @@ impl ResponsesParser {
 
     fn validate_response_snapshot(
         &mut self,
-        frame: &SseFrame,
+        key: LlmKey,
         value: &Value,
         allow_emit_without_delta: bool,
     ) -> Vec<LlmOutput> {
-        let key = LlmKey::from_responses_frame(frame, value);
         let expected = response_snapshot_text(value);
         self.finish_with_expected(
             key,

@@ -11,7 +11,8 @@ use crate::capture::{
     CaptureConfig, DEFAULT_ASSEMBLE_BUFFER_BYTES, DEFAULT_DECODE_INPUT_BYTES,
     DEFAULT_DECODE_OUTPUT_BYTES, DEFAULT_DECODE_READER_BUFFER_BYTES, DEFAULT_DRAIN_MILLIS,
     DEFAULT_MATCH_LIMIT, DEFAULT_MAX_CAPTURE_BYTES, DEFAULT_PENDING_OPS, DEFAULT_POLL_MILLIS,
-    DEFAULT_RING_BUFFER_BYTES, DEFAULT_RUSTLS_CHUNKS,
+    DEFAULT_RING_BUFFER_BYTES, DEFAULT_RUSTLS_CHUNKS, DEFAULT_WEBSOCKET_DECODED_BYTES,
+    DEFAULT_WEBSOCKET_FRAME_BUFFER_BYTES, DEFAULT_WEBSOCKET_MESSAGE_BYTES, WebSocketConfig,
 };
 use crate::cli::report_config::{EventFilter, RedactionMode, ReportEvent, ReporterConfig};
 use crate::{ToolError, ToolResult};
@@ -90,6 +91,18 @@ pub(crate) struct ProbeArgs {
     #[arg(long, value_name = "N", value_parser = parse_usize, default_value_t = DEFAULT_DECODE_READER_BUFFER_BYTES)]
     decode_reader_buffer_bytes: usize,
 
+    /// Maximum buffered WebSocket wire bytes per direction.
+    #[arg(long, value_name = "N", value_parser = parse_usize, default_value_t = DEFAULT_WEBSOCKET_FRAME_BUFFER_BYTES)]
+    websocket_frame_buffer_bytes: usize,
+
+    /// Maximum compressed payload bytes per WebSocket logical message.
+    #[arg(long, value_name = "N", value_parser = parse_usize, default_value_t = DEFAULT_WEBSOCKET_MESSAGE_BYTES)]
+    websocket_message_bytes: usize,
+
+    /// Maximum decoded payload bytes per WebSocket logical message.
+    #[arg(long, value_name = "N", value_parser = parse_usize, default_value_t = DEFAULT_WEBSOCKET_DECODED_BYTES)]
+    websocket_decoded_bytes: usize,
+
     /// Payload preview redaction mode.
     #[arg(long, value_enum, default_value = "redact")]
     redaction: RedactionChoice,
@@ -141,6 +154,11 @@ impl ProbeArgs {
             decode_input_bytes: self.decode_input_bytes,
             decode_output_bytes: self.decode_output_bytes,
             decode_reader_buffer_bytes: self.decode_reader_buffer_bytes,
+            websocket: WebSocketConfig {
+                max_frame_buffer_bytes: self.websocket_frame_buffer_bytes,
+                max_message_bytes: self.websocket_message_bytes,
+                max_decoded_bytes: self.websocket_decoded_bytes,
+            },
             arch: self.arch.into(),
             provider: self.provider.into(),
             source: self.source.into(),

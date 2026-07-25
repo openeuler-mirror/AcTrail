@@ -16,7 +16,8 @@ RUSTLS_REQUIRED_HOOKS = (
 
 @dataclass(frozen=True)
 class RustlsProbePlan:
-    build_id: str
+    identity_type_code: int
+    identity: str
     architecture: str
     symbols: dict[str, str]
     detail: str
@@ -38,7 +39,8 @@ def resolve_rustls_probe_plan(
     if plan.provider != "rustls":
         raise RuntimeError(f"finder plan did not select provider = rustls: {plan.provider}")
     return RustlsProbePlan(
-        build_id=plan.build_id,
+        identity_type_code=plan.identity_type_code,
+        identity=plan.identity,
         architecture=plan.architecture,
         symbols=plan.symbols,
         detail=plan.detail,

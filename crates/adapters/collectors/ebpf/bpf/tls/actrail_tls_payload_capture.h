@@ -15,6 +15,7 @@ static __always_inline int emit_tls_direct_capture(
     __u64 bounded_size;
     __u32 capture_size;
     __u32 copy_limit = payload_tls_direct_copy_limit();
+    __u64 kernel_pid_tgid = current_kernel_pid_tgid();
     struct actrail_tls_direct_capture_event *event;
 
     tls_diag_inc(ACTRAIL_TLS_DIAG_DIRECT_COPY_ATTEMPT);
@@ -53,6 +54,8 @@ static __always_inline int emit_tls_direct_capture(
     event->library = op->library;
     event->reserved = 0;
     event->pid_generation = op->pid_generation;
+    event->host_pid = kernel_pid_tgid >> 32;
+    event->host_tid = (__u32)kernel_pid_tgid;
     if (bpf_probe_read_user(
             event->bytes,
             bounded_size,
@@ -75,6 +78,7 @@ static __always_inline int emit_tls_capture_request(
     __u32 tid,
     __u64 requested_size
 ) {
+    __u64 kernel_pid_tgid = current_kernel_pid_tgid();
     struct actrail_tls_capture_request_event *event =
         actrail_event_reserve(sizeof(*event));
     if (!event) {
@@ -94,6 +98,8 @@ static __always_inline int emit_tls_capture_request(
     event->pid_generation = op->pid_generation;
     event->symbol = op->symbol;
     event->library = op->library;
+    event->host_pid = kernel_pid_tgid >> 32;
+    event->host_tid = (__u32)kernel_pid_tgid;
     if (bpf_send_signal(ACTRAIL_TLS_CAPTURE_SIGSTOP) == 0) {
         actrail_event_submit(ctx, event);
         tls_diag_inc(ACTRAIL_TLS_DIAG_CAPTURE_REQUEST_SUBMIT_OK);
