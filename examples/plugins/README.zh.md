@@ -6,7 +6,7 @@
 
 | 目录 | 运行时 / ABI | 插件用途 | 示例内容 |
 | --- | --- | --- | --- |
-| `builtin/otel-jsonl` | `builtin` | `observation-consumer` | 内置 OTEL JSONL 观测消费者，使用插件自己的 TOML 配置。 |
+| `builtin/otel-jsonl` | `builtin` | `observation-consumer` | 内置 OTEL JSONL 观测消费者；release 安装为可发现但默认不加载的候选包。 |
 | `wasm-legacy/observation-count` | `wasm` core module | `observation-consumer` | 最小观测消费者 ABI，使用手写 `.wat` 模块统计观测记录。 |
 | `wasm-legacy/observation-env-read` | `wasm` core module | `observation-consumer` | 观测插件通过显式授权读取指定环境变量。 |
 | `wasm-legacy/observation-payload-read` | `wasm` core module | `observation-consumer` | 观测插件通过显式授权读取保留的 payload 数据。 |
@@ -27,11 +27,11 @@
 
 每个插件示例至少包含：
 
-- `plugin.toml`：插件 manifest。
-- 插件 artifact：例如 `.wat` 或 `.wasm`。
+- 插件 manifest；普通示例通常名为 `plugin.toml`，可发现的安装包使用 `*.plugin.toml`。
+- WASM 插件 artifact，例如 `.wat` 或 `.wasm`；builtin 插件的实现已编译进 `actraild`，无需独立 artifact。
 - `README.zh.md`：该插件的说明。
 
-如果插件声明了 `plugin_config.required = true`，目录中还会包含 `config.toml`。如果 manifest 使用了 `plugin_config.schema_ref`，目录中还会包含对应的 JSON Schema 文件。
+如果插件声明了 `plugin_config.required = true`，目录中还会包含对应配置文件。可发现包的配置文件必须与 manifest 同名，例如 `otel-jsonl.plugin.toml` 对应 `otel-jsonl.config.toml`。如果 manifest 使用了 `plugin_config.schema_ref`，目录中还会包含对应的 JSON Schema 文件。
 
 ## WASM Core Module 示例
 

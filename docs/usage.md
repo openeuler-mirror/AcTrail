@@ -209,8 +209,8 @@ failure_policy = "fail-fast"
 instance = "live-otel"
 enabled = true
 failure_policy = "continue"
-manifest = "/etc/actrail/plugins/otel-jsonl/plugin.toml"
-plugin_config = "/etc/actrail/plugins/otel-jsonl/config.toml"
+manifest = "/etc/actrail/plugins/otel-jsonl/otel-jsonl.plugin.toml"
+plugin_config = "/etc/actrail/plugins/otel-jsonl/otel-jsonl.config.toml"
 host_grants = []
 ```
 

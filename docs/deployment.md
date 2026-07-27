@@ -91,7 +91,7 @@ For a persistent deployment, review these fields first:
 
 AcTrail fails fast for unsupported required capabilities. Do not add broad fallback configs that silently reduce coverage.
 
-`scripts/install-release.sh` builds and installs two official packages under `${ACTRAIL_PLUGIN_DIR:-$HOME/.actrail/plugins}`: `file-leakage/` provides post-trace leakage detection, and `file-policy-dynamic/` manages dynamic allow, deny, and gray file rules. Installation only makes these packages discoverable. The generated startup list remains empty and disabled; use the local Plugins Web workspace or the plugin CLI to load a package explicitly.
+`scripts/install-release.sh` installs four official packages under `${ACTRAIL_PLUGIN_DIR:-$HOME/.actrail/plugins}`: `otel-jsonl/` exposes the built-in live OTLP JSONL exporter, `file-leakage/` provides post-trace leakage detection, `activity-anomaly/` detects terminal-trace activity anomalies, and `file-policy-dynamic/` manages dynamic allow, deny, and gray file rules. Installation only makes these packages discoverable. The generated startup list remains empty and disabled; use the local Plugins Web workspace or the plugin CLI to load a package explicitly.
 
 The dynamic file-policy plugin requests `file-policy.rules.apply`, whose grants must include allowed rule decisions and absolute path scopes. Select the candidate in the Web workspace, configure those grants in the load dialog, and load the instance. The daemon validates the submitted grants before activating the plugin. Web lifecycle operations are privileged daemon administration, so run `actrailweb` as an authorized local administrator and keep its listener on a trusted interface.
 

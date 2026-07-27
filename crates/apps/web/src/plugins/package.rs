@@ -383,3 +383,76 @@ impl InstalledPackage {
         self.issue.is_none() && self.manifest_path.is_some() && self.plugin_id.is_some()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use config_core::daemon::PluginDiscoveryConfig;
+    use plugin_system::{PluginPurpose, PluginRuntimeKind};
+
+    use super::PluginDirectory;
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new(label: &str) -> Self {
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time must be after unix epoch")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "actrail-web-{label}-{}-{nonce}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&path).expect("create test plugin directory");
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn official_otel_jsonl_package_is_discoverable() {
+        let root = TestDirectory::new("otel-jsonl-candidate");
+        let package = root.path().join("otel-jsonl");
+        fs::create_dir(&package).expect("create otel-jsonl package");
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../examples/plugins/builtin/otel-jsonl");
+        for asset in [
+            "otel-jsonl.plugin.toml",
+            "otel-jsonl.config.toml",
+            "otel-jsonl.plugin-config.v1",
+        ] {
+            fs::copy(source.join(asset), package.join(asset))
+                .unwrap_or_else(|error| panic!("copy {asset} fixture failed: {error}"));
+        }
+        let directory = PluginDirectory::new(&PluginDiscoveryConfig {
+            directory: root.path().to_path_buf(),
+            max_packages: 1,
+            manifest_max_bytes: 262_144,
+        })
+        .expect("create plugin directory scanner");
+
+        let candidates = directory.scan().expect("scan official plugin package");
+
+        assert_eq!(candidates.len(), 1);
+        let candidate = &candidates[0];
+        assert_eq!(candidate.key, "otel-jsonl");
+        assert_eq!(candidate.plugin_id.as_deref(), Some("otel-jsonl"));
+        assert_eq!(candidate.purpose, Some(PluginPurpose::ObservationConsumer));
+        assert_eq!(candidate.runtime, Some(PluginRuntimeKind::Builtin));
+        assert!(candidate.plugin_config_path.is_some());
+        assert!(candidate.activation_ready(), "{:?}", candidate.issue);
+    }
+}
