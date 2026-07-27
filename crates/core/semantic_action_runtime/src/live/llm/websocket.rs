@@ -12,6 +12,8 @@ use model_core::process::ProcessIdentity;
 use serde_json::Value;
 
 const HEADER_END: &[u8] = b"\r\n\r\n";
+const REQUEST_PREFIX: &[u8] = b"GET ";
+const ACCEPT_PREFIX: &[u8] = b"HTTP/1.1 101 ";
 const MAX_HANDSHAKE_BYTES: usize = 64 * 1024;
 const MAX_FRAME_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 const MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
@@ -53,31 +55,30 @@ impl WebSocketLlmAdapter {
 
 #[derive(Default)]
 struct ProcessWebSocket {
-    outbound_handshake: Vec<u8>,
-    inbound_handshake: Vec<u8>,
-    offered_path: Option<String>,
-    accepted: Option<NegotiatedExtensions>,
+    outbound_handshake: HandshakeCandidate,
+    inbound_handshake: HandshakeCandidate,
+    pending_offer: Option<String>,
+    accepted: Option<AcceptedHandshake>,
     connection: Option<WebSocketConnection>,
 }
 
 impl ProcessWebSocket {
     fn observe(&mut self, segment: &PayloadSegment) -> Vec<PayloadSegment> {
+        if self.observe_handshake(segment) {
+            return Vec::new();
+        }
         if self.connection.is_none() {
-            self.observe_handshake(segment);
             let expected_masked = segment.direction == PayloadDirection::Outbound;
             if self.accepted.is_some()
                 && FrameDecoder::looks_like_frame(&segment.bytes, expected_masked)
             {
-                let Some(path) = self.offered_path.clone() else {
-                    return Vec::new();
-                };
-                let Some(extensions) = self.accepted.clone() else {
+                let Some(accepted) = self.accepted.take() else {
                     return Vec::new();
                 };
                 self.connection = Some(WebSocketConnection::new(
                     segment.stream_key.clone(),
-                    path,
-                    extensions,
+                    accepted.path,
+                    accepted.extensions,
                 ));
             }
         }
@@ -88,7 +89,12 @@ impl ProcessWebSocket {
             return Vec::new();
         }
         match connection.observe(segment) {
-            Ok(projected) => projected,
+            Ok(observation) => {
+                if observation.closed {
+                    self.connection = None;
+                }
+                observation.projected
+            }
             Err(()) => {
                 self.connection = None;
                 Vec::new()
@@ -96,38 +102,117 @@ impl ProcessWebSocket {
         }
     }
 
-    fn observe_handshake(&mut self, segment: &PayloadSegment) {
-        let buffer = match segment.direction {
-            PayloadDirection::Outbound => &mut self.outbound_handshake,
-            PayloadDirection::Inbound => &mut self.inbound_handshake,
-        };
-        if buffer.len().saturating_add(segment.bytes.len()) > MAX_HANDSHAKE_BYTES {
-            buffer.clear();
-        }
-        buffer.extend_from_slice(&segment.bytes);
+    fn observe_handshake(&mut self, segment: &PayloadSegment) -> bool {
         match segment.direction {
             PayloadDirection::Outbound => {
-                if let Some(path) = websocket_request_path(buffer) {
-                    self.offered_path = Some(path);
+                let observed = self.outbound_handshake.observe(segment, REQUEST_PREFIX);
+                if let Some(path) = self.outbound_handshake.request_path() {
+                    self.pending_offer = Some(path);
                     self.accepted = None;
-                    self.connection = None;
-                    buffer.clear();
                 }
+                observed
             }
             PayloadDirection::Inbound => {
-                if self.offered_path.is_some()
-                    && let Some(extensions) = websocket_accept(buffer)
+                let observed = self.inbound_handshake.observe(segment, ACCEPT_PREFIX);
+                if let Some(extensions) = self.inbound_handshake.accepted_extensions()
+                    && let Some(path) = self.pending_offer.take()
                 {
-                    self.accepted = Some(extensions);
+                    self.accepted = Some(AcceptedHandshake { path, extensions });
                     self.connection = None;
-                    buffer.clear();
                 }
+                observed
             }
         }
     }
 }
 
-#[derive(Clone)]
+#[derive(Default)]
+struct HandshakeCandidate {
+    buffer: Vec<u8>,
+    operation_id: Option<u64>,
+    next_offset: u64,
+    scan_from: usize,
+    header_end: Option<usize>,
+}
+
+impl HandshakeCandidate {
+    fn observe(&mut self, segment: &PayloadSegment, prefix: &[u8]) -> bool {
+        if segment.operation_offset == 0 {
+            if !segment.bytes.starts_with(prefix) {
+                if self.operation_id.is_some() {
+                    self.clear();
+                }
+                return false;
+            }
+            self.clear();
+            self.operation_id = Some(segment.operation_id);
+        } else if self.operation_id != Some(segment.operation_id)
+            || segment.operation_offset != self.next_offset
+        {
+            if self.operation_id.is_some() {
+                self.clear();
+            }
+            return false;
+        }
+        if self.buffer.len().saturating_add(segment.bytes.len()) > MAX_HANDSHAKE_BYTES {
+            self.clear();
+            return true;
+        }
+        let Some(next_offset) = u64::try_from(segment.bytes.len())
+            .ok()
+            .and_then(|length| segment.operation_offset.checked_add(length))
+        else {
+            self.clear();
+            return true;
+        };
+        self.buffer.extend_from_slice(&segment.bytes);
+        self.next_offset = next_offset;
+        self.scan_for_header_end();
+        true
+    }
+
+    fn request_path(&mut self) -> Option<String> {
+        let header_end = self.header_end?;
+        let path = websocket_request_path(&self.buffer[..header_end]);
+        self.clear();
+        path
+    }
+
+    fn accepted_extensions(&mut self) -> Option<NegotiatedExtensions> {
+        let header_end = self.header_end?;
+        let extensions = websocket_accept(&self.buffer[..header_end]);
+        self.clear();
+        extensions
+    }
+
+    fn scan_for_header_end(&mut self) {
+        let Some(relative_end) = self.buffer[self.scan_from..]
+            .windows(HEADER_END.len())
+            .position(|part| part == HEADER_END)
+        else {
+            self.scan_from = self
+                .buffer
+                .len()
+                .saturating_sub(HEADER_END.len().saturating_sub(1));
+            return;
+        };
+        self.header_end = Some(self.scan_from + relative_end);
+    }
+
+    fn clear(&mut self) {
+        self.buffer.clear();
+        self.operation_id = None;
+        self.next_offset = 0;
+        self.scan_from = 0;
+        self.header_end = None;
+    }
+}
+
+struct AcceptedHandshake {
+    path: String,
+    extensions: NegotiatedExtensions,
+}
+
 struct NegotiatedExtensions {
     permessage_deflate: bool,
     client_no_context_takeover: bool,
@@ -141,6 +226,11 @@ struct WebSocketConnection {
     outbound: DirectionAssembler,
     inbound: DirectionAssembler,
     response_text: String,
+}
+
+struct ConnectionObservation {
+    projected: Vec<PayloadSegment>,
+    closed: bool,
 }
 
 impl WebSocketConnection {
@@ -163,13 +253,13 @@ impl WebSocketConnection {
         }
     }
 
-    fn observe(&mut self, segment: &PayloadSegment) -> Result<Vec<PayloadSegment>, ()> {
-        let messages = match segment.direction {
+    fn observe(&mut self, segment: &PayloadSegment) -> Result<ConnectionObservation, ()> {
+        let assembled = match segment.direction {
             PayloadDirection::Outbound => self.outbound.push(&segment.bytes)?,
             PayloadDirection::Inbound => self.inbound.push(&segment.bytes)?,
         };
         let mut projected = Vec::new();
-        for payload in messages {
+        for payload in assembled.messages {
             let Ok(text) = String::from_utf8(payload) else {
                 continue;
             };
@@ -249,7 +339,10 @@ impl WebSocketConnection {
                 }
             }
         }
-        Ok(projected)
+        Ok(ConnectionObservation {
+            projected,
+            closed: assembled.closed,
+        })
     }
 }
 
@@ -297,6 +390,11 @@ struct DirectionAssembler {
     message: MessageAssembler,
 }
 
+struct DirectionObservation {
+    messages: Vec<Vec<u8>>,
+    closed: bool,
+}
+
 impl DirectionAssembler {
     fn new(expected_masked: bool, deflate_enabled: bool, no_context_takeover: bool) -> Self {
         Self {
@@ -305,14 +403,16 @@ impl DirectionAssembler {
         }
     }
 
-    fn push(&mut self, bytes: &[u8]) -> Result<Vec<Vec<u8>>, ()> {
+    fn push(&mut self, bytes: &[u8]) -> Result<DirectionObservation, ()> {
         let mut messages = Vec::new();
+        let mut closed = false;
         for frame in self.frames.push(bytes)? {
+            closed |= matches!(frame.opcode, Opcode::Close);
             if let Some(message) = self.message.push(frame)? {
                 messages.push(message);
             }
         }
-        Ok(messages)
+        Ok(DirectionObservation { messages, closed })
     }
 }
 
@@ -631,7 +731,7 @@ impl PerMessageDeflateDecoder {
 }
 
 fn websocket_request_path(bytes: &[u8]) -> Option<String> {
-    let header = http_header(bytes)?;
+    let header = std::str::from_utf8(bytes).ok()?;
     let mut lines = header.lines();
     let first = lines.next()?;
     let mut parts = first.split_whitespace();
@@ -646,7 +746,7 @@ fn websocket_request_path(bytes: &[u8]) -> Option<String> {
 }
 
 fn websocket_accept(bytes: &[u8]) -> Option<NegotiatedExtensions> {
-    let header = http_header(bytes)?;
+    let header = std::str::from_utf8(bytes).ok()?;
     let mut lines = header.lines();
     if !lines.next()?.starts_with("HTTP/1.1 101 ") || !has_upgrade_headers(lines.clone()) {
         return None;
@@ -660,13 +760,6 @@ fn websocket_accept(bytes: &[u8]) -> Option<NegotiatedExtensions> {
         client_no_context_takeover: lower.contains("client_no_context_takeover"),
         server_no_context_takeover: lower.contains("server_no_context_takeover"),
     })
-}
-
-fn http_header(bytes: &[u8]) -> Option<&str> {
-    let end = bytes
-        .windows(HEADER_END.len())
-        .position(|part| part == HEADER_END)?;
-    std::str::from_utf8(&bytes[..end]).ok()
 }
 
 fn has_upgrade_headers<'a>(lines: impl Iterator<Item = &'a str>) -> bool {
