@@ -19,6 +19,25 @@ pub(super) fn parse_llm_request_content_query(query: &str) -> Result<usize, Stri
     Ok(max_bytes)
 }
 
+pub(super) fn parse_llm_request_content_node_query(
+    query: &str,
+) -> Result<view::LlmRequestContentNodeQuery, String> {
+    let pointer = optional_query_param(query, "pointer")?.unwrap_or_default();
+    if !pointer.is_empty() && !pointer.starts_with('/') {
+        return Err("invalid query parameter pointer: JSON Pointer must start with /".to_string());
+    }
+    let offset = required_query_usize(query, "offset")?;
+    let limit = required_query_usize(query, "limit")?;
+    if limit == usize::default() {
+        return Err("invalid query parameter limit: value must be positive".to_string());
+    }
+    Ok(view::LlmRequestContentNodeQuery {
+        pointer,
+        offset,
+        limit,
+    })
+}
+
 pub(super) fn parse_token_usage_stats_query(
     query: &str,
 ) -> Result<view::TokenUsageStatsQuery, String> {
@@ -148,4 +167,27 @@ fn required_query_u64(query: &str, key: &'static str) -> Result<u64, String> {
     let raw = required_query_param(query, key)?;
     raw.parse::<u64>()
         .map_err(|error| format!("invalid query parameter {key}: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_llm_request_content_node_query;
+
+    #[test]
+    fn parses_percent_encoded_json_pointer_and_page() {
+        let query = parse_llm_request_content_node_query(
+            "pointer=%2Fcustom_model%2Fparameters&offset=4&limit=20",
+        )
+        .expect("parse node query");
+        assert_eq!(query.pointer, "/custom_model/parameters");
+        assert_eq!(query.offset, 4);
+        assert_eq!(query.limit, 20);
+    }
+
+    #[test]
+    fn rejects_non_pointer_path() {
+        let error = parse_llm_request_content_node_query("pointer=custom_model&offset=0&limit=20")
+            .expect_err("non-pointer path must fail");
+        assert!(error.contains("must start with /"));
+    }
 }

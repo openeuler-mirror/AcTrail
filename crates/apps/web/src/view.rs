@@ -6,10 +6,10 @@ mod action_tree_projection;
 mod action_tree_roles;
 #[path = "view/actions.rs"]
 mod actions;
-#[path = "view/cluster.rs"]
-pub(crate) mod cluster;
 #[path = "view/alerts.rs"]
 mod alerts;
+#[path = "view/cluster.rs"]
+pub(crate) mod cluster;
 #[path = "view/commands.rs"]
 mod commands;
 #[path = "view/events.rs"]
@@ -395,6 +395,28 @@ pub fn action_llm_request_content_json(
         TraceId::new(trace_id),
         action_id,
         max_bytes,
+    )
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LlmRequestContentNodeQuery {
+    pub pointer: String,
+    pub offset: usize,
+    pub limit: usize,
+}
+
+pub fn action_llm_request_content_node_json(
+    storage_config: &StorageConfig,
+    trace_id: u64,
+    action_id: &str,
+    query: LlmRequestContentNodeQuery,
+) -> Result<String, String> {
+    let mut storage = open_storage(storage_config)?;
+    actions::llm_request_content_node_json(
+        storage.as_mut(),
+        TraceId::new(trace_id),
+        action_id,
+        query,
     )
 }
 

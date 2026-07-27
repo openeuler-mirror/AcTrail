@@ -6,6 +6,178 @@
 - 加载插件后，同样的调用会产生 `llm.request` 和 `llm.response`；
 - 可以通过 `actrailviewer` 查看模型、提示词和响应内容。
 
+## 数据转换流程
+
+```mermaid
+sequenceDiagram
+    participant HTTP as HTTP/SSE 组装器
+    participant Registry as LLM codec registry
+    participant Plugin as qoder_llm_codec.wasm
+    participant Parser as 现有 LLM parser
+    participant Actions as Semantic actions
+
+    Note over HTTP,Actions: Request：一次传递完整 HTTP request body
+    HTTP->>Registry: method + authority + path + 完整 encoded body
+    Registry->>Plugin: decode_request(完整 body)
+    Plugin-->>Registry: classifier/protocol/model + 完整 decoded JSON
+    Registry->>Parser: 完整 decoded JSON
+    Parser->>Actions: 1 个 llm.request + canonical blocks
+
+    Note over HTTP,Actions: Response：逐个传递 SSE event，最后汇聚
+    loop 每个 data: SSE event
+        HTTP->>Registry: event index/type/id + 当前 event.data
+        Registry->>Plugin: decode_sse_event(当前 event.data)
+        Plugin-->>Registry: 当前 inner event JSON 或 DONE
+        Registry->>Parser: 当前 normalized event
+    end
+    Parser->>Actions: 汇聚所有 events，生成 1 个 llm.response
+    Actions->>Actions: 配对 request/response，生成 1 个 llm.call
+```
+
+各阶段的数据粒度如下：
+
+| 阶段 | 收到的数据 | 发出的数据 | 粒度 |
+| --- | --- | --- | --- |
+| HTTP request 组装 | 多个 TLS plaintext payload | method、authority、path、完整 body | 每个 HTTP request 一次 |
+| `decode_request` | Qoder 编码后的完整 body | 解码后的完整 JSON，以及 classifier/protocol/model | 每个 HTTP request 一次 |
+| Request parser | 完整解码 JSON | `llm.request` 与 canonical content blocks | 每个 LLM request 一次 |
+| SSE parser | HTTP response byte stream | `event.data` | 每个 SSE event 一次 |
+| `decode_sse_event` | 单个 Qoder 外层 event data | 单个内层 JSON event 或 `[DONE]` | 局部增量，不是完整 response |
+| Response parser | 一组按顺序到达的内层 events | 聚合后的 content、reasoning、tool calls、usage | 每个完整 LLM response 一次 |
+| Call linker | 一个 request action 和一个 response action | `llm.call` 及两个 links | 每次 LLM 调用一次 |
+
+### Request 示例
+
+HTTP 组装器先得到完整请求。下例省略 headers，body 仍是 Qoder 的自定义编码，
+此时不能按普通 JSON 解析：
+
+```text
+POST /algo/api/v2/service/pro/sse/agent_chat_generation?... HTTP/1.1
+Host: api3.qoder.sh
+Content-Type: application/json
+
+LuEp&JHg^PYf&DOLIGodbN*dM#S%rDxK^...（完整 Qoder encoded body）
+```
+
+codec registry 在核心侧知道 method、authority、path 和完整 body；当前 Qoder
+WASM 插件的专用 `decode_request` export 实际只接收完整 body：
+
+```text
+decode_request(
+  b"LuEp&JHg^PYf&DOLIGodbN*dM#S%rDxK^..."
+)
+```
+
+插件恢复分段顺序并使用 Qoder alphabet 解码。得到的不是 HTTP chunk，也不是
+单个 message，而是完整的 Qoder request JSON。简化、脱敏后的形状类似：
+
+```json
+{
+  "model_config": {
+    "key": "custom_model",
+    "format": "openai"
+  },
+  "custom_model": {
+    "provider": "deepseek",
+    "model": "deepseek-v4-flash-pg",
+    "parameters": {
+      "api_key": "<redacted>"
+    }
+  },
+  "messages": [
+    {
+      "role": "user",
+      "content": "Reply with exactly \"A123\" and nothing else."
+    }
+  ]
+}
+```
+
+WASM ABI 不能直接返回 Rust struct，所以插件先返回一个 codec envelope；
+`body` 是上述完整 JSON 的字节数组：
+
+```json
+{
+  "status": "decoded",
+  "classifier_id": "qoder-infer",
+  "protocol_id": "qoder-infer",
+  "model": "auto",
+  "body": [123, 34, 109, 111, 100, 101, 108, 95, 99, 111, 110, 102, 105, 103]
+}
+```
+
+为避免示例变成数万项数组，这里只展示了 `body` 的前 14 个字节；真实返回值
+包含完整 decoded JSON 的全部字节。
+
+WASM host 把 `body` 字节数组还原为完整 JSON bytes，再交给现有 request
+parser。parser 最终生成一个 `llm.request`；action attributes 只保存摘要字段，
+完整解码 JSON 按现有 canonical content blocks 保存：
+
+```text
+llm.request
+├── llm.request.classifier_id = qoder-infer
+├── llm.request.protocol_id   = qoder-infer
+├── llm.request.model         = auto
+├── llm.request.content_state = canonical_blocks
+└── canonical manifest/blocks = 可精确重建完整 decoded request
+```
+
+### Response 示例
+
+Response 不是先汇聚成完整 JSON 再调用插件。HTTP SSE parser 每解析出一个
+`data:` event，就把当前 event 单独交给 codec。Qoder 外层 event 类似：
+
+```text
+data: {"statusCodeValue":200,"body":"{\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking\"}}]}"}
+
+data: {"statusCodeValue":200,"body":"{\"choices\":[{\"delta\":{\"content\":\"A123\"}}]}"}
+
+data: {"statusCodeValue":200,"body":"{\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2}}"}
+
+data: [DONE]
+```
+
+插件每次只处理其中一个 `event.data`。例如第一次调用：
+
+```text
+decode_sse_event(
+  b"{\"statusCodeValue\":200,\"body\":\"{\\\"choices\\\":[...]}\"}"
+)
+```
+
+插件校验 `statusCodeValue == 200`，取出并反转义 `body`，本次只返回一个内层
+event：
+
+```json
+{
+  "choices": [
+    {
+      "delta": {
+        "reasoning_content": "thinking"
+      }
+    }
+  ]
+}
+```
+
+后续 event 分别提供 `content`、tool call delta、usage 或 `[DONE]`。现有
+response parser 按顺序累计这些局部字段，流结束后才生成一个汇聚结果：
+
+```text
+llm.response
+├── content_text      = "A123"
+├── reasoning_text    = "thinking"
+├── prompt_tokens     = 10
+├── completion_tokens = 2
+├── chunk_count       = 4
+└── done              = true
+```
+
+因此 request 路径是“完整 body 进、完整 JSON 出”；response 路径是“单个
+event 进、单个 inner event 出”，最后由 AcTrail 现有 parser 汇聚成一个
+`llm.response`。TLS 明文捕获、HTTP/SSE 组装、action 创建和 call 配对不属于
+插件职责。
+
 下面的流程假设你在仓库根目录执行命令。
 
 ## 前置条件

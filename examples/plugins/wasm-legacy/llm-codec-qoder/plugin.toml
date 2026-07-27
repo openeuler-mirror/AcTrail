@@ -30,6 +30,4 @@ memory_max_bytes = 67108864
 # This codec has no runtime config. The manifest still declares config handling
 # so load-time validation has an explicit contract.
 format = "toml"
-# Empty schema_ref is allowed only because required=false and no config is passed.
-schema_ref = ""
 required = false

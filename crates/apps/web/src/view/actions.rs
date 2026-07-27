@@ -7,10 +7,12 @@ use semantic_action::{
     FilePathSetPath, FilePathSetPathPage, LlmRequestContentPage, SemanticAction,
     SemanticActionLink, SemanticEvidence,
 };
+use serde_json::{Value, json as json_value};
 use storage_core::{
     SemanticActionChildPageQuery, SemanticActionSummary, StorageBackend, StorageError,
 };
 
+use super::LlmRequestContentNodeQuery;
 use super::action_tree_projection::{ActionDisplayProjection, DisplayChild, ROOT_PARENT_ID};
 use super::action_tree_roles::NODE_ID_AGENT;
 use super::projection_cache;
@@ -171,6 +173,142 @@ pub(super) fn llm_request_content_json(
         Some(content) => format!("{{\"content\":{}}}", llm_request_content_page_json(content)),
         None => "{\"content\":null}".to_string(),
     })
+}
+
+pub(super) fn llm_request_content_node_json(
+    storage: &mut dyn StorageBackend,
+    trace_id: TraceId,
+    action_id: &str,
+    query: LlmRequestContentNodeQuery,
+) -> Result<String, String> {
+    let content = storage
+        .llm_request_content_page(trace_id, action_id, usize::MAX)
+        .map_err(|error| storage_error("read LLM request content node", error))?;
+    let Some(content) = content else {
+        return Ok("{\"content\":null}".to_string());
+    };
+    let body = serde_json::from_str::<Value>(&content.body_json)
+        .map_err(|error| format!("parse canonical LLM request body failed: {error}"))?;
+    let node = body
+        .pointer(&query.pointer)
+        .ok_or_else(|| format!("JSON Pointer not found: {}", query.pointer))?;
+    let node_json = llm_request_node_json(node, &query);
+    serde_json::to_string(&json_value!({
+        "content": {
+            "action_id": content.action_id,
+            "format_version": content.format_version,
+            "canonical_body_hash": content.canonical_body_hash,
+            "canonical_body_bytes": content.canonical_body_bytes,
+            "pointer": query.pointer,
+            "node": node_json,
+        }
+    }))
+    .map_err(|error| format!("serialize LLM request content node failed: {error}"))
+}
+
+fn llm_request_node_json(node: &Value, query: &LlmRequestContentNodeQuery) -> Value {
+    match node {
+        Value::Object(object) => {
+            let total = object.len();
+            let children = object
+                .iter()
+                .skip(query.offset)
+                .take(query.limit)
+                .map(|(key, value)| {
+                    llm_request_child_json(key, &json_pointer_child(&query.pointer, key), value)
+                })
+                .collect::<Vec<_>>();
+            branch_node_json("object", total, children, query)
+        }
+        Value::Array(array) => {
+            let total = array.len();
+            let children = array
+                .iter()
+                .enumerate()
+                .skip(query.offset)
+                .take(query.limit)
+                .map(|(index, value)| {
+                    let token = index.to_string();
+                    llm_request_child_json(
+                        &token,
+                        &json_pointer_child(&query.pointer, &token),
+                        value,
+                    )
+                })
+                .collect::<Vec<_>>();
+            branch_node_json("array", total, children, query)
+        }
+        Value::Null => json_value!({
+            "type": "null",
+            "expandable": false,
+            "value": Value::Null,
+        }),
+        Value::Bool(value) => leaf_node_json("boolean", Value::Bool(*value)),
+        Value::Number(value) => leaf_node_json("number", Value::Number(value.clone())),
+        Value::String(value) => leaf_node_json("string", Value::String(value.clone())),
+    }
+}
+
+fn branch_node_json(
+    kind: &str,
+    total: usize,
+    children: Vec<Value>,
+    query: &LlmRequestContentNodeQuery,
+) -> Value {
+    let returned = children.len();
+    let next_offset = query.offset.saturating_add(returned);
+    let has_more = next_offset < total;
+    json_value!({
+        "type": kind,
+        "expandable": true,
+        "total_children": total,
+        "offset": query.offset,
+        "limit": query.limit,
+        "next_offset": has_more.then_some(next_offset),
+        "has_more": has_more,
+        "children": children,
+    })
+}
+
+fn leaf_node_json(kind: &str, value: Value) -> Value {
+    json_value!({
+        "type": kind,
+        "expandable": false,
+        "value": value,
+    })
+}
+
+fn llm_request_child_json(token: &str, pointer: &str, value: &Value) -> Value {
+    json_value!({
+        "token": token,
+        "pointer": pointer,
+        "type": json_value_type(value),
+        "expandable": matches!(value, Value::Object(_) | Value::Array(_)),
+        "child_count": json_value_child_count(value),
+    })
+}
+
+fn json_value_type(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+fn json_value_child_count(value: &Value) -> Option<usize> {
+    match value {
+        Value::Array(array) => Some(array.len()),
+        Value::Object(object) => Some(object.len()),
+        _ => None,
+    }
+}
+
+fn json_pointer_child(parent: &str, token: &str) -> String {
+    format!("{parent}/{}", token.replace('~', "~0").replace('/', "~1"))
 }
 
 fn load_child_page(
@@ -359,4 +497,57 @@ fn storage_error(stage: &str, error: StorageError) -> String {
 
 fn bool_json(value: bool) -> &'static str {
     if value { "true" } else { "false" }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{LlmRequestContentNodeQuery, json_pointer_child, llm_request_node_json};
+
+    #[test]
+    fn request_node_lists_only_the_requested_child_page() {
+        let body = json!({
+            "custom_model": {"parameters": {"api_key": "secret"}},
+            "messages": [{"role": "user", "content": "hello"}],
+            "model_config": {"format": "openai"}
+        });
+        let node = llm_request_node_json(
+            &body,
+            &LlmRequestContentNodeQuery {
+                pointer: String::new(),
+                offset: 1,
+                limit: 1,
+            },
+        );
+        assert_eq!(node["type"], "object");
+        assert_eq!(node["total_children"], 3);
+        assert_eq!(node["children"].as_array().map(Vec::len), Some(1));
+        assert_eq!(node["children"][0]["token"], "messages");
+        assert_eq!(node["children"][0]["pointer"], "/messages");
+        assert_eq!(node["next_offset"], 2);
+        assert_eq!(node["has_more"], true);
+        assert!(node.get("value").is_none());
+    }
+
+    #[test]
+    fn request_leaf_returns_value_only_when_selected() {
+        let node = llm_request_node_json(
+            &json!("secret"),
+            &LlmRequestContentNodeQuery {
+                pointer: "/custom_model/parameters/api_key".to_string(),
+                offset: 0,
+                limit: 50,
+            },
+        );
+        assert_eq!(node["type"], "string");
+        assert_eq!(node["expandable"], false);
+        assert_eq!(node["value"], "secret");
+        assert!(node.get("children").is_none());
+    }
+
+    #[test]
+    fn child_pointer_escapes_json_pointer_tokens() {
+        assert_eq!(json_pointer_child("/parent", "a/b~c"), "/parent/a~1b~0c");
+    }
 }

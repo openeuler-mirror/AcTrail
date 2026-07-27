@@ -44,6 +44,26 @@ class ProbeQoderCliLLMCase(TestCase):
                 f"{len(lifecycle)} lifecycle commands completed",
             )
 
+            codec_manifest = (
+                self._config.repo
+                / "examples/plugins/wasm-legacy/llm-codec-qoder/plugin.toml"
+            )
+            runtime.run_checked(
+                [
+                    runtime.actraild,
+                    "plugin",
+                    "load",
+                    "--manifest",
+                    codec_manifest,
+                    "--instance",
+                    "qoder.llm-codec",
+                ]
+            )
+            results["qoder_codec"] = TestResult(
+                TestStatus.PASSED,
+                "qoder LLM codec loaded",
+            )
+
             launch = task.run()
             if launch.returncode != 0:
                 raise AssertionError(

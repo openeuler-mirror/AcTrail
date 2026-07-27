@@ -5,7 +5,8 @@
 在仓库根目录执行：
 
 ```bash
-sudo -E python3 tests/v2/regression/probe_qodercli_llm/run_e2e.py
+sudo -E env "HOME=$HOME" "PATH=$PATH" \
+  python3 tests/v2/regression/probe_qodercli_llm/run_e2e.py
 ```
 
 脚本从当前环境的 `PATH` 解析默认 `qodercli`，先执行外部可用性检查，再通过
@@ -18,7 +19,7 @@ qodercli --no-session-persistence -p "prompt" --tools ""
 # 步骤摘要
 
 1. 检查 AcTrail release binaries 和 Qoder CLI 外部可用性。
-2. 初始化、清理并启动 AcTrail。
+2. 初始化、清理并启动 AcTrail，加载 Qoder LLM codec。
 3. 生成随机 marker，以无会话、无工具模式请求 Qoder CLI 原样回答。
 4. 验证标准输出包含 marker，并提取唯一 trace id。
 5. 安全停止 daemon，验证 trace 为 `Exited/Clean`。
@@ -60,12 +61,16 @@ sudo -E target/release/actraild init -f
 sudo -E target/release/actraild stop
 sudo -E target/release/actrailctl clean
 sudo -E target/release/actraild start
+sudo -E target/release/actraild plugin load \
+  --manifest examples/plugins/wasm-legacy/llm-codec-qoder/plugin.toml \
+  --instance qoder.llm-codec
 ```
 
 ### 预期结果
 
-所有命令成功，daemon 正在监听 `/run/actrail/control.sock`。AcTrail 自身缺失
-或启动失败属于 `FAILED`。
+所有命令成功，daemon 正在监听 `/run/actrail/control.sock`，插件实例
+`qoder.llm-codec` 已加载。AcTrail 自身缺失、启动失败或 codec 加载失败属于
+`FAILED`。
 
 ## 步骤3：生成 marker 并运行 Qoder CLI
 

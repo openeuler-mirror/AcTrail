@@ -188,6 +188,17 @@ export function readActionLlmRequestContent(traceId, actionId, { maxBytes }) {
   );
 }
 
+export function readActionLlmRequestContentNode(traceId, actionId, { pointer, offset, limit }) {
+  const query = [
+    `pointer=${encodeURIComponent(pointer)}`,
+    `offset=${encodeURIComponent(offset)}`,
+    `limit=${encodeURIComponent(limit)}`,
+  ].join('&');
+  return fetchJson(
+    `/api/traces/${traceId}/actions/${encodeURIComponent(actionId)}/content/llm-request/node?${query}`,
+  );
+}
+
 export function readCommands(traceId) {
   return fetchJson(`/api/traces/${traceId}/commands`);
 }
