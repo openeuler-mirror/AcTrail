@@ -22,8 +22,8 @@ mod plugins;
 mod query;
 use query::{
     parse_action_tree_page, parse_llm_activity_query, parse_llm_export_query,
-    parse_llm_request_content_query, parse_llm_rows_query, parse_token_usage_stats_query,
-    parse_u64, percent_decode,
+    parse_llm_request_content_node_query, parse_llm_request_content_query, parse_llm_rows_query,
+    parse_token_usage_stats_query, parse_u64, percent_decode,
 };
 
 const STATUS_OK: &str = "200 OK";
@@ -456,6 +456,33 @@ fn route_cluster_trace_api(
                 }
             }
         }
+        [
+            trace_id,
+            "actions",
+            action_id,
+            "content",
+            "llm-request",
+            "node",
+        ] => {
+            let trace_id = parse_u64(trace_id);
+            let action_id = percent_decode(action_id);
+            let node = parse_llm_request_content_node_query(query);
+            match (trace_id, action_id, node) {
+                (Ok(trace_id), Ok(action_id), Ok(node)) => {
+                    view::cluster::llm_request_content_node_json(
+                        cluster_root,
+                        trace_id,
+                        &action_id,
+                        node,
+                    )
+                    .map(Response::json)
+                    .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error)))
+                }
+                (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
+                    Ok(Response::text(STATUS_BAD_REQUEST, error))
+                }
+            }
+        }
         [trace_id, "payloads", segment_id] => {
             let trace_id = parse_u64(trace_id);
             let segment_id = parse_u64(segment_id);
@@ -564,6 +591,28 @@ fn route_trace_api(path: &str, query: &str, storage: &StorageConfig) -> Result<R
             match (trace_id, action_id, max_bytes) {
                 (Ok(trace_id), Ok(action_id), Ok(max_bytes)) => {
                     view::action_llm_request_content_json(storage, trace_id, &action_id, max_bytes)
+                        .map(Response::json)
+                        .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error)))
+                }
+                (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
+                    Ok(Response::text(STATUS_BAD_REQUEST, error))
+                }
+            }
+        }
+        [
+            trace_id,
+            "actions",
+            action_id,
+            "content",
+            "llm-request",
+            "node",
+        ] => {
+            let trace_id = parse_u64(trace_id);
+            let action_id = percent_decode(action_id);
+            let node = parse_llm_request_content_node_query(query);
+            match (trace_id, action_id, node) {
+                (Ok(trace_id), Ok(action_id), Ok(node)) => {
+                    view::action_llm_request_content_node_json(storage, trace_id, &action_id, node)
                         .map(Response::json)
                         .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error)))
                 }

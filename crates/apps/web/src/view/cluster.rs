@@ -232,6 +232,24 @@ pub fn llm_request_content_json(
     Ok("{\"content\":null}".to_string())
 }
 
+pub fn llm_request_content_node_json(
+    root: &Path,
+    trace_id: u64,
+    action_id: &str,
+    query: super::LlmRequestContentNodeQuery,
+) -> Result<String, String> {
+    let row = row_by_ui_id(root, trace_id)?;
+    if let Some((storage, local_trace_id)) = sqlite_storage_for_row(&row)? {
+        return super::action_llm_request_content_node_json(
+            &storage,
+            local_trace_id,
+            action_id,
+            query,
+        );
+    }
+    Ok("{\"content\":null}".to_string())
+}
+
 pub fn payload_json(root: &Path, trace_id: u64, segment_id: u64) -> Result<String, String> {
     let row = row_by_ui_id(root, trace_id)?;
     if let Some((storage, local_trace_id)) = sqlite_storage_for_row(&row)? {

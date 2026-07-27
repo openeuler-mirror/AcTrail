@@ -27,6 +27,13 @@
       :request-content="llmRequestContent"
       :request-loading="llmRequestLoading"
       :request-error="llmRequestError"
+      :request-content-available="llmRequestContentAvailable"
+      @load-request-content="loadLlmRequestContent"
+    />
+    <LlmRequestCanonicalBody
+      :trace-id="traceId"
+      :action-id="llmRequestActionId(detail)"
+      :metadata="llmRequestContentMetadata"
     />
     <HttpInsightPanel :detail="detail" />
     <CommandInsightPanel :detail="detail" />
@@ -91,6 +98,7 @@ import CommandInsightPanel from './CommandInsightPanel.vue';
 import HttpInsightPanel from './HttpInsightPanel.vue';
 import JsonTree from './JsonTree.vue';
 import LlmInsightPanel from './LlmInsightPanel.vue';
+import LlmRequestCanonicalBody from './llm/LlmRequestCanonicalBody.vue';
 
 const LLM_REQUEST_DETAIL_MAX_BYTES = 128 * 1024;
 const EMPTY_JSON_EXPANDED_PATHS = new Set();
@@ -137,6 +145,26 @@ const detailKind = computed(() => props.detail?.kind ?? 'detail');
 const detailRows = computed(() => Object.entries(props.detail?.rows ?? {}));
 const detailAttributes = computed(() => props.detail?.attributes ?? {});
 const detailRawValue = computed(() => props.detail?.raw ?? null);
+const llmRequestContentMetadata = computed(() => {
+  const action = props.detail?.raw;
+  if (action?.kind !== 'llm.request') {
+    return null;
+  }
+  const attributes = action.attributes ?? {};
+  return {
+    state: attributes['llm.request.content_state'],
+    bytes: attributes['llm.request.canonical_body_bytes'],
+    blocks: attributes['llm.request.block_count'],
+    hash: attributes['llm.request.canonical_body_hash'],
+  };
+});
+const llmRequestContentAvailable = computed(() => {
+  const metadata = llmRequestContentMetadata.value;
+  const bytes = Number(metadata?.bytes);
+  return metadata?.state === 'canonical_blocks'
+    && Number.isFinite(bytes)
+    && bytes <= LLM_REQUEST_DETAIL_MAX_BYTES;
+});
 const panelError = computed(() => props.error || payloadError.value || filePathSetError.value);
 const shouldRender = computed(() => !props.hideWhenEmpty || Boolean(props.detail || panelError.value));
 const hasFilePathSet = computed(
@@ -172,13 +200,6 @@ watch(
         offset: 0,
         append: false,
         token: activeFilePathSetLoad,
-      });
-    }
-    if (llmRequestActionId(nextDetail) && traceId) {
-      loadLlmRequestContent({
-        traceId,
-        actionId: llmRequestActionId(nextDetail),
-        token: activeLlmRequestLoad,
       });
     }
   },
@@ -221,10 +242,16 @@ async function loadPayload(traceId, payloadId, token) {
   }
 }
 
-async function loadLlmRequestContent({ traceId, actionId, token }) {
+async function loadLlmRequestContent() {
+  const actionId = llmRequestActionId(props.detail);
+  const token = activeLlmRequestLoad;
+  if (!props.traceId || !actionId || !llmRequestContentAvailable.value || llmRequestLoading.value) {
+    return;
+  }
   try {
     llmRequestLoading.value = true;
-    const response = await readActionLlmRequestContent(traceId, actionId, {
+    llmRequestError.value = '';
+    const response = await readActionLlmRequestContent(props.traceId, actionId, {
       maxBytes: LLM_REQUEST_DETAIL_MAX_BYTES,
     });
     if (activeLlmRequestLoad === token) {

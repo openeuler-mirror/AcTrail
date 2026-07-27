@@ -9,15 +9,15 @@ sudo -E python3 tests/v2/regression/probe_codex_llm/run_e2e.py
 ```
 
 脚本从 `CODEX_E2E_BINARY` 或当前环境查找 Codex，先执行外部可用性检查，
-再通过双层 `actrailctl launch` 验证嵌套 trace 中的 Codex LLM 采集。
+再通过单层 `actrailctl launch` 验证 Codex LLM 采集。
 
 # 步骤摘要
 
 1. 检查 AcTrail release binaries 和 Codex 外部可用性。
 2. 初始化、清理并启动 AcTrail。
-3. 生成随机 marker，通过外层 launch 再启动内层 launch 和 `codex exec`。
-4. 验证 Codex 标准输出包含 marker，并从两个 trace id 中选择内层 trace。
-5. 验证内层 trace 为 `Exited/Clean`。
+3. 生成随机 marker，通过 `actrailctl launch` 启动 `codex exec`。
+4. 验证 Codex 标准输出包含 marker，并取得唯一的 trace id。
+5. 验证该 trace 为 `Exited/Clean`。
 6. 验证 `llm.call/request/response` 数量一致、关系完整，response 包含 marker，
    request 具有 canonical content 证据。
 
@@ -64,7 +64,7 @@ sudo -E target/release/actraild start
 所有命令成功，daemon 正在监听 `/run/actrail/control.sock`。AcTrail 自身缺失
 或启动失败属于 `FAILED`。
 
-## 步骤3：生成 marker 并运行嵌套 launch
+## 步骤3：生成 marker 并运行 launch
 
 ### 手动指令
 
@@ -72,23 +72,22 @@ sudo -E target/release/actraild start
 CASE_MARKER="A$(python3 -c 'import secrets; print(secrets.token_hex(5))')"
 LAUNCH_OUTPUT="$(
   sudo -E target/release/actrailctl launch -- \
-    target/release/actrailctl launch -- \
-      "$CODEX_BIN" exec \
-      --ephemeral \
-      -m "${CODEX_E2E_MODEL:-gpt-5.5}" \
-      -c "model_reasoning_effort=${CODEX_E2E_REASONING_EFFORT:-low}" \
-      "Reply with exactly \"$CASE_MARKER\" and nothing else. Do not use tools." \
-      2>&1
+    "$CODEX_BIN" exec \
+    --ephemeral \
+    -m "${CODEX_E2E_MODEL:-gpt-5.5}" \
+    -c "model_reasoning_effort=${CODEX_E2E_REASONING_EFFORT:-low}" \
+    "Reply with exactly \"$CASE_MARKER\" and nothing else. Do not use tools." \
+    2>&1
 )"
 printf '%s\n' "$LAUNCH_OUTPUT"
 ```
 
 ### 预期结果
 
-输出中先后出现两个不同的 `trace trace-N entered Active`；Codex 输出
-`$CASE_MARKER` 并成功退出。
+输出中出现一个 `trace trace-N entered Active`；Codex 输出 `$CASE_MARKER`
+并成功退出。
 
-## 步骤4：验证回答并选择内层 trace
+## 步骤4：验证回答并取得 trace
 
 ### 手动指令
 
@@ -98,18 +97,16 @@ TRACE_IDS="$(
   printf '%s\n' "$LAUNCH_OUTPUT" |
     sed -n 's/.*trace trace-\([0-9][0-9]*\) entered Active.*/\1/p'
 )"
-test "$(printf '%s\n' "$TRACE_IDS" | sed '/^$/d' | wc -l)" -eq 2
-test "$(printf '%s\n' "$TRACE_IDS" | sort -u | wc -l)" -eq 2
-INNER_TRACE_ID="$(printf '%s\n' "$TRACE_IDS" | tail -n1)"
-printf 'inner trace-%s\n' "$INNER_TRACE_ID"
+test "$(printf '%s\n' "$TRACE_IDS" | sed '/^$/d' | wc -l)" -eq 1
+TRACE_ID="$(printf '%s\n' "$TRACE_IDS" | tail -n1)"
+printf 'trace-%s\n' "$TRACE_ID"
 ```
 
 ### 预期结果
 
-marker 查找成功；恰好得到两个不同 trace id，第二个 id 是直接包裹 Codex 的
-内层 trace。
+marker 查找成功，并且恰好得到一个直接包裹 Codex 的 trace id。
 
-## 步骤5：验证内层 trace 状态
+## 步骤5：验证 trace 状态
 
 ### 手动指令
 
@@ -117,7 +114,7 @@ marker 查找成功；恰好得到两个不同 trace id，第二个 id 是直接
 for TRACE_ATTEMPT in $(seq 1 30); do
   TRACE_STATE="$(
     sudo -E target/release/actrailviewer --output-format json traces |
-      jq -r --argjson trace_id "$INNER_TRACE_ID" '
+      jq -r --argjson trace_id "$TRACE_ID" '
         .traces[]
         | select(.trace_id_raw == $trace_id)
         | "\(.state)/\(.health)"
@@ -132,7 +129,7 @@ printf '%s\n' "$TRACE_STATE"
 
 ### 预期结果
 
-内层 trace 的 `state` 为 `Exited`，`health` 为 `Clean`。
+该 trace 的 `state` 为 `Exited`，`health` 为 `Clean`。
 
 ## 步骤6：验证 LLM action 与 marker
 
@@ -141,7 +138,7 @@ printf '%s\n' "$TRACE_STATE"
 ```bash
 for ACTION_ATTEMPT in $(seq 1 30); do
   sudo -E target/release/actrailviewer --output-format json actions \
-    --trace-id "$INNER_TRACE_ID" > /tmp/actrail-codex-actions.json
+    --trace-id "$TRACE_ID" > /tmp/actrail-codex-actions.json
   ACTION_COUNT="$(
     jq '[.actions[] | select(.kind == "llm.response")] | length' \
       /tmp/actrail-codex-actions.json

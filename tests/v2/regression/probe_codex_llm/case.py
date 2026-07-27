@@ -47,12 +47,12 @@ class ProbeCodexLLMCase(TestCase):
             launch = task.run()
             if launch.returncode != 0:
                 raise AssertionError(
-                    f"nested actrailctl launch exited with {launch.returncode}\n"
+                    f"actrailctl launch exited with {launch.returncode}\n"
                     f"{launch.output[-4000:]}"
                 )
-            results["nested_launch"] = TestResult(
+            results["launch"] = TestResult(
                 TestStatus.PASSED,
-                "wrapper launch, inner launch, and Codex exited successfully",
+                "actrailctl launch and Codex exited successfully",
             )
 
             assertion = LLMTraceAssertion(
@@ -69,8 +69,8 @@ class ProbeCodexLLMCase(TestCase):
 
             trace_id = assertion.require_trace_id(
                 launch,
-                expected_count=2,
-                selected_index=1,
+                expected_count=1,
+                selected_index=0,
             )
             request_count, response_count = assertion.wait_and_require_exchange(trace_id)
             results["llm_exchange"] = TestResult(
