@@ -58,7 +58,6 @@ def wait_for_socket(path: Path, timeout: float = 10.0) -> None:
 def write_config() -> None:
     raw = SOURCE_CONFIG.read_text(encoding="utf-8")
     raw = raw.replace("/tmp/actrail-plugin-otel-jsonl", str(RUN_DIR))
-    raw = raw.replace("[export.runtime]\nenabled = true", "[export.runtime]\nenabled = false")
     raw = raw.replace("[plugins.startup]\nenabled = true", "[plugins.startup]\nenabled = false")
     CONFIG.write_text(raw, encoding="utf-8")
 

@@ -15,7 +15,7 @@ __pycache__/
 .clawtrace
 .env
 
-**/tests/
+# **/tests/
 
 **/__pycache__/
 

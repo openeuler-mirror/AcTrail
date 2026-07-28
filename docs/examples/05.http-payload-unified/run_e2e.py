@@ -23,7 +23,6 @@ SINGLE_VALUE_CONFIG_KEYS = {
     "storage_sqlite_path",
     "log_path",
     "export_directory",
-    "export_otel_jsonl_path",
     "payload_tls_sync_event_socket_path",
 }
 
@@ -87,8 +86,6 @@ def read_operator_config(path: Path) -> dict[str, str]:
         if remapped is None:
             continue
         key = remapped
-        if key == "export_enabled":
-            key = "export_enabled"
         if key in values and key in SINGLE_VALUE_CONFIG_KEYS:
             raise RuntimeError(f"duplicate config key {key} in {path}")
         values.setdefault(key, value)
@@ -102,10 +99,6 @@ def operator_config_key(section: str, key: str) -> str | None:
         return "storage_sqlite_path"
     if section == "export.snapshot" and key == "directory":
         return "export_directory"
-    if section == "export.runtime" and key == "enabled":
-        return "export_enabled"
-    if section == "export.runtime.routes.otel_jsonl" and key == "path":
-        return "export_otel_jsonl_path"
     if section == "payload.tls" and key == "sync_event_socket_path":
         return "payload_tls_sync_event_socket_path"
     if not section:
@@ -127,10 +120,6 @@ def clean_configured_paths(values: dict[str, str]) -> None:
     export_dir = Path(required_value(values, "export_directory"))
     if export_dir.exists():
         shutil.rmtree(export_dir)
-    if values.get("export_enabled") == "true":
-        live_otel_path = Path(required_value(values, "export_otel_jsonl_path"))
-        if live_otel_path.exists():
-            live_otel_path.unlink()
 
 
 def required_value(values: dict[str, str], key: str) -> str:

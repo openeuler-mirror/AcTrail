@@ -40,6 +40,7 @@ class AgentAvailability:
         checks = {
             "codex": self._check_codex_availability,
             "claude": self._check_claude_availability,
+            "opencode": self._check_opencode_availability,
             "pi": self._check_pi_availability,
             "qodercli": self._check_qodercli_availability,
             "xiaoo": self._check_xiaoo_availability,
@@ -104,6 +105,16 @@ class AgentAvailability:
     ) -> bool:
         return self._run(
             [binary, "-p", self._prompt(), "--no-session"],
+            environment,
+        )
+
+    def _check_opencode_availability(
+        self,
+        binary: str,
+        environment: Mapping[str, str] | None,
+    ) -> bool:
+        return self._run(
+            [binary, "run", self._prompt()],
             environment,
         )
 

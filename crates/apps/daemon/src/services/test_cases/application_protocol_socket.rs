@@ -52,7 +52,6 @@ fn socket_payload_gate_persists_http_and_drops_non_http_bytes() {
         super::super::ResourceMetricsConfig::disabled(),
         super::super::TraceFinalizationConfig::default(),
         super::super::WorkloadDiagnostics::default(),
-        super::super::RuntimeExportConfig::disabled(),
         super::super::EnforcementConfig::disabled(),
         super::super::CommandControlConfig::disabled(),
         super::super::NetworkControlConfig::disabled(),

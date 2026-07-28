@@ -187,10 +187,12 @@ done
 for asset in \
   otel-jsonl.plugin.toml \
   otel-jsonl.config.toml \
-  otel-jsonl.plugin-config.v1; do
+  otel-jsonl.config.v1.schema.json; do
   run "${plugin_install[@]}" install -m 0644 \
     "$otel_jsonl_source_dir/$asset" "$otel_jsonl_install_dir/$asset"
 done
+run "${plugin_install[@]}" rm -f \
+  "$otel_jsonl_install_dir/otel-jsonl.plugin-config.v1"
 for asset in \
   file-leakage.plugin.toml \
   file-leakage.config.json \

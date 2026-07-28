@@ -6,7 +6,7 @@ use std::time::SystemTime;
 use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SemanticActionKind {
     ProcessExec,
     FileModify,

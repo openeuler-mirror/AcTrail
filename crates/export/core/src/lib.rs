@@ -6,7 +6,7 @@ mod runtime;
 
 pub use contract::{
     ExportDeliveryDrop, ExportDropReason, ExportError, ExportPublishResult,
-    SemanticActionExportAdapter, SemanticActionExportRecord,
+    SemanticActionExportAdapter, SemanticActionExportRecord, SemanticActionKindSelection,
 };
 pub use delivery::{BestEffortDelivery, BestEffortDeliveryConfig, BestEffortSink};
 pub use runtime::{

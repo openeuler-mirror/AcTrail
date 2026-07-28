@@ -380,7 +380,6 @@ def prepare_configured_directories(config: Path) -> None:
         "pid_file",
         "storage_sqlite_path",
         "log_path",
-        "export_otel_jsonl_path",
         "payload_tls_sync_event_socket_path",
         "enforcement_rules_path",
     ):
@@ -446,10 +445,6 @@ def operator_config_key(section: str, key: str) -> str | None:
         return "storage_sqlite_path"
     if section == "export.snapshot" and key == "directory":
         return "export_directory"
-    if section == "export.runtime" and key == "enabled":
-        return "export_enabled"
-    if section == "export.runtime.routes.otel_jsonl" and key == "path":
-        return "export_otel_jsonl_path"
     if section == "payload.tls" and key == "sync_event_socket_path":
         return "payload_tls_sync_event_socket_path"
     if section == "enforcement" and key == "rules_path":

@@ -16,8 +16,8 @@ from tests.v2.regression.probe_pi_llm.config import ProbePiLLMConfig  # noqa: E4
 TEST_DEFINITION = TestDefinition(
     name="probe_pi_llm",
     description="Run pi through actrailctl launch and verify LLM capture",
-    build_case=lambda repo, bin_dir: ProbePiLLMCase(
-        ProbePiLLMConfig.from_environment(repo, bin_dir)
+    build_case=lambda inputs: ProbePiLLMCase(
+        ProbePiLLMConfig.from_environment(inputs)
     ),
 )
 

@@ -9,5 +9,5 @@ capabilities = []
 
 [plugin_config]
 format = "toml"
-schema_ref = "otel-jsonl.plugin-config.v1"
+schema_ref = "otel-jsonl.config.v1.schema.json"
 required = true

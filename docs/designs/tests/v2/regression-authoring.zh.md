@@ -14,13 +14,15 @@
 必须包含：
 
 - 从仓库根目录执行的单 case 命令；
+- 使用默认 `--cleanup` 的命令；如果现场保留对该 case 有意义，再补充
+  `--no-cleanup` 的调试命令；
 - 测试依赖的外部条件；
 - 测试目标的简短说明。
 
 ## 步骤摘要
 
 按自动测试的真实顺序概括主要阶段，例如外部条件检查、AcTrail 启动、workload、
-证据验证和清理。
+证据验证，以及 runner 在测试任务之外执行的清理。
 
 ## 手动测试
 
@@ -58,10 +60,12 @@
 
 - 指令必须能从仓库根目录直接操作，不能只写“准备环境”或“检查结果”。
 - 文档中的 workload 参数必须与自动测试一致。
+- 测试产生的临时文件和证据必须位于 runner 注入的 `work_dir`；文档不得另造
+  `/tmp` 根目录。
 - 必须说明如何取得本次测试的 marker 和 trace id。
 - 必须给出验证 AcTrail 证据的实际操作，不能只检查 workload stdout。
 - 需要等待 trace/action 时必须给出有上限的轮询。
-- 必须包含清理步骤。
+- 必须包含手动清理步骤，并说明自动测试的清理由 runner 在 task 之外控制。
 - 每一步的预期结果必须写明具体状态、字段、数量或可见现象。
 - 必须明确外部条件不满足是 `SKIPPED`，AcTrail 失败是 `FAILED`。
 - 文档不得包含凭据或敏感数据。
@@ -72,4 +76,6 @@
 - 每个手动步骤都有指令和预期结果。
 - Bash 和 `jq` 片段语法有效。
 - 手动命令与自动测试一致。
-- case 已加入 `test_all.py` 和 Regression README 索引。
+- case 从 runner 接收 `TestCaseInputs`，没有自行解析 `work_dir`。
+- task 没有最终清理逻辑；cleanup hook 和 runner 的职责分离。
+- case 已加入 `tests/v2/regression/test_all.py` 和 Regression README 索引。

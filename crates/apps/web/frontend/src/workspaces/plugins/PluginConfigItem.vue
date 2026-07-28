@@ -160,12 +160,21 @@ const hintText = computed(() => [props.schema.description, rangeLabel.value].fil
 const objectEntries = computed(() => {
   const properties = props.schema.properties ?? {};
   const value = isObject(props.modelValue) ? props.modelValue : {};
+  const inheritedBoolean = typeof value.default === 'boolean'
+    ? value.default
+    : properties.default?.default;
   return Object.keys(properties)
     .map((key, index) => ({
       key,
       index,
       schema: properties[key] ?? {},
-      value: value[key],
+      value: Object.prototype.hasOwnProperty.call(value, key)
+        ? value[key]
+        : key !== 'default'
+          && properties[key]?.type === 'boolean'
+          && typeof inheritedBoolean === 'boolean'
+          ? inheritedBoolean
+          : undefined,
       required: Array.isArray(props.schema.required) && props.schema.required.includes(key),
     }))
     .sort((left, right) => Number(left.schema.readOnly === true) - Number(right.schema.readOnly === true)

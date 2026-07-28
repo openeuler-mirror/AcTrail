@@ -76,21 +76,6 @@ directory = "{tmp / 'export'}"
 payload_bytes_enabled = false
 payload_text_enabled = false
 
-[export.runtime]
-enabled = false
-
-[[export.runtime.routes]]
-name = "live-otel"
-kind = "otel-jsonl"
-delivery = "best-effort"
-enabled = true
-
-[export.runtime.routes.otel_jsonl]
-path = "{tmp / 'actrail-live-spans.otlp.jsonl'}"
-overwrite_enabled = false
-queue_capacity = 1024
-flush_every_spans = 1
-
 [capture]
 profile_name = "control-graylist-plugin-e2e"
 capabilities = ["enforcement-file-permission-fanotify"]

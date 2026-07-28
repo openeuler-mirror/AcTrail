@@ -6,89 +6,39 @@ use std::io::{BufWriter, Write};
 use export_core::{
     BestEffortSemanticActionRoute, BestEffortSemanticActionRouteConfig, BestEffortSink,
     ExportError, SemanticActionExportAdapter, SemanticActionExportRecord,
-    SemanticActionExportRoute,
+    SemanticActionExportRoute, SemanticActionKindSelection,
 };
 use plugin_system::{
-    DEFAULT_OBSERVATION_EVENT_FAMILIES, ObservationBatch, ObservationConsumeReport,
-    ObservationConsumer, ObservationEventFamily, PluginDroppedRecord, PluginRuntimeError,
-    PluginRuntimeKind,
+    ObservationBatch, ObservationConsumeReport, ObservationConsumer, ObservationEventFamily,
+    PluginDroppedRecord, PluginRuntimeError, PluginRuntimeKind,
 };
 
 use crate::OtelJsonlExporterConfig;
 
 const OTEL_JSONL_EXPORTER_NAME: &str = "otel_live_jsonl";
 const OTEL_JSONL_PLUGIN_ID: &str = "otel-jsonl";
-pub const OTEL_JSONL_BUILTIN_PLUGIN_INSTANCE_ID: &str = "builtin.otel-jsonl";
 const WRITER_THREAD_NAME: &str = "actrail-live-otel-export";
 
 type OtelJsonlSemanticActionRoute = BestEffortSemanticActionRoute<OtelJsonlSemanticActionAdapter>;
-
-pub fn build_otel_jsonl_observation_consumer(
-    config: OtelJsonlExporterConfig,
-) -> Result<OtelJsonlObservationConsumer, ExportError> {
-    build_otel_jsonl_observation_consumer_instance(OTEL_JSONL_BUILTIN_PLUGIN_INSTANCE_ID, config)
-}
-
-pub fn build_otel_jsonl_observation_consumer_instance(
-    instance_id: impl Into<String>,
-    config: OtelJsonlExporterConfig,
-) -> Result<OtelJsonlObservationConsumer, ExportError> {
-    build_otel_jsonl_observation_consumer_instance_with_subscriptions(
-        instance_id,
-        config,
-        DEFAULT_OBSERVATION_EVENT_FAMILIES.to_vec(),
-    )
-}
 
 pub fn build_otel_jsonl_observation_consumer_instance_with_subscriptions(
     instance_id: impl Into<String>,
     config: OtelJsonlExporterConfig,
     event_families: Vec<ObservationEventFamily>,
 ) -> Result<OtelJsonlObservationConsumer, ExportError> {
+    let route = build_otel_jsonl_semantic_action_route(&config)?;
     Ok(OtelJsonlObservationConsumer::new(
         instance_id,
-        build_otel_jsonl_semantic_action_route(config)?,
+        config.action_kinds,
+        route,
         event_families,
     ))
 }
 
-pub fn parse_otel_jsonl_plugin_config(raw: &str) -> Result<OtelJsonlExporterConfig, String> {
-    let value = raw
-        .parse::<toml::Value>()
-        .map_err(|error| format!("parse otel-jsonl plugin config: {error}"))?;
-    let table = value
-        .as_table()
-        .ok_or_else(|| "otel-jsonl plugin config must be a TOML table".to_string())?;
-    let mut entries = Vec::new();
-    for (key, value) in table {
-        let parsed = match key.as_str() {
-            "path" => value
-                .as_str()
-                .ok_or_else(|| "otel-jsonl config path must be a string".to_string())?
-                .to_string(),
-            "overwrite_enabled" => value
-                .as_bool()
-                .ok_or_else(|| "otel-jsonl config overwrite_enabled must be a bool".to_string())?
-                .to_string(),
-            "queue_capacity" | "flush_every_spans" => value
-                .as_integer()
-                .ok_or_else(|| format!("otel-jsonl config {key} must be an integer"))?
-                .to_string(),
-            _ => {
-                return Err(format!("unknown config key plugin.otel-jsonl.{key}"));
-            }
-        };
-        entries.push((key.clone(), parsed));
-    }
-    let config = OtelJsonlExporterConfig::parse_section("plugin.otel-jsonl", entries)?;
-    config.validate_enabled_route()?;
-    Ok(config)
-}
-
 fn build_otel_jsonl_semantic_action_route(
-    config: OtelJsonlExporterConfig,
+    config: &OtelJsonlExporterConfig,
 ) -> Result<OtelJsonlSemanticActionRoute, ExportError> {
-    let file = open_output_file(&config)?;
+    let file = open_output_file(config)?;
     if config.flush_every_spans == u32::default() {
         return Err(ExportError::new(
             OTEL_JSONL_EXPORTER_NAME,
@@ -116,18 +66,21 @@ fn build_otel_jsonl_semantic_action_route(
 pub struct OtelJsonlObservationConsumer {
     instance_id: String,
     event_families: Vec<ObservationEventFamily>,
+    action_kinds: SemanticActionKindSelection,
     route: OtelJsonlSemanticActionRoute,
 }
 
 impl OtelJsonlObservationConsumer {
     fn new(
         instance_id: impl Into<String>,
+        action_kinds: SemanticActionKindSelection,
         route: OtelJsonlSemanticActionRoute,
         event_families: Vec<ObservationEventFamily>,
     ) -> Self {
         Self {
             instance_id: instance_id.into(),
             event_families,
+            action_kinds,
             route,
         }
     }
@@ -157,6 +110,9 @@ impl ObservationConsumer for OtelJsonlObservationConsumer {
         validate_observation_batch(&batch)?;
         let mut dropped_records = Vec::new();
         for action in batch.semantic_actions {
+            if !self.action_kinds.enabled(action.kind) {
+                continue;
+            }
             let record = SemanticActionExportRecord {
                 trace: batch.trace,
                 action,

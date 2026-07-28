@@ -132,10 +132,15 @@ cargo build --release -p daemon -p ctl -p view -p web -p tls_payload_probe_sync
 ```bash
 # [host]
 # 1.1 创建运行时目录
-install -d /etc/actrail /var/lib/actrail /run/actrail /var/log/actrail
+install -d /etc/actrail/plugins/otel-jsonl /var/lib/actrail /run/actrail /var/log/actrail
 
 # 1.2 安装受限示例配置（hierarchical TOML：ebpf enabled="auto"、process_seccomp enabled=false、tls-sync 开启）
 install -m 0644 docs/examples/container-agent-restricted/operator.conf /etc/actrail/actraild.conf
+install -m 0644 \
+  examples/plugins/builtin/otel-jsonl/otel-jsonl.plugin.toml \
+  examples/plugins/builtin/otel-jsonl/otel-jsonl.config.toml \
+  examples/plugins/builtin/otel-jsonl/otel-jsonl.config.v1.schema.json \
+  /etc/actrail/plugins/otel-jsonl/
 
 # 1.3 复核关键字段（hierarchical TOML —— key 在 [section] 下）
 grep -nE '^\[control\]|^\[ebpf\]|^\[process_seccomp\]|^\[payload.tls\]|^\[storage.sqlite\]|^socket_path|^enabled|^binary_path|^capture_backend|^sync_event_socket_path|^path' /etc/actrail/actraild.conf

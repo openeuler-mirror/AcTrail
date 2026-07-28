@@ -283,7 +283,6 @@ def operator_replacements(values: dict[str, str]) -> dict[str, str]:
         "storage_sqlite_path",
         "web_listen_addr",
         "export_directory",
-        "export_otel_jsonl_path",
         "capture_profile_name",
         "payload_tls_sync_event_socket_path",
         "agent_invocation_commands",
@@ -299,9 +298,6 @@ def operator_replacements(values: dict[str, str]) -> dict[str, str]:
         '"/tmp/actrail-agent-dynamic-tls.sqlite"': quoted(values["storage_sqlite_path"]),
         '"127.0.0.1:18101"': quoted(values["web_listen_addr"]),
         '"/tmp/actrail-agent-dynamic-tls-export"': quoted(values["export_directory"]),
-        '"/tmp/actrail-agent-dynamic-tls-live-spans.otlp.jsonl"': quoted(
-            values["export_otel_jsonl_path"]
-        ),
         '"agent-dynamic-tls"': quoted(values["capture_profile_name"]),
         '"/tmp/actrail-agent-dynamic-tls-sync.sock"': quoted(
             values["payload_tls_sync_event_socket_path"]

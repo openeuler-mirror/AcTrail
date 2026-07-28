@@ -58,8 +58,6 @@ class ProbeCodexLLMCase(TestCase):
             assertion = LLMTraceAssertion(
                 runtime,
                 task.marker,
-                self._config.drain_attempts,
-                self._config.drain_interval_seconds,
             )
             assertion.require_answer_marker(launch, "Codex")
             results["answer_marker"] = TestResult(
@@ -72,11 +70,24 @@ class ProbeCodexLLMCase(TestCase):
                 expected_count=1,
                 selected_index=0,
             )
-            request_count, response_count = assertion.wait_and_require_exchange(trace_id)
+            stopped = runtime.stop()
+            if stopped is None or stopped.returncode != 0:
+                returncode = None if stopped is None else stopped.returncode
+                raise AssertionError(
+                    f"actraild safe stop exited with {returncode}"
+                )
+            results["runtime_stop"] = TestResult(
+                TestStatus.PASSED,
+                "actraild drained trace finalization and stopped successfully",
+            )
+
+            request_count, response_count = assertion.require_finalized_exchange(
+                trace_id
+            )
             results["llm_exchange"] = TestResult(
                 TestStatus.PASSED,
-                f"trace-{trace_id} has {request_count} paired request(s), "
-                f"{response_count} response(s), and captured markers",
+                f"trace-{trace_id} has {request_count} terminal paired request(s), "
+                f"{response_count} response(s), and a linked marker exchange",
             )
             return TestResult(
                 TestStatus.COMPOSITE,

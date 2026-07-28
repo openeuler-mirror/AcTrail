@@ -47,7 +47,6 @@ def wait_for_socket(path: Path, timeout: float = 10.0) -> None:
 def write_config() -> None:
     raw = SOURCE_CONFIG.read_text(encoding="utf-8")
     raw = raw.replace("/tmp/actrail-plugin-otel-jsonl", str(RUN_DIR))
-    raw = raw.replace("[export.runtime]\nenabled = true", "[export.runtime]\nenabled = false")
     raw = raw.replace("[plugins.startup]\nenabled = true", "[plugins.startup]\nenabled = false")
     CONFIG.write_text(raw, encoding="utf-8")
     PLUGIN_CONFIG.write_text(
@@ -57,6 +56,25 @@ def write_config() -> None:
                 "overwrite_enabled = true",
                 "queue_capacity = 128",
                 "flush_every_spans = 1",
+                "",
+                "[action_kinds]",
+                "default = false",
+                '"process.exec" = true',
+                '"file.modify" = false',
+                '"file.read" = false',
+                '"file.write" = false',
+                '"file.bulk_read" = false',
+                '"fs.enumerate" = false',
+                '"http.message" = false',
+                '"llm.call" = true',
+                '"llm.request" = true',
+                '"llm.response" = true',
+                '"sse.stream" = false',
+                '"sse.event" = false',
+                '"enforcement.decision" = true',
+                '"process.fork_attempt" = false',
+                '"agent.invocation" = true',
+                '"command.invocation" = true',
                 "",
             ]
         ),

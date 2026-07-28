@@ -148,19 +148,31 @@ fn install_plan_points(plan: &RuntimePlan) -> Result<bool, String> {
             actual_identity.identity,
         ));
     }
-    let skip_ssl_read = plan.provider == "openssl"
-        && plan
-            .points
+    let ssl_read_ex_hook = if plan.provider == "openssl" {
+        plan.points
             .iter()
-            .any(|point| point.symbol.as_str() == OPENSSL_SSL_READ_EX);
+            .find(|point| point.symbol.as_str() == OPENSSL_SSL_READ_EX)
+            .map(|point| {
+                let entry = maps::runtime_address(&plan.binary, point.file_offset)?;
+                Ok::<_, String>((entry, openssl_ssl_read_ex_impl(entry)))
+            })
+            .transpose()?
+    } else {
+        None
+    };
+    // Some x86_64 OpenSSL builds expose SSL_read_ex as a short wrapper around the
+    // shared read implementation. Hooking that implementation already covers
+    // SSL_read; otherwise both public entry points must be installed.
+    let ssl_read_covered_by_ssl_read_ex =
+        ssl_read_ex_hook.is_some_and(|(entry, hook_address)| entry != hook_address);
     let mut installed = false;
     for point in &plan.points {
-        if skip_ssl_read && point.symbol == OPENSSL_SSL_READ {
+        if ssl_read_covered_by_ssl_read_ex && point.symbol == OPENSSL_SSL_READ {
             continue;
         }
         let mut address = maps::runtime_address(&plan.binary, point.file_offset)?;
         if plan.provider == "openssl" && point.symbol == OPENSSL_SSL_READ_EX {
-            address = openssl_ssl_read_ex_impl(address);
+            address = ssl_read_ex_hook.map_or(address, |(_, hook_address)| hook_address);
         }
         let trampoline = if rustls::can_handle(&point.symbol) {
             match rustls::install(&point.symbol, address)? {

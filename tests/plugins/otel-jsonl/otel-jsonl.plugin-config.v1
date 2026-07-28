@@ -1,7 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["path", "overwrite_enabled", "queue_capacity", "flush_every_spans"],
+  "required": [
+    "path",
+    "overwrite_enabled",
+    "queue_capacity",
+    "flush_every_spans",
+    "action_kinds"
+  ],
   "additionalProperties": false,
   "properties": {
     "path": {
@@ -18,6 +24,64 @@
     "flush_every_spans": {
       "type": "integer",
       "minimum": 1
+    },
+    "action_kinds": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "default": {
+          "type": "boolean",
+          "default": false
+        },
+        "process.exec": {
+          "type": "boolean"
+        },
+        "file.modify": {
+          "type": "boolean"
+        },
+        "file.read": {
+          "type": "boolean"
+        },
+        "file.write": {
+          "type": "boolean"
+        },
+        "file.bulk_read": {
+          "type": "boolean"
+        },
+        "fs.enumerate": {
+          "type": "boolean"
+        },
+        "http.message": {
+          "type": "boolean"
+        },
+        "llm.call": {
+          "type": "boolean"
+        },
+        "llm.request": {
+          "type": "boolean"
+        },
+        "llm.response": {
+          "type": "boolean"
+        },
+        "sse.stream": {
+          "type": "boolean"
+        },
+        "sse.event": {
+          "type": "boolean"
+        },
+        "enforcement.decision": {
+          "type": "boolean"
+        },
+        "process.fork_attempt": {
+          "type": "boolean"
+        },
+        "agent.invocation": {
+          "type": "boolean"
+        },
+        "command.invocation": {
+          "type": "boolean"
+        }
+      }
     }
   }
 }

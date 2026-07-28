@@ -5,8 +5,7 @@ use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, CommandControlConfig, DiagnosticLogLevel,
     EbpfCollectorConfig, EnforcementConfig, FileObservationConfig, NetworkControlConfig,
     PayloadConfig, PluginAlertRuntimeConfig, ProcessSeccompConfig, ResourceMetricsConfig,
-    RuntimeExportConfig, SeccompNotifyConfig, SemanticRetentionConfig, StorageRetentionConfig,
-    TraceFinalizationConfig,
+    SeccompNotifyConfig, SemanticRetentionConfig, StorageRetentionConfig, TraceFinalizationConfig,
 };
 use config_core::provider_rules::ProviderRuleSetConfig;
 use control_contract::reply::ControlError;
@@ -52,7 +51,6 @@ pub(crate) fn build_runtime_wiring(
     resource_metrics: ResourceMetricsConfig,
     trace_finalization: TraceFinalizationConfig,
     workload_diagnostics: WorkloadDiagnostics,
-    export_runtime: RuntimeExportConfig,
     enforcement: EnforcementConfig,
     command_control: CommandControlConfig,
     network_control: NetworkControlConfig,
@@ -75,7 +73,6 @@ pub(crate) fn build_runtime_wiring(
         PluginAlertRuntimeConfig::default(),
         trace_finalization,
         workload_diagnostics,
-        export_runtime,
         enforcement,
         command_control,
         network_control,
@@ -100,7 +97,6 @@ pub(crate) fn build_runtime_wiring_with_storage_retention(
     plugin_alert_runtime: PluginAlertRuntimeConfig,
     trace_finalization: TraceFinalizationConfig,
     workload_diagnostics: WorkloadDiagnostics,
-    export_runtime: RuntimeExportConfig,
     enforcement: EnforcementConfig,
     command_control: CommandControlConfig,
     network_control: NetworkControlConfig,
@@ -123,7 +119,6 @@ pub(crate) fn build_runtime_wiring_with_storage_retention(
         plugin_alert_runtime,
         trace_finalization,
         workload_diagnostics,
-        export_runtime,
         enforcement,
         command_control,
         network_control,
@@ -149,7 +144,6 @@ pub(crate) fn build_runtime_wiring_with_provider_rule_set_and_storage_retention(
     plugin_alert_runtime: PluginAlertRuntimeConfig,
     trace_finalization: TraceFinalizationConfig,
     workload_diagnostics: WorkloadDiagnostics,
-    export_runtime: RuntimeExportConfig,
     enforcement: EnforcementConfig,
     command_control: CommandControlConfig,
     network_control: NetworkControlConfig,
@@ -176,7 +170,6 @@ pub(crate) fn build_runtime_wiring_with_provider_rule_set_and_storage_retention(
         plugin_alert_runtime,
         trace_finalization,
         workload_diagnostics,
-        export_runtime,
         enforcement,
         command_control,
         network_control,
@@ -202,7 +195,6 @@ fn build_runtime_wiring_with_attach_service(
     plugin_alert_runtime: PluginAlertRuntimeConfig,
     trace_finalization: TraceFinalizationConfig,
     workload_diagnostics: WorkloadDiagnostics,
-    export_runtime_config: RuntimeExportConfig,
     enforcement_config: EnforcementConfig,
     command_control_config: CommandControlConfig,
     network_control_config: NetworkControlConfig,
@@ -223,7 +215,7 @@ fn build_runtime_wiring_with_attach_service(
         .next_payload_segment_id_seed()
         .map_err(|error| ControlError::new(error.stage, error.message))?;
     let enforcement = FanotifyEnforcementService::new(enforcement_config.clone())?;
-    let export_runtime = export_runtime(export_runtime_config)?;
+    let export_runtime = ExportRuntime::new(Vec::new());
 
     let mut attach_service = match provider_classifier {
         Some(provider_classifier) => StorageAttachService::new_with_provider_classifier(
@@ -327,11 +319,6 @@ fn build_runtime_wiring_with_attach_service(
         loaded_policy_plugins: Vec::new(),
         storage_ready: true,
     })
-}
-
-fn export_runtime(config: RuntimeExportConfig) -> Result<ExportRuntime, ControlError> {
-    export_factory::build_export_runtime(&config)
-        .map_err(|error| ControlError::new(error.code, error.message))
 }
 
 fn process_seccomp_descriptor() -> CollectorDescriptor {

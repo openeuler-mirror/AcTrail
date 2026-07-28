@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
-from tests.v2.common.config import CommonTestConfig
+from tests.v2.common.config import CommonTestConfig, TestCaseInputs
 
 
 @dataclass(frozen=True)
 class ProbePiLLMConfig(CommonTestConfig):
     @classmethod
-    def from_environment(cls, repo: Path, bin_dir: Path) -> "ProbePiLLMConfig":
-        common = CommonTestConfig.from_environment(repo, bin_dir, "PI")
+    def from_environment(cls, inputs: TestCaseInputs) -> "ProbePiLLMConfig":
+        common = CommonTestConfig.from_environment(inputs, "PI")
         return cls(**common.as_kwargs())

@@ -102,7 +102,9 @@ For docs examples, prefer the helper because it also removes documented workload
 python3 docs/examples/clean.py --example <example-name>
 ```
 
-`clean` only removes artifacts declared by the config or example metadata. It is meant to replace repeated manual `/tmp/actrail-*` deletion. When legacy `[export.runtime]` is enabled, enabled `otel-jsonl` route output files are also cleaned.
+`clean` only removes artifacts declared by the operator config or example metadata. It is meant
+to replace repeated manual `/tmp/actrail-*` deletion. Plugin-owned output paths come from each
+plugin's config and are not inferred from a legacy `[export.runtime]` route.
 
 ## 5. Start And Check The Daemon
 
@@ -214,7 +216,10 @@ plugin_config = "/etc/actrail/plugins/otel-jsonl/otel-jsonl.config.toml"
 host_grants = []
 ```
 
-The plugin config owns the live JSONL path and queue settings. The live file is compact JSONL: one OTLP JSON document per line, one span per document. Queue-full drops are reported as `RuntimeDropped` diagnostics; writer I/O errors fail the plugin instead of silently falling back.
+The plugin config owns the live JSONL path, queue settings, and required `[action_kinds]`
+selection. `file.tty_io` is filtered upstream and is not configurable. The live file is compact
+JSONL: one OTLP JSON document per line, one span per document. Queue-full drops are reported as
+`RuntimeDropped` diagnostics; writer I/O errors fail the plugin instead of silently falling back.
 
 ## 9. Real Agent Acceptance
 

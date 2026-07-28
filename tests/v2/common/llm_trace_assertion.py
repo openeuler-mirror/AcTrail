@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-import time
 from pathlib import Path
 
 from .actrail_runtime import ActrailRuntime, CommandResult
@@ -26,13 +25,9 @@ class LLMTraceAssertion:
         self,
         runtime: ActrailRuntime,
         marker: str,
-        drain_attempts: int,
-        drain_interval_seconds: float,
     ):
         self._runtime = runtime
         self._marker = marker
-        self._drain_attempts = drain_attempts
-        self._drain_interval_seconds = drain_interval_seconds
 
     def require_trace_id(
         self,
@@ -66,42 +61,6 @@ class LLMTraceAssertion:
             raise AssertionError(
                 f"{agent_name} stdout answer does not contain marker {self._marker}"
             )
-
-    def wait_and_require_exchange(self, trace_id: int) -> tuple[int, int]:
-        last_actions = ""
-        last_trace_state = "missing"
-        for _ in range(self._drain_attempts):
-            traces = self._read_json(
-                [
-                    self._runtime.actrailviewer,
-                    "--output-format",
-                    "json",
-                    "traces",
-                ]
-            )
-            ready, last_trace_state = self._trace_is_cleanly_exited(traces, trace_id)
-            if not ready:
-                time.sleep(self._drain_interval_seconds)
-                continue
-            last_actions = self._runtime.run_checked(
-                [
-                    self._runtime.actrailviewer,
-                    "--output-format",
-                    "json",
-                    "actions",
-                    "--trace-id",
-                    str(trace_id),
-                ],
-                echo=False,
-            ).stdout
-            document = json.loads(last_actions)
-            if self._has_complete_exchange(document):
-                return self._require_complete_exchange(document)
-            time.sleep(self._drain_interval_seconds)
-        raise AssertionError(
-            f"trace-{trace_id} did not produce a complete LLM exchange; "
-            f"trace_state={last_trace_state} last_actions={last_actions}"
-        )
 
     def require_finalized_exchange(self, trace_id: int) -> tuple[int, int]:
         traces = self._read_json(
@@ -157,17 +116,6 @@ class LLMTraceAssertion:
         state = f"state={trace.get('state')} health={trace.get('health')}"
         return trace.get("state") == "Exited" and trace.get("health") == "Clean", state
 
-    def _has_complete_exchange(self, document: dict) -> bool:
-        kinds = {
-            action.get("kind")
-            for action in self._complete_actions(document)
-        }
-        return {"llm.call", "llm.request", "llm.response"} <= kinds
-
-    def _require_complete_exchange(self, document: dict) -> tuple[int, int]:
-        complete = self._complete_actions(document)
-        return self._require_paired_exchange(document, complete)
-
     def _require_paired_exchange(
         self,
         document: dict,
@@ -192,13 +140,6 @@ class LLMTraceAssertion:
         )
         self._require_marker_exchange(pairs)
         return len(requests), len(responses)
-
-    def _complete_actions(self, document: dict) -> list[dict]:
-        return [
-            action
-            for action in document.get("actions", [])
-            if action.get("completeness") == "complete"
-        ]
 
     def _llm_actions(self, document: dict) -> list[dict]:
         return [

@@ -371,7 +371,10 @@ host_grants = ["context-query", "file-access.current-match-get"]
 | `fail-fast` | 插件加载失败则 daemon 启动失败。适合治理控制插件。 |
 | `continue` | 打印错误并继续启动 daemon。适合可选观测导出插件。 |
 
-`[export.runtime]` 是兼容实时导出入口，默认关闭。配置观测导出时优先使用 `[plugins.startup]` 或运行后执行 `actraild plugin load`，让配置形态直接反映“观测消费者是插件实例”的内部模型。
+实时观测导出只通过插件生命周期启用。使用 `[plugins.startup]` 或运行后执行
+`actraild plugin load` 加载 `otel-jsonl`；`[export.runtime]` 不再是受支持的兼容
+入口。插件未加载时，daemon 不读取其业务配置，也不会创建 exporter 队列或输出
+文件。
 
 ## 插件自己的配置
 
@@ -480,7 +483,7 @@ capabilities = []
 
 [plugin_config]
 format = "toml"
-schema_ref = "otel-jsonl.plugin-config.v1"
+schema_ref = "otel-jsonl.config.v1.schema.json"
 required = true
 ```
 
@@ -491,7 +494,20 @@ path = "/tmp/actrail/live-spans.otlp.jsonl"
 overwrite_enabled = true
 queue_capacity = 128
 flush_every_spans = 1
+
+[action_kinds]
+default = false
+"process.exec" = true
+"llm.call" = true
+"llm.request" = true
+"llm.response" = true
+"enforcement.decision" = true
+"agent.invocation" = true
+"command.invocation" = true
 ```
+
+未显式列出的可导出 kind 服从 `default`。`file.tty_io` 在 recording 层被上游过滤，
+不是可配置的 action kind。
 
 加载插件：
 

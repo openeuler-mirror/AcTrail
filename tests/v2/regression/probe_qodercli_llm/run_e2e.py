@@ -20,8 +20,8 @@ from tests.v2.regression.probe_qodercli_llm.config import (  # noqa: E402
 TEST_DEFINITION = TestDefinition(
     name="probe_qodercli_llm",
     description="Run qodercli through actrailctl launch and verify LLM capture",
-    build_case=lambda repo, bin_dir: ProbeQoderCliLLMCase(
-        ProbeQoderCliLLMConfig.from_environment(repo, bin_dir)
+    build_case=lambda inputs: ProbeQoderCliLLMCase(
+        ProbeQoderCliLLMConfig.from_environment(inputs)
     ),
 )
 

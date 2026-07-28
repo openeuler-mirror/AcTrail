@@ -77,7 +77,6 @@ pub fn run_live_verification(
         seccomp_defaults.plugin_alert_runtime,
         seccomp_defaults.trace_finalization,
         seccomp_defaults.workload_diagnostics,
-        seccomp_defaults.export_runtime,
         config.enforcement.clone(),
         seccomp_defaults.command_control,
         seccomp_defaults.network_control,

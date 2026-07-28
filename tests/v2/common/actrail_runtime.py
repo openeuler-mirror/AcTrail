@@ -26,11 +26,13 @@ class ActrailRuntime:
         bin_dir: Path,
         command_timeout_seconds: int,
         output: TestOutput,
+        operator_config: Path | None = None,
     ):
         self._repo = repo
         self._bin_dir = bin_dir if bin_dir.is_absolute() else repo / bin_dir
         self._command_timeout_seconds = command_timeout_seconds
         self._output = output
+        self._operator_config = operator_config
         self.actraild = self._require_binary("actraild")
         self.actrailctl = self._require_binary("actrailctl")
         self.actrailviewer = self._require_binary("actrailviewer")
@@ -38,10 +40,10 @@ class ActrailRuntime:
 
     def prepare(self) -> list[CommandResult]:
         results = [
-            self.run_checked([self.actraild, "init", "-f"]),
-            self.run_checked([self.actraild, "stop"]),
-            self.run_checked([self.actrailctl, "clean"]),
-            self.run_checked([self.actraild, "start"]),
+            self.run_checked([*self._daemon_command(), "init", "-f"]),
+            self.run_checked([*self._daemon_command(), "stop"]),
+            self.run_checked([*self._control_command(), "clean"]),
+            self.run_checked([*self._daemon_command(), "start"]),
         ]
         self._started = True
         return results
@@ -49,10 +51,13 @@ class ActrailRuntime:
     def stop(self) -> CommandResult | None:
         if not self._started:
             return None
-        result = self.run([self.actraild, "stop"])
+        result = self.run([*self._daemon_command(), "stop"])
         if result.returncode == 0:
             self._started = False
         return result
+
+    def clean(self, *, echo: bool = True) -> CommandResult:
+        return self.run([*self._control_command(), "clean"], echo=echo)
 
     def run(
         self,
@@ -107,3 +112,15 @@ class ActrailRuntime:
         if not binary.is_file():
             raise RuntimeError(f"release binary not found: {binary}")
         return binary
+
+    def _daemon_command(self) -> list[Path | str]:
+        command: list[Path | str] = [self.actraild]
+        if self._operator_config is not None:
+            command.extend(["--config", self._operator_config])
+        return command
+
+    def _control_command(self) -> list[Path | str]:
+        command: list[Path | str] = [self.actrailctl]
+        if self._operator_config is not None:
+            command.extend(["--config", self._operator_config])
+        return command

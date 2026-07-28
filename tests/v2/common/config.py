@@ -7,9 +7,14 @@ from typing import Any
 
 
 @dataclass(frozen=True)
-class CommonTestConfig:
+class TestCaseInputs:
     repo: Path
     bin_dir: Path
+    work_dir: Path
+
+
+@dataclass(frozen=True)
+class CommonTestConfig(TestCaseInputs):
     command_timeout_seconds: int
     launch_timeout_seconds: int
     drain_attempts: int
@@ -18,16 +23,16 @@ class CommonTestConfig:
     @classmethod
     def from_environment(
         cls,
-        repo: Path,
-        bin_dir: Path,
+        inputs: TestCaseInputs,
         environment_prefix: str,
     ) -> "CommonTestConfig":
         def value(name: str, default: str) -> str:
             return os.environ.get(f"{environment_prefix}_E2E_{name}", default)
 
         return cls(
-            repo=repo,
-            bin_dir=bin_dir,
+            repo=inputs.repo,
+            bin_dir=inputs.bin_dir,
+            work_dir=inputs.work_dir,
             command_timeout_seconds=int(value("COMMAND_TIMEOUT_SECONDS", "30")),
             launch_timeout_seconds=int(value("LAUNCH_TIMEOUT_SECONDS", "180")),
             drain_attempts=int(value("DRAIN_ATTEMPTS", "30")),
@@ -38,6 +43,7 @@ class CommonTestConfig:
         return {
             "repo": self.repo,
             "bin_dir": self.bin_dir,
+            "work_dir": self.work_dir,
             "command_timeout_seconds": self.command_timeout_seconds,
             "launch_timeout_seconds": self.launch_timeout_seconds,
             "drain_attempts": self.drain_attempts,

@@ -40,7 +40,6 @@ fn tls_sync_payload_persists_without_child_membership() {
         super::ResourceMetricsConfig::disabled(),
         super::TraceFinalizationConfig::default(),
         super::WorkloadDiagnostics::default(),
-        super::RuntimeExportConfig::disabled(),
         super::EnforcementConfig::disabled(),
         super::CommandControlConfig::disabled(),
         super::NetworkControlConfig::disabled(),

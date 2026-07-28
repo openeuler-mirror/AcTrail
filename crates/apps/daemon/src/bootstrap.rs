@@ -8,8 +8,8 @@ use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, CommandControlConfig, DiagnosticLogLevel,
     EbpfCollectorConfig, EnforcementConfig, FileObservationConfig, NetworkControlConfig,
     PayloadConfig, PluginAlertRuntimeConfig, ProcessSeccompConfig, ResourceMetricsConfig,
-    RuntimeExportConfig, SeccompNotifyConfig, SemanticRetentionConfig, StorageRetentionConfig,
-    TraceFinalizationConfig, WorkloadDiagnosticsConfig,
+    SeccompNotifyConfig, SemanticRetentionConfig, StorageRetentionConfig, TraceFinalizationConfig,
+    WorkloadDiagnosticsConfig,
 };
 use config_core::provider_rules::ProviderRuleSetConfig;
 use control_contract::command::PluginLoadCommand;
@@ -69,7 +69,6 @@ impl LocalDaemonServer {
         plugin_alert_runtime: PluginAlertRuntimeConfig,
         trace_finalization: TraceFinalizationConfig,
         workload_diagnostics_config: WorkloadDiagnosticsConfig,
-        export_runtime: RuntimeExportConfig,
         enforcement: EnforcementConfig,
         command_control: CommandControlConfig,
         network_control: NetworkControlConfig,
@@ -93,7 +92,6 @@ impl LocalDaemonServer {
             plugin_alert_runtime,
             trace_finalization,
             workload_diagnostics.clone(),
-            export_runtime,
             enforcement,
             command_control,
             network_control,
@@ -123,7 +121,6 @@ impl LocalDaemonServer {
         plugin_alert_runtime: PluginAlertRuntimeConfig,
         trace_finalization: TraceFinalizationConfig,
         workload_diagnostics_config: WorkloadDiagnosticsConfig,
-        export_runtime: RuntimeExportConfig,
         enforcement: EnforcementConfig,
         command_control: CommandControlConfig,
         network_control: NetworkControlConfig,
@@ -148,7 +145,6 @@ impl LocalDaemonServer {
             plugin_alert_runtime,
             trace_finalization,
             workload_diagnostics.clone(),
-            export_runtime,
             enforcement,
             command_control,
             network_control,

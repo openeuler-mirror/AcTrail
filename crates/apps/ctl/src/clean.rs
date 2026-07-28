@@ -40,9 +40,6 @@ impl CleanArtifacts {
                 config.export_config.output_directory.clone(),
             ),
         ];
-        for output_file in config.export_runtime.enabled_output_files() {
-            entries.push(CleanEntry::file_like(output_file.label, output_file.path));
-        }
         if config.payload_config.tls.capture_backend.is_sync() {
             entries.push(CleanEntry::file_like(
                 "payload_tls_sync_event_socket_path",
