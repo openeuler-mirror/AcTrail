@@ -125,7 +125,7 @@ sequenceDiagram
 ```toml
 [general]
 id = "wasm.component-control"
-api_version = "actrail.plugin.v1"
+api_version = "actrail.plugin.v2"
 role = "control-decider"
 runtime = "wasm"
 
@@ -153,7 +153,7 @@ required = false
 | 字段 | 类型 | 是否必填 | 取值/范围 | 说明 |
 | --- | --- | --- | --- | --- |
 | `id` | string | 是 | 非空字符串 | 插件 ID。内置 `otel-jsonl` 插件使用 `id = "otel-jsonl"`。 |
-| `api_version` | string | 是 | 当前只支持 `actrail.plugin.v1` | manifest 协议版本。 |
+| `api_version` | string | 是 | 当前只支持 `actrail.plugin.v2` | manifest 协议版本。 |
 | `role` | string enum | 是 | `observation-consumer`、`control-decider`、`llm-codec` | 插件角色。观测插件消费观测数据；控制插件参与治理决策；LLM codec 插件在标准 LLM 语义投影前解码非标准 request body 或 SSE event data。 |
 | `runtime` | string enum | 是 | `builtin`、`wasm`、`native-dylib` | 插件运行时类型。当前 `native-dylib` 仍未启用。 |
 
@@ -318,7 +318,9 @@ Plugins 工作区的刷新按钮每次都重新扫描目录，因此新复制的
 
 Web 加载对话框自动列出不需要参数的 manifest capability，并以只读方式展示；`env-read`、`file-policy.rules.apply` 等参数化权限必须由管理员填写具体变量名、规则类型或绝对路径范围。Web 后端先把结构化配置转换为 grant，daemon 再执行最终校验。没有可用 grant 格式的 capability 会明确阻止加载。daemon 的插件管理 socket 仍要求 host-root peer，因此使用 Web 加载/卸载时，`actrailweb` 必须以能通过该校验的本机管理员身份运行；不要把这个管理入口暴露到不受信任网络。
 
-release 安装脚本把两个官方插件包放到 `${ACTRAIL_PLUGIN_DIR:-$HOME/.actrail/plugins}`：`file-leakage/` 用于 trace 结束后的文件泄漏检测，`file-policy-dynamic/` 用于动态管理 allow、deny 和 gray 文件规则。`ACTRAIL_PLUGIN_DIR` 必须是绝对路径，并应与实际运行 `actrailweb` 的 `plugins.discovery.directory` 解析结果一致。复制完成后两个插件都仍是未加载候选；打开 Web 并刷新后才能看到它们。
+release 安装脚本把四个官方插件包放到 `${ACTRAIL_PLUGIN_DIR:-$HOME/.actrail/plugins}`：`otel-jsonl/` 提供内置实时 OTLP JSONL 导出，`file-leakage/` 用于 trace 结束后的文件泄漏检测，`activity-anomaly/` 用于终态 trace 活动异常检测，`file-policy-dynamic/` 用于动态管理 allow、deny 和 gray 文件规则。`ACTRAIL_PLUGIN_DIR` 必须是绝对路径，并应与实际运行 `actrailweb` 的 `plugins.discovery.directory` 解析结果一致。复制完成后这些插件都仍是未加载候选；打开 Web 并刷新后才能看到它们。
+
+`otel-jsonl` 的执行代码编译在 `actraild` 中，安装目录里的包只提供发现和加载所需的 manifest、默认配置与 schema。它出现在候选列表并不表示已经开始导出；点击 **Configure & load** 或通过 CLI/startup 清单加载后才会创建输出文件。
 
 `file-policy-dynamic` 需要为 `file-policy.rules.apply` 指定可写规则类型和路径范围。在 Plugins 页面点击该候选的 **Configure & load**，填写实例 ID，添加一个或多个绝对路径，并为每个路径选择 allow、deny、gray 中允许写入的规则类型。加载成功后，实例详情中的 **Plugin command** 可以直接发送规则管理命令。
 
@@ -335,8 +337,8 @@ failure_policy = "fail-fast"
 instance = "live-otel"
 enabled = true
 failure_policy = "continue"
-manifest = "/etc/actrail/plugins/otel-jsonl/plugin.toml"
-plugin_config = "/etc/actrail/plugins/otel-jsonl/config.toml"
+manifest = "/etc/actrail/plugins/otel-jsonl/otel-jsonl.plugin.toml"
+plugin_config = "/etc/actrail/plugins/otel-jsonl/otel-jsonl.config.toml"
 host_grants = []
 
 [[plugins.startup.load]]
@@ -399,7 +401,7 @@ manifest 示例：
 ```toml
 [general]
 id = "vendor.llm-codec"
-api_version = "actrail.plugin.v1"
+api_version = "actrail.plugin.v2"
 role = "llm-codec"
 runtime = "wasm"
 
@@ -462,12 +464,14 @@ last_error=none
 
 这个场景用于把观测数据输出为 JSONL 文件，同时通过插件生命周期管理，而不是只依赖启动时的 exporter 配置。
 
+执行 release 安装后，先在 Web 的 **Plugins** 工作区点击 **Refresh**。`otel-jsonl` 会出现在 **Plugin candidates**；选择 **Configure & load** 并填写实例 ID 即可启用。默认配置写入 `/var/lib/actrail/export/live-spans.otlp.jsonl`，可在加载前编辑安装包中的 `otel-jsonl.config.toml`。
+
 manifest 示例：
 
 ```toml
 [general]
 id = "otel-jsonl"
-api_version = "actrail.plugin.v1"
+api_version = "actrail.plugin.v2"
 role = "observation-consumer"
 runtime = "builtin"
 

@@ -10,8 +10,8 @@ DESTDIR defaults to /usr/local/bin.
 
 The script installs/checks build dependencies, runs cargo build --release when
 target/release is incomplete, builds TLS sync preload runtimes, then copies the
-release binaries, runtimes, and the installed-but-disabled file-leakage,
-activity-anomaly, and dynamic file-policy plugins.
+release binaries, runtimes, and the installed-but-disabled otel-jsonl,
+file-leakage, activity-anomaly, and dynamic file-policy plugins.
 
 Environment:
   ACTRAIL_SUDO  Privilege command for installing into system directories.
@@ -42,6 +42,8 @@ plugin_root="${ACTRAIL_PLUGIN_DIR:-$plugin_home/.actrail/plugins}"
   echo "ACTRAIL_PLUGIN_DIR must be an absolute path: $plugin_root" >&2
   exit 2
 }
+otel_jsonl_install_dir="$plugin_root/otel-jsonl"
+otel_jsonl_source_dir="$script_dir/../examples/plugins/builtin/otel-jsonl"
 file_leakage_install_dir="$plugin_root/file-leakage"
 file_leakage_source_dir="$script_dir/../examples/plugins/wit-component/file-leakage"
 file_leakage_artifact="$file_leakage_source_dir/target/wasm32-wasip2/release/actrail_file_leakage_plugin.wasm"
@@ -159,6 +161,7 @@ mapfile -t binary_install < <(install_prefix "$dest_dir")
 mapfile -t plugin_install < <(install_prefix "$plugin_root")
 
 run "${binary_install[@]}" install -d "$dest_dir"
+run "${plugin_install[@]}" install -d "$otel_jsonl_install_dir"
 run "${plugin_install[@]}" install -d "$file_leakage_install_dir"
 run "${plugin_install[@]}" install -d "$activity_anomaly_install_dir"
 run "${plugin_install[@]}" install -d "$file_policy_install_dir"
@@ -181,6 +184,13 @@ for runtime in "${runtimes[@]}"; do
   run "${binary_install[@]}" install -m 0755 "$source_path" "$dest_dir/$runtime"
 done
 
+for asset in \
+  otel-jsonl.plugin.toml \
+  otel-jsonl.config.toml \
+  otel-jsonl.plugin-config.v1; do
+  run "${plugin_install[@]}" install -m 0644 \
+    "$otel_jsonl_source_dir/$asset" "$otel_jsonl_install_dir/$asset"
+done
 for asset in \
   file-leakage.plugin.toml \
   file-leakage.config.json \
