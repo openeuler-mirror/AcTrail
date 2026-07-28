@@ -50,10 +50,6 @@ impl SemanticActionBatch {
         &self.actions
     }
 
-    pub fn actions_mut(&mut self) -> &mut Vec<SemanticAction> {
-        &mut self.actions
-    }
-
     pub fn links(&self) -> &[SemanticActionLink] {
         &self.links
     }

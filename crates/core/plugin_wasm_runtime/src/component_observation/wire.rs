@@ -95,10 +95,6 @@ pub(super) fn semantic_action_val(action: &SemanticAction, paths: &[FileObservat
             Val::String(action.action_id.clone()),
         ),
         (
-            "trace-id".to_string(),
-            Val::String(action.trace_id.to_string()),
-        ),
-        (
             "kind".to_string(),
             Val::String(action.kind.as_str().to_string()),
         ),
@@ -114,21 +110,6 @@ pub(super) fn semantic_action_val(action: &SemanticAction, paths: &[FileObservat
             "file-change".to_string(),
             Val::Option(file_change_val(action, paths).map(Box::new)),
         ),
-        (
-            "attributes".to_string(),
-            Val::List(
-                action
-                    .attributes
-                    .iter()
-                    .map(|(key, value)| {
-                        Val::Record(vec![
-                            ("key".to_string(), Val::String(key.clone())),
-                            ("value".to_string(), Val::String(value.clone())),
-                        ])
-                    })
-                    .collect(),
-            ),
-        ),
     ])
 }
 
@@ -137,10 +118,6 @@ pub(super) fn trace_analysis_action_val(action: &TraceAnalysisAction) -> Val {
         (
             "action-id".to_string(),
             Val::String(action.action_id.clone()),
-        ),
-        (
-            "trace-id".to_string(),
-            Val::String(String::new()),
         ),
         ("kind".to_string(), Val::String(action.kind.clone())),
         (
@@ -160,10 +137,6 @@ pub(super) fn trace_analysis_action_val(action: &TraceAnalysisAction) -> Val {
                     .map(trace_analysis_file_change_val)
                     .map(Box::new),
             ),
-        ),
-        (
-            "attributes".to_string(),
-            Val::List(Vec::new()),
         ),
     ])
 }

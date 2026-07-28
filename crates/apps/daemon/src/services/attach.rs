@@ -45,7 +45,6 @@ use ebpf_collector::procfs::{
 use export_core::ExportRuntime;
 use model_core::capability::Capability;
 use model_core::diagnostics::{DiagnosticKind, DiagnosticRecord, DiagnosticSeverity};
-use model_core::ids::TraceId;
 use model_core::process::{ProcessIdentity, ProcessObservation, ProcessRecord};
 use plugin_system::PluginInstanceStatus;
 use process_identity::ProcessIdentityError;
@@ -141,11 +140,6 @@ pub(crate) struct StorageAttachService {
         BTreeSet<(model_core::ids::TraceId, ProcessIdentity)>,
     pub(super) provider_classifier: Box<dyn ProviderClassifier>,
     pub(super) provider_classification_enabled: bool,
-    /// Cross-batch tool name cache: trace_id → (llm_call_action_id → tool_name).
-    /// Populated when LlmResponse actions arrive; consumed by propagate_tool_names_to_commands
-    /// to retroactively set command.tool.name on CommandInvocations that were persisted
-    /// before their corresponding LlmResponse was processed.
-    pub(super) pending_tool_names: BTreeMap<TraceId, BTreeMap<String, String>>,
 }
 
 impl StorageAttachService {

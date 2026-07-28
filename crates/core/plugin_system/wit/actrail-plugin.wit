@@ -104,19 +104,12 @@ interface types {
     path-state: path-observation-state,
   }
 
-  record attribute-pair {
-    key: string,
-    value: string,
-  }
-
   record semantic-action-record {
     action-id: string,
-    trace-id: string,
     kind: string,
     status: string,
     completeness: string,
     file-change: option<file-change-record>,
-    attributes: list<attribute-pair>,
   }
 
   record observation-batch {
