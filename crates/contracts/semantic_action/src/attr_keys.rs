@@ -33,6 +33,7 @@ pub mod command {
     pub const FAILURE_KIND: &str = "command.failure.kind";
     pub const FAILURE_SUMMARY: &str = "command.failure.summary";
     pub const LINE: &str = "command.line";
+    pub const TOOL_NAME: &str = "command.tool.name";
 }
 
 pub mod enforcement {

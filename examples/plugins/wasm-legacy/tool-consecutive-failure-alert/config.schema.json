@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tool Consecutive Failure Alert Plugin Config",
+  "type": "object",
+  "properties": {
+    "alert": {
+      "type": "object",
+      "properties": {
+        "consecutive_failure_threshold": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 3,
+          "description": "Consecutive failure count threshold to trigger alert"
+        },
+        "cooldown_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 60,
+          "description": "Cooldown period in seconds between alerts for the same (trace, tool) pair"
+        },
+        "desensitization": {
+          "type": "string",
+          "enum": ["none", "summary_only"],
+          "default": "summary_only",
+          "description": "Desensitization policy for tool parameters and results"
+        },
+        "tool_name_format": {
+          "type": "string",
+          "enum": ["bare", "full"],
+          "default": "bare",
+          "description": "Tool name format in alerts: 'bare' uses only the tool name (e.g. 'ls'), 'full' uses the complete command line with arguments (e.g. 'ls /aaa'). In 'full' mode, different command arguments are tracked as separate tools."
+        }
+      },
+      "required": ["consecutive_failure_threshold", "cooldown_seconds", "desensitization"]
+    },
+    "alert.filter": {
+      "type": "object",
+      "properties": {
+        "monitored_tools": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Only monitor these tools (empty = all)"
+        },
+        "ignored_tools": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Ignore these tools"
+        }
+      }
+    },
+    "alert.behavior": {
+      "type": "object",
+      "properties": {
+        "policy_denied_counts_as_failure": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether tool policy denial counts as a failure"
+        },
+        "state_ttl_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 300,
+          "description": "TTL in seconds for state auto-recycling after trace ends"
+        }
+      }
+    }
+  }
+}
