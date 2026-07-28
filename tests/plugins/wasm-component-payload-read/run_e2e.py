@@ -55,7 +55,6 @@ def wait_for_socket(path: Path, timeout: float = 10.0) -> None:
 def write_config() -> None:
     raw = SOURCE_CONFIG.read_text(encoding="utf-8")
     raw = raw.replace("/tmp/actrail-http-local-test", str(RUN_DIR / "actrail-http-local-test"))
-    raw = raw.replace("[export.runtime]\nenabled = false", "[export.runtime]\nenabled = false")
     raw = raw.replace("[semantic_retention]", "[semantic_retention]\ncontent_owner = \"configured_layers\"")
     raw = raw.replace(
         "[semantic_retention.l4_payload]",

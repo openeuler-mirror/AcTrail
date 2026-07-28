@@ -78,8 +78,6 @@ class ProbeQoderCliLLMCase(TestCase):
             assertion = LLMTraceAssertion(
                 runtime,
                 task.marker,
-                self._config.drain_attempts,
-                self._config.drain_interval_seconds,
             )
             assertion.require_answer_marker(launch, "qodercli")
             results["answer_marker"] = TestResult(

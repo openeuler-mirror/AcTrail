@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from tests.v2.common.config import CommonTestConfig
+from tests.v2.common.config import CommonTestConfig, TestCaseInputs
 
 
 @dataclass(frozen=True)
@@ -13,8 +13,11 @@ class ProbeClaudeLLMConfig(CommonTestConfig):
     claude_binary: Path | None
 
     @classmethod
-    def from_environment(cls, repo: Path, bin_dir: Path) -> "ProbeClaudeLLMConfig":
-        common = CommonTestConfig.from_environment(repo, bin_dir, "CLAUDE")
+    def from_environment(
+        cls,
+        inputs: TestCaseInputs,
+    ) -> "ProbeClaudeLLMConfig":
+        common = CommonTestConfig.from_environment(inputs, "CLAUDE")
         configured_binary = os.environ.get("CLAUDE_E2E_BINARY")
         return cls(
             **common.as_kwargs(),

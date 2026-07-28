@@ -8,7 +8,11 @@
 
 - `otel-jsonl.plugin.toml`：插件 manifest；文件名符合插件目录发现约定。
 - `otel-jsonl.config.toml`：插件自己的 TOML 配置。
-- `otel-jsonl.plugin-config.v1`：`schema_ref` 指向的 JSON Schema。
+- `otel-jsonl.config.v1.schema.json`：`schema_ref` 指向的 JSON Schema。
+
+插件配置中的 `[action_kinds]` 是必填的。`default` 控制未显式列出的可导出 kind，
+其余 boolean 字段会由 Web 按 schema 显示为 checkbox。`file.tty_io` 由 recording
+层在 exporter 之前过滤，不属于插件配置。
 
 加载示例：
 

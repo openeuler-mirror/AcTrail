@@ -432,7 +432,7 @@ mod tests {
         for asset in [
             "otel-jsonl.plugin.toml",
             "otel-jsonl.config.toml",
-            "otel-jsonl.plugin-config.v1",
+            "otel-jsonl.config.v1.schema.json",
         ] {
             fs::copy(source.join(asset), package.join(asset))
                 .unwrap_or_else(|error| panic!("copy {asset} fixture failed: {error}"));

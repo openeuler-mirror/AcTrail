@@ -4,10 +4,6 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
-use export_factory::{
-    ExportConfig as RuntimeExportConfig, ExportDeliveryConfig, ExportRouteConfig, ExportRouteKind,
-    ExportRouteTargetConfig, OtelJsonlExporterConfig,
-};
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use model_core::ids::ProfileName;
 use serde::{Deserialize, Serialize};
@@ -151,18 +147,6 @@ impl ConfigModel for OperatorDocument {
         if self.capture.capabilities.is_empty() {
             return Err(ConfigError::new("capture.capabilities must not be empty"));
         }
-        if self.export.runtime.enabled
-            && self
-                .export
-                .runtime
-                .routes
-                .iter()
-                .all(|route| !route.enabled)
-        {
-            return Err(ConfigError::new(
-                "export.runtime.enabled=true requires at least one enabled route",
-            ));
-        }
         Ok(())
     }
 }
@@ -266,7 +250,6 @@ impl OperatorDocument {
                     payload_bytes_enabled: config.export_config.payload_bytes_enabled,
                     payload_text_enabled: config.export_config.payload_text_enabled,
                 },
-                runtime: RuntimeExportDocument::from_config(&config.export_runtime),
             },
             plugins: PluginsDocument::from_config(
                 &config.plugin_discovery,
@@ -444,7 +427,6 @@ impl OperatorDocument {
             web: self.web.to_config()?,
             cluster: self.cluster.to_config()?,
             export_config: self.export.snapshot.to_config(),
-            export_runtime: self.export.runtime.to_config()?,
             plugin_discovery,
             plugin_alert_runtime,
             startup_plugins,

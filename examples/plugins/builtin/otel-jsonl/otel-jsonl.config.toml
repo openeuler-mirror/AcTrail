@@ -2,3 +2,23 @@ path = "/var/lib/actrail/export/live-spans.otlp.jsonl"
 overwrite_enabled = true
 queue_capacity = 1024
 flush_every_spans = 1
+
+[action_kinds]
+default = false
+
+"process.exec" = true
+"file.modify" = false
+"file.read" = false
+"file.write" = false
+"file.bulk_read" = false
+"fs.enumerate" = false
+"http.message" = false
+"llm.call" = true
+"llm.request" = true
+"llm.response" = true
+"sse.stream" = false
+"sse.event" = false
+"enforcement.decision" = true
+"process.fork_attempt" = false
+"agent.invocation" = true
+"command.invocation" = true

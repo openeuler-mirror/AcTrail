@@ -98,8 +98,11 @@ Install the unified host configuration:
 sudo deploy/container-auto/install-host.sh target/release
 ```
 
-It installs the versioned `/etc/actrail/container-auto.conf`, which declares
-the complete capability set and uses host eBPF `enabled = "auto"`.
+It installs the versioned `/etc/actrail/container-auto.conf` plus the
+`otel-jsonl` manifest, schema, and selected-action config under
+`/etc/actrail/plugins/otel-jsonl/`. The operator config declares the complete
+capability set, uses host eBPF `enabled = "auto"`, and loads the exporter
+through the plugin startup lifecycle.
 
 Probe from the workload:
 

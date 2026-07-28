@@ -1,6 +1,5 @@
-use export_core::{ExportError, ExportRuntime};
+use export_core::ExportError;
 use export_otel_jsonl::{
-    build_otel_jsonl_observation_consumer,
     build_otel_jsonl_observation_consumer_instance_with_subscriptions,
     parse_otel_jsonl_plugin_config,
 };
@@ -8,36 +7,6 @@ use std::sync::Arc;
 
 use plugin_system::{AlertHost, PluginHostGrants, PostTraceHost};
 use plugin_system::{ObservationConsumer, PluginManifest, PluginPurpose, PluginRuntimeKind};
-
-use crate::{ExportConfig, ExportDeliveryConfig, ExportRouteTargetConfig};
-
-pub fn build_export_runtime(config: &ExportConfig) -> Result<ExportRuntime, ExportError> {
-    if !config.enabled {
-        return Ok(ExportRuntime::new(Vec::new()));
-    }
-    if config.routes().iter().all(|route| !route.enabled) {
-        return Err(ExportError::new(
-            "export_factory",
-            "export enabled but no enabled export routes configured",
-        ));
-    }
-    let mut consumers = Vec::new();
-    for route in config.routes().iter().filter(|route| route.enabled) {
-        route
-            .target
-            .validate_enabled_route()
-            .map_err(|message| ExportError::new("export_factory", message))?;
-        match route.delivery {
-            ExportDeliveryConfig::BestEffort => match &route.target {
-                ExportRouteTargetConfig::OtelJsonl(otel_jsonl) => {
-                    let consumer = build_otel_jsonl_observation_consumer(otel_jsonl.clone())?;
-                    consumers.push(Box::new(consumer) as Box<dyn ObservationConsumer>);
-                }
-            },
-        }
-    }
-    Ok(export_core::ExportRuntime::new(consumers))
-}
 
 pub fn build_observation_consumer_from_manifest(
     instance_id: &str,

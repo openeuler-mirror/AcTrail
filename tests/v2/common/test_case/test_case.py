@@ -48,3 +48,14 @@ class TestCase(ABC, metaclass=TestCaseMeta):
         Run the test case.
         """
         raise NotImplementedError
+
+    def cleanup(
+        self,
+        test_context: TestingContextSingleton,
+    ) -> TestResult | None:
+        """
+        Clean resources owned by the case when the outer runner requests it.
+
+        Cases that manage cleanup internally may keep the default no-op hook.
+        """
+        return None

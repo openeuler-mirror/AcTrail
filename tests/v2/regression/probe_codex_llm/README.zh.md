@@ -17,8 +17,9 @@ sudo -E python3 tests/v2/regression/probe_codex_llm/run_e2e.py
 2. 初始化、清理并启动 AcTrail。
 3. 生成随机 marker，通过 `actrailctl launch` 启动 `codex exec`。
 4. 验证 Codex 标准输出包含 marker，并取得唯一的 trace id。
-5. 验证该 trace 为 `Exited/Clean`。
-6. 验证 `llm.call/request/response` 数量一致、关系完整，response 包含 marker，
+5. 停止 daemon，等待事件排空和 trace finalization 完成。
+6. 从数据库验证 trace 为 `Exited/Clean`，并验证
+   `llm.call/request/response` 数量一致、关系完整，response 包含 marker，
    request 具有 canonical content 证据。
 
 # 手动测试
@@ -106,47 +107,35 @@ printf 'trace-%s\n' "$TRACE_ID"
 
 marker 查找成功，并且恰好得到一个直接包裹 Codex 的 trace id。
 
-## 步骤5：验证 trace 状态
+## 步骤5：停止 daemon 并完成 finalization
 
 ### 手动指令
 
 ```bash
-for TRACE_ATTEMPT in $(seq 1 30); do
-  TRACE_STATE="$(
-    sudo -E target/release/actrailviewer --output-format json traces |
-      jq -r --argjson trace_id "$TRACE_ID" '
-        .traces[]
-        | select(.trace_id_raw == $trace_id)
-        | "\(.state)/\(.health)"
-      '
-  )"
-  test "$TRACE_STATE" = "Exited/Clean" && break
-  sleep 1
-done
-test "$TRACE_STATE" = "Exited/Clean"
-printf '%s\n' "$TRACE_STATE"
+sudo -E target/release/actraild stop
 ```
 
 ### 预期结果
 
-该 trace 的 `state` 为 `Exited`，`health` 为 `Clean`。
+daemon 在已捕获事件排空、trace finalization 和数据持久化完成后成功退出。
 
-## 步骤6：验证 LLM action 与 marker
+## 步骤6：验证最终 trace、LLM action 与 marker
 
 ### 手动指令
 
 ```bash
-for ACTION_ATTEMPT in $(seq 1 30); do
-  sudo -E target/release/actrailviewer --output-format json actions \
-    --trace-id "$TRACE_ID" > /tmp/actrail-codex-actions.json
-  ACTION_COUNT="$(
-    jq '[.actions[] | select(.kind == "llm.response")] | length' \
-      /tmp/actrail-codex-actions.json
-  )"
-  test "$ACTION_COUNT" -gt 0 && break
-  sleep 1
-done
-test "$ACTION_COUNT" -gt 0
+TRACE_STATE="$(
+  sudo -E target/release/actrailviewer --output-format json traces |
+    jq -r --argjson trace_id "$TRACE_ID" '
+      .traces[]
+      | select(.trace_id_raw == $trace_id)
+      | "\(.state)/\(.health)"
+    '
+)"
+test "$TRACE_STATE" = "Exited/Clean"
+
+sudo -E target/release/actrailviewer --output-format json actions \
+  --trace-id "$TRACE_ID" > /tmp/actrail-codex-actions.json
 
 jq --arg marker "$CASE_MARKER" '
   [.actions[] | select(.kind == "llm.call")] as $calls
@@ -193,18 +182,7 @@ jq --arg marker "$CASE_MARKER" '
 
 ### 预期结果
 
-三个计数均大于零且相等；`call_links` 中每个 call 恰好有一个 request link
-和一个 response link，且没有 request/response 被重复使用；
-`canonical_requests`、`marker_responses` 均非空。
-
-## 步骤7：停止 daemon
-
-### 手动指令
-
-```bash
-sudo -E target/release/actraild stop
-```
-
-### 预期结果
-
-daemon 成功停止，没有遗留运行中的测试进程。
+trace 为 `Exited/Clean`；三个 action 计数均大于零且相等；`call_links`
+中每个 call 恰好有一个 request link 和一个 response link，且没有
+request/response 被重复使用；`canonical_requests`、`marker_responses`
+均非空。

@@ -1,0 +1,24 @@
+path = "/tmp/actrail-full-monitor/live-spans.otlp.jsonl"
+overwrite_enabled = true
+queue_capacity = 1024
+flush_every_spans = 1
+
+[action_kinds]
+default = false
+
+"process.exec" = true
+"file.modify" = true
+"file.read" = true
+"file.write" = true
+"file.bulk_read" = true
+"fs.enumerate" = true
+"http.message" = true
+"llm.call" = true
+"llm.request" = true
+"llm.response" = true
+"sse.stream" = true
+"sse.event" = true
+"enforcement.decision" = true
+"process.fork_attempt" = true
+"agent.invocation" = true
+"command.invocation" = true

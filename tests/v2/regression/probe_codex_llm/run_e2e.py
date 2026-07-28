@@ -18,8 +18,8 @@ from tests.v2.regression.probe_codex_llm.config import (  # noqa: E402
 TEST_DEFINITION = TestDefinition(
     name="probe_codex_llm",
     description="Run Codex through actrailctl launch and verify LLM capture",
-    build_case=lambda repo, bin_dir: ProbeCodexLLMCase(
-        ProbeCodexLLMConfig.from_environment(repo, bin_dir)
+    build_case=lambda inputs: ProbeCodexLLMCase(
+        ProbeCodexLLMConfig.from_environment(inputs)
     ),
 )
 

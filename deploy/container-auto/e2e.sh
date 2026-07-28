@@ -17,6 +17,8 @@ WORK_DIR="$(mktemp -d /tmp/actrail-container-auto-e2e.XXXXXX)"
 SOCK_DIR="${WORK_DIR}/run"
 DATA_DIR="${WORK_DIR}/data"
 LOG_DIR="${WORK_DIR}/log"
+PLUGIN_SOURCE_DIR="${REPO_ROOT}/examples/plugins/builtin/otel-jsonl"
+PLUGIN_DIR="${WORK_DIR}/etc/actrail/plugins/otel-jsonl"
 BUILD_CONTEXT="${WORK_DIR}/image"
 CONF="${WORK_DIR}/container-auto.conf"
 AUTO_CONF="${WORK_DIR}/container-auto.auto.conf"
@@ -194,11 +196,32 @@ command -v sed >/dev/null || fail "sed missing"
 for f in actraild actrailctl "${PROBE_LIB}"; do
     [[ -f "${BIN_DIR}/${f}" ]] || fail "missing ${BIN_DIR}/${f}"
 done
-mkdir -p "${SOCK_DIR}" "${DATA_DIR}/export" "${LOG_DIR}" "${BUILD_CONTEXT}"
+for f in \
+    otel-jsonl.plugin.toml \
+    otel-jsonl.config.toml \
+    otel-jsonl.config.v1.schema.json; do
+    [[ -f "${PLUGIN_SOURCE_DIR}/${f}" ]] \
+        || fail "missing ${PLUGIN_SOURCE_DIR}/${f}"
+done
+mkdir -p \
+    "${SOCK_DIR}" \
+    "${DATA_DIR}/export" \
+    "${LOG_DIR}" \
+    "${PLUGIN_DIR}" \
+    "${BUILD_CONTEXT}"
+install -m 0644 \
+    "${PLUGIN_SOURCE_DIR}/otel-jsonl.plugin.toml" \
+    "${PLUGIN_SOURCE_DIR}/otel-jsonl.config.v1.schema.json" \
+    "${PLUGIN_DIR}/"
+sed \
+    -e "s|/var/lib/actrail|${DATA_DIR}|g" \
+    "${PLUGIN_SOURCE_DIR}/otel-jsonl.config.toml" \
+    >"${PLUGIN_DIR}/otel-jsonl.config.toml"
 sed \
     -e "s|/run/actrail|${SOCK_DIR}|g" \
     -e "s|/var/lib/actrail|${DATA_DIR}|g" \
     -e "s|/var/log/actrail|${LOG_DIR}|g" \
+    -e "s|/etc/actrail|${WORK_DIR}/etc/actrail|g" \
     "${MODULE_DIR}/container-auto.conf" >"${CONF}"
 cp "${CONF}" "${AUTO_CONF}"
 

@@ -58,8 +58,6 @@ class ProbePiLLMCase(TestCase):
             assertion = LLMTraceAssertion(
                 runtime,
                 task.marker,
-                self._config.drain_attempts,
-                self._config.drain_interval_seconds,
             )
             assertion.require_answer_marker(launch, "pi")
             results["answer_marker"] = TestResult(

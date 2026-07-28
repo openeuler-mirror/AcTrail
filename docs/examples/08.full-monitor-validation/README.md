@@ -5,6 +5,7 @@
 ## 文件
 
 - `operator.conf`：full-monitor operator 配置。
+- `otel-jsonl.config.toml`：启动时加载的 `otel-jsonl` 插件配置。
 - `/tmp/actrail-full-monitor/`：运行时产物目录，包括 socket、pid、SQLite、导出文件和 daemon 日志。
 
 ## 采集范围
@@ -275,7 +276,8 @@ target/release/actrailctl init --output /tmp/actrail-default.conf --force
 
 - `control.socket_path = ...`、`pid_file = ...`、`log_path = ...`：把 daemon 运行时文件放到 `/tmp/actrail-full-monitor/`。
 - `storage.sqlite.path = ...`、`export.snapshot.directory = ...`：把验证数据和导出文件放到同一临时目录。
-- `export.runtime.enabled = true`：开启 live OTEL JSONL 导出。
+- `[plugins.startup]`：启动时加载 `otel-jsonl` 插件；输出参数和 action kind
+  选择位于 `otel-jsonl.config.toml`。
 - `payload.tls.sync_event_socket_path = ...`：为本例使用独立的 TLS sync event socket。
 - `enforcement.rules_path = ...`：为本例使用独立的 enforcement rules 路径。
 - `capture.profile_name = "full-monitor"`：给 trace 标记本示例 profile；采集能力集合继承默认 full-monitor 配置。

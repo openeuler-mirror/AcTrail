@@ -364,14 +364,12 @@ impl WebDocument {
 #[serde(default, deny_unknown_fields)]
 pub(super) struct ExportDocument {
     pub snapshot: SnapshotExportDocument,
-    pub runtime: RuntimeExportDocument,
 }
 
 impl Default for ExportDocument {
     fn default() -> Self {
         Self {
             snapshot: SnapshotExportDocument::default(),
-            runtime: RuntimeExportDocument::default(),
         }
     }
 }
@@ -406,141 +404,6 @@ impl SnapshotExportDocument {
             output_directory: PathBuf::from(&self.directory),
             payload_bytes_enabled: self.payload_bytes_enabled,
             payload_text_enabled: self.payload_text_enabled,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(default, deny_unknown_fields)]
-pub(super) struct RuntimeExportDocument {
-    pub enabled: bool,
-    pub routes: Vec<RuntimeExportRouteDocument>,
-}
-
-impl Default for RuntimeExportDocument {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            routes: vec![RuntimeExportRouteDocument::default()],
-        }
-    }
-}
-
-impl RuntimeExportDocument {
-    pub(super) fn from_config(config: &RuntimeExportConfig) -> Self {
-        Self {
-            enabled: config.enabled,
-            routes: config
-                .routes()
-                .iter()
-                .map(RuntimeExportRouteDocument::from_config)
-                .collect(),
-        }
-    }
-
-    pub(super) fn to_config(&self) -> Result<RuntimeExportConfig, String> {
-        let mut routes = Vec::new();
-        for route in &self.routes {
-            routes.push(route.to_config()?);
-        }
-        let config = RuntimeExportConfig::new(self.enabled, routes);
-        if self.enabled && config.routes().iter().all(|route| !route.enabled) {
-            return Err(
-                "export.runtime.enabled=true requires at least one enabled route".to_string(),
-            );
-        }
-        if self.enabled {
-            for route in config.routes().iter().filter(|route| route.enabled) {
-                route.target.validate_enabled_route()?;
-            }
-        }
-        Ok(config)
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(default, deny_unknown_fields)]
-pub(super) struct RuntimeExportRouteDocument {
-    pub name: String,
-    pub kind: String,
-    pub delivery: String,
-    pub enabled: bool,
-    pub otel_jsonl: OtelJsonlRouteDocument,
-}
-
-impl Default for RuntimeExportRouteDocument {
-    fn default() -> Self {
-        Self {
-            name: "live-otel".to_string(),
-            kind: "otel-jsonl".to_string(),
-            delivery: "best-effort".to_string(),
-            enabled: true,
-            otel_jsonl: OtelJsonlRouteDocument::default(),
-        }
-    }
-}
-
-impl RuntimeExportRouteDocument {
-    pub(super) fn from_config(config: &ExportRouteConfig) -> Self {
-        let ExportRouteTargetConfig::OtelJsonl(otel_jsonl) = &config.target;
-        Self {
-            name: config.name.clone(),
-            kind: config.target.kind().as_str().to_string(),
-            delivery: config.delivery.as_str().to_string(),
-            enabled: config.enabled,
-            otel_jsonl: OtelJsonlRouteDocument {
-                path: otel_jsonl.path.display().to_string(),
-                overwrite_enabled: otel_jsonl.overwrite_enabled,
-                queue_capacity: otel_jsonl.queue_capacity,
-                flush_every_spans: otel_jsonl.flush_every_spans,
-            },
-        }
-    }
-
-    pub(super) fn to_config(&self) -> Result<ExportRouteConfig, String> {
-        let kind = parse_value::<ExportRouteKind>("export.runtime.routes.kind", &self.kind)?;
-        if kind != ExportRouteKind::OtelJsonl {
-            return Err(format!("unsupported export route kind {}", self.kind));
-        }
-        Ok(ExportRouteConfig {
-            name: required_non_empty("export.runtime.routes.name", &self.name)?.to_string(),
-            enabled: self.enabled,
-            delivery: parse_value::<ExportDeliveryConfig>(
-                "export.runtime.routes.delivery",
-                &self.delivery,
-            )?,
-            target: ExportRouteTargetConfig::OtelJsonl(OtelJsonlExporterConfig {
-                path: PathBuf::from(&self.otel_jsonl.path),
-                overwrite_enabled: self.otel_jsonl.overwrite_enabled,
-                queue_capacity: require_positive_u32(
-                    "export.runtime.routes.otel_jsonl.queue_capacity",
-                    self.otel_jsonl.queue_capacity,
-                )?,
-                flush_every_spans: require_positive_u32(
-                    "export.runtime.routes.otel_jsonl.flush_every_spans",
-                    self.otel_jsonl.flush_every_spans,
-                )?,
-            }),
-        })
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(default, deny_unknown_fields)]
-pub(super) struct OtelJsonlRouteDocument {
-    pub path: String,
-    pub overwrite_enabled: bool,
-    pub queue_capacity: u32,
-    pub flush_every_spans: u32,
-}
-
-impl Default for OtelJsonlRouteDocument {
-    fn default() -> Self {
-        Self {
-            path: "/var/lib/actrail/export/live-spans.otlp.jsonl".to_string(),
-            overwrite_enabled: true,
-            queue_capacity: 1024,
-            flush_every_spans: 1,
         }
     }
 }

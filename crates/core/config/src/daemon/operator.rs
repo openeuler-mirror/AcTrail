@@ -15,9 +15,9 @@ use super::{
     AgentInvocationConfig, ApplicationProtocolConfig, ClusterConfig, CommandControlConfig,
     DiagnosticLogLevel, EbpfCollectorConfig, EnforcementConfig, FileObservationConfig,
     NetworkControlConfig, PayloadConfig, PayloadSocketConfig, PayloadTlsConfig,
-    ProcessSeccompConfig, ResourceMetricsConfig, RuntimeExportConfig, SeccompNotifyConfig,
-    SemanticRetentionConfig, SocketPermissions, SseDataPolicy, StorageRetentionConfig,
-    TraceFinalizationConfig, WebServerConfig, WorkloadDiagnosticsConfig,
+    ProcessSeccompConfig, ResourceMetricsConfig, SeccompNotifyConfig, SemanticRetentionConfig,
+    SocketPermissions, SseDataPolicy, StorageRetentionConfig, TraceFinalizationConfig,
+    WebServerConfig, WorkloadDiagnosticsConfig,
 };
 use crate::capture_profile::{CaptureProfile, LaunchSeccompRequirements};
 use crate::export::ExportConfig;
@@ -53,7 +53,6 @@ pub struct OperatorConfig {
     pub web: WebServerConfig,
     pub cluster: ClusterConfig,
     pub export_config: ExportConfig,
-    pub export_runtime: RuntimeExportConfig,
     pub plugin_discovery: PluginDiscoveryConfig,
     pub plugin_alert_runtime: PluginAlertRuntimeConfig,
     pub startup_plugins: StartupPluginsConfig,

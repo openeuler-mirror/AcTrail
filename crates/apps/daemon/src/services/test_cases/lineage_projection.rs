@@ -34,7 +34,6 @@ fn terminal_reconcile_projects_late_exec_through_process_lineage() {
         super::ResourceMetricsConfig::disabled(),
         super::TraceFinalizationConfig::default(),
         super::WorkloadDiagnostics::default(),
-        super::RuntimeExportConfig::disabled(),
         super::EnforcementConfig::disabled(),
         super::CommandControlConfig::disabled(),
         super::NetworkControlConfig::disabled(),

@@ -134,11 +134,16 @@ If the host cannot run eBPF (no BTF / non-root / no tracefs), the daemon auto-de
 ```bash
 # [host]
 # 1.1 Create runtime directories
-install -d /etc/actrail /var/lib/actrail /run/actrail /var/log/actrail
+install -d /etc/actrail/plugins/otel-jsonl /var/lib/actrail /run/actrail /var/log/actrail
 
 # 1.2 Install the restricted example config (hierarchical TOML: ebpf enabled="auto",
 #     process_seccomp enabled=false, tls-sync on)
 install -m 0644 docs/examples/container-agent-restricted/operator.conf /etc/actrail/actraild.conf
+install -m 0644 \
+  examples/plugins/builtin/otel-jsonl/otel-jsonl.plugin.toml \
+  examples/plugins/builtin/otel-jsonl/otel-jsonl.config.toml \
+  examples/plugins/builtin/otel-jsonl/otel-jsonl.config.v1.schema.json \
+  /etc/actrail/plugins/otel-jsonl/
 
 # 1.3 Confirm the key fields (hierarchical TOML — keys live under [section] headers)
 grep -nE '^\[control\]|^\[ebpf\]|^\[process_seccomp\]|^\[payload.tls\]|^\[storage.sqlite\]|^socket_path|^enabled|^binary_path|^capture_backend|^sync_event_socket_path|^path' /etc/actrail/actraild.conf

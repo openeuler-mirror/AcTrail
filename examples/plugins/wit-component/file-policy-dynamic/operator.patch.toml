@@ -14,9 +14,6 @@ directory = "/tmp/actrail-file-policy-demo/export"
 payload_bytes_enabled = false
 payload_text_enabled = false
 
-[export.runtime]
-enabled = false
-
 [capture]
 profile_name = "file-policy-dynamic-demo"
 capabilities = ["proc-lifecycle", "enforcement-file-permission-fanotify"]

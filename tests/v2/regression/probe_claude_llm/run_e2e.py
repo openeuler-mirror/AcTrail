@@ -20,8 +20,8 @@ from tests.v2.regression.probe_claude_llm.config import (  # noqa: E402
 TEST_DEFINITION = TestDefinition(
     name="probe_claude_llm",
     description="Run Claude through actrailctl launch and verify LLM capture",
-    build_case=lambda repo, bin_dir: ProbeClaudeLLMCase(
-        ProbeClaudeLLMConfig.from_environment(repo, bin_dir)
+    build_case=lambda inputs: ProbeClaudeLLMCase(
+        ProbeClaudeLLMConfig.from_environment(inputs)
     ),
 )
 

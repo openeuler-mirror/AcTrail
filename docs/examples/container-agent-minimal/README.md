@@ -30,8 +30,13 @@ compatibility diagnosis, but it removes Docker's outer syscall allowlist.
 ## Install on host
 
 ```bash
-sudo install -d /etc/actrail /var/lib/actrail /run/actrail /var/log/actrail
+sudo install -d /etc/actrail/plugins/otel-jsonl /var/lib/actrail /run/actrail /var/log/actrail
 sudo install -m 0644 docs/examples/container-agent-minimal/operator.conf /etc/actrail/actraild.conf
+sudo install -m 0644 \
+  examples/plugins/builtin/otel-jsonl/otel-jsonl.plugin.toml \
+  examples/plugins/builtin/otel-jsonl/otel-jsonl.config.toml \
+  examples/plugins/builtin/otel-jsonl/otel-jsonl.config.v1.schema.json \
+  /etc/actrail/plugins/otel-jsonl/
 ./target/release/actraild --config /etc/actrail/actraild.conf start
 ```
 
