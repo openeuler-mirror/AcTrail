@@ -235,7 +235,6 @@ impl PostTraceBroker {
             .get_trace(trace_id)
             .map_err(storage_runtime_error)?
             .ok_or_else(|| trace_missing(trace_id))?;
-        analysis_context(&trace)?;
         Ok(project_activity_context(&trace))
     }
 
@@ -246,11 +245,10 @@ impl PostTraceBroker {
         offset: usize,
         limit: usize,
     ) -> Result<TraceLlmExchangePage, PluginRuntimeError> {
-        let trace = storage
+        storage
             .get_trace(trace_id)
             .map_err(storage_runtime_error)?
             .ok_or_else(|| trace_missing(trace_id))?;
-        analysis_context(&trace)?;
         let actions = storage
             .semantic_actions_matching_kinds(
                 trace_id,
@@ -282,11 +280,10 @@ impl PostTraceBroker {
         offset: usize,
         limit: usize,
     ) -> Result<TraceCommandExecutionPage, PluginRuntimeError> {
-        let trace = storage
+        storage
             .get_trace(trace_id)
             .map_err(storage_runtime_error)?
             .ok_or_else(|| trace_missing(trace_id))?;
-        analysis_context(&trace)?;
         let actions = storage
             .semantic_actions_matching_kinds(
                 trace_id,

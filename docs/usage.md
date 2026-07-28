@@ -13,6 +13,7 @@ Expected binaries:
 ```text
 target/release/actraild
 target/release/actrailctl
+target/release/actrailcluster
 target/release/actrailviewer
 target/release/actrailweb
 target/release/ebpf_probe

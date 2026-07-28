@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 
 def parse_args() -> argparse.Namespace:
@@ -16,6 +18,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bind-port", type=int, default=0)
     parser.add_argument("--response-marker", required=True)
     parser.add_argument("--sleep-seconds", type=float, default=2.0)
+    parser.add_argument("--hold-ready")
+    parser.add_argument("--hold-release")
     return parser.parse_args()
 
 
@@ -25,9 +29,18 @@ def main() -> int:
         raise RuntimeError("--bind-port must be non-negative")
     if args.sleep_seconds <= 0:
         raise RuntimeError("--sleep-seconds must be positive")
+    if bool(args.hold_ready) != bool(args.hold_release):
+        raise RuntimeError("--hold-ready and --hold-release must be provided together")
+    hold_ready = Path(args.hold_ready) if args.hold_ready else None
+    hold_release = Path(args.hold_release) if args.hold_release else None
     server = ThreadingHTTPServer(
         (args.bind_host, args.bind_port),
-        make_handler(args.response_marker, args.sleep_seconds),
+        make_handler(
+            args.response_marker,
+            args.sleep_seconds,
+            hold_ready,
+            hold_release,
+        ),
     )
     host, port = server.server_address
     print(f"provider_base_url=http://{host}:{port}", flush=True)
@@ -38,7 +51,12 @@ def main() -> int:
     return 0
 
 
-def make_handler(response_marker: str, sleep_seconds: float):
+def make_handler(
+    response_marker: str,
+    sleep_seconds: float,
+    hold_ready: Path | None,
+    hold_release: Path | None,
+):
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
@@ -46,13 +64,30 @@ def make_handler(response_marker: str, sleep_seconds: float):
             try:
                 body = read_body(self)
                 request = parse_request(body)
-                if has_tool_result(request):
+                completed_tools = tool_result_count(request)
+                if completed_tools == 0:
+                    chunks = tool_call_chunks(
+                        request,
+                        f"sleep {sleep_seconds:g}",
+                        "call_actrail_activity_sleep",
+                    )
+                    turn = "tool"
+                elif completed_tools == 1 and hold_release is not None:
+                    chunks = tool_call_chunks(
+                        request,
+                        (
+                            f"while [ ! -f {shlex.quote(str(hold_release))} ]; "
+                            "do sleep 0.1; done"
+                        ),
+                        "call_actrail_activity_hold",
+                    )
+                    turn = "hold"
+                else:
                     chunks = final_chunks(request, response_marker)
                     turn = "final"
-                else:
-                    chunks = tool_call_chunks(request, sleep_seconds)
-                    turn = "tool"
                 write_stream(self, chunks)
+                if turn == "hold" and hold_ready is not None:
+                    hold_ready.write_text("ready\n", encoding="utf-8")
                 print(
                     f"activity_provider turn={turn} path={self.path} "
                     f"request_bytes={len(body)} response_events={len(chunks)}",
@@ -88,26 +123,27 @@ def parse_request(body: bytes) -> dict:
     return request
 
 
-def has_tool_result(request: dict) -> bool:
+def tool_result_count(request: dict) -> int:
+    count = 0
     for message in request["messages"]:
         if not isinstance(message, dict):
             continue
         if message.get("role") == "tool":
-            return True
+            count += 1
+            continue
         content = message.get("content")
         if isinstance(content, list) and any(
             isinstance(block, dict)
             and block.get("type") in {"tool_result", "tool-result"}
             for block in content
         ):
-            return True
-    return False
+            count += 1
+    return count
 
 
-def tool_call_chunks(request: dict, sleep_seconds: float) -> list[dict]:
-    name, arguments = bash_tool_call(request, sleep_seconds)
+def tool_call_chunks(request: dict, command: str, call_id: str) -> list[dict]:
+    name, arguments = bash_tool_call(request, command)
     model = str(request.get("model") or "actrail-activity-e2e")
-    call_id = "call_actrail_activity_sleep"
     return [
         chunk(
             model,
@@ -133,7 +169,7 @@ def tool_call_chunks(request: dict, sleep_seconds: float) -> list[dict]:
     ]
 
 
-def bash_tool_call(request: dict, sleep_seconds: float) -> tuple[str, dict]:
+def bash_tool_call(request: dict, command: str) -> tuple[str, dict]:
     tools = request.get("tools")
     if not isinstance(tools, list):
         raise RuntimeError("real agent request did not advertise tools")
@@ -162,7 +198,7 @@ def bash_tool_call(request: dict, sleep_seconds: float) -> tuple[str, dict]:
             raise RuntimeError(
                 f"bash tool {name} exposes no command/cmd input: {sorted(properties)}"
             )
-        return name, {command_key: f"sleep {sleep_seconds:g}"}
+        return name, {command_key: command}
     raise RuntimeError(
         "real agent did not advertise a bash tool: "
         + ",".join(name for name, _ in candidates)

@@ -19,7 +19,7 @@ memory_max_bytes = 67108864
 delivery = "trace-consistent"
 
 [role.observation-consumer.subscriptions]
-event_families = ["semantic-action", "trace-lifecycle"]
+event_families = ["semantic-action", "semantic-action-link", "trace-lifecycle"]
 
 [role.observation-consumer.resources]
 queue_capacity = 4096

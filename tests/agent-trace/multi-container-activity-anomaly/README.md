@@ -4,10 +4,12 @@ This test loads `actrail.activity-anomaly` into one host daemon and runs two rea
 
 The test verifies, for each trace:
 
+- all alerts are persisted while the real xiaoO process is still running a provider-issued hold command and the trace remains `active`;
 - one request-growth alert;
 - one response-growth alert;
 - one long-command alert with a duration above 500 ms;
 - the owning container, trace, process, and Agent action;
+- terminal fallback does not duplicate a live alert;
 - `last_error=none` after analysis.
 
 ## Run

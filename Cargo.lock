@@ -361,6 +361,7 @@ dependencies = [
  "clap",
  "config_core",
  "json_graph_export",
+ "libc",
  "model_core",
  "rusqlite",
  "serde",

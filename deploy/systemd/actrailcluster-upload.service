@@ -1,0 +1,20 @@
+[Unit]
+Description=AcTrail periodic cluster uploader
+After=network-online.target actraild.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+UMask=0027
+StateDirectory=actrail
+StateDirectoryMode=0750
+ConfigurationDirectory=actrail
+ConfigurationDirectoryMode=0755
+ExecStart=/usr/bin/actrailcluster --config /etc/actrail/actraild.conf upload-loop
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

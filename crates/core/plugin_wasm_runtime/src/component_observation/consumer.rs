@@ -280,12 +280,17 @@ impl ObservationConsumer for WitComponentObservationConsumer {
         state.previous_lifecycle = Some(batch.trace.lifecycle_state);
         let input = observation_batch_val(&batch, sequence, lifecycle_transition);
         let fuel_per_call = state.fuel_per_call;
+        let activity_page_max_count = state.post_trace_limits.activity_page_max_count;
+        let activity_total_max_count = state.post_trace_limits.activity_total_max_count;
         let consume = state.consume.clone();
         reset_fuel(&mut state.store, fuel_per_call)?;
         let mut results = [wasmtime::component::Val::Result(Ok(None))];
         state.store.data_mut().set_observation_trace_context(
+            batch.trace.trace_id,
             batch.trace.root_working_directory.clone(),
             &batch.trace.alert_token,
+            activity_page_max_count,
+            activity_total_max_count,
         );
         state
             .store
