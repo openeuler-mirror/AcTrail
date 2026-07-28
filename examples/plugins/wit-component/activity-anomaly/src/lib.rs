@@ -18,7 +18,7 @@ wit_bindgen::generate!({
 
 use actrail::plugin::types::{
     AlertDraft, AlertWriteRequest, CommandExecutionRecord, ConfigReadStatus, LlmExchangeRecord,
-    TraceActivityContext,
+    ObservationEventFamily, TraceActivityContext,
 };
 use exports::actrail::plugin::observation_consumer::{
     Guest as ObservationGuest, ObservationBatch, ObservationReport,
@@ -79,6 +79,22 @@ struct ActivityAnomalyPlugin {
 
 struct TraceState {
     alert_token: Vec<u8>,
+    reported: ReportedAlerts,
+}
+
+#[derive(Clone, Copy, Default)]
+struct ReportedAlerts {
+    request_growth: bool,
+    response_growth: bool,
+    command_duration: bool,
+}
+
+impl ReportedAlerts {
+    fn all_enabled(self, config: &ActivityAnomalyConfig) -> bool {
+        (!config.request_growth.enabled || self.request_growth)
+            && (!config.response_growth.enabled || self.response_growth)
+            && (!config.command_duration.enabled || self.command_duration)
+    }
 }
 
 impl ActivityAnomalyPlugin {
@@ -93,10 +109,14 @@ impl ActivityAnomalyPlugin {
         let has_relevant_activity = batch.semantic_actions.iter().any(|action| {
             matches!(
                 action.kind.as_str(),
-                "llm.request" | "llm.response" | "command.invocation"
+                "llm.call" | "llm.request" | "llm.response" | "command.invocation"
             )
         });
-        if !has_relevant_activity {
+        let can_complete_existing_activity = self.trace_states.contains_key(&batch.trace_id)
+            && batch
+                .families
+                .contains(&ObservationEventFamily::SemanticActionLink);
+        if !has_relevant_activity && !can_complete_existing_activity {
             return Ok(());
         }
         let context = actrail::plugin::observation_context_read::trace_context_get()?;
@@ -110,57 +130,113 @@ impl ActivityAnomalyPlugin {
                     batch.trace_id
                 ));
             }
-            return Ok(());
+        } else {
+            if self.trace_states.len() >= self.config.trace_state_max_count {
+                return Err(format!(
+                    "activity anomaly trace state count exceeded {}",
+                    self.config.trace_state_max_count
+                ));
+            }
+            self.trace_states.insert(
+                batch.trace_id.clone(),
+                TraceState {
+                    alert_token,
+                    reported: ReportedAlerts::default(),
+                },
+            );
         }
-        if self.trace_states.len() >= self.config.trace_state_max_count {
-            return Err(format!(
-                "activity anomaly trace state count exceeded {}",
-                self.config.trace_state_max_count
-            ));
-        }
-        self.trace_states
-            .insert(batch.trace_id, TraceState { alert_token });
-        Ok(())
+        self.evaluate(&batch.trace_id)
     }
 
     fn analyze(&mut self, trace_id: &str) -> Result<(), String> {
-        let Some(state) = self.trace_states.remove(trace_id) else {
+        if !self.trace_states.contains_key(trace_id) {
             return Ok(());
-        };
-        let context = actrail::plugin::trace_activity_read::context_get()?;
-        let mut request = GrowthDetector::new(
-            "request",
-            &self.config.request_growth,
-            self.config.finding_max_count,
-        );
-        let mut response = GrowthDetector::new(
-            "response",
-            &self.config.response_growth,
-            self.config.finding_max_count,
-        );
-        self.read_llm_exchanges(&mut request, &mut response)?;
-        let command_findings = self.read_commands()?;
+        }
+        let result = self.evaluate(trace_id);
+        self.trace_states.remove(trace_id);
+        result
+    }
 
-        if request.has_findings() {
-            let payload = request.payload(&context);
-            submit_alert(trace_id, &state.alert_token, REQUEST_ALERT_KEY, &payload)?;
+    fn evaluate(&mut self, trace_id: &str) -> Result<(), String> {
+        let state = self
+            .trace_states
+            .get(trace_id)
+            .ok_or_else(|| format!("activity anomaly trace state {trace_id} is unavailable"))?;
+        let alert_token = state.alert_token.clone();
+        let reported = state.reported;
+        if reported.all_enabled(&self.config) {
+            return Ok(());
         }
-        if response.has_findings() {
-            let payload = response.payload(&context);
-            submit_alert(trace_id, &state.alert_token, RESPONSE_ALERT_KEY, &payload)?;
-        }
-        if command_findings.total_count > 0 {
-            let truncated_count = command_findings.truncated_count();
-            let payload = CommandDurationPayload {
-                root_container_id: context.root_container_id.clone(),
-                root_process_id: context.root_process_id.clone(),
-                display_name: context.display_name.clone(),
-                profile_name: context.profile_name.clone(),
-                maximum_duration_ms: self.config.command_duration.maximum_duration_ms,
-                findings: command_findings.findings,
-                truncated_count,
+        let context = actrail::plugin::trace_activity_read::context_get()?;
+        let (request_payload, response_payload) =
+            if reported.request_growth && reported.response_growth {
+                (None, None)
+            } else {
+                let mut request = GrowthDetector::new(
+                    "request",
+                    &self.config.request_growth,
+                    self.config.finding_max_count,
+                );
+                let mut response = GrowthDetector::new(
+                    "response",
+                    &self.config.response_growth,
+                    self.config.finding_max_count,
+                );
+                self.read_llm_exchanges(&mut request, &mut response)?;
+                (
+                    (!reported.request_growth && request.has_findings())
+                        .then(|| request.payload(&context)),
+                    (!reported.response_growth && response.has_findings())
+                        .then(|| response.payload(&context)),
+                )
             };
-            submit_alert(trace_id, &state.alert_token, COMMAND_ALERT_KEY, &payload)?;
+        let command_payload = if reported.command_duration {
+            None
+        } else {
+            let command_findings = self.read_commands()?;
+            (command_findings.total_count > 0).then(|| {
+                let truncated_count = command_findings.truncated_count();
+                CommandDurationPayload {
+                    root_container_id: context.root_container_id.clone(),
+                    root_process_id: context.root_process_id.clone(),
+                    display_name: context.display_name.clone(),
+                    profile_name: context.profile_name.clone(),
+                    maximum_duration_ms: self.config.command_duration.maximum_duration_ms,
+                    findings: command_findings.findings,
+                    truncated_count,
+                }
+            })
+        };
+
+        if let Some(payload) = request_payload {
+            submit_alert(trace_id, &alert_token, REQUEST_ALERT_KEY, &payload)?;
+            self.trace_states
+                .get_mut(trace_id)
+                .ok_or_else(|| {
+                    format!("activity anomaly trace state {trace_id} disappeared while evaluating")
+                })?
+                .reported
+                .request_growth = true;
+        }
+        if let Some(payload) = response_payload {
+            submit_alert(trace_id, &alert_token, RESPONSE_ALERT_KEY, &payload)?;
+            self.trace_states
+                .get_mut(trace_id)
+                .ok_or_else(|| {
+                    format!("activity anomaly trace state {trace_id} disappeared while evaluating")
+                })?
+                .reported
+                .response_growth = true;
+        }
+        if let Some(payload) = command_payload {
+            submit_alert(trace_id, &alert_token, COMMAND_ALERT_KEY, &payload)?;
+            self.trace_states
+                .get_mut(trace_id)
+                .ok_or_else(|| {
+                    format!("activity anomaly trace state {trace_id} disappeared while evaluating")
+                })?
+                .reported
+                .command_duration = true;
         }
         Ok(())
     }

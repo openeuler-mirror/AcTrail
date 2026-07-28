@@ -1,5 +1,7 @@
 //! Minimal offline/periodic cluster reporting for AcTrail.
 
+mod upload_loop;
+
 use std::fs;
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -49,6 +51,8 @@ enum Command {
     },
     #[command(about = "Upload terminal traces once according to [cluster.report]")]
     UploadOnce,
+    #[command(about = "Continuously upload traces according to [cluster.report]")]
+    UploadLoop,
     #[command(about = "Receive bundles on the center node")]
     Serve,
     #[command(about = "Import one bundle file into the center index")]
@@ -76,8 +80,9 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<(), String> {
         }
         Command::UploadOnce => {
             let config = OperatorConfig::load(&cli.config_path)?;
-            upload_once(&config)
+            upload_once(&config).map(|_| ())
         }
+        Command::UploadLoop => upload_loop::run(&cli.config_path),
         Command::Serve => {
             let config = OperatorConfig::load(&cli.config_path)?;
             serve(&config.cluster.center)
@@ -134,7 +139,14 @@ fn pack_trace(
     Ok(manifest)
 }
 
-fn upload_once(config: &OperatorConfig) -> Result<(), String> {
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct UploadSummary {
+    pub(crate) uploaded: u32,
+    pub(crate) skipped_unchanged: u32,
+    pub(crate) failed: u32,
+}
+
+pub(crate) fn upload_once(config: &OperatorConfig) -> Result<UploadSummary, String> {
     validate_cluster_config(&config.cluster)?;
     let report = &config.cluster.report;
     if !config.cluster.enabled || !report.enabled {
@@ -170,11 +182,10 @@ fn upload_once(config: &OperatorConfig) -> Result<(), String> {
     let token = read_optional_token(report.auth_token_file.as_deref())?;
     let mut uploaded = 0_u32;
     let mut skipped_unchanged = 0_u32;
+    let mut failed = 0_u32;
+    let mut attempted = 0_u32;
     let mut visited = 0_u32;
     for trace in traces {
-        if uploaded >= report.batch_max_traces {
-            break;
-        }
         if report.terminal_only && !trace.lifecycle_state.is_terminal() {
             continue;
         }
@@ -190,6 +201,10 @@ fn upload_once(config: &OperatorConfig) -> Result<(), String> {
             );
             continue;
         }
+        if attempted >= report.batch_max_traces {
+            break;
+        }
+        attempted += 1;
         let bundle_path = report
             .spool_dir
             .join(safe_bundle_file_name(&trace_uid, "actrailbundle"));
@@ -217,6 +232,7 @@ fn upload_once(config: &OperatorConfig) -> Result<(), String> {
                     Ok(bundle_fingerprint) => bundle_fingerprint,
                     Err(error) => {
                         state.mark_failed(&trace_uid, &local_trace_id, &bundle_path, &error)?;
+                        failed += 1;
                         eprintln!("fingerprint failed for {trace_uid}: {error}");
                         continue;
                     }
@@ -255,18 +271,27 @@ fn upload_once(config: &OperatorConfig) -> Result<(), String> {
                     }
                     Err(error) => {
                         state.mark_failed(&trace_uid, &local_trace_id, &bundle_path, &error)?;
+                        failed += 1;
                         eprintln!("upload failed for {trace_uid}: {error}");
                     }
                 }
             }
             Err(error) => {
                 state.mark_failed(&trace_uid, &local_trace_id, &bundle_path, &error)?;
+                failed += 1;
                 eprintln!("pack failed for {trace_uid}: {error}");
             }
         }
     }
-    println!("upload-once completed: uploaded={uploaded} skipped_unchanged={skipped_unchanged}");
-    Ok(())
+    println!(
+        "upload-once completed: attempted={attempted} uploaded={uploaded} \
+         skipped_unchanged={skipped_unchanged} failed={failed}"
+    );
+    Ok(UploadSummary {
+        uploaded,
+        skipped_unchanged,
+        failed,
+    })
 }
 
 fn serve(center: &ClusterCenterConfig) -> Result<(), String> {

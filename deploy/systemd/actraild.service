@@ -1,0 +1,25 @@
+[Unit]
+Description=AcTrail host daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+UMask=0027
+RuntimeDirectory=actrail
+RuntimeDirectoryMode=0755
+StateDirectory=actrail
+StateDirectoryMode=0750
+LogsDirectory=actrail
+LogsDirectoryMode=0750
+ConfigurationDirectory=actrail
+ConfigurationDirectoryMode=0755
+ExecStartPre=/usr/bin/actraild --config /etc/actrail/actraild.conf init
+ExecStart=/usr/bin/actraild --config /etc/actrail/actraild.conf run
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -134,6 +134,13 @@ def main() -> int:
             hold_seconds=0,
         ),
     ]
+    hold_gates = {
+        workload.suffix: (
+            runtime / f"provider-{workload.suffix}.hold-ready",
+            runtime / f"provider-{workload.suffix}.hold-release",
+        )
+        for workload in workloads
+    }
     config = runtime / "operator.conf"
     database = runtime / "data/actrail.sqlite"
     daemon_log = runtime / "log/daemon.stdout"
@@ -151,9 +158,12 @@ def main() -> int:
             plugin_artifact,
         )
         for workload in workloads:
+            hold_ready, hold_release = hold_gates[workload.suffix]
             provider, provider_url = start_provider(
                 provider_script,
                 workload.response_marker,
+                hold_ready,
+                hold_release,
                 args.ready_timeout_seconds,
                 repo,
             )
@@ -200,6 +210,24 @@ def main() -> int:
         }
         base.require_trace_container_isolation(trace_rows, set(container_ids.values()))
 
+        wait_for_hold_commands(
+            [ready for ready, _release in hold_gates.values()],
+            launches,
+            workloads,
+            args.launch_timeout_seconds,
+        )
+        live_alert_rows = wait_for_alerts(
+            database,
+            len(workloads) * len(EXPECTED_DEFINITIONS),
+            args.drain_timeout_seconds,
+        )
+        require_live_alert_delivery(database, launches, workloads)
+        print(
+            "activity_anomaly_live_delivery "
+            f"agents_running={len(launches)} alerts={len(live_alert_rows)} "
+            "trace_states=active"
+        )
+        release_hold_commands([release for _ready, release in hold_gates.values()])
         outputs = base.wait_for_launches(
             launches,
             workloads,
@@ -213,7 +241,7 @@ def main() -> int:
         )
         trace_rows_by_name = trace_rows_by_display_name(database)
         verify_trace_identity(trace_rows_by_name, workloads, container_ids)
-        alert_rows = wait_for_alerts(
+        alert_rows = wait_for_stable_alerts(
             database,
             len(workloads) * len(EXPECTED_DEFINITIONS),
             args.drain_timeout_seconds,
@@ -322,6 +350,8 @@ def prepare_plugin_package(
 def start_provider(
     script: Path,
     response_marker: str,
+    hold_ready: Path,
+    hold_release: Path,
     timeout: float,
     cwd: Path,
 ) -> tuple[subprocess.Popen[str], str]:
@@ -333,6 +363,10 @@ def start_provider(
             response_marker,
             "--sleep-seconds",
             "2",
+            "--hold-ready",
+            str(hold_ready),
+            "--hold-release",
+            str(hold_release),
         ],
         cwd=cwd,
         text=True,
@@ -354,6 +388,61 @@ def start_provider(
             stderr = process.stderr.read() if process.stderr is not None else ""
             raise RuntimeError(f"activity provider exited early: {stderr}")
     raise RuntimeError("activity provider did not report its listen URL")
+
+
+def wait_for_hold_commands(
+    ready_paths: list[Path],
+    launches: list[subprocess.Popen[str]],
+    workloads: list,
+    timeout: float,
+) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for launch, workload in zip(launches, workloads):
+            if launch.poll() is not None:
+                stdout, stderr = launch.communicate()
+                raise RuntimeError(
+                    f"{workload.container_name} exited before the live-alert hold command "
+                    f"exit={launch.returncode} stdout={stdout} stderr={stderr}"
+                )
+        if all(path.is_file() for path in ready_paths):
+            return
+        time.sleep(0.05)
+    missing = [str(path) for path in ready_paths if not path.is_file()]
+    raise RuntimeError(f"real agents did not start their hold commands: {missing}")
+
+
+def release_hold_commands(release_paths: list[Path]) -> None:
+    for path in release_paths:
+        path.write_text("release\n", encoding="utf-8")
+
+
+def require_live_alert_delivery(
+    database: Path,
+    launches: list[subprocess.Popen[str]],
+    workloads: list,
+) -> None:
+    stopped = [
+        workload.container_name
+        for launch, workload in zip(launches, workloads)
+        if launch.poll() is not None
+    ]
+    if stopped:
+        raise RuntimeError(f"agents stopped before live alerts were verified: {stopped}")
+    with sqlite3.connect(database) as connection:
+        rows = connection.execute(
+            """
+            SELECT display_name, lifecycle_state
+            FROM traces
+            WHERE profile_name LIKE ?
+            ORDER BY trace_id
+            """,
+            (f"{PROFILE_NAME}%",),
+        ).fetchall()
+    expected_names = {workload.trace_name for workload in workloads}
+    actual_names = {str(name) for name, _state in rows}
+    if actual_names != expected_names or any(state != "active" for _name, state in rows):
+        raise RuntimeError(f"alerts were not delivered while all traces were active: {rows}")
 
 
 def rewrite_provider_host(url: str, host: str) -> str:
@@ -477,22 +566,46 @@ def wait_for_alerts(database: Path, expected: int, timeout: float) -> list[tuple
     deadline = time.monotonic() + timeout
     rows: list[tuple] = []
     while time.monotonic() < deadline:
-        with sqlite3.connect(database) as connection:
-            rows = connection.execute(
-                """
-                SELECT a.trace_id, d.definition_key, d.kind, a.payload_json
-                FROM alerts a
-                JOIN alert_definitions d
-                  ON d.alert_definition_id = a.alert_definition_id
-                WHERE d.producer_plugin_id = ?
-                ORDER BY a.trace_id, d.definition_key
-                """,
-                (PLUGIN_ID,),
-            ).fetchall()
+        rows = activity_alert_rows(database)
         if len(rows) == expected:
             return rows
         time.sleep(0.1)
     raise RuntimeError(f"expected {expected} activity alerts, found {rows}")
+
+
+def wait_for_stable_alerts(database: Path, expected: int, timeout: float) -> list[tuple]:
+    deadline = time.monotonic() + timeout
+    stable_since: float | None = None
+    rows: list[tuple] = []
+    while time.monotonic() < deadline:
+        rows = activity_alert_rows(database)
+        if len(rows) > expected:
+            raise RuntimeError(
+                f"activity alerts duplicated after terminal fallback: {rows}"
+            )
+        if len(rows) == expected:
+            stable_since = stable_since or time.monotonic()
+            if time.monotonic() - stable_since >= 1.5:
+                return rows
+        else:
+            stable_since = None
+        time.sleep(0.1)
+    raise RuntimeError(f"expected {expected} stable activity alerts, found {rows}")
+
+
+def activity_alert_rows(database: Path) -> list[tuple]:
+    with sqlite3.connect(database) as connection:
+        return connection.execute(
+            """
+            SELECT a.trace_id, d.definition_key, d.kind, a.payload_json
+            FROM alerts a
+            JOIN alert_definitions d
+              ON d.alert_definition_id = a.alert_definition_id
+            WHERE d.producer_plugin_id = ?
+            ORDER BY a.trace_id, d.definition_key
+            """,
+            (PLUGIN_ID,),
+        ).fetchall()
 
 
 def verify_alerts(

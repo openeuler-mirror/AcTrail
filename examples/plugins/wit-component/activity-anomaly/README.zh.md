@@ -1,6 +1,6 @@
 # 请求/响应增长与长命令告警插件
 
-`actrail.activity-anomaly` 是 WIT Component 观测插件，在 trace 进入终态后生成以下告警：
+`actrail.activity-anomaly` 是 WIT Component 观测插件。相关活动事实一旦完整且命中规则，插件立即写入告警，不等待 Agent 或 trace 结束：
 
 | 告警类型（`kind`） | 触发条件 |
 | --- | --- |
@@ -31,7 +31,7 @@
 ended_at_ms - started_at_ms > maximum_duration_ms
 ```
 
-命令未结束或缺少可靠时间时不产生告警。启用 seccomp notify 并成功采集 argv 后，告警包含完整命令行；否则仅包含可执行文件。
+命令结束事件提供可靠时间后立即判断；命令仍在运行或缺少可靠时间时不产生告警。启用 seccomp notify 并成功采集 argv 后，告警包含完整命令行；否则仅包含可执行文件。
 
 ## 权限与数据范围
 
@@ -39,10 +39,10 @@ ended_at_ms - started_at_ms > maximum_duration_ms
 
 | capability | 用途 |
 | --- | --- |
-| `trace-activity-read` | 读取当前终态 trace 的 LLM 字节计数、命令执行事实和容器归属 |
+| `trace-activity-read` | 在当前 observation trace 范围内读取已持久化的 LLM 字节计数、命令执行事实和容器归属 |
 | `alert-write` | 写入 manifest 中已声明的告警 |
 
-插件不读取请求或响应正文，也不能查询其他 trace。分析和告警写入不在被观测进程的同步执行路径上。
+插件不读取请求或响应正文，也不能查询其他 trace。实时分析和告警写入位于异步 observation worker，不在被观测进程的同步执行路径上。trace 进入终态后还会执行一次兜底分析，并释放该 trace 的插件状态。
 
 ## 多容器隔离
 

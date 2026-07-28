@@ -30,8 +30,12 @@ pub(crate) struct WasmStoreState {
 
 #[derive(Clone, Debug)]
 pub(crate) struct ObservationTraceContext {
+    pub(crate) trace_id: TraceId,
     pub(crate) working_directory: Option<String>,
     pub(crate) alert_token: Option<TraceAlertToken>,
+    pub(crate) activity_page_max_count: usize,
+    pub(crate) activity_total_max_count: usize,
+    pub(crate) activity_rows_read: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -170,17 +174,28 @@ impl WasmStoreState {
         self.observation_trace_context.as_ref()
     }
 
+    pub(crate) fn observation_trace_context_mut(&mut self) -> Option<&mut ObservationTraceContext> {
+        self.observation_trace_context.as_mut()
+    }
+
     pub(crate) fn set_observation_trace_context(
         &mut self,
+        trace_id: TraceId,
         working_directory: Option<String>,
         alert_token: &TraceAlertToken,
+        activity_page_max_count: usize,
+        activity_total_max_count: usize,
     ) {
         self.observation_trace_context = Some(ObservationTraceContext {
+            trace_id,
             working_directory,
             alert_token: self
                 .host_grants
                 .can_write_alerts()
                 .then(|| alert_token.clone()),
+            activity_page_max_count,
+            activity_total_max_count,
+            activity_rows_read: 0,
         });
     }
 

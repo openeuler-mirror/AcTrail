@@ -91,7 +91,7 @@ For a persistent deployment, review these fields first:
 
 AcTrail fails fast for unsupported required capabilities. Do not add broad fallback configs that silently reduce coverage.
 
-`scripts/install-release.sh` installs four official packages under `${ACTRAIL_PLUGIN_DIR:-$HOME/.actrail/plugins}`: `otel-jsonl/` exposes the built-in live OTLP JSONL exporter, `file-leakage/` provides post-trace leakage detection, `activity-anomaly/` detects terminal-trace activity anomalies, and `file-policy-dynamic/` manages dynamic allow, deny, and gray file rules. Installation only makes these packages discoverable. The generated startup list remains empty and disabled; use the local Plugins Web workspace or the plugin CLI to load a package explicitly.
+`scripts/install-release.sh` installs four official packages under `${ACTRAIL_PLUGIN_DIR:-$HOME/.actrail/plugins}`: `otel-jsonl/` exposes the built-in live OTLP JSONL exporter, `file-leakage/` provides post-trace leakage detection, `activity-anomaly/` reports LLM growth and completed long-command anomalies while a trace is active and uses terminal analysis as a fallback, and `file-policy-dynamic/` manages dynamic allow, deny, and gray file rules. Installation only makes these packages discoverable. The generated startup list remains empty and disabled; use the local Plugins Web workspace or the plugin CLI to load a package explicitly.
 
 The dynamic file-policy plugin requests `file-policy.rules.apply`, whose grants must include allowed rule decisions and absolute path scopes. Select the candidate in the Web workspace, configure those grants in the load dialog, and load the instance. The daemon validates the submitted grants before activating the plugin. Web lifecycle operations are privileged daemon administration, so run `actrailweb` as an authorized local administrator and keep its listener on a trusted interface.
 
@@ -165,6 +165,41 @@ Clean local runtime artifacts when intentionally resetting a test deployment:
 ```
 
 Do not run `clean` against a config whose storage/log artifacts must be retained.
+
+## RPM-Managed Services And Cluster Upload
+
+The RPM installs and enables two system services:
+
+```bash
+systemctl status actraild.service
+systemctl status actrailcluster-upload.service
+```
+
+`actraild.service` initializes `/etc/actrail/actraild.conf` only when it does
+not exist, then runs the daemon in the foreground. An existing valid config is
+kept unchanged. An invalid config makes the service fail visibly and is never
+replaced automatically.
+
+`actrailcluster-upload.service` runs:
+
+```bash
+actrailcluster --config /etc/actrail/actraild.conf upload-loop
+```
+
+The process stays active when reporting is disabled, but does not connect to a
+center node until both `[cluster].enabled` and `[cluster.report].enabled` are
+true. It reloads the config before each round, uses
+`cluster.report.interval_secs` after successful rounds, and exponentially
+backs off failed rounds from `retry_backoff_secs` through
+`max_retry_backoff_secs`. A lock next to `state_path` prevents two upload loops
+from sharing the same report state. Newly generated configs default
+`interval_secs` to `43200` seconds (12 hours).
+
+The RPM also installs an interactive shell alias so `nga <args>` expands to
+`actrailctl launch -- nga <args>` without replacing a system `nga` executable.
+New login shells load the alias. Set `ACTRAIL_NGA_AUTO_LAUNCH=0` before the
+profile is sourced, or invoke the external command through a shell-specific
+alias bypass, when AcTrail launch is not wanted.
 
 ## Launch-Time Features
 

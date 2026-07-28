@@ -183,7 +183,20 @@ fn activity_host(
         state.host_grants().can_read_trace_activity(),
         "trace-activity-read",
     )?;
-    current_task(state)
+    let trace_id = state
+        .observation_trace_context()
+        .map(|context| context.trace_id)
+        .or_else(|| state.post_trace_task().map(|task| task.trace_id))
+        .ok_or_else(|| {
+            PluginRuntimeError::new(
+                "trace_activity_host",
+                "trace activity call context is unavailable",
+            )
+        })?;
+    let host = state.post_trace_host().cloned().ok_or_else(|| {
+        PluginRuntimeError::new("trace_activity_host", "host broker is unavailable")
+    })?;
+    Ok((host, trace_id))
 }
 
 fn activity_page_request(
@@ -200,12 +213,18 @@ fn activity_page_request(
         .transpose()?
         .unwrap_or_default();
     let limit = usize::try_from(*limit).map_err(limit_overflow)?;
-    let task = state
-        .post_trace_task()
-        .ok_or_else(|| missing_task(operation))?;
-    if limit == 0 || limit > task.limits.activity_page_max_count {
+    let page_max_count = state
+        .observation_trace_context()
+        .map(|context| context.activity_page_max_count)
+        .or_else(|| {
+            state
+                .post_trace_task()
+                .map(|task| task.limits.activity_page_max_count)
+        })
+        .ok_or_else(|| missing_activity_context(operation))?;
+    if limit == 0 || limit > page_max_count {
         return Err(PluginRuntimeError::new(
-            "post_trace_host",
+            "trace_activity_host",
             format!("{operation} page limit is zero or exceeds the grant"),
         ));
     }
@@ -216,8 +235,26 @@ fn account_activity_rows(
     state: &mut WasmStoreState,
     row_count: usize,
 ) -> Result<(), PluginRuntimeError> {
+    if let Some(context) = state.observation_trace_context_mut() {
+        context.activity_rows_read = context
+            .activity_rows_read
+            .checked_add(row_count)
+            .ok_or_else(|| {
+                PluginRuntimeError::new("trace_activity_host", "activity read counter overflow")
+            })?;
+        if context.activity_rows_read > context.activity_total_max_count {
+            return Err(PluginRuntimeError::new(
+                "trace_activity_host",
+                "trace activity total read limit exceeded",
+            ));
+        }
+        return Ok(());
+    }
     let task = state.post_trace_task_mut().ok_or_else(|| {
-        PluginRuntimeError::new("post_trace_host", "post-trace task context is unavailable")
+        PluginRuntimeError::new(
+            "trace_activity_host",
+            "trace activity call context is unavailable",
+        )
     })?;
     task.activity_rows_read = task
         .activity_rows_read
@@ -227,7 +264,7 @@ fn account_activity_rows(
         })?;
     if task.activity_rows_read > task.limits.activity_total_max_count {
         return Err(PluginRuntimeError::new(
-            "post_trace_host",
+            "trace_activity_host",
             "trace activity total read limit exceeded",
         ));
     }
@@ -578,6 +615,13 @@ fn missing_task(operation: &str) -> PluginRuntimeError {
     PluginRuntimeError::new(
         "post_trace_host",
         format!("{operation} requires an active post-trace task"),
+    )
+}
+
+fn missing_activity_context(operation: &str) -> PluginRuntimeError {
+    PluginRuntimeError::new(
+        "trace_activity_host",
+        format!("{operation} requires an observation or post-trace call context"),
     )
 }
 
