@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "consecutive-failure-alert-v1",
+  "title": "Consecutive Failure Alert Payload",
+  "description": "Payload schema for tool-consecutive-failure-alert plugin alerts",
+  "type": "object",
+  "required": [
+    "alert_type",
+    "timestamp",
+    "tool_name",
+    "tool_args",
+    "consecutive_failures",
+    "threshold",
+    "failure_summary",
+    "failure_sequence",
+    "evidence_action_ids"
+  ],
+  "properties": {
+    "alert_type": {
+      "type": "string",
+      "const": "consecutive_failure"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of the alert"
+    },
+    "tool_name": {
+      "type": "string",
+      "description": "Tool name used for state keying (bare or full depending on tool_name_format)"
+    },
+    "tool_args": {
+      "type": "string",
+      "description": "Command line arguments (command.line attribute). Empty when desensitization=summary_only."
+    },
+    "consecutive_failures": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Number of consecutive failures observed"
+    },
+    "threshold": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Alert threshold that was exceeded"
+    },
+    "failure_summary": {
+      "type": "string",
+      "description": "Summary of the latest failure (command.failure.summary)"
+    },
+    "failure_sequence": {
+      "type": "object",
+      "required": ["first_action_id", "last_action_id"],
+      "properties": {
+        "first_action_id": {
+          "type": "string",
+          "description": "Action ID of the first failure in the sequence"
+        },
+        "last_action_id": {
+          "type": "string",
+          "description": "Action ID of the last failure in the sequence"
+        }
+      },
+      "description": "Boundaries of the consecutive failure sequence"
+    },
+    "evidence_action_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Action IDs of all failures in the consecutive sequence"
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,5 +1,7 @@
 //! Construction for the storage-backed attach service.
 
+use std::collections::BTreeMap;
+
 use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, CommandControlConfig, DiagnosticLogLevel,
     EbpfCollectorConfig, FileObservationConfig, NetworkControlConfig, PayloadConfig,
@@ -245,6 +247,7 @@ impl StorageAttachService {
             diagnosed_terminal_open_memberships: Default::default(),
             provider_classifier,
             provider_classification_enabled,
+            pending_tool_names: BTreeMap::new(),
         })
     }
 }
