@@ -11,6 +11,7 @@ use model_core::event::{DomainEvent, EventPayload};
 use model_core::ids::TraceId;
 use model_core::process::{ProcessIdentity, ProcessRecord};
 use recording_runtime::{SemanticActionBatch, TraceStateRecord};
+use semantic_action::{SemanticActionKind, SemanticActionLinkRole, attr_keys as attrs};
 use trace_runtime::registry::TraceRuntime;
 
 use crate::services::attach::StorageAttachService;
@@ -115,6 +116,12 @@ impl StorageAttachService {
             semantic_action_count,
             semantic_link_count,
         );
+        if let Some(&trace_id) = batch.trace_ids.iter().next() {
+            Self::propagate_tool_names_to_commands(
+                &mut batch.semantic_actions,
+                self.pending_tool_names.entry(trace_id).or_default(),
+            );
+        }
         self.persist_live_event_batch(trace_runtime, batch)
     }
 
@@ -178,6 +185,12 @@ impl StorageAttachService {
             semantic_action_count,
             semantic_link_count,
         );
+        if let Some(&trace_id) = batch.trace_ids.iter().next() {
+            Self::propagate_tool_names_to_commands(
+                &mut batch.semantic_actions,
+                self.pending_tool_names.entry(trace_id).or_default(),
+            );
+        }
         self.persist_live_event_batch(trace_runtime, batch)
     }
 
@@ -228,6 +241,139 @@ impl StorageAttachService {
             target_path.as_deref(),
         );
         event
+    }
+
+    /// 将 LlmResponse 中的工具名传播到 CommandInvocation 上。
+    ///
+    /// 通过两阶段匹配：
+    /// 1. 同 batch 内：通过 semantic_links 中的 LlmCall → LlmResponse → CommandInvocation 链路
+    /// 2. 跨 batch：通过 pending_tool_names 缓存（LlmResponse 在后续 batch 到达时填充）
+    fn propagate_tool_names_to_commands(
+        batch: &mut SemanticActionBatch,
+        pending_tool_names: &mut BTreeMap<String, String>,
+    ) {
+        // 1. 收集 LlmResponse 中的工具名：llm_call_action_id → tool_name
+        //    同时缓存到 pending_tool_names 供后续 batch 使用
+        let mut response_tool_names: BTreeMap<String, String> = BTreeMap::new();
+        for action in batch.actions() {
+            if action.kind == SemanticActionKind::LlmResponse {
+                if let Some(tool_calls_json) =
+                    action.attributes.get(attrs::llm_response::TOOL_CALLS_JSON)
+                {
+                    if let Ok(tool_calls) =
+                        serde_json::from_str::<Vec<serde_json::Value>>(tool_calls_json)
+                    {
+                        for tc in &tool_calls {
+                            if let Some(name) = tc
+                                .get("function")
+                                .and_then(|f| f.get("name"))
+                                .and_then(|n| n.as_str())
+                            {
+                                response_tool_names
+                                    .insert(action.action_id.clone(), name.to_string());
+                                break; // 取第一个工具名
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. 通过 links 建立关联链
+        //    link: parent_action_id → child_action_id
+        let mut llm_call_to_response: BTreeMap<&str, &str> = BTreeMap::new();
+        let mut command_to_llm_call: BTreeMap<&str, &str> = BTreeMap::new();
+        for link in batch.links() {
+            match link.role {
+                SemanticActionLinkRole::LlmCallResponse => {
+                    // parent = LlmCall, child = LlmResponse
+                    llm_call_to_response
+                        .insert(&link.parent_action_id, &link.child_action_id);
+                }
+                SemanticActionLinkRole::CommandContainsLlmCall => {
+                    // parent = CommandInvocation, child = LlmCall
+                    command_to_llm_call
+                        .insert(&link.parent_action_id, &link.child_action_id);
+                }
+                _ => {}
+            }
+        }
+
+        // 3. 通过 LlmCall 桥接，找到 CommandInvocation → tool_name 的映射
+        let mut command_to_tool_name: BTreeMap<String, String> = BTreeMap::new();
+        for (command_id, llm_call_id) in &command_to_llm_call {
+            if let Some(response_id) = llm_call_to_response.get(llm_call_id) {
+                if let Some(tool_name) = response_tool_names.get(*response_id) {
+                    command_to_tool_name
+                        .insert(command_id.to_string(), tool_name.clone());
+                }
+            }
+        }
+
+        // 4. 将工具名写入对应 CommandInvocation 的 attributes（同 batch 匹配）
+        for action in batch.actions_mut() {
+            if action.kind == SemanticActionKind::CommandInvocation {
+                if let Some(tool_name) = command_to_tool_name.get(&action.action_id) {
+                    action.attributes.insert(
+                        attrs::command::TOOL_NAME.to_string(),
+                        tool_name.clone(),
+                    );
+                }
+            }
+        }
+
+        // 5. 跨 batch 匹配：用 pending_tool_names 缓存查找尚未匹配的 CommandInvocation
+        //    （LlmResponse 在后续 batch 到达时，retroactively 更新之前 batch 中的 CommandInvocation）
+        let mut needs_update = false;
+        for action in batch.actions() {
+            if action.kind == SemanticActionKind::CommandInvocation
+                && !action.attributes.contains_key(attrs::command::TOOL_NAME)
+            {
+                // 该 CommandInvocation 尚未有 tool_name，尝试从缓存中查找
+                if let Some(tool_name) = pending_tool_names.get(&action.action_id) {
+                    command_to_tool_name
+                        .insert(action.action_id.clone(), tool_name.clone());
+                    needs_update = true;
+                }
+            }
+        }
+        if needs_update {
+            for action in batch.actions_mut() {
+                if action.kind == SemanticActionKind::CommandInvocation
+                    && !action.attributes.contains_key(attrs::command::TOOL_NAME)
+                {
+                    if let Some(tool_name) = command_to_tool_name.get(&action.action_id) {
+                        action.attributes.insert(
+                            attrs::command::TOOL_NAME.to_string(),
+                            tool_name.clone(),
+                        );
+                    }
+                }
+            }
+        }
+
+        // 6. 将当前 batch 中新发现的工具名存入缓存，供后续 batch 使用
+        //    （当 LlmResponse 在 batch N 到达，但 CommandInvocation 在 batch N-1 已写入 DB 时，
+        //     这里缓存的映射会在 batch N+1 的 CommandInvocation 到达时被使用）
+        for (llm_call_id, tool_name) in &response_tool_names {
+            // 找到该 LlmResponse 对应的 LlmCall，再找到对应的 CommandInvocation
+            if let Some(llm_call_action) = batch.actions().iter().find(|a| {
+                a.kind == SemanticActionKind::LlmCall
+                    && a.attributes
+                        .get(attrs::llm_call::RESPONSE_ACTION_ID)
+                        .is_some_and(|id| id == llm_call_id)
+            }) {
+                // 通过 links 找到 LlmCall 的父 CommandInvocation
+                for link in batch.links() {
+                    if link.role == SemanticActionLinkRole::CommandContainsLlmCall
+                        && link.child_action_id == llm_call_action.action_id
+                    {
+                        pending_tool_names
+                            .insert(link.parent_action_id.clone(), tool_name.clone());
+                    }
+                }
+            }
+        }
     }
 }
 

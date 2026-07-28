@@ -1,0 +1,33 @@
+[general]
+id = "tool-consecutive-failure-alert"
+api_version = "actrail.plugin.v2"
+role = "observation-consumer"
+runtime = "wasm"
+
+[host]
+capabilities = ["alert-write"]
+
+[runtime.wasm]
+artifact_path = "actrail_tool_consecutive_failure_alert.wasm"
+abi = "wit-component"
+
+[hostcall_limits.plugin_config]
+read_max_bytes = 4096
+
+[role.observation-consumer.subscriptions]
+event_families = ["semantic-action"]
+
+[role.observation-consumer.resources]
+queue_capacity = 4096
+
+[plugin_config]
+format = "toml"
+schema_ref = "config.schema.json"
+required = true
+
+[outputs.alerts.consecutive-failure]
+kind = "consecutive_failure"
+title = "同一工具连续失败告警"
+severity = "high"
+payload_schema_id = "consecutive-failure-alert-v1"
+payload_schema_ref = "alert-schema.json"
