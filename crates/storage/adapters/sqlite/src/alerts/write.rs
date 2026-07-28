@@ -64,7 +64,6 @@ impl AlertWriteStore for SqliteStorage {
             return Ok(AlertSubmitOutcome::RejectedTraceToken);
         }
         let canonical_payload = AlertInputValidator::canonical_payload(draft)?;
-        let canonical_payload = patch_payload_timestamp(&canonical_payload, created_at);
         let definition_id = transaction
             .query_row(
                 "SELECT alert_definition_id FROM alert_definitions
@@ -122,46 +121,4 @@ impl AlertWriteStore for SqliteStorage {
         })?;
         Ok(AlertSubmitOutcome::Stored(AlertId::new(alert_id)))
     }
-}
-
-fn patch_payload_timestamp(payload: &str, now: SystemTime) -> String {
-    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(payload) else {
-        return payload.to_string();
-    };
-    let Some(obj) = value.as_object_mut() else {
-        return payload.to_string();
-    };
-    let epoch_secs = now
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let ts = epoch_secs_to_iso8601(epoch_secs);
-    obj.insert("timestamp".to_string(), serde_json::Value::String(ts));
-    serde_json::to_string(&obj).unwrap_or_else(|_| payload.to_string())
-}
-
-fn epoch_secs_to_iso8601(secs: u64) -> String {
-    const DAYS_IN_MONTH: [u32; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let total_days = (secs / 86400) as u32;
-    let rem = (secs % 86400) as u32;
-    let h = rem / 3600;
-    let m = (rem % 3600) / 60;
-    let s = rem % 60;
-    let mut days_left = total_days;
-    let mut year = 1970u32;
-    loop {
-        let diy = if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 { 366 } else { 365 };
-        if days_left < diy { break; }
-        days_left -= diy;
-        year += 1;
-    }
-    let mut month = 1u32;
-    for m_idx in 0..12u32 {
-        let dim = if m_idx == 1 && ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0) { 29 } else { DAYS_IN_MONTH[m_idx as usize] };
-        if days_left < dim { break; }
-        days_left -= dim;
-        month = m_idx + 1;
-    }
-    let day = days_left + 1;
-    format!("{year:04}-{month:02}-{day:02}T{h:02}:{m:02}:{s:02}Z")
 }

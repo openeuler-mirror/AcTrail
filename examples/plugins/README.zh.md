@@ -15,7 +15,6 @@
 | `wasm-legacy/control-graylist` | `wasm` core module | `control-decider` | fanotify 灰名单文件访问同步决策。 |
 | `wasm-legacy/control-command-deny` | `wasm` core module | `control-decider` | 显式命令执行策略命中后拒绝执行。 |
 | `wasm-legacy/control-network-deny` | `wasm` core module | `control-decider` | 显式 TCP connect 策略命中后拒绝连接。 |
-| `wasm-legacy/tool-consecutive-failure-alert` | `wasm` WIT component | `observation-consumer` | 按 trace 维护同一工具连续失败状态，超阈值生成告警。 |
 | `wit-component/observation-read-config` | `wasm` WIT component | `observation-consumer` | Rust 编写的 component 观测插件，按需读取插件配置。 |
 | `wit-component/observation-payload-read` | `wasm` WIT component | `observation-consumer` | Rust 编写的 component 观测插件，读取 payload 数据。 |
 | `wit-component/file-leakage` | `wasm` WIT component | `observation-consumer` | 运行期间只保存成功写操作的越界候选，trace 终态后检查残留并异步追加独立告警；release 会安装但默认不加载。 |
