@@ -1,0 +1,30 @@
+{
+  "description": "Repeatedly asks the agent to inspect the HOME environment variable with the bash tool.",
+  "type": "loop",
+  "generator": {
+    "type": "response",
+    "response": {
+      "blocks": [
+        {
+          "type": "reasoning",
+          "text": "The scripted loop requires inspecting HOME again."
+        },
+        {
+          "type": "message",
+          "text": "Inspecting HOME."
+        },
+        {
+          "type": "tool_call",
+          "name": "bash",
+          "arguments": {
+            "command": "printf '%s\\n' \"$HOME\""
+          }
+        }
+      ],
+      "usage": {
+        "input_tokens": 128,
+        "output_tokens": 16
+      }
+    }
+  }
+}
