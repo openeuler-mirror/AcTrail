@@ -322,6 +322,7 @@ impl StorageAttachService {
             .map_err(|error| ControlError::new(error.stage, error.message))?;
         self.persist_trace_state(trace_runtime, trace_id)?;
         self.enqueue_trace_finalization_if_terminal(trace_runtime, trace_id)?;
+        self.pending_tool_names.remove(&trace_id);
         let finalization_state = if self.pending_terminal_finalizations.contains(&trace_id) {
             "queued"
         } else {
