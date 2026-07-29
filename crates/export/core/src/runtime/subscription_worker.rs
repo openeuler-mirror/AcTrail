@@ -1,10 +1,13 @@
+use std::collections::BTreeMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
+use std::time::{Duration, SystemTime};
 
+use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
-use model_core::trace::TraceRecord;
+use model_core::trace::{TraceLifecycleState, TraceRecord};
 use plugin_system::{ObservationBatch, ObservationConsumer, PluginRuntimeError, PostTraceTask};
 use semantic_action::{FileObservationPath, SemanticAction, SemanticActionLink};
 
@@ -51,18 +54,46 @@ pub(super) fn run_observation_worker(
     queue_capacity: Option<u32>,
     post_trace_completion_sender: Sender<PostTraceCompletion>,
 ) {
-    while let Ok(work_item) = receiver.recv() {
-        match work_item {
-            ObservationWorkItem::Batch(batch) => {
+    let mut scheduled = BTreeMap::<TraceId, ScheduledObservation>::new();
+    loop {
+        while let Some(batch) = take_due_observation(&mut scheduled, SystemTime::now()) {
+            update_schedule(
+                &mut scheduled,
                 run_observation_batch(
                     consumer.as_ref(),
                     batch,
                     &metrics,
                     &instance_id,
                     queue_capacity,
+                ),
+            );
+        }
+        let work_item = match next_wait_duration(&scheduled, SystemTime::now()) {
+            Some(timeout) => match receiver.recv_timeout(timeout) {
+                Ok(work_item) => work_item,
+                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Disconnected) => break,
+            },
+            None => match receiver.recv() {
+                Ok(work_item) => work_item,
+                Err(_) => break,
+            },
+        };
+        match work_item {
+            ObservationWorkItem::Batch(batch) => {
+                update_schedule(
+                    &mut scheduled,
+                    run_observation_batch(
+                        consumer.as_ref(),
+                        batch,
+                        &metrics,
+                        &instance_id,
+                        queue_capacity,
+                    ),
                 );
             }
             ObservationWorkItem::PostTrace(task) => {
+                scheduled.remove(&task.trace_id);
                 if control.cancellation_requested() {
                     complete_cancelled_post_trace(
                         task.trace_id,
@@ -86,13 +117,23 @@ pub(super) fn run_observation_worker(
     }
 }
 
+struct ScheduledObservation {
+    requested_at: SystemTime,
+    trace: TraceRecord,
+}
+
+struct ObservationRun {
+    trace: TraceRecord,
+    reevaluate_at: Option<SystemTime>,
+}
+
 fn run_observation_batch(
     consumer: &dyn ObservationConsumer,
     batch: QueuedObservationBatch,
     metrics: &ObservationConsumerMetrics,
     instance_id: &str,
     queue_capacity: Option<u32>,
-) {
+) -> ObservationRun {
     let action_count = u64::try_from(batch.semantic_actions.len()).unwrap_or(u64::MAX);
     let trace_id = batch.trace.trace_id;
     let result = catch_unwind(AssertUnwindSafe(|| {
@@ -104,8 +145,12 @@ fn run_observation_batch(
             payload_segments: &batch.payload_segments,
         })
     }));
-    match result {
-        Ok(Ok(report)) => record_successful_consume(metrics, action_count, report, true),
+    let reevaluate_at = match result {
+        Ok(Ok(report)) => {
+            let reevaluate_at = report.reevaluate_at;
+            record_successful_consume(metrics, action_count, report, true);
+            reevaluate_at
+        }
         Ok(Err(error)) => {
             let reason = format!("{}: {}", error.code, error.message);
             record_pending_runtime_failure(
@@ -119,6 +164,7 @@ fn run_observation_batch(
                 },
             );
             record_consume_failure(metrics, reason);
+            None
         }
         Err(panic) => {
             let reason = format!("plugin consumer panicked: {}", panic_message(&panic));
@@ -133,8 +179,74 @@ fn run_observation_batch(
                 },
             );
             record_consume_failure(metrics, reason);
+            None
         }
+    };
+    ObservationRun {
+        trace: batch.trace,
+        reevaluate_at,
     }
+}
+
+fn update_schedule(
+    scheduled: &mut BTreeMap<TraceId, ScheduledObservation>,
+    observation: ObservationRun,
+) {
+    let trace_id = observation.trace.trace_id;
+    scheduled.remove(&trace_id);
+    if is_terminal(observation.trace.lifecycle_state) {
+        return;
+    }
+    if let Some(requested_at) = observation.reevaluate_at {
+        scheduled.insert(
+            trace_id,
+            ScheduledObservation {
+                requested_at,
+                trace: observation.trace,
+            },
+        );
+    }
+}
+
+fn take_due_observation(
+    scheduled: &mut BTreeMap<TraceId, ScheduledObservation>,
+    now: SystemTime,
+) -> Option<QueuedObservationBatch> {
+    let trace_id = scheduled
+        .iter()
+        .filter(|(_trace_id, observation)| observation.requested_at <= now)
+        .min_by_key(|(_trace_id, observation)| observation.requested_at)
+        .map(|(trace_id, _observation)| *trace_id)?;
+    let observation = scheduled.remove(&trace_id)?;
+    Some(QueuedObservationBatch {
+        trace: observation.trace,
+        semantic_actions: Vec::new(),
+        semantic_links: Vec::new(),
+        file_observation_paths: Vec::new(),
+        payload_segments: Vec::new(),
+    })
+}
+
+fn next_wait_duration(
+    scheduled: &BTreeMap<TraceId, ScheduledObservation>,
+    now: SystemTime,
+) -> Option<Duration> {
+    scheduled
+        .values()
+        .map(|observation| {
+            observation
+                .requested_at
+                .duration_since(now)
+                .unwrap_or(Duration::ZERO)
+        })
+        .min()
+}
+
+fn is_terminal(state: TraceLifecycleState) -> bool {
+    matches!(
+        state,
+        TraceLifecycleState::Completed | TraceLifecycleState::Exited | TraceLifecycleState::Failed
+    )
 }
 
 fn run_post_trace_task(

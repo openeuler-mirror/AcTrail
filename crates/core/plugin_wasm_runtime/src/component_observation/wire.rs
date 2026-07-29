@@ -138,10 +138,7 @@ pub(super) fn trace_analysis_action_val(action: &TraceAnalysisAction) -> Val {
             "action-id".to_string(),
             Val::String(action.action_id.clone()),
         ),
-        (
-            "trace-id".to_string(),
-            Val::String(String::new()),
-        ),
+        ("trace-id".to_string(), Val::String(String::new())),
         ("kind".to_string(), Val::String(action.kind.clone())),
         (
             "status".to_string(),
@@ -161,10 +158,7 @@ pub(super) fn trace_analysis_action_val(action: &TraceAnalysisAction) -> Val {
                     .map(Box::new),
             ),
         ),
-        (
-            "attributes".to_string(),
-            Val::List(Vec::new()),
-        ),
+        ("attributes".to_string(), Val::List(Vec::new())),
     ])
 }
 
@@ -328,6 +322,7 @@ pub(super) fn parse_observation_report(
             queue_capacity: Some(queue_capacity),
             dropped_records,
         }],
+        reevaluate_at: None,
     })
 }
 

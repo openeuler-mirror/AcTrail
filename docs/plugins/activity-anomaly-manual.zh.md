@@ -207,7 +207,7 @@ sudo -E "$ACTRAIL_BIN_DIR/actrailctl" \
   --prompt '请使用 bash 工具执行 sleep 2，然后结束任务。'
 ```
 
-xiaoO 必须已配置可用的真实 LLM provider。相关 LLM 交换或长命令结束并命中规则后，即可在 Agent 仍运行时从 Web 的“告警”页面看到告警：
+xiaoO 必须已配置可用的真实 LLM provider。相关 LLM 交换命中规则后立即上报；`sleep 2` 仍在运行且耗时刚超过 500 ms 时，长命令告警也应已经出现在 Web 的“告警”页面：
 
 | 告警类型 | 预期结果 |
 | --- | --- |
@@ -226,9 +226,10 @@ sudo mv -- \
 ## 6. 使用说明
 
 - LLM 请求/响应完整且命中规则后立即生成告警；不等待 Agent trace 结束。
-- 长命令在命令结束、可计算可靠耗时后立即生成告警；当前规则不会在命令仍运行时按计时器提前触发。
-- 每个 trace 的每类告警最多写入一次；终态分析只补充实时阶段尚未成功提交的告警。
-- 完整命令行依赖 seccomp notify；未采集 argv 时只能显示可执行文件。
+- 运行中的 Agent 顶层命令达到阈值后由 observation worker 定时复评并立即生成告警，不等待命令或 trace 结束。
+- 运行态长命令 finding 使用 `status=in_progress`、`ended_at_ms=null`，并通过 `observed_at_ms` 记录命中时间。
+- 每个 trace 的每类告警使用稳定幂等键，多个相同插件实例、延迟 observation 和终态兜底不会产生重复记录；终态分析只补充实时阶段尚未成功提交的告警。
+- 完整命令行依赖 seccomp notify 及 argv 投影完成时机；实时命中时尚未取得 argv 会只显示可执行文件。
 - 请求和响应的历史窗口按 trace、进程、模型、服务端和 URL 隔离。
 - 多容器场景中，各容器不会共享增长检测窗口。
 - 配置字段缺失或取值无效会导致插件加载失败，具体原因可通过 `plugin status` 的 `last_error` 查看。

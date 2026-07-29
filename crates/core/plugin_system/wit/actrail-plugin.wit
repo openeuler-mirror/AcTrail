@@ -358,6 +358,7 @@ interface types {
   record alert-draft {
     definition-key: string,
     payload-json: string,
+    deduplication-key: option<string>,
   }
 
   record alert-write-request {
@@ -400,6 +401,8 @@ interface observation-context-read {
   use types.{trace-context};
 
   trace-context-get: func() -> result<trace-context, string>;
+  current-time-ms: func() -> result<u64, string>;
+  request-reevaluation-at: func(unix-time-ms: u64) -> result<_, string>;
 }
 
 interface trace-analysis-read {

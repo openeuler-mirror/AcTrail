@@ -82,7 +82,10 @@
 
           <dl class="activity-evidence-fields">
             <div><dt>{{ t('alerts.activity.startedAt') }}</dt><dd>{{ formatTime(finding.started_at_ms) }}</dd></div>
-            <div><dt>{{ t('alerts.activity.endedAt') }}</dt><dd>{{ formatTime(finding.ended_at_ms) }}</dd></div>
+            <div>
+              <dt>{{ finding.ended_at_ms == null ? t('alerts.activity.observedAt') : t('alerts.activity.endedAt') }}</dt>
+              <dd>{{ formatTime(finding.ended_at_ms ?? finding.observed_at_ms) }}</dd>
+            </div>
             <div v-if="finding.executable && finding.executable !== finding.command_line">
               <dt>{{ t('alerts.activity.executable') }}</dt>
               <dd><code>{{ finding.executable }}</code></dd>
@@ -224,6 +227,7 @@ function statusLabel(status) {
     success: t('alerts.activity.statusSuccess'),
     failed: t('alerts.activity.statusFailed'),
     'in-progress': t('alerts.activity.statusInProgress'),
+    in_progress: t('alerts.activity.statusInProgress'),
   };
   return labels[status] ?? valueOrDash(status);
 }
@@ -294,6 +298,7 @@ function formatDuration(value) {
 }
 
 function formatTime(timestamp) {
+  if (timestamp == null || timestamp === '') return '—';
   const value = Number(timestamp);
   if (!Number.isFinite(value)) return valueOrDash(timestamp);
   return new Date(value).toLocaleString(currentLanguage.value, {

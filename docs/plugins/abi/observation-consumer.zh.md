@@ -20,7 +20,7 @@ WIT package 中的 world 是 `observation-plugin`。运行时要求 component �
 
 | 项 | 值 |
 | --- | --- |
-| Export interface | `actrail:plugin/observation-consumer@0.1.0` |
+| Export interface | `actrail:plugin/observation-consumer@0.2.0` |
 | Function | `consume` |
 
 函数签名：
@@ -113,6 +113,19 @@ WIT component 观测插件收到的是结构化 `observation-batch` record：
 
 插件如果需要读取 payload 内容，必须在 manifest 声明 `payload-read` capability，并在加载时获得对应 `--grant`。插件如果只需要 action 摘要，不需要额外 payload 授权。
 
+### WIT Component 定时复评
+
+WIT component 可以在 `consume` 中使用 `observation-context-read`：
+
+```wit
+current-time-ms: func() -> result<u64, string>
+request-reevaluation-at: func(unix-time-ms: u64) -> result<_, string>
+```
+
+`current-time-ms` 返回宿主 Unix 毫秒时间。`request-reevaluation-at` 为当前 trace 申请一次不早于指定时间的异步复评；宿主还会强制至少 10 ms 的调用间隔，避免插件用已过期 deadline 形成忙循环。到期后，同一个 observation worker 会再次调用 `consume`，batch 的 `semantic-actions` 和 `payload-refs` 为空，但当前 trace 上下文和受限的 `trace-activity-read` 仍然可用。
+
+复评申请只在当前 `consume` 调用内有效。普通 observation 在 deadline 前到达时，插件必须根据最新事实重新申请；trace 进入终态或插件被卸载时，未触发的申请会取消。该机制不进入被观测进程的同步路径，不可用于控制放行决策。
+
 ## 实时活动读取与 Trace 终态分析
 
 WIT component 可以在 manifest 中声明 `[role.observation-consumer.post-trace]`。这要求 `delivery = "trace-consistent"`，并订阅 `semantic-action` 与 `trace-lifecycle`。trace 被持久化为终态后，宿主调用：
@@ -128,11 +141,13 @@ analyze: func(task: post-trace-task) -> result<_, string>
 | `trace-analysis-read` | 通用 action 摘要 | 只能读取当前终态 trace，受分页和总行数限制。 |
 | `trace-file-state-read` | 成功文件写 action 对应的终态文件状态 | 只能按当前 trace 的 action ID 查询，受次数和超时限制。 |
 | `trace-activity-read` | LLM exchange 字节计数、命令行与起止时间、trace 容器归属 | 不包含请求/响应正文；可在 `consume` 中读取当前 observation trace，也可在 `analyze` 中读取当前终态 trace；两种调用都受独立的分页和总行数限制。 |
-| `alert-write` | 无读取能力；向独立告警队列提交 manifest 已声明的告警 | 请求必须携带当前 trace 授权 token。 |
+| `alert-write` | 无读取能力；向独立告警队列提交 manifest 已声明的告警 | 请求必须携带当前 trace 授权 token；`alert-draft.deduplication-key` 非空时，相同 trace、告警定义和 key 只持久化一次。 |
 
 `trace-activity-read` 将已经持久化的 `llm.call`、request 和可选 response 组合为一条 LLM exchange，并提供命令行、起止时间、Agent 顶层子命令标记和容器归属。实时 observation worker 调用时，宿主从 batch 携带的 trace 上下文确定唯一可读的 trace ID；插件不能把 hostcall 切换到其他 trace。
 
 这些 hostcall 仅处理当前授权 trace，不在被观测进程的同步路径上，也不支持跨 trace 查询。`trace-analysis-read` 和 `trace-file-state-read` 仍只在终态 `analyze` 调用中可用。
+
+`deduplication-key` 是插件显式选择的幂等边界。未提供 key 的提交保持逐次追加语义；不同 key 或不同告警定义不会互相抑制。
 
 ## 与控制决策的区别
 

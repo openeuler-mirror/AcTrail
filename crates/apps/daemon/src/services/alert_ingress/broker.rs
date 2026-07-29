@@ -239,6 +239,7 @@ impl AlertIngress {
             request.admission.complete()?;
             match result {
                 Ok(alert_contract::AlertSubmitOutcome::Stored(_))
+                | Ok(alert_contract::AlertSubmitOutcome::DuplicateSuppressed)
                 | Ok(alert_contract::AlertSubmitOutcome::RejectedTraceToken) => {}
                 Err(error) => {
                     issues.push(AlertIngressIssue {

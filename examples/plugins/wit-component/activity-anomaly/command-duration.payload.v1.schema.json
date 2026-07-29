@@ -26,6 +26,7 @@
           "action_id",
           "process_id",
           "started_at_ms",
+          "observed_at_ms",
           "ended_at_ms",
           "duration_ms",
           "status"
@@ -36,7 +37,8 @@
           "executable": { "type": ["string", "null"] },
           "command_line": { "type": ["string", "null"] },
           "started_at_ms": { "type": "integer", "minimum": 0 },
-          "ended_at_ms": { "type": "integer", "minimum": 0 },
+          "observed_at_ms": { "type": "integer", "minimum": 0 },
+          "ended_at_ms": { "type": ["integer", "null"], "minimum": 0 },
           "duration_ms": { "type": "integer", "minimum": 0 },
           "status": { "type": "string", "minLength": 1 },
           "exit_code": { "type": ["integer", "null"] },

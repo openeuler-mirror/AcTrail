@@ -44,6 +44,13 @@ CREATE TABLE IF NOT EXISTS alerts (
     payload_json TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS alert_deduplication_keys (
+    trace_id INTEGER NOT NULL,
+    alert_definition_id INTEGER NOT NULL REFERENCES alert_definitions(alert_definition_id),
+    deduplication_key TEXT NOT NULL,
+    PRIMARY KEY (trace_id, alert_definition_id, deduplication_key)
+) WITHOUT ROWID;
+
 CREATE INDEX IF NOT EXISTS idx_alerts_latest
 ON alerts(created_at DESC, alert_id DESC);
 

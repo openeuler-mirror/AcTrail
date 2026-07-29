@@ -28,6 +28,17 @@ impl AlertWriteStore for SqliteStorage {
                 "producer_plugin_id must not be empty",
             ));
         }
+        if draft
+            .deduplication_key
+            .as_ref()
+            .is_some_and(|key| key.trim().is_empty() || key.len() > 256)
+        {
+            return Err(AlertStoreError::new(
+                AlertStoreErrorKind::InvalidPayload,
+                "validate_alert_deduplication",
+                "alert deduplication key must contain 1 to 256 bytes",
+            ));
+        }
         let mut connection = self.connection().borrow_mut();
         let transaction = connection.transaction().map_err(|error| {
             AlertStoreError::new(
@@ -87,6 +98,25 @@ impl AlertWriteStore for SqliteStorage {
                     "alert definition is not registered for this producer",
                 )
             })?;
+        if let Some(deduplication_key) = &draft.deduplication_key {
+            let inserted = transaction
+                .execute(
+                    "INSERT OR IGNORE INTO alert_deduplication_keys (
+                        trace_id, alert_definition_id, deduplication_key
+                     ) VALUES (?1, ?2, ?3)",
+                    params![trace_id.get(), definition_id.get(), deduplication_key],
+                )
+                .map_err(|error| {
+                    AlertStoreError::new(
+                        AlertStoreErrorKind::StorageFailure,
+                        "reserve_alert_deduplication_key",
+                        error.to_string(),
+                    )
+                })?;
+            if inserted == 0 {
+                return Ok(AlertSubmitOutcome::DuplicateSuppressed);
+            }
+        }
         transaction
             .execute(
                 "INSERT INTO alerts (
@@ -150,16 +180,28 @@ fn epoch_secs_to_iso8601(secs: u64) -> String {
     let mut days_left = total_days;
     let mut year = 1970u32;
     loop {
-        let diy = if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 { 366 } else { 365 };
-        if days_left < diy { break; }
+        let diy = if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 {
+            366
+        } else {
+            365
+        };
+        if days_left < diy {
+            break;
+        }
         days_left -= diy;
         year += 1;
     }
     let mut month = 1u32;
     for m_idx in 0..12u32 {
         month = m_idx + 1;
-        let dim = if m_idx == 1 && ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0) { 29 } else { DAYS_IN_MONTH[m_idx as usize] };
-        if days_left < dim { break; }
+        let dim = if m_idx == 1 && ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0) {
+            29
+        } else {
+            DAYS_IN_MONTH[m_idx as usize]
+        };
+        if days_left < dim {
+            break;
+        }
         days_left -= dim;
     }
     let day = days_left + 1;

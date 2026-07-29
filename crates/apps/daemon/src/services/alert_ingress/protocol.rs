@@ -122,6 +122,16 @@ impl AlertAdmission {
     }
 
     pub(super) fn validate(&self, draft: &AlertDraft) -> Result<(), PluginRuntimeError> {
+        if draft
+            .deduplication_key
+            .as_ref()
+            .is_some_and(|key| key.trim().is_empty() || key.len() > 256)
+        {
+            return Err(PluginRuntimeError::new(
+                "alert_deduplication",
+                "alert deduplication key must contain 1 to 256 bytes",
+            ));
+        }
         let output = self.outputs.get(&draft.definition_key).ok_or_else(|| {
             PluginRuntimeError::new(
                 "alert_definition",

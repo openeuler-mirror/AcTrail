@@ -200,6 +200,7 @@ impl FileLeakagePlugin {
             draft: AlertDraft {
                 definition_key: ALERT_DEFINITION_KEY.to_string(),
                 payload_json,
+                deduplication_key: None,
             },
         })?;
         Ok(())

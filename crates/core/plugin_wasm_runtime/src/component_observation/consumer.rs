@@ -297,10 +297,11 @@ impl ObservationConsumer for WitComponentObservationConsumer {
             .data_mut()
             .set_payload_snapshot(batch.payload_segments);
         let result = consume.call(&mut state.store, &[input], &mut results);
+        let reevaluate_at = state.store.data_mut().take_requested_reevaluation_at();
         state.store.data_mut().clear_payload_snapshot();
         state.store.data_mut().clear_observation_trace_context();
         result.map_err(|error| component_call_error(&mut state.store, "consume", error))?;
-        let parsed = parse_observation_report(
+        let mut parsed = parse_observation_report(
             &self.instance_id,
             self.queue_capacity,
             batch.trace.trace_id,
@@ -308,6 +309,9 @@ impl ObservationConsumer for WitComponentObservationConsumer {
                 PluginRuntimeError::new("wasm_runtime", "wasm component consume returned no result")
             })?,
         );
+        if let Ok(report) = &mut parsed {
+            report.reevaluate_at = reevaluate_at;
+        }
         consume.post_return(&mut state.store).map_err(|error| {
             PluginRuntimeError::new(
                 "wasm_runtime",

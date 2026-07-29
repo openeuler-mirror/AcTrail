@@ -236,12 +236,14 @@ pub trait PostTraceHost: Send + Sync {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ObservationConsumeReport {
     pub dropped_records: Vec<PluginDroppedRecord>,
+    pub reevaluate_at: Option<SystemTime>,
 }
 
 impl ObservationConsumeReport {
     pub fn empty() -> Self {
         Self {
             dropped_records: Vec::new(),
+            reevaluate_at: None,
         }
     }
 }

@@ -48,6 +48,7 @@ impl AlertCall {
         };
         let definition_key = record_string(draft_fields, "definition-key")?;
         let payload_json = record_string(draft_fields, "payload-json")?;
+        let deduplication_key = record_optional_string(draft_fields, "deduplication-key")?;
         if payload_json.len() > state.host_limits().alert_payload_max_bytes {
             return Err(PluginRuntimeError::new(
                 "alert_host",
@@ -65,6 +66,7 @@ impl AlertCall {
             draft: AlertDraft {
                 definition_key,
                 payload_json,
+                deduplication_key,
             },
         })
     }
@@ -108,6 +110,20 @@ fn record_field<'a>(fields: &'a [(String, Val)], name: &str) -> Option<&'a Val> 
 fn record_string(fields: &[(String, Val)], name: &str) -> Result<String, PluginRuntimeError> {
     match record_field(fields, name) {
         Some(Val::String(value)) if !value.is_empty() => Ok(value.clone()),
+        _ => Err(invalid_field(name)),
+    }
+}
+
+fn record_optional_string(
+    fields: &[(String, Val)],
+    name: &str,
+) -> Result<Option<String>, PluginRuntimeError> {
+    match record_field(fields, name) {
+        Some(Val::Option(Some(value))) => match value.as_ref() {
+            Val::String(value) if !value.is_empty() => Ok(Some(value.clone())),
+            _ => Err(invalid_field(name)),
+        },
+        Some(Val::Option(None)) | None => Ok(None),
         _ => Err(invalid_field(name)),
     }
 }

@@ -72,6 +72,7 @@ impl FileAccessBoundaryAlert {
         Ok(AlertDraft {
             definition_key: DEFINITION_KEY.to_string(),
             payload_json,
+            deduplication_key: None,
         })
     }
 }
