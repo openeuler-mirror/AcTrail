@@ -32,6 +32,7 @@ class PluginTestEnvironment:
         output: TestOutput,
         *,
         operator_config: Path,
+        operator_config_patch: Path | None = None,
         web_host: str,
         web_port: int,
         plugin: PluginRuntimeSpec,
@@ -45,6 +46,7 @@ class PluginTestEnvironment:
             config.command_timeout_seconds,
             output,
             operator_config,
+            operator_config_patch,
         )
         bin_dir = (
             config.bin_dir

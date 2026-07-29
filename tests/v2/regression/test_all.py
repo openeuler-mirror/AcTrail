@@ -79,6 +79,9 @@ def main(argv: list[str] | None = None) -> int:
         show_details=False,
         cleanup_cases=arguments.cleanup,
         fail_fast=arguments.fail_fast,
+        lock_path=arguments.lock_path,
+        lock_timeout_seconds=arguments.lock_timeout_seconds,
+        lock_poll_seconds=arguments.lock_poll_seconds,
     )
 
 

@@ -21,13 +21,13 @@ class OtelJsonlConfig(CommonTestConfig):
         inputs: TestCaseInputs,
     ) -> "OtelJsonlConfig":
         common = CommonTestConfig.from_environment(inputs, "OTEL_JSONL")
+        configured_operator = os.environ.get("OTEL_JSONL_E2E_OPERATOR_CONFIG")
         return cls(
             **common.as_kwargs(),
-            operator_config=Path(
-                os.environ.get(
-                    "OTEL_JSONL_E2E_OPERATOR_CONFIG",
-                    "/etc/actrail/actraild.conf",
-                )
+            operator_config=(
+                Path(configured_operator)
+                if configured_operator
+                else inputs.work_dir / "actraild.conf"
             ),
             web_host=os.environ.get("OTEL_JSONL_E2E_WEB_HOST", "127.0.0.1"),
             web_port=int(os.environ.get("OTEL_JSONL_E2E_WEB_PORT", "18080")),
