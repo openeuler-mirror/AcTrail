@@ -24,26 +24,34 @@ feature，用于在任何环境下强制使用 perfbuf。
 默认自动选择：
 
 ```bash
-cargo build -p daemon
+cargo build --release -p daemon
 ```
 
 `ebpf_collector` 的 build script 会按以下顺序检测 ringbuf 支持：
 
-1. `bpftool feature probe kernel unprivileged` 报告 ringbuf map/helper 可用。
-2. `/sys/kernel/btf/vmlinux` 包含 ringbuf map/helper 符号。
-3. `/proc/sys/kernel/osrelease` 或 `uname -r` 显示内核版本不低于 5.8。
+1. `bpftool feature probe kernel` 在具备所需权限时报告 ringbuf map/helper 可用或明确
+   不可用。
+2. `bpftool feature probe kernel unprivileged` 报告 ringbuf map/helper 可用。非特权探测
+   的 unavailable 只表示当前权限视角无法确认，不能作为内核不支持的依据。
+3. `/sys/kernel/btf/vmlinux` 包含 ringbuf map/helper 符号。
+4. `/proc/sys/kernel/osrelease` 或 `uname -r` 显示内核版本；低于 5.8 可确认上游内核
+   不支持，5.8 及以上只作为允许条件，不能代替实际 capability 证据。
 
-只要确认 ringbuf 可用，默认构建就使用 ringbuf；如果检测结果明确不可用，或所有检测方式
-都无法确认可用，则自动切到 perfbuf。构建日志会输出最终选择，例如：
+每个无法确认的探测都会继续到下一种检测方式。只有实际 capability 证据确认 ringbuf
+可用时，默认构建才使用 ringbuf；如果特权探测或内核版本确认不可用，或所有检测方式都
+无法确认可用，则自动切到 perfbuf。构建日志会输出最终选择，例如：
 
 ```text
-AcTrail eBPF event transport: ring-buffer (bpftool reported ringbuf map and helpers)
+AcTrail eBPF event transport: ring-buffer (privileged bpftool reported ringbuf map and helpers)
 ```
+
+daemon 启动时也会在 `host_ebpf_preflight completed` 诊断中记录编译进二进制的
+`event_transport`，用于核对实际运行的制品。
 
 强制 perfbuf 构建：
 
 ```bash
-cargo build -p daemon --features perf-buffer
+cargo build --release -p daemon --features perf-buffer
 ```
 
 `daemon` 的 `perf-buffer` feature 会转发到 `ebpf_collector/perf-buffer`。
