@@ -17,6 +17,10 @@ pub mod agent {
     pub const PERFORMED_ACTION_SEQUENCE: &str = "agent.performed_action.sequence";
 }
 
+pub mod agent_exit {
+    pub const IDENTITY_ACTION_ID: &str = "agent.exit.identity_action_id";
+}
+
 pub mod agent_child {
     pub const COMMAND_LINE: &str = "agent.child.command_line";
     pub const EXECUTABLE: &str = "agent.child.executable";

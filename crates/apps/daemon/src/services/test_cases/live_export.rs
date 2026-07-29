@@ -261,7 +261,7 @@ impl ObservationConsumer for FailingConsumer {
         );
         Ok(ObservationConsumeReport {
             dropped_records: vec![PluginDroppedRecord {
-                trace_id: batch.trace.trace_id,
+                trace_id: Some(batch.trace.trace_id),
                 plugin_instance: FAILING_EXPORTER_NAME.to_string(),
                 reason: format!("{FAILING_EXPORTER_ERROR_CODE}: {FAILING_EXPORTER_ERROR_MESSAGE}"),
                 queue_capacity: Some(FAILING_EXPORTER_QUEUE_CAPACITY),

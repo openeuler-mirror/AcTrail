@@ -75,4 +75,4 @@ Expected proof:
 - payload cases show complete outbound plaintext payload rows. HTTPS/TLS requests use `TlsUserSpace`; plain HTTP requests use `Syscall/socket-syscall`.
 - full exchange cases contain complete successful `llm.request` and `llm.response` semantic actions.
 - full exchange cases export `llm.request` and `llm.response` OTEL spans.
-- process invocation cases additionally validate `process.exec` / `agent.invocation` spans in their own scripts.
+- process invocation cases additionally validate `process.exec`, `agent.identity`, and `command.invocation` spans in their own scripts.

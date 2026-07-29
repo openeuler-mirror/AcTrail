@@ -171,7 +171,9 @@ fn raw_exec(
     if let Some(parent) = &parent {
         metadata.insert("ppid".to_string(), parent.get().to_string());
     }
-    raw_process_event(process, "exec", parent, metadata, observed_second)
+    let mut event = raw_process_event(process, "exec", parent, metadata, observed_second);
+    event.envelope.collector = CollectorName::new("ebpf");
+    event
 }
 
 fn raw_fork(

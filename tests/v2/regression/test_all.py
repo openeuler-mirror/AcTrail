@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-from importlib import import_module
 import sys
 from pathlib import Path
 
@@ -31,12 +30,22 @@ from tests.v2.regression.probe_qodercli_llm.run_e2e import (  # noqa: E402
 from tests.v2.regression.probe_xiaoo_llm.run_e2e import (  # noqa: E402
     TEST_DEFINITION as XIAOO,
 )
+from tests.v2.regression.otel_jsonl_action_filter.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as OTEL_JSONL_ACTION_FILTER,
+)
+from tests.v2.regression.semantic_action_boundaries.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as SEMANTIC_ACTION_BOUNDARIES,
+)
 
-OTEL_JSONL = import_module(
-    "tests.v2.regression.plugins.otel-jsonl.run_e2e"
-).TEST_DEFINITION
-
-TESTS = [CLAUDE, CODEX, PI, QODERCLI, XIAOO, OTEL_JSONL]
+TESTS = [
+    CLAUDE,
+    CODEX,
+    PI,
+    QODERCLI,
+    XIAOO,
+    SEMANTIC_ACTION_BOUNDARIES,
+    OTEL_JSONL_ACTION_FILTER,
+]
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -293,7 +293,10 @@ impl PostTraceBroker {
         let links = storage
             .list_semantic_action_links(trace_id)
             .map_err(storage_runtime_error)?;
-        let commands = project_command_executions(actions, &links)?;
+        let memberships = storage
+            .trace_memberships(trace_id)
+            .map_err(storage_runtime_error)?;
+        let commands = project_command_executions(actions, &links, &memberships)?;
         let total = commands.len();
         let page = commands
             .into_iter()

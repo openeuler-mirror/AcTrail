@@ -8,7 +8,6 @@ from pathlib import Path
 
 PROCESS_ID_ATTR = "actrail.process.id"
 PARENT_PROCESS_ID_ATTR = "process.parent.id"
-CHILD_PROCESS_ID_ATTR = "agent.child.process_id"
 
 
 @dataclass(frozen=True)
@@ -28,7 +27,10 @@ def validate_hidden_agent_actions(
         raise RuntimeError("missing agent A process.exec")
     agent_a_attrs = span_attrs(agent_a)
     agent_a_process_id = required_attr(agent_a_attrs, PROCESS_ID_ATTR)
-    require_agent_identity(agent_a_attrs, "agent A")
+    agent_a_identity = find_agent_identity_for_process(document, agent_a_process_id)
+    if agent_a_identity is None:
+        raise RuntimeError("missing agent A agent.identity")
+    require_agent_identity(span_attrs(agent_a_identity), "agent A")
     if find_llm_request_for_process(document, agent_a_process_id) is None:
         raise RuntimeError("missing agent A llm.request")
 
@@ -37,6 +39,10 @@ def validate_hidden_agent_actions(
         raise RuntimeError("missing xiaoo process.exec with agent identity")
     xiaoo_attrs = span_attrs(xiaoo)
     xiaoo_process_id = required_attr(xiaoo_attrs, PROCESS_ID_ATTR)
+    xiaoo_identity = find_agent_identity_for_process(document, xiaoo_process_id)
+    if xiaoo_identity is None:
+        raise RuntimeError("missing xiaoo agent.identity")
+    require_agent_identity(span_attrs(xiaoo_identity), "xiaoo")
     if find_llm_request_for_process(document, xiaoo_process_id) is None:
         raise RuntimeError("missing xiaoo llm.request")
 
@@ -71,12 +77,18 @@ def hidden_agent_evidence_is_complete(
     if agent_a is None or xiaoo is None:
         return False
     agent_a_attrs = span_attrs(agent_a)
-    if agent_a_attrs.get("agent.identity.status") != "observed":
-        return False
-    if agent_a_attrs.get("agent.identity.source") != "llm.request":
-        return False
     agent_a_process_id = agent_a_attrs.get(PROCESS_ID_ATTR, "")
     xiaoo_process_id = span_attrs(xiaoo).get(PROCESS_ID_ATTR, "")
+    agent_a_identity = find_agent_identity_for_process(document, agent_a_process_id)
+    xiaoo_identity = find_agent_identity_for_process(document, xiaoo_process_id)
+    if agent_a_identity is None or xiaoo_identity is None:
+        return False
+    for identity in (agent_a_identity, xiaoo_identity):
+        attrs = span_attrs(identity)
+        if attrs.get("agent.identity.status") != "observed":
+            return False
+        if attrs.get("agent.identity.source") != "llm.request":
+            return False
     invocation = find_agent_command_for_child_process(document, xiaoo_process_id)
     if invocation is None:
         return False
@@ -97,9 +109,11 @@ def describe_hidden_agent_evidence(document: dict, script_b_path: str, agent_a_p
     xiaoo = find_xiaoo_exec_with_identity(document)
     agent_a_process_id = span_attrs(agent_a).get(PROCESS_ID_ATTR, "") if agent_a else ""
     xiaoo_process_id = span_attrs(xiaoo).get(PROCESS_ID_ATTR, "") if xiaoo else ""
+    agent_a_identity = find_agent_identity_for_process(document, agent_a_process_id)
+    xiaoo_identity = find_agent_identity_for_process(document, xiaoo_process_id)
     lines = [
-        f"agent_a_exec={bool(agent_a)} process_id={agent_a_process_id} identity={identity_status(agent_a)}",
-        f"xiaoo_exec={bool(xiaoo)} process_id={xiaoo_process_id} identity={identity_status(xiaoo)}",
+        f"agent_a_exec={bool(agent_a)} process_id={agent_a_process_id} identity={identity_status(agent_a_identity)}",
+        f"xiaoo_exec={bool(xiaoo)} process_id={xiaoo_process_id} identity={identity_status(xiaoo_identity)}",
         f"agent_a_llm={find_llm_request_for_process(document, agent_a_process_id) is not None}",
         f"xiaoo_llm={find_llm_request_for_process(document, xiaoo_process_id) is not None}",
     ]
@@ -138,6 +152,7 @@ def find_agent_a_exec(document: dict, agent_a_path: str) -> dict | None:
 
 
 def find_xiaoo_exec_with_identity(document: dict) -> dict | None:
+    candidates = []
     for span in spans(document):
         attrs = span_attrs(span)
         if attrs.get("actrail.action.kind") != "process.exec":
@@ -145,7 +160,22 @@ def find_xiaoo_exec_with_identity(document: dict) -> dict | None:
         executable = attrs.get("process.executable", attrs.get("executable", ""))
         if executable_basename(executable) != "xiaoo":
             continue
-        if attrs.get("agent.identity.status") == "observed":
+        candidates.append(span)
+        process_id = attrs.get(PROCESS_ID_ATTR, "")
+        if find_agent_identity_for_process(document, process_id) is not None:
+            return span
+    return candidates[0] if candidates else None
+
+
+def find_agent_identity_for_process(document: dict, process_id: str) -> dict | None:
+    if not process_id:
+        return None
+    for span in spans(document):
+        attrs = span_attrs(span)
+        if (
+            attrs.get("actrail.action.kind") == "agent.identity"
+            and attrs.get(PROCESS_ID_ATTR) == process_id
+        ):
             return span
     return None
 
@@ -165,9 +195,11 @@ def find_agent_command_for_child_process(document: dict, child_process_id: str) 
         attrs = span_attrs(span)
         if attrs.get("actrail.action.kind") != "command.invocation":
             continue
-        if attrs.get("invocation.kind") != "agent":
-            continue
-        if attrs.get(CHILD_PROCESS_ID_ATTR) == child_process_id:
+        executable = attrs.get("process.executable", attrs.get("executable", ""))
+        if (
+            attrs.get(PROCESS_ID_ATTR) == child_process_id
+            and executable_basename(executable) == "xiaoo"
+        ):
             return span
     return None
 
@@ -181,11 +213,11 @@ def find_agent_command_with_parent_child(
         attrs = span_attrs(span)
         if attrs.get("actrail.action.kind") != "command.invocation":
             continue
-        if attrs.get("invocation.kind") != "agent":
-            continue
+        executable = attrs.get("process.executable", attrs.get("executable", ""))
         if (
             attrs.get(PARENT_PROCESS_ID_ATTR) == parent_process_id
-            and attrs.get(CHILD_PROCESS_ID_ATTR) == child_process_id
+            and attrs.get(PROCESS_ID_ATTR) == child_process_id
+            and executable_basename(executable) == "xiaoo"
         ):
             return span
     return None
@@ -218,11 +250,14 @@ def agent_command_child_process_ids(document: dict) -> list[str]:
     process_ids = []
     for span in spans(document):
         attrs = span_attrs(span)
+        process_id = attrs.get(PROCESS_ID_ATTR, "")
+        executable = attrs.get("process.executable", attrs.get("executable", ""))
         if (
             attrs.get("actrail.action.kind") == "command.invocation"
-            and attrs.get("invocation.kind") == "agent"
+            and executable_basename(executable) == "xiaoo"
+            and find_agent_identity_for_process(document, process_id) is not None
         ):
-            process_ids.append(attrs.get(CHILD_PROCESS_ID_ATTR, ""))
+            process_ids.append(process_id)
     return process_ids
 
 

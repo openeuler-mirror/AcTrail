@@ -30,6 +30,7 @@ Expected result:
 - OTEL contains a `process.exec` span for `claude` with `seccomp_observed=true` and argv containing `claude -p`.
 - OTEL contains an `llm.request` span for the same Claude process.
 - OTEL contains a successful Bash `command.invocation` span whose direct parent is the same Claude process.
-- OTEL contains an `agent.invocation` span whose child command line contains `claude`; its parent is Claude's direct launcher, which may be a shell or timeout wrapper rather than the outer xiaoO process.
+- OTEL contains one `agent.identity` span for the Claude process; its evidence action ID points to Claude's first valid `llm.request`.
+- OTEL contains a same-process `command.invocation` for Claude whose direct parent may be a shell or timeout wrapper rather than the outer xiaoO process.
 
 This case requires root, `/root/projects/xiaoO/target/release/xiaoo`, a working default xiaoO config, a working `claude` CLI, and external network access. It is not a mock and should fail fast if those prerequisites are missing.

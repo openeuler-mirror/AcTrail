@@ -9,6 +9,9 @@ use model_core::process::ProcessIdentity;
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SemanticActionKind {
     ProcessExec,
+    ProcessExit,
+    AgentIdentity,
+    AgentExit,
     FileModify,
     FileRead,
     FileWrite,
@@ -31,6 +34,9 @@ impl SemanticActionKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::ProcessExec => "process.exec",
+            Self::ProcessExit => "process.exit",
+            Self::AgentIdentity => "agent.identity",
+            Self::AgentExit => "agent.exit",
             Self::FileModify => "file.modify",
             Self::FileRead => "file.read",
             Self::FileWrite => "file.write",
@@ -53,6 +59,9 @@ impl SemanticActionKind {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "process.exec" => Some(Self::ProcessExec),
+            "process.exit" => Some(Self::ProcessExit),
+            "agent.identity" => Some(Self::AgentIdentity),
+            "agent.exit" => Some(Self::AgentExit),
             "file.modify" => Some(Self::FileModify),
             "file.read" => Some(Self::FileRead),
             "file.write" => Some(Self::FileWrite),

@@ -5,12 +5,15 @@ use super::{
     LinkConfidenceCodes, LinkRoleCodes, SemanticActionCodebook,
 };
 
-pub(in crate::semantic_actions::codebook) const SCHEMA_VERSION: i32 = 12;
+pub(in crate::semantic_actions::codebook) const SCHEMA_VERSION: i32 = 13;
 
 pub(in crate::semantic_actions::codebook) const CODEBOOK: &SemanticActionCodebook =
     &SemanticActionCodebook {
         action_kind: ActionKindCodes {
             process_exec: 101,
+            process_exit: 118,
+            agent_identity: 119,
+            agent_exit: 120,
             file_modify: 102,
             file_read: 103,
             file_write: 104,

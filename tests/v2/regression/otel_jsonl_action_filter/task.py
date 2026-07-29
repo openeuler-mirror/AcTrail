@@ -11,7 +11,7 @@ from tests.v2.common.actrail_runtime import CommandResult
 from tests.v2.common.agent_selection import AgentSelection
 from tests.v2.common.test_case import TestResult, TestStatus
 
-from .environment import OtelJsonlEnvironment
+from .environment import OtelJsonlActionFilterEnvironment
 
 
 @dataclass(frozen=True)
@@ -20,7 +20,7 @@ class FilterRound:
     enabled_kinds: frozenset[str]
 
 
-class OtelJsonlTask:
+class OtelJsonlActionFilterTask:
     _TRACE_PATTERN = re.compile(r"trace trace-(\d+) entered Active")
     _EXECUTION_CONTEXT_KINDS = frozenset(
         {"process.exec", "file.read", "command.invocation"}
@@ -32,7 +32,7 @@ class OtelJsonlTask:
 
     def __init__(
         self,
-        environment: OtelJsonlEnvironment,
+        environment: OtelJsonlActionFilterEnvironment,
         agent: AgentSelection,
     ):
         self._environment = environment
@@ -41,17 +41,31 @@ class OtelJsonlTask:
 
     @classmethod
     def _build_rounds(cls) -> tuple[FilterRound, ...]:
-        execution_kind = secrets.choice(sorted(cls._EXECUTION_CONTEXT_KINDS))
+        execution_kind = secrets.choice(
+            sorted(cls._EXECUTION_CONTEXT_KINDS)
+        )
         llm_kind = secrets.choice(sorted(cls._LLM_COMPLETE_KINDS))
         third_kind = secrets.choice(
-            sorted(cls._REPRESENTATIVE_KINDS.difference({execution_kind, llm_kind}))
+            sorted(
+                cls._REPRESENTATIVE_KINDS.difference(
+                    {execution_kind, llm_kind}
+                )
+            )
         )
-        random_three = frozenset({execution_kind, llm_kind, third_kind})
+        random_three = frozenset(
+            {execution_kind, llm_kind, third_kind}
+        )
         return (
-            FilterRound("execution-context", cls._EXECUTION_CONTEXT_KINDS),
+            FilterRound(
+                "execution-context",
+                cls._EXECUTION_CONTEXT_KINDS,
+            ),
             FilterRound("llm-complete", cls._LLM_COMPLETE_KINDS),
             FilterRound("mixed-random-three", random_three),
-            FilterRound("representative-combined", cls._REPRESENTATIVE_KINDS),
+            FilterRound(
+                "representative-combined",
+                cls._REPRESENTATIVE_KINDS,
+            ),
         )
 
     def run(self) -> dict[str, TestResult]:
@@ -70,8 +84,13 @@ class OtelJsonlTask:
         return results
 
     def _run_round(self, round_definition: FilterRound) -> set[str]:
-        self._environment.update_selection(set(round_definition.enabled_kinds))
-        marker = f"OTEL_JSONL_{round_definition.name}_{secrets.token_hex(6)}"
+        self._environment.update_selection(
+            set(round_definition.enabled_kinds)
+        )
+        marker = (
+            f"OTEL_JSONL_FILTER_{round_definition.name}_"
+            f"{secrets.token_hex(6)}"
+        )
         launch = self._launch(marker)
         if launch.returncode != 0:
             raise AssertionError(
@@ -108,7 +127,7 @@ class OtelJsonlTask:
                 "bash",
                 "-lc",
                 'cat /etc/hostname >/dev/null; exec "$@"',
-                "actrail-otel-jsonl",
+                "actrail-otel-jsonl-filter",
                 *agent_command,
             ],
             timeout_seconds=self._environment.config.launch_timeout_seconds,
@@ -116,10 +135,14 @@ class OtelJsonlTask:
         )
 
     def _require_trace_id(self, launch: CommandResult) -> int:
-        trace_ids = [int(value) for value in self._TRACE_PATTERN.findall(launch.output)]
+        trace_ids = [
+            int(value)
+            for value in self._TRACE_PATTERN.findall(launch.output)
+        ]
         if len(trace_ids) != 1:
             raise AssertionError(
-                f"expected one trace id, found {trace_ids}: {launch.output[-4000:]}"
+                f"expected one trace id, found {trace_ids}: "
+                f"{launch.output[-4000:]}"
             )
         return trace_ids[0]
 
@@ -129,38 +152,58 @@ class OtelJsonlTask:
             document = self._viewer_json(["traces"])
             traces = document.get("traces")
             if not isinstance(traces, list):
-                raise AssertionError("actrailviewer traces returned no traces array")
+                raise AssertionError(
+                    "actrailviewer traces returned no traces array"
+                )
             for trace in traces:
                 if (
                     isinstance(trace, dict)
                     and trace.get("trace_id_raw") == trace_id
                 ):
-                    last_state = f"{trace.get('state')}/{trace.get('health')}"
-                    if last_state == "Exited/Clean":
+                    last_state = (
+                        f"{trace.get('state')}/{trace.get('health')}"
+                    )
+                    if last_state in {
+                        "Exited/Clean",
+                        "Completed/Clean",
+                    }:
                         return
-            time.sleep(self._environment.config.drain_interval_seconds)
+            time.sleep(
+                self._environment.config.drain_interval_seconds
+            )
         raise AssertionError(
-            f"trace-{trace_id} did not reach Exited/Clean; last={last_state}"
+            f"trace-{trace_id} did not reach a clean terminal state; "
+            f"last={last_state}"
         )
 
     def _wait_for_source_actions(self, trace_id: int) -> None:
         last_kinds: set[str] = set()
         for _ in range(self._environment.config.drain_attempts):
-            document = self._viewer_json(["actions", "--trace-id", str(trace_id)])
+            document = self._viewer_json(
+                ["actions", "--trace-id", str(trace_id)]
+            )
             actions = document.get("actions")
             if not isinstance(actions, list):
-                raise AssertionError("actrailviewer actions returned no actions array")
+                raise AssertionError(
+                    "actrailviewer actions returned no actions array"
+                )
             last_kinds = {
                 str(action["kind"])
                 for action in actions
-                if isinstance(action, dict) and isinstance(action.get("kind"), str)
+                if isinstance(action, dict)
+                and isinstance(action.get("kind"), str)
             }
             if self._REPRESENTATIVE_KINDS.issubset(last_kinds):
                 return
-            time.sleep(self._environment.config.drain_interval_seconds)
-        missing = sorted(self._REPRESENTATIVE_KINDS.difference(last_kinds))
+            time.sleep(
+                self._environment.config.drain_interval_seconds
+            )
+        missing = sorted(
+            self._REPRESENTATIVE_KINDS.difference(last_kinds)
+        )
         raise AssertionError(
-            f"trace-{trace_id} did not produce representative source action(s): "
+            f"trace-{trace_id} did not produce representative source "
+            "action(s): "
             + ", ".join(missing)
         )
 
@@ -174,7 +217,9 @@ class OtelJsonlTask:
             actual = self._extract_exported_kinds(marker)
             if actual == expected:
                 return actual
-            time.sleep(self._environment.config.drain_interval_seconds)
+            time.sleep(
+                self._environment.config.drain_interval_seconds
+            )
         raise AssertionError(
             f"OTEL action kinds for {marker} are {sorted(actual)}, "
             f"expected {sorted(expected)}"
@@ -196,12 +241,18 @@ class OtelJsonlTask:
                 if not isinstance(resource_spans, dict):
                     continue
                 resource = resource_spans.get("resource", {})
-                if self._string_attribute(
-                    resource.get("attributes", []),
-                    "actrail.trace.display_name",
-                ) != marker:
+                if (
+                    self._string_attribute(
+                        resource.get("attributes", []),
+                        "actrail.trace.display_name",
+                    )
+                    != marker
+                ):
                     continue
-                for scope_spans in resource_spans.get("scopeSpans", []):
+                for scope_spans in resource_spans.get(
+                    "scopeSpans",
+                    [],
+                ):
                     if not isinstance(scope_spans, dict):
                         continue
                     for span in scope_spans.get("spans", []):
@@ -211,20 +262,38 @@ class OtelJsonlTask:
                             span.get("attributes", []),
                             "actrail.action.kind",
                         )
-                        if kind:
+                        action_id = self._string_attribute(
+                            span.get("attributes", []),
+                            "actrail.action.id",
+                        )
+                        process_id = self._string_attribute(
+                            span.get("attributes", []),
+                            "actrail.process.id",
+                        )
+                        if kind and action_id and process_id:
                             kinds.add(kind)
         return kinds
 
     @staticmethod
-    def _string_attribute(attributes: Any, key: str) -> str | None:
+    def _string_attribute(
+        attributes: Any,
+        key: str,
+    ) -> str | None:
         if not isinstance(attributes, list):
             return None
         for attribute in attributes:
-            if not isinstance(attribute, dict) or attribute.get("key") != key:
+            if (
+                not isinstance(attribute, dict)
+                or attribute.get("key") != key
+            ):
                 continue
             value = attribute.get("value")
-            if isinstance(value, dict) and isinstance(value.get("stringValue"), str):
+            if not isinstance(value, dict):
+                return None
+            if isinstance(value.get("stringValue"), str):
                 return value["stringValue"]
+            if isinstance(value.get("intValue"), (str, int)):
+                return str(value["intValue"])
         return None
 
     def _viewer_json(self, arguments: list[str]) -> dict[str, Any]:
@@ -251,14 +320,18 @@ class OtelJsonlTask:
                 f"actrailviewer {' '.join(arguments)} returned invalid JSON"
             ) from error
         if not isinstance(document, dict):
-            raise AssertionError("actrailviewer returned non-object JSON")
+            raise AssertionError(
+                "actrailviewer returned non-object JSON"
+            )
         return document
 
     def _require_runtime_healthy(self) -> None:
         document = self._environment.api.runtime()
         plugins = document.get("plugins")
         if not isinstance(plugins, list):
-            raise AssertionError("plugin runtime response has no plugins array")
+            raise AssertionError(
+                "plugin runtime response has no plugins array"
+            )
         for plugin in plugins:
             if (
                 isinstance(plugin, dict)
@@ -267,7 +340,8 @@ class OtelJsonlTask:
             ):
                 if plugin.get("state") != "active":
                     raise AssertionError(
-                        f"otel-jsonl final state is {plugin.get('state')!r}"
+                        "otel-jsonl final state is "
+                        f"{plugin.get('state')!r}"
                     )
                 if plugin.get("dropped_records") != 0:
                     raise AssertionError(
@@ -275,4 +349,6 @@ class OtelJsonlTask:
                         f"{plugin.get('dropped_records')!r}"
                     )
                 return
-        raise AssertionError("otel-jsonl instance is absent from plugin runtime")
+        raise AssertionError(
+            "otel-jsonl instance is absent from plugin runtime"
+        )

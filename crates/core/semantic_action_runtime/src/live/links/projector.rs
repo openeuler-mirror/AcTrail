@@ -60,7 +60,16 @@ impl ActionLinkProjector {
         &mut self,
         event: &DomainEvent,
     ) -> Vec<SemanticActionLink> {
-        self.command.observe_process_fork(event)
+        let update = self.command.observe_process_fork(event);
+        let mut links = update.links;
+        if let Some(conflict) = update.conflict {
+            links.extend(self.agent.invalidate_command_parent_conflict(
+                conflict.trace_id,
+                &conflict.action_ids,
+                &conflict.evidence,
+            ));
+        }
+        links
     }
 
     pub(in crate::live) fn forget_trace(&mut self, trace_id: TraceId) {

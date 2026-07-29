@@ -159,6 +159,9 @@ fn span_kind(kind: SemanticActionKind) -> &'static str {
         | SemanticActionKind::LlmRequest
         | SemanticActionKind::LlmResponse => "SPAN_KIND_CLIENT",
         SemanticActionKind::ProcessExec
+        | SemanticActionKind::ProcessExit
+        | SemanticActionKind::AgentIdentity
+        | SemanticActionKind::AgentExit
         | SemanticActionKind::CommandInvocation
         | SemanticActionKind::ProcessForkAttempt
         | SemanticActionKind::AgentInvocation

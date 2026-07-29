@@ -60,6 +60,9 @@ flush_every_spans = 1
 [action_kinds]
 default = false
 "process.exec" = true
+"process.exit" = true
+"agent.identity" = true
+"agent.exit" = true
 "file.modify" = false
 "file.read" = false
 "file.write" = false

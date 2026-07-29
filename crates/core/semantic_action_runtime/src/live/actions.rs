@@ -13,9 +13,6 @@ pub(super) const ATTR_AGENT_IDENTITY_STATUS: &str = attrs::agent::IDENTITY_STATU
 pub(super) const ATTR_AGENT_IDENTITY_SOURCE: &str = attrs::agent::IDENTITY_SOURCE;
 pub(super) const ATTR_AGENT_IDENTITY_EVIDENCE_ACTION_ID: &str =
     attrs::agent::IDENTITY_EVIDENCE_ACTION_ID;
-pub(super) const ATTR_AGENT_INVOCATION_TRIGGER: &str = attrs::agent_invocation::TRIGGER;
-pub(super) const ATTR_AGENT_INVOCATION_EVIDENCE_ACTION_ID: &str =
-    attrs::agent_invocation::EVIDENCE_ACTION_ID;
 pub(super) const ATTR_PROCESS_PARENT_ID: &str = attrs::process_parent::ID;
 pub(super) const ATTR_PROCESS_PARENT_IDENTITY_STATE: &str = attrs::process_parent::IDENTITY_STATE;
 pub(super) const PROCESS_PARENT_IDENTITY_STATE_CONFLICT: &str = "conflict";
@@ -50,15 +47,8 @@ pub(super) fn process_exec_action(event: &DomainEvent) -> SemanticAction {
     let EventPayload::Process(payload) = &event.payload else {
         unreachable!("process_exec_action only receives process events")
     };
-    let mut attributes = payload.metadata.clone();
-    if let Some(executable) = &payload.executable {
-        attributes.insert(attrs::process::EXECUTABLE.to_string(), executable.clone());
-    }
-    if let Some(parent) = &payload.parent {
-        insert_parent_identity_attributes(&mut attributes, parent);
-    }
     SemanticAction {
-        action_id: process_action_id(event.envelope.trace_id, &event.envelope.process, "exec"),
+        action_id: event_action_id(event, SemanticActionKind::ProcessExec.as_str()),
         trace_id: event.envelope.trace_id,
         kind: SemanticActionKind::ProcessExec,
         title: payload
@@ -66,13 +56,115 @@ pub(super) fn process_exec_action(event: &DomainEvent) -> SemanticAction {
             .clone()
             .unwrap_or_else(|| format!("exec {}", event.envelope.process)),
         start_time: event.envelope.observed_at,
-        end_time: None,
+        end_time: Some(event.envelope.observed_at),
         process: event.envelope.process.clone(),
-        status: SemanticActionStatus::InProgress,
+        status: SemanticActionStatus::Success,
+        completeness: SemanticActionCompleteness::Complete,
+        confidence_millis: None,
+        attributes: process_event_attributes(event),
+        evidence: vec![event_evidence(
+            event,
+            evidence_roles::process::EXEC_COMPLETED,
+        )],
+    }
+}
+
+pub(super) fn agent_identity_action(request: &SemanticAction) -> SemanticAction {
+    let mut attributes = std::collections::BTreeMap::new();
+    attributes.insert(
+        ATTR_AGENT_IDENTITY_STATUS.to_string(),
+        "observed".to_string(),
+    );
+    attributes.insert(
+        ATTR_AGENT_IDENTITY_SOURCE.to_string(),
+        SemanticActionKind::LlmRequest.as_str().to_string(),
+    );
+    attributes.insert(
+        ATTR_AGENT_IDENTITY_EVIDENCE_ACTION_ID.to_string(),
+        request.action_id.clone(),
+    );
+    let evidence = request
+        .evidence
+        .iter()
+        .cloned()
+        .map(|mut evidence| {
+            evidence.role = evidence_roles::agent::IDENTITY.to_string();
+            evidence
+        })
+        .collect();
+    SemanticAction {
+        action_id: process_action_id(
+            request.trace_id,
+            &request.process,
+            SemanticActionKind::AgentIdentity.as_str(),
+        ),
+        trace_id: request.trace_id,
+        kind: SemanticActionKind::AgentIdentity,
+        title: format!("agent identity {}", request.process),
+        start_time: request.start_time,
+        end_time: Some(request.start_time),
+        process: request.process.clone(),
+        status: SemanticActionStatus::Success,
         completeness: SemanticActionCompleteness::Complete,
         confidence_millis: None,
         attributes,
-        evidence: vec![event_evidence(event, evidence_roles::process::EXEC)],
+        evidence,
+    }
+}
+
+pub(super) fn process_exit_action(event: &DomainEvent) -> SemanticAction {
+    exit_action(event, SemanticActionKind::ProcessExit, None)
+}
+
+pub(super) fn agent_exit_action(event: &DomainEvent, identity_action_id: &str) -> SemanticAction {
+    exit_action(
+        event,
+        SemanticActionKind::AgentExit,
+        Some(identity_action_id),
+    )
+}
+
+fn exit_action(
+    event: &DomainEvent,
+    kind: SemanticActionKind,
+    identity_action_id: Option<&str>,
+) -> SemanticAction {
+    let EventPayload::Process(payload) = &event.payload else {
+        unreachable!("exit_action only receives process events")
+    };
+    let exit_code = payload.metadata.get("exit_code");
+    let mut attributes = payload.metadata.clone();
+    attributes.insert(
+        attrs::process::OPERATION.to_string(),
+        payload.operation.clone(),
+    );
+    if let Some(identity_action_id) = identity_action_id {
+        attributes.insert(
+            attrs::agent_exit::IDENTITY_ACTION_ID.to_string(),
+            identity_action_id.to_string(),
+        );
+    }
+    apply_process_exit_attributes(&mut attributes, exit_code);
+    SemanticAction {
+        action_id: event_action_id(event, kind.as_str()),
+        trace_id: event.envelope.trace_id,
+        kind,
+        title: format!("{} {}", kind.as_str(), event.envelope.process),
+        start_time: event.envelope.observed_at,
+        end_time: Some(event.envelope.observed_at),
+        process: event.envelope.process.clone(),
+        status: process_exit_status(exit_code),
+        completeness: SemanticActionCompleteness::Complete,
+        confidence_millis: None,
+        attributes,
+        evidence: vec![event_evidence(
+            event,
+            match kind {
+                SemanticActionKind::ProcessExit => evidence_roles::process::EXIT,
+                SemanticActionKind::AgentExit => evidence_roles::agent::EXIT,
+                _ => unreachable!("exit_action only builds exit action kinds"),
+            },
+        )],
     }
 }
 
@@ -106,53 +198,46 @@ pub(super) fn process_fork_attempt_action(event: &DomainEvent) -> SemanticAction
 
 pub(super) fn process_exit_status(exit_code: Option<&String>) -> SemanticActionStatus {
     match exit_code.and_then(|value| value.parse::<i32>().ok()) {
-        Some(0) | None => SemanticActionStatus::Success,
+        Some(0) => SemanticActionStatus::Success,
         Some(_) => SemanticActionStatus::Error,
+        None => SemanticActionStatus::Unknown,
     }
 }
 
-pub(super) fn apply_process_exit_attributes(
-    action: &mut SemanticAction,
+fn apply_process_exit_attributes(
+    attributes: &mut std::collections::BTreeMap<String, String>,
     exit_code: Option<&String>,
 ) {
     let Some(exit_code) = exit_code else {
         return;
     };
-    action
-        .attributes
-        .insert(attrs::process::EXIT_CODE.to_string(), exit_code.clone());
+    attributes.insert(attrs::process::EXIT_CODE.to_string(), exit_code.clone());
     if exit_code.parse::<i32>().ok().is_some_and(|code| code != 0) {
-        action.attributes.insert(
+        attributes.insert(
             attrs::process::FAILURE_KIND.to_string(),
             "nonzero_exit".to_string(),
         );
-        action.attributes.insert(
+        attributes.insert(
             attrs::process::FAILURE_SUMMARY.to_string(),
             format!("exit code {exit_code}"),
         );
     }
 }
 
-pub(super) fn apply_command_exit_attributes(
-    action: &mut SemanticAction,
-    exit_code: Option<&String>,
-) {
-    let Some(exit_code) = exit_code else {
-        return;
+pub(super) fn process_event_attributes(
+    event: &DomainEvent,
+) -> std::collections::BTreeMap<String, String> {
+    let EventPayload::Process(payload) = &event.payload else {
+        return std::collections::BTreeMap::new();
     };
-    action
-        .attributes
-        .insert(attrs::command::EXIT_CODE.to_string(), exit_code.clone());
-    if exit_code.parse::<i32>().ok().is_some_and(|code| code != 0) {
-        action.attributes.insert(
-            attrs::command::FAILURE_KIND.to_string(),
-            "nonzero_exit".to_string(),
-        );
-        action.attributes.insert(
-            attrs::command::FAILURE_SUMMARY.to_string(),
-            format!("exit code {exit_code}"),
-        );
+    let mut attributes = payload.metadata.clone();
+    if let Some(executable) = &payload.executable {
+        attributes.insert(attrs::process::EXECUTABLE.to_string(), executable.clone());
     }
+    if let Some(parent) = &payload.parent {
+        insert_parent_identity_attributes(&mut attributes, parent);
+    }
+    attributes
 }
 
 pub(super) fn file_modify_action(event: &DomainEvent) -> SemanticAction {
