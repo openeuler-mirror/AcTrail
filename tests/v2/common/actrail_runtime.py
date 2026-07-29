@@ -27,12 +27,14 @@ class ActrailRuntime:
         command_timeout_seconds: int,
         output: TestOutput,
         operator_config: Path | None = None,
+        operator_config_patch: Path | None = None,
     ):
         self._repo = repo
         self._bin_dir = bin_dir if bin_dir.is_absolute() else repo / bin_dir
         self._command_timeout_seconds = command_timeout_seconds
         self._output = output
         self._operator_config = operator_config
+        self._operator_config_patch = operator_config_patch
         self.actraild = self._require_binary("actraild")
         self.actrailctl = self._require_binary("actrailctl")
         self.actrailviewer = self._require_binary("actrailviewer")
@@ -40,7 +42,7 @@ class ActrailRuntime:
 
     def prepare(self) -> list[CommandResult]:
         results = [
-            self.run_checked([*self._daemon_command(), "init", "-f"]),
+            self.run_checked(self._init_command()),
             self.run_checked([*self._daemon_command(), "stop"]),
             self.run_checked([*self._control_command(), "clean"]),
             self.run_checked([*self._daemon_command(), "start"]),
@@ -112,6 +114,12 @@ class ActrailRuntime:
         if not binary.is_file():
             raise RuntimeError(f"release binary not found: {binary}")
         return binary
+
+    def _init_command(self) -> list[Path | str]:
+        command = [*self._daemon_command(), "init", "-f"]
+        if self._operator_config_patch is not None:
+            command.extend(["--patch", self._operator_config_patch])
+        return command
 
     def _daemon_command(self) -> list[Path | str]:
         command: list[Path | str] = [self.actraild]

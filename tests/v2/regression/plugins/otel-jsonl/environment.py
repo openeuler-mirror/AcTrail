@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 from pathlib import Path
 from typing import Any
 
@@ -24,10 +25,12 @@ class OtelJsonlEnvironment(PluginTestEnvironment):
     }
 
     def __init__(self, config: OtelJsonlConfig, output: TestOutput):
+        self._operator_config_patch = config.work_dir / "actraild.patch.toml"
         super().__init__(
             config,
             output,
             operator_config=config.operator_config,
+            operator_config_patch=self._operator_config_patch,
             web_host=config.web_host,
             web_port=config.web_port,
             plugin=PluginRuntimeSpec(
@@ -43,8 +46,22 @@ class OtelJsonlEnvironment(PluginTestEnvironment):
         return self.config.work_dir / "otel.jsonl"
 
     def prepare(self) -> None:
+        self._write_operator_config_patch()
         document = super().prepare()
         self._require_checkbox_schema(document)
+
+    def _write_operator_config_patch(self) -> None:
+        plugin_root = (
+            self.config.repo / "examples" / "plugins" / "builtin"
+        ).resolve()
+        manifest = plugin_root / "otel-jsonl" / "otel-jsonl.plugin.toml"
+        if not manifest.is_file():
+            raise RuntimeError(f"official otel-jsonl manifest not found: {manifest}")
+        self._operator_config_patch.write_text(
+            "[plugins.discovery]\n"
+            f"directory = {json.dumps(str(plugin_root))}\n",
+            encoding="utf-8",
+        )
 
     def update_selection(self, enabled_kinds: set[str]) -> dict[str, Any]:
         candidate = self.current_config()

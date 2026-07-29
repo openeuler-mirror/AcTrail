@@ -43,6 +43,12 @@ runner 根据 `--work-root` 为 definition 注入独立 `work_dir`。默认目�
 `--no-cleanup` 才会保留 workspace 和日志用于调试。默认日志目录统一位于
 `/tmp/actrail-regression/logs`。
 
+自动化用例从刷新后的默认模板生成 case-local `actraild.conf`，再用最小 patch 将
+`plugins.discovery.directory` 指向仓库中的 `examples/plugins/builtin`。因此测试使用
+当前源码配套的官方 `otel-jsonl` manifest、配置和 Schema，不读取或覆盖用户
+`~/.actrail/plugins` 下可能被编辑过的安装资产。设置
+`OTEL_JSONL_E2E_OPERATOR_CONFIG` 时可以显式覆盖 case-local config 路径。
+
 # 步骤摘要
 
 1. 清理历史状态并启动 `actraild`。
