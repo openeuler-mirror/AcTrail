@@ -37,7 +37,7 @@ cargo build --release --locked
 
 - `vue` 3.5.35: MIT.
 - `@lucide/vue` 1.17.0: ISC.
-- `vite` 5.4.21 and `@vitejs/plugin-vue` 5.2.4: MIT.
+- `vite` 8.1.5 and `@vitejs/plugin-vue` 6.0.8: MIT.
 
 ## Alert refresh
 

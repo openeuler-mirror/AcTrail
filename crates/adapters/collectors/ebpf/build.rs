@@ -23,8 +23,15 @@ struct TransportChoice {
     reason: String,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ProbeVerdict {
+    Supported,
+    Unsupported,
+    Inconclusive,
+}
+
 struct RingbufProbe {
-    supported: bool,
+    verdict: ProbeVerdict,
     reason: String,
 }
 
@@ -120,16 +127,28 @@ fn select_event_transport() -> TransportChoice {
         };
     }
 
-    if let Some(probe) = probe_ringbuf_with_bpftool() {
-        return choice_from_probe(probe);
+    if let Some(probe) = probe_ringbuf_with_bpftool(false) {
+        if let Some(choice) = choice_from_probe(probe) {
+            return choice;
+        }
+    }
+
+    if let Some(probe) = probe_ringbuf_with_bpftool(true) {
+        if let Some(choice) = choice_from_probe(probe) {
+            return choice;
+        }
     }
 
     if let Some(probe) = probe_ringbuf_with_vmlinux_btf() {
-        return choice_from_probe(probe);
+        if let Some(choice) = choice_from_probe(probe) {
+            return choice;
+        }
     }
 
     if let Some(probe) = probe_ringbuf_with_kernel_release() {
-        return choice_from_probe(probe);
+        if let Some(choice) = choice_from_probe(probe) {
+            return choice;
+        }
     }
 
     TransportChoice {
@@ -138,25 +157,27 @@ fn select_event_transport() -> TransportChoice {
     }
 }
 
-fn choice_from_probe(probe: RingbufProbe) -> TransportChoice {
-    if probe.supported {
-        TransportChoice {
+fn choice_from_probe(probe: RingbufProbe) -> Option<TransportChoice> {
+    match probe.verdict {
+        ProbeVerdict::Supported => Some(TransportChoice {
             transport: EventTransport::RingBuffer,
             reason: probe.reason,
-        }
-    } else {
-        TransportChoice {
+        }),
+        ProbeVerdict::Unsupported => Some(TransportChoice {
             transport: EventTransport::PerfBuffer,
             reason: probe.reason,
-        }
+        }),
+        ProbeVerdict::Inconclusive => None,
     }
 }
 
-fn probe_ringbuf_with_bpftool() -> Option<RingbufProbe> {
-    let output = Command::new("bpftool")
-        .args(["feature", "probe", "kernel", "unprivileged"])
-        .output()
-        .ok()?;
+fn probe_ringbuf_with_bpftool(unprivileged: bool) -> Option<RingbufProbe> {
+    let mut command = Command::new("bpftool");
+    command.args(["feature", "probe", "kernel"]);
+    if unprivileged {
+        command.arg("unprivileged");
+    }
+    let output = command.output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -177,21 +198,44 @@ fn probe_ringbuf_with_bpftool() -> Option<RingbufProbe> {
 
     if has_map && has_helpers {
         Some(RingbufProbe {
-            supported: true,
-            reason: "bpftool reported ringbuf map and helpers".to_owned(),
+            verdict: ProbeVerdict::Supported,
+            reason: if unprivileged {
+                "unprivileged bpftool reported ringbuf map and helpers".to_owned()
+            } else {
+                "privileged bpftool reported ringbuf map and helpers".to_owned()
+            },
         })
     } else if has_map {
         Some(RingbufProbe {
-            supported: true,
-            reason: "bpftool reported ringbuf map support".to_owned(),
+            verdict: ProbeVerdict::Inconclusive,
+            reason: if unprivileged {
+                "unprivileged bpftool did not expose every required ringbuf helper".to_owned()
+            } else {
+                "privileged bpftool did not expose every required ringbuf helper".to_owned()
+            },
         })
     } else if lacks_map {
         Some(RingbufProbe {
-            supported: false,
-            reason: "bpftool reported ringbuf map is unavailable".to_owned(),
+            verdict: if unprivileged {
+                ProbeVerdict::Inconclusive
+            } else {
+                ProbeVerdict::Unsupported
+            },
+            reason: if unprivileged {
+                "unprivileged bpftool cannot establish privileged ringbuf availability".to_owned()
+            } else {
+                "privileged bpftool reported ringbuf map is unavailable".to_owned()
+            },
         })
     } else {
-        None
+        Some(RingbufProbe {
+            verdict: ProbeVerdict::Inconclusive,
+            reason: if unprivileged {
+                "unprivileged bpftool did not report ringbuf capability".to_owned()
+            } else {
+                "privileged bpftool did not report ringbuf capability".to_owned()
+            },
+        })
     }
 }
 
@@ -206,11 +250,15 @@ fn probe_ringbuf_with_vmlinux_btf() -> Option<RingbufProbe> {
     ];
     let supported = markers.iter().all(|marker| contains_bytes(&btf, marker));
     Some(RingbufProbe {
-        supported,
+        verdict: if supported {
+            ProbeVerdict::Supported
+        } else {
+            ProbeVerdict::Inconclusive
+        },
         reason: if supported {
             "vmlinux BTF contains ringbuf map and helper symbols".to_owned()
         } else {
-            "vmlinux BTF does not contain ringbuf map/helper symbols".to_owned()
+            "vmlinux BTF cannot confirm every ringbuf map/helper symbol".to_owned()
         },
     })
 }
@@ -222,9 +270,13 @@ fn probe_ringbuf_with_kernel_release() -> Option<RingbufProbe> {
     let (major, minor) = parse_kernel_major_minor(&release)?;
     let supported = major > 5 || (major == 5 && minor >= 8);
     Some(RingbufProbe {
-        supported,
+        verdict: if supported {
+            ProbeVerdict::Inconclusive
+        } else {
+            ProbeVerdict::Unsupported
+        },
         reason: if supported {
-            format!("kernel release {major}.{minor} is >= 5.8")
+            format!("kernel release {major}.{minor} permits but does not confirm ringbuf")
         } else {
             format!("kernel release {major}.{minor} is < 5.8")
         },

@@ -13,6 +13,7 @@ pub mod maps;
 pub mod procfs;
 pub mod sensors;
 
+use std::collections::BTreeMap;
 use std::os::fd::RawFd;
 use std::time::SystemTime;
 
@@ -68,6 +69,9 @@ pub struct EbpfCollector {
     binding_gap_lifecycle_skips: u64,
     clock_ticks_per_second: Option<u64>,
 }
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct EbpfPreflightKey(Vec<(Capability, RequestMode)>);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct TraceSuppressedFd {
@@ -210,6 +214,19 @@ impl EbpfCollector {
         &self.probe_result
     }
 
+    pub const fn event_transport(&self) -> &'static str {
+        env!("ACTRAIL_EBPF_EVENT_TRANSPORT")
+    }
+
+    pub fn preflight_key(&self, requests: &[CapabilityRequest]) -> EbpfPreflightKey {
+        EbpfPreflightKey(
+            self.effective_preflight_requests(requests)
+                .into_iter()
+                .map(|request| (request.capability, request.mode))
+                .collect(),
+        )
+    }
+
     pub fn preflight_capability_requests(
         &self,
         requests: &[CapabilityRequest],
@@ -218,18 +235,7 @@ impl EbpfCollector {
             return Err(CollectorError::new("ebpf_preflight", reason.clone()));
         }
 
-        let requests = requests
-            .iter()
-            .filter(|request| request.mode != RequestMode::Disabled)
-            .filter(|request| {
-                self.probe_result
-                    .descriptor
-                    .capabilities
-                    .iter()
-                    .any(|descriptor| descriptor.capability == request.capability)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
+        let requests = self.effective_preflight_requests(requests);
         if requests.is_empty() {
             return Err(CollectorError::new(
                 "ebpf_preflight",
@@ -273,6 +279,35 @@ impl EbpfCollector {
             ));
         }
         Ok(())
+    }
+
+    fn effective_preflight_requests(
+        &self,
+        requests: &[CapabilityRequest],
+    ) -> Vec<CapabilityRequest> {
+        let mut effective = BTreeMap::<Capability, RequestMode>::new();
+        for request in requests.iter().filter(|request| {
+            request.mode != RequestMode::Disabled
+                && self
+                    .probe_result
+                    .descriptor
+                    .capabilities
+                    .iter()
+                    .any(|descriptor| descriptor.capability == request.capability)
+        }) {
+            effective
+                .entry(request.capability.clone())
+                .and_modify(|mode| {
+                    if request.mode == RequestMode::Required {
+                        *mode = RequestMode::Required;
+                    }
+                })
+                .or_insert(request.mode);
+        }
+        effective
+            .into_iter()
+            .map(|(capability, mode)| CapabilityRequest { capability, mode })
+            .collect()
     }
 
     pub fn seed_trace_memberships(
