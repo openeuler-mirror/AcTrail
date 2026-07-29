@@ -19,6 +19,10 @@ pub(crate) struct ObservedRecordBatch {
 }
 
 impl ObservedRecordBatch {
+    pub(crate) fn semantic_actions(&self) -> &SemanticActionBatch {
+        &self.semantic_actions
+    }
+
     pub(crate) fn from_live_events(
         events: Vec<DomainEvent>,
         diagnostics: Vec<DiagnosticRecord>,

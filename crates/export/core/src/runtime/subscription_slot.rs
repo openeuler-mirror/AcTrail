@@ -1,72 +1,25 @@
-use std::collections::BTreeMap;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Sender, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
+use super::report_accumulator::{
+    PendingDropAccumulator, PendingRuntimeFailureAccumulator, ReportAccumulator,
+};
 use super::subscription_worker::{
-    ObservationWorkItem, ObservationWorkerControl, QueuedObservationBatch, run_observation_worker,
+    ObservationWorkItem, ObservationWorkerControl, QueuedObservationBatch, panic_message,
+    run_observation_worker,
 };
 use super::{
-    ExportDroppedRecord, ExportPublishReport, PostTraceCompletion, SemanticActionExportBatch,
+    ExportDroppedRecord, ExportRuntimeFailure, PostTraceCompletion, SemanticActionExportBatch,
 };
-use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
 use plugin_system::{
     ObservationBatch, ObservationConsumeReport, ObservationConsumer, ObservationEventFamily,
     PluginHostcallMetricsSource, PluginInstanceStatus, PluginLifecycleState, PluginPurpose,
     PluginRuntimeKind, PostTraceTask,
 };
-
-#[derive(Default)]
-pub(super) struct DropAccumulator {
-    dropped: BTreeMap<RouteDropKey, u64>,
-}
-
-impl DropAccumulator {
-    pub(super) fn record(
-        &mut self,
-        trace_id: TraceId,
-        route: String,
-        reason: String,
-        queue_capacity: Option<u32>,
-        dropped_records: u64,
-    ) {
-        let key = RouteDropKey {
-            trace_id,
-            route,
-            reason,
-            queue_capacity,
-        };
-        self.dropped
-            .entry(key)
-            .and_modify(|count| *count = count.saturating_add(dropped_records))
-            .or_insert(dropped_records);
-    }
-
-    pub(super) fn into_report(self) -> ExportPublishReport {
-        ExportPublishReport::from_dropped_records(
-            self.dropped
-                .into_iter()
-                .map(|(key, dropped_records)| ExportDroppedRecord {
-                    trace_id: key.trace_id,
-                    exporter: key.route,
-                    reason: key.reason,
-                    queue_capacity: key.queue_capacity,
-                    dropped_records,
-                })
-                .collect(),
-        )
-    }
-}
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct RouteDropKey {
-    trace_id: TraceId,
-    route: String,
-    reason: String,
-    queue_capacity: Option<u32>,
-}
 
 pub(super) struct ObservationConsumerSlot {
     instance_id: String,
@@ -81,6 +34,7 @@ pub(super) struct ObservationConsumerSlot {
     delivery: ObservationDelivery,
     metrics: Arc<ObservationConsumerMetrics>,
     has_post_trace_analyzer: bool,
+    stopped: bool,
 }
 
 impl ObservationConsumerSlot {
@@ -102,7 +56,10 @@ impl ObservationConsumerSlot {
             dropped_records: AtomicU64::new(0),
             queue_depth: AtomicU64::new(0),
             last_error: Mutex::new(None),
-            pending_dropped_records: Mutex::new(Vec::new()),
+            pending_dropped_records: Mutex::new(PendingDropAccumulator::new(instance_id.clone())),
+            pending_runtime_failures: Mutex::new(PendingRuntimeFailureAccumulator::new(
+                instance_id.clone(),
+            )),
         });
         let (queue_capacity, delivery) = match runtime {
             PluginRuntimeKind::Builtin => (None, ObservationDelivery::Inline(consumer)),
@@ -150,6 +107,7 @@ impl ObservationConsumerSlot {
             delivery,
             metrics,
             has_post_trace_analyzer,
+            stopped: false,
         }
     }
 
@@ -282,7 +240,7 @@ impl ObservationConsumerSlot {
         &self,
         batch: &SemanticActionExportBatch<'_>,
         payload_segments: &[PayloadSegment],
-        dropped: &mut DropAccumulator,
+        dropped: &mut ReportAccumulator,
     ) {
         match &self.delivery {
             ObservationDelivery::Inline(consumer) => {
@@ -306,8 +264,8 @@ impl ObservationConsumerSlot {
                 ..
             } => enqueue_observation_batch(self, sender, batch, payload_segments, dropped),
             ObservationDelivery::Queued { sender: None, .. } => {
-                dropped.record(
-                    batch.trace.trace_id,
+                dropped.record_drop(
+                    Some(batch.trace.trace_id),
                     self.instance_id.clone(),
                     "plugin queue is stopped".to_string(),
                     self.queue_capacity,
@@ -317,38 +275,50 @@ impl ObservationConsumerSlot {
         }
     }
 
-    pub(super) fn drain_pending_drops(&self, dropped: &mut DropAccumulator) {
-        let Ok(mut pending) = self.metrics.pending_dropped_records.lock() else {
-            return;
-        };
-        for drop in pending.drain(..) {
-            dropped.record(
-                drop.trace_id,
-                drop.exporter,
-                drop.reason,
-                drop.queue_capacity,
-                drop.dropped_records,
-            );
+    pub(super) fn drain_pending_reports(&self, report: &mut ReportAccumulator) {
+        if let Ok(mut pending) = self.metrics.pending_dropped_records.lock() {
+            pending.drain_into(report);
+        }
+        if let Ok(mut pending) = self.metrics.pending_runtime_failures.lock() {
+            pending.drain_into(report);
         }
     }
 
-    pub(super) fn stop(&mut self) {
-        if let ObservationDelivery::Queued {
-            sender,
-            worker,
-            consumer,
-            control,
-        } = &mut self.delivery
-        {
-            if let Some(analyzer) = consumer.post_trace_analyzer() {
-                control.request_cancellation();
-                analyzer.cancel_post_trace();
+    pub(super) fn stop(&mut self) -> Vec<ExportRuntimeFailure> {
+        if self.stopped {
+            return Vec::new();
+        }
+        self.stopped = true;
+        match &mut self.delivery {
+            ObservationDelivery::Inline(consumer) => {
+                finish_observation_consumer(consumer.as_ref(), &self.metrics)
             }
-            sender.take();
-            if let Some(worker) = worker.take()
-                && worker.join().is_err()
-            {
-                self.store_last_error(Some("plugin queue worker panicked".to_string()));
+            ObservationDelivery::Queued {
+                sender,
+                worker,
+                consumer,
+                control,
+            } => {
+                let mut failures = Vec::new();
+                if let Some(analyzer) = consumer.post_trace_analyzer() {
+                    control.request_cancellation();
+                    analyzer.cancel_post_trace();
+                }
+                sender.take();
+                if let Some(worker) = worker.take()
+                    && worker.join().is_err()
+                {
+                    failures.push(record_runtime_failure(
+                        consumer.as_ref(),
+                        &self.metrics,
+                        "plugin queue worker panicked".to_string(),
+                    ));
+                }
+                failures.extend(finish_observation_consumer(
+                    consumer.as_ref(),
+                    &self.metrics,
+                ));
+                failures
             }
         }
     }
@@ -385,7 +355,7 @@ impl ObservationConsumerSlot {
 
 impl Drop for ObservationConsumerSlot {
     fn drop(&mut self) {
-        self.stop();
+        let _ = self.stop();
     }
 }
 
@@ -404,7 +374,8 @@ pub(super) struct ObservationConsumerMetrics {
     pub(super) dropped_records: AtomicU64,
     pub(super) queue_depth: AtomicU64,
     pub(super) last_error: Mutex<Option<String>>,
-    pub(super) pending_dropped_records: Mutex<Vec<ExportDroppedRecord>>,
+    pending_dropped_records: Mutex<PendingDropAccumulator>,
+    pending_runtime_failures: Mutex<PendingRuntimeFailureAccumulator>,
 }
 
 fn enqueue_observation_batch(
@@ -412,15 +383,15 @@ fn enqueue_observation_batch(
     sender: &SyncSender<ObservationWorkItem>,
     batch: &SemanticActionExportBatch<'_>,
     payload_segments: &[PayloadSegment],
-    dropped: &mut DropAccumulator,
+    dropped: &mut ReportAccumulator,
 ) {
     if !slot.try_reserve_queue_slot() {
         let dropped_records = u64::try_from(batch.actions.len()).unwrap_or(u64::MAX);
         slot.metrics
             .dropped_records
             .fetch_add(dropped_records, Ordering::Relaxed);
-        dropped.record(
-            batch.trace.trace_id,
+        dropped.record_drop(
+            Some(batch.trace.trace_id),
             slot.instance_id.clone(),
             "observation_queue_full".to_string(),
             slot.queue_capacity,
@@ -443,8 +414,8 @@ fn enqueue_observation_batch(
             slot.metrics
                 .dropped_records
                 .fetch_add(dropped_records, Ordering::Relaxed);
-            dropped.record(
-                batch.trace.trace_id,
+            dropped.record_drop(
+                Some(batch.trace.trace_id),
                 slot.instance_id.clone(),
                 "observation_queue_full".to_string(),
                 slot.queue_capacity,
@@ -459,8 +430,8 @@ fn enqueue_observation_batch(
                 .fetch_add(dropped_records, Ordering::Relaxed);
             let reason = "plugin queue worker disconnected".to_string();
             slot.store_last_error(Some(reason.clone()));
-            dropped.record(
-                batch.trace.trace_id,
+            dropped.record_drop(
+                Some(batch.trace.trace_id),
                 slot.instance_id.clone(),
                 reason,
                 slot.queue_capacity,
@@ -475,17 +446,17 @@ fn consume_observation_batch(
     consumer: &dyn ObservationConsumer,
     batch: ObservationBatch<'_>,
     action_count: usize,
-    dropped: &mut DropAccumulator,
+    dropped: &mut ReportAccumulator,
 ) {
-    let dropped_records_on_error = u64::try_from(action_count).unwrap_or(u64::MAX);
+    let observed_records = u64::try_from(action_count).unwrap_or(u64::MAX);
     let trace_id = batch.trace.trace_id;
-    match consumer.consume(batch) {
-        Ok(report) => {
+    match catch_unwind(AssertUnwindSafe(|| consumer.consume(batch))) {
+        Ok(Ok(report)) => {
             for drop in &report.dropped_records {
                 if drop.dropped_records == u64::default() {
                     continue;
                 }
-                dropped.record(
+                dropped.record_drop(
                     drop.trace_id,
                     drop.plugin_instance.clone(),
                     drop.reason.clone(),
@@ -493,18 +464,29 @@ fn consume_observation_batch(
                     drop.dropped_records,
                 );
             }
-            record_successful_consume(&slot.metrics, dropped_records_on_error, report, false);
+            record_successful_consume(&slot.metrics, observed_records, report, false);
         }
-        Err(error) => {
+        Ok(Err(error)) => {
             let reason = format!("{}: {}", error.code, error.message);
-            dropped.record(
-                trace_id,
-                slot.instance_id.clone(),
-                reason.clone(),
-                None,
-                dropped_records_on_error,
-            );
-            record_consume_error(&slot.metrics, dropped_records_on_error, reason);
+            dropped.record_runtime_failure(ExportRuntimeFailure {
+                trace_id: Some(trace_id),
+                exporter: slot.instance_id.clone(),
+                reason: reason.clone(),
+                queue_capacity: slot.queue_capacity,
+                occurrences: 1,
+            });
+            record_consume_failure(&slot.metrics, reason);
+        }
+        Err(panic) => {
+            let reason = format!("plugin consumer panicked: {}", panic_message(&panic));
+            dropped.record_runtime_failure(ExportRuntimeFailure {
+                trace_id: Some(trace_id),
+                exporter: slot.instance_id.clone(),
+                reason: reason.clone(),
+                queue_capacity: slot.queue_capacity,
+                occurrences: 1,
+            });
+            record_consume_failure(&slot.metrics, reason);
         }
     }
 }
@@ -541,28 +523,86 @@ pub(super) fn record_successful_consume(
     }
 }
 
-pub(super) fn record_consume_error(
-    metrics: &ObservationConsumerMetrics,
-    dropped_records: u64,
-    reason: String,
-) {
-    metrics
-        .dropped_records
-        .fetch_add(dropped_records, Ordering::Relaxed);
+pub(super) fn record_consume_failure(metrics: &ObservationConsumerMetrics, reason: String) {
     store_last_error(metrics, Some(reason));
 }
 
 pub(super) fn record_pending_drop(metrics: &ObservationConsumerMetrics, drop: ExportDroppedRecord) {
-    if drop.dropped_records == u64::default() {
-        return;
-    }
     if let Ok(mut pending) = metrics.pending_dropped_records.lock() {
-        pending.push(drop);
+        pending.record(drop);
+    }
+}
+
+pub(super) fn record_pending_runtime_failure(
+    metrics: &ObservationConsumerMetrics,
+    failure: ExportRuntimeFailure,
+) {
+    if let Ok(mut pending) = metrics.pending_runtime_failures.lock() {
+        pending.record(failure);
     }
 }
 
 pub(super) fn store_last_error(metrics: &ObservationConsumerMetrics, error: Option<String>) {
     if let Ok(mut last_error) = metrics.last_error.lock() {
         *last_error = error;
+    }
+}
+
+fn finish_observation_consumer(
+    consumer: &dyn ObservationConsumer,
+    metrics: &ObservationConsumerMetrics,
+) -> Vec<ExportRuntimeFailure> {
+    match catch_unwind(AssertUnwindSafe(|| consumer.finish())) {
+        Ok(Ok(report)) => {
+            for drop in report.dropped_records {
+                if drop.dropped_records == u64::default() {
+                    continue;
+                }
+                metrics
+                    .dropped_records
+                    .fetch_add(drop.dropped_records, Ordering::Relaxed);
+                store_last_error(metrics, Some(drop.reason.clone()));
+                record_pending_drop(
+                    metrics,
+                    ExportDroppedRecord {
+                        trace_id: drop.trace_id,
+                        exporter: drop.plugin_instance,
+                        reason: drop.reason,
+                        queue_capacity: drop.queue_capacity,
+                        dropped_records: drop.dropped_records,
+                    },
+                );
+            }
+            Vec::new()
+        }
+        Ok(Err(error)) => {
+            vec![record_runtime_failure(
+                consumer,
+                metrics,
+                format!("{}: {}", error.code, error.message),
+            )]
+        }
+        Err(_) => {
+            vec![record_runtime_failure(
+                consumer,
+                metrics,
+                "plugin consumer finish panicked".to_string(),
+            )]
+        }
+    }
+}
+
+fn record_runtime_failure(
+    consumer: &dyn ObservationConsumer,
+    metrics: &ObservationConsumerMetrics,
+    reason: String,
+) -> ExportRuntimeFailure {
+    store_last_error(metrics, Some(reason.clone()));
+    ExportRuntimeFailure {
+        trace_id: None,
+        exporter: consumer.instance_id().to_string(),
+        reason,
+        queue_capacity: None,
+        occurrences: 1,
     }
 }

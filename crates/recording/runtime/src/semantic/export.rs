@@ -45,41 +45,34 @@ impl<'a> SemanticActionExportRecorder<'a> {
         if batch.actions().is_empty() {
             return Ok(());
         }
-        let report = if batch.actions().iter().all(action_exportable) {
-            let payload_segments = self.payload_segments_for_export(trace.trace_id)?;
-            self.export_runtime
-                .publish_semantic_actions(SemanticActionExportBatch {
-                    trace,
-                    actions: batch.actions(),
-                    links: batch.links(),
-                    file_observation_paths: batch.file_observation_paths(),
-                    payload_segments: &payload_segments,
-                })?
-        } else {
-            let exportable_actions = exportable_actions(batch.actions());
-            if exportable_actions.is_empty() {
-                return Ok(());
-            }
-            let exportable_links = exportable_links(&exportable_actions, batch.links());
-            let exportable_paths =
-                exportable_paths(&exportable_actions, batch.file_observation_paths());
-            let payload_segments = self.payload_segments_for_export(trace.trace_id)?;
-            self.export_runtime
-                .publish_semantic_actions(SemanticActionExportBatch {
-                    trace,
-                    actions: &exportable_actions,
-                    links: &exportable_links,
-                    file_observation_paths: &exportable_paths,
-                    payload_segments: &payload_segments,
-                })?
-        };
-        // Export backpressure is recorded after publish so collection can continue visibly.
-        crate::writer::RecordingWriter::new(self.storage).persist_export_drop_report(
-            report,
-            emitted_at,
-            next_diagnostic_id,
-        )?;
-        Ok(())
+        let exportable_actions = exportable_actions(batch.actions());
+        if exportable_actions.is_empty() {
+            return Ok(());
+        }
+        let exportable_links = exportable_links(&exportable_actions, batch.links());
+        let exportable_paths =
+            exportable_paths(&exportable_actions, batch.file_observation_paths());
+        let payload_snapshot = self.payload_segments_for_export(trace.trace_id);
+        let payload_segments = payload_snapshot.as_deref().unwrap_or_default();
+        let publish_result = self
+            .export_runtime
+            .publish_semantic_actions(SemanticActionExportBatch {
+                trace,
+                actions: &exportable_actions,
+                links: &exportable_links,
+                file_observation_paths: &exportable_paths,
+                payload_segments,
+            })
+            .map_err(RecordingError::from)
+            .and_then(|report| {
+                // Export backpressure is recorded after publish so collection can continue visibly.
+                crate::writer::RecordingWriter::new(self.storage).persist_export_drop_report(
+                    report,
+                    emitted_at,
+                    next_diagnostic_id,
+                )
+            });
+        combine_snapshot_and_publish(payload_snapshot.map(|_| ()), publish_result)
     }
 
     fn payload_segments_for_export(
@@ -128,15 +121,28 @@ impl<'a> SemanticActionExportRecorder<'a> {
         emitted_at: SystemTime,
         mut next_diagnostic_id: impl FnMut() -> Result<DiagnosticId, RecordingError>,
     ) -> Result<(), RecordingError> {
+        let mut errors = Vec::new();
         for batch in semantic_actions.split_by_trace() {
-            self.publish_batch_for_trace(
+            if let Err(error) = self.publish_batch_for_trace(
                 traces,
                 batch.as_record_batch(),
                 emitted_at,
                 &mut next_diagnostic_id,
-            )?;
+            ) {
+                errors.push(error);
+            }
         }
-        Ok(())
+        if errors.is_empty() {
+            return Ok(());
+        }
+        Err(RecordingError::new(
+            LIVE_EXPORT_STAGE,
+            errors
+                .into_iter()
+                .map(|error| format!("{}: {}", error.stage, error.message))
+                .collect::<Vec<_>>()
+                .join("; "),
+        ))
     }
 }
 
@@ -180,4 +186,21 @@ fn exportable_paths(
         .filter(|path| exportable_action_ids.contains(path.action_id.as_str()))
         .cloned()
         .collect()
+}
+
+fn combine_snapshot_and_publish(
+    snapshot_result: Result<(), RecordingError>,
+    publish_result: Result<(), RecordingError>,
+) -> Result<(), RecordingError> {
+    match (snapshot_result, publish_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Err(snapshot), Err(publish)) => Err(RecordingError::new(
+            LIVE_EXPORT_STAGE,
+            format!(
+                "payload snapshot failed at {}: {}; publish failed at {}: {}",
+                snapshot.stage, snapshot.message, publish.stage, publish.message
+            ),
+        )),
+    }
 }

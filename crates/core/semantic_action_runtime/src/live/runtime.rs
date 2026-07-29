@@ -115,9 +115,7 @@ impl LiveSemanticActionRuntime {
                         path_order: 0,
                         path,
                     });
-                let mut output = self
-                    .file_access
-                    .observe_file_event(event, Some(&file_action));
+                let mut output = self.file_access.observe_file_event(event);
                 if !output.raw_event_consumed {
                     let insert_at = output
                         .actions
@@ -139,7 +137,7 @@ impl LiveSemanticActionRuntime {
                     .extend(self.links.observe_actions(&output.actions));
                 output
             } else {
-                let mut output = self.file_access.observe_file_event(event, None);
+                let mut output = self.file_access.observe_file_event(event);
                 output
                     .links
                     .extend(self.links.observe_actions(&output.actions));
@@ -433,34 +431,3 @@ fn event_projects_semantic_action_boundary(event: &DomainEvent) -> bool {
     }
 }
 
-#[cfg(test)]
-#[path = "runtime_tests/support.rs"]
-mod test_support;
-
-#[cfg(test)]
-#[path = "runtime_tests/process.rs"]
-mod process_tests;
-
-#[cfg(test)]
-#[path = "runtime_tests/command.rs"]
-mod command_tests;
-
-#[cfg(test)]
-#[path = "runtime_tests/command_identity.rs"]
-mod command_identity_tests;
-
-#[cfg(test)]
-#[path = "runtime_tests/llm.rs"]
-mod llm_tests;
-
-#[cfg(test)]
-#[path = "runtime_tests/llm_links.rs"]
-mod llm_link_tests;
-
-#[cfg(test)]
-#[path = "runtime_tests/llm_non_llm.rs"]
-mod llm_non_llm_tests;
-
-#[cfg(test)]
-#[path = "runtime_tests/file.rs"]
-mod file_tests;

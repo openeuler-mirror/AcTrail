@@ -11,8 +11,8 @@ use semantic_action::{
 };
 
 use super::super::shared::{
-    FileSummaryPathAccumulator, attr_keys as file_attrs, event_fd, event_read_summary_count,
-    event_result, event_size,
+    FileSummaryPathAccumulator, attr_keys as file_attrs, event_error_count,
+    event_read_summary_count, event_result, event_size,
 };
 use crate::live::actions::event_action_id;
 
@@ -33,12 +33,12 @@ pub(super) struct BulkReadState {
     active: bool,
     mode: FileBulkReadMode,
     paths: FileSummaryPathAccumulator,
-    open_event_by_fd: BTreeMap<u32, EventId>,
     pending_events: Vec<DomainEvent>,
     open_count: u64,
     close_count: u64,
     read_count: u64,
     bytes_read: u64,
+    error_count: u64,
     fast_path_summary_count: u64,
     fast_path_read_count: u64,
 }
@@ -60,12 +60,12 @@ impl BulkReadState {
             active: false,
             mode,
             paths: FileSummaryPathAccumulator::new(max_paths_per_set, path_set_chunk_max_paths),
-            open_event_by_fd: BTreeMap::new(),
             pending_events: Vec::new(),
             open_count: 0,
             close_count: 0,
             read_count: 0,
             bytes_read: 0,
+            error_count: 0,
             fast_path_summary_count: 0,
             fast_path_read_count: 0,
         }
@@ -87,23 +87,20 @@ impl BulkReadState {
         config: &FileBulkReadObservationConfig,
     ) {
         self.last_event_id = event.envelope.event_id;
+        self.error_count = self
+            .error_count
+            .saturating_add(event_error_count(event).unwrap_or_else(|| {
+                u64::from(event_result(event).is_some_and(|result| result < 0))
+            }));
         if let Some(result) = event_result(event).filter(|result| *result < 0) {
             self.paths.record_error(result, path);
         }
         match operation {
             "open" => {
                 self.open_count = self.open_count.saturating_add(1);
-                if event_result(event).is_none_or(|result| result >= 0)
-                    && let Some(fd) = event_fd(event)
-                {
-                    self.open_event_by_fd.insert(fd, event.envelope.event_id);
-                }
             }
             "close" => {
                 self.close_count = self.close_count.saturating_add(1);
-                if let Some(fd) = event_fd(event) {
-                    self.open_event_by_fd.remove(&fd);
-                }
             }
             "read" | "readv" | "read_summary" => {
                 let read_count = event_read_summary_count(event).unwrap_or(1);
@@ -174,7 +171,7 @@ impl BulkReadState {
             ),
             (
                 attrs::file_bulk_read::ERROR_COUNT.to_string(),
-                self.paths.error_count().to_string(),
+                self.error_count.to_string(),
             ),
             (
                 attrs::file_bulk_read::UNIQUE_PATH_COUNT.to_string(),
@@ -255,7 +252,7 @@ impl BulkReadState {
             start_time: self.start_time,
             end_time: Some(end_time),
             process: self.process.clone(),
-            status: SemanticActionStatus::Success,
+            status: aggregate_status(self.error_count),
             completeness,
             confidence_millis: None,
             attributes,
@@ -295,4 +292,12 @@ pub(super) fn bulk_read_operation_candidate(operation: &str) -> bool {
         operation,
         "open" | "close" | "read" | "readv" | "read_summary"
     )
+}
+
+fn aggregate_status(error_count: u64) -> SemanticActionStatus {
+    if error_count == 0 {
+        SemanticActionStatus::Success
+    } else {
+        SemanticActionStatus::Error
+    }
 }

@@ -1,28 +1,26 @@
 //! File access projection from file syscall events.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::time::SystemTime;
 
 use config_core::daemon::FileObservationConfig;
 use model_core::event::{DomainEvent, EventPayload};
 use model_core::ids::{EventId, TraceId};
 use model_core::process::ProcessIdentity;
-use semantic_action::{
-    SemanticAction, SemanticActionCompleteness, SemanticActionLink, SemanticActionLinkConfidence,
-    SemanticActionLinkRole, evidence_roles,
-};
+use semantic_action::{SemanticAction, SemanticActionCompleteness};
 
 use super::super::shared::{
-    FileFdOwner, FileFdRegistry, event_fd, event_file_path, event_read_summary_count, event_result,
-    event_size, file_open_has_directory_flag,
+    FileFdOwner, FileFdRegistry, event_error_count, event_fd, event_file_path,
+    event_read_summary_count, event_result, event_size, event_source_fd, event_target_fd,
+    file_open_has_directory_flag,
 };
 use super::bulk_read::bulk_read_operation_candidate;
 use super::enumerate::{FsEnumerateOutput, FsEnumerateProjector};
 use super::io_action::{
-    FileAccessKind, FileIoState, complete_close_action, open_backed_io_action, single_io_action,
+    FileAccessKind, FileIoState, OpenFileActionContext, single_io_action, terminal_io_action,
 };
 use super::summary::{FileSummaryOutput, FileSummaryProjector};
-use crate::live::actions::{event_evidence, is_file_modify_operation, status_from_result};
+use crate::live::actions::{is_file_modify_event, is_file_modify_operation, status_from_result};
 use crate::live::runtime::LiveSemanticActionOutput;
 
 pub(in crate::live) struct FileAccessProjector {
@@ -30,7 +28,6 @@ pub(in crate::live) struct FileAccessProjector {
     summary: FileSummaryProjector,
     fd_registry: FileFdRegistry,
     open_files: BTreeMap<FileHandleKey, FileHandleState>,
-    linked_file_events: BTreeSet<FileEventLinkKey>,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -42,18 +39,15 @@ struct FileHandleKey {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct FileHandleState {
+    trace_id: TraceId,
+    process: ProcessIdentity,
+    action_seed_event_id: EventId,
     open_event_id: EventId,
+    open_evidence_role: Option<&'static str>,
     open_time: SystemTime,
     path: String,
     read: FileIoState,
     write: FileIoState,
-}
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct FileEventLinkKey {
-    trace_id: TraceId,
-    parent_action_id: String,
-    child_action_id: String,
 }
 
 impl FileAccessProjector {
@@ -63,25 +57,26 @@ impl FileAccessProjector {
             summary: FileSummaryProjector::new(config),
             fd_registry: FileFdRegistry::default(),
             open_files: BTreeMap::new(),
-            linked_file_events: BTreeSet::new(),
         }
     }
 
     pub(in crate::live) fn observe_file_event(
         &mut self,
         event: &DomainEvent,
-        file_modify_action: Option<&SemanticAction>,
     ) -> LiveSemanticActionOutput {
         let EventPayload::File(payload) = &event.payload else {
             return LiveSemanticActionOutput::default();
         };
         if fd_duplicate_lifecycle_operation(&payload.operation) {
+            let pending = self.summary.release_pending_before_fd_lifecycle(event);
+            let mut output = self.live_output_from_summary(pending, false);
+            append_output(&mut output, self.observe_file_duplicate(event));
             self.fd_registry.duplicate(event);
-            return consumed_lifecycle_output();
-        }
-        if payload.operation == "open" && file_modify_action.is_some() {
-            self.observe_open(event);
-            return LiveSemanticActionOutput::default();
+            if !event_result(event).is_some_and(|result| result < 0) {
+                output.retain_event = false;
+                output.raw_event_consumed = true;
+            }
+            return output;
         }
         if payload.operation == "open" && file_open_has_directory_flag(payload) {
             if let Some(output) = self.observe_directory_open(event) {
@@ -94,7 +89,7 @@ impl FileAccessProjector {
             }
         }
         let mut output = LiveSemanticActionOutput::default();
-        if completes_enumerate_boundary(&payload.operation) {
+        if completes_enumerate_boundary(&payload.operation) || is_file_modify_event(event) {
             append_output(
                 &mut output,
                 live_output_from_enumerate(
@@ -114,17 +109,18 @@ impl FileAccessProjector {
             self.live_output_from_summary(summary, summary_consumed),
         );
         if summary_consumed {
-            consume_successful_close(&mut output, event);
             return output;
         }
-        let current = match payload.operation.as_str() {
-            "open" => {
-                self.observe_open(event);
-                LiveSemanticActionOutput::default()
-            }
-            "read" | "readv" | "read_summary" => self.observe_io(event, FileAccessKind::Read, None),
-            "write" | "writev" => self.observe_io(event, FileAccessKind::Write, file_modify_action),
+        let lifecycle = match payload.operation.as_str() {
+            "open" => self.observe_open(event),
             "close" => self.observe_close(event),
+            _ => LiveSemanticActionOutput::default(),
+        };
+        append_output(&mut output, lifecycle);
+        let current = match payload.operation.as_str() {
+            "open" | "close" => LiveSemanticActionOutput::default(),
+            "read" | "readv" | "read_summary" => self.observe_io(event, FileAccessKind::Read),
+            "write" | "writev" => self.observe_io(event, FileAccessKind::Write),
             _ => LiveSemanticActionOutput::default(),
         };
         append_output(&mut output, current);
@@ -163,6 +159,21 @@ impl FileAccessProjector {
             &event.envelope.process,
             event.envelope.observed_at,
         );
+        if matches!(
+            &event.payload,
+            EventPayload::Process(payload) if payload.operation == "exit"
+        ) {
+            append_output(
+                &mut output,
+                self.finalize_process_handles(
+                    event.envelope.trace_id,
+                    &event.envelope.process,
+                    event.envelope.observed_at,
+                ),
+            );
+            self.fd_registry
+                .forget_process(event.envelope.trace_id, &event.envelope.process);
+        }
         if !matches!(event.payload, EventPayload::File(_)) {
             output.retain_event = true;
             output.raw_event_consumed = false;
@@ -175,8 +186,6 @@ impl FileAccessProjector {
         self.summary.forget_trace(trace_id);
         self.fd_registry.forget_trace(trace_id);
         self.open_files.retain(|key, _| key.trace_id != trace_id);
-        self.linked_file_events
-            .retain(|key| key.trace_id != trace_id);
     }
 
     pub(in crate::live) fn finalize_trace(
@@ -189,6 +198,10 @@ impl FileAccessProjector {
         append_output(
             &mut output,
             live_output_from_enumerate(self.enumerate.finalize_trace(trace_id, finished_at), false),
+        );
+        append_output(
+            &mut output,
+            self.finalize_trace_handles(trace_id, finished_at),
         );
         output
     }
@@ -232,16 +245,15 @@ impl FileAccessProjector {
     ) -> LiveSemanticActionOutput {
         let mut output = LiveSemanticActionOutput {
             actions: summary.actions,
-            links: Vec::new(),
-            file_observation_paths: summary.file_observation_paths,
-            file_path_sets: summary.file_path_sets,
-            llm_request_contents: Vec::new(),
-            deferred_events: summary.deferred_events,
-            retain_event: summary.retain_event,
-            raw_event_consumed,
+            ..LiveSemanticActionOutput::default()
         };
+        output.file_observation_paths = summary.file_observation_paths;
+        output.file_path_sets = summary.file_path_sets;
+        output.deferred_events = summary.deferred_events;
+        output.retain_event = summary.retain_event;
+        output.raw_event_consumed = raw_event_consumed;
         for event in summary.released_detailed_events {
-            append_output(&mut output, self.observe_released_detailed_event(&event));
+            append_replayed_output(&mut output, self.observe_released_detailed_event(&event));
         }
         output
     }
@@ -251,119 +263,172 @@ impl FileAccessProjector {
             return LiveSemanticActionOutput::default();
         };
         match payload.operation.as_str() {
-            "open" => {
-                self.observe_open(event);
-                LiveSemanticActionOutput::default()
-            }
-            "read" | "readv" | "read_summary" => self.observe_io(event, FileAccessKind::Read, None),
-            "write" | "writev" => self.observe_io(event, FileAccessKind::Write, None),
+            "open" => self.observe_open(event),
+            "read" | "readv" | "read_summary" => self.observe_io(event, FileAccessKind::Read),
+            "write" | "writev" => self.observe_io(event, FileAccessKind::Write),
             "close" => self.observe_close(event),
             _ => LiveSemanticActionOutput::default(),
         }
     }
 
-    fn observe_open(&mut self, event: &DomainEvent) {
+    fn observe_open(&mut self, event: &DomainEvent) -> LiveSemanticActionOutput {
         let Some(fd) = event_fd(event) else {
-            return;
+            return LiveSemanticActionOutput::default();
         };
         if event_result(event).is_some_and(|result| result < 0) {
-            return;
+            return LiveSemanticActionOutput::default();
         }
         let Some(path) = event_file_path(event) else {
-            return;
+            return LiveSemanticActionOutput::default();
         };
         let key = FileHandleKey {
             trace_id: event.envelope.trace_id,
             process: event.envelope.process.clone(),
             fd,
         };
+        let replaced = self.open_files.remove(&key);
         self.open_files.insert(
             key,
             FileHandleState {
+                trace_id: event.envelope.trace_id,
+                process: event.envelope.process.clone(),
+                action_seed_event_id: event.envelope.event_id,
                 open_event_id: event.envelope.event_id,
+                open_evidence_role: Some(semantic_action::evidence_roles::file::OPEN),
                 open_time: event.envelope.observed_at,
                 path,
                 read: FileIoState::default(),
                 write: FileIoState::default(),
             },
         );
+        let actions = replaced
+            .map(|state| {
+                state.terminal_actions(
+                    fd,
+                    event.envelope.observed_at,
+                    SemanticActionCompleteness::Partial,
+                    None,
+                )
+            })
+            .unwrap_or_default();
+        LiveSemanticActionOutput {
+            actions,
+            ..LiveSemanticActionOutput::default()
+        }
     }
 
     fn observe_io(
         &mut self,
         event: &DomainEvent,
         kind: FileAccessKind,
-        file_modify_action: Option<&SemanticAction>,
     ) -> LiveSemanticActionOutput {
-        let Some(path) = event_file_path(event) else {
-            return LiveSemanticActionOutput::default();
-        };
         let bytes = event_size(event).unwrap_or_default();
         let count = event_read_summary_count(event).unwrap_or(1);
         let status = status_from_result(event_result(event));
+        let error_count = event_error_count(event).unwrap_or_else(|| {
+            if status == semantic_action::SemanticActionStatus::Error {
+                count.max(1)
+            } else {
+                0
+            }
+        });
         let Some(fd) = event_fd(event) else {
-            let action = single_io_action(event, kind, &path, bytes, status);
-            return LiveSemanticActionOutput {
-                actions: vec![action.clone()],
-                links: self.file_event_link(&action, kind, file_modify_action, event),
-                file_observation_paths: Vec::new(),
-                file_path_sets: Vec::new(),
-                llm_request_contents: Vec::new(),
-                deferred_events: Vec::new(),
-                retain_event: true,
-                raw_event_consumed: false,
+            let Some(path) = event_file_path(event) else {
+                return LiveSemanticActionOutput::default();
             };
+            let action = single_io_action(event, kind, &path, bytes, count, error_count, status);
+            let mut output = LiveSemanticActionOutput {
+                actions: vec![action],
+                ..LiveSemanticActionOutput::default()
+            };
+            output.retain_event = true;
+            output.raw_event_consumed = false;
+            return output;
         };
         let key = FileHandleKey {
             trace_id: event.envelope.trace_id,
             process: event.envelope.process.clone(),
             fd,
         };
-        let Some(mut state) = self.open_files.remove(&key) else {
-            let action = single_io_action(event, kind, &path, bytes, status);
+        if let Some(state) = self.open_files.get_mut(&key) {
+            state
+                .io_mut(kind)
+                .observe(event.envelope.event_id, bytes, count, error_count);
             return LiveSemanticActionOutput {
-                actions: vec![action.clone()],
-                links: self.file_event_link(&action, kind, file_modify_action, event),
-                file_observation_paths: Vec::new(),
-                file_path_sets: Vec::new(),
-                llm_request_contents: Vec::new(),
-                deferred_events: Vec::new(),
+                actions: Vec::new(),
                 retain_event: true,
                 raw_event_consumed: false,
+                ..LiveSemanticActionOutput::default()
             };
+        }
+        let Some(path) = event_file_path(event) else {
+            return LiveSemanticActionOutput::default();
         };
-        let open_event_id = state.open_event_id;
-        let open_time = state.open_time;
-        let open_path = state.path.clone();
-        let io = state.io_mut(kind);
-        io.bytes = io.bytes.saturating_add(bytes);
-        io.count = io.count.saturating_add(count);
-        let mut action = io.action.clone().unwrap_or_else(|| {
-            open_backed_io_action(event, kind, open_event_id, open_time, &open_path)
-        });
-        action.end_time = Some(event.envelope.observed_at);
-        action.status = status;
-        action.completeness = SemanticActionCompleteness::Partial;
-        action
-            .attributes
-            .insert(kind.bytes_attr().to_string(), io.bytes.to_string());
-        action
-            .attributes
-            .insert(kind.count_attr().to_string(), io.count.to_string());
-        action
-            .evidence
-            .push(event_evidence(event, kind.event_role()));
-        io.action = Some(action.clone());
-        self.open_files.insert(key, state);
+        let action = single_io_action(event, kind, &path, bytes, count, error_count, status);
+        let mut output = LiveSemanticActionOutput {
+            actions: vec![action],
+            ..LiveSemanticActionOutput::default()
+        };
+        output.retain_event = true;
+        output.raw_event_consumed = false;
+        output
+    }
+
+    fn observe_file_duplicate(&mut self, event: &DomainEvent) -> LiveSemanticActionOutput {
+        if event_result(event).is_some_and(|result| result < 0) {
+            return LiveSemanticActionOutput::default();
+        }
+        let Some(source_fd) = event_source_fd(event) else {
+            return LiveSemanticActionOutput::default();
+        };
+        let Some(target_fd) = event_target_fd(event) else {
+            return LiveSemanticActionOutput::default();
+        };
+        if source_fd == target_fd {
+            return LiveSemanticActionOutput::default();
+        }
+        let source_key = FileHandleKey {
+            trace_id: event.envelope.trace_id,
+            process: event.envelope.process.clone(),
+            fd: source_fd,
+        };
+        let target_key = FileHandleKey {
+            trace_id: event.envelope.trace_id,
+            process: event.envelope.process.clone(),
+            fd: target_fd,
+        };
+        let source_state = self.open_files.get(&source_key).cloned();
+        let mut actions = self
+            .open_files
+            .remove(&target_key)
+            .map(|state| {
+                state.terminal_actions(
+                    target_fd,
+                    event.envelope.observed_at,
+                    SemanticActionCompleteness::Partial,
+                    None,
+                )
+            })
+            .unwrap_or_default();
+        if let Some(source_state) = source_state {
+            self.open_files.insert(
+                target_key,
+                FileHandleState {
+                    trace_id: event.envelope.trace_id,
+                    process: event.envelope.process.clone(),
+                    action_seed_event_id: event.envelope.event_id,
+                    open_event_id: event.envelope.event_id,
+                    open_evidence_role: None,
+                    open_time: event.envelope.observed_at,
+                    path: source_state.path,
+                    read: FileIoState::default(),
+                    write: FileIoState::default(),
+                },
+            );
+        }
         LiveSemanticActionOutput {
-            actions: vec![action.clone()],
-            links: self.file_event_link(&action, kind, file_modify_action, event),
-            file_observation_paths: Vec::new(),
-            file_path_sets: Vec::new(),
-            llm_request_contents: Vec::new(),
-            deferred_events: Vec::new(),
-            retain_event: true,
-            raw_event_consumed: false,
+            actions: std::mem::take(&mut actions),
+            ..LiveSemanticActionOutput::default()
         }
     }
 
@@ -371,62 +436,82 @@ impl FileAccessProjector {
         let Some(fd) = event_fd(event) else {
             return LiveSemanticActionOutput::default();
         };
+        if event_result(event).is_some_and(|result| result < 0) {
+            return LiveSemanticActionOutput::default();
+        }
         let key = FileHandleKey {
             trace_id: event.envelope.trace_id,
             process: event.envelope.process.clone(),
             fd,
         };
-        let Some(mut state) = self.open_files.remove(&key) else {
+        let Some(state) = self.open_files.remove(&key) else {
             return LiveSemanticActionOutput::default();
         };
-        let actions = [FileAccessKind::Read, FileAccessKind::Write]
-            .into_iter()
-            .filter_map(|kind| complete_close_action(state.io_mut(kind), event))
-            .collect::<Vec<_>>();
-        let retain_event = event_result(event).is_some_and(|result| result < 0);
-        LiveSemanticActionOutput {
+        let actions = state.terminal_actions(
+            fd,
+            event.envelope.observed_at,
+            SemanticActionCompleteness::Complete,
+            Some(event.envelope.event_id),
+        );
+        let mut output = LiveSemanticActionOutput {
             actions,
-            links: Vec::new(),
-            file_observation_paths: Vec::new(),
-            file_path_sets: Vec::new(),
-            llm_request_contents: Vec::new(),
-            deferred_events: Vec::new(),
-            retain_event,
-            raw_event_consumed: !retain_event,
-        }
+            ..LiveSemanticActionOutput::default()
+        };
+        output.retain_event = false;
+        output.raw_event_consumed = true;
+        output
     }
 
-    fn file_event_link(
+    fn finalize_process_handles(
         &mut self,
-        action: &SemanticAction,
-        kind: FileAccessKind,
-        file_modify_action: Option<&SemanticAction>,
-        event: &DomainEvent,
-    ) -> Vec<SemanticActionLink> {
-        if !matches!(kind, FileAccessKind::Write) {
-            return Vec::new();
+        trace_id: TraceId,
+        process: &ProcessIdentity,
+        finished_at: SystemTime,
+    ) -> LiveSemanticActionOutput {
+        let keys = self
+            .open_files
+            .keys()
+            .filter(|key| key.trace_id == trace_id && key.process == *process)
+            .cloned()
+            .collect::<Vec<_>>();
+        self.finalize_handle_keys(keys, finished_at)
+    }
+
+    fn finalize_trace_handles(
+        &mut self,
+        trace_id: TraceId,
+        finished_at: SystemTime,
+    ) -> LiveSemanticActionOutput {
+        let keys = self
+            .open_files
+            .keys()
+            .filter(|key| key.trace_id == trace_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        self.finalize_handle_keys(keys, finished_at)
+    }
+
+    fn finalize_handle_keys(
+        &mut self,
+        keys: Vec<FileHandleKey>,
+        finished_at: SystemTime,
+    ) -> LiveSemanticActionOutput {
+        let mut actions = Vec::new();
+        for key in keys {
+            let Some(state) = self.open_files.remove(&key) else {
+                continue;
+            };
+            actions.extend(state.terminal_actions(
+                key.fd,
+                finished_at,
+                SemanticActionCompleteness::Partial,
+                None,
+            ));
         }
-        let Some(file_modify_action) = file_modify_action else {
-            return Vec::new();
-        };
-        let key = FileEventLinkKey {
-            trace_id: action.trace_id,
-            parent_action_id: action.action_id.clone(),
-            child_action_id: file_modify_action.action_id.clone(),
-        };
-        if !self.linked_file_events.insert(key) {
-            return Vec::new();
+        LiveSemanticActionOutput {
+            actions,
+            ..LiveSemanticActionOutput::default()
         }
-        vec![SemanticActionLink {
-            trace_id: action.trace_id,
-            parent_action_id: action.action_id.clone(),
-            child_action_id: file_modify_action.action_id.clone(),
-            role: SemanticActionLinkRole::FileWriteContainsFileEvent,
-            confidence: SemanticActionLinkConfidence::Observed,
-            valid: true,
-            evidence: vec![event_evidence(event, evidence_roles::file::WRITE)],
-            attributes: BTreeMap::new(),
-        }]
     }
 }
 
@@ -439,19 +524,6 @@ fn completes_enumerate_boundary(operation: &str) -> bool {
 
 fn fd_duplicate_lifecycle_operation(operation: &str) -> bool {
     matches!(operation, "dup" | "dup2" | "dup3" | "fcntl_dup")
-}
-
-fn consumed_lifecycle_output() -> LiveSemanticActionOutput {
-    LiveSemanticActionOutput {
-        actions: Vec::new(),
-        links: Vec::new(),
-        file_observation_paths: Vec::new(),
-        file_path_sets: Vec::new(),
-        llm_request_contents: Vec::new(),
-        deferred_events: Vec::new(),
-        retain_event: false,
-        raw_event_consumed: true,
-    }
 }
 
 fn consume_successful_close(output: &mut LiveSemanticActionOutput, event: &DomainEvent) {
@@ -488,16 +560,14 @@ fn live_output_from_enumerate(
     enumerate: FsEnumerateOutput,
     raw_event_consumed: bool,
 ) -> LiveSemanticActionOutput {
-    LiveSemanticActionOutput {
+    let mut output = LiveSemanticActionOutput {
         actions: enumerate.actions,
-        links: Vec::new(),
-        file_observation_paths: Vec::new(),
-        file_path_sets: enumerate.file_path_sets,
-        llm_request_contents: Vec::new(),
-        deferred_events: Vec::new(),
-        retain_event: enumerate.retain_event,
-        raw_event_consumed,
-    }
+        ..LiveSemanticActionOutput::default()
+    };
+    output.file_path_sets = enumerate.file_path_sets;
+    output.retain_event = enumerate.retain_event;
+    output.raw_event_consumed = raw_event_consumed;
+    output
 }
 
 fn append_output(output: &mut LiveSemanticActionOutput, other: LiveSemanticActionOutput) {
@@ -515,11 +585,62 @@ fn append_output(output: &mut LiveSemanticActionOutput, other: LiveSemanticActio
     output.raw_event_consumed = output.raw_event_consumed || other.raw_event_consumed;
 }
 
+fn append_replayed_output(output: &mut LiveSemanticActionOutput, other: LiveSemanticActionOutput) {
+    output.actions.extend(other.actions);
+    output.links.extend(other.links);
+    output
+        .file_observation_paths
+        .extend(other.file_observation_paths);
+    output.file_path_sets.extend(other.file_path_sets);
+    output
+        .llm_request_contents
+        .extend(other.llm_request_contents);
+    output.deferred_events.extend(other.deferred_events);
+}
+
 impl FileHandleState {
     fn io_mut(&mut self, kind: FileAccessKind) -> &mut FileIoState {
         match kind {
             FileAccessKind::Read => &mut self.read,
             FileAccessKind::Write => &mut self.write,
         }
+    }
+
+    fn io(&self, kind: FileAccessKind) -> &FileIoState {
+        match kind {
+            FileAccessKind::Read => &self.read,
+            FileAccessKind::Write => &self.write,
+        }
+    }
+
+    fn terminal_actions(
+        &self,
+        fd: u32,
+        end_time: SystemTime,
+        completeness: SemanticActionCompleteness,
+        close_event_id: Option<EventId>,
+    ) -> Vec<SemanticAction> {
+        [FileAccessKind::Read, FileAccessKind::Write]
+            .into_iter()
+            .filter_map(|kind| {
+                terminal_io_action(
+                    OpenFileActionContext {
+                        trace_id: self.trace_id,
+                        process: &self.process,
+                        fd,
+                        action_seed_event_id: self.action_seed_event_id,
+                        open_event_id: self.open_event_id,
+                        open_evidence_role: self.open_evidence_role,
+                        open_time: self.open_time,
+                        path: &self.path,
+                    },
+                    kind,
+                    self.io(kind),
+                    end_time,
+                    completeness,
+                    close_event_id,
+                )
+            })
+            .collect()
     }
 }

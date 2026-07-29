@@ -5,7 +5,6 @@ use model_core::diagnostics::DiagnosticRecord;
 use model_core::event::DomainEvent;
 use model_core::ids::DiagnosticId;
 use model_core::process::ProcessRecord;
-use semantic_action::{SemanticAction, SemanticActionLink};
 use storage_core::StorageBackend;
 
 use crate::commit::ObservedRecordCommitCoordinator;
@@ -15,8 +14,7 @@ use crate::observed::{
     TraceStateRecord,
 };
 use crate::semantic::{
-    RecordingError, SemanticActionBatch, SemanticActionExportRecorder, SemanticActionRecordBatch,
-    TraceRecordLookup,
+    RecordingError, SemanticActionBatch, SemanticActionExportRecorder, TraceRecordLookup,
 };
 
 pub struct RecordingWriter<'a> {
@@ -116,26 +114,24 @@ impl<'a> RecordingWriter<'a> {
         traces: &dyn TraceRecordLookup,
         emitted_at: SystemTime,
         next_diagnostic_id: impl FnMut() -> Result<DiagnosticId, RecordingError>,
-        write: impl FnOnce(
-            &mut ObservedRecordWriteSession<'_>,
-        ) -> Result<SemanticActionBatch, RecordingError>,
+        export_batch: SemanticActionBatch,
+        write: impl FnOnce(&mut ObservedRecordWriteSession<'_>) -> Result<(), RecordingError>,
     ) -> Result<(), RecordingError> {
         ObservedRecordCommitCoordinator::new(self.storage, export_runtime)
-            .write_session_then_export(traces, emitted_at, next_diagnostic_id, write)
+            .write_session_then_export(traces, emitted_at, next_diagnostic_id, export_batch, write)
     }
 
-    pub fn export_semantic_actions_for_trace(
+    pub fn export_semantic_action_batch_for_trace(
         &mut self,
         export_runtime: &ExportRuntime,
         traces: &dyn TraceRecordLookup,
-        actions: &[SemanticAction],
-        links: &[SemanticActionLink],
+        semantic_actions: SemanticActionBatch,
         emitted_at: SystemTime,
         next_diagnostic_id: impl FnMut() -> Result<DiagnosticId, RecordingError>,
     ) -> Result<(), RecordingError> {
         SemanticActionExportRecorder::new(self.storage, export_runtime).publish_batch_for_trace(
             traces,
-            SemanticActionRecordBatch::new(actions, links, &[], &[], &[]),
+            semantic_actions.as_record_batch(),
             emitted_at,
             next_diagnostic_id,
         )

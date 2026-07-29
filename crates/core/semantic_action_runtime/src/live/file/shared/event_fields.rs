@@ -45,6 +45,16 @@ pub(in crate::live::file) fn event_read_summary_count(event: &DomainEvent) -> Op
         .and_then(|value| value.parse::<u64>().ok())
 }
 
+pub(in crate::live::file) fn event_error_count(event: &DomainEvent) -> Option<u64> {
+    let EventPayload::File(payload) = &event.payload else {
+        return None;
+    };
+    payload
+        .metadata
+        .get("error_count")
+        .and_then(|value| value.parse::<u64>().ok())
+}
+
 pub(in crate::live::file) fn event_file_path(event: &DomainEvent) -> Option<String> {
     let EventPayload::File(payload) = &event.payload else {
         return None;

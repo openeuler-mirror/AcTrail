@@ -108,22 +108,13 @@ impl FsEnumerateProjector {
                 self.config.path_set_chunk_max_paths,
             )
         });
-        let was_active = state.active;
         state.observe(event, enumerate_event);
         if !state.active && state.should_activate(self.config.min_unique_paths) {
             state.active = true;
         }
-        let actions = if !was_active && state.active {
-            vec![state.action(
-                event.envelope.observed_at,
-                SemanticActionCompleteness::Partial,
-            )]
-        } else {
-            Vec::new()
-        };
         let consumed_by_summary = state.active;
         FsEnumerateOutput {
-            actions,
+            actions: Vec::new(),
             file_path_sets: Vec::new(),
             handled_event: true,
             consumed_by_summary,
@@ -347,7 +338,7 @@ impl FsEnumerateState {
             start_time: self.start_time,
             end_time: Some(end_time),
             process: self.process.clone(),
-            status: SemanticActionStatus::Success,
+            status: aggregate_status(self.paths.error_count()),
             completeness,
             confidence_millis: None,
             attributes,
@@ -376,5 +367,13 @@ fn should_retain_event(retention: FileRawEventRetention, event: &DomainEvent) ->
     match status_from_result(event_result(event)) {
         SemanticActionStatus::Error => retention.retains_error(),
         _ => retention.retains_success(),
+    }
+}
+
+fn aggregate_status(error_count: u64) -> SemanticActionStatus {
+    if error_count == 0 {
+        SemanticActionStatus::Success
+    } else {
+        SemanticActionStatus::Error
     }
 }

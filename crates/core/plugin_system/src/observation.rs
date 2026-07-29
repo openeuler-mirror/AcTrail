@@ -73,6 +73,10 @@ pub trait ObservationConsumer: Send + Sync {
         &self,
         batch: ObservationBatch<'_>,
     ) -> Result<ObservationConsumeReport, PluginRuntimeError>;
+
+    fn finish(&self) -> Result<ObservationConsumeReport, PluginRuntimeError> {
+        Ok(ObservationConsumeReport::empty())
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

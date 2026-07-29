@@ -127,7 +127,7 @@ impl ObservationConsumer for OtelJsonlObservationConsumer {
                         continue;
                     }
                     dropped_records.push(PluginDroppedRecord {
-                        trace_id: action.trace_id,
+                        trace_id: Some(action.trace_id),
                         plugin_instance: self.instance_id.clone(),
                         reason: drop.reason().code().to_string(),
                         queue_capacity: drop.queue_capacity(),
@@ -136,7 +136,7 @@ impl ObservationConsumer for OtelJsonlObservationConsumer {
                 }
                 Err(error) => {
                     dropped_records.push(PluginDroppedRecord {
-                        trace_id: action.trace_id,
+                        trace_id: Some(action.trace_id),
                         plugin_instance: self.instance_id.clone(),
                         reason: format!("{}: {}", error.code, error.message),
                         queue_capacity: error.queue_capacity(),
@@ -146,6 +146,28 @@ impl ObservationConsumer for OtelJsonlObservationConsumer {
             }
         }
         Ok(ObservationConsumeReport { dropped_records })
+    }
+
+    fn finish(&self) -> Result<ObservationConsumeReport, PluginRuntimeError> {
+        let finish = self.route.finish();
+        let Some(error) = finish.error() else {
+            return Ok(ObservationConsumeReport::empty());
+        };
+        if finish.dropped_records() == u64::default() {
+            return Err(PluginRuntimeError::new(
+                error.code.clone(),
+                error.message.clone(),
+            ));
+        }
+        Ok(ObservationConsumeReport {
+            dropped_records: vec![PluginDroppedRecord {
+                trace_id: None,
+                plugin_instance: self.instance_id.clone(),
+                reason: format!("{}: {}", error.code, error.message),
+                queue_capacity: error.queue_capacity(),
+                dropped_records: finish.dropped_records(),
+            }],
+        })
     }
 }
 
@@ -204,18 +226,23 @@ impl JsonlLineSink {
 }
 
 impl BestEffortSink<String> for JsonlLineSink {
-    fn deliver(&mut self, line: String) -> Result<(), String> {
+    fn deliver(&mut self, line: String) -> Result<u64, String> {
         writeln!(self.writer, "{line}").map_err(|error| error.to_string())?;
         self.pending_flush = self.pending_flush.saturating_add(1);
         if self.pending_flush >= self.flush_every_lines {
             self.writer.flush().map_err(|error| error.to_string())?;
+            let delivered = u64::try_from(self.pending_flush).unwrap_or(u64::MAX);
             self.pending_flush = usize::default();
+            return Ok(delivered);
         }
-        Ok(())
+        Ok(u64::default())
     }
 
-    fn finish(&mut self) -> Result<(), String> {
-        self.writer.flush().map_err(|error| error.to_string())
+    fn finish(&mut self) -> Result<u64, String> {
+        self.writer.flush().map_err(|error| error.to_string())?;
+        let delivered = u64::try_from(self.pending_flush).unwrap_or(u64::MAX);
+        self.pending_flush = usize::default();
+        Ok(delivered)
     }
 }
 

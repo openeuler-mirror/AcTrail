@@ -8,9 +8,11 @@ pub use contract::{
     ExportDeliveryDrop, ExportDropReason, ExportError, ExportPublishResult,
     SemanticActionExportAdapter, SemanticActionExportRecord, SemanticActionKindSelection,
 };
-pub use delivery::{BestEffortDelivery, BestEffortDeliveryConfig, BestEffortSink};
+pub use delivery::{
+    BestEffortDelivery, BestEffortDeliveryConfig, BestEffortDeliveryFinish, BestEffortSink,
+};
 pub use runtime::{
     BestEffortSemanticActionRoute, BestEffortSemanticActionRouteConfig, ExportDroppedRecord,
-    ExportPublishReport, ExportRuntime, ObservationConsumerRemoval, PostTraceCompletion,
-    SemanticActionExportBatch, SemanticActionExportRoute,
+    ExportPublishReport, ExportRuntime, ExportRuntimeFailure, ObservationConsumerRemoval,
+    PostTraceCompletion, SemanticActionExportBatch, SemanticActionExportRoute,
 };

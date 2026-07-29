@@ -1,6 +1,6 @@
 use crate::{
-    BestEffortDelivery, BestEffortDeliveryConfig, BestEffortSink, ExportError, ExportPublishResult,
-    SemanticActionExportAdapter, SemanticActionExportRecord,
+    BestEffortDelivery, BestEffortDeliveryConfig, BestEffortDeliveryFinish, BestEffortSink,
+    ExportError, ExportPublishResult, SemanticActionExportAdapter, SemanticActionExportRecord,
 };
 
 pub trait SemanticActionExportRoute: Send + Sync {
@@ -47,6 +47,10 @@ where
             sink,
         )?;
         Ok(Self { adapter, delivery })
+    }
+
+    pub fn finish(&self) -> BestEffortDeliveryFinish {
+        self.delivery.finish()
     }
 }
 

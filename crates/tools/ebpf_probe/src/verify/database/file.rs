@@ -14,6 +14,14 @@ pub(super) fn observed(events: &[DomainEvent], actions: &[SemanticAction]) -> Ha
             _ => None,
         })
         .collect::<HashSet<_>>();
+    if events.iter().any(|event| {
+        matches!(
+            &event.payload,
+            EventPayload::File(payload) if payload.metadata.contains_key("truncate_source")
+        )
+    }) {
+        observed.insert("truncate".to_string());
+    }
     for action in actions {
         if action.evidence.iter().any(|evidence| {
             evidence.kind == SemanticEvidenceKind::Event
@@ -34,6 +42,9 @@ pub(super) fn observed(events: &[DomainEvent], actions: &[SemanticAction]) -> Ha
                 }
             }
             "file.modify" => {
+                if action.attributes.contains_key("truncate_source") {
+                    observed.insert("truncate".to_string());
+                }
                 if let Some(operation) = action
                     .attributes
                     .get(attrs::file::OPERATION)

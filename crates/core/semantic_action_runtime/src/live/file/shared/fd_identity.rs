@@ -77,6 +77,15 @@ impl FileFdRegistry {
     pub(in crate::live::file) fn forget_trace(&mut self, trace_id: TraceId) {
         self.states.retain(|key, _| key.trace_id != trace_id);
     }
+
+    pub(in crate::live::file) fn forget_process(
+        &mut self,
+        trace_id: TraceId,
+        process: &ProcessIdentity,
+    ) {
+        self.states
+            .retain(|key, _| key.trace_id != trace_id || key.process != *process);
+    }
 }
 
 impl FileFdKey {

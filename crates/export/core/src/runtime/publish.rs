@@ -85,17 +85,16 @@ impl ExportRuntime {
     ) -> Result<ObservationConsumerRemoval, ExportError> {
         self.subscriptions.remove_observation_consumer(instance_id)
     }
+
+    pub fn shutdown_observation_consumers(&mut self) -> ExportPublishReport {
+        self.subscriptions.shutdown_observation_consumers()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExportPublishReport {
     pub dropped_records: Vec<ExportDroppedRecord>,
-}
-
-impl ExportPublishReport {
-    pub(crate) fn from_dropped_records(dropped_records: Vec<ExportDroppedRecord>) -> Self {
-        Self { dropped_records }
-    }
+    pub runtime_failures: Vec<ExportRuntimeFailure>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -106,11 +105,20 @@ pub struct ObservationConsumerRemoval {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExportDroppedRecord {
-    pub trace_id: TraceId,
+    pub trace_id: Option<TraceId>,
     pub exporter: String,
     pub reason: String,
     pub queue_capacity: Option<u32>,
     pub dropped_records: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExportRuntimeFailure {
+    pub trace_id: Option<TraceId>,
+    pub exporter: String,
+    pub reason: String,
+    pub queue_capacity: Option<u32>,
+    pub occurrences: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

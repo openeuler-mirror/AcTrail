@@ -22,6 +22,7 @@ pub enum DiagnosticKind {
     IdentityUnverified,
     IdentityMismatch,
     RuntimeDropped,
+    RuntimeFailure,
     RuntimeFatal,
     PolicyFiltered,
     PolicyRedacted,

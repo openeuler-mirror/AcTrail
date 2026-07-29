@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, SystemTime};
 
 use config_core::daemon::{FileObservationConfig, FileRawEventRetention};
@@ -10,10 +10,10 @@ use semantic_action::{
     SemanticActionStatus,
 };
 
-use super::super::shared::{event_result, payload_file_path};
+use super::super::shared::{event_error_count, event_result, payload_file_path};
 use super::bulk_read::{BulkReadKey, BulkReadState, bulk_read_operation_candidate};
 use super::tty::{TtyKey, TtyState};
-use crate::live::actions::status_from_result;
+use crate::live::actions::{is_file_modify_event, status_from_result};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct FileSummaryOutput {
@@ -58,6 +58,7 @@ pub(super) struct FileSummaryProjector {
     config: FileObservationConfig,
     tty: BTreeMap<TtyKey, TtyState>,
     bulk_read: BTreeMap<BulkReadKey, BulkReadState>,
+    detailed_bulk_read: BTreeSet<BulkReadKey>,
 }
 
 impl FileSummaryProjector {
@@ -66,6 +67,7 @@ impl FileSummaryProjector {
             config,
             tty: BTreeMap::new(),
             bulk_read: BTreeMap::new(),
+            detailed_bulk_read: BTreeSet::new(),
         }
     }
 
@@ -86,10 +88,10 @@ impl FileSummaryProjector {
                 consume_tty_event()
             };
         }
-        let is_bulk_read_candidate = bulk_read_operation_candidate(&payload.operation);
-        let mut output = if is_bulk_read_candidate {
-            FileSummaryOutput::default()
-        } else if completes_scan_boundary(&payload.operation) {
+        let modifying_open = payload.operation == "open" && is_file_modify_event(event);
+        let is_bulk_read_candidate =
+            bulk_read_operation_candidate(&payload.operation) && !modifying_open;
+        let mut output = if modifying_open || completes_scan_boundary(&payload.operation) {
             self.observe_boundary(
                 event.envelope.trace_id,
                 &event.envelope.process,
@@ -117,6 +119,7 @@ impl FileSummaryProjector {
             trace_id,
             process: process.clone(),
         };
+        self.detailed_bulk_read.remove(&key);
         let Some(state) = self.bulk_read.remove(&key) else {
             return FileSummaryOutput::default();
         };
@@ -144,6 +147,24 @@ impl FileSummaryProjector {
             consumed_by_summary: false,
             retain_event: true,
         }
+    }
+
+    pub(super) fn release_pending_before_fd_lifecycle(
+        &mut self,
+        event: &DomainEvent,
+    ) -> FileSummaryOutput {
+        let key = BulkReadKey {
+            trace_id: event.envelope.trace_id,
+            process: event.envelope.process.clone(),
+        };
+        if self.bulk_read.get(&key).is_none_or(BulkReadState::active) {
+            return FileSummaryOutput::default();
+        }
+        self.observe_boundary(
+            event.envelope.trace_id,
+            &event.envelope.process,
+            event.envelope.observed_at,
+        )
     }
 
     pub(super) fn finalize_trace(
@@ -181,12 +202,16 @@ impl FileSummaryProjector {
             }
             false
         });
+        self.detailed_bulk_read
+            .retain(|key| key.trace_id != trace_id);
         output
     }
 
     pub(super) fn forget_trace(&mut self, trace_id: TraceId) {
         self.tty.retain(|key, _| key.trace_id != trace_id);
         self.bulk_read.retain(|key, _| key.trace_id != trace_id);
+        self.detailed_bulk_read
+            .retain(|key| key.trace_id != trace_id);
     }
 
     fn observe_tty(
@@ -243,21 +268,19 @@ impl FileSummaryProjector {
             trace_id: event.envelope.trace_id,
             process: event.envelope.process.clone(),
         };
-        let mut state = self.bulk_read.remove(&key).unwrap_or_else(|| {
-            BulkReadState::new(
+        if self.detailed_bulk_read.contains(&key) {
+            return FileSummaryOutput::default();
+        }
+        let mut state = match self.bulk_read.remove(&key) {
+            Some(state) => state,
+            None => BulkReadState::new(
                 event,
                 self.config.bulk_read.mode,
                 self.config.bulk_read.max_paths_per_set,
                 self.config.bulk_read.path_set_chunk_max_paths,
-            )
-        });
-        let was_active = state.active();
+            ),
+        };
         state.observe(event, operation, path, &self.config.bulk_read);
-        let status = status_from_result(event_result(event));
-        if status == SemanticActionStatus::Error {
-            self.bulk_read.insert(key, state);
-            return FileSummaryOutput::default();
-        }
         let activates_now =
             !state.active() && state.should_activate(self.config.bulk_read.min_unique_paths);
         if activates_now {
@@ -269,6 +292,7 @@ impl FileSummaryProjector {
                 let pending_events = state.take_pending_events();
                 let deferred_events =
                     retained_events(self.config.bulk_read.raw_event_retention, &pending_events);
+                self.detailed_bulk_read.insert(key);
                 return FileSummaryOutput {
                     actions: Vec::new(),
                     file_observation_paths: Vec::new(),
@@ -299,19 +323,11 @@ impl FileSummaryProjector {
                 &pending_events,
             ));
         }
-        let actions = if was_active {
-            Vec::new()
-        } else {
-            vec![state.action(
-                event.envelope.observed_at,
-                SemanticActionCompleteness::Partial,
-            )]
-        };
         if state.active() {
             self.bulk_read.insert(key, state);
         }
         FileSummaryOutput {
-            actions,
+            actions: Vec::new(),
             file_observation_paths: Vec::new(),
             file_path_sets: Vec::new(),
             deferred_events,
@@ -331,7 +347,12 @@ fn retained_events(retention: FileRawEventRetention, events: &[DomainEvent]) -> 
 }
 
 fn should_retain_event(retention: FileRawEventRetention, event: &DomainEvent) -> bool {
-    match status_from_result(event_result(event)) {
+    let status = if event_error_count(event).is_some_and(|count| count > 0) {
+        SemanticActionStatus::Error
+    } else {
+        status_from_result(event_result(event))
+    };
+    match status {
         SemanticActionStatus::Error => retention.retains_error(),
         _ => retention.retains_success(),
     }
