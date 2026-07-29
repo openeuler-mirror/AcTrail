@@ -31,15 +31,4 @@ impl RecordingTransaction {
             }
         }
     }
-
-    pub fn commit_or_rollback_then<T, R, E>(
-        self,
-        write_result: Result<T, E>,
-        map_commit_error: impl FnOnce(RecordingError) -> E,
-        post_commit: impl FnOnce(T) -> Result<R, E>,
-    ) -> Result<R, E> {
-        let value = self.commit_or_rollback(write_result, map_commit_error)?;
-        // Post-commit work is intentionally outside rollback scope.
-        post_commit(value)
-    }
 }

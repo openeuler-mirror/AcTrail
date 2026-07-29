@@ -144,7 +144,6 @@ fn nonzero_u64(value: u64) -> Option<u64> {
 
 fn file_operation(outcome: &FileSyscallOutcome) -> &'static str {
     match outcome.enter.kind {
-        FILE_EVENT_OPEN if open_truncates(&outcome.enter) => "truncate",
         FILE_EVENT_OPEN => "open",
         crate::decode::FILE_EVENT_CONTEXT if outcome.enter.aux == FILE_SYSCALL_CLOSE => "close",
         crate::decode::FILE_EVENT_CONTEXT if outcome.enter.aux == FILE_SYSCALL_DUP => "dup",
@@ -267,6 +266,9 @@ fn insert_syscall_args(metadata: &mut BTreeMap<String, String>, outcome: &FileSy
         FILE_SYSCALL_OPEN => {
             metadata.insert("flags".to_string(), event.arg1.to_string());
             metadata.insert("mode".to_string(), event.arg2.to_string());
+            if open_truncates(event) {
+                metadata.insert("truncate_source".to_string(), "open_o_trunc".to_string());
+            }
         }
         FILE_SYSCALL_OPENAT => {
             metadata.insert("dirfd".to_string(), (event.arg0 as i32).to_string());
@@ -287,6 +289,7 @@ fn insert_syscall_args(metadata: &mut BTreeMap<String, String>, outcome: &FileSy
         }
         FILE_SYSCALL_CREAT => {
             metadata.insert("mode".to_string(), event.arg1.to_string());
+            metadata.insert("truncate_source".to_string(), "creat".to_string());
         }
         FILE_SYSCALL_UNLINKAT => {
             metadata.insert("dirfd".to_string(), (event.arg0 as i32).to_string());

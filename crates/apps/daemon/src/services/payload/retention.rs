@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use control_contract::reply::ControlError;
 use model_core::ids::TraceId;
-use recording_runtime::ObservedRecordWriteSession;
+use storage_core::StorageBackend;
 
 #[derive(Default)]
 pub(super) struct RetainedPayloadTransaction {
@@ -14,7 +14,7 @@ impl RetainedPayloadTransaction {
     pub(super) fn bytes(
         &mut self,
         cache: &mut BTreeMap<TraceId, u64>,
-        session: &ObservedRecordWriteSession<'_>,
+        storage: &dyn StorageBackend,
         trace_id: TraceId,
     ) -> Result<u64, ControlError> {
         if let Some(bytes) = self.retained_bytes.get(&trace_id) {
@@ -23,7 +23,7 @@ impl RetainedPayloadTransaction {
         let bytes = match cache.get(&trace_id) {
             Some(bytes) => *bytes,
             None => {
-                let bytes = session
+                let bytes = storage
                     .retained_payload_bytes(trace_id)
                     .map_err(|error| ControlError::new(error.stage, error.message))?;
                 cache.insert(trace_id, bytes);

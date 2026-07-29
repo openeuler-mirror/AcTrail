@@ -47,6 +47,7 @@ pub mod file {
     pub const BYTES_READ: &str = "file.bytes_read";
     pub const BYTES_WRITTEN: &str = "file.bytes_written";
     pub const CHANGE_KIND: &str = "file.change_kind";
+    pub const ERROR_COUNT: &str = "file.error_count";
     pub const FD: &str = "file.fd";
     pub const OPERATION: &str = "file.operation";
     pub const PATH: &str = "file.path";

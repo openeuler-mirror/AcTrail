@@ -27,9 +27,22 @@ impl StorageAttachService {
                 error.code, error.message
             ));
         }
+        if let Err(error) = self.finalize_unsettled_semantics_for_shutdown(trace_runtime) {
+            failures.push(format!(
+                "unsettled semantic finalization: {}: {}",
+                error.code, error.message
+            ));
+        }
         if let Err(error) = self.shutdown_post_trace_runtime_impl() {
             failures.push(format!(
                 "post-trace drain: {}: {}",
+                error.code, error.message
+            ));
+        }
+        let export_drop_report = self.export_runtime.shutdown_observation_consumers();
+        if let Err(error) = self.persist_export_drop_report(export_drop_report) {
+            failures.push(format!(
+                "observation exporter drain: {}: {}",
                 error.code, error.message
             ));
         }
@@ -40,6 +53,35 @@ impl StorageAttachService {
             Ok(())
         } else {
             Err(ControlError::new("daemon_shutdown", failures.join("; ")))
+        }
+    }
+
+    fn finalize_unsettled_semantics_for_shutdown(
+        &mut self,
+        trace_runtime: &TraceRuntime,
+    ) -> Result<(), ControlError> {
+        let trace_ids = trace_runtime
+            .list_trace_records()
+            .into_iter()
+            .filter(|trace| !self.post_trace_coordinator.barrier_ready(trace.trace_id))
+            .map(|trace| trace.trace_id)
+            .collect::<Vec<_>>();
+        let finished_at = SystemTime::now();
+        let mut failures = Vec::new();
+        for trace_id in trace_ids {
+            if let Err(error) =
+                self.finalize_semantic_projection_for_trace(trace_runtime, trace_id, finished_at)
+            {
+                failures.push(format!("{trace_id}: {}: {}", error.code, error.message));
+            }
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(ControlError::new(
+                "shutdown_semantic_finalization",
+                failures.join("; "),
+            ))
         }
     }
 

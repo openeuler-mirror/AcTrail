@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -12,19 +13,51 @@ pub struct BestEffortDeliveryConfig {
 }
 
 pub trait BestEffortSink<T>: Send + 'static {
-    fn deliver(&mut self, message: T) -> Result<(), String>;
+    /// Returns the number of records made durable by this call.
+    fn deliver(&mut self, message: T) -> Result<u64, String>;
 
-    fn finish(&mut self) -> Result<(), String> {
-        Ok(())
+    /// Flushes buffered records and returns the number made durable.
+    fn finish(&mut self) -> Result<u64, String> {
+        Ok(u64::default())
     }
 }
 
-pub struct BestEffortDelivery<T> {
-    sender: Option<SyncSender<T>>,
-    worker: Option<JoinHandle<()>>,
+pub struct BestEffortDelivery<T: Send + 'static> {
+    state: Mutex<BestEffortDeliveryState<T>>,
+    accepted_records: AtomicU64,
+    durable_records: Arc<AtomicU64>,
     error: Arc<Mutex<Option<String>>>,
     component_name: &'static str,
     queue_capacity: u32,
+}
+
+struct BestEffortDeliveryState<T> {
+    sender: Option<SyncSender<T>>,
+    worker: Option<JoinHandle<()>>,
+    finished: bool,
+}
+
+#[derive(Debug)]
+pub struct BestEffortDeliveryFinish {
+    dropped_records: u64,
+    error: Option<ExportError>,
+}
+
+impl BestEffortDeliveryFinish {
+    pub const fn dropped_records(&self) -> u64 {
+        self.dropped_records
+    }
+
+    pub const fn error(&self) -> Option<&ExportError> {
+        self.error.as_ref()
+    }
+
+    const fn empty() -> Self {
+        Self {
+            dropped_records: 0,
+            error: None,
+        }
+    }
 }
 
 impl<T: Send + 'static> BestEffortDelivery<T> {
@@ -50,18 +83,30 @@ impl<T: Send + 'static> BestEffortDelivery<T> {
         let (sender, receiver) = sync_channel(queue_capacity);
         let error = Arc::new(Mutex::new(None));
         let thread_error = Arc::clone(&error);
+        let durable_records = Arc::new(AtomicU64::new(0));
+        let thread_durable_records = Arc::clone(&durable_records);
         let worker = thread::Builder::new()
             .name(config.worker_thread_name.to_string())
             .spawn(move || {
                 let mut sink = sink;
                 while let Ok(message) = receiver.recv() {
-                    if let Err(error) = sink.deliver(message) {
-                        store_delivery_error(&thread_error, error);
-                        return;
+                    match sink.deliver(message) {
+                        Ok(delivered) => {
+                            thread_durable_records.fetch_add(delivered, Ordering::Relaxed);
+                        }
+                        Err(error) => {
+                            store_delivery_error(&thread_error, error);
+                            return;
+                        }
                     }
                 }
-                if let Err(error) = sink.finish() {
-                    store_delivery_error(&thread_error, error);
+                match sink.finish() {
+                    Ok(delivered) => {
+                        thread_durable_records.fetch_add(delivered, Ordering::Relaxed);
+                    }
+                    Err(error) => {
+                        store_delivery_error(&thread_error, error);
+                    }
                 }
             })
             .map_err(|error| {
@@ -72,8 +117,13 @@ impl<T: Send + 'static> BestEffortDelivery<T> {
             })?;
 
         Ok(Self {
-            sender: Some(sender),
-            worker: Some(worker),
+            state: Mutex::new(BestEffortDeliveryState {
+                sender: Some(sender),
+                worker: Some(worker),
+                finished: false,
+            }),
+            accepted_records: AtomicU64::new(0),
+            durable_records,
             error,
             component_name: config.component_name,
             queue_capacity: config.queue_capacity,
@@ -92,11 +142,17 @@ impl<T: Send + 'static> BestEffortDelivery<T> {
 
     pub fn publish(&self, message: T) -> Result<ExportPublishResult, ExportError> {
         self.check_health()?;
-        let Some(sender) = &self.sender else {
+        let state = self.state.lock().map_err(|error| {
+            self.delivery_error(format!("delivery state lock poisoned: {error}"))
+        })?;
+        let Some(sender) = &state.sender else {
             return Err(self.delivery_error("delivery sender is closed"));
         };
         match sender.try_send(message) {
-            Ok(()) => Ok(ExportPublishResult::delivered()),
+            Ok(()) => {
+                self.accepted_records.fetch_add(1, Ordering::Relaxed);
+                Ok(ExportPublishResult::delivered())
+            }
             Err(TrySendError::Full(_)) => Ok(ExportPublishResult::dropped(
                 ExportDeliveryDrop::queue_full(1, self.queue_capacity),
             )),
@@ -107,17 +163,62 @@ impl<T: Send + 'static> BestEffortDelivery<T> {
         }
     }
 
+    pub fn finish(&self) -> BestEffortDeliveryFinish {
+        let (worker, mut errors) = {
+            let (mut state, state_error) = match self.state.lock() {
+                Ok(state) => (state, None),
+                Err(error) => {
+                    let message = format!("delivery state lock poisoned: {error}");
+                    (error.into_inner(), Some(message))
+                }
+            };
+            if state.finished {
+                return BestEffortDeliveryFinish::empty();
+            }
+            state.finished = true;
+            state.sender.take();
+            (
+                state.worker.take(),
+                state_error.into_iter().collect::<Vec<_>>(),
+            )
+        };
+
+        if worker.is_some_and(|worker| worker.join().is_err()) {
+            errors.push("delivery worker panicked".to_string());
+        }
+        match self.error.lock() {
+            Ok(error) => errors.extend(error.iter().cloned()),
+            Err(error) => errors.push(format!("delivery error lock poisoned: {error}")),
+        }
+
+        let accepted_records = self.accepted_records.load(Ordering::Relaxed);
+        let durable_records = self.durable_records.load(Ordering::Relaxed);
+        let dropped_records = accepted_records.saturating_sub(durable_records);
+        if durable_records > accepted_records {
+            errors.push(format!(
+                "delivery sink acknowledged {durable_records} record(s), but only \
+                 {accepted_records} were accepted"
+            ));
+        } else if dropped_records > 0 && errors.is_empty() {
+            errors.push(format!(
+                "delivery worker finished with {dropped_records} unacknowledged record(s)"
+            ));
+        }
+        let error = (!errors.is_empty()).then(|| self.delivery_error(errors.join("; ")));
+        BestEffortDeliveryFinish {
+            dropped_records,
+            error,
+        }
+    }
+
     fn delivery_error(&self, message: impl Into<String>) -> ExportError {
         ExportError::new(self.component_name, message).with_queue_capacity(self.queue_capacity)
     }
 }
 
-impl<T> Drop for BestEffortDelivery<T> {
+impl<T: Send + 'static> Drop for BestEffortDelivery<T> {
     fn drop(&mut self) {
-        self.sender.take();
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
-        }
+        let _ = self.finish();
     }
 }
 

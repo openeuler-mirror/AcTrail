@@ -279,12 +279,12 @@ impl StorageAttachService {
                 .export_runtime
                 .remove_observation_consumer(instance_id)
                 .map_err(|error| ControlError::new(error.code, error.message))?;
+            self.persist_export_drop_report(removal.drop_report)?;
             if alert_registered {
                 self.close_and_drain_alert_instance_impl(instance_id)?;
                 self.unregister_alert_instance_impl(instance_id)?;
             }
             self.post_trace_broker.unregister_plugin(instance_id);
-            self.persist_export_drop_report(removal.drop_report)?;
             return Ok(removal.status);
         }
         if self
@@ -418,7 +418,7 @@ impl StorageAttachService {
         self.plugin_configs.document(instance_id)
     }
 
-    fn persist_export_drop_report(
+    pub(in crate::services) fn persist_export_drop_report(
         &mut self,
         report: ExportPublishReport,
     ) -> Result<(), ControlError> {

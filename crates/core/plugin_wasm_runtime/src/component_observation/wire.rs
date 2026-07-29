@@ -295,7 +295,7 @@ pub(super) fn parse_observation_report(
     }
     Ok(ObservationConsumeReport {
         dropped_records: vec![PluginDroppedRecord {
-            trace_id,
+            trace_id: Some(trace_id),
             plugin_instance: instance_id.to_string(),
             reason: "wasm_component_reported_drop".to_string(),
             queue_capacity: Some(queue_capacity),

@@ -10,7 +10,7 @@ use super::error::RecordingError;
 
 const SEMANTIC_ACTION_BATCH_STAGE: &str = "semantic_action_batch";
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct SemanticActionBatch {
     actions: Vec<SemanticAction>,
     links: Vec<SemanticActionLink>,

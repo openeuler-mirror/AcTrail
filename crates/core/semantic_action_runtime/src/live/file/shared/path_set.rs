@@ -194,9 +194,7 @@ fn format_reason_counts(reason_counts: &BTreeMap<String, u64>) -> String {
 
 fn syscall_error_reason(result: i32) -> String {
     let errno = result.saturating_abs();
-    errno_name(errno)
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("ERRNO_{errno}"))
+    errno_name(errno).unwrap_or("OTHER").to_string()
 }
 
 fn errno_name(errno: i32) -> Option<&'static str> {

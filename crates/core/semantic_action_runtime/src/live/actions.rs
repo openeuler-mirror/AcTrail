@@ -298,13 +298,19 @@ pub(super) fn is_file_modify_event(event: &DomainEvent) -> bool {
     let EventPayload::File(payload) = &event.payload else {
         return false;
     };
-    is_file_modify_operation(&payload.operation)
-        || (payload.operation == "open" && file_change_kind(payload) == FileChangeKind::Created)
+    (is_file_modify_operation(&payload.operation)
+        && !matches!(payload.operation.as_str(), "write" | "writev"))
+        || (payload.operation == "open"
+            && (file_change_kind(payload) == FileChangeKind::Created
+                || payload.metadata.contains_key("truncate_source")))
 }
 
 fn file_change_kind(payload: &model_core::event::FilePayload) -> FileChangeKind {
     if open_requests_creation(payload) {
         return FileChangeKind::Created;
+    }
+    if payload.metadata.contains_key("truncate_source") {
+        return FileChangeKind::Modified;
     }
     match payload.operation.as_str() {
         "mkdir" => FileChangeKind::Created,

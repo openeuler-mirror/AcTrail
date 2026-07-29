@@ -2,7 +2,7 @@ use model_core::ids::TraceId;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PluginDroppedRecord {
-    pub trace_id: TraceId,
+    pub trace_id: Option<TraceId>,
     pub plugin_instance: String,
     pub reason: String,
     pub queue_capacity: Option<u32>,

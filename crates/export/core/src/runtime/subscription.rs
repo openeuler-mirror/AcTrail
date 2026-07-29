@@ -7,7 +7,8 @@ use plugin_system::{
 
 use crate::ExportError;
 
-use super::subscription_slot::{DropAccumulator, ObservationConsumerSlot};
+use super::report_accumulator::ReportAccumulator;
+use super::subscription_slot::ObservationConsumerSlot;
 use super::{
     ExportPublishReport, ObservationConsumerRemoval, PostTraceCompletion, SemanticActionExportBatch,
 };
@@ -142,22 +143,36 @@ impl SemanticActionSubscriptionManager {
             ));
         };
         let mut slot = self.consumers.remove(index);
-        slot.stop();
+        let runtime_failures = slot.stop();
         let status = slot.status(PluginLifecycleState::Stopped);
-        let mut dropped = DropAccumulator::default();
-        slot.drain_pending_drops(&mut dropped);
+        let mut report = ReportAccumulator::default();
+        for failure in runtime_failures {
+            report.record_runtime_failure(failure);
+        }
+        slot.drain_pending_reports(&mut report);
         Ok(ObservationConsumerRemoval {
             status,
-            drop_report: dropped.into_report(),
+            drop_report: report.into_report(),
         })
+    }
+
+    pub(crate) fn shutdown_observation_consumers(&mut self) -> ExportPublishReport {
+        let mut report = ReportAccumulator::default();
+        for slot in &mut self.consumers {
+            for failure in slot.stop() {
+                report.record_runtime_failure(failure);
+            }
+        }
+        self.drain_pending_reports(&mut report);
+        report.into_report()
     }
 
     pub(crate) fn publish_semantic_actions(
         &self,
         batch: SemanticActionExportBatch<'_>,
     ) -> ExportPublishReport {
-        let mut dropped = DropAccumulator::default();
-        self.drain_pending_drops(&mut dropped);
+        let mut report = ReportAccumulator::default();
+        self.drain_pending_reports(&mut report);
         let mut metadata_payload_segments = None;
         for slot in &self.consumers {
             if !slot.receives_semantic_action_batch() {
@@ -168,10 +183,10 @@ impl SemanticActionSubscriptionManager {
                 batch.payload_segments,
                 &mut metadata_payload_segments,
             );
-            slot.publish(&batch, payload_segments, &mut dropped);
+            slot.publish(&batch, payload_segments, &mut report);
         }
-        self.drain_pending_drops(&mut dropped);
-        dropped.into_report()
+        self.drain_pending_reports(&mut report);
+        report.into_report()
     }
 
     pub(crate) fn payload_snapshot_limit(&self) -> Option<usize> {
@@ -182,9 +197,9 @@ impl SemanticActionSubscriptionManager {
             .max()
     }
 
-    fn drain_pending_drops(&self, dropped: &mut DropAccumulator) {
+    fn drain_pending_reports(&self, report: &mut ReportAccumulator) {
         for slot in &self.consumers {
-            slot.drain_pending_drops(dropped);
+            slot.drain_pending_reports(report);
         }
     }
 }

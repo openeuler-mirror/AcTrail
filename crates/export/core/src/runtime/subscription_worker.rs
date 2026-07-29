@@ -9,10 +9,10 @@ use plugin_system::{ObservationBatch, ObservationConsumer, PluginRuntimeError, P
 use semantic_action::{FileObservationPath, SemanticAction, SemanticActionLink};
 
 use super::subscription_slot::{
-    ObservationConsumerMetrics, record_consume_error, record_pending_drop,
+    ObservationConsumerMetrics, record_consume_failure, record_pending_runtime_failure,
     record_successful_consume, store_last_error,
 };
-use super::{ExportDroppedRecord, PostTraceCompletion};
+use super::{ExportRuntimeFailure, PostTraceCompletion};
 
 pub(super) struct QueuedObservationBatch {
     pub(super) trace: TraceRecord,
@@ -54,17 +54,13 @@ pub(super) fn run_observation_worker(
     while let Ok(work_item) = receiver.recv() {
         match work_item {
             ObservationWorkItem::Batch(batch) => {
-                if control.cancellation_requested() {
-                    cancel_observation_batch(batch, &metrics, &instance_id, queue_capacity);
-                } else {
-                    run_observation_batch(
-                        consumer.as_ref(),
-                        batch,
-                        &metrics,
-                        &instance_id,
-                        queue_capacity,
-                    );
-                }
+                run_observation_batch(
+                    consumer.as_ref(),
+                    batch,
+                    &metrics,
+                    &instance_id,
+                    queue_capacity,
+                );
             }
             ObservationWorkItem::PostTrace(task) => {
                 if control.cancellation_requested() {
@@ -90,27 +86,6 @@ pub(super) fn run_observation_worker(
     }
 }
 
-fn cancel_observation_batch(
-    batch: QueuedObservationBatch,
-    metrics: &ObservationConsumerMetrics,
-    instance_id: &str,
-    queue_capacity: Option<u32>,
-) {
-    let dropped_records = u64::try_from(batch.semantic_actions.len()).unwrap_or(u64::MAX);
-    let reason = "plugin worker cancelled during lifecycle drain".to_string();
-    record_pending_drop(
-        metrics,
-        ExportDroppedRecord {
-            trace_id: batch.trace.trace_id,
-            exporter: instance_id.to_string(),
-            reason: reason.clone(),
-            queue_capacity,
-            dropped_records,
-        },
-    );
-    record_consume_error(metrics, dropped_records, reason);
-}
-
 fn run_observation_batch(
     consumer: &dyn ObservationConsumer,
     batch: QueuedObservationBatch,
@@ -133,31 +108,31 @@ fn run_observation_batch(
         Ok(Ok(report)) => record_successful_consume(metrics, action_count, report, true),
         Ok(Err(error)) => {
             let reason = format!("{}: {}", error.code, error.message);
-            record_pending_drop(
+            record_pending_runtime_failure(
                 metrics,
-                ExportDroppedRecord {
-                    trace_id,
+                ExportRuntimeFailure {
+                    trace_id: Some(trace_id),
                     exporter: instance_id.to_string(),
                     reason: reason.clone(),
                     queue_capacity,
-                    dropped_records: action_count,
+                    occurrences: 1,
                 },
             );
-            record_consume_error(metrics, action_count, reason);
+            record_consume_failure(metrics, reason);
         }
         Err(panic) => {
             let reason = format!("plugin consumer panicked: {}", panic_message(&panic));
-            record_pending_drop(
+            record_pending_runtime_failure(
                 metrics,
-                ExportDroppedRecord {
-                    trace_id,
+                ExportRuntimeFailure {
+                    trace_id: Some(trace_id),
                     exporter: instance_id.to_string(),
                     reason: reason.clone(),
                     queue_capacity,
-                    dropped_records: action_count,
+                    occurrences: 1,
                 },
             );
-            record_consume_error(metrics, action_count, reason);
+            record_consume_failure(metrics, reason);
         }
     }
 }
@@ -224,7 +199,7 @@ fn post_trace_cancelled() -> PluginRuntimeError {
     )
 }
 
-fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
+pub(super) fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
     if let Some(message) = panic.downcast_ref::<&str>() {
         return (*message).to_string();
     }

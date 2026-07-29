@@ -11,7 +11,7 @@ use model_core::trace::TraceRecord;
 use recording_runtime::{
     RecordingError, RecordingWriter, SemanticActionBatch, TraceRecordLookup, TraceStateRecord,
 };
-use semantic_action::{SemanticAction, SemanticActionLink};
+use semantic_action::SemanticActionLink;
 use semantic_action_runtime::derive_lineage_links;
 use trace_runtime::registry::TraceRuntime;
 
@@ -100,10 +100,24 @@ impl StorageAttachService {
         finished_at: std::time::SystemTime,
     ) -> Result<(), ControlError> {
         let semantic_actions = self.finalize_semantic_actions_for_trace(trace_id, finished_at);
-        let semantic_actions = self.write_semantic_action_batch(semantic_actions)?;
-        let mut links = semantic_actions.links().to_vec();
-        links.extend(self.rebuild_lineage_semantic_links(trace_id)?);
-        self.publish_live_export_actions(trace_runtime, semantic_actions.actions(), &links)
+        let mut export_batch = semantic_actions.clone();
+        let mut errors = Vec::new();
+
+        match self.write_semantic_action_batch(semantic_actions) {
+            Ok(_) => match self.rebuild_lineage_semantic_links(trace_id) {
+                Ok(lineage_links) => {
+                    export_batch.extend(SemanticActionBatch::from_parts(Vec::new(), lineage_links));
+                }
+                Err(error) => errors.push(error),
+            },
+            Err(error) => errors.push(error),
+        }
+
+        if let Err(error) = self.publish_live_export_actions(trace_runtime, export_batch) {
+            errors.push(error);
+        }
+
+        combine_control_errors(errors)
     }
 
     pub(super) fn rebuild_lineage_semantic_links(
@@ -134,17 +148,15 @@ impl StorageAttachService {
     pub(super) fn publish_live_export_actions(
         &mut self,
         trace_runtime: &TraceRuntime,
-        actions: &[SemanticAction],
-        links: &[SemanticActionLink],
+        semantic_actions: SemanticActionBatch,
     ) -> Result<(), ControlError> {
         let traces = LiveTraceRecordLookup::new(trace_runtime);
         let next_diagnostic_id = &mut self.next_diagnostic_id;
         RecordingWriter::new(self.storage.as_mut())
-            .export_semantic_actions_for_trace(
+            .export_semantic_action_batch_for_trace(
                 &self.export_runtime,
                 &traces,
-                actions,
-                links,
+                semantic_actions,
                 SystemTime::now(),
                 || {
                     next_diagnostic_id_from_seed(next_diagnostic_id)
@@ -153,6 +165,18 @@ impl StorageAttachService {
             )
             .map_err(recording_error_to_control)
     }
+}
+
+fn combine_control_errors(errors: Vec<ControlError>) -> Result<(), ControlError> {
+    if errors.is_empty() {
+        return Ok(());
+    }
+    let message = errors
+        .iter()
+        .map(|error| format!("{}: {}", error.code, error.message))
+        .collect::<Vec<_>>()
+        .join("; ");
+    Err(ControlError::new("semantic_action_finalize", message))
 }
 
 fn recording_error_to_control(error: RecordingError) -> ControlError {
