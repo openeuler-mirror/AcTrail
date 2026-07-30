@@ -150,16 +150,28 @@ fn epoch_secs_to_iso8601(secs: u64) -> String {
     let mut days_left = total_days;
     let mut year = 1970u32;
     loop {
-        let diy = if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 { 366 } else { 365 };
-        if days_left < diy { break; }
+        let diy = if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 {
+            366
+        } else {
+            365
+        };
+        if days_left < diy {
+            break;
+        }
         days_left -= diy;
         year += 1;
     }
     let mut month = 1u32;
     for m_idx in 0..12u32 {
         month = m_idx + 1;
-        let dim = if m_idx == 1 && ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0) { 29 } else { DAYS_IN_MONTH[m_idx as usize] };
-        if days_left < dim { break; }
+        let dim = if m_idx == 1 && ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0) {
+            29
+        } else {
+            DAYS_IN_MONTH[m_idx as usize]
+        };
+        if days_left < dim {
+            break;
+        }
         days_left -= dim;
     }
     let day = days_left + 1;

@@ -26,6 +26,10 @@ enum actrail_socket_payload_flags {
     ACTRAIL_SOCKET_PAYLOAD_TRUNCATED = 1,
 };
 
+enum actrail_socket_payload_fd_flags {
+    ACTRAIL_SOCKET_FD_TLS_OWNED = 1,
+};
+
 enum actrail_socket_dup_mode {
     ACTRAIL_SOCKET_DUP_RET_FD = 1,
     ACTRAIL_SOCKET_DUP_TARGET_FD = 2,
@@ -40,6 +44,11 @@ struct actrail_socket_payload_config {
 struct actrail_socket_payload_fd_key {
     __u32 pid;
     __u32 fd;
+};
+
+struct actrail_socket_payload_fd_state {
+    __u32 generation;
+    __u32 flags;
 };
 
 struct actrail_socket_payload_sequence_key {
@@ -65,6 +74,7 @@ struct actrail_pending_socket_dup_op {
     __u32 target_fd;
     __u32 source_generation;
     __u32 target_generation;
+    __u32 source_flags;
     __u32 mode;
 };
 
@@ -119,7 +129,7 @@ struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 1);
     __type(key, struct actrail_socket_payload_fd_key);
-    __type(value, __u32);
+    __type(value, struct actrail_socket_payload_fd_state);
 } payload_socket_fds SEC(".maps");
 
 struct {

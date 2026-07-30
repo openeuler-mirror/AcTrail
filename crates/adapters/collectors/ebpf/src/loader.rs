@@ -48,6 +48,7 @@ pub use ring_decode::{
     KernelTlsCaptureRequestEvent, KernelTlsCompletionEvent, KernelTlsDiagnosticEvent,
     KernelTlsDirectCaptureEvent,
 };
+pub use socket::SocketPayloadFdState;
 use tls::GoTlsAttachOutcome;
 pub use tls::{
     DynamicTlsProbePlan, PendingTlsPayloadOp, TlsPayloadDiagnosticCounter, TlsPayloadDiagnostics,
@@ -654,12 +655,21 @@ impl EbpfRuntime {
         Ok(())
     }
 
-    pub fn lookup_socket_fd_generation(
+    pub fn lookup_socket_fd_state(
         &self,
         pid: u32,
         fd: u32,
-    ) -> Result<Option<u32>, LoaderError> {
-        socket::lookup_fd_generation(&self.payload_socket_fds, pid, fd)
+    ) -> Result<Option<SocketPayloadFdState>, LoaderError> {
+        socket::lookup_fd_state(&self.payload_socket_fds, pid, fd)
+    }
+
+    pub fn mark_socket_fd_tls_owned(
+        &self,
+        pid: u32,
+        fd: u32,
+        expected_generation: u32,
+    ) -> Result<bool, LoaderError> {
+        socket::mark_fd_tls_owned(&self.payload_socket_fds, pid, fd, expected_generation)
     }
 
     pub fn attached_programs(&self) -> &[String] {

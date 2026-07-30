@@ -8,4 +8,5 @@ pub(in crate::services) use body_retention::{
 };
 pub(in crate::services) use socket::{
     SocketHttpPayloadGate, socket_payload_prefix_is_http_candidate,
+    socket_payload_prefix_is_tls_hello,
 };

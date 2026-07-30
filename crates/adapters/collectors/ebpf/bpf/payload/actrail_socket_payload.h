@@ -2,6 +2,7 @@
 #define ACTRAIL_SOCKET_PAYLOAD_H
 
 #include "actrail_socket_payload_types.h"
+#include "actrail_socket_tls.h"
 
 #define ACTRAIL_LINUX_EINPROGRESS 115
 #define ACTRAIL_SOCKET_PAYLOAD_DIRECT_CHUNK_MAX 16
@@ -31,69 +32,7 @@ static __always_inline __u32 payload_socket_user_read_enabled(void) {
     return config && config->enabled && config->user_read_enabled;
 }
 
-static __always_inline struct actrail_socket_payload_fd_key socket_payload_fd_key(
-    __u32 pid,
-    __u32 fd
-) {
-    struct actrail_socket_payload_fd_key key = {};
-    key.pid = pid;
-    key.fd = fd;
-    return key;
-}
-
-static __always_inline __u32 socket_payload_fd_generation(__u32 pid, __u32 fd) {
-    struct actrail_socket_payload_fd_key key = socket_payload_fd_key(pid, fd);
-    __u32 *generation = bpf_map_lookup_elem(&payload_socket_fds, &key);
-    return generation ? *generation : 0;
-}
-
-static __always_inline __u32 socket_payload_next_generation(__u32 pid) {
-    __u32 initial = 1;
-    __u32 next;
-    __u32 *current = bpf_map_lookup_elem(&payload_socket_process_generations, &pid);
-
-    if (!current) {
-        bpf_map_update_elem(&payload_socket_process_generations, &pid, &initial, BPF_ANY);
-        return initial;
-    }
-
-    next = *current + 1;
-    if (!next) {
-        next = 1;
-    }
-    bpf_map_update_elem(&payload_socket_process_generations, &pid, &next, BPF_ANY);
-    return next;
-}
-
-static __always_inline void socket_payload_set_fd_generation(
-    __u32 pid,
-    __u32 fd,
-    __u32 generation
-) {
-    struct actrail_socket_payload_fd_key key;
-
-    if (!generation) {
-        return;
-    }
-    key = socket_payload_fd_key(pid, fd);
-    bpf_map_update_elem(&payload_socket_fds, &key, &generation, BPF_ANY);
-}
-
-static __always_inline void socket_payload_track_fd(__u32 pid, __u32 fd) {
-    struct actrail_socket_payload_config *config = socket_payload_config();
-    __u32 generation;
-
-    if (!config || !config->enabled) {
-        return;
-    }
-    generation = socket_payload_next_generation(pid);
-    socket_payload_set_fd_generation(pid, fd, generation);
-}
-
-static __always_inline void socket_payload_delete_fd(__u32 pid, __u32 fd) {
-    struct actrail_socket_payload_fd_key key = socket_payload_fd_key(pid, fd);
-    bpf_map_delete_elem(&payload_socket_fds, &key);
-}
+#include "actrail_socket_fd_state.h"
 
 static __always_inline __u64 next_socket_payload_sequence(
     __u32 pid,
@@ -135,6 +74,7 @@ static __always_inline int store_socket_payload_op(
     __u64 *trace_id = bpf_map_lookup_elem(&tracked_traces, &tgid);
     struct actrail_socket_payload_config *config = socket_payload_config();
     struct actrail_pending_socket_payload_op op = {};
+    struct actrail_socket_payload_fd_state *fd_state;
     __u32 fd = (__u32)ctx->args[fd_arg];
     __u32 fd_generation = 0;
 
@@ -144,8 +84,23 @@ static __always_inline int store_socket_payload_op(
     if (is_suppressed_fd(tgid, fd)) {
         return 0;
     }
-    fd_generation = socket_payload_fd_generation(tgid, fd);
+    fd_state = socket_payload_fd_state(tgid, fd);
+    if (fd_state && (fd_state->flags & ACTRAIL_SOCKET_FD_TLS_OWNED)) {
+        return 0;
+    }
+    fd_generation = fd_state ? fd_state->generation : 0;
     if (require_tracked_fd && !fd_generation) {
+        return 0;
+    }
+    if (fd_state
+        && direction == ACTRAIL_SOCKET_PAYLOAD_OUTBOUND
+        && (syscall == ACTRAIL_SOCKET_SYSCALL_WRITE
+            || syscall == ACTRAIL_SOCKET_SYSCALL_SENDTO)
+        && socket_payload_read_tls_hello_prefix(
+            (__u64)ctx->args[buffer_arg],
+            (__u64)ctx->args[size_arg]
+        )) {
+        fd_state->flags |= ACTRAIL_SOCKET_FD_TLS_OWNED;
         return 0;
     }
 
@@ -232,8 +187,6 @@ static __noinline int emit_socket_payload_direct_chunk(
     event->direction = op->direction;
     event->trace_id = op->trace_id;
     event->observed_ktime_ns = bpf_ktime_get_ns();
-    event->sequence =
-        next_socket_payload_sequence(chunk->tgid, op->direction, op->fd, op->fd_generation);
     event->fd = op->fd;
     event->original_size = (__u32)chunk->original_size;
     event->captured_size = capture_size;
@@ -251,6 +204,19 @@ static __noinline int emit_socket_payload_direct_chunk(
         actrail_event_discard(event);
         return 0;
     }
+    if (!chunk->offset
+        && op->direction == ACTRAIL_SOCKET_PAYLOAD_INBOUND
+        && socket_payload_prefix_is_tls_hello(event->bytes, capture_size)
+        && socket_payload_mark_fd_tls_owned(
+            chunk->tgid,
+            op->fd,
+            op->fd_generation
+        )) {
+        actrail_event_discard(event);
+        return 1;
+    }
+    event->sequence =
+        next_socket_payload_sequence(chunk->tgid, op->direction, op->fd, op->fd_generation);
 
     actrail_event_submit(ctx, event);
     return 0;
@@ -301,7 +267,9 @@ static __always_inline int emit_socket_payload_direct_chunks(
         chunk.flags = flags;
         chunk.tgid = tgid;
         chunk.tid = tid;
-        emit_socket_payload_direct_chunk(ctx, op, &chunk);
+        if (emit_socket_payload_direct_chunk(ctx, op, &chunk)) {
+            break;
+        }
         offset += bounded_size;
     }
     return 0;
@@ -378,6 +346,7 @@ static __always_inline int store_socket_payload_sendmsg_op(
     __u64 *trace_id = bpf_map_lookup_elem(&tracked_traces, &tgid);
     struct actrail_socket_payload_config *config = socket_payload_config();
     struct actrail_pending_socket_payload_op op = {};
+    struct actrail_socket_payload_fd_state *fd_state;
     __u32 fd = (__u32)ctx->args[0];
 
     if (!tgid || !trace_id || !config || !config->enabled || !ctx->args[1]) {
@@ -386,13 +355,17 @@ static __always_inline int store_socket_payload_sendmsg_op(
     if (is_suppressed_fd(tgid, fd)) {
         return 0;
     }
+    fd_state = socket_payload_fd_state(tgid, fd);
+    if (fd_state && (fd_state->flags & ACTRAIL_SOCKET_FD_TLS_OWNED)) {
+        return 0;
+    }
 
     op.trace_id = *trace_id;
     op.buffer_ptr = (__u64)ctx->args[1];
     op.requested_size = 0;
     op.pid_generation = current_process_start_time(tgid);
     op.fd = fd;
-    op.fd_generation = socket_payload_fd_generation(tgid, fd);
+    op.fd_generation = fd_state ? fd_state->generation : 0;
     op.direction = ACTRAIL_SOCKET_PAYLOAD_OUTBOUND;
     op.syscall = ACTRAIL_SOCKET_SYSCALL_SENDMSG;
     bpf_map_update_elem(&pending_socket_payload_ops, &pid_tgid, &op, BPF_ANY);
@@ -439,116 +412,6 @@ static __always_inline int store_socket_payload_read_op(
         2,
         1
     );
-}
-
-static __always_inline void socket_payload_track_connect_exit(
-    struct trace_event_raw_sys_exit *ctx
-) {
-    __u64 pid_tgid = current_pid_tgid();
-    __u32 tgid = pid_tgid >> 32;
-    struct actrail_pending_net_op *op = bpf_map_lookup_elem(&pending_net_ops, &pid_tgid);
-
-    if (!tgid || !op || op->kind != ACTRAIL_NET_CONNECT) {
-        return;
-    }
-    if (ctx->ret != 0 && ctx->ret != -ACTRAIL_LINUX_EINPROGRESS) {
-        return;
-    }
-    socket_payload_track_fd(tgid, op->fd);
-}
-
-static __always_inline void socket_payload_track_accept_exit(
-    struct trace_event_raw_sys_exit *ctx
-) {
-    __u32 tgid = current_tgid();
-
-    if (!tgid || ctx->ret < 0) {
-        return;
-    }
-    socket_payload_track_fd(tgid, (__u32)ctx->ret);
-}
-
-static __always_inline void socket_payload_close_enter(
-    struct trace_event_raw_sys_enter *ctx
-) {
-    __u32 tgid = current_tgid();
-
-    if (!tgid) {
-        return;
-    }
-    socket_payload_delete_fd(tgid, (__u32)ctx->args[0]);
-}
-
-static __always_inline void socket_payload_dup_enter(
-    struct trace_event_raw_sys_enter *ctx,
-    __u32 source_fd_arg,
-    __u32 target_fd_arg,
-    __u32 mode
-) {
-    __u64 pid_tgid = current_pid_tgid();
-    __u32 tgid = pid_tgid >> 32;
-    struct actrail_socket_payload_config *config = socket_payload_config();
-    struct actrail_pending_socket_dup_op op = {};
-    __u32 source_fd = (__u32)ctx->args[source_fd_arg];
-    __u32 target_fd = target_fd_arg < ACTRAIL_SYSCALL_ARG_MISSING
-        ? (__u32)ctx->args[target_fd_arg]
-        : 0;
-
-    if (!tgid || !config || !config->enabled) {
-        return;
-    }
-    op.source_fd = source_fd;
-    op.target_fd = target_fd;
-    op.source_generation = socket_payload_fd_generation(tgid, source_fd);
-    op.target_generation = target_fd_arg < ACTRAIL_SYSCALL_ARG_MISSING
-        ? socket_payload_fd_generation(tgid, target_fd)
-        : 0;
-    op.mode = mode;
-    if (!op.source_generation && !op.target_generation) {
-        return;
-    }
-    bpf_map_update_elem(&pending_socket_dup_ops, &pid_tgid, &op, BPF_ANY);
-}
-
-static __always_inline void socket_payload_fcntl_enter(
-    struct trace_event_raw_sys_enter *ctx
-) {
-    __u32 command = (__u32)ctx->args[1];
-
-    if (command != F_DUPFD && command != F_DUPFD_CLOEXEC) {
-        return;
-    }
-    socket_payload_dup_enter(
-        ctx,
-        0,
-        ACTRAIL_SYSCALL_ARG_MISSING,
-        ACTRAIL_SOCKET_DUP_RET_FD
-    );
-}
-
-static __always_inline void socket_payload_dup_exit(
-    struct trace_event_raw_sys_exit *ctx
-) {
-    __u64 pid_tgid = current_pid_tgid();
-    __u32 tgid = pid_tgid >> 32;
-    struct actrail_pending_socket_dup_op *op =
-        bpf_map_lookup_elem(&pending_socket_dup_ops, &pid_tgid);
-    __u32 new_fd;
-
-    if (!tgid || !op) {
-        return;
-    }
-    if (ctx->ret < 0) {
-        bpf_map_delete_elem(&pending_socket_dup_ops, &pid_tgid);
-        return;
-    }
-    new_fd = op->mode == ACTRAIL_SOCKET_DUP_RET_FD ? (__u32)ctx->ret : op->target_fd;
-    if (op->source_generation) {
-        socket_payload_set_fd_generation(tgid, new_fd, op->source_generation);
-    } else if (op->target_generation) {
-        socket_payload_delete_fd(tgid, new_fd);
-    }
-    bpf_map_delete_elem(&pending_socket_dup_ops, &pid_tgid);
 }
 
 #endif

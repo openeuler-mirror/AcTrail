@@ -18,7 +18,9 @@ use trace_runtime::registry::TraceRuntime;
 
 use super::http::{HTTP1_PROTOCOL_HINT, content_length_admission};
 use super::request::{SocketReadRequest, fd_is_socket, socket_symbol, tgid_from_status};
-use crate::services::payload_gate::socket_payload_prefix_is_http_candidate;
+use crate::services::payload_gate::{
+    socket_payload_prefix_is_http_candidate, socket_payload_prefix_is_tls_hello,
+};
 
 #[derive(Debug)]
 pub(crate) struct SeccompSocketService {
@@ -82,10 +84,13 @@ impl SeccompSocketService {
         if !membership.capture_enabled {
             return Ok(());
         }
-        let fd_generation = collector
-            .lookup_socket_fd_generation(tgid, request.fd)
-            .map_err(|error| ControlError::new(error.stage, error.message))?
-            .unwrap_or(0);
+        let fd_state = collector
+            .lookup_socket_fd_state(tgid, request.fd)
+            .map_err(|error| ControlError::new(error.stage, error.message))?;
+        if fd_state.is_some_and(|state| state.tls_owned()) {
+            return Ok(());
+        }
+        let fd_generation = fd_state.map_or(0, |state| state.generation());
         let stream_key = SocketContinuationKey {
             trace_id: trace_id.get(),
             pid: tgid,
@@ -101,6 +106,15 @@ impl SeccompSocketService {
         else {
             return Ok(());
         };
+        if socket_payload_prefix_is_tls_hello(&prefix) {
+            if let Some(fd_state) = fd_state {
+                collector
+                    .mark_socket_fd_tls_owned(tgid, request.fd, fd_state.generation())
+                    .map_err(|error| ControlError::new(error.stage, error.message))?;
+                self.continuations.remove(&stream_key);
+            }
+            return Ok(());
+        }
         let reached_sniff_limit =
             prefix.len() as u64 >= self.http_sniff_max_bytes.min(request.read_size_hint());
         if request.skip_small_linear_payload(self.max_segment_bytes) {
