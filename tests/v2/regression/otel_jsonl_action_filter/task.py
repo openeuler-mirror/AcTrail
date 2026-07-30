@@ -10,6 +10,7 @@ from typing import Any
 from tests.v2.common.actrail_runtime import CommandResult
 from tests.v2.common.agent_selection import AgentSelection
 from tests.v2.common.test_case import TestResult, TestStatus
+from tests.v2.common.testing_context import TestingContextSingleton
 
 from .environment import OtelJsonlActionFilterEnvironment
 
@@ -34,9 +35,11 @@ class OtelJsonlActionFilterTask:
         self,
         environment: OtelJsonlActionFilterEnvironment,
         agent: AgentSelection,
+        test_context: TestingContextSingleton,
     ):
         self._environment = environment
         self._agent = agent
+        self._test_context = test_context
         self._rounds = self._build_rounds()
 
     @classmethod
@@ -70,12 +73,20 @@ class OtelJsonlActionFilterTask:
 
     def run(self) -> dict[str, TestResult]:
         results: dict[str, TestResult] = {}
-        for round_definition in self._rounds:
+        for index, round_definition in enumerate(self._rounds, start=1):
+            self._test_context.report_progress(
+                "filter_round",
+                f"{round_definition.name} ({index}/{len(self._rounds)})",
+            )
             actual = self._run_round(round_definition)
             results[round_definition.name] = TestResult(
                 TestStatus.PASSED,
                 "exported action kinds: " + ", ".join(sorted(actual)),
             )
+        self._test_context.report_progress(
+            "runtime_health",
+            "checking otel-jsonl runtime health",
+        )
         self._require_runtime_healthy()
         results["plugin_runtime"] = TestResult(
             TestStatus.PASSED,
@@ -84,12 +95,20 @@ class OtelJsonlActionFilterTask:
         return results
 
     def _run_round(self, round_definition: FilterRound) -> set[str]:
+        self._test_context.report_progress(
+            "filter_config",
+            f"applying {round_definition.name} filter",
+        )
         self._environment.update_selection(
             set(round_definition.enabled_kinds)
         )
         marker = (
             f"OTEL_JSONL_FILTER_{round_definition.name}_"
             f"{secrets.token_hex(6)}"
+        )
+        self._test_context.report_progress(
+            "filter_launch",
+            f"launching {self._agent.kind} for {round_definition.name}",
         )
         launch = self._launch(marker)
         if launch.returncode != 0:
@@ -102,6 +121,10 @@ class OtelJsonlActionFilterTask:
                 f"{round_definition.name}: {self._agent.kind} output "
                 f"does not contain marker {marker}"
             )
+        self._test_context.report_progress(
+            "filter_observe",
+            f"waiting for {round_definition.name} trace and exported actions",
+        )
         trace_id = self._require_trace_id(launch)
         self._wait_for_terminal_trace(trace_id)
         self._wait_for_source_actions(trace_id)

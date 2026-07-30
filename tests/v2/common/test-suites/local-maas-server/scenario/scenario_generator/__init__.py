@@ -1,9 +1,16 @@
 from .config import ScenarioGeneratorConfig
 from .factory import ScenarioGeneratorFactory
-from .interface import GeneratorParameters, ScenarioGenerator
+from .interface import (
+    GenerationOptions,
+    GeneratorExecution,
+    GeneratorParameters,
+    ScenarioGenerator,
+)
 from .loader import ScenarioLoader
 
 __all__ = [
+    "GenerationOptions",
+    "GeneratorExecution",
     "GeneratorParameters",
     "ScenarioGenerator",
     "ScenarioGeneratorConfig",

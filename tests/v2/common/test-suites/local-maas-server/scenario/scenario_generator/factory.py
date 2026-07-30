@@ -11,8 +11,10 @@ from ..model import (
     ToolCall,
     UsageDelta,
 )
+from .action_pool_repository import ActionPoolRepository
 from .config import ScenarioGeneratorConfig
 from .impl import (
+    ActionPoolGenerator,
     LoopGenerator,
     RandomGenerator,
     ResponseGenerator,
@@ -26,9 +28,12 @@ class ScenarioGeneratorFactory:
     _SEQUENTIAL_KEYS = frozenset({"type", "generators"})
     _LOOP_KEYS = frozenset({"type", "generator", "count"})
     _RANDOM_KEYS = frozenset({"type", "generators", "count", "seed"})
+    _ACTION_POOL_KEYS = frozenset(
+        {"type", "pools", "selection", "count", "seed"}
+    )
     _EXPECTATION_KEYS = frozenset({"protocol", "stream", "model"})
     _RESPONSE_SPEC_KEYS = frozenset({"model", "blocks", "stop", "usage"})
-    _USAGE_KEYS = frozenset({"input_tokens", "output_tokens"})
+    _USAGE_KEYS = frozenset({"output_tokens"})
     _TEXT_BLOCK_KEYS = frozenset({"type", "text", "chunks"})
     _TOOL_BLOCK_KEYS = frozenset({"type", "name", "arguments"})
     _STOP_REASONS = frozenset({"complete", "tool_call", "length"})
@@ -40,14 +45,24 @@ class ScenarioGeneratorFactory:
     ):
         self._config = config
         self._supported_protocols = supported_protocols
+        self._action_pools = ActionPoolRepository(config)
         self._nodes_created = 0
 
     def create(self, document: object) -> ScenarioGenerator:
         self._nodes_created = 0
-        return self._create(document, "$", depth=1)
+        return self._create(
+            document,
+            "$",
+            depth=1,
+            allow_action_pool=True,
+        )
 
     def _create(
-        self, value: object, path: str, depth: int
+        self,
+        value: object,
+        path: str,
+        depth: int,
+        allow_action_pool: bool,
     ) -> ScenarioGenerator:
         if depth > self._config.max_depth:
             raise ScenarioConfigurationError(
@@ -68,13 +83,22 @@ class ScenarioGeneratorFactory:
         if generator_type == "response":
             return self._create_response(node, path)
         if generator_type == "sequential":
-            return self._create_sequential(node, path, depth)
+            return self._create_sequential(
+                node, path, depth, allow_action_pool
+            )
         if generator_type == "loop":
-            return self._create_loop(node, path, depth)
+            return self._create_loop(node, path, depth, allow_action_pool)
         if generator_type == "random":
-            return self._create_random(node, path, depth)
+            return self._create_random(node, path, depth, allow_action_pool)
+        if generator_type == "action_pool":
+            if not allow_action_pool:
+                raise ScenarioConfigurationError(
+                    f"{path}.type cannot reference action_pool from an action"
+                )
+            return self._create_action_pool(node, path, depth)
         raise ScenarioConfigurationError(
-            f"{path}.type must be response, sequential, loop, or random"
+            f"{path}.type must be response, sequential, loop, random, "
+            "or action_pool"
         )
 
     def _create_response(
@@ -94,10 +118,19 @@ class ScenarioGeneratorFactory:
         )
 
     def _create_sequential(
-        self, node: dict[str, Any], path: str, depth: int
+        self,
+        node: dict[str, Any],
+        path: str,
+        depth: int,
+        allow_action_pool: bool,
     ) -> SequentialGenerator:
         self._reject_unknown_keys(node, self._SEQUENTIAL_KEYS, path)
-        generators = self._parse_children(node.get("generators"), path, depth)
+        generators = self._parse_children(
+            node.get("generators"),
+            path,
+            depth,
+            allow_action_pool,
+        )
         for index, generator in enumerate(generators[:-1]):
             if generator.is_infinite:
                 raise ScenarioConfigurationError(
@@ -107,12 +140,19 @@ class ScenarioGeneratorFactory:
         return SequentialGenerator(generators)
 
     def _create_loop(
-        self, node: dict[str, Any], path: str, depth: int
+        self,
+        node: dict[str, Any],
+        path: str,
+        depth: int,
+        allow_action_pool: bool,
     ) -> LoopGenerator:
         self._reject_unknown_keys(node, self._LOOP_KEYS, path)
         count = self._parse_optional_count(node, path)
         generator = self._create(
-            node.get("generator"), f"{path}.generator", depth + 1
+            node.get("generator"),
+            f"{path}.generator",
+            depth + 1,
+            allow_action_pool,
         )
         if generator.is_infinite:
             raise ScenarioConfigurationError(
@@ -121,14 +161,23 @@ class ScenarioGeneratorFactory:
         return LoopGenerator(generator=generator, count=count)
 
     def _create_random(
-        self, node: dict[str, Any], path: str, depth: int
+        self,
+        node: dict[str, Any],
+        path: str,
+        depth: int,
+        allow_action_pool: bool,
     ) -> RandomGenerator:
         self._reject_unknown_keys(node, self._RANDOM_KEYS, path)
         count = self._parse_optional_count(node, path)
         seed = node.get("seed", self._config.random_seed)
         if isinstance(seed, bool) or not isinstance(seed, int):
             raise ScenarioConfigurationError(f"{path}.seed must be an integer")
-        generators = self._parse_children(node.get("generators"), path, depth)
+        generators = self._parse_children(
+            node.get("generators"),
+            path,
+            depth,
+            allow_action_pool,
+        )
         for index, generator in enumerate(generators):
             if generator.is_infinite:
                 raise ScenarioConfigurationError(
@@ -141,15 +190,85 @@ class ScenarioGeneratorFactory:
             node_path=path,
         )
 
+    def _create_action_pool(
+        self,
+        node: dict[str, Any],
+        path: str,
+        depth: int,
+    ) -> ActionPoolGenerator:
+        self._reject_unknown_keys(node, self._ACTION_POOL_KEYS, path)
+        raw_pools = node.get("pools")
+        if not isinstance(raw_pools, list) or not raw_pools:
+            raise ScenarioConfigurationError(
+                f"{path}.pools must be a non-empty array"
+            )
+        pools = tuple(
+            self._require_non_empty_string(
+                pool,
+                f"{path}.pools[{index}]",
+            )
+            for index, pool in enumerate(raw_pools)
+        )
+        if len(pools) != len(set(pools)):
+            raise ScenarioConfigurationError(
+                f"{path}.pools must not contain duplicates"
+            )
+        selection = self._require_non_empty_string(
+            node.get("selection", "random"),
+            f"{path}.selection",
+        )
+        if selection not in {"random", "sequential"}:
+            raise ScenarioConfigurationError(
+                f"{path}.selection must be random or sequential"
+            )
+        seed = node.get("seed", self._config.random_seed)
+        if isinstance(seed, bool) or not isinstance(seed, int):
+            raise ScenarioConfigurationError(f"{path}.seed must be an integer")
+
+        action_root = self._config.action_pools_dir.resolve()
+        actions = tuple(
+            self._create(
+                action.generator,
+                (
+                    "@action_pools/"
+                    + action.source.relative_to(action_root).as_posix()
+                ),
+                depth + 1,
+                allow_action_pool=False,
+            )
+            for action in self._action_pools.load(pools)
+        )
+        for index, action in enumerate(actions):
+            if action.is_infinite:
+                raise ScenarioConfigurationError(
+                    f"{path} selected infinite action {index}"
+                )
+        return ActionPoolGenerator(
+            actions=actions,
+            selection=selection,
+            count=self._parse_optional_count(node, path),
+            seed=seed,
+            node_path=path,
+        )
+
     def _parse_children(
-        self, value: object, path: str, depth: int
+        self,
+        value: object,
+        path: str,
+        depth: int,
+        allow_action_pool: bool,
     ) -> tuple[ScenarioGenerator, ...]:
         if not isinstance(value, list) or not value:
             raise ScenarioConfigurationError(
                 f"{path}.generators must be a non-empty array"
             )
         return tuple(
-            self._create(child, f"{path}.generators[{index}]", depth + 1)
+            self._create(
+                child,
+                f"{path}.generators[{index}]",
+                depth + 1,
+                allow_action_pool,
+            )
             for index, child in enumerate(value)
         )
 
@@ -277,9 +396,6 @@ class ScenarioGeneratorFactory:
         usage = self._require_object(value, path)
         self._reject_unknown_keys(usage, self._USAGE_KEYS, path)
         return UsageDelta(
-            input_tokens=self._non_negative_integer(
-                usage.get("input_tokens", 0), f"{path}.input_tokens"
-            ),
             output_tokens=self._non_negative_integer(
                 usage.get("output_tokens", 0), f"{path}.output_tokens"
             ),

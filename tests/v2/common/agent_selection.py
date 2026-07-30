@@ -83,6 +83,10 @@ class AgentSelector:
             if binary is None:
                 continue
             environment = self._environment(kind, binary)
+            test_context.report_progress(
+                "agent_availability",
+                f"checking {kind} availability",
+            )
             if test_context.check_agent_availability(
                 kind,
                 binary,

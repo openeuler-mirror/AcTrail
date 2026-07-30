@@ -19,6 +19,14 @@ tests/v2/common/test-suites/local-maas-server/
 │   ├── __init__.py
 │   ├── model.py
 │   ├── runtime.py
+│   ├── tool_alias/
+│   │   ├── __init__.py
+│   │   ├── config.py
+│   │   ├── interface.py
+│   │   ├── factory.py
+│   │   └── impl/
+│   │       ├── __init__.py
+│   │       └── schema.py
 │   │
 │   └── scenario_generator/
 │       ├── __init__.py
@@ -26,13 +34,29 @@ tests/v2/common/test-suites/local-maas-server/
 │       ├── interface.py
 │       ├── factory.py
 │       ├── loader.py
+│       ├── action_pool_repository.py
 │       │
 │       ├── impl/
 │       │   ├── __init__.py
+│       │   ├── action_pool.py
 │       │   ├── response.py
 │       │   ├── sequential.py
 │       │   ├── loop.py
 │       │   └── random.py
+│       │
+│       ├── action_pools/
+│       │   ├── reasoning-and-message/
+│       │   │   ├── long/
+│       │   │   └── short/
+│       │   └── tool/
+│       │       ├── file/
+│       │       │   ├── read/
+│       │       │   ├── write/
+│       │       │   ├── grep/
+│       │       │   └── glob/
+│       │       └── exec/
+│       │           ├── heavy/
+│       │           └── light/
 │       │
 │       └── templates/
 │           ├── finite-sequence.json
@@ -40,7 +64,14 @@ tests/v2/common/test-suites/local-maas-server/
 │           ├── alternating-message-loop.json
 │           ├── bash-tool-roundtrip.json
 │           ├── bash-home-loop.json
-│           └── random-message.json
+│           ├── random-message.json
+│           └── action-pools/
+│               ├── random-light-exec.json
+│               ├── adaptive-tool-or-message-loop.json
+│               ├── random-file-operation.json
+│               ├── reasoning-length-loop.json
+│               ├── short-reasoning-sequential-cycle.json
+│               └── long-reasoning-short-operation.json
 │
 ├── protocol/
 │   ├── __init__.py
@@ -58,6 +89,7 @@ tests/v2/common/test-suites/local-maas-server/
 ├── server_core/
 │   ├── __init__.py
 │   ├── config.py
+│   ├── server.py
 │   ├── application.py
 │   ├── api_endpoints.py
 │   │
@@ -82,6 +114,7 @@ tests/v2/common/test-suites/local-maas-server/
 └── utils/
     ├── __init__.py
     ├── json.py
+    ├── lifecycle.py
     └── logging.py
 ```
 
@@ -90,17 +123,27 @@ tests/v2/common/test-suites/local-maas-server/
 ```text
 server.py
     ↓
-LocalMaaSConfig
+parse_cli_args
+    ↓
+LocalMaaSConfig.parse_from
     ├── ScenarioGeneratorConfig
+    ├── ToolAliasConfig
     ├── ProtocolConfig
     ├── ScheduleConfig
     └── ServerCoreConfig
             ↓
+LocalMaaSServer
+    ↓ start
 ScenarioLoader
     ↓
 ScenarioGeneratorFactory
+    └── ActionPoolRepository
     ↓
 ScenarioRuntime
+    └── ToolAliasConverter
+            ↑
+        ToolAliasConverterFactory
+            └── SchemaToolAliasConverter
     ↓
 LocalMaaSApplication
     ↓
@@ -109,6 +152,31 @@ ConnectionFactory
     └── HTTPSConnectionServer
             ↓
 ConnectionManager
+    ↓
+LocalMaaSStatus
+```
+
+```text
+server.py
+    ├── LocalMaaSServer.start
+    ├── ExitSignalWaiter.wait
+    └── LocalMaaSServer.stop
+            ↑
+        finally / atexit
+```
+
+```text
+LocalMaaSServer.reset
+    ↓
+LocalMaaSApplication.reset
+    ↓
+ScenarioRuntime.reset
+    ↓
+ScenarioGenerator.reset
+    ↓
+GeneratorExecution
+    ├── GeneratorParameters
+    └── lazy response iterator
 ```
 
 ```text
@@ -163,8 +231,15 @@ HTTPRequestHandler
 ApiEndpoints
     ↓
 ProtocolAdapter.decode_request
+    ├── request tools
+    └── tool input schemas
+    ↓
+ToolAliasConverter.generation_options
     ↓
 ScenarioRuntime.reserve
+    └── GeneratorExecution.next(GenerationOptions)
+    ↓
+ToolAliasConverter
     ↓
 ProtocolAdapter.encode_response
     ↓

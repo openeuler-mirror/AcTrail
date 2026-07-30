@@ -1,0 +1,41 @@
+{
+  "description": "Reads the local hostname file and reports completion.",
+  "type": "sequential",
+  "generators": [
+    {
+      "type": "response",
+      "response": {
+        "blocks": [
+          {
+            "type": "reasoning",
+            "text": "The requested local fact can be read from a small text file."
+          },
+          {
+            "type": "tool_call",
+            "name": "read",
+            "arguments": {
+              "path": "/etc/hostname"
+            }
+          }
+        ],
+        "usage": {
+          "output_tokens": 16
+        }
+      }
+    },
+    {
+      "type": "response",
+      "response": {
+        "blocks": [
+          {
+            "type": "message",
+            "text": "LOCAL_MAAS_FILE_READ_OK"
+          }
+        ],
+        "usage": {
+          "output_tokens": 7
+        }
+      }
+    }
+  ]
+}

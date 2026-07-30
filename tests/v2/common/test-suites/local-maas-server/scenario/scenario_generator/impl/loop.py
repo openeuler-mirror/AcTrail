@@ -4,7 +4,12 @@ from dataclasses import dataclass
 from typing import Iterator
 
 from ...model import ResponseTemplate, ScenarioConfigurationError
-from ..interface import GeneratorParameters, ScenarioGenerator
+from ..interface import (
+    GenerationOptions,
+    GenerationUnavailable,
+    GeneratorParameters,
+    ScenarioGenerator,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,8 +41,11 @@ class LoopGenerator(ScenarioGenerator):
 
     def generate(
         self, parameters: GeneratorParameters
-    ) -> Iterator[ResponseTemplate]:
+    ) -> Iterator[ResponseTemplate | GenerationUnavailable]:
         iteration = 0
         while self.count is None or iteration < self.count:
             yield from self.generator.generate(parameters)
             iteration += 1
+
+    def is_eligible(self, options: GenerationOptions) -> bool:
+        return self.generator.is_eligible(options)

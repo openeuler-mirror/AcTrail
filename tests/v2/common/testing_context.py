@@ -7,6 +7,7 @@ import math
 import os
 import socket
 import stat
+import subprocess
 import sys
 import threading
 import time
@@ -14,7 +15,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Mapping
 
-from .output import TestOutput
+from .output import CaseProgressReporter, TestOutput
+from .test_case import TestResult, TestStatus
 from .testing_env import AgentAvailability
 
 
@@ -192,8 +194,11 @@ class TestingContextSingleton:
                 instance._env_dict = {}
                 instance.agent_availability = AgentAvailability()
                 instance._output_stack = [output]
+                instance._progress_stack = []
                 instance._lock_path = lock_path
                 instance._lease_depth = 1
+                instance._release_prepared = False
+                instance._release_repo = None
                 instance._suite_lock = _RegressionSuiteLock(
                     lock_path,
                     wait,
@@ -231,6 +236,54 @@ class TestingContextSingleton:
     def output(self) -> TestOutput:
         return self._output_stack[-1]
 
+    def prepare_release(self, repo: Path) -> None:
+        resolved_repo = repo.resolve()
+        if (
+            self._release_repo is not None
+            and self._release_repo != resolved_repo
+        ):
+            raise RuntimeError(
+                "regression singleton cannot prepare releases from "
+                f"multiple repositories: held={self._release_repo} "
+                f"requested={resolved_repo}"
+            )
+        if self._release_prepared:
+            return
+
+        self._release_repo = resolved_repo
+        script = resolved_repo / "scripts/install-release.sh"
+        if not script.is_file():
+            raise RuntimeError(f"release installer not found: {script}")
+
+        self.output.heading("▶ release_install")
+        self.output.line("→ running bash scripts/install-release.sh")
+        try:
+            completed = subprocess.run(
+                ["bash", "scripts/install-release.sh"],
+                cwd=resolved_repo,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as error:
+            raise RuntimeError(
+                f"launch release installer failed: {error}"
+            ) from error
+        if completed.returncode != 0:
+            self.output.command_output(
+                completed.stdout,
+                completed.stderr,
+            )
+            raise RuntimeError(
+                "bash scripts/install-release.sh exited with "
+                f"{completed.returncode}"
+            )
+        self._release_prepared = True
+        self.output.summary(
+            "release_install",
+            TestResult(TestStatus.PASSED),
+        )
+
     @contextmanager
     def output_scope(self, output: TestOutput) -> Iterator[None]:
         self._output_stack.append(output)
@@ -240,6 +293,30 @@ class TestingContextSingleton:
             active_output = self._output_stack.pop()
             if active_output is not output:
                 raise RuntimeError("regression output scope stack is corrupted")
+
+    @contextmanager
+    def progress_scope(
+        self,
+        reporter: CaseProgressReporter,
+    ) -> Iterator[None]:
+        self._progress_stack.append(reporter)
+        try:
+            yield
+        finally:
+            active_reporter = self._progress_stack.pop()
+            if active_reporter is not reporter:
+                raise RuntimeError(
+                    "regression progress scope stack is corrupted"
+                )
+
+    def report_progress(
+        self,
+        step: str,
+        message: str | None = None,
+    ) -> None:
+        if not self._progress_stack:
+            raise RuntimeError("regression progress scope is inactive")
+        self._progress_stack[-1].report(step, message)
 
     @classmethod
     def _lease_owner_description(cls) -> str:

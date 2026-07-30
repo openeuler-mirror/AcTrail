@@ -1,0 +1,9 @@
+{
+  "description": "Continuously selects a long or short reasoning-and-message action.",
+  "type": "action_pool",
+  "pools": [
+    "reasoning-and-message/long",
+    "reasoning-and-message/short"
+  ],
+  "selection": "random"
+}

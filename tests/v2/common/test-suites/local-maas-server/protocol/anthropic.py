@@ -8,6 +8,7 @@ from scenario.model import (
     ResponseBlock,
     ScenarioEmission,
     ScenarioRequest,
+    ToolDefinition,
     UsageSnapshot,
 )
 
@@ -62,6 +63,8 @@ class AnthropicMessagesAdapter(ProtocolAdapter):
             stream=stream,
             model=model,
             include_usage=True,
+            input_tokens=self.input_tokens(document),
+            tools=self._decode_tools(document.get("tools", [])),
         )
 
     def encode_response(
@@ -304,6 +307,32 @@ class AnthropicMessagesAdapter(ProtocolAdapter):
         if block.tool_call is None:
             raise RuntimeError("validated tool_call block is missing tool data")
         return block.tool_call
+
+    def _decode_tools(self, value: object) -> tuple[ToolDefinition, ...]:
+        if not isinstance(value, list):
+            raise ProtocolRequestError(
+                "invalid_tools", "tools must be an array"
+            )
+        tools = []
+        for index, raw_tool in enumerate(value):
+            if not isinstance(raw_tool, dict):
+                raise ProtocolRequestError(
+                    "invalid_tools", f"tools[{index}] must be an object"
+                )
+            name = self._required_string(
+                raw_tool.get("name"),
+                f"tools[{index}].name",
+            )
+            input_schema = raw_tool.get("input_schema", {})
+            if not isinstance(input_schema, dict):
+                raise ProtocolRequestError(
+                    "invalid_tools",
+                    f"tools[{index}].input_schema must be an object",
+                )
+            tools.append(
+                ToolDefinition(name=name, input_schema=input_schema)
+            )
+        return tuple(tools)
 
     @staticmethod
     def _required_string(value: object, field: str) -> str:

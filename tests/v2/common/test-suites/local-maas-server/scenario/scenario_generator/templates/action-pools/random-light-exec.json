@@ -1,0 +1,9 @@
+{
+  "description": "Selects one lightweight execution action at random and completes its full tool roundtrip.",
+  "type": "action_pool",
+  "pools": [
+    "tool/exec/light"
+  ],
+  "selection": "random",
+  "count": 1
+}

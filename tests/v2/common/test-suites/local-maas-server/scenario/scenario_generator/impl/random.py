@@ -6,7 +6,12 @@ from dataclasses import dataclass
 from typing import Iterator
 
 from ...model import ResponseTemplate, ScenarioConfigurationError
-from ..interface import GeneratorParameters, ScenarioGenerator
+from ..interface import (
+    GenerationOptions,
+    GenerationUnavailable,
+    GeneratorParameters,
+    ScenarioGenerator,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,7 +49,7 @@ class RandomGenerator(ScenarioGenerator):
 
     def generate(
         self, parameters: GeneratorParameters
-    ) -> Iterator[ResponseTemplate]:
+    ) -> Iterator[ResponseTemplate | GenerationUnavailable]:
         invocation = parameters.next_random_invocation(self.node_path)
         seed_material = (
             f"{self.node_path}\0{invocation}".encode("utf-8")
@@ -56,6 +61,28 @@ class RandomGenerator(ScenarioGenerator):
         chooser = random.Random(effective_seed)
         iteration = 0
         while self.count is None or iteration < self.count:
-            generator = chooser.choice(self.generators)
+            options = parameters.options
+            eligible = (
+                ()
+                if options is None
+                else tuple(
+                    generator
+                    for generator in self.generators
+                    if generator.is_eligible(options)
+                )
+            )
+            if not eligible:
+                yield GenerationUnavailable(
+                    f"random generator {self.node_path} has no compatible "
+                    "candidate"
+                )
+                continue
+            generator = chooser.choice(eligible)
             yield from generator.generate(parameters)
             iteration += 1
+
+    def is_eligible(self, options: GenerationOptions) -> bool:
+        return any(
+            generator.is_eligible(options)
+            for generator in self.generators
+        )

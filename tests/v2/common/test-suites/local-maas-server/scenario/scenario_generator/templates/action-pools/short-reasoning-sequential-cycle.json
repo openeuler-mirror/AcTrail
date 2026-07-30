@@ -1,0 +1,9 @@
+{
+  "description": "Cycles through all short reasoning-and-message actions twice in deterministic order.",
+  "type": "action_pool",
+  "pools": [
+    "reasoning-and-message/short"
+  ],
+  "selection": "sequential",
+  "count": 4
+}

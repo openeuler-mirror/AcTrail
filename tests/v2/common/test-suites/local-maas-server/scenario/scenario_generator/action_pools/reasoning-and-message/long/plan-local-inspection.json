@@ -1,0 +1,23 @@
+{
+  "description": "Returns a long reasoning trace followed by a concise inspection summary.",
+  "type": "response",
+  "response": {
+    "blocks": [
+      {
+        "type": "reasoning",
+        "chunks": [
+          "I need to understand the local context before reaching a conclusion. ",
+          "First I will identify the relevant inputs, then compare the observable state with the requested outcome. ",
+          "I should avoid assuming that missing evidence proves success, and I should keep the final answer proportional to what was actually observed."
+        ]
+      },
+      {
+        "type": "message",
+        "text": "The local inspection plan is ready."
+      }
+    ],
+    "usage": {
+      "output_tokens": 72
+    }
+  }
+}

@@ -41,7 +41,8 @@ class SemanticActionBoundariesConfig(CommonTestConfig):
             web_port=int(
                 os.environ.get(
                     "SEMANTIC_ACTION_BOUNDARIES_E2E_WEB_PORT",
-                    "18081",
+                    # Port 0 requests a kernel-assigned ephemeral port.
+                    "0",
                 )
             ),
             plugin_package="otel-jsonl",

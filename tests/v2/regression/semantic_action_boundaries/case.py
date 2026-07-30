@@ -17,6 +17,10 @@ class SemanticActionBoundariesCase(TestCase):
     def run(self, test_context: TestingContextSingleton) -> TestResult:
         results: dict[str, TestResult] = {}
         try:
+            test_context.report_progress(
+                "agent_selection",
+                "selecting an available agent",
+            )
             agent = AgentSelector(self._config.repo).select(test_context)
             if agent is None:
                 return TestResult(
@@ -29,6 +33,10 @@ class SemanticActionBoundariesCase(TestCase):
                 f"selected {agent.kind}: {agent.binary}",
             )
 
+            test_context.report_progress(
+                "environment_prepare",
+                "starting actraild and semantic observation",
+            )
             self._environment = SemanticActionBoundariesEnvironment(
                 self._config,
                 test_context.output,
@@ -42,6 +50,7 @@ class SemanticActionBoundariesCase(TestCase):
             task = SemanticActionBoundariesTask(
                 self._environment,
                 agent,
+                test_context,
             )
             results.update(task.run())
             return TestResult(

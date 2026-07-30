@@ -45,8 +45,16 @@ runner 在创建 suite context 时获取一次全局文件锁，整套 selected 
 runner 会显示进程或线程持有者并等待；进程内 lease 与文件锁共用上述总时限，超时后会
 明确报告测试未启动，并在执行任何 daemon stop/clean 之前失败。
 
-`test_all.py` 中每个测例的名称和最终结果显示在同一行，stdout、stderr、命令输出
-及详细检查结果统一写入 `<log-dir>/<case>.log`。
+取得全局锁后，runner 会在 suite singleton 生命周期内执行一次
+`bash scripts/install-release.sh`，成功后才进入任何测例。安装脚本从仓库根目录运行，
+会让 Cargo 检查并刷新 release 和官方 WASM 插件、安装或检查构建依赖，并覆盖
+`/usr/local/bin` 与 `$ACTRAIL_PLUGIN_DIR`（默认为 `$HOME/.actrail/plugins`）中的
+AcTrail 产物。安装失败属于启动失败，runner 不会进入测例。`--bin-dir` 仍只控制测例
+使用的二进制目录，不改变安装脚本的目标目录。
+
+`test_all.py` 在 TTY 中原地刷新每个测例的当前步骤和最终结果；非 TTY 输出按步骤逐行
+保留。stdout、stderr、命令输出及详细检查结果统一写入
+`<log-dir>/<case>.log`。
 
 单个测例通过其目录中的 `run_e2e.py` 独立运行时，会在终端实时显示 stdout、
 stderr 和完整检查明细，同时仍由公共框架保存对应日志。

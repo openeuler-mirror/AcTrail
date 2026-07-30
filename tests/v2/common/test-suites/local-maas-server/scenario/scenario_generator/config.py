@@ -7,6 +7,7 @@ from pathlib import Path
 @dataclass(frozen=True, slots=True)
 class ScenarioGeneratorConfig:
     templates_dir: Path
+    action_pools_dir: Path
     template_name: str
     max_template_bytes: int
     max_depth: int

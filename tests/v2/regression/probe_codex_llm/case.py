@@ -28,6 +28,10 @@ class ProbeCodexLLMCase(TestCase):
                 task = ProbeCodexLLMTask(self._config, runtime)
             except AgentBinaryNotFoundError as error:
                 return TestResult(TestStatus.SKIPPED, str(error))
+            test_context.report_progress(
+                "agent_availability",
+                "checking codex availability",
+            )
             if not test_context.check_agent_availability(
                 "codex",
                 task.binary,
@@ -38,12 +42,20 @@ class ProbeCodexLLMCase(TestCase):
                     "Codex external availability check failed",
                 )
 
+            test_context.report_progress(
+                "runtime_prepare",
+                "preparing actraild runtime",
+            )
             lifecycle = runtime.prepare()
             results["runtime_lifecycle"] = TestResult(
                 TestStatus.PASSED,
                 f"{len(lifecycle)} lifecycle commands completed",
             )
 
+            test_context.report_progress(
+                "agent_launch",
+                "launching codex",
+            )
             launch = task.run()
             if launch.returncode != 0:
                 raise AssertionError(
@@ -55,6 +67,10 @@ class ProbeCodexLLMCase(TestCase):
                 "actrailctl launch and Codex exited successfully",
             )
 
+            test_context.report_progress(
+                "launch_validation",
+                "validating answer marker and trace id",
+            )
             assertion = LLMTraceAssertion(
                 runtime,
                 task.marker,
@@ -70,6 +86,10 @@ class ProbeCodexLLMCase(TestCase):
                 expected_count=1,
                 selected_index=0,
             )
+            test_context.report_progress(
+                "runtime_stop",
+                "stopping actraild and draining trace",
+            )
             stopped = runtime.stop()
             if stopped is None or stopped.returncode != 0:
                 returncode = None if stopped is None else stopped.returncode
@@ -81,8 +101,12 @@ class ProbeCodexLLMCase(TestCase):
                 "actraild drained trace finalization and stopped successfully",
             )
 
-            request_count, response_count = assertion.require_finalized_exchange(
-                trace_id
+            test_context.report_progress(
+                "trace_validation",
+                "validating finalized LLM exchange",
+            )
+            request_count, response_count = (
+                assertion.require_finalized_exchange(trace_id)
             )
             results["llm_exchange"] = TestResult(
                 TestStatus.PASSED,

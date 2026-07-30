@@ -8,10 +8,10 @@ Usage: scripts/install-release.sh [DESTDIR]
 Install AcTrail release binaries into DESTDIR and the official plugin packages.
 DESTDIR defaults to /usr/local/bin.
 
-The script installs/checks build dependencies, runs cargo build --release when
-target/release is incomplete, builds TLS sync preload runtimes, then copies the
-release binaries, runtimes, and the installed-but-disabled otel-jsonl,
-file-leakage, activity-anomaly, and dynamic file-policy plugins.
+The script installs/checks build dependencies, asks Cargo to refresh the
+release binaries and TLS sync preload runtimes, then copies those artifacts
+and the installed-but-disabled otel-jsonl, file-leakage, activity-anomaly,
+and dynamic file-policy plugins.
 
 Environment:
   ACTRAIL_SUDO  Privilege command for installing into system directories.
@@ -20,6 +20,9 @@ Environment:
                 Plugin installation root. Defaults to ~/.actrail/plugins for
                 the user running this script. The same absolute directory must
                 be configured as plugins.discovery.directory.
+  CARGO_TARGET_DIR
+                Shared Cargo output directory for binaries, TLS runtimes, and
+                WASM plugins. Defaults to target.
 EOF
 }
 
@@ -46,15 +49,18 @@ otel_jsonl_install_dir="$plugin_root/otel-jsonl"
 otel_jsonl_source_dir="$script_dir/../examples/plugins/builtin/otel-jsonl"
 file_leakage_install_dir="$plugin_root/file-leakage"
 file_leakage_source_dir="$script_dir/../examples/plugins/wit-component/file-leakage"
-file_leakage_artifact="$file_leakage_source_dir/target/wasm32-wasip2/release/actrail_file_leakage_plugin.wasm"
 activity_anomaly_install_dir="$plugin_root/activity-anomaly"
 activity_anomaly_source_dir="$script_dir/../examples/plugins/wit-component/activity-anomaly"
-activity_anomaly_artifact="$activity_anomaly_source_dir/target/wasm32-wasip2/release/actrail_activity_anomaly_plugin.wasm"
 file_policy_install_dir="$plugin_root/file-policy-dynamic"
 file_policy_source_dir="$script_dir/../examples/plugins/wit-component/file-policy-dynamic"
 file_policy_fixture_dir="$file_policy_source_dir/fixture-src"
-file_policy_artifact="$file_policy_fixture_dir/target/wasm32-wasip2/release/actrail_component_file_policy_dynamic.wasm"
-release_dir="target/release"
+target_dir="${CARGO_TARGET_DIR:-target}"
+export CARGO_TARGET_DIR="$target_dir"
+release_dir="$target_dir/release"
+wasm_release_dir="$target_dir/wasm32-wasip2/release"
+file_leakage_artifact="$wasm_release_dir/actrail_file_leakage_plugin.wasm"
+activity_anomaly_artifact="$wasm_release_dir/actrail_activity_anomaly_plugin.wasm"
+file_policy_artifact="$wasm_release_dir/actrail_component_file_policy_dynamic.wasm"
 binaries=(
   actraild
   actrailctl
@@ -104,32 +110,14 @@ install_prefix() {
 
 "$script_dir/install-build-deps.sh" --install
 
-missing_release_binary=0
-for binary in "${binaries[@]}"; do
-  if [[ ! -x "$release_dir/$binary" ]]; then
-    missing_release_binary=1
-  fi
-done
+run cargo build --release \
+  --bin actraild \
+  --bin actrailctl \
+  --bin actrailcluster \
+  --bin actrailviewer \
+  --bin actrailweb
 
-if [[ "$missing_release_binary" -eq 1 ]]; then
-  run cargo build --release \
-    --bin actraild \
-    --bin actrailctl \
-    --bin actrailcluster \
-    --bin actrailviewer \
-    --bin actrailweb
-fi
-
-missing_runtime=0
-for runtime in "${runtimes[@]}"; do
-  if [[ ! -f "$release_dir/$runtime" ]]; then
-    missing_runtime=1
-  fi
-done
-
-if [[ "$missing_runtime" -eq 1 ]]; then
-  run "$script_dir/build-tls-sync-runtimes.sh"
-fi
+run "$script_dir/build-tls-sync-runtimes.sh"
 
 command -v rustup >/dev/null 2>&1 || {
   echo "rustup is required to build the official wasm32-wasip2 plugin" >&2

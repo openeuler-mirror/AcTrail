@@ -1,0 +1,42 @@
+{
+  "description": "Finds Python files under the test tree and reports completion.",
+  "type": "sequential",
+  "generators": [
+    {
+      "type": "response",
+      "response": {
+        "blocks": [
+          {
+            "type": "reasoning",
+            "text": "A bounded file glob can inspect the available Python tests."
+          },
+          {
+            "type": "tool_call",
+            "name": "glob",
+            "arguments": {
+              "pattern": "**/*.py",
+              "path": "tests"
+            }
+          }
+        ],
+        "usage": {
+          "output_tokens": 16
+        }
+      }
+    },
+    {
+      "type": "response",
+      "response": {
+        "blocks": [
+          {
+            "type": "message",
+            "text": "LOCAL_MAAS_FILE_GLOB_OK"
+          }
+        ],
+        "usage": {
+          "output_tokens": 7
+        }
+      }
+    }
+  ]
+}

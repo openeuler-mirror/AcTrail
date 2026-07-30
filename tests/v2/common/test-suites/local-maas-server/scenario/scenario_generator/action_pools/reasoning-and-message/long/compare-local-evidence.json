@@ -1,0 +1,23 @@
+{
+  "description": "Returns a long evidence-comparison reasoning trace and a short conclusion.",
+  "type": "response",
+  "response": {
+    "blocks": [
+      {
+        "type": "reasoning",
+        "chunks": [
+          "There are several plausible interpretations of the available local evidence. ",
+          "I will separate direct observations from inferences, check whether the observations are mutually consistent, and retain uncertainty where the data does not distinguish the alternatives. ",
+          "This keeps the conclusion useful without overstating confidence."
+        ]
+      },
+      {
+        "type": "message",
+        "text": "The evidence is consistent enough for a bounded conclusion."
+      }
+    ],
+    "usage": {
+      "output_tokens": 68
+    }
+  }
+}

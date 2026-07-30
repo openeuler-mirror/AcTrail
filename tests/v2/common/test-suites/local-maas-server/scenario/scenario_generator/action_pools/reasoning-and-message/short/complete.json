@@ -1,0 +1,19 @@
+{
+  "description": "Returns a short completion message.",
+  "type": "response",
+  "response": {
+    "blocks": [
+      {
+        "type": "reasoning",
+        "text": "No further action is needed."
+      },
+      {
+        "type": "message",
+        "text": "Done."
+      }
+    ],
+    "usage": {
+      "output_tokens": 6
+    }
+  }
+}

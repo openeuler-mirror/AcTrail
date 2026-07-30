@@ -1,0 +1,12 @@
+{
+  "description": "Selects one file read, write, grep, or glob action at random.",
+  "type": "action_pool",
+  "pools": [
+    "tool/file/read",
+    "tool/file/write",
+    "tool/file/grep",
+    "tool/file/glob"
+  ],
+  "selection": "random",
+  "count": 1
+}

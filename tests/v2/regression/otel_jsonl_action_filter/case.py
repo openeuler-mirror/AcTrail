@@ -17,6 +17,10 @@ class OtelJsonlActionFilterCase(TestCase):
     def run(self, test_context: TestingContextSingleton) -> TestResult:
         results: dict[str, TestResult] = {}
         try:
+            test_context.report_progress(
+                "agent_selection",
+                "selecting an available agent",
+            )
             agent = AgentSelector(self._config.repo).select(test_context)
             if agent is None:
                 return TestResult(
@@ -29,6 +33,10 @@ class OtelJsonlActionFilterCase(TestCase):
                 f"selected {agent.kind}: {agent.binary}",
             )
 
+            test_context.report_progress(
+                "environment_prepare",
+                "starting actraild, actrailweb, and otel-jsonl",
+            )
             self._environment = OtelJsonlActionFilterEnvironment(
                 self._config,
                 test_context.output,
@@ -39,7 +47,11 @@ class OtelJsonlActionFilterCase(TestCase):
                 "actraild, actrailweb, and builtin otel-jsonl are active",
             )
 
-            task = OtelJsonlActionFilterTask(self._environment, agent)
+            task = OtelJsonlActionFilterTask(
+                self._environment,
+                agent,
+                test_context,
+            )
             results.update(task.run())
             return TestResult(
                 TestStatus.COMPOSITE,
