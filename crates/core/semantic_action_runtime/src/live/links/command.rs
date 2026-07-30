@@ -5,7 +5,7 @@ use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use semantic_action::{
     SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkConfidence,
-    SemanticActionLinkRole,
+    SemanticActionLinkRole, SemanticEvidence,
 };
 
 use super::super::process_parent::{
@@ -17,6 +17,7 @@ use super::shared::{ActionLinkKey, invalidate_child_links, is_nested_file_write_
 #[derive(Default)]
 pub(super) struct CommandChildActionLinkProjector {
     commands_by_process: BTreeMap<(TraceId, ProcessIdentity), SemanticAction>,
+    command_ids_by_process: BTreeMap<(TraceId, ProcessIdentity), BTreeSet<String>>,
     fork_edges: BTreeMap<(TraceId, ProcessIdentity), ForkProcessEdge>,
     fork_children: BTreeMap<(TraceId, ProcessIdentity), BTreeSet<ProcessIdentity>>,
     pending_by_process: BTreeMap<(TraceId, ProcessIdentity), Vec<SemanticAction>>,
@@ -28,6 +29,17 @@ pub(super) struct CommandChildActionLinkProjector {
     emitted_links: BTreeSet<ActionLinkKey>,
 }
 
+pub(super) struct ProcessForkLinkUpdate {
+    pub(super) links: Vec<SemanticActionLink>,
+    pub(super) conflict: Option<ProcessParentConflict>,
+}
+
+pub(super) struct ProcessParentConflict {
+    pub(super) trace_id: TraceId,
+    pub(super) action_ids: Vec<String>,
+    pub(super) evidence: Vec<SemanticEvidence>,
+}
+
 impl CommandChildActionLinkProjector {
     pub(super) fn observe_action(&mut self, action: &SemanticAction) {
         if action.kind != SemanticActionKind::CommandInvocation {
@@ -35,15 +47,24 @@ impl CommandChildActionLinkProjector {
         }
         self.commands_by_process
             .insert((action.trace_id, action.process.clone()), action.clone());
+        self.command_ids_by_process
+            .entry((action.trace_id, action.process.clone()))
+            .or_default()
+            .insert(action.action_id.clone());
     }
 
-    pub(super) fn observe_process_fork(&mut self, event: &DomainEvent) -> Vec<SemanticActionLink> {
+    pub(super) fn observe_process_fork(&mut self, event: &DomainEvent) -> ProcessForkLinkUpdate {
         let Some(edge) = fork_edge_from_event(event) else {
-            return Vec::new();
+            return ProcessForkLinkUpdate {
+                links: Vec::new(),
+                conflict: None,
+            };
         };
         let key = (edge.trace_id, edge.child.clone());
         let previous = self.fork_edges.get(&key).cloned();
         let edge = merge_fork_edges(self.fork_edges.get(&key), edge);
+        let became_conflicted =
+            !previous.as_ref().is_some_and(|edge| edge.conflict) && edge.conflict;
         self.fork_edges.insert(key.clone(), edge);
         let merged = self.fork_edges.get(&key).cloned();
         self.update_fork_child_index(previous.as_ref(), merged.as_ref());
@@ -51,10 +72,35 @@ impl CommandChildActionLinkProjector {
         for pending_key in &affected_pending_keys {
             self.refresh_pending_owner_candidates(pending_key);
         }
-        affected_pending_keys
+        let mut links = affected_pending_keys
             .iter()
             .flat_map(|pending_key| self.link_pending_for_parent_key(pending_key))
-            .collect()
+            .collect::<Vec<_>>();
+        let conflict = if became_conflicted && let Some(edge) = &merged {
+            let action_ids = self
+                .command_ids_by_process
+                .get(&key)
+                .cloned()
+                .unwrap_or_default();
+            for action_id in &action_ids {
+                self.remove_pending_child_id(edge.trace_id, action_id);
+                links.extend(invalidate_child_links(
+                    &self.emitted_links,
+                    edge.trace_id,
+                    action_id,
+                    SemanticActionLinkRole::CommandContainsCommandInvocation,
+                    &edge.evidence,
+                ));
+            }
+            Some(ProcessParentConflict {
+                trace_id: edge.trace_id,
+                action_ids: action_ids.into_iter().collect(),
+                evidence: edge.evidence.clone(),
+            })
+        } else {
+            None
+        };
+        ProcessForkLinkUpdate { links, conflict }
     }
 
     pub(super) fn link_pending_for_command(
@@ -93,6 +139,8 @@ impl CommandChildActionLinkProjector {
 
     pub(super) fn forget_trace(&mut self, trace_id: TraceId) {
         self.commands_by_process
+            .retain(|(candidate, _), _| *candidate != trace_id);
+        self.command_ids_by_process
             .retain(|(candidate, _), _| *candidate != trace_id);
         self.fork_edges
             .retain(|(candidate, _), _| *candidate != trace_id);
@@ -169,12 +217,16 @@ impl CommandChildActionLinkProjector {
     }
 
     fn remove_pending_child(&mut self, action: &SemanticAction) {
-        let child_key = (action.trace_id, action.action_id.clone());
+        self.remove_pending_child_id(action.trace_id, &action.action_id);
+    }
+
+    fn remove_pending_child_id(&mut self, trace_id: TraceId, action_id: &str) {
+        let child_key = (trace_id, action_id.to_string());
         let Some(pending_key) = self.pending_key_by_child.remove(&child_key) else {
             return;
         };
         if let Some(pending) = self.pending_by_process.get_mut(&pending_key) {
-            pending.retain(|candidate| candidate.action_id != action.action_id);
+            pending.retain(|candidate| candidate.action_id != action_id);
         }
         if self
             .pending_by_process

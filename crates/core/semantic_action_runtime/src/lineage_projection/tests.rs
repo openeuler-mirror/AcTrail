@@ -26,7 +26,7 @@ fn derives_command_link_through_transient_helper_process() {
         ProcessMembership::inherited(TRACE_ID, base64.clone(), helper, time(3)),
     ];
     let actions = vec![
-        observed_agent_exec("agent-exec", agent.clone(), time(0)),
+        observed_agent_identity("agent-identity", agent.clone(), time(0)),
         command("agent-command", agent, time(0), None),
         command("bash-command", bash, time(1), None),
         command("base64-command", base64, time(4), None),
@@ -46,12 +46,12 @@ fn derives_command_link_through_transient_helper_process() {
             && link.role == SemanticActionLinkRole::CommandContainsCommandInvocation
     }));
     assert!(links.iter().any(|link| {
-        link.parent_action_id == "agent-exec"
+        link.parent_action_id == "agent-identity"
             && link.child_action_id == "bash-command"
             && link.role == SemanticActionLinkRole::AgentPerformedAction
     }));
     assert!(!links.iter().any(|link| {
-        link.parent_action_id == "agent-exec"
+        link.parent_action_id == "agent-identity"
             && link.child_action_id == "base64-command"
             && link.role == SemanticActionLinkRole::AgentPerformedAction
     }));
@@ -117,20 +117,18 @@ fn stale_lineage_link_is_invalidated_when_parent_changes() {
     }));
 }
 
-fn observed_agent_exec(
+fn observed_agent_identity(
     action_id: &str,
     process: ProcessIdentity,
     start_time: SystemTime,
 ) -> SemanticAction {
-    let mut attributes = BTreeMap::new();
-    attributes.insert("agent.identity.status".to_string(), "observed".to_string());
     action(
         action_id,
-        SemanticActionKind::ProcessExec,
+        SemanticActionKind::AgentIdentity,
         process,
         start_time,
         None,
-        attributes,
+        BTreeMap::new(),
     )
 }
 

@@ -14,9 +14,9 @@ agent_a
 
 Expected semantic evidence:
 
-- `agent_a` performs a real DeepSeek HTTPS request and its `process.exec` action is marked `agent.identity.status=observed`.
-- `xiaoo` performs its own real LLM request and its `process.exec` action is marked `agent.identity.status=observed`.
-- Only the direct `script_b.sh` launcher is recorded as the parent of the agent-labeled `xiaoo` `command.invocation`; there must not be an ancestor `agent_a -> xiaoo` shortcut.
+- `agent_a` performs a real DeepSeek HTTPS request and gets one separate `agent.identity` action.
+- `xiaoo` performs its own real LLM request and gets one separate `agent.identity` action.
+- Only the direct `script_b.sh` launcher is recorded as the parent of the one-shot `xiaoo` `command.invocation`; there must not be an ancestor `agent_a -> xiaoo` shortcut.
 
 Run after building release binaries:
 

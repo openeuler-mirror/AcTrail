@@ -222,6 +222,7 @@ impl StorageAttachService {
             plugin_configs: Default::default(),
             semantic_actions: LiveSemanticActionRuntime::new(
                 agent_invocation,
+                process_seccomp_config.pending_max_entries,
                 semantic_retention,
                 file_observation,
             ),

@@ -22,7 +22,6 @@ class EdgeValidation:
 
 PROCESS_ID_ATTR = "actrail.process.id"
 PARENT_PROCESS_ID_ATTR = "process.parent.id"
-CHILD_PROCESS_ID_ATTR = "agent.child.process_id"
 
 
 def validate_agent_invocation_edge(
@@ -38,16 +37,16 @@ def validate_agent_invocation_edge(
         return EdgeValidation(
             facts=[
                 f"otel_output={path}",
-                f"agent_command_spans={count_agent_command_spans(spans)}",
+                f"agent_identity_spans={count_kind(spans, 'agent.identity')}",
                 f"command.invocation_spans={count_kind(spans, 'command.invocation')}",
                 f"process.exec_spans={count_kind(spans, 'process.exec')}",
             ],
             missing=[
-                "agent command.invocation span with expected child executable, logical child identity, success, and complete",
+                "Claude command.invocation span with expected executable, logical process identity, parent identity, success, and complete",
             ],
         )
     parent_process_id = edge.attributes[PARENT_PROCESS_ID_ATTR]
-    child_process_id = edge.attributes[CHILD_PROCESS_ID_ATTR]
+    child_process_id = edge.attributes[PROCESS_ID_ATTR]
     root_exec = find_process_exec_span_by_executable(spans, edge.trace_id, expected_xiaoo)
     parent_exec = find_process_exec_span(
         spans, edge.trace_id, parent_process_id, None, None
@@ -60,6 +59,7 @@ def validate_agent_invocation_edge(
         None,
     )
     child_llm = find_llm_request_span(spans, edge.trace_id, child_process_id)
+    child_identity = find_agent_identity_span(spans, edge.trace_id, child_process_id)
     child_bash_command = find_child_bash_command_span(
         spans, edge.trace_id, child_process_id
     )
@@ -70,11 +70,9 @@ def validate_agent_invocation_edge(
         "agent command status="
         f"{edge.attributes.get('actrail.action.status')} "
         f"completeness={edge.attributes.get('actrail.action.completeness')}",
-        f"agent command trigger={edge.attributes.get('agent.invocation.trigger')}",
-        f"agent command evidence_action_id={edge.attributes.get('agent.invocation.evidence_action_id')}",
         f"agent command parent process_id={parent_process_id}",
-        f"agent command child process_id={child_process_id} executable={edge.attributes.get('agent.child.executable')}",
-        f"agent command child command_line={edge.attributes.get('agent.child.command_line')}",
+        f"agent command process_id={child_process_id} executable={edge.attributes.get('process.executable')}",
+        f"agent command line={edge.attributes.get('command.line')}",
     ]
     missing: list[str] = []
     if root_exec is None:
@@ -122,6 +120,18 @@ def validate_agent_invocation_edge(
                 f"child llm.request process_id={child_llm.attributes.get(PROCESS_ID_ATTR)}",
             ]
         )
+    if child_identity is None:
+        missing.append(
+            "matching Claude agent.identity span with same trace_id and process ID"
+        )
+    else:
+        facts.extend(
+            [
+                f"child agent.identity action_id={child_identity.attributes.get('actrail.action.id')}",
+                f"child agent.identity source={child_identity.attributes.get('agent.identity.source')}",
+                f"child agent.identity evidence_action_id={child_identity.attributes.get('agent.identity.evidence_action_id')}",
+            ]
+        )
     if child_bash_command is None:
         missing.append("matching successful Claude child Bash command.invocation")
     else:
@@ -133,19 +143,18 @@ def validate_agent_invocation_edge(
                 f"child Bash command line={child_bash_command.attributes.get('command.line')}",
             ]
         )
-    if edge.attributes.get("agent.invocation.trigger") != "child_llm_request":
-        missing.append("agent.invocation.trigger=child_llm_request")
     if (
         child_llm is not None
-        and edge.attributes.get("agent.invocation.evidence_action_id")
+        and child_identity is not None
+        and child_identity.attributes.get("agent.identity.evidence_action_id")
         != child_llm.attributes.get("actrail.action.id")
     ):
-        missing.append("agent.invocation.evidence_action_id points to the child Claude llm.request action")
+        missing.append("agent.identity.evidence_action_id points to the child Claude llm.request action")
     if root_exec is not None and parent_exec is not None and child_exec is not None:
         facts.append(
             "process linkage verified: "
             f"agent command process.parent.id == parent actrail.process.id == {parent_process_id}; "
-            f"agent command child process ID == child actrail.process.id == {child_process_id}"
+            f"agent command process ID == child actrail.process.id == {child_process_id}"
         )
         facts.append(
             "trace linkage verified: agent command, xiaoO exec, parent exec, and child exec "
@@ -174,12 +183,11 @@ def find_agent_command_span(
         attributes = span.attributes
         if (
             attributes.get("actrail.action.kind") == "command.invocation"
-            and attributes.get("invocation.kind") == "agent"
             and attributes.get("actrail.action.status") == "success"
             and attributes.get("actrail.action.completeness") == "complete"
-            and attributes.get("agent.child.executable") == expected_claude
+            and attributes.get("process.executable") == expected_claude
             and attributes.get(PARENT_PROCESS_ID_ATTR)
-            and attributes.get(CHILD_PROCESS_ID_ATTR)
+            and attributes.get(PROCESS_ID_ATTR)
         ):
             return span
     return None
@@ -195,7 +203,10 @@ def find_process_exec_span_by_executable(
         if (
             span.trace_id == trace_id
             and attributes.get("actrail.action.kind") == "process.exec"
-            and attributes.get("executable") == executable
+            and (
+                attributes.get("process.executable") == executable
+                or attributes.get("executable") == executable
+            )
         ):
             return span
     return None
@@ -214,8 +225,30 @@ def find_process_exec_span(
             span.trace_id == trace_id
             and attributes.get("actrail.action.kind") == "process.exec"
             and attributes.get(PROCESS_ID_ATTR) == process_id
-            and (executable is None or attributes.get("executable") == executable)
+            and (
+                executable is None
+                or attributes.get("process.executable") == executable
+                or attributes.get("executable") == executable
+            )
             and (command_line is None or attributes.get("command_line") == command_line)
+        ):
+            return span
+    return None
+
+
+def find_agent_identity_span(
+    spans: list[SpanRecord],
+    trace_id: str,
+    process_id: str,
+) -> SpanRecord | None:
+    for span in spans:
+        attributes = span.attributes
+        if (
+            span.trace_id == trace_id
+            and attributes.get("actrail.action.kind") == "agent.identity"
+            and attributes.get(PROCESS_ID_ATTR) == process_id
+            and attributes.get("agent.identity.status") == "observed"
+            and attributes.get("agent.identity.source") == "llm.request"
         ):
             return span
     return None
@@ -268,15 +301,6 @@ def executable_basename(value: str) -> str:
 
 def count_kind(spans: list[SpanRecord], kind: str) -> int:
     return sum(1 for span in spans if span.attributes.get("actrail.action.kind") == kind)
-
-
-def count_agent_command_spans(spans: list[SpanRecord]) -> int:
-    return sum(
-        1
-        for span in spans
-        if span.attributes.get("actrail.action.kind") == "command.invocation"
-        and span.attributes.get("invocation.kind") == "agent"
-    )
 
 
 def iter_otel_spans(document: dict):

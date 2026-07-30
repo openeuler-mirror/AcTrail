@@ -712,11 +712,9 @@ fn hidden_sibling_binary(entry: &Path) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use tls_probe_point_finder::{
-        AttachPoint, BinaryIdentity, BinaryIdentityTypeCode, CaptureStrategy, PayloadDirection,
-        ProbeBinary, ProbePoint, ProbePointPlan, ProbeSource, TargetIdentity, TlsProvider,
+        AttachPoint, CaptureStrategy, PayloadDirection, ProbeBinary, ProbePoint, ProbePointPlan,
+        ProbeSource, TargetIdentity, TlsProvider,
     };
 
     use super::{
@@ -816,29 +814,26 @@ mod tests {
     }
 
     fn plan(architecture: &str, complete: bool) -> ProbePointPlan {
+        let target = std::env::current_exe().expect("resolve current test target");
+        let identity =
+            tls_probe_point_finder::elf_identity(&target).expect("resolve current target identity");
         let mut points = vec![point("SSL_read", PayloadDirection::Inbound)];
         if complete {
             points.push(point("SSL_write", PayloadDirection::Outbound));
         }
         ProbePointPlan {
             target: TargetIdentity {
-                binary: PathBuf::from("/tmp/target"),
-                architecture: architecture.to_string(),
-                identity: BinaryIdentity {
-                    identity_type_code: BinaryIdentityTypeCode::GnuBuildId,
-                    identity: "00".to_string(),
-                },
+                binary: target.clone(),
+                architecture: std::env::consts::ARCH.to_string(),
+                identity: identity.clone(),
             },
             provider: TlsProvider::OpenSsl,
             source: ProbeSource::Executable,
             resolver: "test".to_string(),
             binary: ProbeBinary {
-                path: PathBuf::from("/tmp/target"),
+                path: target,
                 architecture: architecture.to_string(),
-                identity: BinaryIdentity {
-                    identity_type_code: BinaryIdentityTypeCode::GnuBuildId,
-                    identity: "00".to_string(),
-                },
+                identity,
             },
             points,
         }

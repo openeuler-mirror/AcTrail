@@ -263,6 +263,7 @@ mod tests {
     use std::path::PathBuf;
 
     use tls_payload_core::PayloadDirection;
+    use tls_probe_point_finder::{BinaryIdentity, BinaryIdentityTypeCode};
 
     use super::{HookPoint, RuntimeConfig, RuntimeConfigParts};
     use crate::runtime::config::plan::RuntimePlan;
@@ -303,7 +304,11 @@ mod tests {
     fn openssl_plan() -> RuntimePlan {
         RuntimePlan {
             target: PathBuf::from("/usr/bin/python3"),
+            target_identity: BinaryIdentity::try_new(BinaryIdentityTypeCode::GnuBuildId, "0011")
+                .expect("valid target identity"),
             binary: PathBuf::from("/usr/lib64/libssl.so.1.1"),
+            binary_identity: BinaryIdentity::try_new(BinaryIdentityTypeCode::GnuBuildId, "2233")
+                .expect("valid binary identity"),
             provider: "openssl".to_string(),
             points: vec![
                 HookPoint {

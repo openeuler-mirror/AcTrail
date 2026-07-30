@@ -13,7 +13,8 @@ python3 tests/v2/regression/test_all.py --list
 sudo -E python3 tests/v2/regression/test_all.py --case probe_codex_llm
 sudo -E python3 tests/v2/regression/test_all.py --case probe_pi_llm
 sudo -E python3 tests/v2/regression/test_all.py --case probe_qodercli_llm
-sudo -E python3 tests/v2/regression/test_all.py --case plugin_otel_jsonl
+sudo -E python3 tests/v2/regression/test_all.py --case semantic_action_boundaries
+sudo -E python3 tests/v2/regression/test_all.py --case otel_jsonl_action_filter
 sudo -E python3 tests/v2/regression/test_all.py --fail-fast --no-cleanup
 ```
 
@@ -59,4 +60,5 @@ stderr 和完整检查明细，同时仍由公共框架保存对应日志。
 | `probe_pi_llm` | [`probe_pi_llm/README.zh.md`](probe_pi_llm/README.zh.md) |
 | `probe_qodercli_llm` | [`probe_qodercli_llm/README.zh.md`](probe_qodercli_llm/README.zh.md) |
 | `probe_xiaoo_llm` | [`probe_xiaoo_llm/README.zh.md`](probe_xiaoo_llm/README.zh.md) |
-| `plugin_otel_jsonl` | [`otel-jsonl/README.zh.md`](plugins/otel-jsonl/README.zh.md) |
+| `semantic_action_boundaries` | [`semantic_action_boundaries/README.zh.md`](semantic_action_boundaries/README.zh.md) |
+| `otel_jsonl_action_filter` | [`otel_jsonl_action_filter/README.zh.md`](otel_jsonl_action_filter/README.zh.md) |

@@ -11,12 +11,15 @@ from tests.v2.common.plugin_test_environment import (
     PluginTestEnvironment,
 )
 
-from .config import OtelJsonlConfig
+from .config import OtelJsonlActionFilterConfig
 
 
-class OtelJsonlEnvironment(PluginTestEnvironment):
+class OtelJsonlActionFilterEnvironment(PluginTestEnvironment):
     _REPRESENTATIVE_KINDS = {
         "process.exec",
+        "process.exit",
+        "agent.identity",
+        "agent.exit",
         "file.read",
         "command.invocation",
         "llm.call",
@@ -24,7 +27,11 @@ class OtelJsonlEnvironment(PluginTestEnvironment):
         "llm.response",
     }
 
-    def __init__(self, config: OtelJsonlConfig, output: TestOutput):
+    def __init__(
+        self,
+        config: OtelJsonlActionFilterConfig,
+        output: TestOutput,
+    ):
         self._operator_config_patch = config.work_dir / "actraild.patch.toml"
         super().__init__(
             config,
@@ -43,25 +50,12 @@ class OtelJsonlEnvironment(PluginTestEnvironment):
 
     @property
     def export_path(self) -> Path:
-        return self.config.work_dir / "otel.jsonl"
+        return self.config.work_dir / "otel-action-filter.jsonl"
 
     def prepare(self) -> None:
         self._write_operator_config_patch()
         document = super().prepare()
         self._require_checkbox_schema(document)
-
-    def _write_operator_config_patch(self) -> None:
-        plugin_root = (
-            self.config.repo / "examples" / "plugins" / "builtin"
-        ).resolve()
-        manifest = plugin_root / "otel-jsonl" / "otel-jsonl.plugin.toml"
-        if not manifest.is_file():
-            raise RuntimeError(f"official otel-jsonl manifest not found: {manifest}")
-        self._operator_config_patch.write_text(
-            "[plugins.discovery]\n"
-            f"directory = {json.dumps(str(plugin_root))}\n",
-            encoding="utf-8",
-        )
 
     def update_selection(self, enabled_kinds: set[str]) -> dict[str, Any]:
         candidate = self.current_config()
@@ -71,7 +65,8 @@ class OtelJsonlEnvironment(PluginTestEnvironment):
         missing = enabled_kinds.difference(action_kinds)
         if missing:
             raise AssertionError(
-                "plugin config is missing action kind(s): " + ", ".join(sorted(missing))
+                "plugin config is missing action kind(s): "
+                + ", ".join(sorted(missing))
             )
         for key in action_kinds:
             action_kinds[key] = False
@@ -89,20 +84,41 @@ class OtelJsonlEnvironment(PluginTestEnvironment):
             )
         if returned.get("path") != str(self.export_path):
             raise AssertionError(
-                f"plugin export path escaped case directory: {returned.get('path')!r}"
+                f"plugin export path escaped case directory: "
+                f"{returned.get('path')!r}"
             )
         return returned
 
+    def _write_operator_config_patch(self) -> None:
+        plugin_root = (
+            self.config.repo / "examples" / "plugins" / "builtin"
+        ).resolve()
+        manifest = plugin_root / "otel-jsonl" / "otel-jsonl.plugin.toml"
+        if not manifest.is_file():
+            raise RuntimeError(
+                f"official otel-jsonl manifest not found: {manifest}"
+            )
+        self._operator_config_patch.write_text(
+            "[plugins.discovery]\n"
+            f"directory = {json.dumps(str(plugin_root))}\n",
+            encoding="utf-8",
+        )
+
     @classmethod
     def _require_checkbox_schema(cls, document: dict[str, Any]) -> None:
-        if document.get("available") is not True or document.get("editable") is not True:
+        if (
+            document.get("available") is not True
+            or document.get("editable") is not True
+        ):
             raise AssertionError(f"plugin config is not editable: {document}")
         schema = document.get("schema")
         try:
             action_kinds_schema = schema["properties"]["action_kinds"]
             properties = action_kinds_schema["properties"]
         except (KeyError, TypeError) as error:
-            raise AssertionError("schema has no action_kinds properties") from error
+            raise AssertionError(
+                "schema has no action_kinds properties"
+            ) from error
         if action_kinds_schema.get("additionalProperties") is not False:
             raise AssertionError("schema allows unknown action kinds")
         if "file.tty_io" in properties:
@@ -116,11 +132,14 @@ class OtelJsonlEnvironment(PluginTestEnvironment):
         )
         if invalid:
             raise AssertionError(
-                "schema action kind(s) are not boolean: " + ", ".join(invalid)
+                "schema action kind(s) are not boolean: "
+                + ", ".join(invalid)
             )
         config = document.get("config")
         action_kinds = (
-            config.get("action_kinds") if isinstance(config, dict) else None
+            config.get("action_kinds")
+            if isinstance(config, dict)
+            else None
         )
         if not isinstance(action_kinds, dict):
             raise AssertionError("plugin config has no action_kinds object")

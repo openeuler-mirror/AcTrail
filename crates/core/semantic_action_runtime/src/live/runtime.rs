@@ -17,7 +17,7 @@ use crate::payload_projection::llm::{LlmCodecPlugin, LlmCodecPluginStatus};
 
 use super::actions::{
     enforcement_action, file_modify_action, http_message_action, is_file_modify_event,
-    is_http_protocol, process_exec_action, process_fork_attempt_action,
+    is_http_protocol, process_fork_attempt_action,
 };
 use super::agent::AgentProjector;
 use super::command::CommandProjector;
@@ -84,6 +84,7 @@ impl LiveSemanticActionOutput {
 impl LiveSemanticActionRuntime {
     pub fn new(
         config: AgentInvocationConfig,
+        pending_exec_max_entries: u32,
         semantic_retention: SemanticRetentionConfig,
         file_observation: FileObservationConfig,
     ) -> Self {
@@ -92,7 +93,7 @@ impl LiveSemanticActionRuntime {
             commands: _,
         } = config;
         Self {
-            agent: AgentProjector::new(enabled),
+            agent: AgentProjector::new(enabled, pending_exec_max_entries),
             command: CommandProjector::new(),
             file_access: FileAccessProjector::new(file_observation),
             http_exchange: HttpExchangeTracker::default(),
@@ -152,9 +153,7 @@ impl LiveSemanticActionRuntime {
         };
         match &event.payload {
             EventPayload::Process(payload) if payload.operation == "exec" => {
-                let actions = self
-                    .agent
-                    .observe_process_exec(event, process_exec_action(event));
+                let actions = self.agent.observe_process_exec(event);
                 output.actions.extend(actions.clone());
                 if let Some(process_action) = actions
                     .iter()
@@ -175,7 +174,7 @@ impl LiveSemanticActionRuntime {
                 output
             }
             EventPayload::Process(payload) if payload.operation == "fork" => {
-                output.extend(self.command.observe_process_fork(event));
+                self.command.observe_process_fork(event);
                 output.links.extend(self.links.observe_process_fork(event));
                 output
                     .links
@@ -186,7 +185,6 @@ impl LiveSemanticActionRuntime {
                 output
                     .actions
                     .extend(self.agent.observe_process_exit(event));
-                output.extend(self.command.observe_process_exit(event));
                 output
                     .links
                     .extend(self.links.observe_actions(&output.actions));
@@ -235,6 +233,10 @@ impl LiveSemanticActionRuntime {
         self.llm.codec_statuses()
     }
 
+    pub fn take_pending_exec_intent_evictions(&mut self) -> u64 {
+        self.agent.take_pending_exec_evictions()
+    }
+
     pub fn observe_payload_segment(
         &mut self,
         segment: &PayloadSegment,
@@ -259,13 +261,7 @@ impl LiveSemanticActionRuntime {
                 Vec::new()
             };
             output.actions.push(action.clone());
-            output.actions.extend(agent_actions.clone());
-            for process_action in agent_actions {
-                output.extend(
-                    self.command
-                        .observe_agent_identity(&process_action, &action),
-                );
-            }
+            output.actions.extend(agent_actions);
         }
         output
             .links
@@ -430,4 +426,3 @@ fn event_projects_semantic_action_boundary(event: &DomainEvent) -> bool {
         _ => false,
     }
 }
-

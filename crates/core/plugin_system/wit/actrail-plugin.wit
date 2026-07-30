@@ -331,9 +331,13 @@ interface types {
     process-id: string,
     executable: option<string>,
     command-line: option<string>,
+    /// Time the exec-backed invocation completed.
     started-at: u64,
+    /// Next completed exec for the process, or its durable exit observation.
     ended-at: option<u64>,
+    /// Success when replaced cleanly, otherwise the durable final process result.
     status: string,
+    /// Present only for the last invocation with a durable process exit code.
     exit-code: option<s32>,
     agent-action-id: option<string>,
     parent-command-action-id: option<string>,

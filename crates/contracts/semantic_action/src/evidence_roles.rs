@@ -32,8 +32,16 @@ pub mod llm_response {
 pub mod process {
     use super::SemanticActionKind;
 
-    pub const EXEC: &str = SemanticActionKind::ProcessExec.as_str();
-    pub const EXIT: &str = "process.exit";
+    pub const EXEC_COMPLETED: &str = "process.exec.completed";
+    pub const EXEC_INTENT: &str = "process.exec.intent";
+    pub const EXIT: &str = SemanticActionKind::ProcessExit.as_str();
     pub const FORK: &str = "process.fork";
     pub const FORK_ATTEMPT: &str = SemanticActionKind::ProcessForkAttempt.as_str();
+}
+
+pub mod agent {
+    use super::SemanticActionKind;
+
+    pub const IDENTITY: &str = SemanticActionKind::AgentIdentity.as_str();
+    pub const EXIT: &str = SemanticActionKind::AgentExit.as_str();
 }

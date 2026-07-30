@@ -4,15 +4,15 @@ from tests.v2.common.agent_selection import AgentSelector
 from tests.v2.common.test_case import TestCase, TestResult, TestStatus
 from tests.v2.common.testing_context import TestingContextSingleton
 
-from .config import OtelJsonlConfig
-from .environment import OtelJsonlEnvironment
-from .task import OtelJsonlTask
+from .config import OtelJsonlActionFilterConfig
+from .environment import OtelJsonlActionFilterEnvironment
+from .task import OtelJsonlActionFilterTask
 
 
-class OtelJsonlCase(TestCase):
-    def __init__(self, config: OtelJsonlConfig):
+class OtelJsonlActionFilterCase(TestCase):
+    def __init__(self, config: OtelJsonlActionFilterConfig):
         self._config = config
-        self._environment: OtelJsonlEnvironment | None = None
+        self._environment: OtelJsonlActionFilterEnvironment | None = None
 
     def run(self, test_context: TestingContextSingleton) -> TestResult:
         results: dict[str, TestResult] = {}
@@ -29,7 +29,7 @@ class OtelJsonlCase(TestCase):
                 f"selected {agent.kind}: {agent.binary}",
             )
 
-            self._environment = OtelJsonlEnvironment(
+            self._environment = OtelJsonlActionFilterEnvironment(
                 self._config,
                 test_context.output,
             )
@@ -39,18 +39,18 @@ class OtelJsonlCase(TestCase):
                 "actraild, actrailweb, and builtin otel-jsonl are active",
             )
 
-            task = OtelJsonlTask(self._environment, agent)
+            task = OtelJsonlActionFilterTask(self._environment, agent)
             results.update(task.run())
             return TestResult(
                 TestStatus.COMPOSITE,
-                "otel-jsonl Web action filter",
+                "otel-jsonl action filtering",
                 results,
             )
         except Exception as error:
             results["failure"] = TestResult(TestStatus.FAILED, str(error))
             return TestResult(
                 TestStatus.COMPOSITE,
-                "otel-jsonl Web action filter",
+                "otel-jsonl action filtering",
                 results,
             )
 

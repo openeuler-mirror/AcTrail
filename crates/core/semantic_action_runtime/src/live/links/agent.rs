@@ -4,10 +4,9 @@ use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use semantic_action::{
     SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkConfidence,
-    SemanticActionLinkRole, attr_keys as attrs,
+    SemanticActionLinkRole, SemanticEvidence, attr_keys as attrs,
 };
 
-use crate::live::actions::ATTR_AGENT_IDENTITY_STATUS;
 use crate::live::process_parent::{parent_identity_has_conflict, parent_process_from_action};
 
 use super::shared::{ActionLinkKey, invalidate_child_links, is_nested_file_write_event};
@@ -30,6 +29,27 @@ impl AgentPerformedActionLinkProjector {
         }
         self.agents_by_process
             .insert((action.trace_id, action.process.clone()), action.clone());
+    }
+
+    pub(super) fn invalidate_command_parent_conflict(
+        &mut self,
+        trace_id: TraceId,
+        action_ids: &[String],
+        evidence: &[SemanticEvidence],
+    ) -> Vec<SemanticActionLink> {
+        action_ids
+            .iter()
+            .flat_map(|action_id| {
+                self.remove_pending_child_id(trace_id, action_id);
+                invalidate_child_links(
+                    &self.emitted_links,
+                    trace_id,
+                    action_id,
+                    SemanticActionLinkRole::AgentPerformedAction,
+                    evidence,
+                )
+            })
+            .collect()
     }
 
     pub(super) fn link_pending_for_agent(
@@ -155,12 +175,16 @@ impl AgentPerformedActionLinkProjector {
     }
 
     fn remove_pending_child(&mut self, action: &SemanticAction) {
-        let child_key = (action.trace_id, action.action_id.clone());
+        self.remove_pending_child_id(action.trace_id, &action.action_id);
+    }
+
+    fn remove_pending_child_id(&mut self, trace_id: TraceId, action_id: &str) {
+        let child_key = (trace_id, action_id.to_string());
         let Some(pending_key) = self.pending_key_by_child.remove(&child_key) else {
             return;
         };
         if let Some(pending) = self.pending_by_agent_process.get_mut(&pending_key) {
-            pending.retain(|candidate| candidate.action_id != action.action_id);
+            pending.retain(|candidate| candidate.action_id != action_id);
         }
         self.pending_by_agent_process
             .retain(|_, pending| !pending.is_empty());
@@ -176,11 +200,7 @@ impl AgentPerformedActionLinkProjector {
 }
 
 fn is_observed_agent_process(action: &SemanticAction) -> bool {
-    action.kind == SemanticActionKind::ProcessExec
-        && action
-            .attributes
-            .get(ATTR_AGENT_IDENTITY_STATUS)
-            .is_some_and(|status| status == "observed")
+    action.kind == SemanticActionKind::AgentIdentity
 }
 
 fn agent_performed_action_candidate(action: &SemanticAction) -> bool {

@@ -412,6 +412,15 @@ fn trim_profile_to_available_permissions(
 ) {
     let name = profile.name.clone();
     *profile = profile.for_permissions(permissions);
+    let process_lifecycle_available = profile.capabilities.iter().any(|request| {
+        request.mode != model_core::capability::RequestMode::Disabled
+            && request.capability == Capability::ProcLifecycle
+    });
+    if !process_lifecycle_available {
+        profile
+            .capabilities
+            .retain(|request| request.capability != Capability::EnforcementFilePermissionFanotify);
+    }
     profile.name = name;
 }
 

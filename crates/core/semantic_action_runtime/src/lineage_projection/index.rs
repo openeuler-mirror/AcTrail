@@ -5,8 +5,6 @@ use model_core::ids::TraceId;
 use model_core::process::{ProcessIdentity, ProcessMembership};
 use semantic_action::{SemanticAction, SemanticActionKind};
 
-use super::ATTR_AGENT_IDENTITY_STATUS;
-
 pub(super) struct LineageIndex<'a> {
     actions: Vec<&'a SemanticAction>,
     parent_by_process: BTreeMap<ProcessIdentity, ProcessIdentity>,
@@ -106,9 +104,7 @@ impl<'a> LineageIndex<'a> {
             .get(process)?
             .iter()
             .rev()
-            .find(|agent| {
-                agent.start_time <= at && agent.end_time.is_none_or(|end_time| at <= end_time)
-            })
+            .find(|agent| agent.start_time <= at)
             .copied()
     }
 
@@ -122,19 +118,11 @@ impl<'a> LineageIndex<'a> {
             .get(process)?
             .iter()
             .rev()
-            .find(|command| {
-                command.action_id != child_action_id
-                    && command.start_time <= at
-                    && command.end_time.is_none_or(|end_time| at <= end_time)
-            })
+            .find(|command| command.action_id != child_action_id && command.start_time <= at)
             .copied()
     }
 }
 
 fn is_observed_agent(action: &SemanticAction) -> bool {
-    action.kind == SemanticActionKind::ProcessExec
-        && action
-            .attributes
-            .get(ATTR_AGENT_IDENTITY_STATUS)
-            .is_some_and(|status| status == "observed")
+    action.kind == SemanticActionKind::AgentIdentity
 }

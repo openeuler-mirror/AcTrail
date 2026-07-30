@@ -60,6 +60,9 @@ impl SemanticActionCodebook {
 #[derive(Clone, Copy)]
 pub(crate) struct ActionKindCodes {
     pub(crate) process_exec: i16,
+    pub(crate) process_exit: i16,
+    pub(crate) agent_identity: i16,
+    pub(crate) agent_exit: i16,
     pub(crate) file_modify: i16,
     pub(crate) file_read: i16,
     pub(crate) file_write: i16,
@@ -82,6 +85,9 @@ impl ActionKindCodes {
     pub(crate) const fn code(self, value: SemanticActionKind) -> i16 {
         match value {
             SemanticActionKind::ProcessExec => self.process_exec,
+            SemanticActionKind::ProcessExit => self.process_exit,
+            SemanticActionKind::AgentIdentity => self.agent_identity,
+            SemanticActionKind::AgentExit => self.agent_exit,
             SemanticActionKind::FileModify => self.file_modify,
             SemanticActionKind::FileRead => self.file_read,
             SemanticActionKind::FileWrite => self.file_write,
@@ -112,6 +118,9 @@ impl ActionKindCodes {
             .map_err(|_| CodebookError::unknown("semantic_action_kind_code", code))?;
         match code {
             value if value == self.process_exec => Ok(SemanticActionKind::ProcessExec),
+            value if value == self.process_exit => Ok(SemanticActionKind::ProcessExit),
+            value if value == self.agent_identity => Ok(SemanticActionKind::AgentIdentity),
+            value if value == self.agent_exit => Ok(SemanticActionKind::AgentExit),
             value if value == self.file_modify => Ok(SemanticActionKind::FileModify),
             value if value == self.file_read => Ok(SemanticActionKind::FileRead),
             value if value == self.file_write => Ok(SemanticActionKind::FileWrite),
@@ -136,9 +145,15 @@ impl ActionKindCodes {
         }
     }
 
-    fn entries(self) -> [(&'static str, i16); 17] {
+    fn entries(self) -> [(&'static str, i16); 20] {
         [
             (SemanticActionKind::ProcessExec.as_str(), self.process_exec),
+            (SemanticActionKind::ProcessExit.as_str(), self.process_exit),
+            (
+                SemanticActionKind::AgentIdentity.as_str(),
+                self.agent_identity,
+            ),
+            (SemanticActionKind::AgentExit.as_str(), self.agent_exit),
             (SemanticActionKind::FileModify.as_str(), self.file_modify),
             (SemanticActionKind::FileRead.as_str(), self.file_read),
             (SemanticActionKind::FileWrite.as_str(), self.file_write),

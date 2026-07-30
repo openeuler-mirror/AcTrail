@@ -596,7 +596,8 @@ mod tests {
     };
     use control_contract::reply::{
         ControlError, ControlReply, LaunchPermissionsReply, LaunchTlsPlanReply,
-        LaunchTlsPlanStatus, PluginCommandReply, TrackAddReply,
+        LaunchTlsPlanStatus, PluginCommandReply, PluginConfigReply, PluginConfigValidationReply,
+        TrackAddReply,
     };
     use control_contract::selector::TraceSelector;
     use model_core::ids::{ProfileName, RequestId, TraceId, TraceName};

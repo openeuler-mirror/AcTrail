@@ -1,3 +1,4 @@
+use semantic_action::SemanticActionKind;
 use storage_core::StorageBackend;
 
 use super::{RecordingError, SemanticActionRecordBatch};
@@ -16,7 +17,12 @@ impl<'a> SemanticActionRecorder<'a> {
         batch: SemanticActionRecordBatch<'_>,
     ) -> Result<(), RecordingError> {
         // Persist actions before links so graph edges never race ahead of their nodes.
-        for action in batch.actions().iter().cloned() {
+        for action in batch
+            .actions()
+            .iter()
+            .filter(|action| Self::persists_action_kind(action.kind))
+            .cloned()
+        {
             self.storage.upsert_semantic_action(action)?;
         }
         for link in batch.links().iter().cloned() {
@@ -28,5 +34,14 @@ impl<'a> SemanticActionRecorder<'a> {
         self.storage
             .upsert_llm_request_contents(batch.llm_request_contents())?;
         Ok(())
+    }
+
+    fn persists_action_kind(kind: SemanticActionKind) -> bool {
+        // Termination is durable in process records and raw exit events. The
+        // semantic exit actions exist only to make the online export boundary explicit.
+        !matches!(
+            kind,
+            SemanticActionKind::ProcessExit | SemanticActionKind::AgentExit
+        )
     }
 }

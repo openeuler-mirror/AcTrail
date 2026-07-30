@@ -36,6 +36,15 @@
         "process.exec": {
           "type": "boolean"
         },
+        "process.exit": {
+          "type": "boolean"
+        },
+        "agent.identity": {
+          "type": "boolean"
+        },
+        "agent.exit": {
+          "type": "boolean"
+        },
         "file.modify": {
           "type": "boolean"
         },

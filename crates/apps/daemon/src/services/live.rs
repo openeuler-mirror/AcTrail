@@ -59,6 +59,7 @@ impl StorageAttachService {
             .record_drain_call(active_bindings, active_path);
         if !active_path {
             self.drain_seccomp_notifications_impl(trace_runtime)?;
+            self.materialize_process_seccomp_observations_impl(trace_runtime)?;
             self.collector
                 .poll_tls_payload_control_events()
                 .map_err(|error| ControlError::new(error.stage, error.message))?;
@@ -83,6 +84,7 @@ impl StorageAttachService {
         }
 
         self.drain_seccomp_notifications_impl(trace_runtime)?;
+        self.materialize_process_seccomp_observations_impl(trace_runtime)?;
         let batch = self
             .collector
             .poll_batch()
@@ -453,6 +455,13 @@ impl StorageAttachService {
                 .collect();
             self.process_live_event_batch(trace_runtime, raw_events)?;
             self.pending_process_seccomp_observations.drain(..batch_len);
+        }
+        let evicted_intents = self.semantic_actions.take_pending_exec_intent_evictions();
+        if evicted_intents > 0 {
+            tracing::warn!(
+                evicted_intents,
+                "semantic exec intent capacity reached; completed exec actions remain valid but may omit seccomp argument evidence"
+            );
         }
         Ok(())
     }

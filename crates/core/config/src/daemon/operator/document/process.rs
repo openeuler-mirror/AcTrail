@@ -32,6 +32,7 @@ pub(super) struct ProcessSeccompDocument {
     pub syscalls: Vec<String>,
     pub max_args: u32,
     pub max_arg_bytes: u32,
+    /// Bounds process observations and semantic exec intents awaiting completion.
     pub pending_max_entries: u32,
 }
 

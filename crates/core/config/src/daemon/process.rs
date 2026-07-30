@@ -58,6 +58,7 @@ pub struct ProcessSeccompConfig {
     pub syscalls: Vec<ProcessSeccompSyscall>,
     pub max_args: u32,
     pub max_arg_bytes: u32,
+    /// Bounds both unmaterialized process observations and exec intents awaiting completion.
     pub pending_max_entries: u32,
 }
 

@@ -7,7 +7,7 @@ This document maps common operator questions to the AcTrail feature path and the
 | Question | Use This Path | Validate With |
 | --- | --- | --- |
 | What process tree did the agent create? | eBPF process lifecycle plus viewer process/events output. | [Example 01](examples/01.quick-start/README.md), [Example 03](examples/03.extended-observation-e2e/README.md) |
-| Did one agent silently launch another agent? | `actrailctl launch` plus process seccomp exec context, TLS/plaintext LLM evidence, and `agent.invocation` semantic action. | [Example 07](examples/07.xiaoo-claude-agent-invocation/README.md) |
+| Did one agent silently launch another agent? | `actrailctl launch` plus process seccomp exec context, TLS/plaintext LLM evidence, `agent.identity`, and direct-parent command linkage. | [Example 07](examples/07.xiaoo-claude-agent-invocation/README.md) |
 | What LLM request and response did a real agent exchange? | Full-monitor payload capture plus HTTP/SSE and `llm.request`/`llm.response` semantic assembly. | [Example 08](examples/08.full-monitor-validation/README.md) |
 | What LLM request and response did opencode exchange? | Bun/static-BoringSSL executable TLS payload capture plus proxy-aware HTTP semantics. | `python3 tests/agent-trace/run_case.py opencode-bun` |
 | What outbound LLM request did a Rust/rustls agent send? | `tls-sync` with a rustls probe plan from finder fast, symbols, or a BinaryIdentity-checked pattern. | [Example 06](examples/06.xiaoo-tls-capture/README.md) |
@@ -33,7 +33,7 @@ Expected evidence:
 - The monitored workload prints `ACTRAIL_AGENT_TREE_OK`.
 - OTEL export contains a `process.exec` span for `claude -p`.
 - OTEL export contains an `llm.request` span for the same Claude process.
-- OTEL export contains an `agent.invocation` span linking Claude's direct launcher to the child Claude command.
+- OTEL export contains one `agent.identity` for Claude and a same-process `command.invocation` whose `process.parent.id` is Claude's direct launcher.
 
 This use case requires payload capture for the child LLM call. A command match is only a candidate hint; it does not prove agent identity by itself.
 
@@ -158,7 +158,7 @@ Expected evidence:
 
 - Top-level JSON contains `resourceSpans`.
 - Semantic spans contain `actrail.action.kind`.
-- Action kinds currently covered by examples include `process.exec`, `agent.invocation`, `file.read`, `file.write`, `http.message`, `llm.request`, `llm.response`, and `enforcement.decision`.
+- Action kinds currently covered by examples include `process.exec`, `agent.identity`, `command.invocation`, `file.read`, `file.write`, `http.message`, `llm.request`, `llm.response`, and `enforcement.decision`.
 
 Not every raw fact is currently an OTEL span. Validate low-level network rows, IPC rows, resource samples, provider labels, and payload rows through viewer commands or JSON graph export when no semantic span exists.
 

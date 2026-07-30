@@ -464,6 +464,8 @@ mod tests {
             .ingest_direct_captures(vec![TlsPayloadDirectCapture {
                 pid: PID,
                 tid: TID,
+                host_pid: PID,
+                host_tid: TID,
                 trace_id: TraceId::new(TRACE_ID),
                 operation_id: OPERATION_ID,
                 stream_key: STREAM_KEY,
@@ -481,6 +483,8 @@ mod tests {
             .ingest_completions(vec![TlsPayloadCompletion {
                 pid: PID,
                 tid: TID,
+                host_pid: PID,
+                host_tid: TID,
                 trace_id: TraceId::new(TRACE_ID),
                 observed_ktime_ns: 1,
                 operation_id: OPERATION_ID,
