@@ -1,0 +1,39 @@
+{
+  "description": "Repeats two assistant messages in a fixed alternating order forever.",
+  "type": "loop",
+  "generator": {
+    "type": "sequential",
+    "generators": [
+      {
+        "type": "response",
+        "response": {
+          "blocks": [
+            {
+              "type": "message",
+              "text": "LOOP_A"
+            }
+          ],
+          "usage": {
+            "input_tokens": 7,
+            "output_tokens": 1
+          }
+        }
+      },
+      {
+        "type": "response",
+        "response": {
+          "blocks": [
+            {
+              "type": "message",
+              "text": "LOOP_B"
+            }
+          ],
+          "usage": {
+            "input_tokens": 11,
+            "output_tokens": 1
+          }
+        }
+      }
+    ]
+  }
+}

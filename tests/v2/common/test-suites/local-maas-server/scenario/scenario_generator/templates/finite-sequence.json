@@ -1,0 +1,36 @@
+{
+  "description": "Returns two assistant messages in order and then exhausts.",
+  "type": "sequential",
+  "generators": [
+    {
+      "type": "response",
+      "response": {
+        "blocks": [
+          {
+            "type": "message",
+            "text": "A"
+          }
+        ],
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 1
+        }
+      }
+    },
+    {
+      "type": "response",
+      "response": {
+        "blocks": [
+          {
+            "type": "message",
+            "text": "B"
+          }
+        ],
+        "usage": {
+          "input_tokens": 20,
+          "output_tokens": 1
+        }
+      }
+    }
+  ]
+}
