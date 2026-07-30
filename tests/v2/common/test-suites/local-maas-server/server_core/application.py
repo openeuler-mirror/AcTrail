@@ -48,6 +48,9 @@ class LocalMaaSApplication:
         self._scheduler = scheduler
         self._request_logger = request_logger
 
+    def reset(self) -> None:
+        self._scenario.reset()
+
     def supports_path(self, path: str) -> bool:
         return self._endpoints.resolve("POST", path) is not None
 

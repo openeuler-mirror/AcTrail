@@ -4,7 +4,12 @@ from dataclasses import dataclass
 from typing import Iterator
 
 from ...model import ResponseTemplate, ScenarioConfigurationError
-from ..interface import GeneratorParameters, ScenarioGenerator
+from ..interface import (
+    GenerationOptions,
+    GenerationUnavailable,
+    GeneratorParameters,
+    ScenarioGenerator,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +36,12 @@ class SequentialGenerator(ScenarioGenerator):
 
     def generate(
         self, parameters: GeneratorParameters
-    ) -> Iterator[ResponseTemplate]:
+    ) -> Iterator[ResponseTemplate | GenerationUnavailable]:
         for generator in self.generators:
             yield from generator.generate(parameters)
+
+    def is_eligible(self, options: GenerationOptions) -> bool:
+        return all(
+            generator.is_eligible(options)
+            for generator in self.generators
+        )

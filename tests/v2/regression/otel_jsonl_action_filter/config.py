@@ -41,7 +41,8 @@ class OtelJsonlActionFilterConfig(CommonTestConfig):
             web_port=int(
                 os.environ.get(
                     "OTEL_JSONL_ACTION_FILTER_E2E_WEB_PORT",
-                    "18080",
+                    # Port 0 requests a kernel-assigned ephemeral port.
+                    "0",
                 )
             ),
             plugin_package="otel-jsonl",

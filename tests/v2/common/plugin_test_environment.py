@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TextIO
+from urllib.parse import urlsplit
 
 from .actrail_runtime import ActrailRuntime
 from .config import CommonTestConfig
@@ -56,10 +57,7 @@ class PluginTestEnvironment:
         self._actrailweb = bin_dir / "actrailweb"
         if not self._actrailweb.is_file():
             raise RuntimeError(f"release binary not found: {self._actrailweb}")
-        self.api = PluginWebApi(
-            f"http://{web_host}:{web_port}",
-            config.command_timeout_seconds,
-        )
+        self.api: PluginWebApi
         self._web_host = web_host
         self._web_port = web_port
         self._web_process: subprocess.Popen[str] | None = None
@@ -75,7 +73,7 @@ class PluginTestEnvironment:
             )
         self.runtime.prepare()
         self._daemon_started = True
-        self._start_web()
+        self.api = self._start_web()
         catalog = self._wait_for_catalog()
         self._require_catalog_package(catalog)
         self._load_plugin()
@@ -142,8 +140,9 @@ class PluginTestEnvironment:
             "plugin config restored, services stopped, and traces cleaned",
         )
 
-    def _start_web(self) -> None:
-        self._web_log = (self.config.work_dir / "actrailweb.log").open(
+    def _start_web(self) -> PluginWebApi:
+        log_path = self.config.work_dir / "actrailweb.log"
+        self._web_log = log_path.open(
             "w",
             encoding="utf-8",
         )
@@ -161,6 +160,37 @@ class PluginTestEnvironment:
             stdout=self._web_log,
             stderr=subprocess.STDOUT,
             text=True,
+        )
+        listening_prefix = "actrailweb listening on "
+        for _ in range(self.config.drain_attempts):
+            if self._web_process.poll() is not None:
+                log = log_path.read_text(encoding="utf-8")
+                raise RuntimeError(
+                    f"actrailweb exited early with "
+                    f"{self._web_process.returncode}: {log[-2000:]}"
+                )
+            log = log_path.read_text(encoding="utf-8")
+            for line in log.splitlines():
+                if not line.startswith(listening_prefix):
+                    continue
+                base_url = line.removeprefix(listening_prefix).split()[0]
+                parsed = urlsplit(base_url)
+                if (
+                    parsed.scheme != "http"
+                    or parsed.hostname is None
+                    or parsed.port is None
+                ):
+                    raise RuntimeError(
+                        f"actrailweb reported invalid listening URL: {base_url}"
+                    )
+                return PluginWebApi(
+                    base_url,
+                    self.config.command_timeout_seconds,
+                )
+            time.sleep(self.config.drain_interval_seconds)
+        raise RuntimeError(
+            "actrailweb did not report its listening address: "
+            f"{log_path.read_text(encoding='utf-8')[-2000:]}"
         )
 
     def _wait_for_catalog(self) -> dict[str, Any]:

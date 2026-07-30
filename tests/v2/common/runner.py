@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Callable, TextIO
 
 from .config import TestCaseInputs
-from .output import TestOutput, has_failure
+from .output import CaseProgressReporter, TestOutput, has_failure
 from .test_case import TestCase, TestResult, TestStatus
 from .testing_context import TestingContextSingleton
 
@@ -170,6 +170,14 @@ def run_selected(
         )
         return 1
     try:
+        try:
+            context.prepare_release(repo)
+        except RuntimeError as error:
+            console.result(
+                "release_install",
+                TestResult(TestStatus.FAILED, str(error)),
+            )
+            return 1
         work_root = work_root.resolve()
         _validate_work_root(work_root, repo.resolve())
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -186,9 +194,21 @@ def run_selected(
                 log.write(f"description: {definition.description}\n")
                 runtime_stream = Tee(log, console.stream) if show_details else log
                 case_output = TestOutput(color_mode="never", stream=runtime_stream)
-                with context.output_scope(case_output), redirect_stdout(
+                log_output = TestOutput(color_mode="never", stream=log)
+                progress_reporter = CaseProgressReporter(
+                    console,
+                    log_output,
+                    detailed=show_details,
+                )
+                with context.output_scope(
+                    case_output
+                ), context.progress_scope(
+                    progress_reporter
+                ), redirect_stdout(
                     runtime_stream
-                ), redirect_stderr(runtime_stream):
+                ), redirect_stderr(
+                    runtime_stream
+                ):
                     case: TestCase | None = None
                     result: TestResult | None = None
                     try:
@@ -204,6 +224,10 @@ def run_selected(
                     finally:
                         if cleanup_cases and case is not None:
                             try:
+                                context.report_progress(
+                                    "cleanup",
+                                    "running cleanup hooks",
+                                )
                                 cleanup_result = case.cleanup(context)
                             except Exception as error:
                                 traceback.print_exc(file=runtime_stream)

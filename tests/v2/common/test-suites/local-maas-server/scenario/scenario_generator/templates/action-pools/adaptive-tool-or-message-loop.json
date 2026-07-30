@@ -1,0 +1,9 @@
+{
+  "description": "Cycles through lightweight tool actions when compatible tools exist and falls back to short reasoning messages otherwise.",
+  "type": "action_pool",
+  "pools": [
+    "tool/exec/light",
+    "reasoning-and-message/short"
+  ],
+  "selection": "sequential"
+}

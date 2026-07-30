@@ -16,6 +16,7 @@ HTTP connection 和 scenario runtime 不解析协议字段。
 
 ```python
 class ProtocolAdapter(ABC):
+    def input_tokens(self, document: dict) -> int: ...
     def decode_request(self, document: dict) -> ScenarioRequest: ...
     def encode_response(
         self,
@@ -33,6 +34,8 @@ class ProtocolAdapter(ABC):
 
 `ProtocolResponse` 只能包含 direct body 或 lazy frame iterator 之一。`ProtocolFrame` 只保存实际 wire payload。
 
+adapter 从外部请求构造 `ScenarioRequest`，并以规范化 JSON 的字符数作为本地测试用的 input-token 近似值。该值描述当前请求，不由 scenario 配置，也不在 runtime 中跨请求累计。
+
 ## 内置协议
 
 | Adapter | 路径 | direct | SSE |
@@ -40,9 +43,9 @@ class ProtocolAdapter(ABC):
 | OpenAI Chat Completions | `/chat/completions`、`/v1/chat/completions` | JSON completion | `data:` events，以 `[DONE]` 结束 |
 | Anthropic Messages | `/messages`、`/v1/messages` | JSON message | `message_start` 到 `message_stop` |
 
-OpenAI adapter 负责 reasoning_content、tool_calls、finish_reason 和 usage-only chunk。Anthropic adapter 负责 thinking、signature、tool_use、stop_reason 和 usage events。
+OpenAI adapter 负责 reasoning_content、tool_calls、finish_reason、usage-only chunk，以及 OpenAI function tools 的名称和 parameters 提取。Anthropic adapter 负责 thinking、signature、tool_use、stop_reason、usage events，以及 Anthropic tools 的名称和 input_schema 提取。
 
-Wire response id、tool-call id 和 Anthropic signature 都由 adapter 根据 emission index 生成，scenario 模板不携带协议身份。
+请求工具定义进入协议无关的 `ToolDefinition`。scenario 仍产生普通的规范工具调用；位于 scenario 与协议编码之间的抽象 Alias Converter 将其转换为请求允许的实际名称和参数。Wire response id、tool-call id 和 Anthropic signature 都由 adapter 根据 emission index 生成，scenario 模板不携带协议身份。
 
 ## Registry
 

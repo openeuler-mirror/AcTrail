@@ -6,10 +6,11 @@ Schema、Web 勾选组合或筛选矩阵。
 真实 Agent 场景验证：
 
 - 同一逻辑进程中的 bash 和 Agent exec 分别形成一次终态动作；
-- 多次 LLM request 只建立一个 Agent identity；
+- 真实 Agent 至少产生多次 LLM request，每个 request 独立形成动作，但只建立一个
+  Agent identity；具体请求次数可随 provider、endpoint fallback 和重试变化；
 - `process.exit` 和 `agent.exit` 只在线导出，不进入 action storage；
 - 根进程在线导出的 action ID 非空且每个只出现一次；
-- storage 中保留预期的持久化动作，不存储 export-only exit 动作；
+- storage 与在线导出的持久化 action ID 一致，不存储 export-only exit 动作；
 - exec intent 和 completion 正确配对。
 
 另外运行 seccomp-only 失败、eBPF-only completion 和非零退出三个真实命令边界。

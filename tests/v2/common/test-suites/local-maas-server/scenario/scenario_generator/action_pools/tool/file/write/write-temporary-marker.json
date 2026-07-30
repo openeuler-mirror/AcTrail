@@ -1,0 +1,42 @@
+{
+  "description": "Writes a marker into the system temporary directory and reports completion.",
+  "type": "sequential",
+  "generators": [
+    {
+      "type": "response",
+      "response": {
+        "blocks": [
+          {
+            "type": "reasoning",
+            "text": "A temporary marker provides a bounded file-write action."
+          },
+          {
+            "type": "tool_call",
+            "name": "write",
+            "arguments": {
+              "path": "/tmp/local-maas-action-pool-marker.txt",
+              "content": "LOCAL_MAAS_FILE_WRITE_OK\n"
+            }
+          }
+        ],
+        "usage": {
+          "output_tokens": 18
+        }
+      }
+    },
+    {
+      "type": "response",
+      "response": {
+        "blocks": [
+          {
+            "type": "message",
+            "text": "LOCAL_MAAS_FILE_WRITE_OK"
+          }
+        ],
+        "usage": {
+          "output_tokens": 7
+        }
+      }
+    }
+  ]
+}

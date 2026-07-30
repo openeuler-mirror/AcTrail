@@ -26,6 +26,14 @@ class ScenarioRequest:
     stream: bool
     model: str
     include_usage: bool
+    input_tokens: int
+    tools: tuple[ToolDefinition, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ToolDefinition:
+    name: str
+    input_schema: dict[str, Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,7 +54,6 @@ class RequestExpectation:
 
 @dataclass(frozen=True, slots=True)
 class UsageDelta:
-    input_tokens: int
     output_tokens: int
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+import json
 from typing import Any, Iterable
 
 from scenario.model import ScenarioEmission, ScenarioRequest
@@ -62,6 +63,15 @@ class ProtocolAdapter(ABC):
     @abstractmethod
     def decode_request(self, document: dict[str, Any]) -> ScenarioRequest:
         raise NotImplementedError
+
+    def input_tokens(self, document: dict[str, Any]) -> int:
+        return len(
+            json.dumps(
+                document,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        )
 
     @abstractmethod
     def encode_response(

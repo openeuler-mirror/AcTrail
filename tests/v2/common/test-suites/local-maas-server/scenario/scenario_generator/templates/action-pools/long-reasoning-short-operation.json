@@ -1,0 +1,22 @@
+{
+  "description": "Returns one long reasoning action followed by one randomly selected lightweight operation.",
+  "type": "sequential",
+  "generators": [
+    {
+      "type": "action_pool",
+      "pools": [
+        "reasoning-and-message/long"
+      ],
+      "selection": "random",
+      "count": 1
+    },
+    {
+      "type": "action_pool",
+      "pools": [
+        "tool/exec/light"
+      ],
+      "selection": "random",
+      "count": 1
+    }
+  ]
+}

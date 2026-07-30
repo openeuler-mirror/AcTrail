@@ -1,0 +1,41 @@
+{
+  "description": "Prints the process home directory and reports completion.",
+  "type": "sequential",
+  "generators": [
+    {
+      "type": "response",
+      "response": {
+        "blocks": [
+          {
+            "type": "reasoning",
+            "text": "A lightweight shell command can inspect the home directory."
+          },
+          {
+            "type": "tool_call",
+            "name": "bash",
+            "arguments": {
+              "command": "printf '%s\\n' \"$HOME\""
+            }
+          }
+        ],
+        "usage": {
+          "output_tokens": 16
+        }
+      }
+    },
+    {
+      "type": "response",
+      "response": {
+        "blocks": [
+          {
+            "type": "message",
+            "text": "LOCAL_MAAS_LIGHT_EXEC_OK"
+          }
+        ],
+        "usage": {
+          "output_tokens": 7
+        }
+      }
+    }
+  ]
+}

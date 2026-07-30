@@ -1,0 +1,42 @@
+{
+  "description": "Searches the project README for Markdown headings and reports completion.",
+  "type": "sequential",
+  "generators": [
+    {
+      "type": "response",
+      "response": {
+        "blocks": [
+          {
+            "type": "reasoning",
+            "text": "A focused text search can inspect the project README."
+          },
+          {
+            "type": "tool_call",
+            "name": "grep",
+            "arguments": {
+              "pattern": "^#",
+              "path": "README.md"
+            }
+          }
+        ],
+        "usage": {
+          "output_tokens": 16
+        }
+      }
+    },
+    {
+      "type": "response",
+      "response": {
+        "blocks": [
+          {
+            "type": "message",
+            "text": "LOCAL_MAAS_FILE_GREP_OK"
+          }
+        ],
+        "usage": {
+          "output_tokens": 7
+        }
+      }
+    }
+  ]
+}

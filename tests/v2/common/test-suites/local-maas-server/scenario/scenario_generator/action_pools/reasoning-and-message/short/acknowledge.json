@@ -1,0 +1,19 @@
+{
+  "description": "Returns a short acknowledgement.",
+  "type": "response",
+  "response": {
+    "blocks": [
+      {
+        "type": "reasoning",
+        "text": "The request is clear."
+      },
+      {
+        "type": "message",
+        "text": "Understood."
+      }
+    ],
+    "usage": {
+      "output_tokens": 6
+    }
+  }
+}

@@ -12,7 +12,6 @@
           }
         ],
         "usage": {
-          "input_tokens": 10,
           "output_tokens": 1
         }
       }
@@ -33,7 +32,6 @@
                 }
               ],
               "usage": {
-                "input_tokens": 20,
                 "output_tokens": 1
               }
             }
@@ -48,7 +46,6 @@
                 }
               ],
               "usage": {
-                "input_tokens": 30,
                 "output_tokens": 1
               }
             }
@@ -66,7 +63,6 @@
           }
         ],
         "usage": {
-          "input_tokens": 40,
           "output_tokens": 1
         }
       }

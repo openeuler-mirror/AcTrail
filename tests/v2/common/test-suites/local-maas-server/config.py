@@ -10,6 +10,7 @@ from protocol.config import ProtocolConfig
 from scenario import ScenarioConfigurationError
 from scenario.scenario_generator import ScenarioLoader
 from scenario.scenario_generator.config import ScenarioGeneratorConfig
+from scenario.tool_alias import ToolAliasConfig
 from schedule.config import ScheduleConfig
 from server_core.connection.http.config import HTTPConfig
 from server_core.connection.https.config import HTTPSConfig
@@ -30,6 +31,11 @@ DEFAULT_TTFT_MILLISECONDS = 0.0
 DEFAULT_TPOT_MILLISECONDS = 0.0
 DEFAULT_TLS_OPENSSL_BINARY = "openssl"
 DEFAULT_TLS_CERTIFICATE_VALIDITY_DAYS = 1
+DEFAULT_SCENARIO_GENERATOR_DIR = (
+    Path(__file__).resolve().parent
+    / "scenario"
+    / "scenario_generator"
+)
 
 
 class ConfigurationError(RuntimeError):
@@ -39,35 +45,26 @@ class ConfigurationError(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class LocalMaaSConfig:
     generator: ScenarioGeneratorConfig
+    tool_alias: ToolAliasConfig
     protocol: ProtocolConfig
     schedule: ScheduleConfig
     server: ServerCoreConfig
 
-
-class LocalMaaSConfigParser:
-    def parse(self) -> LocalMaaSConfig:
-        parser = argparse.ArgumentParser(
-            description="Run a local MaaS server backed by a lazy scenario generator.",
-            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-        )
-        self._add_scenario_options(parser)
-        self._add_protocol_options(parser)
-        self._add_schedule_options(parser)
-        self._add_server_options(parser)
-        args = parser.parse_args()
-        self._require_scenario(parser, args)
-        api_key = self._load_api_key(args.api_key_env)
+    @classmethod
+    def parse_from(cls, args: argparse.Namespace) -> LocalMaaSConfig:
+        api_key = cls._load_api_key(args.api_key_env)
         try:
-            generator = ScenarioGeneratorConfig(
-                templates_dir=args.templates_dir,
-                template_name=args.scenario,
-                max_template_bytes=args.max_template_bytes,
-                max_depth=args.max_generator_depth,
-                max_nodes=args.max_generator_nodes,
-                random_seed=args.random_seed,
-            )
-            return LocalMaaSConfig(
-                generator=generator,
+            return cls(
+                generator=ScenarioGeneratorConfig(
+                    templates_dir=args.templates_dir,
+                    action_pools_dir=args.action_pools_dir,
+                    template_name=args.scenario,
+                    max_template_bytes=args.max_template_bytes,
+                    max_depth=args.max_generator_depth,
+                    max_nodes=args.max_generator_nodes,
+                    random_seed=args.random_seed,
+                ),
+                tool_alias=ToolAliasConfig.default(),
                 protocol=ProtocolConfig(default_model=args.default_model),
                 schedule=ScheduleConfig(
                     ttft_seconds=args.ttft_milliseconds / 1000.0,
@@ -78,7 +75,7 @@ class LocalMaaSConfigParser:
                         bind_host=args.http_bind_host,
                         bind_port=args.http_bind_port,
                     ),
-                    https=self._https_config(args),
+                    https=cls._https_config(args),
                     max_request_bytes=args.max_request_bytes,
                     request_timeout_seconds=args.request_timeout_seconds,
                     api_key=api_key,
@@ -89,17 +86,93 @@ class LocalMaaSConfigParser:
             raise ConfigurationError(str(error)) from error
 
     @staticmethod
+    def _https_config(args: argparse.Namespace) -> HTTPSConfig | None:
+        option_names = (
+            "https_bind_host",
+            "https_bind_port",
+            "tls_work_dir",
+            "tls_openssl_binary",
+            "tls_certificate_validity_days",
+        )
+        explicitly_configured = any(
+            hasattr(args, name) for name in option_names
+        )
+        if args.disable_https:
+            if explicitly_configured:
+                raise ValueError(
+                    "--disable-https cannot be combined with HTTPS options"
+                )
+            return None
+        return HTTPSConfig(
+            bind_host=getattr(
+                args,
+                "https_bind_host",
+                args.http_bind_host,
+            ),
+            bind_port=getattr(args, "https_bind_port", 0),
+            best_effort=not explicitly_configured,
+            certificate_work_dir=getattr(args, "tls_work_dir", None),
+            openssl_binary=getattr(
+                args,
+                "tls_openssl_binary",
+                DEFAULT_TLS_OPENSSL_BINARY,
+            ),
+            certificate_validity_days=getattr(
+                args,
+                "tls_certificate_validity_days",
+                DEFAULT_TLS_CERTIFICATE_VALIDITY_DAYS,
+            ),
+        )
+
+    @staticmethod
+    def _load_api_key(environment_name: str | None) -> str | None:
+        if environment_name is None:
+            return None
+        api_key = os.environ.get(environment_name)
+        if not api_key:
+            raise ConfigurationError(
+                f"environment variable {environment_name!r} is missing or empty"
+            )
+        if not api_key.isascii():
+            raise ConfigurationError(
+                f"environment variable {environment_name!r} must contain an "
+                "ASCII API key"
+            )
+        if any(character in api_key for character in "\r\n"):
+            raise ConfigurationError(
+                f"environment variable {environment_name!r} cannot contain "
+                "line breaks"
+            )
+        return api_key
+
+
+class LocalMaaSConfigParser:
+    def parse_args(self) -> argparse.Namespace:
+        parser = argparse.ArgumentParser(
+            description="Run a local MaaS server backed by a lazy scenario generator.",
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        )
+        self._add_scenario_options(parser)
+        self._add_protocol_options(parser)
+        self._add_schedule_options(parser)
+        self._add_server_options(parser)
+        args = parser.parse_args()
+        self._require_scenario(parser, args)
+        return args
+
+    @staticmethod
     def _add_scenario_options(parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
             "--templates-dir",
             type=Path,
-            default=(
-                Path(__file__).resolve().parent
-                / "scenario"
-                / "scenario_generator"
-                / "templates"
-            ),
+            default=DEFAULT_SCENARIO_GENERATOR_DIR / "templates",
             help="directory containing scenario generator JSON templates",
+        )
+        parser.add_argument(
+            "--action-pools-dir",
+            type=Path,
+            default=DEFAULT_SCENARIO_GENERATOR_DIR / "action_pools",
+            help="directory containing reusable action pool JSON generators",
         )
         parser.add_argument(
             "--scenario",
@@ -207,45 +280,6 @@ class LocalMaaSConfigParser:
         )
 
     @staticmethod
-    def _https_config(args: argparse.Namespace) -> HTTPSConfig | None:
-        option_names = (
-            "https_bind_host",
-            "https_bind_port",
-            "tls_work_dir",
-            "tls_openssl_binary",
-            "tls_certificate_validity_days",
-        )
-        explicitly_configured = any(
-            hasattr(args, name) for name in option_names
-        )
-        if args.disable_https:
-            if explicitly_configured:
-                raise ValueError(
-                    "--disable-https cannot be combined with HTTPS options"
-                )
-            return None
-        return HTTPSConfig(
-            bind_host=getattr(
-                args,
-                "https_bind_host",
-                args.http_bind_host,
-            ),
-            bind_port=getattr(args, "https_bind_port", 0),
-            best_effort=not explicitly_configured,
-            certificate_work_dir=getattr(args, "tls_work_dir", None),
-            openssl_binary=getattr(
-                args,
-                "tls_openssl_binary",
-                DEFAULT_TLS_OPENSSL_BINARY,
-            ),
-            certificate_validity_days=getattr(
-                args,
-                "tls_certificate_validity_days",
-                DEFAULT_TLS_CERTIFICATE_VALIDITY_DAYS,
-            ),
-        )
-
-    @staticmethod
     def _require_scenario(
         parser: argparse.ArgumentParser,
         args: argparse.Namespace,
@@ -280,23 +314,6 @@ class LocalMaaSConfigParser:
             f"--scenario is required; {heading}:\n" + choices
         )
 
-    @staticmethod
-    def _load_api_key(environment_name: str | None) -> str | None:
-        if environment_name is None:
-            return None
-        api_key = os.environ.get(environment_name)
-        if not api_key:
-            raise ConfigurationError(
-                f"environment variable {environment_name!r} is missing or empty"
-            )
-        if not api_key.isascii():
-            raise ConfigurationError(
-                f"environment variable {environment_name!r} must contain an "
-                "ASCII API key"
-            )
-        if any(character in api_key for character in "\r\n"):
-            raise ConfigurationError(
-                f"environment variable {environment_name!r} cannot contain "
-                "line breaks"
-            )
-        return api_key
+def parse_cli_args() -> LocalMaaSConfig:
+    args = LocalMaaSConfigParser().parse_args()
+    return LocalMaaSConfig.parse_from(args)

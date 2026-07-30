@@ -38,9 +38,11 @@ class ConnectionManager:
             thread.join()
 
     def close(self) -> None:
-        for server in self._servers:
-            server.shutdown()
+        for server, thread in zip(self._servers, self._threads):
+            if thread.is_alive():
+                server.shutdown()
         for thread in self._threads:
             thread.join()
         for server in reversed(self._servers):
             server.close()
+        self._threads.clear()

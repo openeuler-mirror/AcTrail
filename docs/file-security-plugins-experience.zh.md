@@ -104,30 +104,25 @@ printf '%s\n' "$HOME" "$ACTRAIL_REPO" "$DEMO_ROOT"
 
 必须让构建、插件安装、daemon 和 Web 使用同一个 `HOME`。否则插件可能被安装到一个用户的 `~/.actrail/plugins`，Web 却从另一个用户的目录扫描。
 
-### 4.2 显式构建最新主程序和前端
+### 4.2 构建并安装最新程序和前端
 
 输入：
 
 ```bash
-scripts/install-build-deps.sh --install
-npm --prefix crates/apps/web/frontend run build
 cargo fmt
-cargo build --workspace --release
 scripts/install-release.sh /usr/local/bin
 ```
 
 预期现象：
 
-- Vite 输出 `built in ...`；
+- 前端需要重建时，Vite 输出 `built in ...`；
 - Cargo 输出 `Finished release profile`；
-- 安装器构建两个 `wasm32-wasip2` 插件；
+- 安装器构建三个 `wasm32-wasip2` 插件；
 - 最后一行类似：
 
 ```text
 installed AcTrail binaries to /usr/local/bin and plugins to /root/.actrail/plugins
 ```
-
-不要只执行 `scripts/install-release.sh`。当前安装器在 `target/release` 中已有可执行文件时不会主动判断源代码是否更新；显式执行 release build 可以避免把旧二进制部署到 `/usr/local/bin`。
 
 检查输入：
 
@@ -798,7 +793,8 @@ curl --noproxy '*' -sS http://127.0.0.1:18080/api/plugins/catalog
 read enforcement rules /etc/actrail/enforcement-rules.conf: No such file or directory
 ```
 
-说明 `/usr/local/bin/actraild` 是旧产物。回到 4.2，显式执行 `cargo build --workspace --release` 后重新安装。不要为绕过旧二进制而临时创建 bootstrap 规则文件。
+说明 `/usr/local/bin/actraild` 是旧产物。回到 4.2，重新运行安装脚本，让 Cargo
+检查源码新鲜度并重新安装。不要为绕过旧二进制而临时创建 bootstrap 规则文件。
 
 ### 9.3 动态插件加载按钮不可用
 
@@ -852,13 +848,12 @@ file-leakage 只看成功的 `write`/`writev`。只创建未写入、写入失�
 
 以下内容不影响当前流程完成，但开始体验前应知晓：
 
-1. **安装器可能复制旧主程序。** `install-release.sh` 只在 release 二进制缺失时构建主程序，不能单独承担“部署最新源码”的职责。本指南已通过显式 release build 规避，后续应考虑修复安装器本身。
-2. **file-leakage 的 command REST 错误文案不准确。** Web 会正确显示 observation 插件不支持管理命令，但直接 POST command 当前返回“plugin instance ... not found”，即使实例实际 active。不要调用该写接口；用 catalog 中的 purpose 和 Web 的禁用说明验证能力边界。
-3. **动态配置不能视为跨重启持久化状态。** 插件/daemon 重启后必须重新读取并确认规则，不要依赖上一次操作残留状态。
-4. **真实 agent 输出存在外部依赖。** 模型认证、网络、配额和 agent 自身工具选择都会影响耗时；开始前必须执行 4.6 和两段完整预检。
-5. **告警到达时间不能与 trace 终态绑定。** 前端轮询和手动 REST 查询只能观察最终落库结果，不能把一次没有立即返回当成“不会产生告警”。
-6. **浏览器视觉需要在实际显示尺寸复查。** 本次真实后端和 Xiaoo E2E 已通过，但自动化环境没有完成真实浏览器截图检查；显示分辨率、浏览器缩放和 Arc 主题下仍需人工确认无溢出。
-7. **不同内核的拒绝文案可能不同。** 当前实测 Xiaoo 报告 `Permission denied`；其他 libc、shell 或 agent 可能展示等价的 `Operation not permitted`。验收依据应是访问失败、Enforcement deny 审计和 boundary alert 三者一致，而不是绑定一条英文错误文本。
+1. **file-leakage 的 command REST 错误文案不准确。** Web 会正确显示 observation 插件不支持管理命令，但直接 POST command 当前返回“plugin instance ... not found”，即使实例实际 active。不要调用该写接口；用 catalog 中的 purpose 和 Web 的禁用说明验证能力边界。
+2. **动态配置不能视为跨重启持久化状态。** 插件/daemon 重启后必须重新读取并确认规则，不要依赖上一次操作残留状态。
+3. **真实 agent 输出存在外部依赖。** 模型认证、网络、配额和 agent 自身工具选择都会影响耗时；开始前必须执行 4.6 和两段完整预检。
+4. **告警到达时间不能与 trace 终态绑定。** 前端轮询和手动 REST 查询只能观察最终落库结果，不能把一次没有立即返回当成“不会产生告警”。
+5. **浏览器视觉需要在实际显示尺寸复查。** 本次真实后端和 Xiaoo E2E 已通过，但自动化环境没有完成真实浏览器截图检查；显示分辨率、浏览器缩放和 Arc 主题下仍需人工确认无溢出。
+6. **不同内核的拒绝文案可能不同。** 当前实测 Xiaoo 报告 `Permission denied`；其他 libc、shell 或 agent 可能展示等价的 `Operation not permitted`。验收依据应是访问失败、Enforcement deny 审计和 boundary alert 三者一致，而不是绑定一条英文错误文本。
 
 ## 11. 本指南的真实验证记录
 

@@ -8,6 +8,7 @@ from typing import Any
 from tests.v2.common.actrail_runtime import CommandResult
 from tests.v2.common.agent_selection import AgentSelection
 from tests.v2.common.test_case import TestResult, TestStatus
+from tests.v2.common.testing_context import TestingContextSingleton
 
 from .environment import SemanticActionBoundariesEnvironment
 from .observation import ExportedSpan, SemanticActionObservation
@@ -24,18 +25,26 @@ class SemanticActionBoundariesTask:
             "command.invocation",
         }
     )
+    _EXPORT_ONLY_KINDS = frozenset({"process.exit", "agent.exit"})
+    _PERSISTED_KINDS = _OBSERVED_KINDS.difference(_EXPORT_ONLY_KINDS)
 
     def __init__(
         self,
         environment: SemanticActionBoundariesEnvironment,
         agent: AgentSelection,
+        test_context: TestingContextSingleton,
     ):
         self._environment = environment
         self._agent = agent
+        self._test_context = test_context
         self._observation = SemanticActionObservation(environment)
 
     def run(self) -> dict[str, TestResult]:
         results: dict[str, TestResult] = {}
+        self._test_context.report_progress(
+            "boundary_round",
+            "testing agent action boundaries",
+        )
         boundary_counts = self._run_boundary_round()
         results["terminal-actions"] = TestResult(
             TestStatus.PASSED,
@@ -50,6 +59,10 @@ class SemanticActionBoundariesTask:
             TestStatus.PASSED,
             "seccomp-only failure, eBPF-only completion, and nonzero "
             "exit passed",
+        )
+        self._test_context.report_progress(
+            "runtime_health",
+            "checking observation runtime health",
         )
         self._observation.require_runtime_healthy()
         results["observation_runtime"] = TestResult(
@@ -67,6 +80,10 @@ class SemanticActionBoundariesTask:
             "SEMANTIC_ACTION_BOUNDARIES_"
             f"{secrets.token_hex(6)}"
         )
+        self._test_context.report_progress(
+            "boundary_launch",
+            f"launching {self._agent.kind} boundary trace",
+        )
         launch = self._launch_agent(marker)
         if launch.returncode != 0:
             raise AssertionError(
@@ -78,6 +95,10 @@ class SemanticActionBoundariesTask:
                 f"semantic action boundaries: {self._agent.kind} output "
                 f"does not contain marker {marker}"
             )
+        self._test_context.report_progress(
+            "boundary_observe",
+            "waiting for finalized exported actions",
+        )
         trace_id = self._observation.require_trace_id(launch)
         self._observation.wait_for_terminal_trace(trace_id)
         self._observation.wait_for_exported_kinds(
@@ -90,21 +111,28 @@ class SemanticActionBoundariesTask:
             span for span in spans if span.process_id == process_id
         ]
         counts = Counter(span.kind for span in root_spans)
-        expected = Counter(
-            {
-                "process.exec": 2,
-                "command.invocation": 2,
-                "llm.request": 2,
-                "agent.identity": 1,
-                "process.exit": 1,
-                "agent.exit": 1,
-            }
+        expected_exact = {
+            "process.exec": 2,
+            "command.invocation": 2,
+            "agent.identity": 1,
+            "process.exit": 1,
+            "agent.exit": 1,
+        }
+        mismatches = {
+            kind: (counts.get(kind, 0), expected_count)
+            for kind, expected_count in expected_exact.items()
+            if counts.get(kind, 0) != expected_count
+        }
+        unexpected = set(counts).difference(
+            expected_exact,
+            {"llm.request"},
         )
-        if counts != expected:
+        if counts.get("llm.request", 0) < 2 or mismatches or unexpected:
             raise AssertionError(
                 f"semantic action root process {process_id} counts are "
-                f"{dict(sorted(counts.items()))}, expected "
-                f"{dict(sorted(expected.items()))}"
+                f"{dict(sorted(counts.items()))}, expected exact "
+                f"{dict(sorted(expected_exact.items()))}, "
+                "llm.request>=2, and no other kinds"
             )
         action_id_counts = Counter(
             span.action_id for span in root_spans
@@ -122,12 +150,25 @@ class SemanticActionBoundariesTask:
         self._require_stored_boundary_actions(
             trace_id,
             int(process_id),
+            root_spans,
         )
         return counts
 
     def _run_exec_edge_cases(self) -> None:
+        self._test_context.report_progress(
+            "seccomp_exec",
+            "testing failed seccomp exec",
+        )
         self._require_seccomp_only_exec_attempt()
+        self._test_context.report_progress(
+            "ebpf_exec",
+            "testing eBPF-only exec completion",
+        )
         self._require_ebpf_only_exec_completion()
+        self._test_context.report_progress(
+            "nonzero_exit",
+            "testing nonzero process exit",
+        )
         self._require_nonzero_process_exit()
 
     def _require_seccomp_only_exec_attempt(self) -> None:
@@ -376,6 +417,7 @@ class SemanticActionBoundariesTask:
         self,
         trace_id: int,
         process_id: int,
+        exported_spans: list[ExportedSpan],
     ) -> None:
         document = self._observation.viewer_json(
             ["actions", "--trace-id", str(trace_id)]
@@ -392,29 +434,47 @@ class SemanticActionBoundariesTask:
             and isinstance(action.get("process"), dict)
             and action["process"].get("process_id") == process_id
         ]
-        counts = Counter(
-            str(action.get("kind"))
+        stored_observed_actions = [
+            action
             for action in root_actions
+            if action.get("kind") in self._OBSERVED_KINDS
+        ]
+        stored_export_only = Counter(
+            str(action.get("kind"))
+            for action in stored_observed_actions
+            if action.get("kind") in self._EXPORT_ONLY_KINDS
         )
-        expected = {
-            "process.exec": 2,
-            "command.invocation": 2,
-            "llm.request": 2,
-            "agent.identity": 1,
-            "process.exit": 0,
-            "agent.exit": 0,
-        }
-        mismatches = {
-            kind: (counts.get(kind, 0), expected_count)
-            for kind, expected_count in expected.items()
-            if counts.get(kind, 0) != expected_count
-        }
-        if mismatches:
+        if stored_export_only:
             raise AssertionError(
-                "semantic action stored root action count mismatches: "
-                f"{dict(sorted(mismatches.items()))}"
+                "semantic action storage contains export-only root "
+                f"actions: {dict(sorted(stored_export_only.items()))}"
             )
-        for action in root_actions:
+        stored_persisted_actions = [
+            action
+            for action in stored_observed_actions
+            if action.get("kind") in self._PERSISTED_KINDS
+        ]
+        exported_pairs = Counter(
+            (span.action_id, span.kind)
+            for span in exported_spans
+            if span.kind in self._PERSISTED_KINDS
+        )
+        stored_pairs = Counter(
+            (
+                str(action.get("action_id") or ""),
+                str(action.get("kind") or ""),
+            )
+            for action in stored_persisted_actions
+        )
+        if stored_pairs != exported_pairs:
+            missing = exported_pairs - stored_pairs
+            unexpected = stored_pairs - exported_pairs
+            raise AssertionError(
+                "semantic action stored root actions differ from online "
+                f"export: missing={dict(sorted(missing.items()))}, "
+                f"unexpected={dict(sorted(unexpected.items()))}"
+            )
+        for action in stored_persisted_actions:
             if action.get("kind") != "process.exec":
                 continue
             self._require_completed_exec(action)

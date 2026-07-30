@@ -8,6 +8,7 @@ from scenario.model import (
     ResponseBlock,
     ScenarioEmission,
     ScenarioRequest,
+    ToolDefinition,
     UsageSnapshot,
 )
 
@@ -75,6 +76,8 @@ class OpenAIChatAdapter(ProtocolAdapter):
             stream=stream,
             model=model,
             include_usage=include_usage,
+            input_tokens=self.input_tokens(document),
+            tools=self._decode_tools(document.get("tools", [])),
         )
 
     def encode_response(
@@ -281,6 +284,43 @@ class OpenAIChatAdapter(ProtocolAdapter):
         if block.tool_call is None:
             raise RuntimeError("validated tool_call block is missing tool data")
         return block.tool_call
+
+    def _decode_tools(self, value: object) -> tuple[ToolDefinition, ...]:
+        if not isinstance(value, list):
+            raise ProtocolRequestError(
+                "invalid_tools", "tools must be an array"
+            )
+        tools = []
+        for index, raw_tool in enumerate(value):
+            if not isinstance(raw_tool, dict):
+                raise ProtocolRequestError(
+                    "invalid_tools", f"tools[{index}] must be an object"
+                )
+            if raw_tool.get("type") != "function":
+                raise ProtocolRequestError(
+                    "invalid_tools",
+                    f"tools[{index}].type must be function",
+                )
+            function = raw_tool.get("function")
+            if not isinstance(function, dict):
+                raise ProtocolRequestError(
+                    "invalid_tools",
+                    f"tools[{index}].function must be an object",
+                )
+            name = self._required_string(
+                function.get("name"),
+                f"tools[{index}].function.name",
+            )
+            parameters = function.get("parameters", {})
+            if not isinstance(parameters, dict):
+                raise ProtocolRequestError(
+                    "invalid_tools",
+                    f"tools[{index}].function.parameters must be an object",
+                )
+            tools.append(
+                ToolDefinition(name=name, input_schema=parameters)
+            )
+        return tuple(tools)
 
     @staticmethod
     def _required_string(value: object, field: str) -> str:

@@ -1,0 +1,41 @@
+{
+  "description": "Runs a bounded recursive file count and reports completion.",
+  "type": "sequential",
+  "generators": [
+    {
+      "type": "response",
+      "response": {
+        "blocks": [
+          {
+            "type": "reasoning",
+            "text": "A bounded recursive scan represents a heavier local operation."
+          },
+          {
+            "type": "tool_call",
+            "name": "bash",
+            "arguments": {
+              "command": "find . -maxdepth 4 -type f -print | wc -l"
+            }
+          }
+        ],
+        "usage": {
+          "output_tokens": 18
+        }
+      }
+    },
+    {
+      "type": "response",
+      "response": {
+        "blocks": [
+          {
+            "type": "message",
+            "text": "LOCAL_MAAS_HEAVY_EXEC_OK"
+          }
+        ],
+        "usage": {
+          "output_tokens": 7
+        }
+      }
+    }
+  ]
+}

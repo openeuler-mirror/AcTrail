@@ -8,8 +8,9 @@
 - Anthropic Messages；
 - HTTP 和临时证书 HTTPS；
 - direct JSON 和 SSE；
-- response、sequential、loop、random generator；
-- 单个服务进程内累计 input token usage；
+- response、sequential、loop、random、action_pool generator；
+- 可复用 action pools 和请求工具 schema 驱动的 alias 转换；
+- 根据每次外部请求的大小计算 input token usage；
 - 可配置 TTFT/TPOT 返回节奏。
 
 ## 快速启动
@@ -98,7 +99,9 @@ curl --cacert /tmp/local-maas-tls-.../combined-ca.pem \
 
 ## 剧本播放
 
-一次服务启动只创建一个 lazy iterator。每个匹配 expectation 的 MaaS 请求消费下一份 response，并在该进程内累计 input tokens。有限剧本耗尽后返回协议对应的 409 错误。
+一次服务启动只创建一个 lazy iterator。每个匹配 expectation 的 MaaS 请求消费下一份 response。input tokens 根据当前外部请求的规范化 JSON 字符数计算，不从剧本读取，也不跨请求累计；Agent 携带的历史越长，本次 usage 就越大。有限剧本耗尽后返回协议对应的 409 错误。
+
+请求声明的工具及 schema 会先经 Alias Converter 反向转换为本次 `GenerationOptions`。运行时先统一工具名和参数名的大小写，再由 alias 表处理 `read_file -> read` 等语义别名。random 和 action_pool 只从可正向转换的候选中生成；没有声明工具时，混合 pool 只会生成 reasoning/message action。
 
 服务不会要求真实 MaaS 协议之外的 header 或 query 参数。不同测试需要独立剧本状态时，分别启动服务进程；重启服务即从剧本开头重新播放。
 
@@ -114,8 +117,14 @@ curl --cacert /tmp/local-maas-tls-.../combined-ca.pem \
 - `random-message.json`
 - `bash-tool-roundtrip.json`
 - `bash-home-loop.json`
+- `action-pools/random-light-exec.json`
+- `action-pools/adaptive-tool-or-message-loop.json`
+- `action-pools/random-file-operation.json`
+- `action-pools/reasoning-length-loop.json`
+- `action-pools/short-reasoning-sequential-cycle.json`
+- `action-pools/long-reasoning-short-operation.json`
 
-模板只按返回行为命名，不归属于任何具体客户端。通过 `--templates-dir` 使用外部模板目录。
+可复用 action 位于 `scenario/scenario_generator/action_pools/`，按 reasoning 长度、工具种类和操作重量分池。模板只选择和组合 pool，不复制具体动作。通过 `--templates-dir` 和 `--action-pools-dir` 使用外部目录。
 
 ## 配置
 
@@ -124,12 +133,15 @@ curl --cacert /tmp/local-maas-tls-.../combined-ca.pem \
 ```text
 LocalMaaSConfig
 ├── generator
+├── tool_alias
 ├── protocol
 ├── schedule
 └── server
     ├── http
     └── https
 ```
+
+`LocalMaaSServer.start()` 非阻塞返回当前 status。运行期间调用 `reset()` 会把 scenario iterator、pending response 和 response index 重置到初始状态，同时保持 listener、端口和临时证书不变；`stop()` 负责关闭服务。
 
 运行下面的命令查看全部入口：
 
@@ -147,8 +159,9 @@ config.py                         顶层配置聚合
 scenario/                         剧本模型、播放状态和 generator
 protocol/                         协议 adapter 与 registry
 schedule/                         TTFT/TPOT 节奏控制
+server_core/server.py             非阻塞 LocalMaaSServer 生命周期
 server_core/                      application、endpoint 和 HTTP/HTTPS connection
-utils/                            严格 JSON 解码和跨模块请求日志
+utils/                            JSON、日志和进程退出信号等待
 ```
 
 进一步说明：
