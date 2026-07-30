@@ -39,6 +39,7 @@ pub use crate::decode::{
     SocketPayloadCompletion, TlsDiagnosticEvent, TlsPayloadCaptureRequest, TlsPayloadCompletion,
     TlsPayloadDirectCapture,
 };
+pub use crate::loader::SocketPayloadFdState;
 use crate::loader::{
     AttachPlan, EbpfProgramLoader, EbpfRuntime, LoaderError, PendingTlsPayloadOp,
     TlsPayloadDiagnostics,
@@ -403,13 +404,24 @@ impl EbpfCollector {
             .map_err(loader_error)
     }
 
-    pub fn lookup_socket_fd_generation(
+    pub fn lookup_socket_fd_state(
         &self,
         pid: u32,
         fd: u32,
-    ) -> Result<Option<u32>, CollectorError> {
+    ) -> Result<Option<SocketPayloadFdState>, CollectorError> {
         self.runtime_ref()?
-            .lookup_socket_fd_generation(pid, fd)
+            .lookup_socket_fd_state(pid, fd)
+            .map_err(loader_error)
+    }
+
+    pub fn mark_socket_fd_tls_owned(
+        &self,
+        pid: u32,
+        fd: u32,
+        expected_generation: u32,
+    ) -> Result<bool, CollectorError> {
+        self.runtime_ref()?
+            .mark_socket_fd_tls_owned(pid, fd, expected_generation)
             .map_err(loader_error)
     }
 

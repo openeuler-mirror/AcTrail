@@ -57,7 +57,9 @@ fn main() {
     println!("cargo:rerun-if-changed=bpf/file/actrail_file_bulk_read_fast.h");
     println!("cargo:rerun-if-changed=bpf/file/actrail_file_path.h");
     println!("cargo:rerun-if-changed=bpf/include/actrail_const.h");
+    println!("cargo:rerun-if-changed=bpf/payload/actrail_socket_fd_state.h");
     println!("cargo:rerun-if-changed=bpf/payload/actrail_socket_payload.h");
+    println!("cargo:rerun-if-changed=bpf/payload/actrail_socket_tls.h");
     println!("cargo:rerun-if-changed=bpf/payload/actrail_socket_payload_types.h");
     println!("cargo:rerun-if-changed=bpf/payload/actrail_stdio_payload.h");
     println!("cargo:rerun-if-changed=bpf/tls/actrail_tls_payload_capture.h");

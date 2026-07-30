@@ -287,13 +287,11 @@ impl StorageAttachService {
             match link.role {
                 SemanticActionLinkRole::LlmCallResponse => {
                     // parent = LlmCall, child = LlmResponse
-                    llm_call_to_response
-                        .insert(&link.parent_action_id, &link.child_action_id);
+                    llm_call_to_response.insert(&link.parent_action_id, &link.child_action_id);
                 }
                 SemanticActionLinkRole::CommandContainsLlmCall => {
                     // parent = CommandInvocation, child = LlmCall
-                    command_to_llm_call
-                        .insert(&link.parent_action_id, &link.child_action_id);
+                    command_to_llm_call.insert(&link.parent_action_id, &link.child_action_id);
                 }
                 _ => {}
             }
@@ -304,8 +302,7 @@ impl StorageAttachService {
         for (command_id, llm_call_id) in &command_to_llm_call {
             if let Some(response_id) = llm_call_to_response.get(llm_call_id) {
                 if let Some(tool_name) = response_tool_names.get(*response_id) {
-                    command_to_tool_name
-                        .insert(command_id.to_string(), tool_name.clone());
+                    command_to_tool_name.insert(command_id.to_string(), tool_name.clone());
                 }
             }
         }
@@ -314,10 +311,9 @@ impl StorageAttachService {
         for action in batch.actions_mut() {
             if action.kind == SemanticActionKind::CommandInvocation {
                 if let Some(tool_name) = command_to_tool_name.get(&action.action_id) {
-                    action.attributes.insert(
-                        attrs::command::TOOL_NAME.to_string(),
-                        tool_name.clone(),
-                    );
+                    action
+                        .attributes
+                        .insert(attrs::command::TOOL_NAME.to_string(), tool_name.clone());
                 }
             }
         }
@@ -331,8 +327,7 @@ impl StorageAttachService {
             {
                 // 该 CommandInvocation 尚未有 tool_name，尝试从缓存中查找
                 if let Some(tool_name) = pending_tool_names.get(&action.action_id) {
-                    command_to_tool_name
-                        .insert(action.action_id.clone(), tool_name.clone());
+                    command_to_tool_name.insert(action.action_id.clone(), tool_name.clone());
                     needs_update = true;
                 }
             }
@@ -343,10 +338,9 @@ impl StorageAttachService {
                     && !action.attributes.contains_key(attrs::command::TOOL_NAME)
                 {
                     if let Some(tool_name) = command_to_tool_name.get(&action.action_id) {
-                        action.attributes.insert(
-                            attrs::command::TOOL_NAME.to_string(),
-                            tool_name.clone(),
-                        );
+                        action
+                            .attributes
+                            .insert(attrs::command::TOOL_NAME.to_string(), tool_name.clone());
                     }
                 }
             }
@@ -368,8 +362,7 @@ impl StorageAttachService {
                     if link.role == SemanticActionLinkRole::CommandContainsLlmCall
                         && link.child_action_id == llm_call_action.action_id
                     {
-                        pending_tool_names
-                            .insert(link.parent_action_id.clone(), tool_name.clone());
+                        pending_tool_names.insert(link.parent_action_id.clone(), tool_name.clone());
                     }
                 }
             }
