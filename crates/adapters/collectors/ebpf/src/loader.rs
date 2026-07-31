@@ -10,6 +10,8 @@ mod environment;
 mod file;
 #[path = "loader/object.rs"]
 mod object;
+#[path = "loader/pending_exec.rs"]
+mod pending_exec;
 #[path = "loader/ring_decode.rs"]
 mod ring_decode;
 #[path = "loader/socket.rs"]
@@ -27,7 +29,7 @@ use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::env;
 use std::ffi::OsStr;
-use std::os::fd::RawFd;
+use std::os::fd::{BorrowedFd, RawFd};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::rc::Rc;
@@ -36,11 +38,12 @@ use config_core::daemon::{EbpfCollectorConfig, FileBulkReadFastPathConfig, Paylo
 use libbpf_rs::{Link, MapCore, MapFlags, MapHandle, Object, ObjectBuilder};
 use model_core::capability::Capability;
 use model_core::ids::TraceId;
-use model_core::process::{KernelProcessCoordinates, ProcessSuppressedFd};
+use model_core::process::{InitialSuppressedFd, KernelProcessCoordinates, ProcessSuppressedFd};
 
 pub use attach_plan::AttachPlan;
 use attach_plan::{configure_program_autoload, effective_config_for_attach_plan};
 use object::{EventBuffer, event_map_max_entries, map_handle, resize_map, ring_buffer_max_bytes};
+use pending_exec::PendingExecBindings;
 use ring_decode::decode_kernel_event;
 pub use ring_decode::{
     KernelEndpoint, KernelEvent, KernelFilePathEvent, KernelObservationEvent,
@@ -113,6 +116,7 @@ pub struct EbpfRuntime {
     attached_capabilities: BTreeSet<Capability>,
     tracked_traces: MapHandle,
     process_start_times: MapHandle,
+    pending_exec_bindings: PendingExecBindings,
     fork_trace_bindings: MapHandle,
     trace_pid_namespaces: MapHandle,
     suppressed_fds: MapHandle,
@@ -328,6 +332,10 @@ impl EbpfRuntime {
         let tracked_traces = map_handle(&object, "tracked_traces", "tracked_map")?;
         let process_start_times =
             map_handle(&object, "process_start_times", "process_start_time_map")?;
+        let pending_exec_bindings = PendingExecBindings::from_object(
+            &object,
+            config.suppressed_fd_index_slots_per_process,
+        )?;
         let fork_trace_bindings =
             map_handle(&object, "fork_trace_bindings", "fork_trace_bindings")?;
         let trace_pid_namespaces =
@@ -425,6 +433,7 @@ impl EbpfRuntime {
             attached_capabilities,
             tracked_traces,
             process_start_times,
+            pending_exec_bindings,
             fork_trace_bindings,
             trace_pid_namespaces,
             suppressed_fds,
@@ -507,6 +516,21 @@ impl EbpfRuntime {
         self.process_start_times
             .update(&key, &kernel_start_time.to_ne_bytes(), MapFlags::ANY)
             .map_err(|error| LoaderError::new("track_pid_start_time", error.to_string()))
+    }
+
+    pub fn arm_pending_exec(
+        &self,
+        pidfd: BorrowedFd<'_>,
+        trace_id: TraceId,
+        generation: u64,
+        suppressed_fds: &[InitialSuppressedFd],
+    ) -> Result<(), LoaderError> {
+        self.pending_exec_bindings
+            .arm(pidfd, trace_id, generation, suppressed_fds)
+    }
+
+    pub fn cancel_pending_exec(&self, pidfd: BorrowedFd<'_>) -> Result<bool, LoaderError> {
+        self.pending_exec_bindings.cancel(pidfd)
     }
 
     pub fn register_trace_pid_namespace(

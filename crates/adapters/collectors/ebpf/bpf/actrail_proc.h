@@ -7,6 +7,129 @@ enum actrail_proc_coord_syscall_id {
     ACTRAIL_PROC_COORD_TRACEPOINT_SIGNAL_GENERATE = 1,
 };
 
+static __always_inline __u64 *pending_exec_count_value(void) {
+    __u32 key = 0;
+
+    return bpf_map_lookup_elem(&pending_exec_count, &key);
+}
+
+static __always_inline void decrement_pending_exec_count(__u64 *pending_count) {
+    if (pending_count && *pending_count > 0) {
+        __sync_fetch_and_sub(pending_count, 1);
+    }
+}
+
+static __always_inline int install_pending_exec_suppressed_fds(
+    const struct actrail_pending_exec_binding *binding,
+    __u32 pid
+) {
+    __u32 index;
+
+    if (binding->suppressed_fd_count > ACTRAIL_SUPPRESSED_FD_INDEX_SLOT_MAX) {
+        return 0;
+    }
+#pragma unroll
+    for (index = 0; index < ACTRAIL_SUPPRESSED_FD_INDEX_SLOT_MAX; index++) {
+        struct actrail_suppressed_fd_value value = {};
+        __s32 fd;
+
+        if (index >= binding->suppressed_fd_count) {
+            break;
+        }
+        fd = binding->suppressed_fds[index].fd;
+        value.trace_id = binding->trace_id;
+        value.purpose = binding->suppressed_fds[index].purpose;
+        if (fd < 0 ||
+            value.purpose == ACTRAIL_SUPPRESSED_FD_PURPOSE_NONE ||
+            !upsert_suppressed_fd_for_generation(
+                pid,
+                binding->generation,
+                (__u32)fd,
+                &value)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static __always_inline __u64 promote_pending_exec_binding(void) {
+    __u64 *pending_count = pending_exec_count_value();
+    struct task_struct *task;
+    struct actrail_pending_exec_binding *binding;
+    __u64 trace_id;
+    __u64 generation;
+    __u32 pid;
+
+    if (!pending_count || *pending_count == 0) {
+        return 0;
+    }
+    task = bpf_get_current_task_btf();
+    if (!task) {
+        return 0;
+    }
+    binding = bpf_task_storage_get(&pending_exec_bindings, task, 0, 0);
+    if (!binding || !binding->counted || !binding->trace_id ||
+        !binding->generation) {
+        return 0;
+    }
+    pid = current_kernel_tgid();
+    if (!pid) {
+        return 0;
+    }
+    trace_id = binding->trace_id;
+    generation = binding->generation;
+    if (bpf_map_update_elem(
+            &process_start_times,
+            &pid,
+            &generation,
+            BPF_ANY) != 0) {
+        return 0;
+    }
+    if (!install_pending_exec_suppressed_fds(binding, pid)) {
+        cleanup_suppressed_fds_for_process(pid, generation);
+        bpf_map_delete_elem(&process_start_times, &pid);
+        return 0;
+    }
+    if (bpf_map_update_elem(&tracked_traces, &pid, &trace_id, BPF_ANY) != 0) {
+        cleanup_suppressed_fds_for_process(pid, generation);
+        bpf_map_delete_elem(&process_start_times, &pid);
+        return 0;
+    }
+    if (bpf_task_storage_delete(&pending_exec_bindings, task) != 0) {
+        bpf_map_delete_elem(&tracked_traces, &pid);
+        cleanup_suppressed_fds_for_process(pid, generation);
+        bpf_map_delete_elem(&process_start_times, &pid);
+        return 0;
+    }
+    decrement_pending_exec_count(pending_count);
+    return trace_id;
+}
+
+static __always_inline void cleanup_pending_exec_binding(void) {
+    __u64 *pending_count = pending_exec_count_value();
+    struct task_struct *task;
+    struct actrail_pending_exec_binding *binding;
+    __u32 counted;
+
+    if (!pending_count || *pending_count == 0) {
+        return;
+    }
+    task = bpf_get_current_task_btf();
+    if (!task) {
+        return;
+    }
+    binding = bpf_task_storage_get(&pending_exec_bindings, task, 0, 0);
+    if (!binding) {
+        return;
+    }
+    counted = binding->counted;
+    if (bpf_task_storage_delete(&pending_exec_bindings, task) == 0) {
+        if (counted) {
+            decrement_pending_exec_count(pending_count);
+        }
+    }
+}
+
 static __always_inline int finalize_fork_trace_binding(__u32 child_kernel_pid) {
     __u32 child_pid = 0;
     struct actrail_fork_trace_binding *binding =

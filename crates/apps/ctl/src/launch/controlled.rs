@@ -3,7 +3,7 @@
 use std::ffi::{CString, OsString};
 use std::io::Read;
 use std::io::Write;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Duration;
@@ -17,6 +17,7 @@ pub(super) enum ChildSetup {
 
 pub(crate) struct ControlledChild {
     pid: libc::pid_t,
+    pidfd: OwnedFd,
     env_writer: Option<OwnedFd>,
     listener_fd: Option<OwnedFd>,
 }
@@ -36,19 +37,36 @@ impl ControlledChild {
         let uses_seccomp = matches!(setup, ChildSetup::Seccomp(_));
         let reserved_listener_fd = setup.reserved_listener_fd();
         let (read_fd, write_fd) = env_pipe()?;
-        let child = unsafe { libc::fork() };
+        let mut pidfd = -1;
+        let mut clone_args: libc::clone_args = unsafe { std::mem::zeroed() };
+        clone_args.flags = libc::CLONE_PIDFD as u64;
+        clone_args.pidfd = (&mut pidfd as *mut libc::c_int) as usize as u64;
+        clone_args.exit_signal = libc::SIGCHLD as u64;
+        let child = unsafe {
+            libc::syscall(
+                libc::SYS_clone3,
+                &clone_args as *const libc::clone_args,
+                std::mem::size_of::<libc::clone_args>(),
+            )
+        } as libc::pid_t;
         if child < 0 {
             return Err(format!(
-                "fork launch child: {}",
+                "clone3(CLONE_PIDFD) launch child: {}",
                 std::io::Error::last_os_error()
             ));
         }
         if child == 0 {
             child_exec(argv, setup, read_fd, write_fd);
         }
+        if pidfd < 0 {
+            terminate_child(child);
+            return Err("clone3(CLONE_PIDFD) did not return a pidfd".to_string());
+        }
+        let pidfd = unsafe { OwnedFd::from_raw_fd(pidfd) };
         drop(read_fd);
         let mut child = Self {
             pid: child,
+            pidfd,
             env_writer: Some(write_fd),
             listener_fd: None,
         };
@@ -57,7 +75,7 @@ impl ControlledChild {
             return Err(error);
         }
         if uses_seccomp {
-            match duplicate_child_listener(child.pid, reserved_listener_fd) {
+            match duplicate_child_listener(child.pidfd(), reserved_listener_fd) {
                 Ok(listener_fd) => child.listener_fd = Some(listener_fd),
                 Err(error) => {
                     child.terminate();
@@ -70,6 +88,10 @@ impl ControlledChild {
 
     pub(super) fn pid(&self) -> u32 {
         self.pid as u32
+    }
+
+    pub(super) fn pidfd(&self) -> BorrowedFd<'_> {
+        self.pidfd.as_fd()
     }
 
     pub(super) fn listener_fd(&self) -> Option<&OwnedFd> {
@@ -308,17 +330,9 @@ fn wait_child_stopped(child_pid: libc::pid_t) -> Result<(), String> {
 }
 
 fn duplicate_child_listener(
-    child_pid: libc::pid_t,
+    pidfd: BorrowedFd<'_>,
     reserved_listener_fd: libc::c_int,
 ) -> Result<OwnedFd, String> {
-    let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, child_pid, 0) };
-    if pidfd < 0 {
-        return Err(format!(
-            "pidfd_open launch child: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    let pidfd = unsafe { OwnedFd::from_raw_fd(pidfd as libc::c_int) };
     let listener_fd = unsafe {
         libc::syscall(
             libc::SYS_pidfd_getfd,

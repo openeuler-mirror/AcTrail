@@ -9,7 +9,7 @@ use model_core::process::{KernelProcessCoordinates, ProcessSuppressedFd, Suppres
 
 use super::LoaderError;
 
-const SUPPRESSED_FD_INDEX_SLOT_MAX: u32 = 64;
+pub(super) const SUPPRESSED_FD_INDEX_SLOT_MAX: u32 = 64;
 const SUPPRESSED_FD_KEY_SIZE: usize = std::mem::size_of::<SuppressedFdKeyLayout>();
 const SUPPRESSED_FD_VALUE_SIZE: usize = std::mem::size_of::<SuppressedFdValueLayout>();
 const SUPPRESSED_FD_INDEX_KEY_SIZE: usize = std::mem::size_of::<SuppressedFdIndexKeyLayout>();
@@ -374,7 +374,7 @@ fn parse_index_fd(value: &[u8]) -> Option<u32> {
     Some(u32::from_ne_bytes(value[8..12].try_into().ok()?))
 }
 
-fn suppressed_fd_purpose_code(purpose: SuppressedFdPurpose) -> u32 {
+pub(super) fn suppressed_fd_purpose_code(purpose: SuppressedFdPurpose) -> u32 {
     match purpose {
         SuppressedFdPurpose::TlsSyncEvent => SUPPRESSED_FD_PURPOSE_TLS_SYNC_EVENT,
         SuppressedFdPurpose::InternalUpload => SUPPRESSED_FD_PURPOSE_INTERNAL_UPLOAD,

@@ -427,6 +427,7 @@
     },
     {
       "names": [
+        "clone3",
         "pidfd_getfd"
       ],
       "action": "SCMP_ACT_ALLOW"
@@ -713,18 +714,6 @@
           "s390x"
         ]
       },
-      "excludes": {
-        "caps": [
-          "CAP_SYS_ADMIN"
-        ]
-      }
-    },
-    {
-      "names": [
-        "clone3"
-      ],
-      "action": "SCMP_ACT_ERRNO",
-      "errnoRet": 38,
       "excludes": {
         "caps": [
           "CAP_SYS_ADMIN"

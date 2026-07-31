@@ -201,7 +201,7 @@ pub(crate) fn run_launch(
     timing.mark("resolve_child_process_ref");
 
     let track_add_request_id = next_request_id(request_id)?;
-    let reply = match client.send(ControlCommand::TrackAdd(TrackAddCommand {
+    let track_add = TrackAddCommand {
         request_id: track_add_request_id,
         root: child_ref.clone(),
         display_name: request.display_name,
@@ -224,7 +224,8 @@ pub(crate) fn run_launch(
                 provider: plan.provider.clone(),
                 points: plan.points.clone(),
             }),
-    })) {
+    };
+    let reply = match client.send_launch_track_add(track_add, child.pidfd()) {
         Ok(reply) => reply,
         Err(error) => {
             child.terminate();

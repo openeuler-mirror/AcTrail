@@ -71,10 +71,10 @@ class LLMTraceAssertion:
                 "traces",
             ]
         )
-        ready, trace_state = self._trace_is_cleanly_exited(traces, trace_id)
+        ready, trace_state = self._trace_is_cleanly_terminal(traces, trace_id)
         if not ready:
             raise AssertionError(
-                f"trace-{trace_id} must be cleanly exited after daemon shutdown; "
+                f"trace-{trace_id} must be cleanly terminal after daemon shutdown; "
                 f"{trace_state}"
             )
         document = self._read_json(
@@ -98,7 +98,7 @@ class LLMTraceAssertion:
             raise AssertionError("viewer JSON output must be an object")
         return document
 
-    def _trace_is_cleanly_exited(
+    def _trace_is_cleanly_terminal(
         self,
         document: dict,
         trace_id: int,
@@ -114,7 +114,10 @@ class LLMTraceAssertion:
         if trace is None:
             return False, "missing"
         state = f"state={trace.get('state')} health={trace.get('health')}"
-        return trace.get("state") == "Exited" and trace.get("health") == "Clean", state
+        return (
+            trace.get("state") in {"Completed", "Exited"}
+            and trace.get("health") == "Clean"
+        ), state
 
     def _require_paired_exchange(
         self,
