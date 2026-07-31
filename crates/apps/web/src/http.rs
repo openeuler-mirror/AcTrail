@@ -23,6 +23,7 @@ mod query;
 use query::{
     parse_action_tree_page, parse_llm_activity_query, parse_llm_export_query,
     parse_llm_request_content_node_query, parse_llm_request_content_query, parse_llm_rows_query,
+    parse_time_attribution_range_query, parse_time_attribution_rows_query,
     parse_token_usage_stats_query, parse_u64, percent_decode,
 };
 
@@ -329,6 +330,18 @@ fn route(request: &Request, context: &WebContext) -> Result<Response, String> {
             Ok(query) => view::llm_export_csv(&context.storage, query).map(Response::csv),
             Err(error) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
         },
+        "/api/stats/time-attribution/activity" => match parse_time_attribution_range_query(query) {
+            Ok(query) => {
+                view::aggregate_time_attribution_json(&context.storage, query).map(Response::json)
+            }
+            Err(error) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
+        },
+        "/api/stats/time-attribution/rows" => match parse_time_attribution_rows_query(query) {
+            Ok(query) => {
+                view::time_attribution_rows_json(&context.storage, query).map(Response::json)
+            }
+            Err(error) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
+        },
         "/health" => Ok(Response::text(STATUS_OK, "ok")),
         _ => match &context.cluster_root {
             Some(cluster_root) => route_cluster_trace_api(path, query, cluster_root),
@@ -355,6 +368,10 @@ fn route_cluster_trace_api(
             .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
         [trace_id, "summary"] => parse_u64(trace_id)
             .and_then(|trace_id| view::cluster::trace_summary_json(cluster_root, trace_id))
+            .map(Response::json)
+            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
+        [trace_id, "time-attribution"] => parse_u64(trace_id)
+            .and_then(|trace_id| view::cluster::trace_time_attribution_json(cluster_root, trace_id))
             .map(Response::json)
             .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
         [trace_id, "events"] => parse_u64(trace_id)
@@ -512,6 +529,10 @@ fn route_trace_api(path: &str, query: &str, storage: &StorageConfig) -> Result<R
             .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
         [trace_id, "summary"] => parse_u64(trace_id)
             .and_then(|trace_id| view::trace_summary_json(storage, trace_id))
+            .map(Response::json)
+            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
+        [trace_id, "time-attribution"] => parse_u64(trace_id)
+            .and_then(|trace_id| view::trace_time_attribution_json(storage, trace_id))
             .map(Response::json)
             .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
         [trace_id, "events"] => parse_u64(trace_id)

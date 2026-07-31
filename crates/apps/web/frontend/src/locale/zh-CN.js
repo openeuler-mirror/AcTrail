@@ -130,6 +130,7 @@ export default {
       rail: {
         aria: '统计视图',
         llmRequests: 'LLM Requests',
+        timeAttribution: '耗时归因',
         alerts: '告警',
       },
       llm: {

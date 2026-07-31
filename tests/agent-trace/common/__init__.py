@@ -6,6 +6,7 @@ from .actions import (
     require_complete_llm_exchange,
     require_llm_exchange_graph,
     require_web_action_tree_projection,
+    require_web_time_attribution,
     wait_for_actions,
     wait_for_llm_exchange_actions,
 )
@@ -57,6 +58,7 @@ __all__ = [
     "require_complete_llm_exchange",
     "require_llm_exchange_graph",
     "require_web_action_tree_projection",
+    "require_web_time_attribution",
     "require_complete_payload_rows",
     "require_complete_payload_rows_any",
     "require_otel_span",

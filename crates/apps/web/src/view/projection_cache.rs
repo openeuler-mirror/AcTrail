@@ -125,11 +125,6 @@ pub fn clear_projection_cache() -> usize {
         .unwrap_or(0)
 }
 
-pub fn clear_projection_cache_json() -> String {
-    let cleared = clear_projection_cache();
-    format!("{{\"cleared\":{cleared}}}")
-}
-
 pub(super) fn cached_action_display_projection(
     storage_path: &Path,
     trace_id: TraceId,

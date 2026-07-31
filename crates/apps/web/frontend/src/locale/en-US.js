@@ -129,6 +129,7 @@ export default {
       rail: {
         aria: 'Stats views',
         llmRequests: 'LLM Requests',
+        timeAttribution: 'Time Attribution',
         alerts: 'Alerts',
       },
       llm: {

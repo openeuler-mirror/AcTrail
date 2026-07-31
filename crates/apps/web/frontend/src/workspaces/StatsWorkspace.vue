@@ -19,6 +19,13 @@
         @loading="$emit('loading', $event)"
         @open-trace="$emit('open-trace', $event)"
       />
+      <TimeAttributionWorkspace
+        v-else-if="activeTab === STATS_TAB_IDS.timeAttribution"
+        :query="query"
+        :refresh-nonce="refreshNonce"
+        @loading="$emit('loading', $event)"
+        @open-trace="$emit('open-trace', $event)"
+      />
       <AlertsWorkspace
         v-else-if="activeTab === STATS_TAB_IDS.alerts"
         :query="query"
@@ -39,15 +46,18 @@ import { computed, ref, watch } from 'vue';
 import { useLocale } from '../locale';
 import AlertsWorkspace from './AlertsWorkspace.vue';
 import LlmRequestsWorkspace from './stats/llm/LlmRequestsWorkspace.vue';
+import TimeAttributionWorkspace from './stats/time-attribution/TimeAttributionWorkspace.vue';
 
 const STATS_TAB_IDS = Object.freeze({
   llmRequests: 'llm_requests',
+  timeAttribution: 'time_attribution',
   alerts: 'alerts',
 });
 
 const { t } = useLocale();
 const tabs = computed(() => [
   { id: STATS_TAB_IDS.llmRequests, label: t('stats.rail.llmRequests') },
+  { id: STATS_TAB_IDS.timeAttribution, label: t('stats.rail.timeAttribution') },
   { id: STATS_TAB_IDS.alerts, label: t('stats.rail.alerts') },
 ]);
 

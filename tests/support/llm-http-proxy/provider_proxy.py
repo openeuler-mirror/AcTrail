@@ -55,6 +55,7 @@ class ProxyConfig:
     response_chunk_delay_seconds: float
     local_stream_response_text: str
     local_stream_reasoning_tokens: int
+    local_tool_commands: tuple[str, ...]
 
 
 def main() -> int:
@@ -145,6 +146,12 @@ def parse_args() -> ProxyConfig:
         default=DEFAULT_LOCAL_STREAM_REASONING_TOKENS,
         help="reasoning token count emitted in local-stream usage metadata",
     )
+    parser.add_argument(
+        "--local-tool-command",
+        action="append",
+        default=[],
+        help="ask the real agent to invoke its advertised Bash tool before the final response",
+    )
     args = parser.parse_args()
     if args.bind_port < 0:
         raise RuntimeError("--bind-port must be non-negative")
@@ -171,6 +178,7 @@ def parse_args() -> ProxyConfig:
         response_chunk_delay_seconds=args.response_chunk_delay_seconds,
         local_stream_response_text=args.local_stream_response_text,
         local_stream_reasoning_tokens=args.local_stream_reasoning_tokens,
+        local_tool_commands=tuple(args.local_tool_command),
     )
 
 
@@ -244,11 +252,23 @@ def respond_local_stream(
 ) -> None:
     request = parse_json_body(body)
     model = str(request.get("model") or "actrail-local-stream")
-    chunks = local_stream_chunks(
-        model,
-        config.local_stream_response_text,
-        config.local_stream_reasoning_tokens,
-    )
+    completed_tools = request_tool_result_count(request)
+    turn = "final"
+    if completed_tools < len(config.local_tool_commands):
+        tool_number = completed_tools + 1
+        chunks = local_tool_call_chunks(
+            model,
+            request,
+            config.local_tool_commands[completed_tools],
+            tool_number,
+        )
+        turn = f"tool-call-{tool_number}"
+    else:
+        chunks = local_stream_chunks(
+            model,
+            config.local_stream_response_text,
+            config.local_stream_reasoning_tokens,
+        )
     handler.send_response(200, "OK")
     handler.send_header("Content-Type", "text/event-stream")
     handler.send_header("Cache-Control", "no-cache")
@@ -272,7 +292,7 @@ def respond_local_stream(
     handler.close_connection = True
     print(
         "proxy_local_stream "
-        f"method=POST path={handler.path} status=200 "
+        f"turn={turn} method=POST path={handler.path} status=200 "
         f"request_bytes={len(body)} response_bytes={response_bytes}",
         flush=True,
     )
@@ -333,6 +353,117 @@ def local_stream_chunks(
         }
     )
     return chunks
+
+
+def request_tool_result_count(request: dict) -> int:
+    messages = request.get("messages")
+    if not isinstance(messages, list):
+        return 0
+    count = 0
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") == "tool":
+            count += 1
+            continue
+        content = message.get("content")
+        if isinstance(content, list):
+            count += sum(
+                1
+                for block in content
+                if isinstance(block, dict)
+                and block.get("type") in {"tool_result", "tool-result"}
+            )
+    return count
+
+
+def local_tool_call_chunks(
+    model: str,
+    request: dict,
+    command: str,
+    tool_number: int,
+) -> list[dict]:
+    tool_name, command_key = advertised_bash_tool(request)
+    return [
+        {
+            "id": "chatcmpl-actrail-local-tool",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": f"call_actrail_local_bash_{tool_number}",
+                                "type": "function",
+                                "function": {
+                                    "name": tool_name,
+                                    "arguments": json.dumps(
+                                        {command_key: command},
+                                        ensure_ascii=False,
+                                        separators=(",", ":"),
+                                    ),
+                                },
+                            }
+                        ],
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-actrail-local-tool",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": "tool_calls",
+                }
+            ],
+        },
+    ]
+
+
+def advertised_bash_tool(request: dict) -> tuple[str, str]:
+    tools = request.get("tools")
+    if not isinstance(tools, list):
+        raise RuntimeError("real agent request did not advertise tools")
+    advertised_names = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        function = tool.get("function")
+        if not isinstance(function, dict):
+            continue
+        name = function.get("name")
+        parameters = function.get("parameters")
+        if not isinstance(name, str) or not isinstance(parameters, dict):
+            continue
+        advertised_names.append(name)
+        if "bash" not in name.lower():
+            continue
+        properties = parameters.get("properties")
+        if not isinstance(properties, dict):
+            raise RuntimeError(f"bash tool {name} has no properties schema")
+        command_key = next(
+            (key for key in ("command", "cmd") if key in properties),
+            None,
+        )
+        if command_key is None:
+            raise RuntimeError(
+                f"bash tool {name} exposes no command/cmd input: {sorted(properties)}"
+            )
+        return name, command_key
+    raise RuntimeError(
+        "real agent did not advertise a bash tool: " + ",".join(advertised_names)
+    )
 
 
 def split_response_text(response_text: str) -> list[str]:

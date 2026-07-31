@@ -28,10 +28,60 @@
       </div>
     </div>
 
-    <div v-if="zoomLabel" class="waterfall-breadcrumb">
+    <div
+      v-if="zoomLabel || focusWindow"
+      class="waterfall-breadcrumb"
+      :class="{ 'attribution-focus': focusWindow && !zoomLabel }"
+    >
       <Search :size="14" aria-hidden="true" />
-      <span class="wf-zoom-label">Zoomed: {{ zoomLabel }}</span>
-      <button type="button" class="wf-zoom-reset" @click="resetZoom">Reset zoom</button>
+      <span class="wf-location-copy">
+        <strong class="wf-zoom-label">
+          {{ zoomLabel ? `Zoomed: ${zoomLabel}` : focusTitle }}
+        </strong>
+        <small v-if="focusWindow && !zoomLabel">{{ focusDescription }}</small>
+      </span>
+      <span
+        v-if="focusWindow && !zoomLabel"
+        class="wf-focus-status"
+        :class="{ matched: focusMatchCount > 0 }"
+      >
+        {{ focusMatchLabel }}
+      </span>
+      <span
+        v-if="focusOccurrences.length > 1 && !zoomLabel"
+        class="wf-occurrence-nav"
+      >
+        <button
+          type="button"
+          title="Previous occurrence"
+          :disabled="focusOccurrenceIndex <= 0"
+          @click="navigateOccurrence(-1)"
+        >
+          <ChevronLeft :size="13" aria-hidden="true" />
+        </button>
+        <small>
+          {{ focusOccurrenceIndex + 1 }} / {{ focusOccurrences.length }}
+        </small>
+        <button
+          type="button"
+          title="Next occurrence"
+          :disabled="focusOccurrenceIndex < 0 || focusOccurrenceIndex + 1 >= focusOccurrences.length"
+          @click="navigateOccurrence(1)"
+        >
+          <ChevronRight :size="13" aria-hidden="true" />
+        </button>
+      </span>
+      <button
+        v-if="focusWindow && !zoomLabel"
+        type="button"
+        class="wf-zoom-reset"
+        @click="$emit('open-attribution', focusInterval)"
+      >
+        Back to attribution
+      </button>
+      <button type="button" class="wf-zoom-reset" @click="resetView">
+        {{ focusWindow && !zoomLabel ? 'Show full Trace' : 'Reset view' }}
+      </button>
     </div>
 
     <div v-if="groups.length" class="waterfall-legend">
@@ -54,13 +104,125 @@
       </div>
     </div>
 
-    <div v-if="rows.length" class="waterfall-scroll">
+    <section v-if="bottleneckGroups.length" class="waterfall-bottlenecks">
+      <header class="wf-bottleneck-header">
+        <div class="wf-bottleneck-heading">
+          <Gauge :size="16" aria-hidden="true" />
+          <span>
+            <strong>Duration bottlenecks</strong>
+            <small>Top {{ attribution?.bottlenecks?.default_display_limit ?? 5 }} per type by default; concurrent intervals may overlap.</small>
+          </span>
+        </div>
+        <button
+          type="button"
+          class="wf-bottleneck-toggle"
+          :aria-expanded="bottlenecksExpanded"
+          @click="bottlenecksExpanded = !bottlenecksExpanded"
+        >
+          {{ bottlenecksExpanded ? 'Collapse' : 'Expand' }}
+          <ChevronDown v-if="bottlenecksExpanded" :size="14" aria-hidden="true" />
+          <ChevronRight v-else :size="14" aria-hidden="true" />
+        </button>
+      </header>
+      <div v-if="bottlenecksExpanded" class="wf-bottleneck-grid">
+        <article
+          v-for="group in bottleneckGroups"
+          :key="group.id"
+          class="wf-bottleneck-group"
+          :class="`wf-bottleneck-${group.id}`"
+        >
+          <header>
+            <span class="wf-bottleneck-dot"></span>
+            <strong>{{ group.label }}</strong>
+            <small>{{ group.countLabel }}</small>
+          </header>
+          <div
+            v-if="group.items.length"
+            class="wf-bottleneck-list"
+            :class="{ expanded: group.isExpanded }"
+          >
+            <button
+              v-for="(item, index) in group.items"
+              :key="item.id"
+              type="button"
+              class="wf-bottleneck-item"
+              :class="{ active: isFocusedBottleneck(item) }"
+              :title="`Locate ${item.label} in Waterfall`"
+              @click="focusBottleneck(group, item, index)"
+            >
+              <span class="wf-bottleneck-rank">{{ index + 1 }}</span>
+              <span class="wf-bottleneck-copy">
+                <span class="wf-bottleneck-name">
+                  <strong>{{ item.label }}</strong>
+                  <em v-if="item.status && item.status !== 'complete'">{{ bottleneckStatusLabel(item.status) }}</em>
+                </span>
+                <small>{{ item.description }} · {{ item.offsetLabel }}</small>
+                <span class="wf-bottleneck-meter" aria-hidden="true">
+                  <span :style="{ width: `${item.relativeWidth}%` }"></span>
+                </span>
+              </span>
+              <span class="wf-bottleneck-duration">
+                <strong>{{ formatAttributionDuration(item.duration_nanos) }}</strong>
+                <small>{{ item.traceShare }}</small>
+              </span>
+            </button>
+          </div>
+          <div v-else class="wf-bottleneck-empty">{{ group.emptyLabel }}</div>
+          <button
+            v-if="group.canExpand"
+            type="button"
+            class="wf-bottleneck-more"
+            :aria-expanded="group.isExpanded"
+            @click="toggleBottleneckGroup(group.id)"
+          >
+            {{ group.isExpanded ? `Show top ${group.displayLimit}` : `Show all ${group.observedCount}` }}
+            <ChevronUp v-if="group.isExpanded" :size="13" aria-hidden="true" />
+            <ChevronDown v-else :size="13" aria-hidden="true" />
+          </button>
+        </article>
+      </div>
+    </section>
+
+    <div v-if="rows.length" ref="waterfallScroll" class="waterfall-scroll">
       <div class="waterfall-axis">
         <div class="wf-gutter">Action</div>
         <div class="wf-axis-track">
+          <span
+            v-if="focusBandStyle"
+            class="wf-axis-focus"
+            :style="focusBandStyle"
+            :title="focusDescription"
+          ></span>
           <span v-for="tick in ticks" :key="tick.pct" class="wf-tick" :style="{ left: `${tick.pct}%` }">
             {{ tick.label }}
           </span>
+        </div>
+      </div>
+
+      <div v-if="attributionLanes.length" class="waterfall-attribution-lanes">
+        <div
+          v-for="lane in attributionLanes"
+          :key="lane.id"
+          class="wf-attribution-lane"
+        >
+          <div class="wf-gutter">
+            {{ lane.label }}
+            <small>{{ lane.segments.length }}</small>
+          </div>
+          <div class="wf-attribution-track">
+            <button
+              v-for="segment in lane.segments"
+              :key="segment.id"
+              type="button"
+              class="wf-attribution-segment"
+              :class="segment.className"
+              :style="segment.style"
+              :title="segment.title"
+              @click="focusLaneSegment(segment)"
+            >
+              <span v-if="segment.showLabel">{{ segment.label }}</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -68,9 +230,13 @@
         <div
           v-for="row in rows"
           :key="row.id"
-          v-memo="[row.id, row.expanded, row.barTitle, selectedDetailId, axisWindowKey]"
+          v-memo="[row.id, row.expanded, row.barTitle, selectedDetailId, axisWindowKey, focusActionKey]"
           class="wf-row"
-          :class="{ selected: row.id === selectedDetailId }"
+          :class="{
+            selected: row.id === selectedDetailId,
+            'attribution-match': isFocusAction(row.id),
+          }"
+          :data-action-id="row.id"
           @click="select(row)"
           @dblclick="zoomTo(row)"
         >
@@ -133,6 +299,13 @@
             </button>
           </div>
           <div class="wf-track">
+            <span
+              v-if="focusBandStyle"
+              class="wf-focus-band"
+              :class="{ linked: isFocusAction(row.id) }"
+              :style="focusBandStyle"
+              :title="isFocusAction(row.id) ? focusDescription : undefined"
+            ></span>
             <template v-if="row.barSegments?.length">
               <div
                 v-for="(segment, index) in row.barSegments"
@@ -179,11 +352,22 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
-import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Search, ZoomIn } from '@lucide/vue';
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  ChevronsDownUp,
+  ChevronsUpDown,
+  Gauge,
+  Search,
+  ZoomIn,
+} from '@lucide/vue';
 
 import DetailPanel from '../../../components/DetailPanel.vue';
 import DurationBadge from '../../../components/DurationBadge.vue';
+import { formatAttributionDuration } from '../../../components/time-attribution/model';
 import { TABLE_RENDER_LIMITS } from '../../tableConfig';
 import { normalizeTableQuery } from '../../tableModel';
 import {
@@ -195,6 +379,7 @@ import {
   defaultActiveGroups,
   emptyWaterfallModel,
   findWaterfallNode,
+  findWaterfallPath,
   flattenMatchingWaterfall,
   flattenVisibleWaterfall,
   formatOffset,
@@ -223,14 +408,28 @@ const props = defineProps({
     type: String,
     default: '',
   },
+  focusInterval: {
+    type: Object,
+    default: null,
+  },
+  attribution: {
+    type: Object,
+    default: null,
+  },
 });
+
+const emit = defineEmits(['open-attribution', 'open-waterfall']);
 
 const expandedIds = ref(new Set());
 const activeGroups = ref(new Set());
 const zoomId = ref(null);
+const focusEnabled = ref(true);
+const bottlenecksExpanded = ref(true);
+const expandedBottleneckGroups = ref(new Set());
 const visibleLimit = ref(TABLE_RENDER_LIMITS.initialRows);
 const selectedDetailId = ref(null);
 const selectedDetail = ref(null);
+const waterfallScroll = ref(null);
 const model = ref(emptyWaterfallModel());
 const modelBuilding = ref(false);
 let modelBuildToken = 0;
@@ -312,11 +511,196 @@ const zoomLabel = computed(() => {
   return [node.label, node.target].filter(Boolean).join(' ');
 });
 const displayRoots = computed(() => (zoomNode.value ? [zoomNode.value] : roots.value));
+const focusActionIds = computed(() =>
+  Array.from(
+    new Set(
+      (props.focusInterval?.actionIds ?? [])
+        .map((actionId) => String(actionId))
+        .filter(Boolean),
+    ),
+  ),
+);
+const focusActionIdSet = computed(() => new Set(focusActionIds.value));
+const focusActionKey = computed(() => focusActionIds.value.join('|'));
+const focusPaths = computed(() =>
+  focusActionIds.value
+    .map((actionId) => findWaterfallPath(roots.value, actionId))
+    .filter((path) => path.length),
+);
+const primaryFocusPath = computed(() => focusPaths.value[0] ?? []);
+const focusMatchCount = computed(() => focusPaths.value.length);
+const focusWindow = computed(() => {
+  if (!focusEnabled.value || !props.focusInterval || !window.value?.startNanos) {
+    return null;
+  }
+  try {
+    const startNanos = BigInt(props.focusInterval.startNanos);
+    const endNanos = BigInt(props.focusInterval.endNanos);
+    if (endNanos <= startNanos) {
+      return null;
+    }
+    return {
+      startMs: Number(startNanos - window.value.startNanos) / 1_000_000,
+      spanMs: Math.max(Number(endNanos - startNanos) / 1_000_000, 0.001),
+    };
+  } catch {
+    return null;
+  }
+});
+const focusTitle = computed(() => {
+  const source = props.focusInterval?.source ?? 'Time Attribution';
+  const dimension = {
+    category: 'Category',
+    round: 'Round',
+    model: 'Model',
+    model_request: 'Model request',
+    tool: 'Agent Tool',
+    command: 'Command',
+    command_occurrence: 'Command occurrence',
+    unattributed_gap: 'Unattributed gap',
+  }[props.focusInterval?.dimension];
+  const context = [dimension, props.focusInterval?.label].filter(Boolean).join(' · ');
+  return context ? `${source} · ${context}` : `${source} interval`;
+});
+const focusDescription = computed(() => {
+  if (!focusWindow.value) {
+    return '';
+  }
+  const start = focusWindow.value.startMs;
+  const end = start + focusWindow.value.spanMs;
+  const range = `+${formatOffset(start)} → +${formatOffset(end)}`;
+  const duration = formatOffset(focusWindow.value.spanMs);
+  return [props.focusInterval?.description, `${duration} · ${range}`]
+    .filter(Boolean)
+    .join(' · ');
+});
+const focusMatchLabel = computed(() => {
+  if (!focusActionIds.value.length) {
+    return 'Time range';
+  }
+  if (!focusMatchCount.value) {
+    return 'Linked action unavailable';
+  }
+  return `${focusMatchCount.value}/${focusActionIds.value.length} linked ${
+    focusActionIds.value.length === 1 ? 'action' : 'actions'
+  }`;
+});
+const focusOccurrences = computed(() =>
+  attributionOccurrences(
+    props.attribution,
+    props.focusInterval?.dimension,
+    props.focusInterval?.key,
+  ),
+);
+const focusOccurrenceIndex = computed(() => {
+  const start = String(props.focusInterval?.startNanos ?? '');
+  const end = String(props.focusInterval?.endNanos ?? '');
+  return focusOccurrences.value.findIndex(
+    (occurrence) => occurrence.startNanos === start && occurrence.endNanos === end,
+  );
+});
+const focusAxisWindow = computed(() =>
+  focusWindow.value
+    ? contextualFocusWindow(focusWindow.value, window.value.spanMs)
+    : null,
+);
 const axisWindow = computed(() =>
   zoomNode.value
     ? subtreeWindow(zoomNode.value, window.value.spanMs)
-    : { startMs: 0, spanMs: window.value.spanMs },
+    : focusAxisWindow.value ?? { startMs: 0, spanMs: window.value.spanMs },
 );
+const focusBandStyle = computed(() => {
+  if (!focusWindow.value || zoomNode.value) {
+    return null;
+  }
+  const left = ((focusWindow.value.startMs - axisWindow.value.startMs) / axisWindow.value.spanMs) * 100;
+  const width = (focusWindow.value.spanMs / axisWindow.value.spanMs) * 100;
+  return {
+    left: `${Math.max(left, 0)}%`,
+    width: `${Math.min(Math.max(width, 0.35), 100 - Math.max(left, 0))}%`,
+  };
+});
+const attributionLanes = computed(() => {
+  if (!props.attribution || !window.value?.startNanos) {
+    return [];
+  }
+  return [
+    {
+      id: 'categories',
+      label: 'Agent / Model',
+      segments: projectAttributionLane(
+        props.attribution.segments,
+        'category',
+        axisWindow.value,
+        window.value.startNanos,
+      ),
+    },
+    {
+      id: 'commands',
+      label: 'Commands',
+      segments: projectAttributionLane(
+        props.attribution.command_segments,
+        'command',
+        axisWindow.value,
+        window.value.startNanos,
+      ),
+    },
+  ].filter((lane) => lane.segments.length);
+});
+const bottleneckGroups = computed(() => {
+  const bottlenecks = props.attribution?.bottlenecks;
+  if (!bottlenecks) {
+    return [];
+  }
+  const displayLimit = Math.max(Number(bottlenecks.default_display_limit ?? 5), 1);
+  const definitions = [
+    {
+      id: 'models',
+      label: 'Model requests',
+      countNoun: 'requests',
+      dimension: 'model_request',
+      collection: bottlenecks.model_requests,
+      emptyLabel: 'No observable model requests',
+    },
+    {
+      id: 'commands',
+      label: 'Commands',
+      countNoun: 'occurrences',
+      dimension: 'command_occurrence',
+      collection: bottlenecks.commands,
+      emptyLabel: 'No actual command intervals',
+    },
+    {
+      id: 'unattributed',
+      label: 'Unattributed gaps',
+      countNoun: 'gaps',
+      dimension: 'unattributed_gap',
+      collection: bottlenecks.unattributed_gaps,
+      emptyLabel: 'No unattributed gaps',
+    },
+  ];
+  return definitions.map((definition) => {
+    const observedCount = Number(definition.collection?.observed_count ?? 0);
+    const allItems = decorateBottleneckItems(
+      definition.collection?.items,
+      props.attribution?.scope?.duration_nanos,
+      window.value?.startNanos,
+    );
+    const isExpanded = expandedBottleneckGroups.value.has(definition.id);
+    const items = isExpanded ? allItems : allItems.slice(0, displayLimit);
+    return {
+      ...definition,
+      observedCount,
+      displayLimit,
+      isExpanded,
+      canExpand: allItems.length > displayLimit,
+      countLabel: observedCount
+        ? `Showing ${items.length} of ${observedCount} ${definition.countNoun}`
+        : `0 ${definition.countNoun}`,
+      items,
+    };
+  });
+});
 const axisWindowKey = computed(() => {
   const { startMs, spanMs } = axisWindow.value;
   return `${startMs}:${spanMs}`;
@@ -331,10 +715,13 @@ const ticks = computed(() => {
 });
 
 const allRows = computed(() => {
-  const flat = queryActive.value
+  const flat = queryActive.value && !focusWindow.value
     ? flattenMatchingWaterfall(displayRoots.value, normalizedQuery.value, activeGroups.value)
     : flattenVisibleWaterfall(displayRoots.value, expandedIds.value, activeGroups.value);
-  return decorateWaterfallRows(flat, axisWindow.value);
+  const visible = focusWindow.value && !zoomNode.value
+    ? flat.filter((row) => rowOverlapsWindow(row, focusWindow.value))
+    : flat;
+  return decorateWaterfallRows(visible, axisWindow.value);
 });
 
 const totalRows = computed(() => allRows.value.length);
@@ -350,6 +737,23 @@ watch(
     expandedIds.value = new Set(collectDefaultExpandedIds(nextModel.roots));
     activeGroups.value = defaultActiveGroups(nextModel.groups);
     zoomId.value = null;
+    queueFocusApplication();
+  },
+);
+
+watch(
+  () => props.focusInterval?.nonce,
+  () => {
+    focusEnabled.value = true;
+    zoomId.value = null;
+    queueFocusApplication();
+  },
+);
+
+watch(
+  () => props.attribution?.trace?.id,
+  () => {
+    expandedBottleneckGroups.value = new Set();
   },
 );
 
@@ -359,17 +763,122 @@ watch([displayRoots, normalizedQuery, activeGroups], () => {
 
 function select(row) {
   selectedDetailId.value = row.id;
-  selectedDetail.value = actionDetail(row.action, {
+  const detail = actionDetail(row.action, {
     ...row.llmMessages,
     scope: row.llmScope,
     parent: row.agentContext,
     ttft: row.llmPhases?.gap?.durMs ? formatOffset(row.llmPhases.gap.durMs) : null,
   });
+  if (focusWindow.value && isFocusAction(row.id)) {
+    detail.rows = {
+      attribution: focusTitle.value,
+      attributed_duration: formatOffset(focusWindow.value.spanMs),
+      attributed_interval: focusDescription.value,
+      ...detail.rows,
+    };
+  }
+  selectedDetail.value = detail;
 }
 
 function clearDetail() {
   selectedDetailId.value = null;
   selectedDetail.value = null;
+}
+
+function isFocusAction(actionId) {
+  return focusEnabled.value && focusActionIdSet.value.has(String(actionId));
+}
+
+function queueFocusApplication() {
+  nextTick(applyAttributionFocus);
+}
+
+async function applyAttributionFocus() {
+  if (!focusEnabled.value || !focusWindow.value || !primaryFocusPath.value.length) {
+    return;
+  }
+  const nextExpanded = new Set(expandedIds.value);
+  const nextGroups = new Set(activeGroups.value);
+  for (const path of focusPaths.value) {
+    for (const ancestor of path.slice(0, -1)) {
+      if (ancestor.hasChildren) {
+        nextExpanded.add(ancestor.id);
+      }
+    }
+    for (const node of path) {
+      nextGroups.add(node.kindGroup);
+    }
+  }
+  expandedIds.value = nextExpanded;
+  activeGroups.value = nextGroups;
+  await nextTick();
+
+  const targetRow = focusActionIds.value
+    .map((actionId) => allRows.value.find((row) => row.id === actionId))
+    .find(Boolean);
+  if (!targetRow) {
+    return;
+  }
+  const rowIndex = allRows.value.findIndex((row) => row.id === targetRow.id);
+  if (rowIndex >= visibleLimit.value) {
+    visibleLimit.value = rowIndex + 1;
+    await nextTick();
+  }
+  select(targetRow);
+  await nextTick();
+  const element = Array.from(
+    waterfallScroll.value?.querySelectorAll('.wf-row') ?? [],
+  ).find((row) => row.dataset.actionId === targetRow.id);
+  element?.scrollIntoView({ block: 'center', inline: 'nearest' });
+}
+
+function navigateOccurrence(delta) {
+  const index = focusOccurrenceIndex.value + delta;
+  const occurrence = focusOccurrences.value[index];
+  if (!occurrence) {
+    return;
+  }
+  emit('open-waterfall', {
+    ...props.focusInterval,
+    ...occurrence,
+  });
+}
+
+function focusLaneSegment(segment) {
+  emit('open-waterfall', segment.target);
+}
+
+function focusBottleneck(group, item, index) {
+  emit('open-waterfall', {
+    startNanos: item.start_unix_nanos,
+    endNanos: item.end_unix_nanos,
+    actionIds: Array.isArray(item.action_ids) ? item.action_ids : [],
+    source: 'Duration bottlenecks',
+    dimension: group.dimension,
+    key: item.key,
+    label: item.label,
+    description: [
+      `#${index + 1} longest ${group.label.toLowerCase()}`,
+      item.description,
+      bottleneckStatusDescription(item.status),
+    ].filter(Boolean).join(' · '),
+  });
+}
+
+function toggleBottleneckGroup(groupId) {
+  const next = new Set(expandedBottleneckGroups.value);
+  if (next.has(groupId)) {
+    next.delete(groupId);
+  } else {
+    next.add(groupId);
+  }
+  expandedBottleneckGroups.value = next;
+}
+
+function isFocusedBottleneck(item) {
+  return focusEnabled.value
+    && String(item.start_unix_nanos) === String(props.focusInterval?.startNanos ?? '')
+    && String(item.end_unix_nanos) === String(props.focusInterval?.endNanos ?? '');
 }
 
 function isGroupActive(group) {
@@ -422,8 +931,215 @@ function zoomTo(row) {
   expandedIds.value = next;
 }
 
-function resetZoom() {
-  zoomId.value = null;
+function resetView() {
+  if (zoomId.value) {
+    zoomId.value = null;
+    queueFocusApplication();
+    return;
+  }
+  focusEnabled.value = false;
+  clearDetail();
+  expandedIds.value = new Set(collectDefaultExpandedIds(roots.value));
+  activeGroups.value = defaultActiveGroups(groups.value);
+  visibleLimit.value = TABLE_RENDER_LIMITS.initialRows;
+}
+
+function rowOverlapsWindow(row, targetWindow) {
+  const targetEnd = targetWindow.startMs + targetWindow.spanMs;
+  const rowEnd = row.live
+    ? Number.POSITIVE_INFINITY
+    : row.startOffsetMs + Math.max(row.durMs ?? 0, 0);
+  return row.startOffsetMs <= targetEnd && rowEnd >= targetWindow.startMs;
+}
+
+function contextualFocusWindow(targetWindow, globalSpanMs) {
+  const minimumPadding = Math.min(Math.max(globalSpanMs * 0.01, 2), 25);
+  const padding = Math.max(targetWindow.spanMs * 0.06, minimumPadding);
+  const startMs = Math.max(targetWindow.startMs - padding, 0);
+  const endMs = Math.min(
+    targetWindow.startMs + targetWindow.spanMs + padding,
+    globalSpanMs,
+  );
+  return {
+    startMs,
+    spanMs: Math.max(endMs - startMs, targetWindow.spanMs, 0.001),
+  };
+}
+
+function attributionOccurrences(attribution, dimension, key) {
+  if (!attribution || !dimension || !key) {
+    return [];
+  }
+  let segments = [];
+  if (dimension === 'command') {
+    segments = (attribution.command_segments ?? []).filter(
+      (segment) => segment.key === key,
+    );
+  } else if (dimension === 'model') {
+    segments = (attribution.segments ?? []).filter(
+      (segment) => segment.category === 'model_side' && segment.key === key,
+    );
+  } else if (dimension === 'tool') {
+    segments = (attribution.segments ?? []).filter(
+      (segment) => segment.category === 'agent_side' && segment.key === key,
+    );
+  } else if (dimension === 'category') {
+    segments = (attribution.segments ?? []).filter(
+      (segment) => segment.category === key,
+    );
+  } else if (dimension === 'model_request') {
+    segments = (attribution.bottlenecks?.model_requests?.items ?? []).filter(
+      (segment) => segment.key === key,
+    );
+  } else if (dimension === 'command_occurrence') {
+    segments = (attribution.bottlenecks?.commands?.items ?? []).filter(
+      (segment) => segment.key === key,
+    );
+  } else if (dimension === 'unattributed_gap') {
+    segments = attribution.bottlenecks?.unattributed_gaps?.items ?? [];
+  }
+  return segments
+    .map((segment) => ({
+      startNanos: segment.start_unix_nanos,
+      endNanos: segment.end_unix_nanos,
+      actionIds: Array.isArray(segment.action_ids) ? segment.action_ids : [],
+    }))
+    .sort((left, right) => compareNanos(left.startNanos, right.startNanos));
+}
+
+function decorateBottleneckItems(items, traceDurationNanos, windowStartNanos) {
+  const rows = items ?? [];
+  const durations = rows.map((item) => parseNanos(item.duration_nanos));
+  const longest = durations.reduce((current, duration) => (
+    duration > current ? duration : current
+  ), 0n);
+  const traceDuration = parseNanos(traceDurationNanos);
+  return rows.map((item, index) => {
+    const duration = durations[index];
+    return {
+      ...item,
+      offsetLabel: `+${formatOffset(nanosOffsetMs(item.start_unix_nanos, windowStartNanos))}`,
+      relativeWidth: ratioPercent(duration, longest, 1),
+      traceShare: `${ratioPercent(duration, traceDuration, 2).toFixed(2)}% Trace`,
+    };
+  });
+}
+
+function bottleneckStatusLabel(status) {
+  return {
+    in_progress: 'Live',
+    partial: 'Partial',
+    provisional: 'Provisional',
+    error: 'Error',
+  }[status] ?? status;
+}
+
+function bottleneckStatusDescription(status) {
+  return status && status !== 'complete'
+    ? `${bottleneckStatusLabel(status)} interval`
+    : '';
+}
+
+function parseNanos(value) {
+  try {
+    return BigInt(value ?? 0);
+  } catch {
+    return 0n;
+  }
+}
+
+function ratioPercent(value, total, decimals) {
+  if (value <= 0n || total <= 0n) {
+    return 0;
+  }
+  const scale = 10n ** BigInt(decimals);
+  const scaled = (value * 100n * scale + total / 2n) / total;
+  return Number(scaled) / Number(scale);
+}
+
+function projectAttributionLane(rows, laneKind, targetWindow, windowStartNanos) {
+  const axisEnd = targetWindow.startMs + targetWindow.spanMs;
+  return (rows ?? [])
+    .map((row, index) => {
+      const startMs = nanosOffsetMs(row.start_unix_nanos, windowStartNanos);
+      const endMs = nanosOffsetMs(row.end_unix_nanos, windowStartNanos);
+      const clippedStart = Math.max(startMs, targetWindow.startMs);
+      const clippedEnd = Math.min(endMs, axisEnd);
+      if (clippedEnd <= clippedStart) {
+        return null;
+      }
+      const left = ((clippedStart - targetWindow.startMs) / targetWindow.spanMs) * 100;
+      const width = ((clippedEnd - clippedStart) / targetWindow.spanMs) * 100;
+      const context = laneTargetContext(row, laneKind);
+      return {
+        id: `${laneKind}-${row.id ?? row.key ?? index}-${index}`,
+        label: row.label,
+        className: laneKind === 'command'
+          ? `lane-command-${row.kind}`
+          : `lane-category-${row.category}`,
+        style: {
+          left: `${left}%`,
+          width: `${width}%`,
+        },
+        showLabel: width >= 7,
+        title: `${row.label} · ${formatAttributionDuration(row.duration_nanos)}`,
+        target: {
+          startNanos: row.start_unix_nanos,
+          endNanos: row.end_unix_nanos,
+          actionIds: Array.isArray(row.action_ids) ? row.action_ids : [],
+          source: 'Waterfall attribution lane',
+          ...context,
+        },
+      };
+    })
+    .filter(Boolean);
+}
+
+function laneTargetContext(row, laneKind) {
+  if (laneKind === 'command') {
+    return {
+      dimension: 'command',
+      key: row.key,
+      label: row.label,
+    };
+  }
+  if (row.category === 'model_side') {
+    return {
+      dimension: 'model',
+      key: row.key,
+      label: row.label,
+    };
+  }
+  if (row.category === 'agent_side' && row.subcategory !== 'orchestration') {
+    return {
+      dimension: 'tool',
+      key: row.key,
+      label: row.label,
+    };
+  }
+  return {
+    dimension: 'category',
+    key: row.category,
+    label: row.label,
+  };
+}
+
+function nanosOffsetMs(value, origin) {
+  try {
+    return Number(BigInt(value) - BigInt(origin)) / 1_000_000;
+  } catch {
+    return 0;
+  }
+}
+
+function compareNanos(left, right) {
+  try {
+    const leftNanos = BigInt(left);
+    const rightNanos = BigInt(right);
+    return leftNanos < rightNanos ? -1 : leftNanos > rightNanos ? 1 : 0;
+  } catch {
+    return String(left).localeCompare(String(right));
+  }
 }
 </script>
 <style src="./waterfall.css" scoped></style>

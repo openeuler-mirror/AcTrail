@@ -76,6 +76,17 @@ pub fn trace_summary_json(root: &Path, trace_id: u64) -> Result<String, String> 
     ))
 }
 
+pub fn trace_time_attribution_json(root: &Path, trace_id: u64) -> Result<String, String> {
+    let row = row_by_ui_id(root, trace_id)?;
+    let Some((storage, local_trace_id)) = sqlite_storage_for_row(&row)? else {
+        return Err(format!(
+            "cluster trace {} has no trace.sqlite semantic snapshot; time attribution cannot be computed reliably",
+            row.trace_uid
+        ));
+    };
+    super::trace_time_attribution_json(&storage, local_trace_id)
+}
+
 pub fn trace_events_json(root: &Path, trace_id: u64) -> Result<String, String> {
     let row = row_by_ui_id(root, trace_id)?;
     if let Some((storage, local_trace_id)) = sqlite_storage_for_row(&row)? {
