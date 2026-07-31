@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use model_core::ids::TraceId;
 use model_core::payload::{PayloadSegment, PayloadSourceBoundary};
@@ -19,6 +20,7 @@ pub(crate) struct WasmStoreState {
     plugin_config: Option<Vec<u8>>,
     payload_snapshot: BTreeMap<String, PayloadSnapshotEntry>,
     observation_trace_context: Option<ObservationTraceContext>,
+    requested_reevaluation_at: Option<SystemTime>,
     alert_host: Option<Arc<dyn AlertHost>>,
     post_trace_host: Option<Arc<dyn PostTraceHost>>,
     post_trace_task: Option<PostTraceTaskContext>,
@@ -109,6 +111,7 @@ impl WasmStoreState {
             plugin_config: None,
             payload_snapshot: BTreeMap::new(),
             observation_trace_context: None,
+            requested_reevaluation_at: None,
             alert_host: None,
             post_trace_host: None,
             post_trace_task: None,
@@ -186,6 +189,7 @@ impl WasmStoreState {
         activity_page_max_count: usize,
         activity_total_max_count: usize,
     ) {
+        self.requested_reevaluation_at = None;
         self.observation_trace_context = Some(ObservationTraceContext {
             trace_id,
             working_directory,
@@ -201,6 +205,19 @@ impl WasmStoreState {
 
     pub(crate) fn clear_observation_trace_context(&mut self) {
         self.observation_trace_context = None;
+    }
+
+    pub(crate) fn request_reevaluation_at(&mut self, requested_at: SystemTime) {
+        if self
+            .requested_reevaluation_at
+            .is_none_or(|current| requested_at < current)
+        {
+            self.requested_reevaluation_at = Some(requested_at);
+        }
+    }
+
+    pub(crate) fn take_requested_reevaluation_at(&mut self) -> Option<SystemTime> {
+        self.requested_reevaluation_at.take()
     }
 
     pub(crate) fn set_alert_host(&mut self, host: Option<Arc<dyn AlertHost>>) {

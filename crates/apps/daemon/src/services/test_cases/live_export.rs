@@ -267,6 +267,7 @@ impl ObservationConsumer for FailingConsumer {
                 queue_capacity: Some(FAILING_EXPORTER_QUEUE_CAPACITY),
                 dropped_records: u64::try_from(batch.semantic_actions.len()).unwrap_or(u64::MAX),
             }],
+            reevaluate_at: None,
         })
     }
 }

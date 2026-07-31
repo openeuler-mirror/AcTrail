@@ -136,7 +136,11 @@ impl PluginState {
         if let Some(val) = parse_toml_u64(config_str, "alert.behavior", "state_ttl_seconds") {
             self.state_ttl_secs = val;
         }
-        if let Some(val) = parse_toml_bool(config_str, "alert.behavior", "policy_denied_counts_as_failure") {
+        if let Some(val) = parse_toml_bool(
+            config_str,
+            "alert.behavior",
+            "policy_denied_counts_as_failure",
+        ) {
             self.policy_denied_counts_as_failure = val;
         }
         if let Some(val) = parse_toml_string(config_str, "alert", "desensitization") {
@@ -528,8 +532,7 @@ pub unsafe extern "C" fn memcmp(s1: *const u8, s2: *const u8, n: usize) -> i32 {
 struct SyncCell<T>(T);
 unsafe impl<T> Sync for SyncCell<T> {}
 
-static STATE: SyncCell<UnsafeCell<Option<RefCell<PluginState>>>> =
-    SyncCell(UnsafeCell::new(None));
+static STATE: SyncCell<UnsafeCell<Option<RefCell<PluginState>>>> = SyncCell(UnsafeCell::new(None));
 
 fn state() -> &'static RefCell<PluginState> {
     unsafe {
@@ -596,9 +599,7 @@ impl Guest for Component {
                         .iter()
                         .find(|attr| attr.key == "process.executable")
                         .map(|attr| attr.value.as_str())
-                        .and_then(|exec| {
-                            exec.rsplit('/').next().filter(|s| !s.is_empty())
-                        })
+                        .and_then(|exec| exec.rsplit('/').next().filter(|s| !s.is_empty()))
                 })
                 .or_else(|| {
                     // Fallback: 从 command.line 提取第一个单词（如 "ls /tmp" → "ls"）
@@ -607,9 +608,7 @@ impl Guest for Component {
                         .iter()
                         .find(|attr| attr.key == "command.line")
                         .map(|attr| attr.value.as_str())
-                        .and_then(|line| {
-                            line.split_whitespace().next().filter(|s| !s.is_empty())
-                        })
+                        .and_then(|line| line.split_whitespace().next().filter(|s| !s.is_empty()))
                 })
                 .unwrap_or("unknown");
 
@@ -657,11 +656,14 @@ impl Guest for Component {
                 failure_summary,
             ) {
                 // 通过 alert-write 接口提交告警到 daemon
-                if let Ok(trace_ctx) = actrail::plugin::observation_context_read::trace_context_get() {
+                if let Ok(trace_ctx) =
+                    actrail::plugin::observation_context_read::trace_context_get()
+                {
                     let alert_token = trace_ctx.alert_token.unwrap_or_default();
                     let draft = actrail::plugin::types::AlertDraft {
                         definition_key: "consecutive-failure".to_string(),
                         payload_json: alert_json,
+                        deduplication_key: None,
                     };
                     let request = actrail::plugin::types::AlertWriteRequest {
                         trace_id: action.trace_id.clone(),

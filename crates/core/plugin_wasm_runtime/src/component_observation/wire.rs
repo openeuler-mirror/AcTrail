@@ -322,6 +322,7 @@ pub(super) fn parse_observation_report(
             queue_capacity: Some(queue_capacity),
             dropped_records,
         }],
+        reevaluate_at: None,
     })
 }
 

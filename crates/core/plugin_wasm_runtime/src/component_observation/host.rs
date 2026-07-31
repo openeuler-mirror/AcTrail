@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use plugin_system::PluginRuntimeError;
 use wasmtime::Engine;
@@ -15,6 +15,9 @@ const READ_CONFIG_IMPORT: &str = "read-config";
 const ENV_READ_IMPORT: &str = "env-read";
 const READ_PAYLOAD_IMPORT: &str = "read-payload";
 const TRACE_CONTEXT_GET_IMPORT: &str = "trace-context-get";
+const CURRENT_TIME_MS_IMPORT: &str = "current-time-ms";
+const REQUEST_REEVALUATION_AT_IMPORT: &str = "request-reevaluation-at";
+const MIN_REEVALUATION_DELAY: Duration = Duration::from_millis(10);
 const COMPONENT_ENV_READ_DENIED: &str = "denied";
 const COMPONENT_ENV_READ_INVALID: &str = "invalid";
 const COMPONENT_ENV_READ_NOT_FOUND: &str = "not-found";
@@ -87,9 +90,80 @@ pub(super) fn component_linker(
                 format!("define trace-context-get import failed: {error}"),
             )
         })?;
+    observation_context
+        .func_new(CURRENT_TIME_MS_IMPORT, |_store, _ty, _params, results| {
+            set_current_time_result(results);
+            Ok(())
+        })
+        .map_err(|error| {
+            PluginRuntimeError::new(
+                "wasm_runtime",
+                format!("define current-time-ms import failed: {error}"),
+            )
+        })?;
+    observation_context
+        .func_new(
+            REQUEST_REEVALUATION_AT_IMPORT,
+            |mut store, _ty, params, results| {
+                let result = request_reevaluation_at(store.data_mut(), params);
+                set_empty_result(results, result);
+                Ok(())
+            },
+        )
+        .map_err(|error| {
+            PluginRuntimeError::new(
+                "wasm_runtime",
+                format!("define request-reevaluation-at import failed: {error}"),
+            )
+        })?;
     register_post_trace_interfaces(&mut linker)?;
     register_alert_interface(&mut linker)?;
     Ok(linker)
+}
+
+fn set_current_time_result(results: &mut [Val]) {
+    let Some(result) = results.first_mut() else {
+        return;
+    };
+    *result = match unix_time_ms(SystemTime::now()) {
+        Ok(timestamp) => Val::Result(Ok(Some(Box::new(Val::U64(timestamp))))),
+        Err(error) => Val::Result(Err(Some(Box::new(Val::String(error))))),
+    };
+}
+
+fn request_reevaluation_at(state: &mut WasmStoreState, params: &[Val]) -> Result<(), String> {
+    let [Val::U64(unix_time_ms)] = params else {
+        return Err("request-reevaluation-at received invalid parameters".to_string());
+    };
+    if state.observation_trace_context().is_none() {
+        return Err("observation trace context is unavailable".to_string());
+    }
+    let requested_at = UNIX_EPOCH
+        .checked_add(Duration::from_millis(*unix_time_ms))
+        .ok_or_else(|| "reevaluation deadline exceeds system time range".to_string())?;
+    let earliest_at = SystemTime::now()
+        .checked_add(MIN_REEVALUATION_DELAY)
+        .ok_or_else(|| "minimum reevaluation deadline exceeds system time range".to_string())?;
+    state.request_reevaluation_at(requested_at.max(earliest_at));
+    Ok(())
+}
+
+fn unix_time_ms(time: SystemTime) -> Result<u64, String> {
+    let duration = time
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "system time is before the Unix epoch".to_string())?;
+    u64::try_from(duration.as_millis())
+        .map_err(|_| "system time milliseconds exceed u64".to_string())
+}
+
+fn set_empty_result(results: &mut [Val], result: Result<(), String>) {
+    let Some(slot) = results.first_mut() else {
+        return;
+    };
+    *slot = match result {
+        Ok(()) => Val::Result(Ok(None)),
+        Err(error) => Val::Result(Err(Some(Box::new(Val::String(error))))),
+    };
 }
 
 fn set_trace_context_result(state: &WasmStoreState, results: &mut [Val]) {

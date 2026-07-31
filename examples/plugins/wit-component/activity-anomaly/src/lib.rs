@@ -1,7 +1,9 @@
-#![no_std]
+#![cfg_attr(not(test), no_std)]
+#![cfg_attr(test, allow(dead_code))]
 
 extern crate alloc;
 
+#[cfg(not(test))]
 use alloc::alloc::{Layout, alloc, realloc};
 use alloc::collections::BTreeMap;
 use alloc::format;
@@ -18,7 +20,7 @@ wit_bindgen::generate!({
 
 use actrail::plugin::types::{
     AlertDraft, AlertWriteRequest, CommandExecutionRecord, ConfigReadStatus, LlmExchangeRecord,
-    ObservationEventFamily, TraceActivityContext,
+    TraceActivityContext,
 };
 use exports::actrail::plugin::observation_consumer::{
     Guest as ObservationGuest, ObservationBatch, ObservationReport,
@@ -112,10 +114,7 @@ impl ActivityAnomalyPlugin {
                 "llm.call" | "llm.request" | "llm.response" | "command.invocation"
             )
         });
-        let can_complete_existing_activity = self.trace_states.contains_key(&batch.trace_id)
-            && batch
-                .families
-                .contains(&ObservationEventFamily::SemanticActionLink);
+        let can_complete_existing_activity = self.trace_states.contains_key(&batch.trace_id);
         if !has_relevant_activity && !can_complete_existing_activity {
             return Ok(());
         }
@@ -145,19 +144,19 @@ impl ActivityAnomalyPlugin {
                 },
             );
         }
-        self.evaluate(&batch.trace_id)
+        self.evaluate(&batch.trace_id, true)
     }
 
     fn analyze(&mut self, trace_id: &str) -> Result<(), String> {
         if !self.trace_states.contains_key(trace_id) {
             return Ok(());
         }
-        let result = self.evaluate(trace_id);
+        let result = self.evaluate(trace_id, false);
         self.trace_states.remove(trace_id);
         result
     }
 
-    fn evaluate(&mut self, trace_id: &str) -> Result<(), String> {
+    fn evaluate(&mut self, trace_id: &str, allow_reevaluation: bool) -> Result<(), String> {
         let state = self
             .trace_states
             .get(trace_id)
@@ -193,7 +192,16 @@ impl ActivityAnomalyPlugin {
         let command_payload = if reported.command_duration {
             None
         } else {
-            let command_findings = self.read_commands()?;
+            let observed_at_ms = actrail::plugin::observation_context_read::current_time_ms()?;
+            let command_findings = self.read_commands(observed_at_ms)?;
+            if command_findings.total_count == 0
+                && allow_reevaluation
+                && let Some(reevaluate_at_ms) = command_findings.reevaluate_at_ms
+            {
+                actrail::plugin::observation_context_read::request_reevaluation_at(
+                    reevaluate_at_ms,
+                )?;
+            }
             (command_findings.total_count > 0).then(|| {
                 let truncated_count = command_findings.truncated_count();
                 CommandDurationPayload {
@@ -267,7 +275,7 @@ impl ActivityAnomalyPlugin {
         }
     }
 
-    fn read_commands(&self) -> Result<CommandFindingSet, String> {
+    fn read_commands(&self, observed_at_ms: u64) -> Result<CommandFindingSet, String> {
         let mut findings = CommandFindingSet::default();
         if !self.config.command_duration.enabled {
             return Ok(findings);
@@ -280,7 +288,7 @@ impl ActivityAnomalyPlugin {
                 self.config.page_size,
             )?;
             for command in page.commands {
-                self.observe_command(command, &mut findings)?;
+                self.observe_command(command, observed_at_ms, &mut findings)?;
             }
             offset = checked_next_offset(
                 requested_offset,
@@ -296,18 +304,32 @@ impl ActivityAnomalyPlugin {
     fn observe_command(
         &self,
         command: CommandExecutionRecord,
+        observed_at_ms: u64,
         findings: &mut CommandFindingSet,
     ) -> Result<(), String> {
         if !command.top_level_agent_child {
             return Ok(());
         }
-        let Some(ended_at_ms) = command.ended_at else {
-            return Ok(());
+        let duration_ms = match command.ended_at {
+            Some(ended_at_ms) => ended_at_ms
+                .checked_sub(command.started_at)
+                .ok_or_else(|| format!("command {} ended before it started", command.action_id))?,
+            None => observed_at_ms.saturating_sub(command.started_at),
         };
-        let duration_ms = ended_at_ms
-            .checked_sub(command.started_at)
-            .ok_or_else(|| format!("command {} ended before it started", command.action_id))?;
         if duration_ms <= self.config.command_duration.maximum_duration_ms {
+            if command.ended_at.is_none() {
+                let reevaluate_at_ms = command
+                    .started_at
+                    .checked_add(self.config.command_duration.maximum_duration_ms)
+                    .and_then(|deadline| deadline.checked_add(1))
+                    .ok_or_else(|| {
+                        format!(
+                            "command {} duration reevaluation deadline overflow",
+                            command.action_id
+                        )
+                    })?;
+                findings.request_reevaluation_at(reevaluate_at_ms);
+            }
             return Ok(());
         }
         findings.total_count = findings
@@ -315,15 +337,21 @@ impl ActivityAnomalyPlugin {
             .checked_add(1)
             .ok_or_else(|| "command finding count overflow".to_string())?;
         if findings.findings.len() < self.config.finding_max_count {
+            let status = if command.ended_at.is_none() {
+                "in_progress".to_string()
+            } else {
+                command.status
+            };
             findings.findings.push(CommandDurationFinding {
                 action_id: command.action_id,
                 process_id: command.process_id,
                 executable: command.executable,
                 command_line: command.command_line,
                 started_at_ms: command.started_at,
-                ended_at_ms,
+                observed_at_ms: command.ended_at.unwrap_or(observed_at_ms),
+                ended_at_ms: command.ended_at,
                 duration_ms,
-                status: command.status,
+                status,
                 exit_code: command.exit_code,
                 agent_action_id: command.agent_action_id,
             });
@@ -617,11 +645,21 @@ struct LlmGrowthPayload {
 struct CommandFindingSet {
     findings: Vec<CommandDurationFinding>,
     total_count: usize,
+    reevaluate_at_ms: Option<u64>,
 }
 
 impl CommandFindingSet {
     fn truncated_count(&self) -> usize {
         self.total_count.saturating_sub(self.findings.len())
+    }
+
+    fn request_reevaluation_at(&mut self, requested_at_ms: u64) {
+        if self
+            .reevaluate_at_ms
+            .is_none_or(|current| requested_at_ms < current)
+        {
+            self.reevaluate_at_ms = Some(requested_at_ms);
+        }
     }
 }
 
@@ -632,7 +670,8 @@ struct CommandDurationFinding {
     executable: Option<String>,
     command_line: Option<String>,
     started_at_ms: u64,
-    ended_at_ms: u64,
+    observed_at_ms: u64,
+    ended_at_ms: Option<u64>,
     duration_ms: u64,
     status: String,
     exit_code: Option<i32>,
@@ -669,18 +708,30 @@ fn submit_alert(
     definition_key: &str,
     payload: &impl Serialize,
 ) -> Result<(), String> {
+    let request = build_alert_request(trace_id, alert_token, definition_key, payload)?;
+    actrail::plugin::alert_write::submit(&request)
+}
+
+fn build_alert_request(
+    trace_id: &str,
+    alert_token: &[u8],
+    definition_key: &str,
+    payload: &impl Serialize,
+) -> Result<AlertWriteRequest, String> {
     let payload_json = serde_json::to_string(payload)
         .map_err(|error| format!("serialize {definition_key} alert payload failed: {error}"))?;
-    actrail::plugin::alert_write::submit(&AlertWriteRequest {
+    Ok(AlertWriteRequest {
         trace_id: trace_id.to_string(),
         alert_token: alert_token.to_vec(),
         draft: AlertDraft {
             definition_key: definition_key.to_string(),
             payload_json,
+            deduplication_key: Some(definition_key.to_string()),
         },
     })
 }
 
+#[cfg(not(test))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cabi_realloc(
     old_ptr: *mut u8,
@@ -707,6 +758,7 @@ pub unsafe extern "C" fn cabi_realloc(
     ptr
 }
 
+#[cfg(not(test))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn memcmp(left: *const u8, right: *const u8, len: usize) -> i32 {
     let mut index = 0;
@@ -721,9 +773,158 @@ pub unsafe extern "C" fn memcmp(left: *const u8, right: *const u8, len: usize) -
     0
 }
 
+#[cfg(not(test))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
     loop {}
 }
 
+#[cfg(not(test))]
 export!(Component);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn matching_activity_builds_alert_drafts() {
+        let config = test_config();
+        let context = TraceActivityContext {
+            root_container_id: None,
+            root_process_id: "process-root".to_string(),
+            display_name: "activity-anomaly-rule-test".to_string(),
+            profile_name: "activity-anomaly-rule-test".to_string(),
+        };
+        let exchange = LlmExchangeRecord {
+            call_action_id: "call-1".to_string(),
+            request_action_id: "request-1".to_string(),
+            response_action_id: Some("response-1".to_string()),
+            process_id: "process-agent".to_string(),
+            model: Some("test-model".to_string()),
+            server_address: Some("127.0.0.1:1".to_string()),
+            url_path: Some("/v1/messages".to_string()),
+            started_at: 1_000,
+            completed_at: Some(1_100),
+            request_body_bytes: 2,
+            request_raw_bytes: Some(2),
+            request_complete: true,
+            response_body_bytes: Some(2),
+            response_raw_bytes: Some(2),
+            response_complete: true,
+        };
+
+        let mut request_detector =
+            GrowthDetector::new("request", &config.request_growth, config.finding_max_count);
+        request_detector.observe(&exchange, GrowthDirection::Request);
+        let request = build_alert_request(
+            "trace-rule-test",
+            b"alert-token",
+            REQUEST_ALERT_KEY,
+            &request_detector.payload(&context),
+        )
+        .expect("request match should build an alert");
+        require_alert(&request, REQUEST_ALERT_KEY);
+
+        let mut response_detector = GrowthDetector::new(
+            "response",
+            &config.response_growth,
+            config.finding_max_count,
+        );
+        response_detector.observe(&exchange, GrowthDirection::Response);
+        let response = build_alert_request(
+            "trace-rule-test",
+            b"alert-token",
+            RESPONSE_ALERT_KEY,
+            &response_detector.payload(&context),
+        )
+        .expect("response match should build an alert");
+        require_alert(&response, RESPONSE_ALERT_KEY);
+
+        let plugin = ActivityAnomalyPlugin {
+            config,
+            trace_states: BTreeMap::new(),
+        };
+        let mut command_findings = CommandFindingSet::default();
+        plugin
+            .observe_command(
+                CommandExecutionRecord {
+                    action_id: "command-1".to_string(),
+                    process_id: "process-command".to_string(),
+                    executable: Some("/bin/sleep".to_string()),
+                    command_line: Some("sleep 1".to_string()),
+                    started_at: 1_000,
+                    ended_at: Some(1_600),
+                    status: "success".to_string(),
+                    exit_code: Some(0),
+                    agent_action_id: Some("agent-1".to_string()),
+                    parent_command_action_id: None,
+                    top_level_agent_child: true,
+                },
+                1_600,
+                &mut command_findings,
+            )
+            .expect("command match should be evaluated");
+        assert_eq!(command_findings.total_count, 1);
+        let truncated_count = command_findings.truncated_count();
+        let command = build_alert_request(
+            "trace-rule-test",
+            b"alert-token",
+            COMMAND_ALERT_KEY,
+            &CommandDurationPayload {
+                root_container_id: context.root_container_id,
+                root_process_id: context.root_process_id,
+                display_name: context.display_name,
+                profile_name: context.profile_name,
+                maximum_duration_ms: plugin.config.command_duration.maximum_duration_ms,
+                findings: command_findings.findings,
+                truncated_count,
+            },
+        )
+        .expect("command match should build an alert");
+        require_alert(&command, COMMAND_ALERT_KEY);
+    }
+
+    fn test_config() -> ActivityAnomalyConfig {
+        ActivityAnomalyConfig {
+            request_growth: test_growth_rule(),
+            response_growth: test_growth_rule(),
+            command_duration: CommandDurationRule {
+                enabled: true,
+                maximum_duration_ms: 500,
+            },
+            page_size: 16,
+            trace_state_max_count: 4,
+            finding_max_count: 4,
+        }
+    }
+
+    fn test_growth_rule() -> GrowthRule {
+        GrowthRule {
+            enabled: true,
+            window_size: 3,
+            minimum_samples: 2,
+            ratio_per_mille: 1_500,
+            minimum_growth_bytes: 1,
+            minimum_current_bytes: 1,
+            hard_limit_bytes: 1,
+        }
+    }
+
+    fn require_alert(request: &AlertWriteRequest, definition_key: &str) {
+        assert_eq!(request.trace_id, "trace-rule-test");
+        assert_eq!(request.alert_token, b"alert-token");
+        assert_eq!(request.draft.definition_key, definition_key);
+        assert_eq!(
+            request.draft.deduplication_key.as_deref(),
+            Some(definition_key)
+        );
+        let payload: serde_json::Value =
+            serde_json::from_str(&request.draft.payload_json).expect("valid alert JSON");
+        assert!(
+            payload["findings"]
+                .as_array()
+                .is_some_and(|findings| !findings.is_empty()),
+            "{definition_key} alert should contain a finding"
+        );
+    }
+}

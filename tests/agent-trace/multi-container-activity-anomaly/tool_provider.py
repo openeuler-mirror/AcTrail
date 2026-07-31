@@ -18,6 +18,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bind-port", type=int, default=0)
     parser.add_argument("--response-marker", required=True)
     parser.add_argument("--sleep-seconds", type=float, default=2.0)
+    parser.add_argument("--long-command")
     parser.add_argument("--hold-ready")
     parser.add_argument("--hold-release")
     return parser.parse_args()
@@ -38,6 +39,7 @@ def main() -> int:
         make_handler(
             args.response_marker,
             args.sleep_seconds,
+            args.long_command,
             hold_ready,
             hold_release,
         ),
@@ -54,6 +56,7 @@ def main() -> int:
 def make_handler(
     response_marker: str,
     sleep_seconds: float,
+    long_command: str | None,
     hold_ready: Path | None,
     hold_release: Path | None,
 ):
@@ -68,26 +71,43 @@ def make_handler(
                 if completed_tools == 0:
                     chunks = tool_call_chunks(
                         request,
-                        f"sleep {sleep_seconds:g}",
-                        "call_actrail_activity_sleep",
+                        "printf ACTRAIL_ACTIVITY_WARMUP",
+                        "call_actrail_activity_warmup",
                     )
-                    turn = "tool"
-                elif completed_tools == 1 and hold_release is not None:
+                    turn = "warmup"
+                elif completed_tools == 1 and long_command is not None:
                     chunks = tool_call_chunks(
                         request,
-                        (
-                            f"while [ ! -f {shlex.quote(str(hold_release))} ]; "
-                            "do sleep 0.1; done"
+                        command_with_optional_gates(
+                            long_command,
+                            hold_ready,
+                            hold_release,
                         ),
-                        "call_actrail_activity_hold",
+                        "call_actrail_activity_long_command",
                     )
-                    turn = "hold"
+                    turn = "long-command"
+                elif (
+                    completed_tools == 1
+                    and hold_ready is not None
+                    and hold_release is not None
+                ):
+                    chunks = tool_call_chunks(
+                        request,
+                        hold_command(hold_ready, hold_release),
+                        "call_actrail_activity_long_command",
+                    )
+                    turn = "long-command"
+                elif completed_tools == 1:
+                    chunks = tool_call_chunks(
+                        request,
+                        long_command or f"sleep {sleep_seconds:g}",
+                        "call_actrail_activity_sleep",
+                    )
+                    turn = "long-command"
                 else:
                     chunks = final_chunks(request, response_marker)
                     turn = "final"
                 write_stream(self, chunks)
-                if turn == "hold" and hold_ready is not None:
-                    hold_ready.write_text("ready\n", encoding="utf-8")
                 print(
                     f"activity_provider turn={turn} path={self.path} "
                     f"request_bytes={len(body)} response_events={len(chunks)}",
@@ -102,6 +122,27 @@ def make_handler(
             return
 
     return Handler
+
+
+def hold_command(hold_ready: Path, hold_release: Path) -> str:
+    return (
+        f"printf 'ready\\n' > {shlex.quote(str(hold_ready))}; "
+        f"while [ ! -f {shlex.quote(str(hold_release))} ]; "
+        "do sleep 0.1; done"
+    )
+
+
+def command_with_optional_gates(
+    command: str,
+    hold_ready: Path | None,
+    hold_release: Path | None,
+) -> str:
+    if hold_ready is None or hold_release is None:
+        return command
+    return (
+        f"{command} {shlex.quote(str(hold_ready))} "
+        f"{shlex.quote(str(hold_release))}"
+    )
 
 
 def read_body(handler: BaseHTTPRequestHandler) -> bytes:

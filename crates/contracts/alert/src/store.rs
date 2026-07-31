@@ -30,8 +30,10 @@ pub trait AlertDefinitionStore {
 pub trait AlertWriteStore {
     /// Durably appends one alert occurrence for the current trace and producer.
     ///
-    /// A matching trace/token pair creates a distinct occurrence. Missing traces
-    /// and mismatched tokens are rejected without writing an occurrence.
+    /// A matching trace/token pair creates a distinct occurrence unless the draft
+    /// supplies a deduplication key already used for the trace and definition.
+    /// Missing traces and mismatched tokens are rejected without writing an
+    /// occurrence.
     fn submit_alert(
         &mut self,
         trace_id: TraceId,

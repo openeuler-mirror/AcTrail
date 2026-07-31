@@ -36,6 +36,9 @@ from tests.v2.regression.otel_jsonl_action_filter.run_e2e import (  # noqa: E402
 from tests.v2.regression.semantic_action_boundaries.run_e2e import (  # noqa: E402
     TEST_DEFINITION as SEMANTIC_ACTION_BOUNDARIES,
 )
+from tests.v2.regression.activity_anomaly.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as ACTIVITY_ANOMALY,
+)
 
 TESTS = [
     CLAUDE,
@@ -45,6 +48,7 @@ TESTS = [
     XIAOO,
     SEMANTIC_ACTION_BOUNDARIES,
     OTEL_JSONL_ACTION_FILTER,
+    ACTIVITY_ANOMALY,
 ]
 
 

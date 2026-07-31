@@ -1,16 +1,17 @@
 # Multi-container activity-anomaly E2E
 
-This test loads `actrail.activity-anomaly` into one host daemon and runs two real xiaoO agents in separate Docker containers. A local OpenAI-compatible provider returns a bash tool call that executes `sleep 2`.
+This test loads two identical `actrail.activity-anomaly` instances into one host daemon and runs two real xiaoO agents in separate Docker containers. A local OpenAI-compatible provider first returns a short warm-up bash call so the first LLM exchange is complete, then asks the agent to run [`long-running-command.sh`](../../../examples/plugins/wit-component/activity-anomaly/long-running-command.sh). The script creates a ready marker, runs for five seconds, and does not finish until the test releases it.
 
 The test verifies, for each trace:
 
-- all alerts are persisted while the real xiaoO process is still running a provider-issued hold command and the trace remains `active`;
+- the long-command alert is persisted just after 500 ms while the provider-issued command is still running, has `status=in_progress`, has no end time, and the trace remains `active`;
 - one request-growth alert;
 - one response-growth alert;
 - one long-command alert with a duration above 500 ms;
 - the owning container, trace, process, and Agent action;
-- terminal fallback does not duplicate a live alert;
-- `last_error=none` after analysis.
+- two identical plugin instances do not create duplicate rows;
+- command completion and terminal fallback do not duplicate a live alert;
+- `last_error=none` for both instances after analysis.
 
 ## Run
 

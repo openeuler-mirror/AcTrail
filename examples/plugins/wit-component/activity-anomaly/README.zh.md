@@ -28,10 +28,10 @@
 长命令规则仅处理具有 Agent 归属的顶层 `command.invocation`。判断条件为：
 
 ```text
-ended_at_ms - started_at_ms > maximum_duration_ms
+(ended_at_ms 或当前宿主时间) - started_at_ms > maximum_duration_ms
 ```
 
-命令结束事件提供可靠时间后立即判断；命令仍在运行或缺少可靠时间时不产生告警。启用 seccomp notify 并成功采集 argv 后，告警包含完整命令行；否则仅包含可执行文件。
+命令仍在运行且尚未达到阈值时，插件申请在 `started_at_ms + maximum_duration_ms + 1` 复评；跨过阈值后立即提交告警，不等待命令结束。运行态 finding 的 `status` 为 `in_progress`、`ended_at_ms` 为 `null`，`observed_at_ms` 记录命中时间。启用 seccomp notify 并且 argv 已完成投影时，告警包含完整命令行；否则实时告警回退为仅包含可执行文件。
 
 ## 权限与数据范围
 
@@ -42,7 +42,7 @@ ended_at_ms - started_at_ms > maximum_duration_ms
 | `trace-activity-read` | 在当前 observation trace 范围内读取已持久化的 LLM 字节计数、命令执行事实和容器归属 |
 | `alert-write` | 写入 manifest 中已声明的告警 |
 
-插件不读取请求或响应正文，也不能查询其他 trace。实时分析和告警写入位于异步 observation worker，不在被观测进程的同步执行路径上。trace 进入终态后还会执行一次兜底分析，并释放该 trace 的插件状态。
+插件不读取请求或响应正文，也不能查询其他 trace。实时分析、定时复评和告警写入位于异步 observation worker，不在被观测进程的同步执行路径上。trace 进入终态后还会执行一次兜底分析，并释放该 trace 的插件状态。
 
 ## 多容器隔离
 
@@ -73,8 +73,16 @@ scripts/install-release.sh
 - 长命令告警结构：[command-duration.payload.v1.schema.json](command-duration.payload.v1.schema.json)
 - 插件清单：[activity-anomaly.plugin.toml](activity-anomaly.plugin.toml)
 
-每种告警在一个 trace 中最多提交一条，多个命中项存放在 `findings` 中。超过 `finding_max_count` 的数量记录在 `truncated_count`。
+每种告警在一个 trace 中最多保留一条，多个命中项存放在 `findings` 中。插件为每类告警提交稳定幂等键，因此并发插件实例、延迟 observation 和终态兜底不会落入重复记录。超过 `finding_max_count` 的数量记录在 `truncated_count`。
 
 ## 验证
 
 真实 xiaoO 多容器验证见[端到端测试说明](../../../../tests/agent-trace/multi-container-activity-anomaly/README.md)。
+
+仓库同时提供可直接运行的长命令示例：
+
+```bash
+bash examples/plugins/wit-component/activity-anomaly/long-running-command.sh 60 5
+```
+
+第一个参数是目标阈值秒数，第二个参数是超过阈值后继续运行的秒数；上述命令共运行 65 秒。真实 Agent E2E 会把阈值调为 500ms，并让 xiaoO 的 bash 工具执行同一脚本，以便在脚本结束前验证告警已上报。

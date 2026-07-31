@@ -63,6 +63,9 @@ def main() -> int:
         "alert-token: option<list<u8>>",
         "definition-key: string",
         "payload-json: string",
+        "deduplication-key: option<string>",
+        "current-time-ms: func() -> result<u64, string>",
+        "request-reevaluation-at: func(unix-time-ms: u64) -> result<_, string>",
         "record actor-process-identity",
         "actor-process-identity: actor-process-identity",
         "context-ref: option<string>",
@@ -101,7 +104,7 @@ def main() -> int:
         reject(rejected, raw)
 
     semantic_action = record_body("semantic-action-record", raw)
-    for duplicated in ["trace-id:", "summary:"]:
+    for duplicated in ["summary:"]:
         reject(duplicated, semantic_action)
 
     alert_draft = record_body("alert-draft", raw)

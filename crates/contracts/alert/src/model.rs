@@ -36,6 +36,7 @@ define_alert_id!(AlertDefinitionId, "alert-definition");
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AlertSubmitOutcome {
     Stored(AlertId),
+    DuplicateSuppressed,
     RejectedTraceToken,
 }
 
@@ -107,6 +108,7 @@ impl AlertDefinition {
 pub struct AlertDraft {
     pub definition_key: String,
     pub payload_json: String,
+    pub deduplication_key: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

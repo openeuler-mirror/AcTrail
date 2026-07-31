@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 import select
+import shlex
 import shutil
 import sqlite3
 import subprocess
@@ -19,7 +20,10 @@ from urllib.parse import urlsplit, urlunsplit
 
 
 PLUGIN_ID = "actrail.activity-anomaly"
-PLUGIN_INSTANCE = "actrail.activity-anomaly.e2e"
+PLUGIN_INSTANCES = (
+    "actrail.activity-anomaly.e2e.primary",
+    "actrail.activity-anomaly.e2e.duplicate",
+)
 PROFILE_NAME = "multi-container-activity-anomaly"
 API_KEY_ENV = "ACTRAIL_MULTI_CONTAINER_XIAOO_API_KEY"
 API_KEY = "actrail-activity-anomaly-local-key"
@@ -28,6 +32,8 @@ EXPECTED_DEFINITIONS = {
     "llm-response-growth",
     "command-duration-exceeded",
 }
+COMMAND_THRESHOLD_MS = 500
+MAX_LIVE_COMMAND_DURATION_MS = 2_000
 
 
 def load_base_module(repo: Path):
@@ -69,6 +75,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ready-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--launch-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--drain-timeout-seconds", type=float, default=45.0)
+    parser.add_argument("--runtime-root", default="/tmp")
     parser.add_argument("--keep-runtime", action="store_true")
     return parser.parse_args()
 
@@ -97,10 +104,17 @@ def main() -> int:
         plugin_dir
         / "target/wasm32-wasip2/release/actrail_activity_anomaly_plugin.wasm"
     )
+    long_command_source = base.require_file(plugin_dir / "long-running-command.sh")
     docker_seccomp = base.resolve_docker_seccomp(args.seccomp_profile, repo)
+    runtime_root = base.resolve_path(args.runtime_root, repo)
+    if not runtime_root.is_dir():
+        raise RuntimeError(f"activity E2E runtime root is not a directory: {runtime_root}")
 
     runtime = Path(
-        tempfile.mkdtemp(prefix="actrail-multi-container-activity.", dir="/tmp")
+        tempfile.mkdtemp(
+            prefix="actrail-multi-container-activity.",
+            dir=runtime_root,
+        )
     )
     run_id = f"{int(time.time())}-{os.getpid()}"
     label = f"io.actrail.activity-anomaly-e2e={run_id}"
@@ -151,6 +165,11 @@ def main() -> int:
 
     try:
         prepare_runtime(runtime, operator_template, config)
+        long_command_script = runtime / "long-running-command.sh"
+        shutil.copy2(long_command_source, long_command_script)
+        long_command = (
+            f"/bin/bash {shlex.quote(str(long_command_script))} 1 4"
+        )
         plugin_manifest = prepare_plugin_package(
             runtime,
             plugin_dir,
@@ -164,6 +183,7 @@ def main() -> int:
                 workload.response_marker,
                 hold_ready,
                 hold_release,
+                long_command,
                 args.ready_timeout_seconds,
                 repo,
             )
@@ -180,7 +200,15 @@ def main() -> int:
             daemon,
             args.ready_timeout_seconds,
         )
-        load_plugin(actraild, config, plugin_manifest, plugin_config, plugin_artifact)
+        for plugin_instance in PLUGIN_INSTANCES:
+            load_plugin(
+                actraild,
+                config,
+                plugin_manifest,
+                plugin_config,
+                plugin_artifact,
+                plugin_instance,
+            )
 
         for workload in workloads:
             launches.append(
@@ -216,12 +244,13 @@ def main() -> int:
             workloads,
             args.launch_timeout_seconds,
         )
-        live_alert_rows = wait_for_alerts(
+        live_alert_rows = wait_for_running_command_alerts(
             database,
-            len(workloads) * len(EXPECTED_DEFINITIONS),
+            len(workloads),
             args.drain_timeout_seconds,
         )
         require_live_alert_delivery(database, launches, workloads)
+        verify_running_command_alerts(live_alert_rows, len(workloads))
         print(
             "activity_anomaly_live_delivery "
             f"agents_running={len(launches)} alerts={len(live_alert_rows)} "
@@ -257,19 +286,22 @@ def main() -> int:
             container_ids,
             actions_by_trace,
         )
-        status = base.run_checked(
-            [
-                str(actraild),
-                "--config",
-                str(config),
-                "plugin",
-                "status",
-                "--instance",
-                PLUGIN_INSTANCE,
-            ]
-        )
-        if "last_error=none" not in status:
-            raise RuntimeError(f"plugin reported an error after analysis:\n{status}")
+        for plugin_instance in PLUGIN_INSTANCES:
+            status = base.run_checked(
+                [
+                    str(actraild),
+                    "--config",
+                    str(config),
+                    "plugin",
+                    "status",
+                    "--instance",
+                    plugin_instance,
+                ]
+            )
+            if "last_error=none" not in status:
+                raise RuntimeError(
+                    f"plugin {plugin_instance} reported an error after analysis:\n{status}"
+                )
 
         for workload in workloads:
             trace_id, container_id = trace_rows_by_name[workload.trace_name]
@@ -352,6 +384,7 @@ def start_provider(
     response_marker: str,
     hold_ready: Path,
     hold_release: Path,
+    long_command: str,
     timeout: float,
     cwd: Path,
 ) -> tuple[subprocess.Popen[str], str]:
@@ -367,6 +400,8 @@ def start_provider(
             str(hold_ready),
             "--hold-release",
             str(hold_release),
+            "--long-command",
+            long_command,
         ],
         cwd=cwd,
         text=True,
@@ -477,6 +512,7 @@ def load_plugin(
     manifest: Path,
     plugin_config: Path,
     artifact: Path,
+    plugin_instance: str,
 ) -> None:
     if not artifact.is_file():
         raise RuntimeError(f"missing activity plugin artifact {artifact}")
@@ -496,7 +532,7 @@ def load_plugin(
             "--grant",
             "alert-write",
             "--instance",
-            PLUGIN_INSTANCE,
+            plugin_instance,
         ],
         text=True,
         stdout=subprocess.PIPE,
@@ -508,7 +544,7 @@ def load_plugin(
             f"activity plugin load failed exit={result.returncode}: "
             f"{result.stdout}\n{result.stderr}"
         )
-    if PLUGIN_INSTANCE not in result.stdout:
+    if plugin_instance not in result.stdout:
         raise RuntimeError(f"plugin load output omitted instance: {result.stdout}")
 
 
@@ -562,15 +598,74 @@ def verify_trace_identity(
         raise RuntimeError(f"workloads were not isolated into separate traces: {rows}")
 
 
-def wait_for_alerts(database: Path, expected: int, timeout: float) -> list[tuple]:
+def wait_for_running_command_alerts(
+    database: Path,
+    expected: int,
+    timeout: float,
+) -> list[tuple]:
     deadline = time.monotonic() + timeout
     rows: list[tuple] = []
     while time.monotonic() < deadline:
         rows = activity_alert_rows(database)
-        if len(rows) == expected:
+        command_rows = [
+            row for row in rows if row[1] == "command-duration-exceeded"
+        ]
+        if len(command_rows) > expected:
+            raise RuntimeError(
+                f"command alerts were duplicated during live delivery: {command_rows}"
+            )
+        if len(command_rows) == expected:
             return rows
         time.sleep(0.1)
-    raise RuntimeError(f"expected {expected} activity alerts, found {rows}")
+    raise RuntimeError(
+        f"expected {expected} running-command alerts, found {rows}"
+    )
+
+
+def verify_running_command_alerts(rows: list[tuple], expected: int) -> None:
+    command_payloads = [
+        json.loads(payload_json)
+        for _trace_id, definition, _kind, payload_json in rows
+        if definition == "command-duration-exceeded"
+    ]
+    if len(command_payloads) != expected:
+        raise RuntimeError(
+            f"expected {expected} running-command alerts, found {command_payloads}"
+        )
+    for payload in command_payloads:
+        if payload.get("maximum_duration_ms") != COMMAND_THRESHOLD_MS:
+            raise RuntimeError(f"command threshold mismatch: {payload}")
+        findings = payload.get("findings")
+        if not isinstance(findings, list) or not findings:
+            raise RuntimeError(f"running-command alert has no findings: {payload}")
+        for finding in findings:
+            if finding.get("status") != "in_progress":
+                raise RuntimeError(
+                    f"long command was not reported while running: {finding}"
+                )
+            if finding.get("ended_at_ms") is not None:
+                raise RuntimeError(
+                    f"running command unexpectedly has an end time: {finding}"
+                )
+            duration_ms = int(finding.get("duration_ms", 0))
+            if not (
+                COMMAND_THRESHOLD_MS
+                < duration_ms
+                <= MAX_LIVE_COMMAND_DURATION_MS
+            ):
+                raise RuntimeError(
+                    f"running command was not reported promptly after threshold: {finding}"
+                )
+            observed_at_ms = int(finding.get("observed_at_ms", 0))
+            started_at_ms = int(finding.get("started_at_ms", 0))
+            if observed_at_ms - started_at_ms != duration_ms:
+                raise RuntimeError(
+                    f"running command duration and observation time disagree: {finding}"
+                )
+            if not finding.get("executable") or not finding.get("agent_action_id"):
+                raise RuntimeError(
+                    f"running command omitted executable or Agent attribution: {finding}"
+                )
 
 
 def wait_for_stable_alerts(database: Path, expected: int, timeout: float) -> list[tuple]:
@@ -714,9 +809,8 @@ def verify_command_alert(
     if kind != "command.duration.exceeded":
         raise RuntimeError(f"command alert kind mismatch: {kind}")
     if not any(
-        int(finding.get("duration_ms", 0)) > 500
+        int(finding.get("duration_ms", 0)) > COMMAND_THRESHOLD_MS
         and finding.get("agent_action_id")
-        and "sleep 2" in str(finding.get("command_line") or "")
         for finding in findings
     ):
         raise RuntimeError(

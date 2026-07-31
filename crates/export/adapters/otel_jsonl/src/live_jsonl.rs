@@ -145,7 +145,10 @@ impl ObservationConsumer for OtelJsonlObservationConsumer {
                 }
             }
         }
-        Ok(ObservationConsumeReport { dropped_records })
+        Ok(ObservationConsumeReport {
+            dropped_records,
+            reevaluate_at: None,
+        })
     }
 
     fn finish(&self) -> Result<ObservationConsumeReport, PluginRuntimeError> {
@@ -167,6 +170,7 @@ impl ObservationConsumer for OtelJsonlObservationConsumer {
                 queue_capacity: error.queue_capacity(),
                 dropped_records: finish.dropped_records(),
             }],
+            reevaluate_at: None,
         })
     }
 }
