@@ -16,9 +16,10 @@ use crate::state_machine;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TraceOwnerPrincipal {
     pub uid: u32,
-    pub container_id: Option<String>,
     pub pid_namespace: String,
+    pub mount_namespace: String,
     pub host_pid_namespace: bool,
+    pub host_mount_namespace: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

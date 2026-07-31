@@ -43,9 +43,10 @@ host actraild
 需要避免的是启动第二个 `actraild` 去绑定同一组 socket 路径。
 
 每个容器必须为自己的 Agent 执行一次 `actrailctl launch`。daemon 在 accept
-后读取内核 `SO_PEERCRED`，把创建者的 container principal 固定到 trace；
-其他容器即使挂载相同 socket，也不能控制该 trace 或向其中注入 TLS-sync
-数据。eBPF 内部使用宿主机 PID/TID 作为 map key，因此不同 PID namespace
+后读取内核 `SO_PEERCRED`，把创建者的 PID + mount namespace principal 固定到
+trace；container ID 只作为可选归属信息，不参与授权。其他 namespace principal
+的容器即使挂载相同 socket，也不能控制该 trace 或向其中注入 TLS-sync 数据。eBPF
+内部使用宿主机 PID/TID 作为 map key，因此不同 PID namespace
 中都叫 PID 1 的进程不会碰撞；每条 trace 另存自己的 PID namespace，
 页面和导出事件仍显示正确的容器内 PID。
 
@@ -144,11 +145,15 @@ docker exec "$AGENT_CONTAINER" \
 预期结果：human 输出包含 `deployment_permissions_requested`、`deployment_permissions_selected`、`deployment_permissions_degraded` 和最终 required capabilities；发生降级或配置裁剪时还会包含可机器解析的原因。JSON 输出包含相同的 `deployment_permissions` 对象。
 
 control 和 TLS-sync socket 在 accept 后读取内核 `SO_PEERCRED`。创建 trace
-的 container principal 会绑定到该 trace；另一个即使挂载了同一
-`/run/actrail` 的容器，也不能 remove/register 该 trace 或向它注入 TLS
-event。拒绝错误码固定为 `peer_identity`，daemon journald 中同时记录
-`actrail::peer_auth` 审计信息。host root 保留运维权限，普通 host uid 仍受
-socket 文件权限和 peer uid 校验约束。
+的 PID + mount namespace principal 会绑定到该 trace；另一个 namespace principal 的容器
+即使挂载了同一 `/run/actrail`，也不能 remove/register 该 trace 或向它注入
+TLS event。container ID 的缺失、冲突或变化不改变授权结果。拒绝错误码固定为
+`peer_identity`，daemon journald 中同时记录 `actrail::peer_auth` 审计信息。
+只有同时处于 daemon 的宿主 PID、mount namespace 且 UID 为 0 的 peer 才保留
+host root 运维权限；普通 host uid 仍受 socket 文件权限和 peer uid 校验约束。
+当前 Demo 使用 Docker 默认独立 PID、mount namespace；共享 PID 但 mount
+namespace 不同的 workload 仍会隔离，故意同时共享两者的模式需要未来的显式
+workload capability/runtime binding。
 
 JSON 示例：
 

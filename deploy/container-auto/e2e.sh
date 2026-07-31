@@ -10,6 +10,7 @@ REPO_ROOT="$(cd "${MODULE_DIR}/../.." && pwd)"
 BIN_DIR="${BIN_DIR:-${REPO_ROOT}/target/release}"
 PROFILE="${MODULE_DIR}/seccomp/actrail-notify.json"
 TARGET_URL="${TARGET_URL:-https://example.com/}"
+BASE_IMAGE="${CONTAINER_AUTO_E2E_BASE_IMAGE:-ubuntu:24.04}"
 PROBE_LIB="libactrail_tls_payload_probe_sync.so"
 CONTAINER_CONF="/etc/actrail/container-auto.conf"
 RUN_ID="$(date +%s)-$$"
@@ -33,6 +34,7 @@ AUTO_NOTIFY_ONLY="actrail-auto-notify-only-${RUN_ID}"
 AUTO_NEITHER="actrail-auto-neither-${RUN_ID}"
 PEER_A="actrail-peer-a-${RUN_ID}"
 PEER_B="actrail-peer-b-${RUN_ID}"
+PEER_HOST_PID="actrail-peer-host-pid-${RUN_ID}"
 DAEMON_PID=""
 
 pass() { echo "  PASS: $*"; }
@@ -222,10 +224,33 @@ sed \
     -e "s|/var/lib/actrail|${DATA_DIR}|g" \
     -e "s|/var/log/actrail|${LOG_DIR}|g" \
     -e "s|/etc/actrail|${WORK_DIR}/etc/actrail|g" \
+    -e "/^\[payload\.tls\]$/a sync_event_socket_path = \"${SOCK_DIR}/tls-sync.sock\"" \
     "${MODULE_DIR}/container-auto.conf" >"${CONF}"
+cat >>"${CONF}" <<EOF
+
+[control]
+socket_path = "${SOCK_DIR}/control.sock"
+pid_file = "${SOCK_DIR}/actraild.pid"
+log_path = "${DAEMON_LOG}"
+
+[storage]
+backend = "sqlite"
+
+[storage.sqlite]
+path = "${DB}"
+
+[export.snapshot]
+directory = "${DATA_DIR}/export"
+EOF
 cp "${CONF}" "${AUTO_CONF}"
 
 note "1) start isolated unified auto daemon"
+grep -q "^socket_path = \"${SOCK_DIR}/control.sock\"$" "${CONF}" \
+    || fail "generated auto config control socket is not isolated"
+grep -q "^path = \"${DB}\"$" "${CONF}" \
+    || fail "generated auto config storage is not isolated"
+grep -q "^sync_event_socket_path = \"${SOCK_DIR}/tls-sync.sock\"$" "${CONF}" \
+    || fail "generated auto config TLS-sync socket is not isolated"
 start_test_daemon
 grep -q '^profile_name = "container-auto"$' "${CONF}" \
     || fail "generated auto profile name is wrong"
@@ -242,6 +267,7 @@ install -m 0755 "${BIN_DIR}/${PROBE_LIB}" \
     "${BUILD_CONTEXT}/${PROBE_LIB}"
 install -m 0644 "${MODULE_DIR}/Dockerfile" "${BUILD_CONTEXT}/Dockerfile"
 docker build -q -f "${BUILD_CONTEXT}/Dockerfile" \
+    --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
     --label "${RUN_LABEL}" -t "${IMAGE}" "${BUILD_CONTEXT}" >/dev/null
 printf 'FROM %s\nRUN apt-get update && apt-get install -y --no-install-recommends curl python3 && rm -rf /var/lib/apt/lists/*\n' \
     "${IMAGE}" | docker build -q --label "${RUN_LABEL}" -t "${IMAGE_E2E}" - >/dev/null
@@ -282,6 +308,23 @@ B_LIST="$(docker exec "${PEER_B}" \
     actrailctl --config "${CONTAINER_CONF}" list-traces)"
 echo "${B_LIST}" | grep -q "trace-${trace} " \
     && fail "peer isolation: container B can list container A trace"
+
+docker run -d --name "${PEER_HOST_PID}" --label "${RUN_LABEL}" --user 0:0 \
+    --pid=host \
+    --entrypoint /bin/sh \
+    -v "${SOCK_DIR}:${SOCK_DIR}:ro" \
+    -v "${CONF}:${CONTAINER_CONF}:ro" \
+    "${IMAGE_E2E}" -c 'sleep 120' >/dev/null
+HOST_PID_LIST="$(docker exec "${PEER_HOST_PID}" \
+    actrailctl --config "${CONTAINER_CONF}" list-traces)"
+echo "${HOST_PID_LIST}" | grep -q "trace-${trace} " \
+    && fail "peer isolation: host-PID container was trusted as host root"
+if docker exec "${PEER_HOST_PID}" \
+    actrailctl --config "${CONTAINER_CONF}" track-remove \
+    --trace-id "trace-${trace}" >/dev/null 2>&1; then
+    fail "peer isolation: host-PID container removed container A trace"
+fi
+pass "host-PID container does not inherit host-root authority"
 
 if REMOVE_OUT="$(docker exec "${PEER_B}" \
     actrailctl --config "${CONTAINER_CONF}" track-remove \
@@ -343,14 +386,27 @@ import sys
 
 client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 client.connect(sys.argv[2])
+start_time_ticks = open("/proc/self/stat", encoding="utf-8").read().split()[21]
+pid_namespace = os.readlink("/proc/self/ns/pid")
 line = (
-    "v1\tpayload\t"
+    "v2\tpayload\t"
     + sys.argv[1]
     + "\t"
     + str(os.getpid())
+    + "\t"
+    + start_time_ticks
+    + "\t"
+    + pid_namespace
     + "\toutbound\tpeer-e2e\tinjection\t1\t1\t6869\n"
 )
 client.sendall(line.encode())
+client.shutdown(socket.SHUT_WR)
+client.settimeout(10)
+try:
+    while client.recv(4096):
+        pass
+except socket.timeout:
+    pass
 ' "${trace}" "${SOCK_DIR}/tls-sync.sock"
 tls_rejected=false
 for _ in $(seq 1 50); do
@@ -368,7 +424,7 @@ done
     "SELECT COUNT(*) FROM payload_segments WHERE trace_id=${trace} AND library='peer-e2e' AND symbol='injection';")" -eq 0 ]] \
     || fail "peer isolation: forged TLS payload reached container A trace"
 pass "container B cannot inject TLS events into container A trace"
-docker rm -f "${PEER_A}" "${PEER_B}" >/dev/null
+docker rm -f "${PEER_A}" "${PEER_B}" "${PEER_HOST_PID}" >/dev/null
 
 note "6) required permissions fail loud"
 if REQUIRED_OUT="$(docker run --rm --label "${RUN_LABEL}" --user 0:0 \
