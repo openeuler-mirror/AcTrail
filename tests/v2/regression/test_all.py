@@ -30,6 +30,12 @@ from tests.v2.regression.probe_qodercli_llm.run_e2e import (  # noqa: E402
 from tests.v2.regression.probe_xiaoo_llm.run_e2e import (  # noqa: E402
     TEST_DEFINITION as XIAOO,
 )
+from tests.v2.regression.container_auto.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as CONTAINER_AUTO,
+)
+from tests.v2.regression.container_agent_xiaoo.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as CONTAINER_AGENT_XIAOO,
+)
 from tests.v2.regression.otel_jsonl_action_filter.run_e2e import (  # noqa: E402
     TEST_DEFINITION as OTEL_JSONL_ACTION_FILTER,
 )
@@ -46,6 +52,8 @@ TESTS = [
     PI,
     QODERCLI,
     XIAOO,
+    CONTAINER_AUTO,
+    CONTAINER_AGENT_XIAOO,
     SEMANTIC_ACTION_BOUNDARIES,
     OTEL_JSONL_ACTION_FILTER,
     ACTIVITY_ANOMALY,

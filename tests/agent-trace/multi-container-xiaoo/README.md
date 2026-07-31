@@ -24,7 +24,7 @@ lifecycle.
 
 The acceptance checks require:
 
-- two different Docker container IDs and PID namespaces;
+- two different PID namespaces, without requiring container-ID attribution;
 - a period where both traces are simultaneously `Active`;
 - eBPF process and network events for each trace;
 - positive `file.read` and `file.write` actions for each task's own paths;

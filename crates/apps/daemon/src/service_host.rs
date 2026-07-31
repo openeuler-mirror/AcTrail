@@ -981,9 +981,10 @@ mod tests {
             .unwrap();
         let owner = PeerPrincipal {
             uid: 0,
-            container_id: Some("container-a".to_string()),
             pid_namespace: "pid:[101]".to_string(),
+            mount_namespace: "mnt:[101]".to_string(),
             host_pid_namespace: false,
+            host_mount_namespace: false,
         };
         host.wiring
             .trace_runtime
@@ -1011,9 +1012,10 @@ mod tests {
             process: model_core::process::ProcessObservation::default(),
             principal: PeerPrincipal {
                 uid: 0,
-                container_id: Some("container-b".to_string()),
                 pid_namespace: "pid:[202]".to_string(),
+                mount_namespace: "mnt:[202]".to_string(),
                 host_pid_namespace: false,
+                host_mount_namespace: false,
             },
         };
         let existing_error = host
@@ -1039,9 +1041,10 @@ mod tests {
             process: model_core::process::ProcessObservation::default(),
             principal: PeerPrincipal {
                 uid: 0,
-                container_id: None,
                 pid_namespace: "pid:[1]".to_string(),
+                mount_namespace: "mnt:[1]".to_string(),
                 host_pid_namespace: true,
+                host_mount_namespace: true,
             },
         };
         let root_error = host
