@@ -4,6 +4,7 @@ use crate::args::{PatternArgs, require_arch};
 use crate::binary::resolve_entry_elf;
 use crate::detect::{OffsetAddressReport, TargetReport};
 use crate::elf::ElfImage;
+use crate::pattern_search::ExactPatternSearch;
 use crate::{ToolError, ToolResult};
 
 pub(crate) struct PatternReport {
@@ -66,22 +67,9 @@ pub(crate) fn run(args: PatternArgs) -> ToolResult<PatternReport> {
 }
 
 pub(crate) fn find_all(data: &[u8], pattern: &[u8]) -> ToolResult<Vec<usize>> {
-    if pattern.is_empty() {
-        return Err(ToolError::new("pattern must not be empty"));
-    }
-    let mut offsets = Vec::new();
-    let mut start = 0_usize;
-    while start <= data.len().saturating_sub(pattern.len()) {
-        let Some(relative) = data[start..].iter().position(|byte| *byte == pattern[0]) else {
-            break;
-        };
-        let offset = start + relative;
-        if data.get(offset..offset + pattern.len()) == Some(pattern) {
-            offsets.push(offset);
-        }
-        start = offset + 1;
-    }
-    Ok(offsets)
+    ExactPatternSearch::new(pattern)
+        .map(|search| search.find_all(data))
+        .ok_or_else(|| ToolError::new("pattern must not be empty"))
 }
 
 fn pattern_hex(pattern: &[u8]) -> String {

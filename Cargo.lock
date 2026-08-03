@@ -2287,6 +2287,7 @@ version = "0.7.1"
 dependencies = [
  "anstyle",
  "clap",
+ "memchr",
  "model_core",
  "rustc-demangle",
  "sha2",

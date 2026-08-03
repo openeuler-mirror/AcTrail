@@ -54,7 +54,7 @@ impl ConsumerCapability {
                 Self::sync_rejection(key.provider, points)
             }
             ProbeConsumer::Daemon => {
-                if key.provider != TlsProvider::Rustls {
+                if !matches!(key.provider, TlsProvider::OpenSsl | TlsProvider::Rustls) {
                     return Some(format!(
                         "daemon-direct-does-not-support-provider:{}",
                         key.provider.as_str()
@@ -117,5 +117,11 @@ const SYNC_SYMBOLS: &[&str] = &[
     "rustls_take_received_plaintext",
 ];
 
-const DAEMON_DIRECT_SYMBOLS: &[&str] =
-    &["rustls_buffer_plaintext", "rustls_take_received_plaintext"];
+const DAEMON_DIRECT_SYMBOLS: &[&str] = &[
+    "SSL_write",
+    "SSL_write_ex",
+    "SSL_read",
+    "SSL_read_ex",
+    "rustls_buffer_plaintext",
+    "rustls_take_received_plaintext",
+];

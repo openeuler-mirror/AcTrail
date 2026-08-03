@@ -223,6 +223,8 @@ mod tests {
             sync_event_socket_path: PathBuf::from("/tmp/actrail-test-tls-sync.sock"),
             sync_socket_mode: 0o660,
             sync_match_limit: 8,
+            dynamic_exec_plan_timeout_ms:
+                config_core::daemon::DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS,
             sync_flow_control_enabled: true,
             sync_flow_sniff_bytes: 65536,
             sync_flow_max_header_bytes: 16384,

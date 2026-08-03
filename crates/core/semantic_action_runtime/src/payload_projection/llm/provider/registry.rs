@@ -7,12 +7,15 @@ use semantic_action::{
 
 use super::anthropic::AnthropicMessagesResponseParser;
 use super::openai::OpenAiCompatibleResponseParser;
+use super::openai_responses::OpenAiResponsesResponseParser;
 use super::structured_json_sse::StructuredJsonSseParser;
 
 static OPENAI_COMPATIBLE: OpenAiCompatibleResponseParser = OpenAiCompatibleResponseParser;
+static OPENAI_RESPONSES: OpenAiResponsesResponseParser = OpenAiResponsesResponseParser;
 static ANTHROPIC_MESSAGES: AnthropicMessagesResponseParser = AnthropicMessagesResponseParser;
 static STRUCTURED_JSON_SSE: StructuredJsonSseParser = StructuredJsonSseParser;
 static PARSERS: &[&dyn LlmProviderResponseParser] = &[
+    &OPENAI_RESPONSES,
     &STRUCTURED_JSON_SSE,
     &ANTHROPIC_MESSAGES,
     &OPENAI_COMPATIBLE,

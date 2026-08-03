@@ -80,8 +80,9 @@ pub use operator::{
     launch_seccomp_requirements,
 };
 pub use payload::{
-    DisabledOrPath, PayloadConfig, PayloadRedactionPolicy, PayloadSocketCaptureBackend,
-    PayloadSocketConfig, PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadStdioStorageMode,
+    DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS, DisabledOrPath, PayloadConfig,
+    PayloadRedactionPolicy, PayloadSocketCaptureBackend, PayloadSocketConfig,
+    PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadStdioStorageMode,
     PayloadTlsCaptureBackend, PayloadTlsConfig, PayloadTlsLibrary, PayloadTlsLibraryPath,
     PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource,
     PayloadTlsSyncRuntimeLibraryPath,

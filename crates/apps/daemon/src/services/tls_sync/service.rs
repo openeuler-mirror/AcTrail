@@ -13,6 +13,7 @@ use std::io::{ErrorKind, Read};
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::Path;
 use std::time::SystemTime;
 
 use config_core::daemon::{PayloadTlsCaptureBackend, PayloadTlsConfig};
@@ -27,11 +28,12 @@ use payload_event::RawPayloadSegment;
 use tls_payload_core::PayloadDirection as SyncDirection;
 use tls_payload_sync::{
     PayloadEvent, SummaryEvent, SyncEvent, decode_event_line, decode_plan_lookup_request,
+    target_runtime_for_path,
 };
 use trace_runtime::registry::TraceRuntime;
 use uds_control_server::PeerCredentials;
 
-use self::resolver::TlsSyncPlanResolver;
+use self::resolver::{ExecPlanConsumer, TlsSyncPlanResolver};
 use self::root_path::PeerRootResolver;
 use crate::peer_identity::{PeerIdentity, peer_error};
 
@@ -41,6 +43,17 @@ pub(crate) struct TlsSyncService {
     resolver: Option<TlsSyncPlanResolver>,
     read_buffer_bytes: usize,
     max_line_bytes: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ExecTlsPlanMode {
+    Direct,
+    Sync,
+}
+
+pub(crate) struct ExecTlsPlanResolution {
+    pub(crate) mode: ExecTlsPlanMode,
+    pub(crate) reply: LaunchTlsPlanReply,
 }
 
 #[derive(Debug, Default)]
@@ -98,19 +111,31 @@ impl TlsSyncService {
         fds
     }
 
-    pub(crate) fn prewarm_plan_for_exec(
+    pub(crate) fn resolve_exec_plan(
         &self,
-        binary: &std::path::Path,
-    ) -> Result<(), ControlError> {
+        binary: &Path,
+    ) -> Result<ExecTlsPlanResolution, ControlError> {
         let Some(resolver) = &self.resolver else {
-            return Ok(());
+            return Err(ControlError::new(
+                "tls_sync_plan",
+                "TLS sync plan resolver is disabled",
+            ));
         };
-        resolver.prewarm(binary)
+        let runtime = target_runtime_for_path(binary, None)
+            .map_err(|error| ControlError::new("tls_sync_exec_target", error.to_string()))?;
+        let (mode, consumer) = if runtime.is_static() {
+            (ExecTlsPlanMode::Direct, ExecPlanConsumer::Daemon)
+        } else {
+            (ExecTlsPlanMode::Sync, ExecPlanConsumer::Sync)
+        };
+        resolver
+            .resolve_exec_plan(&runtime.path, consumer)
+            .map(|reply| ExecTlsPlanResolution { mode, reply })
     }
 
     pub(crate) fn resolve_launch_plan(
         &self,
-        binary: &std::path::Path,
+        binary: &Path,
     ) -> Result<LaunchTlsPlanReply, ControlError> {
         let Some(resolver) = &self.resolver else {
             return Err(ControlError::new(
@@ -461,7 +486,7 @@ fn payload_direction(direction: SyncDirection) -> PayloadDirection {
     }
 }
 
-fn create_parent_directory(socket_path: &std::path::Path) -> Result<(), ControlError> {
+fn create_parent_directory(socket_path: &Path) -> Result<(), ControlError> {
     let Some(parent) = socket_path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())

@@ -51,9 +51,10 @@ impl X86_64BoringSslStaticPatternProbeDetector {
 
     pub(crate) fn detect(&self, image: &ElfImage) -> ToolResult<StaticPatternDetection> {
         let data = image.data();
-        let handshake_matches = StaticPatternSupport::find_all(data, HANDSHAKE_PATTERN);
-        let read_matches = StaticPatternSupport::find_all(data, READ_PATTERN);
-        let write_matches = StaticPatternSupport::find_all(data, WRITE_PATTERN);
+        let handshake_matches =
+            StaticPatternSupport::find_all_executable(image, HANDSHAKE_PATTERN)?;
+        let read_matches = StaticPatternSupport::find_all_executable(image, READ_PATTERN)?;
+        let write_matches = StaticPatternSupport::find_all_executable(image, WRITE_PATTERN)?;
         let resolved =
             Self::resolve_offsets(data, &handshake_matches, &read_matches, &write_matches)?;
         let mut resolved_offsets = Vec::new();

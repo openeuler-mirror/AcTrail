@@ -3,6 +3,8 @@
 use std::path::PathBuf;
 use std::str::FromStr;
 
+pub const DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS: u64 = 30_000;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PayloadTlsLibrary {
     Auto,
@@ -305,6 +307,7 @@ pub struct PayloadTlsConfig {
     pub sync_event_socket_path: PathBuf,
     pub sync_socket_mode: u32,
     pub sync_match_limit: u32,
+    pub dynamic_exec_plan_timeout_ms: u64,
     pub sync_flow_control_enabled: bool,
     pub sync_flow_sniff_bytes: u32,
     pub sync_flow_max_header_bytes: u32,

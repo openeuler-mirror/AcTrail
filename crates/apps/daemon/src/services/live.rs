@@ -14,7 +14,8 @@ use std::time::SystemTime;
 
 use collector_instance::CollectorInstance;
 use config_core::daemon::DiagnosticLogLevel;
-use control_contract::reply::ControlError;
+use control_contract::reply::{ControlError, LaunchTlsPlanStatus};
+use ebpf_collector::loader::DynamicTlsProbePlan;
 use model_core::diagnostics::{DiagnosticKind, DiagnosticRecord, DiagnosticSeverity};
 use model_core::event::{DomainEvent, EventEnvelope, EventFlags, EventKind, EventPayload};
 use model_core::ids::{CollectorName, DiagnosticId, EventId, TraceId};
@@ -25,6 +26,7 @@ use trace_runtime::registry::TraceRuntime;
 use crate::services::attach::StorageAttachService;
 use crate::services::command_control::CommandControlOutcome;
 use crate::services::resource_metrics::COLLECTOR_NAME as RESOURCE_METRICS_COLLECTOR_NAME;
+use crate::services::tls_sync::ExecTlsPlanMode;
 use crate::services::workload_diagnostics::PayloadSegmentStage;
 
 /// Log and swallow recoverable errors from best-effort subsystems.
@@ -357,10 +359,12 @@ impl StorageAttachService {
                     notification,
                     continuation,
                     &mut |candidate, continuation| {
-                        if let Some(trace_id) = candidate.trace_id {
+                        if let (Some(trace_id), Some(process)) =
+                            (candidate.trace_id, candidate.process.as_ref())
+                        {
                             match command_control.decide_exec(
                                 trace_id,
-                                &candidate.process,
+                                process,
                                 &self.process_registry,
                                 candidate,
                                 control_plugins,
@@ -394,13 +398,78 @@ impl StorageAttachService {
                         ) else {
                             return Ok(());
                         };
-                        if let Err(error) = tls_sync.prewarm_plan_for_exec(&host_path) {
-                            tracing::warn!(
-                                target: "actrail::tls_sync",
-                                binary = %host_path.display(),
-                                error = %error.message,
-                                "failed to prewarm TLS sync plan for exec candidate"
-                            );
+                        if candidate.trace_id.is_some() {
+                            match tls_sync.resolve_exec_plan(&host_path) {
+                                Ok(resolution) => {
+                                    let cache_hit = resolution.reply.cache_hit;
+                                    let elapsed_micros = resolution.reply.resolve_elapsed_micros;
+                                    match resolution.reply.status {
+                                        LaunchTlsPlanStatus::Found(plan)
+                                            if resolution.mode == ExecTlsPlanMode::Direct =>
+                                        {
+                                            let provider = plan.provider.clone();
+                                            let source = plan.source.clone();
+                                            let dynamic_plan = DynamicTlsProbePlan {
+                                                target: plan.target,
+                                                target_identity: plan.target_identity,
+                                                binary: plan.binary,
+                                                binary_identity: plan.binary_identity,
+                                                provider: plan.provider,
+                                                points: plan.points,
+                                            };
+                                            match collector.attach_dynamic_tls_plan(&dynamic_plan) {
+                                                Ok(()) => tracing::info!(
+                                                    target: "actrail::tls_sync",
+                                                    pid = candidate.pid,
+                                                    binary = %host_path.display(),
+                                                    provider,
+                                                    source,
+                                                    cache_hit,
+                                                    elapsed_micros,
+                                                    "attached pre-resume TLS plan for exec candidate"
+                                                ),
+                                                Err(error) => tracing::warn!(
+                                                    target: "actrail::tls_sync",
+                                                    pid = candidate.pid,
+                                                    binary = %host_path.display(),
+                                                    provider,
+                                                    error = %error.message,
+                                                    "failed to attach pre-resume TLS plan; continuing exec"
+                                                ),
+                                            }
+                                        }
+                                        LaunchTlsPlanStatus::Found(plan) => tracing::debug!(
+                                            target: "actrail::tls_sync",
+                                            pid = candidate.pid,
+                                            binary = %host_path.display(),
+                                            provider = %plan.provider,
+                                            source = %plan.source,
+                                            cache_hit,
+                                            elapsed_micros,
+                                            "resolved pre-resume sync TLS plan for exec candidate"
+                                        ),
+                                        LaunchTlsPlanStatus::Unsupported { reason } => {
+                                            tracing::debug!(
+                                                target: "actrail::tls_sync",
+                                                pid = candidate.pid,
+                                                binary = %host_path.display(),
+                                                reason,
+                                                cache_hit,
+                                                elapsed_micros,
+                                                "exec candidate has no supported TLS plan"
+                                            );
+                                        }
+                                    }
+                                }
+                                Err(error) => tracing::warn!(
+                                    target: "actrail::tls_sync",
+                                    pid = candidate.pid,
+                                    binary = %host_path.display(),
+                                    error_code = %error.code,
+                                    error = %error.message,
+                                    "failed to resolve pre-resume TLS plan; continuing exec"
+                                ),
+                            }
                         }
                         collector
                             .attach_dynamic_go_tls(&host_path)

@@ -5,6 +5,7 @@ mod anthropic_stream;
 mod common;
 mod generic_request;
 mod openai;
+mod openai_responses;
 mod registry;
 mod request_registry;
 mod structured_json_sse;

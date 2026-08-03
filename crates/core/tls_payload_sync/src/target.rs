@@ -1,15 +1,20 @@
 //! Target executable runtime ABI detection for TLS sync injection.
 
 use std::ffi::{OsStr, OsString};
+use std::fs::File;
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use crate::{SyncError, SyncResult};
 
 const ELF_MAGIC: &[u8; 4] = b"\x7fELF";
+const ELF64_HEADER_SIZE: usize = 64;
 const ELF_CLASS_64: u8 = 2;
 const ELF_DATA_LITTLE_ENDIAN: u8 = 1;
 const PT_INTERP: u32 = 3;
+const ELF64_PROGRAM_HEADER_SIZE: usize = 56;
 const ELF64_E_PHOFF: usize = 32;
 const ELF64_E_PHENTSIZE: usize = 54;
 const ELF64_E_PHNUM: usize = 56;
@@ -17,6 +22,132 @@ const ELF64_PH_TYPE: usize = 0;
 const ELF64_PH_OFFSET: usize = 8;
 const ELF64_PH_FILESZ: usize = 32;
 const SHEBANG_RECURSION_LIMIT: usize = 6;
+
+struct TargetRuntimeFile {
+    file: File,
+    generation: TargetFileGeneration,
+}
+
+#[derive(Eq, PartialEq)]
+struct TargetFileGeneration {
+    device: u64,
+    inode: u64,
+    size: u64,
+    modified_seconds: i64,
+    modified_nanoseconds: i64,
+    changed_seconds: i64,
+    changed_nanoseconds: i64,
+}
+
+impl TargetFileGeneration {
+    fn from_metadata(metadata: &std::fs::Metadata) -> Self {
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            size: metadata.size(),
+            modified_seconds: metadata.mtime(),
+            modified_nanoseconds: metadata.mtime_nsec(),
+            changed_seconds: metadata.ctime(),
+            changed_nanoseconds: metadata.ctime_nsec(),
+        }
+    }
+}
+
+impl TargetRuntimeFile {
+    fn open(path: &Path) -> std::io::Result<Self> {
+        let file = File::open(path)?;
+        let generation = TargetFileGeneration::from_metadata(&file.metadata()?);
+        Ok(Self { file, generation })
+    }
+
+    fn read_prefix(&mut self) -> std::io::Result<Vec<u8>> {
+        self.file.seek(SeekFrom::Start(0))?;
+        let mut prefix = Vec::with_capacity(ELF64_HEADER_SIZE);
+        (&mut self.file)
+            .take(ELF64_HEADER_SIZE as u64)
+            .read_to_end(&mut prefix)?;
+        Ok(prefix)
+    }
+
+    fn read_shebang_line(&mut self) -> std::io::Result<Vec<u8>> {
+        self.file.seek(SeekFrom::Start(0))?;
+        let mut line = Vec::new();
+        BufReader::new(&mut self.file).read_until(b'\n', &mut line)?;
+        Ok(line)
+    }
+
+    fn elf_interpreter(&mut self, header: &[u8]) -> Result<Option<String>, String> {
+        validate_elf64(header)?;
+        let phoff = read_u64(header, ELF64_E_PHOFF)?;
+        let phentsize = usize::from(read_u16(header, ELF64_E_PHENTSIZE)?);
+        if phentsize != ELF64_PROGRAM_HEADER_SIZE {
+            return Err(format!(
+                "ELF64 program header entry size is {phentsize}, expected {ELF64_PROGRAM_HEADER_SIZE}"
+            ));
+        }
+        let phnum = usize::from(read_u16(header, ELF64_E_PHNUM)?);
+        for index in 0..phnum {
+            let relative = index
+                .checked_mul(phentsize)
+                .ok_or("program header index overflow")?;
+            let relative = u64::try_from(relative)
+                .map_err(|_| "program header offset overflow".to_string())?;
+            let offset = phoff
+                .checked_add(relative)
+                .ok_or("program header offset overflow")?;
+            let program_header = self.read_exact_range(offset, phentsize)?;
+            if read_u32(&program_header, ELF64_PH_TYPE)? != PT_INTERP {
+                continue;
+            }
+            let interp_offset = read_u64(&program_header, ELF64_PH_OFFSET)?;
+            let interp_size = usize::try_from(read_u64(&program_header, ELF64_PH_FILESZ)?)
+                .map_err(|_| "PT_INTERP size overflow".to_string())?;
+            if !(2..=libc::PATH_MAX as usize).contains(&interp_size) {
+                return Err(format!(
+                    "PT_INTERP size {interp_size} is outside Linux executable bounds"
+                ));
+            }
+            let raw = self.read_exact_range(interp_offset, interp_size)?;
+            let raw = raw.strip_suffix(b"\0").unwrap_or(&raw);
+            let interpreter = std::str::from_utf8(raw)
+                .map(str::to_string)
+                .map_err(|error| format!("PT_INTERP is not UTF-8: {error}"));
+            self.ensure_unchanged()?;
+            return interpreter.map(Some);
+        }
+        self.ensure_unchanged()?;
+        Ok(None)
+    }
+
+    fn read_exact_range(&mut self, offset: u64, size: usize) -> Result<Vec<u8>, String> {
+        let size_u64 = u64::try_from(size).map_err(|_| "ELF field size overflow".to_string())?;
+        let end = offset
+            .checked_add(size_u64)
+            .ok_or_else(|| "ELF offset overflow".to_string())?;
+        if end > self.generation.size {
+            return Err("ELF field is out of bounds".to_string());
+        }
+        let mut data = vec![0; size];
+        self.file
+            .seek(SeekFrom::Start(offset))
+            .map_err(|error| format!("cannot seek to ELF field: {error}"))?;
+        self.file
+            .read_exact(&mut data)
+            .map_err(|error| format!("cannot read ELF field: {error}"))?;
+        Ok(data)
+    }
+
+    fn ensure_unchanged(&self) -> Result<(), String> {
+        let current = self
+            .file
+            .metadata()
+            .map_err(|error| format!("cannot restat exec target: {error}"))?;
+        if TargetFileGeneration::from_metadata(&current) != self.generation {
+            return Err("exec target changed during runtime classification".to_string());
+        }
+        Ok(())
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LibcFamily {
@@ -106,16 +237,40 @@ fn target_runtime_for_path_inner(
             path.display()
         )));
     }
-    let data = std::fs::read(path).map_err(|error| {
+    let mut target = TargetRuntimeFile::open(path).map_err(|error| {
         SyncError::new(format!(
             "cannot read exec target {}: {error}",
             path.display()
         ))
     })?;
-    if let Some(interpreter) = shebang_interpreter(&data, path_value)? {
+    let prefix = target.read_prefix().map_err(|error| {
+        SyncError::new(format!(
+            "cannot read exec target {}: {error}",
+            path.display()
+        ))
+    })?;
+    if prefix.starts_with(b"#!") {
+        let shebang = target.read_shebang_line().map_err(|error| {
+            SyncError::new(format!(
+                "cannot read exec target {}: {error}",
+                path.display()
+            ))
+        })?;
+        target.ensure_unchanged().map_err(|error| {
+            SyncError::new(format!(
+                "cannot classify exec target {}: {error}",
+                path.display()
+            ))
+        })?;
+        let interpreter = shebang_interpreter(&shebang, path_value)?.ok_or_else(|| {
+            SyncError::new(format!(
+                "cannot classify exec target {}: invalid shebang",
+                path.display()
+            ))
+        })?;
         return target_runtime_for_path_inner(&interpreter, path_value, depth + 1);
     }
-    let interpreter = elf_interpreter(&data).map_err(|error| {
+    let interpreter = target.elf_interpreter(&prefix).map_err(|error| {
         SyncError::new(format!(
             "cannot classify exec target {}: {error}",
             path.display()
@@ -217,40 +372,8 @@ fn env_shebang_target(tokens: Vec<&str>) -> SyncResult<&str> {
     Err(SyncError::new("/usr/bin/env shebang has no target command"))
 }
 
-fn elf_interpreter(data: &[u8]) -> Result<Option<String>, String> {
-    validate_elf64(data)?;
-    let phoff = read_u64(data, ELF64_E_PHOFF)?;
-    let phentsize = usize::from(read_u16(data, ELF64_E_PHENTSIZE)?);
-    let phnum = usize::from(read_u16(data, ELF64_E_PHNUM)?);
-    let phoff = usize::try_from(phoff).map_err(|_| "program header offset overflow".to_string())?;
-    for index in 0..phnum {
-        let offset = phoff
-            .checked_add(
-                index
-                    .checked_mul(phentsize)
-                    .ok_or("program header index overflow")?,
-            )
-            .ok_or("program header offset overflow")?;
-        let header = bounded(data, offset, phentsize)?;
-        if read_u32(header, ELF64_PH_TYPE)? != PT_INTERP {
-            continue;
-        }
-        let interp_offset = usize::try_from(read_u64(header, ELF64_PH_OFFSET)?)
-            .map_err(|_| "PT_INTERP offset overflow".to_string())?;
-        let interp_size = usize::try_from(read_u64(header, ELF64_PH_FILESZ)?)
-            .map_err(|_| "PT_INTERP size overflow".to_string())?;
-        let raw = bounded(data, interp_offset, interp_size)?;
-        let raw = raw.strip_suffix(b"\0").unwrap_or(raw);
-        return std::str::from_utf8(raw)
-            .map(str::to_string)
-            .map(Some)
-            .map_err(|error| format!("PT_INTERP is not UTF-8: {error}"));
-    }
-    Ok(None)
-}
-
 fn validate_elf64(data: &[u8]) -> Result<(), String> {
-    if data.len() < 64 || &data[..4] != ELF_MAGIC {
+    if data.len() < ELF64_HEADER_SIZE || &data[..4] != ELF_MAGIC {
         return Err("not an ELF executable and not a script".to_string());
     }
     if data[4] != ELF_CLASS_64 {

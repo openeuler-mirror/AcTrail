@@ -1,4 +1,5 @@
 use crate::elf::ElfImage;
+use crate::pattern_search::ExactPatternSearch;
 use crate::{ToolError, ToolResult};
 
 pub(crate) struct StaticPatternDetection {
@@ -30,22 +31,13 @@ pub(crate) struct StaticPatternSupport;
 
 impl StaticPatternSupport {
     pub(crate) fn find_all(data: &[u8], pattern: &[u8]) -> Vec<usize> {
-        if pattern.is_empty() {
-            return Vec::new();
-        }
-        let mut offsets = Vec::new();
-        let mut start = 0_usize;
-        while start <= data.len().saturating_sub(pattern.len()) {
-            let Some(relative) = data[start..].iter().position(|byte| *byte == pattern[0]) else {
-                break;
-            };
-            let offset = start + relative;
-            if Self::matches_at(data, offset, pattern) {
-                offsets.push(offset);
-            }
-            start = offset + 1;
-        }
-        offsets
+        ExactPatternSearch::new(pattern).map_or_else(Vec::new, |search| search.find_all(data))
+    }
+
+    pub(crate) fn find_all_executable(image: &ElfImage, pattern: &[u8]) -> ToolResult<Vec<usize>> {
+        let ranges = image.executable_file_ranges()?;
+        Ok(ExactPatternSearch::new(pattern)
+            .map_or_else(Vec::new, |search| search.find_all_in_file_ranges(&ranges)))
     }
 
     pub(crate) fn contains(data: &[u8], pattern: &[u8]) -> bool {

@@ -12,6 +12,7 @@ mod detect;
 mod elf;
 pub mod fast;
 mod pattern_cmd;
+mod pattern_search;
 mod plan;
 mod probe_detector;
 mod reporter;

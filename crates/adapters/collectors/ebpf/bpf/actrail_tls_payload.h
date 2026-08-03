@@ -44,6 +44,7 @@ enum actrail_tls_completion_flags {
 enum actrail_tls_payload_capture_backend {
     ACTRAIL_TLS_BACKEND_SECCOMP_USER_READ = 1,
     ACTRAIL_TLS_BACKEND_BPF_COPY_SECCOMP_FALLBACK = 2,
+    ACTRAIL_TLS_BACKEND_BPF_COPY_ONLY = 3,
 };
 
 enum actrail_tls_payload_capture_state {
@@ -56,8 +57,9 @@ enum actrail_tls_capture_signal {
 };
 
 enum actrail_tls_payload_copy_limit {
-    ACTRAIL_TLS_PAYLOAD_DIRECT_COPY_ABI_BYTES = 4194304,
-    ACTRAIL_TLS_PAYLOAD_DIRECT_COPY_MAX_BYTES = 4194303,
+    ACTRAIL_TLS_PAYLOAD_DIRECT_COPY_ABI_BYTES = 65536,
+    ACTRAIL_TLS_PAYLOAD_DIRECT_COPY_MAX_BYTES = 65535,
+    ACTRAIL_TLS_PAYLOAD_DIRECT_COPY_MAX_CHUNKS = 1,
 };
 
 enum actrail_tls_payload_diagnostic_counter {
@@ -87,6 +89,7 @@ struct actrail_tls_payload_config {
     __u32 library;
     __u32 capture_backend;
     __u32 max_segment_bytes;
+    __u32 max_operation_bytes;
     __u32 diagnostics_enabled;
 };
 
@@ -183,7 +186,7 @@ struct actrail_tls_direct_capture_event {
     __u32 flags;
     __u32 symbol;
     __u32 library;
-    __u32 reserved;
+    __u32 operation_offset;
     __u64 pid_generation;
     __u32 host_pid;
     __u32 host_tid;
@@ -236,6 +239,39 @@ static __always_inline __u32 payload_tls_library(void) {
     return config->library;
 }
 
+static __always_inline __u32 payload_tls_library_for_symbol(__u32 symbol) {
+    __u32 configured = payload_tls_library();
+
+    if (configured != 0) {
+        return configured;
+    }
+    if (symbol >= ACTRAIL_TLS_SYMBOL_SSL_WRITE &&
+        symbol <= ACTRAIL_TLS_SYMBOL_SSL_READ_EX) {
+        return ACTRAIL_TLS_LIBRARY_OPENSSL;
+    }
+    if (symbol >= ACTRAIL_TLS_SYMBOL_RUSTLS_WRITE &&
+        symbol <= ACTRAIL_TLS_SYMBOL_RUSTLS_WRITE_VECTORED) {
+        return ACTRAIL_TLS_LIBRARY_RUSTLS;
+    }
+    if (symbol >= ACTRAIL_TLS_SYMBOL_GO_CONN_WRITE &&
+        symbol <= ACTRAIL_TLS_SYMBOL_GO_CONN_READ) {
+        return ACTRAIL_TLS_LIBRARY_GO;
+    }
+    if (symbol >= ACTRAIL_TLS_SYMBOL_GNUTLS_RECORD_SEND &&
+        symbol <= ACTRAIL_TLS_SYMBOL_GNUTLS_RECORD_RECV) {
+        return ACTRAIL_TLS_LIBRARY_GNUTLS;
+    }
+    if (symbol >= ACTRAIL_TLS_SYMBOL_NSPR_PR_WRITE &&
+        symbol <= ACTRAIL_TLS_SYMBOL_NSPR_PR_RECV) {
+        return ACTRAIL_TLS_LIBRARY_NSS;
+    }
+    if (symbol >= ACTRAIL_TLS_SYMBOL_RUSTLS_BUFFER_PLAINTEXT &&
+        symbol <= ACTRAIL_TLS_SYMBOL_RUSTLS_TAKE_RECEIVED_PLAINTEXT) {
+        return ACTRAIL_TLS_LIBRARY_RUSTLS;
+    }
+    return 0;
+}
+
 static __always_inline __u32 payload_tls_diagnostics_enabled(void) {
     __u32 key = 0;
     struct actrail_tls_payload_config *config =
@@ -274,6 +310,13 @@ static __always_inline __u32 payload_tls_capture_backend(void) {
     return config->capture_backend;
 }
 
+static __always_inline int payload_tls_bpf_copy_enabled(void) {
+    __u32 backend = payload_tls_capture_backend();
+
+    return backend == ACTRAIL_TLS_BACKEND_BPF_COPY_SECCOMP_FALLBACK ||
+        backend == ACTRAIL_TLS_BACKEND_BPF_COPY_ONLY;
+}
+
 static __always_inline __u32 payload_tls_direct_copy_limit(void) {
     __u32 key = 0;
     struct actrail_tls_payload_config *config =
@@ -282,10 +325,10 @@ static __always_inline __u32 payload_tls_direct_copy_limit(void) {
     if (!config) {
         return 0;
     }
-    if (config->max_segment_bytes > ACTRAIL_TLS_PAYLOAD_DIRECT_COPY_MAX_BYTES) {
+    if (config->max_operation_bytes > ACTRAIL_TLS_PAYLOAD_DIRECT_COPY_MAX_BYTES) {
         return ACTRAIL_TLS_PAYLOAD_DIRECT_COPY_MAX_BYTES;
     }
-    return config->max_segment_bytes;
+    return config->max_operation_bytes;
 }
 
 static __always_inline __u32 tls_op_metadata(__u32 direction, __u32 symbol) {
@@ -387,10 +430,10 @@ static __always_inline int store_tls_payload_op_args(
     op.pid_generation = current_process_start_time(tgid);
     op.direction = metadata & 0xffff;
     op.symbol = metadata >> 16;
-    op.library = payload_tls_library();
+    op.library = payload_tls_library_for_symbol(op.symbol);
     op.capture_state = ACTRAIL_TLS_CAPTURE_STATE_NEEDS_SECCOMP;
     if (op.direction == ACTRAIL_TLS_PAYLOAD_OUTBOUND &&
-        payload_tls_capture_backend() == ACTRAIL_TLS_BACKEND_BPF_COPY_SECCOMP_FALLBACK &&
+        payload_tls_bpf_copy_enabled() &&
         emit_tls_direct_capture(ctx, &op, tgid, tid, op.requested_size) == 1) {
         op.capture_state = ACTRAIL_TLS_CAPTURE_STATE_BPF_COPIED_FULL;
     }
@@ -596,7 +639,8 @@ static __always_inline int emit_tls_immediate_payload_args(
         return 0;
     }
     op->library = library;
-    if (direction == ACTRAIL_TLS_PAYLOAD_INBOUND) {
+    if (direction == ACTRAIL_TLS_PAYLOAD_INBOUND &&
+        payload_tls_capture_backend() != ACTRAIL_TLS_BACKEND_BPF_COPY_ONLY) {
         emit_tls_capture_request(ctx, op, tgid, tid, requested_size);
     }
     return emit_tls_payload_completion(ctx, requested_size, 0);

@@ -3,7 +3,7 @@
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -25,6 +25,13 @@ use super::root_path::PeerRootHandle;
 
 pub(super) struct TlsSyncPlanResolver {
     requests: Sender<PlanLookupJob>,
+    dynamic_exec_plan_timeout: Duration,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ExecPlanConsumer {
+    Daemon,
+    Sync,
 }
 
 struct PlanLookupJob {
@@ -66,7 +73,10 @@ impl TlsSyncPlanResolver {
             .name("actrail-tls-plan-resolver".to_string())
             .spawn(move || worker.run(receiver))
             .map_err(|error| ControlError::new("tls_sync_plan_worker", error.to_string()))?;
-        Ok(Self { requests })
+        Ok(Self {
+            requests,
+            dynamic_exec_plan_timeout: Duration::from_millis(config.dynamic_exec_plan_timeout_ms),
+        })
     }
 
     pub(super) fn submit_lookup(
@@ -86,36 +96,66 @@ impl TlsSyncPlanResolver {
             .map_err(|error| ControlError::new("tls_sync_plan_worker", error.to_string()))
     }
 
-    pub(super) fn prewarm(&self, binary: &Path) -> Result<(), ControlError> {
-        self.requests
-            .send(PlanLookupJob {
-                runtime_binary: binary.to_path_buf(),
-                consumer: ProbeConsumer::Sync,
-                peer_root: None,
-                response: None,
-                control_response: None,
-            })
-            .map_err(|error| ControlError::new("tls_sync_plan_worker", error.to_string()))
-    }
-
     pub(super) fn resolve_launch_plan(
         &self,
         binary: &Path,
     ) -> Result<LaunchTlsPlanReply, ControlError> {
+        self.submit_control_lookup(binary, ProbeConsumer::Daemon)?
+            .recv()
+            .map(|outcome| outcome.reply)
+            .map_err(|error| ControlError::new("tls_sync_plan_worker", error.to_string()))
+    }
+
+    pub(super) fn resolve_exec_plan(
+        &self,
+        binary: &Path,
+        consumer: ExecPlanConsumer,
+    ) -> Result<LaunchTlsPlanReply, ControlError> {
+        match self
+            .submit_control_lookup(binary, consumer.probe_consumer())?
+            .recv_timeout(self.dynamic_exec_plan_timeout)
+        {
+            Ok(outcome) => Ok(outcome.reply),
+            Err(RecvTimeoutError::Timeout) => Err(ControlError::new(
+                "tls_sync_exec_plan_timeout",
+                format!(
+                    "TLS plan resolution for {} exceeded {} ms",
+                    binary.display(),
+                    self.dynamic_exec_plan_timeout.as_millis()
+                ),
+            )),
+            Err(RecvTimeoutError::Disconnected) => Err(ControlError::new(
+                "tls_sync_plan_worker",
+                "TLS plan resolver stopped before returning the exec plan",
+            )),
+        }
+    }
+
+    fn submit_control_lookup(
+        &self,
+        binary: &Path,
+        consumer: ProbeConsumer,
+    ) -> Result<Receiver<LaunchPlanLookupOutcome>, ControlError> {
         let (sender, receiver) = mpsc::channel();
         self.requests
             .send(PlanLookupJob {
                 runtime_binary: binary.to_path_buf(),
-                consumer: ProbeConsumer::Daemon,
+                consumer,
                 peer_root: None,
                 response: None,
                 control_response: Some(sender),
             })
             .map_err(|error| ControlError::new("tls_sync_plan_worker", error.to_string()))?;
-        receiver
-            .recv()
-            .map(|outcome| outcome.reply)
-            .map_err(|error| ControlError::new("tls_sync_plan_worker", error.to_string()))
+        Ok(receiver)
+    }
+}
+
+impl ExecPlanConsumer {
+    const fn probe_consumer(self) -> ProbeConsumer {
+        match self {
+            Self::Daemon => ProbeConsumer::Daemon,
+            Self::Sync => ProbeConsumer::Sync,
+        }
     }
 }
 
