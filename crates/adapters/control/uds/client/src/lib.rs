@@ -2,11 +2,11 @@
 
 use std::io::{Read, Write};
 use std::net::Shutdown;
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::{AsRawFd, BorrowedFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
-use control_contract::command::ControlCommand;
+use control_contract::command::{ControlCommand, TrackAddCommand};
 use control_contract::reply::{ControlError, ControlReply};
 
 pub trait RoundTripTransport {
@@ -87,10 +87,32 @@ where
 
     pub fn send(&mut self, command: ControlCommand) -> Result<ControlReply, ControlError> {
         let fds = command_fds(&command);
+        self.send_command_with_fds(command, &fds)
+    }
+
+    pub fn send_launch_track_add(
+        &mut self,
+        command: TrackAddCommand,
+        pidfd: BorrowedFd<'_>,
+    ) -> Result<ControlReply, ControlError> {
+        if !command.launch_mode {
+            return Err(ControlError::new(
+                "transport",
+                "pidfd track registration requires launch_mode=true",
+            ));
+        }
+        self.send_command_with_fds(ControlCommand::TrackAdd(command), &[pidfd.as_raw_fd()])
+    }
+
+    fn send_command_with_fds(
+        &mut self,
+        command: ControlCommand,
+        fds: &[RawFd],
+    ) -> Result<ControlReply, ControlError> {
         let request = uds_control_transport::encode_command(&command);
         let bytes = self
             .transport
-            .send_with_fds(request, &fds)
+            .send_with_fds(request, fds)
             .map_err(|error| ControlError::new("transport", error))?;
         uds_control_transport::decode_reply(&bytes)
             .map_err(|error| ControlError::new(error.stage, error.message))?

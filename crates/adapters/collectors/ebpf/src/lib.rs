@@ -14,7 +14,7 @@ pub mod procfs;
 pub mod sensors;
 
 use std::collections::BTreeMap;
-use std::os::fd::RawFd;
+use std::os::fd::{AsFd, OwnedFd, RawFd};
 use std::time::SystemTime;
 
 use collector_binding::{
@@ -26,8 +26,8 @@ use config_core::daemon::{EbpfCollectorConfig, FileBulkReadFastPathConfig, Paylo
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use model_core::ids::{CollectorName, TraceId};
 use model_core::process::{
-    InitialSuppressedFd, KernelProcessCoordinates, ProcessObservation, ProcessRecord,
-    ProcessSuppressedFd,
+    InitialSuppressedFd, KernelProcessCoordinates, ProcessIdentity, ProcessObservation,
+    ProcessRecord, ProcessSuppressedFd,
 };
 
 use crate::capability_probe::{EbpfProbeResult, probe};
@@ -66,6 +66,7 @@ pub struct EbpfCollector {
     tls_diagnostic_events: Vec<TlsDiagnosticEvent>,
     socket_completions: Vec<SocketPayloadCompletion>,
     suppressed_fds: Vec<TraceSuppressedFd>,
+    pending_launches: BTreeMap<TraceId, PendingLaunchBinding>,
     binding_gap_drops: u64,
     binding_gap_lifecycle_skips: u64,
     clock_ticks_per_second: Option<u64>,
@@ -78,6 +79,15 @@ pub struct EbpfPreflightKey(Vec<(Capability, RequestMode)>);
 struct TraceSuppressedFd {
     trace_id: TraceId,
     fd: ProcessSuppressedFd,
+}
+
+struct PendingLaunchBinding {
+    root_identity: ProcessIdentity,
+    root_observation: ProcessObservation,
+    generation: u64,
+    initial_suppressed_fds: Vec<InitialSuppressedFd>,
+    root_working_directory: Option<String>,
+    pidfd: OwnedFd,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -163,6 +173,7 @@ impl EbpfCollector {
             tls_diagnostic_events: Vec::new(),
             socket_completions: Vec::new(),
             suppressed_fds: Vec::new(),
+            pending_launches: BTreeMap::new(),
             binding_gap_drops: 0,
             binding_gap_lifecycle_skips: 0,
             clock_ticks_per_second: clock_ticks_per_second(),
@@ -311,12 +322,103 @@ impl EbpfCollector {
             .collect()
     }
 
+    pub fn bind_launch_trace(
+        &mut self,
+        request: &TraceBindingRequest,
+        pidfd: OwnedFd,
+    ) -> Result<TraceBindingHandle, CollectorError> {
+        if let Some(reason) = &self.probe_result.reason_unavailable {
+            return Err(CollectorError::new("bind_launch_trace", reason.clone()));
+        }
+        if self.pending_launches.contains_key(&request.trace_id) {
+            return Err(CollectorError::new(
+                "bind_launch_trace",
+                format!("trace {} already has a pending launch", request.trace_id),
+            ));
+        }
+        if let Some(unsupported_required) = request.requested_capabilities.iter().find(|request| {
+            !supported_required_capability(&request.capability, self.loader.payload_config())
+                && request.mode == RequestMode::Required
+        }) {
+            return Err(CollectorError::new(
+                "bind_launch_trace",
+                format!(
+                    "current libbpf-rs collector path does not support required capability {:?}",
+                    unsupported_required.capability
+                ),
+            ));
+        }
+
+        self.ensure_runtime_for_requests(&request.requested_capabilities)?;
+        let generation = kernel_start_time(&request.root_observation)?;
+        let root_pid_namespace = request
+            .root_observation
+            .namespace
+            .as_ref()
+            .map(|value| value.pid_namespace.clone())
+            .ok_or_else(|| {
+                CollectorError::new("pid_namespace", "root process has no PID namespace")
+            })?;
+        let attached_capabilities = self.runtime_ref()?.attached_capabilities().clone();
+        self.register_trace_pid_namespace(request.trace_id, &request.root_observation)?;
+        if let Err(error) = self.runtime_ref()?.arm_pending_exec(
+            pidfd.as_fd(),
+            request.trace_id,
+            generation,
+            &request.initial_suppressed_fds,
+        ) {
+            let _ = self
+                .runtime_ref()?
+                .unregister_trace_pid_namespace(request.trace_id);
+            return Err(loader_error(error));
+        }
+
+        self.bindings.set_trace_capabilities(
+            request.trace_id,
+            request
+                .requested_capabilities
+                .iter()
+                .filter(|request| request.mode != RequestMode::Disabled)
+                .filter(|request| attached_capabilities.contains(&request.capability))
+                .map(|request| request.capability.clone()),
+        );
+        self.bindings
+            .set_trace_pid_namespace(request.trace_id, root_pid_namespace);
+        let root_working_directory = request
+            .root_observation
+            .host
+            .as_ref()
+            .and_then(|host| crate::procfs::read_process_cwd(host.pid));
+        self.pending_launches.insert(
+            request.trace_id,
+            PendingLaunchBinding {
+                root_identity: request.root_identity,
+                root_observation: request.root_observation.clone(),
+                generation,
+                initial_suppressed_fds: request.initial_suppressed_fds.clone(),
+                root_working_directory,
+                pidfd,
+            },
+        );
+        Ok(TraceBindingHandle {
+            collector: self.probe_result.descriptor.clone(),
+            bound_at: SystemTime::now(),
+        })
+    }
+
     pub fn seed_trace_memberships(
         &mut self,
         trace_id: TraceId,
         records: impl IntoIterator<Item = ProcessRecord>,
     ) -> Result<(), CollectorError> {
         for record in records {
+            if self
+                .pending_launches
+                .get(&trace_id)
+                .is_some_and(|pending| pending.root_identity == record.identity)
+            {
+                continue;
+            }
             let observation = observation_from_record(&record)?;
             let map_pid = self.map_pid_for_observation(&observation)?;
             let kernel_start_time = kernel_start_time(&observation)?;
@@ -364,6 +466,20 @@ impl EbpfCollector {
     }
 
     pub fn stop_kernel_tracking_process(&mut self, pid: u32) -> Result<(), CollectorError> {
+        if let Some(trace_id) = self
+            .pending_launches
+            .iter()
+            .find_map(|(trace_id, pending)| {
+                pending
+                    .root_observation
+                    .host
+                    .as_ref()
+                    .is_some_and(|host| host.pid == pid)
+                    .then_some(*trace_id)
+            })
+        {
+            self.cancel_pending_launch(trace_id)?;
+        }
         let tracked = self.bindings.by_host_pid(pid).cloned();
         let map_pid = tracked
             .as_ref()
@@ -477,7 +593,7 @@ impl EbpfCollector {
             .as_ref()
             .ok_or_else(|| CollectorError::new("runtime", "eBPF runtime was not initialized"))?;
         Ok(EbpfCollectorDebugSnapshot {
-            active_binding_traces: self.bindings.trace_count(),
+            active_binding_traces: self.active_binding_trace_count(),
             attached_programs: runtime.attached_programs().to_vec(),
             last_raw_sample_count: runtime.last_raw_sample_count(),
             tracked_trace_id: runtime
@@ -511,10 +627,14 @@ impl EbpfCollector {
     }
 
     fn idle_runtime_needs_replan(&self, attach_plan: &AttachPlan) -> bool {
-        self.bindings.trace_count() == 0
+        self.active_binding_trace_count() == 0
             && self.runtime.as_ref().is_some_and(|runtime| {
                 !attach_plan.is_satisfied_by(runtime.attached_capabilities())
             })
+    }
+
+    fn active_binding_trace_count(&self) -> usize {
+        self.bindings.trace_count() + self.pending_launches.len()
     }
 
     fn ensure_required_capabilities_attached(
@@ -617,6 +737,18 @@ impl EbpfCollector {
             return Ok(());
         };
         cleanup_suppressed_fds_for_process(runtime, &mut self.suppressed_fds, pid, generation)
+    }
+
+    fn cancel_pending_launch(&mut self, trace_id: TraceId) -> Result<bool, CollectorError> {
+        let Some(pending) = self.pending_launches.get(&trace_id) else {
+            return Ok(false);
+        };
+        let deleted = self
+            .runtime_ref()?
+            .cancel_pending_exec(pending.pidfd.as_fd())
+            .map_err(loader_error)?;
+        self.pending_launches.remove(&trace_id);
+        Ok(deleted)
     }
 }
 
@@ -820,6 +952,7 @@ impl CollectorInstance for EbpfCollector {
     }
 
     fn unbind_trace(&mut self, trace_id: TraceId) -> Result<(), CollectorError> {
+        self.cancel_pending_launch(trace_id)?;
         if let Some(runtime) = self.runtime.as_mut() {
             runtime.untrack_fork_trace(trace_id).map_err(loader_error)?;
             cleanup_suppressed_fds_for_trace(runtime, &mut self.suppressed_fds, trace_id)?;
@@ -856,7 +989,7 @@ impl CollectorInstance for EbpfCollector {
         }
         CollectorStats {
             collector_name: CollectorName::new("ebpf"),
-            active_bindings: self.bindings.trace_count(),
+            active_bindings: self.active_binding_trace_count(),
             last_heartbeat_at: SystemTime::now(),
             dropped,
         }

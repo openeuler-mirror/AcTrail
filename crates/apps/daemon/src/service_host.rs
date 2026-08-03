@@ -1,7 +1,7 @@
 //! Host boundary for long-lived daemon services.
 
 use std::collections::BTreeMap;
-use std::os::fd::RawFd;
+use std::os::fd::{OwnedFd, RawFd};
 use std::time::{Duration, SystemTime};
 
 use control_contract::command::{ControlCommand, TrackAddCommand};
@@ -36,6 +36,17 @@ pub trait AttachService {
         trace_runtime: &mut trace_runtime::TraceRuntime,
         command: &control_contract::command::TrackAddCommand,
     ) -> Result<TrackAddReply, ControlError>;
+    fn attach_launch(
+        &mut self,
+        _trace_runtime: &mut trace_runtime::TraceRuntime,
+        _command: &control_contract::command::TrackAddCommand,
+        _pidfd: OwnedFd,
+    ) -> Result<TrackAddReply, ControlError> {
+        Err(ControlError::new(
+            "launch_pidfd",
+            "attach service does not implement pidfd launch registration",
+        ))
+    }
     fn drain_live_events(
         &mut self,
         trace_runtime: &mut trace_runtime::TraceRuntime,
@@ -168,6 +179,15 @@ where
         credentials: PeerCredentials,
         command: ControlCommand,
     ) -> Result<ControlReply, ControlError> {
+        self.handle_from_peer_with_launch_pidfd(credentials, command, None)
+    }
+
+    fn handle_from_peer_with_launch_pidfd(
+        &mut self,
+        credentials: PeerCredentials,
+        command: ControlCommand,
+        launch_pidfd: Option<OwnedFd>,
+    ) -> Result<ControlReply, ControlError> {
         let command_name = control_command_name(&command);
         let peer = PeerIdentity::resolve(credentials).map_err(|error| {
             audit_peer_rejection(credentials, command_name, &error);
@@ -202,7 +222,7 @@ where
             _ => None,
         };
 
-        let mut reply = self.handle(command)?;
+        let mut reply = self.handle_with_launch_pidfd(command, launch_pidfd)?;
         if let (
             Some((peer_process, track_add_request_id)),
             ControlReply::LaunchPermissions(permissions),
@@ -241,6 +261,25 @@ where
     }
 
     fn handle(&mut self, command: ControlCommand) -> Result<ControlReply, ControlError> {
+        self.handle_with_launch_pidfd(command, None)
+    }
+
+    fn handle_with_launch_pidfd(
+        &mut self,
+        command: ControlCommand,
+        mut launch_pidfd: Option<OwnedFd>,
+    ) -> Result<ControlReply, ControlError> {
+        if launch_pidfd.is_some()
+            && !matches!(
+                &command,
+                ControlCommand::TrackAdd(track_add) if track_add.launch_mode
+            )
+        {
+            return Err(ControlError::new(
+                "unexpected_fd",
+                "launch pidfd is only valid for launch-mode track-add",
+            ));
+        }
         match command {
             ControlCommand::ResolveLaunchPermissions(command) => {
                 let host_ebpf_available = self
@@ -280,10 +319,23 @@ where
                         ),
                     ));
                 }
-                self.wiring
-                    .attach_service
-                    .attach_existing(&mut self.wiring.trace_runtime, &command)
-                    .map(ControlReply::TrackAdded)
+                if command.launch_mode {
+                    let pidfd = launch_pidfd.take().ok_or_else(|| {
+                        ControlError::new(
+                            "launch_pidfd",
+                            "launch-mode track-add requires an SCM_RIGHTS pidfd",
+                        )
+                    })?;
+                    self.wiring
+                        .attach_service
+                        .attach_launch(&mut self.wiring.trace_runtime, &command, pidfd)
+                        .map(ControlReply::TrackAdded)
+                } else {
+                    self.wiring
+                        .attach_service
+                        .attach_existing(&mut self.wiring.trace_runtime, &command)
+                        .map(ControlReply::TrackAdded)
+                }
             }
             ControlCommand::RegisterSeccompListener(command) => {
                 self.wiring

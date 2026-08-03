@@ -24,6 +24,9 @@ const PROCESS_CONTEXT_PROGRAMS: &[&str] = &[
     "handle_sched_process_exit",
 ];
 
+const TRACKING_REGISTRATION_PROGRAMS: &[&str] =
+    &["handle_sched_process_exec", "handle_sched_process_exit"];
+
 const NET_TRANSPORT_PROGRAMS: &[&str] = &[
     "handle_sys_enter_connect",
     "handle_sys_exit_connect",
@@ -215,6 +218,9 @@ impl AttachPlan {
                 "attach_plan",
                 format!("BPF program {program_name} has no capability mapping"),
             ));
+        }
+        if TRACKING_REGISTRATION_PROGRAMS.contains(&program_name) {
+            return Ok(true);
         }
         Ok(self
             .capabilities

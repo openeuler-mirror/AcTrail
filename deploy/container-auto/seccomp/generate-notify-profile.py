@@ -39,7 +39,7 @@ def generate(document: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(syscalls, list):
         raise SystemExit("Moby profile has no syscall rule list")
 
-    removed = 0
+    removed_pidfd_gate = 0
     for rule in syscalls:
         names = rule.get("names")
         includes = rule.get("includes", {})
@@ -50,12 +50,27 @@ def generate(document: dict[str, Any]) -> dict[str, Any]:
             and "CAP_SYS_PTRACE" in caps
         ):
             names.remove("pidfd_getfd")
-            removed += 1
+            removed_pidfd_gate += 1
 
-    if removed != 1:
+    if removed_pidfd_gate != 1:
         raise SystemExit(
-            f"expected one CAP_SYS_PTRACE-gated pidfd_getfd rule, found {removed}"
+            "expected one CAP_SYS_PTRACE-gated pidfd_getfd rule, "
+            f"found {removed_pidfd_gate}"
         )
+
+    clone3_errno_rules = [
+        rule
+        for rule in syscalls
+        if rule.get("names") == ["clone3"]
+        and rule.get("action") == "SCMP_ACT_ERRNO"
+        and rule.get("errnoRet") == 38
+    ]
+    if len(clone3_errno_rules) != 1:
+        raise SystemExit(
+            "expected one clone3 ENOSYS compatibility rule, "
+            f"found {len(clone3_errno_rules)}"
+        )
+    syscalls.remove(clone3_errno_rules[0])
 
     # Rule order is not semantically significant for these ALLOW entries, but
     # keeping the AcTrail delta next to the broad baseline allowlist makes
@@ -63,7 +78,7 @@ def generate(document: dict[str, Any]) -> dict[str, Any]:
     syscalls.insert(
         1,
         {
-            "names": ["pidfd_getfd"],
+            "names": ["clone3", "pidfd_getfd"],
             "action": "SCMP_ACT_ALLOW",
         },
     )

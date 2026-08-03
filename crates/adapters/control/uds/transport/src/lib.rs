@@ -58,7 +58,14 @@ pub fn encode_command(command: &ControlCommand) -> Vec<u8> {
             fields.push(command.binary.display().to_string());
         }
         ControlCommand::TrackAdd(command) => {
-            fields.push("track_add_v4".to_string());
+            fields.push(
+                if command.launch_mode {
+                    "track_add_v5"
+                } else {
+                    "track_add_v4"
+                }
+                .to_string(),
+            );
             fields.push(command.request_id.get().to_string());
             encode_process_ref(&mut fields, &command.root);
             fields.push(command.display_name.to_string());
@@ -265,7 +272,7 @@ pub fn decode_command(bytes: &[u8]) -> Result<ControlCommand, ControlCodecError>
                 tls_probe_plan: None,
             }))
         }
-        "track_add_v4" => {
+        "track_add_v4" | "track_add_v5" => {
             let request_id = RequestId::new(parse_u64(field(&fields, 1)?, "request_id")?);
             let root = decode_process_ref(&fields, 2)?;
             let display_name = TraceName::new(field(&fields, 4)?);

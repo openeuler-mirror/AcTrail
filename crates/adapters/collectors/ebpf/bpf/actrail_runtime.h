@@ -107,6 +107,20 @@ struct task_struct {
     __u64 start_boottime;
 } __attribute__((preserve_access_index));
 
+struct actrail_pending_exec_suppressed_fd {
+    __s32 fd;
+    __u32 purpose;
+};
+
+struct actrail_pending_exec_binding {
+    __u64 trace_id;
+    __u64 generation;
+    __u32 suppressed_fd_count;
+    __u32 counted;
+    struct actrail_pending_exec_suppressed_fd
+        suppressed_fds[ACTRAIL_SUPPRESSED_FD_INDEX_SLOT_MAX];
+};
+
 struct actrail_pending_exit_op {
     __s32 code;
 };
@@ -212,6 +226,21 @@ struct {
     __type(key, __u32);
     __type(value, __u64);
 } process_start_times SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_TASK_STORAGE);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+    __type(key, int);
+    __type(value, struct actrail_pending_exec_binding);
+} pending_exec_bindings SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u64);
+} pending_exec_count SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);

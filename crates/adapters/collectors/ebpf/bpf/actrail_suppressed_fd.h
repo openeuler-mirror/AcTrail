@@ -2,7 +2,6 @@
 #define ACTRAIL_SUPPRESSED_FD_H
 
 #define ACTRAIL_SUPPRESSED_FD_PURPOSE_NONE 0
-#define ACTRAIL_SUPPRESSED_FD_INDEX_SLOT_MAX 64
 
 struct actrail_suppressed_fd_config {
     __u32 index_slots_per_process;

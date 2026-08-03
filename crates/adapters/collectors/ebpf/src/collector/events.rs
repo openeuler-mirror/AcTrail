@@ -2,6 +2,7 @@
 
 use collector_instance::{CollectorError, CollectorPollBatch};
 use model_core::ids::TraceId;
+use model_core::process::{KernelProcessCoordinates, ProcessSuppressedFd};
 
 use crate::decode::{
     self, decode_file_path, decode_observation, decode_socket_payload,
@@ -40,6 +41,9 @@ impl EbpfCollector {
             return Ok(());
         };
         for event in runtime.poll_events().map_err(loader_error)? {
+            if let KernelEvent::Observation(observation) = &event {
+                self.promote_pending_launch_after_exec(observation)?;
+            }
             self.handle_control_event(event);
         }
         Ok(())
@@ -107,6 +111,7 @@ impl EbpfCollector {
     ) -> Result<(), CollectorError> {
         match event {
             KernelEvent::Observation(event) => {
+                self.promote_pending_launch_after_exec(&event)?;
                 if self.is_superseded_fork_event(&event) {
                     return Ok(());
                 }
@@ -145,6 +150,67 @@ impl EbpfCollector {
             }
             other => self.handle_control_event(other),
         }
+        Ok(())
+    }
+
+    fn promote_pending_launch_after_exec(
+        &mut self,
+        event: &KernelObservationEvent,
+    ) -> Result<(), CollectorError> {
+        if event.kind != decode::PROC_EVENT_EXEC {
+            return Ok(());
+        }
+        let Some(pending) = self.pending_launches.get(&event.trace_id) else {
+            return Ok(());
+        };
+        if event.host_pid == 0 {
+            return Err(CollectorError::new(
+                "pending_launch_exec",
+                format!(
+                    "trace {} exec promotion did not report kernel PID K",
+                    event.trace_id
+                ),
+            ));
+        }
+        if event.pid_generation == 0 || event.pid_generation != pending.generation {
+            return Err(CollectorError::new(
+                "pending_launch_exec",
+                format!(
+                    "trace {} exec generation {} does not match armed generation {}",
+                    event.trace_id, event.pid_generation, pending.generation
+                ),
+            ));
+        }
+
+        let root_observation = pending.root_observation.clone();
+        let root_working_directory = pending.root_working_directory.clone();
+        let initial_suppressed_fds = pending.initial_suppressed_fds.clone();
+        self.bindings.track_with_map_pid(
+            event.trace_id,
+            root_observation.clone(),
+            event.host_pid,
+            event.pid_generation,
+        );
+        self.file_tracker
+            .seed_process(event.trace_id, root_observation, root_working_directory);
+        let process = KernelProcessCoordinates {
+            pid: event.host_pid,
+            start_time: event.pid_generation,
+        };
+        self.suppressed_fds
+            .extend(
+                initial_suppressed_fds
+                    .into_iter()
+                    .map(|initial| super::TraceSuppressedFd {
+                        trace_id: event.trace_id,
+                        fd: ProcessSuppressedFd {
+                            process,
+                            fd: initial.fd,
+                            purpose: initial.purpose,
+                        },
+                    }),
+            );
+        self.pending_launches.remove(&event.trace_id);
         Ok(())
     }
 

@@ -1,7 +1,7 @@
 //! Attach service backed by procfs bootstrap and storage persistence.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::os::fd::RawFd;
+use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::time::{Duration, Instant, SystemTime};
 
 #[path = "attach/debug.rs"]
@@ -388,6 +388,7 @@ impl StorageAttachService {
         command: &TrackAddCommand,
         profile_snapshot: CaptureProfileSnapshot,
         sensor_plan: SensorPlan,
+        launch_pidfd: Option<OwnedFd>,
     ) -> Result<TrackAddReply, ControlError> {
         let collector_name = self.collector_name();
         let requested_capabilities = collector_capability_requests(
@@ -424,7 +425,7 @@ impl StorageAttachService {
             .collect::<Result<Vec<_>, _>>()?;
 
         if uses_ebpf_collector {
-            if let Err(error) = self.collector.bind_trace(&TraceBindingRequest {
+            let binding_request = TraceBindingRequest {
                 trace_id: bootstrap.trace_id,
                 root_identity: bootstrap.root_identity,
                 root_observation: bootstrap.root_observation.clone(),
@@ -432,7 +433,19 @@ impl StorageAttachService {
                 profile_snapshot: profile_snapshot.clone(),
                 requested_capabilities,
                 initial_suppressed_fds: command.initial_suppressed_fds.clone(),
-            }) {
+            };
+            let bind_result = if command.launch_mode {
+                let pidfd = launch_pidfd.ok_or_else(|| {
+                    ControlError::new(
+                        "launch_pidfd",
+                        "eBPF launch attach requires an SCM_RIGHTS pidfd",
+                    )
+                })?;
+                self.collector.bind_launch_trace(&binding_request, pidfd)
+            } else {
+                self.collector.bind_trace(&binding_request)
+            };
+            if let Err(error) = bind_result {
                 let _ = trace_runtime.fail_trace(bootstrap.trace_id, SystemTime::now());
                 return Err(ControlError::new(error.stage, error.message));
             }
@@ -447,6 +460,9 @@ impl StorageAttachService {
                     points: plan.points.clone(),
                 };
                 if let Err(error) = self.collector.attach_dynamic_tls_plan(&plan) {
+                    if command.launch_mode {
+                        let _ = self.collector.unbind_trace(bootstrap.trace_id);
+                    }
                     let _ = trace_runtime.fail_trace(bootstrap.trace_id, SystemTime::now());
                     return Err(ControlError::new(error.stage, error.message));
                 }
@@ -456,12 +472,15 @@ impl StorageAttachService {
                 .collector
                 .seed_trace_memberships(bootstrap.trace_id, member_processes)
             {
+                if command.launch_mode {
+                    let _ = self.collector.unbind_trace(bootstrap.trace_id);
+                }
                 let _ = trace_runtime.fail_trace(bootstrap.trace_id, SystemTime::now());
                 return Err(ControlError::new(error.stage, error.message));
             }
         }
 
-        self.finalize_trace(
+        let result = self.finalize_trace(
             trace_runtime,
             bootstrap.trace_id,
             bootstrap.root_identity,
@@ -473,7 +492,123 @@ impl StorageAttachService {
             } else {
                 "snapshot bootstrap completed before virtual collector sampling and remains gap-marked"
             },
+        );
+        if result.is_err() && uses_ebpf_collector && command.launch_mode {
+            let _ = self.collector.unbind_trace(bootstrap.trace_id);
+            let _ = trace_runtime.fail_trace(bootstrap.trace_id, SystemTime::now());
+        }
+        result
+    }
+
+    fn attach_command(
+        &mut self,
+        trace_runtime: &mut trace_runtime::TraceRuntime,
+        command: &TrackAddCommand,
+        launch_pidfd: Option<OwnedFd>,
+    ) -> Result<TrackAddReply, ControlError> {
+        if !command.launch_mode && self.profiles.is_launch_only_profile(&command.profile_name) {
+            return Err(ControlError::new(
+                "launch_admission",
+                "deployment-derived profiles require a daemon launch permission admission",
+            ));
+        }
+        let profile = self
+            .profiles
+            .capture_profile(&command.profile_name)
+            .ok_or_else(|| {
+                ControlError::new("unknown_profile", "capture profile does not exist")
+            })?;
+        let profile_snapshot = CaptureProfileSnapshot::from_profile(profile, SystemTime::now());
+        if self.seccomp_tls.enabled()
+            && !command.launch_mode
+            && capability_requested(
+                &profile_snapshot.capability_requests,
+                &Capability::TlsPlaintextPayload,
+            )
+        {
+            return Err(ControlError::new(
+                "payload_tls_backend",
+                "TLS plaintext payload capture is only supported by actrailctl launch",
+            ));
+        }
+        if self.process_seccomp.enabled()
+            && !command.launch_mode
+            && capability_requested(
+                &profile_snapshot.capability_requests,
+                &Capability::ProcExecContext,
+            )
+        {
+            return Err(ControlError::new(
+                "process_seccomp_backend",
+                "process exec context capture is only supported by actrailctl launch",
+            ));
+        }
+        let sensor_plan = trace_runtime
+            .negotiate(&profile_snapshot)
+            .map_err(|error| ControlError::new("negotiate", format!("{:?}", error)))?;
+
+        if sensor_plan.collectors.is_empty() {
+            return self.attach_snapshot_only(
+                trace_runtime,
+                command,
+                profile_snapshot,
+                sensor_plan,
+            );
+        }
+
+        self.attach_with_collector(
+            trace_runtime,
+            command,
+            profile_snapshot,
+            sensor_plan,
+            launch_pidfd,
         )
+    }
+
+    fn validate_launch_pidfd(
+        &self,
+        command: &TrackAddCommand,
+        pidfd: &OwnedFd,
+    ) -> Result<(), ControlError> {
+        let observation = resolve_process_ref(&command.root)?;
+        let expected_pid = observation
+            .host
+            .as_ref()
+            .map(|host| host.pid)
+            .ok_or_else(|| ControlError::new("launch_pidfd", "root host PID is missing"))?;
+        let path = format!("/proc/self/fdinfo/{}", pidfd.as_raw_fd());
+        let fdinfo = std::fs::read_to_string(&path).map_err(|error| {
+            ControlError::new(
+                "launch_pidfd",
+                format!("read received pidfd metadata {path}: {error}"),
+            )
+        })?;
+        let pid = fdinfo
+            .lines()
+            .find_map(|line| line.strip_prefix("Pid:"))
+            .map(str::trim)
+            .ok_or_else(|| {
+                ControlError::new(
+                    "launch_pidfd",
+                    "received descriptor is not a pidfd with a Pid field",
+                )
+            })?
+            .parse::<u32>()
+            .map_err(|error| {
+                ControlError::new(
+                    "launch_pidfd",
+                    format!("parse received pidfd target PID: {error}"),
+                )
+            })?;
+        if pid != expected_pid {
+            return Err(ControlError::new(
+                "launch_pidfd",
+                format!(
+                    "received pidfd targets daemon PID {pid}, but ProcessRef resolved to {expected_pid}"
+                ),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -567,57 +702,29 @@ impl AttachService for StorageAttachService {
         trace_runtime: &mut trace_runtime::TraceRuntime,
         command: &TrackAddCommand,
     ) -> Result<TrackAddReply, ControlError> {
-        if !command.launch_mode && self.profiles.is_launch_only_profile(&command.profile_name) {
+        if command.launch_mode {
             return Err(ControlError::new(
-                "launch_admission",
-                "deployment-derived profiles require a daemon launch permission admission",
+                "launch_pidfd",
+                "launch-mode track-add must use pidfd launch registration",
             ));
         }
-        let profile = self
-            .profiles
-            .capture_profile(&command.profile_name)
-            .ok_or_else(|| {
-                ControlError::new("unknown_profile", "capture profile does not exist")
-            })?;
-        let profile_snapshot = CaptureProfileSnapshot::from_profile(profile, SystemTime::now());
-        if self.seccomp_tls.enabled()
-            && !command.launch_mode
-            && capability_requested(
-                &profile_snapshot.capability_requests,
-                &Capability::TlsPlaintextPayload,
-            )
-        {
-            return Err(ControlError::new(
-                "payload_tls_backend",
-                "TLS plaintext payload capture is only supported by actrailctl launch",
-            ));
-        }
-        if self.process_seccomp.enabled()
-            && !command.launch_mode
-            && capability_requested(
-                &profile_snapshot.capability_requests,
-                &Capability::ProcExecContext,
-            )
-        {
-            return Err(ControlError::new(
-                "process_seccomp_backend",
-                "process exec context capture is only supported by actrailctl launch",
-            ));
-        }
-        let sensor_plan = trace_runtime
-            .negotiate(&profile_snapshot)
-            .map_err(|error| ControlError::new("negotiate", format!("{:?}", error)))?;
+        self.attach_command(trace_runtime, command, None)
+    }
 
-        if sensor_plan.collectors.is_empty() {
-            return self.attach_snapshot_only(
-                trace_runtime,
-                command,
-                profile_snapshot,
-                sensor_plan,
-            );
+    fn attach_launch(
+        &mut self,
+        trace_runtime: &mut trace_runtime::TraceRuntime,
+        command: &TrackAddCommand,
+        pidfd: OwnedFd,
+    ) -> Result<TrackAddReply, ControlError> {
+        if !command.launch_mode {
+            return Err(ControlError::new(
+                "launch_pidfd",
+                "pidfd launch registration requires launch_mode=true",
+            ));
         }
-
-        self.attach_with_collector(trace_runtime, command, profile_snapshot, sensor_plan)
+        self.validate_launch_pidfd(command, &pidfd)?;
+        self.attach_command(trace_runtime, command, Some(pidfd))
     }
 
     fn drain_live_events(

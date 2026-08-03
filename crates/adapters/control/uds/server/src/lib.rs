@@ -1,7 +1,7 @@
 //! Unix-domain-socket server adapter for daemon-side control handling.
 
 use std::io::Write;
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
 use std::os::unix::net::UnixStream;
 
 use control_contract::command::ControlCommand;
@@ -53,12 +53,41 @@ impl PeerCredentials {
 pub trait ControlService {
     fn handle(&mut self, command: ControlCommand) -> Result<ControlReply, ControlError>;
 
+    fn handle_with_launch_pidfd(
+        &mut self,
+        command: ControlCommand,
+        launch_pidfd: Option<OwnedFd>,
+    ) -> Result<ControlReply, ControlError> {
+        if launch_pidfd.is_some() {
+            return Err(ControlError::new(
+                "unexpected_fd",
+                "service does not accept a launch pidfd",
+            ));
+        }
+        self.handle(command)
+    }
+
     fn handle_from_peer(
         &mut self,
         _peer: PeerCredentials,
         command: ControlCommand,
     ) -> Result<ControlReply, ControlError> {
         self.handle(command)
+    }
+
+    fn handle_from_peer_with_launch_pidfd(
+        &mut self,
+        peer: PeerCredentials,
+        command: ControlCommand,
+        launch_pidfd: Option<OwnedFd>,
+    ) -> Result<ControlReply, ControlError> {
+        if launch_pidfd.is_some() {
+            return Err(ControlError::new(
+                "unexpected_fd",
+                "service does not accept a launch pidfd",
+            ));
+        }
+        self.handle_from_peer(peer, command)
     }
 }
 
@@ -96,19 +125,27 @@ where
         peer: Option<PeerCredentials>,
     ) -> Vec<u8> {
         let response = match uds_control_transport::decode_command(request) {
-            Ok(command) => {
-                let (command, injected_fd) = inject_fds(command, fds);
-                let response = match peer {
-                    Some(peer) => self.service.handle_from_peer(peer, command),
-                    None => self.service.handle(command),
-                };
-                if response.is_err() {
-                    if let Some(fd) = injected_fd {
-                        close_fd(fd);
+            Ok(command) => match prepare_command_fds(command, fds) {
+                Ok(mut prepared) => {
+                    let response = match peer {
+                        Some(peer) => self.service.handle_from_peer_with_launch_pidfd(
+                            peer,
+                            prepared.command,
+                            prepared.launch_pidfd,
+                        ),
+                        None => self
+                            .service
+                            .handle_with_launch_pidfd(prepared.command, prepared.launch_pidfd),
+                    };
+                    if response.is_ok() {
+                        if let Some(fd) = prepared.injected_listener_fd.take() {
+                            let _ = fd.into_raw_fd();
+                        }
                     }
+                    response
                 }
-                response
-            }
+                Err(error) => Err(error),
+            },
             Err(error) => {
                 close_fds(fds);
                 Err(ControlError::new(error.stage, error.message))
@@ -182,16 +219,70 @@ impl UdsControlConnection {
     }
 }
 
-fn inject_fds(mut command: ControlCommand, mut fds: Vec<RawFd>) -> (ControlCommand, Option<RawFd>) {
-    let mut injected = None;
-    if let ControlCommand::RegisterSeccompListener(command) = &mut command {
-        if !fds.is_empty() {
-            injected = Some(fds.remove(0));
+struct PreparedCommand {
+    command: ControlCommand,
+    launch_pidfd: Option<OwnedFd>,
+    injected_listener_fd: Option<OwnedFd>,
+}
+
+fn prepare_command_fds(
+    mut command: ControlCommand,
+    fds: Vec<RawFd>,
+) -> Result<PreparedCommand, ControlError> {
+    let mut fds = fds
+        .into_iter()
+        .map(|fd| unsafe { OwnedFd::from_raw_fd(fd) })
+        .collect::<Vec<_>>();
+    let fd_count = fds.len();
+    match &mut command {
+        ControlCommand::TrackAdd(track_add) if track_add.launch_mode => {
+            if fd_count != 1 {
+                return Err(ControlError::new(
+                    "launch_pidfd",
+                    format!(
+                        "launch-mode track-add requires exactly one SCM_RIGHTS pidfd; received {}",
+                        fd_count
+                    ),
+                ));
+            }
+            let pidfd = fds.pop().expect("validated one launch pidfd");
+            Ok(PreparedCommand {
+                command,
+                launch_pidfd: Some(pidfd),
+                injected_listener_fd: None,
+            })
         }
-        command.listener_fd = injected;
+        ControlCommand::RegisterSeccompListener(listener) => {
+            if fd_count != 1 {
+                return Err(ControlError::new(
+                    "seccomp_listener",
+                    format!(
+                        "seccomp listener registration requires exactly one SCM_RIGHTS fd; received {}",
+                        fd_count
+                    ),
+                ));
+            }
+            let owned = fds.pop().expect("validated one seccomp listener fd");
+            listener.listener_fd = Some(owned.as_raw_fd());
+            Ok(PreparedCommand {
+                command,
+                launch_pidfd: None,
+                injected_listener_fd: Some(owned),
+            })
+        }
+        _ if fd_count == 0 => Ok(PreparedCommand {
+            command,
+            launch_pidfd: None,
+            injected_listener_fd: None,
+        }),
+        _ => Err(ControlError::new(
+            "unexpected_fd",
+            format!(
+                "control command does not accept SCM_RIGHTS descriptors; received {}",
+                fd_count
+            ),
+        )),
     }
-    close_fds(fds);
-    (command, injected)
 }
 
 fn close_fds(fds: Vec<RawFd>) {
