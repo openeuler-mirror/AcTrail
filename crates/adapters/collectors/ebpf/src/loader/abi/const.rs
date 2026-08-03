@@ -18,3 +18,7 @@ pub(super) const EXEC_EVENT_FILENAME_SIZE_OFFSET: usize = KERNEL_OBSERVATION_EVE
 pub(super) const EXEC_EVENT_FILENAME_FLAGS_OFFSET: usize = EXEC_EVENT_FILENAME_SIZE_OFFSET + 4;
 pub(super) const EXEC_EVENT_FILENAME_OFFSET: usize = EXEC_EVENT_FILENAME_FLAGS_OFFSET + 4;
 pub(super) const EXEC_EVENT_SIZE: usize = EXEC_EVENT_FILENAME_OFFSET + EXEC_FILENAME_ABI_MAX_BYTES;
+
+// Should be same with struct actrail_launch_binding_failure_event in
+// bpf/launch_binding/actrail_launch_binding.h.
+pub(super) const LAUNCH_BINDING_FAILURE_EVENT_SIZE: usize = 16;

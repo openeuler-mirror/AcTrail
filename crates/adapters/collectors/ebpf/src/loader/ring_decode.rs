@@ -22,13 +22,14 @@ use super::abi::{
     EXEC_EVENT_FILENAME_FLAGS_OFFSET, EXEC_EVENT_FILENAME_OFFSET, EXEC_EVENT_FILENAME_SIZE_OFFSET,
     EXEC_EVENT_SIZE, EXEC_FILENAME_ABI_MAX_BYTES, EXEC_FILENAME_FLAG_TRUNCATED,
     KERNEL_ENDPOINT_SIZE, KERNEL_OBSERVATION_EVENT_SIZE, KERNEL_OBSERVATION_HEADER_SIZE,
-    PROC_EXEC_EVENT_KIND,
+    LAUNCH_BINDING_FAILURE_EVENT_SIZE, PROC_EXEC_EVENT_KIND,
 };
 
 pub const TLS_PAYLOAD_COMPLETION_EVENT_KIND: u32 = 201;
 pub const TLS_PAYLOAD_CAPTURE_REQUEST_EVENT_KIND: u32 = 202;
 pub const TLS_PAYLOAD_DIRECT_CAPTURE_EVENT_KIND: u32 = 203;
 pub const TLS_PAYLOAD_DIAGNOSTIC_EVENT_KIND: u32 = 204;
+const LAUNCH_BINDING_FAILURE_EVENT_KIND: u32 = 205;
 pub const FILE_EVENT_OPEN: u32 = 300;
 pub const FILE_EVENT_READ_SUMMARY: u32 = 308;
 pub const STDIO_PAYLOAD_EVENT_KIND: u32 = 400;
@@ -43,9 +44,55 @@ pub enum KernelEvent {
     TlsCompletion(KernelTlsCompletionEvent),
     TlsDirectCapture(KernelTlsDirectCaptureEvent),
     TlsDiagnostic(KernelTlsDiagnosticEvent),
+    LaunchBindingFailure(LaunchBindingFailure),
     StdioPayload(KernelStdioPayloadEvent),
     SocketPayload(KernelSocketPayloadEvent),
     SocketPayloadCompletion(KernelSocketPayloadCompletionEvent),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LaunchBindingFailure {
+    trace_id: TraceId,
+    status: LaunchBindingFailureStatus,
+}
+
+impl LaunchBindingFailure {
+    pub const fn trace_id(self) -> TraceId {
+        self.trace_id
+    }
+
+    pub const fn status(self) -> LaunchBindingFailureStatus {
+        self.status
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LaunchBindingFailureStatus {
+    IdentityFailure,
+    PromotionFailure,
+    CleanupFailure,
+}
+
+impl LaunchBindingFailureStatus {
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::IdentityFailure => "launch_binding.identity_failure",
+            Self::PromotionFailure => "launch_binding.promotion_failure",
+            Self::CleanupFailure => "launch_binding.cleanup_failure",
+        }
+    }
+
+    fn decode(raw: u32) -> Result<Self, LoaderError> {
+        match raw {
+            1 => Ok(Self::IdentityFailure),
+            2 => Ok(Self::PromotionFailure),
+            3 => Ok(Self::CleanupFailure),
+            _ => Err(LoaderError::new(
+                "decode_launch_binding_failure",
+                format!("unknown launch binding failure status {raw}"),
+            )),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -128,6 +175,9 @@ pub fn decode_kernel_event(raw: &[u8]) -> Result<KernelEvent, LoaderError> {
     if kind == TLS_PAYLOAD_DIAGNOSTIC_EVENT_KIND {
         return decode_tls_diagnostic_event(raw).map(KernelEvent::TlsDiagnostic);
     }
+    if kind == LAUNCH_BINDING_FAILURE_EVENT_KIND {
+        return decode_launch_binding_failure(raw).map(KernelEvent::LaunchBindingFailure);
+    }
     if kind == STDIO_PAYLOAD_EVENT_KIND {
         return decode_stdio_payload_event(raw).map(KernelEvent::StdioPayload);
     }
@@ -142,6 +192,32 @@ pub fn decode_kernel_event(raw: &[u8]) -> Result<KernelEvent, LoaderError> {
         return decode_file_path_event(raw).map(KernelEvent::FilePath);
     }
     decode_observation_event(raw).map(KernelEvent::Observation)
+}
+
+fn decode_launch_binding_failure(raw: &[u8]) -> Result<LaunchBindingFailure, LoaderError> {
+    if raw.len() != LAUNCH_BINDING_FAILURE_EVENT_SIZE {
+        return Err(LoaderError::new(
+            "decode_launch_binding_failure",
+            format!(
+                "unexpected launch binding failure event size {}, expected {}",
+                raw.len(),
+                LAUNCH_BINDING_FAILURE_EVENT_SIZE
+            ),
+        ));
+    }
+    let trace_id = TraceId::new(read_u64(raw, 8).expect("event length checked"));
+    if trace_id.get() == 0 {
+        return Err(LoaderError::new(
+            "decode_launch_binding_failure",
+            "launch binding failure event has zero trace ID",
+        ));
+    }
+    Ok(LaunchBindingFailure {
+        trace_id,
+        status: LaunchBindingFailureStatus::decode(
+            read_u32(raw, 4).expect("event length checked"),
+        )?,
+    })
 }
 
 fn decode_observation_event(raw: &[u8]) -> Result<KernelObservationEvent, LoaderError> {

@@ -17,7 +17,9 @@ use libbpf_rs::{RingBuffer, RingBufferBuilder};
 
 use super::LoaderError;
 #[cfg(any(feature = "perf-buffer", actrail_event_transport_perf))]
-use super::abi::{EXEC_EVENT_SIZE, KERNEL_OBSERVATION_EVENT_SIZE};
+use super::abi::{
+    EXEC_EVENT_SIZE, KERNEL_OBSERVATION_EVENT_SIZE, LAUNCH_BINDING_FAILURE_EVENT_SIZE,
+};
 
 pub(crate) fn ring_buffer_max_bytes(config: &EbpfCollectorConfig, payload: &PayloadConfig) -> u32 {
     let mut max_bytes = config.event_ring_buffer_max_bytes;
@@ -190,6 +192,7 @@ fn known_event_size(kind: u32, size: usize) -> bool {
         201 | 202 => size == TLS_PAYLOAD_FIXED_EVENT_SIZE,
         203 => size == TLS_DIRECT_CAPTURE_EVENT_SIZE,
         204 => size == TLS_DIAGNOSTIC_EVENT_SIZE,
+        205 => size == LAUNCH_BINDING_FAILURE_EVENT_SIZE,
         300..=308 => {
             matches!(
                 size,
@@ -207,7 +210,7 @@ fn known_event_size(kind: u32, size: usize) -> bool {
 fn known_event_kind(kind: u32) -> bool {
     matches!(
         kind,
-        1..=4 | 100..=105 | 201..=204 | 300..=308 | 400 | 500 | 501
+        1..=4 | 100..=105 | 201..=205 | 300..=308 | 400 | 500 | 501
     )
 }
 

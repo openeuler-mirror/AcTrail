@@ -14,7 +14,7 @@ pub mod procfs;
 pub mod sensors;
 
 use std::collections::BTreeMap;
-use std::os::fd::{AsFd, OwnedFd, RawFd};
+use std::os::fd::{OwnedFd, RawFd};
 use std::time::SystemTime;
 
 use collector_binding::{
@@ -39,11 +39,11 @@ pub use crate::decode::{
     SocketPayloadCompletion, TlsDiagnosticEvent, TlsPayloadCaptureRequest, TlsPayloadCompletion,
     TlsPayloadDirectCapture,
 };
-pub use crate::loader::SocketPayloadFdState;
 use crate::loader::{
-    AttachPlan, EbpfProgramLoader, EbpfRuntime, LoaderError, PendingTlsPayloadOp,
-    TlsPayloadDiagnostics,
+    ArmedLaunchBinding, AttachPlan, EbpfProgramLoader, EbpfRuntime, LoaderError,
+    PendingTlsPayloadOp, TlsPayloadDiagnostics,
 };
+pub use crate::loader::{LaunchBindingFailure, LaunchBindingFailureStatus, SocketPayloadFdState};
 use crate::maps::BindingStateMap;
 use collector_dynamic_go_tls::DynamicGoTlsAttacher;
 use collector_dynamic_tls::DynamicTlsAttacher;
@@ -64,6 +64,7 @@ pub struct EbpfCollector {
     tls_completions: Vec<TlsPayloadCompletion>,
     tls_direct_captures: Vec<TlsPayloadDirectCapture>,
     tls_diagnostic_events: Vec<TlsDiagnosticEvent>,
+    launch_binding_failures: Vec<LaunchBindingFailure>,
     socket_completions: Vec<SocketPayloadCompletion>,
     suppressed_fds: Vec<TraceSuppressedFd>,
     pending_launches: BTreeMap<TraceId, PendingLaunchBinding>,
@@ -87,7 +88,7 @@ struct PendingLaunchBinding {
     generation: u64,
     initial_suppressed_fds: Vec<InitialSuppressedFd>,
     root_working_directory: Option<String>,
-    pidfd: OwnedFd,
+    armed_binding: ArmedLaunchBinding,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -171,6 +172,7 @@ impl EbpfCollector {
             tls_completions: Vec::new(),
             tls_direct_captures: Vec::new(),
             tls_diagnostic_events: Vec::new(),
+            launch_binding_failures: Vec::new(),
             socket_completions: Vec::new(),
             suppressed_fds: Vec::new(),
             pending_launches: BTreeMap::new(),
@@ -351,6 +353,7 @@ impl EbpfCollector {
 
         self.ensure_runtime_for_requests(&request.requested_capabilities)?;
         let generation = kernel_start_time(&request.root_observation)?;
+        let host_pid = self.map_pid_for_observation(&request.root_observation)?;
         let root_pid_namespace = request
             .root_observation
             .namespace
@@ -361,17 +364,21 @@ impl EbpfCollector {
             })?;
         let attached_capabilities = self.runtime_ref()?.attached_capabilities().clone();
         self.register_trace_pid_namespace(request.trace_id, &request.root_observation)?;
-        if let Err(error) = self.runtime_ref()?.arm_pending_exec(
-            pidfd.as_fd(),
+        let armed_binding = match self.runtime_ref()?.arm_launch_binding(
+            pidfd,
+            host_pid,
             request.trace_id,
             generation,
             &request.initial_suppressed_fds,
         ) {
-            let _ = self
-                .runtime_ref()?
-                .unregister_trace_pid_namespace(request.trace_id);
-            return Err(loader_error(error));
-        }
+            Ok(armed) => armed,
+            Err(error) => {
+                let _ = self
+                    .runtime_ref()?
+                    .unregister_trace_pid_namespace(request.trace_id);
+                return Err(loader_error(error));
+            }
+        };
 
         self.bindings.set_trace_capabilities(
             request.trace_id,
@@ -397,7 +404,7 @@ impl EbpfCollector {
                 generation,
                 initial_suppressed_fds: request.initial_suppressed_fds.clone(),
                 root_working_directory,
-                pidfd,
+                armed_binding,
             },
         );
         Ok(TraceBindingHandle {
@@ -555,6 +562,10 @@ impl EbpfCollector {
 
     pub fn take_tls_diagnostic_events(&mut self) -> Vec<TlsDiagnosticEvent> {
         std::mem::take(&mut self.tls_diagnostic_events)
+    }
+
+    pub fn take_launch_binding_failures(&mut self) -> Vec<LaunchBindingFailure> {
+        std::mem::take(&mut self.launch_binding_failures)
     }
 
     pub fn take_socket_completions(&mut self) -> Vec<SocketPayloadCompletion> {
@@ -745,7 +756,7 @@ impl EbpfCollector {
         };
         let deleted = self
             .runtime_ref()?
-            .cancel_pending_exec(pending.pidfd.as_fd())
+            .cancel_launch_binding(&pending.armed_binding)
             .map_err(loader_error)?;
         self.pending_launches.remove(&trace_id);
         Ok(deleted)

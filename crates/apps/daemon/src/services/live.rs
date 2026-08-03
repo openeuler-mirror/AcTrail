@@ -2,6 +2,8 @@
 
 #[path = "live/batch.rs"]
 mod batch;
+#[path = "live/launch_binding.rs"]
+mod launch_binding;
 #[path = "live/reconcile.rs"]
 mod reconcile;
 #[path = "live/shutdown.rs"]
@@ -66,6 +68,10 @@ impl StorageAttachService {
                 .poll_tls_payload_control_events()
                 .map_err(|error| ControlError::new(error.stage, error.message))?;
             warn_best_effort(
+                self.persist_launch_binding_failures_impl(trace_runtime),
+                "launch_binding_failure",
+            );
+            warn_best_effort(
                 self.persist_event_transport_loss_diagnostics_impl(trace_runtime),
                 "event_transport_loss_diag",
             );
@@ -91,6 +97,10 @@ impl StorageAttachService {
             .collector
             .poll_batch()
             .map_err(|error| ControlError::new(error.stage, error.message))?;
+        warn_best_effort(
+            self.persist_launch_binding_failures_impl(trace_runtime),
+            "launch_binding_failure",
+        );
         warn_best_effort(
             self.persist_event_transport_loss_diagnostics_impl(trace_runtime),
             "event_transport_loss_diag",

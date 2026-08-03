@@ -9,6 +9,40 @@ enum EventTransport {
     PerfBuffer,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum LaunchBindingBackend {
+    TaskStorage,
+    PidGenerationHash,
+}
+
+impl LaunchBindingBackend {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::TaskStorage => "task-storage",
+            Self::PidGenerationHash => "pid-generation-hash",
+        }
+    }
+
+    fn clang_define(self) -> &'static str {
+        match self {
+            Self::TaskStorage => "-DACTRAIL_LAUNCH_BINDING_TASK_STORAGE",
+            Self::PidGenerationHash => "-DACTRAIL_LAUNCH_BINDING_PID_GENERATION_HASH",
+        }
+    }
+
+    fn rust_cfg(self) -> &'static str {
+        match self {
+            Self::TaskStorage => "actrail_launch_binding_task_storage",
+            Self::PidGenerationHash => "actrail_launch_binding_pid_generation_hash",
+        }
+    }
+}
+
+struct LaunchBindingChoice {
+    backend: LaunchBindingBackend,
+    reason: String,
+}
+
 impl EventTransport {
     fn as_str(self) -> &'static str {
         match self {
@@ -54,6 +88,9 @@ fn main() {
     println!("cargo:rerun-if-changed=bpf/actrail_suppressed_fd.h");
     println!("cargo:rerun-if-changed=bpf/actrail_tls_payload.h");
     println!("cargo:rerun-if-changed=bpf/actrail_uprobe_regs.h");
+    println!("cargo:rerun-if-changed=bpf/launch_binding/actrail_launch_binding.h");
+    println!("cargo:rerun-if-changed=bpf/launch_binding/impl/task_storage.h");
+    println!("cargo:rerun-if-changed=bpf/launch_binding/impl/pid_generation_hash.h");
     println!("cargo:rerun-if-changed=bpf/file/actrail_file_bulk_read_fast.h");
     println!("cargo:rerun-if-changed=bpf/file/actrail_file_path.h");
     println!("cargo:rerun-if-changed=bpf/include/actrail_const.h");
@@ -70,13 +107,17 @@ fn main() {
     println!("cargo:rerun-if-changed=/proc/sys/kernel/osrelease");
     println!("cargo:rerun-if-changed=/sys/kernel/btf/vmlinux");
     println!("cargo:rerun-if-env-changed=ACTRAIL_BPF_SYSTEM_INCLUDE");
+    println!("cargo:rerun-if-env-changed=ACTRAIL_LAUNCH_BINDING_BACKEND");
     println!("cargo:rustc-check-cfg=cfg(actrail_event_transport_perf)");
+    println!("cargo:rustc-check-cfg=cfg(actrail_launch_binding_task_storage)");
+    println!("cargo:rustc-check-cfg=cfg(actrail_launch_binding_pid_generation_hash)");
     println!(
         "cargo:rustc-env=ACTRAIL_EBPF_OBJECT={}",
         object_path.display()
     );
 
     let transport = select_event_transport();
+    let launch_binding = select_launch_binding_backend();
     println!(
         "cargo:rustc-env=ACTRAIL_EBPF_EVENT_TRANSPORT={}",
         transport.transport.as_str()
@@ -85,6 +126,16 @@ fn main() {
         "cargo:warning=AcTrail eBPF event transport: {} ({})",
         transport.transport.as_str(),
         transport.reason
+    );
+    println!(
+        "cargo:rustc-env=ACTRAIL_LAUNCH_BINDING_BACKEND={}",
+        launch_binding.backend.as_str()
+    );
+    println!("cargo:rustc-cfg={}", launch_binding.backend.rust_cfg());
+    println!(
+        "cargo:warning=AcTrail launch binding backend: {} ({})",
+        launch_binding.backend.as_str(),
+        launch_binding.reason
     );
 
     let mut clang_args = vec![
@@ -99,6 +150,7 @@ fn main() {
         println!("cargo:rustc-cfg=actrail_event_transport_perf");
         clang_args.push("-DACTRAIL_EVENT_TRANSPORT_PERF".to_string());
     }
+    clang_args.push(launch_binding.backend.clang_define().to_string());
 
     libbpf_cargo::SkeletonBuilder::new()
         .source("bpf/live_observation.bpf.c")
@@ -106,6 +158,108 @@ fn main() {
         .clang_args(clang_args)
         .build()
         .expect("failed to compile eBPF object");
+}
+
+fn select_launch_binding_backend() -> LaunchBindingChoice {
+    match env::var("ACTRAIL_LAUNCH_BINDING_BACKEND") {
+        Ok(value) => match value.as_str() {
+            "auto" => auto_launch_binding_backend(),
+            "task-storage" => LaunchBindingChoice {
+                backend: LaunchBindingBackend::TaskStorage,
+                reason: "forced by ACTRAIL_LAUNCH_BINDING_BACKEND".to_owned(),
+            },
+            "pid-generation-hash" => LaunchBindingChoice {
+                backend: LaunchBindingBackend::PidGenerationHash,
+                reason: "forced by ACTRAIL_LAUNCH_BINDING_BACKEND".to_owned(),
+            },
+            _ => panic!(
+                "ACTRAIL_LAUNCH_BINDING_BACKEND must be auto, task-storage, or pid-generation-hash; got {value}"
+            ),
+        },
+        Err(env::VarError::NotPresent) => auto_launch_binding_backend(),
+        Err(error) => panic!("invalid ACTRAIL_LAUNCH_BINDING_BACKEND: {error}"),
+    }
+}
+
+fn auto_launch_binding_backend() -> LaunchBindingChoice {
+    let host = env::var("HOST").expect("HOST must be set");
+    let target = env::var("TARGET").expect("TARGET must be set");
+    if host != target {
+        panic!(
+            "ACTRAIL_LAUNCH_BINDING_BACKEND=auto cannot infer the deployment kernel while cross-compiling from {host} to {target}; select task-storage or pid-generation-hash explicitly"
+        );
+    }
+
+    if task_storage_reported_by_bpftool() {
+        return LaunchBindingChoice {
+            backend: LaunchBindingBackend::TaskStorage,
+            reason: "privileged bpftool reported the task-storage map and required helpers"
+                .to_owned(),
+        };
+    }
+    if task_storage_reported_by_vmlinux_btf() {
+        return LaunchBindingChoice {
+            backend: LaunchBindingBackend::TaskStorage,
+            reason: "vmlinux BTF contains the task-storage map and required helpers".to_owned(),
+        };
+    }
+
+    let release = fs::read_to_string("/proc/sys/kernel/osrelease")
+        .or_else(|_| uname_release())
+        .expect("cannot determine the local kernel release for launch binding selection");
+    let (major, minor) = parse_kernel_major_minor(&release)
+        .expect("cannot parse the local kernel release for launch binding selection");
+    if major < 5 || (major == 5 && minor < 11) {
+        return LaunchBindingChoice {
+            backend: LaunchBindingBackend::PidGenerationHash,
+            reason: format!(
+                "local kernel {major}.{minor} predates upstream BPF task-storage support"
+            ),
+        };
+    }
+
+    panic!(
+        "kernel {major}.{minor} may support BPF task-storage, but neither privileged bpftool nor vmlinux BTF proved the required map and helpers; set ACTRAIL_LAUNCH_BINDING_BACKEND explicitly"
+    );
+}
+
+fn task_storage_reported_by_bpftool() -> bool {
+    let output = Command::new("bpftool")
+        .args(["feature", "probe", "kernel"])
+        .output();
+    let Ok(output) = output else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let report = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    report.contains("eBPF map_type task_storage is available")
+        && [
+            "bpf_task_storage_get",
+            "bpf_task_storage_delete",
+            "bpf_get_current_task_btf",
+        ]
+        .into_iter()
+        .all(|helper| report.contains(helper))
+}
+
+fn task_storage_reported_by_vmlinux_btf() -> bool {
+    let Ok(btf) = fs::read("/sys/kernel/btf/vmlinux") else {
+        return false;
+    };
+    [
+        b"BPF_MAP_TYPE_TASK_STORAGE".as_slice(),
+        b"BPF_FUNC_task_storage_get".as_slice(),
+        b"BPF_FUNC_task_storage_delete".as_slice(),
+        b"BPF_FUNC_get_current_task_btf".as_slice(),
+    ]
+    .into_iter()
+    .all(|marker| contains_bytes(&btf, marker))
 }
 
 fn target_system_include(target_arch: &str) -> Option<PathBuf> {
