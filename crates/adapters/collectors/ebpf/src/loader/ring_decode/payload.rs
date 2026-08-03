@@ -57,6 +57,7 @@ pub struct KernelTlsDirectCaptureEvent {
     pub flags: u32,
     pub symbol: u32,
     pub library: u32,
+    pub operation_offset: u32,
     pub pid_generation: u64,
     pub bytes: Vec<u8>,
 }
@@ -207,7 +208,7 @@ pub(super) fn decode_tls_direct_capture_event(
     raw: &[u8],
 ) -> Result<KernelTlsDirectCaptureEvent, LoaderError> {
     const TLS_DIRECT_CAPTURE_HEADER_SIZE: usize = 88;
-    const TLS_DIRECT_CAPTURE_ABI_MAX_BYTES: usize = 4_194_304;
+    const TLS_DIRECT_CAPTURE_ABI_MAX_BYTES: usize = 65_536;
     const TLS_DIRECT_CAPTURE_EVENT_SIZE: usize =
         TLS_DIRECT_CAPTURE_HEADER_SIZE + TLS_DIRECT_CAPTURE_ABI_MAX_BYTES;
     if raw.len() != TLS_DIRECT_CAPTURE_EVENT_SIZE {
@@ -240,6 +241,7 @@ pub(super) fn decode_tls_direct_capture_event(
         flags: read_u32(raw, 56).expect("event length checked"),
         symbol: read_u32(raw, 60).expect("event length checked"),
         library: read_u32(raw, 64).expect("event length checked"),
+        operation_offset: read_u32(raw, 68).expect("event length checked"),
         pid_generation: read_u64(raw, 72).expect("event length checked"),
         host_pid: read_u32(raw, 80).expect("event length checked"),
         host_tid: read_u32(raw, 84).expect("event length checked"),

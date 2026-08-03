@@ -18,7 +18,8 @@ static __always_inline void capture_tls_payload_after_completion(
     }
 
     backend = payload_tls_capture_backend();
-    if (backend == ACTRAIL_TLS_BACKEND_BPF_COPY_SECCOMP_FALLBACK &&
+    if ((backend == ACTRAIL_TLS_BACKEND_BPF_COPY_SECCOMP_FALLBACK ||
+         backend == ACTRAIL_TLS_BACKEND_BPF_COPY_ONLY) &&
         emit_tls_direct_capture(ctx, op, tgid, tid, completed_size) == 1) {
         return;
     }

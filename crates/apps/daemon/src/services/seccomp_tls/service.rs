@@ -107,18 +107,29 @@ impl SeccompTlsService {
     ) -> Result<(), ControlError> {
         for capture in captures {
             self.log_diagnostic(format_args!(
-                "tls_payload_join direct_capture operation_id={} pid={} generation={} bytes={}",
+                "tls_payload_join direct_capture operation_id={} pid={} generation={} offset={} bytes={}",
                 capture.operation_id,
                 capture.pid,
                 capture.pid_generation,
+                capture.operation_offset,
                 capture.bytes.len()
             ));
-            self.captures.insert(
-                capture.operation_id,
-                CapturedTlsOperation {
-                    bytes: capture.bytes,
-                },
-            );
+            let (appended, captured) = {
+                let operation = self
+                    .captures
+                    .entry(capture.operation_id)
+                    .or_insert_with(CapturedTlsOperation::empty);
+                let appended = operation.append_contiguous(capture.operation_offset, capture.bytes);
+                (appended, operation.bytes.len())
+            };
+            if !appended {
+                self.log_diagnostic(format_args!(
+                    "tls_payload_join drop_noncontiguous_chunk operation_id={} offset={} captured={}",
+                    capture.operation_id,
+                    capture.operation_offset,
+                    captured
+                ));
+            }
         }
         self.ensure_pending_capacity()
     }
@@ -208,7 +219,7 @@ impl SeccompTlsService {
                         "tls:{}:{:x}",
                         completion.pid, completion.stream_key
                     )),
-                    sequence: completion.operation_id + index as u64,
+                    sequence: completion.observed_ktime_ns + index as u64,
                     original_size: if truncation == PayloadTruncationState::Truncated {
                         operation_original_size.saturating_sub(offset as u64)
                     } else {
@@ -262,7 +273,7 @@ impl SeccompTlsService {
             return Ok(false);
         };
         self.captures
-            .insert(pending.operation_id, CapturedTlsOperation { bytes });
+            .insert(pending.operation_id, CapturedTlsOperation::complete(bytes));
         Ok(true)
     }
 
@@ -297,7 +308,7 @@ impl SeccompTlsService {
             return Ok(());
         };
         self.captures
-            .insert(request.operation_id, CapturedTlsOperation { bytes });
+            .insert(request.operation_id, CapturedTlsOperation::complete(bytes));
         Ok(())
     }
 
@@ -331,6 +342,24 @@ impl SeccompTlsService {
 #[derive(Debug)]
 struct CapturedTlsOperation {
     bytes: Vec<u8>,
+}
+
+impl CapturedTlsOperation {
+    fn empty() -> Self {
+        Self { bytes: Vec::new() }
+    }
+
+    fn complete(bytes: Vec<u8>) -> Self {
+        Self { bytes }
+    }
+
+    fn append_contiguous(&mut self, offset: u64, bytes: Vec<u8>) -> bool {
+        if offset != self.bytes.len() as u64 {
+            return false;
+        }
+        self.bytes.extend(bytes);
+        true
+    }
 }
 
 fn continue_stopped_process(pid: u32) -> Result<(), ControlError> {

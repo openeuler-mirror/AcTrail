@@ -80,6 +80,13 @@ OpenSSL shared-library probing resolves library names that are already present i
 
 These paths do not create standalone system candidates. They are only searched after a `DT_NEEDED` entry names a dependency, or when the user passes `--library`.
 
+Codex 0.146.0 embeds OpenSSL 3.6.3 in a stripped x86_64 musl executable. The exact-target detector is restricted to sampled executable identity `6948d0811ec18dab404ee6949296b85dc192126a6033ab17918b9b61d8bdc168` and requires each active plaintext entry pattern to occur exactly once:
+
+- `SSL_read_ex`, 18 bytes: `55 48 89 e5 e8 c7 fb ff ff 31 c9 85 c0 0f 4e c1 5d c3`
+- `SSL_write_ex`, 30 bytes: `55 48 89 e5 53 50 49 89 c8 31 db 31 c9 e8 be fd ff ff 85 c0 0f 4e c3 48 83 c4 08 5b 5d c3`
+
+The two `_ex` entries form the complete inbound and outbound plaintext closure for this binary. A real Codex request produced 1,962 `SSL_read_ex` hits and 54 `SSL_write_ex` hits; `SSL_read` was present but inactive, and `SSL_write` was removed by section garbage collection.
+
 Rustls stripped x86_64 probing uses these documented entry patterns:
 
 - `rustls_buffer_plaintext`, `CommonState::buffer_plaintext`, 27 bytes: `55 41 57 41 56 41 55 41 54 53 48 83 ec 28 49 89 d6 48 89 f3 4c 8b a7 08 03 00 00`

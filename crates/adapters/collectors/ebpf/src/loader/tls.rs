@@ -55,7 +55,7 @@ pub(super) use go_dynamic::{GoTlsAttachOutcome, attach_programs as attach_go_tls
 pub use pending::PendingTlsPayloadOp;
 pub(super) use pending::lookup_pending_payload_op;
 
-pub const TLS_PAYLOAD_DIRECT_COPY_MAX_BYTES: u32 = 4_194_303;
+pub const TLS_PAYLOAD_DIRECT_COPY_MAX_BYTES: u32 = 65_535;
 pub const TLS_PAYLOAD_DIRECT_COPY_MIN_RING_BUFFER_BYTES: u32 = 8_388_608;
 
 const TLS_LIBRARY_OPENSSL: u32 = 1;
@@ -64,8 +64,10 @@ const TLS_LIBRARY_RUSTLS: u32 = 3;
 const TLS_LIBRARY_GO: u32 = 4;
 const TLS_LIBRARY_GNUTLS: u32 = 5;
 const TLS_LIBRARY_NSS: u32 = 6;
+const TLS_LIBRARY_AUTO: u32 = 0;
 const TLS_BACKEND_SECCOMP_USER_READ: u32 = 1;
 const TLS_BACKEND_BPF_COPY_SECCOMP_FALLBACK: u32 = 2;
+const TLS_BACKEND_BPF_COPY_ONLY: u32 = 3;
 
 pub fn validate_payload_config(config: &PayloadTlsConfig) -> Result<(), LoaderError> {
     if !config.enabled {
@@ -154,9 +156,9 @@ pub fn configure_payload_tls_map(
                 .map_err(|error| LoaderError::new("payload_tls_config", error.to_string()))
         })?;
     let key = 0_u32.to_ne_bytes();
-    let mut value = Vec::with_capacity(std::mem::size_of::<u32>() * 4);
+    let mut value = Vec::with_capacity(std::mem::size_of::<u32>() * 5);
     let (library, backend) = if config.capture_backend.is_sync() {
-        (TLS_LIBRARY_GO, TLS_BACKEND_BPF_COPY_SECCOMP_FALLBACK)
+        (TLS_LIBRARY_AUTO, TLS_BACKEND_BPF_COPY_ONLY)
     } else {
         (
             payload_tls_library_id(config)?,
@@ -166,6 +168,7 @@ pub fn configure_payload_tls_map(
     value.extend_from_slice(&library.to_ne_bytes());
     value.extend_from_slice(&backend.to_ne_bytes());
     value.extend_from_slice(&config.max_segment_bytes.to_ne_bytes());
+    value.extend_from_slice(&config.max_operation_bytes.to_ne_bytes());
     value.extend_from_slice(&(config.diagnostics_enabled as u32).to_ne_bytes());
     map.update(&key, &value, MapFlags::ANY)
         .map_err(|error| LoaderError::new("payload_tls_config", error.to_string()))
@@ -226,6 +229,9 @@ pub fn is_go_tls_program(program_name: &str) -> bool {
 
 pub fn is_dynamic_tls_program(program_name: &str) -> bool {
     is_go_tls_program(program_name)
+        || OPENSSL_UPROBE_TARGETS
+            .iter()
+            .any(|target| target.program == program_name)
         || matches!(
             program_name,
             "handle_rustls_buffer_plaintext" | "handle_rustls_take_received_plaintext"

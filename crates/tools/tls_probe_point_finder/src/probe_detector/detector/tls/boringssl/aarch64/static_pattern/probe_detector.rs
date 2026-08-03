@@ -38,9 +38,10 @@ impl Aarch64BoringSslStaticPatternProbeDetector {
 
     pub(crate) fn detect(&self, image: &ElfImage) -> ToolResult<StaticPatternDetection> {
         let data = image.data();
-        let read_matches = StaticPatternSupport::find_all(data, READ_PATTERN);
-        let read_internal_matches = StaticPatternSupport::find_all(data, READ_INTERNAL_PATTERN);
-        let write_matches = StaticPatternSupport::find_all(data, WRITE_PATTERN);
+        let read_matches = StaticPatternSupport::find_all_executable(image, READ_PATTERN)?;
+        let read_internal_matches =
+            StaticPatternSupport::find_all_executable(image, READ_INTERNAL_PATTERN)?;
+        let write_matches = StaticPatternSupport::find_all_executable(image, WRITE_PATTERN)?;
         let write = StaticPatternSupport::require_single(&write_matches, "SSL_write")?;
         let read = Self::require_related(
             data,

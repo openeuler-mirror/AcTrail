@@ -161,16 +161,12 @@ impl ProcessSeccompService {
                     self.max_args,
                     self.max_arg_bytes,
                 )?;
-                let Some(process) = identity(
+                let process = identity(
                     trace_runtime,
                     process_registry,
                     identity_reader,
                     notification.pid,
-                )?
-                else {
-                    continuation.continue_now()?;
-                    return Ok(Vec::new());
-                };
+                )?;
                 let parent_pid = parent_pid(notification.pid)?;
                 let trace_id =
                     trace_for_host_pid(trace_runtime, process_registry, notification.pid).or_else(
@@ -184,7 +180,7 @@ impl ProcessSeccompService {
                     &ProcessSeccompExecCandidate {
                         pid: notification.pid,
                         trace_id,
-                        process: process.clone(),
+                        process,
                         syscall: syscall_name(syscall).to_string(),
                         path: args.path.clone(),
                         argv: args.argv.clone(),
@@ -194,6 +190,9 @@ impl ProcessSeccompService {
                     continuation,
                 )?;
                 if continuation.is_finished() {
+                    let Some(process) = process else {
+                        return Ok(Vec::new());
+                    };
                     return Ok(vec![ProcessSeccompObservation {
                         observed_at,
                         process,
@@ -207,6 +206,9 @@ impl ProcessSeccompService {
                     }]);
                 }
                 continuation.continue_now()?;
+                let Some(process) = process else {
+                    return Ok(Vec::new());
+                };
                 Ok(vec![ProcessSeccompObservation {
                     observed_at,
                     process,
@@ -237,16 +239,12 @@ impl ProcessSeccompService {
                     self.max_args,
                     self.max_arg_bytes,
                 )?;
-                let Some(process) = identity(
+                let process = identity(
                     trace_runtime,
                     process_registry,
                     identity_reader,
                     notification.pid,
-                )?
-                else {
-                    continuation.continue_now()?;
-                    return Ok(Vec::new());
-                };
+                )?;
                 let parent_pid = parent_pid(notification.pid)?;
                 let trace_id =
                     trace_for_host_pid(trace_runtime, process_registry, notification.pid).or_else(
@@ -260,7 +258,7 @@ impl ProcessSeccompService {
                     &ProcessSeccompExecCandidate {
                         pid: notification.pid,
                         trace_id,
-                        process: process.clone(),
+                        process,
                         syscall: syscall_name(syscall).to_string(),
                         path: args.path.clone(),
                         argv: args.argv.clone(),
@@ -270,6 +268,9 @@ impl ProcessSeccompService {
                     continuation,
                 )?;
                 if continuation.is_finished() {
+                    let Some(process) = process else {
+                        return Ok(Vec::new());
+                    };
                     return Ok(vec![ProcessSeccompObservation {
                         observed_at,
                         process,
@@ -283,6 +284,9 @@ impl ProcessSeccompService {
                     }]);
                 }
                 continuation.continue_now()?;
+                let Some(process) = process else {
+                    return Ok(Vec::new());
+                };
                 Ok(vec![ProcessSeccompObservation {
                     observed_at,
                     process,
@@ -497,7 +501,7 @@ pub(crate) struct ProcessSeccompObservation {
 pub(crate) struct ProcessSeccompExecCandidate {
     pub(crate) pid: u32,
     pub(crate) trace_id: Option<TraceId>,
-    pub(crate) process: ProcessIdentity,
+    pub(crate) process: Option<ProcessIdentity>,
     pub(crate) syscall: String,
     pub(crate) path: Option<String>,
     pub(crate) argv: Vec<String>,

@@ -82,6 +82,19 @@ impl ElfImage {
         &self.identity
     }
 
+    pub(crate) fn executable_file_ranges(&self) -> ToolResult<Vec<(usize, &[u8])>> {
+        self.load_segments
+            .iter()
+            .filter(|segment| segment.executable)
+            .map(|segment| {
+                let data = bounded(&self.data, segment.file_offset, segment.file_size)?;
+                let file_offset = usize::try_from(segment.file_offset)
+                    .map_err(|_| ToolError::new("executable file offset overflows usize"))?;
+                Ok((file_offset, data))
+            })
+            .collect()
+    }
+
     pub(crate) fn has_interpreter(&self) -> bool {
         self.has_interpreter
     }

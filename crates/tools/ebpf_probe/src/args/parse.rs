@@ -1,8 +1,8 @@
 //! Command-line parser implementation for the eBPF probe tool.
 
 use config_core::daemon::{
-    ApplicationProtocolConfig, EnforcementConfig, PayloadSocketConfig, PayloadStdioConfig,
-    PayloadTlsConfig, ResourceMetricsConfig,
+    ApplicationProtocolConfig, DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS, EnforcementConfig,
+    PayloadSocketConfig, PayloadStdioConfig, PayloadTlsConfig, ResourceMetricsConfig,
 };
 use payload_capability::DEFAULT_TLS_SYNC_FLOW_UNKNOWN_STREAM_BYTES;
 
@@ -110,6 +110,7 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ProbeCommand
                     "--payload-tls-sync-socket-mode-octal",
                 )?,
                 sync_match_limit: required_u32(&flags, "--payload-tls-sync-match-limit")?,
+                dynamic_exec_plan_timeout_ms: DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS,
                 sync_flow_control_enabled: true,
                 sync_flow_sniff_bytes: 65536,
                 sync_flow_max_header_bytes: 16384,
