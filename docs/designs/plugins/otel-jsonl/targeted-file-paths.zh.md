@@ -1,9 +1,9 @@
-# OTEL JSONL 插件关键文件路径
+# OTEL JSON exporter 插件关键文件路径
 
 ## 文档目的
 
 本文索引整个 `otel-jsonl` 插件从配置资产、候选发现、加载、semantic action 交付、
-OTLP 编码到 JSONL 写出的关键文件路径。
+OTLP 编码到所选 exporter 交付的关键文件路径。
 
 本文只说明：
 
@@ -12,9 +12,10 @@ OTLP 编码到 JSONL 写出的关键文件路径。
 - 路径之间如何依赖；
 - 目标设计落在哪些文件。
 
-具体配置协议、过滤语义和验收规则见
-[Semantic action kind 选择策略设计](action-kind-selection.zh.md)。候选包的安装与发现
-方案见 [内置插件候选发现设计](builtin-candidate-discovery.zh.md)。
+Exporter 配置与交付语义见 [OTEL exporter 选择协议](exporter-selection.zh.md)，
+action 过滤规则见
+[Semantic action kind 选择策略设计](action-kind-selection.zh.md)。候选包的安装与
+发现方案见 [内置插件候选发现设计](builtin-candidate-discovery.zh.md)。
 
 ## 端到端路径
 
@@ -32,7 +33,9 @@ flowchart TD
     Selection["shared action selection<br/>crates/export/core/src/contract"]
     Route["best-effort route<br/>crates/export/core/src/delivery"]
     Codec["OTLP JSON codec<br/>crates/export/adapters/otel_codec"]
-    Sink["JSONL file sink<br/>otel_jsonl/live_jsonl.rs"]
+    Sink["selected exporter sink<br/>otel_jsonl/exporter/sink.rs"]
+    File["JSONL file<br/>otel_jsonl/exporter/file.rs"]
+    JsonRpc["JSON-RPC HTTP(S)<br/>otel_jsonl/exporter/json_rpc_http.rs"]
 
     Assets --> Web
     Assets --> Entry
@@ -46,12 +49,14 @@ flowchart TD
     Consumer --> Selection
     Selection -->|"matched live action"| Route
     Route --> Codec
-    Codec -->|"one OTLP document per line"| Sink
+    Codec -->|"one OTLP JSON document"| Sink
+    Sink --> File
+    Sink --> JsonRpc
 
 ```
 
-上半部分是插件发现与实例构造链路，下半部分是 live JSONL 数据流。本次只实现
-live 插件筛选；`actrailviewer export-otel` 不在本次修改范围内。
+上半部分是插件发现与实例构造链路，下半部分是 live exporter 数据流；
+`actrailviewer export-otel` 不在插件范围内。
 
 ## 插件描述包与安装
 
@@ -126,12 +131,16 @@ daemon attach 层负责通用插件生命周期，不在这里实现 action kind
 | 路径 | 职责 |
 | --- | --- |
 | `crates/export/adapters/otel_jsonl/src/config.rs` | 定义并解析 `OtelJsonlExporterConfig`。 |
-| `crates/export/adapters/otel_jsonl/src/live_jsonl.rs` | 实现 builtin observation consumer、异步 route adapter 和 JSONL file sink。 |
+| `crates/export/adapters/otel_jsonl/src/live_jsonl.rs` | 实现 builtin observation consumer 和异步 route adapter。 |
+| `crates/export/adapters/otel_jsonl/src/exporter/mod.rs` | 声明 exporter 子模块并暴露 crate 内聚合入口。 |
+| `crates/export/adapters/otel_jsonl/src/exporter/sink.rs` | 按配置构造并分派具体 exporter sink。 |
+| `crates/export/adapters/otel_jsonl/src/exporter/file.rs` | 实现 JSONL 文件 exporter。 |
+| `crates/export/adapters/otel_jsonl/src/exporter/json_rpc_http.rs` | 实现 JSON-RPC 2.0 over HTTP(S) exporter。 |
 | `crates/export/adapters/otel_jsonl/src/lib.rs` | 暴露 config、builder 和插件解析入口。 |
 | `crates/export/adapters/otel_jsonl/Cargo.toml` | 声明 adapter 对 export core、OTLP codec 和 plugin system 的依赖。 |
 
-action kind 选择设计主要修改 `config.rs` 与 `live_jsonl.rs`。配置在前者进入类型系统，
-选择在后者进入异步 route 前执行。
+配置在 `config.rs` 进入类型系统，action 选择在 `live_jsonl.rs` 进入异步 route
+前执行；具体交付故障被限制在 exporter worker 内。
 
 ## Export core
 
@@ -203,14 +212,12 @@ contract。
 
 | 路径 | 职责 |
 | --- | --- |
-| `tests/v2/regression/plugins/otel-jsonl/` | 端到端覆盖：通过 Web API 更新选择配置，并验证实际 OTEL JSONL kind 集合。 |
+| `tests/v2/regression/otel_jsonl_action_filter/` | 端到端覆盖：通过 Web API 切换 file/JSON-RPC、运行真实 Agent，并验证实际 kind 集合与远端重试。 |
 | `tests/plugins/otel-jsonl/` | 既有 builtin 插件生命周期覆盖，按新必填配置做必要适配。 |
 | `tests/plugins/dynamic-builtin/` | 既有动态加载覆盖，按新必填配置做必要适配。 |
 | `tests/plugins/persistent-load/` | 既有持久化恢复覆盖，按新必填配置做必要适配。 |
-| `crates/export/adapters/otel_jsonl/src/config.rs` | 保留并调整现有 config parsing 测试。 |
-
 禁止新增 schema 与 enum 逐项相等的一致性单元测试，禁止为每个 boolean 组合增加
-单元测试，也不为现有通用 Web checkbox 新建测试框架。
+单元测试。exporter 行为通过刷新默认配置的真实 Agent 端到端用例验证。
 
 以下目录包含旧 live OTEL route 配置，需要随静态入口删除而清理：
 
@@ -237,6 +244,7 @@ docs/llm-capture/
 | --- | --- |
 | `docs/designs/plugins/otel-jsonl/README.zh.md` | 本设计目录索引。 |
 | `docs/designs/plugins/otel-jsonl/builtin-candidate-discovery.zh.md` | builtin 候选发现与安装设计。 |
+| `docs/designs/plugins/otel-jsonl/exporter-selection.zh.md` | exporter 分层配置、交付和失败隔离协议。 |
 | `docs/designs/plugins/otel-jsonl/action-kind-selection.zh.md` | action kind selection 的配置与运行语义。 |
 | `docs/designs/plugins/otel-jsonl/targeted-file-paths.zh.md` | 整个插件及关键邻接模块的路径索引。 |
 | `docs/plugins/operator-manual.zh.md` | 插件运维手册。 |
@@ -249,7 +257,12 @@ action kind selection 设计涉及的改动只在这里列路径，不重复具�
 
 ```text
 新增
-└── crates/export/core/src/contract/action_kind_selection.rs
+├── crates/export/core/src/contract/action_kind_selection.rs
+└── crates/export/adapters/otel_jsonl/src/exporter
+    ├── mod.rs
+    ├── sink.rs
+    ├── file.rs
+    └── json_rpc_http.rs
 
 删除
 ├── crates/export/factory/src/config.rs
@@ -279,7 +292,7 @@ action kind selection 设计涉及的改动只在这里列路径，不重复具�
 ├── deploy/container-auto/
 ├── docs/examples/container-agent-minimal/
 ├── docs/examples/container-agent-restricted/
-├── tests/v2/regression/plugins/otel-jsonl/
+├── tests/v2/regression/otel_jsonl_action_filter/
 ├── 受新必填插件配置影响的既有 lifecycle fixtures
 └── 旧 [export.runtime] operator configs 与相关文档
 ```

@@ -12,7 +12,7 @@ AcTrail has three runtime surfaces:
 | Control CLI | `actrailctl` | Starts traces, launches children, lists/removes traces, cleans local artifacts. |
 | Views and local administration | `actrailviewer`, `actrailweb` | Reads storage and renders observations; `actrailweb` can also scan and explicitly load/unload local plugin packages through the daemon control socket. |
 
-Run one daemon per operator config. Keep each deployment's `socket_path`, `pid_file`, `storage_sqlite_path`, `log_path`, `export_directory`, plugin discovery directory, and enabled `otel-jsonl` route path unique.
+Run one daemon per operator config. Keep each deployment's `socket_path`, `pid_file`, `storage_sqlite_path`, `log_path`, `export_directory`, plugin discovery directory, and enabled `otel-jsonl` exporter destination unique.
 
 ## Host Preconditions
 
@@ -53,7 +53,7 @@ The generated default keeps daemon runtime state and durable observation data ou
 | `storage_sqlite_path` | `/var/lib/actrail/actrail.sqlite` |
 | `export_directory` | `/var/lib/actrail/export` |
 | `plugins.discovery.directory` | `~/.actrail/plugins` |
-| live `otel-jsonl` plugin config `path` | `/var/lib/actrail/export/live-spans.otlp.jsonl` when explicitly loaded |
+| live `otel-jsonl` plugin config `file.path` | `/var/lib/actrail/export/live-spans.otlp.jsonl` when the file exporter is explicitly loaded |
 | `log_path` | `/var/log/actrail/actraild.log` |
 | `control.finalization.shutdown_drain_timeout_ms` | `30000` |
 | `supervision.startup_wait_ms` | `30000` |
@@ -91,7 +91,7 @@ For a persistent deployment, review these fields first:
 
 AcTrail fails fast for unsupported required capabilities. Do not add broad fallback configs that silently reduce coverage.
 
-`scripts/install-release.sh` installs four official packages under `${ACTRAIL_PLUGIN_DIR:-$HOME/.actrail/plugins}`: `otel-jsonl/` exposes the built-in live OTLP JSONL exporter, `file-leakage/` provides post-trace leakage detection, `activity-anomaly/` reports LLM growth and running Agent commands as soon as they exceed the configured duration threshold and uses terminal analysis as a fallback, and `file-policy-dynamic/` manages dynamic allow, deny, and gray file rules. Installation only makes these packages discoverable. The generated startup list remains empty and disabled; use the local Plugins Web workspace or the plugin CLI to load a package explicitly.
+`scripts/install-release.sh` installs four official packages under `${ACTRAIL_PLUGIN_DIR:-$HOME/.actrail/plugins}`: `otel-jsonl/` exposes selectable file and JSON-RPC HTTP(S) live OTLP JSON exporters, `file-leakage/` provides post-trace leakage detection, `activity-anomaly/` reports LLM growth and running Agent commands as soon as they exceed the configured duration threshold and uses terminal analysis as a fallback, and `file-policy-dynamic/` manages dynamic allow, deny, and gray file rules. Installation only makes these packages discoverable. The generated startup list remains empty and disabled; use the local Plugins Web workspace or the plugin CLI to load a package explicitly.
 
 The dynamic file-policy plugin requests `file-policy.rules.apply`, whose grants must include allowed rule decisions and absolute path scopes. Select the candidate in the Web workspace, configure those grants in the load dialog, and load the instance. The daemon validates the submitted grants before activating the plugin. Web lifecycle operations are privileged daemon administration, so run `actrailweb` as an authorized local administrator and keep its listener on a trusted interface.
 

@@ -2,7 +2,7 @@
 
 use control_contract::command::ProcessRef;
 use control_contract::reply::ControlError;
-use ebpf_collector::procfs::{parse_container_identity, resolve_namespaced_pid};
+use ebpf_collector::procfs::resolve_namespaced_pid;
 use model_core::ids::TraceId;
 use model_core::process::ProcessObservation;
 use process_identity::ProcessIdentityReader;
@@ -12,9 +12,10 @@ use uds_control_server::PeerCredentials;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PeerPrincipal {
     pub(crate) uid: u32,
-    pub(crate) container_id: Option<String>,
     pub(crate) pid_namespace: String,
+    pub(crate) mount_namespace: String,
     pub(crate) host_pid_namespace: bool,
+    pub(crate) host_mount_namespace: bool,
 }
 
 /// One principal identity viewed by reference, so `PeerPrincipal` and
@@ -22,30 +23,30 @@ pub(crate) struct PeerPrincipal {
 #[derive(Clone, Copy)]
 struct PrincipalRef<'a> {
     uid: u32,
-    container_id: Option<&'a str>,
     pid_namespace: &'a str,
+    mount_namespace: &'a str,
     host_pid_namespace: bool,
+    host_mount_namespace: bool,
 }
 
 fn principals_match(peer: PrincipalRef<'_>, other: PrincipalRef<'_>) -> bool {
-    match (peer.container_id, other.container_id) {
-        (Some(left), Some(right)) => left == right,
-        (None, None) if peer.host_pid_namespace && other.host_pid_namespace => {
-            peer.uid == other.uid
-        }
-        (None, None) if !peer.host_pid_namespace && !other.host_pid_namespace => {
-            peer.uid == other.uid && peer.pid_namespace == other.pid_namespace
-        }
-        _ => false,
+    if peer.host_pid_namespace != other.host_pid_namespace
+        || peer.host_mount_namespace != other.host_mount_namespace
+        || peer.pid_namespace != other.pid_namespace
+        || peer.mount_namespace != other.mount_namespace
+    {
+        return false;
     }
+    !peer.host_pid_namespace || !peer.host_mount_namespace || peer.uid == other.uid
 }
 
 fn owner_ref(owner: &TraceOwnerPrincipal) -> PrincipalRef<'_> {
     PrincipalRef {
         uid: owner.uid,
-        container_id: owner.container_id.as_deref(),
         pid_namespace: &owner.pid_namespace,
+        mount_namespace: &owner.mount_namespace,
         host_pid_namespace: owner.host_pid_namespace,
+        host_mount_namespace: owner.host_mount_namespace,
     }
 }
 
@@ -57,9 +58,10 @@ impl PeerPrincipal {
     pub(crate) fn trace_owner(&self) -> TraceOwnerPrincipal {
         TraceOwnerPrincipal {
             uid: self.uid,
-            container_id: self.container_id.clone(),
             pid_namespace: self.pid_namespace.clone(),
+            mount_namespace: self.mount_namespace.clone(),
             host_pid_namespace: self.host_pid_namespace,
+            host_mount_namespace: self.host_mount_namespace,
         }
     }
 
@@ -70,9 +72,10 @@ impl PeerPrincipal {
     fn as_ref(&self) -> PrincipalRef<'_> {
         PrincipalRef {
             uid: self.uid,
-            container_id: self.container_id.as_deref(),
             pid_namespace: &self.pid_namespace,
+            mount_namespace: &self.mount_namespace,
             host_pid_namespace: self.host_pid_namespace,
+            host_mount_namespace: self.host_mount_namespace,
         }
     }
 }
@@ -94,24 +97,26 @@ impl PeerIdentity {
                     credentials.pid
                 ))
             })?;
-        let container_id = process_container_id(credentials.pid)?;
         let pid_namespace = process_pid_namespace(credentials.pid)?;
+        let mount_namespace = process_mount_namespace(credentials.pid)?;
         let host_pid_namespace = pid_namespace == process_pid_namespace(std::process::id())?;
+        let host_mount_namespace = mount_namespace == process_mount_namespace(std::process::id())?;
         Ok(Self {
             credentials,
             process,
             principal: PeerPrincipal {
                 uid: credentials.uid,
-                container_id,
                 pid_namespace,
+                mount_namespace,
                 host_pid_namespace,
+                host_mount_namespace,
             },
         })
     }
 
     pub(crate) fn is_trusted_host_root(&self) -> bool {
-        self.principal.container_id.is_none()
-            && self.principal.host_pid_namespace
+        self.principal.host_pid_namespace
+            && self.principal.host_mount_namespace
             && self.credentials.uid == 0
     }
 
@@ -127,23 +132,28 @@ impl PeerIdentity {
             .map(|host| host.pid)
             .ok_or_else(|| peer_error("resolved target has no host PID"))?;
         let target_pid_namespace = process_pid_namespace(host_pid)?;
+        let target_mount_namespace = process_mount_namespace(host_pid)?;
         let target = PeerPrincipal {
             uid: process_uid(host_pid)?,
-            container_id: process_container_id(host_pid)?,
             host_pid_namespace: target_pid_namespace == process_pid_namespace(std::process::id())?,
+            host_mount_namespace: target_mount_namespace
+                == process_mount_namespace(std::process::id())?,
             pid_namespace: target_pid_namespace,
+            mount_namespace: target_mount_namespace,
         };
         if self.principal.matches(&target) {
             Ok(())
         } else {
             Err(peer_error(format!(
-                "peer pid={} uid={} container={} cannot act for target pid={} uid={} container={}",
+                "peer pid={} uid={} pid_namespace={} mount_namespace={} cannot act for target pid={} uid={} pid_namespace={} mount_namespace={}",
                 self.credentials.pid,
                 self.credentials.uid,
-                display_container(self.principal.container_id.as_deref()),
+                self.principal.pid_namespace,
+                self.principal.mount_namespace,
                 host_pid,
                 target.uid,
-                display_container(target.container_id.as_deref())
+                target.pid_namespace,
+                target.mount_namespace
             )))
         }
     }
@@ -171,13 +181,6 @@ pub(crate) fn peer_error(message: impl Into<String>) -> ControlError {
     ControlError::new("peer_identity", message)
 }
 
-fn process_container_id(pid: u32) -> Result<Option<String>, ControlError> {
-    let path = format!("/proc/{pid}/cgroup");
-    let content = std::fs::read_to_string(&path)
-        .map_err(|error| peer_error(format!("read {path}: {error}")))?;
-    Ok(parse_container_identity(&content).map(|identity| identity.container_id))
-}
-
 fn process_uid(pid: u32) -> Result<u32, ControlError> {
     let path = format!("/proc/{pid}/status");
     let content = std::fs::read_to_string(&path)
@@ -199,8 +202,11 @@ fn process_pid_namespace(pid: u32) -> Result<String, ControlError> {
         .map_err(|error| peer_error(format!("read {path}: {error}")))
 }
 
-fn display_container(container_id: Option<&str>) -> &str {
-    container_id.unwrap_or("host")
+fn process_mount_namespace(pid: u32) -> Result<String, ControlError> {
+    let path = format!("/proc/{pid}/ns/mnt");
+    std::fs::read_link(&path)
+        .map(|namespace| namespace.display().to_string())
+        .map_err(|error| peer_error(format!("read {path}: {error}")))
 }
 
 #[cfg(test)]
@@ -208,18 +214,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn container_principals_match_by_container_not_uid() {
+    fn isolated_principals_match_by_pid_namespace_across_uids() {
         let first = PeerPrincipal {
             uid: 0,
-            container_id: Some("container-a".to_string()),
             pid_namespace: "pid:[1]".to_string(),
+            mount_namespace: "mnt:[1]".to_string(),
             host_pid_namespace: false,
+            host_mount_namespace: false,
         };
         let second = PeerPrincipal {
             uid: 1000,
-            container_id: Some("container-a".to_string()),
             pid_namespace: "pid:[1]".to_string(),
+            mount_namespace: "mnt:[1]".to_string(),
             host_pid_namespace: false,
+            host_mount_namespace: false,
         };
         assert!(first.matches(&second));
     }
@@ -228,39 +236,44 @@ mod tests {
     fn host_principals_require_same_uid() {
         let first = PeerPrincipal {
             uid: 1000,
-            container_id: None,
             pid_namespace: "pid:[1]".to_string(),
+            mount_namespace: "mnt:[1]".to_string(),
             host_pid_namespace: true,
+            host_mount_namespace: true,
         };
         let same = PeerPrincipal {
             uid: 1000,
-            container_id: None,
             pid_namespace: "pid:[1]".to_string(),
+            mount_namespace: "mnt:[1]".to_string(),
             host_pid_namespace: true,
+            host_mount_namespace: true,
         };
         let other = PeerPrincipal {
             uid: 1001,
-            container_id: None,
             pid_namespace: "pid:[1]".to_string(),
+            mount_namespace: "mnt:[1]".to_string(),
             host_pid_namespace: true,
+            host_mount_namespace: true,
         };
         assert!(first.matches(&same));
         assert!(!first.matches(&other));
     }
 
     #[test]
-    fn different_containers_do_not_match() {
+    fn isolated_principals_with_different_pid_namespaces_do_not_match() {
         let first = PeerPrincipal {
             uid: 0,
-            container_id: Some("container-a".to_string()),
             pid_namespace: "pid:[1]".to_string(),
+            mount_namespace: "mnt:[1]".to_string(),
             host_pid_namespace: false,
+            host_mount_namespace: false,
         };
         let second = PeerPrincipal {
             uid: 0,
-            container_id: Some("container-b".to_string()),
             pid_namespace: "pid:[2]".to_string(),
+            mount_namespace: "mnt:[2]".to_string(),
             host_pid_namespace: false,
+            host_mount_namespace: false,
         };
         assert!(!first.matches(&second));
     }
@@ -269,23 +282,88 @@ mod tests {
     fn unresolved_isolated_principals_require_same_pid_namespace() {
         let first = PeerPrincipal {
             uid: 0,
-            container_id: None,
             pid_namespace: "pid:[10]".to_string(),
+            mount_namespace: "mnt:[10]".to_string(),
             host_pid_namespace: false,
+            host_mount_namespace: false,
         };
         let same = PeerPrincipal {
             uid: 0,
-            container_id: None,
             pid_namespace: "pid:[10]".to_string(),
+            mount_namespace: "mnt:[10]".to_string(),
             host_pid_namespace: false,
+            host_mount_namespace: false,
         };
         let other = PeerPrincipal {
             uid: 0,
-            container_id: None,
             pid_namespace: "pid:[11]".to_string(),
+            mount_namespace: "mnt:[11]".to_string(),
             host_pid_namespace: false,
+            host_mount_namespace: false,
         };
         assert!(first.matches(&same));
         assert!(!first.matches(&other));
+    }
+
+    #[test]
+    fn host_root_trust_depends_only_on_kernel_namespace_and_uid() {
+        let peer = PeerIdentity {
+            credentials: PeerCredentials {
+                pid: 1,
+                uid: 0,
+                gid: 0,
+            },
+            process: ProcessObservation::default(),
+            principal: PeerPrincipal {
+                uid: 0,
+                pid_namespace: "pid:[1]".to_string(),
+                mount_namespace: "mnt:[1]".to_string(),
+                host_pid_namespace: true,
+                host_mount_namespace: true,
+            },
+        };
+
+        assert!(peer.is_trusted_host_root());
+    }
+
+    #[test]
+    fn host_pid_container_is_not_trusted_as_host_root() {
+        let peer = PeerIdentity {
+            credentials: PeerCredentials {
+                pid: 2,
+                uid: 0,
+                gid: 0,
+            },
+            process: ProcessObservation::default(),
+            principal: PeerPrincipal {
+                uid: 0,
+                pid_namespace: "pid:[1]".to_string(),
+                mount_namespace: "mnt:[container]".to_string(),
+                host_pid_namespace: true,
+                host_mount_namespace: false,
+            },
+        };
+
+        assert!(!peer.is_trusted_host_root());
+    }
+
+    #[test]
+    fn shared_pid_namespaces_are_isolated_by_mount_namespace() {
+        let first = PeerPrincipal {
+            uid: 0,
+            pid_namespace: "pid:[shared]".to_string(),
+            mount_namespace: "mnt:[1]".to_string(),
+            host_pid_namespace: false,
+            host_mount_namespace: false,
+        };
+        let second = PeerPrincipal {
+            uid: 0,
+            pid_namespace: "pid:[shared]".to_string(),
+            mount_namespace: "mnt:[2]".to_string(),
+            host_pid_namespace: false,
+            host_mount_namespace: false,
+        };
+
+        assert!(!first.matches(&second));
     }
 }

@@ -20,7 +20,7 @@ from tests.v2.regression.otel_jsonl_action_filter.config import (  # noqa: E402
 TEST_DEFINITION = TestDefinition(
     name="otel_jsonl_action_filter",
     description=(
-        "Configure builtin otel-jsonl and verify live action-kind filtering"
+        "Select builtin OTEL exporters and verify live action-kind filtering"
     ),
     build_case=lambda inputs: OtelJsonlActionFilterCase(
         OtelJsonlActionFilterConfig.from_environment(inputs)

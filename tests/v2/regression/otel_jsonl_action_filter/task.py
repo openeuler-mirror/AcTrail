@@ -18,7 +18,9 @@ from .environment import OtelJsonlActionFilterEnvironment
 @dataclass(frozen=True)
 class FilterRound:
     name: str
+    exporter: str
     enabled_kinds: frozenset[str]
+    inject_retryable_failure: bool = False
 
 
 class OtelJsonlActionFilterTask:
@@ -60,13 +62,20 @@ class OtelJsonlActionFilterTask:
         )
         return (
             FilterRound(
-                "execution-context",
+                "execution-context-file",
+                "file",
                 cls._EXECUTION_CONTEXT_KINDS,
             ),
-            FilterRound("llm-complete", cls._LLM_COMPLETE_KINDS),
-            FilterRound("mixed-random-three", random_three),
             FilterRound(
-                "representative-combined",
+                "llm-complete-json-rpc",
+                "json_rpc_http",
+                cls._LLM_COMPLETE_KINDS,
+                inject_retryable_failure=True,
+            ),
+            FilterRound("mixed-random-three-file", "file", random_three),
+            FilterRound(
+                "representative-combined-json-rpc",
+                "json_rpc_http",
                 cls._REPRESENTATIVE_KINDS,
             ),
         )
@@ -76,12 +85,14 @@ class OtelJsonlActionFilterTask:
         for index, round_definition in enumerate(self._rounds, start=1):
             self._test_context.report_progress(
                 "filter_round",
-                f"{round_definition.name} ({index}/{len(self._rounds)})",
+                f"{round_definition.name} via {round_definition.exporter} "
+                f"({index}/{len(self._rounds)})",
             )
             actual = self._run_round(round_definition)
             results[round_definition.name] = TestResult(
                 TestStatus.PASSED,
-                "exported action kinds: " + ", ".join(sorted(actual)),
+                f"{round_definition.exporter} exported action kinds: "
+                + ", ".join(sorted(actual)),
             )
         self._test_context.report_progress(
             "runtime_health",
@@ -90,18 +101,29 @@ class OtelJsonlActionFilterTask:
         self._require_runtime_healthy()
         results["plugin_runtime"] = TestResult(
             TestStatus.PASSED,
-            "otel-jsonl remains active with dropped_records=0",
+            "file and JSON-RPC exporters remain active with dropped_records=0",
         )
         return results
 
     def _run_round(self, round_definition: FilterRound) -> set[str]:
         self._test_context.report_progress(
             "filter_config",
-            f"applying {round_definition.name} filter",
+            f"applying {round_definition.name} filter and exporter",
         )
         self._environment.update_selection(
-            set(round_definition.enabled_kinds)
+            round_definition.exporter,
+            set(round_definition.enabled_kinds),
         )
+        failures_before = self._environment.json_rpc_injected_failures
+        response_delays_before = (
+            self._environment.json_rpc_injected_response_delays
+        )
+        request_ids_before = len(
+            self._environment.json_rpc_request_ids()
+        )
+        if round_definition.inject_retryable_failure:
+            self._environment.fail_next_json_rpc_requests(1)
+            self._environment.delay_next_json_rpc_responses(0.75)
         marker = (
             f"OTEL_JSONL_FILTER_{round_definition.name}_"
             f"{secrets.token_hex(6)}"
@@ -128,9 +150,49 @@ class OtelJsonlActionFilterTask:
         trace_id = self._require_trace_id(launch)
         self._wait_for_terminal_trace(trace_id)
         self._wait_for_source_actions(trace_id)
-        return self._wait_for_exported_kinds(
+        actual = self._wait_for_exported_kinds(
             marker,
             set(round_definition.enabled_kinds),
+            round_definition.exporter,
+        )
+        if (
+            round_definition.inject_retryable_failure
+            and self._environment.json_rpc_injected_failures
+            != failures_before + 1
+        ):
+            raise AssertionError(
+                "JSON-RPC exporter did not retry the injected HTTP failure"
+            )
+        if round_definition.inject_retryable_failure:
+            if (
+                self._environment.json_rpc_injected_response_delays
+                != response_delays_before + 1
+            ):
+                raise AssertionError(
+                    "JSON-RPC exporter did not reach the delayed response"
+                )
+            self._require_same_id_retries(request_ids_before)
+        return actual
+
+    def _require_same_id_retries(self, start_index: int) -> None:
+        observed: list[int] = []
+        for _ in range(self._environment.config.drain_attempts):
+            observed = self._environment.json_rpc_request_ids()[
+                start_index:
+            ]
+            if len(observed) >= 3:
+                if len(set(observed[:3])) != 1:
+                    raise AssertionError(
+                        "JSON-RPC retries changed request id: "
+                        f"{observed[:3]}"
+                    )
+                return
+            time.sleep(
+                self._environment.config.drain_interval_seconds
+            )
+        raise AssertionError(
+            "JSON-RPC exporter did not retry both HTTP status and "
+            f"response timeout failures; request_ids={observed}"
         )
 
     def _launch(self, marker: str) -> CommandResult:
@@ -234,10 +296,11 @@ class OtelJsonlActionFilterTask:
         self,
         marker: str,
         expected: set[str],
+        exporter: str,
     ) -> set[str]:
         actual: set[str] = set()
         for _ in range(self._environment.config.drain_attempts):
-            actual = self._extract_exported_kinds(marker)
+            actual = self._extract_exported_kinds(marker, exporter)
             if actual == expected:
                 return actual
             time.sleep(
@@ -248,18 +311,13 @@ class OtelJsonlActionFilterTask:
             f"expected {sorted(expected)}"
         )
 
-    def _extract_exported_kinds(self, marker: str) -> set[str]:
-        path = self._environment.export_path
-        if not path.is_file():
-            return set()
+    def _extract_exported_kinds(
+        self,
+        marker: str,
+        exporter: str,
+    ) -> set[str]:
         kinds: set[str] = set()
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                document = json.loads(line)
-            except json.JSONDecodeError:
-                continue
+        for document in self._exported_documents(exporter):
             for resource_spans in document.get("resourceSpans", []):
                 if not isinstance(resource_spans, dict):
                     continue
@@ -296,6 +354,29 @@ class OtelJsonlActionFilterTask:
                         if kind and action_id and process_id:
                             kinds.add(kind)
         return kinds
+
+    def _exported_documents(
+        self,
+        exporter: str,
+    ) -> list[dict[str, Any]]:
+        if exporter == "json_rpc_http":
+            return self._environment.json_rpc_documents()
+        if exporter != "file":
+            raise AssertionError(f"unknown exporter {exporter}")
+        path = self._environment.export_path
+        if not path.is_file():
+            return []
+        documents: list[dict[str, Any]] = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                document = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(document, dict):
+                documents.append(document)
+        return documents
 
     @staticmethod
     def _string_attribute(

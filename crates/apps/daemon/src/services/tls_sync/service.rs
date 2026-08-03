@@ -342,7 +342,8 @@ fn audit_tls_peer_rejection(peer: &PeerIdentity, error: &ControlError) {
         peer_pid = peer.credentials.pid,
         peer_uid = peer.credentials.uid,
         peer_gid = peer.credentials.gid,
-        peer_container = peer.principal.container_id.as_deref().unwrap_or("host"),
+        peer_pid_namespace = %peer.principal.pid_namespace,
+        peer_mount_namespace = %peer.principal.mount_namespace,
         error_code = %error.code,
         error = %error.message,
         "closed rejected TLS-sync peer"

@@ -1,1 +1,1 @@
-"""OTEL JSONL action-filter regression case."""
+"""OTEL exporter selection and action-filter regression case."""

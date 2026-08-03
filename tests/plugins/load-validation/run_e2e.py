@@ -146,9 +146,12 @@ required = true
     BUILTIN_HOST_CAPABILITY_CONFIG.write_text(
         "\n".join(
             [
+                'exporter = "file"',
+                "queue_capacity = 128",
+                "",
+                "[file]",
                 f'path = "{RUN_DIR / "builtin-host-capability.otlp.jsonl"}"',
                 "overwrite_enabled = true",
-                "queue_capacity = 128",
                 "flush_every_spans = 1",
                 "",
             ]
@@ -177,9 +180,12 @@ required = true
     BUILTIN_ARTIFACT_PATH_CONFIG.write_text(
         "\n".join(
             [
+                'exporter = "file"',
+                "queue_capacity = 128",
+                "",
+                "[file]",
                 f'path = "{RUN_DIR / "builtin-artifact-path.otlp.jsonl"}"',
                 "overwrite_enabled = true",
-                "queue_capacity = 128",
                 "flush_every_spans = 1",
                 "",
             ]

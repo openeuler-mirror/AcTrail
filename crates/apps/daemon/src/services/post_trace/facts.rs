@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use model_core::ids::TraceId;
-use model_core::process::{ExitStatus, ProcessMembership};
+use model_core::process::{ExitStatus, NamespaceIdentity, ProcessMembership};
 use model_core::trace::{TraceLifecycleState, TraceRecord};
 use plugin_system::{
     PluginRuntimeError, TraceActivityContext, TraceAnalysisAction, TraceAnalysisContext,
@@ -387,9 +387,6 @@ pub(super) fn observed_host_path(
         };
         PathBuf::from(working_directory).join(observed_path)
     };
-    if trace.root_container_id.is_none() {
-        return Ok(Some(absolute));
-    }
     let process = storage
         .get_process_record(action.process.clone())
         .map_err(storage_runtime_error)?
@@ -402,10 +399,32 @@ pub(super) fn observed_host_path(
     let Some(namespace) = process.namespaces.iter().next() else {
         return Ok(None);
     };
+    let host_pid_namespace = current_pid_namespace()?;
+    if !requires_namespaced_root(&namespace.pid_namespace, &host_pid_namespace) {
+        return Ok(Some(absolute));
+    }
     Ok(ebpf_collector::procfs::resolve_host_path(
         &namespace.pid_namespace,
         &absolute.to_string_lossy(),
     ))
+}
+
+fn current_pid_namespace() -> Result<NamespaceIdentity, PluginRuntimeError> {
+    std::fs::read_link("/proc/self/ns/pid")
+        .map(|namespace| NamespaceIdentity::new(namespace.display().to_string()))
+        .map_err(|error| {
+            PluginRuntimeError::new(
+                "trace_file_state",
+                format!("read daemon PID namespace: {error}"),
+            )
+        })
+}
+
+fn requires_namespaced_root(
+    process_pid_namespace: &NamespaceIdentity,
+    host_pid_namespace: &NamespaceIdentity,
+) -> bool {
+    process_pid_namespace != host_pid_namespace
 }
 
 pub(super) fn read_file_state(path: &Path) -> TraceFileState {
@@ -454,4 +473,25 @@ pub(super) fn trace_missing(trace_id: TraceId) -> PluginRuntimeError {
 
 pub(super) fn storage_runtime_error(error: storage_core::StorageError) -> PluginRuntimeError {
     PluginRuntimeError::new(error.stage, error.message)
+}
+
+#[cfg(test)]
+mod tests {
+    use model_core::process::NamespaceIdentity;
+
+    use super::requires_namespaced_root;
+
+    #[test]
+    fn path_view_uses_pid_namespace_not_runtime_attribution() {
+        let host = NamespaceIdentity::new("pid:[1]");
+
+        assert!(!requires_namespaced_root(
+            &NamespaceIdentity::new("pid:[1]"),
+            &host,
+        ));
+        assert!(requires_namespaced_root(
+            &NamespaceIdentity::new("pid:[2]"),
+            &host,
+        ));
+    }
 }

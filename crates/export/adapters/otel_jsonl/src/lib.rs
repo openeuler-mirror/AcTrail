@@ -1,6 +1,7 @@
 //! Built-in OTEL JSONL observation consumer.
 
 mod config;
+mod exporter;
 mod live_jsonl;
 
 pub use config::{OtelJsonlExporterConfig, parse_otel_jsonl_plugin_config};

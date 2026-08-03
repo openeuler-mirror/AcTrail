@@ -2,7 +2,7 @@
 
 ## 状态
 
-候选发现已采纳并实现；静态入口移除与 action kind 配置待实现。
+已实现。
 
 ## 背景
 
@@ -23,8 +23,9 @@ Web 的 **Plugin candidates** 不枚举 `actraild` 内部注册的 builtin。它
 ## 非目标
 
 - 不新增 Wasm exporter。
-- 不新增 OTLP/HTTP exporter。
-- 不改变 JSONL 编码、异步队列、覆盖或 flush 语义。
+- 不新增 exporter 服务端或 collector 自动发现。
+- 不改变 OTLP JSON 编码和有界异步队列语义。
+- 不扩展预留的 `network-egress` grant。
 - 不让 Web 自动加载任何导出插件。
 - 不新增独立的 builtin catalog API。
 
@@ -52,9 +53,12 @@ manifest 基名与配置基名一致，因此现有目录发现器可直接解�
 默认配置为：
 
 ```toml
+exporter = "file"
+queue_capacity = 1024
+
+[file]
 path = "/var/lib/actrail/export/live-spans.otlp.jsonl"
 overwrite_enabled = true
-queue_capacity = 1024
 flush_every_spans = 1
 
 [action_kinds]
@@ -81,8 +85,9 @@ default = false
 ```
 
 `file.tty_io` 由 recording 层在上游永久过滤，不出现在插件 schema 或默认配置中。
-安装只写入描述包；只有插件实例成功加载后才读取配置、创建 exporter 队列并打开
-输出文件。
+安装只写入描述包；只有插件实例成功加载后才读取配置并创建 exporter 队列。默认
+`file` 分支会在加载时打开输出文件；`json_rpc_http` 分支在记录到达后向配置端点
+发送请求。
 
 ## 生命周期
 
@@ -92,7 +97,7 @@ sequenceDiagram
     participant Directory as plugins.discovery.directory
     participant Web as actrailweb
     participant Daemon as actraild
-    participant File as OTLP JSONL
+    participant Sink as selected exporter
 
     Installer->>Directory: 安装 manifest/config/schema
     Note over Directory: 未加载，不产生导出
@@ -100,7 +105,7 @@ sequenceDiagram
     Directory-->>Web: otel-jsonl (builtin, observation-consumer)
     Web->>Daemon: Configure & load
     Daemon->>Daemon: 校验 manifest/config 并创建 builtin consumer
-    Daemon->>File: 运行期间异步追加 OTLP JSON line
+    Daemon->>Sink: 运行期间异步交付 OTLP JSON
 ```
 
 ## 启动入口
@@ -124,7 +129,7 @@ exporter。
    - purpose 为 `observation-consumer`
    - config 路径存在
    - 无 capability/grant 阻塞
-3. 未加载时不会创建默认输出文件。
+3. 未加载时不会创建默认输出文件或发起网络请求。
 4. Web 加载成功后实例出现在 loaded instances，不再出现在 candidates。
-5. 运行 trace 后，输出文件出现 OTLP JSONL，实例 `observed_records` 增长。
+5. 运行 trace 后，所选 exporter 收到 OTLP JSON，实例 `observed_records` 增长。
 6. 卸载后停止接收新 batch；刷新后候选重新出现。

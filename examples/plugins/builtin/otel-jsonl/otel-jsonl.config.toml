@@ -1,7 +1,19 @@
+exporter = "file"
+queue_capacity = 1024
+
+[file]
 path = "/var/lib/actrail/export/live-spans.otlp.jsonl"
 overwrite_enabled = true
-queue_capacity = 1024
 flush_every_spans = 1
+
+[json_rpc_http]
+endpoint = "http://127.0.0.1:4319/"
+method = "otel.export"
+connect_timeout_ms = 2000
+request_timeout_ms = 5000
+response_body_max_bytes = 65536
+max_attempts = 1
+retry_backoff_ms = 200
 
 [action_kinds]
 default = false

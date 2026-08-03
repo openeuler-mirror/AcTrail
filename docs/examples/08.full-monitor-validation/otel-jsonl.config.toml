@@ -1,6 +1,9 @@
+exporter = "file"
+queue_capacity = 1024
+
+[file]
 path = "/tmp/actrail-full-monitor/live-spans.otlp.jsonl"
 overwrite_enabled = true
-queue_capacity = 1024
 flush_every_spans = 1
 
 [action_kinds]

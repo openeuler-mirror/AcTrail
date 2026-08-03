@@ -80,7 +80,7 @@ The generated default uses persistent Linux paths instead of `/tmp`:
 | `storage_sqlite_path` | `/var/lib/actrail/actrail.sqlite` |
 | `export_directory` | `/var/lib/actrail/export` |
 | `plugins.discovery.directory` | `~/.actrail/plugins` |
-| live `otel-jsonl` plugin config `path` | `/var/lib/actrail/export/live-spans.otlp.jsonl` when explicitly loaded |
+| live `otel-jsonl` plugin config `file.path` | `/var/lib/actrail/export/live-spans.otlp.jsonl` when the file exporter is explicitly loaded |
 | `log_path` | `/var/log/actrail/actraild.log` |
 | `workload_diagnostics_enabled` | `false` |
 | `workload_diagnostics_interval_ms` | `1000` |
@@ -217,10 +217,11 @@ plugin_config = "/etc/actrail/plugins/otel-jsonl/otel-jsonl.config.toml"
 host_grants = []
 ```
 
-The plugin config owns the live JSONL path, queue settings, and required `[action_kinds]`
-selection. `file.tty_io` is filtered upstream and is not configurable. The live file is compact
-JSONL: one OTLP JSON document per line, one span per document. Queue-full drops are reported as
-`RuntimeDropped` diagnostics; writer I/O errors fail the plugin instead of silently falling back.
+The plugin config selects `file` or `json_rpc_http`, owns the selected exporter settings, and
+defines the required `[action_kinds]` selection. `file.tty_io` is filtered upstream and is not
+configurable. File output is compact JSONL: one OTLP JSON document per line. JSON-RPC output
+sends one acknowledged request per document. Queue-full drops are reported as `RuntimeDropped`
+diagnostics; exporter failures stay local to the plugin instead of silently falling back.
 
 ## 9. Real Agent Acceptance
 

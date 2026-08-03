@@ -62,15 +62,23 @@ host actraild
 
 The socket paths are shared listeners, not per-container files. Accepted
 connections are authenticated with kernel `SO_PEERCRED`, and each trace is
-bound to the creating container principal. Consequently, sharing the mounts
-does not merge traces and does not let one container control or inject
-TLS-sync data into another container's trace.
+bound to the creating process's PID and mount namespaces. Runtime container
+IDs are best-effort attribution only and do not participate in authorization.
+Consequently, sharing the mounts does not merge traces and does not let a
+container in another PID namespace control or inject TLS-sync data into the
+trace.
 
 The eBPF collector uses host PID/TID values for internal map keys, so identical
 container-local PIDs from different PID namespaces do not collide. Each trace
 also stores its own PID namespace identity; emitted events retain
 container-local PID coordinates for the viewer while host PID coordinates
 remain available for attribution.
+
+This demo is tested with Docker's default independent PID and mount
+namespaces. Host/shared-PID workloads remain separated when their mount
+namespaces differ. Workloads that deliberately share both namespaces are
+outside the authorization model and require a future explicit workload
+capability/runtime binding.
 
 Every workload must invoke `actrailctl launch` for the agent root process.
 Mounting the sockets alone does not automatically trace every process in a
@@ -191,6 +199,14 @@ Run the complete matrix acceptance test with:
 
 ```bash
 sudo BIN_DIR=target/release deploy/container-auto/e2e.sh
+```
+
+The acceptance image defaults to `ubuntu:24.04`. When Docker Hub is
+unavailable, pull the same Ubuntu image through an approved mirror and set:
+
+```bash
+sudo CONTAINER_AUTO_E2E_BASE_IMAGE=<ubuntu-mirror-image> \
+  BIN_DIR=target/release deploy/container-auto/e2e.sh
 ```
 
 The test starts its own daemon with config, sockets, database, logs, image

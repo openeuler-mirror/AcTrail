@@ -2,26 +2,118 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "required": [
-    "path",
-    "overwrite_enabled",
+    "exporter",
     "queue_capacity",
-    "flush_every_spans",
     "action_kinds"
   ],
   "additionalProperties": false,
   "properties": {
-    "path": {
+    "exporter": {
+      "title": "Exporter",
+      "description": "Delivery implementation used for OTLP JSON records.",
       "type": "string",
-      "minLength": 1
+      "oneOf": [
+        {
+          "const": "file",
+          "title": "File"
+        },
+        {
+          "const": "json_rpc_http",
+          "title": "JSON-RPC 2.0 over HTTP(S)"
+        }
+      ]
     },
-    "overwrite_enabled": {
-      "type": "boolean"
+    "file": {
+      "title": "File exporter",
+      "description": "Settings used only when Exporter is File.",
+      "type": "object",
+      "required": [
+        "path",
+        "overwrite_enabled",
+        "flush_every_spans"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "title": "Output path",
+          "description": "Absolute path of the JSONL output file.",
+          "type": "string",
+          "minLength": 1
+        },
+        "overwrite_enabled": {
+          "title": "Overwrite existing file",
+          "type": "boolean"
+        },
+        "flush_every_spans": {
+          "title": "Flush every spans",
+          "description": "Flush the buffered file after this many records.",
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "json_rpc_http": {
+      "title": "JSON-RPC HTTP exporter",
+      "description": "Settings used only when Exporter is JSON-RPC 2.0 over HTTP(S).",
+      "type": "object",
+      "required": [
+        "endpoint",
+        "method",
+        "connect_timeout_ms",
+        "request_timeout_ms",
+        "response_body_max_bytes",
+        "max_attempts",
+        "retry_backoff_ms"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "endpoint": {
+          "title": "Endpoint",
+          "description": "Absolute HTTP or HTTPS URL receiving JSON-RPC requests.",
+          "type": "string",
+          "minLength": 1
+        },
+        "method": {
+          "title": "Method",
+          "description": "JSON-RPC method invoked for each OTLP JSON record.",
+          "type": "string",
+          "minLength": 1
+        },
+        "connect_timeout_ms": {
+          "title": "Connect timeout (ms)",
+          "description": "Maximum time for TCP connection and TLS handshake.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "request_timeout_ms": {
+          "title": "Request timeout (ms)",
+          "description": "Maximum end-to-end duration of one delivery attempt.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "response_body_max_bytes": {
+          "title": "Response body limit",
+          "description": "Maximum JSON-RPC response body size in bytes.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_attempts": {
+          "title": "Maximum attempts",
+          "description": "Total delivery attempts for retryable transport failures.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "retry_backoff_ms": {
+          "title": "Retry backoff (ms)",
+          "description": "Fixed delay between retryable delivery attempts.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
     },
     "queue_capacity": {
-      "type": "integer",
-      "minimum": 1
-    },
-    "flush_every_spans": {
+      "title": "Queue capacity",
+      "description": "Bounded exporter queue; a full queue drops locally without blocking recording.",
       "type": "integer",
       "minimum": 1
     },
@@ -91,6 +183,32 @@
           "type": "boolean"
         }
       }
+    }
+  },
+  "if": {
+    "required": [
+      "exporter"
+    ],
+    "properties": {
+      "exporter": {
+        "const": "file"
+      }
+    }
+  },
+  "then": {
+    "required": [
+      "file"
+    ],
+    "properties": {
+      "file": {}
+    }
+  },
+  "else": {
+    "required": [
+      "json_rpc_http"
+    ],
+    "properties": {
+      "json_rpc_http": {}
     }
   }
 }

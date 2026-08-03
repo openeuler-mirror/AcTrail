@@ -6,7 +6,7 @@
 
 | 目录 | 运行时 / ABI | 插件用途 | 示例内容 |
 | --- | --- | --- | --- |
-| `builtin/otel-jsonl` | `builtin` | `observation-consumer` | 内置 OTEL JSONL 观测消费者；release 安装为可发现但默认不加载的候选包。 |
+| `builtin/otel-jsonl` | `builtin` | `observation-consumer` | 内置 OTLP JSON 观测消费者，可选择 JSONL 文件或 JSON-RPC HTTP(S) exporter；release 安装为可发现但默认不加载的候选包。 |
 | `wasm-legacy/observation-count` | `wasm` core module | `observation-consumer` | 最小观测消费者 ABI，使用手写 `.wat` 模块统计观测记录。 |
 | `wasm-legacy/observation-env-read` | `wasm` core module | `observation-consumer` | 观测插件通过显式授权读取指定环境变量。 |
 | `wasm-legacy/observation-payload-read` | `wasm` core module | `observation-consumer` | 观测插件通过显式授权读取保留的 payload 数据。 |

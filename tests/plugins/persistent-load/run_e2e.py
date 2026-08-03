@@ -52,9 +52,12 @@ def write_config() -> None:
     PLUGIN_CONFIG.write_text(
         "\n".join(
             [
+                'exporter = "file"',
+                "queue_capacity = 128",
+                "",
+                "[file]",
                 f'path = "{RUN_DIR / "live-spans.otlp.jsonl"}"',
                 "overwrite_enabled = true",
-                "queue_capacity = 128",
                 "flush_every_spans = 1",
                 "",
                 "[action_kinds]",

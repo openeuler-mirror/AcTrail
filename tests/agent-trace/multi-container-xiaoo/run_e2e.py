@@ -212,11 +212,11 @@ def main() -> int:
             launches,
             workloads,
         )
-        container_ids = {
-            workload.container_name: inspect_container_id(workload.container_name)
+        pid_namespaces = {
+            workload.container_name: inspect_pid_namespace(workload.container_name)
             for workload in workloads
         }
-        require_trace_container_isolation(trace_rows, set(container_ids.values()))
+        require_distinct_pid_namespaces(pid_namespaces)
         require_trace_display_names(database, workloads)
         require_trace_start_stagger(
             database,
@@ -251,7 +251,7 @@ def main() -> int:
             print(
                 "multi_container_trace "
                 f"container={workload.container_name} "
-                f"container_id={container_ids[workload.container_name]} "
+                f"pid_namespace={pid_namespaces[workload.container_name]} "
                 f"trace=trace-{trace_id} "
                 f"trace_name={workload.trace_name} "
                 f"input={workload.input_path} "
@@ -518,10 +518,19 @@ def resolve_docker_seccomp(value: str, repo: Path) -> str:
     return f"seccomp={require_file(resolve_path(value, repo))}"
 
 
+def require_distinct_pid_namespaces(pid_namespaces: dict[str, str]) -> None:
+    if len(set(pid_namespaces.values())) != len(pid_namespaces):
+        raise RuntimeError(
+            "workload containers unexpectedly share a PID namespace: "
+            f"{pid_namespaces}"
+        )
+
+
 def require_trace_container_isolation(
     trace_rows: list[tuple[int, str, str | None]],
     expected_container_ids: set[str],
 ) -> None:
+    """Compatibility assertion for attribution-specific acceptance cases."""
     trace_container_ids = {row[2] for row in trace_rows}
     if None in trace_container_ids:
         raise RuntimeError(f"a trace has no Docker container identity: {trace_rows}")
@@ -847,7 +856,15 @@ def verify_no_cross_trace_llm_actions(
                     )
 
 
+def inspect_pid_namespace(name: str) -> str:
+    host_pid = run_checked(
+        ["docker", "inspect", "--format", "{{.State.Pid}}", name]
+    ).strip()
+    return os.readlink(f"/proc/{host_pid}/ns/pid")
+
+
 def inspect_container_id(name: str) -> str:
+    """Compatibility helper for attribution-specific acceptance cases."""
     return run_checked(["docker", "inspect", "--format", "{{.Id}}", name]).strip()
 
 
