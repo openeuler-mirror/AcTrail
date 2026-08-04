@@ -13,29 +13,38 @@ pub(super) fn sweep_segments(
     boundaries.entry(scope.start).or_default();
     boundaries.entry(scope.end).or_default();
     for interval in agent_intervals {
+        let Some(interval) = interval.intersect(scope) else {
+            continue;
+        };
         boundaries.entry(interval.start).or_default().agent_delta += 1;
         boundaries.entry(interval.end).or_default().agent_delta -= 1;
     }
     for (index, call) in calls.iter().enumerate() {
+        let Some(interval) = call.interval.intersect(scope) else {
+            continue;
+        };
         boundaries
-            .entry(call.interval.start)
+            .entry(interval.start)
             .or_default()
             .call_starts
             .push(index);
         boundaries
-            .entry(call.interval.end)
+            .entry(interval.end)
             .or_default()
             .call_ends
             .push(index);
     }
     for (index, tool) in tools.iter().enumerate() {
+        let Some(interval) = tool.interval.intersect(scope) else {
+            continue;
+        };
         boundaries
-            .entry(tool.interval.start)
+            .entry(interval.start)
             .or_default()
             .tool_starts
             .push(index);
         boundaries
-            .entry(tool.interval.end)
+            .entry(interval.end)
             .or_default()
             .tool_ends
             .push(index);

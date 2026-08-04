@@ -4,6 +4,10 @@ This Vue app renders the read-only AcTrail UI. Rust owns storage/API/static serv
 
 ## Build
 
+The frontend toolchain supports Node.js 18, Node.js 20, and Node.js 22 or
+newer. In particular, it does not require the `node:util` `styleText` export
+introduced after Node.js 20.11.
+
 ```sh
 # From the repository root:
 npm ci --prefix crates/apps/web/frontend
@@ -37,7 +41,7 @@ cargo build --release --locked
 
 - `vue` 3.5.35: MIT.
 - `@lucide/vue` 1.17.0: ISC.
-- `vite` 8.1.5 and `@vitejs/plugin-vue` 6.0.8: MIT.
+- `vite` 6.4.3 and `@vitejs/plugin-vue` 5.2.4: MIT.
 
 ## Alert refresh
 

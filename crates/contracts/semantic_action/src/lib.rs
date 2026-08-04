@@ -5,6 +5,7 @@ pub mod evidence_roles;
 pub mod link_roles;
 pub mod llm;
 pub mod model;
+pub mod model_identity;
 pub mod store;
 
 pub use llm::{
@@ -21,4 +22,5 @@ pub use model::{
     SemanticEvidence, SemanticEvidenceKind, file_path_set_identity_for_overflow_scope,
     file_path_set_identity_for_paths,
 };
+pub use model_identity::validated_model_identifier;
 pub use store::{SemanticActionReadStore, SemanticActionStoreError, SemanticActionWriteStore};

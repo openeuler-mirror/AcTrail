@@ -306,8 +306,11 @@ def validate_time_attribution(
     scope_start = required_decimal(scope, "start_unix_nanos")
     scope_end = required_decimal(scope, "end_unix_nanos")
     total = required_decimal(scope, "duration_nanos")
-    if scope_end - scope_start != total or total <= 0:
-        raise RuntimeError("time attribution scope boundaries do not match its duration")
+    scope_windows = validate_scope_windows(scope, total)
+    if total <= 0:
+        raise RuntimeError("real-Agent time attribution has no user-request duration")
+    if scope_start != scope_windows[0][0] or scope_end != scope_windows[-1][1]:
+        raise RuntimeError("time attribution outer scope does not bound its user windows")
 
     categories = keyed_rows(attribution.get("categories"), "time attribution categories")
     expected_keys = {"agent_side", "model_side", "unattributed"}
@@ -332,13 +335,22 @@ def validate_time_attribution(
     if not isinstance(segments, list) or not segments:
         raise RuntimeError("time attribution did not return exclusive segments")
     segment_category_totals = {key: 0 for key in expected_keys}
-    cursor = scope_start
+    window_index = 0
+    cursor = scope_windows[0][0]
     model_intervals: list[tuple[int, int]] = []
+    attributed_model_action_ids: set[str] = set()
     for segment in segments:
         start = required_decimal(segment, "start_unix_nanos")
         end = required_decimal(segment, "end_unix_nanos")
         duration = required_decimal(segment, "duration_nanos")
         category = segment.get("category")
+        while (
+            window_index < len(scope_windows)
+            and cursor == scope_windows[window_index][1]
+        ):
+            window_index += 1
+            if window_index < len(scope_windows):
+                cursor = scope_windows[window_index][0]
         if start != cursor:
             raise RuntimeError(
                 f"time attribution segments are not contiguous at {cursor}: next={start}"
@@ -350,10 +362,19 @@ def validate_time_attribution(
         segment_category_totals[category] += duration
         if category == "model_side":
             model_intervals.append((start, end))
+            attributed_model_action_ids.update(
+                action_id
+                for action_id in segment.get("action_ids", [])
+                if isinstance(action_id, str)
+            )
         cursor = end
-    if cursor != scope_end:
+    while window_index < len(scope_windows) and cursor == scope_windows[window_index][1]:
+        window_index += 1
+        if window_index < len(scope_windows):
+            cursor = scope_windows[window_index][0]
+    if window_index != len(scope_windows):
         raise RuntimeError(
-            f"time attribution segments end at {cursor}, expected scope end {scope_end}"
+            f"time attribution segments do not cover all user windows: {scope_windows}"
         )
     for key, duration in segment_category_totals.items():
         expected = required_decimal(categories[key], "duration_nanos")
@@ -446,9 +467,33 @@ def validate_time_attribution(
         scope_start,
         scope_end,
     )
+    coverage = attribution.get("coverage", {})
+    llm_request_count = int(coverage.get("llm_request_count", -1))
+    observed_llm_call_count = int(coverage.get("observed_llm_call_count", -1))
+    paired_llm_call_count = int(coverage.get("llm_call_count", -1))
+    excluded_llm_call_count = int(coverage.get("excluded_llm_call_count", -1))
+    if min(
+        llm_request_count,
+        observed_llm_call_count,
+        paired_llm_call_count,
+        excluded_llm_call_count,
+    ) < 0:
+        raise RuntimeError("time attribution LLM evidence coverage is missing")
+    if paired_llm_call_count != bottleneck_counts["model_requests"]:
+        raise RuntimeError("paired LLM coverage does not match attributed model requests")
+    if excluded_llm_call_count != observed_llm_call_count - paired_llm_call_count:
+        raise RuntimeError("excluded LLM call coverage is inconsistent")
+    if any(row.get("key") == "{" for row in attribution.get("models", [])):
+        raise RuntimeError("JSON fragment was exposed as a model attribution key")
 
-    validate_round_partition(attribution.get("rounds"), scope_start, scope_end)
-    validate_llm_calls_covered(action_tree, model_intervals, scope_start, scope_end)
+    validate_round_partition(attribution.get("rounds"), scope_windows)
+    validate_llm_calls_covered(
+        action_tree,
+        model_intervals,
+        scope_start,
+        scope_end,
+        attributed_model_action_ids,
+    )
 
     named_tools = [
         row
@@ -500,6 +545,10 @@ def validate_time_attribution(
         "model_bottleneck_count": bottleneck_counts["model_requests"],
         "command_bottleneck_count": bottleneck_counts["commands"],
         "unattributed_bottleneck_count": bottleneck_counts["unattributed_gaps"],
+        "llm_request_count": llm_request_count,
+        "observed_llm_call_count": observed_llm_call_count,
+        "paired_llm_call_count": paired_llm_call_count,
+        "excluded_llm_call_count": excluded_llm_call_count,
     }
 
 
@@ -662,16 +711,44 @@ def action_spans(segments: object) -> dict[str, tuple[int, int]]:
     return spans
 
 
-def validate_round_partition(rounds: object, scope_start: int, scope_end: int) -> None:
+def validate_scope_windows(scope: dict, total: int) -> list[tuple[int, int]]:
+    windows = scope.get("windows")
+    if not isinstance(windows, list) or not windows:
+        raise RuntimeError("time attribution user-request windows are missing")
+    parsed: list[tuple[int, int]] = []
+    previous_end = None
+    for window in windows:
+        start = required_decimal(window, "start_unix_nanos")
+        end = required_decimal(window, "end_unix_nanos")
+        duration = required_decimal(window, "duration_nanos")
+        if end <= start or end - start != duration:
+            raise RuntimeError(f"invalid time attribution scope window: {window}")
+        if previous_end is not None and start < previous_end:
+            raise RuntimeError(f"overlapping time attribution scope windows: {windows}")
+        parsed.append((start, end))
+        previous_end = end
+    if sum(end - start for start, end in parsed) != total:
+        raise RuntimeError("time attribution scope windows do not sum to scope duration")
+    return parsed
+
+
+def validate_round_partition(
+    rounds: object,
+    scope_windows: list[tuple[int, int]],
+) -> None:
     if not isinstance(rounds, list) or not rounds:
         raise RuntimeError("time attribution did not return round attribution")
-    cursor = scope_start
+    round_intervals: list[tuple[int, int]] = []
     for round_row in rounds:
         start = required_decimal(round_row, "start_unix_nanos")
         end = required_decimal(round_row, "end_unix_nanos")
         duration = required_decimal(round_row, "duration_nanos")
-        if start != cursor or end <= start or end - start != duration:
-            raise RuntimeError(f"round attribution is not a valid partition: {round_row}")
+        if end <= start or end - start != duration:
+            raise RuntimeError(f"user-request attribution boundaries are invalid: {round_row}")
+        if round_row.get("kind") != "user_turn" or int(round_row.get("call_count", 0)) <= 0:
+            raise RuntimeError(f"attribution row is not a user request: {round_row}")
+        if not any(window_start <= start and end <= window_end for window_start, window_end in scope_windows):
+            raise RuntimeError(f"user request lies outside attribution scope: {round_row}")
         category_total = sum(
             required_decimal(row, "duration_nanos")
             for row in round_row.get("categories", [])
@@ -688,10 +765,17 @@ def validate_round_partition(rounds: object, scope_start: int, scope_end: int) -
             raise RuntimeError(
                 f"round percentages sum to {percentage_total}, expected 10000 bps"
             )
-        cursor = end
-    if cursor != scope_end:
+        round_intervals.append((start, end))
+    merged_rounds: list[tuple[int, int]] = []
+    for start, end in sorted(round_intervals):
+        if merged_rounds and start <= merged_rounds[-1][1]:
+            merged_rounds[-1] = (merged_rounds[-1][0], max(merged_rounds[-1][1], end))
+        else:
+            merged_rounds.append((start, end))
+    if merged_rounds != scope_windows:
         raise RuntimeError(
-            f"round attribution ends at {cursor}, expected scope end {scope_end}"
+            f"user-request rounds do not produce scope windows: rounds={merged_rounds} "
+            f"windows={scope_windows}"
         )
 
 
@@ -700,15 +784,20 @@ def validate_llm_calls_covered(
     model_intervals: list[tuple[int, int]],
     scope_start: int,
     scope_end: int,
+    attributed_action_ids: set[str],
 ) -> None:
     calls = [
         action
         for action in action_tree.get("actions", [])
         if action.get("kind") == "llm.call"
+        and action.get("id") in attributed_action_ids
         and action.get("end_time_unix_nanos") is not None
     ]
-    if not calls:
-        raise RuntimeError("real-Agent action tree has no completed llm.call")
+    if len(calls) != len(attributed_action_ids):
+        raise RuntimeError(
+            "not every attributed model action can be located in Waterfall: "
+            f"expected={attributed_action_ids} found={[call.get('id') for call in calls]}"
+        )
     for call in calls:
         start = max(required_decimal(call, "start_time_unix_nanos"), scope_start)
         end = min(required_decimal(call, "end_time_unix_nanos"), scope_end)

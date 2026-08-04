@@ -3,6 +3,10 @@ use super::summary::{
     breakdown_shares, category_shares, command_breakdown_shares, round_attributions,
     trace_bottlenecks,
 };
+use super::turns::{
+    attribution_scope, clip_command_intervals, clip_intervals, clip_model_intervals,
+    clip_tool_intervals, clip_user_turns, merge_intervals, user_turns,
+};
 use super::*;
 
 pub(super) fn project_trace_data(
@@ -22,34 +26,70 @@ pub(super) fn project_trace_data(
     }
     let provisional = !trace.lifecycle_state.is_terminal();
     let full_scope = trace_scope(trace, actions, memberships, &mut tracker)?;
-    let scope = match clip_window {
-        Some(window) => full_scope.intersect(window).unwrap_or_else(|| {
-            let boundary = full_scope.start.max(window.start);
-            Interval {
-                start: boundary,
-                end: boundary,
-            }
-        }),
-        None => full_scope,
+    let candidate_calls = model_intervals(actions, full_scope, provisional, &mut tracker);
+    let strong_turn_keys = candidate_calls
+        .iter()
+        .filter(|call| call.user_input_start.is_some())
+        .map(|call| call.turn_key.clone())
+        .collect::<BTreeSet<_>>();
+    let candidate_calls = if strong_turn_keys.is_empty() {
+        if !candidate_calls.is_empty() {
+            tracker.info(
+                "user_input_boundary_unobserved",
+                "User-message evidence was observed, but terminal input timing was unavailable; each turn begins at its first model request.",
+            );
+        }
+        candidate_calls
+    } else {
+        candidate_calls
+            .into_iter()
+            .filter(|call| {
+                let accepted = strong_turn_keys.contains(&call.turn_key);
+                if !accepted {
+                    tracker.action_info(
+                        "background_llm_call_excluded",
+                        "LLM call is not linked to an observed user input and is excluded from user-turn attribution.",
+                        &call.action_id,
+                        Some(call.interval),
+                    );
+                }
+                accepted
+            })
+            .collect()
     };
-
-    let calls = model_intervals(actions, scope, provisional, &mut tracker);
-    let (mut agent_intervals, agent_processes) =
-        agent_intervals(actions, memberships, &calls, scope, &mut tracker);
-    if degraded {
-        agent_intervals.clear();
-    }
-    let tools = tool_intervals(
+    let agent_processes = agent_processes(memberships, &candidate_calls, &mut tracker);
+    let raw_tools = tool_intervals(
         actions,
         links,
         memberships,
         &agent_processes,
-        scope,
+        full_scope,
         provisional,
         &mut tracker,
     );
-    let command_intervals = command_intervals(actions, memberships, &tools, scope, provisional);
-    let mut segments = sweep_segments(scope, &agent_intervals, &calls, &tools);
+    let (calls, full_turns) = user_turns(candidate_calls, &raw_tools, &mut tracker);
+    let full_windows = merge_intervals(full_turns.iter().map(|turn| turn.interval));
+    let windows = clip_intervals(&full_windows, clip_window);
+    let calls = clip_model_intervals(&calls, &windows);
+    let turns = clip_user_turns(&full_turns, &calls, clip_window);
+    if full_windows.is_empty() {
+        tracker.info(
+            "user_turn_not_observed",
+            "No completed model exchange with reliable user-message evidence was observed; startup, idle, and background activity are excluded.",
+        );
+    }
+    let tools = clip_tool_intervals(&raw_tools, &windows);
+    let mut agent_intervals = tools.iter().map(|tool| tool.interval).collect::<Vec<_>>();
+    if degraded {
+        agent_intervals.clear();
+    }
+    let raw_command_intervals =
+        command_intervals(actions, memberships, &raw_tools, full_scope, provisional);
+    let command_intervals = clip_command_intervals(&raw_command_intervals, &windows);
+    let mut segments = windows
+        .iter()
+        .flat_map(|window| sweep_segments(*window, &agent_intervals, &calls, &tools))
+        .collect::<Vec<_>>();
     for (index, segment) in segments.iter_mut().enumerate() {
         segment.id = format!("segment-{}", index + 1);
     }
@@ -57,16 +97,32 @@ pub(super) fn project_trace_data(
     for (index, segment) in command_segments.iter_mut().enumerate() {
         segment.id = format!("command-segment-{}", index + 1);
     }
-    let categories = category_shares(&segments, scope.duration());
-    let models = breakdown_shares(&segments, scope.duration(), Category::ModelSide, "model");
-    let tools_breakdown =
-        breakdown_shares(&segments, scope.duration(), Category::AgentSide, "agent");
-    let commands = command_breakdown_shares(&command_segments, scope.duration());
-    let rounds = round_attributions(scope, &calls, &segments, provisional);
+    let total_duration = windows.iter().map(|window| window.duration()).sum::<u128>();
+    let categories = category_shares(&segments, total_duration);
+    let models = breakdown_shares(&segments, total_duration, Category::ModelSide, "model");
+    let tools_breakdown = breakdown_shares(&segments, total_duration, Category::AgentSide, "agent");
+    let commands = command_breakdown_shares(&command_segments, total_duration);
+    let rounds = round_attributions(&turns, &calls, &segments, provisional);
     let bottlenecks = trace_bottlenecks(&calls, &command_intervals, &segments, provisional);
     let status = tracker.status(provisional);
+    let llm_request_count = actions
+        .iter()
+        .filter(|action| action.kind == SemanticActionKind::LlmRequest)
+        .count();
+    let observed_llm_call_count = actions
+        .iter()
+        .filter(|action| action.kind == SemanticActionKind::LlmCall)
+        .count();
     let coverage = TraceCoverage {
+        llm_request_count,
+        observed_llm_call_count,
         llm_call_count: calls.len(),
+        excluded_llm_call_count: observed_llm_call_count.saturating_sub(calls.len()),
+        user_turn_count: turns.len(),
+        strong_user_input_count: calls
+            .iter()
+            .filter(|call| call.user_input_start.is_some())
+            .count(),
         agent_process_count: agent_processes.len(),
         tool_interval_count: tools.len(),
         command_interval_count: command_intervals.len(),
@@ -80,13 +136,7 @@ pub(super) fn project_trace_data(
             name: trace.display_name.as_str().to_string(),
             state: trace.lifecycle_state.as_storage_str().to_string(),
         },
-        scope: AttributionScope {
-            start_unix_nanos: nanos_string(scope.start),
-            end_unix_nanos: nanos_string(scope.end),
-            duration_nanos: nanos_string(scope.duration()),
-            provisional,
-            semantics: "exclusive_wall_clock",
-        },
+        scope: attribution_scope(&windows, full_scope.start, provisional),
         status,
         categories,
         rounds,
@@ -183,27 +233,68 @@ fn model_intervals(
     provisional: bool,
     tracker: &mut StatusTracker,
 ) -> Vec<ModelInterval> {
+    let actions_by_id = actions
+        .iter()
+        .map(|action| (action.action_id.as_str(), action))
+        .collect::<BTreeMap<_, _>>();
     let mut intervals = Vec::new();
     for action in actions
         .iter()
         .filter(|action| action.kind == SemanticActionKind::LlmCall)
     {
-        let Ok(start) = system_time_nanos(action.start_time) else {
+        let request = action
+            .attributes
+            .get(attr_keys::llm_call::REQUEST_ACTION_ID)
+            .and_then(|request_id| actions_by_id.get(request_id.as_str()).copied())
+            .filter(|request| request.kind == SemanticActionKind::LlmRequest);
+        let Some(request) = request else {
+            tracker.action_warning(
+                "llm_call_request_missing",
+                "LLM call has no matching request action and is left unattributed.",
+                &action.action_id,
+                None,
+            );
+            continue;
+        };
+        if let Some(background_kind) = request
+            .attributes
+            .get(attr_keys::llm_request::BACKGROUND_KIND)
+        {
+            tracker.action_info(
+                "background_llm_call_excluded",
+                format!(
+                    "LLM call is classified as background activity ({background_kind}) and is excluded from user-turn attribution."
+                ),
+                &action.action_id,
+                None,
+            );
+            continue;
+        }
+        let response = action
+            .attributes
+            .get(attr_keys::llm_call::RESPONSE_ACTION_ID)
+            .and_then(|response_id| actions_by_id.get(response_id.as_str()).copied())
+            .filter(|response| response.kind == SemanticActionKind::LlmResponse);
+        let model = resolved_call_model(action, request, response, tracker);
+        let Some(response) = response else {
+            report_unpaired_call(action, provisional, tracker);
+            continue;
+        };
+        let Ok(start) = system_time_nanos(request.start_time) else {
             tracker.action_error(
                 "llm_call_clock_invalid",
-                "LLM call start time cannot be represented.",
+                "LLM request start time cannot be represented.",
                 &action.action_id,
             );
             continue;
         };
-        let unfinished = action.end_time.is_none();
-        let end = match action.end_time {
+        let end = match response.end_time {
             Some(end) => match system_time_nanos(end) {
                 Ok(end) => end,
                 Err(_) => {
                     tracker.action_error(
                         "llm_call_clock_invalid",
-                        "LLM call end time cannot be represented.",
+                        "LLM response end time cannot be represented.",
                         &action.action_id,
                     );
                     continue;
@@ -212,20 +303,20 @@ fn model_intervals(
             None => {
                 if provisional {
                     tracker.action_info(
-                        "llm_call_in_progress",
-                        "LLM call is unfinished; the current observation watermark is used.",
+                        "llm_response_pending",
+                        "LLM response has no observable data boundary yet; pending time remains unattributed.",
                         &action.action_id,
-                        Interval::new(start.min(scope.end), scope.end),
+                        None,
                     );
                 } else {
                     tracker.action_warning(
-                        "llm_call_end_missing",
-                        "Terminal trace contains an LLM call without an end time.",
+                        "llm_response_end_missing",
+                        "Terminal Trace contains an LLM response without an observable end; the call is left unattributed.",
                         &action.action_id,
-                        Interval::new(start.min(scope.end), scope.end),
+                        None,
                     );
                 }
-                scope.end
+                continue;
             }
         };
         if end < start {
@@ -236,44 +327,77 @@ fn model_intervals(
             );
             continue;
         }
+        let Some(turn_key) = user_turn_key(request) else {
+            tracker.action_info(
+                "llm_call_without_user_message",
+                "LLM call has no retained user-message evidence and is excluded from user-turn attribution.",
+                &action.action_id,
+                Interval::new(start, end),
+            );
+            continue;
+        };
+        let user_input_start = request
+            .attributes
+            .get(attr_keys::agent_turn::USER_INPUT_OBSERVED_AT_UNIX_NANOS)
+            .and_then(|value| value.parse::<u128>().ok())
+            .filter(|input_start| *input_start <= start && *input_start >= scope.start);
+        let finalized_on_trace_close =
+            finalized_on_trace_close(action) || finalized_on_trace_close(response);
+        if finalized_on_trace_close && end == scope.end {
+            tracker.action_warning(
+                "llm_call_trace_close_only",
+                "LLM call has no response boundary distinct from Trace close and is left unattributed.",
+                &action.action_id,
+                Interval::new(start.min(scope.end), scope.end),
+            );
+            continue;
+        }
         let Some(interval) = Interval::new(start, end).and_then(|value| value.intersect(scope))
         else {
             continue;
         };
-        let finalized_on_trace_close = action
-            .attributes
-            .get(attr_keys::actrail::ACTION_FINALIZED_ON_TRACE_CLOSE)
-            .is_some_and(|value| value == "true");
-        let partial_observation = action.completeness != SemanticActionCompleteness::Complete
-            || action.status == SemanticActionStatus::InProgress;
+        let partial_observation = response.completeness != SemanticActionCompleteness::Complete
+            || response.status == SemanticActionStatus::InProgress;
         if finalized_on_trace_close {
             tracker.action_warning(
                 "llm_call_closed_on_trace_end",
-                "LLM call was finalized at trace close; its end is a capture boundary.",
+                "LLM call was finalized at Trace close; only its last observed response boundary is attributed.",
                 &action.action_id,
                 Some(interval),
             );
-        } else if !(provisional && unfinished) && partial_observation {
-            tracker.action_warning(
-                "llm_call_partial",
-                "LLM call is incomplete; observable boundaries may be partial.",
-                &action.action_id,
-                Some(interval),
-            );
+        } else if partial_observation {
+            if provisional {
+                tracker.action_info(
+                    "llm_call_in_progress",
+                    "LLM response is still open; attribution stops at the latest observed response data.",
+                    &action.action_id,
+                    Some(interval),
+                );
+            } else {
+                tracker.action_warning(
+                    "llm_call_partial",
+                    "LLM call is incomplete; attribution stops at the last reliable response boundary.",
+                    &action.action_id,
+                    Some(interval),
+                );
+            }
         }
         intervals.push(ModelInterval {
             interval,
             action_id: action.action_id.clone(),
-            model: non_empty_attr(action, attr_keys::llm_call::MODEL),
-            status: if provisional && unfinished {
+            model,
+            process: request.process.clone(),
+            status: if provisional && response.status == SemanticActionStatus::InProgress {
                 "in_progress"
-            } else if unfinished || finalized_on_trace_close || partial_observation {
+            } else if finalized_on_trace_close || partial_observation {
                 "partial"
-            } else if action.status == SemanticActionStatus::Error {
+            } else if response.status == SemanticActionStatus::Error {
                 "error"
             } else {
                 "complete"
             },
+            turn_key,
+            user_input_start,
         });
     }
     intervals.sort_by(|left, right| {
@@ -286,26 +410,134 @@ fn model_intervals(
     intervals
 }
 
-fn agent_intervals(
-    actions: &[SemanticAction],
+fn user_turn_key(request: &SemanticAction) -> Option<UserTurnKey> {
+    let user_message_count = request
+        .attributes
+        .get(attr_keys::llm_request::USER_MESSAGE_COUNT)
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|count| *count > 0);
+    let latest_user_message_hash = request
+        .attributes
+        .get(attr_keys::llm_request::LATEST_USER_MESSAGE_HASH)
+        .filter(|value| valid_user_message_hash(value))
+        .cloned();
+    let (user_message_count, latest_user_message_hash) =
+        match (user_message_count, latest_user_message_hash) {
+            (Some(count), Some(hash)) => (count, hash),
+            _ => {
+                let preview = request
+                    .attributes
+                    .get(attr_keys::llm_request::MESSAGE_PREVIEW)
+                    .map(|value| value.trim())
+                    .filter(|value| !value.is_empty())?;
+                (0, format!("legacy-preview:{preview}"))
+            }
+        };
+    Some(UserTurnKey {
+        process: request.process.clone(),
+        user_message_count,
+        latest_user_message_hash,
+    })
+}
+
+fn valid_user_message_hash(value: &str) -> bool {
+    value.len() == "sha256:".len() + 64
+        && value.starts_with("sha256:")
+        && value["sha256:".len()..]
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn report_unpaired_call(action: &SemanticAction, provisional: bool, tracker: &mut StatusTracker) {
+    if provisional && action.status == SemanticActionStatus::InProgress {
+        tracker.action_info(
+            "llm_call_unpaired",
+            "LLM request has no matching response yet; it is excluded from model-side time until response evidence arrives.",
+            &action.action_id,
+            None,
+        );
+    } else {
+        tracker.action_warning(
+            "llm_call_unpaired",
+            "LLM call has no matching response and is excluded from model-side time.",
+            &action.action_id,
+            None,
+        );
+    }
+}
+
+fn resolved_call_model(
+    call: &SemanticAction,
+    request: &SemanticAction,
+    response: Option<&SemanticAction>,
+    tracker: &mut StatusTracker,
+) -> Option<String> {
+    let request_model = validated_action_model(request, attr_keys::llm_request::MODEL);
+    let response_model =
+        response.and_then(|action| validated_action_model(action, attr_keys::llm_response::MODEL));
+    let call_model = validated_action_model(call, attr_keys::llm_call::MODEL);
+    let has_invalid_model = [
+        action_model_is_invalid(request, attr_keys::llm_request::MODEL),
+        response
+            .is_some_and(|action| action_model_is_invalid(action, attr_keys::llm_response::MODEL)),
+        action_model_is_invalid(call, attr_keys::llm_call::MODEL),
+    ]
+    .into_iter()
+    .any(|invalid| invalid);
+    if has_invalid_model {
+        tracker.action_info(
+            "llm_model_invalid",
+            "A malformed model identifier was ignored; JSON fragments are not used as model keys.",
+            &call.action_id,
+            None,
+        );
+    }
+    if let (Some(request_model), Some(response_model)) = (&request_model, &response_model)
+        && request_model != response_model
+    {
+        tracker.action_info(
+            "llm_model_conflict",
+            "Request and response report different model identifiers; the response model is used.",
+            &call.action_id,
+            None,
+        );
+    }
+    response_model.or(request_model).or(call_model)
+}
+
+fn validated_action_model(action: &SemanticAction, key: &str) -> Option<String> {
+    action
+        .attributes
+        .get(key)
+        .and_then(|value| validated_model_identifier(value))
+        .map(ToOwned::to_owned)
+}
+
+fn action_model_is_invalid(action: &SemanticAction, key: &str) -> bool {
+    action
+        .attributes
+        .get(key)
+        .is_some_and(|value| validated_model_identifier(value).is_none())
+}
+
+fn finalized_on_trace_close(action: &SemanticAction) -> bool {
+    action
+        .attributes
+        .get(attr_keys::actrail::ACTION_FINALIZED_ON_TRACE_CLOSE)
+        .is_some_and(|value| value == "true")
+}
+
+fn agent_processes(
     memberships: &[ProcessMembership],
     calls: &[ModelInterval],
-    scope: Interval,
     tracker: &mut StatusTracker,
-) -> (Vec<Interval>, BTreeSet<ProcessIdentity>) {
+) -> BTreeSet<ProcessIdentity> {
     let mut evidence_start = BTreeMap::<ProcessIdentity, u128>::new();
-    for action in actions.iter().filter(|action| {
-        matches!(
-            action.kind,
-            SemanticActionKind::AgentIdentity | SemanticActionKind::LlmCall
-        )
-    }) {
-        if let Ok(start) = system_time_nanos(action.start_time) {
-            evidence_start
-                .entry(action.process.clone())
-                .and_modify(|current| *current = (*current).min(start))
-                .or_insert(start);
-        }
+    for call in calls {
+        evidence_start
+            .entry(call.process.clone())
+            .and_modify(|current| *current = (*current).min(call.interval.start))
+            .or_insert(call.interval.start);
     }
     if evidence_start.is_empty() && !calls.is_empty() {
         tracker.warning(
@@ -335,13 +567,12 @@ fn agent_intervals(
         .iter()
         .map(|membership| (membership.identity.clone(), membership))
         .collect::<BTreeMap<_, _>>();
-    let mut intervals = Vec::new();
     for process in &agent_processes {
         let Some(membership) = membership_by_process.get(process).copied() else {
             tracker.warning(
                 "agent_membership_missing",
                 format!(
-                    "Agent process {process} has no membership boundary; its local time is left unattributed."
+                    "Agent process {process} has no membership boundary; only directly bounded local actions are attributable."
                 ),
             );
             continue;
@@ -352,44 +583,14 @@ fn agent_intervals(
                 format!("Agent subtree process {process} has stale identity coordinates."),
             );
         }
-        let start = membership
-            .observed_at
-            .and_then(|time| system_time_nanos(time).ok())
-            .or_else(|| {
-                tracker.warning(
-                    "agent_start_missing",
-                    format!(
-                        "Agent subtree process {process} has no observed start; identity evidence is used."
-                    ),
-                );
-                evidence_start.get(process).copied()
-            })
-            .unwrap_or(scope.start);
-        let end = membership
-            .exit_status
-            .as_ref()
-            .and_then(|exit| system_time_nanos(exit.observed_at).ok())
-            .unwrap_or(scope.end);
-        if end < start {
-            tracker.warning(
-                "agent_clock_reversed",
-                format!(
-                    "Agent subtree process {process} ends before it starts; its interval is unattributed."
-                ),
-            );
-            continue;
-        }
-        if let Some(interval) = Interval::new(start, end).and_then(|value| value.intersect(scope)) {
-            intervals.push(interval);
-        }
     }
-    if agent_processes.is_empty() {
+    if agent_processes.is_empty() && !calls.is_empty() {
         tracker.warning(
             "agent_identity_missing",
             "No confirmed Agent process was observed; non-model time is left unattributed.",
         );
     }
-    (intervals, agent_processes)
+    agent_processes
 }
 
 fn tool_intervals(
@@ -398,7 +599,7 @@ fn tool_intervals(
     memberships: &[ProcessMembership],
     agent_processes: &BTreeSet<ProcessIdentity>,
     scope: Interval,
-    provisional: bool,
+    _provisional: bool,
     tracker: &mut StatusTracker,
 ) -> Vec<ToolInterval> {
     let inferred_tool_names = infer_tool_names(actions, links);
@@ -459,9 +660,7 @@ fn tool_intervals(
                 .get(&process)
                 .and_then(|membership| membership.exit_status.as_ref())
                 .and_then(|exit| system_time_nanos(exit.observed_at).ok());
-            let end = next_start
-                .or(membership_end)
-                .or_else(|| provisional.then_some(scope.end));
+            let end = next_start.or(membership_end);
             let Some(end) = end else {
                 tracker.action_warning(
                     "tool_exit_missing",
@@ -483,15 +682,6 @@ fn tool_intervals(
             else {
                 continue;
             };
-            if provisional && next_start.is_none() && membership_end.is_none() {
-                tracker.info(
-                    "tool_in_progress",
-                    format!(
-                        "Command {} is still running at the observation watermark.",
-                        action.action_id
-                    ),
-                );
-            }
             output.push(ToolInterval {
                 interval,
                 action_id: action.action_id.clone(),
@@ -516,7 +706,7 @@ fn command_intervals(
     memberships: &[ProcessMembership],
     tools: &[ToolInterval],
     scope: Interval,
-    provisional: bool,
+    _provisional: bool,
 ) -> Vec<CommandInterval> {
     let mut commands_by_process = BTreeMap::<ProcessIdentity, Vec<&SemanticAction>>::new();
     for action in actions
@@ -565,7 +755,7 @@ fn command_intervals(
             .exit_status
             .as_ref()
             .and_then(|exit| system_time_nanos(exit.observed_at).ok());
-        let Some(end) = observed_end.or_else(|| provisional.then_some(scope.end)) else {
+        let Some(end) = observed_end else {
             continue;
         };
         let Some(interval) = Interval::new(start, end).and_then(|value| value.intersect(scope))
@@ -610,7 +800,7 @@ fn command_intervals(
             .get(&process)
             .and_then(|membership| membership.exit_status.as_ref())
             .and_then(|exit| system_time_nanos(exit.observed_at).ok());
-        let Some(end) = observed_end.or_else(|| provisional.then_some(scope.end)) else {
+        let Some(end) = observed_end else {
             continue;
         };
         let Some(interval) = Interval::new(start, end).and_then(|value| value.intersect(scope))

@@ -258,7 +258,7 @@ impl LiveLlmProjector {
     pub(super) fn finalize_trace(
         &mut self,
         trace_id: TraceId,
-        finished_at: SystemTime,
+        _finished_at: SystemTime,
     ) -> Vec<SemanticAction> {
         self.websocket.forget_trace(trace_id);
         let trace_close_completed_response_ids = self
@@ -292,7 +292,6 @@ impl LiveLlmProjector {
                 action.status = SemanticActionStatus::Error;
                 action.completeness = SemanticActionCompleteness::Partial;
             }
-            action.end_time = Some(finished_at);
             action.attributes.insert(
                 attrs::actrail::ACTION_FINALIZED_ON_TRACE_CLOSE.to_string(),
                 "true".to_string(),

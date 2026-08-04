@@ -240,123 +240,61 @@ struct BreakdownAccumulator {
 }
 
 pub(super) fn round_attributions(
-    scope: Interval,
+    turns: &[UserTurn],
     calls: &[ModelInterval],
     segments: &[AttributionSegment],
     provisional: bool,
 ) -> Vec<RoundAttribution> {
-    let mut groups = Vec::<CallGroup>::new();
-    for call in calls {
-        if let Some(last) = groups.last_mut()
-            && call.interval.start < last.call_end
-        {
-            last.call_end = last.call_end.max(call.interval.end);
-            last.calls.push(call);
-            continue;
-        }
-        groups.push(CallGroup {
-            start: call.interval.start,
-            call_end: call.interval.end,
-            calls: vec![call],
-        });
-    }
-    if groups.is_empty() {
-        return vec![round_for_interval(
-            "local-interval".to_string(),
-            if provisional {
-                "Current local interval".to_string()
+    turns
+        .iter()
+        .enumerate()
+        .map(|(index, turn)| {
+            let turn_call_ids = turn
+                .call_action_ids
+                .iter()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>();
+            let turn_calls = calls
+                .iter()
+                .filter(|call| turn_call_ids.contains(call.action_id.as_str()))
+                .collect::<Vec<_>>();
+            let has_input_boundary = turn_calls
+                .iter()
+                .any(|call| call.user_input_start.is_some());
+            let in_progress = provisional
+                && turn_calls
+                    .iter()
+                    .any(|call| call.status == "in_progress" || call.status == "partial");
+            let label = if in_progress {
+                format!("Current user request {}", index + 1)
             } else {
-                "Trace interval without model calls".to_string()
-            },
-            if provisional {
-                "Trace start → current observation watermark; no model request observed".to_string()
-            } else {
-                "Trace start → Trace end; no model request observed".to_string()
-            },
-            "local".to_string(),
-            scope,
-            &[],
-            segments,
-        )];
-    }
-
-    let mut rounds = Vec::new();
-    if scope.start < groups[0].start {
-        rounds.push(round_for_interval(
-            "preparation".to_string(),
-            "Before first model call".to_string(),
-            "Trace start → first model request".to_string(),
-            "preparation".to_string(),
-            Interval {
-                start: scope.start,
-                end: groups[0].start,
-            },
-            &[],
-            segments,
-        ));
-    }
-    for (index, group) in groups.iter().enumerate() {
-        let final_round = index + 1 == groups.len();
-        let end = groups
-            .get(index + 1)
-            .map(|next| next.start)
-            .unwrap_or(scope.end);
-        let interval = Interval {
-            start: group.start,
-            end: end.max(group.start),
-        };
-        let concurrent = group.calls.len() > 1;
-        let label = match (concurrent, final_round, provisional) {
-            (true, true, true) => format!("Current concurrent model round {}", index + 1),
-            (true, true, false) => format!("Final concurrent model round {}", index + 1),
-            (true, false, _) => format!("Concurrent model round {}", index + 1),
-            (false, true, true) => format!("Current model round {}", index + 1),
-            (false, true, false) => format!("Final model round {}", index + 1),
-            (false, false, _) => format!("Model round {}", index + 1),
-        };
-        let description = if final_round {
-            let end_label = if provisional {
-                "current observation watermark"
-            } else {
-                "Trace end"
+                format!("User request {}", index + 1)
             };
-            if concurrent {
-                format!(
-                    "{} overlapping model calls → {end_label}",
-                    group.calls.len()
-                )
+            let start_boundary = if has_input_boundary {
+                "Observed user input"
             } else {
-                format!("Model request → {end_label}")
-            }
-        } else if concurrent {
-            format!(
-                "{} overlapping model calls → next model request",
-                group.calls.len()
+                "First attributable model request"
+            };
+            let description = format!(
+                "{start_boundary} → final observable response boundary · {} model {}",
+                turn_calls.len(),
+                if turn_calls.len() == 1 {
+                    "call"
+                } else {
+                    "calls"
+                }
+            );
+            round_for_interval(
+                format!("user-request-{}", index + 1),
+                label,
+                description,
+                "user_turn".to_string(),
+                turn.interval,
+                &turn_calls,
+                segments,
             )
-        } else {
-            "Model request → next model request".to_string()
-        };
-        rounds.push(round_for_interval(
-            format!("round-{}", index + 1),
-            label,
-            description,
-            if concurrent {
-                "concurrent".to_string()
-            } else {
-                "round".to_string()
-            },
-            interval,
-            &group.calls,
-            segments,
-        ));
-    }
-    rounds
-}
-
-struct CallGroup<'a> {
-    start: u128,
-    call_end: u128,
-    calls: Vec<&'a ModelInterval>,
+        })
+        .collect()
 }
 
 fn round_for_interval(

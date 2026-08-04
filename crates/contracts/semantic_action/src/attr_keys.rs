@@ -158,6 +158,7 @@ pub mod llm_call {
 }
 
 pub mod llm_request {
+    pub const BACKGROUND_KIND: &str = "llm.request.background_kind";
     pub const BODY_JSON: &str = "llm.request.body_json";
     pub const BODY_TEXT: &str = "llm.request.body_text";
     pub const BLOCK_COUNT: &str = "llm.request.block_count";
@@ -167,11 +168,20 @@ pub mod llm_request {
     pub const CONTENT_FORMAT_VERSION: &str = "llm.request.content_format_version";
     pub const CONTENT_STATE: &str = "llm.request.content_state";
     pub const MESSAGE_PREVIEW: &str = "llm.request.message_preview";
+    pub const LATEST_USER_MESSAGE_HASH: &str = "llm.request.latest_user_message_hash";
     pub const MODEL: &str = "llm.request.model";
     pub const PAYLOAD_BYTES: &str = "llm.request.payload_bytes";
     pub const PAYLOAD_TEXT: &str = "llm.request.payload_text";
     pub const PROTOCOL_ID: &str = "llm.request.protocol_id";
     pub const RAW_PAYLOAD_BYTES: &str = "llm.request.raw_payload_bytes";
+    pub const USER_MESSAGE_COUNT: &str = "llm.request.user_message_count";
+}
+
+pub mod agent_turn {
+    pub const USER_INPUT_OBSERVED_AT_UNIX_NANOS: &str =
+        "agent.turn.user_input_observed_at_unix_nanos";
+    pub const USER_INPUT_SEGMENT_ID: &str = "agent.turn.user_input_segment_id";
+    pub const USER_INPUT_SOURCE: &str = "agent.turn.user_input_source";
 }
 
 pub mod llm_response {

@@ -5,7 +5,7 @@ use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use semantic_action::{
     SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionStatus,
-    attr_keys as attrs,
+    attr_keys as attrs, validated_model_identifier,
 };
 
 use crate::live::actions::{append_missing_evidence, llm_call_action_id_from_request_action_id};
@@ -35,12 +35,17 @@ pub(super) fn llm_call_from_request_response(
             response.action_id.clone(),
         );
     }
-    if let Some(model) = request
-        .attributes
-        .get(attrs::llm_request::MODEL)
-        .or_else(|| response.and_then(|action| action.attributes.get(attrs::llm_response::MODEL)))
+    if let Some(model) = response
+        .and_then(|action| action.attributes.get(attrs::llm_response::MODEL))
+        .and_then(|value| validated_model_identifier(value))
+        .or_else(|| {
+            request
+                .attributes
+                .get(attrs::llm_request::MODEL)
+                .and_then(|value| validated_model_identifier(value))
+        })
     {
-        attributes.insert(attrs::llm_call::MODEL.to_string(), model.clone());
+        attributes.insert(attrs::llm_call::MODEL.to_string(), model.to_string());
     }
     copy_attr(request, &mut attributes, attrs::payload::STREAM_KEY);
     copy_attr(request, &mut attributes, attrs::payload::OPERATION_ID);

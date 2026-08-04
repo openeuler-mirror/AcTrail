@@ -1,5 +1,6 @@
 use super::projection::{project_trace_data, terminal_time};
 use super::summary::{breakdown_shares, category_shares, command_breakdown_shares};
+use super::turns::attribution_scope;
 use super::*;
 
 pub(super) fn project_trace(
@@ -66,18 +67,24 @@ fn clip_terminal_projection(projection: &TraceAttribution, window: Interval) -> 
         start: parse_nanos(&projection.scope.start_unix_nanos),
         end: parse_nanos(&projection.scope.end_unix_nanos),
     };
-    let scope = full_scope.intersect(window).unwrap_or_else(|| {
-        let boundary = full_scope.start.max(window.start);
-        Interval {
-            start: boundary,
-            end: boundary,
-        }
-    });
+    let windows = projection
+        .scope
+        .windows
+        .iter()
+        .filter_map(|scope_window| {
+            Interval::new(
+                parse_nanos(&scope_window.start_unix_nanos),
+                parse_nanos(&scope_window.end_unix_nanos),
+            )?
+            .intersect(window)
+        })
+        .collect::<Vec<_>>();
+    let fallback_start = full_scope.start.max(window.start);
     let mut segments = projection
         .segments
         .iter()
         .filter_map(|segment| {
-            let interval = segment.interval.intersect(scope)?;
+            let interval = segment.interval.intersect(window)?;
             let mut clipped = segment.clone();
             clipped.interval = interval;
             clipped.start_unix_nanos = nanos_string(interval.start);
@@ -93,7 +100,7 @@ fn clip_terminal_projection(projection: &TraceAttribution, window: Interval) -> 
         .command_segments
         .iter()
         .filter_map(|segment| {
-            let interval = segment.interval.intersect(scope)?;
+            let interval = segment.interval.intersect(window)?;
             let mut clipped = segment.clone();
             clipped.interval = interval;
             clipped.start_unix_nanos = nanos_string(interval.start);
@@ -105,10 +112,11 @@ fn clip_terminal_projection(projection: &TraceAttribution, window: Interval) -> 
     for (index, segment) in command_segments.iter_mut().enumerate() {
         segment.id = format!("command-segment-{}", index + 1);
     }
-    let categories = category_shares(&segments, scope.duration());
-    let models = breakdown_shares(&segments, scope.duration(), Category::ModelSide, "model");
-    let tools = breakdown_shares(&segments, scope.duration(), Category::AgentSide, "agent");
-    let commands = command_breakdown_shares(&command_segments, scope.duration());
+    let total_duration = windows.iter().map(|window| window.duration()).sum::<u128>();
+    let categories = category_shares(&segments, total_duration);
+    let models = breakdown_shares(&segments, total_duration, Category::ModelSide, "model");
+    let tools = breakdown_shares(&segments, total_duration, Category::AgentSide, "agent");
+    let commands = command_breakdown_shares(&command_segments, total_duration);
     let llm_call_count = segments
         .iter()
         .filter(|segment| segment.category_value == Category::ModelSide)
@@ -132,13 +140,7 @@ fn clip_terminal_projection(projection: &TraceAttribution, window: Interval) -> 
     TraceAttribution {
         schema_version: projection.schema_version,
         trace: projection.trace.clone(),
-        scope: AttributionScope {
-            start_unix_nanos: nanos_string(scope.start),
-            end_unix_nanos: nanos_string(scope.end),
-            duration_nanos: nanos_string(scope.duration()),
-            provisional: false,
-            semantics: "exclusive_wall_clock",
-        },
+        scope: attribution_scope(&windows, fallback_start, false),
         status: projection.status,
         categories,
         rounds: Vec::new(),
@@ -147,7 +149,26 @@ fn clip_terminal_projection(projection: &TraceAttribution, window: Interval) -> 
         commands,
         bottlenecks: TraceBottlenecks::default(),
         coverage: TraceCoverage {
+            llm_request_count: projection.coverage.llm_request_count,
+            observed_llm_call_count: projection.coverage.observed_llm_call_count,
             llm_call_count,
+            excluded_llm_call_count: projection
+                .coverage
+                .observed_llm_call_count
+                .saturating_sub(llm_call_count),
+            user_turn_count: projection
+                .rounds
+                .iter()
+                .filter(|round| {
+                    Interval::new(
+                        parse_nanos(&round.start_unix_nanos),
+                        parse_nanos(&round.end_unix_nanos),
+                    )
+                    .and_then(|interval| interval.intersect(window))
+                    .is_some()
+                })
+                .count(),
+            strong_user_input_count: projection.coverage.strong_user_input_count,
             agent_process_count: projection.coverage.agent_process_count,
             tool_interval_count,
             command_interval_count,

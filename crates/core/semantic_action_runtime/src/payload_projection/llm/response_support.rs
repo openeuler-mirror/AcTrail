@@ -8,7 +8,7 @@ use model_core::payload::{
 };
 use semantic_action::{
     LlmTokenUsage, SemanticActionCompleteness, SemanticActionStatus, SemanticEvidence,
-    attr_keys as attrs, evidence_roles,
+    attr_keys as attrs, evidence_roles, validated_model_identifier,
 };
 
 use crate::payload_projection::http::HttpResponseParts;
@@ -138,7 +138,7 @@ pub(super) fn raw_llm_response_attributes(
         attrs::llm_response::CHUNK_COUNT.to_string(),
         body.chunk_count.to_string(),
     );
-    if let Some(model) = body.model.as_deref() {
+    if let Some(model) = body.model.as_deref().and_then(validated_model_identifier) {
         attributes.insert(attrs::llm_response::MODEL.to_string(), model.to_string());
     }
     attributes.insert(

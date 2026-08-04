@@ -7,6 +7,7 @@ import argparse
 import os
 import shutil
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,6 +27,7 @@ from common import (  # noqa: E402
     require_llm_exchange_graph,
     require_complete_payload_rows_any,
     require_web_action_tree_projection,
+    require_web_time_attribution,
     require_otel_span,
     require_root,
     required,
@@ -73,19 +75,23 @@ def main() -> int:
         float(required(workload, "daemon_ready_timeout_seconds")),
     )
     try:
-        trace_id, output = launch_and_parse_trace(
-            actrailctl,
-            resolved_config,
-            "agent-opencode-bun",
-            [
-                "opencode",
-                "run",
-                "-m",
-                required(workload, "model"),
-                required(workload, "prompt"),
-            ],
-            float(required(workload, "launch_timeout_seconds")),
-        )
+        with tempfile.TemporaryDirectory(prefix="actrail-opencode-bun-") as work_dir:
+            trace_id, output = launch_and_parse_trace(
+                actrailctl,
+                resolved_config,
+                "agent-opencode-bun",
+                [
+                    "opencode",
+                    "run",
+                    "--pure",
+                    "--dir",
+                    work_dir,
+                    "-m",
+                    required(workload, "model"),
+                    required(workload, "prompt"),
+                ],
+                float(required(workload, "launch_timeout_seconds")),
+            )
         if required(workload, "expected_output_fragment") not in output:
             raise RuntimeError("opencode output did not contain expected marker")
         payloads = wait_for_payloads_any(
@@ -121,6 +127,13 @@ def main() -> int:
             float(required(workload, "drain_sleep_seconds")),
             required_reachable_kinds=("llm.call", "llm.request", "llm.response", "http.message"),
         )
+        time_attribution = require_web_time_attribution(
+            actrailweb,
+            resolved_config,
+            trace_id,
+            float(required(workload, "daemon_ready_timeout_seconds")),
+            float(required(workload, "drain_sleep_seconds")),
+        )
         otel = export_otel(
             actrailviewer,
             resolved_config,
@@ -134,6 +147,13 @@ def main() -> int:
         print(f"opencode_payload_segments={payload_count}")
         print(f"opencode_response_payload_segments={response_payload_count}")
         print(f"opencode_web_action_tree_reachable={web_tree['reachable_count']}")
+        print(
+            "opencode_time_attribution "
+            f"model_nanos={time_attribution['model_nanos']} "
+            f"unattributed_nanos={time_attribution['unattributed_nanos']} "
+            f"paired_calls={time_attribution['paired_llm_call_count']} "
+            f"excluded_calls={time_attribution['excluded_llm_call_count']}"
+        )
         print(f"opencode_llm_request_spans={request_span_count}")
         print(f"opencode_llm_response_spans={response_span_count}")
         print("opencode agent trace e2e complete")
