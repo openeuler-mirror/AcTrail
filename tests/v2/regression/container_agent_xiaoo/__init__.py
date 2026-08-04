@@ -1,1 +1,3 @@
-"""V2 regression adapter for the real xiaoO multi-container acceptance."""
+from .v2 import ContainerAgentXiaooCase, ContainerAgentXiaooConfig
+
+__all__ = ["ContainerAgentXiaooCase", "ContainerAgentXiaooConfig"]

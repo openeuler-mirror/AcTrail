@@ -1,37 +1,15 @@
-# 普通容器部署 V2 回归
+# Container Auto 回归测试
 
-该测例通过 V2 公共 runner 调用现有
-`deploy/container-auto/e2e.sh`，验证 Docker 普通容器部署的完整权限矩阵、
-跨容器控制隔离和并发归属。
+## 当前版本
+该目录按实现版本保存 Container Auto 回归测试：
 
-## 运行
+- [V2](v2/README.zh.md)：当前入口，使用内容寻址镜像、长驻容器和四个独立权限
+  Case。
 
-先构建 release 产物，然后以 root 运行：
+根目录的 `__init__.py` 与 `run_e2e.py` 均重定向到 V2
 
-```bash
-cargo build --release
-sudo -E python3 tests/v2/regression/test_all.py \
-  --case container_auto \
-  --no-cleanup
-```
+# 其他版本（已归档）
 
-也可以单独运行并显示完整明细：
+> 归档版本只能通过各自入口显式运行
 
-```bash
-sudo -E python3 tests/v2/regression/container_auto/run_e2e.py \
-  --no-cleanup
-```
-
-外部前置条件包括可用的 Docker daemon 和 `sqlite3`。缺少外部环境时测例显示
-跳过；AcTrail release 产物缺失或验收脚本断言失败时测例失败。
-
-环境变量：
-
-- `CONTAINER_AUTO_E2E_TIMEOUT_SECONDS`：完整验收超时，默认 1200 秒。
-- `CONTAINER_AUTO_E2E_CLEANUP_GRACE_SECONDS`：超时后留给脚本清理的时间，
-  默认 30 秒。
-- `CONTAINER_AUTO_E2E_BASE_IMAGE`：验收使用的基础镜像，默认
-  `ubuntu:24.04`；Docker Hub 不可用时可指定同一 Ubuntu 镜像的镜像源地址。
-
-原验收脚本始终通过唯一运行标签清理它创建的容器、镜像和临时目录。因此
-`--no-cleanup` 会保留 V2 runner 日志，但不会保留这些 Docker 临时资源。
+- [V1](v1/README.zh.md)：原始实现归档，代码和文档保持不变。
