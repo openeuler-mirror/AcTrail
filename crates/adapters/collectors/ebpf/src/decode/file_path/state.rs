@@ -114,12 +114,12 @@ pub(super) struct ProcessFileState {
 }
 
 impl FileTracker {
-    pub(crate) fn new(ipc_lineage: IpcLineageConfig, mcp_enabled: bool) -> Self {
+    pub(crate) fn new(ipc_lineage: IpcLineageConfig, mcp_projection_enabled: bool) -> Self {
         Self {
             pending: BTreeMap::new(),
             pending_processes: BTreeMap::new(),
             processes: BTreeMap::new(),
-            lineage: IpcLineageTracker::new(ipc_lineage, mcp_enabled),
+            lineage: IpcLineageTracker::new(ipc_lineage, mcp_projection_enabled),
         }
     }
 

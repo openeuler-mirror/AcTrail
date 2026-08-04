@@ -104,7 +104,7 @@ Use a narrow config for each deployment intent:
 | Intent | Required Capabilities / Settings |
 | --- | --- |
 | Process and network trail | `proc-lifecycle`, `net-transport`, `ebpf_enabled = true`. |
-| File and IPC observation | Add `fs-access-basic`, `ipc-pipe-fifo`, `ipc-unix-socket`; set `file_path_capture_enabled = true` when path events are required. |
+| File and IPC observation | Set `ebpf.ipc_lineage.enabled = true`; add `fs-access-basic`, `ipc-pipe-fifo`, `ipc-unix-socket`; set `file_path_capture_enabled = true` when path events are required. Setting IPC lineage to `false` removes both IPC capabilities and their dedicated lineage hooks; a profile that still marks either capability as required is rejected. |
 | Stdio payload | Add `stdio-chunk`; enable `payload_stdio_enabled` and the specific stdin/stdout/stderr booleans. |
 | Plain HTTP payload | Add `socket-plaintext-payload`; enable `payload_socket_enabled`, `payload_socket_capture_backend`, `payload_socket_seccomp_syscall`, and HTTP application protocol settings. The default full-monitor config includes `write`, `writev`, `sendto`, and `sendmsg` so linear and vectored socket writes can both produce request payload evidence. |
 | HTTPS OpenSSL payload | Add `tls-plaintext-payload`; configure TLS resolver/source and use `actrailctl launch` for `tls-sync` capture. |

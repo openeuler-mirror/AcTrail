@@ -329,6 +329,7 @@ MCP tool arguments 和结果可能包含敏感数据。默认 stdio redaction �
 
 ```toml
 [ebpf.ipc_lineage]
+enabled = true
 max_processes_per_trace = 8192
 max_candidate_fds_per_trace = 65536
 max_stdio_bundles_per_trace = 8192
@@ -374,19 +375,22 @@ response_content = "canonical_json"
 
 ### 9.3 IPC lineage 限制
 
-| 配置项 | 默认值 | 容量达到时的行为 |
+| 配置项 | 默认值 | 约束与行为 |
 | --- | ---: | --- |
+| `ebpf.ipc_lineage.enabled` | `true` | `false` 时不暴露 `ipc-pipe-fifo`、`ipc-unix-socket` capability，不挂载 IPC 专用 lineage hook，也不建立 MCP IPC lineage；若 profile 仍将任一 IPC capability 标为 Required，配置加载直接失败。 |
 | `ebpf.ipc_lineage.max_processes_per_trace` | 8192 | 停用该 trace 的 lineage，发送 `lineage_disabled`。 |
 | `ebpf.ipc_lineage.max_candidate_fds_per_trace` | 65536 | 停用该 trace 的 lineage，关闭活跃 bundle 并发送诊断。 |
 | `ebpf.ipc_lineage.max_stdio_bundles_per_trace` | 8192 | 不接纳新的受影响 bundle，发送 `lineage_capacity_exhausted`，不伪造 MCP session。 |
 
-三个值都必须为正。lineage 容量耗尽不会回退到“解析所有 stdio”，因为那会把普通
+三个容量值都必须为正。lineage 容量耗尽不会回退到“解析所有 stdio”，因为那会把普通
 终端输出误识别为协议流。
 
 ### 9.4 stdio 开关的组合语义
 
 - eBPF collector、`payload.stdio.enabled`、`payload.mcp.enabled` 和
-  `payload.stdio.capture_stdin` 必须同时启用，collector 才建立 MCP IPC lineage。
+  `payload.stdio.capture_stdin` 必须同时启用，collector 才建立 stdio bundle 并投影
+  MCP JSON-RPC；这些 payload 开关不控制 IPC FD lineage 采集，后者只由
+  `ebpf.ipc_lineage.enabled` 控制。
 - 完整的 request/response 五动作图还要求 `payload.stdio.capture_stdout=true`。
 - `capture_stdout=false` 时仍可能确认 request，但无法观察 response；未闭合 root
   只有在 correlation state 保留到 trace finalize 时才按 `error/partial` 收口；若最后

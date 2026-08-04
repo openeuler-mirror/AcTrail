@@ -214,7 +214,7 @@ impl AttachPlan {
             if request.mode == RequestMode::Disabled {
                 continue;
             }
-            if capability_configured_for_attach(&request.capability, payload) {
+            if capability_configured_for_attach(&request.capability, config, payload) {
                 plan.capabilities.insert(request.capability.clone());
             }
         }
@@ -363,14 +363,17 @@ pub(super) fn effective_config_for_attach_plan(
     effective
 }
 
-fn capability_configured_for_attach(capability: &Capability, payload: &PayloadConfig) -> bool {
+fn capability_configured_for_attach(
+    capability: &Capability,
+    config: &EbpfCollectorConfig,
+    payload: &PayloadConfig,
+) -> bool {
     match capability {
         Capability::ProcLifecycle
         | Capability::NetTransport
         | Capability::FsAccessBasic
-        | Capability::FsMmap
-        | Capability::IpcPipeFifo
-        | Capability::IpcUnixSocket => true,
+        | Capability::FsMmap => true,
+        Capability::IpcPipeFifo | Capability::IpcUnixSocket => config.ipc_lineage.enabled,
         Capability::TlsPlaintextPayload => {
             payload.tls.enabled && !payload.tls.capture_backend.is_sync()
         }

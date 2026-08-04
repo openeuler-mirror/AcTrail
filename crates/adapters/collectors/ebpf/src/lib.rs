@@ -163,8 +163,9 @@ impl EbpfCollector {
             && payload_config.stdio.enabled
             && payload_config.stdio.capture_stdin;
         let file_tracker = FileTracker::new(config.ipc_lineage, mcp_stdio_enabled);
+        let probe_result = probe_result_for_config(probe_result, &config, &payload_config);
         Self {
-            probe_result: probe_result_for_config(probe_result, &payload_config),
+            probe_result,
             loader: EbpfProgramLoader::new(
                 config,
                 payload_config.clone(),
@@ -268,8 +269,11 @@ impl EbpfCollector {
             ));
         }
         if let Some(unsupported_required) = requests.iter().find(|request| {
-            !supported_required_capability(&request.capability, self.loader.payload_config())
-                && request.mode == RequestMode::Required
+            !supported_required_capability(
+                &request.capability,
+                self.loader.config(),
+                self.loader.payload_config(),
+            ) && request.mode == RequestMode::Required
         }) {
             return Err(CollectorError::new(
                 "ebpf_preflight",
@@ -350,8 +354,11 @@ impl EbpfCollector {
             ));
         }
         if let Some(unsupported_required) = request.requested_capabilities.iter().find(|request| {
-            !supported_required_capability(&request.capability, self.loader.payload_config())
-                && request.mode == RequestMode::Required
+            !supported_required_capability(
+                &request.capability,
+                self.loader.config(),
+                self.loader.payload_config(),
+            ) && request.mode == RequestMode::Required
         }) {
             return Err(CollectorError::new(
                 "bind_launch_trace",
@@ -898,8 +905,11 @@ impl CollectorInstance for EbpfCollector {
             return Err(CollectorError::new("bind_trace", reason.clone()));
         }
         if let Some(unsupported_required) = request.requested_capabilities.iter().find(|request| {
-            !supported_required_capability(&request.capability, self.loader.payload_config())
-                && request.mode == RequestMode::Required
+            !supported_required_capability(
+                &request.capability,
+                self.loader.config(),
+                self.loader.payload_config(),
+            ) && request.mode == RequestMode::Required
         }) {
             return Err(CollectorError::new(
                 "bind_trace",
@@ -1040,8 +1050,17 @@ fn clock_ticks_per_second() -> Option<u64> {
 
 fn probe_result_for_config(
     mut result: EbpfProbeResult,
+    config: &EbpfCollectorConfig,
     payload: &PayloadConfig,
 ) -> EbpfProbeResult {
+    if !config.ipc_lineage.enabled {
+        result.descriptor.capabilities.retain(|descriptor| {
+            !matches!(
+                &descriptor.capability,
+                Capability::IpcPipeFifo | Capability::IpcUnixSocket
+            )
+        });
+    }
     if payload.tls.enabled && !payload.tls.capture_backend.is_sync() {
         result
             .descriptor
@@ -1081,18 +1100,24 @@ fn probe_result_for_config(
     result
 }
 
-fn supported_required_capability(capability: &Capability, payload: &PayloadConfig) -> bool {
+fn supported_required_capability(
+    capability: &Capability,
+    config: &EbpfCollectorConfig,
+    payload: &PayloadConfig,
+) -> bool {
     matches!(
         capability,
         Capability::ProcLifecycle
             | Capability::NetTransport
             | Capability::FsAccessBasic
             | Capability::FsMmap
-            | Capability::IpcPipeFifo
-            | Capability::IpcUnixSocket
-    ) || (matches!(capability, Capability::TlsPlaintextPayload)
-        && payload.tls.enabled
-        && !payload.tls.capture_backend.is_sync())
+    ) || (matches!(
+        capability,
+        Capability::IpcPipeFifo | Capability::IpcUnixSocket
+    ) && config.ipc_lineage.enabled)
+        || (matches!(capability, Capability::TlsPlaintextPayload)
+            && payload.tls.enabled
+            && !payload.tls.capture_backend.is_sync())
         || (matches!(capability, Capability::SocketPlaintextPayload) && payload.socket.enabled)
         || (matches!(capability, Capability::StdioChunk)
             && stdio_payload_capability_configured(payload))

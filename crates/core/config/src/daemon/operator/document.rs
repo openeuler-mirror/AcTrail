@@ -45,7 +45,7 @@ use super::super::{
 };
 use super::{
     OperatorConfig, validate_application_protocol_config, validate_enforcement_config,
-    validate_resource_metrics_config, validate_seccomp_config,
+    validate_ipc_lineage_config, validate_resource_metrics_config, validate_seccomp_config,
 };
 use crate::capture_profile::CaptureProfile;
 use crate::export::ExportConfig;
@@ -387,6 +387,8 @@ impl OperatorDocument {
             socket: self.payload.socket.to_config()?,
             mcp: self.payload.mcp.to_config()?,
         };
+        let ebpf_config = self.ebpf.to_config()?;
+        validate_ipc_lineage_config(&ebpf_config.ipc_lineage, &capabilities)?;
         let seccomp_notify = self.seccomp_notify.to_config();
         let process_seccomp = self.process_seccomp.to_config()?;
         let application_protocol = self.application.to_config()?;
@@ -443,7 +445,7 @@ impl OperatorDocument {
                 ProfileName::new(self.capture.profile_name.clone()),
                 capabilities,
             ),
-            ebpf_config: self.ebpf.to_config()?,
+            ebpf_config,
             payload_config,
             seccomp_notify,
             process_seccomp,
