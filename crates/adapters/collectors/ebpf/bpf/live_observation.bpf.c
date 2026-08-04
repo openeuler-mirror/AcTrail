@@ -101,7 +101,7 @@ int handle_sched_process_exec(struct sched_process_exec_ctx *ctx) {
     }
     finalize_fork_trace_binding(current_kernel_tgid());
     trace_id = lookup_trace_for_context_pid(context_pid, &pid, &tid, &lookup_flags);
-    if (!trace_id && promote_pending_exec_binding()) {
+    if (!trace_id && actrail_launch_binding_promote_current(ctx, pid)) {
         trace_id = lookup_trace_for_context_pid(context_pid, &pid, &tid, &lookup_flags);
     }
     if (!trace_id) {
@@ -124,7 +124,7 @@ int handle_sched_process_exit(struct sched_process_exit_ctx *ctx) {
     __u32 host_tid = (__u32)kernel_pid_tgid;
     struct actrail_event event;
 
-    cleanup_pending_exec_binding();
+    actrail_launch_binding_cleanup_current(ctx, host_pid);
     trace_id = lookup_trace_for_context_pid(context_pid, &pid, &tid, &lookup_flags);
     pid_tgid = ((__u64)pid << 32) | tid;
     if (!pid) {

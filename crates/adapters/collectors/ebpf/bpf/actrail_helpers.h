@@ -73,19 +73,6 @@ static long (*bpf_get_ns_current_pid_tgid)(
     struct actrail_bpf_pidns_info *nsdata,
     __u32 size
 ) = (void *)ACTRAIL_BPF_FUNC_GET_NS_CURRENT_PID_TGID;
-static void *(*bpf_task_storage_get)(
-    void *map,
-    struct task_struct *task,
-    void *value,
-    __u64 flags
-) = (void *)BPF_FUNC_task_storage_get;
-static long (*bpf_task_storage_delete)(
-    void *map,
-    struct task_struct *task
-) = (void *)BPF_FUNC_task_storage_delete;
-static struct task_struct *(*bpf_get_current_task_btf)(void) =
-    (void *)BPF_FUNC_get_current_task_btf;
-
 #define ACTRAIL_CORE_READ(dst, source, field) \
     bpf_probe_read_kernel( \
         (dst), \

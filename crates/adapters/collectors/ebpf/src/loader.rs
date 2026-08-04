@@ -8,10 +8,10 @@ mod attach_plan;
 mod environment;
 #[path = "loader/file.rs"]
 mod file;
+#[path = "loader/launch_binding.rs"]
+mod launch_binding;
 #[path = "loader/object.rs"]
 mod object;
-#[path = "loader/pending_exec.rs"]
-mod pending_exec;
 #[path = "loader/ring_decode.rs"]
 mod ring_decode;
 #[path = "loader/socket.rs"]
@@ -29,7 +29,7 @@ use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::env;
 use std::ffi::OsStr;
-use std::os::fd::{BorrowedFd, RawFd};
+use std::os::fd::{OwnedFd, RawFd};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::rc::Rc;
@@ -42,14 +42,15 @@ use model_core::process::{InitialSuppressedFd, KernelProcessCoordinates, Process
 
 pub use attach_plan::AttachPlan;
 use attach_plan::{configure_program_autoload, effective_config_for_attach_plan};
+pub(crate) use launch_binding::ArmedLaunchBinding;
+use launch_binding::{LaunchBindingTarget, LaunchExecBindings, PendingLaunchBinding};
 use object::{EventBuffer, event_map_max_entries, map_handle, resize_map, ring_buffer_max_bytes};
-use pending_exec::PendingExecBindings;
 use ring_decode::decode_kernel_event;
 pub use ring_decode::{
     KernelEndpoint, KernelEvent, KernelFilePathEvent, KernelObservationEvent,
     KernelSocketPayloadCompletionEvent, KernelSocketPayloadEvent, KernelStdioPayloadEvent,
     KernelTlsCaptureRequestEvent, KernelTlsCompletionEvent, KernelTlsDiagnosticEvent,
-    KernelTlsDirectCaptureEvent,
+    KernelTlsDirectCaptureEvent, LaunchBindingFailure, LaunchBindingFailureStatus,
 };
 pub use socket::SocketPayloadFdState;
 use tls::GoTlsAttachOutcome;
@@ -116,7 +117,7 @@ pub struct EbpfRuntime {
     attached_capabilities: BTreeSet<Capability>,
     tracked_traces: MapHandle,
     process_start_times: MapHandle,
-    pending_exec_bindings: PendingExecBindings,
+    launch_bindings: LaunchExecBindings,
     fork_trace_bindings: MapHandle,
     trace_pid_namespaces: MapHandle,
     suppressed_fds: MapHandle,
@@ -187,6 +188,19 @@ impl EbpfProgramLoader {
             "process_start_times",
             self.config.tracked_process_max_entries,
         )?;
+        #[cfg(actrail_launch_binding_pid_generation_hash)]
+        {
+            resize_map(
+                &mut open_object,
+                "pending_exec_bindings",
+                self.config.pending_operation_max_entries,
+            )?;
+            resize_map(
+                &mut open_object,
+                "pending_exec_pid_index",
+                self.config.pending_operation_max_entries,
+            )?;
+        }
         resize_map(
             &mut open_object,
             "trace_pid_namespaces",
@@ -332,10 +346,8 @@ impl EbpfRuntime {
         let tracked_traces = map_handle(&object, "tracked_traces", "tracked_map")?;
         let process_start_times =
             map_handle(&object, "process_start_times", "process_start_time_map")?;
-        let pending_exec_bindings = PendingExecBindings::from_object(
-            &object,
-            config.suppressed_fd_index_slots_per_process,
-        )?;
+        let launch_bindings =
+            LaunchExecBindings::from_object(&object, config.suppressed_fd_index_slots_per_process)?;
         let fork_trace_bindings =
             map_handle(&object, "fork_trace_bindings", "fork_trace_bindings")?;
         let trace_pid_namespaces =
@@ -433,7 +445,7 @@ impl EbpfRuntime {
             attached_capabilities,
             tracked_traces,
             process_start_times,
-            pending_exec_bindings,
+            launch_bindings,
             fork_trace_bindings,
             trace_pid_namespaces,
             suppressed_fds,
@@ -518,19 +530,24 @@ impl EbpfRuntime {
             .map_err(|error| LoaderError::new("track_pid_start_time", error.to_string()))
     }
 
-    pub fn arm_pending_exec(
+    pub(crate) fn arm_launch_binding(
         &self,
-        pidfd: BorrowedFd<'_>,
+        pidfd: OwnedFd,
+        host_pid: u32,
         trace_id: TraceId,
         generation: u64,
         suppressed_fds: &[InitialSuppressedFd],
-    ) -> Result<(), LoaderError> {
-        self.pending_exec_bindings
-            .arm(pidfd, trace_id, generation, suppressed_fds)
+    ) -> Result<ArmedLaunchBinding, LoaderError> {
+        let target = LaunchBindingTarget::new(pidfd, host_pid, generation)?;
+        let pending = PendingLaunchBinding::new(trace_id, suppressed_fds);
+        self.launch_bindings.arm(target, &pending)
     }
 
-    pub fn cancel_pending_exec(&self, pidfd: BorrowedFd<'_>) -> Result<bool, LoaderError> {
-        self.pending_exec_bindings.cancel(pidfd)
+    pub(crate) fn cancel_launch_binding(
+        &self,
+        armed: &ArmedLaunchBinding,
+    ) -> Result<bool, LoaderError> {
+        self.launch_bindings.cancel(armed)
     }
 
     pub fn register_trace_pid_namespace(

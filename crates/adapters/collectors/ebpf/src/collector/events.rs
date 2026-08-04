@@ -96,6 +96,9 @@ impl EbpfCollector {
                 self.tls_diagnostic_events
                     .push(decode_tls_diagnostic(event));
             }
+            KernelEvent::LaunchBindingFailure(event) => {
+                self.launch_binding_failures.push(event);
+            }
             KernelEvent::SocketPayloadCompletion(event) => {
                 self.socket_completions
                     .push(decode_socket_payload_completion(event));

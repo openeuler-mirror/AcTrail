@@ -1,5 +1,8 @@
 //! Controlled launch child lifecycle.
 
+#[path = "controlled/spawn.rs"]
+mod spawn;
+
 use std::ffi::{CString, OsString};
 use std::io::Read;
 use std::io::Write;
@@ -9,6 +12,7 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Duration;
 
 use super::seccomp::SeccompSetup;
+use spawn::PidfdSpawn;
 
 pub(super) enum ChildSetup {
     Plain,
@@ -37,32 +41,9 @@ impl ControlledChild {
         let uses_seccomp = matches!(setup, ChildSetup::Seccomp(_));
         let reserved_listener_fd = setup.reserved_listener_fd();
         let (read_fd, write_fd) = env_pipe()?;
-        let mut pidfd = -1;
-        let mut clone_args: libc::clone_args = unsafe { std::mem::zeroed() };
-        clone_args.flags = libc::CLONE_PIDFD as u64;
-        clone_args.pidfd = (&mut pidfd as *mut libc::c_int) as usize as u64;
-        clone_args.exit_signal = libc::SIGCHLD as u64;
-        let child = unsafe {
-            libc::syscall(
-                libc::SYS_clone3,
-                &clone_args as *const libc::clone_args,
-                std::mem::size_of::<libc::clone_args>(),
-            )
-        } as libc::pid_t;
-        if child < 0 {
-            return Err(format!(
-                "clone3(CLONE_PIDFD) launch child: {}",
-                std::io::Error::last_os_error()
-            ));
-        }
-        if child == 0 {
+        let PidfdSpawn::Parent { child, pidfd } = PidfdSpawn::create()? else {
             child_exec(argv, setup, read_fd, write_fd);
-        }
-        if pidfd < 0 {
-            terminate_child(child);
-            return Err("clone3(CLONE_PIDFD) did not return a pidfd".to_string());
-        }
-        let pidfd = unsafe { OwnedFd::from_raw_fd(pidfd) };
+        };
         drop(read_fd);
         let mut child = Self {
             pid: child,
