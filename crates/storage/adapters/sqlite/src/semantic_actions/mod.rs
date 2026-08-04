@@ -5,6 +5,7 @@ pub(crate) mod codebook;
 mod cold_fields;
 mod command_fallback;
 mod llm_request_content;
+mod mcp_jsonrpc_content;
 mod path_sets;
 mod query;
 mod root_tree;

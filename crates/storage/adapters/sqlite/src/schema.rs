@@ -268,6 +268,23 @@ CREATE TABLE IF NOT EXISTS llm_request_block_refs (
     PRIMARY KEY (manifest_id, ordinal)
 ) WITHOUT ROWID;
 
+CREATE TABLE IF NOT EXISTS mcp_jsonrpc_messages (
+    message_id INTEGER PRIMARY KEY,
+    trace_id INTEGER NOT NULL,
+    format_version INTEGER NOT NULL,
+    canonical_json_hash BLOB NOT NULL,
+    canonical_json_bytes INTEGER NOT NULL,
+    canonical_json BLOB NOT NULL,
+    UNIQUE (trace_id, format_version, canonical_json_hash)
+);
+
+CREATE TABLE IF NOT EXISTS mcp_jsonrpc_action_refs (
+    trace_id INTEGER NOT NULL,
+    action_key INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    PRIMARY KEY (trace_id, action_key)
+) WITHOUT ROWID;
+
 CREATE TABLE IF NOT EXISTS diagnostics (
     diagnostic_id INTEGER PRIMARY KEY,
     trace_id INTEGER,
@@ -328,6 +345,11 @@ CREATE INDEX IF NOT EXISTS idx_file_path_set_refs_path_set ON file_path_set_chun
 CREATE INDEX IF NOT EXISTS idx_file_path_set_action_refs_path_set ON file_path_set_action_refs (
     trace_id,
     path_set_id
+);
+
+CREATE INDEX IF NOT EXISTS idx_mcp_jsonrpc_action_refs_message ON mcp_jsonrpc_action_refs (
+    trace_id,
+    message_id
 );
 
 "#;
@@ -429,6 +451,12 @@ fn validate_current_schema(connection: &Connection) -> Result<(), rusqlite::Erro
     require_column(connection, "llm_request_manifests", "action_key")?;
     require_column(connection, "llm_request_blocks", "block_id")?;
     require_column(connection, "llm_request_block_refs", "manifest_id")?;
+    require_column(connection, "mcp_jsonrpc_messages", "message_id")?;
+    require_column(connection, "mcp_jsonrpc_messages", "canonical_json_hash")?;
+    require_column(connection, "mcp_jsonrpc_messages", "canonical_json_bytes")?;
+    require_column(connection, "mcp_jsonrpc_messages", "canonical_json")?;
+    require_column(connection, "mcp_jsonrpc_action_refs", "action_key")?;
+    require_column(connection, "mcp_jsonrpc_action_refs", "message_id")?;
     require_column(connection, "semantic_action_cold_fields", "payload")?;
     require_column(connection, "semantic_action_link_cold_fields", "payload")
 }

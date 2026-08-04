@@ -3,7 +3,13 @@ import { compactMeta, compactRows, kindClass, shortTime } from './common';
 
 const GROUP_KIND = 'action.group';
 const SAME_KIND_RULE = 'same-kind';
-const NON_GROUPABLE_KINDS = new Set(['llm.call', 'llm.request', 'llm.response']);
+const NON_GROUPABLE_KINDS = new Set([
+  'llm.call',
+  'llm.request',
+  'llm.response',
+  'mcp.stdin',
+  'mcp.stdout',
+]);
 
 export function groupActionNodes(nodes) {
   const minActions = UI_LIMITS.actionGroupMinActions;

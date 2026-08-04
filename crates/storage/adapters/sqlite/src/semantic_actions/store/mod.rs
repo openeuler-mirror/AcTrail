@@ -6,8 +6,9 @@ use model_core::ids::TraceId;
 use rusqlite::{OptionalExtension, params};
 use semantic_action::{
     FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
-    LlmRequestContentWrite, SemanticAction, SemanticActionLink, SemanticActionPage,
-    SemanticActionReadStore, SemanticActionStoreError, SemanticActionWriteStore, SemanticEvidence,
+    LlmRequestContentWrite, McpJsonRpcContentPage, McpJsonRpcContentWrite, SemanticAction,
+    SemanticActionLink, SemanticActionPage, SemanticActionReadStore, SemanticActionStoreError,
+    SemanticActionWriteStore, SemanticEvidence,
 };
 
 use crate::SqliteStorage;
@@ -244,6 +245,20 @@ impl SemanticActionWriteStore for SqliteStorage {
         }
         let connection = self.connection().borrow_mut();
         crate::semantic_actions::llm_request_content::upsert_llm_request_contents(
+            &connection,
+            contents,
+        )
+    }
+
+    fn upsert_mcp_jsonrpc_contents(
+        &mut self,
+        contents: &[McpJsonRpcContentWrite],
+    ) -> Result<(), SemanticActionStoreError> {
+        if contents.is_empty() {
+            return Ok(());
+        }
+        let connection = self.connection().borrow_mut();
+        crate::semantic_actions::mcp_jsonrpc_content::upsert_mcp_jsonrpc_contents(
             &connection,
             contents,
         )
@@ -489,6 +504,27 @@ impl SemanticActionReadStore for SqliteStorage {
         }
         let connection = self.connection().borrow();
         crate::semantic_actions::llm_request_content::llm_request_content_page(
+            &connection,
+            trace_id,
+            action_id,
+            max_bytes,
+        )
+    }
+
+    fn mcp_jsonrpc_content_page(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+        max_bytes: usize,
+    ) -> Result<Option<McpJsonRpcContentPage>, SemanticActionStoreError> {
+        if self.is_purged(trace_id) {
+            return Err(SemanticActionStoreError::new(
+                "mcp_jsonrpc_content_page",
+                "trace has been purged",
+            ));
+        }
+        let connection = self.connection().borrow();
+        crate::semantic_actions::mcp_jsonrpc_content::mcp_jsonrpc_content_page(
             &connection,
             trace_id,
             action_id,

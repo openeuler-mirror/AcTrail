@@ -10,6 +10,8 @@ sudo -E python3.11 tests/v2/regression/test_all.py
 
 ```bash
 python3.11 tests/v2/regression/test_all.py --list
+sudo -E python3.11 tests/v2/regression/test_all.py --case probe_claude_mcp
+sudo -E python3.11 tests/v2/regression/test_all.py --case probe_codex_mcp
 sudo -E python3.11 tests/v2/regression/test_all.py --case probe_codex_llm
 sudo -E python3.11 tests/v2/regression/test_all.py --case probe_pi_llm
 sudo -E python3.11 tests/v2/regression/test_all.py --case probe_qodercli_llm
@@ -67,7 +69,9 @@ stderr 和完整检查明细，同时仍由公共框架保存对应日志。
 | 测例 | 中文操作文档 |
 | --- | --- |
 | `probe_claude_llm` | [`probe_claude_llm/README.zh.md`](probe_claude_llm/README.zh.md) |
+| `probe_claude_mcp` | [`probe_claude_mcp/README.zh.md`](probe_claude_mcp/README.zh.md) |
 | `probe_codex_llm` | [`probe_codex_llm/README.zh.md`](probe_codex_llm/README.zh.md) |
+| `probe_codex_mcp` | [`probe_codex_mcp/README.zh.md`](probe_codex_mcp/README.zh.md) |
 | `probe_pi_llm` | [`probe_pi_llm/README.zh.md`](probe_pi_llm/README.zh.md) |
 | `probe_qodercli_llm` | [`probe_qodercli_llm/README.zh.md`](probe_qodercli_llm/README.zh.md) |
 | `probe_xiaoo_llm` | [`probe_xiaoo_llm/README.zh.md`](probe_xiaoo_llm/README.zh.md) |

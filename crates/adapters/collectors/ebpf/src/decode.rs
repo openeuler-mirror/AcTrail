@@ -47,7 +47,8 @@ const NET_SYSCALL_FD_IO: u32 = 2;
 const NET_SYSCALL_FD_IO_WRITEV: u32 = 3;
 const PROC_COORD_TRACEPOINT_SIGNAL_GENERATE: u32 = 1;
 
-pub(crate) use file_path::{FdIpcKind, FileTracker};
+use file_path::FdIpcKind;
+pub(crate) use file_path::FileTracker;
 pub use payload::{
     SOCKET_PAYLOAD_DIRECTION_INBOUND, SOCKET_PAYLOAD_DIRECTION_OUTBOUND,
     SOCKET_PAYLOAD_SYSCALL_READ, SOCKET_PAYLOAD_SYSCALL_RECVFROM, SOCKET_PAYLOAD_SYSCALL_SENDMSG,
@@ -56,6 +57,9 @@ pub use payload::{
     TlsPayloadDirectCapture, decode_socket_payload, decode_socket_payload_completion,
     decode_stdio_payload, decode_tls_capture_request, decode_tls_completion, decode_tls_diagnostic,
     decode_tls_direct_capture,
+};
+pub(crate) use payload::{
+    STDIO_PAYLOAD_DIRECTION_OUTBOUND, STDIO_PAYLOAD_FLAG_STAGED, STDIO_PAYLOAD_SYSCALL_WRITE,
 };
 
 pub(crate) fn decode_file_path(
@@ -123,7 +127,11 @@ fn decode_fork(
 ) -> Result<Option<RawCollectorEvent>, DecodeError> {
     let parent = fork_parent_observation(&event, bindings)?;
     let child = fork_child_observation(&event, bindings)?;
-    if event.reserved & PROC_FORK_CHILD_HOST_ONLY == 0 {
+    if event.reserved & PROC_FORK_CHILD_HOST_ONLY != 0 {
+        bindings
+            .track_host_only(event.trace_id, child.clone(), event.aux_generation)
+            .map_err(|error| DecodeError::new("fork_identity", error))?;
+    } else {
         bindings.track_with_map_pid(
             event.trace_id,
             child.clone(),
@@ -504,13 +512,32 @@ pub(crate) fn resolve_event_observation(
         .trace_pid_namespace(trace_id)
         .ok_or_else(|| format!("trace {} has no PID namespace binding", trace_id.get()))?;
     let namespace = NamespaceProcessCoordinates::new(namespace.clone(), namespace_pid, 0);
-    let mut observation = ProcessObservation::namespace(namespace);
+    let mut observation = bindings
+        .provisional_event_observation(trace_id, kernel_start_time)?
+        .cloned()
+        .unwrap_or_else(|| ProcessObservation::namespace(namespace.clone()));
+    if observation.namespace.is_none() {
+        observation.namespace = Some(namespace);
+    }
     if host_pid != 0 {
-        let mut host = HostProcessCoordinates::new(host_pid, 0);
-        if kernel_start_time != 0 {
-            host = host.with_start_boottime_ns(kernel_start_time);
+        if let Some(existing) = &observation.host {
+            if existing.pid != host_pid
+                || existing
+                    .start_boottime_ns
+                    .is_some_and(|start| kernel_start_time != 0 && start != kernel_start_time)
+            {
+                return Err(format!(
+                    "event host coordinates {host_pid}:{kernel_start_time} conflict with provisional fork coordinates {}:{:?}",
+                    existing.pid, existing.start_boottime_ns
+                ));
+            }
+        } else {
+            let mut host = HostProcessCoordinates::new(host_pid, 0);
+            if kernel_start_time != 0 {
+                host = host.with_start_boottime_ns(kernel_start_time);
+            }
+            observation.host = Some(host);
         }
-        observation.host = Some(host);
     }
     Ok(observation)
 }
@@ -527,6 +554,7 @@ mod tests {
 
     use super::{
         PROC_EVENT_EXEC, PROC_EVENT_FORK, PROC_FORK_CHILD_HOST_ONLY, decode_exec, decode_fork,
+        resolve_bound_event_observation,
     };
 
     #[test]
@@ -577,6 +605,13 @@ mod tests {
                 .tracked_event_observation(trace_id, 4200, 200)
                 .is_none(),
             "host PID must not collide with a namespace-PID binding"
+        );
+        let bridged = resolve_bound_event_observation(trace_id, 42, 200, &bindings)
+            .expect("resolve first namespace event through eager fork binding");
+        assert_eq!(bridged.host.as_ref().map(|host| host.pid), Some(4200));
+        assert_eq!(
+            bridged.namespace.as_ref().map(|namespace| namespace.pid),
+            Some(42)
         );
 
         let exec = KernelObservationEvent {

@@ -1,5 +1,7 @@
 //! Responses WebSocket message projection onto the existing HTTP LLM seam.
 
+use std::time::SystemTime;
+
 use model_core::payload::{PayloadDirection, PayloadSegment, PayloadStreamKey};
 use serde_json::Value;
 
@@ -13,6 +15,9 @@ pub(super) struct WebSocketConnection {
     outbound: DirectionAssembler,
     inbound: DirectionAssembler,
     response_text: String,
+    response_output: Vec<Value>,
+    response_output_bytes: usize,
+    response_started_at: Option<SystemTime>,
 }
 
 pub(super) struct ConnectionObservation {
@@ -41,6 +46,9 @@ impl WebSocketConnection {
                 extensions.server_no_context_takeover,
             ),
             response_text: String::new(),
+            response_output: Vec::new(),
+            response_output_bytes: 0,
+            response_started_at: None,
         }
     }
 
@@ -67,7 +75,9 @@ impl WebSocketConnection {
                 PayloadDirection::Outbound => {
                     self.project_outbound(segment, &text, &value, &mut projected)
                 }
-                PayloadDirection::Inbound => self.project_inbound(segment, &value, &mut projected),
+                PayloadDirection::Inbound => {
+                    self.project_inbound(segment, &value, &mut projected)?
+                }
             }
         }
         Ok(Some(ConnectionObservation {
@@ -86,7 +96,7 @@ impl WebSocketConnection {
         if value.get("type").and_then(Value::as_str) != Some("response.create") {
             return;
         }
-        self.response_text.clear();
+        self.clear_response();
         let body = text.as_bytes();
         let mut bytes = format!(
             "POST {} HTTP/1.1\r\nHost: chatgpt.com\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
@@ -103,20 +113,21 @@ impl WebSocketConnection {
         segment: &PayloadSegment,
         value: &Value,
         projected: &mut Vec<PayloadSegment>,
-    ) {
+    ) -> Result<(), ()> {
         let Some(message_type) = value.get("type").and_then(Value::as_str) else {
-            return;
+            return Ok(());
         };
         if !message_type.starts_with("response.") {
-            return;
+            return Ok(());
         }
+        self.response_started_at.get_or_insert(segment.observed_at);
         if message_type == "response.output_text.delta" {
             if let Some(delta) = value.get("delta").and_then(Value::as_str)
                 && self.response_text.len().saturating_add(delta.len()) <= MAX_DECODED_BYTES
             {
                 self.response_text.push_str(delta);
             }
-            return;
+            return Ok(());
         }
         if message_type == "response.output_text.done"
             && self.response_text.is_empty()
@@ -125,37 +136,70 @@ impl WebSocketConnection {
         {
             self.response_text.push_str(done_text);
         }
+        if message_type == "response.output_item.done" {
+            self.capture_response_output_item(value)?;
+            return Ok(());
+        }
         if !matches!(
             message_type,
             "response.completed" | "response.failed" | "response.incomplete"
         ) {
-            return;
+            return Ok(());
         }
         let Some(mut response) = value.get("response").cloned() else {
-            self.response_text.clear();
-            return;
+            self.clear_response();
+            return Ok(());
         };
-        Self::ensure_response_output(&mut response, &self.response_text);
+        Self::ensure_response_output(&mut response, &self.response_output, &self.response_text);
         let Ok(body) = serde_json::to_vec(&response) else {
-            self.response_text.clear();
-            return;
+            self.clear_response();
+            return Ok(());
         };
-        self.response_text.clear();
         let mut bytes = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
             body.len()
         )
         .into_bytes();
         bytes.extend_from_slice(&body);
-        projected.push(self.synthetic_segment(segment, bytes));
+        let mut synthetic = self.synthetic_segment(segment, bytes);
+        if let Some(response_started_at) = self.response_started_at {
+            synthetic.observed_at = response_started_at;
+        }
+        self.clear_response();
+        projected.push(synthetic);
+        Ok(())
     }
 
-    fn ensure_response_output(response: &mut Value, text: &str) {
+    fn capture_response_output_item(&mut self, value: &Value) -> Result<(), ()> {
+        let item = value.get("item").ok_or(())?;
+        let item_bytes = serde_json::to_vec(item).map_err(|_| ())?.len();
+        let response_output_bytes = self
+            .response_output_bytes
+            .checked_add(item_bytes)
+            .filter(|bytes| *bytes <= MAX_DECODED_BYTES)
+            .ok_or(())?;
+        self.response_output.push(item.clone());
+        self.response_output_bytes = response_output_bytes;
+        Ok(())
+    }
+
+    fn clear_response(&mut self) {
+        self.response_text.clear();
+        self.response_output.clear();
+        self.response_output_bytes = 0;
+        self.response_started_at = None;
+    }
+
+    fn ensure_response_output(response: &mut Value, output_items: &[Value], text: &str) {
         let output_has_content = response
             .get("output")
             .and_then(Value::as_array)
             .is_some_and(|output| !output.is_empty());
         if output_has_content {
+            return;
+        }
+        if !output_items.is_empty() {
+            response["output"] = Value::Array(output_items.to_vec());
             return;
         }
         response["output"] = serde_json::json!([{

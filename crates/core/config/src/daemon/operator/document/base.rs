@@ -1,5 +1,10 @@
 use super::*;
 
+#[path = "base/ipc_lineage.rs"]
+mod ipc_lineage;
+
+pub(super) use ipc_lineage::IpcLineageDocument;
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct ControlDocument {
@@ -491,6 +496,7 @@ pub(super) struct EbpfDocument {
     pub event_ring_buffer_max_bytes: u32,
     pub file_path_capture_enabled: bool,
     pub file_path_max_bytes: u32,
+    pub ipc_lineage: IpcLineageDocument,
 }
 
 impl Default for EbpfDocument {
@@ -505,6 +511,7 @@ impl Default for EbpfDocument {
             event_ring_buffer_max_bytes: 33554432,
             file_path_capture_enabled: true,
             file_path_max_bytes: 255,
+            ipc_lineage: IpcLineageDocument::default(),
         }
     }
 }
@@ -535,6 +542,7 @@ impl EbpfDocument {
                 "ebpf.file_path_max_bytes",
                 self.file_path_max_bytes,
             )?,
+            ipc_lineage: self.ipc_lineage.to_config()?,
         })
     }
 }

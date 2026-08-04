@@ -620,6 +620,21 @@ fn route_trace_api(path: &str, query: &str, storage: &StorageConfig) -> Result<R
                 }
             }
         }
+        [trace_id, "actions", action_id, "content", "mcp-jsonrpc"] => {
+            let trace_id = parse_u64(trace_id);
+            let action_id = percent_decode(action_id);
+            let max_bytes = parse_llm_request_content_query(query);
+            match (trace_id, action_id, max_bytes) {
+                (Ok(trace_id), Ok(action_id), Ok(max_bytes)) => {
+                    view::action_mcp_jsonrpc_content_json(storage, trace_id, &action_id, max_bytes)
+                        .map(Response::json)
+                        .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error)))
+                }
+                (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
+                    Ok(Response::text(STATUS_BAD_REQUEST, error))
+                }
+            }
+        }
         [
             trace_id,
             "actions",

@@ -12,7 +12,8 @@ use model_core::process::{ProcessIdentity, ProcessMembership, ProcessRecord};
 use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
 use semantic_action::{
     FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
-    LlmRequestContentWrite, SemanticAction, SemanticActionLink, SemanticActionPage,
+    LlmRequestContentWrite, McpJsonRpcContentPage, McpJsonRpcContentWrite, SemanticAction,
+    SemanticActionLink, SemanticActionPage,
 };
 use storage_core::{
     PayloadSegmentQuery, RetentionCandidate, SemanticActionChildPage, SemanticActionChildPageQuery,
@@ -258,6 +259,14 @@ impl StorageBackend for SqliteStorage {
             .map_err(StorageError::from)
     }
 
+    fn upsert_mcp_jsonrpc_contents(
+        &mut self,
+        contents: &[McpJsonRpcContentWrite],
+    ) -> Result<(), StorageError> {
+        semantic_action::SemanticActionWriteStore::upsert_mcp_jsonrpc_contents(self, contents)
+            .map_err(StorageError::from)
+    }
+
     fn list_semantic_actions(
         &self,
         trace_id: TraceId,
@@ -455,6 +464,18 @@ impl StorageBackend for SqliteStorage {
         max_bytes: usize,
     ) -> Result<Option<LlmRequestContentPage>, StorageError> {
         semantic_action::SemanticActionReadStore::llm_request_content_page(
+            self, trace_id, action_id, max_bytes,
+        )
+        .map_err(StorageError::from)
+    }
+
+    fn mcp_jsonrpc_content_page(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+        max_bytes: usize,
+    ) -> Result<Option<McpJsonRpcContentPage>, StorageError> {
+        semantic_action::SemanticActionReadStore::mcp_jsonrpc_content_page(
             self, trace_id, action_id, max_bytes,
         )
         .map_err(StorageError::from)

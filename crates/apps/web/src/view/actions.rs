@@ -4,8 +4,8 @@ use std::path::Path;
 
 use model_core::ids::TraceId;
 use semantic_action::{
-    FilePathSetPath, FilePathSetPathPage, LlmRequestContentPage, SemanticAction,
-    SemanticActionLink, SemanticEvidence,
+    FilePathSetPath, FilePathSetPathPage, LlmRequestContentPage, McpJsonRpcContentPage,
+    SemanticAction, SemanticActionLink, SemanticEvidence,
 };
 use serde_json::{Value, json as json_value};
 use storage_core::{
@@ -171,6 +171,21 @@ pub(super) fn llm_request_content_json(
         .map_err(|error| storage_error("read LLM request content", error))?;
     Ok(match content {
         Some(content) => format!("{{\"content\":{}}}", llm_request_content_page_json(content)),
+        None => "{\"content\":null}".to_string(),
+    })
+}
+
+pub(super) fn mcp_jsonrpc_content_json(
+    storage: &mut dyn StorageBackend,
+    trace_id: TraceId,
+    action_id: &str,
+    max_bytes: usize,
+) -> Result<String, String> {
+    let content = storage
+        .mcp_jsonrpc_content_page(trace_id, action_id, max_bytes)
+        .map_err(|error| storage_error("read MCP JSON-RPC content", error))?;
+    Ok(match content {
+        Some(content) => format!("{{\"content\":{}}}", mcp_jsonrpc_content_page_json(content)),
         None => "{\"content\":null}".to_string(),
     })
 }
@@ -430,6 +445,19 @@ fn llm_request_content_page_json(content: LlmRequestContentPage) -> String {
         json::number(content.returned_bytes),
         bool_json(content.truncated),
         json::string(&content.body_json)
+    )
+}
+
+fn mcp_jsonrpc_content_page_json(content: McpJsonRpcContentPage) -> String {
+    format!(
+        "{{\"action_id\":{},\"format_version\":{},\"canonical_json_hash\":{},\"canonical_json_bytes\":{},\"returned_bytes\":{},\"truncated\":{},\"canonical_json\":{}}}",
+        json::string(&content.action_id),
+        json::number(content.format_version),
+        json::string(&content.canonical_json_hash),
+        json::number(content.canonical_json_bytes),
+        json::number(content.returned_bytes),
+        bool_json(content.truncated),
+        json::string(&content.canonical_json)
     )
 }
 

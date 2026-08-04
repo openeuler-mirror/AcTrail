@@ -2,7 +2,7 @@ use model_core::ids::TraceId;
 
 use crate::loader::LoaderError;
 
-use super::{read_u32, read_u64};
+use super::{read_i64, read_u32, read_u64};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KernelTlsCompletionEvent {
@@ -97,6 +97,24 @@ pub struct KernelStdioPayloadEvent {
     pub syscall: u32,
     pub pid_generation: u64,
     pub bytes: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KernelStdioPayloadCompletionEvent {
+    pub pid: u32,
+    pub tid: u32,
+    pub host_pid: u32,
+    pub host_tid: u32,
+    pub direction: u32,
+    pub trace_id: TraceId,
+    pub observed_ktime_ns: u64,
+    pub sequence: u64,
+    pub result: i64,
+    pub requested_size: u64,
+    pub pid_generation: u64,
+    pub stream: u32,
+    pub fd: u32,
+    pub syscall: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -326,6 +344,38 @@ pub(super) fn decode_stdio_payload_event(
         host_tid: read_u32(raw, 76).expect("event length checked"),
         bytes: raw[STDIO_EVENT_HEADER_SIZE..STDIO_EVENT_HEADER_SIZE + captured_size as usize]
             .to_vec(),
+    })
+}
+
+pub(super) fn decode_stdio_payload_completion_event(
+    raw: &[u8],
+) -> Result<KernelStdioPayloadCompletionEvent, LoaderError> {
+    const STDIO_COMPLETION_EVENT_SIZE: usize = 88;
+    if raw.len() != STDIO_COMPLETION_EVENT_SIZE {
+        return Err(LoaderError::new(
+            "decode_stdio_payload_completion",
+            format!(
+                "unexpected stdio payload completion event size {}, expected {}",
+                raw.len(),
+                STDIO_COMPLETION_EVENT_SIZE
+            ),
+        ));
+    }
+    Ok(KernelStdioPayloadCompletionEvent {
+        pid: read_u32(raw, 4).expect("event length checked"),
+        tid: read_u32(raw, 8).expect("event length checked"),
+        direction: read_u32(raw, 12).expect("event length checked"),
+        trace_id: TraceId::new(read_u64(raw, 16).expect("event length checked")),
+        observed_ktime_ns: read_u64(raw, 24).expect("event length checked"),
+        sequence: read_u64(raw, 32).expect("event length checked"),
+        result: read_i64(raw, 40).expect("event length checked"),
+        requested_size: read_u64(raw, 48).expect("event length checked"),
+        pid_generation: read_u64(raw, 56).expect("event length checked"),
+        stream: read_u32(raw, 64).expect("event length checked"),
+        fd: read_u32(raw, 68).expect("event length checked"),
+        syscall: read_u32(raw, 72).expect("event length checked"),
+        host_pid: read_u32(raw, 76).expect("event length checked"),
+        host_tid: read_u32(raw, 80).expect("event length checked"),
     })
 }
 

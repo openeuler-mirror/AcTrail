@@ -30,6 +30,7 @@ enum actrail_proc_event_kind {
     ACTRAIL_FILE_CONTEXT = 307,
     ACTRAIL_FILE_READ_SUMMARY = 308,
     ACTRAIL_STDIO_PAYLOAD = 400,
+    ACTRAIL_STDIO_PAYLOAD_COMPLETION = 401,
     ACTRAIL_SOCKET_PAYLOAD = 500,
     ACTRAIL_SOCKET_PAYLOAD_COMPLETION = 501,
 };
@@ -115,8 +116,12 @@ struct actrail_pending_exit_op {
 struct actrail_pending_ipc_fd_pair_op {
     __u64 trace_id;
     __u64 fd_pair_ptr;
+    __u64 pid_generation;
     __u32 kind;
     __u32 domain;
+    __u32 creation_flags;
+    __u32 pid;
+    __u32 tid;
 };
 
 struct actrail_pid_namespace {
@@ -140,7 +145,9 @@ enum actrail_event_transport_diagnostic_counter {
     ACTRAIL_EVENT_TRANSPORT_OUTPUT_FAIL = 1,
     ACTRAIL_EVENT_TRANSPORT_OUTPUT_FAIL_BYTES = 2,
     ACTRAIL_FORK_IDENTITY_PUBLISH_FAIL = 3,
-    ACTRAIL_EVENT_TRANSPORT_DIAG_COUNTER_COUNT = 4,
+    ACTRAIL_STDIO_PENDING_UPDATE_FAIL = 4,
+    ACTRAIL_STDIO_READ_USER_FAIL = 5,
+    ACTRAIL_EVENT_TRANSPORT_DIAG_COUNTER_COUNT = 6,
 };
 
 struct tracepoint_common {
@@ -424,6 +431,17 @@ static __always_inline __u64 *lookup_current_trace(
             *tgid = kernel_tgid;
             *tid = (__u32)kernel_pid_tgid;
             return trace_id;
+        }
+    }
+
+    if (kernel_tgid) {
+        struct actrail_fork_trace_binding *binding =
+            bpf_map_lookup_elem(&fork_trace_bindings, &kernel_tgid);
+        if (binding) {
+            *tgid = kernel_tgid;
+            *tid = (__u32)kernel_pid_tgid;
+            *flags = ACTRAIL_TRACE_LOOKUP_FLAG_HOST_FALLBACK;
+            return &binding->trace_id;
         }
     }
 

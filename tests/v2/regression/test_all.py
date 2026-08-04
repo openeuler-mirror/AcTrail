@@ -18,8 +18,14 @@ from tests.v2.common.runner import (  # noqa: E402
 from tests.v2.regression.probe_claude_llm.run_e2e import (  # noqa: E402
     TEST_DEFINITION as CLAUDE,
 )
+from tests.v2.regression.probe_claude_mcp.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as CLAUDE_MCP,
+)
 from tests.v2.regression.probe_codex_llm.run_e2e import (  # noqa: E402
     TEST_DEFINITION as CODEX,
+)
+from tests.v2.regression.probe_codex_mcp.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as CODEX_MCP,
 )
 from tests.v2.regression.probe_pi_llm.run_e2e import (  # noqa: E402
     TEST_DEFINITION as PI,
@@ -48,7 +54,9 @@ from tests.v2.regression.activity_anomaly.run_e2e import (  # noqa: E402
 
 TESTS = [
     CLAUDE,
+    CLAUDE_MCP,
     CODEX,
+    CODEX_MCP,
     PI,
     QODERCLI,
     XIAOO,

@@ -179,6 +179,7 @@ fn known_event_size(kind: u32, size: usize) -> bool {
     const FILE_EVENT_PRIMARY_PATH_SIZE: usize = FILE_EVENT_HEADER_SIZE + 256;
     const FILE_EVENT_SIZE: usize = FILE_EVENT_HEADER_SIZE + 256 * 2;
     const STDIO_EVENT_SIZE: usize = 80 + 4_096;
+    const STDIO_COMPLETION_EVENT_SIZE: usize = 88;
     const SOCKET_EVENT_SIZE: usize = 80 + 4_096;
     const SOCKET_COMPLETION_EVENT_SIZE: usize = 96;
 
@@ -200,6 +201,7 @@ fn known_event_size(kind: u32, size: usize) -> bool {
             )
         }
         400 => size == STDIO_EVENT_SIZE,
+        401 => size == STDIO_COMPLETION_EVENT_SIZE,
         500 => size == SOCKET_EVENT_SIZE,
         501 => size == SOCKET_COMPLETION_EVENT_SIZE,
         _ => false,
@@ -210,7 +212,7 @@ fn known_event_size(kind: u32, size: usize) -> bool {
 fn known_event_kind(kind: u32) -> bool {
     matches!(
         kind,
-        1..=4 | 100..=105 | 201..=205 | 300..=308 | 400 | 500 | 501
+        1..=4 | 100..=105 | 201..=205 | 300..=308 | 400 | 401 | 500 | 501
     )
 }
 
@@ -286,8 +288,7 @@ pub(crate) fn resize_map(
 
 #[cfg(all(test, any(feature = "perf-buffer", actrail_event_transport_perf)))]
 mod tests {
-    use super::perf_sample_payload;
-    use crate::loader::abi::{EXEC_EVENT_SIZE, KERNEL_OBSERVATION_EVENT_SIZE};
+    use super::{EXEC_EVENT_SIZE, KERNEL_OBSERVATION_EVENT_SIZE, perf_sample_payload};
 
     #[test]
     fn perf_sample_payload_strips_raw_size_prefix() {

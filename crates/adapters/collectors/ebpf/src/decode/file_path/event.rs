@@ -15,13 +15,15 @@ use crate::loader::KernelFilePathEvent;
 use crate::maps::BindingStateMap;
 
 use super::state::{
-    FILE_FD_MISSING, FILE_PHASE_EXIT, FILE_SYSCALL_CHDIR, FILE_SYSCALL_CLOSE, FILE_SYSCALL_CREAT,
+    FILE_FD_MISSING, FILE_IPC_KIND_PIPE, FILE_IPC_KIND_UNIX_SOCKET, FILE_PHASE_EXIT,
+    FILE_SYSCALL_CHDIR, FILE_SYSCALL_CLOSE, FILE_SYSCALL_CLOSE_RANGE, FILE_SYSCALL_CREAT,
     FILE_SYSCALL_DUP, FILE_SYSCALL_DUP2, FILE_SYSCALL_DUP3, FILE_SYSCALL_FCHDIR,
     FILE_SYSCALL_FCNTL, FILE_SYSCALL_FTRUNCATE, FILE_SYSCALL_MKDIR, FILE_SYSCALL_MKDIRAT,
     FILE_SYSCALL_MMAP, FILE_SYSCALL_OPEN, FILE_SYSCALL_OPENAT, FILE_SYSCALL_OPENAT2,
-    FILE_SYSCALL_RENAME, FILE_SYSCALL_RENAMEAT, FILE_SYSCALL_RENAMEAT2, FILE_SYSCALL_RMDIR,
-    FILE_SYSCALL_TRUNCATE, FILE_SYSCALL_UNLINK, FILE_SYSCALL_UNLINKAT, FileSyscallOutcome,
-    FileTracker, PATH_FLAG_FAULT, PATH_FLAG_TRUNCATED, dup_target_fd, fcntl_duplicates_fd,
+    FILE_SYSCALL_PIPE, FILE_SYSCALL_PIPE2, FILE_SYSCALL_RENAME, FILE_SYSCALL_RENAMEAT,
+    FILE_SYSCALL_RENAMEAT2, FILE_SYSCALL_RMDIR, FILE_SYSCALL_SOCKETPAIR, FILE_SYSCALL_TRUNCATE,
+    FILE_SYSCALL_UNLINK, FILE_SYSCALL_UNLINKAT, FileSyscallOutcome, FileTracker, PATH_FLAG_FAULT,
+    PATH_FLAG_TRUNCATED, dup_target_fd, fcntl_duplicates_fd,
 };
 
 pub(in crate::decode) fn decode(
@@ -30,11 +32,30 @@ pub(in crate::decode) fn decode(
     tracker: &mut FileTracker,
 ) -> Result<Option<RawCollectorEvent>, DecodeError> {
     let trace_id = event.trace_id;
+    if let Some(capability) = ipc_pair_capability(&event) {
+        if !bindings.trace_has_capability(event.trace_id, &capability) {
+            return Ok(None);
+        }
+        let identity = resolve_bound_event_observation(
+            event.trace_id,
+            event.pid,
+            event.pid_generation,
+            bindings,
+        )
+        .map_err(|error| DecodeError::new("file_identity", error))?;
+        tracker.record_ipc_fd_pair(&event, identity);
+        return Ok(None);
+    }
+    let fs_access_enabled =
+        bindings.trace_has_capability(event.trace_id, &Capability::FsAccessBasic);
+    let lineage_context_enabled = ipc_lineage_context_event(&event)
+        && (bindings.trace_has_capability(event.trace_id, &Capability::IpcPipeFifo)
+            || bindings.trace_has_capability(event.trace_id, &Capability::IpcUnixSocket));
     if event.kind == FILE_EVENT_MMAP {
         if !bindings.trace_has_capability(event.trace_id, &Capability::FsMmap) {
             return Ok(None);
         }
-    } else if !bindings.trace_has_capability(event.trace_id, &Capability::FsAccessBasic) {
+    } else if !fs_access_enabled && !lineage_context_enabled {
         return Ok(None);
     }
 
@@ -45,14 +66,14 @@ pub(in crate::decode) fn decode(
     if event.kind == FILE_EVENT_READ_SUMMARY {
         return decode_read_summary(event, identity, tracker);
     }
-    if tracker.record_ipc_fd_pair(&event, identity.clone()) {
-        return Ok(None);
-    }
     let is_exit = event.phase == FILE_PHASE_EXIT;
     let outcome = tracker.record(event, identity.clone());
     let Some(outcome) = outcome else {
         return Ok(None);
     };
+    if !fs_access_enabled && lineage_context_enabled {
+        return Ok(None);
+    }
     if outcome.enter.kind == FILE_EVENT_CONTEXT && !observable_context_event(&outcome) {
         return Ok(None);
     }
@@ -91,6 +112,32 @@ pub(in crate::decode) fn decode(
             metadata,
         },
     }))
+}
+
+fn ipc_pair_capability(event: &KernelFilePathEvent) -> Option<Capability> {
+    if event.kind != FILE_EVENT_CONTEXT || event.phase != FILE_PHASE_EXIT || event.result != 0 {
+        return None;
+    }
+    match (event.aux, event.arg1) {
+        (FILE_SYSCALL_PIPE | FILE_SYSCALL_PIPE2, FILE_IPC_KIND_PIPE) => {
+            Some(Capability::IpcPipeFifo)
+        }
+        (FILE_SYSCALL_SOCKETPAIR, FILE_IPC_KIND_UNIX_SOCKET) => Some(Capability::IpcUnixSocket),
+        _ => None,
+    }
+}
+
+fn ipc_lineage_context_event(event: &KernelFilePathEvent) -> bool {
+    event.kind == FILE_EVENT_CONTEXT
+        && matches!(
+            event.aux,
+            FILE_SYSCALL_CLOSE
+                | FILE_SYSCALL_CLOSE_RANGE
+                | FILE_SYSCALL_DUP
+                | FILE_SYSCALL_DUP2
+                | FILE_SYSCALL_DUP3
+                | FILE_SYSCALL_FCNTL
+        )
 }
 
 fn decode_read_summary(
@@ -146,6 +193,9 @@ fn file_operation(outcome: &FileSyscallOutcome) -> &'static str {
     match outcome.enter.kind {
         FILE_EVENT_OPEN => "open",
         crate::decode::FILE_EVENT_CONTEXT if outcome.enter.aux == FILE_SYSCALL_CLOSE => "close",
+        crate::decode::FILE_EVENT_CONTEXT if outcome.enter.aux == FILE_SYSCALL_CLOSE_RANGE => {
+            "close_range"
+        }
         crate::decode::FILE_EVENT_CONTEXT if outcome.enter.aux == FILE_SYSCALL_DUP => "dup",
         crate::decode::FILE_EVENT_CONTEXT if outcome.enter.aux == FILE_SYSCALL_DUP2 => "dup2",
         crate::decode::FILE_EVENT_CONTEXT if outcome.enter.aux == FILE_SYSCALL_DUP3 => "dup3",
@@ -323,6 +373,11 @@ fn insert_syscall_args(metadata: &mut BTreeMap<String, String>, outcome: &FileSy
                 mmap_is_shared_writable(outcome).to_string(),
             );
         }
+        FILE_SYSCALL_CLOSE_RANGE => {
+            metadata.insert("first_fd".to_string(), event.arg0.to_string());
+            metadata.insert("last_fd".to_string(), event.arg1.to_string());
+            metadata.insert("flags".to_string(), event.arg2.to_string());
+        }
         FILE_SYSCALL_CLOSE | FILE_SYSCALL_DUP | FILE_SYSCALL_DUP2 | FILE_SYSCALL_DUP3
         | FILE_SYSCALL_FCNTL | FILE_SYSCALL_CHDIR | FILE_SYSCALL_FCHDIR | FILE_SYSCALL_RENAME
         | FILE_SYSCALL_UNLINK | FILE_SYSCALL_RMDIR => {}
@@ -339,7 +394,11 @@ fn normalized_result(outcome: &FileSyscallOutcome) -> i64 {
 
 fn observable_context_event(outcome: &FileSyscallOutcome) -> bool {
     match outcome.enter.aux {
-        FILE_SYSCALL_CLOSE | FILE_SYSCALL_DUP | FILE_SYSCALL_DUP2 | FILE_SYSCALL_DUP3 => true,
+        FILE_SYSCALL_CLOSE
+        | FILE_SYSCALL_CLOSE_RANGE
+        | FILE_SYSCALL_DUP
+        | FILE_SYSCALL_DUP2
+        | FILE_SYSCALL_DUP3 => true,
         FILE_SYSCALL_FCNTL => fcntl_duplicates_fd(&outcome.enter),
         _ => false,
     }
@@ -367,6 +426,7 @@ fn syscall_name(raw: u32) -> &'static str {
         FILE_SYSCALL_FTRUNCATE => "ftruncate",
         FILE_SYSCALL_MMAP => "mmap",
         FILE_SYSCALL_CLOSE => "close",
+        FILE_SYSCALL_CLOSE_RANGE => "close_range",
         FILE_SYSCALL_DUP => "dup",
         FILE_SYSCALL_DUP2 => "dup2",
         FILE_SYSCALL_DUP3 => "dup3",

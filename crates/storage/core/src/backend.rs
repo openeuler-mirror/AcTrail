@@ -14,7 +14,8 @@ use model_core::process::{ProcessIdentity, ProcessMembership, ProcessRecord};
 use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
 use semantic_action::{
     FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
-    LlmRequestContentWrite, SemanticAction, SemanticActionLink, SemanticActionPage,
+    LlmRequestContentWrite, McpJsonRpcContentPage, McpJsonRpcContentWrite, SemanticAction,
+    SemanticActionLink, SemanticActionPage,
 };
 
 use crate::{
@@ -151,6 +152,10 @@ pub trait StorageBackend {
         &mut self,
         contents: &[LlmRequestContentWrite],
     ) -> Result<(), StorageError>;
+    fn upsert_mcp_jsonrpc_contents(
+        &mut self,
+        contents: &[McpJsonRpcContentWrite],
+    ) -> Result<(), StorageError>;
     fn list_semantic_actions(&self, trace_id: TraceId)
     -> Result<Vec<SemanticAction>, StorageError>;
     fn semantic_actions_page(
@@ -238,6 +243,12 @@ pub trait StorageBackend {
         action_id: &str,
         max_bytes: usize,
     ) -> Result<Option<LlmRequestContentPage>, StorageError>;
+    fn mcp_jsonrpc_content_page(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+        max_bytes: usize,
+    ) -> Result<Option<McpJsonRpcContentPage>, StorageError>;
     fn semantic_action_command_fallback_children(
         &self,
         trace_id: TraceId,

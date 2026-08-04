@@ -1,5 +1,7 @@
 mod event;
+mod lineage;
 mod state;
 
 pub(super) use event::decode;
-pub(crate) use state::{FdIpcKind, FileTracker};
+pub(super) use lineage::FdIpcKind;
+pub(crate) use state::FileTracker;

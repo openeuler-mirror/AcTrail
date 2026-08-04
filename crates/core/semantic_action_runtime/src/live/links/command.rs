@@ -114,16 +114,16 @@ impl CommandChildActionLinkProjector {
     }
 
     pub(super) fn link_child_action(&mut self, action: &SemanticAction) -> Vec<SemanticActionLink> {
-        if !command_child_candidate(action) {
+        let Some(role) = command_child_role(action) else {
             return Vec::new();
-        }
+        };
         if parent_identity_has_conflict(action) {
             self.remove_pending_child(action);
             return invalidate_child_links(
                 &self.emitted_links,
                 action.trace_id,
                 &action.action_id,
-                SemanticActionLinkRole::CommandContainsCommandInvocation,
+                role,
                 &action.evidence,
             );
         }
@@ -426,10 +426,6 @@ impl CommandChildActionLinkProjector {
     }
 }
 
-fn command_child_candidate(action: &SemanticAction) -> bool {
-    command_child_role(action).is_some()
-}
-
 fn command_child_role(action: &SemanticAction) -> Option<SemanticActionLinkRole> {
     if is_nested_file_write_event(action) {
         return None;
@@ -457,6 +453,10 @@ fn command_child_role(action: &SemanticAction) -> Option<SemanticActionLinkRole>
             .then_some(SemanticActionLinkRole::CommandContainsLlmCall)
     })
     .or_else(|| {
+        (action.kind == SemanticActionKind::McpToolCall)
+            .then_some(SemanticActionLinkRole::CommandContainsMcpToolCall)
+    })
+    .or_else(|| {
         (action.kind == SemanticActionKind::AgentInvocation)
             .then_some(SemanticActionLinkRole::CommandContainsCommandInvocation)
     })
@@ -474,6 +474,7 @@ fn parent_command_process(action: &SemanticAction) -> Option<ProcessIdentity> {
         | SemanticActionKind::LlmCall
         | SemanticActionKind::AgentInvocation => Some(action.process.clone()),
         SemanticActionKind::CommandInvocation => parent_process_from_action(action),
+        SemanticActionKind::McpToolCall => parent_process_from_action(action),
         _ => None,
     }
 }

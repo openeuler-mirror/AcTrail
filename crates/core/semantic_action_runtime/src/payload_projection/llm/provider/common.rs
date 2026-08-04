@@ -213,6 +213,9 @@ impl ToolCallAssembler {
                 }
             }
             Value::Object(object) => {
+                if object.get("type").and_then(Value::as_str) == Some("function_call") {
+                    self.apply_openai_response_function_call(object);
+                }
                 if let Some(Value::Array(tool_calls)) = object.get("tool_calls") {
                     for tool_call in tool_calls {
                         if let Value::Object(tool_call) = tool_call {
@@ -253,6 +256,33 @@ impl ToolCallAssembler {
             .into_iter()
             .filter(|call| tool_call_value(call).is_some())
             .collect()
+    }
+
+    fn apply_openai_response_function_call(&mut self, item: &Map<String, Value>) {
+        let call_id = item.get("call_id").and_then(Value::as_str);
+        let Some(call) = self.call_slot(None, call_id) else {
+            return;
+        };
+        call.kind = Some("function".to_string());
+        let function = call.function.get_or_insert_with(LlmToolFunction::default);
+        if let Some(name) = item
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|name| !name.is_empty())
+        {
+            let qualified_name = item
+                .get("namespace")
+                .and_then(Value::as_str)
+                .filter(|namespace| namespace.starts_with("mcp__"))
+                .filter(|_| !name.starts_with("mcp__"))
+                .map(|namespace| format!("{namespace}__{name}"))
+                .unwrap_or_else(|| name.to_string());
+            function.name = Some(qualified_name);
+        }
+        if let Some(arguments) = item.get("arguments").and_then(Value::as_str) {
+            function.arguments = Some(arguments.to_string());
+            function.arguments_json = parse_json_value(arguments);
+        }
     }
 
     fn apply_openai_delta(&mut self, delta: &Map<String, Value>) {

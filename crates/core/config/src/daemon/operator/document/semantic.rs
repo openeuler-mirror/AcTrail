@@ -5,6 +5,7 @@ use super::*;
 pub(super) struct SemanticRetentionDocument {
     pub content_owner: String,
     pub l0_llm_call: L0LlmCallDocument,
+    pub l0_mcp_call: L0McpCallDocument,
     pub l1_sse: L1SseDocument,
     pub l2_http: L2HttpDocument,
     pub l3_http2_frame: L3Http2FrameDocument,
@@ -16,6 +17,7 @@ impl Default for SemanticRetentionDocument {
         Self {
             content_owner: "highest_consumed".to_string(),
             l0_llm_call: L0LlmCallDocument::default(),
+            l0_mcp_call: L0McpCallDocument::default(),
             l1_sse: L1SseDocument::default(),
             l2_http: L2HttpDocument::default(),
             l3_http2_frame: L3Http2FrameDocument::default(),
@@ -41,6 +43,16 @@ impl SemanticRetentionDocument {
                 tool_calls: llm_tool_call_retention_as_str(config.l0_llm_call.tool_calls)
                     .to_string(),
                 usage: llm_usage_retention_as_str(config.l0_llm_call.usage).to_string(),
+            },
+            l0_mcp_call: L0McpCallDocument {
+                request_content: mcp_jsonrpc_content_retention_as_str(
+                    config.l0_mcp_call.request_content,
+                )
+                .to_string(),
+                response_content: mcp_jsonrpc_content_retention_as_str(
+                    config.l0_mcp_call.response_content,
+                )
+                .to_string(),
             },
             l1_sse: L1SseDocument {
                 enabled: config.l1_sse.enabled,
@@ -75,10 +87,42 @@ impl SemanticRetentionDocument {
         Ok(SemanticRetentionConfig {
             content_owner: parse_value("semantic_retention.content_owner", &self.content_owner)?,
             l0_llm_call: self.l0_llm_call.to_config()?,
+            l0_mcp_call: self.l0_mcp_call.to_config()?,
             l1_sse: self.l1_sse.to_config()?,
             l2_http: self.l2_http.to_config()?,
             l3_http2_frame: self.l3_http2_frame.to_config()?,
             l4_payload: self.l4_payload.to_config()?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct L0McpCallDocument {
+    pub request_content: String,
+    pub response_content: String,
+}
+
+impl Default for L0McpCallDocument {
+    fn default() -> Self {
+        Self {
+            request_content: "canonical_json".to_string(),
+            response_content: "canonical_json".to_string(),
+        }
+    }
+}
+
+impl L0McpCallDocument {
+    pub(super) fn to_config(&self) -> Result<L0McpCallRetention, String> {
+        Ok(L0McpCallRetention {
+            request_content: parse_value(
+                "semantic_retention.l0_mcp_call.request_content",
+                &self.request_content,
+            )?,
+            response_content: parse_value(
+                "semantic_retention.l0_mcp_call.response_content",
+                &self.response_content,
+            )?,
         })
     }
 }

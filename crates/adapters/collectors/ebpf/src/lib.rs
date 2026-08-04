@@ -7,6 +7,8 @@ mod collector_dynamic_go_tls;
 mod collector_dynamic_tls;
 #[path = "collector/events.rs"]
 mod collector_events;
+#[path = "collector/stdio_payload.rs"]
+mod collector_stdio_payload;
 pub mod decode;
 pub mod loader;
 pub mod maps;
@@ -47,6 +49,7 @@ pub use crate::loader::{LaunchBindingFailure, LaunchBindingFailureStatus, Socket
 use crate::maps::BindingStateMap;
 use collector_dynamic_go_tls::DynamicGoTlsAttacher;
 use collector_dynamic_tls::DynamicTlsAttacher;
+use collector_stdio_payload::StdioPayloadAssembler;
 
 #[cfg(test)]
 mod tests;
@@ -66,6 +69,7 @@ pub struct EbpfCollector {
     tls_diagnostic_events: Vec<TlsDiagnosticEvent>,
     launch_binding_failures: Vec<LaunchBindingFailure>,
     socket_completions: Vec<SocketPayloadCompletion>,
+    stdio_payloads: StdioPayloadAssembler,
     suppressed_fds: Vec<TraceSuppressedFd>,
     pending_launches: BTreeMap<TraceId, PendingLaunchBinding>,
     binding_gap_drops: u64,
@@ -155,6 +159,10 @@ impl EbpfCollector {
             probe_result.reason_unavailable =
                 Some("collector disabled by configuration".to_string());
         }
+        let mcp_stdio_enabled = payload_config.mcp.enabled
+            && payload_config.stdio.enabled
+            && payload_config.stdio.capture_stdin;
+        let file_tracker = FileTracker::new(config.ipc_lineage, mcp_stdio_enabled);
         Self {
             probe_result: probe_result_for_config(probe_result, &payload_config),
             loader: EbpfProgramLoader::new(
@@ -164,7 +172,7 @@ impl EbpfCollector {
             ),
             bindings: BindingStateMap::default(),
             runtime: None,
-            file_tracker: FileTracker::default(),
+            file_tracker,
             dynamic_go_tls: DynamicGoTlsAttacher::new(&payload_config.tls),
             dynamic_tls: DynamicTlsAttacher::default(),
             file_bulk_read_fast_path,
@@ -174,6 +182,9 @@ impl EbpfCollector {
             tls_diagnostic_events: Vec::new(),
             launch_binding_failures: Vec::new(),
             socket_completions: Vec::new(),
+            stdio_payloads: StdioPayloadAssembler::new(
+                payload_config.stdio.pending_operation_max_entries,
+            ),
             suppressed_fds: Vec::new(),
             pending_launches: BTreeMap::new(),
             binding_gap_drops: 0,
@@ -580,10 +591,13 @@ impl EbpfCollector {
     }
 
     pub fn take_event_transport_loss_summaries(&mut self) -> Vec<String> {
-        self.runtime
+        let mut summaries = self
+            .runtime
             .as_mut()
             .map(EbpfRuntime::take_event_transport_loss_summaries)
-            .unwrap_or_default()
+            .unwrap_or_default();
+        summaries.extend(self.stdio_payloads.take_loss_summaries());
+        summaries
     }
 
     pub fn flush_transport(&mut self) -> Result<(), CollectorError> {
@@ -963,6 +977,7 @@ impl CollectorInstance for EbpfCollector {
     }
 
     fn unbind_trace(&mut self, trace_id: TraceId) -> Result<(), CollectorError> {
+        self.stdio_payloads.release_trace(trace_id);
         self.cancel_pending_launch(trace_id)?;
         if let Some(runtime) = self.runtime.as_mut() {
             runtime.untrack_fork_trace(trace_id).map_err(loader_error)?;
@@ -998,6 +1013,13 @@ impl CollectorInstance for EbpfCollector {
                 count: self.binding_gap_lifecycle_skips,
             });
         }
+        for (reason, count) in self.file_tracker.lineage_gap_diagnostics() {
+            dropped.push(DropCounter {
+                reason: format!("ebpf_stdio_bundle_lineage_gap:{reason}"),
+                count,
+            });
+        }
+        self.stdio_payloads.append_drop_counters(&mut dropped);
         CollectorStats {
             collector_name: CollectorName::new("ebpf"),
             active_bindings: self.active_binding_trace_count(),

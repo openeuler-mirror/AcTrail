@@ -30,6 +30,7 @@ impl AgentInvocationConfig {
 pub struct SemanticRetentionConfig {
     pub content_owner: SemanticContentOwner,
     pub l0_llm_call: L0LlmCallRetention,
+    pub l0_mcp_call: L0McpCallRetention,
     pub l1_sse: L1SseRetention,
     pub l2_http: L2HttpRetention,
     pub l3_http2_frame: L3Http2FrameRetention,
@@ -41,6 +42,7 @@ impl Default for SemanticRetentionConfig {
         Self {
             content_owner: SemanticContentOwner::HighestConsumed,
             l0_llm_call: L0LlmCallRetention::default(),
+            l0_mcp_call: L0McpCallRetention::default(),
             l1_sse: L1SseRetention::default(),
             l2_http: L2HttpRetention::default(),
             l3_http2_frame: L3Http2FrameRetention::default(),
@@ -182,6 +184,42 @@ pub struct L0LlmCallRetention {
     pub response_content: LlmResponseContentRetention,
     pub tool_calls: LlmToolCallRetention,
     pub usage: LlmUsageRetention,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct L0McpCallRetention {
+    pub request_content: McpJsonRpcContentRetention,
+    pub response_content: McpJsonRpcContentRetention,
+}
+
+impl Default for L0McpCallRetention {
+    fn default() -> Self {
+        Self {
+            request_content: McpJsonRpcContentRetention::CanonicalJson,
+            response_content: McpJsonRpcContentRetention::CanonicalJson,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum McpJsonRpcContentRetention {
+    None,
+    #[default]
+    CanonicalJson,
+}
+
+impl FromStr for McpJsonRpcContentRetention {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "none" => Ok(Self::None),
+            "canonical_json" => Ok(Self::CanonicalJson),
+            other => Err(format!(
+                "unsupported MCP JSON-RPC content retention {other}"
+            )),
+        }
+    }
 }
 
 impl Default for L0LlmCallRetention {

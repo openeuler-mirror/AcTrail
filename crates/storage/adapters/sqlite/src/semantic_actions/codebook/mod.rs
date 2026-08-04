@@ -73,6 +73,11 @@ pub(crate) struct ActionKindCodes {
     pub(crate) llm_call: i16,
     pub(crate) llm_request: i16,
     pub(crate) llm_response: i16,
+    pub(crate) mcp_tool_call: i16,
+    pub(crate) mcp_request: i16,
+    pub(crate) mcp_response: i16,
+    pub(crate) mcp_stdin: i16,
+    pub(crate) mcp_stdout: i16,
     pub(crate) sse_stream: i16,
     pub(crate) sse_event: i16,
     pub(crate) enforcement_decision: i16,
@@ -98,6 +103,11 @@ impl ActionKindCodes {
             SemanticActionKind::LlmCall => self.llm_call,
             SemanticActionKind::LlmRequest => self.llm_request,
             SemanticActionKind::LlmResponse => self.llm_response,
+            SemanticActionKind::McpToolCall => self.mcp_tool_call,
+            SemanticActionKind::McpRequest => self.mcp_request,
+            SemanticActionKind::McpResponse => self.mcp_response,
+            SemanticActionKind::McpStdin => self.mcp_stdin,
+            SemanticActionKind::McpStdout => self.mcp_stdout,
             SemanticActionKind::SseStream => self.sse_stream,
             SemanticActionKind::SseEvent => self.sse_event,
             SemanticActionKind::EnforcementDecision => self.enforcement_decision,
@@ -131,6 +141,11 @@ impl ActionKindCodes {
             value if value == self.llm_call => Ok(SemanticActionKind::LlmCall),
             value if value == self.llm_request => Ok(SemanticActionKind::LlmRequest),
             value if value == self.llm_response => Ok(SemanticActionKind::LlmResponse),
+            value if value == self.mcp_tool_call => Ok(SemanticActionKind::McpToolCall),
+            value if value == self.mcp_request => Ok(SemanticActionKind::McpRequest),
+            value if value == self.mcp_response => Ok(SemanticActionKind::McpResponse),
+            value if value == self.mcp_stdin => Ok(SemanticActionKind::McpStdin),
+            value if value == self.mcp_stdout => Ok(SemanticActionKind::McpStdout),
             value if value == self.sse_stream => Ok(SemanticActionKind::SseStream),
             value if value == self.sse_event => Ok(SemanticActionKind::SseEvent),
             value if value == self.enforcement_decision => {
@@ -145,7 +160,7 @@ impl ActionKindCodes {
         }
     }
 
-    fn entries(self) -> [(&'static str, i16); 20] {
+    fn entries(self) -> [(&'static str, i16); 25] {
         [
             (SemanticActionKind::ProcessExec.as_str(), self.process_exec),
             (SemanticActionKind::ProcessExit.as_str(), self.process_exit),
@@ -167,6 +182,11 @@ impl ActionKindCodes {
             (SemanticActionKind::LlmCall.as_str(), self.llm_call),
             (SemanticActionKind::LlmRequest.as_str(), self.llm_request),
             (SemanticActionKind::LlmResponse.as_str(), self.llm_response),
+            (SemanticActionKind::McpToolCall.as_str(), self.mcp_tool_call),
+            (SemanticActionKind::McpRequest.as_str(), self.mcp_request),
+            (SemanticActionKind::McpResponse.as_str(), self.mcp_response),
+            (SemanticActionKind::McpStdin.as_str(), self.mcp_stdin),
+            (SemanticActionKind::McpStdout.as_str(), self.mcp_stdout),
             (SemanticActionKind::SseStream.as_str(), self.sse_stream),
             (SemanticActionKind::SseEvent.as_str(), self.sse_event),
             (
@@ -318,6 +338,7 @@ pub(crate) struct LinkRoleCodes {
     pub(crate) command_contains_process_exec: i16,
     pub(crate) command_contains_command_invocation: i16,
     pub(crate) command_contains_llm_call: i16,
+    pub(crate) command_contains_mcp_tool_call: i16,
     pub(crate) file_write_contains_file_event: i16,
     pub(crate) agent_invocation_exec: i16,
     pub(crate) agent_invocation_child_llm_request: i16,
@@ -328,6 +349,10 @@ pub(crate) struct LinkRoleCodes {
     pub(crate) llm_response_http_message: i16,
     pub(crate) llm_response_sse_stream: i16,
     pub(crate) sse_stream_event: i16,
+    pub(crate) mcp_tool_call_request: i16,
+    pub(crate) mcp_tool_call_response: i16,
+    pub(crate) mcp_request_stdout: i16,
+    pub(crate) mcp_response_stdin: i16,
 }
 
 impl LinkRoleCodes {
@@ -345,6 +370,9 @@ impl LinkRoleCodes {
                 self.command_contains_command_invocation
             }
             SemanticActionLinkRole::CommandContainsLlmCall => self.command_contains_llm_call,
+            SemanticActionLinkRole::CommandContainsMcpToolCall => {
+                self.command_contains_mcp_tool_call
+            }
             SemanticActionLinkRole::FileWriteContainsFileEvent => {
                 self.file_write_contains_file_event
             }
@@ -359,6 +387,10 @@ impl LinkRoleCodes {
             SemanticActionLinkRole::LlmResponseHttpMessage => self.llm_response_http_message,
             SemanticActionLinkRole::LlmResponseSseStream => self.llm_response_sse_stream,
             SemanticActionLinkRole::SseStreamEvent => self.sse_stream_event,
+            SemanticActionLinkRole::McpToolCallRequest => self.mcp_tool_call_request,
+            SemanticActionLinkRole::McpToolCallResponse => self.mcp_tool_call_response,
+            SemanticActionLinkRole::McpRequestStdout => self.mcp_request_stdout,
+            SemanticActionLinkRole::McpResponseStdin => self.mcp_response_stdin,
         }
     }
 
@@ -390,6 +422,9 @@ impl LinkRoleCodes {
             value if value == self.command_contains_llm_call => {
                 Ok(SemanticActionLinkRole::CommandContainsLlmCall)
             }
+            value if value == self.command_contains_mcp_tool_call => {
+                Ok(SemanticActionLinkRole::CommandContainsMcpToolCall)
+            }
             value if value == self.file_write_contains_file_event => {
                 Ok(SemanticActionLinkRole::FileWriteContainsFileEvent)
             }
@@ -414,6 +449,18 @@ impl LinkRoleCodes {
                 Ok(SemanticActionLinkRole::LlmResponseSseStream)
             }
             value if value == self.sse_stream_event => Ok(SemanticActionLinkRole::SseStreamEvent),
+            value if value == self.mcp_tool_call_request => {
+                Ok(SemanticActionLinkRole::McpToolCallRequest)
+            }
+            value if value == self.mcp_tool_call_response => {
+                Ok(SemanticActionLinkRole::McpToolCallResponse)
+            }
+            value if value == self.mcp_request_stdout => {
+                Ok(SemanticActionLinkRole::McpRequestStdout)
+            }
+            value if value == self.mcp_response_stdin => {
+                Ok(SemanticActionLinkRole::McpResponseStdin)
+            }
             _ => Err(CodebookError::unknown(
                 "semantic_action_link_role_code",
                 code,
@@ -421,7 +468,7 @@ impl LinkRoleCodes {
         }
     }
 
-    fn entries(self) -> [(&'static str, i16); 16] {
+    fn entries(self) -> [(&'static str, i16); 21] {
         [
             (
                 SemanticActionLinkRole::AgentPerformedAction.as_str(),
@@ -446,6 +493,10 @@ impl LinkRoleCodes {
             (
                 SemanticActionLinkRole::CommandContainsLlmCall.as_str(),
                 self.command_contains_llm_call,
+            ),
+            (
+                SemanticActionLinkRole::CommandContainsMcpToolCall.as_str(),
+                self.command_contains_mcp_tool_call,
             ),
             (
                 SemanticActionLinkRole::FileWriteContainsFileEvent.as_str(),
@@ -486,6 +537,22 @@ impl LinkRoleCodes {
             (
                 SemanticActionLinkRole::SseStreamEvent.as_str(),
                 self.sse_stream_event,
+            ),
+            (
+                SemanticActionLinkRole::McpToolCallRequest.as_str(),
+                self.mcp_tool_call_request,
+            ),
+            (
+                SemanticActionLinkRole::McpToolCallResponse.as_str(),
+                self.mcp_tool_call_response,
+            ),
+            (
+                SemanticActionLinkRole::McpRequestStdout.as_str(),
+                self.mcp_request_stdout,
+            ),
+            (
+                SemanticActionLinkRole::McpResponseStdin.as_str(),
+                self.mcp_response_stdin,
             ),
         ]
     }

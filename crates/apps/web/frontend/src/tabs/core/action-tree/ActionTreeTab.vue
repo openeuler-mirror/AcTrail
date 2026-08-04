@@ -22,7 +22,7 @@
           <path
             v-for="arc in httpExchangeArcs"
             :key="arc.id"
-            class="http-exchange-arc"
+            :class="arc.className"
             :d="arc.path"
           />
         </svg>
@@ -649,6 +649,16 @@ function scrollNodeIntoView(nodeId) {
 .http-exchange-arc {
   fill: none;
   stroke: var(--trace-action-tree-arc);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 6 6;
+  vector-effect: non-scaling-stroke;
+}
+
+.mcp-exchange-arc {
+  fill: none;
+  stroke: rgba(124, 58, 237, 0.5);
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;

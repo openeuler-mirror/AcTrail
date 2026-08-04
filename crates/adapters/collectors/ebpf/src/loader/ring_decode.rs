@@ -8,14 +8,15 @@ use model_core::ids::TraceId;
 use crate::loader::LoaderError;
 
 pub use payload::{
-    KernelSocketPayloadCompletionEvent, KernelSocketPayloadEvent, KernelStdioPayloadEvent,
-    KernelTlsCaptureRequestEvent, KernelTlsCompletionEvent, KernelTlsDiagnosticEvent,
-    KernelTlsDirectCaptureEvent,
+    KernelSocketPayloadCompletionEvent, KernelSocketPayloadEvent,
+    KernelStdioPayloadCompletionEvent, KernelStdioPayloadEvent, KernelTlsCaptureRequestEvent,
+    KernelTlsCompletionEvent, KernelTlsDiagnosticEvent, KernelTlsDirectCaptureEvent,
 };
 use payload::{
     decode_socket_payload_completion_event, decode_socket_payload_event,
-    decode_stdio_payload_event, decode_tls_capture_request_event, decode_tls_completion_event,
-    decode_tls_diagnostic_event, decode_tls_direct_capture_event,
+    decode_stdio_payload_completion_event, decode_stdio_payload_event,
+    decode_tls_capture_request_event, decode_tls_completion_event, decode_tls_diagnostic_event,
+    decode_tls_direct_capture_event,
 };
 
 use super::abi::{
@@ -33,6 +34,7 @@ const LAUNCH_BINDING_FAILURE_EVENT_KIND: u32 = 205;
 pub const FILE_EVENT_OPEN: u32 = 300;
 pub const FILE_EVENT_READ_SUMMARY: u32 = 308;
 pub const STDIO_PAYLOAD_EVENT_KIND: u32 = 400;
+pub const STDIO_PAYLOAD_COMPLETION_EVENT_KIND: u32 = 401;
 pub const SOCKET_PAYLOAD_EVENT_KIND: u32 = 500;
 pub const SOCKET_PAYLOAD_COMPLETION_EVENT_KIND: u32 = 501;
 
@@ -46,8 +48,28 @@ pub enum KernelEvent {
     TlsDiagnostic(KernelTlsDiagnosticEvent),
     LaunchBindingFailure(LaunchBindingFailure),
     StdioPayload(KernelStdioPayloadEvent),
+    StdioPayloadCompletion(KernelStdioPayloadCompletionEvent),
     SocketPayload(KernelSocketPayloadEvent),
     SocketPayloadCompletion(KernelSocketPayloadCompletionEvent),
+}
+
+impl KernelEvent {
+    #[cfg(any(feature = "perf-buffer", actrail_event_transport_perf))]
+    pub(super) fn observed_ktime_ns(&self) -> Option<u64> {
+        Some(match self {
+            Self::Observation(event) => event.observed_ktime_ns,
+            Self::FilePath(event) => event.observed_ktime_ns,
+            Self::TlsCaptureRequest(event) => event.observed_ktime_ns,
+            Self::TlsCompletion(event) => event.observed_ktime_ns,
+            Self::TlsDirectCapture(event) => event.observed_ktime_ns,
+            Self::TlsDiagnostic(event) => event.observed_ktime_ns,
+            Self::LaunchBindingFailure(_) => return None,
+            Self::StdioPayload(event) => event.observed_ktime_ns,
+            Self::StdioPayloadCompletion(event) => event.observed_ktime_ns,
+            Self::SocketPayload(event) => event.observed_ktime_ns,
+            Self::SocketPayloadCompletion(event) => event.observed_ktime_ns,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -180,6 +202,9 @@ pub fn decode_kernel_event(raw: &[u8]) -> Result<KernelEvent, LoaderError> {
     }
     if kind == STDIO_PAYLOAD_EVENT_KIND {
         return decode_stdio_payload_event(raw).map(KernelEvent::StdioPayload);
+    }
+    if kind == STDIO_PAYLOAD_COMPLETION_EVENT_KIND {
+        return decode_stdio_payload_completion_event(raw).map(KernelEvent::StdioPayloadCompletion);
     }
     if kind == SOCKET_PAYLOAD_EVENT_KIND {
         return decode_socket_payload_event(raw).map(KernelEvent::SocketPayload);

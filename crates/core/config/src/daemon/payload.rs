@@ -3,6 +3,12 @@
 use std::path::PathBuf;
 use std::str::FromStr;
 
+/// Maximum incomplete JSON-RPC message bytes retained per confirmed MCP stdio stream.
+pub const DEFAULT_MCP_PARSE_BUFFER_MAX_BYTES: u64 = 4_194_304;
+/// Maximum aggregate bytes retained while a stdio bundle is awaiting `tools/call`.
+pub const DEFAULT_MCP_STDIO_CANDIDATE_MAX_BYTES: u64 = 65_536;
+/// Maximum number of stdio bundles simultaneously awaiting MCP confirmation.
+pub const DEFAULT_MCP_PENDING_STDIO_CANDIDATE_MAX_ENTRIES: u32 = 1_024;
 pub const DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS: u64 = 30_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -349,9 +355,33 @@ pub struct PayloadSocketConfig {
     pub seccomp_syscalls: Vec<PayloadSocketSeccompSyscall>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PayloadMcpConfig {
+    /// Enables local stdio MCP semantic recognition.
+    pub enabled: bool,
+    /// Maximum incomplete framed message bytes retained per confirmed stream.
+    pub parse_buffer_max_bytes: u64,
+    /// Maximum aggregate bytes scanned before a stdio candidate is rejected.
+    pub stdio_candidate_max_bytes: u64,
+    /// Maximum number of stdio candidates scanned concurrently.
+    pub pending_stdio_candidate_max_entries: u32,
+}
+
+impl Default for PayloadMcpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            parse_buffer_max_bytes: DEFAULT_MCP_PARSE_BUFFER_MAX_BYTES,
+            stdio_candidate_max_bytes: DEFAULT_MCP_STDIO_CANDIDATE_MAX_BYTES,
+            pending_stdio_candidate_max_entries: DEFAULT_MCP_PENDING_STDIO_CANDIDATE_MAX_ENTRIES,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PayloadConfig {
     pub tls: PayloadTlsConfig,
     pub stdio: PayloadStdioConfig,
     pub socket: PayloadSocketConfig,
+    pub mcp: PayloadMcpConfig,
 }

@@ -4,7 +4,8 @@ use model_core::ids::TraceId;
 
 use crate::model::{
     FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
-    LlmRequestContentWrite, SemanticAction, SemanticActionLink, SemanticActionPage,
+    LlmRequestContentWrite, McpJsonRpcContentPage, McpJsonRpcContentWrite, SemanticAction,
+    SemanticActionLink, SemanticActionPage,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -47,6 +48,11 @@ pub trait SemanticActionWriteStore {
         &mut self,
         contents: &[LlmRequestContentWrite],
     ) -> Result<(), SemanticActionStoreError>;
+
+    fn upsert_mcp_jsonrpc_contents(
+        &mut self,
+        contents: &[McpJsonRpcContentWrite],
+    ) -> Result<(), SemanticActionStoreError>;
 }
 
 pub trait SemanticActionReadStore {
@@ -87,4 +93,11 @@ pub trait SemanticActionReadStore {
         action_id: &str,
         max_bytes: usize,
     ) -> Result<Option<LlmRequestContentPage>, SemanticActionStoreError>;
+
+    fn mcp_jsonrpc_content_page(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+        max_bytes: usize,
+    ) -> Result<Option<McpJsonRpcContentPage>, SemanticActionStoreError>;
 }

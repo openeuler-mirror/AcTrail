@@ -1,5 +1,9 @@
 use super::*;
 
+use crate::daemon::{
+    DEFAULT_MCP_PARSE_BUFFER_MAX_BYTES, DEFAULT_MCP_PENDING_STDIO_CANDIDATE_MAX_ENTRIES,
+    DEFAULT_MCP_STDIO_CANDIDATE_MAX_BYTES,
+};
 use payload_capability::DEFAULT_TLS_SYNC_FLOW_UNKNOWN_STREAM_BYTES;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -8,6 +12,7 @@ pub(super) struct PayloadDocument {
     pub tls: PayloadTlsDocument,
     pub stdio: PayloadStdioDocument,
     pub socket: PayloadSocketDocument,
+    pub mcp: PayloadMcpDocument,
 }
 
 impl Default for PayloadDocument {
@@ -16,6 +21,7 @@ impl Default for PayloadDocument {
             tls: PayloadTlsDocument::default(),
             stdio: PayloadStdioDocument::default(),
             socket: PayloadSocketDocument::default(),
+            mcp: PayloadMcpDocument::default(),
         }
     }
 }
@@ -26,11 +32,78 @@ impl PayloadDocument {
             tls: PayloadTlsDocument::from_config(&config.tls),
             stdio: PayloadStdioDocument::from_config(&config.stdio),
             socket: PayloadSocketDocument::from_config(&config.socket),
+            mcp: PayloadMcpDocument::from_config(&config.mcp),
         }
     }
 }
 
 impl PayloadDocument {}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct PayloadMcpDocument {
+    pub enabled: bool,
+    pub parse_buffer_max_bytes: u64,
+    pub stdio_candidate_max_bytes: u64,
+    pub pending_stdio_candidate_max_entries: u32,
+}
+
+impl Default for PayloadMcpDocument {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            parse_buffer_max_bytes: DEFAULT_MCP_PARSE_BUFFER_MAX_BYTES,
+            stdio_candidate_max_bytes: DEFAULT_MCP_STDIO_CANDIDATE_MAX_BYTES,
+            pending_stdio_candidate_max_entries: DEFAULT_MCP_PENDING_STDIO_CANDIDATE_MAX_ENTRIES,
+        }
+    }
+}
+
+impl PayloadMcpDocument {
+    pub(super) fn from_config(config: &PayloadMcpConfig) -> Self {
+        Self {
+            enabled: config.enabled,
+            parse_buffer_max_bytes: config.parse_buffer_max_bytes,
+            stdio_candidate_max_bytes: config.stdio_candidate_max_bytes,
+            pending_stdio_candidate_max_entries: config.pending_stdio_candidate_max_entries,
+        }
+    }
+
+    pub(super) fn to_config(&self) -> Result<PayloadMcpConfig, String> {
+        let parse_buffer_max_bytes = require_positive_u64(
+            "payload.mcp.parse_buffer_max_bytes",
+            self.parse_buffer_max_bytes,
+        )?;
+        let stdio_candidate_max_bytes = require_positive_u64(
+            "payload.mcp.stdio_candidate_max_bytes",
+            self.stdio_candidate_max_bytes,
+        )?;
+        usize::try_from(parse_buffer_max_bytes).map_err(|_| {
+            format!(
+                "payload.mcp.parse_buffer_max_bytes ({parse_buffer_max_bytes}) does not fit this platform"
+            )
+        })?;
+        usize::try_from(stdio_candidate_max_bytes).map_err(|_| {
+            format!(
+                "payload.mcp.stdio_candidate_max_bytes ({stdio_candidate_max_bytes}) does not fit this platform"
+            )
+        })?;
+        if stdio_candidate_max_bytes > parse_buffer_max_bytes {
+            return Err(format!(
+                "payload.mcp.stdio_candidate_max_bytes ({stdio_candidate_max_bytes}) must not exceed payload.mcp.parse_buffer_max_bytes ({parse_buffer_max_bytes})"
+            ));
+        }
+        Ok(PayloadMcpConfig {
+            enabled: self.enabled,
+            parse_buffer_max_bytes,
+            stdio_candidate_max_bytes,
+            pending_stdio_candidate_max_entries: require_positive_u32(
+                "payload.mcp.pending_stdio_candidate_max_entries",
+                self.pending_stdio_candidate_max_entries,
+            )?,
+        })
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
