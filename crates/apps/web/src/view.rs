@@ -22,6 +22,8 @@ mod projection_cache;
 mod runtime_config;
 #[path = "view/stats.rs"]
 mod stats;
+#[path = "view/time_attribution.rs"]
+mod time_attribution;
 #[path = "view/topology.rs"]
 mod topology;
 #[path = "view/traces.rs"]
@@ -40,6 +42,9 @@ use crate::json;
 pub(crate) use alerts::{AlertProjection, AlertProjectionError};
 pub(crate) use stats::{
     ExportView, LlmActivityQuery, LlmExportQuery, LlmRowsQuery, Rollup, TokenUsageStatsQuery,
+};
+pub(crate) use time_attribution::{
+    TimeAttributionDimension, TimeAttributionRangeQuery, TimeAttributionRowsQuery,
 };
 
 pub fn current_config_json(
@@ -114,6 +119,26 @@ pub fn llm_export_csv(
 ) -> Result<String, String> {
     let mut storage = open_storage(storage_config)?;
     stats::llm_export_csv(storage.as_mut(), query)
+}
+
+pub fn aggregate_time_attribution_json(
+    storage_config: &StorageConfig,
+    query: TimeAttributionRangeQuery,
+) -> Result<String, String> {
+    let mut storage = open_storage(storage_config)?;
+    time_attribution::aggregate_time_attribution_json(
+        storage_config.path(),
+        storage.as_mut(),
+        query,
+    )
+}
+
+pub fn time_attribution_rows_json(
+    storage_config: &StorageConfig,
+    query: TimeAttributionRowsQuery,
+) -> Result<String, String> {
+    let mut storage = open_storage(storage_config)?;
+    time_attribution::time_attribution_rows_json(storage_config.path(), storage.as_mut(), query)
 }
 
 pub fn parse_llm_explore_query(body: &str) -> Result<stats::LlmExploreQuery, String> {
@@ -237,6 +262,18 @@ pub fn trace_summary_json(storage_config: &StorageConfig, trace_id: u64) -> Resu
     Ok(output)
 }
 
+pub fn trace_time_attribution_json(
+    storage_config: &StorageConfig,
+    trace_id: u64,
+) -> Result<String, String> {
+    let mut storage = open_storage(storage_config)?;
+    time_attribution::trace_time_attribution_json(
+        storage_config.path(),
+        storage.as_mut(),
+        TraceId::new(trace_id),
+    )
+}
+
 pub fn trace_events_json(storage_config: &StorageConfig, trace_id: u64) -> Result<String, String> {
     let storage = open_storage(storage_config)?;
     let trace_id = TraceId::new(trace_id);
@@ -324,7 +361,9 @@ pub fn trace_diagnostics_json(
 }
 
 pub fn clear_cache_json() -> Result<String, String> {
-    Ok(projection_cache::clear_projection_cache_json())
+    let cleared = projection_cache::clear_projection_cache()
+        .saturating_add(time_attribution::clear_time_attribution_cache());
+    Ok(format!("{{\"cleared\":{cleared}}}"))
 }
 
 pub fn action_tree_json(storage_config: &StorageConfig, trace_id: u64) -> Result<String, String> {

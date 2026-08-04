@@ -164,6 +164,19 @@ export function findWaterfallNode(roots, id) {
   return null;
 }
 
+export function findWaterfallPath(roots, id) {
+  for (const node of roots) {
+    if (node.id === id) {
+      return [node];
+    }
+    const childPath = findWaterfallPath(node.children, id);
+    if (childPath.length) {
+      return [node, ...childPath];
+    }
+  }
+  return [];
+}
+
 // Time bounds (offset ms from capture start) covering a node and all of its
 // descendants. Live (unfinished) actions extend to the global span end.
 export function subtreeWindow(node, globalSpanMs) {

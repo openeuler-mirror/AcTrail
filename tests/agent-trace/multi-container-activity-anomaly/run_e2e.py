@@ -18,6 +18,9 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from common import require_web_time_attribution  # noqa: E402
+
 
 PLUGIN_ID = "actrail.activity-anomaly"
 PLUGIN_INSTANCES = (
@@ -92,6 +95,7 @@ def main() -> int:
     actraild = base.require_executable(bin_dir / "actraild")
     actrailctl = base.require_executable(bin_dir / "actrailctl")
     actrailviewer = base.require_executable(bin_dir / "actrailviewer")
+    actrailweb = base.require_executable(bin_dir / "actrailweb")
     tls_runtime = base.require_file(bin_dir / "libactrail_tls_payload_probe_sync.so")
     xiaoo = base.require_executable(base.resolve_path(args.xiaoo_bin, repo))
     operator_template = base.require_file(base.resolve_path(args.operator_template, repo))
@@ -279,6 +283,17 @@ def main() -> int:
             trace_id: base.load_trace_actions(actrailviewer, config, trace_id)
             for trace_id, _container_id in trace_rows_by_name.values()
         }
+        attribution_by_trace = {
+            trace_id: require_web_time_attribution(
+                actrailweb,
+                config,
+                trace_id,
+                args.ready_timeout_seconds,
+                0.25,
+                require_tool=True,
+            )
+            for trace_id, _container_id in trace_rows_by_name.values()
+        }
         verify_alerts(
             alert_rows,
             trace_rows_by_name,
@@ -311,6 +326,13 @@ def main() -> int:
                 f"container_id={container_id} "
                 f"trace=trace-{trace_id} "
                 f"definitions={','.join(sorted(EXPECTED_DEFINITIONS))}"
+            )
+            print(
+                "activity_anomaly_time_attribution "
+                f"trace=trace-{trace_id} "
+                f"model_nanos={attribution_by_trace[trace_id]['model_nanos']} "
+                f"agent_nanos={attribution_by_trace[trace_id]['agent_nanos']} "
+                f"tools={attribution_by_trace[trace_id]['named_tool_count']}"
             )
         print("multi-container real-agent activity anomaly E2E complete")
         succeeded = True

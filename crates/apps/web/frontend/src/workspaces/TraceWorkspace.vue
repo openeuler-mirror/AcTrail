@@ -37,6 +37,8 @@
         v-else
         :is="activeTabDefinition.component"
         v-bind="activeTabProps"
+        @open-attribution="openTimeAttribution"
+        @open-waterfall="openWaterfall"
       />
     </main>
 
@@ -58,6 +60,7 @@ import {
   readTracePayloads,
   readTraceProcesses,
   readTraceSummary,
+  readTraceTimeAttribution,
   readTraceTimeline,
 } from '../api';
 import TraceTabs from '../tabs/TraceTabs.vue';
@@ -97,11 +100,14 @@ const traceDetail = shallowRef(null);
 const actionTree = ref(emptyActionTree());
 const commands = shallowRef(emptyCommands());
 const waterfall = shallowRef(emptyWaterfall());
+const timeAttribution = shallowRef(null);
+const waterfallFocus = shallowRef(null);
 const error = ref('');
 const loading = ref(false);
 let activeTraceLoad = null;
 let activeCommandsLoad = null;
 let activeWaterfallLoad = null;
+let activeAttributionLoad = null;
 let activeTracePartLoad = null;
 
 const selectedTrace = computed(() =>
@@ -126,6 +132,13 @@ const activeTabProps = computed(() => {
   }
   if (activeTab.value === TAB_IDS.waterfall) {
     tabProps.waterfall = waterfall.value;
+    tabProps.focusInterval = waterfallFocus.value;
+    tabProps.attribution = timeAttribution.value;
+  }
+  if (activeTab.value === TAB_IDS.timeAttribution) {
+    tabProps.attribution = timeAttribution.value;
+    tabProps.initialDetail = waterfallFocus.value?.dimension ?? '';
+    tabProps.initialKey = waterfallFocus.value?.key ?? '';
   }
   return tabProps;
 });
@@ -178,6 +191,8 @@ watch(selectedTraceId, async (traceId) => {
     actionTree.value = emptyActionTree();
     commands.value = emptyCommands();
     waterfall.value = emptyWaterfall();
+    timeAttribution.value = null;
+    waterfallFocus.value = null;
     return;
   }
   await loadTrace(traceId);
@@ -212,6 +227,13 @@ watch(
     }
     if (target.tabId && tabs.some((tab) => tab.id === target.tabId)) {
       activeTab.value = target.tabId;
+    }
+    if (target.focus) {
+      waterfallFocus.value = {
+        ...target.focus,
+        traceId: target.traceId,
+        nonce: target.nonce ?? Date.now(),
+      };
     }
     if (!traceIdMatches(selectedTraceId.value, target.traceId)) {
       selectedTraceId.value = target.traceId;
@@ -262,6 +284,10 @@ async function loadTrace(traceId) {
   actionTree.value = emptyActionTree();
   commands.value = emptyCommands();
   waterfall.value = emptyWaterfall();
+  timeAttribution.value = null;
+  if (!traceIdMatches(waterfallFocus.value?.traceId, traceId)) {
+    waterfallFocus.value = null;
+  }
   loading.value = true;
   error.value = '';
 
@@ -305,6 +331,7 @@ async function ensureDataForActiveTab() {
     ensureTracePartForActiveTab(),
     ensureCommandsForActiveTab(),
     ensureWaterfallForActiveTab(),
+    ensureTimeAttributionForActiveTab(),
   ]);
 }
 
@@ -391,6 +418,52 @@ async function ensureWaterfallForActiveTab() {
       error.value = String(err.message ?? err);
     }
   }
+}
+
+async function ensureTimeAttributionForActiveTab() {
+  const traceId = selectedTraceId.value;
+  if (
+    !traceId
+    || (
+      activeTab.value !== TAB_IDS.timeAttribution
+      && activeTab.value !== TAB_IDS.waterfall
+    )
+  ) {
+    return;
+  }
+  if (timeAttribution.value?.trace && traceIdMatches(timeAttribution.value.trace.id, traceId)) {
+    return;
+  }
+  const token = Symbol();
+  activeAttributionLoad = token;
+  try {
+    const data = await readTraceTimeAttribution(traceId);
+    if (activeAttributionLoad === token && traceIdMatches(selectedTraceId.value, traceId)) {
+      timeAttribution.value = data;
+    }
+  } catch (err) {
+    if (activeAttributionLoad === token && traceIdMatches(selectedTraceId.value, traceId)) {
+      error.value = String(err.message ?? err);
+    }
+  }
+}
+
+async function openWaterfall(target) {
+  if (!target?.startNanos || !target?.endNanos) {
+    return;
+  }
+  waterfallFocus.value = {
+    ...target,
+    traceId: selectedTraceId.value,
+    nonce: Date.now(),
+  };
+  activeTab.value = TAB_IDS.waterfall;
+  await ensureWaterfallForActiveTab();
+}
+
+async function openTimeAttribution() {
+  activeTab.value = TAB_IDS.timeAttribution;
+  await ensureTimeAttributionForActiveTab();
 }
 
 function emptyActionTree(summary = null, rootData = null) {

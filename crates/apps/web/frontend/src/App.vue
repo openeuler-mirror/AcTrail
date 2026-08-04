@@ -269,6 +269,7 @@ function openTrace(target) {
   pendingTraceSelection.value = {
     traceId: target.traceId,
     tabId: target.tabId ?? TRACE_TAB_IDS.alerts,
+    focus: target.focus ?? null,
     nonce: Date.now(),
   };
   activeWorkspace.value = WORKSPACE_IDS.traces;

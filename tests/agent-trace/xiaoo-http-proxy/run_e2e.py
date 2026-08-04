@@ -30,6 +30,7 @@ from common import (  # noqa: E402
     require_otel_span,
     require_root,
     require_web_action_tree_projection,
+    require_web_time_attribution,
     required,
     start_daemon,
     stop_process,
@@ -62,23 +63,26 @@ def main() -> int:
     try:
         proxy, proxy_base_url = start_proxy(workload, repo)
         xiaoo_config = write_xiaoo_config(workload, repo, proxy_base_url)
-        clean_configured_paths(actrailctl, config)
+        if not args.preserve_existing:
+            clean_configured_paths(actrailctl, config)
         daemon = start_daemon(
             actraild,
             config,
             float(required(workload, "daemon_ready_timeout_seconds")),
         )
+        tool_commands = configured_tool_commands(workload)
+        tool_args = ["--tools", "bash"] if tool_commands else ["--no-tools"]
         trace_id, output = launch_and_parse_trace(
             actrailctl,
             config,
-            "agent-xiaoo-http-proxy",
+            args.trace_name,
             [
                 str(xiaoo_binary),
                 "--cli",
                 "run",
                 "--config",
                 str(xiaoo_config),
-                "--no-tools",
+                *tool_args,
                 "--max-turns",
                 required(workload, "max_turns"),
                 "--prompt",
@@ -127,6 +131,14 @@ def main() -> int:
             float(required(workload, "drain_sleep_seconds")),
             required_reachable_kinds=("llm.call", "llm.request", "llm.response", "http.message"),
         )
+        time_attribution = require_web_time_attribution(
+            actrailweb,
+            config,
+            trace_id,
+            float(required(workload, "daemon_ready_timeout_seconds")),
+            float(required(workload, "drain_sleep_seconds")),
+            require_tool=bool(tool_commands),
+        )
         otel = export_otel(
             actrailviewer,
             config,
@@ -135,6 +147,13 @@ def main() -> int:
         )
         request_span_count = require_otel_span(otel, "llm.request")
         response_span_count = require_otel_span(otel, "llm.response")
+        expected_llm_rounds = len(tool_commands) + 1
+        if min(request_span_count, response_span_count) < expected_llm_rounds:
+            raise RuntimeError(
+                "real tool task did not produce every tool-selection and final LLM round: "
+                f"expected={expected_llm_rounds} requests={request_span_count} "
+                f"responses={response_span_count}"
+            )
         require_plain_http_otel_exchange(otel, workload)
         emit_llm_otel_evidence(otel, int(required(workload, "evidence_text_max_chars")))
         print(f"xiaoo_http_proxy_trace_id={trace_id}")
@@ -143,6 +162,10 @@ def main() -> int:
         print(f"xiaoo_http_proxy_outbound_payload_segments={outbound_count}")
         print(f"xiaoo_http_proxy_inbound_payload_segments={inbound_count}")
         print(f"xiaoo_http_proxy_web_action_tree_reachable={web_tree['reachable_count']}")
+        print(
+            "xiaoo_http_proxy_model_side_nanos="
+            f"{time_attribution['model_nanos']}"
+        )
         print(f"xiaoo_http_proxy_llm_request_spans={request_span_count}")
         print(f"xiaoo_http_proxy_llm_response_spans={response_span_count}")
         print("xiaoO HTTP proxy agent trace e2e complete")
@@ -162,6 +185,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bin-dir", default=os.environ.get("ACTRAIL_BIN_DIR", "target/release"))
     parser.add_argument("--config", default=str(case_dir / "operator.conf"))
     parser.add_argument("--workload-config", default=str(case_dir / "workload.conf"))
+    parser.add_argument("--trace-name", default="agent-xiaoo-http-proxy")
+    parser.add_argument(
+        "--preserve-existing",
+        action="store_true",
+        help="append a new Trace without clearing existing evidence",
+    )
     return parser.parse_args()
 
 
@@ -198,6 +227,13 @@ def start_proxy(
         "--local-stream-reasoning-tokens",
         required(workload, "local_stream_reasoning_tokens"),
     ]
+    for tool_command in configured_tool_commands(workload):
+        command.extend(
+            [
+                "--local-tool-command",
+                tool_command,
+            ]
+        )
     process = subprocess.Popen(
         command,
         cwd=repo,
@@ -277,22 +313,23 @@ def require_plain_http_otel_exchange(document: dict, workload: dict[str, str]) -
     )
     if request is None:
         raise RuntimeError("OTEL export did not contain a Syscall/plain-HTTP llm.request span")
-    response = matching_otel_action(
-        document,
-        "llm.response",
-        "Syscall",
-        "",
-        "",
-    )
-    if response is None:
+    responses = [
+        span
+        for span in otel_spans(document)
+        if otel_attrs(span).get("actrail.action.kind") == "llm.response"
+        and otel_attrs(span).get("payload.source_boundary") == "Syscall"
+    ]
+    if not responses:
         raise RuntimeError("OTEL export did not contain a Syscall/plain-HTTP llm.response span")
-    response_attrs = otel_attrs(response)
     expected_reasoning_tokens = required(workload, "local_stream_reasoning_tokens")
-    if response_attrs.get("llm.response.reasoning_tokens") != expected_reasoning_tokens:
+    observed_reasoning_tokens = [
+        otel_attrs(response).get("llm.response.reasoning_tokens") for response in responses
+    ]
+    if expected_reasoning_tokens not in observed_reasoning_tokens:
         raise RuntimeError(
             "OTEL llm.response reasoning token mismatch: "
             f"expected {expected_reasoning_tokens}, "
-            f"found {response_attrs.get('llm.response.reasoning_tokens')}"
+            f"found {observed_reasoning_tokens}"
         )
 
 
@@ -340,6 +377,18 @@ def require_no_tls_payload_rows(payloads: str) -> None:
 
 def proxy_mode(workload: dict[str, str]) -> str:
     return workload.get("proxy_mode", "forward")
+
+
+def configured_tool_commands(workload: dict[str, str]) -> list[str]:
+    numbered = []
+    index = 1
+    while command := workload.get(f"local_tool_command_{index}"):
+        numbered.append(command)
+        index += 1
+    if numbered:
+        return numbered
+    command = workload.get("local_tool_command")
+    return [command] if command else []
 
 
 def resolve_xiaoo_binary(configured: str) -> Path:

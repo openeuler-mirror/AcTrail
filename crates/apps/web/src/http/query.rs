@@ -84,6 +84,44 @@ pub(super) fn parse_llm_rows_query(query: &str) -> Result<view::LlmRowsQuery, St
     })
 }
 
+pub(super) fn parse_time_attribution_range_query(
+    query: &str,
+) -> Result<view::TimeAttributionRangeQuery, String> {
+    let from_ms = required_query_u64(query, "from_ms")?;
+    let to_ms = required_query_u64(query, "to_ms")?;
+    if from_ms >= to_ms {
+        return Err("invalid time attribution range: from_ms must be less than to_ms".to_string());
+    }
+    Ok(view::TimeAttributionRangeQuery { from_ms, to_ms })
+}
+
+pub(super) fn parse_time_attribution_rows_query(
+    query: &str,
+) -> Result<view::TimeAttributionRowsQuery, String> {
+    let range = parse_time_attribution_range_query(query)?;
+    let offset = required_query_usize(query, "offset")?;
+    let limit = required_query_usize(query, "limit")?;
+    if limit == usize::default() {
+        return Err("invalid query parameter limit: value must be positive".to_string());
+    }
+    let dimension = optional_query_param(query, "dimension")?
+        .map(|raw| view::TimeAttributionDimension::parse(&raw))
+        .transpose()?;
+    let key = optional_query_param(query, "key")?;
+    if dimension.is_some() != key.is_some() {
+        return Err(
+            "time attribution rows require dimension and key together, or neither".to_string(),
+        );
+    }
+    Ok(view::TimeAttributionRowsQuery {
+        range,
+        offset,
+        limit,
+        dimension,
+        key,
+    })
+}
+
 pub(super) fn parse_llm_export_query(query: &str) -> Result<view::LlmExportQuery, String> {
     let from_ms = required_query_u64(query, "from_ms")?;
     let to_ms = required_query_u64(query, "to_ms")?;

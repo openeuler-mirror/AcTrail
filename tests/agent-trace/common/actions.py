@@ -191,6 +191,663 @@ def require_web_action_tree_projection(
         stop_web_process(process, timeout_seconds)
 
 
+def require_web_time_attribution(
+    actrailweb: Path,
+    config: Path | None,
+    trace_id: int,
+    timeout_seconds: float,
+    poll_interval_seconds: float,
+    *,
+    require_tool: bool = False,
+) -> dict[str, object]:
+    """Validate time attribution through the real Web API and captured Agent data."""
+    values = read_config(operator_config_path(config))
+    host = web_host(required(values, "web_listen_addr"))
+    port = reserve_local_port(host)
+    process = subprocess.Popen(
+        actrail_command(
+            actrailweb,
+            config,
+            "--addr",
+            host,
+            "--port",
+            str(port),
+        ),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    origin = f"http://{host}:{port}"
+    action_tree_url = f"{origin}/api/traces/{trace_id}/action-tree"
+    attribution_url = f"{origin}/api/traces/{trace_id}/time-attribution"
+    try:
+        wait_for_action_tree_root(
+            action_tree_url,
+            timeout_seconds,
+            poll_interval_seconds,
+        )
+        action_tree = fetch_action_tree_json(
+            action_tree_url,
+            "",
+            timeout_seconds,
+        )
+        attribution = wait_for_time_attribution(
+            attribution_url,
+            timeout_seconds,
+            poll_interval_seconds,
+        )
+        summary = validate_time_attribution(
+            attribution,
+            action_tree,
+            require_tool=require_tool,
+        )
+        validate_aggregate_time_attribution(
+            origin,
+            attribution,
+            timeout_seconds,
+        )
+        print(
+            "web_time_attribution "
+            f"trace={trace_id} "
+            f"total_nanos={summary['total_nanos']} "
+            f"agent_nanos={summary['agent_nanos']} "
+            f"model_nanos={summary['model_nanos']} "
+            f"unattributed_nanos={summary['unattributed_nanos']} "
+            f"segments={summary['segment_count']} "
+            f"tools={summary['named_tool_count']} "
+            f"commands={summary['actual_command_count']}",
+            flush=True,
+        )
+        return summary
+    except Exception as error:
+        output = collect_process_output(process)
+        raise RuntimeError(f"{error}\nactrailweb_output={output}") from error
+    finally:
+        stop_web_process(process, timeout_seconds)
+
+
+def wait_for_time_attribution(
+    url: str,
+    timeout_seconds: float,
+    poll_interval_seconds: float,
+) -> dict:
+    deadline = time.monotonic() + timeout_seconds
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            attribution = fetch_json_url(url, timeout_seconds)
+            if attribution.get("scope", {}).get("duration_nanos") is not None:
+                return attribution
+        except Exception as error:
+            last_error = error
+        sleep_seconds = min(
+            poll_interval_seconds,
+            max(deadline - time.monotonic(), 0),
+        )
+        if sleep_seconds > 0:
+            time.sleep(sleep_seconds)
+    raise RuntimeError(f"actrailweb time attribution was not ready: {last_error}")
+
+
+def validate_time_attribution(
+    attribution: dict,
+    action_tree: dict,
+    *,
+    require_tool: bool,
+) -> dict[str, object]:
+    if attribution.get("schema_version") != "time-attribution.v1":
+        raise RuntimeError("time attribution schema version is missing or unexpected")
+    if attribution.get("status") != "complete":
+        raise RuntimeError(
+            "terminal real-Agent Trace time attribution was not complete: "
+            f"{attribution.get('status')} issues={attribution.get('issues')}"
+        )
+    scope = attribution.get("scope", {})
+    scope_start = required_decimal(scope, "start_unix_nanos")
+    scope_end = required_decimal(scope, "end_unix_nanos")
+    total = required_decimal(scope, "duration_nanos")
+    if scope_end - scope_start != total or total <= 0:
+        raise RuntimeError("time attribution scope boundaries do not match its duration")
+
+    categories = keyed_rows(attribution.get("categories"), "time attribution categories")
+    expected_keys = {"agent_side", "model_side", "unattributed"}
+    if set(categories) != expected_keys:
+        raise RuntimeError(
+            f"time attribution categories mismatch: expected {expected_keys}, found {set(categories)}"
+        )
+    category_total = sum(required_decimal(row, "duration_nanos") for row in categories.values())
+    if category_total != total:
+        raise RuntimeError(
+            f"time attribution categories sum to {category_total}, expected {total}"
+        )
+    percentage_total = sum(int(row.get("percentage_bps", -1)) for row in categories.values())
+    if percentage_total != 10_000:
+        raise RuntimeError(
+            f"time attribution percentages sum to {percentage_total}, expected 10000 bps"
+        )
+    if required_decimal(categories["model_side"], "duration_nanos") <= 0:
+        raise RuntimeError("real-Agent Trace has no observable model-side time")
+
+    segments = attribution.get("segments")
+    if not isinstance(segments, list) or not segments:
+        raise RuntimeError("time attribution did not return exclusive segments")
+    segment_category_totals = {key: 0 for key in expected_keys}
+    cursor = scope_start
+    model_intervals: list[tuple[int, int]] = []
+    for segment in segments:
+        start = required_decimal(segment, "start_unix_nanos")
+        end = required_decimal(segment, "end_unix_nanos")
+        duration = required_decimal(segment, "duration_nanos")
+        category = segment.get("category")
+        if start != cursor:
+            raise RuntimeError(
+                f"time attribution segments are not contiguous at {cursor}: next={start}"
+            )
+        if end <= start or end - start != duration:
+            raise RuntimeError(f"invalid time attribution segment boundaries: {segment}")
+        if category not in segment_category_totals:
+            raise RuntimeError(f"unknown time attribution segment category: {category}")
+        segment_category_totals[category] += duration
+        if category == "model_side":
+            model_intervals.append((start, end))
+        cursor = end
+    if cursor != scope_end:
+        raise RuntimeError(
+            f"time attribution segments end at {cursor}, expected scope end {scope_end}"
+        )
+    for key, duration in segment_category_totals.items():
+        expected = required_decimal(categories[key], "duration_nanos")
+        if duration != expected:
+            raise RuntimeError(
+                f"segment total for {key} is {duration}, category reports {expected}"
+            )
+
+    model_breakdown_total = sum(
+        required_decimal(row, "duration_nanos")
+        for row in attribution.get("models", [])
+    )
+    if model_breakdown_total != segment_category_totals["model_side"]:
+        raise RuntimeError(
+            "model breakdown does not partition observable model-side time"
+        )
+    agent_breakdown_total = sum(
+        required_decimal(row, "duration_nanos")
+        for row in attribution.get("tools", [])
+    )
+    if agent_breakdown_total != segment_category_totals["agent_side"]:
+        raise RuntimeError("tool/local breakdown does not partition Agent-side time")
+
+    tool_scoped_total = sum(
+        required_decimal(segment, "duration_nanos")
+        for segment in segments
+        if segment.get("category") == "agent_side"
+        and segment.get("key") != "__orchestration__"
+    )
+    command_segments = attribution.get("command_segments")
+    if not isinstance(command_segments, list):
+        raise RuntimeError("time attribution command segments are missing")
+    command_segment_total = 0
+    previous_command_end = scope_start
+    for segment in command_segments:
+        start = required_decimal(segment, "start_unix_nanos")
+        end = required_decimal(segment, "end_unix_nanos")
+        duration = required_decimal(segment, "duration_nanos")
+        if start < previous_command_end or end <= start or end - start != duration:
+            raise RuntimeError(
+                f"command attribution overlaps or has invalid boundaries: {segment}"
+            )
+        if not segment.get("agent_tools"):
+            raise RuntimeError(
+                f"command attribution is missing its logical Agent Tool: {segment}"
+            )
+        command_segment_total += duration
+        previous_command_end = end
+    if command_segment_total != tool_scoped_total:
+        raise RuntimeError(
+            "command segments do not exclusively partition Agent Tool time: "
+            f"commands={command_segment_total} tools={tool_scoped_total}"
+        )
+    command_breakdown_total = sum(
+        required_decimal(row, "duration_nanos")
+        for row in attribution.get("commands", [])
+    )
+    if command_breakdown_total != command_segment_total:
+        raise RuntimeError(
+            "command breakdown does not match exclusive command segments"
+        )
+    validate_dominant_attribution_targets(
+        attribution.get("models", []),
+        [
+            segment
+            for segment in segments
+            if segment.get("category") == "model_side"
+        ],
+        "model",
+    )
+    validate_dominant_attribution_targets(
+        attribution.get("tools", []),
+        [
+            segment
+            for segment in segments
+            if segment.get("category") == "agent_side"
+        ],
+        "Agent Tool",
+    )
+    validate_dominant_attribution_targets(
+        attribution.get("commands", []),
+        command_segments,
+        "command",
+    )
+    bottleneck_counts = validate_time_attribution_bottlenecks(
+        attribution,
+        action_tree,
+        segments,
+        command_segments,
+        scope_start,
+        scope_end,
+    )
+
+    validate_round_partition(attribution.get("rounds"), scope_start, scope_end)
+    validate_llm_calls_covered(action_tree, model_intervals, scope_start, scope_end)
+
+    named_tools = [
+        row
+        for row in attribution.get("tools", [])
+        if row.get("key")
+        not in {
+            "__orchestration__",
+            "__unidentified_command__",
+            "__concurrent_tools__",
+        }
+        and required_decimal(row, "duration_nanos") > 0
+        and int(row.get("action_count", 0)) > 0
+    ]
+    if require_tool and not named_tools:
+        raise RuntimeError(
+            "real-Agent tool task did not expose a named Agent-side tool interval"
+        )
+    if require_tool and not command_segments:
+        raise RuntimeError(
+            "real-Agent tool task did not expose its command/tool-overhead partition"
+        )
+    actual_commands = [
+        row
+        for row in attribution.get("commands", [])
+        if row.get("kind") == "command"
+        and required_decimal(row, "duration_nanos") > 0
+    ]
+    action_ids = {
+        action.get("id")
+        for action in action_tree.get("actions", [])
+        if action.get("id")
+    }
+    for command in actual_commands:
+        target_ids = set(command.get("target", {}).get("action_ids", []))
+        if not target_ids.intersection(action_ids):
+            raise RuntimeError(
+                "actual command attribution target cannot be located in Waterfall: "
+                f"{command.get('key')}"
+            )
+
+    return {
+        "total_nanos": total,
+        "agent_nanos": segment_category_totals["agent_side"],
+        "model_nanos": segment_category_totals["model_side"],
+        "unattributed_nanos": segment_category_totals["unattributed"],
+        "segment_count": len(segments),
+        "named_tool_count": len(named_tools),
+        "actual_command_count": len(actual_commands),
+        "model_bottleneck_count": bottleneck_counts["model_requests"],
+        "command_bottleneck_count": bottleneck_counts["commands"],
+        "unattributed_bottleneck_count": bottleneck_counts["unattributed_gaps"],
+    }
+
+
+def validate_dominant_attribution_targets(
+    breakdown: object,
+    segments: list[dict],
+    label: str,
+) -> None:
+    if not isinstance(breakdown, list):
+        raise RuntimeError(f"{label} attribution breakdown is missing")
+    durations_by_key: dict[str, list[int]] = {}
+    for segment in segments:
+        key = segment.get("key")
+        if isinstance(key, str):
+            durations_by_key.setdefault(key, []).append(
+                required_decimal(segment, "duration_nanos")
+            )
+    for row in breakdown:
+        key = row.get("key")
+        durations = durations_by_key.get(key, [])
+        target = row.get("target")
+        if not durations or not isinstance(target, dict):
+            raise RuntimeError(f"{label} attribution target is missing for {key}")
+        target_duration = (
+            required_decimal(target, "end_unix_nanos")
+            - required_decimal(target, "start_unix_nanos")
+        )
+        if target_duration != max(durations):
+            raise RuntimeError(
+                f"{label} attribution target for {key} is not its longest interval: "
+                f"target={target_duration} longest={max(durations)}"
+            )
+
+
+def validate_time_attribution_bottlenecks(
+    attribution: dict,
+    action_tree: dict,
+    segments: list[dict],
+    command_segments: list[dict],
+    scope_start: int,
+    scope_end: int,
+) -> dict[str, int]:
+    bottlenecks = attribution.get("bottlenecks")
+    if not isinstance(bottlenecks, dict):
+        raise RuntimeError("time attribution bottleneck ranking is missing")
+    default_display_limit = int(bottlenecks.get("default_display_limit", 0))
+    if default_display_limit <= 0:
+        raise RuntimeError("time attribution bottleneck display limit is invalid")
+
+    known_action_ids = {
+        action.get("id")
+        for action in action_tree.get("actions", [])
+        if isinstance(action.get("id"), str)
+    }
+    model_spans = action_spans(
+        segment
+        for segment in segments
+        if segment.get("category") == "model_side"
+    )
+    command_spans = action_spans(
+        segment
+        for segment in command_segments
+        if segment.get("kind") in {"command", "concurrent_commands"}
+    )
+    unattributed_spans = [
+        (
+            required_decimal(segment, "start_unix_nanos"),
+            required_decimal(segment, "end_unix_nanos"),
+            (),
+        )
+        for segment in segments
+        if segment.get("category") == "unattributed"
+    ]
+    sources = {
+        "model_requests": [
+            (start, end, (action_id,))
+            for action_id, (start, end) in model_spans.items()
+        ],
+        "commands": [
+            (start, end, (action_id,))
+            for action_id, (start, end) in command_spans.items()
+        ],
+        "unattributed_gaps": unattributed_spans,
+    }
+    kinds = {
+        "model_requests": "model_request",
+        "commands": "command_occurrence",
+        "unattributed_gaps": "unattributed_gap",
+    }
+    counts: dict[str, int] = {}
+    for collection_name, expected_spans in sources.items():
+        collection = bottlenecks.get(collection_name)
+        if not isinstance(collection, dict):
+            raise RuntimeError(f"{collection_name} bottleneck collection is missing")
+        observed_count = int(collection.get("observed_count", -1))
+        if observed_count != len(expected_spans):
+            raise RuntimeError(
+                f"{collection_name} bottleneck count is {observed_count}, "
+                f"expected {len(expected_spans)}"
+            )
+        items = collection.get("items")
+        if not isinstance(items, list):
+            raise RuntimeError(f"{collection_name} bottleneck items are missing")
+        if len(items) != observed_count:
+            raise RuntimeError(
+                f"{collection_name} returned {len(items)} occurrences, "
+                f"expected all {observed_count} observed occurrences"
+            )
+        expected = sorted(
+            expected_spans,
+            key=lambda span: (-(span[1] - span[0]), span[0], span[2]),
+        )
+        actual: list[tuple[int, int, tuple[str, ...]]] = []
+        for item in items:
+            start = required_decimal(item, "start_unix_nanos")
+            end = required_decimal(item, "end_unix_nanos")
+            duration = required_decimal(item, "duration_nanos")
+            action_ids = tuple(item.get("action_ids", []))
+            if item.get("kind") != kinds[collection_name]:
+                raise RuntimeError(
+                    f"{collection_name} bottleneck kind is unexpected: {item}"
+                )
+            if start < scope_start or end > scope_end or end <= start or end - start != duration:
+                raise RuntimeError(
+                    f"{collection_name} bottleneck boundaries are invalid: {item}"
+                )
+            if collection_name != "unattributed_gaps" and (
+                len(action_ids) != 1 or action_ids[0] not in known_action_ids
+            ):
+                raise RuntimeError(
+                    f"{collection_name} bottleneck cannot be located in Waterfall: {item}"
+                )
+            if collection_name == "unattributed_gaps" and action_ids:
+                raise RuntimeError(
+                    f"unattributed bottleneck unexpectedly links an action: {item}"
+                )
+            actual.append((start, end, action_ids))
+        if actual != expected:
+            raise RuntimeError(
+                f"{collection_name} bottlenecks are not the longest source intervals: "
+                f"actual={actual} expected={expected}"
+            )
+        counts[collection_name] = len(items)
+    return counts
+
+
+def action_spans(segments: object) -> dict[str, tuple[int, int]]:
+    spans: dict[str, tuple[int, int]] = {}
+    for segment in segments:
+        start = required_decimal(segment, "start_unix_nanos")
+        end = required_decimal(segment, "end_unix_nanos")
+        for action_id in segment.get("action_ids", []):
+            if not isinstance(action_id, str):
+                continue
+            previous = spans.get(action_id)
+            spans[action_id] = (
+                min(previous[0], start) if previous else start,
+                max(previous[1], end) if previous else end,
+            )
+    return spans
+
+
+def validate_round_partition(rounds: object, scope_start: int, scope_end: int) -> None:
+    if not isinstance(rounds, list) or not rounds:
+        raise RuntimeError("time attribution did not return round attribution")
+    cursor = scope_start
+    for round_row in rounds:
+        start = required_decimal(round_row, "start_unix_nanos")
+        end = required_decimal(round_row, "end_unix_nanos")
+        duration = required_decimal(round_row, "duration_nanos")
+        if start != cursor or end <= start or end - start != duration:
+            raise RuntimeError(f"round attribution is not a valid partition: {round_row}")
+        category_total = sum(
+            required_decimal(row, "duration_nanos")
+            for row in round_row.get("categories", [])
+        )
+        if category_total != duration:
+            raise RuntimeError(
+                f"round categories sum to {category_total}, expected {duration}"
+            )
+        percentage_total = sum(
+            int(row.get("percentage_bps", -1))
+            for row in round_row.get("categories", [])
+        )
+        if percentage_total != 10_000:
+            raise RuntimeError(
+                f"round percentages sum to {percentage_total}, expected 10000 bps"
+            )
+        cursor = end
+    if cursor != scope_end:
+        raise RuntimeError(
+            f"round attribution ends at {cursor}, expected scope end {scope_end}"
+        )
+
+
+def validate_llm_calls_covered(
+    action_tree: dict,
+    model_intervals: list[tuple[int, int]],
+    scope_start: int,
+    scope_end: int,
+) -> None:
+    calls = [
+        action
+        for action in action_tree.get("actions", [])
+        if action.get("kind") == "llm.call"
+        and action.get("end_time_unix_nanos") is not None
+    ]
+    if not calls:
+        raise RuntimeError("real-Agent action tree has no completed llm.call")
+    for call in calls:
+        start = max(required_decimal(call, "start_time_unix_nanos"), scope_start)
+        end = min(required_decimal(call, "end_time_unix_nanos"), scope_end)
+        if start >= end:
+            continue
+        cursor = start
+        for model_start, model_end in model_intervals:
+            if model_end <= cursor:
+                continue
+            if model_start > cursor:
+                break
+            cursor = max(cursor, model_end)
+            if cursor >= end:
+                break
+        if cursor < end:
+            raise RuntimeError(
+                "observable model-side segments do not cover complete llm.call "
+                f"{call.get('id')}: uncovered [{cursor}, {end})"
+            )
+
+
+def validate_aggregate_time_attribution(
+    origin: str,
+    trace_attribution: dict,
+    timeout_seconds: float,
+) -> None:
+    scope = trace_attribution["scope"]
+    start_nanos = required_decimal(scope, "start_unix_nanos")
+    end_nanos = required_decimal(scope, "end_unix_nanos")
+    from_ms = start_nanos // 1_000_000
+    to_ms = (end_nanos + 999_999) // 1_000_000
+    query = urllib.parse.urlencode({"from_ms": from_ms, "to_ms": to_ms})
+    aggregate = fetch_json_url(
+        f"{origin}/api/stats/time-attribution/activity?{query}",
+        timeout_seconds,
+    )
+    total = required_decimal(aggregate, "total_duration_nanos")
+    categories = aggregate.get("categories", [])
+    if sum(required_decimal(row, "duration_nanos") for row in categories) != total:
+        raise RuntimeError("aggregate time attribution categories do not sum to total")
+    if total > 0 and sum(int(row.get("percentage_bps", -1)) for row in categories) != 10_000:
+        raise RuntimeError("aggregate time attribution percentages do not sum to 10000 bps")
+    if int(aggregate.get("coverage", {}).get("trace_count", 0)) < 1:
+        raise RuntimeError("aggregate time attribution did not include the real-Agent Trace")
+    aggregate_agent = next(
+        (
+            required_decimal(row, "duration_nanos")
+            for row in categories
+            if row.get("key") == "agent_side"
+        ),
+        0,
+    )
+    aggregate_commands = sum(
+        required_decimal(row, "duration_nanos")
+        for row in aggregate.get("commands", [])
+    )
+    if aggregate_commands > aggregate_agent:
+        raise RuntimeError("aggregate command time exceeds aggregate Agent-side time")
+
+    rows_query = urllib.parse.urlencode(
+        {
+            "from_ms": from_ms,
+            "to_ms": to_ms,
+            "offset": 0,
+            "limit": 50,
+            "dimension": "category",
+            "key": "model_side",
+        }
+    )
+    rows = fetch_json_url(
+        f"{origin}/api/stats/time-attribution/rows?{rows_query}",
+        timeout_seconds,
+    )
+    trace_id = trace_attribution.get("trace", {}).get("id")
+    matching = [
+        row
+        for row in rows.get("rows", [])
+        if row.get("trace", {}).get("id") == trace_id
+    ]
+    if not matching or not matching[0].get("target"):
+        raise RuntimeError(
+            "aggregate model-side drill-down did not return the real Trace interval"
+        )
+
+    command_rows = trace_attribution.get("commands", [])
+    if command_rows:
+        command = next(
+            (row for row in command_rows if row.get("kind") == "command"),
+            command_rows[0],
+        )
+        command_query = urllib.parse.urlencode(
+            {
+                "from_ms": from_ms,
+                "to_ms": to_ms,
+                "offset": 0,
+                "limit": 50,
+                "dimension": "command",
+                "key": command.get("key"),
+            }
+        )
+        command_drilldown = fetch_json_url(
+            f"{origin}/api/stats/time-attribution/rows?{command_query}",
+            timeout_seconds,
+        )
+        command_matching = [
+            row
+            for row in command_drilldown.get("rows", [])
+            if row.get("trace", {}).get("id") == trace_id
+        ]
+        if not command_matching or not command_matching[0].get("target"):
+            raise RuntimeError(
+                "aggregate command drill-down did not return the real Trace interval"
+            )
+
+
+def keyed_rows(rows: object, label: str) -> dict[str, dict]:
+    if not isinstance(rows, list):
+        raise RuntimeError(f"{label} are missing")
+    output = {}
+    for row in rows:
+        key = row.get("key")
+        if not isinstance(key, str):
+            raise RuntimeError(f"{label} contain a row without a string key")
+        output[key] = row
+    return output
+
+
+def required_decimal(row: dict, key: str) -> int:
+    raw = row.get(key)
+    if not isinstance(raw, str) or not raw.isdecimal():
+        raise RuntimeError(f"{key} is not a decimal string: {raw!r}")
+    return int(raw)
+
+
+def fetch_json_url(url: str, timeout_seconds: float) -> dict:
+    with urllib.request.urlopen(url, timeout=timeout_seconds) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
 def read_web_action_tree_projection(
     base_url: str,
     timeout_seconds: float,

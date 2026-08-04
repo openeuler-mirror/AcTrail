@@ -113,6 +113,31 @@ export function readLlmRequestRows({ fromMs, toMs, offset = 0, limit = 50, signa
   );
 }
 
+export function readTimeAttributionActivity({ fromMs, toMs, signal } = {}) {
+  return fetchJson(
+    `/api/stats/time-attribution/activity?from_ms=${fromMs}&to_ms=${toMs}`,
+    { signal },
+  );
+}
+
+export function readTimeAttributionRows({
+  fromMs,
+  toMs,
+  offset = 0,
+  limit = 50,
+  dimension = null,
+  key = null,
+  signal,
+} = {}) {
+  const filter = dimension && key !== null
+    ? `&dimension=${encodeURIComponent(dimension)}&key=${encodeURIComponent(key)}`
+    : '';
+  return fetchJson(
+    `/api/stats/time-attribution/rows?from_ms=${fromMs}&to_ms=${toMs}&offset=${offset}&limit=${limit}${filter}`,
+    { signal },
+  );
+}
+
 export function runLlmRequestsExplore(query, { signal } = {}) {
   return fetchJson('/api/stats/llm-requests/explore', {
     method: 'POST',
@@ -136,6 +161,10 @@ export async function readLlmRequestsCsv({ fromMs, toMs, view = 'rows', signal }
 
 export function readTraceSummary(traceId) {
   return fetchJson(`/api/traces/${traceId}/summary`);
+}
+
+export function readTraceTimeAttribution(traceId) {
+  return fetchJson(`/api/traces/${traceId}/time-attribution`);
 }
 
 export function readTraceEvents(traceId) {
