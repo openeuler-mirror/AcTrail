@@ -2,28 +2,41 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "required": [
-    "path",
-    "overwrite_enabled",
+    "exporter",
     "queue_capacity",
-    "flush_every_spans",
+    "file",
     "action_kinds"
   ],
   "additionalProperties": false,
   "properties": {
-    "path": {
-      "type": "string",
-      "minLength": 1
-    },
-    "overwrite_enabled": {
-      "type": "boolean"
+    "exporter": {
+      "const": "file"
     },
     "queue_capacity": {
       "type": "integer",
       "minimum": 1
     },
-    "flush_every_spans": {
-      "type": "integer",
-      "minimum": 1
+    "file": {
+      "type": "object",
+      "required": [
+        "path",
+        "overwrite_enabled",
+        "flush_every_spans"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "overwrite_enabled": {
+          "type": "boolean"
+        },
+        "flush_every_spans": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
     },
     "action_kinds": {
       "type": "object",

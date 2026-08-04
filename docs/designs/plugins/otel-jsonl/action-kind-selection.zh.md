@@ -6,9 +6,9 @@
 
 ## 1. 背景
 
-`otel-jsonl` 是 AcTrail 内置的 observation consumer。当前 live exporter 收到
-semantic action batch 后，会遍历 batch 中的 action，并在没有 action kind 配置
-过滤的情况下逐条发布到异步 JSONL route。recording export 层会在上游排除
+`otel-jsonl` 是 AcTrail 内置的 observation consumer。live exporter 收到 semantic
+action batch 后，会遍历 batch 中的 action，应用 action kind 配置后逐条发布到
+异步 exporter route。recording export 层会在上游排除
 `file.tty_io`，避免超高频 TTY 刷新进入 observation consumer 和 exporter；
 OTLP codec 还会跳过已经失效的 action。除此之外，`file.read`、
 `file.write`、`http.message`、`sse.event` 等高频 semantic action 都会进入 live
@@ -59,7 +59,7 @@ AcTrail 尚未达到 `v1.0`。本设计不保留旧版 `otel-jsonl` 配置兼容
 - action status、completeness、attribute 或路径级过滤。
 - 同一 `action_id` 的 `in_progress`、terminal 或重复更新抑制。
 - sampling、速率限制或基于 trace 的概率选择。
-- OTLP/HTTP transport 或 collector 推送。
+- exporter 端协议之外的 collector 发现、服务端实现或配置分发。
 - raw eBPF event、payload bytes 或 diagnostic event 的导出策略。
 - 对 `v1.0` 之前旧插件配置的自动迁移或兼容解析。
 - `actrailviewer export-otel` 的离线 action kind 筛选。
@@ -79,12 +79,16 @@ AcTrail 尚未达到 `v1.0`。本设计不保留旧版 `otel-jsonl` 配置兼容
 
 ## 5. 配置协议
 
-插件配置必须包含顶层 `[action_kinds]` table：
+插件配置必须包含顶层 exporter 选择和 `[action_kinds]` table。文件 exporter
+示例：
 
 ```toml
+exporter = "file"
+queue_capacity = 1024
+
+[file]
 path = "/var/lib/actrail/export/live-spans.otlp.jsonl"
 overwrite_enabled = true
-queue_capacity = 1024
 flush_every_spans = 1
 
 [action_kinds]
@@ -213,6 +217,9 @@ Web 前端必须将 `action_kinds` 中的 boolean action kind 显示为可勾选
 并将勾选结果按同一个 `{ string -> bool }` 协议提交。禁止要求用户通过自由文本
 编辑 action kind map，也禁止为 Web 单独定义另一套筛选协议。
 
+`exporter` 必须显示为枚举选择；Web 按 schema 的 `if/then/else` 只显示当前
+exporter 的配置对象，但不得删除隐藏分支中尚未提交的草稿值。
+
 ## 6. 过滤位置
 
 live exporter 必须在 `OtelJsonlObservationConsumer::consume()` 中、调用
@@ -226,11 +233,11 @@ ObservationBatch
       └── true：构造 export record
                   → async queue
                   → OTLP codec
-                  → JSONL sink
+                  → selected exporter sink
 ```
 
 禁止只在 OTLP codec 中过滤，因为此时 action 已经占用 exporter 队列。禁止写入
-不含 span 的空 OTLP JSONL document 代表一次过滤。
+不含 span 的空 OTLP JSON document 代表一次过滤。
 
 选择策略只决定 action kind 是否进入 exporter。action 失效校验属于数据完整性
 约束，不属于用户可配置 kind 过滤，可以继续独立拒绝无效 action。
@@ -295,7 +302,7 @@ load。旧 `[export.runtime]` 静态 OTEL JSONL route 不保留为兼容入口�
 
 - 不读取 `otel-jsonl` plugin config；
 - 不要求存在 `[action_kinds]`；
-- 不创建 exporter route、异步队列或输出文件。
+- 不创建 exporter route、异步队列或输出目标。
 
 `action_kinds` 必填是“加载 `otel-jsonl` 插件”的前置条件，不是 daemon operator
 配置的全局要求。
@@ -314,20 +321,20 @@ schema 中的 action kind property 集合必须与允许进入 OTEL exporter 的
 2. JSON Schema properties；
 3. 官方默认配置；
 4. 本文中的完整配置示例；
-5. `tests/v2/regression/plugins/otel-jsonl/` 中相应的代表性端到端场景。
+5. `tests/v2/regression/otel_jsonl_action_filter/` 中相应的代表性端到端场景。
 
-`tests/v2/regression/plugins/otel-jsonl/` 必须验证代表性 action kind 组合、Web API
-配置更新和实际 OTEL JSONL 输出。测试不要求枚举与 schema 的逐项相等检查、
+`tests/v2/regression/otel_jsonl_action_filter/` 必须验证代表性 action kind 组合、
+Web API 配置更新和 file/JSON-RPC 实际输出。测试不要求枚举与 schema 的逐项相等检查、
 boolean 或 kind 组合穷举，也不要求为现有通用 Web checkbox 建立独立测试框架。
 
 ## 12. 可观测性
 
 `observed_records` 表示 observation consumer 收到的 action 数，不应被重新解释为
-最终写出的 span 数。`dropped_records` 继续表示进入 route 后因队列或写入错误丢失
+最终交付的 span 数。`dropped_records` 继续表示进入 route 后因队列或交付错误丢失
 的 action 数。被 selection 正常过滤的 action 不是 delivery drop。
 
 本次不为 action kind selection 扩展公共插件状态字段。实际导出集合由现有 v2
-regression 读取 OTEL JSONL 验证。
+regression 读取所选 exporter 输出验证。
 
 ## 13. 验收标准
 
@@ -339,10 +346,10 @@ regression 读取 OTEL JSONL 验证。
 6. 官方默认配置显式列出当前全部可导出 canonical action kind，且不列出
    `file.tty_io`。
 7. recording 层现有 TTY 过滤保持不变，TTY 不进入 observation consumer。
-8. 全部 kind 关闭时输出文件保持为空，不写入空 span document。
+8. 全部 kind 关闭时 exporter 不收到空 span document。
 9. 过滤发生在 exporter queue 前，filtered action 不占用 route queue capacity。
 10. `default = false` 时新增但未显式配置的可导出 kind 不会自动导出。
 11. Web/API 能够读取、校验和提交 schema 声明的 action kind。
-12. `tests/v2/regression/plugins/otel-jsonl/` 的现有代表性组合验证实际 OTEL JSONL
-    只包含启用的 kind。
+12. `tests/v2/regression/otel_jsonl_action_filter/` 的代表性组合验证 file 与
+    JSON-RPC 输出都只包含启用的 kind。
 13. 插件未加载时不要求 `action_kinds`，也不启动 exporter。

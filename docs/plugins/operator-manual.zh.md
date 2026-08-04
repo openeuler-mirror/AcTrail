@@ -318,9 +318,9 @@ Plugins 工作区的刷新按钮每次都重新扫描目录，因此新复制的
 
 Web 加载对话框自动列出不需要参数的 manifest capability，并以只读方式展示；`env-read`、`file-policy.rules.apply` 等参数化权限必须由管理员填写具体变量名、规则类型或绝对路径范围。Web 后端先把结构化配置转换为 grant，daemon 再执行最终校验。没有可用 grant 格式的 capability 会明确阻止加载。daemon 的插件管理 socket 仍要求 host-root peer，因此使用 Web 加载/卸载时，`actrailweb` 必须以能通过该校验的本机管理员身份运行；不要把这个管理入口暴露到不受信任网络。
 
-release 安装脚本把四个官方插件包放到 `${ACTRAIL_PLUGIN_DIR:-$HOME/.actrail/plugins}`：`otel-jsonl/` 提供内置实时 OTLP JSONL 导出，`file-leakage/` 用于 trace 结束后的文件泄漏检测，`activity-anomaly/` 实时上报 LLM 增长和运行中已超过阈值的 Agent 顶层长命令（终态分析兜底），`file-policy-dynamic/` 用于动态管理 allow、deny 和 gray 文件规则。`ACTRAIL_PLUGIN_DIR` 必须是绝对路径，并应与实际运行 `actrailweb` 的 `plugins.discovery.directory` 解析结果一致。复制完成后这些插件都仍是未加载候选；打开 Web 并刷新后才能看到它们。
+release 安装脚本把四个官方插件包放到 `${ACTRAIL_PLUGIN_DIR:-$HOME/.actrail/plugins}`：`otel-jsonl/` 提供可选择 JSONL 文件或 JSON-RPC HTTP(S) 的实时 OTLP JSON 导出，`file-leakage/` 用于 trace 结束后的文件泄漏检测，`activity-anomaly/` 实时上报 LLM 增长和运行中已超过阈值的 Agent 顶层长命令（终态分析兜底），`file-policy-dynamic/` 用于动态管理 allow、deny 和 gray 文件规则。`ACTRAIL_PLUGIN_DIR` 必须是绝对路径，并应与实际运行 `actrailweb` 的 `plugins.discovery.directory` 解析结果一致。复制完成后这些插件都仍是未加载候选；打开 Web 并刷新后才能看到它们。
 
-`otel-jsonl` 的执行代码编译在 `actraild` 中，安装目录里的包只提供发现和加载所需的 manifest、默认配置与 schema。它出现在候选列表并不表示已经开始导出；点击 **Configure & load** 或通过 CLI/startup 清单加载后才会创建输出文件。
+`otel-jsonl` 的执行代码编译在 `actraild` 中，安装目录里的包只提供发现和加载所需的 manifest、默认配置与 schema。它出现在候选列表并不表示已经开始导出；点击 **Configure & load** 或通过 CLI/startup 清单加载后才会创建所选 exporter。
 
 `file-policy-dynamic` 需要为 `file-policy.rules.apply` 指定可写规则类型和路径范围。在 Plugins 页面点击该候选的 **Configure & load**，填写实例 ID，添加一个或多个绝对路径，并为每个路径选择 allow、deny、gray 中允许写入的规则类型。加载成功后，实例详情中的 **Plugin command** 可以直接发送规则管理命令。
 
@@ -374,7 +374,7 @@ host_grants = ["context-query", "file-access.current-match-get"]
 实时观测导出只通过插件生命周期启用。使用 `[plugins.startup]` 或运行后执行
 `actraild plugin load` 加载 `otel-jsonl`；`[export.runtime]` 不再是受支持的兼容
 入口。插件未加载时，daemon 不读取其业务配置，也不会创建 exporter 队列或输出
-文件。
+目标。
 
 ## 插件自己的配置
 
@@ -465,7 +465,8 @@ last_error=none
 
 ## 场景一：动态加载 OTEL JSONL 观测插件
 
-这个场景用于把观测数据输出为 JSONL 文件，同时通过插件生命周期管理，而不是只依赖启动时的 exporter 配置。
+这个场景用于通过插件生命周期把观测数据输出到 JSONL 文件或 JSON-RPC 2.0
+HTTP(S) 端点。
 
 执行 release 安装后，先在 Web 的 **Plugins** 工作区点击 **Refresh**。`otel-jsonl` 会出现在 **Plugin candidates**；选择 **Configure & load** 并填写实例 ID 即可启用。默认配置写入 `/var/lib/actrail/export/live-spans.otlp.jsonl`，可在加载前编辑安装包中的 `otel-jsonl.config.toml`。
 
@@ -490,9 +491,12 @@ required = true
 插件配置示例：
 
 ```toml
+exporter = "file"
+queue_capacity = 128
+
+[file]
 path = "/tmp/actrail/live-spans.otlp.jsonl"
 overwrite_enabled = true
-queue_capacity = 128
 flush_every_spans = 1
 
 [action_kinds]
@@ -511,6 +515,12 @@ default = false
 
 未显式列出的可导出 kind 服从 `default`。`file.tty_io` 在 recording 层被上游过滤，
 不是可配置的 action kind。
+
+加载后可在 Web 的 **Configuration** 中切换 **Exporter**。选择
+`json_rpc_http` 时，配置 `endpoint`、`method`、连接/请求 timeout、响应体上限和
+有界重试参数。Web 更新只影响当前运行实例；daemon 重启后重新读取插件包中的
+配置文件。完整字段与 JSON-RPC 响应约束见
+[OTEL exporter 选择协议](../designs/plugins/otel-jsonl/exporter-selection.zh.md)。
 
 加载插件：
 

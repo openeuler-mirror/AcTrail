@@ -25,7 +25,7 @@
 
 | 示例分类 | 内容 |
 | --- | --- |
-| `builtin/` | 内置插件示例，例如 OTEL JSONL 观测消费者。 |
+| `builtin/` | 内置插件示例，例如可选择文件或 JSON-RPC HTTP(S) 的 OTLP JSON 观测消费者。 |
 | `wasm-legacy/` | WASM core module 示例，适合阅读底层内存 ABI 和 `.wat` 写法。 |
 | `wit-component/` | WIT component 示例，适合正式插件开发和 Rust component 插件参考。 |
 

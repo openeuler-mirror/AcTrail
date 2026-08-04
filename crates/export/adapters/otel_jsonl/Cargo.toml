@@ -8,4 +8,6 @@ license = "MulanPSL-2.0"
 export_core = { path = "../../core" }
 export_otel_codec = { path = "../otel_codec" }
 plugin_system = { path = "../../../core/plugin_system" }
+serde_json = "1"
 toml = "0.8"
+ureq = { version = "3.3", default-features = false, features = ["rustls"] }

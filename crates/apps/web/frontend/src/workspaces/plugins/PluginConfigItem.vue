@@ -163,11 +163,41 @@ const objectEntries = computed(() => {
   const inheritedBoolean = typeof value.default === 'boolean'
     ? value.default
     : properties.default?.default;
+  let activeConditionalProperties = {};
+  let activeConditionalRequired = [];
+  let hiddenConditionalKeys = new Set();
+  const condition = props.schema.if;
+  const discriminatorKeys = Array.isArray(condition?.required) ? condition.required : [];
+  if (discriminatorKeys.length === 1) {
+    const discriminator = discriminatorKeys[0];
+    const conditionSchema = condition?.properties?.[discriminator];
+    if (conditionSchema
+      && Object.prototype.hasOwnProperty.call(conditionSchema, 'const')
+      && isObject(props.schema.then)
+      && isObject(props.schema.else)) {
+      const discriminatorValue = Object.prototype.hasOwnProperty.call(value, discriminator)
+        ? value[discriminator]
+        : properties[discriminator]?.default;
+      const conditionMatches = Object.is(discriminatorValue, conditionSchema.const);
+      const activeBranch = conditionMatches ? props.schema.then : props.schema.else;
+      const inactiveBranch = conditionMatches ? props.schema.else : props.schema.then;
+      activeConditionalProperties = activeBranch.properties ?? {};
+      activeConditionalRequired = Array.isArray(activeBranch.required) ? activeBranch.required : [];
+      const activeKeys = new Set(Object.keys(activeConditionalProperties));
+      hiddenConditionalKeys = new Set(
+        Object.keys(inactiveBranch.properties ?? {}).filter((key) => !activeKeys.has(key)),
+      );
+    }
+  }
   return Object.keys(properties)
+    .filter((key) => !hiddenConditionalKeys.has(key))
     .map((key, index) => ({
       key,
       index,
-      schema: properties[key] ?? {},
+      schema: {
+        ...(properties[key] ?? {}),
+        ...(activeConditionalProperties[key] ?? {}),
+      },
       value: Object.prototype.hasOwnProperty.call(value, key)
         ? value[key]
         : key !== 'default'
@@ -175,7 +205,8 @@ const objectEntries = computed(() => {
           && typeof inheritedBoolean === 'boolean'
           ? inheritedBoolean
           : undefined,
-      required: Array.isArray(props.schema.required) && props.schema.required.includes(key),
+      required: (Array.isArray(props.schema.required) && props.schema.required.includes(key))
+        || activeConditionalRequired.includes(key),
     }))
     .sort((left, right) => Number(left.schema.readOnly === true) - Number(right.schema.readOnly === true)
       || Number(right.required) - Number(left.required)

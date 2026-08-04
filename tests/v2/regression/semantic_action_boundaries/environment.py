@@ -65,8 +65,14 @@ class SemanticActionBoundariesEnvironment(PluginTestEnvironment):
         action_kinds["default"] = False
         for key in observed_kinds:
             action_kinds[key] = True
-        candidate["path"] = str(self.export_path)
-        candidate["overwrite_enabled"] = True
+        candidate["exporter"] = "file"
+        file_config = candidate.get("file")
+        if not isinstance(file_config, dict):
+            raise AssertionError(
+                "OTEL observation config has no file exporter object"
+            )
+        file_config["path"] = str(self.export_path)
+        file_config["overwrite_enabled"] = True
 
         returned = self.update_config(copy.deepcopy(candidate))
         if returned.get("action_kinds") != action_kinds:
@@ -74,10 +80,14 @@ class SemanticActionBoundariesEnvironment(PluginTestEnvironment):
                 "OTEL observation config returned action_kinds="
                 f"{returned.get('action_kinds')!r}, expected {action_kinds!r}"
             )
-        if returned.get("path") != str(self.export_path):
+        returned_file = returned.get("file")
+        if (
+            not isinstance(returned_file, dict)
+            or returned_file.get("path") != str(self.export_path)
+        ):
             raise AssertionError(
                 "OTEL observation path escaped case directory: "
-                f"{returned.get('path')!r}"
+                f"{returned_file!r}"
             )
         return returned
 
