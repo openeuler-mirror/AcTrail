@@ -221,7 +221,7 @@ impl LiveLlmProjector {
     }
 
     pub(super) fn observe_http_message(&mut self, action: &SemanticAction) -> Vec<SemanticAction> {
-        if !http::error_response(action) {
+        if !http::terminal_failure_response(action) {
             return Vec::new();
         }
         let Some((request, call)) = self.take_open_request_for_http_response(action) else {

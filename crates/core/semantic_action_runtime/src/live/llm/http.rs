@@ -7,23 +7,72 @@ use semantic_action::{
 
 const DIRECTION_ATTR: &str = "direction";
 const DIRECTION_INBOUND: &str = "inbound";
+const CONTENT_TYPE_ATTR: &str = "content_type";
 const HTTP_REQUEST_STREAM_ID_ATTR: &str = attrs::http_request::STREAM_ID;
 const PAYLOAD_SEQUENCE_ATTR: &str = attrs::payload::SEQUENCE;
 const PAYLOAD_STREAM_KEY_ATTR: &str = attrs::payload::STREAM_KEY;
 const STATUS_CODE_ATTR: &str = "status_code";
 const STREAM_KEY_ATTR: &str = "stream_key";
 const HTTP_MESSAGE_STREAM_ID_ATTR: &str = "stream_id";
+const HTTP_SUCCESS_MIN: u16 = 200;
+const HTTP_SUCCESS_MAX: u16 = 299;
 const HTTP_CLIENT_ERROR_MIN: u16 = 400;
 const HTTP_SERVER_ERROR_MAX: u16 = 599;
+
+enum HttpResponseFailure {
+    ErrorStatus,
+    UnexpectedHtml,
+}
+
+impl HttpResponseFailure {
+    fn classify(action: &SemanticAction) -> Option<Self> {
+        if action.kind != SemanticActionKind::HttpMessage
+            || action.attributes.get(DIRECTION_ATTR).map(String::as_str) != Some(DIRECTION_INBOUND)
+        {
+            return None;
+        }
+        let status = action
+            .attributes
+            .get(STATUS_CODE_ATTR)?
+            .parse::<u16>()
+            .ok()?;
+        if (HTTP_CLIENT_ERROR_MIN..=HTTP_SERVER_ERROR_MAX).contains(&status) {
+            return Some(Self::ErrorStatus);
+        }
+        let media_type = action
+            .attributes
+            .get(CONTENT_TYPE_ATTR)?
+            .split(';')
+            .next()?
+            .trim();
+        ((HTTP_SUCCESS_MIN..=HTTP_SUCCESS_MAX).contains(&status)
+            && media_type.eq_ignore_ascii_case("text/html"))
+        .then_some(Self::UnexpectedHtml)
+    }
+
+    fn body_format(&self) -> &'static str {
+        match self {
+            Self::ErrorStatus => "http_error",
+            Self::UnexpectedHtml => "unexpected_html",
+        }
+    }
+
+    fn title(&self, status: &str) -> String {
+        match self {
+            Self::ErrorStatus => format!("LLM response HTTP {status}"),
+            Self::UnexpectedHtml => {
+                format!("LLM response HTTP {status} unexpected text/html")
+            }
+        }
+    }
+}
 
 pub(super) fn failed_response_for_open_request(
     http_response: &SemanticAction,
     request: &SemanticAction,
     call: &SemanticAction,
 ) -> Option<SemanticAction> {
-    if !error_response(http_response) {
-        return None;
-    }
+    let failure = HttpResponseFailure::classify(http_response)?;
     let response_sequence = http_payload_sequence(http_response)?;
     if !request_matches_http_response(request, http_response, response_sequence) {
         return None;
@@ -45,7 +94,7 @@ pub(super) fn failed_response_for_open_request(
     );
     attributes.insert(
         attrs::llm_response::BODY_FORMAT.to_string(),
-        "http_error".to_string(),
+        failure.body_format().to_string(),
     );
     if let Some(content_length) = http_response.attributes.get("content_length") {
         attributes.insert(
@@ -137,7 +186,7 @@ pub(super) fn failed_response_for_open_request(
         action_id: failed_response_action_id(http_response),
         trace_id: http_response.trace_id,
         kind: SemanticActionKind::LlmResponse,
-        title: format!("LLM response HTTP {status}"),
+        title: failure.title(&status),
         start_time: http_response.start_time,
         end_time: http_response.end_time.or(Some(http_response.start_time)),
         process: http_response.process.clone(),
@@ -179,14 +228,8 @@ fn http_stream_ids_match(request: &SemanticAction, http_message: &SemanticAction
     }
 }
 
-pub(super) fn error_response(action: &SemanticAction) -> bool {
-    action.kind == SemanticActionKind::HttpMessage
-        && action.attributes.get(DIRECTION_ATTR).map(String::as_str) == Some(DIRECTION_INBOUND)
-        && action
-            .attributes
-            .get(STATUS_CODE_ATTR)
-            .and_then(|status| status.parse::<u16>().ok())
-            .is_some_and(|status| (HTTP_CLIENT_ERROR_MIN..=HTTP_SERVER_ERROR_MAX).contains(&status))
+pub(super) fn terminal_failure_response(action: &SemanticAction) -> bool {
+    HttpResponseFailure::classify(action).is_some()
 }
 
 fn http_payload_sequence(action: &SemanticAction) -> Option<u64> {
