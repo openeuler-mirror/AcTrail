@@ -41,9 +41,10 @@ pub use crate::retention::{
 };
 pub use agent::{
     AgentInvocationConfig, Http2DataContentRetention, HttpBodyRetention, HttpHeadersRetention,
-    L0LlmCallRetention, L1SseRetention, L2HttpRetention, L3Http2FrameRetention, L4PayloadRetention,
-    LlmRequestContentRetention, LlmResponseContentRetention, LlmToolCallRetention,
-    LlmUsageRetention, PayloadBodyContentRetention, SemanticContentOwner, SemanticRetentionConfig,
+    L0LlmCallRetention, L0McpCallRetention, L1SseRetention, L2HttpRetention, L3Http2FrameRetention,
+    L4PayloadRetention, LlmRequestContentRetention, LlmResponseContentRetention,
+    LlmToolCallRetention, LlmUsageRetention, McpJsonRpcContentRetention,
+    PayloadBodyContentRetention, SemanticContentOwner, SemanticRetentionConfig,
     SseEventContentRetention,
 };
 pub use application::{ApplicationProtocolConfig, SseDataPolicy};
@@ -80,12 +81,13 @@ pub use operator::{
     launch_seccomp_requirements,
 };
 pub use payload::{
-    DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS, DisabledOrPath, PayloadConfig,
-    PayloadRedactionPolicy, PayloadSocketCaptureBackend, PayloadSocketConfig,
-    PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadStdioStorageMode,
-    PayloadTlsCaptureBackend, PayloadTlsConfig, PayloadTlsLibrary, PayloadTlsLibraryPath,
-    PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource,
-    PayloadTlsSyncRuntimeLibraryPath,
+    DEFAULT_MCP_PARSE_BUFFER_MAX_BYTES, DEFAULT_MCP_PENDING_STDIO_CANDIDATE_MAX_ENTRIES,
+    DEFAULT_MCP_STDIO_CANDIDATE_MAX_BYTES, DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS,
+    DisabledOrPath, PayloadConfig, PayloadMcpConfig, PayloadRedactionPolicy,
+    PayloadSocketCaptureBackend, PayloadSocketConfig, PayloadSocketSeccompSyscall,
+    PayloadStdioConfig, PayloadStdioStorageMode, PayloadTlsCaptureBackend, PayloadTlsConfig,
+    PayloadTlsLibrary, PayloadTlsLibraryPath, PayloadTlsResolver, PayloadTlsSeccompSyscall,
+    PayloadTlsSource, PayloadTlsSyncRuntimeLibraryPath,
 };
 pub use process::{ProcessSeccompConfig, ProcessSeccompSyscall, SeccompNotifyConfig};
 pub use resource::ResourceMetricsConfig;
@@ -219,6 +221,33 @@ impl std::fmt::Display for EbpfEnabledMode {
     }
 }
 
+/// Maximum process lineage records retained for one trace by default.
+pub const DEFAULT_IPC_LINEAGE_MAX_PROCESSES_PER_TRACE: u32 = 8_192;
+/// Maximum candidate IPC file descriptors retained for one trace by default.
+pub const DEFAULT_IPC_LINEAGE_MAX_CANDIDATE_FDS_PER_TRACE: u32 = 65_536;
+/// Maximum complete stdio bundles retained for one trace by default.
+pub const DEFAULT_IPC_LINEAGE_MAX_STDIO_BUNDLES_PER_TRACE: u32 = 8_192;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IpcLineageConfig {
+    /// Maximum process lineage records retained for one trace.
+    pub max_processes_per_trace: u32,
+    /// Maximum candidate IPC file descriptors retained for one trace.
+    pub max_candidate_fds_per_trace: u32,
+    /// Maximum complete stdio bundles retained for one trace.
+    pub max_stdio_bundles_per_trace: u32,
+}
+
+impl Default for IpcLineageConfig {
+    fn default() -> Self {
+        Self {
+            max_processes_per_trace: DEFAULT_IPC_LINEAGE_MAX_PROCESSES_PER_TRACE,
+            max_candidate_fds_per_trace: DEFAULT_IPC_LINEAGE_MAX_CANDIDATE_FDS_PER_TRACE,
+            max_stdio_bundles_per_trace: DEFAULT_IPC_LINEAGE_MAX_STDIO_BUNDLES_PER_TRACE,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EbpfCollectorConfig {
     /// The operator-declared mode (true/false/auto). Parse-time only; the
@@ -236,6 +265,7 @@ pub struct EbpfCollectorConfig {
     pub event_ring_buffer_max_bytes: u32,
     pub file_path_capture_enabled: bool,
     pub file_path_max_bytes: u32,
+    pub ipc_lineage: IpcLineageConfig,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

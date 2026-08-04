@@ -5,7 +5,7 @@ use super::{
     LinkConfidenceCodes, LinkRoleCodes, SemanticActionCodebook,
 };
 
-pub(in crate::semantic_actions::codebook) const SCHEMA_VERSION: i32 = 13;
+pub(in crate::semantic_actions::codebook) const SCHEMA_VERSION: i32 = 15;
 
 pub(in crate::semantic_actions::codebook) const CODEBOOK: &SemanticActionCodebook =
     &SemanticActionCodebook {
@@ -24,6 +24,11 @@ pub(in crate::semantic_actions::codebook) const CODEBOOK: &SemanticActionCodeboo
             llm_call: 109,
             llm_request: 110,
             llm_response: 111,
+            mcp_tool_call: 121,
+            mcp_request: 122,
+            mcp_response: 123,
+            mcp_stdin: 124,
+            mcp_stdout: 125,
             sse_stream: 112,
             sse_event: 113,
             enforcement_decision: 114,
@@ -54,6 +59,7 @@ pub(in crate::semantic_actions::codebook) const CODEBOOK: &SemanticActionCodeboo
             command_contains_process_exec: 504,
             command_contains_command_invocation: 505,
             command_contains_llm_call: 506,
+            command_contains_mcp_tool_call: 517,
             file_write_contains_file_event: 507,
             agent_invocation_exec: 508,
             agent_invocation_child_llm_request: 509,
@@ -64,6 +70,10 @@ pub(in crate::semantic_actions::codebook) const CODEBOOK: &SemanticActionCodeboo
             llm_response_http_message: 514,
             llm_response_sse_stream: 515,
             sse_stream_event: 516,
+            mcp_tool_call_request: 518,
+            mcp_tool_call_response: 519,
+            mcp_request_stdout: 520,
+            mcp_response_stdin: 521,
         },
         link_confidence: LinkConfidenceCodes {
             observed: 601,

@@ -71,7 +71,8 @@ fn call_references_action(call: &SemanticAction, attr: &str, child: &SemanticAct
 
 fn invalid_parent_identity_link(link: &SemanticActionLink, child: &SemanticAction) -> bool {
     (link.role == SemanticActionLinkRole::AgentPerformedAction
-        || link.role == SemanticActionLinkRole::CommandContainsCommandInvocation)
+        || link.role == SemanticActionLinkRole::CommandContainsCommandInvocation
+        || link.role == SemanticActionLinkRole::CommandContainsMcpToolCall)
         && child
             .attributes
             .get(PROCESS_PARENT_IDENTITY_STATE_ATTR)

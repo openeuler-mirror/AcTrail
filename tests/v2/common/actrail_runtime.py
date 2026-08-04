@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,6 +41,35 @@ class ActrailRuntime:
         self.actrailviewer = self._require_binary("actrailviewer")
         self._started = False
 
+    @classmethod
+    def isolated(
+        cls,
+        repo: Path,
+        bin_dir: Path,
+        command_timeout_seconds: int,
+        output: TestOutput,
+        work_dir: Path,
+    ) -> "ActrailRuntime":
+        work_dir = work_dir.resolve()
+        if not work_dir.is_dir():
+            raise RuntimeError(
+                f"isolated AcTrail work directory is missing: {work_dir}"
+            )
+        operator_config = work_dir / "actraild.conf"
+        operator_config_patch = work_dir / "actraild.patch.toml"
+        cls._write_isolated_operator_config_patch(
+            operator_config_patch,
+            work_dir,
+        )
+        return cls(
+            repo,
+            bin_dir,
+            command_timeout_seconds,
+            output,
+            operator_config,
+            operator_config_patch,
+        )
+
     def prepare(self) -> list[CommandResult]:
         results = [
             self.run_checked(self._init_command()),
@@ -60,6 +90,15 @@ class ActrailRuntime:
 
     def clean(self, *, echo: bool = True) -> CommandResult:
         return self.run([*self._control_command(), "clean"], echo=echo)
+
+    def control_command(self, *arguments: Path | str) -> list[Path | str]:
+        return [*self._control_command(), *arguments]
+
+    def viewer_command(self, *arguments: Path | str) -> list[Path | str]:
+        command: list[Path | str] = [self.actrailviewer]
+        if self._operator_config is not None:
+            command.extend(["--config", self._operator_config])
+        return [*command, *arguments]
 
     def run(
         self,
@@ -132,3 +171,46 @@ class ActrailRuntime:
         if self._operator_config is not None:
             command.extend(["--config", self._operator_config])
         return command
+
+    @staticmethod
+    def _write_isolated_operator_config_patch(
+        path: Path,
+        work_dir: Path,
+    ) -> None:
+        quoted = {
+            name: json.dumps(str(work_dir / relative))
+            for name, relative in {
+                "socket": "run/control.sock",
+                "pid": "run/actraild.pid",
+                "log": "log/actraild.log",
+                "storage": "data/actrail.sqlite",
+                "export": "data/export",
+                "tls_sync": "run/tls-sync.sock",
+                "cluster_spool": "data/cluster-spool",
+                "cluster_state": "data/cluster-report-state.sqlite",
+                "cluster_root": "data/cluster",
+                "plugins": "plugins",
+            }.items()
+        }
+        path.write_text(
+            "[control]\n"
+            f"socket_path = {quoted['socket']}\n"
+            f"pid_file = {quoted['pid']}\n"
+            f"log_path = {quoted['log']}\n"
+            "\n[storage.sqlite]\n"
+            f"path = {quoted['storage']}\n"
+            "\n[storage.retention]\n"
+            "enabled = false\n"
+            "\n[export.snapshot]\n"
+            f"directory = {quoted['export']}\n"
+            "\n[payload.tls]\n"
+            f"sync_event_socket_path = {quoted['tls_sync']}\n"
+            "\n[cluster.report]\n"
+            f"spool_dir = {quoted['cluster_spool']}\n"
+            f"state_path = {quoted['cluster_state']}\n"
+            "\n[cluster.center]\n"
+            f"root_dir = {quoted['cluster_root']}\n"
+            "\n[plugins.discovery]\n"
+            f"directory = {quoted['plugins']}\n",
+            encoding="utf-8",
+        )

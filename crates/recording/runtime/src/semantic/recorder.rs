@@ -33,6 +33,8 @@ impl<'a> SemanticActionRecorder<'a> {
         self.storage.upsert_file_path_sets(batch.file_path_sets())?;
         self.storage
             .upsert_llm_request_contents(batch.llm_request_contents())?;
+        self.storage
+            .upsert_mcp_jsonrpc_contents(batch.mcp_jsonrpc_contents())?;
         Ok(())
     }
 

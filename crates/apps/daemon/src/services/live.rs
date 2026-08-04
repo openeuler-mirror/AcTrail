@@ -4,6 +4,8 @@
 mod batch;
 #[path = "live/launch_binding.rs"]
 mod launch_binding;
+#[path = "live/mcp_diagnostics.rs"]
+mod mcp_diagnostics;
 #[path = "live/reconcile.rs"]
 mod reconcile;
 #[path = "live/shutdown.rs"]
@@ -83,6 +85,10 @@ impl StorageAttachService {
             self.persist_completed_seccomp_socket_operations_impl(trace_runtime)?;
             warn_best_effort(self.log_payload_tls_diagnostics_impl(), "payload_tls_diag");
             warn_best_effort(self.drain_enforcement_impl(trace_runtime), "enforcement");
+            let mcp_stdio_diagnostics = self
+                .semantic_actions
+                .flush_closed_mcp_stdio_sessions_with_diagnostics(SystemTime::now());
+            self.persist_mcp_stdio_diagnostics_impl(trace_runtime, mcp_stdio_diagnostics)?;
             self.reconcile_draining_memberships_impl(trace_runtime)?;
             self.finalize_terminal_traces_impl(trace_runtime)?;
             self.forget_terminal_trace_state_impl(trace_runtime);
@@ -110,6 +116,10 @@ impl StorageAttachService {
         self.log_tls_diagnostic_events_impl();
         self.process_live_event_batch(trace_runtime, batch.observations)?;
         self.process_payload_segments_impl(trace_runtime, batch.payload_segments)?;
+        let mcp_stdio_diagnostics = self
+            .semantic_actions
+            .flush_closed_mcp_stdio_sessions_with_diagnostics(SystemTime::now());
+        self.persist_mcp_stdio_diagnostics_impl(trace_runtime, mcp_stdio_diagnostics)?;
         self.ingest_polled_seccomp_tls_controls_impl()?;
         self.drain_seccomp_notifications_impl(trace_runtime)?;
         self.materialize_process_seccomp_observations_impl(trace_runtime)?;

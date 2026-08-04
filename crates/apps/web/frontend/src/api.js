@@ -217,6 +217,12 @@ export function readActionLlmRequestContent(traceId, actionId, { maxBytes }) {
   );
 }
 
+export function readActionMcpJsonRpcContent(traceId, actionId, { maxBytes }) {
+  return fetchJson(
+    `/api/traces/${traceId}/actions/${encodeURIComponent(actionId)}/content/mcp-jsonrpc?max_bytes=${maxBytes}`,
+  );
+}
+
 export function readActionLlmRequestContentNode(traceId, actionId, { pointer, offset, limit }) {
   const query = [
     `pointer=${encodeURIComponent(pointer)}`,

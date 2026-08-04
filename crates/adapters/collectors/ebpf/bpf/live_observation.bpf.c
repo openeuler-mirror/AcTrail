@@ -336,6 +336,7 @@ int handle_sys_enter_pipe(struct trace_event_raw_sys_enter *ctx) {
         ctx,
         ACTRAIL_FILE_IPC_FD_PIPE,
         0,
+        0,
         0
     );
 }
@@ -351,7 +352,8 @@ int handle_sys_enter_pipe2(struct trace_event_raw_sys_enter *ctx) {
         ctx,
         ACTRAIL_FILE_IPC_FD_PIPE,
         0,
-        0
+        0,
+        (__u32)ctx->args[1]
     );
 }
 
@@ -366,7 +368,8 @@ int handle_sys_enter_socketpair(struct trace_event_raw_sys_enter *ctx) {
         ctx,
         ACTRAIL_FILE_IPC_FD_UNIX_SOCKET,
         3,
-        (__u32)ctx->args[0]
+        (__u32)ctx->args[0],
+        (__u32)ctx->args[1]
     );
 }
 
@@ -514,6 +517,20 @@ SEC("tracepoint/syscalls/sys_exit_close")
 int handle_sys_exit_close(struct trace_event_raw_sys_exit *ctx) {
     emit_file_bulk_read_fast_close_op(ctx);
     return emit_file_exit(ctx, ACTRAIL_FILE_CONTEXT, ACTRAIL_FILE_SYSCALL_CLOSE);
+}
+
+SEC("tracepoint/syscalls/sys_enter_close_range")
+int handle_sys_enter_close_range(struct trace_event_raw_sys_enter *ctx) {
+    return emit_file_close_range_enter(ctx);
+}
+
+SEC("tracepoint/syscalls/sys_exit_close_range")
+int handle_sys_exit_close_range(struct trace_event_raw_sys_exit *ctx) {
+    return emit_file_exit(
+        ctx,
+        ACTRAIL_FILE_CONTEXT,
+        ACTRAIL_FILE_SYSCALL_CLOSE_RANGE
+    );
 }
 
 SEC("tracepoint/syscalls/sys_enter_dup")

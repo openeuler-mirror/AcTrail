@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use model_core::ids::TraceId;
 use semantic_action::{
-    FileObservationPath, FilePathSetWrite, LlmRequestContentWrite, SemanticAction,
-    SemanticActionLink,
+    FileObservationPath, FilePathSetWrite, LlmRequestContentWrite, McpJsonRpcContentWrite,
+    SemanticAction, SemanticActionLink,
 };
 
 use super::error::RecordingError;
@@ -17,6 +17,7 @@ pub struct SemanticActionBatch {
     file_observation_paths: Vec<FileObservationPath>,
     file_path_sets: Vec<FilePathSetWrite>,
     llm_request_contents: Vec<LlmRequestContentWrite>,
+    mcp_jsonrpc_contents: Vec<McpJsonRpcContentWrite>,
 }
 
 impl SemanticActionBatch {
@@ -27,6 +28,7 @@ impl SemanticActionBatch {
             file_observation_paths: Vec::new(),
             file_path_sets: Vec::new(),
             llm_request_contents: Vec::new(),
+            mcp_jsonrpc_contents: Vec::new(),
         }
     }
 
@@ -36,6 +38,7 @@ impl SemanticActionBatch {
         file_observation_paths: Vec<FileObservationPath>,
         file_path_sets: Vec<FilePathSetWrite>,
         llm_request_contents: Vec<LlmRequestContentWrite>,
+        mcp_jsonrpc_contents: Vec<McpJsonRpcContentWrite>,
     ) -> Self {
         Self {
             actions,
@@ -43,6 +46,7 @@ impl SemanticActionBatch {
             file_observation_paths,
             file_path_sets,
             llm_request_contents,
+            mcp_jsonrpc_contents,
         }
     }
 
@@ -70,6 +74,10 @@ impl SemanticActionBatch {
         &self.llm_request_contents
     }
 
+    pub fn mcp_jsonrpc_contents(&self) -> &[McpJsonRpcContentWrite] {
+        &self.mcp_jsonrpc_contents
+    }
+
     pub fn as_record_batch(&self) -> SemanticActionRecordBatch<'_> {
         SemanticActionRecordBatch::new(
             &self.actions,
@@ -77,6 +85,7 @@ impl SemanticActionBatch {
             &self.file_observation_paths,
             &self.file_path_sets,
             &self.llm_request_contents,
+            &self.mcp_jsonrpc_contents,
         )
     }
 
@@ -87,6 +96,7 @@ impl SemanticActionBatch {
             .extend(other.file_observation_paths);
         self.file_path_sets.extend(other.file_path_sets);
         self.llm_request_contents.extend(other.llm_request_contents);
+        self.mcp_jsonrpc_contents.extend(other.mcp_jsonrpc_contents);
     }
 
     pub(crate) fn split_by_trace(self) -> Vec<Self> {
@@ -122,6 +132,13 @@ impl SemanticActionBatch {
                 .llm_request_contents
                 .push(content);
         }
+        for content in self.mcp_jsonrpc_contents {
+            batches
+                .entry(content.trace_id)
+                .or_default()
+                .mcp_jsonrpc_contents
+                .push(content);
+        }
         batches.into_values().collect()
     }
 
@@ -136,6 +153,7 @@ pub struct SemanticActionRecordBatch<'a> {
     file_observation_paths: &'a [FileObservationPath],
     file_path_sets: &'a [FilePathSetWrite],
     llm_request_contents: &'a [LlmRequestContentWrite],
+    mcp_jsonrpc_contents: &'a [McpJsonRpcContentWrite],
 }
 
 impl<'a> SemanticActionRecordBatch<'a> {
@@ -145,6 +163,7 @@ impl<'a> SemanticActionRecordBatch<'a> {
         file_observation_paths: &'a [FileObservationPath],
         file_path_sets: &'a [FilePathSetWrite],
         llm_request_contents: &'a [LlmRequestContentWrite],
+        mcp_jsonrpc_contents: &'a [McpJsonRpcContentWrite],
     ) -> Self {
         Self {
             actions,
@@ -152,6 +171,7 @@ impl<'a> SemanticActionRecordBatch<'a> {
             file_observation_paths,
             file_path_sets,
             llm_request_contents,
+            mcp_jsonrpc_contents,
         }
     }
 
@@ -175,6 +195,10 @@ impl<'a> SemanticActionRecordBatch<'a> {
         self.llm_request_contents
     }
 
+    pub fn mcp_jsonrpc_contents(&self) -> &'a [McpJsonRpcContentWrite] {
+        self.mcp_jsonrpc_contents
+    }
+
     pub fn trace_id(&self) -> Result<Option<TraceId>, RecordingError> {
         let mut trace_id = None;
         for action in self.actions {
@@ -191,6 +215,9 @@ impl<'a> SemanticActionRecordBatch<'a> {
         }
         for content in self.llm_request_contents {
             record_trace_id(&mut trace_id, content.manifest.trace_id)?;
+        }
+        for content in self.mcp_jsonrpc_contents {
+            record_trace_id(&mut trace_id, content.trace_id)?;
         }
         Ok(trace_id)
     }

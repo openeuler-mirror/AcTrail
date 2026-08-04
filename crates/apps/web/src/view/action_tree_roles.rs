@@ -12,6 +12,7 @@ pub(super) const DISPLAY_PARENT_ROLES: &[SemanticActionLinkRole] = &[
     SemanticActionLinkRole::AgentInvocationChildLlmRequest,
     SemanticActionLinkRole::CommandContainsCommandInvocation,
     SemanticActionLinkRole::CommandContainsLlmCall,
+    SemanticActionLinkRole::CommandContainsMcpToolCall,
     SemanticActionLinkRole::CommandContainsFileAccess,
     SemanticActionLinkRole::CommandContainsProcessForkAttempt,
     SemanticActionLinkRole::CommandContainsProcessExec,
@@ -23,4 +24,8 @@ pub(super) const DISPLAY_PARENT_ROLES: &[SemanticActionLinkRole] = &[
     SemanticActionLinkRole::LlmResponseSseStream,
     SemanticActionLinkRole::SseStreamEvent,
     SemanticActionLinkRole::LlmRequestLlmResponse,
+    SemanticActionLinkRole::McpToolCallRequest,
+    SemanticActionLinkRole::McpToolCallResponse,
+    SemanticActionLinkRole::McpRequestStdout,
+    SemanticActionLinkRole::McpResponseStdin,
 ];

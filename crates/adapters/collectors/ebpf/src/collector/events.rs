@@ -6,8 +6,8 @@ use model_core::process::{KernelProcessCoordinates, ProcessSuppressedFd};
 
 use crate::decode::{
     self, decode_file_path, decode_observation, decode_socket_payload,
-    decode_socket_payload_completion, decode_stdio_payload, decode_tls_capture_request,
-    decode_tls_completion, decode_tls_diagnostic, decode_tls_direct_capture,
+    decode_socket_payload_completion, decode_tls_capture_request, decode_tls_completion,
+    decode_tls_diagnostic, decode_tls_direct_capture,
 };
 use crate::loader::{KernelEvent, KernelObservationEvent};
 
@@ -128,6 +128,9 @@ impl EbpfCollector {
                     batch.observations.push(event);
                 }
                 self.apply_file_lifecycle_after_decode(&lifecycle_event)?;
+                batch
+                    .observations
+                    .extend(self.file_tracker.take_stdio_bundle_events());
             }
             KernelEvent::FilePath(event) => {
                 match decode_file_path(event, &self.bindings, &mut self.file_tracker) {
@@ -138,12 +141,22 @@ impl EbpfCollector {
                     }
                     Err(error) => return Err(CollectorError::new(error.stage, error.message)),
                 }
+                batch
+                    .observations
+                    .extend(self.file_tracker.take_stdio_bundle_events());
             }
             KernelEvent::StdioPayload(event) => {
-                batch.payload_segments.push(
-                    decode_stdio_payload(event, &self.bindings)
-                        .map_err(|error| CollectorError::new(error.stage, error.message))?,
-                );
+                if let Some(segment) = self.stdio_payloads.observe_payload(event, &self.bindings)? {
+                    batch.payload_segments.push(segment);
+                }
+            }
+            KernelEvent::StdioPayloadCompletion(event) => {
+                if let Some(segment) = self
+                    .stdio_payloads
+                    .observe_completion(event, &self.bindings)?
+                {
+                    batch.payload_segments.push(segment);
+                }
             }
             KernelEvent::SocketPayload(event) => {
                 batch.payload_segments.push(
@@ -232,6 +245,11 @@ impl EbpfCollector {
     ) -> Result<(), CollectorError> {
         match event.kind {
             decode::PROC_EVENT_EXIT => {
+                self.stdio_payloads.release_process(
+                    event.trace_id,
+                    event.host_pid,
+                    event.pid_generation,
+                );
                 let map_pid = decode::event_map_pid(event.pid, event.host_pid);
                 if decode::resolve_bound_event_observation(
                     event.trace_id,
@@ -284,8 +302,21 @@ impl EbpfCollector {
                     &self.bindings,
                 )
                 .map_err(|error| CollectorError::new("file_lifecycle_exec", error))?;
-                self.file_tracker.exec_process(event.trace_id, process);
+                self.file_tracker
+                    .exec_process(event.trace_id, process, event.observed_ktime_ns);
                 self.configure_file_bulk_read_fast_process(event)?;
+            }
+            decode::PROC_EVENT_EXIT => {
+                let map_pid = event.pid;
+                let process = decode::resolve_bound_event_observation(
+                    event.trace_id,
+                    map_pid,
+                    event.pid_generation,
+                    &self.bindings,
+                )
+                .map_err(|error| CollectorError::new("file_lifecycle_exit", error))?;
+                self.file_tracker
+                    .exit_process(event.trace_id, process, event.observed_ktime_ns);
             }
             _ => {}
         }

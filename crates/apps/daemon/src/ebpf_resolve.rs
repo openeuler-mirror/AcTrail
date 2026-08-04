@@ -71,6 +71,7 @@ mod tests {
             event_ring_buffer_max_bytes: 4096,
             file_path_capture_enabled: false,
             file_path_max_bytes: 255,
+            ipc_lineage: config_core::daemon::IpcLineageConfig::default(),
         }
     }
 

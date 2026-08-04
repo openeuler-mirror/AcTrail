@@ -3,14 +3,16 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::time::SystemTime;
 
-use config_core::daemon::{AgentInvocationConfig, FileObservationConfig, SemanticRetentionConfig};
+use config_core::daemon::{
+    AgentInvocationConfig, FileObservationConfig, PayloadMcpConfig, SemanticRetentionConfig,
+};
 use model_core::event::{DomainEvent, EventPayload};
 use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
 use model_core::process::ProcessIdentity;
 use semantic_action::{
-    FileObservationPath, FilePathSetWrite, LlmRequestContentWrite, SemanticAction,
-    SemanticActionKind, SemanticActionLink, attr_keys as attrs,
+    FileObservationPath, FilePathSetWrite, LlmRequestContentWrite, McpJsonRpcContentWrite,
+    SemanticAction, SemanticActionKind, SemanticActionLink, attr_keys as attrs,
 };
 
 use crate::payload_projection::llm::{LlmCodecPlugin, LlmCodecPluginStatus};
@@ -23,7 +25,8 @@ use super::agent::AgentProjector;
 use super::command::CommandProjector;
 use super::file::FileAccessProjector;
 use super::links::ActionLinkProjector;
-use super::llm::LiveLlmProjector;
+use super::llm::{LiveLlmOutput, LiveLlmProjector};
+use super::mcp::{LiveMcpProjector, LiveMcpStdioDiagnostic};
 
 const HTTP_DIRECTION_ATTR: &str = "direction";
 const HTTP_PAYLOAD_SEQUENCE_ATTR: &str = "payload_sequence";
@@ -37,7 +40,27 @@ pub struct LiveSemanticActionRuntime {
     file_access: FileAccessProjector,
     http_exchange: HttpExchangeTracker,
     llm: LiveLlmProjector,
+    mcp: LiveMcpProjector,
     links: ActionLinkProjector,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct LiveMcpStdioMetrics {
+    pub untracked_stdio: u64,
+    pub candidates: u64,
+    pub rejected: u64,
+    pub confirmed: u64,
+    pub lifecycle_contract_gaps: u64,
+    pub capacity_exhausted: u64,
+    pub candidate_stream_discards: u64,
+    pub confirmed_parse_discards: u64,
+    pub rejection_reasons: BTreeMap<String, u64>,
+    pub discard_reasons: BTreeMap<String, u64>,
+}
+
+pub struct LiveSemanticActionObservation {
+    pub output: LiveSemanticActionOutput,
+    pub mcp_stdio_diagnostics: Vec<LiveMcpStdioDiagnostic>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -47,6 +70,7 @@ pub struct LiveSemanticActionOutput {
     pub file_observation_paths: Vec<FileObservationPath>,
     pub file_path_sets: Vec<FilePathSetWrite>,
     pub llm_request_contents: Vec<LlmRequestContentWrite>,
+    pub mcp_jsonrpc_contents: Vec<McpJsonRpcContentWrite>,
     pub deferred_events: Vec<DomainEvent>,
     pub retain_event: bool,
     pub raw_event_consumed: bool,
@@ -60,6 +84,7 @@ impl Default for LiveSemanticActionOutput {
             file_observation_paths: Vec::new(),
             file_path_sets: Vec::new(),
             llm_request_contents: Vec::new(),
+            mcp_jsonrpc_contents: Vec::new(),
             deferred_events: Vec::new(),
             retain_event: true,
             raw_event_consumed: false,
@@ -75,6 +100,7 @@ impl LiveSemanticActionOutput {
             .extend(other.file_observation_paths);
         self.file_path_sets.extend(other.file_path_sets);
         self.llm_request_contents.extend(other.llm_request_contents);
+        self.mcp_jsonrpc_contents.extend(other.mcp_jsonrpc_contents);
         self.deferred_events.extend(other.deferred_events);
         self.retain_event = self.retain_event && other.retain_event;
         self.raw_event_consumed = self.raw_event_consumed || other.raw_event_consumed;
@@ -87,22 +113,41 @@ impl LiveSemanticActionRuntime {
         pending_exec_max_entries: u32,
         semantic_retention: SemanticRetentionConfig,
         file_observation: FileObservationConfig,
+        mcp: PayloadMcpConfig,
     ) -> Self {
         let AgentInvocationConfig {
             enabled,
             commands: _,
         } = config;
+        let mcp_content_retention = semantic_retention.l0_mcp_call.clone();
         Self {
             agent: AgentProjector::new(enabled, pending_exec_max_entries),
             command: CommandProjector::new(),
             file_access: FileAccessProjector::new(file_observation),
             http_exchange: HttpExchangeTracker::default(),
             llm: LiveLlmProjector::new(semantic_retention),
+            mcp: LiveMcpProjector::new(mcp, mcp_content_retention),
             links: ActionLinkProjector::new(),
         }
     }
 
     pub fn observe_event(&mut self, event: &DomainEvent) -> LiveSemanticActionOutput {
+        self.observe_event_with_diagnostics(event).output
+    }
+
+    pub fn observe_event_with_diagnostics(
+        &mut self,
+        event: &DomainEvent,
+    ) -> LiveSemanticActionObservation {
+        let mcp_stdio_diagnostics = self.mcp.observe_event(event);
+        let output = self.observe_event_semantics(event);
+        LiveSemanticActionObservation {
+            output,
+            mcp_stdio_diagnostics,
+        }
+    }
+
+    fn observe_event_semantics(&mut self, event: &DomainEvent) -> LiveSemanticActionOutput {
         if matches!(&event.payload, EventPayload::File(_)) {
             return if is_file_modify_event(event) {
                 let file_action = file_modify_action(event);
@@ -241,8 +286,54 @@ impl LiveSemanticActionRuntime {
         &mut self,
         segment: &PayloadSegment,
     ) -> LiveSemanticActionOutput {
-        let llm_output = self.llm.observe_payload_segment(segment);
-        let mut output = if llm_output.actions.is_empty() {
+        self.observe_payload_segment_with_diagnostics(segment)
+            .output
+    }
+
+    pub fn observe_payload_segment_with_diagnostics(
+        &mut self,
+        segment: &PayloadSegment,
+    ) -> LiveSemanticActionObservation {
+        self.observe_payload_segment_with_evidence(segment, true)
+    }
+
+    /// Projects an unretained stdio segment only through the local MCP path.
+    ///
+    /// Payload evidence is omitted because no payload row will be persisted.
+    pub fn observe_unretained_mcp_stdio_payload_segment(
+        &mut self,
+        segment: &PayloadSegment,
+    ) -> LiveSemanticActionOutput {
+        self.observe_unretained_mcp_stdio_payload_segment_with_diagnostics(segment)
+            .output
+    }
+
+    pub fn observe_unretained_mcp_stdio_payload_segment_with_diagnostics(
+        &mut self,
+        segment: &PayloadSegment,
+    ) -> LiveSemanticActionObservation {
+        assert!(
+            segment.source_boundary == model_core::payload::PayloadSourceBoundary::Stdio,
+            "unretained MCP projection requires a stdio payload segment"
+        );
+        self.observe_payload_segment_with_evidence(segment, false)
+    }
+
+    fn observe_payload_segment_with_evidence(
+        &mut self,
+        segment: &PayloadSegment,
+        retain_evidence: bool,
+    ) -> LiveSemanticActionObservation {
+        let llm_output = if retain_evidence {
+            self.llm.observe_payload_segment(segment)
+        } else {
+            LiveLlmOutput::default()
+        };
+        let mut mcp_actions = self.mcp.observe_llm_actions(&llm_output.actions);
+        let (mcp_output, mcp_stdio_diagnostics) =
+            self.mcp.observe_payload_segment(segment, retain_evidence);
+        mcp_actions.extend(mcp_output.actions);
+        let mut output = if llm_output.actions.is_empty() && mcp_actions.is_empty() {
             LiveSemanticActionOutput::default()
         } else {
             self.file_access.observe_boundary(
@@ -263,10 +354,58 @@ impl LiveSemanticActionRuntime {
             output.actions.push(action.clone());
             output.actions.extend(agent_actions);
         }
+        for action in &mcp_actions {
+            output.extend(self.command.observe_mcp_tool_call(action));
+        }
+        output.actions.extend(mcp_actions);
+        output.links.extend(mcp_output.links);
+        output.mcp_jsonrpc_contents.extend(mcp_output.contents);
         output
             .links
             .extend(self.links.observe_actions(&output.actions));
-        output
+        LiveSemanticActionObservation {
+            output,
+            mcp_stdio_diagnostics,
+        }
+    }
+
+    pub fn should_project_dropped_stdio_payload(&self, segment: &PayloadSegment) -> bool {
+        self.mcp.should_project_stdio_payload(segment)
+    }
+
+    pub fn flush_closed_mcp_stdio_sessions(&mut self) {
+        let _ = self.flush_closed_mcp_stdio_sessions_with_diagnostics(SystemTime::now());
+    }
+
+    pub fn flush_closed_mcp_stdio_sessions_with_diagnostics(
+        &mut self,
+        emitted_at: SystemTime,
+    ) -> Vec<LiveMcpStdioDiagnostic> {
+        self.mcp.flush_closed_stdio_sessions(emitted_at)
+    }
+
+    pub fn take_mcp_stdio_metrics(&mut self) -> LiveMcpStdioMetrics {
+        let metrics = self.mcp.take_stdio_metrics();
+        LiveMcpStdioMetrics {
+            untracked_stdio: metrics.untracked_stdio,
+            candidates: metrics.candidates,
+            rejected: metrics.rejected,
+            confirmed: metrics.confirmed,
+            lifecycle_contract_gaps: metrics.lifecycle_contract_gaps,
+            capacity_exhausted: metrics.capacity_exhausted,
+            candidate_stream_discards: metrics.candidate_stream_discards,
+            confirmed_parse_discards: metrics.confirmed_parse_discards,
+            rejection_reasons: metrics
+                .rejection_reasons
+                .into_iter()
+                .map(|(reason, count)| (reason.to_string(), count))
+                .collect(),
+            discard_reasons: metrics
+                .discard_reasons
+                .into_iter()
+                .map(|(reason, count)| (reason.to_string(), count))
+                .collect(),
+        }
     }
 
     pub fn forget_trace(&mut self, trace_id: TraceId) {
@@ -275,6 +414,7 @@ impl LiveSemanticActionRuntime {
         self.file_access.forget_trace(trace_id);
         self.http_exchange.forget_trace(trace_id);
         self.llm.forget_trace(trace_id);
+        self.mcp.forget_trace(trace_id);
         self.links.forget_trace(trace_id);
     }
 
@@ -284,6 +424,7 @@ impl LiveSemanticActionRuntime {
         finished_at: SystemTime,
     ) -> LiveSemanticActionOutput {
         let mut actions = self.llm.finalize_trace(trace_id, finished_at);
+        actions.extend(self.mcp.finalize_trace(trace_id, finished_at));
         let file_output = self.file_access.finalize_trace(trace_id, finished_at);
         actions.extend(file_output.actions);
         let links = self.links.observe_actions(&actions);
@@ -293,6 +434,7 @@ impl LiveSemanticActionRuntime {
             file_observation_paths: Vec::new(),
             file_path_sets: file_output.file_path_sets,
             llm_request_contents: Vec::new(),
+            mcp_jsonrpc_contents: Vec::new(),
             deferred_events: file_output.deferred_events,
             retain_event: file_output.retain_event,
             raw_event_consumed: false,

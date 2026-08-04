@@ -57,11 +57,13 @@ enum actrail_file_syscall_id {
     ACTRAIL_FILE_SYSCALL_PIPE2 = 24,
     ACTRAIL_FILE_SYSCALL_SOCKETPAIR = 25,
     ACTRAIL_FILE_SYSCALL_READ_SUMMARY = 26,
+    ACTRAIL_FILE_SYSCALL_CLOSE_RANGE = 27,
 };
 
 enum actrail_file_syscall_arg_count {
     ACTRAIL_FILE_SYSCALL_ARGC_CHDIR = 1,
     ACTRAIL_FILE_SYSCALL_ARGC_CLOSE = 1,
+    ACTRAIL_FILE_SYSCALL_ARGC_CLOSE_RANGE = 3,
     ACTRAIL_FILE_SYSCALL_ARGC_CREAT = 2,
     ACTRAIL_FILE_SYSCALL_ARGC_DUP = 1,
     ACTRAIL_FILE_SYSCALL_ARGC_DUP2 = 2,
@@ -146,9 +148,10 @@ static __always_inline int emit_file_primary_path_enter(
     __u32 fd,
     __u64 path_ptr
 ) {
-    __u64 pid_tgid = current_pid_tgid();
-    __u32 tgid = pid_tgid >> 32;
-    __u64 *trace_id = bpf_map_lookup_elem(&tracked_traces, &tgid);
+    __u32 tgid = 0;
+    __u32 tid = 0;
+    __u32 lookup_flags = 0;
+    __u64 *trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
     struct actrail_file_event *event;
     __u64 generation;
     __u32 kind = (__u32)(descriptor & ACTRAIL_FILE_DESCRIPTOR_KIND_MASK);
@@ -172,7 +175,7 @@ static __always_inline int emit_file_primary_path_enter(
 
     init_file_event_primary_path(event, kind);
     event->pid = tgid;
-    event->tid = (__u32)pid_tgid;
+    event->tid = tid;
     generation = current_process_start_time(tgid);
     event->pid_generation = generation;
     event->phase = ACTRAIL_FILE_PHASE_ENTER;
@@ -192,9 +195,10 @@ static __always_inline int emit_file_full_path_enter(
     __u64 path_ptr,
     __u64 secondary_path_ptr
 ) {
-    __u64 pid_tgid = current_pid_tgid();
-    __u32 tgid = pid_tgid >> 32;
-    __u64 *trace_id = bpf_map_lookup_elem(&tracked_traces, &tgid);
+    __u32 tgid = 0;
+    __u32 tid = 0;
+    __u32 lookup_flags = 0;
+    __u64 *trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
     struct actrail_file_event *event;
     __u64 generation;
     __u32 kind = (__u32)(descriptor & ACTRAIL_FILE_DESCRIPTOR_KIND_MASK);
@@ -218,7 +222,7 @@ static __always_inline int emit_file_full_path_enter(
 
     init_file_event(event, kind);
     event->pid = tgid;
-    event->tid = (__u32)pid_tgid;
+    event->tid = tid;
     event->pid_generation = current_process_start_time(tgid);
     event->phase = ACTRAIL_FILE_PHASE_ENTER;
     event->trace_id = *trace_id;
@@ -238,9 +242,10 @@ static __always_inline int emit_file_header_enter(
     __u64 descriptor,
     __u32 fd
 ) {
-    __u64 pid_tgid = current_pid_tgid();
-    __u32 tgid = pid_tgid >> 32;
-    __u64 *trace_id = bpf_map_lookup_elem(&tracked_traces, &tgid);
+    __u32 tgid = 0;
+    __u32 tid = 0;
+    __u32 lookup_flags = 0;
+    __u64 *trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
     struct actrail_file_event *event;
     __u32 kind = (__u32)(descriptor & ACTRAIL_FILE_DESCRIPTOR_KIND_MASK);
     __u32 syscall_id = (__u32)(
@@ -263,7 +268,7 @@ static __always_inline int emit_file_header_enter(
 
     init_file_event_header(event, kind);
     event->pid = tgid;
-    event->tid = (__u32)pid_tgid;
+    event->tid = tid;
     event->pid_generation = current_process_start_time(tgid);
     event->phase = ACTRAIL_FILE_PHASE_ENTER;
     event->trace_id = *trace_id;
@@ -372,6 +377,20 @@ static __always_inline int emit_file_close_enter(
     );
 }
 
+static __always_inline int emit_file_close_range_enter(
+    struct trace_event_raw_sys_enter *ctx
+) {
+    return emit_file_header_enter(
+        ctx,
+        file_enter_descriptor(
+            ACTRAIL_FILE_CONTEXT,
+            ACTRAIL_FILE_SYSCALL_CLOSE_RANGE,
+            ACTRAIL_FILE_SYSCALL_ARGC_CLOSE_RANGE
+        ),
+        (__u32)ctx->args[0]
+    );
+}
+
 static __always_inline int emit_file_dup_enter(
     struct trace_event_raw_sys_enter *ctx
 ) {
@@ -463,9 +482,10 @@ static __always_inline int emit_file_exit(
     __u32 kind,
     __u32 syscall_id
 ) {
-    __u64 pid_tgid = current_pid_tgid();
-    __u32 tgid = pid_tgid >> 32;
-    __u64 *trace_id = bpf_map_lookup_elem(&tracked_traces, &tgid);
+    __u32 tgid = 0;
+    __u32 tid = 0;
+    __u32 lookup_flags = 0;
+    __u64 *trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
     struct actrail_file_event *event;
     __u64 generation;
 
@@ -483,7 +503,7 @@ static __always_inline int emit_file_exit(
 
     init_file_event_header(event, kind);
     event->pid = tgid;
-    event->tid = (__u32)pid_tgid;
+    event->tid = tid;
     generation = current_process_start_time(tgid);
     event->pid_generation = generation;
     event->phase = ACTRAIL_FILE_PHASE_EXIT;
@@ -510,22 +530,29 @@ static __always_inline int store_pending_ipc_fd_pair_op(
     struct trace_event_raw_sys_enter *ctx,
     __u32 kind,
     __u32 fd_pair_arg,
-    __u32 domain
+    __u32 domain,
+    __u32 creation_flags
 ) {
-    __u64 pid_tgid = current_pid_tgid();
-    __u32 tgid = pid_tgid >> 32;
-    __u64 *trace_id = bpf_map_lookup_elem(&tracked_traces, &tgid);
+    __u64 operation_key = current_kernel_pid_tgid();
+    __u32 tgid = 0;
+    __u32 tid = 0;
+    __u32 lookup_flags = 0;
+    __u64 *trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
     struct actrail_pending_ipc_fd_pair_op op = {};
 
-    if (!tgid || !trace_id || !ctx->args[fd_pair_arg]) {
+    if (!operation_key || !tgid || !trace_id || !ctx->args[fd_pair_arg]) {
         return 0;
     }
 
     op.trace_id = *trace_id;
     op.fd_pair_ptr = (__u64)ctx->args[fd_pair_arg];
+    op.pid_generation = current_process_start_time(tgid);
     op.kind = kind;
     op.domain = domain;
-    bpf_map_update_elem(&pending_ipc_fd_pair_ops, &pid_tgid, &op, BPF_ANY);
+    op.creation_flags = creation_flags;
+    op.pid = tgid;
+    op.tid = tid;
+    bpf_map_update_elem(&pending_ipc_fd_pair_ops, &operation_key, &op, BPF_ANY);
     return 0;
 }
 
@@ -533,43 +560,42 @@ static __always_inline int emit_ipc_fd_pair_exit(
     struct trace_event_raw_sys_exit *ctx,
     __u32 syscall_id
 ) {
-    __u64 pid_tgid = current_pid_tgid();
-    __u32 tgid = pid_tgid >> 32;
+    __u64 operation_key = current_kernel_pid_tgid();
     struct actrail_pending_ipc_fd_pair_op *op =
-        bpf_map_lookup_elem(&pending_ipc_fd_pair_ops, &pid_tgid);
+        bpf_map_lookup_elem(&pending_ipc_fd_pair_ops, &operation_key);
     struct actrail_file_event *event;
     int fds[2] = {};
 
-    if (!tgid || !op) {
+    if (!operation_key || !op) {
         return 0;
     }
     if (ctx->ret != 0) {
-        bpf_map_delete_elem(&pending_ipc_fd_pair_ops, &pid_tgid);
+        bpf_map_delete_elem(&pending_ipc_fd_pair_ops, &operation_key);
         return 0;
     }
     if (op->kind == ACTRAIL_FILE_IPC_FD_UNIX_SOCKET && op->domain != AF_UNIX) {
-        bpf_map_delete_elem(&pending_ipc_fd_pair_ops, &pid_tgid);
+        bpf_map_delete_elem(&pending_ipc_fd_pair_ops, &operation_key);
         return 0;
     }
     if (bpf_probe_read_user(&fds, sizeof(fds), (void *)(unsigned long)op->fd_pair_ptr) != 0) {
-        bpf_map_delete_elem(&pending_ipc_fd_pair_ops, &pid_tgid);
+        bpf_map_delete_elem(&pending_ipc_fd_pair_ops, &operation_key);
         return 0;
     }
     if (fds[0] < 0 || fds[1] < 0) {
-        bpf_map_delete_elem(&pending_ipc_fd_pair_ops, &pid_tgid);
+        bpf_map_delete_elem(&pending_ipc_fd_pair_ops, &operation_key);
         return 0;
     }
 
     event = actrail_event_reserve(ACTRAIL_FILE_EVENT_HEADER_SIZE);
     if (!event) {
-        bpf_map_delete_elem(&pending_ipc_fd_pair_ops, &pid_tgid);
+        bpf_map_delete_elem(&pending_ipc_fd_pair_ops, &operation_key);
         return 0;
     }
 
     init_file_event_header(event, ACTRAIL_FILE_CONTEXT);
-    event->pid = tgid;
-    event->tid = (__u32)pid_tgid;
-    event->pid_generation = current_process_start_time(tgid);
+    event->pid = op->pid;
+    event->tid = op->tid;
+    event->pid_generation = op->pid_generation;
     event->phase = ACTRAIL_FILE_PHASE_EXIT;
     event->result = ctx->ret;
     event->trace_id = op->trace_id;
@@ -577,8 +603,9 @@ static __always_inline int emit_ipc_fd_pair_exit(
     event->fd = (__u32)fds[0];
     event->arg0 = (__u32)fds[1];
     event->arg1 = op->kind;
+    event->arg2 = op->creation_flags;
     actrail_event_submit(ctx, event);
-    bpf_map_delete_elem(&pending_ipc_fd_pair_ops, &pid_tgid);
+    bpf_map_delete_elem(&pending_ipc_fd_pair_ops, &operation_key);
     return 0;
 }
 

@@ -437,6 +437,21 @@ pub fn action_llm_request_content_json(
     )
 }
 
+pub fn action_mcp_jsonrpc_content_json(
+    storage_config: &StorageConfig,
+    trace_id: u64,
+    action_id: &str,
+    max_bytes: usize,
+) -> Result<String, String> {
+    let mut storage = open_storage(storage_config)?;
+    actions::mcp_jsonrpc_content_json(
+        storage.as_mut(),
+        TraceId::new(trace_id),
+        action_id,
+        max_bytes,
+    )
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LlmRequestContentNodeQuery {
     pub pointer: String,

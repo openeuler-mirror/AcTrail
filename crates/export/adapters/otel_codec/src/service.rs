@@ -171,6 +171,11 @@ fn span_kind(kind: SemanticActionKind) -> &'static str {
         | SemanticActionKind::FileTtyIo
         | SemanticActionKind::FileBulkRead
         | SemanticActionKind::FsEnumerate
+        | SemanticActionKind::McpToolCall
+        | SemanticActionKind::McpRequest
+        | SemanticActionKind::McpResponse
+        | SemanticActionKind::McpStdin
+        | SemanticActionKind::McpStdout
         | SemanticActionKind::SseStream
         | SemanticActionKind::SseEvent
         | SemanticActionKind::EnforcementDecision => "SPAN_KIND_INTERNAL",
@@ -230,6 +235,7 @@ fn link_invalidated_by_child_parent_identity(
             link.role,
             SemanticActionLinkRole::AgentPerformedAction
                 | SemanticActionLinkRole::CommandContainsCommandInvocation
+                | SemanticActionLinkRole::CommandContainsMcpToolCall
         )
 }
 
@@ -242,6 +248,11 @@ fn link_is_parent_child(role: SemanticActionLinkRole) -> bool {
             | SemanticActionLinkRole::CommandContainsProcessExec
             | SemanticActionLinkRole::CommandContainsCommandInvocation
             | SemanticActionLinkRole::CommandContainsLlmCall
+            | SemanticActionLinkRole::CommandContainsMcpToolCall
+            | SemanticActionLinkRole::McpToolCallRequest
+            | SemanticActionLinkRole::McpToolCallResponse
+            | SemanticActionLinkRole::McpRequestStdout
+            | SemanticActionLinkRole::McpResponseStdin
             | SemanticActionLinkRole::FileWriteContainsFileEvent
             | SemanticActionLinkRole::AgentInvocationExec
             | SemanticActionLinkRole::AgentInvocationChildLlmRequest
@@ -258,6 +269,11 @@ enum ParentRolePriority {
     CommandContainsProcessExec,
     CommandContainsCommandInvocation,
     CommandContainsLlmCall,
+    CommandContainsMcpToolCall,
+    McpToolCallRequest,
+    McpToolCallResponse,
+    McpRequestStdout,
+    McpResponseStdin,
     AgentPerformedAction,
     CommandContainsProcessForkAttempt,
     CommandContainsFileAccess,
@@ -284,6 +300,13 @@ fn parent_role_priority(role: SemanticActionLinkRole) -> ParentRolePriority {
         SemanticActionLinkRole::CommandContainsLlmCall => {
             ParentRolePriority::CommandContainsLlmCall
         }
+        SemanticActionLinkRole::CommandContainsMcpToolCall => {
+            ParentRolePriority::CommandContainsMcpToolCall
+        }
+        SemanticActionLinkRole::McpToolCallRequest => ParentRolePriority::McpToolCallRequest,
+        SemanticActionLinkRole::McpToolCallResponse => ParentRolePriority::McpToolCallResponse,
+        SemanticActionLinkRole::McpRequestStdout => ParentRolePriority::McpRequestStdout,
+        SemanticActionLinkRole::McpResponseStdin => ParentRolePriority::McpResponseStdin,
         SemanticActionLinkRole::CommandContainsProcessForkAttempt => {
             ParentRolePriority::CommandContainsProcessForkAttempt
         }

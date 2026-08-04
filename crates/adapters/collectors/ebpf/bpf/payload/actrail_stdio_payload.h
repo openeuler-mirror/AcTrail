@@ -26,6 +26,7 @@ enum actrail_stdio_payload_syscall {
 
 enum actrail_stdio_payload_flags {
     ACTRAIL_STDIO_PAYLOAD_TRUNCATED = 1,
+    ACTRAIL_STDIO_PAYLOAD_STAGED = 2,
 };
 
 struct actrail_stdio_payload_config {
@@ -40,10 +41,14 @@ struct actrail_pending_stdio_payload_op {
     __u64 trace_id;
     __u64 buffer_ptr;
     __u64 requested_size;
+    __u64 pid_generation;
+    __u64 sequence;
     __u32 fd;
     __u32 stream;
     __u32 direction;
     __u32 syscall;
+    __u32 pid;
+    __u32 tid;
 };
 
 struct actrail_stdio_stream_sequence_key {
@@ -69,6 +74,25 @@ struct actrail_stdio_payload_event {
     __u32 host_pid;
     __u32 host_tid;
     __u8 bytes[ACTRAIL_STDIO_PAYLOAD_ABI_MAX_BYTES];
+};
+
+struct actrail_stdio_payload_completion_event {
+    __u32 kind;
+    __u32 pid;
+    __u32 tid;
+    __u32 direction;
+    __u64 trace_id;
+    __u64 observed_ktime_ns;
+    __u64 sequence;
+    __s64 result;
+    __u64 requested_size;
+    __u64 pid_generation;
+    __u32 stream;
+    __u32 fd;
+    __u32 syscall;
+    __u32 host_pid;
+    __u32 host_tid;
+    __u32 reserved;
 };
 
 struct {
@@ -130,18 +154,104 @@ static __always_inline __u64 next_stdio_payload_sequence(__u32 pid, __u32 stream
     return next;
 }
 
+static __always_inline int emit_staged_stdio_write(
+    void *ctx,
+    struct actrail_pending_stdio_payload_op *op,
+    __u64 operation_key
+) {
+    struct actrail_stdio_payload_event *event;
+    __u64 bounded_size = op->requested_size;
+    __u32 limit = payload_stdio_capture_limit();
+
+    if (bounded_size > limit) {
+        bounded_size = limit;
+    }
+    actrail_barrier_var(bounded_size);
+    bounded_size &= ACTRAIL_STDIO_PAYLOAD_COPY_MAX_BYTES;
+    if (!bounded_size) {
+        return 0;
+    }
+
+    event = actrail_event_reserve(sizeof(*event));
+    if (!event) {
+        return 0;
+    }
+    event->kind = ACTRAIL_STDIO_PAYLOAD;
+    event->pid = op->pid;
+    event->tid = op->tid;
+    event->direction = op->direction;
+    event->trace_id = op->trace_id;
+    event->observed_ktime_ns = bpf_ktime_get_ns();
+    event->sequence = op->sequence;
+    event->stream = op->stream;
+    event->original_size = (__u32)op->requested_size;
+    event->captured_size = (__u32)bounded_size;
+    event->flags = ACTRAIL_STDIO_PAYLOAD_STAGED
+        | (op->requested_size > bounded_size ? ACTRAIL_STDIO_PAYLOAD_TRUNCATED : 0);
+    event->fd = op->fd;
+    event->syscall = op->syscall;
+    event->pid_generation = op->pid_generation;
+    event->host_pid = operation_key >> 32;
+    event->host_tid = (__u32)operation_key;
+    if (bpf_probe_read_user(
+            event->bytes,
+            bounded_size,
+            (void *)(unsigned long)op->buffer_ptr) != 0) {
+        event_transport_diag_inc(ACTRAIL_STDIO_READ_USER_FAIL);
+        actrail_event_discard(event);
+        return 0;
+    }
+    actrail_event_submit(ctx, event);
+    return 1;
+}
+
+static __always_inline void emit_stdio_write_completion(
+    void *ctx,
+    struct actrail_pending_stdio_payload_op *op,
+    __u64 operation_key,
+    __s64 result
+) {
+    struct actrail_stdio_payload_completion_event *event =
+        actrail_event_reserve(sizeof(*event));
+
+    if (!event) {
+        return;
+    }
+    event->kind = ACTRAIL_STDIO_PAYLOAD_COMPLETION;
+    event->pid = op->pid;
+    event->tid = op->tid;
+    event->direction = op->direction;
+    event->trace_id = op->trace_id;
+    event->observed_ktime_ns = bpf_ktime_get_ns();
+    event->sequence = op->sequence;
+    event->result = result;
+    event->requested_size = op->requested_size;
+    event->pid_generation = op->pid_generation;
+    event->stream = op->stream;
+    event->fd = op->fd;
+    event->syscall = op->syscall;
+    event->host_pid = operation_key >> 32;
+    event->host_tid = (__u32)operation_key;
+    event->reserved = 0;
+    actrail_event_submit(ctx, event);
+}
+
 static __always_inline int store_stdio_payload_op(
     struct trace_event_raw_sys_enter *ctx,
     __u32 syscall
 ) {
-    __u64 pid_tgid = current_pid_tgid();
-    __u32 tgid = pid_tgid >> 32;
-    __u64 *trace_id = bpf_map_lookup_elem(&tracked_traces, &tgid);
+    __u64 operation_key = current_kernel_pid_tgid();
+    __u32 tgid = 0;
+    __u32 tid = 0;
+    __u32 lookup_flags = 0;
+    __u64 *trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
     struct actrail_stdio_payload_config *config = stdio_payload_config();
     struct actrail_pending_stdio_payload_op op = {};
+    struct actrail_pending_stdio_payload_op *stored_op;
     __u32 fd = (__u32)ctx->args[0];
 
-    if (!tgid || !trace_id || !config || !config->enabled || !ctx->args[1] || !ctx->args[2]) {
+    if (!operation_key || !tgid || !trace_id || !config || !config->enabled
+        || !ctx->args[1] || !ctx->args[2]) {
         return 0;
     }
 
@@ -167,27 +277,54 @@ static __always_inline int store_stdio_payload_op(
     op.trace_id = *trace_id;
     op.buffer_ptr = (__u64)ctx->args[1];
     op.requested_size = (__u64)ctx->args[2];
+    op.pid_generation = current_process_start_time(tgid);
     op.fd = fd;
     op.syscall = syscall;
-    bpf_map_update_elem(&pending_stdio_payload_ops, &pid_tgid, &op, BPF_ANY);
+    op.pid = tgid;
+    op.tid = tid;
+    if (syscall == ACTRAIL_STDIO_SYSCALL_WRITE) {
+        op.sequence = next_stdio_payload_sequence(op.pid, op.stream);
+    }
+    if (bpf_map_update_elem(
+            &pending_stdio_payload_ops,
+            &operation_key,
+            &op,
+            BPF_ANY) != 0) {
+        event_transport_diag_inc(ACTRAIL_STDIO_PENDING_UPDATE_FAIL);
+        return 0;
+    }
+    if (syscall == ACTRAIL_STDIO_SYSCALL_WRITE) {
+        stored_op = bpf_map_lookup_elem(&pending_stdio_payload_ops, &operation_key);
+        if (!stored_op) {
+            event_transport_diag_inc(ACTRAIL_STDIO_PENDING_UPDATE_FAIL);
+            return 0;
+        }
+        emit_staged_stdio_write(ctx, stored_op, operation_key);
+    }
     return 0;
 }
 
 static __always_inline int emit_stdio_payload_op(struct trace_event_raw_sys_exit *ctx) {
-    __u64 pid_tgid = current_pid_tgid();
-    __u64 kernel_pid_tgid = current_kernel_pid_tgid();
-    __u32 tgid = pid_tgid >> 32;
-    __u32 tid = (__u32)pid_tgid;
+    __u64 operation_key = current_kernel_pid_tgid();
     struct actrail_pending_stdio_payload_op *op =
-        bpf_map_lookup_elem(&pending_stdio_payload_ops, &pid_tgid);
+        bpf_map_lookup_elem(&pending_stdio_payload_ops, &operation_key);
     struct actrail_stdio_payload_event *event;
     __u64 original_size = (__u64)ctx->ret;
     __u64 bounded_size;
     __u32 capture_size;
     __u32 limit = payload_stdio_capture_limit();
 
-    if (!tgid || !op || ctx->ret <= 0 || !limit) {
-        bpf_map_delete_elem(&pending_stdio_payload_ops, &pid_tgid);
+    if (!operation_key || !op) {
+        bpf_map_delete_elem(&pending_stdio_payload_ops, &operation_key);
+        return 0;
+    }
+    if (op->syscall == ACTRAIL_STDIO_SYSCALL_WRITE) {
+        emit_stdio_write_completion(ctx, op, operation_key, ctx->ret);
+        bpf_map_delete_elem(&pending_stdio_payload_ops, &operation_key);
+        return 0;
+    }
+    if (ctx->ret <= 0 || !limit) {
+        bpf_map_delete_elem(&pending_stdio_payload_ops, &operation_key);
         return 0;
     }
 
@@ -202,40 +339,46 @@ static __always_inline int emit_stdio_payload_op(struct trace_event_raw_sys_exit
     bounded_size &= ACTRAIL_STDIO_PAYLOAD_COPY_MAX_BYTES;
     capture_size = (__u32)bounded_size;
     if (!capture_size) {
-        bpf_map_delete_elem(&pending_stdio_payload_ops, &pid_tgid);
+        bpf_map_delete_elem(&pending_stdio_payload_ops, &operation_key);
         return 0;
     }
 
     event = actrail_event_reserve(sizeof(*event));
     if (!event) {
-        bpf_map_delete_elem(&pending_stdio_payload_ops, &pid_tgid);
+        bpf_map_delete_elem(&pending_stdio_payload_ops, &operation_key);
         return 0;
     }
 
     event->kind = ACTRAIL_STDIO_PAYLOAD;
-    event->pid = tgid;
-    event->tid = tid;
+    event->pid = op->pid;
+    event->tid = op->tid;
     event->direction = op->direction;
     event->trace_id = op->trace_id;
     event->observed_ktime_ns = bpf_ktime_get_ns();
-    event->sequence = next_stdio_payload_sequence(tgid, op->stream);
+    event->sequence = op->sequence
+        ? op->sequence
+        : next_stdio_payload_sequence(op->pid, op->stream);
     event->stream = op->stream;
     event->original_size = (__u32)original_size;
     event->captured_size = capture_size;
     event->flags = original_size > bounded_size ? ACTRAIL_STDIO_PAYLOAD_TRUNCATED : 0;
     event->fd = op->fd;
     event->syscall = op->syscall;
-    event->pid_generation = current_process_start_time(tgid);
-    event->host_pid = kernel_pid_tgid >> 32;
-    event->host_tid = (__u32)kernel_pid_tgid;
-    if (bpf_probe_read_user(event->bytes, bounded_size, (void *)(unsigned long)op->buffer_ptr) != 0) {
+    event->pid_generation = op->pid_generation;
+    event->host_pid = operation_key >> 32;
+    event->host_tid = (__u32)operation_key;
+    if (bpf_probe_read_user(
+            event->bytes,
+            bounded_size,
+            (void *)(unsigned long)op->buffer_ptr) != 0) {
+        event_transport_diag_inc(ACTRAIL_STDIO_READ_USER_FAIL);
         actrail_event_discard(event);
-        bpf_map_delete_elem(&pending_stdio_payload_ops, &pid_tgid);
+        bpf_map_delete_elem(&pending_stdio_payload_ops, &operation_key);
         return 0;
     }
 
     actrail_event_submit(ctx, event);
-    bpf_map_delete_elem(&pending_stdio_payload_ops, &pid_tgid);
+    bpf_map_delete_elem(&pending_stdio_payload_ops, &operation_key);
     return 0;
 }
 

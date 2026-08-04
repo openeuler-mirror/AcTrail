@@ -198,6 +198,22 @@ impl RetentionStore for SqliteStorage {
             .map_err(|error| RetentionError::new("delete_llm_request_blocks", error.to_string()))?;
         transaction
             .execute(
+                "DELETE FROM mcp_jsonrpc_action_refs WHERE trace_id = ?1",
+                params![trace_id.get()],
+            )
+            .map_err(|error| {
+                RetentionError::new("delete_mcp_jsonrpc_action_refs", error.to_string())
+            })?;
+        transaction
+            .execute(
+                "DELETE FROM mcp_jsonrpc_messages WHERE trace_id = ?1",
+                params![trace_id.get()],
+            )
+            .map_err(|error| {
+                RetentionError::new("delete_mcp_jsonrpc_messages", error.to_string())
+            })?;
+        transaction
+            .execute(
                 "DELETE FROM semantic_actions WHERE trace_id = ?1",
                 params![trace_id.get()],
             )

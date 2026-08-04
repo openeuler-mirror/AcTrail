@@ -22,6 +22,11 @@ pub enum SemanticActionKind {
     LlmCall,
     LlmRequest,
     LlmResponse,
+    McpToolCall,
+    McpRequest,
+    McpResponse,
+    McpStdin,
+    McpStdout,
     SseStream,
     SseEvent,
     EnforcementDecision,
@@ -47,6 +52,11 @@ impl SemanticActionKind {
             Self::LlmCall => "llm.call",
             Self::LlmRequest => "llm.request",
             Self::LlmResponse => "llm.response",
+            Self::McpToolCall => "mcp.tool_call",
+            Self::McpRequest => "mcp.request",
+            Self::McpResponse => "mcp.response",
+            Self::McpStdin => "mcp.stdin",
+            Self::McpStdout => "mcp.stdout",
             Self::SseStream => "sse.stream",
             Self::SseEvent => "sse.event",
             Self::EnforcementDecision => "enforcement.decision",
@@ -72,6 +82,11 @@ impl SemanticActionKind {
             "llm.call" => Some(Self::LlmCall),
             "llm.request" => Some(Self::LlmRequest),
             "llm.response" => Some(Self::LlmResponse),
+            "mcp.tool_call" => Some(Self::McpToolCall),
+            "mcp.request" => Some(Self::McpRequest),
+            "mcp.response" => Some(Self::McpResponse),
+            "mcp.stdin" => Some(Self::McpStdin),
+            "mcp.stdout" => Some(Self::McpStdout),
             "sse.stream" => Some(Self::SseStream),
             "sse.event" => Some(Self::SseEvent),
             "enforcement.decision" => Some(Self::EnforcementDecision),
@@ -402,6 +417,27 @@ pub struct LlmRequestContentPage {
     pub body_json: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct McpJsonRpcContentWrite {
+    pub trace_id: TraceId,
+    pub action_ids: Vec<String>,
+    pub format_version: u32,
+    pub canonical_json_hash: String,
+    pub canonical_json: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct McpJsonRpcContentPage {
+    pub trace_id: TraceId,
+    pub action_id: String,
+    pub format_version: u32,
+    pub canonical_json_hash: String,
+    pub canonical_json_bytes: u64,
+    pub returned_bytes: u64,
+    pub truncated: bool,
+    pub canonical_json: String,
+}
+
 const FNV_OFFSET_BASIS: u64 = 14_695_981_039_346_656_037;
 const FNV_PRIME: u64 = 1_099_511_628_211;
 
@@ -422,6 +458,7 @@ pub enum SemanticActionLinkRole {
     CommandContainsProcessExec,
     CommandContainsCommandInvocation,
     CommandContainsLlmCall,
+    CommandContainsMcpToolCall,
     FileWriteContainsFileEvent,
     AgentInvocationExec,
     AgentInvocationChildLlmRequest,
@@ -432,6 +469,10 @@ pub enum SemanticActionLinkRole {
     LlmResponseHttpMessage,
     LlmResponseSseStream,
     SseStreamEvent,
+    McpToolCallRequest,
+    McpToolCallResponse,
+    McpRequestStdout,
+    McpResponseStdin,
 }
 
 impl SemanticActionLinkRole {
@@ -443,6 +484,7 @@ impl SemanticActionLinkRole {
             Self::CommandContainsProcessExec => "command.contains_process_exec",
             Self::CommandContainsCommandInvocation => "command.contains_command_invocation",
             Self::CommandContainsLlmCall => "command.contains_llm_call",
+            Self::CommandContainsMcpToolCall => "command.contains_mcp_tool_call",
             Self::FileWriteContainsFileEvent => "file.write.contains_file_event",
             Self::AgentInvocationExec => "agent.invocation.exec",
             Self::AgentInvocationChildLlmRequest => "agent.invocation.child_llm_request",
@@ -453,6 +495,10 @@ impl SemanticActionLinkRole {
             Self::LlmResponseHttpMessage => "llm.response.http_message",
             Self::LlmResponseSseStream => "llm.response.sse_stream",
             Self::SseStreamEvent => "sse.stream.event",
+            Self::McpToolCallRequest => "mcp.tool_call.request",
+            Self::McpToolCallResponse => "mcp.tool_call.response",
+            Self::McpRequestStdout => "mcp.request.stdout",
+            Self::McpResponseStdin => "mcp.response.stdin",
         }
     }
 
@@ -466,6 +512,7 @@ impl SemanticActionLinkRole {
             "command.contains_process_exec" => Some(Self::CommandContainsProcessExec),
             "command.contains_command_invocation" => Some(Self::CommandContainsCommandInvocation),
             "command.contains_llm_call" => Some(Self::CommandContainsLlmCall),
+            "command.contains_mcp_tool_call" => Some(Self::CommandContainsMcpToolCall),
             "file.write.contains_file_event" => Some(Self::FileWriteContainsFileEvent),
             "agent.invocation.exec" => Some(Self::AgentInvocationExec),
             "agent.invocation.child_llm_request" => Some(Self::AgentInvocationChildLlmRequest),
@@ -476,6 +523,10 @@ impl SemanticActionLinkRole {
             "llm.response.http_message" => Some(Self::LlmResponseHttpMessage),
             "llm.response.sse_stream" => Some(Self::LlmResponseSseStream),
             "sse.stream.event" => Some(Self::SseStreamEvent),
+            "mcp.tool_call.request" => Some(Self::McpToolCallRequest),
+            "mcp.tool_call.response" => Some(Self::McpToolCallResponse),
+            "mcp.request.stdout" => Some(Self::McpRequestStdout),
+            "mcp.response.stdin" => Some(Self::McpResponseStdin),
             _ => None,
         }
     }

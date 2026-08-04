@@ -139,6 +139,7 @@ impl StorageAttachService {
         let payload_socket_redaction_policy = payload_config.socket.redaction_policy;
         let payload_socket_retention_max_bytes_per_trace =
             payload_config.socket.retention_max_bytes_per_trace;
+        let payload_mcp = payload_config.mcp;
         let launch_seccomp_requirements = launch_seccomp_requirements(
             &payload_config,
             &process_seccomp_config,
@@ -225,6 +226,7 @@ impl StorageAttachService {
                 process_seccomp_config.pending_max_entries,
                 semantic_retention,
                 file_observation,
+                payload_mcp,
             ),
             export_runtime,
             alert_ingress,

@@ -60,9 +60,10 @@ static __always_inline int emit_file_creat_enter(
 static __always_inline int emit_file_openat2_enter(
     struct trace_event_raw_sys_enter *ctx
 ) {
-    __u64 pid_tgid = current_pid_tgid();
-    __u32 tgid = pid_tgid >> 32;
-    __u64 *trace_id = bpf_map_lookup_elem(&tracked_traces, &tgid);
+    __u32 tgid = 0;
+    __u32 tid = 0;
+    __u32 lookup_flags = 0;
+    __u64 *trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
     struct actrail_file_event *event;
     struct actrail_open_how how = {};
     __u64 how_ptr = (__u64)ctx->args[2];
@@ -84,7 +85,7 @@ static __always_inline int emit_file_openat2_enter(
 
     init_file_event(event, ACTRAIL_FILE_OPEN);
     event->pid = tgid;
-    event->tid = (__u32)pid_tgid;
+    event->tid = tid;
     event->pid_generation = current_process_start_time(tgid);
     event->phase = ACTRAIL_FILE_PHASE_ENTER;
     event->trace_id = *trace_id;

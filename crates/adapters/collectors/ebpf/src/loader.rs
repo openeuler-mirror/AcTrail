@@ -48,9 +48,10 @@ use object::{EventBuffer, event_map_max_entries, map_handle, resize_map, ring_bu
 use ring_decode::decode_kernel_event;
 pub use ring_decode::{
     KernelEndpoint, KernelEvent, KernelFilePathEvent, KernelObservationEvent,
-    KernelSocketPayloadCompletionEvent, KernelSocketPayloadEvent, KernelStdioPayloadEvent,
-    KernelTlsCaptureRequestEvent, KernelTlsCompletionEvent, KernelTlsDiagnosticEvent,
-    KernelTlsDirectCaptureEvent, LaunchBindingFailure, LaunchBindingFailureStatus,
+    KernelSocketPayloadCompletionEvent, KernelSocketPayloadEvent,
+    KernelStdioPayloadCompletionEvent, KernelStdioPayloadEvent, KernelTlsCaptureRequestEvent,
+    KernelTlsCompletionEvent, KernelTlsDiagnosticEvent, KernelTlsDirectCaptureEvent,
+    LaunchBindingFailure, LaunchBindingFailureStatus,
 };
 pub use socket::SocketPayloadFdState;
 use tls::GoTlsAttachOutcome;
@@ -471,10 +472,24 @@ impl EbpfRuntime {
         self.capture_event_transport_loss()?;
         let raw_events = std::mem::take(&mut *self.events.borrow_mut());
         self.last_raw_sample_count = raw_events.len();
-        raw_events
+        let events = raw_events
             .into_iter()
             .map(|raw| decode_kernel_event(&raw))
-            .collect()
+            .collect::<Result<Vec<_>, _>>()?;
+        #[cfg(any(feature = "perf-buffer", actrail_event_transport_perf))]
+        let events = {
+            // Perf buffers are drained per CPU, so callback order is not a
+            // global causal order. Timestamped events are sorted causally;
+            // untimestamped control diagnostics remain last in arrival order.
+            // Ring buffers already preserve callback order.
+            let mut events = events;
+            events.sort_by_key(|event| {
+                let observed_ktime_ns = event.observed_ktime_ns();
+                (observed_ktime_ns.is_none(), observed_ktime_ns)
+            });
+            events
+        };
+        Ok(events)
     }
 
     /// Drain the kernel transport buffer into userspace without decoding.
@@ -497,10 +512,16 @@ impl EbpfRuntime {
             || diagnostics.reserve_fail != 0
             || diagnostics.output_fail != 0
             || diagnostics.output_fail_bytes != 0
+            || diagnostics.stdio_pending_update_fail != 0
+            || diagnostics.stdio_read_user_fail != 0
         {
             let summary = format!(
-                "kernel event transport lost data: perf_lost={perf_lost}, reserve_fail={}, output_fail={}, output_fail_bytes={}",
-                diagnostics.reserve_fail, diagnostics.output_fail, diagnostics.output_fail_bytes
+                "kernel event transport lost data: perf_lost={perf_lost}, reserve_fail={}, output_fail={}, output_fail_bytes={}, stdio_pending_update_fail={}, stdio_read_user_fail={}",
+                diagnostics.reserve_fail,
+                diagnostics.output_fail,
+                diagnostics.output_fail_bytes,
+                diagnostics.stdio_pending_update_fail,
+                diagnostics.stdio_read_user_fail,
             );
             if self.last_event_transport_loss_summary.as_deref() != Some(summary.as_str()) {
                 self.last_event_transport_loss_summary = Some(summary.clone());
@@ -851,6 +872,8 @@ struct EventTransportDiagnostics {
     reserve_fail: u64,
     output_fail: u64,
     output_fail_bytes: u64,
+    stdio_pending_update_fail: u64,
+    stdio_read_user_fail: u64,
 }
 
 fn read_event_transport_diagnostics(
@@ -860,6 +883,8 @@ fn read_event_transport_diagnostics(
         reserve_fail: read_event_transport_counter(map, 0)?,
         output_fail: read_event_transport_counter(map, 1)?,
         output_fail_bytes: read_event_transport_counter(map, 2)?,
+        stdio_pending_update_fail: read_event_transport_counter(map, 4)?,
+        stdio_read_user_fail: read_event_transport_counter(map, 5)?,
     })
 }
 

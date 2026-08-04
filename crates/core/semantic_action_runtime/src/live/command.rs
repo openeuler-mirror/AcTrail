@@ -7,10 +7,13 @@ use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use semantic_action::{
     SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionLink,
-    SemanticActionLinkConfidence, SemanticActionLinkRole, attr_keys as attrs, evidence_roles,
+    SemanticActionLinkConfidence, SemanticActionLinkRole, SemanticEvidence, attr_keys as attrs,
+    evidence_roles,
 };
 
-use super::actions::{ATTR_PROCESS_PARENT_IDENTITY_STATE, event_action_id};
+use super::actions::{
+    ATTR_PROCESS_PARENT_IDENTITY_STATE, append_missing_evidence, event_action_id,
+};
 use super::process_parent::{
     ForkProcessEdge, apply_fork_parent, fork_edge_from_event, is_parent_identity_attr,
     merge_fork_edges,
@@ -20,13 +23,22 @@ use super::runtime::LiveSemanticActionOutput;
 type CommandKey = (TraceId, ProcessIdentity);
 
 pub(super) struct CommandProjector {
+    commands: BTreeMap<CommandKey, SemanticAction>,
     fork_edges: BTreeMap<CommandKey, ForkProcessEdge>,
+    mcp_invocations: BTreeMap<CommandKey, McpInvocationEvidence>,
+}
+
+#[derive(Clone)]
+struct McpInvocationEvidence {
+    evidence: Vec<SemanticEvidence>,
 }
 
 impl CommandProjector {
     pub(super) fn new() -> Self {
         Self {
+            commands: BTreeMap::new(),
             fork_edges: BTreeMap::new(),
+            mcp_invocations: BTreeMap::new(),
         }
     }
 
@@ -42,10 +54,52 @@ impl CommandProjector {
         {
             apply_fork_parent(&mut action, edge);
         }
+        let key = command_key(action.trace_id, &action.process);
+        if let Some(evidence) = self.mcp_invocations.get(&key) {
+            Self::apply_mcp_invocation(&mut action, evidence);
+        }
+        self.commands.insert(key, action.clone());
         let link = command_exec_link(&action, process_action);
         LiveSemanticActionOutput {
             actions: vec![action],
             links: vec![link],
+            ..LiveSemanticActionOutput::default()
+        }
+    }
+
+    pub(super) fn observe_mcp_tool_call(
+        &mut self,
+        action: &SemanticAction,
+    ) -> LiveSemanticActionOutput {
+        if action.kind != SemanticActionKind::McpToolCall
+            || action
+                .attributes
+                .get(attrs::mcp::TRANSPORT)
+                .map(String::as_str)
+                != Some("stdio")
+        {
+            return LiveSemanticActionOutput::default();
+        }
+        let key = command_key(action.trace_id, &action.process);
+        let invocation =
+            self.mcp_invocations
+                .entry(key.clone())
+                .or_insert_with(|| McpInvocationEvidence {
+                    evidence: Vec::new(),
+                });
+        append_missing_evidence(&mut invocation.evidence, &action.evidence);
+        let invocation = invocation.clone();
+        let Some(mut command) = self.commands.get(&key).cloned() else {
+            return LiveSemanticActionOutput::default();
+        };
+        let previous = command.clone();
+        Self::apply_mcp_invocation(&mut command, &invocation);
+        if command == previous {
+            return LiveSemanticActionOutput::default();
+        }
+        self.commands.insert(key, command.clone());
+        LiveSemanticActionOutput {
+            actions: vec![command],
             ..LiveSemanticActionOutput::default()
         }
     }
@@ -60,8 +114,26 @@ impl CommandProjector {
     }
 
     pub(super) fn forget_trace(&mut self, trace_id: TraceId) {
+        self.commands
+            .retain(|(candidate, _), _| *candidate != trace_id);
         self.fork_edges
             .retain(|(candidate, _), _| *candidate != trace_id);
+        self.mcp_invocations
+            .retain(|(candidate, _), _| *candidate != trace_id);
+    }
+
+    fn apply_mcp_invocation(action: &mut SemanticAction, invocation: &McpInvocationEvidence) {
+        if action
+            .attributes
+            .get(attrs::invocation::KIND)
+            .map(String::as_str)
+            != Some("agent")
+        {
+            action
+                .attributes
+                .insert(attrs::invocation::KIND.to_string(), "mcp".to_string());
+        }
+        append_missing_evidence(&mut action.evidence, &invocation.evidence);
     }
 }
 

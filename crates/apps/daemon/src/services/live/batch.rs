@@ -31,7 +31,7 @@ impl StorageAttachService {
         let mut semantic_action_count = 0usize;
         let mut semantic_link_count = 0usize;
         let mut batch = LiveEventBatch::default();
-        for raw_event in raw_events {
+        for mut raw_event in raw_events {
             let observed_at = raw_event.envelope.observed_at;
             let parent_observation = match &raw_event.payload {
                 RawObservationPayload::Process { parent, .. } => parent.clone(),
@@ -54,6 +54,13 @@ impl StorageAttachService {
             let matched =
                 RuntimeProcessEventApplier::new(trace_runtime, &mut self.process_registry)
                     .apply(&raw_event, process, parent)?;
+            if let Some(matched) = &matched {
+                self.attach_mcp_stdio_client_identity(
+                    trace_runtime,
+                    matched.trace_id,
+                    &mut raw_event,
+                );
+            }
             let matched_trace_id = matched.as_ref().map(|matched| matched.trace_id);
             let event_id = self.next_event_id()?;
             let label_event_id = if self.provider_classification_enabled
@@ -81,7 +88,11 @@ impl StorageAttachService {
                 }
                 batch.trace_ids.insert(trace_id);
                 for event in outcome.events {
-                    let output = self.semantic_actions.observe_event(&event);
+                    let observation = self.semantic_actions.observe_event_with_diagnostics(&event);
+                    batch.diagnostics.extend(
+                        self.materialize_mcp_stdio_diagnostics(observation.mcp_stdio_diagnostics)?,
+                    );
+                    let output = observation.output;
                     let retain_event = output.retain_event;
                     semantic_action_count =
                         semantic_action_count.saturating_add(output.actions.len());
@@ -94,6 +105,7 @@ impl StorageAttachService {
                             output.file_observation_paths,
                             output.file_path_sets,
                             output.llm_request_contents,
+                            output.mcp_jsonrpc_contents,
                         ));
                     retained_events = retained_events.saturating_add(output.deferred_events.len());
                     for deferred_event in output.deferred_events {
@@ -155,7 +167,11 @@ impl StorageAttachService {
         };
         for event in events {
             self.mark_semantic_projection_dirty(event.envelope.trace_id);
-            let output = self.semantic_actions.observe_event(&event);
+            let observation = self.semantic_actions.observe_event_with_diagnostics(&event);
+            batch
+                .diagnostics
+                .extend(self.materialize_mcp_stdio_diagnostics(observation.mcp_stdio_diagnostics)?);
+            let output = observation.output;
             let retain_event = output.retain_event;
             semantic_action_count = semantic_action_count.saturating_add(output.actions.len());
             semantic_link_count = semantic_link_count.saturating_add(output.links.len());
@@ -167,6 +183,7 @@ impl StorageAttachService {
                     output.file_observation_paths,
                     output.file_path_sets,
                     output.llm_request_contents,
+                    output.mcp_jsonrpc_contents,
                 ));
             retained_events = retained_events.saturating_add(output.deferred_events.len());
             for deferred_event in output.deferred_events {
@@ -241,6 +258,68 @@ impl StorageAttachService {
             target_path.as_deref(),
         );
         event
+    }
+
+    fn attach_mcp_stdio_client_identity(
+        &self,
+        trace_runtime: &TraceRuntime,
+        trace_id: TraceId,
+        raw_event: &mut RawCollectorEvent,
+    ) {
+        let RawObservationPayload::Ipc {
+            channel, metadata, ..
+        } = &mut raw_event.payload
+        else {
+            return;
+        };
+        if channel != "stdio_bundle"
+            || !matches!(
+                metadata.get("operation").map(String::as_str),
+                Some("ready" | "replaced")
+            )
+        {
+            return;
+        }
+
+        metadata.remove(attrs::mcp::CLIENT_PROCESS_ID);
+        let Some(client_host_pid) = metadata
+            .get("client_host_pid")
+            .and_then(|value| value.parse::<u32>().ok())
+            .filter(|value| *value != 0)
+        else {
+            return;
+        };
+        let Some(client_generation) = metadata
+            .get("client_generation")
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| *value != 0)
+        else {
+            return;
+        };
+        let Some(client) = self.process_registry.active_host_pid(client_host_pid) else {
+            return;
+        };
+        let Some(host) = self
+            .process_registry
+            .record(client)
+            .and_then(|record| record.host.as_ref())
+        else {
+            return;
+        };
+        let expected_generation = host.start_boottime_ns.unwrap_or(host.start_time_ticks);
+        if expected_generation == 0
+            || expected_generation != client_generation
+            || trace_runtime
+                .get_trace(trace_id)
+                .and_then(|trace| trace.memberships.get(&client))
+                .is_none()
+        {
+            return;
+        }
+        metadata.insert(
+            attrs::mcp::CLIENT_PROCESS_ID.to_string(),
+            client.get().to_string(),
+        );
     }
 
     /// 将 LlmResponse 中的工具名传播到 CommandInvocation 上。

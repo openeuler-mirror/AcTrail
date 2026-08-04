@@ -321,6 +321,15 @@ pub(super) fn semantic_content_owner_as_str(value: SemanticContentOwner) -> &'st
     }
 }
 
+pub(super) fn mcp_jsonrpc_content_retention_as_str(
+    value: McpJsonRpcContentRetention,
+) -> &'static str {
+    match value {
+        McpJsonRpcContentRetention::None => "none",
+        McpJsonRpcContentRetention::CanonicalJson => "canonical_json",
+    }
+}
+
 pub(super) fn llm_request_content_retention_as_str(
     value: LlmRequestContentRetention,
 ) -> &'static str {
