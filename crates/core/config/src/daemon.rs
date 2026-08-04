@@ -230,6 +230,8 @@ pub const DEFAULT_IPC_LINEAGE_MAX_STDIO_BUNDLES_PER_TRACE: u32 = 8_192;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct IpcLineageConfig {
+    /// Whether IPC pipe/FIFO and Unix-socket observation is enabled.
+    pub enabled: bool,
     /// Maximum process lineage records retained for one trace.
     pub max_processes_per_trace: u32,
     /// Maximum candidate IPC file descriptors retained for one trace.
@@ -241,6 +243,7 @@ pub struct IpcLineageConfig {
 impl Default for IpcLineageConfig {
     fn default() -> Self {
         Self {
+            enabled: true,
             max_processes_per_trace: DEFAULT_IPC_LINEAGE_MAX_PROCESSES_PER_TRACE,
             max_candidate_fds_per_trace: DEFAULT_IPC_LINEAGE_MAX_CANDIDATE_FDS_PER_TRACE,
             max_stdio_bundles_per_trace: DEFAULT_IPC_LINEAGE_MAX_STDIO_BUNDLES_PER_TRACE,

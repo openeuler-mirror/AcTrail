@@ -1,7 +1,10 @@
 use super::*;
 
 impl IpcLineageTracker {
-    pub(in crate::decode::file_path) fn new(config: IpcLineageConfig, enabled: bool) -> Self {
+    pub(in crate::decode::file_path) fn new(
+        config: IpcLineageConfig,
+        mcp_stdio_projection_enabled: bool,
+    ) -> Self {
         assert!(
             config.max_processes_per_trace != 0
                 && config.max_candidate_fds_per_trace != 0
@@ -9,7 +12,8 @@ impl IpcLineageTracker {
             "IPC lineage limits must be positive"
         );
         Self {
-            enabled,
+            collection_enabled: config.enabled,
+            mcp_stdio_projection_enabled,
             config,
             traces: BTreeMap::new(),
             archived_diagnostics: BTreeMap::new(),
@@ -19,194 +23,12 @@ impl IpcLineageTracker {
         }
     }
 
-    pub(in crate::decode::file_path) fn seed_process(&mut self, key: ProcessFileKey) {
-        if !self.enabled {
-            return;
-        }
-        self.pending_output_traces.insert(key.trace_id);
-        let trace = self.traces.entry(key.trace_id).or_default();
-        if let Err(reason) = trace.observe_process(&key.process, &self.config) {
-            trace.disable(key.trace_id, key.process, reason, 0);
-        }
-    }
-
-    pub(in crate::decode::file_path) fn inherit_process(
-        &mut self,
-        parent: &ProcessFileKey,
-        child: ProcessFileKey,
-    ) {
-        if !self.enabled {
-            return;
-        }
-        self.pending_output_traces.insert(child.trace_id);
-        let trace = self.traces.entry(child.trace_id).or_default();
-        if trace.disabled_reason.is_some() {
-            return;
-        }
-        let Some(parent_id) = LineageProcessId::from_observation(&parent.process) else {
-            trace.increment_diagnostic("fork_parent_identity_missing");
-            return;
-        };
-        let inherited = trace
-            .processes
-            .get(&parent_id)
-            .map(|state| {
-                state
-                    .fds
-                    .iter()
-                    .map(|(fd, binding)| (*fd, binding.inherited()))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        if !trace.processes.contains_key(&parent_id) {
-            trace.increment_diagnostic("fork_parent_lineage_missing");
-        }
-        let child_id = match trace.observe_process(&child.process, &self.config) {
-            Ok(child_id) => child_id,
-            Err(reason) => {
-                trace.disable(child.trace_id, child.process, reason, 0);
-                return;
-            }
-        };
-        trace.parents.insert(child_id, parent_id);
-        for (fd, binding) in inherited {
-            if let Err(reason) = trace.bind_fd(child_id, fd, binding, &self.config) {
-                trace.disable(child.trace_id, child.process.clone(), reason, 0);
-                return;
-            }
-        }
-    }
-
-    pub(in crate::decode::file_path) fn rekey_process(
-        &mut self,
-        source: &ProcessFileKey,
-        target: ProcessFileKey,
-    ) {
-        if !self.enabled {
-            return;
-        }
-        self.pending_output_traces.insert(target.trace_id);
-        let trace = self.traces.entry(target.trace_id).or_default();
-        let source_id = LineageProcessId::from_observation(&source.process);
-        let target_id = LineageProcessId::from_observation(&target.process);
-        if source_id != target_id {
-            trace.increment_diagnostic("process_identity_rekey_mismatch");
-            return;
-        }
-        if let Err(reason) = trace.observe_process(&target.process, &self.config) {
-            trace.disable(target.trace_id, target.process, reason, 0);
-        }
-    }
-
-    pub(in crate::decode::file_path) fn exec_process(
-        &mut self,
-        key: ProcessFileKey,
-        observed_ktime_ns: u64,
-    ) {
-        if !self.enabled {
-            return;
-        }
-        self.pending_output_traces.insert(key.trace_id);
-        let trace = self.traces.entry(key.trace_id).or_default();
-        let process = match trace.observe_process(&key.process, &self.config) {
-            Ok(process) => process,
-            Err(reason) => {
-                trace.disable(key.trace_id, key.process, reason, observed_ktime_ns);
-                return;
-            }
-        };
-        let close_on_exec_fds = trace
-            .processes
-            .get(&process)
-            .map(|state| {
-                state
-                    .fds
-                    .iter()
-                    .filter_map(|(fd, binding)| binding.close_on_exec.then_some(*fd))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let mut changed = BTreeSet::new();
-        for fd in close_on_exec_fds {
-            if let Some(binding) = trace.unbind_fd(process, fd) {
-                changed.insert(binding.channel_id);
-            }
-        }
-        if let Some(state) = trace.processes.get_mut(&process) {
-            state.exec_ktime_ns = Some(observed_ktime_ns);
-        }
-        let servers = trace.dependent_servers(process, &changed);
-        trace.refresh_servers(
-            key.trace_id,
-            servers,
-            observed_ktime_ns,
-            "exec",
-            &self.config,
-        );
-    }
-
-    pub(in crate::decode::file_path) fn exit_process(
-        &mut self,
-        key: &ProcessFileKey,
-        observed_ktime_ns: u64,
-    ) {
-        if !self.enabled {
-            return;
-        }
-        self.pending_output_traces.insert(key.trace_id);
-        let Some(process) = LineageProcessId::from_observation(&key.process) else {
-            return;
-        };
-        let Some(trace) = self.traces.get_mut(&key.trace_id) else {
-            return;
-        };
-        trace.close_bundle(key.trace_id, process, observed_ktime_ns, "process_exit");
-        let channels = trace
-            .processes
-            .get(&process)
-            .map(|state| {
-                state
-                    .fds
-                    .values()
-                    .map(|binding| binding.channel_id.clone())
-                    .collect::<BTreeSet<_>>()
-            })
-            .unwrap_or_default();
-        let mut servers = trace.dependent_servers(process, &channels);
-        servers.remove(&process);
-        trace.remove_process_state(process);
-        trace.refresh_servers(
-            key.trace_id,
-            servers,
-            observed_ktime_ns,
-            "peer_process_exit",
-            &self.config,
-        );
-    }
-
-    pub(in crate::decode::file_path) fn remove_trace(&mut self, trace_id: TraceId) {
-        if !self.enabled {
-            return;
-        }
-        self.pending_output_traces.remove(&trace_id);
-        let Some(mut trace) = self.traces.remove(&trace_id) else {
-            return;
-        };
-        for (reason, count) in trace.diagnostics {
-            let archived = self.archived_diagnostics.entry(reason).or_default();
-            *archived = archived.saturating_add(count);
-        }
-        self.archived_lifecycle.append(&mut trace.pending_lifecycle);
-        self.archived_degradations
-            .append(&mut trace.pending_degradations);
-    }
-
     pub(in crate::decode::file_path) fn resolve_kind(
         &self,
         key: &ProcessFileKey,
         fd: u32,
     ) -> Option<FdIpcKind> {
-        if !self.enabled {
+        if !self.collection_enabled {
             return None;
         }
         let process = LineageProcessId::from_observation(&key.process)?;
@@ -228,15 +50,24 @@ impl IpcLineageTracker {
         close_on_exec: bool,
         observed_ktime_ns: u64,
     ) {
-        if !self.enabled {
+        if !self.collection_enabled {
             return;
         }
-        self.pending_output_traces.insert(key.trace_id);
+        let projection_enabled = self.mcp_stdio_projection_enabled;
+        if projection_enabled {
+            self.pending_output_traces.insert(key.trace_id);
+        }
         let trace = self.traces.entry(key.trace_id).or_default();
         let process = match trace.observe_process(&key.process, &self.config) {
             Ok(process) => process,
             Err(reason) => {
-                trace.disable(key.trace_id, key.process.clone(), reason, observed_ktime_ns);
+                trace.disable(
+                    key.trace_id,
+                    key.process.clone(),
+                    reason,
+                    observed_ktime_ns,
+                    projection_enabled,
+                );
                 return;
             }
         };
@@ -258,7 +89,13 @@ impl IpcLineageTracker {
         ) {
             Ok(changed) => changed,
             Err(reason) => {
-                trace.disable(key.trace_id, key.process.clone(), reason, observed_ktime_ns);
+                trace.disable(
+                    key.trace_id,
+                    key.process.clone(),
+                    reason,
+                    observed_ktime_ns,
+                    projection_enabled,
+                );
                 return;
             }
         };
@@ -270,18 +107,26 @@ impl IpcLineageTracker {
         ) {
             Ok(other) => changed.extend(other),
             Err(reason) => {
-                trace.disable(key.trace_id, key.process.clone(), reason, observed_ktime_ns);
+                trace.disable(
+                    key.trace_id,
+                    key.process.clone(),
+                    reason,
+                    observed_ktime_ns,
+                    projection_enabled,
+                );
                 return;
             }
         }
-        let servers = trace.dependent_servers(process, &changed);
-        trace.refresh_servers(
-            key.trace_id,
-            servers,
-            observed_ktime_ns,
-            "ipc_created",
-            &self.config,
-        );
+        if projection_enabled {
+            let servers = trace.dependent_servers(process, &changed);
+            trace.refresh_servers(
+                key.trace_id,
+                servers,
+                observed_ktime_ns,
+                "ipc_created",
+                &self.config,
+            );
+        }
     }
 
     pub(in crate::decode::file_path) fn replace_with_non_ipc(
@@ -290,10 +135,13 @@ impl IpcLineageTracker {
         fd: u32,
         observed_ktime_ns: u64,
     ) {
-        if !self.enabled {
+        if !self.collection_enabled {
             return;
         }
-        self.pending_output_traces.insert(key.trace_id);
+        let projection_enabled = self.mcp_stdio_projection_enabled;
+        if projection_enabled {
+            self.pending_output_traces.insert(key.trace_id);
+        }
         let config = self.config;
         let Some((trace, process)) = self.trace_process_mut(key) else {
             return;
@@ -301,15 +149,17 @@ impl IpcLineageTracker {
         let Some(binding) = trace.unbind_fd(process, fd) else {
             return;
         };
-        let channels = BTreeSet::from([binding.channel_id]);
-        let servers = trace.dependent_servers(process, &channels);
-        trace.refresh_servers(
-            key.trace_id,
-            servers,
-            observed_ktime_ns,
-            "fd_rebound",
-            &config,
-        );
+        if projection_enabled {
+            let channels = BTreeSet::from([binding.channel_id]);
+            let servers = trace.dependent_servers(process, &channels);
+            trace.refresh_servers(
+                key.trace_id,
+                servers,
+                observed_ktime_ns,
+                "fd_rebound",
+                &config,
+            );
+        }
     }
 
     pub(in crate::decode::file_path) fn close_fd(
@@ -318,10 +168,13 @@ impl IpcLineageTracker {
         fd: u32,
         observed_ktime_ns: u64,
     ) {
-        if !self.enabled {
+        if !self.collection_enabled {
             return;
         }
-        self.pending_output_traces.insert(key.trace_id);
+        let projection_enabled = self.mcp_stdio_projection_enabled;
+        if projection_enabled {
+            self.pending_output_traces.insert(key.trace_id);
+        }
         let config = self.config;
         let Some((trace, process)) = self.trace_process_mut(key) else {
             return;
@@ -329,15 +182,17 @@ impl IpcLineageTracker {
         let Some(binding) = trace.unbind_fd(process, fd) else {
             return;
         };
-        let channels = BTreeSet::from([binding.channel_id]);
-        let servers = trace.dependent_servers(process, &channels);
-        trace.refresh_servers(
-            key.trace_id,
-            servers,
-            observed_ktime_ns,
-            "fd_closed",
-            &config,
-        );
+        if projection_enabled {
+            let channels = BTreeSet::from([binding.channel_id]);
+            let servers = trace.dependent_servers(process, &channels);
+            trace.refresh_servers(
+                key.trace_id,
+                servers,
+                observed_ktime_ns,
+                "fd_closed",
+                &config,
+            );
+        }
     }
 
     pub(in crate::decode::file_path) fn close_range(
@@ -348,10 +203,13 @@ impl IpcLineageTracker {
         close_on_exec: bool,
         observed_ktime_ns: u64,
     ) {
-        if !self.enabled {
+        if !self.collection_enabled {
             return;
         }
-        self.pending_output_traces.insert(key.trace_id);
+        let projection_enabled = self.mcp_stdio_projection_enabled;
+        if projection_enabled {
+            self.pending_output_traces.insert(key.trace_id);
+        }
         let config = self.config;
         let Some((trace, process)) = self.trace_process_mut(key) else {
             return;
@@ -386,14 +244,16 @@ impl IpcLineageTracker {
         if changed.is_empty() {
             return;
         }
-        let servers = trace.dependent_servers(process, &changed);
-        trace.refresh_servers(
-            key.trace_id,
-            servers,
-            observed_ktime_ns,
-            "fd_range_closed",
-            &config,
-        );
+        if projection_enabled {
+            let servers = trace.dependent_servers(process, &changed);
+            trace.refresh_servers(
+                key.trace_id,
+                servers,
+                observed_ktime_ns,
+                "fd_range_closed",
+                &config,
+            );
+        }
     }
 
     pub(in crate::decode::file_path) fn set_fd_close_on_exec(
@@ -402,7 +262,7 @@ impl IpcLineageTracker {
         fd: u32,
         close_on_exec: bool,
     ) {
-        if !self.enabled {
+        if !self.collection_enabled {
             return;
         }
         let Some((trace, process)) = self.trace_process_mut(key) else {
@@ -425,13 +285,16 @@ impl IpcLineageTracker {
         close_on_exec: bool,
         observed_ktime_ns: u64,
     ) {
-        if !self.enabled {
+        if !self.collection_enabled {
             return;
         }
         if source_fd == target_fd {
             return;
         }
-        self.pending_output_traces.insert(key.trace_id);
+        let projection_enabled = self.mcp_stdio_projection_enabled;
+        if projection_enabled {
+            self.pending_output_traces.insert(key.trace_id);
+        }
         let config = self.config;
         let Some((trace, process)) = self.trace_process_mut(key) else {
             return;
@@ -450,7 +313,13 @@ impl IpcLineageTracker {
             ) {
                 Ok(changed) => changed,
                 Err(reason) => {
-                    trace.disable(key.trace_id, key.process.clone(), reason, observed_ktime_ns);
+                    trace.disable(
+                        key.trace_id,
+                        key.process.clone(),
+                        reason,
+                        observed_ktime_ns,
+                        projection_enabled,
+                    );
                     return;
                 }
             },
@@ -461,18 +330,20 @@ impl IpcLineageTracker {
                 BTreeSet::from([binding.channel_id])
             }
         };
-        let servers = trace.dependent_servers(process, &changed);
-        trace.refresh_servers(
-            key.trace_id,
-            servers,
-            observed_ktime_ns,
-            "fd_duplicated",
-            &config,
-        );
+        if projection_enabled {
+            let servers = trace.dependent_servers(process, &changed);
+            trace.refresh_servers(
+                key.trace_id,
+                servers,
+                observed_ktime_ns,
+                "fd_duplicated",
+                &config,
+            );
+        }
     }
 
     pub(in crate::decode::file_path) fn take_lifecycle_events(&mut self) -> Vec<RawCollectorEvent> {
-        if !self.enabled {
+        if !self.mcp_stdio_projection_enabled {
             return Vec::new();
         }
         let mut lifecycle = std::mem::take(&mut self.archived_lifecycle);
@@ -501,7 +372,7 @@ impl IpcLineageTracker {
     }
 
     pub(in crate::decode::file_path) fn lineage_gap_diagnostics(&self) -> Vec<(&'static str, u64)> {
-        if !self.enabled {
+        if !self.mcp_stdio_projection_enabled {
             return Vec::new();
         }
         let mut diagnostics = self.archived_diagnostics.clone();
@@ -521,6 +392,9 @@ impl IpcLineageTracker {
         &mut self,
         key: &ProcessFileKey,
     ) -> Option<(&mut TraceLineageState, LineageProcessId)> {
+        if !self.collection_enabled {
+            return None;
+        }
         let process = LineageProcessId::from_observation(&key.process)?;
         let trace = self.traces.get_mut(&key.trace_id)?;
         (trace.processes.contains_key(&process) && trace.disabled_reason.is_none())

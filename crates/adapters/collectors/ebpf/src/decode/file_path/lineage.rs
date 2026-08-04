@@ -1,7 +1,8 @@
-//! Event-driven admission index for anonymous IPC descriptors used by stdio MCP.
+//! Tracks anonymous IPC descriptor lineage and optionally projects stdio MCP bundles.
 //!
-//! It identifies client/server fd bundles before payload projection. Only a
-//! ready bundle may enter MCP JSON-RPC framing; ordinary stdio is not parsed.
+//! IPC descriptor collection remains available without MCP projection. When
+//! projection is enabled, only a ready client/server bundle may enter MCP
+//! JSON-RPC framing; ordinary stdio is not parsed.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -14,6 +15,7 @@ use super::state::ProcessFileKey;
 
 mod bundle;
 mod bundle_state;
+mod process_tracker;
 mod tracker;
 
 use bundle::{StdioBundle, StdioBundleLifecycle, StdioLineageDiagnostic};
@@ -223,25 +225,29 @@ impl TraceLineageState {
         process: ProcessObservation,
         reason: &'static str,
         observed_ktime_ns: u64,
+        mcp_stdio_projection_enabled: bool,
     ) {
         if self.disabled_reason.is_some() {
             return;
         }
-        self.increment_diagnostic(reason);
-        self.pending_degradations.push(StdioLineageDiagnostic {
-            trace_id,
-            process,
-            operation: "lineage_disabled",
-            observed_ktime_ns,
-            reason,
-        });
-        let servers = self.active_bundles.keys().copied().collect::<Vec<_>>();
-        for server in servers {
-            self.close_bundle(trace_id, server, observed_ktime_ns, reason);
+        if mcp_stdio_projection_enabled {
+            self.increment_diagnostic(reason);
+            self.pending_degradations.push(StdioLineageDiagnostic {
+                trace_id,
+                process,
+                operation: "lineage_disabled",
+                observed_ktime_ns,
+                reason,
+            });
+            let servers = self.active_bundles.keys().copied().collect::<Vec<_>>();
+            for server in servers {
+                self.close_bundle(trace_id, server, observed_ktime_ns, reason);
+            }
         }
         self.processes.clear();
         self.parents.clear();
         self.owners_by_channel.clear();
+        self.active_bundles.clear();
         self.bundles_by_channel.clear();
         self.last_gaps.clear();
         self.candidate_fd_count = 0;
@@ -340,7 +346,8 @@ impl TraceLineageState {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct IpcLineageTracker {
-    enabled: bool,
+    collection_enabled: bool,
+    mcp_stdio_projection_enabled: bool,
     config: IpcLineageConfig,
     traces: BTreeMap<TraceId, TraceLineageState>,
     archived_diagnostics: BTreeMap<&'static str, u64>,

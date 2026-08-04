@@ -14,7 +14,7 @@ use storage_factory::StorageConfig;
 use super::{
     AgentInvocationConfig, ApplicationProtocolConfig, ClusterConfig, CommandControlConfig,
     DiagnosticLogLevel, EbpfCollectorConfig, EnforcementConfig, FileObservationConfig,
-    NetworkControlConfig, PayloadConfig, PayloadSocketConfig, PayloadTlsConfig,
+    IpcLineageConfig, NetworkControlConfig, PayloadConfig, PayloadSocketConfig, PayloadTlsConfig,
     ProcessSeccompConfig, ResourceMetricsConfig, SeccompNotifyConfig, SemanticRetentionConfig,
     SocketPermissions, SseDataPolicy, StorageRetentionConfig, TraceFinalizationConfig,
     WebServerConfig, WorkloadDiagnosticsConfig,
@@ -443,6 +443,29 @@ fn validate_resource_metrics_config(
 ) -> Result<(), String> {
     if capability_requested(capabilities, &Capability::ResourceMetrics) && !config.enabled {
         return Err("resource-metrics requires resource_metrics_enabled=true".to_string());
+    }
+    Ok(())
+}
+
+fn validate_ipc_lineage_config(
+    config: &IpcLineageConfig,
+    capabilities: &[CapabilityRequest],
+) -> Result<(), String> {
+    if config.enabled {
+        return Ok(());
+    }
+    let required_ipc = capabilities.iter().find(|request| {
+        request.mode == RequestMode::Required
+            && matches!(
+                &request.capability,
+                Capability::IpcPipeFifo | Capability::IpcUnixSocket
+            )
+    });
+    if let Some(request) = required_ipc {
+        return Err(format!(
+            "{} requires ebpf.ipc_lineage.enabled=true",
+            request.capability.as_str()
+        ));
     }
     Ok(())
 }
