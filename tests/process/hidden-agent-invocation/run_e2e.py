@@ -15,6 +15,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "agent-trace"))
+from common import require_web_time_attribution  # noqa: E402
+
 from runner.otel import (
     describe_hidden_agent_evidence,
     hidden_agent_evidence_is_complete,
@@ -34,6 +37,7 @@ def main() -> int:
     actraild = require_binary(bin_dir, "actraild")
     actrailctl = require_binary(bin_dir, "actrailctl")
     actrailviewer = require_binary(bin_dir, "actrailviewer")
+    actrailweb = require_binary(bin_dir, "actrailweb")
     config = Path(args.config)
     workload_path = Path(args.workload_config)
     workload = read_config(workload_path)
@@ -82,6 +86,15 @@ def main() -> int:
             required(workload, "script_b_path"),
             str(agent_a_binary),
         )
+        attribution_summary = require_web_time_attribution(
+            actrailweb,
+            config,
+            launch.trace_id,
+            float(required(workload, "daemon_ready_timeout_seconds")),
+            float(required(workload, "drain_sleep_seconds")),
+            accepted_statuses=("complete", "partial"),
+        )
+        validate_agent_runtime_exclusion(attribution_summary, proof.xiaoo_process_id)
         print(f"hidden_agent_trace_id={launch.trace_id}")
         print(f"agent_a_process_id={proof.agent_a_process_id}")
         print(f"xiaoo_process_id={proof.xiaoo_process_id}")
@@ -95,6 +108,54 @@ def main() -> int:
             clean_configured_paths(actrailctl, config)
             cleanup_helper_binary(workload)
     return 0
+
+
+def validate_agent_runtime_exclusion(
+    summary: dict[str, object],
+    agent_process_id: str,
+) -> None:
+    attribution = summary.get("attribution")
+    action_tree = summary.get("action_tree")
+    if not isinstance(attribution, dict) or not isinstance(action_tree, dict):
+        raise RuntimeError("web time attribution did not return its validation documents")
+
+    runtime_action_ids = {
+        action.get("id")
+        for action in action_tree.get("actions", [])
+        if action.get("kind") == "command.invocation"
+        and str(action.get("process", {}).get("process_id")) == agent_process_id
+        and isinstance(action.get("id"), str)
+    }
+    if not runtime_action_ids:
+        raise RuntimeError("hidden Agent command evidence is missing from the action tree")
+
+    exposed_action_ids: set[str] = set()
+    for row in attribution.get("commands", []):
+        exposed_action_ids.update(row.get("target", {}).get("action_ids", []))
+    for segment in attribution.get("command_segments", []):
+        exposed_action_ids.update(segment.get("action_ids", []))
+    for item in attribution.get("bottlenecks", {}).get("commands", {}).get("items", []):
+        exposed_action_ids.update(item.get("action_ids", []))
+    exposed_runtime_ids = runtime_action_ids.intersection(exposed_action_ids)
+    if exposed_runtime_ids:
+        raise RuntimeError(
+            "Agent runtime was exposed as an Agent-side command: "
+            + ",".join(sorted(exposed_runtime_ids))
+        )
+
+    issue_codes = {
+        issue.get("code")
+        for issue in attribution.get("issues", [])
+        if isinstance(issue, dict)
+    }
+    if "agent_runtime_command_excluded" not in issue_codes:
+        raise RuntimeError("Agent runtime exclusion did not emit attribution diagnostics")
+    print(
+        "hidden_agent_time_attribution "
+        f"agent_process_id={agent_process_id} "
+        f"runtime_commands={len(runtime_action_ids)} exposed=0",
+        flush=True,
+    )
 
 
 def parse_args() -> argparse.Namespace:

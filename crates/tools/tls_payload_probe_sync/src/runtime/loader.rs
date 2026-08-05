@@ -272,7 +272,7 @@ fn original_symbol(cache: &AtomicUsize, symbol: &[u8]) -> Option<usize> {
     let name = symbol
         .strip_suffix(b"\0")
         .and_then(|symbol| std::str::from_utf8(symbol).ok())?;
-    let address = resolver::libc_symbol(name)?;
+    let address = resolver::loader_symbol(name)?;
     if address == 0 {
         return None;
     }

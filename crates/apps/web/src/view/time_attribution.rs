@@ -15,6 +15,8 @@ use semantic_action::{
 use serde::Serialize;
 use storage_core::{StorageBackend, TraceFilter};
 
+#[path = "time_attribution/agents.rs"]
+mod agents;
 #[path = "time_attribution/aggregate.rs"]
 mod aggregate;
 #[path = "time_attribution/cache.rs"]
@@ -188,6 +190,7 @@ struct ToolInterval {
     action_id: String,
     tool_name: Option<String>,
     process: ProcessIdentity,
+    agent_invocation: bool,
 }
 
 #[derive(Clone, Debug)]
