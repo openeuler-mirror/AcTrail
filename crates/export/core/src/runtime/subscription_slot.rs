@@ -17,8 +17,8 @@ use super::{
 use model_core::payload::PayloadSegment;
 use plugin_system::{
     ObservationBatch, ObservationConsumeReport, ObservationConsumer, ObservationEventFamily,
-    PluginHostcallMetricsSource, PluginInstanceStatus, PluginLifecycleState, PluginPurpose,
-    PluginRuntimeKind, PostTraceTask,
+    PluginHostcallMetricsSource, PluginInstanceStatus, PluginLifecycleState,
+    PluginOperationalMetricsSource, PluginPurpose, PluginRuntimeKind, PostTraceTask,
 };
 
 pub(super) struct ObservationConsumerSlot {
@@ -29,6 +29,7 @@ pub(super) struct ObservationConsumerSlot {
     event_families: Vec<ObservationEventFamily>,
     warnings: Vec<String>,
     hostcall_metrics: Option<Arc<dyn PluginHostcallMetricsSource>>,
+    operational_metrics: Option<Arc<dyn PluginOperationalMetricsSource>>,
     payload_snapshot_limit: Option<usize>,
     queue_capacity: Option<u32>,
     delivery: ObservationDelivery,
@@ -48,6 +49,7 @@ impl ObservationConsumerSlot {
         let runtime = consumer.runtime_kind();
         let host_grants = consumer.host_grants();
         let hostcall_metrics = consumer.hostcall_metrics_source();
+        let operational_metrics = consumer.operational_metrics_source();
         let event_families = consumer.subscribed_event_families();
         let payload_snapshot_limit = consumer.payload_snapshot_limit();
         let has_post_trace_analyzer = consumer.post_trace_analyzer().is_some();
@@ -102,6 +104,7 @@ impl ObservationConsumerSlot {
             event_families,
             warnings,
             hostcall_metrics,
+            operational_metrics,
             payload_snapshot_limit,
             queue_capacity,
             delivery,
@@ -208,6 +211,11 @@ impl ObservationConsumerSlot {
     }
 
     pub(super) fn status(&self, state: PluginLifecycleState) -> PluginInstanceStatus {
+        let operational = self
+            .operational_metrics
+            .as_ref()
+            .map(|metrics| metrics.snapshot())
+            .unwrap_or_default();
         PluginInstanceStatus {
             instance_id: self.instance_id.clone(),
             plugin_id: self.plugin_id.clone(),
@@ -217,21 +225,28 @@ impl ObservationConsumerSlot {
             host_grants: self.host_grants.clone(),
             queue_depth: self
                 .queue_capacity
-                .map(|_| self.metrics.queue_depth.load(Ordering::Relaxed)),
-            queue_capacity: self.queue_capacity,
+                .map(|_| self.metrics.queue_depth.load(Ordering::Relaxed))
+                .or(operational.queue_depth),
+            queue_capacity: self.queue_capacity.or(operational.queue_capacity),
             observed_records: self.metrics.observed_records.load(Ordering::Relaxed),
-            dropped_records: self.metrics.dropped_records.load(Ordering::Relaxed),
+            dropped_records: self
+                .metrics
+                .dropped_records
+                .load(Ordering::Relaxed)
+                .saturating_add(operational.dropped_records),
             hostcall_metrics: self
                 .hostcall_metrics
                 .as_ref()
                 .map(|metrics| metrics.snapshot())
                 .unwrap_or_default(),
-            last_error: self
-                .metrics
-                .last_error
-                .lock()
-                .ok()
-                .and_then(|error| error.clone()),
+            operational_metrics: operational.values,
+            last_error: operational.last_error.or_else(|| {
+                self.metrics
+                    .last_error
+                    .lock()
+                    .ok()
+                    .and_then(|error| error.clone())
+            }),
             warnings: self.warnings.clone(),
         }
     }
@@ -246,6 +261,7 @@ impl ObservationConsumerSlot {
             ObservationDelivery::Inline(consumer) => {
                 let observation_batch = ObservationBatch {
                     trace: batch.trace,
+                    trace_finalized: batch.trace_finalized,
                     semantic_actions: batch.actions,
                     semantic_links: batch.links,
                     file_observation_paths: batch.file_observation_paths,
@@ -401,6 +417,7 @@ fn enqueue_observation_batch(
     }
     let queued_batch = QueuedObservationBatch {
         trace: batch.trace.clone(),
+        trace_finalized: batch.trace_finalized,
         semantic_actions: batch.actions.to_vec(),
         semantic_links: batch.links.to_vec(),
         file_observation_paths: batch.file_observation_paths.to_vec(),
@@ -604,5 +621,82 @@ fn record_runtime_failure(
         reason,
         queue_capacity: None,
         occurrences: 1,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+    use std::sync::mpsc;
+
+    use plugin_system::{
+        ObservationBatch, ObservationConsumeReport, ObservationConsumer, PluginOperationalMetrics,
+        PluginOperationalMetricsSource, PluginRuntimeError, PluginRuntimeKind,
+    };
+
+    use super::ObservationConsumerSlot;
+
+    struct FixedMetrics;
+
+    impl PluginOperationalMetricsSource for FixedMetrics {
+        fn snapshot(&self) -> PluginOperationalMetrics {
+            PluginOperationalMetrics {
+                queue_depth: Some(3),
+                queue_capacity: Some(16),
+                dropped_records: 5,
+                last_error: Some("collector unavailable".to_string()),
+                values: BTreeMap::from([("retry_attempts".to_string(), 2)]),
+            }
+        }
+    }
+
+    struct MetricsConsumer {
+        metrics: Arc<FixedMetrics>,
+    }
+
+    impl ObservationConsumer for MetricsConsumer {
+        fn instance_id(&self) -> &str {
+            "builtin.metrics-test"
+        }
+
+        fn plugin_id(&self) -> &str {
+            "metrics-test"
+        }
+
+        fn runtime_kind(&self) -> PluginRuntimeKind {
+            PluginRuntimeKind::Builtin
+        }
+
+        fn operational_metrics_source(&self) -> Option<Arc<dyn PluginOperationalMetricsSource>> {
+            Some(self.metrics.clone())
+        }
+
+        fn consume(
+            &self,
+            _batch: ObservationBatch<'_>,
+        ) -> Result<ObservationConsumeReport, PluginRuntimeError> {
+            Ok(ObservationConsumeReport::empty())
+        }
+    }
+
+    #[test]
+    fn status_includes_consumer_operational_metrics() {
+        let (post_trace_completion_sender, _post_trace_completion_receiver) = mpsc::channel();
+        let slot = ObservationConsumerSlot::new(
+            Box::new(MetricsConsumer {
+                metrics: Arc::new(FixedMetrics),
+            }),
+            Vec::new(),
+            post_trace_completion_sender,
+        );
+
+        let status = slot.status(plugin_system::PluginLifecycleState::Active);
+
+        assert_eq!(status.queue_depth, Some(3));
+        assert_eq!(status.queue_capacity, Some(16));
+        assert_eq!(status.dropped_records, 5);
+        assert_eq!(status.last_error.as_deref(), Some("collector unavailable"));
+        assert_eq!(status.operational_metrics["retry_attempts"], 2);
     }
 }

@@ -1,0 +1,13 @@
+[general]
+id = "otel-http"
+api_version = "actrail.plugin.v2"
+role = "observation-consumer"
+runtime = "builtin"
+
+[host]
+capabilities = []
+
+[plugin_config]
+format = "toml"
+schema_ref = "otel-http.config.v1.schema.json"
+required = true

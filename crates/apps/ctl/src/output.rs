@@ -58,7 +58,7 @@ pub fn format_reply(reply: &ControlReply) -> String {
             .iter()
             .map(|item| {
                 format!(
-                    "{} {} {} {} {} queue={}/{} observed={} dropped={} warnings={}",
+                    "{} {} {} {} {} queue={}/{} observed={} dropped={} metrics={} warnings={}",
                     item.instance_id,
                     item.plugin_id,
                     item.purpose.as_str(),
@@ -72,6 +72,7 @@ pub fn format_reply(reply: &ControlReply) -> String {
                         .unwrap_or_else(|| "none".to_string()),
                     item.observed_records,
                     item.dropped_records,
+                    printable_operational_metrics(&item.operational_metrics),
                     printable_warnings(&item.warnings)
                 )
             })
@@ -80,7 +81,7 @@ pub fn format_reply(reply: &ControlReply) -> String {
         ControlReply::PluginStatus(item) => {
             let payload_read = item.hostcall_metrics.payload_read;
             format!(
-                "instance={} plugin_id={} purpose={} runtime={} state={} queue={}/{} observed={} dropped={} payload_read_calls={} payload_read_bytes={} payload_read_denied={} payload_read_not_found={} payload_read_invalid={} payload_read_too_large={} payload_read_truncated={} payload_read_latency_total_ns={} payload_read_latency_max_ns={} warnings={}",
+                "instance={} plugin_id={} purpose={} runtime={} state={} queue={}/{} observed={} dropped={} payload_read_calls={} payload_read_bytes={} payload_read_denied={} payload_read_not_found={} payload_read_invalid={} payload_read_too_large={} payload_read_truncated={} payload_read_latency_total_ns={} payload_read_latency_max_ns={} last_error={} metrics={} warnings={}",
                 item.instance_id,
                 item.plugin_id,
                 item.purpose.as_str(),
@@ -103,6 +104,8 @@ pub fn format_reply(reply: &ControlReply) -> String {
                 payload_read.truncated,
                 payload_read.latency_total_ns,
                 payload_read.latency_max_ns,
+                item.last_error.as_deref().unwrap_or("none"),
+                printable_operational_metrics(&item.operational_metrics),
                 printable_warnings(&item.warnings)
             )
         }
@@ -142,5 +145,17 @@ fn printable_warnings(warnings: &[String]) -> String {
         "none".to_string()
     } else {
         warnings.join(";")
+    }
+}
+
+fn printable_operational_metrics(metrics: &std::collections::BTreeMap<String, u64>) -> String {
+    if metrics.is_empty() {
+        "none".to_string()
+    } else {
+        metrics
+            .iter()
+            .map(|(name, value)| format!("{name}:{value}"))
+            .collect::<Vec<_>>()
+            .join(",")
     }
 }

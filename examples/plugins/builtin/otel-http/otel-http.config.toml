@@ -1,0 +1,53 @@
+# Replace the placeholder host before deployment. Production deployments
+# should use https:// and configure the three TLS paths below.
+endpoint = "http://COLLECTOR_HOST:4318/v1/traces"
+# Plaintext HTTP is rejected unless this explicit acknowledgement is true.
+# Production deployments should switch the endpoint to https:// and set false.
+allow_insecure = true
+encoding = "protobuf"
+compression = "none"
+# Only structural action metadata is exported by default. Set this to "full"
+# only when the Collector is trusted to receive captured content attributes.
+attribute_mode = "metadata-only"
+queue_capacity = 1024
+batch_max_spans = 64
+batch_timeout_ms = 1000
+connect_timeout_ms = 1000
+request_timeout_ms = 2000
+retry_max_attempts = 3
+retry_backoff_ms = 200
+shutdown_flush_deadline_ms = 3000
+
+# tls_ca_cert_path = "/etc/actrail/tls/ca.crt"
+# tls_client_cert_path = "/etc/actrail/tls/client.crt"
+# tls_client_key_path = "/etc/actrail/tls/client.key"
+
+# OTEL/HTTP is a general observation consumer, so deployments opt in to the
+# action kinds that may cross this outbound boundary.
+[action_kinds]
+default = false
+
+"process.exec" = true
+"process.exit" = true
+"agent.identity" = true
+"agent.exit" = true
+"file.modify" = false
+"file.read" = false
+"file.write" = false
+"file.bulk_read" = false
+"fs.enumerate" = false
+"http.message" = false
+"llm.call" = true
+"llm.request" = true
+"llm.response" = true
+"mcp.tool_call" = true
+"mcp.request" = true
+"mcp.response" = true
+"mcp.stdin" = true
+"mcp.stdout" = true
+"sse.stream" = false
+"sse.event" = false
+"enforcement.decision" = true
+"process.fork_attempt" = false
+"agent.invocation" = true
+"command.invocation" = true

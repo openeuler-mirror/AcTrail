@@ -46,6 +46,18 @@ pub fn map(values: &BTreeMap<String, String>) -> String {
     output
 }
 
+pub fn number_map(values: &BTreeMap<String, u64>) -> String {
+    let mut output = String::from("{");
+    for (index, (key, value)) in values.iter().enumerate() {
+        if index > 0 {
+            output.push(',');
+        }
+        field(&mut output, key, &number(value));
+    }
+    output.push('}');
+    output
+}
+
 pub fn string_array(values: impl IntoIterator<Item = String>) -> String {
     let values = values
         .into_iter()

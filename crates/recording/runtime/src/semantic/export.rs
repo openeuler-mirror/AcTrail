@@ -39,25 +39,31 @@ impl<'a> SemanticActionExportRecorder<'a> {
         &mut self,
         trace: &TraceRecord,
         batch: SemanticActionRecordBatch<'_>,
+        trace_finalized: bool,
         emitted_at: SystemTime,
         next_diagnostic_id: impl FnMut() -> Result<DiagnosticId, RecordingError>,
     ) -> Result<(), RecordingError> {
-        if batch.actions().is_empty() {
+        if batch.actions().is_empty() && !trace_finalized {
             return Ok(());
         }
         let exportable_actions = exportable_actions(batch.actions());
-        if exportable_actions.is_empty() {
+        if exportable_actions.is_empty() && !trace_finalized {
             return Ok(());
         }
         let exportable_links = exportable_links(&exportable_actions, batch.links());
         let exportable_paths =
             exportable_paths(&exportable_actions, batch.file_observation_paths());
-        let payload_snapshot = self.payload_segments_for_export(trace.trace_id);
+        let payload_snapshot = if exportable_actions.is_empty() {
+            Ok(Vec::new())
+        } else {
+            self.payload_segments_for_export(trace.trace_id)
+        };
         let payload_segments = payload_snapshot.as_deref().unwrap_or_default();
         let publish_result = self
             .export_runtime
             .publish_semantic_actions(SemanticActionExportBatch {
                 trace,
+                trace_finalized,
                 actions: &exportable_actions,
                 links: &exportable_links,
                 file_observation_paths: &exportable_paths,
@@ -111,7 +117,29 @@ impl<'a> SemanticActionExportRecorder<'a> {
         let trace = traces
             .trace_record(trace_id)
             .ok_or_else(|| RecordingError::new(LIVE_EXPORT_STAGE, "trace not found"))?;
-        self.publish_batch(trace, batch, emitted_at, next_diagnostic_id)
+        self.publish_batch(trace, batch, false, emitted_at, next_diagnostic_id)
+    }
+
+    pub(crate) fn publish_final_batch_for_trace(
+        &mut self,
+        traces: &dyn TraceRecordLookup,
+        trace_id: TraceId,
+        batch: SemanticActionRecordBatch<'_>,
+        emitted_at: SystemTime,
+        next_diagnostic_id: impl FnMut() -> Result<DiagnosticId, RecordingError>,
+    ) -> Result<(), RecordingError> {
+        if let Some(batch_trace_id) = batch.trace_id()?
+            && batch_trace_id != trace_id
+        {
+            return Err(RecordingError::new(
+                LIVE_EXPORT_STAGE,
+                "final semantic action batch trace_id does not match finalized trace",
+            ));
+        }
+        let trace = traces
+            .trace_record(trace_id)
+            .ok_or_else(|| RecordingError::new(LIVE_EXPORT_STAGE, "trace not found"))?;
+        self.publish_batch(trace, batch, true, emitted_at, next_diagnostic_id)
     }
 
     pub(crate) fn publish_batches_by_trace(

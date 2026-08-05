@@ -6,6 +6,10 @@ license = "MulanPSL-2.0"
 
 [dependencies]
 export_core = { path = "../core" }
+export_otel_http = { path = "../adapters/otel_http" }
 export_otel_jsonl = { path = "../adapters/otel_jsonl" }
 plugin_wasm_runtime = { path = "../../core/plugin_wasm_runtime" }
 plugin_system = { path = "../../core/plugin_system" }
+
+[dev-dependencies]
+toml = "0.8"

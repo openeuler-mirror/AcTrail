@@ -274,6 +274,12 @@ fn runtime_plugin_json(item: &plugin_system::PluginInstanceStatus) -> String {
     output.push(',');
     json::field(
         &mut output,
+        "operational_metrics",
+        &json::number_map(&item.operational_metrics),
+    );
+    output.push(',');
+    json::field(
+        &mut output,
         "last_error",
         &json::optional_string(item.last_error.as_deref()),
     );

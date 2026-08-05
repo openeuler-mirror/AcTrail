@@ -2,6 +2,7 @@ use crate::{
     BestEffortDelivery, BestEffortDeliveryConfig, BestEffortDeliveryFinish, BestEffortSink,
     ExportError, ExportPublishResult, SemanticActionExportAdapter, SemanticActionExportRecord,
 };
+use std::time::Duration;
 
 pub trait SemanticActionExportRoute: Send + Sync {
     fn name(&self) -> &'static str;
@@ -16,6 +17,7 @@ pub trait SemanticActionExportRoute: Send + Sync {
 pub struct BestEffortSemanticActionRouteConfig {
     pub worker_thread_name: &'static str,
     pub queue_capacity: u32,
+    pub shutdown_timeout: Option<Duration>,
 }
 
 pub struct BestEffortSemanticActionRoute<A>
@@ -43,6 +45,7 @@ where
                 component_name: adapter.name(),
                 worker_thread_name: config.worker_thread_name,
                 queue_capacity: config.queue_capacity,
+                shutdown_timeout: config.shutdown_timeout,
             },
             sink,
         )?;

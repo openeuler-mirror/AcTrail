@@ -228,6 +228,61 @@ fn tty_summary_is_persisted_but_not_live_exported() {
     let _ = std::fs::remove_file(storage_path);
 }
 
+#[test]
+fn empty_final_projection_reaches_live_consumer() {
+    let storage_path = std::env::temp_dir().join(format!(
+        "actrail-empty-final-export-test-{}.sqlite",
+        std::process::id()
+    ));
+    let profiles = DaemonProfileRegistry::new();
+    let mut wiring = super::super::build_runtime_wiring(
+        &super::test_storage_config(storage_path.clone()),
+        profiles,
+        super::ebpf_config(false),
+        super::payload_config(false),
+        super::DEFAULT_ACTIVE_TRACE_MAX,
+        DiagnosticLogLevel::Info,
+        super::SeccompNotifyConfig::disabled(),
+        super::ProcessSeccompConfig::disabled(),
+        super::AgentInvocationConfig::disabled(),
+        super::SemanticRetentionConfig::default(),
+        super::FileObservationConfig::default(),
+        super::ApplicationProtocolConfig::disabled(),
+        super::ResourceMetricsConfig::disabled(),
+        super::TraceFinalizationConfig::default(),
+        super::WorkloadDiagnostics::default(),
+        super::EnforcementConfig::disabled(),
+        super::CommandControlConfig::disabled(),
+        super::NetworkControlConfig::disabled(),
+    )
+    .unwrap();
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    wiring.attach_service.export_runtime =
+        ExportRuntime::new(vec![Box::new(FinalBatchRecordingConsumer {
+            observed: Arc::clone(&observed),
+        })]);
+
+    let trace_id = wiring.trace_runtime.reserve_trace_id();
+    super::create_active_trace(
+        &mut wiring,
+        trace_id,
+        ProcessIdentity::new(20_200),
+        ProfileName::new("empty-final-export"),
+        TraceName::new("empty-final-export"),
+        Vec::new(),
+        "ebpf",
+        Vec::new(),
+    );
+
+    wiring
+        .attach_service
+        .finalize_semantic_projection_for_trace(&wiring.trace_runtime, trace_id, SystemTime::now())
+        .unwrap();
+
+    assert_eq!(observed.lock().unwrap().as_slice(), &[(true, 0)]);
+    let _ = std::fs::remove_file(storage_path);
+}
+
 struct FailingConsumer;
 
 impl ObservationConsumer for FailingConsumer {
@@ -274,6 +329,35 @@ impl ObservationConsumer for FailingConsumer {
 
 struct RecordingConsumer {
     actions: Arc<Mutex<Vec<SemanticActionKind>>>,
+}
+
+struct FinalBatchRecordingConsumer {
+    observed: Arc<Mutex<Vec<(bool, usize)>>>,
+}
+
+impl ObservationConsumer for FinalBatchRecordingConsumer {
+    fn instance_id(&self) -> &str {
+        "test-final-batch-exporter"
+    }
+
+    fn plugin_id(&self) -> &str {
+        "test-final-batch"
+    }
+
+    fn runtime_kind(&self) -> PluginRuntimeKind {
+        PluginRuntimeKind::Builtin
+    }
+
+    fn consume(
+        &self,
+        batch: ObservationBatch<'_>,
+    ) -> Result<ObservationConsumeReport, PluginRuntimeError> {
+        self.observed
+            .lock()
+            .unwrap()
+            .push((batch.trace_finalized, batch.semantic_actions.len()));
+        Ok(ObservationConsumeReport::empty())
+    }
 }
 
 impl ObservationConsumer for RecordingConsumer {

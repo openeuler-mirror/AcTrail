@@ -43,6 +43,7 @@ fn build_otel_jsonl_semantic_action_route(
         BestEffortSemanticActionRouteConfig {
             worker_thread_name: WRITER_THREAD_NAME,
             queue_capacity,
+            shutdown_timeout: None,
         },
         sink,
     )

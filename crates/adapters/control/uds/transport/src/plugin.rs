@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use plugin_system::{
     PluginHostcallMetrics, PluginInstanceStatus, PluginLifecycleState, PluginPayloadReadMetrics,
     PluginPurpose, PluginRuntimeKind,
@@ -7,6 +9,7 @@ use super::{ControlCodecError, field, parse_usize};
 
 const HOSTCALL_METRIC_FIELDS: usize = 9;
 const WARNINGS_FIELD: &str = "warnings";
+const OPERATIONAL_METRICS_FIELD: &str = "operational_metrics";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum HostcallMetricsMode {
@@ -63,6 +66,14 @@ fn encode_plugin_status_fields(fields: &mut Vec<String>, status: &PluginInstance
         fields.push(WARNINGS_FIELD.to_string());
         fields.push(status.warnings.len().to_string());
         fields.extend(status.warnings.iter().cloned());
+    }
+    if !status.operational_metrics.is_empty() {
+        fields.push(OPERATIONAL_METRICS_FIELD.to_string());
+        fields.push(status.operational_metrics.len().to_string());
+        for (name, value) in &status.operational_metrics {
+            fields.push(name.clone());
+            fields.push(value.to_string());
+        }
     }
 }
 
@@ -197,7 +208,8 @@ fn decode_plugin_status_fields(
         HostcallMetricsMode::Present => base_end + HOSTCALL_METRIC_FIELDS,
     };
     let mut warnings = Vec::new();
-    let next_offset = if matches!(hostcall_metrics_mode, HostcallMetricsMode::Present)
+    let mut next_offset = warning_count_offset;
+    if matches!(hostcall_metrics_mode, HostcallMetricsMode::Present)
         && warning_count_offset < fields.len()
         && field(fields, warning_count_offset)? == WARNINGS_FIELD
     {
@@ -216,10 +228,38 @@ fn decode_plugin_status_fields(
             ));
         }
         warnings.extend(fields[warning_start..warning_end].iter().cloned());
-        warning_end
-    } else {
-        warning_count_offset
-    };
+        next_offset = warning_end;
+    }
+    let mut operational_metrics = BTreeMap::new();
+    if matches!(hostcall_metrics_mode, HostcallMetricsMode::Present)
+        && next_offset < fields.len()
+        && field(fields, next_offset)? == OPERATIONAL_METRICS_FIELD
+    {
+        let metric_count = parse_usize(
+            field(fields, next_offset + 1)?,
+            "plugin_operational_metric_count",
+        )?;
+        let metric_fields = metric_count.checked_mul(2).ok_or_else(|| {
+            ControlCodecError::new("decode", "plugin operational metric count overflow")
+        })?;
+        let metric_start = next_offset + 2;
+        let metric_end = metric_start.checked_add(metric_fields).ok_or_else(|| {
+            ControlCodecError::new("decode", "plugin operational metric count overflow")
+        })?;
+        if metric_end > fields.len() {
+            return Err(ControlCodecError::new(
+                "decode",
+                "plugin operational metric count exceeds status fields",
+            ));
+        }
+        for pair in fields[metric_start..metric_end].chunks_exact(2) {
+            operational_metrics.insert(
+                pair[0].clone(),
+                parse_u64(&pair[1], "plugin_operational_metric_value")?,
+            );
+        }
+        next_offset = metric_end;
+    }
     Ok((
         PluginInstanceStatus {
             instance_id: field(fields, offset)?.clone(),
@@ -236,6 +276,7 @@ fn decode_plugin_status_fields(
             observed_records: parse_u64(field(fields, metrics_offset + 2)?, "observed_records")?,
             dropped_records: parse_u64(field(fields, metrics_offset + 3)?, "dropped_records")?,
             hostcall_metrics,
+            operational_metrics,
             last_error: match field(fields, metrics_offset + 4)?.as_str() {
                 "none" => None,
                 value => Some(value.to_string()),

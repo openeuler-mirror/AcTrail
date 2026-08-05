@@ -114,7 +114,8 @@ impl StorageAttachService {
             Err(error) => errors.push(error),
         }
 
-        if let Err(error) = self.publish_live_export_actions(trace_runtime, export_batch) {
+        if let Err(error) = self.publish_live_export_actions(trace_runtime, trace_id, export_batch)
+        {
             errors.push(error);
         }
 
@@ -149,14 +150,16 @@ impl StorageAttachService {
     pub(super) fn publish_live_export_actions(
         &mut self,
         trace_runtime: &TraceRuntime,
+        trace_id: TraceId,
         semantic_actions: SemanticActionBatch,
     ) -> Result<(), ControlError> {
         let traces = LiveTraceRecordLookup::new(trace_runtime);
         let next_diagnostic_id = &mut self.next_diagnostic_id;
         RecordingWriter::new(self.storage.as_mut())
-            .export_semantic_action_batch_for_trace(
+            .export_final_semantic_action_batch_for_trace(
                 &self.export_runtime,
                 &traces,
+                trace_id,
                 semantic_actions,
                 SystemTime::now(),
                 || {

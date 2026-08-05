@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use crate::{PluginPurpose, PluginRuntimeKind};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -51,6 +53,19 @@ pub trait PluginHostcallMetricsSource: Send + Sync {
     fn snapshot(&self) -> PluginHostcallMetrics;
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct PluginOperationalMetrics {
+    pub queue_depth: Option<u64>,
+    pub queue_capacity: Option<u32>,
+    pub dropped_records: u64,
+    pub last_error: Option<String>,
+    pub values: BTreeMap<String, u64>,
+}
+
+pub trait PluginOperationalMetricsSource: Send + Sync {
+    fn snapshot(&self) -> PluginOperationalMetrics;
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PluginInstanceStatus {
     pub instance_id: String,
@@ -64,6 +79,7 @@ pub struct PluginInstanceStatus {
     pub observed_records: u64,
     pub dropped_records: u64,
     pub hostcall_metrics: PluginHostcallMetrics,
+    pub operational_metrics: BTreeMap<String, u64>,
     pub last_error: Option<String>,
     pub warnings: Vec<String>,
 }

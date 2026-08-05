@@ -40,6 +40,7 @@ members = [
     "crates/contracts/semantic_action",
     "crates/contracts/alert",
     "crates/export/adapters/otel_codec",
+    "crates/export/adapters/otel_http",
     "crates/export/adapters/otel_jsonl",
     "crates/export/core",
     "crates/export/factory",

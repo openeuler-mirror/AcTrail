@@ -312,6 +312,7 @@ fn active_status(
             .as_ref()
             .map(|metrics| metrics.snapshot())
             .unwrap_or_default(),
+        operational_metrics: Default::default(),
         last_error,
         warnings,
     }
