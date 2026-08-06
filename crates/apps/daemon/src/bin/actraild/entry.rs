@@ -673,6 +673,9 @@ fn print_plugin_status(status: &PluginInstanceStatus) {
         "last_error={}",
         status.last_error.as_deref().unwrap_or("none")
     );
+    for (name, value) in &status.operational_metrics {
+        println!("metric.{name}={value}");
+    }
     println!("warnings={}", printable_warnings(&status.warnings));
 }
 

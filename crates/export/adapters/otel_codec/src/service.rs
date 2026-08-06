@@ -59,12 +59,13 @@ fn render_otlp_json_compact(
     links: &[SemanticActionLink],
 ) -> String {
     let service_name = trace.profile_name.as_str();
+    let trace_id = otel_trace_id(trace);
     let mut spans = Vec::new();
     for action in actions {
         if action_invalidated(action) {
             continue;
         }
-        spans.push(render_span(trace, action, links));
+        spans.push(render_span(&trace_id, action, links));
     }
     let mut resource_attrs = vec![
         string_attr("service.name", service_name),
@@ -85,11 +86,7 @@ fn render_otlp_json_compact(
     )
 }
 
-fn render_span(
-    trace: &TraceRecord,
-    action: &SemanticAction,
-    links: &[SemanticActionLink],
-) -> String {
+fn render_span(trace_id: &str, action: &SemanticAction, links: &[SemanticActionLink]) -> String {
     let mut attrs = vec![
         string_attr("actrail.action.id", &action.action_id),
         string_attr("actrail.action.kind", action.kind.as_str()),
@@ -111,7 +108,7 @@ fn render_span(
         .evidence
         .iter()
         .map(|evidence| {
-            let attrs = vec![
+            let attrs = [
                 string_attr("actrail.evidence.kind", evidence.kind.as_str()),
                 int_attr("actrail.evidence.id", evidence.id),
                 string_attr("actrail.evidence.role", &evidence.role),
@@ -133,12 +130,12 @@ fn render_span(
         })
         .unwrap_or_default();
     let span_links = support_links(action, links, parent)
-        .map(|link| render_span_link(link))
+        .map(|link| render_span_link(trace_id, link))
         .collect::<Vec<_>>();
 
     format!(
         "{{\"traceId\":{},\"spanId\":{}{},\"name\":{},\"kind\":\"{}\",\"startTimeUnixNano\":\"{}\",\"endTimeUnixNano\":\"{}\",\"attributes\":[{}],\"events\":[{}],\"links\":[{}],\"status\":{{\"code\":\"{}\"}}}}",
-        quoted(&otel_trace_id(trace)),
+        quoted(trace_id),
         quoted(&otel_span_id(&action.action_id)),
         parent_span_id,
         quoted(&action.title),
@@ -182,7 +179,7 @@ fn span_kind(kind: SemanticActionKind) -> &'static str {
     }
 }
 
-fn parent_link<'a>(
+pub(crate) fn parent_link<'a>(
     action: &SemanticAction,
     links: &'a [SemanticActionLink],
 ) -> Option<&'a SemanticActionLink> {
@@ -193,7 +190,7 @@ fn parent_link<'a>(
         .min_by_key(|link| parent_role_priority(link.role))
 }
 
-fn support_links<'a>(
+pub(crate) fn support_links<'a>(
     action: &SemanticAction,
     links: &'a [SemanticActionLink],
     parent: Option<&'a SemanticActionLink>,
@@ -209,7 +206,7 @@ fn support_links<'a>(
     })
 }
 
-fn action_invalidated(action: &SemanticAction) -> bool {
+pub(crate) fn action_invalidated(action: &SemanticAction) -> bool {
     action
         .attributes
         .get(ATTR_ACTION_VALID)
@@ -220,10 +217,11 @@ fn link_invalidated_by_child_parent_identity(
     action: &SemanticAction,
     link: &SemanticActionLink,
 ) -> bool {
-    if link
-        .attributes
-        .get(ATTR_LINK_VALID)
-        .is_some_and(|value| value == LINK_VALID_FALSE)
+    if !link.valid
+        || link
+            .attributes
+            .get(ATTR_LINK_VALID)
+            .is_some_and(|value| value == LINK_VALID_FALSE)
     {
         return true;
     }
@@ -332,14 +330,14 @@ fn parent_role_priority(role: SemanticActionLinkRole) -> ParentRolePriority {
     }
 }
 
-fn render_span_link(link: &SemanticActionLink) -> String {
-    let attrs = vec![
+fn render_span_link(trace_id: &str, link: &SemanticActionLink) -> String {
+    let attrs = [
         string_attr("actrail.link.role", link.role.as_str()),
         string_attr("actrail.link.confidence", link.confidence.as_str()),
     ];
     format!(
         "{{\"traceId\":{},\"spanId\":{},\"attributes\":[{}]}}",
-        quoted(&format!("{:032x}", link.trace_id.get())),
+        quoted(trace_id),
         quoted(&otel_span_id(&link.parent_action_id)),
         attrs.join(",")
     )
@@ -353,12 +351,24 @@ fn status_code(status: SemanticActionStatus) -> &'static str {
     }
 }
 
+/// Render the daemon-local trace id as the fixed-width OTLP 128-bit value.
 fn otel_trace_id(trace: &TraceRecord) -> String {
-    format!("{:032x}", trace.trace_id.get())
+    format!("{:032x}", otel_trace_id_u128(trace))
+}
+
+/// The 128-bit trace id as a number, so the JSON (hex) and protobuf (16 bytes)
+/// encoders derive an identical value from one place.
+pub(crate) fn otel_trace_id_u128(trace: &TraceRecord) -> u128 {
+    u128::from(trace.trace_id.get())
 }
 
 fn otel_span_id(action_id: &str) -> String {
-    format!("{:016x}", stable_hash(action_id.as_bytes()))
+    format!("{:016x}", otel_span_id_u64(action_id))
+}
+
+/// The 64-bit span id as a number (shared by the JSON and protobuf encoders).
+pub(crate) fn otel_span_id_u64(action_id: &str) -> u64 {
+    stable_hash(action_id.as_bytes())
 }
 
 fn stable_hash(bytes: &[u8]) -> u64 {

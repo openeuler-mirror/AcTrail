@@ -37,6 +37,7 @@ impl StorageAttachService {
                     observed_records: 0,
                     dropped_records: 0,
                     hostcall_metrics: Default::default(),
+                    operational_metrics: Default::default(),
                     last_error: None,
                     warnings: Vec::new(),
                 }),
@@ -206,6 +207,7 @@ impl StorageAttachService {
                         .as_ref()
                         .map(|metrics| metrics.snapshot())
                         .unwrap_or_default(),
+                    operational_metrics: Default::default(),
                     last_error: None,
                     warnings: manifest_warnings,
                 };
@@ -315,6 +317,7 @@ impl StorageAttachService {
                 observed_records: 0,
                 dropped_records: 0,
                 hostcall_metrics: Default::default(),
+                operational_metrics: Default::default(),
                 last_error: None,
                 warnings: Vec::new(),
             });

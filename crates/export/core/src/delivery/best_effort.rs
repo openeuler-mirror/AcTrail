@@ -1,7 +1,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
+use std::sync::mpsc::{RecvTimeoutError, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use crate::{ExportDeliveryDrop, ExportError, ExportPublishResult};
 
@@ -10,11 +11,28 @@ pub struct BestEffortDeliveryConfig {
     pub component_name: &'static str,
     pub worker_thread_name: &'static str,
     pub queue_capacity: u32,
+    /// Maximum time `finish()` may wait for the worker. `None` drains fully.
+    pub shutdown_timeout: Option<Duration>,
 }
 
 pub trait BestEffortSink<T>: Send + 'static {
+    /// Supplies the shared shutdown signal used by the delivery worker.
+    /// Sinks with retry loops should consult it between blocking operations.
+    fn bind_shutdown(&mut self, _shutdown: BestEffortShutdown) {}
+
     /// Returns the number of records made durable by this call.
     fn deliver(&mut self, message: T) -> Result<u64, String>;
+
+    /// Time until this sink next needs worker attention without a new message.
+    /// `None` keeps the worker blocked until input arrives or the sender closes.
+    fn idle_timeout(&self) -> Option<Duration> {
+        None
+    }
+
+    /// Called when `idle_timeout` elapses and returns records made durable.
+    fn on_idle(&mut self) -> Result<u64, String> {
+        Ok(u64::default())
+    }
 
     /// Flushes buffered records and returns the number made durable.
     fn finish(&mut self) -> Result<u64, String> {
@@ -29,6 +47,36 @@ pub struct BestEffortDelivery<T: Send + 'static> {
     error: Arc<Mutex<Option<String>>>,
     component_name: &'static str,
     queue_capacity: u32,
+    shutdown_timeout: Option<Duration>,
+    shutdown: BestEffortShutdown,
+}
+
+#[derive(Clone, Default)]
+pub struct BestEffortShutdown {
+    deadline: Arc<Mutex<Option<Instant>>>,
+}
+
+impl BestEffortShutdown {
+    pub fn deadline(&self) -> Option<Instant> {
+        self.deadline.lock().ok().and_then(|deadline| *deadline)
+    }
+
+    pub fn expired(&self) -> bool {
+        match self.deadline.lock() {
+            Ok(deadline) => deadline.is_some_and(|deadline| Instant::now() >= deadline),
+            // A poisoned shutdown signal cannot safely coordinate more I/O.
+            Err(_) => true,
+        }
+    }
+
+    fn set_deadline(&self, deadline: Option<Instant>) -> Result<(), String> {
+        let mut slot = self
+            .deadline
+            .lock()
+            .map_err(|error| format!("shutdown deadline lock poisoned: {error}"))?;
+        *slot = deadline;
+        Ok(())
+    }
 }
 
 struct BestEffortDeliveryState<T> {
@@ -85,27 +133,61 @@ impl<T: Send + 'static> BestEffortDelivery<T> {
         let thread_error = Arc::clone(&error);
         let durable_records = Arc::new(AtomicU64::new(0));
         let thread_durable_records = Arc::clone(&durable_records);
+        let shutdown = BestEffortShutdown::default();
+        let thread_shutdown = shutdown.clone();
         let worker = thread::Builder::new()
             .name(config.worker_thread_name.to_string())
             .spawn(move || {
                 let mut sink = sink;
-                while let Ok(message) = receiver.recv() {
-                    match sink.deliver(message) {
+                sink.bind_shutdown(thread_shutdown.clone());
+                loop {
+                    if thread_shutdown.expired() {
+                        break;
+                    }
+                    match sink.idle_timeout() {
+                        Some(timeout) => match receiver.recv_timeout(timeout) {
+                            Ok(message) => match sink.deliver(message) {
+                                Ok(delivered) => {
+                                    thread_durable_records.fetch_add(delivered, Ordering::Relaxed);
+                                }
+                                Err(error) => {
+                                    store_delivery_error(&thread_error, error);
+                                    return;
+                                }
+                            },
+                            Err(RecvTimeoutError::Timeout) => match sink.on_idle() {
+                                Ok(delivered) => {
+                                    thread_durable_records.fetch_add(delivered, Ordering::Relaxed);
+                                }
+                                Err(error) => {
+                                    store_delivery_error(&thread_error, error);
+                                    return;
+                                }
+                            },
+                            Err(RecvTimeoutError::Disconnected) => break,
+                        },
+                        None => match receiver.recv() {
+                            Ok(message) => match sink.deliver(message) {
+                                Ok(delivered) => {
+                                    thread_durable_records.fetch_add(delivered, Ordering::Relaxed);
+                                }
+                                Err(error) => {
+                                    store_delivery_error(&thread_error, error);
+                                    return;
+                                }
+                            },
+                            Err(_) => break,
+                        },
+                    }
+                }
+                if !thread_shutdown.expired() {
+                    match sink.finish() {
                         Ok(delivered) => {
                             thread_durable_records.fetch_add(delivered, Ordering::Relaxed);
                         }
                         Err(error) => {
                             store_delivery_error(&thread_error, error);
-                            return;
                         }
-                    }
-                }
-                match sink.finish() {
-                    Ok(delivered) => {
-                        thread_durable_records.fetch_add(delivered, Ordering::Relaxed);
-                    }
-                    Err(error) => {
-                        store_delivery_error(&thread_error, error);
                     }
                 }
             })
@@ -127,6 +209,8 @@ impl<T: Send + 'static> BestEffortDelivery<T> {
             error,
             component_name: config.component_name,
             queue_capacity: config.queue_capacity,
+            shutdown_timeout: config.shutdown_timeout,
+            shutdown,
         })
     }
 
@@ -164,7 +248,7 @@ impl<T: Send + 'static> BestEffortDelivery<T> {
     }
 
     pub fn finish(&self) -> BestEffortDeliveryFinish {
-        let (worker, mut errors) = {
+        let (worker, mut errors, deadline) = {
             let (mut state, state_error) = match self.state.lock() {
                 Ok(state) => (state, None),
                 Err(error) => {
@@ -176,15 +260,44 @@ impl<T: Send + 'static> BestEffortDelivery<T> {
                 return BestEffortDeliveryFinish::empty();
             }
             state.finished = true;
+            let deadline = self
+                .shutdown_timeout
+                .and_then(|timeout| Instant::now().checked_add(timeout));
+            let deadline_error = self.shutdown.set_deadline(deadline).err();
             state.sender.take();
             (
                 state.worker.take(),
-                state_error.into_iter().collect::<Vec<_>>(),
+                state_error
+                    .into_iter()
+                    .chain(deadline_error)
+                    .collect::<Vec<_>>(),
+                deadline,
             )
         };
 
-        if worker.is_some_and(|worker| worker.join().is_err()) {
-            errors.push("delivery worker panicked".to_string());
+        if let Some(worker) = worker {
+            match deadline {
+                Some(deadline) => {
+                    while !worker.is_finished() && Instant::now() < deadline {
+                        let remaining = deadline.saturating_duration_since(Instant::now());
+                        thread::sleep(remaining.min(Duration::from_millis(1)));
+                    }
+                    if worker.is_finished() {
+                        if worker.join().is_err() {
+                            errors.push("delivery worker panicked".to_string());
+                        }
+                    } else {
+                        errors.push(
+                            "shutdown deadline exceeded; delivery worker detached".to_string(),
+                        );
+                    }
+                }
+                None => {
+                    if worker.join().is_err() {
+                        errors.push("delivery worker panicked".to_string());
+                    }
+                }
+            }
         }
         match self.error.lock() {
             Ok(error) => errors.extend(error.iter().cloned()),
@@ -225,5 +338,57 @@ impl<T: Send + 'static> Drop for BestEffortDelivery<T> {
 fn store_delivery_error(error: &Arc<Mutex<Option<String>>>, message: String) {
     if let Ok(mut slot) = error.lock() {
         *slot = Some(message);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    use super::{BestEffortDelivery, BestEffortDeliveryConfig, BestEffortSink};
+
+    struct BlockingSink {
+        started: mpsc::Sender<()>,
+    }
+
+    impl BestEffortSink<()> for BlockingSink {
+        fn deliver(&mut self, (): ()) -> Result<u64, String> {
+            let _ = self.started.send(());
+            std::thread::sleep(Duration::from_millis(500));
+            Ok(1)
+        }
+    }
+
+    #[test]
+    fn finish_returns_by_deadline_when_delivery_is_blocked() {
+        let (started_tx, started_rx) = mpsc::channel();
+        let delivery = BestEffortDelivery::spawn(
+            BestEffortDeliveryConfig {
+                component_name: "deadline-test",
+                worker_thread_name: "deadline-test-worker",
+                queue_capacity: 1,
+                shutdown_timeout: Some(Duration::from_millis(50)),
+            },
+            BlockingSink {
+                started: started_tx,
+            },
+        )
+        .expect("spawn delivery");
+        delivery.publish(()).expect("queue message");
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("delivery entered blocking sink");
+
+        let started = Instant::now();
+        let finish = delivery.finish();
+
+        assert!(started.elapsed() < Duration::from_millis(200));
+        assert_eq!(finish.dropped_records(), 1);
+        assert!(
+            finish
+                .error()
+                .is_some_and(|error| error.message.contains("shutdown deadline exceeded"))
+        );
     }
 }

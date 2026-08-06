@@ -9,7 +9,8 @@ pub use contract::{
     SemanticActionExportAdapter, SemanticActionExportRecord, SemanticActionKindSelection,
 };
 pub use delivery::{
-    BestEffortDelivery, BestEffortDeliveryConfig, BestEffortDeliveryFinish, BestEffortSink,
+    BestEffortDelivery, BestEffortDeliveryConfig, BestEffortDeliveryFinish, BestEffortShutdown,
+    BestEffortSink,
 };
 pub use runtime::{
     BestEffortSemanticActionRoute, BestEffortSemanticActionRouteConfig, ExportDroppedRecord,

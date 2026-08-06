@@ -136,4 +136,23 @@ impl<'a> RecordingWriter<'a> {
             next_diagnostic_id,
         )
     }
+
+    pub fn export_final_semantic_action_batch_for_trace(
+        &mut self,
+        export_runtime: &ExportRuntime,
+        traces: &dyn TraceRecordLookup,
+        trace_id: model_core::ids::TraceId,
+        semantic_actions: SemanticActionBatch,
+        emitted_at: SystemTime,
+        next_diagnostic_id: impl FnMut() -> Result<DiagnosticId, RecordingError>,
+    ) -> Result<(), RecordingError> {
+        SemanticActionExportRecorder::new(self.storage, export_runtime)
+            .publish_final_batch_for_trace(
+                traces,
+                trace_id,
+                semantic_actions.as_record_batch(),
+                emitted_at,
+                next_diagnostic_id,
+            )
+    }
 }

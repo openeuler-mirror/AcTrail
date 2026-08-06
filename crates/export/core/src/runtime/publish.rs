@@ -13,6 +13,7 @@ const EXPORT_RUNTIME_ERROR: &str = "export_runtime";
 
 pub struct SemanticActionExportBatch<'a> {
     pub trace: &'a TraceRecord,
+    pub trace_finalized: bool,
     pub actions: &'a [SemanticAction],
     pub links: &'a [SemanticActionLink],
     pub file_observation_paths: &'a [FileObservationPath],

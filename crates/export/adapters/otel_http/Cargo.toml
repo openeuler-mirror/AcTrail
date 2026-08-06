@@ -1,0 +1,22 @@
+[package]
+name = "export_otel_http"
+version.workspace = true
+edition = "2024"
+license = "MulanPSL-2.0"
+
+[dependencies]
+export_core = { path = "../../core" }
+export_otel_codec = { path = "../otel_codec" }
+flate2 = "1"
+plugin_system = { path = "../../../core/plugin_system" }
+semantic_action = { path = "../../../contracts/semantic_action" }
+serde_json = "1"
+toml = "0.8"
+# System OpenSSL (libssl/libcrypto). actraild already depends on openssl-libs at
+# runtime and openssl-devel at build time, so this adds no new system package —
+# only the Rust bindings. Chosen over rustls to avoid pulling a new crypto stack
+# through openEuler downstream packaging review.
+openssl = "0.10"
+
+[dev-dependencies]
+model_core = { path = "../../../core/model" }

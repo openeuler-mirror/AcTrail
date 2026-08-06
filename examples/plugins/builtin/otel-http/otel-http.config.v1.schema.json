@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "endpoint",
+    "allow_insecure",
+    "encoding",
+    "compression",
+    "attribute_mode",
+    "queue_capacity",
+    "batch_max_spans",
+    "batch_timeout_ms",
+    "connect_timeout_ms",
+    "request_timeout_ms",
+    "retry_max_attempts",
+    "retry_backoff_ms",
+    "shutdown_flush_deadline_ms",
+    "action_kinds"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "endpoint": {
+      "type": "string",
+      "pattern": "^https?://"
+    },
+    "allow_insecure": {
+      "title": "Allow plaintext HTTP",
+      "description": "Explicit acknowledgement required for an http:// endpoint. Keep false for HTTPS production deployments.",
+      "type": "boolean",
+      "default": false
+    },
+    "encoding": {
+      "type": "string",
+      "enum": ["json", "protobuf"]
+    },
+    "compression": {
+      "type": "string",
+      "enum": ["none", "gzip"]
+    },
+    "attribute_mode": {
+      "title": "Outbound action attributes",
+      "description": "Metadata-only omits captured content attributes. Full is an explicit opt-in for trusted Collectors.",
+      "type": "string",
+      "enum": ["metadata-only", "full"],
+      "default": "metadata-only"
+    },
+    "queue_capacity": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "batch_max_spans": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "batch_timeout_ms": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "connect_timeout_ms": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "request_timeout_ms": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "retry_max_attempts": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "retry_backoff_ms": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "shutdown_flush_deadline_ms": {
+      "description": "Maximum time plugin shutdown waits for queued and buffered spans. Records not acknowledged by this deadline are reported as dropped.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "tls_ca_cert_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tls_client_cert_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tls_client_key_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "action_kinds": {
+      "title": "Outbound action kinds",
+      "description": "Explicit allow-list for semantic action kinds that may cross the OTLP/HTTP boundary.",
+      "type": "object",
+      "required": ["default"],
+      "additionalProperties": false,
+      "properties": {
+        "default": {"type": "boolean", "const": false, "default": false},
+        "process.exec": {"type": "boolean"},
+        "process.exit": {"type": "boolean"},
+        "agent.identity": {"type": "boolean"},
+        "agent.exit": {"type": "boolean"},
+        "file.modify": {"type": "boolean"},
+        "file.read": {"type": "boolean"},
+        "file.write": {"type": "boolean"},
+        "file.bulk_read": {"type": "boolean"},
+        "fs.enumerate": {"type": "boolean"},
+        "http.message": {"type": "boolean"},
+        "llm.call": {"type": "boolean"},
+        "llm.request": {"type": "boolean"},
+        "llm.response": {"type": "boolean"},
+        "mcp.tool_call": {"type": "boolean"},
+        "mcp.request": {"type": "boolean"},
+        "mcp.response": {"type": "boolean"},
+        "mcp.stdin": {"type": "boolean"},
+        "mcp.stdout": {"type": "boolean"},
+        "sse.stream": {"type": "boolean"},
+        "sse.event": {"type": "boolean"},
+        "enforcement.decision": {"type": "boolean"},
+        "process.fork_attempt": {"type": "boolean"},
+        "agent.invocation": {"type": "boolean"},
+        "command.invocation": {"type": "boolean"}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["endpoint"],
+        "properties": {
+          "endpoint": {"pattern": "^http://"}
+        }
+      },
+      "then": {
+        "properties": {
+          "allow_insecure": {"const": true}
+        }
+      }
+    }
+  ]
+}

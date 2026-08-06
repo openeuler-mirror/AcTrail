@@ -54,5 +54,5 @@ pub use observation::{
 pub use runtime::{BuiltinPluginInstance, PluginInstanceId};
 pub use status::{
     PluginHostcallMetrics, PluginHostcallMetricsSource, PluginInstanceStatus, PluginLifecycleState,
-    PluginPayloadReadMetrics,
+    PluginOperationalMetrics, PluginOperationalMetricsSource, PluginPayloadReadMetrics,
 };

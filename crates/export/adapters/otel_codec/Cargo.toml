@@ -6,5 +6,7 @@ license = "MulanPSL-2.0"
 
 [dependencies]
 model_core = { path = "../../../core/model" }
+opentelemetry-proto = { version = "0.32.0", default-features = false, features = ["gen-tonic-messages", "trace"] }
+prost = "0.14.4"
 semantic_action = { path = "../../../contracts/semantic_action" }
 serde_json = "1"

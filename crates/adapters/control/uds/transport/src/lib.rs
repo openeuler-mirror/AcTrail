@@ -936,7 +936,13 @@ mod tests {
 
     #[test]
     fn plugin_status_reply_v2_preserves_nonzero_metrics() {
-        let status = plugin_status_with_payload_read_calls("wasm.status", "plugin.status", 11);
+        let mut status = plugin_status_with_payload_read_calls("wasm.status", "plugin.status", 11);
+        status
+            .operational_metrics
+            .insert("otel_http.retry_attempts".to_string(), 3);
+        status
+            .operational_metrics
+            .insert("otel_http.pending_spans".to_string(), 7);
         let reply = Ok(ControlReply::PluginStatus(status.clone()));
 
         let fields = decode_fields(&encode_reply(&reply)).expect("decode encoded fields");
@@ -948,6 +954,7 @@ mod tests {
         };
         assert_eq!(item.instance_id, status.instance_id);
         assert_eq!(item.hostcall_metrics, status.hostcall_metrics);
+        assert_eq!(item.operational_metrics, status.operational_metrics);
     }
 
     #[test]
@@ -962,6 +969,7 @@ mod tests {
         };
         assert_eq!(item.instance_id, "legacy.status");
         assert_eq!(item.hostcall_metrics, PluginHostcallMetrics::default());
+        assert!(item.operational_metrics.is_empty());
     }
 
     #[test]
@@ -1038,6 +1046,7 @@ mod tests {
             observed_records: 7,
             dropped_records: 0,
             hostcall_metrics: PluginHostcallMetrics::default(),
+            operational_metrics: Default::default(),
             last_error: None,
             warnings: Vec::new(),
         }

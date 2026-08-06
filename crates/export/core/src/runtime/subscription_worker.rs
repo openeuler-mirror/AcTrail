@@ -19,6 +19,7 @@ use super::{ExportRuntimeFailure, PostTraceCompletion};
 
 pub(super) struct QueuedObservationBatch {
     pub(super) trace: TraceRecord,
+    pub(super) trace_finalized: bool,
     pub(super) semantic_actions: Vec<SemanticAction>,
     pub(super) semantic_links: Vec<SemanticActionLink>,
     pub(super) file_observation_paths: Vec<FileObservationPath>,
@@ -139,6 +140,7 @@ fn run_observation_batch(
     let result = catch_unwind(AssertUnwindSafe(|| {
         consumer.consume(ObservationBatch {
             trace: &batch.trace,
+            trace_finalized: batch.trace_finalized,
             semantic_actions: &batch.semantic_actions,
             semantic_links: &batch.semantic_links,
             file_observation_paths: &batch.file_observation_paths,
@@ -220,6 +222,7 @@ fn take_due_observation(
     let observation = scheduled.remove(&trace_id)?;
     Some(QueuedObservationBatch {
         trace: observation.trace,
+        trace_finalized: false,
         semantic_actions: Vec::new(),
         semantic_links: Vec::new(),
         file_observation_paths: Vec::new(),

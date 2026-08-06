@@ -57,7 +57,7 @@ class ActrailRuntime:
             )
         operator_config = work_dir / "actraild.conf"
         operator_config_patch = work_dir / "actraild.patch.toml"
-        cls._write_isolated_operator_config_patch(
+        cls.write_isolated_operator_config_patch(
             operator_config_patch,
             work_dir,
         )
@@ -173,9 +173,11 @@ class ActrailRuntime:
         return command
 
     @staticmethod
-    def _write_isolated_operator_config_patch(
+    def write_isolated_operator_config_patch(
         path: Path,
         work_dir: Path,
+        *,
+        plugin_directory: Path | None = None,
     ) -> None:
         quoted = {
             name: json.dumps(str(work_dir / relative))
@@ -192,6 +194,8 @@ class ActrailRuntime:
                 "plugins": "plugins",
             }.items()
         }
+        if plugin_directory is not None:
+            quoted["plugins"] = json.dumps(str(plugin_directory.resolve()))
         path.write_text(
             "[control]\n"
             f"socket_path = {quoted['socket']}\n"

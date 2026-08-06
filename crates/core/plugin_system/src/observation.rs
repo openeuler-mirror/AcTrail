@@ -10,7 +10,8 @@ use semantic_action::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    PluginDroppedRecord, PluginHostcallMetricsSource, PluginRuntimeError, PluginRuntimeKind,
+    PluginDroppedRecord, PluginHostcallMetricsSource, PluginOperationalMetricsSource,
+    PluginRuntimeError, PluginRuntimeKind,
 };
 
 pub const DEFAULT_OBSERVATION_QUEUE_CAPACITY: u32 = 4096;
@@ -32,6 +33,9 @@ pub enum ObservationEventFamily {
 
 pub struct ObservationBatch<'a> {
     pub trace: &'a TraceRecord,
+    /// True only for the final semantic projection batch for this trace.
+    /// Consumers may release trace-scoped state after processing this batch.
+    pub trace_finalized: bool,
     pub semantic_actions: &'a [SemanticAction],
     pub semantic_links: &'a [SemanticActionLink],
     pub file_observation_paths: &'a [FileObservationPath],
@@ -50,6 +54,10 @@ pub trait ObservationConsumer: Send + Sync {
     }
 
     fn hostcall_metrics_source(&self) -> Option<Arc<dyn PluginHostcallMetricsSource>> {
+        None
+    }
+
+    fn operational_metrics_source(&self) -> Option<Arc<dyn PluginOperationalMetricsSource>> {
         None
     }
 
