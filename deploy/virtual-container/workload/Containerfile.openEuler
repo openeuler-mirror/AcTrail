@@ -1,0 +1,10 @@
+ARG BASE_IMAGE=openeuler/openeuler:24.09
+FROM ${BASE_IMAGE}
+
+# openEuler containerd 1.6 has no `ctr run --user`; the regression runner uses
+# setpriv inside the workload to preserve the numeric non-root UID/GID boundary.
+RUN dnf install -y util-linux \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+
+CMD ["/bin/sh"]

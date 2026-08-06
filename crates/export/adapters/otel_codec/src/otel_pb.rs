@@ -86,6 +86,12 @@ pub(crate) fn build_export_request(
     if let Some(container_id) = trace.root_container_id.as_deref() {
         resource_attrs.push(str_kv("container.id", container_id));
     }
+    if let Some(pod_uid) = trace.root_pod_uid.as_deref() {
+        resource_attrs.push(str_kv("k8s.pod.uid", pod_uid));
+    }
+    if let Some(host_id) = trace.root_host_id.as_deref() {
+        resource_attrs.push(str_kv("host.id", host_id));
+    }
 
     ExportTraceServiceRequest {
         resource_spans: vec![ResourceSpans {
@@ -264,6 +270,8 @@ mod tests {
             UNIX_EPOCH,
         );
         trace.root_container_id = Some("6bfb54c1b8d9".to_string());
+        trace.root_pod_uid = Some("2ee7d8a2-e832-4a13-b26c-02ad9ae4a8f6".to_string());
+        trace.root_host_id = Some("33468d3c-97d2-4615-ae8b-c4c6e6ba1471".to_string());
 
         let parent = SemanticAction {
             action_id: "trace:7:event:1:command.invocation".to_string(),
@@ -507,6 +515,12 @@ mod tests {
         let json_res = json_attrs(&json["resourceSpans"][0]["resource"]["attributes"]);
         let proto_res = proto_attrs(&req.resource_spans[0].resource.as_ref().unwrap().attributes);
         assert_eq!(json_res, proto_res, "resource attributes diverge");
+        for key in ["container.id", "k8s.pod.uid", "host.id"] {
+            assert!(
+                json_res.iter().any(|(name, _)| name == key),
+                "missing {key}"
+            );
+        }
 
         // Scope.
         let scope = &json["resourceSpans"][0]["scopeSpans"][0]["scope"];

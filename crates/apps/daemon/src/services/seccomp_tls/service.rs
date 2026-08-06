@@ -501,6 +501,7 @@ mod tests {
                 direction: 1,
                 symbol: 7,
                 library: 4,
+                operation_offset: 0,
                 pid_generation: PID_GENERATION,
                 original_size: PAYLOAD_SIZE as u64,
                 captured_size: PAYLOAD_SIZE as u64,

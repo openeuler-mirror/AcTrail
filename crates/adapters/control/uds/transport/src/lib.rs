@@ -466,12 +466,20 @@ pub fn encode_reply(reply: &Result<ControlReply, ControlError>) -> Vec<u8> {
         }
         Ok(ControlReply::TrackRemoved) => fields.push("reply_track_removed".to_string()),
         Ok(ControlReply::TraceList(items)) => {
-            fields.push("reply_trace_list".to_string());
+            fields.push("reply_trace_list_v3".to_string());
             fields.push(items.len().to_string());
             for item in items {
                 fields.push(item.trace_id.get().to_string());
                 fields.push(item.display_name.to_string());
                 fields.push(item.root_pid.to_string());
+                fields.push(
+                    item.root_pid_namespace
+                        .as_ref()
+                        .map(|namespace| namespace.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                );
+                fields.push(item.root_container_id.clone().unwrap_or_default());
                 fields.push(item.lifecycle_state.as_display_str().to_string());
                 fields.push(format!("{:?}", item.health));
                 fields.push(system_time_to_secs(item.created_at).to_string());
@@ -563,7 +571,8 @@ pub fn decode_reply(bytes: &[u8]) -> Result<Result<ControlReply, ControlError>, 
         }))),
         "reply_track_removed" => Ok(Ok(ControlReply::TrackRemoved)),
         "reply_seccomp_listener_registered" => Ok(Ok(ControlReply::SeccompListenerRegistered)),
-        "reply_trace_list" => {
+        "reply_trace_list" | "reply_trace_list_v2" | "reply_trace_list_v3" => {
+            let trace_list_version = fields[0].as_str();
             let count = parse_usize(field(&fields, 1)?, "count")?;
             let mut items = Vec::new();
             let mut cursor = 2;
@@ -571,25 +580,56 @@ pub fn decode_reply(bytes: &[u8]) -> Result<Result<ControlReply, ControlError>, 
                 let trace_id = TraceId::new(parse_u64(field(&fields, cursor)?, "trace_id")?);
                 let display_name = TraceName::new(field(&fields, cursor + 1)?);
                 let root_pid = parse_u32(field(&fields, cursor + 2)?, "root_pid")?;
-                let lifecycle_state = parse_lifecycle(field(&fields, cursor + 3)?)?;
-                let health = parse_health(field(&fields, cursor + 4)?)?;
+                let includes_pid_namespace = matches!(
+                    trace_list_version,
+                    "reply_trace_list_v2" | "reply_trace_list_v3"
+                );
+                let includes_container_id = trace_list_version == "reply_trace_list_v3";
+                let root_pid_namespace = if includes_pid_namespace {
+                    match field(&fields, cursor + 3)?.as_str() {
+                        "" => None,
+                        value => Some(NamespaceIdentity::new(value)),
+                    }
+                } else {
+                    None
+                };
+                let root_container_id = if includes_container_id {
+                    let container_offset = usize::from(includes_pid_namespace);
+                    match field(&fields, cursor + 3 + container_offset)?.as_str() {
+                        "" => None,
+                        value => Some(value.to_string()),
+                    }
+                } else {
+                    None
+                };
+                let metadata_offset =
+                    usize::from(includes_pid_namespace) + usize::from(includes_container_id);
+                let lifecycle_state =
+                    parse_lifecycle(field(&fields, cursor + 3 + metadata_offset)?)?;
+                let health = parse_health(field(&fields, cursor + 4 + metadata_offset)?)?;
                 let created_at = UNIX_EPOCH
-                    + Duration::from_secs(parse_u64(field(&fields, cursor + 5)?, "created_at")?);
-                let tag_count = parse_usize(field(&fields, cursor + 6)?, "tag_count")?;
+                    + Duration::from_secs(parse_u64(
+                        field(&fields, cursor + 5 + metadata_offset)?,
+                        "created_at",
+                    )?);
+                let tag_count =
+                    parse_usize(field(&fields, cursor + 6 + metadata_offset)?, "tag_count")?;
                 let mut tags = BTreeSet::new();
                 for tag_index in 0..tag_count {
-                    tags.insert(field(&fields, cursor + 7 + tag_index)?.clone());
+                    tags.insert(field(&fields, cursor + 7 + metadata_offset + tag_index)?.clone());
                 }
                 items.push(TraceListItem {
                     trace_id,
                     display_name,
                     root_pid,
+                    root_pid_namespace,
+                    root_container_id,
                     lifecycle_state,
                     health,
                     tags,
                     created_at,
                 });
-                cursor += 7 + tag_count;
+                cursor += 7 + metadata_offset + tag_count;
             }
             Ok(Ok(ControlReply::TraceList(items)))
         }
@@ -848,6 +888,102 @@ mod tests {
         PluginHostcallMetrics, PluginInstanceStatus, PluginLifecycleState, PluginPurpose,
         PluginRuntimeKind,
     };
+
+    #[test]
+    fn trace_list_v3_round_trips_namespace_and_container_identity() {
+        let reply = Ok(ControlReply::TraceList(vec![
+            TraceListItem {
+                trace_id: TraceId::new(7),
+                display_name: TraceName::new("kata"),
+                root_pid: 42,
+                root_pid_namespace: Some(NamespaceIdentity::new("pid:[4026532248]")),
+                root_container_id: Some("a".repeat(64)),
+                lifecycle_state: TraceLifecycleState::Active,
+                health: TraceHealth::Clean,
+                tags: BTreeSet::from(["sandbox".to_string()]),
+                created_at: UNIX_EPOCH,
+            },
+            TraceListItem {
+                trace_id: TraceId::new(8),
+                display_name: TraceName::new("host"),
+                root_pid: 43,
+                root_pid_namespace: None,
+                root_container_id: None,
+                lifecycle_state: TraceLifecycleState::Completed,
+                health: TraceHealth::Degraded,
+                tags: BTreeSet::new(),
+                created_at: UNIX_EPOCH + Duration::from_secs(1),
+            },
+        ]));
+
+        let encoded = encode_reply(&reply);
+        let fields = decode_fields(&encoded).expect("decode encoded fields");
+        assert_eq!(fields[0], "reply_trace_list_v3");
+        assert_eq!(fields[5], "pid:[4026532248]");
+        assert_eq!(fields[6], "a".repeat(64));
+
+        let decoded = decode_reply(&encoded).expect("decode trace list v3");
+        assert_eq!(decoded, reply);
+    }
+
+    #[test]
+    fn trace_list_v2_preserves_pid_namespace_and_defaults_container_to_none() {
+        let fields = vec![
+            "reply_trace_list_v2",
+            "1",
+            "7",
+            "kata",
+            "42",
+            "pid:[4026532248]",
+            "Active",
+            "Clean",
+            "0",
+            "1",
+            "sandbox",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+
+        let decoded = decode_reply(&encode_fields(&fields)).expect("decode trace list v2");
+        let Ok(ControlReply::TraceList(items)) = decoded else {
+            panic!("expected trace list");
+        };
+        assert_eq!(
+            items[0].root_pid_namespace,
+            Some(NamespaceIdentity::new("pid:[4026532248]"))
+        );
+        assert_eq!(items[0].root_container_id, None);
+        assert!(items[0].tags.contains("sandbox"));
+    }
+
+    #[test]
+    fn legacy_trace_list_defaults_runtime_identity_fields_to_none() {
+        let fields = vec![
+            "reply_trace_list",
+            "1",
+            "7",
+            "legacy",
+            "42",
+            "Active",
+            "Clean",
+            "0",
+            "1",
+            "legacy-tag",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+
+        let decoded = decode_reply(&encode_fields(&fields)).expect("decode legacy trace list");
+        let Ok(ControlReply::TraceList(items)) = decoded else {
+            panic!("expected trace list");
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].root_pid_namespace, None);
+        assert_eq!(items[0].root_container_id, None);
+        assert!(items[0].tags.contains("legacy-tag"));
+    }
 
     #[test]
     fn track_add_v3_round_trips_process_ref_and_initial_suppressed_fds() {

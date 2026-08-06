@@ -48,6 +48,8 @@ pub struct OperatorConfig {
     pub control_pending_connection_max: u32,
     pub active_trace_max: u32,
     pub pid_file: PathBuf,
+    /// OTel `host.id` override. `None` → daemon probes DMI product_uuid at start.
+    pub host_id: Option<String>,
     pub storage: StorageConfig,
     pub storage_retention: StorageRetentionConfig,
     pub web: WebServerConfig,
@@ -501,6 +503,32 @@ mod tests {
     use std::time::Duration;
 
     use super::OperatorConfig;
+
+    #[test]
+    fn guest_otel_http_plugin_parses_through_operator_config() {
+        let raw = include_str!("../../../../../deploy/virtual-container/guest/operator.conf");
+        let config = OperatorConfig::parse(raw).expect("guest operator config parses");
+        let plugin = config
+            .startup_plugins
+            .load
+            .iter()
+            .find(|plugin| plugin.instance_id == "kata-guest.otel-http")
+            .expect("otel-http startup plugin present");
+
+        assert!(config.startup_plugins.enabled);
+        assert_eq!(
+            plugin.manifest_path.to_string_lossy(),
+            "/usr/share/actrail/plugins/otel-http/otel-http.plugin.toml"
+        );
+        assert_eq!(
+            plugin
+                .plugin_config_path
+                .as_ref()
+                .expect("otel-http config path")
+                .to_string_lossy(),
+            "/etc/actrail/plugins/otel-http/otel-http.config.toml"
+        );
+    }
 
     #[test]
     fn default_operator_template_includes_storage_retention() {

@@ -137,6 +137,10 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
     signals::install_shutdown_handlers()?;
     write_pid_file(&config.pid_file, std::process::id())?;
     let pid_written = true;
+    daemon::host_id::init(config.host_id.clone());
+    if let Some(host_id) = daemon::host_id::get() {
+        tracing::info!(host_id = %host_id, "actraild host id resolved");
+    }
     let enforcement = enforcement_with_builtin_rules(config_path, config)?;
     let ebpf_resolution = resolve_ebpf_collector_config(config.ebpf_config.clone());
     if let Some(detail) = &ebpf_resolution.degrade_detail {

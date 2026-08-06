@@ -10,6 +10,7 @@ cargo build --release
 
 | 测例项 | 运行指令 | 测试目标 | 预期现象 |
 | --- | --- | --- | --- |
+| Virtual-container deployment | `sudo -E python3 tests/v2/regression/test_all.py --case virtual_container` | 按 V2 规范汇总 guest bundle、systemd/rootfs、workload 接口及 StratoVirt/Cloud Hypervisor Kata E2E。 | 外部虚拟化条件缺失为 SKIPPED；AcTrail、部署契约或采集断言失败为 FAILED；完整矩阵通过为 PASSED。 |
 | Regression quick suite | `python3 tests/regression/test_all.py` | 按 quick suite 汇总运行核心平台、agent、payload、enforcement 和 docs transfer 检查。 | 输出每个 case 的 PASS/SKIP/FAIL 汇总，并在 `/tmp/actrail-regression-*` 下生成 Markdown/JSON 报告。 |
 | Regression case list | `python3 tests/regression/test_all.py --list` | 列出 regression runner 发现的所有 case、suite 归属和标题。 | 只打印 case 清单，不启动 daemon 或真实 workload。 |
 | `initialize` | `python3 tests/regression/test_all.py --case initialize` | 检查运行平台、root 权限、release binaries、seccomp user notification、BTF、tracefs、platform preflight。 | 必要能力存在时 PASS；缺 root、BTF、tracefs 或 release binary 时明确 FAIL/WARN。 |

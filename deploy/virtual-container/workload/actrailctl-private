@@ -1,0 +1,39 @@
+#!/bin/sh
+# Run the bundled client with private libraries without changing Agent env.
+set -eu
+
+ROOT="${ACTRAIL_WORKLOAD_ROOT:-/opt/actrail}"
+INTERFACE="$ROOT/WORKLOAD-INTERFACE"
+
+fail() {
+  echo "FAIL: $*" >&2
+  exit 1
+}
+
+[ -f "$INTERFACE" ] || fail "workload interface is missing: $INTERFACE"
+PROGRAM_INTERPRETER="$(
+  sed -n 's/^program_interpreter=//p' "$INTERFACE" | sed -n '1p'
+)"
+case "$PROGRAM_INTERPRETER" in
+  /*) ;;
+  *) fail "invalid program_interpreter in WORKLOAD-INTERFACE" ;;
+esac
+[ -x "$PROGRAM_INTERPRETER" ] \
+  || fail "program interpreter is unavailable: $PROGRAM_INTERPRETER"
+[ -x "$ROOT/bin/actrailctl" ] \
+  || fail "actrailctl is missing: $ROOT/bin/actrailctl"
+[ -d "$ROOT/lib" ] || fail "private library directory is missing: $ROOT/lib"
+
+if ! "$PROGRAM_INTERPRETER" --verify "$ROOT/bin/actrailctl"; then
+  fail "workload ABI verification failed: $PROGRAM_INTERPRETER cannot load $ROOT/bin/actrailctl"
+fi
+if ! "$PROGRAM_INTERPRETER" \
+  --library-path "$ROOT/lib" \
+  --list "$ROOT/bin/actrailctl" >/dev/null; then
+  fail "workload runtime compatibility check failed: $ROOT/bin/actrailctl dependencies are unavailable"
+fi
+
+exec "$PROGRAM_INTERPRETER" \
+  --library-path "$ROOT/lib" \
+  "$ROOT/bin/actrailctl" \
+  "$@"

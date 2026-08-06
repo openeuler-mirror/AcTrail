@@ -172,6 +172,7 @@ impl StorageAttachService {
         let alert_ingress = AlertIngress::new(plugin_alert_runtime, storage.as_mut())?;
         Ok(Self {
             profiles,
+            host_id: crate::host_id::get(),
             launch_seccomp_requirements,
             storage,
             process_registry,

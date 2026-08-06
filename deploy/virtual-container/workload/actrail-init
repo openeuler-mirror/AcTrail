@@ -1,0 +1,19 @@
+#!/bin/sh
+# Minimal Kata workload PID 1 supervisor for actrail-launch.
+set -eu
+
+ROOT="${ACTRAIL_WORKLOAD_ROOT:-/opt/actrail}"
+[ "$#" -gt 0 ] || {
+  echo "FAIL: actrail-init requires actrail-launch arguments" >&2
+  exit 1
+}
+[ -x "$ROOT/bin/actrail-launch" ] || {
+  echo "FAIL: actrail-launch is missing: $ROOT/bin/actrail-launch" >&2
+  exit 1
+}
+
+set +e
+"$ROOT/bin/actrail-launch" "$@"
+status=$?
+set -e
+exit "$status"

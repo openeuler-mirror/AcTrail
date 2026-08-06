@@ -29,6 +29,7 @@ fn is_ebpf_only_capability(capability: &Capability) -> bool {
             | Capability::IpcPipeFifo
             | Capability::StdioChunk
             | Capability::SocketPlaintextPayload
+            | Capability::EnforcementFilePermissionFanotify
     )
 }
 
@@ -183,6 +184,10 @@ mod tests {
                 CapabilityRequest::new(Capability::TlsPlaintextPayload, RequestMode::Required),
                 CapabilityRequest::new(Capability::ProcExecContext, RequestMode::Required),
                 CapabilityRequest::new(
+                    Capability::EnforcementFilePermissionFanotify,
+                    RequestMode::Required,
+                ),
+                CapabilityRequest::new(
                     Capability::SocketPlaintextPayload,
                     RequestMode::Opportunistic,
                 ),
@@ -200,6 +205,10 @@ mod tests {
         assert!(!has(&neither, Capability::NetTransport));
         assert!(!has(&neither, Capability::ProcExecContext));
         assert!(!has(&neither, Capability::SocketPlaintextPayload));
+        assert!(!has(
+            &neither,
+            Capability::EnforcementFilePermissionFanotify
+        ));
 
         let ebpf_only = profile.for_permissions(DeploymentPermissions::new(true, false));
         assert_eq!(ebpf_only.name.as_str(), "container-auto-ebpf-on-notify-off");
@@ -207,6 +216,10 @@ mod tests {
         assert!(has(&ebpf_only, Capability::NetTransport));
         assert!(!has(&ebpf_only, Capability::ProcExecContext));
         assert!(has(&ebpf_only, Capability::SocketPlaintextPayload));
+        assert!(has(
+            &ebpf_only,
+            Capability::EnforcementFilePermissionFanotify
+        ));
 
         let notify_only = profile.for_permissions(DeploymentPermissions::new(false, true));
         assert_eq!(
@@ -217,11 +230,16 @@ mod tests {
         assert!(!has(&notify_only, Capability::ProcLifecycle));
         assert!(has(&notify_only, Capability::ProcExecContext));
         assert!(!has(&notify_only, Capability::SocketPlaintextPayload));
+        assert!(!has(
+            &notify_only,
+            Capability::EnforcementFilePermissionFanotify
+        ));
 
         let both = profile.for_permissions(DeploymentPermissions::new(true, true));
         assert_eq!(both.name.as_str(), "container-auto-ebpf-on-notify-on");
         assert!(has(&both, Capability::ProcLifecycle));
         assert!(has(&both, Capability::ProcExecContext));
         assert!(has(&both, Capability::SocketPlaintextPayload));
+        assert!(has(&both, Capability::EnforcementFilePermissionFanotify));
     }
 }

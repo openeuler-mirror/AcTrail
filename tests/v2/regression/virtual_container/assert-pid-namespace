@@ -1,0 +1,32 @@
+#!/bin/sh
+# Assert the PID namespace that the guest-root daemon attached to this trace.
+set -eu
+
+ROOT="${ACTRAIL_WORKLOAD_ROOT:-/opt/actrail}"
+TRACE_NAME="${ACTRAIL_NAMESPACE_TRACE_NAME:-kata-pid-namespace}"
+EXPECTED_PID_NAMESPACE="${ACTRAIL_TEST_PID_NAMESPACE:-}"
+
+fail() {
+  echo "FAIL: $*" >&2
+  exit 1
+}
+
+if [ -z "$EXPECTED_PID_NAMESPACE" ]; then
+  EXPECTED_PID_NAMESPACE="$(readlink /proc/self/ns/pid)" \
+    || fail "cannot query workload PID namespace from /proc/self/ns/pid"
+fi
+printf '%s\n' "$EXPECTED_PID_NAMESPACE" \
+  | grep -Eq '^pid:\[[0-9]+\]$' \
+  || fail "unexpected workload PID namespace: $EXPECTED_PID_NAMESPACE"
+
+trace_output="$(
+  "$ROOT/bin/actrailctl-private" \
+    --config "$ROOT/etc/actrail/operator.conf" \
+    list-traces --name "$TRACE_NAME"
+)"
+printf '%s\n' "$trace_output"
+printf '%s\n' "$trace_output" \
+  | grep -F "pidns=$EXPECTED_PID_NAMESPACE " >/dev/null \
+  || fail "daemon trace does not contain workload PID namespace $EXPECTED_PID_NAMESPACE"
+
+echo "ACTRAIL_PID_NAMESPACE_OK"

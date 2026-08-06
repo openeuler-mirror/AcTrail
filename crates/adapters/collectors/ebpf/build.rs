@@ -107,6 +107,7 @@ fn main() {
     println!("cargo:rerun-if-changed=/proc/sys/kernel/osrelease");
     println!("cargo:rerun-if-changed=/sys/kernel/btf/vmlinux");
     println!("cargo:rerun-if-env-changed=ACTRAIL_BPF_SYSTEM_INCLUDE");
+    println!("cargo:rerun-if-env-changed=ACTRAIL_EBPF_EVENT_TRANSPORT");
     println!("cargo:rerun-if-env-changed=ACTRAIL_LAUNCH_BINDING_BACKEND");
     println!("cargo:rustc-check-cfg=cfg(actrail_event_transport_perf)");
     println!("cargo:rustc-check-cfg=cfg(actrail_launch_binding_task_storage)");
@@ -276,7 +277,37 @@ fn target_system_include(target_arch: &str) -> Option<PathBuf> {
 }
 
 fn select_event_transport() -> TransportChoice {
-    if env::var_os("CARGO_FEATURE_PERF_BUFFER").is_some() {
+    let perf_feature = env::var_os("CARGO_FEATURE_PERF_BUFFER").is_some();
+    if let Some(requested) = env::var_os("ACTRAIL_EBPF_EVENT_TRANSPORT") {
+        let requested = requested.to_string_lossy();
+        match requested.as_ref() {
+            "" | "auto" => {}
+            "perf-buffer" => {
+                return TransportChoice {
+                    transport: EventTransport::PerfBuffer,
+                    reason: "forced by ACTRAIL_EBPF_EVENT_TRANSPORT".to_owned(),
+                };
+            }
+            "ring-buffer" if perf_feature => {
+                panic!(
+                    "ACTRAIL_EBPF_EVENT_TRANSPORT=ring-buffer conflicts with Cargo feature perf-buffer"
+                );
+            }
+            "ring-buffer" => {
+                return TransportChoice {
+                    transport: EventTransport::RingBuffer,
+                    reason: "forced by ACTRAIL_EBPF_EVENT_TRANSPORT".to_owned(),
+                };
+            }
+            other => {
+                panic!(
+                    "unsupported ACTRAIL_EBPF_EVENT_TRANSPORT={other}; expected auto, perf-buffer, or ring-buffer"
+                );
+            }
+        }
+    }
+
+    if perf_feature {
         return TransportChoice {
             transport: EventTransport::PerfBuffer,
             reason: "forced by Cargo feature perf-buffer".to_owned(),

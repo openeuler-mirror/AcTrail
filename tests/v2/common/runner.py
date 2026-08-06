@@ -10,7 +10,12 @@ from pathlib import Path
 from typing import Callable, TextIO
 
 from .config import TestCaseInputs
-from .output import CaseProgressReporter, TestOutput, has_failure
+from .output import (
+    CaseProgressReporter,
+    TestOutput,
+    effective_status,
+    has_failure,
+)
 from .test_case import TestCase, TestResult, TestStatus
 from .testing_context import TestingContextSingleton
 
@@ -20,6 +25,7 @@ class TestDefinition:
     name: str
     description: str
     build_case: Callable[[TestCaseInputs], TestCase]
+    skip_if_skipped: tuple[str, ...] = ()
 
 
 class Tee:
@@ -182,6 +188,7 @@ def run_selected(
         _validate_work_root(work_root, repo.resolve())
         log_dir.mkdir(parents=True, exist_ok=True)
         failed = False
+        completed_results: dict[str, TestResult] = {}
         for definition in definitions:
             case_work_dir = work_root / definition.name
             if show_details:
@@ -213,11 +220,16 @@ def run_selected(
                     result: TestResult | None = None
                     try:
                         try:
-                            _prepare_case_work_dir(case_work_dir, work_root)
-                            case = definition.build_case(
-                                TestCaseInputs(repo, bin_dir, case_work_dir)
+                            result = _dependency_skip_result(
+                                definition,
+                                completed_results,
                             )
-                            result = case.run(context)
+                            if result is None:
+                                _prepare_case_work_dir(case_work_dir, work_root)
+                                case = definition.build_case(
+                                    TestCaseInputs(repo, bin_dir, case_work_dir)
+                                )
+                                result = case.run(context)
                         except Exception as error:
                             traceback.print_exc(file=runtime_stream)
                             result = TestResult(TestStatus.FAILED, str(error))
@@ -295,6 +307,7 @@ def run_selected(
                 if cleanup_cases and has_failure(result):
                     console.result(definition.name, result)
             case_failed = has_failure(result)
+            completed_results[definition.name] = result
             failed = failed or case_failed
             if fail_fast and case_failed:
                 break
@@ -307,6 +320,24 @@ def run_selected(
         return 1 if failed else 0
     finally:
         context.close()
+
+
+def _dependency_skip_result(
+    definition: TestDefinition,
+    completed_results: dict[str, TestResult],
+) -> TestResult | None:
+    skipped = [
+        name
+        for name in definition.skip_if_skipped
+        if name in completed_results
+        and effective_status(completed_results[name]) is TestStatus.SKIPPED
+    ]
+    if not skipped:
+        return None
+    return TestResult(
+        TestStatus.SKIPPED,
+        "prerequisite case skipped: " + ", ".join(skipped),
+    )
 
 
 def _remove_case_work_dir(case_work_dir: Path, work_root: Path) -> None:

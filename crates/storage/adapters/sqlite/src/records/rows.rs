@@ -34,7 +34,19 @@ pub fn trace_from_row(row: &Row<'_>) -> Result<TraceRecord, SqlError> {
         trace_id: model_core::ids::TraceId::new(row.get::<_, u64>("trace_id")?),
         alert_token,
         root_process_identity: ProcessIdentity::new(row.get("root_process_id")?),
+        // Active trace queries are served by `TraceRuntime`, which captures the
+        // namespace at attach. Historical SQLite rows predate this projection.
+        root_pid_namespace: None,
         root_container_id: row.get::<_, Option<String>>("root_container_id")?,
+        // pod uid and host.id are v1 live-export-only (not persisted); reloaded
+        // traces carry None. Known gap: the `actrailviewer` storage export of a
+        // trace therefore omits the `k8s.pod.uid` and `host.id` resource
+        // attributes that its live export carries. Nothing may derive an OTLP
+        // trace id from these (see `otel_codec::service::otel_trace_id_u128`) —
+        // that would split one trace across the two export paths. A future
+        // schema bump persists both together.
+        root_pod_uid: None,
+        root_host_id: None,
         root_working_directory: row.get::<_, Option<String>>("root_working_directory")?,
         display_name: model_core::ids::TraceName::new(row.get::<_, String>("display_name")?),
         profile_name: model_core::ids::ProfileName::new(row.get::<_, String>("profile_name")?),

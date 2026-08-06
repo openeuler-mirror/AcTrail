@@ -1,0 +1,42 @@
+# actraild guest unit — 发布 control-plane ready gate，但默认不阻塞 kata-agent。
+# Guest startup dependency 默认为 optional：本 unit 与 kata-agent 没有强制顺序；
+# 若选择 required，安装 systemd/required 下的 kata-agent Requires/After drop-in。
+# 这只描述 systemd 启动依赖，不改变 Agent 运行期观测失败语义。
+# openEuler 的通用 tmpfiles unit 不处理 /dev。actraild 与 kata-agent 都显式执行
+# 同一条幂等 tmpfiles 规则，避免 optional 模式下两个并行服务之间出现启动竞态。
+# ExecStartPost 以 control-plane doctor 请求作为 daemon ready gate。TLS 已启用时，daemon
+# 会先完成 TLS listener 初始化，再创建 control socket。
+#
+# 关机顺序契约:sandbox stop → systemd 停本服务 → daemon 停新 trace →
+# finalize → guest-local export drain → 退出。TimeoutStopSec 为本地收尾留出余量。
+
+[Unit]
+Description=AcTrail guest observation daemon
+After=local-fs.target
+
+[Service]
+Type=simple
+User=root
+Group=actrail
+Environment=LD_LIBRARY_PATH=/usr/local/lib/actrail
+RuntimeDirectory=actrail
+RuntimeDirectoryMode=0750
+ExecStartPre=/usr/bin/mkdir -p /run/actrail/private
+ExecStartPre=/usr/bin/chmod 0700 /run/actrail/private
+ExecStartPre=/usr/bin/systemd-tmpfiles --create --prefix=/dev/actrail
+ExecStartPre=/usr/bin/test -d /dev/actrail
+ExecStartPre=/usr/bin/chown root:actrail /dev/actrail
+ExecStartPre=/usr/bin/chmod 0750 /dev/actrail
+ExecStart=/usr/local/bin/actraild --config /etc/actrail/operator.conf run
+ExecStartPost=/bin/sh -c 'until /usr/local/bin/actrailctl --config /etc/actrail/operator.conf doctor >/dev/null 2>&1; do sleep 0.2; done; /usr/bin/touch /run/actrail/ready'
+ExecStopPost=/usr/bin/rm -f /run/actrail/ready
+# eBPF/BTF load verification is deliberately part of the ready gate. Debug
+# kernels and cold caches can make the first load noticeably slower.
+TimeoutStartSec=60
+# finalization 和 guest-local export 余量
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target kata-containers.target

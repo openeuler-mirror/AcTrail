@@ -15,6 +15,9 @@ pub(super) struct ControlDocument {
     pub pid_file: String,
     pub log_path: String,
     pub diagnostic_log_level: String,
+    /// OTel `host.id` override. Empty/absent → daemon probes DMI product_uuid.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_id: Option<String>,
     pub workload_diagnostics: WorkloadDiagnosticsDocument,
     pub finalization: FinalizationDocument,
 }
@@ -29,6 +32,7 @@ impl Default for ControlDocument {
             pid_file: "/run/actrail/actraild.pid".to_string(),
             log_path: "/var/log/actrail/actraild.log".to_string(),
             diagnostic_log_level: "info".to_string(),
+            host_id: None,
             workload_diagnostics: WorkloadDiagnosticsDocument::default(),
             finalization: FinalizationDocument::default(),
         }

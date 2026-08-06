@@ -5,7 +5,7 @@ use std::fmt;
 use std::time::SystemTime;
 
 use crate::ids::{ProfileName, TraceId, TraceName};
-use crate::process::ProcessIdentity;
+use crate::process::{NamespaceIdentity, ProcessIdentity};
 
 const TRACE_ALERT_TOKEN_BYTES: usize = 32;
 
@@ -152,10 +152,25 @@ pub struct TraceRecord {
     pub trace_id: TraceId,
     pub alert_token: TraceAlertToken,
     pub root_process_identity: ProcessIdentity,
+    /// Kernel PID namespace captured when the root process is attached.
+    /// The symlink target (for example `pid:[4026532248]`) remains queryable
+    /// after the original `/proc/<pid>` entry disappears.
+    pub root_pid_namespace: Option<NamespaceIdentity>,
     /// Readable, stable container id of the root process's container.
     /// `None` = host process or a runtime not resolved by the collector.
-    /// 1:1 with `root_process_identity.pid_namespace`; resolved once at attach.
+    /// Optional attribution metadata resolved once at attach; it is not an
+    /// authorization identity.
     pub root_container_id: Option<String>,
+    /// Kubernetes pod UID of the root container (OTel `k8s.pod.uid`), parsed
+    /// from the same cgroup path as `root_container_id`. In-memory only in v1
+    /// (injected into OTLP resource, not persisted to SQLite — same policy as
+    /// `root_host_id`). `None` = not under a kubepods cgroup.
+    pub root_pod_uid: Option<String>,
+    /// Stable id of the host/VM this daemon runs on (OTel `host.id`, from DMI
+    /// product_uuid or static config). Daemon-wide constant: identical on every
+    /// trace this daemon emits. In-memory only in v1 (injected into OTLP
+    /// resource, not persisted to SQLite). `None` = not resolved / single-host.
+    pub root_host_id: Option<String>,
     /// Working directory captured from the root process during attach bootstrap.
     pub root_working_directory: Option<String>,
     pub display_name: TraceName,
@@ -179,7 +194,10 @@ impl TraceRecord {
             trace_id,
             alert_token,
             root_process_identity,
+            root_pid_namespace: None,
             root_container_id: None,
+            root_pod_uid: None,
+            root_host_id: None,
             root_working_directory: None,
             display_name,
             profile_name,

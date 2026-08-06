@@ -365,7 +365,7 @@ def start_provider(
             "--mode",
             "local-stream",
             "--bind-host",
-            "0.0.0.0",
+            "127.0.0.1",
             "--bind-port",
             "0",
             "--local-stream-response-text",

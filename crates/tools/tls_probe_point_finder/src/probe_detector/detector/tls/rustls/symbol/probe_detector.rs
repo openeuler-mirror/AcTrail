@@ -17,10 +17,14 @@ use crate::probe_detector::detector::tls::rustls::{
     RUNTIME_BUFFER_PLAINTEXT_SYMBOL, RUNTIME_SYMBOLS, RUNTIME_TAKE_RECEIVED_PLAINTEXT_SYMBOL,
 };
 
-const DEMANGLED_BUFFER_PLAINTEXT_SUFFIX: &str =
-    "rustls::common_state::CommonState::buffer_plaintext";
-const DEMANGLED_TAKE_RECEIVED_PLAINTEXT_SUFFIX: &str =
-    "rustls::common_state::CommonState::take_received_plaintext";
+const DEMANGLED_BUFFER_PLAINTEXT_PREFIXES: &[&str] = &[
+    "rustls::common_state::CommonState::buffer_plaintext",
+    "<rustls::common_state::CommonState>::buffer_plaintext",
+];
+const DEMANGLED_TAKE_RECEIVED_PLAINTEXT_PREFIXES: &[&str] = &[
+    "rustls::common_state::CommonState::take_received_plaintext",
+    "<rustls::common_state::CommonState>::take_received_plaintext",
+];
 
 pub(crate) struct RustlsSymbolProbeDetector {
     path: DetectorPath,
@@ -56,18 +60,18 @@ impl RustlsSymbolProbeDetector {
     ) -> ToolResult<Option<DemangledPlaintextSymbols>> {
         let mut targets = BTreeMap::<&'static str, DemangledPlaintextTarget>::new();
         for symbol in image.defined_function_symbols()? {
-            let demangled = rustc_demangle::demangle(&symbol.raw_name).to_string();
+            let demangled = format!("{:#}", rustc_demangle::demangle(&symbol.raw_name));
             if let Some(target) = Self::parse_target(
                 &demangled,
                 symbol.value,
-                DEMANGLED_BUFFER_PLAINTEXT_SUFFIX,
+                DEMANGLED_BUFFER_PLAINTEXT_PREFIXES,
                 RUNTIME_BUFFER_PLAINTEXT_SYMBOL,
             ) {
                 targets.insert(RUNTIME_BUFFER_PLAINTEXT_SYMBOL, target);
             } else if let Some(target) = Self::parse_target(
                 &demangled,
                 symbol.value,
-                DEMANGLED_TAKE_RECEIVED_PLAINTEXT_SUFFIX,
+                DEMANGLED_TAKE_RECEIVED_PLAINTEXT_PREFIXES,
                 RUNTIME_TAKE_RECEIVED_PLAINTEXT_SYMBOL,
             ) {
                 targets.insert(RUNTIME_TAKE_RECEIVED_PLAINTEXT_SYMBOL, target);
@@ -101,14 +105,16 @@ impl RustlsSymbolProbeDetector {
     fn parse_target(
         symbol: &str,
         address: u64,
-        suffix: &str,
+        prefixes: &[&str],
         runtime_symbol: &'static str,
     ) -> Option<DemangledPlaintextTarget> {
-        let matched = match symbol.strip_prefix(suffix) {
-            Some("") => true,
-            Some(tail) => tail.starts_with("::h"),
-            None => false,
-        };
+        let matched = prefixes
+            .iter()
+            .any(|prefix| match symbol.strip_prefix(prefix) {
+                Some("") => true,
+                Some(tail) => tail.starts_with("::h"),
+                None => false,
+            });
         matched.then(|| DemangledPlaintextTarget {
             runtime_symbol,
             symbol: symbol.to_string(),

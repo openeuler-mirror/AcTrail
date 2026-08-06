@@ -40,12 +40,20 @@ fn proc_lifecycle_request_skips_file_and_mmap_programs() {
 }
 
 #[test]
-fn baseline_has_no_implicit_proc_lifecycle() {
+fn baseline_loads_tracking_registration_without_proc_lifecycle_capability() {
     let plan = AttachPlan::baseline();
 
     assert!(
+        plan.should_load_program("handle_sched_process_exec")
+            .expect("mapped program")
+    );
+    assert!(
+        plan.should_load_program("handle_sched_process_exit")
+            .expect("mapped program")
+    );
+    assert!(
         !plan
-            .should_load_program("handle_sched_process_exec")
+            .should_load_program("handle_sched_process_fork")
             .expect("mapped program")
     );
     assert!(!plan.contains(&Capability::ProcLifecycle));

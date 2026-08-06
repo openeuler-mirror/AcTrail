@@ -8,6 +8,7 @@ use crate::command::DeploymentPermissionMode;
 use model_core::binary_identity::BinaryIdentity;
 use model_core::capability::Capability;
 use model_core::ids::{ProfileName, TraceId, TraceName};
+use model_core::process::NamespaceIdentity;
 use model_core::trace::{TraceHealth, TraceLifecycleState};
 use plugin_system::PluginInstanceStatus;
 
@@ -16,6 +17,14 @@ pub struct TraceListItem {
     pub trace_id: TraceId,
     pub display_name: TraceName,
     pub root_pid: u32,
+    /// Kernel PID namespace captured for the trace root. This query field is
+    /// independent of runtime container metadata; authorization additionally
+    /// checks the peer's mount namespace.
+    pub root_pid_namespace: Option<NamespaceIdentity>,
+    /// Runtime container identity resolved by the daemon from the root
+    /// process cgroup. `None` means the trace is host-rooted or the runtime
+    /// layout did not yield an identity.
+    pub root_container_id: Option<String>,
     pub lifecycle_state: TraceLifecycleState,
     pub health: TraceHealth,
     pub tags: BTreeSet<String>,
