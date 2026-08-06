@@ -120,6 +120,10 @@ impl PostTraceBroker {
                 Err(TryRecvError::Disconnected) => break,
             };
             let response = if Instant::now() >= request.expires_at {
+                tracing::warn!(
+                    plugin_instance = %request.scope.instance_id,
+                    "post-trace host request expired before daemon execution"
+                );
                 Err(PluginRuntimeError::new(
                     "post_trace_host_timeout",
                     "host request expired before daemon execution",

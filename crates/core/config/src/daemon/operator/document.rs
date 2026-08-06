@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use storage_factory::StorageConfig;
 
 use super::super::{
-    AgentInvocationConfig, ApplicationProtocolConfig, ClusterCenterConfig, ClusterConfig,
-    ClusterReportConfig, CommandControlConfig, DEFAULT_ACTIVE_TRACE_MAX,
+    AgentInvocationConfig, AlertWebhookConfig, ApplicationProtocolConfig, ClusterCenterConfig,
+    ClusterConfig, ClusterReportConfig, CommandControlConfig, DEFAULT_ACTIVE_TRACE_MAX,
     DEFAULT_CONTROL_PENDING_CONNECTION_MAX, DEFAULT_FINALIZATION_POLL_INTERVAL_MS,
     DEFAULT_FINALIZATION_SETTLE_DELAY_MS, DEFAULT_FINALIZATION_SHUTDOWN_DRAIN_TIMEOUT_MS,
     DEFAULT_FINALIZATION_TRACES_PER_CYCLE, DEFAULT_PLUGIN_ALERT_DRAIN_TIMEOUT_MS,

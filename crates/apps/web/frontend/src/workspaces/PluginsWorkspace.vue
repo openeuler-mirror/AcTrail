@@ -122,17 +122,18 @@
                     <dt>Warnings</dt>
                     <dd>{{ warningText(plugin.warnings) }}</dd>
                   </dl>
-                  <PluginConfigPanel
-                    :instance-id="plugin.instance_id"
-                    :refresh-nonce="configRefreshNonces[plugin.instance_id] ?? 0"
-                    @updated="refreshPlugins"
-                  />
                   <PluginCommandForm
                     :instance-id="plugin.instance_id"
                     :purpose="plugin.purpose"
                     @completed="refreshPluginConfig(plugin.instance_id)"
                   />
                 </details>
+                <PluginConfigPanel
+                  :instance-id="plugin.instance_id"
+                  :plugin-id="plugin.plugin_id"
+                  :refresh-nonce="configRefreshNonces[plugin.instance_id] ?? 0"
+                  @updated="refreshPlugins"
+                />
                 <div class="plugin-lifecycle-control">
                   <span class="plugin-runtime-state active"><i aria-hidden="true"></i>Active</span>
                   <button

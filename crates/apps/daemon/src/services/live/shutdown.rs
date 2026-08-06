@@ -269,6 +269,16 @@ impl StorageAttachService {
             if !admission.all_admitted {
                 continue;
             }
+            // Admission only guarantees that every analyzer task reached its
+            // plugin worker. Keep the trace finalization barrier in place until
+            // all completions have been drained so post-trace host calls cannot
+            // race with trace-runtime cleanup.
+            if self
+                .post_trace_coordinator
+                .has_running_tasks_for_trace(trace_id)
+            {
+                continue;
+            }
             self.application_protocol.forget_trace(trace_id);
             self.semantic_actions.forget_trace(trace_id);
             self.socket_payload_gate.forget_trace(trace_id);

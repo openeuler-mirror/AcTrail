@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "actrail.llm-turn-anomaly.config.v1",
+  "type": "object",
+  "required": [
+    "high_frequency",
+    "consecutive_retry",
+    "repeated_similar",
+    "error_ratio",
+    "context_growth",
+    "page_size",
+    "trace_state_max_count",
+    "finding_max_count"
+  ],
+  "properties": {
+    "high_frequency": {
+      "type": "object",
+      "required": ["enabled", "window_size_ms", "threshold", "min_exchanges"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "window_size_ms": { "type": "integer", "minimum": 1000, "maximum": 86400000 },
+        "threshold": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "min_exchanges": { "type": "integer", "minimum": 1, "maximum": 10000 }
+      },
+      "additionalProperties": false
+    },
+    "consecutive_retry": {
+      "type": "object",
+      "required": ["enabled", "consecutive_count", "min_request_bytes"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "consecutive_count": { "type": "integer", "minimum": 2, "maximum": 1000 },
+        "min_request_bytes": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "repeated_similar": {
+      "type": "object",
+      "required": ["enabled", "similarity_window", "min_repeat_count", "similarity_tolerance_ratio_per_mille"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "similarity_window": { "type": "integer", "minimum": 2, "maximum": 256 },
+        "min_repeat_count": { "type": "integer", "minimum": 2, "maximum": 256 },
+        "similarity_tolerance_ratio_per_mille": { "type": "integer", "minimum": 0, "maximum": 1000 }
+      },
+      "additionalProperties": false
+    },
+    "error_ratio": {
+      "type": "object",
+      "required": ["enabled", "minimum_exchanges", "error_ratio_per_mille"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minimum_exchanges": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "error_ratio_per_mille": { "type": "integer", "minimum": 1, "maximum": 1000 }
+      },
+      "additionalProperties": false
+    },
+    "context_growth": {
+      "type": "object",
+      "required": ["enabled", "growth_ratio_per_mille", "minimum_baseline_bytes", "minimum_growth_bytes", "window_size", "minimum_samples"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "growth_ratio_per_mille": { "type": "integer", "minimum": 1001, "maximum": 100000 },
+        "minimum_baseline_bytes": { "type": "integer", "minimum": 1 },
+        "minimum_growth_bytes": { "type": "integer", "minimum": 1 },
+        "window_size": { "type": "integer", "minimum": 1, "maximum": 64 },
+        "minimum_samples": { "type": "integer", "minimum": 1, "maximum": 64 }
+      },
+      "additionalProperties": false
+    },
+    "page_size": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 256,
+      "readOnly": true
+    },
+    "trace_state_max_count": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4096,
+      "readOnly": true
+    },
+    "finding_max_count": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4096,
+      "readOnly": true
+    }
+  },
+  "additionalProperties": false
+}

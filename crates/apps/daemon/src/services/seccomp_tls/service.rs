@@ -497,6 +497,7 @@ mod tests {
                 host_tid: TID,
                 trace_id: TraceId::new(TRACE_ID),
                 operation_id: OPERATION_ID,
+                operation_offset: 0,
                 stream_key: STREAM_KEY,
                 direction: 1,
                 symbol: 7,
