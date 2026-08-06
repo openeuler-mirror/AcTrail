@@ -496,8 +496,13 @@ impl SemanticActionExportAdapter for OtelHttpSemanticActionAdapter {
 enum PendingBatch {
     /// Accumulated `resourceSpans` array elements.
     Json(Vec<serde_json::Value>),
-    /// Concatenated `ExportTraceServiceRequest` bytes (`count` spans so far).
-    Proto { bytes: Vec<u8>, count: usize },
+    /// Concatenated `ExportTraceServiceRequest` bytes. `record_ends` holds the
+    /// end offset of each appended record, which is both the span count and the
+    /// only way to cut the concatenation back apart on a 413.
+    Proto {
+        bytes: Vec<u8>,
+        record_ends: Vec<usize>,
+    },
 }
 
 impl PendingBatch {
@@ -506,7 +511,7 @@ impl PendingBatch {
             OtelEncoding::Json => Self::Json(Vec::new()),
             OtelEncoding::Protobuf => Self::Proto {
                 bytes: Vec::new(),
-                count: 0,
+                record_ends: Vec::new(),
             },
         }
     }
@@ -519,16 +524,31 @@ impl PendingBatch {
     fn len(&self) -> usize {
         match self {
             Self::Json(spans) => spans.len(),
-            Self::Proto { count, .. } => *count,
+            Self::Proto { record_ends, .. } => record_ends.len(),
         }
     }
 
-    fn clear(&mut self) {
+    /// Move the second half of the batch into a new batch, leaving the first
+    /// half here. `None` when a single record cannot be divided any further.
+    fn split_off_half(&mut self) -> Option<Self> {
+        if self.len() < 2 {
+            return None;
+        }
         match self {
-            Self::Json(spans) => spans.clear(),
-            Self::Proto { bytes, count } => {
-                bytes.clear();
-                *count = 0;
+            Self::Json(spans) => Some(Self::Json(spans.split_off(spans.len() / 2))),
+            Self::Proto { bytes, record_ends } => {
+                let middle = record_ends.len() / 2;
+                let cut = record_ends[middle - 1];
+                let tail_bytes = bytes.split_off(cut);
+                let tail_ends = record_ends
+                    .split_off(middle)
+                    .into_iter()
+                    .map(|end| end - cut)
+                    .collect();
+                Some(Self::Proto {
+                    bytes: tail_bytes,
+                    record_ends: tail_ends,
+                })
             }
         }
     }
@@ -556,9 +576,9 @@ impl PendingBatch {
                     }
                 }
             }
-            (Self::Proto { bytes, count }, EncodedRecord::Proto(record_bytes)) => {
+            (Self::Proto { bytes, record_ends }, EncodedRecord::Proto(record_bytes)) => {
                 bytes.extend_from_slice(&record_bytes);
-                *count += 1;
+                record_ends.push(bytes.len());
             }
             _ => eprintln!("{OTEL_HTTP_EXPORTER_NAME}: dropped record with mismatched encoding"),
         }
@@ -621,6 +641,9 @@ pub(crate) struct HttpBatchSink {
     shutdown_flush_deadline: Duration,
     shutdown: BestEffortShutdown,
     tls: OtelHttpTlsConfig,
+    /// Configured extra headers, pre-rendered once as `name: value\r\n` lines
+    /// and spliced verbatim into every request head. Empty when unconfigured.
+    extra_headers: String,
     connection: Option<HttpConnection>,
     dropped_batches: u64,
     metrics: Arc<OtelHttpOperationalMetrics>,
@@ -656,19 +679,72 @@ impl HttpBatchSink {
             shutdown_flush_deadline: config.shutdown_flush_deadline(),
             shutdown: BestEffortShutdown::default(),
             tls: config.tls.clone(),
+            extra_headers: render_extra_headers(&config.headers),
             connection: None,
             dropped_batches: 0,
             metrics,
         }
     }
 
+    /// Deliver everything buffered, splitting any batch the collector rejects
+    /// as too large rather than dropping spans that simply did not fit.
     fn flush_batch(&mut self, deadline: Option<Instant>) -> Result<u64, String> {
         if self.pending.is_empty() {
             return Ok(u64::default());
         }
-        let batch_spans = self.pending.len();
-        let body = self
-            .pending
+        let mut remaining = vec![std::mem::replace(
+            &mut self.pending,
+            PendingBatch::new(self.encoding),
+        )];
+        let mut durable = u64::default();
+        while let Some(mut batch) = remaining.pop() {
+            match self.deliver_batch(&batch, deadline)? {
+                BatchOutcome::Delivered(spans) => durable = durable.saturating_add(spans),
+                BatchOutcome::TooLarge => {
+                    if let Some(tail) = batch.split_off_half() {
+                        // The collector's body limit is below our batch size:
+                        // shrink later batches too, or every flush pays this.
+                        self.batch_max_spans = (self.batch_max_spans / 2).max(1);
+                        // Pushed tail-first so the halves keep their order.
+                        remaining.push(tail);
+                        remaining.push(batch);
+                        continue;
+                    }
+                    self.drop_batch(
+                        &batch,
+                        "collector rejected an indivisible batch as too large",
+                    );
+                }
+                BatchOutcome::Dropped(detail) => self.drop_batch(&batch, &detail),
+            }
+        }
+        self.pending_since = None;
+        self.metrics.set_pending(0, None);
+        Ok(durable)
+    }
+
+    /// Drop one batch, keeping the route alive. Best-effort delivery's only
+    /// failure mode, and it is always loud.
+    fn drop_batch(&mut self, batch: &PendingBatch, detail: &str) {
+        let batch_spans = batch.len();
+        self.dropped_batches = self.dropped_batches.saturating_add(1);
+        self.metrics.record_dropped_batch(batch_spans);
+        eprintln!(
+            "{OTEL_HTTP_EXPORTER_NAME}: dropped batch of {batch_spans} spans after {} attempts \
+             (total dropped batches {}): {detail}",
+            self.retry_max_attempts, self.dropped_batches,
+        );
+    }
+
+    /// Run one batch's attempt sequence. `Err` is an encoding failure, which no
+    /// retry or split can fix.
+    fn deliver_batch(
+        &mut self,
+        batch: &PendingBatch,
+        deadline: Option<Instant>,
+    ) -> Result<BatchOutcome, String> {
+        let batch_spans = batch.len();
+        let body = batch
             .body()
             .and_then(|body| encode_request_body(&body, self.compression))
             .inspect_err(|error| {
@@ -688,6 +764,7 @@ impl HttpBatchSink {
                 &mut self.connection,
                 PostRequest {
                     endpoint: &self.endpoint,
+                    extra_headers: &self.extra_headers,
                     body: &body,
                     content_type,
                     content_encoding,
@@ -698,13 +775,15 @@ impl HttpBatchSink {
             ) {
                 Ok(success) => {
                     self.metrics.record_success(success.partial_rejected);
-                    self.pending.clear();
-                    self.pending_since = None;
-                    self.metrics.set_pending(0, None);
                     let durable = u64::try_from(batch_spans)
                         .unwrap_or(u64::MAX)
                         .saturating_sub(success.partial_rejected);
-                    return Ok(durable);
+                    return Ok(BatchOutcome::Delivered(durable));
+                }
+                // The body was too big, not wrong: hand it back to be split.
+                Err(PostError::TooLarge { detail }) => {
+                    self.metrics.record_error(detail);
+                    return Ok(BatchOutcome::TooLarge);
                 }
                 // OTLP: 400 and other non-retryable statuses will never succeed on
                 // replay — drop immediately instead of burning the retry budget.
@@ -713,7 +792,7 @@ impl HttpBatchSink {
                     self.metrics.record_error(last_error.clone());
                     break;
                 }
-                // OTLP: only 429/502/503/504 and transport errors are retried;
+                // Only transient statuses and transport errors are retried;
                 // honor a server `Retry-After`, otherwise exponential backoff+jitter.
                 Err(PostError::Retryable {
                     detail,
@@ -738,20 +817,7 @@ impl HttpBatchSink {
             last_error = "shutdown flush deadline exceeded".to_string();
             self.metrics.record_error(last_error.clone());
         }
-        // Exhausted or permanent: drop the batch, keep the route alive. Loud line.
-        self.dropped_batches = self.dropped_batches.saturating_add(1);
-        self.metrics.record_dropped_batch(batch_spans);
-        eprintln!(
-            "{OTEL_HTTP_EXPORTER_NAME}: dropped batch of {} spans after {} attempts \
-             (total dropped batches {}): {last_error}",
-            self.pending.len(),
-            self.retry_max_attempts,
-            self.dropped_batches,
-        );
-        self.pending.clear();
-        self.pending_since = None;
-        self.metrics.set_pending(0, None);
-        Ok(u64::default())
+        Ok(BatchOutcome::Dropped(last_error))
     }
 
     /// A partial batch has waited at least `batch_timeout` since its first span.
@@ -817,14 +883,27 @@ fn bounded_backoff(backoff: Duration, deadline: Option<Instant>) -> Duration {
 /// Classification of a failed POST, per the OTLP/HTTP spec.
 #[derive(Debug)]
 enum PostError {
-    /// Transport error or a retryable status (429/502/503/504). `retry_after`
-    /// carries a server-supplied delay when present.
+    /// Transport error or a retryable status (408/429/500/502/503/504).
+    /// `retry_after` carries a server-supplied delay when present.
     Retryable {
         detail: String,
         retry_after: Option<Duration>,
     },
-    /// A status that replay cannot fix (400, 401, 404, 500, ...). Drop now.
+    /// The collector rejected the body as too large (413). Replaying it is
+    /// pointless, but the same spans fit in smaller batches.
+    TooLarge { detail: String },
+    /// A status that replay cannot fix (400, 401, 403, 404, 415, ...). Drop now.
     Permanent { detail: String },
+}
+
+/// What one batch's delivery attempt sequence concluded.
+enum BatchOutcome {
+    /// Accepted by the collector; carries the span count the collector kept.
+    Delivered(u64),
+    /// Rejected as too large — the caller splits and redelivers.
+    TooLarge,
+    /// Retries exhausted or permanently rejected; carries the last error.
+    Dropped(String),
 }
 
 #[derive(Debug)]
@@ -832,9 +911,17 @@ struct PostSuccess {
     partial_rejected: u64,
 }
 
-/// OTLP/HTTP retryable status codes. Everything else non-2xx is permanent.
+/// The collector's body-size limit is below this batch's size.
+const HTTP_PAYLOAD_TOO_LARGE: u16 = 413;
+
+/// Retryable status codes. Everything else non-2xx is permanent.
+///
+/// 429/502/503/504 are the OTLP specification's retryable set. 408 and 500 are
+/// added on top: both describe the collector failing to process a request it
+/// otherwise accepted, so a replay is the only thing that can recover them, and
+/// `retry_max_attempts` bounds the cost when a collector returns them forever.
 fn is_retryable_status(status: u16) -> bool {
-    matches!(status, 429 | 502 | 503 | 504)
+    matches!(status, 408 | 429 | 500 | 502 | 503 | 504)
 }
 
 /// Parse a `Retry-After` header value in delay-seconds form (the HTTP-date form
@@ -925,6 +1012,7 @@ fn post_json(
             body,
             content_type,
             content_encoding,
+            extra_headers: "",
             connect_timeout,
             request_timeout,
             tls,
@@ -932,11 +1020,22 @@ fn post_json(
     )
 }
 
+/// Render the configured headers into the `name: value\r\n` block the request
+/// head splices in. Names and values were validated at config parse time, so
+/// this cannot introduce a header the transport does not expect.
+fn render_extra_headers(headers: &[(String, String)]) -> String {
+    headers
+        .iter()
+        .map(|(name, value)| format!("{name}: {value}\r\n"))
+        .collect()
+}
+
 struct PostRequest<'a> {
     endpoint: &'a Endpoint,
     body: &'a [u8],
     content_type: &'a str,
     content_encoding: Option<&'a str>,
+    extra_headers: &'a str,
     connect_timeout: Duration,
     request_timeout: Duration,
     tls: &'a OtelHttpTlsConfig,
@@ -969,6 +1068,7 @@ fn post_otlp_reusing(
         request.body,
         request.content_type,
         request.content_encoding,
+        request.extra_headers,
     ) {
         Ok(response) => response,
         Err(error) => {
@@ -1053,7 +1153,9 @@ fn classify_response(
         return Ok(PostSuccess { partial_rejected });
     }
     let detail = format!("collector {} returned HTTP {status}", endpoint.authority());
-    if is_retryable_status(status) {
+    if status == HTTP_PAYLOAD_TOO_LARGE {
+        Err(PostError::TooLarge { detail })
+    } else if is_retryable_status(status) {
         Err(PostError::Retryable {
             detail,
             retry_after: response.retry_after,
@@ -1122,17 +1224,19 @@ fn http_exchange<S: Read + Write>(
     body: &[u8],
     content_type: &str,
     content_encoding: Option<&str>,
+    extra_headers: &str,
 ) -> Result<HttpResponse, String> {
     let content_encoding_header = content_encoding
         .map(|encoding| format!("Content-Encoding: {encoding}\r\n"))
         .unwrap_or_default();
     let head = format!(
         "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Type: {}\r\n\
-         {}Content-Length: {}\r\nConnection: keep-alive\r\n\r\n",
+         {}{}Content-Length: {}\r\nConnection: keep-alive\r\n\r\n",
         endpoint.path,
         endpoint.authority(),
         content_type,
         content_encoding_header,
+        extra_headers,
         body.len(),
     );
     stream
@@ -1433,6 +1537,7 @@ mod tests {
             tls: crate::config::OtelHttpTlsConfig::default(),
             encoding: crate::config::OtelEncoding::Json,
             compression: crate::config::OtelCompression::None,
+            headers: Vec::new(),
             action_kinds: export_core::SemanticActionKindSelection::from_config_entries([
                 ("default".to_string(), false),
                 ("process.exec".to_string(), true),
@@ -2245,16 +2350,119 @@ mod tests {
     }
 
     #[test]
-    fn only_429_502_503_504_are_retryable() {
-        for status in [429u16, 502, 503, 504] {
+    fn transient_statuses_are_retryable_and_client_faults_are_not() {
+        // 408 and 500 are the collector timing out or faulting on a request it
+        // never processed — replay is what recovers them.
+        for status in [408u16, 429, 500, 502, 503, 504] {
             assert!(super::is_retryable_status(status), "{status} should retry");
         }
-        for status in [400u16, 401, 403, 404, 500, 501] {
+        // These describe the request itself; replaying it verbatim cannot help.
+        for status in [400u16, 401, 403, 404, 413, 415, 501] {
             assert!(
                 !super::is_retryable_status(status),
                 "{status} should not retry"
             );
         }
+    }
+
+    #[test]
+    fn retries_on_500_then_succeeds() {
+        let (endpoint, received) = spawn_scripted_collector(vec![
+            status_reply("500 Internal Server Error"),
+            status_reply("200 OK"),
+        ]);
+        let config = test_config(endpoint.clone());
+        assert!(config.retry_max_attempts >= 2, "test needs a retry budget");
+        let mut sink = HttpBatchSink::new(Endpoint::parse(&endpoint).unwrap(), &config);
+
+        sink.deliver(span_line("first")).expect("buffered");
+        sink.deliver(span_line("second"))
+            .expect("batch flushed at count 2");
+
+        received
+            .recv_timeout(Duration::from_secs(2))
+            .expect("first (500) attempt");
+        received
+            .recv_timeout(Duration::from_secs(2))
+            .expect("500 must be retried");
+        assert_eq!(sink.dropped_batches, 0, "the retry delivered the batch");
+    }
+
+    // ---- 413 batch shrinking ----
+
+    #[test]
+    fn too_large_batch_is_split_and_redelivered() {
+        // 413 says the body was too big, not that the spans are bad. Replaying
+        // the same body loops; halving it delivers the same spans.
+        let (endpoint, received) = spawn_scripted_collector(vec![
+            status_reply("413 Payload Too Large"),
+            status_reply("200 OK"),
+            status_reply("200 OK"),
+        ]);
+        let mut config = test_config(endpoint.clone());
+        config.batch_max_spans = 4;
+        let mut sink = HttpBatchSink::new(Endpoint::parse(&endpoint).unwrap(), &config);
+
+        for name in ["first", "second", "third", "fourth"] {
+            sink.deliver(span_line(name)).expect("buffered");
+        }
+
+        let oversized = received
+            .recv_timeout(Duration::from_secs(2))
+            .expect("full batch attempted");
+        assert_eq!(
+            oversized.matches("\"name\":").count(),
+            4,
+            "first attempt carries the whole batch"
+        );
+
+        let mut redelivered = Vec::new();
+        for _ in 0..2 {
+            let request = received
+                .recv_timeout(Duration::from_secs(2))
+                .expect("413 must be followed by smaller batches, not a drop");
+            let body = request.split("\r\n\r\n").nth(1).unwrap_or_default();
+            assert_eq!(
+                body.matches("\"name\":").count(),
+                2,
+                "each half carries half the spans"
+            );
+            redelivered.push(body.to_string());
+        }
+
+        let combined = redelivered.join("");
+        for name in ["first", "second", "third", "fourth"] {
+            assert!(combined.contains(name), "{name} must survive the split");
+        }
+        assert_eq!(sink.dropped_batches, 0, "splitting is not a drop");
+        assert_eq!(
+            sink.batch_max_spans, 2,
+            "later batches must be built at the smaller size"
+        );
+    }
+
+    #[test]
+    fn indivisible_too_large_batch_is_dropped_without_looping() {
+        // One span that the collector still rejects cannot be split further.
+        // Dropping it is the documented best-effort outcome; looping is not.
+        let (endpoint, received) = spawn_scripted_collector(vec![
+            status_reply("413 Payload Too Large"),
+            status_reply("200 OK"),
+        ]);
+        let mut config = test_config(endpoint.clone());
+        config.batch_max_spans = 1;
+        let mut sink = HttpBatchSink::new(Endpoint::parse(&endpoint).unwrap(), &config);
+
+        sink.deliver(span_line("only")).expect("batch flushed");
+
+        received
+            .recv_timeout(Duration::from_secs(2))
+            .expect("single-span attempt");
+        assert!(
+            received.recv_timeout(Duration::from_millis(300)).is_err(),
+            "an indivisible 413 must not be retried"
+        );
+        assert_eq!(sink.dropped_batches, 1, "the batch is dropped, loudly");
     }
 
     // ---- protobuf encoding wiring ----
@@ -2288,6 +2496,70 @@ mod tests {
             "both records concatenated"
         );
         assert!(sink.pending.is_empty());
+    }
+
+    // ---- optional custom request headers ----
+
+    #[test]
+    fn configured_headers_are_sent_with_every_post() {
+        // Agent Insight attributes a trace by the `x-witty-api-key` request
+        // header; without it a 200 still means the data lands on no account.
+        let (endpoint, received) = spawn_stub_collector(1);
+        let mut config = test_config(endpoint.clone());
+        config.headers = vec![
+            ("x-witty-api-key".to_string(), "secret-key".to_string()),
+            ("x-actrail-cluster".to_string(), "prod-a".to_string()),
+        ];
+        let mut sink = HttpBatchSink::new(Endpoint::parse(&endpoint).unwrap(), &config);
+
+        sink.deliver(span_line("first")).expect("buffered");
+        sink.deliver(span_line("second"))
+            .expect("batch flushed at count 2");
+
+        let request = received
+            .recv_timeout(Duration::from_secs(2))
+            .expect("collector received batch");
+        let head = request.split("\r\n\r\n").next().unwrap_or_default();
+        assert!(
+            head.contains("x-witty-api-key: secret-key"),
+            "credential header must be on the wire, got head: {head}"
+        );
+        assert!(
+            head.contains("x-actrail-cluster: prod-a"),
+            "every configured header must be sent, got head: {head}"
+        );
+        // The transport still owns framing.
+        assert_eq!(head.matches("Content-Length:").count(), 1);
+        assert_eq!(head.matches("Content-Type:").count(), 1);
+    }
+
+    #[test]
+    fn no_configured_headers_leaves_the_request_unchanged() {
+        // Regression guard: the default config must produce the exact request
+        // shape shipped in !97.
+        let (endpoint, received) = spawn_stub_collector(1);
+        let config = test_config(endpoint.clone());
+        assert!(config.headers.is_empty(), "test baseline has no headers");
+        let mut sink = HttpBatchSink::new(Endpoint::parse(&endpoint).unwrap(), &config);
+
+        sink.deliver(span_line("first")).expect("buffered");
+        sink.deliver(span_line("second"))
+            .expect("batch flushed at count 2");
+
+        let request = received
+            .recv_timeout(Duration::from_secs(2))
+            .expect("collector received batch");
+        let head = request.split("\r\n\r\n").next().unwrap_or_default();
+        let body_len = request.split("\r\n\r\n").nth(1).unwrap_or_default().len();
+        assert_eq!(
+            head,
+            format!(
+                "POST /v1/traces HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\n\
+                 Content-Length: {body_len}\r\nConnection: keep-alive",
+                Endpoint::parse(&endpoint).unwrap().authority()
+            ),
+            "empty headers must not perturb the request head"
+        );
     }
 
     #[test]

@@ -2,4 +2,4 @@
 
 mod builder;
 
-pub use builder::build_observation_consumer_from_manifest;
+pub use builder::{build_observation_consumer_from_manifest, validate_observation_consumer_config};

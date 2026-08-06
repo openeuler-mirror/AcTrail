@@ -89,6 +89,32 @@
       "type": "string",
       "minLength": 1
     },
+    "headers": {
+      "title": "Extra request headers",
+      "description": "Optional headers sent with every OTLP POST, for collectors that authenticate the sender (for example Agent Insight's x-witty-api-key). Each header may be configured once.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "value"],
+        "properties": {
+          "name": {
+            "title": "Header name",
+            "description": "Headers the exporter derives itself — host, content-length, content-type, content-encoding, connection, transfer-encoding — are rejected.",
+            "type": "string",
+            "pattern": "^[!#$%&'*+\\-.^_`|~0-9A-Za-z]+$",
+            "examples": ["x-witty-api-key"]
+          },
+          "value": {
+            "title": "Header value",
+            "description": "Sent verbatim. Treat this as a credential: use an https:// endpoint so it is not exposed on the wire.",
+            "type": "string",
+            "pattern": "^[^\\r\\n\\u0000]*$",
+            "writeOnly": true
+          }
+        }
+      }
+    },
     "action_kinds": {
       "title": "Outbound action kinds",
       "description": "Explicit allow-list for semantic action kinds that may cross the OTLP/HTTP boundary.",

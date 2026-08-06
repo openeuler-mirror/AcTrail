@@ -111,7 +111,7 @@
       <input
         v-else
         class="config-input"
-        type="text"
+        :type="schema.writeOnly === true ? 'password' : 'text'"
         :value="modelValue ?? ''"
         :placeholder="schema.examples?.[0] ?? ''"
         @input="$emit('update:modelValue', $event.target.value)"

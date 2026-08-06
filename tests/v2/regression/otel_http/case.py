@@ -84,6 +84,11 @@ class OtelHttpCase(TestCase):
                 TestStatus.PASSED,
                 "all exported span attributes stayed within structural metadata",
             )
+            requests = self._require_configured_credential()
+            results["request-credential"] = TestResult(
+                TestStatus.PASSED,
+                f"configured credential header reached the receiver on {requests} request(s)",
+            )
             return TestResult(
                 TestStatus.COMPOSITE,
                 "builtin OTEL/HTTP V2 boundary regression",
@@ -223,6 +228,29 @@ class OtelHttpCase(TestCase):
         if not {"process.exec", "process.exit"}.issubset(counts):
             raise AssertionError(f"OTEL/HTTP action kinds are incomplete: {counts}")
         return counts
+
+    def _require_configured_credential(self) -> int:
+        """Every accepted request must carry the configured credential header.
+
+        A receiver that attributes traces by request header sees unattributable
+        data if the exporter drops it, even though the POST still returns 200.
+        """
+        assert self._environment is not None
+        credentials = self._environment.credentials()
+        if not credentials:
+            raise AssertionError("receiver accepted no request to check")
+        unexpected = [
+            value
+            for value in credentials
+            if value != OtelHttpEnvironment.EXPORT_CREDENTIAL
+        ]
+        if unexpected:
+            raise AssertionError(
+                f"{len(unexpected)} of {len(credentials)} request(s) carried "
+                f"credential {unexpected[0]!r}, expected "
+                f"{OtelHttpEnvironment.EXPORT_CREDENTIAL!r}"
+            )
+        return len(credentials)
 
     def _require_metadata_only(self, spans: list[dict[str, Any]]) -> None:
         unexpected: set[str] = set()

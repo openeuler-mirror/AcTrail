@@ -36,6 +36,14 @@ pub struct OtelHttpExporterConfig {
     pub encoding: OtelEncoding,
     /// Request-body compression. `gzip` is supported by every OTLP server.
     pub compression: OtelCompression,
+    /// Extra headers sent with every OTLP POST, in the configured order.
+    /// Optional and empty by default; collectors that authenticate the sender
+    /// need one here (Agent Insight attributes a trace by its `x-witty-api-key`
+    /// header). Modelled as ordered `name`/`value` pairs rather than a map so
+    /// the Web config form can render it like every other plugin setting.
+    /// Headers the transport derives itself are rejected — see
+    /// [`RESERVED_HEADERS`].
+    pub headers: Vec<(String, String)>,
     /// Explicit action-kind policy applied before encoding and queue admission.
     pub action_kinds: SemanticActionKindSelection,
     /// Controls whether domain-specific action attributes may leave the daemon.
@@ -208,6 +216,9 @@ impl OtelHttpExporterConfig {
                 Some(value) => value.parse::<OtelCompression>()?,
                 None => OtelCompression::default(),
             },
+            // Populated from the `[[headers]]` array by the plugin config
+            // parser; a flat key/value section carries no headers.
+            headers: Vec::new(),
             action_kinds: SemanticActionKindSelection::from_config_entries([(
                 "default".to_string(),
                 false,
@@ -289,9 +300,16 @@ pub fn parse_otel_http_plugin_config(raw: &str) -> Result<OtelHttpExporterConfig
     )
     .map_err(|message| format!("invalid plugin.otel-http.action_kinds: {message}"))?;
 
-    let mut entries = Vec::with_capacity(table.len().saturating_sub(1));
+    let headers = match table.get("headers") {
+        Some(headers) => parse_headers_array(headers.as_array().ok_or_else(|| {
+            "plugin.otel-http.headers must be an array of name/value entries".to_string()
+        })?)?,
+        None => Vec::new(),
+    };
+
+    let mut entries = Vec::with_capacity(table.len().saturating_sub(2));
     for (key, value) in table {
-        if key == "action_kinds" {
+        if key == "action_kinds" || key == "headers" {
             continue;
         }
         let value = match value {
@@ -309,8 +327,97 @@ pub fn parse_otel_http_plugin_config(raw: &str) -> Result<OtelHttpExporterConfig
 
     let mut config = OtelHttpExporterConfig::parse_section("plugin.otel-http", entries)?;
     config.action_kinds = action_kinds;
+    config.headers = headers;
     config.validate_enabled_route()?;
     Ok(config)
+}
+
+/// Headers the transport derives from the endpoint, encoding and body. A config
+/// that overrides one of these would silently break request framing, so a
+/// collision is a hard configuration error rather than a last-write-wins.
+const RESERVED_HEADERS: [&str; 6] = [
+    "host",
+    "content-length",
+    "content-type",
+    "content-encoding",
+    "connection",
+    "transfer-encoding",
+];
+
+fn parse_headers_array(entries: &[toml::Value]) -> Result<Vec<(String, String)>, String> {
+    let mut headers: Vec<(String, String)> = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.iter().enumerate() {
+        let entry = entry.as_table().ok_or_else(|| {
+            format!("otel-http config headers[{index}] must be a name/value table")
+        })?;
+        let name = header_entry_field(entry, index, "name")?;
+        let value = header_entry_field(entry, index, "value")?;
+        if let Some(unknown) = entry.keys().find(|key| *key != "name" && *key != "value") {
+            return Err(format!(
+                "unknown config key plugin.otel-http.headers[{index}].{unknown}"
+            ));
+        }
+        validate_header_name(name)?;
+        validate_header_value(name, value)?;
+        // A header configured twice has no single correct meaning, and keeping
+        // one silently would leave an operator looking at a value that is not
+        // being sent. HTTP field names are case-insensitive.
+        if headers
+            .iter()
+            .any(|(seen, _)| seen.eq_ignore_ascii_case(name))
+        {
+            return Err(format!(
+                "otel-http header {name:?} is configured more than once"
+            ));
+        }
+        headers.push((name.to_string(), value.to_string()));
+    }
+    Ok(headers)
+}
+
+fn header_entry_field<'a>(
+    entry: &'a toml::Table,
+    index: usize,
+    key: &str,
+) -> Result<&'a str, String> {
+    entry
+        .get(key)
+        .ok_or_else(|| format!("missing config key plugin.otel-http.headers[{index}].{key}"))?
+        .as_str()
+        .ok_or_else(|| format!("otel-http config headers[{index}].{key} must be a string"))
+}
+
+fn validate_header_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("otel-http config headers has an empty header name".to_string());
+    }
+    // RFC 7230 token: anything else can terminate the name early and forge a
+    // second header or request line.
+    if !name
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
+    {
+        return Err(format!(
+            "invalid otel-http header name {name:?}: must be an RFC 7230 token"
+        ));
+    }
+    if RESERVED_HEADERS.contains(&name.to_ascii_lowercase().as_str()) {
+        return Err(format!(
+            "otel-http header {name:?} is reserved: the exporter derives it from \
+             endpoint, encoding and body"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_header_value(name: &str, value: &str) -> Result<(), String> {
+    if let Some(index) = value.find(['\r', '\n', '\0']) {
+        return Err(format!(
+            "invalid otel-http header value for {name:?}: control character at byte {index} \
+             would split the request"
+        ));
+    }
+    Ok(())
 }
 
 /// Parsed `http(s)://host[:port]/path` collector endpoint.
@@ -437,6 +544,7 @@ fn reject_unknown_key(section_name: &str, key: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+
     use export_core::SemanticActionKindSelection;
 
     use super::{
@@ -459,6 +567,7 @@ mod tests {
             tls,
             encoding: OtelEncoding::default(),
             compression: OtelCompression::default(),
+            headers: Vec::new(),
             action_kinds: SemanticActionKindSelection::from_config_entries([(
                 "default".to_string(),
                 false,
@@ -690,5 +799,131 @@ default = true
         .expect_err("otel-http must require an explicit action allow-list");
 
         assert!(error.contains("default must be false"));
+    }
+
+    // ---- optional custom request headers ----
+
+    fn headers_plugin_config(headers_section: &str) -> String {
+        format!(
+            r#"
+endpoint = "https://collector.internal:4318/v1/traces"
+encoding = "json"
+compression = "none"
+queue_capacity = 16
+batch_max_spans = 2
+batch_timeout_ms = 1000
+connect_timeout_ms = 1000
+request_timeout_ms = 2000
+retry_max_attempts = 2
+retry_backoff_ms = 10
+shutdown_flush_deadline_ms = 500
+
+[action_kinds]
+default = false
+{headers_section}"#
+        )
+    }
+
+    fn header_entry(name: &str, value: &str) -> String {
+        format!("\n[[headers]]\nname = \"{name}\"\nvalue = \"{value}\"\n")
+    }
+
+    #[test]
+    fn headers_are_optional_and_default_to_none() {
+        let config =
+            parse_otel_http_plugin_config(&headers_plugin_config("")).expect("valid plugin config");
+
+        assert!(
+            config.headers.is_empty(),
+            "a config without [[headers]] must keep sending the same request as before"
+        );
+    }
+
+    #[test]
+    fn headers_are_parsed_in_configured_order() {
+        let config = parse_otel_http_plugin_config(&headers_plugin_config(&format!(
+            "{}{}",
+            header_entry("x-witty-api-key", "secret-key"),
+            header_entry("x-actrail-cluster", "prod-a"),
+        )))
+        .expect("valid plugin config");
+
+        assert_eq!(
+            config.headers,
+            vec![
+                ("x-witty-api-key".to_string(), "secret-key".to_string()),
+                ("x-actrail-cluster".to_string(), "prod-a".to_string()),
+            ],
+            "entries keep the order the operator configured"
+        );
+    }
+
+    #[test]
+    fn headers_reject_transport_owned_names() {
+        // These are derived from endpoint/encoding/compression; letting a config
+        // override them silently corrupts request framing.
+        for name in [
+            "host",
+            "Content-Length",
+            "content-type",
+            "Content-Encoding",
+            "connection",
+            "Transfer-Encoding",
+        ] {
+            let error =
+                parse_otel_http_plugin_config(&headers_plugin_config(&header_entry(name, "x")))
+                    .expect_err("{name} is owned by the transport");
+            assert!(
+                error.contains("reserved"),
+                "{name} must be rejected as reserved, got: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn headers_reject_request_splitting() {
+        let error = parse_otel_http_plugin_config(&headers_plugin_config(&header_entry(
+            "x-witty-api-key",
+            "a\\r\\nX-Injected: 1",
+        )))
+        .expect_err("CR/LF in a header value can forge a second request");
+        assert!(error.contains("x-witty-api-key"), "error names the header");
+
+        let error =
+            parse_otel_http_plugin_config(&headers_plugin_config(&header_entry("bad name", "x")))
+                .expect_err("a header name must be an RFC 7230 token");
+        assert!(error.contains("bad name"), "error names the header");
+    }
+
+    #[test]
+    fn headers_reject_duplicate_names_ignoring_case() {
+        // An array can express what a table could not. Two rows for one header
+        // have no single correct meaning, and silently keeping one would leave
+        // the operator staring at a value that is not being sent.
+        let error = parse_otel_http_plugin_config(&headers_plugin_config(&format!(
+            "{}{}",
+            header_entry("x-witty-api-key", "first"),
+            header_entry("X-Witty-Api-Key", "second"),
+        )))
+        .expect_err("a header must be configured once");
+        assert!(
+            error.contains("x-witty-api-key") || error.contains("X-Witty-Api-Key"),
+            "error names the duplicated header, got: {error}"
+        );
+    }
+
+    #[test]
+    fn headers_reject_entries_without_name_or_value() {
+        let error = parse_otel_http_plugin_config(&headers_plugin_config(
+            "\n[[headers]]\nvalue = \"orphan\"\n",
+        ))
+        .expect_err("a header entry needs a name");
+        assert!(error.contains("name"), "error names the missing key");
+
+        let error = parse_otel_http_plugin_config(&headers_plugin_config(
+            "\n[[headers]]\nname = \"x-actrail-cluster\"\n",
+        ))
+        .expect_err("a header entry needs a value");
+        assert!(error.contains("value"), "error names the missing key");
     }
 }
