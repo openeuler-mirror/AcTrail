@@ -20,6 +20,7 @@ sudo -E python3.11 tests/v2/regression/test_all.py --case container_agent_xiaoo
 sudo -E python3.11 tests/v2/regression/test_all.py --case semantic_action_boundaries
 sudo -E python3.11 tests/v2/regression/test_all.py --case otel_jsonl_action_filter
 sudo -E python3.11 tests/v2/regression/test_all.py --case plugin_activity_anomaly
+sudo -E python3.11 tests/v2/regression/test_all.py --case tool_consecutive_failure_alert
 sudo -E python3.11 tests/v2/regression/test_all.py --fail-fast --no-cleanup
 ```
 
@@ -80,3 +81,4 @@ stderr 和完整检查明细，同时仍由公共框架保存对应日志。
 | `semantic_action_boundaries` | [`semantic_action_boundaries/README.zh.md`](semantic_action_boundaries/README.zh.md) |
 | `otel_jsonl_action_filter` | [`otel_jsonl_action_filter/README.zh.md`](otel_jsonl_action_filter/README.zh.md) |
 | `plugin_activity_anomaly` | [`activity_anomaly/README.zh.md`](activity_anomaly/README.zh.md) |
+| `tool_consecutive_failure_alert` | [`tool_consecutive_failure_alert/README.zh.md`](tool_consecutive_failure_alert/README.zh.md) |

@@ -250,6 +250,7 @@ pub mod payload_aggregate {
 }
 
 pub mod process {
+    pub const ID: &str = "process.id";
     pub const EXECUTABLE: &str = "process.executable";
     pub const EXIT_CODE: &str = "process.exit_code";
     pub const FAILURE_KIND: &str = "process.failure.kind";

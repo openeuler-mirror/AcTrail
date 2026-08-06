@@ -2,7 +2,7 @@
 
 extern crate alloc;
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt::Write;
@@ -35,6 +35,20 @@ const DEFAULT_DESENSITIZATION: &str = "summary_only";
 const DEFAULT_TOOL_NAME_FORMAT: &str = "bare";
 /// 默认：策略拒绝是否计入失败
 const DEFAULT_POLICY_DENIED_COUNTS_AS_FAILURE: bool = true;
+/// 默认：process.exit 状态为 unknown（宿主在退出码为 0 时不上报 exit_code）时视为成功
+const DEFAULT_UNKNOWN_STATUS_COUNTS_AS_SUCCESS: bool = true;
+/// 宿主导出时统一注入的进程标识属性（见 wire.rs observation_attributes）
+const PROCESS_ID_ATTR: &str = "process.id";
+/// process.exit 动作上的退出码属性（仅非 0 时存在）
+const PROCESS_EXIT_CODE_ATTR: &str = "process.exit_code";
+/// process.exit 动作上的失败摘要属性
+const PROCESS_FAILURE_SUMMARY_ATTR: &str = "process.failure.summary";
+/// 工具名属性（host 可能回填）
+const COMMAND_TOOL_NAME_ATTR: &str = "command.tool.name";
+/// 可执行文件属性
+const PROCESS_EXECUTABLE_ATTR: &str = "process.executable";
+/// 命令行属性
+const COMMAND_LINE_ATTR: &str = "command.line";
 
 // ============================================================================
 // 状态机
@@ -68,18 +82,38 @@ impl ToolFailureState {
         }
     }
 
-    fn record_failure(&mut self, action_id: String, epoch_secs: u64) {
-        if self.evidence_action_ids.contains(&action_id) {
+    /// 记录一次失败。`command_action_id` 是对应 command.invocation 的 action_id，
+    /// `exit_action_id` 是对应 process.exit 的 action_id（唯一性去重依据）。
+    /// 返回 false 表示该 exit 事件此前已处理过（跨 batch 重发）。
+    fn record_failure(
+        &mut self,
+        command_action_id: &str,
+        exit_action_id: &str,
+        epoch_secs: u64,
+    ) -> bool {
+        if self
+            .evidence_action_ids
+            .iter()
+            .any(|id| id == exit_action_id)
+        {
             self.last_active_secs = epoch_secs;
-            return;
+            return false;
         }
         if self.count == 0 {
-            self.first_action_id = action_id.clone();
+            self.first_action_id = command_action_id.to_string();
         }
         self.count += 1;
-        self.last_action_id = action_id.clone();
-        self.evidence_action_ids.push(action_id);
+        self.last_action_id = exit_action_id.to_string();
+        if !self
+            .evidence_action_ids
+            .iter()
+            .any(|id| id == command_action_id)
+        {
+            self.evidence_action_ids.push(command_action_id.to_string());
+        }
+        self.evidence_action_ids.push(exit_action_id.to_string());
         self.last_active_secs = epoch_secs;
+        true
     }
 
     fn record_success(&mut self, epoch_secs: u64) {
@@ -93,9 +127,22 @@ impl ToolFailureState {
 
 type StateKey = (String, String);
 
+/// 一次 command.invocation 的登记信息，等待对应的 process.exit 回填成败。
+#[derive(Clone)]
+struct CommandEntry {
+    action_id: String,
+    bare_tool_name: String,
+    effective_tool_name: String,
+    tool_args: String,
+}
+
 struct PluginState {
     /// 按 (trace_id, tool_name) 维护的状态
     states: BTreeMap<StateKey, ToolFailureState>,
+    /// 按 trace 维护待决命令队列（FIFO 兜底关联，process.id 缺失/漏采时使用）
+    pending: BTreeMap<String, VecDeque<CommandEntry>>,
+    /// 按 (trace_id, process.id) 精确关联 command.invocation -> 待决命令
+    commands_by_process: BTreeMap<(String, String), CommandEntry>,
     /// 配置
     threshold: u32,
     cooldown_secs: u64,
@@ -105,14 +152,17 @@ struct PluginState {
     ignored_tools: Vec<String>,
     policy_denied_counts_as_failure: bool,
     tool_name_format: String,
-    /// 当前 epoch 秒（由 batch 中的第一条记录近似）
-    current_epoch_secs: u64,
+    unknown_status_counts_as_success: bool,
+    /// 单调递增的批时钟（用于冷却/TTL 的近似时间；告警 timestamp 由宿主落库时覆盖）
+    clock: u64,
 }
 
 impl PluginState {
     fn new() -> Self {
         Self {
             states: BTreeMap::new(),
+            pending: BTreeMap::new(),
+            commands_by_process: BTreeMap::new(),
             threshold: DEFAULT_THRESHOLD,
             cooldown_secs: DEFAULT_COOLDOWN_SECS,
             state_ttl_secs: DEFAULT_STATE_TTL_SECS,
@@ -121,7 +171,8 @@ impl PluginState {
             ignored_tools: Vec::new(),
             policy_denied_counts_as_failure: DEFAULT_POLICY_DENIED_COUNTS_AS_FAILURE,
             tool_name_format: DEFAULT_TOOL_NAME_FORMAT.to_string(),
-            current_epoch_secs: 0,
+            unknown_status_counts_as_success: DEFAULT_UNKNOWN_STATUS_COUNTS_AS_SUCCESS,
+            clock: 0,
         }
     }
 
@@ -142,6 +193,13 @@ impl PluginState {
             "policy_denied_counts_as_failure",
         ) {
             self.policy_denied_counts_as_failure = val;
+        }
+        if let Some(val) = parse_toml_bool(
+            config_str,
+            "alert.behavior",
+            "unknown_status_counts_as_success",
+        ) {
+            self.unknown_status_counts_as_success = val;
         }
         if let Some(val) = parse_toml_string(config_str, "alert", "desensitization") {
             self.desensitization = val;
@@ -176,106 +234,150 @@ impl PluginState {
         lower.contains("policy") && (lower.contains("denied") || lower.contains("reject"))
     }
 
-    /// 处理一个 CommandInvocation 事件
-    /// `bare_tool_name` 用于过滤（monitored_tools / ignored_tools 匹配）
-    /// `effective_tool_name` 用于状态键和告警输出（可能是完整命令行）
-    fn process_command(
+    /// 登记一次 command.invocation（只登记，不判成败）。
+    /// 成败统一由对应的 process.exit 事件决定。
+    fn register_command_invocation(
         &mut self,
         trace_id: &str,
         action_id: &str,
         bare_tool_name: &str,
         effective_tool_name: &str,
         tool_args: &str,
+        process_id: &str,
+    ) {
+        let entry = CommandEntry {
+            action_id: action_id.to_string(),
+            bare_tool_name: bare_tool_name.to_string(),
+            effective_tool_name: effective_tool_name.to_string(),
+            tool_args: tool_args.to_string(),
+        };
+        self.pending
+            .entry(trace_id.to_string())
+            .or_default()
+            .push_back(entry.clone());
+        if !process_id.is_empty() {
+            self.commands_by_process.insert(
+                (trace_id.to_string(), process_id.to_string()),
+                entry,
+            );
+        }
+    }
+
+    /// 处理一次 process.exit：精确关联到对应命令（process.id），
+    /// 更新 (trace, tool) 的连续成败计数，达到阈值时返回告警 JSON。
+    fn process_exit(
+        &mut self,
+        trace_id: &str,
+        action_id: &str,
         status: &str,
         exit_code: &str,
         failure_summary: &str,
+        process_id: &str,
     ) -> Option<String> {
-        if !self.should_monitor(bare_tool_name) {
+        // 1) 关联命令：优先按 (trace, process.id) 精确匹配；缺失时用 FIFO 兜底
+        let entry = if !process_id.is_empty() {
+            self.commands_by_process
+                .remove(&(trace_id.to_string(), process_id.to_string()))
+        } else {
+            None
+        }
+        .or_else(|| {
+            self.pending
+                .get_mut(trace_id)
+                .and_then(|queue| queue.pop_front())
+        });
+        let entry = entry?;
+        self.remove_pending_entry(trace_id, &entry.action_id);
+
+        // 2) 过滤与状态判定
+        if !self.should_monitor(&entry.bare_tool_name) {
             return None;
         }
-
-        // in_progress 状态不参与计数（既不算成功也不算失败）
         if status == "in_progress" {
             return None;
         }
 
-        let key: StateKey = (trace_id.to_string(), effective_tool_name.to_string());
-        let is_success = Self::is_success_status(status, exit_code);
+        let is_failure = status == "error" || (!exit_code.is_empty() && exit_code != "0");
+        let is_success = status == "success"
+            || (status == "unknown" && self.unknown_status_counts_as_success);
 
+        let key: StateKey = (trace_id.to_string(), entry.effective_tool_name.clone());
         if is_success {
             // 成功：重置计数器
             if let Some(state) = self.states.get_mut(&key) {
-                state.record_success(self.current_epoch_secs);
+                state.record_success(self.clock);
             }
             return None;
         }
-
-        // 失败：更新或创建状态
+        if !is_failure {
+            // unknown 且配置为不计成功：忽略（不清零也不计数）
+            return None;
+        }
         // 策略拒绝检查：如果配置为不计入失败，则跳过
         if Self::is_policy_denied(failure_summary) && !self.policy_denied_counts_as_failure {
             return None;
         }
 
+        // 3) 更新失败状态（跨 batch 重发的 exit 事件按 action_id 去重）
         let state = self
             .states
             .entry(key.clone())
-            .or_insert_with(|| ToolFailureState::new(self.current_epoch_secs));
-
-        state.record_failure(action_id.to_string(), self.current_epoch_secs);
-
-        // 检查是否触发告警
-        if state.count >= self.threshold {
-            // 冷却检查
-            if self.cooldown_secs > 0
-                && state.last_alert_secs > 0
-                && self.current_epoch_secs - state.last_alert_secs < self.cooldown_secs
-            {
-                return None; // 冷却中，不重复告警
-            }
-
-            state.last_alert_secs = self.current_epoch_secs;
-
-            // 提取 state 字段，避免同时持有可变借用和不可变借用
-            let count = state.count;
-            let first_action_id = state.first_action_id.clone();
-            let last_action_id = state.last_action_id.clone();
-            let evidence_action_ids = state.evidence_action_ids.clone();
-            let threshold = self.threshold;
-            let desensitization = self.desensitization.clone();
-
-            let alert = Self::build_alert_static(
-                trace_id,
-                effective_tool_name,
-                tool_args,
-                count,
-                threshold,
-                &desensitization,
-                &first_action_id,
-                &last_action_id,
-                &evidence_action_ids,
-                failure_summary,
-                self.current_epoch_secs,
-            );
-            return Some(alert);
+            .or_insert_with(|| ToolFailureState::new(self.clock));
+        if !state.record_failure(&entry.action_id, action_id, self.clock) {
+            return None;
         }
 
-        None
+        // 4) 阈值 + 冷却检查
+        if state.count < self.threshold {
+            return None;
+        }
+        if self.cooldown_secs > 0
+            && state.last_alert_secs > 0
+            && self.clock - state.last_alert_secs < self.cooldown_secs
+        {
+            return None; // 冷却中，不重复告警
+        }
+        state.last_alert_secs = self.clock;
+
+        // 提取 state 字段，避免同时持有可变借用和不可变借用
+        let count = state.count;
+        let first_action_id = state.first_action_id.clone();
+        let last_action_id = state.last_action_id.clone();
+        let evidence_action_ids = state.evidence_action_ids.clone();
+        let threshold = self.threshold;
+        let desensitization = self.desensitization.clone();
+        let summary = if failure_summary.is_empty() && !exit_code.is_empty() {
+            alloc::format!("exit code {exit_code}")
+        } else {
+            failure_summary.to_string()
+        };
+
+        Some(Self::build_alert_static(
+            trace_id,
+            &entry.effective_tool_name,
+            &entry.tool_args,
+            count,
+            threshold,
+            &desensitization,
+            &first_action_id,
+            &last_action_id,
+            &evidence_action_ids,
+            &summary,
+            self.clock,
+        ))
     }
 
-    /// 判定成功/失败
-    /// 遵循 AcTrail 的 process_exit_status() 逻辑：
-    ///   exit_code=0 或 None → Success
-    ///   exit_code≠0 → Error
-    fn is_success_status(status: &str, exit_code: &str) -> bool {
-        // status 为 "success" 即为成功
-        if status == "success" {
-            return true;
+    /// 从 per-trace FIFO 中移除已关联的命令（避免残留错配）。
+    fn remove_pending_entry(&mut self, trace_id: &str, action_id: &str) {
+        let remove_trace = if let Some(queue) = self.pending.get_mut(trace_id) {
+            queue.retain(|entry| entry.action_id != action_id);
+            queue.is_empty()
+        } else {
+            false
+        };
+        if remove_trace {
+            self.pending.remove(trace_id);
         }
-        // exit_code 为 "0" 或空即为成功
-        if exit_code.is_empty() || exit_code == "0" {
-            return true;
-        }
-        false
     }
 
     /// 构建告警 JSON（静态方法，不借用 self）
@@ -333,7 +435,7 @@ impl PluginState {
         }
 
         let ttl = self.state_ttl_secs;
-        let now = self.current_epoch_secs;
+        let now = self.clock;
         self.states
             .retain(|_, state| now - state.last_active_secs < ttl);
     }
@@ -563,118 +665,49 @@ impl Guest for Component {
             state.load_config(&config_str);
         }
 
-        // 从 batch 中提取真实时间戳（eBPF start_time），替代递增计数器
-        for action in &batch.semantic_actions {
-            if let Some(ts) = action
-                .attributes
-                .iter()
-                .find(|attr| attr.key == "action.start_time")
-                .and_then(|attr| attr.value.parse::<u64>().ok())
-            {
-                if ts > state.current_epoch_secs {
-                    state.current_epoch_secs = ts;
-                }
-                break;
-            }
-        }
+        // 单调递增的批时钟：用于冷却 / TTL 的近似时间
+        state.clock = state.clock.wrapping_add(1);
 
         // 遍历 semantic_actions，遇一条处理一条
         let mut observed: u64 = 0;
         for action in &batch.semantic_actions {
-            // 只处理 CommandInvocation（WIT 传输的 kind 字符串为 "command.invocation"）
-            if action.kind != "command.invocation" {
-                continue;
-            }
-
-            // 提取工具名：优先从 command.tool.name，fallback 到 process.executable / command.line
-            let bare_tool_name = action
-                .attributes
-                .iter()
-                .find(|attr| attr.key == "command.tool.name")
-                .map(|attr| attr.value.as_str())
-                .or_else(|| {
-                    // Fallback: 从 process.executable 提取文件名（如 /usr/bin/ls → ls）
-                    action
-                        .attributes
-                        .iter()
-                        .find(|attr| attr.key == "process.executable")
-                        .map(|attr| attr.value.as_str())
-                        .and_then(|exec| exec.rsplit('/').next().filter(|s| !s.is_empty()))
-                })
-                .or_else(|| {
-                    // Fallback: 从 command.line 提取第一个单词（如 "ls /tmp" → "ls"）
-                    action
-                        .attributes
-                        .iter()
-                        .find(|attr| attr.key == "command.line")
-                        .map(|attr| attr.value.as_str())
-                        .and_then(|line| line.split_whitespace().next().filter(|s| !s.is_empty()))
-                })
-                .unwrap_or("unknown");
-
-            // 提取工具参数：从 command.line 属性获取
-            let tool_args = action
-                .attributes
-                .iter()
-                .find(|attr| attr.key == "command.line")
-                .map(|attr| attr.value.as_str())
-                .unwrap_or("");
-
-            // 提取 exit_code 和 failure_summary
-            let exit_code = action
-                .attributes
-                .iter()
-                .find(|attr| attr.key == "command.exit_code")
-                .map(|attr| attr.value.as_str())
-                .unwrap_or("");
-
-            let failure_summary = action
-                .attributes
-                .iter()
-                .find(|attr| attr.key == "command.failure.summary")
-                .map(|attr| attr.value.as_str())
-                .unwrap_or("");
-
-            // 根据 tool_name_format 决定用于状态键和告警的工具名
-            // "bare": 仅工具名（如 "ls"），不同参数的调用共享同一计数器
-            // "full": 完整命令行（如 "ls /aaa"），不同参数的独立计数
-            let effective_tool_name = if state.tool_name_format == "full" && !tool_args.is_empty() {
-                tool_args
-            } else {
-                bare_tool_name
-            };
-
-            // 处理事件
-            if let Some(alert_json) = state.process_command(
-                &action.trace_id,
-                &action.action_id,
-                bare_tool_name,
-                effective_tool_name,
-                tool_args,
-                &action.status,
-                exit_code,
-                failure_summary,
-            ) {
-                // 通过 alert-write 接口提交告警到 daemon
-                if let Ok(trace_ctx) =
-                    actrail::plugin::observation_context_read::trace_context_get()
-                {
-                    let alert_token = trace_ctx.alert_token.unwrap_or_default();
-                    let draft = actrail::plugin::types::AlertDraft {
-                        definition_key: "consecutive-failure".to_string(),
-                        payload_json: alert_json,
-                        deduplication_key: None,
+            let process_id = find_attr(&action.attributes, PROCESS_ID_ATTR).unwrap_or("");
+            if action.kind == "command.invocation" {
+                // 只登记，成败由 process.exit 决定
+                let bare_tool_name = extract_bare_tool_name(action);
+                let tool_args = find_attr(&action.attributes, COMMAND_LINE_ATTR).unwrap_or("");
+                let effective_tool_name =
+                    if state.tool_name_format == "full" && !tool_args.is_empty() {
+                        tool_args
+                    } else {
+                        bare_tool_name
                     };
-                    let request = actrail::plugin::types::AlertWriteRequest {
-                        trace_id: action.trace_id.clone(),
-                        alert_token,
-                        draft,
-                    };
-                    let _ = actrail::plugin::alert_write::submit(&request);
+                state.register_command_invocation(
+                    &action.trace_id,
+                    &action.action_id,
+                    bare_tool_name,
+                    effective_tool_name,
+                    tool_args,
+                    process_id,
+                );
+                observed += 1;
+            } else if action.kind == "process.exit" {
+                let exit_code =
+                    find_attr(&action.attributes, PROCESS_EXIT_CODE_ATTR).unwrap_or("");
+                let failure_summary =
+                    find_attr(&action.attributes, PROCESS_FAILURE_SUMMARY_ATTR).unwrap_or("");
+                if let Some(alert_json) = state.process_exit(
+                    &action.trace_id,
+                    &action.action_id,
+                    &action.status,
+                    exit_code,
+                    failure_summary,
+                    process_id,
+                ) {
+                    submit_alert(&action.trace_id, alert_json);
                 }
+                observed += 1;
             }
-
-            observed += 1;
         }
 
         // 清理过期状态
@@ -684,6 +717,54 @@ impl Guest for Component {
             observed_records: observed,
             dropped_records: 0,
         })
+    }
+}
+
+// ============================================================================
+// 工具函数
+// ============================================================================
+
+/// 查找动作属性值
+fn find_attr<'a>(
+    attributes: &'a [actrail::plugin::types::AttributePair],
+    key: &str,
+) -> Option<&'a str> {
+    attributes
+        .iter()
+        .find(|attr| attr.key == key)
+        .map(|attr| attr.value.as_str())
+}
+
+/// 提取工具名：优先 command.tool.name，fallback 到 process.executable 文件名，
+/// 再 fallback 到 command.line 首词
+fn extract_bare_tool_name(action: &actrail::plugin::types::SemanticActionRecord) -> &str {
+    find_attr(&action.attributes, COMMAND_TOOL_NAME_ATTR)
+        .or_else(|| {
+            find_attr(&action.attributes, PROCESS_EXECUTABLE_ATTR)
+                .and_then(|exec| exec.rsplit('/').next().filter(|s| !s.is_empty()))
+        })
+        .or_else(|| {
+            find_attr(&action.attributes, COMMAND_LINE_ATTR)
+                .and_then(|line| line.split_whitespace().next().filter(|s| !s.is_empty()))
+        })
+        .unwrap_or("unknown")
+}
+
+/// 通过 alert-write 接口提交告警到 daemon
+fn submit_alert(trace_id: &str, alert_json: String) {
+    if let Ok(trace_ctx) = actrail::plugin::observation_context_read::trace_context_get() {
+        let alert_token = trace_ctx.alert_token.unwrap_or_default();
+        let draft = actrail::plugin::types::AlertDraft {
+            definition_key: "consecutive-failure".to_string(),
+            payload_json: alert_json,
+            deduplication_key: None,
+        };
+        let request = actrail::plugin::types::AlertWriteRequest {
+            trace_id: trace_id.to_string(),
+            alert_token,
+            draft,
+        };
+        let _ = actrail::plugin::alert_write::submit(&request);
     }
 }
 
