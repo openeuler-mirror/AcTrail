@@ -8,4 +8,3 @@ license = "MulanPSL-2.0"
 model_core = { path = "../../core/model" }
 plugin_system = { path = "../../core/plugin_system" }
 semantic_action = { path = "../../contracts/semantic_action" }
-tracing = "0.1"

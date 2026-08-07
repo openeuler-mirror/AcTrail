@@ -319,9 +319,6 @@ fn next_id_seed(
 }
 
 #[cfg(test)]
-#[path = "test_cases/alerts.rs"]
-mod alert_tests;
-#[cfg(test)]
 #[path = "test_cases/root_tree.rs"]
 mod root_tree_tests;
 #[cfg(test)]

@@ -15,49 +15,6 @@
           <strong>{{ formatDuration(payload.maximum_duration_ms) }}</strong>
         </p>
       </div>
-      <div v-else-if="isHighFrequency" class="activity-rule-copy">
-        <p>
-          {{ t('alerts.turnAnomaly.highFrequencyRule', {
-            window: formatDuration(payload.window_size_ms),
-            threshold: formatInteger(payload.threshold),
-          }) }}
-        </p>
-      </div>
-      <div v-else-if="isConsecutiveRetry" class="activity-rule-copy">
-        <p>
-          {{ t('alerts.turnAnomaly.consecutiveRetryRule', {
-            count: formatInteger(payload.consecutive_count),
-          }) }}
-        </p>
-      </div>
-      <div v-else-if="isRepeatedSimilar" class="activity-rule-copy">
-        <p>
-          {{ t('alerts.turnAnomaly.repeatedSimilarRule', {
-            window: formatInteger(payload.similarity_window),
-            repeat: formatInteger(payload.min_repeat_count ?? 2),
-            tolerance: formatRatio(payload.similarity_tolerance_ratio_per_mille),
-          }) }}
-        </p>
-      </div>
-      <div v-else-if="isErrorRatio" class="activity-rule-copy">
-        <p>
-          {{ t('alerts.turnAnomaly.errorRatioRule', {
-            minimum: formatInteger(payload.minimum_exchanges),
-            ratio: formatRatio(payload.error_ratio_per_mille),
-          }) }}
-        </p>
-      </div>
-      <div v-else-if="isContextGrowth" class="activity-rule-copy">
-        <p>
-          {{ t('alerts.turnAnomaly.contextGrowthRule', {
-            samples: formatInteger(payload.minimum_samples),
-            baseline: formatBytes(payload.minimum_baseline_bytes),
-            growth: formatBytes(payload.minimum_growth_bytes),
-            ratio: formatRatio(payload.growth_ratio_per_mille),
-            window: formatInteger(payload.window_size),
-          }) }}
-        </p>
-      </div>
       <div v-else class="activity-rule-copy">
         <p>{{ t('alerts.activity.growthRulePrefix') }}</p>
         <ul>
@@ -143,162 +100,6 @@
           </dl>
         </template>
 
-        <template v-else-if="isHighFrequency">
-          <header class="activity-finding-heading">
-            <div>
-              <span>{{ t('alerts.activity.model') }}</span>
-              <strong>{{ valueOrDash(finding.model) }}</strong>
-            </div>
-            <span class="activity-reason">{{ t('alerts.turnAnomaly.highFrequencyBadge') }}</span>
-          </header>
-
-          <dl class="activity-metrics">
-            <div class="activity-metric-primary">
-              <dt>{{ t('alerts.turnAnomaly.exchangeCount') }}</dt>
-              <dd>{{ formatInteger(finding.exchange_count) }}</dd>
-            </div>
-            <div>
-              <dt>{{ t('alerts.turnAnomaly.windowDuration') }}</dt>
-              <dd>{{ formatDuration(payload.window_size_ms) }}</dd>
-            </div>
-            <div>
-              <dt>{{ t('alerts.turnAnomaly.threshold') }}</dt>
-              <dd>{{ formatInteger(payload.threshold) }}</dd>
-            </div>
-          </dl>
-
-          <dl class="activity-evidence-fields">
-            <div><dt>{{ t('alerts.turnAnomaly.firstTimestamp') }}</dt><dd>{{ formatTime(finding.window_start_ms) }}</dd></div>
-            <div><dt>{{ t('alerts.turnAnomaly.lastTimestamp') }}</dt><dd>{{ formatTime(finding.window_end_ms) }}</dd></div>
-            <div><dt>{{ t('alerts.activity.processId') }}</dt><dd>{{ finding.process_id }}</dd></div>
-          </dl>
-        </template>
-
-        <template v-else-if="isConsecutiveRetry">
-          <header class="activity-finding-heading">
-            <div>
-              <span>{{ t('alerts.activity.model') }}</span>
-              <strong>{{ valueOrDash(finding.model) }}</strong>
-            </div>
-            <span class="activity-reason">{{ t('alerts.turnAnomaly.consecutiveRetryBadge') }}</span>
-          </header>
-
-          <dl class="activity-metrics">
-            <div class="activity-metric-primary">
-              <dt>{{ t('alerts.turnAnomaly.retryLength') }}</dt>
-              <dd>{{ formatInteger(finding.retry_length) }}</dd>
-            </div>
-            <div>
-              <dt>{{ t('alerts.turnAnomaly.requiredCount') }}</dt>
-              <dd>{{ formatInteger(payload.consecutive_count) }}</dd>
-            </div>
-          </dl>
-
-          <dl class="activity-evidence-fields">
-            <div><dt>{{ t('alerts.turnAnomaly.firstAction') }}</dt><dd>{{ finding.first_action_id }}</dd></div>
-            <div><dt>{{ t('alerts.turnAnomaly.lastAction') }}</dt><dd>{{ finding.last_action_id }}</dd></div>
-            <div><dt>{{ t('alerts.activity.processId') }}</dt><dd>{{ finding.process_id }}</dd></div>
-          </dl>
-        </template>
-
-        <template v-else-if="isRepeatedSimilar">
-          <header class="activity-finding-heading">
-            <div>
-              <span>{{ t('alerts.activity.model') }}</span>
-              <strong>{{ valueOrDash(finding.model) }}</strong>
-            </div>
-            <span class="activity-reason">{{ t('alerts.turnAnomaly.repeatedSimilarBadge') }}</span>
-          </header>
-
-          <dl class="activity-metrics">
-            <div class="activity-metric-primary">
-              <dt>{{ t('alerts.turnAnomaly.repeatCount') }}</dt>
-              <dd>{{ formatInteger(finding.repeat_count) }}</dd>
-            </div>
-            <div>
-              <dt>{{ t('alerts.turnAnomaly.representativeSize') }}</dt>
-              <dd>{{ formatBytes(finding.representative_request_bytes) }}</dd>
-            </div>
-            <div>
-              <dt>{{ t('alerts.turnAnomaly.windowSize') }}</dt>
-              <dd>{{ formatInteger(payload.similarity_window) }}</dd>
-            </div>
-          </dl>
-
-          <dl class="activity-evidence-fields">
-            <div><dt>{{ t('alerts.turnAnomaly.representativeAction') }}</dt><dd>{{ finding.representative_action_id }}</dd></div>
-            <div><dt>{{ t('alerts.activity.processId') }}</dt><dd>{{ finding.process_id }}</dd></div>
-          </dl>
-        </template>
-
-        <template v-else-if="isErrorRatio">
-          <header class="activity-finding-heading">
-            <div>
-              <span>{{ t('alerts.activity.model') }}</span>
-              <strong>{{ valueOrDash(finding.model) }}</strong>
-            </div>
-            <span class="activity-reason">{{ t('alerts.turnAnomaly.errorRatioBadge') }}</span>
-          </header>
-
-          <dl class="activity-metrics">
-            <div class="activity-metric-primary">
-              <dt>{{ t('alerts.turnAnomaly.errorCount') }}</dt>
-              <dd>{{ formatInteger(finding.error_count) }}</dd>
-            </div>
-            <div>
-              <dt>{{ t('alerts.turnAnomaly.totalExchanges') }}</dt>
-              <dd>{{ formatInteger(finding.total_exchanges) }}</dd>
-            </div>
-            <div>
-              <dt>{{ t('alerts.turnAnomaly.observedRatio') }}</dt>
-              <dd>{{ formatRatio(finding.actual_ratio_per_mille) }}</dd>
-            </div>
-            <div>
-              <dt>{{ t('alerts.turnAnomaly.thresholdRatio') }}</dt>
-              <dd>{{ formatRatio(payload.error_ratio_per_mille) }}</dd>
-            </div>
-          </dl>
-
-          <dl class="activity-evidence-fields">
-            <div><dt>{{ t('alerts.activity.processId') }}</dt><dd>{{ finding.process_id }}</dd></div>
-          </dl>
-        </template>
-
-        <template v-else-if="isContextGrowth">
-          <header class="activity-finding-heading">
-            <div>
-              <span>{{ t('alerts.activity.model') }}</span>
-              <strong>{{ valueOrDash(finding.model) }}</strong>
-            </div>
-            <span class="activity-reason">{{ t('alerts.turnAnomaly.contextGrowthBadge') }}</span>
-          </header>
-
-          <dl class="activity-metrics">
-            <div class="activity-metric-primary">
-              <dt>{{ t('alerts.turnAnomaly.observedSize') }}</dt>
-              <dd>{{ formatBytes(finding.observed_bytes) }}</dd>
-            </div>
-            <div>
-              <dt>{{ t('alerts.turnAnomaly.baselineSize') }}</dt>
-              <dd>{{ formatBytes(finding.baseline_median_bytes) }}</dd>
-            </div>
-            <div>
-              <dt>{{ t('alerts.turnAnomaly.observedRatio') }}</dt>
-              <dd>{{ formatRatio(finding.observed_ratio_per_mille) }}</dd>
-            </div>
-            <div>
-              <dt>{{ t('alerts.turnAnomaly.thresholdRatio') }}</dt>
-              <dd>{{ formatRatio(payload.growth_ratio_per_mille) }}</dd>
-            </div>
-          </dl>
-
-          <dl class="activity-evidence-fields">
-            <div><dt>{{ t('alerts.activity.startedAt') }}</dt><dd>{{ formatTime(finding.started_at_ms) }}</dd></div>
-            <div><dt>{{ t('alerts.activity.processId') }}</dt><dd>{{ finding.process_id }}</dd></div>
-            <div><dt>{{ t('alerts.activity.actionId') }}</dt><dd>{{ finding.action_id }}</dd></div>
-          </dl>
-        </template>
-
         <template v-else>
           <header class="activity-finding-heading">
             <div>
@@ -341,66 +142,6 @@
       </article>
     </section>
 
-    <section v-if="isLlmTurnAnomaly" class="activity-request">
-      <header class="activity-section-heading">
-        <div>
-          <span>{{ t('alerts.turnAnomaly.requestKicker') }}</span>
-          <h3>{{ t('alerts.turnAnomaly.requestTitle') }}</h3>
-        </div>
-      </header>
-
-      <article
-        v-for="entry in requestEntries"
-        :key="entry.key"
-        class="activity-finding"
-      >
-        <header class="activity-finding-heading">
-          <div>
-            <span>{{ t('alerts.activity.actionId') }}</span>
-            <code>{{ entry.actionId }}</code>
-          </div>
-          <span v-if="entry.model" class="activity-reason">{{ entry.model }}</span>
-        </header>
-
-        <template v-if="entry.loading">
-          <p class="activity-data-note">{{ t('alerts.turnAnomaly.requestLoading') }}</p>
-        </template>
-        <template v-else-if="entry.error">
-          <p class="activity-data-note">{{ entry.error }}</p>
-          <button class="activity-load-button" type="button" @click="loadRequestEntry(entry)">
-            {{ t('alerts.turnAnomaly.loadRequest') }}
-          </button>
-        </template>
-        <template v-else-if="entry.content">
-          <dl class="activity-evidence-fields">
-            <div v-if="entry.server">
-              <dt>{{ t('alerts.activity.server') }}</dt>
-              <dd>{{ entry.server }}</dd>
-            </div>
-            <div>
-              <dt>{{ t('alerts.turnAnomaly.requestBytes') }}</dt>
-              <dd>{{ formatBytes(entry.content.canonical_body_bytes) }}</dd>
-            </div>
-            <div v-if="entry.content.truncated">
-              <dt>{{ t('alerts.turnAnomaly.requestReturned') }}</dt>
-              <dd>{{ formatBytes(entry.content.returned_bytes) }}</dd>
-            </div>
-          </dl>
-          <JsonTree v-if="entry.body !== null" :value="entry.body" />
-        </template>
-        <template v-else>
-          <p class="activity-data-note">{{ t('alerts.turnAnomaly.requestNotLoaded') }}</p>
-          <button class="activity-load-button" type="button" @click="loadRequestEntry(entry)">
-            {{ t('alerts.turnAnomaly.loadRequest') }}
-          </button>
-        </template>
-      </article>
-
-      <p v-if="!requestEntries.length" class="activity-data-note request-empty">
-        {{ t('alerts.turnAnomaly.requestUnavailable') }}
-      </p>
-    </section>
-
     <section class="activity-context">
       <header class="activity-section-heading">
         <div>
@@ -419,13 +160,9 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue';
+import { computed } from 'vue';
 
-import { readActionDetail, readActionLlmRequestContent } from '../api';
 import { useLocale } from '../locale';
-import JsonTree from './JsonTree.vue';
-
-const REQUEST_MAX_BYTES = 128 * 1024;
 
 const props = defineProps({
   alert: {
@@ -441,115 +178,16 @@ const findings = computed(() =>
 );
 const truncatedCount = computed(() => Number(payload.value.truncated_count) || 0);
 const isCommand = computed(() => props.alert?.kind === 'command.duration.exceeded');
-const isLlmTurnAnomaly = computed(() => props.alert?.kind?.startsWith('llm.turn.'));
-const isHighFrequency = computed(() => props.alert?.kind === 'llm.turn.high_frequency');
-const isConsecutiveRetry = computed(() => props.alert?.kind === 'llm.turn.consecutive_retry');
-const isRepeatedSimilar = computed(() => props.alert?.kind === 'llm.turn.repeated_similar');
-const isErrorRatio = computed(() => props.alert?.kind === 'llm.turn.error_ratio');
-const isContextGrowth = computed(() => props.alert?.kind === 'llm.turn.context_growth');
 const directionLabel = computed(() =>
   payload.value.direction === 'response'
     ? t('alerts.activity.response')
     : t('alerts.activity.request'),
 );
-const ruleTitle = computed(() => {
-  const kind = props.alert?.kind;
-  if (kind === 'command.duration.exceeded') return t('alerts.activity.commandRuleTitle');
-  if (kind === 'llm.turn.high_frequency') return t('alerts.turnAnomaly.highFrequencyTitle');
-  if (kind === 'llm.turn.consecutive_retry') return t('alerts.turnAnomaly.consecutiveRetryTitle');
-  if (kind === 'llm.turn.repeated_similar') return t('alerts.turnAnomaly.repeatedSimilarTitle');
-  if (kind === 'llm.turn.error_ratio') return t('alerts.turnAnomaly.errorRatioTitle');
-  if (kind === 'llm.turn.context_growth') return t('alerts.turnAnomaly.contextGrowthTitle');
-  return t('alerts.activity.growthRuleTitle', { direction: directionLabel.value });
-});
-
-const requestEntries = ref([]);
-let requestLoadToken = null;
-
-watch(
-  [() => props.alert, findings],
-  () => {
-    requestLoadToken = Symbol();
-    const entries = [];
-    findings.value.forEach((finding, index) => {
-      const actionId = requestActionId(props.alert?.kind, finding);
-      if (actionId) {
-        entries.push({
-          key: `${index}:${actionId}`,
-          actionId,
-          model: finding.model ?? null,
-          server: '',
-          content: null,
-          body: null,
-          loading: false,
-          error: '',
-        });
-      }
-    });
-    requestEntries.value = entries;
-    if (entries.length) {
-      loadRequestEntry(entries[0]);
-    }
-  },
-  { immediate: true },
+const ruleTitle = computed(() =>
+  isCommand.value
+    ? t('alerts.activity.commandRuleTitle')
+    : t('alerts.activity.growthRuleTitle', { direction: directionLabel.value }),
 );
-
-async function loadRequestEntry(entry) {
-  if (!entry || entry.loading || entry.content) {
-    return;
-  }
-  const token = Symbol();
-  requestLoadToken = token;
-  entry.loading = true;
-  entry.error = '';
-  try {
-    const traceId = props.alert?.trace_id;
-    const [contentResult, detailResult] = await Promise.all([
-      readActionLlmRequestContent(traceId, entry.actionId, { maxBytes: REQUEST_MAX_BYTES }),
-      readActionDetail(traceId, entry.actionId),
-    ]);
-    if (requestLoadToken !== token) {
-      return;
-    }
-    entry.content = contentResult?.content ?? null;
-    entry.server = attributeServerTarget(detailResult?.attributes ?? {});
-    if (entry.content?.body_json) {
-      try {
-        entry.body = JSON.parse(entry.content.body_json);
-      } catch {
-        entry.body = entry.content.body_json;
-      }
-    }
-  } catch (err) {
-    if (requestLoadToken === token) {
-      entry.error = String(err.message ?? err);
-    }
-  } finally {
-    entry.loading = false;
-  }
-}
-
-function requestActionId(kind, finding) {
-  switch (kind) {
-    case 'llm.turn.context_growth':
-      return finding.action_id || finding.call_action_id;
-    case 'llm.turn.repeated_similar':
-      return finding.representative_action_id;
-    case 'llm.turn.consecutive_retry':
-      return finding.last_action_id || finding.first_action_id;
-    default:
-      return null;
-  }
-}
-
-function attributeServerTarget(attributes) {
-  const address = attributes['server.address'];
-  const path = attributes['url.path'];
-  if (!address && !path) {
-    return '';
-  }
-  return `${address ?? ''}${path ?? ''}`;
-}
 
 function commandText(finding) {
   return finding.command_line || finding.executable || t('alerts.activity.unknownCommand');
@@ -683,7 +321,6 @@ function formatTime(timestamp) {
 
 .activity-rule,
 .activity-findings,
-.activity-request,
 .activity-context {
   min-width: 0;
   overflow: hidden;
@@ -825,32 +462,6 @@ function formatTime(timestamp) {
   color: var(--stats-muted);
   font-size: var(--stats-font-sm);
   line-height: 1.55;
-}
-
-.request-empty {
-  padding: var(--stats-space-xl);
-}
-
-.activity-load-button {
-  width: fit-content;
-  min-height: var(--stats-control-height-md);
-  padding: 0 var(--stats-space-lg);
-  border: 0;
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-accent);
-  color: var(--stats-on-accent);
-  cursor: pointer;
-  font-size: var(--stats-font-sm);
-  font-weight: var(--stats-weight-medium);
-}
-
-.activity-load-button:hover {
-  filter: brightness(1.06);
-}
-
-.activity-load-button:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--stats-accent) 50%, transparent);
-  outline-offset: 2px;
 }
 
 .activity-metrics {
