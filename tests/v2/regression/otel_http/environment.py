@@ -15,6 +15,9 @@ from .receiver import OtlpHttpReceiver
 
 
 class OtelHttpEnvironment(PluginTestEnvironment):
+    #: Stand-in for the receiving service's per-user API key.
+    EXPORT_CREDENTIAL = "v2-otel-http-credential"
+
     _CONFIGURABLE_ACTION_KINDS = {
         "process.exec",
         "process.exit",
@@ -105,6 +108,14 @@ class OtelHttpEnvironment(PluginTestEnvironment):
                 "retry_max_attempts": 1,
                 "retry_backoff_ms": 1,
                 "shutdown_flush_deadline_ms": 3000,
+                # Ingest endpoints that attribute a trace to an account read the
+                # sender identity from a request header, never from span content.
+                "headers": [
+                    {
+                        "name": OtlpHttpReceiver.CREDENTIAL_HEADER,
+                        "value": self.EXPORT_CREDENTIAL,
+                    }
+                ],
             }
         )
         returned = self.update_config(copy.deepcopy(candidate))
@@ -115,6 +126,12 @@ class OtelHttpEnvironment(PluginTestEnvironment):
             "compression": "none",
             "attribute_mode": "metadata-only",
             "action_kinds": action_kinds,
+            "headers": [
+                {
+                    "name": OtlpHttpReceiver.CREDENTIAL_HEADER,
+                    "value": self.EXPORT_CREDENTIAL,
+                }
+            ],
         }
         for key, value in expected.items():
             if returned.get(key) != value:
@@ -137,6 +154,9 @@ class OtelHttpEnvironment(PluginTestEnvironment):
 
     def documents(self) -> list[dict[str, Any]]:
         return self._receiver.documents()
+
+    def credentials(self) -> list[str | None]:
+        return self._receiver.credentials()
 
     def _write_operator_config_patch(self) -> None:
         plugin_root = (

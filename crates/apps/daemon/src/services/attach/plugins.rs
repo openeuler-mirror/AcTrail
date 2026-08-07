@@ -227,21 +227,7 @@ impl StorageAttachService {
     ) -> Result<PluginInstanceStatus, ControlError> {
         let command = inspected_config.load_command();
         let manifest_path = PathBuf::from(&command.manifest_path);
-        let manifest_raw = std::fs::read_to_string(&manifest_path).map_err(|error| {
-            ControlError::new(
-                "plugin_manifest",
-                format!("read {} failed: {error}", command.manifest_path),
-            )
-        })?;
-        let manifest = toml::from_str::<PluginManifest>(&manifest_raw).map_err(|error| {
-            ControlError::new(
-                "plugin_manifest",
-                format!("parse {} failed: {error}", command.manifest_path),
-            )
-        })?;
-        let manifest_warnings = manifest
-            .validate_loadable()
-            .map_err(|message| ControlError::new("plugin_manifest", message))?;
+        let (manifest, manifest_warnings) = Self::load_plugin_manifest(&manifest_path)?;
         let host_grants = validate_plugin_capability_grants(&manifest, &command.host_grants)?;
         self.install_plugin_impl(
             command,
@@ -251,6 +237,46 @@ impl StorageAttachService {
             host_grants,
             inspected_config,
         )
+    }
+
+    fn load_plugin_manifest(
+        manifest_path: &Path,
+    ) -> Result<(PluginManifest, Vec<String>), ControlError> {
+        let manifest_raw = std::fs::read_to_string(manifest_path).map_err(|error| {
+            ControlError::new(
+                "plugin_manifest",
+                format!("read {} failed: {error}", manifest_path.display()),
+            )
+        })?;
+        let manifest = toml::from_str::<PluginManifest>(&manifest_raw).map_err(|error| {
+            ControlError::new(
+                "plugin_manifest",
+                format!("parse {} failed: {error}", manifest_path.display()),
+            )
+        })?;
+        let warnings = manifest
+            .validate_loadable()
+            .map_err(|message| ControlError::new("plugin_manifest", message))?;
+        Ok((manifest, warnings))
+    }
+
+    /// Run the plugin's own config parser without building anything.
+    ///
+    /// Updating a file-backed plugin's config removes the running instance
+    /// before constructing the replacement, so a document the JSON schema
+    /// accepts but the plugin rejects would leave nothing loaded. Reject it here
+    /// instead, while the current instance is still serving.
+    fn precheck_plugin_config(
+        &self,
+        inspected_config: &super::plugin_config::InspectedPluginConfig,
+    ) -> Result<(), ControlError> {
+        let command = inspected_config.load_command();
+        let (manifest, _) = Self::load_plugin_manifest(&PathBuf::from(&command.manifest_path))?;
+        export_factory::validate_observation_consumer_config(
+            &manifest,
+            inspected_config.raw.as_deref(),
+        )
+        .map_err(|error| ControlError::new(error.code, error.message))
     }
 
     pub(super) fn unload_plugin_impl(
@@ -349,7 +375,19 @@ impl StorageAttachService {
         config_json: &str,
     ) -> Result<control_contract::reply::PluginConfigValidationReply, ControlError> {
         if !self.plugin_configs.runtime_managed(instance_id)? {
-            return self.plugin_configs.validate(instance_id, config_json);
+            let mut validation = self.plugin_configs.validate(instance_id, config_json)?;
+            // Schema validation cannot express every rule the plugin enforces.
+            // Surface the rest here so a test reports what an update would.
+            if validation.valid {
+                let update = self
+                    .plugin_configs
+                    .prepare_update(instance_id, config_json)?;
+                if let Err(error) = self.precheck_plugin_config(&update) {
+                    validation.errors = vec![error.message];
+                    validation.valid = false;
+                }
+            }
+            return Ok(validation);
         }
         let current = self
             .control_plugins
@@ -415,6 +453,7 @@ impl StorageAttachService {
         let update = self
             .plugin_configs
             .prepare_update(instance_id, config_json)?;
+        self.precheck_plugin_config(&update)?;
         self.remove_plugin_runtime_impl(instance_id)?;
         self.plugin_configs.remove(instance_id);
         self.install_updated_plugin_impl(update)?;

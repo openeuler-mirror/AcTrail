@@ -12,8 +12,12 @@ class OtlpHttpReceiver:
 
     _MAX_REQUEST_BYTES = 16 * 1024 * 1024
 
+    #: Credential header a real ingest endpoint uses to attribute the trace.
+    CREDENTIAL_HEADER = "x-witty-api-key"
+
     def __init__(self, host: str = "127.0.0.1", port: int = 0):
         self._documents: list[dict[str, Any]] = []
+        self._credentials: list[str | None] = []
         self._lock = threading.Lock()
         self._server = _OtlpHttpServer((host, port), self)
         self._thread: threading.Thread | None = None
@@ -47,6 +51,11 @@ class OtlpHttpReceiver:
         with self._lock:
             return copy.deepcopy(self._documents)
 
+    def credentials(self) -> list[str | None]:
+        """The credential header seen on each accepted request, in order."""
+        with self._lock:
+            return list(self._credentials)
+
     def handle(self, handler: BaseHTTPRequestHandler) -> None:
         if handler.path != "/v1/traces":
             self._send_json(handler, 404, {"error": "not found"})
@@ -75,6 +84,7 @@ class OtlpHttpReceiver:
             return
         with self._lock:
             self._documents.append(document)
+            self._credentials.append(handler.headers.get(self.CREDENTIAL_HEADER))
         # An empty ExportTraceServiceResponse is a valid OTLP success body.
         self._send_json(handler, 200, {})
 

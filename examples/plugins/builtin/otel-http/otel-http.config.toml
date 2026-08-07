@@ -22,6 +22,14 @@ shutdown_flush_deadline_ms = 3000
 # tls_client_cert_path = "/etc/actrail/tls/client.crt"
 # tls_client_key_path = "/etc/actrail/tls/client.key"
 
+# Optional. Extra headers sent with every POST, for collectors that
+# authenticate the sender and attribute the trace to an account. Each header
+# may be configured once. Send credentials over https:// only — this file
+# holds them in plaintext.
+# [[headers]]
+# name = "x-witty-api-key"
+# value = "<user API key>"
+
 # OTEL/HTTP is a general observation consumer, so deployments opt in to the
 # action kinds that may cross this outbound boundary.
 [action_kinds]

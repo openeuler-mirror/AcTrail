@@ -20,6 +20,35 @@ HTTP/LLM 内容等采集属性。只有 Collector
 - `otel-http.config.toml`：部署配置，使用前必须替换 Collector 占位地址；
 - `otel-http.config.v1.schema.json`：Web/部署工具可使用的配置 schema。
 
+可选的 `[[headers]]` 数组为每次 POST 附加自定义请求头，供需要识别发送方身份的
+Collector 使用（例如 Agent Insight 用 `x-witty-api-key` 决定 trace 归属哪个账号）：
+
+```toml
+[[headers]]
+name = "x-witty-api-key"
+value = "<用户 API Key>"
+```
+
+写成数组而非键值表，是为了与本仓库其他插件配置一致：每个配置对象都由具名字段
+构成，Web 配置面板据此渲染，因此请求头可以直接在页面上增删改。
+
+由 endpoint、编码和请求体推导出来的 `host`、`content-length`、`content-type`、
+`content-encoding`、`connection`、`transfer-encoding` 属于传输层，配置这些会被拒绝；
+头名必须是 RFC 7230 token，头值不得含 CR/LF；同一个头名（不区分大小写）只能出现
+一次，重复配置会直接拒绝加载，而不是静默取其一。凭据在该配置文件中以明文保存，
+因此携带凭据时必须使用 `https://`。
+
+## Web 端配置
+
+展开已加载实例，再展开 **Configuration**，即可在 **Extra request headers** 下
+增删请求头条目；头值按凭据处理，输入框做遮码显示。与其他文件型插件一样，页面上
+点 **Test** 校验通过后再点 **Update configuration**，daemon 会用新配置重新加载
+导出器，立即生效。校验失败时保持原配置不变；保留头、非法头名和重复头名都会在
+这一步返回明确错误。
+
+页面提交的配置不写回 `otel-http.config.toml`，daemon 重启后仍以文件内容为准。
+正式部署应直接维护配置文件，页面修改适合联调期临时调整。
+
 生产环境应使用 `https://`。`http://` endpoint 只有在显式设置
 `allow_insecure = true` 时才会被接受；mTLS 的客户端证书与私钥必须同时配置，为
 plaintext endpoint 配置 TLS 文件会被拒绝。不同部署形态可以通过各自的 `operator.conf`
