@@ -3,9 +3,9 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from tests.v2.common.core import TestCaseInputs
+from tests.v2.common.core import TestCaseInputs, TestStatus
 from tests.v2.regression.virtual_container_xiaoo_concurrency.v2.case import (
     VirtualContainerXiaooConcurrencyCase,
 )
@@ -15,6 +15,25 @@ from tests.v2.regression.virtual_container_xiaoo_concurrency.v2.config import (
 
 
 class VirtualContainerXiaooConcurrencyCaseTest(unittest.TestCase):
+    def test_no_kvm_skips_before_artifact_resolution(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="actrail-xiaoo-no-kvm.") as raw_dir:
+            root = Path(raw_dir)
+            with patch.dict("os.environ", {}, clear=True):
+                config = VirtualContainerXiaooConcurrencyConfig.from_environment(
+                    TestCaseInputs(root, root / "bin", root / "work")
+                )
+            case = VirtualContainerXiaooConcurrencyCase(config)
+            with patch(
+                "tests.v2.regression.virtual_container_xiaoo_concurrency.v2."
+                "case.os.access",
+                return_value=False,
+            ), patch.object(case, "_resolve_deployment") as resolve_deployment:
+                result = case.run(Mock())
+
+        resolve_deployment.assert_not_called()
+        self.assertEqual(result.status, TestStatus.SKIPPED)
+        self.assertIn("/dev/kvm", result.message)
+
     def test_valid_runtime_config_satisfies_prerequisites(self) -> None:
         with tempfile.TemporaryDirectory(prefix="actrail-xiaoo-case.") as raw_dir:
             root = Path(raw_dir)

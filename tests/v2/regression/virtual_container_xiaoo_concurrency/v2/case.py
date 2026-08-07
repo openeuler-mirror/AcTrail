@@ -32,6 +32,12 @@ class VirtualContainerXiaooConcurrencyCase(TestCase):
         self._workload = Path(__file__).resolve().parent / "workload.sh"
 
     def run(self, test_context: TestingContextSingleton) -> TestResult:
+        if not os.access("/dev/kvm", os.R_OK | os.W_OK):
+            return TestResult(
+                TestStatus.SKIPPED,
+                "readable/writable /dev/kvm is unavailable; "
+                "Kata concurrency acceptance was not run",
+            )
         test_context.report_progress(
             "artifacts",
             "validating concurrency deployment assets",
@@ -154,12 +160,6 @@ class VirtualContainerXiaooConcurrencyCase(TestCase):
             return TestResult(
                 TestStatus.SKIPPED,
                 f"external Kata prerequisite is unavailable: {unavailable}",
-            )
-        if not os.access("/dev/kvm", os.R_OK | os.W_OK):
-            return TestResult(
-                TestStatus.SKIPPED,
-                "external Kata prerequisite is unavailable: "
-                "readable/writable /dev/kvm",
             )
         assert runtime_config is not None
         try:
