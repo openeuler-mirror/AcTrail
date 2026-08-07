@@ -4,7 +4,9 @@ use std::collections::BTreeMap;
 
 use config_core::daemon::SemanticRetentionConfig;
 use model_core::payload::PayloadSegment;
-use semantic_action::{SemanticAction, SemanticActionKind, attr_keys as attrs};
+use semantic_action::{
+    SemanticAction, SemanticActionKind, attr_keys as attrs, validated_model_identifier,
+};
 
 use super::body::{LlmResponseBody, sse_events_json};
 
@@ -82,7 +84,7 @@ fn sse_stream_action(
     ) {
         attributes.insert(attrs::sse::EVENTS_JSON.to_string(), events_json);
     }
-    if let Some(model) = body.model.as_deref() {
+    if let Some(model) = body.model.as_deref().and_then(validated_model_identifier) {
         attributes.insert(attrs::llm_response::MODEL.to_string(), model.to_string());
     }
     SemanticAction {

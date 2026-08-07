@@ -8,7 +8,7 @@ use model_core::payload::{
 };
 use semantic_action::{
     LlmRequestContentWrite, SemanticAction, SemanticActionCompleteness, SemanticActionKind,
-    SemanticActionStatus, attr_keys as attrs, evidence_roles,
+    SemanticActionStatus, attr_keys as attrs, evidence_roles, validated_model_identifier,
 };
 use serde_json::Value;
 
@@ -80,6 +80,9 @@ struct RequestContentMetadata {
     canonical_body_bytes: Option<u64>,
     block_count: Option<usize>,
     message_preview: Option<String>,
+    user_message_count: usize,
+    latest_user_message_hash: Option<String>,
+    background_kind: Option<&'static str>,
 }
 
 fn project_request_content(
@@ -104,6 +107,9 @@ fn project_request_content(
                 canonical_body_bytes: None,
                 block_count: None,
                 message_preview: None,
+                user_message_count: 0,
+                latest_user_message_hash: None,
+                background_kind: None,
             }),
         }),
         LlmRequestContentRetention::Shape => Ok(shape_projection(body)),
@@ -120,6 +126,9 @@ fn project_request_content(
                     canonical_body_bytes: Some(content.canonical_body_bytes),
                     block_count: Some(content.block_count),
                     message_preview: content.message_preview.clone(),
+                    user_message_count: content.user_message_count,
+                    latest_user_message_hash: content.latest_user_message_hash.clone(),
+                    background_kind: content.background_kind,
                 }),
                 content: Some(content.write),
             })
@@ -128,10 +137,25 @@ fn project_request_content(
 }
 
 fn shape_projection(body: &LlmRequestBody) -> RequestContentProjection {
-    let (canonical_body_hash, canonical_body_bytes, message_preview) =
-        body.json.as_ref().map_or((None, None, None), |value| {
-            let (hash, bytes, preview) = canonical_shape_metadata(value);
-            (Some(hash), Some(bytes), preview)
+    let (
+        canonical_body_hash,
+        canonical_body_bytes,
+        message_preview,
+        user_messages,
+        background_kind,
+    ) = body
+        .json
+        .as_ref()
+        .map_or((None, None, None, None, None), |value| {
+            let (hash, bytes, preview, user_messages, background_kind) =
+                canonical_shape_metadata(value);
+            (
+                Some(hash),
+                Some(bytes),
+                preview,
+                Some(user_messages),
+                background_kind,
+            )
         });
     RequestContentProjection {
         content: None,
@@ -142,6 +166,12 @@ fn shape_projection(body: &LlmRequestBody) -> RequestContentProjection {
             canonical_body_bytes,
             block_count: None,
             message_preview,
+            user_message_count: user_messages
+                .as_ref()
+                .map(|metadata| metadata.count)
+                .unwrap_or_default(),
+            latest_user_message_hash: user_messages.and_then(|metadata| metadata.latest_hash),
+            background_kind,
         }),
     }
 }
@@ -229,7 +259,7 @@ fn llm_attributes(
             "hpack".to_string(),
         );
     }
-    if let Some(model) = body.model.as_deref() {
+    if let Some(model) = body.model.as_deref().and_then(validated_model_identifier) {
         attributes.insert(attrs::llm_request::MODEL.to_string(), model.to_string());
     }
     attributes.insert(
@@ -275,6 +305,24 @@ fn llm_attributes(
             attributes.insert(
                 attrs::llm_request::MESSAGE_PREVIEW.to_string(),
                 preview.to_string(),
+            );
+        }
+        if content.user_message_count > 0 {
+            attributes.insert(
+                attrs::llm_request::USER_MESSAGE_COUNT.to_string(),
+                content.user_message_count.to_string(),
+            );
+        }
+        if let Some(hash) = content.latest_user_message_hash.as_deref() {
+            attributes.insert(
+                attrs::llm_request::LATEST_USER_MESSAGE_HASH.to_string(),
+                hash.to_string(),
+            );
+        }
+        if let Some(background_kind) = content.background_kind {
+            attributes.insert(
+                attrs::llm_request::BACKGROUND_KIND.to_string(),
+                background_kind.to_string(),
             );
         }
     } else if config.llm_layer_enabled() {
@@ -356,9 +404,8 @@ impl LlmRequestBodyParser<'_> {
                         .as_ref()
                         .and_then(|parsed| parsed.protocol_id.map(ToString::to_string))
                 }),
-                model: decoded
-                    .model
-                    .or_else(|| parsed.and_then(|parsed| parsed.model)),
+                model: valid_model(decoded.model)
+                    .or_else(|| parsed.and_then(|parsed| valid_model(parsed.model))),
                 json: Some(value),
             });
         }
@@ -369,17 +416,18 @@ impl LlmRequestBodyParser<'_> {
                 json_valid: true,
                 classifier_id: parsed.classifier_id.to_string(),
                 protocol_id: parsed.protocol_id.map(ToString::to_string),
-                model: parsed.model,
+                model: valid_model(parsed.model),
                 json: Some(value),
             });
         }
         let text = String::from_utf8_lossy(body);
-        if lossy_text_is_llm_request(&text) {
+        let model = extract_json_string_lossy(&text, "model");
+        if model.is_some() && lossy_text_has_llm_shape(&text) {
             Some(LlmRequestBody {
                 json_valid: false,
                 classifier_id: "generic-json-request".to_string(),
                 protocol_id: None,
-                model: extract_json_string_lossy(&text, "model"),
+                model,
                 json: None,
             })
         } else {
@@ -388,7 +436,7 @@ impl LlmRequestBodyParser<'_> {
     }
 }
 
-fn lossy_text_is_llm_request(text: &str) -> bool {
+fn lossy_text_has_llm_shape(text: &str) -> bool {
     let text = text.to_ascii_lowercase();
     text.contains("\"model\"")
         && (text.contains("\"messages\"")
@@ -401,12 +449,14 @@ fn extract_json_string_lossy(text: &str, key: &str) -> Option<String> {
     let index = text.find(&needle)?;
     let after_key = &text[index + needle.len()..];
     let colon = after_key.find(':')?;
-    let mut value = after_key[colon + 1..].trim_start_matches([' ', '\t', '\r', '\n', '\0']);
-    value = value.strip_prefix('"').unwrap_or(value);
-    let end = value
-        .find(['"', ',', '\r', '\n', '\0'])
-        .unwrap_or(value.len());
-    (!value[..end].is_empty()).then(|| value[..end].to_string())
+    let value = after_key[colon + 1..].trim_start_matches([' ', '\t', '\r', '\n', '\0']);
+    let quoted = value.strip_prefix('"')?;
+    let end = quoted.find('"')?;
+    validated_model_identifier(&quoted[..end]).map(ToOwned::to_owned)
+}
+
+fn valid_model(model: Option<String>) -> Option<String> {
+    model.and_then(|value| validated_model_identifier(&value).map(ToOwned::to_owned))
 }
 
 fn llm_stream_completeness(segments: &[&PayloadSegment]) -> SemanticActionCompleteness {

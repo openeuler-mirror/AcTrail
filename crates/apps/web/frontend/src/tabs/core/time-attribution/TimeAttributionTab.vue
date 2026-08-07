@@ -6,11 +6,12 @@
     <template v-else>
       <header class="attribution-header">
         <div>
-          <span class="attribution-kicker">Exclusive wall-clock attribution</span>
+          <span class="attribution-kicker">User-turn wall-clock attribution</span>
           <h2>Agent vs. model time</h2>
           <p>
-            Model-side is the observable wait from request start through the final streamed
-            response. It is not the model service's internal compute time.
+            Only completed user-request windows are measured. Agent startup, waiting for input,
+            detached background requests, and post-response idle stay visible in Waterfall but do
+            not enter the attribution denominator.
           </p>
         </div>
         <span class="status-badge" :class="`status-${attribution.status}`">
@@ -18,9 +19,26 @@
         </span>
       </header>
 
-      <TimeAttributionBar :categories="attribution.categories" @select="openCategory" />
+      <TimeAttributionBar
+        v-if="hasUserTurns"
+        :categories="attribution.categories"
+        @select="openCategory"
+      />
 
-      <div class="category-grid">
+      <p class="detail-note coverage-note">
+        {{ attributionCoverageLabel(attribution.coverage) }}
+      </p>
+
+      <div v-if="!hasUserTurns" class="no-user-turn-state">
+        <strong>No attributable user request observed</strong>
+        <span>
+          This Agent has only startup, idle, incomplete, or background activity so far. Ask a
+          question and wait for its observable response to finish; Waterfall continues to show the
+          full Trace.
+        </span>
+      </div>
+
+      <div v-if="hasUserTurns" class="category-grid">
         <button
           v-for="category in attribution.categories"
           :key="category.key"
@@ -38,7 +56,7 @@
         </button>
       </div>
 
-      <nav class="detail-tabs" aria-label="Attribution dimensions">
+      <nav v-if="hasUserTurns" class="detail-tabs" aria-label="Attribution dimensions">
         <button
           v-for="tab in detailTabs"
           :key="tab.id"
@@ -50,12 +68,12 @@
         </button>
       </nav>
 
-      <p v-if="activeDetail === 'commands'" class="detail-note">
+      <p v-if="hasUserTurns && activeDetail === 'commands'" class="detail-note">
         Actual commands launched by an Agent Tool. A command includes its descendant process tree,
         so cargo time already includes rustc and linker work without double counting.
       </p>
 
-      <section v-if="activeDetail === 'rounds'" class="detail-list">
+      <section v-if="hasUserTurns && activeDetail === 'rounds'" class="detail-list">
         <article
           v-for="round in filteredRounds"
           :key="round.id"
@@ -88,10 +106,12 @@
             @select="(category) => openRoundCategory(round, category)"
           />
         </article>
-        <div v-if="!filteredRounds.length" class="attribution-empty">No rounds match the filter.</div>
+        <div v-if="!filteredRounds.length" class="attribution-empty">
+          No user requests match the filter.
+        </div>
       </section>
 
-      <section v-else class="detail-list">
+      <section v-else-if="hasUserTurns" class="detail-list">
         <button
           v-for="row in filteredBreakdown"
           :key="row.key"
@@ -132,8 +152,9 @@
       </section>
 
       <footer class="attribution-footnote">
-        Agent-side, model-side observable, and unattributed always partition the selected Trace
-        interval. Concurrent intervals are unioned before percentages are calculated.
+        Agent-side, model-side observable, and unattributed partition only the union of observed
+        user-request windows. Agent lifetime and interaction idle are excluded, and concurrent
+        intervals are unioned before percentages are calculated.
       </footer>
     </template>
   </section>
@@ -174,13 +195,21 @@ const props = defineProps({
 
 const emit = defineEmits(['open-waterfall']);
 const detailTabs = Object.freeze([
-  { id: 'rounds', label: 'Rounds' },
+  { id: 'rounds', label: 'User Requests' },
   { id: 'models', label: 'Models' },
   { id: 'tools', label: 'Agent Tools' },
   { id: 'commands', label: 'Commands' },
 ]);
 const activeDetail = ref('rounds');
 const normalizedQuery = computed(() => props.query.trim().toLowerCase());
+const hasUserTurns = computed(() => {
+  const count = Number(props.attribution?.coverage?.user_turn_count ?? 0);
+  try {
+    return count > 0 && BigInt(props.attribution?.scope?.duration_nanos ?? 0) > 0n;
+  } catch {
+    return false;
+  }
+});
 const filteredRounds = computed(() =>
   (props.attribution?.rounds ?? []).filter((round) =>
     matchesQuery([
@@ -300,6 +329,22 @@ function roundCallLabel(round) {
   return `${count} model ${count === 1 ? 'call' : 'calls'}`;
 }
 
+function attributionCoverageLabel(coverage) {
+  const requests = Number(coverage?.llm_request_count ?? 0);
+  const observedCalls = Number(coverage?.observed_llm_call_count ?? 0);
+  const pairedCalls = Number(coverage?.llm_call_count ?? 0);
+  const excludedCalls = Number(coverage?.excluded_llm_call_count ?? 0);
+  const userTurns = Number(coverage?.user_turn_count ?? 0);
+  const inputBoundaries = Number(coverage?.strong_user_input_count ?? 0);
+  return [
+    `${userTurns} user ${userTurns === 1 ? 'request' : 'requests'} attributed`,
+    `${inputBoundaries} observed input ${inputBoundaries === 1 ? 'boundary' : 'boundaries'}`,
+    `${requests} LLM ${requests === 1 ? 'request' : 'requests'} observed`,
+    `${pairedCalls} of ${observedCalls} calls paired with response evidence`,
+    `${excludedCalls} excluded from model-side time`,
+  ].join(' · ');
+}
+
 function roundCategorySummary(round) {
   return (round?.categories ?? [])
     .filter((category) => BigInt(category.duration_nanos ?? 0) > 0n)
@@ -375,6 +420,10 @@ function dominantIntervalDescription(row) {
   color: var(--stats-muted, var(--muted));
   font-size: var(--stats-font-sm, 13px);
   line-height: 1.55;
+}
+
+.coverage-note {
+  margin-top: calc(var(--stats-space-lg, 16px) * -1);
 }
 
 .detail-note {
@@ -605,6 +654,21 @@ function dominantIntervalDescription(row) {
 
 .issue-error strong {
   color: var(--stats-danger, #dc6673) !important;
+}
+
+.no-user-turn-state {
+  display: grid;
+  gap: var(--stats-space-sm, 8px);
+  padding: var(--stats-space-xl, 20px);
+  border: 1px dashed var(--stats-border, var(--border));
+  border-radius: var(--stats-radius-lg, 14px);
+  background: var(--stats-surface, var(--surface));
+  color: var(--stats-muted, var(--muted));
+  line-height: 1.55;
+}
+
+.no-user-turn-state strong {
+  color: var(--stats-text, var(--text));
 }
 
 .attribution-empty {

@@ -324,6 +324,9 @@ impl LiveSemanticActionRuntime {
         segment: &PayloadSegment,
         retain_evidence: bool,
     ) -> LiveSemanticActionObservation {
+        if retain_evidence {
+            self.agent.observe_payload_segment(segment);
+        }
         let llm_output = if retain_evidence {
             self.llm.observe_payload_segment(segment)
         } else {
@@ -345,8 +348,9 @@ impl LiveSemanticActionRuntime {
         output
             .llm_request_contents
             .extend(llm_output.llm_request_contents);
-        for action in llm_output.actions {
+        for mut action in llm_output.actions {
             let agent_actions = if action.kind == SemanticActionKind::LlmRequest {
+                self.agent.annotate_user_input(&mut action);
                 self.agent.observe_llm_request(&action)
             } else {
                 Vec::new()

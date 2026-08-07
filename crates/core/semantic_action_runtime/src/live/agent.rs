@@ -5,8 +5,11 @@ use std::time::SystemTime;
 
 use model_core::event::{DomainEvent, EventPayload};
 use model_core::ids::TraceId;
+use model_core::payload::{PayloadDirection, PayloadSegment, PayloadSourceBoundary};
 use model_core::process::ProcessIdentity;
-use semantic_action::{SemanticAction, SemanticActionKind, SemanticActionStatus, SemanticEvidence};
+use semantic_action::{
+    SemanticAction, SemanticActionKind, SemanticActionStatus, SemanticEvidence, attr_keys as attrs,
+};
 
 use super::actions::{
     agent_exit_action, agent_identity_action, event_evidence, process_event_attributes,
@@ -27,6 +30,34 @@ pub(super) struct AgentProjector {
     pending_exec_evictions: u64,
     agent_identities: BTreeMap<ProcessActionKey, SemanticAction>,
     process_exits: BTreeMap<ProcessActionKey, DomainEvent>,
+    user_input_by_process: BTreeMap<ProcessActionKey, UserInputState>,
+}
+
+const USER_INPUT_BUFFER_MAX_BYTES: usize = 16 * 1024;
+const PENDING_USER_INPUT_MAX_ENTRIES: usize = 8;
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct UserInputState {
+    current: Vec<u8>,
+    escape_state: EscapeSequenceState,
+    pending: VecDeque<PendingUserInput>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum EscapeSequenceState {
+    #[default]
+    Ground,
+    Escape,
+    ControlSequence,
+    OperatingSystemCommand,
+    OperatingSystemCommandEscape,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PendingUserInput {
+    observed_at: SystemTime,
+    segment_id: u64,
+    normalized_text: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -54,7 +85,110 @@ impl AgentProjector {
             pending_exec_evictions: 0,
             agent_identities: BTreeMap::new(),
             process_exits: BTreeMap::new(),
+            user_input_by_process: BTreeMap::new(),
         }
+    }
+
+    pub(super) fn observe_payload_segment(&mut self, segment: &PayloadSegment) {
+        if segment.source_boundary != PayloadSourceBoundary::Stdio
+            || segment.direction != PayloadDirection::Inbound
+            || segment.protocol_hint.as_deref() != Some("stdin")
+            || segment.bytes.is_empty()
+        {
+            return;
+        }
+        let key = action_key(segment.trace_id, &segment.process);
+        let state = self.user_input_by_process.entry(key).or_default();
+        for byte in &segment.bytes {
+            if consume_escape_sequence(&mut state.escape_state, *byte) {
+                continue;
+            }
+            match *byte {
+                0x1b => state.escape_state = EscapeSequenceState::Escape,
+                b'\r' | b'\n' => {
+                    let normalized_text = normalize_user_text(&state.current);
+                    state.current.clear();
+                    if normalized_text.is_empty() {
+                        continue;
+                    }
+                    while state.pending.len() >= PENDING_USER_INPUT_MAX_ENTRIES {
+                        state.pending.pop_front();
+                    }
+                    state.pending.push_back(PendingUserInput {
+                        observed_at: segment.observed_at,
+                        segment_id: segment.segment_id.get(),
+                        normalized_text,
+                    });
+                }
+                0x08 | 0x7f => {
+                    state.current.pop();
+                }
+                b'\t' => {
+                    if state.current.len() < USER_INPUT_BUFFER_MAX_BYTES {
+                        state.current.push(b' ');
+                    }
+                }
+                byte if byte >= 0x20 => {
+                    if state.current.len() < USER_INPUT_BUFFER_MAX_BYTES {
+                        state.current.push(byte);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    pub(super) fn annotate_user_input(&mut self, action: &mut SemanticAction) {
+        if action.kind != SemanticActionKind::LlmRequest {
+            return;
+        }
+        let Some(preview) = action
+            .attributes
+            .get(attrs::llm_request::MESSAGE_PREVIEW)
+            .map(|value| normalize_text(value.trim_end_matches("...")))
+            .filter(|value| !value.is_empty())
+        else {
+            return;
+        };
+        let key = action_key(action.trace_id, &action.process);
+        let Some(state) = self.user_input_by_process.get_mut(&key) else {
+            return;
+        };
+        let matched_index = state.pending.iter().rposition(|candidate| {
+            candidate.observed_at <= action.start_time
+                && text_matches(&candidate.normalized_text, &preview)
+        });
+        let Some(matched_index) = matched_index else {
+            return;
+        };
+        let mut matched = None;
+        for index in 0..=matched_index {
+            let candidate = state
+                .pending
+                .pop_front()
+                .expect("matched pending user input must still exist");
+            if index == matched_index {
+                matched = Some(candidate);
+            }
+        }
+        let Some(matched) = matched else {
+            return;
+        };
+        let Ok(observed_at) = matched.observed_at.duration_since(SystemTime::UNIX_EPOCH) else {
+            return;
+        };
+        action.attributes.insert(
+            attrs::agent_turn::USER_INPUT_SOURCE.to_string(),
+            "stdio".to_string(),
+        );
+        action.attributes.insert(
+            attrs::agent_turn::USER_INPUT_SEGMENT_ID.to_string(),
+            matched.segment_id.to_string(),
+        );
+        action.attributes.insert(
+            attrs::agent_turn::USER_INPUT_OBSERVED_AT_UNIX_NANOS.to_string(),
+            observed_at.as_nanos().to_string(),
+        );
     }
 
     pub(super) fn observe_process_exec(&mut self, event: &DomainEvent) -> Vec<SemanticAction> {
@@ -125,6 +259,8 @@ impl AgentProjector {
         self.agent_identities
             .retain(|(candidate, _), _| *candidate != trace_id);
         self.process_exits
+            .retain(|(candidate, _), _| *candidate != trace_id);
+        self.user_input_by_process
             .retain(|(candidate, _), _| *candidate != trace_id);
     }
 
@@ -291,6 +427,57 @@ impl AgentProjector {
             if !self.pending_exec_order.contains_key(&sequence) {
                 return sequence;
             }
+        }
+    }
+}
+
+fn normalize_user_text(bytes: &[u8]) -> String {
+    normalize_text(&String::from_utf8_lossy(bytes))
+}
+
+fn normalize_text(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn text_matches(input: &str, preview: &str) -> bool {
+    input == preview || input.starts_with(preview)
+}
+
+fn consume_escape_sequence(state: &mut EscapeSequenceState, byte: u8) -> bool {
+    use EscapeSequenceState::{
+        ControlSequence, Escape, Ground, OperatingSystemCommand, OperatingSystemCommandEscape,
+    };
+    match *state {
+        Ground => false,
+        Escape => {
+            *state = match byte {
+                b'[' => ControlSequence,
+                b']' => OperatingSystemCommand,
+                _ => Ground,
+            };
+            true
+        }
+        ControlSequence => {
+            if (0x40..=0x7e).contains(&byte) {
+                *state = Ground;
+            }
+            true
+        }
+        OperatingSystemCommand => {
+            if byte == 0x07 {
+                *state = Ground;
+            } else if byte == 0x1b {
+                *state = OperatingSystemCommandEscape;
+            }
+            true
+        }
+        OperatingSystemCommandEscape => {
+            *state = if byte == b'\\' {
+                Ground
+            } else {
+                OperatingSystemCommand
+            };
+            true
         }
     }
 }

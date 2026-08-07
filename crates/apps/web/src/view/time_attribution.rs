@@ -10,7 +10,7 @@ use model_core::process::{MembershipState, ProcessIdentity, ProcessMembership};
 use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
 use semantic_action::{
     SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionLink,
-    SemanticActionLinkRole, SemanticActionStatus, attr_keys,
+    SemanticActionLinkRole, SemanticActionStatus, attr_keys, validated_model_identifier,
 };
 use serde::Serialize;
 use storage_core::{StorageBackend, TraceFilter};
@@ -25,6 +25,8 @@ mod partition;
 mod projection;
 #[path = "time_attribution/summary.rs"]
 mod summary;
+#[path = "time_attribution/turns.rs"]
+mod turns;
 
 use self::aggregate::{
     aggregate_breakdowns, aggregate_coverage, aggregate_issues, aggregate_status, attribution_row,
@@ -161,7 +163,23 @@ struct ModelInterval {
     interval: Interval,
     action_id: String,
     model: Option<String>,
+    process: ProcessIdentity,
     status: &'static str,
+    turn_key: UserTurnKey,
+    user_input_start: Option<u128>,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct UserTurnKey {
+    process: ProcessIdentity,
+    user_message_count: u64,
+    latest_user_message_hash: String,
+}
+
+#[derive(Clone, Debug)]
+struct UserTurn {
+    interval: Interval,
+    call_action_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -341,11 +359,25 @@ struct AttributionScope {
     duration_nanos: String,
     provisional: bool,
     semantics: &'static str,
+    windows: Vec<AttributionScopeWindow>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct AttributionScopeWindow {
+    id: String,
+    start_unix_nanos: String,
+    end_unix_nanos: String,
+    duration_nanos: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
 struct TraceCoverage {
+    llm_request_count: usize,
+    observed_llm_call_count: usize,
     llm_call_count: usize,
+    excluded_llm_call_count: usize,
+    user_turn_count: usize,
+    strong_user_input_count: usize,
     agent_process_count: usize,
     tool_interval_count: usize,
     command_interval_count: usize,
@@ -385,7 +417,11 @@ struct AggregateCoverage {
     provisional_trace_count: usize,
     partial_trace_count: usize,
     invalid_trace_count: usize,
+    llm_request_count: usize,
+    observed_llm_call_count: usize,
     llm_call_count: usize,
+    excluded_llm_call_count: usize,
+    user_turn_count: usize,
     tool_interval_count: usize,
     command_interval_count: usize,
 }

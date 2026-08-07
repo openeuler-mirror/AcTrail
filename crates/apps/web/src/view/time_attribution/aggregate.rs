@@ -148,7 +148,11 @@ pub(super) fn aggregate_coverage(projections: &[TraceAttribution]) -> AggregateC
             AttributionStatus::Partial => coverage.partial_trace_count += 1,
             AttributionStatus::Invalid => coverage.invalid_trace_count += 1,
         }
+        coverage.llm_request_count += projection.coverage.llm_request_count;
+        coverage.observed_llm_call_count += projection.coverage.observed_llm_call_count;
         coverage.llm_call_count += projection.coverage.llm_call_count;
+        coverage.excluded_llm_call_count += projection.coverage.excluded_llm_call_count;
+        coverage.user_turn_count += projection.coverage.user_turn_count;
         coverage.tool_interval_count += projection.coverage.tool_interval_count;
         coverage.command_interval_count += projection.coverage.command_interval_count;
     }
