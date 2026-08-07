@@ -54,6 +54,9 @@ from tests.v2.regression.semantic_action_boundaries.run_e2e import (  # noqa: E4
 from tests.v2.regression.activity_anomaly.run_e2e import (  # noqa: E402
     TEST_DEFINITION as ACTIVITY_ANOMALY,
 )
+from tests.v2.regression.tool_consecutive_failure_alert.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as TOOL_CONSECUTIVE_FAILURE_ALERT,
+)
 
 TESTS = [
     CLAUDE,
@@ -69,6 +72,7 @@ TESTS = [
     OTEL_JSONL_ACTION_FILTER,
     OTEL_HTTP,
     ACTIVITY_ANOMALY,
+    TOOL_CONSECUTIVE_FAILURE_ALERT,
 ]
 
 

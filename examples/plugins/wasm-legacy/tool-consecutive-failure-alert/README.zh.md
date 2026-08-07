@@ -2,7 +2,7 @@
 
 类别：WIT component 观测消费者。
 
-这个示例实现按 trace 维护每个工具的连续失败状态，当同一工具连续失败次数超过配置阈值时生成告警。插件订阅 `semantic-action` 事件族，过滤 `CommandInvocation` 类型的语义动作，按 `(trace_id, 工具名)` 二元组独立维护计数器。
+这个示例实现按 trace 维护每个工具的连续失败状态，当同一工具连续失败次数超过配置阈值时生成告警。插件订阅 `semantic-action` 事件族，通过宿主导出时统一注入的 `process.id` 属性把 `CommandInvocation` 与对应的 `ProcessExit` 精确关联，按 `(trace_id, 工具名)` 二元组独立维护计数器。
 
 核心特性：
 
@@ -23,28 +23,30 @@
 ### 工作原理
 
 ```
-eBPF 采集 process.exec
+eBPF 采集 process.exec / process.exit
         ↓
-daemon 生成 CommandInvocation 语义动作
+daemon 生成 CommandInvocation / ProcessExit 语义动作（导出时注入 process.id）
         ↓
 工具名传播：LlmResponse.tool_calls_json → CommandInvocation.command.tool.name
         ↓
 observation pipeline 批量发送给插件
         ↓
-插件 consume batch，按 (trace_id, tool_name) 累计失败计数
+插件 consume batch：CommandInvocation 登记待决命令，ProcessExit 按 process.id 关联后判定成败
         ↓
 连续失败 >= 阈值 → alert_write::submit() → daemon AlertIngress
         ↓
 TraceAlertToken 校验 → payload JSON Schema 校验 → SQLite 存储
 ```
 
-插件只处理 `CommandInvocation` 类型的语义动作。成功/失败判定依据：
+插件只处理 `CommandInvocation` 和 `ProcessExit` 两种语义动作。成功/失败判定只依据 `ProcessExit`：
 
 | 条件                   | 结果 |
 | ---------------------- | ---- |
-| `status = "success"`   | 成功 |
-| `exit_code = "0"` 或空 | 成功 |
-| 其他                   | 失败 |
+| `status = "error"`（或 `process.exit_code` 非 0） | 失败 |
+| `status = "success"`                               | 成功 |
+| `status = "unknown"`（宿主对退出码 0 不上报 exit_code） | 默认视为成功（可由配置关闭） |
+
+`CommandInvocation` 只登记工具名/命令行，不直接判定成败；`ProcessExit` 通过宿主注入的 `process.id` 属性精确关联到对应命令（若该属性缺失，则按 trace 内到达顺序 FIFO 兜底）。
 
 #### 重新编译：
 
@@ -73,6 +75,7 @@ ignored_tools = []                  # 忽略的工具列表
 [alert.behavior]
 state_ttl_seconds = 300             # 状态自动回收时间（秒）
 policy_denied_counts_as_failure = true  # 策略拒绝是否计入失败
+unknown_status_counts_as_success = true # ProcessExit 状态 unknown 是否视为成功
 ```
 
 ### 使用

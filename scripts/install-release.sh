@@ -11,7 +11,7 @@ DESTDIR defaults to /usr/local/bin.
 The script installs/checks build dependencies, asks Cargo to refresh the
 release binaries and TLS sync preload runtimes, then copies those artifacts
 and the installed-but-disabled otel-jsonl, file-leakage, activity-anomaly,
-and dynamic file-policy plugins.
+tool-consecutive-failure-alert, and dynamic file-policy plugins.
 
 Environment:
   ACTRAIL_SUDO  Privilege command for installing into system directories.
@@ -61,6 +61,9 @@ wasm_release_dir="$target_dir/wasm32-wasip2/release"
 file_leakage_artifact="$wasm_release_dir/actrail_file_leakage_plugin.wasm"
 activity_anomaly_artifact="$wasm_release_dir/actrail_activity_anomaly_plugin.wasm"
 file_policy_artifact="$wasm_release_dir/actrail_component_file_policy_dynamic.wasm"
+tool_consecutive_failure_install_dir="$plugin_root/tool-consecutive-failure-alert"
+tool_consecutive_failure_source_dir="$script_dir/../examples/plugins/wasm-legacy/tool-consecutive-failure-alert"
+tool_consecutive_failure_artifact="$wasm_release_dir/actrail_tool_consecutive_failure_alert.wasm"
 binaries=(
   actraild
   actrailctl
@@ -144,6 +147,12 @@ run cargo build --release --target wasm32-wasip2 \
   echo "missing plugin artifact $file_policy_artifact" >&2
   exit 1
 }
+run cargo build --release --target wasm32-wasip2 \
+  --manifest-path "$tool_consecutive_failure_source_dir/Cargo.toml"
+[[ -f "$tool_consecutive_failure_artifact" ]] || {
+  echo "missing plugin artifact $tool_consecutive_failure_artifact" >&2
+  exit 1
+}
 
 mapfile -t binary_install < <(install_prefix "$dest_dir")
 mapfile -t plugin_install < <(install_prefix "$plugin_root")
@@ -153,6 +162,7 @@ run "${plugin_install[@]}" install -d "$otel_jsonl_install_dir"
 run "${plugin_install[@]}" install -d "$file_leakage_install_dir"
 run "${plugin_install[@]}" install -d "$activity_anomaly_install_dir"
 run "${plugin_install[@]}" install -d "$file_policy_install_dir"
+run "${plugin_install[@]}" install -d "$tool_consecutive_failure_install_dir"
 
 for binary in "${binaries[@]}"; do
   source_path="$release_dir/$binary"
@@ -216,5 +226,14 @@ done
 run "${plugin_install[@]}" install -m 0644 \
   "$file_policy_artifact" \
   "$file_policy_install_dir/component-file-policy-dynamic.wasm"
+run "${plugin_install[@]}" install -m 0644 \
+  "$tool_consecutive_failure_source_dir/plugin.toml" \
+  "$tool_consecutive_failure_install_dir/tool-consecutive-failure-alert.plugin.toml"
+run "${plugin_install[@]}" install -m 0644 \
+  "$tool_consecutive_failure_source_dir/alert-schema.json" \
+  "$tool_consecutive_failure_install_dir/alert-schema.json"
+run "${plugin_install[@]}" install -m 0644 \
+  "$tool_consecutive_failure_artifact" \
+  "$tool_consecutive_failure_install_dir/actrail_tool_consecutive_failure_alert.wasm"
 
 printf 'installed AcTrail binaries to %s and plugins to %s\n' "$dest_dir" "$plugin_root"
