@@ -80,6 +80,8 @@ use self::helpers::{capability_requested, collector_capability_requests};
 
 pub(crate) struct StorageAttachService {
     pub(super) profiles: DaemonProfileRegistry,
+    /// Host/VM id (OTel `host.id`) stamped onto every trace this daemon emits.
+    pub(super) host_id: Option<String>,
     pub(super) launch_seccomp_requirements: LaunchSeccompRequirements,
     pub(super) storage: Box<dyn StorageBackend>,
     pub(super) process_registry: ProcessIdentityManager,
@@ -225,11 +227,19 @@ impl StorageAttachService {
             .ok_or_else(|| ControlError::new("pid_resolution", "root host PID is missing"))?;
         let (root_identity, root_record) =
             self.resolve_process_observation(root_observation.clone())?;
-        // Resolve the container id host-side from the already-resolved host pid.
-        // This sees the full `docker-<id>` cgroup path; a container-local
-        // `/proc/self/cgroup` may be masked to `0::/`). `None` = host/non-Docker.
-        let root_container_id =
-            read_container_identity(root_host_pid).map(|identity| identity.container_id);
+        let root_pid_namespace = root_observation
+            .namespace
+            .as_ref()
+            .map(|coordinates| coordinates.pid_namespace.clone());
+        // Resolve the container identity host-side from the already-resolved
+        // host pid. This sees the full runtime cgroup path; a container-local
+        // `/proc/self/cgroup` may be masked to `0::/`). `None` = host process
+        // or unrecognized runtime layout. The pod UID (k8s.pod.uid) comes from
+        // the same parse and is `None` outside kubepods cgroups.
+        let (root_container_id, root_pod_uid) = match read_container_identity(root_host_pid) {
+            Some(identity) => (Some(identity.container_id), identity.pod_uid),
+            None => (None, None),
+        };
         let snapshot = process_tree_snapshot_contract::snapshot::ProcessTreeSnapshotter::snapshot(
             &self.snapshotter,
             &root_observation,
@@ -243,7 +253,10 @@ impl StorageAttachService {
                 trace_id,
                 TrackTraceRequest {
                     root_identity: root_identity.clone(),
+                    root_pid_namespace,
                     root_container_id,
+                    root_pod_uid,
+                    root_host_id: self.host_id.clone(),
                     root_working_directory,
                     display_name: command.display_name.clone(),
                     profile_snapshot,

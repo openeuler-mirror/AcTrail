@@ -1,0 +1,13 @@
+#
+# Copied from Kata Containers 3.2.0 src/agent/kata-containers.target.
+#
+
+[Unit]
+Description=Kata Containers Agent Target
+Requires=basic.target
+Requires=tmp.mount
+Wants=chronyd.service
+Requires=kata-agent.service
+Conflicts=rescue.service rescue.target
+After=basic.target rescue.service rescue.target
+AllowIsolate=yes

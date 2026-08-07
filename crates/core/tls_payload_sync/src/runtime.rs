@@ -167,24 +167,40 @@ impl EventQueue {
         Ok(())
     }
 
-    fn pop(&self) -> Option<QueuedEvent> {
-        let mut state = self.state.lock().ok()?;
+    fn pop_batch(&self, byte_limit: usize) -> Vec<QueuedEvent> {
+        let Ok(mut state) = self.state.lock() else {
+            return Vec::new();
+        };
         loop {
-            if let Some(queued) = state.pending.pop_front() {
-                state.pending_bytes = state.pending_bytes.saturating_sub(queued.event_bytes);
-                state.in_flight = state.in_flight.saturating_add(1);
-                return Some(queued);
+            if !state.pending.is_empty() {
+                let mut batch = Vec::new();
+                let mut batch_bytes = 0usize;
+                while let Some(next) = state.pending.front() {
+                    let next_bytes = batch_bytes.saturating_add(next.event_bytes);
+                    if !batch.is_empty() && next_bytes > byte_limit {
+                        break;
+                    }
+                    let queued = state.pending.pop_front().expect("front exists");
+                    state.pending_bytes = state.pending_bytes.saturating_sub(queued.event_bytes);
+                    batch_bytes = next_bytes;
+                    batch.push(queued);
+                }
+                state.in_flight = state.in_flight.saturating_add(batch.len());
+                return batch;
             }
             if state.closed || state.failed {
-                return None;
+                return Vec::new();
             }
-            state = self.ready.wait(state).ok()?;
+            let Ok(next_state) = self.ready.wait(state) else {
+                return Vec::new();
+            };
+            state = next_state;
         }
     }
 
-    fn finish_one(&self) {
+    fn finish_batch(&self, count: usize) {
         if let Ok(mut state) = self.state.lock() {
-            state.in_flight = state.in_flight.saturating_sub(1);
+            state.in_flight = state.in_flight.saturating_sub(count);
             self.ready.notify_all();
         }
     }
@@ -239,20 +255,26 @@ struct QueuedEvent {
 fn event_writer(stream: UnixStream, queue: Arc<EventQueue>, write_buffer_bytes: usize) {
     let chunked = ChunkedWriter::new(stream, write_buffer_bytes);
     let mut writer = BufWriter::with_capacity(write_buffer_bytes, chunked);
-    while let Some(queued) = queue.pop() {
-        if write_event_line(&mut writer, &queued.event)
-            .and_then(|_| {
-                writer
-                    .flush()
-                    .map_err(|error| SyncError::new(error.to_string()))
-            })
-            .is_err()
-        {
+    loop {
+        let batch = queue.pop_batch(write_buffer_bytes);
+        if batch.is_empty() {
+            break;
+        }
+        if write_event_batch(&mut writer, &batch).is_err() {
             queue.fail();
             return;
         }
-        queue.finish_one();
+        queue.finish_batch(batch.len());
     }
+}
+
+fn write_event_batch<W: Write>(writer: &mut W, batch: &[QueuedEvent]) -> SyncResult<()> {
+    for queued in batch {
+        write_event_line(writer, &queued.event)?;
+    }
+    writer
+        .flush()
+        .map_err(|error| SyncError::new(error.to_string()))
 }
 
 struct ChunkedWriter<W> {
@@ -308,7 +330,7 @@ fn queued_event_bytes(event: &SyncEvent) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Read;
+    use std::io::{Read, Write};
     use std::os::fd::IntoRawFd;
     use std::os::unix::net::UnixStream;
 
@@ -317,10 +339,28 @@ mod tests {
     use super::*;
     use crate::{DecisionEvent, encode_event_line};
 
-    #[test]
-    fn inherited_fd_event_client_writes_to_existing_stream() {
-        let (client, mut server) = UnixStream::pair().expect("socket pair");
-        let event = SyncEvent::Decision(DecisionEvent {
+    #[derive(Default)]
+    struct CountingWriter {
+        bytes: Vec<u8>,
+        write_calls: usize,
+        flush_calls: usize,
+    }
+
+    impl Write for CountingWriter {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            self.write_calls = self.write_calls.saturating_add(1);
+            self.bytes.extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.flush_calls = self.flush_calls.saturating_add(1);
+            Ok(())
+        }
+    }
+
+    fn decision_event(sequence: u64) -> SyncEvent {
+        SyncEvent::Decision(DecisionEvent {
             trace_id: 7,
             pid: 42,
             start_time_ticks: 99,
@@ -329,10 +369,16 @@ mod tests {
             provider: "rustls".to_string(),
             symbol: "write".to_string(),
             stream_key: 1,
-            sequence: 2,
+            sequence,
             action: "allow".to_string(),
             reason: "test".to_string(),
-        });
+        })
+    }
+
+    #[test]
+    fn inherited_fd_event_client_writes_to_existing_stream() {
+        let (client, mut server) = UnixStream::pair().expect("socket pair");
+        let event = decision_event(2);
 
         let client =
             EventClient::connect_inherited_fd(client.into_raw_fd(), 4096, 256).expect("client");
@@ -342,6 +388,26 @@ mod tests {
         let mut bytes = Vec::new();
         server.read_to_end(&mut bytes).expect("read event line");
         assert_eq!(bytes, encode_event_line(&event));
+    }
+
+    #[test]
+    fn event_batch_flushes_multiple_small_events_once() {
+        let events = [decision_event(1), decision_event(2), decision_event(3)];
+        let batch = events
+            .into_iter()
+            .map(|event| QueuedEvent {
+                event_bytes: queued_event_bytes(&event),
+                event,
+            })
+            .collect::<Vec<_>>();
+        let chunked = ChunkedWriter::new(CountingWriter::default(), 4096);
+        let mut writer = BufWriter::with_capacity(4096, chunked);
+
+        write_event_batch(&mut writer, &batch).expect("write event batch");
+
+        assert_eq!(writer.get_ref().inner.write_calls, 1);
+        assert_eq!(writer.get_ref().inner.flush_calls, 1);
+        assert!(!writer.get_ref().inner.bytes.is_empty());
     }
 
     #[test]

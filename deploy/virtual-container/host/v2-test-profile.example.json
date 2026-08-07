@@ -1,0 +1,23 @@
+{
+  "format": 2,
+  "name": "openEuler ARM64 / Kata 3.32 / StratoVirt",
+  "path_prepend": [
+    "${REPO}/local/kata/bin",
+    "/opt/kata/bin",
+    "/usr/local/bin",
+    "/usr/local/sbin",
+    "/usr/sbin",
+    "/usr/bin",
+    "/bin"
+  ],
+  "environment": {
+    "ACTRAIL_BIN_DIR": "${REPO}/target/release",
+    "CTR_RUNTIME": "io.containerd.kata332.v2",
+    "VIRTUAL_CONTAINER_E2E_SCOPE": "all",
+    "VIRTUAL_CONTAINER_E2E_BACKENDS": "stratovirt",
+    "VIRTUAL_CONTAINER_XIAOO_CONCURRENCY_E2E_BACKEND": "stratovirt",
+    "VIRTUAL_CONTAINER_E2E_ARTIFACT_MANIFEST": "${REPO}/local/kata/artifacts/<digest>/manifest.json",
+    "VIRTUAL_CONTAINER_E2E_IMAGE": "docker.io/library/actrail-openeuler-workload:24.09",
+    "VIRTUAL_CONTAINER_E2E_IMAGE_PULL_POLICY": "never"
+  }
+}

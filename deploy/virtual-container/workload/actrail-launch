@@ -1,0 +1,37 @@
+#!/bin/sh
+# Required-mode workload launcher for the guest-root AcTrail daemon.
+set -eu
+
+ROOT="${ACTRAIL_WORKLOAD_ROOT:-/opt/actrail}"
+EXIT_GRACE_SECONDS="${ACTRAIL_WORKLOAD_EXIT_GRACE_SECONDS:-2}"
+
+case "$EXIT_GRACE_SECONDS" in
+  ''|*[!0-9]*)
+    echo "FAIL: ACTRAIL_WORKLOAD_EXIT_GRACE_SECONDS must be an integer" >&2
+    exit 1
+    ;;
+esac
+[ "$EXIT_GRACE_SECONDS" -le 60 ] || {
+  echo "FAIL: ACTRAIL_WORKLOAD_EXIT_GRACE_SECONDS must not exceed 60" >&2
+  exit 1
+}
+
+"$ROOT/bin/verify-interface"
+
+set +e
+"$ROOT/bin/actrailctl-private" \
+  --config "$ROOT/etc/actrail/operator.conf" \
+  launch \
+  --seccomp-notify disabled \
+  "$@"
+status=$?
+set -e
+
+# Kata 3.32 compatibility workaround: keep the launch process alive briefly
+# after actrailctl exits. Immediate PID 1 exit exposed a sandbox-stop race
+# after the supervised child was reaped. This delay is profile-specific, not a
+# stable guest/workload interface; a lifecycle handshake should replace it.
+if [ "$EXIT_GRACE_SECONDS" -gt 0 ]; then
+  sleep "$EXIT_GRACE_SECONDS"
+fi
+exit "$status"

@@ -191,6 +191,7 @@ impl OperatorDocument {
                 log_path: config.log_path.display().to_string(),
                 diagnostic_log_level: diagnostic_log_level_as_str(config.diagnostic_log_level)
                     .to_string(),
+                host_id: config.host_id.clone(),
                 workload_diagnostics: WorkloadDiagnosticsDocument {
                     enabled: config.workload_diagnostics.enabled,
                     interval_ms: config.workload_diagnostics.interval_ms,
@@ -427,6 +428,12 @@ impl OperatorDocument {
                 self.control.active_trace_max,
             )?,
             pid_file: PathBuf::from(&self.control.pid_file),
+            host_id: self
+                .control
+                .host_id
+                .as_ref()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
             storage: self.storage.to_config()?,
             storage_retention: self.storage.retention.to_config()?,
             web: self.web.to_config()?,

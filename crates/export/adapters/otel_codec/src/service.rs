@@ -78,6 +78,12 @@ fn render_otlp_json_compact(
     if let Some(container_id) = trace.root_container_id.as_deref() {
         resource_attrs.push(string_attr("container.id", container_id));
     }
+    if let Some(pod_uid) = trace.root_pod_uid.as_deref() {
+        resource_attrs.push(string_attr("k8s.pod.uid", pod_uid));
+    }
+    if let Some(host_id) = trace.root_host_id.as_deref() {
+        resource_attrs.push(string_attr("host.id", host_id));
+    }
     format!(
         "{{\"resourceSpans\":[{{\"resource\":{{\"attributes\":[{}]}},\"scopeSpans\":[{{\"scope\":{{\"name\":\"actrail.semantic_actions\",\"version\":\"{}\"}},\"spans\":[{}]}}]}}]}}",
         resource_attrs.join(","),
@@ -358,6 +364,14 @@ fn otel_trace_id(trace: &TraceRecord) -> String {
 
 /// The 128-bit trace id as a number, so the JSON (hex) and protobuf (16 bytes)
 /// encoders derive an identical value from one place.
+///
+/// `TraceId` is a per-daemon counter, so two daemons reporting into one shared
+/// Collector still emit colliding ids. Widening this into a globally unique id
+/// needs a scope anchor that survives a reload from SQLite — `root_host_id`
+/// and `root_pod_uid` do not (`sqlite/records/rows.rs`), and anchoring on them
+/// would give one trace two different ids depending on the export path. That
+/// scoping is deferred to the centralized-Collector work, which settles the
+/// anchor and its schema together.
 pub(crate) fn otel_trace_id_u128(trace: &TraceRecord) -> u128 {
     u128::from(trace.trace_id.get())
 }
@@ -385,4 +399,66 @@ fn unix_nanos(value: SystemTime) -> u128 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::UNIX_EPOCH;
+
+    use model_core::ids::{ProfileName, TraceId, TraceName};
+    use model_core::process::ProcessIdentity;
+    use model_core::trace::{TraceAlertToken, TraceRecord};
+
+    use super::{otel_trace_id, render_otlp_json};
+
+    fn trace() -> TraceRecord {
+        TraceRecord::new(
+            TraceId::new(1),
+            TraceAlertToken::new([1; 32]),
+            ProcessIdentity::new(100),
+            TraceName::new("test trace"),
+            ProfileName::new("test"),
+            UNIX_EPOCH,
+        )
+    }
+
+    #[test]
+    fn resource_emits_runtime_identity_when_resolved() {
+        let mut record = trace();
+        record.root_container_id = Some("6bfb54c1b8d9".to_string());
+        record.root_pod_uid = Some("2ee7d8a2-e832-4a13-b26c-02ad9ae4a8f6".to_string());
+        record.root_host_id = Some("4C4C4544-0042-1234-8000-abcdef012345".to_string());
+
+        let json = render_otlp_json(&record, &[], &[]).expect("render");
+
+        for key in ["container.id", "k8s.pod.uid", "host.id"] {
+            assert!(json.contains(&format!("\"{key}\"")), "missing {key}");
+        }
+    }
+
+    /// The same trace must export one id on every path. `root_host_id` and
+    /// `root_pod_uid` live only in `TraceRuntime`; a record reloaded from
+    /// SQLite carries `None` for both (see `sqlite/records/rows.rs`), so any
+    /// id derived from them would split the live export and the
+    /// `actrailviewer` storage export of one trace into two OTLP traces.
+    #[test]
+    fn trace_id_does_not_depend_on_unpersisted_runtime_identity() {
+        let live = {
+            let mut record = trace();
+            record.root_host_id = Some("4C4C4544-0042-1234-8000-abcdef012345".to_string());
+            record.root_pod_uid = Some("2ee7d8a2-e832-4a13-b26c-02ad9ae4a8f6".to_string());
+            record.root_container_id = Some("6bfb54c1b8d9".to_string());
+            record
+        };
+        // What `trace_from_row` reconstructs for the same trace.
+        let reloaded = {
+            let mut record = trace();
+            record.root_container_id = Some("6bfb54c1b8d9".to_string());
+            record
+        };
+        let host_rooted = trace();
+
+        assert_eq!(otel_trace_id(&live), otel_trace_id(&reloaded));
+        assert_eq!(otel_trace_id(&live), otel_trace_id(&host_rooted));
+    }
 }

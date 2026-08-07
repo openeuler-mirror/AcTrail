@@ -386,20 +386,25 @@ import sys
 
 client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 client.connect(sys.argv[2])
-start_time_ticks = open("/proc/self/stat", encoding="utf-8").read().split()[21]
-pid_namespace = os.readlink("/proc/self/ns/pid")
-line = (
-    "v2\tpayload\t"
-    + sys.argv[1]
-    + "\t"
-    + str(os.getpid())
-    + "\t"
-    + start_time_ticks
-    + "\t"
-    + pid_namespace
-    + "\toutbound\tpeer-e2e\tinjection\t1\t1\t6869\n"
-)
-client.sendall(line.encode())
+# Send a valid v2 frame so the test reaches peer authorization instead of
+# being rejected by the wire decoder.
+stat = open("/proc/self/stat", encoding="ascii").read()
+start_time_ticks = stat[stat.rfind(")") + 2 :].split()[19]
+fields = [
+    "v2",
+    "payload",
+    sys.argv[1],
+    str(os.getpid()),
+    start_time_ticks,
+    os.readlink("/proc/self/ns/pid"),
+    "outbound",
+    "peer-e2e",
+    "injection",
+    "1",
+    "1",
+    "6869",
+]
+client.sendall(("\t".join(fields) + "\n").encode())
 client.shutdown(socket.SHUT_WR)
 client.settimeout(10)
 try:
@@ -451,6 +456,30 @@ elif echo "${REQUIRED_OUT}" | grep -q "seccomp-notify required"; then
 else
     echo "${REQUIRED_OUT}" | sed 's/^/    /'
     fail "required seccomp-notify failure lacked a stable diagnostic"
+fi
+
+note "6.5) host.id stamped into OTLP export"
+# Read the export this run actually wrote (DATA_DIR), not a stale fixed path.
+OTLP_JSONL="${DATA_DIR}/export/live-spans.otlp.jsonl"
+HOST_UUID="$(tr -d '[:space:]' < /sys/class/dmi/id/product_uuid 2>/dev/null || true)"
+if [[ -z "${HOST_UUID}" ]]; then
+    echo "  SKIP: no DMI product_uuid on this machine; host.id auto-probe not exercised"
+else
+    for _ in $(seq 1 25); do
+        [[ -f "${OTLP_JSONL}" ]] \
+            && grep -q '"resourceSpans"' "${OTLP_JSONL}" 2>/dev/null && break
+        sleep 0.2
+    done
+    [[ -f "${OTLP_JSONL}" ]] || fail "host.id: OTLP jsonl ${OTLP_JSONL} was not produced"
+    # Every exported record must carry host.id — not just "some record".
+    total="$(grep -c '"resourceSpans"' "${OTLP_JSONL}" 2>/dev/null || echo 0)"
+    withhost="$(grep -c '"host.id"' "${OTLP_JSONL}" 2>/dev/null || echo 0)"
+    [[ "${total}" -gt 0 ]] || fail "host.id: no OTLP records exported"
+    [[ "${total}" -eq "${withhost}" ]] \
+        || fail "host.id: only ${withhost}/${total} exported records carry host.id"
+    grep -q "${HOST_UUID}" "${OTLP_JSONL}" \
+        || fail "host.id: exported value does not match DMI product_uuid ${HOST_UUID}"
+    pass "host.id=${HOST_UUID} on all ${total} exported OTLP records"
 fi
 
 note "7) restore eBPF auto"

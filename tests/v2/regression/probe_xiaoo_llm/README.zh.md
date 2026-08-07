@@ -33,8 +33,15 @@ sudo -E python3 tests/v2/regression/probe_xiaoo_llm/run_e2e.py
 test -x target/release/actraild
 test -x target/release/actrailctl
 test -x target/release/actrailviewer
+cargo build --release \
+  -p tls_probe_point_finder \
+  --bin tls-probe-point-finder
 XIAOO_BIN="${XIAOO_E2E_BINARY:-$(command -v xiaoo)}"
 test -n "$XIAOO_BIN"
+target/release/tls-probe-point-finder fast \
+  --provider rustls \
+  --source auto \
+  "$XIAOO_BIN"
 "$XIAOO_BIN" \
   --cli run \
   --no-tools \
@@ -44,9 +51,13 @@ test -n "$XIAOO_BIN"
 
 ### 预期结果
 
-AcTrail binaries 均可执行；xiaoO 成功输出 `XIAOO_PREFLIGHT_OK`。xiaoO
-缺失、provider/model 配置不可用、认证失效或网络不可达时，自动测试标记为
-`SKIPPED`。
+AcTrail binaries 均可执行；使用 HTTPS/rustls 的 xiaoO 必须先输出包含
+`rustls_buffer_plaintext` 和 `rustls_take_received_plaintext` 的完整 probe plan，随后
+成功输出 `XIAOO_PREFLIGHT_OK`。保留符号的 Rust v0 ELF 可以通过符号解析；stripped
+构建必须匹配一套已验证的静态特征。xiaoO 缺失、provider/model 配置不可用、认证失效
+或网络不可达时，自动测试标记为 `SKIPPED`；xiaoO 能回答但 finder 无完整 plan 时，
+HTTPS 内容仍不可见，最终 LLM action 校验会失败。plain HTTP provider route 不需要
+rustls plan，可直接通过 socket plaintext 捕获。
 
 ## 步骤2：初始化并启动 AcTrail
 

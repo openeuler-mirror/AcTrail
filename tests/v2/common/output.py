@@ -182,6 +182,7 @@ class CaseProgressReporter:
 
     def report(self, step: str, message: str | None = None) -> None:
         progress = self._format_progress(step, message)
+        compact_progress = self._format_progress(step, None)
         with self._lock:
             if progress == self._last_progress:
                 return
@@ -190,7 +191,7 @@ class CaseProgressReporter:
             if self._detailed:
                 self._console.line(f"→ {progress}")
             else:
-                self._console.progress_update(progress)
+                self._console.progress_update(compact_progress)
 
     @staticmethod
     def _format_progress(step: str, message: str | None) -> str:

@@ -1,0 +1,197 @@
+#!/usr/bin/env bash
+# Verify the static AcTrail installation contract in a Kata guest rootfs.
+set -euo pipefail
+
+ROOTFS=""
+EXPECTED_STARTUP_DEPENDENCY="optional"
+EXPECTED_SOCKET_GID=39000
+EXPECTED_OTEL_ENDPOINT=""
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=otel-endpoint.sh
+source "$SCRIPT_DIR/otel-endpoint.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: verify-rootfs.sh --rootfs DIR --otel-endpoint URL [--startup-dependency optional|required] [--socket-gid GID]
+
+This is an offline structural check. A real Kata boot and `actrailctl doctor`
+are still required before declaring the guest-root startup path complete.
+EOF
+}
+
+fail() {
+  echo "FAIL: $*" >&2
+  exit 1
+}
+
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --rootfs)
+      [[ "$#" -ge 2 ]] || fail "--rootfs requires a value"
+      ROOTFS="$2"
+      shift 2
+      ;;
+    --startup-dependency)
+      [[ "$#" -ge 2 ]] || fail "--startup-dependency requires a value"
+      EXPECTED_STARTUP_DEPENDENCY="$2"
+      shift 2
+      ;;
+    --otel-endpoint)
+      [[ "$#" -ge 2 ]] || fail "--otel-endpoint requires a value"
+      EXPECTED_OTEL_ENDPOINT="$2"
+      shift 2
+      ;;
+    --socket-gid)
+      [[ "$#" -ge 2 ]] || fail "--socket-gid requires a value"
+      [[ "$2" =~ ^[0-9]+$ ]] || fail "--socket-gid must be an integer"
+      EXPECTED_SOCKET_GID="$((10#$2))"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      fail "unknown argument: $1"
+      ;;
+  esac
+done
+
+[[ -n "$ROOTFS" ]] || fail "--rootfs is required"
+actrail_validate_guest_otel_endpoint "$EXPECTED_OTEL_ENDPOINT" \
+  || fail "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
+[[ -d "$ROOTFS" ]] || fail "rootfs is not a directory: $ROOTFS"
+case "$EXPECTED_STARTUP_DEPENDENCY" in
+  optional|required) ;;
+  *) fail "--startup-dependency must be optional or required" ;;
+esac
+(( EXPECTED_SOCKET_GID > 0 && EXPECTED_SOCKET_GID <= 2147483647 )) \
+  || fail "--socket-gid must be between 1 and 2147483647"
+ROOTFS="$(realpath "$ROOTFS")"
+[[ "$ROOTFS" != "/" ]] || fail "refusing to verify / as an offline rootfs"
+
+assert_file() {
+  local path="$ROOTFS/${1#/}"
+  [[ -f "$path" ]] || fail "installed file missing: /${1#/}"
+}
+
+assert_line() {
+  local relative="$1"
+  local line="$2"
+  grep -Fqx -- "$line" "$ROOTFS/${relative#/}" \
+    || fail "/${relative#/} is missing: $line"
+}
+
+assert_link() {
+  local relative="$1"
+  local expected="$2"
+  local path="$ROOTFS/${relative#/}"
+  [[ -L "$path" ]] || fail "enabled-unit link missing: /${relative#/}"
+  [[ "$(readlink "$path")" == "$expected" ]] \
+    || fail "/${relative#/} points to $(readlink "$path"), expected $expected"
+}
+
+assert_file /usr/local/bin/actraild
+assert_file /usr/local/bin/actrailctl
+assert_file /usr/local/lib/actrail/libactrail_tls_payload_probe_sync.so
+assert_file /etc/actrail/operator.conf
+assert_file /etc/actrail/plugins/otel-http/otel-http.config.toml
+assert_file /usr/share/actrail/plugins/otel-http/otel-http.plugin.toml
+assert_file /usr/share/actrail/plugins/otel-http/otel-http.config.v1.schema.json
+assert_file /usr/lib/systemd/system/actraild.service
+assert_file /usr/lib/tmpfiles.d/actrail.conf
+assert_file /usr/lib/systemd/system/kata-agent.service.d/10-actrail-workload-interface.conf
+assert_file /usr/share/actrail/guest-install-info
+assert_file /usr/share/actrail/workload-interface
+
+assert_line /etc/actrail/operator.conf \
+  'sync_runtime_library_path = "/usr/local/lib/actrail/libactrail_tls_payload_probe_sync.so"'
+assert_line /etc/actrail/operator.conf \
+  'socket_path = "/dev/actrail/control.sock"'
+assert_line /etc/actrail/operator.conf \
+  'sync_event_socket_path = "/dev/actrail/tls-sync.sock"'
+assert_line /etc/actrail/operator.conf 'log_path = "/run/actrail/private/actraild.log"'
+assert_line /etc/actrail/operator.conf 'path = "/run/actrail/private/actrail.sqlite"'
+assert_line /etc/actrail/operator.conf \
+  'manifest = "/usr/share/actrail/plugins/otel-http/otel-http.plugin.toml"'
+assert_line /etc/actrail/operator.conf \
+  'plugin_config = "/etc/actrail/plugins/otel-http/otel-http.config.toml"'
+assert_line /etc/actrail/plugins/otel-http/otel-http.config.toml \
+  "endpoint = \"$EXPECTED_OTEL_ENDPOINT\""
+if grep -Eiq -- 'COLLECTOR_HOST|placeholder|replace[_-]me|change[_-]me' \
+  "$ROOTFS/etc/actrail/plugins/otel-http/otel-http.config.toml"; then
+  fail "/etc/actrail/plugins/otel-http/otel-http.config.toml contains a placeholder"
+fi
+for section in payload.socket seccomp_notify process_seccomp enforcement; do
+  awk -v section="[$section]" '
+    $0 == section { inside = 1; next }
+    inside && /^\[/ { exit }
+    inside && $0 == "enabled = false" { found = 1 }
+    END { exit !found }
+  ' "$ROOTFS/etc/actrail/operator.conf" \
+    || fail "/etc/actrail/operator.conf must disable $section"
+done
+assert_line /usr/lib/systemd/system/actraild.service \
+  'Environment=LD_LIBRARY_PATH=/usr/local/lib/actrail'
+assert_line /usr/lib/systemd/system/actraild.service 'User=root'
+assert_line /usr/lib/systemd/system/actraild.service 'Group=actrail'
+assert_line /usr/lib/systemd/system/actraild.service 'RuntimeDirectory=actrail'
+assert_line /usr/lib/systemd/system/actraild.service 'RuntimeDirectoryMode=0750'
+assert_line /usr/lib/systemd/system/actraild.service \
+  'ExecStartPre=/usr/bin/systemd-tmpfiles --create --prefix=/dev/actrail'
+assert_line /usr/lib/systemd/system/actraild.service \
+  'ExecStartPre=/usr/bin/test -d /dev/actrail'
+assert_line /usr/lib/systemd/system/actraild.service \
+  'WantedBy=multi-user.target kata-containers.target'
+assert_line /usr/lib/tmpfiles.d/actrail.conf \
+  'd /dev/actrail 0750 root actrail -'
+assert_line \
+  /usr/lib/systemd/system/kata-agent.service.d/10-actrail-workload-interface.conf \
+  'ExecStartPre=/usr/bin/systemd-tmpfiles --create --prefix=/dev/actrail'
+if grep -Fq -- 'Before=kata-agent.service' \
+  "$ROOTFS/usr/lib/systemd/system/actraild.service"; then
+  fail "optional actraild.service must not order itself before kata-agent"
+fi
+grep -Fq -- '/usr/bin/touch /run/actrail/ready' \
+  "$ROOTFS/usr/lib/systemd/system/actraild.service" \
+  || fail "actraild.service has no runtime readiness marker"
+if grep -Fq -- 'rmdir /dev/actrail' \
+  "$ROOTFS/usr/lib/systemd/system/actraild.service"; then
+  fail "actraild.service must not remove the guest-wide workload interface"
+fi
+if grep -Fq -- '/var/' "$ROOTFS/usr/lib/systemd/system/actraild.service"; then
+  fail "actraild.service writes to the read-only Kata guest rootfs"
+fi
+
+assert_link /usr/lib/systemd/system/kata-containers.target.wants/actraild.service \
+  ../actraild.service
+assert_link /usr/lib/systemd/system/multi-user.target.wants/actraild.service \
+  ../actraild.service
+assert_line /usr/share/actrail/guest-install-info \
+  "guest_startup_dependency=$EXPECTED_STARTUP_DEPENDENCY"
+assert_line /usr/share/actrail/guest-install-info \
+  "workload_socket_gid=$EXPECTED_SOCKET_GID"
+assert_line /usr/share/actrail/workload-interface \
+  "socket_gid=$EXPECTED_SOCKET_GID"
+assert_line /usr/share/actrail/workload-interface \
+  'guest_socket_source=/dev/actrail'
+assert_line /usr/share/actrail/workload-interface \
+  'workload_socket_target=/run/actrail'
+grep -Eq "^actrail:x:${EXPECTED_SOCKET_GID}:$" "$ROOTFS/etc/group" \
+  || fail "/etc/group does not contain the expected actrail socket group"
+
+strict_drop_in="$ROOTFS/usr/lib/systemd/system/kata-agent.service.d/20-actrail-required.conf"
+if [[ "$EXPECTED_STARTUP_DEPENDENCY" == "required" ]]; then
+  [[ -f "$strict_drop_in" ]] || fail "required kata-agent dependency drop-in is missing"
+  grep -Fqx -- 'Requires=actraild.service' "$strict_drop_in" \
+    || fail "required dependency drop-in does not require actraild.service"
+else
+  [[ ! -e "$strict_drop_in" && ! -L "$strict_drop_in" ]] \
+    || fail "optional dependency rootfs unexpectedly contains the required drop-in"
+fi
+
+echo "ACTRAIL_GUEST_ROOTFS_STATIC_OK"
+echo "rootfs=$ROOTFS"
+echo "guest_startup_dependency=$EXPECTED_STARTUP_DEPENDENCY"
+echo "otel_endpoint_configured=true"

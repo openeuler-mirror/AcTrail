@@ -38,10 +38,15 @@ pub fn format_reply(reply: &ControlReply) -> String {
             .iter()
             .map(|item| {
                 format!(
-                    "{} {} pid={} {}/{:?}",
+                    "{} {} pid={} pidns={} container={} {}/{:?}",
                     item.trace_id,
                     item.display_name,
                     item.root_pid,
+                    item.root_pid_namespace
+                        .as_ref()
+                        .map(|namespace| namespace.as_str())
+                        .unwrap_or("none"),
+                    item.root_container_id.as_deref().unwrap_or("none"),
                     item.lifecycle_state,
                     item.health
                 )
@@ -157,5 +162,54 @@ fn printable_operational_metrics(metrics: &std::collections::BTreeMap<String, u6
             .map(|(name, value)| format!("{name}:{value}"))
             .collect::<Vec<_>>()
             .join(",")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+    use std::time::SystemTime;
+
+    use control_contract::reply::{ControlReply, TraceListItem};
+    use model_core::ids::{TraceId, TraceName};
+    use model_core::process::NamespaceIdentity;
+    use model_core::trace::{TraceHealth, TraceLifecycleState};
+
+    use super::format_reply;
+
+    #[test]
+    fn trace_list_prints_namespace_and_resolved_container_identity() {
+        let output = format_reply(&ControlReply::TraceList(vec![TraceListItem {
+            trace_id: TraceId::new(7),
+            display_name: TraceName::new("kata"),
+            root_pid: 42,
+            root_pid_namespace: Some(NamespaceIdentity::new("pid:[4026532248]")),
+            root_container_id: Some("a".repeat(64)),
+            lifecycle_state: TraceLifecycleState::Active,
+            health: TraceHealth::Clean,
+            tags: BTreeSet::new(),
+            created_at: SystemTime::UNIX_EPOCH,
+        }]));
+
+        assert!(output.contains("pidns=pid:[4026532248]"));
+        assert!(output.contains(&format!("container={}", "a".repeat(64))));
+    }
+
+    #[test]
+    fn trace_list_marks_unresolved_container_identity() {
+        let output = format_reply(&ControlReply::TraceList(vec![TraceListItem {
+            trace_id: TraceId::new(8),
+            display_name: TraceName::new("host"),
+            root_pid: 43,
+            root_pid_namespace: None,
+            root_container_id: None,
+            lifecycle_state: TraceLifecycleState::Active,
+            health: TraceHealth::Clean,
+            tags: BTreeSet::new(),
+            created_at: SystemTime::UNIX_EPOCH,
+        }]));
+
+        assert!(output.contains("pidns=none"));
+        assert!(output.contains("container=none"));
     }
 }

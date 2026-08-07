@@ -1,0 +1,46 @@
+ARG BASE_IMAGE=openeuler/openeuler:24.03-lts-sp3
+FROM ${BASE_IMAGE}
+
+# Host-side AcTrail compilation plus offline openEuler Kata image assembly.
+# Rust is intentionally not installed from the distribution: use the project
+# pinned rustup toolchain and mount its cargo/rustup directories at runtime.
+RUN dnf install -y \
+      bash \
+      clang \
+      llvm \
+      elfutils-devel \
+      zlib-devel \
+      musl-gcc \
+      musl-devel \
+      openssl-devel \
+      make \
+      gcc \
+      gcc-c++ \
+      bc \
+      bison \
+      flex \
+      patch \
+      perl \
+      elfutils-libelf-devel \
+      dtc-devel \
+      glibc-devel \
+      glibc-static \
+      git-core \
+      file \
+      cpio \
+      gzip \
+      zstd \
+      xz \
+      e2fsprogs \
+      util-linux \
+      rpm-build \
+      dnf-plugins-core \
+      findutils \
+      shadow-utils \
+      systemd \
+      virtiofsd \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+
+WORKDIR /workspace/AcTrail
+CMD ["/bin/bash"]

@@ -373,6 +373,8 @@ where
                                 .wiring
                                 .attach_service
                                 .host_pid_for_process(trace.root_process_identity)?,
+                            root_pid_namespace: trace.root_pid_namespace.clone(),
+                            root_container_id: trace.root_container_id.clone(),
                             lifecycle_state: trace.lifecycle_state,
                             health: trace.health,
                             tags: trace.tags.clone(),
@@ -636,7 +638,7 @@ fn resolve_trace_id(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
-    use std::os::fd::RawFd;
+    use std::os::fd::{FromRawFd, OwnedFd, RawFd};
     use std::time::{Duration, SystemTime};
 
     use config_core::capture_profile::CaptureProfile;
@@ -683,6 +685,16 @@ mod tests {
             std::process::id(),
             NamespaceIdentity::new(namespace.display().to_string()),
         )
+    }
+
+    fn current_process_pidfd() -> OwnedFd {
+        let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, std::process::id(), 0) };
+        assert!(
+            pidfd >= 0,
+            "pidfd_open current process: {}",
+            std::io::Error::last_os_error()
+        );
+        unsafe { OwnedFd::from_raw_fd(pidfd as libc::c_int) }
     }
 
     fn launch_track_add(request_id: u64, profile_name: &str) -> ControlCommand {
@@ -762,6 +774,15 @@ mod tests {
             _command: &TrackAddCommand,
         ) -> Result<TrackAddReply, ControlError> {
             Err(ControlError::new("unused", "unused"))
+        }
+
+        fn attach_launch(
+            &mut self,
+            trace_runtime: &mut trace_runtime::TraceRuntime,
+            command: &TrackAddCommand,
+            _pidfd: OwnedFd,
+        ) -> Result<TrackAddReply, ControlError> {
+            self.attach_existing(trace_runtime, command)
         }
 
         fn drain_live_events(
@@ -985,7 +1006,11 @@ mod tests {
         .expect("replacement permission decision");
 
         let attach_error = host
-            .handle_from_peer(peer, launch_track_add(31, "default"))
+            .handle_from_peer_with_launch_pidfd(
+                peer,
+                launch_track_add(31, "default"),
+                Some(current_process_pidfd()),
+            )
             .unwrap_err();
         assert_eq!(attach_error.code, "unused");
 
@@ -1021,7 +1046,12 @@ mod tests {
                 trace_id,
                 TrackTraceRequest {
                     root_identity: ProcessIdentity::new(1),
+                    root_pid_namespace: Some(model_core::process::NamespaceIdentity::new(
+                        "pid:[101]",
+                    )),
                     root_container_id: Some("container-a".to_string()),
+                    root_pod_uid: None,
+                    root_host_id: None,
                     root_working_directory: None,
                     display_name: TraceName::new("owned"),
                     profile_snapshot,

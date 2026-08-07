@@ -5,16 +5,15 @@
 //! kernel `NamespaceIdentity` (an opaque, reuse-prone inode) it maps to
 //! `docker ps` / image / pod and survives collector restarts.
 //!
-//! The initial resolver supports Docker. The struct keeps `runtime` and `pod_uid` so
-//! containerd / Podman / CRI-O / K8s can be added without changing the model.
+//! The resolver supports Docker, containerd/Kata and Kubernetes cgroup layouts.
+//! The struct keeps `runtime` and `pod_uid` separate so attribution remains
+//! explicit without treating a pod UID as a container ID.
 
 /// Which container runtime a [`ContainerIdentity`] was parsed from.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ContainerRuntime {
     Docker,
     Containerd,
-    Podman,
-    CriO,
     K8s,
     Unknown,
 }

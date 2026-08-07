@@ -115,9 +115,15 @@ where
                 trace_id,
                 TrackTraceRequest {
                     root_identity: root_identity.clone(),
-                    // Generic attach path: container id is resolved host-side in
-                    // the daemon's `services/attach.rs`, not here.
+                    root_pid_namespace: root_observation
+                        .namespace
+                        .as_ref()
+                        .map(|coordinates| coordinates.pid_namespace.clone()),
+                    // Generic attach path: container id and host id are stamped
+                    // host-side in the daemon's `services/attach.rs`, not here.
                     root_container_id: None,
+                    root_pod_uid: None,
+                    root_host_id: None,
                     root_working_directory,
                     display_name: request.display_name,
                     profile_snapshot: request.profile_snapshot,

@@ -1,0 +1,47 @@
+extensions:
+  health_check:
+    endpoint: 127.0.0.1:13133
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: ${env:OTELCOL_OTLP_HTTP_ENDPOINT}
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+    spike_limit_mib: 64
+  batch:
+    send_batch_size: 512
+    timeout: 1s
+
+exporters:
+  debug:
+    verbosity: detailed
+  file/acceptance:
+    path: /var/lib/otelcol/actrail-traces.json
+    format: json
+    rotation:
+      max_megabytes: 32
+      max_days: 7
+      max_backups: 5
+      localtime: false
+
+service:
+  extensions:
+    - health_check
+  pipelines:
+    traces:
+      receivers:
+        - otlp
+      processors:
+        - memory_limiter
+        - batch
+      exporters:
+        - debug
+        - file/acceptance
+  telemetry:
+    logs:
+      level: info

@@ -1,6 +1,7 @@
 //! Integration-oriented daemon service tests.
 
 use std::collections::BTreeSet;
+use std::os::fd::{FromRawFd, OwnedFd};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -60,6 +61,16 @@ fn test_process_ref(pid: u32) -> ProcessRef {
     )
 }
 
+fn test_pidfd(pid: u32) -> OwnedFd {
+    let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+    assert!(
+        pidfd >= 0,
+        "pidfd_open test process {pid}: {}",
+        std::io::Error::last_os_error()
+    );
+    unsafe { OwnedFd::from_raw_fd(pidfd as libc::c_int) }
+}
+
 #[test]
 fn attach_main_path_runs() {
     let storage_path =
@@ -91,11 +102,13 @@ fn attach_main_path_runs() {
     )
     .unwrap();
     let mut host = DaemonServiceHost::new(wiring);
+    let root = test_process_ref(std::process::id());
+    let expected_pid_namespace = root.pid_namespace.clone();
 
     let reply = host
         .handle(ControlCommand::TrackAdd(TrackAddCommand {
             request_id: RequestId::new(1),
-            root: test_process_ref(std::process::id()),
+            root,
             display_name: TraceName::new("self"),
             profile_name: ProfileName::new("snapshot"),
             tags: BTreeSet::new(),
@@ -117,7 +130,14 @@ fn attach_main_path_runs() {
     let control_contract::reply::ControlReply::TraceList(items) = list else {
         panic!("unexpected list reply");
     };
-    assert!(items.iter().any(|item| item.trace_id == reply.trace_id));
+    let trace = items
+        .iter()
+        .find(|item| item.trace_id == reply.trace_id)
+        .expect("attached trace");
+    assert_eq!(
+        trace.root_pid_namespace.as_ref(),
+        Some(&expected_pid_namespace)
+    );
 }
 
 #[test]
@@ -205,16 +225,19 @@ fn launch_mode_suppresses_wrapper_bootstrap_gap() {
     let mut host = DaemonServiceHost::new(wiring);
 
     let reply = host
-        .handle(ControlCommand::TrackAdd(TrackAddCommand {
-            request_id: RequestId::new(1),
-            root: test_process_ref(std::process::id()),
-            display_name: TraceName::new("launch-wrapper"),
-            profile_name: ProfileName::new("snapshot"),
-            tags: BTreeSet::new(),
-            launch_mode: true,
-            initial_suppressed_fds: Vec::new(),
-            tls_probe_plan: None,
-        }))
+        .handle_with_launch_pidfd(
+            ControlCommand::TrackAdd(TrackAddCommand {
+                request_id: RequestId::new(1),
+                root: test_process_ref(std::process::id()),
+                display_name: TraceName::new("launch-wrapper"),
+                profile_name: ProfileName::new("snapshot"),
+                tags: BTreeSet::new(),
+                launch_mode: true,
+                initial_suppressed_fds: Vec::new(),
+                tls_probe_plan: None,
+            }),
+            Some(test_pidfd(std::process::id())),
+        )
         .unwrap();
     let control_contract::reply::ControlReply::TrackAdded(reply) = reply else {
         panic!("unexpected reply");
@@ -559,7 +582,10 @@ fn create_active_trace(
             trace_id,
             TrackTraceRequest {
                 root_identity: process,
+                root_pid_namespace: None,
                 root_container_id: None,
+                root_pod_uid: None,
+                root_host_id: None,
                 root_working_directory: None,
                 display_name,
                 profile_snapshot,

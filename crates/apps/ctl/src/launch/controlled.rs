@@ -490,6 +490,7 @@ mod tests {
         uninstall_signal_forwarding, wait_child_exit,
     };
     use std::ffi::CString;
+    use std::os::fd::{FromRawFd, OwnedFd};
     use std::sync::Mutex;
     use std::time::Duration;
 
@@ -612,8 +613,15 @@ mod tests {
             std::thread::sleep(Duration::from_millis(25));
             unsafe { libc::kill(libc::getpid(), libc::SIGTERM) };
         });
+        let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, child_pid, 0) };
+        assert!(
+            pidfd >= 0,
+            "pidfd_open test child: {}",
+            std::io::Error::last_os_error()
+        );
         let child = ControlledChild {
             pid: child_pid,
+            pidfd: unsafe { OwnedFd::from_raw_fd(pidfd as libc::c_int) },
             env_writer: None,
             listener_fd: None,
         };

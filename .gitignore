@@ -35,6 +35,8 @@ node_modules/
 crates/apps/web/frontend/dist/
 crates/apps/web/src/render/dist/
 crates/apps/ctl/java-agent/dist/
+.actrail-guest-bundle/
+.actrail-workload-bundle/
 
 
 # Added by cargo

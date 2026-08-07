@@ -88,7 +88,10 @@ impl TraceRuntime {
             request.profile_snapshot.profile_name.clone(),
             request.created_at,
         );
+        trace.root_pid_namespace = request.root_pid_namespace;
         trace.root_container_id = request.root_container_id;
+        trace.root_pod_uid = request.root_pod_uid;
+        trace.root_host_id = request.root_host_id;
         trace.root_working_directory = request.root_working_directory;
         for tag in request.tags {
             trace.add_tag(tag);
@@ -368,7 +371,7 @@ mod tests {
     use config_core::trace_snapshot::CaptureProfileSnapshot;
     use model_core::capability::{Capability, CapabilityRequest, RequestMode};
     use model_core::ids::{CollectorName, ProfileName, TraceName};
-    use model_core::process::{ExitStatus, ProcessIdentity};
+    use model_core::process::{ExitStatus, NamespaceIdentity, ProcessIdentity};
     use model_core::trace::TraceLifecycleState;
 
     use crate::TraceRuntime;
@@ -402,13 +405,49 @@ mod tests {
     }
 
     #[test]
+    fn trace_keeps_root_pid_namespace_for_query() {
+        let mut runtime = runtime();
+        let trace_id = runtime.reserve_trace_id();
+        let pid_namespace = NamespaceIdentity::new("pid:[4026532248]");
+        let request = TrackTraceRequest {
+            root_identity: ProcessIdentity::new(1),
+            root_pid_namespace: Some(pid_namespace.clone()),
+            root_container_id: None,
+            root_pod_uid: None,
+            root_host_id: None,
+            root_working_directory: None,
+            display_name: TraceName::new("agent"),
+            profile_snapshot: profile_snapshot(),
+            tags: BTreeSet::new(),
+            created_at: SystemTime::UNIX_EPOCH,
+        };
+        let plan = SensorPlan::negotiate(&request.profile_snapshot, &runtime.collectors).unwrap();
+
+        runtime
+            .create_starting_trace(trace_id, request, plan)
+            .unwrap();
+
+        assert_eq!(
+            runtime
+                .get_trace(trace_id)
+                .unwrap()
+                .trace
+                .root_pid_namespace,
+            Some(pid_namespace)
+        );
+    }
+
+    #[test]
     fn track_remove_keeps_trace_draining_when_descendant_exists() {
         let mut runtime = runtime();
         let trace_id = runtime.reserve_trace_id();
         let root = ProcessIdentity::new(1);
         let request = TrackTraceRequest {
             root_identity: root.clone(),
+            root_pid_namespace: None,
             root_container_id: None,
+            root_pod_uid: None,
+            root_host_id: None,
             root_working_directory: None,
             display_name: TraceName::new("agent"),
             profile_snapshot: profile_snapshot(),
@@ -449,7 +488,10 @@ mod tests {
         let root = ProcessIdentity::new(1);
         let request = TrackTraceRequest {
             root_identity: root.clone(),
+            root_pid_namespace: None,
             root_container_id: None,
+            root_pod_uid: None,
+            root_host_id: None,
             root_working_directory: None,
             display_name: TraceName::new("agent"),
             profile_snapshot: profile_snapshot(),

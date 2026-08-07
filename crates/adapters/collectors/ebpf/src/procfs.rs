@@ -230,9 +230,9 @@ fn read_pid_namespace(pid: u32) -> NamespaceIdentity {
 
 /// Resolve a process's container identity from its cgroup.
 ///
-/// Userspace, read once per container. `None` = host process or non-Docker
-/// runtime. Pass the host pid (after NSpid mapping) so
-/// the cgroup path carries the full `docker-<id>`.
+/// Userspace, read once per container. `None` = host process or a runtime
+/// layout the parser does not recognize. Pass the host pid (after NSpid
+/// mapping) so the cgroup path carries the full runtime-assigned id.
 pub fn read_container_identity(pid: u32) -> Option<ContainerIdentity> {
     let content = std::fs::read_to_string(format!("/proc/{pid}/cgroup")).ok()?;
     parse_container_identity(&content)
@@ -240,44 +240,175 @@ pub fn read_container_identity(pid: u32) -> Option<ContainerIdentity> {
 
 /// Parse a `/proc/<pid>/cgroup` file body into a container identity.
 ///
-/// Handles cgroup v2 (single `0::/path`) and v1 (`N:controllers:/path` lines).
-/// Matches Docker (`docker-<id>.scope` systemd driver, or `/docker/<id>`
-/// cgroupfs driver). Pure function for unit testing.
+/// Recognizes Docker, containerd/Kata and Kubernetes cgroup layouts across
+/// cgroup v1 (`N:controllers:/path`) and v2 (`0::/path`). A Kubernetes pod UID
+/// ancestor is captured into `pod_uid`, never mistaken for the container id.
+/// Kata guest cgroupfs layouts
+/// (`[N:controllers|0::]/<containerd-namespace>/<container-id>`) are handled by
+/// the final leaf fallback. The v2 form is verified from a real guest fixture;
+/// the equivalent v1 multi-controller form is covered by regression fixtures.
+/// Pure function for unit testing.
 pub fn parse_container_identity(cgroup_file: &str) -> Option<ContainerIdentity> {
     for line in cgroup_file.lines() {
         // "N:controllers:/path" (v1) or "0::/path" (v2); cgroup paths have no ':'.
         let Some(path) = line.splitn(3, ':').nth(2) else {
             continue;
         };
-        if let Some(id) = docker_id_from_path(path) {
-            return Some(ContainerIdentity::new(ContainerRuntime::Docker, id));
+        if let Some(identity) = container_identity_from_path(path) {
+            return Some(identity);
         }
     }
     None
 }
 
-fn docker_id_from_path(path: &str) -> Option<String> {
+/// Scope prefixes used by systemd cgroup drivers: `<prefix><id>.scope`.
+const SCOPE_RUNTIMES: [(&str, ContainerRuntime); 2] = [
+    ("docker-", ContainerRuntime::Docker),
+    ("cri-containerd-", ContainerRuntime::Containerd),
+];
+
+fn container_identity_from_path(path: &str) -> Option<ContainerIdentity> {
+    let mut pod_uid: Option<String> = None;
     let mut prev_was_docker = false;
+    let mut prev_was_pod_dir = false;
     for segment in path.split('/') {
-        // systemd driver: ".../docker-<id>.scope"
-        if let Some(id) = segment
-            .strip_prefix("docker-")
-            .and_then(|rest| rest.strip_suffix(".scope"))
-            && is_container_id(id)
-        {
-            return Some(id.to_string());
+        // Kubernetes pod ancestor ("kubepods-…-pod<uid>.slice" or "pod<uid>"):
+        // remember the UID for the container that follows, never take it as id.
+        if let Some(uid) = pod_uid_from_segment(segment) {
+            pod_uid = Some(uid);
+            prev_was_pod_dir = true;
+            prev_was_docker = false;
+            continue;
+        }
+        // systemd driver: ".../<runtime>-<id>.scope"
+        if let Some(scope) = segment.strip_suffix(".scope") {
+            for (prefix, runtime) in SCOPE_RUNTIMES {
+                if let Some(id) = scope.strip_prefix(prefix)
+                    && is_container_id(id)
+                {
+                    let mut identity = ContainerIdentity::new(runtime, id);
+                    identity.pod_uid = pod_uid;
+                    return Some(identity);
+                }
+            }
         }
         // cgroupfs driver: ".../docker/<id>"
         if prev_was_docker && is_container_id(segment) {
-            return Some(segment.to_string());
+            return Some(ContainerIdentity::new(ContainerRuntime::Docker, segment));
+        }
+        // cgroupfs CRI leaf: ".../kubepods/<qos>/pod<uid>/<id>". The bare hex
+        // leaf does not say which runtime created it, so tag it `K8s`.
+        if prev_was_pod_dir && is_container_id(segment) {
+            let mut identity = ContainerIdentity::new(ContainerRuntime::K8s, segment);
+            identity.pod_uid = pod_uid;
+            return Some(identity);
         }
         prev_was_docker = segment == "docker";
+        prev_was_pod_dir = false;
+    }
+    // Fallback: kata-agent (in-guest) lays workload cgroups out cgroupfs-style
+    // as `/<containerd-namespace>/<container-id>` with no runtime-naming prefix
+    // or `.scope` suffix. The v2 form is verified from a real Kata guest via
+    // the debug console (e.g. `0::/k8s.io/<64-hex>`, `0::/default/<id>`); v1
+    // exposes the same path once per controller.
+    // None of the specific patterns above matched, so if the leaf itself is a
+    // container id, tag it Containerd. The `is_container_id` shape (>=12 hex)
+    // excludes guest system paths like `/init.scope` and
+    // `/system.slice/kata-agent.service`.
+    if let Some(leaf) = path.rsplit('/').find(|segment| !segment.is_empty())
+        && is_container_id(leaf)
+    {
+        let mut identity = ContainerIdentity::new(ContainerRuntime::Containerd, leaf);
+        identity.pod_uid = pod_uid;
+        return Some(identity);
     }
     None
+}
+
+/// Extract a Kubernetes pod UID from a cgroup path segment, if present.
+///
+/// systemd driver encodes it as `kubepods-<qos->pod<uid_with_underscores>.slice`;
+/// the cgroupfs driver as a plain `pod<uid>` directory.
+fn pod_uid_from_segment(segment: &str) -> Option<String> {
+    if segment.starts_with("kubepods")
+        && let Some(rest) = segment.strip_suffix(".slice")
+        && let Some(index) = rest.rfind("pod")
+    {
+        let uid = rest[index + 3..].replace('_', "-");
+        if is_pod_uid(&uid) {
+            return Some(uid);
+        }
+    }
+    if let Some(raw) = segment.strip_prefix("pod")
+        && is_pod_uid(raw)
+    {
+        return Some(raw.to_string());
+    }
+    None
+}
+
+/// Heuristic: does this cgroup file look containerized even though
+/// [`parse_container_identity`] extracted nothing?
+///
+/// Security backstop, not an identity source. When a runtime lays out cgroups
+/// in a shape the parser does not know (e.g. an unmapped kata-agent guest
+/// layout), the process must NOT be silently treated as a host process —
+/// callers use this to refuse host-level trust and to log the degradation
+/// loudly instead. False positives only cost a warning plus stricter
+/// matching; false negatives would silently weaken cross-container isolation.
+pub fn cgroup_looks_containerized(cgroup_file: &str) -> bool {
+    for line in cgroup_file.lines() {
+        let Some(path) = line.splitn(3, ':').nth(2) else {
+            continue;
+        };
+        if has_containerd_namespace_layout(path) {
+            return true;
+        }
+        for segment in path.split('/') {
+            if segment.is_empty() {
+                continue;
+            }
+            let lower = segment.to_ascii_lowercase();
+            // Unknown runtime markers stay a security-only backstop: they keep
+            // unsupported container layouts from inheriting host trust, but
+            // do not resolve a ContainerIdentity above.
+            if lower.contains("docker")
+                || lower.contains("containerd")
+                || lower.contains("crio")
+                || lower.contains("libpod")
+                || lower.contains("kube")
+                || lower.starts_with("kata")
+                || lower == "vc"
+                || pod_uid_from_segment(segment).is_some()
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// kata-agent/containerd may expose a workload as
+/// `/<containerd-namespace>/<container-id>` without a runtime prefix. Keep
+/// identity parsing strict, but treat even a non-hex leaf as containerized so
+/// an unresolved workload cannot inherit host-level trust.
+fn has_containerd_namespace_layout(path: &str) -> bool {
+    let mut segments = path.split('/').filter(|segment| !segment.is_empty());
+    matches!(segments.next(), Some("default" | "k8s.io")) && segments.next().is_some()
 }
 
 fn is_container_id(value: &str) -> bool {
     value.len() >= 12 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// RFC-4122 shape: 36 chars, hyphens at 8/13/18/23, hex elsewhere.
+fn is_pod_uid(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 36
+        && bytes.iter().enumerate().all(|(index, byte)| match index {
+            8 | 13 | 18 | 23 => *byte == b'-',
+            _ => byte.is_ascii_hexdigit(),
+        })
 }
 
 /// Map a container-internal file path to a host-reachable path.
@@ -392,10 +523,133 @@ mod tests {
         assert_eq!(identity.container_id, ID);
     }
 
+    const POD_UID: &str = "2ee7d8a2-e832-4a13-b26c-02ad9ae4a8f6";
+
+    #[test]
+    fn parse_container_cri_containerd_systemd_with_pod_uid() {
+        let uid_underscored = POD_UID.replace('-', "_");
+        let cgroup = format!(
+            "0::/kubepods.slice/kubepods-besteffort.slice/\
+             kubepods-besteffort-pod{uid_underscored}.slice/cri-containerd-{ID}.scope\n"
+        );
+        let identity = parse_container_identity(&cgroup).expect("containerd id");
+        assert_eq!(identity.runtime, ContainerRuntime::Containerd);
+        assert_eq!(identity.container_id, ID);
+        assert_eq!(identity.pod_uid.as_deref(), Some(POD_UID));
+    }
+
+    #[test]
+    fn unsupported_runtime_layouts_do_not_resolve_identity() {
+        let uid_underscored = POD_UID.replace('-', "_");
+        let crio = format!(
+            "0::/kubepods.slice/kubepods-burstable.slice/\
+             kubepods-burstable-pod{uid_underscored}.slice/crio-{ID}.scope\n"
+        );
+        let scoped = format!("0::/machine.slice/libpod-{ID}.scope\n");
+        let cgroupfs = format!("12:pids:/libpod_parent/libpod-{ID}\n");
+
+        assert!(parse_container_identity(&crio).is_none());
+        assert!(parse_container_identity(&scoped).is_none());
+        assert!(parse_container_identity(&cgroupfs).is_none());
+    }
+
+    #[test]
+    fn parse_container_kubepods_cgroupfs_leaf() {
+        let cgroup = format!("12:pids:/kubepods/besteffort/pod{POD_UID}/{ID}\n");
+        let identity = parse_container_identity(&cgroup).expect("cri leaf id");
+        assert_eq!(identity.runtime, ContainerRuntime::K8s);
+        assert_eq!(identity.container_id, ID);
+        assert_eq!(identity.pod_uid.as_deref(), Some(POD_UID));
+    }
+
+    #[test]
+    fn parse_container_pod_uid_is_never_the_container_id() {
+        // A pod directory without a container leaf must not yield an identity,
+        // and the pod UID must never be reported as a container id.
+        let cgroup = format!("0::/kubepods/besteffort/pod{POD_UID}\n");
+        assert!(parse_container_identity(&cgroup).is_none());
+
+        let uid_underscored = POD_UID.replace('-', "_");
+        let systemd_only_pod = format!(
+            "0::/kubepods.slice/kubepods-besteffort.slice/\
+             kubepods-besteffort-pod{uid_underscored}.slice\n"
+        );
+        assert!(parse_container_identity(&systemd_only_pod).is_none());
+    }
+
+    #[test]
+    fn parse_container_kata_agent_guest_layout() {
+        // Real fixture captured from a Kata guest via debug console: kata-agent
+        // lays workload cgroups out cgroup-v2 cgroupfs-style as
+        // `/<containerd-namespace>/<container-id>`. The guest daemon reads this
+        // from the guest root namespace (a container-internal read is masked to
+        // `0::/` by the cgroup namespace, so it must be read guest-side).
+        let k8s = format!("0::/k8s.io/{ID}\n");
+        let identity = parse_container_identity(&k8s).expect("kata k8s.io leaf");
+        assert_eq!(identity.runtime, ContainerRuntime::Containerd);
+        assert_eq!(identity.container_id, ID);
+
+        let default_ns = format!("0::/default/{ID}\n");
+        let identity = parse_container_identity(&default_ns).expect("kata default leaf");
+        assert_eq!(identity.runtime, ContainerRuntime::Containerd);
+        assert_eq!(identity.container_id, ID);
+    }
+
+    #[test]
+    fn parse_container_kata_agent_guest_v1_layout() {
+        let cgroup = format!(
+            "12:pids:/k8s.io/{ID}\n\
+             11:memory:/k8s.io/{ID}\n\
+             10:devices:/k8s.io/{ID}\n"
+        );
+        let identity = parse_container_identity(&cgroup).expect("kata v1 k8s.io leaf");
+        assert_eq!(identity.runtime, ContainerRuntime::Containerd);
+        assert_eq!(identity.container_id, ID);
+
+        let default_ns = format!(
+            "12:pids:/default/{ID}\n\
+             11:memory:/default/{ID}\n"
+        );
+        let identity = parse_container_identity(&default_ns).expect("kata v1 default leaf");
+        assert_eq!(identity.runtime, ContainerRuntime::Containerd);
+        assert_eq!(identity.container_id, ID);
+    }
+
+    #[test]
+    fn parse_container_kata_guest_system_paths_are_none() {
+        // Guest system services and init must NOT be mistaken for containers
+        // (their leaves are not container-id shaped).
+        assert!(parse_container_identity("0::/init.scope\n").is_none());
+        assert!(parse_container_identity("0::/system.slice/kata-agent.service\n").is_none());
+        assert!(parse_container_identity("0::/system.slice/systemd-journald.service\n").is_none());
+    }
+
     #[test]
     fn parse_container_host_is_none() {
         let cgroup = "0::/user.slice/user-1000.slice/session-3.scope\n";
         assert!(parse_container_identity(cgroup).is_none());
+    }
+
+    #[test]
+    fn containerized_heuristic_flags_unparsed_layouts_but_not_host() {
+        use super::cgroup_looks_containerized;
+        // Unmapped guest layouts (kata-agent style) must trip the backstop…
+        assert!(cgroup_looks_containerized("0::/vc/abc123\n"));
+        assert!(cgroup_looks_containerized("0::/kata_sandbox/agent\n"));
+        assert!(cgroup_looks_containerized("0::/default/guestprobe\n"));
+        assert!(cgroup_looks_containerized("0::/k8s.io/guestprobe\n"));
+        assert!(cgroup_looks_containerized(&format!(
+            "0::/kubepods/besteffort/pod{POD_UID}\n"
+        )));
+        assert!(parse_container_identity("0::/default/guestprobe\n").is_none());
+        assert!(parse_container_identity("0::/k8s.io/guestprobe\n").is_none());
+        // …while plain host paths stay clean.
+        assert!(!cgroup_looks_containerized(
+            "0::/user.slice/user-1000.slice/session-3.scope\n"
+        ));
+        assert!(!cgroup_looks_containerized("0::/init.scope\n"));
+        assert!(!cgroup_looks_containerized("0::/default\n"));
+        assert!(!cgroup_looks_containerized(""));
     }
 
     #[test]
