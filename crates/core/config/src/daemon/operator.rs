@@ -86,11 +86,21 @@ pub struct PluginDiscoveryConfig {
     pub manifest_max_bytes: u64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AlertWebhookConfig {
+    pub enabled: bool,
+    pub url: String,
+    pub auth_token: String,
+    pub timeout_ms: u64,
+    pub redact_sensitive_body: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PluginAlertRuntimeConfig {
     pub queue_capacity: u32,
     pub writes_per_cycle: u32,
     pub drain_timeout_ms: u64,
+    pub webhook: Option<AlertWebhookConfig>,
 }
 
 impl Default for PluginAlertRuntimeConfig {
@@ -99,6 +109,7 @@ impl Default for PluginAlertRuntimeConfig {
             queue_capacity: DEFAULT_PLUGIN_ALERT_QUEUE_CAPACITY,
             writes_per_cycle: DEFAULT_PLUGIN_ALERT_WRITES_PER_CYCLE,
             drain_timeout_ms: DEFAULT_PLUGIN_ALERT_DRAIN_TIMEOUT_MS,
+            webhook: None,
         }
     }
 }

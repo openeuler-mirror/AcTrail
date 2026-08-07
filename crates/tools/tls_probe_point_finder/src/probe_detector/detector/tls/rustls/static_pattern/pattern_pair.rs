@@ -25,6 +25,7 @@ pub(crate) struct PatternPairProbeDetector {
     arch_label: &'static str,
     patterns: [StaticPatternSpec; 2],
     verified_targets: Vec<VerifiedTarget>,
+    require_verified_identity: bool,
 }
 
 pub(crate) struct StaticPatternDetection {
@@ -75,7 +76,13 @@ impl PatternPairProbeDetector {
             arch_label,
             patterns,
             verified_targets,
+            require_verified_identity: false,
         }
+    }
+
+    pub(crate) fn requiring_verified_identity(mut self) -> Self {
+        self.require_verified_identity = true;
+        self
     }
 
     pub(crate) fn detect_outcome(
@@ -93,6 +100,20 @@ impl PatternPairProbeDetector {
             return DetectionOutcome::Inapplicable(
                 DetectionEvidence::new(self.path.clone(), context.target.architecture.clone())
                     .rejected("Rustls static-pattern candidate excluded by context"),
+            );
+        }
+        if self.require_verified_identity
+            && !self
+                .verified_targets
+                .iter()
+                .filter_map(|target| target.identity.as_ref())
+                .any(|identity| identity == context.probe.image.identity())
+        {
+            return DetectionOutcome::NoMatch(
+                DetectionEvidence::new(self.path.clone(), context.target.architecture.clone())
+                    .rejected(
+                        "Rustls static-pattern candidate requires a verified binary identity",
+                    ),
             );
         }
         let detection = match self.detect(context.probe.image, match_limit) {

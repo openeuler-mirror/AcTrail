@@ -7,6 +7,7 @@ license = "MulanPSL-2.0"
 [features]
 default = []
 perf-buffer = ["ebpf_collector/perf-buffer"]
+webhook-alert = ["dep:ureq"]
 
 [dependencies]
 alert_contract = { path = "../../contracts/alert" }
@@ -47,6 +48,7 @@ tls_payload_sync = { path = "../../core/tls_payload_sync" }
 tls_probe_point_finder = { path = "../../tools/tls_probe_point_finder" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
+ureq = { version = "3", default-features = false, features = ["json"], optional = true }
 toml = "0.8"
 uds_control_server = { path = "../../adapters/control/uds/server" }
 uds_control_client = { path = "../../adapters/control/uds/client" }

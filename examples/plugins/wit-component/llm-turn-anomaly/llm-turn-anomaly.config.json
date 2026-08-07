@@ -1,0 +1,35 @@
+{
+  "high_frequency": {
+    "enabled": true,
+    "window_size_ms": 60000,
+    "threshold": 30,
+    "min_exchanges": 10
+  },
+  "consecutive_retry": {
+    "enabled": true,
+    "consecutive_count": 3,
+    "min_request_bytes": 0
+  },
+  "repeated_similar": {
+    "enabled": true,
+    "similarity_window": 2,
+    "min_repeat_count": 2,
+    "similarity_tolerance_ratio_per_mille": 100
+  },
+  "error_ratio": {
+    "enabled": true,
+    "minimum_exchanges": 10,
+    "error_ratio_per_mille": 300
+  },
+  "context_growth": {
+    "enabled": true,
+    "growth_ratio_per_mille": 2000,
+    "minimum_baseline_bytes": 8192,
+    "minimum_growth_bytes": 32768,
+    "window_size": 5,
+    "minimum_samples": 3
+  },
+  "page_size": 256,
+  "trace_state_max_count": 256,
+  "finding_max_count": 100
+}

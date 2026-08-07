@@ -94,7 +94,15 @@ pub(super) fn run_observation_worker(
                 );
             }
             ObservationWorkItem::PostTrace(task) => {
-                scheduled.remove(&task.trace_id);
+                let was_scheduled = scheduled.remove(&task.trace_id).is_some();
+                tracing::debug!(
+                    trace_id = %task.trace_id,
+                    plugin_instance = %instance_id,
+                    timeout_ms = task.timeout_ms,
+                    was_scheduled,
+                    cancellation_requested = control.cancellation_requested(),
+                    "post-trace task received by worker"
+                );
                 if control.cancellation_requested() {
                     complete_cancelled_post_trace(
                         task.trace_id,
@@ -261,6 +269,13 @@ fn run_post_trace_task(
     completion_sender: &Sender<PostTraceCompletion>,
 ) {
     let trace_id = task.trace_id;
+    tracing::debug!(
+        trace_id = %trace_id,
+        plugin_instance = %instance_id,
+        timeout_ms = task.timeout_ms,
+        "post-trace task execution started"
+    );
+    let started_at = std::time::Instant::now();
     let result = catch_unwind(AssertUnwindSafe(|| {
         consumer
             .post_trace_analyzer()
@@ -282,14 +297,38 @@ fn run_post_trace_task(
         Err(_) if control.cancellation_requested() => Err(post_trace_cancelled()),
         result => result,
     };
+    let elapsed_ms = started_at.elapsed().as_millis();
+    match &result {
+        Ok(()) => tracing::debug!(
+            trace_id = %trace_id,
+            plugin_instance = %instance_id,
+            elapsed_ms,
+            "post-trace task execution succeeded"
+        ),
+        Err(error) => tracing::warn!(
+            trace_id = %trace_id,
+            plugin_instance = %instance_id,
+            elapsed_ms,
+            error.code = %error.code,
+            error.message = %error.message,
+            "post-trace task execution failed"
+        ),
+    }
     if let Err(error) = &result {
         store_last_error(metrics, Some(format!("{}: {}", error.code, error.message)));
     }
-    let _ = completion_sender.send(PostTraceCompletion {
+    let send_result = completion_sender.send(PostTraceCompletion {
         trace_id,
         instance_id: instance_id.to_string(),
         result,
     });
+    if let Err(error) = send_result {
+        tracing::error!(
+            trace_id = %trace_id,
+            plugin_instance = %instance_id,
+            "post-trace completion send failed: {error}"
+        );
+    }
 }
 
 fn complete_cancelled_post_trace(
@@ -298,6 +337,11 @@ fn complete_cancelled_post_trace(
     instance_id: &str,
     completion_sender: &Sender<PostTraceCompletion>,
 ) {
+    tracing::debug!(
+        trace_id = %trace_id,
+        plugin_instance = %instance_id,
+        "post-trace task cancelled"
+    );
     let error = post_trace_cancelled();
     store_last_error(metrics, Some(format!("{}: {}", error.code, error.message)));
     let _ = completion_sender.send(PostTraceCompletion {

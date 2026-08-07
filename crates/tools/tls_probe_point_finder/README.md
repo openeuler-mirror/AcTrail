@@ -92,6 +92,13 @@ Rustls stripped x86_64 probing uses these documented entry patterns:
 - `rustls_buffer_plaintext`, `CommonState::buffer_plaintext`, 27 bytes: `55 41 57 41 56 41 55 41 54 53 48 83 ec 28 49 89 d6 48 89 f3 4c 8b a7 08 03 00 00`
 - `rustls_take_received_plaintext`, `CommonState::take_received_plaintext`, 32 bytes: `41 57 41 56 41 54 53 50 49 89 ff c6 87 2e 03 00 00 20 4c 8b 26 4c 8b 76 08 4c 89 e0 48 f7 d8 48`
 
+Codex 0.145.0 and 0.146.0 x86_64 musl builds use the same 27-byte
+`rustls_buffer_plaintext` pattern above and this register-allocation variant for
+`rustls_take_received_plaintext`. This candidate is accepted only for the
+recorded ELF sample identities of those two Codex builds:
+
+- `rustls_take_received_plaintext`, 32 bytes: `41 57 41 56 41 55 41 54 53 49 89 ff c6 87 2e 03 00 00 20 4c 8b 2e 4c 8b 76 08 4c 89 e8 48 f7 d8`
+
 Rustls stripped aarch64 probing uses these documented entry patterns, collected from stripped `xiaoo`/`xiaoo-tui` aarch64 rustls 0.23.40 ThinLTO release binaries and verified with `pattern` as unique in both binaries:
 
 - `rustls_buffer_plaintext`, `CommonState::buffer_plaintext`, 52 bytes: `ff 83 01 d1 fd 7b 02 a9 f8 5f 03 a9 f6 57 04 a9 f4 4f 05 a9 fd 83 00 91 17 84 41 f9 08 00 f0 d2 f4 03 02 aa f3 03 01 aa f5 03 00 aa 08 84 01 f9 ff 02 08 eb`
