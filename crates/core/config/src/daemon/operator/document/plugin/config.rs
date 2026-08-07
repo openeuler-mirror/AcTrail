@@ -55,7 +55,6 @@ struct PluginAlertRuntimeDocument {
     queue_capacity: u32,
     writes_per_cycle: u32,
     drain_timeout_ms: u64,
-    webhook: Option<PluginAlertWebhookDocument>,
 }
 
 impl Default for PluginAlertRuntimeDocument {
@@ -64,7 +63,6 @@ impl Default for PluginAlertRuntimeDocument {
             queue_capacity: DEFAULT_PLUGIN_ALERT_QUEUE_CAPACITY,
             writes_per_cycle: DEFAULT_PLUGIN_ALERT_WRITES_PER_CYCLE,
             drain_timeout_ms: DEFAULT_PLUGIN_ALERT_DRAIN_TIMEOUT_MS,
-            webhook: None,
         }
     }
 }
@@ -75,10 +73,6 @@ impl PluginAlertRuntimeDocument {
             queue_capacity: config.queue_capacity,
             writes_per_cycle: config.writes_per_cycle,
             drain_timeout_ms: config.drain_timeout_ms,
-            webhook: config
-                .webhook
-                .as_ref()
-                .map(PluginAlertWebhookDocument::from_config),
         }
     }
 
@@ -92,11 +86,6 @@ impl PluginAlertRuntimeDocument {
                 "plugins.alerts.writes_per_cycle must not exceed queue_capacity".to_string(),
             );
         }
-        let webhook = self
-            .webhook
-            .as_ref()
-            .map(PluginAlertWebhookDocument::to_config)
-            .transpose()?;
         Ok(PluginAlertRuntimeConfig {
             queue_capacity,
             writes_per_cycle,
@@ -104,66 +93,6 @@ impl PluginAlertRuntimeDocument {
                 "plugins.alerts.drain_timeout_ms",
                 self.drain_timeout_ms,
             )?,
-            webhook,
-        })
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(default, deny_unknown_fields)]
-struct PluginAlertWebhookDocument {
-    enabled: bool,
-    url: String,
-    auth_token: String,
-    timeout_ms: u64,
-    redact_sensitive_body: bool,
-}
-
-impl Default for PluginAlertWebhookDocument {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            url: String::new(),
-            auth_token: String::new(),
-            timeout_ms: 5_000,
-            redact_sensitive_body: true,
-        }
-    }
-}
-
-impl PluginAlertWebhookDocument {
-    fn from_config(config: &AlertWebhookConfig) -> Self {
-        Self {
-            enabled: config.enabled,
-            url: config.url.clone(),
-            auth_token: config.auth_token.clone(),
-            timeout_ms: config.timeout_ms,
-            redact_sensitive_body: config.redact_sensitive_body,
-        }
-    }
-
-    fn to_config(&self) -> Result<AlertWebhookConfig, String> {
-        if !self.enabled {
-            return Ok(AlertWebhookConfig {
-                enabled: false,
-                url: String::new(),
-                auth_token: String::new(),
-                timeout_ms: 0,
-                redact_sensitive_body: true,
-            });
-        }
-        let url = required_non_empty("plugins.alerts.webhook.url", &self.url)?.to_string();
-        if !url.starts_with("http://") && !url.starts_with("https://") {
-            return Err(
-                "plugins.alerts.webhook.url must start with http:// or https://".to_string(),
-            );
-        }
-        Ok(AlertWebhookConfig {
-            enabled: true,
-            url,
-            auth_token: self.auth_token.clone(),
-            timeout_ms: require_positive_u64("plugins.alerts.webhook.timeout_ms", self.timeout_ms)?,
-            redact_sensitive_body: self.redact_sensitive_body,
         })
     }
 }

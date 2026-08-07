@@ -85,10 +85,6 @@ impl PostTraceCoordinator {
             .any(|key| key.instance_id == instance_id)
     }
 
-    pub(crate) fn has_running_tasks_for_trace(&self, trace_id: TraceId) -> bool {
-        self.running.keys().any(|key| key.trace_id == trace_id)
-    }
-
     pub(crate) fn running_instance_ids(&self) -> Vec<String> {
         self.running
             .keys()
@@ -277,13 +273,6 @@ impl PostTraceCoordinator {
         export_runtime: &ExportRuntime,
         storage: &mut dyn StorageBackend,
     ) -> Result<(), ControlError> {
-        tracing::debug!(
-            trace_id = %key.trace_id,
-            plugin_instance = %key.instance_id,
-            running_tasks = self.running.len(),
-            max_in_flight = self.max_in_flight_tasks,
-            "post-trace task enqueue started"
-        );
         let lease = storage
             .acquire_trace_lease(key.trace_id, TraceLeasePurpose::PostTraceAnalysis)
             .map_err(|error| ControlError::new(error.stage, error.message))?;
@@ -298,22 +287,9 @@ impl PostTraceCoordinator {
             storage
                 .release_trace_lease(lease)
                 .map_err(|release| ControlError::new(release.stage, release.message))?;
-            tracing::warn!(
-                trace_id = %key.trace_id,
-                plugin_instance = %key.instance_id,
-                error.code = %error.code,
-                error.message = %error.message,
-                "post-trace task enqueue failed"
-            );
             return Err(ControlError::new(error.code, error.message));
         }
         self.running.insert(key.clone(), lease);
-        tracing::debug!(
-            trace_id = %key.trace_id,
-            plugin_instance = %key.instance_id,
-            running_tasks = self.running.len(),
-            "post-trace task enqueue succeeded"
-        );
         Ok(())
     }
 }

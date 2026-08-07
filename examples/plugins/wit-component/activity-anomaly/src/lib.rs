@@ -726,7 +726,7 @@ fn build_alert_request(
         draft: AlertDraft {
             definition_key: definition_key.to_string(),
             payload_json,
-            deduplication_key: None,
+            deduplication_key: Some(definition_key.to_string()),
         },
     })
 }
@@ -914,9 +914,9 @@ mod tests {
         assert_eq!(request.trace_id, "trace-rule-test");
         assert_eq!(request.alert_token, b"alert-token");
         assert_eq!(request.draft.definition_key, definition_key);
-        assert!(
-            request.draft.deduplication_key.is_none(),
-            "{definition_key} alert must keep every event without a deduplication key"
+        assert_eq!(
+            request.draft.deduplication_key.as_deref(),
+            Some(definition_key)
         );
         let payload: serde_json::Value =
             serde_json::from_str(&request.draft.payload_json).expect("valid alert JSON");

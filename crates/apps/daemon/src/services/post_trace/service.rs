@@ -12,40 +12,11 @@ impl StorageAttachService {
     pub(in crate::services) fn drain_post_trace_runtime_impl(
         &mut self,
     ) -> Result<(), ControlError> {
-        let broker_processed = self
-            .post_trace_broker
-            .drain_requests(self.storage.as_mut())
-            .map_err(|error| {
-                tracing::warn!(
-                    error.code = %error.code,
-                    error.message = %error.message,
-                    "post-trace broker drain failed"
-                );
-                error
-            })?;
-        if broker_processed > 0 {
-            tracing::debug!(
-                requests_processed = broker_processed,
-                "post-trace broker drain completed"
-            );
-        }
+        self.post_trace_broker
+            .drain_requests(self.storage.as_mut())?;
         let outcomes = self
             .post_trace_coordinator
-            .drain_completions(&self.export_runtime, self.storage.as_mut())
-            .map_err(|error| {
-                tracing::warn!(
-                    error.code = %error.code,
-                    error.message = %error.message,
-                    "post-trace completion drain failed"
-                );
-                error
-            })?;
-        if !outcomes.is_empty() {
-            tracing::debug!(
-                completions_drained = outcomes.len(),
-                "post-trace completions drained"
-            );
-        }
+            .drain_completions(&self.export_runtime, self.storage.as_mut())?;
         for outcome in outcomes {
             match outcome.result {
                 Ok(()) => tracing::info!(
@@ -53,21 +24,12 @@ impl StorageAttachService {
                     plugin_instance = %outcome.instance_id,
                     "post-trace analysis completed"
                 ),
-                Err(error) => {
-                    tracing::warn!(
-                        trace_id = %outcome.trace_id,
-                        plugin_instance = %outcome.instance_id,
-                        error.code = %error.code,
-                        error.message = %error.message,
-                        "post-trace analysis failed"
-                    );
-                    self.persist_post_trace_issue(PostTraceIssue {
-                        trace_id: outcome.trace_id,
-                        instance_id: outcome.instance_id,
-                        code: error.code,
-                        message: error.message,
-                    })?;
-                }
+                Err(error) => self.persist_post_trace_issue(PostTraceIssue {
+                    trace_id: outcome.trace_id,
+                    instance_id: outcome.instance_id,
+                    code: error.code,
+                    message: error.message,
+                })?,
             }
         }
         Ok(())

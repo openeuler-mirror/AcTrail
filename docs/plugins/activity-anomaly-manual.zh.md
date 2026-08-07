@@ -228,7 +228,7 @@ sudo mv -- \
 - LLM 请求/响应完整且命中规则后立即生成告警；不等待 Agent trace 结束。
 - 运行中的 Agent 顶层命令达到阈值后由 observation worker 定时复评并立即生成告警，不等待命令或 trace 结束。
 - 运行态长命令 finding 使用 `status=in_progress`、`ended_at_ms=null`，并通过 `observed_at_ms` 记录命中时间。
-- 每次命中规则都会作为独立告警事件追加，同一个 trace 生命周期内多次命中同一类告警时每条都保留并展示，不会被按告警类型去重、覆盖或合并。
+- 每个 trace 的每类告警使用稳定幂等键，多个相同插件实例、延迟 observation 和终态兜底不会产生重复记录；终态分析只补充实时阶段尚未成功提交的告警。
 - 完整命令行依赖 seccomp notify 及 argv 投影完成时机；实时命中时尚未取得 argv 会只显示可执行文件。
 - 请求和响应的历史窗口按 trace、进程、模型、服务端和 URL 隔离。
 - 多容器场景中，各容器不会共享增长检测窗口。
