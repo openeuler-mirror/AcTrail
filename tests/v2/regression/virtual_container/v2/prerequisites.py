@@ -13,7 +13,7 @@ from tests.v2.common.kata_runtime import (
     resolve_deployment_artifacts,
     shim_binary,
 )
-from tests.v2.common.test_case import TestResult, TestStatus
+from tests.v2.common.core import TestResult, TestStatus
 
 from .config import VirtualContainerConfig
 

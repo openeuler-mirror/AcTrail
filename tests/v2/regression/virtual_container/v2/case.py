@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from tests.v2.common.output import has_failure
-from tests.v2.common.test_case import TestCase, TestResult, TestStatus
-from tests.v2.common.testing_context import TestingContextSingleton
+from tests.v2.common.core import has_failure, TestCase, TestResult, TestStatus
+from tests.v2.common.runner import TestingContextSingleton
 
 from .config import VirtualContainerConfig
 from .prerequisites import VirtualContainerPrerequisites

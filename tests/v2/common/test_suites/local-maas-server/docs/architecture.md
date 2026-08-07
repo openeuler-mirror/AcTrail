@@ -3,7 +3,7 @@
 ## 文件路径
 
 ```text
-tests/v2/common/test-suites/local-maas-server/
+tests/v2/common/test_suites/local-maas-server/
 ├── README.md
 ├── server.py
 ├── config.py

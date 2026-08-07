@@ -6,8 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from tests.v2.common.actrail_runtime import ActrailRuntime
-from tests.v2.common.output import TestOutput
-from tests.v2.common.test_case import TestResult, TestStatus
+from tests.v2.common.core import TestOutput, TestResult, TestStatus
 
 from .config import ToolConsecutiveFailureAlertConfig
 

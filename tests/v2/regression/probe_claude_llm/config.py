@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from tests.v2.common.config import CommonTestConfig, TestCaseInputs
+from tests.v2.common.core import CommonTestConfig, TestCaseInputs
 
 
 @dataclass(frozen=True)

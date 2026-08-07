@@ -87,6 +87,23 @@ runner 会显示进程或线程持有者并等待；进程内 lease 与文件锁
 AcTrail 产物。安装失败属于启动失败，runner 不会进入测例。`--bin-dir` 仍只控制测例
 使用的二进制目录，不改变安装脚本的目标目录。
 
+取得全局锁后、进入任何测例前，runner 会先打印一次宿主机环境摘要：
+
+```text
+environment:
+kernel_release=6.8.0-45-generic
+os=Ubuntu 24.04 LTS
+machine=x86_64
+hostname=node-01
+python=3.11.14
+```
+
+`kernel_release` 即 `uname -r` 的输出；`os` 取自 `/etc/os-release` 的
+`PRETTY_NAME`；其余字段分别为 CPU 架构、主机名和 Python 版本。各测例目录下的
+`run_e2e.py` 独立入口与 `test_all.py` 都经过同一公共 runner
+（`tests/v2/common/runner/`），因此两种运行方式都会在开头输出同样的环境摘要。
+探测为尽力收集：字段缺失或读取失败时跳过该字段并继续，不影响测试启动。
+
 `test_all.py` 在 TTY 中只用短 step 名原地刷新每个测例的当前步骤和最终结果；step
 说明、stdout、stderr、命令输出及详细检查结果统一写入
 `<log-dir>/<case>.log`。

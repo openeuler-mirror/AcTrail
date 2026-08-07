@@ -8,7 +8,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(REPO))
 
-from tests.v2.common.runner import TestDefinition, run_one  # noqa: E402
+from tests.v2.common.runner import TestDefinition, run_one
 from tests.v2.regression.probe_codex_mcp.case import (  # noqa: E402
     ProbeCodexMcpCase,
 )

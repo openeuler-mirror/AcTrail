@@ -1,12 +1,26 @@
 from __future__ import annotations
 
 from abc import ABC, ABCMeta, abstractmethod
+from dataclasses import dataclass, field
+from enum import Enum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from tests.v2.common.testing_context import TestingContextSingleton
+    from tests.v2.common.runner.testing_context import TestingContextSingleton
 
-from .test_result import TestResult
+
+class TestStatus(Enum):
+    SKIPPED = "skipped"
+    PASSED = "passed"
+    FAILED = "failed"
+    COMPOSITE = "composite"  # For composite test cases that contain multiple sub-tests
+
+
+@dataclass
+class TestResult:
+    status: TestStatus
+    message: str = ""
+    details: dict[str, "TestResult"] = field(default_factory=dict)
 
 
 class TestCaseMeta(ABCMeta):
@@ -59,3 +73,6 @@ class TestCase(ABC, metaclass=TestCaseMeta):
         Cases that manage cleanup internally may keep the default no-op hook.
         """
         return None
+
+
+__all__ = ["TestCase", "TestResult", "TestStatus"]

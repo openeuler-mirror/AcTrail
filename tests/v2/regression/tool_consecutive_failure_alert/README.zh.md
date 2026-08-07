@@ -65,10 +65,12 @@ sudo -E python3.11 \
 10. 安装包轮：临时卸载仓库实例，仅加载安装目录实例跑一轮正向（同一时刻
     只保留一个实例，避免两个实例对同一批事件各提交一条重复告警），断言
     安装产物可用；完成后恢复仓库实例。
-11. 真实 Agent 轮（可选）：探测 `xiaoo`/`pi`/`opencode`/`claude`/`codex`，
-    用统一提示词驱动其执行三条失败命令，最多重试两次。无可用 Agent 或
-    Agent 未实际执行失败命令时 `SKIPPED`；Agent 执行了失败命令但无告警
-    落库则 `FAILED`。
+11. 真实 Agent 轮（可选）：按顺序选择第一个找到的 agent 二进制
+    （`xiaoo`/`pi`/`opencode`/`claude`/`codex`），不再逐个真实探测；设置
+    `ACTRAIL_TEST_AGENT_PROBE_ALL=1` 可恢复逐候选真实探测。用统一提示词
+    驱动选中 agent 执行三条失败命令，最多重试两次。无可用 Agent 或 Agent
+    未实际执行失败命令时 `SKIPPED`；Agent 执行了失败命令但无告警落库则
+    `FAILED`。
 12. 卸载插件、停止 daemon、清理。
 
 # 手动测试

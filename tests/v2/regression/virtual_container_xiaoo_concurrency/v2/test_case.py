@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.v2.common.config import TestCaseInputs
+from tests.v2.common.core import TestCaseInputs
 from tests.v2.regression.virtual_container_xiaoo_concurrency.v2.case import (
     VirtualContainerXiaooConcurrencyCase,
 )

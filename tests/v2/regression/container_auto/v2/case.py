@@ -3,8 +3,8 @@ from __future__ import annotations
 import shutil
 import subprocess
 
-from tests.v2.common.test_case import TestCase, TestResult, TestStatus
-from tests.v2.common.testing_context import TestingContextSingleton
+from tests.v2.common.core import TestCase, TestResult, TestStatus
+from tests.v2.common.runner import TestingContextSingleton
 
 from .config import ContainerAutoConfig
 from .auto_scenario import ContainerAutoScenario

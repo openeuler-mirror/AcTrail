@@ -11,6 +11,13 @@ from typing import Any
 
 STDIO_CAPTURE_ABI_MAX_BYTES = 4095
 
+_MCP_PROBE_SERVER = (
+    Path(__file__).resolve().parents[1]
+    / "test_suite_tools"
+    / "mcp"
+    / "mcp_probe_server.py"
+)
+
 
 @dataclass(frozen=True)
 class McpProbeSpec:
@@ -53,10 +60,7 @@ class McpProbeWorkspace:
         case_name: str,
     ) -> None:
         self._repo = repo.resolve()
-        self._probe_script = (
-            self._repo
-            / "tests/v2/common/test-suite-tools/mcp/mcp_probe_server.py"
-        )
+        self._probe_script = _MCP_PROBE_SERVER
         if not self._probe_script.is_file():
             raise RuntimeError(
                 f"repository-owned MCP probe server is missing: {self._probe_script}"

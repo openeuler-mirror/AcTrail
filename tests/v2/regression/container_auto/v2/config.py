@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-from tests.v2.common.config import TestCaseInputs
+from tests.v2.common.core import TestCaseInputs
 
 
 @dataclass(frozen=True)

@@ -5,7 +5,7 @@
 HTTPS 默认使用 OpenSSL 生成临时 CA 和服务端证书，并在临时端口 best-effort 启动：
 
 ```bash
-python3 tests/v2/common/test-suites/local-maas-server/server.py \
+python3 tests/v2/common/test_suites/local-maas-server/server.py \
   --scenario alternating-message-loop \
   --http-bind-port 20000
 ```
@@ -15,7 +15,7 @@ python3 tests/v2/common/test-suites/local-maas-server/server.py \
 固定 HTTPS 端口：
 
 ```bash
-python3 tests/v2/common/test-suites/local-maas-server/server.py \
+python3 tests/v2/common/test_suites/local-maas-server/server.py \
   --scenario alternating-message-loop \
   --http-bind-port 20000 \
   --https-bind-port 30000

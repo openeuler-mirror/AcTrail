@@ -9,14 +9,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, TextIO
 
-from .config import TestCaseInputs
-from .output import (
+from ..core import (
     CaseProgressReporter,
+    TestCase,
+    TestCaseInputs,
     TestOutput,
+    TestResult,
+    TestStatus,
     effective_status,
     has_failure,
 )
-from .test_case import TestCase, TestResult, TestStatus
+from .environment_probe import EnvironmentProbe
 from .testing_context import TestingContextSingleton
 
 
@@ -175,6 +178,10 @@ def run_selected(
             TestResult(TestStatus.FAILED, str(error)),
         )
         return 1
+    try:
+        EnvironmentProbe(console).print_summary()
+    except Exception as error:
+        console.line(f"environment_probe=failed: {error}")
     try:
         try:
             context.prepare_release(repo)

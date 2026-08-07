@@ -92,7 +92,9 @@ if [[ -z "$prebuilt_musl_runtime" ]] && ! rustup target list --installed | grep 
 fi
 
 if [[ "$musl_only" -eq 0 ]]; then
-  run cargo build --release -p tls_payload_probe_sync --lib
+  # Host runtime comes from the plain full-workspace build so fingerprints
+  # stay identical to a normal `cargo build --release` (no -p flip-flop).
+  run cargo build --release
 fi
 
 musl_output="$runtime_output_dir/libactrail_tls_payload_probe_sync-musl.so"
