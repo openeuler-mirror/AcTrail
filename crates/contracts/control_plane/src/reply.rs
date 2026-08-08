@@ -69,7 +69,7 @@ pub struct LaunchTlsPlanDescriptor {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LaunchTlsPlanStatus {
-    Found(LaunchTlsPlanDescriptor),
+    Found(Vec<LaunchTlsPlanDescriptor>),
     Unsupported { reason: String },
 }
 

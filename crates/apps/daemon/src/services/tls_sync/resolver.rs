@@ -15,8 +15,9 @@ use tls_payload_sync::{
     PlanLookupResponse, RuntimePlanDescriptor, encode_points, validate_native_backend_plan,
 };
 use tls_probe_point_finder::fast::{
-    ArchFilter, FastProbeRequest, ProbeConsumer, ProviderFilter, SourceFilter, resolve_for_consumer,
+    ArchFilter, FastProbeRequest, ProbeConsumer, ProviderFilter, SourceFilter,
 };
+use tls_probe_point_finder::{ResolveMode, resolve_plans};
 
 use super::plan_store::{
     BinaryPlanDescriptor, BinaryPlanKey, BinaryPlanRecord, BinaryPlanStore, InMemoryBinaryPlanStore,
@@ -50,9 +51,9 @@ struct TlsSyncPlanWorker {
 
 struct PlanLookupOutcome {
     response: PlanLookupResponse,
+    launch_plans: Vec<LaunchTlsPlanDescriptor>,
     cache_hit: bool,
     elapsed: Duration,
-    source: Option<String>,
 }
 
 struct LaunchPlanLookupOutcome {
@@ -248,7 +249,7 @@ impl TlsSyncPlanWorker {
                 );
             }
         }
-        let cached = match self.resolve_plan(key.path(), consumer) {
+        let cached = match self.resolve_plans(key.path(), consumer) {
             Ok(plan) => BinaryPlanRecord::Found(plan),
             Err(error) => {
                 tracing::warn!(
@@ -274,12 +275,12 @@ impl TlsSyncPlanWorker {
         outcome
     }
 
-    fn resolve_plan(
+    fn resolve_plans(
         &self,
         binary: &Path,
         consumer: ProbeConsumer,
-    ) -> Result<BinaryPlanDescriptor, ControlError> {
-        let plan = resolve_for_consumer(
+    ) -> Result<Vec<BinaryPlanDescriptor>, ControlError> {
+        let resolution = resolve_plans(
             FastProbeRequest {
                 binary: binary.to_path_buf(),
                 arch: ArchFilter::Auto,
@@ -290,19 +291,32 @@ impl TlsSyncPlanWorker {
                 library_search_dirs: Vec::new(),
             },
             consumer,
+            ResolveMode::All,
         )
         .map_err(|error| ControlError::new("tls_sync_plan", error.to_string()))?;
-        validate_native_backend_plan(&plan)
-            .map_err(|error| ControlError::new("tls_sync_plan", error.to_string()))?;
-        Ok(BinaryPlanDescriptor {
-            binary: plan.binary.path.clone(),
-            target_identity: plan.target.identity.clone(),
-            binary_identity: plan.binary.identity.clone(),
-            provider: plan.provider.as_str().to_string(),
-            source: plan.source.as_str().to_string(),
-            points: encode_points(&plan)
-                .map_err(|error| ControlError::new("tls_sync_plan", error.to_string()))?,
-        })
+        if resolution.plans.is_empty() {
+            return Err(ControlError::new(
+                "tls_sync_plan",
+                "no supported TLS payload probe points found",
+            ));
+        }
+        resolution
+            .plans
+            .into_iter()
+            .map(|plan| {
+                validate_native_backend_plan(&plan)
+                    .map_err(|error| ControlError::new("tls_sync_plan", error.to_string()))?;
+                Ok(BinaryPlanDescriptor {
+                    binary: plan.binary.path.clone(),
+                    target_identity: plan.target.identity.clone(),
+                    binary_identity: plan.binary.identity.clone(),
+                    provider: plan.provider.as_str().to_string(),
+                    source: plan.source.as_str().to_string(),
+                    points: encode_points(&plan)
+                        .map_err(|error| ControlError::new("tls_sync_plan", error.to_string()))?,
+                })
+            })
+            .collect()
     }
 }
 
@@ -324,27 +338,43 @@ fn outcome_for_record(
     started: Instant,
 ) -> PlanLookupOutcome {
     match record {
-        BinaryPlanRecord::Found(plan) => {
-            let source = plan.source.clone();
-            PlanLookupOutcome {
-                response: PlanLookupResponse::Found(RuntimePlanDescriptor {
+        BinaryPlanRecord::Found(plans) => {
+            let mut launch_plans = Vec::with_capacity(plans.len());
+            let mut response = None;
+            for plan in plans {
+                let descriptor = RuntimePlanDescriptor {
                     target: runtime_binary.to_path_buf(),
                     target_identity: plan.target_identity,
                     binary: runtime_view_binary(&plan.binary, runtime_binary, probe_binary),
                     binary_identity: plan.binary_identity,
                     provider: plan.provider,
                     points: plan.points,
-                }),
+                };
+                if response.is_none() {
+                    response = Some(PlanLookupResponse::Found(descriptor.clone()));
+                }
+                launch_plans.push(LaunchTlsPlanDescriptor {
+                    target: descriptor.target,
+                    target_identity: descriptor.target_identity,
+                    binary: descriptor.binary,
+                    binary_identity: descriptor.binary_identity,
+                    provider: descriptor.provider,
+                    source: plan.source,
+                    points: descriptor.points,
+                });
+            }
+            PlanLookupOutcome {
+                response: response.expect("Found record has at least one plan"),
+                launch_plans,
                 cache_hit,
                 elapsed: started.elapsed(),
-                source: Some(source),
             }
         }
         BinaryPlanRecord::Unsupported(reason) => PlanLookupOutcome {
             response: PlanLookupResponse::Unsupported { reason },
+            launch_plans: Vec::new(),
             cache_hit,
             elapsed: started.elapsed(),
-            source: None,
         },
     }
 }
@@ -352,24 +382,21 @@ fn outcome_for_record(
 fn unsupported_outcome(reason: String, started: Instant) -> PlanLookupOutcome {
     PlanLookupOutcome {
         response: PlanLookupResponse::Unsupported { reason },
+        launch_plans: Vec::new(),
         cache_hit: false,
         elapsed: started.elapsed(),
-        source: None,
     }
 }
 
 fn launch_reply_for_outcome(outcome: PlanLookupOutcome) -> LaunchTlsPlanReply {
-    let status = match outcome.response {
-        PlanLookupResponse::Found(plan) => LaunchTlsPlanStatus::Found(LaunchTlsPlanDescriptor {
-            target: plan.target,
-            target_identity: plan.target_identity,
-            binary: plan.binary,
-            binary_identity: plan.binary_identity,
-            provider: plan.provider,
-            source: outcome.source.unwrap_or_else(|| "unknown".to_string()),
-            points: plan.points,
-        }),
-        PlanLookupResponse::Unsupported { reason } => LaunchTlsPlanStatus::Unsupported { reason },
+    let status = if outcome.launch_plans.is_empty() {
+        let reason = match outcome.response {
+            PlanLookupResponse::Unsupported { reason } => reason,
+            PlanLookupResponse::Found(_) => "empty TLS plan set".to_string(),
+        };
+        LaunchTlsPlanStatus::Unsupported { reason }
+    } else {
+        LaunchTlsPlanStatus::Found(outcome.launch_plans)
     };
     LaunchTlsPlanReply {
         status,

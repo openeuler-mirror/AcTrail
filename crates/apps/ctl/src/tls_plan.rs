@@ -13,8 +13,8 @@ use crate::transport::ControlClientPort;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct QueriedLaunchTlsPlan {
-    pub(crate) descriptor: RuntimePlanDescriptor,
-    pub(crate) source: String,
+    pub(crate) descriptors: Vec<RuntimePlanDescriptor>,
+    pub(crate) sources: Vec<String>,
     pub(crate) cache_hit: bool,
     pub(crate) resolve_elapsed_micros: u64,
 }
@@ -43,16 +43,20 @@ pub(crate) fn queried_plan_from_reply(
     reply: LaunchTlsPlanReply,
 ) -> Result<Option<QueriedLaunchTlsPlan>, String> {
     match reply.status {
-        LaunchTlsPlanStatus::Found(plan) => Ok(Some(QueriedLaunchTlsPlan {
-            descriptor: RuntimePlanDescriptor {
-                target: plan.target,
-                target_identity: plan.target_identity,
-                binary: plan.binary,
-                binary_identity: plan.binary_identity,
-                provider: plan.provider,
-                points: plan.points,
-            },
-            source: plan.source,
+        LaunchTlsPlanStatus::Found(plans) if plans.is_empty() => Ok(None),
+        LaunchTlsPlanStatus::Found(plans) => Ok(Some(QueriedLaunchTlsPlan {
+            descriptors: plans
+                .iter()
+                .map(|plan| RuntimePlanDescriptor {
+                    target: plan.target.clone(),
+                    target_identity: plan.target_identity.clone(),
+                    binary: plan.binary.clone(),
+                    binary_identity: plan.binary_identity.clone(),
+                    provider: plan.provider.clone(),
+                    points: plan.points.clone(),
+                })
+                .collect(),
+            sources: plans.iter().map(|plan| plan.source.clone()).collect(),
             cache_hit: reply.cache_hit,
             resolve_elapsed_micros: reply.resolve_elapsed_micros,
         })),

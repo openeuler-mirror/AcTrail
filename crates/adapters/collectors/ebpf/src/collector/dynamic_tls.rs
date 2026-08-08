@@ -11,7 +11,7 @@ use super::{EbpfCollector, loader_error};
 
 #[derive(Debug, Default)]
 pub(super) struct DynamicTlsAttacher {
-    attached: BTreeSet<BinaryIdentity>,
+    attached: BTreeSet<(BinaryIdentity, String, String)>,
 }
 
 impl DynamicTlsAttacher {
@@ -20,13 +20,18 @@ impl DynamicTlsAttacher {
         runtime: &mut EbpfRuntime,
         plan: &DynamicTlsProbePlan,
     ) -> Result<(), CollectorError> {
-        if self.attached.contains(&plan.binary_identity) {
+        let key = (
+            plan.binary_identity.clone(),
+            plan.provider.clone(),
+            plan.points.clone(),
+        );
+        if self.attached.contains(&key) {
             return Ok(());
         }
         runtime
             .attach_dynamic_tls_plan(plan)
             .map_err(loader_error)?;
-        self.attached.insert(plan.binary_identity.clone());
+        self.attached.insert(key);
         Ok(())
     }
 }

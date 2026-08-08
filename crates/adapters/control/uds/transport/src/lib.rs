@@ -60,9 +60,9 @@ pub fn encode_command(command: &ControlCommand) -> Vec<u8> {
         ControlCommand::TrackAdd(command) => {
             fields.push(
                 if command.launch_mode {
-                    "track_add_v5"
+                    "track_add_v6"
                 } else {
-                    "track_add_v4"
+                    "track_add_v5"
                 }
                 .to_string(),
             );
@@ -76,8 +76,8 @@ pub fn encode_command(command: &ControlCommand) -> Vec<u8> {
                 fields.push(suppressed_fd.fd.to_string());
                 fields.push(suppressed_fd.purpose.as_str().to_string());
             }
-            if let Some(plan) = &command.tls_probe_plan {
-                fields.push("1".to_string());
+            fields.push(command.tls_probe_plans.len().to_string());
+            for plan in &command.tls_probe_plans {
                 fields.push(plan.target.display().to_string());
                 fields.push(plan.target_identity.identity_type_code.code().to_string());
                 fields.push(plan.target_identity.identity.clone());
@@ -86,8 +86,6 @@ pub fn encode_command(command: &ControlCommand) -> Vec<u8> {
                 fields.push(plan.binary_identity.identity.clone());
                 fields.push(plan.provider.clone());
                 fields.push(plan.points.clone());
-            } else {
-                fields.push("0".to_string());
             }
             fields.push(command.tags.len().to_string());
             fields.extend(command.tags.iter().cloned());
@@ -203,7 +201,7 @@ pub fn decode_command(bytes: &[u8]) -> Result<ControlCommand, ControlCodecError>
                 tags,
                 launch_mode,
                 initial_suppressed_fds: Vec::new(),
-                tls_probe_plan: None,
+                tls_probe_plans: Vec::new(),
             }))
         }
         "track_add_v2" => {
@@ -236,7 +234,7 @@ pub fn decode_command(bytes: &[u8]) -> Result<ControlCommand, ControlCodecError>
                 tags,
                 launch_mode,
                 initial_suppressed_fds,
-                tls_probe_plan: None,
+                tls_probe_plans: Vec::new(),
             }))
         }
         "track_add_v3" => {
@@ -269,7 +267,7 @@ pub fn decode_command(bytes: &[u8]) -> Result<ControlCommand, ControlCodecError>
                 tags,
                 launch_mode,
                 initial_suppressed_fds,
-                tls_probe_plan: None,
+                tls_probe_plans: Vec::new(),
             }))
         }
         "track_add_v4" | "track_add_v5" => {
@@ -288,7 +286,8 @@ pub fn decode_command(bytes: &[u8]) -> Result<ControlCommand, ControlCodecError>
                 initial_suppressed_fds.push(InitialSuppressedFd { fd, purpose });
                 cursor += 2;
             }
-            let tls_probe_plan = if field(&fields, cursor)? == "1" {
+            let mut tls_probe_plans = Vec::new();
+            if field(&fields, cursor)? == "1" {
                 cursor += 1;
                 let plan = LaunchTlsProbePlan {
                     target: PathBuf::from(field(&fields, cursor)?),
@@ -299,11 +298,10 @@ pub fn decode_command(bytes: &[u8]) -> Result<ControlCommand, ControlCodecError>
                     points: field(&fields, cursor + 7)?.clone(),
                 };
                 cursor += 8;
-                Some(plan)
+                tls_probe_plans.push(plan);
             } else {
                 cursor += 1;
-                None
-            };
+            }
             let tag_count = parse_usize(field(&fields, cursor)?, "tag_count")?;
             cursor += 1;
             let mut tags = BTreeSet::new();
@@ -318,7 +316,55 @@ pub fn decode_command(bytes: &[u8]) -> Result<ControlCommand, ControlCodecError>
                 tags,
                 launch_mode,
                 initial_suppressed_fds,
-                tls_probe_plan,
+                tls_probe_plans,
+            }))
+        }
+        "track_add_v6" => {
+            let request_id = RequestId::new(parse_u64(field(&fields, 1)?, "request_id")?);
+            let root = decode_process_ref(&fields, 2)?;
+            let display_name = TraceName::new(field(&fields, 4)?);
+            let profile_name = ProfileName::new(field(&fields, 5)?);
+            let launch_mode = parse_bool(field(&fields, 6)?, "launch_mode")?;
+            let suppressed_count = parse_usize(field(&fields, 7)?, "suppressed_fd_count")?;
+            let mut cursor = 8;
+            let mut initial_suppressed_fds = Vec::new();
+            for _ in 0..suppressed_count {
+                let fd = parse_i32(field(&fields, cursor)?, "suppressed_fd")?;
+                let purpose = SuppressedFdPurpose::from_str(field(&fields, cursor + 1)?)
+                    .map_err(|error| ControlCodecError::new("decode", error))?;
+                initial_suppressed_fds.push(InitialSuppressedFd { fd, purpose });
+                cursor += 2;
+            }
+            let plan_count = parse_usize(field(&fields, cursor)?, "tls_probe_plan_count")?;
+            cursor += 1;
+            let mut tls_probe_plans = Vec::with_capacity(plan_count);
+            for _ in 0..plan_count {
+                let plan = LaunchTlsProbePlan {
+                    target: PathBuf::from(field(&fields, cursor)?),
+                    target_identity: decode_binary_identity(&fields, cursor + 1, "target")?,
+                    binary: PathBuf::from(field(&fields, cursor + 3)?),
+                    binary_identity: decode_binary_identity(&fields, cursor + 4, "binary")?,
+                    provider: field(&fields, cursor + 6)?.clone(),
+                    points: field(&fields, cursor + 7)?.clone(),
+                };
+                tls_probe_plans.push(plan);
+                cursor += 8;
+            }
+            let tag_count = parse_usize(field(&fields, cursor)?, "tag_count")?;
+            cursor += 1;
+            let mut tags = BTreeSet::new();
+            for offset in 0..tag_count {
+                tags.insert(field(&fields, cursor + offset)?.clone());
+            }
+            Ok(ControlCommand::TrackAdd(TrackAddCommand {
+                request_id,
+                root,
+                display_name,
+                profile_name,
+                tags,
+                launch_mode,
+                initial_suppressed_fds,
+                tls_probe_plans,
             }))
         }
         "register_seccomp_listener" => Ok(ControlCommand::RegisterSeccompListener(
@@ -434,21 +480,24 @@ pub fn encode_reply(reply: &Result<ControlReply, ControlError>) -> Vec<u8> {
             permission::encode_reply(&mut fields, reply);
         }
         Ok(ControlReply::LaunchTlsPlan(reply)) => {
-            fields.push("reply_launch_tls_plan_v2".to_string());
+            fields.push("reply_launch_tls_plan_v3".to_string());
             fields.push(reply.cache_hit.to_string());
             fields.push(reply.resolve_elapsed_micros.to_string());
             match &reply.status {
-                LaunchTlsPlanStatus::Found(plan) => {
+                LaunchTlsPlanStatus::Found(plans) => {
                     fields.push("found".to_string());
-                    fields.push(plan.target.display().to_string());
-                    fields.push(plan.target_identity.identity_type_code.code().to_string());
-                    fields.push(plan.target_identity.identity.clone());
-                    fields.push(plan.binary.display().to_string());
-                    fields.push(plan.binary_identity.identity_type_code.code().to_string());
-                    fields.push(plan.binary_identity.identity.clone());
-                    fields.push(plan.provider.clone());
-                    fields.push(plan.source.clone());
-                    fields.push(plan.points.clone());
+                    fields.push(plans.len().to_string());
+                    for plan in plans {
+                        fields.push(plan.target.display().to_string());
+                        fields.push(plan.target_identity.identity_type_code.code().to_string());
+                        fields.push(plan.target_identity.identity.clone());
+                        fields.push(plan.binary.display().to_string());
+                        fields.push(plan.binary_identity.identity_type_code.code().to_string());
+                        fields.push(plan.binary_identity.identity.clone());
+                        fields.push(plan.provider.clone());
+                        fields.push(plan.source.clone());
+                        fields.push(plan.points.clone());
+                    }
                 }
                 LaunchTlsPlanStatus::Unsupported { reason } => {
                     fields.push("unsupported".to_string());
@@ -540,7 +589,7 @@ pub fn decode_reply(bytes: &[u8]) -> Result<Result<ControlReply, ControlError>, 
         "reply_launch_permissions_v2" => permission::decode_reply(&fields).map(Ok),
         "reply_launch_tls_plan_v2" => {
             let status = match field(&fields, 3)?.as_str() {
-                "found" => LaunchTlsPlanStatus::Found(LaunchTlsPlanDescriptor {
+                "found" => LaunchTlsPlanStatus::Found(vec![LaunchTlsPlanDescriptor {
                     target: PathBuf::from(field(&fields, 4)?),
                     target_identity: decode_binary_identity(&fields, 5, "target")?,
                     binary: PathBuf::from(field(&fields, 7)?),
@@ -548,7 +597,44 @@ pub fn decode_reply(bytes: &[u8]) -> Result<Result<ControlReply, ControlError>, 
                     provider: field(&fields, 10)?.clone(),
                     source: field(&fields, 11)?.clone(),
                     points: field(&fields, 12)?.clone(),
-                }),
+                }]),
+                "unsupported" => LaunchTlsPlanStatus::Unsupported {
+                    reason: field(&fields, 4)?.clone(),
+                },
+                _ => {
+                    return Err(ControlCodecError::new(
+                        "decode",
+                        "invalid launch TLS plan status",
+                    ));
+                }
+            };
+            Ok(Ok(ControlReply::LaunchTlsPlan(LaunchTlsPlanReply {
+                cache_hit: parse_bool(field(&fields, 1)?, "cache_hit")?,
+                resolve_elapsed_micros: parse_u64(field(&fields, 2)?, "resolve_elapsed_micros")?,
+                status,
+            })))
+        }
+        "reply_launch_tls_plan_v3" => {
+            let status = match field(&fields, 3)?.as_str() {
+                "found" => {
+                    let count = parse_usize(field(&fields, 4)?, "tls_plan_count")?;
+                    let mut cursor = 5;
+                    let mut plans = Vec::with_capacity(count);
+                    for _ in 0..count {
+                        let plan = LaunchTlsPlanDescriptor {
+                            target: PathBuf::from(field(&fields, cursor)?),
+                            target_identity: decode_binary_identity(&fields, cursor + 1, "target")?,
+                            binary: PathBuf::from(field(&fields, cursor + 3)?),
+                            binary_identity: decode_binary_identity(&fields, cursor + 4, "binary")?,
+                            provider: field(&fields, cursor + 6)?.clone(),
+                            source: field(&fields, cursor + 7)?.clone(),
+                            points: field(&fields, cursor + 8)?.clone(),
+                        };
+                        plans.push(plan);
+                        cursor += 9;
+                    }
+                    LaunchTlsPlanStatus::Found(plans)
+                }
                 "unsupported" => LaunchTlsPlanStatus::Unsupported {
                     reason: field(&fields, 4)?.clone(),
                 },
@@ -998,7 +1084,7 @@ mod tests {
                 fd: 3,
                 purpose: SuppressedFdPurpose::TlsSyncEvent,
             }],
-            tls_probe_plan: None,
+            tls_probe_plans: Vec::new(),
         });
 
         let decoded = decode_command(&encode_command(&command)).expect("decode command");

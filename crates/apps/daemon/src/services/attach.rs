@@ -464,8 +464,8 @@ impl StorageAttachService {
                 return Err(ControlError::new(error.stage, error.message));
             }
 
-            if let Some(plan) = &command.tls_probe_plan {
-                let plan = DynamicTlsProbePlan {
+            for plan in &command.tls_probe_plans {
+                let dynamic_plan = DynamicTlsProbePlan {
                     target: plan.target.clone(),
                     target_identity: plan.target_identity.clone(),
                     binary: plan.binary.clone(),
@@ -473,7 +473,7 @@ impl StorageAttachService {
                     provider: plan.provider.clone(),
                     points: plan.points.clone(),
                 };
-                if let Err(error) = self.collector.attach_dynamic_tls_plan(&plan) {
+                if let Err(error) = self.collector.attach_dynamic_tls_plan(&dynamic_plan) {
                     if command.launch_mode {
                         let _ = self.collector.unbind_trace(bootstrap.trace_id);
                     }

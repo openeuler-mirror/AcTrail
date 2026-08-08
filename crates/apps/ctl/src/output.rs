@@ -12,16 +12,22 @@ pub fn format_reply(reply: &ControlReply) -> String {
             reply.degraded
         ),
         ControlReply::LaunchTlsPlan(reply) => match &reply.status {
-            LaunchTlsPlanStatus::Found(plan) => format!(
-                "tls plan cache={} daemon_elapsed_us={} target={} binary={} provider={} source={} point_count={}",
-                if reply.cache_hit { "hit" } else { "miss" },
-                reply.resolve_elapsed_micros,
-                plan.target.display(),
-                plan.binary.display(),
-                plan.provider,
-                plan.source,
-                point_count(&plan.points)
-            ),
+            LaunchTlsPlanStatus::Found(plans) => plans
+                .iter()
+                .map(|plan| {
+                    format!(
+                        "tls plan cache={} daemon_elapsed_us={} target={} binary={} provider={} source={} point_count={}",
+                        if reply.cache_hit { "hit" } else { "miss" },
+                        reply.resolve_elapsed_micros,
+                        plan.target.display(),
+                        plan.binary.display(),
+                        plan.provider,
+                        plan.source,
+                        point_count(&plan.points)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
             LaunchTlsPlanStatus::Unsupported { reason } => format!(
                 "tls plan cache={} daemon_elapsed_us={} unsupported={}",
                 if reply.cache_hit { "hit" } else { "miss" },

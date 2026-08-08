@@ -394,7 +394,7 @@ fn track_workload(
             tags: BTreeSet::new(),
             launch_mode: false,
             initial_suppressed_fds: Vec::new(),
-            tls_probe_plan: None,
+            tls_probe_plans: Vec::new(),
         }),
     )?;
     let ControlReply::TrackAdded(reply) = reply else {
