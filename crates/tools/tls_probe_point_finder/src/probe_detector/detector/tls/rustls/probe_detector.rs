@@ -11,6 +11,7 @@ use crate::probe_detector::contract::selection::DetectionSelector;
 use super::RustlsProbeDetectorConfig;
 use super::static_pattern::RustlsStaticPatternProbeDetector;
 use super::symbol::RustlsSymbolProbeDetector;
+use crate::probe_detector::detector::tls::ExecutablePatternRegistration;
 
 pub(crate) const NAME: &str = "rustls";
 pub(crate) const RESOLVER: &str = "rustls-symbol-map";
@@ -72,5 +73,15 @@ impl ProbeDetector for RustlsProbeDetector {
             DetectionEvidence::new(self.path.clone(), context.target.architecture.clone()),
             outcomes,
         ))
+    }
+}
+
+impl ExecutablePatternRegistration for RustlsProbeDetector {
+    fn register_executable_patterns(&self, context: &ProbeContext<'_>) {
+        self.static_pattern.register_executable_patterns(context);
+    }
+
+    fn detector_path(&self) -> &DetectorPath {
+        &self.path
     }
 }

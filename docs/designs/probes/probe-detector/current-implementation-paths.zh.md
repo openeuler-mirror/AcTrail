@@ -114,7 +114,8 @@ crates/tools/tls_probe_point_finder/src/
         │   │   └── 聚合 executable/shared_library；多个 libssl 命中由 UniqueMatch 拒绝歧义
         │   ├── common/
         │   │   ├── executable/
-        │   │   │   └── 实现 ProbeDetector 并生成 executable symbol candidate
+        │   │   │   ├── 实现 ProbeDetector 并生成 executable symbol candidate
+        │   │   │   └── aarch64 stripped fallback：Codex 0.146.0 OpenSSL 3.6.3 的 SSL_read_ex/SSL_write_ex 32-byte static patterns（目标结构应迁移到 aarch64/static_pattern）
         │   │   └── shared_library/
         │   │       ├── discovery/
         │   │       │   └── user/direct/Python-_ssl/transitive library discovery
@@ -123,7 +124,9 @@ crates/tools/tls_probe_point_finder/src/
         │   ├── x86_64/mod.rs
         │   │   └── re-export common 实现；构造时绑定 x86_64 并写入 detector path
         │   └── aarch64/mod.rs
-        │       └── re-export common 实现；构造时绑定 aarch64 并写入 detector path
+        │       └── re-export common 实现；构造时绑定 aarch64 并写入 detector path；
+        │           当前 OpenSSL aarch64 static fallback 暂留在 common/executable，
+        │           目标迁移到 aarch64/static_pattern/ssl_ex_entry_pair_32_32
         │
         ├── go_tls/
         │   ├── config.rs + probe_detector.rs
@@ -158,7 +161,7 @@ tests/agent-trace/
 
 tests/v2/regression/
 ├── probe_codex_llm/
-│   └── 验证 static ELF → Daemon direct Rustls，并校验 LLM request/response 成对
+│   └── 验证 static ELF → Daemon direct TLS；当前已验证 Rustls 通路，API-key/OpenSSL 通路需多探针挂载后覆盖
 ├── probe_xiaoo_llm/
 │   └── 验证 dynamic ELF → Daemon sync Rustls，并校验 LLM request/response 成对
 └── probe_claude_llm/
@@ -166,5 +169,7 @@ tests/v2/regression/
 ```
 
 当前 diagnostic 配置在 TLS 根和 Rustls provider 根使用 `CollectAll`：因此会收集全部 provider outcome，并展开 Rustls 的 symbol/static-pattern 两类 outcome。OpenSSL、BoringSSL、GnuTLS 与 NSS 的后代节点仍保留各自启动导向的选择策略；当前实现不声称已经递归展开所有 provider 的全部 leaf evidence。
+
+当前 OpenSSL aarch64 与 x86_64 的 static pattern 均已作为 symbol 缺失时的 pattern-only fallback（identity 只作为验证记录，不参与匹配）；它们让 `detect` 能同时报告 rustls 与 openssl 两个 candidate，但仍位于 `common/executable/probe_detector.rs`；按目标结构应迁移到各架构的 `static_pattern/` 子树。`fast` 目前仍按 FirstComplete 返回单个 provider plan，多 provider 同时挂载尚未接入 daemon。
 
 受当前 aarch64 主机环境限制，x86_64 detector 已 release 编译但未在本机执行真实运行时 E2E；Go toolchain 与 Python `langgraph` 包缺失的工作负载也保留为环境待验证项。

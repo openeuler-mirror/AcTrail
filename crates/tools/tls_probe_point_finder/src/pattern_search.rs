@@ -32,6 +32,10 @@ impl<'pattern> ExactPatternSearch<'pattern> {
         offsets
     }
 
+    pub(crate) fn contains(&self, data: &[u8]) -> bool {
+        self.pattern_length <= data.len() && self.finder.find(data).is_some()
+    }
+
     pub(crate) fn find_all_in_file_ranges(&self, ranges: &[(usize, &[u8])]) -> Vec<usize> {
         let mut offsets = ranges
             .iter()

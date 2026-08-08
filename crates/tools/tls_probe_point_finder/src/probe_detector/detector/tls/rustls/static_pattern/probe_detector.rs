@@ -11,6 +11,7 @@ use crate::probe_detector::contract::selection::DetectionSelector;
 use super::RustlsStaticPatternProbeDetectorConfig;
 use super::aarch64::Aarch64RustlsProbeDetector;
 use super::x86_64::X86_64RustlsProbeDetector;
+use crate::probe_detector::detector::tls::ExecutablePatternRegistration;
 
 pub(crate) struct RustlsStaticPatternProbeDetector {
     path: DetectorPath,
@@ -58,5 +59,26 @@ impl ProbeDetector for RustlsStaticPatternProbeDetector {
             DetectionEvidence::new(self.path.clone(), context.target.architecture.clone()),
             outcomes,
         ))
+    }
+}
+
+impl ExecutablePatternRegistration for RustlsStaticPatternProbeDetector {
+    fn register_executable_patterns(&self, context: &ProbeContext<'_>) {
+        if context.probe.source != ProbeSource::Executable
+            || context
+                .request
+                .requested_provider
+                .is_some_and(|provider| provider != TlsProvider::Rustls)
+        {
+            return;
+        }
+        self.x86_64
+            .register_executable_patterns(context.probe.image);
+        self.aarch64
+            .register_executable_patterns(context.probe.image);
+    }
+
+    fn detector_path(&self) -> &DetectorPath {
+        &self.path
     }
 }

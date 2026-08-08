@@ -36,12 +36,11 @@ impl StaticPatternSupport {
 
     pub(crate) fn find_all_executable(image: &ElfImage, pattern: &[u8]) -> ToolResult<Vec<usize>> {
         let ranges = image.executable_file_ranges()?;
-        Ok(ExactPatternSearch::new(pattern)
-            .map_or_else(Vec::new, |search| search.find_all_in_file_ranges(&ranges)))
+        Ok(image.pattern_offsets_for(&[pattern], &ranges).remove(0))
     }
 
-    pub(crate) fn contains(data: &[u8], pattern: &[u8]) -> bool {
-        !Self::find_all(data, pattern).is_empty()
+    pub(crate) fn contains_any(image: &ElfImage, patterns: &[&[u8]]) -> bool {
+        image.contains_any_patterns(patterns)
     }
 
     pub(crate) fn matches_at(data: &[u8], offset: usize, pattern: &[u8]) -> bool {

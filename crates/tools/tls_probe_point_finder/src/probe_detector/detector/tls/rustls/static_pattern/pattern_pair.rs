@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 
 use crate::elf::ElfImage;
-use crate::pattern_search::ExactPatternSearch;
 use crate::plan::{ProbeSource, TlsProvider};
 use crate::probe_detector::contract::candidate::verification::VerifiedTarget;
 use crate::probe_detector::contract::detection::{
@@ -75,6 +74,12 @@ impl PatternPairProbeDetector {
             arch_label,
             patterns,
             verified_targets,
+        }
+    }
+
+    pub(crate) fn register_executable_patterns(&self, image: &ElfImage) {
+        for pattern in &self.patterns {
+            image.register_pattern_scan(pattern.bytes);
         }
     }
 
@@ -174,8 +179,13 @@ impl PatternPairProbeDetector {
         let executable_ranges = image.executable_file_ranges()?;
         let mut matches = Vec::new();
         let mut offsets_by_symbol = BTreeMap::<&'static str, Vec<usize>>::new();
-        for pattern in &self.patterns {
-            let pattern_offsets = Self::find_all(&executable_ranges, pattern.bytes);
+        let pattern_bytes = self
+            .patterns
+            .iter()
+            .map(|pattern| pattern.bytes)
+            .collect::<Vec<_>>();
+        let all_offsets = image.pattern_offsets_for(&pattern_bytes, &executable_ranges);
+        for (pattern, pattern_offsets) in self.patterns.iter().zip(all_offsets) {
             offsets_by_symbol
                 .entry(pattern.symbol)
                 .or_default()
@@ -202,11 +212,6 @@ impl PatternPairProbeDetector {
             offsets,
             verified_targets: self.verified_targets.clone(),
         })
-    }
-
-    fn find_all(ranges: &[(usize, &[u8])], pattern: &[u8]) -> Vec<usize> {
-        ExactPatternSearch::new(pattern)
-            .map_or_else(Vec::new, |search| search.find_all_in_file_ranges(ranges))
     }
 
     fn require_single_unique(matches: &[usize], symbol: &str) -> ToolResult<usize> {

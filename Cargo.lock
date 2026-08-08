@@ -2603,6 +2603,7 @@ dependencies = [
  "anstyle",
  "clap",
  "memchr",
+ "memmap2",
  "model_core",
  "rustc-demangle",
  "sha2",

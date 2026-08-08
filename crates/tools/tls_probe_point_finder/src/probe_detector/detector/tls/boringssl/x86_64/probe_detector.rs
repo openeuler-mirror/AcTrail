@@ -65,6 +65,10 @@ impl X86_64BoringSslProbeDetector {
     pub(crate) fn detect_static(&self, image: &ElfImage) -> ToolResult<StaticPatternDetection> {
         self.static_pattern.detect(image)
     }
+
+    pub(crate) fn register_executable_patterns(&self, image: &ElfImage) {
+        self.static_pattern.register_executable_patterns(image);
+    }
 }
 
 impl ProbeDetector for X86_64BoringSslProbeDetector {

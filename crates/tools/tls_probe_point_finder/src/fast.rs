@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use crate::binary::resolve_entry_elf;
-use crate::elf::{Arch, ElfImage};
+use crate::elf::{Arch, DEFAULT_LOW_MEMORY_CHUNK_BYTES, ElfImage, ScanMode};
 use crate::plan::{ProbePointPlan, ProbeSource, TargetIdentity, TlsProvider};
 use crate::probe_detector::contract::detection::{
     DetectionOutcome, DetectionRequest, ProbeContext,
@@ -58,8 +58,16 @@ pub fn resolve_for_consumer(
     request: FastProbeRequest,
     consumer: ProbeConsumer,
 ) -> ToolResult<ProbePointPlan> {
+    resolve_for_consumer_with_scan(request, consumer, ScanMode::Full)
+}
+
+pub fn resolve_for_consumer_with_scan(
+    request: FastProbeRequest,
+    consumer: ProbeConsumer,
+    scan: ScanMode,
+) -> ToolResult<ProbePointPlan> {
     let binary = resolve_entry_elf(&request.binary)?;
-    let image = ElfImage::parse(&binary)?;
+    let image = ElfImage::parse_with_mode(&binary, scan, DEFAULT_LOW_MEMORY_CHUNK_BYTES)?;
     require_arch(image.arch(), request.arch, image.path())?;
     let target = TargetIdentity {
         binary: image.path().to_path_buf(),

@@ -30,14 +30,18 @@ pub(super) const ELF_PROGRAM_HEADER_FLAG_EXECUTE: u32 = 1;
 
 pub(super) const ELF_SECTION_HEADER_NAME_FIELD: usize = 0;
 pub(super) const ELF_SECTION_HEADER_TYPE_FIELD: usize = 4;
+pub(super) const ELF_SECTION_HEADER_FLAGS_FIELD: usize = 8;
 pub(super) const ELF_SECTION_HEADER_ADDR_FIELD: usize = 16;
 pub(super) const ELF_SECTION_HEADER_FILE_OFFSET_FIELD: usize = 24;
 pub(super) const ELF_SECTION_HEADER_SIZE_FIELD: usize = 32;
 pub(super) const ELF_SECTION_HEADER_LINK_FIELD: usize = 40;
 pub(super) const ELF_SECTION_ENTRY_SIZE_FIELD: usize = 56;
+pub(super) const ELF_SECTION_TYPE_NOBITS: u32 = 8;
 pub(super) const ELF_SECTION_SYMTAB: u32 = 2;
 pub(super) const ELF_SECTION_NOTE: u32 = 7;
 pub(super) const ELF_SECTION_DYNSYM: u32 = 11;
+pub(super) const ELF_SECTION_FLAG_ALLOC: u64 = 0x2;
+pub(super) const ELF_SECTION_FLAG_EXECINSTR: u64 = 0x4;
 
 pub(super) const ELF_SYMBOL_NAME_FIELD: usize = 0;
 pub(super) const ELF_SYMBOL_INFO_FIELD: usize = 4;

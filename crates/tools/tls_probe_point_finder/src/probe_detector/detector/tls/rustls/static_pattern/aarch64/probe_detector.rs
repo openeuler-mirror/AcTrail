@@ -1,3 +1,4 @@
+use crate::elf::ElfImage;
 use crate::probe_detector::contract::detection::{
     DetectionError, DetectionEvidence, DetectionOutcome, ProbeContext,
 };
@@ -38,6 +39,15 @@ impl Aarch64RustlsProbeDetector {
                     .into_pattern_pair(),
             ],
         })
+    }
+
+    pub(crate) fn register_executable_patterns(&self, image: &ElfImage) {
+        if image.arch().as_str() != "aarch64" {
+            return;
+        }
+        for candidate in &self.candidates {
+            candidate.register_executable_patterns(image);
+        }
     }
 }
 
