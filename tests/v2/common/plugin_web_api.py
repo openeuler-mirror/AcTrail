@@ -20,12 +20,20 @@ class PluginWebApi:
     def catalog(self) -> dict[str, Any]:
         return self._request("GET", "/api/plugins/catalog")
 
-    def load(self, package: str, instance_id: str) -> dict[str, Any]:
+    def load(
+        self,
+        package: str,
+        instance_id: str,
+        grants: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {"instance_id": instance_id}
+        if grants is not None:
+            body["grants"] = grants
         return self._request(
             "POST",
             "/api/plugins/catalog/load",
             query={"package": package},
-            body={"instance_id": instance_id},
+            body=body,
         )
 
     def runtime(self) -> dict[str, Any]:
@@ -69,6 +77,17 @@ class PluginWebApi:
             query={"instance_id": instance_id},
         )
 
+    def command(self, instance_id: str, argv: list[str]) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/api/plugins/runtime/command",
+            query={"instance_id": instance_id},
+            body={"argv": argv},
+        )
+
+    def alerts(self, trace_id: int) -> dict[str, Any]:
+        return self._request("GET", f"/api/traces/{trace_id}/alerts")
+
     def _request(
         self,
         method: str,
@@ -85,6 +104,8 @@ class PluginWebApi:
             "--fail",
             "--silent",
             "--show-error",
+            "--noproxy",
+            "*",
             "--request",
             method,
             "--max-time",

@@ -743,6 +743,7 @@ mod tests {
                 payload_socket_seccomp: false,
                 process_seccomp: false,
                 network_control_seccomp: false,
+                command_control_seccomp: false,
                 file_mkdir_seccomp: false,
                 file_rmdir_seccomp: false,
                 required_capabilities: Vec::new(),

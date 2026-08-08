@@ -175,6 +175,7 @@ impl NetworkControlService {
             ),
             context_ref: Some(CONTROL_CURRENT_CONTEXT_TOKEN.to_string()),
             file_policy_context: None,
+            command_execution_context: None,
         };
         let response = control_plugins
             .decide(

@@ -25,6 +25,7 @@ pub enum Capability {
     PolicyIngestProcessing,
     PolicyDecisionRecord,
     EnforcementFilePermissionFanotify,
+    EnforcementCommandExecutionSeccomp,
 }
 
 impl Capability {
@@ -51,6 +52,7 @@ impl Capability {
             Self::PolicyIngestProcessing => "policy-ingest-processing",
             Self::PolicyDecisionRecord => "policy-decision-record",
             Self::EnforcementFilePermissionFanotify => "enforcement-file-permission-fanotify",
+            Self::EnforcementCommandExecutionSeccomp => "enforcement-command-execution-seccomp",
         }
     }
 }
@@ -81,6 +83,7 @@ impl std::str::FromStr for Capability {
             "policy-ingest-processing" => Ok(Self::PolicyIngestProcessing),
             "policy-decision-record" => Ok(Self::PolicyDecisionRecord),
             "enforcement-file-permission-fanotify" => Ok(Self::EnforcementFilePermissionFanotify),
+            "enforcement-command-execution-seccomp" => Ok(Self::EnforcementCommandExecutionSeccomp),
             other => Err(format!("unknown capability {other}")),
         }
     }

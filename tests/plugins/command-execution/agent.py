@@ -17,18 +17,25 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def run_allowed(path: Path) -> None:
-    result = subprocess.run([str(path)], text=True, capture_output=True, check=False)
+def run_allowed(path: Path, argv: list[str], label: str) -> None:
+    result = subprocess.run(
+        [str(path), *argv], text=True, capture_output=True, check=False
+    )
     if result.returncode != 0:
         raise RuntimeError(
             f"allowed command failed rc={result.returncode} stdout={result.stdout} stderr={result.stderr}"
         )
-    print("allowed=ok", flush=True)
+    print(f"{label}=ok", flush=True)
 
 
 def run_denied(path: Path) -> None:
     try:
-        result = subprocess.run([str(path)], text=True, capture_output=True, check=False)
+        result = subprocess.run(
+            [str(path), "blocked", "remaining"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
     except PermissionError:
         print("denied=permission_denied", flush=True)
         return
@@ -49,7 +56,8 @@ def main() -> int:
     if control.strip() != "go":
         print(f"unexpected_control={control!r}", flush=True)
         return 2
-    run_allowed(Path(args.allowed_command))
+    run_allowed(Path(args.allowed_command), [], "allowed")
+    run_allowed(Path(args.denied_command), ["safe"], "same_binary_allowed")
     run_denied(Path(args.denied_command))
     return 0
 

@@ -177,7 +177,7 @@ pub fn decode_command(bytes: &[u8]) -> Result<ControlCommand, ControlCodecError>
     let fields = decode_fields(bytes)?;
     let opcode = field(&fields, 0)?.as_str();
     match opcode {
-        "resolve_launch_permissions_v1" => permission::decode_command(&fields),
+        "resolve_launch_permissions_v2" => permission::decode_command(&fields),
         "resolve_launch_tls_plan_v1" => Ok(ControlCommand::ResolveLaunchTlsPlan(
             ResolveLaunchTlsPlanCommand {
                 request_id: RequestId::new(parse_u64(field(&fields, 1)?, "request_id")?),
@@ -537,7 +537,7 @@ pub fn encode_reply(reply: &Result<ControlReply, ControlError>) -> Vec<u8> {
 pub fn decode_reply(bytes: &[u8]) -> Result<Result<ControlReply, ControlError>, ControlCodecError> {
     let fields = decode_fields(bytes)?;
     match field(&fields, 0)?.as_str() {
-        "reply_launch_permissions_v1" => permission::decode_reply(&fields).map(Ok),
+        "reply_launch_permissions_v2" => permission::decode_reply(&fields).map(Ok),
         "reply_launch_tls_plan_v2" => {
             let status = match field(&fields, 3)?.as_str() {
                 "found" => LaunchTlsPlanStatus::Found(LaunchTlsPlanDescriptor {

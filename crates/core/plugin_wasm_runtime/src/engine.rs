@@ -29,6 +29,10 @@ pub(crate) const DEFAULT_HOSTCALL_CONTEXT_READ_MAX_BYTES: u32 = 1024;
 pub(crate) const DEFAULT_HOSTCALL_FILE_POLICY_CONTEXT_REF_MAX_BYTES: u32 = 128;
 pub(crate) const DEFAULT_HOSTCALL_FILE_POLICY_QUERY_MAX_BYTES: u32 = 128;
 pub(crate) const DEFAULT_HOSTCALL_FILE_POLICY_READ_MAX_BYTES: u32 = 1024;
+pub(crate) const DEFAULT_HOSTCALL_COMMAND_CONTEXT_REF_MAX_BYTES: u32 = 128;
+pub(crate) const DEFAULT_HOSTCALL_COMMAND_CONTEXT_QUERY_MAX_BYTES: u32 = 128;
+pub(crate) const DEFAULT_HOSTCALL_COMMAND_CONTEXT_READ_MAX_BYTES: u32 = 128 * 1024;
+pub(crate) const DEFAULT_HOSTCALL_COMMAND_POLICY_READ_MAX_BYTES: u32 = 64 * 1024;
 pub(crate) const DEFAULT_HOSTCALL_PLUGIN_CONFIG_READ_MAX_BYTES: u32 = 4096;
 pub(crate) const DEFAULT_HOSTCALL_PLUGIN_COMMAND_ARGV_MAX_COUNT: u32 = 32;
 pub(crate) const DEFAULT_HOSTCALL_PLUGIN_COMMAND_ARG_MAX_BYTES: u32 = 4096;
@@ -127,6 +131,26 @@ pub(crate) fn host_limits(manifest: &PluginManifest) -> Result<WasmHostLimits, P
         .file_policy
         .read_max_bytes
         .unwrap_or(DEFAULT_HOSTCALL_FILE_POLICY_READ_MAX_BYTES);
+    let command_context_ref_max_bytes = manifest
+        .hostcall_limits
+        .command_context
+        .context_ref_max_bytes
+        .unwrap_or(DEFAULT_HOSTCALL_COMMAND_CONTEXT_REF_MAX_BYTES);
+    let command_context_query_max_bytes = manifest
+        .hostcall_limits
+        .command_context
+        .query_max_bytes
+        .unwrap_or(DEFAULT_HOSTCALL_COMMAND_CONTEXT_QUERY_MAX_BYTES);
+    let command_context_read_max_bytes = manifest
+        .hostcall_limits
+        .command_context
+        .read_max_bytes
+        .unwrap_or(DEFAULT_HOSTCALL_COMMAND_CONTEXT_READ_MAX_BYTES);
+    let command_policy_io_max_bytes = manifest
+        .hostcall_limits
+        .command_policy
+        .read_max_bytes
+        .unwrap_or(DEFAULT_HOSTCALL_COMMAND_POLICY_READ_MAX_BYTES);
     let plugin_config_read_max_bytes = manifest
         .hostcall_limits
         .plugin_config
@@ -227,6 +251,38 @@ pub(crate) fn host_limits(manifest: &PluginManifest) -> Result<WasmHostLimits, P
                 format!("file-policy read hostcall byte limit overflow: {error}"),
             )
         })?,
+        command_context_ref_max_bytes: usize::try_from(command_context_ref_max_bytes).map_err(
+            |error| {
+                PluginRuntimeError::new(
+                    "wasm_runtime",
+                    format!("command context-ref hostcall byte limit overflow: {error}"),
+                )
+            },
+        )?,
+        command_context_query_max_bytes: usize::try_from(command_context_query_max_bytes).map_err(
+            |error| {
+                PluginRuntimeError::new(
+                    "wasm_runtime",
+                    format!("command context query hostcall byte limit overflow: {error}"),
+                )
+            },
+        )?,
+        command_context_read_max_bytes: usize::try_from(command_context_read_max_bytes).map_err(
+            |error| {
+                PluginRuntimeError::new(
+                    "wasm_runtime",
+                    format!("command context read hostcall byte limit overflow: {error}"),
+                )
+            },
+        )?,
+        command_policy_io_max_bytes: usize::try_from(command_policy_io_max_bytes).map_err(
+            |error| {
+                PluginRuntimeError::new(
+                    "wasm_runtime",
+                    format!("command policy read hostcall byte limit overflow: {error}"),
+                )
+            },
+        )?,
         plugin_config_read_max_bytes: usize::try_from(plugin_config_read_max_bytes).map_err(
             |error| {
                 PluginRuntimeError::new(

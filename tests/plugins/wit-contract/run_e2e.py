@@ -34,7 +34,7 @@ def main() -> int:
     raw = WIT.read_text(encoding="utf-8")
 
     for required in [
-        "package actrail:plugin@0.2.0;",
+        "package actrail:plugin@0.4.0;",
         "interface types",
         "interface host",
         "interface observation-context-read",
@@ -76,6 +76,13 @@ def main() -> int:
         "record file-policy-list-result",
         "record file-policy-match-dry-run-request",
         "record file-policy-match-dry-run-result",
+        "record command-policy-rule-draft",
+        "record command-policy-apply-request",
+        "record command-policy-rule-view",
+        "record command-policy-list-result",
+        "record command-policy-match-dry-run-request",
+        "record command-policy-match-dry-run-result",
+        "record command-execution-context",
         "record plugin-command-request",
         "record plugin-command-result",
         "enum file-policy-apply-status",
@@ -84,6 +91,12 @@ def main() -> int:
         "file-policy-rules-list: func(filter: file-policy-list-filter, cursor: option<string>, limit: u32) -> result<file-policy-list-result, string>",
         "file-policy-rules-match-dry-run: func(request: file-policy-match-dry-run-request) -> result<file-policy-match-dry-run-result, string>",
         "file-policy-rules-apply: func(request: file-policy-apply-request) -> result<file-policy-apply-result, string>",
+        "command-execution-current-context-query: func(context-ref: string, query: string) -> result<command-execution-context, string>",
+        "command-policy-rules-version-get: func() -> result<u64, string>",
+        "command-policy-rules-list: func(filter: command-policy-list-filter, cursor: option<string>, limit: u32) -> result<command-policy-list-result, string>",
+        "command-policy-rules-match-dry-run: func(request: command-policy-match-dry-run-request) -> result<command-policy-match-dry-run-result, string>",
+        "command-policy-rules-validate: func(request: command-policy-apply-request) -> result<command-policy-apply-result, string>",
+        "command-policy-rules-apply: func(request: command-policy-apply-request) -> result<command-policy-apply-result, string>",
         "interface management-command",
         "export management-command",
         "handle-command: func(request: plugin-command-request) -> result<plugin-command-result, string>",
@@ -106,6 +119,14 @@ def main() -> int:
     semantic_action = record_body("semantic-action-record", raw)
     for duplicated in ["summary:"]:
         reject(duplicated, semantic_action)
+
+    command_draft = record_body("command-policy-rule-draft", raw)
+    command_view = record_body("command-policy-rule-view", raw)
+    command_dry_run = record_body("command-policy-match-dry-run-request", raw)
+    require("args: option<list<string>>", command_draft)
+    require("args: option<list<string>>", command_view)
+    require("executable: string", command_dry_run)
+    require("args: list<string>", command_dry_run)
 
     alert_draft = record_body("alert-draft", raw)
     for duplicated in [

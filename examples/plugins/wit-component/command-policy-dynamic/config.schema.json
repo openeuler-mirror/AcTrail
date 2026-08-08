@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Dynamic command policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["rules"],
+  "properties": {
+    "rules": {
+      "title": "Command execution routes",
+      "description": "Executable routes with optional argv[1..] matching, owned by this plugin instance and projected into AcTrail command enforcement.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["decision", "executable", "priority"],
+        "properties": {
+          "rule_id": {
+            "title": "Rule ID",
+            "description": "Stable route identity. New rules receive command-dynamic-N when omitted.",
+            "type": "string",
+            "minLength": 1
+          },
+          "decision": {
+            "title": "Decision",
+            "description": "Allow or deny this executable, or ask a synchronous control plugin.",
+            "type": "string",
+            "enum": ["allow", "deny", "gray"]
+          },
+          "executable": {
+            "title": "Executable",
+            "description": "Exact absolute tracee-namespace executable path covered by a command-policy grant.",
+            "type": "string",
+            "pattern": "^/",
+            "examples": ["/usr/bin/bash"]
+          },
+          "args": {
+            "title": "Arguments",
+            "description": "Optional exact argv[1..] matcher. A final * matches any remaining arguments; omit args to match every invocation of the executable.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "examples": [["-c", "*"]]
+          },
+          "priority": {
+            "title": "Priority",
+            "description": "Higher values win among executable and argv candidates that match the request.",
+            "type": "integer",
+            "default": 10
+          },
+          "gray_target": {
+            "title": "Gray target instance ID",
+            "description": "Required only for gray. The active control-decider instance that receives the synchronous decision request.",
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}

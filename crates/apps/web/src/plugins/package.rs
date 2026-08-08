@@ -358,7 +358,9 @@ impl InstalledPackage {
         let mut unsupported = Vec::new();
         for capability in manifest.capabilities() {
             match capability {
-                PluginCapability::EnvRead | PluginCapability::FilePolicyRulesApply => {
+                PluginCapability::EnvRead
+                | PluginCapability::FilePolicyRulesApply
+                | PluginCapability::CommandPolicyRulesApply => {
                     parameterized.push(capability.as_str());
                 }
                 PluginCapability::NetworkEgress => unsupported.push(capability.as_str()),

@@ -31,6 +31,7 @@ pub(super) fn build_seccomp_rules(
     payload_socket_max_segment_bytes: u32,
     process_syscalls: Vec<ProcessSeccompSyscall>,
     network_syscalls: Vec<NetworkControlSeccompSyscall>,
+    command_control: bool,
     file_enforcement_syscalls: Vec<EnforcementSeccompSyscall>,
 ) -> Result<Vec<SeccompRule>, String> {
     let mut rules = std::collections::BTreeSet::new();
@@ -56,6 +57,11 @@ pub(super) fn build_seccomp_rules(
     }
     for syscall in network_syscalls {
         rules.insert(network_control_syscall_rule(syscall)?);
+    }
+    if command_control {
+        for syscall in [KernelProcessSyscall::Execve, KernelProcessSyscall::Execveat] {
+            rules.insert(process_seccomp_rule(syscall)?);
+        }
     }
     for syscall in file_enforcement_syscalls {
         for kernel_syscall in effective_file_syscalls(syscall) {

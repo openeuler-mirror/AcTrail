@@ -37,6 +37,7 @@ impl SeccompSetup {
         payload_socket_max_segment_bytes: u32,
         process_syscalls: Vec<ProcessSeccompSyscall>,
         network_syscalls: Vec<NetworkControlSeccompSyscall>,
+        command_control: bool,
         file_enforcement_syscalls: Vec<EnforcementSeccompSyscall>,
         reserved_listener_fd: u32,
     ) -> Result<Self, String> {
@@ -48,6 +49,7 @@ impl SeccompSetup {
             payload_socket_max_segment_bytes,
             process_syscalls,
             network_syscalls,
+            command_control,
             file_enforcement_syscalls,
         )?;
         Ok(Self {

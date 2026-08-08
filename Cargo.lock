@@ -680,6 +680,7 @@ dependencies = [
  "semantic_action_runtime",
  "serde",
  "serde_json",
+ "sha2",
  "storage_core",
  "storage_factory",
  "tls_payload_core",

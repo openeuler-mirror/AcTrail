@@ -144,6 +144,7 @@ impl StorageAttachService {
             &payload_config,
             &process_seccomp_config,
             &network_control_config,
+            &command_control_config,
         );
         let socket_payload_gate = SocketHttpPayloadGate::new(
             payload_config.socket.http_sniff_max_bytes,
@@ -176,6 +177,7 @@ impl StorageAttachService {
             launch_seccomp_requirements,
             storage,
             process_registry,
+            process_id_block_size: block_size,
             collector: EbpfCollector::new(
                 ebpf_config,
                 payload_config,

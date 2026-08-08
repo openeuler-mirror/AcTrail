@@ -1,6 +1,7 @@
 //! AcTrail plugin-system protocol and runtime boundaries.
 
 mod alert;
+mod command_policy;
 mod control;
 mod diagnostics;
 mod grants;
@@ -11,6 +12,14 @@ mod runtime;
 mod status;
 
 pub use alert::AlertHost;
+pub use command_policy::{
+    CommandExecutionContext, CommandPolicyApplyError, CommandPolicyApplyRequest,
+    CommandPolicyApplyResult, CommandPolicyApplyStatus, CommandPolicyDecision, CommandPolicyHost,
+    CommandPolicyListFilter, CommandPolicyListResult, CommandPolicyMatchDryRunRequest,
+    CommandPolicyMatchDryRunResult, CommandPolicyPatchItem, CommandPolicyPatchOp,
+    CommandPolicyRuleDraft, CommandPolicyRuleView, COMMAND_EXECUTION_CONTEXT_QUERY,
+    COMMAND_EXECUTION_CURRENT_CONTEXT_TOKEN,
+};
 pub use control::{
     ControlActorProcessIdentity, ControlDecider, ControlDecisionBudget, ControlDecisionRequest,
     ControlDecisionResponse, ControlSubject, ControlVerdict, DecisionScope, FilePolicyApplyError,
@@ -24,18 +33,21 @@ pub use control::{
     FILE_POLICY_CURRENT_CONTEXT_TOKEN, FILE_POLICY_MATCHED_RULE_QUERY,
 };
 pub use diagnostics::{PluginDroppedRecord, PluginRuntimeError};
-pub use grants::{FilePolicyRulesApplyGrant, PluginHostGrant, PluginHostGrants};
+pub use grants::{
+    CommandPolicyRulesApplyGrant, FilePolicyRulesApplyGrant, PluginHostGrant, PluginHostGrants,
+};
 pub use llm_codec::{
     LlmCodecDecoded, LlmCodecOutcome, LlmCodecPlugin, LlmCodecPluginStatus, LlmCodecRequest,
     LlmCodecSseEvent,
 };
 pub use manifest::{
     PluginAlertDefinitionDeclaration, PluginAlertHostcallLimits, PluginBuiltinDeclaration,
-    PluginCapability, PluginCommandHostcallLimits, PluginConfigDeclaration,
-    PluginConfigHostcallLimits, PluginContextHostcallLimits, PluginControlDeciderDeclaration,
-    PluginControlDeciderResources, PluginEnvHostcallLimits, PluginFilePolicyHostcallLimits,
-    PluginGeneralDeclaration, PluginHostDeclaration, PluginHostcallLimits, PluginManifest,
-    PluginManifestPolicy, PluginNativeDylibDeclaration, PluginObservationConsumerDeclaration,
+    PluginCapability, PluginCommandContextHostcallLimits, PluginCommandHostcallLimits,
+    PluginCommandPolicyHostcallLimits, PluginConfigDeclaration, PluginConfigHostcallLimits,
+    PluginContextHostcallLimits, PluginControlDeciderDeclaration, PluginControlDeciderResources,
+    PluginEnvHostcallLimits, PluginFilePolicyHostcallLimits, PluginGeneralDeclaration,
+    PluginHostDeclaration, PluginHostcallLimits, PluginManifest, PluginManifestPolicy,
+    PluginNativeDylibDeclaration, PluginObservationConsumerDeclaration,
     PluginObservationConsumerResources, PluginObservationDelivery, PluginOutputsDeclaration,
     PluginPayloadHostcallLimits, PluginPostTraceDeclaration, PluginPostTraceTrigger, PluginPurpose,
     PluginRoleDeclaration, PluginRuntimeDeclaration, PluginRuntimeKind,

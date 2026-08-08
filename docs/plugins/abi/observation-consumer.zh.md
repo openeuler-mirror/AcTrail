@@ -20,7 +20,7 @@ WIT package 中的 world 是 `observation-plugin`。运行时要求 component �
 
 | 项 | 值 |
 | --- | --- |
-| Export interface | `actrail:plugin/observation-consumer@0.2.0` |
+| Export interface | `actrail:plugin/observation-consumer@0.4.0` |
 | Function | `consume` |
 
 函数签名：

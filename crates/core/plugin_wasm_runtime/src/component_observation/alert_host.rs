@@ -6,7 +6,7 @@ use wasmtime::component::{Linker as ComponentLinker, Val};
 
 use crate::engine::WasmStoreState;
 
-const ALERT_WRITE_IMPORT: &str = "actrail:plugin/alert-write@0.2.0";
+const ALERT_WRITE_IMPORT: &str = "actrail:plugin/alert-write@0.4.0";
 
 pub(super) fn register_alert_interface(
     linker: &mut ComponentLinker<WasmStoreState>,

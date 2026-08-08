@@ -16,7 +16,9 @@ use storage_core::StorageBackend;
 use super::protocol::{
     AlertAdmission, AlertHostClient, AlertRequest, EventSignal, RegisteredOutput,
 };
-use super::system::{self, DAEMON_ENFORCEMENT_INSTANCE_ID, FileAccessBoundaryAlert};
+use super::system::{
+    self, CommandExecutionBoundaryAlert, DAEMON_ENFORCEMENT_INSTANCE_ID, FileAccessBoundaryAlert,
+};
 
 pub(crate) struct AlertIngress {
     request_sender: SyncSender<AlertRequest>,
@@ -86,6 +88,17 @@ impl AlertIngress {
     ) -> Result<(), ControlError> {
         self.daemon_alert_host
             .submit_file_access_boundary_alert(trace_id, alert_token, alert)
+            .map_err(|error| ControlError::new(error.code, error.message))
+    }
+
+    pub(crate) fn submit_command_execution_boundary_alert(
+        &self,
+        trace_id: TraceId,
+        alert_token: TraceAlertToken,
+        alert: CommandExecutionBoundaryAlert,
+    ) -> Result<(), ControlError> {
+        self.daemon_alert_host
+            .submit_command_execution_boundary_alert(trace_id, alert_token, alert)
             .map_err(|error| ControlError::new(error.code, error.message))
     }
 

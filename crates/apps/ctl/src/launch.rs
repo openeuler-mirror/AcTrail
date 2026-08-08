@@ -121,6 +121,7 @@ pub(crate) fn run_launch(
         permission_reply.process_seccomp,
         permission_reply.network_control_seccomp,
     )
+    .with_command_control(permission_reply.command_control_seccomp)
     .with_file_enforcement(FileEnforcementSeccompRequirements::new(
         permission_reply.file_mkdir_seccomp,
         permission_reply.file_rmdir_seccomp,
@@ -130,11 +131,12 @@ pub(crate) fn run_launch(
     timing.mark_detail(
         "permission_decision",
         format_args!(
-            "seccomp_enabled={seccomp_enabled} payload_tls_seccomp={} payload_socket_seccomp={} process_seccomp={} network_control_seccomp={} file_mkdir_seccomp={} file_rmdir_seccomp={}",
+            "seccomp_enabled={seccomp_enabled} payload_tls_seccomp={} payload_socket_seccomp={} process_seccomp={} network_control_seccomp={} command_control_seccomp={} file_mkdir_seccomp={} file_rmdir_seccomp={}",
             effective_seccomp.payload_tls,
             effective_seccomp.payload_socket,
             effective_seccomp.process_seccomp,
             effective_seccomp.network_control,
+            effective_seccomp.command_control,
             effective_seccomp.file_enforcement.mkdir,
             effective_seccomp.file_enforcement.rmdir,
         ),
@@ -151,6 +153,7 @@ pub(crate) fn run_launch(
             effective_seccomp.payload_socket,
             effective_seccomp.process_seccomp,
             effective_seccomp.network_control,
+            effective_seccomp.command_control,
             effective_seccomp.file_enforcement,
         )?)
     } else {
@@ -337,6 +340,7 @@ fn seccomp_setup(
     payload_socket_enabled: bool,
     process_seccomp_enabled: bool,
     network_control_enabled: bool,
+    command_control_enabled: bool,
     file_enforcement: FileEnforcementSeccompRequirements,
 ) -> Result<SeccompSetup, String> {
     let payload_tls_seccomp_syscalls = if payload_tls_seccomp_enabled {
@@ -374,6 +378,7 @@ fn seccomp_setup(
         request.payload_socket_max_segment_bytes,
         process_seccomp_syscalls,
         network_control_syscalls,
+        command_control_enabled,
         file_enforcement_syscalls,
         request.seccomp_notify_reserved_listener_fd,
     )

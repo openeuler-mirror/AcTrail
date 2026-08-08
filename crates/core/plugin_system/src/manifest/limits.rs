@@ -12,6 +12,10 @@ pub struct PluginHostcallLimits {
     #[serde(default)]
     pub file_policy: PluginFilePolicyHostcallLimits,
     #[serde(default)]
+    pub command_policy: PluginCommandPolicyHostcallLimits,
+    #[serde(default)]
+    pub command_context: PluginCommandContextHostcallLimits,
+    #[serde(default)]
     pub plugin_config: PluginConfigHostcallLimits,
     #[serde(default)]
     pub plugin_command: PluginCommandHostcallLimits,
@@ -51,6 +55,20 @@ pub struct PluginContextHostcallLimits {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginFilePolicyHostcallLimits {
+    pub context_ref_max_bytes: Option<u32>,
+    pub query_max_bytes: Option<u32>,
+    pub read_max_bytes: Option<u32>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginCommandPolicyHostcallLimits {
+    pub read_max_bytes: Option<u32>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginCommandContextHostcallLimits {
     pub context_ref_max_bytes: Option<u32>,
     pub query_max_bytes: Option<u32>,
     pub read_max_bytes: Option<u32>,

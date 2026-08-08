@@ -93,6 +93,22 @@ pub(crate) fn deny_notification_errno(
     Err(ControlError::new("seccomp_notif_send", error.to_string()))
 }
 
+pub(crate) fn notification_id_valid(fd: libc::c_int, id: u64) -> Result<bool, ControlError> {
+    let mut notification_id = id;
+    let result = unsafe { libc::ioctl(fd, seccomp_ioctl_notif_id_valid(), &mut notification_id) };
+    if result == 0 {
+        return Ok(true);
+    }
+    let error = std::io::Error::last_os_error();
+    if seccomp_notification_is_stale(&error) {
+        return Ok(false);
+    }
+    Err(ControlError::new(
+        "seccomp_notif_id_valid",
+        error.to_string(),
+    ))
+}
+
 pub(crate) fn validate_seccomp_notif_abi() -> Result<(), ControlError> {
     let mut sizes: libc::seccomp_notif_sizes = unsafe { std::mem::zeroed() };
     let result = unsafe {
@@ -161,6 +177,15 @@ const fn seccomp_ioctl_notif_send() -> libc::c_ulong {
         SECCOMP_IOCTL_MAGIC,
         1,
         std::mem::size_of::<libc::seccomp_notif_resp>() as u64,
+    )
+}
+
+const fn seccomp_ioctl_notif_id_valid() -> libc::c_ulong {
+    ioc(
+        IOC_WRITE,
+        SECCOMP_IOCTL_MAGIC,
+        2,
+        std::mem::size_of::<u64>() as u64,
     )
 }
 

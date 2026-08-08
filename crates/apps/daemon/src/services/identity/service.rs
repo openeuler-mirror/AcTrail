@@ -9,10 +9,14 @@ use ingest_runtime::IngestMatch;
 use model_core::ids::TraceId;
 use model_core::process::{
     ExitObservationSource, ExitStatus, MembershipState, ProcessIdentity, ProcessMembership,
+    ProcessRecord,
 };
 use plugin_system::ControlActorProcessIdentity;
 use process_identity::ProcessIdentityManager;
-use process_identity::{IdentityLookupError, ProcessIdentityReader};
+use process_identity::{
+    IdentityLookupError, ProcessIdentityError, ProcessIdentityReader, ProcessResolution,
+};
+use storage_core::StorageBackend;
 use trace_runtime::registry::{RegistryError, TraceRuntime};
 
 pub(crate) const PROCESS_METADATA_PARENT_PID: &str = "ppid";
@@ -41,6 +45,244 @@ impl ResolvedTraceProcess {
                 self.state,
                 MembershipState::Starting | MembershipState::Active
             )
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct SeccompIdentityPreparation {
+    pub(crate) resolved: ResolvedTraceProcess,
+    pub(crate) inherited_record: Option<ProcessRecord>,
+}
+
+pub(crate) struct SeccompNotificationIdentityRegistrar<'a> {
+    process_manager: &'a mut ProcessIdentityManager,
+    identity_reader: &'a dyn ProcessIdentityReader,
+    storage: &'a mut dyn StorageBackend,
+    process_id_block_size: u64,
+}
+
+impl<'a> SeccompNotificationIdentityRegistrar<'a> {
+    pub(crate) fn new(
+        process_manager: &'a mut ProcessIdentityManager,
+        identity_reader: &'a dyn ProcessIdentityReader,
+        storage: &'a mut dyn StorageBackend,
+        process_id_block_size: u64,
+    ) -> Self {
+        Self {
+            process_manager,
+            identity_reader,
+            storage,
+            process_id_block_size,
+        }
+    }
+
+    pub(crate) fn ensure(
+        &mut self,
+        trace_runtime: &mut TraceRuntime,
+        trace_id: TraceId,
+        pid: u32,
+    ) -> Result<SeccompIdentityPreparation, ControlError> {
+        let observation = self.read_identity(pid, "command_control_identity")?;
+        let resolution = self.resolve_or_create(observation)?;
+        let process = resolution.identity;
+        if resolution.created || resolution.enriched {
+            self.persist_process_record(process)?;
+        }
+        if let Some(resolved) = TraceIdentityResolver::new(trace_runtime, self.process_manager)
+            .match_process_in_trace(trace_id, process)
+        {
+            return Self::capturable_preparation(resolved, None);
+        }
+        if let Some((other_trace_id, _)) = trace_runtime.find_membership(&process) {
+            return Err(ControlError::new(
+                "command_control_identity",
+                format!(
+                    "listener trace {trace_id} received pid {pid} owned by trace {other_trace_id}"
+                ),
+            ));
+        }
+        let parent_pid = self.read_parent_pid(pid)?.ok_or_else(|| {
+            ControlError::new(
+                "command_control_identity",
+                format!("cannot confirm parent generation for pid {pid}"),
+            )
+        })?;
+        let parent_observation =
+            self.read_identity(parent_pid, "command_control_parent_identity")?;
+        let parent = self
+            .process_manager
+            .lookup(&parent_observation)
+            .map_err(|error| {
+                ControlError::new("command_control_parent_identity", format!("{error:?}"))
+            })?
+            .ok_or_else(|| {
+                ControlError::new(
+                    "command_control_parent_identity",
+                    format!("cannot confirm process generation for parent pid {parent_pid}"),
+                )
+            })?;
+        let parent_membership = trace_runtime
+            .find_membership_in_trace(trace_id, &parent)
+            .ok_or_else(|| {
+                ControlError::new(
+                    "command_control_parent_identity",
+                    format!("parent pid {parent_pid} is not part of listener trace {trace_id}"),
+                )
+            })?;
+        if !parent_membership.capture_enabled
+            || !parent_membership.propagation_enabled
+            || matches!(parent_membership.state, MembershipState::IdentityStale)
+        {
+            return Err(ControlError::new(
+                "command_control_parent_identity",
+                format!("parent pid {parent_pid} cannot propagate trace membership"),
+            ));
+        }
+        trace_runtime
+            .inherit_process(trace_id, &parent, process, SystemTime::now())
+            .map_err(|error| {
+                ControlError::new("command_control_identity_inherit", format!("{error:?}"))
+            })?;
+        let membership = trace_runtime
+            .find_membership_in_trace(trace_id, &process)
+            .ok_or_else(|| {
+                ControlError::new(
+                    "command_control_identity_inherit",
+                    "inherited membership is missing",
+                )
+            })?;
+        self.storage
+            .upsert_membership(membership)
+            .map_err(|error| ControlError::new(error.stage, error.message))?;
+        let record = self
+            .process_manager
+            .record(process)
+            .cloned()
+            .ok_or_else(|| {
+                ControlError::new(
+                    "command_control_identity",
+                    format!("process record {} is missing", process.get()),
+                )
+            })?;
+        let resolved = TraceIdentityResolver::new(trace_runtime, self.process_manager)
+            .match_process_in_trace(trace_id, process)
+            .ok_or_else(|| {
+                ControlError::new(
+                    "command_control_identity_inherit",
+                    "cannot resolve inherited membership",
+                )
+            })?;
+        Self::capturable_preparation(resolved, Some(record))
+    }
+
+    fn resolve_or_create(
+        &mut self,
+        observation: model_core::process::ProcessObservation,
+    ) -> Result<ProcessResolution, ControlError> {
+        loop {
+            match self.process_manager.resolve_or_create(observation.clone()) {
+                Ok(resolution) => return Ok(resolution),
+                Err(ProcessIdentityError::IdBlockExhausted) => {
+                    let (block_start, block_end) = self
+                        .storage
+                        .reserve_process_id_block(self.process_id_block_size)
+                        .map_err(|error| ControlError::new(error.stage, error.message))?;
+                    self.process_manager
+                        .install_reserved_block(block_start, block_end)
+                        .map_err(|error| {
+                            ControlError::new(
+                                "command_control_identity_block",
+                                format!("{error:?}"),
+                            )
+                        })?;
+                }
+                Err(error) => {
+                    return Err(ControlError::new(
+                        "command_control_identity",
+                        format!("{error:?}"),
+                    ));
+                }
+            }
+        }
+    }
+
+    fn persist_process_record(&mut self, process: ProcessIdentity) -> Result<(), ControlError> {
+        let record = self
+            .process_manager
+            .record(process)
+            .cloned()
+            .ok_or_else(|| {
+                ControlError::new(
+                    "command_control_identity",
+                    format!("process record {} is missing", process.get()),
+                )
+            })?;
+        self.storage
+            .upsert_process_record(record)
+            .map_err(|error| ControlError::new(error.stage, error.message))
+    }
+
+    fn read_identity(
+        &self,
+        pid: u32,
+        stage: &'static str,
+    ) -> Result<model_core::process::ProcessObservation, ControlError> {
+        self.identity_reader.read_identity(pid).map_err(|error| {
+            ControlError::new(
+                stage,
+                format!("cannot read identity for pid {pid}: {error:?}"),
+            )
+        })
+    }
+
+    fn read_parent_pid(&self, pid: u32) -> Result<Option<u32>, ControlError> {
+        let raw = match std::fs::read_to_string(format!("/proc/{pid}/status")) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(ControlError::new(
+                    "command_control_parent_identity",
+                    error.to_string(),
+                ));
+            }
+        };
+        raw.lines()
+            .find_map(|line| line.strip_prefix("PPid:"))
+            .map(str::trim)
+            .map(|value| {
+                value.parse::<u32>().map(Some).map_err(|error| {
+                    ControlError::new(
+                        "command_control_parent_identity",
+                        format!("parse PPid for pid {pid}: {error}"),
+                    )
+                })
+            })
+            .unwrap_or_else(|| {
+                Err(ControlError::new(
+                    "command_control_parent_identity",
+                    format!("missing PPid for pid {pid}"),
+                ))
+            })
+    }
+
+    fn capturable_preparation(
+        resolved: ResolvedTraceProcess,
+        inherited_record: Option<ProcessRecord>,
+    ) -> Result<SeccompIdentityPreparation, ControlError> {
+        if !resolved.is_capturable() {
+            return Err(ControlError::new(
+                "command_control_identity",
+                format!(
+                    "process {} is not capturable in trace {}",
+                    resolved.process.get(),
+                    resolved.trace_id
+                ),
+            ));
+        }
+        Ok(SeccompIdentityPreparation {
+            resolved,
+            inherited_record,
+        })
     }
 }
 

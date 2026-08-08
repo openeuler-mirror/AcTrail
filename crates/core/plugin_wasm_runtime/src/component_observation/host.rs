@@ -9,8 +9,8 @@ use crate::component_observation::post_trace_host::register_post_trace_interface
 use crate::engine::WasmStoreState;
 use crate::host::component_read_config;
 
-const HOST_IMPORT: &str = "actrail:plugin/host@0.2.0";
-const OBSERVATION_CONTEXT_IMPORT: &str = "actrail:plugin/observation-context-read@0.2.0";
+const HOST_IMPORT: &str = "actrail:plugin/host@0.4.0";
+const OBSERVATION_CONTEXT_IMPORT: &str = "actrail:plugin/observation-context-read@0.4.0";
 const READ_CONFIG_IMPORT: &str = "read-config";
 const ENV_READ_IMPORT: &str = "env-read";
 const READ_PAYLOAD_IMPORT: &str = "read-payload";

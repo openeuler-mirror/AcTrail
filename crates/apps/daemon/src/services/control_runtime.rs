@@ -201,6 +201,19 @@ impl ControlPluginRuntime {
         Some(slot.decider.instance_concurrency_limit())
     }
 
+    pub(in crate::services) fn active_instance_registration(
+        &self,
+        instance_id: &str,
+    ) -> Option<(u64, u32)> {
+        let slot = self.find_slot(instance_id)?;
+        slot.active.load(Ordering::Relaxed).then(|| {
+            (
+                slot.instance_index,
+                slot.decider.instance_concurrency_limit(),
+            )
+        })
+    }
+
     pub(in crate::services) fn is_instance_index_active(&self, instance_index: u64) -> bool {
         let deciders = self
             .deciders

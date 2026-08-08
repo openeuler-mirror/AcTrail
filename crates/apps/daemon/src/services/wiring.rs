@@ -287,13 +287,16 @@ fn build_runtime_wiring_with_attach_service(
     if enforcement_config.enabled && attach_service.enforcement.enabled() {
         available_collectors.push(ENFORCEMENT_COLLECTOR_NAME.to_string());
     }
-    if process_seccomp.enabled {
+    if process_seccomp.enabled || command_control_config.enabled {
         available_collectors.push(PROCESS_SECCOMP_COLLECTOR_NAME.to_string());
     }
 
     let mut collector_descriptors = Vec::new();
-    if process_seccomp.enabled {
-        collector_descriptors.push(process_seccomp_descriptor());
+    if process_seccomp.enabled || command_control_config.enabled {
+        collector_descriptors.push(process_seccomp_descriptor(
+            process_seccomp.enabled,
+            command_control_config.enabled,
+        ));
     }
     if ebpf_config.enabled {
         collector_descriptors.push(attach_service.collector_descriptor());
@@ -321,16 +324,35 @@ fn build_runtime_wiring_with_attach_service(
     })
 }
 
-fn process_seccomp_descriptor() -> CollectorDescriptor {
-    CollectorDescriptor {
-        name: CollectorName::new(PROCESS_SECCOMP_COLLECTOR_NAME),
-        capabilities: vec![CapabilityDescriptor::new(
+fn process_seccomp_descriptor(
+    process_observation_enabled: bool,
+    command_control_enabled: bool,
+) -> CollectorDescriptor {
+    let mut capabilities = Vec::new();
+    if process_observation_enabled {
+        capabilities.push(CapabilityDescriptor::new(
             Capability::ProcExecContext,
             vec![CapabilityField::new(
                 "exec_argv_context",
                 GuaranteeClass::GuaranteedByTransportCollector,
             )],
-        )],
+        ));
+    }
+    if command_control_enabled {
+        capabilities.push(CapabilityDescriptor::new(
+            Capability::EnforcementCommandExecutionSeccomp,
+            vec![
+                CapabilityField::new(
+                    "resolved_executable",
+                    GuaranteeClass::GuaranteedByTransportCollector,
+                ),
+                CapabilityField::new("decision", GuaranteeClass::GuaranteedByTransportCollector),
+            ],
+        ));
+    }
+    CollectorDescriptor {
+        name: CollectorName::new(PROCESS_SECCOMP_COLLECTOR_NAME),
+        capabilities,
         supports_attach_coverage_guard: false,
         supports_existing_pid_attach: false,
     }

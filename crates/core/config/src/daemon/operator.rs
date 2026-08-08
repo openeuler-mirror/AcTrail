@@ -197,6 +197,7 @@ pub fn launch_seccomp_requirements(
     payload: &PayloadConfig,
     process_seccomp: &ProcessSeccompConfig,
     network_control: &NetworkControlConfig,
+    command_control: &CommandControlConfig,
 ) -> LaunchSeccompRequirements {
     LaunchSeccompRequirements::new(
         payload.tls.enabled && payload.tls.capture_backend.requires_seccomp_notify(),
@@ -204,6 +205,7 @@ pub fn launch_seccomp_requirements(
         process_seccomp.enabled,
         network_control.enabled,
     )
+    .with_command_control(command_control.enabled)
 }
 
 impl OperatorConfig {
@@ -215,6 +217,7 @@ impl OperatorConfig {
             &self.payload_config,
             &self.process_seccomp,
             &self.network_control,
+            &self.command_control,
         )
     }
 
@@ -341,6 +344,7 @@ fn validate_seccomp_config(
     payload_socket: &PayloadSocketConfig,
     process_seccomp: &ProcessSeccompConfig,
     enforcement: &EnforcementConfig,
+    command_control: &CommandControlConfig,
     capabilities: &[CapabilityRequest],
 ) -> Result<(), String> {
     if payload_tls.enabled
@@ -364,6 +368,29 @@ fn validate_seccomp_config(
     }
     if enforcement.enabled && !enforcement.seccomp_syscalls.is_empty() && !notify.enabled {
         return Err("enforcement seccomp syscalls require seccomp_notify_enabled=true".to_string());
+    }
+    let command_control_requested = capability_requested(
+        capabilities,
+        &Capability::EnforcementCommandExecutionSeccomp,
+    );
+    if command_control_requested && !command_control.enabled {
+        return Err(
+            "enforcement-command-execution-seccomp requires command_control.enabled=true"
+                .to_string(),
+        );
+    }
+    if command_control_requested && !notify.enabled {
+        return Err(
+            "enforcement-command-execution-seccomp requires seccomp_notify.enabled=true"
+                .to_string(),
+        );
+    }
+    if command_control_requested && !capability_requested(capabilities, &Capability::ProcLifecycle)
+    {
+        return Err(
+            "enforcement-command-execution-seccomp requires proc-lifecycle so command identity is known before exec"
+                .to_string(),
+        );
     }
     if capability_requested(capabilities, &Capability::ProcExecContext) && !process_seccomp.enabled
     {

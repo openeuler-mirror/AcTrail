@@ -9,7 +9,7 @@
       >
         <header class="plugin-load-header">
           <div>
-            <span>{{ needsFilePolicy ? 'Configure file access' : 'Load plugin' }}</span>
+            <span>{{ loadSubtitle }}</span>
             <h2 :id="titleId">{{ plugin.plugin_id }}</h2>
           </div>
           <button type="button" aria-label="Close load dialog" :disabled="busy" @click="close">
@@ -35,53 +35,28 @@
             </div>
           </details>
 
-          <section v-if="needsFilePolicy" class="plugin-load-section editable">
-            <div class="plugin-load-section-heading">
-              <div>
-                <span>Files this plugin can manage</span>
-                <small>The plugin can create only the selected rule types inside these paths.</small>
-              </div>
-              <strong>Required</strong>
-            </div>
+          <PolicyScopeEditor
+            v-if="needsFilePolicy"
+            v-model="filePolicyScopes"
+            title="Files this plugin can manage"
+            description="The plugin can create only the selected rule types inside these paths."
+            placeholder="/workspace/project/**"
+            path-hint="Use an absolute file path or a directory ending in /**."
+            :busy="busy"
+            @blur="showValidation = true"
+          />
 
-            <div class="plugin-load-scope-list">
-              <div v-for="(scope, index) in filePolicyScopes" :key="scope.key" class="plugin-load-scope">
-                <label>
-                  <span>Path</span>
-                  <input
-                    v-model="scope.path_scope"
-                    type="text"
-                    placeholder="/workspace/project/**"
-                    autocomplete="off"
-                    :disabled="busy"
-                    @blur="showValidation = true"
-                  />
-                  <small>Use an absolute file path or a directory ending in <code>/**</code>.</small>
-                </label>
-                <fieldset>
-                  <legend>Rule types</legend>
-                  <label v-for="decision in decisionOptions" :key="decision.value">
-                    <input v-model="scope.decisions" type="checkbox" :value="decision.value" :disabled="busy" />
-                    <span>{{ decision.label }}</span>
-                  </label>
-                </fieldset>
-                <button
-                  v-if="filePolicyScopes.length > 1"
-                  class="plugin-load-remove"
-                  type="button"
-                  :disabled="busy"
-                  @click="removeScope(index)"
-                >
-                  <Trash2 :size="15" aria-hidden="true" />
-                  Remove scope
-                </button>
-              </div>
-            </div>
-            <button class="plugin-load-add" type="button" :disabled="busy" @click="addScope">
-              <Plus :size="15" aria-hidden="true" />
-              Add another path
-            </button>
-          </section>
+          <PolicyScopeEditor
+            v-if="needsCommandPolicy"
+            v-model="commandPolicyScopes"
+            title="Executables this plugin can manage"
+            description="The plugin can publish only the selected decisions for these executable scopes."
+            path-label="Executable scope"
+            placeholder="/usr/bin/**"
+            path-hint="Use an exact absolute executable path or a directory ending in /**."
+            :busy="busy"
+            @blur="showValidation = true"
+          />
 
           <section v-if="needsEnvRead" class="plugin-load-section editable">
             <div class="plugin-load-section-heading">
@@ -119,7 +94,8 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { Plus, Trash2, X } from '@lucide/vue';
+import { X } from '@lucide/vue';
+import PolicyScopeEditor from './PolicyScopeEditor.vue';
 
 const props = defineProps({
   open: { type: Boolean, required: true },
@@ -128,22 +104,24 @@ const props = defineProps({
 });
 
 const emit = defineEmits(['close', 'submit']);
-const decisionOptions = [
-  { value: 'allow', label: 'Allow' },
-  { value: 'deny', label: 'Deny' },
-  { value: 'gray', label: 'Ask plugin' },
-];
-const decisions = decisionOptions.map((decision) => decision.value);
 const instanceId = ref('');
 const filePolicyScopes = ref([]);
+const commandPolicyScopes = ref([]);
 const envReadText = ref('');
 const showValidation = ref(false);
-let nextScopeKey = 0;
 
 const titleId = computed(() => `plugin-load-title-${props.plugin.package_key}`);
 const needsFilePolicy = computed(() => props.plugin.parameterized_host_grants
   ?.includes('file-policy.rules.apply'));
+const needsCommandPolicy = computed(() => props.plugin.parameterized_host_grants
+  ?.includes('command-policy.rules.apply'));
 const needsEnvRead = computed(() => props.plugin.parameterized_host_grants?.includes('env-read'));
+const loadSubtitle = computed(() => {
+  if (needsFilePolicy.value && needsCommandPolicy.value) return 'Configure policy access';
+  if (needsCommandPolicy.value) return 'Configure command execution';
+  if (needsFilePolicy.value) return 'Configure file access';
+  return 'Load plugin';
+});
 const envRead = computed(() => envReadText.value
   .split('\n')
   .map((name) => name.trim())
@@ -152,16 +130,14 @@ const validationError = computed(() => {
   if (!instanceId.value || instanceId.value.trim() !== instanceId.value) {
     return 'Instance ID is required and cannot have surrounding whitespace.';
   }
-  if (needsFilePolicy.value) {
-    for (const scope of filePolicyScopes.value) {
-      if (!scope.path_scope.startsWith('/')) {
-        return 'Every file-policy scope must be an absolute path.';
-      }
-      if (scope.decisions.length === 0) {
-        return 'Select at least one rule decision for every file-policy scope.';
-      }
-    }
-  }
+  const fileScopeError = needsFilePolicy.value
+    ? validateScopes(filePolicyScopes.value, 'file-policy')
+    : '';
+  if (fileScopeError) return fileScopeError;
+  const commandScopeError = needsCommandPolicy.value
+    ? validateScopes(commandPolicyScopes.value, 'command-policy')
+    : '';
+  if (commandScopeError) return commandScopeError;
   if (needsEnvRead.value) {
     if (envRead.value.length === 0) {
       return 'Enter at least one environment variable name.';
@@ -187,22 +163,30 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
 
 function reset() {
   instanceId.value = props.plugin.plugin_id ?? '';
-  filePolicyScopes.value = [newScope()];
+  filePolicyScopes.value = [newScope('file')];
+  commandPolicyScopes.value = [newScope('command')];
   envReadText.value = '';
   showValidation.value = false;
 }
 
-function newScope() {
-  nextScopeKey += 1;
-  return { key: nextScopeKey, path_scope: '', decisions: [...decisions] };
+function newScope(kind) {
+  return {
+    key: `${kind}-policy-scope-initial`,
+    path_scope: '',
+    decisions: ['allow', 'deny', 'gray'],
+  };
 }
 
-function addScope() {
-  filePolicyScopes.value.push(newScope());
-}
-
-function removeScope(index) {
-  filePolicyScopes.value.splice(index, 1);
+function validateScopes(scopes, label) {
+  for (const scope of scopes) {
+    if (!scope.path_scope.startsWith('/')) {
+      return `Every ${label} scope must be an absolute path.`;
+    }
+    if (scope.decisions.length === 0) {
+      return `Select at least one rule decision for every ${label} scope.`;
+    }
+  }
+  return '';
 }
 
 function close() {
@@ -220,6 +204,12 @@ function submit() {
     grants: {
       file_policy_rules_apply: needsFilePolicy.value
         ? filePolicyScopes.value.flatMap((scope) => scope.decisions.map((decision) => ({
+          decision,
+          path_scope: scope.path_scope,
+        })))
+        : [],
+      command_policy_rules_apply: needsCommandPolicy.value
+        ? commandPolicyScopes.value.flatMap((scope) => scope.decisions.map((decision) => ({
           decision,
           path_scope: scope.path_scope,
         })))
@@ -275,15 +265,9 @@ function submit() {
 .plugin-load-header span,
 .plugin-load-section-heading small,
 .plugin-load-field small,
-.plugin-load-scope small,
 .plugin-load-permissions small {
   color: var(--stats-muted);
   font-size: var(--stats-font-sm);
-}
-
-.plugin-load-scope small code {
-  color: inherit;
-  font-size: inherit;
 }
 
 .plugin-load-header h2 {
@@ -293,9 +277,7 @@ function submit() {
 }
 
 .plugin-load-header button,
-.plugin-load-actions button,
-.plugin-load-add,
-.plugin-load-remove {
+.plugin-load-actions button {
   min-height: var(--stats-control-height-md);
   border: 1px solid var(--stats-border-strong);
   border-radius: var(--stats-radius-sm);
@@ -320,24 +302,20 @@ function submit() {
 }
 
 .plugin-load-field,
-.plugin-load-section-heading > div,
-.plugin-load-scope > label {
+.plugin-load-section-heading > div {
   display: grid;
   gap: var(--stats-space-xs);
 }
 
 .plugin-load-field > span,
-.plugin-load-scope > label > span,
-.plugin-load-section-heading span,
-.plugin-load-scope legend {
+.plugin-load-section-heading span {
   color: var(--stats-text);
   font-size: var(--stats-font-md);
   font-weight: var(--stats-weight-medium);
 }
 
 .plugin-load-field input,
-.plugin-load-field textarea,
-.plugin-load-scope input[type="text"] {
+.plugin-load-field textarea {
   width: 100%;
   padding: var(--stats-space-md);
   border: 1px solid var(--stats-border-strong);
@@ -422,67 +400,6 @@ function submit() {
   font-size: var(--stats-font-xs);
 }
 
-.plugin-load-scope-list {
-  display: grid;
-  gap: var(--stats-space-md);
-}
-
-.plugin-load-scope {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: var(--stats-space-md);
-  padding: var(--stats-space-md);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface);
-}
-
-.plugin-load-scope fieldset {
-  min-width: 0;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--stats-space-md);
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.plugin-load-scope fieldset label,
-.plugin-load-add,
-.plugin-load-remove {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--stats-space-xs);
-}
-
-.plugin-load-scope fieldset label {
-  min-height: var(--stats-control-height-sm);
-  padding: 0 var(--stats-space-sm);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface-soft);
-  color: var(--stats-text);
-  font-size: var(--stats-font-sm);
-}
-
-.plugin-load-scope legend {
-  margin-bottom: var(--stats-space-xs);
-}
-
-.plugin-load-remove {
-  grid-column: 1 / -1;
-  justify-self: end;
-  min-height: var(--stats-control-height-sm);
-  padding: 0 var(--stats-space-md);
-  color: var(--stats-danger);
-}
-
-.plugin-load-add {
-  justify-self: start;
-  padding: 0 var(--stats-space-md);
-}
-
 .plugin-load-error {
   margin: 0;
   color: var(--stats-danger);
@@ -508,12 +425,6 @@ function submit() {
 button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
-}
-
-@media (max-width: 47.5rem) {
-  .plugin-load-scope {
-    grid-template-columns: minmax(0, 1fr);
-  }
 }
 
 @media (max-width: 42.5rem) {

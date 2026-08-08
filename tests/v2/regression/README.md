@@ -36,6 +36,7 @@ sudo -E python3.11 tests/v2/regression/test_all.py --case probe_codex_mcp
 sudo -E python3.11 tests/v2/regression/test_all.py --case probe_codex_llm
 sudo -E python3.11 tests/v2/regression/test_all.py --case probe_pi_llm
 sudo -E python3.11 tests/v2/regression/test_all.py --case probe_qodercli_llm
+sudo -E python3.11 tests/v2/regression/test_all.py --case command_policy_xiaoo
 sudo -E VIRTUAL_CONTAINER_E2E_SCOPE=contracts \
   python3.11 tests/v2/regression/test_all.py --case virtual_container
 sudo -E python3.11 tests/v2/regression/test_all.py --case container_auto
@@ -122,6 +123,7 @@ stderr 和完整检查明细，同时仍由公共框架保存对应日志。
 | `probe_pi_llm` | [`probe_pi_llm/README.zh.md`](probe_pi_llm/README.zh.md) |
 | `probe_qodercli_llm` | [`probe_qodercli_llm/README.zh.md`](probe_qodercli_llm/README.zh.md) |
 | `probe_xiaoo_llm` | [`probe_xiaoo_llm/README.zh.md`](probe_xiaoo_llm/README.zh.md) |
+| `command_policy_xiaoo` | [`command_policy_xiaoo/README.zh.md`](command_policy_xiaoo/README.zh.md) |
 | `virtual_container` | [`virtual_container/README.zh.md`](virtual_container/README.zh.md) |
 | `virtual_container_xiaoo_concurrency` | [`virtual_container_xiaoo_concurrency/README.zh.md`](virtual_container_xiaoo_concurrency/README.zh.md) |
 | `container_auto` | [`container_auto/README.zh.md`](container_auto/README.zh.md) |

@@ -89,6 +89,16 @@ pub enum PluginCapability {
     FilePolicyRulesValidate,
     #[serde(rename = "file-policy.rules.apply")]
     FilePolicyRulesApply,
+    #[serde(rename = "command-execution.current-context-query")]
+    CommandExecutionCurrentContextQuery,
+    #[serde(rename = "command-policy.rules.read")]
+    CommandPolicyRulesRead,
+    #[serde(rename = "command-policy.rules.match-dry-run")]
+    CommandPolicyRulesMatchDryRun,
+    #[serde(rename = "command-policy.rules.validate")]
+    CommandPolicyRulesValidate,
+    #[serde(rename = "command-policy.rules.apply")]
+    CommandPolicyRulesApply,
     NetworkEgress,
     EnvRead,
 }
@@ -108,6 +118,11 @@ impl PluginCapability {
             Self::FilePolicyRulesMatchDryRun => "file-policy.rules.match-dry-run",
             Self::FilePolicyRulesValidate => "file-policy.rules.validate",
             Self::FilePolicyRulesApply => "file-policy.rules.apply",
+            Self::CommandExecutionCurrentContextQuery => "command-execution.current-context-query",
+            Self::CommandPolicyRulesRead => "command-policy.rules.read",
+            Self::CommandPolicyRulesMatchDryRun => "command-policy.rules.match-dry-run",
+            Self::CommandPolicyRulesValidate => "command-policy.rules.validate",
+            Self::CommandPolicyRulesApply => "command-policy.rules.apply",
             Self::NetworkEgress => "network-egress",
             Self::EnvRead => "env-read",
         }

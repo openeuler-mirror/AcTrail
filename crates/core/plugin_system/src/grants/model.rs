@@ -2,7 +2,10 @@ use std::collections::BTreeSet;
 
 use model_core::payload::PayloadSourceBoundary;
 
-use crate::{FilePolicyDecision, PluginCapability};
+use crate::{CommandPolicyDecision, FilePolicyDecision, PluginCapability};
+
+use super::parser::ScopedApplyGrantParser;
+use super::validation::GrantValidator;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct PluginHostGrants {
@@ -19,12 +22,23 @@ pub struct PluginHostGrants {
     file_policy_rules_match_dry_run: bool,
     file_policy_rules_validate: bool,
     file_policy_rules_apply: Vec<FilePolicyRulesApplyGrant>,
+    command_execution_current_context_query: bool,
+    command_policy_rules_read: bool,
+    command_policy_rules_match_dry_run: bool,
+    command_policy_rules_validate: bool,
+    command_policy_rules_apply: Vec<CommandPolicyRulesApplyGrant>,
     env_read: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FilePolicyRulesApplyGrant {
     pub decision: FilePolicyDecision,
+    pub path_scope: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommandPolicyRulesApplyGrant {
+    pub decision: CommandPolicyDecision,
     pub path_scope: String,
 }
 
@@ -62,6 +76,19 @@ impl PluginHostGrants {
                 PluginHostGrant::FilePolicyRulesApply { decision, path } => {
                     grants.allow_file_policy_rules_apply(decision, path)?
                 }
+                PluginHostGrant::CommandExecutionCurrentContextQuery => {
+                    grants.allow_command_execution_current_context_query()
+                }
+                PluginHostGrant::CommandPolicyRulesRead => grants.allow_command_policy_rules_read(),
+                PluginHostGrant::CommandPolicyRulesMatchDryRun => {
+                    grants.allow_command_policy_rules_match_dry_run()
+                }
+                PluginHostGrant::CommandPolicyRulesValidate => {
+                    grants.allow_command_policy_rules_validate()
+                }
+                PluginHostGrant::CommandPolicyRulesApply { decision, path } => {
+                    grants.allow_command_policy_rules_apply(decision, path)?
+                }
                 PluginHostGrant::EnvRead { name } => grants.allow_env_read(name)?,
             }
         }
@@ -79,7 +106,7 @@ impl PluginHostGrants {
 
     pub fn allow_payload_read_source(&mut self, source: impl Into<String>) -> Result<(), String> {
         let source = source.into();
-        validate_payload_source_boundary(&source)?;
+        GrantValidator::payload_source(&source)?;
         self.payload_read_sources.insert(source);
         Ok(())
     }
@@ -92,12 +119,12 @@ impl PluginHostGrants {
         self.payload_read_all
             || self
                 .payload_read_sources
-                .contains(payload_source_boundary_grant_name(source_boundary))
+                .contains(GrantValidator::payload_source_name(source_boundary))
     }
 
     pub fn allow_env_read(&mut self, name: impl Into<String>) -> Result<(), String> {
         let name = name.into();
-        validate_env_name(&name)?;
+        GrantValidator::env_name(&name)?;
         self.env_read.insert(name);
         Ok(())
     }
@@ -187,9 +214,9 @@ impl PluginHostGrants {
         decision: FilePolicyDecision,
         path_scope: impl Into<String>,
     ) -> Result<(), String> {
-        validate_file_policy_apply_decision(decision)?;
+        GrantValidator::file_decision(decision)?;
         let path_scope = path_scope.into();
-        validate_file_policy_path_scope(&path_scope)?;
+        GrantValidator::file_path_scope(&path_scope)?;
         self.file_policy_rules_apply
             .push(FilePolicyRulesApplyGrant {
                 decision,
@@ -204,6 +231,62 @@ impl PluginHostGrants {
 
     pub fn can_apply_file_policy_rules(&self) -> bool {
         !self.file_policy_rules_apply.is_empty()
+    }
+
+    pub fn allow_command_execution_current_context_query(&mut self) {
+        self.command_execution_current_context_query = true;
+    }
+
+    pub fn can_query_current_command_execution_context(&self) -> bool {
+        self.command_execution_current_context_query
+    }
+
+    pub fn allow_command_policy_rules_read(&mut self) {
+        self.command_policy_rules_read = true;
+    }
+
+    pub fn can_read_command_policy_rules(&self) -> bool {
+        self.command_policy_rules_read
+    }
+
+    pub fn allow_command_policy_rules_match_dry_run(&mut self) {
+        self.command_policy_rules_match_dry_run = true;
+    }
+
+    pub fn can_match_dry_run_command_policy_rules(&self) -> bool {
+        self.command_policy_rules_match_dry_run
+    }
+
+    pub fn allow_command_policy_rules_validate(&mut self) {
+        self.command_policy_rules_validate = true;
+    }
+
+    pub fn can_validate_command_policy_rules(&self) -> bool {
+        self.command_policy_rules_validate
+    }
+
+    pub fn allow_command_policy_rules_apply(
+        &mut self,
+        decision: CommandPolicyDecision,
+        path_scope: impl Into<String>,
+    ) -> Result<(), String> {
+        GrantValidator::command_decision(decision)?;
+        let path_scope = path_scope.into();
+        GrantValidator::command_path_scope(&path_scope)?;
+        self.command_policy_rules_apply
+            .push(CommandPolicyRulesApplyGrant {
+                decision,
+                path_scope,
+            });
+        Ok(())
+    }
+
+    pub fn command_policy_rules_apply_grants(&self) -> &[CommandPolicyRulesApplyGrant] {
+        &self.command_policy_rules_apply
+    }
+
+    pub fn can_apply_command_policy_rules(&self) -> bool {
+        !self.command_policy_rules_apply.is_empty()
     }
 
     pub fn can_read_env(&self, name: &str) -> bool {
@@ -262,6 +345,25 @@ impl PluginHostGrants {
             }
             .to_wire()
         }));
+        if self.command_execution_current_context_query {
+            values.push(PluginHostGrant::CommandExecutionCurrentContextQuery.to_wire());
+        }
+        if self.command_policy_rules_read {
+            values.push(PluginHostGrant::CommandPolicyRulesRead.to_wire());
+        }
+        if self.command_policy_rules_match_dry_run {
+            values.push(PluginHostGrant::CommandPolicyRulesMatchDryRun.to_wire());
+        }
+        if self.command_policy_rules_validate {
+            values.push(PluginHostGrant::CommandPolicyRulesValidate.to_wire());
+        }
+        values.extend(self.command_policy_rules_apply.iter().map(|grant| {
+            PluginHostGrant::CommandPolicyRulesApply {
+                decision: grant.decision,
+                path: grant.path_scope.clone(),
+            }
+            .to_wire()
+        }));
         values.extend(
             self.env_read
                 .iter()
@@ -284,6 +386,11 @@ impl PluginHostGrants {
             && !self.file_policy_rules_match_dry_run
             && !self.file_policy_rules_validate
             && self.file_policy_rules_apply.is_empty()
+            && !self.command_execution_current_context_query
+            && !self.command_policy_rules_read
+            && !self.command_policy_rules_match_dry_run
+            && !self.command_policy_rules_validate
+            && self.command_policy_rules_apply.is_empty()
             && self.env_read.is_empty()
     }
 }
@@ -306,6 +413,14 @@ pub enum PluginHostGrant {
     FilePolicyRulesValidate,
     FilePolicyRulesApply {
         decision: FilePolicyDecision,
+        path: String,
+    },
+    CommandExecutionCurrentContextQuery,
+    CommandPolicyRulesRead,
+    CommandPolicyRulesMatchDryRun,
+    CommandPolicyRulesValidate,
+    CommandPolicyRulesApply {
+        decision: CommandPolicyDecision,
         path: String,
     },
     EnvRead {
@@ -348,9 +463,21 @@ impl PluginHostGrant {
         if raw == "file-policy.rules.validate" {
             return Ok(Self::FilePolicyRulesValidate);
         }
+        if raw == "command-execution.current-context-query" {
+            return Ok(Self::CommandExecutionCurrentContextQuery);
+        }
+        if raw == "command-policy.rules.read" {
+            return Ok(Self::CommandPolicyRulesRead);
+        }
+        if raw == "command-policy.rules.match-dry-run" {
+            return Ok(Self::CommandPolicyRulesMatchDryRun);
+        }
+        if raw == "command-policy.rules.validate" {
+            return Ok(Self::CommandPolicyRulesValidate);
+        }
         let Some((kind, value)) = raw.split_once(':') else {
             return Err(format!(
-                "invalid plugin host grant {raw}; expected payload-read, payload-read:source=syscall, payload-read:source=tls-user-space, payload-read:source=stdio, context-query, trace-analysis-read, trace-activity-read, trace-file-state-read, alert-write, file-access.current-match-get, file-access.current-context-query, file-policy.rules.read, file-policy.rules.match-dry-run, file-policy.rules.validate, file-policy.rules.apply:kind=allow,path=/abs/**, or env-read:NAME"
+                "invalid plugin host grant {raw}; expected a declared unscoped grant, payload-read:source=<boundary>, file-policy.rules.apply:kind=<allow|deny|gray>,path=<absolute|/absolute/**>, command-policy.rules.apply:kind=<allow|deny|gray>,path=<absolute|/absolute/**>, or env-read:NAME"
             ));
         };
         match kind {
@@ -360,20 +487,21 @@ impl PluginHostGrant {
                         "invalid plugin host grant {raw}; expected payload-read:source=syscall, payload-read:source=tls-user-space, or payload-read:source=stdio"
                     ));
                 };
-                validate_payload_source_boundary(source)?;
+                GrantValidator::payload_source(source)?;
                 Ok(Self::PayloadReadSource {
                     source: source.to_string(),
                 })
             }
             "env-read" => {
-                validate_env_name(value)?;
+                GrantValidator::env_name(value)?;
                 Ok(Self::EnvRead {
                     name: value.to_string(),
                 })
             }
-            "file-policy.rules.apply" => parse_file_policy_rules_apply_grant(value),
+            "file-policy.rules.apply" => ScopedApplyGrantParser::file(value),
+            "command-policy.rules.apply" => ScopedApplyGrantParser::command(value),
             other => Err(format!(
-                "unsupported plugin host grant {other}; supported grants: payload-read, payload-read:source=syscall, payload-read:source=tls-user-space, payload-read:source=stdio, context-query, trace-analysis-read, trace-activity-read, trace-file-state-read, alert-write, file-access.current-match-get, file-access.current-context-query, file-policy.rules.read, file-policy.rules.match-dry-run, file-policy.rules.validate, file-policy.rules.apply:kind=allow,path=/abs/**, env-read:NAME"
+                "unsupported plugin host grant {other}; command policy grants use command-policy.rules.read, command-policy.rules.match-dry-run, command-policy.rules.validate, or command-policy.rules.apply:kind=<allow|deny|gray>,path=<absolute|/absolute/**>"
             )),
         }
     }
@@ -392,6 +520,13 @@ impl PluginHostGrant {
             Self::FilePolicyRulesMatchDryRun => PluginCapability::FilePolicyRulesMatchDryRun,
             Self::FilePolicyRulesValidate => PluginCapability::FilePolicyRulesValidate,
             Self::FilePolicyRulesApply { .. } => PluginCapability::FilePolicyRulesApply,
+            Self::CommandExecutionCurrentContextQuery => {
+                PluginCapability::CommandExecutionCurrentContextQuery
+            }
+            Self::CommandPolicyRulesRead => PluginCapability::CommandPolicyRulesRead,
+            Self::CommandPolicyRulesMatchDryRun => PluginCapability::CommandPolicyRulesMatchDryRun,
+            Self::CommandPolicyRulesValidate => PluginCapability::CommandPolicyRulesValidate,
+            Self::CommandPolicyRulesApply { .. } => PluginCapability::CommandPolicyRulesApply,
             Self::EnvRead { .. } => PluginCapability::EnvRead,
         }
     }
@@ -415,105 +550,18 @@ impl PluginHostGrant {
                 decision.as_str(),
                 path
             ),
+            Self::CommandExecutionCurrentContextQuery => {
+                "command-execution.current-context-query".to_string()
+            }
+            Self::CommandPolicyRulesRead => "command-policy.rules.read".to_string(),
+            Self::CommandPolicyRulesMatchDryRun => "command-policy.rules.match-dry-run".to_string(),
+            Self::CommandPolicyRulesValidate => "command-policy.rules.validate".to_string(),
+            Self::CommandPolicyRulesApply { decision, path } => format!(
+                "command-policy.rules.apply:kind={},path={}",
+                decision.as_str(),
+                path
+            ),
             Self::EnvRead { name } => format!("env-read:{name}"),
         }
-    }
-}
-
-fn parse_file_policy_rules_apply_grant(value: &str) -> Result<PluginHostGrant, String> {
-    let mut decision = None;
-    let mut path = None;
-    for part in value.split(',') {
-        let Some((key, raw_value)) = part.split_once('=') else {
-            return Err(format!(
-                "invalid file-policy.rules.apply grant segment {part}; expected key=value"
-            ));
-        };
-        match key {
-            "kind" => {
-                let parsed = FilePolicyDecision::from_wire(raw_value)?;
-                validate_file_policy_apply_decision(parsed)?;
-                decision = Some(parsed);
-            }
-            "path" => {
-                validate_file_policy_path_scope(raw_value)?;
-                path = Some(raw_value.to_string());
-            }
-            other => {
-                return Err(format!(
-                    "unsupported file-policy.rules.apply grant key {other}; expected kind or path"
-                ));
-            }
-        }
-    }
-    Ok(PluginHostGrant::FilePolicyRulesApply {
-        decision: decision.ok_or_else(|| {
-            "file-policy.rules.apply grant requires kind=allow|deny|gray".to_string()
-        })?,
-        path: path.ok_or_else(|| {
-            "file-policy.rules.apply grant requires path=/absolute/path or path=/absolute/**"
-                .to_string()
-        })?,
-    })
-}
-
-fn validate_file_policy_apply_decision(decision: FilePolicyDecision) -> Result<(), String> {
-    if matches!(decision, FilePolicyDecision::Default) {
-        return Err("file-policy.rules.apply grant kind cannot be default".to_string());
-    }
-    Ok(())
-}
-
-fn validate_file_policy_path_scope(path: &str) -> Result<(), String> {
-    if path.is_empty() {
-        return Err("file-policy.rules.apply path scope must not be empty".to_string());
-    }
-    let check_path = path.strip_suffix("/**").unwrap_or(path);
-    if !check_path.starts_with('/') {
-        return Err(format!(
-            "file-policy.rules.apply path scope {path} must be absolute"
-        ));
-    }
-    if check_path.contains('\0') {
-        return Err("file-policy.rules.apply path scope contains NUL".to_string());
-    }
-    Ok(())
-}
-
-fn validate_env_name(name: &str) -> Result<(), String> {
-    if name.is_empty() {
-        return Err("env-read grant name must not be empty".to_string());
-    }
-    let mut chars = name.chars();
-    let first = chars
-        .next()
-        .ok_or_else(|| "env-read grant name must not be empty".to_string())?;
-    if !(first == '_' || first.is_ascii_alphabetic()) {
-        return Err(format!(
-            "env-read grant name {name} must start with an ASCII letter or underscore"
-        ));
-    }
-    if chars.any(|ch| !(ch == '_' || ch.is_ascii_alphanumeric())) {
-        return Err(format!(
-            "env-read grant name {name} must contain only ASCII letters, digits, and underscores"
-        ));
-    }
-    Ok(())
-}
-
-fn validate_payload_source_boundary(source: &str) -> Result<(), String> {
-    match source {
-        "syscall" | "tls-user-space" | "stdio" => Ok(()),
-        _ => Err(format!(
-            "unsupported payload-read source {source}; expected syscall, tls-user-space, or stdio"
-        )),
-    }
-}
-
-fn payload_source_boundary_grant_name(source_boundary: PayloadSourceBoundary) -> &'static str {
-    match source_boundary {
-        PayloadSourceBoundary::Syscall => "syscall",
-        PayloadSourceBoundary::TlsUserSpace => "tls-user-space",
-        PayloadSourceBoundary::Stdio => "stdio",
     }
 }

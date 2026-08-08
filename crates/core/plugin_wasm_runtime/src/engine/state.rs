@@ -6,7 +6,8 @@ use model_core::ids::TraceId;
 use model_core::payload::{PayloadSegment, PayloadSourceBoundary};
 use model_core::trace::TraceAlertToken;
 use plugin_system::{
-    AlertHost, FilePolicyHost, FilePolicyReadContext, PluginHostGrants, PostTraceHost,
+    AlertHost, CommandExecutionContext, CommandPolicyHost, FilePolicyHost, FilePolicyReadContext,
+    PluginHostGrants, PostTraceHost,
 };
 use wasmtime::{StoreLimits, StoreLimitsBuilder};
 
@@ -28,6 +29,9 @@ pub(crate) struct WasmStoreState {
     file_policy_context: Option<FilePolicyReadContext>,
     file_policy_host: Option<Arc<dyn FilePolicyHost>>,
     file_policy_owner_instance_id: Option<String>,
+    command_execution_context: Option<CommandExecutionContext>,
+    command_policy_host: Option<Arc<dyn CommandPolicyHost>>,
+    command_policy_owner_instance_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -70,6 +74,10 @@ pub(crate) struct WasmHostLimits {
     pub(crate) file_policy_context_ref_max_bytes: usize,
     pub(crate) file_policy_query_max_bytes: usize,
     pub(crate) file_policy_io_max_bytes: usize,
+    pub(crate) command_context_ref_max_bytes: usize,
+    pub(crate) command_context_query_max_bytes: usize,
+    pub(crate) command_context_read_max_bytes: usize,
+    pub(crate) command_policy_io_max_bytes: usize,
     pub(crate) plugin_config_read_max_bytes: usize,
     pub(crate) plugin_command_argv_max_count: usize,
     pub(crate) plugin_command_arg_max_bytes: usize,
@@ -119,6 +127,9 @@ impl WasmStoreState {
             file_policy_context: None,
             file_policy_host: None,
             file_policy_owner_instance_id: None,
+            command_execution_context: None,
+            command_policy_host: None,
+            command_policy_owner_instance_id: None,
         }
     }
 
@@ -297,5 +308,37 @@ impl WasmStoreState {
     ) {
         self.file_policy_owner_instance_id = host.as_ref().map(|_| owner_instance_id.into());
         self.file_policy_host = host;
+    }
+
+    pub(crate) fn command_execution_context(&self) -> Option<&CommandExecutionContext> {
+        self.command_execution_context.as_ref()
+    }
+
+    pub(crate) fn set_command_execution_context(
+        &mut self,
+        context: Option<CommandExecutionContext>,
+    ) {
+        self.command_execution_context = context;
+    }
+
+    pub(crate) fn clear_command_execution_context(&mut self) {
+        self.command_execution_context = None;
+    }
+
+    pub(crate) fn command_policy_host(&self) -> Option<&Arc<dyn CommandPolicyHost>> {
+        self.command_policy_host.as_ref()
+    }
+
+    pub(crate) fn command_policy_owner_instance_id(&self) -> Option<&str> {
+        self.command_policy_owner_instance_id.as_deref()
+    }
+
+    pub(crate) fn set_command_policy_host(
+        &mut self,
+        owner_instance_id: impl Into<String>,
+        host: Option<Arc<dyn CommandPolicyHost>>,
+    ) {
+        self.command_policy_owner_instance_id = host.as_ref().map(|_| owner_instance_id.into());
+        self.command_policy_host = host;
     }
 }

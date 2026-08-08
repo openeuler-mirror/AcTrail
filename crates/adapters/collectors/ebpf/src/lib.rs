@@ -464,6 +464,68 @@ impl EbpfCollector {
         Ok(())
     }
 
+    /// Seed userspace identity for a child that still has its kernel fork binding.
+    ///
+    /// The fork binding remains authoritative until the queued exec event promotes
+    /// it. Replacing it with a procfs tick generation here would split the child
+    /// from the descriptor lineage carried by the queued fork event.
+    pub fn seed_fork_bound_membership(
+        &mut self,
+        trace_id: TraceId,
+        record: ProcessRecord,
+    ) -> Result<(), CollectorError> {
+        let observation = observation_from_record(&record)?;
+        let map_pid = self.map_pid_for_observation(&observation)?;
+        let binding = match self.fork_trace_lookup(map_pid)? {
+            ForkTraceLookup::Bound(binding) => binding,
+            ForkTraceLookup::Unbound => {
+                return Err(CollectorError::new(
+                    "fork_trace_identity",
+                    format!("host PID {map_pid} has no fork-time trace binding"),
+                ));
+            }
+            ForkTraceLookup::Unavailable => {
+                return Err(CollectorError::new(
+                    "fork_trace_identity",
+                    "fork-time trace lookup is unavailable",
+                ));
+            }
+            ForkTraceLookup::IntegrityFailure {
+                failed_publications,
+            } => {
+                return Err(CollectorError::new(
+                    "fork_trace_identity",
+                    format!(
+                        "fork-time trace identity is compromised after {failed_publications} publication failure(s)"
+                    ),
+                ));
+            }
+        };
+        if binding.trace_id() != trace_id {
+            return Err(CollectorError::new(
+                "fork_trace_identity",
+                format!(
+                    "host PID {map_pid} belongs to fork trace {}, not listener trace {}",
+                    binding.trace_id().get(),
+                    trace_id.get(),
+                ),
+            ));
+        }
+        let observation = binding.validate_and_enrich(observation)?;
+        let kernel_start_time = kernel_start_time(&observation)?;
+        self.file_tracker.seed_process(
+            trace_id,
+            observation.clone(),
+            observation
+                .host
+                .as_ref()
+                .and_then(|host| crate::procfs::read_process_cwd(host.pid)),
+        );
+        self.bindings
+            .track_with_map_pid(trace_id, observation, map_pid, kernel_start_time);
+        Ok(())
+    }
+
     pub fn stop_tracking_process(&mut self, pid: u32) -> Result<(), CollectorError> {
         let tracked = self.bindings.by_host_pid(pid).cloned();
         let map_pid = self
