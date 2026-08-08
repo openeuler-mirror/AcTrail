@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tests.v2.common.runner import TestingContextSingleton
-from tests.v2.common.testing_env import AgentBinaryDiscovery
+from tests.v2.common.testing_env import AgentBinaryDiscovery, default_claude_model
 
 
 @dataclass(frozen=True)
@@ -38,7 +38,7 @@ class AgentSelection:
                 "--output-format",
                 "text",
                 "--model",
-                os.environ.get("CLAUDE_E2E_MODEL", "sonnet"),
+                default_claude_model(),
                 "--no-session-persistence",
                 "--safe-mode",
                 "--permission-mode",

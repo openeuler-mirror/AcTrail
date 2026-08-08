@@ -42,6 +42,10 @@ PID、日志、SQLite、TLS-sync socket、export 和 plugin 路径，不会停�
 - 默认 `stdout_storage_mode=drop` 下不持久化 stdout payload，但必须存在
   stdin payload，所有 payload evidence 都引用已持久化 segment。
 
+prompt 采用 best-effort 设计：如果当前 Codex+provider 没有暴露 MCP 工具，
+Codex 应直接回复 `NO_MCP_TOOL`。此时 probe server 不会收到 `tools/call`，
+测例判为 `SKIPPED`（视为环境不支持，而不是 AcTrail 失败）。
+
 ## 手动测试
 
 配置仓库自带的 stdio MCP probe，启动隔离的 AcTrail daemon，运行
@@ -520,7 +524,7 @@ trap 会停止隔离 daemon，并同时保留 `$CASE_DIR` 和 `$RUNTIME_DIR` 供
 | --- | --- | --- |
 | `ACTRAIL_TEST_PYTHON` | `python3` | Python 3.10+ 解释器；手动流程也用它启动 probe server |
 | `CODEX_E2E_BINARY` | 自动查找 `codex` | Codex 可执行文件 |
-| `CODEX_E2E_MODEL` | `gpt-5.5` | Codex model |
+| `CODEX_E2E_MODEL` | 自动 | 未设置时由 `codex debug models` 选择当前 provider 第一个可用模型 |
 | `CODEX_E2E_REASONING_EFFORT` | `low` | reasoning effort |
 | `CODEX_MCP_E2E_COMMAND_TIMEOUT_SECONDS` | `30` | AcTrail 管理及停止超时 |
 | `CODEX_MCP_E2E_LAUNCH_TIMEOUT_SECONDS` | `180` | Codex workload 超时 |

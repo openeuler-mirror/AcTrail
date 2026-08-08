@@ -10,6 +10,8 @@ sudo -E python3 tests/v2/regression/probe_codex_llm/run_e2e.py
 
 脚本从 `CODEX_E2E_BINARY` 或当前环境查找 Codex，先执行外部可用性检查，
 再通过单层 `actrailctl launch` 验证 Codex LLM 采集。
+未显式设置 `CODEX_E2E_MODEL` 时，runner 会调用 `codex debug models`
+自动选择当前 provider 第一个 `supported_in_api=true` 的模型。
 
 # 步骤摘要
 

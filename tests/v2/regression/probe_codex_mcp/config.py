@@ -6,6 +6,7 @@ from pathlib import Path
 
 from tests.v2.common.core import CommonTestConfig, TestCaseInputs
 from tests.v2.common.mcp_test_support import STDIO_CAPTURE_ABI_MAX_BYTES
+from tests.v2.common.testing_env import default_codex_model
 
 
 @dataclass(frozen=True)
@@ -45,7 +46,11 @@ class ProbeCodexMcpConfig(CommonTestConfig):
         configured_binary = os.environ.get("CODEX_E2E_BINARY")
         return cls(
             **common.as_kwargs(),
-            model=os.environ.get("CODEX_E2E_MODEL", "gpt-5.5"),
+            model=(
+                os.environ.get("CODEX_E2E_MODEL")
+                or default_codex_model(inputs.repo)
+                or "gpt-5.5"
+            ),
             reasoning_effort=os.environ.get(
                 "CODEX_E2E_REASONING_EFFORT",
                 "low",

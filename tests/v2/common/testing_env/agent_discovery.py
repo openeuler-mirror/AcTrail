@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 import pwd
 import shutil
+import subprocess
 from pathlib import Path
 
 
@@ -48,6 +50,46 @@ class AgentBinaryDiscovery:
             environment["HOME"] = str(home)
         return environment
 
+    def default_codex_model(self) -> str | None:
+        binary = self.resolve("CODEX_E2E_BINARY", "codex")
+        if binary is None:
+            return None
+        return self.default_codex_model_for_binary(binary)
+
+    def default_codex_model_for_binary(self, binary: Path) -> str | None:
+        environment = self.environment(binary)
+        try:
+            completed = subprocess.run(
+                [str(binary), "debug", "models"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env=environment,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if completed.returncode != 0:
+            return None
+        try:
+            document = json.loads(completed.stdout)
+        except json.JSONDecodeError:
+            return None
+        models = document.get("models") if isinstance(document, dict) else None
+        if not isinstance(models, list):
+            return None
+        for model in models:
+            if not isinstance(model, dict):
+                continue
+            slug = model.get("slug")
+            if (
+                isinstance(slug, str)
+                and slug
+                and model.get("supported_in_api") is True
+                and model.get("visibility") != "hidden"
+            ):
+                return slug
+        return None
+
     @staticmethod
     def is_executable(path: Path) -> bool:
         return path.is_file() and os.access(path, os.X_OK)
@@ -88,3 +130,11 @@ class AgentBinaryDiscovery:
             except KeyError:
                 pass
         return homes
+
+
+def default_claude_model() -> str:
+    return (
+        os.environ.get("CLAUDE_E2E_MODEL")
+        or os.environ.get("ANTHROPIC_MODEL")
+        or "sonnet"
+    )

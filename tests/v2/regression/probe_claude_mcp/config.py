@@ -6,6 +6,7 @@ from pathlib import Path
 
 from tests.v2.common.core import CommonTestConfig, TestCaseInputs
 from tests.v2.common.mcp_test_support import STDIO_CAPTURE_ABI_MAX_BYTES
+from tests.v2.common.testing_env import default_claude_model
 
 
 @dataclass(frozen=True)
@@ -52,7 +53,7 @@ class ProbeClaudeMcpConfig(CommonTestConfig):
         configured_binary = os.environ.get("CLAUDE_E2E_BINARY")
         return cls(
             **common.as_kwargs(),
-            model=os.environ.get("CLAUDE_E2E_MODEL", "sonnet"),
+            model=default_claude_model(),
             claude_binary=Path(configured_binary) if configured_binary else None,
             artifact_root=Path(
                 os.environ.get(

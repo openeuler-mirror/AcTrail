@@ -212,6 +212,16 @@ class McpProbeWorkspace:
         self._require_tool_listing_size(spec, events)
         return f"{spec.tool_id} executed once with request id {request_id}"
 
+    def execution_count(self, spec: McpProbeSpec) -> int:
+        if not spec.event_log.is_file():
+            return 0
+        events = self._read_events(spec.event_log)
+        return sum(
+            1
+            for event in events
+            if event.get("event") == "tool_execution"
+        )
+
     def tool_listing_completed(self, spec: McpProbeSpec) -> bool:
         if not spec.event_log.is_file():
             return False

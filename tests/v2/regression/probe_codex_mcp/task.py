@@ -65,6 +65,12 @@ class ProbeCodexMcpTask:
             )
         return self._workspace.require_execution(self.local)
 
+    def tool_execution_count(self) -> int:
+        return self._workspace.execution_count(self.local)
+
+    def replied_no_tool(self, launch: CommandResult) -> bool:
+        return "NO_MCP_TOOL" in launch.stdout
+
     def environment(self) -> dict[str, str]:
         environment = self._discovery.environment(self._codex)
         for parent in self._codex.resolve().parents:
@@ -101,9 +107,11 @@ class ProbeCodexMcpTask:
 
     def _prompt(self) -> str:
         return (
-            f"Use {self.local.tool_id} with "
-            f'{{"marker":"{self.local.marker}"}}. '
-            f'After the result returns, reply with "{self.final_marker}".'
+            f"If {self.local.tool_id} is available, use it with "
+            f'{{"marker":"{self.local.marker}"}}, then reply with '
+            f'"{self.final_marker}". '
+            "If that MCP tool is not available, reply exactly "
+            "NO_MCP_TOOL and do not attempt to use it."
         )
 
     def _resolve_codex(self) -> Path:

@@ -83,7 +83,10 @@ class TestOutput:
                 raise RuntimeError("cannot finish inactive progress")
             status = effective_status(result)
             symbol = self._color(_SYMBOLS[status], status)
-            message = self._progress_text(symbol)
+            tail = symbol
+            if status is TestStatus.SKIPPED and result.message:
+                tail = f"{symbol} {result.message}"
+            message = self._progress_text(tail)
             if self._uses_in_place_progress():
                 print(
                     f"\r{message}\033[K",
