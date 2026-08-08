@@ -7,10 +7,10 @@ import argparse
 import os
 import select
 import signal
+import shutil
 import sqlite3
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -18,6 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 FIXTURE_DIR = ROOT / "tests/plugins/command-execution"
 INSTANCE = "wasm.command-deny"
+RUN_DIR = ROOT / "temp/command-execution-e2e"
 
 
 def parse_args() -> argparse.Namespace:
@@ -79,10 +80,10 @@ payload_text_enabled = false
 
 [capture]
 profile_name = "command-execution-plugin-e2e"
-capabilities = ["proc-exec-context"]
+capabilities = ["proc-lifecycle", "proc-exec-context", "enforcement-command-execution-seccomp"]
 
 [ebpf]
-enabled = false
+enabled = true
 memlock_rlimit = "inherit"
 tracked_process_max_entries = 1024
 pending_operation_max_entries = 1024
@@ -200,6 +201,21 @@ event_buffer_bytes = 65536
 [command_control]
 enabled = true
 rules_path = "{rules_path}"
+default_decision = "allow"
+failure_decision = "deny"
+audit_enabled = true
+audit_default_allow = false
+path_max_bytes = 4096
+argv_max_count = 128
+argv_max_arg_bytes = 8192
+argv_max_total_bytes = 65536
+pending_decision_max = 64
+reusable_cache_max_entries = 4096
+
+[command_control.gray]
+timeout_ms = 5000
+concurrency_limit = 8
+fallback = "deny"
 
 [supervision]
 startup_wait_ms = 5000
@@ -319,30 +335,60 @@ def wait_for_command_control_events(
     actrailctl: Path,
     config: Path,
     storage_path: Path,
+    denied_path: Path,
     attempts: int,
     sleep_sec: float,
 ) -> dict[str, str]:
+    observed: list[dict[str, str]] = []
+    observed_alerts: list[tuple[str, str, str, str]] = []
     for _ in range(attempts):
         run_checked([str(actrailctl), "--config", str(config), "list-traces"])
         with sqlite3.connect(storage_path) as connection:
             rows = connection.execute(
-                "select payload_fields from events where trace_id = 1 and payload_variant = 'process'"
+                "select payload_fields from events where trace_id = 1 and payload_variant = 'enforcement'"
             ).fetchall()
+            alerts = connection.execute(
+                """
+                select d.definition_key, d.kind, d.producer_plugin_id, a.payload_json
+                from alerts a
+                join alert_definitions d on d.alert_definition_id = a.alert_definition_id
+                where a.trace_id = 1
+                """
+            ).fetchall()
+        observed_alerts = alerts
         for (payload_fields,) in rows:
             fields = decode_map(payload_fields)
-            if fields.get("operation") != "command_control":
+            observed.append(fields)
+            if fields.get("operation") not in ("execve", "execveat"):
                 continue
             metadata = decode_map(fields.get("metadata", ""))
             if (
-                metadata.get("subject") == "command-execution"
-                and metadata.get("decision_source") == "sync-plugin"
+                fields.get("backend") == "seccomp-user-notify"
+                and fields.get("decision") == "deny"
+                and fields.get("result") == "denied"
+                and fields.get("path") == str(denied_path)
+                and fields.get("rule_id") == "command-deny"
+                and metadata.get("decision_source") == "gray-plugin"
                 and metadata.get("plugin_instance") == INSTANCE
-                and metadata.get("rule_id") == "command-deny"
-                and metadata.get("decision") == "deny"
+                and metadata.get("policy_owner_instance_id") == "actrail.static"
+                and metadata.get("decision_scope") == "once"
+                and bool(metadata.get("argv_digest"))
             ):
-                return metadata
+                expected_alert = any(
+                    definition == "command-execution-boundary-violation"
+                    and kind == "command.execution.boundary-violation"
+                    and producer == "actraild.enforcement"
+                    and str(denied_path) in payload
+                    and '"rule_id":"command-deny"' in payload
+                    for definition, kind, producer, payload in alerts
+                )
+                if expected_alert:
+                    return metadata
         time.sleep(sleep_sec)
-    raise RuntimeError("SQLite did not show expected command-execution control event")
+    raise RuntimeError(
+        "SQLite did not show expected command-execution control event: "
+        f"events={observed[-10:]} alerts={observed_alerts}"
+    )
 
 
 def parse_status_fields(output: str) -> dict[str, str]:
@@ -374,19 +420,30 @@ def main() -> int:
     actrailctl = require_binary(bin_dir, "actrailctl")
     agent_script = FIXTURE_DIR / "agent.py"
 
-    with tempfile.TemporaryDirectory(prefix="actrail-command-control-e2e-") as raw_tmp:
-        tmp = Path(raw_tmp)
+    if RUN_DIR.exists():
+        shutil.rmtree(RUN_DIR)
+    RUN_DIR.mkdir(parents=True)
+    tmp = RUN_DIR
+    try:
         allowed = tmp / "commands" / "allowed.sh"
         denied = tmp / "commands" / "denied.sh"
         allowed_marker = tmp / "allowed.marker"
+        same_binary_allowed_marker = tmp / "same-binary-allowed.marker"
         denied_marker = tmp / "denied.marker"
         rules = tmp / "command-rules.conf"
         config = tmp / "operator.conf"
         write_text(allowed, f"#!/bin/sh\nprintf allowed > {allowed_marker}\n", 0o755)
-        write_text(denied, f"#!/bin/sh\nprintf denied > {denied_marker}\n", 0o755)
+        write_text(
+            denied,
+            "#!/bin/sh\n"
+            f'if [ "$1" = "blocked" ]; then printf denied > {denied_marker}; '
+            f"else printf allowed > {same_binary_allowed_marker}; fi\n",
+            0o755,
+        )
         write_text(
             rules,
-            f"command-deny sync-plugin {INSTANCE} timeout-ms 5000 concurrency 1 fallback deny exec {denied}\n",
+            f'command-deny gray sync-plugin {INSTANCE} exec {denied} '
+            'args-json ["blocked","*"] priority 20\n',
         )
         write_text(config, operator_config(tmp, rules))
         write_text(tmp / "unused-enforcement-rules.conf", "")
@@ -442,16 +499,26 @@ def main() -> int:
                 output = wait_for_agent_output(agent, args.agent_timeout_sec)
             finally:
                 stop_process(agent)
-            if "allowed=ok" not in output or "denied=permission_denied" not in output:
+            if not all(
+                marker in output
+                for marker in (
+                    "allowed=ok",
+                    "same_binary_allowed=ok",
+                    "denied=permission_denied",
+                )
+            ):
                 raise RuntimeError(f"agent output missed expected markers: {output}")
             if not allowed_marker.exists():
                 raise RuntimeError("allowed command did not execute")
+            if not same_binary_allowed_marker.exists():
+                raise RuntimeError("same binary with nonmatching args did not execute")
             if denied_marker.exists():
                 raise RuntimeError("denied command executed despite plugin denial")
             wait_for_command_control_events(
                 actrailctl,
                 config,
                 tmp / "actrail.sqlite",
+                denied,
                 args.drain_attempts,
                 args.drain_sleep_sec,
             )
@@ -474,6 +541,8 @@ def main() -> int:
                 raise RuntimeError(f"plugin should observe exactly one command decision: {status}")
         finally:
             stop_process(daemon)
+    finally:
+        shutil.rmtree(RUN_DIR, ignore_errors=True)
     print("command_execution_control_e2e=ok")
     return 0
 

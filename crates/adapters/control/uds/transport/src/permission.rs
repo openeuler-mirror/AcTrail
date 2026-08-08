@@ -10,7 +10,7 @@ use model_core::ids::{ProfileName, RequestId};
 use super::{ControlCodecError, field, parse_bool, parse_u64, parse_usize};
 
 pub(super) fn encode_command(fields: &mut Vec<String>, command: &ResolveLaunchPermissionsCommand) {
-    fields.push("resolve_launch_permissions_v1".to_string());
+    fields.push("resolve_launch_permissions_v2".to_string());
     fields.push(command.request_id.get().to_string());
     fields.push(command.profile_name.to_string());
     fields.push(command.host_ebpf.as_str().to_string());
@@ -33,7 +33,7 @@ pub(super) fn decode_command(fields: &[String]) -> Result<ControlCommand, Contro
 }
 
 pub(super) fn encode_reply(fields: &mut Vec<String>, reply: &LaunchPermissionsReply) {
-    fields.push("reply_launch_permissions_v1".to_string());
+    fields.push("reply_launch_permissions_v2".to_string());
     fields.push(reply.requested_host_ebpf.as_str().to_string());
     fields.push(reply.requested_seccomp_notify.as_str().to_string());
     fields.push(reply.selected_host_ebpf.to_string());
@@ -43,6 +43,7 @@ pub(super) fn encode_reply(fields: &mut Vec<String>, reply: &LaunchPermissionsRe
     fields.push(reply.payload_socket_seccomp.to_string());
     fields.push(reply.process_seccomp.to_string());
     fields.push(reply.network_control_seccomp.to_string());
+    fields.push(reply.command_control_seccomp.to_string());
     fields.push(reply.file_mkdir_seccomp.to_string());
     fields.push(reply.file_rmdir_seccomp.to_string());
     fields.push(reply.degraded.to_string());
@@ -58,8 +59,8 @@ pub(super) fn encode_reply(fields: &mut Vec<String>, reply: &LaunchPermissionsRe
 }
 
 pub(super) fn decode_reply(fields: &[String]) -> Result<ControlReply, ControlCodecError> {
-    let capability_count = parse_usize(field(fields, 13)?, "required_capability_count")?;
-    let mut cursor = 14;
+    let capability_count = parse_usize(field(fields, 14)?, "required_capability_count")?;
+    let mut cursor = 15;
     let mut required_capabilities = Vec::new();
     for _ in 0..capability_count {
         required_capabilities.push(
@@ -85,9 +86,10 @@ pub(super) fn decode_reply(fields: &[String]) -> Result<ControlReply, ControlCod
         payload_socket_seccomp: parse_bool(field(fields, 7)?, "payload_socket_seccomp")?,
         process_seccomp: parse_bool(field(fields, 8)?, "process_seccomp")?,
         network_control_seccomp: parse_bool(field(fields, 9)?, "network_control_seccomp")?,
-        file_mkdir_seccomp: parse_bool(field(fields, 10)?, "file_mkdir_seccomp")?,
-        file_rmdir_seccomp: parse_bool(field(fields, 11)?, "file_rmdir_seccomp")?,
-        degraded: parse_bool(field(fields, 12)?, "degraded")?,
+        command_control_seccomp: parse_bool(field(fields, 10)?, "command_control_seccomp")?,
+        file_mkdir_seccomp: parse_bool(field(fields, 11)?, "file_mkdir_seccomp")?,
+        file_rmdir_seccomp: parse_bool(field(fields, 12)?, "file_rmdir_seccomp")?,
+        degraded: parse_bool(field(fields, 13)?, "degraded")?,
         required_capabilities,
         reasons,
     }))
@@ -138,6 +140,7 @@ mod tests {
                 payload_socket_seccomp: false,
                 process_seccomp: false,
                 network_control_seccomp: false,
+                command_control_seccomp: false,
                 file_mkdir_seccomp: false,
                 file_rmdir_seccomp: false,
                 required_capabilities: vec![

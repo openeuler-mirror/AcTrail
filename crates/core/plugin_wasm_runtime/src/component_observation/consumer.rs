@@ -20,9 +20,9 @@ use crate::engine::{
     memory_max_bytes, metered_engine, reset_fuel,
 };
 
-const OBSERVATION_CONSUMER_EXPORT: &str = "actrail:plugin/observation-consumer@0.2.0";
+const OBSERVATION_CONSUMER_EXPORT: &str = "actrail:plugin/observation-consumer@0.4.0";
 const OBSERVATION_CONSUME_EXPORT: &str = "consume";
-const POST_TRACE_ANALYZER_EXPORT: &str = "actrail:plugin/post-trace-analyzer@0.2.0";
+const POST_TRACE_ANALYZER_EXPORT: &str = "actrail:plugin/post-trace-analyzer@0.4.0";
 const POST_TRACE_ANALYZE_EXPORT: &str = "analyze";
 const DEFAULT_ACTION_PAGE_MAX_COUNT: u32 = 256;
 const DEFAULT_ACTION_TOTAL_MAX_COUNT: u32 = 16_384;

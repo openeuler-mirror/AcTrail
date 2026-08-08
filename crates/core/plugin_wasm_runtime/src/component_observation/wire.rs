@@ -135,11 +135,11 @@ fn observation_attributes(action: &SemanticAction) -> Vec<Val> {
     }
     if !action.attributes.contains_key(attrs::process::ID) {
         pairs.push(Val::Record(vec![
-            ("key".to_string(), Val::String(attrs::process::ID.to_string())),
             (
-                "value".to_string(),
-                Val::String(action.process.to_string()),
+                "key".to_string(),
+                Val::String(attrs::process::ID.to_string()),
             ),
+            ("value".to_string(), Val::String(action.process.to_string())),
         ]));
     }
     pairs

@@ -4,9 +4,9 @@ use wasmtime::component::{Linker as ComponentLinker, Val};
 use crate::component_observation::wire::{system_time_millis, trace_analysis_action_val};
 use crate::engine::WasmStoreState;
 
-const TRACE_ANALYSIS_IMPORT: &str = "actrail:plugin/trace-analysis-read@0.2.0";
-const TRACE_ACTIVITY_IMPORT: &str = "actrail:plugin/trace-activity-read@0.2.0";
-const TRACE_FILE_STATE_IMPORT: &str = "actrail:plugin/trace-file-state-read@0.2.0";
+const TRACE_ANALYSIS_IMPORT: &str = "actrail:plugin/trace-analysis-read@0.4.0";
+const TRACE_ACTIVITY_IMPORT: &str = "actrail:plugin/trace-activity-read@0.4.0";
+const TRACE_FILE_STATE_IMPORT: &str = "actrail:plugin/trace-file-state-read@0.4.0";
 
 pub(super) fn register_post_trace_interfaces(
     linker: &mut ComponentLinker<WasmStoreState>,

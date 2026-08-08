@@ -174,12 +174,16 @@ impl StorageAttachService {
                 let file_policy_host = self
                     .enforcement
                     .file_policy_host(self.control_plugins.clone());
+                let command_policy_host = self
+                    .command_control
+                    .command_policy_host(self.control_plugins.clone());
                 let decider = build_control_decider_from_manifest(
                     &command.instance_id,
                     &manifest,
                     plugin_config_raw.as_deref(),
                     host_grants,
                     Some(std::sync::Arc::new(file_policy_host)),
+                    Some(std::sync::Arc::new(command_policy_host)),
                 )?;
                 self.control_plugins.add_decider(decider, manifest_warnings)
             }
@@ -322,6 +326,8 @@ impl StorageAttachService {
             .any(|status| status.instance_id == instance_id)
         {
             self.enforcement.remove_plugin_policy_owner(instance_id)?;
+            self.command_control
+                .remove_plugin_policy_owner(instance_id)?;
             return self.control_plugins.remove_decider(instance_id);
         }
         if let Some(existing) = self
@@ -572,6 +578,36 @@ fn validate_plugin_capability_grants(
                 ungranted.push(capability.as_str());
             }
             PluginCapability::FilePolicyRulesApply => {}
+            PluginCapability::CommandExecutionCurrentContextQuery
+                if !host_grants.can_query_current_command_execution_context() =>
+            {
+                ungranted.push(capability.as_str());
+            }
+            PluginCapability::CommandExecutionCurrentContextQuery => {}
+            PluginCapability::CommandPolicyRulesRead
+                if !host_grants.can_read_command_policy_rules() =>
+            {
+                ungranted.push(capability.as_str());
+            }
+            PluginCapability::CommandPolicyRulesRead => {}
+            PluginCapability::CommandPolicyRulesMatchDryRun
+                if !host_grants.can_match_dry_run_command_policy_rules() =>
+            {
+                ungranted.push(capability.as_str());
+            }
+            PluginCapability::CommandPolicyRulesMatchDryRun => {}
+            PluginCapability::CommandPolicyRulesValidate
+                if !host_grants.can_validate_command_policy_rules() =>
+            {
+                ungranted.push(capability.as_str());
+            }
+            PluginCapability::CommandPolicyRulesValidate => {}
+            PluginCapability::CommandPolicyRulesApply
+                if !host_grants.can_apply_command_policy_rules() =>
+            {
+                ungranted.push(capability.as_str());
+            }
+            PluginCapability::CommandPolicyRulesApply => {}
             other => ungranted.push(other.as_str()),
         }
     }
@@ -594,6 +630,7 @@ fn build_control_decider_from_manifest(
     plugin_config: Option<&str>,
     host_grants: PluginHostGrants,
     file_policy_host: Option<std::sync::Arc<dyn plugin_system::FilePolicyHost>>,
+    command_policy_host: Option<std::sync::Arc<dyn plugin_system::CommandPolicyHost>>,
 ) -> Result<Box<dyn ControlDecider>, ControlError> {
     match manifest.runtime_kind() {
         PluginRuntimeKind::Wasm => {
@@ -603,6 +640,7 @@ fn build_control_decider_from_manifest(
                 plugin_config,
                 host_grants,
                 file_policy_host,
+                command_policy_host,
             )
             .map_err(|error| ControlError::new(error.code, error.message))?;
             Ok(Box::new(decider))

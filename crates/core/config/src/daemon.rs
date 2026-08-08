@@ -54,7 +54,13 @@ pub use cluster::{
     DEFAULT_CLUSTER_REPORT_INTERVAL_SECS, DEFAULT_CLUSTER_REPORT_MAX_RETRY_BACKOFF_SECS,
     DEFAULT_CLUSTER_REPORT_RETRY_BACKOFF_SECS, DEFAULT_CLUSTER_REPORT_UPLOAD_TIMEOUT_SECS,
 };
-pub use command::CommandControlConfig;
+pub use command::{
+    CommandControlConfig, CommandControlGrayConfig, DEFAULT_COMMAND_ARGV_MAX_ARG_BYTES,
+    DEFAULT_COMMAND_ARGV_MAX_COUNT, DEFAULT_COMMAND_ARGV_MAX_TOTAL_BYTES,
+    DEFAULT_COMMAND_GRAY_CONCURRENCY_LIMIT, DEFAULT_COMMAND_GRAY_TIMEOUT_MS,
+    DEFAULT_COMMAND_PATH_MAX_BYTES, DEFAULT_COMMAND_PENDING_DECISION_MAX,
+    DEFAULT_COMMAND_REUSABLE_CACHE_MAX_ENTRIES,
+};
 pub use enforcement::{
     EnforcementBackend, EnforcementBuiltinRuleConfig, EnforcementConfig, EnforcementDecision,
     EnforcementMarkStrategy, EnforcementScope, EnforcementSeccompSyscall,

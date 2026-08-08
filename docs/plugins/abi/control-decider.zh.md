@@ -22,7 +22,7 @@ WASM core module 插件还需要遵守 [WASM Core Module ABI](wasm-core-module.z
 
 | 项 | 值 |
 | --- | --- |
-| Export interface | `actrail:plugin/control-decider@0.1.0` |
+| Export interface | `actrail:plugin/control-decider@0.4.0` |
 | Function | `decide` |
 
 函数签名：
@@ -264,13 +264,60 @@ WIT component 入口：
 | `file-policy-rules-validate(request)` | `result<file-policy-apply-result, string>` |
 | `file-policy-rules-apply(request)` | `result<file-policy-apply-result, string>` |
 
+命令 gray 决策的公共 `decision-request` 只携带紧凑摘要。`target-summary` 用于展示和诊断，不是稳定策略输入，插件不得依赖其文本格式解析 argv。需要完整命令上下文的插件应声明并获得 `command-execution.current-context-query`，然后查询 `context-ref = "c"`、`query = "command-execution.v1"`。
+
+返回的 `command-execution-context` 字段如下：
+
+| 字段 | WIT 类型 | 含义 |
+| --- | --- | --- |
+| `syscall` | string | `execve` 或 `execveat`。 |
+| `requested-path` | string | tracee 原始请求路径。 |
+| `resolved-path` | string | tracee namespace 内词法规范化后的绝对路径。 |
+| `argv` | list<string> | 在配置的数量、单参数和总字节上限内完整复制的 argv。 |
+| `execveat-dirfd` | option<s32> | `execveat` dirfd；`execve` 为 none。 |
+| `execveat-flags` | option<u64> | `execveat` flags；`execve` 为 none。 |
+
+argv 超过任一限制时，daemon 直接使用 `command_control.failure_decision`，不会调用插件。WIT component 使用结构化 record；WASM core module 的 `command_execution_current_context_query` 使用版本化长度前缀二进制响应，以避免 JSON 转义放大。
+
+动态命令路由使用以下 grants：
+
+| grant | 能力 |
+| --- | --- |
+| `command-policy.rules.read` | 读取当前合并规则及 revision。 |
+| `command-policy.rules.match-dry-run` | 按精确 executable 与请求 args 查询实际命中 owner、决策和 revision。 |
+| `command-policy.rules.validate` | 校验一批 AON patch，不修改路由。 |
+| `command-policy.rules.apply:kind=<allow\|deny\|gray>,path=<absolute-path-or-/**-scope>` | 只允许发布指定决策类型和 executable 范围。 |
+
+每个 apply request 包含 `base-revision`、`mutation-id`、可选 `reason` 和 `upsert/delete` items。规则 draft/view 的 `args: option<list<string>>` 匹配 `argv[1..]`：none 表示任意参数，空 list 表示无额外参数，只有最后一个 `"*"` 可匹配任意剩余参数。dry-run request 必须同时提交 `executable` 和实际 `args: list<string>`。revision 不匹配、任一规则非法、grant 越权或 gray target 不可用时整批 rejected。
+
+WASM core module 入口使用版本 2 的长度前缀二进制请求/响应：
+
+| hostcall | ABI |
+| --- | --- |
+| `command_policy_rules_version_get() -> i64` | 成功返回当前 revision；负数为错误码。 |
+| `command_policy_rules_list(filter_ptr, filter_len, cursor_ptr, cursor_len, limit, out, max) -> i64` | 列出规则并返回写入字节数。 |
+| `command_policy_rules_match_dry_run(ptr, len, out, max) -> i64` | 查询 executable 与 args 的合并命中结果。 |
+| `command_policy_rules_validate(ptr, len, out, max) -> i64` | AON 校验 patch。 |
+| `command_policy_rules_apply(ptr, len, out, max) -> i64` | AON 应用 patch。 |
+
+WIT component 入口：
+
+| hostcall | WIT 类型 |
+| --- | --- |
+| `command-execution-current-context-query(context-ref, query)` | `result<command-execution-context, string>` |
+| `command-policy-rules-version-get()` | `result<u64, string>` |
+| `command-policy-rules-list(filter, cursor, limit)` | `result<command-policy-list-result, string>` |
+| `command-policy-rules-match-dry-run(request)` | `result<command-policy-match-dry-run-result, string>` |
+| `command-policy-rules-validate(request)` | `result<command-policy-apply-result, string>` |
+| `command-policy-rules-apply(request)` | `result<command-policy-apply-result, string>` |
+
 需要支持 `actraild plugin cmd` 的控制插件使用 WIT world `managed-control-plugin`。它在 `control-plugin` 的基础上额外导出管理命令入口：
 
 | export | WIT 类型 |
 | --- | --- |
 | `management-command.handle-command(request)` | `result<plugin-command-result, string>` |
 
-该入口由 `actraild plugin cmd --instance <id> -- <plugin args...>` 调用，属于低频管理面，不参与文件访问热路径。AcTrail 只转发 argv 并限制输入输出大小；插件自己解释子命令。
+该入口由 `actraild plugin cmd --instance <id> -- <plugin args...>` 调用，属于低频管理面，不参与文件或命令执行热路径。AcTrail 只转发 argv 并限制输入输出大小；插件自己解释子命令。
 
 ## 控制决策返回码
 
@@ -289,4 +336,4 @@ WASM core module 控制插件通过 `i64` 返回码表达决策：
 
 `once` 结果只作用于当前待决策请求。`reusable` 结果允许 AcTrail 在当前 task/trace 内复用该决策，减少重复调用插件的开销。
 
-灰名单文件访问的超时 fallback 由 AcTrail 策略配置决定，默认拒绝。耗时较长的逻辑应限制在明确需要同步决策的灰名单或显式策略命中路径上，避免拖慢普通快路径。
+灰名单文件访问的超时 fallback 由文件规则配置决定；命令 gray 的超时和 fallback 由 `[command_control.gray]` 配置，默认拒绝。耗时较长的逻辑应限制在明确需要同步决策的 gray 路径上，避免拖慢普通快路径。

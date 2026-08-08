@@ -4,4 +4,7 @@ mod service;
 mod system;
 
 pub(crate) use broker::AlertIngress;
-pub(crate) use system::{FileAccessBoundaryAlert, FileAccessDenySource};
+pub(crate) use system::{
+    CommandExecutionBoundaryAlert, CommandExecutionDenySource, FileAccessBoundaryAlert,
+    FileAccessDenySource,
+};

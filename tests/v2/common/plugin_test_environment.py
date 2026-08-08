@@ -20,6 +20,7 @@ class PluginRuntimeSpec:
     instance_id: str
     plugin_id: str
     runtime: str
+    load_grants: dict[str, Any] | None = None
 
 
 class PluginTestEnvironment:
@@ -63,6 +64,7 @@ class PluginTestEnvironment:
         self._daemon_started = False
         self._plugin_loaded = False
         self._original_config: dict[str, Any] | None = None
+        self._loaded_plugin: dict[str, Any] | None = None
 
     def prepare(self) -> dict[str, Any]:
         if not self.config.work_dir.is_dir():
@@ -102,6 +104,22 @@ class PluginTestEnvironment:
         if not isinstance(returned, dict):
             raise AssertionError("plugin config update returned no config object")
         return returned
+
+    @property
+    def loaded_plugin(self) -> dict[str, Any]:
+        if self._loaded_plugin is None:
+            raise RuntimeError("plugin has not been loaded")
+        return copy.deepcopy(self._loaded_plugin)
+
+    def unload_plugin(self) -> dict[str, Any]:
+        if not self._plugin_loaded:
+            raise RuntimeError(
+                f"plugin instance is not loaded: {self.plugin.instance_id}"
+            )
+        response = self.api.unload(self.plugin.instance_id)
+        self._plugin_loaded = False
+        self._loaded_plugin = None
+        return response
 
     def cleanup(self) -> TestResult:
         failures: list[str] = []
@@ -228,7 +246,11 @@ class PluginTestEnvironment:
             )
 
     def _load_plugin(self) -> None:
-        loaded = self.api.load(self.plugin.package, self.plugin.instance_id)
+        loaded = self.api.load(
+            self.plugin.package,
+            self.plugin.instance_id,
+            self.plugin.load_grants,
+        )
         self._plugin_loaded = True
         plugin = loaded.get("plugin")
         if not isinstance(plugin, dict):
@@ -244,6 +266,7 @@ class PluginTestEnvironment:
                 raise AssertionError(
                     f"loaded plugin {key}={plugin.get(key)!r}, expected {value!r}"
                 )
+        self._loaded_plugin = copy.deepcopy(plugin)
 
     def _stop_web(self, failures: list[str]) -> None:
         if self._web_process is not None:

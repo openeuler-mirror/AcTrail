@@ -444,6 +444,7 @@ impl Default for CaptureDocument {
                 "net-application-plaintext-http",
                 "net-application-http2-frames",
                 "resource-metrics",
+                "enforcement-command-execution-seccomp",
                 "enforcement-file-permission-fanotify",
             ]
             .into_iter()

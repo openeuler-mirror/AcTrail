@@ -11,7 +11,7 @@ use storage_factory::StorageConfig;
 
 use super::super::{
     AgentInvocationConfig, ApplicationProtocolConfig, ClusterCenterConfig, ClusterConfig,
-    ClusterReportConfig, CommandControlConfig, DEFAULT_ACTIVE_TRACE_MAX,
+    ClusterReportConfig, CommandControlConfig, CommandControlGrayConfig, DEFAULT_ACTIVE_TRACE_MAX,
     DEFAULT_CONTROL_PENDING_CONNECTION_MAX, DEFAULT_FINALIZATION_POLL_INTERVAL_MS,
     DEFAULT_FINALIZATION_SETTLE_DELAY_MS, DEFAULT_FINALIZATION_SHUTDOWN_DRAIN_TIMEOUT_MS,
     DEFAULT_FINALIZATION_TRACES_PER_CYCLE, DEFAULT_PLUGIN_ALERT_DRAIN_TIMEOUT_MS,
@@ -356,6 +356,21 @@ impl OperatorDocument {
             command_control: CommandControlDocument {
                 enabled: config.command_control.enabled,
                 rules_path: config.command_control.rules_path.display().to_string(),
+                default_decision: config.command_control.default_decision.as_str().to_string(),
+                failure_decision: config.command_control.failure_decision.as_str().to_string(),
+                audit_enabled: config.command_control.audit_enabled,
+                audit_default_allow: config.command_control.audit_default_allow,
+                path_max_bytes: config.command_control.path_max_bytes,
+                argv_max_count: config.command_control.argv_max_count,
+                argv_max_arg_bytes: config.command_control.argv_max_arg_bytes,
+                argv_max_total_bytes: config.command_control.argv_max_total_bytes,
+                pending_decision_max: config.command_control.pending_decision_max,
+                reusable_cache_max_entries: config.command_control.reusable_cache_max_entries,
+                gray: CommandControlGrayDocument {
+                    timeout_ms: config.command_control.gray.timeout_ms,
+                    concurrency_limit: config.command_control.gray.concurrency_limit,
+                    fallback: config.command_control.gray.fallback.as_str().to_string(),
+                },
             },
             network_control: NetworkControlDocument {
                 enabled: config.network_control.enabled,
@@ -403,7 +418,7 @@ impl OperatorDocument {
         validate_resource_metrics_config(&resource_metrics, &capabilities)?;
         let enforcement = self.enforcement.to_config()?;
         validate_enforcement_config(&enforcement, &capabilities)?;
-        let command_control = self.command_control.to_config();
+        let command_control = self.command_control.to_config()?;
         let network_control = self.network_control.to_config()?;
         validate_seccomp_config(
             &seccomp_notify,
@@ -411,6 +426,7 @@ impl OperatorDocument {
             &payload_config.socket,
             &process_seccomp,
             &enforcement,
+            &command_control,
             &capabilities,
         )?;
         let (plugin_discovery, plugin_alert_runtime, startup_plugins) = self.plugins.to_config()?;

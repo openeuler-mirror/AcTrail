@@ -37,6 +37,9 @@ from tests.v2.regression.probe_qodercli_llm.run_e2e import (  # noqa: E402
 from tests.v2.regression.probe_xiaoo_llm.run_e2e import (  # noqa: E402
     TEST_DEFINITION as XIAOO,
 )
+from tests.v2.regression.command_policy_xiaoo.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as COMMAND_POLICY_XIAOO,
+)
 from tests.v2.regression.activity_anomaly.run_e2e import (  # noqa: E402
     TEST_DEFINITION as ACTIVITY_ANOMALY,
 )
@@ -73,6 +76,7 @@ TESTS = [
     PI,
     QODERCLI,
     XIAOO,
+    COMMAND_POLICY_XIAOO,
     VIRTUAL_CONTAINER,
     VIRTUAL_CONTAINER_XIAOO_CONCURRENCY,
     CONTAINER_AUTO,
@@ -83,6 +87,7 @@ TESTS = [
     ACTIVITY_ANOMALY,
     TOOL_CONSECUTIVE_FAILURE_ALERT,
 ]
+
 
 def main(argv: list[str] | None = None) -> int:
     effective_argv = list(sys.argv[1:] if argv is None else argv)

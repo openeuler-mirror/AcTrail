@@ -10,7 +10,7 @@ use model_core::ids::TraceId;
 use model_core::trace::TraceAlertToken;
 use plugin_system::{AlertHost, PluginRuntimeError};
 
-use super::system::FileAccessBoundaryAlert;
+use super::system::{CommandExecutionBoundaryAlert, FileAccessBoundaryAlert};
 
 pub(super) struct AlertHostClient {
     admission: Arc<AlertAdmission>,
@@ -41,6 +41,19 @@ impl AlertHostClient {
             trace_id,
             alert_token,
             QueuedAlertDraft::FileAccessBoundary(alert),
+        )
+    }
+
+    pub(super) fn submit_command_execution_boundary_alert(
+        &self,
+        trace_id: TraceId,
+        alert_token: TraceAlertToken,
+        alert: CommandExecutionBoundaryAlert,
+    ) -> Result<(), PluginRuntimeError> {
+        self.enqueue(
+            trace_id,
+            alert_token,
+            QueuedAlertDraft::CommandExecutionBoundary(alert),
         )
     }
 
@@ -254,6 +267,7 @@ pub(super) struct AlertRequest {
 pub(super) enum QueuedAlertDraft {
     Ready(AlertDraft),
     FileAccessBoundary(FileAccessBoundaryAlert),
+    CommandExecutionBoundary(CommandExecutionBoundaryAlert),
 }
 
 impl QueuedAlertDraft {
@@ -261,6 +275,7 @@ impl QueuedAlertDraft {
         match self {
             Self::Ready(draft) => Ok(draft),
             Self::FileAccessBoundary(alert) => alert.into_draft(),
+            Self::CommandExecutionBoundary(alert) => alert.into_draft(),
         }
     }
 }

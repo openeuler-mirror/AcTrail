@@ -1,4 +1,4 @@
-package actrail:plugin@0.2.0;
+package actrail:plugin@0.4.0;
 
 interface types {
   enum observation-event-family {
@@ -380,10 +380,110 @@ interface types {
     rejected-count: u32,
     errors: list<file-policy-apply-error>,
   }
+
+  enum command-policy-decision {
+    default,
+    allow,
+    deny,
+    gray,
+  }
+
+  enum command-policy-patch-op {
+    upsert,
+    delete,
+  }
+
+  enum command-policy-apply-status {
+    accepted,
+    rejected,
+  }
+
+  record command-policy-rule-draft {
+    rule-id: option<string>,
+    decision: command-policy-decision,
+    executable: string,
+    args: option<list<string>>,
+    gray-target: option<string>,
+    priority: s32,
+  }
+
+  record command-policy-patch-item {
+    op: command-policy-patch-op,
+    rule-id: option<string>,
+    rule: option<command-policy-rule-draft>,
+  }
+
+  record command-policy-apply-request {
+    base-revision: u64,
+    mutation-id: string,
+    reason: option<string>,
+    items: list<command-policy-patch-item>,
+  }
+
+  record command-policy-apply-error {
+    item-index: u32,
+    code: string,
+    message: string,
+  }
+
+  record command-policy-apply-result {
+    status: command-policy-apply-status,
+    new-revision: u64,
+    applied-count: u32,
+    rejected-count: u32,
+    errors: list<command-policy-apply-error>,
+  }
+
+  record command-policy-list-filter {
+    decision: option<command-policy-decision>,
+    executable-prefix: option<string>,
+  }
+
+  record command-policy-rule-view {
+    rule-id: string,
+    owner-instance-id: string,
+    decision: command-policy-decision,
+    executable: string,
+    args: option<list<string>>,
+    gray-target: option<string>,
+    priority: s32,
+    rule-revision: u64,
+    updated-sequence: u64,
+  }
+
+  record command-policy-list-result {
+    rules: list<command-policy-rule-view>,
+    next-cursor: option<string>,
+    source-revision: u64,
+  }
+
+  record command-policy-match-dry-run-request {
+    executable: string,
+    args: list<string>,
+  }
+
+  record command-policy-match-dry-run-result {
+    matched: bool,
+    decision: command-policy-decision,
+    rule-id: option<string>,
+    owner-instance-id: option<string>,
+    resolved-executable: string,
+    rule-revision: option<u64>,
+    source-revision: u64,
+  }
+
+  record command-execution-context {
+    syscall: string,
+    requested-path: string,
+    resolved-path: string,
+    argv: list<string>,
+    execveat-dirfd: option<s32>,
+    execveat-flags: option<u64>,
+  }
 }
 
 interface host {
-  use types.{payload-ref, payload-chunk, config-chunk, decision-summary, file-policy-view, file-policy-apply-request, file-policy-apply-result, file-policy-list-filter, file-policy-list-result, file-policy-match-dry-run-request, file-policy-match-dry-run-result};
+  use types.{payload-ref, payload-chunk, config-chunk, decision-summary, file-policy-view, file-policy-apply-request, file-policy-apply-result, file-policy-list-filter, file-policy-list-result, file-policy-match-dry-run-request, file-policy-match-dry-run-result, command-policy-apply-request, command-policy-apply-result, command-policy-list-filter, command-policy-list-result, command-policy-match-dry-run-request, command-policy-match-dry-run-result, command-execution-context};
 
   read-config: func(offset: u64, max-bytes: u64) -> config-chunk;
   read-payload: func(ref: payload-ref, offset: u64, max-bytes: u64) -> payload-chunk;
@@ -394,6 +494,12 @@ interface host {
   file-policy-rules-match-dry-run: func(request: file-policy-match-dry-run-request) -> result<file-policy-match-dry-run-result, string>;
   file-policy-rules-validate: func(request: file-policy-apply-request) -> result<file-policy-apply-result, string>;
   file-policy-rules-apply: func(request: file-policy-apply-request) -> result<file-policy-apply-result, string>;
+  command-execution-current-context-query: func(context-ref: string, query: string) -> result<command-execution-context, string>;
+  command-policy-rules-version-get: func() -> result<u64, string>;
+  command-policy-rules-list: func(filter: command-policy-list-filter, cursor: option<string>, limit: u32) -> result<command-policy-list-result, string>;
+  command-policy-rules-match-dry-run: func(request: command-policy-match-dry-run-request) -> result<command-policy-match-dry-run-result, string>;
+  command-policy-rules-validate: func(request: command-policy-apply-request) -> result<command-policy-apply-result, string>;
+  command-policy-rules-apply: func(request: command-policy-apply-request) -> result<command-policy-apply-result, string>;
   env-read: func(name: string, max-bytes: u64) -> result<string, string>;
 }
 

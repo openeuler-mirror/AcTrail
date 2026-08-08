@@ -3,10 +3,10 @@ use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::time::{Duration, Instant};
 
 use plugin_system::{
-    ControlDecider, ControlDecisionBudget, ControlDecisionRequest, ControlDecisionResponse,
-    ControlVerdict, DecisionScope, FilePolicyHost, PluginCommandBudget, PluginCommandRequest,
-    PluginCommandResponse, PluginHostGrants, PluginHostcallMetricsSource, PluginManifest,
-    PluginRuntimeError, PluginRuntimeKind, PluginWasmAbi, RuntimePluginConfig,
+    CommandPolicyHost, ControlDecider, ControlDecisionBudget, ControlDecisionRequest,
+    ControlDecisionResponse, ControlVerdict, DecisionScope, FilePolicyHost, PluginCommandBudget,
+    PluginCommandRequest, PluginCommandResponse, PluginHostGrants, PluginHostcallMetricsSource,
+    PluginManifest, PluginRuntimeError, PluginRuntimeKind, PluginWasmAbi, RuntimePluginConfig,
 };
 use serde_json::{Map, Value, json};
 use wasmtime::{Engine, Memory, Module, TypedFunc};
@@ -47,6 +47,7 @@ pub fn build_wasm_control_decider(
     plugin_config: Option<&str>,
     host_grants: PluginHostGrants,
     file_policy_host: Option<Arc<dyn FilePolicyHost>>,
+    command_policy_host: Option<Arc<dyn CommandPolicyHost>>,
 ) -> Result<WasmControlDecider, PluginRuntimeError> {
     let instance_id = instance_id.into();
     let wasm = manifest.selected_wasm().ok_or_else(|| {
@@ -63,6 +64,7 @@ pub fn build_wasm_control_decider(
                 plugin_config.unwrap_or_default(),
                 host_grants,
                 file_policy_host,
+                command_policy_host,
             )?;
             Ok(WasmControlDecider::new(Box::new(decider)))
         }
@@ -73,6 +75,7 @@ pub fn build_wasm_control_decider(
                 plugin_config,
                 host_grants,
                 file_policy_host,
+                command_policy_host,
             )?;
             Ok(WasmControlDecider::new(Box::new(decider)))
         }
@@ -163,6 +166,7 @@ impl LegacyWasmControlDecider {
         plugin_config: &str,
         host_grants: PluginHostGrants,
         file_policy_host: Option<Arc<dyn FilePolicyHost>>,
+        command_policy_host: Option<Arc<dyn CommandPolicyHost>>,
     ) -> Result<Self, PluginRuntimeError> {
         let artifact_path = manifest
             .selected_wasm()
@@ -199,6 +203,7 @@ impl LegacyWasmControlDecider {
                 Arc::clone(&hostcall_metrics),
                 instance_id.clone(),
                 file_policy_host.clone(),
+                command_policy_host.clone(),
             )?));
         }
 
@@ -251,6 +256,7 @@ fn instantiate_control_state(
     hostcall_metrics: Arc<WasmHostcallMetrics>,
     instance_id: String,
     file_policy_host: Option<Arc<dyn FilePolicyHost>>,
+    command_policy_host: Option<Arc<dyn CommandPolicyHost>>,
 ) -> Result<WasmControlState, PluginRuntimeError> {
     let mut store = limited_store(
         &engine,
@@ -261,7 +267,10 @@ fn instantiate_control_state(
     );
     store
         .data_mut()
-        .set_file_policy_host(instance_id, file_policy_host);
+        .set_file_policy_host(instance_id.clone(), file_policy_host);
+    store
+        .data_mut()
+        .set_command_policy_host(instance_id, command_policy_host);
     let linker = host_linker(&engine)?;
     let instance = linker.instantiate(&mut store, module).map_err(|error| {
         PluginRuntimeError::new(
@@ -377,6 +386,10 @@ impl ControlDecider for LegacyWasmControlDecider {
             .store
             .data_mut()
             .set_file_policy_context(request.file_policy_context.clone());
+        state
+            .store
+            .data_mut()
+            .set_command_execution_context(request.command_execution_context.clone());
         let decide = state.decide.clone();
         let started_at = Instant::now();
         let deadline_generation = state.deadline_generation.clone();
@@ -389,6 +402,7 @@ impl ControlDecider for LegacyWasmControlDecider {
         let result = decide.call(&mut state.store, (ptr, len));
         state.store.data_mut().clear_control_context();
         state.store.data_mut().clear_file_policy_context();
+        state.store.data_mut().clear_command_execution_context();
         disarm_epoch_timeout(&mut state.store, deadline, &deadline_generation);
         let code = result.map_err(|error| {
             call_timeout_error(

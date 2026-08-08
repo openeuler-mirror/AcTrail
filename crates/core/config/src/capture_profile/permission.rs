@@ -87,6 +87,7 @@ pub struct LaunchSeccompRequirements {
     pub payload_socket: bool,
     pub process_seccomp: bool,
     pub network_control: bool,
+    pub command_control: bool,
     pub file_enforcement: FileEnforcementSeccompRequirements,
 }
 
@@ -102,8 +103,14 @@ impl LaunchSeccompRequirements {
             payload_socket,
             process_seccomp,
             network_control,
+            command_control: false,
             file_enforcement: FileEnforcementSeccompRequirements::new(false, false),
         }
+    }
+
+    pub const fn with_command_control(mut self, command_control: bool) -> Self {
+        self.command_control = command_control;
+        self
     }
 
     pub const fn with_file_enforcement(
@@ -119,6 +126,7 @@ impl LaunchSeccompRequirements {
             || self.payload_socket
             || self.process_seccomp
             || self.network_control
+            || self.command_control
             || self.file_enforcement.required()
     }
 

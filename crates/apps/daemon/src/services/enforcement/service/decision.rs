@@ -538,6 +538,7 @@ pub(super) fn control_decision_request(
             .unwrap_or_else(|| rule.path.display().to_string()),
         context_ref: Some(CONTROL_CURRENT_CONTEXT_TOKEN.to_string()),
         file_policy_context,
+        command_execution_context: None,
     })
 }
 

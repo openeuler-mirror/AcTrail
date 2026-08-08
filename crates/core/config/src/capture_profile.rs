@@ -35,7 +35,10 @@ fn is_ebpf_only_capability(capability: &Capability) -> bool {
 
 /// Capabilities that need the seccomp-notify launch path.
 fn is_seccomp_only_capability(capability: &Capability) -> bool {
-    matches!(capability, Capability::ProcExecContext)
+    matches!(
+        capability,
+        Capability::ProcExecContext | Capability::EnforcementCommandExecutionSeccomp
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -82,6 +85,10 @@ impl CaptureProfile {
         profile.capabilities.retain(|request| {
             (permissions.host_ebpf || !is_ebpf_only_capability(&request.capability))
                 && (permissions.seccomp_notify || !is_seccomp_only_capability(&request.capability))
+                && (!matches!(
+                    request.capability,
+                    Capability::EnforcementCommandExecutionSeccomp
+                ) || (permissions.host_ebpf && permissions.seccomp_notify))
         });
         profile
     }

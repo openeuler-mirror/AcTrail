@@ -19,6 +19,7 @@ use super::remote_args::{
     ExecArgs, ExecPath, read_execve_args, read_execve_path, read_execveat_args, read_execveat_path,
 };
 use super::syscall::{effective_syscalls, syscall_from_notification, syscall_name};
+use crate::services::command_control::ExecNotificationContext;
 use crate::services::identity::{
     PROCESS_METADATA_PARENT_PID, PROCESS_METADATA_SECCOMP_OBSERVED, TraceIdentityResolver,
 };
@@ -65,6 +66,80 @@ impl ProcessSeccompService {
             ));
         }
         Ok(limit)
+    }
+
+    pub(crate) fn deferred_exec_observation(
+        &self,
+        context: &ExecNotificationContext,
+    ) -> Result<Option<ProcessSeccompObservation>, ControlError> {
+        if !self.enabled {
+            return Ok(None);
+        }
+        let syscall = match context.syscall_name() {
+            "execve" => ProcessSeccompSyscall::Execve,
+            "execveat" => ProcessSeccompSyscall::Execveat,
+            other => {
+                return Err(ControlError::new(
+                    "process_seccomp_exec",
+                    format!("unsupported deferred exec syscall {other}"),
+                ));
+            }
+        };
+        let kernel_syscall = match syscall {
+            ProcessSeccompSyscall::Execve => KernelProcessSyscall::Execve,
+            ProcessSeccompSyscall::Execveat => KernelProcessSyscall::Execveat,
+            _ => unreachable!("deferred exec syscall is execve or execveat"),
+        };
+        if !self.syscalls.contains(&kernel_syscall) {
+            return Ok(None);
+        }
+        let (path, path_truncated) =
+            Self::bounded_string(context.requested_path(), self.max_arg_bytes)?;
+        let max_args = usize::try_from(self.max_args).map_err(|error| {
+            ControlError::new(
+                "process_seccomp_exec",
+                format!("max args overflow: {error}"),
+            )
+        })?;
+        let mut truncated = path_truncated || context.argv().len() > max_args;
+        let mut argv = Vec::new();
+        for arg in context.argv().iter().take(max_args) {
+            let (arg, arg_truncated) = Self::bounded_string(arg, self.max_arg_bytes)?;
+            truncated |= arg_truncated;
+            argv.push(arg);
+        }
+        Ok(Some(ProcessSeccompObservation {
+            observed_at: SystemTime::now(),
+            process: context.process(),
+            parent_pid: parent_pid(context.actor_pid())?,
+            syscall,
+            details: ProcessSeccompObservationDetails::Exec {
+                args: ExecArgs {
+                    path: Some(path),
+                    argv,
+                    truncated,
+                },
+                execveat_dirfd: context.execveat_dirfd().map(|value| value as i64 as u64),
+                execveat_flags: context.execveat_flags(),
+            },
+        }))
+    }
+
+    fn bounded_string(value: &str, max_bytes: u32) -> Result<(String, bool), ControlError> {
+        let max_bytes = usize::try_from(max_bytes).map_err(|error| {
+            ControlError::new(
+                "process_seccomp_exec",
+                format!("argument byte limit overflow: {error}"),
+            )
+        })?;
+        if value.len() <= max_bytes {
+            return Ok((value.to_string(), false));
+        }
+        let mut end = max_bytes;
+        while end > 0 && !value.is_char_boundary(end) {
+            end -= 1;
+        }
+        Ok((value[..end].to_string(), true))
     }
 
     pub(crate) fn ensure_listener_target(
@@ -127,10 +202,7 @@ impl ProcessSeccompService {
         identity_reader: &impl ProcessIdentityReader,
         notification: &libc::seccomp_notif,
         continuation: &mut NotificationContinuation,
-        before_exec_continue: &mut impl FnMut(
-            &ProcessSeccompExecCandidate,
-            &mut NotificationContinuation,
-        ) -> Result<(), ControlError>,
+        before_exec_continue: &mut impl FnMut(&ProcessSeccompExecCandidate) -> Result<(), ControlError>,
     ) -> Result<Vec<ProcessSeccompObservation>, ControlError> {
         if !self.enabled {
             return Ok(Vec::new());
@@ -176,35 +248,13 @@ impl ProcessSeccompService {
                             })
                         },
                     );
-                before_exec_continue(
-                    &ProcessSeccompExecCandidate {
-                        pid: notification.pid,
-                        trace_id,
-                        process,
-                        syscall: syscall_name(syscall).to_string(),
-                        path: args.path.clone(),
-                        argv: args.argv.clone(),
-                        path_truncated: args.truncated,
-                        execveat_dirfd: None,
-                    },
-                    continuation,
-                )?;
-                if continuation.is_finished() {
-                    let Some(process) = process else {
-                        return Ok(Vec::new());
-                    };
-                    return Ok(vec![ProcessSeccompObservation {
-                        observed_at,
-                        process,
-                        parent_pid,
-                        syscall,
-                        details: ProcessSeccompObservationDetails::CommandControl {
-                            path: args.path,
-                            argv: args.argv,
-                            metadata: continuation.take_metadata(),
-                        },
-                    }]);
-                }
+                before_exec_continue(&ProcessSeccompExecCandidate {
+                    pid: notification.pid,
+                    trace_id,
+                    path: args.path.clone(),
+                    path_truncated: args.truncated,
+                    execveat_dirfd: None,
+                })?;
                 continuation.continue_now()?;
                 let Some(process) = process else {
                     return Ok(Vec::new());
@@ -254,35 +304,13 @@ impl ProcessSeccompService {
                             })
                         },
                     );
-                before_exec_continue(
-                    &ProcessSeccompExecCandidate {
-                        pid: notification.pid,
-                        trace_id,
-                        process,
-                        syscall: syscall_name(syscall).to_string(),
-                        path: args.path.clone(),
-                        argv: args.argv.clone(),
-                        path_truncated: args.truncated,
-                        execveat_dirfd: Some(notification.data.args[0]),
-                    },
-                    continuation,
-                )?;
-                if continuation.is_finished() {
-                    let Some(process) = process else {
-                        return Ok(Vec::new());
-                    };
-                    return Ok(vec![ProcessSeccompObservation {
-                        observed_at,
-                        process,
-                        parent_pid,
-                        syscall,
-                        details: ProcessSeccompObservationDetails::CommandControl {
-                            path: args.path,
-                            argv: args.argv,
-                            metadata: continuation.take_metadata(),
-                        },
-                    }]);
-                }
+                before_exec_continue(&ProcessSeccompExecCandidate {
+                    pid: notification.pid,
+                    trace_id,
+                    path: args.path.clone(),
+                    path_truncated: args.truncated,
+                    execveat_dirfd: Some(notification.data.args[0]),
+                })?;
                 continuation.continue_now()?;
                 let Some(process) = process else {
                     return Ok(Vec::new());
@@ -381,18 +409,6 @@ impl ProcessSeccompService {
                 *clone3_args_ptr,
                 *clone3_args_size,
             ),
-            ProcessSeccompObservationDetails::CommandControl {
-                path,
-                argv,
-                metadata,
-            } => self.command_control_event(
-                observation.observed_at,
-                process,
-                observation.parent_pid,
-                path.clone(),
-                argv.clone(),
-                metadata.clone(),
-            ),
         }
     }
 
@@ -459,33 +475,6 @@ impl ProcessSeccompService {
         }
         process_event(observed_at, process, "fork_attempt", None, metadata)
     }
-
-    fn command_control_event(
-        &self,
-        observed_at: SystemTime,
-        process: ProcessObservation,
-        parent_pid: Option<u32>,
-        path: Option<String>,
-        argv: Vec<String>,
-        mut metadata: BTreeMap<String, String>,
-    ) -> RawCollectorEvent {
-        if let Some(parent_pid) = parent_pid {
-            metadata.insert(
-                PROCESS_METADATA_PARENT_PID.to_string(),
-                parent_pid.to_string(),
-            );
-        }
-        if let Some(path) = path.filter(|value| !value.is_empty()) {
-            metadata.insert("executable".to_string(), path.clone());
-            metadata.insert("exec.path".to_string(), path);
-        }
-        if !argv.is_empty() {
-            metadata.insert("argv".to_string(), argv.join("\n"));
-            metadata.insert("argv_count".to_string(), argv.len().to_string());
-            metadata.insert("command_line".to_string(), argv.join(" "));
-        }
-        process_event(observed_at, process, "command_control", None, metadata)
-    }
 }
 
 #[derive(Debug)]
@@ -501,10 +490,7 @@ pub(crate) struct ProcessSeccompObservation {
 pub(crate) struct ProcessSeccompExecCandidate {
     pub(crate) pid: u32,
     pub(crate) trace_id: Option<TraceId>,
-    pub(crate) process: Option<ProcessIdentity>,
-    pub(crate) syscall: String,
     pub(crate) path: Option<String>,
-    pub(crate) argv: Vec<String>,
     pub(crate) path_truncated: bool,
     pub(crate) execveat_dirfd: Option<u64>,
 }
@@ -520,11 +506,6 @@ enum ProcessSeccompObservationDetails {
         flags: Option<u64>,
         clone3_args_ptr: Option<u64>,
         clone3_args_size: Option<u64>,
-    },
-    CommandControl {
-        path: Option<String>,
-        argv: Vec<String>,
-        metadata: BTreeMap<String, String>,
     },
 }
 

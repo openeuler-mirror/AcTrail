@@ -8,6 +8,8 @@ mod launch_binding;
 mod mcp_diagnostics;
 #[path = "live/reconcile.rs"]
 mod reconcile;
+#[path = "live/seccomp.rs"]
+mod seccomp;
 #[path = "live/shutdown.rs"]
 mod shutdown;
 #[path = "live/tls_debug.rs"]
@@ -18,8 +20,7 @@ use std::time::SystemTime;
 
 use collector_instance::CollectorInstance;
 use config_core::daemon::DiagnosticLogLevel;
-use control_contract::reply::{ControlError, LaunchTlsPlanStatus};
-use ebpf_collector::loader::DynamicTlsProbePlan;
+use control_contract::reply::ControlError;
 use model_core::diagnostics::{DiagnosticKind, DiagnosticRecord, DiagnosticSeverity};
 use model_core::event::{DomainEvent, EventEnvelope, EventFlags, EventKind, EventPayload};
 use model_core::ids::{CollectorName, DiagnosticId, EventId, TraceId};
@@ -28,9 +29,8 @@ use recording_runtime::{RecordingWriter, SemanticActionBatch, TraceStateRecord};
 use trace_runtime::registry::TraceRuntime;
 
 use crate::services::attach::StorageAttachService;
-use crate::services::command_control::CommandControlOutcome;
+use crate::services::command_control::CommandEnforcementDraft;
 use crate::services::resource_metrics::COLLECTOR_NAME as RESOURCE_METRICS_COLLECTOR_NAME;
-use crate::services::tls_sync::ExecTlsPlanMode;
 use crate::services::workload_diagnostics::PayloadSegmentStage;
 
 /// Log and swallow recoverable errors from best-effort subsystems.
@@ -331,230 +331,6 @@ impl StorageAttachService {
         Ok(())
     }
 
-    fn drain_seccomp_notifications_impl(
-        &mut self,
-        trace_runtime: &mut TraceRuntime,
-    ) -> Result<(), ControlError> {
-        let seccomp_notify = &mut self.seccomp_notify;
-        let seccomp_tls = &mut self.seccomp_tls;
-        let seccomp_socket = &mut self.seccomp_socket;
-        let tls_sync = &self.tls_sync;
-        let collector = &mut self.collector;
-        let mut network_events = Vec::new();
-        let mut enforcement_outcomes = Vec::new();
-        let pending_process_observations = &mut self.pending_process_seccomp_observations;
-        {
-            let process_seccomp = &self.process_seccomp;
-            let command_control = &self.command_control;
-            let network_control = &self.network_control;
-            let control_plugins = &self.control_plugins;
-            let enforcement = &mut self.enforcement;
-            let identity_reader = &self.identity_reader;
-            seccomp_notify.drain_notifications(|notification, continuation| {
-                if let Some(outcome) = enforcement.handle_seccomp_notification(
-                    trace_runtime,
-                    &self.process_registry,
-                    identity_reader,
-                    control_plugins,
-                    notification,
-                    continuation,
-                )? {
-                    enforcement_outcomes.push(outcome);
-                }
-                if continuation.is_finished() {
-                    return Ok(());
-                }
-                network_events.extend(network_control.handle_notification(
-                    trace_runtime,
-                    &self.process_registry,
-                    identity_reader,
-                    notification,
-                    continuation,
-                    control_plugins,
-                )?);
-                pending_process_observations.extend(process_seccomp.handle_notification(
-                    trace_runtime,
-                    &self.process_registry,
-                    identity_reader,
-                    notification,
-                    continuation,
-                    &mut |candidate, continuation| {
-                        if let (Some(trace_id), Some(process)) =
-                            (candidate.trace_id, candidate.process.as_ref())
-                        {
-                            match command_control.decide_exec(
-                                trace_id,
-                                process,
-                                &self.process_registry,
-                                candidate,
-                                control_plugins,
-                            )? {
-                                CommandControlOutcome::Continue => {}
-                                outcome => {
-                                    let metadata = command_control_metadata(&outcome);
-                                    continuation.set_metadata(metadata);
-                                    if matches!(
-                                        command_control_decision(&outcome),
-                                        config_core::daemon::EnforcementDecision::Deny
-                                    ) {
-                                        continuation.deny_errno(libc::EPERM)?;
-                                    } else {
-                                        continuation.continue_now()?;
-                                    }
-                                    return Ok(());
-                                }
-                            }
-                        }
-                        if candidate.path_truncated {
-                            return Ok(());
-                        }
-                        let Some(path) = candidate.path.as_deref() else {
-                            return Ok(());
-                        };
-                        let Some(host_path) = crate::services::process_seccomp::host_exec_path(
-                            candidate.pid,
-                            path,
-                            candidate.execveat_dirfd,
-                        ) else {
-                            return Ok(());
-                        };
-                        if candidate.trace_id.is_some() {
-                            match tls_sync.resolve_exec_plan(&host_path) {
-                                Ok(resolution) => {
-                                    let cache_hit = resolution.reply.cache_hit;
-                                    let elapsed_micros = resolution.reply.resolve_elapsed_micros;
-                                    match resolution.reply.status {
-                                        LaunchTlsPlanStatus::Found(plan)
-                                            if resolution.mode == ExecTlsPlanMode::Direct =>
-                                        {
-                                            let provider = plan.provider.clone();
-                                            let source = plan.source.clone();
-                                            let dynamic_plan = DynamicTlsProbePlan {
-                                                target: plan.target,
-                                                target_identity: plan.target_identity,
-                                                binary: plan.binary,
-                                                binary_identity: plan.binary_identity,
-                                                provider: plan.provider,
-                                                points: plan.points,
-                                            };
-                                            match collector.attach_dynamic_tls_plan(&dynamic_plan) {
-                                                Ok(()) => tracing::info!(
-                                                    target: "actrail::tls_sync",
-                                                    pid = candidate.pid,
-                                                    binary = %host_path.display(),
-                                                    provider,
-                                                    source,
-                                                    cache_hit,
-                                                    elapsed_micros,
-                                                    "attached pre-resume TLS plan for exec candidate"
-                                                ),
-                                                Err(error) => tracing::warn!(
-                                                    target: "actrail::tls_sync",
-                                                    pid = candidate.pid,
-                                                    binary = %host_path.display(),
-                                                    provider,
-                                                    error = %error.message,
-                                                    "failed to attach pre-resume TLS plan; continuing exec"
-                                                ),
-                                            }
-                                        }
-                                        LaunchTlsPlanStatus::Found(plan) => tracing::debug!(
-                                            target: "actrail::tls_sync",
-                                            pid = candidate.pid,
-                                            binary = %host_path.display(),
-                                            provider = %plan.provider,
-                                            source = %plan.source,
-                                            cache_hit,
-                                            elapsed_micros,
-                                            "resolved pre-resume sync TLS plan for exec candidate"
-                                        ),
-                                        LaunchTlsPlanStatus::Unsupported { reason } => {
-                                            tracing::debug!(
-                                                target: "actrail::tls_sync",
-                                                pid = candidate.pid,
-                                                binary = %host_path.display(),
-                                                reason,
-                                                cache_hit,
-                                                elapsed_micros,
-                                                "exec candidate has no supported TLS plan"
-                                            );
-                                        }
-                                    }
-                                }
-                                Err(error) => tracing::warn!(
-                                    target: "actrail::tls_sync",
-                                    pid = candidate.pid,
-                                    binary = %host_path.display(),
-                                    error_code = %error.code,
-                                    error = %error.message,
-                                    "failed to resolve pre-resume TLS plan; continuing exec"
-                                ),
-                            }
-                        }
-                        collector
-                            .attach_dynamic_go_tls(&host_path)
-                            .map_err(|error| ControlError::new(error.stage, error.message))
-                    },
-                )?);
-                let tls_consumed = seccomp_tls.handle_notification(collector, notification)?;
-                if !tls_consumed {
-                    seccomp_socket.handle_notification(
-                        collector,
-                        trace_runtime,
-                        &self.process_registry,
-                        notification,
-                    )?;
-                }
-                Ok(())
-            })?;
-        }
-        self.persist_enforcement_outcomes(
-            trace_runtime,
-            crate::services::enforcement::EnforcementDrain {
-                outcomes: enforcement_outcomes,
-                process_records: Vec::new(),
-            },
-        )?;
-        self.process_live_event_batch(trace_runtime, network_events)?;
-        Ok(())
-    }
-
-    fn materialize_process_seccomp_observations_impl(
-        &mut self,
-        trace_runtime: &mut TraceRuntime,
-    ) -> Result<(), ControlError> {
-        if self.pending_process_seccomp_observations.is_empty() {
-            return Ok(());
-        }
-        let batch_size = self.process_seccomp.pending_observation_batch_size()?;
-        while !self.pending_process_seccomp_observations.is_empty() {
-            let batch_len = self
-                .pending_process_seccomp_observations
-                .len()
-                .min(batch_size);
-            let raw_events = self.pending_process_seccomp_observations[..batch_len]
-                .iter()
-                .map(|observation| {
-                    self.process_seccomp.materialize_observation(
-                        trace_runtime,
-                        &self.process_registry,
-                        observation,
-                    )
-                })
-                .collect();
-            self.process_live_event_batch(trace_runtime, raw_events)?;
-            self.pending_process_seccomp_observations.drain(..batch_len);
-        }
-        let evicted_intents = self.semantic_actions.take_pending_exec_intent_evictions();
-        if evicted_intents > 0 {
-            tracing::warn!(
-                evicted_intents,
-                "semantic exec intent capacity reached; completed exec actions remain valid but may omit seccomp argument evidence"
-            );
-        }
-        Ok(())
-    }
-
     fn drain_resource_metrics_impl(
         &mut self,
         trace_runtime: &trace_runtime::TraceRuntime,
@@ -671,6 +447,61 @@ impl StorageAttachService {
         )
     }
 
+    fn persist_command_enforcement_outcomes(
+        &mut self,
+        trace_runtime: &TraceRuntime,
+        outcomes: Vec<CommandEnforcementDraft>,
+    ) -> Result<(), ControlError> {
+        let mut events = Vec::new();
+        for outcome in outcomes {
+            if let Some(alert) = outcome.boundary_alert {
+                let alert_token = trace_runtime
+                    .get_trace(outcome.trace_id)
+                    .map(|entry| entry.trace.alert_token.clone());
+                match alert_token {
+                    Some(alert_token) => {
+                        if let Err(error) =
+                            self.alert_ingress.submit_command_execution_boundary_alert(
+                                outcome.trace_id,
+                                alert_token,
+                                alert,
+                            )
+                        {
+                            tracing::warn!(
+                                trace_id = %outcome.trace_id,
+                                error.code = %error.code,
+                                error.message = %error.message,
+                                "command execution boundary alert queue admission failed"
+                            );
+                        }
+                    }
+                    None => tracing::warn!(
+                        trace_id = %outcome.trace_id,
+                        "command execution boundary alert lost its trace before queue admission"
+                    ),
+                }
+            }
+            events.push(DomainEvent::new(
+                EventEnvelope {
+                    event_id: self.next_event_id()?,
+                    trace_id: outcome.trace_id,
+                    observed_at: outcome.observed_at,
+                    process: outcome.process,
+                    collector: CollectorName::new(
+                        crate::services::process_seccomp::PROCESS_SECCOMP_COLLECTOR_NAME,
+                    ),
+                    kind: EventKind::Enforcement,
+                    flags: EventFlags {
+                        metadata_partial: outcome.metadata_partial,
+                        ..EventFlags::clean()
+                    },
+                },
+                EventPayload::Enforcement(outcome.payload),
+            ));
+        }
+        self.persist_observed_event_batch(trace_runtime, events)
+    }
+
     pub(super) fn next_diagnostic_id(&mut self) -> Result<DiagnosticId, ControlError> {
         next_diagnostic_id_from_seed(&mut self.next_diagnostic_id)
     }
@@ -750,63 +581,6 @@ fn event_transport_loss_message(losses: &[String]) -> String {
             losses.len(),
             losses.join("; ")
         ),
-    }
-}
-
-fn command_control_metadata(
-    outcome: &CommandControlOutcome,
-) -> std::collections::BTreeMap<String, String> {
-    let mut metadata = std::collections::BTreeMap::new();
-    metadata.insert("subject".to_string(), "command-execution".to_string());
-    metadata.insert("decision_source".to_string(), "sync-plugin".to_string());
-    metadata.insert(
-        "decision".to_string(),
-        command_control_decision(outcome).as_str().to_string(),
-    );
-    match outcome {
-        CommandControlOutcome::Continue => {}
-        CommandControlOutcome::Decision {
-            rule_id,
-            plugin_instance,
-            timeout_ms,
-            concurrency_limit,
-            ..
-        }
-        | CommandControlOutcome::DecisionError {
-            rule_id,
-            plugin_instance,
-            timeout_ms,
-            concurrency_limit,
-            ..
-        } => {
-            metadata.insert("rule_id".to_string(), rule_id.clone());
-            metadata.insert("plugin_instance".to_string(), plugin_instance.clone());
-            metadata.insert("plugin_timeout_ms".to_string(), timeout_ms.to_string());
-            metadata.insert(
-                "plugin_concurrency_limit".to_string(),
-                concurrency_limit.to_string(),
-            );
-        }
-    }
-    if let CommandControlOutcome::DecisionError { error, .. } = outcome {
-        metadata.insert("plugin_error".to_string(), error.clone());
-        let fallback_reason = if error == "concurrency_limit" {
-            "concurrency_limit"
-        } else {
-            "plugin_error"
-        };
-        metadata.insert("fallback_reason".to_string(), fallback_reason.to_string());
-    }
-    metadata
-}
-
-fn command_control_decision(
-    outcome: &CommandControlOutcome,
-) -> config_core::daemon::EnforcementDecision {
-    match outcome {
-        CommandControlOutcome::Continue => config_core::daemon::EnforcementDecision::Allow,
-        CommandControlOutcome::Decision { decision, .. }
-        | CommandControlOutcome::DecisionError { decision, .. } => *decision,
     }
 }
 

@@ -48,6 +48,7 @@ pub struct LaunchPermissionsReply {
     pub payload_socket_seccomp: bool,
     pub process_seccomp: bool,
     pub network_control_seccomp: bool,
+    pub command_control_seccomp: bool,
     pub file_mkdir_seccomp: bool,
     pub file_rmdir_seccomp: bool,
     pub required_capabilities: Vec<Capability>,

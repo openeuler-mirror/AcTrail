@@ -85,6 +85,7 @@ pub(crate) struct StorageAttachService {
     pub(super) launch_seccomp_requirements: LaunchSeccompRequirements,
     pub(super) storage: Box<dyn StorageBackend>,
     pub(super) process_registry: ProcessIdentityManager,
+    pub(super) process_id_block_size: u64,
     pub(super) collector: EbpfCollector,
     pub(super) host_ebpf_preflight:
         BTreeMap<model_core::ids::ProfileName, preflight::EbpfPreflightReport>,
@@ -556,6 +557,17 @@ impl StorageAttachService {
                 "process exec context capture is only supported by actrailctl launch",
             ));
         }
+        if !command.launch_mode
+            && capability_requested(
+                &profile_snapshot.capability_requests,
+                &Capability::EnforcementCommandExecutionSeccomp,
+            )
+        {
+            return Err(ControlError::new(
+                "command_control_backend",
+                "command execution enforcement is only supported by actrailctl launch",
+            ));
+        }
         let sensor_plan = trace_runtime
             .negotiate(&profile_snapshot)
             .map_err(|error| ControlError::new("negotiate", format!("{:?}", error)))?;
@@ -656,6 +668,13 @@ impl AttachService for StorageAttachService {
         };
         let launch_seccomp_requirements = self
             .launch_seccomp_requirements
+            .with_command_control(
+                self.launch_seccomp_requirements.command_control
+                    && capability_requested(
+                        &profile.capabilities,
+                        &Capability::EnforcementCommandExecutionSeccomp,
+                    ),
+            )
             .with_file_enforcement(self.enforcement.seccomp_requirements()?);
         let decision = resolve_deployment_permissions(
             policy,
@@ -691,6 +710,7 @@ impl AttachService for StorageAttachService {
             payload_socket_seccomp: effective_seccomp.payload_socket,
             process_seccomp: effective_seccomp.process_seccomp,
             network_control_seccomp: effective_seccomp.network_control,
+            command_control_seccomp: effective_seccomp.command_control,
             file_mkdir_seccomp: effective_seccomp.file_enforcement.mkdir,
             file_rmdir_seccomp: effective_seccomp.file_enforcement.rmdir,
             required_capabilities: decision.required_capabilities,
@@ -757,6 +777,7 @@ impl AttachService for StorageAttachService {
             fds.push(fd);
         }
         fds.extend(self.enforcement.event_poll_fds());
+        fds.extend(self.command_control.event_poll_fds());
         fds.extend(self.tls_sync.event_poll_fds());
         fds.extend(self.seccomp_notify.event_poll_fds());
         fds.push(self.alert_ingress.event_poll_fd());
@@ -838,7 +859,8 @@ impl AttachService for StorageAttachService {
                 self.persist_trace_state(trace_runtime, command.trace_id)?;
             }
         }
-        self.seccomp_notify.register_listener(command.listener_fd)
+        self.seccomp_notify
+            .register_listener(command.trace_id, command.listener_fd)
     }
 
     fn plugin_statuses(&self) -> Vec<PluginInstanceStatus> {
