@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.v2.common.config import TestCaseInputs
-from tests.v2.common.test_case import TestStatus
+from tests.v2.common.core import TestCaseInputs, TestStatus
+
 from tests.v2.regression.virtual_container.v2.config import (
     VirtualContainerConfig,
 )

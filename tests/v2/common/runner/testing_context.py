@@ -15,9 +15,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Mapping
 
-from .output import CaseProgressReporter, TestOutput
-from .test_case import TestResult, TestStatus
-from .testing_env import AgentAvailability
+from tests.v2.common.testing_env import AgentAvailability
+
+from ..core import CaseProgressReporter, TestOutput, TestResult, TestStatus
 
 
 class _RegressionLockWait:

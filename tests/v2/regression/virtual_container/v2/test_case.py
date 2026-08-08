@@ -5,9 +5,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from tests.v2.common.config import TestCaseInputs
-from tests.v2.common.test_case import TestResult, TestStatus
-from tests.v2.common.output import effective_status
+from tests.v2.common.core import TestCaseInputs, TestResult, TestStatus, effective_status
+
 from tests.v2.regression.virtual_container.v2.case import VirtualContainerCase
 from tests.v2.regression.virtual_container.v2.config import VirtualContainerConfig
 from tests.v2.regression.virtual_container.v2.prerequisites import ResolvedBackend

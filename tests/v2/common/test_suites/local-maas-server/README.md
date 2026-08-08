@@ -16,7 +16,7 @@
 ## 快速启动
 
 ```bash
-python3 tests/v2/common/test-suites/local-maas-server/server.py \
+python3 tests/v2/common/test_suites/local-maas-server/server.py \
   --scenario alternating-message-loop \
   --http-bind-port 42117
 ```
@@ -54,7 +54,7 @@ Please run with the Local MaaS CA: SSL_CERT_FILE=/tmp/local-maas-tls-.../combine
 
 ```bash
 LOCAL_MAAS_API_KEY=local-test-key \
-python3 tests/v2/common/test-suites/local-maas-server/server.py \
+python3 tests/v2/common/test_suites/local-maas-server/server.py \
   --scenario alternating-message-loop \
   --http-bind-port 42117 \
   --api-key-env LOCAL_MAAS_API_KEY
@@ -146,7 +146,7 @@ LocalMaaSConfig
 运行下面的命令查看全部入口：
 
 ```bash
-python3 tests/v2/common/test-suites/local-maas-server/server.py --help
+python3 tests/v2/common/test_suites/local-maas-server/server.py --help
 ```
 
 所有容量、超时、随机 seed、TTFT 和 TPOT 都有 CLI 配置；非法配置会让启动失败。单次请求错误只影响当前请求。

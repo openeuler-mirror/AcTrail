@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tests.v2.common.config import CommonTestConfig, TestCaseInputs
+from tests.v2.common.core import CommonTestConfig, TestCaseInputs
 
 
 @dataclass(frozen=True)

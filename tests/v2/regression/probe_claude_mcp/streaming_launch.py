@@ -9,7 +9,7 @@ from pathlib import Path
 
 from tests.v2.common.actrail_runtime import CommandResult
 from tests.v2.common.mcp_test_support import McpProbeSpec, McpProbeWorkspace
-from tests.v2.common.output import TestOutput
+from tests.v2.common.core import TestOutput
 
 
 class ClaudeMcpStreamingLaunch:

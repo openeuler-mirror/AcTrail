@@ -4,9 +4,9 @@ import io
 import unittest
 from unittest.mock import Mock
 
-from tests.v2.common.output import CaseProgressReporter
-from tests.v2.common.runner import _dependency_skip_result
-from tests.v2.common.test_case import TestResult, TestStatus
+from tests.v2.common.core import CaseProgressReporter, TestResult, TestStatus
+from tests.v2.common.runner.run import _dependency_skip_result
+
 from tests.v2.regression.virtual_container_xiaoo_concurrency.v2.run_e2e import (
     TEST_DEFINITION as CONCURRENCY_DEFINITION,
 )

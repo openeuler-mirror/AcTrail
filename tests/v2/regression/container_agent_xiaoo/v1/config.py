@@ -5,7 +5,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from tests.v2.common.config import TestCaseInputs
+from tests.v2.common.core import TestCaseInputs
 
 
 @dataclass(frozen=True)

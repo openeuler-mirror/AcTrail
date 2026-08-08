@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 
 from tests.v2.common.actrail_runtime import ActrailRuntime, CommandResult
-from tests.v2.common.errors import AgentBinaryNotFoundError
+from tests.v2.common.core import AgentBinaryNotFoundError
 
 from .config import ProbePiLLMConfig
 

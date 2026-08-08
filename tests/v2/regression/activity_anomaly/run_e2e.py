@@ -9,10 +9,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(REPO))
 
-from tests.v2.common.config import TestCaseInputs  # noqa: E402
-from tests.v2.common.runner import TestDefinition, run_one  # noqa: E402
-from tests.v2.common.test_case import TestCase, TestResult, TestStatus  # noqa: E402
-from tests.v2.common.testing_context import TestingContextSingleton  # noqa: E402
+from tests.v2.common.core import TestCaseInputs, TestCase, TestResult, TestStatus
+from tests.v2.common.runner import TestDefinition, run_one, TestingContextSingleton
 
 
 class ActivityAnomalyCase(TestCase):

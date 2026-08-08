@@ -4,7 +4,7 @@ import copy
 from typing import Any
 
 from tests.v2.common.actrail_runtime import ActrailRuntime
-from tests.v2.common.output import TestOutput
+from tests.v2.common.core import TestOutput
 from tests.v2.common.plugin_test_environment import (
     PluginRuntimeSpec,
     PluginTestEnvironment,

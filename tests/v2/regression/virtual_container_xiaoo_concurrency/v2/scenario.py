@@ -18,8 +18,9 @@ from tests.v2.common.kata_runtime import (
     RequirementCheck,
 )
 from tests.v2.common.kata_runtime.process import ManagedProcess, SubprocessRunner
-from tests.v2.common.test_case import TestResult, TestStatus
-from tests.v2.common.testing_context import TestingContextSingleton
+from tests.v2.common.core import TestResult, TestStatus
+from tests.v2.common.runner import TestingContextSingleton
+
 from tests.v2.regression.virtual_container.v2.assertions import (
     find_clean_trace,
     parse_summary_counts,

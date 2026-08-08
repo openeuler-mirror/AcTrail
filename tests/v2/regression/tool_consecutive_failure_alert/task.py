@@ -8,8 +8,8 @@ import time
 from typing import Any
 
 from tests.v2.common.agent_selection import AgentSelector
-from tests.v2.common.test_case import TestResult, TestStatus
-from tests.v2.common.testing_context import TestingContextSingleton
+from tests.v2.common.core import TestResult, TestStatus
+from tests.v2.common.runner import TestingContextSingleton
 
 from .environment import ToolConsecutiveFailureAlertEnvironment
 

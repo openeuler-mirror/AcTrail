@@ -12,8 +12,8 @@ from tests.v2.common.kata_runtime import (
     shim_binary,
 )
 from tests.v2.common.kata_runtime.process import SubprocessRunner
-from tests.v2.common.test_case import TestCase, TestResult, TestStatus
-from tests.v2.common.testing_context import TestingContextSingleton
+from tests.v2.common.core import TestCase, TestResult, TestStatus
+from tests.v2.common.runner import TestingContextSingleton
 
 from .config import VirtualContainerXiaooConcurrencyConfig
 from .scenario import DualKataXiaooScenario

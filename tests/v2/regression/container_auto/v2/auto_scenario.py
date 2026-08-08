@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from typing import Protocol
 
-from tests.v2.common.testing_context import TestingContextSingleton
+from tests.v2.common.runner import TestingContextSingleton
 
 from .config import ContainerAutoConfig
 from .cases import (
@@ -24,7 +24,14 @@ from .cases import (
 
 
 REPO = Path(__file__).resolve().parents[5]
-CONTAINER_MANAGER_DIR = REPO / "tests/v2/common/test-suites/container-manager"
+CONTAINER_MANAGER_DIR = (
+    REPO
+    / "tests"
+    / "v2"
+    / "common"
+    / "test_suites"
+    / "container-manager"
+)
 sys.path.insert(0, str(CONTAINER_MANAGER_DIR))
 
 from container import TestContainer  # noqa: E402

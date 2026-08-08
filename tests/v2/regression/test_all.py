@@ -10,11 +10,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO))
 
-from tests.v2.common.output import TestOutput  # noqa: E402
-from tests.v2.common.runner import (  # noqa: E402
-    add_common_arguments,
-    run_selected,
-)
+from tests.v2.common.core import TestOutput
+from tests.v2.common.runner import add_common_arguments, run_selected
 from tests.v2.regression.local_profile import (  # noqa: E402
     DEFAULT_PROFILE,
     load_local_test_profile,

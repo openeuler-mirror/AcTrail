@@ -99,7 +99,7 @@ PYTHON_BIN="$(
     'import sys; from pathlib import Path; print(Path(sys.executable).resolve())'
 )"
 PROBE_SCRIPT="$(
-  readlink -f tests/v2/common/test-suite-tools/mcp/mcp_probe_server.py
+  readlink -f tests/v2/common/test_suite_tools/mcp/mcp_probe_server.py
 )"
 ARTIFACT_ROOT="$(
   readlink -m "${CLAUDE_MCP_E2E_ARTIFACT_ROOT:-temp/v2-regression/mcp}"

@@ -113,12 +113,7 @@ install_prefix() {
 
 "$script_dir/install-build-deps.sh" --install
 
-run cargo build --release \
-  --bin actraild \
-  --bin actrailctl \
-  --bin actrailcluster \
-  --bin actrailviewer \
-  --bin actrailweb
+run cargo build --release
 
 run "$script_dir/build-tls-sync-runtimes.sh"
 

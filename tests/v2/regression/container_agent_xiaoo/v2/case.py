@@ -7,8 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from tests.v2.common.test_case import TestCase, TestResult, TestStatus
-from tests.v2.common.testing_context import TestingContextSingleton
+from tests.v2.common.core import TestCase, TestResult, TestStatus
+from tests.v2.common.runner import TestingContextSingleton
 
 from .config import ContainerAgentXiaooConfig
 

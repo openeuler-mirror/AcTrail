@@ -20,9 +20,8 @@ from tests.v2.common.kata_runtime.process import (
     CommandTimeoutError,
     SubprocessRunner,
 )
-from tests.v2.common.output import has_failure
-from tests.v2.common.test_case import TestResult, TestStatus
-from tests.v2.common.testing_context import TestingContextSingleton
+from tests.v2.common.core import has_failure, TestResult, TestStatus
+from tests.v2.common.runner import TestingContextSingleton
 
 from .assertions import find_clean_trace, parse_summary_counts, require_markers
 from .config import VirtualContainerConfig

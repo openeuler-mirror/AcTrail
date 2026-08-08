@@ -5,7 +5,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from .output import TestOutput
+from tests.v2.common.core import TestOutput
 
 
 @dataclass(frozen=True)

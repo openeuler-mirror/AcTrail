@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-import os
-import pwd
 import secrets
-import shutil
 from pathlib import Path
 
 from tests.v2.common.actrail_runtime import ActrailRuntime, CommandResult
-from tests.v2.common.errors import AgentBinaryNotFoundError
+from tests.v2.common.core import AgentBinaryNotFoundError, TestOutput
 from tests.v2.common.mcp_test_support import McpProbeSpec, McpProbeWorkspace
-from tests.v2.common.output import TestOutput
+from tests.v2.common.testing_env import AgentBinaryDiscovery
 
 from .config import ProbeClaudeMcpConfig
 from .streaming_launch import ClaudeMcpStreamingLaunch
@@ -23,6 +20,7 @@ class ProbeClaudeMcpTask:
     ) -> None:
         self._config = config
         self._runtime = runtime
+        self._discovery = AgentBinaryDiscovery(config.repo)
         self._claude = self._resolve_claude()
         self._workspace = McpProbeWorkspace(
             config.repo,
@@ -80,12 +78,7 @@ class ProbeClaudeMcpTask:
         return execution_evidence
 
     def environment(self) -> dict[str, str]:
-        environment = os.environ.copy()
-        for parent in self._claude.resolve().parents:
-            if parent.name == ".local":
-                environment["HOME"] = str(parent.parent)
-                break
-        return environment
+        return self._discovery.environment(self._claude)
 
     def close(self) -> None:
         self._workspace.close()
@@ -121,31 +114,17 @@ class ProbeClaudeMcpTask:
         )
 
     def _resolve_claude(self) -> Path:
-        if self._config.claude_binary is not None:
-            if self._is_executable(self._config.claude_binary):
-                return self._config.claude_binary
+        configured = self._config.claude_binary
+        if configured is not None:
+            if AgentBinaryDiscovery.is_executable(configured):
+                return configured
             raise AgentBinaryNotFoundError(
                 "configured Claude executable is unavailable: "
-                f"{self._config.claude_binary}"
+                f"{configured}"
             )
-        discovered = shutil.which("claude")
-        if discovered:
-            return Path(discovered)
-        homes = {
-            Path(pwd.getpwuid(os.getuid()).pw_dir),
-            Path(pwd.getpwuid(self._config.repo.stat().st_uid).pw_dir),
-        }
-        invoking_user = os.environ.get("SUDO_USER")
-        if invoking_user and invoking_user != "root":
-            homes.add(Path(pwd.getpwnam(invoking_user).pw_dir))
-        for home in homes:
-            candidate = home / ".local/bin/claude"
-            if self._is_executable(candidate):
-                return candidate
-        raise AgentBinaryNotFoundError(
-            "Claude executable not found; set CLAUDE_E2E_BINARY to its path"
-        )
-
-    @staticmethod
-    def _is_executable(path: Path) -> bool:
-        return path.is_file() and os.access(path, os.X_OK)
+        binary = self._discovery.resolve("CLAUDE_E2E_BINARY", "claude")
+        if binary is None:
+            raise AgentBinaryNotFoundError(
+                "Claude executable not found; set CLAUDE_E2E_BINARY to its path"
+            )
+        return binary

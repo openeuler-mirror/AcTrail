@@ -7,8 +7,8 @@ import time
 from collections import Counter
 from typing import Any
 
-from tests.v2.common.test_case import TestCase, TestResult, TestStatus
-from tests.v2.common.testing_context import TestingContextSingleton
+from tests.v2.common.core import TestCase, TestResult, TestStatus
+from tests.v2.common.runner import TestingContextSingleton
 
 from .config import OtelHttpConfig
 from .environment import OtelHttpEnvironment

@@ -20,7 +20,14 @@ from urllib.parse import urlsplit, urlunsplit
 
 
 REPO = Path(__file__).resolve().parents[5]
-CONTAINER_MANAGER_DIR = REPO / "tests/v2/common/test-suites/container-manager"
+CONTAINER_MANAGER_DIR = (
+    REPO
+    / "tests"
+    / "v2"
+    / "common"
+    / "test_suites"
+    / "container-manager"
+)
 sys.path.insert(0, str(CONTAINER_MANAGER_DIR))
 
 from container import TestContainer  # noqa: E402

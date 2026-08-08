@@ -46,7 +46,7 @@ class TestCaseInputs:
 
 ## Workspace 所有权
 
-workspace 的创建和删除只属于 `tests/v2/common/runner.py`：
+workspace 的创建和删除只属于 `tests/v2/common/runner/`：
 
 - 默认根目录是 `/tmp/actrail-regression`；
 - 每个 definition 的默认目录是 `<work-root>/<definition.name>`；

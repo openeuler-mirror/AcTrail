@@ -10,10 +10,8 @@ from typing import Any, TextIO
 from urllib.parse import urlsplit
 
 from .actrail_runtime import ActrailRuntime
-from .config import CommonTestConfig
-from .output import TestOutput
 from .plugin_web_api import PluginWebApi
-from .test_case import TestResult, TestStatus
+from tests.v2.common.core import CommonTestConfig, TestOutput, TestResult, TestStatus
 
 
 @dataclass(frozen=True)

@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import os
-import pwd
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from .testing_context import TestingContextSingleton
+from tests.v2.common.runner import TestingContextSingleton
+from tests.v2.common.testing_env import AgentBinaryDiscovery
 
 
 @dataclass(frozen=True)
@@ -72,72 +71,48 @@ class AgentSelector:
     )
 
     def __init__(self, repo: Path):
-        self._repo = repo
+        self._discovery = AgentBinaryDiscovery(repo)
 
     def select(
         self,
         test_context: TestingContextSingleton,
     ) -> AgentSelection | None:
+        probe_all = _probe_all_agents_enabled()
         for kind, variable, executable in self._CANDIDATES:
-            binary = self._resolve_binary(kind, variable, executable)
+            binary = self._discovery.resolve(variable, executable)
             if binary is None:
                 continue
-            environment = self._environment(kind, binary)
+            environment = self._discovery.environment(binary)
+            if probe_all:
+                test_context.report_progress(
+                    "agent_availability",
+                    f"checking {kind} availability",
+                )
+                if test_context.check_agent_availability(
+                    kind,
+                    binary,
+                    environment,
+                ):
+                    return AgentSelection(kind, binary, environment)
+                continue
             test_context.report_progress(
-                "agent_availability",
-                f"checking {kind} availability",
+                "agent_selection",
+                f"selecting first available agent: {kind}",
             )
-            if test_context.check_agent_availability(
-                kind,
-                binary,
-                environment,
-            ):
-                return AgentSelection(kind, binary, environment)
+            return AgentSelection(kind, binary, environment)
         return None
 
-    def _resolve_binary(
-        self,
-        kind: str,
-        variable: str,
-        executable: str,
-    ) -> Path | None:
-        configured = os.environ.get(variable)
-        if configured:
-            candidate = Path(configured)
-            return candidate if self._is_executable(candidate) else None
-        discovered = shutil.which(executable)
-        if discovered:
-            return Path(discovered)
-        if kind == "xiaoo":
-            return self._resolve_xiaoo_fallback()
-        return None
 
-    def _resolve_xiaoo_fallback(self) -> Path | None:
-        homes = {
-            Path(pwd.getpwuid(os.getuid()).pw_dir),
-            Path(pwd.getpwuid(self._repo.stat().st_uid).pw_dir),
-        }
-        invoking_user = os.environ.get("SUDO_USER")
-        if invoking_user and invoking_user != "root":
-            homes.add(Path(pwd.getpwnam(invoking_user).pw_dir))
-        for home in homes:
-            candidate = home / ".cargo/bin/xiaoo"
-            if self._is_executable(candidate):
-                return candidate
-        return None
+def _probe_all_agents_enabled() -> bool:
+    """Whether selection should probe every found agent until one passes.
 
-    @staticmethod
-    def _is_executable(path: Path) -> bool:
-        return path.is_file() and os.access(path, os.X_OK)
-
-    @staticmethod
-    def _environment(kind: str, binary: Path) -> dict[str, str]:
-        environment = os.environ.copy()
-        if kind != "xiaoo":
-            return environment
-        resolved = binary.resolve()
-        for parent in resolved.parents:
-            if parent.name == ".cargo":
-                environment["HOME"] = str(parent.parent)
-                break
-        return environment
+    Default is false: the first executable agent binary wins without a real
+    model call. Set ACTRAIL_TEST_AGENT_PROBE_ALL=1 to restore per-candidate
+    availability probing.
+    """
+    return os.environ.get("ACTRAIL_TEST_AGENT_PROBE_ALL", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
