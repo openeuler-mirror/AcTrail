@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-use crate::elf::Arch;
+use crate::elf::{Arch, ScanMode};
 use crate::fast::{ArchFilter, FastProbeRequest, ProviderFilter, SourceFilter};
 use crate::{ToolError, ToolResult};
 
@@ -47,6 +47,10 @@ pub(crate) struct DetectArgs {
     #[arg(long, value_enum, default_value = "auto")]
     pub(crate) source: SourceChoice,
 
+    /// Memory scan strategy for executable payload patterns.
+    #[arg(long, value_enum, default_value = "low")]
+    pub(crate) scan: ScanChoice,
+
     /// Extra exported function symbol to display.
     #[arg(long = "symbol", value_name = "NAME")]
     pub(crate) symbols: Vec<String>,
@@ -80,6 +84,10 @@ pub(crate) struct FastArgs {
     /// Probe source to inspect.
     #[arg(long, value_enum, default_value = "auto")]
     pub(crate) source: SourceChoice,
+
+    /// Memory scan strategy for executable payload patterns.
+    #[arg(long, value_enum, default_value = "low")]
+    pub(crate) scan: ScanChoice,
 
     /// Maximum pattern matches to inspect per pattern.
     #[arg(long, value_name = "N", value_parser = parse_usize, default_value_t = DEFAULT_MATCH_LIMIT)]
@@ -136,6 +144,22 @@ pub(crate) enum ArchChoice {
     Aarch64,
     #[value(name = "x86_64")]
     X86_64,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+pub(crate) enum ScanChoice {
+    Full,
+    #[value(name = "low")]
+    LowMemory,
+}
+
+impl From<ScanChoice> for ScanMode {
+    fn from(choice: ScanChoice) -> Self {
+        match choice {
+            ScanChoice::Full => Self::Full,
+            ScanChoice::LowMemory => Self::LowMemory,
+        }
+    }
 }
 
 impl From<ArchChoice> for ArchFilter {

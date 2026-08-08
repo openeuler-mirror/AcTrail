@@ -22,6 +22,7 @@ pub use binary_identity::{
     BinaryIdentity, BinaryIdentityError, BinaryIdentityRegion, BinaryIdentityResolver,
     BinaryIdentityTypeCode,
 };
+pub use elf::ScanMode;
 pub use plan::{
     AttachPoint, CaptureStrategy, PayloadDirection, ProbeBinary, ProbePoint, ProbePointPlan,
     ProbeSource, TargetIdentity, TlsProvider,
@@ -75,7 +76,12 @@ pub fn run_from_env() -> ToolResult<()> {
             }
         }
         Command::Fast(args) => {
-            let plan = fast::resolve(args.into_request())?;
+            let scan = args.scan;
+            let plan = fast::resolve_for_consumer_with_scan(
+                args.into_request(),
+                fast::ProbeConsumer::PlanOnly,
+                scan.into(),
+            )?;
             reporter::print_fast_probe_plan(&plan)
         }
         Command::Pattern(args) => {

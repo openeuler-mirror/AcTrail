@@ -17,6 +17,7 @@ use super::common::executable::OpenSslExecutableProbeDetector;
 use super::common::shared_library::OpenSslSharedLibraryProbeDetector;
 use super::common::shared_library::discovery::LibrarySearch;
 use super::{aarch64, x86_64};
+use crate::probe_detector::detector::tls::ExecutablePatternRegistration;
 
 pub(crate) const NAME: &str = "openssl";
 pub(crate) const RESOLVER: &str = "openssl-symbols";
@@ -212,5 +213,25 @@ impl ProbeDetector for OpenSslProbeDetector {
                 outcomes,
             ),
         )
+    }
+}
+
+impl ExecutablePatternRegistration for OpenSslProbeDetector {
+    fn register_executable_patterns(&self, context: &ProbeContext<'_>) {
+        if context
+            .request
+            .requested_provider
+            .is_some_and(|provider| provider != TlsProvider::OpenSsl)
+        {
+            return;
+        }
+        self.x86_64.executable.register_executable_patterns(context);
+        self.aarch64
+            .executable
+            .register_executable_patterns(context);
+    }
+
+    fn detector_path(&self) -> &DetectorPath {
+        &self.path
     }
 }

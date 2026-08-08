@@ -80,12 +80,19 @@ OpenSSL shared-library probing resolves library names that are already present i
 
 These paths do not create standalone system candidates. They are only searched after a `DT_NEEDED` entry names a dependency, or when the user passes `--library`.
 
-Codex 0.146.0 embeds OpenSSL 3.6.3 in a stripped x86_64 musl executable. The exact-target detector is restricted to sampled executable identity `6948d0811ec18dab404ee6949296b85dc192126a6033ab17918b9b61d8bdc168` and requires each active plaintext entry pattern to occur exactly once:
+Codex 0.146.0 embeds OpenSSL 3.6.3 in a stripped x86_64 musl executable. The x86_64 executable detector falls back to the following unique static entry patterns when the symbol table is absent (verified on identity `6948d0811ec18dab404ee6949296b85dc192126a6033ab17918b9b61d8bdc168`):
 
 - `SSL_read_ex`, 18 bytes: `55 48 89 e5 e8 c7 fb ff ff 31 c9 85 c0 0f 4e c1 5d c3`
 - `SSL_write_ex`, 30 bytes: `55 48 89 e5 53 50 49 89 c8 31 db 31 c9 e8 be fd ff ff 85 c0 0f 4e c3 48 83 c4 08 5b 5d c3`
 
 The two `_ex` entries form the complete inbound and outbound plaintext closure for this binary. A real Codex request produced 1,962 `SSL_read_ex` hits and 54 `SSL_write_ex` hits; `SSL_read` was present but inactive, and `SSL_write` was removed by section garbage collection.
+
+Codex 0.146.0 also embeds OpenSSL 3.6.3 in the stripped aarch64 musl executable. The aarch64 executable detector falls back to the following unique static entry patterns when the symbol table is absent (verified on identity `c80ca3c22e034fbf5e4de424377663d4073fc4a12ebbc689f1d093869462de16`):
+
+- `SSL_read_ex`, 32 bytes: `fd 7b bf a9 fd 03 00 91 eb fe ff 97 00 7c a0 0a fd 7b c1 a8 c0 03 5f d6 ff c3 01 d1 fd 7b 03 a9`
+- `SSL_write_ex`, 32 bytes: `fd 7b bf a9 fd 03 00 91 e4 03 03 aa e3 03 1f aa 72 ff ff 97 00 7c a0 0a fd 7b c1 a8 c0 03 5f d6`
+
+A real aarch64 Codex request produced 86 `SSL_read_ex` hits and 21 `SSL_write_ex` hits. These points are used by the API-key/OpenSSL route and can be attached alongside the rustls points below.
 
 Rustls stripped x86_64 probing uses these documented entry patterns:
 

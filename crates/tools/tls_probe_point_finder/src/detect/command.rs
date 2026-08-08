@@ -3,7 +3,7 @@
 use crate::ToolResult;
 use crate::args::{DetectArgs, ProviderChoice, SourceChoice, require_arch};
 use crate::binary::resolve_entry_elf;
-use crate::elf::ElfImage;
+use crate::elf::{DEFAULT_LOW_MEMORY_CHUNK_BYTES, ElfImage};
 use crate::plan::{ProbeSource, TargetIdentity, TlsProvider};
 use crate::probe_detector::contract::candidate::ProbeCandidate;
 use crate::probe_detector::contract::detection::{
@@ -16,7 +16,8 @@ use super::report::*;
 
 pub(crate) fn run(args: DetectArgs) -> ToolResult<DetectReport> {
     let binary = resolve_entry_elf(&args.binary)?;
-    let image = ElfImage::parse(&binary)?;
+    let image =
+        ElfImage::parse_with_mode(&binary, args.scan.into(), DEFAULT_LOW_MEMORY_CHUNK_BYTES)?;
     require_arch(image.arch(), args.arch, image.path())?;
     let target = TargetIdentity {
         binary: image.path().to_path_buf(),

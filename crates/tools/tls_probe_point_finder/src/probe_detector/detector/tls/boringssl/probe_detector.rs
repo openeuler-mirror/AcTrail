@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::elf::ElfImage;
+use crate::elf::{Arch, ElfImage};
 use crate::plan::{ProbeSource, TlsProvider};
 use crate::probe_detector::contract::detection::{
     DetectionError, DetectionEvidence, DetectionOutcome, LibraryCandidate, ProbeContext,
@@ -14,6 +14,7 @@ use crate::probe_detector::contract::selection::{DetectionSelector, SelectionPol
 use super::BoringSslProbeDetectorConfig;
 use super::aarch64::Aarch64BoringSslProbeDetector;
 use super::x86_64::X86_64BoringSslProbeDetector;
+use crate::probe_detector::detector::tls::ExecutablePatternRegistration;
 
 pub(crate) const NAME: &str = "boringssl";
 pub(crate) const MAP_SYMBOLS_X86_64: &[&str] = &["SSL_do_handshake", "SSL_read", "SSL_write"];
@@ -118,6 +119,7 @@ impl ProbeDetector for BoringSslProbeDetector {
                     note: None,
                 };
                 let library_context = context.for_library(&image, &library);
+                self.register_executable_patterns(&library_context);
                 let outcome = self.arch_outcome(&library_context)?;
                 if matches!(outcome, DetectionOutcome::Matched(_)) {
                     return Ok(outcome);
@@ -128,5 +130,31 @@ impl ProbeDetector for BoringSslProbeDetector {
             DetectionEvidence::new(self.path.clone(), context.target.architecture.clone())
                 .rejected("BoringSSL symbols and static patterns were not found"),
         ))
+    }
+}
+
+impl ExecutablePatternRegistration for BoringSslProbeDetector {
+    fn register_executable_patterns(&self, context: &ProbeContext<'_>) {
+        if context
+            .request
+            .requested_provider
+            .is_some_and(|provider| provider != TlsProvider::BoringSsl)
+        {
+            return;
+        }
+        // 与 X86_64/Aarch64 分支 detect 的 arch guard 一致，只注册当前架构的
+        // patterns，避免把另一个架构永远不会请求的 patterns 加入联合扫描。
+        match context.probe.image.arch() {
+            Arch::X86_64 => self
+                .x86_64
+                .register_executable_patterns(context.probe.image),
+            Arch::Aarch64 => self
+                .aarch64
+                .register_executable_patterns(context.probe.image),
+        }
+    }
+
+    fn detector_path(&self) -> &DetectorPath {
+        &self.path
     }
 }

@@ -12,6 +12,7 @@ path = "src/bin/tls-probe-point-finder.rs"
 anstyle = "1.0"
 clap = { version = "4.6", features = ["derive"] }
 memchr = "2.7"
+memmap2 = "0.5.10"
 model_core = { path = "../../core/model" }
 rustc-demangle = "0.1"
 sha2 = "0.10"

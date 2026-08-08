@@ -1,6 +1,6 @@
 # Probe Detector 目标文件路径
 
-本文件定义 Probe Detector 重构完成后的目标路径。路径本身承担 namespace；每个 detector category 目录包含当前层 detector，并可以继续包含任意层级的子 detector。每个 `probe_detector.rs` 必须在同目录拥有一一对应的 `config.rs`，由后者定义该 detector 的构造配置结构体；即使当前没有可配置字段，也必须保留显式空配置结构体。Rustls static candidate 按实际 signature/codegen shape 命名，适用版本作为验证证据记录，不进入 detector 路径。
+本文件定义 Probe Detector 重构完成后的目标路径。路径本身承担 namespace；每个 detector category 目录包含当前层 detector，并可以继续包含任意层级的子 detector。每个 `probe_detector.rs` 必须在同目录拥有一一对应的 `config.rs`，由后者定义该 detector 的构造配置结构体；即使当前没有可配置字段，也必须保留显式空配置结构体。Rustls 与 OpenSSL 的 static candidate 按实际 signature/codegen shape 命名，适用版本作为验证证据记录，不进入 detector 路径。
 
 目标二进制和实际挂载二进制统一使用 `BinaryIdentity { identity_type_code, identity }`。任何 detector、plan、诊断报告、symbol map 或本机缓存都不得把 GNU build-id 本身作为必填 identity；它只是 identity provider 之一。identity type code 与取值规则共同版本化，比较时必须同时比较二者。
 
@@ -236,7 +236,7 @@ crates/tools/tls_probe_point_finder/src/
             │   │   │   ├── mod.rs
             │   │   │   ├── config.rs
             │   │   │   └── probe_detector.rs
-            │   │   │       └── 从 executable exported SSL_* symbols 建立双向闭包
+            │   │   │       └── 从 executable exported SSL_* symbols 建立双向闭包；不包含架构专属 static pattern
             │   │   │
             │   │   └── shared_library/
             │   │       ├── mod.rs
@@ -260,8 +260,20 @@ crates/tools/tls_probe_point_finder/src/
             │   │       └── 在 x86_64 namespace 下 re-export common executable/shared_library detectors 及其 configs
             │   │
             │   └── aarch64/
-            │       └── mod.rs
-            │           └── 在 aarch64 namespace 下 re-export common executable/shared_library detectors 及其 configs
+            │       ├── mod.rs
+            │       │   └── 在 aarch64 namespace 下 re-export common executable/shared_library detectors，并暴露 static_pattern 子树
+            │       └── static_pattern/
+            │           ├── mod.rs
+            │           ├── config.rs
+            │           ├── probe_detector.rs
+            │           │   └── 聚合 aarch64 OpenSSL signature/codegen candidates
+            │           └── ssl_ex_entry_pair_32_32/
+            │               ├── mod.rs
+            │               ├── config.rs
+            │               ├── probe_detector.rs
+            │               │   └── 匹配 32-byte SSL_read_ex 与 32-byte SSL_write_ex entry family
+            │               └── verified_targets.rs
+            │                   └── 记录 Codex 0.146.0 aarch64 OpenSSL 3.6.3 验证证据，不参与 detector 命名
             │
             ├── boringssl/
             │   ├── mod.rs
@@ -382,6 +394,8 @@ probe_detector::detector::tls::rustls::static_pattern::aarch64
 probe_detector::detector::tls::rustls::static_pattern::aarch64::common_state_pair_52_64
 probe_detector::detector::tls::openssl::x86_64::shared_library::symbol
 probe_detector::detector::tls::openssl::aarch64::shared_library::symbol
+probe_detector::detector::tls::openssl::aarch64::static_pattern
+probe_detector::detector::tls::openssl::aarch64::static_pattern::ssl_ex_entry_pair_32_32
 probe_detector::detector::tls::boringssl::x86_64::static_pattern
 probe_detector::detector::tls::boringssl::aarch64::static_pattern
 ```

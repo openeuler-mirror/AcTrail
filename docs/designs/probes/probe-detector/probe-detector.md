@@ -285,6 +285,12 @@ RustlsStaticDetector
 └─ Aarch64RustlsDetector
    ├─ CommonStatePair5264Detector
    └─ CommonStatePair4856Detector
+
+OpenSSLStaticDetector
+├─ X86_64OpenSSLDetector
+│  └─ Codex146SslExPairDetector
+└─ Aarch64OpenSSLDetector
+   └─ SslExEntryPair3232Detector
 ```
 
 必须满足：
@@ -313,6 +319,18 @@ RustlsDetector : ProbeDetector
    └─ Aarch64RustlsDetector : ProbeDetector
       ├─ CommonStatePair5264Detector : ProbeDetector
       └─ CommonStatePair4856Detector : ProbeDetector
+```
+
+OpenSSL detector 可以按以下方式组合，static candidate 同样按机器码形态命名：
+
+```text
+OpenSSLDetector : ProbeDetector
+├─ OpenSSLSharedLibraryDetector : ProbeDetector
+└─ OpenSSLExecutableDetector : ProbeDetector
+   ├─ X86_64OpenSSLDetector : ProbeDetector
+   │  └─ Codex146SslExPairDetector : ProbeDetector
+   └─ Aarch64OpenSSLDetector : ProbeDetector
+      └─ SslExEntryPair3232Detector : ProbeDetector
 ```
 
 未来可以继续细分而不修改统一接口：

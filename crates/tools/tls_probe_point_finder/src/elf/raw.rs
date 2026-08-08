@@ -74,9 +74,7 @@ pub(super) fn string_at_usize(data: &[u8], offset: usize) -> ToolResult<&str> {
     let rest = data
         .get(offset..)
         .ok_or_else(|| ToolError::new("ELF string offset is out of range"))?;
-    let end = rest
-        .iter()
-        .position(|byte| *byte == 0)
-        .ok_or_else(|| ToolError::new("ELF string is unterminated"))?;
+    let end =
+        memchr::memchr(0, rest).ok_or_else(|| ToolError::new("ELF string is unterminated"))?;
     std::str::from_utf8(&rest[..end]).map_err(|error| ToolError::new(error.to_string()))
 }

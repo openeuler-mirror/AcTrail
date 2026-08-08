@@ -60,6 +60,9 @@ impl RustlsSymbolProbeDetector {
     ) -> ToolResult<Option<DemangledPlaintextSymbols>> {
         let mut targets = BTreeMap::<&'static str, DemangledPlaintextTarget>::new();
         for symbol in image.defined_function_symbols()? {
+            if !symbol.raw_name.contains("rustls") {
+                continue;
+            }
             let demangled = format!("{:#}", rustc_demangle::demangle(&symbol.raw_name));
             if let Some(target) = Self::parse_target(
                 &demangled,

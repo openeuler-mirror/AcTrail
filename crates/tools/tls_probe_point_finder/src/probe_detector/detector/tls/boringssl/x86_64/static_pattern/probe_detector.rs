@@ -49,14 +49,25 @@ impl X86_64BoringSslStaticPatternProbeDetector {
         })
     }
 
+    pub(crate) fn register_executable_patterns(&self, image: &ElfImage) {
+        image.register_pattern_scan(HANDSHAKE_PATTERN);
+        image.register_pattern_scan(READ_PATTERN);
+        image.register_pattern_scan(WRITE_PATTERN);
+    }
+
     pub(crate) fn detect(&self, image: &ElfImage) -> ToolResult<StaticPatternDetection> {
         let data = image.data();
         let handshake_matches =
             StaticPatternSupport::find_all_executable(image, HANDSHAKE_PATTERN)?;
         let read_matches = StaticPatternSupport::find_all_executable(image, READ_PATTERN)?;
         let write_matches = StaticPatternSupport::find_all_executable(image, WRITE_PATTERN)?;
-        let resolved =
-            Self::resolve_offsets(data, &handshake_matches, &read_matches, &write_matches)?;
+        let resolved = Self::resolve_offsets(
+            image,
+            data,
+            &handshake_matches,
+            &read_matches,
+            &write_matches,
+        )?;
         let mut resolved_offsets = Vec::new();
         if let Some(handshake) = resolved.handshake {
             resolved_offsets.push(("SSL_do_handshake", handshake));
@@ -97,6 +108,7 @@ impl X86_64BoringSslStaticPatternProbeDetector {
     }
 
     fn resolve_offsets(
+        image: &ElfImage,
         data: &[u8],
         handshake_matches: &[usize],
         read_matches: &[usize],
@@ -106,7 +118,7 @@ impl X86_64BoringSslStaticPatternProbeDetector {
         let write = Self::resolve_write(data, write_matches, read)?;
         let handshake = match Self::resolve_handshake(data, handshake_matches, read) {
             Ok(offset) => Some(offset),
-            Err(_) if Self::has_identity(data) => None,
+            Err(_) if Self::has_identity(image) => None,
             Err(error) => return Err(error),
         };
         Ok(ResolvedOffsets {
@@ -149,11 +161,11 @@ impl X86_64BoringSslStaticPatternProbeDetector {
         )))
     }
 
-    fn has_identity(data: &[u8]) -> bool {
-        let vendor = StaticPatternSupport::contains(data, IDENTITY_MARKERS[0]);
-        let openssl_error = StaticPatternSupport::contains(data, IDENTITY_MARKERS[1]);
-        let boring_error = StaticPatternSupport::contains(data, IDENTITY_MARKERS[2]);
-        let flag = StaticPatternSupport::contains(data, IDENTITY_MARKERS[3]);
+    fn has_identity(image: &ElfImage) -> bool {
+        let vendor = StaticPatternSupport::contains_any(image, &[IDENTITY_MARKERS[0]]);
+        let openssl_error = StaticPatternSupport::contains_any(image, &[IDENTITY_MARKERS[1]]);
+        let boring_error = StaticPatternSupport::contains_any(image, &[IDENTITY_MARKERS[2]]);
+        let flag = StaticPatternSupport::contains_any(image, &[IDENTITY_MARKERS[3]]);
         vendor || flag || (openssl_error && boring_error)
     }
 }

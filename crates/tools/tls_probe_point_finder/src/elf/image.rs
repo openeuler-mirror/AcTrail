@@ -1,5 +1,7 @@
-use std::fs;
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+
+use memmap2::{Mmap, MmapOptions};
 
 use crate::binary_identity::{BinaryIdentity, BinaryIdentityRegion, BinaryIdentityResolver};
 use crate::{ToolError, ToolResult};
@@ -9,6 +11,8 @@ use super::raw::{
     bounded, bounded_usize, checked_table_offset, hex_bytes, read_u16, read_u32, read_u64,
     string_at,
 };
+use super::scan::{DEFAULT_LOW_MEMORY_CHUNK_BYTES, PatternScanCache, ScanMode};
+use super::symbols::SymbolScanCache;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Arch {
@@ -34,19 +38,34 @@ impl Arch {
 
 pub(crate) struct ElfImage {
     pub(super) path: PathBuf,
-    pub(super) data: Vec<u8>,
+    pub(super) data: Mmap,
     pub(super) arch: Arch,
     pub(super) identity: BinaryIdentity,
     pub(super) has_interpreter: bool,
     pub(super) load_segments: Vec<LoadSegment>,
     pub(super) dynamic_segments: Vec<SegmentRange>,
     pub(super) sections: Vec<ElfSection>,
+    pub(super) scan_mode: ScanMode,
+    pub(super) scan_chunk_bytes: usize,
+    pub(super) scan_cache: RefCell<PatternScanCache>,
+    pub(super) symbol_cache: RefCell<SymbolScanCache>,
 }
 
 impl ElfImage {
     pub(crate) fn parse(path: &Path) -> ToolResult<Self> {
-        let data = fs::read(path)
-            .map_err(|error| ToolError::new(format!("cannot read {}: {error}", path.display())))?;
+        Self::parse_with_mode(path, ScanMode::Full, DEFAULT_LOW_MEMORY_CHUNK_BYTES)
+    }
+
+    pub(crate) fn parse_with_mode(
+        path: &Path,
+        scan_mode: ScanMode,
+        scan_chunk_bytes: usize,
+    ) -> ToolResult<Self> {
+        let file = std::fs::File::open(path)
+            .map_err(|error| ToolError::new(format!("cannot open {}: {error}", path.display())))?;
+        let data = unsafe { MmapOptions::new().map(&file) }
+            .map_err(|error| ToolError::new(format!("cannot mmap {}: {error}", path.display())))?;
+        let _ = data.advise(memmap2::Advice::Sequential);
         validate_header(&data)?;
         let arch = parse_arch(&data)?;
         let has_interpreter = has_program_header_type(&data, ELF_PROGRAM_HEADER_INTERP)?;
@@ -63,6 +82,10 @@ impl ElfImage {
             load_segments,
             dynamic_segments,
             sections,
+            scan_mode,
+            scan_chunk_bytes,
+            scan_cache: RefCell::new(PatternScanCache::default()),
+            symbol_cache: RefCell::new(SymbolScanCache::new()),
         })
     }
 
@@ -71,7 +94,41 @@ impl ElfImage {
     }
 
     pub(crate) fn data(&self) -> &[u8] {
-        &self.data
+        &self.data[..]
+    }
+
+    pub(crate) fn register_pattern_scan(&self, pattern: &[u8]) {
+        self.scan_cache.borrow_mut().register(pattern);
+    }
+
+    pub(crate) fn pattern_offsets_for(
+        &self,
+        patterns: &[&[u8]],
+        ranges: &[(usize, &[u8])],
+    ) -> Vec<Vec<usize>> {
+        let mut cache = self.scan_cache.borrow_mut();
+        let keys = patterns
+            .iter()
+            .map(|pattern| cache.register(pattern))
+            .collect::<Vec<_>>();
+        cache.scan_if_needed(
+            ranges,
+            self.scan_mode,
+            Some(&self.data),
+            self.scan_chunk_bytes,
+        );
+        keys.iter()
+            .map(|&key| cache.offsets(key).to_vec())
+            .collect()
+    }
+
+    pub(crate) fn contains_any_patterns(&self, patterns: &[&[u8]]) -> bool {
+        // Identity markers live in read-only data, so scan the whole file but
+        // stop at the first hit instead of collecting every match.
+        patterns.iter().any(|pattern| {
+            crate::pattern_search::ExactPatternSearch::new(pattern)
+                .map_or(false, |search| search.contains(&self.data))
+        })
     }
 
     pub(crate) fn arch(&self) -> Arch {
@@ -83,6 +140,30 @@ impl ElfImage {
     }
 
     pub(crate) fn executable_file_ranges(&self) -> ToolResult<Vec<(usize, &[u8])>> {
+        let code_ranges = self
+            .sections
+            .iter()
+            .filter(|section| {
+                section.section_type != ELF_SECTION_TYPE_NOBITS
+                    && section.size > 0
+                    && section.flags & ELF_SECTION_FLAG_ALLOC != 0
+                    && section.flags & ELF_SECTION_FLAG_EXECINSTR != 0
+            })
+            .map(|section| {
+                let data = bounded(&self.data, section.file_offset, section.size)?;
+                let file_offset = usize::try_from(section.file_offset).map_err(|_| {
+                    ToolError::new("executable section file offset overflows usize")
+                })?;
+                Ok((file_offset, data))
+            })
+            .collect::<ToolResult<Vec<_>>>()?;
+        if !code_ranges.is_empty() {
+            return Ok(code_ranges);
+        }
+        self.executable_load_segment_ranges()
+    }
+
+    fn executable_load_segment_ranges(&self) -> ToolResult<Vec<(usize, &[u8])>> {
         self.load_segments
             .iter()
             .filter(|segment| segment.executable)
@@ -213,6 +294,7 @@ pub(super) struct SegmentRange {
 pub(super) struct ElfSection {
     pub(super) name: String,
     pub(super) section_type: u32,
+    pub(super) flags: u64,
     pub(super) virtual_address: u64,
     pub(super) file_offset: u64,
     pub(super) size: u64,
@@ -323,6 +405,7 @@ fn parse_sections(data: &[u8]) -> ToolResult<Vec<ElfSection>> {
         raw_sections.push((
             read_u32(header, ELF_SECTION_HEADER_NAME_FIELD)?,
             read_u32(header, ELF_SECTION_HEADER_TYPE_FIELD)?,
+            read_u64(header, ELF_SECTION_HEADER_FLAGS_FIELD)?,
             read_u64(header, ELF_SECTION_HEADER_ADDR_FIELD)?,
             read_u64(header, ELF_SECTION_HEADER_FILE_OFFSET_FIELD)?,
             read_u64(header, ELF_SECTION_HEADER_SIZE_FIELD)?,
@@ -332,13 +415,22 @@ fn parse_sections(data: &[u8]) -> ToolResult<Vec<ElfSection>> {
     }
     let names_section = raw_sections.get(name_table_index);
     let names = match names_section {
-        Some((_, _, _, offset, size, _, _)) => Some(bounded(data, *offset, *size)?),
+        Some((_, _, _, _, offset, size, _, _)) => Some(bounded(data, *offset, *size)?),
         None => None,
     };
     raw_sections
         .into_iter()
         .map(
-            |(name_offset, section_type, virtual_address, file_offset, size, link, entry_size)| {
+            |(
+                name_offset,
+                section_type,
+                flags,
+                virtual_address,
+                file_offset,
+                size,
+                link,
+                entry_size,
+            )| {
                 let name = match names {
                     Some(table) => string_at(table, name_offset)?.unwrap_or("").to_string(),
                     None => String::new(),
@@ -346,6 +438,7 @@ fn parse_sections(data: &[u8]) -> ToolResult<Vec<ElfSection>> {
                 Ok(ElfSection {
                     name,
                     section_type,
+                    flags,
                     virtual_address,
                     file_offset,
                     size,
