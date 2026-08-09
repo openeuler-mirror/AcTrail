@@ -2,14 +2,10 @@
 
 use std::path::PathBuf;
 
-use crate::binary::resolve_entry_elf;
-use crate::elf::{Arch, DEFAULT_LOW_MEMORY_CHUNK_BYTES, ElfImage, ScanMode};
-use crate::plan::{ProbePointPlan, ProbeSource, TargetIdentity, TlsProvider};
-use crate::probe_detector::contract::detection::{
-    DetectionOutcome, DetectionRequest, ProbeContext,
-};
-use crate::probe_detector::contract::detector::ProbeDetector;
-use crate::probe_detector::detector::tls::{TlsProbeDetector, TlsProbeDetectorConfig};
+use crate::elf::{Arch, ScanMode};
+use crate::plan::{ProbePointPlan, ProbeSource, TlsProvider};
+use crate::probe_detector::contract::detection::DetectionOutcome;
+use crate::resolve::detect_outcome;
 use crate::{ToolError, ToolResult};
 
 pub use crate::probe_detector::contract::detection::ProbeConsumer;
@@ -66,29 +62,7 @@ pub fn resolve_for_consumer_with_scan(
     consumer: ProbeConsumer,
     scan: ScanMode,
 ) -> ToolResult<ProbePointPlan> {
-    let binary = resolve_entry_elf(&request.binary)?;
-    let image = ElfImage::parse_with_mode(&binary, scan, DEFAULT_LOW_MEMORY_CHUNK_BYTES)?;
-    require_arch(image.arch(), request.arch, image.path())?;
-    let target = TargetIdentity {
-        binary: image.path().to_path_buf(),
-        architecture: image.arch().as_str().to_string(),
-        identity: image.identity().clone(),
-    };
-    let detection_request = DetectionRequest {
-        requested_provider: request.provider.requested_provider(),
-        requested_source: request.source.requested_source(),
-        libraries: request.libraries,
-        library_search_dirs: request.library_search_dirs,
-        consumer,
-    };
-    let context = ProbeContext::executable(&target, &image, &detection_request);
-    let detector = TlsProbeDetector::try_new(TlsProbeDetectorConfig::with_match_limit(
-        request.match_limit,
-    ))?;
-    match detector
-        .detect(&context)
-        .map_err(|error| ToolError::new(error.to_string()))?
-    {
+    match detect_outcome(&request, consumer, scan, false)? {
         DetectionOutcome::Matched(candidate) => Ok(candidate.into_plan()),
         DetectionOutcome::Ambiguous(ambiguous) => Err(ToolError::new(format!(
             "ambiguous TLS probe detection: {}",
@@ -107,7 +81,11 @@ pub fn resolve_for_consumer_with_scan(
     }
 }
 
-fn require_arch(actual: Arch, requested: ArchFilter, path: &std::path::Path) -> ToolResult<()> {
+pub(crate) fn require_arch(
+    actual: Arch,
+    requested: ArchFilter,
+    path: &std::path::Path,
+) -> ToolResult<()> {
     let matches = match requested {
         ArchFilter::Auto => true,
         ArchFilter::Aarch64 => actual == Arch::Aarch64,
@@ -136,7 +114,7 @@ impl ArchFilter {
 }
 
 impl ProviderFilter {
-    fn requested_provider(self) -> Option<TlsProvider> {
+    pub(crate) fn requested_provider(self) -> Option<TlsProvider> {
         match self {
             Self::Auto => None,
             Self::OpenSsl => Some(TlsProvider::OpenSsl),
@@ -150,7 +128,7 @@ impl ProviderFilter {
 }
 
 impl SourceFilter {
-    fn requested_source(self) -> Option<ProbeSource> {
+    pub(crate) fn requested_source(self) -> Option<ProbeSource> {
         match self {
             Self::Auto => None,
             Self::Executable => Some(ProbeSource::Executable),

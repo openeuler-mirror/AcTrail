@@ -508,7 +508,7 @@ trap 会停止隔离 daemon，并同时保留 `$CASE_DIR` 和 `$RUNTIME_DIR` 供
 | --- | --- | --- |
 | `ACTRAIL_TEST_PYTHON` | `python3` | Python 3.10+ 解释器；手动流程也用它启动 probe server |
 | `CLAUDE_E2E_BINARY` | 自动查找 `claude` | Claude 可执行文件 |
-| `CLAUDE_E2E_MODEL` | `sonnet` | Claude model |
+| `CLAUDE_E2E_MODEL` | `sonnet` | Claude model；未设置时读取 `ANTHROPIC_MODEL` |
 | `CLAUDE_MCP_E2E_COMMAND_TIMEOUT_SECONDS` | `30` | AcTrail 管理及停止超时 |
 | `CLAUDE_MCP_E2E_LAUNCH_TIMEOUT_SECONDS` | `180` | Claude workload 超时 |
 | `CLAUDE_MCP_E2E_ARTIFACT_ROOT` | `temp/v2-regression/mcp` | 隔离证据目录 |

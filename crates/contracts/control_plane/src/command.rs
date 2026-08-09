@@ -77,7 +77,7 @@ pub struct TrackAddCommand {
     pub tags: BTreeSet<String>,
     pub launch_mode: bool,
     pub initial_suppressed_fds: Vec<InitialSuppressedFd>,
-    pub tls_probe_plan: Option<LaunchTlsProbePlan>,
+    pub tls_probe_plans: Vec<LaunchTlsProbePlan>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

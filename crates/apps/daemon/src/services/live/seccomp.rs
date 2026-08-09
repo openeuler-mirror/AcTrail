@@ -128,46 +128,49 @@ impl StorageAttachService {
                                     let cache_hit = resolution.reply.cache_hit;
                                     let elapsed_micros = resolution.reply.resolve_elapsed_micros;
                                     match resolution.reply.status {
-                                        LaunchTlsPlanStatus::Found(plan)
+                                        LaunchTlsPlanStatus::Found(plans)
                                             if resolution.mode == ExecTlsPlanMode::Direct =>
                                         {
-                                            let provider = plan.provider.clone();
-                                            let source = plan.source.clone();
-                                            let dynamic_plan = DynamicTlsProbePlan {
-                                                target: plan.target,
-                                                target_identity: plan.target_identity,
-                                                binary: plan.binary,
-                                                binary_identity: plan.binary_identity,
-                                                provider: plan.provider,
-                                                points: plan.points,
-                                            };
-                                            match collector.attach_dynamic_tls_plan(&dynamic_plan) {
-                                                Ok(()) => tracing::info!(
-                                                    target: "actrail::tls_sync",
-                                                    pid = candidate.pid,
-                                                    binary = %host_path.display(),
-                                                    provider,
-                                                    source,
-                                                    cache_hit,
-                                                    elapsed_micros,
-                                                    "attached pre-resume TLS plan for exec candidate"
-                                                ),
-                                                Err(error) => tracing::warn!(
-                                                    target: "actrail::tls_sync",
-                                                    pid = candidate.pid,
-                                                    binary = %host_path.display(),
-                                                    provider,
-                                                    error = %error.message,
-                                                    "failed to attach pre-resume TLS plan; continuing exec"
-                                                ),
+                                            for plan in plans {
+                                                let provider = plan.provider.clone();
+                                                let source = plan.source.clone();
+                                                let dynamic_plan = DynamicTlsProbePlan {
+                                                    target: plan.target,
+                                                    target_identity: plan.target_identity,
+                                                    binary: plan.binary,
+                                                    binary_identity: plan.binary_identity,
+                                                    provider: plan.provider,
+                                                    points: plan.points,
+                                                };
+                                                match collector.attach_dynamic_tls_plan(
+                                                    &dynamic_plan,
+                                                ) {
+                                                    Ok(()) => tracing::info!(
+                                                        target: "actrail::tls_sync",
+                                                        pid = candidate.pid,
+                                                        binary = %host_path.display(),
+                                                        provider,
+                                                        source,
+                                                        cache_hit,
+                                                        elapsed_micros,
+                                                        "attached pre-resume TLS plan for exec candidate"
+                                                    ),
+                                                    Err(error) => tracing::warn!(
+                                                        target: "actrail::tls_sync",
+                                                        pid = candidate.pid,
+                                                        binary = %host_path.display(),
+                                                        provider,
+                                                        error = %error.message,
+                                                        "failed to attach pre-resume TLS plan; continuing exec"
+                                                    ),
+                                                }
                                             }
                                         }
-                                        LaunchTlsPlanStatus::Found(plan) => tracing::debug!(
+                                        LaunchTlsPlanStatus::Found(plans) => tracing::debug!(
                                             target: "actrail::tls_sync",
                                             pid = candidate.pid,
                                             binary = %host_path.display(),
-                                            provider = %plan.provider,
-                                            source = %plan.source,
+                                            plan_count = plans.len(),
                                             cache_hit,
                                             elapsed_micros,
                                             "resolved pre-resume sync TLS plan for exec candidate"

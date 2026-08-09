@@ -54,6 +54,18 @@ class ProbeCodexMcpCase(TestCase):
                 TestStatus.PASSED,
                 "actrailctl launch and Codex exited successfully",
             )
+            if task.tool_execution_count() == 0:
+                no_tool = "NO_MCP_TOOL" in launch.stdout
+                reason = (
+                    "Codex did not execute "
+                    f"{task.local.tool_id}"
+                )
+                if no_tool:
+                    reason += "; Codex reported NO_MCP_TOOL"
+                return TestResult(
+                    TestStatus.SKIPPED,
+                    reason,
+                )
             execution_evidence = task.require_agent_evidence(launch)
             results["probe_execution"] = TestResult(
                 TestStatus.PASSED,

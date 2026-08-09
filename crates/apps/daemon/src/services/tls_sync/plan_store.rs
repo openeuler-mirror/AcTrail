@@ -18,7 +18,7 @@ pub(super) struct BinaryPlanKey {
 
 #[derive(Clone, Debug)]
 pub(super) enum BinaryPlanRecord {
-    Found(BinaryPlanDescriptor),
+    Found(Vec<BinaryPlanDescriptor>),
     Unsupported(String),
 }
 

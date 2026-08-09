@@ -216,17 +216,23 @@ pub(crate) fn run_launch(
             .map(InheritableSuppressedFd::initial_suppressed_fd)
             .into_iter()
             .collect(),
-        tls_probe_plan: sync_launch
+        tls_probe_plans: sync_launch
             .as_ref()
-            .and_then(SyncLaunch::direct_probe_plan)
-            .map(|plan| LaunchTlsProbePlan {
-                target: plan.target.clone(),
-                target_identity: plan.target_identity.clone(),
-                binary: plan.binary.clone(),
-                binary_identity: plan.binary_identity.clone(),
-                provider: plan.provider.clone(),
-                points: plan.points.clone(),
-            }),
+            .map(|launch| {
+                launch
+                    .direct_probe_plans()
+                    .iter()
+                    .map(|plan| LaunchTlsProbePlan {
+                        target: plan.target.clone(),
+                        target_identity: plan.target_identity.clone(),
+                        binary: plan.binary.clone(),
+                        binary_identity: plan.binary_identity.clone(),
+                        provider: plan.provider.clone(),
+                        points: plan.points.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
     };
     let reply = match client.send_launch_track_add(track_add, child.pidfd()) {
         Ok(reply) => reply,

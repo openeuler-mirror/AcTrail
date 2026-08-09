@@ -10,6 +10,8 @@ sudo -E python3 tests/v2/regression/probe_claude_llm/run_e2e.py
 
 脚本从 `CLAUDE_E2E_BINARY` 或当前环境查找 Claude，先执行外部可用性
 检查，再通过单层 `actrailctl launch` 捕获一次无会话、无工具的 Claude 请求。
+未显式设置 `CLAUDE_E2E_MODEL` 时，会回退读取 `ANTHROPIC_MODEL`，再回退到
+`sonnet`。
 
 # 步骤摘要
 

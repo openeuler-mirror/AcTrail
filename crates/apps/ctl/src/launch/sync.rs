@@ -29,17 +29,17 @@ pub(super) struct SyncLaunch {
     initial_runtime_family: Option<LibcFamily>,
     preload_libraries: Vec<PathBuf>,
     audit_libraries: Vec<PathBuf>,
-    direct_probe_plan: Option<RuntimePlanDescriptor>,
+    direct_probe_plans: Vec<RuntimePlanDescriptor>,
     java_agent_env_required: bool,
 }
 
 impl SyncLaunch {
     pub(super) const fn requires_sync_runtime(&self) -> bool {
-        self.direct_probe_plan.is_none()
+        self.direct_probe_plans.is_empty()
     }
 
-    pub(super) fn direct_probe_plan(&self) -> Option<&RuntimePlanDescriptor> {
-        self.direct_probe_plan.as_ref()
+    pub(super) fn direct_probe_plans(&self) -> &[RuntimePlanDescriptor] {
+        &self.direct_probe_plans
     }
 }
 
@@ -60,15 +60,22 @@ pub(super) fn sync_launch(
     let (command, launch_plan) = match resolve_daemon_plan(client, request_id, &raw_command, config)
     {
         Ok(plan) => {
-            let command = launch_command_for_plan_descriptor(&raw_command, &plan.descriptor)
+            let primary = plan
+                .descriptors
+                .first()
+                .ok_or_else(|| "TLS plan resolution returned an empty plan set".to_string())?;
+            let command = launch_command_for_plan_descriptor(&raw_command, primary)
                 .map_err(|error| error.to_string())?;
             timing.mark_detail(
                 "sync.resolve_launch_plan",
                 format_args!(
                     "result=ok provider={} source={} binary={} cache={} daemon_elapsed_us={}",
-                    plan.descriptor.provider,
-                    plan.source,
-                    plan.descriptor.binary.display(),
+                    primary.provider,
+                    plan.sources
+                        .first()
+                        .map(String::as_str)
+                        .unwrap_or("unknown"),
+                    primary.binary.display(),
                     if plan.cache_hit { "hit" } else { "miss" },
                     plan.resolve_elapsed_micros
                 ),
@@ -85,21 +92,26 @@ pub(super) fn sync_launch(
     };
     let initial_runtime = initial_runtime(&command)?;
     if initial_runtime.is_static() {
-        let direct_probe_plan = launch_plan
+        let direct_probe_plans = launch_plan
             .as_ref()
-            .map(|plan| plan.descriptor.clone())
-            .ok_or_else(|| {
-                format!(
-                    "static ELF {} requires a resolved native TLS probe plan",
-                    initial_runtime.path.display()
-                )
-            })?;
+            .map(|plan| plan.descriptors.clone())
+            .unwrap_or_default();
+        if direct_probe_plans.is_empty() {
+            return Err(format!(
+                "static ELF {} requires a resolved native TLS probe plan",
+                initial_runtime.path.display()
+            ));
+        }
         timing.mark_detail(
             "sync.initial_runtime",
             format_args!(
                 "kind=static binary={} provider={}",
                 initial_runtime.path.display(),
-                direct_probe_plan.provider
+                direct_probe_plans
+                    .iter()
+                    .map(|plan| plan.provider.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",")
             ),
         );
         return Ok(SyncLaunch {
@@ -109,7 +121,7 @@ pub(super) fn sync_launch(
             initial_runtime_family: None,
             preload_libraries: Vec::new(),
             audit_libraries: Vec::new(),
-            direct_probe_plan: Some(direct_probe_plan),
+            direct_probe_plans,
             java_agent_env_required: false,
         });
     }
@@ -141,7 +153,15 @@ pub(super) fn sync_launch(
     let audit_libraries = if initial_runtime_family == LibcFamily::Glibc {
         launch_plan
             .as_ref()
-            .map(|plan| audit_libraries_for_plan_source(&preload_libraries, &plan.source))
+            .map(|plan| {
+                audit_libraries_for_plan_source(
+                    &preload_libraries,
+                    plan.sources
+                        .first()
+                        .map(String::as_str)
+                        .unwrap_or("unknown"),
+                )
+            })
             .unwrap_or_default()
     } else {
         Vec::new()
@@ -177,7 +197,7 @@ pub(super) fn sync_launch(
         initial_runtime_family: Some(initial_runtime_family),
         preload_libraries,
         audit_libraries,
-        direct_probe_plan: None,
+        direct_probe_plans: Vec::new(),
         java_agent_env_required,
     })
 }
@@ -308,18 +328,19 @@ fn bundle_plans(
     agent_commands: &[String],
 ) -> Vec<RuntimePlanDescriptor> {
     let mut plans = launch_plan
-        .map(|plan| plan.descriptor.clone())
-        .into_iter()
-        .collect::<Vec<_>>();
+        .map(|plan| plan.descriptors.clone())
+        .unwrap_or_default();
     for command in agent_commands {
         let candidate = vec![OsString::from(command)];
         let Ok(plan) = resolve_daemon_plan(client, request_id, &candidate, config) else {
             continue;
         };
-        if contains_plan(&plans, &plan.descriptor) {
-            continue;
+        for descriptor in plan.descriptors {
+            if contains_plan(&plans, &descriptor) {
+                continue;
+            }
+            plans.push(descriptor);
         }
-        plans.push(plan.descriptor);
     }
     plans
 }

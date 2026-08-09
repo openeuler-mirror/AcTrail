@@ -114,7 +114,7 @@ fn attach_main_path_runs() {
             tags: BTreeSet::new(),
             launch_mode: false,
             initial_suppressed_fds: Vec::new(),
-            tls_probe_plan: None,
+            tls_probe_plans: Vec::new(),
         }))
         .unwrap();
     let control_contract::reply::ControlReply::TrackAdded(reply) = reply else {
@@ -183,7 +183,7 @@ fn direct_track_add_rejects_a_launch_only_profile() {
             tags: BTreeSet::new(),
             launch_mode: false,
             initial_suppressed_fds: Vec::new(),
-            tls_probe_plan: None,
+            tls_probe_plans: Vec::new(),
         }))
         .unwrap_err();
 
@@ -234,7 +234,7 @@ fn launch_mode_suppresses_wrapper_bootstrap_gap() {
                 tags: BTreeSet::new(),
                 launch_mode: true,
                 initial_suppressed_fds: Vec::new(),
-                tls_probe_plan: None,
+                tls_probe_plans: Vec::new(),
             }),
             Some(test_pidfd(std::process::id())),
         )

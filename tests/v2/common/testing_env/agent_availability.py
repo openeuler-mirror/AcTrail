@@ -6,6 +6,8 @@ import subprocess
 from pathlib import Path
 from typing import Mapping
 
+from .agent_discovery import AgentBinaryDiscovery, default_claude_model
+
 
 class AgentAvailability:
     def __init__(self):
@@ -67,7 +69,7 @@ class AgentAvailability:
                 "exec",
                 "--ephemeral",
                 "-m",
-                os.environ.get("CODEX_E2E_MODEL", "gpt-5.5"),
+                self._codex_model(binary),
                 "-c",
                 "model_reasoning_effort="
                 + os.environ.get("CODEX_E2E_REASONING_EFFORT", "low"),
@@ -75,6 +77,18 @@ class AgentAvailability:
             ],
             environment,
         )
+
+    def _codex_model(self, binary: str) -> str:
+        configured = os.environ.get("CODEX_E2E_MODEL")
+        if configured:
+            return configured
+        try:
+            model = AgentBinaryDiscovery(Path.cwd()).default_codex_model_for_binary(
+                Path(binary)
+            )
+        except Exception:
+            model = None
+        return model or "gpt-5.5"
 
     def _check_claude_availability(
         self,
@@ -87,7 +101,7 @@ class AgentAvailability:
                 "-p",
                 self._prompt(),
                 "--model",
-                os.environ.get("CLAUDE_E2E_MODEL", "sonnet"),
+                default_claude_model(),
                 "--no-session-persistence",
                 "--safe-mode",
                 "--permission-mode",
