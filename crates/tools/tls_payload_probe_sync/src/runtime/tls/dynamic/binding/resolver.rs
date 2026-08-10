@@ -29,7 +29,15 @@ pub(in crate::runtime) unsafe fn real_dlsym(
 }
 
 pub(in crate::runtime) fn libc_symbol(symbol: &str) -> Option<usize> {
-    resolve_libc_symbol(symbol)
+    resolve_symbol_from_mappings(
+        [system_library_mapping(SystemLibrary::Libc), None],
+        symbol,
+        elf_dynsym_value,
+    )
+}
+
+pub(in crate::runtime) fn loader_symbol(symbol: &str) -> Option<usize> {
+    resolve_loader_symbol(symbol)
 }
 
 pub(in crate::runtime) unsafe fn real_dlvsym(
@@ -80,7 +88,7 @@ fn real_dlsym_fn() -> Option<DlsymFn> {
     if cached != 0 {
         return Some(unsafe { std::mem::transmute::<usize, DlsymFn>(cached) });
     }
-    let address = resolve_libc_symbol("dlsym")?;
+    let address = resolve_loader_symbol("dlsym")?;
     REAL_DLSYM.store(address, Ordering::Release);
     Some(unsafe { std::mem::transmute::<usize, DlsymFn>(address) })
 }
@@ -90,40 +98,84 @@ fn real_dlvsym_fn() -> Option<DlvsymFn> {
     if cached != 0 {
         return Some(unsafe { std::mem::transmute::<usize, DlvsymFn>(cached) });
     }
-    let address = resolve_libc_symbol("dlvsym")?;
+    let address = resolve_loader_symbol("dlvsym")?;
     REAL_DLVSYM.store(address, Ordering::Release);
     Some(unsafe { std::mem::transmute::<usize, DlvsymFn>(address) })
 }
 
-fn resolve_libc_symbol(symbol: &str) -> Option<usize> {
-    let mapping = libc_mapping()?;
-    let value = elf_dynsym_value(&mapping.path, symbol)?;
-    Some(mapping.load_bias.wrapping_add(usize::try_from(value).ok()?))
+fn resolve_loader_symbol(symbol: &str) -> Option<usize> {
+    // glibc 2.34 moved the libdl APIs into libc. Older glibc releases keep
+    // dlopen, dlsym, dlvsym, and dlmopen in a separately loaded libdl.so.2.
+    resolve_symbol_from_mappings(
+        [
+            system_library_mapping(SystemLibrary::Libc),
+            system_library_mapping(SystemLibrary::Libdl),
+        ],
+        symbol,
+        elf_dynsym_value,
+    )
 }
 
-struct LibcMapping {
+fn resolve_symbol_from_mappings(
+    mappings: [Option<LibraryMapping>; 2],
+    symbol: &str,
+    lookup: impl Fn(&Path, &str) -> Option<u64>,
+) -> Option<usize> {
+    mappings.into_iter().flatten().find_map(|mapping| {
+        let value = lookup(&mapping.path, symbol)?;
+        Some(mapping.load_bias.wrapping_add(usize::try_from(value).ok()?))
+    })
+}
+
+#[derive(Clone, Copy)]
+enum SystemLibrary {
+    Libc,
+    Libdl,
+}
+
+struct LibraryMapping {
     path: PathBuf,
     load_bias: usize,
 }
 
-fn libc_mapping() -> Option<LibcMapping> {
-    if let Some(mapping) = libc_mapping_from_phdr() {
+fn system_library_mapping(library: SystemLibrary) -> Option<LibraryMapping> {
+    if let Some(mapping) = system_library_mapping_from_phdr(library) {
         return Some(mapping);
     }
     let maps = std::fs::read_to_string("/proc/self/maps").ok()?;
     for line in maps.lines() {
         let mut fields = line.split_whitespace();
-        let range = fields.next()?;
-        let _perms = fields.next()?;
-        let offset = usize::from_str_radix(fields.next()?, 16).ok()?;
-        let _dev = fields.next()?;
-        let _inode = fields.next()?;
-        let path = PathBuf::from(fields.next()?);
-        if !is_libc_path(&path) {
+        let Some(range) = fields.next() else {
+            continue;
+        };
+        let Some(_perms) = fields.next() else {
+            continue;
+        };
+        let Some(offset) = fields
+            .next()
+            .and_then(|value| usize::from_str_radix(value, 16).ok())
+        else {
+            continue;
+        };
+        let Some(_dev) = fields.next() else {
+            continue;
+        };
+        let Some(_inode) = fields.next() else {
+            continue;
+        };
+        let Some(path) = fields.next().map(PathBuf::from) else {
+            continue;
+        };
+        if !library.matches_path(&path) {
             continue;
         }
-        let start = usize::from_str_radix(range.split_once('-')?.0, 16).ok()?;
-        return Some(LibcMapping {
+        let Some(start) = range
+            .split_once('-')
+            .and_then(|(start, _)| usize::from_str_radix(start, 16).ok())
+        else {
+            continue;
+        };
+        return Some(LibraryMapping {
             path,
             load_bias: start.wrapping_sub(offset),
         });
@@ -131,18 +183,26 @@ fn libc_mapping() -> Option<LibcMapping> {
     None
 }
 
-fn libc_mapping_from_phdr() -> Option<LibcMapping> {
-    let mut mapping = None;
+fn system_library_mapping_from_phdr(library: SystemLibrary) -> Option<LibraryMapping> {
+    let mut search = MappingSearch {
+        library,
+        mapping: None,
+    };
     unsafe {
         libc::dl_iterate_phdr(
-            Some(collect_libc_mapping),
-            (&mut mapping as *mut Option<LibcMapping>).cast(),
+            Some(collect_system_library_mapping),
+            (&mut search as *mut MappingSearch).cast(),
         );
     }
-    mapping
+    search.mapping
 }
 
-unsafe extern "C" fn collect_libc_mapping(
+struct MappingSearch {
+    library: SystemLibrary,
+    mapping: Option<LibraryMapping>,
+}
+
+unsafe extern "C" fn collect_system_library_mapping(
     info: *mut libc::dl_phdr_info,
     _size: usize,
     data: *mut c_void,
@@ -158,28 +218,41 @@ unsafe extern "C" fn collect_libc_mapping(
         return 0;
     }
     let path = PathBuf::from(path.to_string_lossy().as_ref());
-    if !is_libc_path(&path) {
+    let search = unsafe { &mut *(data.cast::<MappingSearch>()) };
+    if !search.library.matches_path(&path) {
         return 0;
     }
-    let output = unsafe { &mut *(data.cast::<Option<LibcMapping>>()) };
-    *output = Some(LibcMapping {
+    search.mapping = Some(LibraryMapping {
         path,
         load_bias: info.dlpi_addr as usize,
     });
     1
 }
 
-fn is_libc_path(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| {
-            name == "libc.so.6"
-                || name == "libc.so"
-                || name.starts_with("libc-")
-                || name.starts_with("libc.musl-")
-                || (name.starts_with("ld-musl-") && name.ends_with(".so.1"))
-        })
-        && path.is_file()
+impl SystemLibrary {
+    fn matches_path(self, path: &Path) -> bool {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| self.matches_name(name))
+            && path.is_file()
+    }
+
+    fn matches_name(self, name: &str) -> bool {
+        match self {
+            Self::Libc => {
+                name == "libc.so.6"
+                    || name == "libc.so"
+                    || name.starts_with("libc-")
+                    || name.starts_with("libc.musl-")
+                    || (name.starts_with("ld-musl-") && name.ends_with(".so.1"))
+            }
+            Self::Libdl => {
+                name == "libdl.so.2"
+                    || name == "libdl.so"
+                    || (name.starts_with("libdl-") && name.ends_with(".so"))
+            }
+        }
+    }
 }
 
 fn elf_dynsym_value(path: &Path, symbol: &str) -> Option<u64> {
@@ -268,4 +341,64 @@ fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
 fn read_u64(bytes: &[u8], offset: usize) -> Option<u64> {
     let raw = bytes.get(offset..offset.checked_add(8)?)?;
     Some(u64::from_le_bytes(raw.try_into().ok()?))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use super::{LibraryMapping, SystemLibrary, resolve_symbol_from_mappings};
+
+    #[test]
+    fn legacy_libdl_names_are_recognized() {
+        for name in ["libdl.so", "libdl.so.2", "libdl-2.17.so", "libdl-2.28.so"] {
+            assert!(SystemLibrary::Libdl.matches_name(name), "{name}");
+        }
+        for name in ["libc.so.6", "libpthread.so.0", "libdl.so.2.debug"] {
+            assert!(!SystemLibrary::Libdl.matches_name(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn loader_symbol_falls_back_from_libc_to_libdl() {
+        for symbol in ["dlopen", "dlsym", "dlvsym", "dlmopen"] {
+            let libc = mapping("/lib64/libc.so.6", 0x1000);
+            let libdl = mapping("/lib64/libdl.so.2", 0x2000);
+
+            let resolved = resolve_symbol_from_mappings(
+                [Some(libc), Some(libdl)],
+                symbol,
+                |path, candidate| match (file_name(path), candidate) {
+                    ("libdl.so.2", candidate) if candidate == symbol => Some(0x34),
+                    _ => None,
+                },
+            );
+
+            assert_eq!(resolved, Some(0x2034), "{symbol}");
+        }
+    }
+
+    #[test]
+    fn loader_symbol_prefers_libc_over_libdl() {
+        let libc = mapping("/lib64/libc.so.6", 0x1000);
+        let libdl = mapping("/lib64/libdl.so.2", 0x2000);
+
+        let resolved =
+            resolve_symbol_from_mappings([Some(libc), Some(libdl)], "dlsym", |_path, _symbol| {
+                Some(0x45)
+            });
+
+        assert_eq!(resolved, Some(0x1045));
+    }
+
+    fn mapping(path: &str, load_bias: usize) -> LibraryMapping {
+        LibraryMapping {
+            path: PathBuf::from(path),
+            load_bias,
+        }
+    }
+
+    fn file_name(path: &Path) -> &str {
+        path.file_name().and_then(|name| name.to_str()).unwrap()
+    }
 }

@@ -1,3 +1,4 @@
+use super::agents::{AgentProcessScope, agent_process_scope, include_nested_agent_calls};
 use super::partition::{sweep_command_segments, sweep_segments};
 use super::summary::{
     breakdown_shares, category_shares, command_breakdown_shares, round_attributions,
@@ -26,48 +27,71 @@ pub(super) fn project_trace_data(
     }
     let provisional = !trace.lifecycle_state.is_terminal();
     let full_scope = trace_scope(trace, actions, memberships, &mut tracker)?;
-    let candidate_calls = model_intervals(actions, full_scope, provisional, &mut tracker);
-    let strong_turn_keys = candidate_calls
+    let observed_calls = model_intervals(actions, full_scope, provisional, &mut tracker);
+    let strong_turn_keys = observed_calls
         .iter()
         .filter(|call| call.user_input_start.is_some())
         .map(|call| call.turn_key.clone())
         .collect::<BTreeSet<_>>();
     let candidate_calls = if strong_turn_keys.is_empty() {
-        if !candidate_calls.is_empty() {
+        if !observed_calls.is_empty() {
             tracker.info(
                 "user_input_boundary_unobserved",
                 "User-message evidence was observed, but terminal input timing was unavailable; each turn begins at its first model request.",
             );
         }
-        candidate_calls
+        observed_calls.clone()
     } else {
-        candidate_calls
-            .into_iter()
-            .filter(|call| {
-                let accepted = strong_turn_keys.contains(&call.turn_key);
-                if !accepted {
-                    tracker.action_info(
-                        "background_llm_call_excluded",
-                        "LLM call is not linked to an observed user input and is excluded from user-turn attribution.",
-                        &call.action_id,
-                        Some(call.interval),
-                    );
-                }
-                accepted
-            })
+        observed_calls
+            .iter()
+            .filter(|call| strong_turn_keys.contains(&call.turn_key))
+            .cloned()
             .collect()
     };
-    let agent_processes = agent_processes(memberships, &candidate_calls, &mut tracker);
+    let candidate_call_ids = candidate_calls
+        .iter()
+        .map(|call| call.action_id.clone())
+        .collect::<BTreeSet<_>>();
+    let agent_scope = agent_process_scope(memberships, &observed_calls, &mut tracker);
     let raw_tools = tool_intervals(
         actions,
         links,
         memberships,
-        &agent_processes,
+        &agent_scope,
         full_scope,
         provisional,
         &mut tracker,
     );
-    let (calls, full_turns) = user_turns(candidate_calls, &raw_tools, &mut tracker);
+    let raw_local_tools = raw_tools
+        .iter()
+        .filter(|tool| !tool.agent_invocation)
+        .cloned()
+        .collect::<Vec<_>>();
+    let (direct_calls, mut full_turns) = user_turns(candidate_calls, &raw_tools, &mut tracker);
+    let calls = include_nested_agent_calls(
+        &observed_calls,
+        direct_calls,
+        &mut full_turns,
+        &raw_tools,
+        &agent_scope,
+        &mut tracker,
+    );
+    let attributed_call_ids = calls
+        .iter()
+        .map(|call| call.action_id.clone())
+        .collect::<BTreeSet<_>>();
+    for call in &observed_calls {
+        if !candidate_call_ids.contains(&call.action_id)
+            && !attributed_call_ids.contains(&call.action_id)
+        {
+            tracker.action_info(
+                "background_llm_call_excluded",
+                "LLM call is not linked to an observed user input or nested Agent invocation and is excluded from user-turn attribution.",
+                &call.action_id,
+                Some(call.interval),
+            );
+        }
+    }
     let full_windows = merge_intervals(full_turns.iter().map(|turn| turn.interval));
     let windows = clip_intervals(&full_windows, clip_window);
     let calls = clip_model_intervals(&calls, &windows);
@@ -78,13 +102,19 @@ pub(super) fn project_trace_data(
             "No completed model exchange with reliable user-message evidence was observed; startup, idle, and background activity are excluded.",
         );
     }
-    let tools = clip_tool_intervals(&raw_tools, &windows);
+    let tools = clip_tool_intervals(&raw_local_tools, &windows);
     let mut agent_intervals = tools.iter().map(|tool| tool.interval).collect::<Vec<_>>();
     if degraded {
         agent_intervals.clear();
     }
-    let raw_command_intervals =
-        command_intervals(actions, memberships, &raw_tools, full_scope, provisional);
+    let raw_command_intervals = command_intervals(
+        actions,
+        memberships,
+        &raw_local_tools,
+        &agent_scope,
+        full_scope,
+        provisional,
+    );
     let command_intervals = clip_command_intervals(&raw_command_intervals, &windows);
     let mut segments = windows
         .iter()
@@ -123,7 +153,7 @@ pub(super) fn project_trace_data(
             .iter()
             .filter(|call| call.user_input_start.is_some())
             .count(),
-        agent_process_count: agent_processes.len(),
+        agent_process_count: agent_scope.subjects.len(),
         tool_interval_count: tools.len(),
         command_interval_count: command_intervals.len(),
         segment_count: segments.len(),
@@ -527,77 +557,11 @@ fn finalized_on_trace_close(action: &SemanticAction) -> bool {
         .is_some_and(|value| value == "true")
 }
 
-fn agent_processes(
-    memberships: &[ProcessMembership],
-    calls: &[ModelInterval],
-    tracker: &mut StatusTracker,
-) -> BTreeSet<ProcessIdentity> {
-    let mut evidence_start = BTreeMap::<ProcessIdentity, u128>::new();
-    for call in calls {
-        evidence_start
-            .entry(call.process.clone())
-            .and_modify(|current| *current = (*current).min(call.interval.start))
-            .or_insert(call.interval.start);
-    }
-    if evidence_start.is_empty() && !calls.is_empty() {
-        tracker.warning(
-            "agent_identity_missing",
-            "Model calls exist but no reliable Agent process identity was found.",
-        );
-    }
-
-    let mut agent_processes = evidence_start.keys().cloned().collect::<BTreeSet<_>>();
-    loop {
-        let before = agent_processes.len();
-        for membership in memberships {
-            if membership
-                .inherited_from
-                .as_ref()
-                .is_some_and(|parent| agent_processes.contains(parent))
-            {
-                agent_processes.insert(membership.identity.clone());
-            }
-        }
-        if before == agent_processes.len() {
-            break;
-        }
-    }
-
-    let membership_by_process = memberships
-        .iter()
-        .map(|membership| (membership.identity.clone(), membership))
-        .collect::<BTreeMap<_, _>>();
-    for process in &agent_processes {
-        let Some(membership) = membership_by_process.get(process).copied() else {
-            tracker.warning(
-                "agent_membership_missing",
-                format!(
-                    "Agent process {process} has no membership boundary; only directly bounded local actions are attributable."
-                ),
-            );
-            continue;
-        };
-        if membership.state == MembershipState::IdentityStale {
-            tracker.warning(
-                "agent_identity_stale",
-                format!("Agent subtree process {process} has stale identity coordinates."),
-            );
-        }
-    }
-    if agent_processes.is_empty() && !calls.is_empty() {
-        tracker.warning(
-            "agent_identity_missing",
-            "No confirmed Agent process was observed; non-model time is left unattributed.",
-        );
-    }
-    agent_processes
-}
-
 fn tool_intervals(
     actions: &[SemanticAction],
     links: &[SemanticActionLink],
     memberships: &[ProcessMembership],
-    agent_processes: &BTreeSet<ProcessIdentity>,
+    agent_scope: &AgentProcessScope,
     scope: Interval,
     _provisional: bool,
     tracker: &mut StatusTracker,
@@ -629,7 +593,7 @@ fn tool_intervals(
         let explicitly_linked = linked_agent_commands.contains(command.action_id.as_str());
         let named_tool = non_empty_attr(command, attr_keys::command::TOOL_NAME).is_some()
             || inferred_tool_names.contains_key(&command.action_id);
-        if agent_processes.contains(&command.process) && (explicitly_linked || named_tool) {
+        if agent_scope.subtree.contains(&command.process) && (explicitly_linked || named_tool) {
             by_process
                 .entry(command.process.clone())
                 .or_default()
@@ -682,12 +646,22 @@ fn tool_intervals(
             else {
                 continue;
             };
+            let agent_invocation = agent_scope.is_agent_runtime_command(action);
+            if agent_invocation {
+                tracker.action_info(
+                    "agent_runtime_command_excluded",
+                    "Command execution was promoted to an Agent runtime or invocation wrapper; it is retained for causal turn linking but excluded from Agent-side command duration.",
+                    &action.action_id,
+                    Some(interval),
+                );
+            }
             output.push(ToolInterval {
                 interval,
                 action_id: action.action_id.clone(),
                 tool_name: non_empty_attr(action, attr_keys::command::TOOL_NAME)
                     .or_else(|| inferred_tool_names.get(&action.action_id).cloned()),
                 process,
+                agent_invocation,
             });
         }
     }
@@ -705,6 +679,7 @@ fn command_intervals(
     actions: &[SemanticAction],
     memberships: &[ProcessMembership],
     tools: &[ToolInterval],
+    agent_scope: &AgentProcessScope,
     scope: Interval,
     _provisional: bool,
 ) -> Vec<CommandInterval> {
@@ -736,6 +711,9 @@ fn command_intervals(
     let mut output = Vec::new();
 
     for membership in memberships {
+        if agent_scope.is_agent_runtime_process(membership.identity) {
+            continue;
+        }
         let Some(parent) = membership
             .inherited_from
             .filter(|parent| tool_processes.contains(parent))
@@ -789,7 +767,8 @@ fn command_intervals(
             continue;
         };
         let Some(first_actual) = process_commands.iter().copied().find(|action| {
-            command_key_label(action).is_some_and(|(key, _)| !is_shell_command(&key))
+            !agent_scope.is_agent_runtime_command(action)
+                && command_key_label(action).is_some_and(|(key, _)| !is_shell_command(&key))
         }) else {
             continue;
         };

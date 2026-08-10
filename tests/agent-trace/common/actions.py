@@ -199,6 +199,7 @@ def require_web_time_attribution(
     poll_interval_seconds: float,
     *,
     require_tool: bool = False,
+    accepted_statuses: tuple[str, ...] = ("complete",),
 ) -> dict[str, object]:
     """Validate time attribution through the real Web API and captured Agent data."""
     values = read_config(operator_config_path(config))
@@ -240,6 +241,7 @@ def require_web_time_attribution(
             attribution,
             action_tree,
             require_tool=require_tool,
+            accepted_statuses=accepted_statuses,
         )
         validate_aggregate_time_attribution(
             origin,
@@ -258,6 +260,8 @@ def require_web_time_attribution(
             f"commands={summary['actual_command_count']}",
             flush=True,
         )
+        summary["attribution"] = attribution
+        summary["action_tree"] = action_tree
         return summary
     except Exception as error:
         output = collect_process_output(process)
@@ -294,12 +298,13 @@ def validate_time_attribution(
     action_tree: dict,
     *,
     require_tool: bool,
+    accepted_statuses: tuple[str, ...] = ("complete",),
 ) -> dict[str, object]:
     if attribution.get("schema_version") != "time-attribution.v1":
         raise RuntimeError("time attribution schema version is missing or unexpected")
-    if attribution.get("status") != "complete":
+    if attribution.get("status") not in accepted_statuses:
         raise RuntimeError(
-            "terminal real-Agent Trace time attribution was not complete: "
+            "terminal real-Agent Trace time attribution status was not accepted: "
             f"{attribution.get('status')} issues={attribution.get('issues')}"
         )
     scope = attribution.get("scope", {})
