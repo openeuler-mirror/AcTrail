@@ -10,9 +10,9 @@ DESTDIR defaults to /usr/local/bin.
 
 The script installs/checks build dependencies, asks Cargo to refresh the
 release binaries and TLS sync preload runtimes, then copies those artifacts
-and the installed-but-disabled otel-jsonl, file-leakage, activity-anomaly,
-tool-consecutive-failure-alert, dynamic file-policy, and dynamic command-policy
-plugins.
+and the installed-but-disabled otel-jsonl, otel-http, file-leakage,
+activity-anomaly, tool-consecutive-failure-alert, dynamic file-policy, and
+dynamic command-policy plugins.
 
 Environment:
   ACTRAIL_SUDO  Privilege command for installing into system directories.
@@ -48,6 +48,8 @@ plugin_root="${ACTRAIL_PLUGIN_DIR:-$plugin_home/.actrail/plugins}"
 }
 otel_jsonl_install_dir="$plugin_root/otel-jsonl"
 otel_jsonl_source_dir="$script_dir/../examples/plugins/builtin/otel-jsonl"
+otel_http_install_dir="$plugin_root/otel-http"
+otel_http_source_dir="$script_dir/../examples/plugins/builtin/otel-http"
 file_leakage_install_dir="$plugin_root/file-leakage"
 file_leakage_source_dir="$script_dir/../examples/plugins/wit-component/file-leakage"
 activity_anomaly_install_dir="$plugin_root/activity-anomaly"
@@ -165,6 +167,7 @@ mapfile -t plugin_install < <(install_prefix "$plugin_root")
 
 run "${binary_install[@]}" install -d "$dest_dir"
 run "${plugin_install[@]}" install -d "$otel_jsonl_install_dir"
+run "${plugin_install[@]}" install -d "$otel_http_install_dir"
 run "${plugin_install[@]}" install -d "$file_leakage_install_dir"
 run "${plugin_install[@]}" install -d "$activity_anomaly_install_dir"
 run "${plugin_install[@]}" install -d "$file_policy_install_dir"
@@ -198,6 +201,13 @@ for asset in \
 done
 run "${plugin_install[@]}" rm -f \
   "$otel_jsonl_install_dir/otel-jsonl.plugin-config.v1"
+for asset in \
+  otel-http.plugin.toml \
+  otel-http.config.toml \
+  otel-http.config.v1.schema.json; do
+  run "${plugin_install[@]}" install -m 0644 \
+    "$otel_http_source_dir/$asset" "$otel_http_install_dir/$asset"
+done
 for asset in \
   file-leakage.plugin.toml \
   file-leakage.config.json \

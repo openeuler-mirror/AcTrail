@@ -457,4 +457,38 @@ mod tests {
         assert!(candidate.plugin_config_path.is_some());
         assert!(candidate.activation_ready(), "{:?}", candidate.issue);
     }
+
+    #[test]
+    fn official_otel_http_package_is_discoverable() {
+        let root = TestDirectory::new("otel-http-candidate");
+        let package = root.path().join("otel-http");
+        fs::create_dir(&package).expect("create otel-http package");
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../examples/plugins/builtin/otel-http");
+        for asset in [
+            "otel-http.plugin.toml",
+            "otel-http.config.toml",
+            "otel-http.config.v1.schema.json",
+        ] {
+            fs::copy(source.join(asset), package.join(asset))
+                .unwrap_or_else(|error| panic!("copy {asset} fixture failed: {error}"));
+        }
+        let directory = PluginDirectory::new(&PluginDiscoveryConfig {
+            directory: root.path().to_path_buf(),
+            max_packages: 1,
+            manifest_max_bytes: 262_144,
+        })
+        .expect("create plugin directory scanner");
+
+        let candidates = directory.scan().expect("scan official plugin package");
+
+        assert_eq!(candidates.len(), 1);
+        let candidate = &candidates[0];
+        assert_eq!(candidate.key, "otel-http");
+        assert_eq!(candidate.plugin_id.as_deref(), Some("otel-http"));
+        assert_eq!(candidate.purpose, Some(PluginPurpose::ObservationConsumer));
+        assert_eq!(candidate.runtime, Some(PluginRuntimeKind::Builtin));
+        assert!(candidate.plugin_config_path.is_some());
+        assert!(candidate.activation_ready(), "{:?}", candidate.issue);
+    }
 }
