@@ -330,6 +330,18 @@ fn llm_exchange_val(exchange: &plugin_system::TraceLlmExchange) -> Result<Val, P
             "response-complete".to_string(),
             Val::Bool(exchange.response_complete),
         ),
+        (
+            "response-status".to_string(),
+            Val::Enum(
+                match exchange.response_status {
+                    plugin_system::TraceLlmResponseStatus::Pending => "pending",
+                    plugin_system::TraceLlmResponseStatus::Success => "success",
+                    plugin_system::TraceLlmResponseStatus::Error => "error",
+                    plugin_system::TraceLlmResponseStatus::Unknown => "unknown",
+                }
+                .to_string(),
+            ),
+        ),
     ]))
 }
 

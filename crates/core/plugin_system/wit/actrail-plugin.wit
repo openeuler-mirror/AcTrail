@@ -303,6 +303,13 @@ interface types {
     profile-name: string,
   }
 
+  enum llm-response-status {
+    pending,
+    success,
+    error,
+    unknown,
+  }
+
   record llm-exchange-record {
     call-action-id: string,
     request-action-id: string,
@@ -319,6 +326,7 @@ interface types {
     response-body-bytes: option<u64>,
     response-raw-bytes: option<u64>,
     response-complete: bool,
+    response-status: llm-response-status,
   }
 
   record llm-exchange-page {

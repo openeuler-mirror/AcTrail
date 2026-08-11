@@ -261,6 +261,7 @@ fn run_post_trace_task(
     completion_sender: &Sender<PostTraceCompletion>,
 ) {
     let trace_id = task.trace_id;
+    let started_at = std::time::Instant::now();
     let result = catch_unwind(AssertUnwindSafe(|| {
         consumer
             .post_trace_analyzer()
@@ -282,6 +283,17 @@ fn run_post_trace_task(
         Err(_) if control.cancellation_requested() => Err(post_trace_cancelled()),
         result => result,
     };
+    let elapsed_ms = started_at.elapsed().as_millis();
+    if let Err(error) = &result {
+        tracing::warn!(
+            trace_id = %trace_id,
+            plugin_instance = %instance_id,
+            elapsed_ms,
+            error.code = %error.code,
+            error.message = %error.message,
+            "post-trace task execution failed"
+        );
+    }
     if let Err(error) = &result {
         store_last_error(metrics, Some(format!("{}: {}", error.code, error.message)));
     }

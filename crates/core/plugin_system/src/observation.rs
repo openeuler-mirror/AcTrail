@@ -154,6 +154,15 @@ pub struct TraceLlmExchange {
     pub response_body_bytes: Option<u64>,
     pub response_raw_bytes: Option<u64>,
     pub response_complete: bool,
+    pub response_status: TraceLlmResponseStatus,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TraceLlmResponseStatus {
+    Pending,
+    Success,
+    Error,
+    Unknown,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

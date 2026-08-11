@@ -788,3 +788,8 @@
     padding-left: var(--stats-space-xl);
   }
 }
+
+.plugin-runtime-item > .plugin-config-panel {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}

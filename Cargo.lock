@@ -816,6 +816,7 @@ dependencies = [
  "model_core",
  "plugin_system",
  "semantic_action",
+ "tracing",
 ]
 
 [[package]]
