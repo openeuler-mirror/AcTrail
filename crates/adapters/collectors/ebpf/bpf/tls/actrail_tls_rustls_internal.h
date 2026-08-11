@@ -3,7 +3,8 @@
 
 enum actrail_rustls_payload_layout {
     ACTRAIL_RUSTLS_INLINE_TAG = 0,
-    ACTRAIL_RUSTLS_BORROWED_TAG = 0x8000000000000000ULL,
+    ACTRAIL_RUSTLS_BORROWED_TAG_SIGNED_MIN = 0x8000000000000000ULL,
+    ACTRAIL_RUSTLS_BORROWED_TAG_UNSIGNED_MAX = 0xffffffffffffffffULL,
     ACTRAIL_RUSTLS_MAX_CHUNKS = 8,
 };
 
@@ -32,7 +33,8 @@ static __always_inline int emit_rustls_internal_payload(
         return 0;
     }
     if (symbol == ACTRAIL_TLS_SYMBOL_RUSTLS_TAKE_RECEIVED_PLAINTEXT) {
-        if (q0 != ACTRAIL_RUSTLS_BORROWED_TAG) {
+        if (q0 != ACTRAIL_RUSTLS_BORROWED_TAG_SIGNED_MIN &&
+            q0 != ACTRAIL_RUSTLS_BORROWED_TAG_UNSIGNED_MAX) {
             return 0;
         }
         return emit_tls_immediate_payload(

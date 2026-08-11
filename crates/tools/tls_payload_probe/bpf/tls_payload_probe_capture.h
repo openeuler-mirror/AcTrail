@@ -296,7 +296,8 @@ static __always_inline int emit_rustls_payload(
         return 0;
     }
     if (symbol == TLS_PROBE_SYMBOL_RUSTLS_TAKE_RECEIVED_PLAINTEXT) {
-        if (q0 != TLS_PROBE_RUSTLS_BORROWED_TAG) {
+        if (q0 != TLS_PROBE_RUSTLS_BORROWED_TAG_SIGNED_MIN &&
+            q0 != TLS_PROBE_RUSTLS_BORROWED_TAG_UNSIGNED_MAX) {
             return 0;
         }
         struct tls_probe_emit_op op = {

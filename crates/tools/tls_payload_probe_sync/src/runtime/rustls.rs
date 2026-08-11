@@ -12,7 +12,8 @@ use crate::runtime::{hook, maps, output};
 const RUSTLS_BUFFER_PLAINTEXT_SYMBOL: &str = "rustls_buffer_plaintext";
 const RUSTLS_TAKE_RECEIVED_PLAINTEXT_SYMBOL: &str = "rustls_take_received_plaintext";
 const RUSTLS_INLINE_TAG: usize = 0;
-const RUSTLS_BORROWED_TAG: usize = 0x8000_0000_0000_0000;
+const RUSTLS_BORROWED_TAG_SIGNED_MIN: usize = 1 << (usize::BITS - 1);
+const RUSTLS_BORROWED_TAG_UNSIGNED_MAX: usize = usize::MAX;
 
 static RUSTLS_BUFFER_PLAINTEXT_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
 static RUSTLS_TAKE_RECEIVED_PLAINTEXT_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
@@ -122,7 +123,10 @@ enum RustlsDecision {
 
 fn rewrite_received_payload(stream_key: usize, payload: *mut RustlsPayload) {
     let payload = unsafe { &mut *payload };
-    if payload.tag != RUSTLS_BORROWED_TAG {
+    if !matches!(
+        payload.tag,
+        RUSTLS_BORROWED_TAG_SIGNED_MIN | RUSTLS_BORROWED_TAG_UNSIGNED_MAX
+    ) {
         abort_runtime(&format!(
             "rustls inbound unsupported Payload tag=0x{:x}",
             payload.tag
