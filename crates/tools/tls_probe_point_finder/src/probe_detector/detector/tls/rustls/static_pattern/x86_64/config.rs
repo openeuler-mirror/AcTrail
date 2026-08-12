@@ -3,6 +3,7 @@ use crate::probe_detector::contract::selection::SelectionPolicy;
 
 use super::common_state_pair_27_31::CommonStatePair2731ProbeDetectorConfig;
 use super::common_state_pair_27_32::CommonStatePair2732ProbeDetectorConfig;
+use super::common_state_pair_28_36::CommonStatePair2836ProbeDetectorConfig;
 use super::common_state_pair_41_32::CommonStatePair4132ProbeDetectorConfig;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -11,6 +12,7 @@ pub(crate) struct X86_64RustlsProbeDetectorConfig {
     pub(crate) selection: SelectionPolicy,
     pub(crate) common_state_pair_27_31: CommonStatePair2731ProbeDetectorConfig,
     pub(crate) common_state_pair_27_32: CommonStatePair2732ProbeDetectorConfig,
+    pub(crate) common_state_pair_28_36: CommonStatePair2836ProbeDetectorConfig,
     pub(crate) common_state_pair_41_32: CommonStatePair4132ProbeDetectorConfig,
 }
 
@@ -21,6 +23,7 @@ impl X86_64RustlsProbeDetectorConfig {
             selection: SelectionPolicy::UniqueClosure,
             common_state_pair_27_31: CommonStatePair2731ProbeDetectorConfig::default(),
             common_state_pair_27_32: CommonStatePair2732ProbeDetectorConfig::default(),
+            common_state_pair_28_36: CommonStatePair2836ProbeDetectorConfig::default(),
             common_state_pair_41_32: CommonStatePair4132ProbeDetectorConfig::default(),
         }
     }
@@ -35,6 +38,7 @@ impl ProbeDetectorConfig for X86_64RustlsProbeDetectorConfig {
         }
         self.common_state_pair_27_31.validate()?;
         self.common_state_pair_27_32.validate()?;
+        self.common_state_pair_28_36.validate()?;
         self.common_state_pair_41_32.validate()
     }
 }
