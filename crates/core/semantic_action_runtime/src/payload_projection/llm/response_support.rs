@@ -14,8 +14,13 @@ use semantic_action::{
 use crate::payload_projection::http::HttpResponseParts;
 
 use super::body::LlmResponseBody;
+use super::body::LlmResponseProgress;
 use super::evidence::{insert_payload_span_attributes, payload_aggregate_evidence};
 use super::stream::PayloadStreamGroupKey;
+
+pub(super) fn http_response_can_evict(http: &HttpResponseParts) -> bool {
+    !http.body_boundary_known || http.complete
+}
 
 pub(super) fn llm_response_attributes(
     config: &SemanticRetentionConfig,
@@ -271,13 +276,29 @@ pub(super) fn llm_response_status(
     http_complete: bool,
     body: &LlmResponseBody,
 ) -> SemanticActionStatus {
+    llm_response_status_from_progress(
+        segments,
+        http_complete,
+        &LlmResponseProgress {
+            done: body.done,
+            stream: body.stream,
+            chunk_count: body.chunk_count,
+        },
+    )
+}
+
+pub(super) fn llm_response_status_from_progress(
+    segments: &[&PayloadSegment],
+    http_complete: bool,
+    progress: &LlmResponseProgress,
+) -> SemanticActionStatus {
     if segments.iter().any(|segment| {
         segment.operation_completion_state == PayloadOperationCompletionState::Failed
     }) {
         SemanticActionStatus::Error
-    } else if body.done
+    } else if progress.done
         || http_complete
-        || (!body.stream && operation_segments_are_complete(segments))
+        || (!progress.stream && operation_segments_are_complete(segments))
     {
         SemanticActionStatus::Success
     } else {

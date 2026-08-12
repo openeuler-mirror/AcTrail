@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use model_core::ids::TraceId;
+use model_core::payload::PayloadSegment;
 use semantic_action::{
     FileObservationPath, FilePathSetWrite, LlmRequestContentWrite, McpJsonRpcContentWrite,
     SemanticAction, SemanticActionLink,
@@ -18,6 +19,7 @@ pub struct SemanticActionBatch {
     file_path_sets: Vec<FilePathSetWrite>,
     llm_request_contents: Vec<LlmRequestContentWrite>,
     mcp_jsonrpc_contents: Vec<McpJsonRpcContentWrite>,
+    payload_segments: Vec<PayloadSegment>,
 }
 
 impl SemanticActionBatch {
@@ -29,6 +31,7 @@ impl SemanticActionBatch {
             file_path_sets: Vec::new(),
             llm_request_contents: Vec::new(),
             mcp_jsonrpc_contents: Vec::new(),
+            payload_segments: Vec::new(),
         }
     }
 
@@ -39,6 +42,7 @@ impl SemanticActionBatch {
         file_path_sets: Vec<FilePathSetWrite>,
         llm_request_contents: Vec<LlmRequestContentWrite>,
         mcp_jsonrpc_contents: Vec<McpJsonRpcContentWrite>,
+        payload_segments: Vec<PayloadSegment>,
     ) -> Self {
         Self {
             actions,
@@ -47,6 +51,7 @@ impl SemanticActionBatch {
             file_path_sets,
             llm_request_contents,
             mcp_jsonrpc_contents,
+            payload_segments,
         }
     }
 
@@ -58,8 +63,23 @@ impl SemanticActionBatch {
         &mut self.actions
     }
 
+    pub(super) fn take_persistence_actions(&mut self) -> Vec<SemanticAction> {
+        std::mem::take(&mut self.actions)
+    }
+
     pub fn links(&self) -> &[SemanticActionLink] {
         &self.links
+    }
+
+    pub(super) fn take_persistence_links(&mut self) -> Vec<SemanticActionLink> {
+        std::mem::take(&mut self.links)
+    }
+
+    pub(super) fn has_auxiliary_records(&self) -> bool {
+        !self.file_observation_paths.is_empty()
+            || !self.file_path_sets.is_empty()
+            || !self.llm_request_contents.is_empty()
+            || !self.mcp_jsonrpc_contents.is_empty()
     }
 
     pub fn file_observation_paths(&self) -> &[FileObservationPath] {
@@ -76,6 +96,14 @@ impl SemanticActionBatch {
 
     pub fn mcp_jsonrpc_contents(&self) -> &[McpJsonRpcContentWrite] {
         &self.mcp_jsonrpc_contents
+    }
+
+    pub fn payload_segments(&self) -> &[PayloadSegment] {
+        &self.payload_segments
+    }
+
+    pub(super) fn take_payload_segments(&mut self) -> Vec<PayloadSegment> {
+        std::mem::take(&mut self.payload_segments)
     }
 
     pub fn as_record_batch(&self) -> SemanticActionRecordBatch<'_> {
@@ -97,6 +125,7 @@ impl SemanticActionBatch {
         self.file_path_sets.extend(other.file_path_sets);
         self.llm_request_contents.extend(other.llm_request_contents);
         self.mcp_jsonrpc_contents.extend(other.mcp_jsonrpc_contents);
+        self.payload_segments.extend(other.payload_segments);
     }
 
     pub(crate) fn split_by_trace(self) -> Vec<Self> {

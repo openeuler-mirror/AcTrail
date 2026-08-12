@@ -4,25 +4,28 @@ use semantic_action::{
 };
 
 use crate::records::{encode_map, encode_time};
-use crate::semantic_actions::action_ids::require_action_key;
 use crate::semantic_actions::codebook::sqlite::{
     action_completeness_code, action_kind_code, action_status_code, evidence_kind_code,
 };
 use crate::semantic_actions::cold_fields::upsert_action_attributes;
+use crate::semantic_actions::storage_meta::ColdFieldCompression;
 
 pub(super) fn write_action_row(
-    connection: &rusqlite::Connection,
+    connection: &mut rusqlite::Connection,
     action_key: i64,
     action: &SemanticAction,
+    compression: ColdFieldCompression,
 ) -> Result<(), SemanticActionStoreError> {
     connection
-        .execute(
+        .prepare_cached(
             "INSERT OR REPLACE INTO semantic_actions (
                 action_key, trace_id, kind_code, title, start_time, end_time, process_id,
                 status_code, completeness_code, confidence_millis,
                 action_valid_code, agent_observed, process_parent_conflict, attributes
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
-            params![
+        )
+        .and_then(|mut statement| {
+            statement.execute(params![
                 action_key,
                 action.trace_id.get(),
                 action_kind_code(action.kind),
@@ -37,47 +40,73 @@ pub(super) fn write_action_row(
                 agent_observed(action),
                 process_parent_conflict(action),
                 "",
-            ],
-        )
+            ])
+        })
         .map_err(|error| {
             SemanticActionStoreError::new("upsert_semantic_action", error.to_string())
         })?;
-    upsert_action_attributes(connection, action_key, &encode_map(&action.attributes)).map_err(
-        |error| {
-            SemanticActionStoreError::new("upsert_semantic_action_attributes", error.to_string())
-        },
+    upsert_action_attributes(
+        connection,
+        action_key,
+        &encode_map(&action.attributes),
+        compression,
     )
+    .map_err(|error| {
+        SemanticActionStoreError::new("upsert_semantic_action_attributes", error.to_string())
+    })
 }
 
 pub(super) fn replace_action_evidence(
-    connection: &rusqlite::Connection,
+    connection: &mut rusqlite::Connection,
     action: &SemanticAction,
+    known_action_key: Option<i64>,
 ) -> Result<(), SemanticActionStoreError> {
-    let action_key = require_action_key(connection, &action.action_id)?;
+    let action_key = match known_action_key {
+        Some(action_key) => action_key,
+        None => connection
+            .prepare_cached("SELECT action_key FROM semantic_action_ids WHERE action_id = ?1")
+            .and_then(|mut statement| {
+                statement.query_row(params![action.action_id], |row| {
+                    row.get::<_, i64>("action_key")
+                })
+            })
+            .map_err(|error| {
+                SemanticActionStoreError::new("resolve_semantic_action_key", error.to_string())
+            })?,
+    };
     connection
-        .execute(
-            "DELETE FROM semantic_action_evidence WHERE action_key = ?1",
-            params![action_key],
-        )
+        .prepare_cached("DELETE FROM semantic_action_evidence WHERE action_key = ?1")
+        .and_then(|mut statement| statement.execute(params![action_key]))
         .map_err(|error| {
             SemanticActionStoreError::new("replace_semantic_action_evidence", error.to_string())
         })?;
     for (index, evidence) in action.evidence.iter().enumerate() {
         connection
-            .execute(
+            .prepare_cached(
                 "INSERT INTO semantic_action_evidence (
                     action_key, evidence_order, kind_code, evidence_id, role
                 ) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![
+            )
+            .and_then(|mut statement| {
+                statement.execute(params![
                     action_key,
                     index,
                     evidence_kind_code(evidence.kind),
                     evidence.id,
                     &evidence.role,
-                ],
-            )
+                ])
+            })
             .map_err(|error| {
-                SemanticActionStoreError::new("insert_semantic_action_evidence", error.to_string())
+                SemanticActionStoreError::new(
+                    "insert_semantic_action_evidence",
+                    format!(
+                        "action_id={} action_kind={} evidence_kind={} evidence_id={}: {error}",
+                        action.action_id,
+                        action.kind.as_str(),
+                        evidence.kind.as_str(),
+                        evidence.id
+                    ),
+                )
             })?;
     }
     Ok(())

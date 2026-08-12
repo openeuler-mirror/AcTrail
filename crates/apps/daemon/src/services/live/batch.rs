@@ -106,6 +106,7 @@ impl StorageAttachService {
                             output.file_path_sets,
                             output.llm_request_contents,
                             output.mcp_jsonrpc_contents,
+                            output.payload_segments,
                         ));
                     retained_events = retained_events.saturating_add(output.deferred_events.len());
                     for deferred_event in output.deferred_events {
@@ -184,6 +185,7 @@ impl StorageAttachService {
                     output.file_path_sets,
                     output.llm_request_contents,
                     output.mcp_jsonrpc_contents,
+                    output.payload_segments,
                 ));
             retained_events = retained_events.saturating_add(output.deferred_events.len());
             for deferred_event in output.deferred_events {

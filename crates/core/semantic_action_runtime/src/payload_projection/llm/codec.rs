@@ -16,6 +16,10 @@ pub struct LlmCodecRegistry {
 }
 
 impl LlmCodecRegistry {
+    pub(super) fn is_empty(&self) -> bool {
+        self.plugins.is_empty()
+    }
+
     pub fn register(&mut self, plugin: Arc<dyn LlmCodecPlugin>) -> Result<(), String> {
         let instance_id = plugin.instance_id();
         if self

@@ -16,6 +16,7 @@ use crate::payload_projection::http::HttpRequestParts;
 
 use super::codec::LlmCodecRegistry;
 use super::evidence::{insert_payload_span_attributes, payload_aggregate_evidence};
+use super::live_projection::semantic_payload_draft;
 use super::provider::{LlmRequestParserInput, parse_json_request};
 use super::request_blocks::{FORMAT_VERSION, canonical_request_content, canonical_shape_metadata};
 use super::stream::PayloadStreamGroupKey;
@@ -23,6 +24,7 @@ use super::stream::PayloadStreamGroupKey;
 pub(crate) struct ProjectedLlmRequestAction {
     pub(crate) action: SemanticAction,
     pub(crate) content: Option<LlmRequestContentWrite>,
+    pub(crate) payload_segments: Vec<PayloadSegment>,
 }
 
 pub(super) fn project_stream_llm_request_action(
@@ -49,6 +51,12 @@ pub(super) fn project_stream_llm_request_action(
         content_projection.metadata.as_ref(),
     );
     let evidence = payload_aggregate_evidence(segments, evidence_roles::llm_request::PAYLOAD);
+    let payload_segments =
+        if config.l4_payload.enabled || !config.l0_llm_call.retain_assembled_payload() {
+            Vec::new()
+        } else {
+            vec![semantic_payload_draft(first, raw_bytes)]
+        };
     Some(ProjectedLlmRequestAction {
         action: SemanticAction {
             action_id,
@@ -65,6 +73,7 @@ pub(super) fn project_stream_llm_request_action(
             evidence,
         },
         content: content_projection.content,
+        payload_segments,
     })
 }
 

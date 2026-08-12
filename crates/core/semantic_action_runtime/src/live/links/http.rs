@@ -62,32 +62,67 @@ impl HttpMessageLinkProjector {
                 self.llm_actions.insert(key.clone(), action.clone());
                 if let Some(stream_key) = HttpLlmStreamKey::from_llm_action(action) {
                     self.llm_by_stream
-                        .entry(stream_key.clone())
+                        .entry(stream_key)
                         .or_default()
                         .insert(key);
                 }
-                let http_messages = self.http_candidates_for_llm(action);
-                http_messages
-                    .iter()
-                    .filter_map(|http_message| self.link(action, http_message))
-                    .collect()
+                self.link_candidates(action, self.http_candidate_keys_for_llm(action))
             }
             SemanticActionKind::HttpMessage if http_message_can_link_to_llm(action) => {
                 let key = SemanticActionKey::from(action);
                 self.http_messages.insert(key.clone(), action.clone());
                 if let Some(stream_key) = HttpLlmStreamKey::from_http_message(action) {
                     self.http_by_stream
-                        .entry(stream_key.clone())
+                        .entry(stream_key)
                         .or_default()
                         .insert(key);
                 }
-                let llm_actions = self.llm_candidates_for_http(action);
-                llm_actions
-                    .iter()
-                    .filter_map(|llm_action| self.link(llm_action, action))
-                    .collect()
+                self.link_candidates(action, self.llm_candidate_keys_for_http(action))
             }
             _ => Vec::new(),
+        }
+    }
+
+    /// Emit links from `action` to each candidate, deduplicating on the link
+    /// identity. Candidates are enumerated as keys so no `SemanticAction`
+    /// needs to be deep-cloned on the hot payload path.
+    fn link_candidates(
+        &mut self,
+        action: &SemanticAction,
+        candidate_keys: Vec<SemanticActionKey>,
+    ) -> Vec<SemanticActionLink> {
+        let mut links = Vec::new();
+        for candidate_key in candidate_keys {
+            let Some(candidate) = self.candidate_for_link(action, &candidate_key) else {
+                continue;
+            };
+            let Some(link) = self.link(action, candidate) else {
+                continue;
+            };
+            let dedup_key = ActionLinkKey {
+                trace_id: link.trace_id,
+                parent_action_id: link.parent_action_id.clone(),
+                child_action_id: link.child_action_id.clone(),
+                role: link.role,
+            };
+            if self.emitted_links.insert(dedup_key) {
+                links.push(link);
+            }
+        }
+        links
+    }
+
+    fn candidate_for_link<'a>(
+        &'a self,
+        action: &SemanticAction,
+        candidate_key: &SemanticActionKey,
+    ) -> Option<&'a SemanticAction> {
+        match action.kind {
+            SemanticActionKind::LlmRequest | SemanticActionKind::LlmResponse => {
+                self.http_messages.get(candidate_key)
+            }
+            SemanticActionKind::HttpMessage => self.llm_actions.get(candidate_key),
+            _ => None,
         }
     }
 
@@ -100,7 +135,7 @@ impl HttpMessageLinkProjector {
         self.emitted_links.retain(|key| key.trace_id != trace_id);
     }
 
-    fn http_candidates_for_llm(&self, action: &SemanticAction) -> Vec<SemanticAction> {
+    fn http_candidate_keys_for_llm(&self, action: &SemanticAction) -> Vec<SemanticActionKey> {
         let Some(stream_key) = HttpLlmStreamKey::from_llm_action(action) else {
             return Vec::new();
         };
@@ -108,11 +143,11 @@ impl HttpMessageLinkProjector {
             .into_iter()
             .flat_map(|key| self.http_by_stream.get(&key).into_iter())
             .flat_map(|keys| keys.iter())
-            .filter_map(|key| self.http_messages.get(key).cloned())
+            .cloned()
             .collect()
     }
 
-    fn llm_candidates_for_http(&self, action: &SemanticAction) -> Vec<SemanticAction> {
+    fn llm_candidate_keys_for_http(&self, action: &SemanticAction) -> Vec<SemanticActionKey> {
         let Some(stream_key) = HttpLlmStreamKey::from_http_message(action) else {
             return Vec::new();
         };
@@ -120,7 +155,7 @@ impl HttpMessageLinkProjector {
             .into_iter()
             .flat_map(|key| self.llm_by_stream.get(&key).into_iter())
             .flat_map(|keys| keys.iter())
-            .filter_map(|key| self.llm_actions.get(key).cloned())
+            .cloned()
             .collect()
     }
 
@@ -152,21 +187,12 @@ impl HttpMessageLinkProjector {
     }
 
     fn link(
-        &mut self,
+        &self,
         llm_action: &SemanticAction,
         http_message: &SemanticAction,
     ) -> Option<SemanticActionLink> {
         let role = llm_http_link_role(llm_action, http_message)?;
         if !self.http_message_matches_llm(llm_action, http_message) {
-            return None;
-        }
-        let key = ActionLinkKey {
-            trace_id: llm_action.trace_id,
-            parent_action_id: llm_action.action_id.clone(),
-            child_action_id: http_message.action_id.clone(),
-            role,
-        };
-        if !self.emitted_links.insert(key) {
             return None;
         }
         let mut evidence = http_message.evidence.clone();
@@ -208,14 +234,18 @@ impl HttpMessageLinkProjector {
         let Some(response_sequence) = payload_sequence(llm_action) else {
             return false;
         };
-        if self.http_request_between(http_message, response_sequence) {
+        let Some(stream_key) = HttpLlmStreamKey::from_http_message(http_message) else {
+            return false;
+        };
+        if self.http_request_between(&stream_key, http_message, response_sequence) {
             return false;
         }
-        self.http_messages_for_stream(http_message)
-            .iter()
+        self.http_messages_for_stream(&stream_key)
             .filter(|candidate| response_stream_candidate(llm_action, candidate))
             .filter_map(|candidate| Some((http_payload_sequence(candidate)?, candidate)))
-            .filter(|(_, candidate)| !self.http_request_between(candidate, response_sequence))
+            .filter(|(_, candidate)| {
+                !self.http_request_between(&stream_key, candidate, response_sequence)
+            })
             .max_by(|left, right| {
                 response_candidate_rank(response_sequence, left)
                     .cmp(&response_candidate_rank(response_sequence, right))
@@ -223,14 +253,18 @@ impl HttpMessageLinkProjector {
             .is_some_and(|(_, candidate)| candidate.action_id == http_message.action_id)
     }
 
-    fn http_request_between(&self, http_response: &SemanticAction, response_sequence: u64) -> bool {
+    fn http_request_between(
+        &self,
+        stream_key: &HttpLlmStreamKey,
+        http_response: &SemanticAction,
+        response_sequence: u64,
+    ) -> bool {
         let Some(response_message_sequence) = http_payload_sequence(http_response) else {
             return false;
         };
         let lower = response_message_sequence.min(response_sequence);
         let upper = response_message_sequence.max(response_sequence);
-        self.http_messages_for_opposite_direction(http_response, "outbound")
-            .iter()
+        self.http_messages_for_opposite_direction(stream_key, "outbound")
             .any(|candidate| {
                 candidate.attributes.get("direction").map(String::as_str) == Some("outbound")
                     && same_trace_process_stream(http_response, candidate)
@@ -239,33 +273,29 @@ impl HttpMessageLinkProjector {
             })
     }
 
-    fn http_messages_for_stream(&self, action: &SemanticAction) -> Vec<SemanticAction> {
-        let Some(stream_key) = HttpLlmStreamKey::from_http_message(action) else {
-            return Vec::new();
-        };
+    fn http_messages_for_stream<'a>(
+        &'a self,
+        stream_key: &'a HttpLlmStreamKey,
+    ) -> impl Iterator<Item = &'a SemanticAction> + 'a {
         self.http_by_stream
             .get(&stream_key)
             .into_iter()
             .flat_map(|keys| keys.iter())
-            .filter_map(|key| self.http_messages.get(key).cloned())
-            .collect()
+            .filter_map(|key| self.http_messages.get(key))
     }
 
-    fn http_messages_for_opposite_direction(
-        &self,
-        action: &SemanticAction,
+    fn http_messages_for_opposite_direction<'a>(
+        &'a self,
+        stream_key: &'a HttpLlmStreamKey,
         direction: &str,
-    ) -> Vec<SemanticAction> {
-        let Some(mut stream_key) = HttpLlmStreamKey::from_http_message(action) else {
-            return Vec::new();
-        };
+    ) -> impl Iterator<Item = &'a SemanticAction> + 'a {
+        let mut stream_key = stream_key.clone();
         stream_key.direction = direction.to_string();
         self.http_by_stream
             .get(&stream_key)
             .into_iter()
             .flat_map(|keys| keys.iter())
-            .filter_map(|key| self.http_messages.get(key).cloned())
-            .collect()
+            .filter_map(|key| self.http_messages.get(key))
     }
 }
 

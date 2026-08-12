@@ -33,7 +33,14 @@ pub(super) fn lexically_normalize_path(path: &str) -> String {
 }
 
 pub(super) fn resolved_absolute_path(path: &PathResolution) -> Option<String> {
-    path.resolved.as_deref().and_then(absolute_path)
+    // `PathResolution.resolved` is always produced by `lexically_normalize_path`
+    // over an absolute base/raw path, so it is already normalized and
+    // absolute. Re-normalizing it here is pure redundant work; keep only the
+    // defensive absolute check.
+    let resolved = path.resolved.as_deref()?;
+    Path::new(resolved)
+        .is_absolute()
+        .then(|| resolved.to_string())
 }
 
 pub(super) fn absolute_path(path: &str) -> Option<String> {

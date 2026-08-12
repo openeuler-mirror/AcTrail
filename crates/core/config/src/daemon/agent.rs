@@ -184,6 +184,7 @@ pub struct L0LlmCallRetention {
     pub response_content: LlmResponseContentRetention,
     pub tool_calls: LlmToolCallRetention,
     pub usage: LlmUsageRetention,
+    pub retain_assembled_payload: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -230,7 +231,14 @@ impl Default for L0LlmCallRetention {
             response_content: LlmResponseContentRetention::AssembledProvider,
             tool_calls: LlmToolCallRetention::AssembledJson,
             usage: LlmUsageRetention::Summary,
+            retain_assembled_payload: false,
         }
+    }
+}
+
+impl L0LlmCallRetention {
+    pub fn retain_assembled_payload(&self) -> bool {
+        self.retain_assembled_payload
     }
 }
 
@@ -463,7 +471,7 @@ pub struct L4PayloadRetention {
 impl Default for L4PayloadRetention {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             stats: true,
             body_content: PayloadBodyContentRetention::None,
         }

@@ -1,6 +1,6 @@
 //! Live LLM projection from retained plaintext payload segments.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::time::SystemTime;
 
 use config_core::daemon::SemanticRetentionConfig;
@@ -11,14 +11,15 @@ use model_core::payload::{
 use model_core::process::ProcessIdentity;
 use semantic_action::{
     LlmRequestContentWrite, SemanticAction, SemanticActionCompleteness, SemanticActionKind,
-    SemanticActionStatus, attr_keys as attrs,
+    SemanticActionStatus, SemanticEvidenceKind, attr_keys as attrs,
 };
 
 use crate::payload_projection::llm::{
-    LiveLlmProjection, LlmCodecPlugin, LlmCodecPluginStatus, LlmCodecRegistry,
-    PayloadStreamGroupKey, live_llm_http_response_message_len, live_llm_request_message_len,
-    live_llm_request_prefix_skip_len, live_llm_request_stream_id_hint,
-    project_live_llm_request_message, project_live_llm_response_message,
+    InFlightResponse, IncrementalSseCache, LiveLlmProjection, LiveLlmResponseMessage,
+    LlmCodecPlugin, LlmCodecPluginStatus, LlmCodecRegistry, PayloadStreamGroupKey,
+    live_llm_request_message_len, live_llm_request_prefix_skip_len,
+    live_llm_request_stream_id_hint, project_live_llm_request_message,
+    project_live_llm_response_message, semantic_payload_draft,
 };
 
 use super::actions::action_for_live_state;
@@ -33,7 +34,6 @@ pub(super) struct LiveLlmProjector {
     streams: BTreeMap<LiveStreamKey, LiveStreamState>,
     open_requests: BTreeMap<LlmStreamKey, VecDeque<OpenLlmRequest>>,
     pending_responses: BTreeMap<LlmStreamKey, VecDeque<SemanticAction>>,
-    open_calls_by_request: BTreeMap<(TraceId, String), SemanticAction>,
     open_action_versions: BTreeMap<(TraceId, String), SemanticAction>,
     websocket: websocket::WebSocketLlmAdapter,
 }
@@ -42,12 +42,14 @@ pub(super) struct LiveLlmProjector {
 pub(super) struct LiveLlmOutput {
     pub(super) actions: Vec<SemanticAction>,
     pub(super) llm_request_contents: Vec<LlmRequestContentWrite>,
+    pub(super) payload_segments: Vec<PayloadSegment>,
 }
 
 impl LiveLlmOutput {
     fn extend(&mut self, other: Self) {
         self.actions.extend(other.actions);
         self.llm_request_contents.extend(other.llm_request_contents);
+        self.payload_segments.extend(other.payload_segments);
     }
 }
 
@@ -59,7 +61,6 @@ impl LiveLlmProjector {
             streams: BTreeMap::new(),
             open_requests: BTreeMap::new(),
             pending_responses: BTreeMap::new(),
-            open_calls_by_request: BTreeMap::new(),
             open_action_versions: BTreeMap::new(),
             websocket: websocket::WebSocketLlmAdapter::default(),
         }
@@ -224,12 +225,13 @@ impl LiveLlmProjector {
         if !http::terminal_failure_response(action) {
             return Vec::new();
         }
-        let Some((request, call)) = self.take_open_request_for_http_response(action) else {
+        let Some(request) = self.take_open_request_for_http_response(action) else {
             return Vec::new();
         };
+        let call = call::llm_call_from_request_response(&request, None);
         let Some(failed_response) = http::failed_response_for_open_request(action, &request, &call)
         else {
-            self.restore_open_request(request, call);
+            self.restore_open_request(request);
             return Vec::new();
         };
         let failed_call = call::llm_call_from_request_response(&request, Some(&failed_response));
@@ -249,8 +251,6 @@ impl LiveLlmProjector {
         self.open_requests.retain(|key, _| key.trace_id != trace_id);
         self.pending_responses
             .retain(|key, _| key.trace_id != trace_id);
-        self.open_calls_by_request
-            .retain(|(candidate, _), _| *candidate != trace_id);
         self.open_action_versions
             .retain(|(candidate, _), _| *candidate != trace_id);
     }
@@ -258,55 +258,82 @@ impl LiveLlmProjector {
     pub(super) fn finalize_trace(
         &mut self,
         trace_id: TraceId,
-        _finished_at: SystemTime,
-    ) -> Vec<SemanticAction> {
+        finished_at: SystemTime,
+    ) -> (Vec<SemanticAction>, Vec<PayloadSegment>) {
         self.websocket.forget_trace(trace_id);
-        let trace_close_completed_response_ids = self
-            .open_action_versions
-            .iter()
-            .filter(|((candidate, _), action)| {
-                *candidate == trace_id && response_completes_on_trace_close(action)
-            })
-            .map(|(_, action)| action.action_id.clone())
-            .collect::<BTreeSet<_>>();
         let mut finalized = Vec::new();
-        for ((candidate, _), action) in self.open_action_versions.iter_mut() {
-            if *candidate != trace_id || action.status != SemanticActionStatus::InProgress {
+        let mut payload_segments = Vec::new();
+        let keys = self
+            .streams
+            .keys()
+            .filter(|key| {
+                key.group.trace_id == trace_id && key.direction == LiveStreamDirection::Inbound
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for key in keys {
+            let Some(mut state) = self.streams.remove(&key) else {
                 continue;
-            }
-            if !matches!(
-                action.kind,
-                SemanticActionKind::LlmCall
-                    | SemanticActionKind::LlmResponse
-                    | SemanticActionKind::SseStream
-            ) {
+            };
+            let Some(in_flight) = state.in_flight_response.take() else {
                 continue;
-            }
-            let close_completed_successfully =
-                trace_close_completes_action(action, &trace_close_completed_response_ids);
-            if close_completed_successfully {
-                action.status = SemanticActionStatus::Success;
-                action.completeness = SemanticActionCompleteness::Complete;
-                mark_trace_close_completion_attributes(action);
-            } else {
+            };
+            let Some((mut actions, drafts)) = state.materialize_in_flight(
+                &self.config,
+                &self.codecs,
+                &key.group,
+                in_flight.message_start,
+            ) else {
+                continue;
+            };
+            payload_segments.extend(drafts);
+            for action in &mut actions {
+                if action.kind != SemanticActionKind::LlmResponse {
+                    continue;
+                }
                 action.status = SemanticActionStatus::Error;
                 action.completeness = SemanticActionCompleteness::Partial;
+                action.end_time = Some(finished_at);
+                action.attributes.insert(
+                    attrs::actrail::ACTION_FINALIZED_ON_TRACE_CLOSE.to_string(),
+                    "true".to_string(),
+                );
+                finalized.push(action.clone());
+                if let Some(request) = self.open_request_for_response(action) {
+                    let mut call = call::llm_call_from_request_response(&request, Some(action));
+                    call.status = SemanticActionStatus::Error;
+                    call.completeness = SemanticActionCompleteness::Partial;
+                    call.end_time = Some(finished_at);
+                    finalized.push(call);
+                }
             }
-            action.attributes.insert(
+        }
+        for request in self.open_requests_for_trace(trace_id) {
+            let mut call = call::llm_call_from_request_response(&request, None);
+            call.status = SemanticActionStatus::Error;
+            call.completeness = SemanticActionCompleteness::Partial;
+            call.end_time = Some(finished_at);
+            call.attributes.insert(
                 attrs::actrail::ACTION_FINALIZED_ON_TRACE_CLOSE.to_string(),
                 "true".to_string(),
             );
-            finalized.push(action.clone());
+            finalized.push(call);
         }
         self.streams.retain(|key, _| key.group.trace_id != trace_id);
         self.open_requests.retain(|key, _| key.trace_id != trace_id);
         self.pending_responses
             .retain(|key, _| key.trace_id != trace_id);
-        self.open_calls_by_request
-            .retain(|(candidate, _), _| *candidate != trace_id);
         self.open_action_versions
             .retain(|(candidate, _), _| *candidate != trace_id);
-        finalized
+        (finalized, payload_segments)
+    }
+
+    fn open_requests_for_trace(&self, trace_id: TraceId) -> Vec<SemanticAction> {
+        self.open_requests
+            .iter()
+            .filter(|(key, _)| key.trace_id == trace_id)
+            .flat_map(|(_, requests)| requests.iter().map(|request| request.action.clone()))
+            .collect()
     }
 
     fn observe_http_payload(&mut self, segment: &PayloadSegment) -> LiveLlmOutput {
@@ -326,58 +353,35 @@ impl LiveLlmProjector {
             .into_iter()
             .map(|content| (content.manifest.action_id.clone(), content))
             .collect::<BTreeMap<_, _>>();
-        for action in output.actions {
+        for mut action in output.actions {
+            if !self.config.l4_payload.enabled {
+                action
+                    .evidence
+                    .retain(|evidence| evidence.kind == SemanticEvidenceKind::Event);
+            }
             let state_action = action_for_live_state(&action);
-            if self.record_projected_action(&state_action) {
+            let action_changed = self.record_projected_action(&state_action);
+            if action_changed {
                 if let Some(content) = request_contents.remove(&action.action_id) {
                     changed.llm_request_contents.push(content);
                 }
-                changed.actions.push(action.clone());
+                changed.actions.push(action);
             }
-            match action.kind {
+            match state_action.kind {
                 SemanticActionKind::LlmRequest => {
                     self.remember_open_request(state_action.clone());
                     if let Some(response) = self.take_pending_response_for_request(&state_action) {
                         let call =
                             call::llm_call_from_request_response(&state_action, Some(&response));
-                        self.open_calls_by_request
-                            .remove(&(state_action.trace_id, state_action.action_id.clone()));
                         self.remove_open_request(&state_action);
-                        if self.record_projected_action(&call) {
-                            changed.actions.push(call);
-                        }
-                    } else {
-                        let call = call::llm_call_from_request_response(&state_action, None);
-                        self.open_calls_by_request.insert(
-                            (state_action.trace_id, state_action.action_id.clone()),
-                            call.clone(),
-                        );
-                        if self.record_projected_action(&call) {
-                            changed.actions.push(call);
-                        }
+                        self.record_derived_call(call, &mut changed.actions);
                     }
                 }
                 SemanticActionKind::LlmResponse => {
-                    let request = if state_action.status == SemanticActionStatus::InProgress {
-                        self.open_request_for_response(&state_action)
-                    } else {
-                        self.take_open_request_for_response(&state_action)
-                    };
-                    if let Some(request) = request {
+                    if let Some(request) = self.take_open_request_for_response(&state_action) {
                         let call =
                             call::llm_call_from_request_response(&request, Some(&state_action));
-                        if state_action.status == SemanticActionStatus::InProgress {
-                            self.open_calls_by_request.insert(
-                                (request.trace_id, request.action_id.clone()),
-                                call.clone(),
-                            );
-                        } else {
-                            self.open_calls_by_request
-                                .remove(&(request.trace_id, request.action_id.clone()));
-                        }
-                        if self.record_projected_action(&call) {
-                            changed.actions.push(call);
-                        }
+                        self.record_derived_call(call, &mut changed.actions);
                     } else {
                         self.remember_pending_response(state_action.clone());
                     }
@@ -388,14 +392,16 @@ impl LiveLlmProjector {
         changed
     }
 
+    fn record_derived_call(&mut self, call: SemanticAction, changed: &mut Vec<SemanticAction>) {
+        if self.record_projected_action(&call) {
+            changed.push(call);
+        }
+    }
+
     fn record_projected_action(&mut self, action: &SemanticAction) -> bool {
         let key = (action.trace_id, action.action_id.clone());
-        match self.open_action_versions.get(&key) {
-            Some(existing) if existing == action => return false,
-            Some(existing) if suppress_repeated_in_progress_response(existing, action) => {
-                return false;
-            }
-            _ => {}
+        if self.open_action_versions.get(&key) == Some(action) {
+            return false;
         }
         if action.status == SemanticActionStatus::InProgress {
             self.open_action_versions.insert(key, action.clone());
@@ -429,10 +435,8 @@ impl LiveLlmProjector {
         }
     }
 
-    fn restore_open_request(&mut self, request: SemanticAction, call: SemanticAction) {
-        self.remember_open_request(request.clone());
-        self.open_calls_by_request
-            .insert((request.trace_id, request.action_id.clone()), call);
+    fn restore_open_request(&mut self, request: SemanticAction) {
+        self.remember_open_request(request);
     }
 
     fn remove_open_request(&mut self, request: &SemanticAction) {
@@ -511,7 +515,7 @@ impl LiveLlmProjector {
     fn take_open_request_for_http_response(
         &mut self,
         http_response: &SemanticAction,
-    ) -> Option<(SemanticAction, SemanticAction)> {
+    ) -> Option<SemanticAction> {
         let response_order = LlmActionOrder {
             start_time: http_response.start_time,
             sequence_start: http_payload_sequence(http_response)?,
@@ -520,13 +524,7 @@ impl LiveLlmProjector {
             let Some(request) = self.take_open_request_before(&stream_key, response_order) else {
                 continue;
             };
-            let Some(call) = self
-                .open_calls_by_request
-                .remove(&(request.trace_id, request.action_id.clone()))
-            else {
-                continue;
-            };
-            return Some((request, call));
+            return Some(request);
         }
         None
     }
@@ -603,107 +601,6 @@ impl LiveLlmProjector {
     }
 }
 
-fn response_completes_on_trace_close(action: &SemanticAction) -> bool {
-    action.kind == SemanticActionKind::LlmResponse
-        && action.status == SemanticActionStatus::InProgress
-        && action
-            .attributes
-            .get(attrs::llm_response::PROVIDER_ID)
-            .is_some_and(|value| value == "structured-json-sse")
-        && action
-            .attributes
-            .get(attrs::llm_response::STREAM)
-            .is_some_and(|value| value == "true")
-        && llm_response_is_sse(action)
-        && action
-            .attributes
-            .get(attrs::llm_response::DONE)
-            .is_some_and(|value| value == "false")
-        && successful_http_response(action)
-        && llm_response_has_observed_output(action)
-}
-
-fn trace_close_completes_action(
-    action: &SemanticAction,
-    completed_response_ids: &BTreeSet<String>,
-) -> bool {
-    match action.kind {
-        SemanticActionKind::LlmResponse => completed_response_ids.contains(&action.action_id),
-        SemanticActionKind::SseStream => action
-            .attributes
-            .get(attrs::llm_response::ACTION_ID)
-            .is_some_and(|response_id| completed_response_ids.contains(response_id)),
-        SemanticActionKind::LlmCall => {
-            action
-                .attributes
-                .get(attrs::llm_call::REQUEST_ACTION_ID)
-                .is_some_and(|request_id| !request_id.is_empty())
-                && action
-                    .attributes
-                    .get(attrs::llm_call::RESPONSE_ACTION_ID)
-                    .is_some_and(|response_id| completed_response_ids.contains(response_id))
-        }
-        _ => false,
-    }
-}
-
-fn mark_trace_close_completion_attributes(action: &mut SemanticAction) {
-    match action.kind {
-        SemanticActionKind::LlmResponse => {
-            action
-                .attributes
-                .insert(attrs::llm_response::DONE.to_string(), "true".to_string());
-        }
-        SemanticActionKind::SseStream => {
-            action
-                .attributes
-                .insert(attrs::sse::DONE.to_string(), "true".to_string());
-        }
-        _ => {}
-    }
-}
-
-fn llm_response_is_sse(action: &SemanticAction) -> bool {
-    action
-        .attributes
-        .get(attrs::llm_response::BODY_FORMAT)
-        .is_some_and(|value| value == "sse")
-        || action
-            .attributes
-            .get(attrs::http_response::BODY_FORMAT)
-            .is_some_and(|value| value == "sse")
-}
-
-fn successful_http_response(action: &SemanticAction) -> bool {
-    action
-        .attributes
-        .get(attrs::http_response::STATUS_CODE)
-        .and_then(|value| value.parse::<u16>().ok())
-        .is_some_and(|status| (200..300).contains(&status))
-}
-
-fn llm_response_has_observed_output(action: &SemanticAction) -> bool {
-    positive_usize_attr(action, attrs::llm_response::CHUNK_COUNT)
-        || attr_has_text(action, attrs::llm_response::CONTENT_TEXT)
-        || attr_has_text(action, attrs::llm_response::REASONING_TEXT)
-        || attr_has_text(action, attrs::llm_response::TOOL_CALLS_JSON)
-}
-
-fn attr_has_text(action: &SemanticAction, key: &str) -> bool {
-    action
-        .attributes
-        .get(key)
-        .is_some_and(|value| !value.is_empty())
-}
-
-fn positive_usize_attr(action: &SemanticAction, key: &str) -> bool {
-    action
-        .attributes
-        .get(key)
-        .and_then(|value| value.parse::<usize>().ok())
-        .is_some_and(|value| value > 0)
-}
-
 #[derive(Default)]
 struct LiveStreamState {
     buffer: Vec<u8>,
@@ -711,6 +608,8 @@ struct LiveStreamState {
     segments: VecDeque<LiveSegmentRange>,
     pending_raw_chunk_terminator: bool,
     completion_detector: ResponseCompletionDetector,
+    sse_parse_cache: Option<IncrementalSseCache>,
+    in_flight_response: Option<InFlightResponse>,
 }
 
 impl LiveStreamState {
@@ -783,6 +682,7 @@ impl LiveStreamState {
             output
                 .llm_request_contents
                 .extend(projection.llm_request_contents);
+            output.payload_segments.extend(projection.payload_segments);
             self.evict_encoded_len(encoded_len);
             if self.buffer.is_empty() {
                 break;
@@ -803,10 +703,17 @@ impl LiveStreamState {
         while let Some(projection) = self.project_next_response(config, codecs, key) {
             let terminal = projection.terminal;
             let encoded_len = projection.encoded_len;
+            if projection.in_flight.is_some() {
+                self.in_flight_response = projection.in_flight;
+            } else if terminal || !projection.actions.is_empty() {
+                self.in_flight_response = None;
+            }
             output.actions.extend(projection.actions);
+            output.payload_segments.extend(projection.payload_segments);
             if terminal {
                 self.pending_raw_chunk_terminator = projection.raw_response;
                 self.evict_encoded_len(encoded_len);
+                self.sse_parse_cache = None;
                 self.completion_detector.rebuild(&self.buffer);
                 if self.buffer.is_empty() {
                     break;
@@ -819,24 +726,68 @@ impl LiveStreamState {
     }
 
     fn project_next_response(
-        &self,
+        &mut self,
         config: &SemanticRetentionConfig,
         codecs: &LlmCodecRegistry,
         key: &PayloadStreamGroupKey,
     ) -> Option<LiveLlmProjection> {
-        let encoded_len =
-            live_llm_http_response_message_len(&self.buffer).unwrap_or_else(|| self.buffer.len());
+        let mut sse_parse_cache = self.sse_parse_cache.take();
+        let message = LiveLlmResponseMessage::parse(&self.buffer);
+        let encoded_len = message.encoded_len();
         let message_start = self.base_offset;
         let message_end = message_start + encoded_len;
         let segments = self.segments_for_range(message_start, message_end);
-        project_live_llm_response_message(
+        let projection = project_live_llm_response_message(
             config,
             codecs,
             key,
             message_start,
             &self.buffer,
+            message,
             &segments,
-        )
+            &mut sse_parse_cache,
+            false,
+        );
+        self.sse_parse_cache = sse_parse_cache;
+        projection
+    }
+
+    fn materialize_in_flight(
+        &mut self,
+        config: &SemanticRetentionConfig,
+        codecs: &LlmCodecRegistry,
+        key: &PayloadStreamGroupKey,
+        message_start: usize,
+    ) -> Option<(Vec<SemanticAction>, Vec<PayloadSegment>)> {
+        let mut sse_parse_cache = self.sse_parse_cache.take();
+        let message = LiveLlmResponseMessage::parse(&self.buffer);
+        let encoded_len = message.encoded_len();
+        let message_end = message_start.checked_add(encoded_len)?;
+        let (first, assembled_bytes, projection) = {
+            let segments = self.segments_for_range(message_start, message_end);
+            let first = (**segments.first()?).clone();
+            let assembled_bytes = self.buffer.get(..encoded_len)?.to_vec();
+            let projection = project_live_llm_response_message(
+                config,
+                codecs,
+                key,
+                message_start,
+                &self.buffer,
+                message,
+                &segments,
+                &mut sse_parse_cache,
+                true,
+            );
+            (first, assembled_bytes, projection)
+        };
+        self.sse_parse_cache = sse_parse_cache;
+        let payload_segments =
+            if config.l4_payload.enabled || !config.l0_llm_call.retain_assembled_payload() {
+                Vec::new()
+            } else {
+                vec![semantic_payload_draft(&first, &assembled_bytes)]
+            };
+        Some((projection?.actions, payload_segments))
     }
 
     fn segments_for_range(&self, start: usize, end: usize) -> Vec<&PayloadSegment> {
@@ -1046,47 +997,6 @@ fn plaintext_http_candidate(segment: &PayloadSegment) -> bool {
 
 fn http_payload_sequence(action: &SemanticAction) -> Option<u64> {
     action.attributes.get("payload_sequence")?.parse().ok()
-}
-
-fn suppress_repeated_in_progress_response(
-    existing: &SemanticAction,
-    candidate: &SemanticAction,
-) -> bool {
-    if existing.kind != SemanticActionKind::LlmResponse
-        || candidate.kind != SemanticActionKind::LlmResponse
-        || existing.status != SemanticActionStatus::InProgress
-        || candidate.status != SemanticActionStatus::InProgress
-    {
-        return false;
-    }
-    !llm_response_semantic_progress_changed(existing, candidate)
-}
-
-fn llm_response_semantic_progress_changed(
-    existing: &SemanticAction,
-    candidate: &SemanticAction,
-) -> bool {
-    const SEMANTIC_PROGRESS_ATTRS: &[&str] = &[
-        attrs::llm_response::PROVIDER_ID,
-        attrs::llm_response::MODEL,
-        attrs::llm_response::CONTENT_TEXT,
-        attrs::llm_response::REASONING_TEXT,
-        attrs::llm_response::TOOL_CALLS_JSON,
-        attrs::llm_response::CHUNK_COUNT,
-        attrs::llm_response::DONE,
-        attrs::llm_response::FINISH_REASON,
-        attrs::llm_response::PROMPT_TOKENS,
-        attrs::llm_response::COMPLETION_TOKENS,
-        attrs::llm_response::TOTAL_TOKENS,
-        attrs::llm_response::CACHED_PROMPT_TOKENS,
-        attrs::llm_response::REASONING_TOKENS,
-        attrs::llm_response::PROMPT_CACHE_HIT_TOKENS,
-        attrs::llm_response::PROMPT_CACHE_MISS_TOKENS,
-    ];
-
-    SEMANTIC_PROGRESS_ATTRS
-        .iter()
-        .any(|key| existing.attributes.get(*key) != candidate.attributes.get(*key))
 }
 
 #[cfg(test)]

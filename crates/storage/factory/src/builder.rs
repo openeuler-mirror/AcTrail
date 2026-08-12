@@ -14,9 +14,10 @@ pub fn open_storage_backend(
     match (config, mode) {
         (StorageConfig::Sqlite(config), StorageOpenMode::ReadWrite) => {
             create_parent_directory(&config.path)?;
-            SqliteStorage::open_with_busy_timeout(
+            SqliteStorage::open_with_compression(
                 &config.path,
-                Duration::from_millis(config.busy_timeout_ms),
+                Some(Duration::from_millis(config.busy_timeout_ms)),
+                config.cold_field_compression(),
             )
             .map(|storage| Box::new(storage) as Box<dyn StorageBackend>)
             .map_err(|error| StorageError::new("open_sqlite_storage", error.to_string()))

@@ -51,6 +51,8 @@ pub fn run_live_verification(
             enabled_mode: config_core::daemon::EbpfEnabledMode::True,
             enabled: true,
             memlock_rlimit: config.memlock_rlimit,
+            preflight_link_teardown_workers:
+                config_core::daemon::DEFAULT_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS,
             tracked_process_max_entries: config.tracked_process_max_entries,
             pending_operation_max_entries: config.pending_operation_max_entries,
             suppressed_fd_max_entries: config.suppressed_fd_max_entries,

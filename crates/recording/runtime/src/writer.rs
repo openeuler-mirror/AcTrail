@@ -1,4 +1,4 @@
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use export_core::{ExportPublishReport, ExportRuntime};
 use model_core::diagnostics::DiagnosticRecord;
@@ -115,10 +115,18 @@ impl<'a> RecordingWriter<'a> {
         emitted_at: SystemTime,
         next_diagnostic_id: impl FnMut() -> Result<DiagnosticId, RecordingError>,
         export_batch: SemanticActionBatch,
+        observe_semantic_flush: impl FnOnce(Duration),
         write: impl FnOnce(&mut ObservedRecordWriteSession<'_>) -> Result<(), RecordingError>,
     ) -> Result<(), RecordingError> {
         ObservedRecordCommitCoordinator::new(self.storage, export_runtime)
-            .write_session_then_export(traces, emitted_at, next_diagnostic_id, export_batch, write)
+            .write_session_then_export(
+                traces,
+                emitted_at,
+                next_diagnostic_id,
+                export_batch,
+                observe_semantic_flush,
+                write,
+            )
     }
 
     pub fn export_semantic_action_batch_for_trace(

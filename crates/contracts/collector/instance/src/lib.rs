@@ -47,6 +47,12 @@ pub trait CollectorInstance {
         Ok(())
     }
     fn stats(&self) -> CollectorStats;
+    /// Lightweight active-binding count used by the drain loop on every cycle.
+    /// Defaults to `stats().active_bindings`; collectors that track the count
+    /// directly should override it to avoid building a full stats snapshot.
+    fn active_binding_trace_count(&self) -> usize {
+        self.stats().active_bindings
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

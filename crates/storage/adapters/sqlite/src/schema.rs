@@ -170,7 +170,6 @@ CREATE TABLE IF NOT EXISTS semantic_action_cold_fields (
     field_code INTEGER NOT NULL,
     encoding_code INTEGER NOT NULL,
     uncompressed_bytes INTEGER NOT NULL,
-    value_hash BLOB NOT NULL,
     payload BLOB NOT NULL,
     PRIMARY KEY (owner_key, field_code)
 );
@@ -183,7 +182,6 @@ CREATE TABLE IF NOT EXISTS semantic_action_link_cold_fields (
     field_code INTEGER NOT NULL,
     encoding_code INTEGER NOT NULL,
     uncompressed_bytes INTEGER NOT NULL,
-    value_hash BLOB NOT NULL,
     payload BLOB NOT NULL,
     PRIMARY KEY (trace_id, parent_action_key, child_action_key, role_code, field_code)
 );

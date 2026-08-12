@@ -49,7 +49,7 @@ pub struct IngestPipeline<'a, P> {
 
 impl<'a, P> IngestPipeline<'a, P>
 where
-    P: PolicyEvaluator,
+    P: PolicyEvaluator + 'static,
 {
     pub fn new(policy_evaluator: P, classifier: &'a dyn ProviderClassifier) -> Self {
         Self {

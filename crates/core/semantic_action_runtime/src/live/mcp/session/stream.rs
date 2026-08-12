@@ -1,4 +1,4 @@
-use model_core::payload::PayloadSegment;
+use model_core::payload::{PayloadRedactionState, PayloadSegment, PayloadSegmentId};
 
 use super::{McpConfirmedStdioSession, McpStdioCandidate};
 use crate::live::mcp::framing::McpJsonRpcFramer;
@@ -81,6 +81,38 @@ impl McpStdioCandidate {
             },
             self.buffered_messages,
         )
+    }
+
+    pub(super) fn stdin_payload_draft(&self, segment: &PayloadSegment) -> Option<PayloadSegment> {
+        let segment_id = self
+            .stdin
+            .first_segment_id()
+            .unwrap_or_else(|| segment.segment_id.get());
+        let size = u64::try_from(self.stdin.buffer_bytes().len()).ok()?;
+        Some(PayloadSegment {
+            segment_id: PayloadSegmentId::new(segment_id),
+            trace_id: segment.trace_id,
+            observed_at: segment.observed_at,
+            process: segment.process.clone(),
+            source_boundary: segment.source_boundary,
+            content_state: segment.content_state,
+            direction: segment.direction,
+            stream_key: segment.stream_key.clone(),
+            sequence: segment.sequence,
+            original_size: size,
+            captured_size: size,
+            operation_id: segment.operation_id,
+            operation_offset: 0,
+            operation_original_size: size,
+            operation_captured_size: size,
+            operation_completion_state: segment.operation_completion_state,
+            truncation: segment.truncation,
+            redaction: PayloadRedactionState::NotRequired,
+            library: segment.library.clone(),
+            symbol: segment.symbol.clone(),
+            protocol_hint: segment.protocol_hint.clone(),
+            bytes: self.stdin.buffer_bytes().to_vec(),
+        })
     }
 }
 

@@ -64,6 +64,8 @@ mod tests {
             enabled_mode: mode,
             enabled: matches!(mode, EbpfEnabledMode::True),
             memlock_rlimit: MemlockRlimit::Inherit,
+            preflight_link_teardown_workers:
+                config_core::daemon::DEFAULT_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS,
             tracked_process_max_entries: 64,
             pending_operation_max_entries: 64,
             suppressed_fd_max_entries: 64,

@@ -65,7 +65,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--prompt",
         default=xiaoo_agent.DEFAULT_PROMPT,
-        help="prompt sent to xiaoo (replay ignores its content)",
+        help="prompt sent to agent (replay ignores its content)",
     )
     parser.add_argument(
         "--max-turns",
@@ -142,8 +142,8 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--agent",
         choices=("xiaoo", "opencode"),
-        default="xiaoo",
-        help="agent backend to benchmark (default: xiaoo)",
+        default="opencode",
+        help="agent backend to benchmark (default: opencode)",
     )
     parser.add_argument(
         "--agent-binary",
