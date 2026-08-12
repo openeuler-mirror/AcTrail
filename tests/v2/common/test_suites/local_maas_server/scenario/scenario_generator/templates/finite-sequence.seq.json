@@ -1,0 +1,33 @@
+{
+  "type": "sequential",
+  "generators": [
+    {
+      "type": "response",
+      "response": {
+        "blocks": [
+          {
+            "type": "message",
+            "text": "A"
+          }
+        ],
+        "usage": {
+          "output_tokens": 1
+        }
+      }
+    },
+    {
+      "type": "response",
+      "response": {
+        "blocks": [
+          {
+            "type": "message",
+            "text": "B"
+          }
+        ],
+        "usage": {
+          "output_tokens": 1
+        }
+      }
+    }
+  ]
+}

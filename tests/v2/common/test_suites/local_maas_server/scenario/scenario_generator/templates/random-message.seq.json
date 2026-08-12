@@ -1,0 +1,35 @@
+{
+  "type": "random",
+  "count": 4,
+  "seed": 7,
+  "generators": [
+    {
+      "type": "response",
+      "response": {
+        "blocks": [
+          {
+            "type": "message",
+            "text": "RANDOM_A"
+          }
+        ],
+        "usage": {
+          "output_tokens": 1
+        }
+      }
+    },
+    {
+      "type": "response",
+      "response": {
+        "blocks": [
+          {
+            "type": "message",
+            "text": "RANDOM_B"
+          }
+        ],
+        "usage": {
+          "output_tokens": 1
+        }
+      }
+    }
+  ]
+}
