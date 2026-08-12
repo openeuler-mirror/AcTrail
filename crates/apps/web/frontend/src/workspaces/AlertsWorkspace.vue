@@ -170,6 +170,11 @@ const activityAlertKinds = new Set([
   'llm.request.growth',
   'llm.response.growth',
   'command.duration.exceeded',
+  'llm.turn.high_frequency',
+  'llm.turn.consecutive_retry',
+  'llm.turn.repeated_similar',
+  'llm.turn.error_ratio',
+  'llm.turn.context_growth',
 ]);
 let loadToken = null;
 let detailToken = null;
@@ -334,6 +339,21 @@ function alertSummary(alert) {
   if (alert.kind === 'command.duration.exceeded') {
     const command = finding.command_line || finding.executable || t('alerts.activity.unknownCommand');
     return `${command} · ${formatCompactDuration(finding.duration_ms)} > ${formatCompactDuration(payload.maximum_duration_ms)}`;
+  }
+  if (alert.kind === 'llm.turn.high_frequency') {
+    return `${finding.model ?? '—'} · ${finding.exchange_count} req in ${formatCompactDuration(payload.window_size_ms)}`;
+  }
+  if (alert.kind === 'llm.turn.consecutive_retry') {
+    return `${finding.model ?? '—'} · ${finding.retry_length}× consecutive failures`;
+  }
+  if (alert.kind === 'llm.turn.repeated_similar') {
+    return `${finding.model ?? '—'} · ${finding.repeat_count}× similar (${formatCompactBytes(finding.representative_request_bytes)})`;
+  }
+  if (alert.kind === 'llm.turn.error_ratio') {
+    return `${finding.model ?? '—'} · ${finding.error_count}/${finding.total_exchanges} errors (${formatCompactRatio(finding.actual_ratio_per_mille)})`;
+  }
+  if (alert.kind === 'llm.turn.context_growth') {
+    return `${finding.model ?? '—'} · ${formatCompactBytes(finding.observed_bytes)} / ${formatCompactBytes(finding.baseline_median_bytes)} (${formatCompactRatio(finding.observed_ratio_per_mille)})`;
   }
   const direction = alert.kind === 'llm.response.growth'
     ? t('alerts.activity.response')

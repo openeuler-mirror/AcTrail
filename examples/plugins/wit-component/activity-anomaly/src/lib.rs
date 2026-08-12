@@ -811,6 +811,7 @@ mod tests {
             response_body_bytes: Some(2),
             response_raw_bytes: Some(2),
             response_complete: true,
+            response_status: actrail::plugin::types::LlmResponseStatus::Success,
         };
 
         let mut request_detector =

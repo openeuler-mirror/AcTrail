@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "actrail.llm-turn-anomaly.consecutive-retry.payload.v1",
+  "type": "object",
+  "required": [
+    "root_process_id",
+    "display_name",
+    "profile_name",
+    "consecutive_count",
+    "findings",
+    "truncated_count"
+  ],
+  "properties": {
+    "root_container_id": { "type": ["string", "null"] },
+    "root_process_id": { "type": "string", "minLength": 1 },
+    "display_name": { "type": "string", "minLength": 1 },
+    "profile_name": { "type": "string", "minLength": 1 },
+    "consecutive_count": { "type": "integer", "minimum": 2 },
+    "findings": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4096,
+      "items": {
+        "type": "object",
+        "required": [
+          "process_id",
+          "model",
+          "retry_length",
+          "first_action_id",
+          "last_action_id",
+          "first_started_at_ms",
+          "last_started_at_ms"
+        ],
+        "properties": {
+          "process_id": { "type": "string", "minLength": 1 },
+          "model": { "type": ["string", "null"] },
+          "retry_length": { "type": "integer", "minimum": 2 },
+          "first_action_id": { "type": "string", "minLength": 1 },
+          "last_action_id": { "type": "string", "minLength": 1 },
+          "first_started_at_ms": { "type": "integer", "minimum": 0 },
+          "last_started_at_ms": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "truncated_count": { "type": "integer", "minimum": 0 }
+  },
+  "additionalProperties": false
+}

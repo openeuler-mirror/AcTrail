@@ -8,7 +8,7 @@ use model_core::trace::{TraceLifecycleState, TraceRecord};
 use plugin_system::{
     PluginRuntimeError, TraceActivityContext, TraceAnalysisAction, TraceAnalysisContext,
     TraceAnalysisFileChange, TraceCommandExecution, TraceFileState, TraceFileStateStatus,
-    TraceLlmExchange,
+    TraceLlmExchange, TraceLlmResponseStatus,
 };
 use semantic_action::{
     SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionLink,
@@ -149,9 +149,33 @@ pub(super) fn project_llm_exchanges(
                 .transpose()?
                 .flatten(),
             response_complete: response.is_some_and(action_complete),
+            response_status: response_status(call, response),
         });
     }
     Ok(exchanges)
+}
+
+fn response_status(
+    call: &SemanticAction,
+    response: Option<&SemanticAction>,
+) -> TraceLlmResponseStatus {
+    let Some(response) = response else {
+        return match call.status {
+            SemanticActionStatus::InProgress => TraceLlmResponseStatus::Pending,
+            SemanticActionStatus::Success => TraceLlmResponseStatus::Success,
+            SemanticActionStatus::Error => TraceLlmResponseStatus::Error,
+            SemanticActionStatus::Unknown => TraceLlmResponseStatus::Unknown,
+        };
+    };
+    if !action_complete(response) {
+        return TraceLlmResponseStatus::Pending;
+    }
+    match response.status {
+        SemanticActionStatus::Success => TraceLlmResponseStatus::Success,
+        SemanticActionStatus::Error => TraceLlmResponseStatus::Error,
+        SemanticActionStatus::InProgress => TraceLlmResponseStatus::Pending,
+        SemanticActionStatus::Unknown => TraceLlmResponseStatus::Unknown,
+    }
 }
 
 pub(super) fn project_command_executions(
@@ -477,9 +501,17 @@ pub(super) fn storage_runtime_error(error: storage_core::StorageError) -> Plugin
 
 #[cfg(test)]
 mod tests {
-    use model_core::process::NamespaceIdentity;
+    use std::collections::BTreeMap;
+    use std::time::SystemTime;
 
-    use super::requires_namespaced_root;
+    use model_core::process::{NamespaceIdentity, ProcessIdentity};
+    use model_core::trace::TraceId;
+    use plugin_system::TraceLlmResponseStatus;
+    use semantic_action::{
+        SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionStatus,
+    };
+
+    use super::{requires_namespaced_root, response_status};
 
     #[test]
     fn path_view_uses_pid_namespace_not_runtime_attribution() {
@@ -493,5 +525,92 @@ mod tests {
             &NamespaceIdentity::new("pid:[2]"),
             &host,
         ));
+    }
+
+    fn action(
+        kind: SemanticActionKind,
+        status: SemanticActionStatus,
+        completeness: SemanticActionCompleteness,
+    ) -> SemanticAction {
+        SemanticAction {
+            action_id: "response-1".to_string(),
+            trace_id: TraceId::new(1),
+            kind,
+            title: "response".to_string(),
+            start_time: SystemTime::UNIX_EPOCH,
+            end_time: Some(SystemTime::UNIX_EPOCH),
+            process: ProcessIdentity::new(1),
+            status,
+            completeness,
+            confidence_millis: None,
+            attributes: BTreeMap::new(),
+            evidence: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn llm_response_status_distinguishes_pending_success_error_and_unknown() {
+        let pending_call = action(
+            SemanticActionKind::LlmCall,
+            SemanticActionStatus::InProgress,
+            SemanticActionCompleteness::Partial,
+        );
+        assert_eq!(
+            response_status(&pending_call, None),
+            TraceLlmResponseStatus::Pending
+        );
+        let error_call = action(
+            SemanticActionKind::LlmCall,
+            SemanticActionStatus::Error,
+            SemanticActionCompleteness::Complete,
+        );
+        assert_eq!(
+            response_status(&error_call, None),
+            TraceLlmResponseStatus::Error
+        );
+        assert_eq!(
+            response_status(
+                &pending_call,
+                Some(&action(
+                    SemanticActionKind::LlmResponse,
+                    SemanticActionStatus::Success,
+                    SemanticActionCompleteness::Partial,
+                )),
+            ),
+            TraceLlmResponseStatus::Pending
+        );
+        assert_eq!(
+            response_status(
+                &pending_call,
+                Some(&action(
+                    SemanticActionKind::LlmResponse,
+                    SemanticActionStatus::Success,
+                    SemanticActionCompleteness::Complete,
+                )),
+            ),
+            TraceLlmResponseStatus::Success
+        );
+        assert_eq!(
+            response_status(
+                &pending_call,
+                Some(&action(
+                    SemanticActionKind::LlmResponse,
+                    SemanticActionStatus::Error,
+                    SemanticActionCompleteness::Complete,
+                )),
+            ),
+            TraceLlmResponseStatus::Error
+        );
+        assert_eq!(
+            response_status(
+                &pending_call,
+                Some(&action(
+                    SemanticActionKind::LlmResponse,
+                    SemanticActionStatus::Unknown,
+                    SemanticActionCompleteness::Complete,
+                )),
+            ),
+            TraceLlmResponseStatus::Unknown
+        );
     }
 }

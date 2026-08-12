@@ -4,8 +4,8 @@
       <span class="plugin-config-toggle-title">
         <Settings2 :size="17" aria-hidden="true" />
         <span>
-          <strong>Configuration</strong>
-          <small>Schema-driven runtime settings</small>
+          <strong>{{ panelTitle }}</strong>
+          <small>{{ panelSubtitle }}</small>
         </span>
       </span>
       <span class="plugin-config-toggle-state">
@@ -80,7 +80,9 @@
         <ul v-if="validation && !validation.valid" class="plugin-config-errors">
           <li v-for="message in validation.errors" :key="message">{{ message }}</li>
         </ul>
-        <p v-if="updated" class="plugin-config-valid">Runtime configuration updated.</p>
+        <p v-if="updated" class="plugin-config-valid">
+          Configuration updated and applied to the running plugin.
+        </p>
       </template>
     </div>
   </section>
@@ -99,6 +101,7 @@ import PluginConfigItem from './PluginConfigItem.vue';
 
 const props = defineProps({
   instanceId: { type: String, required: true },
+  pluginId: { type: String, default: '' },
   refreshNonce: { type: Number, default: 0 },
 });
 
@@ -116,6 +119,12 @@ const validation = ref(null);
 const error = ref('');
 const updated = ref(false);
 let activeConfigLoad = null;
+
+const isLlmTurnAnomaly = computed(() => props.pluginId === 'actrail.llm-turn-anomaly');
+const panelTitle = computed(() => isLlmTurnAnomaly.value ? 'LLM alert parameters' : 'Configuration');
+const panelSubtitle = computed(() => isLlmTurnAnomaly.value
+  ? 'Enable rules and tune thresholds; saved values take effect immediately'
+  : 'Schema-driven runtime settings');
 
 const draftSnapshot = computed(() => JSON.stringify(draft.value));
 const canUpdate = computed(() => Boolean(

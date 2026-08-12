@@ -61,7 +61,8 @@ pub use observation::{
     PostTraceAnalyzer, PostTraceHost, PostTraceTask, TraceActivityContext, TraceAnalysisAction,
     TraceAnalysisActionPage, TraceAnalysisContext, TraceAnalysisFileChange, TraceCommandExecution,
     TraceCommandExecutionPage, TraceFileState, TraceFileStateStatus, TraceLlmExchange,
-    TraceLlmExchangePage, DEFAULT_OBSERVATION_EVENT_FAMILIES, DEFAULT_OBSERVATION_QUEUE_CAPACITY,
+    TraceLlmExchangePage, TraceLlmResponseStatus, DEFAULT_OBSERVATION_EVENT_FAMILIES,
+    DEFAULT_OBSERVATION_QUEUE_CAPACITY,
 };
 pub use runtime::{BuiltinPluginInstance, PluginInstanceId};
 pub use status::{
