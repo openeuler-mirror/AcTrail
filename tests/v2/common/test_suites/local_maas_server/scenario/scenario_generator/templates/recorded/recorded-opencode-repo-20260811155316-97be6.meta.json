@@ -1,0 +1,15 @@
+{
+  "name": "recorded/recorded-opencode-repo-20260811155316-97be6",
+  "description": "Recorded scenario recorded/recorded-opencode-repo-20260811155316-97be6 from session debd961bd1fe",
+  "type": "recorded",
+  "infinite": false,
+  "tool_source": "recorded/recorded-opencode-repo-20260811155316-97be6.tool.jsonl",
+  "message_source": "recorded/recorded-opencode-repo-20260811155316-97be6.message.jsonl",
+  "rounds": 16,
+  "tool_rounds": 14,
+  "message_rounds": 2,
+  "tools": [
+    "glob",
+    "read"
+  ]
+}

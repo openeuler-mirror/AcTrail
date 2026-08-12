@@ -1,0 +1,13 @@
+{
+  "name": "bash-tool-roundtrip",
+  "description": "Runs one bash tool call and returns a completion message after receiving the tool result.",
+  "type": "sequential",
+  "infinite": false,
+  "sequence": "bash-tool-roundtrip.seq.json",
+  "rounds": 2,
+  "tool_rounds": 1,
+  "message_rounds": 1,
+  "tools": [
+    "bash"
+  ]
+}

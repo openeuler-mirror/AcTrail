@@ -1,0 +1,11 @@
+{
+  "name": "finite-sequence",
+  "description": "Returns two assistant messages in order and then exhausts.",
+  "type": "sequential",
+  "infinite": false,
+  "sequence": "finite-sequence.seq.json",
+  "rounds": 2,
+  "tool_rounds": 0,
+  "message_rounds": 2,
+  "tools": []
+}

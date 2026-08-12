@@ -1,0 +1,70 @@
+{
+  "type": "sequential",
+  "generators": [
+    {
+      "type": "response",
+      "response": {
+        "blocks": [
+          {
+            "type": "message",
+            "text": "START"
+          }
+        ],
+        "usage": {
+          "output_tokens": 1
+        }
+      }
+    },
+    {
+      "type": "loop",
+      "count": 2,
+      "generator": {
+        "type": "sequential",
+        "generators": [
+          {
+            "type": "response",
+            "response": {
+              "blocks": [
+                {
+                  "type": "message",
+                  "text": "LOOP_A"
+                }
+              ],
+              "usage": {
+                "output_tokens": 1
+              }
+            }
+          },
+          {
+            "type": "response",
+            "response": {
+              "blocks": [
+                {
+                  "type": "message",
+                  "text": "LOOP_B"
+                }
+              ],
+              "usage": {
+                "output_tokens": 1
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "response",
+      "response": {
+        "blocks": [
+          {
+            "type": "message",
+            "text": "END"
+          }
+        ],
+        "usage": {
+          "output_tokens": 1
+        }
+      }
+    }
+  ]
+}

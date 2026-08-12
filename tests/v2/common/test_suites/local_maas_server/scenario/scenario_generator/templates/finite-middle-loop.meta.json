@@ -1,0 +1,11 @@
+{
+  "name": "finite-middle-loop",
+  "description": "Returns a start message, repeats a two-message sequence twice, and then returns an end message.",
+  "type": "sequential",
+  "infinite": false,
+  "sequence": "finite-middle-loop.seq.json",
+  "rounds": 6,
+  "tool_rounds": 0,
+  "message_rounds": 6,
+  "tools": []
+}

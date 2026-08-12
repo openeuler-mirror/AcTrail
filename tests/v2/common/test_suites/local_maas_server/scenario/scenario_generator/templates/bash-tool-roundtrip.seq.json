@@ -1,0 +1,54 @@
+{
+  "type": "sequential",
+  "generators": [
+    {
+      "type": "response",
+      "response": {
+        "blocks": [
+          {
+            "type": "reasoning",
+            "chunks": [
+              "The test asks for a local tool invocation. ",
+              "I should use the advertised bash tool."
+            ]
+          },
+          {
+            "type": "message",
+            "text": "I will run the scripted local check."
+          },
+          {
+            "type": "tool_call",
+            "name": "bash",
+            "arguments": {
+              "command": "printf 'LOCAL_MAAS_TOOL_OK\\n'"
+            }
+          }
+        ],
+        "usage": {
+          "output_tokens": 18
+        }
+      }
+    },
+    {
+      "type": "response",
+      "response": {
+        "blocks": [
+          {
+            "type": "reasoning",
+            "text": "The scripted tool call completed."
+          },
+          {
+            "type": "message",
+            "chunks": [
+              "LOCAL_MAAS_",
+              "E2E_OK"
+            ]
+          }
+        ],
+        "usage": {
+          "output_tokens": 8
+        }
+      }
+    }
+  ]
+}
