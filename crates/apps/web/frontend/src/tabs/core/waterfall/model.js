@@ -653,13 +653,24 @@ function barInstantRow(row, axisWindow) {
 
 function barStyleForRow(row, axisWindow) {
   const { startMs, spanMs } = axisWindow;
-  const left = clampPct(((row.startOffsetMs - startMs) / spanMs) * 100);
-  if (barInstantRow(row, axisWindow)) {
-    return { left: `${left}%`, width: '3px' };
-  }
   const endMs = row.live ? startMs + spanMs : row.startOffsetMs + (row.durMs ?? 0);
-  const width = Math.max(((endMs - row.startOffsetMs) / spanMs) * 100, 0.5);
-  return { left: `${left}%`, width: `${Math.min(width, 100 - left)}%` };
+  if (!row.live && endMs === row.startOffsetMs) {
+    if (row.startOffsetMs < startMs || row.startOffsetMs > startMs + spanMs) {
+      return null;
+    }
+    return {
+      left: `${((row.startOffsetMs - startMs) / spanMs) * 100}%`,
+      width: '3px',
+    };
+  }
+  const projected = projectTimeInterval(row.startOffsetMs, endMs, axisWindow);
+  if (!projected) {
+    return null;
+  }
+  if (barInstantRow(row, axisWindow)) {
+    return { left: `${projected.leftPct}%`, width: '3px' };
+  }
+  return { left: `${projected.leftPct}%`, width: `${projected.widthPct}%` };
 }
 
 function barClassForRow(row) {
@@ -730,25 +741,72 @@ function phaseSegment(kind, phase, startMs, spanMs, live) {
   if (!phase) {
     return null;
   }
-  const left = clampPct(((phase.startOffsetMs - startMs) / spanMs) * 100);
   const endMs = live && kind !== 'ttft' ? startMs + spanMs : phase.startOffsetMs + (phase.durMs ?? 0);
-  const widthPct = kind === 'ttft'
-    ? Math.max(((phase.durMs ?? 0) / spanMs) * 100, 0.35)
-    : Math.max(((endMs - phase.startOffsetMs) / spanMs) * 100, 0.5);
-  if (widthPct <= 0) {
+  const projected = projectTimeInterval(phase.startOffsetMs, endMs, { startMs, spanMs });
+  if (!projected) {
     return null;
   }
   return {
     kind,
     style: {
-      left: `${left}%`,
-      width: `${Math.min(widthPct, 100 - left)}%`,
+      left: `${projected.leftPct}%`,
+      width: `${projected.widthPct}%`,
     },
   };
 }
 
-function clampPct(value) {
-  return Math.min(Math.max(value, 0), 100);
+export function projectTimeInterval(intervalStartMs, intervalEndMs, viewport) {
+  const viewportStart = Number(viewport?.startMs);
+  const viewportSpan = Number(viewport?.spanMs);
+  if (!Number.isFinite(viewportStart) || !Number.isFinite(viewportSpan) || viewportSpan <= 0) {
+    return null;
+  }
+  const viewportEnd = viewportStart + viewportSpan;
+  const visibleStart = Math.max(Number(intervalStartMs), viewportStart);
+  const visibleEnd = Math.min(Number(intervalEndMs), viewportEnd);
+  if (!Number.isFinite(visibleStart) || !Number.isFinite(visibleEnd) || visibleEnd <= visibleStart) {
+    return null;
+  }
+  return {
+    leftPct: ((visibleStart - viewportStart) / viewportSpan) * 100,
+    widthPct: ((visibleEnd - visibleStart) / viewportSpan) * 100,
+  };
+}
+
+export function constrainTimeViewport(viewport, bounds, minimumSpanMs = 0.001) {
+  const boundsStart = Number(bounds?.startMs) || 0;
+  const boundsSpan = Math.max(Number(bounds?.spanMs) || minimumSpanMs, minimumSpanMs);
+  const spanMs = Math.min(
+    Math.max(Number(viewport?.spanMs) || boundsSpan, minimumSpanMs),
+    boundsSpan,
+  );
+  const latestStart = boundsStart + boundsSpan - spanMs;
+  const startMs = Math.min(
+    Math.max(Number(viewport?.startMs) || boundsStart, boundsStart),
+    latestStart,
+  );
+  return { startMs, spanMs };
+}
+
+export function zoomTimeViewport(viewport, bounds, factor, anchorRatio = 0.5) {
+  const current = constrainTimeViewport(viewport, bounds);
+  const safeFactor = Number.isFinite(factor) && factor > 0 ? factor : 1;
+  const anchor = Math.min(Math.max(Number(anchorRatio) || 0, 0), 1);
+  const minimumSpanMs = Math.max(Math.min(Number(bounds?.spanMs) * 0.000001, 1), 0.001);
+  const nextSpan = current.spanMs / safeFactor;
+  const anchorTime = current.startMs + current.spanMs * anchor;
+  return constrainTimeViewport({
+    startMs: anchorTime - nextSpan * anchor,
+    spanMs: nextSpan,
+  }, bounds, minimumSpanMs);
+}
+
+export function panTimeViewport(viewport, bounds, deltaMs) {
+  const current = constrainTimeViewport(viewport, bounds);
+  return constrainTimeViewport({
+    startMs: current.startMs + Number(deltaMs || 0),
+    spanMs: current.spanMs,
+  }, bounds);
 }
 
 function llmMessagesFromAction(action) {
