@@ -51,6 +51,27 @@ impl TlsPayloadDiagnostics {
             entries.join(" ")
         }
     }
+
+    pub(crate) fn saturating_delta_since(&self, baseline: &Self) -> Self {
+        let counters = self
+            .counters
+            .iter()
+            .enumerate()
+            .map(|(index, counter)| {
+                let baseline_value = baseline
+                    .counters
+                    .get(index)
+                    .filter(|baseline_counter| baseline_counter.name == counter.name)
+                    .map(|baseline_counter| baseline_counter.value)
+                    .unwrap_or(0);
+                TlsPayloadDiagnosticCounter {
+                    name: counter.name,
+                    value: counter.value.saturating_sub(baseline_value),
+                }
+            })
+            .collect();
+        Self { counters }
+    }
 }
 
 pub(crate) fn read_tls_payload_diagnostics(

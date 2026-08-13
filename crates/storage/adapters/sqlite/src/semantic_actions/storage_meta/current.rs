@@ -8,8 +8,18 @@ pub(in crate::semantic_actions) const LINK_ATTRIBUTES_FIELD_CODE: i16 = 2;
 pub(in crate::semantic_actions) const ENCODING_PLAIN_TEXT: i16 = 0;
 pub(in crate::semantic_actions) const ENCODING_ZSTD: i16 = 1;
 
-pub(in crate::semantic_actions) const ZSTD_LEVEL: i32 = 3;
-pub(in crate::semantic_actions) const COMPRESSION_MIN_BYTES: usize = 64;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ColdFieldCompression {
+    pub zstd_level: i32,
+    pub compression_min_bytes: usize,
+}
+
+impl ColdFieldCompression {
+    pub const DEFAULT: Self = Self {
+        zstd_level: 3,
+        compression_min_bytes: 64,
+    };
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::semantic_actions) struct StorageMeta {
@@ -23,8 +33,6 @@ pub(in crate::semantic_actions) struct ColdFieldMeta {
     pub link_attributes: i16,
     pub plain_text: i16,
     pub zstd: i16,
-    pub zstd_level: i32,
-    pub compression_min_bytes: usize,
 }
 
 pub(in crate::semantic_actions) const CURRENT: StorageMeta = StorageMeta {
@@ -34,7 +42,5 @@ pub(in crate::semantic_actions) const CURRENT: StorageMeta = StorageMeta {
         link_attributes: LINK_ATTRIBUTES_FIELD_CODE,
         plain_text: ENCODING_PLAIN_TEXT,
         zstd: ENCODING_ZSTD,
-        zstd_level: ZSTD_LEVEL,
-        compression_min_bytes: COMPRESSION_MIN_BYTES,
     },
 };

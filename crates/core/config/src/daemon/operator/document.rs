@@ -12,25 +12,26 @@ use storage_factory::StorageConfig;
 use super::super::{
     AgentInvocationConfig, ApplicationProtocolConfig, ClusterCenterConfig, ClusterConfig,
     ClusterReportConfig, CommandControlConfig, CommandControlGrayConfig, DEFAULT_ACTIVE_TRACE_MAX,
-    DEFAULT_CONTROL_PENDING_CONNECTION_MAX, DEFAULT_FINALIZATION_POLL_INTERVAL_MS,
-    DEFAULT_FINALIZATION_SETTLE_DELAY_MS, DEFAULT_FINALIZATION_SHUTDOWN_DRAIN_TIMEOUT_MS,
-    DEFAULT_FINALIZATION_TRACES_PER_CYCLE, DEFAULT_PLUGIN_ALERT_DRAIN_TIMEOUT_MS,
-    DEFAULT_PLUGIN_ALERT_QUEUE_CAPACITY, DEFAULT_PLUGIN_ALERT_WRITES_PER_CYCLE,
-    DEFAULT_PLUGIN_DISCOVERY_DIRECTORY, DEFAULT_PLUGIN_DISCOVERY_MANIFEST_MAX_BYTES,
-    DEFAULT_PLUGIN_DISCOVERY_MAX_PACKAGES, DEFAULT_POST_TRACE_ADMISSION_TIMEOUT_MS,
-    DEFAULT_POST_TRACE_BROKER_QUEUE_CAPACITY, DEFAULT_POST_TRACE_BROKER_REPLY_TIMEOUT_MS,
-    DEFAULT_POST_TRACE_EXECUTION_TIMEOUT_MS, DEFAULT_POST_TRACE_MAX_IN_FLIGHT_TASKS,
-    DEFAULT_POST_TRACE_REQUESTS_PER_CYCLE, DEFAULT_POST_TRACE_SHUTDOWN_DRAIN_TIMEOUT_MS,
-    DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS, DEFAULT_WEB_ALERTS_LIMIT,
-    DEFAULT_WEB_ALERTS_MAX_LIMIT, DisabledOrPath, EbpfCollectorConfig, EbpfEnabledMode,
-    EnforcementBackend, EnforcementBuiltinRuleConfig, EnforcementConfig, EnforcementMarkStrategy,
-    EnforcementScope, EnforcementSeccompSyscall, FileBulkReadFastPathConfig,
-    FileBulkReadObservationConfig, FileMetadataRetention, FileObservationConfig,
-    FileRawEventRetention, FileTtyObservationConfig, FsEnumerateObservationConfig,
-    Http2DataContentRetention, HttpBodyRetention, HttpHeadersRetention, IpcLineageConfig,
-    L0LlmCallRetention, L0McpCallRetention, L1SseRetention, L2HttpRetention, L3Http2FrameRetention,
-    L4PayloadRetention, LlmRequestContentRetention, LlmResponseContentRetention,
-    LlmToolCallRetention, LlmUsageRetention, McpJsonRpcContentRetention, MemlockRlimit,
+    DEFAULT_CONTROL_PENDING_CONNECTION_MAX, DEFAULT_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS,
+    DEFAULT_FINALIZATION_POLL_INTERVAL_MS, DEFAULT_FINALIZATION_SETTLE_DELAY_MS,
+    DEFAULT_FINALIZATION_SHUTDOWN_DRAIN_TIMEOUT_MS, DEFAULT_FINALIZATION_TRACES_PER_CYCLE,
+    DEFAULT_PLUGIN_ALERT_DRAIN_TIMEOUT_MS, DEFAULT_PLUGIN_ALERT_QUEUE_CAPACITY,
+    DEFAULT_PLUGIN_ALERT_WRITES_PER_CYCLE, DEFAULT_PLUGIN_DISCOVERY_DIRECTORY,
+    DEFAULT_PLUGIN_DISCOVERY_MANIFEST_MAX_BYTES, DEFAULT_PLUGIN_DISCOVERY_MAX_PACKAGES,
+    DEFAULT_POST_TRACE_ADMISSION_TIMEOUT_MS, DEFAULT_POST_TRACE_BROKER_QUEUE_CAPACITY,
+    DEFAULT_POST_TRACE_BROKER_REPLY_TIMEOUT_MS, DEFAULT_POST_TRACE_EXECUTION_TIMEOUT_MS,
+    DEFAULT_POST_TRACE_MAX_IN_FLIGHT_TASKS, DEFAULT_POST_TRACE_REQUESTS_PER_CYCLE,
+    DEFAULT_POST_TRACE_SHUTDOWN_DRAIN_TIMEOUT_MS, DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS,
+    DEFAULT_WEB_ALERTS_LIMIT, DEFAULT_WEB_ALERTS_MAX_LIMIT, DisabledOrPath, EbpfCollectorConfig,
+    EbpfEnabledMode, EnforcementBackend, EnforcementBuiltinRuleConfig, EnforcementConfig,
+    EnforcementMarkStrategy, EnforcementScope, EnforcementSeccompSyscall,
+    FileBulkReadFastPathConfig, FileBulkReadObservationConfig, FileMetadataRetention,
+    FileObservationConfig, FileRawEventRetention, FileTtyObservationConfig,
+    FsEnumerateObservationConfig, Http2DataContentRetention, HttpBodyRetention,
+    HttpHeadersRetention, IpcLineageConfig, L0LlmCallRetention, L0McpCallRetention, L1SseRetention,
+    L2HttpRetention, L3Http2FrameRetention, L4PayloadRetention, LlmRequestContentRetention,
+    LlmResponseContentRetention, LlmToolCallRetention, LlmUsageRetention,
+    MAX_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS, McpJsonRpcContentRetention, MemlockRlimit,
     NetworkControlConfig, NetworkControlSeccompSyscall, PayloadBodyContentRetention, PayloadConfig,
     PayloadMcpConfig, PayloadRedactionPolicy, PayloadSocketCaptureBackend, PayloadSocketConfig,
     PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadStdioStorageMode,
@@ -54,7 +55,7 @@ use crate::provider_rules::ProviderRuleSetConfig;
 
 #[path = "document/app.rs"]
 mod app;
-#[path = "document/base.rs"]
+#[path = "document/base/document.rs"]
 mod base;
 #[path = "document/cluster.rs"]
 mod cluster;
@@ -178,6 +179,10 @@ impl OperatorDocument {
             sqlite: SqliteStorageDocument {
                 path: config.storage.path().display().to_string(),
                 busy_timeout_ms: config.storage.sqlite_busy_timeout_ms(),
+                cold_field_compression_min_bytes: config
+                    .storage
+                    .sqlite_cold_field_compression_min_bytes(),
+                cold_field_zstd_level: config.storage.sqlite_cold_field_zstd_level(),
             },
             retention: StorageRetentionDocument::from_config(&config.storage_retention),
         };
@@ -267,6 +272,7 @@ impl OperatorDocument {
             ebpf: EbpfDocument {
                 enabled: config.ebpf_config.enabled_mode.to_string(),
                 memlock_rlimit: memlock_rlimit_as_str(config.ebpf_config.memlock_rlimit),
+                preflight_link_teardown_workers: config.ebpf_config.preflight_link_teardown_workers,
                 tracked_process_max_entries: config.ebpf_config.tracked_process_max_entries,
                 pending_operation_max_entries: config.ebpf_config.pending_operation_max_entries,
                 suppressed_fd_max_entries: config.ebpf_config.suppressed_fd_max_entries,

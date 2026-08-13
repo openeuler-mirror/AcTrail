@@ -848,7 +848,7 @@ impl AttachService for StorageAttachService {
                     .ok_or_else(|| {
                         ControlError::new("process_registry", "listener process record is missing")
                     })?;
-                if self.collector.stats().active_bindings > 0 {
+                if self.collector.active_binding_trace_count() > 0 {
                     self.collector
                         .seed_trace_memberships(command.trace_id, std::iter::once(record.clone()))
                         .map_err(|error| ControlError::new(error.stage, error.message))?;

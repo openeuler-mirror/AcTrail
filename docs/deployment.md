@@ -75,6 +75,8 @@ For a persistent deployment, review these fields first:
 | `storage_backend` | Storage backend implementation. Current supported value: `sqlite`. |
 | `storage_sqlite_path` | SQLite storage location; place it on a filesystem with enough space for payload retention. |
 | `storage_sqlite_busy_timeout_ms` | SQLite busy timeout for daemon writes. Keep this positive; increase it only when long-running readers share the same storage. |
+| `storage_sqlite_cold_field_compression_min_bytes` | Minimum serialized attribute size in bytes before cold-field attributes are zstd-compressed. `0` disables cold-field compression. Default `64`. |
+| `storage_sqlite_cold_field_zstd_level` | zstd compression level for cold-field attributes. Default `3`. |
 | `log_path` | Daemon background stdout/stderr log. |
 | `control.finalization.shutdown_drain_timeout_ms` | Maximum time the daemon spends draining terminal trace finalization during shutdown. It must be at least `control.finalization.settle_delay_ms`. A timeout marks affected traces degraded, persists a diagnostic, and makes shutdown fail visibly. |
 | `supervision.startup_wait_ms` | Maximum time that `start` or `restart` waits for both the PID file and control socket. The default is 30 seconds. |

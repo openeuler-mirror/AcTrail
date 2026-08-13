@@ -4,6 +4,7 @@ pub mod attr_keys;
 pub mod evidence_roles;
 pub mod link_roles;
 pub mod llm;
+mod merge;
 pub mod model;
 pub mod model_identity;
 pub mod store;
@@ -13,6 +14,7 @@ pub use llm::{
     LlmProviderResponseParser, LlmProviderResponseStreamParser, LlmSseEvent, LlmSseResponseInput,
     LlmTokenUsage, LlmToolCall, LlmToolFunction,
 };
+pub use merge::SemanticActionMergeError;
 pub use model::{
     FileChangeKind, FileObservationPath, FilePathSetIdentity, FilePathSetPath, FilePathSetPathPage,
     FilePathSetState, FilePathSetWrite, LlmRequestBlock, LlmRequestBlockRef, LlmRequestContentPage,

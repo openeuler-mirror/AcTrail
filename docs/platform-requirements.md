@@ -122,6 +122,8 @@ Platform preflight renders those stages separately. A retained-observation asser
 
 If this fails before attach, do not ask testers to edit configs by hand. Treat it as a platform prerequisite failure or an implementation failure. AcTrail's process fork observation uses `sched/sched_process_fork`; the syscall tracepoint `syscalls/sys_enter_fork` is not required for this preflight. Default process lifecycle capture suppresses process signal events such as `SIGCHLD`. Some target kernels do not expose compatibility fd-alias tracepoints such as `syscalls/sys_enter_dup2`. AcTrail treats `dup2`/`dup3` alias tracepoints as optional: their absence can reduce fd alias fidelity, but it must not block process, network, file, or socket-payload collection. For launch-time process seccomp, config values such as `fork` and `vfork` are resolved through the target architecture's syscall map. Architectures without standalone `fork` or `vfork` syscalls use the available process-creation syscalls such as `clone` and `clone3`; emitted trace metadata still records the actual syscall that fired.
 
+`ebpf.preflight_link_teardown_workers` controls the bounded startup workers used to destroy independently verified static perf-event links before the daemon becomes ready. Valid values are `1..=16`; the default is `4`, and `1` preserves serial teardown. All workers are joined before readiness, so this setting does not skip preflight verification or leave hooks attached.
+
 ## TLS Sync Preflight
 
 This validates the launch-time TLS sync payload path without external network or API keys. The local HTTP/2 example uses `payload_tls_capture_backend = tls-sync`.

@@ -1,8 +1,8 @@
 //! Provider parser selection.
 
 use semantic_action::{
-    LlmJsonResponseInput, LlmParsedResponse, LlmParsedSseEvent, LlmProviderMatch,
-    LlmProviderResponseParser, LlmSseResponseInput,
+    LlmJsonResponseInput, LlmParsedResponse, LlmProviderMatch, LlmProviderResponseParser,
+    LlmProviderResponseStreamParser, LlmSseResponseInput,
 };
 
 use super::anthropic::AnthropicMessagesResponseParser;
@@ -23,7 +23,6 @@ static PARSERS: &[&dyn LlmProviderResponseParser] = &[
 
 pub(in crate::payload_projection::llm) struct ParsedSseResponse {
     pub(in crate::payload_projection::llm) response: LlmParsedResponse,
-    pub(in crate::payload_projection::llm) events: Vec<LlmParsedSseEvent>,
 }
 
 pub(in crate::payload_projection::llm) fn parse_json_response(
@@ -37,12 +36,22 @@ pub(in crate::payload_projection::llm) fn parse_sse_response(
 ) -> Option<ParsedSseResponse> {
     let parser = select_sse_parser(input)?;
     let response = parser.parse_sse_response(input)?;
-    let events = input
-        .events
-        .iter()
-        .map(|event| parser.parse_sse_event(*event))
-        .collect();
-    Some(ParsedSseResponse { response, events })
+    Some(ParsedSseResponse { response })
+}
+
+/// Create a stateful incremental SSE stream parser for the provider selected
+/// by the given events.
+///
+/// The incremental parser mirrors the batch `parse_sse_response` aggregation
+/// but consumes one event at a time, so a growing SSE body only needs its
+/// newly-appended events parsed instead of re-parsing the entire stream.
+pub(in crate::payload_projection::llm) fn new_sse_stream_parser(
+    input: LlmSseResponseInput<'_>,
+) -> Option<(
+    Box<dyn LlmProviderResponseStreamParser + Send>,
+    &'static str,
+)> {
+    select_sse_parser(input).map(|parser| (parser.new_stream_parser(), parser.provider_id()))
 }
 
 fn select_json_parser(

@@ -21,7 +21,7 @@ use crate::semantic_actions::codebook::sqlite::{
 use crate::semantic_actions::cold_fields::decode_text_from_row_with_prefix;
 use crate::semantic_actions::store::{
     ACTION_SELECT_COLUMNS, action_cold_field_join, action_from_row, link_cold_field_join,
-    read_evidence,
+    read_evidence_shared,
 };
 use crate::semantic_actions::tree_metadata::{
     child_count_for_parent, effective_incoming_link_absence_predicate, effective_link_value_count,
@@ -139,7 +139,7 @@ impl SqliteStorage {
                 .is_some_and(|status| status == "observed")
                 && !invalidated_action_attrs(&action.attributes)
             {
-                action.evidence = read_evidence(&connection, &action.action_id)?;
+                action.evidence = read_evidence_shared(&connection, &action.action_id)?;
                 return Ok(Some(action));
             }
         }
@@ -259,7 +259,7 @@ impl SqliteStorage {
         let mut action = action_from_row(row).map_err(|error| {
             SemanticActionStoreError::new("map_semantic_action_for_process_kind", error.to_string())
         })?;
-        action.evidence = read_evidence(&connection, &action.action_id)?;
+        action.evidence = read_evidence_shared(&connection, &action.action_id)?;
         Ok(Some(action))
     }
 
@@ -320,7 +320,6 @@ impl SqliteStorage {
                     link.attributes AS link_legacy_attributes,
                     link_attrs.encoding_code AS link_attributes_encoding_code,
                     link_attrs.uncompressed_bytes AS link_attributes_uncompressed_bytes,
-                    link_attrs.value_hash AS link_attributes_value_hash,
                     link_attrs.payload AS link_attributes_payload
              FROM semantic_action_links link
              JOIN semantic_actions action
@@ -395,7 +394,8 @@ impl SqliteStorage {
     ) -> Result<Option<SemanticAction>, SemanticActionStoreError> {
         ensure_semantic_trace(self, trace_id)?;
         let connection = self.connection().borrow();
-        let action = crate::semantic_actions::store::read_action_by_id(&connection, action_id)?;
+        let action =
+            crate::semantic_actions::store::read_action_by_id_shared(&connection, action_id)?;
         Ok(action.filter(|action| action.trace_id == trace_id))
     }
 }

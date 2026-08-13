@@ -12,8 +12,10 @@ use syscall::{
     open_requests_creation, path_string, pending_key, primary_dirfd, secondary_dirfd,
 };
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::Path;
+use std::rc::Rc;
 
 use collector_event::RawCollectorEvent;
 use config_core::daemon::IpcLineageConfig;
@@ -85,6 +87,7 @@ pub(crate) struct FileTracker {
     pending_processes: BTreeMap<PendingKey, ProcessFileKey>,
     pub(super) processes: BTreeMap<ProcessFileKey, ProcessFileState>,
     lineage: IpcLineageTracker,
+    process_rcs: RefCell<HashMap<ProcessObservation, Rc<ProcessObservation>>>,
 }
 
 impl Default for FileTracker {
@@ -103,7 +106,7 @@ struct PendingKey {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct ProcessFileKey {
     pub(super) trace_id: TraceId,
-    pub(super) process: ProcessObservation,
+    pub(super) process: Rc<ProcessObservation>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -120,7 +123,21 @@ impl FileTracker {
             pending_processes: BTreeMap::new(),
             processes: BTreeMap::new(),
             lineage: IpcLineageTracker::new(ipc_lineage, mcp_projection_enabled),
+            process_rcs: RefCell::new(HashMap::new()),
         }
+    }
+
+    /// Intern the process observation so repeated `ProcessFileKey`
+    /// constructions (per fd/path lookup and per `ensure_process` entry) only
+    /// bump an `Rc` refcount instead of cloning the embedded namespace string.
+    fn intern_process(&self, process: &ProcessObservation) -> Rc<ProcessObservation> {
+        let mut rcs = self.process_rcs.borrow_mut();
+        if let Some(rc) = rcs.get(process) {
+            return Rc::clone(rc);
+        }
+        let rc = Rc::new(process.clone());
+        rcs.insert(process.clone(), Rc::clone(&rc));
+        rc
     }
 
     pub(crate) fn seed_process(
@@ -129,7 +146,10 @@ impl FileTracker {
         process: ProcessObservation,
         cwd: Option<String>,
     ) {
-        let key = ProcessFileKey { trace_id, process };
+        let key = ProcessFileKey {
+            trace_id,
+            process: self.intern_process(&process),
+        };
         let state = self.processes.entry(key.clone()).or_default();
         if let Some(cwd) = cwd.and_then(|path| absolute_path(&path)) {
             state.cwd = Some(cwd);
@@ -145,11 +165,11 @@ impl FileTracker {
     ) {
         let parent_key = ProcessFileKey {
             trace_id,
-            process: parent.clone(),
+            process: self.intern_process(parent),
         };
         let child_key = ProcessFileKey {
             trace_id,
-            process: child,
+            process: self.intern_process(&child),
         };
         let inherited = self.processes.get(&parent_key).cloned().unwrap_or_default();
         self.processes.insert(child_key.clone(), inherited);
@@ -164,12 +184,12 @@ impl FileTracker {
     ) {
         let key = ProcessFileKey {
             trace_id,
-            process: process.clone(),
+            process: self.intern_process(&process),
         };
         if !self.processes.contains_key(&key) {
             let provisional = process.host.clone().map(|host| ProcessFileKey {
                 trace_id,
-                process: ProcessObservation::host(host),
+                process: self.intern_process(&ProcessObservation::host(host)),
             });
             let state = provisional
                 .as_ref()
@@ -189,7 +209,10 @@ impl FileTracker {
         process: ProcessObservation,
         observed_ktime_ns: u64,
     ) {
-        let key = ProcessFileKey { trace_id, process };
+        let key = ProcessFileKey {
+            trace_id,
+            process: self.intern_process(&process),
+        };
         self.lineage.exit_process(&key, observed_ktime_ns);
         self.processes.remove(&key);
     }
@@ -213,7 +236,7 @@ impl FileTracker {
         }
         let key = ProcessFileKey {
             trace_id,
-            process: process.clone(),
+            process: self.intern_process(process),
         };
         self.processes
             .get(&key)
@@ -232,7 +255,7 @@ impl FileTracker {
         }
         let key = ProcessFileKey {
             trace_id,
-            process: process.clone(),
+            process: self.intern_process(process),
         };
         self.lineage.resolve_kind(&key, fd)
     }
@@ -248,7 +271,7 @@ impl FileTracker {
         }
         let key = ProcessFileKey {
             trace_id,
-            process: process.clone(),
+            process: self.intern_process(process),
         };
         self.processes
             .get(&key)
@@ -277,7 +300,7 @@ impl FileTracker {
         };
         let process_key = ProcessFileKey {
             trace_id: event.trace_id,
-            process,
+            process: self.intern_process(&process),
         };
         let state = self.processes.entry(process_key.clone()).or_default();
         state.fds.remove(&event.fd);
@@ -315,7 +338,7 @@ impl FileTracker {
                     key.clone(),
                     ProcessFileKey {
                         trace_id: event.trace_id,
-                        process,
+                        process: self.intern_process(&process),
                     },
                 );
                 self.pending.insert(key, event);
@@ -578,8 +601,10 @@ impl FileTracker {
                 source: "unresolved_relative",
             };
         };
-        let resolved =
-            lexically_normalize_path(&PathBuf::from(base).join(&raw_path).display().to_string());
+        // `base` is already normalized and `raw_path` is relative here, so a
+        // plain join string is equivalent to PathBuf::join and avoids two
+        // intermediate allocations before normalization.
+        let resolved = lexically_normalize_path(&format!("{base}/{raw_path}"));
         PathResolution {
             resolved: Some(resolved),
             raw: Some(raw_path),

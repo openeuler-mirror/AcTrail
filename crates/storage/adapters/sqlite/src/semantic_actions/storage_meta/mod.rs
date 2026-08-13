@@ -2,6 +2,7 @@
 
 mod current;
 
+pub use current::ColdFieldCompression;
 pub(in crate::semantic_actions) use current::{ColdFieldMeta, StorageMeta};
 
 pub(crate) const CURRENT_SCHEMA_VERSION: i32 = current::SCHEMA_VERSION;

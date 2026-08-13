@@ -91,6 +91,7 @@ impl StorageAttachService {
             output.file_path_sets,
             output.llm_request_contents,
             output.mcp_jsonrpc_contents,
+            output.payload_segments,
         )
     }
 

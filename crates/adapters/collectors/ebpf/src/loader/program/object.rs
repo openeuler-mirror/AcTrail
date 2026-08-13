@@ -20,6 +20,7 @@ use super::LoaderError;
 use super::abi::{
     EXEC_EVENT_SIZE, KERNEL_OBSERVATION_EVENT_SIZE, LAUNCH_BINDING_FAILURE_EVENT_SIZE,
 };
+use super::ring_decode::{KernelEvent, decode_kernel_event};
 
 pub(crate) fn ring_buffer_max_bytes(config: &EbpfCollectorConfig, payload: &PayloadConfig) -> u32 {
     let mut max_bytes = config.event_ring_buffer_max_bytes;
@@ -38,12 +39,25 @@ pub(crate) fn ring_buffer_max_bytes(config: &EbpfCollectorConfig, payload: &Payl
 #[cfg(not(any(feature = "perf-buffer", actrail_event_transport_perf)))]
 pub(crate) fn build_ring_buffer(
     events_map: &MapHandle,
-    events: Rc<RefCell<Vec<Vec<u8>>>>,
+    events: Rc<RefCell<Vec<KernelEvent>>>,
+    decode_error: Rc<RefCell<Option<LoaderError>>>,
 ) -> Result<RingBuffer<'static>, LoaderError> {
     let mut builder = RingBufferBuilder::new();
     builder
         .add(events_map, move |raw| {
-            events.borrow_mut().push(raw.to_vec());
+            // Decode directly in the callback so each sample is only touched
+            // once instead of being copied into a raw buffer and decoded
+            // afterwards. Decode failures are recorded and surfaced by
+            // `poll_events`, mirroring the previous drain-failure behavior.
+            match decode_kernel_event(raw) {
+                Ok(event) => events.borrow_mut().push(event),
+                Err(error) => {
+                    let mut slot = decode_error.borrow_mut();
+                    if slot.is_none() {
+                        *slot = Some(error);
+                    }
+                }
+            }
             0
         })
         .map_err(|error| LoaderError::new("ring_buffer", error.to_string()))?;
@@ -65,18 +79,19 @@ pub(crate) enum EventBuffer {
 impl EventBuffer {
     pub(crate) fn build(
         events_map: &MapHandle,
-        events: Rc<RefCell<Vec<Vec<u8>>>>,
+        events: Rc<RefCell<Vec<KernelEvent>>>,
+        decode_error: Rc<RefCell<Option<LoaderError>>>,
         buffer_bytes: u32,
     ) -> Result<Self, LoaderError> {
         #[cfg(any(feature = "perf-buffer", actrail_event_transport_perf))]
         {
-            let (buffer, lost) = build_perf_buffer(events_map, events, buffer_bytes)?;
+            let (buffer, lost) = build_perf_buffer(events_map, events, decode_error, buffer_bytes)?;
             return Ok(Self::Perf { buffer, lost });
         }
         #[cfg(not(any(feature = "perf-buffer", actrail_event_transport_perf)))]
         {
             let _ = buffer_bytes;
-            build_ring_buffer(events_map, events).map(Self::Ring)
+            build_ring_buffer(events_map, events, decode_error).map(Self::Ring)
         }
     }
 
@@ -115,7 +130,8 @@ impl EventBuffer {
 #[cfg(any(feature = "perf-buffer", actrail_event_transport_perf))]
 fn build_perf_buffer(
     events_map: &MapHandle,
-    events: Rc<RefCell<Vec<Vec<u8>>>>,
+    events: Rc<RefCell<Vec<KernelEvent>>>,
+    decode_error: Rc<RefCell<Option<LoaderError>>>,
     buffer_bytes: u32,
 ) -> Result<(PerfBuffer<'static>, Arc<AtomicU64>), LoaderError> {
     let callback_events = Rc::clone(&events);
@@ -123,11 +139,17 @@ fn build_perf_buffer(
     let callback_lost = Arc::clone(&lost);
     let pages = perf_pages_for_bytes(buffer_bytes)?;
     let buffer = PerfBufferBuilder::new(events_map)
-        .sample_cb(move |_cpu, raw| {
-            callback_events
-                .borrow_mut()
-                .push(perf_sample_payload(raw).to_vec());
-        })
+        .sample_cb(
+            move |_cpu, raw| match decode_kernel_event(perf_sample_payload(raw)) {
+                Ok(event) => callback_events.borrow_mut().push(event),
+                Err(error) => {
+                    let mut slot = decode_error.borrow_mut();
+                    if slot.is_none() {
+                        *slot = Some(error);
+                    }
+                }
+            },
+        )
         .lost_cb(move |_cpu, count| {
             callback_lost.fetch_add(count, Ordering::Relaxed);
         })

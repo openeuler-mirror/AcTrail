@@ -26,34 +26,39 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, Row};
 pub use config::{
     SQLITE_DEFAULT_BUSY_TIMEOUT_MS, SQLITE_STORAGE_CONFIG_PREFIX, SqliteStorageConfig,
 };
+pub use semantic_actions::storage_meta::ColdFieldCompression;
 
 #[derive(Clone)]
 pub struct SqliteStorage {
     connection: Rc<RefCell<Connection>>,
     trace_leases: Rc<RefCell<crate::query::TraceLeaseRegistry>>,
+    cold_field_compression: ColdFieldCompression,
 }
 
 impl SqliteStorage {
     pub fn open(path: &Path) -> Result<Self, rusqlite::Error> {
-        let connection = Connection::open(path)?;
-        configure_file_connection(&connection, None)?;
-        schema::initialize(&connection)?;
-        Ok(Self {
-            connection: Rc::new(RefCell::new(connection)),
-            trace_leases: Rc::new(RefCell::new(crate::query::TraceLeaseRegistry::new())),
-        })
+        Self::open_with_compression(path, None, ColdFieldCompression::DEFAULT)
     }
 
     pub fn open_with_busy_timeout(
         path: &Path,
         busy_timeout: Duration,
     ) -> Result<Self, rusqlite::Error> {
+        Self::open_with_compression(path, Some(busy_timeout), ColdFieldCompression::DEFAULT)
+    }
+
+    pub fn open_with_compression(
+        path: &Path,
+        busy_timeout: Option<Duration>,
+        cold_field_compression: ColdFieldCompression,
+    ) -> Result<Self, rusqlite::Error> {
         let connection = Connection::open(path)?;
-        configure_file_connection(&connection, Some(busy_timeout))?;
+        configure_file_connection(&connection, busy_timeout)?;
         schema::initialize(&connection)?;
         Ok(Self {
             connection: Rc::new(RefCell::new(connection)),
             trace_leases: Rc::new(RefCell::new(crate::query::TraceLeaseRegistry::new())),
+            cold_field_compression,
         })
     }
 
@@ -63,6 +68,7 @@ impl SqliteStorage {
         Ok(Self {
             connection: Rc::new(RefCell::new(connection)),
             trace_leases: Rc::new(RefCell::new(crate::query::TraceLeaseRegistry::new())),
+            cold_field_compression: ColdFieldCompression::DEFAULT,
         })
     }
 
@@ -72,6 +78,7 @@ impl SqliteStorage {
         Ok(Self {
             connection: Rc::new(RefCell::new(connection)),
             trace_leases: Rc::new(RefCell::new(crate::query::TraceLeaseRegistry::new())),
+            cold_field_compression: ColdFieldCompression::DEFAULT,
         })
     }
 

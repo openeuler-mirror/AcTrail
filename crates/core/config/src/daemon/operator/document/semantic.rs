@@ -43,6 +43,7 @@ impl SemanticRetentionDocument {
                 tool_calls: llm_tool_call_retention_as_str(config.l0_llm_call.tool_calls)
                     .to_string(),
                 usage: llm_usage_retention_as_str(config.l0_llm_call.usage).to_string(),
+                retain_assembled_payload: config.l0_llm_call.retain_assembled_payload,
             },
             l0_mcp_call: L0McpCallDocument {
                 request_content: mcp_jsonrpc_content_retention_as_str(
@@ -135,6 +136,7 @@ pub(super) struct L0LlmCallDocument {
     pub response_content: String,
     pub tool_calls: String,
     pub usage: String,
+    pub retain_assembled_payload: bool,
 }
 
 impl Default for L0LlmCallDocument {
@@ -145,6 +147,7 @@ impl Default for L0LlmCallDocument {
             response_content: "assembled_provider".to_string(),
             tool_calls: "assembled_json".to_string(),
             usage: "summary".to_string(),
+            retain_assembled_payload: false,
         }
     }
 }
@@ -166,6 +169,7 @@ impl L0LlmCallDocument {
                 &self.tool_calls,
             )?,
             usage: parse_value("semantic_retention.l0_llm_call.usage", &self.usage)?,
+            retain_assembled_payload: self.retain_assembled_payload,
         })
     }
 }
@@ -277,7 +281,7 @@ pub(super) struct L4PayloadDocument {
 impl Default for L4PayloadDocument {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             stats: true,
             body_content: "none".to_string(),
         }

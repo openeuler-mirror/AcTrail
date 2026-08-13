@@ -10,9 +10,9 @@ use model_core::payload::{
 };
 use model_core::process::ProcessIdentity;
 
-#[path = "application_protocol/http1.rs"]
+#[path = "http1.rs"]
 mod http1;
-#[path = "application_protocol/http2.rs"]
+#[path = "http2.rs"]
 mod http2;
 
 pub(super) const COLLECTOR_NAME: &str = "application-protocol-analyzer";
@@ -240,5 +240,5 @@ fn recognized_http2(drafts: &[ApplicationEventDraft]) -> bool {
 }
 
 #[cfg(test)]
-#[path = "application_protocol/tests.rs"]
+#[path = "tests.rs"]
 mod tests;

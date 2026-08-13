@@ -103,6 +103,7 @@ impl StorageAttachService {
         let semantic_link_count;
         let mut mcp_stdio_diagnostics = Vec::new();
         let mut retained_payload_transaction = RetainedPayloadTransaction::default();
+        let semantic_flush_diagnostics = self.workload_diagnostics.clone();
         let started = crate::services::workload_diagnostics::now();
         let result = {
             let mut context = PayloadTransactionContext {
@@ -145,7 +146,7 @@ impl StorageAttachService {
             );
             semantic_action_count = export_batch.actions().len();
             semantic_link_count = export_batch.links().len();
-            RecordingWriter::new(self.storage.as_mut())
+            let result = RecordingWriter::new(self.storage.as_mut())
                 .write_session_then_export(
                     &self.export_runtime,
                     &traces,
@@ -155,6 +156,13 @@ impl StorageAttachService {
                             .map_err(control_error_to_recording)
                     },
                     export_batch,
+                    move |elapsed| {
+                        semantic_flush_diagnostics.record_payload_transaction_phase(
+                            PayloadTransactionPhase::SemanticPersist,
+                            elapsed,
+                            semantic_action_count + semantic_link_count,
+                        );
+                    },
                     |session| {
                         let prepared = prepared.map_err(control_error_to_recording)?;
                         for record in process_records.into_values() {
@@ -168,7 +176,8 @@ impl StorageAttachService {
                             .map_err(control_error_to_recording)
                     },
                 )
-                .map_err(recording_error_to_control)
+                .map_err(recording_error_to_control);
+            result
         };
         retained_payload_transaction
             .apply_result(&mut self.retained_payload_bytes_by_trace, &result);
@@ -215,6 +224,7 @@ enum PreparedPayloadSegment {
     SemanticOnly {
         segment: PayloadSegment,
         semantic_actions: SemanticActionBatch,
+        application_events: Vec<PreparedApplicationEvent>,
     },
 }
 
@@ -260,7 +270,8 @@ impl PayloadTransactionContext<'_> {
             return Ok(None);
         };
         let policy = self.policy.for_segment(&raw)?;
-        let dropped = policy.stdio_storage_mode == PayloadStdioStorageMode::Drop;
+        let stdio_dropped = policy.stdio_storage_mode == PayloadStdioStorageMode::Drop;
+        let retain_payload_segment = !stdio_dropped && self.semantic_retention.l4_payload.enabled;
         let mut segment = PayloadSegment {
             // Persisted allocation fails before this semantic-only evidence sentinel.
             segment_id: PayloadSegmentId::new(u64::MAX),
@@ -286,7 +297,7 @@ impl PayloadTransactionContext<'_> {
             protocol_hint: raw.protocol_hint,
             bytes: raw.bytes,
         };
-        if dropped
+        if stdio_dropped
             && !self
                 .semantic_actions
                 .should_project_dropped_stdio_payload(&segment)
@@ -300,7 +311,7 @@ impl PayloadTransactionContext<'_> {
             ));
             return Ok(None);
         }
-        if !dropped {
+        if !stdio_dropped {
             segment.segment_id = self.next_payload_segment_id()?;
         }
         self.mark_semantic_projection_dirty(segment.trace_id);
@@ -309,7 +320,7 @@ impl PayloadTransactionContext<'_> {
         segment.captured_size = bytes.len() as u64;
         segment.redaction = redaction;
         segment.bytes = bytes;
-        if dropped {
+        if stdio_dropped {
             let started = crate::services::workload_diagnostics::now();
             let semantic_actions = self.observe_payload_semantics(&segment, false);
             self.workload_diagnostics.record_payload_transaction_phase(
@@ -321,50 +332,53 @@ impl PayloadTransactionContext<'_> {
             return Ok(Some(PreparedPayloadSegment::SemanticOnly {
                 segment,
                 semantic_actions,
+                application_events: Vec::new(),
             }));
         }
         let body_retention: PayloadBodyRetentionDecision =
             self.payload_body_retention_gate.decide(&segment);
         let analysis_segment = segment.clone();
-        let mut stored_segment = segment;
-        if should_clear_transport_payload_body(
-            &stored_segment,
-            self.semantic_retention,
-            body_retention.semantic_layer.consumed_by_higher_layer(),
-        ) {
-            stored_segment.bytes.clear();
-        }
-        apply_stdio_storage_mode(&mut stored_segment, policy.stdio_storage_mode);
-        let retained_body_bytes = u64::try_from(stored_segment.bytes.len())
-            .map_err(|error| ControlError::new("payload_retention", error.to_string()))?;
-        let started = crate::services::workload_diagnostics::now();
-        let retention_result = match self.retained_payload_bytes(storage, raw.trace_id) {
-            Ok(retained_bytes) => {
-                let next_retained_bytes = retained_bytes
+        let retained_payload = if retain_payload_segment {
+            let mut stored_segment = segment;
+            if should_clear_transport_payload_body(
+                &stored_segment,
+                self.semantic_retention,
+                body_retention.semantic_layer.consumed_by_higher_layer(),
+            ) {
+                stored_segment.bytes.clear();
+            }
+            apply_stdio_storage_mode(&mut stored_segment, policy.stdio_storage_mode);
+            let retained_body_bytes = u64::try_from(stored_segment.bytes.len())
+                .map_err(|error| ControlError::new("payload_retention", error.to_string()))?;
+            let started = crate::services::workload_diagnostics::now();
+            let retained_bytes = self.retained_payload_bytes(storage, raw.trace_id)?;
+            let next_retained_bytes =
+                retained_bytes
                     .checked_add(retained_body_bytes)
                     .ok_or_else(|| {
                         ControlError::new("payload_retention", "payload retention overflow")
                     })?;
-                if next_retained_bytes > policy.retention_max_bytes_per_trace {
-                    return Err(ControlError::new(
-                        "payload_retention",
-                        format!(
-                            "trace {} payload retention would exceed configured maximum {} bytes",
-                            raw.trace_id, policy.retention_max_bytes_per_trace
-                        ),
-                    ));
-                }
-                Ok(next_retained_bytes)
+            if next_retained_bytes > policy.retention_max_bytes_per_trace {
+                return Err(ControlError::new(
+                    "payload_retention",
+                    format!(
+                        "trace {} payload retention would exceed configured maximum {} bytes",
+                        raw.trace_id, policy.retention_max_bytes_per_trace
+                    ),
+                ));
             }
-            Err(error) => Err(error),
+            self.workload_diagnostics.record_payload_transaction_phase(
+                PayloadTransactionPhase::RetentionCheck,
+                started.elapsed(),
+                0,
+            );
+            Some((stored_segment, next_retained_bytes, retained_body_bytes))
+        } else {
+            None
         };
-        self.workload_diagnostics.record_payload_transaction_phase(
-            PayloadTransactionPhase::RetentionCheck,
-            started.elapsed(),
-            0,
-        );
         let started = crate::services::workload_diagnostics::now();
-        let semantic_actions = self.observe_payload_semantics(&analysis_segment, true);
+        let semantic_actions =
+            self.observe_payload_semantics(&analysis_segment, retain_payload_segment);
         export_batch.extend(semantic_actions.clone());
         self.workload_diagnostics.record_payload_transaction_phase(
             PayloadTransactionPhase::SemanticObserve,
@@ -403,16 +417,26 @@ impl PayloadTransactionContext<'_> {
         self.payload_body_retention_gate
             .apply(&analysis_segment, body_retention);
 
-        let next_retained_bytes = retention_result?;
-        self.retained_payload_transaction
-            .record_persisted(raw.trace_id, next_retained_bytes);
-        Ok(Some(PreparedPayloadSegment::Retained {
-            stored_segment,
-            semantic_actions,
-            application_events,
-            next_retained_bytes,
-            retained_body_bytes,
-        }))
+        let prepared = if let Some((stored_segment, next_retained_bytes, retained_body_bytes)) =
+            retained_payload
+        {
+            self.retained_payload_transaction
+                .record_persisted(raw.trace_id, next_retained_bytes);
+            PreparedPayloadSegment::Retained {
+                stored_segment,
+                semantic_actions,
+                application_events,
+                next_retained_bytes,
+                retained_body_bytes,
+            }
+        } else {
+            PreparedPayloadSegment::SemanticOnly {
+                segment: analysis_segment,
+                semantic_actions,
+                application_events,
+            }
+        };
+        Ok(Some(prepared))
     }
 
     fn next_payload_segment_id(&mut self) -> Result<PayloadSegmentId, ControlError> {

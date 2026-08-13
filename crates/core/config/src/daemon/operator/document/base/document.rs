@@ -1,6 +1,6 @@
 use super::*;
 
-#[path = "base/ipc_lineage.rs"]
+#[path = "ipc_lineage.rs"]
 mod ipc_lineage;
 
 pub(super) use ipc_lineage::IpcLineageDocument;
@@ -222,21 +222,28 @@ impl StorageDocument {
                 self.backend
             ));
         }
-        Ok(StorageConfig::sqlite(
+        Ok(StorageConfig::sqlite_with_compression(
             &self.sqlite.path,
             require_positive_u64(
                 "storage.sqlite.busy_timeout_ms",
                 self.sqlite.busy_timeout_ms,
             )?,
+            self.sqlite.cold_field_compression_min_bytes,
+            self.sqlite.cold_field_zstd_level,
         ))
     }
 }
+
+const DEFAULT_COLD_FIELD_COMPRESSION_MIN_BYTES: usize = 64;
+const DEFAULT_COLD_FIELD_ZSTD_LEVEL: i32 = 3;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct SqliteStorageDocument {
     pub path: String,
     pub busy_timeout_ms: u64,
+    pub cold_field_compression_min_bytes: usize,
+    pub cold_field_zstd_level: i32,
 }
 
 impl Default for SqliteStorageDocument {
@@ -244,6 +251,8 @@ impl Default for SqliteStorageDocument {
         Self {
             path: "/var/lib/actrail/actrail.sqlite".to_string(),
             busy_timeout_ms: 5000,
+            cold_field_compression_min_bytes: DEFAULT_COLD_FIELD_COMPRESSION_MIN_BYTES,
+            cold_field_zstd_level: DEFAULT_COLD_FIELD_ZSTD_LEVEL,
         }
     }
 }
@@ -494,6 +503,7 @@ pub(super) struct EbpfDocument {
     )]
     pub enabled: String,
     pub memlock_rlimit: String,
+    pub preflight_link_teardown_workers: u32,
     pub tracked_process_max_entries: u32,
     pub pending_operation_max_entries: u32,
     pub suppressed_fd_max_entries: u32,
@@ -509,6 +519,7 @@ impl Default for EbpfDocument {
         Self {
             enabled: "true".to_string(),
             memlock_rlimit: "inherit".to_string(),
+            preflight_link_teardown_workers: DEFAULT_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS,
             tracked_process_max_entries: 8192,
             pending_operation_max_entries: 8192,
             suppressed_fd_max_entries: 8192,
@@ -530,6 +541,15 @@ impl EbpfDocument {
         // At parse time `enabled` is true only for an explicit `true`; `auto`
         // defers to daemon-side resolution (starts false).
         let enabled = matches!(enabled_mode, EbpfEnabledMode::True);
+        let preflight_link_teardown_workers = require_positive_u32(
+            "ebpf.preflight_link_teardown_workers",
+            self.preflight_link_teardown_workers,
+        )?;
+        if preflight_link_teardown_workers > MAX_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS {
+            return Err(format!(
+                "invalid ebpf.preflight_link_teardown_workers: value must not exceed {MAX_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS}"
+            ));
+        }
         Ok(EbpfCollectorConfig {
             enabled_mode,
             enabled,
@@ -537,6 +557,7 @@ impl EbpfDocument {
                 "ebpf.memlock_rlimit",
                 &self.memlock_rlimit,
             )?,
+            preflight_link_teardown_workers,
             tracked_process_max_entries: self.tracked_process_max_entries,
             pending_operation_max_entries: self.pending_operation_max_entries,
             suppressed_fd_max_entries: self.suppressed_fd_max_entries,

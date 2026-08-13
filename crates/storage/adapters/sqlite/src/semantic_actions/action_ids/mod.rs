@@ -4,16 +4,49 @@ use rusqlite::{OptionalExtension, params};
 use semantic_action::SemanticActionStoreError;
 
 pub(in crate::semantic_actions) fn intern_action_id(
+    connection: &mut rusqlite::Connection,
+    trace_id: u64,
+    action_id: &str,
+) -> Result<i64, SemanticActionStoreError> {
+    require_non_empty_action_id(action_id)?;
+    // Fast path: aggregate actions are upserted once per payload segment with
+    // the same action_id, so the id is almost always already interned. The
+    // action_id column is UNIQUE, so a row matching trace + action_id is ours.
+    if let Some(action_key) = connection
+        .prepare_cached(
+            "SELECT action_key FROM semantic_action_ids
+             WHERE trace_id = ?1 AND action_id = ?2",
+        )
+        .and_then(|mut statement| {
+            statement.query_row(params![trace_id, action_id], |row| {
+                row.get::<_, i64>("action_key")
+            })
+        })
+        .optional()
+        .map_err(|error| {
+            SemanticActionStoreError::new("resolve_semantic_action_key", error.to_string())
+        })?
+    {
+        return Ok(action_key);
+    }
+    intern_action_id_slow(connection, trace_id, action_id)
+}
+
+/// Shared-borrow variant for cold paths that already hold `&Connection`.
+pub(in crate::semantic_actions) fn intern_action_id_shared(
     connection: &rusqlite::Connection,
     trace_id: u64,
     action_id: &str,
 ) -> Result<i64, SemanticActionStoreError> {
-    if action_id.is_empty() {
-        return Err(SemanticActionStoreError::new(
-            "semantic_action_id",
-            "action_id must not be empty",
-        ));
-    }
+    require_non_empty_action_id(action_id)?;
+    intern_action_id_slow(connection, trace_id, action_id)
+}
+
+fn intern_action_id_slow(
+    connection: &rusqlite::Connection,
+    trace_id: u64,
+    action_id: &str,
+) -> Result<i64, SemanticActionStoreError> {
     let action_id_hash = hash::sha256_hash_blob(action_id.as_bytes());
     connection
         .execute(
@@ -56,6 +89,16 @@ pub(in crate::semantic_actions) fn intern_action_id(
             "action_id maps to a different trace or hash",
         ))
     }
+}
+
+fn require_non_empty_action_id(action_id: &str) -> Result<(), SemanticActionStoreError> {
+    if action_id.is_empty() {
+        return Err(SemanticActionStoreError::new(
+            "semantic_action_id",
+            "action_id must not be empty",
+        ));
+    }
+    Ok(())
 }
 
 pub(in crate::semantic_actions) fn resolve_action_key(

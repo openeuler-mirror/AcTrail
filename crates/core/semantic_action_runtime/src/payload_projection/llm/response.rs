@@ -2,26 +2,59 @@
 
 use config_core::daemon::SemanticRetentionConfig;
 use model_core::payload::PayloadSegment;
-use semantic_action::{SemanticAction, SemanticActionKind};
+use semantic_action::{SemanticAction, SemanticActionKind, SemanticActionStatus};
 
 use crate::payload_projection::http::HttpResponseParts;
 
-use super::body::parse_llm_response_body;
-use super::codec::LlmCodecRegistry;
-use super::response_support::{
-    llm_raw_stream_action_id, llm_response_attributes, llm_response_completeness,
-    llm_response_status, llm_response_title, llm_stream_action_id, payload_evidence,
-    plaintext_transport_scheme, raw_llm_response_attributes,
+use super::body::{
+    IncrementalSseCache, SseBodySource, parse_llm_response_body_incremental,
+    parse_llm_response_progress,
 };
-use super::sse::sse_actions_for_response;
+use super::codec::LlmCodecRegistry;
+use super::live_projection::semantic_payload_draft;
+use super::response_support::{
+    http_response_can_evict, llm_raw_stream_action_id, llm_response_attributes,
+    llm_response_completeness, llm_response_status_from_progress, llm_response_title,
+    llm_stream_action_id, payload_evidence, plaintext_transport_scheme,
+    raw_llm_response_attributes,
+};
 use super::stream::PayloadStreamGroupKey;
 
 const HTTP1_LINE_ENDING: &[u8] = b"\r\n";
 
-pub(super) struct RawChunkedResponseProjection {
+/// Identity of one in-flight LLM response message held by a stream state.
+///
+/// Recorded when the incremental SSE cache is first seeded (first chunk of the
+/// message) and cleared when the message terminates. Used only to materialize
+/// the full response action on trace close; the terminal chunk materializes
+/// through the normal projection path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct InFlightResponse {
+    pub(crate) message_start: usize,
+}
+
+pub(super) struct LlmResponseProjection {
     pub(super) actions: Vec<SemanticAction>,
+    pub(super) payload_segments: Vec<PayloadSegment>,
+    pub(super) in_flight: Option<InFlightResponse>,
     pub(super) encoded_len: usize,
-    pub(super) trailing_chunk_framing: bool,
+    pub(super) terminal: bool,
+    pub(super) raw_response: bool,
+}
+
+fn in_flight_projection(
+    encoded_len: usize,
+    message_start: usize,
+    raw_response: bool,
+) -> LlmResponseProjection {
+    LlmResponseProjection {
+        actions: Vec::new(),
+        payload_segments: Vec::new(),
+        in_flight: Some(InFlightResponse { message_start }),
+        encoded_len,
+        terminal: false,
+        raw_response,
+    }
 }
 
 pub(super) fn project_stream_llm_response_message_actions(
@@ -32,12 +65,26 @@ pub(super) fn project_stream_llm_response_message_actions(
     raw_bytes: &[u8],
     mut http: HttpResponseParts,
     segments: &[&PayloadSegment],
-) -> Option<Vec<SemanticAction>> {
-    let body = parse_llm_response_body(&http.body, codecs)?;
+    sse_cache: &mut Option<IncrementalSseCache>,
+    force_terminal: bool,
+) -> Option<LlmResponseProjection> {
+    let progress =
+        parse_llm_response_progress(SseBodySource::SplitHttp, &http.body, codecs, sse_cache)?;
     let first = *segments.first()?;
     http.scheme = plaintext_transport_scheme(first.source_boundary);
+    let status = llm_response_status_from_progress(segments, http.complete, &progress);
+    if !force_terminal && status == SemanticActionStatus::InProgress {
+        return Some(in_flight_projection(http.encoded_len, message_start, false));
+    }
+    let body = parse_llm_response_body_incremental(
+        SseBodySource::SplitHttp,
+        &http.body,
+        codecs,
+        sse_cache,
+    )?;
     let attributes = llm_response_attributes(config, segments, raw_bytes, &http, &body);
     let evidence = payload_evidence(segments);
+    let payload_segments = semantic_response_payloads(config, first, raw_bytes);
     let response = SemanticAction {
         action_id: llm_stream_action_id(key, message_start, first),
         trace_id: first.trace_id,
@@ -46,16 +93,20 @@ pub(super) fn project_stream_llm_response_message_actions(
         start_time: first.observed_at,
         end_time: segments.last().map(|segment| segment.observed_at),
         process: first.process.clone(),
-        status: llm_response_status(segments, http.complete, &body),
+        status,
         completeness: llm_response_completeness(segments, http.complete, &body),
         confidence_millis: None,
         attributes,
         evidence,
     };
-    let sse_actions = sse_actions_for_response(config, &response, &body, segments);
-    let mut actions = vec![response];
-    actions.extend(sse_actions);
-    Some(actions)
+    Some(LlmResponseProjection {
+        actions: vec![response],
+        payload_segments,
+        in_flight: None,
+        encoded_len: http.encoded_len,
+        terminal: http_response_can_evict(&http) && status != SemanticActionStatus::InProgress,
+        raw_response: false,
+    })
 }
 
 pub(super) fn project_raw_chunked_stream_llm_response_actions(
@@ -65,11 +116,29 @@ pub(super) fn project_raw_chunked_stream_llm_response_actions(
     message_start: usize,
     bytes: &[u8],
     segments: &[&PayloadSegment],
-) -> Option<RawChunkedResponseProjection> {
+    sse_cache: &mut Option<IncrementalSseCache>,
+    force_terminal: bool,
+) -> Option<LlmResponseProjection> {
     let chunked = parse_chunked_body_prefix(bytes)?;
-    let body = parse_llm_response_body(&chunked.body, codecs)?;
+    let progress =
+        parse_llm_response_progress(SseBodySource::ChunkedBody, &chunked.body, codecs, sse_cache)?;
     let first = *segments.first()?;
+    let status = llm_response_status_from_progress(segments, chunked.complete, &progress);
+    if !force_terminal && status == SemanticActionStatus::InProgress {
+        return Some(in_flight_projection(
+            chunked.encoded_len,
+            message_start,
+            !chunked.complete,
+        ));
+    }
+    let body = parse_llm_response_body_incremental(
+        SseBodySource::ChunkedBody,
+        &chunked.body,
+        codecs,
+        sse_cache,
+    )?;
     let attributes = raw_llm_response_attributes(config, segments, &chunked.body, &body);
+    let payload_segments = semantic_response_payloads(config, first, &chunked.body);
     let response = SemanticAction {
         action_id: llm_raw_stream_action_id(key, message_start, first),
         trace_id: first.trace_id,
@@ -78,19 +147,19 @@ pub(super) fn project_raw_chunked_stream_llm_response_actions(
         start_time: first.observed_at,
         end_time: segments.last().map(|segment| segment.observed_at),
         process: first.process.clone(),
-        status: llm_response_status(segments, chunked.complete, &body),
+        status,
         completeness: llm_response_completeness(segments, chunked.complete, &body),
         confidence_millis: None,
         attributes,
         evidence: payload_evidence(segments),
     };
-    let sse_actions = sse_actions_for_response(config, &response, &body, segments);
-    let mut actions = vec![response];
-    actions.extend(sse_actions);
-    Some(RawChunkedResponseProjection {
-        actions,
+    Some(LlmResponseProjection {
+        actions: vec![response],
+        payload_segments,
+        in_flight: None,
         encoded_len: chunked.encoded_len,
-        trailing_chunk_framing: !chunked.complete,
+        terminal: status != SemanticActionStatus::InProgress,
+        raw_response: !chunked.complete,
     })
 }
 
@@ -101,10 +170,19 @@ pub(super) fn project_raw_stream_llm_response_actions(
     message_start: usize,
     bytes: &[u8],
     segments: &[&PayloadSegment],
-) -> Option<Vec<SemanticAction>> {
-    let body = parse_llm_response_body(bytes, codecs)?;
+    sse_cache: &mut Option<IncrementalSseCache>,
+    force_terminal: bool,
+) -> Option<LlmResponseProjection> {
+    let progress = parse_llm_response_progress(SseBodySource::RawBytes, bytes, codecs, sse_cache)?;
     let first = *segments.first()?;
+    let status = llm_response_status_from_progress(segments, false, &progress);
+    if !force_terminal && status == SemanticActionStatus::InProgress {
+        return Some(in_flight_projection(bytes.len(), message_start, true));
+    }
+    let body =
+        parse_llm_response_body_incremental(SseBodySource::RawBytes, bytes, codecs, sse_cache)?;
     let attributes = raw_llm_response_attributes(config, segments, bytes, &body);
+    let payload_segments = semantic_response_payloads(config, first, bytes);
     let response = SemanticAction {
         action_id: llm_raw_stream_action_id(key, message_start, first),
         trace_id: first.trace_id,
@@ -113,16 +191,32 @@ pub(super) fn project_raw_stream_llm_response_actions(
         start_time: first.observed_at,
         end_time: segments.last().map(|segment| segment.observed_at),
         process: first.process.clone(),
-        status: llm_response_status(segments, false, &body),
+        status,
         completeness: llm_response_completeness(segments, false, &body),
         confidence_millis: None,
         attributes,
         evidence: payload_evidence(segments),
     };
-    let sse_actions = sse_actions_for_response(config, &response, &body, segments);
-    let mut actions = vec![response];
-    actions.extend(sse_actions);
-    Some(actions)
+    Some(LlmResponseProjection {
+        actions: vec![response],
+        payload_segments,
+        in_flight: None,
+        encoded_len: bytes.len(),
+        terminal: true,
+        raw_response: true,
+    })
+}
+
+fn semantic_response_payloads(
+    config: &SemanticRetentionConfig,
+    first: &PayloadSegment,
+    assembled_bytes: &[u8],
+) -> Vec<PayloadSegment> {
+    if config.l4_payload.enabled || !config.l0_llm_call.retain_assembled_payload() {
+        Vec::new()
+    } else {
+        vec![semantic_payload_draft(first, assembled_bytes)]
+    }
 }
 
 struct ChunkedBodyPrefix {

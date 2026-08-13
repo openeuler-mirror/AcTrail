@@ -34,13 +34,13 @@ use super::{
     workload_diagnostics::WorkloadDiagnostics,
 };
 
-#[path = "test_cases/application_protocol.rs"]
+#[path = "application_protocol.rs"]
 mod application_protocol_tests;
-#[path = "test_cases/lineage_projection.rs"]
+#[path = "lineage_projection.rs"]
 mod lineage_projection_tests;
-#[path = "test_cases/live_export.rs"]
+#[path = "live_export.rs"]
 mod live_export_tests;
-#[path = "test_cases/tls_sync.rs"]
+#[path = "tls_sync.rs"]
 mod tls_sync_tests;
 
 const RESOURCE_TEST_INTERVAL: Duration = Duration::from_millis(2);
@@ -641,6 +641,8 @@ fn ebpf_config(enabled: bool) -> EbpfCollectorConfig {
         },
         enabled,
         memlock_rlimit: MemlockRlimit::Inherit,
+        preflight_link_teardown_workers:
+            config_core::daemon::DEFAULT_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS,
         tracked_process_max_entries: 64,
         pending_operation_max_entries: 128,
         suppressed_fd_max_entries: 128,

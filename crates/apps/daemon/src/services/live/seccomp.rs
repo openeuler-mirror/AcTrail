@@ -70,7 +70,7 @@ impl StorageAttachService {
                     .ensure(trace_runtime, listener_trace_id, notification.pid)
                     .and_then(|preparation| {
                         if let Some(record) = preparation.inherited_record
-                            && collector.stats().active_bindings > 0
+                            && collector.active_binding_trace_count() > 0
                         {
                             collector
                                 .seed_fork_bound_membership(listener_trace_id, record)

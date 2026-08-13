@@ -1,6 +1,7 @@
 //! Concrete daemon services backed by procfs bootstrap and storage persistence.
 
 pub(crate) mod alert_ingress;
+#[path = "services/application_protocol/service.rs"]
 pub(crate) mod application_protocol;
 pub(crate) mod attach;
 pub(crate) mod command_control;
@@ -29,6 +30,7 @@ pub(crate) mod wiring;
 pub(crate) mod workload_diagnostics;
 
 #[cfg(test)]
+#[path = "services/test_cases/suite.rs"]
 pub(crate) mod tests;
 
 #[cfg(test)]
