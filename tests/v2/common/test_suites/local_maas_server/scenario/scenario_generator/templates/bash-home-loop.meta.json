@@ -1,0 +1,13 @@
+{
+  "name": "bash-home-loop",
+  "description": "Repeatedly asks the agent to inspect the HOME environment variable with the bash tool.",
+  "type": "loop",
+  "infinite": true,
+  "sequence": "bash-home-loop.seq.json",
+  "rounds": null,
+  "tool_rounds": null,
+  "message_rounds": 0,
+  "tools": [
+    "bash"
+  ]
+}

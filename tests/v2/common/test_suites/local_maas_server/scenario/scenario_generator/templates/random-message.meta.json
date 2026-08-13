@@ -1,0 +1,11 @@
+{
+  "name": "random-message",
+  "description": "Returns four deterministically seeded random choices between two assistant messages.",
+  "type": "random",
+  "infinite": false,
+  "sequence": "random-message.seq.json",
+  "rounds": 4,
+  "tool_rounds": 0,
+  "message_rounds": 4,
+  "tools": []
+}

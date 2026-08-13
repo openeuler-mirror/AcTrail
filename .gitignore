@@ -38,6 +38,10 @@ crates/apps/ctl/java-agent/dist/
 .actrail-guest-bundle/
 .actrail-workload-bundle/
 
+# local_maas_server recording artifacts (caches + finalized scenarios)
+tests/v2/common/test_suites/local_maas_server/recordings/
+tests/v2/common/test_suites/local_maas_server/scenario/scenario_generator/templates/recorded/
+scripts/bench/overall/out/
 
 # Added by cargo
 

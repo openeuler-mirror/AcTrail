@@ -1,0 +1,11 @@
+{
+  "name": "alternating-message-loop",
+  "description": "Repeats two assistant messages in a fixed alternating order forever.",
+  "type": "loop",
+  "infinite": true,
+  "sequence": "alternating-message-loop.seq.json",
+  "rounds": null,
+  "tool_rounds": 0,
+  "message_rounds": null,
+  "tools": []
+}

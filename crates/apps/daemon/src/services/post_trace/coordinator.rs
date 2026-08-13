@@ -85,6 +85,10 @@ impl PostTraceCoordinator {
             .any(|key| key.instance_id == instance_id)
     }
 
+    pub(crate) fn has_running_tasks_for_trace(&self, trace_id: TraceId) -> bool {
+        self.running.keys().any(|key| key.trace_id == trace_id)
+    }
+
     pub(crate) fn running_instance_ids(&self) -> Vec<String> {
         self.running
             .keys()

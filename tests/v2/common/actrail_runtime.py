@@ -178,6 +178,10 @@ class ActrailRuntime:
         work_dir: Path,
         *,
         plugin_directory: Path | None = None,
+        payload_tls_enabled: bool | None = None,
+        payload_stdio_enabled: bool | None = None,
+        payload_tls_seccomp_syscalls: list[str] | None = None,
+        payload_socket_seccomp_syscalls: list[str] | None = None,
     ) -> None:
         quoted = {
             name: json.dumps(str(work_dir / relative))
@@ -196,6 +200,39 @@ class ActrailRuntime:
         }
         if plugin_directory is not None:
             quoted["plugins"] = json.dumps(str(plugin_directory.resolve()))
+        payload_tls = (
+            f"sync_event_socket_path = {quoted['tls_sync']}\n"
+        )
+        if payload_tls_enabled is not None:
+            payload_tls += (
+                f"enabled = {str(payload_tls_enabled).lower()}\n"
+            )
+        if payload_tls_seccomp_syscalls is not None:
+            payload_tls += (
+                "seccomp_syscalls = ["
+                + ", ".join(
+                    json.dumps(syscall)
+                    for syscall in payload_tls_seccomp_syscalls
+                )
+                + "]\n"
+            )
+        payload_socket = ""
+        if payload_socket_seccomp_syscalls is not None:
+            payload_socket = (
+                "\n[payload.socket]\n"
+                "seccomp_syscalls = ["
+                + ", ".join(
+                    json.dumps(syscall)
+                    for syscall in payload_socket_seccomp_syscalls
+                )
+                + "]\n"
+            )
+        payload_stdio = ""
+        if payload_stdio_enabled is not None:
+            payload_stdio = (
+                "\n[payload.stdio]\n"
+                f"enabled = {str(payload_stdio_enabled).lower()}\n"
+            )
         path.write_text(
             "[control]\n"
             f"socket_path = {quoted['socket']}\n"
@@ -208,8 +245,10 @@ class ActrailRuntime:
             "\n[export.snapshot]\n"
             f"directory = {quoted['export']}\n"
             "\n[payload.tls]\n"
-            f"sync_event_socket_path = {quoted['tls_sync']}\n"
-            "\n[cluster.report]\n"
+            + payload_tls
+            + payload_socket
+            + payload_stdio
+            + "\n[cluster.report]\n"
             f"spool_dir = {quoted['cluster_spool']}\n"
             f"state_path = {quoted['cluster_state']}\n"
             "\n[cluster.center]\n"
