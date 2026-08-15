@@ -1,0 +1,49 @@
+[general]
+id = "actrail.tool-frequent-failure-alert"
+api_version = "actrail.plugin.v2"
+role = "observation-consumer"
+runtime = "wasm"
+
+[host]
+capabilities = ["alert-write"]
+
+[runtime.wasm]
+artifact_path = "actrail_tool_frequent_failure_alert.wasm"
+abi = "wit-component"
+
+[runtime.wasm.resources]
+fuel_per_call = 50000000
+memory_max_bytes = 67108864
+
+[role.observation-consumer]
+delivery = "best-effort"
+
+[role.observation-consumer.subscriptions]
+event_families = ["semantic-action", "trace-lifecycle"]
+
+[role.observation-consumer.resources]
+queue_capacity = 4096
+
+[hostcall_limits.plugin_config]
+read_max_bytes = 16384
+
+[hostcall_limits.alert]
+payload_max_bytes = 16384
+
+[plugin_config]
+format = "json"
+required = false
+
+[outputs.alerts.frequent-failure]
+kind = "frequent_failure"
+title = "工具频繁失败告警"
+severity = "high"
+payload_schema_id = "tool-frequent-failure-alert.v1"
+payload_schema_ref = "frequent-failure-alert-v1.schema.json"
+
+[outputs.alerts.indeterminate-result]
+kind = "indeterminate_result"
+title = "工具结果无法判定"
+severity = "informational"
+payload_schema_id = "tool-frequent-failure-alert.indeterminate.v1"
+payload_schema_ref = "indeterminate-result-v1.schema.json"

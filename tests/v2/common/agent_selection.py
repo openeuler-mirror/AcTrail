@@ -76,9 +76,15 @@ class AgentSelector:
     def select(
         self,
         test_context: TestingContextSingleton,
+        *,
+        kinds: tuple[str, ...] | None = None,
     ) -> AgentSelection | None:
         probe_all = _probe_all_agents_enabled()
-        for kind, variable, executable in self._CANDIDATES:
+        candidates = self._CANDIDATES
+        if kinds is not None:
+            by_kind = {candidate[0]: candidate for candidate in candidates}
+            candidates = tuple(by_kind[kind] for kind in kinds if kind in by_kind)
+        for kind, variable, executable in candidates:
             binary = self._discovery.resolve(variable, executable)
             if binary is None:
                 continue

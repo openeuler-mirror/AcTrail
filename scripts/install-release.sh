@@ -71,6 +71,9 @@ command_policy_artifact="$wasm_release_dir/actrail_component_command_policy_dyna
 tool_consecutive_failure_install_dir="$plugin_root/tool-consecutive-failure-alert"
 tool_consecutive_failure_source_dir="$script_dir/../examples/plugins/wasm-legacy/tool-consecutive-failure-alert"
 tool_consecutive_failure_artifact="$wasm_release_dir/actrail_tool_consecutive_failure_alert.wasm"
+tool_frequent_failure_install_dir="$plugin_root/tool-frequent-failure-alert"
+tool_frequent_failure_source_dir="$script_dir/../examples/plugins/wasm-legacy/tool-frequent-failure-alert"
+tool_frequent_failure_artifact="$wasm_release_dir/actrail_tool_frequent_failure_alert.wasm"
 binaries=(
   actraild
   actrailctl
@@ -161,6 +164,12 @@ run cargo build --release --target wasm32-wasip2 \
   echo "missing plugin artifact $tool_consecutive_failure_artifact" >&2
   exit 1
 }
+run cargo build --release --target wasm32-wasip2 \
+  --manifest-path "$tool_frequent_failure_source_dir/Cargo.toml"
+[[ -f "$tool_frequent_failure_artifact" ]] || {
+  echo "missing plugin artifact $tool_frequent_failure_artifact" >&2
+  exit 1
+}
 
 mapfile -t binary_install < <(install_prefix "$dest_dir")
 mapfile -t plugin_install < <(install_prefix "$plugin_root")
@@ -173,6 +182,7 @@ run "${plugin_install[@]}" install -d "$activity_anomaly_install_dir"
 run "${plugin_install[@]}" install -d "$file_policy_install_dir"
 run "${plugin_install[@]}" install -d "$command_policy_install_dir"
 run "${plugin_install[@]}" install -d "$tool_consecutive_failure_install_dir"
+run "${plugin_install[@]}" install -d "$tool_frequent_failure_install_dir"
 
 for binary in "${binaries[@]}"; do
   source_path="$release_dir/$binary"
@@ -264,5 +274,17 @@ run "${plugin_install[@]}" install -m 0644 \
 run "${plugin_install[@]}" install -m 0644 \
   "$tool_consecutive_failure_artifact" \
   "$tool_consecutive_failure_install_dir/actrail_tool_consecutive_failure_alert.wasm"
+run "${plugin_install[@]}" install -m 0644 \
+  "$tool_frequent_failure_source_dir/plugin.toml" \
+  "$tool_frequent_failure_install_dir/tool-frequent-failure-alert.plugin.toml"
+for asset in \
+  frequent-failure-alert-v1.schema.json \
+  indeterminate-result-v1.schema.json; do
+  run "${plugin_install[@]}" install -m 0644 \
+    "$tool_frequent_failure_source_dir/$asset" "$tool_frequent_failure_install_dir/$asset"
+done
+run "${plugin_install[@]}" install -m 0644 \
+  "$tool_frequent_failure_artifact" \
+  "$tool_frequent_failure_install_dir/actrail_tool_frequent_failure_alert.wasm"
 
 printf 'installed AcTrail binaries to %s and plugins to %s\n' "$dest_dir" "$plugin_root"
