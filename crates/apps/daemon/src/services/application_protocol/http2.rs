@@ -7,7 +7,9 @@ use config_core::daemon::{
 };
 use model_core::event::{ApplicationBody, ApplicationPayload};
 use model_core::ids::TraceId;
-use model_core::payload::{PayloadDirection, PayloadSegment, PayloadStreamKey};
+use model_core::payload::{
+    PayloadDirection, PayloadSegment, PayloadStreamIdentity, PayloadStreamKey,
+};
 use model_core::process::ProcessIdentity;
 
 use super::ApplicationEventDraft;
@@ -61,6 +63,14 @@ impl Http2Analyzer {
 
     pub(super) fn forget_trace(&mut self, trace_id: TraceId) {
         self.connections.retain(|key, _| key.trace_id != trace_id);
+    }
+
+    pub(super) fn forget_stream(&mut self, identity: &PayloadStreamIdentity) {
+        self.connections.retain(|key, _| {
+            key.trace_id != identity.trace_id
+                || key.process != identity.process
+                || key.stream_key != identity.stream_key
+        });
     }
 }
 

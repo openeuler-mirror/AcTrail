@@ -36,6 +36,7 @@ pub const NET_EVENT_BIND: u32 = 104;
 pub const NET_EVENT_LISTEN: u32 = 105;
 pub const NET_EVENT_CLOSE: u32 = 106;
 pub const NET_EVENT_SHUTDOWN: u32 = 107;
+pub const SOCKET_FD_RELEASE_EVENT: u32 = 108;
 pub const FILE_EVENT_OPEN: u32 = 300;
 pub const FILE_EVENT_UNLINK: u32 = 301;
 pub const FILE_EVENT_RENAME: u32 = 302;
@@ -62,9 +63,9 @@ pub use payload::{
     SOCKET_PAYLOAD_SYSCALL_READ, SOCKET_PAYLOAD_SYSCALL_RECVFROM, SOCKET_PAYLOAD_SYSCALL_SENDMSG,
     SOCKET_PAYLOAD_SYSCALL_SENDTO, SOCKET_PAYLOAD_SYSCALL_WRITE, SOCKET_PAYLOAD_SYSCALL_WRITEV,
     SocketPayloadCompletion, TlsDiagnosticEvent, TlsPayloadCaptureRequest, TlsPayloadCompletion,
-    TlsPayloadDirectCapture, decode_socket_payload, decode_socket_payload_completion,
-    decode_stdio_payload, decode_tls_capture_request, decode_tls_completion, decode_tls_diagnostic,
-    decode_tls_direct_capture,
+    TlsPayloadDirectCapture, decode_socket_fd_release, decode_socket_payload,
+    decode_socket_payload_completion, decode_stdio_payload, decode_tls_capture_request,
+    decode_tls_completion, decode_tls_diagnostic, decode_tls_direct_capture,
 };
 pub(crate) use payload::{
     STDIO_PAYLOAD_DIRECTION_OUTBOUND, STDIO_PAYLOAD_FLAG_STAGED, STDIO_PAYLOAD_SYSCALL_WRITE,
@@ -113,6 +114,7 @@ pub(crate) fn decode_observation(
         PROC_EVENT_SIGNAL => {
             maybe_lifecycle_event(lifecycle_requested, decode_signal(event, bindings)?)
         }
+        SOCKET_FD_RELEASE_EVENT => Ok(None),
         NET_EVENT_CONNECT | NET_EVENT_ACCEPT | NET_EVENT_BIND | NET_EVENT_LISTEN
         | NET_EVENT_CLOSE | NET_EVENT_SHUTDOWN => decode_connection_event(event, bindings),
         FD_IO_EVENT_SEND | FD_IO_EVENT_RECV => decode_fd_io_event(event, bindings, file_tracker),

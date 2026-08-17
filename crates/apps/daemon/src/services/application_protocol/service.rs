@@ -6,7 +6,8 @@ use config_core::daemon::{ApplicationProtocolConfig, SemanticRetentionConfig, Ss
 use model_core::event::ApplicationPayload;
 use model_core::ids::TraceId;
 use model_core::payload::{
-    PayloadContentState, PayloadSegment, PayloadSourceBoundary, PayloadStreamKey,
+    PayloadContentState, PayloadSegment, PayloadSourceBoundary, PayloadStreamIdentity,
+    PayloadStreamKey,
 };
 use model_core::process::ProcessIdentity;
 
@@ -109,7 +110,8 @@ impl ApplicationProtocolAnalyzer {
                 summary_only,
             )?);
             if recognized_http2(&drafts) {
-                self.http1.forget_stream(segment);
+                self.http1
+                    .forget_stream(&PayloadStreamIdentity::from_segment(segment));
                 self.known_stream_protocols
                     .insert(stream_key, StreamProtocol::Http2);
             }
@@ -122,6 +124,16 @@ impl ApplicationProtocolAnalyzer {
             .retain(|key, _| key.trace_id != trace_id);
         self.http1.forget_trace(trace_id);
         self.http2.forget_trace(trace_id);
+    }
+
+    pub(super) fn forget_stream(&mut self, identity: &PayloadStreamIdentity) {
+        self.known_stream_protocols.retain(|key, _| {
+            key.trace_id != identity.trace_id
+                || key.process != identity.process
+                || key.stream_key != identity.stream_key
+        });
+        self.http1.forget_stream(identity);
+        self.http2.forget_stream(identity);
     }
 
     fn analyze_known_protocol(

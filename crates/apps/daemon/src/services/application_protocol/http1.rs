@@ -5,7 +5,9 @@ use std::collections::BTreeMap;
 use config_core::daemon::{ApplicationProtocolConfig, SemanticRetentionConfig};
 use model_core::event::ApplicationPayload;
 use model_core::ids::TraceId;
-use model_core::payload::{PayloadDirection, PayloadSegment, PayloadStreamKey};
+use model_core::payload::{
+    PayloadDirection, PayloadSegment, PayloadStreamIdentity, PayloadStreamKey,
+};
 use model_core::process::ProcessIdentity;
 
 use super::ApplicationEventDraft;
@@ -32,16 +34,16 @@ impl Http1Analyzer {
         consumed_by_llm: bool,
         summary_only: bool,
     ) -> Result<Vec<ApplicationEventDraft>, String> {
-        let text = match std::str::from_utf8(&segment.bytes) {
-            Ok(text) => text,
-            Err(_) => return Ok(Vec::new()),
-        };
         let key = stream_key(segment);
         let buffer = self.buffers.entry(key.clone()).or_default();
-        if summary_only {
-            buffer.append_summary_only(text, config.sse_max_buffer_bytes)?;
+        let append_outcome = if summary_only {
+            buffer.append_summary_only(&segment.bytes, config.sse_max_buffer_bytes)?
         } else {
-            buffer.append(text, config.sse_max_buffer_bytes)?;
+            buffer.append(&segment.bytes, config.sse_max_buffer_bytes)?
+        };
+        if append_outcome == StreamAppendOutcome::InvalidUtf8 {
+            self.buffers.remove(&key);
+            return Ok(Vec::new());
         }
         if !buffer.expects_chunked_sse_body() && !buffer.starts_like_http_or_sse(config.sse_enabled)
         {
@@ -114,11 +116,11 @@ impl Http1Analyzer {
         self.buffers.retain(|key, _| key.trace_id != trace_id);
     }
 
-    pub(super) fn forget_stream(&mut self, segment: &PayloadSegment) {
+    pub(super) fn forget_stream(&mut self, identity: &PayloadStreamIdentity) {
         self.buffers.retain(|key, _| {
-            key.trace_id != segment.trace_id
-                || key.process != segment.process
-                || key.stream_key != segment.stream_key
+            key.trace_id != identity.trace_id
+                || key.process != identity.process
+                || key.stream_key != identity.stream_key
         });
     }
 }
@@ -149,6 +151,8 @@ impl From<PayloadDirection> for StreamDirectionKey {
 struct StreamBuffer {
     text: String,
     state: StreamBufferState,
+    utf8_tail: [u8; 3],
+    utf8_tail_len: u8,
 }
 
 impl Default for StreamBuffer {
@@ -156,8 +160,16 @@ impl Default for StreamBuffer {
         Self {
             text: String::new(),
             state: StreamBufferState::Http,
+            utf8_tail: [0; 3],
+            utf8_tail_len: 0,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StreamAppendOutcome {
+    Appended,
+    InvalidUtf8,
 }
 
 enum StreamBufferState {
@@ -166,25 +178,93 @@ enum StreamBufferState {
 }
 
 impl StreamBuffer {
-    fn append(&mut self, text: &str, max_buffer_bytes: u64) -> Result<(), String> {
-        self.append_checked(text, max_buffer_bytes)
+    fn append(
+        &mut self,
+        bytes: &[u8],
+        max_buffer_bytes: u64,
+    ) -> Result<StreamAppendOutcome, String> {
+        self.append_utf8(bytes, max_buffer_bytes)
     }
 
-    fn append_summary_only(&mut self, text: &str, max_buffer_bytes: u64) -> Result<(), String> {
-        if self.text.is_empty() && parser::header_prefix_len(text).is_none() {
-            let first_line = text.lines().next().map(str::trim).unwrap_or_default();
+    fn append_summary_only(
+        &mut self,
+        bytes: &[u8],
+        max_buffer_bytes: u64,
+    ) -> Result<StreamAppendOutcome, String> {
+        let started_empty = self.text.is_empty() && self.utf8_tail_len == 0;
+        if started_empty && !starts_like_http_message_bytes(bytes) {
+            return Ok(StreamAppendOutcome::Appended);
+        }
+        let header_input_len = http_header_input_len(&self.text, bytes);
+        let outcome = self.append_utf8(&bytes[..header_input_len], max_buffer_bytes)?;
+        if outcome == StreamAppendOutcome::InvalidUtf8 {
+            return Ok(outcome);
+        }
+        if started_empty && parser::header_prefix_len(&self.text).is_none() {
+            let first_line = self.text.lines().next().map(str::trim).unwrap_or_default();
             if !parser::starts_like_http_message(first_line) {
-                return Ok(());
+                self.clear();
+                return Ok(StreamAppendOutcome::Appended);
             }
         }
-        let prefix = parser::header_prefix_len(text)
-            .and_then(|prefix_len| text.get(..prefix_len))
-            .unwrap_or(text);
-        self.append_checked(prefix, max_buffer_bytes)?;
         if let Some(prefix_len) = parser::header_prefix_len(&self.text) {
             self.text.truncate(prefix_len);
+            self.utf8_tail_len = 0;
         }
-        Ok(())
+        Ok(StreamAppendOutcome::Appended)
+    }
+
+    fn append_utf8(
+        &mut self,
+        mut bytes: &[u8],
+        max_buffer_bytes: u64,
+    ) -> Result<StreamAppendOutcome, String> {
+        if self.utf8_tail_len != 0 {
+            let tail_len = usize::from(self.utf8_tail_len);
+            let Some(width) = utf8_sequence_width(self.utf8_tail[0]) else {
+                return Ok(StreamAppendOutcome::InvalidUtf8);
+            };
+            let take = width.saturating_sub(tail_len).min(bytes.len());
+            let mut candidate = [0_u8; 4];
+            candidate[..tail_len].copy_from_slice(&self.utf8_tail[..tail_len]);
+            candidate[tail_len..tail_len + take].copy_from_slice(&bytes[..take]);
+            let candidate_len = tail_len + take;
+            match std::str::from_utf8(&candidate[..candidate_len]) {
+                Ok(text) => {
+                    self.append_checked(text, max_buffer_bytes)?;
+                    self.utf8_tail_len = 0;
+                    bytes = &bytes[take..];
+                }
+                Err(error) if error.error_len().is_none() && candidate_len <= 3 => {
+                    self.utf8_tail[..candidate_len].copy_from_slice(&candidate[..candidate_len]);
+                    self.utf8_tail_len = candidate_len as u8;
+                    return Ok(StreamAppendOutcome::Appended);
+                }
+                Err(_) => return Ok(StreamAppendOutcome::InvalidUtf8),
+            }
+        }
+
+        match std::str::from_utf8(bytes) {
+            Ok(text) => {
+                self.append_checked(text, max_buffer_bytes)?;
+                Ok(StreamAppendOutcome::Appended)
+            }
+            Err(error) if error.error_len().is_none() => {
+                let valid_up_to = error.valid_up_to();
+                let Ok(valid) = std::str::from_utf8(&bytes[..valid_up_to]) else {
+                    return Ok(StreamAppendOutcome::InvalidUtf8);
+                };
+                self.append_checked(valid, max_buffer_bytes)?;
+                let tail = &bytes[valid_up_to..];
+                if tail.len() > self.utf8_tail.len() {
+                    return Ok(StreamAppendOutcome::InvalidUtf8);
+                }
+                self.utf8_tail[..tail.len()].copy_from_slice(tail);
+                self.utf8_tail_len = tail.len() as u8;
+                Ok(StreamAppendOutcome::Appended)
+            }
+            Err(_) => Ok(StreamAppendOutcome::InvalidUtf8),
+        }
     }
 
     fn append_checked(&mut self, text: &str, max_buffer_bytes: u64) -> Result<(), String> {
@@ -200,6 +280,11 @@ impl StreamBuffer {
         }
         self.text.push_str(text);
         Ok(())
+    }
+
+    fn clear(&mut self) {
+        self.text.clear();
+        self.utf8_tail_len = 0;
     }
 
     fn starts_like_http_or_sse(&self, sse_enabled: bool) -> bool {
@@ -256,6 +341,53 @@ impl StreamBuffer {
             }
         }
     }
+}
+
+fn utf8_sequence_width(first: u8) -> Option<usize> {
+    match first {
+        0xC2..=0xDF => Some(2),
+        0xE0..=0xEF => Some(3),
+        0xF0..=0xF4 => Some(4),
+        _ => None,
+    }
+}
+
+fn http_header_input_len(buffered: &str, bytes: &[u8]) -> usize {
+    if parser::header_prefix_len(buffered).is_some() {
+        return 0;
+    }
+    [b"\r\n\r\n".as_slice(), b"\n\n".as_slice()]
+        .into_iter()
+        .filter_map(|boundary| boundary_input_len(buffered.as_bytes(), bytes, boundary))
+        .min()
+        .unwrap_or(bytes.len())
+}
+
+fn boundary_input_len(buffered: &[u8], bytes: &[u8], boundary: &[u8]) -> Option<usize> {
+    for split in (1..boundary.len()).rev() {
+        if buffered.ends_with(&boundary[..split]) && bytes.starts_with(&boundary[split..]) {
+            return Some(boundary.len() - split);
+        }
+    }
+    bytes
+        .windows(boundary.len())
+        .position(|window| window == boundary)
+        .map(|position| position + boundary.len())
+}
+
+fn starts_like_http_message_bytes(bytes: &[u8]) -> bool {
+    let first = bytes.first().copied().unwrap_or_default();
+    if first != b'H' && !first.is_ascii_uppercase() {
+        return false;
+    }
+    let line_end = bytes
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .unwrap_or(bytes.len());
+    std::str::from_utf8(&bytes[..line_end])
+        .ok()
+        .map(str::trim)
+        .is_some_and(parser::starts_like_http_message)
 }
 
 fn stream_key(segment: &PayloadSegment) -> StreamKey {

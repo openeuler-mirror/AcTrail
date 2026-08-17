@@ -307,8 +307,24 @@ static __noinline int fd_release(
     if (!fd_claim(pid, fd, expected_generation, &state)) {
         return 0;
     }
+    if (state.category == ACTRAIL_FD_CATEGORY_NET
+        || state.category == ACTRAIL_FD_CATEGORY_IPC_UNIX_SOCKET) {
+        socket_payload_release_fd(pid, fd);
+    }
     remaining = fd_object_ref_release(pid, state.generation, &object);
     event_trace_id = trace_id ? trace_id : object.trace_id;
+    if ((state.category == ACTRAIL_FD_CATEGORY_NET
+        || state.category == ACTRAIL_FD_CATEGORY_IPC_UNIX_SOCKET)
+        && event_trace_id) {
+        struct actrail_event *event = actrail_event_reserve(sizeof(*event));
+
+        if (event) {
+            init_event(event, ACTRAIL_SOCKET_FD_RELEASE, pid, event_trace_id);
+            event->fd = fd;
+            event->aux_generation = state.generation;
+            actrail_event_submit(ctx, event);
+        }
+    }
     if (state.category == ACTRAIL_FD_CATEGORY_NET && remaining == 0 && event_trace_id) {
         struct actrail_event *event = actrail_event_reserve(sizeof(*event));
 

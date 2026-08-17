@@ -17,10 +17,30 @@ mod connection;
 mod framing;
 mod handshake;
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct ProcessKey {
     trace_id: TraceId,
     process: ProcessIdentity,
+}
+
+pub(super) struct WebSocketExchangeStreamPrefix(String);
+
+impl WebSocketExchangeStreamPrefix {
+    fn new(value: String) -> Self {
+        Self(value)
+    }
+
+    pub(super) fn matches(&self, stream_key: &str) -> bool {
+        stream_key
+            .strip_prefix(&self.0)
+            .is_some_and(|suffix| suffix.starts_with(':'))
+    }
+}
+
+#[derive(Default)]
+pub(super) struct WebSocketLlmObservation {
+    pub(super) projected: Vec<PayloadSegment>,
+    pub(super) forgotten_exchange_streams: Vec<WebSocketExchangeStreamPrefix>,
 }
 
 pub(super) struct WebSocketLlmAdapter {
@@ -36,28 +56,48 @@ impl WebSocketLlmAdapter {
         }
     }
 
-    pub(super) fn observe(&mut self, segment: &PayloadSegment) -> Vec<PayloadSegment> {
+    pub(super) fn observe(&mut self, segment: &PayloadSegment) -> WebSocketLlmObservation {
         if segment.source_boundary != PayloadSourceBoundary::TlsUserSpace {
-            return Vec::new();
+            return WebSocketLlmObservation::default();
         }
         let key = ProcessKey {
             trace_id: segment.trace_id,
-            process: segment.process.clone(),
+            process: segment.process,
         };
         if segment.truncation == PayloadTruncationState::Truncated {
-            if let Some(process) = self.processes.get_mut(&key) {
-                process.forget_stream(&segment.stream_key);
+            let mut observation = WebSocketLlmObservation::default();
+            let empty = if let Some(process) = self.processes.get_mut(&key) {
+                observation.forgotten_exchange_streams = process.forget_stream(&segment.stream_key);
+                process.is_empty()
+            } else {
+                false
+            };
+            if empty {
+                self.processes.remove(&key);
             }
-            return Vec::new();
+            return observation;
         }
-        self.processes
+        let observation = self
+            .processes
             .entry(key)
             .or_insert_with(|| ProcessWebSocket::new(self.max_connections_per_process))
-            .observe(segment)
+            .observe(segment);
+        if self
+            .processes
+            .get(&key)
+            .is_some_and(ProcessWebSocket::is_empty)
+        {
+            self.processes.remove(&key);
+        }
+        observation
     }
 
     pub(super) fn forget_trace(&mut self, trace_id: TraceId) {
         self.processes.retain(|key, _| key.trace_id != trace_id);
+    }
+
+    pub(super) fn is_exchange_stream_key(stream_key: &str) -> bool {
+        stream_key.starts_with("websocket:") && stream_key.contains(":exchange:")
     }
 }
 
@@ -82,7 +122,7 @@ impl ProcessWebSocket {
         }
     }
 
-    fn observe(&mut self, segment: &PayloadSegment) -> Vec<PayloadSegment> {
+    fn observe(&mut self, segment: &PayloadSegment) -> WebSocketLlmObservation {
         if self.observe_handshake(segment) {
             return self.activate_accepted();
         }
@@ -90,16 +130,16 @@ impl ProcessWebSocket {
             return projected;
         }
         if self.buffer_pending_frame(segment) {
-            return Vec::new();
+            return WebSocketLlmObservation::default();
         }
         let expected_masked = segment.direction == PayloadDirection::Outbound;
         if self.accepted.is_empty()
             || !FrameDecoder::looks_like_frame(&segment.bytes, expected_masked)
         {
-            return Vec::new();
+            return WebSocketLlmObservation::default();
         }
         let Some(accepted) = self.accepted.pop_front() else {
-            return Vec::new();
+            return WebSocketLlmObservation::default();
         };
         let mut connection = WebSocketConnection::new(
             accepted.outbound_stream_key,
@@ -116,20 +156,48 @@ impl ProcessWebSocket {
         );
         match connection.observe(segment) {
             Ok(Some(observation)) => {
+                let mut projected = WebSocketLlmObservation {
+                    projected: observation.projected,
+                    ..WebSocketLlmObservation::default()
+                };
                 if !observation.closed {
                     self.push_connection(connection);
+                } else {
+                    projected
+                        .forgotten_exchange_streams
+                        .push(WebSocketExchangeStreamPrefix::new(
+                            connection.synthetic_stream_key_prefix().to_string(),
+                        ));
                 }
-                observation.projected
+                projected
             }
-            Ok(None) => Vec::new(),
+            Ok(None) => WebSocketLlmObservation::default(),
             Err(()) => {
                 Self::warn_invalid_connection(segment);
-                Vec::new()
+                WebSocketLlmObservation {
+                    forgotten_exchange_streams: vec![WebSocketExchangeStreamPrefix::new(
+                        connection.synthetic_stream_key_prefix().to_string(),
+                    )],
+                    ..WebSocketLlmObservation::default()
+                }
             }
         }
     }
 
-    fn forget_stream(&mut self, stream_key: &PayloadStreamKey) {
+    fn forget_stream(
+        &mut self,
+        stream_key: &PayloadStreamKey,
+    ) -> Vec<WebSocketExchangeStreamPrefix> {
+        let forgotten_exchange_streams = self
+            .connections
+            .iter()
+            .filter(|connection| connection.is_bound_to(stream_key))
+            .map(|connection| {
+                WebSocketExchangeStreamPrefix::new(
+                    connection.synthetic_stream_key_prefix().to_string(),
+                )
+            })
+            .collect();
         self.outbound_handshakes
             .retain(|candidate| !candidate.is_for_stream(stream_key));
         self.inbound_handshakes
@@ -140,6 +208,15 @@ impl ProcessWebSocket {
             .retain(|accepted| !accepted.uses_stream(stream_key));
         self.connections
             .retain(|connection| !connection.is_bound_to(stream_key));
+        forgotten_exchange_streams
+    }
+
+    fn is_empty(&self) -> bool {
+        self.outbound_handshakes.is_empty()
+            && self.inbound_handshakes.is_empty()
+            && self.pending_offers.is_empty()
+            && self.accepted.is_empty()
+            && self.connections.is_empty()
     }
 
     fn buffer_pending_frame(&mut self, segment: &PayloadSegment) -> bool {
@@ -173,7 +250,7 @@ impl ProcessWebSocket {
     fn observe_bound_connection(
         &mut self,
         segment: &PayloadSegment,
-    ) -> Option<Vec<PayloadSegment>> {
+    ) -> Option<WebSocketLlmObservation> {
         let position = self
             .connections
             .iter()
@@ -181,24 +258,39 @@ impl ProcessWebSocket {
         let mut connection = self.connections.remove(position)?;
         match connection.observe(segment) {
             Ok(Some(observation)) => {
+                let mut projected = WebSocketLlmObservation {
+                    projected: observation.projected,
+                    ..WebSocketLlmObservation::default()
+                };
                 if !observation.closed {
                     self.push_connection(connection);
+                } else {
+                    projected
+                        .forgotten_exchange_streams
+                        .push(WebSocketExchangeStreamPrefix::new(
+                            connection.synthetic_stream_key_prefix().to_string(),
+                        ));
                 }
-                Some(observation.projected)
+                Some(projected)
             }
             Ok(None) => {
                 self.push_connection(connection);
-                Some(Vec::new())
+                Some(WebSocketLlmObservation::default())
             }
             Err(()) => {
                 Self::warn_invalid_connection(segment);
-                Some(Vec::new())
+                Some(WebSocketLlmObservation {
+                    forgotten_exchange_streams: vec![WebSocketExchangeStreamPrefix::new(
+                        connection.synthetic_stream_key_prefix().to_string(),
+                    )],
+                    ..WebSocketLlmObservation::default()
+                })
             }
         }
     }
 
-    fn activate_accepted(&mut self) -> Vec<PayloadSegment> {
-        let mut projected = Vec::new();
+    fn activate_accepted(&mut self) -> WebSocketLlmObservation {
+        let mut projected = WebSocketLlmObservation::default();
         while let Some(position) = self
             .accepted
             .iter()
@@ -217,14 +309,24 @@ impl ProcessWebSocket {
             for segment in accepted.pending_frames {
                 match connection.observe(&segment) {
                     Ok(Some(observation)) => {
-                        projected.extend(observation.projected);
+                        projected.projected.extend(observation.projected);
                         if observation.closed {
+                            projected.forgotten_exchange_streams.push(
+                                WebSocketExchangeStreamPrefix::new(
+                                    connection.synthetic_stream_key_prefix().to_string(),
+                                ),
+                            );
                             keep_connection = false;
                             break;
                         }
                     }
                     Ok(None) => {}
                     Err(()) => {
+                        projected.forgotten_exchange_streams.push(
+                            WebSocketExchangeStreamPrefix::new(
+                                connection.synthetic_stream_key_prefix().to_string(),
+                            ),
+                        );
                         keep_connection = false;
                         break;
                     }

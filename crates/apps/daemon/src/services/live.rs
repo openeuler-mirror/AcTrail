@@ -107,6 +107,7 @@ impl StorageAttachService {
         let drain_probe_poll_ms = drain_probe_poll.elapsed().as_millis();
         let observations_count = batch.observations.len();
         let payload_segments_count = batch.payload_segments.len();
+        let payload_stream_closes = batch.payload_stream_closes;
         warn_best_effort(
             self.persist_launch_binding_failures_impl(trace_runtime),
             "launch_binding_failure",
@@ -123,6 +124,7 @@ impl StorageAttachService {
         let drain_probe_events_ms = drain_probe_events.elapsed().as_millis();
         let drain_probe_payloads = std::time::Instant::now();
         self.process_payload_segments_impl(trace_runtime, batch.payload_segments)?;
+        self.process_payload_stream_closes_impl(payload_stream_closes)?;
         let drain_probe_payloads_ms = drain_probe_payloads.elapsed().as_millis();
         let mcp_stdio_diagnostics = self
             .semantic_actions

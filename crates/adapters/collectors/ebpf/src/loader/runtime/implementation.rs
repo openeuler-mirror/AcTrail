@@ -293,14 +293,18 @@ impl EbpfRuntime {
             || diagnostics.output_fail_bytes != 0
             || diagnostics.stdio_pending_update_fail != 0
             || diagnostics.stdio_read_user_fail != 0
+            || diagnostics.socket_state_update_fail != 0
+            || diagnostics.socket_sequence_update_fail != 0
         {
             let summary = format!(
-                "kernel event transport lost data: perf_lost={perf_lost}, reserve_fail={}, output_fail={}, output_fail_bytes={}, stdio_pending_update_fail={}, stdio_read_user_fail={}",
+                "kernel event transport lost data: perf_lost={perf_lost}, reserve_fail={}, output_fail={}, output_fail_bytes={}, stdio_pending_update_fail={}, stdio_read_user_fail={}, socket_state_update_fail={}, socket_sequence_update_fail={}",
                 diagnostics.reserve_fail,
                 diagnostics.output_fail,
                 diagnostics.output_fail_bytes,
                 diagnostics.stdio_pending_update_fail,
                 diagnostics.stdio_read_user_fail,
+                diagnostics.socket_state_update_fail,
+                diagnostics.socket_sequence_update_fail,
             );
             if self.last_event_transport_loss_summary.as_deref() != Some(summary.as_str()) {
                 self.last_event_transport_loss_summary = Some(summary.clone());

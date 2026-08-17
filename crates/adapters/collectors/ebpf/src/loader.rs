@@ -421,6 +421,8 @@ struct EventTransportDiagnostics {
     output_fail_bytes: u64,
     stdio_pending_update_fail: u64,
     stdio_read_user_fail: u64,
+    socket_state_update_fail: u64,
+    socket_sequence_update_fail: u64,
 }
 
 impl EventTransportDiagnostics {
@@ -437,6 +439,12 @@ impl EventTransportDiagnostics {
             stdio_read_user_fail: self
                 .stdio_read_user_fail
                 .saturating_sub(baseline.stdio_read_user_fail),
+            socket_state_update_fail: self
+                .socket_state_update_fail
+                .saturating_sub(baseline.socket_state_update_fail),
+            socket_sequence_update_fail: self
+                .socket_sequence_update_fail
+                .saturating_sub(baseline.socket_sequence_update_fail),
         }
     }
 }
@@ -445,12 +453,12 @@ fn read_event_transport_diagnostics(
     map: &MapHandle,
 ) -> Result<EventTransportDiagnostics, LoaderError> {
     // The diagnostics map is a fixed-size ARRAY of counters; a single batch
-    // lookup returns all entries in one syscall instead of five lookups.
+    // lookup returns all entries in one syscall instead of separate lookups.
     // This runs twice per drain cycle, so the saving is material.
     let mut diagnostics = EventTransportDiagnostics::default();
-    let mut seen = [false; 6];
+    let mut seen = [false; 8];
     let batch = map
-        .lookup_batch(6, MapFlags::ANY, MapFlags::ANY)
+        .lookup_batch(8, MapFlags::ANY, MapFlags::ANY)
         .map_err(|error| LoaderError::new("event_transport_diagnostics", error.to_string()))?;
     for item in batch {
         let (key, value) = item;
@@ -483,10 +491,12 @@ fn read_event_transport_diagnostics(
             2 => diagnostics.output_fail_bytes = count,
             4 => diagnostics.stdio_pending_update_fail = count,
             5 => diagnostics.stdio_read_user_fail = count,
+            6 => diagnostics.socket_state_update_fail = count,
+            7 => diagnostics.socket_sequence_update_fail = count,
             _ => {}
         }
     }
-    for counter_id in [0_u32, 1, 2, 4, 5] {
+    for counter_id in [0_u32, 1, 2, 4, 5, 6, 7] {
         if !seen[counter_id as usize] {
             return Err(LoaderError::new(
                 "event_transport_diagnostics",

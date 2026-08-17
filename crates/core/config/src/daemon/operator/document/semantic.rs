@@ -53,6 +53,7 @@ impl SemanticRetentionDocument {
                 websocket_max_connections_per_process: config
                     .l0_llm_call
                     .websocket_max_connections_per_process,
+                assembly: LlmAssemblyDocument::from_config(&config.l0_llm_call.assembly),
                 trajectory: LlmTrajectoryDocument::from_config(&config.l0_llm_call.trajectory),
             },
             l0_mcp_call: L0McpCallDocument {
@@ -76,6 +77,7 @@ impl SemanticRetentionDocument {
                 message_summary: config.l2_http.message_summary,
                 headers: http_headers_retention_as_str(config.l2_http.headers).to_string(),
                 body_content: http_body_retention_as_str(config.l2_http.body_content).to_string(),
+                exchange: HttpExchangeDocument::from_config(&config.l2_http.exchange),
             },
             l3_http2_frame: L3Http2FrameDocument {
                 enabled: config.l3_http2_frame.enabled,
@@ -150,6 +152,7 @@ pub(super) struct L0LlmCallDocument {
     pub usage: String,
     pub retain_assembled_payload: bool,
     pub websocket_max_connections_per_process: u32,
+    pub assembly: LlmAssemblyDocument,
     pub trajectory: LlmTrajectoryDocument,
 }
 
@@ -166,6 +169,7 @@ impl Default for L0LlmCallDocument {
             retain_assembled_payload: false,
             websocket_max_connections_per_process:
                 DEFAULT_LLM_WEBSOCKET_MAX_CONNECTIONS_PER_PROCESS,
+            assembly: LlmAssemblyDocument::default(),
             trajectory: LlmTrajectoryDocument::default(),
         }
     }
@@ -204,7 +208,55 @@ impl L0LlmCallDocument {
                 "semantic_retention.l0_llm_call.websocket_max_connections_per_process",
                 self.websocket_max_connections_per_process,
             )?,
+            assembly: self.assembly.to_config()?,
             trajectory: self.trajectory.to_config()?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct LlmAssemblyDocument {
+    pub max_buffer_bytes: u64,
+    pub max_segment_ranges: u32,
+}
+
+impl Default for LlmAssemblyDocument {
+    fn default() -> Self {
+        Self::from_config(&LlmAssemblyConfig::default())
+    }
+}
+
+impl LlmAssemblyDocument {
+    fn from_config(config: &LlmAssemblyConfig) -> Self {
+        Self {
+            max_buffer_bytes: config.max_buffer_bytes,
+            max_segment_ranges: config.max_segment_ranges,
+        }
+    }
+
+    fn to_config(&self) -> Result<LlmAssemblyConfig, String> {
+        let max_buffer_bytes = require_positive_u64(
+            "semantic_retention.l0_llm_call.assembly.max_buffer_bytes",
+            self.max_buffer_bytes,
+        )?;
+        usize::try_from(max_buffer_bytes).map_err(|error| {
+            format!(
+                "semantic_retention.l0_llm_call.assembly.max_buffer_bytes must fit usize: {error}"
+            )
+        })?;
+        let max_segment_ranges = require_positive_u32(
+            "semantic_retention.l0_llm_call.assembly.max_segment_ranges",
+            self.max_segment_ranges,
+        )?;
+        usize::try_from(max_segment_ranges).map_err(|error| {
+            format!(
+                "semantic_retention.l0_llm_call.assembly.max_segment_ranges must fit usize: {error}"
+            )
+        })?;
+        Ok(LlmAssemblyConfig {
+            max_buffer_bytes,
+            max_segment_ranges,
         })
     }
 }
@@ -336,6 +388,7 @@ pub(super) struct L2HttpDocument {
     pub message_summary: bool,
     pub headers: String,
     pub body_content: String,
+    pub exchange: HttpExchangeDocument,
 }
 
 impl Default for L2HttpDocument {
@@ -345,6 +398,7 @@ impl Default for L2HttpDocument {
             message_summary: true,
             headers: "metadata".to_string(),
             body_content: "text".to_string(),
+            exchange: HttpExchangeDocument::default(),
         }
     }
 }
@@ -358,6 +412,48 @@ impl L2HttpDocument {
             body_content: parse_value(
                 "semantic_retention.l2_http.body_content",
                 &self.body_content,
+            )?,
+            exchange: self.exchange.to_config()?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct HttpExchangeDocument {
+    pub max_pending_requests_per_stream: u32,
+    pub max_pending_responses_per_stream: u32,
+    pub response_lateness: String,
+}
+
+impl Default for HttpExchangeDocument {
+    fn default() -> Self {
+        Self::from_config(&HttpExchangeConfig::default())
+    }
+}
+
+impl HttpExchangeDocument {
+    fn from_config(config: &HttpExchangeConfig) -> Self {
+        Self {
+            max_pending_requests_per_stream: config.max_pending_requests_per_stream,
+            max_pending_responses_per_stream: config.max_pending_responses_per_stream,
+            response_lateness: duration_as_string(config.response_lateness),
+        }
+    }
+
+    fn to_config(&self) -> Result<HttpExchangeConfig, String> {
+        Ok(HttpExchangeConfig {
+            max_pending_requests_per_stream: require_positive_u32(
+                "semantic_retention.l2_http.exchange.max_pending_requests_per_stream",
+                self.max_pending_requests_per_stream,
+            )?,
+            max_pending_responses_per_stream: require_positive_u32(
+                "semantic_retention.l2_http.exchange.max_pending_responses_per_stream",
+                self.max_pending_responses_per_stream,
+            )?,
+            response_lateness: parse_required_duration(
+                "semantic_retention.l2_http.exchange.response_lateness",
+                &self.response_lateness,
             )?,
         })
     }

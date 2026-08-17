@@ -71,6 +71,10 @@ enum actrail_fd_close_mode {
     ACTRAIL_FD_CLOSE_RANGE = 2,
 };
 
+/* Implemented by the socket payload module later in the same BPF translation unit. */
+static __always_inline void socket_payload_release_fd(__u32 pid, __u32 fd);
+static __always_inline void socket_payload_release_process(__u32 pid);
+
 struct actrail_fd_key {
     __u32 pid;
     __u32 fd;

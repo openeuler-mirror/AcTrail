@@ -1,7 +1,6 @@
 //! Seccomp user-notify socket payload capture.
 
 use std::collections::BTreeMap;
-use std::time::SystemTime;
 
 use config_core::daemon::{PayloadSocketCaptureBackend, PayloadSocketConfig};
 use control_contract::reply::ControlError;
@@ -221,7 +220,7 @@ impl SeccompSocketService {
                 };
                 segments.push(RawPayloadSegment {
                     trace_id: capture.trace_id,
-                    observed_at: SystemTime::now(),
+                    observed_at: completion.observed_at,
                     process: capture.process.clone(),
                     source_boundary: PayloadSourceBoundary::Syscall,
                     content_state: PayloadContentState::Plaintext,
@@ -230,7 +229,7 @@ impl SeccompSocketService {
                         "socket:{}:{}:{}",
                         completion.pid, completion.fd, completion.fd_generation
                     )),
-                    sequence: completion.sequence + index as u64,
+                    sequence: completion.sequence,
                     original_size: if truncation == PayloadTruncationState::Truncated {
                         operation_original_size.saturating_sub(offset as u64)
                     } else {

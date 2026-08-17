@@ -43,6 +43,7 @@ use model_core::ids::TraceId;
 use model_core::payload::{PayloadDirection, PayloadSourceBoundary, PayloadStreamKey};
 use model_core::process::ProcessObservation;
 use payload_event::RawPayloadSegment;
+use payload_event::RawPayloadStreamClose;
 
 /// How long to wait for an out-of-order predecessor before concluding the
 /// intervening sequences were lost (capture gap, or a stream whose sequence
@@ -124,6 +125,11 @@ pub(crate) struct PayloadSegmentReorderer {
     streams: BTreeMap<ReorderStreamKey, ReorderStreamState>,
 }
 
+pub(crate) struct AdmittedPayloadSegment {
+    pub(crate) segment: RawPayloadSegment,
+    pub(crate) discontinuity_before: bool,
+}
+
 impl PayloadSegmentReorderer {
     /// Accept freshly captured segments and return those whose capture order
     /// is now determined (in capture order). Segments whose predecessors may
@@ -133,7 +139,7 @@ impl PayloadSegmentReorderer {
         &mut self,
         now: SystemTime,
         segments: Vec<RawPayloadSegment>,
-    ) -> Vec<RawPayloadSegment> {
+    ) -> Vec<AdmittedPayloadSegment> {
         if segments.is_empty() && self.streams.is_empty() {
             return Vec::new();
         }
@@ -165,6 +171,15 @@ impl PayloadSegmentReorderer {
         self.streams.retain(|key, _| key.trace_id != trace_id);
     }
 
+    pub(crate) fn forget_stream(&mut self, close: &RawPayloadStreamClose) {
+        self.streams.retain(|key, _| {
+            key.trace_id != close.trace_id
+                || key.process != close.process
+                || key.source_boundary != close.source_boundary.into()
+                || key.stream_key != close.stream_key
+        });
+    }
+
     #[cfg(test)]
     fn pending_segment_count(&self) -> usize {
         self.streams
@@ -187,7 +202,7 @@ fn reorder_stream_key(segment: &RawPayloadSegment) -> ReorderStreamKey {
 fn drain_ready(
     state: &mut ReorderStreamState,
     now: SystemTime,
-    ready: &mut Vec<RawPayloadSegment>,
+    ready: &mut Vec<AdmittedPayloadSegment>,
 ) {
     let cutoff = now - REORDER_WINDOW;
     loop {
@@ -204,7 +219,7 @@ fn drain_ready(
             None => sequence == FIRST_SOCKET_SEQUENCE,
             Some(last) => sequence == last || sequence == last + 1,
         };
-        if !continuous {
+        let discontinuity_before = if !continuous {
             // There is a gap ahead of the emitted prefix. If the front chunk
             // is still fresh, an earlier sequence may be in flight — wait.
             let Some(front_observed_at) = state
@@ -220,7 +235,10 @@ fn drain_ready(
             }
             // The gap is old enough to conclude the intervening sequences
             // were lost; emit this chunk as the new anchor.
-        }
+            true
+        } else {
+            false
+        };
         let segment = state
             .pending
             .get_mut(&sequence)
@@ -229,7 +247,13 @@ fn drain_ready(
             .expect("pending queue just checked non-empty");
         state.last_emitted = Some(sequence.max(state.last_emitted.unwrap_or(0)));
         state.last_activity = now;
-        ready.push(segment);
+        let discontinuity_before = discontinuity_before
+            && segment.source_boundary == PayloadSourceBoundary::Syscall
+            && segment.library == "socket-syscall";
+        ready.push(AdmittedPayloadSegment {
+            segment,
+            discontinuity_before,
+        });
         if state.pending.get(&sequence).is_none_or(VecDeque::is_empty) {
             state.pending.remove(&sequence);
         }
@@ -297,10 +321,10 @@ mod tests {
         let now = UNIX_EPOCH + Duration::from_secs(1_000_000);
         let first = reorderer.admit(now, vec![fresh(1)]);
         assert_eq!(first.len(), 1);
-        assert_eq!(first[0].sequence, 1);
+        assert_eq!(first[0].segment.sequence, 1);
         let second = reorderer.admit(now, vec![fresh(2)]);
         assert_eq!(second.len(), 1);
-        assert_eq!(second[0].sequence, 2);
+        assert_eq!(second[0].segment.sequence, 2);
         assert_eq!(reorderer.pending_segment_count(), 0);
     }
 
@@ -315,7 +339,7 @@ mod tests {
         let ready = reorderer.admit(now + REORDER_WINDOW, vec![fresh(1)]);
         let sequences = ready
             .iter()
-            .map(|segment| segment.sequence)
+            .map(|segment| segment.segment.sequence)
             .collect::<Vec<_>>();
         assert_eq!(sequences, vec![1, 2]);
         assert_eq!(reorderer.pending_segment_count(), 0);
@@ -331,7 +355,7 @@ mod tests {
         let ready = reorderer.admit(now + REORDER_WINDOW * 2, Vec::new());
         let sequences = ready
             .iter()
-            .map(|segment| segment.sequence)
+            .map(|segment| segment.segment.sequence)
             .collect::<Vec<_>>();
         assert_eq!(sequences, vec![3]);
         assert_eq!(reorderer.pending_segment_count(), 0);
@@ -345,7 +369,7 @@ mod tests {
         // A later admit (even with no new segments) flushes the expired chunk.
         let ready = reorderer.admit(now + REORDER_WINDOW * 2, Vec::new());
         assert_eq!(ready.len(), 1);
-        assert_eq!(ready[0].sequence, 5);
+        assert_eq!(ready[0].segment.sequence, 5);
     }
 
     #[test]
@@ -358,7 +382,7 @@ mod tests {
         second.bytes = vec![b'b'];
         let ready = reorderer.admit(now, vec![first, second]);
         assert_eq!(ready.len(), 2);
-        assert_eq!(ready[0].bytes, vec![b'a']);
-        assert_eq!(ready[1].bytes, vec![b'b']);
+        assert_eq!(ready[0].segment.bytes, vec![b'a']);
+        assert_eq!(ready[1].segment.bytes, vec![b'b']);
     }
 }

@@ -499,13 +499,14 @@ fn remove_launch_root(
     request_id: RequestId,
     trace_id: TraceId,
 ) -> Result<(), String> {
-    client
-        .send(ControlCommand::TrackRemove(TrackRemoveCommand {
-            request_id,
-            selector: TraceSelector::TraceId(trace_id),
-        }))
-        .map(|_| ())
-        .map_err(format_control_error)
+    match client.send(ControlCommand::TrackRemove(TrackRemoveCommand {
+        request_id,
+        selector: TraceSelector::TraceId(trace_id),
+    })) {
+        Ok(_) => Ok(()),
+        Err(error) if error.code == "not_found" => Ok(()),
+        Err(error) => Err(format_control_error(error)),
+    }
 }
 
 fn remove_launch_root_best_effort(
