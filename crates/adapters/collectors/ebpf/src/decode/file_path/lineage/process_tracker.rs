@@ -11,7 +11,13 @@ impl IpcLineageTracker {
         }
         let trace = self.traces.entry(key.trace_id).or_default();
         if let Err(reason) = trace.observe_process(&key.process, &self.config) {
-            trace.disable(key.trace_id, key.process, reason, 0, projection_enabled);
+            trace.disable(
+                key.trace_id,
+                key.process.as_ref().clone(),
+                reason,
+                0,
+                projection_enabled,
+            );
         }
     }
 
@@ -54,7 +60,13 @@ impl IpcLineageTracker {
         let child_id = match trace.observe_process(&child.process, &self.config) {
             Ok(child_id) => child_id,
             Err(reason) => {
-                trace.disable(child.trace_id, child.process, reason, 0, projection_enabled);
+                trace.disable(
+                    child.trace_id,
+                    child.process.as_ref().clone(),
+                    reason,
+                    0,
+                    projection_enabled,
+                );
                 return;
             }
         };
@@ -65,7 +77,7 @@ impl IpcLineageTracker {
             if let Err(reason) = trace.bind_fd(child_id, fd, binding, &self.config) {
                 trace.disable(
                     child.trace_id,
-                    child.process.clone(),
+                    child.process.as_ref().clone(),
                     reason,
                     0,
                     projection_enabled,
@@ -99,7 +111,7 @@ impl IpcLineageTracker {
         if let Err(reason) = trace.observe_process(&target.process, &self.config) {
             trace.disable(
                 target.trace_id,
-                target.process,
+                target.process.as_ref().clone(),
                 reason,
                 0,
                 projection_enabled,
@@ -125,7 +137,7 @@ impl IpcLineageTracker {
             Err(reason) => {
                 trace.disable(
                     key.trace_id,
-                    key.process,
+                    key.process.as_ref().clone(),
                     reason,
                     observed_ktime_ns,
                     projection_enabled,

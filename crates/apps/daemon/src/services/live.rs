@@ -58,8 +58,7 @@ impl StorageAttachService {
         self.drain_post_trace_runtime_impl()?;
         self.drain_resource_metrics_impl(trace_runtime)?;
         self.drain_tls_sync_events_impl(trace_runtime)?;
-        let stats = self.collector.stats();
-        let active_bindings = stats.active_bindings;
+        let active_bindings = self.collector.active_binding_trace_count();
         let active_path = self.collector_ready() && active_bindings > 0;
         self.workload_diagnostics
             .record_drain_call(active_bindings, active_path);
@@ -99,10 +98,15 @@ impl StorageAttachService {
 
         self.drain_seccomp_notifications_impl(trace_runtime)?;
         self.materialize_process_seccomp_observations_impl(trace_runtime)?;
+        let drain_probe_started = std::time::Instant::now();
+        let drain_probe_poll = std::time::Instant::now();
         let batch = self
             .collector
             .poll_batch()
             .map_err(|error| ControlError::new(error.stage, error.message))?;
+        let drain_probe_poll_ms = drain_probe_poll.elapsed().as_millis();
+        let observations_count = batch.observations.len();
+        let payload_segments_count = batch.payload_segments.len();
         warn_best_effort(
             self.persist_launch_binding_failures_impl(trace_runtime),
             "launch_binding_failure",
@@ -114,8 +118,12 @@ impl StorageAttachService {
         self.workload_diagnostics
             .record_collector_batch(batch.observations.len(), batch.payload_segments.len());
         self.log_tls_diagnostic_events_impl();
+        let drain_probe_events = std::time::Instant::now();
         self.process_live_event_batch(trace_runtime, batch.observations)?;
+        let drain_probe_events_ms = drain_probe_events.elapsed().as_millis();
+        let drain_probe_payloads = std::time::Instant::now();
         self.process_payload_segments_impl(trace_runtime, batch.payload_segments)?;
+        let drain_probe_payloads_ms = drain_probe_payloads.elapsed().as_millis();
         let mcp_stdio_diagnostics = self
             .semantic_actions
             .flush_closed_mcp_stdio_sessions_with_diagnostics(SystemTime::now());
@@ -132,6 +140,19 @@ impl StorageAttachService {
         self.forget_terminal_trace_state_impl(trace_runtime);
         self.sweep_storage_retention_impl(trace_runtime)?;
         let _ = self.collector.flush_transport();
+        let drain_probe_total_ms = drain_probe_started.elapsed().as_millis();
+        if drain_probe_total_ms >= 5000 {
+            tracing::warn!(
+                target: "actrail::perfprobe",
+                total_ms = drain_probe_total_ms,
+                poll_ms = drain_probe_poll_ms,
+                events_ms = drain_probe_events_ms,
+                payloads_ms = drain_probe_payloads_ms,
+                observations = observations_count,
+                payload_segments = payload_segments_count,
+                "slow drain cycle"
+            );
+        }
         Ok(())
     }
 

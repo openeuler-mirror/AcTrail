@@ -25,7 +25,9 @@ pub(super) fn decide_payload(
     };
     let sequence = config.next_sequence();
     if payload.len() > config.max_payload_bytes() {
+        let provider = config.provider_for_symbol(symbol);
         report_decision(
+            &provider,
             "block",
             direction,
             symbol,
@@ -37,11 +39,12 @@ pub(super) fn decide_payload(
         return RuntimeAction::Block;
     }
     let provider = config.provider_for_symbol(symbol);
-    report_payload(direction, symbol, stream_key, sequence, payload);
+    report_payload(&provider, direction, symbol, stream_key, sequence, payload);
     match config.decide(&provider, symbol, direction, stream_key, payload) {
         Ok(Decision::Allow) => RuntimeAction::Allow,
         Ok(Decision::Block { reason }) => {
             report_decision(
+                &provider,
                 "block",
                 direction,
                 symbol,
@@ -58,6 +61,7 @@ pub(super) fn decide_payload(
         }) => {
             if replacement.len() != payload.len() {
                 report_decision(
+                    &provider,
                     "block",
                     direction,
                     symbol,
@@ -69,6 +73,7 @@ pub(super) fn decide_payload(
                 return RuntimeAction::Block;
             }
             report_decision(
+                &provider,
                 "replace_equal_len",
                 direction,
                 symbol,
@@ -81,6 +86,7 @@ pub(super) fn decide_payload(
         }
         Err(error) => {
             report_decision(
+                &provider,
                 "block",
                 direction,
                 symbol,
@@ -95,6 +101,7 @@ pub(super) fn decide_payload(
 }
 
 pub(super) fn report_payload(
+    provider: &str,
     direction: PayloadDirection,
     symbol: &str,
     stream_key: usize,
@@ -104,18 +111,17 @@ pub(super) fn report_payload(
     let Some(config) = config::get() else {
         return;
     };
-    let provider = config.provider_for_symbol(symbol);
     let flow_decision = config.classify_flow(direction, stream_key, payload);
     match &flow_decision {
         FlowDecision::EmitPayload => {
             send_payload_event(
-                config, &provider, direction, symbol, stream_key, sequence, payload,
+                config, provider, direction, symbol, stream_key, sequence, payload,
             );
         }
         FlowDecision::EmitSummary(summary) => {
             send_summary_event(
                 config,
-                &provider,
+                provider,
                 direction,
                 symbol,
                 stream_key,
@@ -126,7 +132,7 @@ pub(super) fn report_payload(
         FlowDecision::EmitMany(emissions) => {
             for emission in emissions {
                 send_flow_emission(
-                    config, &provider, direction, symbol, stream_key, sequence, emission,
+                    config, provider, direction, symbol, stream_key, sequence, emission,
                 );
             }
         }
@@ -251,6 +257,7 @@ fn send_summary_event(
 }
 
 pub(super) fn report_decision(
+    provider: &str,
     action: &str,
     direction: PayloadDirection,
     symbol: &str,
@@ -262,9 +269,8 @@ pub(super) fn report_decision(
     let Some(config) = config::get() else {
         return;
     };
-    let provider = config.provider_for_symbol(symbol);
     send_decision_event(
-        config, &provider, action, direction, symbol, stream_key, sequence, reason,
+        config, provider, action, direction, symbol, stream_key, sequence, reason,
     );
     if !config.should_print_decision() {
         return;

@@ -1,10 +1,14 @@
 //! Daemon application package skeleton.
 
+#[path = "startup/bootstrap.rs"]
 pub(crate) mod bootstrap;
 pub(crate) mod control_loop;
+#[path = "startup/ebpf_resolve.rs"]
 pub(crate) mod ebpf_resolve;
+#[path = "startup/host_id.rs"]
 pub mod host_id;
 pub(crate) mod peer_identity;
+#[path = "startup/profiles.rs"]
 pub(crate) mod profiles;
 pub(crate) mod runtime_wiring;
 pub(crate) mod service_host;

@@ -94,8 +94,8 @@ impl Default for HttpApplicationDocument {
     fn default() -> Self {
         Self {
             capture_host: true,
-            sse_enabled: true,
-            sse_data_policy: "preview".to_string(),
+            sse_enabled: false,
+            sse_data_policy: "disabled".to_string(),
             sse_max_buffer_bytes: 4194304,
             sse_max_data_bytes: 65536,
         }

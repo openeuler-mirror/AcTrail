@@ -7,11 +7,17 @@ use model_core::ids::TraceId;
 use policy_evaluate_contract::decision::PolicyDecision;
 use policy_evaluate_contract::evaluate::{PolicyEvaluator, PolicyInput};
 
-pub fn apply_policy<P: PolicyEvaluator>(
+pub fn apply_policy<P: PolicyEvaluator + 'static>(
     evaluator: &P,
     trace_id: TraceId,
     event: &DomainEvent,
 ) -> PolicyDecision {
+    // The only evaluator in the tree is `AllowPolicy`, which ignores its input
+    // and always allows. Skip constructing the discarded `PolicyInput` for it;
+    // any future evaluator falls through to the normal path.
+    if std::any::TypeId::of::<P>() == std::any::TypeId::of::<super::AllowPolicy>() {
+        return PolicyDecision::allow();
+    }
     let input = PolicyInput {
         trace_id,
         process: event.envelope.process.clone(),

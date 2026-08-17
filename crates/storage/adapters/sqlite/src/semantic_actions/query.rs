@@ -8,7 +8,7 @@ use semantic_action::{SemanticAction, SemanticActionStoreError};
 use crate::SqliteStorage;
 use crate::semantic_actions::codebook::sqlite::action_kind_code_from_str;
 use crate::semantic_actions::store::{
-    ACTION_SELECT_COLUMNS, action_cold_field_join, action_from_row, read_evidence,
+    ACTION_SELECT_COLUMNS, action_cold_field_join, action_from_row, read_evidence_shared,
 };
 
 impl SqliteStorage {
@@ -62,7 +62,7 @@ impl SqliteStorage {
                     error.to_string(),
                 )
             })?;
-            action.evidence = read_evidence(&connection, &action.action_id)?;
+            action.evidence = read_evidence_shared(&connection, &action.action_id)?;
             actions.push(action);
         }
         Ok(actions)

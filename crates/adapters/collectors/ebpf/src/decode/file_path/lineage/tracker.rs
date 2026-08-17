@@ -63,7 +63,7 @@ impl IpcLineageTracker {
             Err(reason) => {
                 trace.disable(
                     key.trace_id,
-                    key.process.clone(),
+                    key.process.as_ref().clone(),
                     reason,
                     observed_ktime_ns,
                     projection_enabled,
@@ -91,7 +91,7 @@ impl IpcLineageTracker {
             Err(reason) => {
                 trace.disable(
                     key.trace_id,
-                    key.process.clone(),
+                    key.process.as_ref().clone(),
                     reason,
                     observed_ktime_ns,
                     projection_enabled,
@@ -109,7 +109,7 @@ impl IpcLineageTracker {
             Err(reason) => {
                 trace.disable(
                     key.trace_id,
-                    key.process.clone(),
+                    key.process.as_ref().clone(),
                     reason,
                     observed_ktime_ns,
                     projection_enabled,
@@ -315,7 +315,7 @@ impl IpcLineageTracker {
                 Err(reason) => {
                     trace.disable(
                         key.trace_id,
-                        key.process.clone(),
+                        key.process.as_ref().clone(),
                         reason,
                         observed_ktime_ns,
                         projection_enabled,

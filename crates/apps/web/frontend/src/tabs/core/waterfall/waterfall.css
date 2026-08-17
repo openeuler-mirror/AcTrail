@@ -4,9 +4,13 @@
   height: 100%;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 18px;
+  gap: 8px;
+  padding: 12px;
   overflow: hidden;
+}
+
+.waterfall-detail-layout:not(.detail-open) {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .waterfall-toolbar {
@@ -26,6 +30,8 @@
 
 .wf-actions {
   display: flex;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
   gap: 8px;
 }
 
@@ -62,8 +68,8 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px;
-  padding: 6px 10px;
+  gap: 6px;
+  padding: 5px 8px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface-muted);
@@ -182,7 +188,7 @@
 .waterfall-legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
 }
 
 .waterfall-bottlenecks {
@@ -251,6 +257,8 @@
 .wf-bottleneck-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  max-height: 190px;
+  overflow: auto;
   border-top: 1px solid var(--border);
   background: var(--surface);
 }
@@ -472,8 +480,8 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 26px;
-  padding: 0 10px;
+  height: 23px;
+  padding: 0 8px;
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--surface);
@@ -501,11 +509,22 @@
 
 .waterfall-scroll {
   flex: 1 1 0;
-  min-height: 0;
+  min-height: 240px;
   overflow: auto;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--surface);
+}
+
+.wf-time-track {
+  cursor: ew-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.waterfall-scroll.is-panning,
+.waterfall-scroll.is-panning .wf-time-track {
+  cursor: grabbing;
 }
 
 .waterfall-axis {
@@ -916,7 +935,7 @@
 }
 
 .waterfall-panel {
-  --wf-gutter-width: 380px;
+  --wf-gutter-width: clamp(270px, 34%, 380px);
 }
 
 .wf-llm-scope {

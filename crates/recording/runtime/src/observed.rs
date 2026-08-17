@@ -6,7 +6,10 @@ use model_core::process::{ProcessMembership, ProcessRecord};
 use model_core::trace::TraceRecord;
 use storage_core::StorageBackend;
 
-use crate::semantic::{RecordingError, SemanticActionBatch, SemanticActionRecorder};
+use crate::semantic::{
+    RecordingError, SemanticActionBatch, SemanticActionPersistenceAccumulator,
+    SemanticActionRecorder,
+};
 
 #[derive(Default)]
 pub(crate) struct ObservedRecordBatch {
@@ -37,32 +40,6 @@ impl ObservedRecordBatch {
             semantic_actions,
             trace_states,
             process_records,
-        }
-    }
-
-    pub(crate) fn from_payload_segment(
-        segment: PayloadSegment,
-        semantic_actions: SemanticActionBatch,
-    ) -> Self {
-        // Payload retention depends on each segment write being visible to the next check.
-        Self {
-            events: Vec::new(),
-            payload_segments: vec![segment],
-            diagnostics: Vec::new(),
-            semantic_actions,
-            trace_states: Vec::new(),
-            process_records: Vec::new(),
-        }
-    }
-
-    pub(crate) fn from_event(event: DomainEvent, semantic_actions: SemanticActionBatch) -> Self {
-        Self {
-            events: vec![event],
-            payload_segments: Vec::new(),
-            diagnostics: Vec::new(),
-            semantic_actions,
-            trace_states: Vec::new(),
-            process_records: Vec::new(),
         }
     }
 
@@ -159,6 +136,9 @@ impl<'a> ObservedRecordRecorder<'a> {
             let mut recorder = SemanticActionRecorder::new(&mut *self.storage);
             recorder.persist_batch(semantic_actions.as_record_batch())?;
         }
+        for segment in semantic_actions.payload_segments() {
+            self.storage.append_payload_segment(segment.clone())?;
+        }
         for diagnostic in diagnostics {
             self.storage.append_diagnostic(diagnostic)?;
         }
@@ -176,11 +156,15 @@ impl<'a> ObservedRecordRecorder<'a> {
 
 pub struct ObservedRecordWriteSession<'a> {
     storage: &'a mut dyn StorageBackend,
+    semantic_actions: SemanticActionPersistenceAccumulator,
 }
 
 impl<'a> ObservedRecordWriteSession<'a> {
     pub(crate) fn new(storage: &'a mut dyn StorageBackend) -> Self {
-        Self { storage }
+        Self {
+            storage,
+            semantic_actions: SemanticActionPersistenceAccumulator::default(),
+        }
     }
 
     pub fn retained_payload_bytes(&self, trace_id: TraceId) -> Result<u64, RecordingError> {
@@ -199,46 +183,39 @@ impl<'a> ObservedRecordWriteSession<'a> {
         &mut self,
         trace_state: TraceStateRecord,
     ) -> Result<(), RecordingError> {
-        self.persist_batch(ObservedRecordBatch::from_trace_state(
-            trace_state,
-            Vec::new(),
-        ))
-        .map(|_| ())
-    }
-
-    pub(crate) fn persist_batch(
-        &mut self,
-        batch: ObservedRecordBatch,
-    ) -> Result<ObservedRecordCommit, RecordingError> {
-        ObservedRecordRecorder::new(self.storage).persist_batch(batch)
+        self.storage.create_trace(trace_state.trace)?;
+        for membership in trace_state.memberships {
+            self.storage.upsert_membership(membership)?;
+        }
+        Ok(())
     }
 
     pub fn persist_payload_segment(
         &mut self,
         segment: PayloadSegment,
         semantic_actions: SemanticActionBatch,
-    ) -> Result<SemanticActionBatch, RecordingError> {
-        self.persist_batch(ObservedRecordBatch::from_payload_segment(
-            segment,
-            semantic_actions,
-        ))
-        .map(ObservedRecordCommit::into_semantic_actions)
+    ) -> Result<(), RecordingError> {
+        self.storage.append_payload_segment(segment)?;
+        self.semantic_actions.push_batch(semantic_actions)
     }
 
     pub fn persist_semantic_actions(
         &mut self,
         semantic_actions: SemanticActionBatch,
-    ) -> Result<SemanticActionBatch, RecordingError> {
-        self.persist_batch(ObservedRecordBatch::from_semantic_actions(semantic_actions))
-            .map(ObservedRecordCommit::into_semantic_actions)
+    ) -> Result<(), RecordingError> {
+        self.semantic_actions.push_batch(semantic_actions)
     }
 
     pub fn persist_event(
         &mut self,
         event: DomainEvent,
         semantic_actions: SemanticActionBatch,
-    ) -> Result<SemanticActionBatch, RecordingError> {
-        self.persist_batch(ObservedRecordBatch::from_event(event, semantic_actions))
-            .map(ObservedRecordCommit::into_semantic_actions)
+    ) -> Result<(), RecordingError> {
+        self.storage.append_event(event)?;
+        self.semantic_actions.push_batch(semantic_actions)
+    }
+
+    pub(crate) fn finish(self) -> Result<(), RecordingError> {
+        self.semantic_actions.persist(self.storage)
     }
 }

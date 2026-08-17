@@ -25,15 +25,17 @@ use crate::records::{
 
 impl TraceWriteStore for SqliteStorage {
     fn create_trace(&mut self, trace: TraceRecord) -> Result<(), WriteError> {
-        self.connection()
-            .borrow_mut()
-            .execute(
+        let connection = self.connection().borrow_mut();
+        connection
+            .prepare_cached(
                 "INSERT OR REPLACE INTO traces (
                     trace_id, alert_token, root_process_id, root_container_id, root_working_directory,
                     display_name, profile_name, tags, lifecycle_state, health, created_at,
                     started_at, completed_at, exited_at, failed_at
                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
-                params![
+            )
+            .and_then(|mut statement| {
+                statement.execute(params![
                     trace.trace_id.get(),
                     trace.alert_token.as_bytes().as_slice(),
                     trace.root_process_identity.get(),
@@ -49,8 +51,8 @@ impl TraceWriteStore for SqliteStorage {
                     trace.timings.completed_at.map(encode_time),
                     trace.timings.exited_at.map(encode_time),
                     trace.timings.failed_at.map(encode_time),
-                ],
-            )
+                ])
+            })
             .map(|_| ())
             .map_err(|error| WriteError::new("create_trace", error.to_string()))
     }
@@ -60,12 +62,15 @@ impl TraceWriteStore for SqliteStorage {
         trace_id: model_core::ids::TraceId,
         lifecycle_state: TraceLifecycleState,
     ) -> Result<(), WriteError> {
-        self.connection()
-            .borrow_mut()
-            .execute(
-                "UPDATE traces SET lifecycle_state = ?2 WHERE trace_id = ?1",
-                params![trace_id.get(), encode_trace_lifecycle(lifecycle_state)],
-            )
+        let connection = self.connection().borrow_mut();
+        connection
+            .prepare_cached("UPDATE traces SET lifecycle_state = ?2 WHERE trace_id = ?1")
+            .and_then(|mut statement| {
+                statement.execute(params![
+                    trace_id.get(),
+                    encode_trace_lifecycle(lifecycle_state)
+                ])
+            })
             .map(|_| ())
             .map_err(|error| WriteError::new("update_trace_lifecycle", error.to_string()))
     }
@@ -75,12 +80,12 @@ impl TraceWriteStore for SqliteStorage {
         trace_id: model_core::ids::TraceId,
         health: TraceHealth,
     ) -> Result<(), WriteError> {
-        self.connection()
-            .borrow_mut()
-            .execute(
-                "UPDATE traces SET health = ?2 WHERE trace_id = ?1",
-                params![trace_id.get(), encode_trace_health(health)],
-            )
+        let connection = self.connection().borrow_mut();
+        connection
+            .prepare_cached("UPDATE traces SET health = ?2 WHERE trace_id = ?1")
+            .and_then(|mut statement| {
+                statement.execute(params![trace_id.get(), encode_trace_health(health)])
+            })
             .map(|_| ())
             .map_err(|error| WriteError::new("update_trace_health", error.to_string()))
     }
@@ -88,15 +93,34 @@ impl TraceWriteStore for SqliteStorage {
 
 impl MembershipWriteStore for SqliteStorage {
     fn upsert_membership(&mut self, membership: ProcessMembership) -> Result<(), WriteError> {
-        self.connection()
-            .borrow_mut()
-            .execute(
-                "INSERT OR REPLACE INTO memberships (
+        let connection = self.connection().borrow_mut();
+        connection
+            .prepare_cached(
+                "INSERT INTO memberships (
                     trace_id, process_id, inherited_from_process_id, observed_at,
                     capture_enabled, propagation_enabled, membership_state, exit_code,
                     exit_observed_at, exit_observation_source
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                params![
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                ON CONFLICT(trace_id, process_id) DO UPDATE SET
+                    inherited_from_process_id = excluded.inherited_from_process_id,
+                    observed_at = excluded.observed_at,
+                    capture_enabled = excluded.capture_enabled,
+                    propagation_enabled = excluded.propagation_enabled,
+                    membership_state = excluded.membership_state,
+                    exit_code = excluded.exit_code,
+                    exit_observed_at = excluded.exit_observed_at,
+                    exit_observation_source = excluded.exit_observation_source
+                WHERE memberships.inherited_from_process_id IS NOT excluded.inherited_from_process_id
+                   OR memberships.observed_at IS NOT excluded.observed_at
+                   OR memberships.capture_enabled IS NOT excluded.capture_enabled
+                   OR memberships.propagation_enabled IS NOT excluded.propagation_enabled
+                   OR memberships.membership_state IS NOT excluded.membership_state
+                   OR memberships.exit_code IS NOT excluded.exit_code
+                   OR memberships.exit_observed_at IS NOT excluded.exit_observed_at
+                   OR memberships.exit_observation_source IS NOT excluded.exit_observation_source",
+            )
+            .and_then(|mut statement| {
+                statement.execute(params![
                     membership.trace_id.get(),
                     membership.identity.get(),
                     membership.inherited_from.map(|identity| identity.get()),
@@ -114,8 +138,8 @@ impl MembershipWriteStore for SqliteStorage {
                         .as_ref()
                         .and_then(|value| value.source)
                         .map(encode_exit_observation_source),
-                ],
-            )
+                ])
+            })
             .map(|_| ())
             .map_err(|error| WriteError::new("upsert_membership", error.to_string()))
     }
@@ -125,15 +149,17 @@ impl EventWriteStore for SqliteStorage {
     fn append_event(&mut self, event: DomainEvent) -> Result<(), WriteError> {
         let (payload_variant, payload_fields, payload_bytes) = encode_event_payload(&event.payload);
         let (policy_redactions, policy_truncations) = encode_policy_record(&event.policy);
-        self.connection()
-            .borrow_mut()
-            .execute(
+        let connection = self.connection().borrow_mut();
+        connection
+            .prepare_cached(
                 "INSERT OR REPLACE INTO events (
                     event_id, trace_id, observed_at, process_id, collector, kind, bootstrap_observed,
                     metadata_partial, policy_modified, payload_variant, payload_fields, payload_bytes,
                     policy_verdict, policy_note, policy_redactions, policy_truncations
                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
-                params![
+            )
+            .and_then(|mut statement| {
+                statement.execute(params![
                     event.envelope.event_id.get(),
                     event.envelope.trace_id.get(),
                     encode_time(event.envelope.observed_at),
@@ -150,8 +176,8 @@ impl EventWriteStore for SqliteStorage {
                     event.policy.note,
                     policy_redactions,
                     policy_truncations,
-                ],
-            )
+                ])
+            })
             .map(|_| ())
             .map_err(|error| WriteError::new("append_event", error.to_string()))
     }
@@ -159,9 +185,9 @@ impl EventWriteStore for SqliteStorage {
 
 impl PayloadWriteStore for SqliteStorage {
     fn append_payload_segment(&mut self, segment: PayloadSegment) -> Result<(), WriteError> {
-        self.connection()
-            .borrow_mut()
-            .execute(
+        let connection = self.connection().borrow_mut();
+        connection
+            .prepare_cached(
                 "INSERT OR REPLACE INTO payload_segments (
                     segment_id, trace_id, observed_at, process_id, source_boundary,
                     content_state, direction, stream_key, sequence,
@@ -169,7 +195,9 @@ impl PayloadWriteStore for SqliteStorage {
                     operation_original_size, operation_captured_size, operation_completion_state,
                     truncation_state, redaction_state, library, symbol, protocol_hint, bytes
                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
-                params![
+            )
+            .and_then(|mut statement| {
+                statement.execute(params![
                     segment.segment_id.get(),
                     segment.trace_id.get(),
                     encode_time(segment.observed_at),
@@ -192,8 +220,8 @@ impl PayloadWriteStore for SqliteStorage {
                     segment.symbol,
                     segment.protocol_hint,
                     segment.bytes,
-                ],
-            )
+                ])
+            })
             .map(|_| ())
             .map_err(|error| WriteError::new("append_payload_segment", error.to_string()))
     }
@@ -201,13 +229,15 @@ impl PayloadWriteStore for SqliteStorage {
 
 impl DiagnosticWriteStore for SqliteStorage {
     fn append_diagnostic(&mut self, diagnostic: DiagnosticRecord) -> Result<(), WriteError> {
-        self.connection()
-            .borrow_mut()
-            .execute(
+        let connection = self.connection().borrow_mut();
+        connection
+            .prepare_cached(
                 "INSERT OR REPLACE INTO diagnostics (
                     diagnostic_id, trace_id, process_id, kind, severity, emitted_at, message, metadata
                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![
+            )
+            .and_then(|mut statement| {
+                statement.execute(params![
                     diagnostic.diagnostic_id.get(),
                     diagnostic.trace_id.map(|value| value.get()),
                     diagnostic.process.map(|value| value.get()),
@@ -216,8 +246,8 @@ impl DiagnosticWriteStore for SqliteStorage {
                     encode_time(diagnostic.emitted_at),
                     diagnostic.message,
                     encode_map(&diagnostic.metadata),
-                ],
-            )
+                ])
+            })
             .map(|_| ())
             .map_err(|error| WriteError::new("append_diagnostic", error.to_string()))
     }

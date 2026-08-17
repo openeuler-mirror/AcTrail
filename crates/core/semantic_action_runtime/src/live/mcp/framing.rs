@@ -81,7 +81,7 @@ impl McpJsonRpcFramer {
     pub(super) fn observe_candidate(
         &mut self,
         segment: &PayloadSegment,
-        retain_evidence: bool,
+        _retain_evidence: bool,
     ) -> McpCandidateFramingObservation {
         if segment.truncation == PayloadTruncationState::Truncated {
             self.discard_buffer();
@@ -90,7 +90,7 @@ impl McpJsonRpcFramer {
                 rejection: Some("candidate_truncated"),
             };
         }
-        if let Err(rejection) = self.append_segment(segment, retain_evidence) {
+        if let Err(rejection) = self.append_segment(segment, _retain_evidence) {
             return McpCandidateFramingObservation {
                 messages: Vec::new(),
                 rejection: Some(rejection),
@@ -132,7 +132,7 @@ impl McpJsonRpcFramer {
     fn append_segment(
         &mut self,
         segment: &PayloadSegment,
-        retain_evidence: bool,
+        _retain_evidence: bool,
     ) -> Result<(), &'static str> {
         if segment.bytes.is_empty() {
             return Ok(());
@@ -157,7 +157,7 @@ impl McpJsonRpcFramer {
         self.segments.push_back(McpSegmentRange {
             start,
             end,
-            segment_id: retain_evidence.then(|| segment.segment_id.get()),
+            segment_id: Some(segment.segment_id.get()),
             observed_at: segment.observed_at,
         });
         Ok(())
@@ -386,14 +386,25 @@ impl McpJsonRpcFramer {
             .take_while(|segment| segment.start < end)
             .filter_map(|segment| {
                 observed_at = observed_at.max(segment.observed_at);
-                segment.segment_id.map(|id| SemanticEvidence {
-                    kind: SemanticEvidenceKind::PayloadSegment,
-                    id,
-                    role: evidence_roles::mcp::TOOL_CALL_PAYLOAD.to_string(),
-                })
+                segment
+                    .segment_id
+                    .filter(|id| *id != u64::MAX)
+                    .map(|id| SemanticEvidence {
+                        kind: SemanticEvidenceKind::PayloadSegment,
+                        id,
+                        role: evidence_roles::mcp::TOOL_CALL_PAYLOAD.to_string(),
+                    })
             })
             .collect();
         (evidence, observed_at)
+    }
+
+    pub(super) fn first_segment_id(&self) -> Option<u64> {
+        self.segments.front().and_then(|segment| segment.segment_id)
+    }
+
+    pub(super) fn buffer_bytes(&self) -> &[u8] {
+        &self.buffer
     }
 
     fn evict_encoded_prefix(&mut self, encoded_len: usize) {

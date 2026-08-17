@@ -108,6 +108,8 @@ pub const DEFAULT_FINALIZATION_TRACES_PER_CYCLE: u32 = 1;
 pub const DEFAULT_FINALIZATION_POLL_INTERVAL_MS: u64 = 100;
 pub const DEFAULT_FINALIZATION_SETTLE_DELAY_MS: u64 = 250;
 pub const DEFAULT_FINALIZATION_SHUTDOWN_DRAIN_TIMEOUT_MS: u64 = 30_000;
+pub const DEFAULT_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS: u32 = 4;
+pub const MAX_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS: u32 = 16;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TraceFinalizationConfig {
@@ -267,6 +269,7 @@ pub struct EbpfCollectorConfig {
     /// set by `resolve_ebpf_collector_config` based on the host probe.
     pub enabled: bool,
     pub memlock_rlimit: MemlockRlimit,
+    pub preflight_link_teardown_workers: u32,
     pub tracked_process_max_entries: u32,
     pub pending_operation_max_entries: u32,
     pub suppressed_fd_max_entries: u32,

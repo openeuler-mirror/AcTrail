@@ -27,14 +27,14 @@ fn exec_enrichment_preserves_state_inherited_by_host_only_fork() {
 
     assert!(!tracker.processes.contains_key(&ProcessFileKey {
         trace_id,
-        process: child_host,
+        process: std::rc::Rc::new(child_host),
     }));
     assert_eq!(
         tracker
             .processes
             .get(&ProcessFileKey {
                 trace_id,
-                process: child_enriched,
+                process: std::rc::Rc::new(child_enriched),
             })
             .and_then(|state| state.cwd.as_deref()),
         Some("/work")

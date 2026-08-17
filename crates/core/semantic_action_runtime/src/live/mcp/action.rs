@@ -138,6 +138,7 @@ impl LiveMcpProjector {
             ],
             actions: vec![tool_call, request, stdout],
             contents,
+            payload_segments: Vec::new(),
         }
     }
 
@@ -235,6 +236,7 @@ impl LiveMcpProjector {
             ],
             actions: vec![open.action, response, stdin],
             contents,
+            payload_segments: Vec::new(),
         }
     }
 

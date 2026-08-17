@@ -74,6 +74,7 @@ pub(super) struct McpStdioLifecycleObservation {
 pub(super) struct McpStdioRoute {
     pub(super) session: Option<McpStdioSessionKey>,
     pub(super) messages: Vec<McpBufferedStdioMessage>,
+    pub(super) payload_segments: Vec<PayloadSegment>,
     pub(super) diagnostics: Vec<LiveMcpStdioDiagnostic>,
 }
 
@@ -138,6 +139,11 @@ impl McpStdioSessionRegistry {
                         McpStdioRoute::default(),
                     ),
                     Ok(McpCandidateSegmentOutcome::Confirmed) => {
+                        let stdin_draft = if retain_evidence {
+                            None
+                        } else {
+                            candidate.stdin_payload_draft(segment)
+                        };
                         let (confirmed, messages) = candidate.confirm(self.parse_buffer_max_bytes);
                         self.candidate_keys.remove(&key);
                         self.metrics.confirmed = self.metrics.confirmed.saturating_add(1);
@@ -145,6 +151,7 @@ impl McpStdioSessionRegistry {
                             McpStdioSessionState::Confirmed(confirmed),
                             McpStdioRoute {
                                 messages,
+                                payload_segments: stdin_draft.into_iter().collect(),
                                 ..McpStdioRoute::default()
                             },
                         )

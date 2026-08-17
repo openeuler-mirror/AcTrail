@@ -38,7 +38,7 @@ impl<'a> SemanticActionRecorder<'a> {
         Ok(())
     }
 
-    fn persists_action_kind(kind: SemanticActionKind) -> bool {
+    pub(super) fn persists_action_kind(kind: SemanticActionKind) -> bool {
         // Termination is durable in process records and raw exit events. The
         // semantic exit actions exist only to make the online export boundary explicit.
         !matches!(

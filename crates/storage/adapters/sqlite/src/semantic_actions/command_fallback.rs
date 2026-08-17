@@ -9,7 +9,7 @@ use crate::SqliteStorage;
 use crate::records::encode_time;
 use crate::semantic_actions::codebook::sqlite::action_kind_code;
 use crate::semantic_actions::store::{
-    ACTION_SELECT_COLUMNS, action_cold_field_join, action_from_row, read_evidence,
+    ACTION_SELECT_COLUMNS, action_cold_field_join, action_from_row, read_evidence_shared,
 };
 use crate::semantic_actions::tree_metadata::{
     display_parent_link_absence_predicate, display_parent_link_value_count,
@@ -76,7 +76,7 @@ impl SqliteStorage {
             if invalidated_action_attrs(&action.attributes) {
                 continue;
             }
-            action.evidence = read_evidence(&connection, &action.action_id)?;
+            action.evidence = read_evidence_shared(&connection, &action.action_id)?;
             children.push(action);
         }
         Ok(children)

@@ -5,7 +5,7 @@ use semantic_action::{
     FilePathSetState, FilePathSetWrite, SemanticActionStoreError, file_path_set_identity_for_paths,
 };
 
-use crate::semantic_actions::action_ids::intern_action_id;
+use crate::semantic_actions::action_ids::intern_action_id_shared;
 
 use super::hash::{encode_path_ids, stable_hash_bytes, stable_hash_text};
 
@@ -378,7 +378,8 @@ fn write_action_ref(
     connection: &rusqlite::Connection,
     path_set: &FilePathSetWrite,
 ) -> Result<(), SemanticActionStoreError> {
-    let action_key = intern_action_id(connection, path_set.trace_id.get(), &path_set.action_id)?;
+    let action_key =
+        intern_action_id_shared(connection, path_set.trace_id.get(), &path_set.action_id)?;
     connection
         .execute(
             "INSERT INTO file_path_set_action_refs (

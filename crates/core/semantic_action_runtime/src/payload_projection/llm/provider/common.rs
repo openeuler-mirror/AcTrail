@@ -66,7 +66,9 @@ pub(super) fn push_non_empty_text(chunks: &mut Vec<String>, text: &str) {
     }
 }
 
-pub(super) fn extract_token_usage(value: &Value) -> Option<LlmTokenUsage> {
+pub(in crate::payload_projection::llm) fn extract_token_usage(
+    value: &Value,
+) -> Option<LlmTokenUsage> {
     let usage = value.get("usage")?.as_object()?;
     let prompt_tokens =
         token_count(usage.get("prompt_tokens")).or_else(|| token_count(usage.get("input_tokens")));

@@ -1,14 +1,16 @@
 //! LLM response body and SSE framing adapter.
 
-use config_core::daemon::SseEventContentRetention;
 use semantic_action::{
-    LlmJsonResponseInput, LlmParsedResponse, LlmParsedSseEvent, LlmSseEvent as ProviderSseEvent,
-    LlmSseResponseInput, LlmTokenUsage,
+    LlmJsonResponseInput, LlmParsedResponse, LlmProviderResponseStreamParser,
+    LlmSseEvent as ProviderSseEvent, LlmSseResponseInput, LlmTokenUsage,
 };
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use super::codec::{LlmCodecRegistry, NormalizedSseEvent, SseCodecEvent};
-use super::provider::{parse_json_response, parse_sse_response, tool_calls_json};
+use super::provider::{
+    extract_token_usage, new_sse_stream_parser, parse_json_response, parse_sse_response,
+    tool_calls_json,
+};
 
 const SSE_DONE_MARKER: &str = "[DONE]";
 
@@ -24,24 +26,13 @@ pub(super) struct LlmResponseBody {
     pub(super) chunk_count: usize,
     pub(super) done: bool,
     pub(super) stream: bool,
-    pub(super) sse_events: Vec<SseEvent>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct SseEvent {
-    pub(super) index: usize,
-    pub(super) event_type: Option<String>,
-    pub(super) id: Option<String>,
-    pub(super) raw_data: String,
-    pub(super) model: Option<String>,
-    pub(super) content_text: Option<String>,
-    pub(super) reasoning_text: Option<String>,
-    pub(super) tool_calls_json: Option<String>,
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct LlmResponseProgress {
     pub(super) done: bool,
-    pub(super) finish_reason: Option<String>,
-    pub(super) has_content_delta: bool,
-    pub(super) has_reasoning_delta: bool,
-    pub(super) has_tool_delta: bool,
+    pub(super) stream: bool,
+    pub(super) chunk_count: usize,
 }
 
 pub(super) fn parse_llm_response_body(
@@ -51,21 +42,240 @@ pub(super) fn parse_llm_response_body(
     LlmResponseBodyParser { codecs }.parse(body)
 }
 
-pub(super) fn sse_events_json(
-    events: &[SseEvent],
-    content: SseEventContentRetention,
-) -> Option<String> {
-    let values = match content {
-        SseEventContentRetention::None => return None,
-        SseEventContentRetention::Parsed => {
-            events.iter().map(sse_event_json_value).collect::<Vec<_>>()
+/// Byte-source of the body passed to the incremental SSE parser.
+///
+/// The incremental cache is only valid while the body bytes are a strict
+/// prefix extension of what was previously parsed. Switching projection
+/// paths changes the byte source, so the cache is reseeded.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum SseBodySource {
+    SplitHttp,
+    RawBytes,
+    ChunkedBody,
+}
+
+/// Incremental SSE parse state for one in-flight response message.
+///
+/// Every payload segment re-ran `parse_llm_response_body` over the whole
+/// accumulated SSE body, which is O(M²) over a stream of M events. This cache
+/// parses only newly appended events through a provider stream parser and
+/// accumulates the aggregate response body instead.
+pub(crate) struct IncrementalSseCache {
+    source: SseBodySource,
+    stream_parser: Box<dyn LlmProviderResponseStreamParser + Send>,
+    token_usage: Option<LlmTokenUsage>,
+    consumed_body_len: usize,
+    /// True when the parsed body ended mid-event (no trailing blank line).
+    /// If the next delta continues that event, semantics require a batch
+    /// re-parse fallback.
+    pending_partial: bool,
+    done: bool,
+    chunk_count: usize,
+}
+
+impl IncrementalSseCache {
+    fn seed(
+        source: SseBodySource,
+        body: &[u8],
+        codecs: &LlmCodecRegistry,
+    ) -> Option<(Self, LlmResponseProgress)> {
+        // Codec-decoded streams and non-OpenAI-compatible providers keep the
+        // batch parser so incremental behavior stays exactly equivalent where
+        // it is active.
+        if !codecs.is_empty() {
+            return None;
         }
-        SseEventContentRetention::Raw => events
-            .iter()
-            .map(raw_sse_event_json_value)
-            .collect::<Vec<_>>(),
-    };
-    (!values.is_empty()).then(|| Value::Array(values).to_string())
+        let text = std::str::from_utf8(body).ok()?;
+        let (events, trailing_partial) = parse_sse_events_with_trailing(text);
+        let first = events.first()?;
+        let (stream_parser, provider_id) = new_sse_stream_parser(LlmSseResponseInput {
+            text,
+            events: std::slice::from_ref(&provider_sse_event(first)),
+        })?;
+        if provider_id != "openai-compatible" {
+            return None;
+        }
+        let mut cache = Self {
+            source,
+            stream_parser,
+            token_usage: None,
+            consumed_body_len: 0,
+            pending_partial: false,
+            done: false,
+            chunk_count: 0,
+        };
+        for event in events {
+            cache.apply_event(event);
+        }
+        cache.consumed_body_len = body.len();
+        cache.pending_partial = trailing_partial;
+        let progress = cache.progress();
+        Some((cache, progress))
+    }
+
+    fn apply_event(&mut self, event: SseCodecEvent) {
+        let parsed = self.stream_parser.observe_event(provider_sse_event(&event));
+        if let Some(usage) = event.json.as_ref().and_then(extract_token_usage) {
+            self.token_usage = Some(usage);
+        }
+        if parsed.done || parsed.finish_reason.is_some() {
+            self.done = true;
+        }
+        if parsed.content_text.is_some() || parsed.reasoning_text.is_some() {
+            self.chunk_count += 1;
+        }
+    }
+
+    fn observe_delta(&mut self, body: &[u8]) -> Result<(), ()> {
+        if self.consumed_body_len >= body.len() {
+            return Ok(());
+        }
+        let text = std::str::from_utf8(&body[self.consumed_body_len..]).map_err(|_| ())?;
+        if text.is_empty() {
+            self.consumed_body_len = body.len();
+            return Ok(());
+        }
+        if self.pending_partial && !text.starts_with("\n\n") {
+            return Err(());
+        }
+        let (events, trailing_partial) = parse_sse_events_with_trailing(text);
+        for event in events {
+            self.apply_event(event);
+        }
+        self.consumed_body_len = body.len();
+        self.pending_partial = trailing_partial;
+        Ok(())
+    }
+
+    fn body(&mut self) -> Option<LlmResponseBody> {
+        let mut parsed = self.stream_parser.finish()?;
+        if let Some(usage) = self.token_usage.clone() {
+            parsed.token_usage = Some(usage);
+        }
+        Some(response_body(false, parsed))
+    }
+
+    fn progress(&self) -> LlmResponseProgress {
+        LlmResponseProgress {
+            done: self.done,
+            stream: true,
+            chunk_count: self.chunk_count,
+        }
+    }
+}
+
+fn advance_cache(
+    source: SseBodySource,
+    body: &[u8],
+    codecs: &LlmCodecRegistry,
+    cache: &mut Option<IncrementalSseCache>,
+) -> CacheAdvance {
+    if let Some(existing) = cache.as_ref() {
+        if existing.source != source {
+            *cache = None;
+        }
+    }
+    match cache {
+        Some(existing) => match existing.observe_delta(body) {
+            Ok(()) => CacheAdvance::Incremental(existing.progress()),
+            Err(()) => {
+                *cache = None;
+                batch_advance(body, codecs)
+            }
+        },
+        None => {
+            if let Some((seeded, progress)) = IncrementalSseCache::seed(source, body, codecs) {
+                *cache = Some(seeded);
+                CacheAdvance::Incremental(progress)
+            } else {
+                batch_advance(body, codecs)
+            }
+        }
+    }
+}
+
+enum CacheAdvance {
+    Incremental(LlmResponseProgress),
+    Batch(LlmResponseBody),
+    Unparseable,
+}
+
+fn batch_advance(body: &[u8], codecs: &LlmCodecRegistry) -> CacheAdvance {
+    match parse_llm_response_body(body, codecs) {
+        Some(parsed) => CacheAdvance::Batch(parsed),
+        None => CacheAdvance::Unparseable,
+    }
+}
+
+/// Advance the incremental SSE cache and report progress scalars only.
+///
+/// Unlike [`parse_llm_response_body_incremental`], this does not materialize
+/// the accumulated response body, so in-flight chunks avoid cloning the
+/// accumulated content and tool calls.
+pub(super) fn parse_llm_response_progress(
+    source: SseBodySource,
+    body: &[u8],
+    codecs: &LlmCodecRegistry,
+    cache: &mut Option<IncrementalSseCache>,
+) -> Option<LlmResponseProgress> {
+    match advance_cache(source, body, codecs, cache) {
+        CacheAdvance::Incremental(progress) => Some(progress),
+        CacheAdvance::Batch(parsed) => Some(LlmResponseProgress {
+            done: parsed.done,
+            stream: parsed.stream,
+            chunk_count: parsed.chunk_count,
+        }),
+        CacheAdvance::Unparseable => None,
+    }
+}
+
+/// Parse an SSE response body incrementally when possible, falling back to the
+/// batch parser for codec paths, unsupported providers, or mid-event merges.
+pub(super) fn parse_llm_response_body_incremental(
+    source: SseBodySource,
+    body: &[u8],
+    codecs: &LlmCodecRegistry,
+    cache: &mut Option<IncrementalSseCache>,
+) -> Option<LlmResponseBody> {
+    match advance_cache(source, body, codecs, cache) {
+        CacheAdvance::Incremental(_) => cache.as_mut()?.body(),
+        CacheAdvance::Batch(parsed) => Some(parsed),
+        CacheAdvance::Unparseable => None,
+    }
+}
+
+/// Split SSE text into events like `parse_sse_events`, additionally reporting
+/// whether the text ended mid-event (the last block had no trailing blank line).
+fn parse_sse_events_with_trailing(text: &str) -> (Vec<SseCodecEvent>, bool) {
+    let mut items = Vec::new();
+    for block in text.split("\n\n").filter(|block| !block.trim().is_empty()) {
+        let mut data_lines = Vec::new();
+        let mut event_type = None;
+        let mut id = None;
+        for line in block.lines() {
+            let line = line.trim_end_matches('\r');
+            let Some((name, value)) = line.split_once(':') else {
+                continue;
+            };
+            match name.trim().to_ascii_lowercase().as_str() {
+                "data" => data_lines.push(value.trim_start()),
+                "event" => event_type = Some(value.trim().to_string()),
+                "id" => id = Some(value.trim().to_string()),
+                _ => {}
+            }
+        }
+        if !data_lines.is_empty() {
+            let data = data_lines.join("\n");
+            items.push(raw_sse_event(items.len(), event_type, id, data));
+        }
+    }
+    let trailing_partial = !text.is_empty()
+        && !text.ends_with("\n\n")
+        && text
+            .rsplit("\n\n")
+            .next()
+            .is_some_and(|block| !block.trim().is_empty());
+    (items, trailing_partial)
 }
 
 struct LlmResponseBodyParser<'a> {
@@ -84,7 +294,7 @@ impl LlmResponseBodyParser<'_> {
             text: &text,
             json: value,
         })?;
-        Some(response_body(true, parsed, Vec::new()))
+        Some(response_body(true, parsed))
     }
 
     fn parse_sse_response_body(&self, text: &str) -> Option<LlmResponseBody> {
@@ -103,12 +313,7 @@ impl LlmResponseBodyParser<'_> {
             text,
             events: &provider_events,
         })?;
-        let events = raw_events
-            .into_iter()
-            .zip(parsed.events)
-            .map(|(raw, parsed)| sse_event(raw, parsed))
-            .collect();
-        Some(response_body(false, parsed.response, events))
+        Some(response_body(false, parsed.response))
     }
 
     fn normalized_sse_events(
@@ -142,7 +347,7 @@ impl LlmResponseBodyParser<'_> {
 
 fn decoded_sse_response(
     text: &str,
-    raw_events: Vec<SseCodecEvent>,
+    _raw_events: Vec<SseCodecEvent>,
     provider_id: Option<String>,
     normalized: Vec<NormalizedSseEvent>,
 ) -> Option<LlmResponseBody> {
@@ -154,23 +359,14 @@ fn decoded_sse_response(
         text,
         events: &provider_events,
     })?;
-    let events = raw_events
-        .into_iter()
-        .zip(parsed.events)
-        .map(|(raw, parsed)| sse_event(raw, parsed))
-        .collect();
-    let mut body = response_body(false, parsed.response, events);
+    let mut body = response_body(false, parsed.response);
     if let Some(provider_id) = provider_id {
         body.provider_id = provider_id;
     }
     Some(body)
 }
 
-fn response_body(
-    json_valid: bool,
-    parsed: LlmParsedResponse,
-    sse_events: Vec<SseEvent>,
-) -> LlmResponseBody {
+fn response_body(json_valid: bool, parsed: LlmParsedResponse) -> LlmResponseBody {
     let tool_calls_json = tool_calls_json(&parsed.tool_calls);
     LlmResponseBody {
         provider_id: parsed.provider_id.to_string(),
@@ -183,7 +379,6 @@ fn response_body(
         chunk_count: parsed.chunk_count,
         done: parsed.done,
         stream: parsed.stream,
-        sse_events,
     }
 }
 
@@ -261,82 +456,4 @@ fn normalized_event_from_raw(event: &SseCodecEvent) -> NormalizedSseEvent {
         json: event.json.clone(),
         done_marker: event.done_marker,
     }
-}
-
-fn sse_event(raw: SseCodecEvent, parsed: LlmParsedSseEvent) -> SseEvent {
-    let tool_calls_json = tool_calls_json(&parsed.tool_calls);
-    SseEvent {
-        index: raw.index,
-        event_type: raw.event_type,
-        id: raw.id,
-        raw_data: raw.data,
-        model: parsed.model,
-        has_content_delta: parsed.content_text.is_some(),
-        has_reasoning_delta: parsed.reasoning_text.is_some(),
-        has_tool_delta: tool_calls_json.is_some(),
-        content_text: parsed.content_text,
-        reasoning_text: parsed.reasoning_text,
-        tool_calls_json,
-        done: parsed.done,
-        finish_reason: parsed.finish_reason,
-    }
-}
-
-fn sse_event_json_value(event: &SseEvent) -> Value {
-    let mut object = Map::new();
-    object.insert(
-        "index".to_string(),
-        Value::Number(serde_json::Number::from(event.index as u64)),
-    );
-    if let Some(event_type) = &event.event_type {
-        object.insert("event_type".to_string(), Value::String(event_type.clone()));
-    }
-    if let Some(id) = &event.id {
-        object.insert("id".to_string(), Value::String(id.clone()));
-    }
-    if let Some(model) = &event.model {
-        object.insert("model".to_string(), Value::String(model.clone()));
-    }
-    if let Some(content_text) = &event.content_text {
-        object.insert(
-            "content_text".to_string(),
-            Value::String(content_text.clone()),
-        );
-    }
-    if let Some(reasoning_text) = &event.reasoning_text {
-        object.insert(
-            "reasoning_text".to_string(),
-            Value::String(reasoning_text.clone()),
-        );
-    }
-    if let Some(tool_calls_json) = &event.tool_calls_json
-        && let Ok(tool_calls) = serde_json::from_str::<Value>(tool_calls_json)
-    {
-        object.insert("tool_calls".to_string(), tool_calls);
-    }
-    object.insert("done".to_string(), Value::Bool(event.done));
-    if let Some(finish_reason) = &event.finish_reason {
-        object.insert(
-            "finish_reason".to_string(),
-            Value::String(finish_reason.clone()),
-        );
-    }
-    Value::Object(object)
-}
-
-fn raw_sse_event_json_value(event: &SseEvent) -> Value {
-    let mut object = Map::new();
-    object.insert(
-        "index".to_string(),
-        Value::Number(serde_json::Number::from(event.index as u64)),
-    );
-    if let Some(event_type) = &event.event_type {
-        object.insert("event_type".to_string(), Value::String(event_type.clone()));
-    }
-    if let Some(id) = &event.id {
-        object.insert("id".to_string(), Value::String(id.clone()));
-    }
-    object.insert("data".to_string(), Value::String(event.raw_data.clone()));
-    object.insert("done".to_string(), Value::Bool(event.done));
-    Value::Object(object)
 }

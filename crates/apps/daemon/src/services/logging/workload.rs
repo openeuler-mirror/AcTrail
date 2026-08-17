@@ -202,6 +202,12 @@ impl WorkloadDiagnostics {
                     .payload_semantic_observe_max_us
                     .max(duration_micros(elapsed));
             }
+            PayloadTransactionPhase::SemanticPersist => {
+                counters.payload_semantic_persists.add(output_items as u64);
+                counters
+                    .payload_semantic_persist_max_us
+                    .max(duration_micros(elapsed));
+            }
             PayloadTransactionPhase::SegmentPersist => {
                 counters.payload_segment_persists.add(1);
                 counters
@@ -240,6 +246,7 @@ pub(crate) enum PayloadSegmentStage {
 pub(crate) enum PayloadTransactionPhase {
     RetentionCheck,
     SemanticObserve,
+    SemanticPersist,
     SegmentPersist,
     ApplicationAnalyze,
     ApplicationPersist,
@@ -291,6 +298,8 @@ struct WorkloadCounters {
     payload_retention_check_max_us: Counter,
     payload_semantic_observes: Counter,
     payload_semantic_observe_max_us: Counter,
+    payload_semantic_persists: Counter,
+    payload_semantic_persist_max_us: Counter,
     payload_segment_persists: Counter,
     payload_segment_persist_max_us: Counter,
     payload_application_analyzes: Counter,
@@ -341,6 +350,8 @@ impl WorkloadCounters {
             payload_retention_check_max_us: self.payload_retention_check_max_us.take(),
             payload_semantic_observes: self.payload_semantic_observes.take(),
             payload_semantic_observe_max_us: self.payload_semantic_observe_max_us.take(),
+            payload_semantic_persists: self.payload_semantic_persists.take(),
+            payload_semantic_persist_max_us: self.payload_semantic_persist_max_us.take(),
             payload_segment_persists: self.payload_segment_persists.take(),
             payload_segment_persist_max_us: self.payload_segment_persist_max_us.take(),
             payload_application_analyzes: self.payload_application_analyzes.take(),
@@ -408,6 +419,8 @@ struct WorkloadSnapshot {
     payload_retention_check_max_us: u64,
     payload_semantic_observes: u64,
     payload_semantic_observe_max_us: u64,
+    payload_semantic_persists: u64,
+    payload_semantic_persist_max_us: u64,
     payload_segment_persists: u64,
     payload_segment_persist_max_us: u64,
     payload_application_analyzes: u64,
@@ -433,7 +446,8 @@ impl WorkloadSnapshot {
                 "storage_semantic_links={} storage_trace_states={} storage_errors={} ",
                 "storage_elapsed_max_us={} payload_retention_checks={} ",
                 "payload_retention_check_max_us={} payload_semantic_observes={} ",
-                "payload_semantic_observe_max_us={} payload_segment_persists={} ",
+                "payload_semantic_observe_max_us={} payload_semantic_persists={} ",
+                "payload_semantic_persist_max_us={} payload_segment_persists={} ",
                 "payload_segment_persist_max_us={} payload_application_analyzes={} ",
                 "payload_application_analyze_outputs={} payload_application_analyze_max_us={} ",
                 "payload_application_persists={} payload_application_persist_max_us={}"
@@ -476,6 +490,8 @@ impl WorkloadSnapshot {
             self.payload_retention_check_max_us,
             self.payload_semantic_observes,
             self.payload_semantic_observe_max_us,
+            self.payload_semantic_persists,
+            self.payload_semantic_persist_max_us,
             self.payload_segment_persists,
             self.payload_segment_persist_max_us,
             self.payload_application_analyzes,
