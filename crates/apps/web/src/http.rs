@@ -21,7 +21,7 @@ mod plugins;
 #[path = "http/query.rs"]
 mod query;
 use query::{
-    parse_action_tree_page, parse_llm_activity_query, parse_llm_export_query,
+    parse_action_tree_page, parse_llm_activity_query, parse_llm_export_query, parse_llm_nav_mode,
     parse_llm_request_content_node_query, parse_llm_request_content_query, parse_llm_rows_query,
     parse_time_attribution_range_query, parse_time_attribution_rows_query,
     parse_token_usage_stats_query, parse_u64, percent_decode,
@@ -398,6 +398,10 @@ fn route_cluster_trace_api(
             .and_then(|trace_id| view::cluster::action_tree_json(cluster_root, trace_id))
             .map(Response::json)
             .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
+        [trace_id, "waterfall"] => parse_u64(trace_id)
+            .and_then(|trace_id| view::cluster::waterfall_initial_json(cluster_root, trace_id))
+            .map(Response::json)
+            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
         [trace_id, "action-tree", "root"] => parse_u64(trace_id)
             .and_then(|trace_id| view::cluster::action_tree_root_json(cluster_root, trace_id))
             .map(Response::json)
@@ -420,6 +424,21 @@ fn route_cluster_trace_api(
                 (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
                     Ok(Response::text(STATUS_BAD_REQUEST, error))
                 }
+            }
+        }
+        [trace_id, "action-tree", "llm-nav"] => {
+            let trace_id = parse_u64(trace_id);
+            let mode = parse_llm_nav_mode(query);
+            match (trace_id, mode) {
+                (Ok(trace_id), Ok(mode)) => view::cluster::action_tree_llm_nav_json(
+                    cluster_root,
+                    trace_id,
+                    mode.0,
+                    mode.1.as_deref(),
+                )
+                .map(Response::json)
+                .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
+                (Err(error), _) | (_, Err(error)) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
             }
         }
         [trace_id, "commands"] => parse_u64(trace_id)
@@ -559,6 +578,10 @@ fn route_trace_api(path: &str, query: &str, storage: &StorageConfig) -> Result<R
             .and_then(|trace_id| view::action_tree_json(storage, trace_id))
             .map(Response::json)
             .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
+        [trace_id, "waterfall"] => parse_u64(trace_id)
+            .and_then(|trace_id| view::waterfall_initial_json(storage, trace_id))
+            .map(Response::json)
+            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
         [trace_id, "action-tree", "root"] => parse_u64(trace_id)
             .and_then(|trace_id| view::action_tree_root_json(storage, trace_id))
             .map(Response::json)
@@ -576,6 +599,18 @@ fn route_trace_api(path: &str, query: &str, storage: &StorageConfig) -> Result<R
                 (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
                     Ok(Response::text(STATUS_BAD_REQUEST, error))
                 }
+            }
+        }
+        [trace_id, "action-tree", "llm-nav"] => {
+            let trace_id = parse_u64(trace_id);
+            let mode = parse_llm_nav_mode(query);
+            match (trace_id, mode) {
+                (Ok(trace_id), Ok(mode)) => {
+                    view::action_tree_llm_nav_json(storage, trace_id, mode.0, mode.1.as_deref())
+                        .map(Response::json)
+                        .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error)))
+                }
+                (Err(error), _) | (_, Err(error)) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
             }
         }
         [trace_id, "actions", action_id] => {

@@ -38,7 +38,9 @@ pub(in crate::semantic_actions) fn evidence_from_row(
     })
 }
 
-pub(super) fn action_link_from_row(row: &Row<'_>) -> Result<SemanticActionLink, rusqlite::Error> {
+pub(in crate::semantic_actions) fn action_link_from_row(
+    row: &Row<'_>,
+) -> Result<SemanticActionLink, rusqlite::Error> {
     let attributes = decode_attributes_from_row(row)?;
     let valid = row.get::<_, bool>("valid")?
         && !attributes

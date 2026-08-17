@@ -9,6 +9,7 @@ use rusqlite::{Connection, OptionalExtension, Params, Row, params, params_from_i
 use semantic_action::{
     SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionStoreError,
 };
+use storage_core::SemanticActionTraceRevision;
 
 use crate::SqliteStorage;
 use crate::semantic_actions::action_ids::resolve_action_key;
@@ -91,6 +92,40 @@ impl SqliteStorage {
             actions,
             links,
             roots,
+        })
+    }
+
+    pub fn semantic_action_trace_revision(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<SemanticActionTraceRevision, SemanticActionStoreError> {
+        ensure_semantic_trace(self, trace_id)?;
+        let connection = self.connection().borrow();
+        let (action_count, action_max_key) = connection
+            .query_row(
+                "SELECT COUNT(*), COALESCE(MAX(action_key), 0)
+                 FROM semantic_actions WHERE trace_id = ?1",
+                params![trace_id.get()],
+                |row| Ok((row.get::<_, u64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .map_err(|error| {
+                SemanticActionStoreError::new("revision_semantic_actions", error.to_string())
+            })?;
+        let (link_count, link_max_rowid) = connection
+            .query_row(
+                "SELECT COUNT(*), COALESCE(MAX(rowid), 0)
+                 FROM semantic_action_links WHERE trace_id = ?1",
+                params![trace_id.get()],
+                |row| Ok((row.get::<_, u64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .map_err(|error| {
+                SemanticActionStoreError::new("revision_semantic_action_links", error.to_string())
+            })?;
+        Ok(SemanticActionTraceRevision {
+            action_count,
+            action_max_key,
+            link_count,
+            link_max_rowid,
         })
     }
 

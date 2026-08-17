@@ -81,7 +81,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { Loader2, SkipForward, StepForward } from '@lucide/vue';
 
-import { readActionDetail, readActionTreeChildren } from '../../../api';
+import { readActionDetail, readActionTreeChildren, readActionTreeLlmNav } from '../../../api';
 import ActionTreeNode from '../../../components/ActionTreeNode.vue';
 import DetailPanel from '../../../components/DetailPanel.vue';
 import {
@@ -201,26 +201,154 @@ async function jumpToNode(node) {
 
 async function jumpToFirstLlm() {
   await runLlmNavigation(async () => {
-    const path = await findFirstLlmPath(rootNode.value);
+    const path = await findLlmPathViaServer('first');
+    if (path === undefined) {
+      const fallback = await findFirstLlmPath(rootNode.value);
+      if (!fallback) {
+        llmNavigationError.value = 'No LLM call';
+        return;
+      }
+      await activateLlmPath(fallback);
+      return;
+    }
     if (!path) {
       llmNavigationError.value = 'No LLM call';
       return;
     }
-    await activateLlmPath(path);
+    await activateServerLlmPath(path);
   });
 }
 
 async function jumpToNextLlm() {
   await runLlmNavigation(async () => {
-    const path = selectedDetailId.value
-      ? await findNextLlmPath(rootNode.value, selectedDetailId.value)
-      : await findFirstLlmPath(rootNode.value);
+    const afterId = selectedDetailId.value ?? '';
+    const path = await findLlmPathViaServer('next', afterId);
+    if (path === undefined) {
+      const fallback = afterId
+        ? await findNextLlmPath(rootNode.value, afterId)
+        : await findFirstLlmPath(rootNode.value);
+      if (!fallback) {
+        llmNavigationError.value = 'No next LLM call';
+        return;
+      }
+      await activateLlmPath(fallback);
+      return;
+    }
     if (!path) {
       llmNavigationError.value = 'No next LLM call';
       return;
     }
-    await activateLlmPath(path);
+    await activateServerLlmPath(path);
   });
+}
+
+async function findLlmPathViaServer(mode, afterId = '') {
+  try {
+    const data = await readActionTreeLlmNav(props.traceKey, {
+      mode,
+      afterId: afterId || undefined,
+    });
+    if (!data?.found || !Array.isArray(data.path) || !data.path.length) {
+      return null;
+    }
+    return data.path;
+  } catch {
+    return undefined;
+  }
+}
+
+async function activateServerLlmPath(entries) {
+  const pageSize = UI_LIMITS.actionTreeChildPageSize;
+  if (!Number.isInteger(pageSize) || pageSize < 1) {
+    throw new Error('invalid UI_LIMITS.actionTreeChildPageSize');
+  }
+  let parentNode = rootNode.value;
+  let targetNode = null;
+  const nextExpanded = new Set(expandedNodeIds.value);
+  if (parentNode?.id) {
+    nextExpanded.add(parentNode.id);
+  }
+  for (const entry of entries) {
+    if (!parentNode) {
+      throw new Error('LLM navigation path node not found');
+    }
+    if (parentNode.id !== entry.parent_action_id) {
+      const found = findNode(rootNode.value, entry.parent_action_id);
+      if (!found) {
+        throw new Error(`LLM navigation parent ${entry.parent_action_id} not found`);
+      }
+      parentNode = found;
+    }
+    // Fetch a window centered on the backend offset: the target is guaranteed
+    // to be a member of this window even if the UI re-sorts/regroups the page
+    // differently from the backend.
+    const windowStart = Math.max(0, entry.offset - Math.floor(pageSize / 2));
+    let childData = await readActionTreeChildren(props.traceKey, parentNode.id, {
+      offset: windowStart,
+      limit: pageSize,
+    });
+    let children = buildActionTreeChildNodes({
+      parentNode,
+      childData,
+      traceDetail: props.traceDetail,
+    });
+    if (!locateActionNode(children, entry.action_id)) {
+      // Defensive fallback: fetch the exact backend window starting at the
+      // target so ordering differences cannot hide it.
+      childData = await readActionTreeChildren(props.traceKey, parentNode.id, {
+        offset: entry.offset,
+        limit: pageSize,
+      });
+      children = buildActionTreeChildNodes({
+        parentNode,
+        childData,
+        traceDetail: props.traceDetail,
+      });
+    }
+    parentNode.children = children;
+    parentNode.childrenLoaded = true;
+    parentNode.totalChildren = childData?.total ?? children.length;
+    parentNode.nextChildOffset = childData?.next_offset ?? children.length;
+    parentNode.hasMoreChildren = Boolean(childData?.has_more);
+    parentNode.hasChildren = parentNode.totalChildren > 0 || children.length > 0;
+    if (parentNode !== rootNode.value && parentNode.id) {
+      nextExpanded.add(parentNode.id);
+    }
+    const located = locateActionNode(children, entry.action_id);
+    if (!located) {
+      throw new Error(`LLM navigation action ${entry.action_id} not found under ${parentNode.id}`);
+    }
+    for (const container of located.containers) {
+      if (container.id && container !== parentNode) {
+        nextExpanded.add(container.id);
+      }
+    }
+    targetNode = located.node;
+    parentNode = located.node;
+  }
+  if (!targetNode) {
+    throw new Error('LLM navigation returned an empty path');
+  }
+  expandedNodeIds.value = nextExpanded;
+  await nextTick();
+  await selectNode(targetNode);
+  await nextTick();
+  scrollNodeIntoView(targetNode.detail?.selectionId ?? targetNode.id);
+}
+
+function locateActionNode(nodes, id, containers = []) {
+  for (const node of nodes ?? []) {
+    if (node.id === id) {
+      return { node, containers };
+    }
+    if (node.children?.length) {
+      const found = locateActionNode(node.children, id, [...containers, node]);
+      if (found) {
+        return found;
+      }
+    }
+  }
+  return null;
 }
 
 async function runLlmNavigation(callback) {

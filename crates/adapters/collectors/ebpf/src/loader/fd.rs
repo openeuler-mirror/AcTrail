@@ -12,7 +12,7 @@ const FD_CATEGORY_FLAG_NET: u32 = 1 << 1;
 const FD_CATEGORY_FLAG_IPC_UNIX_SOCKET: u32 = 1 << 2;
 const FD_CATEGORY_FLAG_IPC_PIPE: u32 = 1 << 3;
 const FD_CATEGORY_FLAG_FILE: u32 = 1 << 4;
-const FD_INDEX_HARD_MAX_ENTRIES: u32 = 256;
+const FD_INDEX_HARD_MAX_ENTRIES: u32 = 64;
 
 pub fn validate_fd_config(
     config: &config_core::daemon::EbpfCollectorConfig,

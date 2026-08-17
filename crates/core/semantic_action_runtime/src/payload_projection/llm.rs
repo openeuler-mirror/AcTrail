@@ -16,7 +16,8 @@ pub use codec::LlmCodecRegistry;
 pub(crate) use live_projection::{
     LiveLlmProjection, LiveLlmResponseMessage, live_llm_request_message_len,
     live_llm_request_prefix_skip_len, live_llm_request_stream_id_hint,
-    project_live_llm_request_message, project_live_llm_response_message, semantic_payload_draft,
+    project_http2_stream_request, project_http2_stream_response, project_live_llm_request_message,
+    project_live_llm_response_message, semantic_payload_draft,
 };
 pub use plugin_system::{
     LlmCodecDecoded, LlmCodecOutcome, LlmCodecPlugin, LlmCodecPluginStatus, LlmCodecRequest,

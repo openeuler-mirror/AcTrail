@@ -25,8 +25,7 @@ use crate::semantic_actions::upsert_merge::merge_action;
 mod rows;
 mod write;
 
-use rows::action_link_from_row;
-pub(super) use rows::{action_from_row, evidence_from_row};
+pub(super) use rows::{action_from_row, action_link_from_row, evidence_from_row};
 use write::{
     action_row_matches, link_valid_code, replace_action_evidence, write_action_row,
     write_agent_identity,

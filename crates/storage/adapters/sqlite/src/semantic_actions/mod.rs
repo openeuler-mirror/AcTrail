@@ -7,6 +7,7 @@ mod cold_fields;
 mod command_fallback;
 mod llm_request_content;
 mod mcp_jsonrpc_content;
+mod navigation;
 mod path_sets;
 mod query;
 mod root_tree;

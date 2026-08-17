@@ -524,7 +524,7 @@ impl Default for EbpfDocument {
             preflight_link_teardown_workers: DEFAULT_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS,
             tracked_process_max_entries: 8192,
             pending_operation_max_entries: 8192,
-            fd_per_process_max_entries: 256,
+            fd_per_process_max_entries: 64,
             suppressed_fd_max_entries: 8192,
             suppressed_fd_index_slots_per_process: 64,
             event_ring_buffer_max_bytes: 33554432,

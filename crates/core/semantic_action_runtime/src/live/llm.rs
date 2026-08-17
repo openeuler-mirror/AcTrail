@@ -14,12 +14,16 @@ use semantic_action::{
     SemanticActionStatus, SemanticEvidenceKind, attr_keys as attrs,
 };
 
+use crate::payload_projection::http::{
+    HTTP2_CONNECTION_PREFACE, HTTP2_CONTINUATION_FRAME_TYPE, HTTP2_DATA_FRAME_TYPE,
+    HTTP2_FLAG_END_STREAM, HTTP2_HEADERS_FRAME_TYPE, decode_http2_frame, http2_data_payload,
+};
 use crate::payload_projection::llm::{
     InFlightResponse, IncrementalSseCache, LiveLlmProjection, LiveLlmResponseMessage,
     LlmCodecPlugin, LlmCodecPluginStatus, LlmCodecRegistry, PayloadStreamGroupKey,
     live_llm_request_message_len, live_llm_request_prefix_skip_len,
-    live_llm_request_stream_id_hint, project_live_llm_request_message,
-    project_live_llm_response_message, semantic_payload_draft,
+    live_llm_request_stream_id_hint, project_http2_stream_request, project_http2_stream_response,
+    project_live_llm_request_message, project_live_llm_response_message, semantic_payload_draft,
 };
 
 use super::actions::action_for_live_state;
@@ -275,7 +279,7 @@ impl LiveLlmProjector {
             let Some(mut state) = self.streams.remove(&key) else {
                 continue;
             };
-            let Some(in_flight) = state.in_flight_response.take() else {
+            let Some(in_flight) = state.take_in_flight_response() else {
                 continue;
             };
             let Some((mut actions, drafts)) = state.materialize_in_flight(
@@ -601,8 +605,11 @@ impl LiveLlmProjector {
     }
 }
 
+/// One sequential plaintext byte stream to assemble and project: a whole
+/// HTTP/1 (or raw) connection body, or one de-multiplexed HTTP/2 stream's
+/// plaintext (its DATA-frame payloads).
 #[derive(Default)]
-struct LiveStreamState {
+struct PlainStreamAssembly {
     buffer: Vec<u8>,
     base_offset: usize,
     segments: VecDeque<LiveSegmentRange>,
@@ -612,25 +619,7 @@ struct LiveStreamState {
     in_flight_response: Option<InFlightResponse>,
 }
 
-impl LiveStreamState {
-    fn observe_segment(
-        &mut self,
-        config: &SemanticRetentionConfig,
-        codecs: &LlmCodecRegistry,
-        key: &LiveStreamKey,
-        segment: &PayloadSegment,
-    ) -> LiveLlmOutput {
-        self.append_segment(segment);
-        match key.direction {
-            LiveStreamDirection::Outbound => {
-                self.project_outbound_requests(config, codecs, &key.group)
-            }
-            LiveStreamDirection::Inbound => {
-                self.project_inbound_responses(config, codecs, &key.group)
-            }
-        }
-    }
-
+impl PlainStreamAssembly {
     fn append_segment(&mut self, segment: &PayloadSegment) {
         let start = self.base_offset + self.buffer.len();
         self.buffer.extend_from_slice(&segment.bytes);
@@ -645,6 +634,22 @@ impl LiveStreamState {
         if segment.direction == PayloadDirection::Inbound {
             self.completion_detector.observe(&segment.bytes);
         }
+    }
+
+    /// Append de-framed plaintext (e.g. one HTTP/2 DATA payload) attributed to
+    /// a captured segment.
+    fn append_plaintext(&mut self, bytes: &[u8], segment: PayloadSegment) {
+        let start = self.base_offset + self.buffer.len();
+        self.buffer.extend_from_slice(bytes);
+        let end = self.base_offset + self.buffer.len();
+        let mut metadata = segment;
+        metadata.bytes.clear();
+        self.segments.push_back(LiveSegmentRange {
+            start,
+            end,
+            segment: metadata,
+        });
+        self.completion_detector.observe(bytes);
     }
 
     fn project_outbound_requests(
@@ -853,6 +858,368 @@ impl LiveStreamState {
             sequence_start: first.segment.sequence,
         })
     }
+}
+
+/// One HTTP/2 stream's de-multiplexed plaintext plus its end-of-stream flag.
+#[derive(Default)]
+struct Http2StreamAssembly {
+    plain: PlainStreamAssembly,
+    end_stream: bool,
+}
+
+impl Http2StreamAssembly {
+    fn project_request(
+        &mut self,
+        config: &SemanticRetentionConfig,
+        codecs: &LlmCodecRegistry,
+        key: &PayloadStreamGroupKey,
+        stream_id: u32,
+    ) -> LiveLlmOutput {
+        let mut output = LiveLlmOutput::default();
+        if !self.end_stream || self.plain.buffer.is_empty() {
+            return output;
+        }
+        let message_start = self.plain.base_offset;
+        let message_end = message_start + self.plain.buffer.len();
+        let segments = self.plain.segments_for_range(message_start, message_end);
+        let Some(projection) = project_http2_stream_request(
+            config,
+            codecs,
+            key,
+            stream_id,
+            message_start,
+            &self.plain.buffer,
+            &segments,
+        ) else {
+            return output;
+        };
+        output.actions.extend(projection.actions);
+        output
+            .llm_request_contents
+            .extend(projection.llm_request_contents);
+        self.plain.evict_encoded_len(projection.encoded_len);
+        output
+    }
+
+    fn project_response(
+        &mut self,
+        config: &SemanticRetentionConfig,
+        codecs: &LlmCodecRegistry,
+        key: &PayloadStreamGroupKey,
+        stream_id: u32,
+    ) -> LiveLlmOutput {
+        let mut output = LiveLlmOutput::default();
+        if self.plain.buffer.is_empty() {
+            return output;
+        }
+        let mut sse_parse_cache = self.plain.sse_parse_cache.take();
+        let message_start = self.plain.base_offset;
+        let message_end = message_start + self.plain.buffer.len();
+        let segments = self.plain.segments_for_range(message_start, message_end);
+        let Some(projection) = project_http2_stream_response(
+            config,
+            codecs,
+            key,
+            stream_id,
+            message_start,
+            &self.plain.buffer,
+            &segments,
+            &mut sse_parse_cache,
+            self.end_stream,
+        ) else {
+            self.plain.sse_parse_cache = sse_parse_cache;
+            return output;
+        };
+        self.plain.sse_parse_cache = sse_parse_cache;
+        output.actions.extend(projection.actions);
+        if projection.terminal {
+            self.plain.evict_encoded_len(projection.encoded_len);
+        }
+        output
+    }
+}
+
+/// A whole HTTP/2 connection in one direction: the raw frame byte stream,
+/// decomposed into per-stream plaintext assemblies.
+struct Http2ConnectionAssembly {
+    frame_buffer: Vec<u8>,
+    frame_base_offset: usize,
+    frame_segments: VecDeque<LiveSegmentRange>,
+    streams: BTreeMap<u32, Http2StreamAssembly>,
+}
+
+impl Default for Http2ConnectionAssembly {
+    fn default() -> Self {
+        Self {
+            frame_buffer: Vec::new(),
+            frame_base_offset: 0,
+            frame_segments: VecDeque::new(),
+            streams: BTreeMap::new(),
+        }
+    }
+}
+
+impl Http2ConnectionAssembly {
+    fn append_segment(&mut self, segment: &PayloadSegment) {
+        let start = self.frame_base_offset + self.frame_buffer.len();
+        self.frame_buffer.extend_from_slice(&segment.bytes);
+        let end = self.frame_base_offset + self.frame_buffer.len();
+        let mut metadata = segment.clone();
+        metadata.bytes.clear();
+        self.frame_segments.push_back(LiveSegmentRange {
+            start,
+            end,
+            segment: metadata,
+        });
+        self.parse_frames();
+    }
+
+    fn parse_frames(&mut self) {
+        let mut cursor = 0;
+        if self.frame_buffer.starts_with(HTTP2_CONNECTION_PREFACE) {
+            cursor = HTTP2_CONNECTION_PREFACE.len();
+        }
+        loop {
+            // Copy the frame's info out so we can mutate self while iterating.
+            let (frame_type, flags, stream_id, payload, encoded_len) = {
+                let Some(frame) = decode_http2_frame(&self.frame_buffer[cursor..]) else {
+                    break;
+                };
+                (
+                    frame.frame_type,
+                    frame.flags,
+                    frame.stream_id,
+                    frame.payload.to_vec(),
+                    frame.encoded_len,
+                )
+            };
+            let frame_start = self.frame_base_offset + cursor;
+            match frame_type {
+                HTTP2_DATA_FRAME_TYPE => {
+                    if let Some(data) = http2_data_payload(flags, &payload) {
+                        self.route_stream_data(stream_id, frame_start, data);
+                    }
+                    if flags & HTTP2_FLAG_END_STREAM != 0 {
+                        self.mark_end_stream(stream_id);
+                    }
+                }
+                HTTP2_HEADERS_FRAME_TYPE | HTTP2_CONTINUATION_FRAME_TYPE => {
+                    if flags & HTTP2_FLAG_END_STREAM != 0 {
+                        self.mark_end_stream(stream_id);
+                    }
+                }
+                _ => {}
+            }
+            cursor += encoded_len;
+        }
+        if cursor > 0 {
+            self.evict_frames(cursor);
+        }
+    }
+
+    fn route_stream_data(&mut self, stream_id: u32, frame_start: usize, data: &[u8]) {
+        let Some(segment) = self.segment_metadata_at(frame_start).cloned() else {
+            return;
+        };
+        self.streams
+            .entry(stream_id)
+            .or_default()
+            .plain
+            .append_plaintext(data, segment);
+    }
+
+    fn segment_metadata_at(&self, global_offset: usize) -> Option<&PayloadSegment> {
+        self.frame_segments
+            .iter()
+            .find(|range| range.start <= global_offset && global_offset < range.end)
+            .map(|range| &range.segment)
+    }
+
+    fn mark_end_stream(&mut self, stream_id: u32) {
+        if let Some(stream) = self.streams.get_mut(&stream_id) {
+            stream.end_stream = true;
+        }
+    }
+
+    fn evict_frames(&mut self, consumed: usize) {
+        let global_end = self.frame_base_offset + consumed;
+        self.frame_buffer.drain(..consumed);
+        self.frame_base_offset = global_end;
+        while self
+            .frame_segments
+            .front()
+            .is_some_and(|range| range.end <= self.frame_base_offset)
+        {
+            self.frame_segments.pop_front();
+        }
+        if let Some(front) = self.frame_segments.front_mut()
+            && front.start < self.frame_base_offset
+        {
+            front.start = self.frame_base_offset;
+        }
+    }
+
+    fn project(
+        &mut self,
+        config: &SemanticRetentionConfig,
+        codecs: &LlmCodecRegistry,
+        key: &PayloadStreamGroupKey,
+        direction: LiveStreamDirection,
+    ) -> LiveLlmOutput {
+        let mut output = LiveLlmOutput::default();
+        let mut done = Vec::new();
+        for (stream_id, stream) in self.streams.iter_mut() {
+            let projected = match direction {
+                LiveStreamDirection::Outbound => {
+                    stream.project_request(config, codecs, key, *stream_id)
+                }
+                LiveStreamDirection::Inbound => {
+                    stream.project_response(config, codecs, key, *stream_id)
+                }
+            };
+            output.extend(projected);
+            if stream.plain.buffer.is_empty() || stream.end_stream {
+                done.push(*stream_id);
+            }
+        }
+        for stream_id in done {
+            self.streams.remove(&stream_id);
+        }
+        output
+    }
+
+    fn pending_request_marker(
+        &self,
+        key: &PayloadStreamGroupKey,
+    ) -> Option<call::PendingLlmRequestMarker> {
+        for (stream_id, stream) in &self.streams {
+            if stream.end_stream {
+                continue;
+            }
+            let first = stream.plain.segments.front()?;
+            return Some(call::PendingLlmRequestMarker {
+                trace_id: key.trace_id,
+                process: key.process.clone(),
+                stream_key: key.stream_key.clone(),
+                http_stream_id: Some(stream_id.to_string()),
+                start_time: first.segment.observed_at,
+                sequence_start: first.segment.sequence,
+            });
+        }
+        None
+    }
+}
+
+/// The byte-stream assembly for one (stream_key, direction): either a plain
+/// sequential stream (HTTP/1, raw) or a de-multiplexed HTTP/2 connection.
+enum StreamBody {
+    Plain(PlainStreamAssembly),
+    Http2(Http2ConnectionAssembly),
+}
+
+struct LiveStreamState {
+    body: StreamBody,
+}
+
+impl Default for LiveStreamState {
+    fn default() -> Self {
+        Self {
+            body: StreamBody::Plain(PlainStreamAssembly::default()),
+        }
+    }
+}
+
+impl LiveStreamState {
+    fn observe_segment(
+        &mut self,
+        config: &SemanticRetentionConfig,
+        codecs: &LlmCodecRegistry,
+        key: &LiveStreamKey,
+        segment: &PayloadSegment,
+    ) -> LiveLlmOutput {
+        match &mut self.body {
+            StreamBody::Plain(plain) => {
+                plain.append_segment(segment);
+                if looks_like_http2(&plain.buffer) {
+                    self.activate_http2();
+                    match &mut self.body {
+                        StreamBody::Http2(http2) => {
+                            http2.project(config, codecs, &key.group, key.direction)
+                        }
+                        StreamBody::Plain(_) => unreachable!(),
+                    }
+                } else {
+                    match key.direction {
+                        LiveStreamDirection::Outbound => {
+                            plain.project_outbound_requests(config, codecs, &key.group)
+                        }
+                        LiveStreamDirection::Inbound => {
+                            plain.project_inbound_responses(config, codecs, &key.group)
+                        }
+                    }
+                }
+            }
+            StreamBody::Http2(http2) => {
+                http2.append_segment(segment);
+                http2.project(config, codecs, &key.group, key.direction)
+            }
+        }
+    }
+
+    /// Convert a plain assembly into an HTTP/2 connection assembly once the
+    /// buffered bytes are recognized as HTTP/2 frames.
+    fn activate_http2(&mut self) {
+        let StreamBody::Plain(plain) = &mut self.body else {
+            return;
+        };
+        let mut http2 = Http2ConnectionAssembly::default();
+        http2.frame_buffer = std::mem::take(&mut plain.buffer);
+        http2.frame_base_offset = plain.base_offset;
+        http2.frame_segments = std::mem::take(&mut plain.segments);
+        // Re-route the already-buffered bytes through the frame parser. The
+        // segment evidence moved into frame_segments is used per frame.
+        http2.parse_frames();
+        self.body = StreamBody::Http2(http2);
+    }
+
+    fn pending_request_marker(
+        &self,
+        key: &PayloadStreamGroupKey,
+    ) -> Option<call::PendingLlmRequestMarker> {
+        match &self.body {
+            StreamBody::Plain(plain) => plain.pending_request_marker(key),
+            StreamBody::Http2(http2) => http2.pending_request_marker(key),
+        }
+    }
+
+    /// Take the plain assembly's in-flight response so trace-close
+    /// finalization can materialize it. HTTP/2 streams finalize per stream and
+    /// do not use the single in-flight slot.
+    fn take_in_flight_response(&mut self) -> Option<InFlightResponse> {
+        match &mut self.body {
+            StreamBody::Plain(plain) => plain.in_flight_response.take(),
+            StreamBody::Http2(_) => None,
+        }
+    }
+
+    fn materialize_in_flight(
+        &mut self,
+        config: &SemanticRetentionConfig,
+        codecs: &LlmCodecRegistry,
+        key: &PayloadStreamGroupKey,
+        message_start: usize,
+    ) -> Option<(Vec<SemanticAction>, Vec<PayloadSegment>)> {
+        match &mut self.body {
+            StreamBody::Plain(plain) => {
+                plain.materialize_in_flight(config, codecs, key, message_start)
+            }
+            StreamBody::Http2(_) => None,
+        }
+    }
+}
+
+fn looks_like_http2(bytes: &[u8]) -> bool {
+    bytes.starts_with(HTTP2_CONNECTION_PREFACE) || decode_http2_frame(bytes).is_some()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -39,6 +39,7 @@
         v-bind="activeTabProps"
         @open-attribution="openTimeAttribution"
         @open-waterfall="openWaterfall"
+        @load-full-waterfall="loadFullWaterfall"
       />
     </main>
 
@@ -62,6 +63,7 @@ import {
   readTraceSummary,
   readTraceTimeAttribution,
   readTraceTimeline,
+  readWaterfall,
 } from '../api';
 import TraceTabs from '../tabs/TraceTabs.vue';
 import { TAB_DEFINITIONS, TAB_IDS } from '../tabs/registry';
@@ -409,9 +411,36 @@ async function ensureWaterfallForActiveTab() {
   const token = Symbol();
   activeWaterfallLoad = token;
   try {
-    const data = await readActionTree(traceId);
+    const data = await readWaterfall(traceId);
     if (activeWaterfallLoad === token && traceIdMatches(selectedTraceId.value, traceId)) {
       waterfall.value = withWaterfallTrace(data, traceId);
+    }
+  } catch (err) {
+    if (activeWaterfallLoad === token && traceIdMatches(selectedTraceId.value, traceId)) {
+      error.value = String(err.message ?? err);
+    }
+  }
+}
+
+async function loadFullWaterfall() {
+  const traceId = selectedTraceId.value;
+  if (!traceId || !waterfall.value?.partial) {
+    return;
+  }
+  const token = Symbol();
+  activeWaterfallLoad = token;
+  try {
+    const data = await readActionTree(traceId);
+    if (activeWaterfallLoad === token && traceIdMatches(selectedTraceId.value, traceId)) {
+      waterfall.value = withWaterfallTrace(
+        {
+          ...data,
+          selected_actions: data.actions?.length ?? 0,
+          total_actions: data.actions?.length ?? 0,
+          partial: false,
+        },
+        traceId,
+      );
     }
   } catch (err) {
     if (activeWaterfallLoad === token && traceIdMatches(selectedTraceId.value, traceId)) {
@@ -490,6 +519,9 @@ function emptyWaterfall() {
     actions: [],
     links: [],
     roots: [],
+    selectedActions: 0,
+    totalActions: 0,
+    partial: false,
     loadedTraceId: null,
   };
 }
@@ -499,6 +531,10 @@ function withWaterfallTrace(data, traceId) {
     actions: freezeTraceList(data.actions),
     links: freezeTraceList(data.links),
     roots: data.roots ?? [],
+    selectedActions: data.selected_actions ?? data.actions?.length ?? 0,
+    totalActions:
+      data.total_actions ?? actionTree.value?.summary?.actions ?? data.actions?.length ?? 0,
+    partial: Boolean(data.partial),
     loadedTraceId: traceId,
   };
 }

@@ -11,6 +11,15 @@ pub(super) fn parse_action_tree_page(query: &str) -> Result<SemanticActionChildP
     Ok(SemanticActionChildPageQuery { offset, limit })
 }
 
+pub(super) fn parse_llm_nav_mode(
+    query: &str,
+) -> Result<(view::LlmNavMode, Option<String>), String> {
+    let mode = required_query_param(query, "mode")?;
+    let after = optional_query_param(query, "after")?;
+    let mode = view::LlmNavMode::parse(&mode, after.clone())?;
+    Ok((mode, after))
+}
+
 pub(super) fn parse_llm_request_content_query(query: &str) -> Result<usize, String> {
     let max_bytes = required_query_usize(query, "max_bytes")?;
     if max_bytes == usize::default() {

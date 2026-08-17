@@ -158,6 +158,17 @@ pub fn action_tree_json(root: &Path, trace_id: u64) -> Result<String, String> {
     Ok(action_tree_empty_json(&row))
 }
 
+pub fn waterfall_initial_json(root: &Path, trace_id: u64) -> Result<String, String> {
+    let row = row_by_ui_id(root, trace_id)?;
+    if let Some((storage, local_trace_id)) = sqlite_storage_for_row(&row)? {
+        return super::waterfall_initial_json(&storage, local_trace_id);
+    }
+    Ok(format!(
+        "{{\"actions\":[],\"links\":[],\"selected_actions\":0,\"total_actions\":{},\"partial\":false}}",
+        row.semantic_action_count
+    ))
+}
+
 pub fn action_tree_root_json(root: &Path, trace_id: u64) -> Result<String, String> {
     let row = row_by_ui_id(root, trace_id)?;
     if let Some((storage, local_trace_id)) = sqlite_storage_for_row(&row)? {
@@ -181,6 +192,22 @@ pub fn action_tree_children_json(
         return super::action_tree_children_json(&storage, local_trace_id, parent_id, page);
     }
     Ok("{\"actions\":[],\"links\":[],\"child_state\":[],\"next_offset\":null}".to_string())
+}
+
+pub fn action_tree_llm_nav_json(
+    root: &Path,
+    trace_id: u64,
+    mode: super::LlmNavMode,
+    after_action_id: Option<&str>,
+) -> Result<String, String> {
+    let row = row_by_ui_id(root, trace_id)?;
+    if let Some((storage, local_trace_id)) = sqlite_storage_for_row(&row)? {
+        return super::action_tree_llm_nav_json(&storage, local_trace_id, mode, after_action_id);
+    }
+    Ok(format!(
+        "{{\"mode\":{},\"found\":false,\"path\":[]}}",
+        json::string(mode.as_str())
+    ))
 }
 
 pub fn commands_json(root: &Path, trace_id: u64) -> Result<String, String> {

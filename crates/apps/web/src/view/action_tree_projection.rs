@@ -43,27 +43,6 @@ impl ActionDisplayProjection {
         Ok(Self::new(actions, links))
     }
 
-    pub(super) fn child_count(&self, parent_id: &str) -> usize {
-        self.children_by_parent
-            .get(parent_id)
-            .map(Vec::len)
-            .unwrap_or_default()
-    }
-
-    pub(super) fn children_page(
-        &self,
-        parent_id: &str,
-        offset: usize,
-        limit: usize,
-    ) -> (Vec<DisplayChild>, usize) {
-        let Some(children) = self.children_by_parent.get(parent_id) else {
-            return (Vec::new(), 0);
-        };
-        let total = children.len();
-        let page = children.iter().skip(offset).take(limit).cloned().collect();
-        (page, total)
-    }
-
     fn new(actions: Vec<SemanticAction>, links: Vec<SemanticActionLink>) -> Self {
         let actions = valid_actions(actions);
         let action_by_id = actions

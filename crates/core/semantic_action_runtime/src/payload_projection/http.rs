@@ -6,13 +6,14 @@ use crate::payload_projection::encoding::base64_encode;
 
 pub(super) use stream_id::request_stream_id_hint;
 
-const HTTP2_CONNECTION_PREFACE: &[u8] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
-const HTTP2_FRAME_HEADER_BYTES: usize = 9;
-const HTTP2_DATA_FRAME_TYPE: u8 = 0x0;
-const HTTP2_HEADERS_FRAME_TYPE: u8 = 0x1;
-const HTTP2_CONTINUATION_FRAME_TYPE: u8 = 0x9;
-const HTTP2_FLAG_PADDED: u8 = 0x8;
-const HTTP2_FLAG_PRIORITY: u8 = 0x20;
+pub(crate) const HTTP2_CONNECTION_PREFACE: &[u8] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+pub(crate) const HTTP2_FRAME_HEADER_BYTES: usize = 9;
+pub(crate) const HTTP2_DATA_FRAME_TYPE: u8 = 0x0;
+pub(crate) const HTTP2_HEADERS_FRAME_TYPE: u8 = 0x1;
+pub(crate) const HTTP2_CONTINUATION_FRAME_TYPE: u8 = 0x9;
+pub(crate) const HTTP2_FLAG_END_STREAM: u8 = 0x1;
+pub(crate) const HTTP2_FLAG_PADDED: u8 = 0x8;
+pub(crate) const HTTP2_FLAG_PRIORITY: u8 = 0x20;
 const HTTP1_HEADER_SEPARATOR: &[u8] = b"\r\n\r\n";
 const HTTP1_LINE_ENDING: &[u8] = b"\r\n";
 const HTTP1_RESPONSE_PREFIX: &str = "HTTP/";
@@ -21,7 +22,7 @@ const HTTP1_REQUEST_METHODS: [&str; 9] = [
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct HttpRequestParts {
+pub(crate) struct HttpRequestParts {
     pub protocol: &'static str,
     pub scheme: &'static str,
     pub method: Option<String>,
@@ -35,7 +36,7 @@ pub(super) struct HttpRequestParts {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct HttpResponseParts {
+pub(crate) struct HttpResponseParts {
     pub protocol: &'static str,
     pub scheme: &'static str,
     pub status_code: Option<String>,
@@ -418,15 +419,15 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct Http2Frame<'a> {
-    frame_type: u8,
-    flags: u8,
-    stream_id: u32,
-    payload: &'a [u8],
-    encoded_len: usize,
+pub(crate) struct Http2Frame<'a> {
+    pub(crate) frame_type: u8,
+    pub(crate) flags: u8,
+    pub(crate) stream_id: u32,
+    pub(crate) payload: &'a [u8],
+    pub(crate) encoded_len: usize,
 }
 
-fn decode_http2_frame(bytes: &[u8]) -> Option<Http2Frame<'_>> {
+pub(crate) fn decode_http2_frame(bytes: &[u8]) -> Option<Http2Frame<'_>> {
     if bytes.len() < HTTP2_FRAME_HEADER_BYTES {
         return None;
     }
@@ -462,7 +463,7 @@ fn http2_stream_id_is_valid(frame_type: u8, stream_id: u32) -> bool {
     }
 }
 
-fn http2_data_payload(flags: u8, payload: &[u8]) -> Option<&[u8]> {
+pub(crate) fn http2_data_payload(flags: u8, payload: &[u8]) -> Option<&[u8]> {
     strip_http2_padding(flags, payload, 0)
 }
 
