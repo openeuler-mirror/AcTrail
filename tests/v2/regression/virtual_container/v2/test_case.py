@@ -13,7 +13,7 @@ from tests.v2.regression.virtual_container.v2.prerequisites import ResolvedBacke
 
 
 class VirtualContainerCaseTest(unittest.TestCase):
-    def test_auto_scope_without_kvm_runs_contracts_only(self) -> None:
+    def test_without_kvm_skips_before_all_other_checks(self) -> None:
         with tempfile.TemporaryDirectory(prefix="actrail-auto-no-kvm.") as raw_dir:
             root = Path(raw_dir)
             bin_dir = root / "bin"
@@ -30,31 +30,23 @@ class VirtualContainerCaseTest(unittest.TestCase):
                     TestCaseInputs(root, bin_dir, root / "work")
                 )
             context = Mock()
-            contract_result = TestResult(TestStatus.PASSED, "contracts")
             with patch(
                 "tests.v2.regression.virtual_container.v2.case."
                 "VirtualContainerScenario.run_contracts",
-                return_value=contract_result,
-            ), patch(
+            ) as run_contracts, patch(
                 "tests.v2.regression.virtual_container.v2.prerequisites."
                 "LocalHostProbe.kvm_available",
                 return_value=False,
             ), patch(
                 "tests.v2.regression.virtual_container.v2.case."
-                "VirtualContainerPrerequisites.resolve_deployment",
-                return_value=(None, None),
-            ) as resolve_deployment, patch(
-                "tests.v2.regression.virtual_container.v2.case."
-                "VirtualContainerPrerequisites.resolve_backends",
-                return_value={},
-            ) as resolve_backends:
+                "VirtualContainerPrerequisites.release_problem",
+            ) as release_problem:
                 result = VirtualContainerCase(config).run(context)
 
-        resolve_deployment.assert_not_called()
-        resolve_backends.assert_not_called()
+        release_problem.assert_not_called()
+        run_contracts.assert_not_called()
         self.assertEqual(result.status, TestStatus.SKIPPED)
-        self.assertIn("auto-selected contracts", result.message)
-        self.assertIs(result.details["contracts"], contract_result)
+        self.assertIn("/dev/kvm", result.message)
 
     def test_contract_scope_does_not_resolve_deployment_or_runtime(self) -> None:
         with tempfile.TemporaryDirectory(prefix="actrail-contracts.") as raw_dir:
@@ -79,6 +71,10 @@ class VirtualContainerCaseTest(unittest.TestCase):
             context = Mock()
             contract_result = TestResult(TestStatus.PASSED, "contracts")
             with patch(
+                "tests.v2.regression.virtual_container.v2.prerequisites."
+                "LocalHostProbe.kvm_available",
+                return_value=True,
+            ), patch(
                 "tests.v2.regression.virtual_container.v2.case."
                 "VirtualContainerScenario.run_contracts",
                 return_value=contract_result,
@@ -129,6 +125,10 @@ class VirtualContainerCaseTest(unittest.TestCase):
                 backend_skip,
             )
             with patch(
+                "tests.v2.regression.virtual_container.v2.prerequisites."
+                "LocalHostProbe.kvm_available",
+                return_value=True,
+            ), patch(
                 "tests.v2.regression.virtual_container.v2.case."
                 "VirtualContainerScenario.run_contracts",
                 return_value=contract_result,
@@ -186,6 +186,10 @@ class VirtualContainerCaseTest(unittest.TestCase):
                 ),
             }
             with patch(
+                "tests.v2.regression.virtual_container.v2.prerequisites."
+                "LocalHostProbe.kvm_available",
+                return_value=True,
+            ), patch(
                 "tests.v2.regression.virtual_container.v2.case."
                 "VirtualContainerScenario.run_contracts",
                 return_value=contract_result,
