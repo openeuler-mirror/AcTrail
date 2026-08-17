@@ -78,7 +78,14 @@ class OtelHttpEnvironment(PluginTestEnvironment):
     def configure_buffered_export(
         self,
         enabled_action_kinds: set[str] | None = None,
+        *,
+        attribute_mode: str = "metadata-only",
     ) -> dict[str, Any]:
+        if attribute_mode not in {"metadata-only", "full"}:
+            raise ValueError(
+                "OTEL/HTTP attribute mode must be metadata-only or full, "
+                f"got {attribute_mode!r}"
+            )
         candidate = self.current_config()
         action_kinds = candidate.get("action_kinds")
         if not isinstance(action_kinds, dict):
@@ -107,7 +114,7 @@ class OtelHttpEnvironment(PluginTestEnvironment):
                 "allow_insecure": True,
                 "encoding": "json",
                 "compression": "none",
-                "attribute_mode": "metadata-only",
+                "attribute_mode": attribute_mode,
                 "queue_capacity": 128,
                 # Keep the tail buffered until lifecycle replacement calls finish.
                 "batch_max_spans": 4096,
@@ -133,7 +140,7 @@ class OtelHttpEnvironment(PluginTestEnvironment):
             "allow_insecure": True,
             "encoding": "json",
             "compression": "none",
-            "attribute_mode": "metadata-only",
+            "attribute_mode": attribute_mode,
             "action_kinds": action_kinds,
             "headers": [
                 {
@@ -179,6 +186,12 @@ class OtelHttpEnvironment(PluginTestEnvironment):
             self.config.work_dir,
             plugin_directory=plugin_root,
         )
+        with self._operator_config_patch.open("a", encoding="utf-8") as patch:
+            patch.write(
+                "\n[semantic_retention.l0_llm_call]\n"
+                'request_content = "canonical_blocks"\n'
+                'request_body_export = "canonical_json"\n'
+            )
 
     @staticmethod
     def _require_safe_schema(document: dict[str, Any]) -> None:

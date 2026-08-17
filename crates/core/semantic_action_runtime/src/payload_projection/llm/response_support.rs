@@ -379,3 +379,65 @@ fn operation_segments_are_complete(segments: &[&PayloadSegment]) -> bool {
     expected_offset == first.operation_captured_size
         && first.operation_captured_size == first.operation_original_size
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::payload_projection::testing::HttpResponseFixture;
+
+    use super::super::body::parse_llm_response_body;
+    use super::super::codec::LlmCodecRegistry;
+    use super::*;
+
+    const RESPONSE_BODY: &str = concat!(
+        r#"{"model":"gpt-4o","choices":[{"message":{"content":"hello"}}],"#,
+        r#""usage":{"prompt_tokens":11,"completion_tokens":7,"total_tokens":18}}"#
+    );
+
+    /// The response side shares the builder with the request side; this is the
+    /// same seam guard, on the function that assembles response attributes.
+    #[test]
+    fn response_attribute_assembly_reports_content_and_token_usage() {
+        let fixture = HttpResponseFixture::llm_json(RESPONSE_BODY);
+        let segment = fixture.segment_builder().sequence(3).build();
+        let body = parse_llm_response_body(&fixture.parts.body, &LlmCodecRegistry::default())
+            .expect("LLM response body parses");
+
+        let attributes = llm_response_attributes(
+            &SemanticRetentionConfig::default(),
+            &[&segment],
+            &fixture.raw,
+            &fixture.parts,
+            &body,
+        );
+
+        assert_eq!(
+            attributes
+                .get(attrs::llm_response::CONTENT_TEXT)
+                .map(String::as_str),
+            Some("hello")
+        );
+        assert_eq!(
+            attributes
+                .get(attrs::llm_response::PROMPT_TOKENS)
+                .map(String::as_str),
+            Some("11")
+        );
+        assert_eq!(
+            attributes
+                .get(attrs::llm_response::COMPLETION_TOKENS)
+                .map(String::as_str),
+            Some("7")
+        );
+        assert_eq!(
+            attributes
+                .get(attrs::llm_response::TOTAL_TOKENS)
+                .map(String::as_str),
+            Some("18")
+        );
+        assert_eq!(
+            attributes.get(attrs::payload::SEQUENCE).map(String::as_str),
+            Some("3"),
+            "attributes should carry the segment field the test overrode"
+        );
+    }
+}

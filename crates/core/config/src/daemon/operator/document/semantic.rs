@@ -37,6 +37,11 @@ impl SemanticRetentionDocument {
                     config.l0_llm_call.request_content,
                 )
                 .to_string(),
+                request_body_export: llm_request_body_export_retention_as_str(
+                    config.l0_llm_call.request_body_export,
+                )
+                .to_string(),
+                request_body_export_max_bytes: config.l0_llm_call.request_body_export_max_bytes,
                 response_content: llm_response_content_retention_as_str(
                     config.l0_llm_call.response_content,
                 )
@@ -138,6 +143,8 @@ impl L0McpCallDocument {
 pub(super) struct L0LlmCallDocument {
     pub enabled: bool,
     pub request_content: String,
+    pub request_body_export: String,
+    pub request_body_export_max_bytes: u64,
     pub response_content: String,
     pub tool_calls: String,
     pub usage: String,
@@ -151,6 +158,8 @@ impl Default for L0LlmCallDocument {
         Self {
             enabled: true,
             request_content: "canonical_blocks".to_string(),
+            request_body_export: "none".to_string(),
+            request_body_export_max_bytes: DEFAULT_LLM_REQUEST_BODY_EXPORT_MAX_BYTES,
             response_content: "assembled_provider".to_string(),
             tool_calls: "assembled_json".to_string(),
             usage: "summary".to_string(),
@@ -164,11 +173,22 @@ impl Default for L0LlmCallDocument {
 
 impl L0LlmCallDocument {
     pub(super) fn to_config(&self) -> Result<L0LlmCallRetention, String> {
+        let request_content = parse_value(
+            "semantic_retention.l0_llm_call.request_content",
+            &self.request_content,
+        )?;
+        let request_body_export = parse_value(
+            "semantic_retention.l0_llm_call.request_body_export",
+            &self.request_body_export,
+        )?;
+        validate_request_body_export(request_content, request_body_export)?;
         Ok(L0LlmCallRetention {
             enabled: self.enabled,
-            request_content: parse_value(
-                "semantic_retention.l0_llm_call.request_content",
-                &self.request_content,
+            request_content,
+            request_body_export,
+            request_body_export_max_bytes: require_positive_u64(
+                "semantic_retention.l0_llm_call.request_body_export_max_bytes",
+                self.request_body_export_max_bytes,
             )?,
             response_content: parse_value(
                 "semantic_retention.l0_llm_call.response_content",
@@ -255,6 +275,27 @@ impl LlmTrajectoryDocument {
             )?,
         })
     }
+}
+
+/// Exporting a body the host does not retain is self-contradictory: there is
+/// no canonical body to send. Reject the combination at startup rather than
+/// letting a deployment run for days before anyone notices.
+fn validate_request_body_export(
+    request_content: LlmRequestContentRetention,
+    request_body_export: LlmRequestBodyExportRetention,
+) -> Result<(), String> {
+    if matches!(request_body_export, LlmRequestBodyExportRetention::None) {
+        return Ok(());
+    }
+    if matches!(request_content, LlmRequestContentRetention::CanonicalBlocks) {
+        return Ok(());
+    }
+    Err(format!(
+        "semantic_retention.l0_llm_call.request_body_export = \"{}\" requires \
+         semantic_retention.l0_llm_call.request_content = \"canonical_blocks\", got \"{}\"",
+        llm_request_body_export_retention_as_str(request_body_export),
+        llm_request_content_retention_as_str(request_content)
+    ))
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

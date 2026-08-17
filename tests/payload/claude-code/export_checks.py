@@ -135,8 +135,6 @@ def require_exported_llm_span(document: dict, marker: str) -> None:
             and marker in attributes.get("llm.request.message_preview", "")
             and attributes.get("payload.source_boundary") in {"TlsUserSpace", "Syscall"}
             and attributes.get("url.scheme") in {"http", "https"}
-            and not attributes.get("llm.request.body_json")
-            and not attributes.get("llm.request.body_text")
             and not attributes.get("http.request.body_text")
             and not attributes.get("http.request.body_json")
             and (

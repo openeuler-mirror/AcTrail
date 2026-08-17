@@ -55,7 +55,11 @@ pub enum OtelAttributeMode {
     /// Export only the codec's structural span fields. Action attributes stay local.
     #[default]
     MetadataOnly,
-    /// Export every semantic action attribute. This must be an explicit opt-in.
+    /// Export every attribute already present on the semantic action.
+    ///
+    /// This does not enable optional content production. In particular, LLM
+    /// request bodies require the daemon's separate request-body retention and
+    /// export settings before an attribute exists for this mode to send.
     Full,
 }
 

@@ -12,7 +12,7 @@ python3 tests/v2/regression/test_all.py \
 
 公共 V2 runner 会先执行 `scripts/install-release.sh`，再创建隔离工作目录，启动真实
 `actraild`、`actrailweb`、builtin `otel-http` 插件和本地 OTLP/HTTP JSON
-receiver，最后通过 `actrailctl launch` 运行一轮真实 xiaoO 对话。运行前需要确保
+receiver，最后通过 `actrailctl launch` 运行两轮真实 xiaoO 对话。运行前需要确保
 `xiaoo` 位于 `PATH`，或通过 `XIAOO_E2E_BINARY` 指定可执行文件，并且 xiaoO 的
 provider 配置可用。冷缓存机器可能长时间
 停留在 release、TLS runtime 或 WASM 插件编译阶段；只要 `cargo`/`rustc` 仍在占用
@@ -31,18 +31,24 @@ python3 tests/v2/regression/otel_http/run_e2e.py \
 2. 在隔离目录初始化、清理并启动 AcTrail，同时启动 `actrailweb` 和本地
    OTLP/HTTP JSON receiver。
 3. 发现并加载 builtin `otel-http`，检查配置 schema 和官方安全默认值。
-4. 只启用 `process.exec`、`process.exit`，设置 `metadata-only`，并配置长批次超时。
-5. 通过 `actrailctl launch` 运行一轮真实 xiaoO 对话，确认批次没有提前发送。
-6. 更新插件配置触发旧 consumer 的 `finish`，确认尾批次发送到 receiver。
-7. 验证两个 action 均为终态且只出现一次，并验证 metadata-only 出境约束。
+4. 在 daemon 显式启用 canonical request body export；插件先只启用
+   `process.exec`、`process.exit`、`llm.request`，并使用 `metadata-only`。
+5. 运行第一轮真实 xiaoO 对话，触发旧 consumer 的 `finish`，验证三个 action 的
+   终态 one-shot、metadata-only 出境约束以及持久化 trace identity。
+6. 将插件切换为 `full`，运行带唯一 user marker 的第二轮真实 xiaoO 对话。
+7. 再次触发 `finish`，在 receiver 收到的 OTLP JSON 中验证
+   `llm.request.canonical_body_json` 是有效 JSON、export state 为 `exported`，且 body
+   包含该唯一 marker。
 8. 验证 OTLP `traceId` 是 UUIDv4 格式的 128-bit 标识，并与 SQLite 中持久化的
    `otel_trace_id` 一致；本机数字 `trace_id` 仍保留为资源属性。
 9. 卸载插件，停止 Web、daemon 和 receiver，清理隔离测试数据。
 
 # 手动测试
 
-以下命令完整复现自动测试。所有命令均从仓库根目录、在同一个 root shell 中执行，
-以便保留步骤间的环境变量和后台进程 PID。
+以下命令复现自动测试中的 metadata-only、生命周期和 trace identity 轮次。自动用例
+还会切换到 `full` 再运行一轮，在真实 receiver 边界验证 canonical request body 和
+唯一 user marker。所有命令均从仓库根目录、在同一个 root shell 中执行，以便保留
+步骤间的环境变量和后台进程 PID。
 
 ## 步骤1：检查测试前提并构建 release
 
@@ -543,8 +549,9 @@ esac
 # 覆盖范围与非目标
 
 本用例验证 builtin OTEL/HTTP 的插件发现、配置安全策略、真实 action 输入、批次
-flush、终态 one-shot 和 metadata-only 出境约束。它不依赖外部 Collector、容器或
-Agent CLI，也不替代以下专项验收：
+flush、终态 one-shot、metadata-only 出境约束，以及 full 模式 canonical request
+body 在真实 OTLP receiver 边界的导出。它不依赖外部 Collector 或容器，也不替代
+以下专项验收：
 
 - TLS/mTLS 证书分发、轮换和真实 Collector 互操作；
 - WAL、at-least-once 或其他可靠投递语义；

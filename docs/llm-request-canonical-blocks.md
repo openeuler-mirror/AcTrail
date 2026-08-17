@@ -4,7 +4,7 @@ This document defines the L0 retention model for LLM request bodies. It is the s
 
 ## Goal
 
-Agent requests grow by replaying most previous conversation state on every turn. Storing every `llm.request` as inline `llm.request.body_json` repeats the same system prompts, tool schemas, historical messages, and tool results many times. AcTrail now stores reconstructable request content as a canonical skeleton plus trace-local reusable blocks.
+Agent requests grow by replaying most previous conversation state on every turn. Storing every `llm.request` body inline on the action repeats the same system prompts, tool schemas, historical messages, and tool results many times. AcTrail now stores reconstructable request content as a canonical skeleton plus trace-local reusable blocks.
 
 The model optimizes for three properties:
 
@@ -142,15 +142,28 @@ The block hash is computed from canonical block JSON bytes. If a block row alrea
 - Content state, manifest version, canonical body bytes, and canonical body hash for JSON block mode.
 - Trajectory ID and trajectory inference version when trajectory identification is available.
 
-It must not contain full request body fields:
+It must not contain `llm.request.payload_text`.
 
-- `llm.request.body_json`
-- `llm.request.body_text`
-- `llm.request.payload_text`
+The one full-body field it may carry is `llm.request.canonical_body_json`, and
+only where an operator has enabled request body export. It is absent by
+default. When body export is enabled, `llm.request.canonical_body_export_state`
+is `exported` if that field is present or `too_large` if the canonical UTF-8
+body exceeded `request_body_export_max_bytes` and was omitted entirely.
 
 ## Read, API, and Export Policy
 
 Default action-tree, OTEL, and JSON export views do not inline reconstructed request bodies. They expose content state, sizes, model, transport metadata, and references.
+
+OTEL egress of a request body requires all three explicit settings:
+
+1. `semantic_retention.l0_llm_call.request_content = "canonical_blocks"`;
+2. `semantic_retention.l0_llm_call.request_body_export = "canonical_json"`;
+3. the OTEL plugin's `attribute_mode = "full"`.
+
+`full` exports attributes already present on an action; it does not enable the
+daemon's optional body attribute. Keeping these controls separate prevents an
+upgrade from widening the egress boundary for deployments that already use
+`full`.
 
 Full request content is only returned by explicit content reads with a bounded size:
 
