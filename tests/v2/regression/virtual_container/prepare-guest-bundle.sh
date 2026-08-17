@@ -44,7 +44,7 @@ esac
 [[ ! -L "$FINAL_BUNDLE_DIR" ]] || fail "BUNDLE_DIR must not be a symbolic link: $FINAL_BUNDLE_DIR"
 
 elf_machine() {
-  readelf -h "$1" 2>/dev/null \
+  LC_ALL=C readelf -h "$1" 2>/dev/null \
     | awk -F: '/^[[:space:]]*Machine:/ {
         sub(/^[[:space:]]+/, "", $2)
         print $2
@@ -53,17 +53,17 @@ elf_machine() {
 }
 
 elf_needed() {
-  readelf -d "$1" 2>/dev/null \
+  LC_ALL=C readelf -d "$1" 2>/dev/null \
     | sed -n 's/.*Shared library: \[\([^]]*\)\].*/\1/p'
 }
 
 elf_interpreter() {
-  readelf -l "$1" 2>/dev/null \
+  LC_ALL=C readelf -l "$1" 2>/dev/null \
     | sed -n 's/.*Requesting program interpreter: \([^]]*\).*/\1/p'
 }
 
 elf_max_glibc() {
-  readelf --version-info "$1" 2>/dev/null \
+  LC_ALL=C readelf --version-info "$1" 2>/dev/null \
     | grep -o 'GLIBC_[0-9][0-9.]*' \
     | sed 's/^GLIBC_//' \
     | sort -Vu \

@@ -11,9 +11,9 @@ use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
 use model_core::process::ProcessIdentity;
 use semantic_action::{
-    FileObservationPath, FilePathSetWrite, LlmRequestContentWrite, McpJsonRpcContentWrite,
-    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticEvidenceKind,
-    attr_keys as attrs,
+    FileObservationPath, FilePathSetWrite, LlmRequestContentWrite, LlmRequestLineageWrite,
+    McpJsonRpcContentWrite, SemanticAction, SemanticActionKind, SemanticActionLink,
+    SemanticEvidenceKind, attr_keys as attrs,
 };
 
 use crate::payload_projection::llm::{LlmCodecPlugin, LlmCodecPluginStatus};
@@ -71,6 +71,7 @@ pub struct LiveSemanticActionOutput {
     pub file_observation_paths: Vec<FileObservationPath>,
     pub file_path_sets: Vec<FilePathSetWrite>,
     pub llm_request_contents: Vec<LlmRequestContentWrite>,
+    pub llm_request_lineages: Vec<LlmRequestLineageWrite>,
     pub mcp_jsonrpc_contents: Vec<McpJsonRpcContentWrite>,
     pub payload_segments: Vec<PayloadSegment>,
     pub deferred_events: Vec<DomainEvent>,
@@ -86,6 +87,7 @@ impl Default for LiveSemanticActionOutput {
             file_observation_paths: Vec::new(),
             file_path_sets: Vec::new(),
             llm_request_contents: Vec::new(),
+            llm_request_lineages: Vec::new(),
             mcp_jsonrpc_contents: Vec::new(),
             payload_segments: Vec::new(),
             deferred_events: Vec::new(),
@@ -103,6 +105,7 @@ impl LiveSemanticActionOutput {
             .extend(other.file_observation_paths);
         self.file_path_sets.extend(other.file_path_sets);
         self.llm_request_contents.extend(other.llm_request_contents);
+        self.llm_request_lineages.extend(other.llm_request_lineages);
         self.mcp_jsonrpc_contents.extend(other.mcp_jsonrpc_contents);
         self.payload_segments.extend(other.payload_segments);
         self.deferred_events.extend(other.deferred_events);
@@ -362,6 +365,9 @@ impl LiveSemanticActionRuntime {
         output
             .llm_request_contents
             .extend(llm_output.llm_request_contents);
+        output
+            .llm_request_lineages
+            .extend(llm_output.llm_request_lineages);
         output.payload_segments.extend(llm_output.payload_segments);
         for mut action in llm_output.actions {
             let agent_actions = if action.kind == SemanticActionKind::LlmRequest {
@@ -454,7 +460,8 @@ impl LiveSemanticActionRuntime {
         trace_id: TraceId,
         finished_at: SystemTime,
     ) -> LiveSemanticActionOutput {
-        let (mut actions, payload_segments) = self.llm.finalize_trace(trace_id, finished_at);
+        let llm_output = self.llm.finalize_trace(trace_id, finished_at);
+        let mut actions = llm_output.actions;
         actions.extend(self.mcp.finalize_trace(trace_id, finished_at));
         let file_output = self.file_access.finalize_trace(trace_id, finished_at);
         actions.extend(file_output.actions);
@@ -462,10 +469,11 @@ impl LiveSemanticActionRuntime {
         LiveSemanticActionOutput {
             actions,
             links,
-            payload_segments,
+            payload_segments: llm_output.payload_segments,
             file_observation_paths: Vec::new(),
             file_path_sets: file_output.file_path_sets,
-            llm_request_contents: Vec::new(),
+            llm_request_contents: llm_output.llm_request_contents,
+            llm_request_lineages: llm_output.llm_request_lineages,
             mcp_jsonrpc_contents: Vec::new(),
             deferred_events: file_output.deferred_events,
             retain_event: file_output.retain_event,

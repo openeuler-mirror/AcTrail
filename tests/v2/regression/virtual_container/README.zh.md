@@ -24,6 +24,10 @@ deploy/virtual-container/host/run-v2-tests.sh \
   --color never
 ```
 
+contracts 对 ELF 元数据的读取固定使用稳定的 C locale，因此宿主界面语言不会把有效的
+release 误判为不可读；ELF、bundle 或静态契约本身损坏仍然属于 `FAILED`。只有
+contracts 通过后确认 `/dev/kvm` 或 Kata backend 外部能力不可用时才是 `SKIPPED`。
+
 检测到 `/dev/kvm` 时，包装脚本仍要求先在同一 checkout 生成 profile 和 artifact，
 然后继续完整 Kata runtime 验收。可显式设置 scope 为 `contracts` 或 `all` 覆盖自动选择。
 

@@ -3,11 +3,13 @@
 use std::collections::BTreeMap;
 use std::time::SystemTime;
 
+use serde::{Deserialize, Serialize};
+
 use crate::ids::{CollectorName, EventId, TraceId};
 use crate::policy::{PolicyRecord, PolicyVerdict};
 use crate::process::ProcessIdentity;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum EventKind {
     Process,
     File,
@@ -50,7 +52,7 @@ pub struct EventEnvelope {
     pub flags: EventFlags,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProcessPayload {
     pub operation: String,
     pub parent: Option<ProcessIdentity>,
@@ -58,7 +60,7 @@ pub struct ProcessPayload {
     pub metadata: BTreeMap<String, String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FilePayload {
     pub operation: String,
     pub path: Option<String>,
@@ -66,7 +68,7 @@ pub struct FilePayload {
     pub metadata: BTreeMap<String, String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct NetPayload {
     pub transport: String,
     pub local: Option<String>,
@@ -76,7 +78,7 @@ pub struct NetPayload {
     pub metadata: BTreeMap<String, String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct IpcPayload {
     pub channel: String,
     pub peer: Option<String>,
@@ -84,7 +86,7 @@ pub struct IpcPayload {
     pub metadata: BTreeMap<String, String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct StdioPayload {
     pub stream: String,
     pub data: Vec<u8>,
@@ -92,15 +94,23 @@ pub struct StdioPayload {
     pub truncated: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum ApplicationBody {
+    Text(String),
+    Json(String),
+    Base64(String),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ApplicationPayload {
     pub protocol: String,
     pub operation: String,
     pub summary: String,
+    pub body: Option<ApplicationBody>,
     pub metadata: BTreeMap<String, String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ResourcePayload {
     pub scope: String,
     pub subject: String,
@@ -110,26 +120,26 @@ pub struct ResourcePayload {
     pub metadata: BTreeMap<String, String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ControlPayload {
     pub action: String,
     pub detail: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct LossPayload {
     pub reason: String,
     pub fatal: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct LabelPayload {
     pub provider: String,
     pub confidence_millis: Option<u16>,
     pub evidence: BTreeMap<String, String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct EnforcementPayload {
     pub backend: String,
     pub operation: String,
@@ -140,7 +150,7 @@ pub struct EnforcementPayload {
     pub metadata: BTreeMap<String, String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum EventPayload {
     Process(ProcessPayload),
     File(FilePayload),

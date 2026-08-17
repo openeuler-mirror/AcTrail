@@ -3,22 +3,27 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::time::SystemTime;
 
-use config_core::daemon::SemanticRetentionConfig;
+use config_core::daemon::{LlmRequestContentRetention, SemanticRetentionConfig};
 use model_core::ids::TraceId;
 use model_core::payload::{
     PayloadContentState, PayloadDirection, PayloadSegment, PayloadSourceBoundary,
 };
 use model_core::process::ProcessIdentity;
 use semantic_action::{
-    LlmRequestContentWrite, SemanticAction, SemanticActionCompleteness, SemanticActionKind,
-    SemanticActionStatus, SemanticEvidenceKind, attr_keys as attrs,
+    LlmRequestContentWrite, LlmRequestLineageWrite, SemanticAction, SemanticActionCompleteness,
+    SemanticActionKind, SemanticActionStatus, SemanticEvidenceKind, attr_keys as attrs,
 };
 
+use crate::payload_projection::http::{
+    HTTP2_CONNECTION_PREFACE, HTTP2_CONTINUATION_FRAME_TYPE, HTTP2_DATA_FRAME_TYPE,
+    HTTP2_FLAG_END_STREAM, HTTP2_HEADERS_FRAME_TYPE, decode_http2_frame, http2_data_payload,
+};
 use crate::payload_projection::llm::{
     InFlightResponse, IncrementalSseCache, LiveLlmProjection, LiveLlmResponseMessage,
     LlmCodecPlugin, LlmCodecPluginStatus, LlmCodecRegistry, PayloadStreamGroupKey,
-    live_llm_request_message_len, live_llm_request_prefix_skip_len,
-    live_llm_request_stream_id_hint, project_live_llm_request_message,
+    ProjectedLlmRequestHistory, ProjectedProviderResponseId, live_llm_request_message_len,
+    live_llm_request_prefix_skip_len, live_llm_request_stream_id_hint,
+    project_http2_stream_request, project_http2_stream_response, project_live_llm_request_message,
     project_live_llm_response_message, semantic_payload_draft,
 };
 
@@ -26,15 +31,20 @@ use super::actions::action_for_live_state;
 
 mod call;
 mod http;
+mod trajectory;
 mod websocket;
+
+use trajectory::{TrajectoryAssignment, TrajectoryClassification, TrajectoryClassifier};
 
 pub(super) struct LiveLlmProjector {
     config: SemanticRetentionConfig,
     codecs: LlmCodecRegistry,
     streams: BTreeMap<LiveStreamKey, LiveStreamState>,
     open_requests: BTreeMap<LlmStreamKey, VecDeque<OpenLlmRequest>>,
-    pending_responses: BTreeMap<LlmStreamKey, VecDeque<SemanticAction>>,
+    pending_responses: BTreeMap<LlmStreamKey, VecDeque<PendingLlmResponse>>,
+    pending_trajectory_actions: BTreeMap<(TraceId, String), PendingTrajectoryAction>,
     open_action_versions: BTreeMap<(TraceId, String), SemanticAction>,
+    trajectory: Option<TrajectoryClassifier>,
     websocket: websocket::WebSocketLlmAdapter,
 }
 
@@ -42,6 +52,9 @@ pub(super) struct LiveLlmProjector {
 pub(super) struct LiveLlmOutput {
     pub(super) actions: Vec<SemanticAction>,
     pub(super) llm_request_contents: Vec<LlmRequestContentWrite>,
+    pub(super) llm_request_lineages: Vec<LlmRequestLineageWrite>,
+    llm_request_histories: Vec<ProjectedLlmRequestHistory>,
+    provider_response_ids: Vec<ProjectedProviderResponseId>,
     pub(super) payload_segments: Vec<PayloadSegment>,
 }
 
@@ -49,20 +62,45 @@ impl LiveLlmOutput {
     fn extend(&mut self, other: Self) {
         self.actions.extend(other.actions);
         self.llm_request_contents.extend(other.llm_request_contents);
+        self.llm_request_lineages.extend(other.llm_request_lineages);
+        self.llm_request_histories
+            .extend(other.llm_request_histories);
+        self.provider_response_ids
+            .extend(other.provider_response_ids);
         self.payload_segments.extend(other.payload_segments);
     }
 }
 
 impl LiveLlmProjector {
     pub(super) fn new(config: SemanticRetentionConfig) -> Self {
+        if config.l0_llm_call.enabled
+            && config.l0_llm_call.trajectory.enabled
+            && !matches!(
+                config.l0_llm_call.request_content,
+                LlmRequestContentRetention::CanonicalBlocks
+            )
+        {
+            tracing::warn!(
+                request_content = ?config.l0_llm_call.request_content,
+                "LLM trajectory identification is disabled because request content retention is not canonical_blocks"
+            );
+        }
+        let trajectory = config
+            .llm_trajectory_enabled()
+            .then(|| TrajectoryClassifier::new(config.l0_llm_call.trajectory.into()));
+        let websocket = websocket::WebSocketLlmAdapter::new(
+            config.l0_llm_call.websocket_max_connections_per_process,
+        );
         Self {
             config,
             codecs: LlmCodecRegistry::default(),
             streams: BTreeMap::new(),
             open_requests: BTreeMap::new(),
             pending_responses: BTreeMap::new(),
+            pending_trajectory_actions: BTreeMap::new(),
             open_action_versions: BTreeMap::new(),
-            websocket: websocket::WebSocketLlmAdapter::default(),
+            trajectory,
+            websocket,
         }
     }
 }
@@ -97,6 +135,16 @@ struct OpenLlmRequest {
     action: SemanticAction,
     start_time: SystemTime,
     sequence_start: u64,
+}
+
+struct PendingLlmResponse {
+    action: SemanticAction,
+    provider_response_id: Option<String>,
+}
+
+struct PendingTrajectoryAction {
+    action: SemanticAction,
+    content: Option<LlmRequestContentWrite>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -246,11 +294,16 @@ impl LiveLlmProjector {
     }
 
     pub(super) fn forget_trace(&mut self, trace_id: TraceId) {
+        if let Some(trajectory) = self.trajectory.as_mut() {
+            trajectory.forget_trace(trace_id);
+        }
         self.websocket.forget_trace(trace_id);
         self.streams.retain(|key, _| key.group.trace_id != trace_id);
         self.open_requests.retain(|key, _| key.trace_id != trace_id);
         self.pending_responses
             .retain(|key, _| key.trace_id != trace_id);
+        self.pending_trajectory_actions
+            .retain(|(candidate, _), _| *candidate != trace_id);
         self.open_action_versions
             .retain(|(candidate, _), _| *candidate != trace_id);
     }
@@ -259,10 +312,13 @@ impl LiveLlmProjector {
         &mut self,
         trace_id: TraceId,
         finished_at: SystemTime,
-    ) -> (Vec<SemanticAction>, Vec<PayloadSegment>) {
+    ) -> LiveLlmOutput {
         self.websocket.forget_trace(trace_id);
-        let mut finalized = Vec::new();
-        let mut payload_segments = Vec::new();
+        let mut output = LiveLlmOutput::default();
+        if let Some(classifier) = self.trajectory.as_mut() {
+            let assignments = classifier.finalize_trace(trace_id);
+            self.apply_resolved_trajectory_assignments(trace_id, assignments, &mut output);
+        }
         let keys = self
             .streams
             .keys()
@@ -275,7 +331,7 @@ impl LiveLlmProjector {
             let Some(mut state) = self.streams.remove(&key) else {
                 continue;
             };
-            let Some(in_flight) = state.in_flight_response.take() else {
+            let Some(in_flight) = state.take_in_flight_response() else {
                 continue;
             };
             let Some((mut actions, drafts)) = state.materialize_in_flight(
@@ -286,7 +342,7 @@ impl LiveLlmProjector {
             ) else {
                 continue;
             };
-            payload_segments.extend(drafts);
+            output.payload_segments.extend(drafts);
             for action in &mut actions {
                 if action.kind != SemanticActionKind::LlmResponse {
                     continue;
@@ -298,13 +354,13 @@ impl LiveLlmProjector {
                     attrs::actrail::ACTION_FINALIZED_ON_TRACE_CLOSE.to_string(),
                     "true".to_string(),
                 );
-                finalized.push(action.clone());
+                output.actions.push(action.clone());
                 if let Some(request) = self.open_request_for_response(action) {
                     let mut call = call::llm_call_from_request_response(&request, Some(action));
                     call.status = SemanticActionStatus::Error;
                     call.completeness = SemanticActionCompleteness::Partial;
                     call.end_time = Some(finished_at);
-                    finalized.push(call);
+                    output.actions.push(call);
                 }
             }
         }
@@ -317,15 +373,17 @@ impl LiveLlmProjector {
                 attrs::actrail::ACTION_FINALIZED_ON_TRACE_CLOSE.to_string(),
                 "true".to_string(),
             );
-            finalized.push(call);
+            output.actions.push(call);
         }
         self.streams.retain(|key, _| key.group.trace_id != trace_id);
         self.open_requests.retain(|key, _| key.trace_id != trace_id);
         self.pending_responses
             .retain(|key, _| key.trace_id != trace_id);
+        self.pending_trajectory_actions
+            .retain(|(candidate, _), _| *candidate != trace_id);
         self.open_action_versions
             .retain(|(candidate, _), _| *candidate != trace_id);
-        (finalized, payload_segments)
+        output
     }
 
     fn open_requests_for_trace(&self, trace_id: TraceId) -> Vec<SemanticAction> {
@@ -353,17 +411,77 @@ impl LiveLlmProjector {
             .into_iter()
             .map(|content| (content.manifest.action_id.clone(), content))
             .collect::<BTreeMap<_, _>>();
+        let mut request_histories = output
+            .llm_request_histories
+            .into_iter()
+            .map(|history| (history.action_id.clone(), history))
+            .collect::<BTreeMap<_, _>>();
+        let mut provider_response_ids = output
+            .provider_response_ids
+            .into_iter()
+            .map(|metadata| (metadata.action_id, metadata.provider_response_id))
+            .collect::<BTreeMap<_, _>>();
         for mut action in output.actions {
             if !self.config.l4_payload.enabled {
                 action
                     .evidence
                     .retain(|evidence| evidence.kind == SemanticEvidenceKind::Event);
             }
+            let mut deferred_trajectory = false;
+            let mut resolved_trajectories = Vec::new();
+            let lineage = if action.kind == SemanticActionKind::LlmRequest {
+                self.trajectory.as_mut().and_then(|classifier| {
+                    let classification = match request_histories.remove(&action.action_id) {
+                        Some(history) => classifier.classify(
+                            action.trace_id,
+                            action.process,
+                            history,
+                            action.start_time,
+                        ),
+                        None => TrajectoryClassification::Assigned(
+                            classifier.classify_failure(action.action_id.clone()),
+                        ),
+                    };
+                    resolved_trajectories = classifier.take_resolved();
+                    let TrajectoryClassification::Assigned(assignment) = classification else {
+                        deferred_trajectory = true;
+                        return None;
+                    };
+                    action.attributes.insert(
+                        attrs::llm_request::TRAJECTORY_ID.to_string(),
+                        assignment.trajectory_id.clone(),
+                    );
+                    action.attributes.insert(
+                        attrs::llm_request::TRAJECTORY_INFERENCE_VERSION.to_string(),
+                        assignment.inference_version.to_string(),
+                    );
+                    Some(assignment.lineage(action.trace_id))
+                })
+            } else {
+                None
+            };
             let state_action = action_for_live_state(&action);
+            self.apply_resolved_trajectory_assignments(
+                state_action.trace_id,
+                resolved_trajectories,
+                &mut changed,
+            );
+            if deferred_trajectory {
+                self.pending_trajectory_actions.insert(
+                    (state_action.trace_id, state_action.action_id.clone()),
+                    PendingTrajectoryAction {
+                        action: state_action.clone(),
+                        content: request_contents.remove(&state_action.action_id),
+                    },
+                );
+            }
             let action_changed = self.record_projected_action(&state_action);
-            if action_changed {
+            if action_changed && !deferred_trajectory {
                 if let Some(content) = request_contents.remove(&action.action_id) {
                     changed.llm_request_contents.push(content);
+                }
+                if let Some(lineage) = lineage {
+                    changed.llm_request_lineages.push(lineage);
                 }
                 changed.actions.push(action);
             }
@@ -371,19 +489,46 @@ impl LiveLlmProjector {
                 SemanticActionKind::LlmRequest => {
                     self.remember_open_request(state_action.clone());
                     if let Some(response) = self.take_pending_response_for_request(&state_action) {
-                        let call =
-                            call::llm_call_from_request_response(&state_action, Some(&response));
+                        let assignments = self.register_provider_response(
+                            &state_action,
+                            response.provider_response_id.as_deref(),
+                            response
+                                .action
+                                .end_time
+                                .unwrap_or(response.action.start_time),
+                        );
+                        self.apply_resolved_trajectory_assignments(
+                            state_action.trace_id,
+                            assignments,
+                            &mut changed,
+                        );
+                        let call = call::llm_call_from_request_response(
+                            &state_action,
+                            Some(&response.action),
+                        );
                         self.remove_open_request(&state_action);
                         self.record_derived_call(call, &mut changed.actions);
                     }
                 }
                 SemanticActionKind::LlmResponse => {
+                    let provider_response_id =
+                        provider_response_ids.remove(&state_action.action_id);
                     if let Some(request) = self.take_open_request_for_response(&state_action) {
+                        let assignments = self.register_provider_response(
+                            &request,
+                            provider_response_id.as_deref(),
+                            state_action.end_time.unwrap_or(state_action.start_time),
+                        );
+                        self.apply_resolved_trajectory_assignments(
+                            request.trace_id,
+                            assignments,
+                            &mut changed,
+                        );
                         let call =
                             call::llm_call_from_request_response(&request, Some(&state_action));
                         self.record_derived_call(call, &mut changed.actions);
                     } else {
-                        self.remember_pending_response(state_action.clone());
+                        self.remember_pending_response(state_action.clone(), provider_response_id);
                     }
                 }
                 _ => {}
@@ -395,6 +540,66 @@ impl LiveLlmProjector {
     fn record_derived_call(&mut self, call: SemanticAction, changed: &mut Vec<SemanticAction>) {
         if self.record_projected_action(&call) {
             changed.push(call);
+        }
+    }
+
+    fn register_provider_response(
+        &mut self,
+        request: &SemanticAction,
+        provider_response_id: Option<&str>,
+        observed_at: SystemTime,
+    ) -> Vec<TrajectoryAssignment> {
+        let Some(provider_response_id) = provider_response_id else {
+            return Vec::new();
+        };
+        let Some(classifier_id) = request.attributes.get(attrs::llm_request::CLASSIFIER_ID) else {
+            return Vec::new();
+        };
+        if let Some(classifier) = self.trajectory.as_mut() {
+            return classifier.register_provider_response(
+                request.trace_id,
+                request.process.clone(),
+                classifier_id.clone(),
+                &request.action_id,
+                provider_response_id,
+                observed_at,
+            );
+        }
+        Vec::new()
+    }
+
+    fn apply_resolved_trajectory_assignments(
+        &mut self,
+        trace_id: TraceId,
+        assignments: Vec<TrajectoryAssignment>,
+        changed: &mut LiveLlmOutput,
+    ) {
+        for assignment in assignments {
+            let Some(pending) = self
+                .pending_trajectory_actions
+                .remove(&(trace_id, assignment.action_id.clone()))
+            else {
+                continue;
+            };
+            let mut action = pending.action;
+            action.attributes.insert(
+                attrs::llm_request::TRAJECTORY_ID.to_string(),
+                assignment.trajectory_id.clone(),
+            );
+            action.attributes.insert(
+                attrs::llm_request::TRAJECTORY_INFERENCE_VERSION.to_string(),
+                assignment.inference_version.to_string(),
+            );
+            changed
+                .llm_request_lineages
+                .push(assignment.lineage(action.trace_id));
+            if let Some(content) = pending.content {
+                changed.llm_request_contents.push(content);
+            }
+            self.update_open_request(&action);
+            if self.record_projected_action(&action) {
+                changed.actions.push(action);
+            }
         }
     }
 
@@ -435,6 +640,21 @@ impl LiveLlmProjector {
         }
     }
 
+    fn update_open_request(&mut self, request: &SemanticAction) {
+        let Some(stream_key) = LlmStreamKey::from_llm_request(request) else {
+            return;
+        };
+        let Some(requests) = self.open_requests.get_mut(&stream_key) else {
+            return;
+        };
+        if let Some(existing) = requests
+            .iter_mut()
+            .find(|candidate| candidate.action.action_id == request.action_id)
+        {
+            existing.action = request.clone();
+        }
+    }
+
     fn restore_open_request(&mut self, request: SemanticAction) {
         self.remember_open_request(request);
     }
@@ -452,24 +672,31 @@ impl LiveLlmProjector {
         }
     }
 
-    fn remember_pending_response(&mut self, response: SemanticAction) {
+    fn remember_pending_response(
+        &mut self,
+        response: SemanticAction,
+        provider_response_id: Option<String>,
+    ) {
         let Some(stream_key) = LlmStreamKey::from_llm_response(&response) else {
             return;
         };
         let responses = self.pending_responses.entry(stream_key).or_default();
         if responses
             .iter()
-            .any(|candidate| candidate.action_id == response.action_id)
+            .any(|candidate| candidate.action.action_id == response.action_id)
         {
             return;
         }
-        responses.push_back(response);
+        responses.push_back(PendingLlmResponse {
+            action: response,
+            provider_response_id,
+        });
     }
 
     fn take_pending_response_for_request(
         &mut self,
         request: &SemanticAction,
-    ) -> Option<SemanticAction> {
+    ) -> Option<PendingLlmResponse> {
         let stream_key = LlmStreamKey::from_llm_request(request)?;
         let request_order = LlmActionOrder::from_action(request)?;
         let responses = self.pending_responses.get_mut(&stream_key)?;
@@ -477,16 +704,16 @@ impl LiveLlmProjector {
             .iter()
             .enumerate()
             .filter(|(_, response)| {
-                LlmActionOrder::from_action(response)
+                LlmActionOrder::from_action(&response.action)
                     .is_some_and(|response_order| request_order <= response_order)
             })
             .min_by_key(|(_, response)| {
                 (
-                    LlmActionOrder::from_action(response).unwrap_or(LlmActionOrder {
-                        start_time: response.start_time,
+                    LlmActionOrder::from_action(&response.action).unwrap_or(LlmActionOrder {
+                        start_time: response.action.start_time,
                         sequence_start: u64::MAX,
                     }),
-                    response.action_id.clone(),
+                    response.action.action_id.clone(),
                 )
             })
             .map(|(index, _)| index)?;
@@ -601,8 +828,11 @@ impl LiveLlmProjector {
     }
 }
 
+/// One sequential plaintext byte stream to assemble and project: a whole
+/// HTTP/1 (or raw) connection body, or one de-multiplexed HTTP/2 stream's
+/// plaintext (its DATA-frame payloads).
 #[derive(Default)]
-struct LiveStreamState {
+struct PlainStreamAssembly {
     buffer: Vec<u8>,
     base_offset: usize,
     segments: VecDeque<LiveSegmentRange>,
@@ -612,25 +842,7 @@ struct LiveStreamState {
     in_flight_response: Option<InFlightResponse>,
 }
 
-impl LiveStreamState {
-    fn observe_segment(
-        &mut self,
-        config: &SemanticRetentionConfig,
-        codecs: &LlmCodecRegistry,
-        key: &LiveStreamKey,
-        segment: &PayloadSegment,
-    ) -> LiveLlmOutput {
-        self.append_segment(segment);
-        match key.direction {
-            LiveStreamDirection::Outbound => {
-                self.project_outbound_requests(config, codecs, &key.group)
-            }
-            LiveStreamDirection::Inbound => {
-                self.project_inbound_responses(config, codecs, &key.group)
-            }
-        }
-    }
-
+impl PlainStreamAssembly {
     fn append_segment(&mut self, segment: &PayloadSegment) {
         let start = self.base_offset + self.buffer.len();
         self.buffer.extend_from_slice(&segment.bytes);
@@ -645,6 +857,22 @@ impl LiveStreamState {
         if segment.direction == PayloadDirection::Inbound {
             self.completion_detector.observe(&segment.bytes);
         }
+    }
+
+    /// Append de-framed plaintext (e.g. one HTTP/2 DATA payload) attributed to
+    /// a captured segment.
+    fn append_plaintext(&mut self, bytes: &[u8], segment: PayloadSegment) {
+        let start = self.base_offset + self.buffer.len();
+        self.buffer.extend_from_slice(bytes);
+        let end = self.base_offset + self.buffer.len();
+        let mut metadata = segment;
+        metadata.bytes.clear();
+        self.segments.push_back(LiveSegmentRange {
+            start,
+            end,
+            segment: metadata,
+        });
+        self.completion_detector.observe(bytes);
     }
 
     fn project_outbound_requests(
@@ -682,6 +910,9 @@ impl LiveStreamState {
             output
                 .llm_request_contents
                 .extend(projection.llm_request_contents);
+            output
+                .llm_request_histories
+                .extend(projection.llm_request_histories);
             output.payload_segments.extend(projection.payload_segments);
             self.evict_encoded_len(encoded_len);
             if self.buffer.is_empty() {
@@ -709,6 +940,9 @@ impl LiveStreamState {
                 self.in_flight_response = None;
             }
             output.actions.extend(projection.actions);
+            output
+                .provider_response_ids
+                .extend(projection.provider_response_ids);
             output.payload_segments.extend(projection.payload_segments);
             if terminal {
                 self.pending_raw_chunk_terminator = projection.raw_response;
@@ -855,6 +1089,374 @@ impl LiveStreamState {
     }
 }
 
+/// One HTTP/2 stream's de-multiplexed plaintext plus its end-of-stream flag.
+#[derive(Default)]
+struct Http2StreamAssembly {
+    plain: PlainStreamAssembly,
+    end_stream: bool,
+}
+
+impl Http2StreamAssembly {
+    fn project_request(
+        &mut self,
+        config: &SemanticRetentionConfig,
+        codecs: &LlmCodecRegistry,
+        key: &PayloadStreamGroupKey,
+        stream_id: u32,
+    ) -> LiveLlmOutput {
+        let mut output = LiveLlmOutput::default();
+        if !self.end_stream || self.plain.buffer.is_empty() {
+            return output;
+        }
+        let message_start = self.plain.base_offset;
+        let message_end = message_start + self.plain.buffer.len();
+        let segments = self.plain.segments_for_range(message_start, message_end);
+        let Some(projection) = project_http2_stream_request(
+            config,
+            codecs,
+            key,
+            stream_id,
+            message_start,
+            &self.plain.buffer,
+            &segments,
+        ) else {
+            return output;
+        };
+        output.actions.extend(projection.actions);
+        output
+            .llm_request_contents
+            .extend(projection.llm_request_contents);
+        output
+            .llm_request_histories
+            .extend(projection.llm_request_histories);
+        self.plain.evict_encoded_len(projection.encoded_len);
+        output
+    }
+
+    fn project_response(
+        &mut self,
+        config: &SemanticRetentionConfig,
+        codecs: &LlmCodecRegistry,
+        key: &PayloadStreamGroupKey,
+        stream_id: u32,
+    ) -> LiveLlmOutput {
+        let mut output = LiveLlmOutput::default();
+        if self.plain.buffer.is_empty() {
+            return output;
+        }
+        let mut sse_parse_cache = self.plain.sse_parse_cache.take();
+        let message_start = self.plain.base_offset;
+        let message_end = message_start + self.plain.buffer.len();
+        let segments = self.plain.segments_for_range(message_start, message_end);
+        let Some(projection) = project_http2_stream_response(
+            config,
+            codecs,
+            key,
+            stream_id,
+            message_start,
+            &self.plain.buffer,
+            &segments,
+            &mut sse_parse_cache,
+            self.end_stream,
+        ) else {
+            self.plain.sse_parse_cache = sse_parse_cache;
+            return output;
+        };
+        self.plain.sse_parse_cache = sse_parse_cache;
+        output.actions.extend(projection.actions);
+        output
+            .provider_response_ids
+            .extend(projection.provider_response_ids);
+        if projection.terminal {
+            self.plain.evict_encoded_len(projection.encoded_len);
+        }
+        output
+    }
+}
+
+/// A whole HTTP/2 connection in one direction: the raw frame byte stream,
+/// decomposed into per-stream plaintext assemblies.
+struct Http2ConnectionAssembly {
+    frame_buffer: Vec<u8>,
+    frame_base_offset: usize,
+    frame_segments: VecDeque<LiveSegmentRange>,
+    streams: BTreeMap<u32, Http2StreamAssembly>,
+}
+
+impl Default for Http2ConnectionAssembly {
+    fn default() -> Self {
+        Self {
+            frame_buffer: Vec::new(),
+            frame_base_offset: 0,
+            frame_segments: VecDeque::new(),
+            streams: BTreeMap::new(),
+        }
+    }
+}
+
+impl Http2ConnectionAssembly {
+    fn append_segment(&mut self, segment: &PayloadSegment) {
+        let start = self.frame_base_offset + self.frame_buffer.len();
+        self.frame_buffer.extend_from_slice(&segment.bytes);
+        let end = self.frame_base_offset + self.frame_buffer.len();
+        let mut metadata = segment.clone();
+        metadata.bytes.clear();
+        self.frame_segments.push_back(LiveSegmentRange {
+            start,
+            end,
+            segment: metadata,
+        });
+        self.parse_frames();
+    }
+
+    fn parse_frames(&mut self) {
+        let mut cursor = 0;
+        if self.frame_buffer.starts_with(HTTP2_CONNECTION_PREFACE) {
+            cursor = HTTP2_CONNECTION_PREFACE.len();
+        }
+        loop {
+            // Copy the frame's info out so we can mutate self while iterating.
+            let (frame_type, flags, stream_id, payload, encoded_len) = {
+                let Some(frame) = decode_http2_frame(&self.frame_buffer[cursor..]) else {
+                    break;
+                };
+                (
+                    frame.frame_type,
+                    frame.flags,
+                    frame.stream_id,
+                    frame.payload.to_vec(),
+                    frame.encoded_len,
+                )
+            };
+            let frame_start = self.frame_base_offset + cursor;
+            match frame_type {
+                HTTP2_DATA_FRAME_TYPE => {
+                    if let Some(data) = http2_data_payload(flags, &payload) {
+                        self.route_stream_data(stream_id, frame_start, data);
+                    }
+                    if flags & HTTP2_FLAG_END_STREAM != 0 {
+                        self.mark_end_stream(stream_id);
+                    }
+                }
+                HTTP2_HEADERS_FRAME_TYPE | HTTP2_CONTINUATION_FRAME_TYPE => {
+                    if flags & HTTP2_FLAG_END_STREAM != 0 {
+                        self.mark_end_stream(stream_id);
+                    }
+                }
+                _ => {}
+            }
+            cursor += encoded_len;
+        }
+        if cursor > 0 {
+            self.evict_frames(cursor);
+        }
+    }
+
+    fn route_stream_data(&mut self, stream_id: u32, frame_start: usize, data: &[u8]) {
+        let Some(segment) = self.segment_metadata_at(frame_start).cloned() else {
+            return;
+        };
+        self.streams
+            .entry(stream_id)
+            .or_default()
+            .plain
+            .append_plaintext(data, segment);
+    }
+
+    fn segment_metadata_at(&self, global_offset: usize) -> Option<&PayloadSegment> {
+        self.frame_segments
+            .iter()
+            .find(|range| range.start <= global_offset && global_offset < range.end)
+            .map(|range| &range.segment)
+    }
+
+    fn mark_end_stream(&mut self, stream_id: u32) {
+        if let Some(stream) = self.streams.get_mut(&stream_id) {
+            stream.end_stream = true;
+        }
+    }
+
+    fn evict_frames(&mut self, consumed: usize) {
+        let global_end = self.frame_base_offset + consumed;
+        self.frame_buffer.drain(..consumed);
+        self.frame_base_offset = global_end;
+        while self
+            .frame_segments
+            .front()
+            .is_some_and(|range| range.end <= self.frame_base_offset)
+        {
+            self.frame_segments.pop_front();
+        }
+        if let Some(front) = self.frame_segments.front_mut()
+            && front.start < self.frame_base_offset
+        {
+            front.start = self.frame_base_offset;
+        }
+    }
+
+    fn project(
+        &mut self,
+        config: &SemanticRetentionConfig,
+        codecs: &LlmCodecRegistry,
+        key: &PayloadStreamGroupKey,
+        direction: LiveStreamDirection,
+    ) -> LiveLlmOutput {
+        let mut output = LiveLlmOutput::default();
+        let mut done = Vec::new();
+        for (stream_id, stream) in self.streams.iter_mut() {
+            let projected = match direction {
+                LiveStreamDirection::Outbound => {
+                    stream.project_request(config, codecs, key, *stream_id)
+                }
+                LiveStreamDirection::Inbound => {
+                    stream.project_response(config, codecs, key, *stream_id)
+                }
+            };
+            output.extend(projected);
+            if stream.plain.buffer.is_empty() || stream.end_stream {
+                done.push(*stream_id);
+            }
+        }
+        for stream_id in done {
+            self.streams.remove(&stream_id);
+        }
+        output
+    }
+
+    fn pending_request_marker(
+        &self,
+        key: &PayloadStreamGroupKey,
+    ) -> Option<call::PendingLlmRequestMarker> {
+        for (stream_id, stream) in &self.streams {
+            if stream.end_stream {
+                continue;
+            }
+            let first = stream.plain.segments.front()?;
+            return Some(call::PendingLlmRequestMarker {
+                trace_id: key.trace_id,
+                process: key.process.clone(),
+                stream_key: key.stream_key.clone(),
+                http_stream_id: Some(stream_id.to_string()),
+                start_time: first.segment.observed_at,
+                sequence_start: first.segment.sequence,
+            });
+        }
+        None
+    }
+}
+
+/// The byte-stream assembly for one (stream_key, direction): either a plain
+/// sequential stream (HTTP/1, raw) or a de-multiplexed HTTP/2 connection.
+enum StreamBody {
+    Plain(PlainStreamAssembly),
+    Http2(Http2ConnectionAssembly),
+}
+
+struct LiveStreamState {
+    body: StreamBody,
+}
+
+impl Default for LiveStreamState {
+    fn default() -> Self {
+        Self {
+            body: StreamBody::Plain(PlainStreamAssembly::default()),
+        }
+    }
+}
+
+impl LiveStreamState {
+    fn observe_segment(
+        &mut self,
+        config: &SemanticRetentionConfig,
+        codecs: &LlmCodecRegistry,
+        key: &LiveStreamKey,
+        segment: &PayloadSegment,
+    ) -> LiveLlmOutput {
+        match &mut self.body {
+            StreamBody::Plain(plain) => {
+                plain.append_segment(segment);
+                if looks_like_http2(&plain.buffer) {
+                    self.activate_http2();
+                    match &mut self.body {
+                        StreamBody::Http2(http2) => {
+                            http2.project(config, codecs, &key.group, key.direction)
+                        }
+                        StreamBody::Plain(_) => unreachable!(),
+                    }
+                } else {
+                    match key.direction {
+                        LiveStreamDirection::Outbound => {
+                            plain.project_outbound_requests(config, codecs, &key.group)
+                        }
+                        LiveStreamDirection::Inbound => {
+                            plain.project_inbound_responses(config, codecs, &key.group)
+                        }
+                    }
+                }
+            }
+            StreamBody::Http2(http2) => {
+                http2.append_segment(segment);
+                http2.project(config, codecs, &key.group, key.direction)
+            }
+        }
+    }
+
+    /// Convert a plain assembly into an HTTP/2 connection assembly once the
+    /// buffered bytes are recognized as HTTP/2 frames.
+    fn activate_http2(&mut self) {
+        let StreamBody::Plain(plain) = &mut self.body else {
+            return;
+        };
+        let mut http2 = Http2ConnectionAssembly::default();
+        http2.frame_buffer = std::mem::take(&mut plain.buffer);
+        http2.frame_base_offset = plain.base_offset;
+        http2.frame_segments = std::mem::take(&mut plain.segments);
+        // Re-route the already-buffered bytes through the frame parser. The
+        // segment evidence moved into frame_segments is used per frame.
+        http2.parse_frames();
+        self.body = StreamBody::Http2(http2);
+    }
+
+    fn pending_request_marker(
+        &self,
+        key: &PayloadStreamGroupKey,
+    ) -> Option<call::PendingLlmRequestMarker> {
+        match &self.body {
+            StreamBody::Plain(plain) => plain.pending_request_marker(key),
+            StreamBody::Http2(http2) => http2.pending_request_marker(key),
+        }
+    }
+
+    /// Take the plain assembly's in-flight response so trace-close
+    /// finalization can materialize it. HTTP/2 streams finalize per stream and
+    /// do not use the single in-flight slot.
+    fn take_in_flight_response(&mut self) -> Option<InFlightResponse> {
+        match &mut self.body {
+            StreamBody::Plain(plain) => plain.in_flight_response.take(),
+            StreamBody::Http2(_) => None,
+        }
+    }
+
+    fn materialize_in_flight(
+        &mut self,
+        config: &SemanticRetentionConfig,
+        codecs: &LlmCodecRegistry,
+        key: &PayloadStreamGroupKey,
+        message_start: usize,
+    ) -> Option<(Vec<SemanticAction>, Vec<PayloadSegment>)> {
+        match &mut self.body {
+            StreamBody::Plain(plain) => {
+                plain.materialize_in_flight(config, codecs, key, message_start)
+            }
+            StreamBody::Http2(_) => None,
+        }
+    }
+}
+
+fn looks_like_http2(bytes: &[u8]) -> bool {
+    bytes.starts_with(HTTP2_CONNECTION_PREFACE) || decode_http2_frame(bytes).is_some()
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RawChunkTerminatorPrefix {
     None,
@@ -914,11 +1516,6 @@ impl ResponseCompletionDetector {
         self.tail.clear();
         self.seen = false;
         self.observe(bytes);
-    }
-
-    #[cfg(test)]
-    fn seen(&self) -> bool {
-        self.seen
     }
 }
 
@@ -997,51 +1594,4 @@ fn plaintext_http_candidate(segment: &PayloadSegment) -> bool {
 
 fn http_payload_sequence(action: &SemanticAction) -> Option<u64> {
     action.attributes.get("payload_sequence")?.parse().ok()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn finish_reason_null_sse_chunk_does_not_complete_response() {
-        let mut detector = ResponseCompletionDetector::default();
-
-        detector.observe(
-            br#"data: {"choices":[{"delta":{"content":"hello"},"finish_reason":null}]}
-
-"#,
-        );
-
-        assert!(!detector.seen());
-    }
-
-    #[test]
-    fn explicit_response_completion_markers_complete_response() {
-        for marker in [
-            b"data: [DONE]\n\n".as_slice(),
-            b"event: message_stop\n\n".as_slice(),
-            b"event: done\n\n".as_slice(),
-        ] {
-            let mut detector = ResponseCompletionDetector::default();
-
-            detector.observe(marker);
-
-            assert!(
-                detector.seen(),
-                "marker {marker:?} should complete response"
-            );
-        }
-    }
-
-    #[test]
-    fn split_done_event_marker_completes_response() {
-        let mut detector = ResponseCompletionDetector::default();
-
-        detector.observe(b"event: do");
-        assert!(!detector.seen());
-
-        detector.observe(b"ne\n\n");
-        assert!(detector.seen());
-    }
 }

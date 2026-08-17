@@ -34,51 +34,6 @@ use super::workload_diagnostics::WorkloadDiagnostics;
 
 const TLS_SYNC_COLLECTOR_NAME: &str = "tls-sync";
 
-#[cfg(test)]
-pub(crate) fn build_runtime_wiring(
-    storage_config: &StorageConfig,
-    profiles: DaemonProfileRegistry,
-    ebpf_config: EbpfCollectorConfig,
-    payload_config: PayloadConfig,
-    active_trace_max: u32,
-    diagnostic_log_level: DiagnosticLogLevel,
-    seccomp_notify: SeccompNotifyConfig,
-    process_seccomp: ProcessSeccompConfig,
-    agent_invocation: AgentInvocationConfig,
-    semantic_retention: SemanticRetentionConfig,
-    file_observation: FileObservationConfig,
-    application_protocol: ApplicationProtocolConfig,
-    resource_metrics: ResourceMetricsConfig,
-    trace_finalization: TraceFinalizationConfig,
-    workload_diagnostics: WorkloadDiagnostics,
-    enforcement: EnforcementConfig,
-    command_control: CommandControlConfig,
-    network_control: NetworkControlConfig,
-) -> Result<DaemonRuntimeWiring<StorageAttachService>, ControlError> {
-    build_runtime_wiring_with_storage_retention(
-        storage_config,
-        profiles,
-        ebpf_config,
-        payload_config,
-        active_trace_max,
-        diagnostic_log_level,
-        seccomp_notify,
-        process_seccomp,
-        agent_invocation,
-        semantic_retention,
-        file_observation,
-        application_protocol,
-        resource_metrics,
-        StorageRetentionConfig::default(),
-        PluginAlertRuntimeConfig::default(),
-        trace_finalization,
-        workload_diagnostics,
-        enforcement,
-        command_control,
-        network_control,
-    )
-}
-
 pub(crate) fn build_runtime_wiring_with_storage_retention(
     storage_config: &StorageConfig,
     profiles: DaemonProfileRegistry,

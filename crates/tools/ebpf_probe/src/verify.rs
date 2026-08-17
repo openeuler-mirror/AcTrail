@@ -41,8 +41,11 @@ pub fn run_live_verification(
     };
     let default_operator_config = OperatorConfig::default_hierarchical_template()
         .map_err(|error| setup(format!("render built-in operator defaults: {error}")))?;
-    let seccomp_defaults = OperatorConfig::parse(&default_operator_config)
+    let mut seccomp_defaults = OperatorConfig::parse(&default_operator_config)
         .map_err(|error| setup(format!("parse built-in seccomp defaults: {error}")))?;
+    // verify-live asserts retained payload bytes, while production defaults
+    // intentionally keep the L4 payload layer disabled.
+    seccomp_defaults.semantic_retention.l4_payload.enabled = true;
     let storage_config = StorageConfig::sqlite_path(&config.storage_path);
     let mut server = LocalDaemonServer::build_with_provider_rule_set(
         &storage_config,
@@ -55,11 +58,13 @@ pub fn run_live_verification(
                 config_core::daemon::DEFAULT_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS,
             tracked_process_max_entries: config.tracked_process_max_entries,
             pending_operation_max_entries: config.pending_operation_max_entries,
+            fd_per_process_max_entries: config.fd_per_process_max_entries,
             suppressed_fd_max_entries: config.suppressed_fd_max_entries,
             suppressed_fd_index_slots_per_process: config.suppressed_fd_index_slots_per_process,
             event_ring_buffer_max_bytes: config.event_ring_buffer_max_bytes,
             file_path_capture_enabled: config.file_path_capture_enabled,
             file_path_max_bytes: config.file_path_max_bytes,
+            net_send_recv_aggregation: false,
             ipc_lineage: config_core::daemon::IpcLineageConfig::default(),
         },
         PayloadConfig {

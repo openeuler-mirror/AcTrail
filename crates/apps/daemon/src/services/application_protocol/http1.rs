@@ -121,11 +121,6 @@ impl Http1Analyzer {
                 || key.stream_key != segment.stream_key
         });
     }
-
-    #[cfg(test)]
-    pub(super) fn buffered_stream_count(&self) -> usize {
-        self.buffers.len()
-    }
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]

@@ -12,14 +12,14 @@ use model_core::process::{ProcessIdentity, ProcessMembership, ProcessRecord};
 use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
 use semantic_action::{
     FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
-    LlmRequestContentWrite, McpJsonRpcContentPage, McpJsonRpcContentWrite, SemanticAction,
-    SemanticActionLink, SemanticActionPage,
+    LlmRequestContentWrite, LlmRequestLineage, LlmRequestLineageWrite, McpJsonRpcContentPage,
+    McpJsonRpcContentWrite, SemanticAction, SemanticActionLink, SemanticActionPage,
 };
 use storage_core::{
     PayloadSegmentQuery, RetentionCandidate, SemanticActionChildPage, SemanticActionChildPageQuery,
     SemanticActionChildRow, SemanticActionDisplayRootChildPage, SemanticActionDisplayRootChildRow,
-    SemanticActionSummary, SnapshotView, StorageBackend, StorageError, StorageTransaction,
-    TraceFilter, TraceLease, TraceLeasePurpose, TraceTombstone,
+    SemanticActionSummary, SemanticActionTraceRevision, SnapshotView, StorageBackend, StorageError,
+    StorageTransaction, TraceFilter, TraceLease, TraceLeasePurpose, TraceTombstone,
 };
 use store_read_contract::diagnostics::DiagnosticReadStore;
 use store_read_contract::events::EventReadStore;
@@ -259,6 +259,14 @@ impl StorageBackend for SqliteStorage {
             .map_err(StorageError::from)
     }
 
+    fn upsert_llm_request_lineages(
+        &mut self,
+        lineages: &[LlmRequestLineageWrite],
+    ) -> Result<(), StorageError> {
+        semantic_action::SemanticActionWriteStore::upsert_llm_request_lineages(self, lineages)
+            .map_err(StorageError::from)
+    }
+
     fn upsert_mcp_jsonrpc_contents(
         &mut self,
         contents: &[McpJsonRpcContentWrite],
@@ -287,6 +295,37 @@ impl StorageBackend for SqliteStorage {
         .map_err(StorageError::from)
     }
 
+    fn llm_request_lineage(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+    ) -> Result<Option<LlmRequestLineage>, StorageError> {
+        semantic_action::SemanticActionReadStore::llm_request_lineage(self, trace_id, action_id)
+            .map_err(StorageError::from)
+    }
+
+    fn llm_request_trajectory(
+        &self,
+        trace_id: TraceId,
+        trajectory_id: &str,
+    ) -> Result<Vec<LlmRequestLineage>, StorageError> {
+        semantic_action::SemanticActionReadStore::llm_request_trajectory(
+            self,
+            trace_id,
+            trajectory_id,
+        )
+        .map_err(StorageError::from)
+    }
+
+    fn llm_request_forks(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+    ) -> Result<Vec<LlmRequestLineage>, StorageError> {
+        semantic_action::SemanticActionReadStore::llm_request_forks(self, trace_id, action_id)
+            .map_err(StorageError::from)
+    }
+
     fn list_file_observation_paths(
         &self,
         trace_id: TraceId,
@@ -306,12 +345,30 @@ impl StorageBackend for SqliteStorage {
             .map_err(StorageError::from)
     }
 
+    fn semantic_action_links_matching_roles(
+        &self,
+        trace_id: TraceId,
+        roles: &[&str],
+    ) -> Result<Vec<SemanticActionLink>, StorageError> {
+        SqliteStorage::semantic_action_links_matching_roles(self, trace_id, roles)
+            .map_err(StorageError::from)
+    }
+
     fn semantic_actions_matching_kinds(
         &self,
         trace_id: TraceId,
         kinds: &[&str],
     ) -> Result<Vec<SemanticAction>, StorageError> {
         SqliteStorage::semantic_actions_matching_kinds(self, trace_id, kinds)
+            .map_err(StorageError::from)
+    }
+
+    fn semantic_actions_matching_kinds_lite(
+        &self,
+        trace_id: TraceId,
+        kinds: &[&str],
+    ) -> Result<Vec<SemanticAction>, StorageError> {
+        SqliteStorage::semantic_actions_matching_kinds_lite(self, trace_id, kinds)
             .map_err(StorageError::from)
     }
 
@@ -326,6 +383,13 @@ impl StorageBackend for SqliteStorage {
                 roots: summary.roots,
             })
             .map_err(StorageError::from)
+    }
+
+    fn semantic_action_trace_revision(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<SemanticActionTraceRevision, StorageError> {
+        SqliteStorage::semantic_action_trace_revision(self, trace_id).map_err(StorageError::from)
     }
 
     fn observed_agent_semantic_action(
@@ -412,6 +476,23 @@ impl StorageBackend for SqliteStorage {
             self,
             trace_id,
             display_parent_roles,
+        )
+        .map_err(StorageError::from)
+    }
+
+    fn semantic_action_display_path_to_kind(
+        &self,
+        trace_id: TraceId,
+        display_parent_roles: &[&str],
+        target_kind: &str,
+        after_action_id: Option<&str>,
+    ) -> Result<Option<Vec<storage_core::SemanticActionDisplayPathEntry>>, StorageError> {
+        SqliteStorage::semantic_action_display_path_to_kind(
+            self,
+            trace_id,
+            display_parent_roles,
+            target_kind,
+            after_action_id,
         )
         .map_err(StorageError::from)
     }

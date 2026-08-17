@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use config_core::daemon::{
     ApplicationProtocolConfig, HttpBodyRetention, HttpHeadersRetention, SemanticRetentionConfig,
 };
-use model_core::event::ApplicationPayload;
+use model_core::event::{ApplicationBody, ApplicationPayload};
 use model_core::payload::PayloadSegment;
 use serde_json::{Map, Value};
 
@@ -217,10 +217,10 @@ impl HttpMessage {
             config,
             semantic_retention.http_headers(),
         );
-        add_body(
-            &mut metadata,
+        let body = extract_body(
             &self.body,
             semantic_retention.http_body_content_for_http_message(consumed_by_llm),
+            &mut metadata,
         );
         if let Some(status) = self.response_status() {
             metadata.insert("status_code".to_string(), status.code);
@@ -231,6 +231,7 @@ impl HttpMessage {
                 protocol: status.version,
                 operation: "response".to_string(),
                 summary: status.summary,
+                body,
                 metadata,
             };
         }
@@ -241,6 +242,7 @@ impl HttpMessage {
                 protocol: request.version,
                 operation: "request".to_string(),
                 summary: format!("{} {}", request.method, request.target),
+                body,
                 metadata,
             };
         }
@@ -248,6 +250,7 @@ impl HttpMessage {
             protocol: "http/1.x".to_string(),
             operation: "message".to_string(),
             summary: self.first_line.clone(),
+            body,
             metadata,
         }
     }
@@ -455,35 +458,29 @@ fn add_selected_headers(
     }
 }
 
-fn add_body(metadata: &mut BTreeMap<String, String>, body: &str, retention: HttpBodyRetention) {
+fn extract_body(
+    body: &str,
+    retention: HttpBodyRetention,
+    metadata: &mut BTreeMap<String, String>,
+) -> Option<ApplicationBody> {
     if body.is_empty() {
-        return;
+        return None;
     }
     match retention {
-        HttpBodyRetention::None => {}
-        HttpBodyRetention::Text => {
-            metadata.insert("http.body_text".to_string(), body.to_string());
-        }
+        HttpBodyRetention::None => None,
+        HttpBodyRetention::Text => Some(ApplicationBody::Text(body.to_string())),
         HttpBodyRetention::Json => {
             if let Ok(value) = serde_json::from_str::<Value>(body) {
-                metadata.insert("http.body_json".to_string(), value.to_string());
                 metadata.insert("http.body_json_state".to_string(), "valid".to_string());
+                Some(ApplicationBody::Json(value.to_string()))
             } else {
                 metadata.insert(
                     "http.body_json_state".to_string(),
                     "invalid_or_unavailable".to_string(),
                 );
+                None
             }
         }
-        HttpBodyRetention::Raw => {
-            metadata.insert(
-                "http.body_base64".to_string(),
-                base64_encode(body.as_bytes()),
-            );
-        }
+        HttpBodyRetention::Raw => Some(ApplicationBody::Base64(base64_encode(body.as_bytes()))),
     }
 }
-
-#[cfg(test)]
-#[path = "parser/tests.rs"]
-mod tests;

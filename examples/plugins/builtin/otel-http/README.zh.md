@@ -9,8 +9,10 @@ drop，但不提供 WAL、at-least-once 或可靠投递保证。
 
 出境边界采用显式授权：`[action_kinds]` 决定允许发送的 action 类型，默认
 `attribute_mode = "metadata-only"`，只发送 action/trace 标识、类型、状态、时间、
-进程标识等结构化元数据，并以 action 类型代替可能含内容的 span 标题；不发送命令行、
-HTTP/LLM 内容等采集属性。只有 Collector
+进程标识等结构化元数据，并以 action 类型代替可能含内容的 span 标题；对于
+`llm.request`，该模式还保留 `llm.request.trajectory_id` 和
+`llm.request.trajectory_inference_version`，以便只启用 request 导出时仍可观测其
+trajectory 归属；不发送命令行、HTTP/LLM 内容等采集属性。只有 Collector
 及传输链路均受信任且业务确有需要时，才应显式改成 `attribute_mode = "full"`。
 插件只导出终态 action；同一 action 的 `in_progress` 修订不会形成重复 span。
 

@@ -9,6 +9,17 @@ struct actrail_open_how {
     __u64 resolve;
 };
 
+static __always_inline void read_file_open_how(
+    struct trace_event_raw_sys_enter *ctx,
+    struct actrail_open_how *how
+) {
+    __u64 how_ptr = (__u64)ctx->args[2];
+
+    if (how_ptr) {
+        bpf_probe_read_user(how, sizeof(*how), (void *)(unsigned long)how_ptr);
+    }
+}
+
 static __always_inline int emit_file_open_enter(
     struct trace_event_raw_sys_enter *ctx
 ) {
@@ -58,26 +69,25 @@ static __always_inline int emit_file_creat_enter(
 }
 
 static __always_inline int emit_file_openat2_enter(
-    struct trace_event_raw_sys_enter *ctx
+    struct trace_event_raw_sys_enter *ctx,
+    const struct actrail_open_how *how
 ) {
     __u32 tgid = 0;
     __u32 tid = 0;
     __u32 lookup_flags = 0;
-    __u64 *trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
+    __u64 *trace_id;
     struct actrail_file_event *event;
-    struct actrail_open_how how = {};
-    __u64 how_ptr = (__u64)ctx->args[2];
 
+    if (!file_event_capture_enabled()) {
+        return 0;
+    }
+    trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
     if (!tgid) {
         return 0;
     }
     if (!trace_id) {
         return 0;
     }
-    if (how_ptr) {
-        bpf_probe_read_user(&how, sizeof(how), (void *)(unsigned long)how_ptr);
-    }
-
     event = actrail_event_reserve(sizeof(*event));
     if (!event) {
         return 0;
@@ -92,9 +102,9 @@ static __always_inline int emit_file_openat2_enter(
     event->aux = ACTRAIL_FILE_SYSCALL_OPENAT2;
     event->arg0 = ctx->args[0];
     event->arg1 = ctx->args[1];
-    event->arg2 = how.flags;
-    event->arg3 = how.mode;
-    event->arg4 = how.resolve;
+    event->arg2 = how->flags;
+    event->arg3 = how->mode;
+    event->arg4 = how->resolve;
     event->arg5 = ctx->args[3];
     read_file_path(event, (__u64)ctx->args[1], ACTRAIL_FILE_PRIMARY_PATH);
     actrail_event_submit(ctx, event);

@@ -191,6 +191,10 @@ export function readActionTree(traceId) {
   return fetchJson(`/api/traces/${traceId}/action-tree`);
 }
 
+export function readWaterfall(traceId) {
+  return fetchJson(`/api/traces/${traceId}/waterfall`);
+}
+
 export function readActionTreeRoot(traceId) {
   return fetchJson(`/api/traces/${traceId}/action-tree/root`);
 }
@@ -198,6 +202,13 @@ export function readActionTreeRoot(traceId) {
 export function readActionTreeChildren(traceId, parentId, { offset, limit }) {
   return fetchJson(
     `/api/traces/${traceId}/action-tree/children/${encodeURIComponent(parentId)}?offset=${offset}&limit=${limit}`,
+  );
+}
+
+export function readActionTreeLlmNav(traceId, { mode, afterId = null } = {}) {
+  const after = afterId ? `&after=${encodeURIComponent(afterId)}` : '';
+  return fetchJson(
+    `/api/traces/${encodeURIComponent(traceId)}/action-tree/llm-nav?mode=${encodeURIComponent(mode)}${after}`,
   );
 }
 

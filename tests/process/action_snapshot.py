@@ -24,6 +24,45 @@ class ActionLinkRecord:
     valid: bool
 
 
+@dataclass(frozen=True)
+class EventRecord:
+    variant: str
+    payload: dict
+
+
+class EventSnapshot:
+    def __init__(self, events: tuple[EventRecord, ...]) -> None:
+        self._events = events
+
+    @classmethod
+    def load(cls, viewer: Path, config: Path, trace_id: int) -> EventSnapshot:
+        command = [
+            str(viewer),
+            "--config",
+            str(config),
+            "--output-format",
+            "json",
+            "events",
+            "--trace-id",
+            str(trace_id),
+        ]
+        result = subprocess.run(command, text=True, capture_output=True, check=False)
+        if result.returncode != 0:
+            raise RuntimeError(
+                "event snapshot failed: "
+                f"command={' '.join(command)} stdout={result.stdout} stderr={result.stderr}"
+            )
+        document = json.loads(result.stdout)
+        events = tuple(
+            EventRecord(variant=str(row["variant"]), payload=dict(row.get("payload") or {}))
+            for row in document.get("events", [])
+        )
+        return cls(events)
+
+    def events(self, variant: str) -> tuple[EventRecord, ...]:
+        return tuple(event for event in self._events if event.variant == variant)
+
+
 class SemanticActionSnapshot:
     def __init__(
         self,

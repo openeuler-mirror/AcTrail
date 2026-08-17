@@ -1,7 +1,6 @@
 //! Decoding raw file syscall records into collector events.
 
 use std::collections::BTreeMap;
-use std::time::SystemTime;
 
 use collector_event::{RawCollectorEvent, RawEventEnvelope, RawObservationPayload};
 use model_core::capability::Capability;
@@ -18,12 +17,13 @@ use super::state::{
     FILE_FD_MISSING, FILE_IPC_KIND_PIPE, FILE_IPC_KIND_UNIX_SOCKET, FILE_PHASE_EXIT,
     FILE_SYSCALL_CHDIR, FILE_SYSCALL_CLOSE, FILE_SYSCALL_CLOSE_RANGE, FILE_SYSCALL_CREAT,
     FILE_SYSCALL_DUP, FILE_SYSCALL_DUP2, FILE_SYSCALL_DUP3, FILE_SYSCALL_FCHDIR,
-    FILE_SYSCALL_FCNTL, FILE_SYSCALL_FTRUNCATE, FILE_SYSCALL_MKDIR, FILE_SYSCALL_MKDIRAT,
-    FILE_SYSCALL_MMAP, FILE_SYSCALL_OPEN, FILE_SYSCALL_OPENAT, FILE_SYSCALL_OPENAT2,
-    FILE_SYSCALL_PIPE, FILE_SYSCALL_PIPE2, FILE_SYSCALL_RENAME, FILE_SYSCALL_RENAMEAT,
-    FILE_SYSCALL_RENAMEAT2, FILE_SYSCALL_RMDIR, FILE_SYSCALL_SOCKETPAIR, FILE_SYSCALL_TRUNCATE,
-    FILE_SYSCALL_UNLINK, FILE_SYSCALL_UNLINKAT, FileSyscallOutcome, FileTracker, PATH_FLAG_FAULT,
-    PATH_FLAG_TRUNCATED, dup_target_fd, fcntl_duplicates_fd,
+    FILE_SYSCALL_FCNTL, FILE_SYSCALL_FTRUNCATE, FILE_SYSCALL_IOCTL_CLOEXEC,
+    FILE_SYSCALL_IOCTL_NCLOEXEC, FILE_SYSCALL_MKDIR, FILE_SYSCALL_MKDIRAT, FILE_SYSCALL_MMAP,
+    FILE_SYSCALL_OPEN, FILE_SYSCALL_OPENAT, FILE_SYSCALL_OPENAT2, FILE_SYSCALL_PIPE,
+    FILE_SYSCALL_PIPE2, FILE_SYSCALL_RENAME, FILE_SYSCALL_RENAMEAT, FILE_SYSCALL_RENAMEAT2,
+    FILE_SYSCALL_RMDIR, FILE_SYSCALL_SOCKETPAIR, FILE_SYSCALL_TRUNCATE, FILE_SYSCALL_UNLINK,
+    FILE_SYSCALL_UNLINKAT, FileSyscallOutcome, FileTracker, PATH_FLAG_FAULT, PATH_FLAG_TRUNCATED,
+    dup_target_fd, fcntl_duplicates_fd,
 };
 
 pub(in crate::decode) fn decode(
@@ -32,6 +32,7 @@ pub(in crate::decode) fn decode(
     tracker: &mut FileTracker,
 ) -> Result<Option<RawCollectorEvent>, DecodeError> {
     let trace_id = event.trace_id;
+    let observed_ktime_ns = event.observed_ktime_ns;
     if let Some(capability) = ipc_pair_capability(&event) {
         if !bindings.trace_has_capability(event.trace_id, &capability) {
             return Ok(None);
@@ -102,7 +103,7 @@ pub(in crate::decode) fn decode(
     Ok(Some(RawCollectorEvent {
         envelope: RawEventEnvelope {
             trace_id: Some(trace_id),
-            observed_at: SystemTime::now(),
+            observed_at: super::super::clock::wall_from_ktime(observed_ktime_ns),
             process: identity,
             collector: CollectorName::new("ebpf"),
         },
@@ -137,6 +138,8 @@ fn ipc_lineage_context_event(event: &KernelFilePathEvent) -> bool {
                 | FILE_SYSCALL_DUP2
                 | FILE_SYSCALL_DUP3
                 | FILE_SYSCALL_FCNTL
+                | FILE_SYSCALL_IOCTL_CLOEXEC
+                | FILE_SYSCALL_IOCTL_NCLOEXEC
         )
 }
 
@@ -173,7 +176,7 @@ fn decode_read_summary(
     Ok(Some(RawCollectorEvent {
         envelope: RawEventEnvelope {
             trace_id: Some(event.trace_id),
-            observed_at: SystemTime::now(),
+            observed_at: super::super::clock::wall_from_ktime(event.observed_ktime_ns),
             process: identity,
             collector: CollectorName::new("ebpf"),
         },
@@ -378,9 +381,18 @@ fn insert_syscall_args(metadata: &mut BTreeMap<String, String>, outcome: &FileSy
             metadata.insert("last_fd".to_string(), event.arg1.to_string());
             metadata.insert("flags".to_string(), event.arg2.to_string());
         }
-        FILE_SYSCALL_CLOSE | FILE_SYSCALL_DUP | FILE_SYSCALL_DUP2 | FILE_SYSCALL_DUP3
-        | FILE_SYSCALL_FCNTL | FILE_SYSCALL_CHDIR | FILE_SYSCALL_FCHDIR | FILE_SYSCALL_RENAME
-        | FILE_SYSCALL_UNLINK | FILE_SYSCALL_RMDIR => {}
+        FILE_SYSCALL_CLOSE
+        | FILE_SYSCALL_DUP
+        | FILE_SYSCALL_DUP2
+        | FILE_SYSCALL_DUP3
+        | FILE_SYSCALL_FCNTL
+        | FILE_SYSCALL_IOCTL_CLOEXEC
+        | FILE_SYSCALL_IOCTL_NCLOEXEC
+        | FILE_SYSCALL_CHDIR
+        | FILE_SYSCALL_FCHDIR
+        | FILE_SYSCALL_RENAME
+        | FILE_SYSCALL_UNLINK
+        | FILE_SYSCALL_RMDIR => {}
         _ => {}
     }
 }
@@ -431,6 +443,8 @@ fn syscall_name(raw: u32) -> &'static str {
         FILE_SYSCALL_DUP2 => "dup2",
         FILE_SYSCALL_DUP3 => "dup3",
         FILE_SYSCALL_FCNTL => "fcntl",
+        FILE_SYSCALL_IOCTL_CLOEXEC => "ioctl_fioclex",
+        FILE_SYSCALL_IOCTL_NCLOEXEC => "ioctl_fionclex",
         FILE_SYSCALL_CHDIR => "chdir",
         FILE_SYSCALL_FCHDIR => "fchdir",
         _ => "unknown",

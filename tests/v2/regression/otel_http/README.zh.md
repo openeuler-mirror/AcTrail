@@ -12,7 +12,9 @@ python3 tests/v2/regression/test_all.py \
 
 公共 V2 runner 会先执行 `scripts/install-release.sh`，再创建隔离工作目录，启动真实
 `actraild`、`actrailweb`、builtin `otel-http` 插件和本地 OTLP/HTTP JSON
-receiver，最后通过 `actrailctl launch /bin/true` 产生真实 trace。冷缓存机器可能长时间
+receiver，最后通过 `actrailctl launch` 运行一轮真实 xiaoO 对话。运行前需要确保
+`xiaoo` 位于 `PATH`，或通过 `XIAOO_E2E_BINARY` 指定可执行文件，并且 xiaoO 的
+provider 配置可用。冷缓存机器可能长时间
 停留在 release、TLS runtime 或 WASM 插件编译阶段；只要 `cargo`/`rustc` 仍在占用
 CPU，就不是测试卡死。
 
@@ -30,10 +32,12 @@ python3 tests/v2/regression/otel_http/run_e2e.py \
    OTLP/HTTP JSON receiver。
 3. 发现并加载 builtin `otel-http`，检查配置 schema 和官方安全默认值。
 4. 只启用 `process.exec`、`process.exit`，设置 `metadata-only`，并配置长批次超时。
-5. 通过 `actrailctl launch /bin/true` 产生真实 trace，确认批次没有提前发送。
+5. 通过 `actrailctl launch` 运行一轮真实 xiaoO 对话，确认批次没有提前发送。
 6. 更新插件配置触发旧 consumer 的 `finish`，确认尾批次发送到 receiver。
 7. 验证两个 action 均为终态且只出现一次，并验证 metadata-only 出境约束。
-8. 卸载插件，停止 Web、daemon 和 receiver，清理隔离测试数据。
+8. 验证 OTLP `traceId` 是 UUIDv4 格式的 128-bit 标识，并与 SQLite 中持久化的
+   `otel_trace_id` 一致；本机数字 `trace_id` 仍保留为资源属性。
+9. 卸载插件，停止 Web、daemon 和 receiver，清理隔离测试数据。
 
 # 手动测试
 
@@ -305,6 +309,9 @@ catalog 中存在 activation-ready 的 `otel-http`；加载后实例状态为 `a
 
 ```bash
 CASE_MARKER="OTEL_HTTP_MANUAL_$(python3 -c 'import secrets; print(secrets.token_hex(6))')"
+ANSWER_MARKER="A$(python3 -c 'import secrets; print(secrets.token_hex(5))')"
+XIAOO_BIN="${XIAOO_E2E_BINARY:-$(command -v xiaoo)}"
+test -x "$XIAOO_BIN"
 LAUNCH_OUTPUT="$(
   "$BIN/actrailctl" --config "$WORK/actraild.conf" \
     launch \
@@ -312,10 +319,15 @@ LAUNCH_OUTPUT="$(
     --host-ebpf required \
     --seccomp-notify auto \
     -- \
-    /bin/true \
+    "$XIAOO_BIN" \
+    --cli run \
+    --no-tools \
+    --max-turns 1 \
+    --prompt "Reply with exactly \"$ANSWER_MARKER\" and nothing else. Do not use tools." \
     2>&1
 )"
 printf '%s\n' "$LAUNCH_OUTPUT"
+printf '%s\n' "$LAUNCH_OUTPUT" | grep -F "$ANSWER_MARKER"
 
 TRACE_IDS="$(
   printf '%s\n' "$LAUNCH_OUTPUT" |
@@ -367,7 +379,8 @@ test "$EARLY_SPANS" -eq 0
 
 ### 预期结果
 
-`/bin/true` 成功退出；输出中恰好出现一个 `trace trace-N entered Active`；trace 最终为
+真实 xiaoO 对话成功退出并输出 answer marker；输出中恰好出现一个
+`trace trace-N entered Active`；trace 最终为
 `Exited/Clean` 或 `Completed/Clean`；receiver 中该 marker 的 span 数量仍为 0，
 证明未达到批次上限或超时前不会提前发送。
 
@@ -408,20 +421,23 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 
-python3 - "$WORK/marker-spans.json" <<'PY'
+python3 - "$WORK/marker-spans.json" "$WORK/data/actrail.sqlite" "$TRACE_ID" <<'PY'
 import json
+import re
+import sqlite3
 import sys
 from collections import Counter
 from pathlib import Path
 
 spans = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+database = Path(sys.argv[2])
+local_trace_id = int(sys.argv[3])
 allowed_keys = {
     "actrail.action.id",
     "actrail.action.kind",
     "actrail.action.status",
     "actrail.action.completeness",
     "actrail.process.id",
-    "actrail.action.confidence_millis",
     "actrail.action.valid",
     "process.parent.identity_state",
 }
@@ -450,12 +466,29 @@ assert all(status in {"success", "error", "unknown"} for status in statuses)
 assert all(span.get("name") == kind for span, kind in zip(spans, kinds))
 assert unexpected == []
 
+wire_ids = {span.get("traceId") for span in spans}
+assert len(wire_ids) == 1
+wire_id = next(iter(wire_ids))
+assert isinstance(wire_id, str) and re.fullmatch(r"[0-9a-f]{32}", wire_id)
+assert wire_id != "0" * 32
+assert wire_id != f"{local_trace_id:032x}"
+assert wire_id[12] == "4" and wire_id[16] in "89ab"
+with sqlite3.connect(database) as connection:
+    stored = connection.execute(
+        "SELECT lower(hex(otel_trace_id)), length(otel_trace_id) "
+        "FROM traces WHERE trace_id = ?",
+        (local_trace_id,),
+    ).fetchone()
+assert stored == (wire_id, 16)
+
 print({
     "spans": len(spans),
     "kinds": dict(sorted(Counter(kinds).items())),
     "action_ids_unique": True,
     "terminal": True,
     "metadata_only": True,
+    "otel_trace_id": wire_id,
+    "persistent_identity": True,
 })
 PY
 
@@ -474,7 +507,8 @@ curl -fsS "$WEB_BASE/api/plugins/runtime" |
 
 更新配置成功并触发旧 consumer 的 `finish`；receiver 收到 2 个 span；
 `process.exec=1`、`process.exit=1`，action ID 唯一，状态全部为终态，span 名称等于
-action kind，没有超出 metadata-only 白名单的属性；插件保持 `active` 且
+action kind，没有超出 metadata-only 白名单的属性；所有 span 使用同一个 UUIDv4
+`traceId`，且该值与 SQLite 的 16-byte `otel_trace_id` 一致；插件保持 `active` 且
 `dropped_records=0`。
 
 ## 步骤7：清理测试进程和隔离数据

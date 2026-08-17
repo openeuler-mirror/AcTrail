@@ -824,10 +824,6 @@ fn non_empty_attr(action: &SemanticAction, key: &str) -> Option<String> {
 
 fn valid_link(link: &SemanticActionLink) -> bool {
     link.valid
-        && !link
-            .attributes
-            .get(attr_keys::actrail::LINK_VALID)
-            .is_some_and(|value| value == "false")
 }
 
 fn storage_error(operation: &str, error: storage_core::StorageError) -> String {

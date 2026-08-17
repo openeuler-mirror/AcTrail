@@ -33,6 +33,7 @@ INSERT OR IGNORE INTO process_id_sequence (singleton, next_process_id) VALUES (1
 
 CREATE TABLE IF NOT EXISTS traces (
     trace_id INTEGER PRIMARY KEY,
+    otel_trace_id BLOB NOT NULL UNIQUE CHECK (length(otel_trace_id) = 16),
     alert_token BLOB NOT NULL,
     root_process_id INTEGER NOT NULL,
     root_container_id TEXT,
@@ -48,6 +49,13 @@ CREATE TABLE IF NOT EXISTS traces (
     exited_at INTEGER,
     failed_at INTEGER
 );
+
+CREATE TRIGGER IF NOT EXISTS reject_otel_trace_id_rotation
+BEFORE UPDATE OF otel_trace_id ON traces
+WHEN OLD.otel_trace_id != NEW.otel_trace_id
+BEGIN
+    SELECT RAISE(ABORT, 'OTLP trace identity cannot change');
+END;
 
 CREATE TABLE IF NOT EXISTS memberships (
     trace_id INTEGER NOT NULL,
@@ -74,12 +82,20 @@ CREATE TABLE IF NOT EXISTS events (
     metadata_partial INTEGER NOT NULL,
     policy_modified INTEGER NOT NULL,
     payload_variant TEXT NOT NULL,
-    payload_fields TEXT NOT NULL,
-    payload_bytes TEXT NOT NULL,
+    payload BLOB NOT NULL,
+    payload_code INTEGER NOT NULL,
+    payload_blocks TEXT NOT NULL,
     policy_verdict TEXT NOT NULL,
     policy_note TEXT,
     policy_redactions TEXT NOT NULL,
     policy_truncations TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS event_payload_blocks (
+    block_id INTEGER PRIMARY KEY,
+    trace_id INTEGER NOT NULL,
+    kind INTEGER NOT NULL,
+    encoded_bytes BLOB NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS payload_segments (
@@ -115,6 +131,13 @@ CREATE TABLE IF NOT EXISTS semantic_action_ids (
     UNIQUE (trace_id, action_id_hash, action_id)
 );
 
+CREATE TABLE IF NOT EXISTS agent_identities (
+    trace_id INTEGER NOT NULL,
+    process_id INTEGER NOT NULL,
+    identity_action_key INTEGER NOT NULL,
+    PRIMARY KEY (trace_id, process_id)
+);
+
 CREATE TABLE IF NOT EXISTS semantic_actions (
     action_key INTEGER PRIMARY KEY,
     trace_id INTEGER NOT NULL,
@@ -125,11 +148,8 @@ CREATE TABLE IF NOT EXISTS semantic_actions (
     process_id INTEGER NOT NULL,
     status_code INTEGER NOT NULL,
     completeness_code INTEGER NOT NULL,
-    confidence_millis INTEGER,
     action_valid_code INTEGER NOT NULL DEFAULT 1,
-    agent_observed INTEGER NOT NULL DEFAULT 0,
-    process_parent_conflict INTEGER NOT NULL DEFAULT 0,
-    attributes TEXT NOT NULL
+    process_parent_conflict INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS semantic_action_evidence (
@@ -149,7 +169,6 @@ CREATE TABLE IF NOT EXISTS semantic_action_links (
     confidence_code INTEGER NOT NULL,
     valid INTEGER NOT NULL DEFAULT 1,
     link_valid_code INTEGER NOT NULL DEFAULT 1,
-    attributes TEXT NOT NULL,
     PRIMARY KEY (trace_id, parent_action_key, child_action_key, role_code)
 );
 
@@ -266,6 +285,20 @@ CREATE TABLE IF NOT EXISTS llm_request_block_refs (
     PRIMARY KEY (manifest_id, ordinal)
 ) WITHOUT ROWID;
 
+CREATE TABLE IF NOT EXISTS llm_request_lineage (
+    action_key INTEGER PRIMARY KEY,
+    trace_id INTEGER NOT NULL,
+    trajectory_root_action_key INTEGER NOT NULL,
+    parent_action_key INTEGER,
+    forked_from_action_key INTEGER,
+    trajectory_position INTEGER NOT NULL,
+    transition_code INTEGER NOT NULL,
+    start_reason_code INTEGER NOT NULL,
+    inference_version INTEGER NOT NULL,
+    UNIQUE (trace_id, trajectory_root_action_key, trajectory_position),
+    UNIQUE (parent_action_key)
+);
+
 CREATE TABLE IF NOT EXISTS mcp_jsonrpc_messages (
     message_id INTEGER PRIMARY KEY,
     trace_id INTEGER NOT NULL,
@@ -350,6 +383,16 @@ CREATE INDEX IF NOT EXISTS idx_mcp_jsonrpc_action_refs_message ON mcp_jsonrpc_ac
     message_id
 );
 
+CREATE INDEX IF NOT EXISTS idx_llm_request_lineage_parent ON llm_request_lineage (
+    trace_id,
+    parent_action_key
+);
+
+CREATE INDEX IF NOT EXISTS idx_llm_request_lineage_fork ON llm_request_lineage (
+    trace_id,
+    forked_from_action_key
+);
+
 "#;
 
 pub fn initialize(connection: &Connection) -> Result<(), rusqlite::Error> {
@@ -370,6 +413,7 @@ fn migrate_query_indexes(connection: &Connection) -> Result<(), rusqlite::Error>
         "CREATE INDEX IF NOT EXISTS idx_events_trace_id ON events(trace_id);
          CREATE INDEX IF NOT EXISTS idx_payload_segments_trace_id ON payload_segments(trace_id);
          CREATE INDEX IF NOT EXISTS idx_semantic_actions_trace_start ON semantic_actions(trace_id, start_time);
+         CREATE INDEX IF NOT EXISTS idx_semantic_actions_trace_kind_start ON semantic_actions(trace_id, kind_code, start_time, action_key);
          CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_parent ON semantic_action_links(trace_id, parent_action_key);
          CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_child ON semantic_action_links(trace_id, child_action_key);
          CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_valid_parent ON semantic_action_links(trace_id, valid, parent_action_key);
@@ -407,10 +451,15 @@ fn validate_current_schema(connection: &Connection) -> Result<(), rusqlite::Erro
     require_column(connection, "processes", "process_id")?;
     require_column(connection, "process_namespace_aliases", "process_id")?;
     require_column(connection, "traces", "alert_token")?;
+    require_column(connection, "traces", "otel_trace_id")?;
+    require_schema_object(connection, "trigger", "reject_otel_trace_id_rotation")?;
     require_column(connection, "traces", "root_process_id")?;
     require_column(connection, "traces", "root_working_directory")?;
     require_column(connection, "memberships", "process_id")?;
     require_column(connection, "events", "process_id")?;
+    require_column(connection, "event_payload_blocks", "trace_id")?;
+    require_column(connection, "event_payload_blocks", "kind")?;
+    require_column(connection, "event_payload_blocks", "encoded_bytes")?;
     require_column(connection, "payload_segments", "process_id")?;
     require_column(connection, "traces", "exited_at")?;
     require_column(connection, "semantic_action_ids", "action_key")?;
@@ -421,8 +470,10 @@ fn validate_current_schema(connection: &Connection) -> Result<(), rusqlite::Erro
     require_column(connection, "semantic_actions", "status_code")?;
     require_column(connection, "semantic_actions", "completeness_code")?;
     require_column(connection, "semantic_actions", "action_valid_code")?;
-    require_column(connection, "semantic_actions", "agent_observed")?;
     require_column(connection, "semantic_actions", "process_parent_conflict")?;
+    require_column(connection, "agent_identities", "trace_id")?;
+    require_column(connection, "agent_identities", "process_id")?;
+    require_column(connection, "agent_identities", "identity_action_key")?;
     require_column(connection, "semantic_action_evidence", "action_key")?;
     require_column(connection, "semantic_action_evidence", "kind_code")?;
     require_column(connection, "semantic_action_links", "parent_action_key")?;
@@ -449,6 +500,18 @@ fn validate_current_schema(connection: &Connection) -> Result<(), rusqlite::Erro
     require_column(connection, "llm_request_manifests", "action_key")?;
     require_column(connection, "llm_request_blocks", "block_id")?;
     require_column(connection, "llm_request_block_refs", "manifest_id")?;
+    require_column(connection, "llm_request_lineage", "action_key")?;
+    require_column(
+        connection,
+        "llm_request_lineage",
+        "trajectory_root_action_key",
+    )?;
+    require_column(connection, "llm_request_lineage", "parent_action_key")?;
+    require_column(connection, "llm_request_lineage", "forked_from_action_key")?;
+    require_column(connection, "llm_request_lineage", "trajectory_position")?;
+    require_column(connection, "llm_request_lineage", "transition_code")?;
+    require_column(connection, "llm_request_lineage", "start_reason_code")?;
+    require_column(connection, "llm_request_lineage", "inference_version")?;
     require_column(connection, "mcp_jsonrpc_messages", "message_id")?;
     require_column(connection, "mcp_jsonrpc_messages", "canonical_json_hash")?;
     require_column(connection, "mcp_jsonrpc_messages", "canonical_json_bytes")?;
@@ -478,6 +541,22 @@ fn require_column(
     column: &str,
 ) -> Result<(), rusqlite::Error> {
     if column_exists(connection, table, column)? {
+        return Ok(());
+    }
+    Err(rusqlite::Error::InvalidQuery)
+}
+
+fn require_schema_object(
+    connection: &Connection,
+    object_type: &str,
+    name: &str,
+) -> Result<(), rusqlite::Error> {
+    let count = connection.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = ?1 AND name = ?2",
+        [object_type, name],
+        |row| row.get::<_, i64>(0),
+    )?;
+    if count == 1 {
         return Ok(());
     }
     Err(rusqlite::Error::InvalidQuery)

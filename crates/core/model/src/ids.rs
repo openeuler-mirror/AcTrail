@@ -30,6 +30,25 @@ define_u64_id!(EventId, "event");
 define_u64_id!(DiagnosticId, "diag");
 define_u64_id!(RequestId, "request");
 
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct OtelTraceId([u8; Self::BYTE_COUNT]);
+
+impl OtelTraceId {
+    pub const BYTE_COUNT: usize = 16;
+
+    pub fn from_bytes(bytes: [u8; Self::BYTE_COUNT]) -> Option<Self> {
+        (bytes != [0; Self::BYTE_COUNT]).then_some(Self(bytes))
+    }
+
+    pub fn from_slice(bytes: &[u8]) -> Option<Self> {
+        Self::from_bytes(bytes.try_into().ok()?)
+    }
+
+    pub const fn as_bytes(&self) -> &[u8; Self::BYTE_COUNT] {
+        &self.0
+    }
+}
+
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ProfileName(String);
 

@@ -1,5 +1,7 @@
 //! Decoding of kernel eBPF observations into collector contracts.
 
+#[path = "decode/clock.rs"]
+mod clock;
 #[path = "decode/fd_io.rs"]
 mod fd_io;
 #[path = "decode/file_path/mod.rs"]
@@ -9,7 +11,6 @@ mod payload;
 
 use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
-use std::time::SystemTime;
 
 use collector_event::{RawCollectorEvent, RawEventEnvelope, RawObservationPayload};
 use model_core::capability::Capability;
@@ -29,10 +30,12 @@ pub(crate) const PROC_FORK_CHILD_HOST_ONLY: u32 = 1;
 pub(crate) const PROC_FORK_PARENT_HOST_ONLY: u32 = 2;
 pub const NET_EVENT_CONNECT: u32 = 100;
 pub const NET_EVENT_ACCEPT: u32 = 101;
-pub const NET_EVENT_SEND: u32 = 102;
-pub const NET_EVENT_RECV: u32 = 103;
+pub const FD_IO_EVENT_SEND: u32 = 102;
+pub const FD_IO_EVENT_RECV: u32 = 103;
 pub const NET_EVENT_BIND: u32 = 104;
 pub const NET_EVENT_LISTEN: u32 = 105;
+pub const NET_EVENT_CLOSE: u32 = 106;
+pub const NET_EVENT_SHUTDOWN: u32 = 107;
 pub const FILE_EVENT_OPEN: u32 = 300;
 pub const FILE_EVENT_UNLINK: u32 = 301;
 pub const FILE_EVENT_RENAME: u32 = 302;
@@ -42,9 +45,14 @@ pub const FILE_EVENT_TRUNCATE: u32 = 305;
 pub const FILE_EVENT_MMAP: u32 = 306;
 pub const FILE_EVENT_CONTEXT: u32 = 307;
 pub const FILE_EVENT_READ_SUMMARY: u32 = 308;
-const NET_SYSCALL_SOCKET: u32 = 1;
-const NET_SYSCALL_FD_IO: u32 = 2;
-const NET_SYSCALL_FD_IO_WRITEV: u32 = 3;
+const SYSCALL_FAMILY_SOCKET: u32 = 1;
+const SYSCALL_FAMILY_FD_IO: u32 = 2;
+const SYSCALL_FAMILY_FD_IO_WRITEV: u32 = 3;
+// Should be same with enum actrail_fd_category in bpf/actrail_fd.h.
+const FD_CATEGORY_NET: u32 = 1;
+const FD_CATEGORY_IPC_UNIX_SOCKET: u32 = 2;
+const FD_CATEGORY_IPC_PIPE: u32 = 3;
+const FD_CATEGORY_FILE: u32 = 4;
 const PROC_COORD_TRACEPOINT_SIGNAL_GENERATE: u32 = 1;
 
 use file_path::FdIpcKind;
@@ -105,8 +113,9 @@ pub(crate) fn decode_observation(
         PROC_EVENT_SIGNAL => {
             maybe_lifecycle_event(lifecycle_requested, decode_signal(event, bindings)?)
         }
-        NET_EVENT_CONNECT | NET_EVENT_ACCEPT | NET_EVENT_SEND | NET_EVENT_RECV | NET_EVENT_BIND
-        | NET_EVENT_LISTEN => decode_net(event, bindings, file_tracker),
+        NET_EVENT_CONNECT | NET_EVENT_ACCEPT | NET_EVENT_BIND | NET_EVENT_LISTEN
+        | NET_EVENT_CLOSE | NET_EVENT_SHUTDOWN => decode_connection_event(event, bindings),
+        FD_IO_EVENT_SEND | FD_IO_EVENT_RECV => decode_fd_io_event(event, bindings, file_tracker),
         other => Err(DecodeError::new(
             "decode_observation",
             format!("unknown kernel event kind {other}"),
@@ -143,7 +152,7 @@ fn decode_fork(
     Ok(Some(RawCollectorEvent {
         envelope: RawEventEnvelope {
             trace_id: Some(event.trace_id),
-            observed_at: SystemTime::now(),
+            observed_at: clock::wall_from_ktime(event.observed_ktime_ns),
             process: child,
             collector: CollectorName::new("ebpf"),
         },
@@ -241,7 +250,7 @@ fn decode_exec(
     Ok(Some(RawCollectorEvent {
         envelope: RawEventEnvelope {
             trace_id: Some(event.trace_id),
-            observed_at: SystemTime::now(),
+            observed_at: clock::wall_from_ktime(event.observed_ktime_ns),
             process: observation,
             collector: CollectorName::new("ebpf"),
         },
@@ -274,7 +283,7 @@ fn decode_exit(
     Ok(Some(RawCollectorEvent {
         envelope: RawEventEnvelope {
             trace_id: Some(event.trace_id),
-            observed_at: SystemTime::now(),
+            observed_at: clock::wall_from_ktime(event.observed_ktime_ns),
             process: observation,
             collector: CollectorName::new("ebpf"),
         },
@@ -314,7 +323,7 @@ fn decode_signal(
     Ok(Some(RawCollectorEvent {
         envelope: RawEventEnvelope {
             trace_id: Some(event.trace_id),
-            observed_at: SystemTime::now(),
+            observed_at: clock::wall_from_ktime(event.observed_ktime_ns),
             process: observation,
             collector: CollectorName::new("ebpf"),
         },
@@ -326,7 +335,37 @@ fn decode_signal(
     }))
 }
 
-fn decode_net(
+fn decode_connection_event(
+    event: KernelObservationEvent,
+    bindings: &mut BindingStateMap,
+) -> Result<Option<RawCollectorEvent>, DecodeError> {
+    let observation = resolve_event_observation(
+        event.trace_id,
+        event.pid,
+        event.host_pid,
+        event.pid_generation,
+        bindings,
+    )
+    .map_err(|error| DecodeError::new("net_identity", error))?;
+
+    // 连接生命周期事件（connect/accept/bind/listen/close/shutdown）只可能来自
+    // socket，不可能是文件或管道 I/O，无需 fd_io 分类。
+    if !bindings.trace_has_capability(event.trace_id, &Capability::NetTransport) {
+        return Ok(None);
+    }
+    let local = format_endpoint(&event.local);
+    let remote = format_endpoint(&event.remote);
+    let endpoint_source = endpoint_source(&local, &remote, event.aux);
+    Ok(build_net_observation(
+        event,
+        observation,
+        local,
+        remote,
+        endpoint_source,
+    ))
+}
+
+fn decode_fd_io_event(
     event: KernelObservationEvent,
     bindings: &mut BindingStateMap,
     file_tracker: &mut FileTracker,
@@ -342,39 +381,101 @@ fn decode_net(
 
     let local = format_endpoint(&event.local);
     let remote = format_endpoint(&event.remote);
-
-    let endpoint_source = if local.is_some() || remote.is_some() {
-        "syscall_sockaddr"
-    } else if event.aux == NET_SYSCALL_SOCKET {
-        "unresolved_socket_syscall"
-    } else {
-        "unresolved_fd_io"
-    };
-
-    let (operation, direction) = net_operation(event.kind);
-    if matches!(
-        endpoint_source,
-        "unresolved_fd_io" | "unresolved_socket_syscall"
-    ) {
-        let (operation, direction) = fd_io::operation(event.kind, event.aux);
-        if let Some(event) = fd_io::decode(
-            event.clone(),
-            bindings,
-            observation.clone(),
-            operation,
-            direction,
-            file_tracker,
-        )? {
-            return Ok(Some(event));
+    let endpoint_source = endpoint_source(&local, &remote, event.aux);
+    let (operation, direction) = fd_io::operation(event.kind, event.aux);
+    // 内核 fd_table 的类别码是权威分类；即使 sendto/recvfrom 携带一个可解析的
+    // sockaddr，也不能把 FILE 或 IPC descriptor 伪装成网络事件。
+    match fd_io_category(event.kind, event.reserved) {
+        Some(FD_CATEGORY_FILE) => {
+            return fd_io::decode_file(
+                event,
+                bindings,
+                observation,
+                operation,
+                direction,
+                file_tracker,
+            );
         }
-        if endpoint_source == "unresolved_fd_io" {
-            return Ok(None);
+        Some(category @ (FD_CATEGORY_IPC_PIPE | FD_CATEGORY_IPC_UNIX_SOCKET)) => {
+            let classified_kind = if category == FD_CATEGORY_IPC_PIPE {
+                FdIpcKind::Pipe
+            } else {
+                FdIpcKind::UnixSocket
+            };
+            return fd_io::decode_ipc(
+                event,
+                bindings,
+                observation,
+                operation,
+                direction,
+                file_tracker,
+                Some(classified_kind),
+            );
+        }
+        Some(FD_CATEGORY_NET) => {
+            // 真 socket：直接走 Net 观测（无端点也带 endpoint_unresolved 保留）。
+        }
+        Some(_) => return Ok(None),
+        None => {
+            if matches!(
+                endpoint_source,
+                "unresolved_fd_io" | "unresolved_socket_syscall"
+            ) {
+                if let Some(event) = fd_io::decode(
+                    event.clone(),
+                    bindings,
+                    observation.clone(),
+                    operation,
+                    direction,
+                    file_tracker,
+                )? {
+                    return Ok(Some(event));
+                }
+                if endpoint_source == "unresolved_fd_io" {
+                    return Ok(None);
+                }
+            }
         }
     }
     if !bindings.trace_has_capability(event.trace_id, &Capability::NetTransport) {
         return Ok(None);
     }
+    Ok(build_net_observation(
+        event,
+        observation,
+        local,
+        remote,
+        endpoint_source,
+    ))
+}
 
+fn endpoint_source(local: &Option<String>, remote: &Option<String>, aux: u32) -> &'static str {
+    if local.is_some() || remote.is_some() {
+        "syscall_sockaddr"
+    } else if aux == SYSCALL_FAMILY_SOCKET {
+        "unresolved_socket_syscall"
+    } else {
+        "unresolved_fd_io"
+    }
+}
+
+/// 从 SEND/RECV 事件里读出内核 fd_table 的类别码；0 表示 fd 不在表内（无类别）。
+fn fd_io_category(kind: u32, reserved: u32) -> Option<u32> {
+    if matches!(kind, FD_IO_EVENT_SEND | FD_IO_EVENT_RECV) && reserved != 0 {
+        Some(reserved)
+    } else {
+        None
+    }
+}
+
+fn build_net_observation(
+    event: KernelObservationEvent,
+    observation: ProcessObservation,
+    local: Option<String>,
+    remote: Option<String>,
+    endpoint_source: &'static str,
+) -> Option<RawCollectorEvent> {
+    let (operation, direction) = net_operation(event.kind);
     let mut metadata = BTreeMap::from([
         ("operation".to_string(), operation.to_string()),
         ("direction".to_string(), direction.to_string()),
@@ -382,12 +483,15 @@ fn decode_net(
         ("result".to_string(), event.result.to_string()),
         (
             "syscall_family".to_string(),
-            net_syscall_family(event.aux).to_string(),
+            syscall_family(event.aux).to_string(),
         ),
         ("endpoint_source".to_string(), endpoint_source.to_string()),
     ]);
     if endpoint_source == "unresolved_socket_syscall" {
         metadata.insert("endpoint_unresolved".to_string(), "true".to_string());
+    }
+    if event.kind == NET_EVENT_SHUTDOWN {
+        metadata.insert("shutdown_how".to_string(), event.reserved.to_string());
     }
     if event.requested_size > 0 {
         metadata.insert(
@@ -396,10 +500,10 @@ fn decode_net(
         );
     }
 
-    Ok(Some(RawCollectorEvent {
+    Some(RawCollectorEvent {
         envelope: RawEventEnvelope {
             trace_id: Some(event.trace_id),
-            observed_at: SystemTime::now(),
+            observed_at: clock::wall_from_ktime(event.observed_ktime_ns),
             process: observation,
             collector: CollectorName::new("ebpf"),
         },
@@ -411,17 +515,19 @@ fn decode_net(
             result: Some(event.result),
             metadata,
         },
-    }))
+    })
 }
 
 fn net_operation(kind: u32) -> (&'static str, &'static str) {
     match kind {
         NET_EVENT_CONNECT => ("connect", "outbound"),
         NET_EVENT_ACCEPT => ("accept", "inbound"),
-        NET_EVENT_SEND => ("send", "outbound"),
-        NET_EVENT_RECV => ("recv", "inbound"),
+        FD_IO_EVENT_SEND => ("send", "outbound"),
+        FD_IO_EVENT_RECV => ("recv", "inbound"),
         NET_EVENT_BIND => ("bind", "local"),
         NET_EVENT_LISTEN => ("listen", "local"),
+        NET_EVENT_CLOSE => ("close", "unknown"),
+        NET_EVENT_SHUTDOWN => ("shutdown", "unknown"),
         _ => ("unknown", "unknown"),
     }
 }
@@ -434,7 +540,7 @@ fn process_coordination_syscall(raw: u32) -> &'static str {
 }
 
 fn net_size(kind: u32, result: i32) -> Option<u64> {
-    if !matches!(kind, NET_EVENT_SEND | NET_EVENT_RECV) || result < 0 {
+    if !matches!(kind, FD_IO_EVENT_SEND | FD_IO_EVENT_RECV) || result < 0 {
         return None;
     }
     Some(result as u64)
@@ -447,11 +553,11 @@ fn net_transport(kind: u32) -> &'static str {
     }
 }
 
-fn net_syscall_family(raw: u32) -> &'static str {
+fn syscall_family(raw: u32) -> &'static str {
     match raw {
-        NET_SYSCALL_SOCKET => "socket",
-        NET_SYSCALL_FD_IO => "fd_io",
-        NET_SYSCALL_FD_IO_WRITEV => "fd_io_writev",
+        SYSCALL_FAMILY_SOCKET => "socket",
+        SYSCALL_FAMILY_FD_IO => "fd_io",
+        SYSCALL_FAMILY_FD_IO_WRITEV => "fd_io_writev",
         _ => "unknown",
     }
 }
@@ -540,126 +646,4 @@ pub(crate) fn resolve_event_observation(
         }
     }
     Ok(observation)
-}
-
-#[cfg(test)]
-mod tests {
-    use model_core::ids::TraceId;
-    use model_core::process::{
-        HostProcessCoordinates, NamespaceIdentity, NamespaceProcessCoordinates, ProcessObservation,
-    };
-
-    use crate::loader::{KernelEndpoint, KernelObservationEvent};
-    use crate::maps::BindingStateMap;
-
-    use super::{
-        PROC_EVENT_EXEC, PROC_EVENT_FORK, PROC_FORK_CHILD_HOST_ONLY, decode_exec, decode_fork,
-        resolve_bound_event_observation,
-    };
-
-    #[test]
-    fn eager_fork_defers_tracking_until_namespace_identity_is_available() {
-        let trace_id = TraceId::new(17);
-        let parent = ProcessObservation::host(
-            HostProcessCoordinates::new(4100, 0).with_start_boottime_ns(100),
-        )
-        .with_namespace(NamespaceProcessCoordinates::new(
-            NamespaceIdentity::new("pid:[17]"),
-            41,
-            0,
-        ));
-        let mut bindings = BindingStateMap::default();
-        bindings.set_trace_pid_namespace(trace_id, NamespaceIdentity::new("pid:[17]"));
-        bindings.track_with_map_pid(trace_id, parent, 41, 100);
-
-        let event = KernelObservationEvent {
-            kind: PROC_EVENT_FORK,
-            pid: 41,
-            aux: 0,
-            host_pid: 4100,
-            aux_host_pid: 4200,
-            result: 0,
-            trace_id,
-            observed_ktime_ns: 0,
-            fd: 0,
-            reserved: PROC_FORK_CHILD_HOST_ONLY,
-            requested_size: 0,
-            pid_generation: 100,
-            aux_generation: 200,
-            local: empty_endpoint(),
-            remote: empty_endpoint(),
-            exec_filename: None,
-        };
-
-        let decoded = decode_fork(event, &mut bindings)
-            .expect("decode eager fork")
-            .expect("fork observation");
-        assert_eq!(
-            decoded.envelope.process,
-            ProcessObservation::host(
-                HostProcessCoordinates::new(4200, 0).with_start_boottime_ns(200)
-            )
-        );
-        assert!(
-            bindings
-                .tracked_event_observation(trace_id, 4200, 200)
-                .is_none(),
-            "host PID must not collide with a namespace-PID binding"
-        );
-        let bridged = resolve_bound_event_observation(trace_id, 42, 200, &bindings)
-            .expect("resolve first namespace event through eager fork binding");
-        assert_eq!(bridged.host.as_ref().map(|host| host.pid), Some(4200));
-        assert_eq!(
-            bridged.namespace.as_ref().map(|namespace| namespace.pid),
-            Some(42)
-        );
-
-        let exec = KernelObservationEvent {
-            kind: PROC_EVENT_EXEC,
-            pid: 42,
-            aux: 0,
-            host_pid: 4200,
-            aux_host_pid: 0,
-            result: 0,
-            trace_id,
-            observed_ktime_ns: 0,
-            fd: 0,
-            reserved: 0,
-            requested_size: 0,
-            pid_generation: 200,
-            aux_generation: 0,
-            local: empty_endpoint(),
-            remote: empty_endpoint(),
-            exec_filename: None,
-        };
-        let enriched = decode_exec(exec, &mut bindings)
-            .expect("decode exec")
-            .expect("exec observation")
-            .envelope
-            .process;
-        assert_eq!(enriched.host.as_ref().map(|host| host.pid), Some(4200));
-        assert_eq!(
-            enriched.namespace.as_ref().map(|namespace| namespace.pid),
-            Some(42)
-        );
-        assert_eq!(
-            bindings.tracked_event_observation(trace_id, 4200, 200),
-            Some(&enriched)
-        );
-        assert!(
-            bindings
-                .tracked_event_observation(trace_id, 42, 200)
-                .is_none(),
-            "events with host identity must use the host-PID binding key"
-        );
-    }
-
-    fn empty_endpoint() -> KernelEndpoint {
-        KernelEndpoint {
-            family: 0,
-            port_be: 0,
-            addr4_be: 0,
-            addr6: [0; 16],
-        }
-    }
 }

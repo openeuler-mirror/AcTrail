@@ -4,8 +4,8 @@ use model_core::ids::TraceId;
 
 use crate::model::{
     FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
-    LlmRequestContentWrite, McpJsonRpcContentPage, McpJsonRpcContentWrite, SemanticAction,
-    SemanticActionLink, SemanticActionPage,
+    LlmRequestContentWrite, LlmRequestLineage, LlmRequestLineageWrite, McpJsonRpcContentPage,
+    McpJsonRpcContentWrite, SemanticAction, SemanticActionLink, SemanticActionPage,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -47,6 +47,11 @@ pub trait SemanticActionWriteStore {
     fn upsert_llm_request_contents(
         &mut self,
         contents: &[LlmRequestContentWrite],
+    ) -> Result<(), SemanticActionStoreError>;
+
+    fn upsert_llm_request_lineages(
+        &mut self,
+        lineages: &[LlmRequestLineageWrite],
     ) -> Result<(), SemanticActionStoreError>;
 
     fn upsert_mcp_jsonrpc_contents(
@@ -93,6 +98,24 @@ pub trait SemanticActionReadStore {
         action_id: &str,
         max_bytes: usize,
     ) -> Result<Option<LlmRequestContentPage>, SemanticActionStoreError>;
+
+    fn llm_request_lineage(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+    ) -> Result<Option<LlmRequestLineage>, SemanticActionStoreError>;
+
+    fn llm_request_trajectory(
+        &self,
+        trace_id: TraceId,
+        trajectory_id: &str,
+    ) -> Result<Vec<LlmRequestLineage>, SemanticActionStoreError>;
+
+    fn llm_request_forks(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+    ) -> Result<Vec<LlmRequestLineage>, SemanticActionStoreError>;
 
     fn mcp_jsonrpc_content_page(
         &self,

@@ -83,6 +83,10 @@ fn main() {
     println!("cargo:rerun-if-changed=bpf/actrail_helpers.h");
     println!("cargo:rerun-if-changed=bpf/actrail_file.h");
     println!("cargo:rerun-if-changed=bpf/actrail_net.h");
+    println!("cargo:rerun-if-changed=bpf/actrail_fd.h");
+    println!("cargo:rerun-if-changed=bpf/fd/actrail_fd_index.h");
+    println!("cargo:rerun-if-changed=bpf/fd/actrail_fd_lifecycle.h");
+    println!("cargo:rerun-if-changed=bpf/fd/actrail_fd_sweep.h");
     println!("cargo:rerun-if-changed=bpf/actrail_proc.h");
     println!("cargo:rerun-if-changed=bpf/actrail_runtime.h");
     println!("cargo:rerun-if-changed=bpf/actrail_suppressed_fd.h");
@@ -99,6 +103,7 @@ fn main() {
     println!("cargo:rerun-if-changed=bpf/payload/actrail_socket_tls.h");
     println!("cargo:rerun-if-changed=bpf/payload/actrail_socket_payload_types.h");
     println!("cargo:rerun-if-changed=bpf/payload/actrail_stdio_payload.h");
+    println!("cargo:rerun-if-changed=bpf/process/actrail_process_programs.h");
     println!("cargo:rerun-if-changed=bpf/tls/actrail_tls_payload_capture.h");
     println!("cargo:rerun-if-changed=bpf/tls/actrail_tls_payload_completion.h");
     println!("cargo:rerun-if-changed=bpf/tls/actrail_tls_payload_diagnostics.h");

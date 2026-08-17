@@ -10,7 +10,8 @@ pub use alert_contract::{
 };
 pub use backend::{
     SemanticActionChildPage, SemanticActionChildPageQuery, SemanticActionChildRow,
-    SemanticActionDisplayRootChildPage, SemanticActionDisplayRootChildRow, SemanticActionSummary,
+    SemanticActionDisplayPathEntry, SemanticActionDisplayRootChildPage,
+    SemanticActionDisplayRootChildRow, SemanticActionSummary, SemanticActionTraceRevision,
     StorageBackend, StorageOpenMode,
 };
 pub use error::StorageError;

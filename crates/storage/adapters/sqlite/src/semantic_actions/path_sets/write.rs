@@ -59,7 +59,7 @@ fn upsert_file_path_set(
     write_action_ref(connection, path_set)
 }
 
-fn intern_path(
+pub(in crate::semantic_actions) fn intern_path(
     connection: &rusqlite::Connection,
     trace_id: u64,
     path: &str,

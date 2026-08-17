@@ -205,6 +205,7 @@ impl StorageAttachService {
             payload_socket_retention_max_bytes_per_trace,
             socket_payload_gate,
             payload_body_retention_gate,
+            payload_reorderer: Default::default(),
             seccomp_notify,
             seccomp_tls,
             tls_sync,

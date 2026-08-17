@@ -2,7 +2,7 @@
 
 use flate2::{Decompress, FlushDecompress, Status};
 
-const MAX_FRAME_BUFFER_BYTES: usize = 8 * 1024 * 1024;
+pub(super) const MAX_FRAME_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 const MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 pub(super) const MAX_DECODED_BYTES: usize = 32 * 1024 * 1024;
 const COMPACT_AFTER_BYTES: usize = 64 * 1024;

@@ -251,7 +251,7 @@ exit
 - `COMMAND_POLICY_XIAOO_E2E_BINARY`：真实 Xiaoo 绝对路径；默认从 `PATH` 查找。
 - `COMMAND_POLICY_XIAOO_E2E_BASH`：治理目标；默认 `/usr/bin/bash`。
 - `COMMAND_POLICY_XIAOO_E2E_WEB_HOST`：Web 监听地址；自动测试默认 `127.0.0.1`。
-- `COMMAND_POLICY_XIAOO_E2E_WEB_PORT`：Web 监听端口；自动测试默认 `0`，由系统动态分配。
+- `COMMAND_POLICY_XIAOO_E2E_WEB_PORT`：Web 监听端口；未设置时自动选择可连接的 loopback 端口，显式值必须在 `1..65535` 内。
 - `COMMAND_POLICY_XIAOO_E2E_READY_TIMEOUT_SECONDS`：服务启动时限；默认 15 秒。
 - `COMMAND_POLICY_XIAOO_E2E_EVIDENCE_TIMEOUT_SECONDS`：Enforcement/alert 等待时限；默认 15 秒。
 - `COMMAND_POLICY_XIAOO_E2E_LAUNCH_TIMEOUT_SECONDS`：单次 Xiaoo launch 时限；默认 180 秒。

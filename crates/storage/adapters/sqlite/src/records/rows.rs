@@ -2,6 +2,7 @@
 
 use model_core::diagnostics::DiagnosticRecord;
 use model_core::event::{DomainEvent, EventEnvelope, EventFlags};
+use model_core::ids::OtelTraceId;
 use model_core::payload::{PayloadSegment, PayloadSegmentId, PayloadStreamKey};
 use model_core::process::{ExitStatus, ProcessIdentity, ProcessMembership};
 use model_core::trace::{TraceAlertToken, TraceRecord, TraceTiming};
@@ -9,8 +10,8 @@ use rusqlite::types::Type;
 use rusqlite::{Error as SqlError, Row};
 
 use crate::records::{
-    decode_diagnostic_kind, decode_diagnostic_severity, decode_event_kind, decode_event_payload,
-    decode_exit_observation_source, decode_map, decode_membership_state,
+    BlockKind, PayloadBlock, decode_diagnostic_kind, decode_diagnostic_severity, decode_event_kind,
+    decode_event_payload, decode_exit_observation_source, decode_map, decode_membership_state,
     decode_payload_content_state, decode_payload_direction,
     decode_payload_operation_completion_state, decode_payload_redaction_state,
     decode_payload_source_boundary, decode_payload_truncation_state, decode_policy_record,
@@ -18,6 +19,18 @@ use crate::records::{
 };
 
 pub fn trace_from_row(row: &Row<'_>) -> Result<TraceRecord, SqlError> {
+    let otel_trace_id_column = row.as_ref().column_index("otel_trace_id")?;
+    let otel_trace_id_bytes = row.get::<_, Vec<u8>>(otel_trace_id_column)?;
+    let otel_trace_id = OtelTraceId::from_slice(&otel_trace_id_bytes).ok_or_else(|| {
+        SqlError::FromSqlConversionFailure(
+            otel_trace_id_column,
+            Type::Blob,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "OTLP trace identity must contain exactly 16 non-zero bytes",
+            )),
+        )
+    })?;
     let alert_token_column = row.as_ref().column_index("alert_token")?;
     let alert_token_bytes = row.get::<_, Vec<u8>>(alert_token_column)?;
     let alert_token = TraceAlertToken::from_slice(&alert_token_bytes).ok_or_else(|| {
@@ -32,6 +45,7 @@ pub fn trace_from_row(row: &Row<'_>) -> Result<TraceRecord, SqlError> {
     })?;
     Ok(TraceRecord {
         trace_id: model_core::ids::TraceId::new(row.get::<_, u64>("trace_id")?),
+        otel_trace_id,
         alert_token,
         root_process_identity: ProcessIdentity::new(row.get("root_process_id")?),
         // Active trace queries are served by `TraceRuntime`, which captures the
@@ -92,7 +106,10 @@ pub fn membership_from_row(row: &Row<'_>) -> Result<ProcessMembership, SqlError>
     })
 }
 
-pub fn event_from_row(row: &Row<'_>) -> Result<DomainEvent, SqlError> {
+pub fn event_from_row(
+    connection: &rusqlite::Connection,
+    row: &Row<'_>,
+) -> Result<DomainEvent, SqlError> {
     let envelope = EventEnvelope {
         event_id: model_core::ids::EventId::new(row.get("event_id")?),
         trace_id: model_core::ids::TraceId::new(row.get("trace_id")?),
@@ -106,11 +123,10 @@ pub fn event_from_row(row: &Row<'_>) -> Result<DomainEvent, SqlError> {
             policy_modified: i64_to_bool(row.get("policy_modified")?),
         },
     };
-    let payload = decode_event_payload(
-        &row.get::<_, String>("payload_variant")?,
-        &row.get::<_, String>("payload_fields")?,
-        &row.get::<_, String>("payload_bytes")?,
-    )?;
+    let fields = row.get::<_, Vec<u8>>("payload")?;
+    let payload_blocks = row.get::<_, String>("payload_blocks")?;
+    let blocks = read_payload_blocks(connection, &payload_blocks)?;
+    let payload = decode_event_payload(&fields, &blocks)?;
     let policy = decode_policy_record(
         &row.get::<_, String>("policy_verdict")?,
         row.get("policy_note")?,
@@ -122,6 +138,30 @@ pub fn event_from_row(row: &Row<'_>) -> Result<DomainEvent, SqlError> {
         payload,
         policy,
     })
+}
+
+fn read_payload_blocks(
+    connection: &rusqlite::Connection,
+    payload_blocks: &str,
+) -> Result<Vec<PayloadBlock>, SqlError> {
+    let mut blocks = Vec::new();
+    for id in payload_blocks.split(',').filter(|id| !id.is_empty()) {
+        let block_id = id.parse::<i64>().map_err(|_| SqlError::InvalidQuery)?;
+        let block = connection.query_row(
+            "SELECT kind, encoded_bytes FROM event_payload_blocks WHERE block_id = ?1",
+            rusqlite::params![block_id],
+            |row| {
+                let kind = BlockKind::from_i64(row.get::<_, i64>("kind")?)
+                    .ok_or(SqlError::InvalidQuery)?;
+                let encoded_bytes = row.get::<_, Vec<u8>>("encoded_bytes")?;
+                let bytes = zstd::stream::decode_all(std::io::Cursor::new(encoded_bytes))
+                    .map_err(|_| SqlError::InvalidQuery)?;
+                Ok(PayloadBlock { kind, bytes })
+            },
+        )?;
+        blocks.push(block);
+    }
+    Ok(blocks)
 }
 
 pub fn payload_segment_from_row(row: &Row<'_>) -> Result<PayloadSegment, SqlError> {

@@ -35,11 +35,17 @@ pub(crate) struct InFlightResponse {
 
 pub(super) struct LlmResponseProjection {
     pub(super) actions: Vec<SemanticAction>,
+    pub(super) provider_response_ids: Vec<ProjectedProviderResponseId>,
     pub(super) payload_segments: Vec<PayloadSegment>,
     pub(super) in_flight: Option<InFlightResponse>,
     pub(super) encoded_len: usize,
     pub(super) terminal: bool,
     pub(super) raw_response: bool,
+}
+
+pub(crate) struct ProjectedProviderResponseId {
+    pub(crate) action_id: String,
+    pub(crate) provider_response_id: String,
 }
 
 fn in_flight_projection(
@@ -49,6 +55,7 @@ fn in_flight_projection(
 ) -> LlmResponseProjection {
     LlmResponseProjection {
         actions: Vec::new(),
+        provider_response_ids: Vec::new(),
         payload_segments: Vec::new(),
         in_flight: Some(InFlightResponse { message_start }),
         encoded_len,
@@ -76,7 +83,7 @@ pub(super) fn project_stream_llm_response_message_actions(
     if !force_terminal && status == SemanticActionStatus::InProgress {
         return Some(in_flight_projection(http.encoded_len, message_start, false));
     }
-    let body = parse_llm_response_body_incremental(
+    let mut body = parse_llm_response_body_incremental(
         SseBodySource::SplitHttp,
         &http.body,
         codecs,
@@ -95,12 +102,14 @@ pub(super) fn project_stream_llm_response_message_actions(
         process: first.process.clone(),
         status,
         completeness: llm_response_completeness(segments, http.complete, &body),
-        confidence_millis: None,
         attributes,
         evidence,
     };
+    let provider_response_ids =
+        projected_provider_response_ids(&response, body.provider_response_id.take());
     Some(LlmResponseProjection {
         actions: vec![response],
+        provider_response_ids,
         payload_segments,
         in_flight: None,
         encoded_len: http.encoded_len,
@@ -131,7 +140,7 @@ pub(super) fn project_raw_chunked_stream_llm_response_actions(
             !chunked.complete,
         ));
     }
-    let body = parse_llm_response_body_incremental(
+    let mut body = parse_llm_response_body_incremental(
         SseBodySource::ChunkedBody,
         &chunked.body,
         codecs,
@@ -149,12 +158,14 @@ pub(super) fn project_raw_chunked_stream_llm_response_actions(
         process: first.process.clone(),
         status,
         completeness: llm_response_completeness(segments, chunked.complete, &body),
-        confidence_millis: None,
         attributes,
         evidence: payload_evidence(segments),
     };
+    let provider_response_ids =
+        projected_provider_response_ids(&response, body.provider_response_id.take());
     Some(LlmResponseProjection {
         actions: vec![response],
+        provider_response_ids,
         payload_segments,
         in_flight: None,
         encoded_len: chunked.encoded_len,
@@ -179,7 +190,7 @@ pub(super) fn project_raw_stream_llm_response_actions(
     if !force_terminal && status == SemanticActionStatus::InProgress {
         return Some(in_flight_projection(bytes.len(), message_start, true));
     }
-    let body =
+    let mut body =
         parse_llm_response_body_incremental(SseBodySource::RawBytes, bytes, codecs, sse_cache)?;
     let attributes = raw_llm_response_attributes(config, segments, bytes, &body);
     let payload_segments = semantic_response_payloads(config, first, bytes);
@@ -193,18 +204,33 @@ pub(super) fn project_raw_stream_llm_response_actions(
         process: first.process.clone(),
         status,
         completeness: llm_response_completeness(segments, false, &body),
-        confidence_millis: None,
         attributes,
         evidence: payload_evidence(segments),
     };
+    let provider_response_ids =
+        projected_provider_response_ids(&response, body.provider_response_id.take());
     Some(LlmResponseProjection {
         actions: vec![response],
+        provider_response_ids,
         payload_segments,
         in_flight: None,
         encoded_len: bytes.len(),
         terminal: true,
         raw_response: true,
     })
+}
+
+fn projected_provider_response_ids(
+    response: &SemanticAction,
+    provider_response_id: Option<String>,
+) -> Vec<ProjectedProviderResponseId> {
+    provider_response_id
+        .map(|provider_response_id| ProjectedProviderResponseId {
+            action_id: response.action_id.clone(),
+            provider_response_id,
+        })
+        .into_iter()
+        .collect()
 }
 
 fn semantic_response_payloads(

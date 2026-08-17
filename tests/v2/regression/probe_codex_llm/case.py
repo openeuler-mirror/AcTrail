@@ -17,11 +17,12 @@ class ProbeCodexLLMCase(TestCase):
         results: dict[str, TestResult] = {}
         runtime: ActrailRuntime | None = None
         try:
-            runtime = ActrailRuntime(
+            runtime = ActrailRuntime.isolated(
                 self._config.repo,
                 self._config.bin_dir,
                 self._config.command_timeout_seconds,
                 test_context.output,
+                self._config.work_dir,
             )
             try:
                 task = ProbeCodexLLMTask(self._config, runtime)

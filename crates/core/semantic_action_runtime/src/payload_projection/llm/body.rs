@@ -17,6 +17,7 @@ const SSE_DONE_MARKER: &str = "[DONE]";
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct LlmResponseBody {
     pub(super) provider_id: String,
+    pub(super) provider_response_id: Option<String>,
     pub(super) json_valid: bool,
     pub(super) model: Option<String>,
     pub(super) content_text: Option<String>,
@@ -152,7 +153,7 @@ impl IncrementalSseCache {
         if let Some(usage) = self.token_usage.clone() {
             parsed.token_usage = Some(usage);
         }
-        Some(response_body(false, parsed))
+        Some(response_body(false, parsed, None))
     }
 
     fn progress(&self) -> LlmResponseProgress {
@@ -294,7 +295,7 @@ impl LlmResponseBodyParser<'_> {
             text: &text,
             json: value,
         })?;
-        Some(response_body(true, parsed))
+        Some(response_body(true, parsed, provider_response_id(value)))
     }
 
     fn parse_sse_response_body(&self, text: &str) -> Option<LlmResponseBody> {
@@ -313,7 +314,11 @@ impl LlmResponseBodyParser<'_> {
             text,
             events: &provider_events,
         })?;
-        Some(response_body(false, parsed.response))
+        Some(response_body(
+            false,
+            parsed.response,
+            provider_response_id_from_events(&raw_events),
+        ))
     }
 
     fn normalized_sse_events(
@@ -359,17 +364,23 @@ fn decoded_sse_response(
         text,
         events: &provider_events,
     })?;
-    let mut body = response_body(false, parsed.response);
+    let response_id = provider_response_id_from_normalized_events(&normalized);
+    let mut body = response_body(false, parsed.response, response_id);
     if let Some(provider_id) = provider_id {
         body.provider_id = provider_id;
     }
     Some(body)
 }
 
-fn response_body(json_valid: bool, parsed: LlmParsedResponse) -> LlmResponseBody {
+fn response_body(
+    json_valid: bool,
+    parsed: LlmParsedResponse,
+    provider_response_id: Option<String>,
+) -> LlmResponseBody {
     let tool_calls_json = tool_calls_json(&parsed.tool_calls);
     LlmResponseBody {
         provider_id: parsed.provider_id.to_string(),
+        provider_response_id,
         json_valid,
         model: parsed.model,
         content_text: parsed.content_text,
@@ -380,6 +391,34 @@ fn response_body(json_valid: bool, parsed: LlmParsedResponse) -> LlmResponseBody
         done: parsed.done,
         stream: parsed.stream,
     }
+}
+
+fn provider_response_id(value: &Value) -> Option<String> {
+    value
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn provider_response_id_from_events(events: &[SseCodecEvent]) -> Option<String> {
+    events.iter().rev().find_map(|event| {
+        event
+            .json
+            .as_ref()
+            .and_then(|value| value.get("response"))
+            .and_then(provider_response_id)
+    })
+}
+
+fn provider_response_id_from_normalized_events(events: &[NormalizedSseEvent]) -> Option<String> {
+    events.iter().rev().find_map(|event| {
+        event
+            .json
+            .as_ref()
+            .and_then(|value| value.get("response"))
+            .and_then(provider_response_id)
+    })
 }
 
 fn parse_sse_events(text: &str) -> Vec<SseCodecEvent> {

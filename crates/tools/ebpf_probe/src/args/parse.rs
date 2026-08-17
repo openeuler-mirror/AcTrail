@@ -50,6 +50,7 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ProbeCommand
             memlock_rlimit: required_memlock_rlimit(&flags, "--memlock-rlimit")?,
             tracked_process_max_entries: required_u32(&flags, "--tracked-process-max-entries")?,
             pending_operation_max_entries: required_u32(&flags, "--pending-operation-max-entries")?,
+            fd_per_process_max_entries: required_u32(&flags, "--fd-per-process-max-entries")?,
             suppressed_fd_max_entries: required_u32(&flags, "--suppressed-fd-max-entries")?,
             suppressed_fd_index_slots_per_process: required_u32(
                 &flags,

@@ -200,6 +200,16 @@ pub(super) struct ToolCallAssembler {
     calls: Vec<LlmToolCall>,
 }
 
+#[derive(Clone, Copy)]
+enum CodeModeLexState {
+    Code,
+    SingleQuoted,
+    DoubleQuoted,
+    Template,
+    LineComment,
+    BlockComment,
+}
+
 impl ToolCallAssembler {
     pub(super) fn apply_values<'a>(&mut self, values: impl IntoIterator<Item = &'a Value>) {
         for value in values {
@@ -215,8 +225,10 @@ impl ToolCallAssembler {
                 }
             }
             Value::Object(object) => {
-                if object.get("type").and_then(Value::as_str) == Some("function_call") {
-                    self.apply_openai_response_function_call(object);
+                match object.get("type").and_then(Value::as_str) {
+                    Some("function_call") => self.apply_openai_response_function_call(object),
+                    Some("custom_tool_call") => self.apply_openai_response_custom_tool_call(object),
+                    _ => {}
                 }
                 if let Some(Value::Array(tool_calls)) = object.get("tool_calls") {
                     for tool_call in tool_calls {
@@ -267,24 +279,179 @@ impl ToolCallAssembler {
         };
         call.kind = Some("function".to_string());
         let function = call.function.get_or_insert_with(LlmToolFunction::default);
-        if let Some(name) = item
-            .get("name")
-            .and_then(Value::as_str)
-            .filter(|name| !name.is_empty())
-        {
-            let qualified_name = item
-                .get("namespace")
-                .and_then(Value::as_str)
-                .filter(|namespace| namespace.starts_with("mcp__"))
-                .filter(|_| !name.starts_with("mcp__"))
-                .map(|namespace| format!("{namespace}__{name}"))
-                .unwrap_or_else(|| name.to_string());
-            function.name = Some(qualified_name);
+        if let Some(name) = Self::qualified_response_tool_name(item) {
+            function.name = Some(name);
         }
         if let Some(arguments) = item.get("arguments").and_then(Value::as_str) {
             function.arguments = Some(arguments.to_string());
             function.arguments_json = parse_json_value(arguments);
         }
+    }
+
+    fn apply_openai_response_custom_tool_call(&mut self, item: &Map<String, Value>) {
+        let raw_name = item
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|name| !name.is_empty());
+        let call_id = item.get("call_id").and_then(Value::as_str);
+        if let Some(call) = self.call_slot(None, call_id) {
+            call.kind = Some("custom".to_string());
+            let function = call.function.get_or_insert_with(LlmToolFunction::default);
+            function.name = Self::qualified_response_tool_name(item);
+        }
+        if raw_name == Some("exec")
+            && let Some(input) = item.get("input").and_then(Value::as_str)
+        {
+            self.apply_code_mode_mcp_calls(input, call_id);
+        }
+    }
+
+    fn apply_code_mode_mcp_calls(&mut self, input: &str, call_id: Option<&str>) {
+        const PREFIX: &[u8] = b"tools.mcp__";
+
+        let bytes = input.as_bytes();
+        let mut cursor = 0;
+        let mut state = CodeModeLexState::Code;
+        while cursor < bytes.len() {
+            match state {
+                CodeModeLexState::Code => match bytes[cursor] {
+                    b'\'' => {
+                        state = CodeModeLexState::SingleQuoted;
+                        cursor += 1;
+                    }
+                    b'"' => {
+                        state = CodeModeLexState::DoubleQuoted;
+                        cursor += 1;
+                    }
+                    b'`' => {
+                        state = CodeModeLexState::Template;
+                        cursor += 1;
+                    }
+                    b'/' if bytes.get(cursor + 1) == Some(&b'/') => {
+                        state = CodeModeLexState::LineComment;
+                        cursor += 2;
+                    }
+                    b'/' if bytes.get(cursor + 1) == Some(&b'*') => {
+                        state = CodeModeLexState::BlockComment;
+                        cursor += 2;
+                    }
+                    b'/' => break,
+                    b't' if bytes[cursor..].starts_with(PREFIX) => {
+                        let previous_significant = bytes[..cursor]
+                            .iter()
+                            .rfind(|byte| !byte.is_ascii_whitespace());
+                        let preceded_by_identifier = cursor
+                            .checked_sub(1)
+                            .and_then(|index| bytes.get(index))
+                            .is_some_and(|byte| {
+                                byte.is_ascii_alphanumeric()
+                                    || matches!(*byte, b'_' | b'$')
+                                    || !byte.is_ascii()
+                            })
+                            || previous_significant == Some(&b'.');
+                        let name_start = cursor + b"tools.".len();
+                        let mut name_end = name_start;
+                        while bytes
+                            .get(name_end)
+                            .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+                        {
+                            name_end += 1;
+                        }
+                        cursor = name_end;
+                        let mut call_start = name_end;
+                        while bytes
+                            .get(call_start)
+                            .is_some_and(|byte| byte.is_ascii_whitespace())
+                        {
+                            call_start += 1;
+                        }
+                        if preceded_by_identifier || bytes.get(call_start) != Some(&b'(') {
+                            continue;
+                        }
+                        let Ok(name) = std::str::from_utf8(&bytes[name_start..name_end]) else {
+                            continue;
+                        };
+                        let valid_name = name.strip_prefix("mcp__").is_some_and(|encoded| {
+                            encoded.split_once("__").is_some_and(|(server, tool)| {
+                                !server.is_empty() && !tool.is_empty()
+                            })
+                        });
+                        if !valid_name {
+                            continue;
+                        }
+                        self.calls.push(LlmToolCall {
+                            id: call_id.map(ToString::to_string),
+                            kind: Some("function".to_string()),
+                            function: Some(LlmToolFunction {
+                                name: Some(name.to_string()),
+                                ..LlmToolFunction::default()
+                            }),
+                            ..LlmToolCall::default()
+                        });
+                    }
+                    _ => cursor += 1,
+                },
+                CodeModeLexState::SingleQuoted => {
+                    if bytes[cursor] == b'\\' {
+                        cursor = (cursor + 2).min(bytes.len());
+                    } else {
+                        if bytes[cursor] == b'\'' {
+                            state = CodeModeLexState::Code;
+                        }
+                        cursor += 1;
+                    }
+                }
+                CodeModeLexState::DoubleQuoted => {
+                    if bytes[cursor] == b'\\' {
+                        cursor = (cursor + 2).min(bytes.len());
+                    } else {
+                        if bytes[cursor] == b'"' {
+                            state = CodeModeLexState::Code;
+                        }
+                        cursor += 1;
+                    }
+                }
+                CodeModeLexState::Template => {
+                    if bytes[cursor] == b'\\' {
+                        cursor = (cursor + 2).min(bytes.len());
+                    } else {
+                        if bytes[cursor] == b'`' {
+                            state = CodeModeLexState::Code;
+                        }
+                        cursor += 1;
+                    }
+                }
+                CodeModeLexState::LineComment => {
+                    if matches!(bytes[cursor], b'\n' | b'\r') {
+                        state = CodeModeLexState::Code;
+                    }
+                    cursor += 1;
+                }
+                CodeModeLexState::BlockComment => {
+                    if bytes[cursor] == b'*' && bytes.get(cursor + 1) == Some(&b'/') {
+                        state = CodeModeLexState::Code;
+                        cursor += 2;
+                    } else {
+                        cursor += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    fn qualified_response_tool_name(item: &Map<String, Value>) -> Option<String> {
+        let name = item
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|name| !name.is_empty())?;
+        Some(
+            item.get("namespace")
+                .and_then(Value::as_str)
+                .filter(|namespace| namespace.starts_with("mcp__"))
+                .filter(|_| !name.starts_with("mcp__"))
+                .map(|namespace| format!("{namespace}__{name}"))
+                .unwrap_or_else(|| name.to_string()),
+        )
     }
 
     fn apply_openai_delta(&mut self, delta: &Map<String, Value>) {

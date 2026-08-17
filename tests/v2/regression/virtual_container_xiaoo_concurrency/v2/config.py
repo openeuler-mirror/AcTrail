@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tests.v2.common.core import CommonTestConfig, TestCaseInputs
+from tests.v2.common.kata_runtime import shim_binary
 from tests.v2.common.kata_runtime.environment import (
     absolute_path,
     bounded_environment_int,
@@ -77,14 +78,16 @@ class VirtualContainerXiaooConcurrencyConfig(CommonTestConfig):
             ) from error
 
         repo = inputs.repo.resolve()
+        ctr_runtime = os.environ.get(
+            f"{prefix}CTR_RUNTIME",
+            os.environ.get("CTR_RUNTIME", "io.containerd.kata.v2"),
+        )
+        shim_binary(ctr_runtime)
         return cls(
             **common.as_kwargs(),
             backend=backend,
             runtime_config=runtime_config,
-            ctr_runtime=os.environ.get(
-                f"{prefix}CTR_RUNTIME",
-                os.environ.get("CTR_RUNTIME", "io.containerd.kata.v2"),
-            ),
+            ctr_runtime=ctr_runtime,
             image=os.environ.get(
                 f"{prefix}IMAGE",
                 os.environ.get(

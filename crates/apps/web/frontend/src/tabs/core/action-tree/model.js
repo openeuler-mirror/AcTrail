@@ -7,10 +7,6 @@ export { mergeActionTreeChildren };
 
 const NODE_ID_AGENT = 'agent-process';
 const AGENT_ACTION_SEQUENCE_ATTR = 'agent.performed_action.sequence';
-const ACTION_VALID_ATTR = 'actrail.action.valid';
-const ACTION_VALID_FALSE = 'false';
-const LINK_VALID_ATTR = 'actrail.link.valid';
-const LINK_VALID_FALSE = 'false';
 const PROCESS_PARENT_IDENTITY_STATE_ATTR = 'process.parent.identity_state';
 const PROCESS_PARENT_IDENTITY_STATE_CONFLICT = 'conflict';
 const PARENT_IDENTITY_LINK_ROLES = new Set([
@@ -30,7 +26,7 @@ export function buildActionTreeRootNode({ traceDetail, rootData }) {
 }
 
 export function buildActionTreeChildNodes({ parentNode, childData }) {
-  const actions = (childData?.actions ?? []).filter((action) => !invalidatedAction(action));
+  const actions = childData?.actions ?? [];
   const links = childData?.links ?? [];
   const childState = childStateByActionId(childData?.child_state ?? []);
   const actionChildren = displayActions(actions, links)
@@ -209,16 +205,11 @@ function childStateByActionId(rows) {
   );
 }
 
-function invalidatedAction(action) {
-  return action.attributes?.[ACTION_VALID_ATTR] === ACTION_VALID_FALSE;
-}
-
 function invalidatedParentIdentityLink(link, action) {
   return (
-    link.attributes?.[LINK_VALID_ATTR] === LINK_VALID_FALSE ||
-    (PARENT_IDENTITY_LINK_ROLES.has(link.role) &&
-      action.attributes?.[PROCESS_PARENT_IDENTITY_STATE_ATTR] ===
-        PROCESS_PARENT_IDENTITY_STATE_CONFLICT)
+    PARENT_IDENTITY_LINK_ROLES.has(link.role) &&
+    action.attributes?.[PROCESS_PARENT_IDENTITY_STATE_ATTR] ===
+      PROCESS_PARENT_IDENTITY_STATE_CONFLICT
   );
 }
 

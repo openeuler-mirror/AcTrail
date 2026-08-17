@@ -226,7 +226,6 @@ pub struct SemanticAction {
     pub process: ProcessIdentity,
     pub status: SemanticActionStatus,
     pub completeness: SemanticActionCompleteness,
-    pub confidence_millis: Option<u16>,
     pub attributes: BTreeMap<String, String>,
     pub evidence: Vec<SemanticEvidence>,
 }
@@ -415,6 +414,99 @@ pub struct LlmRequestContentPage {
     pub returned_bytes: u64,
     pub truncated: bool,
     pub body_json: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LlmTrajectoryTransition {
+    Root,
+    Append,
+    ForkRoot,
+    DuplicateRoot,
+}
+
+impl LlmTrajectoryTransition {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Root => "root",
+            Self::Append => "append",
+            Self::ForkRoot => "fork_root",
+            Self::DuplicateRoot => "duplicate_root",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "root" => Some(Self::Root),
+            "append" => Some(Self::Append),
+            "fork_root" => Some(Self::ForkRoot),
+            "duplicate_root" => Some(Self::DuplicateRoot),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LlmTrajectoryStartReason {
+    Unspecified,
+    ContextRewriteOrCompression,
+    RuntimeReset,
+    CapacityEviction,
+    UnsupportedMultimodal,
+    HistoryLimit,
+    ClassifierFailure,
+}
+
+impl LlmTrajectoryStartReason {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unspecified => "unspecified",
+            Self::ContextRewriteOrCompression => "context_rewrite_or_compression",
+            Self::RuntimeReset => "runtime_reset",
+            Self::CapacityEviction => "capacity_eviction",
+            Self::UnsupportedMultimodal => "unsupported_multimodal",
+            Self::HistoryLimit => "history_limit",
+            Self::ClassifierFailure => "classifier_failure",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "unspecified" => Some(Self::Unspecified),
+            "context_rewrite_or_compression" => Some(Self::ContextRewriteOrCompression),
+            "runtime_reset" => Some(Self::RuntimeReset),
+            "capacity_eviction" => Some(Self::CapacityEviction),
+            "unsupported_multimodal" => Some(Self::UnsupportedMultimodal),
+            "history_limit" => Some(Self::HistoryLimit),
+            "classifier_failure" => Some(Self::ClassifierFailure),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LlmRequestLineageWrite {
+    pub trace_id: TraceId,
+    pub action_id: String,
+    pub trajectory_id: String,
+    pub parent_action_id: Option<String>,
+    pub forked_from_action_id: Option<String>,
+    pub trajectory_position: u32,
+    pub transition: LlmTrajectoryTransition,
+    pub start_reason: LlmTrajectoryStartReason,
+    pub inference_version: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LlmRequestLineage {
+    pub trace_id: TraceId,
+    pub action_id: String,
+    pub trajectory_id: String,
+    pub parent_action_id: Option<String>,
+    pub forked_from_action_id: Option<String>,
+    pub trajectory_position: u32,
+    pub transition: LlmTrajectoryTransition,
+    pub start_reason: LlmTrajectoryStartReason,
+    pub inference_version: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

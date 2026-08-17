@@ -64,12 +64,11 @@ class LLMTraceAssertion:
 
     def require_finalized_exchange(self, trace_id: int) -> tuple[int, int]:
         traces = self._read_json(
-            [
-                self._runtime.actrailviewer,
+            self._runtime.viewer_command(
                 "--output-format",
                 "json",
                 "traces",
-            ]
+            )
         )
         ready, trace_state = self._trace_is_cleanly_terminal(traces, trace_id)
         if not ready:
@@ -78,14 +77,13 @@ class LLMTraceAssertion:
                 f"{trace_state}"
             )
         document = self._read_json(
-            [
-                self._runtime.actrailviewer,
+            self._runtime.viewer_command(
                 "--output-format",
                 "json",
                 "actions",
                 "--trace-id",
                 str(trace_id),
-            ]
+            )
         )
         actions = self._llm_actions(document)
         self._require_terminal_actions(actions)

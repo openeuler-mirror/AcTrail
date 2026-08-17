@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tests.v2.common.core import CommonTestConfig, TestCaseInputs
+from tests.v2.common.core.loopback_port import resolve_test_port
 
 
 @dataclass(frozen=True)
@@ -38,12 +39,10 @@ class SemanticActionBoundariesConfig(CommonTestConfig):
                 "SEMANTIC_ACTION_BOUNDARIES_E2E_WEB_HOST",
                 "127.0.0.1",
             ),
-            web_port=int(
-                os.environ.get(
-                    "SEMANTIC_ACTION_BOUNDARIES_E2E_WEB_PORT",
-                    # Port 0 requests a kernel-assigned ephemeral port.
-                    "0",
-                )
+            web_port=resolve_test_port(
+                "SEMANTIC_ACTION_BOUNDARIES_E2E_WEB_PORT",
+                attempts=common.drain_attempts,
+                connect_timeout_seconds=common.drain_interval_seconds,
             ),
             plugin_package="otel-jsonl",
             plugin_instance="v2.semantic-action-boundaries",

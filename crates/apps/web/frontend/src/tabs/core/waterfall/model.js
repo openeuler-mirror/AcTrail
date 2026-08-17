@@ -7,9 +7,6 @@ import {
   previewText,
 } from '../../../llm/insight';
 
-const ACTION_VALID_ATTR = 'actrail.action.valid';
-const ACTION_VALID_FALSE = 'false';
-
 // Single declarative extension seam: add a line here to surface a new metric in
 // every bar's tooltip and the detail panel. Attribute-based metrics need no
 // backend change because action_json passes `attributes` through untouched.
@@ -82,7 +79,7 @@ export function defaultActiveGroups(groups) {
 }
 
 export function buildWaterfall(actions, links) {
-  const validActions = (actions ?? []).filter((action) => !invalidatedAction(action));
+  const validActions = actions ?? [];
   if (!validActions.length) {
     return { roots: [], window: emptyWindow(), groups: [], totalActions: 0 };
   }
@@ -836,10 +833,6 @@ function compareNodes(left, right) {
     return left.startOffsetMs - right.startOffsetMs;
   }
   return String(left.id).localeCompare(String(right.id));
-}
-
-function invalidatedAction(action) {
-  return action?.attributes?.[ACTION_VALID_ATTR] === ACTION_VALID_FALSE;
 }
 
 function toBigInt(value) {

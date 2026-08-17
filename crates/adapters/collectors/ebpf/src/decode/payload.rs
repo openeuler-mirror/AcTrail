@@ -1,7 +1,5 @@
 //! Payload kernel-event decoding.
 
-use std::time::SystemTime;
-
 use model_core::ids::TraceId;
 use model_core::payload::{
     PayloadContentState, PayloadDirection, PayloadOperationCompletionState, PayloadSourceBoundary,
@@ -142,7 +140,7 @@ pub fn decode_stdio_payload(
 
     Ok(RawPayloadSegment {
         trace_id: event.trace_id,
-        observed_at: SystemTime::now(),
+        observed_at: super::clock::wall_from_ktime(event.observed_ktime_ns),
         process: identity,
         source_boundary: PayloadSourceBoundary::Stdio,
         content_state: PayloadContentState::Plaintext,
@@ -178,7 +176,7 @@ pub fn decode_socket_payload(
 
     Ok(RawPayloadSegment {
         trace_id: event.trace_id,
-        observed_at: SystemTime::now(),
+        observed_at: super::clock::wall_from_ktime(event.observed_ktime_ns),
         process: identity,
         source_boundary: PayloadSourceBoundary::Syscall,
         content_state: PayloadContentState::Plaintext,

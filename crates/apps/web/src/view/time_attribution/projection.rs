@@ -523,7 +523,7 @@ fn resolved_call_model(
         );
     }
     if let (Some(request_model), Some(response_model)) = (&request_model, &response_model)
-        && request_model != response_model
+        && !model_identifiers_equal(request_model, response_model)
     {
         tracker.action_info(
             "llm_model_conflict",
@@ -533,6 +533,10 @@ fn resolved_call_model(
         );
     }
     response_model.or(request_model).or(call_model)
+}
+
+fn model_identifiers_equal(left: &str, right: &str) -> bool {
+    left.eq_ignore_ascii_case(right.trim())
 }
 
 fn validated_action_model(action: &SemanticAction, key: &str) -> Option<String> {

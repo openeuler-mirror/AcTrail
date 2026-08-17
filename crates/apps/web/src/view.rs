@@ -47,6 +47,43 @@ pub(crate) use time_attribution::{
     TimeAttributionDimension, TimeAttributionRangeQuery, TimeAttributionRowsQuery,
 };
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LlmNavMode {
+    First,
+    Next,
+}
+
+impl LlmNavMode {
+    pub fn parse(raw: &str, after: Option<String>) -> Result<Self, String> {
+        match raw {
+            "first" => {
+                if after.is_some() {
+                    return Err(
+                        "invalid LLM navigation: after is only valid with mode=next".to_string()
+                    );
+                }
+                Ok(Self::First)
+            }
+            "next" => {
+                if after.as_deref().is_none_or(|value| value.is_empty()) {
+                    return Err(
+                        "invalid LLM navigation: mode=next requires an after action id".to_string(),
+                    );
+                }
+                Ok(Self::Next)
+            }
+            _ => Err(format!("invalid LLM navigation mode: {raw}")),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::First => "first",
+            Self::Next => "next",
+        }
+    }
+}
+
 pub fn current_config_json(
     config_path: Option<&std::path::Path>,
     operator_config: Option<&config_core::daemon::OperatorConfig>,
@@ -375,6 +412,14 @@ pub fn action_tree_json(storage_config: &StorageConfig, trace_id: u64) -> Result
     )
 }
 
+pub fn waterfall_initial_json(
+    storage_config: &StorageConfig,
+    trace_id: u64,
+) -> Result<String, String> {
+    let mut storage = open_storage(storage_config)?;
+    actions::waterfall_initial_json(storage.as_mut(), TraceId::new(trace_id))
+}
+
 pub fn action_tree_root_json(
     storage_config: &StorageConfig,
     trace_id: u64,
@@ -400,6 +445,22 @@ pub fn action_tree_children_json(
         TraceId::new(trace_id),
         parent_id,
         page,
+    )
+}
+
+pub fn action_tree_llm_nav_json(
+    storage_config: &StorageConfig,
+    trace_id: u64,
+    mode: LlmNavMode,
+    after_action_id: Option<&str>,
+) -> Result<String, String> {
+    let mut storage = open_storage(storage_config)?;
+    actions::action_tree_llm_nav_json(
+        storage_config.path(),
+        storage.as_mut(),
+        TraceId::new(trace_id),
+        mode,
+        after_action_id,
     )
 }
 
@@ -435,6 +496,24 @@ pub fn action_llm_request_content_json(
         action_id,
         max_bytes,
     )
+}
+
+pub fn action_llm_request_lineage_json(
+    storage_config: &StorageConfig,
+    trace_id: u64,
+    action_id: &str,
+) -> Result<String, String> {
+    let mut storage = open_storage(storage_config)?;
+    actions::llm_request_lineage_json(storage.as_mut(), TraceId::new(trace_id), action_id)
+}
+
+pub fn llm_request_trajectory_json(
+    storage_config: &StorageConfig,
+    trace_id: u64,
+    trajectory_id: &str,
+) -> Result<String, String> {
+    let mut storage = open_storage(storage_config)?;
+    actions::llm_request_trajectory_json(storage.as_mut(), TraceId::new(trace_id), trajectory_id)
 }
 
 pub fn action_mcp_jsonrpc_content_json(

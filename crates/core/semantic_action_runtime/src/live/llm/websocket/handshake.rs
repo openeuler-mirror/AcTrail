@@ -19,6 +19,10 @@ pub(super) struct HandshakeCandidate {
 }
 
 impl HandshakeCandidate {
+    pub(super) fn is_for_stream(&self, stream_key: &PayloadStreamKey) -> bool {
+        self.stream_key.as_ref() == Some(stream_key)
+    }
+
     pub(super) fn observe(&mut self, segment: &PayloadSegment, prefix: &[u8]) -> bool {
         if segment.operation_offset == 0 && segment.bytes.starts_with(prefix) {
             self.start(segment);
@@ -44,18 +48,22 @@ impl HandshakeCandidate {
         true
     }
 
-    pub(super) fn request_path(&mut self) -> Option<String> {
+    pub(super) fn request_path(&mut self) -> Option<(String, PayloadStreamKey)> {
         let header_end = self.header_end?;
         let path = Self::websocket_request_path(&self.buffer[..header_end]);
+        let stream_key = self.stream_key.clone();
         self.clear();
-        path
+        path.zip(stream_key)
     }
 
-    pub(super) fn accepted_extensions(&mut self) -> Option<NegotiatedExtensions> {
+    pub(super) fn accepted_extensions(
+        &mut self,
+    ) -> Option<(NegotiatedExtensions, PayloadStreamKey)> {
         let header_end = self.header_end?;
         let extensions = Self::websocket_accept(&self.buffer[..header_end]);
+        let stream_key = self.stream_key.clone();
         self.clear();
-        extensions
+        extensions.zip(stream_key)
     }
 
     fn start(&mut self, segment: &PayloadSegment) {

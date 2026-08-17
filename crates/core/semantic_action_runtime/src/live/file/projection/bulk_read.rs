@@ -254,7 +254,6 @@ impl BulkReadState {
             process: self.process.clone(),
             status: aggregate_status(self.error_count),
             completeness,
-            confidence_millis: None,
             attributes,
             evidence: Vec::new(),
         }

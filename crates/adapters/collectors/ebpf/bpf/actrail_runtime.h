@@ -11,10 +11,12 @@ enum actrail_proc_event_kind {
     ACTRAIL_PROC_SIGNAL = 4,
     ACTRAIL_NET_CONNECT = 100,
     ACTRAIL_NET_ACCEPT = 101,
-    ACTRAIL_NET_SEND = 102,
-    ACTRAIL_NET_RECV = 103,
+    ACTRAIL_FD_IO_SEND = 102,
+    ACTRAIL_FD_IO_RECV = 103,
     ACTRAIL_NET_BIND = 104,
     ACTRAIL_NET_LISTEN = 105,
+    ACTRAIL_NET_CLOSE = 106,
+    ACTRAIL_NET_SHUTDOWN = 107,
     ACTRAIL_TLS_PAYLOAD_COMPLETION = 201,
     ACTRAIL_TLS_PAYLOAD_CAPTURE_REQUEST = 202,
     ACTRAIL_TLS_PAYLOAD_DIRECT_CAPTURE = 203,
@@ -40,10 +42,10 @@ enum actrail_proc_event_flag {
     ACTRAIL_PROC_FORK_PARENT_HOST_ONLY = 2,
 };
 
-enum actrail_net_syscall_family {
-    ACTRAIL_NET_SYSCALL_SOCKET = 1,
-    ACTRAIL_NET_SYSCALL_FD_IO = 2,
-    ACTRAIL_NET_SYSCALL_FD_IO_WRITEV = 3,
+enum actrail_syscall_family {
+    ACTRAIL_SYSCALL_FAMILY_SOCKET = 1,
+    ACTRAIL_SYSCALL_FAMILY_FD_IO = 2,
+    ACTRAIL_SYSCALL_FAMILY_FD_IO_WRITEV = 3,
 };
 
 enum actrail_syscall_arg_slot {
@@ -89,11 +91,16 @@ struct actrail_exec_event {
 
 struct actrail_pending_net_op {
     __u64 trace_id;
+    __u64 requested_size;
+    __u64 sockaddr_ptr;
+    struct actrail_endpoint remote;
+    __u32 pid;
     __u32 kind;
     __u32 fd;
     __u32 syscall_family;
-    __u64 requested_size;
-    __u64 sockaddr_ptr;
+    __u32 flags;
+    __u32 category;
+    __u64 generation;
 };
 
 struct actrail_fork_trace_binding {
@@ -103,14 +110,37 @@ struct actrail_fork_trace_binding {
     __u32 parent_pid;
 };
 
+struct actrail_atomic_counter {
+    int counter;
+} __attribute__((preserve_access_index));
+
+struct signal_struct {
+    struct actrail_atomic_counter live;
+} __attribute__((preserve_access_index));
+
+struct file;
+
+struct fdtable {
+    unsigned int max_fds;
+    struct file **fd;
+    unsigned long *close_on_exec;
+} __attribute__((preserve_access_index));
+
+struct files_struct {
+    struct fdtable *fdt;
+} __attribute__((preserve_access_index));
+
 struct task_struct {
     int pid;
     int tgid;
     __u64 start_boottime;
+    struct signal_struct *signal;
+    struct files_struct *files;
 } __attribute__((preserve_access_index));
 
 struct actrail_pending_exit_op {
     __s32 code;
+    __u32 group_exit;
 };
 
 struct actrail_pending_ipc_fd_pair_op {
@@ -382,6 +412,18 @@ static __always_inline __u64 current_kernel_pid_tgid(void) {
 
 static __always_inline __u32 current_kernel_tgid(void) {
     return current_kernel_pid_tgid() >> 32;
+}
+
+static __always_inline int current_process_group_dead(void) {
+    struct task_struct *task = actrail_bpf_get_current_task();
+    struct signal_struct *signal = 0;
+    int live_threads = -1;
+
+    if (!task || ACTRAIL_CORE_READ(&signal, task, signal) != 0 || !signal
+        || ACTRAIL_CORE_READ(&live_threads, signal, live.counter) != 0) {
+        return 0;
+    }
+    return live_threads == 0;
 }
 
 static __always_inline __u64 current_trace_pid_tgid(__u64 trace_id) {

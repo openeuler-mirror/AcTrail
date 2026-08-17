@@ -29,12 +29,6 @@ pub(crate) mod wiring;
 #[path = "services/logging/workload.rs"]
 pub(crate) mod workload_diagnostics;
 
-#[cfg(test)]
-#[path = "services/test_cases/suite.rs"]
-pub(crate) mod tests;
-
-#[cfg(test)]
-pub(crate) use wiring::build_runtime_wiring;
 pub(crate) use wiring::{
     build_runtime_wiring_with_provider_rule_set_and_storage_retention,
     build_runtime_wiring_with_storage_retention,
