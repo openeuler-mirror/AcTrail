@@ -7,9 +7,10 @@ use model_core::ids::TraceId;
 use rusqlite::{OptionalExtension, params};
 use semantic_action::{
     FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
-    LlmRequestContentWrite, McpJsonRpcContentPage, McpJsonRpcContentWrite, SemanticAction,
-    SemanticActionKind, SemanticActionLink, SemanticActionPage, SemanticActionReadStore,
-    SemanticActionStoreError, SemanticActionWriteStore, SemanticEvidence, attr_keys as attrs,
+    LlmRequestContentWrite, LlmRequestLineage, LlmRequestLineageWrite, McpJsonRpcContentPage,
+    McpJsonRpcContentWrite, SemanticAction, SemanticActionKind, SemanticActionLink,
+    SemanticActionPage, SemanticActionReadStore, SemanticActionStoreError,
+    SemanticActionWriteStore, SemanticEvidence, attr_keys as attrs,
 };
 
 use crate::SqliteStorage;
@@ -284,6 +285,17 @@ impl SemanticActionWriteStore for SqliteStorage {
         )
     }
 
+    fn upsert_llm_request_lineages(
+        &mut self,
+        lineages: &[LlmRequestLineageWrite],
+    ) -> Result<(), SemanticActionStoreError> {
+        let mut connection = self.connection().borrow_mut();
+        crate::semantic_actions::llm_request_lineage::LlmRequestLineageStore::upsert_batch(
+            &mut connection,
+            lineages,
+        )
+    }
+
     fn upsert_mcp_jsonrpc_contents(
         &mut self,
         contents: &[McpJsonRpcContentWrite],
@@ -300,6 +312,63 @@ impl SemanticActionWriteStore for SqliteStorage {
 }
 
 impl SemanticActionReadStore for SqliteStorage {
+    fn llm_request_lineage(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+    ) -> Result<Option<LlmRequestLineage>, SemanticActionStoreError> {
+        if self.is_purged(trace_id) {
+            return Err(SemanticActionStoreError::new(
+                "read_llm_request_lineage",
+                "trace has been purged",
+            ));
+        }
+        let connection = self.connection().borrow();
+        crate::semantic_actions::llm_request_lineage::LlmRequestLineageStore::by_action(
+            &connection,
+            trace_id,
+            action_id,
+        )
+    }
+
+    fn llm_request_trajectory(
+        &self,
+        trace_id: TraceId,
+        trajectory_id: &str,
+    ) -> Result<Vec<LlmRequestLineage>, SemanticActionStoreError> {
+        if self.is_purged(trace_id) {
+            return Err(SemanticActionStoreError::new(
+                "read_llm_request_trajectory",
+                "trace has been purged",
+            ));
+        }
+        let connection = self.connection().borrow();
+        crate::semantic_actions::llm_request_lineage::LlmRequestLineageStore::by_trajectory(
+            &connection,
+            trace_id,
+            trajectory_id,
+        )
+    }
+
+    fn llm_request_forks(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+    ) -> Result<Vec<LlmRequestLineage>, SemanticActionStoreError> {
+        if self.is_purged(trace_id) {
+            return Err(SemanticActionStoreError::new(
+                "read_llm_request_forks",
+                "trace has been purged",
+            ));
+        }
+        let connection = self.connection().borrow();
+        crate::semantic_actions::llm_request_lineage::LlmRequestLineageStore::forks_from(
+            &connection,
+            trace_id,
+            action_id,
+        )
+    }
+
     fn list_semantic_actions(
         &self,
         trace_id: TraceId,

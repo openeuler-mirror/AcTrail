@@ -9,7 +9,7 @@ use super::framing::{DirectionAssembler, MAX_DECODED_BYTES};
 use super::handshake::NegotiatedExtensions;
 
 pub(super) struct WebSocketConnection {
-    stream_key: PayloadStreamKey,
+    stream_key: Option<PayloadStreamKey>,
     synthetic_stream_key: PayloadStreamKey,
     path: String,
     outbound: DirectionAssembler,
@@ -27,13 +27,16 @@ pub(super) struct ConnectionObservation {
 
 impl WebSocketConnection {
     pub(super) fn new(
-        stream_key: PayloadStreamKey,
+        outbound_stream_key: PayloadStreamKey,
+        inbound_stream_key: PayloadStreamKey,
         path: String,
         extensions: NegotiatedExtensions,
     ) -> Self {
         Self {
-            synthetic_stream_key: PayloadStreamKey::new(format!("websocket:{stream_key}")),
-            stream_key,
+            synthetic_stream_key: PayloadStreamKey::new(format!(
+                "websocket:{outbound_stream_key}:{inbound_stream_key}"
+            )),
+            stream_key: None,
             path,
             outbound: DirectionAssembler::new(
                 true,
@@ -56,7 +59,7 @@ impl WebSocketConnection {
         &mut self,
         segment: &PayloadSegment,
     ) -> Result<Option<ConnectionObservation>, ()> {
-        if self.stream_key != segment.stream_key {
+        if !self.accepts_segment(segment) {
             return Ok(None);
         }
         let assembled = match segment.direction {
@@ -84,6 +87,22 @@ impl WebSocketConnection {
             projected,
             closed: assembled.closed,
         }))
+    }
+
+    pub(super) fn is_bound_to(&self, stream_key: &PayloadStreamKey) -> bool {
+        self.stream_key.as_ref() == Some(stream_key)
+    }
+
+    fn accepts_segment(&mut self, segment: &PayloadSegment) -> bool {
+        if let Some(stream_key) = self.stream_key.as_ref() {
+            return stream_key == &segment.stream_key;
+        }
+        let expected_masked = segment.direction == PayloadDirection::Outbound;
+        if !super::framing::FrameDecoder::looks_like_frame(&segment.bytes, expected_masked) {
+            return false;
+        }
+        self.stream_key = Some(segment.stream_key.clone());
+        true
     }
 
     fn project_outbound(

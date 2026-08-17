@@ -23,5 +23,8 @@ pub use plugin_system::{
     LlmCodecDecoded, LlmCodecOutcome, LlmCodecPlugin, LlmCodecPluginStatus, LlmCodecRequest,
     LlmCodecSseEvent,
 };
+pub(crate) use request::{ProjectedLlmRequestHistory, ProviderContextReference};
+pub(crate) use request_blocks::{HistoryAtom, TrajectoryHistoryProjection};
 pub(crate) use response::InFlightResponse;
+pub(crate) use response::ProjectedProviderResponseId;
 pub(crate) use stream::PayloadStreamGroupKey;

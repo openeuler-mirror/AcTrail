@@ -19,6 +19,7 @@ use plugin_system::{
     ObservationConsumer, ObservationEventFamily, PluginDroppedRecord, PluginOperationalMetrics,
     PluginOperationalMetricsSource, PluginRuntimeError, PluginRuntimeKind,
 };
+use semantic_action::attr_keys::{llm_request, process_parent};
 
 use crate::config::{
     Endpoint, OtelAttributeMode, OtelCompression, OtelEncoding, OtelHttpExporterConfig,
@@ -29,7 +30,6 @@ const OTEL_HTTP_EXPORTER_NAME: &str = "otel_live_http";
 const OTEL_HTTP_PLUGIN_ID: &str = "otel-http";
 pub const OTEL_HTTP_BUILTIN_PLUGIN_INSTANCE_ID: &str = "builtin.otel-http";
 const SENDER_THREAD_NAME: &str = "actrail-live-otel-http";
-const ATTR_PROCESS_PARENT_IDENTITY_STATE: &str = "process.parent.identity_state";
 
 struct OtelHttpOperationalMetrics {
     queue_depth: AtomicU64,
@@ -444,9 +444,14 @@ fn metadata_only_action(
     // Titles are often derived from command lines, paths, tool names, or LLM
     // previews. Use the stable kind as the span name at the safe boundary.
     sanitized.title = action.kind.as_str().to_string();
-    sanitized
-        .attributes
-        .retain(|key, _| matches!(key.as_str(), ATTR_PROCESS_PARENT_IDENTITY_STATE));
+    sanitized.attributes.retain(|key, _| {
+        matches!(
+            key.as_str(),
+            process_parent::IDENTITY_STATE
+                | llm_request::TRAJECTORY_ID
+                | llm_request::TRAJECTORY_INFERENCE_VERSION
+        )
+    });
     sanitized
 }
 

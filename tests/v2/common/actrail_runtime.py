@@ -107,11 +107,12 @@ class ActrailRuntime:
         timeout_seconds: int | None = None,
         environment: dict[str, str] | None = None,
         echo: bool = True,
+        cwd: Path | None = None,
     ) -> CommandResult:
         command = tuple(str(argument) for argument in argv)
         completed = subprocess.run(
             command,
-            cwd=self._repo,
+            cwd=cwd or self._repo,
             env=environment,
             capture_output=True,
             text=True,

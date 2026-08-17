@@ -18,13 +18,32 @@ use super::codec::LlmCodecRegistry;
 use super::evidence::{insert_payload_span_attributes, payload_aggregate_evidence};
 use super::live_projection::semantic_payload_draft;
 use super::provider::{LlmRequestParserInput, parse_json_request};
-use super::request_blocks::{FORMAT_VERSION, canonical_request_content, canonical_shape_metadata};
+use super::request_blocks::{
+    FORMAT_VERSION, TrajectoryHistoryProjection, canonical_request_content,
+    canonical_shape_metadata,
+};
 use super::stream::PayloadStreamGroupKey;
 
 pub(crate) struct ProjectedLlmRequestAction {
     pub(crate) action: SemanticAction,
     pub(crate) content: Option<LlmRequestContentWrite>,
+    pub(crate) trajectory_history: Option<ProjectedLlmRequestHistory>,
     pub(crate) payload_segments: Vec<PayloadSegment>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ProjectedLlmRequestHistory {
+    pub(crate) action_id: String,
+    pub(crate) classifier_id: String,
+    pub(crate) provider_context: ProviderContextReference,
+    pub(crate) history: TrajectoryHistoryProjection,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ProviderContextReference {
+    NotProvider,
+    Root,
+    PreviousResponse(String),
 }
 
 pub(super) fn project_stream_llm_request_action(
@@ -58,6 +77,23 @@ pub(super) fn project_stream_llm_request_action(
             vec![semantic_payload_draft(first, raw_bytes)]
         };
     Some(ProjectedLlmRequestAction {
+        trajectory_history: content_projection.trajectory_history.map(|history| {
+            ProjectedLlmRequestHistory {
+                action_id: action_id.clone(),
+                classifier_id: body.classifier_id.clone(),
+                provider_context: body
+                    .json
+                    .as_ref()
+                    .map(|value| {
+                        provider_context_reference(
+                            value,
+                            config.l0_llm_call.trajectory.max_structural_bytes_per_atom as usize,
+                        )
+                    })
+                    .unwrap_or(ProviderContextReference::NotProvider),
+                history,
+            }
+        }),
         action: SemanticAction {
             action_id,
             trace_id: first.trace_id,
@@ -79,6 +115,7 @@ pub(super) fn project_stream_llm_request_action(
 struct RequestContentProjection {
     content: Option<LlmRequestContentWrite>,
     metadata: Option<RequestContentMetadata>,
+    trajectory_history: Option<TrajectoryHistoryProjection>,
 }
 
 struct RequestContentMetadata {
@@ -103,11 +140,13 @@ fn project_request_content(
         return Ok(RequestContentProjection {
             content: None,
             metadata: None,
+            trajectory_history: None,
         });
     }
     match config.l0_llm_call.request_content {
         LlmRequestContentRetention::None => Ok(RequestContentProjection {
             content: None,
+            trajectory_history: None,
             metadata: Some(RequestContentMetadata {
                 state: "none",
                 format_version: None,
@@ -125,7 +164,12 @@ fn project_request_content(
             let Some(value) = body.json.as_ref() else {
                 return Ok(shape_projection(body));
             };
-            let content = canonical_request_content(trace_id, action_id, value)?;
+            let content = canonical_request_content(
+                trace_id,
+                action_id,
+                value,
+                config.llm_trajectory_enabled(),
+            )?;
             Ok(RequestContentProjection {
                 metadata: Some(RequestContentMetadata {
                     state: "canonical_blocks",
@@ -139,6 +183,7 @@ fn project_request_content(
                     background_kind: content.background_kind,
                 }),
                 content: Some(content.write),
+                trajectory_history: content.trajectory_history,
             })
         }
     }
@@ -167,6 +212,7 @@ fn shape_projection(body: &LlmRequestBody) -> RequestContentProjection {
         });
     RequestContentProjection {
         content: None,
+        trajectory_history: None,
         metadata: Some(RequestContentMetadata {
             state: "shape",
             format_version: body.json.as_ref().map(|_| FORMAT_VERSION),
@@ -441,6 +487,19 @@ impl LlmRequestBodyParser<'_> {
         } else {
             None
         }
+    }
+}
+
+fn provider_context_reference(value: &Value, maximum_bytes: usize) -> ProviderContextReference {
+    match value.get("previous_response_id") {
+        None => ProviderContextReference::NotProvider,
+        Some(Value::Null) => ProviderContextReference::Root,
+        Some(Value::String(response_id))
+            if !response_id.is_empty() && response_id.len() <= maximum_bytes =>
+        {
+            ProviderContextReference::PreviousResponse(response_id.clone())
+        }
+        Some(_) => ProviderContextReference::Root,
     }
 }
 

@@ -4,8 +4,8 @@ use std::path::Path;
 
 use model_core::ids::TraceId;
 use semantic_action::{
-    FilePathSetPath, FilePathSetPathPage, LlmRequestContentPage, McpJsonRpcContentPage,
-    SemanticAction, SemanticActionLink, SemanticEvidence,
+    FilePathSetPath, FilePathSetPathPage, LlmRequestContentPage, LlmRequestLineage,
+    McpJsonRpcContentPage, SemanticAction, SemanticActionLink, SemanticEvidence,
 };
 use serde_json::{Value, json as json_value};
 use storage_core::{
@@ -296,6 +296,50 @@ pub(super) fn llm_request_content_json(
     })
 }
 
+pub(super) fn llm_request_lineage_json(
+    storage: &mut dyn StorageBackend,
+    trace_id: TraceId,
+    action_id: &str,
+) -> Result<String, String> {
+    let lineage = storage
+        .llm_request_lineage(trace_id, action_id)
+        .map_err(|error| storage_error("read LLM request lineage", error))?;
+    let forks = storage
+        .llm_request_forks(trace_id, action_id)
+        .map_err(|error| storage_error("read LLM request forks", error))?;
+    Ok(format!(
+        "{{\"lineage\":{},\"forks\":[{}]}}",
+        lineage
+            .as_ref()
+            .map(llm_request_lineage_row_json)
+            .unwrap_or_else(|| "null".to_string()),
+        forks
+            .iter()
+            .map(llm_request_lineage_row_json)
+            .collect::<Vec<_>>()
+            .join(",")
+    ))
+}
+
+pub(super) fn llm_request_trajectory_json(
+    storage: &mut dyn StorageBackend,
+    trace_id: TraceId,
+    trajectory_id: &str,
+) -> Result<String, String> {
+    let nodes = storage
+        .llm_request_trajectory(trace_id, trajectory_id)
+        .map_err(|error| storage_error("read LLM request trajectory", error))?;
+    Ok(format!(
+        "{{\"trajectory_id\":{},\"nodes\":[{}]}}",
+        json::string(trajectory_id),
+        nodes
+            .iter()
+            .map(llm_request_lineage_row_json)
+            .collect::<Vec<_>>()
+            .join(",")
+    ))
+}
+
 pub(super) fn mcp_jsonrpc_content_json(
     storage: &mut dyn StorageBackend,
     trace_id: TraceId,
@@ -559,6 +603,28 @@ fn llm_request_content_page_json(content: LlmRequestContentPage) -> String {
         json::number(content.returned_bytes),
         bool_json(content.truncated),
         json::string(&content.body_json)
+    )
+}
+
+fn llm_request_lineage_row_json(lineage: &LlmRequestLineage) -> String {
+    format!(
+        "{{\"action_id\":{},\"trajectory_id\":{},\"parent_action_id\":{},\"forked_from_action_id\":{},\"trajectory_position\":{},\"transition\":{},\"start_reason\":{},\"inference_version\":{}}}",
+        json::string(&lineage.action_id),
+        json::string(&lineage.trajectory_id),
+        lineage
+            .parent_action_id
+            .as_deref()
+            .map(json::string)
+            .unwrap_or_else(|| "null".to_string()),
+        lineage
+            .forked_from_action_id
+            .as_deref()
+            .map(json::string)
+            .unwrap_or_else(|| "null".to_string()),
+        json::number(lineage.trajectory_position),
+        json::string(lineage.transition.as_str()),
+        json::string(lineage.start_reason.as_str()),
+        json::number(lineage.inference_version),
     )
 }
 

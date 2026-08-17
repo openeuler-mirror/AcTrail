@@ -12,8 +12,8 @@ use model_core::process::{ProcessIdentity, ProcessMembership, ProcessRecord};
 use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
 use semantic_action::{
     FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
-    LlmRequestContentWrite, McpJsonRpcContentPage, McpJsonRpcContentWrite, SemanticAction,
-    SemanticActionLink, SemanticActionPage,
+    LlmRequestContentWrite, LlmRequestLineage, LlmRequestLineageWrite, McpJsonRpcContentPage,
+    McpJsonRpcContentWrite, SemanticAction, SemanticActionLink, SemanticActionPage,
 };
 use storage_core::{
     PayloadSegmentQuery, RetentionCandidate, SemanticActionChildPage, SemanticActionChildPageQuery,
@@ -259,6 +259,14 @@ impl StorageBackend for SqliteStorage {
             .map_err(StorageError::from)
     }
 
+    fn upsert_llm_request_lineages(
+        &mut self,
+        lineages: &[LlmRequestLineageWrite],
+    ) -> Result<(), StorageError> {
+        semantic_action::SemanticActionWriteStore::upsert_llm_request_lineages(self, lineages)
+            .map_err(StorageError::from)
+    }
+
     fn upsert_mcp_jsonrpc_contents(
         &mut self,
         contents: &[McpJsonRpcContentWrite],
@@ -285,6 +293,37 @@ impl StorageBackend for SqliteStorage {
             self, trace_id, offset, limit,
         )
         .map_err(StorageError::from)
+    }
+
+    fn llm_request_lineage(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+    ) -> Result<Option<LlmRequestLineage>, StorageError> {
+        semantic_action::SemanticActionReadStore::llm_request_lineage(self, trace_id, action_id)
+            .map_err(StorageError::from)
+    }
+
+    fn llm_request_trajectory(
+        &self,
+        trace_id: TraceId,
+        trajectory_id: &str,
+    ) -> Result<Vec<LlmRequestLineage>, StorageError> {
+        semantic_action::SemanticActionReadStore::llm_request_trajectory(
+            self,
+            trace_id,
+            trajectory_id,
+        )
+        .map_err(StorageError::from)
+    }
+
+    fn llm_request_forks(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+    ) -> Result<Vec<LlmRequestLineage>, StorageError> {
+        semantic_action::SemanticActionReadStore::llm_request_forks(self, trace_id, action_id)
+            .map_err(StorageError::from)
     }
 
     fn list_file_observation_paths(

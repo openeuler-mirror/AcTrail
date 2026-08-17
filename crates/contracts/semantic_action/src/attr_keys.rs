@@ -174,6 +174,8 @@ pub mod llm_request {
     pub const PAYLOAD_TEXT: &str = "llm.request.payload_text";
     pub const PROTOCOL_ID: &str = "llm.request.protocol_id";
     pub const RAW_PAYLOAD_BYTES: &str = "llm.request.raw_payload_bytes";
+    pub const TRAJECTORY_ID: &str = "llm.request.trajectory_id";
+    pub const TRAJECTORY_INFERENCE_VERSION: &str = "llm.request.trajectory_inference_version";
     pub const USER_MESSAGE_COUNT: &str = "llm.request.user_message_count";
 }
 

@@ -3,15 +3,15 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::time::SystemTime;
 
-use config_core::daemon::SemanticRetentionConfig;
+use config_core::daemon::{LlmRequestContentRetention, SemanticRetentionConfig};
 use model_core::ids::TraceId;
 use model_core::payload::{
     PayloadContentState, PayloadDirection, PayloadSegment, PayloadSourceBoundary,
 };
 use model_core::process::ProcessIdentity;
 use semantic_action::{
-    LlmRequestContentWrite, SemanticAction, SemanticActionCompleteness, SemanticActionKind,
-    SemanticActionStatus, SemanticEvidenceKind, attr_keys as attrs,
+    LlmRequestContentWrite, LlmRequestLineageWrite, SemanticAction, SemanticActionCompleteness,
+    SemanticActionKind, SemanticActionStatus, SemanticEvidenceKind, attr_keys as attrs,
 };
 
 use crate::payload_projection::http::{
@@ -21,24 +21,30 @@ use crate::payload_projection::http::{
 use crate::payload_projection::llm::{
     InFlightResponse, IncrementalSseCache, LiveLlmProjection, LiveLlmResponseMessage,
     LlmCodecPlugin, LlmCodecPluginStatus, LlmCodecRegistry, PayloadStreamGroupKey,
-    live_llm_request_message_len, live_llm_request_prefix_skip_len,
-    live_llm_request_stream_id_hint, project_http2_stream_request, project_http2_stream_response,
-    project_live_llm_request_message, project_live_llm_response_message, semantic_payload_draft,
+    ProjectedLlmRequestHistory, ProjectedProviderResponseId, live_llm_request_message_len,
+    live_llm_request_prefix_skip_len, live_llm_request_stream_id_hint,
+    project_http2_stream_request, project_http2_stream_response, project_live_llm_request_message,
+    project_live_llm_response_message, semantic_payload_draft,
 };
 
 use super::actions::action_for_live_state;
 
 mod call;
 mod http;
+mod trajectory;
 mod websocket;
+
+use trajectory::{TrajectoryAssignment, TrajectoryClassification, TrajectoryClassifier};
 
 pub(super) struct LiveLlmProjector {
     config: SemanticRetentionConfig,
     codecs: LlmCodecRegistry,
     streams: BTreeMap<LiveStreamKey, LiveStreamState>,
     open_requests: BTreeMap<LlmStreamKey, VecDeque<OpenLlmRequest>>,
-    pending_responses: BTreeMap<LlmStreamKey, VecDeque<SemanticAction>>,
+    pending_responses: BTreeMap<LlmStreamKey, VecDeque<PendingLlmResponse>>,
+    pending_trajectory_actions: BTreeMap<(TraceId, String), PendingTrajectoryAction>,
     open_action_versions: BTreeMap<(TraceId, String), SemanticAction>,
+    trajectory: Option<TrajectoryClassifier>,
     websocket: websocket::WebSocketLlmAdapter,
 }
 
@@ -46,6 +52,9 @@ pub(super) struct LiveLlmProjector {
 pub(super) struct LiveLlmOutput {
     pub(super) actions: Vec<SemanticAction>,
     pub(super) llm_request_contents: Vec<LlmRequestContentWrite>,
+    pub(super) llm_request_lineages: Vec<LlmRequestLineageWrite>,
+    llm_request_histories: Vec<ProjectedLlmRequestHistory>,
+    provider_response_ids: Vec<ProjectedProviderResponseId>,
     pub(super) payload_segments: Vec<PayloadSegment>,
 }
 
@@ -53,20 +62,45 @@ impl LiveLlmOutput {
     fn extend(&mut self, other: Self) {
         self.actions.extend(other.actions);
         self.llm_request_contents.extend(other.llm_request_contents);
+        self.llm_request_lineages.extend(other.llm_request_lineages);
+        self.llm_request_histories
+            .extend(other.llm_request_histories);
+        self.provider_response_ids
+            .extend(other.provider_response_ids);
         self.payload_segments.extend(other.payload_segments);
     }
 }
 
 impl LiveLlmProjector {
     pub(super) fn new(config: SemanticRetentionConfig) -> Self {
+        if config.l0_llm_call.enabled
+            && config.l0_llm_call.trajectory.enabled
+            && !matches!(
+                config.l0_llm_call.request_content,
+                LlmRequestContentRetention::CanonicalBlocks
+            )
+        {
+            tracing::warn!(
+                request_content = ?config.l0_llm_call.request_content,
+                "LLM trajectory identification is disabled because request content retention is not canonical_blocks"
+            );
+        }
+        let trajectory = config
+            .llm_trajectory_enabled()
+            .then(|| TrajectoryClassifier::new(config.l0_llm_call.trajectory.into()));
+        let websocket = websocket::WebSocketLlmAdapter::new(
+            config.l0_llm_call.websocket_max_connections_per_process,
+        );
         Self {
             config,
             codecs: LlmCodecRegistry::default(),
             streams: BTreeMap::new(),
             open_requests: BTreeMap::new(),
             pending_responses: BTreeMap::new(),
+            pending_trajectory_actions: BTreeMap::new(),
             open_action_versions: BTreeMap::new(),
-            websocket: websocket::WebSocketLlmAdapter::default(),
+            trajectory,
+            websocket,
         }
     }
 }
@@ -101,6 +135,16 @@ struct OpenLlmRequest {
     action: SemanticAction,
     start_time: SystemTime,
     sequence_start: u64,
+}
+
+struct PendingLlmResponse {
+    action: SemanticAction,
+    provider_response_id: Option<String>,
+}
+
+struct PendingTrajectoryAction {
+    action: SemanticAction,
+    content: Option<LlmRequestContentWrite>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -250,11 +294,16 @@ impl LiveLlmProjector {
     }
 
     pub(super) fn forget_trace(&mut self, trace_id: TraceId) {
+        if let Some(trajectory) = self.trajectory.as_mut() {
+            trajectory.forget_trace(trace_id);
+        }
         self.websocket.forget_trace(trace_id);
         self.streams.retain(|key, _| key.group.trace_id != trace_id);
         self.open_requests.retain(|key, _| key.trace_id != trace_id);
         self.pending_responses
             .retain(|key, _| key.trace_id != trace_id);
+        self.pending_trajectory_actions
+            .retain(|(candidate, _), _| *candidate != trace_id);
         self.open_action_versions
             .retain(|(candidate, _), _| *candidate != trace_id);
     }
@@ -263,10 +312,13 @@ impl LiveLlmProjector {
         &mut self,
         trace_id: TraceId,
         finished_at: SystemTime,
-    ) -> (Vec<SemanticAction>, Vec<PayloadSegment>) {
+    ) -> LiveLlmOutput {
         self.websocket.forget_trace(trace_id);
-        let mut finalized = Vec::new();
-        let mut payload_segments = Vec::new();
+        let mut output = LiveLlmOutput::default();
+        if let Some(classifier) = self.trajectory.as_mut() {
+            let assignments = classifier.finalize_trace(trace_id);
+            self.apply_resolved_trajectory_assignments(trace_id, assignments, &mut output);
+        }
         let keys = self
             .streams
             .keys()
@@ -290,7 +342,7 @@ impl LiveLlmProjector {
             ) else {
                 continue;
             };
-            payload_segments.extend(drafts);
+            output.payload_segments.extend(drafts);
             for action in &mut actions {
                 if action.kind != SemanticActionKind::LlmResponse {
                     continue;
@@ -302,13 +354,13 @@ impl LiveLlmProjector {
                     attrs::actrail::ACTION_FINALIZED_ON_TRACE_CLOSE.to_string(),
                     "true".to_string(),
                 );
-                finalized.push(action.clone());
+                output.actions.push(action.clone());
                 if let Some(request) = self.open_request_for_response(action) {
                     let mut call = call::llm_call_from_request_response(&request, Some(action));
                     call.status = SemanticActionStatus::Error;
                     call.completeness = SemanticActionCompleteness::Partial;
                     call.end_time = Some(finished_at);
-                    finalized.push(call);
+                    output.actions.push(call);
                 }
             }
         }
@@ -321,15 +373,17 @@ impl LiveLlmProjector {
                 attrs::actrail::ACTION_FINALIZED_ON_TRACE_CLOSE.to_string(),
                 "true".to_string(),
             );
-            finalized.push(call);
+            output.actions.push(call);
         }
         self.streams.retain(|key, _| key.group.trace_id != trace_id);
         self.open_requests.retain(|key, _| key.trace_id != trace_id);
         self.pending_responses
             .retain(|key, _| key.trace_id != trace_id);
+        self.pending_trajectory_actions
+            .retain(|(candidate, _), _| *candidate != trace_id);
         self.open_action_versions
             .retain(|(candidate, _), _| *candidate != trace_id);
-        (finalized, payload_segments)
+        output
     }
 
     fn open_requests_for_trace(&self, trace_id: TraceId) -> Vec<SemanticAction> {
@@ -357,17 +411,77 @@ impl LiveLlmProjector {
             .into_iter()
             .map(|content| (content.manifest.action_id.clone(), content))
             .collect::<BTreeMap<_, _>>();
+        let mut request_histories = output
+            .llm_request_histories
+            .into_iter()
+            .map(|history| (history.action_id.clone(), history))
+            .collect::<BTreeMap<_, _>>();
+        let mut provider_response_ids = output
+            .provider_response_ids
+            .into_iter()
+            .map(|metadata| (metadata.action_id, metadata.provider_response_id))
+            .collect::<BTreeMap<_, _>>();
         for mut action in output.actions {
             if !self.config.l4_payload.enabled {
                 action
                     .evidence
                     .retain(|evidence| evidence.kind == SemanticEvidenceKind::Event);
             }
+            let mut deferred_trajectory = false;
+            let mut resolved_trajectories = Vec::new();
+            let lineage = if action.kind == SemanticActionKind::LlmRequest {
+                self.trajectory.as_mut().and_then(|classifier| {
+                    let classification = match request_histories.remove(&action.action_id) {
+                        Some(history) => classifier.classify(
+                            action.trace_id,
+                            action.process,
+                            history,
+                            action.start_time,
+                        ),
+                        None => TrajectoryClassification::Assigned(
+                            classifier.classify_failure(action.action_id.clone()),
+                        ),
+                    };
+                    resolved_trajectories = classifier.take_resolved();
+                    let TrajectoryClassification::Assigned(assignment) = classification else {
+                        deferred_trajectory = true;
+                        return None;
+                    };
+                    action.attributes.insert(
+                        attrs::llm_request::TRAJECTORY_ID.to_string(),
+                        assignment.trajectory_id.clone(),
+                    );
+                    action.attributes.insert(
+                        attrs::llm_request::TRAJECTORY_INFERENCE_VERSION.to_string(),
+                        assignment.inference_version.to_string(),
+                    );
+                    Some(assignment.lineage(action.trace_id))
+                })
+            } else {
+                None
+            };
             let state_action = action_for_live_state(&action);
+            self.apply_resolved_trajectory_assignments(
+                state_action.trace_id,
+                resolved_trajectories,
+                &mut changed,
+            );
+            if deferred_trajectory {
+                self.pending_trajectory_actions.insert(
+                    (state_action.trace_id, state_action.action_id.clone()),
+                    PendingTrajectoryAction {
+                        action: state_action.clone(),
+                        content: request_contents.remove(&state_action.action_id),
+                    },
+                );
+            }
             let action_changed = self.record_projected_action(&state_action);
-            if action_changed {
+            if action_changed && !deferred_trajectory {
                 if let Some(content) = request_contents.remove(&action.action_id) {
                     changed.llm_request_contents.push(content);
+                }
+                if let Some(lineage) = lineage {
+                    changed.llm_request_lineages.push(lineage);
                 }
                 changed.actions.push(action);
             }
@@ -375,19 +489,46 @@ impl LiveLlmProjector {
                 SemanticActionKind::LlmRequest => {
                     self.remember_open_request(state_action.clone());
                     if let Some(response) = self.take_pending_response_for_request(&state_action) {
-                        let call =
-                            call::llm_call_from_request_response(&state_action, Some(&response));
+                        let assignments = self.register_provider_response(
+                            &state_action,
+                            response.provider_response_id.as_deref(),
+                            response
+                                .action
+                                .end_time
+                                .unwrap_or(response.action.start_time),
+                        );
+                        self.apply_resolved_trajectory_assignments(
+                            state_action.trace_id,
+                            assignments,
+                            &mut changed,
+                        );
+                        let call = call::llm_call_from_request_response(
+                            &state_action,
+                            Some(&response.action),
+                        );
                         self.remove_open_request(&state_action);
                         self.record_derived_call(call, &mut changed.actions);
                     }
                 }
                 SemanticActionKind::LlmResponse => {
+                    let provider_response_id =
+                        provider_response_ids.remove(&state_action.action_id);
                     if let Some(request) = self.take_open_request_for_response(&state_action) {
+                        let assignments = self.register_provider_response(
+                            &request,
+                            provider_response_id.as_deref(),
+                            state_action.end_time.unwrap_or(state_action.start_time),
+                        );
+                        self.apply_resolved_trajectory_assignments(
+                            request.trace_id,
+                            assignments,
+                            &mut changed,
+                        );
                         let call =
                             call::llm_call_from_request_response(&request, Some(&state_action));
                         self.record_derived_call(call, &mut changed.actions);
                     } else {
-                        self.remember_pending_response(state_action.clone());
+                        self.remember_pending_response(state_action.clone(), provider_response_id);
                     }
                 }
                 _ => {}
@@ -399,6 +540,66 @@ impl LiveLlmProjector {
     fn record_derived_call(&mut self, call: SemanticAction, changed: &mut Vec<SemanticAction>) {
         if self.record_projected_action(&call) {
             changed.push(call);
+        }
+    }
+
+    fn register_provider_response(
+        &mut self,
+        request: &SemanticAction,
+        provider_response_id: Option<&str>,
+        observed_at: SystemTime,
+    ) -> Vec<TrajectoryAssignment> {
+        let Some(provider_response_id) = provider_response_id else {
+            return Vec::new();
+        };
+        let Some(classifier_id) = request.attributes.get(attrs::llm_request::CLASSIFIER_ID) else {
+            return Vec::new();
+        };
+        if let Some(classifier) = self.trajectory.as_mut() {
+            return classifier.register_provider_response(
+                request.trace_id,
+                request.process.clone(),
+                classifier_id.clone(),
+                &request.action_id,
+                provider_response_id,
+                observed_at,
+            );
+        }
+        Vec::new()
+    }
+
+    fn apply_resolved_trajectory_assignments(
+        &mut self,
+        trace_id: TraceId,
+        assignments: Vec<TrajectoryAssignment>,
+        changed: &mut LiveLlmOutput,
+    ) {
+        for assignment in assignments {
+            let Some(pending) = self
+                .pending_trajectory_actions
+                .remove(&(trace_id, assignment.action_id.clone()))
+            else {
+                continue;
+            };
+            let mut action = pending.action;
+            action.attributes.insert(
+                attrs::llm_request::TRAJECTORY_ID.to_string(),
+                assignment.trajectory_id.clone(),
+            );
+            action.attributes.insert(
+                attrs::llm_request::TRAJECTORY_INFERENCE_VERSION.to_string(),
+                assignment.inference_version.to_string(),
+            );
+            changed
+                .llm_request_lineages
+                .push(assignment.lineage(action.trace_id));
+            if let Some(content) = pending.content {
+                changed.llm_request_contents.push(content);
+            }
+            self.update_open_request(&action);
+            if self.record_projected_action(&action) {
+                changed.actions.push(action);
+            }
         }
     }
 
@@ -439,6 +640,21 @@ impl LiveLlmProjector {
         }
     }
 
+    fn update_open_request(&mut self, request: &SemanticAction) {
+        let Some(stream_key) = LlmStreamKey::from_llm_request(request) else {
+            return;
+        };
+        let Some(requests) = self.open_requests.get_mut(&stream_key) else {
+            return;
+        };
+        if let Some(existing) = requests
+            .iter_mut()
+            .find(|candidate| candidate.action.action_id == request.action_id)
+        {
+            existing.action = request.clone();
+        }
+    }
+
     fn restore_open_request(&mut self, request: SemanticAction) {
         self.remember_open_request(request);
     }
@@ -456,24 +672,31 @@ impl LiveLlmProjector {
         }
     }
 
-    fn remember_pending_response(&mut self, response: SemanticAction) {
+    fn remember_pending_response(
+        &mut self,
+        response: SemanticAction,
+        provider_response_id: Option<String>,
+    ) {
         let Some(stream_key) = LlmStreamKey::from_llm_response(&response) else {
             return;
         };
         let responses = self.pending_responses.entry(stream_key).or_default();
         if responses
             .iter()
-            .any(|candidate| candidate.action_id == response.action_id)
+            .any(|candidate| candidate.action.action_id == response.action_id)
         {
             return;
         }
-        responses.push_back(response);
+        responses.push_back(PendingLlmResponse {
+            action: response,
+            provider_response_id,
+        });
     }
 
     fn take_pending_response_for_request(
         &mut self,
         request: &SemanticAction,
-    ) -> Option<SemanticAction> {
+    ) -> Option<PendingLlmResponse> {
         let stream_key = LlmStreamKey::from_llm_request(request)?;
         let request_order = LlmActionOrder::from_action(request)?;
         let responses = self.pending_responses.get_mut(&stream_key)?;
@@ -481,16 +704,16 @@ impl LiveLlmProjector {
             .iter()
             .enumerate()
             .filter(|(_, response)| {
-                LlmActionOrder::from_action(response)
+                LlmActionOrder::from_action(&response.action)
                     .is_some_and(|response_order| request_order <= response_order)
             })
             .min_by_key(|(_, response)| {
                 (
-                    LlmActionOrder::from_action(response).unwrap_or(LlmActionOrder {
-                        start_time: response.start_time,
+                    LlmActionOrder::from_action(&response.action).unwrap_or(LlmActionOrder {
+                        start_time: response.action.start_time,
                         sequence_start: u64::MAX,
                     }),
-                    response.action_id.clone(),
+                    response.action.action_id.clone(),
                 )
             })
             .map(|(index, _)| index)?;
@@ -687,6 +910,9 @@ impl PlainStreamAssembly {
             output
                 .llm_request_contents
                 .extend(projection.llm_request_contents);
+            output
+                .llm_request_histories
+                .extend(projection.llm_request_histories);
             output.payload_segments.extend(projection.payload_segments);
             self.evict_encoded_len(encoded_len);
             if self.buffer.is_empty() {
@@ -714,6 +940,9 @@ impl PlainStreamAssembly {
                 self.in_flight_response = None;
             }
             output.actions.extend(projection.actions);
+            output
+                .provider_response_ids
+                .extend(projection.provider_response_ids);
             output.payload_segments.extend(projection.payload_segments);
             if terminal {
                 self.pending_raw_chunk_terminator = projection.raw_response;
@@ -897,6 +1126,9 @@ impl Http2StreamAssembly {
         output
             .llm_request_contents
             .extend(projection.llm_request_contents);
+        output
+            .llm_request_histories
+            .extend(projection.llm_request_histories);
         self.plain.evict_encoded_len(projection.encoded_len);
         output
     }
@@ -932,6 +1164,9 @@ impl Http2StreamAssembly {
         };
         self.plain.sse_parse_cache = sse_parse_cache;
         output.actions.extend(projection.actions);
+        output
+            .provider_response_ids
+            .extend(projection.provider_response_ids);
         if projection.terminal {
             self.plain.evict_encoded_len(projection.encoded_len);
         }

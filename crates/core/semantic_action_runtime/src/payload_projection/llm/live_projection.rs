@@ -11,10 +11,12 @@ use crate::payload_projection::http::{
 
 use super::body::IncrementalSseCache;
 use super::codec::LlmCodecRegistry;
+use super::request::ProjectedLlmRequestHistory;
 use super::request::project_stream_llm_request_action;
 use super::response::{
-    InFlightResponse, LlmResponseProjection, project_raw_chunked_stream_llm_response_actions,
-    project_raw_stream_llm_response_actions, project_stream_llm_response_message_actions,
+    InFlightResponse, LlmResponseProjection, ProjectedProviderResponseId,
+    project_raw_chunked_stream_llm_response_actions, project_raw_stream_llm_response_actions,
+    project_stream_llm_response_message_actions,
 };
 use super::response_support::http_response_can_evict;
 use super::stream::PayloadStreamGroupKey;
@@ -22,6 +24,8 @@ use super::stream::PayloadStreamGroupKey;
 pub(crate) struct LiveLlmProjection {
     pub(crate) actions: Vec<SemanticAction>,
     pub(crate) llm_request_contents: Vec<LlmRequestContentWrite>,
+    pub(crate) llm_request_histories: Vec<ProjectedLlmRequestHistory>,
+    pub(crate) provider_response_ids: Vec<ProjectedProviderResponseId>,
     pub(crate) payload_segments: Vec<PayloadSegment>,
     pub(crate) in_flight: Option<InFlightResponse>,
     pub(crate) encoded_len: usize,
@@ -80,17 +84,20 @@ pub(crate) fn project_live_llm_request_message(
         http,
         segments,
     );
-    let (actions, llm_request_contents, payload_segments) = match request {
+    let (actions, llm_request_contents, llm_request_histories, payload_segments) = match request {
         Some(request) => (
             vec![request.action],
             request.content.into_iter().collect::<Vec<_>>(),
+            request.trajectory_history.into_iter().collect::<Vec<_>>(),
             request.payload_segments,
         ),
-        None => (Vec::new(), Vec::new(), Vec::new()),
+        None => (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
     };
     Some(LiveLlmProjection {
         actions,
         llm_request_contents,
+        llm_request_histories,
+        provider_response_ids: Vec::new(),
         payload_segments,
         in_flight: None,
         encoded_len,
@@ -190,17 +197,20 @@ pub(crate) fn project_http2_stream_request(
         http,
         segments,
     );
-    let (actions, llm_request_contents, payload_segments) = match request {
+    let (actions, llm_request_contents, llm_request_histories, payload_segments) = match request {
         Some(request) => (
             vec![request.action],
             request.content.into_iter().collect::<Vec<_>>(),
+            request.trajectory_history.into_iter().collect::<Vec<_>>(),
             request.payload_segments,
         ),
-        None => (Vec::new(), Vec::new(), Vec::new()),
+        None => (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
     };
     Some(LiveLlmProjection {
         actions,
         llm_request_contents,
+        llm_request_histories,
+        provider_response_ids: Vec::new(),
         payload_segments,
         in_flight: None,
         encoded_len,
@@ -256,6 +266,8 @@ fn live_projection_from_response(projection: LlmResponseProjection) -> LiveLlmPr
     LiveLlmProjection {
         actions: projection.actions,
         llm_request_contents: Vec::new(),
+        llm_request_histories: Vec::new(),
+        provider_response_ids: projection.provider_response_ids,
         payload_segments: projection.payload_segments,
         in_flight: projection.in_flight,
         encoded_len: projection.encoded_len,
@@ -268,6 +280,8 @@ fn empty_terminal_projection(encoded_len: usize) -> LiveLlmProjection {
     LiveLlmProjection {
         actions: Vec::new(),
         llm_request_contents: Vec::new(),
+        llm_request_histories: Vec::new(),
+        provider_response_ids: Vec::new(),
         payload_segments: Vec::new(),
         in_flight: None,
         encoded_len,

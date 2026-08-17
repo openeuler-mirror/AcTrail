@@ -37,7 +37,7 @@ sudo vi /etc/actrail/plugins/otel-http/otel-http.config.toml
 | --- | --- | --- |
 | `endpoint` | `http://COLLECTOR_HOST:4318/v1/traces` | 占位地址，**必须**换成真实 Collector |
 | `allow_insecure` | `true` | 明文 endpoint 必须显式为 `true`；`https://` 时设为 `false` |
-| `attribute_mode` | `metadata-only` | 只发结构化元数据，不发命令行和 HTTP/LLM 内容；改成 `full` 前需确认 Collector 与链路可信 |
+| `attribute_mode` | `metadata-only` | 只发结构化元数据，不发命令行和 HTTP/LLM 内容；`llm.request` 会保留 trajectory ID 与推断版本；改成 `full` 前需确认 Collector 与链路可信 |
 | `[action_kinds]` | `default = false` | 未列出的类型一律不发。模板已预开 `process.exec/exit`、`agent.*`、`llm.*`、`mcp.*`、`enforcement.decision`、`command.invocation`；`file.*`、`fs.enumerate`、`http.message`、`sse.*` 默认关闭 |
 | `tls_client_cert_path` / `tls_client_key_path` | 注释 | mTLS 两者必须同时配置；为明文 endpoint 配置 TLS 文件会被拒绝 |
 

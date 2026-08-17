@@ -1,6 +1,16 @@
 //! Agent semantic-action configuration.
 
 use std::str::FromStr;
+use std::time::Duration;
+
+pub const DEFAULT_LLM_TRAJECTORY_MAX_ACTIVE_TRAJECTORIES_PER_SCOPE: u32 = 128;
+pub const DEFAULT_LLM_TRAJECTORY_MAX_CANDIDATE_NODES_PER_TRAJECTORY: u32 = 256;
+pub const DEFAULT_LLM_TRAJECTORY_MAX_PREFIX_NODES_PER_SCOPE: u32 = 65_536;
+pub const DEFAULT_LLM_TRAJECTORY_MAX_HISTORY_ATOMS_PER_REQUEST: u32 = 4_096;
+pub const DEFAULT_LLM_TRAJECTORY_MAX_BLOCKS_PER_ATOM: u32 = 64;
+pub const DEFAULT_LLM_TRAJECTORY_MAX_STRUCTURAL_BYTES_PER_ATOM: u32 = 4_096;
+pub const DEFAULT_LLM_TRAJECTORY_IDLE_TTL: Duration = Duration::from_secs(30 * 60);
+pub const DEFAULT_LLM_WEBSOCKET_MAX_CONNECTIONS_PER_PROCESS: u32 = 8;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AgentInvocationConfig {
@@ -82,6 +92,15 @@ impl SemanticRetentionConfig {
 
     pub fn llm_response_usage_enabled(&self) -> bool {
         self.l0_llm_call.enabled && matches!(self.l0_llm_call.usage, LlmUsageRetention::Summary)
+    }
+
+    pub fn llm_trajectory_enabled(&self) -> bool {
+        self.l0_llm_call.enabled
+            && self.l0_llm_call.trajectory.enabled
+            && matches!(
+                self.l0_llm_call.request_content,
+                LlmRequestContentRetention::CanonicalBlocks
+            )
     }
 
     pub fn sse_stream_summary_enabled(&self) -> bool {
@@ -185,6 +204,37 @@ pub struct L0LlmCallRetention {
     pub tool_calls: LlmToolCallRetention,
     pub usage: LlmUsageRetention,
     pub retain_assembled_payload: bool,
+    pub websocket_max_connections_per_process: u32,
+    pub trajectory: LlmTrajectoryConfig,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LlmTrajectoryConfig {
+    pub enabled: bool,
+    pub max_active_trajectories_per_scope: u32,
+    pub max_candidate_nodes_per_trajectory: u32,
+    pub max_prefix_nodes_per_scope: u32,
+    pub max_history_atoms_per_request: u32,
+    pub max_blocks_per_atom: u32,
+    pub max_structural_bytes_per_atom: u32,
+    pub idle_ttl: Duration,
+}
+
+impl Default for LlmTrajectoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_active_trajectories_per_scope:
+                DEFAULT_LLM_TRAJECTORY_MAX_ACTIVE_TRAJECTORIES_PER_SCOPE,
+            max_candidate_nodes_per_trajectory:
+                DEFAULT_LLM_TRAJECTORY_MAX_CANDIDATE_NODES_PER_TRAJECTORY,
+            max_prefix_nodes_per_scope: DEFAULT_LLM_TRAJECTORY_MAX_PREFIX_NODES_PER_SCOPE,
+            max_history_atoms_per_request: DEFAULT_LLM_TRAJECTORY_MAX_HISTORY_ATOMS_PER_REQUEST,
+            max_blocks_per_atom: DEFAULT_LLM_TRAJECTORY_MAX_BLOCKS_PER_ATOM,
+            max_structural_bytes_per_atom: DEFAULT_LLM_TRAJECTORY_MAX_STRUCTURAL_BYTES_PER_ATOM,
+            idle_ttl: DEFAULT_LLM_TRAJECTORY_IDLE_TTL,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -232,6 +282,9 @@ impl Default for L0LlmCallRetention {
             tool_calls: LlmToolCallRetention::AssembledJson,
             usage: LlmUsageRetention::Summary,
             retain_assembled_payload: false,
+            websocket_max_connections_per_process:
+                DEFAULT_LLM_WEBSOCKET_MAX_CONNECTIONS_PER_PROCESS,
+            trajectory: LlmTrajectoryConfig::default(),
         }
     }
 }

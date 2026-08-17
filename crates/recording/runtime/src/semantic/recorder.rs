@@ -1,7 +1,11 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use semantic_action::SemanticActionKind;
 use storage_core::StorageBackend;
 
 use super::{RecordingError, SemanticActionRecordBatch};
+
+static LINEAGE_PERSISTENCE_FAILURES: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) struct SemanticActionRecorder<'a> {
     storage: &'a mut dyn StorageBackend,
@@ -33,6 +37,20 @@ impl<'a> SemanticActionRecorder<'a> {
         self.storage.upsert_file_path_sets(batch.file_path_sets())?;
         self.storage
             .upsert_llm_request_contents(batch.llm_request_contents())?;
+        if let Err(error) = self
+            .storage
+            .upsert_llm_request_lineages(batch.llm_request_lineages())
+        {
+            let failure_count = LINEAGE_PERSISTENCE_FAILURES
+                .fetch_add(1, Ordering::Relaxed)
+                .saturating_add(1);
+            if failure_count.is_power_of_two() {
+                eprintln!(
+                    "warning: LLM request lineage persistence failed locally: failures={} stage={} message={}",
+                    failure_count, error.stage, error.message
+                );
+            }
+        }
         self.storage
             .upsert_mcp_jsonrpc_contents(batch.mcp_jsonrpc_contents())?;
         Ok(())

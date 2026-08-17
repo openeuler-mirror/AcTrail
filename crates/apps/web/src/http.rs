@@ -492,6 +492,32 @@ fn route_cluster_trace_api(
                 }
             }
         }
+        [trace_id, "actions", action_id, "lineage", "llm-request"] => {
+            let trace_id = parse_u64(trace_id);
+            let action_id = percent_decode(action_id);
+            match (trace_id, action_id) {
+                (Ok(trace_id), Ok(action_id)) => {
+                    view::cluster::llm_request_lineage_json(cluster_root, trace_id, &action_id)
+                        .map(Response::json)
+                        .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error)))
+                }
+                (Err(error), _) | (_, Err(error)) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
+            }
+        }
+        [trace_id, "llm-trajectories", trajectory_id] => {
+            let trace_id = parse_u64(trace_id);
+            let trajectory_id = percent_decode(trajectory_id);
+            match (trace_id, trajectory_id) {
+                (Ok(trace_id), Ok(trajectory_id)) => view::cluster::llm_request_trajectory_json(
+                    cluster_root,
+                    trace_id,
+                    &trajectory_id,
+                )
+                .map(Response::json)
+                .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
+                (Err(error), _) | (_, Err(error)) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
+            }
+        }
         [
             trace_id,
             "actions",
@@ -653,6 +679,30 @@ fn route_trace_api(path: &str, query: &str, storage: &StorageConfig) -> Result<R
                 (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
                     Ok(Response::text(STATUS_BAD_REQUEST, error))
                 }
+            }
+        }
+        [trace_id, "actions", action_id, "lineage", "llm-request"] => {
+            let trace_id = parse_u64(trace_id);
+            let action_id = percent_decode(action_id);
+            match (trace_id, action_id) {
+                (Ok(trace_id), Ok(action_id)) => {
+                    view::action_llm_request_lineage_json(storage, trace_id, &action_id)
+                        .map(Response::json)
+                        .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error)))
+                }
+                (Err(error), _) | (_, Err(error)) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
+            }
+        }
+        [trace_id, "llm-trajectories", trajectory_id] => {
+            let trace_id = parse_u64(trace_id);
+            let trajectory_id = percent_decode(trajectory_id);
+            match (trace_id, trajectory_id) {
+                (Ok(trace_id), Ok(trajectory_id)) => {
+                    view::llm_request_trajectory_json(storage, trace_id, &trajectory_id)
+                        .map(Response::json)
+                        .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error)))
+                }
+                (Err(error), _) | (_, Err(error)) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
             }
         }
         [trace_id, "actions", action_id, "content", "mcp-jsonrpc"] => {

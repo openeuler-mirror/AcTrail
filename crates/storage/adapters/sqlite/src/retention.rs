@@ -222,6 +222,14 @@ impl RetentionStore for SqliteStorage {
             })?;
         transaction
             .execute(
+                "DELETE FROM llm_request_lineage WHERE trace_id = ?1",
+                params![trace_id.get()],
+            )
+            .map_err(|error| {
+                RetentionError::new("delete_llm_request_lineage", error.to_string())
+            })?;
+        transaction
+            .execute(
                 "DELETE FROM semantic_actions WHERE trace_id = ?1",
                 params![trace_id.get()],
             )

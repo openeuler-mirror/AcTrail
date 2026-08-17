@@ -40,10 +40,17 @@ pub use crate::retention::{
     DEFAULT_STORAGE_RETENTION_TRACES_PER_SWEEP, StorageRetentionConfig,
 };
 pub use agent::{
-    AgentInvocationConfig, Http2DataContentRetention, HttpBodyRetention, HttpHeadersRetention,
-    L0LlmCallRetention, L0McpCallRetention, L1SseRetention, L2HttpRetention, L3Http2FrameRetention,
-    L4PayloadRetention, LlmRequestContentRetention, LlmResponseContentRetention,
-    LlmToolCallRetention, LlmUsageRetention, McpJsonRpcContentRetention,
+    AgentInvocationConfig, DEFAULT_LLM_TRAJECTORY_IDLE_TTL,
+    DEFAULT_LLM_TRAJECTORY_MAX_ACTIVE_TRAJECTORIES_PER_SCOPE,
+    DEFAULT_LLM_TRAJECTORY_MAX_BLOCKS_PER_ATOM,
+    DEFAULT_LLM_TRAJECTORY_MAX_CANDIDATE_NODES_PER_TRAJECTORY,
+    DEFAULT_LLM_TRAJECTORY_MAX_HISTORY_ATOMS_PER_REQUEST,
+    DEFAULT_LLM_TRAJECTORY_MAX_PREFIX_NODES_PER_SCOPE,
+    DEFAULT_LLM_TRAJECTORY_MAX_STRUCTURAL_BYTES_PER_ATOM, Http2DataContentRetention,
+    HttpBodyRetention, HttpHeadersRetention, L0LlmCallRetention, L0McpCallRetention,
+    L1SseRetention, L2HttpRetention, L3Http2FrameRetention, L4PayloadRetention,
+    LlmRequestContentRetention, LlmResponseContentRetention, LlmToolCallRetention,
+    LlmTrajectoryConfig, LlmUsageRetention, McpJsonRpcContentRetention,
     PayloadBodyContentRetention, SemanticContentOwner, SemanticRetentionConfig,
     SseEventContentRetention,
 };

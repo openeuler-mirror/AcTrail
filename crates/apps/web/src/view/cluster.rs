@@ -270,6 +270,33 @@ pub fn llm_request_content_json(
     Ok("{\"content\":null}".to_string())
 }
 
+pub fn llm_request_lineage_json(
+    root: &Path,
+    trace_id: u64,
+    action_id: &str,
+) -> Result<String, String> {
+    let row = row_by_ui_id(root, trace_id)?;
+    if let Some((storage, local_trace_id)) = sqlite_storage_for_row(&row)? {
+        return super::action_llm_request_lineage_json(&storage, local_trace_id, action_id);
+    }
+    Ok("{\"lineage\":null,\"forks\":[]}".to_string())
+}
+
+pub fn llm_request_trajectory_json(
+    root: &Path,
+    trace_id: u64,
+    trajectory_id: &str,
+) -> Result<String, String> {
+    let row = row_by_ui_id(root, trace_id)?;
+    if let Some((storage, local_trace_id)) = sqlite_storage_for_row(&row)? {
+        return super::llm_request_trajectory_json(&storage, local_trace_id, trajectory_id);
+    }
+    Ok(format!(
+        "{{\"trajectory_id\":{},\"nodes\":[]}}",
+        json::string(trajectory_id)
+    ))
+}
+
 pub fn llm_request_content_node_json(
     root: &Path,
     trace_id: u64,

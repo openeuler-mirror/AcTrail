@@ -1,4 +1,5 @@
 use super::*;
+use crate::daemon::agent::DEFAULT_LLM_WEBSOCKET_MAX_CONNECTIONS_PER_PROCESS;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
@@ -44,6 +45,10 @@ impl SemanticRetentionDocument {
                     .to_string(),
                 usage: llm_usage_retention_as_str(config.l0_llm_call.usage).to_string(),
                 retain_assembled_payload: config.l0_llm_call.retain_assembled_payload,
+                websocket_max_connections_per_process: config
+                    .l0_llm_call
+                    .websocket_max_connections_per_process,
+                trajectory: LlmTrajectoryDocument::from_config(&config.l0_llm_call.trajectory),
             },
             l0_mcp_call: L0McpCallDocument {
                 request_content: mcp_jsonrpc_content_retention_as_str(
@@ -137,6 +142,8 @@ pub(super) struct L0LlmCallDocument {
     pub tool_calls: String,
     pub usage: String,
     pub retain_assembled_payload: bool,
+    pub websocket_max_connections_per_process: u32,
+    pub trajectory: LlmTrajectoryDocument,
 }
 
 impl Default for L0LlmCallDocument {
@@ -148,6 +155,9 @@ impl Default for L0LlmCallDocument {
             tool_calls: "assembled_json".to_string(),
             usage: "summary".to_string(),
             retain_assembled_payload: false,
+            websocket_max_connections_per_process:
+                DEFAULT_LLM_WEBSOCKET_MAX_CONNECTIONS_PER_PROCESS,
+            trajectory: LlmTrajectoryDocument::default(),
         }
     }
 }
@@ -170,6 +180,79 @@ impl L0LlmCallDocument {
             )?,
             usage: parse_value("semantic_retention.l0_llm_call.usage", &self.usage)?,
             retain_assembled_payload: self.retain_assembled_payload,
+            websocket_max_connections_per_process: require_positive_u32(
+                "semantic_retention.l0_llm_call.websocket_max_connections_per_process",
+                self.websocket_max_connections_per_process,
+            )?,
+            trajectory: self.trajectory.to_config()?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct LlmTrajectoryDocument {
+    pub enabled: bool,
+    pub max_active_trajectories_per_scope: u32,
+    pub max_candidate_nodes_per_trajectory: u32,
+    pub max_prefix_nodes_per_scope: u32,
+    pub max_history_atoms_per_request: u32,
+    pub max_blocks_per_atom: u32,
+    pub max_structural_bytes_per_atom: u32,
+    pub idle_ttl: String,
+}
+
+impl Default for LlmTrajectoryDocument {
+    fn default() -> Self {
+        Self::from_config(&LlmTrajectoryConfig::default())
+    }
+}
+
+impl LlmTrajectoryDocument {
+    fn from_config(config: &LlmTrajectoryConfig) -> Self {
+        Self {
+            enabled: config.enabled,
+            max_active_trajectories_per_scope: config.max_active_trajectories_per_scope,
+            max_candidate_nodes_per_trajectory: config.max_candidate_nodes_per_trajectory,
+            max_prefix_nodes_per_scope: config.max_prefix_nodes_per_scope,
+            max_history_atoms_per_request: config.max_history_atoms_per_request,
+            max_blocks_per_atom: config.max_blocks_per_atom,
+            max_structural_bytes_per_atom: config.max_structural_bytes_per_atom,
+            idle_ttl: duration_as_string(config.idle_ttl),
+        }
+    }
+
+    fn to_config(&self) -> Result<LlmTrajectoryConfig, String> {
+        Ok(LlmTrajectoryConfig {
+            enabled: self.enabled,
+            max_active_trajectories_per_scope: require_positive_u32(
+                "semantic_retention.l0_llm_call.trajectory.max_active_trajectories_per_scope",
+                self.max_active_trajectories_per_scope,
+            )?,
+            max_candidate_nodes_per_trajectory: require_positive_u32(
+                "semantic_retention.l0_llm_call.trajectory.max_candidate_nodes_per_trajectory",
+                self.max_candidate_nodes_per_trajectory,
+            )?,
+            max_prefix_nodes_per_scope: require_positive_u32(
+                "semantic_retention.l0_llm_call.trajectory.max_prefix_nodes_per_scope",
+                self.max_prefix_nodes_per_scope,
+            )?,
+            max_history_atoms_per_request: require_positive_u32(
+                "semantic_retention.l0_llm_call.trajectory.max_history_atoms_per_request",
+                self.max_history_atoms_per_request,
+            )?,
+            max_blocks_per_atom: require_positive_u32(
+                "semantic_retention.l0_llm_call.trajectory.max_blocks_per_atom",
+                self.max_blocks_per_atom,
+            )?,
+            max_structural_bytes_per_atom: require_positive_u32(
+                "semantic_retention.l0_llm_call.trajectory.max_structural_bytes_per_atom",
+                self.max_structural_bytes_per_atom,
+            )?,
+            idle_ttl: parse_required_duration(
+                "semantic_retention.l0_llm_call.trajectory.idle_ttl",
+                &self.idle_ttl,
+            )?,
         })
     }
 }

@@ -31,8 +31,7 @@ class ProbeCodexLLMTask:
 
     def _command(self) -> list[Path | str]:
         return [
-            self._runtime.actrailctl,
-            "launch",
+            *self._runtime.control_command("launch"),
             "--",
             self._codex,
             "exec",

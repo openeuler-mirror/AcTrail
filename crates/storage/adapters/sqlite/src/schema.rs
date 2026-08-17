@@ -285,6 +285,20 @@ CREATE TABLE IF NOT EXISTS llm_request_block_refs (
     PRIMARY KEY (manifest_id, ordinal)
 ) WITHOUT ROWID;
 
+CREATE TABLE IF NOT EXISTS llm_request_lineage (
+    action_key INTEGER PRIMARY KEY,
+    trace_id INTEGER NOT NULL,
+    trajectory_root_action_key INTEGER NOT NULL,
+    parent_action_key INTEGER,
+    forked_from_action_key INTEGER,
+    trajectory_position INTEGER NOT NULL,
+    transition_code INTEGER NOT NULL,
+    start_reason_code INTEGER NOT NULL,
+    inference_version INTEGER NOT NULL,
+    UNIQUE (trace_id, trajectory_root_action_key, trajectory_position),
+    UNIQUE (parent_action_key)
+);
+
 CREATE TABLE IF NOT EXISTS mcp_jsonrpc_messages (
     message_id INTEGER PRIMARY KEY,
     trace_id INTEGER NOT NULL,
@@ -367,6 +381,16 @@ CREATE INDEX IF NOT EXISTS idx_file_path_set_action_refs_path_set ON file_path_s
 CREATE INDEX IF NOT EXISTS idx_mcp_jsonrpc_action_refs_message ON mcp_jsonrpc_action_refs (
     trace_id,
     message_id
+);
+
+CREATE INDEX IF NOT EXISTS idx_llm_request_lineage_parent ON llm_request_lineage (
+    trace_id,
+    parent_action_key
+);
+
+CREATE INDEX IF NOT EXISTS idx_llm_request_lineage_fork ON llm_request_lineage (
+    trace_id,
+    forked_from_action_key
 );
 
 "#;
@@ -476,6 +500,18 @@ fn validate_current_schema(connection: &Connection) -> Result<(), rusqlite::Erro
     require_column(connection, "llm_request_manifests", "action_key")?;
     require_column(connection, "llm_request_blocks", "block_id")?;
     require_column(connection, "llm_request_block_refs", "manifest_id")?;
+    require_column(connection, "llm_request_lineage", "action_key")?;
+    require_column(
+        connection,
+        "llm_request_lineage",
+        "trajectory_root_action_key",
+    )?;
+    require_column(connection, "llm_request_lineage", "parent_action_key")?;
+    require_column(connection, "llm_request_lineage", "forked_from_action_key")?;
+    require_column(connection, "llm_request_lineage", "trajectory_position")?;
+    require_column(connection, "llm_request_lineage", "transition_code")?;
+    require_column(connection, "llm_request_lineage", "start_reason_code")?;
+    require_column(connection, "llm_request_lineage", "inference_version")?;
     require_column(connection, "mcp_jsonrpc_messages", "message_id")?;
     require_column(connection, "mcp_jsonrpc_messages", "canonical_json_hash")?;
     require_column(connection, "mcp_jsonrpc_messages", "canonical_json_bytes")?;

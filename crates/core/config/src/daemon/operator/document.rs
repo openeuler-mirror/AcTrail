@@ -30,7 +30,7 @@ use super::super::{
     FsEnumerateObservationConfig, Http2DataContentRetention, HttpBodyRetention,
     HttpHeadersRetention, IpcLineageConfig, L0LlmCallRetention, L0McpCallRetention, L1SseRetention,
     L2HttpRetention, L3Http2FrameRetention, L4PayloadRetention, LlmRequestContentRetention,
-    LlmResponseContentRetention, LlmToolCallRetention, LlmUsageRetention,
+    LlmResponseContentRetention, LlmToolCallRetention, LlmTrajectoryConfig, LlmUsageRetention,
     MAX_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS, McpJsonRpcContentRetention, MemlockRlimit,
     NetworkControlConfig, NetworkControlSeccompSyscall, PayloadBodyContentRetention, PayloadConfig,
     PayloadMcpConfig, PayloadRedactionPolicy, PayloadSocketCaptureBackend, PayloadSocketConfig,
