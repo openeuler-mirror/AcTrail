@@ -9,6 +9,7 @@ use crate::SqliteStorage;
 use crate::semantic_actions::codebook::sqlite::action_kind_code_from_str;
 use crate::semantic_actions::store::{
     ACTION_SELECT_COLUMNS, action_cold_field_join, action_from_row, read_evidence_shared,
+    resolve_file_paths,
 };
 
 impl SqliteStorage {
@@ -63,6 +64,7 @@ impl SqliteStorage {
                 )
             })?;
             action.evidence = read_evidence_shared(&connection, &action.action_id)?;
+            resolve_file_paths(&connection, &mut action)?;
             actions.push(action);
         }
         Ok(actions)

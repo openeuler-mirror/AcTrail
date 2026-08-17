@@ -110,6 +110,7 @@ pub(crate) struct StorageAttachService {
     pub(super) payload_socket_retention_max_bytes_per_trace: u64,
     pub(super) socket_payload_gate: SocketHttpPayloadGate,
     pub(super) payload_body_retention_gate: PayloadBodyRetentionGate,
+    pub(super) payload_reorderer: crate::services::payload::reorder::PayloadSegmentReorderer,
     pub(super) seccomp_notify: SeccompNotifyService,
     pub(super) seccomp_tls: SeccompTlsService,
     pub(super) tls_sync: TlsSyncService,

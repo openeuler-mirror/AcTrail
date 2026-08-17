@@ -41,6 +41,8 @@ static long (*bpf_map_update_elem)(void *map, const void *key, const void *value
     (void *)BPF_FUNC_map_update_elem;
 static long (*bpf_map_delete_elem)(void *map, const void *key) = (void *)BPF_FUNC_map_delete_elem;
 static __u64 (*bpf_get_current_pid_tgid)(void) = (void *)BPF_FUNC_get_current_pid_tgid;
+static struct task_struct *(*actrail_bpf_get_current_task)(void) =
+    (void *)BPF_FUNC_get_current_task;
 static long (*bpf_get_current_comm)(void *buf, __u32 size_of_buf) =
     (void *)BPF_FUNC_get_current_comm;
 static __u64 (*bpf_ktime_get_ns)(void) = (void *)BPF_FUNC_ktime_get_ns;

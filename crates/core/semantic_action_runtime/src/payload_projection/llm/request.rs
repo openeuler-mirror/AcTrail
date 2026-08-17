@@ -68,7 +68,6 @@ pub(super) fn project_stream_llm_request_action(
             process: first.process.clone(),
             status: llm_status(segments),
             completeness: llm_stream_completeness(segments),
-            confidence_millis: None,
             attributes,
             evidence,
         },

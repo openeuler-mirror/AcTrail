@@ -107,6 +107,13 @@ pub(super) fn render_events(events: Vec<DomainEvent>, row_limit: Option<RowLimit
     render_table(table, "no events")
 }
 
+pub(super) fn render_events_json(
+    events: Vec<DomainEvent>,
+    row_limit: Option<RowLimit>,
+) -> Result<String, String> {
+    json::render_events(limit_vec(events, row_limit))
+}
+
 pub(super) fn render_network(events: Vec<DomainEvent>, row_limit: Option<RowLimit>) -> String {
     network::render_network(events, row_limit)
 }

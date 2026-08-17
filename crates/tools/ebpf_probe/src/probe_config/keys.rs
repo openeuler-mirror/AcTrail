@@ -10,6 +10,7 @@ pub(super) fn live_config_keys() -> BTreeSet<&'static str> {
         "memlock_rlimit",
         "tracked_process_max_entries",
         "pending_operation_max_entries",
+        "fd_per_process_max_entries",
         "suppressed_fd_max_entries",
         "suppressed_fd_index_slots_per_process",
         "event_ring_buffer_max_bytes",

@@ -43,24 +43,11 @@ use super::redaction::redact_payload_bytes;
 use super::retention::RetainedPayloadTransaction;
 
 impl StorageAttachService {
-    #[cfg(test)]
-    pub(in crate::services) fn process_payload_segment_impl(
-        &mut self,
-        trace_runtime: &mut TraceRuntime,
-        raw: RawPayloadSegment,
-    ) -> Result<(), ControlError> {
-        self.process_payload_segments_impl(trace_runtime, vec![raw])
-    }
-
     pub(in crate::services) fn process_payload_segments_impl(
         &mut self,
         trace_runtime: &mut TraceRuntime,
         raw_segments: Vec<RawPayloadSegment>,
     ) -> Result<(), ControlError> {
-        if raw_segments.is_empty() {
-            return Ok(());
-        }
-        let raw_segment_count = raw_segments.len();
         let mut admitted = Vec::new();
         for raw in raw_segments {
             admitted.extend(
@@ -69,6 +56,13 @@ impl StorageAttachService {
                     .map_err(|error| ControlError::new("socket_payload_gate", error))?,
             );
         }
+        // Reorder across drain cycles so per-stream byte assembly sees capture
+        // order, not per-CPU delivery order.
+        let admitted = self.payload_reorderer.admit(SystemTime::now(), admitted);
+        if admitted.is_empty() {
+            return Ok(());
+        }
+        let raw_segment_count = admitted.len();
         let mut resolved_segments = Vec::with_capacity(admitted.len());
         let mut process_records = BTreeMap::new();
         let mut membership_trace_ids = BTreeSet::new();
@@ -578,6 +572,7 @@ fn tls_summary_application_draft(segment: &PayloadSegment) -> Option<Application
             protocol,
             operation: operation.to_string(),
             summary: format!("{operation} {} bytes ({reason})", segment.original_size),
+            body: None,
             metadata,
         },
     })

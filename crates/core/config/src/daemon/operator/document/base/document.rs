@@ -506,11 +506,13 @@ pub(super) struct EbpfDocument {
     pub preflight_link_teardown_workers: u32,
     pub tracked_process_max_entries: u32,
     pub pending_operation_max_entries: u32,
+    pub fd_per_process_max_entries: u32,
     pub suppressed_fd_max_entries: u32,
     pub suppressed_fd_index_slots_per_process: u32,
     pub event_ring_buffer_max_bytes: u32,
     pub file_path_capture_enabled: bool,
     pub file_path_max_bytes: u32,
+    pub net_send_recv_aggregation: bool,
     pub ipc_lineage: IpcLineageDocument,
 }
 
@@ -522,11 +524,13 @@ impl Default for EbpfDocument {
             preflight_link_teardown_workers: DEFAULT_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS,
             tracked_process_max_entries: 8192,
             pending_operation_max_entries: 8192,
+            fd_per_process_max_entries: 256,
             suppressed_fd_max_entries: 8192,
             suppressed_fd_index_slots_per_process: 64,
             event_ring_buffer_max_bytes: 33554432,
             file_path_capture_enabled: true,
             file_path_max_bytes: 255,
+            net_send_recv_aggregation: true,
             ipc_lineage: IpcLineageDocument::default(),
         }
     }
@@ -560,6 +564,10 @@ impl EbpfDocument {
             preflight_link_teardown_workers,
             tracked_process_max_entries: self.tracked_process_max_entries,
             pending_operation_max_entries: self.pending_operation_max_entries,
+            fd_per_process_max_entries: require_positive_u32(
+                "ebpf.fd_per_process_max_entries",
+                self.fd_per_process_max_entries,
+            )?,
             suppressed_fd_max_entries: self.suppressed_fd_max_entries,
             suppressed_fd_index_slots_per_process: self.suppressed_fd_index_slots_per_process,
             event_ring_buffer_max_bytes: self.event_ring_buffer_max_bytes,
@@ -568,6 +576,7 @@ impl EbpfDocument {
                 "ebpf.file_path_max_bytes",
                 self.file_path_max_bytes,
             )?,
+            net_send_recv_aggregation: self.net_send_recv_aggregation,
             ipc_lineage: self.ipc_lineage.to_config()?,
         })
     }

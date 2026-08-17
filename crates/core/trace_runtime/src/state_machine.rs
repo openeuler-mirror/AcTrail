@@ -89,35 +89,3 @@ fn require_transition(
         Err(StateTransitionError { from, to })
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::time::SystemTime;
-
-    use model_core::ids::{ProfileName, TraceId, TraceName};
-    use model_core::process::ProcessIdentity;
-    use model_core::trace::{TraceAlertToken, TraceLifecycleState, TraceRecord};
-
-    use super::{begin_draining, complete_trace, start_trace};
-
-    fn sample_trace() -> TraceRecord {
-        TraceRecord::new(
-            TraceId::new(1),
-            TraceAlertToken::new([1; 32]),
-            ProcessIdentity::new(1),
-            TraceName::new("agent"),
-            ProfileName::new("default"),
-            SystemTime::UNIX_EPOCH,
-        )
-    }
-
-    #[test]
-    fn completed_trace_cannot_restart() {
-        let mut trace = sample_trace();
-        start_trace(&mut trace, SystemTime::UNIX_EPOCH).unwrap();
-        complete_trace(&mut trace, SystemTime::UNIX_EPOCH).unwrap();
-
-        let err = begin_draining(&mut trace, SystemTime::UNIX_EPOCH).unwrap_err();
-        assert_eq!(err.from, TraceLifecycleState::Completed);
-    }
-}

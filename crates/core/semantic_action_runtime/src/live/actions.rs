@@ -60,7 +60,6 @@ pub(super) fn process_exec_action(event: &DomainEvent) -> SemanticAction {
         process: event.envelope.process.clone(),
         status: SemanticActionStatus::Success,
         completeness: SemanticActionCompleteness::Complete,
-        confidence_millis: None,
         attributes: process_event_attributes(event),
         evidence: vec![event_evidence(
             event,
@@ -106,7 +105,6 @@ pub(super) fn agent_identity_action(request: &SemanticAction) -> SemanticAction 
         process: request.process.clone(),
         status: SemanticActionStatus::Success,
         completeness: SemanticActionCompleteness::Complete,
-        confidence_millis: None,
         attributes,
         evidence,
     }
@@ -155,7 +153,6 @@ fn exit_action(
         process: event.envelope.process.clone(),
         status: process_exit_status(exit_code),
         completeness: SemanticActionCompleteness::Complete,
-        confidence_millis: None,
         attributes,
         evidence: vec![event_evidence(
             event,
@@ -190,7 +187,6 @@ pub(super) fn process_fork_attempt_action(event: &DomainEvent) -> SemanticAction
         process: event.envelope.process.clone(),
         status: SemanticActionStatus::Success,
         completeness: SemanticActionCompleteness::Complete,
-        confidence_millis: None,
         attributes,
         evidence: vec![event_evidence(event, evidence_roles::process::FORK_ATTEMPT)],
     }
@@ -272,7 +268,6 @@ pub(super) fn file_modify_action(event: &DomainEvent) -> SemanticAction {
         process: event.envelope.process.clone(),
         status: status_from_result(payload.result),
         completeness: SemanticActionCompleteness::Complete,
-        confidence_millis: None,
         attributes,
         evidence: vec![event_evidence(
             event,
@@ -308,7 +303,6 @@ pub(super) fn http_message_action(event: &DomainEvent) -> SemanticAction {
         process: event.envelope.process.clone(),
         status: SemanticActionStatus::Success,
         completeness: SemanticActionCompleteness::Complete,
-        confidence_millis: None,
         attributes,
         evidence: vec![event_evidence(
             event,
@@ -354,7 +348,6 @@ pub(super) fn enforcement_action(event: &DomainEvent) -> SemanticAction {
         process: event.envelope.process.clone(),
         status: enforcement_status(&payload.result),
         completeness: SemanticActionCompleteness::Complete,
-        confidence_millis: None,
         attributes,
         evidence: vec![event_evidence(
             event,

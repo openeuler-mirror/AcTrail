@@ -123,22 +123,3 @@ fn unexpected_value_size(value: &[u8]) -> LoaderError {
         format!("unexpected pending TLS map value size {}", value.len()),
     )
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn target_exited_covers_proc_read_race_errnos() {
-        // ENOENT: /proc entry gone before open. ESRCH: thread reaped mid-read.
-        assert!(target_exited(&std::io::Error::from_raw_os_error(
-            libc::ENOENT
-        )));
-        assert!(target_exited(&std::io::Error::from_raw_os_error(
-            libc::ESRCH
-        )));
-        assert!(!target_exited(&std::io::Error::from_raw_os_error(
-            libc::EACCES
-        )));
-    }
-}

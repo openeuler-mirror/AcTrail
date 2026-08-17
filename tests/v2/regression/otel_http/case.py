@@ -3,12 +3,15 @@ from __future__ import annotations
 import json
 import re
 import secrets
+import sqlite3
 import time
 from collections import Counter
+from pathlib import Path
 from typing import Any
 
 from tests.v2.common.core import TestCase, TestResult, TestStatus
 from tests.v2.common.runner import TestingContextSingleton
+from tests.v2.common.testing_env import AgentBinaryDiscovery
 
 from .config import OtelHttpConfig
 from .environment import OtelHttpEnvironment
@@ -23,7 +26,6 @@ class OtelHttpCase(TestCase):
         "actrail.action.status",
         "actrail.action.completeness",
         "actrail.process.id",
-        "actrail.action.confidence_millis",
         "actrail.action.valid",
         "process.parent.identity_state",
     }
@@ -35,6 +37,26 @@ class OtelHttpCase(TestCase):
     def run(self, test_context: TestingContextSingleton) -> TestResult:
         results: dict[str, TestResult] = {}
         try:
+            discovery = AgentBinaryDiscovery(self._config.repo)
+            xiaoo = discovery.resolve("XIAOO_E2E_BINARY", "xiaoo")
+            if xiaoo is None:
+                return TestResult(
+                    TestStatus.SKIPPED,
+                    "xiaoO executable not found; set XIAOO_E2E_BINARY to its path",
+                )
+            xiaoo_environment = discovery.environment(xiaoo)
+            test_context.report_progress(
+                "agent_availability",
+                "checking xiaoO availability",
+            )
+            if not test_context.check_agent_availability(
+                "xiaoo", xiaoo, xiaoo_environment
+            ):
+                return TestResult(
+                    TestStatus.SKIPPED,
+                    "xiaoO external availability check failed",
+                )
+
             test_context.report_progress(
                 "environment_prepare",
                 "starting actraild, actrailweb, otel-http, and local OTLP receiver",
@@ -53,11 +75,11 @@ class OtelHttpCase(TestCase):
             )
 
             marker = f"OTEL_HTTP_V2_{secrets.token_hex(8)}"
-            trace_id = self._launch(marker)
+            trace_id = self._launch(marker, xiaoo, xiaoo_environment)
             self._wait_for_terminal_trace(trace_id)
             results["source-trace"] = TestResult(
                 TestStatus.PASSED,
-                f"trace-{trace_id} reached a clean terminal state",
+                f"real xiaoO trace-{trace_id} reached a clean terminal state",
             )
 
             if self._marker_spans(marker):
@@ -83,6 +105,11 @@ class OtelHttpCase(TestCase):
             results["metadata-only"] = TestResult(
                 TestStatus.PASSED,
                 "all exported span attributes stayed within structural metadata",
+            )
+            otel_trace_id = self._require_persistent_external_identity(trace_id, spans)
+            results["external-trace-id"] = TestResult(
+                TestStatus.PASSED,
+                f"OTLP traceId {otel_trace_id} matches the persisted 16-byte identity",
             )
             requests = self._require_configured_credential()
             results["request-credential"] = TestResult(
@@ -111,8 +138,14 @@ class OtelHttpCase(TestCase):
             return None
         return self._environment.cleanup()
 
-    def _launch(self, marker: str) -> int:
+    def _launch(
+        self,
+        marker: str,
+        xiaoo: Path,
+        environment: dict[str, str],
+    ) -> int:
         assert self._environment is not None
+        answer_marker = f"A{secrets.token_hex(5)}"
         result = self._environment.runtime.run(
             [
                 *self._environment.runtime.control_command("launch"),
@@ -123,13 +156,26 @@ class OtelHttpCase(TestCase):
                 "--seccomp-notify",
                 "auto",
                 "--",
-                "/bin/true",
+                xiaoo,
+                "--cli",
+                "run",
+                "--no-tools",
+                "--max-turns",
+                "1",
+                "--prompt",
+                f'Reply with exactly "{answer_marker}" and nothing else. Do not use tools.',
             ],
             timeout_seconds=self._config.launch_timeout_seconds,
+            environment=environment,
         )
         if result.returncode != 0:
             raise AssertionError(
                 f"actrailctl launch exited with {result.returncode}: "
+                f"{result.output[-4000:]}"
+            )
+        if answer_marker not in result.stdout:
+            raise AssertionError(
+                f"xiaoO output did not contain answer marker {answer_marker}: "
                 f"{result.output[-4000:]}"
             )
         trace_ids = [int(value) for value in self._TRACE_PATTERN.findall(result.output)]
@@ -138,6 +184,38 @@ class OtelHttpCase(TestCase):
                 f"expected one trace id, found {trace_ids}: {result.output[-4000:]}"
             )
         return trace_ids[0]
+
+    def _require_persistent_external_identity(
+        self,
+        local_trace_id: int,
+        spans: list[dict[str, Any]],
+    ) -> str:
+        wire_ids = {span.get("traceId") for span in spans}
+        if len(wire_ids) != 1:
+            raise AssertionError(f"OTLP spans do not share one traceId: {wire_ids}")
+        wire_id = next(iter(wire_ids))
+        if not isinstance(wire_id, str) or re.fullmatch(r"[0-9a-f]{32}", wire_id) is None:
+            raise AssertionError(f"OTLP traceId is not 32 lowercase hex digits: {wire_id!r}")
+        if wire_id == "0" * 32:
+            raise AssertionError("OTLP traceId must not be all zero")
+        if wire_id == f"{local_trace_id:032x}":
+            raise AssertionError("OTLP traceId still contains the widened local u64 id")
+        if wire_id[12] != "4" or wire_id[16] not in "89ab":
+            raise AssertionError(f"OTLP traceId is not an RFC 4122 UUIDv4 value: {wire_id}")
+
+        database = self._config.work_dir / "data" / "actrail.sqlite"
+        with sqlite3.connect(database) as connection:
+            row = connection.execute(
+                "SELECT lower(hex(otel_trace_id)), length(otel_trace_id) "
+                "FROM traces WHERE trace_id = ?",
+                (local_trace_id,),
+            ).fetchone()
+        if row != (wire_id, 16):
+            raise AssertionError(
+                "OTLP traceId does not match SQLite identity: "
+                f"wire={wire_id}, sqlite={row!r}"
+            )
+        return wire_id
 
     def _wait_for_terminal_trace(self, trace_id: int) -> None:
         last_state = "<missing>"

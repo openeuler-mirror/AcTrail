@@ -80,7 +80,6 @@ pub(super) fn llm_call_from_request_response(
         process: request.process.clone(),
         status,
         completeness,
-        confidence_millis: None,
         attributes,
         evidence,
     }

@@ -95,7 +95,6 @@ pub(super) fn project_stream_llm_response_message_actions(
         process: first.process.clone(),
         status,
         completeness: llm_response_completeness(segments, http.complete, &body),
-        confidence_millis: None,
         attributes,
         evidence,
     };
@@ -149,7 +148,6 @@ pub(super) fn project_raw_chunked_stream_llm_response_actions(
         process: first.process.clone(),
         status,
         completeness: llm_response_completeness(segments, chunked.complete, &body),
-        confidence_millis: None,
         attributes,
         evidence: payload_evidence(segments),
     };
@@ -193,7 +191,6 @@ pub(super) fn project_raw_stream_llm_response_actions(
         process: first.process.clone(),
         status,
         completeness: llm_response_completeness(segments, false, &body),
-        confidence_millis: None,
         attributes,
         evidence: payload_evidence(segments),
     };

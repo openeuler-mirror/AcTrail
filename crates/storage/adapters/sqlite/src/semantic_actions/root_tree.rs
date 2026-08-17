@@ -11,15 +11,14 @@ use semantic_action::{
 };
 
 use crate::SqliteStorage;
-use crate::records::decode_map;
 use crate::semantic_actions::codebook::sqlite::{
     action_kind_code, decode_link_confidence, decode_link_role, link_role_code,
     link_role_code_from_str,
 };
-use crate::semantic_actions::cold_fields::decode_text_from_row;
+use crate::semantic_actions::cold_fields::decode_attributes_from_row;
 use crate::semantic_actions::store::{
     ACTION_SELECT_COLUMNS, LINK_SELECT_COLUMNS, action_cold_field_join, action_from_row,
-    link_cold_field_join, read_link_evidence,
+    link_cold_field_join, read_link_evidence, resolve_file_paths,
 };
 use crate::semantic_actions::tree::SemanticActionChildPageQuery;
 use crate::semantic_actions::tree_metadata::{
@@ -175,9 +174,10 @@ fn read_actions(
         })?;
     let mut actions = BTreeMap::new();
     for row in rows {
-        let action = row.map_err(|error| {
+        let mut action = row.map_err(|error| {
             SemanticActionStoreError::new("map_semantic_action_root_action", error.to_string())
         })?;
+        resolve_file_paths(connection, &mut action)?;
         actions.insert(action.action_id.clone(), action);
     }
     Ok(actions)
@@ -402,7 +402,7 @@ fn root_link_from_row(row: &Row<'_>) -> Result<SemanticActionLink, rusqlite::Err
         confidence: decode_link_confidence(row.get::<_, i64>("confidence_code")?)?,
         valid: row.get("valid")?,
         evidence: Vec::new(),
-        attributes: decode_map(&decode_text_from_row(row, "legacy_attributes")?),
+        attributes: decode_attributes_from_row(row)?,
     })
 }
 

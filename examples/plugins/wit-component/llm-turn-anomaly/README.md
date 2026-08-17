@@ -97,13 +97,3 @@ scripts/install-release.sh
 - 插件清单：[llm-turn-anomaly.plugin.toml](llm-turn-anomaly.plugin.toml)
 
 每种告警在一个 trace 中最多保留一条，多个命中项存放在 `findings` 中。超过 `finding_max_count` 的数量记录在 `truncated_count`。`high_frequency.window_size_ms`、`threshold`、`min_exchanges`，`consecutive_retry.consecutive_count`，`repeated_similar.similarity_window`、`min_repeat_count`，`error_ratio.minimum_exchanges`、`error_ratio_per_mille`，`context_growth.window_size`、`minimum_samples` 以及 `page_size`、`trace_state_max_count`、`finding_max_count` 均受配置约束限制，非法取值会导致插件加载失败。
-
-## 验证
-
-插件核心检测逻辑附带单元测试，在插件目录下执行：
-
-```bash
-cargo test --manifest-path examples/plugins/wit-component/llm-turn-anomaly/tests/Cargo.toml
-```
-
-测试覆盖高频窗口、连续重试分段、相似度容差、错误率阈值、上下文膨胀基线以及配置校验等场景。

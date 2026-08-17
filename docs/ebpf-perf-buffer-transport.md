@@ -98,22 +98,39 @@ perfbuf 路径：
 
 ### Rust 侧
 
-`loader/object.rs` 新增 `EventBuffer`：
+`loader/object.rs` 提供 `EventBuffer`：
 
 - 选择 ringbuf 时包装 `libbpf_rs::RingBuffer`。
 - 自动降级 perfbuf 或 `perf-buffer` feature 强制 perfbuf 时包装 `libbpf_rs::PerfBuffer`。
 - perfbuf 注册 `sample_cb` 收集 raw event，注册 `lost_cb` 统计 perf lost count。
 - perfbuf page 数由既有 `event_ring_buffer_max_bytes` 换算为 2 的幂 page count。
 - perf event array 的 `max_entries` 使用系统 CPU 数量。
+- `build_with_sink` 允许调用方提供 sample 回调，不强制 `Rc` 内部可变性，
+  因此 buffer 可以整体移入专用消费线程。
 
-`loader.rs` 在每次 `poll_events()` 后检查：
+`loader/consumer.rs` 提供专用消费线程 `EventConsumer`。ringbuf/perfbuf 都是
+MPSC，内核 buffer 必须且只能被一个线程 drain，daemon 的重处理（解码、语义投影、
+SQLite 持久化）不能再阻塞内核侧消费：
 
-- perf lost count
-- `event_transport_diagnostics.reserve_fail`
-- `event_transport_diagnostics.output_fail`
-- `event_transport_diagnostics.output_fail_bytes`
+- `EbpfRuntime::from_object` 把 `EventBuffer` 移入 `actrail-ebpf-event-consumer`
+  线程；该线程 `ppoll` 内核 buffer 的 epoll fd，每次就绪或 250ms 看门狗超时后
+  贪婪 `consume()`，把 raw event 按 4096 条 / 2MiB 切为有界 batch，经容量 32 的
+  `sync_channel` 交给主循环。队列满时消费者阻塞，让内核 ring buffer 继续吸收突发。
+- 每条消息携带当前 perf lost 总数；raw 为空但 perf lost 变化时也会发送一条仅含
+  丢失计数的消息，保证丢包不被静默吞掉。
+- 每次入队后通过 eventfd 唤醒 daemon 的 `ppoll` 主循环；主循环 drain 开始时先
+  重置 eventfd 再取消息，避免"先取后清"竞态漏唤醒。
+- `EbpfRuntime::event_poll_fd()` 现在返回这个 wake eventfd，而不是内核 buffer 的
+  epoll fd；runtime 析构时先停消费线程（drop receiver + 写 shutdown eventfd +
+  join），再释放 BPF object。
 
-任何非零值都会返回 `event_transport_loss`，避免生成不完整 trace。
+`loader.rs` 的 `poll_events()` / `flush_transport()` 从队列拉取 raw batch：
+
+- `poll_events()` 拉取后 decode + 因果排序；`flush_transport()` 只拉取不解码，
+  供一轮重处理结束后再次清空队列，缩短饥饿窗口。
+- 每次 drain 后检查 perf lost 总数与 `event_transport_diagnostics` 的
+  `reserve_fail`、`output_fail`、`output_fail_bytes` 等计数器，任何非零都会生成
+  `event_transport_loss` 诊断并标记 trace 降级，避免生成不完整 trace。
 
 ## TLS Payload 说明
 

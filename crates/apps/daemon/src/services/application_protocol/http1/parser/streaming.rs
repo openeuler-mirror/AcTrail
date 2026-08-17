@@ -98,6 +98,7 @@ pub(super) fn sse_event_payloads(
             protocol: "sse".to_string(),
             operation: "event".to_string(),
             summary: event_name,
+            body: None,
             metadata,
         });
     }

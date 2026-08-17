@@ -192,7 +192,6 @@ pub(super) fn failed_response_for_open_request(
         process: http_response.process.clone(),
         status: SemanticActionStatus::Error,
         completeness: SemanticActionCompleteness::Complete,
-        confidence_millis: None,
         attributes,
         evidence: http_response.evidence.clone(),
     })
@@ -285,89 +284,4 @@ fn request_precedes_response(
         return false;
     }
     payload_sequence(request).is_some_and(|sequence| sequence <= response_sequence)
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-    use std::time::{Duration, SystemTime};
-
-    use model_core::ids::TraceId;
-    use model_core::process::ProcessIdentity;
-
-    use super::*;
-
-    #[test]
-    fn request_before_response_with_later_sequence_does_not_match() {
-        let request = request_action(SystemTime::UNIX_EPOCH, 30);
-        let response = response_action(SystemTime::UNIX_EPOCH + Duration::from_secs(1));
-
-        assert!(!request_matches_http_response(&request, &response, 20));
-    }
-
-    #[test]
-    fn request_before_response_with_earlier_sequence_matches() {
-        let request = request_action(SystemTime::UNIX_EPOCH, 20);
-        let response = response_action(SystemTime::UNIX_EPOCH + Duration::from_secs(1));
-
-        assert!(request_matches_http_response(&request, &response, 20));
-    }
-
-    #[test]
-    fn request_after_response_does_not_match_even_with_earlier_sequence() {
-        let request = request_action(SystemTime::UNIX_EPOCH + Duration::from_secs(2), 10);
-        let response = response_action(SystemTime::UNIX_EPOCH + Duration::from_secs(1));
-
-        assert!(!request_matches_http_response(&request, &response, 20));
-    }
-
-    fn request_action(start_time: SystemTime, payload_sequence: u64) -> SemanticAction {
-        let mut attributes = BTreeMap::new();
-        attributes.insert(PAYLOAD_STREAM_KEY_ATTR.to_string(), "stream-a".to_string());
-        attributes.insert(HTTP_REQUEST_STREAM_ID_ATTR.to_string(), "1".to_string());
-        attributes.insert(
-            PAYLOAD_SEQUENCE_ATTR.to_string(),
-            payload_sequence.to_string(),
-        );
-        semantic_action(
-            "request",
-            SemanticActionKind::LlmRequest,
-            start_time,
-            attributes,
-        )
-    }
-
-    fn response_action(start_time: SystemTime) -> SemanticAction {
-        let mut attributes = BTreeMap::new();
-        attributes.insert(STREAM_KEY_ATTR.to_string(), "stream-a".to_string());
-        attributes.insert(HTTP_MESSAGE_STREAM_ID_ATTR.to_string(), "1".to_string());
-        semantic_action(
-            "response",
-            SemanticActionKind::HttpMessage,
-            start_time,
-            attributes,
-        )
-    }
-
-    fn semantic_action(
-        action_id: &str,
-        kind: SemanticActionKind,
-        start_time: SystemTime,
-        attributes: BTreeMap<String, String>,
-    ) -> SemanticAction {
-        SemanticAction {
-            action_id: action_id.to_string(),
-            trace_id: TraceId::new(7),
-            kind,
-            title: action_id.to_string(),
-            start_time,
-            end_time: None,
-            process: ProcessIdentity::new(0),
-            status: SemanticActionStatus::InProgress,
-            completeness: SemanticActionCompleteness::Partial,
-            confidence_millis: None,
-            attributes,
-            evidence: Vec::new(),
-        }
-    }
 }

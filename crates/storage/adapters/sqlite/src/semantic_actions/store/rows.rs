@@ -3,12 +3,12 @@ use model_core::process::ProcessIdentity;
 use rusqlite::Row;
 use semantic_action::{SemanticAction, SemanticActionLink, SemanticEvidence, attr_keys as attrs};
 
-use crate::records::{decode_map, decode_time};
+use crate::records::decode_time;
 use crate::semantic_actions::codebook::sqlite::{
     decode_completeness, decode_evidence_kind, decode_kind, decode_link_confidence,
     decode_link_role, decode_status,
 };
-use crate::semantic_actions::cold_fields::decode_text_from_row;
+use crate::semantic_actions::cold_fields::decode_attributes_from_row;
 
 pub(in crate::semantic_actions) fn action_from_row(
     row: &Row<'_>,
@@ -23,8 +23,7 @@ pub(in crate::semantic_actions) fn action_from_row(
         process: ProcessIdentity::new(row.get("process_id")?),
         status: decode_status(row.get::<_, i64>("status_code")?)?,
         completeness: decode_completeness(row.get::<_, i64>("completeness_code")?)?,
-        confidence_millis: row.get("confidence_millis")?,
-        attributes: decode_map(&decode_text_from_row(row, "legacy_attributes")?),
+        attributes: decode_attributes_from_row(row)?,
         evidence: Vec::new(),
     })
 }
@@ -40,7 +39,7 @@ pub(in crate::semantic_actions) fn evidence_from_row(
 }
 
 pub(super) fn action_link_from_row(row: &Row<'_>) -> Result<SemanticActionLink, rusqlite::Error> {
-    let attributes = decode_map(&decode_text_from_row(row, "legacy_attributes")?);
+    let attributes = decode_attributes_from_row(row)?;
     let valid = row.get::<_, bool>("valid")?
         && !attributes
             .get(attrs::actrail::LINK_VALID)

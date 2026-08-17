@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tests.v2.common.core import CommonTestConfig, TestCaseInputs
+from tests.v2.common.core.loopback_port import resolve_test_port
 
 
 @dataclass(frozen=True)
@@ -52,7 +53,11 @@ class CommandPolicyXiaooConfig(CommonTestConfig):
             web_host=os.environ.get(
                 "COMMAND_POLICY_XIAOO_E2E_WEB_HOST", "127.0.0.1"
             ),
-            web_port=int(os.environ.get("COMMAND_POLICY_XIAOO_E2E_WEB_PORT", "0")),
+            web_port=resolve_test_port(
+                "COMMAND_POLICY_XIAOO_E2E_WEB_PORT",
+                attempts=common.drain_attempts,
+                connect_timeout_seconds=common.drain_interval_seconds,
+            ),
             ready_timeout_seconds=ready_timeout,
             evidence_timeout_seconds=evidence_timeout,
         )

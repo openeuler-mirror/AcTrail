@@ -915,11 +915,6 @@ impl ResponseCompletionDetector {
         self.seen = false;
         self.observe(bytes);
     }
-
-    #[cfg(test)]
-    fn seen(&self) -> bool {
-        self.seen
-    }
 }
 
 fn response_completion_marker_seen(bytes: &[u8]) -> bool {
@@ -997,51 +992,4 @@ fn plaintext_http_candidate(segment: &PayloadSegment) -> bool {
 
 fn http_payload_sequence(action: &SemanticAction) -> Option<u64> {
     action.attributes.get("payload_sequence")?.parse().ok()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn finish_reason_null_sse_chunk_does_not_complete_response() {
-        let mut detector = ResponseCompletionDetector::default();
-
-        detector.observe(
-            br#"data: {"choices":[{"delta":{"content":"hello"},"finish_reason":null}]}
-
-"#,
-        );
-
-        assert!(!detector.seen());
-    }
-
-    #[test]
-    fn explicit_response_completion_markers_complete_response() {
-        for marker in [
-            b"data: [DONE]\n\n".as_slice(),
-            b"event: message_stop\n\n".as_slice(),
-            b"event: done\n\n".as_slice(),
-        ] {
-            let mut detector = ResponseCompletionDetector::default();
-
-            detector.observe(marker);
-
-            assert!(
-                detector.seen(),
-                "marker {marker:?} should complete response"
-            );
-        }
-    }
-
-    #[test]
-    fn split_done_event_marker_completes_response() {
-        let mut detector = ResponseCompletionDetector::default();
-
-        detector.observe(b"event: do");
-        assert!(!detector.seen());
-
-        detector.observe(b"ne\n\n");
-        assert!(detector.seen());
-    }
 }

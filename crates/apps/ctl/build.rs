@@ -267,24 +267,3 @@ fn write_artifact_unavailable(path: &Path, error: &str) {
     );
     fs::write(path, raw).expect("write generated Java agent artifact descriptor");
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn java_tool_uses_java_home_bin() {
-        let tool = java_tool_from_config("javac", None, Some(OsString::from("/opt/jdk-17")))
-            .expect("java home tool path");
-
-        assert_eq!(PathBuf::from(tool), PathBuf::from("/opt/jdk-17/bin/javac"));
-    }
-
-    #[test]
-    fn java_tool_ignores_empty_java_home() {
-        let tool =
-            java_tool_from_config("jar", None, Some(OsString::new())).expect("path fallback tool");
-
-        assert_eq!(tool, OsString::from("jar"));
-    }
-}

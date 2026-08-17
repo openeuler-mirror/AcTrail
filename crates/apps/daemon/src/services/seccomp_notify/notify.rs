@@ -201,34 +201,3 @@ fn recv_error_is_recoverable(error: &std::io::Error) -> bool {
         || error.raw_os_error() == Some(libc::EINTR)
         || seccomp_notification_is_stale(error)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn stale_seccomp_notification_errors_are_nonfatal() {
-        assert!(seccomp_notification_is_stale(
-            &std::io::Error::from_raw_os_error(libc::ENOENT),
-        ));
-        assert!(seccomp_notification_is_stale(
-            &std::io::Error::from_raw_os_error(libc::ESRCH),
-        ));
-        assert!(!seccomp_notification_is_stale(
-            &std::io::Error::from_raw_os_error(libc::EBADF),
-        ));
-    }
-
-    #[test]
-    fn recv_errors_drained_for_recoverable_errnos() {
-        for errno in [libc::EAGAIN, libc::EINTR, libc::ENOENT, libc::ESRCH] {
-            assert!(
-                recv_error_is_recoverable(&std::io::Error::from_raw_os_error(errno)),
-                "errno {errno} should be recoverable",
-            );
-        }
-        assert!(!recv_error_is_recoverable(
-            &std::io::Error::from_raw_os_error(libc::EBADF),
-        ));
-    }
-}

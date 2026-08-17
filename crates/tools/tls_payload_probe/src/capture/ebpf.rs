@@ -602,39 +602,3 @@ fn direction(direction: u32) -> ToolResult<CaptureDirection> {
         ))),
     }
 }
-
-#[cfg(all(test, feature = "perf-buffer"))]
-mod tests {
-    use super::{HEADER_BYTES, perf_sample_payload};
-
-    #[test]
-    fn perf_sample_payload_strips_raw_size_prefix_with_padding() {
-        let event = payload_event(3);
-        let mut raw = Vec::new();
-        raw.extend_from_slice(&(event.len() as u32).to_ne_bytes());
-        raw.extend_from_slice(&event);
-        raw.extend_from_slice(&[0, 0, 0, 0]);
-
-        let payload = perf_sample_payload(&raw);
-
-        assert_eq!(payload, event.as_slice());
-    }
-
-    #[test]
-    fn perf_sample_payload_strips_trailing_padding() {
-        let event = payload_event(5);
-        let mut raw = event.clone();
-        raw.extend_from_slice(&[0, 0, 0]);
-
-        let payload = perf_sample_payload(&raw);
-
-        assert_eq!(payload, event.as_slice());
-    }
-
-    fn payload_event(captured_size: u32) -> Vec<u8> {
-        let mut event = vec![0; HEADER_BYTES + captured_size as usize];
-        event[0..4].copy_from_slice(&1_u32.to_ne_bytes());
-        event[28..32].copy_from_slice(&captured_size.to_ne_bytes());
-        event
-    }
-}

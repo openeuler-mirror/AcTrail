@@ -10,6 +10,7 @@ use crate::records::encode_time;
 use crate::semantic_actions::codebook::sqlite::action_kind_code;
 use crate::semantic_actions::store::{
     ACTION_SELECT_COLUMNS, action_cold_field_join, action_from_row, read_evidence_shared,
+    resolve_file_paths,
 };
 use crate::semantic_actions::tree_metadata::{
     display_parent_link_absence_predicate, display_parent_link_value_count,
@@ -77,6 +78,7 @@ impl SqliteStorage {
                 continue;
             }
             action.evidence = read_evidence_shared(&connection, &action.action_id)?;
+            resolve_file_paths(&connection, &mut action)?;
             children.push(action);
         }
         Ok(children)

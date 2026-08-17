@@ -275,6 +275,7 @@ impl OperatorDocument {
                 preflight_link_teardown_workers: config.ebpf_config.preflight_link_teardown_workers,
                 tracked_process_max_entries: config.ebpf_config.tracked_process_max_entries,
                 pending_operation_max_entries: config.ebpf_config.pending_operation_max_entries,
+                fd_per_process_max_entries: config.ebpf_config.fd_per_process_max_entries,
                 suppressed_fd_max_entries: config.ebpf_config.suppressed_fd_max_entries,
                 suppressed_fd_index_slots_per_process: config
                     .ebpf_config
@@ -282,6 +283,7 @@ impl OperatorDocument {
                 event_ring_buffer_max_bytes: config.ebpf_config.event_ring_buffer_max_bytes,
                 file_path_capture_enabled: config.ebpf_config.file_path_capture_enabled,
                 file_path_max_bytes: config.ebpf_config.file_path_max_bytes,
+                net_send_recv_aggregation: config.ebpf_config.net_send_recv_aggregation,
                 ipc_lineage: IpcLineageDocument::from_config(&config.ebpf_config.ipc_lineage),
             },
             payload: PayloadDocument::from_config(&config.payload_config),

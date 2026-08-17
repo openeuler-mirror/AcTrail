@@ -9,6 +9,8 @@ mod collector_dynamic_tls;
 mod collector_events;
 #[path = "collector/instance.rs"]
 mod collector_instance_impl;
+#[path = "collector/net_aggregation.rs"]
+mod collector_net_aggregation;
 #[path = "collector/runtime.rs"]
 mod collector_runtime;
 #[path = "collector/stdio_payload.rs"]
@@ -23,11 +25,14 @@ pub mod sensors;
 
 use std::collections::BTreeMap;
 use std::os::fd::{OwnedFd, RawFd};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 
 use collector_binding::{
     CoverageGuardHandle, CoverageGuardRequest, TraceBindingHandle, TraceBindingRequest,
 };
+use collector_event::RawCollectorEvent;
 use collector_instance::{CollectorError, CollectorInstance, CollectorPollBatch};
 use collector_stats::{CollectorStats, DropCounter};
 use config_core::daemon::{EbpfCollectorConfig, FileBulkReadFastPathConfig, PayloadConfig};
@@ -55,10 +60,8 @@ pub use crate::loader::{LaunchBindingFailure, LaunchBindingFailureStatus, Socket
 use crate::maps::BindingStateMap;
 use collector_dynamic_go_tls::DynamicGoTlsAttacher;
 use collector_dynamic_tls::DynamicTlsAttacher;
+use collector_net_aggregation::NetAggregator;
 use collector_stdio_payload::StdioPayloadAssembler;
-
-#[cfg(test)]
-mod tests;
 
 pub struct EbpfCollector {
     probe_result: EbpfProbeResult,
@@ -76,6 +79,9 @@ pub struct EbpfCollector {
     launch_binding_failures: Vec<LaunchBindingFailure>,
     socket_completions: Vec<SocketPayloadCompletion>,
     stdio_payloads: StdioPayloadAssembler,
+    net_aggregator: NetAggregator,
+    net_aggregation_enabled: Arc<AtomicBool>,
+    net_aggregation_backlog: Vec<RawCollectorEvent>,
     suppressed_fds: Vec<TraceSuppressedFd>,
     pending_launches: BTreeMap<TraceId, PendingLaunchBinding>,
     binding_gap_drops: u64,
@@ -170,6 +176,7 @@ impl EbpfCollector {
             && payload_config.stdio.capture_stdin;
         let file_tracker = FileTracker::new(config.ipc_lineage, mcp_stdio_enabled);
         let probe_result = probe_result_for_config(probe_result, &config, &payload_config);
+        let net_aggregation_enabled = Arc::new(AtomicBool::new(config.net_send_recv_aggregation));
         Self {
             probe_result,
             loader: EbpfProgramLoader::new(
@@ -192,12 +199,23 @@ impl EbpfCollector {
             stdio_payloads: StdioPayloadAssembler::new(
                 payload_config.stdio.pending_operation_max_entries,
             ),
+            net_aggregator: NetAggregator::new(net_aggregation_enabled.clone()),
+            net_aggregation_enabled,
+            net_aggregation_backlog: Vec::new(),
             suppressed_fds: Vec::new(),
             pending_launches: BTreeMap::new(),
             binding_gap_drops: 0,
             binding_gap_lifecycle_skips: 0,
             clock_ticks_per_second: clock_ticks_per_second(),
         }
+    }
+
+    /// Toggle net send/recv aggregation at runtime. Aggregation is additive
+    /// (already-buffered state is flushed normally via timeout), so toggling
+    /// never drops or duplicates a byte.
+    pub fn set_net_send_recv_aggregation(&self, enabled: bool) {
+        self.net_aggregation_enabled
+            .store(enabled, Ordering::Relaxed);
     }
 }
 

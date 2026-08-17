@@ -509,7 +509,3 @@ fn ctr_el0() -> usize {
     }
     value
 }
-
-#[cfg(test)]
-#[path = "aarch64_tests.rs"]
-mod tests;

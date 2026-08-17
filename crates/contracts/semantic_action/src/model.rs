@@ -226,7 +226,6 @@ pub struct SemanticAction {
     pub process: ProcessIdentity,
     pub status: SemanticActionStatus,
     pub completeness: SemanticActionCompleteness,
-    pub confidence_millis: Option<u16>,
     pub attributes: BTreeMap<String, String>,
     pub evidence: Vec<SemanticEvidence>,
 }

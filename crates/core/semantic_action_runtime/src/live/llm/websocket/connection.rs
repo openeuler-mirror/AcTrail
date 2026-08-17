@@ -191,11 +191,10 @@ impl WebSocketConnection {
     }
 
     fn ensure_response_output(response: &mut Value, output_items: &[Value], text: &str) {
-        let output_has_content = response
-            .get("output")
-            .and_then(Value::as_array)
-            .is_some_and(|output| !output.is_empty());
-        if output_has_content {
+        if let Some(output) = response.get_mut("output").and_then(Value::as_array_mut)
+            && !output.is_empty()
+        {
+            Self::merge_captured_tool_calls(output, output_items);
             return;
         }
         if !output_items.is_empty() {
@@ -211,6 +210,34 @@ impl WebSocketConnection {
                 "text": text
             }]
         }]);
+    }
+
+    fn merge_captured_tool_calls(output: &mut Vec<Value>, captured: &[Value]) {
+        for item in captured.iter().filter(|item| {
+            matches!(
+                item.get("type").and_then(Value::as_str),
+                Some("function_call" | "custom_tool_call")
+            )
+        }) {
+            let duplicate = output
+                .iter()
+                .filter(|existing| {
+                    matches!(
+                        existing.get("type").and_then(Value::as_str),
+                        Some("function_call" | "custom_tool_call")
+                    )
+                })
+                .any(|existing| {
+                    ["call_id", "id"].into_iter().any(|key| {
+                        item.get(key)
+                            .and_then(Value::as_str)
+                            .is_some_and(|id| existing.get(key).and_then(Value::as_str) == Some(id))
+                    }) || existing == item
+                });
+            if !duplicate {
+                output.push(item.clone());
+            }
+        }
     }
 
     fn synthetic_segment(&self, source: &PayloadSegment, bytes: Vec<u8>) -> PayloadSegment {

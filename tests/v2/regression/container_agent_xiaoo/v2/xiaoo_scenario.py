@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import select
@@ -14,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -172,10 +172,6 @@ def main() -> int:
             runtime,
             args.image,
             image_dockerfile,
-            actrailctl,
-            tls_runtime,
-            xiaoo,
-            workload_script,
             args.rebuild_image,
         )
         provider_urls = []
@@ -200,7 +196,15 @@ def main() -> int:
                     image=test_image,
                     name=workload.container_name,
                     labels=(label,),
-                    volumes=(f"{runtime}:{runtime}",),
+                    volumes=(
+                        f"{runtime}:{runtime}",
+                        f"{actrailctl}:/usr/local/bin/actrailctl:ro",
+                        f"{tls_runtime}:"
+                        "/usr/local/bin/libactrail_tls_payload_probe_sync.so:ro",
+                        f"{xiaoo}:/root/.cargo/bin/xiaoo:ro",
+                        f"{workload_script}:"
+                        "/usr/local/bin/actrail-multi-workload:ro",
+                    ),
                     security_options=(docker_seccomp,),
                     user="0:0",
                     network="host",
@@ -322,30 +326,14 @@ def prepare_agent_image(
     runtime: Path,
     base_image: str,
     dockerfile: Path,
-    actrailctl: Path,
-    tls_runtime: Path,
-    xiaoo: Path,
-    workload_script: Path,
     force_rebuild: bool,
 ) -> ContainerImage:
-    sources = {
-        "actrailctl": actrailctl,
-        "libactrail_tls_payload_probe_sync.so": tls_runtime,
-        "xiaoo": xiaoo,
-        "workload.sh": workload_script,
-    }
-    digest = hashlib.sha256()
-    digest.update(base_image.encode("utf-8"))
-    digest.update(dockerfile.read_bytes())
-    for name, source in sorted(sources.items()):
-        digest.update(name.encode("utf-8"))
-        digest.update(source.read_bytes())
-
-    version = digest.hexdigest()[:16]
+    cache_key = zlib.crc32(b"container-agent-xiaoo-runtime-v2\0")
+    cache_key = zlib.crc32(base_image.encode("utf-8"), cache_key)
+    cache_key = zlib.crc32(dockerfile.read_bytes(), cache_key)
+    version = f"runtime-v2-{cache_key:08x}"
     context = runtime / "image"
     context.mkdir()
-    for name, source in sources.items():
-        shutil.copy2(source, context / name)
 
     build = ContainerImage(
         image_name="actrail/container-agent-xiaoo",

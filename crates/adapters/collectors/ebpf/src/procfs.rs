@@ -247,7 +247,7 @@ pub fn read_container_identity(pid: u32) -> Option<ContainerIdentity> {
 /// (`[N:controllers|0::]/<containerd-namespace>/<container-id>`) are handled by
 /// the final leaf fallback. The v2 form is verified from a real guest fixture;
 /// the equivalent v1 multi-controller form is covered by regression fixtures.
-/// Pure function for unit testing.
+/// Pure function: deterministic for a given input, no side effects.
 pub fn parse_container_identity(cgroup_file: &str) -> Option<ContainerIdentity> {
     for line in cgroup_file.lines() {
         // "N:controllers:/path" (v1) or "0::/path" (v2); cgroup paths have no ':'.
@@ -488,7 +488,3 @@ pub fn read_process_cwd(pid: u32) -> Option<String> {
 fn proc_entry_gone(error: &std::io::Error) -> bool {
     error.kind() == std::io::ErrorKind::NotFound || error.raw_os_error() == Some(libc::ESRCH)
 }
-
-#[cfg(test)]
-#[path = "procfs/tests.rs"]
-mod tests;

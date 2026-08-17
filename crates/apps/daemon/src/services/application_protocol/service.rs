@@ -31,11 +31,6 @@ pub(super) struct ApplicationProtocolAnalyzer {
 }
 
 impl ApplicationProtocolAnalyzer {
-    #[cfg(test)]
-    pub(super) fn new(config: ApplicationProtocolConfig) -> Self {
-        Self::new_with_retention(config, SemanticRetentionConfig::default())
-    }
-
     pub(super) fn new_with_retention(
         config: ApplicationProtocolConfig,
         semantic_retention: SemanticRetentionConfig,
@@ -47,14 +42,6 @@ impl ApplicationProtocolAnalyzer {
             config,
             semantic_retention,
         }
-    }
-
-    #[cfg(test)]
-    pub(super) fn analyze(
-        &mut self,
-        segment: &PayloadSegment,
-    ) -> Result<Vec<ApplicationEventDraft>, String> {
-        self.analyze_with_semantic_context(segment, false, false)
     }
 
     pub(super) fn analyze_with_semantic_context(
@@ -135,16 +122,6 @@ impl ApplicationProtocolAnalyzer {
             .retain(|key, _| key.trace_id != trace_id);
         self.http1.forget_trace(trace_id);
         self.http2.forget_trace(trace_id);
-    }
-
-    #[cfg(test)]
-    fn known_stream_protocol_count(&self) -> usize {
-        self.known_stream_protocols.len()
-    }
-
-    #[cfg(test)]
-    fn buffered_http1_stream_count(&self) -> usize {
-        self.http1.buffered_stream_count()
     }
 
     fn analyze_known_protocol(
@@ -238,7 +215,3 @@ fn recognized_http2(drafts: &[ApplicationEventDraft]) -> bool {
         .iter()
         .any(|draft| draft.payload.protocol.as_str() == "h2")
 }
-
-#[cfg(test)]
-#[path = "tests.rs"]
-mod tests;

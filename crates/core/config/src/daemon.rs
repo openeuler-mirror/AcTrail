@@ -272,11 +272,18 @@ pub struct EbpfCollectorConfig {
     pub preflight_link_teardown_workers: u32,
     pub tracked_process_max_entries: u32,
     pub pending_operation_max_entries: u32,
+    /// Maximum simultaneously tracked descriptors for one process. This is
+    /// a dense index capacity and does not limit the numeric fd value.
+    pub fd_per_process_max_entries: u32,
     pub suppressed_fd_max_entries: u32,
     pub suppressed_fd_index_slots_per_process: u32,
     pub event_ring_buffer_max_bytes: u32,
     pub file_path_capture_enabled: bool,
     pub file_path_max_bytes: u32,
+    /// Aggregate per-connection net send/recv events at the collector (default
+    /// on). When enabled, byte totals and event counts are preserved in the
+    /// aggregated record; only the number of emitted events is reduced.
+    pub net_send_recv_aggregation: bool,
     pub ipc_lineage: IpcLineageConfig,
 }
 

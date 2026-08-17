@@ -108,6 +108,10 @@ impl CollectorInstance for EbpfCollector {
     }
 
     fn unbind_trace(&mut self, trace_id: TraceId) -> Result<(), CollectorError> {
+        // Flush any aggregated-but-unflushed net events for this trace into the
+        // backlog so they are emitted on the next poll instead of being dropped.
+        self.net_aggregation_backlog
+            .extend(self.net_aggregator.flush_trace(trace_id));
         self.stdio_payloads.release_trace(trace_id);
         self.cancel_pending_launch(trace_id)?;
         if let Some(runtime) = self.runtime.as_mut() {

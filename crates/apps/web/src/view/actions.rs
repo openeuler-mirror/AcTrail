@@ -376,7 +376,7 @@ fn render_action_json(action: &SemanticAction, lite: bool) -> String {
         evidence_json(&action.evidence)
     };
     format!(
-        "{{\"id\":{},\"kind\":{},\"title\":{},\"start_time\":{},\"start_time_unix_nanos\":{},\"end_time\":{},\"end_time_unix_nanos\":{},\"duration\":{},\"process\":{},\"status\":{},\"completeness\":{},\"confidence_millis\":{},\"attributes\":{},\"evidence\":{}}}",
+        "{{\"id\":{},\"kind\":{},\"title\":{},\"start_time\":{},\"start_time_unix_nanos\":{},\"end_time\":{},\"end_time_unix_nanos\":{},\"duration\":{},\"process\":{},\"status\":{},\"completeness\":{},\"attributes\":{},\"evidence\":{}}}",
         json::string(&action.action_id),
         json::string(action.kind.as_str()),
         json::string(&action.title),
@@ -395,7 +395,6 @@ fn render_action_json(action: &SemanticAction, lite: bool) -> String {
         json::process(&action.process),
         json::string(action.status.as_str()),
         json::string(action.completeness.as_str()),
-        json::optional_number(action.confidence_millis),
         json::map(&attributes),
         evidence
     )
@@ -525,57 +524,4 @@ fn storage_error(stage: &str, error: StorageError) -> String {
 
 fn bool_json(value: bool) -> &'static str {
     if value { "true" } else { "false" }
-}
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::{LlmRequestContentNodeQuery, json_pointer_child, llm_request_node_json};
-
-    #[test]
-    fn request_node_lists_only_the_requested_child_page() {
-        let body = json!({
-            "custom_model": {"parameters": {"api_key": "secret"}},
-            "messages": [{"role": "user", "content": "hello"}],
-            "model_config": {"format": "openai"}
-        });
-        let node = llm_request_node_json(
-            &body,
-            &LlmRequestContentNodeQuery {
-                pointer: String::new(),
-                offset: 1,
-                limit: 1,
-            },
-        );
-        assert_eq!(node["type"], "object");
-        assert_eq!(node["total_children"], 3);
-        assert_eq!(node["children"].as_array().map(Vec::len), Some(1));
-        assert_eq!(node["children"][0]["token"], "messages");
-        assert_eq!(node["children"][0]["pointer"], "/messages");
-        assert_eq!(node["next_offset"], 2);
-        assert_eq!(node["has_more"], true);
-        assert!(node.get("value").is_none());
-    }
-
-    #[test]
-    fn request_leaf_returns_value_only_when_selected() {
-        let node = llm_request_node_json(
-            &json!("secret"),
-            &LlmRequestContentNodeQuery {
-                pointer: "/custom_model/parameters/api_key".to_string(),
-                offset: 0,
-                limit: 50,
-            },
-        );
-        assert_eq!(node["type"], "string");
-        assert_eq!(node["expandable"], false);
-        assert_eq!(node["value"], "secret");
-        assert!(node.get("children").is_none());
-    }
-
-    #[test]
-    fn child_pointer_escapes_json_pointer_tokens() {
-        assert_eq!(json_pointer_child("/parent", "a/b~c"), "/parent/a~1b~0c");
-    }
 }

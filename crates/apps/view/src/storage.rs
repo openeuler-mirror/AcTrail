@@ -57,9 +57,13 @@ pub fn render_storage_view(invocation: ViewInvocation) -> Result<String, String>
             ))
         }
         StorageCommand::Events => {
-            reject_json_output(invocation.output_format, "events")?;
             let snapshot = source::read_snapshot(storage.as_mut(), invocation.trace_id)?;
-            Ok(render::render_events(snapshot.events, invocation.row_limit))
+            Ok(match invocation.output_format {
+                OutputFormat::Table => render::render_events(snapshot.events, invocation.row_limit),
+                OutputFormat::Json => {
+                    render::render_events_json(snapshot.events, invocation.row_limit)?
+                }
+            })
         }
         StorageCommand::Network => {
             reject_json_output(invocation.output_format, "network")?;

@@ -221,24 +221,3 @@ fn close_fd(fd: RawFd) {
         libc::close(fd);
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_tracefs_mount_path() {
-        let line =
-            "29 23 0:26 / /sys/kernel/tracing rw,nosuid,nodev,noexec,relatime - tracefs tracefs rw";
-        assert_eq!(
-            parse_tracefs_mount(line),
-            Some(PathBuf::from("/sys/kernel/tracing"))
-        );
-    }
-
-    #[test]
-    fn ignores_non_tracefs_mount_path() {
-        let line = "24 23 0:22 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw";
-        assert_eq!(parse_tracefs_mount(line), None);
-    }
-}

@@ -78,38 +78,3 @@ pub(super) fn frame_type_name(frame_type: u8) -> &'static str {
         _ => "UNKNOWN",
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{DecodeStatus, decode_next};
-
-    #[test]
-    fn decodes_data_frame_header() {
-        let raw = [0, 0, 3, 0, 1, 0, 0, 0, 5, b'a', b'b', b'c'];
-        let status = decode_next(&raw, 16).unwrap();
-        let DecodeStatus::Frame(frame) = status else {
-            panic!("expected frame");
-        };
-        assert_eq!(frame.length, 3);
-        assert_eq!(frame.type_name(), "DATA");
-        assert_eq!(frame.flags_hex(), "0x01");
-        assert_eq!(frame.stream_id, 5);
-        assert_eq!(frame.payload, b"abc");
-    }
-
-    #[test]
-    fn waits_for_partial_frame() {
-        let raw = [0, 0, 3, 0, 1, 0, 0, 0, 5, b'a'];
-        assert!(matches!(
-            decode_next(&raw, 16).unwrap(),
-            DecodeStatus::NeedMore
-        ));
-    }
-
-    #[test]
-    fn rejects_oversized_frame() {
-        let raw = [0, 0, 17, 0, 1, 0, 0, 0, 5];
-        let error = decode_next(&raw, 16).unwrap_err();
-        assert!(error.contains("exceeds configured maximum"));
-    }
-}

@@ -21,6 +21,9 @@ ROOT = Path(__file__).resolve().parents[3]
 FIXTURE_DIR = ROOT / "tests/plugins/network-action"
 INSTANCE = "wasm.network-deny"
 
+sys.path.insert(0, str(ROOT / "tests" / "process"))
+from action_snapshot import EventSnapshot  # noqa: E402
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -359,23 +362,19 @@ def wait_for_agent_output(process: subprocess.Popen[str], timeout_sec: float) ->
 
 def wait_for_network_control_event(
     actrailctl: Path,
+    actrailviewer: Path,
     config: Path,
-    storage_path: Path,
     expected_endpoint: str,
     attempts: int,
     sleep_sec: float,
 ) -> dict[str, str]:
     for _ in range(attempts):
         run_checked([str(actrailctl), "--config", str(config), "list-traces"])
-        with sqlite3.connect(storage_path) as connection:
-            rows = connection.execute(
-                "select payload_fields from events where trace_id = 1 and payload_variant = 'net'"
-            ).fetchall()
-        for (payload_fields,) in rows:
-            fields = decode_map(payload_fields)
+        for event in EventSnapshot.load(actrailviewer, config, 1).events("net"):
+            fields = event.payload
             if fields.get("remote") != expected_endpoint:
                 continue
-            metadata = decode_map(fields.get("metadata", ""))
+            metadata = fields.get("metadata", {})
             if (
                 metadata.get("subject") == "network-action"
                 and metadata.get("operation") == "connect"
@@ -416,6 +415,7 @@ def main() -> int:
     bin_dir = ROOT / args.bin_dir
     actraild = require_binary(bin_dir, "actraild")
     actrailctl = require_binary(bin_dir, "actrailctl")
+    actrailviewer = require_binary(bin_dir, "actrailviewer")
     agent_script = FIXTURE_DIR / "agent.py"
 
     allowed_server = TcpProbeServer("allowed")
@@ -495,8 +495,8 @@ def main() -> int:
                     raise RuntimeError(f"denied server received data despite plugin denial: {denied_server.accepted!r}")
                 wait_for_network_control_event(
                     actrailctl,
+                    actrailviewer,
                     config,
-                    tmp / "actrail.sqlite",
                     denied_endpoint,
                     args.drain_attempts,
                     args.drain_sleep_sec,
