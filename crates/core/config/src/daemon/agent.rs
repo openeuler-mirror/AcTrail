@@ -74,6 +74,17 @@ impl SemanticRetentionConfig {
             )
     }
 
+    /// Whether the canonical request body is carried on the action for
+    /// export. Configuration validation already guarantees this is only ever
+    /// true alongside `canonical_blocks` request retention.
+    pub fn llm_request_body_export_enabled(&self) -> bool {
+        self.l0_llm_call.enabled
+            && matches!(
+                self.l0_llm_call.request_body_export,
+                LlmRequestBodyExportRetention::CanonicalJson
+            )
+    }
+
     pub fn llm_response_assembled_provider_enabled(&self) -> bool {
         self.l0_llm_call.enabled
             && matches!(
@@ -196,10 +207,16 @@ impl FromStr for SemanticContentOwner {
     }
 }
 
+/// Matches the byte ceiling the Web request-body view already asks storage
+/// for, so an operator who exports bodies gets what the UI would have shown.
+pub const DEFAULT_LLM_REQUEST_BODY_EXPORT_MAX_BYTES: u64 = 128 * 1024;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct L0LlmCallRetention {
     pub enabled: bool,
     pub request_content: LlmRequestContentRetention,
+    pub request_body_export: LlmRequestBodyExportRetention,
+    pub request_body_export_max_bytes: u64,
     pub response_content: LlmResponseContentRetention,
     pub tool_calls: LlmToolCallRetention,
     pub usage: LlmUsageRetention,
@@ -278,6 +295,8 @@ impl Default for L0LlmCallRetention {
         Self {
             enabled: true,
             request_content: LlmRequestContentRetention::CanonicalBlocks,
+            request_body_export: LlmRequestBodyExportRetention::None,
+            request_body_export_max_bytes: DEFAULT_LLM_REQUEST_BODY_EXPORT_MAX_BYTES,
             response_content: LlmResponseContentRetention::AssembledProvider,
             tool_calls: LlmToolCallRetention::AssembledJson,
             usage: LlmUsageRetention::Summary,
@@ -312,6 +331,34 @@ impl FromStr for LlmRequestContentRetention {
             "shape" => Ok(Self::Shape),
             "canonical_blocks" => Ok(Self::CanonicalBlocks),
             other => Err(format!("unsupported LLM request content retention {other}")),
+        }
+    }
+}
+
+/// Whether the canonical request body is carried on the action for export.
+///
+/// Separate from [`LlmRequestContentRetention`], which governs what is kept
+/// locally. A body can be retained without ever leaving the host, and export
+/// is off unless an operator asks for it — `attribute_mode = full` does not
+/// grant it, because what `full` exports today is behavioural metadata while
+/// a request body is the content an agent read.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum LlmRequestBodyExportRetention {
+    #[default]
+    None,
+    CanonicalJson,
+}
+
+impl FromStr for LlmRequestBodyExportRetention {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "none" => Ok(Self::None),
+            "canonical_json" => Ok(Self::CanonicalJson),
+            other => Err(format!(
+                "unsupported LLM request body export retention {other}"
+            )),
         }
     }
 }

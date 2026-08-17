@@ -159,11 +159,15 @@ pub mod llm_call {
 
 pub mod llm_request {
     pub const BACKGROUND_KIND: &str = "llm.request.background_kind";
-    pub const BODY_JSON: &str = "llm.request.body_json";
-    pub const BODY_TEXT: &str = "llm.request.body_text";
     pub const BLOCK_COUNT: &str = "llm.request.block_count";
     pub const CANONICAL_BODY_BYTES: &str = "llm.request.canonical_body_bytes";
+    pub const CANONICAL_BODY_EXPORT_STATE: &str = "llm.request.canonical_body_export_state";
     pub const CANONICAL_BODY_HASH: &str = "llm.request.canonical_body_hash";
+    /// The whole canonical request body, present only when body export is
+    /// enabled. Distinct from the removed inline `body_json`, which carried
+    /// the raw request body: this is the canonicalised content the
+    /// [`CANONICAL_BODY_HASH`] is computed over.
+    pub const CANONICAL_BODY_JSON: &str = "llm.request.canonical_body_json";
     pub const CLASSIFIER_ID: &str = "llm.request.classifier_id";
     pub const CONTENT_FORMAT_VERSION: &str = "llm.request.content_format_version";
     pub const CONTENT_STATE: &str = "llm.request.content_state";

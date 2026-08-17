@@ -14,6 +14,18 @@ drop，但不提供 WAL、at-least-once 或可靠投递保证。
 `llm.request.trajectory_inference_version`，以便只启用 request 导出时仍可观测其
 trajectory 归属；不发送命令行、HTTP/LLM 内容等采集属性。只有 Collector
 及传输链路均受信任且业务确有需要时，才应显式改成 `attribute_mode = "full"`。
+这里的 `full` 只表示“导出 daemon 已经生成的动作属性”，不表示自动生成所有可选内容。
+在 `[action_kinds]` 已允许 `llm.request` 的前提下，请求正文只有以下三个条件同时成立
+才会出境：
+
+1. daemon 的 `semantic_retention.l0_llm_call.request_content = "canonical_blocks"`；
+2. daemon 的 `semantic_retention.l0_llm_call.request_body_export = "canonical_json"`；
+3. 本插件的 `attribute_mode = "full"`。
+
+三个条件分开授权，是为了避免已经使用 `full` 的部署仅因升级就开始外送完整对话、
+工具结果和 agent 读取的文件内容。正文可能包含敏感数据，也会在动作属性中形成一份
+额外副本；启用前应同时评估本地留存、Collector 信任边界和传输安全。正文超过 daemon
+配置的 `request_body_export_max_bytes` 时不会截断发送，而是只导出 `too_large` 状态。
 插件只导出终态 action；同一 action 的 `in_progress` 修订不会形成重复 span。
 
 目录包含：

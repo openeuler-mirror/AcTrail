@@ -6,8 +6,11 @@ endpoint = "http://COLLECTOR_HOST:4318/v1/traces"
 allow_insecure = true
 encoding = "protobuf"
 compression = "none"
-# Only structural action metadata is exported by default. Set this to "full"
-# only when the Collector is trusted to receive captured content attributes.
+# Only structural action metadata is exported by default. "full" exports the
+# attributes the daemon already produced; it does not enable optional content.
+# LLM request bodies also require request_content = "canonical_blocks" and
+# request_body_export = "canonical_json" in the daemon retention config. Use
+# "full" only when the Collector and transport are trusted for captured content.
 attribute_mode = "metadata-only"
 queue_capacity = 1024
 batch_max_spans = 64

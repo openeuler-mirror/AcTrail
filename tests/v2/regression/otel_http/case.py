@@ -28,6 +28,8 @@ class OtelHttpCase(TestCase):
         "actrail.process.id",
         "actrail.action.valid",
         "process.parent.identity_state",
+        "llm.request.trajectory_id",
+        "llm.request.trajectory_inference_version",
     }
 
     def __init__(self, config: OtelHttpConfig):
@@ -68,10 +70,12 @@ class OtelHttpCase(TestCase):
                 "builtin otel-http loaded with editable safe-default schema",
             )
 
-            self._environment.configure_buffered_export()
+            self._environment.configure_buffered_export(
+                {"process.exec", "process.exit", "llm.request"}
+            )
             results["outbound-policy"] = TestResult(
                 TestStatus.PASSED,
-                "explicit process action allow-list and metadata-only mode accepted",
+                "explicit process/request allow-list and metadata-only mode accepted",
             )
 
             marker = f"OTEL_HTTP_V2_{secrets.token_hex(8)}"
@@ -87,13 +91,20 @@ class OtelHttpCase(TestCase):
                     "OTEL/HTTP flushed before batch limits or lifecycle finish"
                 )
             self._environment.finish_buffered_export()
-            spans = self._wait_for_marker_spans(marker)
+            spans = self._wait_for_marker_spans(
+                marker,
+                {"process.exec", "process.exit", "llm.request"},
+            )
             results["shutdown-tail"] = TestResult(
                 TestStatus.PASSED,
                 f"lifecycle finish flushed {len(spans)} buffered span(s)",
             )
 
             counts = self._require_terminal_one_shot(spans)
+            if counts["llm.request"] < 1:
+                raise AssertionError(
+                    "metadata-only OTEL/HTTP round exported no llm.request span"
+                )
             results["terminal-actions"] = TestResult(
                 TestStatus.PASSED,
                 "terminal one-shot counts: "
@@ -104,13 +115,48 @@ class OtelHttpCase(TestCase):
             self._require_metadata_only(spans)
             results["metadata-only"] = TestResult(
                 TestStatus.PASSED,
-                "all exported span attributes stayed within structural metadata",
+                "llm.request and process spans stayed within structural metadata",
             )
             otel_trace_id = self._require_persistent_external_identity(trace_id, spans)
             results["external-trace-id"] = TestResult(
                 TestStatus.PASSED,
                 f"OTLP traceId {otel_trace_id} matches the persisted 16-byte identity",
             )
+
+            self._environment.configure_buffered_export(
+                {"process.exec", "process.exit", "llm.request"},
+                attribute_mode="full",
+            )
+            body_marker = f"REQUEST_BODY_V2_{secrets.token_hex(8)}"
+            full_marker = f"OTEL_HTTP_FULL_V2_{secrets.token_hex(8)}"
+            full_trace_id = self._launch(
+                full_marker,
+                xiaoo,
+                xiaoo_environment,
+                request_marker=body_marker,
+            )
+            self._wait_for_terminal_trace(full_trace_id)
+            if self._marker_spans(full_marker):
+                raise AssertionError(
+                    "full OTEL/HTTP round flushed before lifecycle finish"
+                )
+            self._environment.finish_buffered_export()
+            full_spans = self._wait_for_marker_spans(
+                full_marker,
+                {"process.exec", "process.exit", "llm.request"},
+            )
+            full_counts = self._require_terminal_one_shot(full_spans)
+            if full_counts["llm.request"] < 1:
+                raise AssertionError("full OTEL/HTTP round exported no llm.request span")
+            exported_bodies = self._require_exported_request_body(
+                full_spans,
+                body_marker,
+            )
+            results["request-body-full-export"] = TestResult(
+                TestStatus.PASSED,
+                f"full mode exported {exported_bodies} canonical request body/bodies",
+            )
+
             requests = self._require_configured_credential()
             results["request-credential"] = TestResult(
                 TestStatus.PASSED,
@@ -143,9 +189,17 @@ class OtelHttpCase(TestCase):
         marker: str,
         xiaoo: Path,
         environment: dict[str, str],
+        *,
+        request_marker: str | None = None,
     ) -> int:
         assert self._environment is not None
         answer_marker = f"A{secrets.token_hex(5)}"
+        prompt = ""
+        if request_marker is not None:
+            prompt = f'The opaque request verification marker is "{request_marker}". '
+        prompt += (
+            f'Reply with exactly "{answer_marker}" and nothing else. Do not use tools.'
+        )
         result = self._environment.runtime.run(
             [
                 *self._environment.runtime.control_command("launch"),
@@ -163,7 +217,7 @@ class OtelHttpCase(TestCase):
                 "--max-turns",
                 "1",
                 "--prompt",
-                f'Reply with exactly "{answer_marker}" and nothing else. Do not use tools.',
+                prompt,
             ],
             timeout_seconds=self._config.launch_timeout_seconds,
             environment=environment,
@@ -240,16 +294,21 @@ class OtelHttpCase(TestCase):
             f"trace-{trace_id} did not reach a clean terminal state; last={last_state}"
         )
 
-    def _wait_for_marker_spans(self, marker: str) -> list[dict[str, Any]]:
+    def _wait_for_marker_spans(
+        self,
+        marker: str,
+        required_kinds: set[str],
+    ) -> list[dict[str, Any]]:
         spans: list[dict[str, Any]] = []
         for _ in range(self._config.drain_attempts):
             spans = self._marker_spans(marker)
             kinds = {self._attribute(span, "actrail.action.kind") for span in spans}
-            if {"process.exec", "process.exit"}.issubset(kinds):
+            if required_kinds.issubset(kinds):
                 return spans
             time.sleep(self._config.drain_interval_seconds)
         raise AssertionError(
-            "OTEL/HTTP lifecycle finish did not flush process.exec and process.exit; "
+            "OTEL/HTTP lifecycle finish did not flush required action kinds; "
+            f"required={sorted(required_kinds)}, "
             f"observed={sorted(kind for kind in kinds if kind)}"
         )
 
@@ -355,6 +414,58 @@ class OtelHttpCase(TestCase):
                 "metadata-only OTEL/HTTP exported content attribute(s): "
                 + ", ".join(sorted(unexpected))
             )
+
+    def _require_exported_request_body(
+        self,
+        spans: list[dict[str, Any]],
+        request_marker: str,
+    ) -> int:
+        request_spans = [
+            span
+            for span in spans
+            if self._attribute(span, "actrail.action.kind") == "llm.request"
+        ]
+        matching_bodies = 0
+        for span in request_spans:
+            body_json = self._attribute(span, "llm.request.canonical_body_json")
+            if body_json is None:
+                continue
+            state = self._attribute(
+                span,
+                "llm.request.canonical_body_export_state",
+            )
+            if state != "exported":
+                raise AssertionError(
+                    "OTEL/HTTP request body is present without exported state: "
+                    f"{state!r}"
+                )
+            try:
+                body = json.loads(body_json)
+            except json.JSONDecodeError as error:
+                raise AssertionError(
+                    "OTEL/HTTP canonical request body is not valid JSON"
+                ) from error
+            if self._json_contains_string(body, request_marker):
+                matching_bodies += 1
+        if matching_bodies < 1:
+            raise AssertionError(
+                "full OTEL/HTTP export contained no canonical request body "
+                f"with user marker {request_marker!r}"
+            )
+        return matching_bodies
+
+    @classmethod
+    def _json_contains_string(cls, value: Any, expected: str) -> bool:
+        if isinstance(value, str):
+            return expected in value
+        if isinstance(value, list):
+            return any(cls._json_contains_string(item, expected) for item in value)
+        if isinstance(value, dict):
+            return any(
+                cls._json_contains_string(item, expected)
+                for item in value.values()
+            )
+        return False
 
     def _viewer_json(self, arguments: list[str]) -> dict[str, Any]:
         assert self._environment is not None

@@ -188,8 +188,6 @@ def require_http_llm_span(document: dict, marker: str, model: str) -> None:
             and attrs.get("llm.request.canonical_body_hash")
             and attrs.get("llm.request.block_count")
             and marker in attrs.get("llm.request.message_preview", "")
-            and not attrs.get("llm.request.body_json")
-            and not attrs.get("llm.request.body_text")
             and not attrs.get("http.request.body_text")
             and not attrs.get("http.request.body_json")
         ):

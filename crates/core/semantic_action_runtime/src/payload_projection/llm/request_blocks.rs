@@ -20,11 +20,20 @@ pub(super) const FORMAT_VERSION: u32 = 2;
 
 const BLOCK_PLACEHOLDER_KEY: &str = "$actrail_llm_block";
 
+pub(super) struct CanonicalBody {
+    pub(super) json: String,
+    pub(super) hash: String,
+    pub(super) bytes: u64,
+}
+
 pub(super) struct CanonicalRequestContent {
     pub(super) write: LlmRequestContentWrite,
     pub(crate) trajectory_history: Option<TrajectoryHistoryProjection>,
-    pub(super) canonical_body_hash: String,
-    pub(super) canonical_body_bytes: u64,
+    /// The canonicalised body together with the hash and size derived from its
+    /// exact bytes. Carried out so body export can put those same bytes on the
+    /// action; the caller retains the hash and size but drops the JSON unless
+    /// export is enabled.
+    pub(super) canonical_body: CanonicalBody,
     pub(super) block_count: usize,
     pub(super) message_preview: Option<String>,
     pub(super) user_message_count: usize,
@@ -51,9 +60,9 @@ pub(super) fn canonical_request_content(
     project_trajectory_history: bool,
 ) -> Result<CanonicalRequestContent, String> {
     let user_messages = user_message_metadata(body);
-    let canonical_body = canonical_json_bytes(body);
-    let canonical_body_hash = sha256_hex(&canonical_body);
-    let canonical_body_bytes = canonical_body.len() as u64;
+    let canonical_body_json = canonical_json_string(body);
+    let canonical_body_hash = sha256_hex(canonical_body_json.as_bytes());
+    let canonical_body_bytes = canonical_body_json.len() as u64;
     let mut accumulator = BlockAccumulator::new(trace_id, action_id);
     let (skeleton, trajectory_history) =
         skeletonize_body(body, &mut accumulator, project_trajectory_history)?;
@@ -75,8 +84,11 @@ pub(super) fn canonical_request_content(
             blocks,
         },
         trajectory_history,
-        canonical_body_hash,
-        canonical_body_bytes,
+        canonical_body: CanonicalBody {
+            json: canonical_body_json,
+            hash: canonical_body_hash,
+            bytes: canonical_body_bytes,
+        },
         block_count,
         message_preview: message_preview(body),
         user_message_count: user_messages.count,

@@ -37,9 +37,32 @@ sudo vi /etc/actrail/plugins/otel-http/otel-http.config.toml
 | --- | --- | --- |
 | `endpoint` | `http://COLLECTOR_HOST:4318/v1/traces` | 占位地址，**必须**换成真实 Collector |
 | `allow_insecure` | `true` | 明文 endpoint 必须显式为 `true`；`https://` 时设为 `false` |
-| `attribute_mode` | `metadata-only` | 只发结构化元数据，不发命令行和 HTTP/LLM 内容；`llm.request` 会保留 trajectory ID 与推断版本；改成 `full` 前需确认 Collector 与链路可信 |
+| `attribute_mode` | `metadata-only` | 只发结构化元数据，不发命令行和 HTTP/LLM 内容；`llm.request` 仍保留 trajectory ID 与推断版本。`full` 只导出 daemon 已生成的动作属性，不会自动开启可选内容，且仅适用于可信 Collector 与链路 |
 | `[action_kinds]` | `default = false` | 未列出的类型一律不发。模板已预开 `process.exec/exit`、`agent.*`、`llm.*`、`mcp.*`、`enforcement.decision`、`command.invocation`；`file.*`、`fs.enumerate`、`http.message`、`sse.*` 默认关闭 |
 | `tls_client_cert_path` / `tls_client_key_path` | 注释 | mTLS 两者必须同时配置；为明文 endpoint 配置 TLS 文件会被拒绝 |
+
+### LLM 请求正文的三重授权
+
+在 `[action_kinds]` 已允许 `llm.request` 的前提下，请求正文出境还要求三个条件同时
+成立：
+
+```toml
+# daemon operator config
+[semantic_retention.l0_llm_call]
+request_content = "canonical_blocks"
+request_body_export = "canonical_json"
+# 可选；正文超过该规范化 UTF-8 字节上限时不发送，只标记 too_large
+request_body_export_max_bytes = 131072
+
+# otel-http plugin config
+attribute_mode = "full"
+```
+
+`request_content` 允许 daemon 保存可重建正文，`request_body_export` 才让它在动作属性中
+产生完整正文副本，`attribute_mode` 决定这些已产生的属性能否离开 daemon。把三层分开
+是为了让已有 `full` 部署升级后仍保持原出境范围；否则升级本身就会开始外送完整对话、
+工具结果和 agent 读取的文件内容。启用前应确认额外本地副本符合留存政策，Collector
+和传输链路能承载敏感内容，并按接收端上限设置 `request_body_export_max_bytes`。
 
 ## 步骤 2：加载
 

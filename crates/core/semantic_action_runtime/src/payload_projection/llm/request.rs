@@ -118,11 +118,37 @@ struct RequestContentProjection {
     trajectory_history: Option<TrajectoryHistoryProjection>,
 }
 
+enum CanonicalBodyExport {
+    Exported(String),
+    TooLarge,
+}
+
+impl CanonicalBodyExport {
+    fn state_attribute_value(&self) -> &'static str {
+        match self {
+            Self::Exported(_) => "exported",
+            Self::TooLarge => "too_large",
+        }
+    }
+
+    fn body_json(&self) -> Option<&str> {
+        match self {
+            Self::Exported(body_json) => Some(body_json),
+            Self::TooLarge => None,
+        }
+    }
+}
+
+struct CanonicalBodyMetadata {
+    hash: String,
+    bytes: u64,
+    export: Option<CanonicalBodyExport>,
+}
+
 struct RequestContentMetadata {
     state: &'static str,
     format_version: Option<u32>,
-    canonical_body_hash: Option<String>,
-    canonical_body_bytes: Option<u64>,
+    canonical_body: Option<CanonicalBodyMetadata>,
     block_count: Option<usize>,
     message_preview: Option<String>,
     user_message_count: usize,
@@ -150,8 +176,7 @@ fn project_request_content(
             metadata: Some(RequestContentMetadata {
                 state: "none",
                 format_version: None,
-                canonical_body_hash: None,
-                canonical_body_bytes: None,
+                canonical_body: None,
                 block_count: None,
                 message_preview: None,
                 user_message_count: 0,
@@ -170,12 +195,23 @@ fn project_request_content(
                 value,
                 config.llm_trajectory_enabled(),
             )?;
+            let canonical_body_export = config.llm_request_body_export_enabled().then(|| {
+                if content.canonical_body.bytes <= config.l0_llm_call.request_body_export_max_bytes
+                {
+                    CanonicalBodyExport::Exported(content.canonical_body.json.clone())
+                } else {
+                    CanonicalBodyExport::TooLarge
+                }
+            });
             Ok(RequestContentProjection {
                 metadata: Some(RequestContentMetadata {
                     state: "canonical_blocks",
                     format_version: Some(FORMAT_VERSION),
-                    canonical_body_hash: Some(content.canonical_body_hash.clone()),
-                    canonical_body_bytes: Some(content.canonical_body_bytes),
+                    canonical_body: Some(CanonicalBodyMetadata {
+                        hash: content.canonical_body.hash.clone(),
+                        bytes: content.canonical_body.bytes,
+                        export: canonical_body_export,
+                    }),
                     block_count: Some(content.block_count),
                     message_preview: content.message_preview.clone(),
                     user_message_count: content.user_message_count,
@@ -190,21 +226,18 @@ fn project_request_content(
 }
 
 fn shape_projection(body: &LlmRequestBody) -> RequestContentProjection {
-    let (
-        canonical_body_hash,
-        canonical_body_bytes,
-        message_preview,
-        user_messages,
-        background_kind,
-    ) = body
+    let (canonical_body, message_preview, user_messages, background_kind) = body
         .json
         .as_ref()
-        .map_or((None, None, None, None, None), |value| {
+        .map_or((None, None, None, None), |value| {
             let (hash, bytes, preview, user_messages, background_kind) =
                 canonical_shape_metadata(value);
             (
-                Some(hash),
-                Some(bytes),
+                Some(CanonicalBodyMetadata {
+                    hash,
+                    bytes,
+                    export: None,
+                }),
                 preview,
                 Some(user_messages),
                 background_kind,
@@ -216,8 +249,7 @@ fn shape_projection(body: &LlmRequestBody) -> RequestContentProjection {
         metadata: Some(RequestContentMetadata {
             state: "shape",
             format_version: body.json.as_ref().map(|_| FORMAT_VERSION),
-            canonical_body_hash,
-            canonical_body_bytes,
+            canonical_body,
             block_count: None,
             message_preview,
             user_message_count: user_messages
@@ -337,16 +369,26 @@ fn llm_attributes(
                 format_version.to_string(),
             );
         }
-        if let Some(hash) = content.canonical_body_hash.as_deref() {
+        if let Some(canonical_body) = content.canonical_body.as_ref() {
+            if let Some(export) = canonical_body.export.as_ref() {
+                if let Some(body_json) = export.body_json() {
+                    attributes.insert(
+                        attrs::llm_request::CANONICAL_BODY_JSON.to_string(),
+                        body_json.to_string(),
+                    );
+                }
+                attributes.insert(
+                    attrs::llm_request::CANONICAL_BODY_EXPORT_STATE.to_string(),
+                    export.state_attribute_value().to_string(),
+                );
+            }
             attributes.insert(
                 attrs::llm_request::CANONICAL_BODY_HASH.to_string(),
-                hash.to_string(),
+                canonical_body.hash.clone(),
             );
-        }
-        if let Some(bytes) = content.canonical_body_bytes {
             attributes.insert(
                 attrs::llm_request::CANONICAL_BODY_BYTES.to_string(),
-                bytes.to_string(),
+                canonical_body.bytes.to_string(),
             );
         }
         if let Some(block_count) = content.block_count {
@@ -576,4 +618,275 @@ fn llm_stream_action_id(
         key.stream_key,
         message_start
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use config_core::daemon::{LlmRequestBodyExportRetention, SemanticRetentionConfig};
+    use sha2::{Digest, Sha256};
+
+    use crate::payload_projection::testing::HttpRequestFixture;
+
+    use super::super::codec::LlmCodecRegistry;
+    use super::*;
+
+    const REQUEST_BODY: &str =
+        r#"{"model":"claude-opus-4","messages":[{"role":"user","content":"hi"}]}"#;
+    const SPACED_REQUEST_BODY: &str =
+        r#"{ "model": "claude-opus-4", "messages": [{ "role": "user", "content": "hi" }] }"#;
+
+    /// Guards the seam rather than a behaviour: `llm_attributes` takes a
+    /// payload segment whose two dozen fields none of these attributes depend
+    /// on, and before the builder existed that made the function untestable.
+    #[test]
+    fn request_attribute_assembly_reports_model_and_payload_size() {
+        let fixture = HttpRequestFixture::llm_json(REQUEST_BODY);
+        let segment = fixture.segment_builder().stream_key("tls:7:99").build();
+        let body = parse_llm_request_body(&fixture.parts, &LlmCodecRegistry::default())
+            .expect("LLM request body parses");
+
+        let attributes = llm_attributes(
+            &SemanticRetentionConfig::default(),
+            &[&segment],
+            &fixture.raw,
+            &fixture.parts,
+            &body,
+            None,
+        );
+
+        assert_eq!(
+            attributes
+                .get(attrs::llm_request::MODEL)
+                .map(String::as_str),
+            Some("claude-opus-4")
+        );
+        assert_eq!(
+            attributes
+                .get(attrs::llm_request::CLASSIFIER_ID)
+                .map(String::as_str),
+            Some("structured-json-sse")
+        );
+        assert_eq!(
+            attributes
+                .get(attrs::llm_request::PAYLOAD_BYTES)
+                .map(String::as_str),
+            Some(REQUEST_BODY.len().to_string().as_str())
+        );
+        assert_eq!(
+            attributes
+                .get(attrs::http_request::METHOD)
+                .map(String::as_str),
+            Some("POST")
+        );
+        assert_eq!(
+            attributes
+                .get(attrs::payload::STREAM_KEY)
+                .map(String::as_str),
+            Some("tls:7:99"),
+            "attributes should carry the segment field the test overrode"
+        );
+    }
+
+    /// Assemble the attributes the way the projection does, through the real
+    /// content projection, so what is asserted is what lands on the action.
+    fn request_attributes(config: &SemanticRetentionConfig) -> BTreeMap<String, String> {
+        request_attributes_for_body(config, REQUEST_BODY)
+    }
+
+    fn request_attributes_for_body(
+        config: &SemanticRetentionConfig,
+        request_body: &str,
+    ) -> BTreeMap<String, String> {
+        let fixture = HttpRequestFixture::llm_json(request_body);
+        let segment = fixture.segment_builder().build();
+        let body = parse_llm_request_body(&fixture.parts, &LlmCodecRegistry::default())
+            .expect("LLM request body parses");
+        let projection = project_request_content(
+            config,
+            model_core::ids::TraceId::new(1),
+            "trace:1:action:llm.request",
+            &body,
+        )
+        .expect("canonical request content projects");
+
+        llm_attributes(
+            config,
+            &[&segment],
+            &fixture.raw,
+            &fixture.parts,
+            &body,
+            projection.metadata.as_ref(),
+        )
+    }
+
+    fn config_with_body_export_enabled() -> SemanticRetentionConfig {
+        let mut config = SemanticRetentionConfig::default();
+        config.l0_llm_call.request_body_export = LlmRequestBodyExportRetention::CanonicalJson;
+        config
+    }
+
+    /// Off by default means the attribute is never built, not built and then
+    /// filtered — otherwise every request body would be kept a second time
+    /// next to the canonical blocks that already hold it.
+    #[test]
+    fn body_export_off_keeps_the_canonical_body_out_of_the_attributes() {
+        let attributes = request_attributes(&SemanticRetentionConfig::default());
+
+        assert_eq!(
+            attributes.get(attrs::llm_request::CANONICAL_BODY_JSON),
+            None
+        );
+        assert_eq!(
+            attributes.get(attrs::llm_request::CANONICAL_BODY_EXPORT_STATE),
+            None
+        );
+    }
+
+    #[test]
+    fn body_export_on_puts_the_whole_canonical_body_into_the_attributes() {
+        let attributes = request_attributes(&config_with_body_export_enabled());
+
+        let body_json = attributes
+            .get(attrs::llm_request::CANONICAL_BODY_JSON)
+            .expect("body export should put the canonical body on the action");
+        let parsed = serde_json::from_str::<Value>(body_json)
+            .expect("the exported body should parse as JSON");
+
+        assert_eq!(
+            parsed
+                .get("messages")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1),
+            "the whole request should be exported, not an extract of it"
+        );
+        assert_eq!(
+            parsed.get("model").and_then(Value::as_str),
+            Some("claude-opus-4")
+        );
+    }
+
+    #[test]
+    fn body_at_the_export_limit_is_exported_with_state() {
+        let mut config = config_with_body_export_enabled();
+        config.l0_llm_call.request_body_export_max_bytes = REQUEST_BODY.len() as u64;
+
+        let attributes = request_attributes(&config);
+
+        assert!(
+            attributes.contains_key(attrs::llm_request::CANONICAL_BODY_JSON),
+            "a canonical body exactly at the configured limit should be exported"
+        );
+        assert_eq!(
+            attributes
+                .get(attrs::llm_request::CANONICAL_BODY_EXPORT_STATE)
+                .map(String::as_str),
+            Some("exported")
+        );
+    }
+
+    #[test]
+    fn body_over_the_export_limit_is_omitted_with_size_metadata() {
+        let mut config = config_with_body_export_enabled();
+        config.l0_llm_call.request_body_export_max_bytes = REQUEST_BODY.len() as u64 - 1;
+
+        let attributes = request_attributes(&config);
+
+        assert_eq!(
+            attributes.get(attrs::llm_request::CANONICAL_BODY_JSON),
+            None,
+            "an oversized canonical body must be omitted rather than truncated"
+        );
+        assert_eq!(
+            attributes
+                .get(attrs::llm_request::CANONICAL_BODY_EXPORT_STATE)
+                .map(String::as_str),
+            Some("too_large")
+        );
+        assert!(
+            attributes.contains_key(attrs::llm_request::CANONICAL_BODY_HASH),
+            "the consumer should retain the integrity hash for an omitted body"
+        );
+        assert_eq!(
+            attributes
+                .get(attrs::llm_request::CANONICAL_BODY_BYTES)
+                .map(String::as_str),
+            Some(REQUEST_BODY.len().to_string().as_str())
+        );
+    }
+
+    #[test]
+    fn body_export_limit_is_applied_to_canonical_json_bytes() {
+        let mut config = config_with_body_export_enabled();
+        config.l0_llm_call.request_body_export_max_bytes = REQUEST_BODY.len() as u64;
+        assert!(SPACED_REQUEST_BODY.len() > REQUEST_BODY.len());
+
+        let attributes = request_attributes_for_body(&config, SPACED_REQUEST_BODY);
+
+        assert!(attributes.contains_key(attrs::llm_request::CANONICAL_BODY_JSON));
+        assert_eq!(
+            attributes
+                .get(attrs::llm_request::CANONICAL_BODY_BYTES)
+                .map(String::as_str),
+            Some(REQUEST_BODY.len().to_string().as_str())
+        );
+        assert_eq!(
+            attributes
+                .get(attrs::llm_request::CANONICAL_BODY_EXPORT_STATE)
+                .map(String::as_str),
+            Some("exported")
+        );
+    }
+
+    /// The consumer's only integrity check is that the body it received
+    /// hashes to the hash it received alongside it.
+    #[test]
+    fn exported_body_matches_the_canonical_body_hash_attribute() {
+        let attributes = request_attributes(&config_with_body_export_enabled());
+
+        let body_json = attributes
+            .get(attrs::llm_request::CANONICAL_BODY_JSON)
+            .expect("body export should put the canonical body on the action");
+        let digest = Sha256::digest(body_json.as_bytes());
+        let hash = format!(
+            "sha256:{}",
+            digest
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        );
+
+        assert_eq!(
+            attributes
+                .get(attrs::llm_request::CANONICAL_BODY_HASH)
+                .map(String::as_str),
+            Some(hash.as_str())
+        );
+        assert_eq!(
+            attributes
+                .get(attrs::llm_request::CANONICAL_BODY_BYTES)
+                .map(String::as_str),
+            Some(body_json.len().to_string().as_str())
+        );
+    }
+
+    /// Turning export on adds only its body and state, so every pre-existing
+    /// attribute keeps meaning what it meant before.
+    #[test]
+    fn body_export_leaves_every_other_attribute_untouched() {
+        let mut exported = request_attributes(&config_with_body_export_enabled());
+        let baseline = request_attributes(&SemanticRetentionConfig::default());
+
+        assert!(
+            exported
+                .remove(attrs::llm_request::CANONICAL_BODY_JSON)
+                .is_some(),
+            "the exported run should carry the body"
+        );
+        assert_eq!(
+            exported.remove(attrs::llm_request::CANONICAL_BODY_EXPORT_STATE),
+            Some("exported".to_string())
+        );
+        assert_eq!(exported, baseline);
+    }
 }
