@@ -187,6 +187,27 @@ pub(in crate::payload_projection::llm) fn tool_calls_json(
     (!values.is_empty()).then(|| Value::Array(values).to_string())
 }
 
+/// Build the qualified MCP tool name from an OpenAI Responses API function_call item.
+///
+/// When the item carries a `namespace` starting with `mcp__` and a short `name`
+/// (without the `mcp__` prefix), this joins them as `{namespace}__{name}` so
+/// downstream attribution can match against `mcp__{server}__{tool}`. Falls back
+/// to the raw `name` when no qualifying namespace is present.
+pub(super) fn qualified_response_tool_name(item: &Map<String, Value>) -> Option<String> {
+    let name = item
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|name| !name.is_empty())?;
+    Some(
+        item.get("namespace")
+            .and_then(Value::as_str)
+            .filter(|namespace| namespace.starts_with("mcp__"))
+            .filter(|_| !name.starts_with("mcp__"))
+            .map(|namespace| format!("{namespace}__{name}"))
+            .unwrap_or_else(|| name.to_string()),
+    )
+}
+
 fn tool_call_value(tool_call: &LlmToolCall) -> Option<Value> {
     let mut object = Map::new();
     if let Some(index) = tool_call.index {
@@ -463,18 +484,7 @@ impl ToolCallAssembler {
     }
 
     fn qualified_response_tool_name(item: &Map<String, Value>) -> Option<String> {
-        let name = item
-            .get("name")
-            .and_then(Value::as_str)
-            .filter(|name| !name.is_empty())?;
-        Some(
-            item.get("namespace")
-                .and_then(Value::as_str)
-                .filter(|namespace| namespace.starts_with("mcp__"))
-                .filter(|_| !name.starts_with("mcp__"))
-                .map(|namespace| format!("{namespace}__{name}"))
-                .unwrap_or_else(|| name.to_string()),
-        )
+        qualified_response_tool_name(item)
     }
 
     fn apply_openai_delta(&mut self, delta: &Map<String, Value>) {
