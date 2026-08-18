@@ -73,6 +73,9 @@ from tests.v2.regression.virtual_container_xiaoo_concurrency.run_e2e import (  #
 from tests.v2.regression.tool_consecutive_failure_alert.run_e2e import (  # noqa: E402
     TEST_DEFINITION as TOOL_CONSECUTIVE_FAILURE_ALERT,
 )
+from tests.v2.regression.tool_frequent_failure_alert.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as TOOL_FREQUENT_FAILURE_ALERT,
+)
 
 TESTS = [
     CLAUDE,
@@ -94,6 +97,7 @@ TESTS = [
     LLM_TRAJECTORY_CLAUDE,
     ACTIVITY_ANOMALY,
     TOOL_CONSECUTIVE_FAILURE_ALERT,
+    TOOL_FREQUENT_FAILURE_ALERT,
 ]
 
 
