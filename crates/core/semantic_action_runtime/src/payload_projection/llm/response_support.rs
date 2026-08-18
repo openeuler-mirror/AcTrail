@@ -235,6 +235,11 @@ fn insert_token_usage_attributes(attributes: &mut BTreeMap<String, String>, usag
         attrs::llm_response::PROMPT_CACHE_MISS_TOKENS,
         usage.prompt_cache_miss_tokens,
     );
+    insert_token_count(
+        attributes,
+        attrs::llm_response::CACHE_CREATION_TOKENS,
+        usage.cache_creation_tokens,
+    );
 }
 
 fn insert_token_count(
@@ -388,16 +393,22 @@ mod tests {
     use super::super::codec::LlmCodecRegistry;
     use super::*;
 
-    const RESPONSE_BODY: &str = concat!(
+    const OPENAI_RESPONSE_BODY: &str = concat!(
         r#"{"model":"gpt-4o","choices":[{"message":{"content":"hello"}}],"#,
         r#""usage":{"prompt_tokens":11,"completion_tokens":7,"total_tokens":18}}"#
+    );
+    const ANTHROPIC_RESPONSE_BODY: &str = concat!(
+        r#"{"id":"msg_test","type":"message","role":"assistant","#,
+        r#""model":"claude-test","content":[{"type":"text","text":"hello"}],"#,
+        r#""stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":50,"#,
+        r#""cache_read_input_tokens":800,"cache_creation_input_tokens":200}}"#
     );
 
     /// The response side shares the builder with the request side; this is the
     /// same seam guard, on the function that assembles response attributes.
     #[test]
     fn response_attribute_assembly_reports_content_and_token_usage() {
-        let fixture = HttpResponseFixture::llm_json(RESPONSE_BODY);
+        let fixture = HttpResponseFixture::llm_json(OPENAI_RESPONSE_BODY);
         let segment = fixture.segment_builder().sequence(3).build();
         let body = parse_llm_response_body(&fixture.parts.body, &LlmCodecRegistry::default())
             .expect("LLM response body parses");
@@ -438,6 +449,52 @@ mod tests {
             attributes.get(attrs::payload::SEQUENCE).map(String::as_str),
             Some("3"),
             "attributes should carry the segment field the test overrode"
+        );
+    }
+
+    #[test]
+    fn response_attribute_assembly_maps_anthropic_cache_usage() {
+        let fixture = HttpResponseFixture::llm_json(ANTHROPIC_RESPONSE_BODY);
+        let segment = fixture.segment_builder().build();
+        let body = parse_llm_response_body(&fixture.parts.body, &LlmCodecRegistry::default())
+            .expect("Anthropic response body parses");
+
+        let attributes = llm_response_attributes(
+            &SemanticRetentionConfig::default(),
+            &[&segment],
+            &fixture.raw,
+            &fixture.parts,
+            &body,
+        );
+
+        assert_eq!(
+            attributes
+                .get(attrs::llm_response::PROVIDER_ID)
+                .map(String::as_str),
+            Some("anthropic-messages")
+        );
+        assert_eq!(
+            attributes
+                .get(attrs::llm_response::CONTENT_TEXT)
+                .map(String::as_str),
+            Some("hello")
+        );
+        for (key, expected) in [
+            (attrs::llm_response::PROMPT_TOKENS, "100"),
+            (attrs::llm_response::COMPLETION_TOKENS, "50"),
+            (attrs::llm_response::CACHED_PROMPT_TOKENS, "800"),
+            (attrs::llm_response::PROMPT_CACHE_HIT_TOKENS, "800"),
+            (attrs::llm_response::CACHE_CREATION_TOKENS, "200"),
+        ] {
+            assert_eq!(attributes.get(key).map(String::as_str), Some(expected));
+        }
+        assert!(
+            !attributes.contains_key(attrs::llm_response::TOTAL_TOKENS),
+            "total tokens must remain absent when Anthropic did not report them"
+        );
+        assert!(
+            !attributes.contains_key(attrs::llm_response::PROMPT_CACHE_MISS_TOKENS),
+            "cache creation must not be reported as a miss"
         );
     }
 }

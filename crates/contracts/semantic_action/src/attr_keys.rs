@@ -193,6 +193,7 @@ pub mod agent_turn {
 pub mod llm_response {
     pub const ACTION_ID: &str = "llm.response.action_id";
     pub const BODY_FORMAT: &str = "llm.response.body_format";
+    pub const CACHE_CREATION_TOKENS: &str = "llm.response.cache_creation_tokens";
     pub const CACHED_PROMPT_TOKENS: &str = "llm.response.cached_prompt_tokens";
     pub const CHUNK_COUNT: &str = "llm.response.chunk_count";
     pub const COMPLETION_TOKENS: &str = "llm.response.completion_tokens";

@@ -85,6 +85,13 @@ pub struct LlmTokenUsage {
     pub reasoning_tokens: Option<u64>,
     pub prompt_cache_hit_tokens: Option<u64>,
     pub prompt_cache_miss_tokens: Option<u64>,
+    /// Tokens written into the provider's prompt cache by this request.
+    /// Distinct from `prompt_cache_miss_tokens`: a miss is prompt content
+    /// billed at full rate because the cache did not serve it, while a cache
+    /// creation is content the provider stored for later reuse. Anthropic
+    /// reports the latter as `cache_creation_input_tokens` and has no field
+    /// meaning the former.
+    pub cache_creation_tokens: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

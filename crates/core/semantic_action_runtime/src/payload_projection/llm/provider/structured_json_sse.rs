@@ -7,7 +7,7 @@ use semantic_action::{
 };
 use serde_json::{Map, Value};
 
-use super::common::{ParsedSseResponseAccumulator, push_non_empty_text};
+use super::common::{ParsedSseResponseAccumulator, push_non_empty_text, token_usage_from_map};
 use super::request_registry::{LlmRequestParser, LlmRequestParserInput, ParsedLlmRequest};
 
 pub(super) const STRUCTURED_JSON_SSE_PROTOCOL_ID: &str = "structured-json-sse";
@@ -261,47 +261,17 @@ fn parsed_events_to_response(
     })
 }
 
+/// This protocol carries token counts on the event object itself rather than
+/// under a `usage` key, so it feeds each event straight to the shared field
+/// mapping instead of keeping its own copy of the naming rules.
 fn structured_token_usage<'a>(
     values: impl IntoIterator<Item = &'a Value>,
 ) -> Option<LlmTokenUsage> {
     values
         .into_iter()
         .filter_map(|value| value.as_object())
-        .filter_map(token_usage_from_object)
+        .filter_map(token_usage_from_map)
         .last()
-}
-
-fn token_usage_from_object(object: &Map<String, Value>) -> Option<LlmTokenUsage> {
-    let usage = LlmTokenUsage {
-        prompt_tokens: token_count(object.get("prompt_tokens")),
-        completion_tokens: token_count(object.get("completion_tokens")),
-        total_tokens: token_count(object.get("total_tokens")),
-        cached_prompt_tokens: token_count(object.get("cache_read_input_tokens")),
-        reasoning_tokens: token_count(object.get("reasoning_tokens")),
-        prompt_cache_hit_tokens: token_count(object.get("cache_read_input_tokens")),
-        prompt_cache_miss_tokens: token_count(object.get("cache_creation_input_tokens")),
-    };
-    token_usage_has_any_count(&usage).then_some(usage)
-}
-
-fn token_usage_has_any_count(usage: &LlmTokenUsage) -> bool {
-    usage
-        .prompt_tokens
-        .or(usage.completion_tokens)
-        .or(usage.total_tokens)
-        .or(usage.cached_prompt_tokens)
-        .or(usage.reasoning_tokens)
-        .or(usage.prompt_cache_hit_tokens)
-        .or(usage.prompt_cache_miss_tokens)
-        .is_some()
-}
-
-fn token_count(value: Option<&Value>) -> Option<u64> {
-    match value? {
-        Value::Number(number) => number.as_u64(),
-        Value::String(text) => text.parse().ok(),
-        _ => None,
-    }
 }
 
 #[derive(Default)]
@@ -316,7 +286,7 @@ impl LlmProviderResponseStreamParser for StructuredJsonSseStreamParser {
             && let Some(value) = event.json
             && let Some(object) = value.as_object()
         {
-            self.token_usage = token_usage_from_object(object);
+            self.token_usage = token_usage_from_map(object);
         }
         let parsed = StructuredJsonSseParser.parse_sse_event(event);
         self.accumulator.observe(&parsed);
@@ -329,5 +299,55 @@ impl LlmProviderResponseStreamParser for StructuredJsonSseStreamParser {
             self.token_usage.clone(),
             true,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::structured_token_usage;
+
+    /// This protocol reaches the shared field mapping through its own entry
+    /// point. Testing only the `usage`-wrapper entry would leave exactly the
+    /// divergence that motivated sharing the table unguarded.
+    #[test]
+    fn reads_anthropic_names_through_the_event_entry_point() {
+        let events = [json!({
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cache_read_input_tokens": 800,
+            "cache_creation_input_tokens": 200
+        })];
+
+        let usage = structured_token_usage(events.iter()).expect("usage from event object");
+
+        assert_eq!(usage.prompt_tokens, Some(100));
+        assert_eq!(usage.cached_prompt_tokens, Some(800));
+        assert_eq!(usage.cache_creation_tokens, Some(200));
+    }
+
+    /// Counts live on the event object itself here, with no `usage` wrapper,
+    /// so a wrapped payload must not be mistaken for one.
+    #[test]
+    fn ignores_a_usage_wrapper_it_does_not_use() {
+        let events = [json!({ "usage": { "prompt_tokens": 10 } })];
+        assert!(structured_token_usage(events.iter()).is_none());
+    }
+
+    /// Every event is offered to the mapping and the last match wins, so a
+    /// later event carrying counts replaces an earlier one.
+    #[test]
+    fn the_last_event_carrying_counts_wins() {
+        let events = [
+            json!({ "prompt_tokens": 1, "completion_tokens": 2 }),
+            json!({ "content": "no counts here" }),
+            json!({ "prompt_tokens": 30, "completion_tokens": 40 }),
+        ];
+
+        let usage = structured_token_usage(events.iter()).expect("usage");
+
+        assert_eq!(usage.prompt_tokens, Some(30));
+        assert_eq!(usage.completion_tokens, Some(40));
     }
 }
