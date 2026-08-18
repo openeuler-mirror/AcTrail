@@ -3,11 +3,13 @@
 use semantic_action::{
     LlmJsonResponseInput, LlmParsedResponse, LlmParsedSseEvent, LlmProviderMatch,
     LlmProviderResponseParser, LlmProviderResponseStreamParser, LlmSseEvent, LlmSseResponseInput,
-    LlmTokenUsage,
+    LlmTokenUsage, LlmToolCall, LlmToolFunction,
 };
 use serde_json::Value;
 
-use super::common::{ParsedSseResponseAccumulator, extract_token_usage_from_values};
+use super::common::{
+    ParsedSseResponseAccumulator, extract_token_usage_from_values, qualified_response_tool_name,
+};
 
 const OPENAI_RESPONSES_PROVIDER_ID: &str = "openai-responses";
 const RESPONSE_EVENT_PREFIX: &str = "response.";
@@ -75,6 +77,7 @@ impl LlmProviderResponseParser for OpenAiResponsesResponseParser {
                 })
                 .flatten()
                 .map(ToString::to_string),
+            tool_calls: Self::tool_calls_for_event(event_type, value),
             ..LlmParsedSseEvent::default()
         }
     }
@@ -107,6 +110,62 @@ impl OpenAiResponsesResponseParser {
                 .filter_map(|value| value.get("response")),
         )
     }
+
+    /// Extract tool_call deltas from OpenAI Responses API SSE events.
+    ///
+    /// Primary source is `response.output_item.done`, whose `item` carries the
+    /// authoritative finalized function_call (name, call_id, arguments,
+    /// namespace) — per OpenAI guidance, deltas are redelivered in the `done`
+    /// event, so we skip them to avoid double-accumulation. Falls back to
+    /// `response.output_item.added` for providers that emit the complete item
+    /// up front. The accumulator merges updates by `call_id`.
+    fn tool_calls_for_event(event_type: Option<&str>, value: &Value) -> Vec<LlmToolCall> {
+        let Some(event_type) = event_type else {
+            return Vec::new();
+        };
+        let is_done = event_type == "response.output_item.done";
+        let is_added = event_type == "response.output_item.added";
+        if !is_done && !is_added {
+            return Vec::new();
+        }
+        let Some(item) = value.get("item").and_then(Value::as_object) else {
+            return Vec::new();
+        };
+        if item.get("type").and_then(Value::as_str) != Some("function_call") {
+            return Vec::new();
+        }
+        let call_id = item.get("call_id").and_then(Value::as_str);
+        let name = qualified_response_tool_name(item);
+        // `added` often carries empty arguments; wait for `done` to capture the
+        // finalized string and avoid storing a stale empty value.
+        let arguments = if is_done {
+            item.get("arguments").and_then(Value::as_str)
+        } else {
+            None
+        };
+        build_tool_call(call_id, name.as_deref(), arguments)
+    }
+}
+
+fn build_tool_call(
+    call_id: Option<&str>,
+    name: Option<&str>,
+    arguments: Option<&str>,
+) -> Vec<LlmToolCall> {
+    let function = LlmToolFunction {
+        name: name.map(ToString::to_string),
+        arguments: arguments.map(ToString::to_string),
+        arguments_json: None,
+    };
+    if function.name.is_none() && function.arguments.is_none() && call_id.is_none() {
+        return Vec::new();
+    }
+    vec![LlmToolCall {
+        index: None,
+        id: call_id.map(ToString::to_string),
+        kind: Some("function".to_string()),
+        function: Some(function),
+    }]
 }
 
 #[derive(Default)]
