@@ -143,18 +143,21 @@ impl ConnectionState {
                 continue;
             }
             if semantic_retention.http2_frame_summary_enabled() {
-                drafts.push(ApplicationEventDraft {
-                    payload: frame_payload(segment, &frame),
-                });
+                drafts.push(ApplicationEventDraft::complete(frame_payload(
+                    segment, &frame,
+                )));
             }
             if frame.frame_type == frame::DATA_FRAME_TYPE {
                 let data_content = semantic_retention.http2_data_content();
                 if semantic_retention.http2_frame_summary_enabled()
                     || !matches!(data_content, Http2DataContentRetention::None)
                 {
-                    drafts.push(ApplicationEventDraft {
-                        payload: data_payload(segment, &frame, config, data_content)?,
-                    });
+                    drafts.push(ApplicationEventDraft::complete(data_payload(
+                        segment,
+                        &frame,
+                        config,
+                        data_content,
+                    )?));
                 }
             }
             direction.buffer.drain(..consumed);
@@ -185,9 +188,7 @@ impl ConnectionState {
         self.h2_confirmed = true;
         if !self.preface_emitted && semantic_retention.http2_frame_summary_enabled() {
             self.preface_emitted = true;
-            drafts.push(ApplicationEventDraft {
-                payload: preface_payload(segment),
-            });
+            drafts.push(ApplicationEventDraft::complete(preface_payload(segment)));
         }
         Ok(())
     }

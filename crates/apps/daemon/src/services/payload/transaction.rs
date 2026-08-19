@@ -438,19 +438,25 @@ impl PayloadTransactionContext<'_> {
             semantic_actions.actions().len(),
         );
         let started = crate::services::workload_diagnostics::now();
-        let mut application_drafts = if !operation_incomplete
-            && application_protocol_requested(self.trace_runtime, raw.trace_id)?
-        {
-            self.application_protocol
-                .analyze_with_semantic_context(
-                    &analysis_segment,
-                    body_retention.semantic_layer.consumed_by_llm(),
-                    matches!(body_retention.mode, PayloadBodyRetention::SummaryOnly),
-                )
-                .map_err(|error| ControlError::new("application_protocol_analyzer", error))?
-        } else {
-            Vec::new()
-        };
+        let mut application_drafts =
+            if application_protocol_requested(self.trace_runtime, raw.trace_id)? {
+                let result = if operation_incomplete {
+                    self.application_protocol
+                        .analyze_incomplete_http1_head_with_semantic_context(
+                            &analysis_segment,
+                            body_retention.semantic_layer.consumed_by_llm(),
+                        )
+                } else {
+                    self.application_protocol.analyze_with_semantic_context(
+                        &analysis_segment,
+                        body_retention.semantic_layer.consumed_by_llm(),
+                        matches!(body_retention.mode, PayloadBodyRetention::SummaryOnly),
+                    )
+                };
+                result.map_err(|error| ControlError::new("application_protocol_analyzer", error))?
+            } else {
+                Vec::new()
+            };
         if let Some(summary) = tls_summary_application_draft(&analysis_segment) {
             application_drafts.push(summary);
         }
@@ -525,6 +531,8 @@ impl PayloadTransactionContext<'_> {
     ) -> Result<Vec<PreparedApplicationEvent>, ControlError> {
         let mut prepared = Vec::with_capacity(drafts.len());
         for draft in drafts {
+            let mut flags = EventFlags::clean();
+            flags.metadata_partial = draft.metadata_partial;
             let event = DomainEvent::new(
                 EventEnvelope {
                     event_id: self.next_event_id()?,
@@ -533,7 +541,7 @@ impl PayloadTransactionContext<'_> {
                     process: process.clone(),
                     collector: CollectorName::new(APPLICATION_PROTOCOL_COLLECTOR_NAME),
                     kind: EventKind::Application,
-                    flags: EventFlags::clean(),
+                    flags,
                 },
                 EventPayload::Application(draft.payload),
             );
@@ -627,15 +635,13 @@ fn tls_summary_application_draft(segment: &PayloadSegment) -> Option<Application
             (segment.original_size - segment.captured_size).to_string(),
         );
     }
-    Some(ApplicationEventDraft {
-        payload: ApplicationPayload {
-            protocol,
-            operation: operation.to_string(),
-            summary: format!("{operation} {} bytes ({reason})", segment.original_size),
-            body: None,
-            metadata,
-        },
-    })
+    Some(ApplicationEventDraft::partial(ApplicationPayload {
+        protocol,
+        operation: operation.to_string(),
+        summary: format!("{operation} {} bytes ({reason})", segment.original_size),
+        body: None,
+        metadata,
+    }))
 }
 
 fn parse_tls_summary_hint(hint: &str) -> Option<BTreeMap<String, String>> {

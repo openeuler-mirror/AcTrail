@@ -302,7 +302,11 @@ pub(super) fn http_message_action(event: &DomainEvent) -> SemanticAction {
         end_time: Some(event.envelope.observed_at),
         process: event.envelope.process.clone(),
         status: SemanticActionStatus::Success,
-        completeness: SemanticActionCompleteness::Complete,
+        completeness: if event.envelope.flags.metadata_partial {
+            SemanticActionCompleteness::Partial
+        } else {
+            SemanticActionCompleteness::Complete
+        },
         attributes,
         evidence: vec![event_evidence(
             event,

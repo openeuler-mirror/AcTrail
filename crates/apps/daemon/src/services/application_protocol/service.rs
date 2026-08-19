@@ -21,6 +21,23 @@ pub(super) const COLLECTOR_NAME: &str = "application-protocol-analyzer";
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ApplicationEventDraft {
     pub payload: ApplicationPayload,
+    pub metadata_partial: bool,
+}
+
+impl ApplicationEventDraft {
+    pub(super) fn complete(payload: ApplicationPayload) -> Self {
+        Self {
+            payload,
+            metadata_partial: false,
+        }
+    }
+
+    pub(super) fn partial(payload: ApplicationPayload) -> Self {
+        Self {
+            payload,
+            metadata_partial: true,
+        }
+    }
 }
 
 pub(super) struct ApplicationProtocolAnalyzer {
@@ -57,6 +74,44 @@ impl ApplicationProtocolAnalyzer {
             self.config.clone()
         };
         self.analyze_with_config(segment, config, consumed_by_llm, summary_only)
+    }
+
+    /// Recover a trustworthy HTTP/1 message head from a capture operation whose body is
+    /// incomplete. This path is deliberately stateless: missing bytes must never be joined to a
+    /// later keep-alive exchange, and a draft is emitted only when the current segment starts at a
+    /// valid HTTP message line and contains the complete header terminator.
+    pub(super) fn analyze_incomplete_http1_head_with_semantic_context(
+        &mut self,
+        segment: &PayloadSegment,
+        consumed_by_llm: bool,
+    ) -> Result<Vec<ApplicationEventDraft>, String> {
+        let config = summary_only_config(&self.config);
+        if !config.enabled
+            || !config.http1_enabled
+            || segment.content_state != PayloadContentState::Plaintext
+            || !matches!(
+                segment.source_boundary,
+                PayloadSourceBoundary::TlsUserSpace | PayloadSourceBoundary::Syscall
+            )
+        {
+            return Ok(Vec::new());
+        }
+
+        let stream_key = stream_protocol_key(segment);
+        if self.known_stream_protocols.get(&stream_key) == Some(&StreamProtocol::Http2) {
+            return Ok(Vec::new());
+        }
+        let drafts = self.http1.analyze_incomplete_head(
+            segment,
+            &config,
+            &self.semantic_retention,
+            consumed_by_llm,
+        )?;
+        if recognized_http1(&drafts) {
+            self.known_stream_protocols
+                .insert(stream_key, StreamProtocol::Http1);
+        }
+        Ok(drafts)
     }
 
     fn analyze_with_config(

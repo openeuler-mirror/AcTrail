@@ -56,7 +56,7 @@ impl Http1Analyzer {
             if buffer.expects_chunked_sse_body() {
                 let drain = buffer.take_chunked_sse_events(config)?;
                 for payload in drain.payloads {
-                    drafts.push(ApplicationEventDraft { payload });
+                    drafts.push(ApplicationEventDraft::complete(payload));
                 }
                 if drain.done {
                     buffer.finish_chunked_sse_body();
@@ -70,20 +70,18 @@ impl Http1Analyzer {
             if !summary_only {
                 if let Some(message) = buffer.take_chunked_sse_head(config)? {
                     if semantic_retention.http_message_summary_enabled() {
-                        drafts.push(ApplicationEventDraft {
-                            payload: message.to_payload(
-                                segment,
-                                config,
-                                semantic_retention,
-                                consumed_by_llm,
-                            ),
-                        });
+                        drafts.push(ApplicationEventDraft::complete(message.to_payload(
+                            segment,
+                            config,
+                            semantic_retention,
+                            consumed_by_llm,
+                        )));
                     }
                     buffer.start_chunked_sse_body();
                     continue;
                 }
                 for payload in buffer.take_streaming_sse_events(config)? {
-                    drafts.push(ApplicationEventDraft { payload });
+                    drafts.push(ApplicationEventDraft::complete(payload));
                 }
             }
 
@@ -91,18 +89,16 @@ impl Http1Analyzer {
                 break;
             };
             if semantic_retention.http_message_summary_enabled() {
-                drafts.push(ApplicationEventDraft {
-                    payload: message.to_payload(
-                        segment,
-                        config,
-                        semantic_retention,
-                        consumed_by_llm,
-                    ),
-                });
+                drafts.push(ApplicationEventDraft::complete(message.to_payload(
+                    segment,
+                    config,
+                    semantic_retention,
+                    consumed_by_llm,
+                )));
             }
             if config.sse_enabled && message.is_sse() {
                 for payload in message.sse_events(config)? {
-                    drafts.push(ApplicationEventDraft { payload });
+                    drafts.push(ApplicationEventDraft::complete(payload));
                 }
             }
         }
@@ -110,6 +106,42 @@ impl Http1Analyzer {
             self.buffers.remove(&key);
         }
         Ok(drafts)
+    }
+
+    pub(super) fn analyze_incomplete_head(
+        &self,
+        segment: &PayloadSegment,
+        config: &ApplicationProtocolConfig,
+        semantic_retention: &SemanticRetentionConfig,
+        consumed_by_llm: bool,
+    ) -> Result<Vec<ApplicationEventDraft>, String> {
+        let Some(message) = parser::parse_complete_message_head(&segment.bytes)? else {
+            return Ok(Vec::new());
+        };
+        if !semantic_retention.http_message_summary_enabled() {
+            return Ok(Vec::new());
+        }
+        let mut payload = message.to_payload(segment, config, semantic_retention, consumed_by_llm);
+        payload.metadata.extend([
+            ("payload.capture_incomplete".to_string(), "true".to_string()),
+            (
+                "payload.operation_completion_state".to_string(),
+                segment.operation_completion_state.as_str().to_string(),
+            ),
+            (
+                "payload.operation_original_size".to_string(),
+                segment.operation_original_size.to_string(),
+            ),
+            (
+                "payload.operation_captured_size".to_string(),
+                segment.operation_captured_size.to_string(),
+            ),
+            (
+                "payload.truncation".to_string(),
+                format!("{:?}", segment.truncation).to_ascii_lowercase(),
+            ),
+        ]);
+        Ok(vec![ApplicationEventDraft::partial(payload)])
     }
 
     pub(super) fn forget_trace(&mut self, trace_id: TraceId) {
@@ -396,5 +428,123 @@ fn stream_key(segment: &PayloadSegment) -> StreamKey {
         process: segment.process.clone(),
         stream_key: segment.stream_key.clone(),
         direction: StreamDirectionKey::from(segment.direction),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, UNIX_EPOCH};
+
+    use model_core::ids::TraceId;
+    use model_core::payload::{
+        PayloadContentState, PayloadDirection, PayloadOperationCompletionState,
+        PayloadRedactionState, PayloadSegmentId, PayloadSourceBoundary, PayloadTruncationState,
+    };
+    use model_core::process::ProcessIdentity;
+
+    use super::*;
+
+    #[test]
+    fn incomplete_operation_emits_partial_http_head_without_body() {
+        let bytes = b"POST /v1/messages HTTP/1.1\r\nHost: api.example.test\r\nContent-Length: 4096\r\n\r\n{\"model\":\"partial"
+            .to_vec();
+        let segment = incomplete_segment(bytes);
+        let analyzer = Http1Analyzer::new(ApplicationProtocolConfig::default());
+
+        let drafts = analyzer
+            .analyze_incomplete_head(
+                &segment,
+                &ApplicationProtocolConfig::default(),
+                &SemanticRetentionConfig::default(),
+                false,
+            )
+            .unwrap();
+
+        assert_eq!(drafts.len(), 1);
+        let draft = &drafts[0];
+        assert!(draft.metadata_partial);
+        assert_eq!(draft.payload.protocol, "http/1.1");
+        assert_eq!(draft.payload.operation, "request");
+        assert_eq!(draft.payload.summary, "POST /v1/messages");
+        assert!(draft.payload.body.is_none());
+        assert_eq!(
+            draft
+                .payload
+                .metadata
+                .get("content_length")
+                .map(String::as_str),
+            Some("4096")
+        );
+        assert_eq!(
+            draft
+                .payload
+                .metadata
+                .get("payload.capture_incomplete")
+                .map(String::as_str),
+            Some("true")
+        );
+    }
+
+    #[test]
+    fn incomplete_operation_without_complete_head_emits_nothing() {
+        let segment =
+            incomplete_segment(b"POST /v1/messages HTTP/1.1\r\nContent-Length: 4096\r\n".to_vec());
+        let analyzer = Http1Analyzer::new(ApplicationProtocolConfig::default());
+
+        let drafts = analyzer
+            .analyze_incomplete_head(
+                &segment,
+                &ApplicationProtocolConfig::default(),
+                &SemanticRetentionConfig::default(),
+                false,
+            )
+            .unwrap();
+
+        assert!(drafts.is_empty());
+    }
+
+    #[test]
+    fn incomplete_http2_preface_is_not_misclassified_as_http1() {
+        let segment = incomplete_segment(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".to_vec());
+        let analyzer = Http1Analyzer::new(ApplicationProtocolConfig::default());
+
+        let drafts = analyzer
+            .analyze_incomplete_head(
+                &segment,
+                &ApplicationProtocolConfig::default(),
+                &SemanticRetentionConfig::default(),
+                false,
+            )
+            .unwrap();
+
+        assert!(drafts.is_empty());
+    }
+
+    fn incomplete_segment(bytes: Vec<u8>) -> PayloadSegment {
+        let captured_size = bytes.len() as u64;
+        PayloadSegment {
+            segment_id: PayloadSegmentId::new(1),
+            trace_id: TraceId::new(1),
+            observed_at: UNIX_EPOCH + Duration::from_secs(1),
+            process: ProcessIdentity::new(1),
+            source_boundary: PayloadSourceBoundary::TlsUserSpace,
+            content_state: PayloadContentState::Plaintext,
+            direction: PayloadDirection::Outbound,
+            stream_key: PayloadStreamKey::new("tls:1:42"),
+            sequence: 1,
+            original_size: captured_size + 1,
+            captured_size,
+            operation_id: 1,
+            operation_offset: 0,
+            operation_original_size: captured_size + 1,
+            operation_captured_size: captured_size,
+            operation_completion_state: PayloadOperationCompletionState::Partial,
+            truncation: PayloadTruncationState::Truncated,
+            redaction: PayloadRedactionState::NotRequired,
+            library: "libssl.so".to_string(),
+            symbol: "SSL_write".to_string(),
+            protocol_hint: None,
+            bytes,
+        }
     }
 }
