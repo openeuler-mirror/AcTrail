@@ -106,6 +106,16 @@ impl SocketReadRequest {
         }
     }
 
+    pub(super) fn linear_payload_range(&self) -> Option<(u64, u64)> {
+        match self.source {
+            SocketPayloadSource::Linear {
+                buffer_ptr,
+                requested_size,
+            } => Some((buffer_ptr, requested_size)),
+            SocketPayloadSource::Iovec { .. } | SocketPayloadSource::MsgHdr { .. } => None,
+        }
+    }
+
     pub(super) fn read_payload(
         &self,
         pid: u32,

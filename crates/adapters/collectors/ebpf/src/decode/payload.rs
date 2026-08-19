@@ -1,17 +1,19 @@
 //! Payload kernel-event decoding.
 
+use std::time::SystemTime;
+
 use model_core::ids::TraceId;
 use model_core::payload::{
     PayloadContentState, PayloadDirection, PayloadOperationCompletionState, PayloadSourceBoundary,
     PayloadStreamKey, PayloadTruncationState,
 };
-use payload_event::RawPayloadSegment;
+use payload_event::{RawPayloadSegment, RawPayloadStreamClose};
 
 use crate::decode::{DecodeError, resolve_event_observation};
 use crate::loader::{
-    KernelSocketPayloadCompletionEvent, KernelSocketPayloadEvent, KernelStdioPayloadEvent,
-    KernelTlsCaptureRequestEvent, KernelTlsCompletionEvent, KernelTlsDiagnosticEvent,
-    KernelTlsDirectCaptureEvent,
+    KernelObservationEvent, KernelSocketPayloadCompletionEvent, KernelSocketPayloadEvent,
+    KernelStdioPayloadEvent, KernelTlsCaptureRequestEvent, KernelTlsCompletionEvent,
+    KernelTlsDiagnosticEvent, KernelTlsDirectCaptureEvent,
 };
 use crate::maps::BindingStateMap;
 
@@ -114,6 +116,7 @@ pub struct SocketPayloadCompletion {
     pub host_pid: u32,
     pub host_tid: u32,
     pub trace_id: TraceId,
+    pub observed_at: SystemTime,
     pub sequence: u64,
     pub direction: u32,
     pub fd: u32,
@@ -201,6 +204,29 @@ pub fn decode_socket_payload(
     })
 }
 
+pub fn decode_socket_fd_release(
+    event: KernelObservationEvent,
+    bindings: &BindingStateMap,
+) -> Result<RawPayloadStreamClose, DecodeError> {
+    let identity = resolve_payload_identity(
+        event.trace_id,
+        event.pid,
+        event.host_pid,
+        event.pid_generation,
+        bindings,
+    )?;
+    Ok(RawPayloadStreamClose {
+        trace_id: event.trace_id,
+        observed_at: super::clock::wall_from_ktime(event.observed_ktime_ns),
+        process: identity,
+        source_boundary: PayloadSourceBoundary::Syscall,
+        stream_key: PayloadStreamKey::new(format!(
+            "socket:{}:{}:{}",
+            event.pid, event.fd, event.aux_generation
+        )),
+    })
+}
+
 pub fn decode_socket_payload_completion(
     event: KernelSocketPayloadCompletionEvent,
 ) -> SocketPayloadCompletion {
@@ -210,6 +236,7 @@ pub fn decode_socket_payload_completion(
         host_pid: event.host_pid,
         host_tid: event.host_tid,
         trace_id: event.trace_id,
+        observed_at: super::clock::wall_from_ktime(event.observed_ktime_ns),
         sequence: event.sequence,
         direction: event.direction,
         fd: event.fd,

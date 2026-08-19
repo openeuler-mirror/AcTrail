@@ -32,6 +32,10 @@ Trajectory identification uses the canonical block projection to compare LLM tex
 [semantic_retention.l0_llm_call]
 websocket_max_connections_per_process = 8
 
+[semantic_retention.l0_llm_call.assembly]
+max_buffer_bytes = 8388608
+max_segment_ranges = 8192
+
 [semantic_retention.l0_llm_call.trajectory]
 enabled = true
 max_active_trajectories_per_scope = 128
@@ -41,9 +45,14 @@ max_history_atoms_per_request = 4096
 max_blocks_per_atom = 64
 max_structural_bytes_per_atom = 4096
 idle_ttl = "30m"
+
+[semantic_retention.l2_http.exchange]
+max_pending_requests_per_stream = 256
+max_pending_responses_per_stream = 32
+response_lateness = "1s"
 ```
 
-All capacity values and `idle_ttl` must be positive. The settings bound daemon memory only and are not sent to the eBPF probe. `websocket_max_connections_per_process` bounds concurrently tracked upgraded LLM connections, including main-agent and subagent Codex sessions; the oldest accepted connection that has not bound a business stream is evicted first at capacity, otherwise the least-recently-observed active connection is evicted. Trajectory identification is effectively enabled only when the LLM layer is enabled and `request_content = "canonical_blocks"`; selecting `none` or `shape` keeps request capture operational but disables trajectory assignment because reusable content hashes are unavailable.
+All capacity values, `idle_ttl`, and `response_lateness` must be positive. The settings bound daemon memory only and are not sent to the eBPF probe. `assembly.max_buffer_bytes` bounds incomplete plaintext retained by one HTTP/1 direction or one HTTP/2 connection direction, and `assembly.max_segment_ranges` bounds its retained payload metadata. Explicitly truncated or partial operations and assembly capacity overflow discard only the affected direction; projection stays quarantined until a trusted HTTP message boundary is observed. HTTP exchange reconciliation retains only the configured number of request and response identities per stream. A response action that is projected before its request action can be updated during `response_lateness` only when the captured outbound operation began no later than the response; expired or causally impossible responses remain unassociated. Request capacity exhaustion quarantines that stream rather than shifting later responses onto unknown requests. `websocket_max_connections_per_process` bounds concurrently tracked upgraded LLM connections, including main-agent and subagent Codex sessions; the oldest accepted connection that has not bound a business stream is evicted first at capacity, otherwise the least-recently-observed active connection is evicted. Trajectory identification is effectively enabled only when the LLM layer is enabled and `request_content = "canonical_blocks"`; selecting `none` or `shape` keeps request capture operational but disables trajectory assignment because reusable content hashes are unavailable.
 
 Inference version 2 also recognizes provider-managed context chains. A request whose `previous_response_id` exactly matches an observed, successfully paired response inherits that response's request trajectory. The lookup is isolated by trace, process, and request classifier, is bounded by the existing trajectory candidate limits, and takes precedence over content-prefix matching. Because request and response projections from opposite directions may commit out of order, a delta request with a valid but not-yet-known reference is held within the same bound until the response ID is registered. If the reference remains unresolved for `idle_ttl`, at trace close, or capacity prevents deferral, the request becomes a new root. Delta requests are never indexed as complete history. Provider IDs remain runtime-only metadata; payload storage and the lineage schema are unchanged.
 

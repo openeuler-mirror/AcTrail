@@ -2,4 +2,4 @@
 
 mod segment;
 
-pub use segment::RawPayloadSegment;
+pub use segment::{RawPayloadSegment, RawPayloadStreamClose};

@@ -1,10 +1,6 @@
 //! HTTP message extraction from plaintext transport payloads.
 
-mod stream_id;
-
 use crate::payload_projection::encoding::base64_encode;
-
-pub(super) use stream_id::request_stream_id_hint;
 
 pub(crate) const HTTP2_CONNECTION_PREFACE: &[u8] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 pub(crate) const HTTP2_FRAME_HEADER_BYTES: usize = 9;
@@ -388,7 +384,7 @@ fn parse_http1_request_line(line: &str) -> Option<(String, Option<String>)> {
         .then(|| (method.to_string(), path))
 }
 
-fn http1_request_starts_at(bytes: &[u8]) -> bool {
+pub(crate) fn http1_request_starts_at(bytes: &[u8]) -> bool {
     let Some(line_end) = find_bytes(bytes, HTTP1_LINE_ENDING) else {
         return false;
     };
@@ -396,6 +392,25 @@ fn http1_request_starts_at(bytes: &[u8]) -> bool {
         .ok()
         .and_then(parse_http1_request_line)
         .is_some()
+}
+
+pub(crate) fn http1_response_starts_at(bytes: &[u8]) -> bool {
+    let Some(line_end) = find_bytes(bytes, HTTP1_LINE_ENDING) else {
+        return false;
+    };
+    let Ok(first_line) = std::str::from_utf8(&bytes[..line_end]) else {
+        return false;
+    };
+    let mut parts = first_line.split_whitespace();
+    let Some(version) = parts.next() else {
+        return false;
+    };
+    let Some(status) = parts.next() else {
+        return false;
+    };
+    version.starts_with(HTTP1_RESPONSE_PREFIX)
+        && status.len() == 3
+        && status.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 fn first_http1_request_start_after_prefix(bytes: &[u8]) -> Option<usize> {

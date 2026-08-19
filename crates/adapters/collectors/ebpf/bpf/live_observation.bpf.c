@@ -416,10 +416,8 @@ int handle_sys_enter_close(struct trace_event_raw_sys_enter *ctx) {
     store_file_bulk_read_fast_close_op(ctx);
     fd_close_dispatch_enter(ctx);
     if (suppressed_fd_close_enter(ctx)) {
-        socket_payload_close_enter(ctx);
         return 0;
     }
-    socket_payload_close_enter(ctx);
     return emit_file_close_enter(ctx);
 }
 

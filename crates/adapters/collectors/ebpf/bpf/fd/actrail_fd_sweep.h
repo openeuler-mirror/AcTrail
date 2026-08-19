@@ -234,7 +234,11 @@ static __always_inline void fd_process_exit_cleanup(
     __u32 max_slots = fd_slot_limit();
     __u32 slot;
 
-    if (!pid || bpf_map_delete_elem(&fd_process_active_counts, &pid) != 0) {
+    if (!pid) {
+        return;
+    }
+    socket_payload_release_process(pid);
+    if (bpf_map_delete_elem(&fd_process_active_counts, &pid) != 0) {
         return;
     }
     if (!max_slots || max_slots > ACTRAIL_FD_INDEX_HARD_MAX_ENTRIES) {

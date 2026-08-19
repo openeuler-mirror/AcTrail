@@ -1,24 +1,10 @@
-use std::collections::BTreeMap;
-use std::time::SystemTime;
-
-use model_core::ids::TraceId;
-use model_core::process::ProcessIdentity;
 use semantic_action::{
     SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionStatus,
     attr_keys as attrs, validated_model_identifier,
 };
+use std::collections::BTreeMap;
 
 use crate::live::actions::{append_missing_evidence, llm_call_action_id_from_request_action_id};
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct PendingLlmRequestMarker {
-    pub(super) trace_id: TraceId,
-    pub(super) process: ProcessIdentity,
-    pub(super) stream_key: String,
-    pub(super) http_stream_id: Option<String>,
-    pub(super) start_time: SystemTime,
-    pub(super) sequence_start: u64,
-}
 
 pub(super) fn llm_call_from_request_response(
     request: &SemanticAction,
@@ -114,6 +100,14 @@ pub(super) fn payload_sequence_start(action: &SemanticAction) -> Option<u64> {
     action
         .attributes
         .get(attrs::payload::SEQUENCE_START)
+        .or_else(|| action.attributes.get(attrs::payload::SEQUENCE))
+        .and_then(|value| value.parse().ok())
+}
+
+pub(super) fn payload_sequence_end(action: &SemanticAction) -> Option<u64> {
+    action
+        .attributes
+        .get(attrs::payload::SEQUENCE_END)
         .or_else(|| action.attributes.get(attrs::payload::SEQUENCE))
         .and_then(|value| value.parse().ok())
 }

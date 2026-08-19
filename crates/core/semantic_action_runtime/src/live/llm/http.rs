@@ -8,12 +8,7 @@ use semantic_action::{
 const DIRECTION_ATTR: &str = "direction";
 const DIRECTION_INBOUND: &str = "inbound";
 const CONTENT_TYPE_ATTR: &str = "content_type";
-const HTTP_REQUEST_STREAM_ID_ATTR: &str = attrs::http_request::STREAM_ID;
-const PAYLOAD_SEQUENCE_ATTR: &str = attrs::payload::SEQUENCE;
-const PAYLOAD_STREAM_KEY_ATTR: &str = attrs::payload::STREAM_KEY;
 const STATUS_CODE_ATTR: &str = "status_code";
-const STREAM_KEY_ATTR: &str = "stream_key";
-const HTTP_MESSAGE_STREAM_ID_ATTR: &str = "stream_id";
 const HTTP_SUCCESS_MIN: u16 = 200;
 const HTTP_SUCCESS_MAX: u16 = 299;
 const HTTP_CLIENT_ERROR_MIN: u16 = 400;
@@ -73,10 +68,6 @@ pub(super) fn failed_response_for_open_request(
     call: &SemanticAction,
 ) -> Option<SemanticAction> {
     let failure = HttpResponseFailure::classify(http_response)?;
-    let response_sequence = http_payload_sequence(http_response)?;
-    if !request_matches_http_response(request, http_response, response_sequence) {
-        return None;
-    }
     if call.status != SemanticActionStatus::InProgress
         || call
             .attributes
@@ -197,46 +188,8 @@ pub(super) fn failed_response_for_open_request(
     })
 }
 
-fn request_matches_http_response(
-    request: &SemanticAction,
-    http_response: &SemanticAction,
-    response_sequence: u64,
-) -> bool {
-    request.kind == SemanticActionKind::LlmRequest
-        && request.trace_id == http_response.trace_id
-        && request.process == http_response.process
-        && request
-            .attributes
-            .get(PAYLOAD_STREAM_KEY_ATTR)
-            .zip(http_response.attributes.get(STREAM_KEY_ATTR))
-            .is_some_and(|(left, right)| left == right)
-        && http_stream_ids_match(request, http_response)
-        && request_precedes_response(request, http_response, response_sequence)
-}
-
-fn http_stream_ids_match(request: &SemanticAction, http_message: &SemanticAction) -> bool {
-    match (
-        request.attributes.get(HTTP_REQUEST_STREAM_ID_ATTR),
-        http_message.attributes.get(HTTP_MESSAGE_STREAM_ID_ATTR),
-    ) {
-        (Some(request_stream_id), Some(message_stream_id)) => {
-            request_stream_id == message_stream_id
-        }
-        (Some(_), None) => false,
-        (None, _) => true,
-    }
-}
-
 pub(super) fn terminal_failure_response(action: &SemanticAction) -> bool {
     HttpResponseFailure::classify(action).is_some()
-}
-
-fn http_payload_sequence(action: &SemanticAction) -> Option<u64> {
-    action.attributes.get("payload_sequence")?.parse().ok()
-}
-
-fn payload_sequence(action: &SemanticAction) -> Option<u64> {
-    action.attributes.get(PAYLOAD_SEQUENCE_ATTR)?.parse().ok()
 }
 
 fn failed_response_action_id(http_response: &SemanticAction) -> String {
@@ -273,15 +226,4 @@ fn copy_http_attr(
     if let Some(value) = http_response.attributes.get(source_key) {
         attributes.insert(target_key.to_string(), value.clone());
     }
-}
-
-fn request_precedes_response(
-    request: &SemanticAction,
-    response: &SemanticAction,
-    response_sequence: u64,
-) -> bool {
-    if request.start_time > response.start_time {
-        return false;
-    }
-    payload_sequence(request).is_some_and(|sequence| sequence <= response_sequence)
 }

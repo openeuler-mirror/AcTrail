@@ -250,6 +250,8 @@ const IPC_UNIX_SOCKET_PROGRAMS: &[&str] = &[
 ];
 
 const SOCKET_PAYLOAD_PROGRAMS: &[&str] = &[
+    "handle_sys_enter_socket",
+    "handle_sys_exit_socket",
     "handle_sys_enter_connect",
     "handle_sys_exit_connect",
     "handle_sys_enter_accept",
@@ -270,6 +272,8 @@ const SOCKET_PAYLOAD_PROGRAMS: &[&str] = &[
     "handle_sys_exit_read",
     "handle_sys_enter_close",
     "handle_sys_exit_close",
+    "handle_sys_enter_close_range",
+    "handle_sys_exit_close_range",
     "handle_sys_enter_dup",
     "handle_sys_exit_dup",
     "handle_sys_enter_dup2",
@@ -278,6 +282,9 @@ const SOCKET_PAYLOAD_PROGRAMS: &[&str] = &[
     "handle_sys_exit_dup3",
     "handle_sys_enter_fcntl",
     "handle_sys_exit_fcntl",
+    "handle_fd_sched_process_fork",
+    "handle_fd_sched_process_exec",
+    "handle_fd_sched_process_exit",
 ];
 
 const FS_MMAP_PROGRAMS: &[&str] = &["handle_sys_enter_mmap", "handle_sys_exit_mmap"];

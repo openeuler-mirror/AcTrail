@@ -10,7 +10,9 @@ use super::handshake::NegotiatedExtensions;
 
 pub(super) struct WebSocketConnection {
     stream_key: Option<PayloadStreamKey>,
-    synthetic_stream_key: PayloadStreamKey,
+    synthetic_stream_key_prefix: String,
+    next_exchange_id: u64,
+    active_exchange_stream_key: Option<PayloadStreamKey>,
     path: String,
     outbound: DirectionAssembler,
     inbound: DirectionAssembler,
@@ -33,9 +35,11 @@ impl WebSocketConnection {
         extensions: NegotiatedExtensions,
     ) -> Self {
         Self {
-            synthetic_stream_key: PayloadStreamKey::new(format!(
-                "websocket:{outbound_stream_key}:{inbound_stream_key}"
-            )),
+            synthetic_stream_key_prefix: format!(
+                "websocket:{outbound_stream_key}:{inbound_stream_key}:exchange"
+            ),
+            next_exchange_id: 0,
+            active_exchange_stream_key: None,
             stream_key: None,
             path,
             outbound: DirectionAssembler::new(
@@ -93,6 +97,10 @@ impl WebSocketConnection {
         self.stream_key.as_ref() == Some(stream_key)
     }
 
+    pub(super) fn synthetic_stream_key_prefix(&self) -> &str {
+        &self.synthetic_stream_key_prefix
+    }
+
     fn accepts_segment(&mut self, segment: &PayloadSegment) -> bool {
         if let Some(stream_key) = self.stream_key.as_ref() {
             return stream_key == &segment.stream_key;
@@ -116,6 +124,12 @@ impl WebSocketConnection {
             return;
         }
         self.clear_response();
+        let stream_key = PayloadStreamKey::new(format!(
+            "{}:{}",
+            self.synthetic_stream_key_prefix, self.next_exchange_id
+        ));
+        self.next_exchange_id = self.next_exchange_id.saturating_add(1);
+        self.active_exchange_stream_key = Some(stream_key.clone());
         let body = text.as_bytes();
         let mut bytes = format!(
             "POST {} HTTP/1.1\r\nHost: chatgpt.com\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
@@ -124,7 +138,7 @@ impl WebSocketConnection {
         )
         .into_bytes();
         bytes.extend_from_slice(body);
-        projected.push(self.synthetic_segment(segment, bytes));
+        projected.push(self.synthetic_segment(segment, stream_key, bytes));
     }
 
     fn project_inbound(
@@ -167,6 +181,7 @@ impl WebSocketConnection {
         }
         let Some(mut response) = value.get("response").cloned() else {
             self.clear_response();
+            self.active_exchange_stream_key = None;
             return Ok(());
         };
         Self::ensure_response_output(&mut response, &self.response_output, &self.response_text);
@@ -180,7 +195,11 @@ impl WebSocketConnection {
         )
         .into_bytes();
         bytes.extend_from_slice(&body);
-        let mut synthetic = self.synthetic_segment(segment, bytes);
+        let Some(stream_key) = self.active_exchange_stream_key.take() else {
+            self.clear_response();
+            return Ok(());
+        };
+        let mut synthetic = self.synthetic_segment(segment, stream_key, bytes);
         if let Some(response_started_at) = self.response_started_at {
             synthetic.observed_at = response_started_at;
         }
@@ -259,10 +278,15 @@ impl WebSocketConnection {
         }
     }
 
-    fn synthetic_segment(&self, source: &PayloadSegment, bytes: Vec<u8>) -> PayloadSegment {
+    fn synthetic_segment(
+        &self,
+        source: &PayloadSegment,
+        stream_key: PayloadStreamKey,
+        bytes: Vec<u8>,
+    ) -> PayloadSegment {
         let size = bytes.len() as u64;
         let mut segment = source.clone();
-        segment.stream_key = self.synthetic_stream_key.clone();
+        segment.stream_key = stream_key;
         segment.original_size = size;
         segment.captured_size = size;
         segment.operation_original_size = size;

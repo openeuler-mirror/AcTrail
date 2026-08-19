@@ -44,6 +44,70 @@ pub(super) fn header_prefix_len(text: &str) -> Option<usize> {
     header_boundary(text).map(|(header_end, separator_len)| header_end + separator_len)
 }
 
+/// Parse only a complete HTTP/1 request/response head from the beginning of `bytes`.
+///
+/// Unlike the streaming parser this never buffers a prefix and never consumes body bytes. It is
+/// used after a known capture truncation, where joining the prefix to a later operation would be
+/// unsafe.
+pub(super) fn parse_complete_message_head(bytes: &[u8]) -> Result<Option<HttpMessage>, String> {
+    let Some(prefix_len) = complete_header_prefix_len(bytes) else {
+        return Ok(None);
+    };
+    let Ok(text) = std::str::from_utf8(&bytes[..prefix_len]) else {
+        return Ok(None);
+    };
+    let Some((header_end, _)) = header_boundary(text) else {
+        return Ok(None);
+    };
+    let headers = parse_headers(&text[..header_end])?;
+    if !starts_like_http1_message(&headers.first_line)
+        || text[..header_end]
+            .lines()
+            .skip(1)
+            .any(|line| !line.is_empty() && !line.contains(':'))
+    {
+        return Ok(None);
+    }
+    Ok(Some(HttpMessage {
+        first_line: headers.first_line,
+        fields: headers.fields,
+        body: String::new(),
+    }))
+}
+
+fn starts_like_http1_message(first_line: &str) -> bool {
+    if first_line.starts_with("HTTP/1.0 ") || first_line.starts_with("HTTP/1.1 ") {
+        return true;
+    }
+    let mut parts = first_line.split_whitespace();
+    let Some(method) = parts.next() else {
+        return false;
+    };
+    let Some(_) = parts.next() else {
+        return false;
+    };
+    let Some(version) = parts.next() else {
+        return false;
+    };
+    parts.next().is_none()
+        && method
+            .bytes()
+            .all(|byte| byte.is_ascii_uppercase() || byte == b'-')
+        && matches!(version, "HTTP/1.0" | "HTTP/1.1")
+}
+
+fn complete_header_prefix_len(bytes: &[u8]) -> Option<usize> {
+    [b"\r\n\r\n".as_slice(), b"\n\n".as_slice()]
+        .into_iter()
+        .filter_map(|boundary| {
+            bytes
+                .windows(boundary.len())
+                .position(|window| window == boundary)
+                .map(|position| position + boundary.len())
+        })
+        .min()
+}
+
 pub(super) fn take_message(
     text: &mut String,
     config: &ApplicationProtocolConfig,

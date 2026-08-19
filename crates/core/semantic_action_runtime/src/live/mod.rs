@@ -4,6 +4,7 @@ mod actions;
 mod agent;
 mod command;
 mod file;
+mod http_exchange;
 mod links;
 mod llm;
 mod mcp;

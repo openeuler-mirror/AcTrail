@@ -32,3 +32,12 @@ pub struct RawPayloadSegment {
     pub protocol_hint: Option<String>,
     pub bytes: Vec<u8>,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RawPayloadStreamClose {
+    pub trace_id: TraceId,
+    pub observed_at: SystemTime,
+    pub process: ProcessObservation,
+    pub source_boundary: PayloadSourceBoundary,
+    pub stream_key: PayloadStreamKey,
+}

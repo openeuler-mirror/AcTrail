@@ -5,8 +5,7 @@ use model_core::payload::{PayloadRedactionState, PayloadSegment};
 use semantic_action::{LlmRequestContentWrite, SemanticAction};
 
 use crate::payload_projection::http::{
-    HttpRequestParts, HttpResponseParts, request_prefix_skip_len, request_stream_id_hint,
-    split_request, split_response,
+    HttpRequestParts, HttpResponseParts, request_prefix_skip_len, split_request, split_response,
 };
 
 use super::body::IncrementalSseCache;
@@ -54,10 +53,6 @@ impl LiveLlmResponseMessage {
 
 pub(crate) fn live_llm_request_message_len(bytes: &[u8]) -> Option<usize> {
     split_request(bytes).map(|http| http.encoded_len)
-}
-
-pub(crate) fn live_llm_request_stream_id_hint(bytes: &[u8]) -> Option<Option<u32>> {
-    request_stream_id_hint(bytes)
 }
 
 pub(crate) fn live_llm_request_prefix_skip_len(bytes: &[u8]) -> Option<usize> {

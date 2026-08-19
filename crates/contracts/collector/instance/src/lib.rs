@@ -59,4 +59,5 @@ pub trait CollectorInstance {
 pub struct CollectorPollBatch {
     pub observations: Vec<RawCollectorEvent>,
     pub payload_segments: Vec<RawPayloadSegment>,
+    pub payload_stream_closes: Vec<payload_event::RawPayloadStreamClose>,
 }

@@ -11,6 +11,11 @@ pub const DEFAULT_LLM_TRAJECTORY_MAX_BLOCKS_PER_ATOM: u32 = 64;
 pub const DEFAULT_LLM_TRAJECTORY_MAX_STRUCTURAL_BYTES_PER_ATOM: u32 = 4_096;
 pub const DEFAULT_LLM_TRAJECTORY_IDLE_TTL: Duration = Duration::from_secs(30 * 60);
 pub const DEFAULT_LLM_WEBSOCKET_MAX_CONNECTIONS_PER_PROCESS: u32 = 8;
+pub const DEFAULT_LLM_ASSEMBLY_MAX_BUFFER_BYTES: u64 = 8 * 1024 * 1024;
+pub const DEFAULT_LLM_ASSEMBLY_MAX_SEGMENT_RANGES: u32 = 8_192;
+pub const DEFAULT_HTTP_EXCHANGE_MAX_PENDING_REQUESTS_PER_STREAM: u32 = 256;
+pub const DEFAULT_HTTP_EXCHANGE_MAX_PENDING_RESPONSES_PER_STREAM: u32 = 32;
+pub const DEFAULT_HTTP_EXCHANGE_RESPONSE_LATENESS: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AgentInvocationConfig {
@@ -222,7 +227,23 @@ pub struct L0LlmCallRetention {
     pub usage: LlmUsageRetention,
     pub retain_assembled_payload: bool,
     pub websocket_max_connections_per_process: u32,
+    pub assembly: LlmAssemblyConfig,
     pub trajectory: LlmTrajectoryConfig,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LlmAssemblyConfig {
+    pub max_buffer_bytes: u64,
+    pub max_segment_ranges: u32,
+}
+
+impl Default for LlmAssemblyConfig {
+    fn default() -> Self {
+        Self {
+            max_buffer_bytes: DEFAULT_LLM_ASSEMBLY_MAX_BUFFER_BYTES,
+            max_segment_ranges: DEFAULT_LLM_ASSEMBLY_MAX_SEGMENT_RANGES,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -303,6 +324,7 @@ impl Default for L0LlmCallRetention {
             retain_assembled_payload: false,
             websocket_max_connections_per_process:
                 DEFAULT_LLM_WEBSOCKET_MAX_CONNECTIONS_PER_PROCESS,
+            assembly: LlmAssemblyConfig::default(),
             trajectory: LlmTrajectoryConfig::default(),
         }
     }
@@ -466,6 +488,25 @@ pub struct L2HttpRetention {
     pub message_summary: bool,
     pub headers: HttpHeadersRetention,
     pub body_content: HttpBodyRetention,
+    pub exchange: HttpExchangeConfig,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HttpExchangeConfig {
+    pub max_pending_requests_per_stream: u32,
+    pub max_pending_responses_per_stream: u32,
+    pub response_lateness: Duration,
+}
+
+impl Default for HttpExchangeConfig {
+    fn default() -> Self {
+        Self {
+            max_pending_requests_per_stream: DEFAULT_HTTP_EXCHANGE_MAX_PENDING_REQUESTS_PER_STREAM,
+            max_pending_responses_per_stream:
+                DEFAULT_HTTP_EXCHANGE_MAX_PENDING_RESPONSES_PER_STREAM,
+            response_lateness: DEFAULT_HTTP_EXCHANGE_RESPONSE_LATENESS,
+        }
+    }
 }
 
 impl Default for L2HttpRetention {
@@ -475,6 +516,7 @@ impl Default for L2HttpRetention {
             message_summary: true,
             headers: HttpHeadersRetention::Metadata,
             body_content: HttpBodyRetention::Text,
+            exchange: HttpExchangeConfig::default(),
         }
     }
 }

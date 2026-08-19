@@ -8,7 +8,7 @@ use model_core::ids::TraceId;
 use model_core::process::{KernelProcessCoordinates, ProcessSuppressedFd};
 
 use crate::decode::{
-    self, decode_file_path, decode_observation, decode_socket_payload,
+    self, decode_file_path, decode_observation, decode_socket_fd_release, decode_socket_payload,
     decode_socket_payload_completion, decode_tls_capture_request, decode_tls_completion,
     decode_tls_diagnostic, decode_tls_direct_capture,
 };
@@ -83,12 +83,14 @@ impl EbpfCollector {
             return Ok(CollectorPollBatch {
                 observations: Vec::new(),
                 payload_segments: Vec::new(),
+                payload_stream_closes: Vec::new(),
             });
         };
         let raw_events = runtime.poll_events().map_err(loader_error)?;
         let mut batch = CollectorPollBatch {
             observations: Vec::new(),
             payload_segments: Vec::new(),
+            payload_stream_closes: Vec::new(),
         };
         batch.observations.append(&mut self.net_aggregation_backlog);
         let mut exit_retires = Vec::new();
@@ -155,6 +157,12 @@ impl EbpfCollector {
                     return Ok(());
                 }
                 self.maybe_attach_go_tls_after_exec(&event)?;
+                if event.kind == decode::SOCKET_FD_RELEASE_EVENT {
+                    batch.payload_stream_closes.push(
+                        decode_socket_fd_release(event.clone(), &self.bindings)
+                            .map_err(|error| CollectorError::new(error.stage, error.message))?,
+                    );
+                }
                 let lifecycle_event = event.clone();
                 self.apply_file_lifecycle_before_decode(&lifecycle_event)?;
                 let descriptor_generation = lifecycle_event.aux_generation;

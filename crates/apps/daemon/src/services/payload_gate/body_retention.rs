@@ -6,6 +6,7 @@ use config_core::daemon::SemanticRetentionConfig;
 use model_core::ids::TraceId;
 use model_core::payload::{
     PayloadContentState, PayloadDirection, PayloadSegment, PayloadSourceBoundary,
+    PayloadStreamIdentity,
 };
 use model_core::process::ProcessIdentity;
 
@@ -56,6 +57,13 @@ pub(in crate::services) struct PayloadBodyRetentionGate {
 }
 
 impl PayloadBodyRetentionGate {
+    pub(in crate::services) fn discontinuity_decision() -> PayloadBodyRetentionDecision {
+        PayloadBodyRetentionDecision::transient(
+            PayloadBodyRetention::Full,
+            PayloadSemanticLayer::None,
+        )
+    }
+
     pub(in crate::services) fn new(
         http2_probe_max_bytes: u64,
         semantic_retention: SemanticRetentionConfig,
@@ -110,6 +118,23 @@ impl PayloadBodyRetentionGate {
         self.streams.retain(|key, _| key.trace_id != trace_id);
         self.http2_probe_bytes
             .retain(|key, _| key.trace_id != trace_id);
+    }
+
+    pub(in crate::services) fn forget_stream(&mut self, identity: &PayloadStreamIdentity) {
+        let stream_key = identity.stream_key.to_string();
+        let source_boundary = source_boundary_name(identity.source_boundary);
+        self.streams.retain(|key, _| {
+            key.trace_id != identity.trace_id
+                || key.process != identity.process
+                || key.source_boundary != source_boundary
+                || key.stream_key != stream_key
+        });
+        self.http2_probe_bytes.retain(|key, _| {
+            key.trace_id != identity.trace_id
+                || key.process != identity.process
+                || key.source_boundary != source_boundary
+                || key.stream_key != stream_key
+        });
     }
 
     fn decide_outbound(&mut self, segment: &PayloadSegment) -> PayloadBodyRetentionDecision {
