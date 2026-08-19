@@ -28,7 +28,8 @@ class ContainerAutoConfig(TestCaseInputs):
             bin_dir=inputs.bin_dir,
             work_dir=inputs.work_dir,
             base_image=os.environ.get(
-                "CONTAINER_AUTO_E2E_BASE_IMAGE", "ubuntu:24.04"
+                "CONTAINER_AUTO_E2E_BASE_IMAGE",
+                "openeuler/openeuler:24.03-lts-sp3",
             ),
             timeout_seconds=timeout_seconds,
             cleanup_grace_seconds=cleanup_grace_seconds,

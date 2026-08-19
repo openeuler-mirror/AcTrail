@@ -74,19 +74,22 @@ set -e
 grep -Fq 'unknown argument: --mode' <<<"$legacy_mode_output" \
   || fail "deprecated --mode rejection did not explain the interface change"
 
-# A Guest image must never inherit the bundle's Collector placeholder implicitly.
+# VSOCK is an OTLP transport and therefore cannot be selected without enabling
+# the exporter. Reject this combination before changing the rootfs.
 set +e
 missing_endpoint_output="$(
   "$INSTALLER" \
     --rootfs "$rootfs" \
-    --bundle "$BUNDLE_DIR" 2>&1
+    --bundle "$BUNDLE_DIR" \
+    --egress-mode vsock-bridge 2>&1
 )"
 missing_endpoint_rc=$?
 set -e
 [[ "$missing_endpoint_rc" -ne 0 ]] \
-  || fail "installer accepted a missing --otel-endpoint"
-grep -Fq -- '--otel-endpoint is required' <<<"$missing_endpoint_output" \
-  || fail "missing endpoint rejection did not explain the required input"
+  || fail "installer accepted vsock-bridge without --otel-endpoint"
+grep -Fq -- '--egress-mode vsock-bridge requires --otel-endpoint' \
+  <<<"$missing_endpoint_output" \
+  || fail "missing endpoint rejection did not explain the VSOCK dependency"
 [[ ! -e "$rootfs/usr/local/bin/actraild" ]] \
   || fail "installer wrote artifacts before rejecting the missing endpoint"
 
@@ -110,6 +113,24 @@ grep -Fq 'GID 39000 is already used by group already-used' <<<"$collision_output
 [[ ! -e "$collision_rootfs/usr/local/bin/actraild" ]] \
   || fail "installer wrote artifacts before rejecting the socket GID collision"
 
+# The default installation is local-only: SQLite remains available, while the
+# exporter files and startup entry are absent.
+"$INSTALLER" \
+  --rootfs "$rootfs" \
+  --bundle "$BUNDLE_DIR" \
+  --startup-dependency optional
+"$VERIFIER" \
+  --rootfs "$rootfs" \
+  --startup-dependency optional
+grep -Fqx 'path = "/run/actrail/private/actrail.sqlite"' \
+  "$rootfs/etc/actrail/operator.conf" \
+  || fail "local-only install does not retain Guest SQLite"
+if grep -Fq 'kata-guest.otel-http' "$rootfs/etc/actrail/operator.conf"; then
+  fail "local-only install unexpectedly loads otel-http"
+fi
+[[ ! -e "$rootfs/etc/actrail/plugins/otel-http/otel-http.config.toml" ]] \
+  || fail "local-only install unexpectedly contains exporter config"
+
 "$INSTALLER" \
   --rootfs "$rootfs" \
   --bundle "$BUNDLE_DIR" \
@@ -126,6 +147,19 @@ if grep -Fq -- 'COLLECTOR_HOST' \
   "$rootfs/etc/actrail/plugins/otel-http/otel-http.config.toml"; then
   fail "installed OTLP/HTTP config retained the bundle placeholder"
 fi
+# Parse the rendered exporter startup fragment through the real CLI. Rewrite
+# only offline-root paths so this checks the candidate rootfs rather than files
+# that may happen to be installed on the test host.
+rendered_probe_config="$test_dir/rendered-otel-operator.conf"
+sed \
+  -e "s#/usr/local/lib/actrail/libactrail_tls_payload_probe_sync.so#$BUNDLE_DIR/libactrail_tls_payload_probe_sync.so#" \
+  -e "s#/usr/share/actrail/plugins/otel-http/otel-http.plugin.toml#$rootfs/usr/share/actrail/plugins/otel-http/otel-http.plugin.toml#" \
+  -e "s#/etc/actrail/plugins/otel-http/otel-http.config.toml#$rootfs/etc/actrail/plugins/otel-http/otel-http.config.toml#" \
+  "$rootfs/etc/actrail/operator.conf" >"$rendered_probe_config"
+LD_LIBRARY_PATH="$BUNDLE_DIR/lib" \
+  "$BUNDLE_DIR/actrailctl" \
+  --config "$rendered_probe_config" \
+  probe --skip-daemon --json >/dev/null
 [[ ! -e "$rootfs/usr/local/bin/actrailviewer" ]] \
   || fail "minimal guest install unexpectedly includes actrailviewer"
 
@@ -152,5 +186,17 @@ fi
   --rootfs "$rootfs" \
   --otel-endpoint "$TEST_OTEL_ENDPOINT" \
   --startup-dependency optional
+
+# Returning to the default local-only mode removes exporter configuration and
+# leaves the base observation service usable.
+"$INSTALLER" \
+  --rootfs "$rootfs" \
+  --bundle "$BUNDLE_DIR" \
+  --startup-dependency optional
+"$VERIFIER" \
+  --rootfs "$rootfs" \
+  --startup-dependency optional
+[[ ! -e "$rootfs/etc/actrail/plugins/otel-http/otel-http.config.toml" ]] \
+  || fail "local-only reinstall retained exporter config"
 
 echo "PASS: guest rootfs installer"

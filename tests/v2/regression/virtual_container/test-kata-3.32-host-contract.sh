@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Static contract for the pinned, side-by-side Kata 3.32 ARM64 installation.
+# Static contract for the pinned, side-by-side Kata 3.32 installation on the
+# officially released architectures.
 set -euo pipefail
 
 ROOT_DIR="${ACTRAIL_REPO_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../.." && pwd)}"
@@ -19,7 +20,7 @@ fail() {
 bash -n "$INSTALLER" || fail "Kata 3.32 installer has invalid shell syntax"
 bash -n "$V2_RUNNER" || fail "V2 one-command runner has invalid shell syntax"
 "$PREPARER" --help | grep -Fq -- '--otel-endpoint' \
-  || fail "V2 artifact preparer does not require a Guest Collector endpoint"
+  || fail "V2 artifact preparer does not expose optional OTLP/HTTP export"
 python3 - "$CONFIGURATOR" "$PREPARER" "$PREPARER_MODULE" <<'PY' \
   || fail "virtual-container host tools have invalid Python syntax"
 from pathlib import Path
@@ -44,9 +45,26 @@ PY
 grep -Fqx 'VERSION="3.32.0"' "$INSTALLER" \
   || fail "installer does not pin Kata 3.32.0"
 grep -Fqx \
-  'ARCHIVE_SHA256="8736c054d9223974735394f822000823baef509e1c33405ec798240fa9b6e4b5"' \
+  'ARM64_ARCHIVE_SHA256="8736c054d9223974735394f822000823baef509e1c33405ec798240fa9b6e4b5"' \
   "$INSTALLER" \
   || fail "installer does not pin the official ARM64 archive digest"
+grep -Fqx \
+  'AMD64_ARCHIVE_SHA256="1449ecea50bd91fa73a94648db195d18950fe869ba4b1f12d05f55f1fa7c1b01"' \
+  "$INSTALLER" \
+  || fail "installer does not pin the official x86_64 archive digest"
+grep -Fq 'ELF_MACHINE="ARM aarch64"' "$INSTALLER" \
+  || fail "installer does not check the ARM64 ELF machine"
+grep -Fq 'ELF_MACHINE="x86-64"' "$INSTALLER" \
+  || fail "installer does not check the x86_64 ELF machine"
+grep -Fq 'unsupported host architecture' "$INSTALLER" \
+  || fail "installer does not reject architectures it has no digest for"
+if grep -Fq 'requires an aarch64 host' "$INSTALLER"; then
+  fail "installer still refuses every non-ARM64 host"
+fi
+"$INSTALLER" --help | grep -Fq 'arm64' \
+  || fail "installer help does not name the ARM64 archive"
+"$INSTALLER" --help | grep -Fq 'amd64' \
+  || fail "installer help does not name the x86_64 archive"
 grep -Fqx 'PREFIX="/opt/kata-$VERSION"' "$INSTALLER" \
   || fail "installer does not preserve a versioned side-by-side prefix"
 grep -Fq '/usr/local/bin/containerd-shim-kata-v2' "$INSTALLER" \

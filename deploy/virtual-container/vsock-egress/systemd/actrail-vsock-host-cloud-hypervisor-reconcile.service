@@ -1,0 +1,18 @@
+[Unit]
+Description=Reconcile AcTrail Cloud Hypervisor VSOCK bridges with live Kata sandboxes
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/actrail-vsock-egress/ch-reconcile.sh
+# Reconciliation only starts and stops per-sandbox bridge instances; the bridges
+# themselves carry the byte-forwarding sandbox.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+UMask=0077
+MemoryMax=32M
+TasksMax=16

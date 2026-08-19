@@ -14,6 +14,41 @@
 > [Container Permission Auto-Selection](../deploy/container-auto/README.md)；
 > 本文只说明单机 Docker 主流程。
 
+## 一键部署入口
+
+新机器上从当前 checkout 构建 release、安装宿主 daemon/systemd、拉取基础镜像并构建
+workload 镜像，可直接执行：
+
+```bash
+sudo -E deploy/container-auto/deploy.sh
+```
+
+默认基础镜像为 `openeuler/openeuler:24.03-lts-sp3`，输出镜像为
+`actrail/container-auto:openeuler-24.03`。Ubuntu 24.04 使用：
+
+```bash
+sudo -E deploy/container-auto/deploy.sh --distro ubuntu
+```
+
+部署入口负责宿主组件和通用 workload 镜像；Agent 二进制、模型密钥与用户配置仍应在
+运行时通过镜像分层、只读挂载或 secrets 注入，不能由部署脚本猜测。已有 release 可加
+`--bin-dir target/release` 跳过编译。下面的手动流程保留用于已有容器迁移、定制路径和
+逐步排障。
+
+默认 exporter 是宿主机本地 JSONL。宿主机已有 OTLP/HTTP Collector 时，可在同一条命令
+中配置：
+
+```bash
+sudo -E deploy/container-auto/deploy.sh \
+  --otel-endpoint http://127.0.0.1:4318/v1/traces
+```
+
+endpoint 从宿主 `actraild` 的网络视角解析，因此 Host Collector 可以使用
+`127.0.0.1:4318`，普通 Agent 容器本身不需要访问 Collector。部署仍保留本地 JSONL，
+同时加载 `otel-http`，并用真实 observed workload 验证 Collector 已接受至少一个 batch。
+默认 `metadata-only` 不外送命令行和 HTTP/LLM 内容属性；可信环境需要这些语义内容时才
+显式增加 `--otel-attribute-mode full`。该开关不导出原始 `payload_segments` 字节。
+
 ## 说明什么东西
 
 本文档说明的是 AcTrail 在容器化 Agent 场景下的运行部署，不说明如何把 `actraild` 本身放进容器，也不说明如何通过 TCP 转发 AcTrail 控制 socket。
@@ -286,7 +321,7 @@ test -f "$ACTRAIL_SECCOMP_PROFILE"
 docker run -d --name "$AGENT_CONTAINER" \
   --user 0:0 \
   --security-opt "seccomp=$ACTRAIL_SECCOMP_PROFILE" \
-  -v /run/actrail:/run/actrail \
+  -v /run/actrail:/run/actrail:ro \
   -v /etc/actrail:/etc/actrail:ro \
   openeuler/openeuler:24.03-lts-sp3 \
   tail -f /dev/null
@@ -379,7 +414,7 @@ test -f "$ACTRAIL_SECCOMP_PROFILE"
 docker run --rm --name actrail-xiaoo \
   --user 0:0 \
   --security-opt "seccomp=$ACTRAIL_SECCOMP_PROFILE" \
-  -v /run/actrail:/run/actrail \
+  -v /run/actrail:/run/actrail:ro \
   -v /etc/actrail:/etc/actrail:ro \
   -v "$XIAOO_CONFIG_DIR:/root/.config/xiaoo:ro" \
   -v "$XIAOO_ENV_FILE:/run/secrets/xiaoo-env:ro" \

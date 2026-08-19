@@ -38,6 +38,62 @@ class VirtualContainerXiaooConcurrencyConfigTest(unittest.TestCase):
         self.assertEqual(config.runtime_config, runtime_config)
         self.assertEqual(config.xiaoo_binary, xiaoo)
         self.assertEqual(config.image_pull_policy, PullPolicy.NEVER)
+        self.assertIsNone(config.opencode_free_model)
+
+    def test_accepts_only_explicit_free_opencode_models(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="actrail-opencode-config.") as raw_dir:
+            root = Path(raw_dir)
+            variable = (
+                "VIRTUAL_CONTAINER_XIAOO_CONCURRENCY_E2E_"
+                "OPENCODE_FREE_MODEL"
+            )
+            with patch.dict(
+                "os.environ",
+                {
+                    "CTR_RUNTIME": "io.containerd.kata332.v2",
+                    variable: "opencode/mimo-v2.5-free",
+                },
+                clear=True,
+            ):
+                config = VirtualContainerXiaooConcurrencyConfig.from_environment(
+                    TestCaseInputs(root, root / "bin", root / "work")
+                )
+            self.assertEqual(
+                config.opencode_free_model,
+                "opencode/mimo-v2.5-free",
+            )
+            with patch.dict(
+                "os.environ",
+                {
+                    "CTR_RUNTIME": "io.containerd.kata332.v2",
+                    variable: "opencode/gpt-5.6-sol",
+                },
+                clear=True,
+            ):
+                with self.assertRaisesRegex(ValueError, r"opencode/\*-free"):
+                    VirtualContainerXiaooConcurrencyConfig.from_environment(
+                        TestCaseInputs(root, root / "bin", root / "work")
+                    )
+
+    def test_rejects_opencode_vsock_smoke_on_cloud_hypervisor(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="actrail-opencode-clh.") as raw_dir:
+            root = Path(raw_dir)
+            with patch.dict(
+                "os.environ",
+                {
+                    "CTR_RUNTIME": "io.containerd.kata332.v2",
+                    "VIRTUAL_CONTAINER_XIAOO_CONCURRENCY_E2E_BACKEND": (
+                        "cloud-hypervisor"
+                    ),
+                    "VIRTUAL_CONTAINER_XIAOO_CONCURRENCY_E2E_"
+                    "OPENCODE_FREE_MODEL": "opencode/mimo-v2.5-free",
+                },
+                clear=True,
+            ):
+                with self.assertRaisesRegex(ValueError, "requires stratovirt"):
+                    VirtualContainerXiaooConcurrencyConfig.from_environment(
+                        TestCaseInputs(root, root / "bin", root / "work")
+                    )
 
 
 if __name__ == "__main__":

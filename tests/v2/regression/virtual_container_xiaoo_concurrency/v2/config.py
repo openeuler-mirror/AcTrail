@@ -27,6 +27,7 @@ class VirtualContainerXiaooConcurrencyConfig(CommonTestConfig):
     workload_bundle: Path
     capability_bundle: Path
     xiaoo_binary: Path | None
+    opencode_free_model: str | None
     runtime_timeout_seconds: int
     ready_timeout_seconds: int
     overlap_timeout_seconds: int
@@ -65,6 +66,22 @@ class VirtualContainerXiaooConcurrencyConfig(CommonTestConfig):
             or os.environ.get("XIAOO_E2E_BINARY"),
             f"{prefix}XIAOO_BINARY",
         )
+        opencode_free_model = os.environ.get(
+            f"{prefix}OPENCODE_FREE_MODEL",
+            "",
+        ).strip()
+        if opencode_free_model and not (
+            opencode_free_model.startswith("opencode/")
+            and opencode_free_model.endswith("-free")
+        ):
+            raise ValueError(
+                f"{prefix}OPENCODE_FREE_MODEL must use an "
+                "opencode/*-free model"
+            )
+        if opencode_free_model and backend != "stratovirt":
+            raise ValueError(
+                "OpenCode free-model VSOCK smoke currently requires stratovirt"
+            )
 
         pull_value = os.environ.get(
             f"{prefix}IMAGE_PULL_POLICY",
@@ -119,6 +136,7 @@ class VirtualContainerXiaooConcurrencyConfig(CommonTestConfig):
                 "CAPABILITY_BUNDLE_DIR",
             ),
             xiaoo_binary=xiaoo_binary,
+            opencode_free_model=opencode_free_model or None,
             runtime_timeout_seconds=positive_environment_int(
                 f"{prefix}RUNTIME_TIMEOUT_SECONDS",
                 "900",

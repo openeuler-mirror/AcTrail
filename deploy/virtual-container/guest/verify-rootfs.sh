@@ -6,6 +6,9 @@ ROOTFS=""
 EXPECTED_STARTUP_DEPENDENCY="optional"
 EXPECTED_SOCKET_GID=39000
 EXPECTED_OTEL_ENDPOINT=""
+EXPECTED_EGRESS_MODE="network"
+EXPECTED_OTEL_EXPORT_ENABLED=0
+EXPECTED_OTEL_ENDPOINT_CONFIGURED="false"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=otel-endpoint.sh
@@ -13,7 +16,7 @@ source "$SCRIPT_DIR/otel-endpoint.sh"
 
 usage() {
   cat <<'EOF'
-Usage: verify-rootfs.sh --rootfs DIR --otel-endpoint URL [--startup-dependency optional|required] [--socket-gid GID]
+Usage: verify-rootfs.sh --rootfs DIR [--otel-endpoint URL] [--egress-mode network|vsock-bridge] [--startup-dependency optional|required] [--socket-gid GID]
 
 This is an offline structural check. A real Kata boot and `actrailctl doctor`
 are still required before declaring the guest-root startup path complete.
@@ -35,6 +38,11 @@ while [[ "$#" -gt 0 ]]; do
     --startup-dependency)
       [[ "$#" -ge 2 ]] || fail "--startup-dependency requires a value"
       EXPECTED_STARTUP_DEPENDENCY="$2"
+      shift 2
+      ;;
+    --egress-mode)
+      [[ "$#" -ge 2 ]] || fail "--egress-mode requires a value"
+      EXPECTED_EGRESS_MODE="$2"
       shift 2
       ;;
     --otel-endpoint)
@@ -59,8 +67,12 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 [[ -n "$ROOTFS" ]] || fail "--rootfs is required"
-actrail_validate_guest_otel_endpoint "$EXPECTED_OTEL_ENDPOINT" \
+actrail_validate_guest_otel_selection "$EXPECTED_OTEL_ENDPOINT" "$EXPECTED_EGRESS_MODE" \
   || fail "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
+if [[ -n "$EXPECTED_OTEL_ENDPOINT" ]]; then
+  EXPECTED_OTEL_EXPORT_ENABLED=1
+  EXPECTED_OTEL_ENDPOINT_CONFIGURED="true"
+fi
 [[ -d "$ROOTFS" ]] || fail "rootfs is not a directory: $ROOTFS"
 case "$EXPECTED_STARTUP_DEPENDENCY" in
   optional|required) ;;
@@ -96,9 +108,6 @@ assert_file /usr/local/bin/actraild
 assert_file /usr/local/bin/actrailctl
 assert_file /usr/local/lib/actrail/libactrail_tls_payload_probe_sync.so
 assert_file /etc/actrail/operator.conf
-assert_file /etc/actrail/plugins/otel-http/otel-http.config.toml
-assert_file /usr/share/actrail/plugins/otel-http/otel-http.plugin.toml
-assert_file /usr/share/actrail/plugins/otel-http/otel-http.config.v1.schema.json
 assert_file /usr/lib/systemd/system/actraild.service
 assert_file /usr/lib/tmpfiles.d/actrail.conf
 assert_file /usr/lib/systemd/system/kata-agent.service.d/10-actrail-workload-interface.conf
@@ -113,15 +122,31 @@ assert_line /etc/actrail/operator.conf \
   'sync_event_socket_path = "/dev/actrail/tls-sync.sock"'
 assert_line /etc/actrail/operator.conf 'log_path = "/run/actrail/private/actraild.log"'
 assert_line /etc/actrail/operator.conf 'path = "/run/actrail/private/actrail.sqlite"'
-assert_line /etc/actrail/operator.conf \
-  'manifest = "/usr/share/actrail/plugins/otel-http/otel-http.plugin.toml"'
-assert_line /etc/actrail/operator.conf \
-  'plugin_config = "/etc/actrail/plugins/otel-http/otel-http.config.toml"'
-assert_line /etc/actrail/plugins/otel-http/otel-http.config.toml \
-  "endpoint = \"$EXPECTED_OTEL_ENDPOINT\""
-if grep -Eiq -- 'COLLECTOR_HOST|placeholder|replace[_-]me|change[_-]me' \
-  "$ROOTFS/etc/actrail/plugins/otel-http/otel-http.config.toml"; then
-  fail "/etc/actrail/plugins/otel-http/otel-http.config.toml contains a placeholder"
+if [[ "$EXPECTED_OTEL_EXPORT_ENABLED" == "1" ]]; then
+  assert_file /etc/actrail/plugins/otel-http/otel-http.config.toml
+  assert_file /usr/share/actrail/plugins/otel-http/otel-http.plugin.toml
+  assert_file /usr/share/actrail/plugins/otel-http/otel-http.config.v1.schema.json
+  assert_line /etc/actrail/operator.conf \
+    'manifest = "/usr/share/actrail/plugins/otel-http/otel-http.plugin.toml"'
+  assert_line /etc/actrail/operator.conf \
+    'plugin_config = "/etc/actrail/plugins/otel-http/otel-http.config.toml"'
+  assert_line /etc/actrail/plugins/otel-http/otel-http.config.toml \
+    "endpoint = \"$EXPECTED_OTEL_ENDPOINT\""
+  if grep -Eiq -- 'COLLECTOR_HOST|placeholder|replace[_-]me|change[_-]me' \
+    "$ROOTFS/etc/actrail/plugins/otel-http/otel-http.config.toml"; then
+    fail "/etc/actrail/plugins/otel-http/otel-http.config.toml contains a placeholder"
+  fi
+else
+  if grep -Fq -- 'kata-guest.otel-http' "$ROOTFS/etc/actrail/operator.conf"; then
+    fail "local-only rootfs unexpectedly loads otel-http"
+  fi
+  for path in \
+    /etc/actrail/plugins/otel-http/otel-http.config.toml \
+    /usr/share/actrail/plugins/otel-http/otel-http.plugin.toml \
+    /usr/share/actrail/plugins/otel-http/otel-http.config.v1.schema.json; do
+    [[ ! -e "$ROOTFS$path" && ! -L "$ROOTFS$path" ]] \
+      || fail "local-only rootfs unexpectedly contains $path"
+  done
 fi
 for section in payload.socket seccomp_notify process_seccomp enforcement; do
   awk -v section="[$section]" '
@@ -171,6 +196,10 @@ assert_link /usr/lib/systemd/system/multi-user.target.wants/actraild.service \
 assert_line /usr/share/actrail/guest-install-info \
   "guest_startup_dependency=$EXPECTED_STARTUP_DEPENDENCY"
 assert_line /usr/share/actrail/guest-install-info \
+  "guest_egress_mode=$EXPECTED_EGRESS_MODE"
+assert_line /usr/share/actrail/guest-install-info \
+  "otel_export_enabled=$EXPECTED_OTEL_EXPORT_ENABLED"
+assert_line /usr/share/actrail/guest-install-info \
   "workload_socket_gid=$EXPECTED_SOCKET_GID"
 assert_line /usr/share/actrail/workload-interface \
   "socket_gid=$EXPECTED_SOCKET_GID"
@@ -180,6 +209,30 @@ assert_line /usr/share/actrail/workload-interface \
   'workload_socket_target=/run/actrail'
 grep -Eq "^actrail:x:${EXPECTED_SOCKET_GID}:$" "$ROOTFS/etc/group" \
   || fail "/etc/group does not contain the expected actrail socket group"
+
+bridge_unit="$ROOTFS/usr/lib/systemd/system/actrail-vsock-guest-bridge.service"
+bridge_script="$ROOTFS/usr/local/libexec/actrail-vsock-egress/guest-bridge.sh"
+if [[ "$EXPECTED_OTEL_EXPORT_ENABLED" == "1" && "$EXPECTED_EGRESS_MODE" == "vsock-bridge" ]]; then
+  [[ -f "$bridge_unit" ]] || fail "vsock-bridge rootfs is missing the Guest bridge unit"
+  [[ -x "$bridge_script" ]] || fail "vsock-bridge rootfs is missing the Guest bridge script"
+  [[ -x "$ROOTFS/usr/bin/socat" ]] \
+    || fail "vsock-bridge rootfs is missing socat, so the bridge cannot run"
+  expected_bridge_port="$(actrail_guest_otel_endpoint_port "$EXPECTED_OTEL_ENDPOINT")" \
+    || fail "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
+  grep -Fqx -- \
+    "ExecStart=/usr/local/libexec/actrail-vsock-egress/guest-bridge.sh --listen-port $expected_bridge_port" \
+    "$bridge_unit" \
+    || fail "Guest bridge unit does not listen on the endpoint port $expected_bridge_port"
+  assert_link /usr/lib/systemd/system/kata-containers.target.wants/actrail-vsock-guest-bridge.service \
+    ../actrail-vsock-guest-bridge.service
+  assert_link /usr/lib/systemd/system/multi-user.target.wants/actrail-vsock-guest-bridge.service \
+    ../actrail-vsock-guest-bridge.service
+else
+  [[ ! -e "$bridge_unit" && ! -L "$bridge_unit" ]] \
+    || fail "network egress rootfs unexpectedly contains the Guest VSOCK bridge unit"
+  [[ ! -e "$bridge_script" && ! -L "$bridge_script" ]] \
+    || fail "network egress rootfs unexpectedly contains the Guest VSOCK bridge script"
+fi
 
 strict_drop_in="$ROOTFS/usr/lib/systemd/system/kata-agent.service.d/20-actrail-required.conf"
 if [[ "$EXPECTED_STARTUP_DEPENDENCY" == "required" ]]; then
@@ -194,4 +247,5 @@ fi
 echo "ACTRAIL_GUEST_ROOTFS_STATIC_OK"
 echo "rootfs=$ROOTFS"
 echo "guest_startup_dependency=$EXPECTED_STARTUP_DEPENDENCY"
-echo "otel_endpoint_configured=true"
+echo "guest_egress_mode=$EXPECTED_EGRESS_MODE"
+echo "otel_endpoint_configured=$EXPECTED_OTEL_ENDPOINT_CONFIGURED"

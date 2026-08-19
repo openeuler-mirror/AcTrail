@@ -1,0 +1,30 @@
+[Unit]
+Description=AcTrail StratoVirt Host VSOCK egress bridge
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/libexec/actrail-vsock-egress/host-bridge.sh --backend stratovirt
+Restart=on-failure
+RestartSec=1s
+KillMode=control-group
+TimeoutStopSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_VSOCK
+UMask=0077
+MemoryMax=64M
+TasksMax=32
+LimitNOFILE=128
+
+[Install]
+WantedBy=multi-user.target

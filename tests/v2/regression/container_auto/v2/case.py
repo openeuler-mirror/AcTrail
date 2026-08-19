@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
+import sys
 
 from tests.v2.common.core import TestCase, TestResult, TestStatus
 from tests.v2.common.runner import TestingContextSingleton
@@ -16,8 +18,18 @@ class ContainerAutoCase(TestCase):
         self._scenario_path = config.repo / (
             "tests/v2/regression/container_auto/v2/auto_scenario.py"
         )
+        self._deployment_test_path = config.repo / (
+            "tests/v2/regression/container_auto/v2/test_deployment.py"
+        )
 
     def run(self, test_context: TestingContextSingleton) -> TestResult:
+        test_context.report_progress(
+            "deployment_contract",
+            "checking one-command deployment and distribution contracts",
+        )
+        contract_problem = self._deployment_contract_problem()
+        if contract_problem is not None:
+            return contract_problem
         problem = self._prerequisite_problem()
         if problem is not None:
             return problem
@@ -29,6 +41,32 @@ class ContainerAutoCase(TestCase):
         return TestResult(
             TestStatus.PASSED,
             "container permission auto-selection matrix completed",
+        )
+
+    def _deployment_contract_problem(self) -> TestResult | None:
+        if not self._deployment_test_path.is_file():
+            return TestResult(
+                TestStatus.FAILED,
+                f"deployment contract is missing: {self._deployment_test_path}",
+            )
+        environment = os.environ.copy()
+        environment["TMPDIR"] = str(self._config.work_dir)
+        completed = subprocess.run(
+            [sys.executable, str(self._deployment_test_path), "-q"],
+            cwd=self._config.repo,
+            env=environment,
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        if completed.returncode == 0:
+            return None
+        diagnostic = (completed.stderr + completed.stdout).strip()
+        return TestResult(
+            TestStatus.FAILED,
+            "container deployment contract failed: "
+            + (diagnostic or f"exit={completed.returncode}"),
         )
 
     def _prerequisite_problem(self) -> TestResult | None:

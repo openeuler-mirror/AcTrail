@@ -15,6 +15,7 @@ from .runtime_config import load_hypervisor_table
 
 _MANIFEST_LINE = re.compile(r"^([0-9a-fA-F]{64})[ \t]+(.+)$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_EGRESS_MODES = {"network", "vsock-bridge"}
 _RELEASE_LAYOUT = {
     "actraild_sha256": "actraild",
     "actrailctl_sha256": "actrailctl",
@@ -32,6 +33,8 @@ class DeploymentArtifacts:
     source_commit: str
     backend: str
     runtime: str
+    egress_mode: str
+    otel_export_enabled: bool
     guest_bundle: Path
     workload_bundle: Path
     base_image: Path
@@ -73,6 +76,21 @@ class DeploymentArtifacts:
         source_commit = _required_string(document, "source_commit")
         backend = _required_string(document, "backend")
         runtime = _required_string(document, "runtime")
+        egress_mode_value = document.get("egress_mode", "network")
+        if not isinstance(egress_mode_value, str) or not egress_mode_value:
+            raise RuntimeError("artifact manifest egress_mode must be a string")
+        egress_mode = egress_mode_value
+        if egress_mode not in _EGRESS_MODES:
+            raise RuntimeError(
+                "artifact manifest egress_mode must be network or vsock-bridge"
+            )
+        otel_export_enabled = document.get("otel_export_enabled", True)
+        if not isinstance(otel_export_enabled, bool):
+            raise RuntimeError("artifact manifest otel_export_enabled must be boolean")
+        if egress_mode == "vsock-bridge" and not otel_export_enabled:
+            raise RuntimeError(
+                "artifact manifest cannot select vsock-bridge without OTLP export"
+            )
         if backend != expected_backend:
             raise RuntimeError(
                 "artifact backend mismatch: "
@@ -237,6 +255,8 @@ class DeploymentArtifacts:
             source_commit=source_commit,
             backend=backend,
             runtime=runtime,
+            egress_mode=egress_mode,
+            otel_export_enabled=otel_export_enabled,
             guest_bundle=guest_bundle,
             workload_bundle=workload_bundle,
             base_image=base_image,
