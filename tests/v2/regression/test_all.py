@@ -40,6 +40,9 @@ from tests.v2.regression.probe_xiaoo_llm.run_e2e import (  # noqa: E402
 from tests.v2.regression.command_policy_xiaoo.run_e2e import (  # noqa: E402
     TEST_DEFINITION as COMMAND_POLICY_XIAOO,
 )
+from tests.v2.regression.network_policy_xiaoo.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as NETWORK_POLICY_XIAOO,
+)
 from tests.v2.regression.activity_anomaly.run_e2e import (  # noqa: E402
     TEST_DEFINITION as ACTIVITY_ANOMALY,
 )
@@ -86,6 +89,7 @@ TESTS = [
     QODERCLI,
     XIAOO,
     COMMAND_POLICY_XIAOO,
+    NETWORK_POLICY_XIAOO,
     VIRTUAL_CONTAINER,
     VIRTUAL_CONTAINER_XIAOO_CONCURRENCY,
     CONTAINER_AUTO,

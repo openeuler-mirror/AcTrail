@@ -367,6 +367,18 @@ impl PluginManifest {
                 "hostcall_limits.command_context.read_max_bytes",
             ),
             (
+                self.hostcall_limits.network_policy.context_ref_max_bytes,
+                "hostcall_limits.network_policy.context_ref_max_bytes",
+            ),
+            (
+                self.hostcall_limits.network_policy.query_max_bytes,
+                "hostcall_limits.network_policy.query_max_bytes",
+            ),
+            (
+                self.hostcall_limits.network_policy.read_max_bytes,
+                "hostcall_limits.network_policy.read_max_bytes",
+            ),
+            (
                 self.hostcall_limits.plugin_config.read_max_bytes,
                 "hostcall_limits.plugin_config.read_max_bytes",
             ),

@@ -37,7 +37,9 @@ fn is_ebpf_only_capability(capability: &Capability) -> bool {
 fn is_seccomp_only_capability(capability: &Capability) -> bool {
     matches!(
         capability,
-        Capability::ProcExecContext | Capability::EnforcementCommandExecutionSeccomp
+        Capability::ProcExecContext
+            | Capability::EnforcementCommandExecutionSeccomp
+            | Capability::EnforcementNetworkConnectSeccomp
     )
 }
 

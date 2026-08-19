@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,14 @@ class CommandPolicyXiaooEnvironment(PluginTestEnvironment):
         self._plugin_root = config.work_dir / "plugins"
         self._rules = config.work_dir / "command-control.rules"
         self._xiaoo_config = config.work_dir / "xiaoo-config.toml"
+        self._thread_exec_fixture = (
+            config.repo
+            / "tests"
+            / "v2"
+            / "regression"
+            / "command_policy_xiaoo"
+            / "thread_exec.py"
+        )
         self._provider = LocalXiaooProvider(
             config.repo,
             config.work_dir,
@@ -170,6 +179,26 @@ class CommandPolicyXiaooEnvironment(PluginTestEnvironment):
         if result.returncode != 0 or "GNU bash" not in result.output:
             raise AssertionError(
                 "same Bash binary with argv outside [-c, *] was not allowed: "
+                f"{result.output[-2000:]}"
+            )
+
+    def require_nonleader_exec_allowed(self) -> None:
+        result = self.runtime.run(
+            self.runtime.control_command(
+                "launch",
+                "--name",
+                "v2-command-policy-nonleader-exec",
+                "--",
+                Path(sys.executable).resolve(),
+                self._thread_exec_fixture,
+                self.command_config.bash_executable,
+                "--version",
+            ),
+            timeout_seconds=self.command_config.launch_timeout_seconds,
+        )
+        if result.returncode != 0 or "GNU bash" not in result.output:
+            raise AssertionError(
+                "non-leader thread exec outside [-c, *] was not allowed: "
                 f"{result.output[-2000:]}"
             )
 

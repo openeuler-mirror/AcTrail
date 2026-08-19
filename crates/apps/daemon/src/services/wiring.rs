@@ -28,6 +28,7 @@ use super::enforcement::{
     COLLECTOR_NAME as ENFORCEMENT_COLLECTOR_NAME, FanotifyEnforcementService,
     enforcement_descriptor,
 };
+use super::network_control::NetworkControlService;
 use super::process_seccomp::PROCESS_SECCOMP_COLLECTOR_NAME;
 use super::resource_metrics::COLLECTOR_NAME as RESOURCE_METRICS_COLLECTOR_NAME;
 use super::workload_diagnostics::WorkloadDiagnostics;
@@ -245,6 +246,14 @@ fn build_runtime_wiring_with_attach_service(
     if process_seccomp.enabled || command_control_config.enabled {
         available_collectors.push(PROCESS_SECCOMP_COLLECTOR_NAME.to_string());
     }
+    if network_control_config.enabled {
+        available_collectors.push(
+            NetworkControlService::descriptor()
+                .name
+                .as_str()
+                .to_string(),
+        );
+    }
 
     let mut collector_descriptors = Vec::new();
     if process_seccomp.enabled || command_control_config.enabled {
@@ -267,6 +276,9 @@ fn build_runtime_wiring_with_attach_service(
     }
     if enforcement_config.enabled {
         collector_descriptors.push(enforcement_descriptor());
+    }
+    if network_control_config.enabled {
+        collector_descriptors.push(NetworkControlService::descriptor());
     }
 
     Ok(DaemonRuntimeWiring {

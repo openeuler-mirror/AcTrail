@@ -7,7 +7,7 @@ use model_core::payload::{PayloadSegment, PayloadSourceBoundary};
 use model_core::trace::TraceAlertToken;
 use plugin_system::{
     AlertHost, CommandExecutionContext, CommandPolicyHost, FilePolicyHost, FilePolicyReadContext,
-    PluginHostGrants, PostTraceHost,
+    NetworkActionContext, NetworkPolicyHost, PluginHostGrants, PostTraceHost,
 };
 use wasmtime::{StoreLimits, StoreLimitsBuilder};
 
@@ -32,6 +32,9 @@ pub(crate) struct WasmStoreState {
     command_execution_context: Option<CommandExecutionContext>,
     command_policy_host: Option<Arc<dyn CommandPolicyHost>>,
     command_policy_owner_instance_id: Option<String>,
+    network_action_context: Option<NetworkActionContext>,
+    network_policy_host: Option<Arc<dyn NetworkPolicyHost>>,
+    network_policy_owner_instance_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -78,6 +81,9 @@ pub(crate) struct WasmHostLimits {
     pub(crate) command_context_query_max_bytes: usize,
     pub(crate) command_context_read_max_bytes: usize,
     pub(crate) command_policy_io_max_bytes: usize,
+    pub(crate) network_context_ref_max_bytes: usize,
+    pub(crate) network_query_max_bytes: usize,
+    pub(crate) network_policy_io_max_bytes: usize,
     pub(crate) plugin_config_read_max_bytes: usize,
     pub(crate) plugin_command_argv_max_count: usize,
     pub(crate) plugin_command_arg_max_bytes: usize,
@@ -130,6 +136,9 @@ impl WasmStoreState {
             command_execution_context: None,
             command_policy_host: None,
             command_policy_owner_instance_id: None,
+            network_action_context: None,
+            network_policy_host: None,
+            network_policy_owner_instance_id: None,
         }
     }
 
@@ -340,5 +349,34 @@ impl WasmStoreState {
     ) {
         self.command_policy_owner_instance_id = host.as_ref().map(|_| owner_instance_id.into());
         self.command_policy_host = host;
+    }
+
+    pub(crate) fn network_action_context(&self) -> Option<&NetworkActionContext> {
+        self.network_action_context.as_ref()
+    }
+
+    pub(crate) fn set_network_action_context(&mut self, context: Option<NetworkActionContext>) {
+        self.network_action_context = context;
+    }
+
+    pub(crate) fn clear_network_action_context(&mut self) {
+        self.network_action_context = None;
+    }
+
+    pub(crate) fn network_policy_host(&self) -> Option<&Arc<dyn NetworkPolicyHost>> {
+        self.network_policy_host.as_ref()
+    }
+
+    pub(crate) fn network_policy_owner_instance_id(&self) -> Option<&str> {
+        self.network_policy_owner_instance_id.as_deref()
+    }
+
+    pub(crate) fn set_network_policy_host(
+        &mut self,
+        owner_instance_id: impl Into<String>,
+        host: Option<Arc<dyn NetworkPolicyHost>>,
+    ) {
+        self.network_policy_owner_instance_id = host.as_ref().map(|_| owner_instance_id.into());
+        self.network_policy_host = host;
     }
 }

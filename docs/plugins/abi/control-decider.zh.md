@@ -33,6 +33,8 @@ decide: func(request: decision-request) -> result<decision-response, string>
 
 WIT component 不读取 WASM core module 的 JSON envelope。AcTrail 通过 component model 直接传入结构化 `decision-request` record。返回 `ok(decision-response)` 表示插件给出控制结论；返回 `err(string)` 会被 AcTrail 视为插件运行错误。
 
+需要动态发布网络规则的 component 使用 `managed-network-control-plugin` world。它在管理命令和运行时配置接口之外导入独立的 `actrail:plugin/network-control-host@0.4.0`；普通控制插件不会因此获得网络策略写权限。
+
 ## 调用流程：WASM Core Module
 
 ```mermaid
@@ -66,7 +68,7 @@ sequenceDiagram
     D-->>A: 按插件决策继续或拒绝
 ```
 
-AcTrail 只把需要插件参与的行为送进插件。命令和网络控制先由本地显式策略命中插件实例；文件访问控制先由 fanotify 和黑白灰名单快路径筛选，只有需要插件决策的灰名单请求才进入插件。
+AcTrail 只把需要插件参与的行为送进插件。命令和网络控制都先做本地规则查找，allow/deny 在 daemon 内直接完成；只有 gray 规则才调用目标决策插件。文件访问控制先由 fanotify 和黑白灰名单快路径筛选，只有需要插件决策的灰名单请求才进入插件。动态策略 publisher 自身不参与 gray 决策。
 
 ## 格式约定
 
@@ -85,8 +87,12 @@ WASM core module JSON envelope 的短 key 是 ABI 的一部分，不是给人阅
 | --- | --- | --- |
 | 当前决策上下文 | `actrail_plugin_abi::control::context::CURRENT_DECISION` | `c` |
 | 当前文件策略上下文 | `actrail_plugin_abi::control::context::CURRENT_FILE_POLICY` | `f` |
+| 当前命令执行上下文 | `actrail_plugin_abi::control::context::CURRENT_COMMAND_EXECUTION` | `c` |
+| 当前网络动作上下文 | `actrail_plugin_abi::control::context::CURRENT_NETWORK_ACTION` | `c` |
 | 决策摘要查询 | `actrail_plugin_abi::control::query::DECISION_SUMMARY` | `decision-summary.v1` |
 | 命中文件策略查询 | `actrail_plugin_abi::control::query::MATCHED_RULE` | `matched-rule.v1` |
+| 命令执行上下文查询 | `actrail_plugin_abi::control::query::COMMAND_EXECUTION_CONTEXT` | `command-execution.v1` |
+| 网络动作上下文查询 | `actrail_plugin_abi::control::query::NETWORK_ACTION_CONTEXT` | `network-action.v1` |
 
 AcTrail 只接受这些短 token 和 query 名称，不接受长字段 token。
 
@@ -96,6 +102,8 @@ AcTrail 只接受这些短 token 和 query 名称，不接受长字段 token。
 
 - 文件访问先由 fanotify 和本地黑白灰名单筛选；白名单和黑名单不需要调用插件。
 - 灰名单或显式命中某个插件实例的策略才会调用控制决策插件。
+- 网络 connect 热路径先查询规范化 `SocketAddr` 精确索引，仅在未命中时查询 `IpAddr` 全端口索引；没有规则时直接采用 `network_control.default_decision`，不会进入 WASM，也不会遍历规则。
+- 网络 gray 调用从 seccomp 事件循环延后到有界 worker；全局 pending、每规则并发和目标实例并发任一达到上限时立即使用规则 fallback。
 - 插件需要额外上下文时，应通过已授权 hostcall 按需查询，不应要求 AcTrail 在每次请求里主动携带完整上下文。
 - 可复用结论应通过 `reusable` 返回，让 AcTrail 在当前 trace/task 范围内减少重复调用。
 
@@ -311,6 +319,44 @@ WIT component 入口：
 | `command-policy-rules-validate(request)` | `result<command-policy-apply-result, string>` |
 | `command-policy-rules-apply(request)` | `result<command-policy-apply-result, string>` |
 
+### 网络动作上下文与动态网络路由
+
+网络 gray 决策的 `target-summary` 仍然只用于展示和诊断，插件不得解析该字符串作为稳定策略输入。需要结构化目标的 WIT component 必须声明并获得 `network-action.current-context-query`，然后通过 `network-control-host.network-action-current-context-query("c", "network-action.v1")` 查询：
+
+| 字段 | WIT 类型 | 含义 |
+| --- | --- | --- |
+| `syscall` | string | 当前为 `connect`。 |
+| `fd` | u64 | tracee 传入 `connect(2)` 的 fd。 |
+| `address-family` | string | `ipv4` 或 `ipv6`。 |
+| `remote-address` | string | 不含端口的规范化数字 IP。 |
+| `remote-port` | u16 | 远端端口。 |
+| `ipv6-scope-id` | u32 | `sockaddr_in6.sin6_scope_id`；非 IPv6 或未设置时为 0。 |
+
+动态网络策略使用独立 grants：
+
+| grant | 能力 |
+| --- | --- |
+| `network-action.current-context-query` | 仅在当前网络 gray 决策期间读取结构化 connect 上下文。 |
+| `network-policy.rules.read` | 读取当前静态与动态 owner 合并后的规则及 revision。 |
+| `network-policy.rules.match-dry-run` | 对一个精确数字 endpoint 查询实际命中 owner、决策和 revision。 |
+| `network-policy.rules.validate` | 校验一批 AON patch，不修改路由。 |
+| `network-policy.rules.apply:kind=<allow\|deny\|gray>,remote=<*\|numeric-ip:port\|numeric-ip:*>` | 只允许发布指定决策类型和远端范围；IPv6 使用 `[ip]:port` 或 `[ip]:*`。 |
+
+`network-policy-apply-request` 包含精确 `base-revision`、`mutation-id`、可选 `reason` 和 `upsert/delete` items。每条动态 rule draft 使用 `remote` 表达精确数字 IPv4/IPv6 endpoint 或单 IP 全端口 selector；实际规则不接受裸 `*`。grant 的 `*` 覆盖全部 selector，`IP:*` 覆盖同 IP 的全端口和精确 endpoint，精确 grant 只覆盖自身。规则不提供 priority；同一 `IP:*` 与该 IP 的任何精确 endpoint 视为重叠，静态精确规则或任意动态 owner 间的重复/重叠会使整批请求 rejected。gray 规则还必须同时提供非自身的活动 `gray-target`、正数 `timeout-ms`、正数 `concurrency-limit` 和 `allow|deny` fallback。allow/deny 规则不得携带这些 gray 字段。
+
+`network-control-host` 的 WIT component 入口如下；这些入口不向 WASM core module 提供，声明网络策略管理能力的 core module 会在加载时失败。只做 gray 决策且需要结构化网络上下文的 component 使用最小 `network-control-plugin` world；同时提供管理命令和运行时配置的策略 publisher 使用 `managed-network-control-plugin`：
+
+| hostcall | WIT 类型 |
+| --- | --- |
+| `network-action-current-context-query(context-ref, query)` | `result<network-action-context, string>` |
+| `network-policy-rules-version-get()` | `result<u64, string>` |
+| `network-policy-rules-list(filter, cursor, limit)` | `result<network-policy-list-result, string>` |
+| `network-policy-rules-match-dry-run(request)` | `result<network-policy-match-dry-run-result, string>` |
+| `network-policy-rules-validate(request)` | `result<network-policy-apply-result, string>` |
+| `network-policy-rules-apply(request)` | `result<network-policy-apply-result, string>` |
+
+v1 网络控制的准确边界是 `AF_INET`/`AF_INET6` 的 `connect(2)`，即“INET connect 控制”，不是完整 egress firewall，也不能据此断言 transport 是 TCP。规则 selector 由数字 IP 与精确端口或全端口 `*` 组成；端口不支持任意区间。IPv6 scope ID 只进入 gray 决策上下文和审计，不参与 v1 本地规则匹配。审计中的 `remote` 保留实际 `IP:port`，命中规则时 `policy_remote_scope` 记录精确或 `IP:*` selector。它不解析域名、不做 DNS 或反向 DNS、不支持 CIDR、TLS SNI 和代理后的最终目标，也不覆盖 `sendto(2)`、AF_UNIX、继承或预先建立的连接、未安装 seccomp listener 的 attach 流程以及非 `SYS_connect` 的异步 I/O 路径。
+
 需要支持 `actraild plugin cmd` 的控制插件使用 WIT world `managed-control-plugin`。它在 `control-plugin` 的基础上额外导出管理命令入口：
 
 | export | WIT 类型 |
@@ -318,6 +364,8 @@ WIT component 入口：
 | `management-command.handle-command(request)` | `result<plugin-command-result, string>` |
 
 该入口由 `actraild plugin cmd --instance <id> -- <plugin args...>` 调用，属于低频管理面，不参与文件或命令执行热路径。AcTrail 只转发 argv 并限制输入输出大小；插件自己解释子命令。
+
+网络策略 publisher 使用 `managed-network-control-plugin`，导出同样的 `control-decider`、`management-command` 和 `runtime-config`，并额外导入 `network-control-host`。官方 `wasm.network-policy-dynamic` 的 `decide` 会明确返回错误，因为该实例只负责发布本地路由，gray 规则必须指向另一个活动 control-decider。
 
 ## 控制决策返回码
 
@@ -336,4 +384,4 @@ WASM core module 控制插件通过 `i64` 返回码表达决策：
 
 `once` 结果只作用于当前待决策请求。`reusable` 结果允许 AcTrail 在当前 task/trace 内复用该决策，减少重复调用插件的开销。
 
-灰名单文件访问的超时 fallback 由文件规则配置决定；命令 gray 的超时和 fallback 由 `[command_control.gray]` 配置，默认拒绝。耗时较长的逻辑应限制在明确需要同步决策的 gray 路径上，避免拖慢普通快路径。
+灰名单文件访问的超时 fallback 由文件规则配置决定；命令 gray 的超时和 fallback 由 `[command_control.gray]` 配置；网络 gray 的 timeout、并发上限和 fallback 属于每条网络规则。网络 reusable 缓存键包含 trace、进程 generation、owner/rule revision 和远端 endpoint，规则更新或 owner 卸载会清空相关缓存；gray target 在决策前或决策期间卸载时固定拒绝，不使用可放行的规则 fallback。耗时较长的逻辑应限制在明确需要同步决策的 gray 路径上，避免拖慢普通快路径。

@@ -107,11 +107,9 @@ class ProbeCodexMcpTask:
 
     def _prompt(self) -> str:
         return (
-            f"If {self.local.tool_id} is available, use it with "
-            f'{{"marker":"{self.local.marker}"}}, then reply with '
-            f'"{self.final_marker}". '
-            "If that MCP tool is not available, reply exactly "
-            "NO_MCP_TOOL and do not attempt to use it."
+            f"Use the {self.local.tool_id} MCP tool exactly once with "
+            f'{{"marker":"{self.local.marker}"}}, then reply exactly '
+            f'"{self.final_marker}". You must call the MCP tool before replying.'
         )
 
     def _resolve_codex(self) -> Path:

@@ -50,7 +50,7 @@
     </div>
     <button class="policy-scope-add" type="button" :disabled="busy" @click="addScope">
       <Plus :size="15" aria-hidden="true" />
-      Add another path
+      {{ addLabel }}
     </button>
   </section>
 </template>
@@ -66,6 +66,7 @@ const props = defineProps({
   placeholder: { type: String, required: true },
   pathHint: { type: String, required: true },
   busy: { type: Boolean, default: false },
+  addLabel: { type: String, default: 'Add another path' },
 });
 
 const emit = defineEmits(['update:modelValue', 'blur']);

@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Dynamic network policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["rules"],
+  "properties": {
+    "rules": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["decision", "remote"],
+        "properties": {
+          "rule_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Stable rule identifier; generated when omitted."
+          },
+          "decision": {
+            "type": "string",
+            "enum": ["allow", "deny", "gray"]
+          },
+          "remote": {
+            "type": "string",
+            "minLength": 3,
+            "description": "Numeric IPv4 or bracketed IPv6 selector with either an exact port or * for every port on that IP. Bare * is not a rule selector.",
+            "examples": ["203.0.113.10:443", "203.0.113.10:*", "[2001:db8::10]:*"]
+          },
+          "gray_target": {
+            "type": "string",
+            "minLength": 1
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "concurrency_limit": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "fallback": {
+            "type": "string",
+            "enum": ["allow", "deny"]
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "decision": { "const": "gray" } },
+              "required": ["decision"]
+            },
+            "then": {
+              "required": ["gray_target", "timeout_ms", "concurrency_limit", "fallback"]
+            },
+            "else": {
+              "properties": {
+                "gray_target": false,
+                "timeout_ms": false,
+                "concurrency_limit": false,
+                "fallback": false
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

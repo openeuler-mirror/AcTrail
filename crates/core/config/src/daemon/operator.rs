@@ -345,6 +345,7 @@ fn validate_seccomp_config(
     process_seccomp: &ProcessSeccompConfig,
     enforcement: &EnforcementConfig,
     command_control: &CommandControlConfig,
+    network_control: &NetworkControlConfig,
     capabilities: &[CapabilityRequest],
 ) -> Result<(), String> {
     if payload_tls.enabled
@@ -390,6 +391,18 @@ fn validate_seccomp_config(
         return Err(
             "enforcement-command-execution-seccomp requires proc-lifecycle so command identity is known before exec"
                 .to_string(),
+        );
+    }
+    let network_control_requested =
+        capability_requested(capabilities, &Capability::EnforcementNetworkConnectSeccomp);
+    if network_control_requested && !network_control.enabled {
+        return Err(
+            "enforcement-network-connect-seccomp requires network_control.enabled=true".to_string(),
+        );
+    }
+    if network_control_requested && !notify.enabled {
+        return Err(
+            "enforcement-network-connect-seccomp requires seccomp_notify.enabled=true".to_string(),
         );
     }
     if capability_requested(capabilities, &Capability::ProcExecContext) && !process_seccomp.enabled

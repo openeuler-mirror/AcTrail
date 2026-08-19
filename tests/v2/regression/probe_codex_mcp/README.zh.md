@@ -42,9 +42,9 @@ PID、日志、SQLite、TLS-sync socket、export 和 plugin 路径，不会停�
 - 默认 `stdout_storage_mode=drop` 下不持久化 stdout payload，但必须存在
   stdin payload，所有 payload evidence 都引用已持久化 segment。
 
-prompt 采用 best-effort 设计：如果当前 Codex+provider 没有暴露 MCP 工具，
-Codex 应直接回复 `NO_MCP_TOOL`。此时 probe server 不会收到 `tools/call`，
-测例判为 `SKIPPED`（视为环境不支持，而不是 AcTrail 失败）。
+prompt 会无条件要求 Codex 调用 MCP 工具，不向模型提供跳过工具调用的退出路径。
+如果当前 Codex+provider 确实没有暴露 MCP 工具，probe server 不会收到
+`tools/call`，测例判为 `SKIPPED`（视为环境不支持，而不是 AcTrail 失败）。
 
 ## 手动测试
 

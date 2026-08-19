@@ -2,7 +2,7 @@
 
 类别：WASM core module 控制决策插件。
 
-这个示例用于网络动作控制。当 `[network_control]` 规则精确命中 TCP `connect <ip:port>` 目标时，daemon 会在继续 seccomp notification 前调用插件。该示例返回拒绝决策，使目标连接收到 `EPERM`。
+这个示例用于网络动作控制。当 `[network_control]` gray 规则精确命中 INET `connect <ip:port>` 目标时，daemon 会把 seccomp notification 延后给插件 worker。该示例返回拒绝决策，使目标连接收到 `EPERM`。daemon 不检查 socket type，因此这里不应把目标限定描述为 TCP。
 
 文件：
 
