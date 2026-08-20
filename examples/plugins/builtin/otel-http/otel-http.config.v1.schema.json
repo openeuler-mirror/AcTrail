@@ -39,7 +39,7 @@
     },
     "attribute_mode": {
       "title": "Outbound action attributes",
-      "description": "Metadata-only omits captured action attributes. Full exports attributes already produced by the daemon, but does not enable optional content production: LLM request bodies additionally require semantic_retention.l0_llm_call.request_content=canonical_blocks and request_body_export=canonical_json. Use full only with a trusted Collector and transport.",
+      "description": "Metadata-only omits captured action attributes. Full exports attributes already produced by the daemon, but does not enable optional content production: LLM request bodies additionally require request_content=canonical_blocks and request_body_export=canonical_json; tool result bodies require tool_result_content_export=canonical_json. Use full only with a trusted Collector and transport.",
       "type": "string",
       "enum": ["metadata-only", "full"],
       "default": "metadata-only"
@@ -136,6 +136,8 @@
         "llm.call": {"type": "boolean"},
         "llm.request": {"type": "boolean"},
         "llm.response": {"type": "boolean"},
+        "llm.tool_call": {"type": "boolean"},
+        "llm.tool_result": {"type": "boolean"},
         "mcp.tool_call": {"type": "boolean"},
         "mcp.request": {"type": "boolean"},
         "mcp.response": {"type": "boolean"},

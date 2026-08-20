@@ -28,6 +28,16 @@ trajectory 归属；不发送命令行、HTTP/LLM 内容等采集属性。只有
 配置的 `request_body_export_max_bytes` 时不会截断发送，而是只导出 `too_large` 状态。
 插件只导出终态 action；同一 action 的 `in_progress` 修订不会形成重复 span。
 
+模型原生工具会形成 `llm.tool_call` / `llm.tool_result` action；逻辑 subagent 工具还会
+形成 `agent.invocation`，调用、结果、trajectory 和子请求关系通过带 role/confidence 的
+OTLP Span Links 输出。因为 action kind 是显式出境白名单，已有配置升级后需要自行加入
+`"llm.tool_call" = true` 和 `"llm.tool_result" = true`。
+
+工具结果正文采用独立授权，daemon 默认仅生成 ID、错误态、字节数、哈希与绑定状态，
+这些属性也只有插件设置 `attribute_mode = "full"` 时才会出境。正文还要求 daemon 设置
+`semantic_retention.l0_llm_call.tool_result_content_export = "canonical_json"`；规范化 JSON
+仅在不超过 `tool_result_content_export_max_bytes` 时才会出境。
+
 目录包含：
 
 - `otel-http.plugin.toml`：builtin observation-consumer manifest；

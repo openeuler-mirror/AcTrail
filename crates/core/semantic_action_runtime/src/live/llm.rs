@@ -23,9 +23,10 @@ use crate::payload_projection::http::{
 use crate::payload_projection::llm::{
     InFlightResponse, IncrementalSseCache, LiveLlmProjection, LiveLlmResponseMessage,
     LlmCodecPlugin, LlmCodecPluginStatus, LlmCodecRegistry, PayloadStreamGroupKey,
-    ProjectedLlmRequestHistory, ProjectedProviderResponseId, live_llm_request_message_len,
-    live_llm_request_prefix_skip_len, project_http2_stream_request, project_http2_stream_response,
-    project_live_llm_request_message, project_live_llm_response_message, semantic_payload_draft,
+    ProjectedLlmRequestHistory, ProjectedLlmToolResult, ProjectedProviderResponseId,
+    live_llm_request_message_len, live_llm_request_prefix_skip_len, project_http2_stream_request,
+    project_http2_stream_response, project_live_llm_request_message,
+    project_live_llm_response_message, semantic_payload_draft,
 };
 
 use super::actions::action_for_live_state;
@@ -60,6 +61,7 @@ pub(super) struct LiveLlmOutput {
     pub(super) llm_request_contents: Vec<LlmRequestContentWrite>,
     pub(super) llm_request_lineages: Vec<LlmRequestLineageWrite>,
     llm_request_histories: Vec<ProjectedLlmRequestHistory>,
+    pub(super) llm_tool_results: Vec<ProjectedLlmToolResult>,
     provider_response_ids: Vec<ProjectedProviderResponseId>,
     non_reusable_response_ids: BTreeSet<String>,
     pub(super) payload_segments: Vec<PayloadSegment>,
@@ -78,6 +80,7 @@ impl LiveLlmOutput {
         self.llm_request_lineages.extend(other.llm_request_lineages);
         self.llm_request_histories
             .extend(other.llm_request_histories);
+        self.llm_tool_results.extend(other.llm_tool_results);
         self.provider_response_ids
             .extend(other.provider_response_ids);
         self.non_reusable_response_ids
@@ -175,6 +178,7 @@ struct ActiveLlmResponseBinding {
 struct PendingTrajectoryAction {
     action: SemanticAction,
     content: Option<LlmRequestContentWrite>,
+    tool_results: Vec<ProjectedLlmToolResult>,
 }
 
 #[derive(Clone, Copy)]
@@ -674,6 +678,13 @@ impl LiveLlmProjector {
             .into_iter()
             .map(|history| (history.action_id.clone(), history))
             .collect::<BTreeMap<_, _>>();
+        let mut tool_results = BTreeMap::<String, Vec<ProjectedLlmToolResult>>::new();
+        for result in output.llm_tool_results {
+            tool_results
+                .entry(result.request_action_id.clone())
+                .or_default()
+                .push(result);
+        }
         let mut provider_response_ids = output
             .provider_response_ids
             .into_iter()
@@ -745,6 +756,9 @@ impl LiveLlmProjector {
                     PendingTrajectoryAction {
                         action: state_action.clone(),
                         content: request_contents.remove(&state_action.action_id),
+                        tool_results: tool_results
+                            .remove(&state_action.action_id)
+                            .unwrap_or_default(),
                     },
                 );
             }
@@ -752,6 +766,9 @@ impl LiveLlmProjector {
             if action_changed && !deferred_trajectory {
                 if let Some(content) = request_contents.remove(&action.action_id) {
                     changed.llm_request_contents.push(content);
+                }
+                if let Some(results) = tool_results.remove(&action.action_id) {
+                    changed.llm_tool_results.extend(results);
                 }
                 if let Some(lineage) = lineage {
                     changed.llm_request_lineages.push(lineage);
@@ -863,6 +880,7 @@ impl LiveLlmProjector {
             if let Some(content) = pending.content {
                 changed.llm_request_contents.push(content);
             }
+            changed.llm_tool_results.extend(pending.tool_results);
             self.update_open_request(&action);
             if self.record_projected_action(&action) {
                 changed.actions.push(action);
@@ -1336,6 +1354,7 @@ impl PlainStreamAssembly {
             output
                 .llm_request_histories
                 .extend(projection.llm_request_histories);
+            output.llm_tool_results.extend(projection.llm_tool_results);
             output.payload_segments.extend(projection.payload_segments);
             self.evict_encoded_len(encoded_len);
             if self.buffer.is_empty() {
@@ -1537,6 +1556,7 @@ impl Http2StreamAssembly {
         output
             .llm_request_histories
             .extend(projection.llm_request_histories);
+        output.llm_tool_results.extend(projection.llm_tool_results);
         self.plain.evict_encoded_len(projection.encoded_len);
         output
     }

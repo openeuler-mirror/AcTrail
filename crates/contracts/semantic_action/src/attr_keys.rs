@@ -28,7 +28,12 @@ pub mod agent_child {
 }
 
 pub mod agent_invocation {
+    pub const AGENT_TYPE: &str = "agent.invocation.agent_type";
     pub const EVIDENCE_ACTION_ID: &str = "agent.invocation.evidence_action_id";
+    pub const PROMPT_HASH: &str = "agent.invocation.prompt_hash";
+    pub const TOOL_CALL_ACTION_ID: &str = "agent.invocation.tool_call_action_id";
+    pub const TOOL_CALL_ID: &str = "agent.invocation.tool_call_id";
+    pub const TOOL_NAME: &str = "agent.invocation.tool_name";
     pub const TRIGGER: &str = "agent.invocation.trigger";
 }
 
@@ -218,8 +223,24 @@ pub mod llm_response {
 }
 
 pub mod llm_tool_call {
+    pub const ARGUMENTS_BYTES: &str = "llm.tool_call.arguments_bytes";
+    pub const ARGUMENTS_HASH: &str = "llm.tool_call.arguments_hash";
     pub const ID: &str = "llm.tool_call.id";
     pub const NAME: &str = "llm.tool_call.name";
+    pub const ORDINAL: &str = "llm.tool_call.ordinal";
+    pub const RESPONSE_ACTION_ID: &str = "llm.tool_call.response_action_id";
+}
+
+pub mod llm_tool_result {
+    pub const BINDING_STATE: &str = "llm.tool_result.binding_state";
+    pub const CONTENT_BYTES: &str = "llm.tool_result.content_bytes";
+    pub const CONTENT_HASH: &str = "llm.tool_result.content_hash";
+    pub const CONTENT_JSON: &str = "llm.tool_result.content_json";
+    pub const CONTENT_EXPORT_STATE: &str = "llm.tool_result.content_export_state";
+    pub const ID: &str = "llm.tool_result.id";
+    pub const IS_ERROR: &str = "llm.tool_result.is_error";
+    pub const ORDINAL: &str = "llm.tool_result.ordinal";
+    pub const REQUEST_ACTION_ID: &str = "llm.tool_result.request_action_id";
 }
 
 pub mod mcp {

@@ -1475,15 +1475,19 @@ mod request_body_export_tests {
     use plugin_system::{ObservationBatch, ObservationConsumer};
     use semantic_action::{
         SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionStatus,
-        attr_keys::llm_request,
+        attr_keys::{llm_request, llm_tool_result},
     };
 
-    use super::build_otel_http_observation_consumer;
+    use super::{build_otel_http_observation_consumer, metadata_only_action};
     use crate::config::{
         OtelAttributeMode, OtelCompression, OtelEncoding, OtelHttpExporterConfig, OtelHttpTlsConfig,
     };
 
-    fn test_config(endpoint: String, attribute_mode: OtelAttributeMode) -> OtelHttpExporterConfig {
+    fn test_config(
+        endpoint: String,
+        attribute_mode: OtelAttributeMode,
+        action_kind: SemanticActionKind,
+    ) -> OtelHttpExporterConfig {
         OtelHttpExporterConfig {
             endpoint,
             allow_insecure: true,
@@ -1501,9 +1505,9 @@ mod request_body_export_tests {
             headers: Vec::new(),
             action_kinds: SemanticActionKindSelection::from_config_entries([
                 ("default".to_string(), false),
-                ("llm.request".to_string(), true),
+                (action_kind.as_str().to_string(), true),
             ])
-            .expect("LLM request export policy"),
+            .expect("semantic action export policy"),
             attribute_mode,
         }
     }
@@ -1553,18 +1557,6 @@ mod request_body_export_tests {
     }
 
     fn export_canonical_request_body(attribute_mode: OtelAttributeMode) -> String {
-        let (endpoint, received) = spawn_stub_collector();
-        let consumer = build_otel_http_observation_consumer(test_config(endpoint, attribute_mode))
-            .expect("build consumer");
-        let trace = TraceRecord::new(
-            TraceId::new(7),
-            OtelTraceId::from_bytes([7; OtelTraceId::BYTE_COUNT]).expect("non-zero OTEL trace ID"),
-            TraceAlertToken::new([1; 32]),
-            ProcessIdentity::new(100),
-            TraceName::new("otel-http-request-body"),
-            ProfileName::new("test"),
-            UNIX_EPOCH,
-        );
         let canonical_body = r#"{"messages":[{"content":"body-export-marker","role":"user"}]}"#;
         let action = SemanticAction {
             action_id: "llm-request-body".to_string(),
@@ -1582,6 +1574,26 @@ mod request_body_export_tests {
             )]),
             evidence: Vec::new(),
         };
+        export_action(action, attribute_mode)
+    }
+
+    fn export_action(action: SemanticAction, attribute_mode: OtelAttributeMode) -> String {
+        let (endpoint, received) = spawn_stub_collector();
+        let consumer = build_otel_http_observation_consumer(test_config(
+            endpoint,
+            attribute_mode,
+            action.kind,
+        ))
+        .expect("build consumer");
+        let trace = TraceRecord::new(
+            TraceId::new(7),
+            OtelTraceId::from_bytes([7; OtelTraceId::BYTE_COUNT]).expect("non-zero OTEL trace ID"),
+            TraceAlertToken::new([1; 32]),
+            ProcessIdentity::new(100),
+            TraceName::new("otel-http-content-export"),
+            ProfileName::new("test"),
+            UNIX_EPOCH,
+        );
 
         consumer
             .consume(ObservationBatch {
@@ -1592,11 +1604,11 @@ mod request_body_export_tests {
                 file_observation_paths: &[],
                 payload_segments: &[],
             })
-            .expect("consume LLM request body");
+            .expect("consume semantic action");
 
         received
             .recv_timeout(Duration::from_secs(2))
-            .expect("collector receives the LLM request body")
+            .expect("collector receives the semantic action")
     }
 
     #[test]
@@ -1614,5 +1626,59 @@ mod request_body_export_tests {
         assert!(request.contains("llm.request"));
         assert!(!request.contains(llm_request::CANONICAL_BODY_JSON));
         assert!(!request.contains("body-export-marker"));
+    }
+
+    #[test]
+    fn metadata_only_mode_strips_opted_in_tool_result_content() {
+        let action = SemanticAction {
+            action_id: "tool-result".to_string(),
+            trace_id: TraceId::new(7),
+            kind: SemanticActionKind::LlmToolResult,
+            title: "secret tool result".to_string(),
+            start_time: UNIX_EPOCH,
+            end_time: Some(UNIX_EPOCH),
+            process: ProcessIdentity::new(100),
+            status: SemanticActionStatus::Success,
+            completeness: SemanticActionCompleteness::Complete,
+            attributes: BTreeMap::from([(
+                llm_tool_result::CONTENT_JSON.to_string(),
+                r#"{"stdout":"secret"}"#.to_string(),
+            )]),
+            evidence: Vec::new(),
+        };
+
+        let sanitized = metadata_only_action(&action);
+
+        assert_eq!(sanitized.title, "llm.tool_result");
+        assert!(
+            !sanitized
+                .attributes
+                .contains_key(llm_tool_result::CONTENT_JSON)
+        );
+    }
+
+    #[test]
+    fn full_attribute_mode_delivers_opted_in_tool_result_content() {
+        let action = SemanticAction {
+            action_id: "tool-result".to_string(),
+            trace_id: TraceId::new(7),
+            kind: SemanticActionKind::LlmToolResult,
+            title: "tool result".to_string(),
+            start_time: UNIX_EPOCH,
+            end_time: Some(UNIX_EPOCH),
+            process: ProcessIdentity::new(100),
+            status: SemanticActionStatus::Success,
+            completeness: SemanticActionCompleteness::Complete,
+            attributes: BTreeMap::from([(
+                llm_tool_result::CONTENT_JSON.to_string(),
+                r#"{"stdout":"tool-result-marker"}"#.to_string(),
+            )]),
+            evidence: Vec::new(),
+        };
+
+        let request = export_action(action, OtelAttributeMode::Full);
+
+        assert!(request.contains(llm_tool_result::CONTENT_JSON));
+        assert!(request.contains("tool-result-marker"));
     }
 }

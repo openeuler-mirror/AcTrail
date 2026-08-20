@@ -44,7 +44,8 @@ pub use agent::{
     DEFAULT_HTTP_EXCHANGE_MAX_PENDING_RESPONSES_PER_STREAM,
     DEFAULT_HTTP_EXCHANGE_RESPONSE_LATENESS, DEFAULT_LLM_ASSEMBLY_MAX_BUFFER_BYTES,
     DEFAULT_LLM_ASSEMBLY_MAX_SEGMENT_RANGES, DEFAULT_LLM_REQUEST_BODY_EXPORT_MAX_BYTES,
-    DEFAULT_LLM_TRAJECTORY_IDLE_TTL, DEFAULT_LLM_TRAJECTORY_MAX_ACTIVE_TRAJECTORIES_PER_SCOPE,
+    DEFAULT_LLM_TOOL_RESULT_EXPORT_MAX_BYTES, DEFAULT_LLM_TRAJECTORY_IDLE_TTL,
+    DEFAULT_LLM_TRAJECTORY_MAX_ACTIVE_TRAJECTORIES_PER_SCOPE,
     DEFAULT_LLM_TRAJECTORY_MAX_BLOCKS_PER_ATOM,
     DEFAULT_LLM_TRAJECTORY_MAX_CANDIDATE_NODES_PER_TRAJECTORY,
     DEFAULT_LLM_TRAJECTORY_MAX_HISTORY_ATOMS_PER_REQUEST,
@@ -53,9 +54,10 @@ pub use agent::{
     HttpBodyRetention, HttpExchangeConfig, HttpHeadersRetention, L0LlmCallRetention,
     L0McpCallRetention, L1SseRetention, L2HttpRetention, L3Http2FrameRetention, L4PayloadRetention,
     LlmAssemblyConfig, LlmRequestBodyExportRetention, LlmRequestContentRetention,
-    LlmResponseContentRetention, LlmToolCallRetention, LlmTrajectoryConfig, LlmUsageRetention,
-    McpJsonRpcContentRetention, PayloadBodyContentRetention, SemanticContentOwner,
-    SemanticRetentionConfig, SseEventContentRetention,
+    LlmResponseContentRetention, LlmToolCallRetention, LlmToolResultContentExportRetention,
+    LlmTrajectoryConfig, LlmUsageRetention, McpJsonRpcContentRetention,
+    PayloadBodyContentRetention, SemanticContentOwner, SemanticRetentionConfig,
+    SseEventContentRetention,
 };
 pub use application::{ApplicationProtocolConfig, SseDataPolicy};
 pub use cluster::{

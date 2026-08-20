@@ -38,7 +38,7 @@ sudo vi /etc/actrail/plugins/otel-http/otel-http.config.toml
 | `endpoint` | `http://COLLECTOR_HOST:4318/v1/traces` | 占位地址，**必须**换成真实 Collector |
 | `allow_insecure` | `true` | 明文 endpoint 必须显式为 `true`；`https://` 时设为 `false` |
 | `attribute_mode` | `metadata-only` | 只发结构化元数据，不发命令行和 HTTP/LLM 内容；`llm.request` 仍保留 trajectory ID 与推断版本。`full` 只导出 daemon 已生成的动作属性，不会自动开启可选内容，且仅适用于可信 Collector 与链路 |
-| `[action_kinds]` | `default = false` | 未列出的类型一律不发。模板已预开 `process.exec/exit`、`agent.*`、`llm.*`、`mcp.*`、`enforcement.decision`、`command.invocation`；`file.*`、`fs.enumerate`、`http.message`、`sse.*` 默认关闭 |
+| `[action_kinds]` | `default = false` | 未列出的类型一律不发。模板已预开 `process.exec/exit`、`agent.*`、`llm.*`（含 `llm.tool_call/result`）、`mcp.*`、`enforcement.decision`、`command.invocation`；`file.*`、`fs.enumerate`、`http.message`、`sse.*` 默认关闭 |
 | `tls_client_cert_path` / `tls_client_key_path` | 注释 | mTLS 两者必须同时配置；为明文 endpoint 配置 TLS 文件会被拒绝 |
 
 ### LLM 请求正文的三重授权
@@ -63,6 +63,36 @@ attribute_mode = "full"
 是为了让已有 `full` 部署升级后仍保持原出境范围；否则升级本身就会开始外送完整对话、
 工具结果和 agent 读取的文件内容。启用前应确认额外本地副本符合留存政策，Collector
 和传输链路能承载敏感内容，并按接收端上限设置 `request_body_export_max_bytes`。
+
+### 工具调用、结果与 subagent 关系
+
+新版本把模型原生工具交互投影为 `llm.tool_call` / `llm.tool_result`，把配置的逻辑
+Agent 工具投影为 `agent.invocation`，并通过 OTLP Span Links 保留调用、结果、trajectory
+和子请求关系。旧配置采用显式白名单，升级后必须补上：
+
+```toml
+[action_kinds]
+"llm.tool_call" = true
+"llm.tool_result" = true
+"agent.invocation" = true
+```
+
+工具结果默认只生成 ID、错误态、规范化字节数、哈希和绑定状态，不生成正文；这些元数据
+也只有 `attribute_mode = "full"` 时才会出境。需要正文时还要显式授权 daemon 生成正文属性：
+
+```toml
+# daemon operator config
+[semantic_retention.l0_llm_call]
+tool_result_content_export = "canonical_json"
+tool_result_content_export_max_bytes = 131072
+
+# otel-http plugin config（元数据与正文均需此项）
+attribute_mode = "full"
+```
+
+`agent_invocation.tool_names` 默认识别 `Agent`、`Task`、`task` 和 `spawn_agent`；不同
+Agent runtime 使用其他逻辑工具名时应在 operator config 中显式补充。子请求关联只接受
+唯一 prompt 指纹命中，不使用时间邻近猜测。
 
 ## 步骤 2：加载
 

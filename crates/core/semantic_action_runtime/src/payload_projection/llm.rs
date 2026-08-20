@@ -22,7 +22,10 @@ pub use plugin_system::{
     LlmCodecDecoded, LlmCodecOutcome, LlmCodecPlugin, LlmCodecPluginStatus, LlmCodecRequest,
     LlmCodecSseEvent,
 };
-pub(crate) use request::{ProjectedLlmRequestHistory, ProviderContextReference};
+pub(crate) use request::{
+    ProjectedLlmRequestHistory, ProjectedLlmToolResult, ProviderContextReference,
+};
+pub(crate) use request_blocks::canonical_json as canonical_llm_json;
 pub(crate) use request_blocks::{HistoryAtom, TrajectoryHistoryProjection};
 pub(crate) use response::InFlightResponse;
 pub(crate) use response::ProjectedProviderResponseId;

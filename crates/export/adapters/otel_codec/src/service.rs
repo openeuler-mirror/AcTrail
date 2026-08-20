@@ -155,6 +155,8 @@ fn span_kind(kind: SemanticActionKind) -> &'static str {
         | SemanticActionKind::CommandInvocation
         | SemanticActionKind::ProcessForkAttempt
         | SemanticActionKind::AgentInvocation
+        | SemanticActionKind::LlmToolCall
+        | SemanticActionKind::LlmToolResult
         | SemanticActionKind::FileRead
         | SemanticActionKind::FileWrite
         | SemanticActionKind::FileModify
@@ -186,16 +188,11 @@ pub(crate) fn parent_link<'a>(
 pub(crate) fn support_links<'a>(
     action: &SemanticAction,
     links: &'a [SemanticActionLink],
-    parent: Option<&'a SemanticActionLink>,
+    _parent: Option<&'a SemanticActionLink>,
 ) -> impl Iterator<Item = &'a SemanticActionLink> {
     links.iter().filter(move |link| {
         link.child_action_id == action.action_id
             && !link_invalidated_by_child_parent_identity(action, link)
-            && !parent.is_some_and(|parent| {
-                parent.parent_action_id == link.parent_action_id
-                    && parent.child_action_id == link.child_action_id
-                    && parent.role == link.role
-            })
     })
 }
 
@@ -235,8 +232,13 @@ fn link_is_parent_child(role: SemanticActionLinkRole) -> bool {
             | SemanticActionLinkRole::FileWriteContainsFileEvent
             | SemanticActionLinkRole::AgentInvocationExec
             | SemanticActionLinkRole::AgentInvocationChildLlmRequest
+            | SemanticActionLinkRole::LlmRequestTrajectoryParent
+            | SemanticActionLinkRole::LlmRequestTrajectoryFork
             | SemanticActionLinkRole::LlmCallRequest
             | SemanticActionLinkRole::LlmCallResponse
+            | SemanticActionLinkRole::LlmResponseToolCall
+            | SemanticActionLinkRole::LlmToolCallResult
+            | SemanticActionLinkRole::LlmToolCallAgentInvocation
             | SemanticActionLinkRole::LlmResponseSseStream
             | SemanticActionLinkRole::SseStreamEvent
     )
@@ -245,6 +247,7 @@ fn link_is_parent_child(role: SemanticActionLinkRole) -> bool {
 #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
 enum ParentRolePriority {
     AgentInvocationExec,
+    LlmToolCallAgentInvocation,
     CommandContainsProcessExec,
     CommandContainsCommandInvocation,
     CommandContainsLlmCall,
@@ -257,8 +260,12 @@ enum ParentRolePriority {
     CommandContainsProcessForkAttempt,
     CommandContainsFileAccess,
     AgentInvocationChildLlmRequest,
+    LlmRequestTrajectoryParent,
+    LlmRequestTrajectoryFork,
     LlmCallRequest,
     LlmCallResponse,
+    LlmResponseToolCall,
+    LlmToolCallResult,
     FileWriteContainsFileEvent,
     LlmResponseSseStream,
     SseStreamEvent,
@@ -270,6 +277,9 @@ enum ParentRolePriority {
 fn parent_role_priority(role: SemanticActionLinkRole) -> ParentRolePriority {
     match role {
         SemanticActionLinkRole::AgentInvocationExec => ParentRolePriority::AgentInvocationExec,
+        SemanticActionLinkRole::LlmToolCallAgentInvocation => {
+            ParentRolePriority::LlmToolCallAgentInvocation
+        }
         SemanticActionLinkRole::CommandContainsProcessExec => {
             ParentRolePriority::CommandContainsProcessExec
         }
@@ -296,8 +306,16 @@ fn parent_role_priority(role: SemanticActionLinkRole) -> ParentRolePriority {
         SemanticActionLinkRole::AgentInvocationChildLlmRequest => {
             ParentRolePriority::AgentInvocationChildLlmRequest
         }
+        SemanticActionLinkRole::LlmRequestTrajectoryParent => {
+            ParentRolePriority::LlmRequestTrajectoryParent
+        }
+        SemanticActionLinkRole::LlmRequestTrajectoryFork => {
+            ParentRolePriority::LlmRequestTrajectoryFork
+        }
         SemanticActionLinkRole::LlmCallRequest => ParentRolePriority::LlmCallRequest,
         SemanticActionLinkRole::LlmCallResponse => ParentRolePriority::LlmCallResponse,
+        SemanticActionLinkRole::LlmResponseToolCall => ParentRolePriority::LlmResponseToolCall,
+        SemanticActionLinkRole::LlmToolCallResult => ParentRolePriority::LlmToolCallResult,
         SemanticActionLinkRole::FileWriteContainsFileEvent => {
             ParentRolePriority::FileWriteContainsFileEvent
         }
@@ -365,4 +383,55 @@ fn unix_nanos(value: SystemTime) -> u128 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use model_core::ids::TraceId;
+    use model_core::process::ProcessIdentity;
+    use semantic_action::{
+        SemanticActionCompleteness, SemanticActionLinkConfidence, SemanticActionStatus,
+    };
+
+    use super::*;
+
+    #[test]
+    fn selected_parent_is_also_emitted_as_a_typed_span_link() {
+        let action = SemanticAction {
+            action_id: "child".to_string(),
+            trace_id: TraceId::new(1),
+            kind: SemanticActionKind::LlmToolResult,
+            title: "tool result".to_string(),
+            start_time: SystemTime::UNIX_EPOCH,
+            end_time: Some(SystemTime::UNIX_EPOCH),
+            process: ProcessIdentity::new(7),
+            status: SemanticActionStatus::Success,
+            completeness: SemanticActionCompleteness::Complete,
+            attributes: BTreeMap::new(),
+            evidence: Vec::new(),
+        };
+        let link = SemanticActionLink {
+            trace_id: action.trace_id,
+            parent_action_id: "tool-call".to_string(),
+            child_action_id: action.action_id.clone(),
+            role: SemanticActionLinkRole::LlmToolCallResult,
+            confidence: SemanticActionLinkConfidence::Observed,
+            valid: true,
+            evidence: Vec::new(),
+            attributes: BTreeMap::new(),
+        };
+        let links = vec![link];
+        let parent = parent_link(&action, &links);
+
+        let emitted = support_links(&action, &links, parent).collect::<Vec<_>>();
+
+        assert_eq!(
+            parent.map(|link| link.role),
+            Some(SemanticActionLinkRole::LlmToolCallResult)
+        );
+        assert_eq!(emitted.len(), 1);
+        assert_eq!(emitted[0].role, SemanticActionLinkRole::LlmToolCallResult);
+    }
 }

@@ -20,6 +20,12 @@ pub(super) const FORMAT_VERSION: u32 = 2;
 
 const BLOCK_PLACEHOLDER_KEY: &str = "$actrail_llm_block";
 
+pub(crate) fn canonical_json(value: &Value) -> (String, String) {
+    let json = canonical_json_string(value);
+    let hash = sha256_hex(json.as_bytes());
+    (json, hash)
+}
+
 pub(super) struct CanonicalBody {
     pub(super) json: String,
     pub(super) hash: String,
