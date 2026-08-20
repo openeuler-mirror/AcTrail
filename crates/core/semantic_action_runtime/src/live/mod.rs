@@ -10,6 +10,7 @@ mod llm;
 mod mcp;
 mod process_parent;
 mod runtime;
+mod tool;
 
 pub use mcp::LiveMcpStdioDiagnostic;
 pub use runtime::LiveSemanticActionObservation;

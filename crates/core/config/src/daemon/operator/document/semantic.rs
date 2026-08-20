@@ -48,6 +48,13 @@ impl SemanticRetentionDocument {
                 .to_string(),
                 tool_calls: llm_tool_call_retention_as_str(config.l0_llm_call.tool_calls)
                     .to_string(),
+                tool_result_content_export: llm_tool_result_content_export_retention_as_str(
+                    config.l0_llm_call.tool_result_content_export,
+                )
+                .to_string(),
+                tool_result_content_export_max_bytes: config
+                    .l0_llm_call
+                    .tool_result_content_export_max_bytes,
                 usage: llm_usage_retention_as_str(config.l0_llm_call.usage).to_string(),
                 retain_assembled_payload: config.l0_llm_call.retain_assembled_payload,
                 websocket_max_connections_per_process: config
@@ -149,6 +156,8 @@ pub(super) struct L0LlmCallDocument {
     pub request_body_export_max_bytes: u64,
     pub response_content: String,
     pub tool_calls: String,
+    pub tool_result_content_export: String,
+    pub tool_result_content_export_max_bytes: u64,
     pub usage: String,
     pub retain_assembled_payload: bool,
     pub websocket_max_connections_per_process: u32,
@@ -165,6 +174,8 @@ impl Default for L0LlmCallDocument {
             request_body_export_max_bytes: DEFAULT_LLM_REQUEST_BODY_EXPORT_MAX_BYTES,
             response_content: "assembled_provider".to_string(),
             tool_calls: "assembled_json".to_string(),
+            tool_result_content_export: "none".to_string(),
+            tool_result_content_export_max_bytes: DEFAULT_LLM_TOOL_RESULT_EXPORT_MAX_BYTES,
             usage: "summary".to_string(),
             retain_assembled_payload: false,
             websocket_max_connections_per_process:
@@ -201,6 +212,14 @@ impl L0LlmCallDocument {
             tool_calls: parse_value(
                 "semantic_retention.l0_llm_call.tool_calls",
                 &self.tool_calls,
+            )?,
+            tool_result_content_export: parse_value(
+                "semantic_retention.l0_llm_call.tool_result_content_export",
+                &self.tool_result_content_export,
+            )?,
+            tool_result_content_export_max_bytes: require_positive_u64(
+                "semantic_retention.l0_llm_call.tool_result_content_export_max_bytes",
+                self.tool_result_content_export_max_bytes,
             )?,
             usage: parse_value("semantic_retention.l0_llm_call.usage", &self.usage)?,
             retain_assembled_payload: self.retain_assembled_payload,

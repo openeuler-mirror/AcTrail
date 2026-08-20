@@ -28,7 +28,20 @@ pub(crate) struct ProjectedLlmRequestAction {
     pub(crate) action: SemanticAction,
     pub(crate) content: Option<LlmRequestContentWrite>,
     pub(crate) trajectory_history: Option<ProjectedLlmRequestHistory>,
+    pub(crate) tool_results: Vec<ProjectedLlmToolResult>,
     pub(crate) payload_segments: Vec<PayloadSegment>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ProjectedLlmToolResult {
+    pub(crate) request_action_id: String,
+    pub(crate) tool_call_id: Option<String>,
+    pub(crate) ordinal: usize,
+    pub(crate) is_error: bool,
+    pub(crate) content_json: Option<String>,
+    pub(crate) content_hash: String,
+    pub(crate) content_bytes: u64,
+    pub(crate) content_export_state: &'static str,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -70,6 +83,9 @@ pub(super) fn project_stream_llm_request_action(
         content_projection.metadata.as_ref(),
     );
     let evidence = payload_aggregate_evidence(segments, evidence_roles::llm_request::PAYLOAD);
+    let tool_results = body.json.as_ref().map_or_else(Vec::new, |value| {
+        project_tool_results(config, &action_id, value)
+    });
     let payload_segments =
         if config.l4_payload.enabled || !config.l0_llm_call.retain_assembled_payload() {
             Vec::new()
@@ -108,8 +124,136 @@ pub(super) fn project_stream_llm_request_action(
             evidence,
         },
         content: content_projection.content,
+        tool_results,
         payload_segments,
     })
+}
+
+fn project_tool_results(
+    config: &SemanticRetentionConfig,
+    request_action_id: &str,
+    body: &Value,
+) -> Vec<ProjectedLlmToolResult> {
+    if !config.llm_layer_enabled() {
+        return Vec::new();
+    }
+    let mut raw = Vec::new();
+    if let Some(messages) = body.get("messages").and_then(Value::as_array) {
+        collect_trailing_tool_results(messages, &mut raw);
+    } else if let Some(input) = body.get("input").and_then(Value::as_array) {
+        collect_trailing_tool_results(input, &mut raw);
+    }
+    raw.into_iter()
+        .enumerate()
+        .map(|(ordinal, raw)| {
+            let (canonical_json, content_hash) = super::request_blocks::canonical_json(raw.content);
+            let content_bytes = canonical_json.len() as u64;
+            let content_json = if !config.llm_tool_result_content_export_enabled() {
+                None
+            } else if content_bytes <= config.l0_llm_call.tool_result_content_export_max_bytes {
+                Some(canonical_json)
+            } else {
+                None
+            };
+            let content_export_state = if !config.llm_tool_result_content_export_enabled() {
+                "none"
+            } else if content_json.is_some() {
+                "exported"
+            } else {
+                "too_large"
+            };
+            ProjectedLlmToolResult {
+                request_action_id: request_action_id.to_string(),
+                tool_call_id: raw.tool_call_id.map(ToString::to_string),
+                ordinal,
+                is_error: raw.is_error,
+                content_json,
+                content_hash,
+                content_bytes,
+                content_export_state,
+            }
+        })
+        .collect()
+}
+
+struct RawToolResult<'a> {
+    tool_call_id: Option<&'a str>,
+    is_error: bool,
+    content: &'a Value,
+}
+
+fn collect_trailing_tool_results<'a>(items: &'a [Value], output: &mut Vec<RawToolResult<'a>>) {
+    let mut suffix = Vec::new();
+    for item in items.iter().rev() {
+        let mut item_results = Vec::new();
+        collect_message_tool_results(item, &mut item_results);
+        if item_results.is_empty() {
+            break;
+        }
+        suffix.push(item_results);
+    }
+    for item_results in suffix.into_iter().rev() {
+        output.extend(item_results);
+    }
+}
+
+fn collect_message_tool_results<'a>(message: &'a Value, output: &mut Vec<RawToolResult<'a>>) {
+    let kind = message.get("type").and_then(Value::as_str);
+    let role = message.get("role").and_then(Value::as_str);
+    if kind.is_some_and(is_tool_result_kind) || role == Some("tool") {
+        output.push(raw_tool_result(message));
+        return;
+    }
+    let Some(content) = message.get("content") else {
+        return;
+    };
+    match content {
+        Value::Array(blocks) => {
+            for block in blocks {
+                if block
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .is_some_and(is_tool_result_kind)
+                {
+                    output.push(raw_tool_result(block));
+                }
+            }
+        }
+        Value::Object(_)
+            if content
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(is_tool_result_kind) =>
+        {
+            output.push(raw_tool_result(content));
+        }
+        _ => {}
+    }
+}
+
+fn is_tool_result_kind(kind: &str) -> bool {
+    matches!(kind, "tool_result" | "tool-result") || kind.ends_with("_call_output")
+}
+
+fn raw_tool_result(value: &Value) -> RawToolResult<'_> {
+    let content = value
+        .get("content")
+        .or_else(|| value.get("output"))
+        .unwrap_or(&Value::Null);
+    let tool_call_id = ["tool_use_id", "tool_call_id", "call_id", "id"]
+        .into_iter()
+        .find_map(|key| value.get(key).and_then(Value::as_str))
+        .filter(|id| !id.is_empty());
+    let is_error = value
+        .get("is_error")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || value.get("status").and_then(Value::as_str) == Some("error");
+    RawToolResult {
+        tool_call_id,
+        is_error,
+        content,
+    }
 }
 
 struct RequestContentProjection {
@@ -622,7 +766,9 @@ fn llm_stream_action_id(
 
 #[cfg(test)]
 mod tests {
-    use config_core::daemon::{LlmRequestBodyExportRetention, SemanticRetentionConfig};
+    use config_core::daemon::{
+        LlmRequestBodyExportRetention, LlmToolResultContentExportRetention, SemanticRetentionConfig,
+    };
     use sha2::{Digest, Sha256};
 
     use crate::payload_projection::testing::HttpRequestFixture;
@@ -888,5 +1034,142 @@ mod tests {
             Some("exported".to_string())
         );
         assert_eq!(exported, baseline);
+    }
+
+    #[test]
+    fn anthropic_tool_result_projects_identity_and_metadata_without_content_by_default() {
+        let body = serde_json::json!({
+            "model": "claude-opus-4",
+            "messages": [{
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": "secret output",
+                    "is_error": false
+                }]
+            }]
+        });
+
+        let results = project_tool_results(&SemanticRetentionConfig::default(), "request-2", &body);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].tool_call_id.as_deref(), Some("toolu_1"));
+        assert_eq!(results[0].content_export_state, "none");
+        assert_eq!(results[0].content_json, None);
+        assert!(results[0].content_hash.starts_with("sha256:"));
+        assert!(results[0].content_bytes > 0);
+    }
+
+    #[test]
+    fn openai_tool_result_content_requires_explicit_export_and_respects_limit() {
+        let body = serde_json::json!({
+            "model": "gpt-5",
+            "messages": [{
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": {"stdout": "done"}
+            }]
+        });
+        let mut config = SemanticRetentionConfig::default();
+        config.l0_llm_call.tool_result_content_export =
+            LlmToolResultContentExportRetention::CanonicalJson;
+
+        let exported = project_tool_results(&config, "request-2", &body);
+        assert_eq!(exported[0].content_export_state, "exported");
+        assert_eq!(
+            exported[0].content_json.as_deref(),
+            Some(r#"{"stdout":"done"}"#)
+        );
+
+        config.l0_llm_call.tool_result_content_export_max_bytes = 1;
+        let omitted = project_tool_results(&config, "request-2", &body);
+        assert_eq!(omitted[0].content_export_state, "too_large");
+        assert_eq!(omitted[0].content_json, None);
+    }
+
+    #[test]
+    fn historical_tool_results_are_not_reemitted_from_later_requests() {
+        let body = serde_json::json!({
+            "model": "claude-opus-4",
+            "messages": [
+                {"role": "user", "content": "run a tool"},
+                {"role": "assistant", "content": [{
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "Bash",
+                    "input": {"command": "true"}
+                }]},
+                {"role": "user", "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": "done"
+                }]},
+                {"role": "assistant", "content": "finished"},
+                {"role": "user", "content": "what next?"}
+            ]
+        });
+
+        let results = project_tool_results(&SemanticRetentionConfig::default(), "request-3", &body);
+
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn responses_input_keeps_only_the_trailing_tool_result_group() {
+        let body = serde_json::json!({
+            "model": "gpt-5",
+            "input": [
+                {"type": "function_call_output", "call_id": "old", "output": "old"},
+                {"role": "user", "content": "new turn"},
+                {"type": "function_call_output", "call_id": "call_1", "output": "one"},
+                {"type": "function_call_output", "call_id": "call_2", "output": "two"}
+            ]
+        });
+
+        let results = project_tool_results(&SemanticRetentionConfig::default(), "request-2", &body);
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].tool_call_id.as_deref(), Some("call_1"));
+        assert_eq!(results[1].tool_call_id.as_deref(), Some("call_2"));
+    }
+
+    #[test]
+    fn responses_custom_tool_output_is_projected() {
+        let body = serde_json::json!({
+            "model": "gpt-5",
+            "input": [{
+                "type": "custom_tool_call_output",
+                "call_id": "custom_1",
+                "output": "patched"
+            }]
+        });
+
+        let results = project_tool_results(&SemanticRetentionConfig::default(), "request-2", &body);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].tool_call_id.as_deref(), Some("custom_1"));
+    }
+
+    #[test]
+    fn chat_messages_keep_parallel_trailing_tool_results() {
+        let body = serde_json::json!({
+            "model": "gpt-5",
+            "messages": [
+                {"role": "user", "content": "run both"},
+                {"role": "assistant", "tool_calls": [
+                    {"id": "call_1", "function": {"name": "one", "arguments": "{}"}},
+                    {"id": "call_2", "function": {"name": "two", "arguments": "{}"}}
+                ]},
+                {"role": "tool", "tool_call_id": "call_1", "content": "one"},
+                {"role": "tool", "tool_call_id": "call_2", "content": "two"}
+            ]
+        });
+
+        let results = project_tool_results(&SemanticRetentionConfig::default(), "request-2", &body);
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].tool_call_id.as_deref(), Some("call_1"));
+        assert_eq!(results[1].tool_call_id.as_deref(), Some("call_2"));
     }
 }

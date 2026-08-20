@@ -349,6 +349,15 @@ pub(super) fn llm_request_body_export_retention_as_str(
     }
 }
 
+pub(super) fn llm_tool_result_content_export_retention_as_str(
+    value: LlmToolResultContentExportRetention,
+) -> &'static str {
+    match value {
+        LlmToolResultContentExportRetention::None => "none",
+        LlmToolResultContentExportRetention::CanonicalJson => "canonical_json",
+    }
+}
+
 pub(super) fn llm_response_content_retention_as_str(
     value: LlmResponseContentRetention,
 ) -> &'static str {

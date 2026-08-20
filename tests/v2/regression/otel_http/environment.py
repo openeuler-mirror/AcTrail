@@ -32,6 +32,8 @@ class OtelHttpEnvironment(PluginTestEnvironment):
         "llm.call",
         "llm.request",
         "llm.response",
+        "llm.tool_call",
+        "llm.tool_result",
         "mcp.tool_call",
         "mcp.request",
         "mcp.response",

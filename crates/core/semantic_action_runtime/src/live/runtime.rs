@@ -28,6 +28,7 @@ use super::http_exchange::HttpExchangeTracker;
 use super::links::ActionLinkProjector;
 use super::llm::LiveLlmProjector;
 use super::mcp::{LiveMcpProjector, LiveMcpStdioDiagnostic};
+use super::tool::ToolInteractionProjector;
 
 pub struct LiveSemanticActionRuntime {
     agent: AgentProjector,
@@ -36,6 +37,7 @@ pub struct LiveSemanticActionRuntime {
     http_exchange: HttpExchangeTracker,
     llm: LiveLlmProjector,
     mcp: LiveMcpProjector,
+    tool: ToolInteractionProjector,
     links: ActionLinkProjector,
 }
 
@@ -116,10 +118,7 @@ impl LiveSemanticActionRuntime {
         file_observation: FileObservationConfig,
         mcp: PayloadMcpConfig,
     ) -> Self {
-        let AgentInvocationConfig {
-            enabled,
-            commands: _,
-        } = config;
+        let enabled = config.enabled;
         let mcp_content_retention = semantic_retention.l0_mcp_call.clone();
         let http_exchange_config = semantic_retention.l2_http.exchange;
         Self {
@@ -129,6 +128,7 @@ impl LiveSemanticActionRuntime {
             http_exchange: HttpExchangeTracker::new(http_exchange_config),
             llm: LiveLlmProjector::new(semantic_retention),
             mcp: LiveMcpProjector::new(mcp, mcp_content_retention),
+            tool: ToolInteractionProjector::new(config),
             links: ActionLinkProjector::new(),
         }
     }
@@ -244,6 +244,11 @@ impl LiveSemanticActionRuntime {
                 let mut llm_actions = Vec::new();
                 for matched in &observation.matches {
                     let llm_output = self.llm.observe_http_exchange(matched);
+                    let tool_output = self.tool.observe_llm_output(
+                        &llm_output.actions,
+                        &llm_output.llm_tool_results,
+                        &llm_output.llm_request_lineages,
+                    );
                     for proposal in &llm_output.http_request_links {
                         if let Some(link) = self.links.observe_exact_http_request_link(proposal) {
                             output.links.push(link);
@@ -257,6 +262,8 @@ impl LiveSemanticActionRuntime {
                         .extend(llm_output.llm_request_lineages);
                     output.payload_segments.extend(llm_output.payload_segments);
                     llm_actions.extend(llm_output.actions);
+                    llm_actions.extend(tool_output.actions);
+                    output.links.extend(tool_output.links);
                 }
                 output.actions.extend(observation.actions);
                 output.actions.extend(llm_actions);
@@ -361,6 +368,11 @@ impl LiveSemanticActionRuntime {
             }
         }
         let mut mcp_actions = self.mcp.observe_llm_actions(&llm_output.actions);
+        let tool_output = self.tool.observe_llm_output(
+            &llm_output.actions,
+            &llm_output.llm_tool_results,
+            &llm_output.llm_request_lineages,
+        );
         let (mcp_output, mcp_stdio_diagnostics) =
             self.mcp.observe_payload_segment(segment, retain_evidence);
         mcp_actions.extend(mcp_output.actions);
@@ -395,6 +407,8 @@ impl LiveSemanticActionRuntime {
             output.actions.push(action.clone());
             output.actions.extend(agent_actions);
         }
+        output.actions.extend(tool_output.actions);
+        output.links.extend(tool_output.links);
         for action in &mcp_actions {
             output.extend(self.command.observe_mcp_tool_call(action));
         }
@@ -432,6 +446,11 @@ impl LiveSemanticActionRuntime {
     ) -> LiveSemanticActionObservation {
         self.http_exchange.quarantine_payload_stream(segment);
         let llm_output = self.llm.observe_payload_gap(segment);
+        let tool_output = self.tool.observe_llm_output(
+            &llm_output.actions,
+            &llm_output.llm_tool_results,
+            &llm_output.llm_request_lineages,
+        );
         let mut output = LiveSemanticActionOutput {
             actions: llm_output.actions,
             payload_segments: llm_output.payload_segments,
@@ -439,6 +458,8 @@ impl LiveSemanticActionRuntime {
             llm_request_lineages: llm_output.llm_request_lineages,
             ..LiveSemanticActionOutput::default()
         };
+        output.actions.extend(tool_output.actions);
+        output.links.extend(tool_output.links);
         output
             .links
             .extend(self.links.observe_actions(&output.actions));
@@ -503,6 +524,7 @@ impl LiveSemanticActionRuntime {
         self.http_exchange.forget_trace(trace_id);
         self.llm.forget_trace(trace_id);
         self.mcp.forget_trace(trace_id);
+        self.tool.forget_trace(trace_id);
         self.links.forget_trace(trace_id);
     }
 
@@ -512,11 +534,21 @@ impl LiveSemanticActionRuntime {
         finished_at: SystemTime,
     ) -> LiveSemanticActionOutput {
         let llm_output = self.llm.finalize_trace(trace_id, finished_at);
+        let tool_output = self.tool.observe_llm_output(
+            &llm_output.actions,
+            &llm_output.llm_tool_results,
+            &llm_output.llm_request_lineages,
+        );
         let mut actions = llm_output.actions;
+        actions.extend(tool_output.actions);
+        let finalized_tool_output = self.tool.finalize_trace(trace_id, finished_at);
+        actions.extend(finalized_tool_output.actions);
         actions.extend(self.mcp.finalize_trace(trace_id, finished_at));
         let file_output = self.file_access.finalize_trace(trace_id, finished_at);
         actions.extend(file_output.actions);
-        let links = self.links.observe_actions(&actions);
+        let mut links = tool_output.links;
+        links.extend(finalized_tool_output.links);
+        links.extend(self.links.observe_actions(&actions));
         LiveSemanticActionOutput {
             actions,
             links,
@@ -539,5 +571,81 @@ fn event_projects_semantic_action_boundary(event: &DomainEvent) -> bool {
         EventPayload::Application(payload) => is_http_protocol(&payload.protocol),
         EventPayload::Enforcement(_) => true,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use config_core::daemon::{
+        AgentInvocationConfig, FileObservationConfig, PayloadMcpConfig, SemanticRetentionConfig,
+    };
+    use model_core::payload::PayloadDirection;
+    use semantic_action::{SemanticActionKind, SemanticActionLinkRole, SemanticActionStatus};
+
+    use crate::payload_projection::testing::{HttpRequestFixture, HttpResponseFixture};
+
+    use super::LiveSemanticActionRuntime;
+
+    #[test]
+    fn captured_agent_call_and_result_reach_the_runtime_action_graph() {
+        let mut runtime = LiveSemanticActionRuntime::new(
+            AgentInvocationConfig::default(),
+            16,
+            SemanticRetentionConfig::default(),
+            FileObservationConfig::default(),
+            PayloadMcpConfig::default(),
+        );
+        let first_request = HttpRequestFixture::llm_json(
+            r#"{"model":"claude-opus-4","messages":[{"role":"user","content":"delegate"}]}"#,
+        )
+        .segment_builder()
+        .build();
+        runtime.observe_payload_segment(&first_request);
+        let response = HttpResponseFixture::llm_json(
+            r#"{"id":"msg_1","type":"message","role":"assistant","model":"claude-opus-4","content":[{"type":"tool_use","id":"toolu_1","name":"Agent","input":{"subagent_type":"general-purpose","prompt":"inspect fixture"}}],"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1}}"#,
+        )
+        .segment_builder()
+        .build();
+
+        let declared = runtime.observe_payload_segment(&response);
+
+        assert!(
+            declared
+                .actions
+                .iter()
+                .any(|action| action.kind == SemanticActionKind::LlmToolCall)
+        );
+        assert!(
+            declared
+                .actions
+                .iter()
+                .any(|action| action.kind == SemanticActionKind::AgentInvocation)
+        );
+
+        let result_request = HttpRequestFixture::llm_json(
+            r#"{"model":"claude-opus-4","messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"done"}]}]}"#,
+        )
+        .segment_builder()
+        .direction(PayloadDirection::Outbound)
+        .sequence(1)
+        .build();
+        let result = runtime.observe_payload_segment(&result_request);
+
+        assert!(
+            result
+                .actions
+                .iter()
+                .any(|action| action.kind == SemanticActionKind::LlmToolResult)
+        );
+        assert!(result.actions.iter().any(|action| {
+            action.kind == SemanticActionKind::AgentInvocation
+                && action.status == SemanticActionStatus::Success
+        }));
+        assert!(
+            result
+                .links
+                .iter()
+                .any(|link| { link.role == SemanticActionLinkRole::LlmToolCallResult })
+        );
     }
 }

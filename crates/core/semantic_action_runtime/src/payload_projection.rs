@@ -4,4 +4,4 @@ mod encoding;
 pub(crate) mod http;
 pub(crate) mod llm;
 #[cfg(test)]
-mod testing;
+pub(crate) mod testing;

@@ -73,6 +73,8 @@ pub(crate) struct ActionKindCodes {
     pub(crate) llm_call: i16,
     pub(crate) llm_request: i16,
     pub(crate) llm_response: i16,
+    pub(crate) llm_tool_call: i16,
+    pub(crate) llm_tool_result: i16,
     pub(crate) mcp_tool_call: i16,
     pub(crate) mcp_request: i16,
     pub(crate) mcp_response: i16,
@@ -103,6 +105,8 @@ impl ActionKindCodes {
             SemanticActionKind::LlmCall => self.llm_call,
             SemanticActionKind::LlmRequest => self.llm_request,
             SemanticActionKind::LlmResponse => self.llm_response,
+            SemanticActionKind::LlmToolCall => self.llm_tool_call,
+            SemanticActionKind::LlmToolResult => self.llm_tool_result,
             SemanticActionKind::McpToolCall => self.mcp_tool_call,
             SemanticActionKind::McpRequest => self.mcp_request,
             SemanticActionKind::McpResponse => self.mcp_response,
@@ -141,6 +145,8 @@ impl ActionKindCodes {
             value if value == self.llm_call => Ok(SemanticActionKind::LlmCall),
             value if value == self.llm_request => Ok(SemanticActionKind::LlmRequest),
             value if value == self.llm_response => Ok(SemanticActionKind::LlmResponse),
+            value if value == self.llm_tool_call => Ok(SemanticActionKind::LlmToolCall),
+            value if value == self.llm_tool_result => Ok(SemanticActionKind::LlmToolResult),
             value if value == self.mcp_tool_call => Ok(SemanticActionKind::McpToolCall),
             value if value == self.mcp_request => Ok(SemanticActionKind::McpRequest),
             value if value == self.mcp_response => Ok(SemanticActionKind::McpResponse),
@@ -160,7 +166,7 @@ impl ActionKindCodes {
         }
     }
 
-    fn entries(self) -> [(&'static str, i16); 25] {
+    fn entries(self) -> [(&'static str, i16); 27] {
         [
             (SemanticActionKind::ProcessExec.as_str(), self.process_exec),
             (SemanticActionKind::ProcessExit.as_str(), self.process_exit),
@@ -182,6 +188,11 @@ impl ActionKindCodes {
             (SemanticActionKind::LlmCall.as_str(), self.llm_call),
             (SemanticActionKind::LlmRequest.as_str(), self.llm_request),
             (SemanticActionKind::LlmResponse.as_str(), self.llm_response),
+            (SemanticActionKind::LlmToolCall.as_str(), self.llm_tool_call),
+            (
+                SemanticActionKind::LlmToolResult.as_str(),
+                self.llm_tool_result,
+            ),
             (SemanticActionKind::McpToolCall.as_str(), self.mcp_tool_call),
             (SemanticActionKind::McpRequest.as_str(), self.mcp_request),
             (SemanticActionKind::McpResponse.as_str(), self.mcp_response),
@@ -342,8 +353,13 @@ pub(crate) struct LinkRoleCodes {
     pub(crate) file_write_contains_file_event: i16,
     pub(crate) agent_invocation_exec: i16,
     pub(crate) agent_invocation_child_llm_request: i16,
+    pub(crate) llm_request_trajectory_parent: i16,
+    pub(crate) llm_request_trajectory_fork: i16,
     pub(crate) llm_call_request: i16,
     pub(crate) llm_call_response: i16,
+    pub(crate) llm_response_tool_call: i16,
+    pub(crate) llm_tool_call_result: i16,
+    pub(crate) llm_tool_call_agent_invocation: i16,
     pub(crate) llm_request_http_message: i16,
     pub(crate) llm_request_llm_response: i16,
     pub(crate) llm_response_http_message: i16,
@@ -380,8 +396,17 @@ impl LinkRoleCodes {
             SemanticActionLinkRole::AgentInvocationChildLlmRequest => {
                 self.agent_invocation_child_llm_request
             }
+            SemanticActionLinkRole::LlmRequestTrajectoryParent => {
+                self.llm_request_trajectory_parent
+            }
+            SemanticActionLinkRole::LlmRequestTrajectoryFork => self.llm_request_trajectory_fork,
             SemanticActionLinkRole::LlmCallRequest => self.llm_call_request,
             SemanticActionLinkRole::LlmCallResponse => self.llm_call_response,
+            SemanticActionLinkRole::LlmResponseToolCall => self.llm_response_tool_call,
+            SemanticActionLinkRole::LlmToolCallResult => self.llm_tool_call_result,
+            SemanticActionLinkRole::LlmToolCallAgentInvocation => {
+                self.llm_tool_call_agent_invocation
+            }
             SemanticActionLinkRole::LlmRequestHttpMessage => self.llm_request_http_message,
             SemanticActionLinkRole::LlmRequestLlmResponse => self.llm_request_llm_response,
             SemanticActionLinkRole::LlmResponseHttpMessage => self.llm_response_http_message,
@@ -434,8 +459,23 @@ impl LinkRoleCodes {
             value if value == self.agent_invocation_child_llm_request => {
                 Ok(SemanticActionLinkRole::AgentInvocationChildLlmRequest)
             }
+            value if value == self.llm_request_trajectory_parent => {
+                Ok(SemanticActionLinkRole::LlmRequestTrajectoryParent)
+            }
+            value if value == self.llm_request_trajectory_fork => {
+                Ok(SemanticActionLinkRole::LlmRequestTrajectoryFork)
+            }
             value if value == self.llm_call_request => Ok(SemanticActionLinkRole::LlmCallRequest),
             value if value == self.llm_call_response => Ok(SemanticActionLinkRole::LlmCallResponse),
+            value if value == self.llm_response_tool_call => {
+                Ok(SemanticActionLinkRole::LlmResponseToolCall)
+            }
+            value if value == self.llm_tool_call_result => {
+                Ok(SemanticActionLinkRole::LlmToolCallResult)
+            }
+            value if value == self.llm_tool_call_agent_invocation => {
+                Ok(SemanticActionLinkRole::LlmToolCallAgentInvocation)
+            }
             value if value == self.llm_request_http_message => {
                 Ok(SemanticActionLinkRole::LlmRequestHttpMessage)
             }
@@ -468,7 +508,7 @@ impl LinkRoleCodes {
         }
     }
 
-    fn entries(self) -> [(&'static str, i16); 21] {
+    fn entries(self) -> [(&'static str, i16); 26] {
         [
             (
                 SemanticActionLinkRole::AgentPerformedAction.as_str(),
@@ -511,12 +551,32 @@ impl LinkRoleCodes {
                 self.agent_invocation_child_llm_request,
             ),
             (
+                SemanticActionLinkRole::LlmRequestTrajectoryParent.as_str(),
+                self.llm_request_trajectory_parent,
+            ),
+            (
+                SemanticActionLinkRole::LlmRequestTrajectoryFork.as_str(),
+                self.llm_request_trajectory_fork,
+            ),
+            (
                 SemanticActionLinkRole::LlmCallRequest.as_str(),
                 self.llm_call_request,
             ),
             (
                 SemanticActionLinkRole::LlmCallResponse.as_str(),
                 self.llm_call_response,
+            ),
+            (
+                SemanticActionLinkRole::LlmResponseToolCall.as_str(),
+                self.llm_response_tool_call,
+            ),
+            (
+                SemanticActionLinkRole::LlmToolCallResult.as_str(),
+                self.llm_tool_call_result,
+            ),
+            (
+                SemanticActionLinkRole::LlmToolCallAgentInvocation.as_str(),
+                self.llm_tool_call_agent_invocation,
             ),
             (
                 SemanticActionLinkRole::LlmRequestHttpMessage.as_str(),
@@ -593,5 +653,33 @@ impl LinkConfidenceCodes {
             ),
             (SemanticActionLinkConfidence::Derived.as_str(), self.derived),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_interaction_codes_are_unique_and_round_trip() {
+        let codebook = current();
+        codebook.validate().expect("current codebook is unique");
+        for kind in [
+            SemanticActionKind::LlmToolCall,
+            SemanticActionKind::LlmToolResult,
+        ] {
+            let code = codebook.action_kind.code(kind);
+            assert_eq!(codebook.action_kind.decode(i64::from(code)), Ok(kind));
+        }
+        for role in [
+            SemanticActionLinkRole::LlmRequestTrajectoryParent,
+            SemanticActionLinkRole::LlmRequestTrajectoryFork,
+            SemanticActionLinkRole::LlmResponseToolCall,
+            SemanticActionLinkRole::LlmToolCallResult,
+            SemanticActionLinkRole::LlmToolCallAgentInvocation,
+        ] {
+            let code = codebook.link_role.code(role);
+            assert_eq!(codebook.link_role.decode(i64::from(code)), Ok(role));
+        }
     }
 }

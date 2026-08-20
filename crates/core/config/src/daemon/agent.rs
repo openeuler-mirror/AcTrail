@@ -21,6 +21,7 @@ pub const DEFAULT_HTTP_EXCHANGE_RESPONSE_LATENESS: Duration = Duration::from_sec
 pub struct AgentInvocationConfig {
     pub enabled: bool,
     pub commands: Vec<String>,
+    pub tool_names: Vec<String>,
 }
 
 impl Default for AgentInvocationConfig {
@@ -28,6 +29,12 @@ impl Default for AgentInvocationConfig {
         Self {
             enabled: true,
             commands: Vec::new(),
+            tool_names: vec![
+                "Agent".to_string(),
+                "Task".to_string(),
+                "task".to_string(),
+                "spawn_agent".to_string(),
+            ],
         }
     }
 }
@@ -103,6 +110,14 @@ impl SemanticRetentionConfig {
             && matches!(
                 self.l0_llm_call.tool_calls,
                 LlmToolCallRetention::AssembledJson
+            )
+    }
+
+    pub fn llm_tool_result_content_export_enabled(&self) -> bool {
+        self.l0_llm_call.enabled
+            && matches!(
+                self.l0_llm_call.tool_result_content_export,
+                LlmToolResultContentExportRetention::CanonicalJson
             )
     }
 
@@ -215,6 +230,7 @@ impl FromStr for SemanticContentOwner {
 /// Matches the byte ceiling the Web request-body view already asks storage
 /// for, so an operator who exports bodies gets what the UI would have shown.
 pub const DEFAULT_LLM_REQUEST_BODY_EXPORT_MAX_BYTES: u64 = 128 * 1024;
+pub const DEFAULT_LLM_TOOL_RESULT_EXPORT_MAX_BYTES: u64 = 128 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct L0LlmCallRetention {
@@ -224,6 +240,8 @@ pub struct L0LlmCallRetention {
     pub request_body_export_max_bytes: u64,
     pub response_content: LlmResponseContentRetention,
     pub tool_calls: LlmToolCallRetention,
+    pub tool_result_content_export: LlmToolResultContentExportRetention,
+    pub tool_result_content_export_max_bytes: u64,
     pub usage: LlmUsageRetention,
     pub retain_assembled_payload: bool,
     pub websocket_max_connections_per_process: u32,
@@ -320,6 +338,8 @@ impl Default for L0LlmCallRetention {
             request_body_export_max_bytes: DEFAULT_LLM_REQUEST_BODY_EXPORT_MAX_BYTES,
             response_content: LlmResponseContentRetention::AssembledProvider,
             tool_calls: LlmToolCallRetention::AssembledJson,
+            tool_result_content_export: LlmToolResultContentExportRetention::None,
+            tool_result_content_export_max_bytes: DEFAULT_LLM_TOOL_RESULT_EXPORT_MAX_BYTES,
             usage: LlmUsageRetention::Summary,
             retain_assembled_payload: false,
             websocket_max_connections_per_process:
@@ -380,6 +400,30 @@ impl FromStr for LlmRequestBodyExportRetention {
             "canonical_json" => Ok(Self::CanonicalJson),
             other => Err(format!(
                 "unsupported LLM request body export retention {other}"
+            )),
+        }
+    }
+}
+
+/// Whether an LLM-native tool result body may leave the host on a semantic
+/// action. Result identity, size, hash, and error state remain available when
+/// this is `none`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum LlmToolResultContentExportRetention {
+    #[default]
+    None,
+    CanonicalJson,
+}
+
+impl FromStr for LlmToolResultContentExportRetention {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "none" => Ok(Self::None),
+            "canonical_json" => Ok(Self::CanonicalJson),
+            other => Err(format!(
+                "unsupported LLM tool result content export retention {other}"
             )),
         }
     }

@@ -58,8 +58,8 @@ pub enum OtelAttributeMode {
     /// Export every attribute already present on the semantic action.
     ///
     /// This does not enable optional content production. In particular, LLM
-    /// request bodies require the daemon's separate request-body retention and
-    /// export settings before an attribute exists for this mode to send.
+    /// request bodies and tool result bodies require separate daemon export
+    /// settings before an attribute exists for this mode to send.
     Full,
 }
 
@@ -543,5 +543,34 @@ fn reject_unknown_key(section_name: &str, key: &str) -> Result<(), String> {
         | "compression"
         | "attribute_mode" => Ok(()),
         _ => Err(format!("unknown config key {section_name}.{key}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use semantic_action::SemanticActionKind;
+
+    use super::parse_otel_http_plugin_config;
+
+    #[test]
+    fn official_template_enables_tool_graph_actions_and_parses() {
+        let raw = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../../examples/plugins/builtin/otel-http/otel-http.config.toml"
+        ));
+
+        let config = parse_otel_http_plugin_config(raw).expect("official template parses");
+
+        assert!(config.action_kinds.enabled(SemanticActionKind::LlmToolCall));
+        assert!(
+            config
+                .action_kinds
+                .enabled(SemanticActionKind::LlmToolResult)
+        );
+        assert!(
+            config
+                .action_kinds
+                .enabled(SemanticActionKind::AgentInvocation)
+        );
     }
 }

@@ -35,11 +35,11 @@ const DEFAULT_OBSERVED_AT_SECS: u64 = 1_700_000_000;
 /// Size fields default to the captured bytes and stay consistent with each
 /// other, so completeness and status derivation see a whole, successful
 /// capture unless a test asks for something else.
-pub(super) struct PayloadSegmentBuilder {
+pub(crate) struct PayloadSegmentBuilder {
     segment: PayloadSegment,
 }
 
-pub(super) fn payload_segment() -> PayloadSegmentBuilder {
+pub(crate) fn payload_segment() -> PayloadSegmentBuilder {
     PayloadSegmentBuilder {
         segment: PayloadSegment {
             segment_id: PayloadSegmentId::new(1),
@@ -70,7 +70,7 @@ pub(super) fn payload_segment() -> PayloadSegmentBuilder {
 
 impl PayloadSegmentBuilder {
     /// Set the captured bytes, keeping every size field consistent with them.
-    pub(super) fn bytes(mut self, bytes: Vec<u8>) -> Self {
+    pub(crate) fn bytes(mut self, bytes: Vec<u8>) -> Self {
         let len = bytes.len() as u64;
         self.segment.bytes = bytes;
         self.segment.original_size = len;
@@ -80,36 +80,36 @@ impl PayloadSegmentBuilder {
         self
     }
 
-    pub(super) fn sequence(mut self, sequence: u64) -> Self {
+    pub(crate) fn sequence(mut self, sequence: u64) -> Self {
         self.segment.sequence = sequence;
         self
     }
 
-    pub(super) fn stream_key(mut self, stream_key: &str) -> Self {
+    pub(crate) fn stream_key(mut self, stream_key: &str) -> Self {
         self.segment.stream_key = PayloadStreamKey::new(stream_key);
         self
     }
 
-    pub(super) fn direction(mut self, direction: PayloadDirection) -> Self {
+    pub(crate) fn direction(mut self, direction: PayloadDirection) -> Self {
         self.segment.direction = direction;
         self
     }
 
-    pub(super) fn build(self) -> PayloadSegment {
+    pub(crate) fn build(self) -> PayloadSegment {
         self.segment
     }
 }
 
 /// An outbound LLM request as it reaches the projection: the raw bytes the
 /// probe captured, and the same bytes split into HTTP parts.
-pub(super) struct HttpRequestFixture {
-    pub(super) raw: Vec<u8>,
-    pub(super) parts: HttpRequestParts,
+pub(crate) struct HttpRequestFixture {
+    pub(crate) raw: Vec<u8>,
+    pub(crate) parts: HttpRequestParts,
 }
 
 impl HttpRequestFixture {
     /// A POST carrying `body` as a JSON request to an LLM endpoint.
-    pub(super) fn llm_json(body: &str) -> Self {
+    pub(crate) fn llm_json(body: &str) -> Self {
         let raw = http1_message(
             "POST /v1/messages HTTP/1.1",
             &[
@@ -125,20 +125,20 @@ impl HttpRequestFixture {
 
     /// The single outbound segment that carried this message, ready for a
     /// test to override the capture fields it is actually about.
-    pub(super) fn segment_builder(&self) -> PayloadSegmentBuilder {
+    pub(crate) fn segment_builder(&self) -> PayloadSegmentBuilder {
         payload_segment().bytes(self.raw.clone())
     }
 }
 
 /// An inbound LLM response as it reaches the projection.
-pub(super) struct HttpResponseFixture {
-    pub(super) raw: Vec<u8>,
-    pub(super) parts: HttpResponseParts,
+pub(crate) struct HttpResponseFixture {
+    pub(crate) raw: Vec<u8>,
+    pub(crate) parts: HttpResponseParts,
 }
 
 impl HttpResponseFixture {
     /// A 200 carrying `body` as a complete JSON response.
-    pub(super) fn llm_json(body: &str) -> Self {
+    pub(crate) fn llm_json(body: &str) -> Self {
         let raw = http1_message(
             "HTTP/1.1 200 OK",
             &[
@@ -153,7 +153,7 @@ impl HttpResponseFixture {
 
     /// The single inbound segment that carried this message, ready for a test
     /// to override the capture fields it is actually about.
-    pub(super) fn segment_builder(&self) -> PayloadSegmentBuilder {
+    pub(crate) fn segment_builder(&self) -> PayloadSegmentBuilder {
         payload_segment()
             .direction(PayloadDirection::Inbound)
             .bytes(self.raw.clone())

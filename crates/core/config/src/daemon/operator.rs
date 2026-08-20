@@ -527,7 +527,10 @@ fn capability_requested(capabilities: &[CapabilityRequest], capability: &Capabil
 
 #[cfg(test)]
 mod tests {
-    use super::super::{LlmRequestBodyExportRetention, LlmRequestContentRetention};
+    use super::super::{
+        LlmRequestBodyExportRetention, LlmRequestContentRetention,
+        LlmToolResultContentExportRetention,
+    };
     use super::OperatorConfig;
 
     fn parse_l0_llm_call(patch: &str) -> Result<OperatorConfig, String> {
@@ -628,5 +631,60 @@ mod tests {
         let reparsed = OperatorConfig::parse(&rendered).expect("rendered config parses");
 
         assert_eq!(reparsed.semantic_retention, config.semantic_retention);
+    }
+
+    #[test]
+    fn tool_result_content_export_is_off_by_default_and_can_be_enabled() {
+        let defaults = OperatorConfig::init().expect("default operator config initializes");
+        assert_eq!(
+            defaults
+                .semantic_retention
+                .l0_llm_call
+                .tool_result_content_export,
+            LlmToolResultContentExportRetention::None
+        );
+
+        let config = parse_l0_llm_call(
+            "tool_result_content_export = \"canonical_json\"\n\
+             tool_result_content_export_max_bytes = 4096\n",
+        )
+        .expect("explicit tool result export parses");
+        assert_eq!(
+            config
+                .semantic_retention
+                .l0_llm_call
+                .tool_result_content_export,
+            LlmToolResultContentExportRetention::CanonicalJson
+        );
+        assert_eq!(
+            config
+                .semantic_retention
+                .l0_llm_call
+                .tool_result_content_export_max_bytes,
+            4096
+        );
+    }
+
+    #[test]
+    fn logical_agent_tool_names_have_safe_defaults_and_round_trip() {
+        let config = OperatorConfig::init().expect("default operator config initializes");
+        assert!(
+            config
+                .agent_invocation
+                .tool_names
+                .iter()
+                .any(|name| name == "Agent")
+        );
+        assert!(
+            config
+                .agent_invocation
+                .tool_names
+                .iter()
+                .any(|name| name == "task")
+        );
+
+        let rendered = config.dump().expect("operator config renders");
+        let reparsed = OperatorConfig::parse(&rendered).expect("rendered config parses");
+        assert_eq!(reparsed.agent_invocation, config.agent_invocation);
     }
 }
