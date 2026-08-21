@@ -8,6 +8,28 @@
 xiaoO。Provider 只监听该 workload 的 loopback，因此不需要外网、CNI 或真实模型
 Token。
 
+需要同时验证镜像内的 OpenCode 时，显式设置一个当前可用的 OpenCode 免费模型：
+
+```bash
+VIRTUAL_CONTAINER_XIAOO_CONCURRENCY_E2E_OPENCODE_FREE_MODEL=\
+opencode/mimo-v2.5-free \
+  deploy/virtual-container/host/run-v2-tests.sh \
+    --case virtual_container_xiaoo_concurrency \
+    --color never
+```
+
+启用后，每台 xiaoO workload 还会在同一个 AcTrail trace 进程树内运行一次
+`opencode run --pure`。用例只接受 `opencode/*-free`，并为 OpenCode 创建全新的临时
+HOME/XDG 目录，不挂载也不读取宿主 `auth.json`。无 CNI 环境中，workload 内的
+OpenCode 通过专用 VSOCK `43181` 连接 Host 上仅允许 `CONNECT opencode.ai:443` 和
+`CONNECT models.opencode.ai:443` 的临时代理；代理随 case 启停，其他目标返回 `403`。
+镜像预置同版本 `@opencode-ai/plugin` 和构建时最新的模型目录缓存，并复制进隔离
+HOME；冷启动不访问 npm registry，也不重新下载完整模型目录。该开关默认关闭，因此不会改变原有
+无网、无 key 的确定性回归基线。当前这条可选出境只实现 StratoVirt；Cloud
+Hypervisor 选择该开关会在启动 VM 前明确拒绝。
+xiaoO 基线仍使用本地 Provider；真实 xiaoO provider key 只允许在单独的交互 smoke
+中通过隐藏输入或临时环境变量传入，不写 profile、镜像或日志。
+
 ## 快速运行
 
 部署 manifest 中已经包含 xiaoO 后执行：
@@ -32,6 +54,7 @@ deploy/virtual-container/host/run-v2-tests.sh --color never
 - 两台 Kata VM 同时处于 Ready；
 - 两个 Provider Ready 后统一释放 barrier；
 - 两个 xiaoO 进程存在同一活跃窗口；
+- 启用 OpenCode smoke 时，两边免费模型均返回各自的响应 marker；
 - A/B 返回值、文件 marker 和 trace 不串线；
 - 两条 trace 均为 `Completed/Clean`，且含 eBPF/network 证据；
 - 删除 VM A 后 VM B 仍运行；

@@ -80,8 +80,16 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument(
         "--otel-endpoint",
-        required=True,
-        help="OTLP/HTTP traces URL reachable from inside the Kata Guest",
+        help=(
+            "optional OTLP/HTTP traces URL reachable from inside the Kata Guest; "
+            "when omitted, keep observations in Guest-local SQLite only"
+        ),
+    )
+    result.add_argument(
+        "--egress-mode",
+        choices=("network", "vsock-bridge"),
+        default="network",
+        help="export path used when --otel-endpoint is set",
     )
     result.add_argument("--socket-gid", type=positive_int, default=39000)
     result.add_argument("--data-vcpus", type=positive_int, default=2)
@@ -160,6 +168,7 @@ def main(argv: list[str] | None = None) -> int:
             ),
             image_pull_policy=arguments.image_pull_policy,
             otel_endpoint=arguments.otel_endpoint,
+            egress_mode=arguments.egress_mode,
             socket_gid=arguments.socket_gid,
             data_vcpus=arguments.data_vcpus,
             tool_inputs=default_tool_inputs(REPO),

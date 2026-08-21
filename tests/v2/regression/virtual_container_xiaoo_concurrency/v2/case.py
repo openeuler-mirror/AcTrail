@@ -147,6 +147,14 @@ class VirtualContainerXiaooConcurrencyCase(TestCase):
             self._validator,
             workload_bundle / "MANIFEST.sha256",
         )
+        if self._config.opencode_free_model is not None:
+            project_files += (
+                Path(__file__).resolve().parent / "connect_proxy.py",
+                self._config.repo
+                / "deploy/virtual-container/vsock-egress/guest-bridge.sh",
+                self._config.repo
+                / "deploy/virtual-container/vsock-egress/host-bridge.sh",
+            )
         missing = [path for path in project_files if not path.is_file()]
         if runtime_config is None:
             missing.append(Path("<Kata data runtime configuration>"))

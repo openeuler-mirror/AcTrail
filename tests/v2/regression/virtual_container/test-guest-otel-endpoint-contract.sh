@@ -7,6 +7,7 @@ HELPER="$ROOT_DIR/deploy/virtual-container/guest/otel-endpoint.sh"
 INSTALLER="$ROOT_DIR/deploy/virtual-container/guest/install-rootfs.sh"
 INJECTOR="$ROOT_DIR/deploy/virtual-container/guest/inject-image.sh"
 VERIFIER="$ROOT_DIR/deploy/virtual-container/guest/verify-rootfs.sh"
+BUILDER="$ROOT_DIR/deploy/virtual-container/guest/build-openeuler-image.sh"
 CONFIG_TEMPLATE="$ROOT_DIR/examples/plugins/builtin/otel-http/otel-http.config.toml"
 
 fail() {
@@ -67,6 +68,84 @@ expect_invalid "http://collector.internal:70000/v1/traces" "between 1 and 65535"
 expect_invalid $'http://collector.internal:4318/v1/traces"\nqueue_capacity = 999999' \
   "unsafe in the Guest TOML config"
 
+# --- egress mode dispatch ---------------------------------------------------
+# The Guest reaches the Collector either over its own network (CNI/K8s) or over
+# the VSOCK bridge, which terminates on Guest loopback. Mode selects which
+# destination is legitimate; every other rule stays in force for both modes.
+
+expect_valid_mode() {
+  local endpoint="$1"
+  local mode="$2"
+  actrail_validate_guest_otel_endpoint "$endpoint" "$mode" \
+    || fail "valid $mode endpoint rejected: $endpoint: $ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
+}
+
+expect_invalid_mode() {
+  local endpoint="$1"
+  local mode="$2"
+  local expected_error="$3"
+
+  if actrail_validate_guest_otel_endpoint "$endpoint" "$mode"; then
+    fail "invalid $mode endpoint accepted: $endpoint"
+  fi
+  [[ "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR" == *"$expected_error"* ]] \
+    || fail "unexpected $mode diagnostic: $ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
+}
+
+# An omitted mode must keep behaving exactly like the network mode.
+expect_valid_mode "$HTTP_ENDPOINT" network
+expect_valid_mode "$HTTPS_ENDPOINT" network
+expect_invalid_mode "http://127.0.0.1:4318/v1/traces" network "Guest loopback"
+expect_invalid_mode "http://localhost:4318/v1/traces" network "Guest loopback"
+
+# The VSOCK bridge listens on Guest loopback, so loopback is the only valid
+# destination there — and the port must be explicit because it is the single
+# source of truth for the bridge listen port.
+VSOCK_ENDPOINT="http://127.0.0.1:14318/v1/traces"
+expect_valid_mode "$VSOCK_ENDPOINT" vsock-bridge
+expect_valid_mode "https://127.0.0.1:14318/v1/traces" vsock-bridge
+
+expect_invalid_mode "http://192.0.2.10:4318/v1/traces" vsock-bridge \
+  "vsock-bridge egress requires the Guest bridge loopback address"
+expect_invalid_mode "http://collector.internal:4318/v1/traces" vsock-bridge \
+  "vsock-bridge egress requires the Guest bridge loopback address"
+expect_invalid_mode "http://0.0.0.0:14318/v1/traces" vsock-bridge \
+  "vsock-bridge egress requires the Guest bridge loopback address"
+# localhost depends on Guest DNS/hosts resolution; require the literal address.
+expect_invalid_mode "http://localhost:14318/v1/traces" vsock-bridge \
+  "vsock-bridge egress requires the Guest bridge loopback address"
+expect_invalid_mode "http://127.0.0.1/v1/traces" vsock-bridge \
+  "explicit port"
+
+# Mode never weakens the shared rules.
+expect_invalid_mode "http://127.0.0.1:14318/v1/metrics" vsock-bridge \
+  "end in /v1/traces"
+expect_invalid_mode "http://COLLECTOR_HOST:4318/v1/traces" vsock-bridge \
+  "placeholder"
+expect_invalid_mode "http://127.0.0.1:70000/v1/traces" vsock-bridge \
+  "between 1 and 65535"
+expect_invalid_mode $'http://127.0.0.1:14318/v1/traces"\nqueue_capacity = 999999' \
+  vsock-bridge "unsafe in the Guest TOML config"
+
+expect_invalid_mode "$HTTP_ENDPOINT" bogus-mode "egress mode"
+expect_invalid_mode "$HTTP_ENDPOINT" "" "egress mode"
+
+# Deployment selection is optional in network mode. VSOCK remains meaningful
+# only when an exporter endpoint is present.
+actrail_validate_guest_otel_selection "" network \
+  || fail "local-only Guest selection was rejected"
+if actrail_validate_guest_otel_selection "" vsock-bridge; then
+  fail "vsock-bridge was accepted without an exporter endpoint"
+fi
+[[ "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR" == *"requires --otel-endpoint"* ]] \
+  || fail "VSOCK without endpoint returned the wrong diagnostic"
+
+# The bridge listen port is derived from the endpoint, never configured twice.
+bridge_port="$(actrail_guest_otel_endpoint_port "$VSOCK_ENDPOINT")" \
+  || fail "endpoint port accessor failed: $ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
+[[ "$bridge_port" == "14318" ]] \
+  || fail "endpoint port accessor returned $bridge_port, expected 14318"
+
 test_dir="$(mktemp -d "${TMPDIR:-/tmp}/actrail-guest-otel-contract.XXXXXX")"
 cleanup() {
   rm -rf "$test_dir"
@@ -126,11 +205,42 @@ for script in "$INSTALLER" "$INJECTOR" "$VERIFIER"; do
   "$script" --help | grep -Fq -- '--otel-endpoint' \
     || fail "$script does not document --otel-endpoint"
 done
-[[ "$(grep -Fc -- '--otel-endpoint "$OTEL_ENDPOINT"' "$INJECTOR")" == "2" ]] \
-  || fail "image injector must forward the endpoint to both installer and verifier"
+
+# The egress mode travels with the endpoint through every deployment entry
+# point, and is recorded in the image so verification can assert it offline.
+for script in "$INSTALLER" "$INJECTOR" "$VERIFIER" "$BUILDER"; do
+  "$script" --help | grep -Fq -- '--egress-mode' \
+    || fail "$script does not document --egress-mode"
+done
+[[ "$(grep -Fc -- '--egress-mode "$EGRESS_MODE"' "$INJECTOR")" == "2" ]] \
+  || fail "image injector must forward the egress mode to installer and verifier"
+[[ "$(grep -Fc -- '--egress-mode "$EGRESS_MODE"' "$BUILDER")" -ge 2 ]] \
+  || fail "image builder must forward the egress mode to installer and verifier"
+grep -Fq 'guest_egress_mode=' "$INSTALLER" \
+  || fail "rootfs installer does not record the egress mode in guest-install-info"
+grep -Fq 'guest_egress_mode=$EXPECTED_EGRESS_MODE' "$VERIFIER" \
+  || fail "rootfs verifier does not assert the recorded egress mode"
+
+# vsock-bridge mode installs and enables the Guest bridge; network mode must
+# leave no bridge behind. The listen port is derived from the endpoint so the
+# bridge and the exporter can never disagree.
+grep -Fq 'vsock-egress/guest-bridge.sh' "$INSTALLER" \
+  || fail "rootfs installer does not install the Guest VSOCK bridge"
+grep -Fq 'actrail_guest_otel_endpoint_port' "$INSTALLER" \
+  || fail "installer does not derive the bridge listen port from the endpoint"
+grep -Fq 'actrail-vsock-guest-bridge.service' "$VERIFIER" \
+  || fail "rootfs verifier does not assert the Guest bridge per egress mode"
+grep -Fq 'usr/bin/socat' "$VERIFIER" \
+  || fail "rootfs verifier does not assert socat exists for vsock-bridge egress"
+grep -Fq -- 'install_args+=(--otel-endpoint "$OTEL_ENDPOINT")' "$INJECTOR" \
+  || fail "image injector does not conditionally enable the exporter"
+grep -Fq -- 'verify_args+=(--otel-endpoint "$OTEL_ENDPOINT")' "$INJECTOR" \
+  || fail "image injector does not conditionally verify the exporter"
 grep -Fq -- 'actrail_write_guest_otel_endpoint_config' "$INSTALLER" \
   || fail "rootfs installer does not render the endpoint into plugin config"
 grep -Fq -- 'endpoint = \"$EXPECTED_OTEL_ENDPOINT\"' "$VERIFIER" \
   || fail "rootfs verifier does not assert the injected endpoint"
+grep -Fq -- 'otel_export_enabled=' "$INSTALLER" \
+  || fail "rootfs installer does not record whether export is enabled"
 
 echo "PASS: explicit Guest OTLP/HTTP endpoint contract"

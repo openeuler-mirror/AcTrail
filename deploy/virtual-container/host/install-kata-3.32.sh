@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
-# Install the official Kata Containers 3.32.0 ARM64 release beside distro RPMs.
+# Install the official Kata Containers 3.32.0 release beside distro RPMs.
+# The host architecture selects which official archive is accepted.
 set -euo pipefail
 
 VERSION="3.32.0"
-ARCHIVE_SHA256="8736c054d9223974735394f822000823baef509e1c33405ec798240fa9b6e4b5"
+ARM64_ARCHIVE_SHA256="8736c054d9223974735394f822000823baef509e1c33405ec798240fa9b6e4b5"
+AMD64_ARCHIVE_SHA256="1449ecea50bd91fa73a94648db195d18950fe869ba4b1f12d05f55f1fa7c1b01"
+ARCHIVE_SHA256=""
+ARCH_LABEL=""
+ELF_MACHINE=""
 PREFIX="/opt/kata-$VERSION"
 ACTIVE_LINK="/opt/kata"
 LOCAL_BIN="/usr/local/bin"
@@ -17,9 +22,11 @@ usage() {
   cat <<'EOF'
 Usage:
   sudo ./install-kata-3.32.sh --archive kata-static-3.32.0-arm64.tar.zst
+  sudo ./install-kata-3.32.sh --archive kata-static-3.32.0-amd64.tar.zst
 
 Options:
-  --archive FILE  Official Kata 3.32.0 ARM64 release archive
+  --archive FILE  Official Kata 3.32.0 release archive matching the host
+                  architecture: arm64 on aarch64, amd64 on x86_64
   --no-activate   Install /opt/kata-3.32.0 without changing runtime symlinks
   -h, --help      Show this help
 
@@ -77,8 +84,25 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 [[ "$(id -u)" -eq 0 ]] || fail "run this installer with sudo"
-[[ "$(uname -m)" == "aarch64" ]] \
-  || fail "Kata 3.32.0 ARM64 archive requires an aarch64 host"
+# Each architecture has exactly one accepted official archive. Selecting the
+# digest from the host architecture makes an archive built for the other
+# architecture fail the integrity check instead of installing binaries the host
+# cannot run.
+case "$(uname -m)" in
+  aarch64)
+    ARCH_LABEL="arm64"
+    ARCHIVE_SHA256="$ARM64_ARCHIVE_SHA256"
+    ELF_MACHINE="ARM aarch64"
+    ;;
+  x86_64)
+    ARCH_LABEL="amd64"
+    ARCHIVE_SHA256="$AMD64_ARCHIVE_SHA256"
+    ELF_MACHINE="x86-64"
+    ;;
+  *)
+    fail "unsupported host architecture: $(uname -m)"
+    ;;
+esac
 [[ -n "$ARCHIVE" ]] || fail "--archive is required"
 [[ -f "$ARCHIVE" ]] || fail "archive not found: $ARCHIVE"
 
@@ -90,7 +114,7 @@ done
 ARCHIVE="$(readlink -f "$ARCHIVE")"
 actual_sha256="$(sha256sum "$ARCHIVE" | awk '{print $1}')"
 [[ "$actual_sha256" == "$ARCHIVE_SHA256" ]] \
-  || fail "archive SHA256 mismatch: $actual_sha256"
+  || fail "archive SHA256 mismatch for $ARCH_LABEL: $actual_sha256"
 
 cleanup() {
   local rc=$?
@@ -127,8 +151,8 @@ else
     || fail "archive has no Cloud Hypervisor runtime configuration"
   [[ -e "$extracted/share/kata-containers/kata-containers-initrd.img" ]] \
     || fail "archive has no reference Kata initrd"
-  file "$extracted/bin/containerd-shim-kata-v2" | grep -Fq 'ARM aarch64' \
-    || fail "archive shim is not an ARM64 executable"
+  file "$extracted/bin/containerd-shim-kata-v2" | grep -Fq "$ELF_MACHINE" \
+    || fail "archive shim is not an $ARCH_LABEL executable"
   "$extracted/bin/containerd-shim-kata-v2" --version | grep -Fq "version: $VERSION" \
     || fail "archive shim version check failed"
   "$extracted/bin/kata-runtime" version | grep -Fq "kata-runtime  : $VERSION" \
@@ -142,8 +166,8 @@ fi
   || fail "installed prefix has no executable Cloud Hypervisor"
 [[ -f "$PREFIX/share/defaults/kata-containers/configuration-clh.toml" ]] \
   || fail "installed prefix has no Cloud Hypervisor runtime configuration"
-file "$PREFIX/bin/cloud-hypervisor" | grep -Fq 'ARM aarch64' \
-  || fail "installed Cloud Hypervisor is not an ARM64 executable"
+file "$PREFIX/bin/cloud-hypervisor" | grep -Fq "$ELF_MACHINE" \
+  || fail "installed Cloud Hypervisor is not an $ARCH_LABEL executable"
 
 if [[ "$ACTIVATE" == "1" ]]; then
   containerd_pid="$(pidof containerd 2>/dev/null | awk '{print $1}')"

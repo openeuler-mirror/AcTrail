@@ -9,6 +9,8 @@ SOURCE_IMAGE=""
 OUTPUT_IMAGE=""
 BUNDLE=""
 OTEL_ENDPOINT=""
+OTEL_ENDPOINT_CONFIGURED="false"
+EGRESS_MODE="network"
 STARTUP_DEPENDENCY="optional"
 WITH_VIEWER=0
 SOCKET_GID=39000
@@ -18,10 +20,11 @@ MOUNT_DIR=""
 
 usage() {
   cat <<'EOF'
-Usage: inject-image.sh --source-image FILE --output-image FILE --bundle DIR --otel-endpoint URL [options]
+Usage: inject-image.sh --source-image FILE --output-image FILE --bundle DIR [options]
 
 Options:
-  --otel-endpoint URL          Guest-reachable OTLP/HTTP traces URL (required)
+  --otel-endpoint URL          Enable OTLP/HTTP export to this Guest-reachable URL
+  --egress-mode MODE           Export path: network or vsock-bridge (default: network)
   --startup-dependency POLICY  optional or required (default: optional)
   --with-viewer                Also install actrailviewer into the guest image
   --socket-gid GID             Numeric GID shared with workloads (default: 39000)
@@ -31,10 +34,10 @@ Options:
 The source image is never mounted or modified. The output path must not exist.
 The image may contain an ext4 filesystem directly or in partition 1.
 
-The OTLP endpoint must use http:// or https:// and name the Collector address
-reachable from inside the Guest. Guest 127.0.0.1 is the Guest itself, not the
-host. Its path must end in /v1/traces; query strings, fragments and placeholder
-endpoints are rejected before the output image is copied.
+Without --otel-endpoint, the image stores observations only in Guest-local
+SQLite. When supplied, the endpoint must use http:// or https:// and name a
+receiver reachable from inside the Guest. Its path must end in /v1/traces;
+query strings, fragments and placeholder endpoints are rejected before copy.
 
 The startup dependency controls only kata-agent systemd ordering/readiness.
 It does not select Agent observation failure behavior.
@@ -66,6 +69,11 @@ while [[ "$#" -gt 0 ]]; do
     --otel-endpoint)
       [[ "$#" -ge 2 ]] || fail "--otel-endpoint requires a value"
       OTEL_ENDPOINT="$2"
+      shift 2
+      ;;
+    --egress-mode)
+      [[ "$#" -ge 2 ]] || fail "--egress-mode requires a value"
+      EGRESS_MODE="$2"
       shift 2
       ;;
     --startup-dependency)
@@ -102,8 +110,11 @@ done
 [[ -n "$SOURCE_IMAGE" ]] || fail "--source-image is required"
 [[ -n "$OUTPUT_IMAGE" ]] || fail "--output-image is required"
 [[ -n "$BUNDLE" ]] || fail "--bundle is required"
-actrail_validate_guest_otel_endpoint "$OTEL_ENDPOINT" \
+actrail_validate_guest_otel_selection "$OTEL_ENDPOINT" "$EGRESS_MODE" \
   || fail "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
+if [[ -n "$OTEL_ENDPOINT" ]]; then
+  OTEL_ENDPOINT_CONFIGURED="true"
+fi
 [[ -f "$SOURCE_IMAGE" ]] || fail "source image not found: $SOURCE_IMAGE"
 [[ -d "$BUNDLE" ]] || fail "bundle not found: $BUNDLE"
 case "$STARTUP_DEPENDENCY" in
@@ -191,19 +202,27 @@ MOUNT_DIR="$(mktemp -d /tmp/actrail-kata-rootfs.XXXXXX)"
 install_args=(
   --rootfs "$MOUNT_DIR"
   --bundle "$BUNDLE"
-  --otel-endpoint "$OTEL_ENDPOINT"
+  --egress-mode "$EGRESS_MODE"
   --startup-dependency "$STARTUP_DEPENDENCY"
   --socket-gid "$SOCKET_GID"
 )
+if [[ -n "$OTEL_ENDPOINT" ]]; then
+  install_args+=(--otel-endpoint "$OTEL_ENDPOINT")
+fi
 if [[ "$WITH_VIEWER" == "1" ]]; then
   install_args+=(--with-viewer)
 fi
 "${sudo_cmd[@]}" "$SCRIPT_DIR/install-rootfs.sh" "${install_args[@]}"
-"${sudo_cmd[@]}" "$SCRIPT_DIR/verify-rootfs.sh" \
-  --rootfs "$MOUNT_DIR" \
-  --otel-endpoint "$OTEL_ENDPOINT" \
-  --socket-gid "$SOCKET_GID" \
+verify_args=(
+  --rootfs "$MOUNT_DIR"
+  --egress-mode "$EGRESS_MODE"
+  --socket-gid "$SOCKET_GID"
   --startup-dependency "$STARTUP_DEPENDENCY"
+)
+if [[ -n "$OTEL_ENDPOINT" ]]; then
+  verify_args+=(--otel-endpoint "$OTEL_ENDPOINT")
+fi
+"${sudo_cmd[@]}" "$SCRIPT_DIR/verify-rootfs.sh" "${verify_args[@]}"
 sync
 "${sudo_cmd[@]}" umount "$MOUNT_DIR"
 "${sudo_cmd[@]}" losetup -d "$LOOP_DEVICE"
@@ -216,6 +235,7 @@ echo "ACTRAIL_GUEST_IMAGE_READY"
 echo "source_image=$SOURCE_IMAGE"
 echo "output_image=$OUTPUT_IMAGE"
 echo "guest_startup_dependency=$STARTUP_DEPENDENCY"
+echo "guest_egress_mode=$EGRESS_MODE"
 echo "workload_socket_gid=$SOCKET_GID"
 echo "image_grow_mib=$GROW_MIB"
-echo "otel_endpoint_configured=true"
+echo "otel_endpoint_configured=$OTEL_ENDPOINT_CONFIGURED"

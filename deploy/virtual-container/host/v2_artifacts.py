@@ -38,6 +38,7 @@ BACKEND_DISPLAY_NAMES = {
     "cloud-hypervisor": "Cloud Hypervisor",
 }
 SUPPORTED_PULL_POLICIES = {"never", "missing", "always"}
+SUPPORTED_EGRESS_MODES = {"network", "vsock-bridge"}
 
 
 @dataclass(frozen=True)
@@ -60,9 +61,10 @@ class PreparationInputs:
     workload_image: str
     workload_image_archive: Path | None
     image_pull_policy: str
-    otel_endpoint: str
+    otel_endpoint: str | None
     socket_gid: int
     data_vcpus: int
+    egress_mode: str = "network"
     tool_inputs: tuple[Path, ...] = ()
 
     def validate(self) -> None:
@@ -72,8 +74,12 @@ class PreparationInputs:
             raise ValueError("containerd runtime must not be empty")
         if self.image_pull_policy not in SUPPORTED_PULL_POLICIES:
             raise ValueError("image pull policy must be never, missing or always")
-        if not self.otel_endpoint:
-            raise ValueError("Guest OTLP/HTTP endpoint must not be empty")
+        if self.egress_mode not in SUPPORTED_EGRESS_MODES:
+            raise ValueError("egress mode must be network or vsock-bridge")
+        if self.otel_endpoint is not None and not self.otel_endpoint:
+            raise ValueError("Guest OTLP/HTTP endpoint must be omitted or non-empty")
+        if self.egress_mode == "vsock-bridge" and self.otel_endpoint is None:
+            raise ValueError("vsock-bridge egress requires a Guest OTLP/HTTP endpoint")
         if not 1 <= self.socket_gid <= 2147483647:
             raise ValueError("socket GID must be between 1 and 2147483647")
         if self.data_vcpus < 2:
@@ -316,12 +322,14 @@ class ArtifactPreparer:
             str(output),
             "--bundle",
             str(guest_bundle),
-            "--otel-endpoint",
-            self.inputs.otel_endpoint,
+            "--egress-mode",
+            self.inputs.egress_mode,
             "--with-viewer",
             "--socket-gid",
             str(self.inputs.socket_gid),
         ]
+        if self.inputs.otel_endpoint is not None:
+            command.extend(["--otel-endpoint", self.inputs.otel_endpoint])
         if self.inputs.backend == "cloud-hypervisor":
             command.extend(["--grow-mib", "128"])
         self.executor.run(command)
@@ -381,6 +389,8 @@ class ArtifactPreparer:
             "source_commit": _source_commit(self.inputs.repo),
             "backend": self.inputs.backend,
             "runtime": self.inputs.runtime,
+            "egress_mode": self.inputs.egress_mode,
+            "otel_export_enabled": self.inputs.otel_endpoint is not None,
             "release": _release_hashes(self.inputs.bin_dir),
             "guest_bundle": {
                 "path": "guest-bundle",
@@ -501,6 +511,7 @@ def build_input_document(inputs: PreparationInputs) -> dict[str, Any]:
         "backend": inputs.backend,
         "runtime": inputs.runtime,
         "otel_endpoint": inputs.otel_endpoint,
+        "egress_mode": inputs.egress_mode,
         "socket_gid": inputs.socket_gid,
         "data_vcpus": inputs.data_vcpus,
         "workload_image": inputs.workload_image,

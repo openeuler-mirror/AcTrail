@@ -1,0 +1,32 @@
+[Unit]
+Description=AcTrail Cloud Hypervisor Host VSOCK egress bridge for %i
+After=local-fs.target
+
+[Service]
+Type=simple
+# Kata names the sandbox runtime directory after the sandbox id, so the systemd
+# instance name is the only input needed. %I is the unescaped instance name;
+# the bridge itself still rejects unsafe paths and refuses an existing suffix.
+ExecStart=/usr/local/libexec/actrail-vsock-egress/host-bridge.sh --backend cloud-hypervisor --clh-vsock-socket /run/vc/vm/%I/clh.sock
+Restart=on-failure
+RestartSec=1s
+KillMode=control-group
+TimeoutStopSec=5s
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_UNIX
+UMask=0077
+MemoryMax=64M
+TasksMax=32
+LimitNOFILE=128
+
+[Install]
+WantedBy=multi-user.target

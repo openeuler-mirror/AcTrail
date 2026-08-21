@@ -26,6 +26,7 @@ from v2_artifacts import (  # noqa: E402
     cache_key_for,
     write_test_profile,
 )
+from tests.v2.common.kata_runtime import DeploymentArtifacts  # noqa: E402
 
 
 class ArtifactPreparerTest(unittest.TestCase):
@@ -40,7 +41,7 @@ class ArtifactPreparerTest(unittest.TestCase):
             changed = cache_key_for(build_input_document(inputs))
             self.assertNotEqual(first, changed)
 
-    def test_otel_endpoint_is_required_and_participates_in_cache_key(self) -> None:
+    def test_otel_endpoint_is_optional_and_participates_in_cache_key(self) -> None:
         with tempfile.TemporaryDirectory(prefix="actrail-prepare.") as raw_dir:
             inputs = _inputs(Path(raw_dir))
             first = cache_key_for(build_input_document(inputs))
@@ -51,11 +52,65 @@ class ArtifactPreparerTest(unittest.TestCase):
             changed = cache_key_for(build_input_document(changed_inputs))
 
             self.assertNotEqual(first, changed)
+            inputs.validate()
             with self.assertRaisesRegex(
                 ValueError,
-                "Guest OTLP/HTTP endpoint must not be empty",
+                "Guest OTLP/HTTP endpoint must be omitted or non-empty",
             ):
                 replace(inputs, otel_endpoint="").validate()
+
+    def test_vsock_egress_requires_an_otel_endpoint(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="actrail-prepare.") as raw_dir:
+            inputs = replace(
+                _inputs(Path(raw_dir)),
+                egress_mode="vsock-bridge",
+            )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "vsock-bridge egress requires a Guest OTLP/HTTP endpoint",
+            ):
+                inputs.validate()
+
+    def test_vsock_egress_mode_is_recorded_and_changes_cache_key(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="actrail-prepare.") as raw_dir:
+            network = _inputs(Path(raw_dir))
+            vsock = replace(
+                network,
+                egress_mode="vsock-bridge",
+                otel_endpoint="http://127.0.0.1:14318/v1/traces",
+            )
+
+            network_document = build_input_document(network)
+            vsock_document = build_input_document(vsock)
+
+        self.assertEqual(vsock_document["egress_mode"], "vsock-bridge")
+        self.assertNotEqual(
+            cache_key_for(network_document),
+            cache_key_for(vsock_document),
+        )
+
+    def test_artifact_prepare_rejects_an_unknown_egress_mode(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="actrail-prepare.") as raw_dir:
+            inputs = replace(_inputs(Path(raw_dir)), egress_mode="host-network")
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "egress mode must be network or vsock-bridge",
+            ):
+                inputs.validate()
+
+    def test_prepare_cli_exposes_the_guest_egress_mode(self) -> None:
+        command = HOST_TOOLS / "prepare-v2-test-artifacts.py"
+        completed = subprocess.run(
+            [sys.executable, str(command), "--help"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("--egress-mode {network,vsock-bridge}", completed.stdout)
 
     def test_profile_format_two_uses_manifest_as_the_path_source(self) -> None:
         with tempfile.TemporaryDirectory(prefix="actrail-prepare.") as raw_dir:
@@ -120,6 +175,7 @@ class ArtifactPreparerTest(unittest.TestCase):
             )
 
         self.assertEqual(manifest_document["backend"], "cloud-hypervisor")
+        self.assertFalse(manifest_document["otel_export_enabled"])
         self.assertIn("[hypervisor.clh]", base_config)
         self.assertEqual(
             profile_document["environment"]["VIRTUAL_CONTAINER_E2E_BACKENDS"],
@@ -148,11 +204,47 @@ class ArtifactPreparerTest(unittest.TestCase):
         ]
         self.assertEqual(len(image_calls), 2)
         for call in image_calls:
-            self.assertEqual(
-                call[call.index("--otel-endpoint") + 1],
-                inputs.otel_endpoint,
-            )
+            self.assertNotIn("--otel-endpoint", call)
             self.assertEqual(call[call.index("--grow-mib") + 1], "128")
+
+    def test_vsock_prepare_publishes_vsock_guest_images(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="actrail-prepare.") as raw_dir:
+            inputs = replace(
+                _inputs(Path(raw_dir), backend="cloud-hypervisor"),
+                egress_mode="vsock-bridge",
+                otel_endpoint="http://127.0.0.1:14318/v1/traces",
+            )
+            executor = _FakeExecutor(inputs.bin_dir)
+
+            with redirect_stdout(io.StringIO()):
+                manifest = ArtifactPreparer(inputs, executor).prepare(
+                    profile_path=None,
+                    ensure_workload_image=False,
+                )
+
+            manifest_document = json.loads(manifest.read_text(encoding="utf-8"))
+            deployment = DeploymentArtifacts.load(
+                manifest,
+                bin_dir=inputs.bin_dir,
+                expected_backend=inputs.backend,
+                expected_runtime=inputs.runtime,
+            )
+            image_calls = [
+                call
+                for call in executor.calls
+                if Path(call[0]).name == "inject-image.sh"
+            ]
+
+        self.assertEqual(manifest_document["egress_mode"], "vsock-bridge")
+        self.assertTrue(manifest_document["otel_export_enabled"])
+        self.assertEqual(deployment.egress_mode, "vsock-bridge")
+        self.assertTrue(deployment.otel_export_enabled)
+        self.assertEqual(len(image_calls), 2)
+        for call in image_calls:
+            self.assertEqual(
+                call[call.index("--egress-mode") + 1],
+                "vsock-bridge",
+            )
 
     def test_sudo_prepare_returns_checkout_outputs_to_invoking_user(self) -> None:
         deploy_uid = 1002
@@ -279,7 +371,7 @@ def _inputs(root: Path, *, backend: str = "stratovirt") -> PreparationInputs:
         workload_image="example.test/workload:24.09",
         workload_image_archive=None,
         image_pull_policy="never",
-        otel_endpoint="http://192.0.2.10:4318/v1/traces",
+        otel_endpoint=None,
         socket_gid=39000,
         data_vcpus=2,
     )

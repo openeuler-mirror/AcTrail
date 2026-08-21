@@ -19,7 +19,10 @@ deploy/container-auto/
 ├── container-auto.conf
 ├── Dockerfile
 ├── actraild.service
+├── deploy.sh
 ├── install-host.sh
+├── render-otel-http-config.sh
+├── wait-service-active.sh
 ├── e2e.sh
 └── seccomp/
 ```
@@ -98,19 +101,95 @@ map sizes. A second daemon cannot bind the same Unix socket paths.
 The runtime model has no numeric deployment levels; the two permission axes
 above are the only selection inputs.
 
+## Prerequisites
+
+`deploy.sh` builds and installs; it does not provision the host. Install these
+first, then the deployment runs unattended:
+
+| Requirement | Why | Installed by the scripts? |
+| --- | --- | --- |
+| Docker, with a running daemon | Builds the workload image and runs observed containers. `deploy.sh` checks `docker info` and stops if the daemon is unreachable. | No |
+| systemd | `install-host.sh` installs and starts `actraild.service`. | No |
+| Rust toolchain >= 1.90 | Builds the release binaries. `install-build-deps.sh` checks the version but never installs Rust. | No — checked only |
+| `awk grep install mktemp seq sleep systemctl` | Used directly by `deploy.sh`. | No — present on any normal distribution |
+| clang, llvm, libelf, zlib, pkg-config, OpenSSL headers, musl toolchain | Builds the eBPF collector and the musl TLS-sync runtime. | Yes — `scripts/install-build-deps.sh` via `dnf` or `apt-get` |
+| Node.js >= 18 and npm | Builds the actrailweb frontend. | Yes — same script |
+| root | Installs into `/usr/local/bin`, `/etc/actrail` and `/etc/systemd/system`. | No — run with `sudo -E` |
+
+Kernel-side requirements for eBPF, BTF, tracefs, seccomp and fanotify are a
+separate matter; see [../../docs/platform-requirements.md](../../docs/platform-requirements.md).
+The two permission axes degrade explicitly when the kernel cannot provide them,
+so a host that fails those checks still deploys and still reports what it lost.
+
+A host that already has the release binaries can skip the whole build
+toolchain by passing `--bin-dir`, in which case only Docker, systemd and root
+are required.
+
 ## Automatic Operation
 
-Install the unified host configuration:
+Deploy the host daemon and build the workload image in one command. The default
+is openEuler 24.03:
+
+```bash
+sudo -E deploy/container-auto/deploy.sh
+```
+
+The command builds and installs the current AcTrail release, pulls
+`openeuler/openeuler:24.03-lts-sp3` when missing, builds
+`actrail/container-auto:openeuler-24.03`, installs the versioned host config,
+plugins, seccomp profile and systemd unit, starts `actraild`, then smoke-tests
+the image and service with a real `actrailctl launch -- /bin/true` trace. Reuse an already-built release with
+`--bin-dir target/release`.
+
+Ubuntu 24.04 is the supported alternative:
+
+```bash
+sudo -E deploy/container-auto/deploy.sh --distro ubuntu
+```
+
+Use `--base-image` for an approved mirror, `--image` for a custom output tag,
+and `--pull-policy missing|always|never` to control registry access. Resolve all
+defaults without changing the host with `deploy.sh --print-plan`.
+
+By default the host keeps live semantic spans in
+`/var/lib/actrail/export/live-spans.otlp.jsonl`. To additionally send them to
+an OTLP/HTTP Collector, pass the endpoint as seen by the **host** `actraild`:
+
+```bash
+sudo -E deploy/container-auto/deploy.sh \
+  --otel-endpoint http://127.0.0.1:4318/v1/traces
+```
+
+This installs and loads `otel-http` alongside the local `otel-jsonl` exporter.
+The deployment succeeds only after its observed smoke trace increments
+`metric.otel_http.successful_batches`; an active plugin with an unreachable
+Collector is reported as a failure. Host loopback is valid here because the
+daemon runs on the host, unlike a Kata Guest where loopback names the Guest.
+
+The safe default is `--otel-attribute-mode metadata-only`: command lines and
+HTTP/LLM content attributes stay local. A trusted Collector and transport may
+opt in with `--otel-attribute-mode full`. This permits semantic action content
+attributes but does not export raw SQLite `payload_segments` as OTLP spans.
+
+The lower-level host-only installer remains available:
 
 ```bash
 sudo deploy/container-auto/install-host.sh target/release
 ```
 
-It installs the versioned `/etc/actrail/container-auto.conf` plus the
-`otel-jsonl` manifest, schema, and selected-action config under
-`/etc/actrail/plugins/otel-jsonl/`. The operator config declares the complete
-capability set, uses host eBPF `enabled = "auto"`, and loads the exporter
-through the plugin startup lifecycle.
+The host-only equivalent with a Collector is:
+
+```bash
+sudo deploy/container-auto/install-host.sh \
+  --otel-endpoint http://127.0.0.1:4318/v1/traces \
+  target/release
+```
+
+It installs `/etc/actrail/container-auto.conf`, the `otel-jsonl` package,
+`/etc/actrail/seccomp/actrail-notify.json`, and the systemd service. The
+operator config declares the complete capability set, uses host eBPF
+`enabled = "auto"`, and loads the exporter through the plugin startup
+lifecycle.
 
 Probe from the workload:
 
@@ -134,7 +213,10 @@ allowlist, start the workload container with the versioned profile:
 
 ```bash
 docker run \
-  --security-opt seccomp="$(pwd)/deploy/container-auto/seccomp/actrail-notify.json" \
+  --security-opt seccomp=/etc/actrail/seccomp/actrail-notify.json \
+  -v /run/actrail:/run/actrail:ro \
+  -v /etc/actrail:/etc/actrail:ro \
+  actrail/container-auto:openeuler-24.03 \
   ...
 ```
 
@@ -201,11 +283,19 @@ Run the complete matrix acceptance test with:
 sudo BIN_DIR=target/release deploy/container-auto/e2e.sh
 ```
 
-The acceptance image defaults to `ubuntu:24.04`. When Docker Hub is
-unavailable, pull the same Ubuntu image through an approved mirror and set:
+The acceptance image defaults to `openeuler/openeuler:24.03-lts-sp3`. Select
+Ubuntu explicitly with:
 
 ```bash
-sudo CONTAINER_AUTO_E2E_BASE_IMAGE=<ubuntu-mirror-image> \
+sudo CONTAINER_AUTO_E2E_BASE_IMAGE=ubuntu:24.04 \
+  BIN_DIR=target/release deploy/container-auto/e2e.sh
+```
+
+When the public registry is unavailable, pull the selected distribution image
+through an approved mirror and set:
+
+```bash
+sudo CONTAINER_AUTO_E2E_BASE_IMAGE=<mirror-image> \
   BIN_DIR=target/release deploy/container-auto/e2e.sh
 ```
 

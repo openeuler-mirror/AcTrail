@@ -1,14 +1,72 @@
 #!/usr/bin/env bash
 # Shared validation and rendering for the Guest OTLP/HTTP exporter endpoint.
+#
+# The Guest reaches the Collector through exactly one of two egress modes, and
+# they differ only in which destination address is legitimate:
+#
+#   network       CNI/Kubernetes gives the Guest its own interface and route, so
+#                 the endpoint must name a host address reachable from inside the
+#                 Guest. Guest loopback is the Guest itself and stays rejected.
+#   vsock-bridge  There is no Guest network. A loopback listener inside the Guest
+#                 forwards over AF_VSOCK to the host, so Guest loopback is the
+#                 only legitimate destination, and its port doubles as the single
+#                 source of truth for the bridge listen port.
+#
+# Every other rule — scheme, traces path, placeholder, IPv4 canonicalisation,
+# port range, TOML safety — applies identically to both modes.
 
 ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR=""
+# Explicit port of the last validated endpoint; empty when none was given.
+ACTRAIL_GUEST_OTEL_ENDPOINT_PORT=""
+ACTRAIL_GUEST_OTEL_EGRESS_MODE_DEFAULT="network"
 
 actrail_guest_otel_endpoint_reject() {
   ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR="$1"
 }
 
+actrail_validate_guest_egress_mode() {
+  local mode="${1-}"
+
+  case "$mode" in
+    network|vsock-bridge)
+      return 0
+      ;;
+    *)
+      actrail_guest_otel_endpoint_reject \
+        "unsupported egress mode ${mode:-<empty>}: expected network or vsock-bridge"
+      return 1
+      ;;
+  esac
+}
+
+# Validate the optional exporter selection used by deployment entry points.
+# The low-level endpoint validator intentionally keeps rejecting an empty value
+# so callers that render an exporter configuration cannot accidentally install
+# a placeholder. An omitted endpoint selects local SQLite-only operation.
+actrail_validate_guest_otel_selection() {
+  local endpoint="${1-}"
+  local mode="$ACTRAIL_GUEST_OTEL_EGRESS_MODE_DEFAULT"
+
+  if [[ "$#" -ge 2 ]]; then
+    mode="$2"
+  fi
+  actrail_validate_guest_egress_mode "$mode" || return 1
+  if [[ -z "$endpoint" ]]; then
+    if [[ "$mode" == "vsock-bridge" ]]; then
+      actrail_guest_otel_endpoint_reject \
+        "--egress-mode vsock-bridge requires --otel-endpoint"
+      return 1
+    fi
+    ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR=""
+    ACTRAIL_GUEST_OTEL_ENDPOINT_PORT=""
+    return 0
+  fi
+  actrail_validate_guest_otel_endpoint "$endpoint" "$mode"
+}
+
 actrail_validate_guest_otel_endpoint() {
   local endpoint="${1-}"
+  local mode="$ACTRAIL_GUEST_OTEL_EGRESS_MODE_DEFAULT"
   local normalized_endpoint=""
   local remainder=""
   local authority=""
@@ -18,12 +76,20 @@ actrail_validate_guest_otel_endpoint() {
   local port=""
   local explicit_port=0
   local port_number=0
+  local is_loopback_literal=0
   local -a ipv4_octets=()
   local -a dns_labels=()
   local octet=""
   local label=""
 
   ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR=""
+  ACTRAIL_GUEST_OTEL_ENDPOINT_PORT=""
+  # An omitted mode keeps the historical network-egress behaviour; an explicitly
+  # passed empty mode is a caller bug and must not be silently defaulted.
+  if [[ "$#" -ge 2 ]]; then
+    mode="$2"
+  fi
+  actrail_validate_guest_egress_mode "$mode" || return 1
   if [[ -z "$endpoint" ]]; then
     actrail_guest_otel_endpoint_reject "--otel-endpoint is required"
     return 1
@@ -144,12 +210,33 @@ actrail_validate_guest_otel_endpoint() {
         "--otel-endpoint port must be an integer between 1 and 65535"
       return 1
     fi
+    ACTRAIL_GUEST_OTEL_ENDPOINT_PORT="$port_number"
   fi
 
   normalized_host="${host,,}"
+  # Only a literal 127.0.0.0/8 address counts as the bridge listener. "localhost"
+  # depends on Guest DNS and /etc/hosts, which the deployment does not control.
+  if [[ ${#ipv4_octets[@]} -eq 4 && ${ipv4_octets[0]} -eq 127 ]]; then
+    is_loopback_literal=1
+  fi
+
+  if [[ "$mode" == "vsock-bridge" ]]; then
+    if (( ! is_loopback_literal )); then
+      actrail_guest_otel_endpoint_reject \
+        "vsock-bridge egress requires the Guest bridge loopback address (127.0.0.0/8 literal)"
+      return 1
+    fi
+    if (( ! explicit_port )); then
+      actrail_guest_otel_endpoint_reject \
+        "vsock-bridge egress requires an explicit port; it is also the Guest bridge listen port"
+      return 1
+    fi
+    return 0
+  fi
+
   if [[ "$normalized_host" == "localhost" \
     || "$normalized_host" == localhost.* \
-    || ( ${#ipv4_octets[@]} -eq 4 && ${ipv4_octets[0]} -eq 127 ) \
+    || $is_loopback_literal -eq 1 \
     || "$normalized_host" == "0.0.0.0" \
     || "$normalized_host" == "[::1]" \
     || "$normalized_host" == "[0:0:0:0:0:0:0:1]" ]]; then
@@ -161,14 +248,37 @@ actrail_validate_guest_otel_endpoint() {
   return 0
 }
 
+# Echo the explicit port of a VSOCK-bridge endpoint. The endpoint is the single
+# source of truth for the Guest bridge listen port, so the installer renders the
+# unit from this value instead of repeating a second constant.
+actrail_guest_otel_endpoint_port() {
+  local endpoint="${1-}"
+  local mode="vsock-bridge"
+
+  if [[ "$#" -ge 2 ]]; then
+    mode="$2"
+  fi
+  actrail_validate_guest_otel_endpoint "$endpoint" "$mode" || return 1
+  if [[ -z "$ACTRAIL_GUEST_OTEL_ENDPOINT_PORT" ]]; then
+    actrail_guest_otel_endpoint_reject \
+      "--otel-endpoint must include an explicit port to derive the bridge listen port"
+    return 1
+  fi
+  printf '%s\n' "$ACTRAIL_GUEST_OTEL_ENDPOINT_PORT"
+}
+
 actrail_write_guest_otel_endpoint_config() {
   local template="${1-}"
   local target="${2-}"
   local endpoint="${3-}"
+  local mode="$ACTRAIL_GUEST_OTEL_EGRESS_MODE_DEFAULT"
   local temp_path=""
 
+  if [[ "$#" -ge 4 ]]; then
+    mode="$4"
+  fi
   ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR=""
-  if ! actrail_validate_guest_otel_endpoint "$endpoint"; then
+  if ! actrail_validate_guest_otel_endpoint "$endpoint" "$mode"; then
     return 1
   fi
   if [[ ! -f "$template" ]]; then
