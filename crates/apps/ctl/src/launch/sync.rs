@@ -232,6 +232,7 @@ pub(super) fn sync_launch_envs(
                 large_transfer_bytes: config.sync_flow_large_transfer_bytes,
                 unknown_stream_bytes: config.sync_flow_unknown_stream_bytes,
                 h2_data_probe_bytes: config.sync_flow_h2_data_probe_bytes,
+                max_streams: 4096,
             },
             redaction: RedactionMode::Redact,
             events: EventFilter::none(),

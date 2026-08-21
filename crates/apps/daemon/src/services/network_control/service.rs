@@ -1,6 +1,6 @@
 //! Network-control service façade, policy host, and gray admission.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::os::fd::RawFd;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -44,6 +44,8 @@ pub(super) struct NetworkControlBackend {
     pub(super) config: NetworkControlConfig,
     pub(super) rules: NetworkPolicyStore,
     pub(super) reusable_decisions: BTreeMap<ReusableDecisionKey, CachedNetworkDecision>,
+    pub(super) reusable_order: BTreeMap<u64, ReusableDecisionKey>,
+    pub(super) reusable_by_trace: BTreeMap<TraceId, BTreeSet<ReusableDecisionKey>>,
     pub(super) next_cache_sequence: u64,
     pub(super) in_flight_by_rule: BTreeMap<(String, String), u32>,
     pub(super) in_flight_by_instance: BTreeMap<String, u32>,
@@ -76,6 +78,8 @@ impl NetworkControlService {
                 config: config.clone(),
                 rules,
                 reusable_decisions: BTreeMap::new(),
+                reusable_order: BTreeMap::new(),
+                reusable_by_trace: BTreeMap::new(),
                 next_cache_sequence: 0,
                 in_flight_by_rule: BTreeMap::new(),
                 in_flight_by_instance: BTreeMap::new(),
@@ -115,12 +119,21 @@ impl NetworkControlService {
             .remove_owner(instance_id)
             .map_err(|message| ControlError::new("network_control_policy", message))?;
         if removed {
-            backend.reusable_decisions.clear();
+            backend.clear_reusable_cache();
         } else {
-            backend
-                .reusable_decisions
-                .retain(|_, cached| cached.instance_id != instance_id);
+            backend.remove_cached_decisions_by_instance(instance_id);
         }
+        Ok(())
+    }
+
+    pub(in crate::services) fn forget_trace(&self, trace_id: TraceId) -> Result<(), ControlError> {
+        let Some(backend) = &self.backend else {
+            return Ok(());
+        };
+        backend
+            .lock()
+            .map_err(lock_control_error)?
+            .forget_trace_cache(trace_id);
         Ok(())
     }
 
@@ -500,7 +513,7 @@ impl NetworkPolicyHost for NetworkPolicyHostFacade {
                 self.plugins.is_instance_active(target)
             });
         if result.status == NetworkPolicyApplyStatus::Accepted && result.applied_count > 0 {
-            backend.reusable_decisions.clear();
+            backend.clear_reusable_cache();
         }
         Ok(result)
     }

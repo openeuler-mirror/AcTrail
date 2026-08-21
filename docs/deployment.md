@@ -57,7 +57,7 @@ The generated default keeps daemon runtime state and durable observation data ou
 | `log_path` | `/var/log/actrail/actraild.log` |
 | `control.finalization.shutdown_drain_timeout_ms` | `30000` |
 | `supervision.startup_wait_ms` | `30000` |
-| `supervision.shutdown_wait_ms` | `5000` |
+| `supervision.shutdown_wait_ms` | `150100` |
 | `workload_diagnostics_enabled` | `false` |
 | `workload_diagnostics_interval_ms` | `1000` |
 
@@ -139,7 +139,7 @@ Increase the startup limit only when successful preflight is consistently slower
 ```toml
 [supervision]
 startup_wait_ms = 60000
-shutdown_wait_ms = 5000
+shutdown_wait_ms = 150100
 poll_interval_ms = 100
 ```
 
@@ -160,7 +160,7 @@ Stop or restart:
 
 On `SIGTERM`, the daemon stops accepting new control work, continues draining captured events, finalizes every terminal trace, and only then closes post-trace admission and drains post-trace work and plugin alert writes. `stop` reports success only after that sequence has completed and the process has exited. If terminal trace finalization exceeds `control.finalization.shutdown_drain_timeout_ms`, the daemon records a `trace_finalization_shutdown_timeout` diagnostic, marks the affected trace degraded, and exits with a shutdown error. Any remaining nonterminal semantic actions are therefore surfaced as degraded evidence rather than a clean shutdown.
 
-The supervising CLI and the daemon use separate budgets. Set `supervision.shutdown_wait_ms` high enough for the expected drain time when workloads or post-trace plugins routinely need more than the generated five-second wait. A supervision timeout does not force-kill a normally stopping daemon; inspect `log_path`, wait for the process to finish its bounded drain, and correct any reported finalization, post-trace, alert, or storage error.
+The supervising CLI reserves one poll interval and passes the remaining `supervision.shutdown_wait_ms` budget to the daemon as a single absolute shutdown deadline. Terminal finalization, unsettled semantic finalization, post-trace work, exporter shutdown, and alert draining consume that shared deadline in order; no later stage receives a fresh timeout. Startup validation requires the configured wait to cover all configured stage maxima plus the supervision poll interval. A supervision timeout does not force-kill a normally stopping daemon; inspect `log_path` and the persisted shutdown-stage diagnostics for the stage that exhausted the budget.
 
 Clean local runtime artifacts when intentionally resetting a test deployment:
 

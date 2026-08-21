@@ -141,6 +141,7 @@ pub(crate) struct StorageAttachService {
     pub(super) finalization_poll_interval: Duration,
     pub(super) terminal_settle_delay: Duration,
     pub(super) finalization_shutdown_drain_timeout: Duration,
+    pub(super) shutdown_runtime_timeout: Duration,
     pub(super) diagnosed_terminal_open_memberships:
         BTreeSet<(model_core::ids::TraceId, ProcessIdentity)>,
     pub(super) provider_classifier: Box<dyn ProviderClassifier>,

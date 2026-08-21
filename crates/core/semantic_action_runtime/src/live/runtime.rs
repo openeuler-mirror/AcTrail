@@ -6,6 +6,7 @@ use std::time::SystemTime;
 use config_core::daemon::{
     AgentInvocationConfig, FileObservationConfig, PayloadMcpConfig, SemanticRetentionConfig,
 };
+use model_core::diagnostics::LlmPipelineDiagnostic;
 use model_core::event::{DomainEvent, EventPayload};
 use model_core::ids::TraceId;
 use model_core::payload::{PayloadSegment, PayloadStreamIdentity};
@@ -15,7 +16,9 @@ use semantic_action::{
     SemanticEvidenceKind, attr_keys as attrs,
 };
 
-use crate::payload_projection::llm::{LlmCodecPlugin, LlmCodecPluginStatus};
+use crate::llm_pipeline::{
+    ActionBatch, LlmActionPipeline, LlmCodecPlugin, LlmCodecPluginStatus, PipelineEvent,
+};
 
 use super::actions::{
     enforcement_action, file_modify_action, http_message_action, is_file_modify_event,
@@ -24,18 +27,17 @@ use super::actions::{
 use super::agent::AgentProjector;
 use super::command::CommandProjector;
 use super::file::FileAccessProjector;
-use super::http_exchange::HttpExchangeTracker;
+use super::http_exchange::{DamagedHttp1RequestOutcome, HttpExchangeTracker};
 use super::links::ActionLinkProjector;
-use super::llm::LiveLlmProjector;
 use super::mcp::{LiveMcpProjector, LiveMcpStdioDiagnostic};
-use super::tool::ToolInteractionProjector;
+use super::tool::{ToolInteractionProjector, ToolProjectionBatch};
 
 pub struct LiveSemanticActionRuntime {
     agent: AgentProjector,
     command: CommandProjector,
     file_access: FileAccessProjector,
     http_exchange: HttpExchangeTracker,
-    llm: LiveLlmProjector,
+    llm: LlmActionPipeline,
     mcp: LiveMcpProjector,
     tool: ToolInteractionProjector,
     links: ActionLinkProjector,
@@ -70,6 +72,7 @@ pub struct LiveSemanticActionOutput {
     pub llm_request_lineages: Vec<LlmRequestLineageWrite>,
     pub mcp_jsonrpc_contents: Vec<McpJsonRpcContentWrite>,
     pub payload_segments: Vec<PayloadSegment>,
+    pub llm_pipeline_diagnostics: Vec<LlmPipelineDiagnostic>,
     pub deferred_events: Vec<DomainEvent>,
     pub retain_event: bool,
     pub raw_event_consumed: bool,
@@ -86,6 +89,7 @@ impl Default for LiveSemanticActionOutput {
             llm_request_lineages: Vec::new(),
             mcp_jsonrpc_contents: Vec::new(),
             payload_segments: Vec::new(),
+            llm_pipeline_diagnostics: Vec::new(),
             deferred_events: Vec::new(),
             retain_event: true,
             raw_event_consumed: false,
@@ -104,6 +108,8 @@ impl LiveSemanticActionOutput {
         self.llm_request_lineages.extend(other.llm_request_lineages);
         self.mcp_jsonrpc_contents.extend(other.mcp_jsonrpc_contents);
         self.payload_segments.extend(other.payload_segments);
+        self.llm_pipeline_diagnostics
+            .extend(other.llm_pipeline_diagnostics);
         self.deferred_events.extend(other.deferred_events);
         self.retain_event = self.retain_event && other.retain_event;
         self.raw_event_consumed = self.raw_event_consumed || other.raw_event_consumed;
@@ -119,6 +125,10 @@ impl LiveSemanticActionRuntime {
         mcp: PayloadMcpConfig,
     ) -> Self {
         let enabled = config.enabled;
+        let max_tool_entries_per_trace = semantic_retention
+            .l0_llm_call
+            .projection_state
+            .max_tool_entries_per_trace;
         let mcp_content_retention = semantic_retention.l0_mcp_call.clone();
         let http_exchange_config = semantic_retention.l2_http.exchange;
         Self {
@@ -126,9 +136,9 @@ impl LiveSemanticActionRuntime {
             command: CommandProjector::new(),
             file_access: FileAccessProjector::new(file_observation),
             http_exchange: HttpExchangeTracker::new(http_exchange_config),
-            llm: LiveLlmProjector::new(semantic_retention),
+            llm: LlmActionPipeline::new(semantic_retention),
             mcp: LiveMcpProjector::new(mcp, mcp_content_retention),
-            tool: ToolInteractionProjector::new(config),
+            tool: ToolInteractionProjector::new(config, max_tool_entries_per_trace),
             links: ActionLinkProjector::new(),
         }
     }
@@ -241,32 +251,32 @@ impl LiveSemanticActionRuntime {
                 let observation = self
                     .http_exchange
                     .observe_http_message(http_message_action(event));
-                let mut llm_actions = Vec::new();
+                let mut projected_llm = LiveSemanticActionOutput::default();
                 for matched in &observation.matches {
-                    let llm_output = self.llm.observe_http_exchange(matched);
-                    let tool_output = self.tool.observe_llm_output(
-                        &llm_output.actions,
-                        &llm_output.llm_tool_results,
-                        &llm_output.llm_request_lineages,
-                    );
-                    for proposal in &llm_output.http_request_links {
-                        if let Some(link) = self.links.observe_exact_http_request_link(proposal) {
-                            output.links.push(link);
-                        }
-                    }
-                    output
-                        .llm_request_contents
-                        .extend(llm_output.llm_request_contents);
-                    output
-                        .llm_request_lineages
-                        .extend(llm_output.llm_request_lineages);
-                    output.payload_segments.extend(llm_output.payload_segments);
-                    llm_actions.extend(llm_output.actions);
-                    llm_actions.extend(tool_output.actions);
-                    output.links.extend(tool_output.links);
+                    let llm_output = self
+                        .llm
+                        .advance(PipelineEvent::HttpExchange(matched))
+                        .output;
+                    projected_llm.extend(self.observe_llm_batch(llm_output));
                 }
+                for response in &observation.damaged_responses {
+                    let llm_output = self
+                        .llm
+                        .advance(PipelineEvent::DamagedHttpResponse(response))
+                        .output;
+                    projected_llm.extend(self.observe_llm_batch(llm_output));
+                }
+                for response in &observation.unmatched_responses {
+                    let llm_output = self
+                        .llm
+                        .advance(PipelineEvent::UnmatchedHttpResponse(response))
+                        .output;
+                    projected_llm.extend(self.observe_llm_batch(llm_output));
+                }
+                let llm_actions = std::mem::take(&mut projected_llm.actions);
                 output.actions.extend(observation.actions);
                 output.actions.extend(llm_actions);
+                output.extend(projected_llm);
                 output
                     .links
                     .extend(self.links.observe_actions(&output.actions));
@@ -301,6 +311,47 @@ impl LiveSemanticActionRuntime {
 
     pub fn llm_codec_statuses(&self) -> Vec<LlmCodecPluginStatus> {
         self.llm.codec_statuses()
+    }
+
+    fn observe_llm_batch(&mut self, llm_output: ActionBatch) -> LiveSemanticActionOutput {
+        let tool_output = self.tool.project(ToolProjectionBatch {
+            actions: &llm_output.actions,
+            tool_results: &llm_output.llm_tool_results,
+            request_lineages: &llm_output.llm_request_lineages,
+        });
+        let mut output = LiveSemanticActionOutput {
+            payload_segments: llm_output.payload_segments,
+            llm_pipeline_diagnostics: llm_output.diagnostics,
+            llm_request_contents: llm_output.llm_request_contents,
+            llm_request_lineages: llm_output.llm_request_lineages,
+            ..LiveSemanticActionOutput::default()
+        };
+        for proposal in &llm_output.http_request_links {
+            if let Some(link) = self.links.observe_exact_http_request_link(proposal) {
+                output.links.push(link);
+            }
+        }
+        for proposal in &llm_output.http_response_links {
+            if let Some(link) = self.links.observe_exact_http_response_link(proposal) {
+                output.links.push(link);
+            }
+        }
+        for mut action in llm_output.actions {
+            let agent_actions = if action.kind == SemanticActionKind::LlmRequest {
+                self.agent.annotate_user_input(&mut action);
+                self.agent.observe_llm_request(&action)
+            } else {
+                Vec::new()
+            };
+            output.actions.push(action);
+            output.actions.extend(agent_actions);
+        }
+        output.actions.extend(tool_output.actions);
+        output.links.extend(tool_output.links);
+        output
+            .llm_pipeline_diagnostics
+            .extend(tool_output.diagnostics);
+        output
     }
 
     pub fn take_pending_exec_intent_evictions(&mut self) -> u64 {
@@ -359,7 +410,10 @@ impl LiveSemanticActionRuntime {
         if retain_evidence {
             self.agent.observe_payload_segment(segment);
         }
-        let mut llm_output = self.llm.observe_payload_segment(segment);
+        let mut llm_output = self
+            .llm
+            .advance(PipelineEvent::PayloadSegment(segment))
+            .output;
         if !retain_evidence {
             for action in &mut llm_output.actions {
                 action
@@ -368,15 +422,11 @@ impl LiveSemanticActionRuntime {
             }
         }
         let mut mcp_actions = self.mcp.observe_llm_actions(&llm_output.actions);
-        let tool_output = self.tool.observe_llm_output(
-            &llm_output.actions,
-            &llm_output.llm_tool_results,
-            &llm_output.llm_request_lineages,
-        );
+        let projected_llm = self.observe_llm_batch(llm_output);
         let (mcp_output, mcp_stdio_diagnostics) =
             self.mcp.observe_payload_segment(segment, retain_evidence);
         mcp_actions.extend(mcp_output.actions);
-        let mut output = if llm_output.actions.is_empty() && mcp_actions.is_empty() {
+        let mut output = if projected_llm.actions.is_empty() && mcp_actions.is_empty() {
             LiveSemanticActionOutput::default()
         } else {
             self.file_access.observe_boundary(
@@ -385,30 +435,7 @@ impl LiveSemanticActionRuntime {
                 segment.observed_at,
             )
         };
-        for proposal in &llm_output.http_request_links {
-            if let Some(link) = self.links.observe_exact_http_request_link(proposal) {
-                output.links.push(link);
-            }
-        }
-        output
-            .llm_request_contents
-            .extend(llm_output.llm_request_contents);
-        output
-            .llm_request_lineages
-            .extend(llm_output.llm_request_lineages);
-        output.payload_segments.extend(llm_output.payload_segments);
-        for mut action in llm_output.actions {
-            let agent_actions = if action.kind == SemanticActionKind::LlmRequest {
-                self.agent.annotate_user_input(&mut action);
-                self.agent.observe_llm_request(&action)
-            } else {
-                Vec::new()
-            };
-            output.actions.push(action.clone());
-            output.actions.extend(agent_actions);
-        }
-        output.actions.extend(tool_output.actions);
-        output.links.extend(tool_output.links);
+        output.extend(projected_llm);
         for action in &mcp_actions {
             output.extend(self.command.observe_mcp_tool_call(action));
         }
@@ -445,21 +472,8 @@ impl LiveSemanticActionRuntime {
         segment: &PayloadSegment,
     ) -> LiveSemanticActionObservation {
         self.http_exchange.quarantine_payload_stream(segment);
-        let llm_output = self.llm.observe_payload_gap(segment);
-        let tool_output = self.tool.observe_llm_output(
-            &llm_output.actions,
-            &llm_output.llm_tool_results,
-            &llm_output.llm_request_lineages,
-        );
-        let mut output = LiveSemanticActionOutput {
-            actions: llm_output.actions,
-            payload_segments: llm_output.payload_segments,
-            llm_request_contents: llm_output.llm_request_contents,
-            llm_request_lineages: llm_output.llm_request_lineages,
-            ..LiveSemanticActionOutput::default()
-        };
-        output.actions.extend(tool_output.actions);
-        output.links.extend(tool_output.links);
+        let llm_output = self.llm.advance(PipelineEvent::PayloadGap(segment)).output;
+        let mut output = self.observe_llm_batch(llm_output);
         output
             .links
             .extend(self.links.observe_actions(&output.actions));
@@ -473,13 +487,95 @@ impl LiveSemanticActionRuntime {
         self.http_exchange.quarantine_payload_stream(segment);
     }
 
+    pub fn prepare_incomplete_http1_request(
+        &mut self,
+        segment: &PayloadSegment,
+        sequence: u64,
+        header_projected: bool,
+    ) {
+        match self
+            .http_exchange
+            .observe_damaged_http1_request(segment, sequence, header_projected)
+        {
+            DamagedHttp1RequestOutcome::Tombstoned => {}
+            DamagedHttp1RequestOutcome::MissingPending
+                if self
+                    .llm
+                    .advance(PipelineEvent::LocalizeIncompleteHttp1Request { segment, sequence })
+                    .localized => {}
+            DamagedHttp1RequestOutcome::MissingPending => {
+                self.http_exchange.quarantine_payload_stream(segment);
+                self.llm
+                    .advance(PipelineEvent::ForgetPayloadAssociations(segment));
+            }
+            DamagedHttp1RequestOutcome::Unsafe => {
+                self.llm
+                    .advance(PipelineEvent::ForgetPayloadAssociations(segment));
+            }
+        }
+    }
+
+    pub fn prepare_incomplete_http1_response(
+        &mut self,
+        segment: &PayloadSegment,
+        sequence: u64,
+        header_projected: bool,
+    ) {
+        let request = (!header_projected)
+            .then(|| self.http_exchange.observe_damaged_http1_response(segment))
+            .flatten();
+        self.llm
+            .advance(PipelineEvent::PrepareIncompleteHttp1Response {
+                segment,
+                sequence,
+                request,
+            });
+    }
+
     pub fn finish_incomplete_payload(&mut self, segment: &PayloadSegment) {
-        self.llm.forget_payload_associations(segment);
+        self.llm
+            .advance(PipelineEvent::ForgetPayloadAssociations(segment));
+    }
+
+    pub fn finish_incomplete_http1_response(
+        &mut self,
+        segment: &PayloadSegment,
+    ) -> LiveSemanticActionOutput {
+        let llm_output = self
+            .llm
+            .advance(PipelineEvent::FinishIncompleteHttp1Response(segment))
+            .output;
+        let mut output = self.observe_llm_batch(llm_output);
+        output
+            .links
+            .extend(self.links.observe_actions(&output.actions));
+        output
     }
 
     pub fn forget_payload_stream(&mut self, identity: &PayloadStreamIdentity) {
         self.http_exchange.forget_payload_stream(identity);
-        self.llm.forget_payload_stream(identity);
+        self.llm
+            .advance(PipelineEvent::ForgetPayloadStream(identity));
+    }
+
+    pub fn finalize_payload_stream(
+        &mut self,
+        identity: &PayloadStreamIdentity,
+        finished_at: SystemTime,
+    ) -> LiveSemanticActionOutput {
+        let llm_output = self
+            .llm
+            .advance(PipelineEvent::FinalizePayloadStream {
+                identity,
+                finished_at,
+            })
+            .output;
+        let mut output = self.observe_llm_batch(llm_output);
+        output
+            .links
+            .extend(self.links.observe_actions(&output.actions));
+        self.http_exchange.forget_payload_stream(identity);
+        output
     }
 
     pub fn flush_closed_mcp_stdio_sessions(&mut self) {
@@ -522,7 +618,7 @@ impl LiveSemanticActionRuntime {
         self.command.forget_trace(trace_id);
         self.file_access.forget_trace(trace_id);
         self.http_exchange.forget_trace(trace_id);
-        self.llm.forget_trace(trace_id);
+        self.llm.advance(PipelineEvent::ForgetTrace(trace_id));
         self.mcp.forget_trace(trace_id);
         self.tool.forget_trace(trace_id);
         self.links.forget_trace(trace_id);
@@ -533,35 +629,32 @@ impl LiveSemanticActionRuntime {
         trace_id: TraceId,
         finished_at: SystemTime,
     ) -> LiveSemanticActionOutput {
-        let llm_output = self.llm.finalize_trace(trace_id, finished_at);
-        let tool_output = self.tool.observe_llm_output(
-            &llm_output.actions,
-            &llm_output.llm_tool_results,
-            &llm_output.llm_request_lineages,
-        );
-        let mut actions = llm_output.actions;
-        actions.extend(tool_output.actions);
-        let finalized_tool_output = self.tool.finalize_trace(trace_id, finished_at);
-        actions.extend(finalized_tool_output.actions);
-        actions.extend(self.mcp.finalize_trace(trace_id, finished_at));
+        let llm_output = self
+            .llm
+            .advance(PipelineEvent::FinalizeTrace {
+                trace_id,
+                finished_at,
+            })
+            .output;
+        let mut output = self.observe_llm_batch(llm_output);
+        let finalized_tool_output = self.tool.finish_trace(trace_id, finished_at);
+        output.actions.extend(finalized_tool_output.actions);
+        output
+            .llm_pipeline_diagnostics
+            .extend(finalized_tool_output.diagnostics);
+        output
+            .actions
+            .extend(self.mcp.finalize_trace(trace_id, finished_at));
         let file_output = self.file_access.finalize_trace(trace_id, finished_at);
-        actions.extend(file_output.actions);
-        let mut links = tool_output.links;
-        links.extend(finalized_tool_output.links);
-        links.extend(self.links.observe_actions(&actions));
-        LiveSemanticActionOutput {
-            actions,
-            links,
-            payload_segments: llm_output.payload_segments,
-            file_observation_paths: Vec::new(),
-            file_path_sets: file_output.file_path_sets,
-            llm_request_contents: llm_output.llm_request_contents,
-            llm_request_lineages: llm_output.llm_request_lineages,
-            mcp_jsonrpc_contents: Vec::new(),
-            deferred_events: file_output.deferred_events,
-            retain_event: file_output.retain_event,
-            raw_event_consumed: false,
-        }
+        output.actions.extend(file_output.actions);
+        output.links.extend(finalized_tool_output.links);
+        output
+            .links
+            .extend(self.links.observe_actions(&output.actions));
+        output.file_path_sets.extend(file_output.file_path_sets);
+        output.deferred_events.extend(file_output.deferred_events);
+        output.retain_event = output.retain_event && file_output.retain_event;
+        output
     }
 }
 
@@ -571,81 +664,5 @@ fn event_projects_semantic_action_boundary(event: &DomainEvent) -> bool {
         EventPayload::Application(payload) => is_http_protocol(&payload.protocol),
         EventPayload::Enforcement(_) => true,
         _ => false,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use config_core::daemon::{
-        AgentInvocationConfig, FileObservationConfig, PayloadMcpConfig, SemanticRetentionConfig,
-    };
-    use model_core::payload::PayloadDirection;
-    use semantic_action::{SemanticActionKind, SemanticActionLinkRole, SemanticActionStatus};
-
-    use crate::payload_projection::testing::{HttpRequestFixture, HttpResponseFixture};
-
-    use super::LiveSemanticActionRuntime;
-
-    #[test]
-    fn captured_agent_call_and_result_reach_the_runtime_action_graph() {
-        let mut runtime = LiveSemanticActionRuntime::new(
-            AgentInvocationConfig::default(),
-            16,
-            SemanticRetentionConfig::default(),
-            FileObservationConfig::default(),
-            PayloadMcpConfig::default(),
-        );
-        let first_request = HttpRequestFixture::llm_json(
-            r#"{"model":"claude-opus-4","messages":[{"role":"user","content":"delegate"}]}"#,
-        )
-        .segment_builder()
-        .build();
-        runtime.observe_payload_segment(&first_request);
-        let response = HttpResponseFixture::llm_json(
-            r#"{"id":"msg_1","type":"message","role":"assistant","model":"claude-opus-4","content":[{"type":"tool_use","id":"toolu_1","name":"Agent","input":{"subagent_type":"general-purpose","prompt":"inspect fixture"}}],"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1}}"#,
-        )
-        .segment_builder()
-        .build();
-
-        let declared = runtime.observe_payload_segment(&response);
-
-        assert!(
-            declared
-                .actions
-                .iter()
-                .any(|action| action.kind == SemanticActionKind::LlmToolCall)
-        );
-        assert!(
-            declared
-                .actions
-                .iter()
-                .any(|action| action.kind == SemanticActionKind::AgentInvocation)
-        );
-
-        let result_request = HttpRequestFixture::llm_json(
-            r#"{"model":"claude-opus-4","messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"done"}]}]}"#,
-        )
-        .segment_builder()
-        .direction(PayloadDirection::Outbound)
-        .sequence(1)
-        .build();
-        let result = runtime.observe_payload_segment(&result_request);
-
-        assert!(
-            result
-                .actions
-                .iter()
-                .any(|action| action.kind == SemanticActionKind::LlmToolResult)
-        );
-        assert!(result.actions.iter().any(|action| {
-            action.kind == SemanticActionKind::AgentInvocation
-                && action.status == SemanticActionStatus::Success
-        }));
-        assert!(
-            result
-                .links
-                .iter()
-                .any(|link| { link.role == SemanticActionLinkRole::LlmToolCallResult })
-        );
     }
 }

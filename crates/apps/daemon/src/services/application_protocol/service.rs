@@ -16,6 +16,8 @@ mod http1;
 #[path = "http2.rs"]
 mod http2;
 
+pub(super) use http1::IncompleteHttp1Message;
+
 pub(super) const COLLECTOR_NAME: &str = "application-protocol-analyzer";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -144,13 +146,12 @@ impl ApplicationProtocolAnalyzer {
 
         let mut drafts = Vec::new();
         if config.http1_enabled {
-            drafts.extend(self.http1.analyze_with_config(
+            drafts.extend(self.analyze_http1_fail_local(
                 segment,
                 &config,
-                &self.semantic_retention,
                 consumed_by_llm,
                 summary_only,
-            )?);
+            ));
             if recognized_http1(&drafts) {
                 self.known_stream_protocols
                     .insert(stream_key, StreamProtocol::Http1);
@@ -191,6 +192,16 @@ impl ApplicationProtocolAnalyzer {
         self.http2.forget_stream(identity);
     }
 
+    pub(super) fn incomplete_http1_message(
+        &self,
+        segment: &PayloadSegment,
+    ) -> Option<IncompleteHttp1Message> {
+        if !self.config.enabled || !self.config.http1_enabled {
+            return None;
+        }
+        self.http1
+            .incomplete_segment_message(segment, self.config.sse_max_buffer_bytes)
+    }
     fn analyze_known_protocol(
         &mut self,
         segment: &PayloadSegment,
@@ -200,13 +211,9 @@ impl ApplicationProtocolAnalyzer {
         summary_only: bool,
     ) -> Result<Vec<ApplicationEventDraft>, String> {
         match protocol {
-            StreamProtocol::Http1 if config.http1_enabled => self.http1.analyze_with_config(
-                segment,
-                config,
-                &self.semantic_retention,
-                consumed_by_llm,
-                summary_only,
-            ),
+            StreamProtocol::Http1 if config.http1_enabled => {
+                Ok(self.analyze_http1_fail_local(segment, config, consumed_by_llm, summary_only))
+            }
             StreamProtocol::Http2 if config.http2_enabled => self.http2.analyze_with_config(
                 segment,
                 config,
@@ -214,6 +221,36 @@ impl ApplicationProtocolAnalyzer {
                 summary_only,
             ),
             _ => Ok(Vec::new()),
+        }
+    }
+
+    fn analyze_http1_fail_local(
+        &mut self,
+        segment: &PayloadSegment,
+        config: &ApplicationProtocolConfig,
+        consumed_by_llm: bool,
+        summary_only: bool,
+    ) -> Vec<ApplicationEventDraft> {
+        match self.http1.analyze_with_config(
+            segment,
+            config,
+            &self.semantic_retention,
+            consumed_by_llm,
+            summary_only,
+        ) {
+            Ok(drafts) => drafts,
+            Err(error) => {
+                self.http1.forget_segment_direction(segment);
+                tracing::warn!(
+                    trace_id = segment.trace_id.get(),
+                    process_id = segment.process.get(),
+                    stream_key = %segment.stream_key,
+                    direction = ?segment.direction,
+                    error,
+                    "discarded one HTTP/1 analyzer stream after a parse failure"
+                );
+                Vec::new()
+            }
         }
     }
 }

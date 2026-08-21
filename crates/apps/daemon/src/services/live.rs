@@ -4,6 +4,8 @@
 mod batch;
 #[path = "live/launch_binding.rs"]
 mod launch_binding;
+#[path = "live/llm_diagnostics.rs"]
+mod llm_diagnostics;
 #[path = "live/mcp_diagnostics.rs"]
 mod mcp_diagnostics;
 #[path = "live/reconcile.rs"]
@@ -65,9 +67,15 @@ impl StorageAttachService {
         if !active_path {
             self.drain_seccomp_notifications_impl(trace_runtime)?;
             self.materialize_process_seccomp_observations_impl(trace_runtime)?;
-            self.collector
+            let poll_result = self
+                .collector
                 .poll_tls_payload_control_events()
-                .map_err(|error| ControlError::new(error.stage, error.message))?;
+                .map_err(|error| ControlError::new(error.stage, error.message));
+            warn_best_effort(
+                self.ingest_polled_seccomp_tls_controls_impl(),
+                "seccomp_tls_control",
+            );
+            poll_result?;
             warn_best_effort(
                 self.persist_launch_binding_failures_impl(trace_runtime),
                 "launch_binding_failure",
@@ -77,7 +85,6 @@ impl StorageAttachService {
                 "event_transport_loss_diag",
             );
             self.log_tls_diagnostic_events_impl();
-            self.ingest_polled_seccomp_tls_controls_impl()?;
             self.drain_seccomp_notifications_impl(trace_runtime)?;
             self.materialize_process_seccomp_observations_impl(trace_runtime)?;
             self.persist_completed_seccomp_tls_operations_impl(trace_runtime)?;
@@ -100,11 +107,16 @@ impl StorageAttachService {
         self.materialize_process_seccomp_observations_impl(trace_runtime)?;
         let drain_probe_started = std::time::Instant::now();
         let drain_probe_poll = std::time::Instant::now();
-        let batch = self
+        let batch_result = self
             .collector
             .poll_batch()
-            .map_err(|error| ControlError::new(error.stage, error.message))?;
+            .map_err(|error| ControlError::new(error.stage, error.message));
         let drain_probe_poll_ms = drain_probe_poll.elapsed().as_millis();
+        warn_best_effort(
+            self.ingest_polled_seccomp_tls_controls_impl(),
+            "seccomp_tls_control",
+        );
+        let batch = batch_result?;
         let observations_count = batch.observations.len();
         let payload_segments_count = batch.payload_segments.len();
         let payload_stream_closes = batch.payload_stream_closes;
@@ -124,13 +136,12 @@ impl StorageAttachService {
         let drain_probe_events_ms = drain_probe_events.elapsed().as_millis();
         let drain_probe_payloads = std::time::Instant::now();
         self.process_payload_segments_impl(trace_runtime, batch.payload_segments)?;
-        self.process_payload_stream_closes_impl(payload_stream_closes)?;
+        self.process_payload_stream_closes_impl(trace_runtime, payload_stream_closes)?;
         let drain_probe_payloads_ms = drain_probe_payloads.elapsed().as_millis();
         let mcp_stdio_diagnostics = self
             .semantic_actions
             .flush_closed_mcp_stdio_sessions_with_diagnostics(SystemTime::now());
         self.persist_mcp_stdio_diagnostics_impl(trace_runtime, mcp_stdio_diagnostics)?;
-        self.ingest_polled_seccomp_tls_controls_impl()?;
         self.drain_seccomp_notifications_impl(trace_runtime)?;
         self.materialize_process_seccomp_observations_impl(trace_runtime)?;
         self.persist_completed_seccomp_tls_operations_impl(trace_runtime)?;
@@ -194,9 +205,10 @@ impl StorageAttachService {
                 ),
             );
         }
-        self.seccomp_tls.ingest_direct_captures(direct_captures)?;
-        self.seccomp_tls.ingest_capture_requests(capture_requests)?;
-        self.seccomp_tls.ingest_completions(completions)
+        let capture_result = self.seccomp_tls.ingest_capture_requests(capture_requests);
+        let direct_result = self.seccomp_tls.ingest_direct_captures(direct_captures);
+        let completion_result = self.seccomp_tls.ingest_completions(completions);
+        capture_result.and(direct_result).and(completion_result)
     }
 
     fn drain_tls_sync_events_impl(
@@ -217,6 +229,22 @@ impl StorageAttachService {
         self.workload_diagnostics
             .record_payload_segments(PayloadSegmentStage::TlsSync, drain.payload_segments.len());
         self.persist_tls_sync_diagnostics_impl(trace_runtime, drain.diagnostics)?;
+        if !drain.flow_diagnostics.is_empty() {
+            // Observability-side write: fail local instead of aborting the
+            // whole drain cycle (which would drop the event/payload writes that
+            // were already committed to this cycle).
+            if let Err(error) = self
+                .storage
+                .as_mut()
+                .append_tls_flow_diagnostics(drain.flow_diagnostics)
+            {
+                tracing::warn!(
+                    stage = %error.stage,
+                    message = %error.message,
+                    "tls flow diagnostics write failed; continuing drain"
+                );
+            }
+        }
         self.process_payload_segments_impl(trace_runtime, drain.payload_segments)
     }
 

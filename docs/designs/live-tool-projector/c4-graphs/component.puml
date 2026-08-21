@@ -1,0 +1,69 @@
+@startuml
+!include <C4/C4_Component>
+
+title AcTrail Live Tool Projector - Target Component Boundary
+
+LAYOUT_LEFT_RIGHT()
+
+Container_Ext(LlmPipeline, "LLM Action Pipeline", "提供标准化 LLM actions、projected tool results 与 request lineage context")
+Container_Ext(SemanticStorage, "Semantic Output Sink", "接收 LiveSemanticActionOutput 并持久化 actions、links 与 diagnosis events")
+Container_Ext(RuntimeConfig, "Runtime Configuration", "提供 agent invocation policy 与 per-trace capacity")
+
+Container_Boundary(LiveRuntime, "Live Semantic Action Runtime") {
+    Component(RuntimeCoordinator, "Live Runtime Coordinator", "live/runtime.rs", "Tool Projector 的唯一调用者；合并各投影器输出并负责统一落盘")
+
+    Boundary(ToolModule, "live/tool/ — module boundary") {
+        Component(ProjectorFacade, "ToolInteractionProjector", "tool/projector.rs", "唯一 façade；编排增量投影、有输出终结和无输出遗忘")
+        Component(Contracts, "Projection Contracts", "tool/contract.rs", "ToolProjectionBatch、ToolProjectionOutput 与模块级配置 DTO")
+
+        Boundary(Internal, "tool/internal/ — implementation private") {
+            Component(Declaration, "Declared Call Interpreter", "internal/declaration/", "从 llm.response attributes 解码 DeclaredLlmToolCalls 和 decode report")
+            Component(Correlation, "Agent Invocation Correlator", "internal/correlation/", "选择 call-result 与 invocation-child 候选；拥有 PromptFingerprint 值对象")
+            Component(State, "ToolInteractionState", "internal/state/", "一致性聚合根：独占 records、lookup indexes、trace ownership、admission/eviction 和 cleanup")
+            Component(Emitter, "ToolSemanticEmitter", "internal/emission/", "持有本批输出并物化 tool actions、tool-specific links 与 diagnosis events")
+        }
+    }
+}
+
+Rel(LlmPipeline, RuntimeCoordinator, "提交 ActionBatch")
+Rel(RuntimeConfig, RuntimeCoordinator, "提供已验证配置")
+Rel(RuntimeCoordinator, ProjectorFacade, "project(batch) / finish_trace(trace, at) / forget_trace(trace)")
+Rel(ProjectorFacade, Contracts, "接收借用型 batch；返回 output")
+Rel(ProjectorFacade, Declaration, "解释 response 中声明的 tool calls")
+Rel(ProjectorFacade, Correlation, "请求绑定 tool result 或 child request")
+Rel(Correlation, State, "通过语义查询读取候选；不访问裸 map")
+Rel(ProjectorFacade, State, "原子 record/admit/finalize/forget")
+Rel(ProjectorFacade, Emitter, "提交已判定的 projection transition")
+Rel(Correlation, Emitter, "提交绑定结果与置信度")
+Rel(Emitter, Contracts, "累积 actions、links 与 diagnosis events")
+Rel(ProjectorFacade, RuntimeCoordinator, "返回 ToolProjectionOutput")
+Rel(RuntimeCoordinator, SemanticStorage, "合并后输出 LiveSemanticActionOutput")
+
+note right of ProjectorFacade
+  对 live 外部的能力约定：
+  * project — 消费一个一致的标准化批次
+  * finish_trace — 物化未完成状态并清理
+  * forget_trace — 无输出地释放 trace 状态
+
+  不暴露 decoder、records、indexes、fingerprint、
+  eviction 类型或任何内部 map。
+end note
+
+note bottom of State
+  状态不变量：
+  1. 每个主记录都属于一个 trace ownership index
+  2. 每个 lookup entry 都能回到主记录
+  3. 删除主记录时同步删除 lookup 与 eviction order
+  4. 每个 trace 的状态受配置上限约束
+  5. finish/forget 后该 trace 不残留状态
+  6. 定点清理 O(k log n)，禁止扫描全局状态
+end note
+
+note bottom of Emitter
+  Emitter 拥有输出批次，避免只用无状态空 Factory
+  对平铺函数做形式化包装。运行期错误 fail-local，
+  通过 diagnosis event 返回而不是向上游 panic。
+end note
+
+SHOW_LEGEND()
+@enduml

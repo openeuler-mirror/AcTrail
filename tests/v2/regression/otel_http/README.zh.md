@@ -315,7 +315,7 @@ catalog 中存在 activation-ready 的 `otel-http`；加载后实例状态为 `a
 
 ```bash
 CASE_MARKER="OTEL_HTTP_MANUAL_$(python3 -c 'import secrets; print(secrets.token_hex(6))')"
-ANSWER_MARKER="A$(python3 -c 'import secrets; print(secrets.token_hex(5))')"
+ANSWER_MARKER="ready"
 XIAOO_BIN="${XIAOO_E2E_BINARY:-$(command -v xiaoo)}"
 test -x "$XIAOO_BIN"
 LAUNCH_OUTPUT="$(

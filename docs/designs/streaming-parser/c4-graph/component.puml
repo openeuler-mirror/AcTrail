@@ -1,0 +1,66 @@
+@startuml
+!include <C4/C4_Component>
+
+title AcTrail LLM Streaming Parser - Component Diagram
+
+LAYOUT_LEFT_RIGHT()
+
+Container_Ext(PayloadIngress, "Payload Ingress", "提供有序 plaintext PayloadSegment")
+Container_Ext(HttpExchange, "HTTP Exchange Runtime", "提供 HTTP request/response context 与 confirmed exchange")
+Container_Ext(Storage, "Semantic Storage", "持久化 actions、links、payload 和 diagnostics")
+Container_Ext(Config, "Runtime Configuration", "提供所有有界限制与 retention 策略")
+
+Container_Boundary(StreamingRuntime, "Streaming Semantic Runtime") {
+    Component(Facade, "Pipeline Facade", "PipelineEvent state owner", "统一接收 payload、gap、HTTP exchange、close 与 trace 生命周期")
+    Component(StreamRouter, "Assembly Stream Router", "Rust object", "按 trace/process/connection/direction 路由，并隔离单流故障")
+    Component(Http1Decoder, "Incremental HTTP/1 Decoder", "Transport state machine", "解析 header、Content-Length/chunked framing，输出共享 decoded message snapshot")
+    Component(Http2Decoder, "Incremental HTTP/2 Decoder", "Transport state machine", "输出 DATA/end/reset/protocol-failure batch，扩展 frame 可安全跳过")
+    Component(Http2Demux, "HTTP/2 Connection Assembly", "Per-connection object", "按 stream_id 将 DATA payload 路由到独立 logical stream")
+
+    Component(PipelineManager, "SSE Stream Pipeline Manager", "Per logical response stream", "管理 framer、classification、provider parser、aggregate 与关闭状态")
+    Component(SseFramer, "Incremental SSE Framer", "Per-stream object", "仅扫描共享 body 的新增后缀；输出完整 event range，并保留单调 scan cursor")
+    Component(Classifier, "Soft-window Stream Classifier", "Two-state state machine", "Undetermined / ConfirmedLlm；16 KiB 只限制初始识别窗口，不触发丢弃或永久降级")
+    Component(ProviderRegistry, "Provider Stream Parser Registry", "Object registry", "选择 OpenAI-compatible、Responses、Anthropic 或 codec adapter")
+    Component(ProviderParser, "Provider Stream Parser", "Per-stream object", "增量聚合 text、reasoning、tool calls、usage 与 provider response id")
+    Component(Aggregate, "LLM Response Aggregate", "Owned stream state", "增量保存语义累计值；原始 assembly 受配置上限约束")
+
+    Component(SpanTracker, "Evidence Span Tracker", "Compact range map", "维护 decoded body offset 到 payload sequence/transport offset 的映射")
+    Component(Projector, "HTTP-aware Semantic Projector", "Rust object", "结合 aggregate 与 HTTP context 生成 response/call/action links")
+    Component(Finalizer, "Stream Finalizer", "Rust object", "统一处理 DONE、END_STREAM、trace close、gap、truncation 与 limit exceeded")
+    Component(Limits, "Limits and Diagnostics", "Configured policy object", "约束 pending tail、undetermined window、aggregate、segment ranges 并 fail-local")
+}
+
+Rel(PayloadIngress, Facade, "PipelineEvent::PayloadSegment/gap/close")
+Rel(HttpExchange, Facade, "PipelineEvent::HttpExchange")
+Rel(Facade, StreamRouter, "push PayloadSegment")
+Rel(StreamRouter, Http1Decoder, "路由 HTTP/1 connection bytes")
+Rel(StreamRouter, Http2Decoder, "路由 HTTP/2 connection bytes")
+Rel(Http2Decoder, Http2Demux, "输出完整 HEADERS/DATA frame")
+Rel(Http1Decoder, PipelineManager, "输出 DecodedHttp1Message + shared body")
+Rel(Http2Demux, PipelineManager, "输出 per-stream body append + stream_id")
+
+Rel(PipelineManager, SseFramer, "advance shared decoded body; framer 只扫描新增后缀")
+Rel(SseFramer, Classifier, "提交 complete event")
+Rel(Classifier, ProviderRegistry, "确认 provider 或请求更多证据")
+Rel(ProviderRegistry, ProviderParser, "创建固定的 per-stream parser")
+Rel(ProviderParser, Aggregate, "增量更新语义字段")
+Rel(SseFramer, SpanTracker, "提交 consumed body range 与 event spans")
+Rel(Http1Decoder, SpanTracker, "提交 body-to-transport offset mapping")
+Rel(Http2Demux, SpanTracker, "提交 stream DATA-to-frame/payload mapping")
+
+Rel(PipelineManager, Finalizer, "报告 completion/close/discontinuity")
+Rel(Finalizer, Aggregate, "take complete 或 meaningful partial aggregate")
+Rel(Aggregate, Projector, "提交 immutable complete/partial result")
+Rel(SpanTracker, Projector, "提供 evidence spans 与 sequence range")
+Rel(HttpExchange, Projector, "提供 request/response identity、status、stream_id")
+Rel(Projector, Storage, "写入 actions、links、payload drafts")
+Rel(Finalizer, Storage, "写入 compact diagnostics")
+
+Rel(Config, Limits, "构造并验证全部限制")
+Rel(Limits, StreamRouter, "约束 connection/stream state")
+Rel(Limits, SseFramer, "约束 pending tail")
+Rel(Limits, Classifier, "提供 soft sniff bytes；assembly hard limit 独立生效")
+Rel(Limits, ProviderParser, "约束 aggregate/tool calls")
+
+SHOW_LEGEND()
+@enduml

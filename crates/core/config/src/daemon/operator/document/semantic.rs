@@ -1,5 +1,8 @@
 use super::*;
-use crate::daemon::agent::DEFAULT_LLM_WEBSOCKET_MAX_CONNECTIONS_PER_PROCESS;
+use crate::daemon::agent::{
+    DEFAULT_LLM_STREAM_CLASSIFIER_SOFT_SNIFF_MAX_BYTES,
+    DEFAULT_LLM_WEBSOCKET_MAX_CONNECTIONS_PER_PROCESS,
+};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
@@ -61,6 +64,12 @@ impl SemanticRetentionDocument {
                     .l0_llm_call
                     .websocket_max_connections_per_process,
                 assembly: LlmAssemblyDocument::from_config(&config.l0_llm_call.assembly),
+                stream_classifier: LlmStreamClassifierDocument::from_config(
+                    &config.l0_llm_call.stream_classifier,
+                ),
+                projection_state: LlmProjectionStateDocument::from_config(
+                    &config.l0_llm_call.projection_state,
+                ),
                 trajectory: LlmTrajectoryDocument::from_config(&config.l0_llm_call.trajectory),
             },
             l0_mcp_call: L0McpCallDocument {
@@ -162,6 +171,8 @@ pub(super) struct L0LlmCallDocument {
     pub retain_assembled_payload: bool,
     pub websocket_max_connections_per_process: u32,
     pub assembly: LlmAssemblyDocument,
+    pub stream_classifier: LlmStreamClassifierDocument,
+    pub projection_state: LlmProjectionStateDocument,
     pub trajectory: LlmTrajectoryDocument,
 }
 
@@ -181,6 +192,8 @@ impl Default for L0LlmCallDocument {
             websocket_max_connections_per_process:
                 DEFAULT_LLM_WEBSOCKET_MAX_CONNECTIONS_PER_PROCESS,
             assembly: LlmAssemblyDocument::default(),
+            stream_classifier: LlmStreamClassifierDocument::default(),
+            projection_state: LlmProjectionStateDocument::default(),
             trajectory: LlmTrajectoryDocument::default(),
         }
     }
@@ -197,6 +210,14 @@ impl L0LlmCallDocument {
             &self.request_body_export,
         )?;
         validate_request_body_export(request_content, request_body_export)?;
+        let assembly = self.assembly.to_config()?;
+        let stream_classifier = self.stream_classifier.to_config()?;
+        if stream_classifier.soft_sniff_max_bytes > assembly.max_buffer_bytes {
+            return Err(format!(
+                "semantic_retention.l0_llm_call.stream_classifier.soft_sniff_max_bytes ({}) must not exceed semantic_retention.l0_llm_call.assembly.max_buffer_bytes ({})",
+                stream_classifier.soft_sniff_max_bytes, assembly.max_buffer_bytes
+            ));
+        }
         Ok(L0LlmCallRetention {
             enabled: self.enabled,
             request_content,
@@ -227,8 +248,148 @@ impl L0LlmCallDocument {
                 "semantic_retention.l0_llm_call.websocket_max_connections_per_process",
                 self.websocket_max_connections_per_process,
             )?,
-            assembly: self.assembly.to_config()?,
+            assembly,
+            stream_classifier,
+            projection_state: self.projection_state.to_config()?,
             trajectory: self.trajectory.to_config()?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct LlmProjectionStateDocument {
+    pub max_pending_requests_per_stream: u32,
+    pub max_pending_responses_per_stream: u32,
+    pub max_action_versions_per_trace: u32,
+    pub max_pending_trajectory_actions_per_trace: u32,
+    pub max_tool_entries_per_trace: u32,
+    pub max_active_response_bindings_per_trace: u32,
+    pub max_damaged_response_bindings_per_trace: u32,
+    pub max_correlation_streams_per_trace: u32,
+}
+
+impl Default for LlmProjectionStateDocument {
+    fn default() -> Self {
+        Self {
+            max_pending_requests_per_stream: DEFAULT_LLM_PROJECTION_MAX_PENDING_REQUESTS_PER_STREAM,
+            max_pending_responses_per_stream:
+                DEFAULT_LLM_PROJECTION_MAX_PENDING_RESPONSES_PER_STREAM,
+            max_action_versions_per_trace: DEFAULT_LLM_PROJECTION_MAX_ACTION_VERSIONS_PER_TRACE,
+            max_pending_trajectory_actions_per_trace:
+                DEFAULT_LLM_PROJECTION_MAX_PENDING_TRAJECTORY_ACTIONS_PER_TRACE,
+            max_tool_entries_per_trace: DEFAULT_LLM_PROJECTION_MAX_TOOL_ENTRIES_PER_TRACE,
+            max_active_response_bindings_per_trace:
+                DEFAULT_LLM_PROJECTION_MAX_ACTIVE_RESPONSE_BINDINGS_PER_TRACE,
+            max_damaged_response_bindings_per_trace:
+                DEFAULT_LLM_PROJECTION_MAX_DAMAGED_RESPONSE_BINDINGS_PER_TRACE,
+            max_correlation_streams_per_trace:
+                DEFAULT_LLM_PROJECTION_MAX_CORRELATION_STREAMS_PER_TRACE,
+        }
+    }
+}
+
+impl LlmProjectionStateDocument {
+    fn from_config(config: &LlmProjectionStateConfig) -> Self {
+        Self {
+            max_pending_requests_per_stream: config.max_pending_requests_per_stream,
+            max_pending_responses_per_stream: config.max_pending_responses_per_stream,
+            max_action_versions_per_trace: config.max_action_versions_per_trace,
+            max_pending_trajectory_actions_per_trace: config
+                .max_pending_trajectory_actions_per_trace,
+            max_tool_entries_per_trace: config.max_tool_entries_per_trace,
+            max_active_response_bindings_per_trace: config.max_active_response_bindings_per_trace,
+            max_damaged_response_bindings_per_trace: config.max_damaged_response_bindings_per_trace,
+            max_correlation_streams_per_trace: config.max_correlation_streams_per_trace,
+        }
+    }
+
+    fn to_config(&self) -> Result<LlmProjectionStateConfig, String> {
+        self.validate_usize(
+            "semantic_retention.l0_llm_call.projection_state.max_pending_requests_per_stream",
+            self.max_pending_requests_per_stream,
+        )?;
+        self.validate_usize(
+            "semantic_retention.l0_llm_call.projection_state.max_pending_responses_per_stream",
+            self.max_pending_responses_per_stream,
+        )?;
+        self.validate_usize(
+            "semantic_retention.l0_llm_call.projection_state.max_action_versions_per_trace",
+            self.max_action_versions_per_trace,
+        )?;
+        self.validate_usize(
+            "semantic_retention.l0_llm_call.projection_state.max_pending_trajectory_actions_per_trace",
+            self.max_pending_trajectory_actions_per_trace,
+        )?;
+        self.validate_usize(
+            "semantic_retention.l0_llm_call.projection_state.max_tool_entries_per_trace",
+            self.max_tool_entries_per_trace,
+        )?;
+        self.validate_usize(
+            "semantic_retention.l0_llm_call.projection_state.max_active_response_bindings_per_trace",
+            self.max_active_response_bindings_per_trace,
+        )?;
+        self.validate_usize(
+            "semantic_retention.l0_llm_call.projection_state.max_damaged_response_bindings_per_trace",
+            self.max_damaged_response_bindings_per_trace,
+        )?;
+        self.validate_usize(
+            "semantic_retention.l0_llm_call.projection_state.max_correlation_streams_per_trace",
+            self.max_correlation_streams_per_trace,
+        )?;
+        Ok(LlmProjectionStateConfig {
+            max_pending_requests_per_stream: self.max_pending_requests_per_stream,
+            max_pending_responses_per_stream: self.max_pending_responses_per_stream,
+            max_action_versions_per_trace: self.max_action_versions_per_trace,
+            max_pending_trajectory_actions_per_trace: self.max_pending_trajectory_actions_per_trace,
+            max_tool_entries_per_trace: self.max_tool_entries_per_trace,
+            max_active_response_bindings_per_trace: self.max_active_response_bindings_per_trace,
+            max_damaged_response_bindings_per_trace: self.max_damaged_response_bindings_per_trace,
+            max_correlation_streams_per_trace: self.max_correlation_streams_per_trace,
+        })
+    }
+
+    fn validate_usize(&self, path: &'static str, value: u32) -> Result<(), String> {
+        let value = require_positive_u32(path, value)?;
+        usize::try_from(value)
+            .map(|_| ())
+            .map_err(|error| format!("{path} must fit usize: {error}"))
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct LlmStreamClassifierDocument {
+    pub soft_sniff_max_bytes: u64,
+}
+
+impl Default for LlmStreamClassifierDocument {
+    fn default() -> Self {
+        Self {
+            soft_sniff_max_bytes: DEFAULT_LLM_STREAM_CLASSIFIER_SOFT_SNIFF_MAX_BYTES,
+        }
+    }
+}
+
+impl LlmStreamClassifierDocument {
+    fn from_config(config: &LlmStreamClassifierConfig) -> Self {
+        Self {
+            soft_sniff_max_bytes: config.soft_sniff_max_bytes,
+        }
+    }
+
+    fn to_config(&self) -> Result<LlmStreamClassifierConfig, String> {
+        let soft_sniff_max_bytes = require_positive_u64(
+            "semantic_retention.l0_llm_call.stream_classifier.soft_sniff_max_bytes",
+            self.soft_sniff_max_bytes,
+        )?;
+        usize::try_from(soft_sniff_max_bytes).map_err(|error| {
+            format!(
+                "semantic_retention.l0_llm_call.stream_classifier.soft_sniff_max_bytes must fit usize: {error}"
+            )
+        })?;
+        Ok(LlmStreamClassifierConfig {
+            soft_sniff_max_bytes,
         })
     }
 }

@@ -1,12 +1,13 @@
 //! Unified storage backend trait.
 
 use std::collections::BTreeMap;
+use std::time::SystemTime;
 
 use alert_contract::{
     AlertDefinition, AlertDefinitionId, AlertDraft, AlertId, AlertListLimit, AlertStoreError,
     AlertView,
 };
-use model_core::diagnostics::DiagnosticRecord;
+use model_core::diagnostics::{DiagnosticRecord, LlmPipelineDiagnostic};
 use model_core::event::DomainEvent;
 use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
@@ -23,6 +24,17 @@ use crate::{
     PayloadSegmentQuery, RetentionCandidate, SnapshotView, StorageError, StorageTransaction,
     TraceFilter, TraceLease, TraceLeasePurpose, TraceTombstone,
 };
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TlsFlowDiagnostic {
+    pub trace_id: TraceId,
+    pub stream_key: String,
+    pub direction: i32,
+    pub reason_code: i32,
+    pub observed_size: u64,
+    pub emitted_size: u64,
+    pub emitted_at: SystemTime,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StorageOpenMode {
@@ -135,6 +147,22 @@ pub trait StorageBackend {
 
     fn append_diagnostic(&mut self, diagnostic: DiagnosticRecord) -> Result<(), StorageError>;
     fn list_diagnostics(&self, trace_id: TraceId) -> Result<Vec<DiagnosticRecord>, StorageError>;
+    fn append_llm_pipeline_diagnostics(
+        &mut self,
+        rows: &[LlmPipelineDiagnostic],
+    ) -> Result<(), StorageError>;
+    fn list_llm_pipeline_diagnostics(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<Vec<LlmPipelineDiagnostic>, StorageError>;
+    fn append_tls_flow_diagnostics(
+        &mut self,
+        rows: Vec<TlsFlowDiagnostic>,
+    ) -> Result<(), StorageError>;
+    fn list_tls_flow_diagnostics(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<Vec<TlsFlowDiagnostic>, StorageError>;
 
     fn register_alert_definition(
         &mut self,

@@ -43,7 +43,7 @@ sudo -E python3.11 tests/v2/regression/test_all.py --case container_auto
 sudo -E python3.11 tests/v2/regression/test_all.py --case container_agent_xiaoo
 sudo -E python3.11 tests/v2/regression/test_all.py --case semantic_action_boundaries
 sudo -E python3.11 tests/v2/regression/test_all.py --case otel_jsonl_action_filter
-sudo -E python3.11 tests/v2/regression/test_all.py --case llm_trajectory
+sudo -E python3.11 tests/v2/regression/test_all.py --case project_subagent_trajectory
 sudo -E python3.11 tests/v2/regression/test_all.py --case plugin_activity_anomaly
 sudo -E python3.11 tests/v2/regression/test_all.py --case tool_consecutive_failure_alert
 sudo -E python3.11 tests/v2/regression/test_all.py --fail-fast --no-cleanup
@@ -131,7 +131,6 @@ stderr 和完整检查明细，同时仍由公共框架保存对应日志。
 | `container_agent_xiaoo` | [`container_agent_xiaoo/README.zh.md`](container_agent_xiaoo/README.zh.md) |
 | `semantic_action_boundaries` | [`semantic_action_boundaries/README.zh.md`](semantic_action_boundaries/README.zh.md) |
 | `otel_jsonl_action_filter` | [`otel_jsonl_action_filter/README.zh.md`](otel_jsonl_action_filter/README.zh.md) |
-| `llm_trajectory` | [`llm_trajectory/README.zh.md`](llm_trajectory/README.zh.md) |
-| `llm_trajectory_claude` | [`llm_trajectory_claude/README.zh.md`](llm_trajectory_claude/README.zh.md) |
+| `project_subagent_trajectory` | [`project_subagent_trajectory/README.zh.md`](project_subagent_trajectory/README.zh.md) |
 | `plugin_activity_anomaly` | [`activity_anomaly/README.zh.md`](activity_anomaly/README.zh.md) |
 | `tool_consecutive_failure_alert` | [`tool_consecutive_failure_alert/README.zh.md`](tool_consecutive_failure_alert/README.zh.md) |

@@ -58,11 +58,8 @@ from tests.v2.regression.otel_jsonl_action_filter.run_e2e import (  # noqa: E402
 from tests.v2.regression.otel_http.run_e2e import (  # noqa: E402
     TEST_DEFINITION as OTEL_HTTP,
 )
-from tests.v2.regression.llm_trajectory.run_e2e import (  # noqa: E402
-    TEST_DEFINITION as LLM_TRAJECTORY,
-)
-from tests.v2.regression.llm_trajectory_claude.run_e2e import (  # noqa: E402
-    TEST_DEFINITION as LLM_TRAJECTORY_CLAUDE,
+from tests.v2.regression.project_subagent_trajectory.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as PROJECT_SUBAGENT_TRAJECTORY,
 )
 from tests.v2.regression.semantic_action_boundaries.run_e2e import (  # noqa: E402
     TEST_DEFINITION as SEMANTIC_ACTION_BOUNDARIES,
@@ -97,8 +94,7 @@ TESTS = [
     SEMANTIC_ACTION_BOUNDARIES,
     OTEL_JSONL_ACTION_FILTER,
     OTEL_HTTP,
-    LLM_TRAJECTORY,
-    LLM_TRAJECTORY_CLAUDE,
+    PROJECT_SUBAGENT_TRAJECTORY,
     ACTIVITY_ANOMALY,
     TOOL_CONSECUTIVE_FAILURE_ALERT,
     TOOL_FREQUENT_FAILURE_ALERT,

@@ -109,8 +109,9 @@ class ProbeXiaooLLMCase(TestCase):
             )
             results["llm_exchange"] = TestResult(
                 TestStatus.PASSED,
-                f"trace-{trace_id} has {request_count} terminal paired request(s), "
-                f"{response_count} response(s), and a linked marker exchange",
+                f"trace-{trace_id} has {request_count} terminal request(s), "
+                f"{response_count} LLM response(s), a linked marker exchange, "
+                "and evidence for every response-less failed HTTP probe",
             )
             return TestResult(
                 TestStatus.COMPOSITE,

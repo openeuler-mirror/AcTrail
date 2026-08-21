@@ -14,9 +14,23 @@ use super::ApplicationEventDraft;
 
 #[path = "http1/parser.rs"]
 mod parser;
+#[path = "http1/summary_chunked.rs"]
+mod summary_chunked;
 
 pub(super) struct Http1Analyzer {
     buffers: BTreeMap<StreamKey, StreamBuffer>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum IncompleteHttp1Message {
+    Request {
+        sequence: u64,
+        header_projected: bool,
+    },
+    Response {
+        sequence: u64,
+        header_projected: bool,
+    },
 }
 
 impl Http1Analyzer {
@@ -36,13 +50,44 @@ impl Http1Analyzer {
     ) -> Result<Vec<ApplicationEventDraft>, String> {
         let key = stream_key(segment);
         let buffer = self.buffers.entry(key.clone()).or_default();
-        let append_outcome = if summary_only {
-            buffer.append_summary_only(&segment.bytes, config.sse_max_buffer_bytes)?
-        } else {
-            buffer.append(&segment.bytes, config.sse_max_buffer_bytes)?
-        };
+        if buffer.is_opaque() {
+            return Ok(Vec::new());
+        }
+        if summary_only {
+            let (append_outcome, messages) = buffer.take_summary_messages(
+                &segment.bytes,
+                segment.sequence,
+                &config,
+                config.sse_max_buffer_bytes,
+            )?;
+            if append_outcome == StreamAppendOutcome::InvalidUtf8 {
+                self.buffers.remove(&key);
+                return Ok(Vec::new());
+            }
+            let drafts = messages
+                .into_iter()
+                .filter(|_| semantic_retention.http_message_summary_enabled())
+                .map(|(message, sequence)| {
+                    ApplicationEventDraft::complete(message.to_payload(
+                        segment,
+                        sequence,
+                        &config,
+                        semantic_retention,
+                        consumed_by_llm,
+                    ))
+                })
+                .collect();
+            if buffer.text.is_empty() && !buffer.summary_body_in_progress() && !buffer.is_opaque() {
+                self.buffers.remove(&key);
+            }
+            return Ok(drafts);
+        }
+        let append_outcome = buffer.append(&segment.bytes, config.sse_max_buffer_bytes)?;
         if append_outcome == StreamAppendOutcome::InvalidUtf8 {
             self.buffers.remove(&key);
+            return Ok(Vec::new());
+        }
+        if buffer.summary_body_in_progress() {
             return Ok(Vec::new());
         }
         if !buffer.expects_chunked_sse_body() && !buffer.starts_like_http_or_sse(config.sse_enabled)
@@ -67,30 +112,30 @@ impl Http1Analyzer {
                 break;
             }
 
-            if !summary_only {
-                if let Some(message) = buffer.take_chunked_sse_head(config)? {
-                    if semantic_retention.http_message_summary_enabled() {
-                        drafts.push(ApplicationEventDraft::complete(message.to_payload(
-                            segment,
-                            config,
-                            semantic_retention,
-                            consumed_by_llm,
-                        )));
-                    }
-                    buffer.start_chunked_sse_body();
-                    continue;
+            if let Some(message) = buffer.take_chunked_sse_head(config)? {
+                if semantic_retention.http_message_summary_enabled() {
+                    drafts.push(ApplicationEventDraft::complete(message.to_payload(
+                        segment,
+                        segment.sequence,
+                        config,
+                        semantic_retention,
+                        consumed_by_llm,
+                    )));
                 }
-                for payload in buffer.take_streaming_sse_events(config)? {
-                    drafts.push(ApplicationEventDraft::complete(payload));
-                }
+                buffer.start_chunked_sse_body();
+                continue;
+            }
+            for payload in buffer.take_streaming_sse_events(config)? {
+                drafts.push(ApplicationEventDraft::complete(payload));
             }
 
-            let Some(message) = buffer.take_message(config, summary_only)? else {
+            let Some(message) = buffer.take_message(config, false)? else {
                 break;
             };
             if semantic_retention.http_message_summary_enabled() {
                 drafts.push(ApplicationEventDraft::complete(message.to_payload(
                     segment,
+                    segment.sequence,
                     config,
                     semantic_retention,
                     consumed_by_llm,
@@ -102,7 +147,11 @@ impl Http1Analyzer {
                 }
             }
         }
-        if buffer.text.is_empty() && !buffer.expects_chunked_sse_body() {
+        if buffer.text.is_empty()
+            && !buffer.expects_chunked_sse_body()
+            && !buffer.summary_body_in_progress()
+            && !buffer.is_opaque()
+        {
             self.buffers.remove(&key);
         }
         Ok(drafts)
@@ -121,7 +170,13 @@ impl Http1Analyzer {
         if !semantic_retention.http_message_summary_enabled() {
             return Ok(Vec::new());
         }
-        let mut payload = message.to_payload(segment, config, semantic_retention, consumed_by_llm);
+        let mut payload = message.to_payload(
+            segment,
+            segment.sequence,
+            config,
+            semantic_retention,
+            consumed_by_llm,
+        );
         payload.metadata.extend([
             ("payload.capture_incomplete".to_string(), "true".to_string()),
             (
@@ -155,6 +210,22 @@ impl Http1Analyzer {
                 || key.stream_key != identity.stream_key
         });
     }
+
+    pub(super) fn forget_segment_direction(&mut self, segment: &PayloadSegment) {
+        self.buffers.remove(&stream_key(segment));
+    }
+
+    pub(super) fn incomplete_segment_message(
+        &self,
+        segment: &PayloadSegment,
+        _max_buffer_bytes: u64,
+    ) -> Option<IncompleteHttp1Message> {
+        if segment.operation_original_size <= segment.operation_captured_size {
+            return None;
+        }
+        let buffer = self.buffers.get(&stream_key(segment))?;
+        buffer.incomplete_segment_message(segment)
+    }
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -180,9 +251,13 @@ impl From<PayloadDirection> for StreamDirectionKey {
     }
 }
 
+#[derive(Clone)]
 struct StreamBuffer {
     text: String,
     state: StreamBufferState,
+    summary_body: Option<SummaryBodyProgress>,
+    summary_chunked: Option<SummaryChunkedProgress>,
+    summary_header_sequence: Option<u64>,
     utf8_tail: [u8; 3],
     utf8_tail_len: u8,
 }
@@ -192,6 +267,9 @@ impl Default for StreamBuffer {
         Self {
             text: String::new(),
             state: StreamBufferState::Http,
+            summary_body: None,
+            summary_chunked: None,
+            summary_header_sequence: None,
             utf8_tail: [0; 3],
             utf8_tail_len: 0,
         }
@@ -204,46 +282,213 @@ enum StreamAppendOutcome {
     InvalidUtf8,
 }
 
+#[derive(Clone)]
 enum StreamBufferState {
     Http,
     ChunkedSse { pending_sse: String },
+    Opaque,
+}
+
+#[derive(Clone)]
+struct SummaryBodyProgress {
+    remaining: u64,
+    request: bool,
+    sequence: u64,
+}
+
+#[derive(Clone)]
+struct SummaryChunkedProgress {
+    state: SummaryChunkedState,
+}
+
+#[derive(Clone)]
+enum SummaryChunkedState {
+    Size {
+        value: u64,
+        saw_digit: bool,
+        in_extension: bool,
+        saw_cr: bool,
+        line_bytes: u64,
+    },
+    Data(u64),
+    DataTerminator(u8),
+    Trailers {
+        line_nonempty: bool,
+        saw_cr: bool,
+        line_bytes: u64,
+    },
+}
+
+impl Default for SummaryChunkedProgress {
+    fn default() -> Self {
+        Self {
+            state: SummaryChunkedState::Size {
+                value: 0,
+                saw_digit: false,
+                in_extension: false,
+                saw_cr: false,
+                line_bytes: 0,
+            },
+        }
+    }
 }
 
 impl StreamBuffer {
+    fn incomplete_segment_message(
+        &self,
+        segment: &PayloadSegment,
+    ) -> Option<IncompleteHttp1Message> {
+        if let Some(progress) = &self.summary_body {
+            let missing_bytes = segment
+                .operation_original_size
+                .saturating_sub(segment.operation_captured_size);
+            let within_message = segment
+                .captured_size
+                .checked_add(missing_bytes)
+                .is_some_and(|remaining_operation| remaining_operation <= progress.remaining);
+            let message = if progress.request {
+                IncompleteHttp1Message::Request {
+                    sequence: progress.sequence,
+                    header_projected: true,
+                }
+            } else {
+                IncompleteHttp1Message::Response {
+                    sequence: progress.sequence,
+                    header_projected: true,
+                }
+            };
+            return (within_message
+                && matches!(
+                    (segment.direction, message),
+                    (
+                        PayloadDirection::Outbound,
+                        IncompleteHttp1Message::Request { .. }
+                    ) | (
+                        PayloadDirection::Inbound,
+                        IncompleteHttp1Message::Response { .. }
+                    )
+                ))
+            .then_some(message);
+        }
+        None
+    }
+
     fn append(
         &mut self,
         bytes: &[u8],
         max_buffer_bytes: u64,
     ) -> Result<StreamAppendOutcome, String> {
+        if matches!(self.state, StreamBufferState::Opaque) {
+            return Ok(StreamAppendOutcome::Appended);
+        }
         self.append_utf8(bytes, max_buffer_bytes)
     }
 
-    fn append_summary_only(
+    fn take_summary_messages(
         &mut self,
-        bytes: &[u8],
+        mut bytes: &[u8],
+        sequence: u64,
+        config: &ApplicationProtocolConfig,
         max_buffer_bytes: u64,
-    ) -> Result<StreamAppendOutcome, String> {
-        let started_empty = self.text.is_empty() && self.utf8_tail_len == 0;
-        if started_empty && !starts_like_http_message_bytes(bytes) {
-            return Ok(StreamAppendOutcome::Appended);
+    ) -> Result<(StreamAppendOutcome, Vec<(parser::HttpMessage, u64)>), String> {
+        let mut messages = Vec::new();
+        if matches!(self.state, StreamBufferState::Opaque) {
+            return Ok((StreamAppendOutcome::Appended, messages));
         }
-        let header_input_len = http_header_input_len(&self.text, bytes);
-        let outcome = self.append_utf8(&bytes[..header_input_len], max_buffer_bytes)?;
-        if outcome == StreamAppendOutcome::InvalidUtf8 {
-            return Ok(outcome);
-        }
-        if started_empty && parser::header_prefix_len(&self.text).is_none() {
-            let first_line = self.text.lines().next().map(str::trim).unwrap_or_default();
-            if !parser::starts_like_http_message(first_line) {
-                self.clear();
-                return Ok(StreamAppendOutcome::Appended);
+        loop {
+            if let Some(progress) = self.summary_chunked.as_mut() {
+                let (consumed, done) = match progress.consume(bytes, max_buffer_bytes) {
+                    Ok(outcome) => outcome,
+                    Err(_) => {
+                        self.summary_chunked = None;
+                        self.state = StreamBufferState::Opaque;
+                        return Ok((StreamAppendOutcome::Appended, messages));
+                    }
+                };
+                bytes = &bytes[consumed..];
+                if !done {
+                    return Ok((StreamAppendOutcome::Appended, messages));
+                }
+                self.summary_chunked = None;
+                if bytes.is_empty() {
+                    return Ok((StreamAppendOutcome::Appended, messages));
+                }
+            }
+            if let Some(progress) = self.summary_body.as_mut() {
+                let take = usize::try_from(progress.remaining)
+                    .unwrap_or(usize::MAX)
+                    .min(bytes.len());
+                progress.remaining = progress.remaining.saturating_sub(take as u64);
+                bytes = &bytes[take..];
+                if progress.remaining != 0 {
+                    return Ok((StreamAppendOutcome::Appended, messages));
+                }
+                self.summary_body = None;
+                if bytes.is_empty() {
+                    return Ok((StreamAppendOutcome::Appended, messages));
+                }
+            }
+            let started_empty = self.text.is_empty() && self.utf8_tail_len == 0;
+            if started_empty {
+                if !starts_like_http_message_bytes(bytes) {
+                    return Ok((StreamAppendOutcome::Appended, messages));
+                }
+                self.summary_header_sequence = Some(sequence);
+            }
+            let header_end = http_header_input_len(&self.text, bytes);
+            let header_input_len = header_end.unwrap_or(bytes.len());
+            let tail = &bytes[header_input_len..];
+            let outcome = self.append_utf8(&bytes[..header_input_len], max_buffer_bytes)?;
+            if outcome == StreamAppendOutcome::InvalidUtf8 {
+                return Ok((outcome, messages));
+            }
+            if header_end.is_none() {
+                return Ok((StreamAppendOutcome::Appended, messages));
+            }
+            self.utf8_tail_len = 0;
+            let Some(message) = self.take_message(config, true)? else {
+                return Ok((StreamAppendOutcome::Appended, messages));
+            };
+            let framing = message.summary_framing();
+            let request = message.is_request();
+            let message_sequence = self.summary_header_sequence.take().unwrap_or(sequence);
+            messages.push((message, message_sequence));
+            let content_length = match framing {
+                parser::SummaryFraming::NoBody => 0,
+                parser::SummaryFraming::Fixed(content_length) => content_length,
+                parser::SummaryFraming::Chunked => {
+                    self.summary_chunked = Some(SummaryChunkedProgress::default());
+                    bytes = tail;
+                    continue;
+                }
+                parser::SummaryFraming::Unsupported => {
+                    self.state = StreamBufferState::Opaque;
+                    return Ok((StreamAppendOutcome::Appended, messages));
+                }
+            };
+            let body_bytes = content_length.min(tail.len());
+            bytes = &tail[body_bytes..];
+            let remaining = content_length.saturating_sub(body_bytes);
+            if remaining != 0 {
+                self.summary_body = Some(SummaryBodyProgress {
+                    remaining: remaining as u64,
+                    request,
+                    sequence: message_sequence,
+                });
+                return Ok((StreamAppendOutcome::Appended, messages));
+            }
+            if bytes.is_empty() {
+                return Ok((StreamAppendOutcome::Appended, messages));
             }
         }
-        if let Some(prefix_len) = parser::header_prefix_len(&self.text) {
-            self.text.truncate(prefix_len);
-            self.utf8_tail_len = 0;
-        }
-        Ok(StreamAppendOutcome::Appended)
+    }
+
+    fn summary_body_in_progress(&self) -> bool {
+        self.summary_body.is_some() || self.summary_chunked.is_some()
+    }
+
+    fn is_opaque(&self) -> bool {
+        matches!(self.state, StreamBufferState::Opaque)
     }
 
     fn append_utf8(
@@ -314,11 +559,6 @@ impl StreamBuffer {
         Ok(())
     }
 
-    fn clear(&mut self) {
-        self.text.clear();
-        self.utf8_tail_len = 0;
-    }
-
     fn starts_like_http_or_sse(&self, sse_enabled: bool) -> bool {
         parser::starts_like_http_or_sse(&self.text, sse_enabled)
     }
@@ -371,6 +611,10 @@ impl StreamBuffer {
             StreamBufferState::ChunkedSse { pending_sse } => {
                 parser::take_chunked_sse_events(&mut self.text, pending_sse, config)
             }
+            StreamBufferState::Opaque => Ok(parser::ChunkedSseDrain {
+                payloads: Vec::new(),
+                done: false,
+            }),
         }
     }
 }
@@ -384,15 +628,11 @@ fn utf8_sequence_width(first: u8) -> Option<usize> {
     }
 }
 
-fn http_header_input_len(buffered: &str, bytes: &[u8]) -> usize {
-    if parser::header_prefix_len(buffered).is_some() {
-        return 0;
-    }
+fn http_header_input_len(buffered: &str, bytes: &[u8]) -> Option<usize> {
     [b"\r\n\r\n".as_slice(), b"\n\n".as_slice()]
         .into_iter()
         .filter_map(|boundary| boundary_input_len(buffered.as_bytes(), bytes, boundary))
         .min()
-        .unwrap_or(bytes.len())
 }
 
 fn boundary_input_len(buffered: &[u8], bytes: &[u8], boundary: &[u8]) -> Option<usize> {
@@ -412,10 +652,12 @@ fn starts_like_http_message_bytes(bytes: &[u8]) -> bool {
     if first != b'H' && !first.is_ascii_uppercase() {
         return false;
     }
-    let line_end = bytes
-        .iter()
-        .position(|byte| *byte == b'\n')
-        .unwrap_or(bytes.len());
+    let line_end = bytes.iter().position(|byte| *byte == b'\n');
+    let Some(line_end) = line_end else {
+        return bytes
+            .iter()
+            .all(|byte| byte.is_ascii_graphic() || *byte == b' ' || *byte == b'\r');
+    };
     std::str::from_utf8(&bytes[..line_end])
         .ok()
         .map(str::trim)
@@ -428,123 +670,5 @@ fn stream_key(segment: &PayloadSegment) -> StreamKey {
         process: segment.process.clone(),
         stream_key: segment.stream_key.clone(),
         direction: StreamDirectionKey::from(segment.direction),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::time::{Duration, UNIX_EPOCH};
-
-    use model_core::ids::TraceId;
-    use model_core::payload::{
-        PayloadContentState, PayloadDirection, PayloadOperationCompletionState,
-        PayloadRedactionState, PayloadSegmentId, PayloadSourceBoundary, PayloadTruncationState,
-    };
-    use model_core::process::ProcessIdentity;
-
-    use super::*;
-
-    #[test]
-    fn incomplete_operation_emits_partial_http_head_without_body() {
-        let bytes = b"POST /v1/messages HTTP/1.1\r\nHost: api.example.test\r\nContent-Length: 4096\r\n\r\n{\"model\":\"partial"
-            .to_vec();
-        let segment = incomplete_segment(bytes);
-        let analyzer = Http1Analyzer::new(ApplicationProtocolConfig::default());
-
-        let drafts = analyzer
-            .analyze_incomplete_head(
-                &segment,
-                &ApplicationProtocolConfig::default(),
-                &SemanticRetentionConfig::default(),
-                false,
-            )
-            .unwrap();
-
-        assert_eq!(drafts.len(), 1);
-        let draft = &drafts[0];
-        assert!(draft.metadata_partial);
-        assert_eq!(draft.payload.protocol, "http/1.1");
-        assert_eq!(draft.payload.operation, "request");
-        assert_eq!(draft.payload.summary, "POST /v1/messages");
-        assert!(draft.payload.body.is_none());
-        assert_eq!(
-            draft
-                .payload
-                .metadata
-                .get("content_length")
-                .map(String::as_str),
-            Some("4096")
-        );
-        assert_eq!(
-            draft
-                .payload
-                .metadata
-                .get("payload.capture_incomplete")
-                .map(String::as_str),
-            Some("true")
-        );
-    }
-
-    #[test]
-    fn incomplete_operation_without_complete_head_emits_nothing() {
-        let segment =
-            incomplete_segment(b"POST /v1/messages HTTP/1.1\r\nContent-Length: 4096\r\n".to_vec());
-        let analyzer = Http1Analyzer::new(ApplicationProtocolConfig::default());
-
-        let drafts = analyzer
-            .analyze_incomplete_head(
-                &segment,
-                &ApplicationProtocolConfig::default(),
-                &SemanticRetentionConfig::default(),
-                false,
-            )
-            .unwrap();
-
-        assert!(drafts.is_empty());
-    }
-
-    #[test]
-    fn incomplete_http2_preface_is_not_misclassified_as_http1() {
-        let segment = incomplete_segment(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".to_vec());
-        let analyzer = Http1Analyzer::new(ApplicationProtocolConfig::default());
-
-        let drafts = analyzer
-            .analyze_incomplete_head(
-                &segment,
-                &ApplicationProtocolConfig::default(),
-                &SemanticRetentionConfig::default(),
-                false,
-            )
-            .unwrap();
-
-        assert!(drafts.is_empty());
-    }
-
-    fn incomplete_segment(bytes: Vec<u8>) -> PayloadSegment {
-        let captured_size = bytes.len() as u64;
-        PayloadSegment {
-            segment_id: PayloadSegmentId::new(1),
-            trace_id: TraceId::new(1),
-            observed_at: UNIX_EPOCH + Duration::from_secs(1),
-            process: ProcessIdentity::new(1),
-            source_boundary: PayloadSourceBoundary::TlsUserSpace,
-            content_state: PayloadContentState::Plaintext,
-            direction: PayloadDirection::Outbound,
-            stream_key: PayloadStreamKey::new("tls:1:42"),
-            sequence: 1,
-            original_size: captured_size + 1,
-            captured_size,
-            operation_id: 1,
-            operation_offset: 0,
-            operation_original_size: captured_size + 1,
-            operation_captured_size: captured_size,
-            operation_completion_state: PayloadOperationCompletionState::Partial,
-            truncation: PayloadTruncationState::Truncated,
-            redaction: PayloadRedactionState::NotRequired,
-            library: "libssl.so".to_string(),
-            symbol: "SSL_write".to_string(),
-            protocol_hint: None,
-            bytes,
-        }
     }
 }

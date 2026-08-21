@@ -4,7 +4,10 @@ use alert_contract::{
     AlertDefinition, AlertDefinitionId, AlertDefinitionStore, AlertDraft, AlertId, AlertListLimit,
     AlertReadStore, AlertStoreError, AlertView, AlertWriteStore,
 };
-use model_core::diagnostics::DiagnosticRecord;
+use model_core::diagnostics::{
+    DiagnosticRecord, LlmPipelineDiagnostic, LlmPipelineDiagnosticCode,
+    LlmPipelineDiagnosticSeverity, LlmPipelineDiagnosticStage,
+};
 use model_core::event::DomainEvent;
 use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
@@ -19,7 +22,8 @@ use storage_core::{
     PayloadSegmentQuery, RetentionCandidate, SemanticActionChildPage, SemanticActionChildPageQuery,
     SemanticActionChildRow, SemanticActionDisplayRootChildPage, SemanticActionDisplayRootChildRow,
     SemanticActionSummary, SemanticActionTraceRevision, SnapshotView, StorageBackend, StorageError,
-    StorageTransaction, TraceFilter, TraceLease, TraceLeasePurpose, TraceTombstone,
+    StorageTransaction, TlsFlowDiagnostic, TraceFilter, TraceLease, TraceLeasePurpose,
+    TraceTombstone,
 };
 use store_read_contract::diagnostics::DiagnosticReadStore;
 use store_read_contract::events::EventReadStore;
@@ -179,6 +183,232 @@ impl StorageBackend for SqliteStorage {
 
     fn list_diagnostics(&self, trace_id: TraceId) -> Result<Vec<DiagnosticRecord>, StorageError> {
         DiagnosticReadStore::list_diagnostics(self, trace_id).map_err(StorageError::from)
+    }
+
+    fn append_llm_pipeline_diagnostics(
+        &mut self,
+        rows: &[LlmPipelineDiagnostic],
+    ) -> Result<(), StorageError> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let connection = self.connection();
+        let mut conn = connection.borrow_mut();
+        let transaction = conn
+            .transaction()
+            .map_err(|error| StorageError::new("llm_pipeline_diagnostics", error.to_string()))?;
+        for row in rows {
+            let observed_at = row
+                .observed_at()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|error| StorageError::new("llm_pipeline_diagnostics", error.to_string()))?
+                .as_nanos();
+            let observed_at = i64::try_from(observed_at).map_err(|error| {
+                StorageError::new("llm_pipeline_diagnostics", error.to_string())
+            })?;
+            transaction
+                .execute(
+                    "INSERT INTO llm_pipeline_diagnostics (
+                        trace_id, process_id, stream_key, stage, code, severity,
+                        observed_at, discarded_bytes, discarded_entries
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    rusqlite::params![
+                        row.trace_id().get(),
+                        row.process().get(),
+                        row.stream_key(),
+                        row.stage().as_u8(),
+                        row.code().as_u16(),
+                        row.severity().as_u8(),
+                        observed_at,
+                        row.discarded_bytes(),
+                        row.discarded_entries(),
+                    ],
+                )
+                .map_err(|error| {
+                    StorageError::new("llm_pipeline_diagnostics", error.to_string())
+                })?;
+        }
+        transaction
+            .commit()
+            .map_err(|error| StorageError::new("llm_pipeline_diagnostics", error.to_string()))
+    }
+
+    fn list_llm_pipeline_diagnostics(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<Vec<LlmPipelineDiagnostic>, StorageError> {
+        let connection = self.connection().borrow();
+        let mut statement = connection
+            .prepare(
+                "SELECT process_id, stream_key, stage, code, severity, observed_at,
+                        discarded_bytes, discarded_entries
+                 FROM llm_pipeline_diagnostics
+                 WHERE trace_id = ?1
+                 ORDER BY observed_at ASC, id ASC",
+            )
+            .map_err(|error| StorageError::new("llm_pipeline_diagnostics", error.to_string()))?;
+        let rows = statement
+            .query_map([trace_id.get()], |row| {
+                let stage = row.get::<_, u8>(2)?;
+                let code = row.get::<_, u16>(3)?;
+                let severity = row.get::<_, u8>(4)?;
+                let observed_at_nanos = row.get::<_, i64>(5)?;
+                let stage = LlmPipelineDiagnosticStage::from_u8(stage).ok_or_else(|| {
+                    rusqlite::Error::InvalidColumnType(
+                        2,
+                        "stage".to_string(),
+                        rusqlite::types::Type::Integer,
+                    )
+                })?;
+                let code = LlmPipelineDiagnosticCode::from_u16(code).ok_or_else(|| {
+                    rusqlite::Error::InvalidColumnType(
+                        3,
+                        "code".to_string(),
+                        rusqlite::types::Type::Integer,
+                    )
+                })?;
+                let severity =
+                    LlmPipelineDiagnosticSeverity::from_u8(severity).ok_or_else(|| {
+                        rusqlite::Error::InvalidColumnType(
+                            4,
+                            "severity".to_string(),
+                            rusqlite::types::Type::Integer,
+                        )
+                    })?;
+                let observed_at_nanos = u64::try_from(observed_at_nanos).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        5,
+                        rusqlite::types::Type::Integer,
+                        Box::new(error),
+                    )
+                })?;
+                let observed_at = std::time::UNIX_EPOCH
+                    .checked_add(std::time::Duration::from_nanos(observed_at_nanos))
+                    .ok_or_else(|| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            5,
+                            rusqlite::types::Type::Integer,
+                            Box::new(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "LLM pipeline diagnostic timestamp overflow",
+                            )),
+                        )
+                    })?;
+                let process = ProcessIdentity::new(row.get(0)?);
+                let stream_key = row.get::<_, Option<String>>(1)?;
+                let discarded_bytes = row.get::<_, Option<u64>>(6)?;
+                let discarded_entries = row.get::<_, Option<u64>>(7)?;
+                let mut diagnostic = LlmPipelineDiagnostic::new(
+                    trace_id,
+                    &process,
+                    observed_at,
+                    code,
+                    severity,
+                    stage,
+                );
+                if let Some(stream_key) = stream_key {
+                    diagnostic = diagnostic.with_stream_key(&stream_key);
+                }
+                if let Some(discarded_bytes) = discarded_bytes {
+                    diagnostic = diagnostic.with_discarded_bytes(discarded_bytes);
+                }
+                if let Some(discarded_entries) = discarded_entries {
+                    diagnostic = diagnostic.with_discarded_entries(discarded_entries);
+                }
+                Ok(diagnostic)
+            })
+            .map_err(|error| StorageError::new("llm_pipeline_diagnostics", error.to_string()))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| StorageError::new("llm_pipeline_diagnostics", error.to_string()))
+    }
+
+    fn append_tls_flow_diagnostics(
+        &mut self,
+        rows: Vec<TlsFlowDiagnostic>,
+    ) -> Result<(), StorageError> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        // Batch the inserts in a single transaction so each row does not pay
+        // an autocommit fsync; this is the only write path in the drain that
+        // was not already transaction-wrapped.
+        let connection = self.connection();
+        let conn = connection.borrow();
+        let run = || -> Result<(), StorageError> {
+            conn.execute_batch("BEGIN")
+                .map_err(|error| StorageError::new("tls_flow_diagnostics", error.to_string()))?;
+            for row in &rows {
+                let emitted_at = row
+                    .emitted_at
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|error| StorageError::new("tls_flow_diagnostics", error.to_string()))?
+                    .as_nanos() as i64;
+                conn.execute(
+                    "INSERT INTO tls_flow_diagnostics (
+                        trace_id, stream_key, direction, reason_code,
+                        observed_size, emitted_size, emitted_at
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    rusqlite::params![
+                        row.trace_id.get(),
+                        row.stream_key,
+                        row.direction,
+                        row.reason_code,
+                        row.observed_size,
+                        row.emitted_size,
+                        emitted_at,
+                    ],
+                )
+                .map_err(|error| StorageError::new("tls_flow_diagnostics", error.to_string()))?;
+            }
+            conn.execute_batch("COMMIT")
+                .map_err(|error| StorageError::new("tls_flow_diagnostics", error.to_string()))?;
+            Ok(())
+        };
+        let result = run();
+        if result.is_err() {
+            let _ = conn.execute_batch("ROLLBACK");
+        }
+        result
+    }
+
+    fn list_tls_flow_diagnostics(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<Vec<TlsFlowDiagnostic>, StorageError> {
+        let connection = self.connection().borrow();
+        let mut statement = connection
+            .prepare(
+                "SELECT trace_id, stream_key, direction, reason_code,
+                        observed_size, emitted_size, emitted_at
+                 FROM tls_flow_diagnostics
+                 WHERE trace_id = ?1
+                 ORDER BY emitted_at ASC, id ASC",
+            )
+            .map_err(|error| StorageError::new("tls_flow_diagnostics", error.to_string()))?;
+        let rows = statement
+            .query_map([trace_id.get()], |row| {
+                let emitted_at_nanos: i64 = row.get(6)?;
+                let emitted_at = std::time::UNIX_EPOCH
+                    .checked_add(std::time::Duration::from_nanos(emitted_at_nanos as u64))
+                    .unwrap_or(std::time::UNIX_EPOCH);
+                Ok(TlsFlowDiagnostic {
+                    trace_id: TraceId::new(row.get(0)?),
+                    stream_key: row.get(1)?,
+                    direction: row.get(2)?,
+                    reason_code: row.get(3)?,
+                    observed_size: row.get(4)?,
+                    emitted_size: row.get(5)?,
+                    emitted_at,
+                })
+            })
+            .map_err(|error| StorageError::new("tls_flow_diagnostics", error.to_string()))?;
+        let mut diagnostics = Vec::new();
+        for row in rows {
+            diagnostics.push(
+                row.map_err(|error| StorageError::new("tls_flow_diagnostics", error.to_string()))?,
+            );
+        }
+        Ok(diagnostics)
     }
 
     fn register_alert_definition(

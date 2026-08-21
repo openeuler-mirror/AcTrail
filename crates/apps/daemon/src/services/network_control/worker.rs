@@ -290,6 +290,9 @@ impl NetworkControlService {
             respond_deferred(&completion.deferred, decision)?;
             if let Some((decision, instance_id, reason)) = cache_value
                 && backend.rules.is_rule_current(&completion.rule)
+                && trace_runtime
+                    .get_trace(completion.context.trace_id())
+                    .is_some_and(|entry| !entry.trace.lifecycle_state.is_terminal())
             {
                 backend.cache_decision(
                     &completion.context,
@@ -312,11 +315,6 @@ impl NetworkControlService {
                 );
             }
         }
-        backend.reusable_decisions.retain(|key, _| {
-            trace_runtime
-                .get_trace(key.trace_id)
-                .is_some_and(|entry| !entry.trace.lifecycle_state.is_terminal())
-        });
         Ok(events)
     }
 }
@@ -405,8 +403,16 @@ impl NetworkControlBackend {
             rule_revision: rule.rule_revision,
             remote: context.endpoint(),
         };
+        if let Some(previous) = self.reusable_decisions.get(&key) {
+            self.reusable_order.remove(&previous.inserted_sequence);
+        } else {
+            self.reusable_by_trace
+                .entry(key.trace_id)
+                .or_default()
+                .insert(key.clone());
+        }
         self.reusable_decisions.insert(
-            key,
+            key.clone(),
             CachedNetworkDecision {
                 decision,
                 instance_id,
@@ -414,17 +420,63 @@ impl NetworkControlBackend {
                 inserted_sequence: self.next_cache_sequence,
             },
         );
+        self.reusable_order.insert(self.next_cache_sequence, key);
         while self.reusable_decisions.len() > self.config.reusable_cache_max_entries as usize {
             let oldest = self
-                .reusable_decisions
-                .iter()
-                .min_by_key(|(_, value)| value.inserted_sequence)
-                .map(|(key, _)| key.clone());
+                .reusable_order
+                .first_key_value()
+                .map(|(_, key)| key.clone());
             if let Some(oldest) = oldest {
-                self.reusable_decisions.remove(&oldest);
+                self.remove_cached_key(&oldest);
             }
         }
         Ok(())
+    }
+
+    pub(super) fn forget_trace_cache(&mut self, trace_id: TraceId) {
+        let Some(keys) = self.reusable_by_trace.remove(&trace_id) else {
+            return;
+        };
+        for key in keys {
+            if let Some(cached) = self.reusable_decisions.remove(&key) {
+                self.reusable_order.remove(&cached.inserted_sequence);
+            }
+        }
+    }
+
+    pub(super) fn clear_reusable_cache(&mut self) {
+        self.reusable_decisions.clear();
+        self.reusable_order.clear();
+        self.reusable_by_trace.clear();
+    }
+
+    pub(super) fn remove_cached_decisions_by_instance(&mut self, instance_id: &str) {
+        let keys = self
+            .reusable_decisions
+            .iter()
+            .filter(|(_, cached)| cached.instance_id == instance_id)
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        for key in keys {
+            self.remove_cached_key(&key);
+        }
+    }
+
+    fn remove_cached_key(&mut self, key: &ReusableDecisionKey) {
+        let Some(cached) = self.reusable_decisions.remove(key) else {
+            return;
+        };
+        self.reusable_order.remove(&cached.inserted_sequence);
+        let remove_trace_bucket =
+            self.reusable_by_trace
+                .get_mut(&key.trace_id)
+                .is_some_and(|keys| {
+                    keys.remove(key);
+                    keys.is_empty()
+                });
+        if remove_trace_bucket {
+            self.reusable_by_trace.remove(&key.trace_id);
+        }
     }
 }
 

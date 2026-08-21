@@ -46,6 +46,9 @@ def main() -> int:
     actrailweb = require_binary(bin_dir, "actrailweb")
     tls_probe_point_finder = require_binary(bin_dir, "tls-probe-point-finder")
     xiaoo_binary = resolve_xiaoo_binary(required(workload, "xiaoo_binary"))
+    xiaoo_config = Path(required(workload, "xiaoo_config_path")).expanduser()
+    if not xiaoo_config.is_file():
+        raise RuntimeError(f"xiaoO config file does not exist: {xiaoo_config}")
     tls_runtime = resolve_optional_xiaoo_tls_runtime(
         xiaoo_binary,
         workload,
@@ -67,9 +70,11 @@ def main() -> int:
                 str(xiaoo_binary),
                 "--cli",
                 "run",
+                "--config",
+                str(xiaoo_config),
                 "--no-tools",
                 "--max-turns",
-                "1",
+                required(workload, "max_turns"),
                 "--prompt",
                 required(workload, "prompt"),
             ],

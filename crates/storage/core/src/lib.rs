@@ -12,7 +12,7 @@ pub use backend::{
     SemanticActionChildPage, SemanticActionChildPageQuery, SemanticActionChildRow,
     SemanticActionDisplayPathEntry, SemanticActionDisplayRootChildPage,
     SemanticActionDisplayRootChildRow, SemanticActionSummary, SemanticActionTraceRevision,
-    StorageBackend, StorageOpenMode,
+    StorageBackend, StorageOpenMode, TlsFlowDiagnostic,
 };
 pub use error::StorageError;
 pub use store_read_contract::filters::TraceFilter;

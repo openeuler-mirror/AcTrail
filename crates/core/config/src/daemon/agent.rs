@@ -13,6 +13,15 @@ pub const DEFAULT_LLM_TRAJECTORY_IDLE_TTL: Duration = Duration::from_secs(30 * 6
 pub const DEFAULT_LLM_WEBSOCKET_MAX_CONNECTIONS_PER_PROCESS: u32 = 8;
 pub const DEFAULT_LLM_ASSEMBLY_MAX_BUFFER_BYTES: u64 = 8 * 1024 * 1024;
 pub const DEFAULT_LLM_ASSEMBLY_MAX_SEGMENT_RANGES: u32 = 8_192;
+pub const DEFAULT_LLM_STREAM_CLASSIFIER_SOFT_SNIFF_MAX_BYTES: u64 = 16 * 1024;
+pub const DEFAULT_LLM_PROJECTION_MAX_PENDING_REQUESTS_PER_STREAM: u32 = 256;
+pub const DEFAULT_LLM_PROJECTION_MAX_PENDING_RESPONSES_PER_STREAM: u32 = 64;
+pub const DEFAULT_LLM_PROJECTION_MAX_ACTION_VERSIONS_PER_TRACE: u32 = 4_096;
+pub const DEFAULT_LLM_PROJECTION_MAX_PENDING_TRAJECTORY_ACTIONS_PER_TRACE: u32 = 1_024;
+pub const DEFAULT_LLM_PROJECTION_MAX_TOOL_ENTRIES_PER_TRACE: u32 = 4_096;
+pub const DEFAULT_LLM_PROJECTION_MAX_ACTIVE_RESPONSE_BINDINGS_PER_TRACE: u32 = 4_096;
+pub const DEFAULT_LLM_PROJECTION_MAX_DAMAGED_RESPONSE_BINDINGS_PER_TRACE: u32 = 1_024;
+pub const DEFAULT_LLM_PROJECTION_MAX_CORRELATION_STREAMS_PER_TRACE: u32 = 1_024;
 pub const DEFAULT_HTTP_EXCHANGE_MAX_PENDING_REQUESTS_PER_STREAM: u32 = 256;
 pub const DEFAULT_HTTP_EXCHANGE_MAX_PENDING_RESPONSES_PER_STREAM: u32 = 32;
 pub const DEFAULT_HTTP_EXCHANGE_RESPONSE_LATENESS: Duration = Duration::from_secs(1);
@@ -246,6 +255,8 @@ pub struct L0LlmCallRetention {
     pub retain_assembled_payload: bool,
     pub websocket_max_connections_per_process: u32,
     pub assembly: LlmAssemblyConfig,
+    pub stream_classifier: LlmStreamClassifierConfig,
+    pub projection_state: LlmProjectionStateConfig,
     pub trajectory: LlmTrajectoryConfig,
 }
 
@@ -260,6 +271,51 @@ impl Default for LlmAssemblyConfig {
         Self {
             max_buffer_bytes: DEFAULT_LLM_ASSEMBLY_MAX_BUFFER_BYTES,
             max_segment_ranges: DEFAULT_LLM_ASSEMBLY_MAX_SEGMENT_RANGES,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LlmStreamClassifierConfig {
+    pub soft_sniff_max_bytes: u64,
+}
+
+impl Default for LlmStreamClassifierConfig {
+    fn default() -> Self {
+        Self {
+            soft_sniff_max_bytes: DEFAULT_LLM_STREAM_CLASSIFIER_SOFT_SNIFF_MAX_BYTES,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LlmProjectionStateConfig {
+    pub max_pending_requests_per_stream: u32,
+    pub max_pending_responses_per_stream: u32,
+    pub max_action_versions_per_trace: u32,
+    pub max_pending_trajectory_actions_per_trace: u32,
+    pub max_tool_entries_per_trace: u32,
+    pub max_active_response_bindings_per_trace: u32,
+    pub max_damaged_response_bindings_per_trace: u32,
+    pub max_correlation_streams_per_trace: u32,
+}
+
+impl Default for LlmProjectionStateConfig {
+    fn default() -> Self {
+        Self {
+            max_pending_requests_per_stream: DEFAULT_LLM_PROJECTION_MAX_PENDING_REQUESTS_PER_STREAM,
+            max_pending_responses_per_stream:
+                DEFAULT_LLM_PROJECTION_MAX_PENDING_RESPONSES_PER_STREAM,
+            max_action_versions_per_trace: DEFAULT_LLM_PROJECTION_MAX_ACTION_VERSIONS_PER_TRACE,
+            max_pending_trajectory_actions_per_trace:
+                DEFAULT_LLM_PROJECTION_MAX_PENDING_TRAJECTORY_ACTIONS_PER_TRACE,
+            max_tool_entries_per_trace: DEFAULT_LLM_PROJECTION_MAX_TOOL_ENTRIES_PER_TRACE,
+            max_active_response_bindings_per_trace:
+                DEFAULT_LLM_PROJECTION_MAX_ACTIVE_RESPONSE_BINDINGS_PER_TRACE,
+            max_damaged_response_bindings_per_trace:
+                DEFAULT_LLM_PROJECTION_MAX_DAMAGED_RESPONSE_BINDINGS_PER_TRACE,
+            max_correlation_streams_per_trace:
+                DEFAULT_LLM_PROJECTION_MAX_CORRELATION_STREAMS_PER_TRACE,
         }
     }
 }
@@ -345,6 +401,8 @@ impl Default for L0LlmCallRetention {
             websocket_max_connections_per_process:
                 DEFAULT_LLM_WEBSOCKET_MAX_CONNECTIONS_PER_PROCESS,
             assembly: LlmAssemblyConfig::default(),
+            stream_classifier: LlmStreamClassifierConfig::default(),
+            projection_state: LlmProjectionStateConfig::default(),
             trajectory: LlmTrajectoryConfig::default(),
         }
     }

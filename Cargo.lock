@@ -2595,6 +2595,7 @@ version = "0.7.1"
 dependencies = [
  "clap",
  "libc",
+ "memchr",
  "payload_capability",
  "tls_payload_core",
  "tls_payload_sync",

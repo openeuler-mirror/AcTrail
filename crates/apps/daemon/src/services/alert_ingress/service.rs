@@ -22,7 +22,10 @@ impl StorageAttachService {
         instance_id: &str,
     ) -> Result<(), ControlError> {
         self.alert_ingress.close_instance(instance_id)?;
-        self.drain_alerts(AlertDrainTarget::Instance(instance_id))
+        self.drain_alerts(
+            AlertDrainTarget::Instance(instance_id),
+            self.alert_ingress.drain_timeout(),
+        )
     }
 
     pub(in crate::services) fn unregister_alert_instance_impl(
@@ -32,19 +35,35 @@ impl StorageAttachService {
         self.alert_ingress.unregister_plugin(instance_id)
     }
 
-    pub(in crate::services) fn shutdown_alert_ingress_impl(&mut self) -> Result<(), ControlError> {
+    pub(in crate::services) fn shutdown_alert_ingress_with_timeout(
+        &mut self,
+        timeout: std::time::Duration,
+    ) -> Result<(), ControlError> {
         self.alert_ingress.close_all()?;
-        self.drain_alerts(AlertDrainTarget::All)
+        self.drain_alerts(AlertDrainTarget::All, timeout)
     }
 
-    fn drain_alerts(&mut self, target: AlertDrainTarget<'_>) -> Result<(), ControlError> {
-        let timeout = self.alert_ingress.drain_timeout();
+    fn drain_alerts(
+        &mut self,
+        target: AlertDrainTarget<'_>,
+        timeout: std::time::Duration,
+    ) -> Result<(), ControlError> {
         let started_at = Instant::now();
         loop {
-            self.drain_alert_ingress_impl()?;
             if !target.has_outstanding_writes(&self.alert_ingress)? {
                 return Ok(());
             }
+            if started_at.elapsed() >= timeout {
+                return Err(ControlError::new(
+                    "alert_ingress_drain_timeout",
+                    format!(
+                        "{} still has outstanding alert writes after {}ms",
+                        target.label(),
+                        timeout.as_millis()
+                    ),
+                ));
+            }
+            self.drain_alert_ingress_impl()?;
             if started_at.elapsed() >= timeout {
                 return Err(ControlError::new(
                     "alert_ingress_drain_timeout",

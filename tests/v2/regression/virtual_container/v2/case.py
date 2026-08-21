@@ -17,11 +17,11 @@ class VirtualContainerCase(TestCase):
         skipped_backends: list[str] = []
         executed_backends = 0
         prerequisites = VirtualContainerPrerequisites(self._config)
-        if not prerequisites.kvm_available():
+        if self._config.scope != "contracts" and not prerequisites.kvm_available():
             return TestResult(
                 TestStatus.SKIPPED,
-                "readable/writable /dev/kvm is unavailable; "
-                "virtual-container acceptance was not run",
+                "readable/writable /dev/kvm is unavailable, so runtime acceptance "
+                "was not run",
             )
         release_problem = prerequisites.release_problem()
         if release_problem is not None:

@@ -59,12 +59,29 @@ pub(super) fn list_semantic_actions(
     let mut actions = storage
         .list_semantic_actions(trace_id)
         .map_err(|error| format!("{}: {}", error.stage, error.message))?;
+    sort_and_dedup_actions(&mut actions);
+    Ok(actions)
+}
+
+pub(super) fn list_semantic_actions_matching_kinds(
+    storage: &dyn StorageBackend,
+    trace_id: TraceId,
+    kinds: &[String],
+) -> Result<Vec<SemanticAction>, String> {
+    let kind_refs = kinds.iter().map(String::as_str).collect::<Vec<_>>();
+    let mut actions = storage
+        .semantic_actions_matching_kinds(trace_id, &kind_refs)
+        .map_err(|error| format!("{}: {}", error.stage, error.message))?;
+    sort_and_dedup_actions(&mut actions);
+    Ok(actions)
+}
+
+fn sort_and_dedup_actions(actions: &mut Vec<SemanticAction>) {
     actions.sort_by(|left, right| {
         (left.start_time, left.action_id.as_str())
             .cmp(&(right.start_time, right.action_id.as_str()))
     });
     actions.dedup_by(|left, right| left.action_id == right.action_id);
-    Ok(actions)
 }
 
 pub(super) fn list_semantic_action_links(
@@ -73,6 +90,15 @@ pub(super) fn list_semantic_action_links(
 ) -> Result<Vec<SemanticActionLink>, String> {
     storage
         .list_semantic_action_links(trace_id)
+        .map_err(|error| format!("{}: {}", error.stage, error.message))
+}
+
+pub(super) fn list_tls_flow_diagnostics(
+    storage: &dyn StorageBackend,
+    trace_id: TraceId,
+) -> Result<Vec<storage_core::TlsFlowDiagnostic>, String> {
+    storage
+        .list_tls_flow_diagnostics(trace_id)
         .map_err(|error| format!("{}: {}", error.stage, error.message))
 }
 

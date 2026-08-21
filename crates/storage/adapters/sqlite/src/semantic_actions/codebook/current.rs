@@ -5,7 +5,7 @@ use super::{
     LinkConfidenceCodes, LinkRoleCodes, SemanticActionCodebook,
 };
 
-pub(in crate::semantic_actions::codebook) const SCHEMA_VERSION: i32 = 25;
+pub(in crate::semantic_actions::codebook) const SCHEMA_VERSION: i32 = 26;
 
 pub(in crate::semantic_actions::codebook) const CODEBOOK: &SemanticActionCodebook =
     &SemanticActionCodebook {

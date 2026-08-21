@@ -25,6 +25,7 @@ use model_core::payload::{
 };
 use model_core::process::{NamespaceIdentity, NamespaceProcessCoordinates, ProcessObservation};
 use payload_event::RawPayloadSegment;
+use storage_core::TlsFlowDiagnostic;
 use tls_payload_core::PayloadDirection as SyncDirection;
 use tls_payload_sync::{
     PayloadEvent, SummaryEvent, SyncEvent, decode_event_line, decode_plan_lookup_request,
@@ -60,6 +61,7 @@ pub(crate) struct ExecTlsPlanResolution {
 pub(crate) struct TlsSyncDrain {
     pub(crate) payload_segments: Vec<RawPayloadSegment>,
     pub(crate) diagnostics: Vec<TlsSyncDiagnostic>,
+    pub(crate) flow_diagnostics: Vec<TlsFlowDiagnostic>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -160,6 +162,7 @@ impl TlsSyncService {
                 self.resolver.as_ref(),
                 trace_runtime,
                 &mut drain.payload_segments,
+                &mut drain.flow_diagnostics,
             );
             match result {
                 Ok(closed) => {
@@ -245,6 +248,7 @@ impl TlsSyncClient {
         resolver: Option<&TlsSyncPlanResolver>,
         trace_runtime: &TraceRuntime,
         segments: &mut Vec<RawPayloadSegment>,
+        flow_diagnostics: &mut Vec<TlsFlowDiagnostic>,
     ) -> Result<bool, ControlError> {
         let mut scratch = vec![0_u8; read_buffer_bytes];
         loop {
@@ -258,7 +262,12 @@ impl TlsSyncClient {
                             "sync event line exceeded configured maximum",
                         ));
                     }
-                    if self.drain_complete_lines(resolver, trace_runtime, segments)? {
+                    if self.drain_complete_lines(
+                        resolver,
+                        trace_runtime,
+                        segments,
+                        flow_diagnostics,
+                    )? {
                         return Ok(true);
                     }
                 }
@@ -273,6 +282,7 @@ impl TlsSyncClient {
         resolver: Option<&TlsSyncPlanResolver>,
         trace_runtime: &TraceRuntime,
         segments: &mut Vec<RawPayloadSegment>,
+        flow_diagnostics: &mut Vec<TlsFlowDiagnostic>,
     ) -> Result<bool, ControlError> {
         while let Some(index) = self.buffer.iter().position(|byte| *byte == b'\n') {
             let line = self.buffer.drain(..=index).collect::<Vec<_>>();
@@ -303,6 +313,19 @@ impl TlsSyncClient {
                     }
                 }
                 SyncEvent::Summary(event) => {
+                    let stream_key = format!("tls-sync:{}:{:x}", event.pid, event.stream_key);
+                    flow_diagnostics.push(TlsFlowDiagnostic {
+                        trace_id: TraceId::new(event.trace_id),
+                        stream_key,
+                        direction: match event.direction {
+                            SyncDirection::Outbound => 0,
+                            SyncDirection::Inbound => 1,
+                        },
+                        reason_code: tls_flow_reason_code(&event.reason),
+                        observed_size: event.observed_size,
+                        emitted_size: event.emitted_size,
+                        emitted_at: SystemTime::now(),
+                    });
                     if let Some(segment) = summary_segment(event, &mut self.process_cache)? {
                         segments.push(segment);
                     }
@@ -526,4 +549,18 @@ fn max_line_bytes(config: &PayloadTlsConfig) -> Result<usize, ControlError> {
 
 fn sync_event_error(error: tls_payload_sync::SyncError) -> ControlError {
     ControlError::new("tls_sync_event", error.to_string())
+}
+
+fn tls_flow_reason_code(reason: &str) -> i32 {
+    match reason {
+        "unknown_stream_threshold" => 1,
+        "binary_unknown_stream" => 2,
+        "http1_header_too_large" => 3,
+        "large_non_text_transfer" => 4,
+        "h2_binary_data" => 5,
+        "h2_data_probe_exceeded" => 6,
+        "flow_drop_discontinuity" => 7,
+        "binary_body" => 8,
+        _ => 0,
+    }
 }

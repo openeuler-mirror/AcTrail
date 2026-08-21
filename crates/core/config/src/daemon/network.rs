@@ -42,7 +42,7 @@ pub struct NetworkControlConfig {
 impl Default for NetworkControlConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             rules_path: PathBuf::from("/etc/actrail/network-control.rules"),
             syscalls: vec![NetworkControlSeccompSyscall::Connect],
             default_decision: EnforcementDecision::Allow,

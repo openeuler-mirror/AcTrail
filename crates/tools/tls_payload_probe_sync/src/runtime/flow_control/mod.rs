@@ -1,6 +1,7 @@
 //! Low-cost TLS plaintext flow classification.
 
 mod controller;
+mod eviction;
 mod http1;
 mod http2;
 mod text;
