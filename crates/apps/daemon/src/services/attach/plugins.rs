@@ -177,6 +177,9 @@ impl StorageAttachService {
                 let command_policy_host = self
                     .command_control
                     .command_policy_host(self.control_plugins.clone());
+                let network_policy_host = self
+                    .network_control
+                    .network_policy_host(self.control_plugins.clone());
                 let decider = build_control_decider_from_manifest(
                     &command.instance_id,
                     &manifest,
@@ -184,6 +187,7 @@ impl StorageAttachService {
                     host_grants,
                     Some(std::sync::Arc::new(file_policy_host)),
                     Some(std::sync::Arc::new(command_policy_host)),
+                    Some(std::sync::Arc::new(network_policy_host)),
                 )?;
                 self.control_plugins.add_decider(decider, manifest_warnings)
             }
@@ -327,6 +331,8 @@ impl StorageAttachService {
         {
             self.enforcement.remove_plugin_policy_owner(instance_id)?;
             self.command_control
+                .remove_plugin_policy_owner(instance_id)?;
+            self.network_control
                 .remove_plugin_policy_owner(instance_id)?;
             return self.control_plugins.remove_decider(instance_id);
         }
@@ -608,6 +614,36 @@ fn validate_plugin_capability_grants(
                 ungranted.push(capability.as_str());
             }
             PluginCapability::CommandPolicyRulesApply => {}
+            PluginCapability::NetworkActionCurrentContextQuery
+                if !host_grants.can_query_current_network_action_context() =>
+            {
+                ungranted.push(capability.as_str());
+            }
+            PluginCapability::NetworkActionCurrentContextQuery => {}
+            PluginCapability::NetworkPolicyRulesRead
+                if !host_grants.can_read_network_policy_rules() =>
+            {
+                ungranted.push(capability.as_str());
+            }
+            PluginCapability::NetworkPolicyRulesRead => {}
+            PluginCapability::NetworkPolicyRulesMatchDryRun
+                if !host_grants.can_match_dry_run_network_policy_rules() =>
+            {
+                ungranted.push(capability.as_str());
+            }
+            PluginCapability::NetworkPolicyRulesMatchDryRun => {}
+            PluginCapability::NetworkPolicyRulesValidate
+                if !host_grants.can_validate_network_policy_rules() =>
+            {
+                ungranted.push(capability.as_str());
+            }
+            PluginCapability::NetworkPolicyRulesValidate => {}
+            PluginCapability::NetworkPolicyRulesApply
+                if !host_grants.can_apply_network_policy_rules() =>
+            {
+                ungranted.push(capability.as_str());
+            }
+            PluginCapability::NetworkPolicyRulesApply => {}
             other => ungranted.push(other.as_str()),
         }
     }
@@ -631,6 +667,7 @@ fn build_control_decider_from_manifest(
     host_grants: PluginHostGrants,
     file_policy_host: Option<std::sync::Arc<dyn plugin_system::FilePolicyHost>>,
     command_policy_host: Option<std::sync::Arc<dyn plugin_system::CommandPolicyHost>>,
+    network_policy_host: Option<std::sync::Arc<dyn plugin_system::NetworkPolicyHost>>,
 ) -> Result<Box<dyn ControlDecider>, ControlError> {
     match manifest.runtime_kind() {
         PluginRuntimeKind::Wasm => {
@@ -641,6 +678,7 @@ fn build_control_decider_from_manifest(
                 host_grants,
                 file_policy_host,
                 command_policy_host,
+                network_policy_host,
             )
             .map_err(|error| ControlError::new(error.code, error.message))?;
             Ok(Box::new(decider))

@@ -569,6 +569,17 @@ impl StorageAttachService {
                 "command execution enforcement is only supported by actrailctl launch",
             ));
         }
+        if !command.launch_mode
+            && capability_requested(
+                &profile_snapshot.capability_requests,
+                &Capability::EnforcementNetworkConnectSeccomp,
+            )
+        {
+            return Err(ControlError::new(
+                "network_control_backend",
+                "network connect enforcement is only supported by actrailctl launch",
+            ));
+        }
         let sensor_plan = trace_runtime
             .negotiate(&profile_snapshot)
             .map_err(|error| ControlError::new("negotiate", format!("{:?}", error)))?;
@@ -669,6 +680,13 @@ impl AttachService for StorageAttachService {
         };
         let launch_seccomp_requirements = self
             .launch_seccomp_requirements
+            .with_network_control(
+                self.launch_seccomp_requirements.network_control
+                    && capability_requested(
+                        &profile.capabilities,
+                        &Capability::EnforcementNetworkConnectSeccomp,
+                    ),
+            )
             .with_command_control(
                 self.launch_seccomp_requirements.command_control
                     && capability_requested(
@@ -779,6 +797,7 @@ impl AttachService for StorageAttachService {
         }
         fds.extend(self.enforcement.event_poll_fds());
         fds.extend(self.command_control.event_poll_fds());
+        fds.extend(self.network_control.event_poll_fds());
         fds.extend(self.tls_sync.event_poll_fds());
         fds.extend(self.seccomp_notify.event_poll_fds());
         fds.push(self.alert_ingress.event_poll_fd());

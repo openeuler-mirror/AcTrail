@@ -11,8 +11,8 @@ DESTDIR defaults to /usr/local/bin.
 The script installs/checks build dependencies, asks Cargo to refresh the
 release binaries and TLS sync preload runtimes, then copies those artifacts
 and the installed-but-disabled otel-jsonl, otel-http, file-leakage,
-activity-anomaly, tool-consecutive-failure-alert, dynamic file-policy, and
-dynamic command-policy plugins.
+activity-anomaly, tool-consecutive-failure-alert, dynamic file-policy,
+dynamic command-policy, and dynamic network-policy plugins.
 
 Environment:
   ACTRAIL_SUDO  Privilege command for installing into system directories.
@@ -60,6 +60,9 @@ file_policy_fixture_dir="$file_policy_source_dir/fixture-src"
 command_policy_install_dir="$plugin_root/command-policy-dynamic"
 command_policy_source_dir="$script_dir/../examples/plugins/wit-component/command-policy-dynamic"
 command_policy_fixture_dir="$command_policy_source_dir/fixture-src"
+network_policy_install_dir="$plugin_root/network-policy-dynamic"
+network_policy_source_dir="$script_dir/../examples/plugins/wit-component/network-policy-dynamic"
+network_policy_fixture_dir="$network_policy_source_dir/fixture-src"
 target_dir="${CARGO_TARGET_DIR:-target}"
 export CARGO_TARGET_DIR="$target_dir"
 release_dir="$target_dir/release"
@@ -68,6 +71,7 @@ file_leakage_artifact="$wasm_release_dir/actrail_file_leakage_plugin.wasm"
 activity_anomaly_artifact="$wasm_release_dir/actrail_activity_anomaly_plugin.wasm"
 file_policy_artifact="$wasm_release_dir/actrail_component_file_policy_dynamic.wasm"
 command_policy_artifact="$wasm_release_dir/actrail_component_command_policy_dynamic.wasm"
+network_policy_artifact="$wasm_release_dir/actrail_component_network_policy_dynamic.wasm"
 tool_consecutive_failure_install_dir="$plugin_root/tool-consecutive-failure-alert"
 tool_consecutive_failure_source_dir="$script_dir/../examples/plugins/wasm-legacy/tool-consecutive-failure-alert"
 tool_consecutive_failure_artifact="$wasm_release_dir/actrail_tool_consecutive_failure_alert.wasm"
@@ -159,6 +163,12 @@ run cargo build --release --target wasm32-wasip2 \
   exit 1
 }
 run cargo build --release --target wasm32-wasip2 \
+  --manifest-path "$network_policy_fixture_dir/Cargo.toml"
+[[ -f "$network_policy_artifact" ]] || {
+  echo "missing plugin artifact $network_policy_artifact" >&2
+  exit 1
+}
+run cargo build --release --target wasm32-wasip2 \
   --manifest-path "$tool_consecutive_failure_source_dir/Cargo.toml"
 [[ -f "$tool_consecutive_failure_artifact" ]] || {
   echo "missing plugin artifact $tool_consecutive_failure_artifact" >&2
@@ -181,6 +191,7 @@ run "${plugin_install[@]}" install -d "$file_leakage_install_dir"
 run "${plugin_install[@]}" install -d "$activity_anomaly_install_dir"
 run "${plugin_install[@]}" install -d "$file_policy_install_dir"
 run "${plugin_install[@]}" install -d "$command_policy_install_dir"
+run "${plugin_install[@]}" install -d "$network_policy_install_dir"
 run "${plugin_install[@]}" install -d "$tool_consecutive_failure_install_dir"
 run "${plugin_install[@]}" install -d "$tool_frequent_failure_install_dir"
 
@@ -265,6 +276,18 @@ done
 run "${plugin_install[@]}" install -m 0644 \
   "$command_policy_artifact" \
   "$command_policy_install_dir/component-command-policy-dynamic.wasm"
+run "${plugin_install[@]}" install -m 0644 \
+  "$network_policy_source_dir/plugin.toml" \
+  "$network_policy_install_dir/network-policy-dynamic.plugin.toml"
+for asset in \
+  network-policy-dynamic.config.json \
+  config.schema.json; do
+  run "${plugin_install[@]}" install -m 0644 \
+    "$network_policy_source_dir/$asset" "$network_policy_install_dir/$asset"
+done
+run "${plugin_install[@]}" install -m 0644 \
+  "$network_policy_artifact" \
+  "$network_policy_install_dir/component-network-policy-dynamic.wasm"
 run "${plugin_install[@]}" install -m 0644 \
   "$tool_consecutive_failure_source_dir/plugin.toml" \
   "$tool_consecutive_failure_install_dir/tool-consecutive-failure-alert.plugin.toml"

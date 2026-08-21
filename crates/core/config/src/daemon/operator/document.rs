@@ -394,6 +394,12 @@ impl OperatorDocument {
                     .map(network_control_seccomp_syscall_as_str)
                     .map(str::to_string)
                     .collect(),
+                default_decision: config.network_control.default_decision.as_str().to_string(),
+                failure_decision: config.network_control.failure_decision.as_str().to_string(),
+                audit_enabled: config.network_control.audit_enabled,
+                audit_default_allow: config.network_control.audit_default_allow,
+                pending_decision_max: config.network_control.pending_decision_max,
+                reusable_cache_max_entries: config.network_control.reusable_cache_max_entries,
             },
             supervision: SupervisionDocument {
                 startup_wait_ms: config.startup_wait_ms,
@@ -438,6 +444,7 @@ impl OperatorDocument {
             &process_seccomp,
             &enforcement,
             &command_control,
+            &network_control,
             &capabilities,
         )?;
         let (plugin_discovery, plugin_alert_runtime, startup_plugins) = self.plugins.to_config()?;

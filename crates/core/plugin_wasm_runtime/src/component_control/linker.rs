@@ -16,6 +16,7 @@ use super::hostcalls::{
     component_file_policy_rules_match_dry_run, component_file_policy_rules_version_get,
     component_query_context,
 };
+use super::network::NetworkComponentHost;
 
 pub(super) fn find_management_handle_command(
     instance: &wasmtime::component::Instance,
@@ -218,6 +219,8 @@ pub(super) fn component_linker(
         },
     )
     .map_err(component_command_host_import_error)?;
+    drop(host);
+    NetworkComponentHost::add_to(&mut linker)?;
     Ok(linker)
 }
 
@@ -240,4 +243,9 @@ pub(super) fn is_supported_component_control_grant(grant: &str) -> bool {
         || grant == component_abi::grant::COMMAND_POLICY_RULES_MATCH_DRY_RUN
         || grant == component_abi::grant::COMMAND_POLICY_RULES_VALIDATE
         || grant.starts_with(component_abi::grant::COMMAND_POLICY_RULES_APPLY_PREFIX)
+        || grant == component_abi::grant::NETWORK_ACTION_CURRENT_CONTEXT_QUERY
+        || grant == component_abi::grant::NETWORK_POLICY_RULES_READ
+        || grant == component_abi::grant::NETWORK_POLICY_RULES_MATCH_DRY_RUN
+        || grant == component_abi::grant::NETWORK_POLICY_RULES_VALIDATE
+        || grant.starts_with(component_abi::grant::NETWORK_POLICY_RULES_APPLY_PREFIX)
 }

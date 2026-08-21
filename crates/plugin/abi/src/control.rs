@@ -2,12 +2,43 @@ pub mod context {
     pub const CURRENT_DECISION: &str = "c";
     pub const CURRENT_FILE_POLICY: &str = "f";
     pub const CURRENT_COMMAND_EXECUTION: &str = "c";
+    pub const CURRENT_NETWORK_ACTION: &str = "c";
 }
 
 pub mod query {
     pub const DECISION_SUMMARY: &str = "decision-summary.v1";
     pub const MATCHED_RULE: &str = "matched-rule.v1";
     pub const COMMAND_EXECUTION_CONTEXT: &str = "command-execution.v1";
+    pub const NETWORK_ACTION_CONTEXT: &str = "network-action.v1";
+}
+
+pub mod network_policy {
+    pub const BINARY_VERSION: u8 = 1;
+
+    pub mod decision_code {
+        pub const DEFAULT: u8 = 0;
+        pub const ALLOW: u8 = 1;
+        pub const DENY: u8 = 2;
+        pub const GRAY: u8 = 3;
+    }
+
+    pub mod patch_op_code {
+        pub const UPSERT: u8 = 1;
+        pub const DELETE: u8 = 2;
+    }
+
+    pub mod apply_status_code {
+        pub const ACCEPTED: u8 = 1;
+        pub const REJECTED: u8 = 2;
+    }
+
+    pub mod grant {
+        pub const CURRENT_CONTEXT_QUERY: &str = "network-action.current-context-query";
+        pub const RULES_READ: &str = "network-policy.rules.read";
+        pub const RULES_MATCH_DRY_RUN: &str = "network-policy.rules.match-dry-run";
+        pub const RULES_VALIDATE: &str = "network-policy.rules.validate";
+        pub const RULES_APPLY: &str = "network-policy.rules.apply";
+    }
 }
 
 pub mod command_policy {

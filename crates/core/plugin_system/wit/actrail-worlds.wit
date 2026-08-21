@@ -1,0 +1,150 @@
+package actrail:plugin@0.4.0;
+
+interface host {
+  use types.{payload-ref, payload-chunk, config-chunk, decision-summary, file-policy-view, file-policy-apply-request, file-policy-apply-result, file-policy-list-filter, file-policy-list-result, file-policy-match-dry-run-request, file-policy-match-dry-run-result, command-policy-apply-request, command-policy-apply-result, command-policy-list-filter, command-policy-list-result, command-policy-match-dry-run-request, command-policy-match-dry-run-result, command-execution-context};
+
+  read-config: func(offset: u64, max-bytes: u64) -> config-chunk;
+  read-payload: func(ref: payload-ref, offset: u64, max-bytes: u64) -> payload-chunk;
+  query-context: func(context-ref: string, query: string) -> result<decision-summary, string>;
+  file-access-current-match-get: func(context-ref: string, query: string) -> result<file-policy-view, string>;
+  file-policy-rules-version-get: func() -> result<u64, string>;
+  file-policy-rules-list: func(filter: file-policy-list-filter, cursor: option<string>, limit: u32) -> result<file-policy-list-result, string>;
+  file-policy-rules-match-dry-run: func(request: file-policy-match-dry-run-request) -> result<file-policy-match-dry-run-result, string>;
+  file-policy-rules-validate: func(request: file-policy-apply-request) -> result<file-policy-apply-result, string>;
+  file-policy-rules-apply: func(request: file-policy-apply-request) -> result<file-policy-apply-result, string>;
+  command-execution-current-context-query: func(context-ref: string, query: string) -> result<command-execution-context, string>;
+  command-policy-rules-version-get: func() -> result<u64, string>;
+  command-policy-rules-list: func(filter: command-policy-list-filter, cursor: option<string>, limit: u32) -> result<command-policy-list-result, string>;
+  command-policy-rules-match-dry-run: func(request: command-policy-match-dry-run-request) -> result<command-policy-match-dry-run-result, string>;
+  command-policy-rules-validate: func(request: command-policy-apply-request) -> result<command-policy-apply-result, string>;
+  command-policy-rules-apply: func(request: command-policy-apply-request) -> result<command-policy-apply-result, string>;
+  env-read: func(name: string, max-bytes: u64) -> result<string, string>;
+}
+
+interface network-control-host {
+  use types.{network-action-context, network-policy-apply-request, network-policy-apply-result, network-policy-list-filter, network-policy-list-result, network-policy-match-dry-run-request, network-policy-match-dry-run-result};
+
+  network-action-current-context-query: func(context-ref: string, query: string) -> result<network-action-context, string>;
+  network-policy-rules-version-get: func() -> result<u64, string>;
+  network-policy-rules-list: func(filter: network-policy-list-filter, cursor: option<string>, limit: u32) -> result<network-policy-list-result, string>;
+  network-policy-rules-match-dry-run: func(request: network-policy-match-dry-run-request) -> result<network-policy-match-dry-run-result, string>;
+  network-policy-rules-validate: func(request: network-policy-apply-request) -> result<network-policy-apply-result, string>;
+  network-policy-rules-apply: func(request: network-policy-apply-request) -> result<network-policy-apply-result, string>;
+}
+
+interface observation-context-read {
+  use types.{trace-context};
+
+  trace-context-get: func() -> result<trace-context, string>;
+  current-time-ms: func() -> result<u64, string>;
+  request-reevaluation-at: func(unix-time-ms: u64) -> result<_, string>;
+}
+
+interface trace-analysis-read {
+  use types.{trace-analysis-context, trace-action-page};
+
+  context-get: func() -> result<trace-analysis-context, string>;
+  semantic-actions-list: func(offset: option<u64>, limit: u32) -> result<trace-action-page, string>;
+}
+
+interface trace-activity-read {
+  use types.{trace-activity-context, llm-exchange-page, command-execution-page};
+
+  context-get: func() -> result<trace-activity-context, string>;
+  llm-exchanges-list: func(offset: option<u64>, limit: u32) -> result<llm-exchange-page, string>;
+  command-executions-list: func(offset: option<u64>, limit: u32) -> result<command-execution-page, string>;
+}
+
+interface trace-file-state-read {
+  use types.{trace-file-state};
+
+  get: func(action-id: string) -> result<trace-file-state, string>;
+}
+
+interface alert-write {
+  use types.{alert-write-request};
+
+  submit: func(request: alert-write-request) -> result<_, string>;
+}
+
+interface observation-consumer {
+  use types.{observation-batch, observation-report};
+
+  consume: func(batch: observation-batch) -> result<observation-report, string>;
+}
+
+interface control-decider {
+  use types.{decision-request, decision-response};
+
+  decide: func(request: decision-request) -> result<decision-response, string>;
+}
+
+interface management-command {
+  use types.{plugin-command-request, plugin-command-result};
+
+  handle-command: func(request: plugin-command-request) -> result<plugin-command-result, string>;
+}
+
+interface runtime-config {
+  get: func() -> result<string, string>;
+  validate: func(config-json: string) -> result<list<string>, string>;
+  submit: func(config-json: string) -> result<_, string>;
+}
+
+interface post-trace-analyzer {
+  use types.{post-trace-task};
+
+  analyze: func(task: post-trace-task) -> result<_, string>;
+}
+
+world observation-plugin {
+  import host;
+  import observation-context-read;
+  import alert-write;
+  export observation-consumer;
+}
+
+world post-trace-observation-plugin {
+  import host;
+  import observation-context-read;
+  import trace-analysis-read;
+  import trace-file-state-read;
+  import alert-write;
+  export observation-consumer;
+  export post-trace-analyzer;
+}
+
+world activity-anomaly-plugin {
+  import host;
+  import observation-context-read;
+  import trace-activity-read;
+  import alert-write;
+  export observation-consumer;
+  export post-trace-analyzer;
+}
+
+world control-plugin {
+  import host;
+  export control-decider;
+}
+
+world managed-control-plugin {
+  import host;
+  export control-decider;
+  export management-command;
+  export runtime-config;
+}
+
+world network-control-plugin {
+  import host;
+  import network-control-host;
+  export control-decider;
+}
+
+world managed-network-control-plugin {
+  import host;
+  import network-control-host;
+  export control-decider;
+  export management-command;
+  export runtime-config;
+}

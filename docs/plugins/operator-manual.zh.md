@@ -216,6 +216,9 @@ required = false
 | `hostcall_limits.command_context.context_ref_max_bytes` | u32 | 否 | 正整数 | `command-execution.current-context-query` context ref 最大字节数。 |
 | `hostcall_limits.command_context.query_max_bytes` | u32 | 否 | 正整数 | `command-execution.current-context-query` query 最大字节数。 |
 | `hostcall_limits.command_context.read_max_bytes` | u32 | 否 | 正整数 | 单次 command execution context 返回最大字节数；legacy core module 的版本化二进制响应使用同一上限。 |
+| `hostcall_limits.network_policy.context_ref_max_bytes` | u32 | 否 | 正整数 | `network-action.current-context-query` context ref 最大字节数，默认 `128`。 |
+| `hostcall_limits.network_policy.query_max_bytes` | u32 | 否 | 正整数 | `network-action.current-context-query` query 最大字节数，默认 `128`。 |
+| `hostcall_limits.network_policy.read_max_bytes` | u32 | 否 | 正整数 | network action context 以及 network-policy list/dry-run/validate/apply 请求和响应的最大字节数，默认 `65536`。 |
 | `hostcall_limits.plugin_config.read_max_bytes` | u32 | 否 | 正整数 | 单次 `read-config` 最大读取字节数。 |
 | `hostcall_limits.plugin_command.argv_max_count` | u32 | 否 | 正整数 | `actraild plugin cmd` 转发给插件的 argv 数量上限。 |
 | `hostcall_limits.plugin_command.arg_max_bytes` | u32 | 否 | 正整数 | `actraild plugin cmd` 单个 argv 最大字节数。 |
@@ -322,13 +325,15 @@ Plugins 工作区的刷新按钮每次都重新扫描目录，因此新复制的
 
 Web 加载对话框自动列出不需要参数的 manifest capability，并以只读方式展示；`env-read`、`file-policy.rules.apply` 等参数化权限必须由管理员填写具体变量名、规则类型或绝对路径范围。Web 后端先把结构化配置转换为 grant，daemon 再执行最终校验。没有可用 grant 格式的 capability 会明确阻止加载。daemon 的插件管理 socket 仍要求 host-root peer，因此使用 Web 加载/卸载时，`actrailweb` 必须以能通过该校验的本机管理员身份运行；不要把这个管理入口暴露到不受信任网络。
 
-release 安装脚本把官方插件包放到 `${ACTRAIL_PLUGIN_DIR:-$HOME/.actrail/plugins}`：`otel-jsonl/` 提供可选择 JSONL 文件或 JSON-RPC HTTP(S) 的实时 OTLP JSON 导出，`otel-http/` 提供 OTLP/HTTP 实时出境（见 [otel-http 插件启用手册](otel-http-manual.zh.md)），`file-leakage/` 用于 trace 结束后的文件泄漏检测，`activity-anomaly/` 实时上报 LLM 增长和运行中已超过阈值的 Agent 顶层长命令（终态分析兜底），`file-policy-dynamic/` 用于动态管理 allow、deny 和 gray 文件规则，`command-policy-dynamic/` 用于动态管理 executable 与可选 argv 范围的 allow、deny 和 gray 路由。`ACTRAIL_PLUGIN_DIR` 必须是绝对路径，并应与实际运行 `actrailweb` 的 `plugins.discovery.directory` 解析结果一致。复制完成后这些插件都仍是未加载候选；打开 Web 并刷新后才能看到它们。
+release 安装脚本把八个官方插件包放到 `${ACTRAIL_PLUGIN_DIR:-$HOME/.actrail/plugins}`：`otel-jsonl/` 提供可选择 JSONL 文件或 JSON-RPC HTTP(S) 的实时 OTLP JSON 导出，`otel-http/` 提供 OTLP/HTTP 实时出境（见 [otel-http 插件启用手册](otel-http-manual.zh.md)），`file-leakage/` 用于 trace 结束后的文件泄漏检测，`activity-anomaly/` 实时上报 LLM 增长和运行中已超过阈值的 Agent 顶层长命令（终态分析兜底），`tool-consecutive-failure-alert/` 检测连续失败工具命令，`file-policy-dynamic/` 用于动态管理 allow、deny 和 gray 文件规则，`command-policy-dynamic/` 用于动态管理 executable 与可选 argv 范围的 allow、deny 和 gray 路由，`network-policy-dynamic/` 用于动态管理精确数字 INET endpoint 或单 IP 全端口 selector。`ACTRAIL_PLUGIN_DIR` 必须是绝对路径，并应与实际运行 `actrailweb` 的 `plugins.discovery.directory` 解析结果一致。复制完成后这些插件都仍是未加载候选；打开 Web 并刷新后才能看到它们。
 
 `otel-jsonl` 和 `otel-http` 的执行代码编译在 `actraild` 中，安装目录里的包只提供发现和加载所需的 manifest、默认配置与 schema。它们出现在候选列表并不表示已经开始导出；点击 **Configure & load** 或通过 CLI/startup 清单加载后才会创建所选 exporter。`otel-http` 的默认配置带占位 Collector 地址，加载前必须替换。
 
 `file-policy-dynamic` 需要为 `file-policy.rules.apply` 指定可写规则类型和路径范围。在 Plugins 页面点击该候选的 **Configure & load**，填写实例 ID，添加一个或多个绝对路径，并为每个路径选择 allow、deny、gray 中允许写入的规则类型。加载成功后，实例详情中的 **Plugin command** 可以直接发送规则管理命令。
 
 `command-policy-dynamic` 使用同构的 `command-policy.rules.apply` 授权。在加载对话框的 **Executables this plugin can manage** 中填写精确绝对路径或以 `/**` 结尾的范围，并分别选择 Allow、Deny、Ask plugin。grant 可以覆盖范围，但插件实际发布的每条规则仍必须是精确 executable 路径。
+
+`network-policy-dynamic` 使用 `network-policy.rules.apply` 授权。在 **Remote endpoints this plugin can manage** 中填写全局 `*`、精确数字 endpoint 或 `IP:*`（IPv6 必须写成 `[IP]:port` 或 `[IP]:*`），并选择允许发布的决策类型。裸 `*` 只用于 grant，不是实际规则 selector。daemon 必须先启用 `[network_control]`；插件只发布路由，不可把自身作为 gray target。
 
 ## 启动时加载插件
 
@@ -905,8 +910,8 @@ actraild --config operator.conf plugin unload \
 - built-in `otel-jsonl`、WASM observation、WIT component observation 插件；
 - 用于 fanotify 灰名单决策的 WASM / WIT component control 插件；
 - trace-scoped command-execution 动态治理：本地 allow/deny 快路径和按字符串实例 ID 路由的 gray control-decider；
-- 受限 network-action 控制主体：显式 TCP `connect <ip:port>` 规则命中后，在继续前同步询问 control-decider；
-- 插件自有配置 `read-config`，观测侧 `env-read` / `payload-read`，控制侧 `context-query`、文件策略 Hostcall、`command-execution.current-context-query` 和 command-policy read/dry-run/validate/受限 apply；
+- 受限 network-action 控制主体：精确 INET `connect <ip:port>` 静态 gray 规则或动态 `IP:*` gray 规则命中后，daemon 延后 seccomp notification 并由 worker 询问 control-decider；
+- 插件自有配置 `read-config`，观测侧 `env-read` / `payload-read`，控制侧 `context-query`、文件策略 Hostcall、命令上下文与 command-policy Hostcall，以及网络动作上下文与 network-policy read/dry-run/validate/受限 apply；
 - 通过 `[plugins.startup]` 配置 daemon 启动时加载的插件清单；
 - 通过 `--persist` 持久化运行时加载的插件实例。
 
@@ -920,6 +925,6 @@ actraild --config operator.conf plugin unload \
 command-execution / network-action 控制主体当前使用方式：
 
 - 命令控制：启用 `[command_control]`，并使用 `<id> allow|deny exec <absolute-path> [args-json <json-string-array>] priority <i32>` 或 `<id> gray sync-plugin <instance-id> exec <absolute-path> [args-json <json-string-array>] priority <i32>`；不兼容旧语法。
-- 网络控制：启用 `[network_control]`，规则格式为 `<rule-id> sync-plugin <instance> timeout-ms <ms> concurrency <n> fallback <allow|deny> connect <ip:port>`。
+- 网络控制：启用 `[network_control]`。静态本地规则仍使用 `<rule-id> <allow|deny> connect <ip:port>`；静态 gray 规则使用 `<rule-id> sync-plugin <instance> timeout-ms <ms> concurrency <n> fallback <allow|deny> connect <ip:port>`。`IP:*` 只由动态 network-policy rule draft 提供；同一 IP 的动态全端口 selector 与静态或动态精确端口规则不可重叠。`default_decision`/`failure_decision`、审计开关、`pending_decision_max` 和 `reusable_cache_max_entries` 均可在该独立配置段设置。当前只治理 AF_INET/AF_INET6 `connect(2)`，不等同于 TCP 或完整 egress firewall。
 - 文件/网络只有明确的 gray/sync-plugin 规则进入 WASM；命令本地 allow/deny 不调用 WASM，命令 gray 规则才调用指定实例。未命中命令按 `command_control.default_decision` 处理。
-- `deny` 在 seccomp notification 继续前返回 `EPERM`，因此目标命令或目标 TCP connect 不会执行。
+- `deny` 在 seccomp notification 继续前返回 `EPERM`，因此目标命令或目标 INET connect 不会执行。

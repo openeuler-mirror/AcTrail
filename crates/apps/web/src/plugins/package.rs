@@ -360,7 +360,8 @@ impl InstalledPackage {
             match capability {
                 PluginCapability::EnvRead
                 | PluginCapability::FilePolicyRulesApply
-                | PluginCapability::CommandPolicyRulesApply => {
+                | PluginCapability::CommandPolicyRulesApply
+                | PluginCapability::NetworkPolicyRulesApply => {
                     parameterized.push(capability.as_str());
                 }
                 PluginCapability::NetworkEgress => unsupported.push(capability.as_str()),

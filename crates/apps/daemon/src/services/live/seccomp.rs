@@ -23,6 +23,11 @@ impl StorageAttachService {
             }
         }
         self.persist_command_enforcement_outcomes(trace_runtime, command_drain.outcomes)?;
+        let mut network_events = self.network_control.drain_completions(
+            trace_runtime,
+            &self.process_registry,
+            &self.control_plugins,
+        )?;
         let seccomp_notify = &mut self.seccomp_notify;
         let seccomp_tls = &mut self.seccomp_tls;
         let seccomp_socket = &mut self.seccomp_socket;
@@ -31,7 +36,6 @@ impl StorageAttachService {
         let process_registry = &mut self.process_registry;
         let storage = self.storage.as_mut();
         let process_id_block_size = self.process_id_block_size;
-        let mut network_events = Vec::new();
         let mut enforcement_outcomes = Vec::new();
         let mut command_enforcement_outcomes = Vec::new();
         let pending_process_observations = &mut self.pending_process_seccomp_observations;
@@ -60,7 +64,12 @@ impl StorageAttachService {
                     trace_runtime,
                     listener_trace_id,
                     notification,
-                ) {
+                ) || network_control.requires_notification_identity(
+                    trace_runtime,
+                    listener_trace_id,
+                    notification,
+                )
+                {
                     SeccompNotificationIdentityRegistrar::new(
                         process_registry,
                         identity_reader,
@@ -86,7 +95,7 @@ impl StorageAttachService {
                     listener_trace_id,
                     trace_runtime,
                     process_registry,
-                    prepared_process,
+                    prepared_process.clone(),
                     control_plugins,
                     notification,
                     continuation,
@@ -95,9 +104,10 @@ impl StorageAttachService {
                     return Ok(());
                 }
                 network_events.extend(network_control.handle_notification(
+                    listener_trace_id,
                     trace_runtime,
                     process_registry,
-                    identity_reader,
+                    prepared_process,
                     notification,
                     continuation,
                     control_plugins,

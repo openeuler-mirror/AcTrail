@@ -7,6 +7,7 @@ mod diagnostics;
 mod grants;
 mod llm_codec;
 mod manifest;
+mod network_policy;
 mod observation;
 mod runtime;
 mod status;
@@ -34,7 +35,8 @@ pub use control::{
 };
 pub use diagnostics::{PluginDroppedRecord, PluginRuntimeError};
 pub use grants::{
-    CommandPolicyRulesApplyGrant, FilePolicyRulesApplyGrant, PluginHostGrant, PluginHostGrants,
+    CommandPolicyRulesApplyGrant, FilePolicyRulesApplyGrant, NetworkPolicyRulesApplyGrant,
+    PluginHostGrant, PluginHostGrants,
 };
 pub use llm_codec::{
     LlmCodecDecoded, LlmCodecOutcome, LlmCodecPlugin, LlmCodecPluginStatus, LlmCodecRequest,
@@ -47,14 +49,22 @@ pub use manifest::{
     PluginContextHostcallLimits, PluginControlDeciderDeclaration, PluginControlDeciderResources,
     PluginEnvHostcallLimits, PluginFilePolicyHostcallLimits, PluginGeneralDeclaration,
     PluginHostDeclaration, PluginHostcallLimits, PluginManifest, PluginManifestPolicy,
-    PluginNativeDylibDeclaration, PluginObservationConsumerDeclaration,
-    PluginObservationConsumerResources, PluginObservationDelivery, PluginOutputsDeclaration,
-    PluginPayloadHostcallLimits, PluginPostTraceDeclaration, PluginPostTraceTrigger, PluginPurpose,
-    PluginRoleDeclaration, PluginRuntimeDeclaration, PluginRuntimeKind,
-    PluginSubscriptionDeclaration, PluginTraceActivityHostcallLimits,
-    PluginTraceAnalysisHostcallLimits, PluginTraceFileStateHostcallLimits,
-    PluginUnusedRuntimeSectionsPolicy, PluginWasmAbi, PluginWasmDeclaration,
-    PluginWasmResourceLimits, SUPPORTED_PLUGIN_API_VERSION,
+    PluginNativeDylibDeclaration, PluginNetworkPolicyHostcallLimits,
+    PluginObservationConsumerDeclaration, PluginObservationConsumerResources,
+    PluginObservationDelivery, PluginOutputsDeclaration, PluginPayloadHostcallLimits,
+    PluginPostTraceDeclaration, PluginPostTraceTrigger, PluginPurpose, PluginRoleDeclaration,
+    PluginRuntimeDeclaration, PluginRuntimeKind, PluginSubscriptionDeclaration,
+    PluginTraceActivityHostcallLimits, PluginTraceAnalysisHostcallLimits,
+    PluginTraceFileStateHostcallLimits, PluginUnusedRuntimeSectionsPolicy, PluginWasmAbi,
+    PluginWasmDeclaration, PluginWasmResourceLimits, SUPPORTED_PLUGIN_API_VERSION,
+};
+pub use network_policy::{
+    NetworkActionContext, NetworkPolicyApplyError, NetworkPolicyApplyRequest,
+    NetworkPolicyApplyResult, NetworkPolicyApplyStatus, NetworkPolicyDecision, NetworkPolicyHost,
+    NetworkPolicyListFilter, NetworkPolicyListResult, NetworkPolicyMatchDryRunRequest,
+    NetworkPolicyMatchDryRunResult, NetworkPolicyPatchItem, NetworkPolicyPatchOp,
+    NetworkPolicyRemoteGrantScope, NetworkPolicyRemoteSelector, NetworkPolicyRuleDraft,
+    NetworkPolicyRuleView, NETWORK_ACTION_CONTEXT_QUERY, NETWORK_ACTION_CURRENT_CONTEXT_TOKEN,
 };
 pub use observation::{
     ObservationBatch, ObservationConsumeReport, ObservationConsumer, ObservationEventFamily,

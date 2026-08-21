@@ -59,6 +59,16 @@ class CommandPolicyXiaooCase(TestCase):
             )
 
             test_context.report_progress(
+                "thread_identity",
+                "allowing Bash exec from a non-leader worker thread",
+            )
+            self._environment.require_nonleader_exec_allowed()
+            results["thread_identity"] = TestResult(
+                TestStatus.PASSED,
+                "non-leader exec resolved the governing process identity",
+            )
+
+            test_context.report_progress(
                 "xiaoo_denied",
                 "running real Xiaoo Bash tool under command enforcement",
             )

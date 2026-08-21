@@ -3,5 +3,6 @@ mod parser;
 mod validation;
 
 pub use model::{
-    CommandPolicyRulesApplyGrant, FilePolicyRulesApplyGrant, PluginHostGrant, PluginHostGrants,
+    CommandPolicyRulesApplyGrant, FilePolicyRulesApplyGrant, NetworkPolicyRulesApplyGrant,
+    PluginHostGrant, PluginHostGrants,
 };

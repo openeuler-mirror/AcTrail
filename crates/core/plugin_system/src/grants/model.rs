@@ -2,7 +2,10 @@ use std::collections::BTreeSet;
 
 use model_core::payload::PayloadSourceBoundary;
 
-use crate::{CommandPolicyDecision, FilePolicyDecision, PluginCapability};
+use crate::{
+    CommandPolicyDecision, FilePolicyDecision, NetworkPolicyDecision,
+    NetworkPolicyRemoteGrantScope, PluginCapability,
+};
 
 use super::parser::ScopedApplyGrantParser;
 use super::validation::GrantValidator;
@@ -27,6 +30,11 @@ pub struct PluginHostGrants {
     command_policy_rules_match_dry_run: bool,
     command_policy_rules_validate: bool,
     command_policy_rules_apply: Vec<CommandPolicyRulesApplyGrant>,
+    network_action_current_context_query: bool,
+    network_policy_rules_read: bool,
+    network_policy_rules_match_dry_run: bool,
+    network_policy_rules_validate: bool,
+    network_policy_rules_apply: Vec<NetworkPolicyRulesApplyGrant>,
     env_read: BTreeSet<String>,
 }
 
@@ -40,6 +48,12 @@ pub struct FilePolicyRulesApplyGrant {
 pub struct CommandPolicyRulesApplyGrant {
     pub decision: CommandPolicyDecision,
     pub path_scope: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NetworkPolicyRulesApplyGrant {
+    pub decision: NetworkPolicyDecision,
+    pub remote_scope: NetworkPolicyRemoteGrantScope,
 }
 
 impl PluginHostGrants {
@@ -88,6 +102,19 @@ impl PluginHostGrants {
                 }
                 PluginHostGrant::CommandPolicyRulesApply { decision, path } => {
                     grants.allow_command_policy_rules_apply(decision, path)?
+                }
+                PluginHostGrant::NetworkActionCurrentContextQuery => {
+                    grants.allow_network_action_current_context_query()
+                }
+                PluginHostGrant::NetworkPolicyRulesRead => grants.allow_network_policy_rules_read(),
+                PluginHostGrant::NetworkPolicyRulesMatchDryRun => {
+                    grants.allow_network_policy_rules_match_dry_run()
+                }
+                PluginHostGrant::NetworkPolicyRulesValidate => {
+                    grants.allow_network_policy_rules_validate()
+                }
+                PluginHostGrant::NetworkPolicyRulesApply { decision, remote } => {
+                    grants.allow_network_policy_rules_apply(decision, remote)?
                 }
                 PluginHostGrant::EnvRead { name } => grants.allow_env_read(name)?,
             }
@@ -289,6 +316,61 @@ impl PluginHostGrants {
         !self.command_policy_rules_apply.is_empty()
     }
 
+    pub fn allow_network_action_current_context_query(&mut self) {
+        self.network_action_current_context_query = true;
+    }
+
+    pub fn can_query_current_network_action_context(&self) -> bool {
+        self.network_action_current_context_query
+    }
+
+    pub fn allow_network_policy_rules_read(&mut self) {
+        self.network_policy_rules_read = true;
+    }
+
+    pub fn can_read_network_policy_rules(&self) -> bool {
+        self.network_policy_rules_read
+    }
+
+    pub fn allow_network_policy_rules_match_dry_run(&mut self) {
+        self.network_policy_rules_match_dry_run = true;
+    }
+
+    pub fn can_match_dry_run_network_policy_rules(&self) -> bool {
+        self.network_policy_rules_match_dry_run
+    }
+
+    pub fn allow_network_policy_rules_validate(&mut self) {
+        self.network_policy_rules_validate = true;
+    }
+
+    pub fn can_validate_network_policy_rules(&self) -> bool {
+        self.network_policy_rules_validate
+    }
+
+    pub fn allow_network_policy_rules_apply(
+        &mut self,
+        decision: NetworkPolicyDecision,
+        remote_scope: impl Into<String>,
+    ) -> Result<(), String> {
+        GrantValidator::network_decision(decision)?;
+        let remote_scope = GrantValidator::network_remote_scope(&remote_scope.into())?;
+        self.network_policy_rules_apply
+            .push(NetworkPolicyRulesApplyGrant {
+                decision,
+                remote_scope,
+            });
+        Ok(())
+    }
+
+    pub fn network_policy_rules_apply_grants(&self) -> &[NetworkPolicyRulesApplyGrant] {
+        &self.network_policy_rules_apply
+    }
+
+    pub fn can_apply_network_policy_rules(&self) -> bool {
+        !self.network_policy_rules_apply.is_empty()
+    }
+
     pub fn can_read_env(&self, name: &str) -> bool {
         self.env_read.contains(name)
     }
@@ -364,6 +446,25 @@ impl PluginHostGrants {
             }
             .to_wire()
         }));
+        if self.network_action_current_context_query {
+            values.push(PluginHostGrant::NetworkActionCurrentContextQuery.to_wire());
+        }
+        if self.network_policy_rules_read {
+            values.push(PluginHostGrant::NetworkPolicyRulesRead.to_wire());
+        }
+        if self.network_policy_rules_match_dry_run {
+            values.push(PluginHostGrant::NetworkPolicyRulesMatchDryRun.to_wire());
+        }
+        if self.network_policy_rules_validate {
+            values.push(PluginHostGrant::NetworkPolicyRulesValidate.to_wire());
+        }
+        values.extend(self.network_policy_rules_apply.iter().map(|grant| {
+            PluginHostGrant::NetworkPolicyRulesApply {
+                decision: grant.decision,
+                remote: grant.remote_scope.to_string(),
+            }
+            .to_wire()
+        }));
         values.extend(
             self.env_read
                 .iter()
@@ -391,6 +492,11 @@ impl PluginHostGrants {
             && !self.command_policy_rules_match_dry_run
             && !self.command_policy_rules_validate
             && self.command_policy_rules_apply.is_empty()
+            && !self.network_action_current_context_query
+            && !self.network_policy_rules_read
+            && !self.network_policy_rules_match_dry_run
+            && !self.network_policy_rules_validate
+            && self.network_policy_rules_apply.is_empty()
             && self.env_read.is_empty()
     }
 }
@@ -422,6 +528,14 @@ pub enum PluginHostGrant {
     CommandPolicyRulesApply {
         decision: CommandPolicyDecision,
         path: String,
+    },
+    NetworkActionCurrentContextQuery,
+    NetworkPolicyRulesRead,
+    NetworkPolicyRulesMatchDryRun,
+    NetworkPolicyRulesValidate,
+    NetworkPolicyRulesApply {
+        decision: NetworkPolicyDecision,
+        remote: String,
     },
     EnvRead {
         name: String,
@@ -475,9 +589,21 @@ impl PluginHostGrant {
         if raw == "command-policy.rules.validate" {
             return Ok(Self::CommandPolicyRulesValidate);
         }
+        if raw == "network-action.current-context-query" {
+            return Ok(Self::NetworkActionCurrentContextQuery);
+        }
+        if raw == "network-policy.rules.read" {
+            return Ok(Self::NetworkPolicyRulesRead);
+        }
+        if raw == "network-policy.rules.match-dry-run" {
+            return Ok(Self::NetworkPolicyRulesMatchDryRun);
+        }
+        if raw == "network-policy.rules.validate" {
+            return Ok(Self::NetworkPolicyRulesValidate);
+        }
         let Some((kind, value)) = raw.split_once(':') else {
             return Err(format!(
-                "invalid plugin host grant {raw}; expected a declared unscoped grant, payload-read:source=<boundary>, file-policy.rules.apply:kind=<allow|deny|gray>,path=<absolute|/absolute/**>, command-policy.rules.apply:kind=<allow|deny|gray>,path=<absolute|/absolute/**>, or env-read:NAME"
+                "invalid plugin host grant {raw}; expected a declared unscoped grant, payload-read:source=<boundary>, file-policy.rules.apply:kind=<allow|deny|gray>,path=<absolute|/absolute/**>, command-policy.rules.apply:kind=<allow|deny|gray>,path=<absolute|/absolute/**>, network-policy.rules.apply:kind=<allow|deny|gray>,remote=<*|ip:port|ip:*>, or env-read:NAME"
             ));
         };
         match kind {
@@ -500,8 +626,9 @@ impl PluginHostGrant {
             }
             "file-policy.rules.apply" => ScopedApplyGrantParser::file(value),
             "command-policy.rules.apply" => ScopedApplyGrantParser::command(value),
+            "network-policy.rules.apply" => ScopedApplyGrantParser::network(value),
             other => Err(format!(
-                "unsupported plugin host grant {other}; command policy grants use command-policy.rules.read, command-policy.rules.match-dry-run, command-policy.rules.validate, or command-policy.rules.apply:kind=<allow|deny|gray>,path=<absolute|/absolute/**>"
+                "unsupported plugin host grant {other}; managed policy grants use their declared read, match-dry-run, validate, or scoped apply form"
             )),
         }
     }
@@ -527,6 +654,13 @@ impl PluginHostGrant {
             Self::CommandPolicyRulesMatchDryRun => PluginCapability::CommandPolicyRulesMatchDryRun,
             Self::CommandPolicyRulesValidate => PluginCapability::CommandPolicyRulesValidate,
             Self::CommandPolicyRulesApply { .. } => PluginCapability::CommandPolicyRulesApply,
+            Self::NetworkActionCurrentContextQuery => {
+                PluginCapability::NetworkActionCurrentContextQuery
+            }
+            Self::NetworkPolicyRulesRead => PluginCapability::NetworkPolicyRulesRead,
+            Self::NetworkPolicyRulesMatchDryRun => PluginCapability::NetworkPolicyRulesMatchDryRun,
+            Self::NetworkPolicyRulesValidate => PluginCapability::NetworkPolicyRulesValidate,
+            Self::NetworkPolicyRulesApply { .. } => PluginCapability::NetworkPolicyRulesApply,
             Self::EnvRead { .. } => PluginCapability::EnvRead,
         }
     }
@@ -560,6 +694,17 @@ impl PluginHostGrant {
                 "command-policy.rules.apply:kind={},path={}",
                 decision.as_str(),
                 path
+            ),
+            Self::NetworkActionCurrentContextQuery => {
+                "network-action.current-context-query".to_string()
+            }
+            Self::NetworkPolicyRulesRead => "network-policy.rules.read".to_string(),
+            Self::NetworkPolicyRulesMatchDryRun => "network-policy.rules.match-dry-run".to_string(),
+            Self::NetworkPolicyRulesValidate => "network-policy.rules.validate".to_string(),
+            Self::NetworkPolicyRulesApply { decision, remote } => format!(
+                "network-policy.rules.apply:kind={},remote={}",
+                decision.as_str(),
+                remote
             ),
             Self::EnvRead { name } => format!("env-read:{name}"),
         }
