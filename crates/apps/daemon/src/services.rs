@@ -19,6 +19,7 @@ pub(crate) mod post_trace;
 pub(crate) mod process_seccomp;
 pub(crate) mod resource_metrics;
 pub(crate) mod retention;
+pub(crate) mod sandbox_plugins;
 pub(crate) mod seccomp_notify;
 pub(crate) mod seccomp_socket;
 pub(crate) mod seccomp_tls;

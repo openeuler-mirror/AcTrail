@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actrail.local/schemas/sandbox-resource-alert.config.v1.schema.json",
+  "title": "AcTrail sandbox resource alert configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "memory_available_threshold_bytes",
+    "read_interval_threshold_bytes",
+    "write_interval_threshold_bytes",
+    "source_state_capacity",
+    "alert_output_path",
+    "alert_queue_capacity",
+    "alert_flush_interval_ms",
+    "alert_writer_thread_stack_bytes"
+  ],
+  "properties": {
+    "memory_available_threshold_bytes": {
+      "description": "Emit oom-risk when Guest available memory is below this byte count.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "read_interval_threshold_bytes": {
+      "description": "Emit high-read when one process lineage exceeds this byte count in a collection interval.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "write_interval_threshold_bytes": {
+      "description": "Emit high-write when one process lineage exceeds this byte count in a collection interval.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "source_state_capacity": {
+      "description": "Maximum number of gateway/SB sources retained for OOM counter comparison.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
+    "alert_output_path": {
+      "description": "Absolute append-only alert output path owned by actraild.",
+      "type": "string",
+      "pattern": "^/[^\\u0000]*$"
+    },
+    "alert_queue_capacity": {
+      "description": "Bounded non-blocking alert writer queue capacity.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "alert_flush_interval_ms": {
+      "description": "Maximum normal buffered-output flush interval in milliseconds.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "alert_writer_thread_stack_bytes": {
+      "description": "Stack allocation requested for the dedicated alert writer thread.",
+      "type": "integer",
+      "minimum": 1
+    }
+  }
+}

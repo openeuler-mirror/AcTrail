@@ -1,0 +1,10 @@
+[package]
+name = "sandbox_resource_alert"
+version.workspace = true
+edition = "2024"
+license = "MulanPSL-2.0"
+
+[dependencies]
+plugin_system = { path = "../../core/plugin_system" }
+sandbox_observation = { path = "../../contracts/sandbox_observation" }
+sandbox_plugin_delivery = { path = "../../contracts/sandbox_plugin_delivery" }

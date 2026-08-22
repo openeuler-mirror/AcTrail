@@ -5,6 +5,7 @@ mod document;
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -58,6 +59,8 @@ pub struct OperatorConfig {
     pub plugin_discovery: PluginDiscoveryConfig,
     pub plugin_alert_runtime: PluginAlertRuntimeConfig,
     pub startup_plugins: StartupPluginsConfig,
+    pub hand_observation: HandObservationConfig,
+    pub sandbox_evidence: SandboxEvidenceConfig,
     pub log_path: PathBuf,
     pub diagnostic_log_level: DiagnosticLogLevel,
     pub workload_diagnostics: WorkloadDiagnosticsConfig,
@@ -79,6 +82,44 @@ pub struct OperatorConfig {
     pub startup_wait_ms: u64,
     pub shutdown_wait_ms: u64,
     pub supervision_poll_interval_ms: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HandObservationConfig {
+    pub enabled: bool,
+    pub listen_addr: SocketAddr,
+    pub max_gateway_connections: u32,
+    pub accept_poll_interval_ms: u64,
+    pub connection_poll_interval_ms: u64,
+    pub connection_idle_timeout_ms: u64,
+    pub write_timeout_ms: u64,
+    pub read_buffer_bytes: usize,
+    pub connection_thread_stack_bytes: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SandboxEvidenceSynchronousConfig {
+    Normal,
+    Full,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SandboxEvidenceConfig {
+    pub path: PathBuf,
+    pub schema_version: u32,
+    pub create_parent_directory: bool,
+    pub busy_timeout_ms: u64,
+    pub writer_queue_capacity: u32,
+    pub batch_max_observations: u32,
+    pub transaction_max_batches: u32,
+    pub flush_interval_ms: u64,
+    pub retention_max_observations: u64,
+    pub capacity_max_bytes: u64,
+    pub synchronous: SandboxEvidenceSynchronousConfig,
+    pub wal_autocheckpoint_pages: u32,
+    pub shutdown_drain_timeout_ms: u64,
+    pub writer_thread_stack_bytes: usize,
+    pub read_limit_max: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

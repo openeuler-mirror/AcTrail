@@ -1,0 +1,19 @@
+[vsock]
+backend = "native"
+cid = 4294967295
+port = 43182
+backlog = 128
+
+[upstream]
+daemon_address = "127.0.0.1:9472"
+
+[runtime]
+max_sb_connections = 64
+per_sb_forward_quota = 16
+outbound_queue_capacity = 1024
+upstream_heartbeat_interval_ms = 5000
+sb_peer_idle_timeout_ms = 15000
+io_timeout_ms = 1000
+reconnect_interval_ms = 1000
+accept_poll_interval_ms = 20
+connection_thread_stack_bytes = 524288

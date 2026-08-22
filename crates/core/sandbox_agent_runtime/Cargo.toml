@@ -1,0 +1,9 @@
+[package]
+name = "sandbox_agent_runtime"
+version.workspace = true
+edition = "2024"
+license = "MulanPSL-2.0"
+
+[dependencies]
+sandbox_observation = { path = "../../contracts/sandbox_observation" }
+sandbox_vsock_contract = { path = "../../contracts/sandbox_link/vsock" }

@@ -10,6 +10,7 @@ mod manifest;
 mod network_policy;
 mod observation;
 mod runtime;
+mod sandbox_observation;
 mod status;
 
 pub use alert::AlertHost;
@@ -53,10 +54,12 @@ pub use manifest::{
     PluginObservationConsumerDeclaration, PluginObservationConsumerResources,
     PluginObservationDelivery, PluginOutputsDeclaration, PluginPayloadHostcallLimits,
     PluginPostTraceDeclaration, PluginPostTraceTrigger, PluginPurpose, PluginRoleDeclaration,
-    PluginRuntimeDeclaration, PluginRuntimeKind, PluginSubscriptionDeclaration,
-    PluginTraceActivityHostcallLimits, PluginTraceAnalysisHostcallLimits,
-    PluginTraceFileStateHostcallLimits, PluginUnusedRuntimeSectionsPolicy, PluginWasmAbi,
-    PluginWasmDeclaration, PluginWasmResourceLimits, SUPPORTED_PLUGIN_API_VERSION,
+    PluginRuntimeDeclaration, PluginRuntimeKind, PluginSandboxObservationConsumerDeclaration,
+    PluginSandboxObservationKind, PluginSandboxSubscriptionDeclaration,
+    PluginSubscriptionDeclaration, PluginTraceActivityHostcallLimits,
+    PluginTraceAnalysisHostcallLimits, PluginTraceFileStateHostcallLimits,
+    PluginUnusedRuntimeSectionsPolicy, PluginWasmAbi, PluginWasmDeclaration,
+    PluginWasmResourceLimits, SUPPORTED_PLUGIN_API_VERSION,
 };
 pub use network_policy::{
     NetworkActionContext, NetworkPolicyApplyError, NetworkPolicyApplyRequest,
@@ -75,6 +78,10 @@ pub use observation::{
     DEFAULT_OBSERVATION_QUEUE_CAPACITY,
 };
 pub use runtime::{BuiltinPluginInstance, PluginInstanceId};
+pub use sandbox_observation::{
+    SandboxConsumerRegistration, SandboxConsumerStatus, SandboxPluginFacade,
+    SandboxPluginRegistrationError, SandboxPluginUnregisterResult,
+};
 pub use status::{
     PluginHostcallMetrics, PluginHostcallMetricsSource, PluginInstanceStatus, PluginLifecycleState,
     PluginOperationalMetrics, PluginOperationalMetricsSource, PluginPayloadReadMetrics,

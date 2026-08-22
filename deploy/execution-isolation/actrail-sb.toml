@@ -1,0 +1,26 @@
+instance_lock_path = "/run/actrail/actrail-sb.lock"
+
+[collector]
+root_process_names = ["xiaoo", "claude"]
+procfs_root = "/proc"
+require_initial_root = false
+root_refresh_interval_ms = 1000
+tracked_process_capacity = 16384
+pending_io_capacity = 32768
+aggregate_capacity = 4096
+poll_interval_ms = 1000
+
+[sampler]
+poll_interval_ms = 1000
+
+[transport]
+host_cid = 2
+port = 43182
+io_timeout_ms = 1000
+heartbeat_interval_ms = 5000
+reconnect_interval_ms = 1000
+
+[runtime]
+observation_queue_capacity = 1024
+batch_max_observations = 256
+worker_thread_stack_bytes = 524288

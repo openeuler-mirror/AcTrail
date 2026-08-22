@@ -224,6 +224,10 @@ impl StorageAttachService {
                     .map_err(|message| ControlError::new("plugin_runtime", message))?;
                 Ok(status)
             }
+            PluginPurpose::SandboxObservationConsumer => Err(ControlError::new(
+                "plugin_runtime",
+                "sandbox observation plugins are owned by the gateway plugin host",
+            )),
         }?;
         self.plugin_configs.register(inspected_config);
         Ok(status)

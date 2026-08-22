@@ -73,6 +73,8 @@ mod cluster;
 mod command;
 #[path = "document/file.rs"]
 mod file;
+#[path = "document/hand_observation/mod.rs"]
+mod hand_observation;
 #[path = "document/helpers.rs"]
 mod helpers;
 #[path = "document/network.rs"]
@@ -83,6 +85,8 @@ mod payload;
 mod plugin;
 #[path = "document/process.rs"]
 mod process;
+#[path = "document/sandbox_evidence/mod.rs"]
+mod sandbox_evidence;
 #[path = "document/semantic.rs"]
 mod semantic;
 
@@ -91,11 +95,13 @@ use base::*;
 use cluster::*;
 use command::*;
 use file::*;
+use hand_observation::*;
 use helpers::*;
 use network::*;
 use payload::*;
 use plugin::*;
 use process::*;
+use sandbox_evidence::*;
 use semantic::*;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -107,6 +113,8 @@ pub(super) struct OperatorDocument {
     cluster: ClusterDocument,
     export: ExportDocument,
     plugins: PluginsDocument,
+    hand_observation: HandObservationDocument,
+    sandbox_evidence: SandboxEvidenceDocument,
     capture: CaptureDocument,
     ebpf: EbpfDocument,
     payload: PayloadDocument,
@@ -133,6 +141,8 @@ impl Default for OperatorDocument {
             cluster: ClusterDocument::default(),
             export: ExportDocument::default(),
             plugins: PluginsDocument::default(),
+            hand_observation: HandObservationDocument::default(),
+            sandbox_evidence: SandboxEvidenceDocument::default(),
             capture: CaptureDocument::default(),
             ebpf: EbpfDocument::default(),
             payload: PayloadDocument::default(),
@@ -273,6 +283,8 @@ impl OperatorDocument {
                 &config.plugin_alert_runtime,
                 &config.startup_plugins,
             ),
+            hand_observation: HandObservationDocument::from_config(&config.hand_observation),
+            sandbox_evidence: SandboxEvidenceDocument::from_config(&config.sandbox_evidence),
             capture: CaptureDocument {
                 profile_name: config.capture_profile.name.as_str().to_string(),
                 capabilities: required,
@@ -456,6 +468,8 @@ impl OperatorDocument {
             &capabilities,
         )?;
         let (plugin_discovery, plugin_alert_runtime, startup_plugins) = self.plugins.to_config()?;
+        let hand_observation = self.hand_observation.to_config()?;
+        let sandbox_evidence = self.sandbox_evidence.to_config()?;
         let trace_finalization = self.control.finalization.to_config()?;
         let shutdown_wait_ms = require_positive_u64(
             "supervision.shutdown_wait_ms",
@@ -477,9 +491,19 @@ impl OperatorDocument {
             .ok_or_else(|| {
                 "configured shutdown drain budgets overflow u64 milliseconds".to_string()
             })?;
+        let minimum_shutdown_wait_ms = if hand_observation.enabled {
+            minimum_shutdown_wait_ms
+                .checked_add(sandbox_evidence.shutdown_drain_timeout_ms)
+                .ok_or_else(|| {
+                    "configured Hand observation shutdown budget overflows u64 milliseconds"
+                        .to_string()
+                })?
+        } else {
+            minimum_shutdown_wait_ms
+        };
         if shutdown_wait_ms < minimum_shutdown_wait_ms {
             return Err(format!(
-                "supervision.shutdown_wait_ms must be at least {minimum_shutdown_wait_ms}ms: 3 * control.finalization.shutdown_drain_timeout_ms (terminal + unsettled semantics + export) + control.finalization.post_trace.shutdown_drain_timeout_ms + plugins.alerts.drain_timeout_ms + supervision.poll_interval_ms"
+                "supervision.shutdown_wait_ms must be at least {minimum_shutdown_wait_ms}ms: 3 * control.finalization.shutdown_drain_timeout_ms (terminal + unsettled semantics + export) + control.finalization.post_trace.shutdown_drain_timeout_ms + plugins.alerts.drain_timeout_ms + supervision.poll_interval_ms, plus sandbox_evidence.shutdown_drain_timeout_ms when Hand observation is enabled"
             ));
         }
         Ok(OperatorConfig {
@@ -510,6 +534,8 @@ impl OperatorDocument {
             plugin_discovery,
             plugin_alert_runtime,
             startup_plugins,
+            hand_observation,
+            sandbox_evidence,
             log_path: PathBuf::from(&self.control.log_path),
             diagnostic_log_level: parse_value(
                 "control.diagnostic_log_level",
