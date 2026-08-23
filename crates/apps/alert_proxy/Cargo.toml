@@ -1,0 +1,20 @@
+[package]
+name = "alert-proxy"
+version.workspace = true
+edition = "2024"
+license = "MulanPSL-2.0"
+
+[dependencies]
+alert_delivery_contract = { package = "alert-delivery-contract", path = "../../contracts/alert_delivery" }
+clap = { version = "4.6", features = ["derive"] }
+libc = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+socket2 = "0.6"
+subtle = "2.6"
+toml = "0.8"
+uuid = { version = "1.18", features = ["v4"] }
+
+[[bin]]
+name = "actraild-alert-proxy"
+path = "src/bin/actraild-alert-proxy.rs"

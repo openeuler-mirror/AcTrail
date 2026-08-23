@@ -15,6 +15,7 @@ pub struct SbConfig {
     pub sampler: SamplerSection,
     pub transport: TransportSection,
     pub runtime: RuntimeSection,
+    pub diagnostics: DiagnosticsSection,
     pub instance_lock_path: PathBuf,
 }
 
@@ -43,7 +44,7 @@ pub struct TransportSection {
     pub host_cid: u32,
     pub port: u32,
     pub io_timeout_ms: u64,
-    pub heartbeat_interval_ms: u64,
+    pub max_silence_interval_ms: u64,
     pub reconnect_interval_ms: u64,
 }
 
@@ -55,11 +56,18 @@ pub struct RuntimeSection {
     pub worker_thread_stack_bytes: usize,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosticsSection {
+    pub interval_ms: u64,
+}
+
 pub struct ValidatedSbConfig {
     pub linux: SandboxLinuxConfig,
     pub resource_procfs_root: PathBuf,
     pub transport: VsockClientConfig,
     pub runtime: SandboxAgentConfig,
+    pub diagnostics_interval: Option<Duration>,
     pub instance_lock_path: PathBuf,
 }
 
@@ -140,14 +148,17 @@ impl SbConfig {
                 "actrail-sb VSOCK host CID and port must be concrete and I/O timeout must be positive",
             ));
         }
+        let diagnostics_interval = (self.diagnostics.interval_ms > 0)
+            .then(|| Duration::from_millis(self.diagnostics.interval_ms));
         let runtime = SandboxAgentConfig {
             io_poll_interval: Duration::from_millis(self.collector.poll_interval_ms),
             resource_poll_interval: Duration::from_millis(self.sampler.poll_interval_ms),
-            heartbeat_interval: Duration::from_millis(self.transport.heartbeat_interval_ms),
+            max_silence_interval: Duration::from_millis(self.transport.max_silence_interval_ms),
             reconnect_interval: Duration::from_millis(self.transport.reconnect_interval_ms),
             observation_queue_capacity: self.runtime.observation_queue_capacity,
             batch_max_observations: self.runtime.batch_max_observations,
             worker_thread_stack_bytes: self.runtime.worker_thread_stack_bytes,
+            metrics_enabled: diagnostics_interval.is_some(),
         };
         runtime.validate()?;
         Ok(ValidatedSbConfig {
@@ -155,6 +166,7 @@ impl SbConfig {
             resource_procfs_root: self.collector.procfs_root,
             transport,
             runtime,
+            diagnostics_interval,
             instance_lock_path: self.instance_lock_path,
         })
     }
@@ -211,7 +223,7 @@ impl SbConfig {
                 host_cid: 2,
                 port: 43_182,
                 io_timeout_ms: 1_000,
-                heartbeat_interval_ms: 5_000,
+                max_silence_interval_ms: 5_000,
                 reconnect_interval_ms: 1_000,
             },
             runtime: RuntimeSection {
@@ -219,6 +231,7 @@ impl SbConfig {
                 batch_max_observations: 256,
                 worker_thread_stack_bytes: 524_288,
             },
+            diagnostics: DiagnosticsSection { interval_ms: 0 },
             instance_lock_path: PathBuf::from("/run/actrail/actrail-sb.lock"),
         }
     }

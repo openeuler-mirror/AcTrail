@@ -10,11 +10,12 @@ const BATCH_FIXED_BYTES: usize = 10;
 pub struct SandboxAgentConfig {
     pub io_poll_interval: Duration,
     pub resource_poll_interval: Duration,
-    pub heartbeat_interval: Duration,
+    pub max_silence_interval: Duration,
     pub reconnect_interval: Duration,
     pub observation_queue_capacity: usize,
     pub batch_max_observations: usize,
     pub worker_thread_stack_bytes: usize,
+    pub metrics_enabled: bool,
 }
 
 impl SandboxAgentConfig {
@@ -22,7 +23,7 @@ impl SandboxAgentConfig {
         for (name, value) in [
             ("io_poll_interval", self.io_poll_interval),
             ("resource_poll_interval", self.resource_poll_interval),
-            ("heartbeat_interval", self.heartbeat_interval),
+            ("max_silence_interval", self.max_silence_interval),
             ("reconnect_interval", self.reconnect_interval),
         ] {
             if value.is_zero() {

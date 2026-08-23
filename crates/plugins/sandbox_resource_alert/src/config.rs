@@ -2,6 +2,7 @@ use std::fmt;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SandboxResourceAlertConfig {
+    pub cpu_usage_threshold_basis_points: u16,
     pub memory_available_threshold_bytes: u64,
     pub read_interval_threshold_bytes: u64,
     pub write_interval_threshold_bytes: u64,
@@ -10,6 +11,9 @@ pub struct SandboxResourceAlertConfig {
 
 impl SandboxResourceAlertConfig {
     pub(crate) fn validate(self) -> Result<usize, SandboxResourceAlertConfigError> {
+        if !(1..=10_000).contains(&self.cpu_usage_threshold_basis_points) {
+            return Err(SandboxResourceAlertConfigError::InvalidCpuThreshold);
+        }
         if self.memory_available_threshold_bytes == 0 {
             return Err(SandboxResourceAlertConfigError::ZeroMemoryThreshold);
         }
@@ -29,6 +33,7 @@ impl SandboxResourceAlertConfig {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SandboxResourceAlertConfigError {
+    InvalidCpuThreshold,
     ZeroMemoryThreshold,
     ZeroReadThreshold,
     ZeroWriteThreshold,
@@ -39,6 +44,9 @@ pub enum SandboxResourceAlertConfigError {
 impl fmt::Display for SandboxResourceAlertConfigError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::InvalidCpuThreshold => {
+                "CPU usage threshold must be between 1 and 10000 basis points"
+            }
             Self::ZeroMemoryThreshold => "memory available threshold must be positive",
             Self::ZeroReadThreshold => "read interval threshold must be positive",
             Self::ZeroWriteThreshold => "write interval threshold must be positive",

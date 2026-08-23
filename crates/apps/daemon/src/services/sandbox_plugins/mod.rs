@@ -1,4 +1,3 @@
-mod alert_writer;
 mod manager;
 mod route_sink;
 

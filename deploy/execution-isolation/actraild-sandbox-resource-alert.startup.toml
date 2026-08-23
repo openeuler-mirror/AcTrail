@@ -26,8 +26,25 @@ shutdown_drain_timeout_ms = 10000
 writer_thread_stack_bytes = 524288
 read_limit_max = 10000
 
+[sandbox_alerts]
+enabled = true
+path = "/var/lib/actrail/sandbox-alerts.sqlite"
+schema_version = 1
+create_parent_directory = true
+busy_timeout_ms = 5000
+writer_queue_capacity = 1024
+transaction_max_alerts = 256
+flush_interval_ms = 250
+retention_max_alerts = 1000000
+capacity_max_bytes = 1073741824
+synchronous = "normal"
+wal_autocheckpoint_pages = 1000
+shutdown_drain_timeout_ms = 10000
+writer_thread_stack_bytes = 524288
+read_limit_max = 10000
+
 [supervision]
-shutdown_wait_ms = 160100
+shutdown_wait_ms = 170100
 
 [plugins.startup]
 enabled = true

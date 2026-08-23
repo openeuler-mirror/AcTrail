@@ -12,16 +12,38 @@ use crate::{SandboxAgentConfig, SandboxConnection, SandboxTransport};
 
 pub(super) struct SenderMetrics {
     pub(super) sb_id: AtomicU32,
-    pub(super) sent_batches: AtomicU64,
-    pub(super) reconnects: AtomicU64,
+    sent_batches: AtomicU64,
+    reconnects: AtomicU64,
+    enabled: bool,
 }
 
 impl SenderMetrics {
-    pub(super) fn new(sb_id: u32) -> Self {
+    pub(super) fn new(sb_id: u32, enabled: bool) -> Self {
         Self {
             sb_id: AtomicU32::new(sb_id),
             sent_batches: AtomicU64::new(0),
             reconnects: AtomicU64::new(0),
+            enabled,
+        }
+    }
+
+    pub(super) fn sent_batches(&self) -> u64 {
+        self.sent_batches.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn reconnects(&self) -> u64 {
+        self.reconnects.load(Ordering::Relaxed)
+    }
+
+    fn record_sent_batch(&self) {
+        if self.enabled {
+            self.sent_batches.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn record_reconnect(&self) {
+        if self.enabled {
+            self.reconnects.fetch_add(1, Ordering::Relaxed);
         }
     }
 }
@@ -88,9 +110,9 @@ impl ObservationSender {
             metrics: Arc::clone(&self.metrics),
         };
         let mut pending: Vec<Observation> = Vec::with_capacity(self.config.batch_max_observations);
-        let mut last_write = Instant::now();
+        let mut last_frame_write = Instant::now();
         loop {
-            self.fill_pending(&mut pending);
+            let receiver_closed = self.fill_pending(&mut pending);
             if !pending.is_empty() {
                 if self.send_batch(&mut *connection, &pending).is_err() {
                     let Some(registered) = self.reconnect() else {
@@ -101,9 +123,9 @@ impl ObservationSender {
                 }
                 pending.clear();
                 self.next_sequence = self.next_sequence.wrapping_add(1).max(1);
-                self.metrics.sent_batches.fetch_add(1, Ordering::Relaxed);
-                last_write = Instant::now();
-            } else if last_write.elapsed() >= self.config.heartbeat_interval {
+                self.metrics.record_sent_batch();
+                last_frame_write = Instant::now();
+            } else if last_frame_write.elapsed() >= self.config.max_silence_interval {
                 let heartbeat =
                     Frame::new(FrameCode::Heartbeat, Vec::new()).expect("fixed heartbeat");
                 if write_frame(&mut *connection, &heartbeat).is_err() {
@@ -112,36 +134,30 @@ impl ObservationSender {
                     };
                     connection = registered;
                 }
-                last_write = Instant::now();
+                last_frame_write = Instant::now();
             }
-            if self.stop.load(Ordering::Acquire) {
-                while pending.len() < self.config.batch_max_observations {
-                    match self.receiver.try_recv() {
-                        Ok(observation) => pending.push(observation),
-                        Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
-                    }
-                }
-                if !pending.is_empty() {
-                    let _ = self.send_batch(&mut *connection, &pending);
-                }
+            if receiver_closed {
                 return;
             }
         }
     }
 
-    fn fill_pending(&self, pending: &mut Vec<Observation>) {
+    fn fill_pending(&self, pending: &mut Vec<Observation>) -> bool {
         if pending.is_empty() {
-            match self.receiver.recv_timeout(self.config.heartbeat_interval) {
+            match self.receiver.recv_timeout(self.config.max_silence_interval) {
                 Ok(observation) => pending.push(observation),
-                Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => return,
+                Err(RecvTimeoutError::Timeout) => return false,
+                Err(RecvTimeoutError::Disconnected) => return true,
             }
         }
         while pending.len() < self.config.batch_max_observations {
             match self.receiver.try_recv() {
                 Ok(observation) => pending.push(observation),
-                Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
+                Err(TryRecvError::Empty) => return false,
+                Err(TryRecvError::Disconnected) => return true,
             }
         }
+        false
     }
 
     fn send_batch(
@@ -165,7 +181,7 @@ impl ObservationSender {
             match Self::register(&*self.transport) {
                 Ok((connection, sb_id)) => {
                     self.metrics.sb_id.store(sb_id, Ordering::Release);
-                    self.metrics.reconnects.fetch_add(1, Ordering::Relaxed);
+                    self.metrics.record_reconnect();
                     return Some(connection);
                 }
                 Err(_) => thread::park_timeout(self.config.reconnect_interval),

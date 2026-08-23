@@ -19,8 +19,15 @@ _EGRESS_MODES = {"network", "vsock-bridge"}
 _RELEASE_LAYOUT = {
     "actraild_sha256": "actraild",
     "actrailctl_sha256": "actrailctl",
+    "actrail_sb_sha256": "actrail-sb",
+    "actrail_vsock_gateway_sha256": "actrail-vsock-gateway",
     "actrailviewer_sha256": "actrailviewer",
     "tls_probe_sha256": "libactrail_tls_payload_probe_sync.so",
+}
+_GUEST_RELEASE_LAYOUT = {
+    key: filename
+    for key, filename in _RELEASE_LAYOUT.items()
+    if filename != "actrail-vsock-gateway"
 }
 
 
@@ -36,6 +43,7 @@ class DeploymentArtifacts:
     egress_mode: str
     otel_export_enabled: bool
     guest_bundle: Path
+    host_bundle: Path
     workload_bundle: Path
     base_image: Path
     data_image: Path
@@ -124,11 +132,60 @@ class DeploymentArtifacts:
             "guest bundle manifest",
         )
         _verify_manifest(guest_bundle, guest_manifest)
-        for digest_name, filename in _RELEASE_LAYOUT.items():
+        for digest_name, filename in _GUEST_RELEASE_LAYOUT.items():
             _verify_file_digest(
                 guest_bundle / filename,
                 _required_sha256(release, digest_name),
                 f"guest bundle {filename}",
+            )
+        guest_sb = guest_bundle / "actrail-sb"
+        if not guest_sb.stat().st_mode & 0o111:
+            raise RuntimeError(f"Guest actrail-sb is not executable: {guest_sb}")
+
+        host = _required_object(document, "host_bundle")
+        host_bundle = _artifact_path(
+            root,
+            _required_string(host, "path"),
+            kind="directory",
+        )
+        host_manifest = host_bundle / "MANIFEST.sha256"
+        _verify_file_digest(
+            host_manifest,
+            _required_sha256(host, "manifest_sha256"),
+            "host bundle manifest",
+        )
+        _verify_manifest(host_bundle, host_manifest)
+        gateway = host_bundle / "actrail-vsock-gateway"
+        gateway_sha256 = _required_sha256(host, "gateway_sha256")
+        _verify_file_digest(gateway, gateway_sha256, "host bundle gateway")
+        if gateway_sha256 != _required_sha256(
+            release,
+            "actrail_vsock_gateway_sha256",
+        ):
+            raise RuntimeError(
+                "host bundle gateway does not match the current release"
+            )
+        if not gateway.stat().st_mode & 0o111:
+            raise RuntimeError(f"host bundle gateway is not executable: {gateway}")
+        plugin_directory = host_bundle / "sandbox-resource-alert"
+        for field, name in (
+            (
+                "sandbox_resource_alert_manifest_sha256",
+                "sandbox-resource-alert.plugin.toml",
+            ),
+            (
+                "sandbox_resource_alert_config_sha256",
+                "sandbox-resource-alert.config.json",
+            ),
+            (
+                "sandbox_resource_alert_schema_sha256",
+                "sandbox-resource-alert.config.v1.schema.json",
+            ),
+        ):
+            _verify_file_digest(
+                plugin_directory / name,
+                _required_sha256(host, field),
+                f"host bundle sandbox resource alert {name}",
             )
 
         workload = _required_object(document, "workload_bundle")
@@ -258,6 +315,7 @@ class DeploymentArtifacts:
             egress_mode=egress_mode,
             otel_export_enabled=otel_export_enabled,
             guest_bundle=guest_bundle,
+            host_bundle=host_bundle,
             workload_bundle=workload_bundle,
             base_image=base_image,
             data_image=data_image,
@@ -318,6 +376,8 @@ def validate_release_bundle_consistency(
         release = bin_dir / filename
         if not release.is_file():
             raise RuntimeError(f"current release artifact is missing: {release}")
+    for filename in _GUEST_RELEASE_LAYOUT.values():
+        release = bin_dir / filename
         _verify_file_digest(
             guest_bundle / filename,
             sha256_file(release),

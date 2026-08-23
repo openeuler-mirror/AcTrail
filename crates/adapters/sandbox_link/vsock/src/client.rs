@@ -33,7 +33,11 @@ impl VsockClient {
     }
 
     pub fn connect(&self) -> io::Result<VsockConnection> {
-        let stream = native::connect(self.config.host_cid, self.config.port)?;
+        let stream = native::connect(
+            self.config.host_cid,
+            self.config.port,
+            self.config.io_timeout,
+        )?;
         let connection = VsockConnection::native(stream, self.config.host_cid, self.config.port);
         connection.set_timeouts(self.config.io_timeout)?;
         Ok(connection)

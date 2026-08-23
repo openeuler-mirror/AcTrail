@@ -29,6 +29,8 @@ from tests.v2.common.kata_runtime import (  # noqa: E402
 RELEASE_FILES = {
     "actraild_sha256": "actraild",
     "actrailctl_sha256": "actrailctl",
+    "actrail_sb_sha256": "actrail-sb",
+    "actrail_vsock_gateway_sha256": "actrail-vsock-gateway",
     "actrailviewer_sha256": "actrailviewer",
     "tls_probe_sha256": "libactrail_tls_payload_probe_sync.so",
 }
@@ -225,6 +227,7 @@ class ArtifactPreparer:
         )
         try:
             guest_bundle = staging / "guest-bundle"
+            host_bundle = staging / "host-bundle"
             workload_bundle = staging / "workload-bundle"
             base_image = staging / "guest-base.img"
             data_image = staging / "guest-data.img"
@@ -252,6 +255,7 @@ class ArtifactPreparer:
                 ],
                 environment=environment,
             )
+            self._prepare_host_bundle(host_bundle)
             self.executor.run(
                 [
                     str(
@@ -309,6 +313,34 @@ class ArtifactPreparer:
             if staging.exists():
                 shutil.rmtree(staging)
             raise
+
+    def _prepare_host_bundle(self, output: Path) -> None:
+        output.mkdir()
+        source = self.inputs.bin_dir / "actrail-vsock-gateway"
+        destination = output / source.name
+        shutil.copy2(source, destination)
+        destination.chmod(0o755)
+        plugin_source = (
+            self.inputs.repo
+            / "examples/plugins/builtin/sandbox-resource-alert"
+        )
+        plugin_output = output / "sandbox-resource-alert"
+        plugin_output.mkdir()
+        for name in (
+            "sandbox-resource-alert.plugin.toml",
+            "sandbox-resource-alert.config.json",
+            "sandbox-resource-alert.config.v1.schema.json",
+        ):
+            shutil.copy2(plugin_source / name, plugin_output / name)
+        manifest = output / "MANIFEST.sha256"
+        lines = []
+        for path in sorted(output.rglob("*")):
+            if not path.is_file() or path == manifest:
+                continue
+            relative = path.relative_to(output).as_posix()
+            lines.append(f"{sha256_file(path)}  ./{relative}\n")
+        manifest.write_text("".join(lines), encoding="utf-8")
+        manifest.chmod(0o644)
 
     def _inject(self, source: Path, output: Path, guest_bundle: Path) -> None:
         command = [
@@ -382,6 +414,7 @@ class ArtifactPreparer:
         staging: Path,
     ) -> dict[str, Any]:
         guest_bundle = staging / "guest-bundle"
+        host_bundle = staging / "host-bundle"
         workload_bundle = staging / "workload-bundle"
         document: dict[str, Any] = {
             "format": 2,
@@ -396,6 +429,27 @@ class ArtifactPreparer:
                 "path": "guest-bundle",
                 "manifest_sha256": sha256_file(
                     guest_bundle / "MANIFEST.sha256"
+                ),
+            },
+            "host_bundle": {
+                "path": "host-bundle",
+                "manifest_sha256": sha256_file(
+                    host_bundle / "MANIFEST.sha256"
+                ),
+                "gateway_sha256": sha256_file(
+                    host_bundle / "actrail-vsock-gateway"
+                ),
+                "sandbox_resource_alert_manifest_sha256": sha256_file(
+                    host_bundle
+                    / "sandbox-resource-alert/sandbox-resource-alert.plugin.toml"
+                ),
+                "sandbox_resource_alert_config_sha256": sha256_file(
+                    host_bundle
+                    / "sandbox-resource-alert/sandbox-resource-alert.config.json"
+                ),
+                "sandbox_resource_alert_schema_sha256": sha256_file(
+                    host_bundle
+                    / "sandbox-resource-alert/sandbox-resource-alert.config.v1.schema.json"
                 ),
             },
             "workload_bundle": {
@@ -548,10 +602,26 @@ def write_test_profile(
         "VIRTUAL_CONTAINER_E2E_IMAGE_PULL_POLICY": inputs.image_pull_policy,
         "VIRTUAL_CONTAINER_E2E_SCOPE": "auto",
     }
+    if inputs.backend == "cloud-hypervisor":
+        environment.update(
+            {
+                "EXECUTION_ISOLATION_E2E_BACKEND": inputs.backend,
+                "EXECUTION_ISOLATION_E2E_ARTIFACT_MANIFEST": str(manifest),
+                "EXECUTION_ISOLATION_E2E_CTR_RUNTIME": inputs.runtime,
+                "EXECUTION_ISOLATION_E2E_IMAGE": inputs.workload_image,
+                "EXECUTION_ISOLATION_E2E_IMAGE_PULL_POLICY": (
+                    inputs.image_pull_policy
+                ),
+            }
+        )
     if inputs.workload_image_archive is not None:
         environment["VIRTUAL_CONTAINER_E2E_IMAGE_ARCHIVE"] = str(
             inputs.workload_image_archive
         )
+        if inputs.backend == "cloud-hypervisor":
+            environment["EXECUTION_ISOLATION_E2E_IMAGE_ARCHIVE"] = str(
+                inputs.workload_image_archive
+            )
     path_prepend = [
         "${REPO}/local/kata/bin",
         str(inputs.hypervisor.parent),
@@ -595,6 +665,7 @@ def default_tool_inputs(repo: Path) -> tuple[Path, ...]:
         repo / "deploy/virtual-container/host/v2_artifacts.py",
         repo
         / "tests/v2/regression/virtual_container/prepare-guest-bundle.sh",
+        repo / "tests/v2/regression/execution_isolation",
     )
     files: list[Path] = []
     for root in roots:

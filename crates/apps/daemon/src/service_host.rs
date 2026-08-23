@@ -14,6 +14,7 @@ use model_core::ids::{ProfileName, RequestId};
 use model_core::process::ProcessIdentity;
 use plugin_system::PluginInstanceStatus;
 use process_identity::ProcessIdentityReader;
+use sandbox_alert_store::SandboxAlertWritePort;
 use sandbox_evidence_store::SandboxEvidenceWritePort;
 use uds_control_server::{ControlService, PeerCredentials};
 
@@ -113,10 +114,13 @@ pub struct DaemonServiceHost<A> {
 }
 
 impl<A> DaemonServiceHost<A> {
-    pub fn new(wiring: DaemonRuntimeWiring<A>) -> Self {
+    pub fn new(
+        wiring: DaemonRuntimeWiring<A>,
+        sandbox_alerts: Option<std::sync::Arc<dyn SandboxAlertWritePort>>,
+    ) -> Self {
         Self {
             wiring,
-            sandbox_plugins: SandboxPluginManager::new(),
+            sandbox_plugins: SandboxPluginManager::new(sandbox_alerts),
             pending_launch_admissions: BTreeMap::new(),
         }
     }
@@ -155,12 +159,22 @@ impl<A> DaemonServiceHost<A> {
     where
         A: AttachService,
     {
-        let sandbox_result = self.sandbox_plugins.shutdown();
-        let attach_result = self
-            .wiring
-            .attach_service
-            .shutdown(&mut self.wiring.trace_runtime);
+        let sandbox_result = self.shutdown_sandbox_plugins();
+        let attach_result = self.shutdown_runtime();
         sandbox_result.and(attach_result)
+    }
+
+    pub(crate) fn shutdown_sandbox_plugins(&mut self) -> Result<(), ControlError> {
+        self.sandbox_plugins.shutdown()
+    }
+
+    pub(crate) fn shutdown_runtime(&mut self) -> Result<(), ControlError>
+    where
+        A: AttachService,
+    {
+        self.wiring
+            .attach_service
+            .shutdown(&mut self.wiring.trace_runtime)
     }
 
     pub fn ebpf_debug_snapshot(

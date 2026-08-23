@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use clap::{Args as ClapArgs, Parser, Subcommand};
-use sb::{SandboxAgentBootstrap, SbConfig, SbConfigOverrides};
+use sb::{SandboxAgentBootstrap, SbConfig, SbConfigOverrides, SbOutput};
 
 static STOP: AtomicBool = AtomicBool::new(false);
 
@@ -49,7 +49,7 @@ extern "C" fn request_stop(_: libc::c_int) {
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("actrail-sb: {error}");
+        SbOutput::startup_error(&*error);
         std::process::exit(1);
     }
 }
@@ -73,12 +73,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         libc::signal(libc::SIGTERM, request_stop as libc::sighandler_t);
     }
     let mut process = SandboxAgentBootstrap::start(config)?;
-    println!(
-        "actrail-sb ready sb_id={}",
-        process.agent().snapshot().sb_id
-    );
+    process.report_ready();
     while !STOP.load(Ordering::Acquire) {
         std::thread::sleep(Duration::from_millis(100));
+        process.report_diagnostics_if_due();
     }
     process.shutdown()?;
     Ok(())
@@ -100,7 +98,7 @@ impl InitArgs {
             overrides = overrides.with_instance_lock_path(path);
         }
         SbConfig::write_default(&self.output, overrides, self.force)?;
-        println!("wrote actrail-sb config {}", self.output.display());
+        SbOutput::config_written(&self.output);
         Ok(())
     }
 }

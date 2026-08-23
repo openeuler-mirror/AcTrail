@@ -10,8 +10,8 @@ DESTDIR defaults to /usr/local/bin.
 
 The script installs/checks build dependencies, asks Cargo to refresh the
 release binaries and TLS sync preload runtimes, then copies those artifacts
-and the installed-but-disabled otel-jsonl, otel-http, file-leakage,
-activity-anomaly, tool-consecutive-failure-alert, dynamic file-policy,
+and the installed-but-disabled otel-jsonl, otel-http, sandbox-resource-alert, file-leakage,
+activity-anomaly, alert-forwarding, tool-consecutive-failure-alert, dynamic file-policy,
 dynamic command-policy, and dynamic network-policy plugins.
 
 Environment:
@@ -21,6 +21,9 @@ Environment:
                 Plugin installation root. Defaults to ~/.actrail/plugins for
                 the user running this script. The same absolute directory must
                 be configured as plugins.discovery.directory.
+  ACTRAIL_CONFIG_DIR
+                System configuration root for the alert proxy and builtin
+                forwarding policy. Defaults to /etc/actrail.
   CARGO_TARGET_DIR
                 Shared Cargo output directory for binaries, TLS runtimes, and
                 WASM plugins. Defaults to target.
@@ -42,14 +45,25 @@ fi
 dest_dir="${1:-/usr/local/bin}"
 plugin_home="${HOME:?HOME is required to resolve the default plugin directory}"
 plugin_root="${ACTRAIL_PLUGIN_DIR:-$plugin_home/.actrail/plugins}"
+config_root="${ACTRAIL_CONFIG_DIR:-/etc/actrail}"
 [[ "$plugin_root" = /* ]] || {
   echo "ACTRAIL_PLUGIN_DIR must be an absolute path: $plugin_root" >&2
+  exit 2
+}
+[[ "$config_root" = /* ]] || {
+  echo "ACTRAIL_CONFIG_DIR must be an absolute path: $config_root" >&2
   exit 2
 }
 otel_jsonl_install_dir="$plugin_root/otel-jsonl"
 otel_jsonl_source_dir="$script_dir/../examples/plugins/builtin/otel-jsonl"
 otel_http_install_dir="$plugin_root/otel-http"
 otel_http_source_dir="$script_dir/../examples/plugins/builtin/otel-http"
+sandbox_resource_alert_install_dir="$plugin_root/sandbox-resource-alert"
+sandbox_resource_alert_source_dir="$script_dir/../examples/plugins/builtin/sandbox-resource-alert"
+alert_forwarding_install_dir="$plugin_root/alert-forwarding"
+alert_forwarding_source_dir="$script_dir/../examples/plugins/builtin/alert-forwarding"
+alert_forwarding_config_dir="$config_root/plugins/alert-forwarding"
+alert_proxy_config_source="$script_dir/../deploy/alert-proxy/actraild-alert-proxy.toml"
 file_leakage_install_dir="$plugin_root/file-leakage"
 file_leakage_source_dir="$script_dir/../examples/plugins/wit-component/file-leakage"
 activity_anomaly_install_dir="$plugin_root/activity-anomaly"
@@ -82,6 +96,9 @@ binaries=(
   actraild
   actrailctl
   actrailcluster
+  actrail-sb
+  actrail-vsock-gateway
+  actraild-alert-proxy
   actrailviewer
   actrailweb
 )
@@ -183,10 +200,14 @@ run cargo build --release --target wasm32-wasip2 \
 
 mapfile -t binary_install < <(install_prefix "$dest_dir")
 mapfile -t plugin_install < <(install_prefix "$plugin_root")
+mapfile -t config_install < <(install_prefix "$config_root")
 
 run "${binary_install[@]}" install -d "$dest_dir"
 run "${plugin_install[@]}" install -d "$otel_jsonl_install_dir"
 run "${plugin_install[@]}" install -d "$otel_http_install_dir"
+run "${plugin_install[@]}" install -d "$sandbox_resource_alert_install_dir"
+run "${plugin_install[@]}" install -d "$alert_forwarding_install_dir"
+run "${config_install[@]}" install -d "$alert_forwarding_config_dir"
 run "${plugin_install[@]}" install -d "$file_leakage_install_dir"
 run "${plugin_install[@]}" install -d "$activity_anomaly_install_dir"
 run "${plugin_install[@]}" install -d "$file_policy_install_dir"
@@ -203,6 +224,16 @@ for binary in "${binaries[@]}"; do
   fi
   run "${binary_install[@]}" install -m 0755 "$source_path" "$dest_dir/$binary"
 done
+
+if [[ ! -e "$config_root/actraild-alert-proxy.toml" ]]; then
+  run "${config_install[@]}" install -m 0640 \
+    "$alert_proxy_config_source" "$config_root/actraild-alert-proxy.toml"
+fi
+if [[ ! -e "$alert_forwarding_config_dir/alert-forwarding.config.json" ]]; then
+  run "${config_install[@]}" install -m 0640 \
+    "$alert_forwarding_source_dir/alert-forwarding.config.json" \
+    "$alert_forwarding_config_dir/alert-forwarding.config.json"
+fi
 
 for runtime in "${runtimes[@]}"; do
   source_path="$release_dir/$runtime"
@@ -228,6 +259,22 @@ for asset in \
   otel-http.config.v1.schema.json; do
   run "${plugin_install[@]}" install -m 0644 \
     "$otel_http_source_dir/$asset" "$otel_http_install_dir/$asset"
+done
+for asset in \
+  sandbox-resource-alert.plugin.toml \
+  sandbox-resource-alert.config.json \
+  sandbox-resource-alert.config.v1.schema.json; do
+  run "${plugin_install[@]}" install -m 0644 \
+    "$sandbox_resource_alert_source_dir/$asset" \
+    "$sandbox_resource_alert_install_dir/$asset"
+done
+for asset in \
+  alert-forwarding.plugin.toml \
+  alert-forwarding.config.json \
+  alert-forwarding.config.v1.schema.json; do
+  run "${plugin_install[@]}" install -m 0644 \
+    "$alert_forwarding_source_dir/$asset" \
+    "$alert_forwarding_install_dir/$asset"
 done
 for asset in \
   file-leakage.plugin.toml \

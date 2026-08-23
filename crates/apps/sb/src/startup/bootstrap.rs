@@ -7,12 +7,14 @@ use sandbox_vsock_transport::VsockClient;
 
 use super::config::ValidatedSbConfig;
 use super::instance_lock::InstanceLock;
+use super::output::{CollectorDiagnostics, SbOutput};
 use crate::SbConfig;
 
 pub struct SandboxAgentBootstrap;
 
 pub struct SandboxAgentProcess {
     agent: SandboxAgent,
+    output: SbOutput,
     _instance_lock: InstanceLock,
 }
 
@@ -23,6 +25,7 @@ impl SandboxAgentBootstrap {
     }
 
     fn start_validated(config: ValidatedSbConfig) -> io::Result<SandboxAgentProcess> {
+        let (output, collector_diagnostics) = SbOutput::runtime(config.diagnostics_interval)?;
         let instance_lock = InstanceLock::acquire(&config.instance_lock_path)?;
         let io_collector = SandboxProcessIoCollector::start(config.linux)
             .map_err(|error| io::Error::other(error.to_string()))?;
@@ -32,12 +35,16 @@ impl SandboxAgentBootstrap {
         let transport: Arc<dyn SandboxTransport> = Arc::new(VsockTransport { vsock_client });
         let agent = SandboxAgent::start(
             config.runtime,
-            Box::new(IoSource { io_collector }),
+            Box::new(IoSource {
+                io_collector,
+                diagnostics: collector_diagnostics,
+            }),
             Box::new(ResourceSource { resource_reader }),
             transport,
         )?;
         Ok(SandboxAgentProcess {
             agent,
+            output,
             _instance_lock: instance_lock,
         })
     }
@@ -48,6 +55,14 @@ impl SandboxAgentProcess {
         &self.agent
     }
 
+    pub fn report_ready(&self) {
+        self.output.ready(&self.agent);
+    }
+
+    pub fn report_diagnostics_if_due(&mut self) {
+        self.output.report_if_due(&self.agent);
+    }
+
     pub fn shutdown(&mut self) -> io::Result<()> {
         self.agent.shutdown()
     }
@@ -55,24 +70,14 @@ impl SandboxAgentProcess {
 
 struct IoSource {
     io_collector: SandboxProcessIoCollector,
+    diagnostics: Option<Arc<CollectorDiagnostics>>,
 }
 
 impl ProcessIoSource for IoSource {
     fn poll(&mut self) -> io::Result<Vec<sandbox_observation::ProcessIoCounters>> {
         let cycle = self.io_collector.poll();
-        for failure in cycle.failures {
-            eprintln!("actrail-sb collector: {failure}");
-        }
-        if cycle.kernel_diagnostics.pending_io_drops > 0
-            || cycle.kernel_diagnostics.aggregate_drops > 0
-            || cycle.kernel_diagnostics.descendant_tracking_drops > 0
-        {
-            eprintln!(
-                "actrail-sb collector drops pending={} aggregate={} descendants={}",
-                cycle.kernel_diagnostics.pending_io_drops,
-                cycle.kernel_diagnostics.aggregate_drops,
-                cycle.kernel_diagnostics.descendant_tracking_drops
-            );
+        if let Some(diagnostics) = &self.diagnostics {
+            diagnostics.record(cycle.failures.len(), cycle.kernel_diagnostics);
         }
         Ok(cycle.process_io)
     }

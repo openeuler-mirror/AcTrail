@@ -50,6 +50,20 @@ impl SandboxPluginRouteSink {
             )),
         }
     }
+
+    fn finish_branches(
+        plugin: Option<SinkDeliveryError>,
+        archive: Result<(), SinkDeliveryError>,
+    ) -> Result<(), SinkDeliveryError> {
+        match (plugin, archive.err()) {
+            (None, None) => Ok(()),
+            (Some(error), None) | (None, Some(error)) => Err(error),
+            (Some(plugin), Some(archive)) => Err(SinkDeliveryError::new(
+                "route_delivery",
+                format!("plugin branch failed: {plugin}; archive branch failed: {archive}"),
+            )),
+        }
+    }
 }
 
 impl SandboxObservationSink for SandboxPluginRouteSink {
@@ -106,19 +120,19 @@ impl SandboxObservationSink for SandboxPluginRouteSink {
             .publisher
             .publish(publish, plan)
             .map_err(|error| SinkDeliveryError::new("plugin_publish", format!("{error:?}")))?;
-        if report
+        let plugin_failure = report
             .deliveries
             .iter()
             .any(|delivery| !matches!(delivery.outcome, SandboxDeliveryOutcome::Accepted { .. }))
-        {
-            return Err(SinkDeliveryError::new(
-                "plugin_backpressure",
-                "one or more sandbox plugin queues rejected the batch",
-            ));
-        }
-        if let Some(indices) = unmatched {
-            self.archive_unmatched(evidence_source, sequence, generation, observations, indices)?;
-        }
-        Ok(())
+            .then(|| {
+                SinkDeliveryError::new(
+                    "plugin_backpressure",
+                    "one or more sandbox plugin queues rejected the batch",
+                )
+            });
+        let archive = unmatched.map_or(Ok(()), |indices| {
+            self.archive_unmatched(evidence_source, sequence, generation, observations, indices)
+        });
+        Self::finish_branches(plugin_failure, archive)
     }
 }

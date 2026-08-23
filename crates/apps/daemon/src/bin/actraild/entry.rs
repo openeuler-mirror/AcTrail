@@ -168,6 +168,8 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
             config.resource_metrics.clone(),
             config.storage_retention.clone(),
             config.plugin_alert_runtime,
+            config.alert_forwarding.clone(),
+            config.sandbox_alerts.clone(),
             config.trace_finalization,
             config
                 .shutdown_wait_ms
@@ -194,6 +196,8 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
             config.resource_metrics.clone(),
             config.storage_retention.clone(),
             config.plugin_alert_runtime,
+            config.alert_forwarding.clone(),
+            config.sandbox_alerts.clone(),
             config.trace_finalization,
             config
                 .shutdown_wait_ms

@@ -13,6 +13,7 @@ pub struct UpstreamServerStatus {
     pub connection_spawn_failures: u64,
     pub connection_failures: u64,
     pub connection_panics: u64,
+    pub sink_delivery_failed_batches: u64,
     pub gateway_ingest: GatewayIngestStatus,
 }
 
@@ -24,6 +25,7 @@ pub(crate) struct ServerMetrics {
     connection_spawn_failures: AtomicU64,
     connection_failures: AtomicU64,
     connection_panics: AtomicU64,
+    sink_delivery_failed_batches: AtomicU64,
 }
 
 impl ServerMetrics {
@@ -36,6 +38,7 @@ impl ServerMetrics {
             connection_spawn_failures: AtomicU64::new(0),
             connection_failures: AtomicU64::new(0),
             connection_panics: AtomicU64::new(0),
+            sink_delivery_failed_batches: AtomicU64::new(0),
         }
     }
 
@@ -68,6 +71,11 @@ impl ServerMetrics {
         self.connection_panics.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub(crate) fn sink_delivery_failed_batch(&self) {
+        self.sink_delivery_failed_batches
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     pub(crate) fn snapshot(
         &self,
         local_addr: SocketAddr,
@@ -82,6 +90,7 @@ impl ServerMetrics {
             connection_spawn_failures: self.connection_spawn_failures.load(Ordering::Relaxed),
             connection_failures: self.connection_failures.load(Ordering::Relaxed),
             connection_panics: self.connection_panics.load(Ordering::Relaxed),
+            sink_delivery_failed_batches: self.sink_delivery_failed_batches.load(Ordering::Relaxed),
             gateway_ingest,
         }
     }

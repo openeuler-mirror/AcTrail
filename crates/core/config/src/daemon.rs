@@ -97,12 +97,13 @@ pub use logging::{
 };
 pub use network::{NetworkControlConfig, NetworkControlSeccompSyscall};
 pub use operator::{
-    DEFAULT_ACTIVE_TRACE_MAX, DEFAULT_CONTROL_PENDING_CONNECTION_MAX, DEFAULT_OPERATOR_CONFIG_PATH,
-    DEFAULT_PLUGIN_ALERT_DRAIN_TIMEOUT_MS, DEFAULT_PLUGIN_ALERT_QUEUE_CAPACITY,
-    DEFAULT_PLUGIN_ALERT_WRITES_PER_CYCLE, DEFAULT_PLUGIN_DISCOVERY_DIRECTORY,
-    DEFAULT_PLUGIN_DISCOVERY_MANIFEST_MAX_BYTES, DEFAULT_PLUGIN_DISCOVERY_MAX_PACKAGES,
-    HandObservationConfig, OperatorConfig, OperatorConfigInitStatus, PluginAlertRuntimeConfig,
-    PluginDiscoveryConfig, SandboxEvidenceConfig, SandboxEvidenceSynchronousConfig,
+    AlertForwardingConfig, DEFAULT_ACTIVE_TRACE_MAX, DEFAULT_CONTROL_PENDING_CONNECTION_MAX,
+    DEFAULT_OPERATOR_CONFIG_PATH, DEFAULT_PLUGIN_ALERT_DRAIN_TIMEOUT_MS,
+    DEFAULT_PLUGIN_ALERT_QUEUE_CAPACITY, DEFAULT_PLUGIN_ALERT_WRITES_PER_CYCLE,
+    DEFAULT_PLUGIN_DISCOVERY_DIRECTORY, DEFAULT_PLUGIN_DISCOVERY_MANIFEST_MAX_BYTES,
+    DEFAULT_PLUGIN_DISCOVERY_MAX_PACKAGES, HandObservationConfig, OperatorConfig,
+    OperatorConfigInitStatus, PluginAlertRuntimeConfig, PluginDiscoveryConfig, SandboxAlertsConfig,
+    SandboxAlertsSynchronousConfig, SandboxEvidenceConfig, SandboxEvidenceSynchronousConfig,
     StartupPluginFailurePolicy, StartupPluginLoadConfig, StartupPluginsConfig,
     launch_seccomp_requirements,
 };

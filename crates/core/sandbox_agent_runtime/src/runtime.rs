@@ -60,6 +60,7 @@ impl Drop for WorkerSet {
 }
 
 struct AgentMetrics {
+    enabled: bool,
     io_observations: AtomicU64,
     resource_observations: AtomicU64,
     source_failures: AtomicU64,
@@ -67,12 +68,33 @@ struct AgentMetrics {
 }
 
 impl AgentMetrics {
-    fn new() -> Self {
+    fn new(enabled: bool) -> Self {
         Self {
+            enabled,
             io_observations: AtomicU64::new(0),
             resource_observations: AtomicU64::new(0),
             source_failures: AtomicU64::new(0),
             dropped_observations: AtomicU64::new(0),
+        }
+    }
+
+    fn record_observations(&self, io_source: bool, accepted: u64, dropped: u64) {
+        if !self.enabled {
+            return;
+        }
+        if io_source {
+            self.io_observations.fetch_add(accepted, Ordering::Relaxed);
+        } else {
+            self.resource_observations
+                .fetch_add(accepted, Ordering::Relaxed);
+        }
+        self.dropped_observations
+            .fetch_add(dropped, Ordering::Relaxed);
+    }
+
+    fn record_source_failure(&self) {
+        if self.enabled {
+            self.source_failures.fetch_add(1, Ordering::Relaxed);
         }
     }
 }
@@ -88,8 +110,8 @@ impl SandboxAgent {
         let (initial_connection, sb_id) = ObservationSender::register(&*transport)?;
         let (sender, receiver) = mpsc::sync_channel(config.observation_queue_capacity);
         let stop = Arc::new(AtomicBool::new(false));
-        let metrics = Arc::new(AgentMetrics::new());
-        let sender_metrics = Arc::new(SenderMetrics::new(sb_id));
+        let metrics = Arc::new(AgentMetrics::new(config.metrics_enabled));
+        let sender_metrics = Arc::new(SenderMetrics::new(sb_id, config.metrics_enabled));
         let mut workers = WorkerSet::new(Arc::clone(&stop));
 
         workers.push(spawn_source_thread(
@@ -153,8 +175,8 @@ impl SandboxAgent {
                 .load(Ordering::Relaxed),
             source_failures: self.metrics.source_failures.load(Ordering::Relaxed),
             dropped_observations: self.metrics.dropped_observations.load(Ordering::Relaxed),
-            sent_batches: self.sender_metrics.sent_batches.load(Ordering::Relaxed),
-            reconnects: self.sender_metrics.reconnects.load(Ordering::Relaxed),
+            sent_batches: self.sender_metrics.sent_batches(),
+            reconnects: self.sender_metrics.reconnects(),
         }
     }
 
@@ -190,26 +212,24 @@ where
             while !stop.load(Ordering::Acquire) {
                 match poll() {
                     Ok(values) => {
+                        let mut accepted = 0_u64;
+                        let mut dropped = 0_u64;
                         for value in values {
                             match sender.try_send(value) {
-                                Ok(()) => {
-                                    if io_source {
-                                        metrics.io_observations.fetch_add(1, Ordering::Relaxed);
-                                    } else {
-                                        metrics
-                                            .resource_observations
-                                            .fetch_add(1, Ordering::Relaxed);
-                                    }
-                                }
+                                Ok(()) => accepted += 1,
                                 Err(TrySendError::Full(_)) => {
-                                    metrics.dropped_observations.fetch_add(1, Ordering::Relaxed);
+                                    dropped += 1;
                                 }
-                                Err(TrySendError::Disconnected(_)) => return,
+                                Err(TrySendError::Disconnected(_)) => {
+                                    metrics.record_observations(io_source, accepted, dropped);
+                                    return;
+                                }
                             }
                         }
+                        metrics.record_observations(io_source, accepted, dropped);
                     }
                     Err(_) => {
-                        metrics.source_failures.fetch_add(1, Ordering::Relaxed);
+                        metrics.record_source_failure();
                     }
                 }
                 thread::park_timeout(interval);

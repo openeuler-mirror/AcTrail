@@ -270,6 +270,24 @@ impl PluginManifest {
                     );
                 }
             }
+            PluginPurpose::AlertConsumer => {
+                if self.role.observation_consumer.is_some()
+                    || self.role.sandbox_observation_consumer.is_some()
+                    || self.role.control_decider.is_some()
+                {
+                    return Err(
+                        "alert-consumer plugins cannot declare unrelated role sections".to_string(),
+                    );
+                }
+                if self.runtime_kind() != PluginRuntimeKind::Builtin {
+                    return Err("alert-consumer plugins must use builtin runtime".to_string());
+                }
+                if !self.capabilities().is_empty() {
+                    return Err(
+                        "alert-consumer plugins must not request host capabilities".to_string()
+                    );
+                }
+            }
             PluginPurpose::ControlDecider => {
                 if self.role.observation_consumer.is_some()
                     || self.role.sandbox_observation_consumer.is_some()

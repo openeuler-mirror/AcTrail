@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub enum PluginPurpose {
     ObservationConsumer,
     SandboxObservationConsumer,
+    AlertConsumer,
     ControlDecider,
     LlmCodec,
 }
@@ -14,6 +15,7 @@ impl PluginPurpose {
         match self {
             Self::ObservationConsumer => "observation-consumer",
             Self::SandboxObservationConsumer => "sandbox-observation-consumer",
+            Self::AlertConsumer => "alert-consumer",
             Self::ControlDecider => "control-decider",
             Self::LlmCodec => "llm-codec",
         }
@@ -23,6 +25,7 @@ impl PluginPurpose {
         match value {
             "observation-consumer" => Ok(Self::ObservationConsumer),
             "sandbox-observation-consumer" => Ok(Self::SandboxObservationConsumer),
+            "alert-consumer" => Ok(Self::AlertConsumer),
             "control-decider" => Ok(Self::ControlDecider),
             "llm-codec" => Ok(Self::LlmCodec),
             _ => Err(format!("unknown plugin role {value}")),

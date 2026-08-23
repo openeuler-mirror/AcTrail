@@ -17,10 +17,13 @@ poll_interval_ms = 1000
 host_cid = 2
 port = 43182
 io_timeout_ms = 1000
-heartbeat_interval_ms = 5000
+max_silence_interval_ms = 5000
 reconnect_interval_ms = 1000
 
 [runtime]
 observation_queue_capacity = 1024
 batch_max_observations = 256
 worker_thread_stack_bytes = 524288
+
+[diagnostics]
+interval_ms = 0

@@ -223,6 +223,7 @@ if [[ "$ACTRAIL_BUILD" == "1" ]]; then
     cargo build "${CARGO_PROFILE_ARGS[@]}" \
     -p daemon \
     -p ctl \
+    -p sb \
     -p view \
     -p tls_payload_probe_sync
 fi
@@ -230,6 +231,7 @@ fi
 for artifact in \
   "$TARGET_DIR/actraild" \
   "$TARGET_DIR/actrailctl" \
+  "$TARGET_DIR/actrail-sb" \
   "$TARGET_DIR/actrailviewer" \
   "$TARGET_DIR/libactrail_tls_payload_probe_sync.so"; do
   [[ -f "$artifact" ]] || fail "build artifact missing: $artifact"
@@ -285,6 +287,7 @@ install -d \
   "$BUNDLE_DIR/tests/guest"
 install -m 0755 "$TARGET_DIR/actraild" "$BUNDLE_DIR/actraild"
 install -m 0755 "$TARGET_DIR/actrailctl" "$BUNDLE_DIR/actrailctl"
+install -m 0755 "$TARGET_DIR/actrail-sb" "$BUNDLE_DIR/actrail-sb"
 install -m 0755 "$TARGET_DIR/actrailviewer" "$BUNDLE_DIR/actrailviewer"
 install -m 0755 "$TARGET_DIR/libactrail_tls_payload_probe_sync.so" \
   "$BUNDLE_DIR/libactrail_tls_payload_probe_sync.so"
@@ -292,6 +295,7 @@ install -m 0755 "$TARGET_DIR/libactrail_tls_payload_probe_sync.so" \
 ELF_INPUTS=(
   "$BUNDLE_DIR/actraild"
   "$BUNDLE_DIR/actrailctl"
+  "$BUNDLE_DIR/actrail-sb"
   "$BUNDLE_DIR/actrailviewer"
   "$BUNDLE_DIR/libactrail_tls_payload_probe_sync.so"
 )

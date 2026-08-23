@@ -46,11 +46,17 @@ from tests.v2.regression.network_policy_xiaoo.run_e2e import (  # noqa: E402
 from tests.v2.regression.activity_anomaly.run_e2e import (  # noqa: E402
     TEST_DEFINITION as ACTIVITY_ANOMALY,
 )
+from tests.v2.regression.alert_forwarding.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as ALERT_FORWARDING,
+)
 from tests.v2.regression.container_agent_xiaoo.run_e2e import (  # noqa: E402
     TEST_DEFINITION as CONTAINER_AGENT_XIAOO,
 )
 from tests.v2.regression.container_auto.run_e2e import (  # noqa: E402
     TEST_DEFINITION as CONTAINER_AUTO,
+)
+from tests.v2.regression.execution_isolation.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as EXECUTION_ISOLATION,
 )
 from tests.v2.regression.otel_jsonl_action_filter.run_e2e import (  # noqa: E402
     TEST_DEFINITION as OTEL_JSONL_ACTION_FILTER,
@@ -89,6 +95,7 @@ TESTS = [
     NETWORK_POLICY_XIAOO,
     VIRTUAL_CONTAINER,
     VIRTUAL_CONTAINER_XIAOO_CONCURRENCY,
+    EXECUTION_ISOLATION,
     CONTAINER_AUTO,
     CONTAINER_AGENT_XIAOO,
     SEMANTIC_ACTION_BOUNDARIES,
@@ -96,6 +103,7 @@ TESTS = [
     OTEL_HTTP,
     PROJECT_SUBAGENT_TRAJECTORY,
     ACTIVITY_ANOMALY,
+    ALERT_FORWARDING,
     TOOL_CONSECUTIVE_FAILURE_ALERT,
     TOOL_FREQUENT_FAILURE_ALERT,
 ]

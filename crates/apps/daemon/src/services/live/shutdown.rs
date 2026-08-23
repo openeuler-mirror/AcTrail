@@ -132,6 +132,7 @@ impl StorageAttachService {
         if let Err(error) = alert_result {
             failures.push(format!("alert drain: {}: {}", error.code, error.message));
         }
+        self.alert_forwarding.shutdown();
         if failures.is_empty() {
             Ok(())
         } else {

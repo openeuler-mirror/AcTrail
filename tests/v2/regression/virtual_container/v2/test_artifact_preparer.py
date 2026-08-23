@@ -327,10 +327,14 @@ def _inputs(root: Path, *, backend: str = "stratovirt") -> PreparationInputs:
     for name in (
         "actraild",
         "actrailctl",
+        "actrail-sb",
+        "actrail-vsock-gateway",
         "actrailviewer",
         "libactrail_tls_payload_probe_sync.so",
     ):
         (bin_dir / name).write_bytes(name.encode())
+        if name in {"actrail-sb", "actrail-vsock-gateway"}:
+            (bin_dir / name).chmod(0o755)
 
     sources = root / "sources"
     sources.mkdir()
@@ -399,6 +403,7 @@ class _FakeExecutor:
             for name in (
                 "actraild",
                 "actrailctl",
+                "actrail-sb",
                 "actrailviewer",
                 "libactrail_tls_payload_probe_sync.so",
             ):

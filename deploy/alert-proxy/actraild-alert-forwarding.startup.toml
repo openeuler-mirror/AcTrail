@@ -1,0 +1,18 @@
+[alert_forwarding]
+proxy_executable = "/usr/local/bin/actraild-alert-proxy"
+proxy_config_path = "/etc/actrail/actraild-alert-proxy.toml"
+plugin_config_path = "/etc/actrail/plugins/alert-forwarding/alert-forwarding.config.json"
+socket_path = "/run/actrail/alert-proxy.sock"
+queue_capacity = 1024
+read_timeout_ms = 1000
+write_timeout_ms = 1000
+heartbeat_interval_ms = 5000
+heartbeat_ack_timeout_ms = 2000
+startup_timeout_ms = 5000
+startup_poll_interval_ms = 20
+max_frame_bytes = 262144
+max_trace_id_bytes = 128
+max_category_bytes = 128
+max_description_bytes = 4096
+max_extras_bytes = 131072
+link_thread_stack_bytes = 524288

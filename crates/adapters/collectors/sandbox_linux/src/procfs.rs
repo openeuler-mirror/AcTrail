@@ -1,6 +1,6 @@
 //! Strict procfs parsing for process roots and Guest resources.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -105,40 +105,44 @@ impl ProcfsReader {
                 Err(_) => {}
             }
         }
-        let roots = processes
+        let mut roots = processes
             .values()
             .filter(|process| names.contains(&process.marker.executable_name))
-            .map(|process| (process.marker.pid, process.marker))
-            .collect::<HashMap<_, _>>();
-        let mut members = processes
-            .keys()
-            .filter_map(|pid| {
-                Self::nearest_root(*pid, &processes, &roots)
-                    .map(|root| ProcessLineageMember { pid: *pid, root })
-            })
+            .map(|process| process.marker)
+            .collect::<Vec<_>>();
+        roots.sort_unstable_by_key(|root| (root.pid, root.start_time_ticks));
+        let mut children = HashMap::<u32, Vec<u32>>::new();
+        for process in processes.values() {
+            children
+                .entry(process.parent_pid)
+                .or_default()
+                .push(process.marker.pid);
+        }
+        let mut assigned = HashMap::with_capacity(processes.len());
+        let mut pending = VecDeque::with_capacity(processes.len());
+        for root in &roots {
+            assigned.insert(root.pid, *root);
+            pending.push_back(root.pid);
+        }
+        while let Some(parent_pid) = pending.pop_front() {
+            let root = assigned[&parent_pid];
+            for child_pid in children.get(&parent_pid).into_iter().flatten() {
+                if let std::collections::hash_map::Entry::Vacant(entry) = assigned.entry(*child_pid)
+                {
+                    entry.insert(root);
+                    pending.push_back(*child_pid);
+                }
+            }
+        }
+        let mut members = assigned
+            .into_iter()
+            .map(|(pid, root)| ProcessLineageMember { pid, root })
             .collect::<Vec<_>>();
         members.sort_unstable_by_key(|member| member.pid);
         Ok(ProcessLineageSnapshot {
             root_count: roots.len(),
             members,
         })
-    }
-
-    fn nearest_root(
-        start_pid: u32,
-        processes: &HashMap<u32, ProcessSnapshot>,
-        roots: &HashMap<u32, ProcessMarker>,
-    ) -> Option<ProcessMarker> {
-        let mut current = start_pid;
-        let mut remaining = processes.len();
-        while current != 0 && remaining > 0 {
-            if let Some(root) = roots.get(&current) {
-                return Some(*root);
-            }
-            current = processes.get(&current)?.parent_pid;
-            remaining -= 1;
-        }
-        None
     }
 
     pub(crate) fn cpu_snapshot(&self) -> Result<CpuSnapshot, SandboxLinuxError> {
@@ -173,7 +177,9 @@ impl ProcfsReader {
                 ),
             ));
         }
-        let total_ticks = ticks.iter().try_fold(0_u64, |total, value| {
+        // guest and guest_nice are already included in user and nice by Linux;
+        // only the first eight counters contribute to the non-duplicated total.
+        let total_ticks = ticks.iter().take(8).try_fold(0_u64, |total, value| {
             total.checked_add(*value).ok_or_else(|| {
                 SandboxLinuxError::new("read_cpu", "aggregate CPU tick counter overflow")
             })

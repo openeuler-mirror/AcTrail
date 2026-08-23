@@ -2,10 +2,11 @@
 
 use collector_capability::CollectorDescriptor;
 use config_core::daemon::{
-    AgentInvocationConfig, ApplicationProtocolConfig, CommandControlConfig, DiagnosticLogLevel,
-    EbpfCollectorConfig, EnforcementConfig, FileObservationConfig, NetworkControlConfig,
-    PayloadConfig, PluginAlertRuntimeConfig, ProcessSeccompConfig, ResourceMetricsConfig,
-    SeccompNotifyConfig, SemanticRetentionConfig, StorageRetentionConfig, TraceFinalizationConfig,
+    AgentInvocationConfig, AlertForwardingConfig, ApplicationProtocolConfig, CommandControlConfig,
+    DiagnosticLogLevel, EbpfCollectorConfig, EnforcementConfig, FileObservationConfig,
+    NetworkControlConfig, PayloadConfig, PluginAlertRuntimeConfig, ProcessSeccompConfig,
+    ResourceMetricsConfig, SeccompNotifyConfig, SemanticRetentionConfig, StorageRetentionConfig,
+    TraceFinalizationConfig,
 };
 use config_core::provider_rules::ProviderRuleSetConfig;
 use control_contract::reply::ControlError;
@@ -22,6 +23,7 @@ use storage_factory::{StorageConfig, open_storage_backend};
 use crate::profiles::DaemonProfileRegistry;
 use crate::runtime_wiring::DaemonRuntimeWiring;
 
+use super::alert_forwarding::AlertForwardingService;
 use super::application_protocol::COLLECTOR_NAME as APPLICATION_PROTOCOL_COLLECTOR_NAME;
 use super::attach::StorageAttachService;
 use super::enforcement::{
@@ -51,6 +53,7 @@ pub(crate) fn build_runtime_wiring_with_storage_retention(
     resource_metrics: ResourceMetricsConfig,
     storage_retention: StorageRetentionConfig,
     plugin_alert_runtime: PluginAlertRuntimeConfig,
+    alert_forwarding_config: AlertForwardingConfig,
     trace_finalization: TraceFinalizationConfig,
     shutdown_runtime_timeout_ms: u64,
     workload_diagnostics: WorkloadDiagnostics,
@@ -74,6 +77,7 @@ pub(crate) fn build_runtime_wiring_with_storage_retention(
         resource_metrics,
         storage_retention,
         plugin_alert_runtime,
+        alert_forwarding_config,
         trace_finalization,
         shutdown_runtime_timeout_ms,
         workload_diagnostics,
@@ -100,6 +104,7 @@ pub(crate) fn build_runtime_wiring_with_provider_rule_set_and_storage_retention(
     resource_metrics: ResourceMetricsConfig,
     storage_retention: StorageRetentionConfig,
     plugin_alert_runtime: PluginAlertRuntimeConfig,
+    alert_forwarding_config: AlertForwardingConfig,
     trace_finalization: TraceFinalizationConfig,
     shutdown_runtime_timeout_ms: u64,
     workload_diagnostics: WorkloadDiagnostics,
@@ -127,6 +132,7 @@ pub(crate) fn build_runtime_wiring_with_provider_rule_set_and_storage_retention(
         resource_metrics,
         storage_retention,
         plugin_alert_runtime,
+        alert_forwarding_config,
         trace_finalization,
         shutdown_runtime_timeout_ms,
         workload_diagnostics,
@@ -153,6 +159,7 @@ fn build_runtime_wiring_with_attach_service(
     resource_metrics: ResourceMetricsConfig,
     storage_retention: StorageRetentionConfig,
     plugin_alert_runtime: PluginAlertRuntimeConfig,
+    alert_forwarding_config: AlertForwardingConfig,
     trace_finalization: TraceFinalizationConfig,
     shutdown_runtime_timeout_ms: u64,
     workload_diagnostics: WorkloadDiagnostics,
@@ -177,6 +184,8 @@ fn build_runtime_wiring_with_attach_service(
         .map_err(|error| ControlError::new(error.stage, error.message))?;
     let enforcement = FanotifyEnforcementService::new(enforcement_config.clone())?;
     let export_runtime = ExportRuntime::new(Vec::new());
+    let alert_forwarding = AlertForwardingService::start(alert_forwarding_config)?;
+    let sandbox_alert_forwarding = alert_forwarding.plugin();
 
     let mut attach_service = match provider_classifier {
         Some(provider_classifier) => StorageAttachService::new_with_provider_classifier(
@@ -194,6 +203,7 @@ fn build_runtime_wiring_with_attach_service(
             resource_metrics.clone(),
             storage_retention.clone(),
             plugin_alert_runtime,
+            alert_forwarding.clone(),
             trace_finalization,
             shutdown_runtime_timeout_ms,
             workload_diagnostics.clone(),
@@ -219,6 +229,7 @@ fn build_runtime_wiring_with_attach_service(
             resource_metrics.clone(),
             storage_retention,
             plugin_alert_runtime,
+            alert_forwarding.clone(),
             trace_finalization,
             shutdown_runtime_timeout_ms,
             workload_diagnostics.clone(),
@@ -295,6 +306,7 @@ fn build_runtime_wiring_with_attach_service(
         available_collectors,
         loaded_policy_plugins: Vec::new(),
         storage_ready: true,
+        alert_forwarding: sandbox_alert_forwarding,
     })
 }
 

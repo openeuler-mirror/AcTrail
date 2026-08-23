@@ -46,7 +46,10 @@ def parser() -> argparse.ArgumentParser:
         default=(Path(os.environ["XIAOO_E2E_BINARY"]) if os.environ.get(
             "XIAOO_E2E_BINARY"
         ) else None),
-        help="optional xiaoO executable included for the concurrency case",
+        help=(
+            "optional xiaoO executable included for concurrency and "
+            "execution-isolation cases"
+        ),
     )
     result.add_argument(
         "--bin-dir",

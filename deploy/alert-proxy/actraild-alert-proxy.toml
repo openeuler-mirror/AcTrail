@@ -1,0 +1,36 @@
+[daemon_ingress]
+socket_path = "/run/actrail/alert-proxy.sock"
+socket_mode_octal = "0660"
+allowed_uids = [0]
+allowed_gids = [0]
+connection_limit = 8
+accept_poll_interval_ms = 20
+io_poll_interval_ms = 250
+producer_idle_timeout_ms = 90000
+max_frame_bytes = 262144
+max_trace_id_bytes = 256
+max_category_bytes = 128
+max_description_bytes = 4096
+max_extras_bytes = 253000
+worker_thread_stack_bytes = 524288
+
+[subscriber]
+listen_addr = "127.0.0.1:9573"
+allow_insecure_remote = false
+listen_backlog = 128
+connection_limit = 128
+accept_poll_interval_ms = 20
+io_poll_interval_ms = 250
+max_frame_bytes = 262144
+max_client_id_bytes = 256
+max_request_id_bytes = 256
+max_topics = 256
+max_topic_bytes = 128
+broadcast_queue_capacity = 1024
+broadcaster_thread_stack_bytes = 524288
+queue_capacity = 256
+heartbeat_interval_ms = 30000
+pong_timeout_ms = 10000
+peer_idle_timeout_ms = 90000
+worker_thread_stack_bytes = 524288
+allowed_tokens = ["replace-before-deployment"]

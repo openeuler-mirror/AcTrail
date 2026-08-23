@@ -154,19 +154,24 @@ pub(super) fn register(
     storage
         .register_alert_definition(&file_definition)
         .map_err(|error| ControlError::new(error.stage, error.message))?;
+    let command_definition = AlertDefinition {
+        producer_plugin_id: DAEMON_ENFORCEMENT_INSTANCE_ID.to_string(),
+        definition_key: COMMAND_DEFINITION_KEY.to_string(),
+        kind: "command.execution.boundary-violation".to_string(),
+        title: "Out-of-bound command execution denied".to_string(),
+        severity: AlertSeverity::High,
+        payload_schema_id: COMMAND_PAYLOAD_SCHEMA_ID.to_string(),
+    };
     storage
-        .register_alert_definition(&AlertDefinition {
-            producer_plugin_id: DAEMON_ENFORCEMENT_INSTANCE_ID.to_string(),
-            definition_key: COMMAND_DEFINITION_KEY.to_string(),
-            kind: "command.execution.boundary-violation".to_string(),
-            title: "Out-of-bound command execution denied".to_string(),
-            severity: AlertSeverity::High,
-            payload_schema_id: COMMAND_PAYLOAD_SCHEMA_ID.to_string(),
-        })
+        .register_alert_definition(&command_definition)
         .map_err(|error| ControlError::new(error.stage, error.message))?;
     Ok(Arc::new(AlertAdmission::new(
         DAEMON_ENFORCEMENT_INSTANCE_ID.to_string(),
         DAEMON_ENFORCEMENT_INSTANCE_ID.to_string(),
         BTreeMap::new(),
+        BTreeMap::from([
+            (FILE_DEFINITION_KEY.to_string(), file_definition),
+            (COMMAND_DEFINITION_KEY.to_string(), command_definition),
+        ]),
     )))
 }

@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use control_contract::command::PluginLoadCommand;
 use control_contract::reply::ControlError;
@@ -10,18 +9,19 @@ use plugin_system::{
     PluginSandboxObservationKind, SandboxConsumerStatus, SandboxPluginFacade,
     SandboxPluginUnregisterResult,
 };
+use sandbox_alert_store::SandboxAlertWritePort;
 use sandbox_evidence_store::SandboxEvidenceWritePort;
-use sandbox_plugin_delivery::SandboxConsumerId;
+use sandbox_plugin_delivery::{SandboxConsumerId, SandboxObservationKind};
 use sandbox_resource_alert::{SandboxResourceAlertConfig, SandboxResourceAlertPlugin};
 use serde::Deserialize;
 
 use super::SandboxPluginRouteSink;
-use super::alert_writer::SandboxAlertWriter;
 
 const RESOURCE_ALERT_PLUGIN_ID: &str = "actrail.sandbox-resource-alert";
 
 pub(crate) struct SandboxPluginManager {
     facade: SandboxPluginFacade,
+    alert_store: Option<Arc<dyn SandboxAlertWritePort>>,
     instances: BTreeMap<String, SandboxPluginInstance>,
 }
 
@@ -29,26 +29,23 @@ struct SandboxPluginInstance {
     plugin_id: String,
     consumer_id: SandboxConsumerId,
     queue_capacity: u32,
-    writer: SandboxAlertWriter,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ResourceAlertConfigDocument {
+    cpu_usage_threshold_basis_points: u16,
     memory_available_threshold_bytes: u64,
     read_interval_threshold_bytes: u64,
     write_interval_threshold_bytes: u64,
     source_state_capacity: u32,
-    alert_output_path: PathBuf,
-    alert_queue_capacity: usize,
-    alert_flush_interval_ms: u64,
-    alert_writer_thread_stack_bytes: usize,
 }
 
 impl SandboxPluginManager {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(alert_store: Option<Arc<dyn SandboxAlertWritePort>>) -> Self {
         Self {
             facade: SandboxPluginFacade::new(),
+            alert_store,
             instances: BTreeMap::new(),
         }
     }
@@ -75,6 +72,16 @@ impl SandboxPluginManager {
                 format!("plugin instance {} already exists", command.instance_id),
             ));
         }
+        if self
+            .instances
+            .values()
+            .any(|instance| instance.plugin_id == RESOURCE_ALERT_PLUGIN_ID)
+        {
+            return Err(ControlError::new(
+                "plugin_runtime",
+                "sandbox resource alert builtin supports one active instance",
+            ));
+        }
         if !command.host_grants.is_empty() {
             return Err(ControlError::new(
                 "plugin_grant",
@@ -93,14 +100,11 @@ impl SandboxPluginManager {
             ));
         }
         let kinds = manifest.sandbox_observation_kinds();
-        if !kinds.contains(&PluginSandboxObservationKind::ProcessIo)
-            || !kinds.contains(&PluginSandboxObservationKind::GuestResource)
-        {
-            return Err(ControlError::new(
-                "plugin_manifest",
-                "sandbox resource alert plugin requires process-io and guest-resource subscriptions",
-            ));
-        }
+        let selectors = kinds
+            .iter()
+            .copied()
+            .map(Self::observation_kind)
+            .collect::<Vec<_>>();
         let queue_capacity = manifest
             .sandbox_observation_queue_capacity()
             .ok_or_else(|| {
@@ -116,42 +120,39 @@ impl SandboxPluginManager {
             )
         })?;
         let config = Self::read_config(Path::new(config_path))?;
-        let mut writer = SandboxAlertWriter::start(
-            &config.alert_output_path,
-            config.alert_queue_capacity,
-            Duration::from_millis(config.alert_flush_interval_ms),
-            config.alert_writer_thread_stack_bytes,
-        )
-        .map_err(|error| ControlError::new("sandbox_alert_writer", error.to_string()))?;
+        let alert_store = self.alert_store.as_ref().ok_or_else(|| {
+            ControlError::new(
+                "sandbox_alerts_disabled",
+                "sandbox alert storage must be enabled before loading the resource alert plugin",
+            )
+        })?;
         let plugin = Arc::new(
             SandboxResourceAlertPlugin::new(
                 SandboxResourceAlertConfig {
+                    cpu_usage_threshold_basis_points: config.cpu_usage_threshold_basis_points,
                     memory_available_threshold_bytes: config.memory_available_threshold_bytes,
                     read_interval_threshold_bytes: config.read_interval_threshold_bytes,
                     write_interval_threshold_bytes: config.write_interval_threshold_bytes,
                     source_state_capacity: config.source_state_capacity,
                 },
-                writer.sink(),
+                Arc::clone(alert_store),
             )
             .map_err(|error| ControlError::new("plugin_config", error.to_string()))?,
         );
-        let consumer_id = match plugin.register(&self.facade, queue_capacity) {
-            Ok(consumer_id) => consumer_id,
-            Err(error) => {
-                let _ = writer.shutdown();
-                return Err(ControlError::new(
+        let consumer_id = plugin
+            .register(&self.facade, selectors, queue_capacity)
+            .map_err(|error| {
+                ControlError::new(
                     "plugin_runtime",
                     format!("register sandbox plugin: {error:?}"),
-                ));
-            }
-        };
+                )
+            })?;
         self.instances.insert(
             command.instance_id.clone(),
             SandboxPluginInstance {
                 plugin_id: manifest.id().to_string(),
                 consumer_id,
                 queue_capacity,
-                writer,
             },
         );
         self.status(&command.instance_id)
@@ -161,17 +162,13 @@ impl SandboxPluginManager {
         &mut self,
         instance_id: &str,
     ) -> Result<PluginInstanceStatus, ControlError> {
-        let mut instance = self.instances.remove(instance_id).ok_or_else(|| {
+        let instance = self.instances.remove(instance_id).ok_or_else(|| {
             ControlError::new(
                 "plugin_not_found",
                 format!("sandbox plugin instance {instance_id} not found"),
             )
         })?;
         let unregister = self.facade.unregister(instance.consumer_id);
-        let writer_result = instance
-            .writer
-            .shutdown()
-            .map_err(|error| ControlError::new("sandbox_alert_writer", error.to_string()));
         let unregister_result = match unregister {
             SandboxPluginUnregisterResult::Unregistered { .. } => Ok(()),
             SandboxPluginUnregisterResult::NotFound { .. } => Err(ControlError::new(
@@ -191,7 +188,7 @@ impl SandboxPluginManager {
                 format!("sandbox consumer for instance {instance_id} panicked during shutdown"),
             )),
         };
-        unregister_result.and(writer_result)?;
+        unregister_result?;
         Ok(Self::instance_status(
             instance_id,
             &instance,
@@ -288,6 +285,13 @@ impl SandboxPluginManager {
         })
     }
 
+    fn observation_kind(kind: PluginSandboxObservationKind) -> SandboxObservationKind {
+        match kind {
+            PluginSandboxObservationKind::ProcessIo => SandboxObservationKind::ProcessIo,
+            PluginSandboxObservationKind::GuestResource => SandboxObservationKind::GuestResource,
+        }
+    }
+
     fn instance_status(
         instance_id: &str,
         instance: &SandboxPluginInstance,
@@ -316,11 +320,5 @@ impl SandboxPluginManager {
             last_error: consumer.and_then(|value| value.last_error),
             warnings: Vec::new(),
         }
-    }
-}
-
-impl Default for SandboxPluginManager {
-    fn default() -> Self {
-        Self::new()
     }
 }

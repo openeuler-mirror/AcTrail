@@ -1,10 +1,10 @@
 //! Private eBPF object loading and aggregate-map decoding.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::time::{Duration, Instant};
 
-use libbpf_rs::{Link, MapCore, MapFlags, MapHandle, Object, ObjectBuilder};
+use libbpf_rs::{ErrorKind, Link, MapCore, MapFlags, MapHandle, Object, ObjectBuilder};
 use sandbox_observation::{GuestBootId, ProcessIoCounters, ProcessMarker};
 
 use crate::SandboxLinuxError;
@@ -234,6 +234,7 @@ impl EbpfIoCollector {
         sample_started_ms: u64,
         sample_ended_ms: u64,
     ) -> Result<(Vec<ProcessIoCounters>, KernelCollectionDiagnostics), SandboxLinuxError> {
+        let active_roots = self.active_roots()?;
         let keys = self.aggregates.keys().collect::<Vec<_>>();
         let mut snapshots = Vec::with_capacity(keys.len());
         for raw_key in keys {
@@ -271,6 +272,7 @@ impl EbpfIoCollector {
             });
         }
         observations.sort_unstable_by_key(|item| (item.process.pid, item.process.start_time_ticks));
+        self.reclaim_inactive_roots(&active_roots);
         let diagnostics = KernelCollectionDiagnostics {
             pending_io_drops: current_diagnostics
                 .pending_io_drops
@@ -288,23 +290,78 @@ impl EbpfIoCollector {
 
     fn seed_lineages(&self, members: &[ProcessLineageMember]) -> Result<(), SandboxLinuxError> {
         for member in members {
-            self.tracked_processes
-                .update(
-                    &member.pid.to_ne_bytes(),
-                    &RootKey::from(member.root).encode(),
-                    MapFlags::ANY,
-                )
+            let pid = member.pid.to_ne_bytes();
+            if self
+                .tracked_processes
+                .lookup(&pid, MapFlags::ANY)
                 .map_err(|error| {
                     SandboxLinuxError::new(
+                        "seed_lineage",
+                        format!("cannot inspect tracked pid {}: {error}", member.pid),
+                    )
+                })?
+                .is_some()
+            {
+                continue;
+            }
+            match self.tracked_processes.update(
+                &pid,
+                &RootKey::from(member.root).encode(),
+                MapFlags::NO_EXIST,
+            ) {
+                Ok(()) => {}
+                Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+                Err(error) => {
+                    return Err(SandboxLinuxError::new(
                         "seed_lineage",
                         format!(
                             "cannot track process pid {} under root pid {}: {error}",
                             member.pid, member.root.pid
                         ),
-                    )
-                })?;
+                    ));
+                }
+            }
         }
         Ok(())
+    }
+
+    fn active_roots(&self) -> Result<HashSet<RootKey>, SandboxLinuxError> {
+        let process_keys = self.tracked_processes.keys().collect::<Vec<_>>();
+        let mut roots = HashSet::with_capacity(process_keys.len());
+        for process_key in process_keys {
+            let Some(raw_root) = self
+                .tracked_processes
+                .lookup(&process_key, MapFlags::ANY)
+                .map_err(|error| {
+                    SandboxLinuxError::new("read_tracked_process", error.to_string())
+                })?
+            else {
+                continue;
+            };
+            roots.insert(RootKey::decode(&raw_root)?);
+        }
+        Ok(roots)
+    }
+
+    fn reclaim_inactive_roots(&mut self, active_roots: &HashSet<RootKey>) {
+        let inactive_roots = self
+            .baselines
+            .keys()
+            .copied()
+            .filter(|root| !active_roots.contains(root))
+            .collect::<Vec<_>>();
+        for root in inactive_roots {
+            let raw_root = root.encode();
+            match self.aggregates.delete(&raw_root) {
+                Ok(()) => {
+                    self.baselines.remove(&root);
+                }
+                Err(error) if error.kind() == ErrorKind::NotFound => {
+                    self.baselines.remove(&root);
+                }
+                Err(_) => {}
+            }
+        }
     }
 
     fn resize_map(

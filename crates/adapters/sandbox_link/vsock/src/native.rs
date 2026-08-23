@@ -5,10 +5,11 @@ use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixListener;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-pub(super) fn connect(cid: u32, port: u32) -> io::Result<File> {
+pub(super) fn connect(cid: u32, port: u32, timeout: Duration) -> io::Result<File> {
     let fd = create_socket()?;
+    set_nonblocking(fd.as_raw_fd(), true)?;
     let address = address(cid, port);
     // SAFETY: fd is an owned AF_VSOCK socket and address points to a fully initialized
     // sockaddr_vm for the duration of this call.
@@ -20,9 +21,86 @@ pub(super) fn connect(cid: u32, port: u32) -> io::Result<File> {
         )
     };
     if result < 0 {
+        let error = io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(libc::EISCONN) => {}
+            Some(code)
+                if code == libc::EINPROGRESS
+                    || code == libc::EALREADY
+                    || code == libc::EWOULDBLOCK
+                    || code == libc::EINTR =>
+            {
+                wait_for_connect(fd.as_raw_fd(), timeout)?;
+            }
+            _ => return Err(error),
+        }
+    }
+    set_nonblocking(fd.as_raw_fd(), false)?;
+    Ok(File::from(fd))
+}
+
+fn wait_for_connect(fd: RawFd, timeout: Duration) -> io::Result<()> {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "VSOCK timeout overflow"))?;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "VSOCK connect timed out",
+            ));
+        }
+        let mut descriptor = libc::pollfd {
+            fd,
+            events: libc::POLLOUT,
+            revents: 0,
+        };
+        // Round up so a positive sub-millisecond remainder cannot become an immediate busy poll.
+        let partial_millisecond = if remaining.subsec_nanos() % 1_000_000 == 0 {
+            0
+        } else {
+            1
+        };
+        let timeout_ms = remaining
+            .as_millis()
+            .saturating_add(partial_millisecond)
+            .clamp(1, i32::MAX as u128) as libc::c_int;
+        // SAFETY: descriptor is a valid one-element pollfd array for the duration of the call.
+        let result = unsafe { libc::poll(&mut descriptor, 1, timeout_ms) };
+        if result > 0 {
+            return connected_socket_result(fd);
+        }
+        if result == 0 {
+            continue;
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
+fn connected_socket_result(fd: RawFd) -> io::Result<()> {
+    let mut socket_error: libc::c_int = 0;
+    let mut length = size_of::<libc::c_int>() as libc::socklen_t;
+    // SAFETY: socket_error and length are writable and have the SO_ERROR value layout.
+    let result = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_ERROR,
+            (&mut socket_error as *mut libc::c_int).cast(),
+            &mut length,
+        )
+    };
+    if result < 0 {
         return Err(io::Error::last_os_error());
     }
-    Ok(File::from(fd))
+    if socket_error != 0 {
+        return Err(io::Error::from_raw_os_error(socket_error));
+    }
+    Ok(())
 }
 
 pub(super) fn bind(cid: u32, port: u32, backlog: u32) -> io::Result<File> {

@@ -45,11 +45,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "alert-delivery-contract"
+version = "0.7.1"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "alert-proxy"
+version = "0.7.1"
+dependencies = [
+ "alert-delivery-contract",
+ "clap",
+ "libc",
+ "serde",
+ "serde_json",
+ "socket2",
+ "subtle",
+ "toml",
+ "uuid",
+]
+
+[[package]]
 name = "alert_contract"
 version = "0.7.1"
 dependencies = [
  "model_core",
  "serde",
+]
+
+[[package]]
+name = "alert_forwarding"
+version = "0.7.1"
+dependencies = [
+ "alert-delivery-contract",
+ "arc-swap",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -668,7 +701,9 @@ dependencies = [
 name = "daemon"
 version = "0.7.1"
 dependencies = [
+ "alert-delivery-contract",
  "alert_contract",
+ "alert_forwarding",
  "attach_runtime",
  "clap",
  "collector_binding",
@@ -695,6 +730,8 @@ dependencies = [
  "provider_label",
  "recording_runtime",
  "rule_set_provider",
+ "sandbox_alert_sqlite",
+ "sandbox_alert_store",
  "sandbox_evidence_sqlite",
  "sandbox_evidence_store",
  "sandbox_observation",
@@ -2281,6 +2318,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "sandbox_alert_sqlite"
+version = "0.7.1"
+dependencies = [
+ "rusqlite",
+ "sandbox_alert_store",
+ "sandbox_observation",
+]
+
+[[package]]
+name = "sandbox_alert_store"
+version = "0.7.1"
+dependencies = [
+ "sandbox_observation",
+]
+
+[[package]]
 name = "sandbox_evidence_sqlite"
 version = "0.7.1"
 dependencies = [
@@ -2321,6 +2374,7 @@ name = "sandbox_resource_alert"
 version = "0.7.1"
 dependencies = [
  "plugin_system",
+ "sandbox_alert_store",
  "sandbox_observation",
  "sandbox_plugin_delivery",
 ]
@@ -2502,6 +2556,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "socket2"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2948,6 +3012,17 @@ name = "utf8parse"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
+
+[[package]]
+name = "uuid"
+version = "1.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f053576934f05a761a402421fbbe3d425d9366f75f978806a037b3ca481abecc"
+dependencies = [
+ "getrandom 0.4.3",
+ "js-sys",
+ "wasm-bindgen",
+]
 
 [[package]]
 name = "uuid-simd"

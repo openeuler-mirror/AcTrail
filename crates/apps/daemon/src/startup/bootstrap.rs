@@ -7,10 +7,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use config_core::daemon::{
-    AgentInvocationConfig, ApplicationProtocolConfig, CommandControlConfig, DiagnosticLogLevel,
-    EbpfCollectorConfig, EnforcementConfig, FileObservationConfig, HandObservationConfig,
-    NetworkControlConfig, PayloadConfig, PluginAlertRuntimeConfig, ProcessSeccompConfig,
-    ResourceMetricsConfig, SandboxEvidenceConfig, SandboxEvidenceSynchronousConfig,
+    AgentInvocationConfig, AlertForwardingConfig, ApplicationProtocolConfig, CommandControlConfig,
+    DiagnosticLogLevel, EbpfCollectorConfig, EnforcementConfig, FileObservationConfig,
+    HandObservationConfig, NetworkControlConfig, PayloadConfig, PluginAlertRuntimeConfig,
+    ProcessSeccompConfig, ResourceMetricsConfig, SandboxAlertsConfig,
+    SandboxAlertsSynchronousConfig, SandboxEvidenceConfig, SandboxEvidenceSynchronousConfig,
     SeccompNotifyConfig, SemanticRetentionConfig, StorageRetentionConfig, TraceFinalizationConfig,
     WorkloadDiagnosticsConfig,
 };
@@ -18,6 +19,9 @@ use config_core::provider_rules::ProviderRuleSetConfig;
 use control_contract::command::PluginLoadCommand;
 use control_contract::reply::ControlError;
 use plugin_system::PluginInstanceStatus;
+use sandbox_alert_sqlite::{
+    SandboxAlertSqliteConfig, SandboxAlertSqliteStore, SandboxAlertSynchronous,
+};
 use sandbox_evidence_sqlite::{
     SandboxEvidenceSqliteConfig, SandboxEvidenceSqliteStore, SandboxEvidenceSynchronous,
 };
@@ -29,6 +33,7 @@ use crate::profiles::DaemonProfileRegistry;
 use crate::runtime_wiring::DaemonRuntimeWiring;
 use crate::service_host::{AttachService, DaemonServiceHost};
 use crate::services::attach::StorageAttachService;
+use crate::services::sandbox_alerts::SandboxAlertForwarder;
 use crate::services::workload_diagnostics::WorkloadDiagnostics;
 use crate::services::{
     build_runtime_wiring_with_provider_rule_set_and_storage_retention,
@@ -47,8 +52,11 @@ where
         Self { wiring }
     }
 
-    pub fn build_control_server(self) -> UdsControlServer<DaemonServiceHost<A>> {
-        UdsControlServer::new(DaemonServiceHost::new(self.wiring))
+    pub fn build_control_server(
+        self,
+        sandbox_alerts: Option<Arc<dyn sandbox_alert_store::SandboxAlertWritePort>>,
+    ) -> UdsControlServer<DaemonServiceHost<A>> {
+        UdsControlServer::new(DaemonServiceHost::new(self.wiring, sandbox_alerts))
     }
 }
 
@@ -57,6 +65,7 @@ pub struct LocalDaemonServer {
     workload_diagnostics: WorkloadDiagnostics,
     hand_observation_server: Option<UpstreamTcpServer>,
     sandbox_evidence_store: Option<SandboxEvidenceSqliteStore>,
+    sandbox_alert_store: Option<SandboxAlertSqliteStore>,
 }
 
 impl LocalDaemonServer {
@@ -76,6 +85,8 @@ impl LocalDaemonServer {
         resource_metrics: ResourceMetricsConfig,
         storage_retention: StorageRetentionConfig,
         plugin_alert_runtime: PluginAlertRuntimeConfig,
+        alert_forwarding_config: AlertForwardingConfig,
+        sandbox_alerts_config: SandboxAlertsConfig,
         trace_finalization: TraceFinalizationConfig,
         shutdown_runtime_timeout_ms: u64,
         workload_diagnostics_config: WorkloadDiagnosticsConfig,
@@ -100,6 +111,7 @@ impl LocalDaemonServer {
             resource_metrics,
             storage_retention,
             plugin_alert_runtime,
+            alert_forwarding_config,
             trace_finalization,
             shutdown_runtime_timeout_ms,
             workload_diagnostics.clone(),
@@ -107,12 +119,22 @@ impl LocalDaemonServer {
             command_control,
             network_control,
         )?;
+        let sandbox_alert_store = if sandbox_alerts_config.enabled {
+            Some(Self::start_sandbox_alert_store(
+                &sandbox_alerts_config,
+                Arc::new(SandboxAlertForwarder::new(wiring.alert_forwarding.clone())),
+            )?)
+        } else {
+            None
+        };
+        let sandbox_alerts = sandbox_alert_store.as_ref().map(|store| store.write_port());
         workload_diagnostics.start();
         Ok(Self {
-            server: DaemonBootstrap::new(wiring).build_control_server(),
+            server: DaemonBootstrap::new(wiring).build_control_server(sandbox_alerts),
             workload_diagnostics,
             hand_observation_server: None,
             sandbox_evidence_store: None,
+            sandbox_alert_store,
         })
     }
 
@@ -132,6 +154,8 @@ impl LocalDaemonServer {
         resource_metrics: ResourceMetricsConfig,
         storage_retention: StorageRetentionConfig,
         plugin_alert_runtime: PluginAlertRuntimeConfig,
+        alert_forwarding_config: AlertForwardingConfig,
+        sandbox_alerts_config: SandboxAlertsConfig,
         trace_finalization: TraceFinalizationConfig,
         shutdown_runtime_timeout_ms: u64,
         workload_diagnostics_config: WorkloadDiagnosticsConfig,
@@ -157,6 +181,7 @@ impl LocalDaemonServer {
             resource_metrics,
             storage_retention,
             plugin_alert_runtime,
+            alert_forwarding_config,
             trace_finalization,
             shutdown_runtime_timeout_ms,
             workload_diagnostics.clone(),
@@ -165,13 +190,52 @@ impl LocalDaemonServer {
             network_control,
             provider_rule_set,
         )?;
+        let sandbox_alert_store = if sandbox_alerts_config.enabled {
+            Some(Self::start_sandbox_alert_store(
+                &sandbox_alerts_config,
+                Arc::new(SandboxAlertForwarder::new(wiring.alert_forwarding.clone())),
+            )?)
+        } else {
+            None
+        };
+        let sandbox_alerts = sandbox_alert_store.as_ref().map(|store| store.write_port());
         workload_diagnostics.start();
         Ok(Self {
-            server: DaemonBootstrap::new(wiring).build_control_server(),
+            server: DaemonBootstrap::new(wiring).build_control_server(sandbox_alerts),
             workload_diagnostics,
             hand_observation_server: None,
             sandbox_evidence_store: None,
+            sandbox_alert_store,
         })
+    }
+
+    fn start_sandbox_alert_store(
+        config: &SandboxAlertsConfig,
+        commit_port: Arc<dyn sandbox_alert_store::SandboxAlertCommitPort>,
+    ) -> Result<SandboxAlertSqliteStore, ControlError> {
+        SandboxAlertSqliteStore::start(
+            SandboxAlertSqliteConfig {
+                path: config.path.clone(),
+                schema_version: config.schema_version,
+                create_parent_directory: config.create_parent_directory,
+                busy_timeout: Duration::from_millis(config.busy_timeout_ms),
+                writer_queue_capacity: config.writer_queue_capacity,
+                transaction_max_alerts: config.transaction_max_alerts,
+                flush_interval: Duration::from_millis(config.flush_interval_ms),
+                retention_max_alerts: config.retention_max_alerts,
+                capacity_max_bytes: config.capacity_max_bytes,
+                synchronous: match config.synchronous {
+                    SandboxAlertsSynchronousConfig::Normal => SandboxAlertSynchronous::Normal,
+                    SandboxAlertsSynchronousConfig::Full => SandboxAlertSynchronous::Full,
+                },
+                wal_autocheckpoint_pages: config.wal_autocheckpoint_pages,
+                shutdown_drain_timeout: Duration::from_millis(config.shutdown_drain_timeout_ms),
+                writer_thread_stack_bytes: config.writer_thread_stack_bytes,
+                read_limit_max: config.read_limit_max,
+            },
+            commit_port,
+        )
+        .map_err(|error| ControlError::new("sandbox_alerts", error))
     }
 
     pub fn start_hand_observation(
@@ -277,8 +341,20 @@ impl LocalDaemonServer {
             None => Ok(()),
         };
         self.sandbox_evidence_store = None;
-        let daemon_result = self.server.service_mut().shutdown();
-        hand_result.and(evidence_result).and(daemon_result)
+        let sandbox_plugins_result = self.server.service_mut().shutdown_sandbox_plugins();
+        let alert_result = match self.sandbox_alert_store.as_mut() {
+            Some(store) => store
+                .shutdown()
+                .map_err(|error| ControlError::new("sandbox_alerts_shutdown", error.to_string())),
+            None => Ok(()),
+        };
+        self.sandbox_alert_store = None;
+        let daemon_result = self.server.service_mut().shutdown_runtime();
+        hand_result
+            .and(evidence_result)
+            .and(sandbox_plugins_result)
+            .and(alert_result)
+            .and(daemon_result)
     }
 
     pub fn ebpf_debug_snapshot(

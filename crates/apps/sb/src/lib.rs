@@ -2,4 +2,6 @@
 
 mod startup;
 
-pub use startup::{SandboxAgentBootstrap, SandboxAgentProcess, SbConfig, SbConfigOverrides};
+pub use startup::{
+    SandboxAgentBootstrap, SandboxAgentProcess, SbConfig, SbConfigOverrides, SbOutput,
+};

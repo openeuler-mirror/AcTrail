@@ -160,9 +160,10 @@ impl ConnectionWorker {
             .batch_codec
             .decode(&frame.payload)
             .map_err(|error| ConnectionError::wire("observation_batch", error))?;
-        self.connection()?
-            .deliver(forwarded.sb_id, batch)
-            .map_err(|error| ConnectionError::wire("sink_delivery", error))
+        if self.connection()?.deliver(forwarded.sb_id, batch).is_err() {
+            self.metrics.sink_delivery_failed_batch();
+        }
+        Ok(())
     }
 
     fn connection(&self) -> Result<&GatewayConnection, ConnectionError> {

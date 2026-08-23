@@ -5,16 +5,19 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
+    "cpu_usage_threshold_basis_points",
     "memory_available_threshold_bytes",
     "read_interval_threshold_bytes",
     "write_interval_threshold_bytes",
-    "source_state_capacity",
-    "alert_output_path",
-    "alert_queue_capacity",
-    "alert_flush_interval_ms",
-    "alert_writer_thread_stack_bytes"
+    "source_state_capacity"
   ],
   "properties": {
+    "cpu_usage_threshold_basis_points": {
+      "description": "Emit high-cpu when interval CPU utilization enters this basis-point threshold.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10000
+    },
     "memory_available_threshold_bytes": {
       "description": "Emit oom-risk when Guest available memory is below this byte count.",
       "type": "integer",
@@ -35,26 +38,6 @@
       "type": "integer",
       "minimum": 1,
       "maximum": 4294967295
-    },
-    "alert_output_path": {
-      "description": "Absolute append-only alert output path owned by actraild.",
-      "type": "string",
-      "pattern": "^/[^\\u0000]*$"
-    },
-    "alert_queue_capacity": {
-      "description": "Bounded non-blocking alert writer queue capacity.",
-      "type": "integer",
-      "minimum": 1
-    },
-    "alert_flush_interval_ms": {
-      "description": "Maximum normal buffered-output flush interval in milliseconds.",
-      "type": "integer",
-      "minimum": 1
-    },
-    "alert_writer_thread_stack_bytes": {
-      "description": "Stack allocation requested for the dedicated alert writer thread.",
-      "type": "integer",
-      "minimum": 1
     }
   }
 }

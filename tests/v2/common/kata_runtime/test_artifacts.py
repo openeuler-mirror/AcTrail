@@ -208,6 +208,8 @@ class DeploymentArtifactsTest(unittest.TestCase):
 _RELEASE_FILES = (
     "actraild",
     "actrailctl",
+    "actrail-sb",
+    "actrail-vsock-gateway",
     "actrailviewer",
     "libactrail_tls_payload_probe_sync.so",
 )
@@ -225,26 +227,45 @@ def _deployment_fixture(
     bin_dir = temporary / "release"
     bin_dir.mkdir()
     guest = root / "guest-bundle"
+    host = root / "host-bundle"
     workload = root / "workload-bundle"
     (workload / "bin").mkdir(parents=True)
     guest.mkdir()
+    host.mkdir()
+    host_plugin = host / "sandbox-resource-alert"
+    host_plugin.mkdir()
+    for name in (
+        "sandbox-resource-alert.plugin.toml",
+        "sandbox-resource-alert.config.json",
+        "sandbox-resource-alert.config.v1.schema.json",
+    ):
+        (host_plugin / name).write_text(f"fixture:{name}\n", encoding="utf-8")
 
     release = {}
     release_key = {
         "actraild": "actraild_sha256",
         "actrailctl": "actrailctl_sha256",
+        "actrail-sb": "actrail_sb_sha256",
+        "actrail-vsock-gateway": "actrail_vsock_gateway_sha256",
         "actrailviewer": "actrailviewer_sha256",
         "libactrail_tls_payload_probe_sync.so": "tls_probe_sha256",
     }
     for name in _RELEASE_FILES:
         content = f"release:{name}".encode()
         (bin_dir / name).write_bytes(content)
-        (guest / name).write_bytes(content)
+        if name == "actrail-vsock-gateway":
+            (host / name).write_bytes(content)
+            (host / name).chmod(0o755)
+        else:
+            (guest / name).write_bytes(content)
+            if name == "actrail-sb":
+                (guest / name).chmod(0o755)
         release[release_key[name]] = hashlib.sha256(content).hexdigest()
     (workload / "bin/actrailctl").write_bytes(
         (bin_dir / "actrailctl").read_bytes()
     )
     _write_directory_manifest(guest)
+    _write_directory_manifest(host)
     _write_directory_manifest(workload)
 
     base_image = root / "guest-base.img"
@@ -296,6 +317,20 @@ def _deployment_fixture(
         "guest_bundle": {
             "path": "guest-bundle",
             "manifest_sha256": _sha256(guest / "MANIFEST.sha256"),
+        },
+        "host_bundle": {
+            "path": "host-bundle",
+            "manifest_sha256": _sha256(host / "MANIFEST.sha256"),
+            "gateway_sha256": _sha256(host / "actrail-vsock-gateway"),
+            "sandbox_resource_alert_manifest_sha256": _sha256(
+                host_plugin / "sandbox-resource-alert.plugin.toml"
+            ),
+            "sandbox_resource_alert_config_sha256": _sha256(
+                host_plugin / "sandbox-resource-alert.config.json"
+            ),
+            "sandbox_resource_alert_schema_sha256": _sha256(
+                host_plugin / "sandbox-resource-alert.config.v1.schema.json"
+            ),
         },
         "workload_bundle": {
             "path": "workload-bundle",
