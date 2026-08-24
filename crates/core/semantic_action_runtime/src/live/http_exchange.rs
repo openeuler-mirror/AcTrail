@@ -23,22 +23,30 @@ pub(super) struct HttpExchangeTracker {
 pub(super) struct HttpExchangeObservation {
     pub(super) actions: Vec<SemanticAction>,
     pub(super) matches: Vec<HttpResponseMatch>,
+    pub(super) damaged_responses: Vec<SemanticAction>,
+    pub(super) unmatched_responses: Vec<SemanticAction>,
+}
+
+pub(super) enum DamagedHttp1RequestOutcome {
+    Tombstoned,
+    MissingPending,
+    Unsafe,
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct HttpResponseMatch {
-    pub(super) response: SemanticAction,
-    pub(super) request: MatchedHttpRequest,
+pub(crate) struct HttpResponseMatch {
+    pub(crate) response: SemanticAction,
+    pub(crate) request: MatchedHttpRequest,
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct MatchedHttpRequest {
-    pub(super) action_id: String,
-    pub(super) evidence: Vec<SemanticEvidence>,
-    pub(super) sequence: u64,
-    pub(super) method: Option<String>,
-    pub(super) target: Option<String>,
-    pub(super) stream_id: Option<String>,
+pub(crate) struct MatchedHttpRequest {
+    pub(crate) action_id: String,
+    pub(crate) evidence: Vec<SemanticEvidence>,
+    pub(crate) sequence: u64,
+    pub(crate) method: Option<String>,
+    pub(crate) target: Option<String>,
+    pub(crate) stream_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -120,12 +128,15 @@ impl HttpStreamQuarantine {
 }
 
 #[derive(Clone, Debug)]
-struct PendingHttpRequest {
-    action: SemanticAction,
-    sequence: u64,
-    method: Option<String>,
-    target: Option<String>,
-    stream_id: Option<String>,
+enum PendingHttpRequest {
+    Observed {
+        action: SemanticAction,
+        sequence: u64,
+        method: Option<String>,
+        target: Option<String>,
+        stream_id: Option<String>,
+    },
+    Damaged,
 }
 
 struct PendingHttpResponse {
@@ -189,6 +200,45 @@ impl HttpExchangeTracker {
         }
     }
 
+    pub(super) fn observe_damaged_http1_request(
+        &mut self,
+        segment: &PayloadSegment,
+        sequence: u64,
+        header_projected: bool,
+    ) -> DamagedHttp1RequestOutcome {
+        let key = HttpExchangeKey {
+            trace_id: segment.trace_id,
+            process: segment.process.clone(),
+            stream_key: segment.stream_key.to_string(),
+            stream_id: None,
+        };
+        let state = self.streams.entry(key.clone()).or_default();
+        state.observe_damaged_request(
+            &key,
+            self.config.max_pending_requests_per_stream as usize,
+            sequence,
+            header_projected,
+        )
+    }
+
+    pub(super) fn observe_damaged_http1_response(
+        &mut self,
+        segment: &PayloadSegment,
+    ) -> Option<MatchedHttpRequest> {
+        let key = HttpExchangeKey {
+            trace_id: segment.trace_id,
+            process: segment.process.clone(),
+            stream_key: segment.stream_key.to_string(),
+            stream_id: None,
+        };
+        let state = self.streams.get_mut(&key)?;
+        let request = state.observe_damaged_response();
+        if state.is_empty() {
+            self.streams.remove(&key);
+        }
+        request
+    }
+
     pub(super) fn forget_payload_stream(&mut self, identity: &PayloadStreamIdentity) {
         let stream_key = identity.stream_key.to_string();
         self.streams.retain(|key, _| {
@@ -204,11 +254,36 @@ impl HttpExchangeObservation {
         Self {
             actions: vec![action],
             matches: Vec::new(),
+            damaged_responses: Vec::new(),
+            unmatched_responses: Vec::new(),
         }
     }
 }
 
 impl HttpStreamState {
+    fn observe_damaged_response(&mut self) -> Option<MatchedHttpRequest> {
+        if self.quarantine.is_some() {
+            return None;
+        }
+        match self.requests.pop_front()? {
+            PendingHttpRequest::Observed {
+                action,
+                sequence,
+                method,
+                target,
+                stream_id,
+            } => Some(MatchedHttpRequest {
+                action_id: action.action_id,
+                evidence: action.evidence,
+                sequence,
+                method,
+                target,
+                stream_id,
+            }),
+            PendingHttpRequest::Damaged => None,
+        }
+    }
+
     fn observe_request(
         &mut self,
         key: &HttpExchangeKey,
@@ -249,7 +324,7 @@ impl HttpStreamState {
             );
             return observation;
         }
-        self.requests.push_back(PendingHttpRequest {
+        self.requests.push_back(PendingHttpRequest::Observed {
             sequence,
             method: action.attributes.get("method").cloned(),
             target: action.attributes.get("target").cloned(),
@@ -258,6 +333,57 @@ impl HttpStreamState {
         });
         self.reconcile(key, &mut observation);
         observation
+    }
+
+    fn observe_damaged_request(
+        &mut self,
+        key: &HttpExchangeKey,
+        max_pending: usize,
+        message_sequence: u64,
+        header_projected: bool,
+    ) -> DamagedHttp1RequestOutcome {
+        if self.quarantine.is_some() {
+            return DamagedHttp1RequestOutcome::Unsafe;
+        }
+        let existing = header_projected.then(|| {
+            self.requests.iter().rposition(|request| {
+                matches!(
+                    request,
+                    PendingHttpRequest::Observed { sequence, .. } if *sequence == message_sequence
+                )
+            })
+        });
+        if header_projected && existing.flatten().is_none() {
+            return DamagedHttp1RequestOutcome::MissingPending;
+        }
+        if let Some(index) = existing.flatten() {
+            self.requests[index] = PendingHttpRequest::Damaged;
+        } else {
+            if self.requests.len() >= max_pending {
+                self.quarantine(
+                    key,
+                    HttpStreamQuarantineReason::PendingRequestCapacity,
+                    None,
+                );
+                return DamagedHttp1RequestOutcome::Unsafe;
+            }
+            self.requests.push_back(PendingHttpRequest::Damaged);
+        }
+        tracing::warn!(
+            trace_id = key.trace_id.get(),
+            process_id = key.process.get(),
+            stream_key = %key.stream_key,
+            message_sequence,
+            "kept HTTP/1 request ordinal with a damaged-message tombstone"
+        );
+        let mut observation = HttpExchangeObservation {
+            actions: Vec::new(),
+            matches: Vec::new(),
+            damaged_responses: Vec::new(),
+            unmatched_responses: Vec::new(),
+        };
+        self.reconcile(key, &mut observation);
+        DamagedHttp1RequestOutcome::Tombstoned
     }
 
     fn observe_response(
@@ -295,6 +421,8 @@ impl HttpStreamState {
         let mut observation = HttpExchangeObservation {
             actions: Vec::new(),
             matches: Vec::new(),
+            damaged_responses: Vec::new(),
+            unmatched_responses: Vec::new(),
         };
         self.reconcile(key, &mut observation);
         if !observation
@@ -309,6 +437,7 @@ impl HttpStreamState {
             {
                 response.emitted_unassociated = true;
             }
+            observation.unmatched_responses.push(action.clone());
             observation.actions.push(action);
         }
         observation
@@ -317,7 +446,28 @@ impl HttpStreamState {
     fn reconcile(&mut self, key: &HttpExchangeKey, observation: &mut HttpExchangeObservation) {
         while let (Some(request), Some(response)) = (self.requests.front(), self.responses.front())
         {
-            if request.action.start_time > response.action.start_time {
+            if matches!(request, PendingHttpRequest::Damaged) {
+                let final_response = final_http_response(response.status_code);
+                let Some(response) = self.responses.pop_front() else {
+                    break;
+                };
+                observation.damaged_responses.push(response.action);
+                if final_response {
+                    self.requests.pop_front();
+                }
+                continue;
+            }
+            let PendingHttpRequest::Observed {
+                action: request_action,
+                sequence: request_sequence,
+                method: request_method,
+                target: request_target,
+                stream_id: request_stream_id,
+            } = request
+            else {
+                unreachable!();
+            };
+            if request_action.start_time > response.action.start_time {
                 self.responses.pop_front();
                 tracing::warn!(
                     trace_id = key.trace_id.get(),
@@ -329,7 +479,11 @@ impl HttpStreamState {
                 );
                 continue;
             }
-            let request = request.clone();
+            let request_action = request_action.clone();
+            let request_sequence = *request_sequence;
+            let request_method = request_method.clone();
+            let request_target = request_target.clone();
+            let request_stream_id = request_stream_id.clone();
             let Some(mut response) = self.responses.pop_front() else {
                 break;
             };
@@ -343,22 +497,22 @@ impl HttpStreamState {
                     process_id = key.process.get(),
                     stream_key = %key.stream_key,
                     stream_id = ?key.stream_id,
-                    request_action_id = %request.action.action_id,
+                    request_action_id = %request_action.action_id,
                     response_action_id = %response.action.action_id,
                     "reconciled HTTP response projected before its request action"
                 );
             }
             response.action.attributes.insert(
                 attrs::http_response::REQUEST_ACTION_ID.to_string(),
-                request.action.action_id.clone(),
+                request_action.action_id.clone(),
             );
             let matched_request = MatchedHttpRequest {
-                action_id: request.action.action_id,
-                evidence: request.action.evidence,
-                sequence: request.sequence,
-                method: request.method,
-                target: request.target,
-                stream_id: request.stream_id,
+                action_id: request_action.action_id,
+                evidence: request_action.evidence,
+                sequence: request_sequence,
+                method: request_method,
+                target: request_target,
+                stream_id: request_stream_id,
             };
             if final_http_response(response.status_code) {
                 self.requests.pop_front();

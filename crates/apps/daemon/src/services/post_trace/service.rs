@@ -49,36 +49,49 @@ impl StorageAttachService {
         &mut self,
         instance_id: &str,
     ) -> Result<(), ControlError> {
-        self.drain_post_trace_tasks(PostTraceDrainTarget::Instance(instance_id))?;
+        self.drain_post_trace_tasks(
+            PostTraceDrainTarget::Instance(instance_id),
+            self.post_trace_coordinator.shutdown_drain_timeout(),
+        )?;
         self.post_trace_coordinator.forget_instance(instance_id)
     }
 
-    pub(in crate::services) fn shutdown_post_trace_runtime_impl(
+    pub(in crate::services) fn shutdown_post_trace_runtime_with_timeout(
         &mut self,
+        drain_timeout: std::time::Duration,
     ) -> Result<(), ControlError> {
         self.post_trace_coordinator.close_admission();
-        self.drain_post_trace_tasks(PostTraceDrainTarget::All)
+        self.drain_post_trace_tasks(PostTraceDrainTarget::All, drain_timeout)
     }
 
     fn drain_post_trace_tasks(
         &mut self,
         target: PostTraceDrainTarget<'_>,
+        drain_timeout: std::time::Duration,
     ) -> Result<(), ControlError> {
-        let drain_timeout = self.post_trace_coordinator.shutdown_drain_timeout();
         let cancel_after = drain_timeout
             .checked_sub(self.post_trace_coordinator.cancellation_grace())
-            .ok_or_else(|| {
-                ControlError::new(
-                    "post_trace_config",
-                    "post-trace drain timeout does not reserve cancellation time",
-                )
-            })?;
+            .unwrap_or_default();
         let started_at = Instant::now();
         loop {
-            self.drain_post_trace_runtime_impl()?;
             if !target.has_running_tasks(&self.post_trace_coordinator) {
                 return Ok(());
             }
+            if started_at.elapsed() >= drain_timeout {
+                let issues = self
+                    .post_trace_coordinator
+                    .diagnose_drain_timeout(target.instance_id());
+                self.persist_post_trace_issues(issues)?;
+                return Err(ControlError::new(
+                    "post_trace_drain_timeout",
+                    format!(
+                        "{} still has running post-trace tasks after {}ms",
+                        target.label(),
+                        drain_timeout.as_millis()
+                    ),
+                ));
+            }
+            self.drain_post_trace_runtime_impl()?;
             let elapsed = started_at.elapsed();
             if elapsed >= cancel_after {
                 for instance_id in target.running_instance_ids(&self.post_trace_coordinator) {

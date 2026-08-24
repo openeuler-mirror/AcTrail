@@ -29,6 +29,7 @@ pub const ENV_FLOW_MAX_HEADER_BYTES: &str = "TLS_PAYLOAD_SYNC_FLOW_MAX_HEADER_BY
 pub const ENV_FLOW_LARGE_TRANSFER_BYTES: &str = "TLS_PAYLOAD_SYNC_FLOW_LARGE_TRANSFER_BYTES";
 pub const ENV_FLOW_UNKNOWN_STREAM_BYTES: &str = "TLS_PAYLOAD_SYNC_FLOW_UNKNOWN_STREAM_BYTES";
 pub const ENV_FLOW_H2_DATA_PROBE_BYTES: &str = "TLS_PAYLOAD_SYNC_FLOW_H2_DATA_PROBE_BYTES";
+pub const ENV_FLOW_MAX_STREAMS: &str = "TLS_PAYLOAD_SYNC_FLOW_MAX_STREAMS";
 pub const ENV_LIBRARY_PATH_PREFIX: &str = "TLS_PAYLOAD_SYNC_LIBRARY_PATH_PREFIX";
 pub const ENV_LIBRARY_PATH_PREFIX_GLIBC: &str = "TLS_PAYLOAD_SYNC_LIBRARY_PATH_PREFIX_GLIBC";
 pub const ENV_LIBRARY_PATH_PREFIX_MUSL: &str = "TLS_PAYLOAD_SYNC_LIBRARY_PATH_PREFIX_MUSL";
@@ -60,6 +61,7 @@ pub struct RuntimeFlowControlConfig {
     pub large_transfer_bytes: u64,
     pub unknown_stream_bytes: u64,
     pub h2_data_probe_bytes: u64,
+    pub max_streams: usize,
 }
 
 impl Default for RuntimeFlowControlConfig {
@@ -71,6 +73,7 @@ impl Default for RuntimeFlowControlConfig {
             large_transfer_bytes: 1048576,
             unknown_stream_bytes: DEFAULT_TLS_SYNC_FLOW_UNKNOWN_STREAM_BYTES,
             h2_data_probe_bytes: 65536,
+            max_streams: 4096,
         }
     }
 }
@@ -189,6 +192,10 @@ pub fn runtime_env_for_plan_descriptors(
         pair(
             ENV_FLOW_H2_DATA_PROBE_BYTES,
             &config.flow_control.h2_data_probe_bytes.to_string(),
+        ),
+        pair(
+            ENV_FLOW_MAX_STREAMS,
+            &config.flow_control.max_streams.to_string(),
         ),
         pair(ENV_REDACTION, config.redaction.as_str()),
         pair(ENV_EVENTS, &config.events.encode()),

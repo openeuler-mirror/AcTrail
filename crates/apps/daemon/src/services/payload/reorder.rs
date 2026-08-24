@@ -1,4 +1,4 @@
-//! Cross-drain reordering of payload segments within a capture stream.
+//! Cross-drain reordering of kernel-captured payload segments within a stream.
 //!
 //! eBPF ring/perf buffers are drained per-CPU, so chunks of the same stream
 //! can be handed to userspace out of causal order, straddling drain cycles.
@@ -7,6 +7,13 @@
 //! corrupts the reconstructed stream. This reorderer holds each stream's
 //! segments briefly and emits them in capture order, waiting only when a gap
 //! suggests an earlier chunk may still arrive.
+//!
+//! The synchronous TLS probe is already serialized through a process-local
+//! FIFO event queue and a single writer. Its producer sequence is
+//! process-global, not stream-local, so interpreting gaps after per-stream
+//! demultiplexing would create false gaps and can turn scheduling delay into a
+//! late drop. Only `tls-sync:` segments bypass this cross-drain reorderer;
+//! seccomp TLS capture retains its existing cross-completion ordering.
 //!
 //! # Why the added latency does not distort timing metrics
 //!
@@ -55,6 +62,9 @@ const REORDER_WINDOW: Duration = Duration::from_millis(50);
 
 /// The first sequence of eBPF socket payload streams.
 const FIRST_SOCKET_SEQUENCE: u64 = 1;
+
+/// Stream provenance assigned by the synchronous TLS event service.
+const TLS_SYNC_STREAM_PREFIX: &str = "tls-sync:";
 
 /// How long an emitted (idle) stream is retained before its ordering state is
 /// dropped. Bounded by trace finalization, which forgets traces eagerly.
@@ -131,10 +141,11 @@ pub(crate) struct AdmittedPayloadSegment {
 }
 
 impl PayloadSegmentReorderer {
-    /// Accept freshly captured segments and return those whose capture order
-    /// is now determined (in capture order). Segments whose predecessors may
-    /// still be in flight are held until `now` has passed `REORDER_WINDOW`
-    /// beyond their observation time.
+    /// Accept freshly captured segments and return kernel/seccomp segments
+    /// whose capture order is now determined. Synchronous TLS segments retain
+    /// FIFO arrival order. Other segments whose predecessors may still be in
+    /// flight are held until `now` has passed `REORDER_WINDOW` beyond their
+    /// observation time.
     pub(crate) fn admit(
         &mut self,
         now: SystemTime,
@@ -143,7 +154,20 @@ impl PayloadSegmentReorderer {
         if segments.is_empty() && self.streams.is_empty() {
             return Vec::new();
         }
+        let mut ready = Vec::new();
         for segment in segments {
+            if segment.source_boundary == PayloadSourceBoundary::TlsUserSpace
+                && segment
+                    .stream_key
+                    .as_str()
+                    .starts_with(TLS_SYNC_STREAM_PREFIX)
+            {
+                ready.push(AdmittedPayloadSegment {
+                    segment,
+                    discontinuity_before: false,
+                });
+                continue;
+            }
             let key = reorder_stream_key(&segment);
             let state = self.streams.entry(key).or_default();
             state.last_activity = now;
@@ -153,7 +177,6 @@ impl PayloadSegmentReorderer {
                 .or_default()
                 .push_back(segment);
         }
-        let mut ready = Vec::new();
         for state in self.streams.values_mut() {
             drain_ready(state, now, &mut ready);
         }

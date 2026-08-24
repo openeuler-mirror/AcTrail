@@ -169,6 +169,9 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
             config.storage_retention.clone(),
             config.plugin_alert_runtime,
             config.trace_finalization,
+            config
+                .shutdown_wait_ms
+                .saturating_sub(config.supervision_poll_interval_ms),
             config.workload_diagnostics.clone(),
             enforcement.clone(),
             config.command_control.clone(),
@@ -192,6 +195,9 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
             config.storage_retention.clone(),
             config.plugin_alert_runtime,
             config.trace_finalization,
+            config
+                .shutdown_wait_ms
+                .saturating_sub(config.supervision_poll_interval_ms),
             config.workload_diagnostics.clone(),
             enforcement.clone(),
             config.command_control.clone(),

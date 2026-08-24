@@ -15,36 +15,44 @@ use super::super::{
     DEFAULT_CONTROL_PENDING_CONNECTION_MAX, DEFAULT_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS,
     DEFAULT_FINALIZATION_POLL_INTERVAL_MS, DEFAULT_FINALIZATION_SETTLE_DELAY_MS,
     DEFAULT_FINALIZATION_SHUTDOWN_DRAIN_TIMEOUT_MS, DEFAULT_FINALIZATION_TRACES_PER_CYCLE,
-    DEFAULT_LLM_REQUEST_BODY_EXPORT_MAX_BYTES, DEFAULT_LLM_TOOL_RESULT_EXPORT_MAX_BYTES,
-    DEFAULT_PLUGIN_ALERT_DRAIN_TIMEOUT_MS, DEFAULT_PLUGIN_ALERT_QUEUE_CAPACITY,
-    DEFAULT_PLUGIN_ALERT_WRITES_PER_CYCLE, DEFAULT_PLUGIN_DISCOVERY_DIRECTORY,
-    DEFAULT_PLUGIN_DISCOVERY_MANIFEST_MAX_BYTES, DEFAULT_PLUGIN_DISCOVERY_MAX_PACKAGES,
-    DEFAULT_POST_TRACE_ADMISSION_TIMEOUT_MS, DEFAULT_POST_TRACE_BROKER_QUEUE_CAPACITY,
-    DEFAULT_POST_TRACE_BROKER_REPLY_TIMEOUT_MS, DEFAULT_POST_TRACE_EXECUTION_TIMEOUT_MS,
-    DEFAULT_POST_TRACE_MAX_IN_FLIGHT_TASKS, DEFAULT_POST_TRACE_REQUESTS_PER_CYCLE,
-    DEFAULT_POST_TRACE_SHUTDOWN_DRAIN_TIMEOUT_MS, DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS,
-    DEFAULT_WEB_ALERTS_LIMIT, DEFAULT_WEB_ALERTS_MAX_LIMIT, DisabledOrPath, EbpfCollectorConfig,
-    EbpfEnabledMode, EnforcementBackend, EnforcementBuiltinRuleConfig, EnforcementConfig,
-    EnforcementMarkStrategy, EnforcementScope, EnforcementSeccompSyscall,
-    FileBulkReadFastPathConfig, FileBulkReadObservationConfig, FileMetadataRetention,
-    FileObservationConfig, FileRawEventRetention, FileTtyObservationConfig,
-    FsEnumerateObservationConfig, Http2DataContentRetention, HttpBodyRetention, HttpExchangeConfig,
-    HttpHeadersRetention, IpcLineageConfig, L0LlmCallRetention, L0McpCallRetention, L1SseRetention,
-    L2HttpRetention, L3Http2FrameRetention, L4PayloadRetention, LlmAssemblyConfig,
+    DEFAULT_LLM_PROJECTION_MAX_ACTION_VERSIONS_PER_TRACE,
+    DEFAULT_LLM_PROJECTION_MAX_ACTIVE_RESPONSE_BINDINGS_PER_TRACE,
+    DEFAULT_LLM_PROJECTION_MAX_CORRELATION_STREAMS_PER_TRACE,
+    DEFAULT_LLM_PROJECTION_MAX_DAMAGED_RESPONSE_BINDINGS_PER_TRACE,
+    DEFAULT_LLM_PROJECTION_MAX_PENDING_REQUESTS_PER_STREAM,
+    DEFAULT_LLM_PROJECTION_MAX_PENDING_RESPONSES_PER_STREAM,
+    DEFAULT_LLM_PROJECTION_MAX_PENDING_TRAJECTORY_ACTIONS_PER_TRACE,
+    DEFAULT_LLM_PROJECTION_MAX_TOOL_ENTRIES_PER_TRACE, DEFAULT_LLM_REQUEST_BODY_EXPORT_MAX_BYTES,
+    DEFAULT_LLM_TOOL_RESULT_EXPORT_MAX_BYTES, DEFAULT_PLUGIN_ALERT_DRAIN_TIMEOUT_MS,
+    DEFAULT_PLUGIN_ALERT_QUEUE_CAPACITY, DEFAULT_PLUGIN_ALERT_WRITES_PER_CYCLE,
+    DEFAULT_PLUGIN_DISCOVERY_DIRECTORY, DEFAULT_PLUGIN_DISCOVERY_MANIFEST_MAX_BYTES,
+    DEFAULT_PLUGIN_DISCOVERY_MAX_PACKAGES, DEFAULT_POST_TRACE_ADMISSION_TIMEOUT_MS,
+    DEFAULT_POST_TRACE_BROKER_QUEUE_CAPACITY, DEFAULT_POST_TRACE_BROKER_REPLY_TIMEOUT_MS,
+    DEFAULT_POST_TRACE_EXECUTION_TIMEOUT_MS, DEFAULT_POST_TRACE_MAX_IN_FLIGHT_TASKS,
+    DEFAULT_POST_TRACE_REQUESTS_PER_CYCLE, DEFAULT_POST_TRACE_SHUTDOWN_DRAIN_TIMEOUT_MS,
+    DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS, DEFAULT_WEB_ALERTS_LIMIT,
+    DEFAULT_WEB_ALERTS_MAX_LIMIT, DisabledOrPath, EbpfCollectorConfig, EbpfEnabledMode,
+    EnforcementBackend, EnforcementBuiltinRuleConfig, EnforcementConfig, EnforcementMarkStrategy,
+    EnforcementScope, EnforcementSeccompSyscall, FileBulkReadFastPathConfig,
+    FileBulkReadObservationConfig, FileMetadataRetention, FileObservationConfig,
+    FileRawEventRetention, FileTtyObservationConfig, FsEnumerateObservationConfig,
+    Http2DataContentRetention, HttpBodyRetention, HttpExchangeConfig, HttpHeadersRetention,
+    IpcLineageConfig, L0LlmCallRetention, L0McpCallRetention, L1SseRetention, L2HttpRetention,
+    L3Http2FrameRetention, L4PayloadRetention, LlmAssemblyConfig, LlmProjectionStateConfig,
     LlmRequestBodyExportRetention, LlmRequestContentRetention, LlmResponseContentRetention,
-    LlmToolCallRetention, LlmToolResultContentExportRetention, LlmTrajectoryConfig,
-    LlmUsageRetention, MAX_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS, McpJsonRpcContentRetention,
-    MemlockRlimit, NetworkControlConfig, NetworkControlSeccompSyscall, PayloadBodyContentRetention,
-    PayloadConfig, PayloadMcpConfig, PayloadRedactionPolicy, PayloadSocketCaptureBackend,
-    PayloadSocketConfig, PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadStdioStorageMode,
-    PayloadTlsCaptureBackend, PayloadTlsConfig, PayloadTlsLibrary, PayloadTlsLibraryPath,
-    PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource,
-    PayloadTlsSyncRuntimeLibraryPath, PluginAlertRuntimeConfig, PluginDiscoveryConfig,
-    PostTraceRuntimeConfig, ProcessSeccompConfig, ProcessSeccompSyscall, ResourceMetricsConfig,
-    SeccompNotifyConfig, SemanticContentOwner, SemanticRetentionConfig, SocketPermissions,
-    SseDataPolicy, SseEventContentRetention, StartupPluginFailurePolicy, StartupPluginLoadConfig,
-    StartupPluginsConfig, StorageRetentionConfig, TraceFinalizationConfig, WebAlertsConfig,
-    WebServerConfig, WorkloadDiagnosticsConfig,
+    LlmStreamClassifierConfig, LlmToolCallRetention, LlmToolResultContentExportRetention,
+    LlmTrajectoryConfig, LlmUsageRetention, MAX_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS,
+    McpJsonRpcContentRetention, MemlockRlimit, NetworkControlConfig, NetworkControlSeccompSyscall,
+    PayloadBodyContentRetention, PayloadConfig, PayloadMcpConfig, PayloadRedactionPolicy,
+    PayloadSocketCaptureBackend, PayloadSocketConfig, PayloadSocketSeccompSyscall,
+    PayloadStdioConfig, PayloadStdioStorageMode, PayloadTlsCaptureBackend, PayloadTlsConfig,
+    PayloadTlsLibrary, PayloadTlsLibraryPath, PayloadTlsResolver, PayloadTlsSeccompSyscall,
+    PayloadTlsSource, PayloadTlsSyncRuntimeLibraryPath, PluginAlertRuntimeConfig,
+    PluginDiscoveryConfig, PostTraceRuntimeConfig, ProcessSeccompConfig, ProcessSeccompSyscall,
+    ResourceMetricsConfig, SeccompNotifyConfig, SemanticContentOwner, SemanticRetentionConfig,
+    SocketPermissions, SseDataPolicy, SseEventContentRetention, StartupPluginFailurePolicy,
+    StartupPluginLoadConfig, StartupPluginsConfig, StorageRetentionConfig, TraceFinalizationConfig,
+    WebAlertsConfig, WebServerConfig, WorkloadDiagnosticsConfig,
 };
 use super::{
     OperatorConfig, validate_application_protocol_config, validate_enforcement_config,
@@ -448,6 +456,32 @@ impl OperatorDocument {
             &capabilities,
         )?;
         let (plugin_discovery, plugin_alert_runtime, startup_plugins) = self.plugins.to_config()?;
+        let trace_finalization = self.control.finalization.to_config()?;
+        let shutdown_wait_ms = require_positive_u64(
+            "supervision.shutdown_wait_ms",
+            self.supervision.shutdown_wait_ms,
+        )?;
+        let supervision_poll_interval_ms = require_positive_u64(
+            "supervision.poll_interval_ms",
+            self.supervision.poll_interval_ms,
+        )?;
+        let minimum_shutdown_wait_ms = trace_finalization
+            .shutdown_drain_timeout_ms
+            .checked_add(trace_finalization.shutdown_drain_timeout_ms)
+            .and_then(|total| total.checked_add(trace_finalization.shutdown_drain_timeout_ms))
+            .and_then(|total| {
+                total.checked_add(trace_finalization.post_trace.shutdown_drain_timeout_ms)
+            })
+            .and_then(|total| total.checked_add(plugin_alert_runtime.drain_timeout_ms))
+            .and_then(|total| total.checked_add(supervision_poll_interval_ms))
+            .ok_or_else(|| {
+                "configured shutdown drain budgets overflow u64 milliseconds".to_string()
+            })?;
+        if shutdown_wait_ms < minimum_shutdown_wait_ms {
+            return Err(format!(
+                "supervision.shutdown_wait_ms must be at least {minimum_shutdown_wait_ms}ms: 3 * control.finalization.shutdown_drain_timeout_ms (terminal + unsettled semantics + export) + control.finalization.post_trace.shutdown_drain_timeout_ms + plugins.alerts.drain_timeout_ms + supervision.poll_interval_ms"
+            ));
+        }
         Ok(OperatorConfig {
             socket_path: PathBuf::from(&self.control.socket_path),
             socket_permissions: SocketPermissions {
@@ -495,7 +529,7 @@ impl OperatorDocument {
             file_observation: self.file_observation.to_config()?,
             application_protocol,
             resource_metrics,
-            trace_finalization: self.control.finalization.to_config()?,
+            trace_finalization,
             provider_rule_set: self.provider.to_config(),
             enforcement,
             command_control,
@@ -504,14 +538,8 @@ impl OperatorDocument {
                 "supervision.startup_wait_ms",
                 self.supervision.startup_wait_ms,
             )?,
-            shutdown_wait_ms: require_positive_u64(
-                "supervision.shutdown_wait_ms",
-                self.supervision.shutdown_wait_ms,
-            )?,
-            supervision_poll_interval_ms: require_positive_u64(
-                "supervision.poll_interval_ms",
-                self.supervision.poll_interval_ms,
-            )?,
+            shutdown_wait_ms,
+            supervision_poll_interval_ms,
         })
     }
 }

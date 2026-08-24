@@ -18,6 +18,7 @@ pub enum StorageCommand {
     Payload,
     Actions,
     Diagnostics,
+    TlsFlow,
     ExportJson,
     ExportOtel,
 }
@@ -41,6 +42,7 @@ pub struct ViewInvocation {
     pub payload_direction: Option<PayloadDirection>,
     pub payload_segment_id: Option<PayloadSegmentId>,
     pub payload_format: Option<PayloadFormat>,
+    pub action_kinds: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -108,6 +110,7 @@ impl ViewerCli {
             payload_direction: payload_direction_for_command(&self.command),
             payload_segment_id: payload_segment_id_for_command(&self.command),
             payload_format: payload_format_for_command(&self.command),
+            action_kinds: action_kinds_for_command(&self.command),
         })
     }
 }
@@ -129,9 +132,11 @@ enum ViewerCommandArgs {
     #[command(about = "Show one payload segment")]
     Payload(PayloadArgs),
     #[command(about = "List semantic actions for a trace")]
-    Actions(TraceLimitedArgs),
+    Actions(ActionArgs),
     #[command(about = "List diagnostics for a trace")]
     Diagnostics(TraceLimitedArgs),
+    #[command(about = "List TLS flow-control diagnostics for a trace")]
+    TlsFlow(TraceArgs),
     #[command(about = "Export one trace as JSON graph")]
     ExportJson(ExportJsonArgs),
     #[command(about = "Export one trace as OpenTelemetry OTLP JSON")]
@@ -150,6 +155,7 @@ impl From<&ViewerCommandArgs> for StorageCommand {
             ViewerCommandArgs::Payload(_) => Self::Payload,
             ViewerCommandArgs::Actions(_) => Self::Actions,
             ViewerCommandArgs::Diagnostics(_) => Self::Diagnostics,
+            ViewerCommandArgs::TlsFlow(_) => Self::TlsFlow,
             ViewerCommandArgs::ExportJson(_) => Self::ExportJson,
             ViewerCommandArgs::ExportOtel(_) => Self::ExportOtel,
         }
@@ -178,6 +184,18 @@ struct TraceLimitedArgs {
 
     #[command(flatten)]
     limit: LimitedArgs,
+}
+
+#[derive(Clone, Debug, clap::Args)]
+struct ActionArgs {
+    #[command(flatten)]
+    trace: TraceArgs,
+
+    #[command(flatten)]
+    limit: LimitedArgs,
+
+    #[arg(long = "kind", value_name = "KIND")]
+    kind: Vec<String>,
 }
 
 #[derive(Clone, Debug, clap::Args)]
@@ -228,8 +246,9 @@ fn trace_id_for_command(command: &Option<ViewerCommandArgs>) -> Option<TraceId> 
         Some(ViewerCommandArgs::Processes(args))
         | Some(ViewerCommandArgs::Events(args))
         | Some(ViewerCommandArgs::Network(args))
-        | Some(ViewerCommandArgs::Actions(args))
         | Some(ViewerCommandArgs::Diagnostics(args)) => args.trace.trace_id,
+        Some(ViewerCommandArgs::TlsFlow(args)) => args.trace_id,
+        Some(ViewerCommandArgs::Actions(args)) => args.trace.trace_id,
         Some(ViewerCommandArgs::Payloads(args)) => args.trace.trace_id,
         Some(ViewerCommandArgs::Payload(args)) => args.trace.trace_id,
         Some(ViewerCommandArgs::ExportJson(args)) | Some(ViewerCommandArgs::ExportOtel(args)) => {
@@ -245,10 +264,11 @@ fn row_limit_for_command(command: &Option<ViewerCommandArgs>) -> Result<Option<R
         Some(ViewerCommandArgs::Processes(args))
         | Some(ViewerCommandArgs::Events(args))
         | Some(ViewerCommandArgs::Network(args))
-        | Some(ViewerCommandArgs::Actions(args))
         | Some(ViewerCommandArgs::Diagnostics(args)) => row_limit(args.limit.head, args.limit.tail),
+        Some(ViewerCommandArgs::Actions(args)) => row_limit(args.limit.head, args.limit.tail),
         Some(ViewerCommandArgs::Payloads(args)) => row_limit(args.limit.head, args.limit.tail),
         Some(ViewerCommandArgs::Summary(_))
+        | Some(ViewerCommandArgs::TlsFlow(_))
         | Some(ViewerCommandArgs::ExportJson(_))
         | Some(ViewerCommandArgs::ExportOtel(_))
         | None => Ok(None),
@@ -274,6 +294,13 @@ fn payload_format_for_command(command: &Option<ViewerCommandArgs>) -> Option<Pay
     match command {
         Some(ViewerCommandArgs::Payload(args)) => Some(args.format),
         _ => None,
+    }
+}
+
+fn action_kinds_for_command(command: &Option<ViewerCommandArgs>) -> Vec<String> {
+    match command {
+        Some(ViewerCommandArgs::Actions(args)) => args.kind.clone(),
+        _ => Vec::new(),
     }
 }
 

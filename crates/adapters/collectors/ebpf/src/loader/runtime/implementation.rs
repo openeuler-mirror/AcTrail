@@ -215,19 +215,36 @@ impl EbpfRuntime {
             self.last_raw_sample_count = 0;
             return Ok(Vec::new());
         }
-        self.drain_consumer_queue()?;
-        self.capture_event_transport_loss()?;
+        let drain_error = self.drain_consumer_queue().err();
         let raw_events = std::mem::take(&mut self.pending_raw_events);
         self.last_raw_sample_count = raw_events.len();
-        let events = raw_events
-            .into_iter()
-            .map(|raw| decode_kernel_event(&raw))
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut events = Vec::with_capacity(raw_events.len());
+        let mut decode_error = None;
+        for raw in raw_events {
+            match decode_kernel_event(&raw) {
+                Ok(event) => events.push(event),
+                Err(error) if decode_error.is_none() => decode_error = Some(error),
+                Err(_) => {}
+            }
+        }
+        let diagnostics_error = self.capture_event_transport_loss().err();
+        for error in [decode_error, diagnostics_error].into_iter().flatten() {
+            self.record_event_transport_loss_summary(format!(
+                "kernel event processing failed locally: {error:?}"
+            ));
+        }
+        if let Some(error) = drain_error {
+            self.record_event_transport_loss_summary(format!(
+                "kernel event consumer failed after delivering queued events: {error:?}"
+            ));
+            if events.is_empty() {
+                return Err(error);
+            }
+        }
         // Both ring buffers and perf buffers are drained per CPU, so callback
         // order is not a global causal order. Timestamped events are sorted
         // causally; untimestamped control diagnostics remain last in arrival
         // order.
-        let mut events = events;
         events.sort_by_key(|event| {
             let observed_ktime_ns = event.observed_ktime_ns();
             (observed_ktime_ns.is_none(), observed_ktime_ns)
@@ -246,8 +263,13 @@ impl EbpfRuntime {
         if self.consumer.is_none() {
             return Ok(());
         }
-        self.drain_consumer_queue()?;
-        self.capture_event_transport_loss()?;
+        let drain_error = self.drain_consumer_queue().err();
+        let diagnostics_error = self.capture_event_transport_loss().err();
+        for error in [drain_error, diagnostics_error].into_iter().flatten() {
+            self.record_event_transport_loss_summary(format!(
+                "kernel event transport flush failed locally: {error:?}"
+            ));
+        }
         Ok(())
     }
 
@@ -306,12 +328,16 @@ impl EbpfRuntime {
                 diagnostics.socket_state_update_fail,
                 diagnostics.socket_sequence_update_fail,
             );
-            if self.last_event_transport_loss_summary.as_deref() != Some(summary.as_str()) {
-                self.last_event_transport_loss_summary = Some(summary.clone());
-                self.pending_event_transport_loss_summaries.push(summary);
-            }
+            self.record_event_transport_loss_summary(summary);
         }
         Ok(())
+    }
+
+    fn record_event_transport_loss_summary(&mut self, summary: String) {
+        if self.last_event_transport_loss_summary.as_deref() != Some(summary.as_str()) {
+            self.last_event_transport_loss_summary = Some(summary.clone());
+            self.pending_event_transport_loss_summaries.push(summary);
+        }
     }
 
     pub fn take_event_transport_loss_summaries(&mut self) -> Vec<String> {

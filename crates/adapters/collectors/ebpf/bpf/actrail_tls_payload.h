@@ -53,6 +53,7 @@ enum actrail_tls_payload_capture_state {
 };
 
 enum actrail_tls_capture_signal {
+    ACTRAIL_TLS_CAPTURE_SIGCONT = 18,
     ACTRAIL_TLS_CAPTURE_SIGSTOP = 19,
 };
 

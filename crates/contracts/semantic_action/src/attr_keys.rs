@@ -218,6 +218,7 @@ pub mod llm_response {
     pub const REASONING_TOKENS: &str = "llm.response.reasoning_tokens";
     pub const SSE_EVENTS_JSON: &str = "llm.response.sse_events_json";
     pub const STREAM: &str = "llm.response.stream";
+    pub const TOOL_ARGUMENTS: &str = "llm.response.tool_arguments";
     pub const TOOL_CALLS_JSON: &str = "llm.response.tool_calls_json";
     pub const TOTAL_TOKENS: &str = "llm.response.total_tokens";
 }

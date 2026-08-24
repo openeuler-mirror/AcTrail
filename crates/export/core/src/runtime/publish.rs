@@ -2,6 +2,7 @@ use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
 use model_core::trace::TraceRecord;
 use semantic_action::{FileObservationPath, SemanticAction, SemanticActionLink};
+use std::time::Duration;
 
 use plugin_system::{ObservationConsumer, PluginInstanceStatus, PluginRuntimeError, PostTraceTask};
 
@@ -87,8 +88,8 @@ impl ExportRuntime {
         self.subscriptions.remove_observation_consumer(instance_id)
     }
 
-    pub fn shutdown_observation_consumers(&mut self) -> ExportPublishReport {
-        self.subscriptions.shutdown_observation_consumers()
+    pub fn shutdown_observation_consumers(&mut self, timeout: Duration) -> ExportPublishReport {
+        self.subscriptions.shutdown_observation_consumers(timeout)
     }
 }
 

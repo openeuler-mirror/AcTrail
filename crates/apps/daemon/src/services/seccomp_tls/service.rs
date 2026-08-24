@@ -92,13 +92,27 @@ impl SeccompTlsService {
         &mut self,
         requests: Vec<TlsPayloadCaptureRequest>,
     ) -> Result<(), ControlError> {
+        let mut first_error = None;
         for request in requests {
             let read_result = self.capture_stopped_request(&request);
             let continue_result = continue_stopped_process(request.host_pid);
-            continue_result?;
-            read_result?;
+            if let Err(error) = continue_result
+                && first_error.is_none()
+            {
+                first_error = Some(error);
+            }
+            if let Err(error) = read_result
+                && first_error.is_none()
+            {
+                first_error = Some(error);
+            }
         }
-        self.ensure_pending_capacity()
+        if let Err(error) = self.ensure_pending_capacity()
+            && first_error.is_none()
+        {
+            first_error = Some(error);
+        }
+        first_error.map_or(Ok(()), Err)
     }
 
     pub(crate) fn ingest_direct_captures(

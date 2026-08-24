@@ -184,22 +184,23 @@ fn run_event_consumer(
         if poll_fds[1].revents & (libc::POLLIN | libc::POLLERR | libc::POLLHUP) != 0 {
             return;
         }
-        if let Err(error) = event_buffer.consume() {
-            let _ = messages_tx.try_send(EventConsumerMessage::Failure {
-                stage: error.stage,
-                message: error.message,
-            });
-            return;
-        }
+        let consume_error = event_buffer.consume().err();
         let raw = std::mem::take(&mut *batch);
         let perf_lost = event_buffer.lost_count();
         let perf_lost_changed = perf_lost != last_reported_perf_lost;
         last_reported_perf_lost = perf_lost;
         if !raw.is_empty() || perf_lost_changed {
-            if !send_raw_batches(messages_tx, raw, perf_lost) {
+            if !send_raw_batches(messages_tx, raw, perf_lost, Some(wake_fd)) {
                 return;
             }
+        }
+        if let Some(error) = consume_error {
+            let _ = messages_tx.send(EventConsumerMessage::Failure {
+                stage: error.stage,
+                message: error.message,
+            });
             signal_eventfd(wake_fd);
+            return;
         }
     }
 }
@@ -212,6 +213,7 @@ fn send_raw_batches(
     messages_tx: &SyncSender<EventConsumerMessage>,
     raw: Vec<Vec<u8>>,
     perf_lost: u64,
+    wake_fd: Option<RawFd>,
 ) -> bool {
     let mut chunk: Vec<Vec<u8>> = Vec::new();
     let mut chunk_bytes = 0usize;
@@ -230,6 +232,9 @@ fn send_raw_batches(
             {
                 return false;
             }
+            if let Some(wake_fd) = wake_fd {
+                signal_eventfd(wake_fd);
+            }
             chunk_bytes = 0;
         }
         chunk_bytes = chunk_bytes.saturating_add(record.len());
@@ -246,6 +251,9 @@ fn send_raw_batches(
             .is_err()
         {
             return false;
+        }
+        if let Some(wake_fd) = wake_fd {
+            signal_eventfd(wake_fd);
         }
     }
     true
@@ -302,7 +310,7 @@ mod tests {
         // Capacity large enough that send_raw_batches never blocks while
         // the test drains afterwards.
         let (tx, rx) = sync_channel::<EventConsumerMessage>(1024);
-        assert!(send_raw_batches(&tx, raw, perf_lost));
+        assert!(send_raw_batches(&tx, raw, perf_lost, None));
         drop(tx);
         let mut batches = Vec::new();
         while let Ok(EventConsumerMessage::RawBatch { raw, .. }) = rx.recv() {

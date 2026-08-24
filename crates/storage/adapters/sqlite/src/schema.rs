@@ -316,6 +316,33 @@ CREATE TABLE IF NOT EXISTS mcp_jsonrpc_action_refs (
     PRIMARY KEY (trace_id, action_key)
 ) WITHOUT ROWID;
 
+CREATE TABLE IF NOT EXISTS tls_flow_diagnostics (
+    id INTEGER PRIMARY KEY,
+    trace_id INTEGER NOT NULL,
+    stream_key TEXT NOT NULL,
+    direction INTEGER NOT NULL,
+    reason_code INTEGER NOT NULL,
+    observed_size INTEGER NOT NULL,
+    emitted_size INTEGER NOT NULL,
+    emitted_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS llm_pipeline_diagnostics (
+    id INTEGER PRIMARY KEY,
+    trace_id INTEGER NOT NULL,
+    process_id INTEGER NOT NULL,
+    stream_key TEXT,
+    stage INTEGER NOT NULL,
+    code INTEGER NOT NULL,
+    severity INTEGER NOT NULL,
+    observed_at INTEGER NOT NULL,
+    discarded_bytes INTEGER,
+    discarded_entries INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_llm_pipeline_diagnostics_trace_time
+ON llm_pipeline_diagnostics (trace_id, observed_at, id);
+
 CREATE TABLE IF NOT EXISTS diagnostics (
     diagnostic_id INTEGER PRIMARY KEY,
     trace_id INTEGER,
@@ -412,6 +439,7 @@ fn migrate_query_indexes(connection: &Connection) -> Result<(), rusqlite::Error>
     connection.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_events_trace_id ON events(trace_id);
          CREATE INDEX IF NOT EXISTS idx_payload_segments_trace_id ON payload_segments(trace_id);
+         CREATE INDEX IF NOT EXISTS idx_tls_flow_diagnostics_trace_id ON tls_flow_diagnostics(trace_id);
          CREATE INDEX IF NOT EXISTS idx_semantic_actions_trace_start ON semantic_actions(trace_id, start_time);
          CREATE INDEX IF NOT EXISTS idx_semantic_actions_trace_kind_start ON semantic_actions(trace_id, kind_code, start_time, action_key);
          CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_parent ON semantic_action_links(trace_id, parent_action_key);
@@ -448,6 +476,17 @@ fn validate_writable_schema_state(
 
 fn validate_current_schema(connection: &Connection) -> Result<(), rusqlite::Error> {
     crate::alerts::schema::validate(connection)?;
+    require_schema_object(connection, "table", "tls_flow_diagnostics")?;
+    require_column(connection, "tls_flow_diagnostics", "trace_id")?;
+    require_column(connection, "tls_flow_diagnostics", "stream_key")?;
+    require_column(connection, "tls_flow_diagnostics", "direction")?;
+    require_column(connection, "tls_flow_diagnostics", "reason_code")?;
+    require_column(connection, "tls_flow_diagnostics", "observed_size")?;
+    require_column(connection, "tls_flow_diagnostics", "emitted_size")?;
+    require_column(connection, "tls_flow_diagnostics", "emitted_at")?;
+    require_integer_column(connection, "llm_pipeline_diagnostics", "stage")?;
+    require_integer_column(connection, "llm_pipeline_diagnostics", "code")?;
+    require_integer_column(connection, "llm_pipeline_diagnostics", "severity")?;
     require_column(connection, "processes", "process_id")?;
     require_column(connection, "process_namespace_aliases", "process_id")?;
     require_column(connection, "traces", "alert_token")?;
@@ -542,6 +581,24 @@ fn require_column(
 ) -> Result<(), rusqlite::Error> {
     if column_exists(connection, table, column)? {
         return Ok(());
+    }
+    Err(rusqlite::Error::InvalidQuery)
+}
+
+fn require_integer_column(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+) -> Result<(), rusqlite::Error> {
+    let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
+    let rows = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+    })?;
+    for row in rows {
+        let (name, column_type) = row?;
+        if name == column && column_type.eq_ignore_ascii_case("INTEGER") {
+            return Ok(());
+        }
     }
     Err(rusqlite::Error::InvalidQuery)
 }

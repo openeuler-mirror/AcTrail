@@ -18,7 +18,7 @@ pub(super) const ATTR_PROCESS_PARENT_IDENTITY_STATE: &str = attrs::process_paren
 pub(super) const PROCESS_PARENT_IDENTITY_STATE_CONFLICT: &str = "conflict";
 pub(super) const PROCESS_PARENT_IDENTITY_STATE_OBSERVED: &str = "observed";
 
-pub(super) fn action_for_live_state(action: &SemanticAction) -> SemanticAction {
+pub(crate) fn action_for_live_state(action: &SemanticAction) -> SemanticAction {
     let mut state_action = action.clone();
     for key in LIVE_STATE_OMITTED_ATTRIBUTES {
         state_action.attributes.remove(*key);
@@ -432,7 +432,7 @@ pub(super) fn event_evidence(event: &DomainEvent, role: &str) -> SemanticEvidenc
     }
 }
 
-pub(super) fn append_missing_evidence(
+pub(crate) fn append_missing_evidence(
     target: &mut Vec<SemanticEvidence>,
     source: &[SemanticEvidence],
 ) {
@@ -484,7 +484,7 @@ pub(super) fn process_action_id(
     )
 }
 
-pub(super) fn llm_call_action_id_from_request_action_id(request_action_id: &str) -> String {
+pub(crate) fn llm_call_action_id_from_request_action_id(request_action_id: &str) -> String {
     request_action_id
         .strip_suffix(":llm.request")
         .map(|prefix| format!("{prefix}:llm.call"))

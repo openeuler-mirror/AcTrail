@@ -46,6 +46,9 @@ pub fn run_live_verification(
     // verify-live asserts retained payload bytes, while production defaults
     // intentionally keep the L4 payload layer disabled.
     seccomp_defaults.semantic_retention.l4_payload.enabled = true;
+    let shutdown_runtime_timeout_ms = seccomp_defaults
+        .shutdown_wait_ms
+        .saturating_sub(seccomp_defaults.supervision_poll_interval_ms);
     let storage_config = StorageConfig::sqlite_path(&config.storage_path);
     let mut server = LocalDaemonServer::build_with_provider_rule_set(
         &storage_config,
@@ -85,6 +88,7 @@ pub fn run_live_verification(
         seccomp_defaults.storage_retention,
         seccomp_defaults.plugin_alert_runtime,
         seccomp_defaults.trace_finalization,
+        shutdown_runtime_timeout_ms,
         seccomp_defaults.workload_diagnostics,
         config.enforcement.clone(),
         seccomp_defaults.command_control,

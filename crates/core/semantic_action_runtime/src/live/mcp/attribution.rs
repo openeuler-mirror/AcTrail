@@ -3,9 +3,9 @@ use std::time::SystemTime;
 
 use model_core::ids::TraceId;
 use semantic_action::{SemanticAction, SemanticActionKind, attr_keys as attrs};
+use serde_json::Value;
 
 use super::projector::LiveMcpProjector;
-use crate::live::tool::DeclaredLlmToolCall;
 
 #[derive(Default)]
 pub(super) struct McpAttributionState {
@@ -234,19 +234,38 @@ impl LiveMcpProjector {
 
 impl LlmToolCallProposal {
     fn from_response(action: &SemanticAction) -> Vec<Self> {
-        DeclaredLlmToolCall::from_response(action)
+        let Some(tool_calls_json) = action.attributes.get(attrs::llm_response::TOOL_CALLS_JSON)
+        else {
+            return Vec::new();
+        };
+        let Ok(Value::Array(tool_calls)) = serde_json::from_str::<Value>(tool_calls_json) else {
+            return Vec::new();
+        };
+        tool_calls
             .into_iter()
-            .filter_map(|tool_call| {
-                let encoded_name = tool_call.name.strip_prefix("mcp__")?;
+            .enumerate()
+            .filter_map(|(ordinal, tool_call)| {
+                // MCP attribution needs identity only. Argument canonicalization and hashing
+                // belong to the tool projector and must not be repeated on this hot path.
+                let name = tool_call
+                    .pointer("/function/name")
+                    .and_then(Value::as_str)
+                    .or_else(|| tool_call.get("name").and_then(Value::as_str))?;
+                let encoded_name = name.strip_prefix("mcp__")?;
                 if !encoded_name.contains("__") {
                     return None;
                 }
                 Some(Self {
-                    ordinal: tool_call.ordinal,
+                    ordinal,
                     response_action_id: action.action_id.clone(),
                     response_start_time: action.start_time,
-                    tool_call_id: tool_call.tool_call_id,
-                    name: tool_call.name,
+                    tool_call_id: tool_call
+                        .get("id")
+                        .or_else(|| tool_call.get("call_id"))
+                        .and_then(Value::as_str)
+                        .filter(|id| !id.is_empty())
+                        .map(ToString::to_string),
+                    name: name.to_string(),
                 })
             })
             .collect()

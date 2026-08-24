@@ -8,7 +8,7 @@ use super::http::HttpMessageLinkProjector;
 use super::llm::LlmExchangeLinkProjector;
 use super::sse::SseLinkProjector;
 use crate::live::actions::action_for_live_state;
-use crate::live::llm::LlmHttpRequestLink;
+use crate::llm_pipeline::{LlmHttpRequestLink, LlmHttpResponseLink};
 
 pub(in crate::live) struct ActionLinkProjector {
     agent: AgentPerformedActionLinkProjector,
@@ -25,6 +25,14 @@ impl ActionLinkProjector {
     ) -> Option<SemanticActionLink> {
         self.http
             .observe_exact_request_link(&proposal.llm_request, &proposal.http_request)
+    }
+
+    pub(in crate::live) fn observe_exact_http_response_link(
+        &mut self,
+        proposal: &LlmHttpResponseLink,
+    ) -> Option<SemanticActionLink> {
+        self.http
+            .observe_exact_response_link(&proposal.llm_response, &proposal.http_response)
     }
 
     pub(in crate::live) fn new() -> Self {

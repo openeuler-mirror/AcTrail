@@ -580,6 +580,9 @@ fn append_output(output: &mut LiveSemanticActionOutput, other: LiveSemanticActio
     output
         .llm_request_contents
         .extend(other.llm_request_contents);
+    output
+        .llm_pipeline_diagnostics
+        .extend(other.llm_pipeline_diagnostics);
     output.deferred_events.extend(other.deferred_events);
     output.retain_event = output.retain_event && other.retain_event;
     output.raw_event_consumed = output.raw_event_consumed || other.raw_event_consumed;
@@ -595,6 +598,9 @@ fn append_replayed_output(output: &mut LiveSemanticActionOutput, other: LiveSema
     output
         .llm_request_contents
         .extend(other.llm_request_contents);
+    output
+        .llm_pipeline_diagnostics
+        .extend(other.llm_pipeline_diagnostics);
     output.deferred_events.extend(other.deferred_events);
 }
 

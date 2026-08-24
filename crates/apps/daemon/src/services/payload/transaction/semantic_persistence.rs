@@ -2,11 +2,34 @@ use super::*;
 use semantic_action::SemanticEvidenceKind;
 
 impl PayloadTransactionContext<'_> {
+    pub(super) fn finish_incomplete_http1_response(
+        &mut self,
+        segment: &PayloadSegment,
+    ) -> SemanticActionBatch {
+        let mut output = self
+            .semantic_actions
+            .finish_incomplete_http1_response(segment);
+        self.llm_pipeline_diagnostics
+            .append(&mut output.llm_pipeline_diagnostics);
+        SemanticActionBatch::from_action_output(
+            output.actions,
+            output.links,
+            output.file_observation_paths,
+            output.file_path_sets,
+            output.llm_request_contents,
+            output.llm_request_lineages,
+            output.mcp_jsonrpc_contents,
+            output.payload_segments,
+        )
+    }
+
     pub(super) fn observe_payload_gap(&mut self, segment: &PayloadSegment) -> SemanticActionBatch {
         let observation = self.semantic_actions.observe_payload_gap(segment);
         self.mcp_stdio_diagnostics
             .extend(observation.mcp_stdio_diagnostics);
-        let output = observation.output;
+        let mut output = observation.output;
+        self.llm_pipeline_diagnostics
+            .append(&mut output.llm_pipeline_diagnostics);
         SemanticActionBatch::from_action_output(
             output.actions,
             output.links,
@@ -26,7 +49,9 @@ impl PayloadTransactionContext<'_> {
         let observation = self.semantic_actions.observe_event_with_diagnostics(event);
         self.mcp_stdio_diagnostics
             .extend(observation.mcp_stdio_diagnostics);
-        let output = observation.output;
+        let mut output = observation.output;
+        self.llm_pipeline_diagnostics
+            .append(&mut output.llm_pipeline_diagnostics);
         SemanticActionBatch::from_action_output(
             output.actions,
             output.links,
@@ -139,7 +164,9 @@ impl PayloadTransactionContext<'_> {
         };
         self.mcp_stdio_diagnostics
             .extend(observation.mcp_stdio_diagnostics);
-        let output = observation.output;
+        let mut output = observation.output;
+        self.llm_pipeline_diagnostics
+            .append(&mut output.llm_pipeline_diagnostics);
         let mut batch = SemanticActionBatch::from_action_output(
             output.actions,
             output.links,

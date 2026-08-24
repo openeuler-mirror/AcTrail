@@ -163,6 +163,7 @@ def main() -> int:
     launches: list[subprocess.Popen[str]] = []
     containers: list[TestContainer] = []
     daemon: subprocess.Popen[str] | None = None
+    test_image: ContainerImage | None = None
     succeeded = False
 
     try:
@@ -290,6 +291,16 @@ def main() -> int:
                 container.close()
             except Exception as error:
                 print(f"container cleanup failed: {error}", file=sys.stderr)
+        if test_image is not None:
+            try:
+                removed_images = test_image.prune_other_versions()
+                if removed_images:
+                    print(
+                        "removed stale test images: " + ", ".join(removed_images),
+                        file=sys.stderr,
+                    )
+            except Exception as error:
+                print(f"image cleanup failed: {error}", file=sys.stderr)
         if daemon is not None:
             terminate_process(daemon)
             if not succeeded:

@@ -193,7 +193,7 @@ class OtelHttpCase(TestCase):
         request_marker: str | None = None,
     ) -> int:
         assert self._environment is not None
-        answer_marker = f"A{secrets.token_hex(5)}"
+        answer_marker = "ready"
         prompt = ""
         if request_marker is not None:
             prompt = f'The opaque request verification marker is "{request_marker}". '

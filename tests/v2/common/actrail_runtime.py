@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -201,6 +202,55 @@ class ActrailRuntime:
         }
         if plugin_directory is not None:
             quoted["plugins"] = json.dumps(str(plugin_directory.resolve()))
+        shutdown_wait_ms = int(
+            os.environ.get("ACTRAIL_V2_SHUTDOWN_WAIT_MS", "150100")
+        )
+        supervision_poll_interval_ms = int(
+            os.environ.get("ACTRAIL_V2_SUPERVISION_POLL_INTERVAL_MS", "100")
+        )
+        finalization_shutdown_drain_timeout_ms = int(
+            os.environ.get(
+                "ACTRAIL_V2_FINALIZATION_SHUTDOWN_DRAIN_TIMEOUT_MS",
+                "30000",
+            )
+        )
+        post_trace_broker_reply_timeout_ms = int(
+            os.environ.get(
+                "ACTRAIL_V2_POST_TRACE_BROKER_REPLY_TIMEOUT_MS",
+                "5000",
+            )
+        )
+        post_trace_shutdown_drain_timeout_ms = int(
+            os.environ.get(
+                "ACTRAIL_V2_POST_TRACE_SHUTDOWN_DRAIN_TIMEOUT_MS",
+                "30000",
+            )
+        )
+        plugin_alert_drain_timeout_ms = int(
+            os.environ.get(
+                "ACTRAIL_V2_PLUGIN_ALERT_DRAIN_TIMEOUT_MS",
+                "30000",
+            )
+        )
+        timing_values = {
+            "ACTRAIL_V2_SHUTDOWN_WAIT_MS": shutdown_wait_ms,
+            "ACTRAIL_V2_SUPERVISION_POLL_INTERVAL_MS": supervision_poll_interval_ms,
+            "ACTRAIL_V2_FINALIZATION_SHUTDOWN_DRAIN_TIMEOUT_MS": (
+                finalization_shutdown_drain_timeout_ms
+            ),
+            "ACTRAIL_V2_POST_TRACE_BROKER_REPLY_TIMEOUT_MS": (
+                post_trace_broker_reply_timeout_ms
+            ),
+            "ACTRAIL_V2_POST_TRACE_SHUTDOWN_DRAIN_TIMEOUT_MS": (
+                post_trace_shutdown_drain_timeout_ms
+            ),
+            "ACTRAIL_V2_PLUGIN_ALERT_DRAIN_TIMEOUT_MS": (
+                plugin_alert_drain_timeout_ms
+            ),
+        }
+        for name, value in timing_values.items():
+            if value < 1:
+                raise ValueError(f"{name} must be positive")
         payload_tls = (
             f"sync_event_socket_path = {quoted['tls_sync']}\n"
         )
@@ -239,6 +289,16 @@ class ActrailRuntime:
             f"socket_path = {quoted['socket']}\n"
             f"pid_file = {quoted['pid']}\n"
             f"log_path = {quoted['log']}\n"
+            "\n[supervision]\n"
+            f"shutdown_wait_ms = {shutdown_wait_ms}\n"
+            f"poll_interval_ms = {supervision_poll_interval_ms}\n"
+            "\n[control.finalization]\n"
+            "shutdown_drain_timeout_ms = "
+            f"{finalization_shutdown_drain_timeout_ms}\n"
+            "\n[control.finalization.post_trace]\n"
+            f"broker_reply_timeout_ms = {post_trace_broker_reply_timeout_ms}\n"
+            "shutdown_drain_timeout_ms = "
+            f"{post_trace_shutdown_drain_timeout_ms}\n"
             "\n[storage.sqlite]\n"
             f"path = {quoted['storage']}\n"
             "\n[storage.retention]\n"
@@ -255,6 +315,8 @@ class ActrailRuntime:
             "\n[cluster.center]\n"
             f"root_dir = {quoted['cluster_root']}\n"
             "\n[plugins.discovery]\n"
-            f"directory = {quoted['plugins']}\n",
+            f"directory = {quoted['plugins']}\n"
+            "\n[plugins.alerts]\n"
+            f"drain_timeout_ms = {plugin_alert_drain_timeout_ms}\n",
             encoding="utf-8",
         )
