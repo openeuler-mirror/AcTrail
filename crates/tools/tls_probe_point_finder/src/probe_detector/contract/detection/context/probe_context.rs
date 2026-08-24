@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use crate::ToolResult;
 use crate::elf::ElfImage;
 use crate::plan::{ProbeSource, TargetIdentity, TlsProvider};
 
@@ -86,6 +87,18 @@ impl<'a> ProbeContext<'a> {
                 library: Some(library),
             },
             request: self.request,
+        }
+    }
+
+    pub(crate) fn parse_probe_image(&self, path: &std::path::Path) -> ToolResult<ElfImage> {
+        match self.target_image.analysis_cache() {
+            Some(cache) => ElfImage::parse_with_analysis_cache(
+                path,
+                self.target_image.scan_mode(),
+                self.target_image.scan_chunk_bytes(),
+                cache,
+            ),
+            None => ElfImage::parse(path),
         }
     }
 }

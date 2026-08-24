@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use crate::elf::ElfImage;
 use crate::plan::{ProbeSource, TlsProvider};
 use crate::probe_detector::contract::detection::{
     DetectionError, DetectionEvidence, DetectionOutcome, LibraryCandidate, ProbeContext,
@@ -59,7 +58,8 @@ impl ProbeDetector for NssProbeDetector {
             ));
         }
         for candidate in self.candidates(context.target_image.path(), &context.request.libraries) {
-            let image = ElfImage::parse(&candidate)
+            let image = context
+                .parse_probe_image(&candidate)
                 .map_err(|error| DetectionError::new(self.path.clone(), error.to_string()))?;
             if image.arch() != context.target_image.arch() {
                 continue;

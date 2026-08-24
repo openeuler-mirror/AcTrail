@@ -24,8 +24,8 @@ from v2_artifacts import (  # noqa: E402
     PreparationInputs,
     build_input_document,
     cache_key_for,
-    write_test_profile,
 )
+from v2_artifacts_support import V2TestProfile  # noqa: E402
 from tests.v2.common.kata_runtime import DeploymentArtifacts  # noqa: E402
 
 
@@ -121,7 +121,7 @@ class ArtifactPreparerTest(unittest.TestCase):
             manifest.parent.mkdir()
             manifest.write_text("{}", encoding="utf-8")
 
-            write_test_profile(inputs, manifest, profile)
+            V2TestProfile.write(inputs, manifest, profile)
             document = json.loads(profile.read_text(encoding="utf-8"))
 
         self.assertEqual(document["format"], 2)
@@ -261,8 +261,13 @@ class ArtifactPreparerTest(unittest.TestCase):
             }
 
             with patch.dict(os.environ, environment, clear=False):
-                with patch("v2_artifacts.os.geteuid", return_value=0):
-                    with patch("v2_artifacts._chown_tree") as chown_tree:
+                with patch(
+                    "v2_artifacts_support.metadata.os.geteuid",
+                    return_value=0,
+                ):
+                    with patch(
+                        "v2_artifacts_support.metadata.chown_tree"
+                    ) as chown_tree:
                         with redirect_stdout(io.StringIO()):
                             manifest = ArtifactPreparer(inputs, executor).prepare(
                                 profile_path=profile,
@@ -301,8 +306,13 @@ class ArtifactPreparerTest(unittest.TestCase):
             }
 
             with patch.dict(os.environ, environment, clear=False):
-                with patch("v2_artifacts.os.geteuid", return_value=0):
-                    with patch("v2_artifacts._chown_tree") as chown_tree:
+                with patch(
+                    "v2_artifacts_support.metadata.os.geteuid",
+                    return_value=0,
+                ):
+                    with patch(
+                        "v2_artifacts_support.metadata.chown_tree"
+                    ) as chown_tree:
                         with self.assertRaisesRegex(
                             RuntimeError,
                             "containerd unavailable",

@@ -1,5 +1,5 @@
 use std::io;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use sandbox_vsock_contract::MAX_FRAME_BYTES;
 
@@ -12,6 +12,7 @@ pub struct SandboxAgentConfig {
     pub resource_poll_interval: Duration,
     pub max_silence_interval: Duration,
     pub reconnect_interval: Duration,
+    pub control_request_timeout: Duration,
     pub observation_queue_capacity: usize,
     pub batch_max_observations: usize,
     pub worker_thread_stack_bytes: usize,
@@ -25,6 +26,7 @@ impl SandboxAgentConfig {
             ("resource_poll_interval", self.resource_poll_interval),
             ("max_silence_interval", self.max_silence_interval),
             ("reconnect_interval", self.reconnect_interval),
+            ("control_request_timeout", self.control_request_timeout),
         ] {
             if value.is_zero() {
                 return Err(io::Error::new(
@@ -40,6 +42,15 @@ impl SandboxAgentConfig {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "sandbox agent capacities and thread stack must be positive",
+            ));
+        }
+        if Instant::now()
+            .checked_add(self.control_request_timeout)
+            .is_none()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "sandbox control request timeout exceeds the platform clock range",
             ));
         }
         let maximum = self

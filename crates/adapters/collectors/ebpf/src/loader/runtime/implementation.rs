@@ -122,6 +122,7 @@ impl EbpfRuntime {
             .filter(|program_name| !tls::is_payload_tls_program(program_name))
             .collect::<Vec<_>>();
         autoloaded_programs.sort_by_key(|program_name| attach_plan.attach_priority(program_name));
+        let tracepoint_policy = tracepoint::TracepointAttachPolicy::new();
         for program_name in autoloaded_programs {
             let program = object
                 .progs_mut()
@@ -132,7 +133,7 @@ impl EbpfRuntime {
                         format!("BPF program {program_name} is missing"),
                     )
                 })?;
-            if let Some(link) = tracepoint::attach_program(
+            if let Some(link) = tracepoint_policy.attach_program(
                 &program,
                 &program_name,
                 attach_plan.allows_missing_tracepoint(&program_name),

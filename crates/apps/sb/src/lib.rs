@@ -1,7 +1,7 @@
 //! actrail-sb composition root.
 
-mod startup;
+mod cli;
+mod daemon;
 
-pub use startup::{
-    SandboxAgentBootstrap, SandboxAgentProcess, SbConfig, SbConfigOverrides, SbOutput,
-};
+pub use cli::run_from_env;
+pub use daemon::{SandboxAgentDaemonBootstrap, SandboxAgentDaemonProcess, SbDaemonConfig};

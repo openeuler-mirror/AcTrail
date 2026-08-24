@@ -1,0 +1,9 @@
+[package]
+name = "sandbox_control_uds"
+version.workspace = true
+edition = "2024"
+license = "MulanPSL-2.0"
+
+[dependencies]
+libc = "0.2"
+sandbox_control = { path = "../../../contracts/sandbox_control" }

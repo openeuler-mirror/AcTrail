@@ -5,6 +5,9 @@ use std::ffi::OsStr;
 use std::time::{Duration, Instant};
 
 use libbpf_rs::{ErrorKind, Link, MapCore, MapFlags, MapHandle, Object, ObjectBuilder};
+use libbpf_tracepoint_attach::{
+    TracepointAttachOutcome, TracepointProgramAttacher, TracepointRequirement,
+};
 use sandbox_observation::{GuestBootId, ProcessIoCounters, ProcessMarker};
 
 use crate::SandboxLinuxError;
@@ -187,14 +190,30 @@ impl EbpfIoCollector {
         )?;
         Self::validate_map_layout(&diagnostics, "collection_diagnostics", 4, 8)?;
         let mut links = Vec::new();
+        let tracepoint_attacher = TracepointProgramAttacher::new();
         for program in object.progs_mut() {
             let name = program.name().to_string_lossy().into_owned();
-            links.push(program.attach().map_err(|error| {
-                SandboxLinuxError::new(
-                    "attach_bpf_program",
-                    format!("cannot attach {name}: {error}"),
-                )
-            })?);
+            let outcome = tracepoint_attacher
+                .attach(&program, &name, TracepointRequirement::Required)
+                .map_err(|error| {
+                    SandboxLinuxError::new(
+                        "attach_bpf_program",
+                        format!("cannot attach {name}: {error}"),
+                    )
+                })?;
+            let link = match outcome {
+                TracepointAttachOutcome::Attached(link) => link,
+                TracepointAttachOutcome::NotTracepoint => program.attach().map_err(|error| {
+                    SandboxLinuxError::new(
+                        "attach_bpf_program",
+                        format!("cannot attach {name}: {error}"),
+                    )
+                })?,
+                TracepointAttachOutcome::Unavailable => {
+                    unreachable!("required tracepoint cannot be unavailable")
+                }
+            };
+            links.push(link);
         }
         if links.is_empty() {
             return Err(SandboxLinuxError::new(

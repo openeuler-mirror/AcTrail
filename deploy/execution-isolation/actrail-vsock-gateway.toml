@@ -1,8 +1,10 @@
 [vsock]
-backend = "native"
-cid = 4294967295
-port = 43182
 backlog = 128
+
+[vsock.listener]
+backend = "firecracker"
+uds_path = "/run/firecracker/actrail/vsock.sock"
+port = 43182
 
 [upstream]
 daemon_address = "127.0.0.1:9472"

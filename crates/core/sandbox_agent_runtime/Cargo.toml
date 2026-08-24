@@ -5,5 +5,6 @@ edition = "2024"
 license = "MulanPSL-2.0"
 
 [dependencies]
+sandbox_control = { path = "../../contracts/sandbox_control" }
 sandbox_observation = { path = "../../contracts/sandbox_observation" }
 sandbox_vsock_contract = { path = "../../contracts/sandbox_link/vsock" }

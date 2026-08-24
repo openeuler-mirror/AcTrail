@@ -6,3 +6,5 @@ license = "MulanPSL-2.0"
 
 [dependencies]
 libc = "0.2"
+sandbox_agent_runtime = { path = "../../../core/sandbox_agent_runtime" }
+sandbox_control = { path = "../../../contracts/sandbox_control" }

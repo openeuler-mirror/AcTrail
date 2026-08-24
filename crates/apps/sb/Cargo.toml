@@ -8,6 +8,8 @@ license = "MulanPSL-2.0"
 clap = { version = "4.6", features = ["derive"] }
 libc = "0.2"
 sandbox_agent_runtime = { path = "../../core/sandbox_agent_runtime" }
+sandbox_control = { path = "../../contracts/sandbox_control" }
+sandbox_control_uds = { path = "../../adapters/sandbox_control/uds" }
 sandbox_linux_collector = { path = "../../adapters/collectors/sandbox_linux" }
 sandbox_observation = { path = "../../contracts/sandbox_observation" }
 sandbox_vsock_transport = { path = "../../adapters/sandbox_link/vsock" }

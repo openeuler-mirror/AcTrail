@@ -13,17 +13,23 @@ poll_interval_ms = 1000
 [sampler]
 poll_interval_ms = 1000
 
-[transport]
-host_cid = 2
-port = 43182
+[observation_queue]
+capacity = 1024
+
+[sender]
+batch_max_observations = 256
 io_timeout_ms = 1000
 max_silence_interval_ms = 5000
 reconnect_interval_ms = 1000
-
-[runtime]
-observation_queue_capacity = 1024
-batch_max_observations = 256
 worker_thread_stack_bytes = 524288
+
+[control]
+socket_path = "/run/actrail/actrail-sb-control.sock"
+socket_mode_octal = "600"
+request_timeout_ms = 5000
+accepted_connection_max = 8
+max_frame_bytes = 1024
+worker_thread_stack_bytes = 262144
 
 [diagnostics]
 interval_ms = 0

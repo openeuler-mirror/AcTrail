@@ -55,8 +55,11 @@ from tests.v2.regression.container_agent_xiaoo.run_e2e import (  # noqa: E402
 from tests.v2.regression.container_auto.run_e2e import (  # noqa: E402
     TEST_DEFINITION as CONTAINER_AUTO,
 )
-from tests.v2.regression.execution_isolation.run_e2e import (  # noqa: E402
-    TEST_DEFINITION as EXECUTION_ISOLATION,
+from tests.v2.regression.execution_isolation_cloud_hypervisor.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as EXECUTION_ISOLATION_CLOUD_HYPERVISOR,
+)
+from tests.v2.regression.sandbox_resource_alert_host.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as SANDBOX_RESOURCE_ALERT_HOST,
 )
 from tests.v2.regression.otel_jsonl_action_filter.run_e2e import (  # noqa: E402
     TEST_DEFINITION as OTEL_JSONL_ACTION_FILTER,
@@ -83,7 +86,7 @@ from tests.v2.regression.tool_frequent_failure_alert.run_e2e import (  # noqa: E
     TEST_DEFINITION as TOOL_FREQUENT_FAILURE_ALERT,
 )
 
-TESTS = [
+DEFAULT_TESTS = [
     CLAUDE,
     CLAUDE_MCP,
     CODEX,
@@ -95,7 +98,7 @@ TESTS = [
     NETWORK_POLICY_XIAOO,
     VIRTUAL_CONTAINER,
     VIRTUAL_CONTAINER_XIAOO_CONCURRENCY,
-    EXECUTION_ISOLATION,
+    SANDBOX_RESOURCE_ALERT_HOST,
     CONTAINER_AUTO,
     CONTAINER_AGENT_XIAOO,
     SEMANTIC_ACTION_BOUNDARIES,
@@ -107,6 +110,12 @@ TESTS = [
     TOOL_CONSECUTIVE_FAILURE_ALERT,
     TOOL_FREQUENT_FAILURE_ALERT,
 ]
+
+OPTIONAL_TESTS = [
+    EXECUTION_ISOLATION_CLOUD_HYPERVISOR,
+]
+
+TESTS = [*DEFAULT_TESTS, *OPTIONAL_TESTS]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -146,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         choices=[test.name for test in TESTS],
         dest="cases",
-        help="case to run; repeatable (default: all)",
+        help="case to run; repeatable (default: default regression set)",
     )
     parser.add_argument(
         "--list",
@@ -161,9 +170,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     arguments = parser.parse_args(effective_argv)
     requested = set(arguments.cases or ())
-    selected = [
-        test for test in TESTS if not requested or test.name in requested
-    ]
+    if requested:
+        selected = [test for test in TESTS if test.name in requested]
+    elif arguments.list_cases:
+        selected = TESTS
+    else:
+        selected = DEFAULT_TESTS
     if loaded_profile is not None:
         TestOutput(color_mode=arguments.color).line(
             f"test_profile={loaded_profile}"

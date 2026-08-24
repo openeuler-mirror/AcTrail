@@ -4,57 +4,50 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use sandbox_vsock_transport::VsockListenerConfig;
 use serde::{Deserialize, Serialize};
 use vsock_gateway_runtime::GatewayConfig;
+
+use super::backend::{GatewayBackend, ListenerSection};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GatewayAppConfig {
-    pub vsock: VsockSection,
-    pub upstream: UpstreamSection,
-    pub runtime: RuntimeSection,
+    vsock: VsockSection,
+    upstream: UpstreamSection,
+    runtime: RuntimeSection,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct VsockSection {
-    pub backend: String,
-    pub cid: Option<u32>,
-    pub port: Option<u32>,
-    pub socket_path: Option<PathBuf>,
-    pub backlog: u32,
+struct VsockSection {
+    backlog: u32,
+    listener: ListenerSection,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct UpstreamSection {
-    pub daemon_address: SocketAddr,
+struct UpstreamSection {
+    daemon_address: SocketAddr,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct RuntimeSection {
-    pub max_sb_connections: usize,
-    pub per_sb_forward_quota: usize,
-    pub outbound_queue_capacity: usize,
-    pub upstream_heartbeat_interval_ms: u64,
-    pub sb_peer_idle_timeout_ms: u64,
-    pub io_timeout_ms: u64,
-    pub reconnect_interval_ms: u64,
-    pub accept_poll_interval_ms: u64,
-    pub connection_thread_stack_bytes: usize,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum GatewayBackend {
-    Native,
-    CloudHypervisor,
+struct RuntimeSection {
+    max_sb_connections: usize,
+    per_sb_forward_quota: usize,
+    outbound_queue_capacity: usize,
+    upstream_heartbeat_interval_ms: u64,
+    sb_peer_idle_timeout_ms: u64,
+    io_timeout_ms: u64,
+    reconnect_interval_ms: u64,
+    accept_poll_interval_ms: u64,
+    connection_thread_stack_bytes: usize,
 }
 
 #[derive(Debug, Default)]
 pub struct GatewayConfigOverrides {
     backend: Option<GatewayBackend>,
+    uds_path: Option<PathBuf>,
     socket_path: Option<PathBuf>,
     cid: Option<u32>,
     port: Option<u32>,
@@ -73,6 +66,11 @@ impl GatewayConfigOverrides {
 
     pub fn with_socket_path(mut self, socket_path: PathBuf) -> Self {
         self.socket_path = Some(socket_path);
+        self
+    }
+
+    pub fn with_uds_path(mut self, uds_path: PathBuf) -> Self {
+        self.uds_path = Some(uds_path);
         self
     }
 
@@ -99,42 +97,7 @@ impl GatewayAppConfig {
     }
 
     pub fn into_runtime(self) -> io::Result<GatewayConfig> {
-        let listener = match self.vsock.backend.as_str() {
-            "native" => {
-                if self.vsock.socket_path.is_some() {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "native VSOCK does not accept socket_path",
-                    ));
-                }
-                let port = self.vsock.port.ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidInput, "native VSOCK requires port")
-                })?;
-                if port == libc::VMADDR_PORT_ANY {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "native VSOCK port must be concrete",
-                    ));
-                }
-                VsockListenerConfig::Native {
-                    cid: self.vsock.cid.ok_or_else(|| {
-                        io::Error::new(io::ErrorKind::InvalidInput, "native VSOCK requires cid")
-                    })?,
-                    port,
-                    backlog: self.validated_backlog()?,
-                }
-            }
-            "cloud-hypervisor" => VsockListenerConfig::CloudHypervisor {
-                socket_path: self.validated_cloud_hypervisor_path()?,
-                backlog: self.validated_backlog()?,
-            },
-            other => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("unsupported VSOCK backend {other}"),
-                ));
-            }
-        };
+        let listener = self.vsock.listener.resolve(self.validated_backlog()?)?;
         let config = GatewayConfig {
             listener,
             daemon_address: self.upstream.daemon_address,
@@ -161,26 +124,19 @@ impl GatewayAppConfig {
     ) -> io::Result<()> {
         let mut config = Self::default_config();
         if let Some(backend) = overrides.backend {
-            match backend {
-                GatewayBackend::Native => {
-                    config.vsock.backend = "native".to_string();
-                    config.vsock.socket_path = None;
-                }
-                GatewayBackend::CloudHypervisor => {
-                    config.vsock.backend = "cloud-hypervisor".to_string();
-                    config.vsock.cid = None;
-                    config.vsock.port = None;
-                }
-            }
+            config.vsock.listener = ListenerSection::for_backend(backend);
+        }
+        if let Some(uds_path) = overrides.uds_path {
+            config.vsock.listener.set_uds_path(uds_path)?;
         }
         if let Some(socket_path) = overrides.socket_path {
-            config.vsock.socket_path = Some(socket_path);
+            config.vsock.listener.set_socket_path(socket_path)?;
         }
         if let Some(cid) = overrides.cid {
-            config.vsock.cid = Some(cid);
+            config.vsock.listener.set_cid(cid)?;
         }
         if let Some(port) = overrides.port {
-            config.vsock.port = Some(port);
+            config.vsock.listener.set_port(port)?;
         }
         if let Some(daemon_address) = overrides.daemon_address {
             config.upstream.daemon_address = daemon_address;
@@ -214,36 +170,11 @@ impl GatewayAppConfig {
         Ok(self.vsock.backlog)
     }
 
-    fn validated_cloud_hypervisor_path(&self) -> io::Result<PathBuf> {
-        if self.vsock.cid.is_some() || self.vsock.port.is_some() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Cloud Hypervisor VSOCK does not accept native cid or port",
-            ));
-        }
-        let path = self.vsock.socket_path.clone().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Cloud Hypervisor VSOCK requires socket_path",
-            )
-        })?;
-        if !path.is_absolute() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Cloud Hypervisor VSOCK socket_path must be absolute",
-            ));
-        }
-        Ok(path)
-    }
-
     fn default_config() -> Self {
         Self {
             vsock: VsockSection {
-                backend: "native".to_string(),
-                cid: Some(libc::VMADDR_CID_ANY),
-                port: Some(43_182),
-                socket_path: None,
                 backlog: 128,
+                listener: ListenerSection::default_firecracker(),
             },
             upstream: UpstreamSection {
                 daemon_address: "127.0.0.1:9472"

@@ -21,6 +21,7 @@ pub struct GatewayConfig {
 
 impl GatewayConfig {
     pub fn validate(&self) -> io::Result<()> {
+        self.listener.validate()?;
         if self.max_sb_connections == 0
             || self.per_sb_forward_quota == 0
             || self.outbound_queue_capacity == 0

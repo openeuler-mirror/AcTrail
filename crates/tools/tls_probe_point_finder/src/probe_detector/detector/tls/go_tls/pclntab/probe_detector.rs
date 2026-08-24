@@ -53,15 +53,22 @@ impl GoPclntabProbeDetector {
         image: &ElfImage,
         required_symbols: &[&str],
     ) -> ToolResult<Option<BTreeMap<String, u64>>> {
+        let cache_key = format!("go-pclntab:{}", required_symbols.join("\u{1f}"));
+        if let Some(cached) = image.cached_named_addresses(&cache_key) {
+            return Ok(cached);
+        }
         let Some(section) = image.section_data(GOPCLNTAB_SECTION)? else {
+            image.cache_named_addresses(cache_key, None);
             return Ok(None);
         };
         let pclntab = GoPclntab::parse(section, image.section_virtual_address(".text"))?;
         let symbols = pclntab.find_symbols(required_symbols)?;
-        Ok(required_symbols
+        let resolved = required_symbols
             .iter()
             .all(|symbol| symbols.contains_key(*symbol))
-            .then_some(symbols))
+            .then_some(symbols);
+        image.cache_named_addresses(cache_key, resolved.clone());
+        Ok(resolved)
     }
 }
 

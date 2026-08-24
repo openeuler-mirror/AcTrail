@@ -1,28 +1,23 @@
 use std::io;
 use std::time::Duration;
 
-use crate::{VsockConnection, native};
+use sandbox_agent_runtime::{SandboxConnection, SandboxTransportFactory as SandboxTransportPort};
+use sandbox_control::SandboxEndpoint;
+
+use crate::{VsockConnection, kernel_vsock};
 
 #[derive(Clone, Copy, Debug)]
-pub struct VsockClientConfig {
-    pub host_cid: u32,
-    pub port: u32,
+pub struct VsockTransportConfig {
     pub io_timeout: Duration,
 }
 
 #[derive(Debug)]
-pub struct VsockClient {
-    config: VsockClientConfig,
+pub struct VsockTransportFactory {
+    config: VsockTransportConfig,
 }
 
-impl VsockClient {
-    pub fn new(config: VsockClientConfig) -> io::Result<Self> {
-        if config.host_cid == libc::VMADDR_CID_ANY || config.port == libc::VMADDR_PORT_ANY {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "VSOCK client CID and port must be concrete",
-            ));
-        }
+impl VsockTransportFactory {
+    pub fn new(config: VsockTransportConfig) -> io::Result<Self> {
         if config.io_timeout.is_zero() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -32,14 +27,18 @@ impl VsockClient {
         Ok(Self { config })
     }
 
-    pub fn connect(&self) -> io::Result<VsockConnection> {
-        let stream = native::connect(
-            self.config.host_cid,
-            self.config.port,
-            self.config.io_timeout,
-        )?;
-        let connection = VsockConnection::native(stream, self.config.host_cid, self.config.port);
+    pub fn connect(&self, endpoint: SandboxEndpoint) -> io::Result<VsockConnection> {
+        let stream =
+            kernel_vsock::connect(endpoint.host_cid(), endpoint.port(), self.config.io_timeout)?;
+        let connection = VsockConnection::kernel_vsock(stream);
         connection.set_timeouts(self.config.io_timeout)?;
         Ok(connection)
+    }
+}
+
+impl SandboxTransportPort for VsockTransportFactory {
+    fn connect(&self, endpoint: SandboxEndpoint) -> io::Result<Box<dyn SandboxConnection>> {
+        self.connect(endpoint)
+            .map(|connection| Box::new(connection) as Box<_>)
     }
 }

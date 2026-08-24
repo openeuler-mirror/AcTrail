@@ -44,7 +44,7 @@ impl PatternScanCache {
         mode: ScanMode,
         mmap: Option<&Mmap>,
         chunk_bytes: usize,
-    ) {
+    ) -> bool {
         let pending = self
             .scanned
             .iter()
@@ -52,7 +52,7 @@ impl PatternScanCache {
             .filter_map(|(index, offsets)| offsets.is_none().then_some(index))
             .collect::<Vec<_>>();
         if pending.is_empty() {
-            return;
+            return false;
         }
         let pending_patterns = pending
             .iter()
@@ -62,6 +62,7 @@ impl PatternScanCache {
         for (index, offsets) in pending.into_iter().zip(results) {
             self.scanned[index] = Some(offsets);
         }
+        true
     }
 
     pub(crate) fn offsets(&self, index: usize) -> &[usize] {

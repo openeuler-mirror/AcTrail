@@ -35,6 +35,9 @@ struct InitArgs {
     backend: Option<BackendArg>,
 
     #[arg(long)]
+    uds_path: Option<PathBuf>,
+
+    #[arg(long)]
     socket_path: Option<PathBuf>,
 
     #[arg(long)]
@@ -49,6 +52,7 @@ struct InitArgs {
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum BackendArg {
+    Firecracker,
     Native,
     CloudHypervisor,
 }
@@ -97,9 +101,13 @@ impl InitArgs {
         let mut overrides = GatewayConfigOverrides::new();
         if let Some(backend) = self.backend {
             overrides = overrides.with_backend(match backend {
+                BackendArg::Firecracker => GatewayBackend::Firecracker,
                 BackendArg::Native => GatewayBackend::Native,
                 BackendArg::CloudHypervisor => GatewayBackend::CloudHypervisor,
             });
+        }
+        if let Some(uds_path) = self.uds_path {
+            overrides = overrides.with_uds_path(uds_path);
         }
         if let Some(socket_path) = self.socket_path {
             overrides = overrides.with_socket_path(socket_path);

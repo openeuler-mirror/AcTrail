@@ -1,10 +1,11 @@
-//! Physical AF_VSOCK and Cloud Hypervisor UDS transport adapters.
+//! Physical kernel VSOCK and Unix stream transport adapters.
 
 mod client;
 mod connection;
+mod kernel_vsock;
 mod listener;
-mod native;
+mod unix_stream;
 
-pub use client::{VsockClient, VsockClientConfig};
-pub use connection::{PeerAddress, VsockConnection};
+pub use client::{VsockTransportConfig, VsockTransportFactory};
+pub use connection::VsockConnection;
 pub use listener::{VsockListener, VsockListenerConfig};

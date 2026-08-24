@@ -109,12 +109,13 @@ pub use operator::{
 };
 pub use payload::{
     DEFAULT_MCP_PARSE_BUFFER_MAX_BYTES, DEFAULT_MCP_PENDING_STDIO_CANDIDATE_MAX_ENTRIES,
-    DEFAULT_MCP_STDIO_CANDIDATE_MAX_BYTES, DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS,
-    DisabledOrPath, PayloadConfig, PayloadMcpConfig, PayloadRedactionPolicy,
-    PayloadSocketCaptureBackend, PayloadSocketConfig, PayloadSocketSeccompSyscall,
-    PayloadStdioConfig, PayloadStdioStorageMode, PayloadTlsCaptureBackend, PayloadTlsConfig,
-    PayloadTlsLibrary, PayloadTlsLibraryPath, PayloadTlsResolver, PayloadTlsSeccompSyscall,
-    PayloadTlsSource, PayloadTlsSyncRuntimeLibraryPath,
+    DEFAULT_MCP_STDIO_CANDIDATE_MAX_BYTES, DEFAULT_TLS_BINARY_ANALYSIS_CACHE_CAPACITY,
+    DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS, DisabledOrPath, PayloadConfig, PayloadMcpConfig,
+    PayloadRedactionPolicy, PayloadSocketCaptureBackend, PayloadSocketConfig,
+    PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadStdioStorageMode,
+    PayloadTlsCaptureBackend, PayloadTlsConfig, PayloadTlsLibrary, PayloadTlsLibraryPath,
+    PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource,
+    PayloadTlsSyncRuntimeLibraryPath,
 };
 pub use process::{ProcessSeccompConfig, ProcessSeccompSyscall, SeccompNotifyConfig};
 pub use resource::ResourceMetricsConfig;

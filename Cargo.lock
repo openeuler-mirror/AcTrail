@@ -795,6 +795,7 @@ dependencies = [
  "config_core",
  "libbpf-cargo",
  "libbpf-rs",
+ "libbpf_tracepoint_attach",
  "libc",
  "model_core",
  "payload_event",
@@ -1518,6 +1519,14 @@ dependencies = [
  "cc",
  "nix",
  "pkg-config",
+]
+
+[[package]]
+name = "libbpf_tracepoint_attach"
+version = "0.7.1"
+dependencies = [
+ "libbpf-rs",
+ "libc",
 ]
 
 [[package]]
@@ -2313,6 +2322,7 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 name = "sandbox_agent_runtime"
 version = "0.7.1"
 dependencies = [
+ "sandbox_control",
  "sandbox_observation",
  "sandbox_vsock_contract",
 ]
@@ -2331,6 +2341,18 @@ name = "sandbox_alert_store"
 version = "0.7.1"
 dependencies = [
  "sandbox_observation",
+]
+
+[[package]]
+name = "sandbox_control"
+version = "0.7.1"
+
+[[package]]
+name = "sandbox_control_uds"
+version = "0.7.1"
+dependencies = [
+ "libc",
+ "sandbox_control",
 ]
 
 [[package]]
@@ -2354,6 +2376,7 @@ version = "0.7.1"
 dependencies = [
  "libbpf-cargo",
  "libbpf-rs",
+ "libbpf_tracepoint_attach",
  "libc",
  "sandbox_observation",
 ]
@@ -2404,6 +2427,8 @@ name = "sandbox_vsock_transport"
 version = "0.7.1"
 dependencies = [
  "libc",
+ "sandbox_agent_runtime",
+ "sandbox_control",
 ]
 
 [[package]]
@@ -2413,6 +2438,8 @@ dependencies = [
  "clap",
  "libc",
  "sandbox_agent_runtime",
+ "sandbox_control",
+ "sandbox_control_uds",
  "sandbox_linux_collector",
  "sandbox_observation",
  "sandbox_vsock_transport",
