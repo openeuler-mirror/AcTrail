@@ -1,0 +1,72 @@
+@startuml
+!include <C4/C4_Container>
+
+skinparam defaultFontName "WenQuanYi Micro Hei"
+
+title AcTrail - Container Diagram (C4 Level 2, Execution Isolation)
+
+LAYOUT_LEFT_RIGHT()
+
+Person(Operator, "运维 / 安全操作员", "管理平台受控区、编排沙箱生命周期")
+Person(Analyst, "安全分析师 / 审计员", "查询 trace、核对证据、查看告警与治理决策")
+
+System_Ext(LlmProvider, "LLM 提供商", "DeepSeek、Anthropic、OpenAI 兼容等远端模型服务")
+System_Ext(Platform, "外部平台", "OTEL Collector / 集群中心 / 可观测后端")
+System_Ext(BrainKernel, "Linux kernel（脑侧）", "actraild 使用的 eBPF / seccomp 内核设施")
+System_Ext(GuestKernel, "Linux Guest kernel（手侧）", "actrail-sb 独立拥有的 Guest-side eBPF 与 procfs")
+
+System_Boundary(brain_side, "脑侧（平台受控区）") {
+
+    System_Ext(Brain, "大脑 Brain", "Agent 核心运行时：LLM 推理 · 记忆 · 规划 · 凭证与策略管理")
+
+    Container(Daemon, "actraild", "Rust daemon", "既有脑侧观测与治理；在进程内托管隔离的手侧证据路由")
+
+    ContainerDb(Storage, "AcTrail Storage", "SQLite (WAL)", "事件、payload、语义动作、诊断")
+
+    ContainerDb(SandboxEvidenceDb, "Sandbox Evidence DB", "独立 SQLite 数据库", "无插件消费意向的手侧观测；不属于 AcTrail 主 Storage")
+
+    Container(Web, "actrailweb", "Web 服务 + 内嵌 Vue SPA", "trace 可视化、统计与告警、插件管理")
+
+    Container(Viewer, "actrailviewer", "Rust CLI", "只读查询与导出")
+
+    Container(PluginPkg, "Plugin Packages", "Builtin / WASM 插件包目录", "既有插件 + immutable sandbox interest selectors + 有界 raw-observation consumers")
+}
+
+System_Boundary(host_side, "宿主侧") {
+
+    Container(Gateway, "actrail-vsock-gateway", "Host VSOCK-to-TCP proxy", "承载多个 SB VSOCK 会话并复用一条 daemon TCP 上游")
+}
+
+System_Boundary(hand_side, "手侧（执行沙箱）") {
+
+    System_Ext(Hand, "Guest Agent / workload", "沙箱内真实 Agent 与动作执行环境：工具调用 · 代码执行 · 文件 / 网络操作")
+
+    Container(Sb, "actrail-sb", "Guest 轻量采集器", "独立 eBPF 根谱系 read/write 计数与 Guest CPU / memory / OOM 快照")
+}
+
+Rel(Operator, Daemon, "start / stop / restart / status", "CLI")
+Rel(Analyst, Web, "浏览 trace、告警与插件管理", "HTTP")
+Rel(Analyst, Viewer, "命令行查询与导出", "CLI")
+Rel(Daemon, Brain, "观测大脑侧行为", "eBPF / seccomp")
+Rel(Daemon, BrainKernel, "挂载并读取脑侧探针", "eBPF / seccomp")
+Rel(Daemon, Storage, "单事务写入（BEGIN IMMEDIATE）", "SQLite")
+Rel(Daemon, PluginPkg, "读取 immutable interest snapshot；向全部匹配 consumers 投递", "Wasmtime")
+Rel(Web, Storage, "只读查询", "SQLite")
+Rel(Viewer, Storage, "只读查询", "SQLite")
+Rel(Sb, Hand, "观测目标进程谱系 I/O 与 Guest 资源状态")
+Rel(Sb, GuestKernel, "装载独立 eBPF 并读取 map / procfs", "Guest-side eBPF / procfs")
+Rel(Sb, Gateway, "hello / ObservationBatch / max-silence heartbeat", "AF_VSOCK binary frames")
+Rel(Gateway, Daemon, "gateway hello / heartbeat / ForwardedSbFrame", "TCP binary frames")
+Rel(Daemon, SandboxEvidenceDb, "仅成功返回 NoInterest 时批量写入", "SQLite")
+Rel(Daemon, Platform, "导出语义动作", "OTLP / HTTP")
+
+note right of Daemon
+  Hand observation 不进入现有 Ingest Pipeline
+  all matching consumers / NoInterest-only DB
+  query / delivery / DB failure 不跨分支 fallback
+end note
+
+Rel(Brain, LlmProvider, "发出 LLM 请求并消费响应", "HTTPS / SSE / HTTP/2")
+
+SHOW_LEGEND()
+@enduml

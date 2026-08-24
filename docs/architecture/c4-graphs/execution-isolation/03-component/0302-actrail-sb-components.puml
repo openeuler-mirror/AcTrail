@@ -1,0 +1,57 @@
+@startuml
+!include <C4/C4_Component>
+
+skinparam defaultFontName "WenQuanYi Micro Hei"
+
+title actrail-sb - Component Diagram (Execution Isolation)
+
+LAYOUT_LEFT_RIGHT()
+
+System_Ext(Operator, "Sandbox manager", "在 Guest 恢复后执行同一 binary 的 connect CLI")
+System_Ext(Hand, "Guest Agent / workload", "沙箱内真实 Agent 与动作执行环境")
+System_Ext(GuestKernel, "Linux Guest kernel", "actrail-sb 独立拥有的 eBPF programs、maps、links 与 procfs")
+Container_Ext(Gateway, "actrail-vsock-gateway", "Host VSOCK-to-TCP proxy", "接收 SB 会话并转发到 actraild")
+
+Container_Boundary(actrail_sb, "actrail-sb（同一 binary，Guest）") {
+    Component(Cli, "Sandbox Control CLI", "apps/sb::cli", "短生命周期 daemon/connect/init 命令入口；connect 不加载采集设施")
+    Component(ControlClient, "Guest-local Control Client", "sandbox_control_uds::client", "发送一个有界 Connect 命令并等待结果")
+    Component(ControlServer, "Guest-local Control Server", "sandbox_control_uds::server/runtime/dispatcher", "非阻塞 UDS poll owner、连接容量与单 worker 异步命令派发")
+
+    Component(DaemonOwner, "Sandbox Agent Daemon Owner", "sandbox_agent_runtime::daemon", "拥有采集 workers、connection gate、session owner、状态与关闭顺序")
+    Component(IoCollector, "Process I/O Collector", "sandbox_linux_collector", "按 comm 识别根进程，跟踪后代并读取 Guest-only eBPF 聚合增量")
+    Component(ResourceSampler, "Guest Resource Sampler", "sandbox_linux_collector", "轮询 Guest CPU、内存与 oom_kill 累计状态")
+    Component(ConnectionGate, "Connection Gate & Delivery Queue", "sandbox_agent_runtime::delivery", "以原子 connection generation 门控 observation，并执行有界非阻塞入队")
+    Component(SessionOwner, "Sandbox Link Session Owner", "sandbox_agent_runtime::session", "独占运行时 endpoint、VSOCK handshake、sb-id、batch、Heartbeat 与轻量重连")
+
+    Component(ProcessLifecycle, "Process Lifecycle Owner", "apps/sb::daemon", "静态配置、实例锁、composition、signalfd、control health 与集中诊断")
+}
+
+Rel(Operator, Cli, "执行 connect")
+Rel(Cli, ControlClient, "构造 Connect(host CID, port)")
+Rel(ControlClient, ControlServer, "有界 request/response", "Guest-local AF_UNIX")
+Rel(ControlServer, DaemonOwner, "异步提交命令；忙时拒绝", "SandboxControlPort")
+Rel(DaemonOwner, SessionOwner, "独占 session command 与状态")
+Rel(ProcessLifecycle, DaemonOwner, "启动、监测与关闭")
+Rel(ProcessLifecycle, ControlServer, "bind、停止 admission、监测 health fd")
+Rel(DaemonOwner, IoCollector, "启动、建立 baseline、周期 poll")
+Rel(DaemonOwner, ResourceSampler, "启动、首次校验、周期 sample")
+Rel(GuestKernel, IoCollector, "read/write、fork/exit 与 procfs 根发现", "eBPF / procfs")
+Rel(GuestKernel, ResourceSampler, "CPU / memory / oom_kill", "procfs")
+Rel(IoCollector, Hand, "观测根进程及其后代 I/O")
+Rel(IoCollector, ConnectionGate, "ProcessIoCounters")
+Rel(ResourceSampler, ConnectionGate, "GuestResourceSnapshot")
+Rel(ConnectionGate, SessionOwner, "当前 generation 的有界 observation")
+Rel(SessionOwner, Gateway, "SbHello / SbWelcome / ObservationBatch / max-silence Heartbeat", "AF_VSOCK binary frames")
+
+note right of ConnectionGate
+  Disconnected / Connecting / Reconnecting 时
+  observation 不入队、不落盘、不补发
+end note
+
+note right of IoCollector
+  Guest-only eBPF 资产完全属于 actrail-sb
+  不接触 actraild eBPF collector
+end note
+
+SHOW_LEGEND()
+@enduml

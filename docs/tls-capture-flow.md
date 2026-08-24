@@ -43,27 +43,36 @@ flowchart TD
     FAST_CANDIDATES --> FAST_NONE
   end
 
-  subgraph PLAN_STORE["daemon binary plan storage"]
+  subgraph PLAN_STORE["daemon binary analysis cache"]
     STORE_REQ["TlsSyncPlanResolver 收到 plan lookup 或 prewarm"]
-    STORE_KEY["按 canonical path、size、mtime、BinaryIdentity 构造 BinaryPlanKey"]
-    STORE_GET["BinaryPlanStore::get"]
-    STORE_HIT{"缓存命中 Found 或 Unsupported"}
-    STORE_RESOLVE["未命中：调用 fast::resolve(binary)"]
+    STORE_ACCESS["通过当前 peer root 打开目标 ELF"]
+    STORE_KEY["从已打开 ELF 构造 artifact analysis key"]
+    STORE_GET["BinaryAnalysisCache lookup"]
+    STORE_RESOLVE["每次调用 fast::resolve(binary)"]
+    STORE_DISCOVER["按当前 namespace 与 target origin 发现依赖"]
+    STORE_HIT{"单 ELF artifact 是否已有分析记录"}
+    STORE_SCAN["未命中：执行符号、pattern 或 pclntab 扫描"]
     STORE_VALIDATE["validate_native_backend_plan"]
-    STORE_PUT["BinaryPlanStore::put Found 或 Unsupported"]
+    STORE_BIND["绑定本次 runtime binary path 与 consumer capability"]
+    STORE_PUT["写入有界 LRU binary analysis cache"]
     STORE_RETURN["返回 PlanLookupResponse"]
 
     DAEMON --> STORE_REQ
-    STORE_REQ --> STORE_KEY
-    STORE_KEY --> STORE_GET
-    STORE_GET --> STORE_HIT
-    STORE_HIT -->|"是"| STORE_RETURN
-    STORE_HIT -->|"否"| STORE_RESOLVE
+    STORE_REQ --> STORE_ACCESS
+    STORE_ACCESS --> STORE_KEY
+    STORE_KEY --> STORE_RESOLVE
     STORE_RESOLVE -.-> FAST_IN
+    STORE_RESOLVE --> STORE_DISCOVER
+    STORE_DISCOVER --> STORE_GET
+    STORE_GET --> STORE_HIT
+    STORE_HIT -->|"是"| STORE_BIND
+    STORE_HIT -->|"否"| STORE_SCAN
+    STORE_SCAN --> STORE_PUT
+    STORE_PUT --> STORE_BIND
     FAST_PLAN -.-> STORE_VALIDATE
-    FAST_NONE -.-> STORE_PUT
-    STORE_VALIDATE --> STORE_PUT
-    STORE_PUT --> STORE_RETURN
+    FAST_NONE -.-> STORE_RETURN
+    STORE_BIND --> STORE_VALIDATE
+    STORE_VALIDATE --> STORE_RETURN
   end
 
   subgraph LAUNCH["入口 A：actrailctl launch 初始 command"]
@@ -310,3 +319,27 @@ flowchart TD
     CAPTURE_SOCKET --> CAPTURE_STORAGE
   end
 ```
+
+## 二进制分析缓存
+
+`payload.tls.binary_analysis_cache_capacity` 控制 daemon TLS binary analysis cache 的容量，默认值为 `256`。
+
+有 GNU build-id 的 ELF 使用 `BinaryIdentity` 作为分析键。
+
+没有 GNU build-id 的 ELF 使用采样 `BinaryIdentity` 与已打开文件的 device、inode、size、mtime、ctime 共同标识当前 artifact generation。
+
+该回退避免为缓存引入全文件哈希，同时阻止两个采样窗口相同的不同 ELF 复用 probe offset。
+
+PID 和访问路径不进入缓存键。
+
+size、mtime 和 ctime 只参与无 build-id 文件的 artifact generation，不替代 `BinaryIdentity`。
+
+peer root 路径只负责访问当前进程命名空间中的文件。
+
+缓存记录只保存符号、pattern marker、pattern offset 和 Go pclntab 地址等无路径分析结果。
+
+每次查询都在当前 peer root 下重新发现依赖，并把分析结果绑定到当前 runtime path。
+
+依赖缺失或身份变化只影响当前查询，不会终止 resolver worker，也不会复用其他二进制的分析结果。
+
+未匹配的符号与 pattern 结果同样进入有界缓存，避免高频非 TLS 二进制重复执行完整扫描。

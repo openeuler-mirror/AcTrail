@@ -1,0 +1,68 @@
+@startuml
+!include <C4/C4_Deployment>
+
+skinparam defaultFontName "WenQuanYi Micro Hei"
+
+title AcTrail - Deployment Diagram (Execution Isolation: Hand-side Observation Path)
+
+LAYOUT_LEFT_RIGHT()
+
+Person(Operator, "运维 / 安全操作员", "管理平台受控区、编排沙箱生命周期")
+Person(Analyst, "安全分析师 / 审计员", "查询 trace、核对证据、查看告警与治理决策")
+
+Deployment_Node(brain_side, "平台受控区（脑侧）", "信任边界") {
+
+    Container(Brain, "大脑 Brain", "Agent 核心运行时", "LLM 推理 · 记忆 · 规划 · 凭证与策略管理")
+
+    Container(Daemon, "actraild", "Rust daemon（完整观测）", "既有脑侧观测与治理；进程内托管隔离的手侧证据路由")
+
+    ContainerDb(Storage, "AcTrail Storage", "SQLite (WAL)", "事件、payload、语义动作、诊断")
+
+    ContainerDb(SandboxEvidenceDb, "Sandbox Evidence DB", "独立 SQLite 数据库", "无插件消费意向的手侧观测；独立 schema 与生命周期")
+
+    Container(Web, "actrailweb", "Web 服务 + 内嵌 Vue SPA", "trace 可视化、统计与告警、插件管理")
+    Container(Viewer, "actrailviewer", "Rust CLI", "只读查询与导出")
+    Container(SandboxEvidenceInspect, "sandbox-evidence-inspect", "Rust CLI", "只读查询独立手侧 evidence database 与 sink status")
+    Container(PluginPkg, "Sandbox Observation Plugin Packages", "Builtin / WASM 插件包", "raw-observation selectors/consumers")
+}
+
+Deployment_Node(host, "物理宿主机 Host", "Linux") {
+
+    Container(Gateway, "actrail-vsock-gateway", "Host VSOCK-to-TCP proxy", "承载多个 SB 会话并将二进制 observation frames 转发到 actraild")
+
+    Container(Vmm, "VMM 进程", "Firecracker（主线）/ Cloud Hypervisor（可选）", "承载手侧沙箱")
+    Container(HostKernel, "宿主内核 Host Kernel", "KVM 硬件虚拟化")
+
+    Deployment_Node(sandbox, "执行沙箱（手侧）", "Guest 级沙箱 · 独立内核") {
+        Container(Sb, "actrail-sb", "Guest 轻量采集器", "独立 eBPF 根谱系 read/write 计数与 CPU / memory / OOM 轮询")
+        Container(Hand, "Guest Agent / workload", "沙箱内真实 Agent 与动作执行进程", "工具调用 · 代码执行 · 文件 / 网络操作")
+    }
+}
+
+System_Ext(LlmProvider, "LLM 提供商", "DeepSeek、Anthropic、OpenAI 兼容等远端模型服务")
+System_Ext(Platform, "外部平台", "OTEL Collector / 集群中心 / 可观测后端")
+
+Rel(Operator, Daemon, "管理 actraild 与插件", "CLI")
+Rel(Operator, Gateway, "管理 vsock gateway", "CLI")
+Rel(Analyst, Web, "浏览 trace、告警与插件管理", "HTTP")
+Rel(Analyst, Viewer, "命令行查询与导出", "CLI")
+Rel(Analyst, SandboxEvidenceInspect, "查询手侧原始观测与 sink status", "CLI")
+
+Rel(Daemon, Brain, "观测大脑侧行为", "eBPF / seccomp")
+Rel(Brain, LlmProvider, "发出 LLM 请求并消费响应", "HTTPS / SSE")
+Rel(Sb, Hand, "观测目标进程谱系 I/O 与 Guest 资源状态", "Guest-only eBPF / procfs")
+Rel(Sb, Vmm, "连接Host CID 2与目标port", "Guest AF_VSOCK")
+Rel(Vmm, Gateway, "桥接 Guest AF_VSOCK 字节流", "Host AF_UNIX ${uds_path}_${port}")
+Rel(Gateway, Daemon, "hello / heartbeat / ForwardedSbFrame", "TCP binary frames")
+Rel(Daemon, Platform, "导出语义动作", "OTLP / HTTP")
+Rel(Daemon, Storage, "单事务写入（BEGIN IMMEDIATE）", "SQLite")
+Rel(Daemon, SandboxEvidenceDb, "无插件消费意向时批量写入", "SQLite")
+Rel(Daemon, PluginPkg, "加载并向匹配 consumer 投递原始观测", "Builtin / Wasmtime")
+Rel(SandboxEvidenceInspect, SandboxEvidenceDb, "只读查询与 health/status", "dedicated read port")
+Rel(Web, Storage, "只读查询", "SQLite")
+Rel(Viewer, Storage, "只读查询", "SQLite")
+
+Rel(Vmm, HostKernel, "/dev/kvm")
+
+SHOW_LEGEND()
+@enduml

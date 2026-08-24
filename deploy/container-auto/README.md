@@ -86,7 +86,7 @@ capability/runtime binding.
 Every workload must invoke `actrailctl launch` for the agent root process.
 Mounting the sockets alone does not automatically trace every process in a
 container. Concurrent capacity is bounded by `[control].active_trace_max`,
-`[control].pending_connection_max`, and the configured eBPF process/pending
+`[control].accepted_connection_max`, and the configured eBPF process/pending
 map sizes. A second daemon cannot bind the same Unix socket paths.
 
 ## Selection Matrix
