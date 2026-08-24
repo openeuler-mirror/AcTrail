@@ -249,7 +249,10 @@ impl TlsSyncPlanWorker {
                 );
             }
         }
-        let cached = match self.resolve_plans(key.path(), consumer) {
+        // Resolve through the original proc-root path. The key path is
+        // normalized to omit the peer PID and is only suitable for cache
+        // identity, not for accessing a tracee's mount namespace.
+        let cached = match self.resolve_plans(&probe_binary, consumer) {
             Ok(plan) => BinaryPlanRecord::Found(plan),
             Err(error) => {
                 tracing::warn!(
