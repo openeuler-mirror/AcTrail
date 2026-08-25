@@ -140,14 +140,20 @@ class AlertSubscriberClient:
             )
         return matched
 
-    def assert_no_alert(self, timeout_seconds: float) -> None:
+    def assert_no_alert(
+        self,
+        timeout_seconds: float,
+        predicate: Callable[[dict[str, Any]], bool] | None = None,
+    ) -> None:
         deadline = time.monotonic() + timeout_seconds
         while time.monotonic() < deadline:
             try:
                 message = self._receive_application_message(deadline)
             except TimeoutError:
                 return
-            if "cat" in message:
+            if "cat" in message and (
+                predicate is None or predicate(message)
+            ):
                 raise AssertionError(f"unexpected forwarded alert: {message}")
 
     def close(self) -> None:

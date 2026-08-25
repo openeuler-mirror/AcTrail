@@ -21,6 +21,11 @@ gateway 必须先完成到 `actraild` 的 TCP 注册，之后才开放 Guest lin
 
 快照恢复后的 `actrail-sb connect` 只向已经运行的 daemon 注入 host CID 与 port，并等待 daemon 完成 `SbHello/SbWelcome`。
 
+StratoVirt/Kata 不要求复用 Firecracker 快照机制：Guest 启动后先运行同一 daemon，等待
+本地 ready，再通过 `actrail-sb connect` 提交 Host CID 与 port。StratoVirt 经 gateway 的
+native AF_VSOCK backend 接入；除 endpoint 解析与 Guest 启动方式外，control、Session
+Owner、Connection Gate、gateway session 和上游路由时序保持不变。
+
 ## 完整时序
 
 ```mermaid
@@ -156,6 +161,9 @@ sequenceDiagram
             Ebpf->>Ebpf: 后代继承根 lineage marker
             Workload->>Ebpf: read/write syscall enter + exit
             Ebpf->>Ebpf: tracked PID 命中后累计成功/失败次数与成功字节数
+            Workload->>Ebpf: kernel OOM mark_victim
+            Ebpf->>Ebpf: 捕获victim PID/comm并在事件时查询lineage map
+            Ebpf->>Ebpf: try_push有界OOM event queue
             Workload->>Ebpf: process exit
             Ebpf->>Ebpf: 清理退出 PID；根聚合由用户态轮询后回收
         end
@@ -169,6 +177,7 @@ sequenceDiagram
                     Ebpf-->>Sb: 记录 failure，仍继续读取已有 lineage aggregate
                 end
                 Sb->>Ebpf: 读取 lineage 聚合增量
+                Sb->>Ebpf: 有界排空OOM victim queue
                 alt 存在 I/O 增量
                     Ebpf-->>Sb: ProcessIoCounters[]
                     alt publication_enabled=true
@@ -181,10 +190,18 @@ sequenceDiagram
                 else aggregate collect 或采样时钟失败
                     Ebpf-->>Sb: 记录 failure，本轮不产生 I/O observation
                 end
+                opt 存在OOM victim事件
+                    Ebpf-->>Sb: OomVictimObservation[]
+                    alt publication_enabled=true
+                        Sb->>Sb: try_send每条OomVictim observation
+                    else 未连接或重连中
+                        Sb->>Sb: 立即丢弃victim observation
+                    end
+                end
             end
         and Guest 资源采样线程
             loop resource_poll_interval
-                Sb->>Resource: sample CPU / memory / oom_kill
+                Sb->>Resource: sample CPU / memory / oom_kill累计计数
                 alt 采样成功
                     Resource-->>Sb: GuestResourceSnapshot
                     alt publication_enabled=true
@@ -253,7 +270,7 @@ sequenceDiagram
                         opt CPU 区间利用率进入超阈值状态
                             AlertPlugin->>AlertDb: try_append HighCpu
                         end
-                        opt oom_kill_count 相邻快照增长
+                        opt OOM victim事件到达
                             AlertPlugin->>AlertDb: try_append OomKilled
                         end
                         opt available_bytes 从非风险状态跌破阈值
@@ -375,5 +392,6 @@ sequenceDiagram
 - Guest-local Control Server 的poll owner不执行VSOCK连接；单worker dispatcher执行control command，已有命令执行时并发命令返回Busy。
 - daemon main通过signalfd、Control Server health fd和可选diagnostics deadline事件驱动等待；diagnostics关闭时没有周期wake loop。
 - VSOCK session 有效性只门控 observation 发布；未连接、断连和重连期间的数据不入队、不落盘、不补发。
+- Firecracker、Cloud Hypervisor 和经 native AF_VSOCK 接入的 StratoVirt 共享同一 Session Owner、gateway session、forwarder 与 upstream runtime；VMM 适配不改变数据语义。
 - `actrail-vsock-gateway` 只处理连接、frame、ID、quota 和转发，不解码 observation payload，不执行插件匹配或持久化。
 - Hand observation 不经过现有 Ingest、Identity、Trace、Semantic、Recording、Export 或主 Storage，也不需要 `actrailctl`。

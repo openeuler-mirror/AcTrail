@@ -90,11 +90,21 @@ I/O 计数由 `actrail-sb` 自己装载的 Guest-side eBPF 程序采集，包括
 
 Guest-side eBPF 对象、map、attach point、用户态 reader 和生命周期均由 `actrail-sb` 独立拥有，与 `actraild` 的 eBPF 采集完全无关。
 
+同一 eBPF 对象挂载 `oom/mark_victim` tracepoint，并把固定宽度 victim 事件写入配置容量的 BPF queue。
+事件包含 Guest boot 单调时间、victim PID、victim `comm`、归因状态和可选谱系根标记。
+现有 I/O worker 在轮询聚合计数时顺带有界排空该 queue，不新增 OOM 常驻线程。
+queue 满时只增加 `oom_event_drops` 诊断计数。
+
+OOM 发生时，eBPF 程序立即用 victim PID 查询当前谱系跟踪表。
+命中时输出 `monitored` 和对应根标记。
+未命中时输出 `unknown`。
+协议保留 `unmonitored` 值，用于能够证明进程已经完成全量分类的采集器。
+
 两个collector只共享轻量的标准tracepoint挂载策略：按section区分标准tracepoint与其他program；标准tracepoint通过`perf_event_open`并强制使用`PERF_EVENT_IOC_SET_BPF`挂载，其他program继续使用libbpf原生attach。该共享层不共享BPF对象、map、采集状态或生命周期。`actrail-sb`缺失或无法挂载任一必要tracepoint时启动失败。
 
 #### Guest 资源状态轮询
 
-资源采样器独立于 eBPF 采集器，按配置周期读取 Guest `procfs_root`；checked-in default为 `/proc`。boot标记来自该根下的 `sys/kernel/random/boot_id`，CPU来自 `stat`，内存来自 `meminfo`，OOM计数来自 `vmstat` 的 `oom_kill`。每个快照包含：
+资源采样器独立于 eBPF 采集器，按配置周期读取 Guest `procfs_root`；checked-in default为 `/proc`。boot标记来自该根下的 `sys/kernel/random/boot_id`，CPU来自 `stat`，内存来自 `meminfo`，OOM累计计数来自 `vmstat` 的 `oom_kill`。每个快照包含：
 
 - Guest CPU 累计总时间、空闲时间和逻辑 CPU 数量。
 - Guest 内存总量、可用量和已用量。
@@ -109,7 +119,7 @@ daemon 维护一个由当前 VSOCK session 状态驱动的发送门控。只有 
 
 未连接、连接中或已经断开时，eBPF 采集和资源轮询继续运行，但本轮产生的 observation 在发送边界立即丢弃，不进入发送队列、不写本地文件或数据库，也不等待后续连接补发。I/O 轮询仍推进累计计数基线，避免未连接期间的读写量进入下一条连接。
 
-连接有效时，进程 I/O 增量和资源快照进入同一个有界 observation 队列。发送线程收到第一条 observation 后立即发送，并将当时已经就绪的 observation 合并为同一个有界 batch，不等待队列凑满；持续积压时连续发送多个 batch。协议自身的最大 frame 长度同时约束可配置的 batch 数量。发送端变慢不得阻塞 eBPF 热路径或资源轮询；队列容量耗尽时记录显式丢弃计数，不建立无界缓存。
+连接有效时，进程 I/O 增量、OOM victim 事件和资源快照进入同一个有界 observation 队列。发送线程收到第一条 observation 后立即发送，并将当时已经就绪的 observation 合并为同一个有界 batch，不等待队列凑满；持续积压时连续发送多个 batch。协议自身的最大 frame 长度同时约束可配置的 batch 数量。发送端变慢不得阻塞 eBPF 热路径或资源轮询；队列容量耗尽时记录显式丢弃计数，不建立无界缓存。
 
 检测到 ObservationBatch 或 Heartbeat 写失败，或者本地 session 失效时，daemon 先关闭发送门控，再丢弃旧 session 的 pending batch 和发送队列。daemon 可使用最近一次 CLI 注入的 endpoint 按配置执行轻量重连；重连期间继续丢弃采集结果。新握手完成后建立新的计数与 sequence 边界，再重新开放发送门控，不重放旧 session 或断连期间的数据。
 
@@ -215,7 +225,22 @@ GuestResourceSnapshot
     └── oom_kill_count
 ```
 
-CPU 使用方通过相邻累计快照计算区间利用率。OOM 消费方通过 `oom_kill_count` 的增量识别实际 OOM kill。
+CPU 使用方通过相邻累计快照计算区间利用率。
+`oom_kill_count` 保留在资源快照中作为累计资源指标，不触发 `OomKilled`。
+具体 victim 由独立 `OomVictimObservation` 表达。
+
+```text
+OomVictimObservation
+├── guest_boot_id
+├── detected_at_ms
+├── victim_pid
+├── victim_comm
+├── attribution
+└── monitored_root optional
+    ├── pid
+    ├── start_time_ticks
+    └── executable_name
+```
 
 ## 4. 插件消费
 
@@ -223,9 +248,9 @@ Sandbox observation 插件以 observation 类型声明消费意向。插件包�
 
 匹配插件通过各自的有界队列异步消费 observation。一个插件队列已满、处理失败或退出时，只影响该插件，不阻塞 gateway 连接线程，也不改变其他插件的投递。
 
-基础资源告警插件消费进程 I/O 计数和 Guest 资源快照，并按 `(gateway-id, sb-id)` 维护有界状态，产生以下告警：
+基础资源告警插件消费进程 I/O 计数、Guest 资源快照和 OOM victim 事件，并按 `(gateway-id, sb-id)` 维护有界状态，产生以下告警：
 
-- `OomKilled`：相邻快照中的 `oom_kill_count` 增加。
+- `OomKilled`：内核选中 OOM victim，包含 victim PID、`comm` 和谱系归因。
 - `OomRisk`：可用内存字节数低于配置阈值。
 - `HighCpu`：相邻 CPU 累计快照形成的区间利用率越过配置阈值。
 - `HighRead`：采样区间读取字节数超过配置阈值。
@@ -233,7 +258,10 @@ Sandbox observation 插件以 observation 类型声明消费意向。插件包�
 
 插件输出带类型的 `SandboxAlert`，通过有界、非阻塞的告警输出边界提交，不生成 JSON、trace 或 semantic action。告警在独立 Sandbox Alert DB 提交成功后，才尝试交给 builtin forwarding plugin。告警数据库、外发队列或 proxy 的运行期故障不得反向形成 Hand observation 消费错误。
 
-阈值和来源状态容量由插件配置拥有。告警数据库和 writer 参数由独立 `SandboxAlertsConfig` 拥有。外发选择由 builtin forwarding plugin 配置拥有。
+四个检测阈值由插件配置拥有并可通过 Web 在线切换。
+来源状态容量在插件加载时确定，不在线改变。
+告警数据库和 writer 参数由独立 `SandboxAlertsConfig` 拥有。
+外发选择由 builtin forwarding plugin 配置拥有。
 
 ## 5. 传输协议
 
@@ -305,6 +333,7 @@ SbDaemonConfig
 │   ├── tracked_process_capacity
 │   ├── pending_io_capacity
 │   ├── aggregate_capacity
+│   ├── oom_event_capacity
 │   └── poll_interval_ms
 ├── sampler
 │   └── poll_interval_ms

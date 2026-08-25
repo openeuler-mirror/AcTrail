@@ -3,6 +3,7 @@ use alert_delivery_contract::{
 };
 use alert_forwarding::AlertForwardingPlugin;
 use sandbox_alert_store::{SandboxAlertCommitPort, SandboxAlertKind, StoredSandboxAlert};
+use sandbox_observation::OomVictimAttribution;
 use serde_json::{Map, Value};
 
 pub(crate) struct SandboxAlertForwarder {
@@ -50,20 +51,31 @@ impl SandboxAlertForwarder {
             }
             SandboxAlertKind::OomKilled {
                 guest_boot_id,
-                previous_count,
-                current_count,
-                delta,
+                victim_pid,
+                victim_comm,
+                attribution,
+                monitored_root,
                 ..
             } => {
-                extras.insert("previous_count".to_string(), Value::from(previous_count));
-                extras.insert("current_count".to_string(), Value::from(current_count));
-                extras.insert("delta".to_string(), Value::from(delta));
+                extras.insert("victim_pid".to_string(), Value::from(victim_pid));
+                extras.insert(
+                    "victim_comm".to_string(),
+                    Value::from(Self::process_name(&victim_comm)),
+                );
+                extras.insert(
+                    "attribution".to_string(),
+                    Value::from(match attribution {
+                        OomVictimAttribution::Unknown => "unknown",
+                        OomVictimAttribution::Monitored => "monitored",
+                        OomVictimAttribution::Unmonitored => "unmonitored",
+                    }),
+                );
                 (
                     DeliverySeverity::Critical,
                     "sandbox.resource.oom_killed",
-                    "Sandbox OOM kill count increased",
+                    "Sandbox kernel selected an OOM victim",
                     guest_boot_id,
-                    None,
+                    monitored_root,
                 )
             }
             SandboxAlertKind::OomRisk {
@@ -149,6 +161,11 @@ impl SandboxAlertForwarder {
         );
         extras.insert("bytes".to_string(), Value::from(bytes));
         extras.insert("threshold_bytes".to_string(), Value::from(threshold_bytes));
+    }
+
+    fn process_name(raw: &[u8; 16]) -> String {
+        let length = raw.iter().position(|byte| *byte == 0).unwrap_or(raw.len());
+        String::from_utf8_lossy(&raw[..length]).into_owned()
     }
 
     fn category(kind: SandboxAlertKind) -> &'static str {

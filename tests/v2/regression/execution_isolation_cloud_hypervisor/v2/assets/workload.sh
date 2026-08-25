@@ -8,6 +8,10 @@ set -eu
 : "${ACTRAIL_XIAOO_RESPONSE_MARKER:?}"
 : "${ACTRAIL_XIAOO_COORD_DIR:?}"
 : "${ACTRAIL_XIAOO_PROVIDER_SCRIPT:?}"
+: "${ACTRAIL_EXECUTION_ISOLATION_AGENT_READ_MARKER:?}"
+: "${ACTRAIL_EXECUTION_ISOLATION_AGENT_WRITE_MARKER:?}"
+: "${ACTRAIL_EXECUTION_ISOLATION_NAMED_ROOT_MARKER:?}"
+: "${ACTRAIL_EXECUTION_ISOLATION_AGENT_TOOLS_MARKER:?}"
 
 PROVIDER_PORT="${ACTRAIL_XIAOO_PROVIDER_PORT:-18098}"
 READY_TIMEOUT="${ACTRAIL_XIAOO_READY_TIMEOUT_SECONDS:-90}"
@@ -69,7 +73,7 @@ python3 -u "$ACTRAIL_XIAOO_PROVIDER_SCRIPT" \
   --local-stream-response-text "$ACTRAIL_XIAOO_RESPONSE_MARKER" \
   --local-stream-reasoning-tokens 3 \
   --local-tool-command "cat /opt/actrail-execution/task.txt > $READ_OUTPUT" \
-  --local-tool-command "printf '%s\\n' ACTRAIL_CLOUD_HYPERVISOR_AGENT_WRITE_OK > $WRITE_OUTPUT" \
+  --local-tool-command "printf '%s\\n' $ACTRAIL_EXECUTION_ISOLATION_AGENT_WRITE_MARKER > $WRITE_OUTPUT" \
   >"$PROVIDER_STDOUT" 2>"$PROVIDER_STDERR" &
 PROVIDER_PID=$!
 
@@ -113,15 +117,15 @@ cat "$XIAOO_STDOUT"
 [ "$xiaoo_rc" -eq 0 ] || fail "xiaoO exited with status $xiaoo_rc"
 grep -Fq "$ACTRAIL_XIAOO_RESPONSE_MARKER" "$XIAOO_STDOUT" \
   || fail "xiaoO output omitted its provider response marker"
-grep -Fq 'ACTRAIL_CLOUD_HYPERVISOR_AGENT_READ_INPUT' "$READ_OUTPUT" \
+grep -Fq "$ACTRAIL_EXECUTION_ISOLATION_AGENT_READ_MARKER" "$READ_OUTPUT" \
   || fail "real xiaoO did not perform the required file read tool call"
-grep -Fq 'ACTRAIL_CLOUD_HYPERVISOR_AGENT_WRITE_OK' "$WRITE_OUTPUT" \
+grep -Fq "$ACTRAIL_EXECUTION_ISOLATION_AGENT_WRITE_MARKER" "$WRITE_OUTPUT" \
   || fail "real xiaoO did not perform the required file write tool call"
 grep -q '^proxy_local_stream turn=tool-call-1 ' "$PROVIDER_STDOUT" \
   || fail "provider did not observe the first real xiaoO tool turn"
 grep -q '^proxy_local_stream turn=tool-call-2 ' "$PROVIDER_STDOUT" \
   || fail "provider did not observe the second real xiaoO tool turn"
 
-echo "ACTRAIL_CLOUD_HYPERVISOR_NAMED_ROOT_OK child_exit=$xiaoo_rc"
-echo "ACTRAIL_CLOUD_HYPERVISOR_AGENT_TOOLS_OK instance=$ACTRAIL_XIAOO_INSTANCE"
+echo "$ACTRAIL_EXECUTION_ISOLATION_NAMED_ROOT_MARKER child_exit=$xiaoo_rc"
+echo "$ACTRAIL_EXECUTION_ISOLATION_AGENT_TOOLS_MARKER instance=$ACTRAIL_XIAOO_INSTANCE"
 echo "KATA_XIAOO_WORKLOAD_OK instance=$ACTRAIL_XIAOO_INSTANCE"

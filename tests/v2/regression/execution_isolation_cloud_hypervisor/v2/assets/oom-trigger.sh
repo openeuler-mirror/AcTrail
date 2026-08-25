@@ -3,9 +3,9 @@ set -eu
 
 CGROUP_ROOT=/sys/fs/cgroup
 GROUP="$CGROUP_ROOT/actrail-e2e-oom"
-START_FILE=/run/actrail-execution/oom.start
-TRIGGER=/opt/actrail-execution/oom_trigger.py
+START_FILE=/tmp/actrail-e2e-oom.start
 TRIGGER_PID=""
+OOM_KILL_MARKER="${ACTRAIL_EXECUTION_ISOLATION_OOM_KILL_MARKER:-ACTRAIL_EXECUTION_ISOLATION_OOM_KILL_OK}"
 
 cleanup() {
   rm -f "$START_FILE"
@@ -22,7 +22,11 @@ trap cleanup EXIT INT TERM
 [ -f "$CGROUP_ROOT/cgroup.controllers" ] \
   || { echo "cgroup v2 is unavailable" >&2; exit 70; }
 [ -r /proc/vmstat ] || { echo "/proc/vmstat is unreadable" >&2; exit 71; }
-[ -x "$TRIGGER" ] || { echo "OOM trigger is unavailable" >&2; exit 72; }
+grep -qw memory "$CGROUP_ROOT/cgroup.controllers" \
+  || { echo "cgroup memory controller is unavailable" >&2; exit 72; }
+if ! grep -qw memory "$CGROUP_ROOT/cgroup.subtree_control"; then
+  echo +memory > "$CGROUP_ROOT/cgroup.subtree_control"
+fi
 
 mkdir "$GROUP"
 [ -f "$GROUP/memory.max" ] \
@@ -41,7 +45,15 @@ case "$before_vmstat" in
 esac
 
 rm -f "$START_FILE"
-python3 "$TRIGGER" "$START_FILE" &
+(
+  while [ ! -f "$START_FILE" ]; do
+    sleep 0.1
+  done
+  exec awk 'BEGIN {
+    value = "0123456789abcdef"
+    while (1) value = value value
+  }'
+) &
 TRIGGER_PID=$!
 echo "$TRIGGER_PID" > "$GROUP/cgroup.procs"
 touch "$START_FILE"
@@ -67,7 +79,7 @@ remaining=50
 while [ "$remaining" -gt 0 ]; do
   after_vmstat="$(awk '$1 == "oom_kill" { print $2 }' /proc/vmstat)"
   if [ "$after_vmstat" -gt "$before_vmstat" ]; then
-    echo "ACTRAIL_CLOUD_HYPERVISOR_OOM_KILL_OK before=$before_vmstat after=$after_vmstat"
+    echo "$OOM_KILL_MARKER before=$before_vmstat after=$after_vmstat"
     exit 0
   fi
   remaining=$((remaining - 1))

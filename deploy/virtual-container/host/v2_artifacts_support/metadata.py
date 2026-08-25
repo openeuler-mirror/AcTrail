@@ -16,7 +16,7 @@ from .model import RELEASE_FILES, PreparationInputs
 def build_input_document(inputs: PreparationInputs) -> dict[str, Any]:
     inputs.validate()
     files: dict[str, str] = {}
-    named_inputs = {
+    named_inputs: dict[str, Path] = {
         "base_config_source": inputs.base_config_source,
         "data_config_source": inputs.data_config_source,
         "base_image_source": inputs.base_image_source,
@@ -24,8 +24,13 @@ def build_input_document(inputs: PreparationInputs) -> dict[str, Any]:
         "hypervisor": inputs.hypervisor,
         "base_kernel": inputs.base_kernel,
         "data_kernel": inputs.data_kernel,
-        "virtiofsd": inputs.virtiofsd,
     }
+    if inputs.virtiofsd is not None:
+        named_inputs["virtiofsd"] = inputs.virtiofsd
+    if inputs.sandbox_observer and inputs.data_kernel_config is not None:
+        named_inputs["data_kernel_config"] = inputs.data_kernel_config
+    if inputs.jailer is not None:
+        named_inputs["jailer"] = inputs.jailer
     if inputs.xiaoo is not None:
         named_inputs["xiaoo"] = inputs.xiaoo
     if inputs.workload_image_archive is not None:
@@ -46,6 +51,7 @@ def build_input_document(inputs: PreparationInputs) -> dict[str, Any]:
         "egress_mode": inputs.egress_mode,
         "socket_gid": inputs.socket_gid,
         "data_vcpus": inputs.data_vcpus,
+        "sandbox_observer": inputs.sandbox_observer,
         "workload_image": inputs.workload_image,
         "image_pull_policy": inputs.image_pull_policy,
         "files": files,
@@ -81,6 +87,7 @@ def default_tool_inputs(repo: Path) -> tuple[Path, ...]:
         repo / "deploy/virtual-container/host/prepare-v2-test-artifacts.py",
         repo / "deploy/virtual-container/host/v2_artifacts.py",
         repo / "deploy/virtual-container/host/v2_artifacts_support",
+        repo / "tests/v2/common/kata_runtime/image.py",
         repo
         / "tests/v2/regression/virtual_container/prepare-guest-bundle.sh",
         repo / "tests/v2/regression/execution_isolation_cloud_hypervisor",

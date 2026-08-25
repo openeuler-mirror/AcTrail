@@ -41,7 +41,7 @@ crates/apps/vsock_gateway/
         └── backend/
             ├── mod.rs               # backend 解析与 factory
             ├── firecracker.rs       # 主线 uds_path + port
-            ├── native.rs            # 可选 Host AF_VSOCK
+            ├── native.rs            # 可选 Host AF_VSOCK（含 StratoVirt）
             └── cloud_hypervisor.rs  # 可选完整 Unix socket path
 ```
 
@@ -53,7 +53,8 @@ crates/apps/daemon/src/
 └── services/
     ├── sandbox_plugins/
     │   ├── mod.rs                   # C4 Sandbox Plugin Delivery facade
-    │   ├── manager.rs               # selector snapshot 与 consumer owners
+    │   ├── configuration.rs         # schema校验、配置文档与可回滚原子文件替换
+    │   ├── manager.rs               # selector snapshot、consumer owners与Web在线配置桥接
     │   └── route_sink.rs            # C4 Gateway Ingest 的 plugin-or-Evidence sink
     └── sandbox_alerts/
         ├── mod.rs                   # Sandbox Alert service facade
@@ -92,13 +93,13 @@ crates/adapters/collectors/sandbox_linux/
 ├── Cargo.toml                       # Guest-only libbpf/procfs adapter package
 ├── build.rs                         # sandbox BPF object build
 ├── bpf/
-│   ├── sandbox_io.bpf.c             # C4 Process I/O Collector kernel programs/maps
+│   ├── sandbox_io.bpf.c             # C4 Process I/O/OOM Collector kernel programs、aggregate与event queue
 │   └── sandbox_bpf_helpers.h        # BPF helpers
 └── src/
     ├── lib.rs                       # collector/resource facade
-    ├── config.rs                    # root names、procfs、refresh 与 map capacities
-    ├── collector.rs                 # process-I/O cycles 与 combined collector owner
-    ├── ebpf.rs                      # lineage、aggregate、baseline 与 kernel diagnostics
+    ├── config.rs                    # root names、procfs、refresh 与I/O/OOM map capacities
+    ├── collector.rs                 # process-I/O与OOM event cycles、combined collector owner
+    ├── ebpf.rs                      # lineage、aggregate baseline、OOM queue drain与kernel diagnostics
     ├── procfs.rs                    # boot/process discovery
     ├── resource.rs                  # C4 Guest Resource Sampler
     └── error.rs                     # adapter errors
@@ -148,7 +149,14 @@ crates/contracts/sandbox_observation/src/
 ├── lib.rs                           # C4 SB observation facade
 ├── observation.rs                   # Observation enum 与 batch
 ├── process.rs                       # ProcessMarker 与 ProcessIoCounters
-└── resource.rs                      # GuestResourceSnapshot
+├── resource.rs                      # GuestResourceSnapshot
+└── oom.rs                           # OOM victim身份、三态归因与可选谱系根
+
+crates/plugins/sandbox_resource_alert/src/
+├── lib.rs                           # C4 Sandbox Resource Alert facade
+├── config.rs                        # typed动态阈值与静态来源状态容量
+├── plugin.rs                        # immutable配置快照、判定与alert store admission
+└── state.rs                         # source-scoped CPU 与 memory 越阈状态
 
 crates/contracts/sandbox_link/vsock/src/
 ├── lib.rs                           # C4 SB↔gateway link facade
@@ -241,6 +249,7 @@ SbDaemonConfig
 │   ├── tracked_process_capacity                     # default 16384
 │   ├── pending_io_capacity                          # default 32768
 │   ├── aggregate_capacity                           # default 4096
+│   ├── oom_event_capacity                           # default 256
 │   └── poll_interval_ms                             # default 1000
 ├── sampler
 │   └── poll_interval_ms                             # default 1000
@@ -282,6 +291,14 @@ deploy/execution-isolation/
 └── README.md                                    # deployment contract
 
 tests/v2/
-├── common/                                      # shared release-binary orchestration
-└── regression/                                  # supported regression cases
+├── common/                                      # shared release-binary and Kata orchestration
+└── regression/
+    ├── sandbox_resource_alert_host/             # no-VMM component-path coverage
+    ├── execution_isolation_firecracker/         # real Firecracker + UDS-vsock Guest coverage
+    ├── execution_isolation_stratovirt/          # real StratoVirt/Kata + native AF_VSOCK coverage
+    └── execution_isolation_cloud_hypervisor/    # optional Cloud Hypervisor Unix endpoint coverage
 ```
+
+VMM cases share observation, alert, artifact, and lifecycle orchestration where the contracts are
+identical. Endpoint selection, boot mechanics, architecture support, and acceptance evidence stay
+inside each backend case; a passing backend is not evidence for another backend.

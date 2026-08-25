@@ -1,5 +1,7 @@
 use std::sync::{Arc, Mutex, TryLockError};
 
+use arc_swap::ArcSwap;
+
 use plugin_system::{
     SandboxConsumerRegistration, SandboxPluginFacade, SandboxPluginRegistrationError,
 };
@@ -7,7 +9,9 @@ use sandbox_alert_store::{
     SandboxAlertAdmission, SandboxAlertKind, SandboxAlertRecord, SandboxAlertSource,
     SandboxAlertWritePort,
 };
-use sandbox_observation::{GuestResourceSnapshot, Observation, ProcessIoCounters};
+use sandbox_observation::{
+    GuestResourceSnapshot, Observation, OomVictimObservation, ProcessIoCounters,
+};
 use sandbox_plugin_delivery::{
     SandboxConsumeError, SandboxConsumeReport, SandboxConsumerBatch, SandboxConsumerId,
     SandboxObservationConsumer, SandboxObservationKind,
@@ -19,7 +23,8 @@ use crate::{SandboxResourceAlertConfig, SandboxResourceAlertConfigError};
 const PLUGIN_NAME: &str = "sandbox-resource-alert";
 
 pub struct SandboxResourceAlertPlugin {
-    config: SandboxResourceAlertConfig,
+    config: ArcSwap<SandboxResourceAlertConfig>,
+    source_state_capacity: u32,
     source_states: Mutex<SourceStateTable>,
     alert_sink: Arc<dyn SandboxAlertWritePort>,
 }
@@ -31,10 +36,16 @@ impl SandboxResourceAlertPlugin {
     ) -> Result<Self, SandboxResourceAlertConfigError> {
         let capacity = config.validate()?;
         Ok(Self {
-            config,
+            config: ArcSwap::from_pointee(config),
+            source_state_capacity: config.source_state_capacity,
             source_states: Mutex::new(SourceStateTable::new(capacity)),
             alert_sink,
         })
+    }
+
+    pub fn publish_config(&self, config: SandboxResourceAlertConfig) {
+        debug_assert_eq!(config.source_state_capacity, self.source_state_capacity);
+        self.config.store(Arc::new(config));
     }
 
     pub fn register(
@@ -56,6 +67,7 @@ impl SandboxResourceAlertPlugin {
         &self,
         batch: &SandboxConsumerBatch,
     ) -> Result<Vec<SandboxAlertRecord>, SandboxConsumeError> {
+        let config = self.config.load();
         let source = batch.source();
         let alert_source =
             SandboxAlertSource::new(source.gateway_id(), source.sb_id()).map_err(|_| {
@@ -94,6 +106,7 @@ impl SandboxResourceAlertPlugin {
                         alert_source,
                         sequence,
                         observation_index,
+                        &config,
                         resource,
                         &mut alerts,
                     )?;
@@ -103,7 +116,17 @@ impl SandboxResourceAlertPlugin {
                         alert_source,
                         sequence,
                         observation_index,
+                        &config,
                         process_io,
+                        &mut alerts,
+                    );
+                }
+                Observation::OomVictim(victim) => {
+                    self.observe_oom_victim(
+                        alert_source,
+                        sequence,
+                        observation_index,
+                        victim,
                         &mut alerts,
                     );
                 }
@@ -119,6 +142,7 @@ impl SandboxResourceAlertPlugin {
         alert_source: SandboxAlertSource,
         sequence: u64,
         observation_index: u32,
+        config: &SandboxResourceAlertConfig,
         resource: &GuestResourceSnapshot,
         alerts: &mut Vec<SandboxAlertRecord>,
     ) -> Result<(), SandboxConsumeError> {
@@ -126,7 +150,7 @@ impl SandboxResourceAlertPlugin {
             .update_cpu_sample(source, resource.guest_boot_id, resource.cpu)
             .map_err(Self::state_error)?
         {
-            let cpu_risk = usage_basis_points >= self.config.cpu_usage_threshold_basis_points;
+            let cpu_risk = usage_basis_points >= config.cpu_usage_threshold_basis_points;
             if states
                 .update_cpu_risk(source, cpu_risk)
                 .map_err(Self::state_error)?
@@ -139,30 +163,12 @@ impl SandboxResourceAlertPlugin {
                         guest_boot_id: resource.guest_boot_id,
                         sampled_at_ms: resource.sampled_at_ms,
                         usage_basis_points,
-                        threshold_basis_points: self.config.cpu_usage_threshold_basis_points,
+                        threshold_basis_points: config.cpu_usage_threshold_basis_points,
                     },
                 ));
             }
         }
-        if let Some(increment) = states
-            .update_oom_kill_count(source, resource.memory.oom_kill_count)
-            .map_err(Self::state_error)?
-        {
-            alerts.push(SandboxAlertRecord::new(
-                alert_source,
-                sequence,
-                observation_index,
-                SandboxAlertKind::OomKilled {
-                    guest_boot_id: resource.guest_boot_id,
-                    sampled_at_ms: resource.sampled_at_ms,
-                    previous_count: increment.previous_count,
-                    current_count: increment.current_count,
-                    delta: increment.delta,
-                },
-            ));
-        }
-        let memory_risk =
-            resource.memory.available_bytes < self.config.memory_available_threshold_bytes;
+        let memory_risk = resource.memory.available_bytes < config.memory_available_threshold_bytes;
         if states
             .update_memory_risk(source, memory_risk)
             .map_err(Self::state_error)?
@@ -175,7 +181,7 @@ impl SandboxResourceAlertPlugin {
                     guest_boot_id: resource.guest_boot_id,
                     sampled_at_ms: resource.sampled_at_ms,
                     available_bytes: resource.memory.available_bytes,
-                    threshold_bytes: self.config.memory_available_threshold_bytes,
+                    threshold_bytes: config.memory_available_threshold_bytes,
                 },
             ));
         }
@@ -187,10 +193,11 @@ impl SandboxResourceAlertPlugin {
         source: SandboxAlertSource,
         sequence: u64,
         observation_index: u32,
+        config: &SandboxResourceAlertConfig,
         process_io: &ProcessIoCounters,
         alerts: &mut Vec<SandboxAlertRecord>,
     ) {
-        if process_io.read_bytes > self.config.read_interval_threshold_bytes {
+        if process_io.read_bytes > config.read_interval_threshold_bytes {
             alerts.push(SandboxAlertRecord::new(
                 source,
                 sequence,
@@ -201,11 +208,11 @@ impl SandboxResourceAlertPlugin {
                     sample_started_ms: process_io.sample_started_ms,
                     sample_ended_ms: process_io.sample_ended_ms,
                     bytes: process_io.read_bytes,
-                    threshold_bytes: self.config.read_interval_threshold_bytes,
+                    threshold_bytes: config.read_interval_threshold_bytes,
                 },
             ));
         }
-        if process_io.write_bytes > self.config.write_interval_threshold_bytes {
+        if process_io.write_bytes > config.write_interval_threshold_bytes {
             alerts.push(SandboxAlertRecord::new(
                 source,
                 sequence,
@@ -216,10 +223,33 @@ impl SandboxResourceAlertPlugin {
                     sample_started_ms: process_io.sample_started_ms,
                     sample_ended_ms: process_io.sample_ended_ms,
                     bytes: process_io.write_bytes,
-                    threshold_bytes: self.config.write_interval_threshold_bytes,
+                    threshold_bytes: config.write_interval_threshold_bytes,
                 },
             ));
         }
+    }
+
+    fn observe_oom_victim(
+        &self,
+        source: SandboxAlertSource,
+        sequence: u64,
+        observation_index: u32,
+        victim: &OomVictimObservation,
+        alerts: &mut Vec<SandboxAlertRecord>,
+    ) {
+        alerts.push(SandboxAlertRecord::new(
+            source,
+            sequence,
+            observation_index,
+            SandboxAlertKind::OomKilled {
+                guest_boot_id: victim.guest_boot_id,
+                detected_at_ms: victim.detected_at_ms,
+                victim_pid: victim.victim_pid,
+                victim_comm: victim.victim_comm,
+                attribution: victim.attribution,
+                monitored_root: victim.monitored_root,
+            },
+        ));
     }
 
     fn state_error(error: StateError) -> SandboxConsumeError {
@@ -262,5 +292,126 @@ impl SandboxObservationConsumer for SandboxResourceAlertPlugin {
             observed_records,
             dropped_records,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use sandbox_alert_store::{
+        SandboxAlertAdmission, SandboxAlertKind, SandboxAlertRecord, SandboxAlertWritePort,
+    };
+    use sandbox_observation::{CpuSnapshot, GuestBootId, GuestResourceSnapshot, MemorySnapshot};
+    use sandbox_plugin_delivery::{
+        SandboxConsumerBatch, SandboxObservationConsumer, SandboxSource,
+    };
+
+    use super::{SandboxResourceAlertConfig, SandboxResourceAlertPlugin};
+
+    #[derive(Default)]
+    struct RecordingAlertSink {
+        alerts: Mutex<Vec<SandboxAlertRecord>>,
+    }
+
+    impl RecordingAlertSink {
+        fn alerts(&self) -> Vec<SandboxAlertRecord> {
+            self.alerts.lock().expect("alert sink lock").clone()
+        }
+    }
+
+    impl SandboxAlertWritePort for RecordingAlertSink {
+        fn try_append(&self, alert: SandboxAlertRecord) -> SandboxAlertAdmission {
+            self.alerts.lock().expect("alert sink lock").push(alert);
+            SandboxAlertAdmission::Accepted
+        }
+    }
+
+    fn resource_batch(
+        sequence: u64,
+        sampled_at_ms: u64,
+        total_ticks: u64,
+        idle_ticks: u64,
+    ) -> SandboxConsumerBatch {
+        let observations = vec![sandbox_observation::Observation::GuestResource(
+            GuestResourceSnapshot {
+                guest_boot_id: GuestBootId::new([7; 16]),
+                sampled_at_ms,
+                cpu: CpuSnapshot {
+                    total_ticks,
+                    idle_ticks,
+                    logical_cpu_count: 2,
+                },
+                memory: MemorySnapshot {
+                    total_bytes: 1_024,
+                    available_bytes: 1_024,
+                    used_bytes: 0,
+                    oom_kill_count: 0,
+                },
+            },
+        )]
+        .into();
+        SandboxConsumerBatch::new(
+            SandboxSource::new(3, 5).expect("valid source"),
+            sequence,
+            observations,
+            vec![0].into(),
+        )
+    }
+
+    #[test]
+    fn high_cpu_alert_is_emitted_only_when_usage_enters_risk() {
+        let sink = Arc::new(RecordingAlertSink::default());
+        let plugin = SandboxResourceAlertPlugin::new(
+            SandboxResourceAlertConfig {
+                cpu_usage_threshold_basis_points: 7_500,
+                memory_available_threshold_bytes: 1,
+                read_interval_threshold_bytes: 1,
+                write_interval_threshold_bytes: 1,
+                source_state_capacity: 4,
+            },
+            sink.clone(),
+        )
+        .expect("valid plugin config");
+
+        plugin
+            .consume(resource_batch(1, 10, 1_000, 800))
+            .expect("baseline sample");
+        assert!(sink.alerts().is_empty());
+
+        plugin
+            .consume(resource_batch(2, 20, 1_100, 820))
+            .expect("first high-CPU sample");
+        let alerts = sink.alerts();
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].batch_sequence(), 2);
+        assert_eq!(alerts[0].observation_index(), 0);
+        assert_eq!(
+            alerts[0].kind(),
+            SandboxAlertKind::HighCpu {
+                guest_boot_id: GuestBootId::new([7; 16]),
+                sampled_at_ms: 20,
+                usage_basis_points: 8_000,
+                threshold_basis_points: 7_500,
+            }
+        );
+
+        plugin
+            .consume(resource_batch(3, 30, 1_200, 840))
+            .expect("sustained high-CPU sample");
+        assert_eq!(sink.alerts().len(), 1);
+
+        plugin
+            .consume(resource_batch(4, 40, 1_300, 940))
+            .expect("recovery sample");
+        assert_eq!(sink.alerts().len(), 1);
+
+        plugin
+            .consume(resource_batch(5, 50, 1_400, 960))
+            .expect("second high-CPU transition");
+        let alerts = sink.alerts();
+        assert_eq!(alerts.len(), 2);
+        assert_eq!(alerts[1].batch_sequence(), 5);
+        assert_eq!(alerts[1].detected_at_ms(), 50);
     }
 }

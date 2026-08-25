@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use control_contract::command::PluginLoadCommand;
-use control_contract::reply::ControlError;
+use control_contract::reply::{ControlError, PluginConfigReply, PluginConfigValidationReply};
 use plugin_system::{
     PluginInstanceStatus, PluginLifecycleState, PluginManifest, PluginPurpose, PluginRuntimeKind,
     PluginSandboxObservationKind, SandboxConsumerStatus, SandboxPluginFacade,
@@ -12,10 +12,10 @@ use plugin_system::{
 use sandbox_alert_store::SandboxAlertWritePort;
 use sandbox_evidence_store::SandboxEvidenceWritePort;
 use sandbox_plugin_delivery::{SandboxConsumerId, SandboxObservationKind};
-use sandbox_resource_alert::{SandboxResourceAlertConfig, SandboxResourceAlertPlugin};
-use serde::Deserialize;
+use sandbox_resource_alert::SandboxResourceAlertPlugin;
 
 use super::SandboxPluginRouteSink;
+use super::configuration::ResourceAlertConfiguration;
 
 const RESOURCE_ALERT_PLUGIN_ID: &str = "actrail.sandbox-resource-alert";
 
@@ -27,18 +27,10 @@ pub(crate) struct SandboxPluginManager {
 
 struct SandboxPluginInstance {
     plugin_id: String,
+    plugin: Arc<SandboxResourceAlertPlugin>,
+    configuration: ResourceAlertConfiguration,
     consumer_id: SandboxConsumerId,
     queue_capacity: u32,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ResourceAlertConfigDocument {
-    cpu_usage_threshold_basis_points: u16,
-    memory_available_threshold_bytes: u64,
-    read_interval_threshold_bytes: u64,
-    write_interval_threshold_bytes: u64,
-    source_state_capacity: u32,
 }
 
 impl SandboxPluginManager {
@@ -119,7 +111,12 @@ impl SandboxPluginManager {
                 "sandbox resource alert plugin requires a config file",
             )
         })?;
-        let config = Self::read_config(Path::new(config_path))?;
+        let configuration = ResourceAlertConfiguration::load(
+            PathBuf::from(config_path),
+            &manifest_path,
+            &manifest,
+        )?;
+        let config = configuration.current();
         let alert_store = self.alert_store.as_ref().ok_or_else(|| {
             ControlError::new(
                 "sandbox_alerts_disabled",
@@ -127,17 +124,8 @@ impl SandboxPluginManager {
             )
         })?;
         let plugin = Arc::new(
-            SandboxResourceAlertPlugin::new(
-                SandboxResourceAlertConfig {
-                    cpu_usage_threshold_basis_points: config.cpu_usage_threshold_basis_points,
-                    memory_available_threshold_bytes: config.memory_available_threshold_bytes,
-                    read_interval_threshold_bytes: config.read_interval_threshold_bytes,
-                    write_interval_threshold_bytes: config.write_interval_threshold_bytes,
-                    source_state_capacity: config.source_state_capacity,
-                },
-                Arc::clone(alert_store),
-            )
-            .map_err(|error| ControlError::new("plugin_config", error.to_string()))?,
+            SandboxResourceAlertPlugin::new(config, Arc::clone(alert_store))
+                .map_err(|error| ControlError::new("plugin_config", error.to_string()))?,
         );
         let consumer_id = plugin
             .register(&self.facade, selectors, queue_capacity)
@@ -151,6 +139,8 @@ impl SandboxPluginManager {
             command.instance_id.clone(),
             SandboxPluginInstance {
                 plugin_id: manifest.id().to_string(),
+                plugin,
+                configuration,
                 consumer_id,
                 queue_capacity,
             },
@@ -199,6 +189,35 @@ impl SandboxPluginManager {
 
     pub(crate) fn contains(&self, instance_id: &str) -> bool {
         self.instances.contains_key(instance_id)
+    }
+
+    pub(crate) fn config(&self, instance_id: &str) -> Result<PluginConfigReply, ControlError> {
+        let instance = self.required(instance_id)?;
+        instance
+            .configuration
+            .document(instance_id, &instance.plugin_id)
+    }
+
+    pub(crate) fn validate_config(
+        &self,
+        instance_id: &str,
+        config_json: &str,
+    ) -> Result<PluginConfigValidationReply, ControlError> {
+        let instance = self.required(instance_id)?;
+        instance.configuration.validate(instance_id, config_json)
+    }
+
+    pub(crate) fn update_config(
+        &mut self,
+        instance_id: &str,
+        config_json: &str,
+    ) -> Result<PluginConfigReply, ControlError> {
+        let instance = self.required_mut(instance_id)?;
+        let config = instance.configuration.prepare(config_json)?;
+        instance.configuration.persist(config)?;
+        instance.plugin.publish_config(config);
+        instance.configuration.commit(config);
+        self.config(instance_id)
     }
 
     pub(crate) fn statuses(&self) -> Vec<PluginInstanceStatus> {
@@ -270,17 +289,23 @@ impl SandboxPluginManager {
         Ok(manifest)
     }
 
-    fn read_config(path: &Path) -> Result<ResourceAlertConfigDocument, ControlError> {
-        let raw = std::fs::read_to_string(path).map_err(|error| {
+    fn required(&self, instance_id: &str) -> Result<&SandboxPluginInstance, ControlError> {
+        self.instances.get(instance_id).ok_or_else(|| {
             ControlError::new(
-                "plugin_config",
-                format!("read {} failed: {error}", path.display()),
+                "plugin_not_found",
+                format!("sandbox plugin instance {instance_id} not found"),
             )
-        })?;
-        serde_json::from_str(&raw).map_err(|error| {
+        })
+    }
+
+    fn required_mut(
+        &mut self,
+        instance_id: &str,
+    ) -> Result<&mut SandboxPluginInstance, ControlError> {
+        self.instances.get_mut(instance_id).ok_or_else(|| {
             ControlError::new(
-                "plugin_config",
-                format!("parse {} failed: {error}", path.display()),
+                "plugin_not_found",
+                format!("sandbox plugin instance {instance_id} not found"),
             )
         })
     }
@@ -289,6 +314,7 @@ impl SandboxPluginManager {
         match kind {
             PluginSandboxObservationKind::ProcessIo => SandboxObservationKind::ProcessIo,
             PluginSandboxObservationKind::GuestResource => SandboxObservationKind::GuestResource,
+            PluginSandboxObservationKind::OomVictim => SandboxObservationKind::OomVictim,
         }
     }
 

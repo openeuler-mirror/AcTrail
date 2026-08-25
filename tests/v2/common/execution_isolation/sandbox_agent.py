@@ -11,9 +11,11 @@ from tests.v2.common.process import CommandResult, ManagedProcess, SubprocessRun
 
 @dataclass(frozen=True)
 class SandboxAgentTiming:
+    io_poll_seconds: float
     resource_poll_seconds: float
     sender_io_timeout_seconds: float
     reconnect_interval_seconds: float
+    root_refresh_seconds: float
 
     @property
     def disconnected_observation_window_seconds(self) -> float:
@@ -23,6 +25,10 @@ class SandboxAgentTiming:
             + self.reconnect_interval_seconds
             + self.resource_poll_seconds,
         )
+
+    @property
+    def minimum_root_discovery_settle_seconds(self) -> float:
+        return self.root_refresh_seconds * 2 + 0.25
 
 
 class SandboxAgentProfile:
@@ -68,6 +74,9 @@ class SandboxAgentProfile:
         self._validate_test_paths(document)
         self._reject_embedded_endpoint(document)
         return SandboxAgentTiming(
+            io_poll_seconds=self._positive_milliseconds(
+                document, "collector", "poll_interval_ms"
+            ),
             resource_poll_seconds=self._positive_milliseconds(
                 document, "sampler", "poll_interval_ms"
             ),
@@ -76,6 +85,11 @@ class SandboxAgentProfile:
             ),
             reconnect_interval_seconds=self._positive_milliseconds(
                 document, "sender", "reconnect_interval_ms"
+            ),
+            root_refresh_seconds=self._positive_milliseconds(
+                document,
+                "collector",
+                "root_refresh_interval_ms",
             ),
         )
 

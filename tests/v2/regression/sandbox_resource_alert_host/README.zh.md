@@ -35,14 +35,23 @@ Host native VSOCK gateway 就绪后，场景执行真实
 
 命名根进程的子进程执行文件读取和写入。
 
+场景启动真实 `actrailweb`，通过 plugin config HTTP API 把可用内存阈值降到非风险范围，等待活动插件消费新资源快照，再把阈值提高到风险范围。
+同一个 plugin instance 必须产生新的可用内存风险告警，更新后的 JSON 必须写回原配置文件。
+
+真实 xiaoO 的一个 Bash tool call 创建测试专属 memory cgroup，只把一个 Python 分配进程放入 32 MiB 限额并触发真实内核 OOM。
+测试根进程和宿主其他进程不进入该 cgroup。
+
 最终要求独立告警数据库与 subscriber 同时出现以下告警：
 
 - 可用内存风险
+- OOM killed
 - 进程高读取量
 - 进程高写入量
 
 读写告警必须匹配命名根进程的 PID、启动时钟和进程名，
 并且观测字节数必须超过配置阈值。
+
+OOM 告警必须为 `critical`，包含真实 victim PID 和 `python3` 命令名，归因为 `monitored`，并携带命名根进程的稳定谱系标记。
 
 完整告警验收后，场景会停止 gateway。
 
@@ -54,15 +63,19 @@ gateway 重新启动后，场景再次执行真实 `actrail-sb connect`。
 重连后必须收到新采样的资源告警，
 且不能补发断连期间产生的旧观测。
 
-该 case 的验收边界是 Host native-VSOCK 组件数据通路及上述三类告警。
-
-Guest kernel、Guest cgroup、VMM transport、high-CPU 和 OOM-killed
-属于 Firecracker 主验收边界。
+该 case 的验收边界是 Host native-VSOCK 组件数据通路、Web 在线阈值配置和上述四类告警。
+Firecracker VMM transport 与快照恢复后的 Guest eBPF link 延续性由 Firecracker 主线场景验收。
 
 仓库根目录运行：
 
 ```bash
-sudo -E python3 tests/v2/regression/sandbox_resource_alert_host/run_e2e.py \
-  --bin-dir target/release \
-  --color never
+PYTHONDONTWRITEBYTECODE=1 \
+deploy/virtual-container/host/run-v2-tests.sh \
+  --no-profile \
+  --case sandbox_resource_alert_host \
+  --color never \
+  --fail-fast
 ```
+
+`run-v2-tests.sh` 会在需要时申请 sudo，并保留调用用户的 Cargo、Rustup 和 PATH。
+显式 `--no-profile` 表示该 Host case 不读取 Kata 本机 profile。

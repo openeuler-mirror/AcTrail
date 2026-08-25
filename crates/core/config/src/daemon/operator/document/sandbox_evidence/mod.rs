@@ -30,7 +30,7 @@ impl Default for SandboxEvidenceDocument {
     fn default() -> Self {
         Self {
             path: "/var/lib/actrail/sandbox-evidence.sqlite".to_string(),
-            schema_version: 1,
+            schema_version: 2,
             create_parent_directory: true,
             busy_timeout_ms: 5_000,
             writer_queue_capacity: 1_024,
@@ -78,8 +78,8 @@ impl SandboxEvidenceDocument {
         if !path.is_absolute() || path.file_name().is_none() {
             return Err("sandbox_evidence.path must be an absolute file path".to_string());
         }
-        if self.schema_version != 1 {
-            return Err("sandbox_evidence.schema_version must be 1".to_string());
+        if self.schema_version != 2 {
+            return Err("sandbox_evidence.schema_version must be 2".to_string());
         }
         let writer_queue_capacity = require_positive_u32(
             "sandbox_evidence.writer_queue_capacity",

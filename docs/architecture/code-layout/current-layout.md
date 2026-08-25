@@ -108,13 +108,13 @@ crates/adapters/collectors/sandbox_linux/
 ├── Cargo.toml                       # Guest-only collector package与依赖
 ├── build.rs                         # 构建 Guest-only BPF object
 ├── bpf/
-│   ├── sandbox_io.bpf.c             # C4 Process I/O Collector 的 kernel programs/maps
+│   ├── sandbox_io.bpf.c             # C4 Process I/O/OOM Collector 的 kernel programs、aggregate与event queue
 │   └── sandbox_bpf_helpers.h        # BPF 辅助定义
 └── src/
     ├── lib.rs                       # collector 与 resource reader facade
-    ├── config.rs                    # root names、procfs、map capacities 与 refresh 配置
-    ├── collector.rs                 # process I/O poll cycle 与独立 resource owner
-    ├── ebpf.rs                      # root lineage、aggregate baseline 与 kernel diagnostics
+    ├── config.rs                    # root names、procfs、I/O/OOM map capacities 与 refresh 配置
+    ├── collector.rs                 # process I/O与OOM event poll cycle、独立resource owner
+    ├── ebpf.rs                      # root lineage、I/O baseline、OOM queue drain与kernel diagnostics
     ├── procfs.rs                    # boot id、comm、start time 与 lineage discovery
     ├── resource.rs                  # C4 Guest Resource Sampler：CPU/memory/oom_kill snapshot
     └── error.rs                     # 启动与运行采集错误
@@ -135,7 +135,24 @@ crates/adapters/collectors/libbpf_tracepoint/
     └── error.rs                     # attach阶段错误
 ```
 
-### 4.4 Guest-local Control
+### 4.4 Sandbox Observation 与资源告警
+
+```text
+crates/contracts/sandbox_observation/src/
+├── lib.rs                           # C4 Sandbox Observation contract facade
+├── observation.rs                   # process I/O、Guest resource与OOM victim batch
+├── process.rs                       # 被观测谱系根与I/O计数
+├── resource.rs                      # Guest CPU、memory与OOM累计计数快照
+└── oom.rs                           # OOM victim身份、三态归因与可选谱系根
+
+crates/plugins/sandbox_resource_alert/src/
+├── lib.rs                           # C4 Sandbox Resource Alert facade
+├── config.rs                        # 阈值与来源状态容量的typed配置
+├── plugin.rs                        # immutable配置快照、告警判定与nonblocking store admission
+└── state.rs                         # gateway/SB 来源的 CPU 与 memory 越阈状态
+```
+
+### 4.5 Guest-local Control
 
 ```text
 crates/contracts/sandbox_control/src/
@@ -157,7 +174,7 @@ crates/adapters/sandbox_control/uds/src/
 └── error.rs                         # bind/connect/read/write/dispatch 错误
 ```
 
-### 4.5 VSOCK Data Link
+### 4.6 VSOCK Data Link
 
 ```text
 crates/contracts/sandbox_link/vsock/src/
@@ -210,7 +227,8 @@ crates/apps/daemon/src/
 └── services/
     ├── sandbox_plugins/
     │   ├── mod.rs                   # sandbox plugin services facade
-    │   ├── manager.rs               # selector registry 与 consumer lifecycle
+    │   ├── configuration.rs         # schema校验、Web配置文档与可回滚原子文件替换
+    │   ├── manager.rs               # selector registry、consumer lifecycle与Web在线配置桥接
     │   └── route_sink.rs            # C4 plugin-or-Evidence 互斥路由
     └── sandbox_alerts/
         ├── mod.rs                   # Sandbox Alert service facade

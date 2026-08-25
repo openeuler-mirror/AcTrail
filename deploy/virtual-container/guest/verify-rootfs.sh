@@ -9,6 +9,7 @@ EXPECTED_OTEL_ENDPOINT=""
 EXPECTED_EGRESS_MODE="network"
 EXPECTED_OTEL_EXPORT_ENABLED=0
 EXPECTED_OTEL_ENDPOINT_CONFIGURED="false"
+EXPECTED_SANDBOX_OBSERVER=0
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=otel-endpoint.sh
@@ -16,7 +17,7 @@ source "$SCRIPT_DIR/otel-endpoint.sh"
 
 usage() {
   cat <<'EOF'
-Usage: verify-rootfs.sh --rootfs DIR [--otel-endpoint URL] [--egress-mode network|vsock-bridge] [--startup-dependency optional|required] [--socket-gid GID]
+Usage: verify-rootfs.sh --rootfs DIR [--otel-endpoint URL] [--egress-mode network|vsock-bridge] [--startup-dependency optional|required] [--socket-gid GID] [--with-sandbox-observer]
 
 This is an offline structural check. A real Kata boot and `actrailctl doctor`
 are still required before declaring the guest-root startup path complete.
@@ -55,6 +56,10 @@ while [[ "$#" -gt 0 ]]; do
       [[ "$2" =~ ^[0-9]+$ ]] || fail "--socket-gid must be an integer"
       EXPECTED_SOCKET_GID="$((10#$2))"
       shift 2
+      ;;
+    --with-sandbox-observer)
+      EXPECTED_SANDBOX_OBSERVER=1
+      shift
       ;;
     -h|--help)
       usage
@@ -113,6 +118,51 @@ assert_file /usr/lib/tmpfiles.d/actrail.conf
 assert_file /usr/lib/systemd/system/kata-agent.service.d/10-actrail-workload-interface.conf
 assert_file /usr/share/actrail/guest-install-info
 assert_file /usr/share/actrail/workload-interface
+observer_agent_drop_in=/usr/lib/systemd/system/kata-agent.service.d/30-actrail-sandbox-observer.conf
+[[ ! -e "$ROOTFS$observer_agent_drop_in" && ! -L "$ROOTFS$observer_agent_drop_in" ]] \
+  || fail "sandbox observer must not change kata-agent startup ordering: $observer_agent_drop_in"
+if [[ "$EXPECTED_SANDBOX_OBSERVER" == "1" ]]; then
+  assert_file /usr/local/bin/actrail-sb
+  assert_file /etc/actrail/sandbox-observer.toml
+  assert_file /usr/lib/systemd/system/actrail-sb.service
+  assert_file /usr/lib/systemd/system/actrail-sb-connect.service
+  assert_line /etc/actrail/sandbox-observer.toml \
+    'root_process_names = ["actrail-root"]'
+  assert_line /etc/actrail/sandbox-observer.toml \
+    'oom_event_capacity = 256'
+  assert_line /etc/actrail/sandbox-observer.toml \
+    'socket_path = "/dev/actrail/sandbox-observer-control.sock"'
+  assert_line /usr/lib/systemd/system/actrail-sb.service \
+    "ExecStart=/bin/sh -ec 'exec /usr/local/bin/actrail-sb daemon --config /etc/actrail/sandbox-observer.toml >>/dev/actrail/sandbox-observer.log 2>&1'"
+  assert_line /usr/lib/systemd/system/actrail-sb.service \
+    'ExecStartPost=/usr/bin/touch /dev/actrail/sandbox-observer.ready'
+  assert_line /usr/lib/systemd/system/actrail-sb-connect.service \
+    'ExecStart=/usr/local/bin/actrail-sb connect --control-socket /dev/actrail/sandbox-observer-control.sock --host-cid 2 --port 43182 --request-timeout-ms 5000'
+  assert_link \
+    /usr/lib/systemd/system/kata-containers.target.wants/actrail-sb.service \
+    ../actrail-sb.service
+  assert_link \
+    /usr/lib/systemd/system/multi-user.target.wants/actrail-sb.service \
+    ../actrail-sb.service
+  for target in kata-containers.target multi-user.target; do
+    connect_link="$ROOTFS/usr/lib/systemd/system/$target.wants/actrail-sb-connect.service"
+    [[ ! -e "$connect_link" && ! -L "$connect_link" ]] \
+      || fail "sandbox observer auto-connect must be disabled by default: $connect_link"
+  done
+else
+  for path in \
+    /usr/local/bin/actrail-sb \
+    /etc/actrail/sandbox-observer.toml \
+    /usr/lib/systemd/system/actrail-sb.service \
+    /usr/lib/systemd/system/actrail-sb-connect.service \
+    /usr/lib/systemd/system/kata-containers.target.wants/actrail-sb.service \
+    /usr/lib/systemd/system/kata-containers.target.wants/actrail-sb-connect.service \
+    /usr/lib/systemd/system/multi-user.target.wants/actrail-sb.service \
+    /usr/lib/systemd/system/multi-user.target.wants/actrail-sb-connect.service; do
+    [[ ! -e "$ROOTFS$path" && ! -L "$ROOTFS$path" ]] \
+      || fail "rootfs unexpectedly contains sandbox observer path: $path"
+  done
+fi
 
 assert_line /etc/actrail/operator.conf \
   'sync_runtime_library_path = "/usr/local/lib/actrail/libactrail_tls_payload_probe_sync.so"'
@@ -201,6 +251,8 @@ assert_line /usr/share/actrail/guest-install-info \
   "otel_export_enabled=$EXPECTED_OTEL_EXPORT_ENABLED"
 assert_line /usr/share/actrail/guest-install-info \
   "workload_socket_gid=$EXPECTED_SOCKET_GID"
+assert_line /usr/share/actrail/guest-install-info \
+  "sandbox_observer_installed=$EXPECTED_SANDBOX_OBSERVER"
 assert_line /usr/share/actrail/workload-interface \
   "socket_gid=$EXPECTED_SOCKET_GID"
 assert_line /usr/share/actrail/workload-interface \
@@ -249,3 +301,4 @@ echo "rootfs=$ROOTFS"
 echo "guest_startup_dependency=$EXPECTED_STARTUP_DEPENDENCY"
 echo "guest_egress_mode=$EXPECTED_EGRESS_MODE"
 echo "otel_endpoint_configured=$EXPECTED_OTEL_ENDPOINT_CONFIGURED"
+echo "sandbox_observer_installed=$EXPECTED_SANDBOX_OBSERVER"

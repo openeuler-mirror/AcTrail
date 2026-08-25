@@ -191,10 +191,13 @@ impl SessionOwner {
                     active.generation.get(),
                     false,
                 );
-                if self.publish_active(active) {
-                    SandboxControlResponse::Connect(response)
-                } else {
-                    shutting_down()
+                match self.publish_active(active) {
+                    Ok(true) => SandboxControlResponse::Connect(response),
+                    Ok(false) => shutting_down(),
+                    Err(error) => {
+                        self.status.disconnected();
+                        self.rejection(EstablishError::Baseline(error))
+                    }
                 }
             }
             Err(error) => {
@@ -279,8 +282,18 @@ impl SessionOwner {
                     self.status.disconnected();
                     return;
                 }
-                if self.publish_active(active) {
-                    self.metrics.record_reconnect();
+                match self.publish_active(active) {
+                    Ok(true) => self.metrics.record_reconnect(),
+                    Ok(false) => {}
+                    Err(_) => {
+                        self.gate.disable();
+                        self.metrics.record_reconnect_failure();
+                        self.status.reconnecting(target.endpoint);
+                        self.reconnect = Some(ReconnectTarget {
+                            endpoint: target.endpoint,
+                            next_attempt: Instant::now() + self.config.reconnect_interval,
+                        });
+                    }
                 }
             }
             Err(EstablishError::Superseded) => {
@@ -335,7 +348,10 @@ impl SessionOwner {
     fn establish_io_baseline(&self) -> io::Result<()> {
         let (response, receiver) = sync_channel(1);
         self.baseline
-            .send(BaselineRequest { response })
+            .send(BaselineRequest {
+                publication_generation: None,
+                response,
+            })
             .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "I/O worker stopped"))?;
         self.io_thread.unpark();
         receiver
@@ -343,12 +359,16 @@ impl SessionOwner {
             .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "I/O baseline reply lost"))?
     }
 
-    fn publish_active(&mut self, active: ActiveSession) -> bool {
+    fn publish_active(&mut self, active: ActiveSession) -> io::Result<bool> {
         if self.stop.load(Ordering::Acquire) {
             self.status.disconnected();
-            return false;
+            return Ok(false);
         }
         self.metrics.set_sb_id(active.sb_id);
+        if let Err(error) = self.activate_io_publication(active.generation) {
+            self.metrics.set_sb_id(0);
+            return Err(error);
+        }
         self.gate.enable(active.generation);
         self.status
             .connected(active.endpoint, active.sb_id, active.generation.get());
@@ -356,11 +376,25 @@ impl SessionOwner {
             self.gate.disable();
             self.metrics.set_sb_id(0);
             self.status.disconnected();
-            return false;
+            return Ok(false);
         }
         self.active = Some(active);
         self.reconnect = None;
-        true
+        Ok(true)
+    }
+
+    fn activate_io_publication(&self, generation: ConnectionGeneration) -> io::Result<()> {
+        let (response, receiver) = sync_channel(1);
+        self.baseline
+            .send(BaselineRequest {
+                publication_generation: Some(generation.get()),
+                response,
+            })
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "I/O worker stopped"))?;
+        self.io_thread.unpark();
+        receiver
+            .recv()
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "I/O publication reply lost"))?
     }
 
     fn begin_reconnect(&mut self, endpoint: SandboxEndpoint) {

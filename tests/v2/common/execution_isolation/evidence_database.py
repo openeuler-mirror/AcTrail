@@ -24,7 +24,7 @@ class SandboxEvidenceDatabase:
             version = connection.execute(
                 "SELECT schema_version FROM sandbox_schema_meta WHERE singleton = 1"
             ).fetchone()
-            if version != (1,):
+            if version != (2,):
                 raise AssertionError(f"unsupported sandbox evidence schema: {version}")
             row = connection.execute(
                 "SELECT COUNT(*) FROM sandbox_evidence"

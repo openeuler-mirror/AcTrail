@@ -118,6 +118,7 @@ pub struct PluginSandboxSubscriptionDeclaration {
 pub enum PluginSandboxObservationKind {
     ProcessIo,
     GuestResource,
+    OomVictim,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]

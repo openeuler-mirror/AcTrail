@@ -27,7 +27,7 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument(
         "--backend",
-        choices=("stratovirt", "cloud-hypervisor"),
+        choices=("stratovirt", "cloud-hypervisor", "firecracker"),
         default="stratovirt",
     )
     result.add_argument("--runtime", default="io.containerd.kata332.v2")
@@ -97,6 +97,13 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--socket-gid", type=positive_int, default=39000)
     result.add_argument("--data-vcpus", type=positive_int, default=2)
     result.add_argument(
+        "--with-sandbox-observer",
+        action="store_true",
+        help=(
+            "install actrail-sb as a Guest system service in both images"
+        ),
+    )
+    result.add_argument(
         "--check-only",
         action="store_true",
         help="validate the matching cache entry and profile without writing",
@@ -115,6 +122,7 @@ def main(argv: list[str] | None = None) -> int:
         default_config_name = {
             "stratovirt": "configuration-stratovirt.toml",
             "cloud-hypervisor": "configuration-clh.toml",
+            "firecracker": "configuration-fc.toml",
         }[arguments.backend]
         base_config = _source_path(
             arguments.base_config_source
@@ -152,12 +160,19 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.data_kernel
                 or infer_runtime_path(data_config, arguments.backend, "kernel")
             ),
-            virtiofsd=_source_path(
-                arguments.virtiofsd
-                or infer_runtime_path(
-                    base_config,
-                    arguments.backend,
-                    "virtio_fs_daemon",
+            virtiofsd=(
+                _source_path(arguments.virtiofsd)
+                if arguments.virtiofsd is not None
+                else (
+                    None
+                    if arguments.backend == "firecracker"
+                    else _source_path(
+                        infer_runtime_path(
+                            base_config,
+                            arguments.backend,
+                            "virtio_fs_daemon",
+                        )
+                    )
                 )
             ),
             xiaoo=(
@@ -174,6 +189,7 @@ def main(argv: list[str] | None = None) -> int:
             egress_mode=arguments.egress_mode,
             socket_gid=arguments.socket_gid,
             data_vcpus=arguments.data_vcpus,
+            sandbox_observer=arguments.with_sandbox_observer,
             tool_inputs=default_tool_inputs(REPO),
         )
         profile = (

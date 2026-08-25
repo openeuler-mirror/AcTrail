@@ -1,5 +1,5 @@
 use sandbox_alert_store::SandboxAlertKind;
-use sandbox_observation::{GuestBootId, ProcessMarker};
+use sandbox_observation::{GuestBootId, OomVictimAttribution, ProcessMarker};
 
 const HIGH_CPU: u8 = 1;
 const OOM_KILLED: u8 = 2;
@@ -26,16 +26,20 @@ impl AlertCodec {
             }
             SandboxAlertKind::OomKilled {
                 guest_boot_id,
-                previous_count,
-                current_count,
-                delta,
+                victim_pid,
+                victim_comm,
+                attribution,
+                monitored_root,
                 ..
             } => {
-                let mut payload = Vec::with_capacity(40);
+                let mut payload = Vec::with_capacity(68);
                 payload.extend_from_slice(guest_boot_id.as_bytes());
-                append_u64(&mut payload, previous_count);
-                append_u64(&mut payload, current_count);
-                append_u64(&mut payload, delta);
+                payload.extend_from_slice(&victim_pid.to_be_bytes());
+                payload.extend_from_slice(&victim_comm);
+                payload.push(encode_attribution(attribution));
+                payload.push(u8::from(monitored_root.is_some()));
+                payload.extend_from_slice(&[0; 2]);
+                encode_optional_process(&mut payload, monitored_root);
                 (OOM_KILLED, payload)
             }
             SandboxAlertKind::OomRisk {
@@ -103,10 +107,11 @@ impl AlertCodec {
             },
             OOM_KILLED => SandboxAlertKind::OomKilled {
                 guest_boot_id,
-                sampled_at_ms: detected_at_ms,
-                previous_count: decoder.u64()?,
-                current_count: decoder.u64()?,
-                delta: decoder.u64()?,
+                detected_at_ms,
+                victim_pid: decoder.u32()?,
+                victim_comm: decoder.array::<16>()?,
+                attribution: decode_attribution(decoder.u8()?)?,
+                monitored_root: decode_optional_process(&mut decoder)?,
             },
             OOM_RISK => SandboxAlertKind::OomRisk {
                 guest_boot_id,
@@ -150,6 +155,56 @@ impl AlertCodec {
     }
 }
 
+fn encode_attribution(attribution: OomVictimAttribution) -> u8 {
+    match attribution {
+        OomVictimAttribution::Unknown => 0,
+        OomVictimAttribution::Monitored => 1,
+        OomVictimAttribution::Unmonitored => 2,
+    }
+}
+
+fn decode_attribution(raw: u8) -> Result<OomVictimAttribution, String> {
+    match raw {
+        0 => Ok(OomVictimAttribution::Unknown),
+        1 => Ok(OomVictimAttribution::Monitored),
+        2 => Ok(OomVictimAttribution::Unmonitored),
+        _ => Err("invalid stored OOM victim attribution".to_string()),
+    }
+}
+
+fn encode_optional_process(payload: &mut Vec<u8>, process: Option<ProcessMarker>) {
+    let process = process.unwrap_or(ProcessMarker {
+        pid: 0,
+        start_time_ticks: 0,
+        executable_name: [0; 16],
+    });
+    payload.extend_from_slice(&process.pid.to_be_bytes());
+    append_u64(payload, process.start_time_ticks);
+    payload.extend_from_slice(&process.executable_name);
+}
+
+fn decode_optional_process(decoder: &mut Decoder<'_>) -> Result<Option<ProcessMarker>, String> {
+    let present = decoder.u8()?;
+    if decoder.array::<2>()? != [0; 2] {
+        return Err("stored OOM victim reserved bytes are non-zero".to_string());
+    }
+    let process = ProcessMarker {
+        pid: decoder.u32()?,
+        start_time_ticks: decoder.u64()?,
+        executable_name: decoder.array::<16>()?,
+    };
+    match present {
+        0 if process.pid == 0
+            && process.start_time_ticks == 0
+            && process.executable_name == [0; 16] =>
+        {
+            Ok(None)
+        }
+        1 => Ok(Some(process)),
+        _ => Err("invalid stored OOM monitored root marker".to_string()),
+    }
+}
+
 fn encode_process_alert(
     guest_boot_id: GuestBootId,
     process: ProcessMarker,
@@ -190,6 +245,10 @@ impl<'a> Decoder<'a> {
 
     fn u32(&mut self) -> Result<u32, String> {
         self.array::<4>().map(u32::from_be_bytes)
+    }
+
+    fn u8(&mut self) -> Result<u8, String> {
+        Ok(self.array::<1>()?[0])
     }
 
     fn u16(&mut self) -> Result<u16, String> {

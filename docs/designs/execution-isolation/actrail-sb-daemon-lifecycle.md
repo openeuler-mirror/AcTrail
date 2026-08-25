@@ -202,6 +202,7 @@ SbDaemonConfig
 │   ├── tracked_process_capacity
 │   ├── pending_io_capacity
 │   ├── aggregate_capacity
+│   ├── oom_event_capacity
 │   └── poll_interval_ms
 ├── sampler
 │   └── poll_interval_ms

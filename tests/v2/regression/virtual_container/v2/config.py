@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tests.v2.common.core import CommonTestConfig, TestCaseInputs
-from tests.v2.common.kata_runtime.backend import supported_backends
+from tests.v2.common.kata_runtime.backend import shared_filesystem_backends
 from tests.v2.common.kata_runtime.environment import (
     absolute_path,
     bounded_environment_int,
@@ -15,7 +15,7 @@ from tests.v2.common.kata_runtime.environment import (
 from tests.v2.common.kata_runtime.image import PullPolicy
 
 
-SUPPORTED_BACKENDS = supported_backends()
+SUPPORTED_BACKENDS = shared_filesystem_backends()
 
 
 @dataclass(frozen=True)

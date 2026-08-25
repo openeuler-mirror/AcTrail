@@ -27,13 +27,13 @@ class CloudHypervisorExecutionIsolationCase(TestCase):
 
         test_context.report_progress(
             "preflight",
-            "validating refreshed Cloud Hypervisor data profile",
+            f"validating refreshed {self._config.IDENTITY.DISPLAY} data profile",
         )
         validation = SubprocessRunner().run(
             (
                 str(self._validator),
                 "--backend",
-                "cloud-hypervisor",
+                self._config.BACKEND,
                 "--require-kernel-config",
                 "--require-ebpf",
                 str(readiness.deployment.data_config),
@@ -44,7 +44,7 @@ class CloudHypervisorExecutionIsolationCase(TestCase):
         if validation.returncode != 0:
             return TestResult(
                 TestStatus.FAILED,
-                "Cloud Hypervisor execution-isolation data config is invalid",
+                f"{self._config.IDENTITY.DISPLAY} data config is invalid",
             )
         return CloudHypervisorExecutionIsolationScenario(
             self._config,

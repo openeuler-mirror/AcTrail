@@ -1,4 +1,4 @@
-use sandbox_observation::{GuestBootId, ProcessMarker};
+use sandbox_observation::{GuestBootId, OomVictimAttribution, ProcessMarker};
 
 use crate::SandboxAlertSourceError;
 
@@ -38,10 +38,11 @@ pub enum SandboxAlertKind {
     },
     OomKilled {
         guest_boot_id: GuestBootId,
-        sampled_at_ms: u64,
-        previous_count: u64,
-        current_count: u64,
-        delta: u64,
+        detected_at_ms: u64,
+        victim_pid: u32,
+        victim_comm: [u8; 16],
+        attribution: OomVictimAttribution,
+        monitored_root: Option<ProcessMarker>,
     },
     OomRisk {
         guest_boot_id: GuestBootId,
@@ -70,9 +71,10 @@ pub enum SandboxAlertKind {
 impl SandboxAlertKind {
     pub const fn detected_at_ms(self) -> u64 {
         match self {
-            Self::HighCpu { sampled_at_ms, .. }
-            | Self::OomKilled { sampled_at_ms, .. }
-            | Self::OomRisk { sampled_at_ms, .. } => sampled_at_ms,
+            Self::HighCpu { sampled_at_ms, .. } | Self::OomRisk { sampled_at_ms, .. } => {
+                sampled_at_ms
+            }
+            Self::OomKilled { detected_at_ms, .. } => detected_at_ms,
             Self::HighRead {
                 sample_ended_ms, ..
             }

@@ -2396,10 +2396,13 @@ dependencies = [
 name = "sandbox_resource_alert"
 version = "0.7.1"
 dependencies = [
+ "arc-swap",
  "plugin_system",
  "sandbox_alert_store",
  "sandbox_observation",
  "sandbox_plugin_delivery",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

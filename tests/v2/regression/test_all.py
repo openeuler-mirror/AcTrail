@@ -58,8 +58,17 @@ from tests.v2.regression.container_auto.run_e2e import (  # noqa: E402
 from tests.v2.regression.execution_isolation_cloud_hypervisor.run_e2e import (  # noqa: E402
     TEST_DEFINITION as EXECUTION_ISOLATION_CLOUD_HYPERVISOR,
 )
+from tests.v2.regression.execution_isolation_firecracker.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as EXECUTION_ISOLATION_FIRECRACKER,
+)
+from tests.v2.regression.execution_isolation_stratovirt.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as EXECUTION_ISOLATION_STRATOVIRT,
+)
 from tests.v2.regression.sandbox_resource_alert_host.run_e2e import (  # noqa: E402
     TEST_DEFINITION as SANDBOX_RESOURCE_ALERT_HOST,
+)
+from tests.v2.regression.sandbox_oom_killed_alert_host.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as SANDBOX_OOM_KILLED_ALERT_HOST,
 )
 from tests.v2.regression.otel_jsonl_action_filter.run_e2e import (  # noqa: E402
     TEST_DEFINITION as OTEL_JSONL_ACTION_FILTER,
@@ -112,7 +121,10 @@ DEFAULT_TESTS = [
 ]
 
 OPTIONAL_TESTS = [
+    SANDBOX_OOM_KILLED_ALERT_HOST,
+    EXECUTION_ISOLATION_FIRECRACKER,
     EXECUTION_ISOLATION_CLOUD_HYPERVISOR,
+    EXECUTION_ISOLATION_STRATOVIRT,
 ]
 
 TESTS = [*DEFAULT_TESTS, *OPTIONAL_TESTS]

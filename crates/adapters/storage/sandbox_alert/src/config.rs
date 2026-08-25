@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SandboxAlertSynchronous {

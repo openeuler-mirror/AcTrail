@@ -163,7 +163,9 @@ socket_path = "/run/vc/vm/<vm-id>/clh.sock_43182"
 `<vm-id>` is a deployment placeholder and must be resolved before use. `socket_path` must be an
 absolute path owned by the VM lifecycle. An existing socket path is not replaced by gateway bind.
 
-Native Host AF_VSOCK is also available for environments that expose a kernel VSOCK listener:
+Native Host AF_VSOCK is also available for environments that expose a kernel VSOCK listener.
+StratoVirt uses this backend: it does not require a StratoVirt-specific gateway transport or a
+Unix-socket endpoint rule.
 
 ```bash
 /usr/bin/actrail-vsock-gateway init \
@@ -174,5 +176,6 @@ Native Host AF_VSOCK is also available for environments that expose a kernel VSO
   --daemon-address 127.0.0.1:9472
 ```
 
-Firecracker, Cloud Hypervisor, and native AF_VSOCK share the same gateway session and TCP
-upstream runtime. Backend-specific endpoint resolution remains confined to gateway startup.
+Firecracker, Cloud Hypervisor, and StratoVirt through native AF_VSOCK share the same gateway
+session and TCP upstream runtime. Backend-specific endpoint resolution remains confined to
+gateway startup.

@@ -31,7 +31,7 @@ class SandboxAlertRecord:
     persisted_at_ms: int
     boot_id: str
     process: dict[str, int | str] | None
-    extras: dict[str, int]
+    extras: dict[str, Any]
 
     @property
     def delivery_source(self) -> dict[str, Any]:
@@ -97,7 +97,7 @@ class SandboxAlertDatabase:
             "SELECT schema_version FROM sandbox_alert_schema_meta "
             "WHERE singleton = 1"
         ).fetchone()
-        if row != (1,):
+        if row != (2,):
             raise AssertionError(f"unsupported sandbox alert schema: {row}")
 
     @classmethod
@@ -128,9 +128,32 @@ class SandboxAlertDatabase:
             extras["usage_basis_points"] = reader.u16()
             extras["threshold_basis_points"] = reader.u16()
         elif kind == 2:
-            extras["previous_count"] = reader.u64()
-            extras["current_count"] = reader.u64()
-            extras["delta"] = reader.u64()
+            extras["victim_pid"] = reader.u32()
+            extras["victim_comm"] = reader.take(16).split(b"\0", 1)[0].decode(
+                "utf-8", errors="replace"
+            )
+            attribution = reader.u8()
+            root_present = reader.u8()
+            if reader.take(2) != b"\0\0":
+                raise AssertionError("OOM alert reserved bytes are non-zero")
+            root = {
+                "pid": reader.u32(),
+                "start_time_ticks": reader.u64(),
+                "executable_name_hex": reader.take(16).hex(),
+            }
+            extras["attribution"] = {
+                0: "unknown",
+                1: "monitored",
+                2: "unmonitored",
+            }.get(attribution)
+            if extras["attribution"] is None:
+                raise AssertionError("invalid OOM alert attribution")
+            if root_present == 1:
+                process = root
+            elif root_present != 0 or any(
+                (root["pid"], root["start_time_ticks"])
+            ) or root["executable_name_hex"] != "00" * 16:
+                raise AssertionError("invalid OOM monitored root marker")
         elif kind == 3:
             extras["available_bytes"] = reader.u64()
             extras["threshold_bytes"] = reader.u64()
@@ -182,6 +205,9 @@ class _PayloadReader:
 
     def u16(self) -> int:
         return int.from_bytes(self.take(2), "big")
+
+    def u8(self) -> int:
+        return self.take(1)[0]
 
     def u32(self) -> int:
         return int.from_bytes(self.take(4), "big")

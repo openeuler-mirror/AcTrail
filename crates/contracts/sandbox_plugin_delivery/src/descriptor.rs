@@ -4,15 +4,17 @@ use sandbox_observation::{Observation, ObservationBatch};
 pub enum SandboxObservationKind {
     ProcessIo,
     GuestResource,
+    OomVictim,
 }
 
 impl SandboxObservationKind {
-    pub const COUNT: usize = 2;
+    pub const COUNT: usize = 3;
 
     pub const fn index(self) -> usize {
         match self {
             Self::ProcessIo => 0,
             Self::GuestResource => 1,
+            Self::OomVictim => 2,
         }
     }
 
@@ -20,6 +22,7 @@ impl SandboxObservationKind {
         match observation {
             Observation::ProcessIo(_) => Self::ProcessIo,
             Observation::GuestResource(_) => Self::GuestResource,
+            Observation::OomVictim(_) => Self::OomVictim,
         }
     }
 }

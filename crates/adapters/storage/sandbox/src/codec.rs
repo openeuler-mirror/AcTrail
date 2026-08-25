@@ -1,10 +1,11 @@
 use sandbox_evidence_store::sandbox_observation::{
     CpuSnapshot, GuestBootId, GuestResourceSnapshot, MemorySnapshot, Observation,
-    ProcessIoCounters, ProcessMarker,
+    OomVictimAttribution, OomVictimObservation, ProcessIoCounters, ProcessMarker,
 };
 
 const PROCESS_IO_KIND: u8 = 1;
 const GUEST_RESOURCE_KIND: u8 = 2;
+const OOM_VICTIM_KIND: u8 = 3;
 
 pub(super) struct ObservationCodec;
 
@@ -51,6 +52,28 @@ impl ObservationCodec {
                 }
                 (GUEST_RESOURCE_KIND, bytes)
             }
+            Observation::OomVictim(value) => {
+                bytes.extend_from_slice(value.guest_boot_id.as_bytes());
+                bytes.extend_from_slice(&value.detected_at_ms.to_be_bytes());
+                bytes.extend_from_slice(&value.victim_pid.to_be_bytes());
+                bytes.extend_from_slice(&value.victim_comm);
+                bytes.push(match value.attribution {
+                    OomVictimAttribution::Unknown => 0,
+                    OomVictimAttribution::Monitored => 1,
+                    OomVictimAttribution::Unmonitored => 2,
+                });
+                bytes.push(u8::from(value.monitored_root.is_some()));
+                bytes.extend_from_slice(&[0; 2]);
+                let root = value.monitored_root.unwrap_or(ProcessMarker {
+                    pid: 0,
+                    start_time_ticks: 0,
+                    executable_name: [0; 16],
+                });
+                bytes.extend_from_slice(&root.pid.to_be_bytes());
+                bytes.extend_from_slice(&root.start_time_ticks.to_be_bytes());
+                bytes.extend_from_slice(&root.executable_name);
+                (OOM_VICTIM_KIND, bytes)
+            }
         }
     }
 
@@ -88,6 +111,48 @@ impl ObservationCodec {
                     oom_kill_count: cursor.u64()?,
                 },
             }),
+            OOM_VICTIM_KIND => {
+                let guest_boot_id = GuestBootId::new(cursor.array()?);
+                let detected_at_ms = cursor.u64()?;
+                let victim_pid = cursor.u32()?;
+                let victim_comm = cursor.array()?;
+                let attribution = match cursor.u8()? {
+                    0 => OomVictimAttribution::Unknown,
+                    1 => OomVictimAttribution::Monitored,
+                    2 => OomVictimAttribution::Unmonitored,
+                    _ => return Err("invalid stored OOM victim attribution".to_string()),
+                };
+                let root_present = cursor.u8()?;
+                if cursor.array::<2>()? != [0; 2] {
+                    return Err("stored OOM victim reserved bytes are non-zero".to_string());
+                }
+                let root = ProcessMarker {
+                    pid: cursor.u32()?,
+                    start_time_ticks: cursor.u64()?,
+                    executable_name: cursor.array()?,
+                };
+                let monitored_root = match root_present {
+                    0 if root.pid == 0
+                        && root.start_time_ticks == 0
+                        && root.executable_name == [0; 16] =>
+                    {
+                        None
+                    }
+                    1 => Some(root),
+                    _ => return Err("invalid stored OOM monitored root marker".to_string()),
+                };
+                Observation::OomVictim(
+                    OomVictimObservation {
+                        guest_boot_id,
+                        detected_at_ms,
+                        victim_pid,
+                        victim_comm,
+                        attribution,
+                        monitored_root,
+                    }
+                    .validate()?,
+                )
+            }
             _ => return Err(format!("unknown sandbox evidence observation kind {kind}")),
         };
         if cursor.remaining() != 0 {
@@ -124,6 +189,10 @@ impl<'a> PayloadCursor<'a> {
 
     fn u16(&mut self) -> Result<u16, String> {
         self.array().map(u16::from_be_bytes)
+    }
+
+    fn u8(&mut self) -> Result<u8, String> {
+        Ok(self.array::<1>()?[0])
     }
 
     fn u32(&mut self) -> Result<u32, String> {

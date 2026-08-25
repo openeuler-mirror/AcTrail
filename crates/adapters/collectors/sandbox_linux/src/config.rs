@@ -6,6 +6,7 @@ use crate::SandboxLinuxError;
 const DEFAULT_TRACKED_PROCESS_CAPACITY: u32 = 16_384;
 const DEFAULT_PENDING_IO_CAPACITY: u32 = 32_768;
 const DEFAULT_AGGREGATE_CAPACITY: u32 = 4_096;
+const DEFAULT_OOM_EVENT_CAPACITY: u32 = 256;
 const MAX_MAP_CAPACITY: u32 = 1_048_576;
 const DEFAULT_ROOT_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const MIN_ROOT_REFRESH_INTERVAL: Duration = Duration::from_millis(10);
@@ -19,6 +20,7 @@ pub struct SandboxLinuxConfig {
     pub(crate) tracked_process_capacity: u32,
     pub(crate) pending_io_capacity: u32,
     pub(crate) aggregate_capacity: u32,
+    pub(crate) oom_event_capacity: u32,
     pub(crate) require_initial_root: bool,
     pub(crate) root_refresh_interval: Duration,
 }
@@ -54,6 +56,7 @@ impl SandboxLinuxConfig {
             tracked_process_capacity: DEFAULT_TRACKED_PROCESS_CAPACITY,
             pending_io_capacity: DEFAULT_PENDING_IO_CAPACITY,
             aggregate_capacity: DEFAULT_AGGREGATE_CAPACITY,
+            oom_event_capacity: DEFAULT_OOM_EVENT_CAPACITY,
             require_initial_root: true,
             root_refresh_interval: DEFAULT_ROOT_REFRESH_INTERVAL,
         })
@@ -83,6 +86,12 @@ impl SandboxLinuxConfig {
         self.tracked_process_capacity = tracked_processes;
         self.pending_io_capacity = pending_io;
         self.aggregate_capacity = aggregates;
+        Ok(self)
+    }
+
+    pub fn with_oom_event_capacity(mut self, capacity: u32) -> Result<Self, SandboxLinuxError> {
+        Self::validate_capacity("OOM event", capacity)?;
+        self.oom_event_capacity = capacity;
         Ok(self)
     }
 

@@ -19,11 +19,19 @@ BACKENDS = {
         "section": "stratovirt",
         "default_config": "configuration-stratovirt.toml",
         "ready_marker": "KATA_STRATOVIRT_CONFIG_READY",
+        "requires_virtiofsd": True,
     },
     "cloud-hypervisor": {
         "section": "clh",
         "default_config": "configuration-clh.toml",
         "ready_marker": "KATA_CLOUD_HYPERVISOR_CONFIG_READY",
+        "requires_virtiofsd": True,
+    },
+    "firecracker": {
+        "section": "firecracker",
+        "default_config": "configuration-fc.toml",
+        "ready_marker": "KATA_FIRECRACKER_CONFIG_READY",
+        "requires_virtiofsd": False,
     },
 }
 
@@ -36,6 +44,10 @@ def executable_path(value: str) -> Path:
     if not os.access(path, os.X_OK):
         raise argparse.ArgumentTypeError(f"file is not executable: {path}")
     return path
+
+
+def resolved_executable_path(value: str) -> Path:
+    return executable_path(value).resolve()
 
 
 def regular_path(value: str) -> Path:
@@ -69,6 +81,7 @@ def main() -> int:
     parser.add_argument("--base-config", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--hypervisor", type=executable_path, required=True)
+    parser.add_argument("--jailer", type=resolved_executable_path)
     parser.add_argument("--kernel", type=regular_path, required=True)
     parser.add_argument("--image", type=regular_path, required=True)
     parser.add_argument(
@@ -79,7 +92,7 @@ def main() -> int:
             "copy"
         ),
     )
-    parser.add_argument("--virtiofsd", type=executable_path, required=True)
+    parser.add_argument("--virtiofsd", type=executable_path)
     parser.add_argument(
         "--default-vcpus",
         type=positive_int,
@@ -92,6 +105,14 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    backend = BACKENDS[args.backend]
+    if backend["requires_virtiofsd"] and args.virtiofsd is None:
+        parser.error(f"--virtiofsd is required for {args.backend}")
+    if args.backend == "firecracker" and args.jailer is None:
+        parser.error("--jailer is required for firecracker")
+    if args.backend != "firecracker" and args.jailer is not None:
+        parser.error("--jailer is only valid for firecracker")
+
     prefix = args.kata_prefix.resolve()
     version_file = prefix / "VERSION"
     try:
@@ -103,7 +124,6 @@ def main() -> int:
             f"Kata prefix is {installed_version!r}, expected {EXPECTED_KATA_VERSION}"
         )
 
-    backend = BACKENDS[args.backend]
     hypervisor_section = f"hypervisor.{backend['section']}"
     base = args.base_config or (
         prefix
@@ -129,13 +149,27 @@ def main() -> int:
         (hypervisor_section, "valid_hypervisor_paths"): (
             f"[{toml_string(args.hypervisor)}]"
         ),
-        (hypervisor_section, "virtio_fs_daemon"): toml_string(
-            args.virtiofsd
-        ),
-        (hypervisor_section, "valid_virtio_fs_daemon_paths"): (
-            f"[{toml_string(args.virtiofsd)}]"
-        ),
     }
+    if args.virtiofsd is not None and backend["requires_virtiofsd"]:
+        replacements.update(
+            {
+                (hypervisor_section, "virtio_fs_daemon"): toml_string(
+                    args.virtiofsd
+                ),
+                (hypervisor_section, "valid_virtio_fs_daemon_paths"): (
+                    f"[{toml_string(args.virtiofsd)}]"
+                ),
+            }
+        )
+    if args.jailer is not None:
+        replacements.update(
+            {
+                (hypervisor_section, "jailer_path"): toml_string(args.jailer),
+                (hypervisor_section, "valid_jailer_paths"): (
+                    f"[{toml_string(args.jailer)}]"
+                ),
+            }
+        )
     if args.debug:
         replacements.update(
             {
@@ -209,10 +243,11 @@ def main() -> int:
     print(f"kata_version={installed_version}")
     print(f"output={args.output}")
     print(f"hypervisor={args.hypervisor}")
+    print(f"jailer={args.jailer or 'not-configured'}")
     print(f"kernel={args.kernel}")
     print(f"image_source={args.image}")
     print(f"image={configured_image}")
-    print(f"virtiofsd={args.virtiofsd}")
+    print(f"virtiofsd={args.virtiofsd or 'not-configured'}")
     print(f"default_vcpus={args.default_vcpus or 'release-default'}")
     print(f"debug={str(args.debug).lower()}")
     return 0

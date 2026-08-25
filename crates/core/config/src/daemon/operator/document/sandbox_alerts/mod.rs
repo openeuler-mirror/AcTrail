@@ -31,7 +31,7 @@ impl Default for SandboxAlertsDocument {
         Self {
             enabled: false,
             path: "/var/lib/actrail/sandbox-alerts.sqlite".to_string(),
-            schema_version: 1,
+            schema_version: 2,
             create_parent_directory: true,
             busy_timeout_ms: 5_000,
             writer_queue_capacity: 1_024,
@@ -78,8 +78,8 @@ impl SandboxAlertsDocument {
         if !path.is_absolute() || path.file_name().is_none() {
             return Err("sandbox_alerts.path must be an absolute file path".to_string());
         }
-        if self.schema_version != 1 {
-            return Err("sandbox_alerts.schema_version must be 1".to_string());
+        if self.schema_version != 2 {
+            return Err("sandbox_alerts.schema_version must be 2".to_string());
         }
         let writer_queue_capacity = require_positive_u32(
             "sandbox_alerts.writer_queue_capacity",

@@ -13,21 +13,26 @@ from tests.v2.common.core.loopback_port import resolve_test_port
 from tests.v2.common.kata_runtime import (
     CtrCapabilities,
     DeploymentArtifacts,
+    GuestConsole,
     KataTestContainer,
 )
 from tests.v2.common.process import ManagedProcess, SubprocessRunner
 from tests.v2.common.runner import TestingContextSingleton
 from tests.v2.common.sandbox_alert_database import SandboxAlertDatabase
 
-from ..cloud_hypervisor import CloudHypervisorSocketInventory
+from ..cloud_hypervisor import (
+    CloudHypervisorSocketInventory,
+    FirecrackerSocketInventory,
+    HybridVsockSocketInventory,
+)
 from ..config import CloudHypervisorExecutionIsolationConfig
-from ..identity import CloudHypervisorScenarioIdentity
 from .setup import CloudHypervisorScenarioSetup
+from .system_observer import GuestSystemSandboxObserver
+from .transport import CoordinationDirectory
 from .verifier import CloudHypervisorAlertVerifier
 
 
 class CloudHypervisorExecutionIsolationScenario:
-    _SB_CONTROL_SOCKET = "/run/actrail-sb-control.sock"
     _ALERT_CATEGORIES = (
         "sandbox.resource.high_cpu",
         "sandbox.resource.oom_killed",
@@ -53,7 +58,15 @@ class CloudHypervisorExecutionIsolationScenario:
         self._alerts = SandboxAlertDatabase(
             self._run_dir / "data" / "sandbox-alerts.sqlite"
         )
-        self._inventory = CloudHypervisorSocketInventory(config.vm_root)
+        self._inventory: HybridVsockSocketInventory | None
+        if config.BACKEND == "cloud-hypervisor":
+            self._inventory = CloudHypervisorSocketInventory(config.vm_root)
+        elif config.BACKEND == "firecracker":
+            self._inventory = FirecrackerSocketInventory(config.vm_root)
+        else:
+            self._inventory = None
+        guest = GuestConsole(self._runner)
+        self._observer = GuestSystemSandboxObserver(guest, config)
         self._setup = CloudHypervisorScenarioSetup(
             config,
             deployment,
@@ -66,6 +79,7 @@ class CloudHypervisorExecutionIsolationScenario:
             config,
             self._alerts,
             self._coordination,
+            guest,
         )
 
     def run(self) -> TestResult:
@@ -75,16 +89,15 @@ class CloudHypervisorExecutionIsolationScenario:
         subscriber: AlertSubscriberClient | None = None
         vm: KataTestContainer | None = None
         gateway: ManagedProcess | None = None
-        sb: ManagedProcess | None = None
         workload: ManagedProcess | None = None
         cleanup_errors: list[str] = []
         try:
             self._setup.prepare_assets()
             daemon_port = resolve_test_port(
-                "EXECUTION_ISOLATION_CLOUD_HYPERVISOR_E2E_DAEMON_PORT"
+                f"{self._config.ENVIRONMENT_PREFIX}DAEMON_PORT"
             )
             subscriber_port = resolve_test_port(
-                "EXECUTION_ISOLATION_CLOUD_HYPERVISOR_E2E_ALERT_PROXY_PORT"
+                f"{self._config.ENVIRONMENT_PREFIX}ALERT_PROXY_PORT"
             )
             proxy = AlertProxyTestProfile.create(
                 self._run_dir,
@@ -111,7 +124,6 @@ class CloudHypervisorExecutionIsolationScenario:
                 "hand-observation listener and sandbox plugin are active",
             )
 
-            before = self._inventory.snapshot()
             vm = KataTestContainer(
                 self._setup.requirements(),
                 self._runner,
@@ -119,60 +131,39 @@ class CloudHypervisorExecutionIsolationScenario:
             )
             self._context.report_progress(
                 "vm",
-                "starting one test-owned Cloud Hypervisor Kata VM",
+                f"starting one test-owned {self._config.IDENTITY.DISPLAY} Kata VM",
             )
-            vm.start()
-            base_socket = self._inventory.resolve_new_base_socket(
-                before,
-                self._inventory.snapshot(),
+            gateway = self._start_vm_gateway_and_connect(
+                vm,
+                daemon_port,
+                results,
             )
-            gateway_socket = self._inventory.gateway_socket(
-                base_socket,
-                self._config.vsock_port,
+            self._context.report_progress(
+                "assets",
+                "staging the execution-isolation workload in the Guest",
             )
-            self._setup.write_gateway_config(gateway_socket, daemon_port)
-            gateway = self._runner.start(
-                (
-                    str(
-                        self._deployment.host_bundle
-                        / "actrail-vsock-gateway"
-                    ),
-                    "--config",
-                    str(self._run_dir / "gateway.toml"),
-                )
-            )
-            self._verifier.require_alive(gateway, "gateway")
-            results["gateway"] = TestResult(
-                TestStatus.PASSED,
-                f"gateway owns {gateway_socket}",
-            )
-
-            sb = self._start_sb_daemon(vm)
-            self._verifier.require_alive(sb, "actrail-sb daemon")
-            self._wait_sb_daemon_ready(vm, sb)
-            self._connect_sb(vm)
-            results["sb"] = TestResult(
-                TestStatus.PASSED,
-                "actrail-sb daemon accepted the runtime VSOCK endpoint",
-            )
+            self._setup.stage_assets(vm)
+            coordination = self._setup.coordination(vm)
 
             workload = self._start_workload(vm)
-            self._verifier.wait_path(
-                self._coordination / "provider.ready",
+            self._reach_pre_oom_checkpoint(
+                vm,
+                gateway,
                 workload,
-                "real xiaoO provider readiness",
+                coordination,
             )
-            self._verifier.wait_resource_baseline(gateway, sb)
-            self._verifier.trigger_guest_oom(vm)
-            (self._coordination / "release").touch()
+            self._context.report_progress(
+                "agent",
+                "running real xiaoO and discovering its named root process",
+            )
             self._verifier.wait_path(
-                self._coordination / "root.pid",
+                coordination.file("root.pid"),
                 workload,
                 "named Agent root discovery",
             )
-            root_pid = self._verifier.read_root_pid()
+            root_pid = self._verifier.read_root_pid(vm, coordination)
             time.sleep(self._config.root_discovery_settle_seconds)
-            (self._coordination / "child.release").touch()
+            coordination.file("child.release").touch()
             self._complete_workload(workload)
             workload = None
             results["agent"] = TestResult(
@@ -180,9 +171,12 @@ class CloudHypervisorExecutionIsolationScenario:
                 "real xiaoO completed in the isolated Guest",
             )
 
+            self._context.report_progress(
+                "alerts",
+                "verifying Guest resource and root-lineage observations",
+            )
             observed_alerts = self._verifier.wait_observation_alerts(
                 gateway,
-                sb,
                 root_pid,
                 subscriber,
             )
@@ -203,7 +197,7 @@ class CloudHypervisorExecutionIsolationScenario:
             self._stop_processes(
                 results,
                 cleanup_errors,
-                (("workload", workload), ("sb", sb), ("gateway", gateway)),
+                (("workload", workload), ("gateway", gateway)),
             )
             self._stop_vm(vm, results, cleanup_errors)
             self._stop_runtime(runtime, cleanup_errors)
@@ -220,9 +214,95 @@ class CloudHypervisorExecutionIsolationScenario:
             )
         return TestResult(
             TestStatus.COMPOSITE,
-            "Cloud Hypervisor execution-isolation observation path",
+            f"{self._config.IDENTITY.DISPLAY} observation path",
             results,
         )
+
+    def _start_gateway(self) -> ManagedProcess:
+        return self._runner.start(
+            (
+                str(self._deployment.host_bundle / "actrail-vsock-gateway"),
+                "--config",
+                str(self._run_dir / "gateway.toml"),
+            )
+        )
+
+    def _start_vm_gateway_and_connect(
+        self,
+        vm: KataTestContainer,
+        daemon_port: int,
+        results: dict[str, TestResult],
+    ) -> ManagedProcess:
+        before = self._inventory.snapshot() if self._inventory is not None else None
+        vm.start()
+        self._observer.require_ready_and_unconnected(vm)
+        results["observer-ready"] = TestResult(
+            TestStatus.PASSED,
+            "Guest system actrail-sb daemon is ready and unconnected",
+        )
+
+        if self._inventory is None:
+            self._setup.write_gateway_config(None, daemon_port)
+            listener = f"native AF_VSOCK port {self._config.vsock_port}"
+            base_socket = None
+        else:
+            assert before is not None
+            base_socket = self._inventory.wait_new_base_socket(
+                before,
+                self._config.ready_timeout_seconds,
+            )
+            gateway_socket = self._inventory.gateway_socket(
+                base_socket,
+                self._config.vsock_port,
+            )
+            self._setup.write_gateway_config(gateway_socket, daemon_port)
+            listener = str(
+                self._inventory.listener_socket(
+                    base_socket,
+                    self._config.vsock_port,
+                )
+            )
+
+        gateway = self._start_gateway()
+        try:
+            self._verifier.require_alive(gateway, "gateway")
+            if self._inventory is not None:
+                assert base_socket is not None
+                self._inventory.wait_listener_socket(
+                    base_socket,
+                    self._config.vsock_port,
+                    self._config.ready_timeout_seconds,
+                )
+                gateway_evidence = f"gateway listener is ready on {listener}"
+            else:
+                gateway.wait_for_output(
+                    "gateway ready gateway_id=",
+                    timeout=self._config.ready_timeout_seconds,
+                )
+                gateway_evidence = (
+                    f"gateway reported ready on {listener} before the explicit "
+                    "Guest observer connection"
+                )
+            results["gateway"] = TestResult(
+                TestStatus.PASSED,
+                gateway_evidence,
+            )
+            self._observer.connect(vm)
+        except BaseException as error:
+            try:
+                gateway.terminate(grace_seconds=3)
+            except Exception as cleanup_error:
+                error.add_note(
+                    "gateway cleanup after startup failure also failed: "
+                    f"{cleanup_error}"
+                )
+            raise
+        results["observer-connect"] = TestResult(
+            TestStatus.PASSED,
+            "case explicitly connected the Guest system observer after gateway "
+            "readiness",
+        )
+        return gateway
 
     def _create_runtime(
         self,
@@ -247,7 +327,7 @@ class CloudHypervisorExecutionIsolationScenario:
         self,
         proxy: AlertProxyTestProfile,
     ) -> AlertSubscriberClient:
-        identity = CloudHypervisorScenarioIdentity
+        identity = self._config.IDENTITY
         subscriber = AlertSubscriberClient(
             proxy.subscriber_address,
             proxy.token,
@@ -272,78 +352,33 @@ class CloudHypervisorExecutionIsolationScenario:
             environment=self._setup.workload_environment(),
         )
 
-    @staticmethod
-    def _start_sb_daemon(vm: KataTestContainer) -> ManagedProcess:
-        return vm.start_exec(
-            (
-                "/opt/actrail-guest/actrail-sb",
-                "daemon",
-                "--config",
-                "/opt/actrail-execution/sb.toml",
-            ),
-            uid=0,
-            gid=0,
-            environment={"LD_LIBRARY_PATH": "/opt/actrail-guest/lib"},
-        )
-
-    def _wait_sb_daemon_ready(
+    def _reach_pre_oom_checkpoint(
         self,
         vm: KataTestContainer,
-        daemon: ManagedProcess,
+        gateway: ManagedProcess,
+        workload: ManagedProcess,
+        coordination: CoordinationDirectory,
     ) -> None:
-        ready = vm.exec(
-            (
-                "/bin/sh",
-                "-ec",
-                f"remaining={self._config.ready_timeout_seconds * 2}; "
-                "while [ $remaining -gt 0 ]; do "
-                f"[ -S {self._SB_CONTROL_SOCKET} ] && exit 0; "
-                "remaining=$((remaining - 1)); sleep 0.5; "
-                "done; exit 72",
-            ),
-            uid=0,
-            gid=0,
-            timeout=self._config.ready_timeout_seconds + 1,
+        self._context.report_progress(
+            "provider",
+            "waiting for the real xiaoO local provider in the Guest",
         )
-        if ready.returncode != 0:
-            self._verifier.require_alive(daemon, "actrail-sb daemon")
-            raise RuntimeError(
-                CloudHypervisorScenarioIdentity.failure(
-                    "actrail-sb daemon control socket did not become ready: "
-                    + ready.diagnostic
-                )
-            )
-
-    def _connect_sb(self, vm: KataTestContainer) -> None:
-        connected = vm.exec(
-            (
-                "/opt/actrail-guest/actrail-sb",
-                "connect",
-                "--control-socket",
-                self._SB_CONTROL_SOCKET,
-                "--host-cid",
-                str(self._config.vsock_host_cid),
-                "--port",
-                str(self._config.vsock_port),
-            ),
-            uid=0,
-            gid=0,
-            environment={"LD_LIBRARY_PATH": "/opt/actrail-guest/lib"},
-            timeout=self._config.ready_timeout_seconds,
+        self._verifier.wait_path(
+            coordination.file("provider.ready"),
+            workload,
+            "real xiaoO provider readiness",
         )
-        if connected.returncode != 0:
-            raise RuntimeError(
-                CloudHypervisorScenarioIdentity.failure(
-                    "actrail-sb runtime VSOCK connection failed: "
-                    + connected.diagnostic
-                )
-            )
-        if "actrail-sb connected sb_id=" not in connected.diagnostic:
-            raise RuntimeError(
-                CloudHypervisorScenarioIdentity.failure(
-                    "actrail-sb connect omitted the successful handshake marker"
-                )
-            )
+        self._context.report_progress(
+            "resource-baseline",
+            "waiting for the pre-OOM Guest resource observation",
+        )
+        self._verifier.wait_resource_baseline(gateway)
+        self._context.report_progress(
+            "guest-oom",
+            "triggering the controlled OOM in the Guest root cgroup namespace",
+        )
+        self._verifier.trigger_guest_oom(vm)
+        coordination.file("release").touch()
 
     def _complete_workload(self, workload: ManagedProcess) -> None:
         result = workload.wait(
@@ -352,15 +387,15 @@ class CloudHypervisorExecutionIsolationScenario:
         )
         if result.returncode != 0:
             raise RuntimeError(
-                CloudHypervisorScenarioIdentity.failure(
+                self._config.IDENTITY.failure(
                     "real xiaoO workload failed: " + result.diagnostic
                 )
             )
         output = result.stdout + result.stderr
-        for marker in CloudHypervisorScenarioIdentity.workload_markers():
+        for marker in self._config.IDENTITY.workload_markers():
             if marker not in output:
                 raise RuntimeError(
-                    CloudHypervisorScenarioIdentity.failure(
+                    self._config.IDENTITY.failure(
                         f"xiaoO workload omitted marker: {marker}"
                     )
                 )

@@ -1,6 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use sandbox_observation::{GuestResourceSnapshot, ProcessIoCounters};
+use sandbox_observation::{GuestResourceSnapshot, OomVictimObservation, ProcessIoCounters};
 
 use crate::ebpf::EbpfIoCollector;
 use crate::procfs::ProcfsReader;
@@ -10,6 +10,7 @@ use crate::{SandboxLinuxConfig, SandboxLinuxError};
 /// One fail-local read cycle from the Guest collector.
 pub struct CollectionCycle {
     pub process_io: Vec<ProcessIoCounters>,
+    pub oom_victims: Vec<OomVictimObservation>,
     pub resources: Option<GuestResourceSnapshot>,
     pub kernel_diagnostics: KernelCollectionDiagnostics,
     pub failures: Vec<SandboxLinuxError>,
@@ -18,6 +19,7 @@ pub struct CollectionCycle {
 /// One process-I/O polling result, independent from resource sampling cadence.
 pub struct ProcessIoCycle {
     pub process_io: Vec<ProcessIoCounters>,
+    pub oom_victims: Vec<OomVictimObservation>,
     pub kernel_diagnostics: KernelCollectionDiagnostics,
     pub failures: Vec<SandboxLinuxError>,
 }
@@ -28,6 +30,8 @@ pub struct KernelCollectionDiagnostics {
     pub pending_io_drops: u64,
     pub aggregate_drops: u64,
     pub descendant_tracking_drops: u64,
+    pub oom_event_drops: u64,
+    pub oom_comm_drops: u64,
 }
 
 /// Owns only Guest process discovery and eBPF I/O aggregation.
@@ -56,24 +60,39 @@ impl SandboxProcessIoCollector {
         if let Err(error) = self.ebpf.refresh_roots(&self.procfs) {
             failures.push(error);
         }
-        let (process_io, kernel_diagnostics) = match now_ms().and_then(|sample_ended_ms| {
-            let collected =
-                self.ebpf
-                    .collect(self.boot_id, self.previous_sample_ms, sample_ended_ms)?;
-            self.previous_sample_ms = sample_ended_ms;
-            Ok(collected)
-        }) {
-            Ok(collected) => collected,
+        let collected = match now_ms() {
+            Ok(sample_ended_ms) => {
+                let collected =
+                    self.ebpf
+                        .collect(self.boot_id, self.previous_sample_ms, sample_ended_ms);
+                self.previous_sample_ms = sample_ended_ms;
+                collected
+            }
             Err(error) => {
                 failures.push(error);
-                (Vec::new(), KernelCollectionDiagnostics::default())
+                crate::ebpf::EbpfCollection {
+                    process_io: Vec::new(),
+                    oom_victims: Vec::new(),
+                    diagnostics: KernelCollectionDiagnostics::default(),
+                    failures: Vec::new(),
+                }
             }
         };
+        failures.extend(collected.failures);
         ProcessIoCycle {
-            process_io,
-            kernel_diagnostics,
+            process_io: collected.process_io,
+            oom_victims: collected.oom_victims,
+            kernel_diagnostics: collected.diagnostics,
             failures,
         }
+    }
+
+    pub fn reset_publication(&mut self) -> Result<(), SandboxLinuxError> {
+        self.ebpf.reset_publication()
+    }
+
+    pub fn activate_publication(&mut self, generation: u64) -> Result<(), SandboxLinuxError> {
+        self.ebpf.activate_publication(generation)
     }
 }
 
@@ -105,6 +124,7 @@ impl SandboxLinuxCollector {
         };
         CollectionCycle {
             process_io: process_cycle.process_io,
+            oom_victims: process_cycle.oom_victims,
             resources,
             kernel_diagnostics: process_cycle.kernel_diagnostics,
             failures,

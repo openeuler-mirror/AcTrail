@@ -111,8 +111,11 @@ actrail-sb → actrail-vsock-gateway → actraild / GatewayIngestRuntime
 
 ## 9. 部署与验证边界
 
-- Firecracker 是主线 backend；Cloud Hypervisor 与 native AF_VSOCK 是独立可选 backend，不能替代 Firecracker 主线结论。
+- Firecracker 是主线 backend；Cloud Hypervisor 与 native AF_VSOCK 是独立可选 gateway backend，不能替代 Firecracker 主线结论。
+- StratoVirt 通过 gateway 的 native AF_VSOCK backend 接入；它不引入独立的 gateway session、forwarder 或 upstream 实现。
 - 快照前启动并预热 `actrail-sb daemon`；运行时顺序为 `actraild → gateway → 恢复 Guest → actrail-sb connect`。
 - Firecracker 中 Guest connect port 与 Host `${uds_path}_${port}` 表示同一 VSOCK port。
+- StratoVirt 中 Guest connect port 与 Host native AF_VSOCK listener port 表示同一 VSOCK port。
+- 每种真实 VMM、CPU 架构、Guest kernel 与 runtime 组合必须独立验收，不能从另一 backend 的结果外推。
 - `tests/v2/` 是唯一允许新增、维护和执行的测试根；`tests/` 下其他目录禁止引用或扩展。
 - 功能完成声明需要当前 release binary、刷新默认配置、真实 Firecracker Guest 和 Guest 内真实 Agent 的端到端结果。

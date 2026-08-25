@@ -153,6 +153,10 @@ grep -Fq -- '--startup-dependency "$STARTUP_DEPENDENCY"' "$INJECTOR" \
   || fail "guest image injector does not forward the Guest startup dependency"
 grep -Fq -- 'install_args+=(--otel-endpoint "$OTEL_ENDPOINT")' "$INJECTOR" \
   || fail "guest image injector does not conditionally enable OTLP export"
+"$INJECTOR" --help | grep -Fq -- '--with-sandbox-observer' \
+  || fail "guest image injector does not expose sandbox observer injection"
+[[ "$(grep -Fc -- '--with-sandbox-observer' "$INJECTOR")" -ge 3 ]] \
+  || fail "guest image injector must forward sandbox observer selection to installer and verifier"
 if grep -Fq -- '--mode' "$INJECTOR"; then
   fail "guest image injector retains the deprecated startup-mode interface"
 fi

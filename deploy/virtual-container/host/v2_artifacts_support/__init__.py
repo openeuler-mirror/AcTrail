@@ -14,9 +14,14 @@ from .metadata import (
 )
 from .model import PreparationInputs
 from .profile import V2TestProfile
+from .workload_image import (
+    PreparedWorkloadImage,
+    prepare_firecracker_workload_image,
+)
 
 __all__ = [
     "PreparationInputs",
+    "PreparedWorkloadImage",
     "V2TestProfile",
     "atomic_json",
     "build_input_document",
@@ -24,6 +29,7 @@ __all__ = [
     "default_tool_inputs",
     "fsync_tree",
     "infer_runtime_path",
+    "prepare_firecracker_workload_image",
     "release_hashes",
     "restore_invoking_user_ownership",
     "shell_display",

@@ -5,7 +5,6 @@ import secrets
 import shutil
 import socket
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
 from tests.v2.common.agent_selection import AgentSelection
@@ -22,20 +21,8 @@ from tests.v2.common.runner import TestingContextSingleton
 from tests.v2.common.sandbox_alert_database import SandboxAlertRecord
 
 from .config import SandboxResourceAlertHostConfig
-
-
-@dataclass
-class _OwnedProcesses:
-    gateway: ManagedProcess | None = None
-    sandbox_agent: ManagedProcess | None = None
-    workload: ManagedProcess | None = None
-
-
-@dataclass(frozen=True)
-class _ScenarioOutcome:
-    records: dict[str, SandboxAlertRecord]
-    initial_connection: str
-    reconnection: str
+from .oom_assertions import OomAlertAssertions
+from .runtime_state import OwnedProcesses, ScenarioOutcome
 
 
 class SandboxResourceAlertHostScenario:
@@ -43,6 +30,7 @@ class SandboxResourceAlertHostScenario:
     _WRITE_THRESHOLD_BYTES = 2_097_152
     _CATEGORIES = (
         "sandbox.resource.oom_risk",
+        "sandbox.resource.oom_killed",
         "sandbox.process.high_read",
         "sandbox.process.high_write",
     )
@@ -65,7 +53,7 @@ class SandboxResourceAlertHostScenario:
     def run(self) -> TestResult:
         results: dict[str, TestResult] = {}
         alert_path: SandboxAlertPath | None = None
-        processes = _OwnedProcesses()
+        processes = OwnedProcesses()
         cleanup_errors: list[str] = []
         try:
             alert_path = self._start_alert_path()
@@ -78,7 +66,17 @@ class SandboxResourceAlertHostScenario:
             )
             results["agent"] = TestResult(
                 TestStatus.PASSED,
-                "real xiaoO completed host file read and write tool calls",
+                "real xiaoO completed host file read, write and isolated OOM tool calls",
+            )
+            results["policy"] = TestResult(
+                TestStatus.PASSED,
+                "actrailweb changed the loaded memory threshold and persisted it",
+            )
+            oom = outcome.records["sandbox.resource.oom_killed"]
+            results["oom"] = TestResult(
+                TestStatus.PASSED,
+                "kernel OOM victim was attributed to the monitored lineage: "
+                f"pid={oom.extras['victim_pid']} comm={oom.extras['victim_comm']}",
             )
             results["control"] = TestResult(
                 TestStatus.PASSED,
@@ -136,6 +134,9 @@ class SandboxResourceAlertHostScenario:
         subscriber_port = resolve_test_port(
             "SANDBOX_RESOURCE_ALERT_HOST_E2E_ALERT_PROXY_PORT"
         )
+        web_port = resolve_test_port(
+            "SANDBOX_RESOURCE_ALERT_HOST_E2E_WEB_PORT"
+        )
         alert_path = SandboxAlertPath(
             repo=self._config.repo,
             bin_dir=self._config.bin_dir,
@@ -144,6 +145,7 @@ class SandboxResourceAlertHostScenario:
             command_timeout_seconds=self._config.command_timeout_seconds,
             daemon_port=daemon_port,
             subscriber_port=subscriber_port,
+            web_port=web_port,
             categories=self._CATEGORIES,
             thresholds=SandboxAlertThresholds(
                 cpu_usage_basis_points=10_000,
@@ -159,8 +161,8 @@ class SandboxResourceAlertHostScenario:
     def _execute_path(
         self,
         alert_path: SandboxAlertPath,
-        processes: _OwnedProcesses,
-    ) -> _ScenarioOutcome:
+        processes: OwnedProcesses,
+    ) -> ScenarioOutcome:
         profile = SandboxAgentProfile(
             binary=self._config.bin_dir / "actrail-sb",
             work_dir=self._run_dir,
@@ -185,6 +187,7 @@ class SandboxResourceAlertHostScenario:
         records = self._run_alert_workload(
             alert_path,
             processes,
+            timing,
         )
         reconnect = self._verify_disconnect_reconnect(
             alert_path,
@@ -192,7 +195,7 @@ class SandboxResourceAlertHostScenario:
             timing,
             processes,
         )
-        return _ScenarioOutcome(
+        return ScenarioOutcome(
             records,
             initial.stdout.strip(),
             reconnect.stdout.strip(),
@@ -201,7 +204,8 @@ class SandboxResourceAlertHostScenario:
     def _run_alert_workload(
         self,
         alert_path: SandboxAlertPath,
-        processes: _OwnedProcesses,
+        processes: OwnedProcesses,
+        timing: SandboxAgentTiming,
     ) -> dict[str, SandboxAlertRecord]:
         gateway = self._require_owned(processes.gateway, "gateway")
         sandbox_agent = self._require_owned(
@@ -219,6 +223,12 @@ class SandboxResourceAlertHostScenario:
             "real xiaoO provider readiness",
         )
         self._wait_memory_baseline(alert_path, gateway, sandbox_agent)
+        self._verify_dynamic_memory_policy(
+            alert_path,
+            gateway,
+            sandbox_agent,
+            timing,
+        )
 
         (self._coord / "workload.release").touch()
         self._wait_path(
@@ -238,6 +248,7 @@ class SandboxResourceAlertHostScenario:
             )
         if "ACTRAIL_HOST_XIAOO_WORKLOAD_OK" not in completed.stdout:
             raise RuntimeError("real xiaoO workload omitted completion evidence")
+        oom_victim_pid = OomAlertAssertions.read_victim_pid(self._coord / "oom.pid")
 
         records = self._wait_all_alerts(
             alert_path,
@@ -245,6 +256,14 @@ class SandboxResourceAlertHostScenario:
             sandbox_agent,
             root_marker,
             child_release_ms,
+            oom_victim_pid,
+        )
+        time.sleep(timing.io_poll_seconds * 2 + 0.25)
+        OomAlertAssertions.assert_single(
+            alert_path,
+            root_marker,
+            child_release_ms,
+            oom_victim_pid,
         )
         deliveries = alert_path.matching_deliveries(
             records,
@@ -255,12 +274,38 @@ class SandboxResourceAlertHostScenario:
         alert_path.assert_independent_database()
         return records
 
+    def _verify_dynamic_memory_policy(
+        self,
+        alert_path: SandboxAlertPath,
+        gateway: ManagedProcess,
+        sb: ManagedProcess,
+        timing: SandboxAgentTiming,
+    ) -> None:
+        alert_path.assert_failed_update_preserves_memory_threshold(1)
+        alert_path.update_memory_threshold(1)
+        time.sleep(timing.resource_poll_seconds * 2 + 0.25)
+        self._require_alive(gateway, "gateway during policy update")
+        self._require_alive(sb, "actrail-sb during policy update")
+        after_alert_id = self._latest_alert_id(alert_path)
+        alert_path.update_memory_threshold(18_446_744_073_709_551_615)
+        deadline = time.monotonic() + self._config.ready_timeout_seconds
+        while time.monotonic() < deadline:
+            self._require_alive(gateway, "gateway after policy update")
+            self._require_alive(sb, "actrail-sb after policy update")
+            for record in alert_path.database.records(
+                after_alert_id=after_alert_id
+            ):
+                if record.category == "sandbox.resource.oom_risk":
+                    return
+            time.sleep(0.1)
+        raise RuntimeError("Web memory threshold did not affect the loaded plugin")
+
     def _verify_disconnect_reconnect(
         self,
         alert_path: SandboxAlertPath,
         profile: SandboxAgentProfile,
         timing: SandboxAgentTiming,
-        processes: _OwnedProcesses,
+        processes: OwnedProcesses,
     ) -> CommandResult:
         gateway = self._require_owned(processes.gateway, "gateway")
         sandbox_agent = self._require_owned(
@@ -309,9 +354,16 @@ class SandboxResourceAlertHostScenario:
     def _prepare_assets(self, provider_port: int) -> None:
         self._assets.mkdir(parents=True)
         self._coord.mkdir()
+        controlled_oom_assets = (
+            self._config.repo / "tests/v2/common/execution_isolation/assets"
+        )
         sources = {
             "named-agent-root": Path(__file__).parent / "assets/named_agent_root.py",
             "workload.sh": Path(__file__).parent / "assets/workload.sh",
+            "oom-cgroup-trigger.sh": (
+                controlled_oom_assets / "oom-cgroup-trigger.sh"
+            ),
+            "oom_trigger.py": controlled_oom_assets / "oom_trigger.py",
             "provider-proxy.py": (
                 self._config.repo / "tests/support/llm-http-proxy/provider_proxy.py"
             ),
@@ -320,7 +372,12 @@ class SandboxResourceAlertHostScenario:
             if not source.is_file():
                 raise RuntimeError(f"host sandbox alert asset is missing: {source}")
             shutil.copy2(source, self._assets / name)
-        for name in ("named-agent-root", "workload.sh"):
+        for name in (
+            "named-agent-root",
+            "workload.sh",
+            "oom-cgroup-trigger.sh",
+            "oom_trigger.py",
+        ):
             (self._assets / name).chmod(0o755)
         (self._assets / "xiaoo.toml").write_text(
             self._xiaoo_config(provider_port),
@@ -381,6 +438,12 @@ class SandboxResourceAlertHostScenario:
                 "ACTRAIL_HOST_PROVIDER_SCRIPT": str(self._assets / "provider-proxy.py"),
                 "ACTRAIL_HOST_COORD_DIR": str(self._coord),
                 "ACTRAIL_HOST_TASK_FILE": str(self._assets / "task.bin"),
+                "ACTRAIL_HOST_OOM_SCRIPT": str(
+                    self._assets / "oom-cgroup-trigger.sh"
+                ),
+                "ACTRAIL_HOST_OOM_TRIGGER": str(
+                    self._assets / "oom_trigger.py"
+                ),
                 "ACTRAIL_HOST_ROOT_PID_FILE": str(self._coord / "root.pid"),
                 "ACTRAIL_HOST_CHILD_RELEASE": str(self._coord / "child.release"),
                 "ACTRAIL_HOST_CHILD_TIMEOUT_SECONDS": str(
@@ -489,6 +552,7 @@ class SandboxResourceAlertHostScenario:
         sb: ManagedProcess,
         root_marker: tuple[int, int, str],
         child_release_ms: int,
+        oom_victim_pid: int,
     ) -> dict[str, SandboxAlertRecord]:
         deadline = time.monotonic() + self._config.ready_timeout_seconds
         while time.monotonic() < deadline:
@@ -498,12 +562,13 @@ class SandboxResourceAlertHostScenario:
                 alert_path,
                 root_marker,
                 child_release_ms,
+                oom_victim_pid,
             )
             if set(self._CATEGORIES).issubset(selected):
                 return {category: selected[category] for category in self._CATEGORIES}
             time.sleep(0.1)
         raise RuntimeError(
-            "timed out waiting for host memory-risk, high-read and "
+            "timed out waiting for host memory-risk, OOM-killed, high-read and "
             f"high-write alerts for named root pid={root_marker[0]}"
         )
 
@@ -512,6 +577,7 @@ class SandboxResourceAlertHostScenario:
         alert_path: SandboxAlertPath,
         root_marker: tuple[int, int, str],
         child_release_ms: int,
+        oom_victim_pid: int,
     ) -> dict[str, SandboxAlertRecord]:
         selected: dict[str, SandboxAlertRecord] = {}
         root_pid, root_start_time_ticks, root_name_hex = root_marker
@@ -545,6 +611,21 @@ class SandboxResourceAlertHostScenario:
                 )
                 if threshold != expected_threshold:
                     raise AssertionError(f"I/O alert threshold changed: {record}")
+            elif record.category == "sandbox.resource.oom_killed":
+                if record.detected_at_ms < child_release_ms:
+                    continue
+                if record.process != {
+                    "pid": root_pid,
+                    "start_time_ticks": root_start_time_ticks,
+                    "executable_name_hex": root_name_hex,
+                }:
+                    continue
+                if record.extras.get("attribution") != "monitored":
+                    raise AssertionError(f"OOM victim attribution is not monitored: {record}")
+                if record.extras.get("victim_pid") != oom_victim_pid:
+                    continue
+                if record.extras.get("victim_comm") != "python3":
+                    raise AssertionError(f"OOM victim command is incorrect: {record}")
             selected.setdefault(record.category, record)
         return selected
 

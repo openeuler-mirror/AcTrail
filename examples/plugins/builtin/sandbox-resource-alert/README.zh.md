@@ -2,18 +2,18 @@
 
 类别：内置手侧观测消费者。
 
-该插件消费独立 Hand 通路中的 `process-io` 和 `guest-resource` observation，生成以下
+该插件消费独立 Hand 通路中的 `process-io`、`guest-resource` 和 `oom-victim` observation，生成以下
 本地告警记录：
 
-- Guest `oom_kill` 计数增长；
+- Guest 内核报告 OOM victim，并携带 victim PID、命令名和被观测谱系归因；
 - Guest 可用内存低于配置阈值；
 - Guest 区间 CPU 利用率越过配置阈值；
 - 一个采样区间内进程谱系读取或写入字节数超过配置阈值。
 
 manifest 的 `role.sandbox-observation-consumer.subscriptions.observation_kinds` 接受任意
-非空子集。默认 manifest 同时订阅 `process-io` 和 `guest-resource`；只需 I/O 告警的
-实例可以仅配置 `process-io`，只需 OOM/OOM-risk 告警的实例可以仅配置
-`guest-resource`。未被任何已加载实例订阅的 observation 会进入独立 NoInterest evidence
+非空子集。默认 manifest 同时订阅三类 observation；只需 I/O 告警的实例可以仅配置
+`process-io`，OOM kill 需要订阅 `oom-victim`，OOM risk 需要订阅 `guest-resource`。
+未被任何已加载实例订阅的 observation 会进入独立 NoInterest evidence
 数据库，不会回退给其他插件。
 
 例如，仅订阅 Guest 资源 observation：

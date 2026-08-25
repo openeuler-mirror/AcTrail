@@ -8,6 +8,7 @@ root_refresh_interval_ms = 1000
 tracked_process_capacity = 16384
 pending_io_capacity = 32768
 aggregate_capacity = 4096
+oom_event_capacity = 256
 poll_interval_ms = 1000
 
 [sampler]

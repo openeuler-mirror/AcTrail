@@ -7,7 +7,7 @@
 daemon 同一时刻只允许一个活动的 `sandbox-resource-alert` 实例，避免同一 observation 被不同阈值实例重复判定和争用同一持久化身份。
 
 ```text
-Guest resource / process I/O observation
+Guest resource / process I/O / OOM victim observation
   -> sandbox-resource-alert
   -> bounded SandboxAlert admission
   -> sandbox alert SQLite transaction
@@ -27,11 +27,11 @@ Sandbox 告警使用独立的数据库文件、schema、连接、writer queue �
 
 插件按 `(gateway_id, sb_id)` 保存有界来源状态。
 每个来源状态同时记录 `guest_boot_id`。
-Guest boot 变化时，OOM、内存和 CPU baseline 全部重建。
+Guest boot 变化时，内存越阈状态和 CPU baseline 全部重建。
 
 插件产生以下告警：
 
-- `OomKilled`：同一 Guest boot 的相邻资源快照中 `oom_kill_count` 正增长；
+- `OomKilled`：Guest 内核 `oom/mark_victim` 选中一个 OOM victim；
 - `OomRisk`：可用内存从阈值以上进入阈值以下；
 - `HighCpu`：相邻 CPU 累计计数形成的区间利用率从阈值以下进入阈值以上；
 - `HighRead`：单个进程采样区间的读取字节数超过阈值；
@@ -43,7 +43,17 @@ CPU 区间利用率使用整数 basis points 表示。
 
 资源类告警使用 `sampled_at_ms` 作为检测时间。
 进程 I/O 告警使用 `sample_ended_ms` 作为检测时间。
+OOM 告警使用内核事件的 Guest boot 单调时间换算出的检测时间。
 数据库提交时间和 proxy 发送时间不得覆盖检测时间。
+
+OOM victim observation 包含 victim PID、内核 `comm`、归因状态和可选的被观测谱系根标记。
+归因状态为 `monitored`、`unmonitored` 或 `unknown`。
+当前采集器只在事件发生时命中 Guest eBPF 跟踪表后输出 `monitored`；未命中时输出 `unknown`，避免把跟踪容量不足或谱系发现窗口误判为 `unmonitored`。
+所有 OOM victim 都产生 `critical` 告警。
+`monitored` 事件额外携带谱系根，使告警接收方可以优先处理被观测 Agent 及其后代的 OOM。
+
+Guest 资源快照中的 `oom_kill_count` 是累计资源指标，不生成 `OomKilled` 告警。
+OOM 事件 queue 的容量损失进入采集诊断。
 
 ## 3. 独立持久化
 
@@ -84,6 +94,8 @@ Sandbox alert 在 daemon 内转换为标准 `ForwardAlert`。
 Sandbox source 不包含 `trid`。
 资源类 source 包含 gateway ID、SB ID 和 Guest boot ID。
 进程类 source 额外包含 PID、进程启动 tick 和固定宽度二进制名的无损十六进制表示。
+`monitored` OOM 的 source 使用被观测谱系根标记，victim PID、victim `comm` 和归因状态进入 `extras`。
+`unknown` 与 `unmonitored` OOM 不伪造进程稳定标记。
 
 `extras` 只保存告警业务量，不重复保存 source 身份。
 外发前先检查 builtin forwarding plugin 的有效启用状态和 category filter。
@@ -98,6 +110,13 @@ Sandbox source 不包含 `trid`。
 - 区间读取字节阈值；
 - 区间写入字节阈值；
 - 来源状态容量。
+
+CPU、可用内存、区间读取和区间写入阈值可通过 Web plugin config API 在线修改。
+管理请求完成 JSON 和类型校验后，先原子替换配置文件，再发布不可变运行时配置快照。
+插件 worker 每个 observation batch 只读取一次快照，同一 batch 不混用新旧阈值。
+校验或持久化失败时继续使用旧配置。
+配置切换不卸载插件、不更换 consumer，也不清空来源状态。
+`source_state_capacity` 决定状态表结构容量，只能在插件加载前配置。
 
 `SandboxAlertsConfig` 只拥有独立数据库及异步 writer 的运行参数。
 该子配置显式启用时，daemon 在加载 Sandbox resource alert plugin 前完成数据库启动。

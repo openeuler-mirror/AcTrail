@@ -12,6 +12,7 @@ use crate::status::DaemonMetrics;
 use crate::{GuestResourceSource, ProcessIoSource};
 
 pub(crate) struct BaselineRequest {
+    pub(crate) publication_generation: Option<u64>,
     pub(crate) response: SyncSender<io::Result<()>>,
 }
 
@@ -72,7 +73,10 @@ pub(crate) fn spawn_io_worker(
             while !stop.load(Ordering::Acquire) {
                 match baseline_commands.try_recv() {
                     Ok(request) => {
-                        let result = source.establish_baseline();
+                        let result = match request.publication_generation {
+                            Some(generation) => source.activate_publication(generation),
+                            None => source.establish_baseline(),
+                        };
                         let _ = request.response.send(result);
                         thread::park_timeout(interval);
                         continue;
@@ -86,11 +90,7 @@ pub(crate) fn spawn_io_worker(
                         let count = observations.len();
                         let counts = match generation {
                             Some(generation) if delivery.generation_is_current(generation) => {
-                                delivery.publish_iter(
-                                    generation,
-                                    count,
-                                    observations.into_iter().map(Observation::ProcessIo),
-                                )
+                                delivery.publish_iter(generation, count, observations)
                             }
                             _ => DeliveryCounts::all_dropped(count),
                         };

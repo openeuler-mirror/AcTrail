@@ -1,6 +1,9 @@
 use std::fmt;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SandboxResourceAlertConfig {
     pub cpu_usage_threshold_basis_points: u16,
     pub memory_available_threshold_bytes: u64,
@@ -10,6 +13,18 @@ pub struct SandboxResourceAlertConfig {
 }
 
 impl SandboxResourceAlertConfig {
+    pub fn from_json(raw: &str) -> Result<Self, SandboxResourceAlertConfigError> {
+        let config: Self = serde_json::from_str(raw)
+            .map_err(|error| SandboxResourceAlertConfigError::InvalidJson(error.to_string()))?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn to_json(self) -> Result<String, SandboxResourceAlertConfigError> {
+        serde_json::to_string(&self)
+            .map_err(|error| SandboxResourceAlertConfigError::InvalidJson(error.to_string()))
+    }
+
     pub(crate) fn validate(self) -> Result<usize, SandboxResourceAlertConfigError> {
         if !(1..=10_000).contains(&self.cpu_usage_threshold_basis_points) {
             return Err(SandboxResourceAlertConfigError::InvalidCpuThreshold);
@@ -31,8 +46,9 @@ impl SandboxResourceAlertConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SandboxResourceAlertConfigError {
+    InvalidJson(String),
     InvalidCpuThreshold,
     ZeroMemoryThreshold,
     ZeroReadThreshold,
@@ -44,6 +60,9 @@ pub enum SandboxResourceAlertConfigError {
 impl fmt::Display for SandboxResourceAlertConfigError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::InvalidJson(message) => {
+                return write!(formatter, "invalid config JSON: {message}");
+            }
             Self::InvalidCpuThreshold => {
                 "CPU usage threshold must be between 1 and 10000 basis points"
             }

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import secrets
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,6 +15,10 @@ from tests.v2.common.sandbox_alert_database import (
 )
 
 from .evidence_database import SandboxEvidenceDatabase
+from .resource_alert_web import SandboxResourceAlertWebControl
+
+
+RESOURCE_ALERT_INSTANCE_ID = "sandbox-resource-alert.host"
 
 
 @dataclass(frozen=True)
@@ -37,6 +42,7 @@ class SandboxAlertPath:
         command_timeout_seconds: int,
         daemon_port: int,
         subscriber_port: int,
+        web_port: int | None,
         categories: tuple[str, ...],
         thresholds: SandboxAlertThresholds,
     ) -> None:
@@ -81,6 +87,18 @@ class SandboxAlertPath:
             f"sandbox-resource-alert-host-{secrets.token_hex(8)}",
             work_dir / "alert-subscriber.jsonl",
         )
+        self._web = (
+            None
+            if web_port is None
+            else SandboxResourceAlertWebControl(
+                bin_dir / "actrailweb",
+                work_dir / "actraild.conf",
+                web_port,
+                work_dir,
+                command_timeout_seconds,
+                RESOURCE_ALERT_INSTANCE_ID,
+            )
+        )
         self._started = False
 
     @property
@@ -109,10 +127,14 @@ class SandboxAlertPath:
         )
         self._subscriber.wait_for_heartbeat(ready_timeout_seconds)
         self._load_plugin()
+        if self._web is not None:
+            self._web.start(ready_timeout_seconds)
 
     def stop(self) -> list[str]:
         errors: list[str] = []
         self._subscriber.close()
+        if self._web is not None:
+            self._web.stop()
         if self._started:
             stopped = self._runtime.stop()
             if stopped is not None and stopped.returncode != 0:
@@ -139,6 +161,53 @@ class SandboxAlertPath:
             },
         )
 
+    def wait_for_oom_killed_delivery(
+        self,
+        timeout_seconds: float,
+        *,
+        victim_pid: int,
+    ) -> dict[str, object]:
+        """Wait for the public OOM-killed delivery for one victim PID."""
+        return self._subscriber.wait_for_alert(
+            timeout_seconds,
+            self._oom_killed_predicate(victim_pid),
+        )
+
+    def assert_no_delivery(self, timeout_seconds: float) -> None:
+        """Require that the public subscriber receives no further alert."""
+        self._subscriber.assert_no_alert(timeout_seconds)
+
+    def assert_no_matching_oom_killed_delivery(
+        self,
+        timeout_seconds: float,
+        *,
+        victim_pid: int,
+    ) -> None:
+        """Reject a duplicate delivery for one controlled OOM identity."""
+        self._subscriber.assert_no_alert(
+            timeout_seconds,
+            self._oom_killed_predicate(victim_pid),
+        )
+
+    def assert_persisted_delivery(
+        self,
+        message: dict[str, object],
+    ) -> SandboxAlertRecord:
+        """Return the stored record matching one public subscriber delivery."""
+        matches = [
+            record
+            for record in self._database.records()
+            if self._matches(record, message)
+        ]
+        if len(matches) != 1:
+            raise AssertionError(
+                "expected one database record for public sandbox delivery, "
+                f"found {len(matches)}: {message}"
+            )
+        record = matches[0]
+        self.assert_delivery(record, message)
+        return record
+
     def assert_delivery(
         self,
         record: SandboxAlertRecord,
@@ -152,13 +221,69 @@ class SandboxAlertPath:
                 "sandbox database record and subscriber delivery differ: "
                 f"record={record}; delivery={message}"
             )
-        if message.get("s") != "warning":
+        expected_severity = (
+            "critical"
+            if record.category == "sandbox.resource.oom_killed"
+            else "warning"
+        )
+        if message.get("s") != expected_severity:
             raise AssertionError(f"sandbox host alert severity changed: {message}")
 
     def assert_independent_database(self) -> None:
         self._database.assert_independent_from(
             self._work_dir / "data" / "actrail.sqlite"
         )
+
+    def update_memory_threshold(self, threshold_bytes: int) -> None:
+        web = self._require_web()
+        candidate = web.update_memory_threshold(threshold_bytes)
+        persisted = json.loads(
+            (self._work_dir / "sandbox-resource-alert.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        if persisted != candidate:
+            raise AssertionError("Web resource alert config was not persisted")
+
+    def assert_failed_update_preserves_memory_threshold(
+        self,
+        threshold_bytes: int,
+    ) -> None:
+        web = self._require_web()
+        config_path = self._work_dir / "sandbox-resource-alert.json"
+        backup_path = self._work_dir / "sandbox-resource-alert.failure-backup.json"
+        config_path.replace(backup_path)
+        config_path.mkdir()
+        try:
+            web.assert_memory_update_rejected(threshold_bytes)
+        finally:
+            config_path.rmdir()
+            backup_path.replace(config_path)
+
+    def _require_web(self) -> SandboxResourceAlertWebControl:
+        if self._web is None:
+            raise RuntimeError("actrailweb is disabled for this alert path")
+        return self._web
+
+    @staticmethod
+    def _oom_killed_predicate(
+        victim_pid: int,
+    ) -> Callable[[dict[str, object]], bool]:
+        def matches(message: dict[str, object]) -> bool:
+            extras = message.get("extras")
+            if (
+                not isinstance(extras, dict)
+                or extras.get("victim_pid") != victim_pid
+            ):
+                return False
+            if message.get("cat") != "sandbox.resource.oom_killed":
+                raise AssertionError(
+                    "controlled OOM victim used an unexpected category: "
+                    f"{message}"
+                )
+            return True
+
+        return matches
 
     def _load_plugin(self) -> None:
         manifest = (
@@ -178,10 +303,10 @@ class SandboxAlertPath:
                 "--plugin-config",
                 self._work_dir / "sandbox-resource-alert.json",
                 "--instance",
-                "sandbox-resource-alert.host",
+                RESOURCE_ALERT_INSTANCE_ID,
             ]
         )
-        if "loaded instance=sandbox-resource-alert.host" not in result.output:
+        if f"loaded instance={RESOURCE_ALERT_INSTANCE_ID}" not in result.output:
             raise RuntimeError("sandbox resource alert plugin did not become active")
 
     def _write_plugin_config(self) -> None:

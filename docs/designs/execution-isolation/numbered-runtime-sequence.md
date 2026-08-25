@@ -23,7 +23,12 @@ gateway 连接 daemon 的 upstream endpoint（当前 profile 默认 `127.0.0.1:9
 
 Host gateway 根据该 microVM 的 VSOCK `uds_path` 与同一 port 形成 `${uds_path}_${port}` listener endpoint。
 
-Cloud Hypervisor 与 native AF_VSOCK 是并列可选 backend。
+Cloud Hypervisor 与 native AF_VSOCK 是并列可选 gateway backend。
+
+StratoVirt/Kata 使用 native AF_VSOCK backend，不新增 StratoVirt 专用 gateway transport。
+`execution_isolation_firecracker`、`execution_isolation_stratovirt` 与
+`execution_isolation_cloud_hypervisor` 分别保留真实 VMM 验收边界，结果不能跨 backend、
+CPU 架构、Guest kernel 或 runtime 组合外推。
 
 下文先描述配置概念，再在括号中标注 checked-in deployment profile 的具体默认值。
 标注为当前 profile 默认值的 IP、CID、port、文件路径、容量、周期、线程栈和告警阈值可由所属配置或明确的运行时 CLI 参数修改；
@@ -76,6 +81,9 @@ CLI 提供的 VSOCK port 与 Host backend endpoint表示同一个具体 port（�
 Firecracker profile由 gateway使用 `listener.uds_path` 与 `listener.port` 形成 `${uds_path}_${port}`。
 
 操作员不手工拼接端口后缀。
+
+StratoVirt profile 使用 gateway native listener 的 Host CID 与 port；Guest 的运行时
+connect port 必须与该 native listener port 一致。
 
 gateway `upstream.daemon_address` 必须能够连接 daemon实际 bind的 Hand listener（当前 same-host profile 在两端使用 `127.0.0.1:9472`）。
 
@@ -144,11 +152,12 @@ wildcard bind、其他网卡地址或网络地址转换场景不要求配置字�
 
 - CLI 下发的目标 port 与 Host backend endpoint 表示同一个具体 port。
 - Firecracker 主线中 CLI 向 SB daemon下发 Host CID `2` 与运行时 port，gateway 监听 `${uds_path}_${port}`。
+- StratoVirt 中 CLI 向 SB daemon下发 Host CID `2` 与运行时 port，gateway 通过 native AF_VSOCK 在同一 port 监听。
 - gateway upstream endpoint能够连接 daemon Hand listener；
 - SB `max_silence_interval` 小于 gateway `sb_peer_idle_timeout`；
 - gateway `upstream_heartbeat_interval` 小于 daemon `connection_idle_timeout`；
 - gateway `outbound_queue_capacity >= max_sb_connections * per_sb_forward_quota`；
-- procfs root、SB instance lock、Evidence DB、Sandbox Alert DB 与 VMM Unix endpoint 使用绝对路径。
+- procfs root、SB instance lock、SB control UDS、Evidence DB、Sandbox Alert DB 与 VMM Unix endpoint 使用绝对路径。
   同一 Guest 中的 SB 实例使用同一个 lock path 才能实现互斥。
 
 ### 0.3 制备包含 actrail-sb daemon 的 Guest 快照
@@ -171,13 +180,13 @@ control socket 或 instance lock path无效、锁冲突或静态配置无效时�
 
 如果 `require_initial_root=true` 且没有找到根，daemon 启动失败。
 
-**0.3.3** daemon 打开内嵌 sandbox BPF object，按配置调整 map容量，load object，并校验 `tracked_processes`、`pending_io`、`io_aggregates` 和 `collection_diagnostics` map layout。
+**0.3.3** daemon 打开内嵌 sandbox BPF object，按配置调整 map容量，load object，并校验 `tracked_processes`、`pending_io`、`io_aggregates`、`oom_events` 和 `collection_diagnostics` map layout。
 
-随后 attach read、write、process fork 与 process exit tracepoints，并把启动扫描发现的根与现有后代 seed 到 `tracked_processes`。
+随后 attach read、write、process fork、process exit 与 OOM victim tracepoints，并把启动扫描发现的根与现有后代 seed 到 `tracked_processes`。
 
 这些 BPF object、maps 和 links 完全由 `actrail-sb daemon` 拥有，与 `actraild` 的 eBPF collector 无关。
 
-**0.3.4** daemon 创建独立 resource reader，读取 boot ID，并完成 CPU、memory 与 OOM 状态的初次读取校验。
+**0.3.4** daemon 创建独立 resource reader，读取 boot ID，并完成 CPU、memory 与 OOM 累计计数的初次读取校验。
 
 它同时初始化有界 observation queue、batch encoder、VSOCK session owner 和发送缓冲区。
 
@@ -185,8 +194,8 @@ control socket 或 instance lock path无效、锁冲突或静态配置无效时�
 
 **0.3.5** daemon 创建以下常驻线程：
 
-- `actrail-sb-io`：周期刷新进程根并读取 eBPF aggregate；
-- `actrail-sb-resource`：周期读取 Guest CPU、memory 和 OOM 状态；
+- `actrail-sb-io`：周期刷新进程根、读取 eBPF I/O aggregate 并排空 OOM victim queue；
+- `actrail-sb-resource`：周期读取 Guest CPU、memory 和 OOM 累计计数；
 - `actrail-sb-vsock`：拥有连接、握手、发送、Heartbeat 和轻量重连；
 - `actrail-sb-control`：非阻塞监听 Guest-local control socket、维护有界connection与deadline；
 - `actrail-sb-control-dispatch`：串行执行control command，不阻塞control poll owner。
@@ -239,8 +248,9 @@ persistent registry 中任一插件加载失败仍会使启动失败。
 
 - `guest-resource`：Guest CPU、memory、OOM 状态；
 - `process-io`：命名根进程谱系的采样区间读写计数。
+- `oom-victim`：内核选中的 OOM victim 及其被观测谱系归因。
 
-后续 daemon 收到这两类 observation 时会把它们投递给此插件。
+后续 daemon 收到这三类 observation 时会把它们投递给此插件。
 某个 observation 如果被至少一个插件订阅，就不会因为该插件处理失败而回退到 Evidence DB。
 
 **1.2.4** plugin host 读取资源告警插件配置（当前 profile 路径为 `/etc/actrail/plugins/sandbox-resource-alert/sandbox-resource-alert.config.json`），完成 JSON 反序列化和 unknown-field 检查。
@@ -254,6 +264,9 @@ persistent registry 中任一插件加载失败仍会使启动失败。
 
 **1.2.7** database owner ready 后，plugin host 创建 `SandboxResourceAlertPlugin`，校验 CPU、available-memory、read/write 阈值和 source-state capacity。
 插件只获得窄化的 nonblocking write port，不知道数据库路径、schema 或 forwarding transport。
+
+四个阈值通过 Web plugin config API 在线修改。
+source-state capacity 在插件加载时确定，Web 将其显示为只读字段。
 
 **1.2.8** plugin host 随后创建资源告警 consumer 及其配置容量的有界消费队列（当前 profile 默认 1024），再创建进程内线程 `sandbox-plugin-{consumer_id}`。
 `consumer_id` 是运行时分配值，线程名中的数字不是协议常量。
@@ -272,7 +285,7 @@ consumer 没有单独 readiness handshake。
 **1.3.3** Evidence writer 以 SQLite `READ_WRITE | CREATE | NO_MUTEX` 模式打开独立数据库。
 它设置配置的 busy timeout（当前 profile 默认 5 秒）、SQLite synchronous mode（当前 profile 默认 `normal`）和 WAL autocheckpoint pages（当前 profile 默认 1000）。
 
-**1.3.4** writer 初始化或校验配置的 schema version（当前 profile 默认且当前支持版本为 1）。
+**1.3.4** writer 初始化或校验配置的 schema version（当前 profile 默认且当前支持版本为 2）。
 
 **1.3.5** writer 从 meta 表读取并持久化推进 `ingest_epoch`。
 `ingest_epoch` 用于区分 Evidence store 不同启动周期；
@@ -366,6 +379,9 @@ Firecracker profile 监听 `${uds_path}_${port}`。
 
 native AF_VSOCK profile 使用 bind CID 与 port。
 
+StratoVirt 使用该 native profile；通常 bind `VMADDR_CID_ANY`，由 gateway 的 session
+registry 和容量约束管理来自 Guest 的连接。
+
 Cloud Hypervisor profile 使用完整绝对 Unix socket path。
 
 三种 backend 共用相同的 SB 连接上限、session registry 与 TCP upstream 行为。
@@ -396,6 +412,10 @@ Host 上的 gateway 已监听与本次运行时 port 对应的 `${uds_path}_${po
 daemon 不恢复 VSOCK connection，也没有运行时 Host CID、port 或 `sb_id`。
 
 `publication_enabled` 保持 `false`。
+
+**3.1.3** StratoVirt/Kata 不依赖 Firecracker snapshot restore。Guest 正常启动后运行
+同一个 `actrail-sb daemon`，等待其在没有 VSOCK session 的状态下本地 ready，再进入
+下述 CLI connect 流程。daemon、control、generation gate 和 Session Owner 语义不变。
 
 ### 3.2 通过 actrail-sb CLI 下发运行时 endpoint
 
@@ -457,6 +477,9 @@ daemon 不改变当前 runtime endpoint、VSOCK session 或 `publication_enabled
 **3.3.1** `actrail-sb-vsock` 使用 CLI 下发的 endpoint 执行受sender I/O timeout限制的nonblocking AF_VSOCK connect，并设置运行期read/write timeout。
 
 Firecracker 将 Guest 的 AF_VSOCK connect转换为 Host `${uds_path}_${port}` 上的 AF_UNIX connect。
+
+StratoVirt 则通过 vhost-vsock 把同一 Guest AF_VSOCK connect交给 Host native
+AF_VSOCK listener；该差异不进入 Session Owner、gateway session 或 upstream runtime。
 
 **3.3.2** gateway accept连接后创建 `actrail-gateway-sb-pending` worker。
 
@@ -524,7 +547,6 @@ memory.total_bytes / available_bytes / used_bytes / oom_kill_count
 未连接时不发送 Heartbeat。
 
 **4.1.5** resource-alert 是否订阅 `guest-resource` 由 manifest selector 决定（当前 profile 默认订阅），所以这些快照会被插件消费，而不是进入 NoInterest Evidence DB。
-首个资源快照建立 `oom_kill_count` baseline；
 如果 available memory 已低于配置的告警阈值（当前 profile 默认 512 MiB），则可以触发一次从非风险状态进入风险状态的 `OomRisk`。
 
 ### 4.2 发现 bash 拉起的命名根和后代
@@ -758,8 +780,10 @@ Evidence 失败不改投插件或主 Storage。
 **6.3.1** consumer 以 `(gateway_id, sb_id)` 作为 source key维护受 source-state capacity 限制的有界状态（当前 profile 默认 4096）。
 容量满时淘汰最旧 source state。
 
-**6.3.2** `OomKilled`：某 source 的第一条 resource snapshot只建立 `oom_kill_count` baseline；
-后续计数严格增加时产生告警，记录 previous、current 和 delta。
+**6.3.2** `OomKilled`：`oom-victim` observation 到达时产生。
+告警记录 victim PID、victim `comm`、`monitored`、`unmonitored` 或 `unknown` 归因，以及 `monitored` 时的谱系根标记。
+所有 OOM 告警均为 critical。
+resource snapshot 中的 `oom_kill_count` 作为累计资源指标保留，不产生 OOM 告警。
 
 **6.3.3** `OomRisk`：`available_bytes` 低于 available-memory threshold（当前 profile 默认 536,870,912 B），且 source 从非风险状态进入风险状态时产生。
 持续低内存不重复告警；
@@ -772,7 +796,7 @@ Evidence 失败不改投插件或主 Storage。
 
 **6.3.6** `HighWrite`：单条 `ProcessIoCounters.write_bytes` 严格大于 per-interval write threshold 时产生（当前 profile 默认 268,435,456 B）。
 
-**6.3.7** 同一 resource observation 可以同时产生 `OomKilled`、`OomRisk` 和 `HighCpu`；
+**6.3.7** 同一 resource observation 可以同时产生 `OomRisk` 和 `HighCpu`；
 同一 I/O observation 可以同时产生 `HighRead` 和 `HighWrite`。
 
 **6.3.8** consumer 对 Sandbox Alert DB writer queue 执行 nonblocking `try_send`。
@@ -781,6 +805,20 @@ Full/Closed 时丢弃当前告警并更新告警支路状态，不向 Evidence f
 **6.3.9** writer 使用独立 SQLite connection 和有界批量事务写入 Sandbox Alert DB。
 事务提交成功后，才把标准化外发副本交给 builtin forwarding plugin。
 外发 disabled、category 不匹配、queue 满或 proxy 断开不改变数据库记录。
+
+### 6.4 在线修改资源告警阈值
+
+**6.4.1** Web 读取活动 `sandbox-resource-alert` 实例的当前 JSON 配置和 schema。
+
+**6.4.2** Web 提交候选配置进行校验。
+daemon 校验 JSON 形状、四个阈值的数值范围，并拒绝在线修改 source-state capacity。
+
+**6.4.3** 更新请求通过校验后，daemon 在 control 线程将候选配置写入同目录临时文件，完成文件同步并原子替换实例原配置文件。
+写入或替换失败时返回错误，活动插件继续使用旧配置。
+
+**6.4.4** 持久化成功后，插件原子发布完整的不可变配置快照。
+consumer 在下一批 observation 开始时读取一次该快照。
+更新不卸载插件、不更换 consumer，也不清空 CPU baseline 或内存越阈状态。
 
 ## 7. 运行期故障与重连
 

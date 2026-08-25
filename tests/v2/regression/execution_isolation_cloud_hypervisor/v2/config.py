@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar, Self
 
 from tests.v2.common.core import CommonTestConfig, TestCaseInputs
 from tests.v2.common.kata_runtime import shim_binary
@@ -14,9 +15,26 @@ from tests.v2.common.kata_runtime.environment import (
 )
 from tests.v2.common.kata_runtime.image import PullPolicy
 
+from .identity import CloudHypervisorScenarioIdentity
+
 
 @dataclass(frozen=True)
 class CloudHypervisorExecutionIsolationConfig(CommonTestConfig):
+    CONFIG_NAMESPACE: ClassVar[str] = "EXECUTION_ISOLATION_CLOUD_HYPERVISOR"
+    ENVIRONMENT_PREFIX: ClassVar[str] = (
+        "EXECUTION_ISOLATION_CLOUD_HYPERVISOR_E2E_"
+    )
+    BACKEND: ClassVar[str] = "cloud-hypervisor"
+    VMM_COMMAND: ClassVar[str] = "cloud-hypervisor"
+    PROFILE_RUNTIME_CONFIG: ClassVar[str] = (
+        "VIRTUAL_CONTAINER_E2E_CLOUD_HYPERVISOR_DATA_CONFIG"
+    )
+    DEFAULT_VM_ROOT: ClassVar[str] = "/run/vc/vm"
+    SUPPORTED_ARCHITECTURES: ClassVar[frozenset[str]] = frozenset({"aarch64"})
+    IDENTITY: ClassVar[type[CloudHypervisorScenarioIdentity]] = (
+        CloudHypervisorScenarioIdentity
+    )
+
     runtime_config: Path | None
     ctr_runtime: str
     image: str
@@ -37,16 +55,16 @@ class CloudHypervisorExecutionIsolationConfig(CommonTestConfig):
     def from_environment(
         cls,
         inputs: TestCaseInputs,
-    ) -> CloudHypervisorExecutionIsolationConfig:
+    ) -> Self:
         common = CommonTestConfig.from_environment(
             inputs,
-            "EXECUTION_ISOLATION_CLOUD_HYPERVISOR",
+            cls.CONFIG_NAMESPACE,
         )
-        prefix = "EXECUTION_ISOLATION_CLOUD_HYPERVISOR_E2E_"
-        backend = os.environ.get(f"{prefix}BACKEND", "cloud-hypervisor")
-        if backend != "cloud-hypervisor":
+        prefix = cls.ENVIRONMENT_PREFIX
+        backend = os.environ.get(f"{prefix}BACKEND", cls.BACKEND)
+        if backend != cls.BACKEND:
             raise ValueError(
-                f"{prefix}BACKEND must be cloud-hypervisor for this harness"
+                f"{prefix}BACKEND must be {cls.BACKEND} for this harness"
             )
 
         ctr_runtime = os.environ.get(
@@ -67,9 +85,7 @@ class CloudHypervisorExecutionIsolationConfig(CommonTestConfig):
 
         runtime_config = optional_absolute_path(
             os.environ.get(f"{prefix}RUNTIME_CONFIG")
-            or os.environ.get(
-                "VIRTUAL_CONTAINER_E2E_CLOUD_HYPERVISOR_DATA_CONFIG"
-            ),
+            or os.environ.get(cls.PROFILE_RUNTIME_CONFIG),
             f"{prefix}RUNTIME_CONFIG",
         )
         return cls(
@@ -99,7 +115,7 @@ class CloudHypervisorExecutionIsolationConfig(CommonTestConfig):
                 f"{prefix}XIAOO_BINARY",
             ),
             vm_root=absolute_path(
-                os.environ.get(f"{prefix}VM_ROOT", "/run/vc/vm"),
+                os.environ.get(f"{prefix}VM_ROOT", cls.DEFAULT_VM_ROOT),
                 f"{prefix}VM_ROOT",
             ),
             vsock_host_cid=bounded_environment_int(

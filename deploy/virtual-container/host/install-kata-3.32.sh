@@ -149,10 +149,24 @@ else
     || fail "archive has no executable Cloud Hypervisor"
   [[ -f "$extracted/share/defaults/kata-containers/configuration-clh.toml" ]] \
     || fail "archive has no Cloud Hypervisor runtime configuration"
+  [[ -x "$extracted/bin/firecracker" ]] \
+    || fail "archive has no executable Firecracker"
+  [[ -x "$extracted/bin/jailer" ]] \
+    || fail "archive has no executable Firecracker jailer"
+  [[ -f "$extracted/share/defaults/kata-containers/configuration-fc.toml" ]] \
+    || fail "archive has no Firecracker runtime configuration"
+  [[ -f "$extracted/share/kata-containers/vmlinux.container" ]] \
+    || fail "archive has no uncompressed Firecracker guest kernel"
+  [[ -f "$extracted/share/kata-containers/kata-containers.img" ]] \
+    || fail "archive has no Firecracker guest rootfs image"
   [[ -e "$extracted/share/kata-containers/kata-containers-initrd.img" ]] \
     || fail "archive has no reference Kata initrd"
   file "$extracted/bin/containerd-shim-kata-v2" | grep -Fq "$ELF_MACHINE" \
     || fail "archive shim is not an $ARCH_LABEL executable"
+  file "$extracted/bin/firecracker" | grep -Fq "$ELF_MACHINE" \
+    || fail "archive Firecracker is not an $ARCH_LABEL executable"
+  file "$extracted/bin/jailer" | grep -Fq "$ELF_MACHINE" \
+    || fail "archive Firecracker jailer is not an $ARCH_LABEL executable"
   "$extracted/bin/containerd-shim-kata-v2" --version | grep -Fq "version: $VERSION" \
     || fail "archive shim version check failed"
   "$extracted/bin/kata-runtime" version | grep -Fq "kata-runtime  : $VERSION" \
@@ -168,6 +182,20 @@ fi
   || fail "installed prefix has no Cloud Hypervisor runtime configuration"
 file "$PREFIX/bin/cloud-hypervisor" | grep -Fq "$ELF_MACHINE" \
   || fail "installed Cloud Hypervisor is not an $ARCH_LABEL executable"
+[[ -x "$PREFIX/bin/firecracker" ]] \
+  || fail "installed prefix has no executable Firecracker"
+[[ -x "$PREFIX/bin/jailer" ]] \
+  || fail "installed prefix has no executable Firecracker jailer"
+[[ -f "$PREFIX/share/defaults/kata-containers/configuration-fc.toml" ]] \
+  || fail "installed prefix has no Firecracker runtime configuration"
+[[ -f "$PREFIX/share/kata-containers/vmlinux.container" ]] \
+  || fail "installed prefix has no uncompressed Firecracker guest kernel"
+[[ -f "$PREFIX/share/kata-containers/kata-containers.img" ]] \
+  || fail "installed prefix has no Firecracker guest rootfs image"
+file "$PREFIX/bin/firecracker" | grep -Fq "$ELF_MACHINE" \
+  || fail "installed Firecracker is not an $ARCH_LABEL executable"
+file "$PREFIX/bin/jailer" | grep -Fq "$ELF_MACHINE" \
+  || fail "installed Firecracker jailer is not an $ARCH_LABEL executable"
 
 if [[ "$ACTIVATE" == "1" ]]; then
   containerd_pid="$(pidof containerd 2>/dev/null | awk '{print $1}')"

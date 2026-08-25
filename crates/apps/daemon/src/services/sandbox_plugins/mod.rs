@@ -1,3 +1,4 @@
+mod configuration;
 mod manager;
 mod route_sink;
 

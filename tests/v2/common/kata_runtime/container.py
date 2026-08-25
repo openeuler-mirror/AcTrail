@@ -16,6 +16,49 @@ from .requirements import ContainerRequirements, KataCreateSpec, PreparePolicy
 _RUN_LABEL = "io.actrail.test.run"
 _CASE_LABEL = "io.actrail.test.case"
 _SAFE_PREFIX = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_ALL_LINUX_CAPABILITIES = (
+    "CAP_CHOWN",
+    "CAP_DAC_OVERRIDE",
+    "CAP_DAC_READ_SEARCH",
+    "CAP_FOWNER",
+    "CAP_FSETID",
+    "CAP_KILL",
+    "CAP_SETGID",
+    "CAP_SETUID",
+    "CAP_SETPCAP",
+    "CAP_LINUX_IMMUTABLE",
+    "CAP_NET_BIND_SERVICE",
+    "CAP_NET_BROADCAST",
+    "CAP_NET_ADMIN",
+    "CAP_NET_RAW",
+    "CAP_IPC_LOCK",
+    "CAP_IPC_OWNER",
+    "CAP_SYS_MODULE",
+    "CAP_SYS_RAWIO",
+    "CAP_SYS_CHROOT",
+    "CAP_SYS_PTRACE",
+    "CAP_SYS_PACCT",
+    "CAP_SYS_ADMIN",
+    "CAP_SYS_BOOT",
+    "CAP_SYS_NICE",
+    "CAP_SYS_RESOURCE",
+    "CAP_SYS_TIME",
+    "CAP_SYS_TTY_CONFIG",
+    "CAP_MKNOD",
+    "CAP_LEASE",
+    "CAP_AUDIT_WRITE",
+    "CAP_AUDIT_CONTROL",
+    "CAP_SETFCAP",
+    "CAP_MAC_OVERRIDE",
+    "CAP_MAC_ADMIN",
+    "CAP_SYSLOG",
+    "CAP_WAKE_ALARM",
+    "CAP_BLOCK_SUSPEND",
+    "CAP_AUDIT_READ",
+    "CAP_PERFMON",
+    "CAP_BPF",
+    "CAP_CHECKPOINT_RESTORE",
+)
 
 
 @dataclass(frozen=True)
@@ -55,7 +98,7 @@ class KataTestContainer:
         self._capabilities = capabilities
         self._run_id = secrets.token_hex(16)
         self._container_id = (
-            f"actrail-v2-{requirements.name_prefix}-{self._run_id[:12]}"
+            f"actrail-v2-{self._run_id[:12]}-{requirements.name_prefix}"
         )
         self._spec: KataCreateSpec | None = None
         self._managed_processes: list[ManagedProcess] = []
@@ -154,6 +197,7 @@ class KataTestContainer:
         gid: int | None = None,
         environment: Mapping[str, str] | None = None,
         timeout: float | None = None,
+        input_text: str | None = None,
     ) -> CommandResult:
         exec_command = self._build_exec_command(
             command,
@@ -167,6 +211,7 @@ class KataTestContainer:
             timeout=(
                 self._spec.ready_timeout_seconds if timeout is None else timeout
             ),
+            input_text=input_text,
         )
 
     def start_exec(
@@ -440,7 +485,14 @@ class KataTestContainer:
             time.sleep(min(0.1, max(0, deadline - time.monotonic())))
 
     def _build_run_command(self, spec: KataCreateSpec) -> list[str]:
-        command = self._ctr("run", "-d", "--runtime", spec.runtime)
+        command = self._ctr("run")
+        if spec.snapshotter is not None:
+            command.extend(["--snapshotter", spec.snapshotter])
+        command.extend(["-d", "--runtime", spec.runtime])
+        if spec.privileged_without_host_devices:
+            command.append("--allow-new-privs")
+            for capability in _ALL_LINUX_CAPABILITIES:
+                command.extend(["--cap-add", capability])
         if spec.runtime_config is not None:
             if not self._capabilities.runtime_config_path:
                 raise RuntimeError("ctr run does not support --runtime-config-path")

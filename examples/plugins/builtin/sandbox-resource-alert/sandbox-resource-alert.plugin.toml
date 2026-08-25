@@ -8,7 +8,7 @@ runtime = "builtin"
 capabilities = []
 
 [role.sandbox-observation-consumer.subscriptions]
-observation_kinds = ["process-io", "guest-resource"]
+observation_kinds = ["process-io", "guest-resource", "oom-victim"]
 
 [role.sandbox-observation-consumer.resources]
 queue_capacity = 1024

@@ -141,6 +141,9 @@ struct IoSource {
 
 impl ProcessIoSource for IoSource {
     fn establish_baseline(&mut self) -> io::Result<()> {
+        self.io_collector
+            .reset_publication()
+            .map_err(|error| io::Error::other(error.to_string()))?;
         let cycle = self.io_collector.poll();
         self.record_diagnostics(&cycle);
         match cycle.failures.first() {
@@ -151,10 +154,29 @@ impl ProcessIoSource for IoSource {
         }
     }
 
-    fn poll(&mut self) -> io::Result<Vec<sandbox_observation::ProcessIoCounters>> {
+    fn activate_publication(&mut self, generation: u64) -> io::Result<()> {
+        self.io_collector
+            .activate_publication(generation)
+            .map_err(|error| io::Error::other(error.to_string()))
+    }
+
+    fn poll(&mut self) -> io::Result<Vec<sandbox_observation::Observation>> {
         let cycle = self.io_collector.poll();
         self.record_diagnostics(&cycle);
-        Ok(cycle.process_io)
+        let mut observations = Vec::with_capacity(cycle.process_io.len() + cycle.oom_victims.len());
+        observations.extend(
+            cycle
+                .process_io
+                .into_iter()
+                .map(sandbox_observation::Observation::ProcessIo),
+        );
+        observations.extend(
+            cycle
+                .oom_victims
+                .into_iter()
+                .map(sandbox_observation::Observation::OomVictim),
+        );
+        Ok(observations)
     }
 }
 

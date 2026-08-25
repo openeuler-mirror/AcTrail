@@ -7,6 +7,7 @@ set -eu
 : "${ACTRAIL_HOST_PROVIDER_SCRIPT:?}"
 : "${ACTRAIL_HOST_COORD_DIR:?}"
 : "${ACTRAIL_HOST_TASK_FILE:?}"
+: "${ACTRAIL_HOST_OOM_SCRIPT:?}"
 
 provider_port="${ACTRAIL_HOST_PROVIDER_PORT:-18098}"
 ready_timeout="${ACTRAIL_HOST_READY_TIMEOUT_SECONDS:-90}"
@@ -46,6 +47,7 @@ python3 -u "$ACTRAIL_HOST_PROVIDER_SCRIPT" \
   --local-stream-reasoning-tokens 3 \
   --local-tool-command "head -c 1048576 \"$ACTRAIL_HOST_TASK_FILE\" > \"$read_output\"" \
   --local-tool-command "dd if=/dev/zero of=\"$write_output\" bs=1048576 count=4" \
+  --local-tool-command "\"$ACTRAIL_HOST_OOM_SCRIPT\"" \
   >"$provider_stdout" 2>"$provider_stderr" &
 provider_pid=$!
 
@@ -94,5 +96,9 @@ grep -q '^proxy_local_stream turn=tool-call-1 ' "$provider_stdout" \
   || fail "provider did not observe the first xiaoO tool turn"
 grep -q '^proxy_local_stream turn=tool-call-2 ' "$provider_stdout" \
   || fail "provider did not observe the second xiaoO tool turn"
+grep -q '^proxy_local_stream turn=tool-call-3 ' "$provider_stdout" \
+  || fail "provider did not observe the third xiaoO tool turn"
+[ -f "$coord/oom.completed" ] \
+  || fail "xiaoO did not complete the isolated OOM tool call"
 
 echo ACTRAIL_HOST_XIAOO_WORKLOAD_OK

@@ -19,6 +19,8 @@ pub(super) struct CollectorDiagnostics {
     pending_io_drops: AtomicU64,
     aggregate_drops: AtomicU64,
     descendant_tracking_drops: AtomicU64,
+    oom_event_drops: AtomicU64,
+    oom_comm_drops: AtomicU64,
 }
 
 struct PeriodicDiagnostics {
@@ -33,6 +35,8 @@ struct CollectorSnapshot {
     pending_io_drops: u64,
     aggregate_drops: u64,
     descendant_tracking_drops: u64,
+    oom_event_drops: u64,
+    oom_comm_drops: u64,
 }
 
 impl SbOutput {
@@ -89,7 +93,7 @@ impl SbOutput {
         let snapshot = agent.snapshot();
         let collector = periodic.collector.take_snapshot();
         Self::stderr(format_args!(
-            "actrail-sb status sb_id={} generation={} publication_enabled={} io_observations={} resource_observations={} source_failures={} dropped_observations={} sent_batches={} reconnects={} reconnect_failures={} collector_failures={} pending_io_drops={} aggregate_drops={} descendant_tracking_drops={}",
+            "actrail-sb status sb_id={} generation={} publication_enabled={} io_observations={} resource_observations={} source_failures={} dropped_observations={} sent_batches={} reconnects={} reconnect_failures={} collector_failures={} pending_io_drops={} aggregate_drops={} descendant_tracking_drops={} oom_event_drops={} oom_comm_drops={}",
             status.sb_id,
             status.connection_generation,
             status.publication_enabled,
@@ -104,6 +108,8 @@ impl SbOutput {
             collector.pending_io_drops,
             collector.aggregate_drops,
             collector.descendant_tracking_drops,
+            collector.oom_event_drops,
+            collector.oom_comm_drops,
         ));
         periodic.next_output = now.checked_add(periodic.interval).unwrap_or(now);
     }
@@ -167,6 +173,8 @@ impl CollectorDiagnostics {
             pending_io_drops: AtomicU64::new(0),
             aggregate_drops: AtomicU64::new(0),
             descendant_tracking_drops: AtomicU64::new(0),
+            oom_event_drops: AtomicU64::new(0),
+            oom_comm_drops: AtomicU64::new(0),
         }
     }
 
@@ -178,6 +186,10 @@ impl CollectorDiagnostics {
             .fetch_add(kernel.aggregate_drops, Ordering::Relaxed);
         self.descendant_tracking_drops
             .fetch_add(kernel.descendant_tracking_drops, Ordering::Relaxed);
+        self.oom_event_drops
+            .fetch_add(kernel.oom_event_drops, Ordering::Relaxed);
+        self.oom_comm_drops
+            .fetch_add(kernel.oom_comm_drops, Ordering::Relaxed);
     }
 
     fn take_snapshot(&self) -> CollectorSnapshot {
@@ -186,6 +198,8 @@ impl CollectorDiagnostics {
             pending_io_drops: self.pending_io_drops.swap(0, Ordering::Relaxed),
             aggregate_drops: self.aggregate_drops.swap(0, Ordering::Relaxed),
             descendant_tracking_drops: self.descendant_tracking_drops.swap(0, Ordering::Relaxed),
+            oom_event_drops: self.oom_event_drops.swap(0, Ordering::Relaxed),
+            oom_comm_drops: self.oom_comm_drops.swap(0, Ordering::Relaxed),
         }
     }
 }

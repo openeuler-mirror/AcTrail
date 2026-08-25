@@ -16,19 +16,22 @@ _ROOT_COMM = b"actrail-root"
 class NamedAgentRoot:
     def __init__(self) -> None:
         self._agent = self._required_path(
-            "ACTRAIL_CLOUD_HYPERVISOR_REAL_XIAOO"
+            "ACTRAIL_EXECUTION_ISOLATION_REAL_XIAOO"
         )
         self._pid_file = self._required_path(
-            "ACTRAIL_CLOUD_HYPERVISOR_ROOT_PID_FILE"
+            "ACTRAIL_EXECUTION_ISOLATION_ROOT_PID_FILE"
         )
         self._child_release = self._required_path(
-            "ACTRAIL_CLOUD_HYPERVISOR_CHILD_RELEASE"
+            "ACTRAIL_EXECUTION_ISOLATION_CHILD_RELEASE"
         )
         self._timeout_seconds = self._positive_timeout()
 
     def run(self, arguments: list[str]) -> int:
         self._set_process_name()
-        self._pid_file.write_text(f"{os.getpid()}\n", encoding="ascii")
+        self._pid_file.write_text(
+            f"{self._guest_pid()}\n",
+            encoding="ascii",
+        )
         self._wait_for_child_release()
         result = subprocess.run((str(self._agent), *arguments), check=False)
         return result.returncode
@@ -50,6 +53,19 @@ class NamedAgentRoot:
         )
 
     @staticmethod
+    def _guest_pid() -> int:
+        for line in Path("/proc/self/status").read_text(
+            encoding="ascii"
+        ).splitlines():
+            if not line.startswith("NSpid:"):
+                continue
+            pids = line.removeprefix("NSpid:").split()
+            if pids and all(pid.isdigit() for pid in pids):
+                return int(pids[0])
+            break
+        raise RuntimeError("/proc/self/status does not expose a valid NSpid")
+
+    @staticmethod
     def _required_path(name: str) -> Path:
         value = os.environ.get(name)
         if not value:
@@ -58,7 +74,7 @@ class NamedAgentRoot:
 
     @staticmethod
     def _positive_timeout() -> int:
-        name = "ACTRAIL_CLOUD_HYPERVISOR_CHILD_TIMEOUT_SECONDS"
+        name = "ACTRAIL_EXECUTION_ISOLATION_CHILD_TIMEOUT_SECONDS"
         raw = os.environ.get(name, "90")
         try:
             value = int(raw)

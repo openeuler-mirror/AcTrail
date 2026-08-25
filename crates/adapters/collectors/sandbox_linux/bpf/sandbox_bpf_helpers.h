@@ -22,8 +22,15 @@ static long (*bpf_map_update_elem)(void *map, const void *key, const void *value
     (void *)BPF_FUNC_map_update_elem;
 static long (*bpf_map_delete_elem)(void *map, const void *key) =
     (void *)BPF_FUNC_map_delete_elem;
+static long (*bpf_probe_read)(void *dst, __u32 size, const void *unsafe_ptr) =
+    (void *)BPF_FUNC_probe_read;
 static __u64 (*bpf_get_current_pid_tgid)(void) =
     (void *)BPF_FUNC_get_current_pid_tgid;
+static long (*bpf_get_current_comm)(void *buf, __u32 size_of_buf) =
+    (void *)BPF_FUNC_get_current_comm;
+static __u64 (*bpf_ktime_get_ns)(void) = (void *)BPF_FUNC_ktime_get_ns;
+static long (*bpf_map_push_elem)(void *map, const void *value, __u64 flags) =
+    (void *)BPF_FUNC_map_push_elem;
 
 struct tracepoint_common {
     __u16 common_type;
@@ -44,19 +51,16 @@ struct syscall_exit_ctx {
     __s64 result;
 };
 
-struct sched_process_fork_ctx {
-    struct tracepoint_common common;
-    char parent_comm[16];
-    __s32 parent_pid;
-    char child_comm[16];
-    __s32 child_pid;
-};
-
 struct sched_process_exit_ctx {
     struct tracepoint_common common;
     char comm[16];
     __s32 pid;
     __s32 prio;
+};
+
+struct oom_mark_victim_ctx {
+    struct tracepoint_common common;
+    __s32 pid;
 };
 
 #endif

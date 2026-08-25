@@ -1,14 +1,16 @@
 use sandbox_observation::{
     CpuSnapshot, GuestBootId, GuestResourceSnapshot, MemorySnapshot, Observation, ObservationBatch,
-    ProcessIoCounters, ProcessMarker,
+    OomVictimAttribution, OomVictimObservation, ProcessIoCounters, ProcessMarker,
 };
 
 use crate::WireError;
 
 const PROCESS_IO_CODE: u8 = 1;
 const RESOURCE_CODE: u8 = 2;
+const OOM_VICTIM_CODE: u8 = 3;
 const PROCESS_IO_BYTES: usize = 108;
 const RESOURCE_BYTES: usize = 74;
+const OOM_VICTIM_BYTES: usize = 77;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ObservationBatchCodec;
@@ -38,6 +40,11 @@ impl ObservationBatchCodec {
                     output.extend_from_slice(&(RESOURCE_BYTES as u16).to_be_bytes());
                     self.encode_resource(&mut output, value);
                 }
+                Observation::OomVictim(value) => {
+                    output.push(OOM_VICTIM_CODE);
+                    output.extend_from_slice(&(OOM_VICTIM_BYTES as u16).to_be_bytes());
+                    self.encode_oom_victim(&mut output, value);
+                }
             }
         }
         Ok(output)
@@ -59,7 +66,10 @@ impl ObservationBatchCodec {
                 RESOURCE_CODE if length == RESOURCE_BYTES => {
                     Observation::GuestResource(self.decode_resource(body)?)
                 }
-                PROCESS_IO_CODE | RESOURCE_CODE => {
+                OOM_VICTIM_CODE if length == OOM_VICTIM_BYTES => {
+                    Observation::OomVictim(self.decode_oom_victim(body)?)
+                }
+                PROCESS_IO_CODE | RESOURCE_CODE | OOM_VICTIM_CODE => {
                     return Err(WireError::new(format!(
                         "invalid observation body length {length} for code {code}"
                     )));
@@ -140,6 +150,62 @@ impl ObservationBatchCodec {
                 oom_kill_count: cursor.u64()?,
             },
         })
+    }
+
+    fn encode_oom_victim(&self, output: &mut Vec<u8>, value: &OomVictimObservation) {
+        output.extend_from_slice(value.guest_boot_id.as_bytes());
+        output.extend_from_slice(&value.detected_at_ms.to_be_bytes());
+        output.extend_from_slice(&value.victim_pid.to_be_bytes());
+        output.extend_from_slice(&value.victim_comm);
+        output.push(match value.attribution {
+            OomVictimAttribution::Unknown => 0,
+            OomVictimAttribution::Monitored => 1,
+            OomVictimAttribution::Unmonitored => 2,
+        });
+        let root = value.monitored_root.unwrap_or(ProcessMarker {
+            pid: 0,
+            start_time_ticks: 0,
+            executable_name: [0; 16],
+        });
+        output.extend_from_slice(&root.pid.to_be_bytes());
+        output.extend_from_slice(&root.start_time_ticks.to_be_bytes());
+        output.extend_from_slice(&root.executable_name);
+        output.extend_from_slice(&[0; 4]);
+    }
+
+    fn decode_oom_victim(&self, bytes: &[u8]) -> Result<OomVictimObservation, WireError> {
+        let mut cursor = Cursor::new(bytes);
+        let guest_boot_id = GuestBootId::new(cursor.array()?);
+        let detected_at_ms = cursor.u64()?;
+        let victim_pid = cursor.u32()?;
+        let victim_comm = cursor.array()?;
+        let attribution = match cursor.u8()? {
+            0 => OomVictimAttribution::Unknown,
+            1 => OomVictimAttribution::Monitored,
+            2 => OomVictimAttribution::Unmonitored,
+            _ => return Err(WireError::new("invalid OOM victim attribution")),
+        };
+        let root = ProcessMarker {
+            pid: cursor.u32()?,
+            start_time_ticks: cursor.u64()?,
+            executable_name: cursor.array()?,
+        };
+        if cursor.array::<4>()? != [0; 4] {
+            return Err(WireError::new("non-zero OOM victim reserved bytes"));
+        }
+        let monitored_root =
+            (root.pid != 0 || root.start_time_ticks != 0 || root.executable_name != [0; 16])
+                .then_some(root);
+        OomVictimObservation {
+            guest_boot_id,
+            detected_at_ms,
+            victim_pid,
+            victim_comm,
+            attribution,
+            monitored_root,
+        }
+        .validate()
+        .map_err(WireError::new)
     }
 }
 

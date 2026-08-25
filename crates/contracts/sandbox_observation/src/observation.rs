@@ -1,9 +1,10 @@
-use crate::{GuestResourceSnapshot, ProcessIoCounters};
+use crate::{GuestResourceSnapshot, OomVictimObservation, ProcessIoCounters};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Observation {
     ProcessIo(ProcessIoCounters),
     GuestResource(GuestResourceSnapshot),
+    OomVictim(OomVictimObservation),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

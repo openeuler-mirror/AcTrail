@@ -498,7 +498,9 @@ where
             }
             ControlCommand::PluginConfigGet(command) => {
                 if self.sandbox_plugins.contains(&command.instance_id) {
-                    Err(Self::sandbox_plugin_capability_error(&command.instance_id))
+                    self.sandbox_plugins
+                        .config(&command.instance_id)
+                        .map(ControlReply::PluginConfig)
                 } else {
                     self.wiring
                         .attach_service
@@ -508,7 +510,9 @@ where
             }
             ControlCommand::PluginConfigValidate(command) => {
                 if self.sandbox_plugins.contains(&command.instance_id) {
-                    Err(Self::sandbox_plugin_capability_error(&command.instance_id))
+                    self.sandbox_plugins
+                        .validate_config(&command.instance_id, &command.config_json)
+                        .map(ControlReply::PluginConfigValidation)
                 } else {
                     self.wiring
                         .attach_service
@@ -518,7 +522,9 @@ where
             }
             ControlCommand::PluginConfigUpdate(command) => {
                 if self.sandbox_plugins.contains(&command.instance_id) {
-                    Err(Self::sandbox_plugin_capability_error(&command.instance_id))
+                    self.sandbox_plugins
+                        .update_config(&command.instance_id, &command.config_json)
+                        .map(ControlReply::PluginConfig)
                 } else {
                     self.wiring
                         .attach_service

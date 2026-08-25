@@ -241,7 +241,7 @@ impl RegistrySnapshot {
         Self {
             generation: SandboxRegistryGeneration::INITIAL,
             endpoints: BTreeMap::new(),
-            consumers_by_kind: [Box::new([]), Box::new([])],
+            consumers_by_kind: [Box::new([]), Box::new([]), Box::new([])],
         }
     }
 
@@ -258,12 +258,13 @@ struct RegistryState {
 
 impl RegistryState {
     fn snapshot(&self) -> RegistrySnapshot {
-        let mut consumers_by_kind = [Vec::new(), Vec::new()];
+        let mut consumers_by_kind = [Vec::new(), Vec::new(), Vec::new()];
         let mut endpoints = BTreeMap::new();
         for (consumer_id, runtime) in &self.consumers {
             for kind in [
                 SandboxObservationKind::ProcessIo,
                 SandboxObservationKind::GuestResource,
+                SandboxObservationKind::OomVictim,
             ] {
                 if runtime.endpoint.selector.matches(kind) {
                     consumers_by_kind[kind.index()].push(*consumer_id);

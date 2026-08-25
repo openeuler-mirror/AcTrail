@@ -43,6 +43,7 @@ class SandboxResourceAlertHostCase(TestCase):
             self._config.bin_dir / "actrail-sb",
             self._config.bin_dir / "actrail-vsock-gateway",
             self._config.bin_dir / "actraild-alert-proxy",
+            self._config.bin_dir / "actrailweb",
             self._config.bin_dir / "actrailviewer",
             self._config.repo
             / "examples/plugins/builtin/sandbox-resource-alert/"
@@ -54,7 +55,7 @@ class SandboxResourceAlertHostCase(TestCase):
         missing = [path for path in required if not path.is_file()]
         non_executable = [
             path
-            for path in required[:5]
+            for path in required[:6]
             if path.is_file() and not os.access(path, os.X_OK)
         ]
         if not missing and not non_executable:
@@ -73,6 +74,9 @@ class SandboxResourceAlertHostCase(TestCase):
                 reasons.append(f"{path} is unavailable")
         if not Path("/sys/kernel/btf/vmlinux").is_file():
             reasons.append("kernel BTF is unavailable")
+        cgroup_problem = SandboxResourceAlertHostCase._memory_cgroup_problem()
+        if cgroup_problem is not None:
+            reasons.append(cgroup_problem)
         if not reasons:
             return None
         return TestResult(
@@ -80,3 +84,31 @@ class SandboxResourceAlertHostCase(TestCase):
             "host-native sandbox collection prerequisite unavailable: "
             + "; ".join(reasons),
         )
+
+    @staticmethod
+    def _memory_cgroup_problem() -> str | None:
+        if Path("/sys/fs/cgroup/cgroup.controllers").is_file():
+            parent = Path("/sys/fs/cgroup")
+            limit_name = "memory.max"
+        elif Path("/sys/fs/cgroup/memory/memory.limit_in_bytes").is_file():
+            parent = Path("/sys/fs/cgroup/memory")
+            limit_name = "memory.limit_in_bytes"
+        else:
+            return "memory cgroup controller is unavailable"
+        probe = parent / f"actrail-precheck-{os.getpid()}"
+        if probe.exists():
+            return f"memory cgroup precheck path already exists: {probe}"
+        try:
+            probe.mkdir()
+            limit = probe / limit_name
+            if not limit.is_file():
+                return f"memory controller is not enabled below {parent}"
+            limit.write_text("33554432\n", encoding="ascii")
+        except OSError as error:
+            return f"memory cgroup is not delegated for the regression: {error}"
+        finally:
+            try:
+                probe.rmdir()
+            except OSError:
+                pass
+        return None

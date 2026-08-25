@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import base64
+import shlex
 import socket
 import time
 from pathlib import Path
 
 from tests.v2.common.alert_proxy import AlertSubscriberClient
-from tests.v2.common.kata_runtime import KataTestContainer
+from tests.v2.common.kata_runtime import GuestConsole, KataTestContainer
 from tests.v2.common.process import ManagedProcess
 from tests.v2.common.sandbox_alert_database import (
     SandboxAlertDatabase,
@@ -13,7 +15,7 @@ from tests.v2.common.sandbox_alert_database import (
 )
 
 from ..config import CloudHypervisorExecutionIsolationConfig
-from ..identity import CloudHypervisorScenarioIdentity
+from .transport import CoordinationDirectory, CoordinationFile, HostCoordination
 
 
 class CloudHypervisorAlertVerifier:
@@ -30,10 +32,12 @@ class CloudHypervisorAlertVerifier:
         config: CloudHypervisorExecutionIsolationConfig,
         alerts: SandboxAlertDatabase,
         coordination: Path,
+        guest: GuestConsole,
     ) -> None:
         self._config = config
         self._alerts = alerts
-        self._coordination = coordination
+        self._coordination = HostCoordination(coordination)
+        self._guest = guest
 
     def wait_tcp(self, port: int) -> None:
         deadline = time.monotonic() + self._config.ready_timeout_seconds
@@ -44,14 +48,14 @@ class CloudHypervisorAlertVerifier:
             except OSError:
                 time.sleep(0.05)
         raise RuntimeError(
-            CloudHypervisorScenarioIdentity.failure(
+            self._config.IDENTITY.failure(
                 "hand-observation TCP listener did not become ready"
             )
         )
 
     def wait_path(
         self,
-        path: Path,
+        path: CoordinationFile,
         process: ManagedProcess,
         description: str,
     ) -> None:
@@ -62,13 +66,13 @@ class CloudHypervisorAlertVerifier:
             if process.poll() is not None:
                 result = process.wait(timeout=1)
                 raise RuntimeError(
-                    CloudHypervisorScenarioIdentity.failure(
+                    self._config.IDENTITY.failure(
                         f"process exited before {description}: {result.diagnostic}"
                     )
                 )
             time.sleep(0.05)
         raise RuntimeError(
-            CloudHypervisorScenarioIdentity.failure(
+            self._config.IDENTITY.failure(
                 f"timed out waiting for {description}"
             )
         )
@@ -76,14 +80,12 @@ class CloudHypervisorAlertVerifier:
     def wait_observation_alerts(
         self,
         gateway: ManagedProcess,
-        sb: ManagedProcess,
         root_pid: int,
         subscriber: AlertSubscriberClient,
     ) -> dict[str, SandboxAlertRecord]:
         deadline = time.monotonic() + self._config.ready_timeout_seconds
         while time.monotonic() < deadline:
             self.require_alive(gateway, "gateway")
-            self.require_alive(sb, "actrail-sb")
             records = self._select_expected_alerts(root_pid)
             if self._EXPECTED_CATEGORIES.issubset(records):
                 expected = {
@@ -107,29 +109,36 @@ class CloudHypervisorAlertVerifier:
                 return expected
             time.sleep(0.05)
         raise RuntimeError(
-            CloudHypervisorScenarioIdentity.failure(
+            self._config.IDENTITY.failure(
                 "timed out waiting for Guest high-CPU, OOM-killed, OOM-risk, "
                 "high-read and high-write alerts aggregated to "
-                f"root pid={root_pid}"
+                f"root pid={root_pid}; "
+                + self._observation_timeout_diagnostic(root_pid)
             )
         )
 
     def trigger_guest_oom(self, vm: KataTestContainer) -> None:
-        result = vm.exec(
-            ("/bin/sh", "/opt/actrail-execution/oom-trigger.sh"),
-            uid=0,
-            gid=0,
+        script = (
+            Path(__file__).parent.parent / "assets" / "oom-trigger.sh"
+        ).read_bytes()
+        payload = base64.b64encode(script).decode("ascii")
+        marker = shlex.quote(self._config.IDENTITY.OOM_KILL_MARKER)
+        result = self._guest.capture(
+            vm.container_id,
+            f"printf %s {shlex.quote(payload)} | /usr/bin/base64 -d | "
+            "/usr/bin/env "
+            f"ACTRAIL_EXECUTION_ISOLATION_OOM_KILL_MARKER={marker} /bin/sh",
             timeout=45,
         )
         if result.returncode != 0:
             raise RuntimeError(
-                CloudHypervisorScenarioIdentity.failure(
+                self._config.IDENTITY.failure(
                     "controlled Guest OOM trigger failed: " + result.diagnostic
                 )
             )
-        if CloudHypervisorScenarioIdentity.OOM_KILL_MARKER not in result.stdout:
+        if self._config.IDENTITY.OOM_KILL_MARKER not in result.stdout:
             raise RuntimeError(
-                CloudHypervisorScenarioIdentity.failure(
+                self._config.IDENTITY.failure(
                     "controlled Guest OOM trigger omitted success evidence"
                 )
             )
@@ -137,12 +146,10 @@ class CloudHypervisorAlertVerifier:
     def wait_resource_baseline(
         self,
         gateway: ManagedProcess,
-        sb: ManagedProcess,
     ) -> None:
         deadline = time.monotonic() + self._config.ready_timeout_seconds
         while time.monotonic() < deadline:
             self.require_alive(gateway, "gateway")
-            self.require_alive(sb, "actrail-sb")
             if any(
                 record.category == "sandbox.resource.oom_risk"
                 for record in self._alerts.records()
@@ -150,22 +157,66 @@ class CloudHypervisorAlertVerifier:
                 return
             time.sleep(0.05)
         raise RuntimeError(
-            CloudHypervisorScenarioIdentity.failure(
+            self._config.IDENTITY.failure(
                 "timed out waiting for the pre-OOM Guest resource baseline"
             )
         )
 
-    def read_root_pid(self) -> int:
-        raw = (self._coordination / "root.pid").read_text(
+    def read_root_pid(
+        self,
+        vm: KataTestContainer,
+        coordination: CoordinationDirectory | None = None,
+    ) -> int:
+        source = coordination or self._coordination
+        raw = source.file("root.pid").read_text(
             encoding="ascii"
         ).strip()
         if not raw.isdigit() or int(raw) <= 0:
             raise RuntimeError(
-                CloudHypervisorScenarioIdentity.failure(
+                self._config.IDENTITY.failure(
                     f"named Agent root PID is invalid: {raw!r}"
                 )
             )
-        return int(raw)
+        namespaced_pid = int(raw)
+        command = (
+            f"target={namespaced_pid}; "
+            "for status in /proc/[0-9]*/status; do "
+            "[ -r \"$status\" ] || continue; "
+            "name=$(awk '$1 == \"Name:\" { print $2; exit }' \"$status\" "
+            "2>/dev/null) || continue; "
+            "[ \"$name\" = actrail-root ] || continue; "
+            "inner=$(awk '$1 == \"NSpid:\" { print $NF; exit }' \"$status\" "
+            "2>/dev/null) || continue; "
+            "[ \"$inner\" = \"$target\" ] || continue; "
+            "pid=${status#/proc/}; pid=${pid%/status}; "
+            "printf '%s\\n' \"$pid\"; "
+            "done"
+        )
+        resolved = self._guest.capture(
+            vm.container_id,
+            command,
+            timeout=min(10.0, float(self._config.ready_timeout_seconds)),
+        )
+        candidates = [
+            line.strip()
+            for line in resolved.stdout.splitlines()
+            if line.strip()
+        ]
+        if (
+            resolved.returncode != 0
+            or len(candidates) != 1
+            or not candidates[0].isdigit()
+            or int(candidates[0]) <= 0
+        ):
+            raise RuntimeError(
+                self._config.IDENTITY.failure(
+                    "cannot resolve the named Agent root from workload PID "
+                    f"namespace pid={namespaced_pid} into the Guest system PID "
+                    "namespace: "
+                    + (resolved.diagnostic or repr(candidates))
+                )
+            )
+        return int(candidates[0])
 
     def _select_expected_alerts(
         self,
@@ -175,7 +226,7 @@ class CloudHypervisorAlertVerifier:
         for record in self._alerts.records():
             if record.gateway_id <= 0 or record.sb_id <= 0:
                 raise AssertionError(
-                    CloudHypervisorScenarioIdentity.failure(
+                    self._config.IDENTITY.failure(
                         f"invalid sandbox alert source: {record}"
                     )
                 )
@@ -184,6 +235,31 @@ class CloudHypervisorAlertVerifier:
                     continue
             selected.setdefault(record.category, record)
         return selected
+
+    def _observation_timeout_diagnostic(self, root_pid: int) -> str:
+        records = self._alerts.records()
+        selected = self._select_expected_alerts(root_pid)
+        observed = sorted({record.category for record in records})
+        missing = sorted(self._EXPECTED_CATEGORIES.difference(selected))
+        candidates = sorted(
+            (
+                record.category,
+                int(record.process["pid"]),
+                int(record.process["start_time_ticks"]),
+                str(record.process["executable_name_hex"]),
+            )
+            for record in records
+            if record.category.startswith("sandbox.process.")
+            and record.process is not None
+        )
+        candidate_text = [
+            f"{category}(pid={pid},start={start},name={name})"
+            for category, pid, start, name in candidates
+        ]
+        return (
+            f"missing={missing}; observed={observed}; "
+            f"process_candidates={candidate_text}"
+        )
 
     @staticmethod
     def _matches_delivery(
@@ -197,22 +273,21 @@ class CloudHypervisorAlertVerifier:
             and message.get("extras") == record.extras
         )
 
-    @classmethod
     def _assert_delivery(
-        cls,
+        self,
         record: SandboxAlertRecord,
         message: dict[str, object],
     ) -> None:
         source = message.get("source")
         if not isinstance(source, dict) or "trid" in source:
             raise AssertionError(
-                CloudHypervisorScenarioIdentity.failure(
+                self._config.IDENTITY.failure(
                     f"sandbox delivery leaked trace identity: {message}"
                 )
             )
-        if not cls._matches_delivery(record, message):
+        if not self._matches_delivery(record, message):
             raise AssertionError(
-                CloudHypervisorScenarioIdentity.failure(
+                self._config.IDENTITY.failure(
                     "sandbox database record and subscriber delivery differ: "
                     f"record={record}; delivery={message}"
                 )
@@ -224,18 +299,17 @@ class CloudHypervisorAlertVerifier:
         )
         if message.get("s") != expected_severity:
             raise AssertionError(
-                CloudHypervisorScenarioIdentity.failure(
+                self._config.IDENTITY.failure(
                     f"sandbox alert severity changed: {message}"
                 )
             )
 
-    @staticmethod
-    def require_alive(process: ManagedProcess, name: str) -> None:
+    def require_alive(self, process: ManagedProcess, name: str) -> None:
         time.sleep(0.1)
         if process.poll() is not None:
             result = process.wait(timeout=1)
             raise RuntimeError(
-                CloudHypervisorScenarioIdentity.failure(
+                self._config.IDENTITY.failure(
                     f"{name} exited early: {result.diagnostic}"
                 )
             )

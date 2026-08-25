@@ -30,6 +30,7 @@ struct CollectorSection {
     tracked_process_capacity: u32,
     pending_io_capacity: u32,
     aggregate_capacity: u32,
+    oom_event_capacity: u32,
     poll_interval_ms: u64,
 }
 
@@ -141,6 +142,7 @@ impl SbDaemonConfig {
                     self.collector.aggregate_capacity,
                 )
             })
+            .and_then(|config| config.with_oom_event_capacity(self.collector.oom_event_capacity))
             .and_then(|config| {
                 config.with_root_refresh_interval(Duration::from_millis(
                     self.collector.root_refresh_interval_ms,
@@ -257,6 +259,7 @@ impl SbDaemonConfig {
                 tracked_process_capacity: 16_384,
                 pending_io_capacity: 32_768,
                 aggregate_capacity: 4_096,
+                oom_event_capacity: 256,
                 poll_interval_ms: 1_000,
             },
             sampler: SamplerSection {
@@ -294,5 +297,26 @@ impl SbDaemonConfig {
 
     fn invalid(message: impl Into<String>) -> io::Error {
         io::Error::new(io::ErrorKind::InvalidInput, message.into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn checked_in_daemon_configs_match_the_runtime_contract() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        for relative in [
+            "deploy/execution-isolation/actrail-sb.toml",
+            "deploy/virtual-container/guest/sandbox-observer.toml",
+        ] {
+            let path = repo.join(relative);
+            let config = SbDaemonConfig::load(&path)
+                .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()));
+            config
+                .validate()
+                .unwrap_or_else(|error| panic!("validate {}: {error}", path.display()));
+        }
     }
 }

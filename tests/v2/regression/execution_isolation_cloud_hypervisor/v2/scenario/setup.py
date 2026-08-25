@@ -18,7 +18,12 @@ from tests.v2.common.process import SubprocessRunner
 
 from ..asset_bundle import CloudHypervisorAssetBundle
 from ..config import CloudHypervisorExecutionIsolationConfig
-from ..identity import CloudHypervisorScenarioIdentity
+from .transport import (
+    CoordinationDirectory,
+    FirecrackerAssetTransport,
+    GuestCoordination,
+    HostCoordination,
+)
 
 
 class CloudHypervisorScenarioSetup:
@@ -39,14 +44,16 @@ class CloudHypervisorScenarioSetup:
         self._coordination = coordination
 
     def prepare_assets(self) -> None:
+        identity = self._config.IDENTITY
         assert self._deployment.xiaoo is not None
         self._assets.mkdir(parents=True)
-        self._coordination.mkdir(mode=0o770)
-        os.chown(
-            self._coordination,
-            self._config.workload_uid,
-            self._config.workload_gid,
-        )
+        if self._config.BACKEND != "firecracker":
+            self._coordination.mkdir(mode=0o770)
+            os.chown(
+                self._coordination,
+                self._config.workload_uid,
+                self._config.workload_gid,
+            )
         source_assets = Path(__file__).parent.parent / "assets"
         sources = {
             "xiaoo-real": self._deployment.xiaoo,
@@ -62,7 +69,7 @@ class CloudHypervisorScenarioSetup:
         for name, source in sources.items():
             if not source.is_file():
                 raise RuntimeError(
-                    CloudHypervisorScenarioIdentity.failure(
+                    identity.failure(
                         f"asset is missing: {source}"
                     )
                 )
@@ -80,31 +87,53 @@ class CloudHypervisorScenarioSetup:
             encoding="utf-8",
         )
         (self._assets / "task.txt").write_text(
-            "ACTRAIL_CLOUD_HYPERVISOR_AGENT_READ_INPUT\n",
+            f"{identity.AGENT_READ_INPUT_MARKER}\n",
             encoding="utf-8",
         )
-        self._write_sb_config()
         self._write_plugin_assets()
         CloudHypervisorAssetBundle.write_manifest(self._assets)
 
     def requirements(self) -> KataContainerRequirements:
+        firecracker = self._config.BACKEND == "firecracker"
         builder = KataRequirementsBuilder(
-            backend="cloud-hypervisor",
+            backend=self._config.BACKEND,
             runtime=self._config.ctr_runtime,
             runtime_config=self._deployment.data_config,
             image=self._deployment.workload_image,
             runner=self._runner,
             pull_policy=self._config.image_pull_policy,
-            image_archive=self._config.image_archive,
+            image_archive=(
+                self._deployment.workload_image_archive
+                if firecracker
+                else self._config.image_archive
+            ),
             runtime_timeout_seconds=self._config.runtime_timeout_seconds,
             uid=self._config.workload_uid,
             gid=self._config.workload_gid,
             ready_timeout_seconds=self._config.ready_timeout_seconds,
+            snapshotter="devmapper" if firecracker else None,
+            image_archive_sha256=(
+                getattr(
+                    self._deployment,
+                    "workload_image_archive_sha256",
+                    None,
+                )
+                if firecracker
+                else None
+            ),
         )
-        return builder.build(
-            name_prefix=CloudHypervisorScenarioIdentity.CASE,
-            command=("/bin/sh", "-c", "sleep 600"),
-            mounts=(
+        if firecracker:
+            # Kata Firecracker has no shared-filesystem transport. The Guest
+            # observer is controlled through the debug console, and workload
+            # assets/coordination are transported with ``ctr exec``.
+            mounts = ()
+            artifact_directories = (self._assets,)
+            # Kata Firecracker truncates its sandbox ID to 32 bytes. Combined
+            # with KataTestContainer's random-token-first ID, this short prefix
+            # keeps the complete owned ID within that limit.
+            name_prefix = "fc-alert"
+        else:
+            mounts = (
                 KataMount(
                     self._deployment.workload_bundle,
                     "/opt/actrail",
@@ -126,18 +155,45 @@ class CloudHypervisorScenarioSetup:
                     read_only=False,
                 ),
                 KataMount(Path("/dev/actrail"), "/run/actrail", read_only=True),
-            ),
-            artifact_directories=(
+            )
+            artifact_directories = (
                 self._deployment.workload_bundle,
                 self._deployment.guest_bundle,
                 self._assets,
-            ),
-            labels=(("io.actrail.test.case", CloudHypervisorScenarioIdentity.CASE),),
+            )
+            name_prefix = self._config.IDENTITY.CASE
+        return builder.build(
+            name_prefix=name_prefix,
+            command=("/bin/sh", "-c", "sleep 600"),
+            mounts=mounts,
+            artifact_directories=artifact_directories,
+            labels=(("io.actrail.test.case", self._config.IDENTITY.CASE),),
             running_validator=self._validate_vm_ready,
         )
 
+    def stage_assets(self, vm: KataTestContainer) -> None:
+        if self._config.BACKEND != "firecracker":
+            return
+        FirecrackerAssetTransport(
+            self._assets,
+            self._config.workload_uid,
+            self._config.workload_gid,
+            self._config.runtime_timeout_seconds,
+        ).stage(vm)
+
+    def coordination(self, vm: KataTestContainer) -> CoordinationDirectory:
+        if self._config.BACKEND != "firecracker":
+            return HostCoordination(self._coordination)
+        return GuestCoordination(
+            vm,
+            self._config.workload_uid,
+            self._config.workload_gid,
+            self._config.ready_timeout_seconds,
+        )
+
     def load_plugin(self, runtime: ActrailRuntime) -> None:
-        instance = CloudHypervisorScenarioIdentity.PLUGIN_INSTANCE
+        identity = self._config.IDENTITY
+        instance = identity.PLUGIN_INSTANCE
         result = runtime.run_checked(
             [
                 runtime.actraild,
@@ -156,28 +212,62 @@ class CloudHypervisorScenarioSetup:
         )
         if f"loaded instance={instance}" not in result.output:
             raise RuntimeError(
-                CloudHypervisorScenarioIdentity.failure(
+                identity.failure(
                     "sandbox resource alert plugin did not become active"
                 )
             )
 
-    def write_gateway_config(self, socket_path: Path, daemon_port: int) -> None:
+    def write_gateway_config(
+        self,
+        socket_path: Path | None,
+        daemon_port: int,
+    ) -> None:
+        if self._config.BACKEND == "cloud-hypervisor":
+            if socket_path is None:
+                raise ValueError("Cloud Hypervisor gateway socket is required")
+            backend_arguments = (
+                "--backend",
+                "cloud-hypervisor",
+                "--socket-path",
+                str(socket_path),
+            )
+        elif self._config.BACKEND == "stratovirt":
+            if socket_path is not None:
+                raise ValueError("StratoVirt uses native AF_VSOCK, not a UDS")
+            backend_arguments = (
+                "--backend",
+                "native",
+                "--cid",
+                "4294967295",
+                "--port",
+                str(self._config.vsock_port),
+            )
+        elif self._config.BACKEND == "firecracker":
+            if socket_path is None:
+                raise ValueError("Firecracker VSOCK base UDS is required")
+            backend_arguments = (
+                "--backend",
+                "firecracker",
+                "--uds-path",
+                str(socket_path),
+                "--port",
+                str(self._config.vsock_port),
+            )
+        else:
+            raise ValueError(f"unsupported VMM backend: {self._config.BACKEND}")
         self._run_config_init(
             self._config.bin_dir / "actrail-vsock-gateway",
             (
                 "--output",
                 str(self._run_dir / "gateway.toml"),
-                "--backend",
-                "cloud-hypervisor",
-                "--socket-path",
-                str(socket_path),
+                *backend_arguments,
                 "--daemon-address",
                 f"127.0.0.1:{daemon_port}",
             ),
         )
 
     def workload_environment(self) -> dict[str, str]:
-        identity = CloudHypervisorScenarioIdentity
+        identity = self._config.IDENTITY
         return {
             "ACTRAIL_XIAOO_INSTANCE": identity.CASE,
             "ACTRAIL_XIAOO_BIN": "/opt/actrail-execution/xiaoo-root",
@@ -194,27 +284,48 @@ class CloudHypervisorScenarioSetup:
             "ACTRAIL_XIAOO_READY_TIMEOUT_SECONDS": str(
                 self._config.ready_timeout_seconds
             ),
-            "ACTRAIL_CLOUD_HYPERVISOR_REAL_XIAOO": (
+            "ACTRAIL_EXECUTION_ISOLATION_REAL_XIAOO": (
                 "/opt/actrail-execution/xiaoo-real"
             ),
-            "ACTRAIL_CLOUD_HYPERVISOR_ROOT_PID_FILE": (
+            "ACTRAIL_EXECUTION_ISOLATION_ROOT_PID_FILE": (
                 "/run/actrail-execution/root.pid"
             ),
-            "ACTRAIL_CLOUD_HYPERVISOR_CHILD_RELEASE": (
+            "ACTRAIL_EXECUTION_ISOLATION_CHILD_RELEASE": (
                 "/run/actrail-execution/child.release"
             ),
-            "ACTRAIL_CLOUD_HYPERVISOR_CHILD_TIMEOUT_SECONDS": str(
+            "ACTRAIL_EXECUTION_ISOLATION_CHILD_TIMEOUT_SECONDS": str(
                 self._config.ready_timeout_seconds
+            ),
+            "ACTRAIL_EXECUTION_ISOLATION_AGENT_READ_MARKER": (
+                identity.AGENT_READ_INPUT_MARKER
+            ),
+            "ACTRAIL_EXECUTION_ISOLATION_AGENT_WRITE_MARKER": (
+                identity.AGENT_WRITE_MARKER
+            ),
+            "ACTRAIL_EXECUTION_ISOLATION_NAMED_ROOT_MARKER": (
+                identity.NAMED_ROOT_MARKER
+            ),
+            "ACTRAIL_EXECUTION_ISOLATION_AGENT_TOOLS_MARKER": (
+                identity.AGENT_TOOLS_MARKER
             ),
         }
 
     def _validate_vm_ready(self, vm: KataTestContainer) -> RequirementCheck:
         if not vm.is_running():
             return RequirementCheck.not_ready(
-                CloudHypervisorScenarioIdentity.failure(
+                self._config.IDENTITY.failure(
                     "Kata task exited before readiness"
                 ),
                 refreshable=True,
+            )
+        firecracker = self._config.BACKEND == "firecracker"
+        mounted_assets = ""
+        if not firecracker:
+            mounted_assets = (
+                "test -x /opt/actrail-execution/xiaoo-real; "
+                "test -x /opt/actrail-execution/xiaoo-root; "
+                "/opt/actrail-execution/xiaoo-real --cli run --help "
+                "2>&1 | grep -q -- --tools; "
             )
         result = vm.exec(
             (
@@ -222,42 +333,20 @@ class CloudHypervisorScenarioSetup:
                 "-ec",
                 ". /etc/os-release; [ \"${ID:-}\" = openEuler ]; "
                 "test -r /sys/kernel/btf/vmlinux; "
-                "test -x /opt/actrail-guest/actrail-sb; "
-                "test -x /opt/actrail-execution/xiaoo-real; "
-                "test -x /opt/actrail-execution/xiaoo-root; "
                 "command -v python3 >/dev/null; "
-                "/opt/actrail-execution/xiaoo-real --cli run --help "
-                "2>&1 | grep -q -- --tools; "
-                "remaining=180; while [ $remaining -gt 0 ]; do "
-                "[ -S /run/actrail/control.sock ] && exit 0; "
-                "remaining=$((remaining - 1)); sleep 0.5; done; exit 72",
+                f"{mounted_assets}"
             ),
-            timeout=self._config.ready_timeout_seconds,
+            timeout=self._config.ready_timeout_seconds + 2,
         )
         if result.returncode == 0:
             return RequirementCheck.ready_check()
         return RequirementCheck.not_ready(
-            CloudHypervisorScenarioIdentity.failure(
+            self._config.IDENTITY.failure(
                 result.diagnostic or "Guest readiness failed"
             ),
             refreshable=not any(
                 marker in result.diagnostic.lower()
                 for marker in ("permission denied", "operation not permitted", "kvm")
-            ),
-        )
-
-    def _write_sb_config(self) -> None:
-        self._run_config_init(
-            self._config.bin_dir / "actrail-sb",
-            (
-                "--output",
-                str(self._assets / "sb.toml"),
-                "--root-process-name",
-                "actrail-root",
-                "--control-socket",
-                "/run/actrail-sb-control.sock",
-                "--instance-lock-path",
-                "/run/actrail-sb.lock",
             ),
         )
 
@@ -272,7 +361,7 @@ class CloudHypervisorScenarioSetup:
         )
         if result.returncode != 0:
             raise RuntimeError(
-                CloudHypervisorScenarioIdentity.failure(
+                self._config.IDENTITY.failure(
                     "current release config generator failed: "
                     f"{result.diagnostic}"
                 )
