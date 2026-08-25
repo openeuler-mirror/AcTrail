@@ -97,22 +97,25 @@ pub use logging::{
 };
 pub use network::{NetworkControlConfig, NetworkControlSeccompSyscall};
 pub use operator::{
-    DEFAULT_ACTIVE_TRACE_MAX, DEFAULT_CONTROL_PENDING_CONNECTION_MAX, DEFAULT_OPERATOR_CONFIG_PATH,
-    DEFAULT_PLUGIN_ALERT_DRAIN_TIMEOUT_MS, DEFAULT_PLUGIN_ALERT_QUEUE_CAPACITY,
-    DEFAULT_PLUGIN_ALERT_WRITES_PER_CYCLE, DEFAULT_PLUGIN_DISCOVERY_DIRECTORY,
-    DEFAULT_PLUGIN_DISCOVERY_MANIFEST_MAX_BYTES, DEFAULT_PLUGIN_DISCOVERY_MAX_PACKAGES,
-    OperatorConfig, OperatorConfigInitStatus, PluginAlertRuntimeConfig, PluginDiscoveryConfig,
+    AlertForwardingConfig, DEFAULT_ACTIVE_TRACE_MAX, DEFAULT_CONTROL_PENDING_CONNECTION_MAX,
+    DEFAULT_OPERATOR_CONFIG_PATH, DEFAULT_PLUGIN_ALERT_DRAIN_TIMEOUT_MS,
+    DEFAULT_PLUGIN_ALERT_QUEUE_CAPACITY, DEFAULT_PLUGIN_ALERT_WRITES_PER_CYCLE,
+    DEFAULT_PLUGIN_DISCOVERY_DIRECTORY, DEFAULT_PLUGIN_DISCOVERY_MANIFEST_MAX_BYTES,
+    DEFAULT_PLUGIN_DISCOVERY_MAX_PACKAGES, HandObservationConfig, OperatorConfig,
+    OperatorConfigInitStatus, PluginAlertRuntimeConfig, PluginDiscoveryConfig, SandboxAlertsConfig,
+    SandboxAlertsSynchronousConfig, SandboxEvidenceConfig, SandboxEvidenceSynchronousConfig,
     StartupPluginFailurePolicy, StartupPluginLoadConfig, StartupPluginsConfig,
     launch_seccomp_requirements,
 };
 pub use payload::{
     DEFAULT_MCP_PARSE_BUFFER_MAX_BYTES, DEFAULT_MCP_PENDING_STDIO_CANDIDATE_MAX_ENTRIES,
-    DEFAULT_MCP_STDIO_CANDIDATE_MAX_BYTES, DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS,
-    DisabledOrPath, PayloadConfig, PayloadMcpConfig, PayloadRedactionPolicy,
-    PayloadSocketCaptureBackend, PayloadSocketConfig, PayloadSocketSeccompSyscall,
-    PayloadStdioConfig, PayloadStdioStorageMode, PayloadTlsCaptureBackend, PayloadTlsConfig,
-    PayloadTlsLibrary, PayloadTlsLibraryPath, PayloadTlsResolver, PayloadTlsSeccompSyscall,
-    PayloadTlsSource, PayloadTlsSyncRuntimeLibraryPath,
+    DEFAULT_MCP_STDIO_CANDIDATE_MAX_BYTES, DEFAULT_TLS_BINARY_ANALYSIS_CACHE_CAPACITY,
+    DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS, DisabledOrPath, PayloadConfig, PayloadMcpConfig,
+    PayloadRedactionPolicy, PayloadSocketCaptureBackend, PayloadSocketConfig,
+    PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadStdioStorageMode,
+    PayloadTlsCaptureBackend, PayloadTlsConfig, PayloadTlsLibrary, PayloadTlsLibraryPath,
+    PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource,
+    PayloadTlsSyncRuntimeLibraryPath,
 };
 pub use process::{ProcessSeccompConfig, ProcessSeccompSyscall, SeccompNotifyConfig};
 pub use resource::ResourceMetricsConfig;

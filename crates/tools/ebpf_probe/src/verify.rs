@@ -87,6 +87,8 @@ pub fn run_live_verification(
         config.resource_metrics.clone(),
         seccomp_defaults.storage_retention,
         seccomp_defaults.plugin_alert_runtime,
+        seccomp_defaults.alert_forwarding,
+        seccomp_defaults.sandbox_alerts,
         seccomp_defaults.trace_finalization,
         shutdown_runtime_timeout_ms,
         seccomp_defaults.workload_diagnostics,

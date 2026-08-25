@@ -200,6 +200,7 @@ local/kata/artifacts/<digest>/
 ├── configuration-base.toml
 ├── configuration-data.toml
 ├── guest-bundle/
+├── host-bundle/              # actrail-vsock-gateway
 ├── workload-bundle/
 └── xiaoo                    # 传入 --xiaoo 时存在
 ```

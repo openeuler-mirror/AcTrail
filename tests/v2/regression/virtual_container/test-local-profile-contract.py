@@ -79,6 +79,12 @@ def main() -> int:
                             "${PROFILE_DIR}/artifacts/digest/manifest.json"
                         ),
                         "VIRTUAL_CONTAINER_E2E_IMAGE_PULL_POLICY": "never",
+                        "VIRTUAL_CONTAINER_E2E_FIRECRACKER_CONFIG": (
+                            "${PROFILE_DIR}/configuration-fc-base.toml"
+                        ),
+                        "VIRTUAL_CONTAINER_E2E_FIRECRACKER_DATA_CONFIG": (
+                            "${PROFILE_DIR}/configuration-fc-data.toml"
+                        ),
                     },
                 }
             ),
@@ -90,6 +96,33 @@ def main() -> int:
                 "VIRTUAL_CONTAINER_E2E_ARTIFACT_MANIFEST"
             ] == str(profile_path.resolve().parent / "artifacts/digest/manifest.json")
             assert os.environ["VIRTUAL_CONTAINER_E2E_IMAGE_PULL_POLICY"] == "never"
+            assert os.environ[
+                "VIRTUAL_CONTAINER_E2E_FIRECRACKER_CONFIG"
+            ] == str(profile_path.resolve().parent / "configuration-fc-base.toml")
+            assert os.environ[
+                "VIRTUAL_CONTAINER_E2E_FIRECRACKER_DATA_CONFIG"
+            ] == str(profile_path.resolve().parent / "configuration-fc-data.toml")
+
+        profile_path.write_text(
+            json.dumps(
+                {
+                    "format": 2,
+                    "environment": {
+                        "EXECUTION_ISOLATION_FIRECRACKER_E2E_KERNEL_IMAGE": (
+                            "/tmp/direct-firecracker-kernel"
+                        )
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        with patch.dict(os.environ, {}, clear=True):
+            try:
+                load_local_test_profile(REPO, profile_path)
+            except ValueError as error:
+                assert "unsupported environment key" in str(error)
+            else:
+                raise AssertionError("direct Firecracker profile key was accepted")
 
     print("LOCAL_TEST_PROFILE_CONTRACT_OK")
     return 0

@@ -10,6 +10,38 @@ from tests.v2.common.kata_runtime.process import (
 
 
 class ManagedProcessTest(unittest.TestCase):
+    def test_wait_for_output_observes_marker_and_preserves_captured_streams(
+        self,
+    ) -> None:
+        process = SubprocessRunner().start(
+            [
+                sys.executable,
+                "-c",
+                "import time; "
+                "print('booting', flush=True); "
+                "print('gateway ready gateway_id=17', flush=True); "
+                "time.sleep(30)",
+            ]
+        )
+
+        process.wait_for_output("gateway ready gateway_id=", timeout=1)
+        result = process.terminate(grace_seconds=0.2)
+
+        self.assertIn("booting", result.stdout)
+        self.assertIn("gateway ready gateway_id=17", result.stdout)
+
+    def test_wait_for_output_reports_early_exit_with_diagnostic(self) -> None:
+        process = SubprocessRunner().start(
+            [
+                sys.executable,
+                "-c",
+                "import sys; print('bind failed', file=sys.stderr, flush=True)",
+            ]
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "bind failed"):
+            process.wait_for_output("gateway ready gateway_id=", timeout=1)
+
     def test_timeout_terminates_process_group_and_keeps_output(self) -> None:
         process = SubprocessRunner().start(
             [

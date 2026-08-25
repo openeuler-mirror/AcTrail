@@ -1,0 +1,39 @@
+@startuml
+!include <C4/C4_Component>
+
+skinparam defaultFontName "WenQuanYi Micro Hei"
+
+title actrailweb - Component Diagram (Default)
+
+LAYOUT_LEFT_RIGHT()
+
+Person(Analyst, "安全分析师 / 审计员", "查询 trace、核对证据、查看告警与治理决策")
+ContainerDb(Storage, "AcTrail Storage", "SQLite (WAL)", "事件、payload、语义动作、诊断")
+Container_Ext(Daemon, "actraild", "Rust daemon", "插件 load / unload 授权")
+Container_Ext(ClusterRoot, "集群中心根目录", "cluster 模式", "远端 trace 索引")
+
+Container_Boundary(actrailweb, "actrailweb") {
+
+    Component(Http, "HTTP Server", "http.rs", "thread-per-connection、可选 gzip、/health")
+
+    Component(TraceApi, "Trace View API", "route_trace_api", "/api/traces/*：summary / action-tree / waterfall / llm-nav / time-attribution / stats / alerts / CSV")
+
+    Component(ClusterApi, "Cluster Trace API", "route_cluster_trace_api", "cluster 模式下渲染远端 trace")
+
+    Component(PluginApi, "Plugin Management API", "http/plugins.rs", "catalog 扫描 / load / unload / command / config / config validate")
+
+    Component(Spa, "Embedded SPA Assets", "Vue 3 / Vite", "include_bytes! 嵌入的 dist 静态资源（Stats / Config / Plugins / Traces）")
+}
+
+Rel(Analyst, Http, "浏览 trace、告警与插件管理", "HTTP 127.0.0.1:18080")
+Rel(Http, TraceApi, "分发视图请求")
+Rel(Http, ClusterApi, "分发 cluster 请求")
+Rel(Http, PluginApi, "分发插件管理请求")
+Rel(Http, Spa, "提供前端静态资源")
+Rel(Spa, Analyst, "浏览器渲染页面", "HTTP")
+Rel(TraceApi, Storage, "只读查询（含告警）", "SQLite")
+Rel(ClusterApi, ClusterRoot, "读取远端 trace 索引", "文件")
+Rel(PluginApi, Daemon, "插件 load / unload 授权", "UDS control socket")
+
+SHOW_LEGEND()
+@enduml

@@ -14,10 +14,13 @@ use model_core::ids::{ProfileName, RequestId};
 use model_core::process::ProcessIdentity;
 use plugin_system::PluginInstanceStatus;
 use process_identity::ProcessIdentityReader;
+use sandbox_alert_store::SandboxAlertWritePort;
+use sandbox_evidence_store::SandboxEvidenceWritePort;
 use uds_control_server::{ControlService, PeerCredentials};
 
 use crate::peer_identity::{PeerIdentity, peer_error};
 use crate::runtime_wiring::DaemonRuntimeWiring;
+use crate::services::sandbox_plugins::{SandboxPluginManager, SandboxPluginRouteSink};
 
 pub trait AttachService {
     fn host_pid_for_process(&self, process: ProcessIdentity) -> Result<u32, ControlError>;
@@ -106,15 +109,27 @@ struct LaunchAdmission {
 
 pub struct DaemonServiceHost<A> {
     wiring: DaemonRuntimeWiring<A>,
+    sandbox_plugins: SandboxPluginManager,
     pending_launch_admissions: BTreeMap<model_core::process::ProcessObservation, LaunchAdmission>,
 }
 
 impl<A> DaemonServiceHost<A> {
-    pub fn new(wiring: DaemonRuntimeWiring<A>) -> Self {
+    pub fn new(
+        wiring: DaemonRuntimeWiring<A>,
+        sandbox_alerts: Option<std::sync::Arc<dyn SandboxAlertWritePort>>,
+    ) -> Self {
         Self {
             wiring,
+            sandbox_plugins: SandboxPluginManager::new(sandbox_alerts),
             pending_launch_admissions: BTreeMap::new(),
         }
+    }
+
+    pub(crate) fn sandbox_route_sink(
+        &self,
+        archive: std::sync::Arc<dyn SandboxEvidenceWritePort>,
+    ) -> SandboxPluginRouteSink {
+        self.sandbox_plugins.route_sink(archive)
     }
 
     pub fn drain_live_events(&mut self) -> Result<(), ControlError>
@@ -144,6 +159,19 @@ impl<A> DaemonServiceHost<A> {
     where
         A: AttachService,
     {
+        let sandbox_result = self.shutdown_sandbox_plugins();
+        let attach_result = self.shutdown_runtime();
+        sandbox_result.and(attach_result)
+    }
+
+    pub(crate) fn shutdown_sandbox_plugins(&mut self) -> Result<(), ControlError> {
+        self.sandbox_plugins.shutdown()
+    }
+
+    pub(crate) fn shutdown_runtime(&mut self) -> Result<(), ControlError>
+    where
+        A: AttachService,
+    {
         self.wiring
             .attach_service
             .shutdown(&mut self.wiring.trace_runtime)
@@ -166,7 +194,66 @@ impl<A> DaemonServiceHost<A> {
     where
         A: AttachService,
     {
-        self.wiring.attach_service.load_plugin(command)
+        if self
+            .plugin_statuses()
+            .iter()
+            .any(|status| status.instance_id == command.instance_id)
+        {
+            return Err(ControlError::new(
+                "plugin_runtime",
+                format!("plugin instance {} already exists", command.instance_id),
+            ));
+        }
+        let manifest_path = std::path::Path::new(&command.manifest_path);
+        if SandboxPluginManager::is_sandbox_manifest(manifest_path)? {
+            self.sandbox_plugins.load(command)
+        } else {
+            self.wiring.attach_service.load_plugin(command)
+        }
+    }
+
+    fn plugin_statuses(&self) -> Vec<PluginInstanceStatus>
+    where
+        A: AttachService,
+    {
+        let mut statuses = self.wiring.attach_service.plugin_statuses();
+        statuses.extend(self.sandbox_plugins.statuses());
+        statuses
+    }
+
+    fn plugin_status(&self, instance_id: &str) -> Result<PluginInstanceStatus, ControlError>
+    where
+        A: AttachService,
+    {
+        self.plugin_statuses()
+            .into_iter()
+            .find(|status| status.instance_id == instance_id)
+            .ok_or_else(|| {
+                ControlError::new(
+                    "plugin_not_found",
+                    format!("plugin instance {instance_id} not found"),
+                )
+            })
+    }
+
+    fn unload_plugin(&mut self, instance_id: &str) -> Result<PluginInstanceStatus, ControlError>
+    where
+        A: AttachService,
+    {
+        if self.sandbox_plugins.contains(instance_id) {
+            self.sandbox_plugins.unload(instance_id)
+        } else {
+            self.wiring.attach_service.unload_plugin(instance_id)
+        }
+    }
+
+    fn sandbox_plugin_capability_error(instance_id: &str) -> ControlError {
+        ControlError::new(
+            "plugin_capability",
+            format!(
+                "sandbox plugin instance {instance_id} is configured by its package config and must be reloaded to change it"
+            ),
+        )
     }
 }
 
@@ -389,54 +476,62 @@ where
                 loaded_policy_plugins: self.wiring.loaded_policy_plugins.clone(),
                 storage_ready: self.wiring.storage_ready,
             })),
-            ControlCommand::PluginList(_) => Ok(ControlReply::PluginList(
-                self.wiring.attach_service.plugin_statuses(),
-            )),
-            ControlCommand::PluginStatus(command) => {
-                let status = self
-                    .wiring
-                    .attach_service
-                    .plugin_statuses()
-                    .into_iter()
-                    .find(|status| status.instance_id == command.instance_id)
-                    .ok_or_else(|| {
-                        ControlError::new(
-                            "plugin_not_found",
-                            format!("plugin instance {} not found", command.instance_id),
-                        )
-                    })?;
-                Ok(ControlReply::PluginStatus(status))
-            }
-            ControlCommand::PluginLoad(command) => self
-                .wiring
-                .attach_service
-                .load_plugin(command)
+            ControlCommand::PluginList(_) => Ok(ControlReply::PluginList(self.plugin_statuses())),
+            ControlCommand::PluginStatus(command) => self
+                .plugin_status(&command.instance_id)
                 .map(ControlReply::PluginStatus),
+            ControlCommand::PluginLoad(command) => {
+                self.load_plugin(command).map(ControlReply::PluginStatus)
+            }
             ControlCommand::PluginUnload(command) => self
-                .wiring
-                .attach_service
                 .unload_plugin(&command.instance_id)
                 .map(ControlReply::PluginStatus),
-            ControlCommand::PluginCommand(command) => self
-                .wiring
-                .attach_service
-                .handle_plugin_command(command)
-                .map(ControlReply::PluginCommand),
-            ControlCommand::PluginConfigGet(command) => self
-                .wiring
-                .attach_service
-                .plugin_config(&command.instance_id)
-                .map(ControlReply::PluginConfig),
-            ControlCommand::PluginConfigValidate(command) => self
-                .wiring
-                .attach_service
-                .validate_plugin_config(&command.instance_id, &command.config_json)
-                .map(ControlReply::PluginConfigValidation),
-            ControlCommand::PluginConfigUpdate(command) => self
-                .wiring
-                .attach_service
-                .update_plugin_config(&command.instance_id, &command.config_json)
-                .map(ControlReply::PluginConfig),
+            ControlCommand::PluginCommand(command) => {
+                if self.sandbox_plugins.contains(&command.instance_id) {
+                    Err(Self::sandbox_plugin_capability_error(&command.instance_id))
+                } else {
+                    self.wiring
+                        .attach_service
+                        .handle_plugin_command(command)
+                        .map(ControlReply::PluginCommand)
+                }
+            }
+            ControlCommand::PluginConfigGet(command) => {
+                if self.sandbox_plugins.contains(&command.instance_id) {
+                    self.sandbox_plugins
+                        .config(&command.instance_id)
+                        .map(ControlReply::PluginConfig)
+                } else {
+                    self.wiring
+                        .attach_service
+                        .plugin_config(&command.instance_id)
+                        .map(ControlReply::PluginConfig)
+                }
+            }
+            ControlCommand::PluginConfigValidate(command) => {
+                if self.sandbox_plugins.contains(&command.instance_id) {
+                    self.sandbox_plugins
+                        .validate_config(&command.instance_id, &command.config_json)
+                        .map(ControlReply::PluginConfigValidation)
+                } else {
+                    self.wiring
+                        .attach_service
+                        .validate_plugin_config(&command.instance_id, &command.config_json)
+                        .map(ControlReply::PluginConfigValidation)
+                }
+            }
+            ControlCommand::PluginConfigUpdate(command) => {
+                if self.sandbox_plugins.contains(&command.instance_id) {
+                    self.sandbox_plugins
+                        .update_config(&command.instance_id, &command.config_json)
+                        .map(ControlReply::PluginConfig)
+                } else {
+                    self.wiring
+                        .attach_service
+                        .update_plugin_config(&command.instance_id, &command.config_json)
+                        .map(ControlReply::PluginConfig)
+                }
+            }
         }
     }
 }

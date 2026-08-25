@@ -14,6 +14,8 @@ mod helpers;
 mod logging;
 #[path = "attach/plugin_config.rs"]
 mod plugin_config;
+#[path = "attach/plugin_configuration.rs"]
+mod plugin_configuration;
 #[path = "attach/plugins.rs"]
 mod plugins;
 #[path = "attach/preflight.rs"]
@@ -59,6 +61,7 @@ use trace_runtime::sensor_plan::SensorPlan;
 
 use crate::profiles::DaemonProfileRegistry;
 use crate::service_host::AttachService;
+use crate::services::alert_forwarding::AlertForwardingService;
 use crate::services::alert_ingress::AlertIngress;
 use crate::services::application_protocol::ApplicationProtocolAnalyzer;
 use crate::services::command_control::CommandControlService;
@@ -130,6 +133,7 @@ pub(crate) struct StorageAttachService {
     pub(super) semantic_actions: LiveSemanticActionRuntime,
     pub(super) export_runtime: ExportRuntime,
     pub(super) alert_ingress: AlertIngress,
+    pub(super) alert_forwarding: AlertForwardingService,
     pub(super) post_trace_broker: PostTraceBroker,
     pub(super) post_trace_coordinator: PostTraceCoordinator,
     pub(super) workload_diagnostics: WorkloadDiagnostics,

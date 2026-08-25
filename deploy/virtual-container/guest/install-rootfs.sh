@@ -12,12 +12,16 @@ OTEL_STARTUP="$SCRIPT_DIR/otel-http-startup.toml"
 UNIT="$SCRIPT_DIR/actraild.service"
 TMPFILES="$SCRIPT_DIR/actrail-tmpfiles.conf"
 INTERFACE_DROP_IN="$SCRIPT_DIR/systemd/workload-interface/kata-agent.service.d/10-actrail-workload-interface.conf"
+SB_CONFIG="$SCRIPT_DIR/sandbox-observer.toml"
+SB_UNIT="$SCRIPT_DIR/actrail-sb.service"
+SB_CONNECT_UNIT="$SCRIPT_DIR/actrail-sb-connect.service"
 OTEL_ENDPOINT=""
 OTEL_EXPORT_ENABLED=0
 OTEL_ENDPOINT_CONFIGURED="false"
 EGRESS_MODE="network"
 STARTUP_DEPENDENCY="optional"
 WITH_VIEWER=0
+WITH_SANDBOX_OBSERVER=0
 SOCKET_GID=39000
 MIN_FREE_BYTES=$((32 * 1024 * 1024))
 
@@ -32,6 +36,7 @@ Options:
   --egress-mode MODE           Export path: network or vsock-bridge (default: network)
   --startup-dependency POLICY  optional or required (default: optional)
   --with-viewer                Also install actrailviewer (omitted by default)
+  --with-sandbox-observer      Install actrail-sb as a Guest system service
   --socket-gid GID             Numeric GID shared with workloads (default: 39000)
   --min-free-mib N             Free-space reserve after installation (default: 32)
   -h, --help                   Show this help
@@ -99,6 +104,10 @@ while [[ "$#" -gt 0 ]]; do
       WITH_VIEWER=1
       shift
       ;;
+    --with-sandbox-observer)
+      WITH_SANDBOX_OBSERVER=1
+      shift
+      ;;
     --socket-gid)
       [[ "$#" -ge 2 ]] || fail "--socket-gid requires a value"
       [[ "$2" =~ ^[0-9]+$ ]] || fail "--socket-gid must be an integer"
@@ -140,6 +149,12 @@ fi
 [[ -f "$TMPFILES" ]] || fail "tmpfiles config not found: $TMPFILES"
 [[ -f "$INTERFACE_DROP_IN" ]] \
   || fail "workload-interface drop-in not found: $INTERFACE_DROP_IN"
+if [[ "$WITH_SANDBOX_OBSERVER" == "1" ]]; then
+  [[ -f "$SB_CONFIG" ]] || fail "sandbox observer config not found: $SB_CONFIG"
+  [[ -f "$SB_UNIT" ]] || fail "sandbox observer unit not found: $SB_UNIT"
+  [[ -f "$SB_CONNECT_UNIT" ]] \
+    || fail "sandbox observer activation unit not found: $SB_CONNECT_UNIT"
+fi
 case "$STARTUP_DEPENDENCY" in
   optional|required) ;;
   *) fail "--startup-dependency must be optional or required" ;;
@@ -153,6 +168,11 @@ CONFIG="$(realpath "$CONFIG")"
 UNIT="$(realpath "$UNIT")"
 TMPFILES="$(realpath "$TMPFILES")"
 INTERFACE_DROP_IN="$(realpath "$INTERFACE_DROP_IN")"
+if [[ "$WITH_SANDBOX_OBSERVER" == "1" ]]; then
+  SB_CONFIG="$(realpath "$SB_CONFIG")"
+  SB_UNIT="$(realpath "$SB_UNIT")"
+  SB_CONNECT_UNIT="$(realpath "$SB_CONNECT_UNIT")"
+fi
 [[ "$ROOTFS" != "/" ]] || fail "refusing to install into /; pass an offline rootfs"
 
 rootfs_target() {
@@ -219,6 +239,9 @@ fi
 if [[ "$WITH_VIEWER" == "1" ]]; then
   required_bundle_files+=(actrailviewer)
 fi
+if [[ "$WITH_SANDBOX_OBSERVER" == "1" ]]; then
+  required_bundle_files+=(actrail-sb)
+fi
 for relative in "${required_bundle_files[@]}"; do
   [[ -f "$BUNDLE/$relative" ]] || fail "bundle file missing: $relative"
 done
@@ -271,6 +294,9 @@ elf_inputs=(
 )
 if [[ "$WITH_VIEWER" == "1" ]]; then
   elf_inputs+=("$BUNDLE/actrailviewer")
+fi
+if [[ "$WITH_SANDBOX_OBSERVER" == "1" ]]; then
+  elf_inputs+=("$BUNDLE/actrail-sb")
 fi
 while IFS= read -r library; do
   elf_inputs+=("$library")
@@ -329,6 +355,16 @@ grep -Fqx \
   'ExecStartPre=/usr/bin/systemd-tmpfiles --create --prefix=/dev/actrail' \
   "$INTERFACE_DROP_IN" \
   || fail "kata-agent drop-in must materialize the workload interface"
+if [[ "$WITH_SANDBOX_OBSERVER" == "1" ]]; then
+  grep -Fqx \
+    "ExecStart=/bin/sh -ec 'exec /usr/local/bin/actrail-sb daemon --config /etc/actrail/sandbox-observer.toml >>/dev/actrail/sandbox-observer.log 2>&1'" \
+    "$SB_UNIT" \
+    || fail "sandbox observer unit does not use the Guest installation"
+  grep -Fqx \
+    'ExecStart=/usr/local/bin/actrail-sb connect --control-socket /dev/actrail/sandbox-observer-control.sock --host-cid 2 --port 43182 --request-timeout-ms 5000' \
+    "$SB_CONNECT_UNIT" \
+    || fail "sandbox observer activation unit does not use the local control socket"
+fi
 
 bin_dir="$(rootfs_target /usr/local/bin)"
 private_lib_dir="$(rootfs_target /usr/local/lib/actrail)"
@@ -366,6 +402,18 @@ install -d -m 0755 \
   "$unit_dir"
 install -m 0755 "$BUNDLE/actraild" "$bin_dir/actraild"
 install -m 0755 "$BUNDLE/actrailctl" "$bin_dir/actrailctl"
+if [[ "$WITH_SANDBOX_OBSERVER" == "1" ]]; then
+  install -m 0755 "$BUNDLE/actrail-sb" "$bin_dir/actrail-sb"
+  install -m 0640 "$SB_CONFIG" "$config_dir/sandbox-observer.toml"
+  install -m 0644 "$SB_UNIT" "$unit_dir/actrail-sb.service"
+  install -m 0644 "$SB_CONNECT_UNIT" "$unit_dir/actrail-sb-connect.service"
+else
+  rm -f \
+    "$bin_dir/actrail-sb" \
+    "$config_dir/sandbox-observer.toml" \
+    "$unit_dir/actrail-sb.service" \
+    "$unit_dir/actrail-sb-connect.service"
+fi
 install -m 0755 "$BUNDLE/libactrail_tls_payload_probe_sync.so" \
   "$private_lib_dir/libactrail_tls_payload_probe_sync.so"
 if [[ "$WITH_VIEWER" == "1" ]]; then
@@ -410,6 +458,27 @@ dependency_dir="$unit_dir/kata-agent.service.d"
 interface_target="$dependency_dir/10-actrail-workload-interface.conf"
 install -d -m 0755 "$dependency_dir"
 install -m 0644 "$INTERFACE_DROP_IN" "$interface_target"
+# Older observer images coupled kata-agent startup to actrail-sb. Remove that
+# drop-in on every install: Kata must remain reachable even when observation
+# cannot initialize, while execution tests gate independently on the ready file.
+rm -f "$dependency_dir/30-actrail-sandbox-observer.conf"
+if [[ "$WITH_SANDBOX_OBSERVER" == "1" ]]; then
+  for target in kata-containers.target multi-user.target; do
+    wants_dir="$unit_dir/$target.wants"
+    install -d -m 0755 "$wants_dir"
+    ln -sfn ../actrail-sb.service "$wants_dir/actrail-sb.service"
+    # The daemon is safe to start before the Host endpoint exists, but connect
+    # is a runtime orchestration action. Keep the production unit installed and
+    # enable-able without letting it race a case-owned gateway by default.
+    rm -f "$wants_dir/actrail-sb-connect.service"
+  done
+else
+  for target in kata-containers.target multi-user.target; do
+    rm -f \
+      "$unit_dir/$target.wants/actrail-sb.service" \
+      "$unit_dir/$target.wants/actrail-sb-connect.service"
+  done
+fi
 
 # The VSOCK egress bridge exists only in vsock-bridge mode. Its listen port is
 # rendered from the endpoint, which stays the single source of truth: the
@@ -480,6 +549,7 @@ install_info="$share_dir/guest-install-info"
   printf 'bundle_required_glibc=%s\n' "${required_glibc:-none}"
   printf 'rootfs_glibc=%s\n' "$target_glibc"
   printf 'viewer_installed=%s\n' "$WITH_VIEWER"
+  printf 'sandbox_observer_installed=%s\n' "$WITH_SANDBOX_OBSERVER"
 } >"$install_info"
 chmod 0644 "$install_info"
 
@@ -503,5 +573,6 @@ echo "bundle_machine=$bundle_machine"
 echo "bundle_required_glibc=${required_glibc:-none}"
 echo "rootfs_glibc=$target_glibc"
 echo "viewer_installed=$WITH_VIEWER"
+echo "sandbox_observer_installed=$WITH_SANDBOX_OBSERVER"
 echo "workload_socket_gid=$SOCKET_GID"
 echo "otel_endpoint_configured=$OTEL_ENDPOINT_CONFIGURED"

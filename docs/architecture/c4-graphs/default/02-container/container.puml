@@ -1,0 +1,73 @@
+@startuml
+!include <C4/C4_Container>
+
+skinparam defaultFontName "WenQuanYi Micro Hei"
+
+title AcTrail - Container Diagram (C4 Level 2)
+
+LAYOUT_LEFT_RIGHT()
+
+Person(Operator, "运维 / 安全操作员", "初始化配置、启动守护进程、launch 被观测任务、管理插件")
+Person(Analyst, "安全分析师 / 审计员", "查询 trace、核对证据、查看告警与治理决策")
+Person(ObservedAgent, "被观测 LLM Agent", "claude-code、xiaoO、opencode、codex、LangGraph 等真实 Agent 进程树")
+
+System_Ext(LlmProvider, "LLM 提供商", "DeepSeek、Anthropic、OpenAI 兼容等远端模型服务")
+System_Ext(LinuxKernel, "Linux 内核", "eBPF/tracefs、seccomp user-notify、fanotify 内核设施")
+System_Ext(OtelCollector, "OTEL Collector / 可观测后端", "接收语义动作 spans")
+System_Ext(ClusterCenter, "集群上报中心", "接收离线 trace bundle（可选部署）")
+
+System_Boundary(actrail_boundary, "AcTrail") {
+
+    Container(Daemon, "actraild", "Rust 守护进程", "采集编排与治理执行：挂载 eBPF/seccomp/fanotify、进程身份解析、语义动作投影、单事务持久化、WASM 插件宿主、文件/命令/网络策略执行、实时导出")
+
+    Container(TlsSync, "TLS-sync Runtime", "LD_PRELOAD 共享库", "注入被观测进程，捕获 TLS 明文 payload 与连接事件并经 UDS 上报（glibc/musl 双版本，另含 Java JSSE agent）")
+
+    Container(Ctl, "actrailctl", "Rust CLI", "init / launch / track-add / doctor / probe；launch 自任 trace 根进程并注入观测运行时")
+
+    Container(Viewer, "actrailviewer", "Rust CLI", "只读查询存储：traces / events / payloads / actions / diagnostics / export-json / export-otel")
+
+    Container(Web, "actrailweb", "Web 服务（内嵌 Vue SPA）", "trace 可视化（语义 action-tree / waterfall / LLM 导航）、统计与告警、插件管理界面")
+
+    Container(ClusterAgent, "actrailcluster", "Rust CLI（可选部署）", "离线打包 trace bundle（VACUUM 快照 + json_graph）并周期上传到集群中心")
+
+    ContainerDb(Storage, "AcTrail Storage", "SQLite (WAL)", "/var/lib/actrail/actrail.sqlite：事件、payload、语义动作、诊断、墓碑")
+
+    Container(PluginPackages, "Plugin Packages", "WASM 插件包目录（非进程）", "~/.actrail/plugins：otel-jsonl / otel-http / 策略与告警插件（wasm32-wasip2）")
+}
+
+Rel(Operator, Ctl, "init / launch / track-add / plugin", "CLI")
+Rel(Operator, Daemon, "start / stop / restart / status", "CLI")
+Rel(Analyst, Web, "浏览 trace、告警与插件管理", "HTTP 127.0.0.1:18080")
+Rel(Analyst, Viewer, "命令行查询与导出", "CLI")
+
+Rel(Ctl, Daemon, "控制协议（launch / track / plugin load）", "UDS /run/actrail/control.sock")
+Rel(Ctl, ObservedAgent, "spawn 目标命令并注入 TLS-sync runtime、seccomp 规则与 Java agent", "LD_PRELOAD / execve")
+Rel(TlsSync, Daemon, "上报明文 payload 与连接事件", "UDS /run/actrail/tls-sync.sock")
+Rel(Daemon, LinuxKernel, "挂载 eBPF 探针、订阅 seccomp-notify / fanotify 并施加策略", "eBPF / seccomp / fanotify")
+Rel(Daemon, ObservedAgent, "观测进程树真实行为", "eBPF / seccomp / fanotify")
+Rel(ObservedAgent, LlmProvider, "发出 LLM 请求并消费响应", "HTTPS / SSE / HTTP/2")
+
+Rel(Daemon, Storage, "单事务写入（BEGIN IMMEDIATE）", "SQLite")
+Rel(Web, Storage, "只读查询", "SQLite")
+Rel(Web, Daemon, "插件 load / unload 授权", "control socket")
+Rel(Viewer, Storage, "只读查询", "SQLite")
+Rel(ClusterAgent, Storage, "打包快照（VACUUM + json_graph）", "SQLite")
+Rel(ClusterAgent, ClusterCenter, "上传 trace bundle", "HTTP POST /api/v1/trace-bundles")
+Rel(Daemon, PluginPackages, "加载 WASM 插件", "Wasmtime")
+Rel(Daemon, OtelCollector, "导出语义动作", "OTLP /v1/traces (4318)")
+
+note right of Daemon
+  内部聚合 20+ 服务：attach / ingest / payload /
+  enforcement / seccomp_notify / tls_sync /
+  command_control / network_control /
+  semantic_actions / retention / alert / export 等。
+end note
+
+note right of TlsSync
+  以 LD_PRELOAD 注入被观测 Agent 进程内运行：
+  libactrail_tls_payload_probe_sync.so
+  （glibc / musl 双版本）。
+end note
+
+SHOW_LEGEND()
+@enduml

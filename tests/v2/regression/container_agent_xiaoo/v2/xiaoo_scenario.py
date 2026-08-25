@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import select
 import shutil
 import sqlite3
@@ -13,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
@@ -167,7 +169,7 @@ def main() -> int:
     succeeded = False
 
     try:
-        prepare_runtime(runtime, operator_template, config)
+        prepare_runtime(runtime, operator_template, config, actraild)
         prepare_workload_files(workloads)
         test_image = prepare_agent_image(
             runtime,
@@ -189,7 +191,13 @@ def main() -> int:
             write_xiaoo_config(workload.config_path, provider_url)
 
         daemon = start_daemon(actraild, config, daemon_log)
-        wait_for_daemon(actrailctl, config, daemon, args.ready_timeout_seconds)
+        wait_for_daemon(
+            actrailctl,
+            config,
+            daemon,
+            daemon_log,
+            args.ready_timeout_seconds,
+        )
 
         for workload in workloads:
             container = TestContainer(
@@ -280,6 +288,7 @@ def main() -> int:
             trace_by_workload,
             workloads,
         )
+        verify_tls_binary_analysis_cache(daemon_log, config)
 
         succeeded = True
         return 0
@@ -304,7 +313,10 @@ def main() -> int:
         if daemon is not None:
             terminate_process(daemon)
             if not succeeded:
-                print_process_stderr("daemon", daemon)
+                print(
+                    "daemon_log:\n" + daemon_log.read_text(encoding="utf-8"),
+                    file=sys.stderr,
+                )
         for provider in provider_processes:
             terminate_process(provider)
             if not succeeded:
@@ -318,13 +330,39 @@ def main() -> int:
             shutil.rmtree(runtime, ignore_errors=True)
 
 
-def prepare_runtime(runtime: Path, template: Path, config: Path) -> None:
+def prepare_runtime(
+    runtime: Path,
+    template: Path,
+    config: Path,
+    actraild: Path,
+) -> None:
     for child in ("run", "data", "data/export", "log"):
         (runtime / child).mkdir(parents=True, exist_ok=True)
     rendered = template.read_text(encoding="utf-8").replace(RUNTIME_TOKEN, str(runtime))
     if RUNTIME_TOKEN in rendered:
         raise RuntimeError("operator template still contains an unresolved runtime token")
-    config.write_text(rendered, encoding="utf-8")
+    patch = runtime / "operator.patch.toml"
+    patch.write_text(rendered, encoding="utf-8")
+    initialized = subprocess.run(
+        [
+            str(actraild),
+            "--config",
+            str(config),
+            "init",
+            "-f",
+            "--patch",
+            str(patch),
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if initialized.returncode != 0:
+        raise RuntimeError(
+            "failed to initialize refreshed operator config: "
+            f"stdout={initialized.stdout!r} stderr={initialized.stderr!r}"
+        )
 
 
 def prepare_workload_files(workloads: list[Workload]) -> None:
@@ -439,7 +477,7 @@ def start_daemon(
         [str(actraild), "--config", str(config), "run"],
         text=True,
         stdout=log,
-        stderr=subprocess.PIPE,
+        stderr=log,
         start_new_session=True,
     )
 
@@ -448,12 +486,16 @@ def wait_for_daemon(
     actrailctl: Path,
     config: Path,
     daemon: subprocess.Popen[str],
+    daemon_log: Path,
     timeout: float,
 ) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if daemon.poll() is not None:
-            raise RuntimeError(f"actraild exited early: {read_process_stderr(daemon)}")
+            raise RuntimeError(
+                "actraild exited early: "
+                + daemon_log.read_text(encoding="utf-8")
+            )
         result = subprocess.run(
             [str(actrailctl), "--config", str(config), "doctor"],
             text=True,
@@ -873,6 +915,68 @@ def verify_no_cross_trace_llm_actions(
                         f"trace-{trace_id} contains LLM markers owned by container "
                         f"{other.suffix}"
                     )
+
+
+def verify_tls_binary_analysis_cache(daemon_log: Path, config: Path) -> None:
+    with config.open("rb") as stream:
+        capacity = int(
+            tomllib.load(stream)["payload"]["tls"][
+                "binary_analysis_cache_capacity"
+            ]
+        )
+    peer_lookups: list[tuple[str, str, int]] = []
+    seen_peers: set[str] = set()
+    for line in daemon_log.read_text(encoding="utf-8").splitlines():
+        if "TLS binary analysis cache lookup" not in line:
+            continue
+        if diagnostic_field(line, "consumer") != "sync":
+            continue
+        runtime_binary = diagnostic_field(line, "runtime_binary")
+        if runtime_binary is None or Path(runtime_binary).name != "xiaoo":
+            continue
+        probe_binary = diagnostic_field(line, "probe_binary")
+        cache = diagnostic_field(line, "cache")
+        entries = diagnostic_field(line, "cache_entries")
+        if (
+            probe_binary is None
+            or cache not in {"hit", "miss"}
+            or entries is None
+        ):
+            continue
+        peer = re.search(r"^/proc/(\d+)/root/", probe_binary)
+        if peer is None or peer.group(1) in seen_peers:
+            continue
+        seen_peers.add(peer.group(1))
+        entry_count = int(entries)
+        if entry_count > capacity:
+            raise RuntimeError(
+                f"TLS binary analysis cache entries {entry_count} exceed {capacity}"
+            )
+        peer_lookups.append((peer.group(1), cache, entry_count))
+    if len(peer_lookups) < 2:
+        raise RuntimeError(
+            "TLS binary analysis diagnostics lack two xiaoO peer PIDs: "
+            f"{peer_lookups}"
+        )
+    first_peer, second_peer = peer_lookups[:2]
+    if second_peer[1] != "hit":
+        raise RuntimeError(
+            "second xiaoO peer did not reuse binary analysis: "
+            f"first={first_peer} second={second_peer}"
+        )
+    print(
+        "tls_binary_analysis_cache "
+        f"first_peer={first_peer[0]} first={first_peer[1]} "
+        f"second_peer={second_peer[0]} second=hit "
+        f"entries={second_peer[2]} capacity={capacity}"
+    )
+
+
+def diagnostic_field(line: str, name: str) -> str | None:
+    matched = re.search(rf'(?:^|\s){re.escape(name)}=(?:"([^"]*)"|(\S+))', line)
+    if matched is None:
+        return None
+    return matched.group(1) if matched.group(1) is not None else matched.group(2)
 
 
 def inspect_pid_namespace(name: str) -> str:

@@ -2,7 +2,7 @@ use super::*;
 
 use crate::daemon::{
     DEFAULT_MCP_PARSE_BUFFER_MAX_BYTES, DEFAULT_MCP_PENDING_STDIO_CANDIDATE_MAX_ENTRIES,
-    DEFAULT_MCP_STDIO_CANDIDATE_MAX_BYTES,
+    DEFAULT_MCP_STDIO_CANDIDATE_MAX_BYTES, DEFAULT_TLS_BINARY_ANALYSIS_CACHE_CAPACITY,
 };
 use payload_capability::DEFAULT_TLS_SYNC_FLOW_UNKNOWN_STREAM_BYTES;
 
@@ -128,6 +128,7 @@ pub(super) struct PayloadTlsDocument {
     pub sync_event_socket_path: String,
     pub sync_socket_mode_octal: String,
     pub sync_match_limit: u32,
+    pub binary_analysis_cache_capacity: u32,
     pub dynamic_exec_plan_timeout_ms: u64,
     pub sync_flow_control_enabled: bool,
     pub sync_flow_sniff_bytes: u32,
@@ -164,6 +165,7 @@ impl Default for PayloadTlsDocument {
             sync_event_socket_path: "/run/actrail/tls-sync.sock".to_string(),
             sync_socket_mode_octal: "660".to_string(),
             sync_match_limit: 8,
+            binary_analysis_cache_capacity: DEFAULT_TLS_BINARY_ANALYSIS_CACHE_CAPACITY,
             dynamic_exec_plan_timeout_ms: DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS,
             sync_flow_control_enabled: true,
             sync_flow_sniff_bytes: 65536,
@@ -206,6 +208,7 @@ impl PayloadTlsDocument {
             sync_event_socket_path: config.sync_event_socket_path.display().to_string(),
             sync_socket_mode_octal: format!("{:o}", config.sync_socket_mode),
             sync_match_limit: config.sync_match_limit,
+            binary_analysis_cache_capacity: config.binary_analysis_cache_capacity,
             dynamic_exec_plan_timeout_ms: config.dynamic_exec_plan_timeout_ms,
             sync_flow_control_enabled: config.sync_flow_control_enabled,
             sync_flow_sniff_bytes: config.sync_flow_sniff_bytes,
@@ -262,6 +265,10 @@ impl PayloadTlsDocument {
             sync_match_limit: require_positive_u32(
                 "payload.tls.sync_match_limit",
                 self.sync_match_limit,
+            )?,
+            binary_analysis_cache_capacity: require_positive_u32(
+                "payload.tls.binary_analysis_cache_capacity",
+                self.binary_analysis_cache_capacity,
             )?,
             dynamic_exec_plan_timeout_ms: require_positive_u64(
                 "payload.tls.dynamic_exec_plan_timeout_ms",

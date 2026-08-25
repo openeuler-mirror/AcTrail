@@ -14,33 +14,12 @@ REPO = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(REPO))
 
 from tests.v2.common.kata_runtime import (  # noqa: E402
+    REQUIRED_EBPF_KERNEL_CONFIG,
+    REQUIRED_FIRECRACKER_KERNEL_CONFIG,
+    REQUIRED_VIRTIO_FS_KERNEL_CONFIG,
+    discover_kernel_config,
     load_hypervisor_table,
     supported_backends,
-)
-
-REQUIRED_VIRTIO_FS_KERNEL_CONFIG = (
-    "CONFIG_FUSE_FS=y",
-    "CONFIG_VIRTIO_FS=y",
-    "CONFIG_VIRTIO_MMIO=y",
-    "CONFIG_VSOCKETS=y",
-    "CONFIG_VIRTIO_VSOCKETS=y",
-    "CONFIG_VIRTIO_VSOCKETS_COMMON=y",
-)
-REQUIRED_EBPF_KERNEL_CONFIG = (
-    "CONFIG_BPF=y",
-    "CONFIG_BPF_SYSCALL=y",
-    "CONFIG_BPF_JIT=y",
-    "CONFIG_BPF_EVENTS=y",
-    "CONFIG_DEBUG_INFO_BTF=y",
-    "CONFIG_FTRACE=y",
-    "CONFIG_FTRACE_SYSCALLS=y",
-    "CONFIG_KPROBES=y",
-    "CONFIG_KPROBE_EVENTS=y",
-    "CONFIG_PERF_EVENTS=y",
-    "CONFIG_TRACEPOINTS=y",
-    "CONFIG_TRACING=y",
-    "CONFIG_UPROBES=y",
-    "CONFIG_UPROBE_EVENTS=y",
 )
 
 
@@ -53,24 +32,6 @@ def nonempty_path(table: Dict[str, Any], key: str) -> Optional[Path]:
     if not isinstance(value, str) or not value.strip():
         return None
     return Path(value)
-
-
-def discover_kernel_config(kernel: Path) -> Optional[Path]:
-    candidates = [Path(f"{kernel}.config")]
-    try:
-        resolved = kernel.resolve(strict=True)
-    except OSError:
-        resolved = kernel
-    for prefix in ("vmlinux-", "vmlinuz-"):
-        if resolved.name.startswith(prefix):
-            candidates.append(
-                resolved.with_name(f"config-{resolved.name[len(prefix):]}")
-            )
-            break
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate
-    return None
 
 
 def main() -> int:
@@ -88,7 +49,7 @@ def main() -> int:
     parser.add_argument(
         "--require-kernel-config",
         action="store_true",
-        help="reject a virtio-fs configuration without a readable .config",
+        help="reject requested backend checks without a readable guest .config",
     )
     parser.add_argument(
         "--require-ebpf",
@@ -161,6 +122,7 @@ def main() -> int:
         args.require_kernel_config
         or args.require_ebpf
         or (uses_virtio_fs and kernel_config is not None)
+        or (args.backend == "firecracker" and kernel_config is not None)
     )
     if must_check_kernel:
         if kernel_config is None:
@@ -214,6 +176,14 @@ def main() -> int:
                         "guest kernel config is missing: "
                         f"{expected_line} ({kernel_config})"
                     )
+
+    if args.backend == "firecracker" and configured_lines is not None:
+        for expected_line in REQUIRED_FIRECRACKER_KERNEL_CONFIG:
+            if expected_line not in configured_lines:
+                errors.append(
+                    "guest Firecracker kernel config is missing: "
+                    f"{expected_line} ({kernel_config})"
+                )
 
     if args.require_ebpf and configured_lines is not None:
         for expected_line in REQUIRED_EBPF_KERNEL_CONFIG:

@@ -100,6 +100,21 @@ impl PluginManifest {
             .and_then(|role| role.resources.queue_capacity)
     }
 
+    pub fn sandbox_observation_queue_capacity(&self) -> Option<u32> {
+        self.role
+            .sandbox_observation_consumer
+            .as_ref()
+            .and_then(|role| role.resources.queue_capacity)
+    }
+
+    pub fn sandbox_observation_kinds(&self) -> &[super::PluginSandboxObservationKind] {
+        self.role
+            .sandbox_observation_consumer
+            .as_ref()
+            .map(|role| role.subscriptions.observation_kinds.as_slice())
+            .unwrap_or_default()
+    }
+
     pub fn control_decision_concurrency_limit(&self) -> Option<u32> {
         self.role
             .control_decider
@@ -164,6 +179,12 @@ impl PluginManifest {
     fn validate_role_sections(&self) -> Result<(), String> {
         match self.role() {
             PluginPurpose::ObservationConsumer => {
+                if self.role.sandbox_observation_consumer.is_some() {
+                    return Err(
+                        "role.sandbox-observation-consumer is unused when general.role = \"observation-consumer\""
+                            .to_string(),
+                    );
+                }
                 if self.role.control_decider.is_some() {
                     return Err(
                         "role.control-decider is unused when general.role = \"observation-consumer\""
@@ -218,8 +239,59 @@ impl PluginManifest {
                     }
                 }
             }
+            PluginPurpose::SandboxObservationConsumer => {
+                if self.role.observation_consumer.is_some() || self.role.control_decider.is_some() {
+                    return Err(
+                        "sandbox-observation-consumer cannot declare brain-side role sections"
+                            .to_string(),
+                    );
+                }
+                if self.runtime_kind() != PluginRuntimeKind::Builtin {
+                    return Err(
+                        "sandbox-observation-consumer currently requires runtime = \"builtin\""
+                            .to_string(),
+                    );
+                }
+                let role = self.role.sandbox_observation_consumer.as_ref().ok_or_else(|| {
+                    "general.role = \"sandbox-observation-consumer\" requires [role.sandbox-observation-consumer]"
+                        .to_string()
+                })?;
+                if role.subscriptions.observation_kinds.is_empty() {
+                    return Err("sandbox observation subscriptions must not be empty".to_string());
+                }
+                let unique = role
+                    .subscriptions
+                    .observation_kinds
+                    .iter()
+                    .collect::<BTreeSet<_>>();
+                if unique.len() != role.subscriptions.observation_kinds.len() {
+                    return Err(
+                        "sandbox observation subscriptions must not contain duplicates".to_string(),
+                    );
+                }
+            }
+            PluginPurpose::AlertConsumer => {
+                if self.role.observation_consumer.is_some()
+                    || self.role.sandbox_observation_consumer.is_some()
+                    || self.role.control_decider.is_some()
+                {
+                    return Err(
+                        "alert-consumer plugins cannot declare unrelated role sections".to_string(),
+                    );
+                }
+                if self.runtime_kind() != PluginRuntimeKind::Builtin {
+                    return Err("alert-consumer plugins must use builtin runtime".to_string());
+                }
+                if !self.capabilities().is_empty() {
+                    return Err(
+                        "alert-consumer plugins must not request host capabilities".to_string()
+                    );
+                }
+            }
             PluginPurpose::ControlDecider => {
-                if self.role.observation_consumer.is_some() {
+                if self.role.observation_consumer.is_some()
+                    || self.role.sandbox_observation_consumer.is_some()
+                {
                     return Err(
                         "role.observation-consumer is unused when general.role = \"control-decider\""
                             .to_string(),
@@ -227,7 +299,9 @@ impl PluginManifest {
                 }
             }
             PluginPurpose::LlmCodec => {
-                if self.role.observation_consumer.is_some() {
+                if self.role.observation_consumer.is_some()
+                    || self.role.sandbox_observation_consumer.is_some()
+                {
                     return Err(
                         "role.observation-consumer is unused when general.role = \"llm-codec\""
                             .to_string(),
@@ -304,6 +378,10 @@ impl PluginManifest {
         validate_positive_u32(
             self.observation_queue_capacity(),
             "role.observation-consumer.resources.queue_capacity",
+        )?;
+        validate_positive_u32(
+            self.sandbox_observation_queue_capacity(),
+            "role.sandbox-observation-consumer.resources.queue_capacity",
         )?;
         for (value, field) in [
             (

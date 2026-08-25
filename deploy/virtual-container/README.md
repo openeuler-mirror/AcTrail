@@ -142,9 +142,8 @@ sudo -E env "PATH=$PATH" \
 ```
 
 Cloud Hypervisor 使用 Kata 3.32 的 `configuration-clh.toml`，并为 data Profile
-提供带 BTF/eBPF 的 guest kernel。准备器只扩展复制后的 Cloud Hypervisor guest
-image 和 ext4 rootfs 128 MiB，为 AcTrail bundle 与运行数据保留空间，不修改 source
-image：
+提供带 BTF/eBPF 的 guest kernel。准备器会为三种 backend 的复制后 guest image 和
+ext4 rootfs 扩展 128 MiB，为 AcTrail bundle 与运行数据保留空间，不修改 source image：
 
 ```bash
 sudo -E env "PATH=$PATH" \
@@ -155,6 +154,38 @@ sudo -E env "PATH=$PATH" \
     --data-kernel /path/to/vmlinux-debug.container \
     --xiaoo /path/to/xiaoo
 ```
+
+Firecracker 不提供 Kata virtiofs 共享目录，因此准备阶段必须提供 containerd
+`ctr images export` 生成的单平台 combined Docker/OCI archive。该 archive 必须保留
+`manifest.json`（不要使用 `--skip-manifest-json`）、content-addressed `LayerSources`，且
+layer 必须是未压缩 OCI tar；旧式 `<layer-id>/layer.tar` 的 `docker save` archive 不在
+当前支持范围内。例如先从 containerd 导出当前宿主平台的基础 workload image：
+
+```bash
+sudo ctr -n default images export \
+  --platform "linux/$(uname -m | sed 's/aarch64/arm64/;s/x86_64/amd64/')" \
+  /absolute/path/to/workload.docker.tar \
+  docker.io/library/actrail-openeuler-workload:24.09
+```
+
+准备器会校验基础镜像引用、平台和 layer/diffID，再追加一个固定哈希的 `xiaoo` layer，
+并生成只供该 artifact 使用的新 image reference。运行时只通过 `ctr exec` 传输小型脚本
+与配置，不再传输整个 xiaoO 二进制：
+
+```bash
+sudo -E env "PATH=$PATH" \
+  python3 deploy/virtual-container/host/prepare-v2-test-artifacts.py \
+    --backend firecracker \
+    --data-kernel /path/to/vmlinux-debug.container \
+    --with-sandbox-observer \
+    --xiaoo /path/to/xiaoo \
+    --workload-image-archive /path/to/workload.docker.tar
+```
+
+这里的 devmapper 是当前 Kata 3.32 Firecracker 路径用来把 workload rootfs 提供为块设备
+的 containerd snapshotter，不是 Firecracker VMM 本身的硬性依赖。当前配置没有
+virtiofs，所以不能直接换成 overlayfs；Cloud Hypervisor 与 StratoVirt 则通过 virtiofs
+共享 workload 文件。
 
 将 `/path/to/...` 替换为当前机器上的实际绝对路径。
 

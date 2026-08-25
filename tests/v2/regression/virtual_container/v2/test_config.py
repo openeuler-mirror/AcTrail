@@ -49,6 +49,19 @@ class VirtualContainerConfigTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "must not contain duplicates"):
                 VirtualContainerConfig.from_environment(inputs)
 
+    def test_rejects_firecracker_without_shared_filesystem_support(self) -> None:
+        inputs = TestCaseInputs(Path("/repo"), Path("/bin"), Path("/work"))
+        with patch.dict(
+            "os.environ",
+            {"VIRTUAL_CONTAINER_E2E_BACKENDS": "firecracker"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "unsupported virtual-container backend.*firecracker",
+            ):
+                VirtualContainerConfig.from_environment(inputs)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,70 @@
+@startuml
+!include <C4/C4_Deployment>
+
+skinparam defaultFontName "WenQuanYi Micro Hei"
+
+title AcTrail - Deployment Diagram (Default: Agent in MicroVM)
+
+LAYOUT_LEFT_RIGHT()
+
+Person(Operator, "运维 / 安全操作员", "创建与销毁 MicroVM、launch 被观测任务、管理插件")
+Person(Analyst, "安全分析师 / 审计员", "查询 trace、核对证据、查看告警与治理决策")
+
+Deployment_Node(control_plane, "控制面 Control Plane", "调度 · 镜像管理 · 生命周期 · 配额 · 健康检查") {
+    Container(CP, "Agent 生命周期管理", "平台组件", "创建 / 销毁 / 迁移 MicroVM 实例")
+}
+
+Deployment_Node(host, "物理宿主机 Host", "Linux") {
+
+    Deployment_Node(vms, "MicroVM 实例 · 每 Agent 独占一台", "独立内核 · vCPU / 内存 / 块设备") {
+
+        Deployment_Node(vm, "MicroVM #N", "Guest Kernel（独立内核）") {
+
+            Container(Daemon, "actraild", "内置观测探针（Rust daemon）", "进程 / 文件 / 网络 / TLS 明文 / LLM 采集、语义投影、治理执行、本地存储")
+
+            Container(Ctl, "actrailctl", "Rust CLI", "launch 被观测任务并注入 TLS-sync 探针；track / doctor / probe")
+
+            Container(Agent, "Agent 进程树", "claude-code / xiaoO / opencode / codex 等", "Agent 运行时 · 工具 · 文件系统，在 VM 内直接操作")
+
+            Container(TlsSync, "TLS-sync Runtime", "LD_PRELOAD 共享库", "注入 Agent 进程，捕获 TLS 明文 payload 并经 UDS 上报")
+
+            ContainerDb(Storage, "AcTrail Storage", "SQLite (WAL)", "Guest 本地存储：事件、payload、语义动作、诊断")
+        }
+    }
+
+    Container(Vmm, "VMM 进程", "Firecracker（主线）/ Cloud Hypervisor（可选）", "宿主用户态进程，承载 MicroVM")
+
+    Container(HostKernel, "宿主内核 Host Kernel", "KVM 硬件虚拟化", "隔离边界：Guest 内核与宿主内核完全隔离")
+
+    Container(Jailer, "jailer / cgroup", "资源硬约束", "约束 VMM 与每 VM 的 CPU / 内存 / 磁盘 / 网络速率")
+}
+
+Deployment_Node(analysis, "分析端（宿主侧）", "安全运营工作站") {
+    Container(Web, "actrailweb", "Web 服务 + 内嵌 Vue SPA", "trace 可视化、统计与告警、插件管理")
+    Container(Viewer, "actrailviewer", "Rust CLI", "只读查询与导出（export-json / export-otel）")
+}
+
+System_Ext(LlmProvider, "LLM 提供商", "DeepSeek、Anthropic、OpenAI 兼容等远端模型服务")
+System_Ext(OtelCollector, "OTEL Collector / 可观测后端", "汇聚跨 sandbox 的语义动作 spans")
+
+Rel(CP, vm, "创建 / 销毁 / 迁移", "virtio")
+Rel(vm, Vmm, "virtio 设备访问")
+Rel(Vmm, HostKernel, "/dev/kvm")
+Rel(Jailer, Vmm, "约束 VMM 与每 VM 资源")
+
+Rel(Operator, CP, "编排 MicroVM 生命周期", "控制面")
+Rel(Operator, Ctl, "launch 被观测任务 / 管理插件", "CLI")
+Rel(Ctl, Daemon, "控制协议（launch / track / plugin load）", "UDS")
+Rel(Ctl, Agent, "spawn 目标命令并注入 TLS-sync runtime", "LD_PRELOAD / execve")
+Rel(TlsSync, Daemon, "上报明文 payload 与连接事件", "UDS")
+Rel(Daemon, Storage, "单事务写入（BEGIN IMMEDIATE）", "SQLite")
+Rel(Agent, LlmProvider, "发出 LLM 请求并消费响应", "HTTPS / SSE / HTTP/2")
+Rel(Daemon, OtelCollector, "导出语义动作（跨 sandbox 保留 / 集中观测）", "OTLP")
+
+Rel(Analyst, Web, "浏览 trace、告警与插件管理", "HTTP")
+Rel(Analyst, Viewer, "命令行查询与导出", "CLI")
+Rel(Web, OtelCollector, "读取汇聚后的观测数据", "OTLP / 查询")
+Rel(Viewer, OtelCollector, "读取汇聚后的观测数据", "OTLP / 查询")
+
+SHOW_LEGEND()
+@enduml

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copy a partitioned Kata rootfs image and inject the AcTrail guest service.
-set -euo pipefail
+set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=otel-endpoint.sh
@@ -13,10 +13,12 @@ OTEL_ENDPOINT_CONFIGURED="false"
 EGRESS_MODE="network"
 STARTUP_DEPENDENCY="optional"
 WITH_VIEWER=0
+WITH_SANDBOX_OBSERVER=0
 SOCKET_GID=39000
 GROW_MIB=0
 LOOP_DEVICE=""
 MOUNT_DIR=""
+IMAGE_INJECTION_STAGE="initialization"
 
 usage() {
   cat <<'EOF'
@@ -27,6 +29,7 @@ Options:
   --egress-mode MODE           Export path: network or vsock-bridge (default: network)
   --startup-dependency POLICY  optional or required (default: optional)
   --with-viewer                Also install actrailviewer into the guest image
+  --with-sandbox-observer      Install actrail-sb as a Guest system service
   --socket-gid GID             Numeric GID shared with workloads (default: 39000)
   --grow-mib N                 Grow the copied image and ext4 rootfs by N MiB
   -h, --help                   Show this help
@@ -48,6 +51,22 @@ fail() {
   echo "FAIL: $*" >&2
   exit 1
 }
+
+image_injection_stage() {
+  IMAGE_INJECTION_STAGE="$1"
+  echo "image_injection_stage=$IMAGE_INJECTION_STAGE"
+}
+
+report_unexpected_error() {
+  local rc="$1"
+  local line="$2"
+  local command="$3"
+  trap - ERR
+  echo "FAIL: guest image injection failed: stage=$IMAGE_INJECTION_STAGE line=$line exit=$rc command=$command" >&2
+  return "$rc"
+}
+
+trap 'report_unexpected_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
@@ -83,6 +102,10 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --with-viewer)
       WITH_VIEWER=1
+      shift
+      ;;
+    --with-sandbox-observer)
+      WITH_SANDBOX_OBSERVER=1
       shift
       ;;
     --socket-gid)
@@ -165,12 +188,16 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+image_injection_stage copy-image
 cp --reflink=auto --sparse=always "$SOURCE_IMAGE" "$OUTPUT_IMAGE"
 if (( GROW_MIB > 0 )); then
+  image_injection_stage grow-image-file
   truncate -s "+${GROW_MIB}M" "$OUTPUT_IMAGE"
 fi
+image_injection_stage attach-loop-device
 LOOP_DEVICE="$("${sudo_cmd[@]}" losetup --find --show --partscan "$OUTPUT_IMAGE")"
 
+image_injection_stage discover-rootfs-partition
 partition="$LOOP_DEVICE"
 for _ in $(seq 1 50); do
   if [[ -b "${LOOP_DEVICE}p1" ]]; then
@@ -181,22 +208,29 @@ for _ in $(seq 1 50); do
 done
 
 if (( GROW_MIB > 0 )); then
+  image_injection_stage refresh-loop-capacity
   "${sudo_cmd[@]}" losetup -c "$LOOP_DEVICE"
   if [[ "$partition" != "$LOOP_DEVICE" ]]; then
+    image_injection_stage resize-partition
     "${sudo_cmd[@]}" parted --fix --script "$LOOP_DEVICE" \
       resizepart 1 100%
+    image_injection_stage probe-partition
     "${sudo_cmd[@]}" partprobe "$LOOP_DEVICE"
   fi
+  image_injection_stage check-filesystem
   set +e
   "${sudo_cmd[@]}" e2fsck -fy "$partition"
   e2fsck_rc=$?
   set -e
   (( e2fsck_rc <= 1 )) \
     || fail "e2fsck failed before rootfs growth: exit=$e2fsck_rc"
+  image_injection_stage grow-filesystem
   "${sudo_cmd[@]}" resize2fs "$partition"
 fi
 
+image_injection_stage create-mount-directory
 MOUNT_DIR="$(mktemp -d /tmp/actrail-kata-rootfs.XXXXXX)"
+image_injection_stage mount-rootfs
 "${sudo_cmd[@]}" mount -o rw "$partition" "$MOUNT_DIR"
 
 install_args=(
@@ -212,6 +246,10 @@ fi
 if [[ "$WITH_VIEWER" == "1" ]]; then
   install_args+=(--with-viewer)
 fi
+if [[ "$WITH_SANDBOX_OBSERVER" == "1" ]]; then
+  install_args+=(--with-sandbox-observer)
+fi
+image_injection_stage install-rootfs
 "${sudo_cmd[@]}" "$SCRIPT_DIR/install-rootfs.sh" "${install_args[@]}"
 verify_args=(
   --rootfs "$MOUNT_DIR"
@@ -222,11 +260,19 @@ verify_args=(
 if [[ -n "$OTEL_ENDPOINT" ]]; then
   verify_args+=(--otel-endpoint "$OTEL_ENDPOINT")
 fi
+if [[ "$WITH_SANDBOX_OBSERVER" == "1" ]]; then
+  verify_args+=(--with-sandbox-observer)
+fi
+image_injection_stage verify-rootfs
 "${sudo_cmd[@]}" "$SCRIPT_DIR/verify-rootfs.sh" "${verify_args[@]}"
+image_injection_stage sync-rootfs
 sync
+image_injection_stage unmount-rootfs
 "${sudo_cmd[@]}" umount "$MOUNT_DIR"
+image_injection_stage detach-loop-device
 "${sudo_cmd[@]}" losetup -d "$LOOP_DEVICE"
 LOOP_DEVICE=""
+image_injection_stage remove-mount-directory
 rmdir "$MOUNT_DIR"
 MOUNT_DIR=""
 trap - EXIT INT TERM
@@ -238,4 +284,5 @@ echo "guest_startup_dependency=$STARTUP_DEPENDENCY"
 echo "guest_egress_mode=$EGRESS_MODE"
 echo "workload_socket_gid=$SOCKET_GID"
 echo "image_grow_mib=$GROW_MIB"
+echo "sandbox_observer_installed=$WITH_SANDBOX_OBSERVER"
 echo "otel_endpoint_configured=$OTEL_ENDPOINT_CONFIGURED"

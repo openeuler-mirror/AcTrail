@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -76,17 +77,107 @@ class VmmConfigPreparerTest(unittest.TestCase):
                 self.assertIn("debug_console_enabled = true", generated)
                 self.assertIn(f"backend={backend}", result.stdout)
 
+    def test_generates_firecracker_config_without_virtiofsd(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="actrail-vmm-config."
+        ) as raw_dir:
+            root = Path(raw_dir)
+            prefix = root / "kata"
+            defaults = prefix / "share/defaults/kata-containers"
+            defaults.mkdir(parents=True)
+            (prefix / "VERSION").write_text("3.32.0\n", encoding="utf-8")
+            (defaults / "configuration-fc.toml").write_text(
+                _source_config("firecracker", with_virtiofsd=False),
+                encoding="utf-8",
+            )
+            hypervisor = _executable(root / "firecracker")
+            jailer_target = _executable(root / "versioned-jailer")
+            jailer = root / "jailer"
+            jailer.symlink_to(jailer_target)
+            resolved_jailer = jailer_target.resolve()
+            kernel = _file(root / "vmlinux.container")
+            image = _file(root / "image")
+            published_image = root / "published/image"
+            output = root / "candidate.toml"
 
-def _source_config(section: str) -> str:
-    return (
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(CONFIGURATOR),
+                    "--backend",
+                    "firecracker",
+                    "--kata-prefix",
+                    str(prefix),
+                    "--output",
+                    str(output),
+                    "--hypervisor",
+                    str(hypervisor),
+                    "--jailer",
+                    str(jailer),
+                    "--kernel",
+                    str(kernel),
+                    "--image",
+                    str(image),
+                    "--image-config-path",
+                    str(published_image),
+                    "--default-vcpus",
+                    "2",
+                    "--debug",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            generated = output.read_text(encoding="utf-8")
+            parsed = tomllib.loads(generated)
+
+        self.assertIn("[hypervisor.firecracker]", generated)
+        self.assertIn(f'path = "{hypervisor}"', generated)
+        self.assertIn(f'jailer_path = "{resolved_jailer}"', generated)
+        self.assertIn(
+            f'valid_jailer_paths = ["{resolved_jailer}"]',
+            generated,
+        )
+        firecracker = parsed["hypervisor"]["firecracker"]
+        self.assertEqual(firecracker["jailer_path"], str(resolved_jailer))
+        self.assertEqual(
+            firecracker["valid_jailer_paths"],
+            [str(resolved_jailer)],
+        )
+        self.assertIn(f'kernel = "{kernel}"', generated)
+        self.assertIn(f'image = "{published_image}"', generated)
+        self.assertNotIn("virtio_fs_daemon", generated)
+        self.assertNotIn("valid_virtio_fs_daemon_paths", generated)
+        self.assertIn("default_vcpus = 2", generated)
+        self.assertIn("debug_console_enabled = true", generated)
+        self.assertIn("KATA_FIRECRACKER_CONFIG_READY", result.stdout)
+        self.assertIn(f"jailer={resolved_jailer}", result.stdout)
+        self.assertIn("virtiofsd=not-configured", result.stdout)
+
+
+def _source_config(section: str, *, with_virtiofsd: bool = True) -> str:
+    hypervisor = (
         f"[hypervisor.{section}]\n"
         'path = "/old/vmm"\n'
         'kernel = "/old/kernel"\n'
         'image = "/old/image"\n'
         'valid_hypervisor_paths = ["/old/vmm"]\n'
-        'virtio_fs_daemon = "/old/virtiofsd"\n'
-        'valid_virtio_fs_daemon_paths = ["/old/virtiofsd"]\n'
-        "default_vcpus = 1\n"
+    )
+    if with_virtiofsd:
+        hypervisor += (
+            'virtio_fs_daemon = "/old/virtiofsd"\n'
+            'valid_virtio_fs_daemon_paths = ["/old/virtiofsd"]\n'
+        )
+    if section == "firecracker":
+        hypervisor += (
+            'jailer_path = "/old/jailer"\n'
+            'valid_jailer_paths = ["/old/jailer"]\n'
+        )
+    return (
+        hypervisor
+        + "default_vcpus = 1\n"
         "enable_debug = false\n"
         "[agent.kata]\n"
         "enable_debug = false\n"

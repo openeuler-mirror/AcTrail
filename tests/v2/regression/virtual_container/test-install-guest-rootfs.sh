@@ -199,4 +199,60 @@ LD_LIBRARY_PATH="$BUNDLE_DIR/lib" \
 [[ ! -e "$rootfs/etc/actrail/plugins/otel-http/otel-http.config.toml" ]] \
   || fail "local-only reinstall retained exporter config"
 
+# Execution-isolation images install the sandbox observer into the Guest
+# system. The public installer/verifier pair owns the complete contract so
+# every Kata VMM receives the same service topology.
+"$INSTALLER" \
+  --rootfs "$rootfs" \
+  --bundle "$BUNDLE_DIR" \
+  --startup-dependency optional \
+  --with-sandbox-observer
+"$VERIFIER" \
+  --rootfs "$rootfs" \
+  --startup-dependency optional \
+  --with-sandbox-observer
+grep -Fq -- '/dev/actrail/sandbox-observer.ready' \
+  "$rootfs/usr/lib/systemd/system/actrail-sb.service" \
+  || fail "sandbox observer does not publish workload-visible readiness"
+grep -Fqx -- \
+  'socket_path = "/dev/actrail/sandbox-observer-control.sock"' \
+  "$rootfs/etc/actrail/sandbox-observer.toml" \
+  || fail "sandbox observer does not publish its control socket through /dev/actrail"
+grep -Fq -- '/dev/actrail/sandbox-observer-control.sock' \
+  "$rootfs/usr/lib/systemd/system/actrail-sb-connect.service" \
+  || fail "sandbox observer connect unit does not use the published control socket"
+grep -Fqx -- 'WantedBy=multi-user.target kata-containers.target' \
+  "$rootfs/usr/lib/systemd/system/actrail-sb-connect.service" \
+  || fail "sandbox observer connect unit cannot be enabled for production"
+for target in kata-containers.target multi-user.target; do
+  connect_link="$rootfs/usr/lib/systemd/system/$target.wants/actrail-sb-connect.service"
+  [[ ! -e "$connect_link" && ! -L "$connect_link" ]] \
+    || fail "sandbox observer auto-connect is enabled before case orchestration: $connect_link"
+done
+[[ ! -e "$rootfs/usr/lib/systemd/system/kata-agent.service.d/30-actrail-sandbox-observer.conf" ]] \
+  || fail "sandbox observer still changes kata-agent startup ordering"
+
+# Reinstalling the normal image profile must remove the observer topology
+# symmetrically rather than leaving a stale root service behind.
+"$INSTALLER" \
+  --rootfs "$rootfs" \
+  --bundle "$BUNDLE_DIR" \
+  --startup-dependency optional
+for observer_path in \
+  /usr/local/bin/actrail-sb \
+  /etc/actrail/sandbox-observer.toml \
+  /usr/lib/systemd/system/actrail-sb.service \
+  /usr/lib/systemd/system/actrail-sb-connect.service \
+  /usr/lib/systemd/system/kata-agent.service.d/30-actrail-sandbox-observer.conf \
+  /usr/lib/systemd/system/kata-containers.target.wants/actrail-sb.service \
+  /usr/lib/systemd/system/kata-containers.target.wants/actrail-sb-connect.service \
+  /usr/lib/systemd/system/multi-user.target.wants/actrail-sb.service \
+  /usr/lib/systemd/system/multi-user.target.wants/actrail-sb-connect.service; do
+  [[ ! -e "$rootfs$observer_path" && ! -L "$rootfs$observer_path" ]] \
+    || fail "default reinstall retained sandbox observer path: $observer_path"
+done
+"$VERIFIER" \
+  --rootfs "$rootfs" \
+  --startup-dependency optional
+
 echo "PASS: guest rootfs installer"

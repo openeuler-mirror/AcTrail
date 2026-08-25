@@ -135,8 +135,14 @@
                   @updated="refreshPlugins"
                 />
                 <div class="plugin-lifecycle-control">
-                  <span class="plugin-runtime-state active"><i aria-hidden="true"></i>Active</span>
+                  <span
+                    class="plugin-runtime-state"
+                    :class="{ active: plugin.state === 'active' }"
+                  >
+                    <i aria-hidden="true"></i>{{ runtimeStateLabel(plugin.state) }}
+                  </span>
                   <button
+                    v-if="canUnload(plugin)"
                     class="plugin-lifecycle-action danger"
                     type="button"
                     :disabled="loading || unloadingInstances[plugin.instance_id]"
@@ -508,12 +514,27 @@ function payloadReadText(plugin) {
   return `${metrics.calls ?? 0} calls, ${metrics.bytes ?? 0} bytes, ${metrics.truncated ?? 0} truncated`;
 }
 
+function runtimeStateLabel(state) {
+  if (state === 'active') return 'Active';
+  if (state === 'draining') return 'Draining';
+  if (state === 'stopped') return 'Stopped';
+  if (state === 'failed') return 'Failed';
+  return state ?? 'Unknown';
+}
+
+function canUnload(plugin) {
+  return plugin.purpose !== 'alert-consumer';
+}
+
 function purposeLabel(purpose) {
   if (purpose === 'observation-consumer') {
     return 'observer';
   }
   if (purpose === 'control-decider') {
     return 'controller';
+  }
+  if (purpose === 'alert-consumer') {
+    return 'alert forwarding';
   }
   return purpose ?? 'unknown';
 }

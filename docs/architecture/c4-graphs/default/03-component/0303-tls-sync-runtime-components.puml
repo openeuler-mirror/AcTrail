@@ -1,0 +1,35 @@
+@startuml
+!include <C4/C4_Component>
+
+skinparam defaultFontName "WenQuanYi Micro Hei"
+
+title TLS-sync Runtime - Component Diagram (Default)
+
+LAYOUT_LEFT_RIGHT()
+
+Person(ObservedAgent, "被观测 Agent 进程", "claude-code / xiaoO / opencode 等")
+Container_Ext(Daemon, "actraild", "Rust daemon", "TLS Sync Service")
+
+Container_Boundary(tls_runtime, "TLS-sync Runtime (LD_PRELOAD)") {
+
+    Component(Probes, "TLS Probe Points", "tls_payload_core / tls_probe_point_finder", "SSL_write / SSL_read 探针点（按运行时解析）")
+
+    Component(Capture, "Payload Capture", "tls_payload_probe_sync", "捕获双向明文 payload 与连接生命周期")
+
+    Component(Encoder, "Event Encoder", "tls_payload_sync::event", "SyncEvent v2 行协议：payload / decision / summary")
+
+    Component(Client, "EventClient", "tls_payload_sync::runtime", "经 UDS 上报事件")
+
+    Component(JavaBridge, "Java Agent Bridge", "actrail-java-payload-agent.jar", "JSSE 明文捕获（JVM workload）")
+}
+
+Rel(ObservedAgent, Probes, "注入进程内观测 TLS 数据", "LD_PRELOAD")
+Rel(ObservedAgent, JavaBridge, "JVM TLS 数据（JSSE instrumentation）", "javaagent")
+Rel(Probes, Capture, "明文片段")
+Rel(Capture, Encoder, "payload / 连接事件")
+Rel(Encoder, Client, "SyncEvent")
+Rel(Client, Daemon, "上报", "UDS /run/actrail/tls-sync.sock")
+Rel(JavaBridge, Daemon, "JSSE 事件上报", "UDS")
+
+SHOW_LEGEND()
+@enduml

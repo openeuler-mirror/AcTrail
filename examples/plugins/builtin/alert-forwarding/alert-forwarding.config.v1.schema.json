@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actrail.local/schemas/alert-forwarding.config.v1.schema.json",
+  "title": "AcTrail alert forwarding configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["enabled", "all_categories", "categories"],
+  "properties": {
+    "enabled": {
+      "description": "Request forwarding only when the daemon has a live alert-proxy connection.",
+      "type": "boolean"
+    },
+    "all_categories": {
+      "description": "Forward every stored alert category. Categories must be empty when enabled.",
+      "type": "boolean"
+    },
+    "categories": {
+      "description": "Exact AlertDefinition.kind values selected for forwarding.",
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
+      }
+    }
+  }
+}

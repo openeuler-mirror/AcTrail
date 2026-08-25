@@ -1,11 +1,14 @@
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use memmap2::{Mmap, MmapOptions};
 
 use crate::binary_identity::{BinaryIdentity, BinaryIdentityRegion, BinaryIdentityResolver};
 use crate::{ToolError, ToolResult};
 
+use super::analysis_cache::{BinaryAnalysisCache, BinaryAnalysisKey};
 use super::constants::*;
 use super::raw::{
     bounded, bounded_usize, checked_table_offset, hex_bytes, read_u16, read_u32, read_u64,
@@ -41,12 +44,14 @@ pub(crate) struct ElfImage {
     pub(super) data: Mmap,
     pub(super) arch: Arch,
     pub(super) identity: BinaryIdentity,
+    pub(super) analysis_key: BinaryAnalysisKey,
     pub(super) has_interpreter: bool,
     pub(super) load_segments: Vec<LoadSegment>,
     pub(super) dynamic_segments: Vec<SegmentRange>,
     pub(super) sections: Vec<ElfSection>,
     pub(super) scan_mode: ScanMode,
     pub(super) scan_chunk_bytes: usize,
+    pub(super) analysis_cache: Option<Rc<BinaryAnalysisCache>>,
     pub(super) scan_cache: RefCell<PatternScanCache>,
     pub(super) symbol_cache: RefCell<SymbolScanCache>,
 }
@@ -61,8 +66,32 @@ impl ElfImage {
         scan_mode: ScanMode,
         scan_chunk_bytes: usize,
     ) -> ToolResult<Self> {
+        Self::parse_with_cache(path, scan_mode, scan_chunk_bytes, None)
+    }
+
+    pub(crate) fn parse_with_analysis_cache(
+        path: &Path,
+        scan_mode: ScanMode,
+        scan_chunk_bytes: usize,
+        analysis_cache: Rc<BinaryAnalysisCache>,
+    ) -> ToolResult<Self> {
+        Self::parse_with_cache(path, scan_mode, scan_chunk_bytes, Some(analysis_cache))
+    }
+
+    fn parse_with_cache(
+        path: &Path,
+        scan_mode: ScanMode,
+        scan_chunk_bytes: usize,
+        analysis_cache: Option<Rc<BinaryAnalysisCache>>,
+    ) -> ToolResult<Self> {
         let file = std::fs::File::open(path)
             .map_err(|error| ToolError::new(format!("cannot open {}: {error}", path.display())))?;
+        let metadata = file.metadata().map_err(|error| {
+            ToolError::new(format!(
+                "cannot stat opened ELF {}: {error}",
+                path.display()
+            ))
+        })?;
         let data = unsafe { MmapOptions::new().map(&file) }
             .map_err(|error| ToolError::new(format!("cannot mmap {}: {error}", path.display())))?;
         let _ = data.advise(memmap2::Advice::Sequential);
@@ -73,17 +102,20 @@ impl ElfImage {
         let dynamic_segments = parse_dynamic_segments(&data)?;
         let sections = parse_sections(&data)?;
         let identity = Self::resolve_identity(&data, arch, &load_segments, &sections)?;
+        let analysis_key = BinaryAnalysisKey::new(identity.clone(), &metadata);
         Ok(Self {
             path: path.to_path_buf(),
             data,
             arch,
             identity,
+            analysis_key,
             has_interpreter,
             load_segments,
             dynamic_segments,
             sections,
             scan_mode,
             scan_chunk_bytes,
+            analysis_cache,
             scan_cache: RefCell::new(PatternScanCache::default()),
             symbol_cache: RefCell::new(SymbolScanCache::new()),
         })
@@ -98,7 +130,13 @@ impl ElfImage {
     }
 
     pub(crate) fn register_pattern_scan(&self, pattern: &[u8]) {
-        self.scan_cache.borrow_mut().register(pattern);
+        if let Some(cache) = &self.analysis_cache {
+            cache.with_patterns(&self.analysis_key, |patterns| {
+                patterns.register(pattern);
+            });
+        } else {
+            self.scan_cache.borrow_mut().register(pattern);
+        }
     }
 
     pub(crate) fn pattern_offsets_for(
@@ -106,29 +144,57 @@ impl ElfImage {
         patterns: &[&[u8]],
         ranges: &[(usize, &[u8])],
     ) -> Vec<Vec<usize>> {
-        let mut cache = self.scan_cache.borrow_mut();
-        let keys = patterns
-            .iter()
-            .map(|pattern| cache.register(pattern))
-            .collect::<Vec<_>>();
-        cache.scan_if_needed(
-            ranges,
-            self.scan_mode,
-            Some(&self.data),
-            self.scan_chunk_bytes,
-        );
-        keys.iter()
-            .map(|&key| cache.offsets(key).to_vec())
-            .collect()
+        let resolve = |cache: &mut PatternScanCache| {
+            let keys = patterns
+                .iter()
+                .map(|pattern| cache.register(pattern))
+                .collect::<Vec<_>>();
+            let scanned = cache.scan_if_needed(
+                ranges,
+                self.scan_mode,
+                Some(&self.data),
+                self.scan_chunk_bytes,
+            );
+            (
+                keys.iter()
+                    .map(|&key| cache.offsets(key).to_vec())
+                    .collect(),
+                scanned,
+            )
+        };
+        let (offsets, scanned) = if let Some(cache) = &self.analysis_cache {
+            cache.with_patterns(&self.analysis_key, resolve)
+        } else {
+            resolve(&mut self.scan_cache.borrow_mut())
+        };
+        self.record_analysis(!scanned);
+        offsets
     }
 
     pub(crate) fn contains_any_patterns(&self, patterns: &[&[u8]]) -> bool {
-        // Identity markers live in read-only data, so scan the whole file but
-        // stop at the first hit instead of collecting every match.
-        patterns.iter().any(|pattern| {
-            crate::pattern_search::ExactPatternSearch::new(pattern)
-                .map_or(false, |search| search.contains(&self.data))
-        })
+        let detect = |markers: &mut BTreeMap<Vec<u8>, bool>| {
+            let mut scanned = false;
+            let found = patterns.iter().any(|pattern| {
+                if let Some(found) = markers.get(*pattern) {
+                    return *found;
+                }
+                scanned = true;
+                let found = crate::pattern_search::ExactPatternSearch::new(pattern)
+                    .is_some_and(|search| search.contains(&self.data));
+                markers.insert(pattern.to_vec(), found);
+                found
+            });
+            (found, scanned)
+        };
+        let (found, scanned) = match &self.analysis_cache {
+            Some(cache) => cache.with_markers(&self.analysis_key, detect),
+            None => {
+                let mut markers = BTreeMap::new();
+                detect(&mut markers)
+            }
+        };
+        self.record_analysis(!scanned);
+        found
     }
 
     pub(crate) fn arch(&self) -> Arch {
@@ -137,6 +203,47 @@ impl ElfImage {
 
     pub(crate) fn identity(&self) -> &BinaryIdentity {
         &self.identity
+    }
+
+    pub(crate) fn analysis_cache(&self) -> Option<Rc<BinaryAnalysisCache>> {
+        self.analysis_cache.clone()
+    }
+
+    pub(crate) fn scan_mode(&self) -> ScanMode {
+        self.scan_mode
+    }
+
+    pub(crate) fn scan_chunk_bytes(&self) -> usize {
+        self.scan_chunk_bytes
+    }
+
+    pub(crate) fn cached_named_addresses(
+        &self,
+        key: &str,
+    ) -> Option<Option<BTreeMap<String, u64>>> {
+        let cache = self.analysis_cache.as_ref()?;
+        let cached =
+            cache.with_named_addresses(&self.analysis_key, |addresses| addresses.get(key).cloned());
+        cache.record_analysis(cached.is_some());
+        cached
+    }
+
+    pub(crate) fn cache_named_addresses(
+        &self,
+        key: String,
+        addresses: Option<BTreeMap<String, u64>>,
+    ) {
+        if let Some(cache) = &self.analysis_cache {
+            cache.with_named_addresses(&self.analysis_key, |cached| {
+                cached.insert(key, addresses);
+            });
+        }
+    }
+
+    pub(super) fn record_analysis(&self, reused: bool) {
+        if let Some(cache) = &self.analysis_cache {
+            cache.record_analysis(reused);
+        }
     }
 
     pub(crate) fn executable_file_ranges(&self) -> ToolResult<Vec<(usize, &[u8])>> {

@@ -45,11 +45,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "alert-delivery-contract"
+version = "0.7.1"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "alert-proxy"
+version = "0.7.1"
+dependencies = [
+ "alert-delivery-contract",
+ "clap",
+ "libc",
+ "serde",
+ "serde_json",
+ "socket2",
+ "subtle",
+ "toml",
+ "uuid",
+]
+
+[[package]]
 name = "alert_contract"
 version = "0.7.1"
 dependencies = [
  "model_core",
  "serde",
+]
+
+[[package]]
+name = "alert_forwarding"
+version = "0.7.1"
+dependencies = [
+ "alert-delivery-contract",
+ "arc-swap",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -143,6 +176,15 @@ name = "arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
+
+[[package]]
+name = "arc-swap"
+version = "1.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c049c0be4daef0b145cb3555416b3b8ef5b7888a38aea1a3a155801fe7b0810b"
+dependencies = [
+ "rustversion",
+]
 
 [[package]]
 name = "async-trait"
@@ -659,7 +701,9 @@ dependencies = [
 name = "daemon"
 version = "0.7.1"
 dependencies = [
+ "alert-delivery-contract",
  "alert_contract",
+ "alert_forwarding",
  "attach_runtime",
  "clap",
  "collector_binding",
@@ -671,6 +715,7 @@ dependencies = [
  "ebpf_collector",
  "export_core",
  "export_factory",
+ "gateway_ingest_runtime",
  "ingest_runtime",
  "jsonschema",
  "libc",
@@ -685,6 +730,14 @@ dependencies = [
  "provider_label",
  "recording_runtime",
  "rule_set_provider",
+ "sandbox_alert_sqlite",
+ "sandbox_alert_store",
+ "sandbox_evidence_sqlite",
+ "sandbox_evidence_store",
+ "sandbox_observation",
+ "sandbox_plugin_delivery",
+ "sandbox_resource_alert",
+ "sandbox_upstream_transport",
  "semantic_action",
  "semantic_action_runtime",
  "serde",
@@ -742,6 +795,7 @@ dependencies = [
  "config_core",
  "libbpf-cargo",
  "libbpf-rs",
+ "libbpf_tracepoint_attach",
  "libc",
  "model_core",
  "payload_event",
@@ -1032,6 +1086,13 @@ dependencies = [
  "futures-task",
  "pin-project-lite",
  "slab",
+]
+
+[[package]]
+name = "gateway_ingest_runtime"
+version = "0.7.1"
+dependencies = [
+ "sandbox_observation",
 ]
 
 [[package]]
@@ -1461,6 +1522,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "libbpf_tracepoint_attach"
+version = "0.7.1"
+dependencies = [
+ "libbpf-rs",
+ "libc",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1854,7 +1923,9 @@ version = "0.7.1"
 dependencies = [
  "actrail_plugin_abi",
  "alert_contract",
+ "arc-swap",
  "model_core",
+ "sandbox_plugin_delivery",
  "semantic_action",
  "serde",
  "wit-parser 0.251.0",
@@ -2248,6 +2319,138 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
+name = "sandbox_agent_runtime"
+version = "0.7.1"
+dependencies = [
+ "sandbox_control",
+ "sandbox_observation",
+ "sandbox_vsock_contract",
+]
+
+[[package]]
+name = "sandbox_alert_sqlite"
+version = "0.7.1"
+dependencies = [
+ "rusqlite",
+ "sandbox_alert_store",
+ "sandbox_observation",
+]
+
+[[package]]
+name = "sandbox_alert_store"
+version = "0.7.1"
+dependencies = [
+ "sandbox_observation",
+]
+
+[[package]]
+name = "sandbox_control"
+version = "0.7.1"
+
+[[package]]
+name = "sandbox_control_uds"
+version = "0.7.1"
+dependencies = [
+ "libc",
+ "sandbox_control",
+]
+
+[[package]]
+name = "sandbox_evidence_sqlite"
+version = "0.7.1"
+dependencies = [
+ "rusqlite",
+ "sandbox_evidence_store",
+]
+
+[[package]]
+name = "sandbox_evidence_store"
+version = "0.7.1"
+dependencies = [
+ "sandbox_observation",
+]
+
+[[package]]
+name = "sandbox_linux_collector"
+version = "0.7.1"
+dependencies = [
+ "libbpf-cargo",
+ "libbpf-rs",
+ "libbpf_tracepoint_attach",
+ "libc",
+ "sandbox_observation",
+]
+
+[[package]]
+name = "sandbox_observation"
+version = "0.7.1"
+
+[[package]]
+name = "sandbox_plugin_delivery"
+version = "0.7.1"
+dependencies = [
+ "sandbox_observation",
+]
+
+[[package]]
+name = "sandbox_resource_alert"
+version = "0.7.1"
+dependencies = [
+ "arc-swap",
+ "plugin_system",
+ "sandbox_alert_store",
+ "sandbox_observation",
+ "sandbox_plugin_delivery",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "sandbox_upstream_contract"
+version = "0.7.1"
+
+[[package]]
+name = "sandbox_upstream_transport"
+version = "0.7.1"
+dependencies = [
+ "gateway_ingest_runtime",
+ "sandbox_upstream_contract",
+ "sandbox_vsock_contract",
+]
+
+[[package]]
+name = "sandbox_vsock_contract"
+version = "0.7.1"
+dependencies = [
+ "sandbox_observation",
+]
+
+[[package]]
+name = "sandbox_vsock_transport"
+version = "0.7.1"
+dependencies = [
+ "libc",
+ "sandbox_agent_runtime",
+ "sandbox_control",
+]
+
+[[package]]
+name = "sb"
+version = "0.7.1"
+dependencies = [
+ "clap",
+ "libc",
+ "sandbox_agent_runtime",
+ "sandbox_control",
+ "sandbox_control_uds",
+ "sandbox_linux_collector",
+ "sandbox_observation",
+ "sandbox_vsock_transport",
+ "serde",
+ "toml",
+]
+
+[[package]]
 name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2383,6 +2586,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "socket2"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2831,6 +3044,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
+name = "uuid"
+version = "1.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f053576934f05a761a402421fbbe3d425d9366f75f978806a037b3ca481abecc"
+dependencies = [
+ "getrandom 0.4.3",
+ "js-sys",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "uuid-simd"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2872,6 +3096,27 @@ name = "vsimd"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
+
+[[package]]
+name = "vsock_gateway"
+version = "0.7.1"
+dependencies = [
+ "clap",
+ "libc",
+ "sandbox_vsock_transport",
+ "serde",
+ "toml",
+ "vsock_gateway_runtime",
+]
+
+[[package]]
+name = "vsock_gateway_runtime"
+version = "0.7.1"
+dependencies = [
+ "sandbox_upstream_contract",
+ "sandbox_vsock_contract",
+ "sandbox_vsock_transport",
+]
 
 [[package]]
 name = "vsprintf"

@@ -77,6 +77,16 @@ grep -Fq 'configuration-clh.toml' "$INSTALLER" \
   || fail "installer does not validate the Cloud Hypervisor configuration"
 grep -Fq 'bin/cloud-hypervisor' "$INSTALLER" \
   || fail "installer does not validate the Cloud Hypervisor binary"
+grep -Fq 'configuration-fc.toml' "$INSTALLER" \
+  || fail "installer does not validate the Firecracker configuration"
+grep -Fq 'bin/firecracker' "$INSTALLER" \
+  || fail "installer does not validate the Firecracker binary"
+grep -Fq 'bin/jailer' "$INSTALLER" \
+  || fail "installer does not validate the Firecracker jailer"
+grep -Fq 'vmlinux.container' "$INSTALLER" \
+  || fail "installer does not validate the uncompressed Firecracker kernel"
+grep -Fq 'kata-containers.img' "$INSTALLER" \
+  || fail "installer does not validate the Firecracker guest rootfs image"
 if grep -Eq "(^|[[:space:]])(mv|install|ln)[[:space:]].*[/]usr/bin" "$INSTALLER"; then
   fail "installer must not overwrite distro-owned /usr/bin Kata binaries"
 fi

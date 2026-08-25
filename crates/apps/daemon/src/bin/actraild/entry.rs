@@ -168,6 +168,8 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
             config.resource_metrics.clone(),
             config.storage_retention.clone(),
             config.plugin_alert_runtime,
+            config.alert_forwarding.clone(),
+            config.sandbox_alerts.clone(),
             config.trace_finalization,
             config
                 .shutdown_wait_ms
@@ -194,6 +196,8 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
             config.resource_metrics.clone(),
             config.storage_retention.clone(),
             config.plugin_alert_runtime,
+            config.alert_forwarding.clone(),
+            config.sandbox_alerts.clone(),
             config.trace_finalization,
             config
                 .shutdown_wait_ms
@@ -214,6 +218,7 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
         format!("daemon build failed: {}: {}", error.code, error.message)
     })?;
     if let Err(error) = load_configured_startup_plugins(&mut server, config) {
+        let _ = server.shutdown();
         cleanup_pid_file(config, pid_written).unwrap_or_else(|cleanup_error| {
             tracing::warn!(
                 error = %cleanup_error,
@@ -223,6 +228,7 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
         return Err(error);
     }
     if let Err(error) = load_persistent_plugins(&mut server, config_path) {
+        let _ = server.shutdown();
         cleanup_pid_file(config, pid_written).unwrap_or_else(|cleanup_error| {
             tracing::warn!(
                 error = %cleanup_error,
@@ -231,6 +237,23 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
         });
         return Err(error);
     }
+    let hand_observation_addr =
+        match server.start_hand_observation(&config.hand_observation, &config.sandbox_evidence) {
+            Ok(address) => address,
+            Err(error) => {
+                let _ = server.shutdown();
+                cleanup_pid_file(config, pid_written).unwrap_or_else(|cleanup_error| {
+                    tracing::warn!(
+                        error = %cleanup_error,
+                        "daemon runtime cleanup failed after Hand observation startup error"
+                    );
+                });
+                return Err(format!(
+                    "Hand observation startup failed: {}: {}",
+                    error.code, error.message
+                ));
+            }
+        };
 
     let mut socket_bound = false;
     let result = server.serve_forever_until(
@@ -240,11 +263,18 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
         signals::shutdown_requested,
         || {
             socket_bound = true;
-            println!(
-                "daemon listening socket={} storage={}",
-                config.socket_path.display(),
-                config.storage.path().display()
-            );
+            match hand_observation_addr {
+                Some(address) => println!(
+                    "daemon listening socket={} storage={} hand_observation={address}",
+                    config.socket_path.display(),
+                    config.storage.path().display()
+                ),
+                None => println!(
+                    "daemon listening socket={} storage={} hand_observation=disabled",
+                    config.socket_path.display(),
+                    config.storage.path().display()
+                ),
+            }
             Ok(())
         },
     );

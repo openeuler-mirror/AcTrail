@@ -79,6 +79,8 @@ class KataCreateSpec:
     labels: tuple[tuple[str, str], ...] = ()
     environment: tuple[tuple[str, str], ...] = ()
     ready_timeout_seconds: float = 60
+    privileged_without_host_devices: bool = False
+    snapshotter: str | None = None
 
     def __post_init__(self) -> None:
         if not self.namespace:
@@ -95,6 +97,12 @@ class KataCreateSpec:
             raise ValueError("Kata workload UID/GID must be non-negative")
         if self.ready_timeout_seconds <= 0:
             raise ValueError("Kata ready timeout must be positive")
+        if self.snapshotter is not None and not self.snapshotter.strip():
+            raise ValueError("containerd snapshotter must not be empty")
+        if not isinstance(self.privileged_without_host_devices, bool):
+            raise ValueError(
+                "privileged_without_host_devices must be a boolean"
+            )
 
 
 class ImageRequirement(Protocol):
@@ -131,6 +139,7 @@ class KataRuntimeProfile:
     runtime: str
     runtime_config: Path
     image: str
+    snapshotter: str | None = None
 
     def __post_init__(self) -> None:
         if not self.backend:
@@ -145,6 +154,8 @@ class KataRuntimeProfile:
             )
         if not self.image:
             raise ValueError("Kata workload image must not be empty")
+        if self.snapshotter is not None and not self.snapshotter.strip():
+            raise ValueError("containerd snapshotter must not be empty")
 
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -164,6 +175,7 @@ class KataContainerRequirements:
     gid: int
     labels: tuple[tuple[str, str], ...] = ()
     environment: tuple[tuple[str, str], ...] = ()
+    privileged_without_host_devices: bool = False
     ready_timeout_seconds: float = 60
     prepare_policy: PreparePolicy = PreparePolicy.CHECK_ONLY
     artifact_requirement: ArtifactRequirement | None = None
@@ -195,6 +207,10 @@ class KataContainerRequirements:
                 raise ValueError(f"invalid Kata environment name: {name}")
             if "\x00" in value:
                 raise ValueError(f"Kata environment value contains NUL: {name}")
+        if not isinstance(self.privileged_without_host_devices, bool):
+            raise ValueError(
+                "privileged_without_host_devices must be a boolean"
+            )
 
     def validate_static(self) -> None:
         if not self.profile.runtime_config.is_file():
@@ -222,6 +238,10 @@ class KataContainerRequirements:
             labels=self.labels,
             environment=self.environment,
             ready_timeout_seconds=self.ready_timeout_seconds,
+            privileged_without_host_devices=(
+                self.privileged_without_host_devices
+            ),
+            snapshotter=self.profile.snapshotter,
         )
 
     def validate_running(

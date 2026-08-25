@@ -1,0 +1,9 @@
+[package]
+name = "sandbox_evidence_sqlite"
+version.workspace = true
+edition = "2024"
+license = "MulanPSL-2.0"
+
+[dependencies]
+rusqlite = { version = "0.31.0", features = ["bundled"] }
+sandbox_evidence_store = { path = "../../../contracts/sandbox_evidence_store" }

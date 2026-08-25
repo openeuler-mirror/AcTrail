@@ -101,7 +101,8 @@ For the full step-by-step walkthrough, including expected output and cleanup, se
 | Learn day-to-day CLI commands | [docs/usage.md](docs/usage.md) |
 | Check kernel, privilege, BTF, tracefs, seccomp, and fanotify requirements | [docs/platform-requirements.md](docs/platform-requirements.md) |
 | Deploy a persistent host daemon | [docs/deployment.md](docs/deployment.md) |
-| Deploy inside a Kata virtual-container guest | [deploy/virtual-container/README.md](deploy/virtual-container/README.md) |
+| Deploy execution isolation with a Firecracker sandbox | [deploy/execution-isolation/README.md](deploy/execution-isolation/README.md) |
+| Deploy the optional Kata virtual-container profile | [deploy/virtual-container/README.md](deploy/virtual-container/README.md) |
 | Pick a capability path for a security question | [docs/use-cases.md](docs/use-cases.md) |
 | Capture LLM HTTP/TLS payloads | [docs/examples/02.llm-http-payload-capture/README.md](docs/examples/02.llm-http-payload-capture/README.md) |
 | Validate broad real-agent coverage | [docs/examples/08.full-monitor-validation/README.md](docs/examples/08.full-monitor-validation/README.md) |

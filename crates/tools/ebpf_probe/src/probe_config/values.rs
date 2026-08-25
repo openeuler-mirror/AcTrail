@@ -4,10 +4,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use config_core::daemon::{
-    ApplicationProtocolConfig, DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS, EnforcementBackend,
-    EnforcementConfig, EnforcementDecision, EnforcementMarkStrategy, EnforcementScope,
-    EnforcementSeccompSyscall, MemlockRlimit, PayloadRedactionPolicy, PayloadSocketCaptureBackend,
-    PayloadSocketConfig, PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadStdioStorageMode,
+    ApplicationProtocolConfig, DEFAULT_TLS_BINARY_ANALYSIS_CACHE_CAPACITY,
+    DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS, EnforcementBackend, EnforcementConfig,
+    EnforcementDecision, EnforcementMarkStrategy, EnforcementScope, EnforcementSeccompSyscall,
+    MemlockRlimit, PayloadRedactionPolicy, PayloadSocketCaptureBackend, PayloadSocketConfig,
+    PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadStdioStorageMode,
     PayloadTlsCaptureBackend, PayloadTlsConfig, PayloadTlsLibrary, PayloadTlsLibraryPath,
     PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource,
     PayloadTlsSyncRuntimeLibraryPath, ResourceMetricsConfig, SseDataPolicy,
@@ -389,6 +390,7 @@ impl ConfigValues {
             sync_event_socket_path: self.required_path("payload_tls_sync_event_socket_path")?,
             sync_socket_mode: self.required_octal("payload_tls_sync_socket_mode_octal")?,
             sync_match_limit: self.required_positive_u32("payload_tls_sync_match_limit")?,
+            binary_analysis_cache_capacity: DEFAULT_TLS_BINARY_ANALYSIS_CACHE_CAPACITY,
             dynamic_exec_plan_timeout_ms: DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS,
             sync_flow_control_enabled: self
                 .optional_bool("payload_tls_sync_flow_control_enabled", true)?,

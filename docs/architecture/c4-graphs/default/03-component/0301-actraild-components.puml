@@ -1,0 +1,100 @@
+@startuml
+!include <C4/C4_Component>
+
+skinparam defaultFontName "WenQuanYi Micro Hei"
+
+title actraild - Component Diagram (Default)
+
+LAYOUT_LEFT_RIGHT()
+
+Container_Ext(Ctl, "actrailctl", "Rust CLI", "init / launch / track-add / doctor / probe")
+Container_Ext(TlsSync, "TLS-sync Runtime", "LD_PRELOAD 共享库", "注入被观测进程，上报明文 payload")
+System_Ext(Kernel, "Linux 内核", "eBPF / tracefs / seccomp / fanotify")
+ContainerDb(Storage, "AcTrail Storage", "SQLite (WAL)", "事件、payload、语义动作、诊断、告警")
+Container_Ext(PluginPkg, "Plugin Packages", "WASM 插件包", "~/.actrail/plugins")
+System_Ext(Otel, "OTEL Collector", "OTLP /v1/traces (4318)")
+
+Container_Boundary(actraild, "actraild") {
+
+    Component(Control, "UDS Control Server", "control_runtime", "处理控制命令：launch / track / plugin load / status")
+
+    Component(Attach, "Attach Service", "attach", "eBPF 挂载、coverage guard、launch 权限裁决、TLS plan 下发")
+
+    Component(Ebpf, "eBPF Collector", "adapters/collectors/ebpf", "ring buffer 事件：进程 / 文件 / socket / stdio / TLS 密钥")
+
+    Component(TlsIngest, "TLS Sync Service", "services/tls_sync", "接收 TLS-sync runtime 明文 payload 与连接事件")
+
+    Component(Payload, "Payload Service", "services/payload", "收集 RawPayloadSegment、敏感内容门控、分发明文 payload")
+
+    Component(AppProto, "Application Protocol", "application_protocol", "在明文 payload 上做 HTTP/1.1 / HTTP/2 / SSE 语义分析")
+
+    Component(Seccomp, "Seccomp Services", "seccomp_notify / process_seccomp", "execve 上下文、子进程跟踪")
+
+    Component(Governance, "Governance", "enforcement / command_control / network_control", "fanotify 文件治理、命令管控、connect 管控")
+
+    Component(Identity, "Identity Manager", "identity / process_identity", "多坐标解析稳定逻辑进程 ID")
+
+    Component(Trace, "Trace Runtime", "trace_runtime", "trace 注册表、membership 进程树、生命周期状态机")
+
+    Component(Ingest, "Ingest Pipeline", "ingest_runtime", "normalize → policy gate → provider classify")
+
+    Component(Semantic, "Semantic Action Runtime", "semantic_actions", "live 投影器：agent / command / file / http_exchange / mcp / tool / links")
+
+    Component(Llm, "LLM Pipeline", "llm_pipeline", "消费全部来源明文 payload（TLS-sync / socket / stdio）：HTTP/SSE/provider 解析、llm.codec 解码、tool 投影")
+
+    Component(Writer, "Recording Writer", "recording/runtime", "单事务持久化（BEGIN IMMEDIATE）")
+
+    Component(Export, "Export Runtime", "export/core", "BestEffort 路由分发语义动作")
+
+    Component(PluginHost, "Plugin Host", "plugin_wasm_runtime", "Wasmtime 加载 WASM 插件（observation / control / codec / alert）")
+
+    Component(Alert, "Alert Ingress", "alert_ingress", "告警 broker：boundary 告警与插件告警的校验、dedup、入队列")
+}
+
+Rel(Ctl, Control, "控制协议（launch / track / plugin load）", "UDS")
+Rel(Control, Attach, "launch 权限裁决 / TLS plan 查询")
+Rel(Control, PluginHost, "plugin load / unload 指令")
+
+Rel(Attach, Ebpf, "挂载与绑定 trace")
+Rel(Attach, Trace, "创建 trace、注册绑定")
+
+Rel(Kernel, Ebpf, "ring buffer 事件流", "eBPF")
+Rel(Kernel, Seccomp, "user-notify 事件", "seccomp")
+Rel(Kernel, Governance, "fanotify / execve / connect 事件", "内核")
+
+Rel(TlsSync, TlsIngest, "上报明文 payload", "UDS")
+
+Rel(Ebpf, Payload, "socket / stdio payload", "Syscall / Stdio")
+Rel(TlsIngest, Payload, "TLS payload", "TlsUserSpace")
+Rel(Payload, Llm, "PayloadSegment 流（分支：TlsUserSpace / Syscall 来源且 Plaintext 才进投影）")
+Rel(Payload, AppProto, "明文 payload", "Plaintext")
+Rel(AppProto, Llm, "HTTP exchange / SSE 语义")
+
+Rel(Ebpf, Ingest, "RawCollectorEvent")
+Rel(Seccomp, Ingest, "进程事件")
+Rel(Governance, Ingest, "Enforcement 事件")
+Rel(Identity, Ingest, "逻辑进程身份")
+Rel(Trace, Ingest, "membership 匹配结果")
+
+Rel(Ingest, Identity, "提交观测、请求身份解析")
+Rel(Ingest, Trace, "查询 membership 匹配")
+Rel(Ingest, Semantic, "DomainEvent")
+
+Rel(Llm, Semantic, "llm.request / llm.response / tool 投影")
+
+Rel(Semantic, Writer, "SemanticAction + links")
+Rel(Semantic, Alert, "boundary 告警（文件访问越界等）")
+Rel(Semantic, Export, "发布 SemanticActionExportBatch")
+
+Rel(PluginHost, Alert, "插件 alert-write 提交（activity-anomaly / tool-failure-alert）")
+Rel(PluginHost, Export, "observation consumer 注册")
+Rel(PluginHost, Governance, "control-decider 决策")
+Rel(PluginHost, PluginPkg, "加载", "Wasmtime")
+
+Rel(Writer, Storage, "单事务写入", "SQLite")
+Rel(Alert, Storage, "写入告警", "SQLite")
+
+Rel(Export, Otel, "导出", "OTLP")
+
+SHOW_LEGEND()
+@enduml
