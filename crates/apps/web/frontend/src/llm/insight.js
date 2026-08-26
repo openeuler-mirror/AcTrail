@@ -14,7 +14,7 @@ export function buildLlmDetailInsight(detail, requestContent = null) {
     return null;
   }
   if (action.kind === 'llm.request') {
-    return requestInsight(action, requestContent);
+    return requestInsight(action, requestContent, detail?.trajectoryContext);
   }
   if (action.kind === 'llm.response') {
     return responseInsight(action);
@@ -136,12 +136,13 @@ export function extractLlmAssistantMessage(raw) {
   return text;
 }
 
-function requestInsight(action, requestContent) {
+function requestInsight(action, requestContent, trajectoryContext) {
   const attrs = action.attributes ?? {};
   const body = requestBodyFromContent(action, requestContent);
   const messages = requestMessages(body);
   const newestMessages = messages.slice().reverse();
   const tools = requestTools(body);
+  const toolResults = requestToolResults(body);
   const lastMessage = messages.filter((message) => message.text).at(-1) ?? null;
   const fallbackMessage = llmRequestMessage(action, { preview: false });
   const blocks = [];
@@ -176,12 +177,33 @@ function requestInsight(action, requestContent) {
       })),
     });
   }
+  const toolResultCount = nonnegativeCount(trajectoryContext?.toolResultCount)
+    ?? toolResults.length;
+  const toolResultDelta = nonnegativeCount(trajectoryContext?.toolResultDelta);
+  if (toolResultCount > 0 || toolResults.length > 0) {
+    const deltaText = toolResultDelta > 0
+      ? ` · +${toolResultDelta} since previous request`
+      : '';
+    blocks.push({
+      id: 'tool-results',
+      tone: 'tools',
+      label: 'Tool results in context',
+      title: `${toolResultCount} result${toolResultCount === 1 ? '' : 's'}${deltaText}`,
+      itemLimit: MESSAGE_CONTEXT_DEFAULT_LIMIT,
+      items: toolResults.slice().reverse().map((result, index) => ({
+        id: result.id ?? `${result.name}-${index}`,
+        title: result.name,
+        subtitle: `result #${toolResults.length - index}`,
+        text: result.text,
+      })),
+    });
+  }
   if (tools.length > 0) {
     blocks.push({
       id: 'request-tools',
       tone: 'tools',
-      label: 'Available tools',
-      title: `${tools.length} tool${tools.length === 1 ? '' : 's'}`,
+      label: 'Available tool definitions',
+      title: `${tools.length} definition${tools.length === 1 ? '' : 's'}`,
       collapsible: true,
       defaultCollapsed: true,
       itemLimit: TOOL_LIST_DEFAULT_LIMIT,
@@ -202,7 +224,7 @@ function requestInsight(action, requestContent) {
       chip('provider', attrs['llm.request.provider_id'] ?? body?.provider),
       chip('trajectory', attrs['llm.request.trajectory_id']),
       chip('messages', messages.length || null),
-      chip('tools', tools.length || null),
+      chip('available tools', tools.length || null),
       chip('blocks', attrs['llm.request.block_count']),
       chip('bytes', attrs['llm.request.canonical_body_bytes'] ?? attrs['llm.request.payload_bytes']),
     ]),
@@ -346,6 +368,63 @@ function requestTools(body) {
     return body.functions.map((tool) => normalizeToolDefinition(tool, 'functions')).filter(Boolean);
   }
   return EMPTY_ARRAY;
+}
+
+function requestToolResults(body) {
+  const messages = Array.isArray(body?.messages)
+    ? body.messages
+    : Array.isArray(body?.input)
+      ? body.input
+      : EMPTY_ARRAY;
+  const namesById = new Map();
+  for (const message of messages) {
+    for (const [index, call] of (message?.tool_calls ?? []).entries()) {
+      const normalized = normalizeToolCall(call, index);
+      if (normalized.id && normalized.name) {
+        namesById.set(normalized.id, normalized.name);
+      }
+    }
+    for (const part of Array.isArray(message?.content) ? message.content : []) {
+      if (part?.type === 'tool_use' && part.id && part.name) {
+        namesById.set(part.id, String(part.name));
+      }
+    }
+  }
+
+  const results = [];
+  for (const [messageIndex, message] of messages.entries()) {
+    const role = String(message?.role ?? '').toLowerCase();
+    if (role === 'tool') {
+      const id = message.tool_call_id ?? message.tool_use_id ?? message.id ?? null;
+      results.push({
+        id: id ? String(id) : `tool-message-${messageIndex}`,
+        name: String(message.name ?? namesById.get(id) ?? 'tool result'),
+        text: messageContentText(message.content),
+      });
+    }
+    for (const [partIndex, part] of (
+      Array.isArray(message?.content) ? message.content : []
+    ).entries()) {
+      if (part?.type !== 'tool_result') {
+        continue;
+      }
+      const id = part.tool_use_id ?? part.id ?? null;
+      results.push({
+        id: id ? String(id) : `tool-result-${messageIndex}-${partIndex}`,
+        name: String(part.name ?? namesById.get(id) ?? 'tool result'),
+        text: stringifyContentValue(part.content),
+      });
+    }
+  }
+  return results;
+}
+
+function nonnegativeCount(value) {
+  if (value == null || value === '') {
+    return null;
+  }
+  const count = Number(value);
+  return Number.isInteger(count) && count >= 0 ? count : null;
 }
 
 function normalizeToolDefinition(tool, source) {

@@ -331,6 +331,23 @@ impl SemanticActionReadStore for SqliteStorage {
         )
     }
 
+    fn llm_request_lineages(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<Vec<LlmRequestLineage>, SemanticActionStoreError> {
+        if self.is_purged(trace_id) {
+            return Err(SemanticActionStoreError::new(
+                "read_llm_request_lineages",
+                "trace has been purged",
+            ));
+        }
+        let connection = self.connection().borrow();
+        crate::semantic_actions::llm_request_lineage::LlmRequestLineageStore::by_trace(
+            &connection,
+            trace_id,
+        )
+    }
+
     fn llm_request_trajectory(
         &self,
         trace_id: TraceId,

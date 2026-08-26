@@ -51,6 +51,46 @@ pub(super) fn user_message_metadata(body: &Value) -> UserMessageMetadata {
     }
 }
 
+pub(super) fn tool_result_count(body: &Value) -> usize {
+    body.get("messages")
+        .and_then(Value::as_array)
+        .or_else(|| body.get("input").and_then(Value::as_array))
+        .map(|messages| messages.iter().map(tool_results_in_message).sum())
+        .unwrap_or_default()
+}
+
+fn tool_results_in_message(message: &Value) -> usize {
+    if message.get("role").and_then(Value::as_str) == Some("tool") {
+        return 1;
+    }
+    if message
+        .get("type")
+        .and_then(Value::as_str)
+        .is_some_and(is_tool_result_kind)
+    {
+        return 1;
+    }
+    message
+        .get("content")
+        .map(tool_results_in_content)
+        .unwrap_or_default()
+}
+
+fn tool_results_in_content(content: &Value) -> usize {
+    match content {
+        Value::Array(blocks) => blocks.iter().map(tool_results_in_content).sum(),
+        Value::Object(_) if block_is_tool_result(content) => 1,
+        _ => 0,
+    }
+}
+
+fn is_tool_result_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "tool_result" | "tool-result" | "function_call_output" | "tool_output"
+    )
+}
+
 pub(super) fn background_request_kind(body: &Value) -> Option<&'static str> {
     let messages = body.get("messages").and_then(Value::as_array)?;
     let mut system_parts = Vec::new();
@@ -124,7 +164,7 @@ fn block_is_tool_result(block: &Value) -> bool {
     block
         .get("type")
         .and_then(Value::as_str)
-        .is_some_and(|kind| matches!(kind, "tool_result" | "tool-result"))
+        .is_some_and(is_tool_result_kind)
 }
 
 fn collect_text(value: &Value, parts: &mut Vec<String>) {
@@ -156,4 +196,39 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
         output.push(ch);
     }
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{tool_result_count, user_message_metadata};
+
+    #[test]
+    fn counts_tool_results_across_supported_request_shapes() {
+        let anthropic = json!({"messages": [{"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "a", "content": "one"},
+            {"type": "tool-result", "tool_use_id": "b", "content": "two"}
+        ]}]});
+        let chat = json!({"messages": [
+            {"role": "tool", "tool_call_id": "a", "content": "ok"}
+        ]});
+        let responses = json!({"input": [
+            {"type": "function_call_output", "call_id": "a", "output": "ok"}
+        ]});
+
+        assert_eq!(tool_result_count(&anthropic), 2);
+        assert_eq!(tool_result_count(&chat), 1);
+        assert_eq!(tool_result_count(&responses), 1);
+    }
+
+    #[test]
+    fn tool_only_user_content_is_not_counted_as_user_input() {
+        let body = json!({"messages": [{"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "a", "content": "ok"}
+        ]}]});
+
+        assert_eq!(tool_result_count(&body), 1);
+        assert_eq!(user_message_metadata(&body).count, 0);
+    }
 }

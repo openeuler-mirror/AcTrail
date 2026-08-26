@@ -113,6 +113,11 @@ class PluginWebApi:
             f"{quote(action_id, safe='')}/lineage/llm-request",
         )
 
+    def llm_trajectory_graph(self, trace_id: int) -> dict[str, Any]:
+        return self._request(
+            "GET", f"/api/traces/{trace_id}/llm-trajectories"
+        )
+
     def llm_request_trajectory(
         self,
         trace_id: int,

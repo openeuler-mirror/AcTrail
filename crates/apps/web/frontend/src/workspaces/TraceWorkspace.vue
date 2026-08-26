@@ -88,6 +88,7 @@ import {
   readActionTree,
   readActionTreeRoot,
   readTraceAlerts,
+  readLlmTrajectoryGraph,
   readCommands,
   readTraceDiagnostics,
   readTraceEvents,
@@ -156,6 +157,7 @@ const lastTabByGroup = ref(
 const selectedTraceId = ref(null);
 const traceDetail = shallowRef(null);
 const actionTree = ref(emptyActionTree());
+const trajectoryGraph = shallowRef(emptyTrajectoryGraph());
 const commands = shallowRef(emptyCommands());
 const waterfall = shallowRef(emptyWaterfall());
 const timeAttribution = shallowRef(null);
@@ -163,6 +165,7 @@ const waterfallFocus = shallowRef(null);
 const error = ref('');
 const loading = ref(false);
 let activeTraceLoad = null;
+let activeTrajectoryLoad = null;
 let activeCommandsLoad = null;
 let activeWaterfallLoad = null;
 let activeAttributionLoad = null;
@@ -195,6 +198,9 @@ const activeTabProps = computed(() => {
   };
   if (activeTab.value === TAB_IDS.commands) {
     tabProps.commands = commands.value;
+  }
+  if (activeTab.value === TAB_IDS.llmTrajectory) {
+    tabProps.trajectoryGraph = trajectoryGraph.value;
   }
   if (activeTab.value === TAB_IDS.waterfall) {
     tabProps.waterfall = waterfall.value;
@@ -243,6 +249,9 @@ const showLoadingPanel = computed(() => {
   if (activeTab.value === TAB_IDS.waterfall) {
     return waterfall.value?.loadedTraceId !== selectedTraceId.value;
   }
+  if (activeTab.value === TAB_IDS.llmTrajectory) {
+    return trajectoryGraph.value?.loadedTraceId !== selectedTraceId.value;
+  }
   return !traceDetail.value;
 });
 
@@ -250,6 +259,7 @@ watch(selectedTraceId, async (traceId) => {
   if (!traceId) {
     traceDetail.value = null;
     actionTree.value = emptyActionTree();
+    trajectoryGraph.value = emptyTrajectoryGraph();
     commands.value = emptyCommands();
     waterfall.value = emptyWaterfall();
     timeAttribution.value = null;
@@ -373,6 +383,7 @@ async function loadTrace(traceId) {
   commands.value = emptyCommands();
   waterfall.value = emptyWaterfall();
   timeAttribution.value = null;
+  trajectoryGraph.value = emptyTrajectoryGraph();
   if (!traceIdMatches(waterfallFocus.value?.traceId, traceId)) {
     waterfallFocus.value = null;
   }
@@ -417,6 +428,7 @@ async function loadTrace(traceId) {
 async function ensureDataForActiveTab() {
   await Promise.all([
     ensureTracePartForActiveTab(),
+    ensureTrajectoryForActiveTab(),
     ensureCommandsForActiveTab(),
     ensureWaterfallForActiveTab(),
     ensureTimeAttributionForActiveTab(),
@@ -464,6 +476,33 @@ async function ensureTracePart(traceId, key, loader) {
   }
 }
 
+
+async function ensureTrajectoryForActiveTab() {
+  const traceId = selectedTraceId.value;
+  if (!traceId || activeTab.value !== TAB_IDS.llmTrajectory) {
+    return;
+  }
+  if (trajectoryGraph.value?.loadedTraceId === traceId) {
+    return;
+  }
+  const token = Symbol();
+  activeTrajectoryLoad = token;
+  try {
+    const data = await readLlmTrajectoryGraph(traceId);
+    if (activeTrajectoryLoad === token && traceIdMatches(selectedTraceId.value, traceId)) {
+      trajectoryGraph.value = {
+        ...data,
+        nodes: freezeTraceList(data.nodes),
+        edges: freezeTraceList(data.edges),
+        loadedTraceId: traceId,
+      };
+    }
+  } catch (err) {
+    if (activeTrajectoryLoad === token && traceIdMatches(selectedTraceId.value, traceId)) {
+      error.value = String(err.message ?? err);
+    }
+  }
+}
 async function ensureCommandsForActiveTab() {
   const traceId = selectedTraceId.value;
   if (!traceId || activeTab.value !== TAB_IDS.commands) {
@@ -581,6 +620,17 @@ function emptyActionTree(summary = null, rootData = null) {
   };
 }
 
+function emptyTrajectoryGraph() {
+  return {
+    nodes: [],
+    edges: [],
+    stats: {},
+    capabilities: {},
+    partial: false,
+    loadedTraceId: null,
+  };
+
+}
 function emptyCommands() {
   return {
     actions: [],

@@ -169,7 +169,8 @@ struct RequestContentMetadata {
     canonical_body: Option<CanonicalBodyMetadata>,
     block_count: Option<usize>,
     message_preview: Option<String>,
-    user_message_count: usize,
+    user_message_count: Option<usize>,
+    tool_result_count: Option<usize>,
     latest_user_message_hash: Option<String>,
     background_kind: Option<&'static str>,
 }
@@ -197,7 +198,8 @@ fn project_request_content(
                 canonical_body: None,
                 block_count: None,
                 message_preview: None,
-                user_message_count: 0,
+                user_message_count: None,
+                tool_result_count: None,
                 latest_user_message_hash: None,
                 background_kind: None,
             }),
@@ -232,7 +234,8 @@ fn project_request_content(
                     }),
                     block_count: Some(content.block_count),
                     message_preview: content.message_preview.clone(),
-                    user_message_count: content.user_message_count,
+                    user_message_count: Some(content.user_message_count),
+                    tool_result_count: Some(content.tool_result_count),
                     latest_user_message_hash: content.latest_user_message_hash.clone(),
                     background_kind: content.background_kind,
                 }),
@@ -244,11 +247,11 @@ fn project_request_content(
 }
 
 fn shape_projection(body: &LlmRequestBody) -> RequestContentProjection {
-    let (canonical_body, message_preview, user_messages, background_kind) = body
+    let (canonical_body, message_preview, user_messages, tool_result_count, background_kind) = body
         .json
         .as_ref()
-        .map_or((None, None, None, None), |value| {
-            let (hash, bytes, preview, user_messages, background_kind) =
+        .map_or((None, None, None, None, None), |value| {
+            let (hash, bytes, preview, user_messages, tool_result_count, background_kind) =
                 canonical_shape_metadata(value);
             (
                 Some(CanonicalBodyMetadata {
@@ -258,6 +261,7 @@ fn shape_projection(body: &LlmRequestBody) -> RequestContentProjection {
                 }),
                 preview,
                 Some(user_messages),
+                Some(tool_result_count),
                 background_kind,
             )
         });
@@ -270,10 +274,8 @@ fn shape_projection(body: &LlmRequestBody) -> RequestContentProjection {
             canonical_body,
             block_count: None,
             message_preview,
-            user_message_count: user_messages
-                .as_ref()
-                .map(|metadata| metadata.count)
-                .unwrap_or_default(),
+            user_message_count: user_messages.as_ref().map(|metadata| metadata.count),
+            tool_result_count,
             latest_user_message_hash: user_messages.and_then(|metadata| metadata.latest_hash),
             background_kind,
         }),
@@ -421,10 +423,16 @@ fn llm_attributes(
                 preview.to_string(),
             );
         }
-        if content.user_message_count > 0 {
+        if let Some(user_message_count) = content.user_message_count {
             attributes.insert(
                 attrs::llm_request::USER_MESSAGE_COUNT.to_string(),
-                content.user_message_count.to_string(),
+                user_message_count.to_string(),
+            );
+        }
+        if let Some(tool_result_count) = content.tool_result_count {
+            attributes.insert(
+                attrs::llm_request::TOOL_RESULT_COUNT.to_string(),
+                tool_result_count.to_string(),
             );
         }
         if let Some(hash) = content.latest_user_message_hash.as_deref() {

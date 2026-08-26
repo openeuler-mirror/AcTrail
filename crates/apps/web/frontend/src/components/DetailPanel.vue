@@ -10,88 +10,98 @@
       </button>
     </div>
 
-    <dl v-if="detailRows.length" class="detail-rows">
-      <template v-for="[key, value] in detailRows" :key="key">
-        <dt>{{ key }}</dt>
-        <dd>{{ value }}</dd>
+    <ProgressiveDisclosure
+      v-model:expanded="showAllDetails"
+      :enabled="progressiveDetails"
+    >
+      <template #primary>
+        <dl v-if="detailRows.length" class="detail-rows">
+          <template v-for="[key, value] in detailRows" :key="key">
+            <dt>{{ key }}</dt>
+            <dd>{{ value }}</dd>
+          </template>
+        </dl>
+
+        <section v-if="panelError" class="detail-section">
+          <h3>Error</h3>
+          <p class="detail-error">{{ panelError }}</p>
+        </section>
+
+        <LlmInsightPanel
+          :detail="detail"
+          :request-content="llmRequestContent"
+          :request-loading="llmRequestLoading"
+          :request-error="llmRequestError"
+          :request-content-available="llmRequestContentAvailable"
+          @load-request-content="loadLlmRequestContent"
+        />
+        <HttpInsightPanel :detail="detail" />
+        <CommandInsightPanel :detail="detail" />
+        <McpInsightPanel
+          :detail="detail"
+          :payload="mcpPayload"
+          :payload-loading="payloadLoading"
+          :payload-error="mcpPayloadError"
+        />
       </template>
-    </dl>
 
-    <section v-if="panelError" class="detail-section">
-      <h3>Error</h3>
-      <p class="detail-error">{{ panelError }}</p>
-    </section>
+      <template #secondary>
+        <LlmRequestCanonicalBody
+          :trace-id="traceId"
+          :action-id="llmRequestActionId(detail)"
+          :metadata="llmRequestContentMetadata"
+        />
 
-    <LlmInsightPanel
-      :detail="detail"
-      :request-content="llmRequestContent"
-      :request-loading="llmRequestLoading"
-      :request-error="llmRequestError"
-      :request-content-available="llmRequestContentAvailable"
-      @load-request-content="loadLlmRequestContent"
-    />
-    <LlmRequestCanonicalBody
-      :trace-id="traceId"
-      :action-id="llmRequestActionId(detail)"
-      :metadata="llmRequestContentMetadata"
-    />
-    <HttpInsightPanel :detail="detail" />
-    <CommandInsightPanel :detail="detail" />
-    <McpInsightPanel
-      :detail="detail"
-      :payload="mcpPayload"
-      :payload-loading="payloadLoading"
-      :payload-error="mcpPayloadError"
-    />
+        <section v-if="Object.keys(detailAttributes).length" class="detail-section">
+          <h3>Attributes</h3>
+          <JsonTree
+            :value="detailAttributes"
+            :expanded-paths="jsonExpandedPaths('attributes')"
+            @toggle-node="updateJsonExpansion('attributes', $event)"
+          />
+        </section>
 
-    <section v-if="Object.keys(detailAttributes).length" class="detail-section">
-      <h3>Attributes</h3>
-      <JsonTree
-        :value="detailAttributes"
-        :expanded-paths="jsonExpandedPaths('attributes')"
-        @toggle-node="updateJsonExpansion('attributes', $event)"
-      />
-    </section>
+        <section v-if="payloadText && !isMcpPayloadDetail" class="detail-section">
+          <h3>Payload</h3>
+          <pre>{{ payloadText }}</pre>
+        </section>
 
-    <section v-if="payloadText && !isMcpPayloadDetail" class="detail-section">
-      <h3>Payload</h3>
-      <pre>{{ payloadText }}</pre>
-    </section>
+        <section v-if="hasFilePathSet" class="detail-section">
+          <h3>Path Set</h3>
+          <dl v-if="filePathSetRows.length" class="detail-rows path-set-rows">
+            <template v-for="[key, value] in filePathSetRows" :key="key">
+              <dt>{{ key }}</dt>
+              <dd>{{ value }}</dd>
+            </template>
+          </dl>
+          <ul v-if="filePathSetPaths.length" class="path-set-list">
+            <li v-for="path in filePathSetPaths" :key="path.path_id">
+              <code>{{ path.path }}</code>
+            </li>
+          </ul>
+          <button
+            v-if="filePathSetHasMore"
+            class="detail-load-button"
+            type="button"
+            :disabled="filePathSetLoading"
+            @click="loadMoreFilePathSet"
+          >
+            <ChevronDown :size="16" aria-hidden="true" />
+            <span>{{ filePathSetLoading ? 'Loading' : 'More' }}</span>
+          </button>
+          <p v-else-if="filePathSetLoading" class="detail-muted">Loading</p>
+        </section>
 
-    <section v-if="hasFilePathSet" class="detail-section">
-      <h3>Path Set</h3>
-      <dl v-if="filePathSetRows.length" class="detail-rows path-set-rows">
-        <template v-for="[key, value] in filePathSetRows" :key="key">
-          <dt>{{ key }}</dt>
-          <dd>{{ value }}</dd>
-        </template>
-      </dl>
-      <ul v-if="filePathSetPaths.length" class="path-set-list">
-        <li v-for="path in filePathSetPaths" :key="path.path_id">
-          <code>{{ path.path }}</code>
-        </li>
-      </ul>
-      <button
-        v-if="filePathSetHasMore"
-        class="detail-load-button"
-        type="button"
-        :disabled="filePathSetLoading"
-        @click="loadMoreFilePathSet"
-      >
-        <ChevronDown :size="16" aria-hidden="true" />
-        <span>{{ filePathSetLoading ? 'Loading' : 'More' }}</span>
-      </button>
-      <p v-else-if="filePathSetLoading" class="detail-muted">Loading</p>
-    </section>
-
-    <section v-if="detailRawValue" class="detail-section">
-      <h3>JSON</h3>
-      <JsonTree
-        :value="detailRawValue"
-        :expanded-paths="jsonExpandedPaths('raw')"
-        @toggle-node="updateJsonExpansion('raw', $event)"
-      />
-    </section>
+        <section v-if="detailRawValue" class="detail-section">
+          <h3>JSON</h3>
+          <JsonTree
+            :value="detailRawValue"
+            :expanded-paths="jsonExpandedPaths('raw')"
+            @toggle-node="updateJsonExpansion('raw', $event)"
+          />
+        </section>
+      </template>
+    </ProgressiveDisclosure>
   </aside>
 </template>
 
@@ -110,6 +120,7 @@ import HttpInsightPanel from './HttpInsightPanel.vue';
 import JsonTree from './JsonTree.vue';
 import LlmInsightPanel from './LlmInsightPanel.vue';
 import McpInsightPanel from './McpInsightPanel.vue';
+import ProgressiveDisclosure from './ProgressiveDisclosure.vue';
 import LlmRequestCanonicalBody from './llm/LlmRequestCanonicalBody.vue';
 import { deriveMcpJsonRpcView, mcpJsonRpcContentSource } from '../mcp/jsonRpcContent';
 import { mcpPayloadEvidenceIds } from '../mcp/payloadEvidence';
@@ -131,6 +142,10 @@ const props = defineProps({
     default: '',
   },
   hideWhenEmpty: {
+    type: Boolean,
+    default: false,
+  },
+  progressiveDetails: {
     type: Boolean,
     default: false,
   },
@@ -156,6 +171,7 @@ const filePathSetHasMore = ref(false);
 const llmRequestContent = ref(null);
 const llmRequestError = ref('');
 const llmRequestLoading = ref(false);
+const showAllDetails = ref(false);
 const jsonExpansionByKey = ref(new Map());
 let activePayloadLoad = null;
 let activeFilePathSetLoad = null;

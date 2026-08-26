@@ -105,6 +105,11 @@ pub trait SemanticActionReadStore {
         action_id: &str,
     ) -> Result<Option<LlmRequestLineage>, SemanticActionStoreError>;
 
+    fn llm_request_lineages(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<Vec<LlmRequestLineage>, SemanticActionStoreError>;
+
     fn llm_request_trajectory(
         &self,
         trace_id: TraceId,

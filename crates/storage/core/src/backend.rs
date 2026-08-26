@@ -218,6 +218,10 @@ pub trait StorageBackend {
         trace_id: TraceId,
         action_id: &str,
     ) -> Result<Option<LlmRequestLineage>, StorageError>;
+    fn llm_request_lineages(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<Vec<LlmRequestLineage>, StorageError>;
     fn llm_request_trajectory(
         &self,
         trace_id: TraceId,
