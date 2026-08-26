@@ -1,0 +1,43 @@
+@startuml
+skinparam defaultFontName "WenQuanYi Micro Hei"
+skinparam componentStyle rectangle
+left to right direction
+
+title 执行隔离的 SB 与网关组件
+
+package "Guest: actrail-sb" {
+  component "Control Server\n接收 connect" as Control
+  component "I/O Collector\neBPF 聚合增量" as Io
+  component "Resource Sampler\nprocfs 指标" as Resource
+  component "Connection Gate\n按 generation 门控" as Gate
+  component "Session Owner\n握手、批次、心跳" as Session
+  Control --> Session
+  Io --> Gate
+  Resource --> Gate
+  Gate --> Session
+}
+
+package "Host: actrail-vsock-gateway" {
+  component "Guest Listener" as Listener
+  component "SB Session Registry\n连接级 sb-id" as Registry
+  component "Bounded Forwarder\n包装原始 SB frame" as Forwarder
+  component "TCP Upstream\n握手与重连" as Upstream
+  Listener --> Registry
+  Registry --> Forwarder
+  Forwarder --> Upstream
+}
+
+component "actraild\nGatewayIngestRuntime" as Daemon
+
+Session --> Listener : AF_VSOCK 或 VMM bridge
+Upstream --> Daemon : ForwardedSbFrame / TCP
+
+note bottom of Gate
+  未连接时继续采集并推进基线
+  观测不缓冲、不补发
+end note
+
+note bottom of Forwarder
+  不解码 observation payload
+end note
+@enduml

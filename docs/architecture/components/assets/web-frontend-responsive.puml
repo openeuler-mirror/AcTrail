@@ -1,0 +1,36 @@
+@startuml
+skinparam defaultFontName "WenQuanYi Micro Hei"
+skinparam componentStyle rectangle
+left to right direction
+title actrailweb 核心响应式折叠
+
+frame "宽屏 > 1100 px" {
+  rectangle "Topbar 单行" as DTop
+  rectangle "Trace rail" as DRail
+  rectangle "主内容" as DMain
+  rectangle "DetailPanel 右栏" as DDetail
+  DTop -[hidden]down-> DRail
+  DRail -[hidden]right-> DMain
+  DMain -[hidden]right-> DDetail
+}
+
+frame "中屏 <= 1100 px" {
+  rectangle "Topbar 单行" as MTop
+  rectangle "Trace rail\n220 px" as MRail
+  rectangle "主内容" as MMain
+  rectangle "DetailPanel 下移\n最大高度 360 px" as MDetail
+  MTop -[hidden]down-> MRail
+  MRail -[hidden]right-> MMain
+  MMain -[hidden]down-> MDetail
+}
+
+frame "窄屏 <= 760 px" {
+  rectangle "Topbar 纵向\n工具栏与搜索占满宽度" as STop
+  rectangle "工作区页签\n横向滚动" as STabs
+  rectangle "Trace / Stats 导航\n转为顶部区域" as SRail
+  rectangle "单列内容\n指标卡两列" as SMain
+  STop -[hidden]down-> STabs
+  STabs -[hidden]down-> SRail
+  SRail -[hidden]down-> SMain
+}
+@enduml

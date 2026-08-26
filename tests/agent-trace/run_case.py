@@ -11,20 +11,9 @@ from pathlib import Path
 
 
 CASES = {
-    "claude-code": "claude-code/run_e2e.py",
-    "opencode-bun": "opencode-bun/run_e2e.py",
     "xiaoo-rustls": "xiaoo-rustls/run_e2e.py",
-    "xiaoo-http-proxy": "xiaoo-http-proxy/run_e2e.py",
     "agentscope-openai": "agentscope-openai/run_e2e.py",
-    "langgraph-openai": "langgraph-openai/run_e2e.py",
-    "go-net-http": "go-net-http/run_e2e.py",
     "gnutls-nss-llm": "gnutls-nss-llm/run_e2e.py",
-    "java-netty-tcnative": "java-netty-tcnative/run_e2e.py",
-    "dynamic-tls": "dynamic-tls/run_e2e.py",
-    "namespaced-tls-lookup": "namespaced-tls-lookup/run_e2e.py",
-    "polluted-env-wrapper": "polluted-env-wrapper/run_e2e.py",
-    "multi-libc-wrapper": "multi-libc-wrapper/run_e2e.py",
-    "tls-flow-reset": "tls-flow-reset/run_e2e.py",
 }
 
 

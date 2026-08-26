@@ -1,0 +1,27 @@
+@startuml
+skinparam defaultFontName "WenQuanYi Micro Hei"
+skinparam componentStyle rectangle
+top to bottom direction
+title actrailweb 前端运行时状态与请求流
+
+component "App 根状态\nworkspace / traces / query\ntheme / locale / refresh" as Root
+component "Vue 组件" as Components
+component "Workspace 局部状态\n选择 / 分页 / 筛选 / 加载状态" as Local
+component "api.js\nHTTP 请求边界" as Api
+component "actrailweb HTTP Router" as Router
+component "View Projection" as View
+component "Plugin Administration" as PluginApi
+database "只读 Storage\n或 Cluster root" as Storage
+component "actraild\ncontrol socket" as Daemon
+
+Root --> Components : props
+Components --> Root : events / v-model
+Components --> Local : 创建与更新
+Local --> Components : computed view
+Local --> Api : 加载 / 刷新 / 控制
+Api --> Router : fetch /api/*
+Router --> View : trace / stats / alerts / config
+Router --> PluginApi : plugin API
+View --> Storage
+PluginApi --> Daemon : load / unload / command / config
+@enduml

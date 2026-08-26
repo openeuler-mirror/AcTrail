@@ -1,0 +1,34 @@
+@startuml
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam componentStyle rectangle
+skinparam defaultFontName "WenQuanYi Micro Hei"
+left to right direction
+
+node "Linux 主机：可信侧" as Host {
+  component "actrail-vsock-gateway" as Gateway
+  component "actraild\nGateway ingest + Sandbox plugins" as Daemon
+  database "brain-side 主存储\n（不接收 hand-side observation）" as MainDb
+  database "Sandbox Evidence DB" as EvidenceDb
+  database "Sandbox Alert DB" as AlertDb
+
+  node "VMM 边界" as Vmm {
+    node "Guest 沙箱：hand side" as Guest {
+      component "actrail-sb" as Sb
+      component "hand-side workload" as Workload
+    }
+  }
+}
+
+Workload --> Sb : Guest-local observation
+Sb --> Gateway : AF_VSOCK Hand frame
+Gateway --> Daemon : TCP Hand frame
+Daemon --> EvidenceDb : 无匹配使用方
+Daemon --> AlertDb : Sandbox 插件提交 alert
+Daemon .. MainDb : brain-side 路径独立
+
+note bottom of Daemon
+匹配 observation 进入对应 Sandbox 插件队列；
+不转换为 brain-side trace 或身份。
+end note
+@enduml

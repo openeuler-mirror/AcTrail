@@ -1,0 +1,36 @@
+@startuml
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam componentStyle rectangle
+skinparam defaultFontName "WenQuanYi Micro Hei"
+left to right direction
+
+actor "运维 / 安全分析人员" as User
+rectangle "workload 进程" as Workload {
+  component "Agent" as Agent
+  component "TLS-sync runtime" as Tls
+}
+component "actrailctl" as Ctl
+component "actraild\n采集、语义、治理、插件" as Daemon
+component "actrailweb\nlocal mode" as LocalWeb
+component "actrailviewer" as Viewer
+database "主存储" as MainDb
+component "actraild-alert-proxy\n（可选）" as AlertProxy
+rectangle "告警订阅方" as Subscribers
+cloud "OpenTelemetry collector" as Otel
+
+User --> Ctl : 命令
+Ctl --> Daemon : AF_UNIX control
+Ctl --> Agent : launch / attach
+Agent .. Tls : 进程内加载
+Tls --> Daemon : 明文 payload
+Daemon --> MainDb : 读写 trace 与 action
+LocalWeb --> MainDb : 只读查询
+LocalWeb --> Daemon : AF_UNIX control
+Viewer --> MainDb : 只读查询 / 导出
+User --> LocalWeb
+User --> Viewer
+Daemon --> AlertProxy : AF_UNIX ATAP
+AlertProxy --> Subscribers : TCP ATAP
+Daemon --> Otel : OTLP / HTTP export
+@enduml

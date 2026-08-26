@@ -1,0 +1,57 @@
+@startuml
+skinparam defaultFontName "WenQuanYi Micro Hei"
+skinparam componentStyle rectangle
+top to bottom direction
+title actrailweb 前端组件包含关系
+
+component "App\n应用壳与根状态" as App
+component "Topbar\n主题、语言、搜索、刷新" as Topbar
+component "GlobalTabs\n工作区选择" as GlobalTabs
+component "StatsWorkspace" as Stats
+component "ConfigWorkspace" as Config
+component "PluginsWorkspace" as Plugins
+component "TraceWorkspace" as Trace
+component "LlmRequestsWorkspace" as Llm
+component "TimeAttributionWorkspace" as TimeStats
+component "AlertsWorkspace" as Alerts
+component "LLM 页面\nOverview / Trends / Latency\nExplore / Settings" as LlmPages
+component "插件控件\nConfigPanel / CommandForm\nLoadDialog / UnloadDialog" as PluginControls
+component "Trace rail\ntrace 选择" as TraceRail
+component "Workspace main" as TraceMain
+component "Metrics strip" as Metrics
+component "TraceTabs\n仅负责页签导航" as TraceTabs
+component "Active trace page\n动态组件" as ActivePage
+component "tabs/registry.js\nID / 标签 / 组件" as Registry
+component "专用 Trace 页面\nOverview / Action Tree / Waterfall\nTime Attribution / Commands / Alerts" as DedicatedTabs
+component "TableTraceTab\n通用表格—详情布局" as TableTab
+component "DataTable" as DataTable
+component "DetailPanel" as Detail
+component "Insight panels\nLLM / HTTP / Command / MCP\nCanonical body / JSON tree" as Insights
+component "Notification stack\nError bar" as Feedback
+
+App *-- Topbar
+App *-- GlobalTabs
+App *-- Stats
+App *-- Config
+App *-- Plugins
+App *-- Trace
+App *-- Feedback
+Stats *-- Llm
+Stats *-- TimeStats
+Stats *-- Alerts
+Llm *-- LlmPages
+Plugins *-- PluginControls
+Trace *-- TraceRail
+Trace *-- TraceMain
+TraceMain *-- Metrics
+TraceMain *-- TraceTabs
+TraceMain *-- ActivePage
+Trace ..> Registry : 读取定义
+Registry ..> ActivePage : 选择组件
+ActivePage *-- DedicatedTabs
+ActivePage *-- TableTab : 表格型页面
+TableTab *-- DataTable
+TableTab *-- Detail
+DedicatedTabs ..> Detail : 部分页签复用
+Detail *-- Insights
+@enduml

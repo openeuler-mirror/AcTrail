@@ -1,0 +1,25 @@
+@startuml
+title TLS sync 从解析到明文上报
+top to bottom direction
+skinparam componentStyle rectangle
+skinparam shadowing false
+
+component "actrailctl launch" as Launch
+component "daemon plan resolver" as Resolver
+database "有界二进制分析缓存" as Cache
+component "preload / audit runtime" as Runtime
+component "动态入口" as Dynamic
+component "明文 hook" as Hook
+component "daemon payload ingress" as Ingress
+
+Launch --> Resolver : 查询初始 executable
+Resolver --> Cache : 按 artifact identity 查找分析结果
+Resolver --> Launch : probe plan 或 Unsupported
+Launch --> Runtime : LD_PRELOAD + 条件式 LD_AUDIT\nplan bundle + socket/trace 配置
+Runtime --> Hook : 安装 executable / shared-library plan
+Runtime --> Dynamic : 保留运行期发现能力
+Dynamic --> Resolver : dlsym / dlopen / 新 executable 查询
+Dynamic --> Hook : binding wrapper 或新 plan
+Hook --> Ingress : Unix socket 上报 TLS payload segment
+Runtime --> Runtime : exec 子进程时继续传播观测环境
+@enduml

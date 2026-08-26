@@ -1,0 +1,21 @@
+@startuml
+skinparam defaultFontName "WenQuanYi Micro Hei"
+skinparam componentStyle rectangle
+top to bottom direction
+title actrailweb 前端构建、嵌入与交付链路
+
+folder "frontend/src\nVue + JavaScript + CSS" as Source
+component "Vite 6" as Vite
+folder "index.html\nassets/app.js\nassets/app.css" as Dist
+component "build.rs\n校验资源并生成 asset table" as Build
+artifact "actrailweb binary\ninclude_bytes!" as Binary
+component "HTTP Router" as Router
+component "浏览器" as Browser
+
+Source --> Vite : npm run build
+Vite --> Dist
+Dist --> Build
+Build --> Binary
+Binary --> Router : 嵌入式资源
+Router --> Browser : / 与 /assets/*
+@enduml
