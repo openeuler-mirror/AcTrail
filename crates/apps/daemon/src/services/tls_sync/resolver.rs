@@ -54,6 +54,7 @@ struct BinaryPlanRecord {
 }
 
 struct BinaryPlanDescriptor {
+    target: PathBuf,
     binary: PathBuf,
     target_identity: BinaryIdentity,
     binary_identity: BinaryIdentity,
@@ -262,7 +263,7 @@ impl TlsSyncPlanWorker {
             cache_hit,
             cache_after,
         );
-        outcome_for_record(record, runtime_binary, cache_hit, started)
+        outcome_for_record(record, cache_hit, started)
     }
 
     fn resolve_plans(
@@ -299,6 +300,7 @@ impl TlsSyncPlanWorker {
                 validate_native_backend_plan(&plan)
                     .map_err(|error| ControlError::new("tls_sync_plan", error.to_string()))?;
                 Ok(BinaryPlanDescriptor {
+                    target: runtime_view_binary(&plan.target.binary, runtime_binary, probe_binary),
                     binary: runtime_view_binary(&plan.binary.path, runtime_binary, probe_binary),
                     target_identity: plan.target.identity.clone(),
                     binary_identity: plan.binary.identity.clone(),
@@ -347,7 +349,6 @@ fn probe_binary_path(
 
 fn outcome_for_record(
     record: BinaryPlanRecord,
-    runtime_binary: &Path,
     cache_hit: bool,
     started: Instant,
 ) -> PlanLookupOutcome {
@@ -355,7 +356,7 @@ fn outcome_for_record(
     let mut response = None;
     for plan in record.plans {
         let descriptor = RuntimePlanDescriptor {
-            target: runtime_binary.to_path_buf(),
+            target: plan.target,
             target_identity: plan.target_identity,
             binary: plan.binary,
             binary_identity: plan.binary_identity,
