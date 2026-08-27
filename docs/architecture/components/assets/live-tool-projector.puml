@@ -1,0 +1,31 @@
+@startuml
+skinparam defaultFontName "WenQuanYi Micro Hei"
+skinparam componentStyle rectangle
+left to right direction
+
+title Live Tool Projector 当前组件边界
+
+component "LiveSemanticActionRuntime\n唯一调用者" as Runtime
+component "ToolInteractionProjector\n批次编排" as Projector
+component "DeclaredLlmToolCalls\n声明解码" as Declaration
+component "AgentInvocationCorrelator\n结果与子请求关联" as Correlator
+component "ToolInteractionState\n记录、索引与 trace 清理" as State
+component "ToolSemanticEmitter\naction、link 与诊断" as Emitter
+database "LiveSemanticActionOutput\n统一持久化输入" as Output
+
+Runtime --> Projector : actions / tool results / lineage
+Projector --> Declaration : 解码 llm.response tool calls
+Projector --> Correlator : 选择关联候选
+Correlator --> State : 语义查询
+Projector --> State : 记录 / 完成 / 清理
+Projector --> Emitter : 已判定的转换
+Emitter --> Output : actions / links / diagnostics
+Projector --> Runtime : ToolProjectionOutput
+Runtime --> Output : 合并输出
+
+note bottom of State
+  状态按 trace 受限
+  finish_trace 物化后清理
+  forget_trace 直接清理
+end note
+@enduml

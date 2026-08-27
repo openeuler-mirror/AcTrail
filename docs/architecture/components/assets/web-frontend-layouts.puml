@@ -1,0 +1,53 @@
+@startuml
+skinparam defaultFontName "WenQuanYi Micro Hei"
+skinparam componentStyle rectangle
+top to bottom direction
+title actrailweb 关键页面布局
+
+rectangle "应用壳" as Shell {
+  rectangle "Topbar：品牌 | 主题、语言、全局搜索、刷新" as ShellTop
+  rectangle "GlobalTabs：Statistics | Config | Plugins | Traces" as ShellTabs
+  rectangle "Active Workspace" as ShellBody
+  rectangle "通知栈 / 错误条" as ShellFeedback
+}
+
+rectangle "Trace Workspace" as TraceLayout {
+  rectangle "Trace 列表" as TraceRail
+  rectangle "指标条 + Trace 页签 + 当前页" as TraceMain
+  rectangle "DetailPanel\n宽屏右栏 / 窄屏下栏" as TraceDetail
+}
+
+rectangle "LLM Statistics" as LlmLayout {
+  rectangle "日期、搜索、刷新、导出" as LlmHeader
+  rectangle "Overview | Trends | Latency | Explore | Settings" as LlmTabs
+  rectangle "指标、图表与请求表" as LlmContent
+}
+
+rectangle "Plugins" as PluginsLayout {
+  rectangle "发现与启动摘要" as PluginSide
+  rectangle "Loaded instances\n生命周期、命令与配置" as Loaded
+  rectangle "Plugin candidates\n加载条件与授权" as Candidates
+}
+
+rectangle "Alerts" as AlertsLayout {
+  rectangle "标题、总数与轮询设置" as AlertHeader
+  rectangle "告警列表\n严重级别筛选" as AlertList
+  rectangle "告警详情\n字段、结构化 payload、打开 trace" as AlertDetail
+}
+
+ShellTop -[hidden]down-> ShellTabs
+ShellTabs -[hidden]down-> ShellBody
+ShellBody -[hidden]down-> ShellFeedback
+TraceRail -[hidden]right-> TraceMain
+TraceMain -[hidden]right-> TraceDetail
+LlmHeader -[hidden]down-> LlmTabs
+LlmTabs -[hidden]down-> LlmContent
+PluginSide -[hidden]right-> Loaded
+Loaded -[hidden]down-> Candidates
+AlertHeader -[hidden]down-> AlertList
+AlertList -[hidden]right-> AlertDetail
+Shell -[hidden]down-> TraceLayout
+TraceLayout -[hidden]right-> LlmLayout
+TraceLayout -[hidden]down-> PluginsLayout
+PluginsLayout -[hidden]right-> AlertsLayout
+@enduml

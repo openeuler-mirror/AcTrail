@@ -1,6 +1,8 @@
-# AcTrail 代码布局
+# 代码布局
 
-文档按当前事实、目标代码布局和设计约束分开：
+> 本文说明运行时职责与负责该职责的 crate 和模块之间的对应关系。
 
-- [当前代码布局](current-layout.md)：workspace 现有目录、职责、组装根和执行隔离能力缺口。
-- [执行隔离代码布局](execution-isolation/README.md)：目标代码布局及其独立设计约束。
+这些页面描述当前运行时职责与源码边界的对应关系。
+
+- [当前仓库布局](current.md)
+- [执行隔离代码布局](execution-isolation.md)

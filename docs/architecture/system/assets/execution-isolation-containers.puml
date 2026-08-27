@@ -1,0 +1,20 @@
+@startuml
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam componentStyle rectangle
+skinparam defaultFontName "WenQuanYi Micro Hei"
+left to right direction
+
+component "hand-side workload" as HandWorkload
+component "actrail-sb" as Sb
+component "actrail-vsock-gateway" as Gateway
+component "actraild\nGateway ingest + Sandbox plugins" as Daemon
+database "Sandbox Evidence DB" as EvidenceDb
+database "Sandbox Alert DB" as AlertDb
+
+HandWorkload --> Sb : Guest-local observation
+Sb --> Gateway : VSOCK Hand frame
+Gateway --> Daemon : TCP Hand frame
+Daemon --> EvidenceDb : 无匹配使用方
+Daemon --> AlertDb : Sandbox 插件提交 alert
+@enduml

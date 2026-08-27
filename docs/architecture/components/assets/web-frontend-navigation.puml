@@ -1,0 +1,37 @@
+@startwbs
+skinparam defaultFontName "WenQuanYi Micro Hei"
+skinparam monochrome true
+title actrailweb 前端工作区导航
+
+* AcTrail Web
+** Statistics
+*** LLM Requests
+**** Overview
+**** Trends
+**** Latency
+**** Explore
+**** Settings
+*** Time Attribution
+*** Alerts
+** Config
+*** Current configuration
+** Plugins
+*** Loaded instances
+*** Plugin candidates
+** Traces
+*** Overview
+*** Action Tree
+*** Waterfall
+*** Time Attribution
+*** Commands
+*** Timeline
+*** Events
+*** Process Tree
+*** Processes
+*** Network
+*** Files
+*** Payloads
+*** Resources
+*** Alerts
+*** Diagnostics
+@endwbs

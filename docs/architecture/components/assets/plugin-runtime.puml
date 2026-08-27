@@ -1,0 +1,43 @@
+@startuml
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam componentStyle rectangle
+skinparam defaultFontName "WenQuanYi Micro Hei"
+top to bottom direction
+
+package "actraild 插件宿主" {
+  component "加载、配置与 grant 校验" as Loader
+  component "Plugin host\n受控 hostcall 边界" as Host
+  component "同步 control path\n被观测进程等待结果" as Control
+  component "异步 observation path\n有界 queue 与 batch" as Observation
+}
+
+package "三种运行形态" {
+  component "WASM core module\n导出函数 + 线性 memory" as Core
+  component "WIT component\n结构化 WIT interface" as Wit
+  component "builtin\n进程内 Rust 实现" as Builtin
+}
+
+component "被观测进程" as Process
+component "Recording 热路径" as Recording
+
+Loader --> Host : 创建已授权实例
+Host --> Core : ABI 调用
+Host --> Wit : WIT 调用
+Host --> Builtin : Rust trait 调用
+Process --> Control : 治理请求
+Control --> Host : gray / 明确插件规则
+Host --> Control : allow / deny / error
+Recording --> Observation : observation batch
+Observation --> Host : 异步投递
+
+note right of Control
+  timeout 或插件错误
+  只在控制 contract 内收敛
+end note
+
+note right of Observation
+  queue 满或 consumer 失败
+  不阻塞 recording 和其他插件
+end note
+@enduml
