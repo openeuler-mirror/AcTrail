@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from action_snapshot import SemanticActionSnapshot  # noqa: E402
+from action_snapshot import EventSnapshot, SemanticActionSnapshot  # noqa: E402
 
 
 TRACE_RE = re.compile(r"trace trace-(\d+) entered Active")
@@ -209,36 +209,30 @@ def verify_writev_recording(
 ) -> None:
     if output_path.read_bytes() != b"alpha-beta\ngamma-delta\n":
         raise RuntimeError(f"unexpected writev output in {output_path}")
-    with sqlite3.connect(storage) as connection:
-        writev_raw_count = connection.execute(
-            """
-            SELECT COUNT(*)
-            FROM events
-            WHERE trace_id = ?
-              AND payload_variant = 'file'
-              AND payload_fields LIKE '%operation=writev%'
-              AND payload_fields LIKE ?
-            """,
-            (trace_id, f"%path={str(output_path)}%"),
-        ).fetchone()[0]
-        if writev_raw_count < 2:
-            raise RuntimeError(f"expected at least two raw file writev events, got {writev_raw_count}")
-        actions = SemanticActionSnapshot.load(actrailviewer, config, trace_id).actions(
-            "file.write"
+    writev_raw_count = sum(
+        1
+        for event in EventSnapshot.load(actrailviewer, config, trace_id).events("file")
+        if event.payload.get("operation") == "writev"
+        and event.payload.get("path") == str(output_path)
+    )
+    if writev_raw_count < 2:
+        raise RuntimeError(f"expected at least two raw file writev events, got {writev_raw_count}")
+    actions = SemanticActionSnapshot.load(actrailviewer, config, trace_id).actions(
+        "file.write"
+    )
+    bytes_written = 0
+    write_actions = 0
+    for action in actions:
+        attributes = action.attributes
+        if attributes.get("file.path") != str(output_path):
+            continue
+        write_actions += 1
+        bytes_written += int(attributes.get("file.bytes_written", "0"))
+    if write_actions < 1 or bytes_written < EXPECTED_BYTES:
+        raise RuntimeError(
+            "missing file.write action bytes for regular-file writev: "
+            f"actions={write_actions} bytes={bytes_written}"
         )
-        bytes_written = 0
-        write_actions = 0
-        for action in actions:
-            attributes = action.attributes
-            if attributes.get("file.path") != str(output_path):
-                continue
-            write_actions += 1
-            bytes_written += int(attributes.get("file.bytes_written", "0"))
-        if write_actions < 1 or bytes_written < EXPECTED_BYTES:
-            raise RuntimeError(
-                "missing file.write action bytes for regular-file writev: "
-                f"actions={write_actions} bytes={bytes_written}"
-            )
 
 
 def stop_daemon(process: subprocess.Popen[str]) -> None:

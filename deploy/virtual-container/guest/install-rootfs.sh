@@ -8,25 +8,35 @@ source "$SCRIPT_DIR/otel-endpoint.sh"
 ROOTFS=""
 BUNDLE=""
 CONFIG="$SCRIPT_DIR/operator.conf"
+OTEL_STARTUP="$SCRIPT_DIR/otel-http-startup.toml"
 UNIT="$SCRIPT_DIR/actraild.service"
 TMPFILES="$SCRIPT_DIR/actrail-tmpfiles.conf"
 INTERFACE_DROP_IN="$SCRIPT_DIR/systemd/workload-interface/kata-agent.service.d/10-actrail-workload-interface.conf"
+SB_CONFIG="$SCRIPT_DIR/sandbox-observer.toml"
+SB_UNIT="$SCRIPT_DIR/actrail-sb.service"
+SB_CONNECT_UNIT="$SCRIPT_DIR/actrail-sb-connect.service"
 OTEL_ENDPOINT=""
+OTEL_EXPORT_ENABLED=0
+OTEL_ENDPOINT_CONFIGURED="false"
+EGRESS_MODE="network"
 STARTUP_DEPENDENCY="optional"
 WITH_VIEWER=0
+WITH_SANDBOX_OBSERVER=0
 SOCKET_GID=39000
 MIN_FREE_BYTES=$((32 * 1024 * 1024))
 
 usage() {
   cat <<'EOF'
-Usage: install-rootfs.sh --rootfs DIR --bundle DIR --otel-endpoint URL [options]
+Usage: install-rootfs.sh --rootfs DIR --bundle DIR [options]
 
 Options:
   --config FILE                Guest operator config (default: guest/operator.conf)
   --unit FILE                  Guest systemd unit (default: guest/actraild.service)
-  --otel-endpoint URL          Guest-reachable OTLP/HTTP traces URL (required)
+  --otel-endpoint URL          Enable OTLP/HTTP export to this Guest-reachable URL
+  --egress-mode MODE           Export path: network or vsock-bridge (default: network)
   --startup-dependency POLICY  optional or required (default: optional)
   --with-viewer                Also install actrailviewer (omitted by default)
+  --with-sandbox-observer      Install actrail-sb as a Guest system service
   --socket-gid GID             Numeric GID shared with workloads (default: 39000)
   --min-free-mib N             Free-space reserve after installation (default: 32)
   -h, --help                   Show this help
@@ -35,10 +45,13 @@ The rootfs must contain systemd, kata-containers.target and kata-agent.service.
 The script never accepts / as --rootfs and verifies bundle checksums, ELF
 architecture and the target rootfs GLIBC level before writing files.
 
-The OTLP endpoint must use http:// or https:// and name the Collector address
-reachable from inside the Guest. Guest 127.0.0.1 is the Guest itself, not the
-host. Its path must end in /v1/traces; query strings, fragments and placeholder
-endpoints are rejected instead of being installed.
+Without --otel-endpoint, actraild stores observations only in the Guest-local
+SQLite database and does not load otel-http. When supplied, the endpoint must
+use http:// or https:// and its path must end in /v1/traces; query strings,
+fragments and placeholder endpoints are rejected instead of being installed.
+The egress mode selects which destination is legitimate: in network mode the
+endpoint names a receiver reachable from inside the Guest; in vsock-bridge mode
+the endpoint must be the Guest loopback address served by the VSOCK bridge.
 
 The startup dependency controls only whether kata-agent requires a ready
 actraild service. It does not select Agent observation failure behavior.
@@ -77,6 +90,11 @@ while [[ "$#" -gt 0 ]]; do
       OTEL_ENDPOINT="$2"
       shift 2
       ;;
+    --egress-mode)
+      [[ "$#" -ge 2 ]] || fail "--egress-mode requires a value"
+      EGRESS_MODE="$2"
+      shift 2
+      ;;
     --startup-dependency)
       [[ "$#" -ge 2 ]] || fail "--startup-dependency requires a value"
       STARTUP_DEPENDENCY="$2"
@@ -84,6 +102,10 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --with-viewer)
       WITH_VIEWER=1
+      shift
+      ;;
+    --with-sandbox-observer)
+      WITH_SANDBOX_OBSERVER=1
       shift
       ;;
     --socket-gid)
@@ -114,8 +136,12 @@ done
 
 [[ -n "$ROOTFS" ]] || fail "--rootfs is required"
 [[ -n "$BUNDLE" ]] || fail "--bundle is required"
-actrail_validate_guest_otel_endpoint "$OTEL_ENDPOINT" \
+actrail_validate_guest_otel_selection "$OTEL_ENDPOINT" "$EGRESS_MODE" \
   || fail "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
+if [[ -n "$OTEL_ENDPOINT" ]]; then
+  OTEL_EXPORT_ENABLED=1
+  OTEL_ENDPOINT_CONFIGURED="true"
+fi
 [[ -d "$ROOTFS" ]] || fail "rootfs is not a directory: $ROOTFS"
 [[ -d "$BUNDLE" ]] || fail "bundle is not a directory: $BUNDLE"
 [[ -f "$CONFIG" ]] || fail "config not found: $CONFIG"
@@ -123,6 +149,12 @@ actrail_validate_guest_otel_endpoint "$OTEL_ENDPOINT" \
 [[ -f "$TMPFILES" ]] || fail "tmpfiles config not found: $TMPFILES"
 [[ -f "$INTERFACE_DROP_IN" ]] \
   || fail "workload-interface drop-in not found: $INTERFACE_DROP_IN"
+if [[ "$WITH_SANDBOX_OBSERVER" == "1" ]]; then
+  [[ -f "$SB_CONFIG" ]] || fail "sandbox observer config not found: $SB_CONFIG"
+  [[ -f "$SB_UNIT" ]] || fail "sandbox observer unit not found: $SB_UNIT"
+  [[ -f "$SB_CONNECT_UNIT" ]] \
+    || fail "sandbox observer activation unit not found: $SB_CONNECT_UNIT"
+fi
 case "$STARTUP_DEPENDENCY" in
   optional|required) ;;
   *) fail "--startup-dependency must be optional or required" ;;
@@ -136,6 +168,11 @@ CONFIG="$(realpath "$CONFIG")"
 UNIT="$(realpath "$UNIT")"
 TMPFILES="$(realpath "$TMPFILES")"
 INTERFACE_DROP_IN="$(realpath "$INTERFACE_DROP_IN")"
+if [[ "$WITH_SANDBOX_OBSERVER" == "1" ]]; then
+  SB_CONFIG="$(realpath "$SB_CONFIG")"
+  SB_UNIT="$(realpath "$SB_UNIT")"
+  SB_CONNECT_UNIT="$(realpath "$SB_CONNECT_UNIT")"
+fi
 [[ "$ROOTFS" != "/" ]] || fail "refusing to install into /; pass an offline rootfs"
 
 rootfs_target() {
@@ -191,12 +228,19 @@ required_bundle_files=(
   actrailctl
   libactrail_tls_payload_probe_sync.so
   BUNDLE-INFO
-  plugins/otel-http/otel-http.plugin.toml
-  plugins/otel-http/otel-http.config.toml
-  plugins/otel-http/otel-http.config.v1.schema.json
 )
+if [[ -n "$OTEL_ENDPOINT" ]]; then
+  required_bundle_files+=(
+    plugins/otel-http/otel-http.plugin.toml
+    plugins/otel-http/otel-http.config.toml
+    plugins/otel-http/otel-http.config.v1.schema.json
+  )
+fi
 if [[ "$WITH_VIEWER" == "1" ]]; then
   required_bundle_files+=(actrailviewer)
+fi
+if [[ "$WITH_SANDBOX_OBSERVER" == "1" ]]; then
+  required_bundle_files+=(actrail-sb)
 fi
 for relative in "${required_bundle_files[@]}"; do
   [[ -f "$BUNDLE/$relative" ]] || fail "bundle file missing: $relative"
@@ -251,6 +295,9 @@ elf_inputs=(
 if [[ "$WITH_VIEWER" == "1" ]]; then
   elf_inputs+=("$BUNDLE/actrailviewer")
 fi
+if [[ "$WITH_SANDBOX_OBSERVER" == "1" ]]; then
+  elf_inputs+=("$BUNDLE/actrail-sb")
+fi
 while IFS= read -r library; do
   elf_inputs+=("$library")
 done < <(find "$BUNDLE/lib" -maxdepth 1 -type f -print | LC_ALL=C sort)
@@ -284,6 +331,12 @@ grep -Fqx 'socket_path = "/dev/actrail/control.sock"' "$CONFIG" \
   || fail "config must place the control socket in the workload interface directory"
 grep -Fqx 'sync_event_socket_path = "/dev/actrail/tls-sync.sock"' "$CONFIG" \
   || fail "config must place the TLS socket in the workload interface directory"
+if grep -Fq 'kata-guest.otel-http' "$CONFIG"; then
+  fail "base config must not load otel-http; pass --otel-endpoint to enable it"
+fi
+if [[ -n "$OTEL_ENDPOINT" ]]; then
+  [[ -f "$OTEL_STARTUP" ]] || fail "otel-http startup fragment not found: $OTEL_STARTUP"
+fi
 grep -Fq 'ExecStart=/usr/local/bin/actraild ' "$UNIT" \
   || fail "unit does not use the guest actraild installation path"
 grep -Fqx \
@@ -302,6 +355,16 @@ grep -Fqx \
   'ExecStartPre=/usr/bin/systemd-tmpfiles --create --prefix=/dev/actrail' \
   "$INTERFACE_DROP_IN" \
   || fail "kata-agent drop-in must materialize the workload interface"
+if [[ "$WITH_SANDBOX_OBSERVER" == "1" ]]; then
+  grep -Fqx \
+    "ExecStart=/bin/sh -ec 'exec /usr/local/bin/actrail-sb daemon --config /etc/actrail/sandbox-observer.toml >>/dev/actrail/sandbox-observer.log 2>&1'" \
+    "$SB_UNIT" \
+    || fail "sandbox observer unit does not use the Guest installation"
+  grep -Fqx \
+    'ExecStart=/usr/local/bin/actrail-sb connect --control-socket /dev/actrail/sandbox-observer-control.sock --host-cid 2 --port 43182 --request-timeout-ms 5000' \
+    "$SB_CONNECT_UNIT" \
+    || fail "sandbox observer activation unit does not use the local control socket"
+fi
 
 bin_dir="$(rootfs_target /usr/local/bin)"
 private_lib_dir="$(rootfs_target /usr/local/lib/actrail)"
@@ -334,18 +397,23 @@ install -d -m 0755 \
   "$bin_dir" \
   "$private_lib_dir" \
   "$config_dir" \
-  "$plugin_config_dir" \
   "$share_dir" \
-  "$plugin_manifest_dir" \
   "$tmpfiles_dir" \
   "$unit_dir"
-actrail_write_guest_otel_endpoint_config \
-  "$BUNDLE/plugins/otel-http/otel-http.config.toml" \
-  "$plugin_config_dir/otel-http.config.toml" \
-  "$OTEL_ENDPOINT" \
-  || fail "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
 install -m 0755 "$BUNDLE/actraild" "$bin_dir/actraild"
 install -m 0755 "$BUNDLE/actrailctl" "$bin_dir/actrailctl"
+if [[ "$WITH_SANDBOX_OBSERVER" == "1" ]]; then
+  install -m 0755 "$BUNDLE/actrail-sb" "$bin_dir/actrail-sb"
+  install -m 0640 "$SB_CONFIG" "$config_dir/sandbox-observer.toml"
+  install -m 0644 "$SB_UNIT" "$unit_dir/actrail-sb.service"
+  install -m 0644 "$SB_CONNECT_UNIT" "$unit_dir/actrail-sb-connect.service"
+else
+  rm -f \
+    "$bin_dir/actrail-sb" \
+    "$config_dir/sandbox-observer.toml" \
+    "$unit_dir/actrail-sb.service" \
+    "$unit_dir/actrail-sb-connect.service"
+fi
 install -m 0755 "$BUNDLE/libactrail_tls_payload_probe_sync.so" \
   "$private_lib_dir/libactrail_tls_payload_probe_sync.so"
 if [[ "$WITH_VIEWER" == "1" ]]; then
@@ -355,10 +423,28 @@ while IFS= read -r library; do
   install -m 0644 "$library" "$private_lib_dir/$(basename "$library")"
 done < <(find "$BUNDLE/lib" -maxdepth 1 -type f -print | LC_ALL=C sort)
 install -m 0640 "$CONFIG" "$config_dir/operator.conf"
-install -m 0644 \
-  "$BUNDLE/plugins/otel-http/otel-http.plugin.toml" \
-  "$BUNDLE/plugins/otel-http/otel-http.config.v1.schema.json" \
-  "$plugin_manifest_dir/"
+if [[ -n "$OTEL_ENDPOINT" ]]; then
+  install -d -m 0755 "$plugin_config_dir" "$plugin_manifest_dir"
+  actrail_write_guest_otel_endpoint_config \
+    "$BUNDLE/plugins/otel-http/otel-http.config.toml" \
+    "$plugin_config_dir/otel-http.config.toml" \
+    "$OTEL_ENDPOINT" \
+    "$EGRESS_MODE" \
+    || fail "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
+  printf '\n' >>"$config_dir/operator.conf"
+  awk '{ print }' "$OTEL_STARTUP" >>"$config_dir/operator.conf"
+  install -m 0644 \
+    "$BUNDLE/plugins/otel-http/otel-http.plugin.toml" \
+    "$BUNDLE/plugins/otel-http/otel-http.config.v1.schema.json" \
+    "$plugin_manifest_dir/"
+else
+  rm -f \
+    "$plugin_config_dir/otel-http.config.toml" \
+    "$plugin_manifest_dir/otel-http.plugin.toml" \
+    "$plugin_manifest_dir/otel-http.config.v1.schema.json"
+  [[ ! -d "$plugin_config_dir" ]] || rmdir --ignore-fail-on-non-empty "$plugin_config_dir"
+  [[ ! -d "$plugin_manifest_dir" ]] || rmdir --ignore-fail-on-non-empty "$plugin_manifest_dir"
+fi
 install -m 0644 "$UNIT" "$unit_dir/actraild.service"
 install -m 0644 "$TMPFILES" "$tmpfiles_dir/actrail.conf"
 
@@ -372,6 +458,74 @@ dependency_dir="$unit_dir/kata-agent.service.d"
 interface_target="$dependency_dir/10-actrail-workload-interface.conf"
 install -d -m 0755 "$dependency_dir"
 install -m 0644 "$INTERFACE_DROP_IN" "$interface_target"
+# Older observer images coupled kata-agent startup to actrail-sb. Remove that
+# drop-in on every install: Kata must remain reachable even when observation
+# cannot initialize, while execution tests gate independently on the ready file.
+rm -f "$dependency_dir/30-actrail-sandbox-observer.conf"
+if [[ "$WITH_SANDBOX_OBSERVER" == "1" ]]; then
+  for target in kata-containers.target multi-user.target; do
+    wants_dir="$unit_dir/$target.wants"
+    install -d -m 0755 "$wants_dir"
+    ln -sfn ../actrail-sb.service "$wants_dir/actrail-sb.service"
+    # The daemon is safe to start before the Host endpoint exists, but connect
+    # is a runtime orchestration action. Keep the production unit installed and
+    # enable-able without letting it race a case-owned gateway by default.
+    rm -f "$wants_dir/actrail-sb-connect.service"
+  done
+else
+  for target in kata-containers.target multi-user.target; do
+    rm -f \
+      "$unit_dir/$target.wants/actrail-sb.service" \
+      "$unit_dir/$target.wants/actrail-sb-connect.service"
+  done
+fi
+
+# The VSOCK egress bridge exists only in vsock-bridge mode. Its listen port is
+# rendered from the endpoint, which stays the single source of truth: the
+# exporter and the bridge cannot drift apart. Network mode must leave no bridge
+# behind, so a rootfs reinstalled into network mode is cleaned symmetrically.
+bridge_source_dir="$SCRIPT_DIR/../vsock-egress"
+bridge_libexec_dir="$ROOTFS/usr/local/libexec/actrail-vsock-egress"
+bridge_script_target="$bridge_libexec_dir/guest-bridge.sh"
+bridge_unit_target="$unit_dir/actrail-vsock-guest-bridge.service"
+if [[ -n "$OTEL_ENDPOINT" && "$EGRESS_MODE" == "vsock-bridge" ]]; then
+  bridge_listen_port="$(actrail_guest_otel_endpoint_port "$OTEL_ENDPOINT")" \
+    || fail "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
+  [[ -x "$ROOTFS/usr/bin/socat" ]] \
+    || fail "vsock-bridge egress requires socat in the guest rootfs: /usr/bin/socat"
+  [[ -f "$bridge_source_dir/guest-bridge.sh" ]] \
+    || fail "guest bridge script not found: $bridge_source_dir/guest-bridge.sh"
+  install -d -m 0755 "$bridge_libexec_dir"
+  install -m 0755 "$bridge_source_dir/guest-bridge.sh" "$bridge_script_target"
+  bridge_unit_source="$bridge_source_dir/systemd/actrail-vsock-guest-bridge.service"
+  [[ -f "$bridge_unit_source" ]] \
+    || fail "guest bridge unit not found: $bridge_unit_source"
+  bridge_unit_temp="$(mktemp "${bridge_unit_target}.tmp.XXXXXX")"
+  awk -v port="$bridge_listen_port" '
+      /^ExecStart=/ {
+        printf "ExecStart=/usr/local/libexec/actrail-vsock-egress/guest-bridge.sh --listen-port %s\n", port
+        rendered++
+        next
+      }
+      { print }
+      END { if (rendered != 1) exit 42 }
+    ' "$bridge_unit_source" >"$bridge_unit_temp" \
+    || { rm -f "$bridge_unit_temp"; fail "guest bridge unit must contain exactly one ExecStart"; }
+  install -m 0644 "$bridge_unit_temp" "$bridge_unit_target"
+  rm -f "$bridge_unit_temp"
+  for target in kata-containers.target multi-user.target; do
+    wants_dir="$unit_dir/$target.wants"
+    install -d -m 0755 "$wants_dir"
+    ln -sfn ../actrail-vsock-guest-bridge.service \
+      "$wants_dir/actrail-vsock-guest-bridge.service"
+  done
+else
+  rm -f "$bridge_unit_target" "$bridge_script_target"
+  for target in kata-containers.target multi-user.target; do
+    rm -f "$unit_dir/$target.wants/actrail-vsock-guest-bridge.service"
+  done
+  [[ ! -d "$bridge_libexec_dir" ]] || rmdir --ignore-fail-on-non-empty "$bridge_libexec_dir"
+fi
 
 required_source="$SCRIPT_DIR/systemd/required/kata-agent.service.d/20-actrail-required.conf"
 required_target="$dependency_dir/20-actrail-required.conf"
@@ -387,12 +541,15 @@ install_info="$share_dir/guest-install-info"
 {
   printf 'format=1\n'
   printf 'guest_startup_dependency=%s\n' "$STARTUP_DEPENDENCY"
+  printf 'guest_egress_mode=%s\n' "$EGRESS_MODE"
+  printf 'otel_export_enabled=%s\n' "$OTEL_EXPORT_ENABLED"
   printf 'workload_socket_group=actrail\n'
   printf 'workload_socket_gid=%s\n' "$SOCKET_GID"
   printf 'bundle_machine=%s\n' "$bundle_machine"
   printf 'bundle_required_glibc=%s\n' "${required_glibc:-none}"
   printf 'rootfs_glibc=%s\n' "$target_glibc"
   printf 'viewer_installed=%s\n' "$WITH_VIEWER"
+  printf 'sandbox_observer_installed=%s\n' "$WITH_SANDBOX_OBSERVER"
 } >"$install_info"
 chmod 0644 "$install_info"
 
@@ -416,5 +573,6 @@ echo "bundle_machine=$bundle_machine"
 echo "bundle_required_glibc=${required_glibc:-none}"
 echo "rootfs_glibc=$target_glibc"
 echo "viewer_installed=$WITH_VIEWER"
+echo "sandbox_observer_installed=$WITH_SANDBOX_OBSERVER"
 echo "workload_socket_gid=$SOCKET_GID"
-echo "otel_endpoint_configured=true"
+echo "otel_endpoint_configured=$OTEL_ENDPOINT_CONFIGURED"

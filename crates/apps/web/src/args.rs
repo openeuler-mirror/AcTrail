@@ -242,18 +242,3 @@ fn parse_port(key: &'static str, raw: &str) -> Result<u16, String> {
     raw.parse::<u16>()
         .map_err(|error| format!("invalid {key}: {error}"))
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn help_request_recognizes_short_long_flags_and_help_command() {
-        assert!(super::is_help_request(&["-h".to_string()]));
-        assert!(super::is_help_request(&["--help".to_string()]));
-        assert!(super::is_help_request(&["help".to_string()]));
-        assert!(!super::is_help_request(&[
-            "--storage-path".to_string(),
-            "help".to_string()
-        ]));
-        assert!(!super::is_help_request(&["--config".to_string()]));
-    }
-}

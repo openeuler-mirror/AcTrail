@@ -63,6 +63,7 @@ struct actrail_pending_socket_payload_op {
     __u64 buffer_ptr;
     __u64 requested_size;
     __u64 pid_generation;
+    __u64 started_ktime_ns;
     __u32 fd;
     __u32 fd_generation;
     __u32 direction;

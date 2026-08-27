@@ -10,6 +10,8 @@ OUTPUT_IMAGE=""
 KATA_INITRD=""
 BUNDLE=""
 OTEL_ENDPOINT=""
+OTEL_ENDPOINT_CONFIGURED="false"
+EGRESS_MODE="network"
 KATA_SYSTEMD_DIR=""
 EXPECTED_AGENT_VERSION=""
 REQUIRE_AGENT_POLICY=0
@@ -26,11 +28,11 @@ Usage:
     --rootfs DIR \
     --output-image FILE \
     --kata-initrd FILE \
-    --bundle DIR \
-    --otel-endpoint URL [options]
+    --bundle DIR [options]
 
 Options:
-  --otel-endpoint URL          Guest-reachable OTLP/HTTP traces URL (required)
+  --otel-endpoint URL          Enable OTLP/HTTP export to this Guest-reachable URL
+  --egress-mode MODE           Export path: network or vsock-bridge (default: network)
   --kata-systemd-dir DIR       Override matching kata-agent.service and target;
                                default: extract both from the reference initrd
   --expected-agent-version V  Require `kata-agent --version` to contain V
@@ -96,6 +98,11 @@ while [[ "$#" -gt 0 ]]; do
       REQUIRE_AGENT_POLICY=1
       shift
       ;;
+    --egress-mode)
+      [[ "$#" -ge 2 ]] || fail "--egress-mode requires a value"
+      EGRESS_MODE="$2"
+      shift 2
+      ;;
     --startup-dependency)
       [[ "$#" -ge 2 ]] || fail "--startup-dependency requires a value"
       STARTUP_DEPENDENCY="$2"
@@ -142,8 +149,11 @@ esac
 [[ -n "$OUTPUT_IMAGE" ]] || fail "--output-image is required"
 [[ -n "$KATA_INITRD" ]] || fail "--kata-initrd is required"
 [[ -n "$BUNDLE" ]] || fail "--bundle is required"
-actrail_validate_guest_otel_endpoint "$OTEL_ENDPOINT" \
+actrail_validate_guest_otel_selection "$OTEL_ENDPOINT" "$EGRESS_MODE" \
   || fail "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
+if [[ -n "$OTEL_ENDPOINT" ]]; then
+  OTEL_ENDPOINT_CONFIGURED="true"
+fi
 [[ -f "$KATA_INITRD" ]] || fail "Kata initrd not found: $KATA_INITRD"
 [[ -d "$BUNDLE" ]] || fail "AcTrail guest bundle not found: $BUNDLE"
 if [[ -n "$KATA_SYSTEMD_DIR" ]]; then
@@ -213,6 +223,7 @@ dnf -y \
     openssl \
     procps-ng \
     shadow \
+    socat \
     systemd \
     util-linux
 dnf -y --installroot="$ROOTFS" clean all
@@ -296,19 +307,27 @@ echo "== inject AcTrail guest service =="
 install_args=(
   --rootfs "$ROOTFS"
   --bundle "$BUNDLE"
-  --otel-endpoint "$OTEL_ENDPOINT"
+  --egress-mode "$EGRESS_MODE"
   --startup-dependency "$STARTUP_DEPENDENCY"
   --socket-gid "$SOCKET_GID"
 )
+if [[ -n "$OTEL_ENDPOINT" ]]; then
+  install_args+=(--otel-endpoint "$OTEL_ENDPOINT")
+fi
 if [[ "$WITH_VIEWER" == "1" ]]; then
   install_args+=(--with-viewer)
 fi
 "$SCRIPT_DIR/install-rootfs.sh" "${install_args[@]}"
-"$SCRIPT_DIR/verify-rootfs.sh" \
-  --rootfs "$ROOTFS" \
-  --otel-endpoint "$OTEL_ENDPOINT" \
-  --startup-dependency "$STARTUP_DEPENDENCY" \
+verify_args=(
+  --rootfs "$ROOTFS"
+  --egress-mode "$EGRESS_MODE"
+  --startup-dependency "$STARTUP_DEPENDENCY"
   --socket-gid "$SOCKET_GID"
+)
+if [[ -n "$OTEL_ENDPOINT" ]]; then
+  verify_args+=(--otel-endpoint "$OTEL_ENDPOINT")
+fi
+"$SCRIPT_DIR/verify-rootfs.sh" "${verify_args[@]}"
 
 echo "== create partitioned sparse ext4 guest image without mounting =="
 rootfs_image="$TEMP_DIR/kata-rootfs.ext4"
@@ -347,5 +366,6 @@ echo "root_device=/dev/vda1"
 echo "agent=$agent_version"
 echo "agent_policy=$agent_policy"
 echo "guest_startup_dependency=$STARTUP_DEPENDENCY"
+echo "guest_egress_mode=$EGRESS_MODE"
 echo "workload_socket_gid=$SOCKET_GID"
-echo "otel_endpoint_configured=true"
+echo "otel_endpoint_configured=$OTEL_ENDPOINT_CONFIGURED"

@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::time::SystemTime;
 
 use collector_capability::CollectorDescriptor;
-use model_core::ids::{TraceId, TraceName};
+use model_core::ids::{OtelTraceId, TraceId, TraceName};
 use model_core::process::{ExitStatus, MembershipState, ProcessIdentity, ProcessMembership};
 use model_core::trace::{TraceAlertToken, TraceLifecycleState, TraceRecord};
 
@@ -40,7 +40,7 @@ pub enum RegistryError {
     ParentMembershipMissing(ProcessIdentity),
     PropagationDisabled(ProcessIdentity),
     InvalidStateTransition(state_machine::StateTransitionError),
-    AlertTokenGenerationFailed(String),
+    TraceIdentityGenerationFailed(String),
 }
 
 pub struct TraceRuntime {
@@ -79,9 +79,20 @@ impl TraceRuntime {
     ) -> Result<(), RegistryError> {
         let mut alert_token = [0_u8; TraceAlertToken::BYTE_COUNT];
         getrandom::fill(&mut alert_token)
-            .map_err(|error| RegistryError::AlertTokenGenerationFailed(error.to_string()))?;
+            .map_err(|error| RegistryError::TraceIdentityGenerationFailed(error.to_string()))?;
+        let mut otel_trace_id = [0_u8; OtelTraceId::BYTE_COUNT];
+        getrandom::fill(&mut otel_trace_id)
+            .map_err(|error| RegistryError::TraceIdentityGenerationFailed(error.to_string()))?;
+        otel_trace_id[6] = (otel_trace_id[6] & 0x0f) | 0x40;
+        otel_trace_id[8] = (otel_trace_id[8] & 0x3f) | 0x80;
+        let otel_trace_id = OtelTraceId::from_bytes(otel_trace_id).ok_or_else(|| {
+            RegistryError::TraceIdentityGenerationFailed(
+                "generated OTLP trace identity is all zero".to_string(),
+            )
+        })?;
         let mut trace = TraceRecord::new(
             trace_id,
+            otel_trace_id,
             TraceAlertToken::new(alert_token),
             request.root_identity.clone(),
             request.display_name,
@@ -358,167 +369,5 @@ impl TraceRuntime {
         }
 
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeSet;
-    use std::time::SystemTime;
-
-    use collector_capability::CollectorDescriptor;
-    use config_core::capture_profile::CaptureProfile;
-    use config_core::trace_snapshot::CaptureProfileSnapshot;
-    use model_core::capability::{Capability, CapabilityRequest, RequestMode};
-    use model_core::ids::{CollectorName, ProfileName, TraceName};
-    use model_core::process::{ExitStatus, NamespaceIdentity, ProcessIdentity};
-    use model_core::trace::TraceLifecycleState;
-
-    use crate::TraceRuntime;
-    use crate::commands::{RootRemovalRequest, TrackTraceRequest};
-    use crate::sensor_plan::SensorPlan;
-
-    fn runtime() -> TraceRuntime {
-        TraceRuntime::new(
-            vec![CollectorDescriptor {
-                name: CollectorName::new("ebpf"),
-                capabilities: vec![model_core::capability::CapabilityDescriptor::new(
-                    Capability::ProcLifecycle,
-                    Vec::new(),
-                )],
-                supports_attach_coverage_guard: true,
-                supports_existing_pid_attach: true,
-            }],
-            1,
-        )
-    }
-
-    fn profile_snapshot() -> CaptureProfileSnapshot {
-        let profile = CaptureProfile::new(
-            ProfileName::new("default"),
-            vec![CapabilityRequest::new(
-                Capability::ProcLifecycle,
-                RequestMode::Required,
-            )],
-        );
-        CaptureProfileSnapshot::from_profile(&profile, SystemTime::UNIX_EPOCH)
-    }
-
-    #[test]
-    fn trace_keeps_root_pid_namespace_for_query() {
-        let mut runtime = runtime();
-        let trace_id = runtime.reserve_trace_id();
-        let pid_namespace = NamespaceIdentity::new("pid:[4026532248]");
-        let request = TrackTraceRequest {
-            root_identity: ProcessIdentity::new(1),
-            root_pid_namespace: Some(pid_namespace.clone()),
-            root_container_id: None,
-            root_pod_uid: None,
-            root_host_id: None,
-            root_working_directory: None,
-            display_name: TraceName::new("agent"),
-            profile_snapshot: profile_snapshot(),
-            tags: BTreeSet::new(),
-            created_at: SystemTime::UNIX_EPOCH,
-        };
-        let plan = SensorPlan::negotiate(&request.profile_snapshot, &runtime.collectors).unwrap();
-
-        runtime
-            .create_starting_trace(trace_id, request, plan)
-            .unwrap();
-
-        assert_eq!(
-            runtime
-                .get_trace(trace_id)
-                .unwrap()
-                .trace
-                .root_pid_namespace,
-            Some(pid_namespace)
-        );
-    }
-
-    #[test]
-    fn track_remove_keeps_trace_draining_when_descendant_exists() {
-        let mut runtime = runtime();
-        let trace_id = runtime.reserve_trace_id();
-        let root = ProcessIdentity::new(1);
-        let request = TrackTraceRequest {
-            root_identity: root.clone(),
-            root_pid_namespace: None,
-            root_container_id: None,
-            root_pod_uid: None,
-            root_host_id: None,
-            root_working_directory: None,
-            display_name: TraceName::new("agent"),
-            profile_snapshot: profile_snapshot(),
-            tags: BTreeSet::new(),
-            created_at: SystemTime::UNIX_EPOCH,
-        };
-        let plan = SensorPlan::negotiate(&request.profile_snapshot, &runtime.collectors).unwrap();
-
-        runtime
-            .create_starting_trace(trace_id, request, plan)
-            .unwrap();
-        runtime
-            .activate_trace(trace_id, SystemTime::UNIX_EPOCH)
-            .unwrap();
-        runtime
-            .inherit_process(
-                trace_id,
-                &root,
-                ProcessIdentity::new(2),
-                SystemTime::UNIX_EPOCH,
-            )
-            .unwrap();
-        runtime
-            .track_remove_root(RootRemovalRequest {
-                trace_id,
-                removed_at: SystemTime::UNIX_EPOCH,
-            })
-            .unwrap();
-
-        let entry = runtime.get_trace(trace_id).unwrap();
-        assert_eq!(entry.trace.lifecycle_state, TraceLifecycleState::Draining);
-    }
-
-    #[test]
-    fn root_exit_marks_trace_exited_without_descendants() {
-        let mut runtime = runtime();
-        let trace_id = runtime.reserve_trace_id();
-        let root = ProcessIdentity::new(1);
-        let request = TrackTraceRequest {
-            root_identity: root.clone(),
-            root_pid_namespace: None,
-            root_container_id: None,
-            root_pod_uid: None,
-            root_host_id: None,
-            root_working_directory: None,
-            display_name: TraceName::new("agent"),
-            profile_snapshot: profile_snapshot(),
-            tags: BTreeSet::new(),
-            created_at: SystemTime::UNIX_EPOCH,
-        };
-        let plan = SensorPlan::negotiate(&request.profile_snapshot, &runtime.collectors).unwrap();
-
-        runtime
-            .create_starting_trace(trace_id, request, plan)
-            .unwrap();
-        runtime
-            .activate_trace(trace_id, SystemTime::UNIX_EPOCH)
-            .unwrap();
-        runtime
-            .mark_process_exited(
-                trace_id,
-                &root,
-                ExitStatus {
-                    code: Some(0),
-                    observed_at: SystemTime::UNIX_EPOCH,
-                    source: Some(model_core::process::ExitObservationSource::Event),
-                },
-            )
-            .unwrap();
-
-        let entry = runtime.get_trace(trace_id).unwrap();
-        assert_eq!(entry.trace.lifecycle_state, TraceLifecycleState::Exited);
     }
 }

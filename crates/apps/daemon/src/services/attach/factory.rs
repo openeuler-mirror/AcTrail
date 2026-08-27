@@ -18,6 +18,7 @@ use semantic_action_runtime::LiveSemanticActionRuntime;
 use storage_core::StorageBackend;
 
 use crate::profiles::DaemonProfileRegistry;
+use crate::services::alert_forwarding::AlertForwardingService;
 use crate::services::alert_ingress::AlertIngress;
 use crate::services::application_protocol::ApplicationProtocolAnalyzer;
 use crate::services::command_control::CommandControlService;
@@ -54,7 +55,9 @@ impl StorageAttachService {
         resource_metrics: ResourceMetricsConfig,
         storage_retention: StorageRetentionConfig,
         plugin_alert_runtime: PluginAlertRuntimeConfig,
+        alert_forwarding: AlertForwardingService,
         trace_finalization: TraceFinalizationConfig,
+        shutdown_runtime_timeout_ms: u64,
         workload_diagnostics: WorkloadDiagnostics,
         enforcement: FanotifyEnforcementService,
         command_control: CommandControlConfig,
@@ -76,7 +79,9 @@ impl StorageAttachService {
             resource_metrics,
             storage_retention,
             plugin_alert_runtime,
+            alert_forwarding,
             trace_finalization,
+            shutdown_runtime_timeout_ms,
             workload_diagnostics,
             enforcement,
             command_control,
@@ -102,7 +107,9 @@ impl StorageAttachService {
         resource_metrics: ResourceMetricsConfig,
         storage_retention_config: StorageRetentionConfig,
         plugin_alert_runtime: PluginAlertRuntimeConfig,
+        alert_forwarding: AlertForwardingService,
         trace_finalization: TraceFinalizationConfig,
+        shutdown_runtime_timeout_ms: u64,
         workload_diagnostics: WorkloadDiagnostics,
         enforcement: FanotifyEnforcementService,
         command_control_config: CommandControlConfig,
@@ -170,7 +177,11 @@ impl StorageAttachService {
         let network_control = NetworkControlService::new(&network_control_config)?;
         let post_trace_broker = PostTraceBroker::new(trace_finalization.post_trace)?;
         let post_trace_coordinator = PostTraceCoordinator::new(trace_finalization.post_trace)?;
-        let alert_ingress = AlertIngress::new(plugin_alert_runtime, storage.as_mut())?;
+        let alert_ingress = AlertIngress::new(
+            plugin_alert_runtime,
+            storage.as_mut(),
+            alert_forwarding.plugin(),
+        )?;
         Ok(Self {
             profiles,
             host_id: crate::host_id::get(),
@@ -205,6 +216,7 @@ impl StorageAttachService {
             payload_socket_retention_max_bytes_per_trace,
             socket_payload_gate,
             payload_body_retention_gate,
+            payload_reorderer: Default::default(),
             seccomp_notify,
             seccomp_tls,
             tls_sync,
@@ -233,6 +245,7 @@ impl StorageAttachService {
             ),
             export_runtime,
             alert_ingress,
+            alert_forwarding,
             post_trace_broker,
             post_trace_coordinator,
             workload_diagnostics,
@@ -250,6 +263,7 @@ impl StorageAttachService {
             finalization_shutdown_drain_timeout: std::time::Duration::from_millis(
                 trace_finalization.shutdown_drain_timeout_ms,
             ),
+            shutdown_runtime_timeout: std::time::Duration::from_millis(shutdown_runtime_timeout_ms),
             diagnosed_terminal_open_memberships: Default::default(),
             provider_classifier,
             provider_classification_enabled,

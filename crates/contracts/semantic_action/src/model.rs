@@ -22,6 +22,8 @@ pub enum SemanticActionKind {
     LlmCall,
     LlmRequest,
     LlmResponse,
+    LlmToolCall,
+    LlmToolResult,
     McpToolCall,
     McpRequest,
     McpResponse,
@@ -52,6 +54,8 @@ impl SemanticActionKind {
             Self::LlmCall => "llm.call",
             Self::LlmRequest => "llm.request",
             Self::LlmResponse => "llm.response",
+            Self::LlmToolCall => "llm.tool_call",
+            Self::LlmToolResult => "llm.tool_result",
             Self::McpToolCall => "mcp.tool_call",
             Self::McpRequest => "mcp.request",
             Self::McpResponse => "mcp.response",
@@ -82,6 +86,8 @@ impl SemanticActionKind {
             "llm.call" => Some(Self::LlmCall),
             "llm.request" => Some(Self::LlmRequest),
             "llm.response" => Some(Self::LlmResponse),
+            "llm.tool_call" => Some(Self::LlmToolCall),
+            "llm.tool_result" => Some(Self::LlmToolResult),
             "mcp.tool_call" => Some(Self::McpToolCall),
             "mcp.request" => Some(Self::McpRequest),
             "mcp.response" => Some(Self::McpResponse),
@@ -226,7 +232,6 @@ pub struct SemanticAction {
     pub process: ProcessIdentity,
     pub status: SemanticActionStatus,
     pub completeness: SemanticActionCompleteness,
-    pub confidence_millis: Option<u16>,
     pub attributes: BTreeMap<String, String>,
     pub evidence: Vec<SemanticEvidence>,
 }
@@ -417,6 +422,99 @@ pub struct LlmRequestContentPage {
     pub body_json: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LlmTrajectoryTransition {
+    Root,
+    Append,
+    ForkRoot,
+    DuplicateRoot,
+}
+
+impl LlmTrajectoryTransition {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Root => "root",
+            Self::Append => "append",
+            Self::ForkRoot => "fork_root",
+            Self::DuplicateRoot => "duplicate_root",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "root" => Some(Self::Root),
+            "append" => Some(Self::Append),
+            "fork_root" => Some(Self::ForkRoot),
+            "duplicate_root" => Some(Self::DuplicateRoot),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LlmTrajectoryStartReason {
+    Unspecified,
+    ContextRewriteOrCompression,
+    RuntimeReset,
+    CapacityEviction,
+    UnsupportedMultimodal,
+    HistoryLimit,
+    ClassifierFailure,
+}
+
+impl LlmTrajectoryStartReason {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unspecified => "unspecified",
+            Self::ContextRewriteOrCompression => "context_rewrite_or_compression",
+            Self::RuntimeReset => "runtime_reset",
+            Self::CapacityEviction => "capacity_eviction",
+            Self::UnsupportedMultimodal => "unsupported_multimodal",
+            Self::HistoryLimit => "history_limit",
+            Self::ClassifierFailure => "classifier_failure",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "unspecified" => Some(Self::Unspecified),
+            "context_rewrite_or_compression" => Some(Self::ContextRewriteOrCompression),
+            "runtime_reset" => Some(Self::RuntimeReset),
+            "capacity_eviction" => Some(Self::CapacityEviction),
+            "unsupported_multimodal" => Some(Self::UnsupportedMultimodal),
+            "history_limit" => Some(Self::HistoryLimit),
+            "classifier_failure" => Some(Self::ClassifierFailure),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LlmRequestLineageWrite {
+    pub trace_id: TraceId,
+    pub action_id: String,
+    pub trajectory_id: String,
+    pub parent_action_id: Option<String>,
+    pub forked_from_action_id: Option<String>,
+    pub trajectory_position: u32,
+    pub transition: LlmTrajectoryTransition,
+    pub start_reason: LlmTrajectoryStartReason,
+    pub inference_version: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LlmRequestLineage {
+    pub trace_id: TraceId,
+    pub action_id: String,
+    pub trajectory_id: String,
+    pub parent_action_id: Option<String>,
+    pub forked_from_action_id: Option<String>,
+    pub trajectory_position: u32,
+    pub transition: LlmTrajectoryTransition,
+    pub start_reason: LlmTrajectoryStartReason,
+    pub inference_version: u32,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct McpJsonRpcContentWrite {
     pub trace_id: TraceId,
@@ -462,8 +560,13 @@ pub enum SemanticActionLinkRole {
     FileWriteContainsFileEvent,
     AgentInvocationExec,
     AgentInvocationChildLlmRequest,
+    LlmRequestTrajectoryParent,
+    LlmRequestTrajectoryFork,
     LlmCallRequest,
     LlmCallResponse,
+    LlmResponseToolCall,
+    LlmToolCallResult,
+    LlmToolCallAgentInvocation,
     LlmRequestHttpMessage,
     LlmRequestLlmResponse,
     LlmResponseHttpMessage,
@@ -488,8 +591,13 @@ impl SemanticActionLinkRole {
             Self::FileWriteContainsFileEvent => "file.write.contains_file_event",
             Self::AgentInvocationExec => "agent.invocation.exec",
             Self::AgentInvocationChildLlmRequest => "agent.invocation.child_llm_request",
+            Self::LlmRequestTrajectoryParent => "llm.request.trajectory_parent",
+            Self::LlmRequestTrajectoryFork => "llm.request.trajectory_fork",
             Self::LlmCallRequest => "llm.call.request",
             Self::LlmCallResponse => "llm.call.response",
+            Self::LlmResponseToolCall => "llm.response.tool_call",
+            Self::LlmToolCallResult => "llm.tool_call.result",
+            Self::LlmToolCallAgentInvocation => "llm.tool_call.agent_invocation",
             Self::LlmRequestHttpMessage => "llm.request.http_message",
             Self::LlmRequestLlmResponse => "llm.request.llm_response",
             Self::LlmResponseHttpMessage => "llm.response.http_message",
@@ -516,8 +624,13 @@ impl SemanticActionLinkRole {
             "file.write.contains_file_event" => Some(Self::FileWriteContainsFileEvent),
             "agent.invocation.exec" => Some(Self::AgentInvocationExec),
             "agent.invocation.child_llm_request" => Some(Self::AgentInvocationChildLlmRequest),
+            "llm.request.trajectory_parent" => Some(Self::LlmRequestTrajectoryParent),
+            "llm.request.trajectory_fork" => Some(Self::LlmRequestTrajectoryFork),
             "llm.call.request" => Some(Self::LlmCallRequest),
             "llm.call.response" => Some(Self::LlmCallResponse),
+            "llm.response.tool_call" => Some(Self::LlmResponseToolCall),
+            "llm.tool_call.result" => Some(Self::LlmToolCallResult),
+            "llm.tool_call.agent_invocation" => Some(Self::LlmToolCallAgentInvocation),
             "llm.request.http_message" => Some(Self::LlmRequestHttpMessage),
             "llm.request.llm_response" => Some(Self::LlmRequestLlmResponse),
             "llm.response.http_message" => Some(Self::LlmResponseHttpMessage),

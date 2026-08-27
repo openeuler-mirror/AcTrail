@@ -9,9 +9,8 @@ use semantic_action::{
 
 use super::index::LineageIndex;
 use super::{
-    ATTR_AGENT_ACTION_SEQUENCE, ATTR_LINK_SOURCE, ATTR_LINK_VALID,
-    ATTR_PROCESS_PARENT_IDENTITY_STATE, LINK_SOURCE_PROCESS_LINEAGE, LINK_VALID_FALSE,
-    PROCESS_PARENT_IDENTITY_STATE_CONFLICT,
+    ATTR_AGENT_ACTION_SEQUENCE, ATTR_LINK_SOURCE, ATTR_PROCESS_PARENT_IDENTITY_STATE,
+    LINK_SOURCE_PROCESS_LINEAGE, PROCESS_PARENT_IDENTITY_STATE_CONFLICT,
 };
 
 pub fn derive_lineage_links(
@@ -301,10 +300,6 @@ fn parent_identity_has_conflict(action: &SemanticAction) -> bool {
 
 fn valid_link(link: &SemanticActionLink) -> bool {
     link.valid
-        && !link
-            .attributes
-            .get(ATTR_LINK_VALID)
-            .is_some_and(|value| value == LINK_VALID_FALSE)
 }
 
 fn is_lineage_link(link: &SemanticActionLink) -> bool {

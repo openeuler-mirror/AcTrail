@@ -1,0 +1,25 @@
+@startuml
+title MCP stdio 观测链
+top to bottom direction
+skinparam componentStyle rectangle
+skinparam shadowing false
+
+actor "Agent / MCP client" as Client
+component "本地 MCP server" as Server
+component "eBPF 生命周期与\nstdio payload 观测" as Ebpf
+component "IPC lineage tracker" as Lineage
+component "MCP session registry" as Registry
+component "语义投影器" as Projector
+database "SQLite" as Db
+component "Web / OTEL" as Export
+
+Client -down-> Server : pipe 或 AF_UNIX socketpair
+Server -down-> Ebpf : fork / exec / fd 变化\nread(0) / write(1)
+Ebpf -down-> Lineage : IPC 生命周期事实
+Ebpf -down-> Registry : 已完成的 payload segment
+Lineage -down-> Registry : stdio bundle 生命周期
+Registry --> Registry : framing + tools/call 准入\nrequest/response 关联
+Registry -down-> Projector : 已确认的 JSON-RPC 消息
+Projector -down-> Db : actions / links / canonical JSON
+Projector -down-> Export : action tree / spans
+@enduml

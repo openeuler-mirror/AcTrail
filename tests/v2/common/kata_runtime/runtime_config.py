@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import re
 from pathlib import Path
+from collections.abc import Iterable
 from typing import Any
 
 from .backend import kata_backend
@@ -11,6 +12,39 @@ try:
     import tomllib
 except ModuleNotFoundError:
     tomllib = None
+
+
+REQUIRED_VIRTIO_FS_KERNEL_CONFIG = (
+    "CONFIG_FUSE_FS=y",
+    "CONFIG_VIRTIO_FS=y",
+    "CONFIG_VIRTIO_MMIO=y",
+    "CONFIG_VSOCKETS=y",
+    "CONFIG_VIRTIO_VSOCKETS=y",
+    "CONFIG_VIRTIO_VSOCKETS_COMMON=y",
+)
+REQUIRED_FIRECRACKER_KERNEL_CONFIG = (
+    "CONFIG_VIRTIO_MMIO=y",
+    "CONFIG_VIRTIO_BLK=y",
+    "CONFIG_VSOCKETS=y",
+    "CONFIG_VIRTIO_VSOCKETS=y",
+    "CONFIG_VIRTIO_VSOCKETS_COMMON=y",
+)
+REQUIRED_EBPF_KERNEL_CONFIG = (
+    "CONFIG_BPF=y",
+    "CONFIG_BPF_SYSCALL=y",
+    "CONFIG_BPF_JIT=y",
+    "CONFIG_BPF_EVENTS=y",
+    "CONFIG_DEBUG_INFO_BTF=y",
+    "CONFIG_FTRACE=y",
+    "CONFIG_FTRACE_SYSCALLS=y",
+    "CONFIG_KPROBES=y",
+    "CONFIG_KPROBE_EVENTS=y",
+    "CONFIG_PERF_EVENTS=y",
+    "CONFIG_TRACEPOINTS=y",
+    "CONFIG_TRACING=y",
+    "CONFIG_UPROBES=y",
+    "CONFIG_UPROBE_EVENTS=y",
+)
 
 
 def load_hypervisor_table(config: Path, backend: str) -> dict[str, Any]:
@@ -68,3 +102,26 @@ def runtime_path(config: Path, backend: str, key: str) -> Path:
             f"[{kata_backend(backend).toml_section}].{key}"
         )
     return Path(value)
+
+
+def discover_kernel_config(kernel: Path) -> Path | None:
+    candidates = [Path(f"{kernel}.config")]
+    try:
+        resolved = kernel.resolve(strict=True)
+    except OSError:
+        resolved = kernel
+    for prefix in ("vmlinux-", "vmlinuz-"):
+        if resolved.name.startswith(prefix):
+            candidates.append(
+                resolved.with_name(f"config-{resolved.name[len(prefix):]}")
+            )
+            break
+    return next((candidate for candidate in candidates if candidate.is_file()), None)
+
+
+def missing_kernel_config_entries(
+    configured_lines: Iterable[str],
+    required_lines: Iterable[str],
+) -> tuple[str, ...]:
+    configured = frozenset(configured_lines)
+    return tuple(line for line in required_lines if line not in configured)

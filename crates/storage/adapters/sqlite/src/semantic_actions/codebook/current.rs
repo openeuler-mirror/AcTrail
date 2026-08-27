@@ -5,7 +5,7 @@ use super::{
     LinkConfidenceCodes, LinkRoleCodes, SemanticActionCodebook,
 };
 
-pub(in crate::semantic_actions::codebook) const SCHEMA_VERSION: i32 = 16;
+pub(in crate::semantic_actions::codebook) const SCHEMA_VERSION: i32 = 26;
 
 pub(in crate::semantic_actions::codebook) const CODEBOOK: &SemanticActionCodebook =
     &SemanticActionCodebook {
@@ -24,6 +24,8 @@ pub(in crate::semantic_actions::codebook) const CODEBOOK: &SemanticActionCodeboo
             llm_call: 109,
             llm_request: 110,
             llm_response: 111,
+            llm_tool_call: 126,
+            llm_tool_result: 127,
             mcp_tool_call: 121,
             mcp_request: 122,
             mcp_response: 123,
@@ -63,8 +65,13 @@ pub(in crate::semantic_actions::codebook) const CODEBOOK: &SemanticActionCodeboo
             file_write_contains_file_event: 507,
             agent_invocation_exec: 508,
             agent_invocation_child_llm_request: 509,
+            llm_request_trajectory_parent: 522,
+            llm_request_trajectory_fork: 523,
             llm_call_request: 510,
             llm_call_response: 511,
+            llm_response_tool_call: 524,
+            llm_tool_call_result: 525,
+            llm_tool_call_agent_invocation: 526,
             llm_request_http_message: 512,
             llm_request_llm_response: 513,
             llm_response_http_message: 514,

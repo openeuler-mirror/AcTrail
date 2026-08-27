@@ -8,10 +8,20 @@
 sudo -E python3 tests/v2/regression/container_auto/v2/run_e2e.py
 ```
 
+验收默认使用 `openeuler/openeuler:24.03-lts-sp3`。验证 Ubuntu 24.04 时显式执行：
+
+```bash
+sudo -E CONTAINER_AUTO_E2E_BASE_IMAGE=ubuntu:24.04 \
+  python3 tests/v2/regression/container_auto/v2/run_e2e.py
+```
+
 该脚本模拟普通用户把 AcTrail Agent 部署进非特权 Docker 容器：容器先以
 `tail -f /dev/null` 长驻，再通过 `docker exec` 执行
 `actrailctl launch --host-ebpf auto --seccomp-notify auto`。测试覆盖 host eBPF 与
 seccomp notify 的四种组合，并验证容器隔离和 `required` 权限失败语义。
+同一 aggregate case 会先执行 `test_deployment.py`，覆盖 openEuler/Ubuntu 一键部署
+解析、严格 systemd active 判定、OTLP endpoint 安全渲染和真实 launch/delivery smoke
+合同；这些断言不是仓库中孤立、不会运行的 unittest。
 `sudo -E` 保留调用者已经导出的环境，runner 及其 Docker 子进程继续继承。
 
 # 步骤摘要
@@ -34,7 +44,7 @@ seccomp notify 的四种组合，并验证容器隔离和 `required` 权限失�
 ```bash
 CASE_DIR="tests/v2/regression/container_auto/v2"
 BIN_DIR="${ACTRAIL_BIN_DIR:-target/release}"
-BASE_IMAGE="${CONTAINER_AUTO_E2E_BASE_IMAGE:-ubuntu:24.04}"
+BASE_IMAGE="${CONTAINER_AUTO_E2E_BASE_IMAGE:-openeuler/openeuler:24.03-lts-sp3}"
 RUNTIME_DIR="$(mktemp -d /tmp/actrail-container-auto-manual.XXXXXX)"
 AUTO_IMAGE="actrail/container-auto-v2:manual"
 mkdir -p "$RUNTIME_DIR/image" "$RUNTIME_DIR/run" "$RUNTIME_DIR/data/export" \

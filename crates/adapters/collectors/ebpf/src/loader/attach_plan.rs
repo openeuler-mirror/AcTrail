@@ -27,7 +27,22 @@ const PROCESS_CONTEXT_PROGRAMS: &[&str] = &[
 const TRACKING_REGISTRATION_PROGRAMS: &[&str] =
     &["handle_sched_process_exec", "handle_sched_process_exit"];
 
+const FD_PROCESS_LIFECYCLE_PROGRAMS: &[&str] = &[
+    "handle_fd_sched_process_fork",
+    "handle_fd_sched_process_exec",
+    "handle_fd_sched_process_exit",
+];
+
 const NET_TRANSPORT_PROGRAMS: &[&str] = &[
+    "handle_sched_process_fork",
+    "handle_sched_process_exec",
+    "handle_sched_process_exit",
+    "handle_fd_sched_process_fork",
+    "handle_fd_sched_process_exec",
+    "handle_fd_sched_process_exit",
+    // fd birth: socket() registers the fd in the unified fd table.
+    "handle_sys_enter_socket",
+    "handle_sys_exit_socket",
     "handle_sys_enter_connect",
     "handle_sys_exit_connect",
     "handle_sys_enter_accept",
@@ -42,14 +57,33 @@ const NET_TRANSPORT_PROGRAMS: &[&str] = &[
     "handle_sys_exit_sendmsg",
     "handle_sys_enter_recvfrom",
     "handle_sys_exit_recvfrom",
+    "handle_sys_enter_recvmsg",
+    "handle_sys_exit_recvmsg",
     "handle_sys_enter_bind",
     "handle_sys_exit_bind",
     "handle_sys_enter_listen",
     "handle_sys_exit_listen",
+    "handle_sys_enter_shutdown",
+    "handle_sys_exit_shutdown",
     "handle_sys_enter_write",
     "handle_sys_exit_write",
     "handle_sys_enter_read",
     "handle_sys_exit_read",
+    // fd lifecycle: close drives connection termination, dup maintains refcount.
+    "handle_sys_enter_close",
+    "handle_sys_exit_close",
+    "handle_sys_enter_close_range",
+    "handle_sys_exit_close_range",
+    "handle_sys_enter_dup",
+    "handle_sys_exit_dup",
+    "handle_sys_enter_dup2",
+    "handle_sys_exit_dup2",
+    "handle_sys_enter_dup3",
+    "handle_sys_exit_dup3",
+    "handle_sys_enter_fcntl",
+    "handle_sys_exit_fcntl",
+    "handle_sys_enter_ioctl",
+    "handle_sys_exit_ioctl",
 ];
 
 const FS_ACCESS_BASIC_FD_PROGRAMS: &[&str] = &[
@@ -78,6 +112,17 @@ const FS_ACCESS_BASIC_PATH_PROGRAMS: &[&str] = &[
     "handle_sys_exit_mkdirat",
 ];
 
+const FS_ACCESS_BASIC_BIRTH_PROGRAMS: &[&str] = &[
+    "handle_sys_enter_open",
+    "handle_sys_exit_open",
+    "handle_sys_enter_openat",
+    "handle_sys_exit_openat",
+    "handle_sys_enter_openat2",
+    "handle_sys_exit_openat2",
+    "handle_sys_enter_creat",
+    "handle_sys_exit_creat",
+];
+
 const FS_ACCESS_BASIC_CONTEXT_PROGRAMS: &[&str] = &[
     "handle_sys_enter_close",
     "handle_sys_exit_close",
@@ -91,6 +136,8 @@ const FS_ACCESS_BASIC_CONTEXT_PROGRAMS: &[&str] = &[
     "handle_sys_exit_dup3",
     "handle_sys_enter_fcntl",
     "handle_sys_exit_fcntl",
+    "handle_sys_enter_ioctl",
+    "handle_sys_exit_ioctl",
     "handle_sys_enter_chdir",
     "handle_sys_exit_chdir",
     "handle_sys_enter_fchdir",
@@ -124,15 +171,17 @@ const STDIO_PROGRAMS: &[&str] = &[
     "handle_sys_exit_read",
 ];
 
-/// Existing programs needed to preserve anonymous IPC ownership through
-/// creation, fd mutation, fork, exec, and exit.
-const IPC_LINEAGE_PROGRAMS: &[&str] = &[
+const IPC_PIPE_FIFO_PROGRAMS: &[&str] = &[
     "handle_sys_enter_pipe",
     "handle_sys_exit_pipe",
     "handle_sys_enter_pipe2",
     "handle_sys_exit_pipe2",
-    "handle_sys_enter_socketpair",
-    "handle_sys_exit_socketpair",
+    "handle_sys_enter_writev",
+    "handle_sys_exit_writev",
+    "handle_sys_enter_write",
+    "handle_sys_exit_write",
+    "handle_sys_enter_read",
+    "handle_sys_exit_read",
     "handle_sys_enter_close",
     "handle_sys_exit_close",
     "handle_sys_enter_close_range",
@@ -145,12 +194,64 @@ const IPC_LINEAGE_PROGRAMS: &[&str] = &[
     "handle_sys_exit_dup3",
     "handle_sys_enter_fcntl",
     "handle_sys_exit_fcntl",
+    "handle_sys_enter_ioctl",
+    "handle_sys_exit_ioctl",
     "handle_sched_process_fork",
     "handle_sched_process_exec",
     "handle_sched_process_exit",
+    "handle_fd_sched_process_fork",
+    "handle_fd_sched_process_exec",
+    "handle_fd_sched_process_exit",
+];
+
+const IPC_UNIX_SOCKET_PROGRAMS: &[&str] = &[
+    "handle_sys_enter_socket",
+    "handle_sys_exit_socket",
+    "handle_sys_enter_socketpair",
+    "handle_sys_exit_socketpair",
+    "handle_sys_enter_accept",
+    "handle_sys_enter_accept4",
+    "handle_sys_exit_accept",
+    "handle_sys_exit_accept4",
+    "handle_sys_enter_sendto",
+    "handle_sys_exit_sendto",
+    "handle_sys_enter_writev",
+    "handle_sys_exit_writev",
+    "handle_sys_enter_sendmsg",
+    "handle_sys_exit_sendmsg",
+    "handle_sys_enter_recvfrom",
+    "handle_sys_exit_recvfrom",
+    "handle_sys_enter_recvmsg",
+    "handle_sys_exit_recvmsg",
+    "handle_sys_enter_write",
+    "handle_sys_exit_write",
+    "handle_sys_enter_read",
+    "handle_sys_exit_read",
+    "handle_sys_enter_close",
+    "handle_sys_exit_close",
+    "handle_sys_enter_close_range",
+    "handle_sys_exit_close_range",
+    "handle_sys_enter_dup",
+    "handle_sys_exit_dup",
+    "handle_sys_enter_dup2",
+    "handle_sys_exit_dup2",
+    "handle_sys_enter_dup3",
+    "handle_sys_exit_dup3",
+    "handle_sys_enter_fcntl",
+    "handle_sys_exit_fcntl",
+    "handle_sys_enter_ioctl",
+    "handle_sys_exit_ioctl",
+    "handle_sched_process_fork",
+    "handle_sched_process_exec",
+    "handle_sched_process_exit",
+    "handle_fd_sched_process_fork",
+    "handle_fd_sched_process_exec",
+    "handle_fd_sched_process_exit",
 ];
 
 const SOCKET_PAYLOAD_PROGRAMS: &[&str] = &[
+    "handle_sys_enter_socket",
+    "handle_sys_exit_socket",
     "handle_sys_enter_connect",
     "handle_sys_exit_connect",
     "handle_sys_enter_accept",
@@ -171,6 +272,8 @@ const SOCKET_PAYLOAD_PROGRAMS: &[&str] = &[
     "handle_sys_exit_read",
     "handle_sys_enter_close",
     "handle_sys_exit_close",
+    "handle_sys_enter_close_range",
+    "handle_sys_exit_close_range",
     "handle_sys_enter_dup",
     "handle_sys_exit_dup",
     "handle_sys_enter_dup2",
@@ -179,6 +282,9 @@ const SOCKET_PAYLOAD_PROGRAMS: &[&str] = &[
     "handle_sys_exit_dup3",
     "handle_sys_enter_fcntl",
     "handle_sys_exit_fcntl",
+    "handle_fd_sched_process_fork",
+    "handle_fd_sched_process_exec",
+    "handle_fd_sched_process_exit",
 ];
 
 const FS_MMAP_PROGRAMS: &[&str] = &["handle_sys_enter_mmap", "handle_sys_exit_mmap"];
@@ -261,12 +367,15 @@ impl AttachPlan {
 
     pub(crate) fn attach_priority(&self, program_name: &str) -> u8 {
         if FS_ACCESS_BASIC_PATH_PROGRAMS.contains(&program_name)
+            || FS_ACCESS_BASIC_BIRTH_PROGRAMS.contains(&program_name)
             || FS_ACCESS_BASIC_CONTEXT_PROGRAMS.contains(&program_name)
             || FS_MMAP_PROGRAMS.contains(&program_name)
         {
             return FILE_ATTACH_PRIORITY;
         }
-        if FS_ACCESS_BASIC_FD_PROGRAMS.contains(&program_name) {
+        if FS_ACCESS_BASIC_FD_PROGRAMS.contains(&program_name)
+            || FD_PROCESS_LIFECYCLE_PROGRAMS.contains(&program_name)
+        {
             return SHARED_FD_ATTACH_PRIORITY;
         }
         if PROC_LIFECYCLE_PROGRAMS.contains(&program_name) {
@@ -287,10 +396,12 @@ impl AttachPlan {
         match capability {
             Capability::FsAccessBasic => {
                 FS_ACCESS_BASIC_FD_PROGRAMS.contains(&program_name)
+                    || FS_ACCESS_BASIC_BIRTH_PROGRAMS.contains(&program_name)
+                    || FS_ACCESS_BASIC_CONTEXT_PROGRAMS.contains(&program_name)
+                    || PROCESS_CONTEXT_PROGRAMS.contains(&program_name)
+                    || FD_PROCESS_LIFECYCLE_PROGRAMS.contains(&program_name)
                     || (self.file_path_capture_enabled
-                        && (FS_ACCESS_BASIC_PATH_PROGRAMS.contains(&program_name)
-                            || FS_ACCESS_BASIC_CONTEXT_PROGRAMS.contains(&program_name)
-                            || PROCESS_CONTEXT_PROGRAMS.contains(&program_name)))
+                        && FS_ACCESS_BASIC_PATH_PROGRAMS.contains(&program_name))
             }
             Capability::FsMmap => {
                 FS_MMAP_PROGRAMS.contains(&program_name)
@@ -315,14 +426,15 @@ impl AttachPlan {
         }
         if matches!(capability, Capability::FsAccessBasic) {
             return programs_attached(FS_ACCESS_BASIC_FD_PROGRAMS, attached_programs)
+                && required_programs_attached(FS_ACCESS_BASIC_BIRTH_PROGRAMS, attached_programs)
+                && required_programs_attached(FS_ACCESS_BASIC_CONTEXT_PROGRAMS, attached_programs)
+                && programs_attached(PROCESS_CONTEXT_PROGRAMS, attached_programs)
+                && programs_attached(FD_PROCESS_LIFECYCLE_PROGRAMS, attached_programs)
                 && (!self.file_path_capture_enabled
-                    || (required_programs_attached(
+                    || required_programs_attached(
                         FS_ACCESS_BASIC_PATH_PROGRAMS,
                         attached_programs,
-                    ) && required_programs_attached(
-                        FS_ACCESS_BASIC_CONTEXT_PROGRAMS,
-                        attached_programs,
-                    ) && programs_attached(PROCESS_CONTEXT_PROGRAMS, attached_programs)));
+                    ));
         }
         if matches!(capability, Capability::FsMmap) {
             return programs_attached(FS_MMAP_PROGRAMS, attached_programs)
@@ -395,7 +507,8 @@ fn capability_required_programs(capability: &Capability) -> Option<&'static [&'s
         Capability::FsAccessBasic => Some(FS_ACCESS_BASIC_FD_PROGRAMS),
         Capability::FsMmap => Some(FS_MMAP_PROGRAMS),
         Capability::StdioChunk => Some(STDIO_PROGRAMS),
-        Capability::IpcPipeFifo | Capability::IpcUnixSocket => Some(IPC_LINEAGE_PROGRAMS),
+        Capability::IpcPipeFifo => Some(IPC_PIPE_FIFO_PROGRAMS),
+        Capability::IpcUnixSocket => Some(IPC_UNIX_SOCKET_PROGRAMS),
         Capability::SocketPlaintextPayload => Some(SOCKET_PAYLOAD_PROGRAMS),
         Capability::TlsPlaintextPayload => Some(&[]),
         _ => None,
@@ -407,12 +520,15 @@ fn capability_programs(program_name: &str) -> Option<()> {
         PROC_LIFECYCLE_PROGRAMS,
         NET_TRANSPORT_PROGRAMS,
         FS_ACCESS_BASIC_FD_PROGRAMS,
+        FS_ACCESS_BASIC_BIRTH_PROGRAMS,
         FS_ACCESS_BASIC_PATH_PROGRAMS,
         FS_ACCESS_BASIC_CONTEXT_PROGRAMS,
         PROCESS_CONTEXT_PROGRAMS,
+        FD_PROCESS_LIFECYCLE_PROGRAMS,
         PROCESS_SIGNAL_DIAGNOSTIC_PROGRAMS,
         STDIO_PROGRAMS,
-        IPC_LINEAGE_PROGRAMS,
+        IPC_PIPE_FIFO_PROGRAMS,
+        IPC_UNIX_SOCKET_PROGRAMS,
         SOCKET_PAYLOAD_PROGRAMS,
         FS_MMAP_PROGRAMS,
     ]
@@ -433,7 +549,3 @@ fn required_programs_attached(programs: &[&str], attached_programs: &[String]) -
         .filter(|program| !PLATFORM_OPTIONAL_TRACEPOINT_PROGRAMS.contains(program))
         .all(|program| attached_programs.iter().any(|attached| attached == program))
 }
-
-#[cfg(test)]
-#[path = "attach_plan/tests.rs"]
-mod tests;

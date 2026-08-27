@@ -200,6 +200,7 @@ function requestInsight(action, requestContent) {
     chips: compactChips([
       chip('model', attrs['llm.request.model'] ?? body?.model),
       chip('provider', attrs['llm.request.provider_id'] ?? body?.provider),
+      chip('trajectory', attrs['llm.request.trajectory_id']),
       chip('messages', messages.length || null),
       chip('tools', tools.length || null),
       chip('blocks', attrs['llm.request.block_count']),

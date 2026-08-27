@@ -58,6 +58,19 @@
             @blur="showValidation = true"
           />
 
+          <PolicyScopeEditor
+            v-if="needsNetworkPolicy"
+            v-model="networkPolicyScopes"
+            title="Remote endpoints this plugin can manage"
+            description="The plugin can publish only the selected decisions for these numeric endpoint scopes."
+            path-label="Remote endpoint scope"
+            placeholder="203.0.113.10:443, 203.0.113.10:* or *"
+            path-hint="Use *, an exact numeric endpoint, or IP:* for every port on one IP; bracket IPv6 addresses."
+            add-label="Add another endpoint"
+            :busy="busy"
+            @blur="showValidation = true"
+          />
+
           <section v-if="needsEnvRead" class="plugin-load-section editable">
             <div class="plugin-load-section-heading">
               <div>
@@ -107,6 +120,7 @@ const emit = defineEmits(['close', 'submit']);
 const instanceId = ref('');
 const filePolicyScopes = ref([]);
 const commandPolicyScopes = ref([]);
+const networkPolicyScopes = ref([]);
 const envReadText = ref('');
 const showValidation = ref(false);
 
@@ -115,9 +129,13 @@ const needsFilePolicy = computed(() => props.plugin.parameterized_host_grants
   ?.includes('file-policy.rules.apply'));
 const needsCommandPolicy = computed(() => props.plugin.parameterized_host_grants
   ?.includes('command-policy.rules.apply'));
+const needsNetworkPolicy = computed(() => props.plugin.parameterized_host_grants
+  ?.includes('network-policy.rules.apply'));
 const needsEnvRead = computed(() => props.plugin.parameterized_host_grants?.includes('env-read'));
 const loadSubtitle = computed(() => {
-  if (needsFilePolicy.value && needsCommandPolicy.value) return 'Configure policy access';
+  if ([needsFilePolicy.value, needsCommandPolicy.value, needsNetworkPolicy.value]
+    .filter(Boolean).length > 1) return 'Configure policy access';
+  if (needsNetworkPolicy.value) return 'Configure network connections';
   if (needsCommandPolicy.value) return 'Configure command execution';
   if (needsFilePolicy.value) return 'Configure file access';
   return 'Load plugin';
@@ -138,6 +156,10 @@ const validationError = computed(() => {
     ? validateScopes(commandPolicyScopes.value, 'command-policy')
     : '';
   if (commandScopeError) return commandScopeError;
+  const networkScopeError = needsNetworkPolicy.value
+    ? validateNetworkScopes(networkPolicyScopes.value)
+    : '';
+  if (networkScopeError) return networkScopeError;
   if (needsEnvRead.value) {
     if (envRead.value.length === 0) {
       return 'Enter at least one environment variable name.';
@@ -165,6 +187,7 @@ function reset() {
   instanceId.value = props.plugin.plugin_id ?? '';
   filePolicyScopes.value = [newScope('file')];
   commandPolicyScopes.value = [newScope('command')];
+  networkPolicyScopes.value = [newScope('network')];
   envReadText.value = '';
   showValidation.value = false;
 }
@@ -187,6 +210,32 @@ function validateScopes(scopes, label) {
     }
   }
   return '';
+}
+
+function validateNetworkScopes(scopes) {
+  for (const scope of scopes) {
+    if (!scope.path_scope || (scope.path_scope !== '*' && !looksLikeNumericRemoteScope(scope.path_scope))) {
+      return 'Every network-policy scope must be *, a numeric IP endpoint, or an IP:* any-port selector.';
+    }
+    if (scope.decisions.length === 0) {
+      return 'Select at least one rule decision for every network-policy scope.';
+    }
+  }
+  return '';
+}
+
+function looksLikeNumericRemoteScope(value) {
+  const ipv4 = value.match(/^([0-9]{1,3}(?:\.[0-9]{1,3}){3}):(\*|[0-9]{1,5})$/);
+  if (ipv4) {
+    return ipv4[1].split('.').every((part) => Number(part) <= 255)
+      && (ipv4[2] === '*' || Number(ipv4[2]) <= 65535);
+  }
+  const ipv6 = value.match(/^\[([0-9A-Fa-f:.]+)\]:(\*|[0-9]{1,5})$/);
+  return Boolean(
+    ipv6
+    && ipv6[1].includes(':')
+    && (ipv6[2] === '*' || Number(ipv6[2]) <= 65535),
+  );
 }
 
 function close() {
@@ -212,6 +261,12 @@ function submit() {
         ? commandPolicyScopes.value.flatMap((scope) => scope.decisions.map((decision) => ({
           decision,
           path_scope: scope.path_scope,
+        })))
+        : [],
+      network_policy_rules_apply: needsNetworkPolicy.value
+        ? networkPolicyScopes.value.flatMap((scope) => scope.decisions.map((decision) => ({
+          decision,
+          remote_scope: scope.path_scope,
         })))
         : [],
       env_read: needsEnvRead.value ? envRead.value : [],

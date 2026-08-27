@@ -54,7 +54,6 @@ pub enum KernelEvent {
 }
 
 impl KernelEvent {
-    #[cfg(any(feature = "perf-buffer", actrail_event_transport_perf))]
     pub(super) fn observed_ktime_ns(&self) -> Option<u64> {
         Some(match self {
             Self::Observation(event) => event.observed_ktime_ns,

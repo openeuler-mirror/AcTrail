@@ -1,0 +1,22 @@
+@startuml
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam componentStyle rectangle
+skinparam defaultFontName "WenQuanYi Micro Hei"
+left to right direction
+
+actor "安全分析人员" as User
+database "本地节点主存储" as MainDb
+component "actrailcluster\nreporter role" as Reporter
+database "report spool +\nstate SQLite" as ReportState
+component "actrailcluster\ncenter role" as Center
+database "cluster root\nindex、bundle、graph、snapshot" as ClusterRoot
+component "actrailweb\ncluster mode" as ClusterWeb
+
+Reporter --> MainDb : 读取终态 trace
+Reporter --> ReportState : bundle 与上报状态
+Reporter --> Center : HTTP bundle upload
+Center --> ClusterRoot : 导入并建立索引
+ClusterWeb --> ClusterRoot : 只读查询
+User --> ClusterWeb : HTTP
+@enduml

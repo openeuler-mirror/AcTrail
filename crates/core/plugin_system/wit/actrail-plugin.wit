@@ -488,128 +488,105 @@ interface types {
     execveat-dirfd: option<s32>,
     execveat-flags: option<u64>,
   }
-}
 
-interface host {
-  use types.{payload-ref, payload-chunk, config-chunk, decision-summary, file-policy-view, file-policy-apply-request, file-policy-apply-result, file-policy-list-filter, file-policy-list-result, file-policy-match-dry-run-request, file-policy-match-dry-run-result, command-policy-apply-request, command-policy-apply-result, command-policy-list-filter, command-policy-list-result, command-policy-match-dry-run-request, command-policy-match-dry-run-result, command-execution-context};
+  enum network-policy-decision {
+    default,
+    allow,
+    deny,
+    gray,
+  }
 
-  read-config: func(offset: u64, max-bytes: u64) -> config-chunk;
-  read-payload: func(ref: payload-ref, offset: u64, max-bytes: u64) -> payload-chunk;
-  query-context: func(context-ref: string, query: string) -> result<decision-summary, string>;
-  file-access-current-match-get: func(context-ref: string, query: string) -> result<file-policy-view, string>;
-  file-policy-rules-version-get: func() -> result<u64, string>;
-  file-policy-rules-list: func(filter: file-policy-list-filter, cursor: option<string>, limit: u32) -> result<file-policy-list-result, string>;
-  file-policy-rules-match-dry-run: func(request: file-policy-match-dry-run-request) -> result<file-policy-match-dry-run-result, string>;
-  file-policy-rules-validate: func(request: file-policy-apply-request) -> result<file-policy-apply-result, string>;
-  file-policy-rules-apply: func(request: file-policy-apply-request) -> result<file-policy-apply-result, string>;
-  command-execution-current-context-query: func(context-ref: string, query: string) -> result<command-execution-context, string>;
-  command-policy-rules-version-get: func() -> result<u64, string>;
-  command-policy-rules-list: func(filter: command-policy-list-filter, cursor: option<string>, limit: u32) -> result<command-policy-list-result, string>;
-  command-policy-rules-match-dry-run: func(request: command-policy-match-dry-run-request) -> result<command-policy-match-dry-run-result, string>;
-  command-policy-rules-validate: func(request: command-policy-apply-request) -> result<command-policy-apply-result, string>;
-  command-policy-rules-apply: func(request: command-policy-apply-request) -> result<command-policy-apply-result, string>;
-  env-read: func(name: string, max-bytes: u64) -> result<string, string>;
-}
+  enum network-policy-patch-op {
+    upsert,
+    delete,
+  }
 
-interface observation-context-read {
-  use types.{trace-context};
+  enum network-policy-apply-status {
+    accepted,
+    rejected,
+  }
 
-  trace-context-get: func() -> result<trace-context, string>;
-  current-time-ms: func() -> result<u64, string>;
-  request-reevaluation-at: func(unix-time-ms: u64) -> result<_, string>;
-}
+  record network-policy-rule-draft {
+    rule-id: option<string>,
+    decision: network-policy-decision,
+    remote: string,
+    gray-target: option<string>,
+    timeout-ms: option<u64>,
+    concurrency-limit: option<u32>,
+    fallback: option<control-verdict>,
+  }
 
-interface trace-analysis-read {
-  use types.{trace-analysis-context, trace-action-page};
+  record network-policy-patch-item {
+    op: network-policy-patch-op,
+    rule-id: option<string>,
+    rule: option<network-policy-rule-draft>,
+  }
 
-  context-get: func() -> result<trace-analysis-context, string>;
-  semantic-actions-list: func(offset: option<u64>, limit: u32) -> result<trace-action-page, string>;
-}
+  record network-policy-apply-request {
+    base-revision: u64,
+    mutation-id: string,
+    reason: option<string>,
+    items: list<network-policy-patch-item>,
+  }
 
-interface trace-activity-read {
-  use types.{trace-activity-context, llm-exchange-page, command-execution-page};
+  record network-policy-apply-error {
+    item-index: u32,
+    code: string,
+    message: string,
+  }
 
-  context-get: func() -> result<trace-activity-context, string>;
-  llm-exchanges-list: func(offset: option<u64>, limit: u32) -> result<llm-exchange-page, string>;
-  command-executions-list: func(offset: option<u64>, limit: u32) -> result<command-execution-page, string>;
-}
+  record network-policy-apply-result {
+    status: network-policy-apply-status,
+    new-revision: u64,
+    applied-count: u32,
+    rejected-count: u32,
+    errors: list<network-policy-apply-error>,
+  }
 
-interface trace-file-state-read {
-  use types.{trace-file-state};
+  record network-policy-list-filter {
+    decision: option<network-policy-decision>,
+    remote: option<string>,
+  }
 
-  get: func(action-id: string) -> result<trace-file-state, string>;
-}
+  record network-policy-rule-view {
+    rule-id: string,
+    owner-instance-id: string,
+    decision: network-policy-decision,
+    remote: string,
+    gray-target: option<string>,
+    timeout-ms: option<u64>,
+    concurrency-limit: option<u32>,
+    fallback: option<control-verdict>,
+    rule-revision: u64,
+    updated-sequence: u64,
+  }
 
-interface alert-write {
-  use types.{alert-write-request};
+  record network-policy-list-result {
+    rules: list<network-policy-rule-view>,
+    next-cursor: option<string>,
+    source-revision: u64,
+  }
 
-  submit: func(request: alert-write-request) -> result<_, string>;
-}
+  record network-policy-match-dry-run-request {
+    remote: string,
+  }
 
-interface observation-consumer {
-  use types.{observation-batch, observation-report};
+  record network-policy-match-dry-run-result {
+    matched: bool,
+    decision: network-policy-decision,
+    rule-id: option<string>,
+    owner-instance-id: option<string>,
+    resolved-remote: string,
+    rule-revision: option<u64>,
+    source-revision: u64,
+  }
 
-  consume: func(batch: observation-batch) -> result<observation-report, string>;
-}
-
-interface control-decider {
-  use types.{decision-request, decision-response};
-
-  decide: func(request: decision-request) -> result<decision-response, string>;
-}
-
-interface management-command {
-  use types.{plugin-command-request, plugin-command-result};
-
-  handle-command: func(request: plugin-command-request) -> result<plugin-command-result, string>;
-}
-
-interface runtime-config {
-  get: func() -> result<string, string>;
-  validate: func(config-json: string) -> result<list<string>, string>;
-  submit: func(config-json: string) -> result<_, string>;
-}
-
-interface post-trace-analyzer {
-  use types.{post-trace-task};
-
-  analyze: func(task: post-trace-task) -> result<_, string>;
-}
-
-world observation-plugin {
-  import host;
-  import observation-context-read;
-  import alert-write;
-  export observation-consumer;
-}
-
-world post-trace-observation-plugin {
-  import host;
-  import observation-context-read;
-  import trace-analysis-read;
-  import trace-file-state-read;
-  import alert-write;
-  export observation-consumer;
-  export post-trace-analyzer;
-}
-
-world activity-anomaly-plugin {
-  import host;
-  import observation-context-read;
-  import trace-activity-read;
-  import alert-write;
-  export observation-consumer;
-  export post-trace-analyzer;
-}
-
-world control-plugin {
-  import host;
-  export control-decider;
-}
-
-world managed-control-plugin {
-  import host;
-  export control-decider;
-  export management-command;
-  export runtime-config;
+  record network-action-context {
+    syscall: string,
+    fd: u64,
+    address-family: string,
+    remote-address: string,
+    remote-port: u16,
+    ipv6-scope-id: u32,
+  }
 }

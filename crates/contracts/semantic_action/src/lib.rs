@@ -18,11 +18,12 @@ pub use merge::SemanticActionMergeError;
 pub use model::{
     FileChangeKind, FileObservationPath, FilePathSetIdentity, FilePathSetPath, FilePathSetPathPage,
     FilePathSetState, FilePathSetWrite, LlmRequestBlock, LlmRequestBlockRef, LlmRequestContentPage,
-    LlmRequestContentWrite, LlmRequestManifest, McpJsonRpcContentPage, McpJsonRpcContentWrite,
-    SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionLink,
-    SemanticActionLinkConfidence, SemanticActionLinkRole, SemanticActionPage, SemanticActionStatus,
-    SemanticEvidence, SemanticEvidenceKind, file_path_set_identity_for_overflow_scope,
-    file_path_set_identity_for_paths,
+    LlmRequestContentWrite, LlmRequestLineage, LlmRequestLineageWrite, LlmRequestManifest,
+    LlmTrajectoryStartReason, LlmTrajectoryTransition, McpJsonRpcContentPage,
+    McpJsonRpcContentWrite, SemanticAction, SemanticActionCompleteness, SemanticActionKind,
+    SemanticActionLink, SemanticActionLinkConfidence, SemanticActionLinkRole, SemanticActionPage,
+    SemanticActionStatus, SemanticEvidence, SemanticEvidenceKind,
+    file_path_set_identity_for_overflow_scope, file_path_set_identity_for_paths,
 };
 pub use model_identity::validated_model_identifier;
 pub use store::{SemanticActionReadStore, SemanticActionStoreError, SemanticActionWriteStore};

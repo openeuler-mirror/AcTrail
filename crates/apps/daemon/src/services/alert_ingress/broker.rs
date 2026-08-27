@@ -3,9 +3,11 @@ use std::os::fd::RawFd;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, sync_channel};
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
-use alert_contract::AlertDefinition;
+use alert_contract::{AlertDefinition, AlertSeverity};
+use alert_delivery_contract::{DeliverySeverity, DeliverySource, ForwardAlert};
+use alert_forwarding::AlertForwardingPlugin;
 use config_core::daemon::PluginAlertRuntimeConfig;
 use control_contract::reply::ControlError;
 use model_core::ids::TraceId;
@@ -26,6 +28,7 @@ pub(crate) struct AlertIngress {
     signal: Arc<EventSignal>,
     registrations: BTreeMap<String, Arc<AlertAdmission>>,
     daemon_alert_host: AlertHostClient,
+    forwarding: AlertForwardingPlugin,
     writes_per_cycle: usize,
     drain_timeout: Duration,
 }
@@ -41,6 +44,7 @@ impl AlertIngress {
     pub(crate) fn new(
         config: PluginAlertRuntimeConfig,
         storage: &mut dyn StorageBackend,
+        forwarding: AlertForwardingPlugin,
     ) -> Result<Self, ControlError> {
         let queue_capacity = usize::try_from(config.queue_capacity).map_err(|error| {
             ControlError::new(
@@ -71,6 +75,7 @@ impl AlertIngress {
                 daemon_admission,
             )]),
             daemon_alert_host,
+            forwarding,
             writes_per_cycle,
             drain_timeout: Duration::from_millis(config.drain_timeout_ms),
         })
@@ -116,6 +121,7 @@ impl AlertIngress {
             ));
         }
         let mut outputs = BTreeMap::new();
+        let mut definitions = BTreeMap::new();
         for (definition_key, declaration) in manifest.alert_outputs() {
             let schema_path = resolve_schema_path(manifest_path, &declaration.payload_schema_ref);
             let raw = std::fs::read_to_string(&schema_path).map_err(|error| {
@@ -147,22 +153,25 @@ impl AlertIngress {
                     format!("compile {} failed: {error}", schema_path.display()),
                 )
             })?;
+            let definition = AlertDefinition {
+                producer_plugin_id: manifest.id().to_string(),
+                definition_key: definition_key.to_string(),
+                kind: declaration.kind.clone(),
+                title: declaration.title.clone(),
+                severity: declaration.severity,
+                payload_schema_id: declaration.payload_schema_id.clone(),
+            };
             storage
-                .register_alert_definition(&AlertDefinition {
-                    producer_plugin_id: manifest.id().to_string(),
-                    definition_key: definition_key.to_string(),
-                    kind: declaration.kind.clone(),
-                    title: declaration.title.clone(),
-                    severity: declaration.severity,
-                    payload_schema_id: declaration.payload_schema_id.clone(),
-                })
+                .register_alert_definition(&definition)
                 .map_err(alert_control_error)?;
             outputs.insert(definition_key.to_string(), RegisteredOutput::new(validator));
+            definitions.insert(definition_key.to_string(), definition);
         }
         let admission = Arc::new(AlertAdmission::new(
             instance_id.to_string(),
             manifest.id().to_string(),
             outputs,
+            definitions,
         ));
         self.registrations
             .insert(instance_id.to_string(), Arc::clone(&admission));
@@ -251,8 +260,27 @@ impl AlertIngress {
             );
             request.admission.complete()?;
             match result {
-                Ok(alert_contract::AlertSubmitOutcome::Stored(_))
-                | Ok(alert_contract::AlertSubmitOutcome::DuplicateSuppressed)
+                Ok(alert_contract::AlertSubmitOutcome::Stored(_)) => {
+                    if let Some(definition) = request.admission.definition(&draft.definition_key) {
+                        self.forward_stored_alert(
+                            request.trace_id,
+                            request.created_at,
+                            definition,
+                            &draft.payload_json,
+                        );
+                    } else {
+                        issues.push(AlertIngressIssue {
+                            trace_id: request.trace_id,
+                            instance_id: request.admission.instance_id.clone(),
+                            code: "alert_forwarding_metadata".to_string(),
+                            message: format!(
+                                "alert definition {} has no forwarding metadata",
+                                draft.definition_key
+                            ),
+                        });
+                    }
+                }
+                Ok(alert_contract::AlertSubmitOutcome::DuplicateSuppressed)
                 | Ok(alert_contract::AlertSubmitOutcome::RejectedTraceToken) => {}
                 Err(error) => {
                     issues.push(AlertIngressIssue {
@@ -278,6 +306,43 @@ impl AlertIngress {
                 format!("plugin instance {instance_id} is not registered"),
             )
         })
+    }
+
+    fn forward_stored_alert(
+        &self,
+        trace_id: TraceId,
+        created_at: std::time::SystemTime,
+        definition: &AlertDefinition,
+        payload_json: &str,
+    ) {
+        if !self.forwarding.accepts_category(&definition.kind) {
+            return;
+        }
+        let Ok(detected_at_ms) = created_at.duration_since(UNIX_EPOCH) else {
+            return;
+        };
+        let Ok(payload) = serde_json::from_str::<serde_json::Value>(payload_json) else {
+            return;
+        };
+        let extras = match payload {
+            serde_json::Value::Object(extras) => extras,
+            value => serde_json::Map::from_iter([("value".to_string(), value)]),
+        };
+        let severity = match definition.severity {
+            AlertSeverity::Informational | AlertSeverity::Low => DeliverySeverity::Info,
+            AlertSeverity::Medium | AlertSeverity::High => DeliverySeverity::Warning,
+            AlertSeverity::Critical => DeliverySeverity::Critical,
+        };
+        let _ = self.forwarding.try_publish(ForwardAlert {
+            detected_at_ms: detected_at_ms.as_millis() as u64,
+            severity,
+            source: DeliverySource::Trace {
+                trid: trace_id.to_string(),
+            },
+            category: definition.kind.clone(),
+            description: Some(definition.title.clone()),
+            extras,
+        });
     }
 }
 

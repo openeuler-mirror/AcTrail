@@ -154,8 +154,11 @@ static __always_inline int emit_tls_capture_request(
     event->host_pid = kernel_pid_tgid >> 32;
     event->host_tid = (__u32)kernel_pid_tgid;
     if (bpf_send_signal(ACTRAIL_TLS_CAPTURE_SIGSTOP) == 0) {
-        actrail_event_submit(ctx, event);
-        tls_diag_inc(ACTRAIL_TLS_DIAG_CAPTURE_REQUEST_SUBMIT_OK);
+        if (actrail_event_submit(ctx, event) == 0) {
+            tls_diag_inc(ACTRAIL_TLS_DIAG_CAPTURE_REQUEST_SUBMIT_OK);
+        } else if (bpf_send_signal(ACTRAIL_TLS_CAPTURE_SIGCONT) != 0) {
+            tls_diag_inc(ACTRAIL_TLS_DIAG_CAPTURE_REQUEST_SIGNAL_FAIL);
+        }
     } else {
         actrail_event_discard(event);
         tls_diag_inc(ACTRAIL_TLS_DIAG_CAPTURE_REQUEST_SIGNAL_FAIL);

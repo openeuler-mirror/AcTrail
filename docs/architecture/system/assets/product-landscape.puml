@@ -1,0 +1,37 @@
+@startuml
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam componentStyle rectangle
+skinparam defaultFontName "WenQuanYi Micro Hei"
+left to right direction
+
+actor "运维 / 安全分析人员" as User
+rectangle "AcTrail 产品边界" #D9EAF7 {
+  rectangle "本地节点 A..N" as LocalNode {
+    component "actraild\n本地观测与治理" as Daemon
+    database "主存储" as LocalStore
+    component "actrailctl" as Ctl
+    component "actrailviewer" as Viewer
+    component "actrailweb\nlocal mode" as LocalWeb
+    component "actrailcluster\nreporter role（可选）" as Reporter
+  }
+  rectangle "集群中心（可选）" as ClusterCenter {
+    component "actrailcluster\ncenter role" as Center
+    database "cluster root\n跨节点索引与 bundle" as ClusterRoot
+    component "actrailweb\ncluster mode" as ClusterWeb
+  }
+}
+
+Daemon --> LocalStore
+Ctl --> Daemon : 本地控制
+Viewer --> LocalStore : 只读查询
+LocalWeb --> LocalStore : 本地分析
+Reporter --> LocalStore : 读取终态 trace
+Reporter --> Center : HTTP bundle upload
+Center --> ClusterRoot : 导入与索引
+ClusterWeb --> ClusterRoot : 集群分析
+User --> Ctl
+User --> Viewer
+User --> LocalWeb
+User --> ClusterWeb
+@enduml

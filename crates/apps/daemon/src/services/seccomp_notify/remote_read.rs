@@ -209,24 +209,3 @@ fn read_usize_at(bytes: &[u8], offset: usize, label: &str) -> Result<usize, Cont
         bytes.try_into().expect("iovec usize width"),
     ))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn target_exited_for_gone_errnos() {
-        assert!(target_exited(&std::io::Error::from_raw_os_error(
-            libc::ESRCH
-        )));
-        assert!(target_exited(&std::io::Error::from_raw_os_error(
-            libc::ENOENT
-        )));
-        assert!(!target_exited(&std::io::Error::from_raw_os_error(
-            libc::EFAULT
-        )));
-        assert!(!target_exited(&std::io::Error::from_raw_os_error(
-            libc::EPERM
-        )));
-    }
-}

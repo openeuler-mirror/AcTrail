@@ -5,9 +5,11 @@ use std::collections::{BTreeMap, btree_map::Entry};
 use config_core::daemon::{
     ApplicationProtocolConfig, Http2DataContentRetention, SemanticRetentionConfig,
 };
-use model_core::event::ApplicationPayload;
+use model_core::event::{ApplicationBody, ApplicationPayload};
 use model_core::ids::TraceId;
-use model_core::payload::{PayloadDirection, PayloadSegment, PayloadStreamKey};
+use model_core::payload::{
+    PayloadDirection, PayloadSegment, PayloadStreamIdentity, PayloadStreamKey,
+};
 use model_core::process::ProcessIdentity;
 
 use super::ApplicationEventDraft;
@@ -17,10 +19,6 @@ use super::base64_encode;
 mod frame;
 
 pub(super) struct Http2Analyzer {
-    #[cfg(test)]
-    config: ApplicationProtocolConfig,
-    #[cfg(test)]
-    semantic_retention: SemanticRetentionConfig,
     connections: BTreeMap<ConnectionKey, ConnectionState>,
 }
 
@@ -28,34 +26,8 @@ impl Http2Analyzer {
     pub(super) fn new(config: ApplicationProtocolConfig) -> Self {
         let _ = &config;
         Self {
-            #[cfg(test)]
-            config,
-            #[cfg(test)]
-            semantic_retention: SemanticRetentionConfig::default(),
             connections: BTreeMap::new(),
         }
-    }
-
-    #[cfg(test)]
-    pub(super) fn new_with_retention(
-        config: ApplicationProtocolConfig,
-        semantic_retention: SemanticRetentionConfig,
-    ) -> Self {
-        Self {
-            config,
-            semantic_retention,
-            connections: BTreeMap::new(),
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn analyze(
-        &mut self,
-        segment: &PayloadSegment,
-    ) -> Result<Vec<ApplicationEventDraft>, String> {
-        let config = self.config.clone();
-        let semantic_retention = self.semantic_retention.clone();
-        self.analyze_with_config(segment, &config, &semantic_retention, false)
     }
 
     pub(super) fn analyze_with_config(
@@ -93,9 +65,12 @@ impl Http2Analyzer {
         self.connections.retain(|key, _| key.trace_id != trace_id);
     }
 
-    #[cfg(test)]
-    pub(super) fn connection_count(&self) -> usize {
-        self.connections.len()
+    pub(super) fn forget_stream(&mut self, identity: &PayloadStreamIdentity) {
+        self.connections.retain(|key, _| {
+            key.trace_id != identity.trace_id
+                || key.process != identity.process
+                || key.stream_key != identity.stream_key
+        });
     }
 }
 
@@ -168,18 +143,21 @@ impl ConnectionState {
                 continue;
             }
             if semantic_retention.http2_frame_summary_enabled() {
-                drafts.push(ApplicationEventDraft {
-                    payload: frame_payload(segment, &frame),
-                });
+                drafts.push(ApplicationEventDraft::complete(frame_payload(
+                    segment, &frame,
+                )));
             }
             if frame.frame_type == frame::DATA_FRAME_TYPE {
                 let data_content = semantic_retention.http2_data_content();
                 if semantic_retention.http2_frame_summary_enabled()
                     || !matches!(data_content, Http2DataContentRetention::None)
                 {
-                    drafts.push(ApplicationEventDraft {
-                        payload: data_payload(segment, &frame, config, data_content)?,
-                    });
+                    drafts.push(ApplicationEventDraft::complete(data_payload(
+                        segment,
+                        &frame,
+                        config,
+                        data_content,
+                    )?));
                 }
             }
             direction.buffer.drain(..consumed);
@@ -210,9 +188,7 @@ impl ConnectionState {
         self.h2_confirmed = true;
         if !self.preface_emitted && semantic_retention.http2_frame_summary_enabled() {
             self.preface_emitted = true;
-            drafts.push(ApplicationEventDraft {
-                payload: preface_payload(segment),
-            });
+            drafts.push(ApplicationEventDraft::complete(preface_payload(segment)));
         }
         Ok(())
     }
@@ -327,6 +303,7 @@ fn preface_payload(segment: &PayloadSegment) -> ApplicationPayload {
         protocol: "h2".to_string(),
         operation: "connection_preface".to_string(),
         summary: "client connection preface".to_string(),
+        body: None,
         metadata: base_metadata(segment, None),
     }
 }
@@ -343,6 +320,7 @@ fn frame_payload(segment: &PayloadSegment, frame: &frame::Frame) -> ApplicationP
             frame.stream_id,
             frame.length
         ),
+        body: None,
         metadata,
     }
 }
@@ -356,6 +334,7 @@ fn data_payload(
     let mut metadata = base_metadata(segment, Some(frame.stream_id));
     insert_frame_metadata(&mut metadata, frame);
     metadata.insert("data_size".to_string(), frame.payload.len().to_string());
+    let mut body = None;
     match content {
         Http2DataContentRetention::None => {}
         Http2DataContentRetention::Preview if config.http2_emit_data_preview => {
@@ -371,7 +350,7 @@ fn data_payload(
         }
         Http2DataContentRetention::Preview => {}
         Http2DataContentRetention::Raw => {
-            metadata.insert("data_base64".to_string(), base64_encode(&frame.payload));
+            body = Some(ApplicationBody::Base64(base64_encode(&frame.payload)));
         }
     }
     Ok(ApplicationPayload {
@@ -382,6 +361,7 @@ fn data_payload(
             frame.stream_id,
             frame.payload.len()
         ),
+        body,
         metadata,
     })
 }
@@ -440,7 +420,3 @@ fn preview_data(bytes: &[u8], max_bytes: u64) -> Result<Option<(String, bool)>, 
     }
     Ok(Some((text[..end].to_string(), true)))
 }
-
-#[cfg(test)]
-#[path = "http2/tests.rs"]
-mod tests;

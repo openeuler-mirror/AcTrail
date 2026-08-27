@@ -2,7 +2,6 @@
 
 use std::collections::BTreeMap;
 use std::os::unix::fs::FileTypeExt;
-use std::time::SystemTime;
 
 use collector_event::{RawCollectorEvent, RawEventEnvelope, RawObservationPayload};
 use model_core::capability::Capability;
@@ -11,11 +10,11 @@ use model_core::process::ProcessObservation;
 
 use crate::decode::FdIpcKind;
 use crate::decode::FileTracker;
-use crate::decode::{DecodeError, NET_EVENT_RECV, NET_EVENT_SEND};
+use crate::decode::{DecodeError, FD_IO_EVENT_RECV, FD_IO_EVENT_SEND};
 use crate::loader::KernelObservationEvent;
 use crate::maps::BindingStateMap;
 
-const NET_SYSCALL_FD_IO_WRITEV: u32 = 3;
+const SYSCALL_FAMILY_FD_IO_WRITEV: u32 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FdTargetKind {
@@ -33,13 +32,14 @@ struct FdObservation {
 
 pub(super) fn operation(kind: u32, syscall_family: u32) -> (&'static str, &'static str) {
     match (kind, syscall_family) {
-        (NET_EVENT_SEND, NET_SYSCALL_FD_IO_WRITEV) => ("writev", "outbound"),
-        (NET_EVENT_SEND, _) => ("write", "outbound"),
-        (NET_EVENT_RECV, _) => ("read", "inbound"),
+        (FD_IO_EVENT_SEND, SYSCALL_FAMILY_FD_IO_WRITEV) => ("writev", "outbound"),
+        (FD_IO_EVENT_SEND, _) => ("write", "outbound"),
+        (FD_IO_EVENT_RECV, _) => ("read", "inbound"),
         _ => ("unknown", "unknown"),
     }
 }
 
+/// 无类别码事件（fd 不在内核 fd_table）时的完整 fallback：先问 lineage 再问 path。
 pub(super) fn decode(
     event: KernelObservationEvent,
     bindings: &BindingStateMap,
@@ -48,80 +48,142 @@ pub(super) fn decode(
     direction: &'static str,
     file_tracker: &mut FileTracker,
 ) -> Result<Option<RawCollectorEvent>, DecodeError> {
-    if let Some(kind) = file_tracker.resolve_fd_ipc_kind(event.trace_id, &identity, event.fd)
-        && ipc_capability_enabled(kind.into(), bindings, event.trace_id)
+    if let Some(event) = decode_ipc(
+        event.clone(),
+        bindings,
+        identity.clone(),
+        operation,
+        direction,
+        file_tracker,
+        None,
+    )? {
+        return Ok(Some(event));
+    }
+    decode_file(
+        event,
+        bindings,
+        identity,
+        operation,
+        direction,
+        file_tracker,
+    )
+}
+
+/// 内核 fd_table 已判定为 IPC（pipe/socketpair）时的直达分支：只查 lineage。
+pub(super) fn decode_ipc(
+    event: KernelObservationEvent,
+    bindings: &BindingStateMap,
+    identity: ProcessObservation,
+    operation: &'static str,
+    direction: &'static str,
+    file_tracker: &mut FileTracker,
+    classified_kind: Option<FdIpcKind>,
+) -> Result<Option<RawCollectorEvent>, DecodeError> {
+    let tracked_kind = file_tracker.resolve_fd_ipc_kind(event.trace_id, &identity, event.fd);
+    let Some(kind) = classified_kind.or(tracked_kind) else {
+        return Ok(None);
+    };
+    if !ipc_capability_enabled(kind.into(), bindings, event.trace_id) {
+        return Ok(None);
+    }
+    let observation = FdObservation {
+        kind: kind.into(),
+        target: anonymous_ipc_target(kind, &event),
+        metadata: BTreeMap::from([(
+            "fd_target_source".to_string(),
+            match classified_kind {
+                Some(classified) if tracked_kind == Some(classified) => {
+                    "kernel_fd_table+ipc_fd_tracker"
+                }
+                Some(_) => "kernel_fd_table",
+                None => "ipc_fd_tracker",
+            }
+            .to_string(),
+        )]),
+    };
+    Ok(Some(build_ipc_observation(
+        &event,
+        identity,
+        observation,
+        operation,
+        direction,
+    )))
+}
+
+/// 内核 fd_table 已判定为 FILE 时的直达分支：查 path 表；命名 fifo/socket 文件
+/// 用一次 stat 回退补判（内核在 open 出口拿不到 inode 类型，只能登记成 FILE）。
+pub(super) fn decode_file(
+    event: KernelObservationEvent,
+    bindings: &BindingStateMap,
+    identity: ProcessObservation,
+    operation: &'static str,
+    direction: &'static str,
+    file_tracker: &mut FileTracker,
+) -> Result<Option<RawCollectorEvent>, DecodeError> {
+    if !bindings.trace_has_capability(event.trace_id, &Capability::FsAccessBasic) {
+        return Ok(None);
+    }
+    let Some(path) = file_tracker.resolve_fd_path(event.trace_id, &identity, event.fd) else {
+        return Ok(None);
+    };
+    if let Some(kind) = tracked_path_ipc_kind(&path)
+        && ipc_capability_enabled(kind, bindings, event.trace_id)
     {
         let observation = FdObservation {
-            kind: kind.into(),
-            target: anonymous_ipc_target(kind, &event),
+            kind,
+            target: path,
             metadata: BTreeMap::from([(
                 "fd_target_source".to_string(),
-                "ipc_fd_tracker".to_string(),
+                "file_tracker".to_string(),
             )]),
         };
-        let metadata = fd_io_metadata(&event, operation, direction, &observation);
-        return Ok(Some(RawCollectorEvent {
-            envelope: RawEventEnvelope {
-                trace_id: Some(event.trace_id),
-                observed_at: SystemTime::now(),
-                process: identity,
-                collector: CollectorName::new("ebpf"),
-            },
-            payload: RawObservationPayload::Ipc {
-                channel: fd_channel(observation.kind).to_string(),
-                peer: Some(observation.target),
-                metadata,
-            },
-        }));
+        return Ok(Some(build_ipc_observation(
+            &event,
+            identity,
+            observation,
+            operation,
+            direction,
+        )));
     }
-    if bindings.trace_has_capability(event.trace_id, &Capability::FsAccessBasic) {
-        if let Some(path) = file_tracker.resolve_fd_path(event.trace_id, &identity, event.fd) {
-            if let Some(kind) = tracked_path_ipc_kind(&path)
-                && ipc_capability_enabled(kind, bindings, event.trace_id)
-            {
-                let observation = FdObservation {
-                    kind,
-                    target: path,
-                    metadata: BTreeMap::from([(
-                        "fd_target_source".to_string(),
-                        "file_tracker".to_string(),
-                    )]),
-                };
-                let metadata = fd_io_metadata(&event, operation, direction, &observation);
-                return Ok(Some(RawCollectorEvent {
-                    envelope: RawEventEnvelope {
-                        trace_id: Some(event.trace_id),
-                        observed_at: SystemTime::now(),
-                        process: identity,
-                        collector: CollectorName::new("ebpf"),
-                    },
-                    payload: RawObservationPayload::Ipc {
-                        channel: fd_channel(observation.kind).to_string(),
-                        peer: Some(observation.target),
-                        metadata,
-                    },
-                }));
-            }
-            let creation_requested =
-                file_tracker.fd_creation_requested(event.trace_id, &identity, event.fd);
-            let metadata =
-                tracked_file_metadata(&event, operation, direction, &path, creation_requested);
-            return Ok(Some(RawCollectorEvent {
-                envelope: RawEventEnvelope {
-                    trace_id: Some(event.trace_id),
-                    observed_at: SystemTime::now(),
-                    process: identity,
-                    collector: CollectorName::new("ebpf"),
-                },
-                payload: RawObservationPayload::File {
-                    operation: operation.to_string(),
-                    path: Some(path),
-                    metadata,
-                },
-            }));
-        }
+    let creation_requested =
+        file_tracker.fd_creation_requested(event.trace_id, &identity, event.fd);
+    let metadata = tracked_file_metadata(&event, operation, direction, &path, creation_requested);
+    Ok(Some(RawCollectorEvent {
+        envelope: RawEventEnvelope {
+            trace_id: Some(event.trace_id),
+            observed_at: super::clock::wall_from_ktime(event.observed_ktime_ns),
+            process: identity,
+            collector: CollectorName::new("ebpf"),
+        },
+        payload: RawObservationPayload::File {
+            operation: operation.to_string(),
+            path: Some(path),
+            metadata,
+        },
+    }))
+}
+
+fn build_ipc_observation(
+    event: &KernelObservationEvent,
+    identity: ProcessObservation,
+    observation: FdObservation,
+    operation: &str,
+    direction: &str,
+) -> RawCollectorEvent {
+    let metadata = fd_io_metadata(event, operation, direction, &observation);
+    RawCollectorEvent {
+        envelope: RawEventEnvelope {
+            trace_id: Some(event.trace_id),
+            observed_at: super::clock::wall_from_ktime(event.observed_ktime_ns),
+            process: identity,
+            collector: CollectorName::new("ebpf"),
+        },
+        payload: RawObservationPayload::Ipc {
+            channel: fd_channel(observation.kind).to_string(),
+            peer: Some(observation.target),
+            metadata,
+        },
     }
-    Ok(None)
 }
 
 fn tracked_path_ipc_kind(path: &str) -> Option<FdTargetKind> {
@@ -197,7 +259,7 @@ fn tracked_file_metadata(
 }
 
 fn fd_io_size(kind: u32, result: i32) -> Option<u64> {
-    if !matches!(kind, NET_EVENT_SEND | NET_EVENT_RECV) || result < 0 {
+    if !matches!(kind, FD_IO_EVENT_SEND | FD_IO_EVENT_RECV) || result < 0 {
         return None;
     }
     Some(result as u64)

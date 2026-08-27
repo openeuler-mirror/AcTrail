@@ -15,34 +15,44 @@ use super::super::{
     DEFAULT_CONTROL_PENDING_CONNECTION_MAX, DEFAULT_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS,
     DEFAULT_FINALIZATION_POLL_INTERVAL_MS, DEFAULT_FINALIZATION_SETTLE_DELAY_MS,
     DEFAULT_FINALIZATION_SHUTDOWN_DRAIN_TIMEOUT_MS, DEFAULT_FINALIZATION_TRACES_PER_CYCLE,
-    DEFAULT_PLUGIN_ALERT_DRAIN_TIMEOUT_MS, DEFAULT_PLUGIN_ALERT_QUEUE_CAPACITY,
-    DEFAULT_PLUGIN_ALERT_WRITES_PER_CYCLE, DEFAULT_PLUGIN_DISCOVERY_DIRECTORY,
-    DEFAULT_PLUGIN_DISCOVERY_MANIFEST_MAX_BYTES, DEFAULT_PLUGIN_DISCOVERY_MAX_PACKAGES,
-    DEFAULT_POST_TRACE_ADMISSION_TIMEOUT_MS, DEFAULT_POST_TRACE_BROKER_QUEUE_CAPACITY,
-    DEFAULT_POST_TRACE_BROKER_REPLY_TIMEOUT_MS, DEFAULT_POST_TRACE_EXECUTION_TIMEOUT_MS,
-    DEFAULT_POST_TRACE_MAX_IN_FLIGHT_TASKS, DEFAULT_POST_TRACE_REQUESTS_PER_CYCLE,
-    DEFAULT_POST_TRACE_SHUTDOWN_DRAIN_TIMEOUT_MS, DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS,
-    DEFAULT_WEB_ALERTS_LIMIT, DEFAULT_WEB_ALERTS_MAX_LIMIT, DisabledOrPath, EbpfCollectorConfig,
-    EbpfEnabledMode, EnforcementBackend, EnforcementBuiltinRuleConfig, EnforcementConfig,
-    EnforcementMarkStrategy, EnforcementScope, EnforcementSeccompSyscall,
-    FileBulkReadFastPathConfig, FileBulkReadObservationConfig, FileMetadataRetention,
-    FileObservationConfig, FileRawEventRetention, FileTtyObservationConfig,
-    FsEnumerateObservationConfig, Http2DataContentRetention, HttpBodyRetention,
-    HttpHeadersRetention, IpcLineageConfig, L0LlmCallRetention, L0McpCallRetention, L1SseRetention,
-    L2HttpRetention, L3Http2FrameRetention, L4PayloadRetention, LlmRequestContentRetention,
-    LlmResponseContentRetention, LlmToolCallRetention, LlmUsageRetention,
-    MAX_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS, McpJsonRpcContentRetention, MemlockRlimit,
-    NetworkControlConfig, NetworkControlSeccompSyscall, PayloadBodyContentRetention, PayloadConfig,
-    PayloadMcpConfig, PayloadRedactionPolicy, PayloadSocketCaptureBackend, PayloadSocketConfig,
-    PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadStdioStorageMode,
-    PayloadTlsCaptureBackend, PayloadTlsConfig, PayloadTlsLibrary, PayloadTlsLibraryPath,
-    PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource,
-    PayloadTlsSyncRuntimeLibraryPath, PluginAlertRuntimeConfig, PluginDiscoveryConfig,
-    PostTraceRuntimeConfig, ProcessSeccompConfig, ProcessSeccompSyscall, ResourceMetricsConfig,
-    SeccompNotifyConfig, SemanticContentOwner, SemanticRetentionConfig, SocketPermissions,
-    SseDataPolicy, SseEventContentRetention, StartupPluginFailurePolicy, StartupPluginLoadConfig,
-    StartupPluginsConfig, StorageRetentionConfig, TraceFinalizationConfig, WebAlertsConfig,
-    WebServerConfig, WorkloadDiagnosticsConfig,
+    DEFAULT_LLM_PROJECTION_MAX_ACTION_VERSIONS_PER_TRACE,
+    DEFAULT_LLM_PROJECTION_MAX_ACTIVE_RESPONSE_BINDINGS_PER_TRACE,
+    DEFAULT_LLM_PROJECTION_MAX_CORRELATION_STREAMS_PER_TRACE,
+    DEFAULT_LLM_PROJECTION_MAX_DAMAGED_RESPONSE_BINDINGS_PER_TRACE,
+    DEFAULT_LLM_PROJECTION_MAX_PENDING_REQUESTS_PER_STREAM,
+    DEFAULT_LLM_PROJECTION_MAX_PENDING_RESPONSES_PER_STREAM,
+    DEFAULT_LLM_PROJECTION_MAX_PENDING_TRAJECTORY_ACTIONS_PER_TRACE,
+    DEFAULT_LLM_PROJECTION_MAX_TOOL_ENTRIES_PER_TRACE, DEFAULT_LLM_REQUEST_BODY_EXPORT_MAX_BYTES,
+    DEFAULT_LLM_TOOL_RESULT_EXPORT_MAX_BYTES, DEFAULT_PLUGIN_ALERT_DRAIN_TIMEOUT_MS,
+    DEFAULT_PLUGIN_ALERT_QUEUE_CAPACITY, DEFAULT_PLUGIN_ALERT_WRITES_PER_CYCLE,
+    DEFAULT_PLUGIN_DISCOVERY_DIRECTORY, DEFAULT_PLUGIN_DISCOVERY_MANIFEST_MAX_BYTES,
+    DEFAULT_PLUGIN_DISCOVERY_MAX_PACKAGES, DEFAULT_POST_TRACE_ADMISSION_TIMEOUT_MS,
+    DEFAULT_POST_TRACE_BROKER_QUEUE_CAPACITY, DEFAULT_POST_TRACE_BROKER_REPLY_TIMEOUT_MS,
+    DEFAULT_POST_TRACE_EXECUTION_TIMEOUT_MS, DEFAULT_POST_TRACE_MAX_IN_FLIGHT_TASKS,
+    DEFAULT_POST_TRACE_REQUESTS_PER_CYCLE, DEFAULT_POST_TRACE_SHUTDOWN_DRAIN_TIMEOUT_MS,
+    DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS, DEFAULT_WEB_ALERTS_LIMIT,
+    DEFAULT_WEB_ALERTS_MAX_LIMIT, DisabledOrPath, EbpfCollectorConfig, EbpfEnabledMode,
+    EnforcementBackend, EnforcementBuiltinRuleConfig, EnforcementConfig, EnforcementMarkStrategy,
+    EnforcementScope, EnforcementSeccompSyscall, FileBulkReadFastPathConfig,
+    FileBulkReadObservationConfig, FileMetadataRetention, FileObservationConfig,
+    FileRawEventRetention, FileTtyObservationConfig, FsEnumerateObservationConfig,
+    Http2DataContentRetention, HttpBodyRetention, HttpExchangeConfig, HttpHeadersRetention,
+    IpcLineageConfig, L0LlmCallRetention, L0McpCallRetention, L1SseRetention, L2HttpRetention,
+    L3Http2FrameRetention, L4PayloadRetention, LlmAssemblyConfig, LlmProjectionStateConfig,
+    LlmRequestBodyExportRetention, LlmRequestContentRetention, LlmResponseContentRetention,
+    LlmStreamClassifierConfig, LlmToolCallRetention, LlmToolResultContentExportRetention,
+    LlmTrajectoryConfig, LlmUsageRetention, MAX_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS,
+    McpJsonRpcContentRetention, MemlockRlimit, NetworkControlConfig, NetworkControlSeccompSyscall,
+    PayloadBodyContentRetention, PayloadConfig, PayloadMcpConfig, PayloadRedactionPolicy,
+    PayloadSocketCaptureBackend, PayloadSocketConfig, PayloadSocketSeccompSyscall,
+    PayloadStdioConfig, PayloadStdioStorageMode, PayloadTlsCaptureBackend, PayloadTlsConfig,
+    PayloadTlsLibrary, PayloadTlsLibraryPath, PayloadTlsResolver, PayloadTlsSeccompSyscall,
+    PayloadTlsSource, PayloadTlsSyncRuntimeLibraryPath, PluginAlertRuntimeConfig,
+    PluginDiscoveryConfig, PostTraceRuntimeConfig, ProcessSeccompConfig, ProcessSeccompSyscall,
+    ResourceMetricsConfig, SeccompNotifyConfig, SemanticContentOwner, SemanticRetentionConfig,
+    SocketPermissions, SseDataPolicy, SseEventContentRetention, StartupPluginFailurePolicy,
+    StartupPluginLoadConfig, StartupPluginsConfig, StorageRetentionConfig, TraceFinalizationConfig,
+    WebAlertsConfig, WebServerConfig, WorkloadDiagnosticsConfig,
 };
 use super::{
     OperatorConfig, validate_application_protocol_config, validate_enforcement_config,
@@ -53,6 +63,8 @@ use crate::export::ExportConfig;
 use crate::framework::{ConfigError, ConfigModel};
 use crate::provider_rules::ProviderRuleSetConfig;
 
+#[path = "document/alert_forwarding/mod.rs"]
+mod alert_forwarding;
 #[path = "document/app.rs"]
 mod app;
 #[path = "document/base/document.rs"]
@@ -63,6 +75,8 @@ mod cluster;
 mod command;
 #[path = "document/file.rs"]
 mod file;
+#[path = "document/hand_observation/mod.rs"]
+mod hand_observation;
 #[path = "document/helpers.rs"]
 mod helpers;
 #[path = "document/network.rs"]
@@ -73,19 +87,27 @@ mod payload;
 mod plugin;
 #[path = "document/process.rs"]
 mod process;
+#[path = "document/sandbox_alerts/mod.rs"]
+mod sandbox_alerts;
+#[path = "document/sandbox_evidence/mod.rs"]
+mod sandbox_evidence;
 #[path = "document/semantic.rs"]
 mod semantic;
 
+use alert_forwarding::*;
 use app::*;
 use base::*;
 use cluster::*;
 use command::*;
 use file::*;
+use hand_observation::*;
 use helpers::*;
 use network::*;
 use payload::*;
 use plugin::*;
 use process::*;
+use sandbox_alerts::*;
+use sandbox_evidence::*;
 use semantic::*;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -97,6 +119,10 @@ pub(super) struct OperatorDocument {
     cluster: ClusterDocument,
     export: ExportDocument,
     plugins: PluginsDocument,
+    alert_forwarding: AlertForwardingDocument,
+    hand_observation: HandObservationDocument,
+    sandbox_evidence: SandboxEvidenceDocument,
+    sandbox_alerts: SandboxAlertsDocument,
     capture: CaptureDocument,
     ebpf: EbpfDocument,
     payload: PayloadDocument,
@@ -123,6 +149,10 @@ impl Default for OperatorDocument {
             cluster: ClusterDocument::default(),
             export: ExportDocument::default(),
             plugins: PluginsDocument::default(),
+            alert_forwarding: AlertForwardingDocument::default(),
+            hand_observation: HandObservationDocument::default(),
+            sandbox_evidence: SandboxEvidenceDocument::default(),
+            sandbox_alerts: SandboxAlertsDocument::default(),
             capture: CaptureDocument::default(),
             ebpf: EbpfDocument::default(),
             payload: PayloadDocument::default(),
@@ -263,6 +293,10 @@ impl OperatorDocument {
                 &config.plugin_alert_runtime,
                 &config.startup_plugins,
             ),
+            alert_forwarding: AlertForwardingDocument::from_config(&config.alert_forwarding),
+            hand_observation: HandObservationDocument::from_config(&config.hand_observation),
+            sandbox_evidence: SandboxEvidenceDocument::from_config(&config.sandbox_evidence),
+            sandbox_alerts: SandboxAlertsDocument::from_config(&config.sandbox_alerts),
             capture: CaptureDocument {
                 profile_name: config.capture_profile.name.as_str().to_string(),
                 capabilities: required,
@@ -275,6 +309,7 @@ impl OperatorDocument {
                 preflight_link_teardown_workers: config.ebpf_config.preflight_link_teardown_workers,
                 tracked_process_max_entries: config.ebpf_config.tracked_process_max_entries,
                 pending_operation_max_entries: config.ebpf_config.pending_operation_max_entries,
+                fd_per_process_max_entries: config.ebpf_config.fd_per_process_max_entries,
                 suppressed_fd_max_entries: config.ebpf_config.suppressed_fd_max_entries,
                 suppressed_fd_index_slots_per_process: config
                     .ebpf_config
@@ -282,6 +317,7 @@ impl OperatorDocument {
                 event_ring_buffer_max_bytes: config.ebpf_config.event_ring_buffer_max_bytes,
                 file_path_capture_enabled: config.ebpf_config.file_path_capture_enabled,
                 file_path_max_bytes: config.ebpf_config.file_path_max_bytes,
+                net_send_recv_aggregation: config.ebpf_config.net_send_recv_aggregation,
                 ipc_lineage: IpcLineageDocument::from_config(&config.ebpf_config.ipc_lineage),
             },
             payload: PayloadDocument::from_config(&config.payload_config),
@@ -305,6 +341,7 @@ impl OperatorDocument {
             agent_invocation: AgentInvocationDocument {
                 enabled: config.agent_invocation.enabled,
                 commands: config.agent_invocation.commands.clone(),
+                tool_names: config.agent_invocation.tool_names.clone(),
             },
             semantic_retention: SemanticRetentionDocument::from_config(&config.semantic_retention),
             file_observation: FileObservationDocument::from_config(&config.file_observation),
@@ -389,6 +426,12 @@ impl OperatorDocument {
                     .map(network_control_seccomp_syscall_as_str)
                     .map(str::to_string)
                     .collect(),
+                default_decision: config.network_control.default_decision.as_str().to_string(),
+                failure_decision: config.network_control.failure_decision.as_str().to_string(),
+                audit_enabled: config.network_control.audit_enabled,
+                audit_default_allow: config.network_control.audit_default_allow,
+                pending_decision_max: config.network_control.pending_decision_max,
+                reusable_cache_max_entries: config.network_control.reusable_cache_max_entries,
             },
             supervision: SupervisionDocument {
                 startup_wait_ms: config.startup_wait_ms,
@@ -433,9 +476,60 @@ impl OperatorDocument {
             &process_seccomp,
             &enforcement,
             &command_control,
+            &network_control,
             &capabilities,
         )?;
         let (plugin_discovery, plugin_alert_runtime, startup_plugins) = self.plugins.to_config()?;
+        let alert_forwarding = self.alert_forwarding.to_config()?;
+        let hand_observation = self.hand_observation.to_config()?;
+        let sandbox_evidence = self.sandbox_evidence.to_config()?;
+        let sandbox_alerts = self.sandbox_alerts.to_config()?;
+        let trace_finalization = self.control.finalization.to_config()?;
+        let shutdown_wait_ms = require_positive_u64(
+            "supervision.shutdown_wait_ms",
+            self.supervision.shutdown_wait_ms,
+        )?;
+        let supervision_poll_interval_ms = require_positive_u64(
+            "supervision.poll_interval_ms",
+            self.supervision.poll_interval_ms,
+        )?;
+        let minimum_shutdown_wait_ms = trace_finalization
+            .shutdown_drain_timeout_ms
+            .checked_add(trace_finalization.shutdown_drain_timeout_ms)
+            .and_then(|total| total.checked_add(trace_finalization.shutdown_drain_timeout_ms))
+            .and_then(|total| {
+                total.checked_add(trace_finalization.post_trace.shutdown_drain_timeout_ms)
+            })
+            .and_then(|total| total.checked_add(plugin_alert_runtime.drain_timeout_ms))
+            .and_then(|total| total.checked_add(supervision_poll_interval_ms))
+            .ok_or_else(|| {
+                "configured shutdown drain budgets overflow u64 milliseconds".to_string()
+            })?;
+        let minimum_shutdown_wait_ms = if hand_observation.enabled {
+            minimum_shutdown_wait_ms
+                .checked_add(sandbox_evidence.shutdown_drain_timeout_ms)
+                .ok_or_else(|| {
+                    "configured Hand observation shutdown budget overflows u64 milliseconds"
+                        .to_string()
+                })?
+        } else {
+            minimum_shutdown_wait_ms
+        };
+        let minimum_shutdown_wait_ms = if sandbox_alerts.enabled {
+            minimum_shutdown_wait_ms
+                .checked_add(sandbox_alerts.shutdown_drain_timeout_ms)
+                .ok_or_else(|| {
+                    "configured Sandbox alert shutdown budget overflows u64 milliseconds"
+                        .to_string()
+                })?
+        } else {
+            minimum_shutdown_wait_ms
+        };
+        if shutdown_wait_ms < minimum_shutdown_wait_ms {
+            return Err(format!(
+                "supervision.shutdown_wait_ms must be at least {minimum_shutdown_wait_ms}ms: 3 * control.finalization.shutdown_drain_timeout_ms (terminal + unsettled semantics + export) + control.finalization.post_trace.shutdown_drain_timeout_ms + plugins.alerts.drain_timeout_ms + supervision.poll_interval_ms, plus sandbox_evidence.shutdown_drain_timeout_ms when Hand observation is enabled and sandbox_alerts.shutdown_drain_timeout_ms when Sandbox alert storage is enabled"
+            ));
+        }
         Ok(OperatorConfig {
             socket_path: PathBuf::from(&self.control.socket_path),
             socket_permissions: SocketPermissions {
@@ -463,7 +557,11 @@ impl OperatorDocument {
             export_config: self.export.snapshot.to_config(),
             plugin_discovery,
             plugin_alert_runtime,
+            alert_forwarding,
             startup_plugins,
+            hand_observation,
+            sandbox_evidence,
+            sandbox_alerts,
             log_path: PathBuf::from(&self.control.log_path),
             diagnostic_log_level: parse_value(
                 "control.diagnostic_log_level",
@@ -483,7 +581,7 @@ impl OperatorDocument {
             file_observation: self.file_observation.to_config()?,
             application_protocol,
             resource_metrics,
-            trace_finalization: self.control.finalization.to_config()?,
+            trace_finalization,
             provider_rule_set: self.provider.to_config(),
             enforcement,
             command_control,
@@ -492,14 +590,8 @@ impl OperatorDocument {
                 "supervision.startup_wait_ms",
                 self.supervision.startup_wait_ms,
             )?,
-            shutdown_wait_ms: require_positive_u64(
-                "supervision.shutdown_wait_ms",
-                self.supervision.shutdown_wait_ms,
-            )?,
-            supervision_poll_interval_ms: require_positive_u64(
-                "supervision.poll_interval_ms",
-                self.supervision.poll_interval_ms,
-            )?,
+            shutdown_wait_ms,
+            supervision_poll_interval_ms,
         })
     }
 }

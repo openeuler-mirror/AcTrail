@@ -32,12 +32,9 @@ class VirtualContainerXiaooConcurrencyCase(TestCase):
         self._workload = Path(__file__).resolve().parent / "workload.sh"
 
     def run(self, test_context: TestingContextSingleton) -> TestResult:
-        if not os.access("/dev/kvm", os.R_OK | os.W_OK):
-            return TestResult(
-                TestStatus.SKIPPED,
-                "readable/writable /dev/kvm is unavailable; "
-                "Kata concurrency acceptance was not run",
-            )
+        problem = self._host_prerequisite_problem()
+        if problem is not None:
+            return problem
         test_context.report_progress(
             "artifacts",
             "validating concurrency deployment assets",
@@ -96,9 +93,34 @@ class VirtualContainerXiaooConcurrencyCase(TestCase):
                 expected_runtime=self._config.ctr_runtime,
                 expected_workload_image=self._config.image,
             )
-        except RuntimeError as error:
+        except (OSError, RuntimeError, ValueError) as error:
             return None, _deployment_failure(str(error))
         return deployment, None
+
+    def _host_prerequisite_problem(self) -> TestResult | None:
+        if not os.access("/dev/kvm", os.R_OK | os.W_OK):
+            return TestResult(
+                TestStatus.SKIPPED,
+                "external Kata prerequisite is unavailable: "
+                "readable/writable /dev/kvm",
+            )
+        commands = (
+            "ctr",
+            "kata-runtime",
+            "script",
+            shim_binary(self._config.ctr_runtime),
+            kata_backend(self._config.backend).vmm_command,
+        )
+        unavailable = next(
+            (command for command in commands if shutil.which(command) is None),
+            None,
+        )
+        if unavailable is not None:
+            return TestResult(
+                TestStatus.SKIPPED,
+                f"external Kata prerequisite is unavailable: {unavailable}",
+            )
+        return None
 
     def _prerequisite_problem(
         self,
@@ -125,6 +147,14 @@ class VirtualContainerXiaooConcurrencyCase(TestCase):
             self._validator,
             workload_bundle / "MANIFEST.sha256",
         )
+        if self._config.opencode_free_model is not None:
+            project_files += (
+                Path(__file__).resolve().parent / "connect_proxy.py",
+                self._config.repo
+                / "deploy/virtual-container/vsock-egress/guest-bridge.sh",
+                self._config.repo
+                / "deploy/virtual-container/vsock-egress/host-bridge.sh",
+            )
         missing = [path for path in project_files if not path.is_file()]
         if runtime_config is None:
             missing.append(Path("<Kata data runtime configuration>"))
@@ -145,22 +175,6 @@ class VirtualContainerXiaooConcurrencyCase(TestCase):
                 f"{xiaoo_binary or '<not configured>'}",
             )
 
-        commands = (
-            "ctr",
-            "kata-runtime",
-            "script",
-            shim_binary(self._config.ctr_runtime),
-            kata_backend(self._config.backend).vmm_command,
-        )
-        unavailable = next(
-            (command for command in commands if shutil.which(command) is None),
-            None,
-        )
-        if unavailable is not None:
-            return TestResult(
-                TestStatus.SKIPPED,
-                f"external Kata prerequisite is unavailable: {unavailable}",
-            )
         assert runtime_config is not None
         try:
             content = runtime_config.read_text(encoding="utf-8")

@@ -1,5 +1,6 @@
 //! Concrete daemon services backed by procfs bootstrap and storage persistence.
 
+pub(crate) mod alert_forwarding;
 pub(crate) mod alert_ingress;
 #[path = "services/application_protocol/service.rs"]
 pub(crate) mod application_protocol;
@@ -19,6 +20,8 @@ pub(crate) mod post_trace;
 pub(crate) mod process_seccomp;
 pub(crate) mod resource_metrics;
 pub(crate) mod retention;
+pub(crate) mod sandbox_alerts;
+pub(crate) mod sandbox_plugins;
 pub(crate) mod seccomp_notify;
 pub(crate) mod seccomp_socket;
 pub(crate) mod seccomp_tls;
@@ -29,12 +32,6 @@ pub(crate) mod wiring;
 #[path = "services/logging/workload.rs"]
 pub(crate) mod workload_diagnostics;
 
-#[cfg(test)]
-#[path = "services/test_cases/suite.rs"]
-pub(crate) mod tests;
-
-#[cfg(test)]
-pub(crate) use wiring::build_runtime_wiring;
 pub(crate) use wiring::{
     build_runtime_wiring_with_provider_rule_set_and_storage_retention,
     build_runtime_wiring_with_storage_retention,

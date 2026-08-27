@@ -1,6 +1,8 @@
 use model_core::payload::PayloadSourceBoundary;
 
-use crate::{CommandPolicyDecision, FilePolicyDecision};
+use crate::{
+    CommandPolicyDecision, FilePolicyDecision, NetworkPolicyDecision, NetworkPolicyRemoteGrantScope,
+};
 
 pub(super) struct GrantValidator;
 
@@ -17,6 +19,23 @@ impl GrantValidator {
             return Err("command-policy.rules.apply grant kind cannot be default".to_string());
         }
         Ok(())
+    }
+
+    pub(super) fn network_decision(decision: NetworkPolicyDecision) -> Result<(), String> {
+        if decision == NetworkPolicyDecision::Default {
+            return Err("network-policy.rules.apply grant kind cannot be default".to_string());
+        }
+        Ok(())
+    }
+
+    pub(super) fn network_remote_scope(
+        remote: &str,
+    ) -> Result<NetworkPolicyRemoteGrantScope, String> {
+        NetworkPolicyRemoteGrantScope::parse(remote).map_err(|error| {
+            format!(
+                "network-policy.rules.apply remote scope must be *, a numeric IP endpoint, or an IP any-port selector: {error}"
+            )
+        })
     }
 
     pub(super) fn file_path_scope(path: &str) -> Result<(), String> {

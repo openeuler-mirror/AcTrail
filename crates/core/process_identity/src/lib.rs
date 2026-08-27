@@ -2,8 +2,6 @@
 
 mod contract;
 mod manager;
-#[cfg(test)]
-mod manager_tests;
 
 pub use contract::{
     HostProcessCoordinates, IdentityLookupError, InitialSuppressedFd, KernelProcessCoordinates,

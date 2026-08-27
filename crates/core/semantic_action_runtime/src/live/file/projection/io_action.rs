@@ -139,7 +139,6 @@ pub(super) fn terminal_io_action(
         process: context.process.clone(),
         status: io.status(),
         completeness,
-        confidence_millis: None,
         attributes,
         evidence,
     })
@@ -205,7 +204,6 @@ fn file_io_action(
         process: event.envelope.process.clone(),
         status,
         completeness: SemanticActionCompleteness::Complete,
-        confidence_millis: None,
         attributes,
         evidence: vec![event_evidence(event, kind.event_role())],
     }

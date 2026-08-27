@@ -74,13 +74,16 @@ impl ProcessSeccompDocument {
 pub(super) struct AgentInvocationDocument {
     pub enabled: bool,
     pub commands: Vec<String>,
+    pub tool_names: Vec<String>,
 }
 
 impl Default for AgentInvocationDocument {
     fn default() -> Self {
+        let config = AgentInvocationConfig::default();
         Self {
-            enabled: true,
-            commands: Vec::new(),
+            enabled: config.enabled,
+            commands: config.commands,
+            tool_names: config.tool_names,
         }
     }
 }
@@ -90,6 +93,7 @@ impl AgentInvocationDocument {
         AgentInvocationConfig {
             enabled: self.enabled,
             commands: self.commands.clone(),
+            tool_names: self.tool_names.clone(),
         }
     }
 }

@@ -59,16 +59,31 @@ eBPF 采集路由限制。
 ## 构建
 
 ARM64 openEuler 主线先构建带 `setpriv` 的 openEuler 24.09 基础 workload 镜像。
+镜像还固定安装 OpenCode CLI `1.18.18`，并创建 UID `1000`、GID `39000` 的
+`actrail` passwd/group 条目；后者保证 OpenCode/Bun 在非 root Kata workload 中能
+解析可写 HOME，而不是回退到 `/`。xiaoO 不烘进 OCI 层，由内容寻址 artifact 在测试
+启动时只读挂载，因此 xiaoO 二进制和 provider key 都不会进入镜像历史。
+
 这既保证容器内部 `/etc/os-release` 是 openEuler，也兼容没有 `ctr run --user`
 的 openEuler containerd 1.6：
 
 ```bash
 docker build \
   --build-arg BASE_IMAGE=openeuler-24.09:latest \
+  --build-arg OPENCODE_VERSION=1.18.18 \
   -f deploy/virtual-container/workload/Containerfile.openEuler \
   -t actrail-openeuler-workload:24.09 \
   deploy/virtual-container/workload
 ```
+
+OpenCode 免费模型 smoke 使用独立的临时 HOME/XDG 目录，不读取宿主或构建机的
+`auth.json`。测试配置只接受 `opencode/*-free`，避免误选付费模型；免费模型列表是
+外部服务状态，运行前仍应以 `opencode models opencode` 的实时结果为准。无 CNI 的
+StratoVirt 验收通过专用 VSOCK 端口连接 Host 上目标白名单为 `opencode.ai:443` 和
+`models.opencode.ai:443` 的临时 HTTP CONNECT 代理，不为 workload 开放通用网络出口。
+CLI 本体和同版本 `@opencode-ai/plugin` 都在镜像构建时固定安装，构建时也缓存最新的
+OpenCode 模型目录；每次验收将这些只读 bootstrap 缓存复制到隔离 HOME，因此运行时
+无需访问 npm registry，也无需重新下载完整模型目录。
 
 然后生成并验证 guest bundle，再生成不含 daemon/viewer 的 workload bundle：
 

@@ -1,0 +1,23 @@
+@startuml
+title 流式 LLM 语义解析链
+top to bottom direction
+skinparam componentStyle rectangle
+skinparam shadowing false
+
+component "plaintext payload ingress" as Ingress
+component "connection / stream state" as Router
+component "HTTP/1 或 HTTP/2 解码" as Http
+component "SSE / JSON 响应解析" as Body
+component "provider codec" as Provider
+component "request / response 关联与投影" as Projection
+database "actions / links / evidence" as Storage
+
+Ingress -down-> Router : payload、gap、close
+Router -down-> Http : 按连接和方向推进
+Http -down-> Body : decoded body + HTTP context
+Body -down-> Provider : 完整事件或完整 JSON
+Provider -down-> Projection : provider-neutral update
+Projection -down-> Storage : llm.request / response / call
+Router -right-> Projection : trace / stream 生命周期
+Projection -down-> Storage : partial action 或 compact diagnostic
+@enduml

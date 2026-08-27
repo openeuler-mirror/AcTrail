@@ -1,0 +1,10 @@
+[package]
+name = "sandbox_upstream_transport"
+version.workspace = true
+edition = "2024"
+license = "MulanPSL-2.0"
+
+[dependencies]
+gateway_ingest_runtime = { path = "../../../core/gateway_ingest_runtime" }
+sandbox_upstream_contract = { path = "../../../contracts/sandbox_link/upstream" }
+sandbox_vsock_contract = { path = "../../../contracts/sandbox_link/vsock" }

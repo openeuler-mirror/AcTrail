@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
 use semantic_action::{
-    FileObservationPath, FilePathSetWrite, LlmRequestContentWrite, McpJsonRpcContentWrite,
-    SemanticAction, SemanticActionLink,
+    FileObservationPath, FilePathSetWrite, LlmRequestContentWrite, LlmRequestLineageWrite,
+    McpJsonRpcContentWrite, SemanticAction, SemanticActionLink,
 };
 
 use super::error::RecordingError;
@@ -18,6 +18,7 @@ pub struct SemanticActionBatch {
     file_observation_paths: Vec<FileObservationPath>,
     file_path_sets: Vec<FilePathSetWrite>,
     llm_request_contents: Vec<LlmRequestContentWrite>,
+    llm_request_lineages: Vec<LlmRequestLineageWrite>,
     mcp_jsonrpc_contents: Vec<McpJsonRpcContentWrite>,
     payload_segments: Vec<PayloadSegment>,
 }
@@ -30,6 +31,7 @@ impl SemanticActionBatch {
             file_observation_paths: Vec::new(),
             file_path_sets: Vec::new(),
             llm_request_contents: Vec::new(),
+            llm_request_lineages: Vec::new(),
             mcp_jsonrpc_contents: Vec::new(),
             payload_segments: Vec::new(),
         }
@@ -41,6 +43,7 @@ impl SemanticActionBatch {
         file_observation_paths: Vec<FileObservationPath>,
         file_path_sets: Vec<FilePathSetWrite>,
         llm_request_contents: Vec<LlmRequestContentWrite>,
+        llm_request_lineages: Vec<LlmRequestLineageWrite>,
         mcp_jsonrpc_contents: Vec<McpJsonRpcContentWrite>,
         payload_segments: Vec<PayloadSegment>,
     ) -> Self {
@@ -50,6 +53,7 @@ impl SemanticActionBatch {
             file_observation_paths,
             file_path_sets,
             llm_request_contents,
+            llm_request_lineages,
             mcp_jsonrpc_contents,
             payload_segments,
         }
@@ -79,6 +83,7 @@ impl SemanticActionBatch {
         !self.file_observation_paths.is_empty()
             || !self.file_path_sets.is_empty()
             || !self.llm_request_contents.is_empty()
+            || !self.llm_request_lineages.is_empty()
             || !self.mcp_jsonrpc_contents.is_empty()
     }
 
@@ -92,6 +97,21 @@ impl SemanticActionBatch {
 
     pub fn llm_request_contents(&self) -> &[LlmRequestContentWrite] {
         &self.llm_request_contents
+    }
+
+    pub fn llm_request_lineages(&self) -> &[LlmRequestLineageWrite] {
+        &self.llm_request_lineages
+    }
+
+    pub fn push_llm_request_lineage(&mut self, lineage: LlmRequestLineageWrite) {
+        self.llm_request_lineages.push(lineage);
+    }
+
+    pub fn extend_llm_request_lineages(
+        &mut self,
+        lineages: impl IntoIterator<Item = LlmRequestLineageWrite>,
+    ) {
+        self.llm_request_lineages.extend(lineages);
     }
 
     pub fn mcp_jsonrpc_contents(&self) -> &[McpJsonRpcContentWrite] {
@@ -113,6 +133,7 @@ impl SemanticActionBatch {
             &self.file_observation_paths,
             &self.file_path_sets,
             &self.llm_request_contents,
+            &self.llm_request_lineages,
             &self.mcp_jsonrpc_contents,
         )
     }
@@ -124,6 +145,7 @@ impl SemanticActionBatch {
             .extend(other.file_observation_paths);
         self.file_path_sets.extend(other.file_path_sets);
         self.llm_request_contents.extend(other.llm_request_contents);
+        self.llm_request_lineages.extend(other.llm_request_lineages);
         self.mcp_jsonrpc_contents.extend(other.mcp_jsonrpc_contents);
         self.payload_segments.extend(other.payload_segments);
     }
@@ -161,6 +183,13 @@ impl SemanticActionBatch {
                 .llm_request_contents
                 .push(content);
         }
+        for lineage in self.llm_request_lineages {
+            batches
+                .entry(lineage.trace_id)
+                .or_default()
+                .llm_request_lineages
+                .push(lineage);
+        }
         for content in self.mcp_jsonrpc_contents {
             batches
                 .entry(content.trace_id)
@@ -182,6 +211,7 @@ pub struct SemanticActionRecordBatch<'a> {
     file_observation_paths: &'a [FileObservationPath],
     file_path_sets: &'a [FilePathSetWrite],
     llm_request_contents: &'a [LlmRequestContentWrite],
+    llm_request_lineages: &'a [LlmRequestLineageWrite],
     mcp_jsonrpc_contents: &'a [McpJsonRpcContentWrite],
 }
 
@@ -192,6 +222,7 @@ impl<'a> SemanticActionRecordBatch<'a> {
         file_observation_paths: &'a [FileObservationPath],
         file_path_sets: &'a [FilePathSetWrite],
         llm_request_contents: &'a [LlmRequestContentWrite],
+        llm_request_lineages: &'a [LlmRequestLineageWrite],
         mcp_jsonrpc_contents: &'a [McpJsonRpcContentWrite],
     ) -> Self {
         Self {
@@ -200,6 +231,7 @@ impl<'a> SemanticActionRecordBatch<'a> {
             file_observation_paths,
             file_path_sets,
             llm_request_contents,
+            llm_request_lineages,
             mcp_jsonrpc_contents,
         }
     }
@@ -224,6 +256,10 @@ impl<'a> SemanticActionRecordBatch<'a> {
         self.llm_request_contents
     }
 
+    pub fn llm_request_lineages(&self) -> &'a [LlmRequestLineageWrite] {
+        self.llm_request_lineages
+    }
+
     pub fn mcp_jsonrpc_contents(&self) -> &'a [McpJsonRpcContentWrite] {
         self.mcp_jsonrpc_contents
     }
@@ -244,6 +280,9 @@ impl<'a> SemanticActionRecordBatch<'a> {
         }
         for content in self.llm_request_contents {
             record_trace_id(&mut trace_id, content.manifest.trace_id)?;
+        }
+        for lineage in self.llm_request_lineages {
+            record_trace_id(&mut trace_id, lineage.trace_id)?;
         }
         for content in self.mcp_jsonrpc_contents {
             record_trace_id(&mut trace_id, content.trace_id)?;

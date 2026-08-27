@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copy a partitioned Kata rootfs image and inject the AcTrail guest service.
-set -euo pipefail
+set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=otel-endpoint.sh
@@ -9,21 +9,27 @@ SOURCE_IMAGE=""
 OUTPUT_IMAGE=""
 BUNDLE=""
 OTEL_ENDPOINT=""
+OTEL_ENDPOINT_CONFIGURED="false"
+EGRESS_MODE="network"
 STARTUP_DEPENDENCY="optional"
 WITH_VIEWER=0
+WITH_SANDBOX_OBSERVER=0
 SOCKET_GID=39000
 GROW_MIB=0
 LOOP_DEVICE=""
 MOUNT_DIR=""
+IMAGE_INJECTION_STAGE="initialization"
 
 usage() {
   cat <<'EOF'
-Usage: inject-image.sh --source-image FILE --output-image FILE --bundle DIR --otel-endpoint URL [options]
+Usage: inject-image.sh --source-image FILE --output-image FILE --bundle DIR [options]
 
 Options:
-  --otel-endpoint URL          Guest-reachable OTLP/HTTP traces URL (required)
+  --otel-endpoint URL          Enable OTLP/HTTP export to this Guest-reachable URL
+  --egress-mode MODE           Export path: network or vsock-bridge (default: network)
   --startup-dependency POLICY  optional or required (default: optional)
   --with-viewer                Also install actrailviewer into the guest image
+  --with-sandbox-observer      Install actrail-sb as a Guest system service
   --socket-gid GID             Numeric GID shared with workloads (default: 39000)
   --grow-mib N                 Grow the copied image and ext4 rootfs by N MiB
   -h, --help                   Show this help
@@ -31,10 +37,10 @@ Options:
 The source image is never mounted or modified. The output path must not exist.
 The image may contain an ext4 filesystem directly or in partition 1.
 
-The OTLP endpoint must use http:// or https:// and name the Collector address
-reachable from inside the Guest. Guest 127.0.0.1 is the Guest itself, not the
-host. Its path must end in /v1/traces; query strings, fragments and placeholder
-endpoints are rejected before the output image is copied.
+Without --otel-endpoint, the image stores observations only in Guest-local
+SQLite. When supplied, the endpoint must use http:// or https:// and name a
+receiver reachable from inside the Guest. Its path must end in /v1/traces;
+query strings, fragments and placeholder endpoints are rejected before copy.
 
 The startup dependency controls only kata-agent systemd ordering/readiness.
 It does not select Agent observation failure behavior.
@@ -45,6 +51,22 @@ fail() {
   echo "FAIL: $*" >&2
   exit 1
 }
+
+image_injection_stage() {
+  IMAGE_INJECTION_STAGE="$1"
+  echo "image_injection_stage=$IMAGE_INJECTION_STAGE"
+}
+
+report_unexpected_error() {
+  local rc="$1"
+  local line="$2"
+  local command="$3"
+  trap - ERR
+  echo "FAIL: guest image injection failed: stage=$IMAGE_INJECTION_STAGE line=$line exit=$rc command=$command" >&2
+  return "$rc"
+}
+
+trap 'report_unexpected_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
@@ -68,6 +90,11 @@ while [[ "$#" -gt 0 ]]; do
       OTEL_ENDPOINT="$2"
       shift 2
       ;;
+    --egress-mode)
+      [[ "$#" -ge 2 ]] || fail "--egress-mode requires a value"
+      EGRESS_MODE="$2"
+      shift 2
+      ;;
     --startup-dependency)
       [[ "$#" -ge 2 ]] || fail "--startup-dependency requires a value"
       STARTUP_DEPENDENCY="$2"
@@ -75,6 +102,10 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --with-viewer)
       WITH_VIEWER=1
+      shift
+      ;;
+    --with-sandbox-observer)
+      WITH_SANDBOX_OBSERVER=1
       shift
       ;;
     --socket-gid)
@@ -102,8 +133,11 @@ done
 [[ -n "$SOURCE_IMAGE" ]] || fail "--source-image is required"
 [[ -n "$OUTPUT_IMAGE" ]] || fail "--output-image is required"
 [[ -n "$BUNDLE" ]] || fail "--bundle is required"
-actrail_validate_guest_otel_endpoint "$OTEL_ENDPOINT" \
+actrail_validate_guest_otel_selection "$OTEL_ENDPOINT" "$EGRESS_MODE" \
   || fail "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
+if [[ -n "$OTEL_ENDPOINT" ]]; then
+  OTEL_ENDPOINT_CONFIGURED="true"
+fi
 [[ -f "$SOURCE_IMAGE" ]] || fail "source image not found: $SOURCE_IMAGE"
 [[ -d "$BUNDLE" ]] || fail "bundle not found: $BUNDLE"
 case "$STARTUP_DEPENDENCY" in
@@ -154,12 +188,16 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+image_injection_stage copy-image
 cp --reflink=auto --sparse=always "$SOURCE_IMAGE" "$OUTPUT_IMAGE"
 if (( GROW_MIB > 0 )); then
+  image_injection_stage grow-image-file
   truncate -s "+${GROW_MIB}M" "$OUTPUT_IMAGE"
 fi
+image_injection_stage attach-loop-device
 LOOP_DEVICE="$("${sudo_cmd[@]}" losetup --find --show --partscan "$OUTPUT_IMAGE")"
 
+image_injection_stage discover-rootfs-partition
 partition="$LOOP_DEVICE"
 for _ in $(seq 1 50); do
   if [[ -b "${LOOP_DEVICE}p1" ]]; then
@@ -170,44 +208,71 @@ for _ in $(seq 1 50); do
 done
 
 if (( GROW_MIB > 0 )); then
+  image_injection_stage refresh-loop-capacity
   "${sudo_cmd[@]}" losetup -c "$LOOP_DEVICE"
   if [[ "$partition" != "$LOOP_DEVICE" ]]; then
+    image_injection_stage resize-partition
     "${sudo_cmd[@]}" parted --fix --script "$LOOP_DEVICE" \
       resizepart 1 100%
+    image_injection_stage probe-partition
     "${sudo_cmd[@]}" partprobe "$LOOP_DEVICE"
   fi
+  image_injection_stage check-filesystem
   set +e
   "${sudo_cmd[@]}" e2fsck -fy "$partition"
   e2fsck_rc=$?
   set -e
   (( e2fsck_rc <= 1 )) \
     || fail "e2fsck failed before rootfs growth: exit=$e2fsck_rc"
+  image_injection_stage grow-filesystem
   "${sudo_cmd[@]}" resize2fs "$partition"
 fi
 
+image_injection_stage create-mount-directory
 MOUNT_DIR="$(mktemp -d /tmp/actrail-kata-rootfs.XXXXXX)"
+image_injection_stage mount-rootfs
 "${sudo_cmd[@]}" mount -o rw "$partition" "$MOUNT_DIR"
 
 install_args=(
   --rootfs "$MOUNT_DIR"
   --bundle "$BUNDLE"
-  --otel-endpoint "$OTEL_ENDPOINT"
+  --egress-mode "$EGRESS_MODE"
   --startup-dependency "$STARTUP_DEPENDENCY"
   --socket-gid "$SOCKET_GID"
 )
+if [[ -n "$OTEL_ENDPOINT" ]]; then
+  install_args+=(--otel-endpoint "$OTEL_ENDPOINT")
+fi
 if [[ "$WITH_VIEWER" == "1" ]]; then
   install_args+=(--with-viewer)
 fi
+if [[ "$WITH_SANDBOX_OBSERVER" == "1" ]]; then
+  install_args+=(--with-sandbox-observer)
+fi
+image_injection_stage install-rootfs
 "${sudo_cmd[@]}" "$SCRIPT_DIR/install-rootfs.sh" "${install_args[@]}"
-"${sudo_cmd[@]}" "$SCRIPT_DIR/verify-rootfs.sh" \
-  --rootfs "$MOUNT_DIR" \
-  --otel-endpoint "$OTEL_ENDPOINT" \
-  --socket-gid "$SOCKET_GID" \
+verify_args=(
+  --rootfs "$MOUNT_DIR"
+  --egress-mode "$EGRESS_MODE"
+  --socket-gid "$SOCKET_GID"
   --startup-dependency "$STARTUP_DEPENDENCY"
+)
+if [[ -n "$OTEL_ENDPOINT" ]]; then
+  verify_args+=(--otel-endpoint "$OTEL_ENDPOINT")
+fi
+if [[ "$WITH_SANDBOX_OBSERVER" == "1" ]]; then
+  verify_args+=(--with-sandbox-observer)
+fi
+image_injection_stage verify-rootfs
+"${sudo_cmd[@]}" "$SCRIPT_DIR/verify-rootfs.sh" "${verify_args[@]}"
+image_injection_stage sync-rootfs
 sync
+image_injection_stage unmount-rootfs
 "${sudo_cmd[@]}" umount "$MOUNT_DIR"
+image_injection_stage detach-loop-device
 "${sudo_cmd[@]}" losetup -d "$LOOP_DEVICE"
 LOOP_DEVICE=""
+image_injection_stage remove-mount-directory
 rmdir "$MOUNT_DIR"
 MOUNT_DIR=""
 trap - EXIT INT TERM
@@ -216,6 +281,8 @@ echo "ACTRAIL_GUEST_IMAGE_READY"
 echo "source_image=$SOURCE_IMAGE"
 echo "output_image=$OUTPUT_IMAGE"
 echo "guest_startup_dependency=$STARTUP_DEPENDENCY"
+echo "guest_egress_mode=$EGRESS_MODE"
 echo "workload_socket_gid=$SOCKET_GID"
 echo "image_grow_mib=$GROW_MIB"
-echo "otel_endpoint_configured=true"
+echo "sandbox_observer_installed=$WITH_SANDBOX_OBSERVER"
+echo "otel_endpoint_configured=$OTEL_ENDPOINT_CONFIGURED"

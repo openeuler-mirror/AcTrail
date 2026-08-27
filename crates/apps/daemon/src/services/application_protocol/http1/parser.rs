@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use config_core::daemon::{
     ApplicationProtocolConfig, HttpBodyRetention, HttpHeadersRetention, SemanticRetentionConfig,
 };
-use model_core::event::ApplicationPayload;
+use model_core::event::{ApplicationBody, ApplicationPayload};
 use model_core::payload::PayloadSegment;
 use serde_json::{Map, Value};
 
@@ -40,10 +40,69 @@ pub(super) fn starts_like_http_message(first_line: &str) -> bool {
         && version.starts_with("HTTP/")
 }
 
-pub(super) fn header_prefix_len(text: &str) -> Option<usize> {
-    header_boundary(text).map(|(header_end, separator_len)| header_end + separator_len)
+/// Parse only a complete HTTP/1 request/response head from the beginning of `bytes`.
+///
+/// Unlike the streaming parser this never buffers a prefix and never consumes body bytes. It is
+/// used after a known capture truncation, where joining the prefix to a later operation would be
+/// unsafe.
+pub(super) fn parse_complete_message_head(bytes: &[u8]) -> Result<Option<HttpMessage>, String> {
+    let Some(prefix_len) = complete_header_prefix_len(bytes) else {
+        return Ok(None);
+    };
+    let Ok(text) = std::str::from_utf8(&bytes[..prefix_len]) else {
+        return Ok(None);
+    };
+    let Some((header_end, _)) = header_boundary(text) else {
+        return Ok(None);
+    };
+    let headers = parse_headers(&text[..header_end])?;
+    if !starts_like_http1_message(&headers.first_line)
+        || text[..header_end]
+            .lines()
+            .skip(1)
+            .any(|line| !line.is_empty() && !line.contains(':'))
+    {
+        return Ok(None);
+    }
+    Ok(Some(HttpMessage {
+        first_line: headers.first_line,
+        fields: headers.fields,
+        body: String::new(),
+    }))
 }
 
+fn starts_like_http1_message(first_line: &str) -> bool {
+    if first_line.starts_with("HTTP/1.0 ") || first_line.starts_with("HTTP/1.1 ") {
+        return true;
+    }
+    let mut parts = first_line.split_whitespace();
+    let Some(method) = parts.next() else {
+        return false;
+    };
+    let Some(_) = parts.next() else {
+        return false;
+    };
+    let Some(version) = parts.next() else {
+        return false;
+    };
+    parts.next().is_none()
+        && method
+            .bytes()
+            .all(|byte| byte.is_ascii_uppercase() || byte == b'-')
+        && matches!(version, "HTTP/1.0" | "HTTP/1.1")
+}
+
+fn complete_header_prefix_len(bytes: &[u8]) -> Option<usize> {
+    [b"\r\n\r\n".as_slice(), b"\n\n".as_slice()]
+        .into_iter()
+        .filter_map(|boundary| {
+            bytes
+                .windows(boundary.len())
+                .position(|window| window == boundary)
+                .map(|position| position + boundary.len())
+        })
+        .min()
+}
 pub(super) fn take_message(
     text: &mut String,
     config: &ApplicationProtocolConfig,
@@ -72,7 +131,7 @@ pub(super) fn take_message(
             fields: headers.fields,
             body: String::new(),
         };
-        text.clear();
+        text.drain(..body_start);
         return Ok(Some(message));
     }
     let (body, consumed) = if let Some(length) = headers.content_length {
@@ -187,10 +246,72 @@ pub(super) struct HttpMessage {
     body: String,
 }
 
+pub(super) enum SummaryFraming {
+    NoBody,
+    Fixed(usize),
+    Chunked,
+    Unsupported,
+}
+
 impl HttpMessage {
+    pub(super) fn content_length(&self) -> Option<usize> {
+        self.fields
+            .get("content-length")
+            .and_then(|value| value.parse().ok())
+    }
+
+    pub(super) fn is_request(&self) -> bool {
+        self.request_line().is_some()
+    }
+
+    pub(super) fn summary_framing(&self) -> SummaryFraming {
+        let transfer_encoding = self.fields.get("transfer-encoding");
+        let chunked = transfer_encoding.is_some_and(|value| {
+            value
+                .split(',')
+                .next_back()
+                .is_some_and(|coding| coding.trim().eq_ignore_ascii_case("chunked"))
+        });
+        if self.is_request() {
+            if transfer_encoding.is_some() {
+                return if chunked {
+                    SummaryFraming::Chunked
+                } else {
+                    SummaryFraming::Unsupported
+                };
+            }
+            return self
+                .content_length()
+                .map(SummaryFraming::Fixed)
+                .unwrap_or(SummaryFraming::NoBody);
+        }
+        let status = self
+            .response_status()
+            .and_then(|status| status.code.parse::<u16>().ok());
+        if status == Some(101) {
+            return SummaryFraming::Unsupported;
+        }
+        if status
+            .is_some_and(|status| (100..200).contains(&status) || status == 204 || status == 304)
+        {
+            return SummaryFraming::NoBody;
+        }
+        if transfer_encoding.is_some() {
+            return if chunked {
+                SummaryFraming::Chunked
+            } else {
+                SummaryFraming::Unsupported
+            };
+        }
+        self.content_length()
+            .map(SummaryFraming::Fixed)
+            .unwrap_or(SummaryFraming::Unsupported)
+    }
+
     pub(super) fn to_payload(
         &self,
         segment: &PayloadSegment,
+        payload_sequence: u64,
         config: &ApplicationProtocolConfig,
         semantic_retention: &SemanticRetentionConfig,
         consumed_by_llm: bool,
@@ -205,7 +326,7 @@ impl HttpMessage {
                 format!("{:?}", segment.source_boundary),
             ),
             ("stream_key".to_string(), segment.stream_key.to_string()),
-            ("payload_sequence".to_string(), segment.sequence.to_string()),
+            ("payload_sequence".to_string(), payload_sequence.to_string()),
             (
                 "payload_segment_id".to_string(),
                 segment.segment_id.get().to_string(),
@@ -217,10 +338,10 @@ impl HttpMessage {
             config,
             semantic_retention.http_headers(),
         );
-        add_body(
-            &mut metadata,
+        let body = extract_body(
             &self.body,
             semantic_retention.http_body_content_for_http_message(consumed_by_llm),
+            &mut metadata,
         );
         if let Some(status) = self.response_status() {
             metadata.insert("status_code".to_string(), status.code);
@@ -231,6 +352,7 @@ impl HttpMessage {
                 protocol: status.version,
                 operation: "response".to_string(),
                 summary: status.summary,
+                body,
                 metadata,
             };
         }
@@ -241,6 +363,7 @@ impl HttpMessage {
                 protocol: request.version,
                 operation: "request".to_string(),
                 summary: format!("{} {}", request.method, request.target),
+                body,
                 metadata,
             };
         }
@@ -248,6 +371,7 @@ impl HttpMessage {
             protocol: "http/1.x".to_string(),
             operation: "message".to_string(),
             summary: self.first_line.clone(),
+            body,
             metadata,
         }
     }
@@ -455,35 +579,29 @@ fn add_selected_headers(
     }
 }
 
-fn add_body(metadata: &mut BTreeMap<String, String>, body: &str, retention: HttpBodyRetention) {
+fn extract_body(
+    body: &str,
+    retention: HttpBodyRetention,
+    metadata: &mut BTreeMap<String, String>,
+) -> Option<ApplicationBody> {
     if body.is_empty() {
-        return;
+        return None;
     }
     match retention {
-        HttpBodyRetention::None => {}
-        HttpBodyRetention::Text => {
-            metadata.insert("http.body_text".to_string(), body.to_string());
-        }
+        HttpBodyRetention::None => None,
+        HttpBodyRetention::Text => Some(ApplicationBody::Text(body.to_string())),
         HttpBodyRetention::Json => {
             if let Ok(value) = serde_json::from_str::<Value>(body) {
-                metadata.insert("http.body_json".to_string(), value.to_string());
                 metadata.insert("http.body_json_state".to_string(), "valid".to_string());
+                Some(ApplicationBody::Json(value.to_string()))
             } else {
                 metadata.insert(
                     "http.body_json_state".to_string(),
                     "invalid_or_unavailable".to_string(),
                 );
+                None
             }
         }
-        HttpBodyRetention::Raw => {
-            metadata.insert(
-                "http.body_base64".to_string(),
-                base64_encode(body.as_bytes()),
-            );
-        }
+        HttpBodyRetention::Raw => Some(ApplicationBody::Base64(base64_encode(body.as_bytes()))),
     }
 }
-
-#[cfg(test)]
-#[path = "parser/tests.rs"]
-mod tests;

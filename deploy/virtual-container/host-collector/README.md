@@ -14,8 +14,9 @@ http://<GUEST_可达的主机_IP>:4318/v1/traces
 
 不要在 Guest 中配置 `http://127.0.0.1:4318/v1/traces`：Guest 里的 `127.0.0.1` 指向 Guest 自己，不是宿主机。请先确认 Kata/虚拟机网络路由和主机防火墙允许 Guest 访问所选主机地址。
 
-生成 Guest 镜像时，把这个完整 URL 通过 `guest/inject-image.sh --otel-endpoint` 显式
-注入；安装器不会把 bundle 中的 `COLLECTOR_HOST` 占位值带入镜像。
+需要启用外送时，生成 Guest 镜像并把这个完整 URL 通过
+`guest/inject-image.sh --otel-endpoint` 显式注入；不传该参数则保持本地 SQLite 模式，
+不会安装 exporter。安装器不会把 bundle 中的 `COLLECTOR_HOST` 占位值带入镜像。
 
 `.env` 中的 `OTELCOL_OTLP_HTTP_ENDPOINT` 是 Collector 的主机监听地址，格式为 `IP:端口`，不是带 scheme 或 `/v1/traces` 的 URL。示例使用 `0.0.0.0:4318` 只是为了开发环境中便于 Guest 连接；若网络模型允许，优先绑定专用的 Guest 可达主机地址。
 

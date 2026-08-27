@@ -1,0 +1,23 @@
+@startuml
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam componentStyle rectangle
+skinparam defaultFontName "WenQuanYi Micro Hei"
+left to right direction
+
+actor "运维人员" as Operator
+actor "安全分析人员" as Analyst
+rectangle "Brain-side Agent workload\n规划、凭证与策略" as BrainWorkload
+rectangle "Hand-side workload（可选）\n隔离环境中的工具与任务" as HandWorkload
+rectangle "AcTrail\n运行观测、语义分析、告警与治理" as AcTrail #D9EAF7
+cloud "OpenTelemetry collector\n（可选）" as Otel
+rectangle "告警订阅方\n（可选）" as Subscribers
+
+Operator --> AcTrail : 部署、配置与运行检查
+Analyst --> AcTrail : 查询证据、语义与告警
+BrainWorkload --> AcTrail : 完整观测信号
+HandWorkload --> AcTrail : 受限 Guest 观测
+AcTrail --> BrainWorkload : 治理控制
+AcTrail --> Otel : 在线观测导出
+AcTrail --> Subscribers : 匹配告警
+@enduml

@@ -1,4 +1,5 @@
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::time::{Duration, Instant};
 
 use model_core::payload::PayloadSegment;
 use plugin_system::{
@@ -156,10 +157,15 @@ impl SemanticActionSubscriptionManager {
         })
     }
 
-    pub(crate) fn shutdown_observation_consumers(&mut self) -> ExportPublishReport {
+    pub(crate) fn shutdown_observation_consumers(
+        &mut self,
+        timeout: Duration,
+    ) -> ExportPublishReport {
+        let started_at = Instant::now();
+        let deadline = started_at.checked_add(timeout).unwrap_or(started_at);
         let mut report = ReportAccumulator::default();
         for slot in &mut self.consumers {
-            for failure in slot.stop() {
+            for failure in slot.stop_before(Some(deadline)) {
                 report.record_runtime_failure(failure);
             }
         }

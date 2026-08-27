@@ -1,0 +1,32 @@
+@startuml
+skinparam defaultFontName "WenQuanYi Micro Hei"
+skinparam componentStyle rectangle
+left to right direction
+
+title LLM request 当前投影与展示路径
+
+component "Transport / Assembly\nHTTP、WebSocket、payload 组装" as Assembly
+component "Request Parser Registry\n请求类型匹配" as Registry
+component "Request Projector\n生成 llm.request" as Projector
+component "Canonical Blocks\n骨架、块引用与去重块" as Blocks
+database "Storage\nmanifest、block refs、blocks" as Storage
+component "Web View API\n重建 body_json" as Api
+component "Browser LLM Insight\n解释 messages / input / tools" as Browser
+
+Assembly --> Projector : 完整 request body
+Projector --> Registry : JSON
+Registry --> Projector : classifier / protocol / model
+Projector --> Blocks : canonical JSON
+Blocks --> Storage : retention policy 允许时写入
+Storage --> Api : 只读查询
+Api --> Browser : raw body_json
+
+note bottom of Registry
+  当前 parser 只返回识别元数据
+  不返回统一的 request item 模型
+end note
+
+note bottom of Browser
+  当前 wire-format 解释仍位于前端
+end note
+@enduml

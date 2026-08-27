@@ -120,3 +120,22 @@ pub struct PayloadSegment {
     pub protocol_hint: Option<String>,
     pub bytes: Vec<u8>,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PayloadStreamIdentity {
+    pub trace_id: TraceId,
+    pub process: ProcessIdentity,
+    pub source_boundary: PayloadSourceBoundary,
+    pub stream_key: PayloadStreamKey,
+}
+
+impl PayloadStreamIdentity {
+    pub fn from_segment(segment: &PayloadSegment) -> Self {
+        Self {
+            trace_id: segment.trace_id,
+            process: segment.process,
+            source_boundary: segment.source_boundary,
+            stream_key: segment.stream_key.clone(),
+        }
+    }
+}

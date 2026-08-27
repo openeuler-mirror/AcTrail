@@ -138,6 +138,7 @@ impl GrayDecisionWorker {
                     context_ref: Some(COMMAND_EXECUTION_CURRENT_CONTEXT_TOKEN.to_string()),
                     file_policy_context: None,
                     command_execution_context: Some(context.command_execution_context()),
+                    network_action_context: None,
                 },
                 ControlDecisionBudget {
                     timeout_ms: Some(self.timeout_ms),

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tests.v2.common.core import CommonTestConfig, TestCaseInputs
+from tests.v2.common.core.loopback_port import resolve_test_port
 
 
 @dataclass(frozen=True)
@@ -27,8 +28,11 @@ class OtelHttpConfig(CommonTestConfig):
                 else inputs.work_dir / "actraild.conf"
             ),
             web_host=os.environ.get("OTEL_HTTP_E2E_WEB_HOST", "127.0.0.1"),
-            # Port 0 requests a kernel-assigned ephemeral port.
-            web_port=int(os.environ.get("OTEL_HTTP_E2E_WEB_PORT", "0")),
+            web_port=resolve_test_port(
+                "OTEL_HTTP_E2E_WEB_PORT",
+                attempts=common.drain_attempts,
+                connect_timeout_seconds=common.drain_interval_seconds,
+            ),
             plugin_package="otel-http",
             plugin_instance="v2.otel-http",
         )

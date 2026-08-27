@@ -186,7 +186,6 @@ fn command_action(event: &DomainEvent, process_action: &SemanticAction) -> Seman
         process: event.envelope.process.clone(),
         status: process_action.status,
         completeness: SemanticActionCompleteness::Complete,
-        confidence_millis: None,
         attributes,
         evidence,
     }

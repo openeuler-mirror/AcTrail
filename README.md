@@ -4,11 +4,11 @@
 
 AcTrail records what an AI-agent process tree actually did on Linux/WSL, then links the evidence back to traceable actions: process launches, file and IPC activity, network connections, TLS/plaintext payloads, HTTP semantics, LLM requests and responses, resource samples, and policy decisions.
 
-## Targeted for
+## When Agent Logs Are Not Enough
 
 ![Why self-reported trace is not enough](./images/figure1-agent-log-gap-zh-cn.drawio.svg)
 
-Use it when an agent's own logs are not enough. AcTrail answers:
+AcTrail provides system-level evidence for security investigations, agent development, and platform operations where an agent's own logs are insufficient. It answers:
 
 - What process tree ran, and which commands did it spawn?
 - Which files, sockets, pipes, and network endpoints did it touch?
@@ -20,27 +20,23 @@ Use it when an agent's own logs are not enough. AcTrail answers:
 
 ## Install
 
-Install from source when developing or testing a checkout:
+A source checkout can be installed for development or testing with:
 
 ```bash
 ./scripts/install-release.sh /usr/local/bin
 ```
 
-The install script checks build dependencies, installs the actrailweb frontend dependencies with `npm ci`, asks Cargo to refresh the release binaries and TLS sync runtimes, and copies them into the destination directory. Cargo's incremental freshness checks keep repeated installs fast while ensuring changed sources are rebuilt. All Cargo builds and artifact reads share `${CARGO_TARGET_DIR:-target}`. The script also installs the official plugin packages, including the built-in `otel-jsonl` and `otel-http` exporter descriptors, under `${ACTRAIL_PLUGIN_DIR:-$HOME/.actrail/plugins}`. Installation makes plugins discoverable but does not load them; use the Plugins Web workspace to refresh and explicitly load one. The script uses `sudo` only for copies whose destination requires elevated permissions. Use another binary or plugin directory when needed, and keep the configured plugin discovery path aligned with the user that runs `actrailweb`.
+The install script checks build dependencies, installs the actrailweb frontend dependencies with `npm ci`, asks Cargo to refresh the release binaries and TLS sync runtimes, and copies them into the destination directory. Cargo's incremental freshness checks keep repeated installs fast while ensuring changed sources are rebuilt. All Cargo builds and artifact reads share `${CARGO_TARGET_DIR:-target}`. The script also installs the official plugin packages, including the built-in `otel-jsonl` and `otel-http` exporter descriptors, under `${ACTRAIL_PLUGIN_DIR:-$HOME/.actrail/plugins}`. Installation makes plugins discoverable but does not load them; the Plugins Web workspace refreshes discovery and loads selected plugins explicitly. The script uses `sudo` only for copies whose destination requires elevated permissions. Alternative binary and plugin directories remain supported, and the configured plugin discovery path must match the user that runs `actrailweb`.
 
-RPM packages are published from the latest release page:
+RPM packages are published on the [latest release page](https://gitcode.com/openeuler/AcTrail/releases/latest).
 
-```text
-https://gitcode.com/openeuler/AcTrail/releases/latest
-```
-
-Download the package that matches your release and architecture, for example:
+The package must match the target operating-system release and architecture, for example:
 
 ```text
 AcTrail-<VERSION>-<RELEASE>.<DISTRO>.<ARCH>.rpm
 ```
 
-Then install it with your system package tooling:
+The matching package can then be installed with the system package manager:
 
 ```bash
 sudo rpm -Uvh AcTrail-<VERSION>-<RELEASE>.<DISTRO>.<ARCH>.rpm
@@ -57,11 +53,11 @@ flowchart LR
     Launch --> Web["actrailweb<br/>(view the traces)"]
 ```
 
-The default config enables broad collection and can persist sensitive plaintext payloads, including prompts, API keys, Authorization headers, and model responses. Use it first on a disposable development host or workload.
+The default config enables broad collection and can persist sensitive plaintext payloads, including prompts, API keys, Authorization headers, and model responses. The first run belongs on a disposable development host or workload.
 
 The commands below assume `actraild`, `actrailctl`, and `actrailweb` are installed on `PATH`. From a source checkout without installation, use the matching `./target/release/...` binaries instead.
 
-Initialize config, start the daemon, launch one traced command, and open the Web UI:
+The following commands initialize the config, start the daemon, launch one traced command, and start the Web UI:
 
 ```bash
 sudo actraild init
@@ -71,17 +67,15 @@ sudo actrailctl launch --name quickstart -- \
 sudo actrailweb
 ```
 
-Open `http://127.0.0.1:18080`, select the `quickstart` trace, and inspect the process tree, derived actions, evidence, diagnostics, and raw details.
+With `actrailweb` running, open `http://127.0.0.1:18080` in a browser, select the `quickstart` trace, and inspect its process tree, derived actions, evidence, diagnostics, and raw details. A visible `quickstart` trace with the launched command and its evidence completes the first-run check.
 
-`actrailweb` runs in the foreground. Keep it open while using the UI, then press `Ctrl-C` before stopping the daemon.
-
-Stop the daemon when finished:
+`actrailweb` runs in the foreground. After inspection, `Ctrl-C` stops the Web UI and the following command stops the daemon:
 
 ```bash
 sudo actraild stop
 ```
 
-For the full step-by-step walkthrough, including expected output and cleanup, see [docs/examples/01.quick-start/README.md](docs/examples/01.quick-start/README.md).
+For the complete prerequisites, verification steps, and cleanup procedure, see the [Quickstart](docs/getting-started/quickstart.md).
 
 ## What It Shows
 
@@ -93,19 +87,19 @@ For the full step-by-step walkthrough, including expected output and cleanup, se
 | LLM behavior | Provider routes, request and response actions, canonical request blocks, assembled response text/reasoning, tool calls, and usage summaries. |
 | Governance | Fanotify enforcement facts, allow/deny decisions, resource samples, diagnostics, JSON export, and OTEL JSON export. |
 
-## Choose Your Path
+## Choose a Path
 
 | Goal | Start Here |
 | --- | --- |
-| Run AcTrail once and view a trace | [docs/examples/01.quick-start/README.md](docs/examples/01.quick-start/README.md) |
-| Learn day-to-day CLI commands | [docs/usage.md](docs/usage.md) |
-| Check kernel, privilege, BTF, tracefs, seccomp, and fanotify requirements | [docs/platform-requirements.md](docs/platform-requirements.md) |
-| Deploy a persistent host daemon | [docs/deployment.md](docs/deployment.md) |
-| Deploy inside a Kata virtual-container guest | [deploy/virtual-container/README.md](deploy/virtual-container/README.md) |
-| Pick a capability path for a security question | [docs/use-cases.md](docs/use-cases.md) |
-| Capture LLM HTTP/TLS payloads | [docs/examples/02.llm-http-payload-capture/README.md](docs/examples/02.llm-http-payload-capture/README.md) |
-| Validate broad real-agent coverage | [docs/examples/08.full-monitor-validation/README.md](docs/examples/08.full-monitor-validation/README.md) |
-| Run real-agent acceptance cases | [tests/agent-trace/README.md](tests/agent-trace/README.md) |
+| Run AcTrail once and view a trace | [Quickstart](docs/getting-started/quickstart.md) |
+| Start or stop the daemon | [Daemon lifecycle](docs/operations/daemon/start-stop.md) |
+| Check kernel, privilege, BTF, tracefs, seccomp, and fanotify requirements | [Platform support](docs/reference/platform-support.md) |
+| Deploy a persistent host daemon | [Host deployment](docs/operations/deployment/host.md) |
+| Deploy execution isolation with a Firecracker sandbox | [deploy/execution-isolation/README.md](deploy/execution-isolation/README.md) |
+| Deploy the optional Kata virtual-container profile | [deploy/virtual-container/README.md](deploy/virtual-container/README.md) |
+| Pick a capability path for a security question | [Capability overview](docs/concepts/capabilities.md) |
+| Configure HTTP/TLS payload collection | [Collection configuration](docs/reference/configuration/collection.md) |
+| Browse all concepts, operations, architecture, and reference material | [Documentation index](docs/README.md) |
 
 ## Runtime Shape
 
@@ -134,7 +128,7 @@ AcTrail is config-driven and fail-fast: required capabilities should fail visibl
 
 `actraild` needs the privileges required by the target Linux/WSL kernel for eBPF tracepoint/uprobe attachment. Seccomp and fanotify paths have additional kernel and permission requirements.
 
-Payload capture can persist prompts, API keys, Authorization headers, file excerpts, and model responses. Review redaction, retention, export, and storage settings before using broad configs outside disposable validation.
+Payload capture can persist prompts, API keys, Authorization headers, file excerpts, and model responses. Operators must review redaction, retention, export, and storage settings before using broad configs outside disposable validation.
 
 ## License
 

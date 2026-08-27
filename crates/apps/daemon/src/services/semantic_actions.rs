@@ -4,6 +4,7 @@ use std::time::SystemTime;
 
 use control_contract::reply::ControlError;
 use model_core::diagnostics::DiagnosticRecord;
+use model_core::diagnostics::LlmPipelineDiagnostic;
 use model_core::event::DomainEvent;
 use model_core::ids::TraceId;
 use model_core::process::ProcessRecord;
@@ -82,16 +83,21 @@ impl StorageAttachService {
         &mut self,
         trace_id: TraceId,
         finished_at: std::time::SystemTime,
-    ) -> SemanticActionBatch {
-        let output = self.semantic_actions.finalize_trace(trace_id, finished_at);
-        SemanticActionBatch::from_action_output(
-            output.actions,
-            output.links,
-            output.file_observation_paths,
-            output.file_path_sets,
-            output.llm_request_contents,
-            output.mcp_jsonrpc_contents,
-            output.payload_segments,
+    ) -> (SemanticActionBatch, Vec<LlmPipelineDiagnostic>) {
+        let mut output = self.semantic_actions.finalize_trace(trace_id, finished_at);
+        let diagnostics = std::mem::take(&mut output.llm_pipeline_diagnostics);
+        (
+            SemanticActionBatch::from_action_output(
+                output.actions,
+                output.links,
+                output.file_observation_paths,
+                output.file_path_sets,
+                output.llm_request_contents,
+                output.llm_request_lineages,
+                output.mcp_jsonrpc_contents,
+                output.payload_segments,
+            ),
+            diagnostics,
         )
     }
 
@@ -101,7 +107,8 @@ impl StorageAttachService {
         trace_id: TraceId,
         finished_at: std::time::SystemTime,
     ) -> Result<(), ControlError> {
-        let semantic_actions = self.finalize_semantic_actions_for_trace(trace_id, finished_at);
+        let (semantic_actions, llm_pipeline_diagnostics) =
+            self.finalize_semantic_actions_for_trace(trace_id, finished_at);
         let mut export_batch = semantic_actions.clone();
         let mut errors = Vec::new();
 
@@ -119,6 +126,8 @@ impl StorageAttachService {
         {
             errors.push(error);
         }
+
+        self.persist_llm_pipeline_diagnostics_fail_local(trace_runtime, llm_pipeline_diagnostics);
 
         combine_control_errors(errors)
     }

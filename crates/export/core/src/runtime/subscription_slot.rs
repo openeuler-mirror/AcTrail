@@ -3,9 +3,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Sender, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
+use std::time::Instant;
 
 use super::report_accumulator::{
     PendingDropAccumulator, PendingRuntimeFailureAccumulator, ReportAccumulator,
+};
+use super::subscription_shutdown::{
+    finish_consumer_before, stop_timeout_failure, wait_until_finished,
 };
 use super::subscription_worker::{
     ObservationWorkItem, ObservationWorkerControl, QueuedObservationBatch, panic_message,
@@ -64,7 +68,10 @@ impl ObservationConsumerSlot {
             )),
         });
         let (queue_capacity, delivery) = match runtime {
-            PluginRuntimeKind::Builtin => (None, ObservationDelivery::Inline(consumer)),
+            PluginRuntimeKind::Builtin => (
+                None,
+                ObservationDelivery::Inline(Arc::<dyn ObservationConsumer>::from(consumer)),
+            ),
             PluginRuntimeKind::Wasm | PluginRuntimeKind::NativeDylib => {
                 let queue_capacity = consumer.observation_queue_capacity();
                 let consumer = Arc::<dyn ObservationConsumer>::from(consumer);
@@ -279,7 +286,7 @@ impl ObservationConsumerSlot {
                 sender: Some(sender),
                 ..
             } => enqueue_observation_batch(self, sender, batch, payload_segments, dropped),
-            ObservationDelivery::Queued { sender: None, .. } => {
+            ObservationDelivery::Queued { sender: None, .. } | ObservationDelivery::Stopped => {
                 dropped.record_drop(
                     Some(batch.trace.trace_id),
                     self.instance_id.clone(),
@@ -301,17 +308,26 @@ impl ObservationConsumerSlot {
     }
 
     pub(super) fn stop(&mut self) -> Vec<ExportRuntimeFailure> {
+        self.stop_before(None)
+    }
+
+    pub(super) fn stop_before(&mut self, deadline: Option<Instant>) -> Vec<ExportRuntimeFailure> {
         if self.stopped {
             return Vec::new();
         }
         self.stopped = true;
-        match &mut self.delivery {
-            ObservationDelivery::Inline(consumer) => {
-                finish_observation_consumer(consumer.as_ref(), &self.metrics)
-            }
+        let delivery = std::mem::replace(&mut self.delivery, ObservationDelivery::Stopped);
+        match delivery {
+            ObservationDelivery::Inline(consumer) => finish_consumer_before(
+                consumer,
+                Arc::clone(&self.metrics),
+                deadline,
+                self.instance_id.clone(),
+                self.queue_capacity,
+            ),
             ObservationDelivery::Queued {
-                sender,
-                worker,
+                mut sender,
+                mut worker,
                 consumer,
                 control,
             } => {
@@ -321,21 +337,34 @@ impl ObservationConsumerSlot {
                     analyzer.cancel_post_trace();
                 }
                 sender.take();
-                if let Some(worker) = worker.take()
-                    && worker.join().is_err()
-                {
-                    failures.push(record_runtime_failure(
-                        consumer.as_ref(),
-                        &self.metrics,
-                        "plugin queue worker panicked".to_string(),
-                    ));
+                if let Some(worker_handle) = worker.take() {
+                    if !wait_until_finished(&worker_handle, deadline) {
+                        failures.push(stop_timeout_failure(
+                            &self.metrics,
+                            &self.instance_id,
+                            self.queue_capacity,
+                            "queue worker",
+                        ));
+                        return failures;
+                    }
+                    if worker_handle.join().is_err() {
+                        failures.push(record_runtime_failure(
+                            consumer.as_ref(),
+                            &self.metrics,
+                            "plugin queue worker panicked".to_string(),
+                        ));
+                    }
                 }
-                failures.extend(finish_observation_consumer(
-                    consumer.as_ref(),
-                    &self.metrics,
+                failures.extend(finish_consumer_before(
+                    consumer,
+                    Arc::clone(&self.metrics),
+                    deadline,
+                    self.instance_id.clone(),
+                    self.queue_capacity,
                 ));
                 failures
             }
+            ObservationDelivery::Stopped => Vec::new(),
         }
     }
 
@@ -371,18 +400,19 @@ impl ObservationConsumerSlot {
 
 impl Drop for ObservationConsumerSlot {
     fn drop(&mut self) {
-        let _ = self.stop();
+        let _ = self.stop_before(Some(Instant::now()));
     }
 }
 
 enum ObservationDelivery {
-    Inline(Box<dyn ObservationConsumer>),
+    Inline(Arc<dyn ObservationConsumer>),
     Queued {
         sender: Option<SyncSender<ObservationWorkItem>>,
         worker: Option<JoinHandle<()>>,
         consumer: Arc<dyn ObservationConsumer>,
         control: Arc<ObservationWorkerControl>,
     },
+    Stopped,
 }
 
 pub(super) struct ObservationConsumerMetrics {
@@ -565,7 +595,7 @@ pub(super) fn store_last_error(metrics: &ObservationConsumerMetrics, error: Opti
     }
 }
 
-fn finish_observation_consumer(
+pub(super) fn finish_observation_consumer(
     consumer: &dyn ObservationConsumer,
     metrics: &ObservationConsumerMetrics,
 ) -> Vec<ExportRuntimeFailure> {
@@ -621,82 +651,5 @@ fn record_runtime_failure(
         reason,
         queue_capacity: None,
         occurrences: 1,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-    use std::sync::Arc;
-    use std::sync::mpsc;
-
-    use plugin_system::{
-        ObservationBatch, ObservationConsumeReport, ObservationConsumer, PluginOperationalMetrics,
-        PluginOperationalMetricsSource, PluginRuntimeError, PluginRuntimeKind,
-    };
-
-    use super::ObservationConsumerSlot;
-
-    struct FixedMetrics;
-
-    impl PluginOperationalMetricsSource for FixedMetrics {
-        fn snapshot(&self) -> PluginOperationalMetrics {
-            PluginOperationalMetrics {
-                queue_depth: Some(3),
-                queue_capacity: Some(16),
-                dropped_records: 5,
-                last_error: Some("collector unavailable".to_string()),
-                values: BTreeMap::from([("retry_attempts".to_string(), 2)]),
-            }
-        }
-    }
-
-    struct MetricsConsumer {
-        metrics: Arc<FixedMetrics>,
-    }
-
-    impl ObservationConsumer for MetricsConsumer {
-        fn instance_id(&self) -> &str {
-            "builtin.metrics-test"
-        }
-
-        fn plugin_id(&self) -> &str {
-            "metrics-test"
-        }
-
-        fn runtime_kind(&self) -> PluginRuntimeKind {
-            PluginRuntimeKind::Builtin
-        }
-
-        fn operational_metrics_source(&self) -> Option<Arc<dyn PluginOperationalMetricsSource>> {
-            Some(self.metrics.clone())
-        }
-
-        fn consume(
-            &self,
-            _batch: ObservationBatch<'_>,
-        ) -> Result<ObservationConsumeReport, PluginRuntimeError> {
-            Ok(ObservationConsumeReport::empty())
-        }
-    }
-
-    #[test]
-    fn status_includes_consumer_operational_metrics() {
-        let (post_trace_completion_sender, _post_trace_completion_receiver) = mpsc::channel();
-        let slot = ObservationConsumerSlot::new(
-            Box::new(MetricsConsumer {
-                metrics: Arc::new(FixedMetrics),
-            }),
-            Vec::new(),
-            post_trace_completion_sender,
-        );
-
-        let status = slot.status(plugin_system::PluginLifecycleState::Active);
-
-        assert_eq!(status.queue_depth, Some(3));
-        assert_eq!(status.queue_capacity, Some(16));
-        assert_eq!(status.dropped_records, 5);
-        assert_eq!(status.last_error.as_deref(), Some("collector unavailable"));
-        assert_eq!(status.operational_metrics["retry_attempts"], 2);
     }
 }

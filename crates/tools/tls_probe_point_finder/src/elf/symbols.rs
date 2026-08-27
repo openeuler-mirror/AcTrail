@@ -60,7 +60,7 @@ impl SymbolScanCache {
         &mut self,
         data: &[u8],
         sections: &[ElfSection],
-    ) -> ToolResult<()> {
+    ) -> ToolResult<bool> {
         let missing = self
             .wanted
             .difference(&self.scanned_wanted)
@@ -68,7 +68,7 @@ impl SymbolScanCache {
             .collect::<Vec<_>>();
         let rustls_missing = self.include_rustls && !self.scanned_rustls;
         if missing.is_empty() && !rustls_missing {
-            return Ok(());
+            return Ok(false);
         }
         let extra = parse_matching_symbols(data, sections, &missing, rustls_missing)?;
         let scanned = self.scanned.get_or_insert_with(BTreeMap::new);
@@ -79,7 +79,7 @@ impl SymbolScanCache {
         if rustls_missing {
             self.scanned_rustls = true;
         }
-        Ok(())
+        Ok(true)
     }
 
     pub(crate) fn matches_for(&self, name: &str) -> Vec<SymbolMatch> {
@@ -181,36 +181,50 @@ fn parse_symbol_table(
 
 impl ElfImage {
     pub(crate) fn register_symbol_names(&self, names: &[&str]) {
-        let mut cache = self.symbol_cache.borrow_mut();
-        for name in names {
-            cache.register_name(name);
-        }
+        self.with_symbol_cache(|cache| {
+            for name in names {
+                cache.register_name(name);
+            }
+        });
     }
 
     pub(crate) fn register_rustls_symbols(&self) {
-        self.symbol_cache.borrow_mut().register_rustls();
+        self.with_symbol_cache(SymbolScanCache::register_rustls);
     }
 
     pub(crate) fn defined_function_symbols(&self) -> ToolResult<Vec<SymbolMatch>> {
-        let mut cache = self.symbol_cache.borrow_mut();
-        cache.register_rustls();
-        cache.scan_if_needed(&self.data, &self.sections)?;
-        Ok(cache.defined_symbols())
+        let result = self.with_symbol_cache(|cache| {
+            cache.register_rustls();
+            let scanned = cache.scan_if_needed(&self.data, &self.sections)?;
+            Ok((cache.defined_symbols(), scanned))
+        });
+        result.map(|(symbols, scanned)| {
+            self.record_analysis(!scanned);
+            symbols
+        })
     }
 
     pub(crate) fn symbols_by_name(
         &self,
         names: &[String],
     ) -> ToolResult<BTreeMap<String, Vec<SymbolMatch>>> {
-        let mut cache = self.symbol_cache.borrow_mut();
-        for name in names {
-            cache.register_name(name);
-        }
-        cache.scan_if_needed(&self.data, &self.sections)?;
-        Ok(names
-            .iter()
-            .map(|name| (name.clone(), cache.matches_for(name)))
-            .collect())
+        let result = self.with_symbol_cache(|cache| {
+            for name in names {
+                cache.register_name(name);
+            }
+            let scanned = cache.scan_if_needed(&self.data, &self.sections)?;
+            Ok((
+                names
+                    .iter()
+                    .map(|name| (name.clone(), cache.matches_for(name)))
+                    .collect(),
+                scanned,
+            ))
+        });
+        result.map(|(symbols, scanned)| {
+            self.record_analysis(!scanned);
+            symbols
+        })
     }
 
     pub(crate) fn unique_defined_symbol_values(
@@ -251,6 +265,14 @@ impl ElfImage {
             );
         }
         Ok(resolved)
+    }
+
+    fn with_symbol_cache<R>(&self, operation: impl FnOnce(&mut SymbolScanCache) -> R) -> R {
+        if let Some(cache) = &self.analysis_cache {
+            cache.with_symbols(&self.analysis_key, operation)
+        } else {
+            operation(&mut self.symbol_cache.borrow_mut())
+        }
     }
 }
 

@@ -1,0 +1,12 @@
+# Optional OTLP/HTTP exporter. install-rootfs.sh appends this fragment only
+# when the deployment explicitly supplies --otel-endpoint.
+[plugins.startup]
+enabled = true
+failure_policy = "fail-fast"
+
+[[plugins.startup.load]]
+instance = "kata-guest.otel-http"
+enabled = true
+manifest = "/usr/share/actrail/plugins/otel-http/otel-http.plugin.toml"
+plugin_config = "/etc/actrail/plugins/otel-http/otel-http.config.toml"
+host_grants = []

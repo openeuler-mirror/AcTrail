@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "kebab-case")]
 pub enum PluginPurpose {
     ObservationConsumer,
+    SandboxObservationConsumer,
+    AlertConsumer,
     ControlDecider,
     LlmCodec,
 }
@@ -12,6 +14,8 @@ impl PluginPurpose {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ObservationConsumer => "observation-consumer",
+            Self::SandboxObservationConsumer => "sandbox-observation-consumer",
+            Self::AlertConsumer => "alert-consumer",
             Self::ControlDecider => "control-decider",
             Self::LlmCodec => "llm-codec",
         }
@@ -20,6 +24,8 @@ impl PluginPurpose {
     pub fn from_wire(value: &str) -> Result<Self, String> {
         match value {
             "observation-consumer" => Ok(Self::ObservationConsumer),
+            "sandbox-observation-consumer" => Ok(Self::SandboxObservationConsumer),
+            "alert-consumer" => Ok(Self::AlertConsumer),
             "control-decider" => Ok(Self::ControlDecider),
             "llm-codec" => Ok(Self::LlmCodec),
             _ => Err(format!("unknown plugin role {value}")),
@@ -99,6 +105,16 @@ pub enum PluginCapability {
     CommandPolicyRulesValidate,
     #[serde(rename = "command-policy.rules.apply")]
     CommandPolicyRulesApply,
+    #[serde(rename = "network-action.current-context-query")]
+    NetworkActionCurrentContextQuery,
+    #[serde(rename = "network-policy.rules.read")]
+    NetworkPolicyRulesRead,
+    #[serde(rename = "network-policy.rules.match-dry-run")]
+    NetworkPolicyRulesMatchDryRun,
+    #[serde(rename = "network-policy.rules.validate")]
+    NetworkPolicyRulesValidate,
+    #[serde(rename = "network-policy.rules.apply")]
+    NetworkPolicyRulesApply,
     NetworkEgress,
     EnvRead,
 }
@@ -123,6 +139,11 @@ impl PluginCapability {
             Self::CommandPolicyRulesMatchDryRun => "command-policy.rules.match-dry-run",
             Self::CommandPolicyRulesValidate => "command-policy.rules.validate",
             Self::CommandPolicyRulesApply => "command-policy.rules.apply",
+            Self::NetworkActionCurrentContextQuery => "network-action.current-context-query",
+            Self::NetworkPolicyRulesRead => "network-policy.rules.read",
+            Self::NetworkPolicyRulesMatchDryRun => "network-policy.rules.match-dry-run",
+            Self::NetworkPolicyRulesValidate => "network-policy.rules.validate",
+            Self::NetworkPolicyRulesApply => "network-policy.rules.apply",
             Self::NetworkEgress => "network-egress",
             Self::EnvRead => "env-read",
         }

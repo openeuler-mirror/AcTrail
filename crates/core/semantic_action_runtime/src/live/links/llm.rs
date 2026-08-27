@@ -44,10 +44,7 @@ impl LlmExchangeLinkProjector {
                         SemanticActionLinkRole::LlmCallResponse,
                     ));
                 }
-                if action.status != semantic_action::SemanticActionStatus::InProgress {
-                    self.calls.remove(&key);
-                    self.remove_call_indexes(action);
-                }
+                self.finish_terminal_call_if_linked(action);
                 links
             }
             SemanticActionKind::LlmRequest => {
@@ -65,6 +62,7 @@ impl LlmExchangeLinkProjector {
                     .into_iter()
                     .collect();
                 self.requests.remove(&key);
+                self.finish_terminal_call_if_linked(&call);
                 links
             }
             SemanticActionKind::LlmResponse => {
@@ -82,6 +80,7 @@ impl LlmExchangeLinkProjector {
                     .into_iter()
                     .collect();
                 self.responses.remove(&key);
+                self.finish_terminal_call_if_linked(&call);
                 links
             }
             _ => Vec::new(),
@@ -119,6 +118,42 @@ impl LlmExchangeLinkProjector {
             self.call_by_response
                 .remove(&(call.trace_id, response_id.clone()));
         }
+    }
+
+    fn finish_terminal_call_if_linked(&mut self, call: &SemanticAction) {
+        if call.status == semantic_action::SemanticActionStatus::InProgress
+            || !self.call_links_emitted(call)
+        {
+            return;
+        }
+        self.calls.remove(&SemanticActionKey::from(call));
+        self.remove_call_indexes(call);
+    }
+
+    fn call_links_emitted(&self, call: &SemanticAction) -> bool {
+        [
+            (
+                attrs::llm_call::REQUEST_ACTION_ID,
+                SemanticActionLinkRole::LlmCallRequest,
+            ),
+            (
+                attrs::llm_call::RESPONSE_ACTION_ID,
+                SemanticActionLinkRole::LlmCallResponse,
+            ),
+        ]
+        .into_iter()
+        .all(|(attribute, role)| {
+            call.attributes
+                .get(attribute)
+                .is_none_or(|child_action_id| {
+                    self.emitted_links.contains(&ActionLinkKey {
+                        trace_id: call.trace_id,
+                        parent_action_id: call.action_id.clone(),
+                        child_action_id: child_action_id.clone(),
+                        role,
+                    })
+                })
+        })
     }
 
     fn call_request(&self, call: &SemanticAction) -> Option<SemanticAction> {

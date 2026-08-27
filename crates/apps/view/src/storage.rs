@@ -57,9 +57,13 @@ pub fn render_storage_view(invocation: ViewInvocation) -> Result<String, String>
             ))
         }
         StorageCommand::Events => {
-            reject_json_output(invocation.output_format, "events")?;
             let snapshot = source::read_snapshot(storage.as_mut(), invocation.trace_id)?;
-            Ok(render::render_events(snapshot.events, invocation.row_limit))
+            Ok(match invocation.output_format {
+                OutputFormat::Table => render::render_events(snapshot.events, invocation.row_limit),
+                OutputFormat::Json => {
+                    render::render_events_json(snapshot.events, invocation.row_limit)?
+                }
+            })
         }
         StorageCommand::Network => {
             reject_json_output(invocation.output_format, "network")?;
@@ -113,7 +117,15 @@ pub fn render_storage_view(invocation: ViewInvocation) -> Result<String, String>
         }
         StorageCommand::Actions => {
             let snapshot = source::read_snapshot(storage.as_mut(), invocation.trace_id)?;
-            let actions = source::list_semantic_actions(storage.as_ref(), snapshot.trace.trace_id)?;
+            let actions = if invocation.action_kinds.is_empty() {
+                source::list_semantic_actions(storage.as_ref(), snapshot.trace.trace_id)?
+            } else {
+                source::list_semantic_actions_matching_kinds(
+                    storage.as_ref(),
+                    snapshot.trace.trace_id,
+                    &invocation.action_kinds,
+                )?
+            };
             Ok(match invocation.output_format {
                 OutputFormat::Table => {
                     render::render_semantic_actions(actions, invocation.row_limit)
@@ -134,6 +146,13 @@ pub fn render_storage_view(invocation: ViewInvocation) -> Result<String, String>
                 snapshot.diagnostics,
                 invocation.row_limit,
             ))
+        }
+        StorageCommand::TlsFlow => {
+            reject_json_output(invocation.output_format, "tls-flow")?;
+            let snapshot = source::read_snapshot(storage.as_mut(), invocation.trace_id)?;
+            let diagnostics =
+                source::list_tls_flow_diagnostics(storage.as_ref(), snapshot.trace.trace_id)?;
+            Ok(render::render_tls_flow_diagnostics(diagnostics))
         }
         StorageCommand::ExportJson | StorageCommand::ExportOtel => {
             unreachable!("export returned before storage render")

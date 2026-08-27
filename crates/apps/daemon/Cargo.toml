@@ -10,6 +10,8 @@ perf-buffer = ["ebpf_collector/perf-buffer"]
 
 [dependencies]
 alert_contract = { path = "../../contracts/alert" }
+alert_delivery_contract = { package = "alert-delivery-contract", path = "../../contracts/alert_delivery" }
+alert_forwarding = { path = "../../plugins/alert_forwarding" }
 attach_runtime = { path = "../../core/attach_runtime" }
 clap = { version = "4.6", features = ["derive"] }
 collector_binding = { path = "../../contracts/collector/binding" }
@@ -27,6 +29,15 @@ linux_platform = { path = "../../core/linux_platform" }
 model_core = { path = "../../core/model" }
 payload_event = { path = "../../contracts/payload/event" }
 plugin_system = { path = "../../core/plugin_system" }
+gateway_ingest_runtime = { path = "../../core/gateway_ingest_runtime" }
+sandbox_plugin_delivery = { path = "../../contracts/sandbox_plugin_delivery" }
+sandbox_observation = { path = "../../contracts/sandbox_observation" }
+sandbox_alert_store = { path = "../../contracts/sandbox_alert_store" }
+sandbox_alert_sqlite = { path = "../../adapters/storage/sandbox_alert" }
+sandbox_evidence_store = { path = "../../contracts/sandbox_evidence_store" }
+sandbox_evidence_sqlite = { path = "../../adapters/storage/sandbox" }
+sandbox_resource_alert = { path = "../../plugins/sandbox_resource_alert" }
+sandbox_upstream_transport = { path = "../../adapters/sandbox_link/upstream" }
 plugin_wasm_runtime = { path = "../../core/plugin_wasm_runtime" }
 process_identity = { path = "../../core/process_identity" }
 process_tree_snapshot_contract = { path = "../../contracts/process/tree_snapshot" }

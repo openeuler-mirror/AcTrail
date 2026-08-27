@@ -17,13 +17,13 @@ sudo -E python3 tests/v2/regression/container_agent_xiaoo/v2/run_e2e.py
 # 步骤摘要
 
 1. 检查 AcTrail release 二进制、Docker daemon 和真实 xiaoO。
-2. 生成内容寻址镜像；固定依赖不变时复用本地镜像。
+2. 按稳定运行时缓存键复用镜像；宿主二进制和脚本通过只读挂载注入。
 3. 启动两个本地流式 LLM provider 和隔离的 AcTrail daemon。
 4. 拉起两个 `tail -f /dev/null` 长驻容器并确认 PID namespace 不同。
 5. 先后通过 `docker exec` 启动两个真实 xiaoO，制造可验证的 Active 重叠窗口。
 6. 验证 trace 与 Docker container ID 一一对应。
 7. 验证每条 trace 的 eBPF、文件和 LLM response marker 均完整且互不串线。
-8. 删除本轮容器与 runtime，保留内容镜像。
+8. 删除本轮容器与 runtime，保留缓存镜像。
 
 # 手动测试
 
@@ -66,9 +66,12 @@ sudo -E python3 \
 
 ### 脚本行为与预期结果
 
-场景对基础镜像、Dockerfile、`actrailctl`、TLS probe、xiaoO 和 workload 计算内容
-摘要，使用 `actrail/container-agent-xiaoo:<content-hash>`。已有同标签镜像时不
-执行 build；设置 `CONTAINER_AGENT_XIAOO_E2E_REBUILD_IMAGE=1` 可强制重建。
+场景仅以缓存布局版本、基础镜像引用和 Dockerfile 内容计算稳定 CRC32 缓存键，
+使用 `actrail/container-agent-xiaoo:runtime-v2-<cache-key>`。`actrailctl`、TLS
+probe、xiaoO 和 workload 不烘入镜像，运行时通过只读 bind mount 注入，因此它们
+更新不会创建新镜像。已有同标签镜像时不执行 build；为上述手动命令追加
+`--rebuild-image` 可强制重建。`run_e2e.py` 套件入口也可通过
+`CONTAINER_AGENT_XIAOO_E2E_REBUILD_IMAGE=1` 请求重建。
 stderr 最后输出保留的 `/tmp/actrail-multi-container-xiaoo.*` 路径。
 
 ## 步骤3：确认长驻容器与 docker exec 拓扑
@@ -172,5 +175,6 @@ docker image ls actrail/container-agent-xiaoo --format '{{.Repository}}:{{.Tag}}
 
 ### 脚本行为与预期结果
 
-固定输入未变化时，两次镜像列表中的内容标签不变，第二次不执行 Docker build。
+缓存布局版本、基础镜像引用和 Dockerfile 未变化时，两次镜像列表中的缓存标签
+不变，第二次不执行 Docker build。
 每轮测试只删除自己拥有的容器与 runtime；缓存镜像保留。

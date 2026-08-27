@@ -1,36 +1,17 @@
-# AcTrail Documentation
+# AcTrail 文档
 
-This directory is the operator-facing documentation entrypoint. Run commands from the repository root unless a document says otherwise.
+> 本文按实际任务提供 AcTrail 入门、操作、参考、架构与规范文档的统一入口。
 
-## Start Here
+AcTrail 观测并治理 AI Agent 的真实活动，使运维与安全人员能够调查行为、追溯证据并执行安全边界。
 
-| Document | Use It For |
+| 任务 | 文档入口 |
 | --- | --- |
-| [Usage Guide](usage.md) | Daily commands: build, preflight, clean, start, attach or launch, inspect, export, stop. |
-| [Deployment Guide](deployment.md) | Host prerequisites, config layout, daemon operation, storage/log handling, and transfer-test readiness. |
-| [Containerized Agent Deployment](containerized-agent-deployment.md) | Host daemon, not containerized, plus one Docker workload container, including required mounts, permissions, xiaoO launch, and host-side verification. |
-| [Container Permission Auto-Selection](../deploy/container-auto/README.md) | Optional host-eBPF × workload-seccomp-notify deployment bundle and acceptance test. |
-| [Use Cases](use-cases.md) | Which example to run for process trees, LLM payloads, HTTP semantics, enforcement, OTEL export, and performance checks. |
-| [LLM Request Canonical Blocks](llm-request-canonical-blocks.md) | L0 request-body retention model for reconstructable, trace-local deduplicated LLM request content. |
-| [Local MCP stdio Observation](designs/mcp-stdio-observation/README.zh.md) | eBPF IPC lineage, bounded JSON-RPC admission, semantic action graph, configuration, diagnostics, and real-agent MCP regression paths. |
-| [Plugin System](plugins/README.zh.md) | Runtime plugin loading, manifest fields, WASM ABI, observation/control plugins, and LLM codec plugins. |
-| [Activity Anomaly Alerts](plugins/activity-anomaly-manual.zh.md) | Configure thresholds, manage the plugin, and verify alerts with a real Agent. |
-| [Platform Requirements](platform-requirements.md) | Kernel, tracefs, BTF, seccomp, pidfd, fanotify, architecture, and failure interpretation. |
-| [Examples Checklist](examples/TESTING.md) | QA handoff checklist for examples under `docs/examples/` and the real agent trace suite under `tests/agent-trace/`. |
-| [Preflight Tools](preflight/README.md) | One-command platform scan and local smoke run. |
-
-## Current Runtime Model
-
-AcTrail is config-driven and fail-fast. Required capabilities are declared in an operator config; if the host cannot provide them, the run should fail instead of silently downgrading coverage.
-
-The main runtime flow is:
-
-```text
-actraild -> collectors/analyzers -> AcTrail storage -> actrailviewer/actrailweb/export
-```
-
-Use `actrailctl track-add` for an already-running process when you only need observation. Use `actrailctl launch` when AcTrail must prepare the child before `exec`, such as TLS sync payload capture (`LD_PRELOAD` runtime plus finder fast probe plan), socket large-payload seccomp fallback, or process seccomp agent-invocation observation.
-
-Process fork observation in the eBPF collector uses `sched/sched_process_fork`. The syscall tracepoint `syscalls/sys_enter_fork` is not required.
-
-For real agent acceptance, use `tests/agent-trace/` after the release binaries are built. That suite runs Claude Code, opencode, xiaoO, and a LangGraph Python workload through AcTrail and validates retained payloads, semantic actions, and OTEL spans for the actions each case declares.
+| 第一次运行 AcTrail | [Quickstart](getting-started/quickstart.md) |
+| 判断 AcTrail 能回答哪些安全问题 | [能力概览](concepts/capabilities.md) |
+| 核对各层可采集和可输出的观测证据 | [采集与观测清单](concepts/collection-observation-checklist.md) |
+| 理解 trace、数据和权限边界 | [运行模型](concepts/runtime-model.md)、[安全模型](concepts/security-model.md) |
+| 部署、运行或排查 AcTrail | [运维指南](operations/README.md) |
+| 查询配置、数据、协议或插件接口 | [参考资料](reference/README.md) |
+| 理解当前实现结构 | [架构](architecture/README.md) |
+| 实现或评审必须满足的行为 | [规范](specifications/README.md) |
+| 理解重要技术选择 | [架构决策](decisions/README.md) |

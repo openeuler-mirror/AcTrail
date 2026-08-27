@@ -42,7 +42,6 @@ impl SemanticAction {
         incoming.end_time = merge_end_time(self.end_time, incoming.end_time);
         incoming.status = merge_status(self.status, incoming.status);
         incoming.completeness = merge_completeness(self.completeness, incoming.completeness);
-        incoming.confidence_millis = incoming.confidence_millis.or(self.confidence_millis);
 
         let mut attributes = std::mem::take(&mut self.attributes);
         attributes.extend(incoming.attributes);

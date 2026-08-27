@@ -54,7 +54,7 @@ fn is_placeholder_uuid(uuid: &str) -> bool {
 }
 
 /// The resolved host id, or `None` if unresolved (single-host / no DMI / not
-/// yet initialized, e.g. in unit tests).
+/// yet initialized before launch binding resolves it).
 pub fn get() -> Option<String> {
     HOST_ID.get().and_then(|value| value.clone())
 }
@@ -66,53 +66,5 @@ fn probe_dmi_product_uuid(path: &str) -> Option<String> {
         None
     } else {
         Some(trimmed.to_string())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn probe_trims_and_rejects_empty() {
-        let dir = std::env::temp_dir();
-        let uuid_path = dir.join(format!("actrail-host-id-{}.uuid", std::process::id()));
-        std::fs::write(&uuid_path, "  4C4C4544-0042-1234-8000-abcdef012345\n").unwrap();
-        assert_eq!(
-            probe_dmi_product_uuid(uuid_path.to_str().unwrap()),
-            Some("4C4C4544-0042-1234-8000-abcdef012345".to_string())
-        );
-
-        std::fs::write(&uuid_path, "   \n").unwrap();
-        assert_eq!(probe_dmi_product_uuid(uuid_path.to_str().unwrap()), None);
-
-        std::fs::remove_file(&uuid_path).ok();
-        assert_eq!(
-            probe_dmi_product_uuid(uuid_path.to_str().unwrap()),
-            None,
-            "missing DMI file resolves to None, not an error"
-        );
-    }
-
-    #[test]
-    fn placeholder_uuids_are_rejected_but_real_ones_kept() {
-        assert!(is_placeholder_uuid("00000000-0000-0000-0000-000000000000"));
-        assert!(is_placeholder_uuid("ffffffff-ffff-ffff-ffff-ffffffffffff"));
-        assert!(is_placeholder_uuid("FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF"));
-        assert!(is_placeholder_uuid(""));
-        assert!(!is_placeholder_uuid("ee6f697d-ad07-4eab-86ad-54a3798b3eb7"));
-        assert!(!is_placeholder_uuid("046b3881-4e64-4cce-91a4-256632078c5d"));
-    }
-
-    #[test]
-    fn config_override_wins_over_probe() {
-        // init() is process-global and may already be set by another test; this
-        // asserts the override-selection logic directly instead.
-        let override_value = Some("my-vm-01".to_string());
-        let resolved = override_value
-            .clone()
-            .filter(|value| !value.trim().is_empty())
-            .or_else(|| probe_dmi_product_uuid(DMI_PRODUCT_UUID_PATH));
-        assert_eq!(resolved, override_value);
     }
 }

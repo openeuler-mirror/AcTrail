@@ -4,9 +4,9 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
+import re
 import select
 import shutil
 import sqlite3
@@ -14,6 +14,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -163,19 +165,16 @@ def main() -> int:
     launches: list[subprocess.Popen[str]] = []
     containers: list[TestContainer] = []
     daemon: subprocess.Popen[str] | None = None
+    test_image: ContainerImage | None = None
     succeeded = False
 
     try:
-        prepare_runtime(runtime, operator_template, config)
+        prepare_runtime(runtime, operator_template, config, actraild)
         prepare_workload_files(workloads)
         test_image = prepare_agent_image(
             runtime,
             args.image,
             image_dockerfile,
-            actrailctl,
-            tls_runtime,
-            xiaoo,
-            workload_script,
             args.rebuild_image,
         )
         provider_urls = []
@@ -192,7 +191,13 @@ def main() -> int:
             write_xiaoo_config(workload.config_path, provider_url)
 
         daemon = start_daemon(actraild, config, daemon_log)
-        wait_for_daemon(actrailctl, config, daemon, args.ready_timeout_seconds)
+        wait_for_daemon(
+            actrailctl,
+            config,
+            daemon,
+            daemon_log,
+            args.ready_timeout_seconds,
+        )
 
         for workload in workloads:
             container = TestContainer(
@@ -200,7 +205,15 @@ def main() -> int:
                     image=test_image,
                     name=workload.container_name,
                     labels=(label,),
-                    volumes=(f"{runtime}:{runtime}",),
+                    volumes=(
+                        f"{runtime}:{runtime}",
+                        f"{actrailctl}:/usr/local/bin/actrailctl:ro",
+                        f"{tls_runtime}:"
+                        "/usr/local/bin/libactrail_tls_payload_probe_sync.so:ro",
+                        f"{xiaoo}:/root/.cargo/bin/xiaoo:ro",
+                        f"{workload_script}:"
+                        "/usr/local/bin/actrail-multi-workload:ro",
+                    ),
                     security_options=(docker_seccomp,),
                     user="0:0",
                     network="host",
@@ -275,6 +288,7 @@ def main() -> int:
             trace_by_workload,
             workloads,
         )
+        verify_tls_binary_analysis_cache(daemon_log, config)
 
         succeeded = True
         return 0
@@ -286,10 +300,23 @@ def main() -> int:
                 container.close()
             except Exception as error:
                 print(f"container cleanup failed: {error}", file=sys.stderr)
+        if test_image is not None:
+            try:
+                removed_images = test_image.prune_other_versions()
+                if removed_images:
+                    print(
+                        "removed stale test images: " + ", ".join(removed_images),
+                        file=sys.stderr,
+                    )
+            except Exception as error:
+                print(f"image cleanup failed: {error}", file=sys.stderr)
         if daemon is not None:
             terminate_process(daemon)
             if not succeeded:
-                print_process_stderr("daemon", daemon)
+                print(
+                    "daemon_log:\n" + daemon_log.read_text(encoding="utf-8"),
+                    file=sys.stderr,
+                )
         for provider in provider_processes:
             terminate_process(provider)
             if not succeeded:
@@ -303,13 +330,39 @@ def main() -> int:
             shutil.rmtree(runtime, ignore_errors=True)
 
 
-def prepare_runtime(runtime: Path, template: Path, config: Path) -> None:
+def prepare_runtime(
+    runtime: Path,
+    template: Path,
+    config: Path,
+    actraild: Path,
+) -> None:
     for child in ("run", "data", "data/export", "log"):
         (runtime / child).mkdir(parents=True, exist_ok=True)
     rendered = template.read_text(encoding="utf-8").replace(RUNTIME_TOKEN, str(runtime))
     if RUNTIME_TOKEN in rendered:
         raise RuntimeError("operator template still contains an unresolved runtime token")
-    config.write_text(rendered, encoding="utf-8")
+    patch = runtime / "operator.patch.toml"
+    patch.write_text(rendered, encoding="utf-8")
+    initialized = subprocess.run(
+        [
+            str(actraild),
+            "--config",
+            str(config),
+            "init",
+            "-f",
+            "--patch",
+            str(patch),
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if initialized.returncode != 0:
+        raise RuntimeError(
+            "failed to initialize refreshed operator config: "
+            f"stdout={initialized.stdout!r} stderr={initialized.stderr!r}"
+        )
 
 
 def prepare_workload_files(workloads: list[Workload]) -> None:
@@ -322,30 +375,14 @@ def prepare_agent_image(
     runtime: Path,
     base_image: str,
     dockerfile: Path,
-    actrailctl: Path,
-    tls_runtime: Path,
-    xiaoo: Path,
-    workload_script: Path,
     force_rebuild: bool,
 ) -> ContainerImage:
-    sources = {
-        "actrailctl": actrailctl,
-        "libactrail_tls_payload_probe_sync.so": tls_runtime,
-        "xiaoo": xiaoo,
-        "workload.sh": workload_script,
-    }
-    digest = hashlib.sha256()
-    digest.update(base_image.encode("utf-8"))
-    digest.update(dockerfile.read_bytes())
-    for name, source in sorted(sources.items()):
-        digest.update(name.encode("utf-8"))
-        digest.update(source.read_bytes())
-
-    version = digest.hexdigest()[:16]
+    cache_key = zlib.crc32(b"container-agent-xiaoo-runtime-v2\0")
+    cache_key = zlib.crc32(base_image.encode("utf-8"), cache_key)
+    cache_key = zlib.crc32(dockerfile.read_bytes(), cache_key)
+    version = f"runtime-v2-{cache_key:08x}"
     context = runtime / "image"
     context.mkdir()
-    for name, source in sources.items():
-        shutil.copy2(source, context / name)
 
     build = ContainerImage(
         image_name="actrail/container-agent-xiaoo",
@@ -440,7 +477,7 @@ def start_daemon(
         [str(actraild), "--config", str(config), "run"],
         text=True,
         stdout=log,
-        stderr=subprocess.PIPE,
+        stderr=log,
         start_new_session=True,
     )
 
@@ -449,12 +486,16 @@ def wait_for_daemon(
     actrailctl: Path,
     config: Path,
     daemon: subprocess.Popen[str],
+    daemon_log: Path,
     timeout: float,
 ) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if daemon.poll() is not None:
-            raise RuntimeError(f"actraild exited early: {read_process_stderr(daemon)}")
+            raise RuntimeError(
+                "actraild exited early: "
+                + daemon_log.read_text(encoding="utf-8")
+            )
         result = subprocess.run(
             [str(actrailctl), "--config", str(config), "doctor"],
             text=True,
@@ -874,6 +915,68 @@ def verify_no_cross_trace_llm_actions(
                         f"trace-{trace_id} contains LLM markers owned by container "
                         f"{other.suffix}"
                     )
+
+
+def verify_tls_binary_analysis_cache(daemon_log: Path, config: Path) -> None:
+    with config.open("rb") as stream:
+        capacity = int(
+            tomllib.load(stream)["payload"]["tls"][
+                "binary_analysis_cache_capacity"
+            ]
+        )
+    peer_lookups: list[tuple[str, str, int]] = []
+    seen_peers: set[str] = set()
+    for line in daemon_log.read_text(encoding="utf-8").splitlines():
+        if "TLS binary analysis cache lookup" not in line:
+            continue
+        if diagnostic_field(line, "consumer") != "sync":
+            continue
+        runtime_binary = diagnostic_field(line, "runtime_binary")
+        if runtime_binary is None or Path(runtime_binary).name != "xiaoo":
+            continue
+        probe_binary = diagnostic_field(line, "probe_binary")
+        cache = diagnostic_field(line, "cache")
+        entries = diagnostic_field(line, "cache_entries")
+        if (
+            probe_binary is None
+            or cache not in {"hit", "miss"}
+            or entries is None
+        ):
+            continue
+        peer = re.search(r"^/proc/(\d+)/root/", probe_binary)
+        if peer is None or peer.group(1) in seen_peers:
+            continue
+        seen_peers.add(peer.group(1))
+        entry_count = int(entries)
+        if entry_count > capacity:
+            raise RuntimeError(
+                f"TLS binary analysis cache entries {entry_count} exceed {capacity}"
+            )
+        peer_lookups.append((peer.group(1), cache, entry_count))
+    if len(peer_lookups) < 2:
+        raise RuntimeError(
+            "TLS binary analysis diagnostics lack two xiaoO peer PIDs: "
+            f"{peer_lookups}"
+        )
+    first_peer, second_peer = peer_lookups[:2]
+    if second_peer[1] != "hit":
+        raise RuntimeError(
+            "second xiaoO peer did not reuse binary analysis: "
+            f"first={first_peer} second={second_peer}"
+        )
+    print(
+        "tls_binary_analysis_cache "
+        f"first_peer={first_peer[0]} first={first_peer[1]} "
+        f"second_peer={second_peer[0]} second=hit "
+        f"entries={second_peer[2]} capacity={capacity}"
+    )
+
+
+def diagnostic_field(line: str, name: str) -> str | None:
+    matched = re.search(rf'(?:^|\s){re.escape(name)}=(?:"([^"]*)"|(\S+))', line)
+    if matched is None:
+        return None
+    return matched.group(1) if matched.group(1) is not None else matched.group(2)
 
 
 def inspect_pid_namespace(name: str) -> str:

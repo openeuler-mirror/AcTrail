@@ -6,6 +6,7 @@ use semantic_action::{
 };
 
 use crate::live::actions::append_missing_evidence;
+use crate::live::http_exchange::MatchedHttpRequest;
 
 use super::shared::{ActionLinkKey, SemanticActionKey};
 
@@ -55,9 +56,87 @@ impl HttpLlmStreamKey {
 }
 
 impl HttpMessageLinkProjector {
+    pub(super) fn observe_exact_request_link(
+        &mut self,
+        llm_request: &SemanticAction,
+        http_request: &MatchedHttpRequest,
+    ) -> Option<SemanticActionLink> {
+        if llm_request.kind != SemanticActionKind::LlmRequest {
+            return None;
+        }
+        let key = ActionLinkKey {
+            trace_id: llm_request.trace_id,
+            parent_action_id: llm_request.action_id.clone(),
+            child_action_id: http_request.action_id.clone(),
+            role: SemanticActionLinkRole::LlmRequestHttpMessage,
+        };
+        if !self.emitted_links.insert(key) {
+            return None;
+        }
+        let mut evidence = http_request.evidence.clone();
+        append_missing_evidence(&mut evidence, &llm_request.evidence);
+        Some(SemanticActionLink {
+            trace_id: llm_request.trace_id,
+            parent_action_id: llm_request.action_id.clone(),
+            child_action_id: http_request.action_id.clone(),
+            role: SemanticActionLinkRole::LlmRequestHttpMessage,
+            confidence: SemanticActionLinkConfidence::Observed,
+            valid: true,
+            evidence,
+            attributes: BTreeMap::new(),
+        })
+    }
+
+    pub(super) fn observe_exact_response_link(
+        &mut self,
+        llm_response: &SemanticAction,
+        http_response: &SemanticAction,
+    ) -> Option<SemanticActionLink> {
+        if llm_response.kind != SemanticActionKind::LlmResponse
+            || http_response.kind != SemanticActionKind::HttpMessage
+            || llm_response.trace_id != http_response.trace_id
+            || llm_response.process != http_response.process
+            || http_response
+                .attributes
+                .get("direction")
+                .map(String::as_str)
+                != Some("inbound")
+            || llm_response
+                .attributes
+                .get(attrs::http_response::REQUEST_ACTION_ID)
+                != http_response
+                    .attributes
+                    .get(attrs::http_response::REQUEST_ACTION_ID)
+        {
+            return None;
+        }
+        let key = ActionLinkKey {
+            trace_id: llm_response.trace_id,
+            parent_action_id: llm_response.action_id.clone(),
+            child_action_id: http_response.action_id.clone(),
+            role: SemanticActionLinkRole::LlmResponseHttpMessage,
+        };
+        if !self.emitted_links.insert(key) {
+            return None;
+        }
+        let mut evidence = http_response.evidence.clone();
+        append_missing_evidence(&mut evidence, &llm_response.evidence);
+        Some(SemanticActionLink {
+            trace_id: llm_response.trace_id,
+            parent_action_id: llm_response.action_id.clone(),
+            child_action_id: http_response.action_id.clone(),
+            role: SemanticActionLinkRole::LlmResponseHttpMessage,
+            confidence: SemanticActionLinkConfidence::Observed,
+            valid: true,
+            evidence,
+            attributes: BTreeMap::new(),
+        })
+    }
+
     pub(super) fn observe_action(&mut self, action: &SemanticAction) -> Vec<SemanticActionLink> {
         match action.kind {
-            SemanticActionKind::LlmRequest | SemanticActionKind::LlmResponse => {
+            SemanticActionKind::LlmRequest => Vec::new(),
+            SemanticActionKind::LlmResponse => {
                 let key = SemanticActionKey::from(action);
                 self.llm_actions.insert(key.clone(), action.clone());
                 if let Some(stream_key) = HttpLlmStreamKey::from_llm_action(action) {
@@ -68,7 +147,11 @@ impl HttpMessageLinkProjector {
                 }
                 self.link_candidates(action, self.http_candidate_keys_for_llm(action))
             }
-            SemanticActionKind::HttpMessage if http_message_can_link_to_llm(action) => {
+            SemanticActionKind::HttpMessage
+                if http_message_can_link_to_llm(action)
+                    && action.attributes.get("direction").map(String::as_str)
+                        == Some("inbound") =>
+            {
                 let key = SemanticActionKey::from(action);
                 self.http_messages.insert(key.clone(), action.clone());
                 if let Some(stream_key) = HttpLlmStreamKey::from_http_message(action) {

@@ -103,10 +103,15 @@ pub(super) fn project_trace_data(
         );
     }
     let tools = clip_tool_intervals(&raw_local_tools, &windows);
-    let mut agent_intervals = tools.iter().map(|tool| tool.interval).collect::<Vec<_>>();
-    if degraded {
-        agent_intervals.clear();
-    }
+    // NOTE: do NOT clear agent_intervals when the trace is degraded. The tool
+    // intervals here already passed validation in tool_intervals (start
+    // representable, an end boundary exists, end >= start, scope-intersected);
+    // invalid commands were skipped and recorded as issues. Dropping the whole
+    // set on degradation collapses the entire Agent-side breakdown to 0 even
+    // when the underlying data is sound, and pushes reliable tool/bash time
+    // into Unattributed. Degradation instead surfaces as the `trace_degraded`
+    // warning below; genuinely unobserved gaps still land in Unattributed.
+    let agent_intervals = tools.iter().map(|tool| tool.interval).collect::<Vec<_>>();
     let raw_command_intervals = command_intervals(
         actions,
         memberships,
@@ -523,7 +528,7 @@ fn resolved_call_model(
         );
     }
     if let (Some(request_model), Some(response_model)) = (&request_model, &response_model)
-        && request_model != response_model
+        && !model_identifiers_equal(request_model, response_model)
     {
         tracker.action_info(
             "llm_model_conflict",
@@ -533,6 +538,10 @@ fn resolved_call_model(
         );
     }
     response_model.or(request_model).or(call_model)
+}
+
+fn model_identifiers_equal(left: &str, right: &str) -> bool {
+    left.eq_ignore_ascii_case(right.trim())
 }
 
 fn validated_action_model(action: &SemanticAction, key: &str) -> Option<String> {

@@ -40,8 +40,14 @@ from tests.v2.regression.probe_xiaoo_llm.run_e2e import (  # noqa: E402
 from tests.v2.regression.command_policy_xiaoo.run_e2e import (  # noqa: E402
     TEST_DEFINITION as COMMAND_POLICY_XIAOO,
 )
+from tests.v2.regression.network_policy_xiaoo.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as NETWORK_POLICY_XIAOO,
+)
 from tests.v2.regression.activity_anomaly.run_e2e import (  # noqa: E402
     TEST_DEFINITION as ACTIVITY_ANOMALY,
+)
+from tests.v2.regression.alert_forwarding.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as ALERT_FORWARDING,
 )
 from tests.v2.regression.container_agent_xiaoo.run_e2e import (  # noqa: E402
     TEST_DEFINITION as CONTAINER_AGENT_XIAOO,
@@ -49,11 +55,29 @@ from tests.v2.regression.container_agent_xiaoo.run_e2e import (  # noqa: E402
 from tests.v2.regression.container_auto.run_e2e import (  # noqa: E402
     TEST_DEFINITION as CONTAINER_AUTO,
 )
+from tests.v2.regression.execution_isolation_cloud_hypervisor.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as EXECUTION_ISOLATION_CLOUD_HYPERVISOR,
+)
+from tests.v2.regression.execution_isolation_firecracker.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as EXECUTION_ISOLATION_FIRECRACKER,
+)
+from tests.v2.regression.execution_isolation_stratovirt.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as EXECUTION_ISOLATION_STRATOVIRT,
+)
+from tests.v2.regression.sandbox_resource_alert_host.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as SANDBOX_RESOURCE_ALERT_HOST,
+)
+from tests.v2.regression.sandbox_oom_killed_alert_host.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as SANDBOX_OOM_KILLED_ALERT_HOST,
+)
 from tests.v2.regression.otel_jsonl_action_filter.run_e2e import (  # noqa: E402
     TEST_DEFINITION as OTEL_JSONL_ACTION_FILTER,
 )
 from tests.v2.regression.otel_http.run_e2e import (  # noqa: E402
     TEST_DEFINITION as OTEL_HTTP,
+)
+from tests.v2.regression.project_subagent_trajectory.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as PROJECT_SUBAGENT_TRAJECTORY,
 )
 from tests.v2.regression.semantic_action_boundaries.run_e2e import (  # noqa: E402
     TEST_DEFINITION as SEMANTIC_ACTION_BOUNDARIES,
@@ -67,8 +91,11 @@ from tests.v2.regression.virtual_container_xiaoo_concurrency.run_e2e import (  #
 from tests.v2.regression.tool_consecutive_failure_alert.run_e2e import (  # noqa: E402
     TEST_DEFINITION as TOOL_CONSECUTIVE_FAILURE_ALERT,
 )
+from tests.v2.regression.tool_frequent_failure_alert.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as TOOL_FREQUENT_FAILURE_ALERT,
+)
 
-TESTS = [
+DEFAULT_TESTS = [
     CLAUDE,
     CLAUDE_MCP,
     CODEX,
@@ -77,16 +104,30 @@ TESTS = [
     QODERCLI,
     XIAOO,
     COMMAND_POLICY_XIAOO,
+    NETWORK_POLICY_XIAOO,
     VIRTUAL_CONTAINER,
     VIRTUAL_CONTAINER_XIAOO_CONCURRENCY,
+    SANDBOX_RESOURCE_ALERT_HOST,
     CONTAINER_AUTO,
     CONTAINER_AGENT_XIAOO,
     SEMANTIC_ACTION_BOUNDARIES,
     OTEL_JSONL_ACTION_FILTER,
     OTEL_HTTP,
+    PROJECT_SUBAGENT_TRAJECTORY,
     ACTIVITY_ANOMALY,
+    ALERT_FORWARDING,
     TOOL_CONSECUTIVE_FAILURE_ALERT,
+    TOOL_FREQUENT_FAILURE_ALERT,
 ]
+
+OPTIONAL_TESTS = [
+    SANDBOX_OOM_KILLED_ALERT_HOST,
+    EXECUTION_ISOLATION_FIRECRACKER,
+    EXECUTION_ISOLATION_CLOUD_HYPERVISOR,
+    EXECUTION_ISOLATION_STRATOVIRT,
+]
+
+TESTS = [*DEFAULT_TESTS, *OPTIONAL_TESTS]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -126,7 +167,7 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         choices=[test.name for test in TESTS],
         dest="cases",
-        help="case to run; repeatable (default: all)",
+        help="case to run; repeatable (default: default regression set)",
     )
     parser.add_argument(
         "--list",
@@ -141,9 +182,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     arguments = parser.parse_args(effective_argv)
     requested = set(arguments.cases or ())
-    selected = [
-        test for test in TESTS if not requested or test.name in requested
-    ]
+    if requested:
+        selected = [test for test in TESTS if test.name in requested]
+    elif arguments.list_cases:
+        selected = TESTS
+    else:
+        selected = DEFAULT_TESTS
     if loaded_profile is not None:
         TestOutput(color_mode=arguments.color).line(
             f"test_profile={loaded_profile}"

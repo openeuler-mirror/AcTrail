@@ -10,8 +10,9 @@ pub use alert_contract::{
 };
 pub use backend::{
     SemanticActionChildPage, SemanticActionChildPageQuery, SemanticActionChildRow,
-    SemanticActionDisplayRootChildPage, SemanticActionDisplayRootChildRow, SemanticActionSummary,
-    StorageBackend, StorageOpenMode,
+    SemanticActionDisplayPathEntry, SemanticActionDisplayRootChildPage,
+    SemanticActionDisplayRootChildRow, SemanticActionSummary, SemanticActionTraceRevision,
+    StorageBackend, StorageOpenMode, TlsFlowDiagnostic,
 };
 pub use error::StorageError;
 pub use store_read_contract::filters::TraceFilter;

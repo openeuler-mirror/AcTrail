@@ -358,7 +358,9 @@ fn read_events(
         .prepare("SELECT * FROM events WHERE trace_id = ?1 ORDER BY observed_at ASC, event_id ASC")
         .map_err(|error| SnapshotError::new("prepare_events", error.to_string()))?;
     let rows = statement
-        .query_map(params![trace_id.get()], event_from_row)
+        .query_map(params![trace_id.get()], |row| {
+            event_from_row(connection, row)
+        })
         .map_err(|error| SnapshotError::new("query_events", error.to_string()))?;
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|error| SnapshotError::new("map_events", error.to_string()))

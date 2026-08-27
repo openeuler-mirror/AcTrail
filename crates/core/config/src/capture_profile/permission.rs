@@ -113,6 +113,11 @@ impl LaunchSeccompRequirements {
         self
     }
 
+    pub const fn with_network_control(mut self, network_control: bool) -> Self {
+        self.network_control = network_control;
+        self
+    }
+
     pub const fn with_file_enforcement(
         mut self,
         file_enforcement: FileEnforcementSeccompRequirements,

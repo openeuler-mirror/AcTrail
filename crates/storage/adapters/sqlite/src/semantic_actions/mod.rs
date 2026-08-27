@@ -1,11 +1,14 @@
 //! SQLite storage for semantic actions.
 
 pub(in crate::semantic_actions) mod action_ids;
+mod attribute_codes;
 pub(crate) mod codebook;
 mod cold_fields;
 mod command_fallback;
 mod llm_request_content;
+mod llm_request_lineage;
 mod mcp_jsonrpc_content;
+mod navigation;
 mod path_sets;
 mod query;
 mod root_tree;

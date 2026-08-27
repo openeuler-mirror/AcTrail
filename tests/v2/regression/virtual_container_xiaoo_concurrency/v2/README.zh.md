@@ -17,7 +17,10 @@ deploy/virtual-container/host/run-v2-tests.sh \
 xiaoO，再启动双 VM 并发场景。
 同一轮同时选择基础 `virtual_container` 时，若基础 case 为 `SKIPPED`，本 case
 直接继承 `SKIPPED`，不再解析 artifact 或尝试启动 VM；单独选择本 case 时仍独立
-检查全部前置条件。
+检查全部前置条件。单独运行时会先验证 runtime 标识，再用现有宿主能力证据检查 `/dev/kvm`、`ctr` CLI、
+Kata runtime、shim 与 VMM；这些外部能力缺失时直接返回 `SKIPPED`，不会要求无能力
+宿主先准备 guest/workload bundle。宿主能力具备后，缺失或损坏的 manifest、bundle、
+runtime config 仍然返回 `FAILED`。
 修改 AcTrail release 代码后，必须重新安装 release 并准备 artifact；否则两个 case
 都会在启动 VM 前以 `checksum mismatch` 失败，避免测试误用旧 guest 镜像。
 
@@ -49,14 +52,15 @@ loopback，不读取模型 Token，也不访问公网。测试固定同时启动
 
 ## 步骤摘要
 
-1. 检查本机 profile、format 2 manifest、data Profile 和 xiaoO artifact。
-2. 在需要时重新生成包含 xiaoO 的内容寻址 artifact。
-3. 运行不启动 VM 的并发场景契约测试。
-4. 创建两台独立 Kata data VM，并验证两边 workload 均为 openEuler。
-5. 等待两个 Provider Ready，再统一释放 barrier。
-6. 在同一轮询窗口看到两个 `xiaoo.active`，证明 Agent 真实重叠。
-7. 验证 A/B response、文件 marker、trace 和 viewer 数据不会串线。
-8. 删除 VM A 后确认 VM B 仍在运行，再清理本轮全部资源。
+1. 验证 runtime 标识并检查 `/dev/kvm`、`ctr` CLI、Kata runtime、shim 和 VMM；外部能力缺失时跳过。
+2. 宿主能力具备时检查本机 profile、format 2 manifest、data Profile 和 xiaoO artifact。
+3. 在需要时重新生成包含 xiaoO 的内容寻址 artifact。
+4. 运行不启动 VM 的并发场景契约测试。
+5. 创建两台独立 Kata data VM，并验证两边 workload 均为 openEuler。
+6. 等待两个 Provider Ready，再统一释放 barrier。
+7. 在同一轮询窗口看到两个 `xiaoo.active`，证明 Agent 真实重叠。
+8. 验证 A/B response、文件 marker、trace 和 viewer 数据不会串线。
+9. 删除 VM A 后确认 VM B 仍在运行，再清理本轮全部资源。
 
 ## 手动测试
 

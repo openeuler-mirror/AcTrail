@@ -6,7 +6,7 @@ use collector_event::{RawCollectorEvent, RawObservationPayload};
 use config_core::daemon::FileMetadataRetention;
 use control_contract::reply::ControlError;
 use ingest_runtime::{AllowPolicy, IngestPipeline};
-use model_core::diagnostics::{DiagnosticKind, DiagnosticRecord};
+use model_core::diagnostics::{DiagnosticKind, DiagnosticRecord, LlmPipelineDiagnostic};
 use model_core::event::{DomainEvent, EventPayload};
 use model_core::ids::TraceId;
 use model_core::process::{ProcessIdentity, ProcessRecord};
@@ -92,7 +92,10 @@ impl StorageAttachService {
                     batch.diagnostics.extend(
                         self.materialize_mcp_stdio_diagnostics(observation.mcp_stdio_diagnostics)?,
                     );
-                    let output = observation.output;
+                    let mut output = observation.output;
+                    batch
+                        .llm_pipeline_diagnostics
+                        .append(&mut output.llm_pipeline_diagnostics);
                     let retain_event = output.retain_event;
                     semantic_action_count =
                         semantic_action_count.saturating_add(output.actions.len());
@@ -105,6 +108,7 @@ impl StorageAttachService {
                             output.file_observation_paths,
                             output.file_path_sets,
                             output.llm_request_contents,
+                            output.llm_request_lineages,
                             output.mcp_jsonrpc_contents,
                             output.payload_segments,
                         ));
@@ -172,7 +176,10 @@ impl StorageAttachService {
             batch
                 .diagnostics
                 .extend(self.materialize_mcp_stdio_diagnostics(observation.mcp_stdio_diagnostics)?);
-            let output = observation.output;
+            let mut output = observation.output;
+            batch
+                .llm_pipeline_diagnostics
+                .append(&mut output.llm_pipeline_diagnostics);
             let retain_event = output.retain_event;
             semantic_action_count = semantic_action_count.saturating_add(output.actions.len());
             semantic_link_count = semantic_link_count.saturating_add(output.links.len());
@@ -184,6 +191,7 @@ impl StorageAttachService {
                     output.file_observation_paths,
                     output.file_path_sets,
                     output.llm_request_contents,
+                    output.llm_request_lineages,
                     output.mcp_jsonrpc_contents,
                     output.payload_segments,
                 ));
@@ -219,14 +227,19 @@ impl StorageAttachService {
         batch: LiveEventBatch,
     ) -> Result<(), ControlError> {
         let trace_states = self.trace_states_for_persistence(trace_runtime, batch.trace_ids)?;
-        self.persist_observed_batch_then_publish(
+        let result = self.persist_observed_batch_then_publish(
             trace_runtime,
             batch.events,
             batch.diagnostics,
             batch.semantic_actions,
             trace_states,
             batch.process_records.into_values().collect(),
-        )
+        );
+        self.persist_llm_pipeline_diagnostics_fail_local(
+            trace_runtime,
+            batch.llm_pipeline_diagnostics,
+        );
+        result
     }
 
     fn trace_states_for_persistence(
@@ -469,6 +482,7 @@ fn remove_if_matches_path(
 struct LiveEventBatch {
     events: Vec<DomainEvent>,
     diagnostics: Vec<DiagnosticRecord>,
+    llm_pipeline_diagnostics: Vec<LlmPipelineDiagnostic>,
     semantic_actions: SemanticActionBatch,
     trace_ids: BTreeSet<TraceId>,
     process_records: BTreeMap<ProcessIdentity, ProcessRecord>,

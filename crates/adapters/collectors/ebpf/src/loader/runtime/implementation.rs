@@ -56,16 +56,10 @@ impl EbpfRuntime {
         let event_transport_diagnostics_baseline = EventTransportDiagnostics::default();
         let events_map = map_handle(&object, "events", "event_buffer")?;
 
-        let events = Rc::new(RefCell::new(Vec::new()));
-        let decode_error = Rc::new(RefCell::new(None));
         let event_buffer_bytes = ring_buffer_max_bytes(config, payload);
-        let event_buffer = EventBuffer::build(
-            &events_map,
-            Rc::clone(&events),
-            Rc::clone(&decode_error),
-            event_buffer_bytes,
-        )?;
-        file::configure_file_config_map(&object, config)?;
+        let consumer = EventConsumer::spawn(&events_map, event_buffer_bytes)?;
+        file::configure_file_config_map(&object, config, attach_plan)?;
+        fd::configure_fd_category_config_map(&object, attach_plan, config)?;
         suppressed_fd::configure_config_map(&object, config)?;
         tls::configure_payload_tls_map(&object, &payload.tls)?;
         stdio::configure_payload_stdio_map(&object, &payload.stdio)?;
@@ -104,10 +98,10 @@ impl EbpfRuntime {
             event_transport_diagnostics,
             event_transport_diagnostics_baseline,
             events_map,
-            events,
-            decode_error,
+            consumer: Some(consumer),
             event_buffer_bytes,
-            event_buffer: Some(event_buffer),
+            pending_raw_events: Vec::new(),
+            last_perf_lost: 0,
             last_event_transport_loss_summary: None,
             pending_event_transport_loss_summaries: Vec::new(),
             last_raw_sample_count: 0,
@@ -128,6 +122,7 @@ impl EbpfRuntime {
             .filter(|program_name| !tls::is_payload_tls_program(program_name))
             .collect::<Vec<_>>();
         autoloaded_programs.sort_by_key(|program_name| attach_plan.attach_priority(program_name));
+        let tracepoint_policy = tracepoint::TracepointAttachPolicy::new();
         for program_name in autoloaded_programs {
             let program = object
                 .progs_mut()
@@ -138,7 +133,7 @@ impl EbpfRuntime {
                         format!("BPF program {program_name} is missing"),
                     )
                 })?;
-            if let Some(link) = tracepoint::attach_program(
+            if let Some(link) = tracepoint_policy.attach_program(
                 &program,
                 &program_name,
                 attach_plan.allows_missing_tracepoint(&program_name),
@@ -171,11 +166,9 @@ impl EbpfRuntime {
         }
         let links = std::mem::take(&mut self.links);
         self.static_link_teardown.drop_all(links)?;
-        if let Some(event_buffer) = self.event_buffer.take() {
-            event_buffer.consume()?;
-        }
-        self.events.borrow_mut().clear();
-        self.decode_error.borrow_mut().take();
+        self.consumer.take();
+        self.pending_raw_events.clear();
+        self.last_perf_lost = 0;
         self.tls_diagnostics_baseline =
             tls::read_tls_payload_diagnostics(&self.payload_tls_diagnostics)?;
         self.event_transport_diagnostics_baseline =
@@ -193,15 +186,10 @@ impl EbpfRuntime {
         if self.attachment_state == RuntimeAttachmentState::Attached {
             return Ok(());
         }
-        let event_buffer = EventBuffer::build(
-            &self.events_map,
-            Rc::clone(&self.events),
-            Rc::clone(&self.decode_error),
-            self.event_buffer_bytes,
-        )?;
-        event_buffer.consume()?;
-        self.events.borrow_mut().clear();
-        self.decode_error.borrow_mut().take();
+        let consumer = EventConsumer::spawn(&self.events_map, self.event_buffer_bytes)?;
+        self.consumer = Some(consumer);
+        self.pending_raw_events.clear();
+        self.last_perf_lost = 0;
         let tls_diagnostics_baseline =
             tls::read_tls_payload_diagnostics(&self.payload_tls_diagnostics)?;
         let event_transport_diagnostics_baseline =
@@ -215,7 +203,6 @@ impl EbpfRuntime {
             ));
         }
         self.links = links;
-        self.event_buffer = Some(event_buffer);
         self.tls_diagnostics_baseline = tls_diagnostics_baseline;
         self.event_transport_diagnostics_baseline = event_transport_diagnostics_baseline;
         self.attached_programs = attached_programs;
@@ -225,33 +212,44 @@ impl EbpfRuntime {
     }
 
     pub fn poll_events(&mut self) -> Result<Vec<KernelEvent>, LoaderError> {
-        let Some(event_buffer) = self.event_buffer.as_ref() else {
+        if self.consumer.is_none() {
             self.last_raw_sample_count = 0;
             return Ok(Vec::new());
-        };
-        event_buffer.consume()?;
-        self.capture_event_transport_loss()?;
-        if let Some(error) = self.decode_error.borrow_mut().take() {
-            // Mirror the previous behavior: a decode failure fails the drain
-            // and drops every event collected in this batch.
-            self.events.borrow_mut().clear();
-            return Err(error);
         }
-        let events = std::mem::take(&mut *self.events.borrow_mut());
-        self.last_raw_sample_count = events.len();
-        #[cfg(any(feature = "perf-buffer", actrail_event_transport_perf))]
-        let events = {
-            // Perf buffers are drained per CPU, so callback order is not a
-            // global causal order. Timestamped events are sorted causally;
-            // untimestamped control diagnostics remain last in arrival order.
-            // Ring buffers already preserve callback order.
-            let mut events = events;
-            events.sort_by_key(|event| {
-                let observed_ktime_ns = event.observed_ktime_ns();
-                (observed_ktime_ns.is_none(), observed_ktime_ns)
-            });
-            events
-        };
+        let drain_error = self.drain_consumer_queue().err();
+        let raw_events = std::mem::take(&mut self.pending_raw_events);
+        self.last_raw_sample_count = raw_events.len();
+        let mut events = Vec::with_capacity(raw_events.len());
+        let mut decode_error = None;
+        for raw in raw_events {
+            match decode_kernel_event(&raw) {
+                Ok(event) => events.push(event),
+                Err(error) if decode_error.is_none() => decode_error = Some(error),
+                Err(_) => {}
+            }
+        }
+        let diagnostics_error = self.capture_event_transport_loss().err();
+        for error in [decode_error, diagnostics_error].into_iter().flatten() {
+            self.record_event_transport_loss_summary(format!(
+                "kernel event processing failed locally: {error:?}"
+            ));
+        }
+        if let Some(error) = drain_error {
+            self.record_event_transport_loss_summary(format!(
+                "kernel event consumer failed after delivering queued events: {error:?}"
+            ));
+            if events.is_empty() {
+                return Err(error);
+            }
+        }
+        // Both ring buffers and perf buffers are drained per CPU, so callback
+        // order is not a global causal order. Timestamped events are sorted
+        // causally; untimestamped control diagnostics remain last in arrival
+        // order.
+        events.sort_by_key(|event| {
+            let observed_ktime_ns = event.observed_ktime_ns();
+            (observed_ktime_ns.is_none(), observed_ktime_ns)
+        });
         Ok(events)
     }
 
@@ -263,25 +261,53 @@ impl EbpfRuntime {
     /// accept new submissions. The buffered bytes are decoded on the next
     /// `poll_events()` call.
     pub fn flush_transport(&mut self) -> Result<(), LoaderError> {
-        let Some(event_buffer) = self.event_buffer.as_ref() else {
+        if self.consumer.is_none() {
+            return Ok(());
+        }
+        let drain_error = self.drain_consumer_queue().err();
+        let diagnostics_error = self.capture_event_transport_loss().err();
+        for error in [drain_error, diagnostics_error].into_iter().flatten() {
+            self.record_event_transport_loss_summary(format!(
+                "kernel event transport flush failed locally: {error:?}"
+            ));
+        }
+        Ok(())
+    }
+
+    /// Pull queued raw batches from the consumer thread into the pending raw
+    /// buffer without decoding, resetting the daemon wakeup first.
+    fn drain_consumer_queue(&mut self) -> Result<(), LoaderError> {
+        // Reset the wakeup before draining: a consumer write that lands after
+        // this reset but before the drain finishes leaves the eventfd counter
+        // non-zero, so the daemon wakes again instead of stranding a batch
+        // until the next background poll.
+        let Some(consumer) = self.consumer.as_ref() else {
             return Ok(());
         };
-        event_buffer.consume()?;
-        self.capture_event_transport_loss()?;
+        consumer.clear_wakeup();
+        loop {
+            match consumer.try_recv() {
+                Ok(EventConsumerMessage::RawBatch { raw, perf_lost }) => {
+                    self.pending_raw_events.extend(raw);
+                    self.last_perf_lost = perf_lost;
+                }
+                Ok(EventConsumerMessage::Failure { stage, message }) => {
+                    return Err(LoaderError::new(format!("event_consumer_{stage}"), message));
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    return Err(LoaderError::new(
+                        "event_consumer",
+                        "event consumer thread exited unexpectedly",
+                    ));
+                }
+            }
+        }
         Ok(())
     }
 
     fn capture_event_transport_loss(&mut self) -> Result<(), LoaderError> {
-        let perf_lost = self
-            .event_buffer
-            .as_ref()
-            .ok_or_else(|| {
-                LoaderError::new(
-                    "event_transport_diagnostics",
-                    "attached eBPF runtime has no event buffer",
-                )
-            })?
-            .lost_count();
+        let perf_lost = self.last_perf_lost;
         let diagnostics = read_event_transport_diagnostics(&self.event_transport_diagnostics)?
             .saturating_delta_since(self.event_transport_diagnostics_baseline);
         if perf_lost != 0
@@ -290,21 +316,29 @@ impl EbpfRuntime {
             || diagnostics.output_fail_bytes != 0
             || diagnostics.stdio_pending_update_fail != 0
             || diagnostics.stdio_read_user_fail != 0
+            || diagnostics.socket_state_update_fail != 0
+            || diagnostics.socket_sequence_update_fail != 0
         {
             let summary = format!(
-                "kernel event transport lost data: perf_lost={perf_lost}, reserve_fail={}, output_fail={}, output_fail_bytes={}, stdio_pending_update_fail={}, stdio_read_user_fail={}",
+                "kernel event transport lost data: perf_lost={perf_lost}, reserve_fail={}, output_fail={}, output_fail_bytes={}, stdio_pending_update_fail={}, stdio_read_user_fail={}, socket_state_update_fail={}, socket_sequence_update_fail={}",
                 diagnostics.reserve_fail,
                 diagnostics.output_fail,
                 diagnostics.output_fail_bytes,
                 diagnostics.stdio_pending_update_fail,
                 diagnostics.stdio_read_user_fail,
+                diagnostics.socket_state_update_fail,
+                diagnostics.socket_sequence_update_fail,
             );
-            if self.last_event_transport_loss_summary.as_deref() != Some(summary.as_str()) {
-                self.last_event_transport_loss_summary = Some(summary.clone());
-                self.pending_event_transport_loss_summaries.push(summary);
-            }
+            self.record_event_transport_loss_summary(summary);
         }
         Ok(())
+    }
+
+    fn record_event_transport_loss_summary(&mut self, summary: String) {
+        if self.last_event_transport_loss_summary.as_deref() != Some(summary.as_str()) {
+            self.last_event_transport_loss_summary = Some(summary.clone());
+            self.pending_event_transport_loss_summaries.push(summary);
+        }
     }
 
     pub fn take_event_transport_loss_summaries(&mut self) -> Vec<String> {
@@ -601,17 +635,7 @@ impl EbpfRuntime {
     }
 
     pub fn event_poll_fd(&self) -> Result<Option<RawFd>, LoaderError> {
-        let Some(event_buffer) = self.event_buffer.as_ref() else {
-            return Ok(None);
-        };
-        let fd = event_buffer.epoll_fd();
-        if fd < 0 {
-            return Err(LoaderError::new(
-                "event_poll_fd",
-                format!("event buffer returned invalid epoll fd {fd}"),
-            ));
-        }
-        Ok(Some(fd))
+        Ok(self.consumer.as_ref().map(EventConsumer::wake_fd))
     }
 
     pub fn lookup_pending_tls_payload_op(

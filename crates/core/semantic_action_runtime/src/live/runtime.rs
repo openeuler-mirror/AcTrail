@@ -1,22 +1,24 @@
 //! Live semantic action runtime.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::time::SystemTime;
 
 use config_core::daemon::{
     AgentInvocationConfig, FileObservationConfig, PayloadMcpConfig, SemanticRetentionConfig,
 };
+use model_core::diagnostics::LlmPipelineDiagnostic;
 use model_core::event::{DomainEvent, EventPayload};
 use model_core::ids::TraceId;
-use model_core::payload::PayloadSegment;
-use model_core::process::ProcessIdentity;
+use model_core::payload::{PayloadSegment, PayloadStreamIdentity};
 use semantic_action::{
-    FileObservationPath, FilePathSetWrite, LlmRequestContentWrite, McpJsonRpcContentWrite,
-    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticEvidenceKind,
-    attr_keys as attrs,
+    FileObservationPath, FilePathSetWrite, LlmRequestContentWrite, LlmRequestLineageWrite,
+    McpJsonRpcContentWrite, SemanticAction, SemanticActionKind, SemanticActionLink,
+    SemanticEvidenceKind, attr_keys as attrs,
 };
 
-use crate::payload_projection::llm::{LlmCodecPlugin, LlmCodecPluginStatus};
+use crate::llm_pipeline::{
+    ActionBatch, LlmActionPipeline, LlmCodecPlugin, LlmCodecPluginStatus, PipelineEvent,
+};
 
 use super::actions::{
     enforcement_action, file_modify_action, http_message_action, is_file_modify_event,
@@ -25,23 +27,19 @@ use super::actions::{
 use super::agent::AgentProjector;
 use super::command::CommandProjector;
 use super::file::FileAccessProjector;
+use super::http_exchange::{DamagedHttp1RequestOutcome, HttpExchangeTracker};
 use super::links::ActionLinkProjector;
-use super::llm::LiveLlmProjector;
 use super::mcp::{LiveMcpProjector, LiveMcpStdioDiagnostic};
-
-const HTTP_DIRECTION_ATTR: &str = "direction";
-const HTTP_PAYLOAD_SEQUENCE_ATTR: &str = "payload_sequence";
-const HTTP_STATUS_CODE_ATTR: &str = "status_code";
-const HTTP_STREAM_ID_ATTR: &str = "stream_id";
-const HTTP_STREAM_KEY_ATTR: &str = "stream_key";
+use super::tool::{ToolInteractionProjector, ToolProjectionBatch};
 
 pub struct LiveSemanticActionRuntime {
     agent: AgentProjector,
     command: CommandProjector,
     file_access: FileAccessProjector,
     http_exchange: HttpExchangeTracker,
-    llm: LiveLlmProjector,
+    llm: LlmActionPipeline,
     mcp: LiveMcpProjector,
+    tool: ToolInteractionProjector,
     links: ActionLinkProjector,
 }
 
@@ -71,8 +69,10 @@ pub struct LiveSemanticActionOutput {
     pub file_observation_paths: Vec<FileObservationPath>,
     pub file_path_sets: Vec<FilePathSetWrite>,
     pub llm_request_contents: Vec<LlmRequestContentWrite>,
+    pub llm_request_lineages: Vec<LlmRequestLineageWrite>,
     pub mcp_jsonrpc_contents: Vec<McpJsonRpcContentWrite>,
     pub payload_segments: Vec<PayloadSegment>,
+    pub llm_pipeline_diagnostics: Vec<LlmPipelineDiagnostic>,
     pub deferred_events: Vec<DomainEvent>,
     pub retain_event: bool,
     pub raw_event_consumed: bool,
@@ -86,8 +86,10 @@ impl Default for LiveSemanticActionOutput {
             file_observation_paths: Vec::new(),
             file_path_sets: Vec::new(),
             llm_request_contents: Vec::new(),
+            llm_request_lineages: Vec::new(),
             mcp_jsonrpc_contents: Vec::new(),
             payload_segments: Vec::new(),
+            llm_pipeline_diagnostics: Vec::new(),
             deferred_events: Vec::new(),
             retain_event: true,
             raw_event_consumed: false,
@@ -103,8 +105,11 @@ impl LiveSemanticActionOutput {
             .extend(other.file_observation_paths);
         self.file_path_sets.extend(other.file_path_sets);
         self.llm_request_contents.extend(other.llm_request_contents);
+        self.llm_request_lineages.extend(other.llm_request_lineages);
         self.mcp_jsonrpc_contents.extend(other.mcp_jsonrpc_contents);
         self.payload_segments.extend(other.payload_segments);
+        self.llm_pipeline_diagnostics
+            .extend(other.llm_pipeline_diagnostics);
         self.deferred_events.extend(other.deferred_events);
         self.retain_event = self.retain_event && other.retain_event;
         self.raw_event_consumed = self.raw_event_consumed || other.raw_event_consumed;
@@ -119,18 +124,21 @@ impl LiveSemanticActionRuntime {
         file_observation: FileObservationConfig,
         mcp: PayloadMcpConfig,
     ) -> Self {
-        let AgentInvocationConfig {
-            enabled,
-            commands: _,
-        } = config;
+        let enabled = config.enabled;
+        let max_tool_entries_per_trace = semantic_retention
+            .l0_llm_call
+            .projection_state
+            .max_tool_entries_per_trace;
         let mcp_content_retention = semantic_retention.l0_mcp_call.clone();
+        let http_exchange_config = semantic_retention.l2_http.exchange;
         Self {
             agent: AgentProjector::new(enabled, pending_exec_max_entries),
             command: CommandProjector::new(),
             file_access: FileAccessProjector::new(file_observation),
-            http_exchange: HttpExchangeTracker::default(),
-            llm: LiveLlmProjector::new(semantic_retention),
+            http_exchange: HttpExchangeTracker::new(http_exchange_config),
+            llm: LlmActionPipeline::new(semantic_retention),
             mcp: LiveMcpProjector::new(mcp, mcp_content_retention),
+            tool: ToolInteractionProjector::new(config, max_tool_entries_per_trace),
             links: ActionLinkProjector::new(),
         }
     }
@@ -240,12 +248,35 @@ impl LiveSemanticActionRuntime {
                 output
             }
             EventPayload::Application(payload) if is_http_protocol(&payload.protocol) => {
-                let mut action = http_message_action(event);
-                self.http_exchange.observe_http_message(&mut action);
-                output.actions.push(action.clone());
-                output
-                    .actions
-                    .extend(self.llm.observe_http_message(&action));
+                let observation = self
+                    .http_exchange
+                    .observe_http_message(http_message_action(event));
+                let mut projected_llm = LiveSemanticActionOutput::default();
+                for matched in &observation.matches {
+                    let llm_output = self
+                        .llm
+                        .advance(PipelineEvent::HttpExchange(matched))
+                        .output;
+                    projected_llm.extend(self.observe_llm_batch(llm_output));
+                }
+                for response in &observation.damaged_responses {
+                    let llm_output = self
+                        .llm
+                        .advance(PipelineEvent::DamagedHttpResponse(response))
+                        .output;
+                    projected_llm.extend(self.observe_llm_batch(llm_output));
+                }
+                for response in &observation.unmatched_responses {
+                    let llm_output = self
+                        .llm
+                        .advance(PipelineEvent::UnmatchedHttpResponse(response))
+                        .output;
+                    projected_llm.extend(self.observe_llm_batch(llm_output));
+                }
+                let llm_actions = std::mem::take(&mut projected_llm.actions);
+                output.actions.extend(observation.actions);
+                output.actions.extend(llm_actions);
+                output.extend(projected_llm);
                 output
                     .links
                     .extend(self.links.observe_actions(&output.actions));
@@ -280,6 +311,47 @@ impl LiveSemanticActionRuntime {
 
     pub fn llm_codec_statuses(&self) -> Vec<LlmCodecPluginStatus> {
         self.llm.codec_statuses()
+    }
+
+    fn observe_llm_batch(&mut self, llm_output: ActionBatch) -> LiveSemanticActionOutput {
+        let tool_output = self.tool.project(ToolProjectionBatch {
+            actions: &llm_output.actions,
+            tool_results: &llm_output.llm_tool_results,
+            request_lineages: &llm_output.llm_request_lineages,
+        });
+        let mut output = LiveSemanticActionOutput {
+            payload_segments: llm_output.payload_segments,
+            llm_pipeline_diagnostics: llm_output.diagnostics,
+            llm_request_contents: llm_output.llm_request_contents,
+            llm_request_lineages: llm_output.llm_request_lineages,
+            ..LiveSemanticActionOutput::default()
+        };
+        for proposal in &llm_output.http_request_links {
+            if let Some(link) = self.links.observe_exact_http_request_link(proposal) {
+                output.links.push(link);
+            }
+        }
+        for proposal in &llm_output.http_response_links {
+            if let Some(link) = self.links.observe_exact_http_response_link(proposal) {
+                output.links.push(link);
+            }
+        }
+        for mut action in llm_output.actions {
+            let agent_actions = if action.kind == SemanticActionKind::LlmRequest {
+                self.agent.annotate_user_input(&mut action);
+                self.agent.observe_llm_request(&action)
+            } else {
+                Vec::new()
+            };
+            output.actions.push(action);
+            output.actions.extend(agent_actions);
+        }
+        output.actions.extend(tool_output.actions);
+        output.links.extend(tool_output.links);
+        output
+            .llm_pipeline_diagnostics
+            .extend(tool_output.diagnostics);
+        output
     }
 
     pub fn take_pending_exec_intent_evictions(&mut self) -> u64 {
@@ -338,7 +410,10 @@ impl LiveSemanticActionRuntime {
         if retain_evidence {
             self.agent.observe_payload_segment(segment);
         }
-        let mut llm_output = self.llm.observe_payload_segment(segment);
+        let mut llm_output = self
+            .llm
+            .advance(PipelineEvent::PayloadSegment(segment))
+            .output;
         if !retain_evidence {
             for action in &mut llm_output.actions {
                 action
@@ -347,10 +422,11 @@ impl LiveSemanticActionRuntime {
             }
         }
         let mut mcp_actions = self.mcp.observe_llm_actions(&llm_output.actions);
+        let projected_llm = self.observe_llm_batch(llm_output);
         let (mcp_output, mcp_stdio_diagnostics) =
             self.mcp.observe_payload_segment(segment, retain_evidence);
         mcp_actions.extend(mcp_output.actions);
-        let mut output = if llm_output.actions.is_empty() && mcp_actions.is_empty() {
+        let mut output = if projected_llm.actions.is_empty() && mcp_actions.is_empty() {
             LiveSemanticActionOutput::default()
         } else {
             self.file_access.observe_boundary(
@@ -359,20 +435,7 @@ impl LiveSemanticActionRuntime {
                 segment.observed_at,
             )
         };
-        output
-            .llm_request_contents
-            .extend(llm_output.llm_request_contents);
-        output.payload_segments.extend(llm_output.payload_segments);
-        for mut action in llm_output.actions {
-            let agent_actions = if action.kind == SemanticActionKind::LlmRequest {
-                self.agent.annotate_user_input(&mut action);
-                self.agent.observe_llm_request(&action)
-            } else {
-                Vec::new()
-            };
-            output.actions.push(action.clone());
-            output.actions.extend(agent_actions);
-        }
+        output.extend(projected_llm);
         for action in &mcp_actions {
             output.extend(self.command.observe_mcp_tool_call(action));
         }
@@ -402,6 +465,117 @@ impl LiveSemanticActionRuntime {
 
     pub fn should_project_dropped_stdio_payload(&self, segment: &PayloadSegment) -> bool {
         self.mcp.should_project_stdio_payload(segment)
+    }
+
+    pub fn observe_payload_gap(
+        &mut self,
+        segment: &PayloadSegment,
+    ) -> LiveSemanticActionObservation {
+        self.http_exchange.quarantine_payload_stream(segment);
+        let llm_output = self.llm.advance(PipelineEvent::PayloadGap(segment)).output;
+        let mut output = self.observe_llm_batch(llm_output);
+        output
+            .links
+            .extend(self.links.observe_actions(&output.actions));
+        LiveSemanticActionObservation {
+            output,
+            mcp_stdio_diagnostics: Vec::new(),
+        }
+    }
+
+    pub fn prepare_incomplete_payload(&mut self, segment: &PayloadSegment) {
+        self.http_exchange.quarantine_payload_stream(segment);
+    }
+
+    pub fn prepare_incomplete_http1_request(
+        &mut self,
+        segment: &PayloadSegment,
+        sequence: u64,
+        header_projected: bool,
+    ) {
+        match self
+            .http_exchange
+            .observe_damaged_http1_request(segment, sequence, header_projected)
+        {
+            DamagedHttp1RequestOutcome::Tombstoned => {}
+            DamagedHttp1RequestOutcome::MissingPending
+                if self
+                    .llm
+                    .advance(PipelineEvent::LocalizeIncompleteHttp1Request { segment, sequence })
+                    .localized => {}
+            DamagedHttp1RequestOutcome::MissingPending => {
+                self.http_exchange.quarantine_payload_stream(segment);
+                self.llm
+                    .advance(PipelineEvent::ForgetPayloadAssociations(segment));
+            }
+            DamagedHttp1RequestOutcome::Unsafe => {
+                self.llm
+                    .advance(PipelineEvent::ForgetPayloadAssociations(segment));
+            }
+        }
+    }
+
+    pub fn prepare_incomplete_http1_response(
+        &mut self,
+        segment: &PayloadSegment,
+        sequence: u64,
+        header_projected: bool,
+    ) {
+        let request = (!header_projected)
+            .then(|| self.http_exchange.observe_damaged_http1_response(segment))
+            .flatten();
+        self.llm
+            .advance(PipelineEvent::PrepareIncompleteHttp1Response {
+                segment,
+                sequence,
+                request,
+            });
+    }
+
+    pub fn finish_incomplete_payload(&mut self, segment: &PayloadSegment) {
+        self.llm
+            .advance(PipelineEvent::ForgetPayloadAssociations(segment));
+    }
+
+    pub fn finish_incomplete_http1_response(
+        &mut self,
+        segment: &PayloadSegment,
+    ) -> LiveSemanticActionOutput {
+        let llm_output = self
+            .llm
+            .advance(PipelineEvent::FinishIncompleteHttp1Response(segment))
+            .output;
+        let mut output = self.observe_llm_batch(llm_output);
+        output
+            .links
+            .extend(self.links.observe_actions(&output.actions));
+        output
+    }
+
+    pub fn forget_payload_stream(&mut self, identity: &PayloadStreamIdentity) {
+        self.http_exchange.forget_payload_stream(identity);
+        self.llm
+            .advance(PipelineEvent::ForgetPayloadStream(identity));
+    }
+
+    pub fn finalize_payload_stream(
+        &mut self,
+        identity: &PayloadStreamIdentity,
+        finished_at: SystemTime,
+    ) -> LiveSemanticActionOutput {
+        let llm_output = self
+            .llm
+            .advance(PipelineEvent::FinalizePayloadStream {
+                identity,
+                finished_at,
+            })
+            .output;
+        let mut output = self.observe_llm_batch(llm_output);
+        output
+            .links
+            .extend(self.links.observe_actions(&output.actions));
+        self.http_exchange.forget_payload_stream(identity);
+        output
     }
 
     pub fn flush_closed_mcp_stdio_sessions(&mut self) {
@@ -444,8 +618,9 @@ impl LiveSemanticActionRuntime {
         self.command.forget_trace(trace_id);
         self.file_access.forget_trace(trace_id);
         self.http_exchange.forget_trace(trace_id);
-        self.llm.forget_trace(trace_id);
+        self.llm.advance(PipelineEvent::ForgetTrace(trace_id));
         self.mcp.forget_trace(trace_id);
+        self.tool.forget_trace(trace_id);
         self.links.forget_trace(trace_id);
     }
 
@@ -454,142 +629,33 @@ impl LiveSemanticActionRuntime {
         trace_id: TraceId,
         finished_at: SystemTime,
     ) -> LiveSemanticActionOutput {
-        let (mut actions, payload_segments) = self.llm.finalize_trace(trace_id, finished_at);
-        actions.extend(self.mcp.finalize_trace(trace_id, finished_at));
+        let llm_output = self
+            .llm
+            .advance(PipelineEvent::FinalizeTrace {
+                trace_id,
+                finished_at,
+            })
+            .output;
+        let mut output = self.observe_llm_batch(llm_output);
+        let finalized_tool_output = self.tool.finish_trace(trace_id, finished_at);
+        output.actions.extend(finalized_tool_output.actions);
+        output
+            .llm_pipeline_diagnostics
+            .extend(finalized_tool_output.diagnostics);
+        output
+            .actions
+            .extend(self.mcp.finalize_trace(trace_id, finished_at));
         let file_output = self.file_access.finalize_trace(trace_id, finished_at);
-        actions.extend(file_output.actions);
-        let links = self.links.observe_actions(&actions);
-        LiveSemanticActionOutput {
-            actions,
-            links,
-            payload_segments,
-            file_observation_paths: Vec::new(),
-            file_path_sets: file_output.file_path_sets,
-            llm_request_contents: Vec::new(),
-            mcp_jsonrpc_contents: Vec::new(),
-            deferred_events: file_output.deferred_events,
-            retain_event: file_output.retain_event,
-            raw_event_consumed: false,
-        }
+        output.actions.extend(file_output.actions);
+        output.links.extend(finalized_tool_output.links);
+        output
+            .links
+            .extend(self.links.observe_actions(&output.actions));
+        output.file_path_sets.extend(file_output.file_path_sets);
+        output.deferred_events.extend(file_output.deferred_events);
+        output.retain_event = output.retain_event && file_output.retain_event;
+        output
     }
-}
-
-#[derive(Default)]
-struct HttpExchangeTracker {
-    pending_by_stream: BTreeMap<HttpExchangeKey, VecDeque<PendingHttpRequest>>,
-}
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct HttpExchangeKey {
-    trace_id: TraceId,
-    process: ProcessIdentity,
-    stream_key: String,
-    stream_id: Option<String>,
-}
-
-#[derive(Clone, Debug)]
-struct PendingHttpRequest {
-    action_id: String,
-    sequence: u64,
-}
-
-impl HttpExchangeTracker {
-    fn observe_http_message(&mut self, action: &mut SemanticAction) {
-        match http_message_direction_operation(action) {
-            Some(("outbound", "request")) => self.observe_request(action),
-            Some(("inbound", "response")) => self.annotate_response(action),
-            _ => {}
-        }
-    }
-
-    fn forget_trace(&mut self, trace_id: TraceId) {
-        self.pending_by_stream
-            .retain(|key, _| key.trace_id != trace_id);
-    }
-
-    fn observe_request(&mut self, action: &SemanticAction) {
-        let Some(key) = HttpExchangeKey::from_http_message(action) else {
-            return;
-        };
-        let Some(sequence) = http_payload_sequence(action) else {
-            return;
-        };
-        self.pending_by_stream
-            .entry(key)
-            .or_default()
-            .push_back(PendingHttpRequest {
-                action_id: action.action_id.clone(),
-                sequence,
-            });
-    }
-
-    fn annotate_response(&mut self, action: &mut SemanticAction) {
-        let Some(status_code) = http_status_code(action) else {
-            return;
-        };
-        let Some(response_sequence) = http_payload_sequence(action) else {
-            return;
-        };
-        let Some(key) = HttpExchangeKey::from_http_message(action) else {
-            return;
-        };
-        let Some(requests) = self.pending_by_stream.get_mut(&key) else {
-            return;
-        };
-        let Some(request) = requests.front() else {
-            return;
-        };
-        if request.sequence > response_sequence {
-            return;
-        }
-        action.attributes.insert(
-            attrs::http_response::REQUEST_ACTION_ID.to_string(),
-            request.action_id.clone(),
-        );
-        if final_http_response(status_code) {
-            requests.pop_front();
-        }
-        if requests.is_empty() {
-            self.pending_by_stream.remove(&key);
-        }
-    }
-}
-
-impl HttpExchangeKey {
-    fn from_http_message(action: &SemanticAction) -> Option<Self> {
-        if action.kind != SemanticActionKind::HttpMessage {
-            return None;
-        }
-        Some(Self {
-            trace_id: action.trace_id,
-            process: action.process.clone(),
-            stream_key: action.attributes.get(HTTP_STREAM_KEY_ATTR)?.clone(),
-            stream_id: action.attributes.get(HTTP_STREAM_ID_ATTR).cloned(),
-        })
-    }
-}
-
-fn http_message_direction_operation(action: &SemanticAction) -> Option<(&str, &str)> {
-    Some((
-        action.attributes.get(HTTP_DIRECTION_ATTR)?.as_str(),
-        action.attributes.get(attrs::http::OPERATION)?.as_str(),
-    ))
-}
-
-fn http_payload_sequence(action: &SemanticAction) -> Option<u64> {
-    action
-        .attributes
-        .get(HTTP_PAYLOAD_SEQUENCE_ATTR)?
-        .parse()
-        .ok()
-}
-
-fn http_status_code(action: &SemanticAction) -> Option<u16> {
-    action.attributes.get(HTTP_STATUS_CODE_ATTR)?.parse().ok()
-}
-
-fn final_http_response(status_code: u16) -> bool {
-    !(100..=199).contains(&status_code) || status_code == 101
 }
 
 fn event_projects_semantic_action_boundary(event: &DomainEvent) -> bool {

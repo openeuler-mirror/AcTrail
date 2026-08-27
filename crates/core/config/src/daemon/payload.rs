@@ -9,6 +9,7 @@ pub const DEFAULT_MCP_PARSE_BUFFER_MAX_BYTES: u64 = 4_194_304;
 pub const DEFAULT_MCP_STDIO_CANDIDATE_MAX_BYTES: u64 = 65_536;
 /// Maximum number of stdio bundles simultaneously awaiting MCP confirmation.
 pub const DEFAULT_MCP_PENDING_STDIO_CANDIDATE_MAX_ENTRIES: u32 = 1_024;
+pub const DEFAULT_TLS_BINARY_ANALYSIS_CACHE_CAPACITY: u32 = 256;
 pub const DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS: u64 = 30_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -313,6 +314,7 @@ pub struct PayloadTlsConfig {
     pub sync_event_socket_path: PathBuf,
     pub sync_socket_mode: u32,
     pub sync_match_limit: u32,
+    pub binary_analysis_cache_capacity: u32,
     pub dynamic_exec_plan_timeout_ms: u64,
     pub sync_flow_control_enabled: bool,
     pub sync_flow_sniff_bytes: u32,

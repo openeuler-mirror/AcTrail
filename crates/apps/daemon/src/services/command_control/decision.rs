@@ -46,7 +46,7 @@ impl CommandSyscall {
 #[derive(Clone, Debug)]
 pub(crate) struct ExecNotificationContext {
     trace_id: TraceId,
-    pid: u32,
+    task_id: u32,
     process: ProcessIdentity,
     actor: ControlActorProcessIdentity,
     syscall: CommandSyscall,
@@ -83,9 +83,10 @@ impl ExecNotificationContext {
             ));
         }
         let process = resolved.process;
-        let actor = ControlActorIdentityResolver::new(process_registry)
+        let mut actor = ControlActorIdentityResolver::new(process_registry)
             .resolve(process)
             .map_err(|error| format!("{}: {}", error.code, error.message))?;
+        actor.task_id = Some(notification.pid);
         let path_pointer = match syscall {
             CommandSyscall::Execve => notification.data.args[0],
             CommandSyscall::Execveat => notification.data.args[1],
@@ -119,7 +120,7 @@ impl ExecNotificationContext {
         )?;
         Ok(Some(Self {
             trace_id: listener_trace_id,
-            pid: notification.pid,
+            task_id: notification.pid,
             process,
             actor,
             syscall,
@@ -143,7 +144,7 @@ impl ExecNotificationContext {
             return Ok(());
         }
         let snapshot = ArgvSnapshotReader::new(
-            self.pid,
+            self.task_id,
             self.argv_pointer,
             max_count,
             max_arg_bytes,
@@ -164,7 +165,7 @@ impl ExecNotificationContext {
     }
 
     pub(crate) fn actor_pid(&self) -> u32 {
-        self.pid
+        self.actor.pid
     }
 
     pub(super) fn process_generation(&self) -> u64 {

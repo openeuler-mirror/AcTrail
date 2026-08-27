@@ -54,6 +54,12 @@ pub(crate) struct SeccompIdentityPreparation {
     pub(crate) inherited_record: Option<ProcessRecord>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SeccompTaskStatus {
+    process_pid: u32,
+    parent_pid: u32,
+}
+
 pub(crate) struct SeccompNotificationIdentityRegistrar<'a> {
     process_manager: &'a mut ProcessIdentityManager,
     identity_reader: &'a dyn ProcessIdentityReader,
@@ -80,14 +86,21 @@ impl<'a> SeccompNotificationIdentityRegistrar<'a> {
         &mut self,
         trace_runtime: &mut TraceRuntime,
         trace_id: TraceId,
-        pid: u32,
+        task_id: u32,
     ) -> Result<SeccompIdentityPreparation, ControlError> {
-        let observation = self.read_identity(pid, "command_control_identity")?;
-        let resolution = self.resolve_or_create(observation)?;
-        let process = resolution.identity;
-        if resolution.created || resolution.enriched {
-            self.persist_process_record(process)?;
-        }
+        let task_status = self.read_task_status(task_id)?;
+        let process_pid = task_status.process_pid;
+        let process = match self.verified_active_process(process_pid)? {
+            Some(process) => process,
+            None => {
+                let observation = self.read_identity(process_pid, "command_control_identity")?;
+                let resolution = self.resolve_or_create(observation)?;
+                if resolution.created || resolution.enriched {
+                    self.persist_process_record(resolution.identity)?;
+                }
+                resolution.identity
+            }
+        };
         if let Some(resolved) = TraceIdentityResolver::new(trace_runtime, self.process_manager)
             .match_process_in_trace(trace_id, process)
         {
@@ -97,16 +110,11 @@ impl<'a> SeccompNotificationIdentityRegistrar<'a> {
             return Err(ControlError::new(
                 "command_control_identity",
                 format!(
-                    "listener trace {trace_id} received pid {pid} owned by trace {other_trace_id}"
+                    "listener trace {trace_id} received task {task_id} from process {process_pid} owned by trace {other_trace_id}"
                 ),
             ));
         }
-        let parent_pid = self.read_parent_pid(pid)?.ok_or_else(|| {
-            ControlError::new(
-                "command_control_identity",
-                format!("cannot confirm parent generation for pid {pid}"),
-            )
-        })?;
+        let parent_pid = task_status.parent_pid;
         let parent_observation =
             self.read_identity(parent_pid, "command_control_parent_identity")?;
         let parent = self
@@ -235,34 +243,97 @@ impl<'a> SeccompNotificationIdentityRegistrar<'a> {
         })
     }
 
-    fn read_parent_pid(&self, pid: u32) -> Result<Option<u32>, ControlError> {
-        let raw = match std::fs::read_to_string(format!("/proc/{pid}/status")) {
-            Ok(raw) => raw,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => {
-                return Err(ControlError::new(
-                    "command_control_parent_identity",
-                    error.to_string(),
-                ));
-            }
+    fn verified_active_process(
+        &self,
+        process_pid: u32,
+    ) -> Result<Option<ProcessIdentity>, ControlError> {
+        let Some(process) = self.process_manager.active_host_pid(process_pid) else {
+            return Ok(None);
         };
-        raw.lines()
-            .find_map(|line| line.strip_prefix("PPid:"))
-            .map(str::trim)
-            .map(|value| {
-                value.parse::<u32>().map(Some).map_err(|error| {
+        let Some(host) = self
+            .process_manager
+            .record(process)
+            .and_then(|record| record.host.as_ref())
+        else {
+            return Ok(None);
+        };
+        if host.pid != process_pid || host.start_time_ticks == 0 {
+            return Ok(None);
+        }
+        let raw =
+            std::fs::read_to_string(format!("/proc/{process_pid}/stat")).map_err(|error| {
+                ControlError::new(
+                    "command_control_identity",
+                    format!("cannot read stat for process {process_pid}: {error}"),
+                )
+            })?;
+        let start_time_ticks = raw
+            .rfind(')')
+            .and_then(|close_paren| raw.get(close_paren + 2..))
+            .and_then(|remainder| remainder.split_whitespace().nth(19))
+            .ok_or_else(|| {
+                ControlError::new(
+                    "command_control_identity",
+                    format!("missing start time for process {process_pid}"),
+                )
+            })?
+            .parse::<u64>()
+            .map_err(|error| {
+                ControlError::new(
+                    "command_control_identity",
+                    format!("parse start time for process {process_pid}: {error}"),
+                )
+            })?;
+        Ok((host.start_time_ticks == start_time_ticks).then_some(process))
+    }
+
+    fn read_task_status(&self, task_id: u32) -> Result<SeccompTaskStatus, ControlError> {
+        let raw = std::fs::read_to_string(format!("/proc/{task_id}/status")).map_err(|error| {
+            ControlError::new(
+                "command_control_identity",
+                format!("cannot read status for task {task_id}: {error}"),
+            )
+        })?;
+        let mut process_pid = None;
+        let mut parent_pid = None;
+        for line in raw.lines() {
+            if process_pid.is_none()
+                && let Some(value) = line.strip_prefix("Tgid:")
+            {
+                process_pid = Some(value.trim().parse::<u32>().map_err(|error| {
+                    ControlError::new(
+                        "command_control_identity",
+                        format!("parse Tgid for task {task_id}: {error}"),
+                    )
+                })?);
+            } else if parent_pid.is_none()
+                && let Some(value) = line.strip_prefix("PPid:")
+            {
+                parent_pid = Some(value.trim().parse::<u32>().map_err(|error| {
                     ControlError::new(
                         "command_control_parent_identity",
-                        format!("parse PPid for pid {pid}: {error}"),
+                        format!("parse PPid for task {task_id}: {error}"),
                     )
-                })
-            })
-            .unwrap_or_else(|| {
-                Err(ControlError::new(
+                })?);
+            }
+            if process_pid.is_some() && parent_pid.is_some() {
+                break;
+            }
+        }
+        Ok(SeccompTaskStatus {
+            process_pid: process_pid.ok_or_else(|| {
+                ControlError::new(
+                    "command_control_identity",
+                    format!("missing Tgid for task {task_id}"),
+                )
+            })?,
+            parent_pid: parent_pid.ok_or_else(|| {
+                ControlError::new(
                     "command_control_parent_identity",
-                    format!("missing PPid for pid {pid}"),
-                ))
-            })
+                    format!("missing PPid for task {task_id}"),
+                )
+            })?,
+        })
     }
 
     fn capturable_preparation(

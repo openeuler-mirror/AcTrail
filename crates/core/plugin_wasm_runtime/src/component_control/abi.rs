@@ -11,6 +11,7 @@ pub const RUNTIME_CONFIG_GET_EXPORT: &str = "get";
 pub const RUNTIME_CONFIG_VALIDATE_EXPORT: &str = "validate";
 pub const RUNTIME_CONFIG_SUBMIT_EXPORT: &str = "submit";
 pub const HOST_IMPORT: &str = "actrail:plugin/host@0.4.0";
+pub const NETWORK_CONTROL_HOST_IMPORT: &str = "actrail:plugin/network-control-host@0.4.0";
 
 pub mod host_import {
     pub const READ_CONFIG: &str = "read-config";
@@ -30,6 +31,15 @@ pub mod host_import {
     pub const COMMAND_POLICY_RULES_APPLY: &str = "command-policy-rules-apply";
 }
 
+pub mod network_host_import {
+    pub const NETWORK_ACTION_CURRENT_CONTEXT_QUERY: &str = "network-action-current-context-query";
+    pub const NETWORK_POLICY_RULES_VERSION_GET: &str = "network-policy-rules-version-get";
+    pub const NETWORK_POLICY_RULES_LIST: &str = "network-policy-rules-list";
+    pub const NETWORK_POLICY_RULES_MATCH_DRY_RUN: &str = "network-policy-rules-match-dry-run";
+    pub const NETWORK_POLICY_RULES_VALIDATE: &str = "network-policy-rules-validate";
+    pub const NETWORK_POLICY_RULES_APPLY: &str = "network-policy-rules-apply";
+}
+
 pub mod grant {
     pub const CONTEXT_QUERY: &str = "context-query";
     pub const FILE_ACCESS_CURRENT_MATCH_GET: &str = "file-access.current-match-get";
@@ -43,6 +53,11 @@ pub mod grant {
     pub const COMMAND_POLICY_RULES_MATCH_DRY_RUN: &str = "command-policy.rules.match-dry-run";
     pub const COMMAND_POLICY_RULES_VALIDATE: &str = "command-policy.rules.validate";
     pub const COMMAND_POLICY_RULES_APPLY_PREFIX: &str = "command-policy.rules.apply:";
+    pub const NETWORK_ACTION_CURRENT_CONTEXT_QUERY: &str = "network-action.current-context-query";
+    pub const NETWORK_POLICY_RULES_READ: &str = "network-policy.rules.read";
+    pub const NETWORK_POLICY_RULES_MATCH_DRY_RUN: &str = "network-policy.rules.match-dry-run";
+    pub const NETWORK_POLICY_RULES_VALIDATE: &str = "network-policy.rules.validate";
+    pub const NETWORK_POLICY_RULES_APPLY_PREFIX: &str = "network-policy.rules.apply:";
 }
 
 pub mod decision_request {
@@ -143,4 +158,9 @@ pub mod command_policy {
     pub const SOURCE_REVISION: &str = "source-revision";
     pub const MATCHED: &str = "matched";
     pub const RESOLVED_EXECUTABLE: &str = "resolved-executable";
+}
+
+pub mod network_policy {
+    pub const DECISION: &str = "decision";
+    pub const REMOTE: &str = "remote";
 }

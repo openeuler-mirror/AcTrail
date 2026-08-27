@@ -20,6 +20,9 @@ FIXTURE_DIR = ROOT / "tests/plugins/command-execution"
 INSTANCE = "wasm.command-deny"
 RUN_DIR = ROOT / "temp/command-execution-e2e"
 
+sys.path.insert(0, str(ROOT / "tests" / "process"))
+from action_snapshot import EventSnapshot  # noqa: E402
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -333,6 +336,7 @@ def wait_for_agent_output(process: subprocess.Popen[str], timeout_sec: float) ->
 
 def wait_for_command_control_events(
     actrailctl: Path,
+    actrailviewer: Path,
     config: Path,
     storage_path: Path,
     denied_path: Path,
@@ -343,10 +347,8 @@ def wait_for_command_control_events(
     observed_alerts: list[tuple[str, str, str, str]] = []
     for _ in range(attempts):
         run_checked([str(actrailctl), "--config", str(config), "list-traces"])
+        events = EventSnapshot.load(actrailviewer, config, 1).events("enforcement")
         with sqlite3.connect(storage_path) as connection:
-            rows = connection.execute(
-                "select payload_fields from events where trace_id = 1 and payload_variant = 'enforcement'"
-            ).fetchall()
             alerts = connection.execute(
                 """
                 select d.definition_key, d.kind, d.producer_plugin_id, a.payload_json
@@ -356,12 +358,12 @@ def wait_for_command_control_events(
                 """
             ).fetchall()
         observed_alerts = alerts
-        for (payload_fields,) in rows:
-            fields = decode_map(payload_fields)
+        for event in events:
+            fields = event.payload
             observed.append(fields)
             if fields.get("operation") not in ("execve", "execveat"):
                 continue
-            metadata = decode_map(fields.get("metadata", ""))
+            metadata = fields.get("metadata", {})
             if (
                 fields.get("backend") == "seccomp-user-notify"
                 and fields.get("decision") == "deny"
@@ -418,6 +420,7 @@ def main() -> int:
     bin_dir = ROOT / args.bin_dir
     actraild = require_binary(bin_dir, "actraild")
     actrailctl = require_binary(bin_dir, "actrailctl")
+    actrailviewer = require_binary(bin_dir, "actrailviewer")
     agent_script = FIXTURE_DIR / "agent.py"
 
     if RUN_DIR.exists():
@@ -516,6 +519,7 @@ def main() -> int:
                 raise RuntimeError("denied command executed despite plugin denial")
             wait_for_command_control_events(
                 actrailctl,
+                actrailviewer,
                 config,
                 tmp / "actrail.sqlite",
                 denied,

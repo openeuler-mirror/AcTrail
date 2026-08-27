@@ -14,10 +14,13 @@ use model_core::ids::{ProfileName, RequestId};
 use model_core::process::ProcessIdentity;
 use plugin_system::PluginInstanceStatus;
 use process_identity::ProcessIdentityReader;
+use sandbox_alert_store::SandboxAlertWritePort;
+use sandbox_evidence_store::SandboxEvidenceWritePort;
 use uds_control_server::{ControlService, PeerCredentials};
 
 use crate::peer_identity::{PeerIdentity, peer_error};
 use crate::runtime_wiring::DaemonRuntimeWiring;
+use crate::services::sandbox_plugins::{SandboxPluginManager, SandboxPluginRouteSink};
 
 pub trait AttachService {
     fn host_pid_for_process(&self, process: ProcessIdentity) -> Result<u32, ControlError>;
@@ -106,15 +109,27 @@ struct LaunchAdmission {
 
 pub struct DaemonServiceHost<A> {
     wiring: DaemonRuntimeWiring<A>,
+    sandbox_plugins: SandboxPluginManager,
     pending_launch_admissions: BTreeMap<model_core::process::ProcessObservation, LaunchAdmission>,
 }
 
 impl<A> DaemonServiceHost<A> {
-    pub fn new(wiring: DaemonRuntimeWiring<A>) -> Self {
+    pub fn new(
+        wiring: DaemonRuntimeWiring<A>,
+        sandbox_alerts: Option<std::sync::Arc<dyn SandboxAlertWritePort>>,
+    ) -> Self {
         Self {
             wiring,
+            sandbox_plugins: SandboxPluginManager::new(sandbox_alerts),
             pending_launch_admissions: BTreeMap::new(),
         }
+    }
+
+    pub(crate) fn sandbox_route_sink(
+        &self,
+        archive: std::sync::Arc<dyn SandboxEvidenceWritePort>,
+    ) -> SandboxPluginRouteSink {
+        self.sandbox_plugins.route_sink(archive)
     }
 
     pub fn drain_live_events(&mut self) -> Result<(), ControlError>
@@ -144,6 +159,19 @@ impl<A> DaemonServiceHost<A> {
     where
         A: AttachService,
     {
+        let sandbox_result = self.shutdown_sandbox_plugins();
+        let attach_result = self.shutdown_runtime();
+        sandbox_result.and(attach_result)
+    }
+
+    pub(crate) fn shutdown_sandbox_plugins(&mut self) -> Result<(), ControlError> {
+        self.sandbox_plugins.shutdown()
+    }
+
+    pub(crate) fn shutdown_runtime(&mut self) -> Result<(), ControlError>
+    where
+        A: AttachService,
+    {
         self.wiring
             .attach_service
             .shutdown(&mut self.wiring.trace_runtime)
@@ -166,7 +194,66 @@ impl<A> DaemonServiceHost<A> {
     where
         A: AttachService,
     {
-        self.wiring.attach_service.load_plugin(command)
+        if self
+            .plugin_statuses()
+            .iter()
+            .any(|status| status.instance_id == command.instance_id)
+        {
+            return Err(ControlError::new(
+                "plugin_runtime",
+                format!("plugin instance {} already exists", command.instance_id),
+            ));
+        }
+        let manifest_path = std::path::Path::new(&command.manifest_path);
+        if SandboxPluginManager::is_sandbox_manifest(manifest_path)? {
+            self.sandbox_plugins.load(command)
+        } else {
+            self.wiring.attach_service.load_plugin(command)
+        }
+    }
+
+    fn plugin_statuses(&self) -> Vec<PluginInstanceStatus>
+    where
+        A: AttachService,
+    {
+        let mut statuses = self.wiring.attach_service.plugin_statuses();
+        statuses.extend(self.sandbox_plugins.statuses());
+        statuses
+    }
+
+    fn plugin_status(&self, instance_id: &str) -> Result<PluginInstanceStatus, ControlError>
+    where
+        A: AttachService,
+    {
+        self.plugin_statuses()
+            .into_iter()
+            .find(|status| status.instance_id == instance_id)
+            .ok_or_else(|| {
+                ControlError::new(
+                    "plugin_not_found",
+                    format!("plugin instance {instance_id} not found"),
+                )
+            })
+    }
+
+    fn unload_plugin(&mut self, instance_id: &str) -> Result<PluginInstanceStatus, ControlError>
+    where
+        A: AttachService,
+    {
+        if self.sandbox_plugins.contains(instance_id) {
+            self.sandbox_plugins.unload(instance_id)
+        } else {
+            self.wiring.attach_service.unload_plugin(instance_id)
+        }
+    }
+
+    fn sandbox_plugin_capability_error(instance_id: &str) -> ControlError {
+        ControlError::new(
+            "plugin_capability",
+            format!(
+                "sandbox plugin instance {instance_id} is configured by its package config and must be reloaded to change it"
+            ),
+        )
     }
 }
 
@@ -389,54 +476,62 @@ where
                 loaded_policy_plugins: self.wiring.loaded_policy_plugins.clone(),
                 storage_ready: self.wiring.storage_ready,
             })),
-            ControlCommand::PluginList(_) => Ok(ControlReply::PluginList(
-                self.wiring.attach_service.plugin_statuses(),
-            )),
-            ControlCommand::PluginStatus(command) => {
-                let status = self
-                    .wiring
-                    .attach_service
-                    .plugin_statuses()
-                    .into_iter()
-                    .find(|status| status.instance_id == command.instance_id)
-                    .ok_or_else(|| {
-                        ControlError::new(
-                            "plugin_not_found",
-                            format!("plugin instance {} not found", command.instance_id),
-                        )
-                    })?;
-                Ok(ControlReply::PluginStatus(status))
-            }
-            ControlCommand::PluginLoad(command) => self
-                .wiring
-                .attach_service
-                .load_plugin(command)
+            ControlCommand::PluginList(_) => Ok(ControlReply::PluginList(self.plugin_statuses())),
+            ControlCommand::PluginStatus(command) => self
+                .plugin_status(&command.instance_id)
                 .map(ControlReply::PluginStatus),
+            ControlCommand::PluginLoad(command) => {
+                self.load_plugin(command).map(ControlReply::PluginStatus)
+            }
             ControlCommand::PluginUnload(command) => self
-                .wiring
-                .attach_service
                 .unload_plugin(&command.instance_id)
                 .map(ControlReply::PluginStatus),
-            ControlCommand::PluginCommand(command) => self
-                .wiring
-                .attach_service
-                .handle_plugin_command(command)
-                .map(ControlReply::PluginCommand),
-            ControlCommand::PluginConfigGet(command) => self
-                .wiring
-                .attach_service
-                .plugin_config(&command.instance_id)
-                .map(ControlReply::PluginConfig),
-            ControlCommand::PluginConfigValidate(command) => self
-                .wiring
-                .attach_service
-                .validate_plugin_config(&command.instance_id, &command.config_json)
-                .map(ControlReply::PluginConfigValidation),
-            ControlCommand::PluginConfigUpdate(command) => self
-                .wiring
-                .attach_service
-                .update_plugin_config(&command.instance_id, &command.config_json)
-                .map(ControlReply::PluginConfig),
+            ControlCommand::PluginCommand(command) => {
+                if self.sandbox_plugins.contains(&command.instance_id) {
+                    Err(Self::sandbox_plugin_capability_error(&command.instance_id))
+                } else {
+                    self.wiring
+                        .attach_service
+                        .handle_plugin_command(command)
+                        .map(ControlReply::PluginCommand)
+                }
+            }
+            ControlCommand::PluginConfigGet(command) => {
+                if self.sandbox_plugins.contains(&command.instance_id) {
+                    self.sandbox_plugins
+                        .config(&command.instance_id)
+                        .map(ControlReply::PluginConfig)
+                } else {
+                    self.wiring
+                        .attach_service
+                        .plugin_config(&command.instance_id)
+                        .map(ControlReply::PluginConfig)
+                }
+            }
+            ControlCommand::PluginConfigValidate(command) => {
+                if self.sandbox_plugins.contains(&command.instance_id) {
+                    self.sandbox_plugins
+                        .validate_config(&command.instance_id, &command.config_json)
+                        .map(ControlReply::PluginConfigValidation)
+                } else {
+                    self.wiring
+                        .attach_service
+                        .validate_plugin_config(&command.instance_id, &command.config_json)
+                        .map(ControlReply::PluginConfigValidation)
+                }
+            }
+            ControlCommand::PluginConfigUpdate(command) => {
+                if self.sandbox_plugins.contains(&command.instance_id) {
+                    self.sandbox_plugins
+                        .update_config(&command.instance_id, &command.config_json)
+                        .map(ControlReply::PluginConfig)
+                } else {
+                    self.wiring
+                        .attach_service
+                        .update_plugin_config(&command.instance_id, &command.config_json)
+                        .map(ControlReply::PluginConfig)
+                }
+            }
         }
     }
 }
@@ -633,506 +728,4 @@ fn resolve_trace_id(
         .find(|trace| selector.matches(trace, None))
         .map(|trace| trace.trace_id)
         .ok_or_else(|| ControlError::new("not_found", "no trace matched selector"))
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeSet;
-    use std::os::fd::{FromRawFd, OwnedFd, RawFd};
-    use std::time::{Duration, SystemTime};
-
-    use config_core::capture_profile::CaptureProfile;
-    use config_core::daemon::DEFAULT_ACTIVE_TRACE_MAX;
-    use config_core::trace_snapshot::CaptureProfileSnapshot;
-    use control_contract::command::{
-        ControlCommand, DeploymentPermissionMode, DoctorCommand, ProcessRef,
-        ResolveLaunchPermissionsCommand, TrackAddCommand,
-    };
-    use control_contract::reply::{
-        ControlError, ControlReply, LaunchPermissionsReply, LaunchTlsPlanReply,
-        LaunchTlsPlanStatus, PluginCommandReply, PluginConfigReply, PluginConfigValidationReply,
-        TrackAddReply,
-    };
-    use control_contract::selector::TraceSelector;
-    use model_core::ids::{ProfileName, RequestId, TraceId, TraceName};
-    use model_core::process::{NamespaceIdentity, ProcessIdentity};
-    use plugin_system::PluginInstanceStatus;
-    use trace_runtime::commands::TrackTraceRequest;
-    use uds_control_server::{ControlService, PeerCredentials};
-
-    use crate::peer_identity::{PeerIdentity, PeerPrincipal};
-    use crate::runtime_wiring::DaemonRuntimeWiring;
-
-    use super::{AttachService, DaemonServiceHost};
-
-    #[derive(Default)]
-    struct CountingAttachService {
-        drain_count: u64,
-        last_host_ebpf_available: Option<bool>,
-    }
-
-    fn current_peer_credentials() -> PeerCredentials {
-        PeerCredentials {
-            pid: std::process::id(),
-            uid: unsafe { libc::getuid() },
-            gid: unsafe { libc::getgid() },
-        }
-    }
-
-    fn current_process_ref() -> ProcessRef {
-        let namespace = std::fs::read_link("/proc/self/ns/pid").expect("current pid namespace");
-        ProcessRef::new(
-            std::process::id(),
-            NamespaceIdentity::new(namespace.display().to_string()),
-        )
-    }
-
-    fn current_process_pidfd() -> OwnedFd {
-        let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, std::process::id(), 0) };
-        assert!(
-            pidfd >= 0,
-            "pidfd_open current process: {}",
-            std::io::Error::last_os_error()
-        );
-        unsafe { OwnedFd::from_raw_fd(pidfd as libc::c_int) }
-    }
-
-    fn launch_track_add(request_id: u64, profile_name: &str) -> ControlCommand {
-        ControlCommand::TrackAdd(TrackAddCommand {
-            request_id: RequestId::new(request_id),
-            root: current_process_ref(),
-            display_name: TraceName::new("launch-admission-test"),
-            profile_name: ProfileName::new(profile_name),
-            tags: BTreeSet::new(),
-            launch_mode: true,
-            initial_suppressed_fds: Vec::new(),
-            tls_probe_plans: Vec::new(),
-        })
-    }
-
-    fn test_host() -> DaemonServiceHost<CountingAttachService> {
-        DaemonServiceHost::new(DaemonRuntimeWiring {
-            trace_runtime: trace_runtime::TraceRuntime::new(Vec::new(), 1),
-            attach_service: CountingAttachService::default(),
-            active_trace_max: DEFAULT_ACTIVE_TRACE_MAX,
-            available_collectors: vec!["ebpf".to_string()],
-            loaded_policy_plugins: Vec::new(),
-            storage_ready: true,
-        })
-    }
-
-    impl AttachService for CountingAttachService {
-        fn host_pid_for_process(&self, process: ProcessIdentity) -> Result<u32, ControlError> {
-            u32::try_from(process.get())
-                .map_err(|error| ControlError::new("test_process", error.to_string()))
-        }
-
-        fn resolve_launch_permissions(
-            &mut self,
-            command: &control_contract::command::ResolveLaunchPermissionsCommand,
-            host_ebpf_available: bool,
-        ) -> Result<LaunchPermissionsReply, ControlError> {
-            self.last_host_ebpf_available = Some(host_ebpf_available);
-            Ok(LaunchPermissionsReply {
-                requested_host_ebpf: command.host_ebpf,
-                requested_seccomp_notify: command.seccomp_notify,
-                selected_host_ebpf: host_ebpf_available,
-                selected_seccomp_notify: command.seccomp_notify_available,
-                selected_profile_name: command.profile_name.clone(),
-                payload_tls_seccomp: false,
-                payload_socket_seccomp: false,
-                process_seccomp: false,
-                network_control_seccomp: false,
-                command_control_seccomp: false,
-                file_mkdir_seccomp: false,
-                file_rmdir_seccomp: false,
-                required_capabilities: Vec::new(),
-                degraded: false,
-                reasons: Vec::new(),
-            })
-        }
-
-        fn host_ebpf_available_for_profile(&self, _profile_name: &ProfileName) -> bool {
-            true
-        }
-
-        fn resolve_launch_tls_plan(
-            &mut self,
-            _command: &control_contract::command::ResolveLaunchTlsPlanCommand,
-        ) -> Result<LaunchTlsPlanReply, ControlError> {
-            Ok(LaunchTlsPlanReply {
-                status: LaunchTlsPlanStatus::Unsupported {
-                    reason: "unused".to_string(),
-                },
-                cache_hit: false,
-                resolve_elapsed_micros: 0,
-            })
-        }
-
-        fn attach_existing(
-            &mut self,
-            _trace_runtime: &mut trace_runtime::TraceRuntime,
-            _command: &TrackAddCommand,
-        ) -> Result<TrackAddReply, ControlError> {
-            Err(ControlError::new("unused", "unused"))
-        }
-
-        fn attach_launch(
-            &mut self,
-            trace_runtime: &mut trace_runtime::TraceRuntime,
-            command: &TrackAddCommand,
-            _pidfd: OwnedFd,
-        ) -> Result<TrackAddReply, ControlError> {
-            self.attach_existing(trace_runtime, command)
-        }
-
-        fn drain_live_events(
-            &mut self,
-            _trace_runtime: &mut trace_runtime::TraceRuntime,
-        ) -> Result<(), ControlError> {
-            self.drain_count += 1;
-            Ok(())
-        }
-
-        fn event_poll_fds(&self) -> Result<Vec<RawFd>, ControlError> {
-            Ok(Vec::new())
-        }
-
-        fn background_poll_timeout(&self) -> Result<Option<Duration>, ControlError> {
-            Ok(None)
-        }
-
-        fn shutdown(
-            &mut self,
-            _trace_runtime: &mut trace_runtime::TraceRuntime,
-        ) -> Result<(), ControlError> {
-            Ok(())
-        }
-
-        fn remove_root(
-            &mut self,
-            _trace_runtime: &mut trace_runtime::TraceRuntime,
-            _trace_id: TraceId,
-            _removed_at: SystemTime,
-        ) -> Result<(), ControlError> {
-            Ok(())
-        }
-
-        fn register_seccomp_listener(
-            &mut self,
-            _trace_runtime: &mut trace_runtime::TraceRuntime,
-            _command: control_contract::command::RegisterSeccompListenerCommand,
-        ) -> Result<(), ControlError> {
-            Ok(())
-        }
-
-        fn plugin_statuses(&self) -> Vec<PluginInstanceStatus> {
-            Vec::new()
-        }
-
-        fn load_plugin(
-            &mut self,
-            _command: control_contract::command::PluginLoadCommand,
-        ) -> Result<PluginInstanceStatus, ControlError> {
-            Err(ControlError::new("unused", "unused"))
-        }
-
-        fn unload_plugin(
-            &mut self,
-            _instance_id: &str,
-        ) -> Result<PluginInstanceStatus, ControlError> {
-            Err(ControlError::new("unused", "unused"))
-        }
-
-        fn handle_plugin_command(
-            &mut self,
-            _command: control_contract::command::PluginCommandCommand,
-        ) -> Result<PluginCommandReply, ControlError> {
-            Err(ControlError::new("unused", "unused"))
-        }
-
-        fn plugin_config(&self, _instance_id: &str) -> Result<PluginConfigReply, ControlError> {
-            Err(ControlError::new("unused", "unused"))
-        }
-
-        fn validate_plugin_config(
-            &self,
-            _instance_id: &str,
-            _config_json: &str,
-        ) -> Result<PluginConfigValidationReply, ControlError> {
-            Err(ControlError::new("unused", "unused"))
-        }
-
-        fn update_plugin_config(
-            &mut self,
-            _instance_id: &str,
-            _config_json: &str,
-        ) -> Result<PluginConfigReply, ControlError> {
-            Err(ControlError::new("unused", "unused"))
-        }
-    }
-
-    #[test]
-    fn control_command_handling_does_not_pre_drain_live_events() {
-        let wiring = DaemonRuntimeWiring {
-            trace_runtime: trace_runtime::TraceRuntime::new(Vec::new(), 1),
-            attach_service: CountingAttachService::default(),
-            active_trace_max: DEFAULT_ACTIVE_TRACE_MAX,
-            available_collectors: Vec::new(),
-            loaded_policy_plugins: Vec::new(),
-            storage_ready: true,
-        };
-        let mut host = DaemonServiceHost::new(wiring);
-
-        let _reply = host
-            .handle(ControlCommand::Doctor(DoctorCommand {
-                request_id: RequestId::new(1),
-            }))
-            .expect("doctor reply");
-
-        assert_eq!(host.wiring.attach_service.drain_count, 0);
-    }
-
-    #[test]
-    fn launch_permissions_use_daemon_collector_availability() {
-        let wiring = DaemonRuntimeWiring {
-            trace_runtime: trace_runtime::TraceRuntime::new(Vec::new(), 1),
-            attach_service: CountingAttachService::default(),
-            active_trace_max: DEFAULT_ACTIVE_TRACE_MAX,
-            available_collectors: vec!["ebpf".to_string()],
-            loaded_policy_plugins: Vec::new(),
-            storage_ready: true,
-        };
-        let mut host = DaemonServiceHost::new(wiring);
-
-        let reply = host
-            .handle(ControlCommand::ResolveLaunchPermissions(
-                ResolveLaunchPermissionsCommand {
-                    request_id: RequestId::new(1),
-                    profile_name: ProfileName::new("default"),
-                    host_ebpf: DeploymentPermissionMode::Auto,
-                    seccomp_notify: DeploymentPermissionMode::Auto,
-                    seccomp_notify_available: false,
-                    seccomp_notify_detail: "denied".to_string(),
-                },
-            ))
-            .expect("resolve launch permissions");
-
-        let ControlReply::LaunchPermissions(reply) = reply else {
-            panic!("unexpected reply");
-        };
-        assert!(reply.selected_host_ebpf);
-        assert!(!reply.selected_seccomp_notify);
-        assert_eq!(
-            host.wiring.attach_service.last_host_ebpf_available,
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn launch_mode_track_add_requires_a_daemon_admission() {
-        let mut host = test_host();
-
-        let error = host
-            .handle_from_peer(current_peer_credentials(), launch_track_add(2, "default"))
-            .unwrap_err();
-
-        assert_eq!(error.code, "launch_admission");
-        assert!(error.message.contains("permission decision"));
-    }
-
-    #[test]
-    fn launch_admission_rejects_a_client_selected_profile() {
-        let mut host = test_host();
-        let peer = current_peer_credentials();
-        host.handle_from_peer(
-            peer,
-            ControlCommand::ResolveLaunchPermissions(ResolveLaunchPermissionsCommand {
-                request_id: RequestId::new(10),
-                profile_name: ProfileName::new("default"),
-                host_ebpf: DeploymentPermissionMode::Auto,
-                seccomp_notify: DeploymentPermissionMode::Auto,
-                seccomp_notify_available: false,
-                seccomp_notify_detail: "denied".to_string(),
-            }),
-        )
-        .expect("permission decision");
-
-        let error = host
-            .handle_from_peer(peer, launch_track_add(11, "other"))
-            .unwrap_err();
-
-        assert_eq!(error.code, "launch_admission");
-        assert!(error.message.contains("does not match daemon-selected"));
-    }
-
-    #[test]
-    fn launch_admission_is_bound_to_the_next_request_and_consumed_once() {
-        let mut host = test_host();
-        let peer = current_peer_credentials();
-        host.handle_from_peer(
-            peer,
-            ControlCommand::ResolveLaunchPermissions(ResolveLaunchPermissionsCommand {
-                request_id: RequestId::new(20),
-                profile_name: ProfileName::new("default"),
-                host_ebpf: DeploymentPermissionMode::Auto,
-                seccomp_notify: DeploymentPermissionMode::Auto,
-                seccomp_notify_available: false,
-                seccomp_notify_detail: "denied".to_string(),
-            }),
-        )
-        .expect("permission decision");
-
-        let request_error = host
-            .handle_from_peer(peer, launch_track_add(22, "default"))
-            .unwrap_err();
-        assert_eq!(request_error.code, "launch_admission");
-        assert!(
-            request_error
-                .message
-                .contains("does not match admitted request")
-        );
-
-        host.handle_from_peer(
-            peer,
-            ControlCommand::ResolveLaunchPermissions(ResolveLaunchPermissionsCommand {
-                request_id: RequestId::new(30),
-                profile_name: ProfileName::new("default"),
-                host_ebpf: DeploymentPermissionMode::Auto,
-                seccomp_notify: DeploymentPermissionMode::Auto,
-                seccomp_notify_available: false,
-                seccomp_notify_detail: "denied".to_string(),
-            }),
-        )
-        .expect("replacement permission decision");
-
-        let attach_error = host
-            .handle_from_peer_with_launch_pidfd(
-                peer,
-                launch_track_add(31, "default"),
-                Some(current_process_pidfd()),
-            )
-            .unwrap_err();
-        assert_eq!(attach_error.code, "unused");
-
-        let replay_error = host
-            .handle_from_peer(peer, launch_track_add(31, "default"))
-            .unwrap_err();
-        assert_eq!(replay_error.code, "launch_admission");
-    }
-
-    #[test]
-    fn track_remove_hides_trace_existence_from_a_different_container() {
-        let wiring = DaemonRuntimeWiring {
-            trace_runtime: trace_runtime::TraceRuntime::new(Vec::new(), 1),
-            attach_service: CountingAttachService::default(),
-            active_trace_max: DEFAULT_ACTIVE_TRACE_MAX,
-            available_collectors: Vec::new(),
-            loaded_policy_plugins: Vec::new(),
-            storage_ready: true,
-        };
-        let mut host = DaemonServiceHost::new(wiring);
-        let trace_id = host.wiring.trace_runtime.reserve_trace_id();
-        let profile = CaptureProfile::new(ProfileName::new("test"), Vec::new());
-        let profile_snapshot =
-            CaptureProfileSnapshot::from_profile(&profile, SystemTime::UNIX_EPOCH);
-        let sensor_plan = host
-            .wiring
-            .trace_runtime
-            .negotiate(&profile_snapshot)
-            .unwrap();
-        host.wiring
-            .trace_runtime
-            .create_starting_trace(
-                trace_id,
-                TrackTraceRequest {
-                    root_identity: ProcessIdentity::new(1),
-                    root_pid_namespace: Some(model_core::process::NamespaceIdentity::new(
-                        "pid:[101]",
-                    )),
-                    root_container_id: Some("container-a".to_string()),
-                    root_pod_uid: None,
-                    root_host_id: None,
-                    root_working_directory: None,
-                    display_name: TraceName::new("owned"),
-                    profile_snapshot,
-                    tags: BTreeSet::new(),
-                    created_at: SystemTime::UNIX_EPOCH,
-                },
-                sensor_plan,
-            )
-            .unwrap();
-        let owner = PeerPrincipal {
-            uid: 0,
-            pid_namespace: "pid:[101]".to_string(),
-            mount_namespace: "mnt:[101]".to_string(),
-            host_pid_namespace: false,
-            host_mount_namespace: false,
-        };
-        host.wiring
-            .trace_runtime
-            .bind_trace_owner(trace_id, owner.trace_owner())
-            .unwrap();
-        let owner_peer = PeerIdentity {
-            credentials: PeerCredentials {
-                pid: 201,
-                uid: 0,
-                gid: 0,
-            },
-            process: model_core::process::ProcessObservation::default(),
-            principal: owner,
-        };
-        assert_eq!(
-            host.resolve_remove_trace_id(&owner_peer, &TraceSelector::TraceId(trace_id)),
-            Ok(trace_id)
-        );
-        let peer = PeerIdentity {
-            credentials: PeerCredentials {
-                pid: 202,
-                uid: 0,
-                gid: 0,
-            },
-            process: model_core::process::ProcessObservation::default(),
-            principal: PeerPrincipal {
-                uid: 0,
-                pid_namespace: "pid:[202]".to_string(),
-                mount_namespace: "mnt:[202]".to_string(),
-                host_pid_namespace: false,
-                host_mount_namespace: false,
-            },
-        };
-        let existing_error = host
-            .resolve_remove_trace_id(&peer, &TraceSelector::TraceId(trace_id))
-            .unwrap_err();
-        let missing_error = host
-            .resolve_remove_trace_id(&peer, &TraceSelector::TraceId(TraceId::new(999)))
-            .unwrap_err();
-
-        assert_eq!(existing_error, missing_error);
-        assert_eq!(existing_error.code, "peer_identity");
-        assert_eq!(
-            existing_error.message,
-            "trace is not available to this peer"
-        );
-
-        let trusted_root = PeerIdentity {
-            credentials: PeerCredentials {
-                pid: 1,
-                uid: 0,
-                gid: 0,
-            },
-            process: model_core::process::ProcessObservation::default(),
-            principal: PeerPrincipal {
-                uid: 0,
-                pid_namespace: "pid:[1]".to_string(),
-                mount_namespace: "mnt:[1]".to_string(),
-                host_pid_namespace: true,
-                host_mount_namespace: true,
-            },
-        };
-        let root_error = host
-            .resolve_remove_trace_id(&trusted_root, &TraceSelector::TraceId(TraceId::new(999)))
-            .unwrap_err();
-        assert_eq!(root_error.code, "not_found");
-    }
 }

@@ -5,8 +5,10 @@
 //! report/plan projections, while the daemon consumes `ProbeResolution`
 //! containing one or more complete plans.
 
+use std::rc::Rc;
+
 use crate::binary::resolve_entry_elf;
-use crate::elf::{DEFAULT_LOW_MEMORY_CHUNK_BYTES, ElfImage, ScanMode};
+use crate::elf::{BinaryAnalysisCache, DEFAULT_LOW_MEMORY_CHUNK_BYTES, ElfImage, ScanMode};
 use crate::fast::{FastProbeRequest, ProbeConsumer, require_arch};
 use crate::plan::{ProbePointPlan, TargetIdentity};
 use crate::probe_detector::contract::detection::{
@@ -47,7 +49,27 @@ pub fn resolve_plans_with_scan(
     scan: ScanMode,
     mode: ResolveMode,
 ) -> ToolResult<ProbeResolution> {
-    let outcome = detect_outcome(&request, consumer, scan, mode == ResolveMode::All)?;
+    resolve_plans_with_optional_cache(request, consumer, scan, mode, None)
+}
+
+pub fn resolve_plans_with_analysis_cache(
+    request: FastProbeRequest,
+    consumer: ProbeConsumer,
+    mode: ResolveMode,
+    cache: Rc<BinaryAnalysisCache>,
+) -> ToolResult<ProbeResolution> {
+    resolve_plans_with_optional_cache(request, consumer, ScanMode::Full, mode, Some(cache))
+}
+
+fn resolve_plans_with_optional_cache(
+    request: FastProbeRequest,
+    consumer: ProbeConsumer,
+    scan: ScanMode,
+    mode: ResolveMode,
+    cache: Option<Rc<BinaryAnalysisCache>>,
+) -> ToolResult<ProbeResolution> {
+    let outcome =
+        detect_outcome_with_cache(&request, consumer, scan, mode == ResolveMode::All, cache)?;
     let plans = match outcome {
         DetectionOutcome::Collected(evidence) => {
             let mut plans = Vec::new();
@@ -88,8 +110,26 @@ pub(crate) fn detect_outcome(
     scan: ScanMode,
     collect_all: bool,
 ) -> ToolResult<DetectionOutcome> {
+    detect_outcome_with_cache(request, consumer, scan, collect_all, None)
+}
+
+fn detect_outcome_with_cache(
+    request: &FastProbeRequest,
+    consumer: ProbeConsumer,
+    scan: ScanMode,
+    collect_all: bool,
+    cache: Option<Rc<BinaryAnalysisCache>>,
+) -> ToolResult<DetectionOutcome> {
     let binary = resolve_entry_elf(&request.binary)?;
-    let image = ElfImage::parse_with_mode(&binary, scan, DEFAULT_LOW_MEMORY_CHUNK_BYTES)?;
+    let image = match cache {
+        Some(cache) => ElfImage::parse_with_analysis_cache(
+            &binary,
+            scan,
+            DEFAULT_LOW_MEMORY_CHUNK_BYTES,
+            cache,
+        )?,
+        None => ElfImage::parse_with_mode(&binary, scan, DEFAULT_LOW_MEMORY_CHUNK_BYTES)?,
+    };
     require_arch(image.arch(), request.arch, image.path())?;
     let target = TargetIdentity {
         binary: image.path().to_path_buf(),

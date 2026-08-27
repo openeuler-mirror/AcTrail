@@ -9,7 +9,7 @@ use model_core::payload::{
     PayloadOperationCompletionState, PayloadSourceBoundary, PayloadTruncationState,
 };
 use model_core::process::ProcessObservation;
-use payload_event::RawPayloadSegment;
+use payload_event::{RawPayloadSegment, RawPayloadStreamClose};
 
 use self::connect::{ClientConnectTunnelGate, ConnectTunnelDecision};
 
@@ -106,6 +106,15 @@ impl SocketHttpPayloadGate {
 
     pub(in crate::services) fn forget_trace(&mut self, trace_id: TraceId) {
         self.streams.retain(|key, _| key.trace_id != trace_id.get());
+    }
+
+    pub(in crate::services) fn forget_stream(&mut self, close: &RawPayloadStreamClose) {
+        let stream_key = close.stream_key.to_string();
+        self.streams.retain(|key, _| {
+            key.trace_id != close.trace_id.get()
+                || key.process != close.process
+                || key.stream_key != stream_key
+        });
     }
 }
 

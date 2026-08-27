@@ -42,20 +42,31 @@ openEuler 本身是 Linux 发行版，因此 `file kernel`、启动日志和 `un
 `kata-agent`、匹配的 systemd unit 和 `default-policy.rego`，再通过
 `mkfs.ext4 -d` 封装镜像。该路径不需要 loop mount 或 privileged 容器。
 
-### 安装 Kata 3.32.0 ARM64 host runtime
+### 安装 Kata 3.32.0 host runtime
 
-官方归档固定为：
+官方归档按宿主架构固定，安装器用 `uname -m` 选择接受哪一个：
 
 ```text
+aarch64:
 https://github.com/kata-containers/kata-containers/releases/download/3.32.0/kata-static-3.32.0-arm64.tar.zst
 sha256:8736c054d9223974735394f822000823baef509e1c33405ec798240fa9b6e4b5
+
+x86_64:
+https://github.com/kata-containers/kata-containers/releases/download/3.32.0/kata-static-3.32.0-amd64.tar.zst
+sha256:1449ecea50bd91fa73a94648db195d18950fe869ba4b1f12d05f55f1fa7c1b01
 ```
+
+把另一架构的归档喂给安装器会在摘要校验处失败，不会装上宿主跑不了的二进制。
 
 目标服务器不能直连 GitHub 时，在可联网机器下载、校验并用 `rsync -P` 续传。然后：
 
 ```bash
 sudo ./deploy/virtual-container/host/install-kata-3.32.sh \
   --archive "$PWD/local/kata/downloads/kata-static-3.32.0-arm64.tar.zst"
+
+# x86_64 宿主换成对应归档：
+sudo ./deploy/virtual-container/host/install-kata-3.32.sh \
+  --archive "$PWD/local/kata/downloads/kata-static-3.32.0-amd64.tar.zst"
 ```
 
 安装器展开到 `/opt/kata-3.32.0`，用 `/opt/kata` 和 `/usr/local/bin` symlink 激活；
@@ -98,7 +109,6 @@ tar --zstd -xf "$KATA_WORK/downloads/kata-static-3.32.0-arm64.tar.zst" \
 落在宿主的 `local/kata/`；该过程不需要 privileged 容器或宿主 sudo：
 
 ```bash
-: "${GUEST_OTEL_ENDPOINT:?set a Guest-reachable OTLP/HTTP traces URL}"
 docker run --rm \
   -v "$PWD:/workspace/AcTrail" \
   -w /workspace/AcTrail \
@@ -108,7 +118,6 @@ docker run --rm \
     --output-image /workspace/AcTrail/local/kata/kata-openeuler-actrail-agent332.img \
     --kata-initrd /workspace/AcTrail/local/kata/kata-3.32.0-reference/opt/kata/share/kata-containers/kata-alpine-3.22.initrd \
     --bundle /workspace/AcTrail/local/kata/guest-bundle \
-    --otel-endpoint "$GUEST_OTEL_ENDPOINT" \
     --expected-agent-version 3.32.0 \
     --require-agent-policy \
     --startup-dependency optional
@@ -337,17 +346,17 @@ policy 版本匹配的基础 image，可以使用 `inject-image.sh` 创建副本
 该脚本需要宿主 root/loop mount 权限，且绝不原地修改基础镜像：
 
 ```bash
-: "${GUEST_OTEL_ENDPOINT:?set a Guest-reachable OTLP/HTTP traces URL}"
 sudo ./deploy/virtual-container/guest/inject-image.sh \
   --source-image kata-openeuler-base.img \
   --output-image kata-openeuler-actrail.img \
   --bundle .actrail-guest-bundle \
-  --otel-endpoint "$GUEST_OTEL_ENDPOINT" \
   --startup-dependency optional
 ```
 
-`GUEST_OTEL_ENDPOINT` 必须指向 Guest 网络真实可达的 Collector；Guest 内
-`127.0.0.1` 不是宿主机，bundle 中的 `COLLECTOR_HOST` 也不能进入镜像制品。
+上述命令默认只启用 Guest 本地 SQLite。需要实时 OTLP/HTTP 外送时再追加
+`--otel-endpoint "$GUEST_OTEL_ENDPOINT"`；该地址必须从 Guest 可达，且 network 模式下
+`127.0.0.1` 不是宿主机。无网络 Guest 使用 endpoint
+`http://127.0.0.1:14318/v1/traces` 时还必须追加 `--egress-mode vsock-bridge`。
 
 数据面验收镜像可额外传 `--with-viewer`；生产最小镜像不应包含 viewer。从已安装的
 `configuration-stratovirt.toml` 生成候选配置时只替换必要资产路径，不修改 Kata

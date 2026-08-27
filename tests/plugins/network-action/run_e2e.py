@@ -8,7 +8,6 @@ import os
 import select
 import signal
 import socket
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -20,6 +19,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 FIXTURE_DIR = ROOT / "tests/plugins/network-action"
 INSTANCE = "wasm.network-deny"
+
+sys.path.insert(0, str(ROOT / "tests" / "process"))
+from action_snapshot import EventSnapshot  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -118,7 +120,7 @@ payload_text_enabled = false
 
 [capture]
 profile_name = "network-action-plugin-e2e"
-capabilities = ["proc-exec-context"]
+capabilities = ["proc-exec-context", "enforcement-network-connect-seccomp"]
 
 [ebpf]
 enabled = false
@@ -194,6 +196,13 @@ pending_max_entries = 1024
 [network_control]
 enabled = true
 rules_path = "{rules_path}"
+syscalls = ["connect"]
+default_decision = "allow"
+failure_decision = "deny"
+audit_enabled = true
+audit_default_allow = true
+pending_decision_max = 64
+reusable_cache_max_entries = 4096
 
 [agent_invocation]
 enabled = false
@@ -291,38 +300,6 @@ def run_checked(command: list[str]) -> str:
     return result.stdout
 
 
-def decode_map(raw: str) -> dict[str, str]:
-    def unescape(value: str) -> str:
-        output: list[str] = []
-        index = 0
-        while index < len(value):
-            char = value[index]
-            if char == "\\" and index + 1 < len(value):
-                escaped = value[index + 1]
-                if escaped == "n":
-                    output.append("\n")
-                elif escaped == "e":
-                    output.append("=")
-                elif escaped == "\\":
-                    output.append("\\")
-                else:
-                    output.append("\\")
-                    output.append(escaped)
-                index += 2
-            else:
-                output.append(char)
-                index += 1
-        return "".join(output)
-
-    fields: dict[str, str] = {}
-    for line in raw.splitlines():
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        fields[unescape(key)] = unescape(value)
-    return fields
-
-
 def wait_for_agent_pid(process: subprocess.Popen[str], timeout_sec: float) -> int:
     deadline = time.monotonic() + timeout_sec
     while time.monotonic() < deadline:
@@ -359,34 +336,32 @@ def wait_for_agent_output(process: subprocess.Popen[str], timeout_sec: float) ->
 
 def wait_for_network_control_event(
     actrailctl: Path,
+    actrailviewer: Path,
     config: Path,
-    storage_path: Path,
     expected_endpoint: str,
     attempts: int,
     sleep_sec: float,
 ) -> dict[str, str]:
     for _ in range(attempts):
         run_checked([str(actrailctl), "--config", str(config), "list-traces"])
-        with sqlite3.connect(storage_path) as connection:
-            rows = connection.execute(
-                "select payload_fields from events where trace_id = 1 and payload_variant = 'net'"
-            ).fetchall()
-        for (payload_fields,) in rows:
-            fields = decode_map(payload_fields)
-            if fields.get("remote") != expected_endpoint:
+        for event in EventSnapshot.load(actrailviewer, config, 1).events("net"):
+            fields = event.payload
+            if fields.get("transport") != "inet" or fields.get("remote") != expected_endpoint:
                 continue
-            metadata = decode_map(fields.get("metadata", ""))
+            metadata = fields.get("metadata", {})
             if (
                 metadata.get("subject") == "network-action"
                 and metadata.get("operation") == "connect"
-                and metadata.get("decision_source") == "sync-plugin"
+                and metadata.get("decision_source") == "gray-plugin"
                 and metadata.get("plugin_instance") == INSTANCE
                 and metadata.get("rule_id") == "network-deny"
+                and metadata.get("policy_owner_instance_id") == "actrail.static"
+                and metadata.get("rule_revision") == "1"
                 and metadata.get("decision") == "deny"
             ):
                 return metadata
         time.sleep(sleep_sec)
-    raise RuntimeError("SQLite did not show expected network-action control event")
+    raise RuntimeError("viewer did not show expected network-action control event")
 
 
 def parse_status_fields(output: str) -> dict[str, str]:
@@ -416,6 +391,7 @@ def main() -> int:
     bin_dir = ROOT / args.bin_dir
     actraild = require_binary(bin_dir, "actraild")
     actrailctl = require_binary(bin_dir, "actrailctl")
+    actrailviewer = require_binary(bin_dir, "actrailviewer")
     agent_script = FIXTURE_DIR / "agent.py"
 
     allowed_server = TcpProbeServer("allowed")
@@ -495,8 +471,8 @@ def main() -> int:
                     raise RuntimeError(f"denied server received data despite plugin denial: {denied_server.accepted!r}")
                 wait_for_network_control_event(
                     actrailctl,
+                    actrailviewer,
                     config,
-                    tmp / "actrail.sqlite",
                     denied_endpoint,
                     args.drain_attempts,
                     args.drain_sleep_sec,

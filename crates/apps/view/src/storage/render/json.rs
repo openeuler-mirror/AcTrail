@@ -3,6 +3,7 @@
 use std::collections::BTreeSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use model_core::event::{DomainEvent, EventPayload};
 use model_core::payload::{PayloadDirection, PayloadSegment};
 use model_core::process::ProcessIdentity;
 use model_core::trace::TraceRecord;
@@ -17,6 +18,11 @@ pub(super) fn render_traces(traces: Vec<TraceRecord>) -> Result<String, String> 
 pub(super) fn render_payloads(segments: Vec<PayloadSegment>) -> Result<String, String> {
     let payloads = segments.iter().map(payload_json).collect::<Vec<_>>();
     render(json!({ "payloads": payloads }))
+}
+
+pub(super) fn render_events(events: Vec<DomainEvent>) -> Result<String, String> {
+    let events = events.iter().map(event_json).collect::<Vec<_>>();
+    render(json!({ "events": events }))
 }
 
 pub(super) fn render_semantic_actions(
@@ -100,7 +106,6 @@ fn action_json(action: &SemanticAction) -> Value {
         "process": process_json(&action.process),
         "status": action.status.as_str(),
         "completeness": action.completeness.as_str(),
-        "confidence_millis": action.confidence_millis,
         "attributes": &action.attributes,
         "evidence": action.evidence.iter().map(evidence_json).collect::<Vec<_>>(),
     })
@@ -132,6 +137,54 @@ fn process_json(process: &ProcessIdentity) -> Value {
     json!({
         "process_id": process.get(),
     })
+}
+
+fn event_json(event: &DomainEvent) -> Value {
+    json!({
+        "event_id": event.envelope.event_id.to_string(),
+        "event_id_raw": event.envelope.event_id.get(),
+        "trace_id": event.envelope.trace_id.to_string(),
+        "trace_id_raw": event.envelope.trace_id.get(),
+        "observed_at_unix_nanos": unix_nanos(event.envelope.observed_at),
+        "process": process_json(&event.envelope.process),
+        "collector": event.envelope.collector.to_string(),
+        "kind": format!("{:?}", event.envelope.kind),
+        "variant": event_variant(&event.payload),
+        "payload": event_payload_json(&event.payload),
+    })
+}
+
+fn event_variant(payload: &EventPayload) -> &'static str {
+    match payload {
+        EventPayload::Process(_) => "process",
+        EventPayload::File(_) => "file",
+        EventPayload::Net(_) => "net",
+        EventPayload::Ipc(_) => "ipc",
+        EventPayload::Stdio(_) => "stdio",
+        EventPayload::Application(_) => "application",
+        EventPayload::Resource(_) => "resource",
+        EventPayload::Control(_) => "control",
+        EventPayload::Loss(_) => "loss",
+        EventPayload::Label(_) => "label",
+        EventPayload::Enforcement(_) => "enforcement",
+    }
+}
+
+fn event_payload_json(payload: &EventPayload) -> Value {
+    let value = match payload {
+        EventPayload::Process(p) => serde_json::to_value(p),
+        EventPayload::File(p) => serde_json::to_value(p),
+        EventPayload::Net(p) => serde_json::to_value(p),
+        EventPayload::Ipc(p) => serde_json::to_value(p),
+        EventPayload::Stdio(p) => serde_json::to_value(p),
+        EventPayload::Application(p) => serde_json::to_value(p),
+        EventPayload::Resource(p) => serde_json::to_value(p),
+        EventPayload::Control(p) => serde_json::to_value(p),
+        EventPayload::Loss(p) => serde_json::to_value(p),
+        EventPayload::Label(p) => serde_json::to_value(p),
+        EventPayload::Enforcement(p) => serde_json::to_value(p),
+    };
+    value.unwrap_or(Value::Null)
 }
 
 fn payload_direction(direction: PayloadDirection) -> &'static str {

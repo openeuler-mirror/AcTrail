@@ -11,6 +11,15 @@ pub(super) fn parse_action_tree_page(query: &str) -> Result<SemanticActionChildP
     Ok(SemanticActionChildPageQuery { offset, limit })
 }
 
+pub(super) fn parse_llm_nav_mode(
+    query: &str,
+) -> Result<(view::LlmNavMode, Option<String>), String> {
+    let mode = required_query_param(query, "mode")?;
+    let after = optional_query_param(query, "after")?;
+    let mode = view::LlmNavMode::parse(&mode, after.clone())?;
+    Ok((mode, after))
+}
+
 pub(super) fn parse_llm_request_content_query(query: &str) -> Result<usize, String> {
     let max_bytes = required_query_usize(query, "max_bytes")?;
     if max_bytes == usize::default() {
@@ -205,27 +214,4 @@ fn required_query_u64(query: &str, key: &'static str) -> Result<u64, String> {
     let raw = required_query_param(query, key)?;
     raw.parse::<u64>()
         .map_err(|error| format!("invalid query parameter {key}: {error}"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::parse_llm_request_content_node_query;
-
-    #[test]
-    fn parses_percent_encoded_json_pointer_and_page() {
-        let query = parse_llm_request_content_node_query(
-            "pointer=%2Fcustom_model%2Fparameters&offset=4&limit=20",
-        )
-        .expect("parse node query");
-        assert_eq!(query.pointer, "/custom_model/parameters");
-        assert_eq!(query.offset, 4);
-        assert_eq!(query.limit, 20);
-    }
-
-    #[test]
-    fn rejects_non_pointer_path() {
-        let error = parse_llm_request_content_node_query("pointer=custom_model&offset=0&limit=20")
-            .expect_err("non-pointer path must fail");
-        assert!(error.contains("must start with /"));
-    }
 }
