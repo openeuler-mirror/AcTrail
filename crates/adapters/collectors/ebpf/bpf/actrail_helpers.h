@@ -17,6 +17,10 @@
 #endif
 #define actrail_barrier_var(var) asm volatile("" : "+r"(var))
 
+#ifndef BPF_F_MMAPABLE
+#define BPF_F_MMAPABLE (1U << 10)
+#endif
+
 #define ACTRAIL_BPF_FUNC_SEND_SIGNAL 109
 #define ACTRAIL_BPF_FUNC_PROBE_READ_USER 112
 #define ACTRAIL_BPF_FUNC_PROBE_READ_KERNEL 113
