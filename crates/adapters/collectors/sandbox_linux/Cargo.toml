@@ -1,0 +1,15 @@
+[package]
+name = "sandbox_linux_collector"
+version.workspace = true
+edition = "2024"
+license = "MulanPSL-2.0"
+build = "build.rs"
+
+[dependencies]
+libc = "0.2"
+libbpf-rs = "0.25.0"
+libbpf_tracepoint_attach = { path = "../libbpf_tracepoint" }
+sandbox_observation = { path = "../../../contracts/sandbox_observation" }
+
+[build-dependencies]
+libbpf-cargo = "0.25.0"

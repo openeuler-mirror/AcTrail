@@ -1,11 +1,36 @@
 //! Agent semantic-action configuration.
 
 use std::str::FromStr;
+use std::time::Duration;
+
+pub const DEFAULT_LLM_TRAJECTORY_MAX_ACTIVE_TRAJECTORIES_PER_SCOPE: u32 = 128;
+pub const DEFAULT_LLM_TRAJECTORY_MAX_CANDIDATE_NODES_PER_TRAJECTORY: u32 = 256;
+pub const DEFAULT_LLM_TRAJECTORY_MAX_PREFIX_NODES_PER_SCOPE: u32 = 65_536;
+pub const DEFAULT_LLM_TRAJECTORY_MAX_HISTORY_ATOMS_PER_REQUEST: u32 = 4_096;
+pub const DEFAULT_LLM_TRAJECTORY_MAX_BLOCKS_PER_ATOM: u32 = 64;
+pub const DEFAULT_LLM_TRAJECTORY_MAX_STRUCTURAL_BYTES_PER_ATOM: u32 = 4_096;
+pub const DEFAULT_LLM_TRAJECTORY_IDLE_TTL: Duration = Duration::from_secs(30 * 60);
+pub const DEFAULT_LLM_WEBSOCKET_MAX_CONNECTIONS_PER_PROCESS: u32 = 8;
+pub const DEFAULT_LLM_ASSEMBLY_MAX_BUFFER_BYTES: u64 = 8 * 1024 * 1024;
+pub const DEFAULT_LLM_ASSEMBLY_MAX_SEGMENT_RANGES: u32 = 8_192;
+pub const DEFAULT_LLM_STREAM_CLASSIFIER_SOFT_SNIFF_MAX_BYTES: u64 = 16 * 1024;
+pub const DEFAULT_LLM_PROJECTION_MAX_PENDING_REQUESTS_PER_STREAM: u32 = 256;
+pub const DEFAULT_LLM_PROJECTION_MAX_PENDING_RESPONSES_PER_STREAM: u32 = 64;
+pub const DEFAULT_LLM_PROJECTION_MAX_ACTION_VERSIONS_PER_TRACE: u32 = 4_096;
+pub const DEFAULT_LLM_PROJECTION_MAX_PENDING_TRAJECTORY_ACTIONS_PER_TRACE: u32 = 1_024;
+pub const DEFAULT_LLM_PROJECTION_MAX_TOOL_ENTRIES_PER_TRACE: u32 = 4_096;
+pub const DEFAULT_LLM_PROJECTION_MAX_ACTIVE_RESPONSE_BINDINGS_PER_TRACE: u32 = 4_096;
+pub const DEFAULT_LLM_PROJECTION_MAX_DAMAGED_RESPONSE_BINDINGS_PER_TRACE: u32 = 1_024;
+pub const DEFAULT_LLM_PROJECTION_MAX_CORRELATION_STREAMS_PER_TRACE: u32 = 1_024;
+pub const DEFAULT_HTTP_EXCHANGE_MAX_PENDING_REQUESTS_PER_STREAM: u32 = 256;
+pub const DEFAULT_HTTP_EXCHANGE_MAX_PENDING_RESPONSES_PER_STREAM: u32 = 32;
+pub const DEFAULT_HTTP_EXCHANGE_RESPONSE_LATENESS: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AgentInvocationConfig {
     pub enabled: bool,
     pub commands: Vec<String>,
+    pub tool_names: Vec<String>,
 }
 
 impl Default for AgentInvocationConfig {
@@ -13,6 +38,12 @@ impl Default for AgentInvocationConfig {
         Self {
             enabled: true,
             commands: Vec::new(),
+            tool_names: vec![
+                "Agent".to_string(),
+                "Task".to_string(),
+                "task".to_string(),
+                "spawn_agent".to_string(),
+            ],
         }
     }
 }
@@ -64,6 +95,17 @@ impl SemanticRetentionConfig {
             )
     }
 
+    /// Whether the canonical request body is carried on the action for
+    /// export. Configuration validation already guarantees this is only ever
+    /// true alongside `canonical_blocks` request retention.
+    pub fn llm_request_body_export_enabled(&self) -> bool {
+        self.l0_llm_call.enabled
+            && matches!(
+                self.l0_llm_call.request_body_export,
+                LlmRequestBodyExportRetention::CanonicalJson
+            )
+    }
+
     pub fn llm_response_assembled_provider_enabled(&self) -> bool {
         self.l0_llm_call.enabled
             && matches!(
@@ -80,8 +122,25 @@ impl SemanticRetentionConfig {
             )
     }
 
+    pub fn llm_tool_result_content_export_enabled(&self) -> bool {
+        self.l0_llm_call.enabled
+            && matches!(
+                self.l0_llm_call.tool_result_content_export,
+                LlmToolResultContentExportRetention::CanonicalJson
+            )
+    }
+
     pub fn llm_response_usage_enabled(&self) -> bool {
         self.l0_llm_call.enabled && matches!(self.l0_llm_call.usage, LlmUsageRetention::Summary)
+    }
+
+    pub fn llm_trajectory_enabled(&self) -> bool {
+        self.l0_llm_call.enabled
+            && self.l0_llm_call.trajectory.enabled
+            && matches!(
+                self.l0_llm_call.request_content,
+                LlmRequestContentRetention::CanonicalBlocks
+            )
     }
 
     pub fn sse_stream_summary_enabled(&self) -> bool {
@@ -177,14 +236,117 @@ impl FromStr for SemanticContentOwner {
     }
 }
 
+/// Matches the byte ceiling the Web request-body view already asks storage
+/// for, so an operator who exports bodies gets what the UI would have shown.
+pub const DEFAULT_LLM_REQUEST_BODY_EXPORT_MAX_BYTES: u64 = 128 * 1024;
+pub const DEFAULT_LLM_TOOL_RESULT_EXPORT_MAX_BYTES: u64 = 128 * 1024;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct L0LlmCallRetention {
     pub enabled: bool,
     pub request_content: LlmRequestContentRetention,
+    pub request_body_export: LlmRequestBodyExportRetention,
+    pub request_body_export_max_bytes: u64,
     pub response_content: LlmResponseContentRetention,
     pub tool_calls: LlmToolCallRetention,
+    pub tool_result_content_export: LlmToolResultContentExportRetention,
+    pub tool_result_content_export_max_bytes: u64,
     pub usage: LlmUsageRetention,
     pub retain_assembled_payload: bool,
+    pub websocket_max_connections_per_process: u32,
+    pub assembly: LlmAssemblyConfig,
+    pub stream_classifier: LlmStreamClassifierConfig,
+    pub projection_state: LlmProjectionStateConfig,
+    pub trajectory: LlmTrajectoryConfig,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LlmAssemblyConfig {
+    pub max_buffer_bytes: u64,
+    pub max_segment_ranges: u32,
+}
+
+impl Default for LlmAssemblyConfig {
+    fn default() -> Self {
+        Self {
+            max_buffer_bytes: DEFAULT_LLM_ASSEMBLY_MAX_BUFFER_BYTES,
+            max_segment_ranges: DEFAULT_LLM_ASSEMBLY_MAX_SEGMENT_RANGES,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LlmStreamClassifierConfig {
+    pub soft_sniff_max_bytes: u64,
+}
+
+impl Default for LlmStreamClassifierConfig {
+    fn default() -> Self {
+        Self {
+            soft_sniff_max_bytes: DEFAULT_LLM_STREAM_CLASSIFIER_SOFT_SNIFF_MAX_BYTES,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LlmProjectionStateConfig {
+    pub max_pending_requests_per_stream: u32,
+    pub max_pending_responses_per_stream: u32,
+    pub max_action_versions_per_trace: u32,
+    pub max_pending_trajectory_actions_per_trace: u32,
+    pub max_tool_entries_per_trace: u32,
+    pub max_active_response_bindings_per_trace: u32,
+    pub max_damaged_response_bindings_per_trace: u32,
+    pub max_correlation_streams_per_trace: u32,
+}
+
+impl Default for LlmProjectionStateConfig {
+    fn default() -> Self {
+        Self {
+            max_pending_requests_per_stream: DEFAULT_LLM_PROJECTION_MAX_PENDING_REQUESTS_PER_STREAM,
+            max_pending_responses_per_stream:
+                DEFAULT_LLM_PROJECTION_MAX_PENDING_RESPONSES_PER_STREAM,
+            max_action_versions_per_trace: DEFAULT_LLM_PROJECTION_MAX_ACTION_VERSIONS_PER_TRACE,
+            max_pending_trajectory_actions_per_trace:
+                DEFAULT_LLM_PROJECTION_MAX_PENDING_TRAJECTORY_ACTIONS_PER_TRACE,
+            max_tool_entries_per_trace: DEFAULT_LLM_PROJECTION_MAX_TOOL_ENTRIES_PER_TRACE,
+            max_active_response_bindings_per_trace:
+                DEFAULT_LLM_PROJECTION_MAX_ACTIVE_RESPONSE_BINDINGS_PER_TRACE,
+            max_damaged_response_bindings_per_trace:
+                DEFAULT_LLM_PROJECTION_MAX_DAMAGED_RESPONSE_BINDINGS_PER_TRACE,
+            max_correlation_streams_per_trace:
+                DEFAULT_LLM_PROJECTION_MAX_CORRELATION_STREAMS_PER_TRACE,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LlmTrajectoryConfig {
+    pub enabled: bool,
+    pub max_active_trajectories_per_scope: u32,
+    pub max_candidate_nodes_per_trajectory: u32,
+    pub max_prefix_nodes_per_scope: u32,
+    pub max_history_atoms_per_request: u32,
+    pub max_blocks_per_atom: u32,
+    pub max_structural_bytes_per_atom: u32,
+    pub idle_ttl: Duration,
+}
+
+impl Default for LlmTrajectoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_active_trajectories_per_scope:
+                DEFAULT_LLM_TRAJECTORY_MAX_ACTIVE_TRAJECTORIES_PER_SCOPE,
+            max_candidate_nodes_per_trajectory:
+                DEFAULT_LLM_TRAJECTORY_MAX_CANDIDATE_NODES_PER_TRAJECTORY,
+            max_prefix_nodes_per_scope: DEFAULT_LLM_TRAJECTORY_MAX_PREFIX_NODES_PER_SCOPE,
+            max_history_atoms_per_request: DEFAULT_LLM_TRAJECTORY_MAX_HISTORY_ATOMS_PER_REQUEST,
+            max_blocks_per_atom: DEFAULT_LLM_TRAJECTORY_MAX_BLOCKS_PER_ATOM,
+            max_structural_bytes_per_atom: DEFAULT_LLM_TRAJECTORY_MAX_STRUCTURAL_BYTES_PER_ATOM,
+            idle_ttl: DEFAULT_LLM_TRAJECTORY_IDLE_TTL,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -228,10 +390,20 @@ impl Default for L0LlmCallRetention {
         Self {
             enabled: true,
             request_content: LlmRequestContentRetention::CanonicalBlocks,
+            request_body_export: LlmRequestBodyExportRetention::None,
+            request_body_export_max_bytes: DEFAULT_LLM_REQUEST_BODY_EXPORT_MAX_BYTES,
             response_content: LlmResponseContentRetention::AssembledProvider,
             tool_calls: LlmToolCallRetention::AssembledJson,
+            tool_result_content_export: LlmToolResultContentExportRetention::None,
+            tool_result_content_export_max_bytes: DEFAULT_LLM_TOOL_RESULT_EXPORT_MAX_BYTES,
             usage: LlmUsageRetention::Summary,
             retain_assembled_payload: false,
+            websocket_max_connections_per_process:
+                DEFAULT_LLM_WEBSOCKET_MAX_CONNECTIONS_PER_PROCESS,
+            assembly: LlmAssemblyConfig::default(),
+            stream_classifier: LlmStreamClassifierConfig::default(),
+            projection_state: LlmProjectionStateConfig::default(),
+            trajectory: LlmTrajectoryConfig::default(),
         }
     }
 }
@@ -259,6 +431,58 @@ impl FromStr for LlmRequestContentRetention {
             "shape" => Ok(Self::Shape),
             "canonical_blocks" => Ok(Self::CanonicalBlocks),
             other => Err(format!("unsupported LLM request content retention {other}")),
+        }
+    }
+}
+
+/// Whether the canonical request body is carried on the action for export.
+///
+/// Separate from [`LlmRequestContentRetention`], which governs what is kept
+/// locally. A body can be retained without ever leaving the host, and export
+/// is off unless an operator asks for it — `attribute_mode = full` does not
+/// grant it, because what `full` exports today is behavioural metadata while
+/// a request body is the content an agent read.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum LlmRequestBodyExportRetention {
+    #[default]
+    None,
+    CanonicalJson,
+}
+
+impl FromStr for LlmRequestBodyExportRetention {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "none" => Ok(Self::None),
+            "canonical_json" => Ok(Self::CanonicalJson),
+            other => Err(format!(
+                "unsupported LLM request body export retention {other}"
+            )),
+        }
+    }
+}
+
+/// Whether an LLM-native tool result body may leave the host on a semantic
+/// action. Result identity, size, hash, and error state remain available when
+/// this is `none`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum LlmToolResultContentExportRetention {
+    #[default]
+    None,
+    CanonicalJson,
+}
+
+impl FromStr for LlmToolResultContentExportRetention {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "none" => Ok(Self::None),
+            "canonical_json" => Ok(Self::CanonicalJson),
+            other => Err(format!(
+                "unsupported LLM tool result content export retention {other}"
+            )),
         }
     }
 }
@@ -366,6 +590,25 @@ pub struct L2HttpRetention {
     pub message_summary: bool,
     pub headers: HttpHeadersRetention,
     pub body_content: HttpBodyRetention,
+    pub exchange: HttpExchangeConfig,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HttpExchangeConfig {
+    pub max_pending_requests_per_stream: u32,
+    pub max_pending_responses_per_stream: u32,
+    pub response_lateness: Duration,
+}
+
+impl Default for HttpExchangeConfig {
+    fn default() -> Self {
+        Self {
+            max_pending_requests_per_stream: DEFAULT_HTTP_EXCHANGE_MAX_PENDING_REQUESTS_PER_STREAM,
+            max_pending_responses_per_stream:
+                DEFAULT_HTTP_EXCHANGE_MAX_PENDING_RESPONSES_PER_STREAM,
+            response_lateness: DEFAULT_HTTP_EXCHANGE_RESPONSE_LATENESS,
+        }
+    }
 }
 
 impl Default for L2HttpRetention {
@@ -375,6 +618,7 @@ impl Default for L2HttpRetention {
             message_summary: true,
             headers: HttpHeadersRetention::Metadata,
             body_content: HttpBodyRetention::Text,
+            exchange: HttpExchangeConfig::default(),
         }
     }
 }

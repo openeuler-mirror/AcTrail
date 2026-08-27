@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from pathlib import Path
 
 from .actrail_runtime import ActrailRuntime, CommandResult
@@ -64,12 +65,11 @@ class LLMTraceAssertion:
 
     def require_finalized_exchange(self, trace_id: int) -> tuple[int, int]:
         traces = self._read_json(
-            [
-                self._runtime.actrailviewer,
+            self._runtime.viewer_command(
                 "--output-format",
                 "json",
                 "traces",
-            ]
+            )
         )
         ready, trace_state = self._trace_is_cleanly_terminal(traces, trace_id)
         if not ready:
@@ -78,14 +78,13 @@ class LLMTraceAssertion:
                 f"{trace_state}"
             )
         document = self._read_json(
-            [
-                self._runtime.actrailviewer,
+            self._runtime.viewer_command(
                 "--output-format",
                 "json",
                 "actions",
                 "--trace-id",
                 str(trace_id),
-            ]
+            )
         )
         actions = self._llm_actions(document)
         self._require_terminal_actions(actions)
@@ -129,9 +128,9 @@ class LLMTraceAssertion:
         responses = [action for action in actions if action.get("kind") == "llm.response"]
         if not requests or not responses:
             raise AssertionError("trace has no LLM request/response")
-        if len(calls) != len(requests) or len(requests) != len(responses):
+        if len(calls) != len(requests):
             raise AssertionError(
-                "LLM call/request/response count mismatch: "
+                "LLM call/request count mismatch: "
                 f"{len(calls)} call(s), {len(requests)} request(s), "
                 f"{len(responses)} response(s)"
             )
@@ -194,6 +193,7 @@ class LLMTraceAssertion:
         responses_by_id = {action["action_id"]: action for action in responses}
         request_links: dict[str, set[str]] = {}
         response_links: dict[str, set[str]] = {}
+        failed_http_requests = self._failed_http_request_counts(document)
         for link in document.get("links", []):
             if not link.get("valid", False):
                 continue
@@ -217,19 +217,23 @@ class LLMTraceAssertion:
         for call_id in calls_by_id:
             call_requests = request_links.get(call_id, set())
             call_responses = response_links.get(call_id, set())
-            if len(call_requests) != 1 or len(call_responses) != 1:
+            if len(call_requests) != 1 or len(call_responses) > 1:
                 raise AssertionError(
-                    f"LLM call {call_id} is not a one-request/one-response exchange"
+                    f"LLM call {call_id} does not have exactly one request "
+                    "and at most one response"
                 )
             paired_requests.update(call_requests)
-            paired_responses.update(call_responses)
             request_id = next(iter(call_requests))
-            response_id = next(iter(call_responses))
-            pairs.append(
-                (
-                    requests_by_id[request_id],
-                    responses_by_id[response_id],
-                )
+            request = requests_by_id[request_id]
+            if call_responses:
+                paired_responses.update(call_responses)
+                response_id = next(iter(call_responses))
+                pairs.append((request, responses_by_id[response_id]))
+                continue
+            self._require_failed_http_probe(
+                calls_by_id[call_id],
+                request,
+                failed_http_requests,
             )
         if (
             paired_requests != set(requests_by_id)
@@ -239,6 +243,95 @@ class LLMTraceAssertion:
                 "not every LLM request/response is paired by exactly one llm.call"
             )
         return pairs
+
+    def _failed_http_request_counts(
+        self,
+        document: dict,
+    ) -> Counter[tuple[str, str, str]]:
+        http_requests: dict[str, tuple[str, str, str]] = {}
+        http_responses: list[dict] = []
+        for action in document.get("actions", []):
+            if action.get("kind") != "http.message":
+                continue
+            attributes = action.get("attributes")
+            if not isinstance(attributes, dict):
+                continue
+            operation = attributes.get("http.operation")
+            if operation == "request":
+                key = self._http_request_key(
+                    attributes,
+                    stream_key_name="stream_key",
+                    method_name="method",
+                    path_name="target",
+                )
+                action_id = action.get("action_id")
+                if key is not None and isinstance(action_id, str):
+                    http_requests[action_id] = key
+            elif operation == "response":
+                http_responses.append(attributes)
+
+        failed: Counter[tuple[str, str, str]] = Counter()
+        for response in http_responses:
+            try:
+                status_code = int(response.get("status_code", ""))
+            except (TypeError, ValueError):
+                continue
+            if status_code < 400:
+                continue
+            request_id = response.get("http.request.action_id")
+            if isinstance(request_id, str) and request_id in http_requests:
+                failed[http_requests[request_id]] += 1
+        return failed
+
+    def _require_failed_http_probe(
+        self,
+        call: dict,
+        request: dict,
+        failed_http_requests: Counter[tuple[str, str, str]],
+    ) -> None:
+        attributes = call.get("attributes")
+        if not isinstance(attributes, dict):
+            attributes = {}
+        terminal_partial = (
+            call.get("status") == "error"
+            and call.get("completeness") == "partial"
+            and attributes.get(self._TRACE_CLOSE_ATTRIBUTE) == "true"
+        )
+        request_attributes = request.get("attributes")
+        key = (
+            self._http_request_key(
+                request_attributes,
+                stream_key_name="payload.stream_key",
+                method_name="http.request.method",
+                path_name="url.path",
+            )
+            if isinstance(request_attributes, dict)
+            else None
+        )
+        if not terminal_partial or key is None or failed_http_requests[key] == 0:
+            raise AssertionError(
+                f"LLM call {call.get('action_id')} has no response and no "
+                "correlated failed HTTP probe"
+            )
+        failed_http_requests[key] -= 1
+
+    @staticmethod
+    def _http_request_key(
+        attributes: dict,
+        *,
+        stream_key_name: str,
+        method_name: str,
+        path_name: str,
+    ) -> tuple[str, str, str] | None:
+        values = (
+            attributes.get(stream_key_name),
+            attributes.get(method_name),
+            attributes.get(path_name),
+        )
+        if not all(isinstance(value, str) and value for value in values):
+            return None
+        stream_key, method, path = values
+        return stream_key, method.upper(), path
 
     def _require_marker_exchange(self, pairs: list[tuple[dict, dict]]) -> None:
         for request, response in pairs:

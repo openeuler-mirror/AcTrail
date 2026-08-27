@@ -16,7 +16,7 @@ from tests.v2.regression.otel_http.config import OtelHttpConfig  # noqa: E402
 TEST_DEFINITION = TestDefinition(
     name="otel_http",
     description=(
-        "Verify builtin OTEL/HTTP terminal, metadata-only, and shutdown boundaries"
+        "Verify builtin OTEL/HTTP metadata, request-body, and shutdown boundaries"
     ),
     build_case=lambda inputs: OtelHttpCase(OtelHttpConfig.from_environment(inputs)),
 )

@@ -1,0 +1,22 @@
+@startuml
+title eBPF 事件传输与消费
+left to right direction
+skinparam componentStyle rectangle
+skinparam shadowing false
+
+component "BPF probes" as Probes
+queue "ring buffer\n或 perf buffer" as KernelBuffer
+component "单一消费线程" as Consumer
+queue "有界 batch queue\n32 batches" as Queue
+component "daemon 主循环" as Daemon
+component "trace 诊断" as Diag
+
+Probes --> KernelBuffer : 内核事件
+KernelBuffer --> Consumer : ppoll + greedy consume
+Consumer --> Queue : 最多 4096 条 / 2 MiB
+Queue --> Daemon : eventfd 唤醒
+Daemon --> Daemon : 解码、因果排序、投影、持久化
+KernelBuffer --> Diag : perf lost
+Probes --> Diag : reserve/output failure
+Diag --> Daemon : event_transport_loss\n标记当前 trace 降级
+@enduml

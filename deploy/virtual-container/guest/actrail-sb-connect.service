@@ -1,0 +1,16 @@
+[Unit]
+Description=Activate the AcTrail sandbox-observation VSOCK link
+Requires=actrail-sb.service
+After=actrail-sb.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+Environment=LD_LIBRARY_PATH=/usr/local/lib/actrail
+ExecStart=/usr/local/bin/actrail-sb connect --control-socket /dev/actrail/sandbox-observer-control.sock --host-cid 2 --port 43182 --request-timeout-ms 5000
+RemainAfterExit=yes
+Restart=on-failure
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target kata-containers.target

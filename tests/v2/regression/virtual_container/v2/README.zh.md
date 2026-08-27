@@ -68,8 +68,26 @@ BACKEND="${BACKEND:-stratovirt}"
 BASE_CONFIG_SOURCE="/path/to/configuration-base-source.toml"
 DATA_CONFIG_SOURCE="/path/to/configuration-data-source.toml"
 XIAOO_BIN="/path/to/xiaoo"
+```
+
+默认测试使用 Guest 本地 SQLite 和镜像内的 `actrailviewer`，不需要 Collector。需要验证
+OTLP/HTTP 外送时再设置：
+
+```bash
+GUEST_EGRESS_MODE="network"
 GUEST_OTEL_ENDPOINT="http://<Guest 可达的主机 IP>:4318/v1/traces"
 ```
+
+无 CNI、Guest 只有 loopback 且需要验证外送时，改为：
+
+```bash
+GUEST_EGRESS_MODE="vsock-bridge"
+GUEST_OTEL_ENDPOINT="http://127.0.0.1:14318/v1/traces"
+```
+
+并先按
+[`deploy/virtual-container/vsock-egress/README.md`](../../../../../deploy/virtual-container/vsock-egress/README.md)
+安装、启用所选 backend 的 Host bridge。
 
 ### 步骤1：检查测试前提
 
@@ -131,7 +149,6 @@ sudo -E env \
   "PATH=$PATH" \
   python3 deploy/virtual-container/host/prepare-v2-test-artifacts.py \
     --backend "$BACKEND" \
-    --otel-endpoint "$GUEST_OTEL_ENDPOINT" \
     --base-config-source "$BASE_CONFIG_SOURCE" \
     --data-config-source "$DATA_CONFIG_SOURCE" \
     --xiaoo "$XIAOO_BIN"
@@ -144,7 +161,6 @@ sudo -E env \
   "PATH=$PATH" \
   python3 deploy/virtual-container/host/prepare-v2-test-artifacts.py \
     --backend "$BACKEND" \
-    --otel-endpoint "$GUEST_OTEL_ENDPOINT" \
     --base-config-source "$BASE_CONFIG_SOURCE" \
     --data-config-source "$DATA_CONFIG_SOURCE"
 ```
@@ -156,7 +172,6 @@ sudo -E env \
   "PATH=$PATH" \
   python3 deploy/virtual-container/host/prepare-v2-test-artifacts.py \
     --backend "$BACKEND" \
-    --otel-endpoint "$GUEST_OTEL_ENDPOINT" \
     --base-config-source "$BASE_CONFIG_SOURCE" \
     --data-config-source "$DATA_CONFIG_SOURCE" \
     --workload-image-archive /path/to/workload-image.tar \
@@ -164,10 +179,18 @@ sudo -E env \
     --xiaoo "$XIAOO_BIN"
 ```
 
+上面的三条准备命令默认不启用 exporter。若已设置 `GUEST_OTEL_ENDPOINT`，在所选命令中
+追加：
+
+```bash
+    --otel-endpoint "$GUEST_OTEL_ENDPOINT" \
+    --egress-mode "$GUEST_EGRESS_MODE"
+```
+
 #### 脚本行为与预期结果
 
-准备器对 release、source image/config、kernel、VMM、virtiofsd、部署脚本和可选
-xiaoO 计算内容摘要，在 staging 中构建完成后原子发布：
+准备器对 release、source image/config、kernel、VMM、virtiofsd、Guest 出境模式、部署
+脚本和可选 xiaoO 计算内容摘要，在 staging 中构建完成后原子发布：
 
 ```text
 local/kata/artifacts/<digest>/
@@ -177,6 +200,7 @@ local/kata/artifacts/<digest>/
 ├── configuration-base.toml
 ├── configuration-data.toml
 ├── guest-bundle/
+├── host-bundle/              # actrail-vsock-gateway
 ├── workload-bundle/
 └── xiaoo                    # 传入 --xiaoo 时存在
 ```

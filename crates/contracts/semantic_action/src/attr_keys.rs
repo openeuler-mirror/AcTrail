@@ -28,7 +28,12 @@ pub mod agent_child {
 }
 
 pub mod agent_invocation {
+    pub const AGENT_TYPE: &str = "agent.invocation.agent_type";
     pub const EVIDENCE_ACTION_ID: &str = "agent.invocation.evidence_action_id";
+    pub const PROMPT_HASH: &str = "agent.invocation.prompt_hash";
+    pub const TOOL_CALL_ACTION_ID: &str = "agent.invocation.tool_call_action_id";
+    pub const TOOL_CALL_ID: &str = "agent.invocation.tool_call_id";
+    pub const TOOL_NAME: &str = "agent.invocation.tool_name";
     pub const TRIGGER: &str = "agent.invocation.trigger";
 }
 
@@ -159,11 +164,15 @@ pub mod llm_call {
 
 pub mod llm_request {
     pub const BACKGROUND_KIND: &str = "llm.request.background_kind";
-    pub const BODY_JSON: &str = "llm.request.body_json";
-    pub const BODY_TEXT: &str = "llm.request.body_text";
     pub const BLOCK_COUNT: &str = "llm.request.block_count";
     pub const CANONICAL_BODY_BYTES: &str = "llm.request.canonical_body_bytes";
+    pub const CANONICAL_BODY_EXPORT_STATE: &str = "llm.request.canonical_body_export_state";
     pub const CANONICAL_BODY_HASH: &str = "llm.request.canonical_body_hash";
+    /// The whole canonical request body, present only when body export is
+    /// enabled. Distinct from the removed inline `body_json`, which carried
+    /// the raw request body: this is the canonicalised content the
+    /// [`CANONICAL_BODY_HASH`] is computed over.
+    pub const CANONICAL_BODY_JSON: &str = "llm.request.canonical_body_json";
     pub const CLASSIFIER_ID: &str = "llm.request.classifier_id";
     pub const CONTENT_FORMAT_VERSION: &str = "llm.request.content_format_version";
     pub const CONTENT_STATE: &str = "llm.request.content_state";
@@ -174,6 +183,8 @@ pub mod llm_request {
     pub const PAYLOAD_TEXT: &str = "llm.request.payload_text";
     pub const PROTOCOL_ID: &str = "llm.request.protocol_id";
     pub const RAW_PAYLOAD_BYTES: &str = "llm.request.raw_payload_bytes";
+    pub const TRAJECTORY_ID: &str = "llm.request.trajectory_id";
+    pub const TRAJECTORY_INFERENCE_VERSION: &str = "llm.request.trajectory_inference_version";
     pub const USER_MESSAGE_COUNT: &str = "llm.request.user_message_count";
 }
 
@@ -187,6 +198,7 @@ pub mod agent_turn {
 pub mod llm_response {
     pub const ACTION_ID: &str = "llm.response.action_id";
     pub const BODY_FORMAT: &str = "llm.response.body_format";
+    pub const CACHE_CREATION_TOKENS: &str = "llm.response.cache_creation_tokens";
     pub const CACHED_PROMPT_TOKENS: &str = "llm.response.cached_prompt_tokens";
     pub const CHUNK_COUNT: &str = "llm.response.chunk_count";
     pub const COMPLETION_TOKENS: &str = "llm.response.completion_tokens";
@@ -206,13 +218,30 @@ pub mod llm_response {
     pub const REASONING_TOKENS: &str = "llm.response.reasoning_tokens";
     pub const SSE_EVENTS_JSON: &str = "llm.response.sse_events_json";
     pub const STREAM: &str = "llm.response.stream";
+    pub const TOOL_ARGUMENTS: &str = "llm.response.tool_arguments";
     pub const TOOL_CALLS_JSON: &str = "llm.response.tool_calls_json";
     pub const TOTAL_TOKENS: &str = "llm.response.total_tokens";
 }
 
 pub mod llm_tool_call {
+    pub const ARGUMENTS_BYTES: &str = "llm.tool_call.arguments_bytes";
+    pub const ARGUMENTS_HASH: &str = "llm.tool_call.arguments_hash";
     pub const ID: &str = "llm.tool_call.id";
     pub const NAME: &str = "llm.tool_call.name";
+    pub const ORDINAL: &str = "llm.tool_call.ordinal";
+    pub const RESPONSE_ACTION_ID: &str = "llm.tool_call.response_action_id";
+}
+
+pub mod llm_tool_result {
+    pub const BINDING_STATE: &str = "llm.tool_result.binding_state";
+    pub const CONTENT_BYTES: &str = "llm.tool_result.content_bytes";
+    pub const CONTENT_HASH: &str = "llm.tool_result.content_hash";
+    pub const CONTENT_JSON: &str = "llm.tool_result.content_json";
+    pub const CONTENT_EXPORT_STATE: &str = "llm.tool_result.content_export_state";
+    pub const ID: &str = "llm.tool_result.id";
+    pub const IS_ERROR: &str = "llm.tool_result.is_error";
+    pub const ORDINAL: &str = "llm.tool_result.ordinal";
+    pub const REQUEST_ACTION_ID: &str = "llm.tool_result.request_action_id";
 }
 
 pub mod mcp {

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "tool-frequent-failure-alert.indeterminate.v1",
+  "title": "Tool Frequent Failure Alert Indeterminate Result",
+  "description": "Diagnostic alert payload when a tool outcome cannot be determined",
+  "type": "object",
+  "required": ["alert_type", "timestamp", "trace_id", "tool_name", "reason", "action_id"],
+  "properties": {
+    "alert_type": { "type": "string", "const": "indeterminate_result" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "trace_id": { "type": "string" },
+    "tool_name": { "type": "string" },
+    "reason": { "type": "string", "description": "Why the outcome could not be determined" },
+    "action_id": { "type": "string", "description": "Evidence action id of the indeterminate event" }
+  },
+  "additionalProperties": false
+}

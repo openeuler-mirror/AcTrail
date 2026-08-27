@@ -8,13 +8,16 @@ use std::time::SystemTime;
 use config_core::daemon::{DiagnosticLogLevel, PayloadStdioStorageMode, SemanticRetentionConfig};
 use control_contract::reply::ControlError;
 use model_core::capability::{Capability, RequestMode};
+use model_core::diagnostics::LlmPipelineDiagnostic;
 use model_core::event::{
     ApplicationPayload, DomainEvent, EventEnvelope, EventFlags, EventKind, EventPayload,
 };
 use model_core::ids::{CollectorName, EventId, TraceId};
-use model_core::payload::{PayloadRedactionState, PayloadSegment, PayloadSegmentId};
+use model_core::payload::{
+    PayloadRedactionState, PayloadSegment, PayloadSegmentId, PayloadStreamIdentity,
+};
 use model_core::process::{ProcessIdentity, ProcessMembership};
-use payload_event::RawPayloadSegment;
+use payload_event::{RawPayloadSegment, RawPayloadStreamClose};
 use recording_runtime::{
     ObservedRecordWriteSession, RecordingError, RecordingWriter, SemanticActionBatch,
 };
@@ -25,7 +28,7 @@ use trace_runtime::registry::TraceRuntime;
 
 use crate::services::application_protocol::{
     ApplicationEventDraft, ApplicationProtocolAnalyzer,
-    COLLECTOR_NAME as APPLICATION_PROTOCOL_COLLECTOR_NAME,
+    COLLECTOR_NAME as APPLICATION_PROTOCOL_COLLECTOR_NAME, IncompleteHttp1Message,
 };
 use crate::services::attach::StorageAttachService;
 use crate::services::diagnostic_logging;
@@ -43,13 +46,46 @@ use super::redaction::redact_payload_bytes;
 use super::retention::RetainedPayloadTransaction;
 
 impl StorageAttachService {
-    #[cfg(test)]
-    pub(in crate::services) fn process_payload_segment_impl(
+    pub(in crate::services) fn process_payload_stream_closes_impl(
         &mut self,
-        trace_runtime: &mut TraceRuntime,
-        raw: RawPayloadSegment,
+        trace_runtime: &TraceRuntime,
+        closes: Vec<RawPayloadStreamClose>,
     ) -> Result<(), ControlError> {
-        self.process_payload_segments_impl(trace_runtime, vec![raw])
+        for close in closes {
+            self.socket_payload_gate.forget_stream(&close);
+            self.payload_reorderer.forget_stream(&close);
+            let (process, _) = self.resolve_process_observation(close.process.clone())?;
+            let identity = PayloadStreamIdentity {
+                trace_id: close.trace_id,
+                process,
+                source_boundary: close.source_boundary,
+                stream_key: close.stream_key,
+            };
+            self.application_protocol.forget_stream(&identity);
+            self.payload_body_retention_gate.forget_stream(&identity);
+            let mut output = self
+                .semantic_actions
+                .finalize_payload_stream(&identity, close.observed_at);
+            self.persist_llm_pipeline_diagnostics_fail_local(
+                trace_runtime,
+                std::mem::take(&mut output.llm_pipeline_diagnostics),
+            );
+            let batch = SemanticActionBatch::from_action_output(
+                output.actions,
+                output.links,
+                output.file_observation_paths,
+                output.file_path_sets,
+                output.llm_request_contents,
+                output.llm_request_lineages,
+                output.mcp_jsonrpc_contents,
+                output.payload_segments,
+            );
+            if !batch.actions().is_empty() || !batch.links().is_empty() {
+                let persisted = self.write_semantic_action_batch(batch)?;
+                self.publish_live_export_actions(trace_runtime, identity.trace_id, persisted)?;
+            }
+        }
+        Ok(())
     }
 
     pub(in crate::services) fn process_payload_segments_impl(
@@ -57,10 +93,6 @@ impl StorageAttachService {
         trace_runtime: &mut TraceRuntime,
         raw_segments: Vec<RawPayloadSegment>,
     ) -> Result<(), ControlError> {
-        if raw_segments.is_empty() {
-            return Ok(());
-        }
-        let raw_segment_count = raw_segments.len();
         let mut admitted = Vec::new();
         for raw in raw_segments {
             admitted.extend(
@@ -69,10 +101,19 @@ impl StorageAttachService {
                     .map_err(|error| ControlError::new("socket_payload_gate", error))?,
             );
         }
+        // Reorder kernel capture across per-CPU drain cycles and seccomp TLS
+        // across completion cycles. Synchronous TLS capture is already FIFO
+        // and preserves its arrival order.
+        let admitted = self.payload_reorderer.admit(SystemTime::now(), admitted);
+        if admitted.is_empty() {
+            return Ok(());
+        }
+        let raw_segment_count = admitted.len();
         let mut resolved_segments = Vec::with_capacity(admitted.len());
         let mut process_records = BTreeMap::new();
         let mut membership_trace_ids = BTreeSet::new();
-        for raw in admitted {
+        for admitted in admitted {
+            let raw = admitted.segment;
             let (process, record) = self.resolve_process_observation(raw.process.clone())?;
             if let Some(record) = record {
                 process_records.insert(record.identity, record);
@@ -91,7 +132,11 @@ impl StorageAttachService {
                     })?;
                 membership_trace_ids.insert(raw.trace_id);
             }
-            resolved_segments.push(ResolvedRawPayloadSegment { raw, process });
+            resolved_segments.push(ResolvedRawPayloadSegment {
+                raw,
+                process,
+                discontinuity_before: admitted.discontinuity_before,
+            });
         }
         let membership_trace_states = membership_trace_ids
             .into_iter()
@@ -102,6 +147,7 @@ impl StorageAttachService {
         let semantic_action_count;
         let semantic_link_count;
         let mut mcp_stdio_diagnostics = Vec::new();
+        let mut llm_pipeline_diagnostics = Vec::new();
         let mut retained_payload_transaction = RetainedPayloadTransaction::default();
         let semantic_flush_diagnostics = self.workload_diagnostics.clone();
         let started = crate::services::workload_diagnostics::now();
@@ -113,6 +159,7 @@ impl StorageAttachService {
                 application_protocol: &mut self.application_protocol,
                 semantic_actions: &mut self.semantic_actions,
                 mcp_stdio_diagnostics: &mut mcp_stdio_diagnostics,
+                llm_pipeline_diagnostics: &mut llm_pipeline_diagnostics,
                 finalized_terminal_traces: &mut self.finalized_terminal_traces,
                 workload_diagnostics: &self.workload_diagnostics,
                 retained_payload_bytes_by_trace: &mut self.retained_payload_bytes_by_trace,
@@ -191,6 +238,7 @@ impl StorageAttachService {
             0,
             result.is_ok(),
         );
+        self.persist_llm_pipeline_diagnostics_fail_local(trace_runtime, llm_pipeline_diagnostics);
         result?;
         self.persist_mcp_stdio_diagnostics_impl(trace_runtime, mcp_stdio_diagnostics)
     }
@@ -203,6 +251,7 @@ struct PayloadTransactionContext<'a> {
     application_protocol: &'a mut ApplicationProtocolAnalyzer,
     semantic_actions: &'a mut LiveSemanticActionRuntime,
     mcp_stdio_diagnostics: &'a mut Vec<LiveMcpStdioDiagnostic>,
+    llm_pipeline_diagnostics: &'a mut Vec<LlmPipelineDiagnostic>,
     finalized_terminal_traces: &'a mut BTreeSet<TraceId>,
     workload_diagnostics: &'a WorkloadDiagnostics,
     retained_payload_bytes_by_trace: &'a mut BTreeMap<TraceId, u64>,
@@ -255,6 +304,7 @@ impl PayloadTransactionContext<'_> {
         resolved: ResolvedRawPayloadSegment,
         export_batch: &mut SemanticActionBatch,
     ) -> Result<Option<PreparedPayloadSegment>, ControlError> {
+        let discontinuity_before = resolved.discontinuity_before;
         let raw = resolved.raw;
         let Some(membership) = self
             .trace_runtime
@@ -320,23 +370,93 @@ impl PayloadTransactionContext<'_> {
         segment.captured_size = bytes.len() as u64;
         segment.redaction = redaction;
         segment.bytes = bytes;
+        let stream_identity = PayloadStreamIdentity::from_segment(&segment);
+        let operation_capture_ended = segment
+            .operation_offset
+            .saturating_add(segment.captured_size)
+            >= segment.operation_captured_size;
+        let operation_incomplete = operation_capture_ended
+            && (segment.truncation == model_core::payload::PayloadTruncationState::Truncated
+                || matches!(
+                    segment.operation_completion_state,
+                    model_core::payload::PayloadOperationCompletionState::Partial
+                        | model_core::payload::PayloadOperationCompletionState::Failed
+                )
+                || segment.operation_original_size != segment.operation_captured_size);
+        let incomplete_http1_message = operation_incomplete
+            .then(|| self.application_protocol.incomplete_http1_message(&segment))
+            .flatten();
+        if discontinuity_before || operation_incomplete {
+            self.application_protocol.forget_stream(&stream_identity);
+            self.payload_body_retention_gate
+                .forget_stream(&stream_identity);
+        }
+        if discontinuity_before {
+            export_batch.extend(self.observe_payload_gap(&segment));
+        } else if operation_incomplete {
+            match incomplete_http1_message {
+                Some(IncompleteHttp1Message::Request {
+                    sequence,
+                    header_projected,
+                }) => self.semantic_actions.prepare_incomplete_http1_request(
+                    &segment,
+                    sequence,
+                    header_projected,
+                ),
+                Some(IncompleteHttp1Message::Response {
+                    sequence,
+                    header_projected,
+                }) => {
+                    tracing::warn!(
+                        trace_id = segment.trace_id.get(),
+                        process_id = segment.process.get(),
+                        stream_key = %segment.stream_key,
+                        message_sequence = sequence,
+                        terminal_sequence = segment.operation_id,
+                        "localized incomplete HTTP/1 response to one message"
+                    );
+                    self.semantic_actions.prepare_incomplete_http1_response(
+                        &segment,
+                        sequence,
+                        header_projected,
+                    )
+                }
+                None => self.semantic_actions.prepare_incomplete_payload(&segment),
+            }
+        }
         if stdio_dropped {
             let started = crate::services::workload_diagnostics::now();
-            let semantic_actions = self.observe_payload_semantics(&segment, false);
+            let mut semantic_actions = self.observe_payload_semantics(&segment, false);
+            if operation_incomplete {
+                let finalized = match incomplete_http1_message {
+                    Some(IncompleteHttp1Message::Response { .. }) => {
+                        self.finish_incomplete_http1_response(&segment)
+                    }
+                    Some(IncompleteHttp1Message::Request { .. }) => Default::default(),
+                    _ => {
+                        self.semantic_actions.finish_incomplete_payload(&segment);
+                        Default::default()
+                    }
+                };
+                semantic_actions.extend(finalized);
+            }
+            export_batch.extend(semantic_actions.clone());
             self.workload_diagnostics.record_payload_transaction_phase(
                 PayloadTransactionPhase::SemanticObserve,
                 started.elapsed(),
                 semantic_actions.actions().len(),
             );
-            export_batch.extend(semantic_actions.clone());
             return Ok(Some(PreparedPayloadSegment::SemanticOnly {
                 segment,
                 semantic_actions,
                 application_events: Vec::new(),
             }));
         }
-        let body_retention: PayloadBodyRetentionDecision =
-            self.payload_body_retention_gate.decide(&segment);
+        let body_retention: PayloadBodyRetentionDecision = if operation_incomplete {
+            PayloadBodyRetentionGate::discontinuity_decision()
+        } else {
+            self.payload_body_retention_gate.decide(&segment)
+        };
         let analysis_segment = segment.clone();
         let retained_payload = if retain_payload_segment {
             let mut stored_segment = segment;
@@ -377,8 +497,22 @@ impl PayloadTransactionContext<'_> {
             None
         };
         let started = crate::services::workload_diagnostics::now();
-        let semantic_actions =
+        let mut semantic_actions =
             self.observe_payload_semantics(&analysis_segment, retain_payload_segment);
+        if operation_incomplete {
+            let finalized = match incomplete_http1_message {
+                Some(IncompleteHttp1Message::Response { .. }) => {
+                    self.finish_incomplete_http1_response(&analysis_segment)
+                }
+                Some(IncompleteHttp1Message::Request { .. }) => Default::default(),
+                _ => {
+                    self.semantic_actions
+                        .finish_incomplete_payload(&analysis_segment);
+                    Default::default()
+                }
+            };
+            semantic_actions.extend(finalized);
+        }
         export_batch.extend(semantic_actions.clone());
         self.workload_diagnostics.record_payload_transaction_phase(
             PayloadTransactionPhase::SemanticObserve,
@@ -388,13 +522,20 @@ impl PayloadTransactionContext<'_> {
         let started = crate::services::workload_diagnostics::now();
         let mut application_drafts =
             if application_protocol_requested(self.trace_runtime, raw.trace_id)? {
-                self.application_protocol
-                    .analyze_with_semantic_context(
+                let result = if operation_incomplete {
+                    self.application_protocol
+                        .analyze_incomplete_http1_head_with_semantic_context(
+                            &analysis_segment,
+                            body_retention.semantic_layer.consumed_by_llm(),
+                        )
+                } else {
+                    self.application_protocol.analyze_with_semantic_context(
                         &analysis_segment,
                         body_retention.semantic_layer.consumed_by_llm(),
                         matches!(body_retention.mode, PayloadBodyRetention::SummaryOnly),
                     )
-                    .map_err(|error| ControlError::new("application_protocol_analyzer", error))?
+                };
+                result.map_err(|error| ControlError::new("application_protocol_analyzer", error))?
             } else {
                 Vec::new()
             };
@@ -472,6 +613,8 @@ impl PayloadTransactionContext<'_> {
     ) -> Result<Vec<PreparedApplicationEvent>, ControlError> {
         let mut prepared = Vec::with_capacity(drafts.len());
         for draft in drafts {
+            let mut flags = EventFlags::clean();
+            flags.metadata_partial = draft.metadata_partial;
             let event = DomainEvent::new(
                 EventEnvelope {
                     event_id: self.next_event_id()?,
@@ -480,7 +623,7 @@ impl PayloadTransactionContext<'_> {
                     process: process.clone(),
                     collector: CollectorName::new(APPLICATION_PROTOCOL_COLLECTOR_NAME),
                     kind: EventKind::Application,
-                    flags: EventFlags::clean(),
+                    flags,
                 },
                 EventPayload::Application(draft.payload),
             );
@@ -518,6 +661,7 @@ impl PayloadTransactionContext<'_> {
 struct ResolvedRawPayloadSegment {
     raw: RawPayloadSegment,
     process: ProcessIdentity,
+    discontinuity_before: bool,
 }
 
 fn recording_error_to_control(error: RecordingError) -> ControlError {
@@ -573,14 +717,13 @@ fn tls_summary_application_draft(segment: &PayloadSegment) -> Option<Application
             (segment.original_size - segment.captured_size).to_string(),
         );
     }
-    Some(ApplicationEventDraft {
-        payload: ApplicationPayload {
-            protocol,
-            operation: operation.to_string(),
-            summary: format!("{operation} {} bytes ({reason})", segment.original_size),
-            metadata,
-        },
-    })
+    Some(ApplicationEventDraft::partial(ApplicationPayload {
+        protocol,
+        operation: operation.to_string(),
+        summary: format!("{operation} {} bytes ({reason})", segment.original_size),
+        body: None,
+        metadata,
+    }))
 }
 
 fn parse_tls_summary_hint(hint: &str) -> Option<BTreeMap<String, String>> {

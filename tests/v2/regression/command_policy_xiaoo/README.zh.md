@@ -2,7 +2,7 @@
 
 该 v2 回归使用 Web Configuration 为 `wasm.command-policy-dynamic` 只授予 `/usr/bin/bash` 的 deny scope，并发布 `args=["-c","*"]` 的规则，再驱动真实 Xiaoo 发起 Bash tool call。末尾 `*` 匹配任意剩余参数；测试不伪造 Agent 或 seccomp 通知。
 
-本地确定性流式 provider 只负责向真实 Xiaoo 返回一次 Bash tool request。Xiaoo 工具进程、`execve`、seccomp user notification、daemon 决策、SQLite 审计和 Web 告警均走实际运行路径。
+本地确定性流式 provider 只负责向真实 Xiaoo 返回一次 Bash tool request。Xiaoo 工具进程、主线程和非 leader 线程的 `execve`、seccomp user notification、daemon 决策、SQLite 审计和 Web 告警均走实际运行路径。
 
 ## 自动断言
 
@@ -12,9 +12,10 @@
 2. 同时包含授权规则和越权规则的 Configuration Test 以 all-or-nothing 方式拒绝，插件内存配置和 daemon revision 均不变化。
 3. Web Update 生成稳定规则 ID `command-dynamic-1`，带 `-c` argv 的 dry-run 返回 owner、decision 和 revision。
 4. 同一个 `/usr/bin/bash` 以 `--version` 运行时不命中 `[-c,*]`，保持允许。
-5. `actrailctl launch` 请求 `enforcement-command-execution-seccomp` 后，真实 Xiaoo Bash tool 返回 `EPERM`，marker 不存在。
-6. CLI 事件包含 `seccomp-user-notify` Enforcement；Web alerts 包含 high severity 的 `command.execution.boundary-violation`。
-7. Web 卸载 policy owner 后，第二次真实 Xiaoo Bash tool 成功并创建 marker。
+5. Python 非 leader 工作线程直接 `execve` 同一个 Bash `--version` 时也保持允许，证明通知 TID正确归一化到进程身份。
+6. `actrailctl launch` 请求 `enforcement-command-execution-seccomp` 后，真实 Xiaoo Bash tool 返回 `EPERM`，marker 不存在。
+7. CLI 事件包含 `seccomp-user-notify` Enforcement；Web alerts 包含 high severity 的 `command.execution.boundary-violation`。
+8. Web 卸载 policy owner 后，第二次真实 Xiaoo Bash tool 成功并创建 marker。
 
 ## 运行
 
@@ -158,6 +159,15 @@ NONMATCHING_OUTPUT="$(
 printf '%s\n' "$NONMATCHING_OUTPUT"
 grep -F 'GNU bash' <<<"$NONMATCHING_OUTPUT"
 
+THREAD_EXEC_OUTPUT="$(
+  timeout "$LAUNCH_TIMEOUT_SECONDS" \
+    actrailctl launch --name v2-command-policy-nonleader-exec -- \
+      python3 tests/v2/regression/command_policy_xiaoo/thread_exec.py \
+      "$BASH_EXECUTABLE" --version 2>&1
+)"
+printf '%s\n' "$THREAD_EXEC_OUTPUT"
+grep -F 'GNU bash' <<<"$THREAD_EXEC_OUTPUT"
+
 rm -f "$MARKER"
 DENIED_OUTPUT="$(
   timeout "$LAUNCH_TIMEOUT_SECONDS" \
@@ -184,8 +194,8 @@ test "$(printf '%s\n' "$DENIED_TRACE_ID" | sed '/^$/d' | wc -l)" -eq 1
 printf 'denied_trace=trace-%s\n' "$DENIED_TRACE_ID"
 ~~~
 
-预期 Bash `--version` 被允许；真实 Xiaoo 的 Bash tool 返回 EPERM，marker 不存在，
-且 launch 输出中只包含一个 denied trace ID。
+预期主线程和非 leader 工作线程执行的 Bash `--version` 均被允许；真实 Xiaoo 的
+Bash tool 返回 EPERM，marker 不存在，且 launch 输出中只包含一个 denied trace ID。
 
 ### 步骤 4：检查治理证据
 
@@ -251,7 +261,7 @@ exit
 - `COMMAND_POLICY_XIAOO_E2E_BINARY`：真实 Xiaoo 绝对路径；默认从 `PATH` 查找。
 - `COMMAND_POLICY_XIAOO_E2E_BASH`：治理目标；默认 `/usr/bin/bash`。
 - `COMMAND_POLICY_XIAOO_E2E_WEB_HOST`：Web 监听地址；自动测试默认 `127.0.0.1`。
-- `COMMAND_POLICY_XIAOO_E2E_WEB_PORT`：Web 监听端口；自动测试默认 `0`，由系统动态分配。
+- `COMMAND_POLICY_XIAOO_E2E_WEB_PORT`：Web 监听端口；未设置时自动选择可连接的 loopback 端口，显式值必须在 `1..65535` 内。
 - `COMMAND_POLICY_XIAOO_E2E_READY_TIMEOUT_SECONDS`：服务启动时限；默认 15 秒。
 - `COMMAND_POLICY_XIAOO_E2E_EVIDENCE_TIMEOUT_SECONDS`：Enforcement/alert 等待时限；默认 15 秒。
 - `COMMAND_POLICY_XIAOO_E2E_LAUNCH_TIMEOUT_SECONDS`：单次 Xiaoo launch 时限；默认 180 秒。

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import sqlite3
 import tempfile
 import time
 from pathlib import Path
@@ -168,6 +169,11 @@ def create_parser() -> argparse.ArgumentParser:
             / f"bench-overall-{time.strftime('%Y%m%d%H%M%S')}.json"
         ),
     )
+    parser.add_argument(
+        "--dump-storage",
+        action="store_true",
+        help="dump per-table and per-variant storage breakdown before cleanup",
+    )
     return parser
 
 
@@ -316,6 +322,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         report.storage_footprint_bytes = storage_footprint_bytes(
             actrail_work_dir
         )
+        if args.dump_storage:
+            dump_table_sizes(actrail_work_dir)
     finally:
         replay_server.stop()
         stop_actrail(actrail_work_dir, args.bin_dir)
@@ -328,6 +336,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         encoding="utf-8",
     )
     print_comparison(report.bare_samples, report.actrail_samples)
+    print(
+        f"storage_footprint_mb: "
+        f"{report.storage_footprint_bytes / (1024 * 1024):.3f}"
+    )
     print(f"report written to {args.out}")
     return 0
 
@@ -337,6 +349,35 @@ def _available_scenarios() -> tuple[ScenarioMeta, ...]:
         return ScenarioRegistry.from_environment().available_scenarios()
     except ScenarioConfigurationError as error:
         raise SystemExit(str(error))
+
+
+def dump_table_sizes(work_dir: Path) -> None:
+    database = work_dir / "data" / "actrail.sqlite"
+    if not database.is_file():
+        return
+    connection = sqlite3.connect(database)
+    try:
+        rows = connection.execute(
+            "SELECT name, SUM(pgsize) FROM dbstat GROUP BY name ORDER BY 2 DESC"
+        ).fetchall()
+        variant_rows = connection.execute(
+            "SELECT payload_variant, COUNT(*), SUM(length(payload)) "
+            "FROM events GROUP BY payload_variant ORDER BY 3 DESC"
+        ).fetchall()
+        block_rows = connection.execute(
+            "SELECT COUNT(*), COALESCE(SUM(length(encoded_bytes)), 0) "
+            "FROM event_payload_blocks"
+        ).fetchone()
+    finally:
+        connection.close()
+    print("table bytes (dbstat, >64KB):")
+    for name, size in rows:
+        if size >= 64 * 1024:
+            print(f"  {name}: {size}")
+    print("events variant (count, payload bytes):")
+    for variant, count, size in variant_rows:
+        print(f"  {variant}: {count} rows, {size} bytes")
+    print(f"event_payload_blocks: {block_rows[0]} rows, {block_rows[1]} bytes")
 
 
 def _scenario_listing_text() -> str:

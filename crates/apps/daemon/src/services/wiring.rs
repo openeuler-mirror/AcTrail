@@ -2,10 +2,11 @@
 
 use collector_capability::CollectorDescriptor;
 use config_core::daemon::{
-    AgentInvocationConfig, ApplicationProtocolConfig, CommandControlConfig, DiagnosticLogLevel,
-    EbpfCollectorConfig, EnforcementConfig, FileObservationConfig, NetworkControlConfig,
-    PayloadConfig, PluginAlertRuntimeConfig, ProcessSeccompConfig, ResourceMetricsConfig,
-    SeccompNotifyConfig, SemanticRetentionConfig, StorageRetentionConfig, TraceFinalizationConfig,
+    AgentInvocationConfig, AlertForwardingConfig, ApplicationProtocolConfig, CommandControlConfig,
+    DiagnosticLogLevel, EbpfCollectorConfig, EnforcementConfig, FileObservationConfig,
+    NetworkControlConfig, PayloadConfig, PluginAlertRuntimeConfig, ProcessSeccompConfig,
+    ResourceMetricsConfig, SeccompNotifyConfig, SemanticRetentionConfig, StorageRetentionConfig,
+    TraceFinalizationConfig,
 };
 use config_core::provider_rules::ProviderRuleSetConfig;
 use control_contract::reply::ControlError;
@@ -22,62 +23,19 @@ use storage_factory::{StorageConfig, open_storage_backend};
 use crate::profiles::DaemonProfileRegistry;
 use crate::runtime_wiring::DaemonRuntimeWiring;
 
+use super::alert_forwarding::AlertForwardingService;
 use super::application_protocol::COLLECTOR_NAME as APPLICATION_PROTOCOL_COLLECTOR_NAME;
 use super::attach::StorageAttachService;
 use super::enforcement::{
     COLLECTOR_NAME as ENFORCEMENT_COLLECTOR_NAME, FanotifyEnforcementService,
     enforcement_descriptor,
 };
+use super::network_control::NetworkControlService;
 use super::process_seccomp::PROCESS_SECCOMP_COLLECTOR_NAME;
 use super::resource_metrics::COLLECTOR_NAME as RESOURCE_METRICS_COLLECTOR_NAME;
 use super::workload_diagnostics::WorkloadDiagnostics;
 
 const TLS_SYNC_COLLECTOR_NAME: &str = "tls-sync";
-
-#[cfg(test)]
-pub(crate) fn build_runtime_wiring(
-    storage_config: &StorageConfig,
-    profiles: DaemonProfileRegistry,
-    ebpf_config: EbpfCollectorConfig,
-    payload_config: PayloadConfig,
-    active_trace_max: u32,
-    diagnostic_log_level: DiagnosticLogLevel,
-    seccomp_notify: SeccompNotifyConfig,
-    process_seccomp: ProcessSeccompConfig,
-    agent_invocation: AgentInvocationConfig,
-    semantic_retention: SemanticRetentionConfig,
-    file_observation: FileObservationConfig,
-    application_protocol: ApplicationProtocolConfig,
-    resource_metrics: ResourceMetricsConfig,
-    trace_finalization: TraceFinalizationConfig,
-    workload_diagnostics: WorkloadDiagnostics,
-    enforcement: EnforcementConfig,
-    command_control: CommandControlConfig,
-    network_control: NetworkControlConfig,
-) -> Result<DaemonRuntimeWiring<StorageAttachService>, ControlError> {
-    build_runtime_wiring_with_storage_retention(
-        storage_config,
-        profiles,
-        ebpf_config,
-        payload_config,
-        active_trace_max,
-        diagnostic_log_level,
-        seccomp_notify,
-        process_seccomp,
-        agent_invocation,
-        semantic_retention,
-        file_observation,
-        application_protocol,
-        resource_metrics,
-        StorageRetentionConfig::default(),
-        PluginAlertRuntimeConfig::default(),
-        trace_finalization,
-        workload_diagnostics,
-        enforcement,
-        command_control,
-        network_control,
-    )
-}
 
 pub(crate) fn build_runtime_wiring_with_storage_retention(
     storage_config: &StorageConfig,
@@ -95,7 +53,9 @@ pub(crate) fn build_runtime_wiring_with_storage_retention(
     resource_metrics: ResourceMetricsConfig,
     storage_retention: StorageRetentionConfig,
     plugin_alert_runtime: PluginAlertRuntimeConfig,
+    alert_forwarding_config: AlertForwardingConfig,
     trace_finalization: TraceFinalizationConfig,
+    shutdown_runtime_timeout_ms: u64,
     workload_diagnostics: WorkloadDiagnostics,
     enforcement: EnforcementConfig,
     command_control: CommandControlConfig,
@@ -117,7 +77,9 @@ pub(crate) fn build_runtime_wiring_with_storage_retention(
         resource_metrics,
         storage_retention,
         plugin_alert_runtime,
+        alert_forwarding_config,
         trace_finalization,
+        shutdown_runtime_timeout_ms,
         workload_diagnostics,
         enforcement,
         command_control,
@@ -142,7 +104,9 @@ pub(crate) fn build_runtime_wiring_with_provider_rule_set_and_storage_retention(
     resource_metrics: ResourceMetricsConfig,
     storage_retention: StorageRetentionConfig,
     plugin_alert_runtime: PluginAlertRuntimeConfig,
+    alert_forwarding_config: AlertForwardingConfig,
     trace_finalization: TraceFinalizationConfig,
+    shutdown_runtime_timeout_ms: u64,
     workload_diagnostics: WorkloadDiagnostics,
     enforcement: EnforcementConfig,
     command_control: CommandControlConfig,
@@ -168,7 +132,9 @@ pub(crate) fn build_runtime_wiring_with_provider_rule_set_and_storage_retention(
         resource_metrics,
         storage_retention,
         plugin_alert_runtime,
+        alert_forwarding_config,
         trace_finalization,
+        shutdown_runtime_timeout_ms,
         workload_diagnostics,
         enforcement,
         command_control,
@@ -193,7 +159,9 @@ fn build_runtime_wiring_with_attach_service(
     resource_metrics: ResourceMetricsConfig,
     storage_retention: StorageRetentionConfig,
     plugin_alert_runtime: PluginAlertRuntimeConfig,
+    alert_forwarding_config: AlertForwardingConfig,
     trace_finalization: TraceFinalizationConfig,
+    shutdown_runtime_timeout_ms: u64,
     workload_diagnostics: WorkloadDiagnostics,
     enforcement_config: EnforcementConfig,
     command_control_config: CommandControlConfig,
@@ -216,6 +184,8 @@ fn build_runtime_wiring_with_attach_service(
         .map_err(|error| ControlError::new(error.stage, error.message))?;
     let enforcement = FanotifyEnforcementService::new(enforcement_config.clone())?;
     let export_runtime = ExportRuntime::new(Vec::new());
+    let alert_forwarding = AlertForwardingService::start(alert_forwarding_config)?;
+    let sandbox_alert_forwarding = alert_forwarding.plugin();
 
     let mut attach_service = match provider_classifier {
         Some(provider_classifier) => StorageAttachService::new_with_provider_classifier(
@@ -233,7 +203,9 @@ fn build_runtime_wiring_with_attach_service(
             resource_metrics.clone(),
             storage_retention.clone(),
             plugin_alert_runtime,
+            alert_forwarding.clone(),
             trace_finalization,
+            shutdown_runtime_timeout_ms,
             workload_diagnostics.clone(),
             enforcement,
             command_control_config.clone(),
@@ -257,7 +229,9 @@ fn build_runtime_wiring_with_attach_service(
             resource_metrics.clone(),
             storage_retention,
             plugin_alert_runtime,
+            alert_forwarding.clone(),
             trace_finalization,
+            shutdown_runtime_timeout_ms,
             workload_diagnostics.clone(),
             enforcement,
             command_control_config.clone(),
@@ -290,6 +264,14 @@ fn build_runtime_wiring_with_attach_service(
     if process_seccomp.enabled || command_control_config.enabled {
         available_collectors.push(PROCESS_SECCOMP_COLLECTOR_NAME.to_string());
     }
+    if network_control_config.enabled {
+        available_collectors.push(
+            NetworkControlService::descriptor()
+                .name
+                .as_str()
+                .to_string(),
+        );
+    }
 
     let mut collector_descriptors = Vec::new();
     if process_seccomp.enabled || command_control_config.enabled {
@@ -313,6 +295,9 @@ fn build_runtime_wiring_with_attach_service(
     if enforcement_config.enabled {
         collector_descriptors.push(enforcement_descriptor());
     }
+    if network_control_config.enabled {
+        collector_descriptors.push(NetworkControlService::descriptor());
+    }
 
     Ok(DaemonRuntimeWiring {
         trace_runtime: trace_runtime::TraceRuntime::new(collector_descriptors, trace_id_seed),
@@ -321,6 +306,7 @@ fn build_runtime_wiring_with_attach_service(
         available_collectors,
         loaded_policy_plugins: Vec::new(),
         storage_ready: true,
+        alert_forwarding: sandbox_alert_forwarding,
     })
 }
 

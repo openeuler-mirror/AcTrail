@@ -1,0 +1,39 @@
+@startuml
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam componentStyle rectangle
+skinparam defaultFontName "WenQuanYi Micro Hei"
+left to right direction
+
+node "Linux 主机（默认部署）" as Host {
+  component "actraild" as Daemon
+  component "actrailctl\n（按需运行）" as Ctl
+  component "被观测 Agent 进程树" as Agent
+  component "TLS-sync runtime\n（目标进程内）" as Tls
+  component "actrailviewer\n（按需运行）" as Viewer
+  component "actrailweb\nlocal mode（可选）" as Web
+  database "AcTrail 主存储" as MainDb
+  component "actraild-alert-proxy\n（可选）" as AlertProxy
+  component "actrailcluster upload-loop\n（可选常驻）" as Reporter
+  database "cluster spool +\nreport state SQLite" as ReportState
+}
+
+cloud "OpenTelemetry collector\n（可选）" as Otel
+rectangle "告警订阅方\n（可选）" as Subscribers
+node "AcTrail 集群中心\n（可选、可位于另一节点）" as ClusterCenter
+
+Ctl --> Daemon : AF_UNIX control
+Ctl --> Agent : launch / attach
+Agent .. Tls : 进程内加载
+Tls --> Daemon : 明文 payload
+Daemon --> MainDb : trace 与 action
+Viewer --> MainDb : 只读查询
+Web --> MainDb : 只读查询
+Web --> Daemon : AF_UNIX control
+Daemon --> AlertProxy : AF_UNIX ATAP
+AlertProxy --> Subscribers : TCP ATAP
+Daemon --> Otel : OTLP / HTTP
+Reporter --> MainDb : 读取终态 trace
+Reporter --> ReportState : bundle 与状态
+Reporter --> ClusterCenter : HTTP bundle upload
+@enduml

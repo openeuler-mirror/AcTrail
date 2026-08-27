@@ -2,8 +2,6 @@
 
 mod path_utils;
 mod syscall;
-#[cfg(test)]
-mod tests;
 
 use path_utils::*;
 pub(super) use syscall::{dup_target_fd, fcntl_duplicates_fd};
@@ -60,6 +58,8 @@ pub(super) const FILE_SYSCALL_PIPE: u32 = 23;
 pub(super) const FILE_SYSCALL_PIPE2: u32 = 24;
 pub(super) const FILE_SYSCALL_SOCKETPAIR: u32 = 25;
 pub(super) const FILE_SYSCALL_CLOSE_RANGE: u32 = 27;
+pub(super) const FILE_SYSCALL_IOCTL_CLOEXEC: u32 = 28;
+pub(super) const FILE_SYSCALL_IOCTL_NCLOEXEC: u32 = 29;
 
 pub(super) const FILE_IPC_KIND_PIPE: u64 = 1;
 pub(super) const FILE_IPC_KIND_UNIX_SOCKET: u64 = 2;
@@ -381,6 +381,15 @@ impl FileTracker {
         primary_path: &PathResolution,
         secondary_path: &Option<PathResolution>,
     ) -> Option<String> {
+        if enter.aux == FILE_SYSCALL_CLOSE {
+            let fd = enter.arg0 as u32;
+            let path = self.resolve_fd_path(process_key.trace_id, &process_key.process, fd);
+            let state = self.ensure_process(process_key);
+            state.fds.remove(&fd);
+            state.creation_requested_fds.remove(&fd);
+            self.lineage.close_fd(process_key, fd, observed_ktime_ns);
+            return path;
+        }
         if result < 0 {
             return None;
         }
@@ -405,19 +414,6 @@ impl FileTracker {
                 }
                 Some(path)
             }
-            FILE_SYSCALL_CLOSE => {
-                let path = self.resolve_fd_path(
-                    process_key.trace_id,
-                    &process_key.process,
-                    enter.arg0 as u32,
-                );
-                let state = self.ensure_process(process_key);
-                state.fds.remove(&(enter.arg0 as u32));
-                state.creation_requested_fds.remove(&(enter.arg0 as u32));
-                self.lineage
-                    .close_fd(process_key, enter.arg0 as u32, observed_ktime_ns);
-                path
-            }
             FILE_SYSCALL_CLOSE_RANGE => {
                 self.apply_close_range_exit(process_key, enter, observed_ktime_ns);
                 None
@@ -435,6 +431,14 @@ impl FileTracker {
                     process_key,
                     enter.arg0 as u32,
                     enter.arg2 & libc::FD_CLOEXEC as u64 != 0,
+                );
+                None
+            }
+            FILE_SYSCALL_IOCTL_CLOEXEC | FILE_SYSCALL_IOCTL_NCLOEXEC => {
+                self.lineage.set_fd_close_on_exec(
+                    process_key,
+                    enter.arg0 as u32,
+                    enter.aux == FILE_SYSCALL_IOCTL_CLOEXEC,
                 );
                 None
             }

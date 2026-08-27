@@ -28,15 +28,32 @@ impl TraceWriteStore for SqliteStorage {
         let connection = self.connection().borrow_mut();
         connection
             .prepare_cached(
-                "INSERT OR REPLACE INTO traces (
-                    trace_id, alert_token, root_process_id, root_container_id, root_working_directory,
+                "INSERT INTO traces (
+                    trace_id, otel_trace_id, alert_token, root_process_id, root_container_id, root_working_directory,
                     display_name, profile_name, tags, lifecycle_state, health, created_at,
                     started_at, completed_at, exited_at, failed_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+                ON CONFLICT(trace_id) DO UPDATE SET
+                    otel_trace_id = excluded.otel_trace_id,
+                    alert_token = excluded.alert_token,
+                    root_process_id = excluded.root_process_id,
+                    root_container_id = excluded.root_container_id,
+                    root_working_directory = excluded.root_working_directory,
+                    display_name = excluded.display_name,
+                    profile_name = excluded.profile_name,
+                    tags = excluded.tags,
+                    lifecycle_state = excluded.lifecycle_state,
+                    health = excluded.health,
+                    created_at = excluded.created_at,
+                    started_at = excluded.started_at,
+                    completed_at = excluded.completed_at,
+                    exited_at = excluded.exited_at,
+                    failed_at = excluded.failed_at",
             )
             .and_then(|mut statement| {
                 statement.execute(params![
                     trace.trace_id.get(),
+                    trace.otel_trace_id.as_bytes().as_slice(),
                     trace.alert_token.as_bytes().as_slice(),
                     trace.root_process_identity.get(),
                     trace.root_container_id.clone(),
@@ -146,17 +163,45 @@ impl MembershipWriteStore for SqliteStorage {
 }
 
 impl EventWriteStore for SqliteStorage {
-    fn append_event(&mut self, event: DomainEvent) -> Result<(), WriteError> {
-        let (payload_variant, payload_fields, payload_bytes) = encode_event_payload(&event.payload);
+    fn append_event(&mut self, mut event: DomainEvent) -> Result<(), WriteError> {
+        let encoded = encode_event_payload(&mut event.payload)
+            .map_err(|error| WriteError::new("encode_event_payload", error.to_string()))?;
         let (policy_redactions, policy_truncations) = encode_policy_record(&event.policy);
         let connection = self.connection().borrow_mut();
+        let mut block_ids = Vec::with_capacity(encoded.blocks.len());
+        for block in &encoded.blocks {
+            let compressed = zstd::stream::encode_all(
+                block.bytes.as_slice(),
+                self.cold_field_compression.zstd_level,
+            )
+            .map_err(|error| WriteError::new("encode_event_payload_block", error.to_string()))?;
+            connection
+                .execute(
+                    "INSERT INTO event_payload_blocks (trace_id, kind, encoded_bytes)
+                     VALUES (?1, ?2, ?3)",
+                    params![
+                        event.envelope.trace_id.get(),
+                        block.kind.to_i64(),
+                        compressed
+                    ],
+                )
+                .map_err(|error| {
+                    WriteError::new("insert_event_payload_block", error.to_string())
+                })?;
+            block_ids.push(connection.last_insert_rowid());
+        }
+        let payload_blocks = block_ids
+            .iter()
+            .map(i64::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
         connection
             .prepare_cached(
                 "INSERT OR REPLACE INTO events (
                     event_id, trace_id, observed_at, process_id, collector, kind, bootstrap_observed,
-                    metadata_partial, policy_modified, payload_variant, payload_fields, payload_bytes,
-                    policy_verdict, policy_note, policy_redactions, policy_truncations
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                    metadata_partial, policy_modified, payload_variant, payload, payload_code,
+                    payload_blocks, policy_verdict, policy_note, policy_redactions, policy_truncations
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             )
             .and_then(|mut statement| {
                 statement.execute(params![
@@ -169,9 +214,10 @@ impl EventWriteStore for SqliteStorage {
                     bool_to_i64(event.envelope.flags.bootstrap_observed),
                     bool_to_i64(event.envelope.flags.metadata_partial),
                     bool_to_i64(event.envelope.flags.policy_modified),
-                    payload_variant,
-                    payload_fields,
-                    payload_bytes,
+                    encoded.variant,
+                    encoded.fields,
+                    1i64,
+                    payload_blocks,
                     encode_policy_verdict(event.policy.verdict),
                     event.policy.note,
                     policy_redactions,

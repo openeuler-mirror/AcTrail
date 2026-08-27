@@ -390,6 +390,7 @@ pub struct ControlDecisionRequest {
     pub context_ref: Option<String>,
     pub file_policy_context: Option<FilePolicyReadContext>,
     pub command_execution_context: Option<crate::CommandExecutionContext>,
+    pub network_action_context: Option<crate::NetworkActionContext>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

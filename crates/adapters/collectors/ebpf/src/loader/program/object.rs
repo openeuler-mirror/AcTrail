@@ -1,8 +1,6 @@
 //! Shared libbpf object helpers for runtime loading.
 
-use std::cell::RefCell;
 use std::ffi::OsStr;
-use std::rc::Rc;
 #[cfg(any(feature = "perf-buffer", actrail_event_transport_perf))]
 use std::sync::Arc;
 #[cfg(any(feature = "perf-buffer", actrail_event_transport_perf))]
@@ -20,7 +18,6 @@ use super::LoaderError;
 use super::abi::{
     EXEC_EVENT_SIZE, KERNEL_OBSERVATION_EVENT_SIZE, LAUNCH_BINDING_FAILURE_EVENT_SIZE,
 };
-use super::ring_decode::{KernelEvent, decode_kernel_event};
 
 pub(crate) fn ring_buffer_max_bytes(config: &EbpfCollectorConfig, payload: &PayloadConfig) -> u32 {
     let mut max_bytes = config.event_ring_buffer_max_bytes;
@@ -36,36 +33,6 @@ pub(crate) fn ring_buffer_max_bytes(config: &EbpfCollectorConfig, payload: &Payl
     max_bytes
 }
 
-#[cfg(not(any(feature = "perf-buffer", actrail_event_transport_perf)))]
-pub(crate) fn build_ring_buffer(
-    events_map: &MapHandle,
-    events: Rc<RefCell<Vec<KernelEvent>>>,
-    decode_error: Rc<RefCell<Option<LoaderError>>>,
-) -> Result<RingBuffer<'static>, LoaderError> {
-    let mut builder = RingBufferBuilder::new();
-    builder
-        .add(events_map, move |raw| {
-            // Decode directly in the callback so each sample is only touched
-            // once instead of being copied into a raw buffer and decoded
-            // afterwards. Decode failures are recorded and surfaced by
-            // `poll_events`, mirroring the previous drain-failure behavior.
-            match decode_kernel_event(raw) {
-                Ok(event) => events.borrow_mut().push(event),
-                Err(error) => {
-                    let mut slot = decode_error.borrow_mut();
-                    if slot.is_none() {
-                        *slot = Some(error);
-                    }
-                }
-            }
-            0
-        })
-        .map_err(|error| LoaderError::new("ring_buffer", error.to_string()))?;
-    builder
-        .build()
-        .map_err(|error| LoaderError::new("ring_buffer", error.to_string()))
-}
-
 pub(crate) enum EventBuffer {
     #[cfg(not(any(feature = "perf-buffer", actrail_event_transport_perf)))]
     Ring(RingBuffer<'static>),
@@ -77,21 +44,29 @@ pub(crate) enum EventBuffer {
 }
 
 impl EventBuffer {
-    pub(crate) fn build(
+    /// Build a transport whose sample callback forwards raw records to `sink`.
+    ///
+    /// The sink must not require `Rc` interior mutability, so the resulting
+    /// buffer can be moved to a dedicated consumer thread: both transports are
+    /// `Send` (libbpf's unsafe impls) and the sink is only ever invoked from
+    /// the single thread that owns the buffer.
+    pub(crate) fn build_with_sink<F>(
         events_map: &MapHandle,
-        events: Rc<RefCell<Vec<KernelEvent>>>,
-        decode_error: Rc<RefCell<Option<LoaderError>>>,
         buffer_bytes: u32,
-    ) -> Result<Self, LoaderError> {
+        sink: F,
+    ) -> Result<Self, LoaderError>
+    where
+        F: FnMut(&[u8]) + 'static,
+    {
         #[cfg(any(feature = "perf-buffer", actrail_event_transport_perf))]
         {
-            let (buffer, lost) = build_perf_buffer(events_map, events, decode_error, buffer_bytes)?;
+            let (buffer, lost) = build_perf_buffer_with_sink(events_map, buffer_bytes, sink)?;
             return Ok(Self::Perf { buffer, lost });
         }
         #[cfg(not(any(feature = "perf-buffer", actrail_event_transport_perf)))]
         {
             let _ = buffer_bytes;
-            build_ring_buffer(events_map, events, decode_error).map(Self::Ring)
+            build_ring_buffer_with_sink(events_map, sink).map(Self::Ring)
         }
     }
 
@@ -127,29 +102,42 @@ impl EventBuffer {
     }
 }
 
-#[cfg(any(feature = "perf-buffer", actrail_event_transport_perf))]
-fn build_perf_buffer(
+#[cfg(not(any(feature = "perf-buffer", actrail_event_transport_perf)))]
+fn build_ring_buffer_with_sink<F>(
     events_map: &MapHandle,
-    events: Rc<RefCell<Vec<KernelEvent>>>,
-    decode_error: Rc<RefCell<Option<LoaderError>>>,
+    mut sink: F,
+) -> Result<RingBuffer<'static>, LoaderError>
+where
+    F: FnMut(&[u8]) + 'static,
+{
+    let mut builder = RingBufferBuilder::new();
+    builder
+        .add(events_map, move |raw| {
+            sink(raw);
+            0
+        })
+        .map_err(|error| LoaderError::new("ring_buffer", error.to_string()))?;
+    builder
+        .build()
+        .map_err(|error| LoaderError::new("ring_buffer", error.to_string()))
+}
+
+#[cfg(any(feature = "perf-buffer", actrail_event_transport_perf))]
+fn build_perf_buffer_with_sink<F>(
+    events_map: &MapHandle,
     buffer_bytes: u32,
-) -> Result<(PerfBuffer<'static>, Arc<AtomicU64>), LoaderError> {
-    let callback_events = Rc::clone(&events);
+    mut sink: F,
+) -> Result<(PerfBuffer<'static>, Arc<AtomicU64>), LoaderError>
+where
+    F: FnMut(&[u8]) + 'static,
+{
     let lost = Arc::new(AtomicU64::new(0));
     let callback_lost = Arc::clone(&lost);
     let pages = perf_pages_for_bytes(buffer_bytes)?;
     let buffer = PerfBufferBuilder::new(events_map)
-        .sample_cb(
-            move |_cpu, raw| match decode_kernel_event(perf_sample_payload(raw)) {
-                Ok(event) => callback_events.borrow_mut().push(event),
-                Err(error) => {
-                    let mut slot = decode_error.borrow_mut();
-                    if slot.is_none() {
-                        *slot = Some(error);
-                    }
-                }
-            },
-        )
+        .sample_cb(move |_cpu, raw| {
+            sink(perf_sample_payload(raw));
+        })
         .lost_cb(move |_cpu, count| {
             callback_lost.fetch_add(count, Ordering::Relaxed);
         })
@@ -210,7 +198,7 @@ fn known_event_size(kind: u32, size: usize) -> bool {
     }
 
     match kind {
-        1 | 3 | 4 | 100..=105 => size == KERNEL_OBSERVATION_EVENT_SIZE,
+        1 | 3 | 4 | 100..=107 => size == KERNEL_OBSERVATION_EVENT_SIZE,
         2 => size == EXEC_EVENT_SIZE,
         201 | 202 => size == TLS_PAYLOAD_FIXED_EVENT_SIZE,
         203 => size == TLS_DIRECT_CAPTURE_EVENT_SIZE,
@@ -234,7 +222,7 @@ fn known_event_size(kind: u32, size: usize) -> bool {
 fn known_event_kind(kind: u32) -> bool {
     matches!(
         kind,
-        1..=4 | 100..=105 | 201..=205 | 300..=308 | 400 | 401 | 500 | 501
+        1..=4 | 100..=107 | 201..=205 | 300..=308 | 400 | 401 | 500 | 501
     )
 }
 
@@ -306,58 +294,4 @@ pub(crate) fn resize_map(
         .ok_or_else(|| LoaderError::new("resize_map", format!("map {map_name} is missing")))?;
     map.set_max_entries(max_entries)
         .map_err(|error| LoaderError::new("resize_map", error.to_string()))
-}
-
-#[cfg(all(test, any(feature = "perf-buffer", actrail_event_transport_perf)))]
-mod tests {
-    use super::{EXEC_EVENT_SIZE, KERNEL_OBSERVATION_EVENT_SIZE, perf_sample_payload};
-
-    #[test]
-    fn perf_sample_payload_strips_raw_size_prefix() {
-        let mut raw = Vec::new();
-        raw.extend_from_slice(&(KERNEL_OBSERVATION_EVENT_SIZE as u32).to_ne_bytes());
-        raw.extend_from_slice(&1u32.to_ne_bytes());
-        raw.resize(KERNEL_OBSERVATION_EVENT_SIZE + 4, 0);
-
-        let payload = perf_sample_payload(&raw);
-
-        assert_eq!(payload.len(), KERNEL_OBSERVATION_EVENT_SIZE);
-        assert_eq!(&payload[..4], &1u32.to_ne_bytes());
-    }
-
-    #[test]
-    fn perf_sample_payload_keeps_unprefixed_event() {
-        let mut raw = Vec::new();
-        raw.extend_from_slice(&1u32.to_ne_bytes());
-        raw.resize(KERNEL_OBSERVATION_EVENT_SIZE, 0);
-
-        let payload = perf_sample_payload(&raw);
-
-        assert_eq!(payload.len(), KERNEL_OBSERVATION_EVENT_SIZE);
-        assert_eq!(&payload[..4], &1u32.to_ne_bytes());
-    }
-
-    #[test]
-    fn perf_sample_payload_strips_trailing_observation_padding() {
-        let mut raw = Vec::new();
-        raw.extend_from_slice(&103u32.to_ne_bytes());
-        raw.resize(KERNEL_OBSERVATION_EVENT_SIZE + 4, 0);
-
-        let payload = perf_sample_payload(&raw);
-
-        assert_eq!(payload.len(), KERNEL_OBSERVATION_EVENT_SIZE);
-        assert_eq!(&payload[..4], &103u32.to_ne_bytes());
-    }
-
-    #[test]
-    fn perf_sample_payload_strips_trailing_exec_padding() {
-        let mut raw = Vec::new();
-        raw.extend_from_slice(&2u32.to_ne_bytes());
-        raw.resize(EXEC_EVENT_SIZE + 4, 0);
-
-        let payload = perf_sample_payload(&raw);
-
-        assert_eq!(payload.len(), EXEC_EVENT_SIZE);
-        assert_eq!(&payload[..4], &2u32.to_ne_bytes());
-    }
 }

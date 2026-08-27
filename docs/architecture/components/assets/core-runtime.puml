@@ -1,0 +1,33 @@
+@startuml
+skinparam defaultFontName "WenQuanYi Micro Hei"
+skinparam componentStyle rectangle
+top to bottom direction
+
+title actraild 当前核心运行时组件
+
+cloud "Linux kernel / TLS sync" as Sources
+component "Control & Attach\n控制命令、trace 绑定、采集挂载" as Control
+component "Collectors & Ingest\n事件、payload、身份与 membership" as Ingest
+component "Protocol & LLM\nHTTP、SSE、provider 投影" as Protocol
+component "Semantic Runtime\naction、link、MCP、tool" as Semantic
+component "Governance\n文件、命令与网络控制" as Governance
+component "Plugin Host\nobservation / control / codec / alert" as Plugins
+component "Recording & Export\n事务写入与 best-effort 导出" as Output
+database "Storage" as Storage
+
+Sources -down-> Ingest : kernel events / plaintext
+Control -right-> Ingest : trace 与采集配置
+Ingest -down-> Protocol : plaintext / HTTP evidence
+Ingest -right-> Semantic : DomainEvent / PayloadSegment
+Protocol -right-> Semantic : LLM actions 与诊断
+Plugins -left-> Protocol : LLM codec
+Plugins -up-> Governance : control decision
+Semantic -down-> Plugins : observation batch
+Semantic -right-> Output : actions / links / content
+Governance -left-> Ingest : enforcement events
+Output -down-> Storage : 单事务持久化
+
+note bottom of Output
+  导出使用方失败不回滚主存储
+end note
+@enduml

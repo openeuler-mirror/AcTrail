@@ -8,6 +8,9 @@ TMPFILES_CONFIG="$ROOT_DIR/deploy/virtual-container/guest/actrail-tmpfiles.conf"
 INTERFACE_DROP_IN="$ROOT_DIR/deploy/virtual-container/guest/systemd/workload-interface/kata-agent.service.d/10-actrail-workload-interface.conf"
 REQUIRED_DROP_IN="$ROOT_DIR/deploy/virtual-container/guest/systemd/required/kata-agent.service.d/20-actrail-required.conf"
 LEGACY_DROP_IN="$ROOT_DIR/deploy/virtual-container/guest/systemd/fail-closed/kata-agent.service.d/20-actrail-required.conf"
+SB_CONFIG="$ROOT_DIR/deploy/virtual-container/guest/sandbox-observer.toml"
+SB_UNIT="$ROOT_DIR/deploy/virtual-container/guest/actrail-sb.service"
+SB_CONNECT_UNIT="$ROOT_DIR/deploy/virtual-container/guest/actrail-sb-connect.service"
 
 fail() {
   echo "FAIL: $*" >&2
@@ -61,5 +64,19 @@ assert_line "$REQUIRED_DROP_IN" "Requires=actraild.service"
 assert_line "$REQUIRED_DROP_IN" "After=actraild.service"
 [[ ! -e "$LEGACY_DROP_IN" ]] \
   || fail "legacy fail-closed directory must not remain as an alias"
+
+[[ -f "$SB_CONFIG" ]] || fail "sandbox observer config not found: $SB_CONFIG"
+[[ -f "$SB_UNIT" ]] || fail "sandbox observer unit not found: $SB_UNIT"
+[[ -f "$SB_CONNECT_UNIT" ]] \
+  || fail "sandbox observer connect unit not found: $SB_CONNECT_UNIT"
+assert_line "$SB_CONFIG" 'oom_event_capacity = 256'
+assert_line "$SB_CONFIG" \
+  'socket_path = "/dev/actrail/sandbox-observer-control.sock"'
+grep -Fq -- '/dev/actrail/sandbox-observer-control.sock' "$SB_UNIT" \
+  || fail "$SB_UNIT does not expose its control socket through /dev/actrail"
+assert_line "$SB_CONNECT_UNIT" \
+  'ExecStart=/usr/local/bin/actrail-sb connect --control-socket /dev/actrail/sandbox-observer-control.sock --host-cid 2 --port 43182 --request-timeout-ms 5000'
+assert_line "$SB_CONNECT_UNIT" \
+  'WantedBy=multi-user.target kata-containers.target'
 
 echo "PASS: guest systemd startup contract"

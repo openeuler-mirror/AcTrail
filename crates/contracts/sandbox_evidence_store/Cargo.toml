@@ -1,0 +1,8 @@
+[package]
+name = "sandbox_evidence_store"
+version.workspace = true
+edition = "2024"
+license = "MulanPSL-2.0"
+
+[dependencies]
+sandbox_observation = { path = "../sandbox_observation" }

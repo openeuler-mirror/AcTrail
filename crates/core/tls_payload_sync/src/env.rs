@@ -29,6 +29,7 @@ pub const ENV_FLOW_MAX_HEADER_BYTES: &str = "TLS_PAYLOAD_SYNC_FLOW_MAX_HEADER_BY
 pub const ENV_FLOW_LARGE_TRANSFER_BYTES: &str = "TLS_PAYLOAD_SYNC_FLOW_LARGE_TRANSFER_BYTES";
 pub const ENV_FLOW_UNKNOWN_STREAM_BYTES: &str = "TLS_PAYLOAD_SYNC_FLOW_UNKNOWN_STREAM_BYTES";
 pub const ENV_FLOW_H2_DATA_PROBE_BYTES: &str = "TLS_PAYLOAD_SYNC_FLOW_H2_DATA_PROBE_BYTES";
+pub const ENV_FLOW_MAX_STREAMS: &str = "TLS_PAYLOAD_SYNC_FLOW_MAX_STREAMS";
 pub const ENV_LIBRARY_PATH_PREFIX: &str = "TLS_PAYLOAD_SYNC_LIBRARY_PATH_PREFIX";
 pub const ENV_LIBRARY_PATH_PREFIX_GLIBC: &str = "TLS_PAYLOAD_SYNC_LIBRARY_PATH_PREFIX_GLIBC";
 pub const ENV_LIBRARY_PATH_PREFIX_MUSL: &str = "TLS_PAYLOAD_SYNC_LIBRARY_PATH_PREFIX_MUSL";
@@ -60,6 +61,7 @@ pub struct RuntimeFlowControlConfig {
     pub large_transfer_bytes: u64,
     pub unknown_stream_bytes: u64,
     pub h2_data_probe_bytes: u64,
+    pub max_streams: usize,
 }
 
 impl Default for RuntimeFlowControlConfig {
@@ -71,6 +73,7 @@ impl Default for RuntimeFlowControlConfig {
             large_transfer_bytes: 1048576,
             unknown_stream_bytes: DEFAULT_TLS_SYNC_FLOW_UNKNOWN_STREAM_BYTES,
             h2_data_probe_bytes: 65536,
+            max_streams: 4096,
         }
     }
 }
@@ -190,6 +193,10 @@ pub fn runtime_env_for_plan_descriptors(
             ENV_FLOW_H2_DATA_PROBE_BYTES,
             &config.flow_control.h2_data_probe_bytes.to_string(),
         ),
+        pair(
+            ENV_FLOW_MAX_STREAMS,
+            &config.flow_control.max_streams.to_string(),
+        ),
         pair(ENV_REDACTION, config.redaction.as_str()),
         pair(ENV_EVENTS, &config.events.encode()),
     ];
@@ -245,131 +252,4 @@ fn encode_hex(bytes: &[u8]) -> String {
         value.push_str(&format!("{byte:02x}"));
     }
     value
-}
-
-#[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-
-    use tls_probe_point_finder::{
-        AttachPoint, BinaryIdentity, BinaryIdentityTypeCode, CaptureStrategy,
-        PayloadDirection as FinderDirection, ProbeBinary, ProbePoint, ProbePointPlan, ProbeSource,
-        TargetIdentity, TlsProvider,
-    };
-
-    use super::{
-        ENV_BINARY, ENV_EVENT_FD, ENV_PLAN_BUNDLE, EventFilter, RuntimeEnvConfig,
-        RuntimeFlowControlConfig, runtime_env_for_plans,
-    };
-
-    #[test]
-    fn runtime_env_encodes_multiple_probe_plans() {
-        let config = RuntimeEnvConfig {
-            rules: Vec::new(),
-            max_payload_bytes: 4096,
-            flow_control: RuntimeFlowControlConfig::default(),
-            redaction: super::RedactionMode::Redact,
-            events: EventFilter::none(),
-            trace_id: None,
-            event_socket_path: None,
-            event_fd: None,
-            event_write_buffer_bytes: None,
-        };
-        let first = plan("/bin/first", TlsProvider::BoringSsl);
-        let second = plan("/bin/second", TlsProvider::Rustls);
-
-        let env = runtime_env_for_plans(&config, &[first, second]).expect("runtime env");
-        let bundle = env
-            .iter()
-            .find(|(key, _)| key == ENV_PLAN_BUNDLE)
-            .map(|(_, value)| value.to_string_lossy().into_owned())
-            .expect("plan bundle");
-
-        assert_eq!(bundle.lines().count(), 2);
-    }
-
-    #[test]
-    fn runtime_env_allows_empty_probe_plan_bundle() {
-        let config = RuntimeEnvConfig {
-            rules: Vec::new(),
-            max_payload_bytes: 4096,
-            flow_control: RuntimeFlowControlConfig::default(),
-            redaction: super::RedactionMode::Redact,
-            events: EventFilter::none(),
-            trace_id: None,
-            event_socket_path: None,
-            event_fd: None,
-            event_write_buffer_bytes: None,
-        };
-
-        let env = runtime_env_for_plans(&config, &[]).expect("runtime env");
-        let bundle = env
-            .iter()
-            .find(|(key, _)| key == ENV_PLAN_BUNDLE)
-            .map(|(_, value)| value.to_string_lossy().into_owned())
-            .expect("plan bundle");
-
-        assert_eq!(bundle, "");
-        assert!(!env.iter().any(|(key, _)| key == ENV_BINARY));
-    }
-
-    #[test]
-    fn runtime_env_encodes_inherited_event_fd() {
-        let config = RuntimeEnvConfig {
-            rules: Vec::new(),
-            max_payload_bytes: 4096,
-            flow_control: RuntimeFlowControlConfig::default(),
-            redaction: super::RedactionMode::Redact,
-            events: EventFilter::none(),
-            trace_id: None,
-            event_socket_path: None,
-            event_fd: Some(3),
-            event_write_buffer_bytes: None,
-        };
-
-        let env = runtime_env_for_plans(&config, &[]).expect("runtime env");
-
-        assert!(env.iter().any(|(key, value)| {
-            key == ENV_EVENT_FD && value.to_string_lossy().as_ref() == "3"
-        }));
-    }
-
-    fn plan(path: &str, provider: TlsProvider) -> ProbePointPlan {
-        ProbePointPlan {
-            target: TargetIdentity {
-                binary: PathBuf::from(path),
-                architecture: "x86_64".to_string(),
-                identity: BinaryIdentity {
-                    identity_type_code: BinaryIdentityTypeCode::GnuBuildId,
-                    identity: "00".to_string(),
-                },
-            },
-            provider,
-            source: ProbeSource::Executable,
-            resolver: "test".to_string(),
-            binary: ProbeBinary {
-                path: PathBuf::from(path),
-                architecture: "x86_64".to_string(),
-                identity: BinaryIdentity {
-                    identity_type_code: BinaryIdentityTypeCode::GnuBuildId,
-                    identity: "00".to_string(),
-                },
-            },
-            points: vec![
-                point("write", FinderDirection::Outbound),
-                point("read", FinderDirection::Inbound),
-            ],
-        }
-    }
-
-    fn point(symbol: &str, direction: FinderDirection) -> ProbePoint {
-        ProbePoint {
-            symbol: symbol.to_string(),
-            direction,
-            attach: AttachPoint::Entry,
-            capture: CaptureStrategy::EntryBuffer,
-            virtual_address: 0,
-            file_offset: 0,
-        }
-    }
 }

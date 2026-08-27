@@ -3,10 +3,19 @@
     <section class="waterfall-panel tab-detail-main">
     <div class="waterfall-toolbar">
       <span class="wf-count">
-        {{ totalActions }} actions
+        {{ waterfall.partial ? `${totalActions} of ${waterfall.totalActions}` : totalActions }} actions
         <template v-if="windowText"> · {{ windowText }}</template>
       </span>
       <div class="wf-actions">
+        <button
+          v-if="waterfall.partial"
+          type="button"
+          class="tree-action"
+          title="Load file, HTTP, SSE, and other high-volume action groups"
+          @click="$emit('load-full-waterfall')"
+        >
+          Load all actions
+        </button>
         <button
           type="button"
           class="tree-action"
@@ -434,7 +443,7 @@ const props = defineProps({
   },
 });
 
-const emit = defineEmits(['open-attribution', 'open-waterfall']);
+const emit = defineEmits(['open-attribution', 'open-waterfall', 'load-full-waterfall']);
 
 const expandedIds = ref(new Set());
 const activeGroups = ref(new Set());

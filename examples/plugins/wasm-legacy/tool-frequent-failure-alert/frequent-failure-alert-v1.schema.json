@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "tool-frequent-failure-alert.v1",
+  "title": "Tool Frequent Failure Alert Payload",
+  "description": "Payload schema for tool-frequent-failure-alert plugin frequent-failure alerts",
+  "type": "object",
+  "required": [
+    "alert_type",
+    "timestamp",
+    "trace_id",
+    "tool_name",
+    "failure_type",
+    "exit_status",
+    "failure_count",
+    "total_count",
+    "failure_rate",
+    "threshold",
+    "window",
+    "first_action_id",
+    "last_action_id",
+    "evidence_action_ids",
+    "evidence_truncated_count"
+  ],
+  "properties": {
+    "alert_type": { "type": "string", "const": "frequent_failure" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "trace_id": { "type": "string" },
+    "tool_name": { "type": "string", "description": "Tool aggregation dimension (LLM/MCP tool name, never the command line)" },
+    "failure_type": { "type": "string", "description": "Canonical failure category after failure_type_map" },
+    "exit_status": { "type": "string", "description": "Normalized exit status (exit code, mcp:error, policy:deny, unknown)" },
+    "failure_breakdown": {
+      "type": "array",
+      "description": "Window-internal (failure_type, exit_status) distribution",
+      "items": {
+        "type": "object",
+        "required": ["failure_type", "exit_status", "count"],
+        "properties": {
+          "failure_type": { "type": "string" },
+          "exit_status": { "type": "string" },
+          "count": { "type": "integer", "minimum": 1 }
+        }
+      }
+    },
+    "failure_count": { "type": "integer", "minimum": 1 },
+    "total_count": { "type": "integer", "minimum": 0 },
+    "failure_rate": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+    "threshold": {
+      "type": "object",
+      "required": ["min_failure_count", "min_failure_rate", "window_seconds", "trigger_mode"],
+      "properties": {
+        "min_failure_count": { "type": "integer", "minimum": 1 },
+        "min_failure_rate": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+        "window_seconds": { "type": "integer", "minimum": 1 },
+        "trigger_mode": { "type": "string" }
+      }
+    },
+    "window": {
+      "type": "object",
+      "required": ["start_ms", "end_ms"],
+      "properties": {
+        "start_ms": { "type": "integer" },
+        "end_ms": { "type": "integer" }
+      },
+      "description": "Aggregation window range (epoch milliseconds)"
+    },
+    "first_action_id": { "type": "string" },
+    "last_action_id": { "type": "string" },
+    "evidence_action_ids": { "type": "array", "items": { "type": "string" } },
+    "evidence_truncated_count": { "type": "integer", "minimum": 0 },
+    "summary": { "type": "string", "description": "Desensitized failure summary; absent when desensitization=category_only" },
+    "debug_command_line": { "type": "string", "description": "Only present when debug_include_command_line=true; always desensitized" }
+  },
+  "additionalProperties": false
+}

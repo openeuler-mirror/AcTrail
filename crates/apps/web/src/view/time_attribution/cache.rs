@@ -3,6 +3,14 @@ use super::summary::{breakdown_shares, category_shares, command_breakdown_shares
 use super::turns::attribution_scope;
 use super::*;
 
+const TIME_ATTRIBUTION_ACTION_KINDS: &[&str] = &[
+    "llm.call",
+    "llm.request",
+    "llm.response",
+    "command.invocation",
+];
+const TIME_ATTRIBUTION_LINK_ROLES: &[&str] = &["llm.call.response", "agent.performed_action"];
+
 pub(super) fn project_trace(
     storage_path: &Path,
     storage: &mut dyn StorageBackend,
@@ -25,11 +33,11 @@ fn project_trace_uncached(
     clip_window: Option<Interval>,
 ) -> Result<TraceAttribution, String> {
     let actions = storage
-        .list_semantic_actions(trace.trace_id)
-        .map_err(|error| storage_error("list actions for time attribution", error))?;
+        .semantic_actions_matching_kinds_lite(trace.trace_id, TIME_ATTRIBUTION_ACTION_KINDS)
+        .map_err(|error| storage_error("read attribution actions", error))?;
     let links = storage
-        .list_semantic_action_links(trace.trace_id)
-        .map_err(|error| storage_error("list links for time attribution", error))?;
+        .semantic_action_links_matching_roles(trace.trace_id, TIME_ATTRIBUTION_LINK_ROLES)
+        .map_err(|error| storage_error("read attribution links", error))?;
     let memberships = storage
         .trace_memberships(trace.trace_id)
         .map_err(|error| storage_error("list process memberships for time attribution", error))?;

@@ -4,7 +4,7 @@ use std::sync::mpsc::{SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
-use alert_contract::AlertDraft;
+use alert_contract::{AlertDefinition, AlertDraft};
 use control_contract::reply::ControlError;
 use model_core::ids::TraceId;
 use model_core::trace::TraceAlertToken;
@@ -114,6 +114,7 @@ pub(super) struct AlertAdmission {
     pub(super) instance_id: String,
     pub(super) plugin_id: String,
     outputs: BTreeMap<String, RegisteredOutput>,
+    definitions: BTreeMap<String, AlertDefinition>,
     state: Mutex<AdmissionState>,
 }
 
@@ -122,11 +123,13 @@ impl AlertAdmission {
         instance_id: String,
         plugin_id: String,
         outputs: BTreeMap<String, RegisteredOutput>,
+        definitions: BTreeMap<String, AlertDefinition>,
     ) -> Self {
         Self {
             instance_id,
             plugin_id,
             outputs,
+            definitions,
             state: Mutex::new(AdmissionState {
                 accepting: true,
                 outstanding_writes: 0,
@@ -155,6 +158,10 @@ impl AlertAdmission {
             )
         })?;
         output.validate_payload(&draft.payload_json)
+    }
+
+    pub(super) fn definition(&self, key: &str) -> Option<&AlertDefinition> {
+        self.definitions.get(key)
     }
 
     pub(super) fn close(&self) -> Result<(), ControlError> {

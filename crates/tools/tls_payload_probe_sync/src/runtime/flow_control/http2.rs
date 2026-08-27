@@ -3,9 +3,9 @@ use tls_payload_core::PayloadDirection;
 use super::text::{body_looks_binary, body_looks_text_api};
 use super::types::{FlowControlConfig, FlowSummary};
 
-const CONNECTION_PREFACE: &[u8] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+pub(super) const CONNECTION_PREFACE: &[u8] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+pub(super) const DATA_FRAME_TYPE: u8 = 0;
 const FRAME_HEADER_BYTES: usize = 9;
-const DATA_FRAME_TYPE: u8 = 0;
 
 pub(super) fn classify(
     config: FlowControlConfig,
@@ -65,13 +65,14 @@ fn append_prefix(prefix: &mut Vec<u8>, payload: &[u8], limit: usize) {
     prefix.extend_from_slice(&payload[..payload.len().min(remaining)]);
 }
 
-struct H2Frame<'a> {
-    frame_type: u8,
-    encoded_len: usize,
-    payload: &'a [u8],
+pub(super) struct H2Frame<'a> {
+    pub(super) frame_type: u8,
+    pub(super) encoded_len: usize,
+    pub(super) stream_id: u32,
+    pub(super) payload: &'a [u8],
 }
 
-fn decode_frame(bytes: &[u8]) -> Option<H2Frame<'_>> {
+pub(super) fn decode_frame(bytes: &[u8]) -> Option<H2Frame<'_>> {
     if bytes.len() < FRAME_HEADER_BYTES {
         return None;
     }
@@ -88,6 +89,7 @@ fn decode_frame(bytes: &[u8]) -> Option<H2Frame<'_>> {
     Some(H2Frame {
         frame_type,
         encoded_len: end,
+        stream_id,
         payload: &bytes[FRAME_HEADER_BYTES..end],
     })
 }

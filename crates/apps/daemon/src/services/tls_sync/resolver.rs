@@ -1,12 +1,14 @@
-//! Store-backed TLS sync probe plan resolver.
+//! Binary-analysis-cached TLS sync probe plan resolver.
 
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use super::root_path::PeerRootHandle;
 use config_core::daemon::{PayloadTlsConfig, PayloadTlsLibraryPath};
 use control_contract::reply::{
     ControlError, LaunchTlsPlanDescriptor, LaunchTlsPlanReply, LaunchTlsPlanStatus,
@@ -17,12 +19,10 @@ use tls_payload_sync::{
 use tls_probe_point_finder::fast::{
     ArchFilter, FastProbeRequest, ProbeConsumer, ProviderFilter, SourceFilter,
 };
-use tls_probe_point_finder::{ResolveMode, resolve_plans};
-
-use super::plan_store::{
-    BinaryPlanDescriptor, BinaryPlanKey, BinaryPlanRecord, BinaryPlanStore, InMemoryBinaryPlanStore,
+use tls_probe_point_finder::{
+    BinaryAnalysisCache, BinaryAnalysisCacheStats, BinaryIdentity, ResolveMode,
+    resolve_plans_with_analysis_cache,
 };
-use super::root_path::PeerRootHandle;
 
 pub(super) struct TlsSyncPlanResolver {
     requests: Sender<PlanLookupJob>,
@@ -44,9 +44,23 @@ struct PlanLookupJob {
 }
 
 struct TlsSyncPlanWorker {
-    store: Box<dyn BinaryPlanStore + Send>,
+    analysis_cache: Rc<BinaryAnalysisCache>,
     config: PayloadTlsConfig,
     match_limit: usize,
+}
+
+struct BinaryPlanRecord {
+    plans: Vec<BinaryPlanDescriptor>,
+}
+
+struct BinaryPlanDescriptor {
+    target: PathBuf,
+    binary: PathBuf,
+    target_identity: BinaryIdentity,
+    binary_identity: BinaryIdentity,
+    provider: String,
+    source: String,
+    points: String,
 }
 
 struct PlanLookupOutcome {
@@ -63,16 +77,24 @@ struct LaunchPlanLookupOutcome {
 impl TlsSyncPlanResolver {
     pub(super) fn new(config: &PayloadTlsConfig) -> Result<Self, ControlError> {
         let match_limit = match_limit(config)?;
+        let cache_capacity = binary_analysis_cache_capacity(config)?;
         validate_library_candidates(config)?;
         let (requests, receiver) = mpsc::channel();
-        let worker = TlsSyncPlanWorker {
-            store: Box::<InMemoryBinaryPlanStore>::default(),
-            config: config.clone(),
-            match_limit,
-        };
+        let worker_config = config.clone();
         thread::Builder::new()
             .name("actrail-tls-plan-resolver".to_string())
-            .spawn(move || worker.run(receiver))
+            .spawn(move || {
+                let analysis_cache = Rc::new(
+                    BinaryAnalysisCache::new(cache_capacity)
+                        .expect("validated TLS binary analysis cache capacity"),
+                );
+                TlsSyncPlanWorker {
+                    analysis_cache,
+                    config: worker_config,
+                    match_limit,
+                }
+                .run(receiver);
+            })
             .map_err(|error| ControlError::new("tls_sync_plan_worker", error.to_string()))?;
         Ok(Self {
             requests,
@@ -217,40 +239,9 @@ impl TlsSyncPlanWorker {
                 return unsupported_outcome(reason, started);
             }
         };
-        let key = match BinaryPlanKey::for_path(&probe_binary, consumer) {
-            Ok(key) => key,
-            Err(error) => {
-                tracing::warn!(
-                    target: "actrail::tls_sync",
-                    runtime_binary = %runtime_binary.display(),
-                    probe_binary = %probe_binary.display(),
-                    error = %error,
-                    "TLS sync plan lookup probe binary stat failed"
-                );
-                return unsupported_outcome(
-                    format!(
-                        "stat probe binary runtime={} probe={}: {error}",
-                        runtime_binary.display(),
-                        probe_binary.display()
-                    ),
-                    started,
-                );
-            }
-        };
-        match self.store.get(&key) {
-            Ok(Some(cached)) => {
-                return outcome_for_record(cached, runtime_binary, &probe_binary, true, started);
-            }
-            Ok(None) => {}
-            Err(error) => {
-                return unsupported_outcome(
-                    format!("load cached probe plan {}: {error}", key.path().display()),
-                    started,
-                );
-            }
-        }
-        let cached = match self.resolve_plans(key.path(), consumer) {
-            Ok(plan) => BinaryPlanRecord::Found(plan),
+        let cache_before = self.analysis_cache.stats();
+        let record = match self.resolve_plans(&probe_binary, runtime_binary, consumer) {
+            Ok(plans) => BinaryPlanRecord { plans },
             Err(error) => {
                 tracing::warn!(
                     target: "actrail::tls_sync",
@@ -259,30 +250,31 @@ impl TlsSyncPlanWorker {
                     error = %error.message,
                     "TLS sync plan lookup probe failed"
                 );
-                BinaryPlanRecord::Unsupported(error.message)
+                return unsupported_outcome(error.message, started);
             }
         };
-        let outcome = outcome_for_record(
-            cached.clone(),
+        let cache_after = self.analysis_cache.stats();
+        let cache_hit =
+            cache_after.misses == cache_before.misses && cache_after.hits > cache_before.hits;
+        self.log_cache_lookup(
+            consumer,
             runtime_binary,
             &probe_binary,
-            false,
-            started,
+            cache_hit,
+            cache_after,
         );
-        if let Err(error) = self.store.put(key, cached) {
-            return unsupported_outcome(format!("store probe plan: {error}"), started);
-        }
-        outcome
+        outcome_for_record(record, cache_hit, started)
     }
 
     fn resolve_plans(
         &self,
-        binary: &Path,
+        probe_binary: &Path,
+        runtime_binary: &Path,
         consumer: ProbeConsumer,
     ) -> Result<Vec<BinaryPlanDescriptor>, ControlError> {
-        let resolution = resolve_plans(
+        let resolution = resolve_plans_with_analysis_cache(
             FastProbeRequest {
-                binary: binary.to_path_buf(),
+                binary: probe_binary.to_path_buf(),
                 arch: ArchFilter::Auto,
                 provider: ProviderFilter::Auto,
                 source: SourceFilter::Auto,
@@ -292,6 +284,7 @@ impl TlsSyncPlanWorker {
             },
             consumer,
             ResolveMode::All,
+            Rc::clone(&self.analysis_cache),
         )
         .map_err(|error| ControlError::new("tls_sync_plan", error.to_string()))?;
         if resolution.plans.is_empty() {
@@ -307,7 +300,8 @@ impl TlsSyncPlanWorker {
                 validate_native_backend_plan(&plan)
                     .map_err(|error| ControlError::new("tls_sync_plan", error.to_string()))?;
                 Ok(BinaryPlanDescriptor {
-                    binary: plan.binary.path.clone(),
+                    target: runtime_view_binary(&plan.target.binary, runtime_binary, probe_binary),
+                    binary: runtime_view_binary(&plan.binary.path, runtime_binary, probe_binary),
                     target_identity: plan.target.identity.clone(),
                     binary_identity: plan.binary.identity.clone(),
                     provider: plan.provider.as_str().to_string(),
@@ -317,6 +311,29 @@ impl TlsSyncPlanWorker {
                 })
             })
             .collect()
+    }
+
+    fn log_cache_lookup(
+        &self,
+        consumer: ProbeConsumer,
+        runtime_binary: &Path,
+        probe_binary: &Path,
+        cache_hit: bool,
+        stats: BinaryAnalysisCacheStats,
+    ) {
+        if !self.config.diagnostics_enabled {
+            return;
+        }
+        tracing::info!(
+            target: "actrail::tls_sync",
+            consumer = probe_consumer_name(consumer),
+            runtime_binary = %runtime_binary.display(),
+            probe_binary = %probe_binary.display(),
+            cache = if cache_hit { "hit" } else { "miss" },
+            cache_entries = stats.entries,
+            cache_evictions = stats.evictions,
+            "TLS binary analysis cache lookup"
+        );
     }
 }
 
@@ -332,50 +349,38 @@ fn probe_binary_path(
 
 fn outcome_for_record(
     record: BinaryPlanRecord,
-    runtime_binary: &Path,
-    probe_binary: &Path,
     cache_hit: bool,
     started: Instant,
 ) -> PlanLookupOutcome {
-    match record {
-        BinaryPlanRecord::Found(plans) => {
-            let mut launch_plans = Vec::with_capacity(plans.len());
-            let mut response = None;
-            for plan in plans {
-                let descriptor = RuntimePlanDescriptor {
-                    target: runtime_binary.to_path_buf(),
-                    target_identity: plan.target_identity,
-                    binary: runtime_view_binary(&plan.binary, runtime_binary, probe_binary),
-                    binary_identity: plan.binary_identity,
-                    provider: plan.provider,
-                    points: plan.points,
-                };
-                if response.is_none() {
-                    response = Some(PlanLookupResponse::Found(descriptor.clone()));
-                }
-                launch_plans.push(LaunchTlsPlanDescriptor {
-                    target: descriptor.target,
-                    target_identity: descriptor.target_identity,
-                    binary: descriptor.binary,
-                    binary_identity: descriptor.binary_identity,
-                    provider: descriptor.provider,
-                    source: plan.source,
-                    points: descriptor.points,
-                });
-            }
-            PlanLookupOutcome {
-                response: response.expect("Found record has at least one plan"),
-                launch_plans,
-                cache_hit,
-                elapsed: started.elapsed(),
-            }
+    let mut launch_plans = Vec::with_capacity(record.plans.len());
+    let mut response = None;
+    for plan in record.plans {
+        let descriptor = RuntimePlanDescriptor {
+            target: plan.target,
+            target_identity: plan.target_identity,
+            binary: plan.binary,
+            binary_identity: plan.binary_identity,
+            provider: plan.provider,
+            points: plan.points,
+        };
+        if response.is_none() {
+            response = Some(PlanLookupResponse::Found(descriptor.clone()));
         }
-        BinaryPlanRecord::Unsupported(reason) => PlanLookupOutcome {
-            response: PlanLookupResponse::Unsupported { reason },
-            launch_plans: Vec::new(),
-            cache_hit,
-            elapsed: started.elapsed(),
-        },
+        launch_plans.push(LaunchTlsPlanDescriptor {
+            target: descriptor.target,
+            target_identity: descriptor.target_identity,
+            binary: descriptor.binary,
+            binary_identity: descriptor.binary_identity,
+            provider: descriptor.provider,
+            source: plan.source,
+            points: descriptor.points,
+        });
+    }
+    PlanLookupOutcome {
+        response: response.expect("Found record has at least one plan"),
+        launch_plans,
+        cache_hit,
+        elapsed: started.elapsed(),
     }
 }
 
@@ -436,6 +441,31 @@ fn match_limit(config: &PayloadTlsConfig) -> Result<usize, ControlError> {
             format!("payload_tls_sync_match_limit overflow: {error}"),
         )
     })
+}
+
+fn binary_analysis_cache_capacity(config: &PayloadTlsConfig) -> Result<usize, ControlError> {
+    let capacity = usize::try_from(config.binary_analysis_cache_capacity).map_err(|error| {
+        ControlError::new(
+            "tls_sync_config",
+            format!("payload_tls_binary_analysis_cache_capacity overflow: {error}"),
+        )
+    })?;
+    if capacity == 0 {
+        return Err(ControlError::new(
+            "tls_sync_config",
+            "payload_tls_binary_analysis_cache_capacity must be greater than zero",
+        ));
+    }
+    Ok(capacity)
+}
+
+const fn probe_consumer_name(consumer: ProbeConsumer) -> &'static str {
+    match consumer {
+        ProbeConsumer::PlanOnly => "plan-only",
+        ProbeConsumer::Standalone => "standalone",
+        ProbeConsumer::Sync => "sync",
+        ProbeConsumer::Daemon => "daemon",
+    }
 }
 
 fn validate_library_candidates(config: &PayloadTlsConfig) -> Result<(), ControlError> {

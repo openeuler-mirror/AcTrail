@@ -1,0 +1,8 @@
+[package]
+name = "gateway_ingest_runtime"
+version.workspace = true
+edition = "2024"
+license = "MulanPSL-2.0"
+
+[dependencies]
+sandbox_observation = { path = "../../contracts/sandbox_observation" }

@@ -14,6 +14,8 @@ mod helpers;
 mod logging;
 #[path = "attach/plugin_config.rs"]
 mod plugin_config;
+#[path = "attach/plugin_configuration.rs"]
+mod plugin_configuration;
 #[path = "attach/plugins.rs"]
 mod plugins;
 #[path = "attach/preflight.rs"]
@@ -59,6 +61,7 @@ use trace_runtime::sensor_plan::SensorPlan;
 
 use crate::profiles::DaemonProfileRegistry;
 use crate::service_host::AttachService;
+use crate::services::alert_forwarding::AlertForwardingService;
 use crate::services::alert_ingress::AlertIngress;
 use crate::services::application_protocol::ApplicationProtocolAnalyzer;
 use crate::services::command_control::CommandControlService;
@@ -110,6 +113,7 @@ pub(crate) struct StorageAttachService {
     pub(super) payload_socket_retention_max_bytes_per_trace: u64,
     pub(super) socket_payload_gate: SocketHttpPayloadGate,
     pub(super) payload_body_retention_gate: PayloadBodyRetentionGate,
+    pub(super) payload_reorderer: crate::services::payload::reorder::PayloadSegmentReorderer,
     pub(super) seccomp_notify: SeccompNotifyService,
     pub(super) seccomp_tls: SeccompTlsService,
     pub(super) tls_sync: TlsSyncService,
@@ -129,6 +133,7 @@ pub(crate) struct StorageAttachService {
     pub(super) semantic_actions: LiveSemanticActionRuntime,
     pub(super) export_runtime: ExportRuntime,
     pub(super) alert_ingress: AlertIngress,
+    pub(super) alert_forwarding: AlertForwardingService,
     pub(super) post_trace_broker: PostTraceBroker,
     pub(super) post_trace_coordinator: PostTraceCoordinator,
     pub(super) workload_diagnostics: WorkloadDiagnostics,
@@ -140,6 +145,7 @@ pub(crate) struct StorageAttachService {
     pub(super) finalization_poll_interval: Duration,
     pub(super) terminal_settle_delay: Duration,
     pub(super) finalization_shutdown_drain_timeout: Duration,
+    pub(super) shutdown_runtime_timeout: Duration,
     pub(super) diagnosed_terminal_open_memberships:
         BTreeSet<(model_core::ids::TraceId, ProcessIdentity)>,
     pub(super) provider_classifier: Box<dyn ProviderClassifier>,
@@ -568,6 +574,17 @@ impl StorageAttachService {
                 "command execution enforcement is only supported by actrailctl launch",
             ));
         }
+        if !command.launch_mode
+            && capability_requested(
+                &profile_snapshot.capability_requests,
+                &Capability::EnforcementNetworkConnectSeccomp,
+            )
+        {
+            return Err(ControlError::new(
+                "network_control_backend",
+                "network connect enforcement is only supported by actrailctl launch",
+            ));
+        }
         let sensor_plan = trace_runtime
             .negotiate(&profile_snapshot)
             .map_err(|error| ControlError::new("negotiate", format!("{:?}", error)))?;
@@ -668,6 +685,13 @@ impl AttachService for StorageAttachService {
         };
         let launch_seccomp_requirements = self
             .launch_seccomp_requirements
+            .with_network_control(
+                self.launch_seccomp_requirements.network_control
+                    && capability_requested(
+                        &profile.capabilities,
+                        &Capability::EnforcementNetworkConnectSeccomp,
+                    ),
+            )
             .with_command_control(
                 self.launch_seccomp_requirements.command_control
                     && capability_requested(
@@ -778,6 +802,7 @@ impl AttachService for StorageAttachService {
         }
         fds.extend(self.enforcement.event_poll_fds());
         fds.extend(self.command_control.event_poll_fds());
+        fds.extend(self.network_control.event_poll_fds());
         fds.extend(self.tls_sync.event_poll_fds());
         fds.extend(self.seccomp_notify.event_poll_fds());
         fds.push(self.alert_ingress.event_poll_fd());

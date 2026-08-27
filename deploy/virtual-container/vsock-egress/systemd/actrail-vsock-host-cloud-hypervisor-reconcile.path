@@ -1,0 +1,13 @@
+[Unit]
+Description=Watch Kata sandbox runtime directories for Cloud Hypervisor VSOCK sockets
+Documentation=file:///usr/share/doc/actrail/vsock-egress/README.md
+
+[Path]
+# Kata creates and removes /run/vc/vm/<sandbox> as sandboxes come and go. The
+# bridge does not need to exist before the VM starts: the Guest exporter retries,
+# so reconciling shortly after the directory changes is sufficient.
+PathModified=/run/vc/vm
+Unit=actrail-vsock-host-cloud-hypervisor-reconcile.service
+
+[Install]
+WantedBy=multi-user.target

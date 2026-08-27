@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from typing import Sequence
+from unittest.mock import patch
 
 from tests.v2.common.kata_runtime.capabilities import CtrCapabilities
 from tests.v2.common.kata_runtime.container import KataTestContainer
@@ -127,6 +129,26 @@ class NonRefreshableRequirements(PassingRequirements):
         )
 
 
+class PrivilegedWithoutHostDevicesRequirements(PassingRequirements):
+    def create_spec(self, image: ResolvedImage) -> KataCreateSpec:
+        return replace(
+            super().create_spec(image),
+            privileged_without_host_devices=True,
+        )
+
+
+class SnapshotterRequirements(PassingRequirements):
+    def create_spec(self, image: ResolvedImage) -> KataCreateSpec:
+        return replace(
+            super().create_spec(image),
+            snapshotter="devmapper",
+        )
+
+
+class LongNameRequirements(PassingRequirements):
+    name_prefix = "execution-isolation-firecracker"
+
+
 class FakeCtrRunner:
     """Small in-memory adapter for the external ctr command seam."""
 
@@ -136,7 +158,9 @@ class FakeCtrRunner:
         self.host_processes: dict[int, tuple[int, str]] = {}
         self.leak_host_processes = False
         self.started_images: list[str] = []
+        self.run_commands: list[tuple[str, ...]] = []
         self.exec_commands: list[tuple[str, ...]] = []
+        self.exec_inputs: list[str | None] = []
         self.started_exec_commands: list[tuple[str, ...]] = []
 
     def run(
@@ -144,11 +168,13 @@ class FakeCtrRunner:
         argv: Sequence[str],
         *,
         timeout: float | None = None,
+        input_text: str | None = None,
     ) -> CommandResult:
         command = tuple(str(value) for value in argv)
         del timeout
 
         if "run" in command:
+            self.run_commands.append(command)
             run_index = command.index("run")
             run_args = command[run_index + 1 :]
             image_index = next(
@@ -197,6 +223,7 @@ class FakeCtrRunner:
 
         if "tasks" in command and "exec" in command:
             self.exec_commands.append(command)
+            self.exec_inputs.append(input_text)
             return CommandResult(command, 0, "uid=123 gid=456\n", "")
 
         if "tasks" in command and "rm" in command:
@@ -255,6 +282,69 @@ class FakeManagedProcess:
 
 
 class KataTestContainerLifecycleTest(unittest.TestCase):
+    def test_container_id_keeps_random_token_before_long_case_name(self) -> None:
+        runner = FakeCtrRunner()
+
+        with patch(
+            "tests.v2.common.kata_runtime.container.secrets.token_hex",
+            return_value="0123456789abcdef0123456789abcdef",
+        ):
+            with KataTestContainer(
+                LongNameRequirements(),
+                runner,
+                CtrCapabilities(True, True, True),
+            ) as container:
+                container_id = container.container_id
+
+        self.assertTrue(
+            container_id.startswith("actrail-v2-0123456789ab-"),
+            container_id,
+        )
+        self.assertLess(container_id.index("execution-isolation"), 32)
+
+    def test_run_uses_configured_snapshotter(self) -> None:
+        runner = FakeCtrRunner()
+
+        with KataTestContainer(
+            SnapshotterRequirements(),
+            runner,
+            CtrCapabilities(True, True, True),
+        ):
+            pass
+
+        self.assertEqual(
+            runner.run_commands[-1][3:9],
+            (
+                "run",
+                "--snapshotter",
+                "devmapper",
+                "-d",
+                "--runtime",
+                "io.containerd.kata332.v2",
+            ),
+        )
+
+    def test_privileged_semantics_do_not_inject_host_devices(self) -> None:
+        runner = FakeCtrRunner()
+        capabilities = CtrCapabilities(True, True, True)
+
+        with KataTestContainer(
+            PrivilegedWithoutHostDevicesRequirements(),
+            runner,
+            capabilities,
+        ):
+            pass
+
+        command = runner.run_commands[-1]
+        self.assertNotIn("--privileged", command)
+        self.assertNotIn("--device", command)
+        self.assertIn("--allow-new-privs", command)
+        self.assertEqual(command.count("--cap-add"), 41)
+        self.assertIn("CAP_CHOWN", command)
+        self.assertIn("CAP_BPF", command)
+        self.assertIn("CAP_PERFMON", command)
+        self.assertIn("CAP_CHECKPOINT_RESTORE", command)
+
     def test_context_exposes_running_task_then_removes_owned_resources(self) -> None:
         requirements = PassingRequirements()
         runner = FakeCtrRunner()
@@ -318,6 +408,22 @@ class KataTestContainerLifecycleTest(unittest.TestCase):
             exec_command[-4:],
             ("/usr/bin/env", "A=one", "B=two", "/usr/bin/id"),
         )
+
+    def test_exec_passes_input_to_attached_ctr_process(self) -> None:
+        runner = FakeCtrRunner()
+
+        with KataTestContainer(
+            PassingRequirements(),
+            runner,
+            CtrCapabilities(True, True, True),
+        ) as container:
+            container.exec(
+                ("/bin/sh", "-c", "cat > /tmp/trusted-asset"),
+                input_text="trusted asset\n",
+            )
+
+        self.assertEqual(runner.exec_inputs, ["trusted asset\n"])
+        self.assertNotIn("--detach", runner.exec_commands[-1])
 
     def test_second_invalid_container_stops_after_one_refresh(self) -> None:
         requirements = NeverReadyRequirements()

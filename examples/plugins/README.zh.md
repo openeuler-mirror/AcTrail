@@ -8,6 +8,7 @@
 | --- | --- | --- | --- |
 | `builtin/otel-http` | `builtin` | `observation-consumer` | 通用 OTLP/HTTP 实时出境；显式 action 白名单，默认仅元数据；release 安装为可发现但默认不加载的候选包。 |
 | `builtin/otel-jsonl` | `builtin` | `observation-consumer` | 内置 OTLP JSON 观测消费者，可选择 JSONL 文件或 JSON-RPC HTTP(S) exporter；release 安装为可发现但默认不加载的候选包。 |
+| `builtin/sandbox-resource-alert` | `builtin` | `sandbox-observation-consumer` | 消费独立 Hand observation，按 Guest CPU、内存、OOM 与进程谱系区间 I/O 阈值写入独立 Sandbox Alert DB。 |
 | `wasm-legacy/observation-count` | `wasm` core module | `observation-consumer` | 最小观测消费者 ABI，使用手写 `.wat` 模块统计观测记录。 |
 | `wasm-legacy/observation-env-read` | `wasm` core module | `observation-consumer` | 观测插件通过显式授权读取指定环境变量。 |
 | `wasm-legacy/observation-payload-read` | `wasm` core module | `observation-consumer` | 观测插件通过显式授权读取保留的 payload 数据。 |

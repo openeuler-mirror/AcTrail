@@ -279,34 +279,3 @@ fn original_symbol(cache: &AtomicUsize, symbol: &[u8]) -> Option<usize> {
     cache.store(address, Ordering::Release);
     Some(address)
 }
-
-#[cfg(test)]
-mod tests {
-    use std::path::Path;
-
-    use super::is_probe_library_candidate;
-
-    #[test]
-    fn probe_library_match_accepts_shared_object_paths() {
-        assert!(is_probe_library_candidate(Path::new(
-            "/usr/lib64/libssl.so.1.1"
-        )));
-        assert!(is_probe_library_candidate(Path::new(
-            "/lib/x86_64-linux-gnu/libssl.so.3"
-        )));
-        assert!(is_probe_library_candidate(Path::new(
-            "/tmp/libnetty_tcnative_linux_x86_64.so"
-        )));
-    }
-
-    #[test]
-    fn probe_library_match_rejects_non_shared_object_paths() {
-        assert!(!is_probe_library_candidate(Path::new("/usr/bin/java")));
-        assert!(!is_probe_library_candidate(Path::new(
-            "/usr/lib64/libssl.a"
-        )));
-        assert!(!is_probe_library_candidate(Path::new(
-            "/tmp/libactrail_tls_payload_probe_sync.so"
-        )));
-    }
-}

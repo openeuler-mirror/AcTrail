@@ -242,9 +242,11 @@ impl LlmToolCallProposal {
             return Vec::new();
         };
         tool_calls
-            .iter()
+            .into_iter()
             .enumerate()
             .filter_map(|(ordinal, tool_call)| {
+                // MCP attribution needs identity only. Argument canonicalization and hashing
+                // belong to the tool projector and must not be repeated on this hot path.
                 let name = tool_call
                     .pointer("/function/name")
                     .and_then(Value::as_str)
@@ -259,6 +261,7 @@ impl LlmToolCallProposal {
                     response_start_time: action.start_time,
                     tool_call_id: tool_call
                         .get("id")
+                        .or_else(|| tool_call.get("call_id"))
                         .and_then(Value::as_str)
                         .filter(|id| !id.is_empty())
                         .map(ToString::to_string),

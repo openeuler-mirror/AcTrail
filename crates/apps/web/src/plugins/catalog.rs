@@ -11,8 +11,8 @@ use control_contract::reply::{
 };
 use model_core::ids::RequestId;
 use plugin_system::{
-    CommandPolicyDecision, FilePolicyDecision, PluginHostGrant, PluginHostGrants,
-    PluginInstanceStatus,
+    CommandPolicyDecision, FilePolicyDecision, NetworkPolicyDecision, PluginHostGrant,
+    PluginHostGrants, PluginInstanceStatus,
 };
 use serde::Deserialize;
 use uds_control_client::{UdsControlClient, UdsSocketTransport};
@@ -54,6 +54,8 @@ struct PluginGrantOptions {
     #[serde(default)]
     command_policy_rules_apply: Vec<CommandPolicyApplyGrantOption>,
     #[serde(default)]
+    network_policy_rules_apply: Vec<NetworkPolicyApplyGrantOption>,
+    #[serde(default)]
     env_read: Vec<String>,
 }
 
@@ -69,6 +71,13 @@ struct FilePolicyApplyGrantOption {
 struct CommandPolicyApplyGrantOption {
     decision: String,
     path_scope: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NetworkPolicyApplyGrantOption {
+    decision: String,
+    remote_scope: String,
 }
 
 impl InstalledPluginCatalog {
@@ -350,6 +359,10 @@ impl PluginGrantOptions {
             .parameterized_host_grants
             .iter()
             .any(|capability| capability == "command-policy.rules.apply");
+        let needs_network_policy = package
+            .parameterized_host_grants
+            .iter()
+            .any(|capability| capability == "network-policy.rules.apply");
         if needs_file_policy && self.file_policy_rules_apply.is_empty() {
             return Err(
                 "file-policy.rules.apply requires at least one decision and path scope".to_string(),
@@ -366,6 +379,15 @@ impl PluginGrantOptions {
         }
         if !needs_command_policy && !self.command_policy_rules_apply.is_empty() {
             return Err("plugin did not request command-policy.rules.apply".to_string());
+        }
+        if needs_network_policy && self.network_policy_rules_apply.is_empty() {
+            return Err(
+                "network-policy.rules.apply requires at least one decision and remote endpoint scope"
+                    .to_string(),
+            );
+        }
+        if !needs_network_policy && !self.network_policy_rules_apply.is_empty() {
+            return Err("plugin did not request network-policy.rules.apply".to_string());
         }
         if needs_env_read && self.env_read.is_empty() {
             return Err("env-read requires at least one environment variable name".to_string());
@@ -391,6 +413,16 @@ impl PluginGrantOptions {
                 PluginHostGrant::CommandPolicyRulesApply {
                     decision,
                     path: option.path_scope,
+                }
+                .to_wire(),
+            );
+        }
+        for option in self.network_policy_rules_apply {
+            let decision = NetworkPolicyDecision::from_wire(&option.decision)?;
+            values.push(
+                PluginHostGrant::NetworkPolicyRulesApply {
+                    decision,
+                    remote: option.remote_scope,
                 }
                 .to_wire(),
             );

@@ -107,6 +107,13 @@ pub(super) fn render_events(events: Vec<DomainEvent>, row_limit: Option<RowLimit
     render_table(table, "no events")
 }
 
+pub(super) fn render_events_json(
+    events: Vec<DomainEvent>,
+    row_limit: Option<RowLimit>,
+) -> Result<String, String> {
+    json::render_events(limit_vec(events, row_limit))
+}
+
 pub(super) fn render_network(events: Vec<DomainEvent>, row_limit: Option<RowLimit>) -> String {
     network::render_network(events, row_limit)
 }
@@ -121,6 +128,48 @@ pub(super) fn render_payloads_json(segments: Vec<PayloadSegment>) -> Result<Stri
 
 pub(super) fn render_payload(segment: PayloadSegment, format: PayloadFormat) -> String {
     payload::render_payload(segment, format)
+}
+
+pub(super) fn render_tls_flow_diagnostics(
+    diagnostics: Vec<storage_core::TlsFlowDiagnostic>,
+) -> String {
+    let mut table = Table::new(&[
+        "STREAM",
+        "DIRECTION",
+        "REASON",
+        "OBSERVED",
+        "EMITTED",
+        "EMITTED_AT",
+    ]);
+    for diagnostic in diagnostics {
+        table.push(vec![
+            diagnostic.stream_key,
+            if diagnostic.direction == 0 {
+                "outbound".to_string()
+            } else {
+                "inbound".to_string()
+            },
+            tls_flow_reason_name(diagnostic.reason_code),
+            diagnostic.observed_size.to_string(),
+            diagnostic.emitted_size.to_string(),
+            format_time(diagnostic.emitted_at),
+        ]);
+    }
+    render_table(table, "no tls flow diagnostics")
+}
+
+fn tls_flow_reason_name(code: i32) -> String {
+    match code {
+        1 => "unknown_stream_threshold".to_string(),
+        2 => "binary_unknown_stream".to_string(),
+        3 => "http1_header_too_large".to_string(),
+        4 => "large_non_text_transfer".to_string(),
+        5 => "h2_binary_data".to_string(),
+        6 => "h2_data_probe_exceeded".to_string(),
+        7 => "flow_drop_discontinuity".to_string(),
+        8 => "binary_body".to_string(),
+        _ => format!("unknown({code})"),
+    }
 }
 
 pub(super) fn render_semantic_actions(

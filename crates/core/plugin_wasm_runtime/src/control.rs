@@ -4,9 +4,10 @@ use std::time::{Duration, Instant};
 
 use plugin_system::{
     CommandPolicyHost, ControlDecider, ControlDecisionBudget, ControlDecisionRequest,
-    ControlDecisionResponse, ControlVerdict, DecisionScope, FilePolicyHost, PluginCommandBudget,
-    PluginCommandRequest, PluginCommandResponse, PluginHostGrants, PluginHostcallMetricsSource,
-    PluginManifest, PluginRuntimeError, PluginRuntimeKind, PluginWasmAbi, RuntimePluginConfig,
+    ControlDecisionResponse, ControlVerdict, DecisionScope, FilePolicyHost, NetworkPolicyHost,
+    PluginCommandBudget, PluginCommandRequest, PluginCommandResponse, PluginHostGrants,
+    PluginHostcallMetricsSource, PluginManifest, PluginRuntimeError, PluginRuntimeKind,
+    PluginWasmAbi, RuntimePluginConfig,
 };
 use serde_json::{Map, Value, json};
 use wasmtime::{Engine, Memory, Module, TypedFunc};
@@ -48,6 +49,7 @@ pub fn build_wasm_control_decider(
     host_grants: PluginHostGrants,
     file_policy_host: Option<Arc<dyn FilePolicyHost>>,
     command_policy_host: Option<Arc<dyn CommandPolicyHost>>,
+    network_policy_host: Option<Arc<dyn NetworkPolicyHost>>,
 ) -> Result<WasmControlDecider, PluginRuntimeError> {
     let instance_id = instance_id.into();
     let wasm = manifest.selected_wasm().ok_or_else(|| {
@@ -58,6 +60,17 @@ pub fn build_wasm_control_decider(
     })?;
     match wasm.abi {
         PluginWasmAbi::LegacyModule => {
+            if host_grants.can_query_current_network_action_context()
+                || host_grants.can_read_network_policy_rules()
+                || host_grants.can_match_dry_run_network_policy_rules()
+                || host_grants.can_validate_network_policy_rules()
+                || host_grants.can_apply_network_policy_rules()
+            {
+                return Err(PluginRuntimeError::new(
+                    "wasm_runtime",
+                    "network action context and network-policy capabilities require a WIT component plugin",
+                ));
+            }
             let decider = LegacyWasmControlDecider::load(
                 instance_id,
                 manifest,
@@ -76,6 +89,7 @@ pub fn build_wasm_control_decider(
                 host_grants,
                 file_policy_host,
                 command_policy_host,
+                network_policy_host,
             )?;
             Ok(WasmControlDecider::new(Box::new(decider)))
         }

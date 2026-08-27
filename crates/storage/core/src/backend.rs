@@ -1,12 +1,13 @@
 //! Unified storage backend trait.
 
 use std::collections::BTreeMap;
+use std::time::SystemTime;
 
 use alert_contract::{
     AlertDefinition, AlertDefinitionId, AlertDraft, AlertId, AlertListLimit, AlertStoreError,
     AlertView,
 };
-use model_core::diagnostics::DiagnosticRecord;
+use model_core::diagnostics::{DiagnosticRecord, LlmPipelineDiagnostic};
 use model_core::event::DomainEvent;
 use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
@@ -14,14 +15,26 @@ use model_core::process::{ProcessIdentity, ProcessMembership, ProcessRecord};
 use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
 use semantic_action::{
     FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
-    LlmRequestContentWrite, McpJsonRpcContentPage, McpJsonRpcContentWrite, SemanticAction,
-    SemanticActionLink, SemanticActionPage,
+    LlmRequestContentWrite, LlmRequestLineage, LlmRequestLineageWrite, McpJsonRpcContentPage,
+    McpJsonRpcContentWrite, SemanticAction, SemanticActionKind, SemanticActionLink,
+    SemanticActionPage,
 };
 
 use crate::{
     PayloadSegmentQuery, RetentionCandidate, SnapshotView, StorageError, StorageTransaction,
     TraceFilter, TraceLease, TraceLeasePurpose, TraceTombstone,
 };
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TlsFlowDiagnostic {
+    pub trace_id: TraceId,
+    pub stream_key: String,
+    pub direction: i32,
+    pub reason_code: i32,
+    pub observed_size: u64,
+    pub emitted_size: u64,
+    pub emitted_at: SystemTime,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StorageOpenMode {
@@ -50,6 +63,14 @@ pub struct SemanticActionSummary {
     pub roots: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SemanticActionTraceRevision {
+    pub action_count: u64,
+    pub action_max_key: i64,
+    pub link_count: u64,
+    pub link_max_rowid: i64,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SemanticActionChildPage {
     pub rows: Vec<SemanticActionChildRow>,
@@ -60,6 +81,14 @@ pub struct SemanticActionChildPage {
 pub struct SemanticActionDisplayRootChildPage {
     pub rows: Vec<SemanticActionDisplayRootChildRow>,
     pub total_count: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SemanticActionDisplayPathEntry {
+    pub parent_action_id: Option<String>,
+    pub action_id: String,
+    pub offset: usize,
+    pub kind: SemanticActionKind,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -118,6 +147,22 @@ pub trait StorageBackend {
 
     fn append_diagnostic(&mut self, diagnostic: DiagnosticRecord) -> Result<(), StorageError>;
     fn list_diagnostics(&self, trace_id: TraceId) -> Result<Vec<DiagnosticRecord>, StorageError>;
+    fn append_llm_pipeline_diagnostics(
+        &mut self,
+        rows: &[LlmPipelineDiagnostic],
+    ) -> Result<(), StorageError>;
+    fn list_llm_pipeline_diagnostics(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<Vec<LlmPipelineDiagnostic>, StorageError>;
+    fn append_tls_flow_diagnostics(
+        &mut self,
+        rows: Vec<TlsFlowDiagnostic>,
+    ) -> Result<(), StorageError>;
+    fn list_tls_flow_diagnostics(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<Vec<TlsFlowDiagnostic>, StorageError>;
 
     fn register_alert_definition(
         &mut self,
@@ -152,6 +197,10 @@ pub trait StorageBackend {
         &mut self,
         contents: &[LlmRequestContentWrite],
     ) -> Result<(), StorageError>;
+    fn upsert_llm_request_lineages(
+        &mut self,
+        lineages: &[LlmRequestLineageWrite],
+    ) -> Result<(), StorageError>;
     fn upsert_mcp_jsonrpc_contents(
         &mut self,
         contents: &[McpJsonRpcContentWrite],
@@ -164,6 +213,21 @@ pub trait StorageBackend {
         offset: usize,
         limit: usize,
     ) -> Result<SemanticActionPage, StorageError>;
+    fn llm_request_lineage(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+    ) -> Result<Option<LlmRequestLineage>, StorageError>;
+    fn llm_request_trajectory(
+        &self,
+        trace_id: TraceId,
+        trajectory_id: &str,
+    ) -> Result<Vec<LlmRequestLineage>, StorageError>;
+    fn llm_request_forks(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+    ) -> Result<Vec<LlmRequestLineage>, StorageError>;
     fn list_file_observation_paths(
         &self,
         trace_id: TraceId,
@@ -173,7 +237,17 @@ pub trait StorageBackend {
         &self,
         trace_id: TraceId,
     ) -> Result<Vec<SemanticActionLink>, StorageError>;
+    fn semantic_action_links_matching_roles(
+        &self,
+        trace_id: TraceId,
+        roles: &[&str],
+    ) -> Result<Vec<SemanticActionLink>, StorageError>;
     fn semantic_actions_matching_kinds(
+        &self,
+        trace_id: TraceId,
+        kinds: &[&str],
+    ) -> Result<Vec<SemanticAction>, StorageError>;
+    fn semantic_actions_matching_kinds_lite(
         &self,
         trace_id: TraceId,
         kinds: &[&str],
@@ -182,6 +256,12 @@ pub trait StorageBackend {
         &self,
         trace_id: TraceId,
     ) -> Result<SemanticActionSummary, StorageError>;
+    /// Cheap per-trace change marker used to keep display projections fresh
+    /// without invalidating on unrelated database writes.
+    fn semantic_action_trace_revision(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<SemanticActionTraceRevision, StorageError>;
     fn observed_agent_semantic_action(
         &self,
         trace_id: TraceId,
@@ -217,6 +297,16 @@ pub trait StorageBackend {
         trace_id: TraceId,
         display_parent_roles: &[&str],
     ) -> Result<usize, StorageError>;
+    /// Locates one action and its display ancestors without materializing the
+    /// complete semantic-action graph. `after_action_id` selects the next
+    /// matching action in chronological display order.
+    fn semantic_action_display_path_to_kind(
+        &self,
+        trace_id: TraceId,
+        display_parent_roles: &[&str],
+        target_kind: &str,
+        after_action_id: Option<&str>,
+    ) -> Result<Option<Vec<SemanticActionDisplayPathEntry>>, StorageError>;
     fn semantic_action_children_matching_kinds(
         &self,
         trace_id: TraceId,

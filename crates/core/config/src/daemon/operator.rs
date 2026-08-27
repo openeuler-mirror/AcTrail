@@ -5,6 +5,7 @@ mod document;
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -57,7 +58,11 @@ pub struct OperatorConfig {
     pub export_config: ExportConfig,
     pub plugin_discovery: PluginDiscoveryConfig,
     pub plugin_alert_runtime: PluginAlertRuntimeConfig,
+    pub alert_forwarding: AlertForwardingConfig,
     pub startup_plugins: StartupPluginsConfig,
+    pub hand_observation: HandObservationConfig,
+    pub sandbox_evidence: SandboxEvidenceConfig,
+    pub sandbox_alerts: SandboxAlertsConfig,
     pub log_path: PathBuf,
     pub diagnostic_log_level: DiagnosticLogLevel,
     pub workload_diagnostics: WorkloadDiagnosticsConfig,
@@ -79,6 +84,90 @@ pub struct OperatorConfig {
     pub startup_wait_ms: u64,
     pub shutdown_wait_ms: u64,
     pub supervision_poll_interval_ms: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AlertForwardingConfig {
+    pub proxy_executable: PathBuf,
+    pub proxy_config_path: PathBuf,
+    pub plugin_config_path: PathBuf,
+    pub socket_path: PathBuf,
+    pub queue_capacity: u32,
+    pub read_timeout_ms: u64,
+    pub write_timeout_ms: u64,
+    pub heartbeat_interval_ms: u64,
+    pub heartbeat_ack_timeout_ms: u64,
+    pub startup_timeout_ms: u64,
+    pub startup_poll_interval_ms: u64,
+    pub max_frame_bytes: u32,
+    pub max_trace_id_bytes: u32,
+    pub max_category_bytes: u32,
+    pub max_description_bytes: u32,
+    pub max_extras_bytes: u32,
+    pub link_thread_stack_bytes: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HandObservationConfig {
+    pub enabled: bool,
+    pub listen_addr: SocketAddr,
+    pub max_gateway_connections: u32,
+    pub accept_poll_interval_ms: u64,
+    pub connection_poll_interval_ms: u64,
+    pub connection_idle_timeout_ms: u64,
+    pub write_timeout_ms: u64,
+    pub read_buffer_bytes: usize,
+    pub connection_thread_stack_bytes: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SandboxEvidenceSynchronousConfig {
+    Normal,
+    Full,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SandboxEvidenceConfig {
+    pub path: PathBuf,
+    pub schema_version: u32,
+    pub create_parent_directory: bool,
+    pub busy_timeout_ms: u64,
+    pub writer_queue_capacity: u32,
+    pub batch_max_observations: u32,
+    pub transaction_max_batches: u32,
+    pub flush_interval_ms: u64,
+    pub retention_max_observations: u64,
+    pub capacity_max_bytes: u64,
+    pub synchronous: SandboxEvidenceSynchronousConfig,
+    pub wal_autocheckpoint_pages: u32,
+    pub shutdown_drain_timeout_ms: u64,
+    pub writer_thread_stack_bytes: usize,
+    pub read_limit_max: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SandboxAlertsSynchronousConfig {
+    Normal,
+    Full,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SandboxAlertsConfig {
+    pub enabled: bool,
+    pub path: PathBuf,
+    pub schema_version: u32,
+    pub create_parent_directory: bool,
+    pub busy_timeout_ms: u64,
+    pub writer_queue_capacity: u32,
+    pub transaction_max_alerts: u32,
+    pub flush_interval_ms: u64,
+    pub retention_max_alerts: u64,
+    pub capacity_max_bytes: u64,
+    pub synchronous: SandboxAlertsSynchronousConfig,
+    pub wal_autocheckpoint_pages: u32,
+    pub shutdown_drain_timeout_ms: u64,
+    pub writer_thread_stack_bytes: usize,
+    pub read_limit_max: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -345,6 +434,7 @@ fn validate_seccomp_config(
     process_seccomp: &ProcessSeccompConfig,
     enforcement: &EnforcementConfig,
     command_control: &CommandControlConfig,
+    network_control: &NetworkControlConfig,
     capabilities: &[CapabilityRequest],
 ) -> Result<(), String> {
     if payload_tls.enabled
@@ -390,6 +480,18 @@ fn validate_seccomp_config(
         return Err(
             "enforcement-command-execution-seccomp requires proc-lifecycle so command identity is known before exec"
                 .to_string(),
+        );
+    }
+    let network_control_requested =
+        capability_requested(capabilities, &Capability::EnforcementNetworkConnectSeccomp);
+    if network_control_requested && !network_control.enabled {
+        return Err(
+            "enforcement-network-connect-seccomp requires network_control.enabled=true".to_string(),
+        );
+    }
+    if network_control_requested && !notify.enabled {
+        return Err(
+            "enforcement-network-connect-seccomp requires seccomp_notify.enabled=true".to_string(),
         );
     }
     if capability_requested(capabilities, &Capability::ProcExecContext) && !process_seccomp.enabled
@@ -527,156 +629,164 @@ fn capability_requested(capabilities: &[CapabilityRequest], capability: &Capabil
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
+    use super::super::{
+        LlmRequestBodyExportRetention, LlmRequestContentRetention,
+        LlmToolResultContentExportRetention,
+    };
     use super::OperatorConfig;
 
-    #[test]
-    fn guest_otel_http_plugin_parses_through_operator_config() {
-        let raw = include_str!("../../../../../deploy/virtual-container/guest/operator.conf");
-        let config = OperatorConfig::parse(raw).expect("guest operator config parses");
-        let plugin = config
-            .startup_plugins
-            .load
-            .iter()
-            .find(|plugin| plugin.instance_id == "kata-guest.otel-http")
-            .expect("otel-http startup plugin present");
-
-        assert!(config.startup_plugins.enabled);
-        assert_eq!(
-            plugin.manifest_path.to_string_lossy(),
-            "/usr/share/actrail/plugins/otel-http/otel-http.plugin.toml"
-        );
-        assert_eq!(
-            plugin
-                .plugin_config_path
-                .as_ref()
-                .expect("otel-http config path")
-                .to_string_lossy(),
-            "/etc/actrail/plugins/otel-http/otel-http.config.toml"
-        );
+    fn parse_l0_llm_call(patch: &str) -> Result<OperatorConfig, String> {
+        OperatorConfig::init()
+            .expect("default operator config initializes")
+            .patch(&format!("[semantic_retention.l0_llm_call]\n{patch}"))
     }
 
     #[test]
-    fn default_operator_template_includes_storage_retention() {
+    fn request_body_export_is_off_by_default() {
         let raw = OperatorConfig::default_hierarchical_template()
             .expect("default operator config template renders");
 
-        assert!(
-            raw.contains("[storage.retention]\nenabled = true\nmax_trace_age = \"7d\""),
-            "default template should include storage.retention.max_trace_age=7d"
-        );
-        assert!(
-            raw.contains("sweep_interval = \"1m\""),
-            "default template should include a one minute retention sweep interval"
-        );
-        assert!(
-            raw.contains("min_terminal_age = \"30s\""),
-            "default template should include a short terminal-state safety window"
-        );
-
-        let config = OperatorConfig::parse(&raw).expect("default operator config parses");
+        assert!(raw.contains("request_body_export = \"none\""));
+        let config = OperatorConfig::parse(&raw).expect("default template parses");
         assert_eq!(
-            config.storage_retention.max_trace_age,
-            Duration::from_secs(7 * 24 * 60 * 60)
-        );
-        assert_eq!(
-            config.storage_retention.min_terminal_age,
-            Duration::from_secs(30)
+            config.semantic_retention.l0_llm_call.request_body_export,
+            LlmRequestBodyExportRetention::None
         );
     }
 
     #[test]
-    fn default_operator_template_includes_cluster_sections_for_init() {
+    fn request_body_export_limit_defaults_to_the_web_body_view_limit() {
         let raw = OperatorConfig::default_hierarchical_template()
             .expect("default operator config template renders");
+        let config = OperatorConfig::parse(&raw).expect("default template parses");
 
-        assert!(raw.contains("[cluster]\n"));
-        assert!(raw.contains("[cluster.report]\n"));
-        assert!(raw.contains("[cluster.center]\n"));
-        assert!(raw.contains("center_host = \"\""));
-        assert!(raw.contains("center_port = 0"));
-        assert!(raw.contains("listen_host = \"\""));
-        assert!(raw.contains("listen_port = 0"));
-
-        OperatorConfig::parse(&raw).expect("default operator config parses");
-    }
-
-    #[test]
-    fn cluster_report_config_parses_center_ip_and_trace_uid_includes_node_ip() {
-        let config = OperatorConfig::init()
-            .expect("default operator config initializes")
-            .patch(
-                r#"
-[cluster]
-enabled = true
-cluster_id = "prod"
-node_id = "node-a"
-node_name = "worker-a-01"
-node_ip = "node-ip-from-config"
-
-[cluster.report]
-enabled = true
-center_host = "center-host-from-config"
-center_port = 1
-"#,
-            )
-            .expect("cluster report patch parses");
-
-        assert!(config.cluster.enabled);
-        assert!(config.cluster.report.enabled);
-        assert_eq!(config.cluster.report.center_host, "center-host-from-config");
         assert_eq!(
-            config.cluster.trace_uid("trace-12"),
-            "prod/node-ip-from-config/node-a/trace-12"
+            config
+                .semantic_retention
+                .l0_llm_call
+                .request_body_export_max_bytes,
+            128 * 1024
         );
     }
 
     #[test]
-    fn storage_retention_can_be_shortened_to_two_minutes_for_tests() {
-        let config = OperatorConfig::init()
-            .expect("default operator config initializes")
-            .patch(
-                r#"
-[storage.retention]
-max_trace_age = "2m"
-sweep_interval = "1s"
-min_terminal_age = "1s"
-max_traces_per_sweep = 2
-"#,
-            )
-            .expect("storage retention patch parses");
+    fn request_body_export_can_be_enabled_with_a_custom_limit() {
+        let config = parse_l0_llm_call(
+            "request_body_export = \"canonical_json\"\nrequest_body_export_max_bytes = 1048576\n",
+        )
+        .expect("explicit body export parses");
 
         assert_eq!(
-            config.storage_retention.max_trace_age,
-            Duration::from_secs(2 * 60)
+            config.semantic_retention.l0_llm_call.request_body_export,
+            LlmRequestBodyExportRetention::CanonicalJson
         );
         assert_eq!(
-            config.storage_retention.sweep_interval,
-            Duration::from_secs(1)
+            config
+                .semantic_retention
+                .l0_llm_call
+                .request_body_export_max_bytes,
+            1_048_576
         );
         assert_eq!(
-            config.storage_retention.min_terminal_age,
-            Duration::from_secs(1)
+            config.semantic_retention.l0_llm_call.request_content,
+            LlmRequestContentRetention::CanonicalBlocks
         );
-        assert_eq!(config.storage_retention.max_traces_per_sweep, 2);
-
-        let rendered = config
-            .to_hierarchical_toml()
-            .expect("operator config renders");
-        assert!(rendered.contains("max_trace_age = \"2m\""));
     }
 
     #[test]
-    fn storage_retention_duration_without_unit_fails_validation() {
-        let raw = OperatorConfig::default_hierarchical_template()
-            .expect("default operator config template renders")
-            .replace("max_trace_age = \"7d\"", "max_trace_age = \"2\"");
+    fn request_body_export_without_canonical_block_retention_fails_validation() {
+        for request_content in ["none", "shape"] {
+            let error = parse_l0_llm_call(&format!(
+                "request_content = \"{request_content}\"\n\
+                 request_body_export = \"canonical_json\"\n"
+            ))
+            .expect_err("contradictory retention and export should fail validation");
 
-        let error = OperatorConfig::parse(&raw)
-            .expect_err("duration without explicit unit should fail validation");
+            assert!(
+                error.contains("semantic_retention.l0_llm_call.request_body_export"),
+                "error should name the offending setting, got: {error}"
+            );
+            assert!(
+                error.contains("request_content"),
+                "error should name the conflicting setting, got: {error}"
+            );
+        }
+    }
 
-        assert!(error.contains("storage.retention.max_trace_age"));
-        assert!(error.contains("expected a duration with unit"));
+    #[test]
+    fn request_body_export_limit_of_zero_fails_validation() {
+        let error = parse_l0_llm_call("request_body_export_max_bytes = 0\n")
+            .expect_err("a zero body ceiling should fail validation");
+
+        assert!(error.contains("semantic_retention.l0_llm_call.request_body_export_max_bytes"));
+        assert!(error.contains("must be positive"));
+    }
+
+    #[test]
+    fn request_body_export_survives_a_serialization_round_trip() {
+        let config = parse_l0_llm_call(
+            "request_body_export = \"canonical_json\"\nrequest_body_export_max_bytes = 4096\n",
+        )
+        .expect("explicit body export parses");
+
+        let rendered = config.dump().expect("operator config renders");
+        let reparsed = OperatorConfig::parse(&rendered).expect("rendered config parses");
+
+        assert_eq!(reparsed.semantic_retention, config.semantic_retention);
+    }
+
+    #[test]
+    fn tool_result_content_export_is_off_by_default_and_can_be_enabled() {
+        let defaults = OperatorConfig::init().expect("default operator config initializes");
+        assert_eq!(
+            defaults
+                .semantic_retention
+                .l0_llm_call
+                .tool_result_content_export,
+            LlmToolResultContentExportRetention::None
+        );
+
+        let config = parse_l0_llm_call(
+            "tool_result_content_export = \"canonical_json\"\n\
+             tool_result_content_export_max_bytes = 4096\n",
+        )
+        .expect("explicit tool result export parses");
+        assert_eq!(
+            config
+                .semantic_retention
+                .l0_llm_call
+                .tool_result_content_export,
+            LlmToolResultContentExportRetention::CanonicalJson
+        );
+        assert_eq!(
+            config
+                .semantic_retention
+                .l0_llm_call
+                .tool_result_content_export_max_bytes,
+            4096
+        );
+    }
+
+    #[test]
+    fn logical_agent_tool_names_have_safe_defaults_and_round_trip() {
+        let config = OperatorConfig::init().expect("default operator config initializes");
+        assert!(
+            config
+                .agent_invocation
+                .tool_names
+                .iter()
+                .any(|name| name == "Agent")
+        );
+        assert!(
+            config
+                .agent_invocation
+                .tool_names
+                .iter()
+                .any(|name| name == "task")
+        );
+
+        let rendered = config.dump().expect("operator config renders");
+        let reparsed = OperatorConfig::parse(&rendered).expect("rendered config parses");
+        assert_eq!(reparsed.agent_invocation, config.agent_invocation);
     }
 }

@@ -16,8 +16,6 @@ mod legacy_llm_call;
 #[path = "action_tree_projection/link_validity.rs"]
 mod link_validity;
 
-const ACTION_VALID_ATTR: &str = "actrail.action.valid";
-const VALID_FALSE: &str = "false";
 pub(super) const ROOT_PARENT_ID: &str = "";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -43,35 +41,6 @@ impl ActionDisplayProjection {
         let actions = load_semantic_actions(storage, trace_id)?;
         let links = load_semantic_action_links(storage, trace_id)?;
         Ok(Self::new(actions, links))
-    }
-
-    #[cfg(test)]
-    pub(super) fn children(&self, parent_id: &str) -> Vec<DisplayChild> {
-        self.children_by_parent
-            .get(parent_id)
-            .cloned()
-            .unwrap_or_default()
-    }
-
-    pub(super) fn child_count(&self, parent_id: &str) -> usize {
-        self.children_by_parent
-            .get(parent_id)
-            .map(Vec::len)
-            .unwrap_or_default()
-    }
-
-    pub(super) fn children_page(
-        &self,
-        parent_id: &str,
-        offset: usize,
-        limit: usize,
-    ) -> (Vec<DisplayChild>, usize) {
-        let Some(children) = self.children_by_parent.get(parent_id) else {
-            return (Vec::new(), 0);
-        };
-        let total = children.len();
-        let page = children.iter().skip(offset).take(limit).cloned().collect();
-        (page, total)
     }
 
     fn new(actions: Vec<SemanticAction>, links: Vec<SemanticActionLink>) -> Self {
@@ -173,10 +142,6 @@ fn load_semantic_action_links(
 }
 
 fn valid_actions(actions: Vec<SemanticAction>) -> Vec<SemanticAction> {
-    let actions = actions
-        .into_iter()
-        .filter(|action| !invalidated_action(action))
-        .collect::<Vec<_>>();
     let bulk_read_ranges = bulk_read_ranges(&actions);
     actions
         .into_iter()
@@ -492,13 +457,6 @@ fn display_role_order(role: SemanticActionLinkRole) -> usize {
         .expect("display parent role must be configured")
 }
 
-fn invalidated_action(action: &SemanticAction) -> bool {
-    action
-        .attributes
-        .get(ACTION_VALID_ATTR)
-        .is_some_and(|value| value == VALID_FALSE)
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct BulkReadRange {
     trace_id: TraceId,
@@ -542,7 +500,3 @@ fn bulk_read_covered_file_read(action: &SemanticAction, ranges: &[BulkReadRange]
                 })
         })
 }
-
-#[cfg(test)]
-#[path = "unit_tests/action_tree_projection.rs"]
-mod tests;

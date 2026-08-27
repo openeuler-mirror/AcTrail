@@ -1,0 +1,10 @@
+[package]
+name = "sandbox_alert_sqlite"
+version.workspace = true
+edition = "2024"
+license = "MulanPSL-2.0"
+
+[dependencies]
+rusqlite = { version = "0.31.0", features = ["bundled"] }
+sandbox_alert_store = { path = "../../../contracts/sandbox_alert_store" }
+sandbox_observation = { path = "../../../contracts/sandbox_observation" }

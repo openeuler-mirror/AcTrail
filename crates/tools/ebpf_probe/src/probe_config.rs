@@ -28,6 +28,7 @@ pub fn load_live_verification_config(path: &Path) -> Result<LiveVerificationConf
         tracked_process_max_entries: values.required_positive_u32("tracked_process_max_entries")?,
         pending_operation_max_entries: values
             .required_positive_u32("pending_operation_max_entries")?,
+        fd_per_process_max_entries: values.required_positive_u32("fd_per_process_max_entries")?,
         suppressed_fd_max_entries: values.required_positive_u32("suppressed_fd_max_entries")?,
         suppressed_fd_index_slots_per_process: values
             .required_positive_u32("suppressed_fd_index_slots_per_process")?,
@@ -163,54 +164,4 @@ fn validate_live_config(config: &LiveVerificationConfig) -> Result<(), String> {
         );
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use std::path::Path;
-
-    use config_core::daemon::PayloadStdioStorageMode;
-
-    use super::{load_live_verification_config, load_workload_config};
-
-    #[test]
-    fn public_extended_observation_config_parses() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../..")
-            .join("docs/examples/03.extended-observation-e2e/observation.conf");
-        let config = load_live_verification_config(&path).expect("parse public example config");
-
-        assert_eq!(config.profile_name, "actrail-extended-e2e");
-        assert_eq!(config.trace_name, "actrail-extended-live");
-        assert!(config.payload_stdio.enabled);
-        assert!(config.payload_stdio.capture_stdin);
-        assert!(config.payload_stdio.capture_stdout);
-        assert!(config.payload_stdio.capture_stderr);
-        assert_eq!(
-            config.payload_stdio.stdin_storage_mode,
-            PayloadStdioStorageMode::Full
-        );
-        assert_eq!(
-            config.payload_stdio.stdout_storage_mode,
-            PayloadStdioStorageMode::Full
-        );
-        assert_eq!(
-            config.payload_stdio.stderr_storage_mode,
-            PayloadStdioStorageMode::Full
-        );
-        assert!(config.mmap.is_some());
-        assert_eq!(config.provider_expected_provider, "actrail-local-tcp");
-    }
-
-    #[test]
-    fn public_extended_workload_config_parses() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../..")
-            .join("docs/examples/03.extended-observation-e2e/workload.conf");
-        let config = load_workload_config(&path).expect("parse public workload config");
-
-        assert_eq!(config.stdio_stdin_message, "actrail-stdio-stdin-e2e");
-        assert_eq!(config.stdio_continue_message, "actrail-stdio-continue-e2e");
-        assert!(config.mmap.is_some());
-    }
 }

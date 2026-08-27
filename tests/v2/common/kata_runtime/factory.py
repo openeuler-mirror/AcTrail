@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .artifacts import CompositeArtifactRequirement, DirectoryManifestRequirement
+from .backend import kata_backend
 from .container import KataTestContainer
 from .image import ContainerdImage, PullPolicy
 from .process import CommandRunner
@@ -30,6 +31,8 @@ class KataRequirementsBuilder:
     uid: int
     gid: int
     ready_timeout_seconds: float
+    snapshotter: str | None = None
+    image_archive_sha256: str | None = None
 
     def build(
         self,
@@ -40,7 +43,12 @@ class KataRequirementsBuilder:
         artifact_directories: tuple[Path, ...],
         labels: tuple[tuple[str, str], ...],
         running_validator: Callable[[KataTestContainer], RequirementCheck],
+        privileged_without_host_devices: bool = False,
     ) -> KataContainerRequirements:
+        backend = kata_backend(self.backend)
+        snapshotter = self.snapshotter
+        if snapshotter is None:
+            snapshotter = backend.default_snapshotter
         prepare_policy = (
             PreparePolicy.CHECK_ONLY
             if self.pull_policy is PullPolicy.NEVER
@@ -53,13 +61,16 @@ class KataRequirementsBuilder:
                 runtime=self.runtime,
                 runtime_config=self.runtime_config,
                 image=self.image,
+                snapshotter=snapshotter,
             ),
             image=ContainerdImage(
                 reference=self.image,
                 runner=self.runner,
                 pull_policy=self.pull_policy,
                 archive=self.image_archive,
+                archive_sha256=self.image_archive_sha256,
                 timeout_seconds=self.runtime_timeout_seconds,
+                snapshotter=snapshotter,
             ),
             artifact_requirement=CompositeArtifactRequirement(
                 tuple(
@@ -73,6 +84,9 @@ class KataRequirementsBuilder:
             uid=self.uid,
             gid=self.gid,
             labels=labels,
+            privileged_without_host_devices=(
+                privileged_without_host_devices
+            ),
             ready_timeout_seconds=self.ready_timeout_seconds,
             prepare_policy=prepare_policy,
             running_validator=running_validator,

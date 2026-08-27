@@ -103,7 +103,10 @@ static __always_inline int emit_exec_proc_event(
     return 0;
 }
 
-static __noinline int store_pending_exit_op(struct trace_event_raw_sys_enter *ctx) {
+static __noinline int store_pending_exit_op(
+    struct trace_event_raw_sys_enter *ctx,
+    __u32 group_exit
+) {
     __u64 pid_tgid = current_pid_tgid();
     __u32 pid = pid_tgid >> 32;
     __u64 *trace_id = 0;
@@ -129,6 +132,10 @@ static __noinline int store_pending_exit_op(struct trace_event_raw_sys_enter *ct
     }
 
     op.code = (__s32)ctx->args[0];
+    op.group_exit = group_exit;
+    if (group_exit) {
+        pid_tgid = ((__u64)pid << 32) | pid;
+    }
     bpf_map_update_elem(&pending_exit_ops, &pid_tgid, &op, BPF_ANY);
     return 0;
 }
@@ -137,14 +144,37 @@ static __always_inline void attach_exit_code(
     struct actrail_event *event,
     __u64 pid_tgid
 ) {
+    __u64 group_key = (pid_tgid & 0xffffffff00000000ULL) | (pid_tgid >> 32);
     struct actrail_pending_exit_op *op = bpf_map_lookup_elem(&pending_exit_ops, &pid_tgid);
 
-    if (!op) {
-        return;
+    if (!op && group_key != pid_tgid) {
+        op = bpf_map_lookup_elem(&pending_exit_ops, &group_key);
     }
-    event->aux = (__u32)op->code;
-    event->result = 1;
+    if (op) {
+        event->aux = (__u32)op->code;
+        event->result = 1;
+    }
     bpf_map_delete_elem(&pending_exit_ops, &pid_tgid);
+    if (group_key != pid_tgid) {
+        bpf_map_delete_elem(&pending_exit_ops, &group_key);
+    }
+}
+
+static __always_inline void discard_process_exit_codes(__u64 pid_tgid) {
+    __u64 group_key = (pid_tgid & 0xffffffff00000000ULL) | (pid_tgid >> 32);
+
+    bpf_map_delete_elem(&pending_exit_ops, &pid_tgid);
+    if (group_key != pid_tgid) {
+        bpf_map_delete_elem(&pending_exit_ops, &group_key);
+    }
+}
+
+static __always_inline void discard_thread_exit_code(__u64 pid_tgid) {
+    struct actrail_pending_exit_op *op = bpf_map_lookup_elem(&pending_exit_ops, &pid_tgid);
+
+    if (op && !op->group_exit) {
+        bpf_map_delete_elem(&pending_exit_ops, &pid_tgid);
+    }
 }
 
 #endif

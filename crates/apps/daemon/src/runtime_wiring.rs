@@ -7,4 +7,5 @@ pub struct DaemonRuntimeWiring<A> {
     pub available_collectors: Vec<String>,
     pub loaded_policy_plugins: Vec<String>,
     pub storage_ready: bool,
+    pub alert_forwarding: alert_forwarding::AlertForwardingPlugin,
 }

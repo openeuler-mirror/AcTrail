@@ -23,6 +23,7 @@ fail() {
 for artifact in \
   "$TARGET_DIR/actraild" \
   "$TARGET_DIR/actrailctl" \
+  "$TARGET_DIR/actrail-sb" \
   "$TARGET_DIR/actrailviewer" \
   "$TARGET_DIR/libactrail_tls_payload_probe_sync.so"; do
   [[ -f "$artifact" ]] \
@@ -53,6 +54,7 @@ done
 grep -Eq '^program_interpreter=/' "$BUNDLE_DIR/BUNDLE-INFO" \
   || fail "BUNDLE-INFO has no absolute program_interpreter"
 [[ -f "$BUNDLE_DIR/MANIFEST.sha256" ]] || fail "MANIFEST.sha256 missing"
+[[ -x "$BUNDLE_DIR/actrail-sb" ]] || fail "Guest actrail-sb missing or not executable"
 for plugin_file in \
   otel-http.plugin.toml \
   otel-http.config.toml \

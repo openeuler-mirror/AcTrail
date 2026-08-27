@@ -1,0 +1,48 @@
+{
+  "alert": {
+    "enabled": true,
+    "trigger_mode": "count",
+    "min_failure_count": 3,
+    "min_failure_rate": 0.0,
+    "window_seconds": 60,
+    "cooldown_seconds": 60,
+    "after_alert": "reset_window",
+    "indeterminate_handling": "skip",
+    "unknown_counts_as_success": true
+  },
+  "filter": {
+    "tool_scope": "llm_and_mcp",
+    "parent_scope": "agent_child",
+    "llm_attribution": "fifo",
+    "monitored_tools": [],
+    "ignored_tools": []
+  },
+  "failure_type_map": {
+    "exit_code_nonzero": "runtime_error",
+    "command_error": "runtime_error",
+    "mcp_error": "mcp_error",
+    "policy_denied": "policy_denied",
+    "indeterminate": "unknown"
+  },
+  "strict_mapping": false,
+  "evidence": {
+    "max_count": 64
+  },
+  "desensitization": {
+    "mode": "category_only",
+    "summary_max_chars": 120,
+    "redact_keywords": ["sk-", "api_key", "apikey", "password", "token", "Authorization", "secret"]
+  },
+  "debug_include_command_line": false,
+  "reporting": {
+    "mode": "database",
+    "endpoint": "",
+    "enabled": false
+  },
+  "resources": {
+    "state_ttl_seconds": 600,
+    "pending_queue_capacity": 1024,
+    "max_trace_states": 1024,
+    "attribution_grace_seconds": 60
+  }
+}

@@ -2,6 +2,7 @@
 #define ACTRAIL_FILE_H
 
 #include "actrail_runtime.h"
+#include "actrail_fd.h"
 
 enum actrail_file_path_abi {
     ACTRAIL_FILE_EVENT_HEADER_SIZE = 128,
@@ -58,6 +59,8 @@ enum actrail_file_syscall_id {
     ACTRAIL_FILE_SYSCALL_SOCKETPAIR = 25,
     ACTRAIL_FILE_SYSCALL_READ_SUMMARY = 26,
     ACTRAIL_FILE_SYSCALL_CLOSE_RANGE = 27,
+    ACTRAIL_FILE_SYSCALL_IOCTL_CLOEXEC = 28,
+    ACTRAIL_FILE_SYSCALL_IOCTL_NCLOEXEC = 29,
 };
 
 enum actrail_file_syscall_arg_count {
@@ -98,6 +101,7 @@ enum actrail_file_enter_descriptor {
 
 struct actrail_file_config {
     __u32 path_max_bytes;
+    __u32 event_capture_enabled;
 };
 
 struct actrail_file_event {
@@ -134,6 +138,13 @@ struct {
     __type(value, struct actrail_file_config);
 } file_config SEC(".maps");
 
+static __always_inline int file_event_capture_enabled(void) {
+    __u32 key = 0;
+    struct actrail_file_config *config = bpf_map_lookup_elem(&file_config, &key);
+
+    return config && config->event_capture_enabled;
+}
+
 static __always_inline void init_file_event_header(
     struct actrail_file_event *event,
     __u32 kind
@@ -151,7 +162,7 @@ static __always_inline int emit_file_primary_path_enter(
     __u32 tgid = 0;
     __u32 tid = 0;
     __u32 lookup_flags = 0;
-    __u64 *trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
+    __u64 *trace_id;
     struct actrail_file_event *event;
     __u64 generation;
     __u32 kind = (__u32)(descriptor & ACTRAIL_FILE_DESCRIPTOR_KIND_MASK);
@@ -161,6 +172,10 @@ static __always_inline int emit_file_primary_path_enter(
     );
     __u32 arg_count = (__u32)(descriptor >> ACTRAIL_FILE_DESCRIPTOR_ARGC_SHIFT);
 
+    if (!file_event_capture_enabled()) {
+        return 0;
+    }
+    trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
     if (!tgid) {
         return 0;
     }
@@ -198,7 +213,7 @@ static __always_inline int emit_file_full_path_enter(
     __u32 tgid = 0;
     __u32 tid = 0;
     __u32 lookup_flags = 0;
-    __u64 *trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
+    __u64 *trace_id;
     struct actrail_file_event *event;
     __u64 generation;
     __u32 kind = (__u32)(descriptor & ACTRAIL_FILE_DESCRIPTOR_KIND_MASK);
@@ -208,6 +223,10 @@ static __always_inline int emit_file_full_path_enter(
     );
     __u32 arg_count = (__u32)(descriptor >> ACTRAIL_FILE_DESCRIPTOR_ARGC_SHIFT);
 
+    if (!file_event_capture_enabled()) {
+        return 0;
+    }
+    trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
     if (!tgid) {
         return 0;
     }
@@ -245,7 +264,7 @@ static __always_inline int emit_file_header_enter(
     __u32 tgid = 0;
     __u32 tid = 0;
     __u32 lookup_flags = 0;
-    __u64 *trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
+    __u64 *trace_id;
     struct actrail_file_event *event;
     __u32 kind = (__u32)(descriptor & ACTRAIL_FILE_DESCRIPTOR_KIND_MASK);
     __u32 syscall_id = (__u32)(
@@ -254,6 +273,10 @@ static __always_inline int emit_file_header_enter(
     );
     __u32 arg_count = (__u32)(descriptor >> ACTRAIL_FILE_DESCRIPTOR_ARGC_SHIFT);
 
+    if (!file_event_capture_enabled()) {
+        return 0;
+    }
+    trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
     if (!tgid) {
         return 0;
     }
@@ -447,6 +470,36 @@ static __always_inline int emit_file_fcntl_enter(
     );
 }
 
+static __always_inline __u32 file_ioctl_flag_syscall_id(__u32 context_kind) {
+    if (context_kind == ACTRAIL_FD_FLAG_CONTEXT_IOCTL_CLOEXEC) {
+        return ACTRAIL_FILE_SYSCALL_IOCTL_CLOEXEC;
+    }
+    if (context_kind == ACTRAIL_FD_FLAG_CONTEXT_IOCTL_NCLOEXEC) {
+        return ACTRAIL_FILE_SYSCALL_IOCTL_NCLOEXEC;
+    }
+    return 0;
+}
+
+static __always_inline int emit_file_ioctl_flag_enter(
+    struct trace_event_raw_sys_enter *ctx,
+    __u32 context_kind
+) {
+    __u32 syscall_id = file_ioctl_flag_syscall_id(context_kind);
+
+    if (!syscall_id) {
+        return 0;
+    }
+    return emit_file_header_enter(
+        ctx,
+        file_enter_descriptor(
+            ACTRAIL_FILE_CONTEXT,
+            syscall_id,
+            ACTRAIL_FILE_SYSCALL_ARGC_CLOSE
+        ),
+        (__u32)ctx->args[0]
+    );
+}
+
 static __always_inline int emit_file_chdir_enter(
     struct trace_event_raw_sys_enter *ctx
 ) {
@@ -485,10 +538,14 @@ static __always_inline int emit_file_exit(
     __u32 tgid = 0;
     __u32 tid = 0;
     __u32 lookup_flags = 0;
-    __u64 *trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
+    __u64 *trace_id;
     struct actrail_file_event *event;
     __u64 generation;
 
+    if (!file_event_capture_enabled()) {
+        return 0;
+    }
+    trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
     if (!tgid) {
         return 0;
     }
@@ -584,6 +641,25 @@ static __always_inline int emit_ipc_fd_pair_exit(
     if (fds[0] < 0 || fds[1] < 0) {
         bpf_map_delete_elem(&pending_ipc_fd_pair_ops, &operation_key);
         return 0;
+    }
+
+    {
+        __u32 category = op->kind == ACTRAIL_FILE_IPC_FD_UNIX_SOCKET
+            ? ACTRAIL_FD_CATEGORY_IPC_UNIX_SOCKET
+            : ACTRAIL_FD_CATEGORY_IPC_PIPE;
+        __u32 fd_flags = fd_creation_flags(op->creation_flags);
+        struct actrail_fd_registration registration = {
+            .trace_id = op->trace_id,
+            .program_ctx = ctx,
+            .pid = op->pid,
+            .category = category,
+            .flags = fd_flags,
+        };
+
+        registration.fd = (__u32)fds[0];
+        fd_register(&registration);
+        registration.fd = (__u32)fds[1];
+        fd_register(&registration);
     }
 
     event = actrail_event_reserve(ACTRAIL_FILE_EVENT_HEADER_SIZE);

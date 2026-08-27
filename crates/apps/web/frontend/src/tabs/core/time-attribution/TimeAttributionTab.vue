@@ -142,12 +142,15 @@
       <section v-if="attribution.issues?.length" class="issues-panel">
         <h3>Collection and attribution status</h3>
         <article
-          v-for="(issue, index) in attribution.issues"
+          v-for="(issue, index) in groupedIssues"
           :key="`${issue.code}-${issue.action_id ?? index}`"
           :class="`issue-${issue.severity}`"
         >
           <strong>{{ issue.code }}</strong>
           <span>{{ issue.message }}</span>
+          <small v-if="issue.count > 1" class="issue-count">
+            {{ issue.count }} occurrences
+          </small>
         </article>
       </section>
 
@@ -230,6 +233,19 @@ const filteredBreakdown = computed(() => {
   return (rows ?? []).filter((row) =>
     matchesQuery([row.label, row.key, row.kind, ...(row.agent_tools ?? [])]),
   );
+});
+const groupedIssues = computed(() => {
+  const groups = new Map();
+  for (const issue of props.attribution?.issues ?? []) {
+    const key = `${issue.code}\u0000${issue.message}`;
+    const group = groups.get(key);
+    if (group) {
+      group.count += 1;
+    } else {
+      groups.set(key, { ...issue, count: 1 });
+    }
+  }
+  return Array.from(groups.values());
 });
 
 watch(

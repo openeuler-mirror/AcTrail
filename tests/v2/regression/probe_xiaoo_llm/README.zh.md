@@ -150,6 +150,14 @@ jq --arg marker "$CASE_MARKER" '
   [.actions[] | select(.kind == "llm.call")] as $calls
   | [.actions[] | select(.kind == "llm.request")] as $requests
   | [.actions[] | select(.kind == "llm.response")] as $responses
+  | [.actions[]
+      | select(.kind == "http.message"
+               and .attributes["http.operation"] == "request")] as $http_requests
+  | [.actions[]
+      | select(.kind == "http.message"
+               and .attributes["http.operation"] == "response"
+               and (((.attributes.status_code // "0") | tonumber) >= 400))]
+      as $failed_http_responses
   | {
       calls: ($calls | length),
       requests: ($requests | length),
@@ -184,6 +192,17 @@ jq --arg marker "$CASE_MARKER" '
             or ((.attributes["llm.response.output_text"] // "") | contains($marker))
           )
         | .action_id
+      ],
+      failed_http_requests: [
+        $failed_http_responses[] as $response
+        | $http_requests[]
+        | select(.action_id == $response.attributes["http.request.action_id"])
+        | {
+            stream_key: .attributes.stream_key,
+            method: .attributes.method,
+            target: .attributes.target,
+            status_code: $response.attributes.status_code
+          }
       ]
     }
 ' /tmp/actrail-xiaoo-actions.json
@@ -191,7 +210,8 @@ jq --arg marker "$CASE_MARKER" '
 
 ### 预期结果
 
-trace 为 `Exited/Clean`；三个 action 计数均大于零且相等；`call_links`
-中每个 call 恰好有一个 request link 和一个 response link，且没有
-request/response 被重复使用；`canonical_requests` 和
-`marker_responses` 均非空。
+trace 为 `Exited/Clean`；call 与 request 计数相等且每个 call 恰好有一个
+request link。已有的 LLM response 必须各自拥有唯一 response link，不能复用。
+缺少 LLM response 的 call 只能是 trace-close 后的 terminal partial/error，并且其
+request 的 stream、method 和 path 必须与 `failed_http_requests` 中尚未使用的
+HTTP 4xx/5xx request 一致。`canonical_requests` 和 `marker_responses` 均非空。

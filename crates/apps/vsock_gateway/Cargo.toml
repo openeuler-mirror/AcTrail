@@ -1,0 +1,17 @@
+[package]
+name = "vsock_gateway"
+version.workspace = true
+edition = "2024"
+license = "MulanPSL-2.0"
+
+[dependencies]
+clap = { version = "4.6", features = ["derive"] }
+libc = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+vsock_gateway_runtime = { path = "../../core/vsock_gateway_runtime" }
+sandbox_vsock_transport = { path = "../../adapters/sandbox_link/vsock" }
+
+[[bin]]
+name = "actrail-vsock-gateway"
+path = "src/bin/actrail-vsock-gateway.rs"

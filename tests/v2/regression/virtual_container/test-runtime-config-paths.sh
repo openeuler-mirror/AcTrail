@@ -14,21 +14,25 @@ TEMP_ROOT="${TMPDIR:-/tmp}"
 WORK_DIR="$(mktemp -d "${TEMP_ROOT%/}/actrail-runtime-config-paths.XXXXXX")"
 trap 'rm -rf -- "$WORK_DIR"' EXIT
 VMM="$WORK_DIR/stratovirt"
+FIRECRACKER="$WORK_DIR/firecracker"
 KERNEL="$WORK_DIR/kernel"
 IMAGE="$WORK_DIR/guest.img"
 VIRTIOFSD="$WORK_DIR/virtiofsd"
 VALID_CONFIG="$WORK_DIR/valid.toml"
 INVALID_CONFIG="$WORK_DIR/invalid.toml"
 DISCOVERED_CONFIG="$WORK_DIR/discovered.toml"
+FIRECRACKER_CONFIG="$WORK_DIR/firecracker.toml"
 
 printf '#!/bin/sh\nexit 0\n' >"$VMM"
+printf '#!/bin/sh\nexit 0\n' >"$FIRECRACKER"
 printf '#!/bin/sh\nexit 0\n' >"$VIRTIOFSD"
-chmod +x "$VMM" "$VIRTIOFSD"
+chmod +x "$VMM" "$FIRECRACKER" "$VIRTIOFSD"
 touch "$KERNEL" "$IMAGE"
 cat >"$KERNEL.config" <<'EOF'
 CONFIG_FUSE_FS=y
 CONFIG_VIRTIO_FS=y
 CONFIG_VIRTIO_MMIO=y
+CONFIG_VIRTIO_BLK=y
 CONFIG_VSOCKETS=y
 CONFIG_VIRTIO_VSOCKETS=y
 CONFIG_VIRTIO_VSOCKETS_COMMON=y
@@ -79,6 +83,50 @@ EOF
 
 "$VALIDATOR" --backend stratovirt --require-ebpf "$VALID_CONFIG" >/dev/null \
   || fail "valid eBPF kernel configuration was rejected"
+
+FIRECRACKER_KERNEL="$WORK_DIR/firecracker-vmlinux.container"
+touch "$FIRECRACKER_KERNEL"
+cp "$KERNEL.config" "$FIRECRACKER_KERNEL.config"
+cat >"$FIRECRACKER_CONFIG" <<EOF
+[hypervisor.firecracker]
+path = "$FIRECRACKER"
+kernel = "$FIRECRACKER_KERNEL"
+image = "$IMAGE"
+valid_hypervisor_paths = ["$WORK_DIR/*"]
+EOF
+
+"$VALIDATOR" \
+  --backend firecracker \
+  --require-kernel-config \
+  --require-ebpf \
+  "$FIRECRACKER_CONFIG" >/dev/null \
+  || fail "valid Firecracker MMIO, vsock and eBPF kernel configuration was rejected"
+
+sed -e '/^CONFIG_VIRTIO_MMIO=y$/d' \
+  -e '/^CONFIG_VSOCKETS=y$/d' \
+  -e '/^CONFIG_VIRTIO_VSOCKETS=y$/d' \
+  "$FIRECRACKER_KERNEL.config" >"$FIRECRACKER_KERNEL.config.tmp"
+mv "$FIRECRACKER_KERNEL.config.tmp" "$FIRECRACKER_KERNEL.config"
+set +e
+missing_firecracker_output="$(
+  "$VALIDATOR" \
+    --backend firecracker \
+    --require-kernel-config \
+    --require-ebpf \
+    "$FIRECRACKER_CONFIG" 2>&1
+)"
+missing_firecracker_rc=$?
+set -e
+[[ "$missing_firecracker_rc" -ne 0 ]] \
+  || fail "Firecracker accepted a kernel without MMIO and vsock support"
+for capability in \
+  CONFIG_VIRTIO_MMIO=y \
+  CONFIG_VSOCKETS=y \
+  CONFIG_VIRTIO_VSOCKETS=y; do
+  grep -Fq "guest Firecracker kernel config is missing: $capability" \
+    <<<"$missing_firecracker_output" \
+    || fail "missing Firecracker $capability diagnostic was not emitted"
+done
 
 # Official Kata static archives expose a friendly kernel symlink while keeping
 # the matching configuration beside its versioned target.

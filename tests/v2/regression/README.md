@@ -1,12 +1,12 @@
 # V2 regression tests
 
-运行全部测例：
+运行默认回归集合：
 
 ```bash
 sudo -E python3.11 tests/v2/regression/test_all.py
 ```
 
-运行全部虚拟容器测例：
+运行默认虚拟容器测例：
 
 ```bash
 sudo -E python3.11 tests/v2/regression/test_all.py \
@@ -19,6 +19,26 @@ sudo -E python3.11 tests/v2/regression/test_all.py \
 workload bundle 和 xiaoO 路径，因此正常验收不需要再粘贴环境变量。显式 shell
 环境变量优先于 profile；可用 `--profile <path>` 选择其他 profile，或用
 `--no-profile` 禁用自动加载。profile 不得保存密码、API key 或其他凭据。
+执行隔离的主验收 backend 是 Firecracker。
+
+当前已注册的辅助与可选回归 case 包含以下职责：
+
+- `sandbox_resource_alert_host` 负责无 VMM 的 Host native-VSOCK 组件通路验收。
+- `sandbox_oom_killed_alert_host` 只负责一次受控 Host memory-cgroup OOM
+  与 `sandbox.resource.oom_killed` 公开告警投递，仅在显式选择时运行。
+- `execution_isolation_firecracker` 负责由 Kata/containerd 管理的真实 Firecracker
+  microVM、hybrid VSOCK 和 xiaoO 告警链验收，仅在显式选择该 case 时运行。
+- `execution_isolation_stratovirt` 负责真实 StratoVirt/Kata、native AF_VSOCK 和
+  xiaoO 告警链验收，仅在显式选择该 case 时运行。
+- `execution_isolation_cloud_hypervisor` 负责 Cloud Hypervisor 可选 backend 验收，
+  由 Kata 部署与生命周期 profile 承载，仅在显式选择该 case 时运行。
+- `virtual_container` 与 `virtual_container_xiaoo_concurrency`
+  负责 virtual-container 部署验收。
+
+显式运行 `execution_isolation_cloud_hypervisor` 时，
+profile 必须由 Cloud Hypervisor backend 且带 `--xiaoo` 的 artifact prepare 命令刷新。
+显式运行 `execution_isolation_stratovirt` 或 `execution_isolation_firecracker` 时，
+分别使用对应 backend 且带 Guest observer 的 Kata artifact，具体契约见各自 README。
 
 虚拟容器首次部署应优先使用
 `deploy/virtual-container/host/run-v2-tests.sh`。`local/kata/` 是 checkout-local 的
@@ -39,10 +59,24 @@ sudo -E python3.11 tests/v2/regression/test_all.py --case probe_qodercli_llm
 sudo -E python3.11 tests/v2/regression/test_all.py --case command_policy_xiaoo
 sudo -E VIRTUAL_CONTAINER_E2E_SCOPE=contracts \
   python3.11 tests/v2/regression/test_all.py --case virtual_container
+deploy/virtual-container/host/run-v2-tests.sh \
+  --profile local/kata/v2-test-profile-firecracker.json \
+  --case execution_isolation_firecracker
+deploy/virtual-container/host/run-v2-tests.sh \
+  --profile local/kata/v2-test-profile-stratovirt.json \
+  --case execution_isolation_stratovirt
+deploy/virtual-container/host/run-v2-tests.sh \
+  --profile local/kata/v2-test-profile-ch.json \
+  --case execution_isolation_cloud_hypervisor
+deploy/virtual-container/host/run-v2-tests.sh \
+  --no-profile --case sandbox_resource_alert_host
+deploy/virtual-container/host/run-v2-tests.sh \
+  --no-profile --case sandbox_oom_killed_alert_host
 sudo -E python3.11 tests/v2/regression/test_all.py --case container_auto
 sudo -E python3.11 tests/v2/regression/test_all.py --case container_agent_xiaoo
 sudo -E python3.11 tests/v2/regression/test_all.py --case semantic_action_boundaries
 sudo -E python3.11 tests/v2/regression/test_all.py --case otel_jsonl_action_filter
+sudo -E python3.11 tests/v2/regression/test_all.py --case project_subagent_trajectory
 sudo -E python3.11 tests/v2/regression/test_all.py --case plugin_activity_anomaly
 sudo -E python3.11 tests/v2/regression/test_all.py --case tool_consecutive_failure_alert
 sudo -E python3.11 tests/v2/regression/test_all.py --fail-fast --no-cleanup
@@ -126,9 +160,16 @@ stderr 和完整检查明细，同时仍由公共框架保存对应日志。
 | `command_policy_xiaoo` | [`command_policy_xiaoo/README.zh.md`](command_policy_xiaoo/README.zh.md) |
 | `virtual_container` | [`virtual_container/README.zh.md`](virtual_container/README.zh.md) |
 | `virtual_container_xiaoo_concurrency` | [`virtual_container_xiaoo_concurrency/README.zh.md`](virtual_container_xiaoo_concurrency/README.zh.md) |
+| `sandbox_resource_alert_host` | [`sandbox_resource_alert_host/README.zh.md`](sandbox_resource_alert_host/README.zh.md) |
+| `sandbox_oom_killed_alert_host` | [`sandbox_oom_killed_alert_host/README.zh.md`](sandbox_oom_killed_alert_host/README.zh.md) |
+| `execution_isolation_firecracker` | [`execution_isolation_firecracker/v2/README.zh.md`](execution_isolation_firecracker/v2/README.zh.md) |
+| `execution_isolation_stratovirt` | [`execution_isolation_stratovirt/v2/README.zh.md`](execution_isolation_stratovirt/v2/README.zh.md) |
+| `execution_isolation_cloud_hypervisor` | [`execution_isolation_cloud_hypervisor/v2/README.zh.md`](execution_isolation_cloud_hypervisor/v2/README.zh.md) |
 | `container_auto` | [`container_auto/README.zh.md`](container_auto/README.zh.md) |
 | `container_agent_xiaoo` | [`container_agent_xiaoo/README.zh.md`](container_agent_xiaoo/README.zh.md) |
 | `semantic_action_boundaries` | [`semantic_action_boundaries/README.zh.md`](semantic_action_boundaries/README.zh.md) |
 | `otel_jsonl_action_filter` | [`otel_jsonl_action_filter/README.zh.md`](otel_jsonl_action_filter/README.zh.md) |
+| `project_subagent_trajectory` | [`project_subagent_trajectory/README.zh.md`](project_subagent_trajectory/README.zh.md) |
 | `plugin_activity_anomaly` | [`activity_anomaly/README.zh.md`](activity_anomaly/README.zh.md) |
+| `alert_forwarding` | [`alert_forwarding/README.zh.md`](alert_forwarding/README.zh.md) |
 | `tool_consecutive_failure_alert` | [`tool_consecutive_failure_alert/README.zh.md`](tool_consecutive_failure_alert/README.zh.md) |

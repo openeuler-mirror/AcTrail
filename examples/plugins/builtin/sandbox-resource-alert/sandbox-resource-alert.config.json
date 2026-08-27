@@ -1,0 +1,7 @@
+{
+  "cpu_usage_threshold_basis_points": 9000,
+  "memory_available_threshold_bytes": 536870912,
+  "read_interval_threshold_bytes": 268435456,
+  "write_interval_threshold_bytes": 268435456,
+  "source_state_capacity": 4096
+}

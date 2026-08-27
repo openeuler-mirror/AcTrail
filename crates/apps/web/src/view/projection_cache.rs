@@ -3,24 +3,38 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::UNIX_EPOCH;
 
 use model_core::ids::TraceId;
+use storage_core::StorageBackend;
 
 use super::action_tree_projection::ActionDisplayProjection;
 
 const CACHE_CAPACITY: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct StorageRevision {
-    modified_secs: u64,
-    len: u64,
+struct TraceRevision {
+    action_count: u64,
+    action_max_key: i64,
+    link_count: u64,
+    link_max_rowid: i64,
+}
+
+impl TraceRevision {
+    fn load(storage: &dyn StorageBackend, trace_id: TraceId) -> Option<TraceRevision> {
+        let revision = storage.semantic_action_trace_revision(trace_id).ok()?;
+        Some(TraceRevision {
+            action_count: revision.action_count,
+            action_max_key: revision.action_max_key,
+            link_count: revision.link_count,
+            link_max_rowid: revision.link_max_rowid,
+        })
+    }
 }
 
 struct ProjectionCache {
     entries: HashMap<(String, u64), Arc<ActionDisplayProjection>>,
     order: VecDeque<(String, u64)>,
-    storage_revisions: HashMap<String, StorageRevision>,
+    trace_revisions: HashMap<(String, u64), TraceRevision>,
 }
 
 impl ProjectionCache {
@@ -28,7 +42,7 @@ impl ProjectionCache {
         Self {
             entries: HashMap::new(),
             order: VecDeque::new(),
-            storage_revisions: HashMap::new(),
+            trace_revisions: HashMap::new(),
         }
     }
 
@@ -52,36 +66,14 @@ impl ProjectionCache {
         let count = self.entries.len();
         self.entries.clear();
         self.order.clear();
-        self.storage_revisions.clear();
+        self.trace_revisions.clear();
         count
     }
 
-    fn clear_storage(&mut self, storage_key: &str) -> usize {
-        let before = self.entries.len();
-        self.entries.retain(|(path, _), _| path != storage_key);
-        self.order.retain(|(path, _)| path != storage_key);
-        self.storage_revisions.remove(storage_key);
-        before - self.entries.len()
-    }
-
-    fn sync_storage_revision(&mut self, storage_path: &Path) {
-        let storage_key = storage_key_string(storage_path);
-        let revision = read_storage_revision(storage_path);
-        let stale = match (revision, self.storage_revisions.get(&storage_key)) {
-            (None, None) => false,
-            (None, Some(_)) => true,
-            (Some(current), Some(previous)) => current != *previous,
-            (Some(current), None) => {
-                self.storage_revisions.insert(storage_key.clone(), current);
-                return;
-            }
-        };
-        if stale {
-            self.clear_storage(&storage_key);
-            if let Some(current) = revision {
-                self.storage_revisions.insert(storage_key, current);
-            }
-        }
+    fn clear_trace(&mut self, key: &(String, u64)) -> usize {
+        let removed = self.entries.remove(key).is_some() as usize;
+        self.order.retain(|entry| entry != key);
+        removed
     }
 }
 
@@ -98,23 +90,27 @@ fn storage_key_string(storage_path: &Path) -> String {
         .into_owned()
 }
 
-fn read_storage_revision(storage_path: &Path) -> Option<StorageRevision> {
-    let metadata = std::fs::metadata(storage_path).ok()?;
-    let modified_secs = metadata
-        .modified()
-        .ok()?
-        .duration_since(UNIX_EPOCH)
-        .ok()?
-        .as_secs();
-    Some(StorageRevision {
-        modified_secs,
-        len: metadata.len(),
-    })
-}
-
-fn sync_storage_revision(storage_path: &Path) {
+pub(super) fn sync_trace_revision(
+    storage: &dyn StorageBackend,
+    storage_path: &Path,
+    trace_id: TraceId,
+) {
+    let Some(revision) = TraceRevision::load(storage, trace_id) else {
+        return;
+    };
+    let key = (storage_key_string(storage_path), trace_id.get());
     if let Ok(mut cache) = cache_state().lock() {
-        cache.sync_storage_revision(storage_path);
+        let stale = match cache.trace_revisions.get(&key) {
+            Some(previous) => *previous != revision,
+            None => {
+                cache.trace_revisions.insert(key, revision);
+                return;
+            }
+        };
+        if stale {
+            cache.clear_trace(&key);
+            cache.trace_revisions.insert(key, revision);
+        }
     }
 }
 
@@ -130,7 +126,6 @@ pub(super) fn cached_action_display_projection(
     trace_id: TraceId,
     loader: impl FnOnce() -> Result<ActionDisplayProjection, String>,
 ) -> Result<Arc<ActionDisplayProjection>, String> {
-    sync_storage_revision(storage_path);
     let key = (storage_key_string(storage_path), trace_id.get());
     if let Ok(mut cache) = cache_state().lock() {
         if let Some(projection) = cache.get(&key) {

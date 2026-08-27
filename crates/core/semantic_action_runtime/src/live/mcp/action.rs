@@ -304,7 +304,6 @@ impl LiveMcpProjector {
             process: server_process.clone(),
             status: SemanticActionStatus::InProgress,
             completeness: SemanticActionCompleteness::Partial,
-            confidence_millis: None,
             attributes,
             evidence: Self::evidence_with_role(
                 &message.evidence,
@@ -345,7 +344,6 @@ impl LiveMcpProjector {
             process: tool_call.process.clone(),
             status,
             completeness: SemanticActionCompleteness::Complete,
-            confidence_millis: None,
             attributes,
             evidence: Self::evidence_with_role(&message.evidence, evidence_role),
         }

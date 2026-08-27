@@ -165,6 +165,10 @@ impl CommandControlService {
             .map_err(lock_control_error)?
             .config
             .path_max_bytes;
+        let prepared_identity = prepared_process
+            .as_ref()
+            .ok()
+            .map(|resolved| resolved.process);
         let mut context = match prepared_process.and_then(|resolved| {
             ExecNotificationContext::capture(
                 listener_trace_id,
@@ -182,10 +186,12 @@ impl CommandControlService {
                 let backend = backend.lock().map_err(lock_control_error)?;
                 let decision = backend.config.failure_decision;
                 respond_continuation(continuation, decision)?;
-                let Some(process) = trace_runtime
-                    .get_trace(listener_trace_id)
-                    .map(|entry| entry.trace.root_process_identity)
-                else {
+                let process = prepared_identity.or_else(|| {
+                    trace_runtime
+                        .get_trace(listener_trace_id)
+                        .map(|entry| entry.trace.root_process_identity)
+                });
+                let Some(process) = process else {
                     tracing::error!(
                         trace_id = %listener_trace_id,
                         pid = notification.pid,

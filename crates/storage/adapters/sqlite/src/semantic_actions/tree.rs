@@ -5,23 +5,22 @@ use std::collections::BTreeSet;
 use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use rusqlite::types::Value;
-use rusqlite::{Connection, Params, Row, params, params_from_iter};
+use rusqlite::{Connection, OptionalExtension, Params, Row, params, params_from_iter};
 use semantic_action::{
     SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionStoreError,
-    attr_keys as attrs,
 };
+use storage_core::SemanticActionTraceRevision;
 
 use crate::SqliteStorage;
-use crate::records::decode_map;
 use crate::semantic_actions::action_ids::resolve_action_key;
 use crate::semantic_actions::codebook::sqlite::{
     action_kind_code, action_kind_code_from_str, decode_link_confidence, decode_link_role,
     link_role_code_from_str,
 };
-use crate::semantic_actions::cold_fields::decode_text_from_row_with_prefix;
+use crate::semantic_actions::cold_fields::decode_attributes_from_row_with_prefix;
 use crate::semantic_actions::store::{
     ACTION_SELECT_COLUMNS, action_cold_field_join, action_from_row, link_cold_field_join,
-    read_evidence_shared,
+    read_evidence_shared, resolve_file_paths,
 };
 use crate::semantic_actions::tree_metadata::{
     child_count_for_parent, effective_incoming_link_absence_predicate, effective_link_value_count,
@@ -96,54 +95,56 @@ impl SqliteStorage {
         })
     }
 
+    pub fn semantic_action_trace_revision(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<SemanticActionTraceRevision, SemanticActionStoreError> {
+        ensure_semantic_trace(self, trace_id)?;
+        let connection = self.connection().borrow();
+        let (action_count, action_max_key) = connection
+            .query_row(
+                "SELECT COUNT(*), COALESCE(MAX(action_key), 0)
+                 FROM semantic_actions WHERE trace_id = ?1",
+                params![trace_id.get()],
+                |row| Ok((row.get::<_, u64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .map_err(|error| {
+                SemanticActionStoreError::new("revision_semantic_actions", error.to_string())
+            })?;
+        let (link_count, link_max_rowid) = connection
+            .query_row(
+                "SELECT COUNT(*), COALESCE(MAX(rowid), 0)
+                 FROM semantic_action_links WHERE trace_id = ?1",
+                params![trace_id.get()],
+                |row| Ok((row.get::<_, u64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .map_err(|error| {
+                SemanticActionStoreError::new("revision_semantic_action_links", error.to_string())
+            })?;
+        Ok(SemanticActionTraceRevision {
+            action_count,
+            action_max_key,
+            link_count,
+            link_max_rowid,
+        })
+    }
+
     pub fn observed_agent_semantic_action(
         &self,
         trace_id: TraceId,
     ) -> Result<Option<SemanticAction>, SemanticActionStoreError> {
         ensure_semantic_trace(self, trace_id)?;
         let connection = self.connection().borrow();
-        let action_cold_join = action_cold_field_join();
-        let mut statement = connection
-            .prepare(&format!(
-                "SELECT {ACTION_SELECT_COLUMNS}
-                     FROM semantic_actions action
-                     JOIN semantic_action_ids ids
-                       ON ids.action_key = action.action_key
-                     {action_cold_join}
-                     WHERE action.trace_id = ?1
-                     AND action.kind_code = ?2
-                     AND action.agent_observed = 1
-                     ORDER BY action.start_time ASC, ids.action_id ASC"
-            ))
-            .map_err(|error| {
-                SemanticActionStoreError::new("prepare_observed_agent_action", error.to_string())
-            })?;
-        let rows = statement
-            .query_map(
-                params![
-                    trace_id.get(),
-                    action_kind_code(SemanticActionKind::ProcessExec),
-                ],
-                action_from_row,
-            )
-            .map_err(|error| {
-                SemanticActionStoreError::new("query_observed_agent_action", error.to_string())
-            })?;
-        for row in rows {
-            let mut action = row.map_err(|error| {
-                SemanticActionStoreError::new("map_observed_agent_action", error.to_string())
-            })?;
-            if action
-                .attributes
-                .get(attrs::agent::IDENTITY_STATUS)
-                .is_some_and(|status| status == "observed")
-                && !invalidated_action_attrs(&action.attributes)
-            {
-                action.evidence = read_evidence_shared(&connection, &action.action_id)?;
-                return Ok(Some(action));
-            }
+        let Some(identity) = query_observed_agent_identity(&connection, trace_id)? else {
+            return Ok(None);
+        };
+        let mut merged =
+            query_observed_agent_process_exec(&connection, trace_id, &identity.process)?
+                .unwrap_or_else(|| identity.clone());
+        for (key, value) in identity.attributes {
+            merged.attributes.entry(key).or_insert(value);
         }
-        Ok(None)
+        Ok(Some(merged))
     }
 
     pub fn semantic_action_children(
@@ -260,6 +261,7 @@ impl SqliteStorage {
             SemanticActionStoreError::new("map_semantic_action_for_process_kind", error.to_string())
         })?;
         action.evidence = read_evidence_shared(&connection, &action.action_id)?;
+        resolve_file_paths(&connection, &mut action)?;
         Ok(Some(action))
     }
 
@@ -317,7 +319,6 @@ impl SqliteStorage {
                     link.role_code AS role_code,
                     link.confidence_code AS confidence_code,
                     link.valid AS valid,
-                    link.attributes AS link_legacy_attributes,
                     link_attrs.encoding_code AS link_attributes_encoding_code,
                     link_attrs.uncompressed_bytes AS link_attributes_uncompressed_bytes,
                     link_attrs.payload AS link_attributes_payload
@@ -350,7 +351,12 @@ impl SqliteStorage {
             SemanticActionStoreError::new("prepare_semantic_action_children", error.to_string())
         })?;
         let rows = statement
-            .query_map(params_from_iter(values), child_row_from_row)
+            .query_map(params_from_iter(values), |row| {
+                let mut child = child_row_from_row(row)?;
+                resolve_file_paths(&connection, &mut child.action)
+                    .map_err(|_| rusqlite::Error::InvalidQuery)?;
+                Ok(child)
+            })
             .map_err(|error| {
                 SemanticActionStoreError::new("query_semantic_action_children", error.to_string())
             })?;
@@ -449,17 +455,87 @@ fn child_row_from_row(row: &Row<'_>) -> Result<SemanticActionChildRow, rusqlite:
         confidence: decode_link_confidence(row.get::<_, i64>("confidence_code")?)?,
         valid: row.get("valid")?,
         evidence: Vec::new(),
-        attributes: decode_map(&decode_text_from_row_with_prefix(
-            row,
-            "link_legacy_attributes",
-            "link_attributes",
-        )?),
+        attributes: decode_attributes_from_row_with_prefix(row, "link_attributes")?,
     };
     Ok(SemanticActionChildRow {
         action,
         link,
         child_count: 0,
     })
+}
+
+fn query_observed_agent_identity(
+    connection: &Connection,
+    trace_id: TraceId,
+) -> Result<Option<SemanticAction>, SemanticActionStoreError> {
+    let action_cold_join = action_cold_field_join();
+    let mut statement = connection
+        .prepare(&format!(
+            "SELECT {ACTION_SELECT_COLUMNS}
+             FROM agent_identities ai
+             JOIN semantic_actions action
+               ON action.action_key = ai.identity_action_key
+             JOIN semantic_action_ids ids
+               ON ids.action_key = action.action_key
+             {action_cold_join}
+             WHERE ai.trace_id = ?1
+             ORDER BY action.start_time ASC, ids.action_id ASC
+             LIMIT 1"
+        ))
+        .map_err(|error| {
+            SemanticActionStoreError::new("prepare_observed_agent_identity", error.to_string())
+        })?;
+    let mut action = statement
+        .query_row(params![trace_id.get()], action_from_row)
+        .optional()
+        .map_err(|error| {
+            SemanticActionStoreError::new("query_observed_agent_identity", error.to_string())
+        })?;
+    if let Some(action) = &mut action {
+        action.evidence = read_evidence_shared(connection, &action.action_id)?;
+    }
+    Ok(action)
+}
+
+fn query_observed_agent_process_exec(
+    connection: &Connection,
+    trace_id: TraceId,
+    process: &ProcessIdentity,
+) -> Result<Option<SemanticAction>, SemanticActionStoreError> {
+    let action_cold_join = action_cold_field_join();
+    let mut statement = connection
+        .prepare(&format!(
+            "SELECT {ACTION_SELECT_COLUMNS}
+             FROM semantic_actions action
+             JOIN semantic_action_ids ids
+               ON ids.action_key = action.action_key
+             {action_cold_join}
+             WHERE action.trace_id = ?1
+               AND action.kind_code = ?2
+               AND action.process_id = ?3
+             ORDER BY action.start_time ASC, ids.action_id ASC
+             LIMIT 1"
+        ))
+        .map_err(|error| {
+            SemanticActionStoreError::new("prepare_observed_agent_process_exec", error.to_string())
+        })?;
+    let mut action = statement
+        .query_row(
+            params![
+                trace_id.get(),
+                action_kind_code(SemanticActionKind::ProcessExec),
+                process.get(),
+            ],
+            action_from_row,
+        )
+        .optional()
+        .map_err(|error| {
+            SemanticActionStoreError::new("query_observed_agent_process_exec", error.to_string())
+        })?;
+    if let Some(action) = &mut action {
+        action.evidence = read_evidence_shared(connection, &action.action_id)?;
+    }
+    Ok(action)
 }
 
 fn role_and_kind_query_values(

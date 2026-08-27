@@ -5,8 +5,6 @@ use semantic_action::{
     SemanticEvidenceKind, attr_keys as attrs,
 };
 
-const LINK_VALID_ATTR: &str = attrs::actrail::LINK_VALID;
-const VALID_FALSE: &str = "false";
 const PROCESS_PARENT_IDENTITY_STATE_ATTR: &str = attrs::process_parent::IDENTITY_STATE;
 const PROCESS_PARENT_IDENTITY_STATE_CONFLICT: &str = "conflict";
 const DIRECTION_ATTR: &str = "direction";
@@ -31,10 +29,6 @@ pub(super) fn invalid_link(
     action_by_id: &BTreeMap<String, SemanticAction>,
 ) -> bool {
     !link.valid
-        || link
-            .attributes
-            .get(LINK_VALID_ATTR)
-            .is_some_and(|value| value == VALID_FALSE)
         || invalid_llm_call_child_link(link, parent, child)
         || invalid_parent_identity_link(link, child)
         || invalid_response_http_link(link, parent, child, action_by_id)

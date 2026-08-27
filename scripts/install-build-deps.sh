@@ -445,7 +445,9 @@ install_frontend_deps() {
 
 install_deps() {
   local manager="$1"
-  install_packages "$manager"
+  if ! check_packages "$manager" >/dev/null 2>&1; then
+    install_packages "$manager"
+  fi
   if bool_enabled "$frontend_npm_ci"; then
     install_frontend_deps "$manager"
   fi

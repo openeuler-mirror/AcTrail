@@ -83,6 +83,11 @@ class VirtualContainerScenario:
             ("guest_systemd", "test-guest-systemd-contract.sh"),
             ("guest_otel_endpoint", "test-guest-otel-endpoint-contract.sh"),
             ("host_collector", "test-host-collector-contract.sh"),
+            ("vsock_egress", "test-vsock-egress-contract.sh"),
+            (
+                "openeuler_vsock_deploy",
+                "test-openeuler-vsock-deploy-contract.sh",
+            ),
             ("guest_rootfs_install", "test-install-guest-rootfs.sh"),
             ("workload_interface", "test-workload-interface-contract.sh"),
             ("workload_bundle", "test-prepare-workload-bundle.sh"),
@@ -600,6 +605,7 @@ class VirtualContainerScenario:
             {
                 "ACTRAIL_REPO_ROOT": str(self._config.repo),
                 "ACTRAIL_BIN_DIR": str(self._config.bin_dir),
+                "ACTRAIL_TEST_WORK_DIR": str(self._config.work_dir),
                 "TMPDIR": str(self._tmp_dir),
                 "KATA_CONFIG_DIRS": os.pathsep.join(
                     str(path) for path in self._config.kata_config_dirs
@@ -657,9 +663,11 @@ class VirtualContainerScenario:
             return TestResult(TestStatus.FAILED, str(error))
         self._context.output.command_output(result.stdout, result.stderr)
         if result.returncode != 0:
+            status = f"exit status {result.returncode}"
+            diagnostic = result.diagnostic
             return TestResult(
                 TestStatus.FAILED,
-                f"exit status {result.returncode}",
+                f"{status} — {diagnostic}" if diagnostic else status,
             )
         return TestResult(TestStatus.PASSED, "completed")
 

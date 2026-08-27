@@ -150,6 +150,7 @@ impl TraceTiming {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TraceRecord {
     pub trace_id: TraceId,
+    pub otel_trace_id: crate::ids::OtelTraceId,
     pub alert_token: TraceAlertToken,
     pub root_process_identity: ProcessIdentity,
     /// Kernel PID namespace captured when the root process is attached.
@@ -184,6 +185,7 @@ pub struct TraceRecord {
 impl TraceRecord {
     pub fn new(
         trace_id: TraceId,
+        otel_trace_id: crate::ids::OtelTraceId,
         alert_token: TraceAlertToken,
         root_process_identity: ProcessIdentity,
         display_name: TraceName,
@@ -192,6 +194,7 @@ impl TraceRecord {
     ) -> Self {
         Self {
             trace_id,
+            otel_trace_id,
             alert_token,
             root_process_identity,
             root_pid_namespace: None,

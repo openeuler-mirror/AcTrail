@@ -31,7 +31,8 @@ sudo -E python3 tests/v2/regression/container_auto/run_e2e.py \
 - `CONTAINER_AUTO_E2E_CLEANUP_GRACE_SECONDS`：超时后留给脚本清理的时间，
   默认 30 秒。
 - `CONTAINER_AUTO_E2E_BASE_IMAGE`：验收使用的基础镜像，默认
-  `ubuntu:24.04`；Docker Hub 不可用时可指定同一 Ubuntu 镜像的镜像源地址。
+  `openeuler/openeuler:24.03-lts-sp3`；验证 Ubuntu 时设为 `ubuntu:24.04`，公共
+  registry 不可用时可指定对应发行版的镜像源地址。
 
 原验收脚本始终通过唯一运行标签清理它创建的容器、镜像和临时目录。因此
 `--no-cleanup` 会保留 V2 runner 日志，但不会保留这些 Docker 临时资源。

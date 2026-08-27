@@ -43,6 +43,38 @@ class ContainerImage:
         self._run(command, "build image")
         return self.reference
 
+    def prune_other_versions(self) -> list[str]:
+        result = subprocess.run(
+            [
+                "docker",
+                "image",
+                "ls",
+                "--filter",
+                f"reference={self.image_name}:*",
+                "--format",
+                "{{.Repository}}:{{.Tag}}",
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                "failed to list image versions: "
+                f"{(result.stderr or result.stdout).strip()}"
+            )
+        stale = sorted(
+            {
+                reference
+                for reference in result.stdout.splitlines()
+                if reference and reference != self.reference
+            }
+        )
+        if stale:
+            self._run(["docker", "image", "rm", *stale], "remove stale images")
+        return stale
+
     def _exists(self) -> bool:
         result = subprocess.run(
             ["docker", "image", "inspect", self.reference],

@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actrail.local/schemas/sandbox-resource-alert.config.v1.schema.json",
+  "title": "AcTrail sandbox resource alert configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "cpu_usage_threshold_basis_points",
+    "memory_available_threshold_bytes",
+    "read_interval_threshold_bytes",
+    "write_interval_threshold_bytes",
+    "source_state_capacity"
+  ],
+  "properties": {
+    "cpu_usage_threshold_basis_points": {
+      "description": "Emit high-cpu when interval CPU utilization enters this basis-point threshold.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10000
+    },
+    "memory_available_threshold_bytes": {
+      "description": "Emit oom-risk when Guest available memory is below this byte count.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "read_interval_threshold_bytes": {
+      "description": "Emit high-read when one process lineage exceeds this byte count in a collection interval.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "write_interval_threshold_bytes": {
+      "description": "Emit high-write when one process lineage exceeds this byte count in a collection interval.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "source_state_capacity": {
+      "description": "Maximum number of gateway/SB sources retained for OOM counter comparison.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295,
+      "readOnly": true
+    }
+  }
+}

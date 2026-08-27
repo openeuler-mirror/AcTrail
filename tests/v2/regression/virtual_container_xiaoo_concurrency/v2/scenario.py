@@ -4,6 +4,8 @@ import hashlib
 import os
 import secrets
 import shutil
+import socket
+import sys
 import time
 from pathlib import Path
 
@@ -19,6 +21,7 @@ from tests.v2.common.kata_runtime import (
 )
 from tests.v2.common.kata_runtime.process import ManagedProcess, SubprocessRunner
 from tests.v2.common.core import TestResult, TestStatus
+from tests.v2.common.core.loopback_port import resolve_test_port
 from tests.v2.common.runner import TestingContextSingleton
 
 from tests.v2.regression.virtual_container.v2.assertions import (
@@ -32,6 +35,8 @@ from .config import VirtualContainerXiaooConcurrencyConfig
 
 
 DUAL_VM_INSTANCES = ("a", "b")
+OPENCODE_GUEST_PROXY_PORT = 14080
+OPENCODE_VSOCK_PORT = 43181
 
 
 class DualKataXiaooScenario:
@@ -48,6 +53,13 @@ class DualKataXiaooScenario:
         self._case_dir = Path(__file__).resolve().parent
         self._provider_source = (
             config.repo / "tests/support/llm-http-proxy/provider_proxy.py"
+        )
+        self._connect_proxy = self._case_dir / "connect_proxy.py"
+        self._guest_bridge = (
+            config.repo / "deploy/virtual-container/vsock-egress/guest-bridge.sh"
+        )
+        self._host_bridge = (
+            config.repo / "deploy/virtual-container/vsock-egress/host-bridge.sh"
         )
         self._runtime_config = (
             deployment.data_config
@@ -74,9 +86,20 @@ class DualKataXiaooScenario:
         results: dict[str, TestResult] = {}
         containers: dict[str, KataTestContainer] = {}
         processes: dict[str, ManagedProcess] = {}
+        host_services: list[ManagedProcess] = []
         outputs: dict[str, str] = {}
         cleanup_errors: list[str] = []
         try:
+            if self._config.opencode_free_model is not None:
+                self._context.report_progress(
+                    "opencode_egress",
+                    "starting allow-listed Host CONNECT proxy and VSOCK bridge",
+                )
+                host_services.extend(self._start_opencode_egress())
+                results["opencode_egress"] = TestResult(
+                    TestStatus.PASSED,
+                    "allow-listed OpenCode HTTPS egress is ready",
+                )
             self._context.report_progress(
                 "assets",
                 "preparing deterministic local xiaoO/provider fixtures",
@@ -244,6 +267,11 @@ class DualKataXiaooScenario:
                     container.close()
                 except Exception as error:
                     cleanup_errors.append(f"{instance}: {error}")
+            for service in reversed(host_services):
+                try:
+                    service.terminate(grace_seconds=2)
+                except Exception as error:
+                    cleanup_errors.append(f"host service: {error}")
             results["cleanup"] = TestResult(
                 TestStatus.FAILED if cleanup_errors else TestStatus.PASSED,
                 "; ".join(cleanup_errors) if cleanup_errors else "owned VMs removed",
@@ -261,7 +289,8 @@ class DualKataXiaooScenario:
         shutil.copy2(self._xiaoo_binary, self._assets / "xiaoo")
         shutil.copy2(self._provider_source, self._assets / "provider_proxy.py")
         shutil.copy2(self._case_dir / "workload.sh", self._assets / "workload.sh")
-        for executable in ("xiaoo", "workload.sh"):
+        shutil.copy2(self._guest_bridge, self._assets / "guest-bridge.sh")
+        for executable in ("xiaoo", "workload.sh", "guest-bridge.sh"):
             (self._assets / executable).chmod(0o755)
         (self._assets / "provider_proxy.py").chmod(0o644)
         for instance in DUAL_VM_INSTANCES:
@@ -330,18 +359,29 @@ class DualKataXiaooScenario:
                 f"Kata VM {instance} task exited before readiness",
                 refreshable=True,
             )
+        opencode_check = ""
+        if self._config.opencode_free_model is not None:
+            opencode_check = (
+                "command -v opencode >/dev/null; "
+                "opencode --version >/dev/null; "
+                "command -v socat >/dev/null; "
+            )
+        readiness_command = (
+            ". /etc/os-release; [ \"${ID:-}\" = openEuler ]; "
+            "command -v python3 >/dev/null; "
+            "command -v base64 >/dev/null; "
+            + opencode_check
+            + "/opt/actrail-xiaoo/xiaoo --help >/dev/null; "
+            "python3 /opt/actrail-xiaoo/provider_proxy.py --help >/dev/null; "
+            "remaining=180; while [ $remaining -gt 0 ]; do "
+            "[ -S /run/actrail/control.sock ] && exit 0; "
+            "remaining=$((remaining - 1)); sleep 0.5; done; exit 72"
+        )
         result = vm.exec(
             (
                 "/bin/sh",
                 "-ec",
-                ". /etc/os-release; [ \"${ID:-}\" = openEuler ]; "
-                "command -v python3 >/dev/null; "
-                "command -v base64 >/dev/null; "
-                "/opt/actrail-xiaoo/xiaoo --help >/dev/null; "
-                "python3 /opt/actrail-xiaoo/provider_proxy.py --help >/dev/null; "
-                "remaining=180; while [ $remaining -gt 0 ]; do "
-                "[ -S /run/actrail/control.sock ] && exit 0; "
-                "remaining=$((remaining - 1)); sleep 0.5; done; exit 72",
+                readiness_command,
             ),
             timeout=self._config.ready_timeout_seconds,
         )
@@ -358,7 +398,7 @@ class DualKataXiaooScenario:
 
     def _workload_environment(self, instance: str) -> dict[str, str]:
         upper = instance.upper()
-        return {
+        environment = {
             "ACTRAIL_XIAOO_INSTANCE": instance,
             "ACTRAIL_XIAOO_BIN": "/opt/actrail-xiaoo/xiaoo",
             "ACTRAIL_XIAOO_CONFIG": f"/opt/actrail-xiaoo/xiaoo-{instance}.toml",
@@ -384,6 +424,88 @@ class DualKataXiaooScenario:
             ),
             "ACTRAIL_XIAOO_PROVIDER_DELAY_SECONDS": "1.0",
         }
+        if self._config.opencode_free_model is not None:
+            environment.update(
+                {
+                    "ACTRAIL_OPENCODE_FREE_MODEL": (
+                        self._config.opencode_free_model
+                    ),
+                    "ACTRAIL_OPENCODE_PROMPT": (
+                        f"Reply with exactly ACTRAIL_KATA_OPENCODE_{upper}_OK "
+                        "and nothing else."
+                    ),
+                    "ACTRAIL_OPENCODE_RESPONSE_MARKER": (
+                        f"ACTRAIL_KATA_OPENCODE_{upper}_OK"
+                    ),
+                    "ACTRAIL_OPENCODE_GUEST_BRIDGE": (
+                        "/opt/actrail-xiaoo/guest-bridge.sh"
+                    ),
+                    "ACTRAIL_OPENCODE_PROXY_PORT": str(
+                        OPENCODE_GUEST_PROXY_PORT
+                    ),
+                    "ACTRAIL_OPENCODE_VSOCK_PORT": str(OPENCODE_VSOCK_PORT),
+                }
+            )
+        return environment
+
+    def _start_opencode_egress(self) -> tuple[ManagedProcess, ManagedProcess]:
+        proxy_port = resolve_test_port(
+            "VIRTUAL_CONTAINER_XIAOO_CONCURRENCY_E2E_HOST_PROXY_PORT"
+        )
+        proxy = self._runner.start(
+            (
+                sys.executable,
+                str(self._connect_proxy),
+                "--bind-port",
+                str(proxy_port),
+                "--log-path",
+                str(self._config.work_dir / "opencode-connect-proxy.log"),
+            )
+        )
+        try:
+            self._wait_host_tcp(proxy, proxy_port)
+            bridge = self._runner.start(
+                (
+                    str(self._host_bridge),
+                    "--backend",
+                    "stratovirt",
+                    "--collector-port",
+                    str(proxy_port),
+                    "--vsock-port",
+                    str(OPENCODE_VSOCK_PORT),
+                )
+            )
+            time.sleep(0.2)
+            if bridge.poll() is not None:
+                result = bridge.wait(timeout=1)
+                raise RuntimeError(
+                    "OpenCode Host VSOCK bridge exited before readiness: "
+                    + result.diagnostic
+                )
+        except Exception:
+            proxy.terminate(grace_seconds=1)
+            raise
+        return proxy, bridge
+
+    def _wait_host_tcp(self, process: ManagedProcess, port: int) -> None:
+        deadline = time.monotonic() + self._config.ready_timeout_seconds
+        last_error = "not attempted"
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                result = process.wait(timeout=1)
+                raise RuntimeError(
+                    "OpenCode Host CONNECT proxy exited before readiness: "
+                    + result.diagnostic
+                )
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                    return
+            except OSError as error:
+                last_error = str(error)
+                time.sleep(0.05)
+        raise RuntimeError(
+            f"OpenCode Host CONNECT proxy readiness timed out: {last_error}"
+        )
 
     def _validate_workload_output(self, instance: str, output: str) -> None:
         upper = instance.upper()
@@ -399,6 +521,15 @@ class DualKataXiaooScenario:
             ),
             context=f"xiaoO workload {instance}",
         )
+        if self._config.opencode_free_model is not None:
+            require_markers(
+                output,
+                (
+                    f"ACTRAIL_KATA_OPENCODE_{upper}_OK",
+                    f"KATA_OPENCODE_FREE_OK instance={instance}",
+                ),
+                context=f"OpenCode workload {instance}",
+            )
         task_output = self._coord_root / instance / "task-output.txt"
         require_markers(
             task_output.read_text(encoding="utf-8"),

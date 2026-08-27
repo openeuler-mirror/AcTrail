@@ -122,7 +122,8 @@ impl OpenSslArchitectureBranch {
         let discovery_notices = search.notices.join("; ");
         let mut outcomes = Vec::new();
         for discovered in search.candidates {
-            let image = ElfImage::parse(&discovered.path)
+            let image = context
+                .parse_probe_image(&discovered.path)
                 .map_err(|error| DetectionError::new(self.path.clone(), error.to_string()))?;
             if image.arch() != context.target_image.arch() {
                 continue;

@@ -1,0 +1,58 @@
+[hand_observation]
+enabled = true
+listen_addr = "127.0.0.1:9472"
+max_gateway_connections = 64
+accept_poll_interval_ms = 20
+connection_poll_interval_ms = 250
+connection_idle_timeout_ms = 15000
+write_timeout_ms = 1000
+read_buffer_bytes = 65536
+connection_thread_stack_bytes = 524288
+
+[sandbox_evidence]
+path = "/var/lib/actrail/sandbox-evidence.sqlite"
+schema_version = 2
+create_parent_directory = true
+busy_timeout_ms = 5000
+writer_queue_capacity = 1024
+batch_max_observations = 1024
+transaction_max_batches = 32
+flush_interval_ms = 250
+retention_max_observations = 1000000
+capacity_max_bytes = 1073741824
+synchronous = "normal"
+wal_autocheckpoint_pages = 1000
+shutdown_drain_timeout_ms = 10000
+writer_thread_stack_bytes = 524288
+read_limit_max = 10000
+
+[sandbox_alerts]
+enabled = true
+path = "/var/lib/actrail/sandbox-alerts.sqlite"
+schema_version = 2
+create_parent_directory = true
+busy_timeout_ms = 5000
+writer_queue_capacity = 1024
+transaction_max_alerts = 256
+flush_interval_ms = 250
+retention_max_alerts = 1000000
+capacity_max_bytes = 1073741824
+synchronous = "normal"
+wal_autocheckpoint_pages = 1000
+shutdown_drain_timeout_ms = 10000
+writer_thread_stack_bytes = 524288
+read_limit_max = 10000
+
+[supervision]
+shutdown_wait_ms = 170100
+
+[plugins.startup]
+enabled = true
+failure_policy = "fail-fast"
+
+[[plugins.startup.load]]
+instance = "sandbox-resource-alert.default"
+enabled = true
+manifest = "/usr/share/actrail/plugins/sandbox-resource-alert/sandbox-resource-alert.plugin.toml"
+plugin_config = "/etc/actrail/plugins/sandbox-resource-alert/sandbox-resource-alert.config.json"
+host_grants = []

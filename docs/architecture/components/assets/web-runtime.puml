@@ -1,0 +1,27 @@
+@startuml
+skinparam defaultFontName "WenQuanYi Micro Hei"
+skinparam componentStyle rectangle
+left to right direction
+
+title actrailweb 当前组件与请求路径
+
+actor "安全分析师" as Analyst
+component "HTTP Server\n每连接一个工作线程" as Http
+component "Router\nhealth、API、静态资源" as Router
+component "View Projection\ntrace、action tree、统计、告警" as View
+component "Plugin Administration\n配置与 daemon 控制" as Plugins
+component "Embedded Vue SPA" as Spa
+database "AcTrail Storage\n只读打开" as Storage
+folder "Cluster root\n远端 trace 索引" as Cluster
+component "actraild control socket" as Daemon
+
+Analyst --> Http : HTTP
+Http --> Router : 解析请求
+Router --> Spa : / 与 /assets/*
+Router --> View : trace / stats / alert API
+Router --> Plugins : plugin API
+View --> Storage : 本地模式
+View --> Cluster : cluster 模式
+Plugins --> Daemon : load / unload 等控制
+Router --> Analyst : JSON / CSV / assets
+@enduml

@@ -93,8 +93,32 @@ pub enum PluginWasmAbi {
 pub struct PluginRoleDeclaration {
     #[serde(default, rename = "observation-consumer")]
     pub observation_consumer: Option<PluginObservationConsumerDeclaration>,
+    #[serde(default, rename = "sandbox-observation-consumer")]
+    pub sandbox_observation_consumer: Option<PluginSandboxObservationConsumerDeclaration>,
     #[serde(default, rename = "control-decider")]
     pub control_decider: Option<PluginControlDeciderDeclaration>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginSandboxObservationConsumerDeclaration {
+    pub subscriptions: PluginSandboxSubscriptionDeclaration,
+    #[serde(default)]
+    pub resources: PluginObservationConsumerResources,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginSandboxSubscriptionDeclaration {
+    pub observation_kinds: Vec<PluginSandboxObservationKind>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PluginSandboxObservationKind {
+    ProcessIo,
+    GuestResource,
+    OomVictim,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]

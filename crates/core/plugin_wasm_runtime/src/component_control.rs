@@ -6,9 +6,9 @@ use std::time::Instant;
 
 use plugin_system::{
     CommandPolicyHost, ControlDecider, ControlDecisionBudget, ControlDecisionRequest,
-    ControlDecisionResponse, FilePolicyHost, PluginCommandBudget, PluginCommandRequest,
-    PluginCommandResponse, PluginHostGrants, PluginHostcallMetricsSource, PluginManifest,
-    PluginRuntimeError, PluginRuntimeKind, RuntimePluginConfig,
+    ControlDecisionResponse, FilePolicyHost, NetworkPolicyHost, PluginCommandBudget,
+    PluginCommandRequest, PluginCommandResponse, PluginHostGrants, PluginHostcallMetricsSource,
+    PluginManifest, PluginRuntimeError, PluginRuntimeKind, RuntimePluginConfig,
 };
 use wasmtime::Engine;
 use wasmtime::component::{Component, Func, Val};
@@ -31,6 +31,8 @@ mod file_codec;
 mod hostcalls;
 #[path = "component_control/linker.rs"]
 mod linker;
+#[path = "component_control/network/mod.rs"]
+mod network;
 #[path = "component_control/runtime_config.rs"]
 mod runtime_config;
 #[path = "component_control/value.rs"]
@@ -63,6 +65,7 @@ impl WitComponentControlDecider {
         host_grants: PluginHostGrants,
         file_policy_host: Option<Arc<dyn FilePolicyHost>>,
         command_policy_host: Option<Arc<dyn CommandPolicyHost>>,
+        network_policy_host: Option<Arc<dyn NetworkPolicyHost>>,
     ) -> Result<Self, PluginRuntimeError> {
         let instance_id = instance_id.into();
         let host_grant_values = host_grants.to_wire_values();
@@ -72,7 +75,7 @@ impl WitComponentControlDecider {
         if unsupported_grants {
             return Err(PluginRuntimeError::new(
                 "wasm_runtime",
-                "only context, file-policy, and command-policy grants are implemented for WIT component control plugins",
+                "only context, file-policy, command-policy, and network-policy grants are implemented for WIT component control plugins",
             ));
         }
         let artifact_path = manifest
@@ -134,6 +137,9 @@ impl WitComponentControlDecider {
             store
                 .data_mut()
                 .set_command_policy_host(instance_id.clone(), command_policy_host.clone());
+            store
+                .data_mut()
+                .set_network_policy_host(instance_id.clone(), network_policy_host.clone());
             store.data_mut().set_plugin_config(plugin_config);
             let linker = component_linker(&engine)?;
             reset_fuel(&mut store, fuel_per_call)?;
@@ -278,10 +284,15 @@ impl ControlDecider for WitComponentControlDecider {
             .store
             .data_mut()
             .set_command_execution_context(request.command_execution_context.clone());
+        state
+            .store
+            .data_mut()
+            .set_network_action_context(request.network_action_context.clone());
         let result = decide.call(&mut state.store, &[input], &mut results);
         state.store.data_mut().clear_control_context();
         state.store.data_mut().clear_file_policy_context();
         state.store.data_mut().clear_command_execution_context();
+        state.store.data_mut().clear_network_action_context();
         disarm_epoch_timeout(&mut state.store, deadline, &deadline_generation);
         if let Err(error) = result {
             return Err(call_timeout_error(

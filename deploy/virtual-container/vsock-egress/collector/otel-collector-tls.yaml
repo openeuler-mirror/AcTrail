@@ -1,0 +1,22 @@
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 127.0.0.1:4318
+        tls:
+          cert_file: ${env:ACTRAIL_OTELCOL_TLS_CERT}
+          key_file: ${env:ACTRAIL_OTELCOL_TLS_KEY}
+
+processors:
+  batch: {}
+
+exporters:
+  debug:
+    verbosity: normal
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]

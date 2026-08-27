@@ -10,7 +10,7 @@ REPO_ROOT="$(cd "${MODULE_DIR}/../.." && pwd)"
 BIN_DIR="${BIN_DIR:-${REPO_ROOT}/target/release}"
 PROFILE="${MODULE_DIR}/seccomp/actrail-notify.json"
 TARGET_URL="${TARGET_URL:-https://example.com/}"
-BASE_IMAGE="${CONTAINER_AUTO_E2E_BASE_IMAGE:-ubuntu:24.04}"
+BASE_IMAGE="${CONTAINER_AUTO_E2E_BASE_IMAGE:-openeuler/openeuler:24.03-lts-sp3}"
 PROBE_LIB="libactrail_tls_payload_probe_sync.so"
 CONTAINER_CONF="/etc/actrail/container-auto.conf"
 RUN_ID="$(date +%s)-$$"
@@ -269,8 +269,10 @@ install -m 0644 "${MODULE_DIR}/Dockerfile" "${BUILD_CONTEXT}/Dockerfile"
 docker build -q -f "${BUILD_CONTEXT}/Dockerfile" \
     --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
     --label "${RUN_LABEL}" -t "${IMAGE}" "${BUILD_CONTEXT}" >/dev/null
-printf 'FROM %s\nRUN apt-get update && apt-get install -y --no-install-recommends curl python3 && rm -rf /var/lib/apt/lists/*\n' \
-    "${IMAGE}" | docker build -q --label "${RUN_LABEL}" -t "${IMAGE_E2E}" - >/dev/null
+printf '%s\n' \
+    "FROM ${IMAGE}" \
+    'RUN set -eux; if command -v apt-get >/dev/null 2>&1; then apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl python3; rm -rf /var/lib/apt/lists/*; elif command -v dnf >/dev/null 2>&1; then dnf install -y curl python3; dnf clean all; rm -rf /var/cache/dnf; else echo "unsupported base image: apt-get or dnf is required" >&2; exit 1; fi' \
+    | docker build -q --label "${RUN_LABEL}" -t "${IMAGE_E2E}" - >/dev/null
 pass "auto image built"
 
 note "3) host eBPF available: custom/default seccomp"

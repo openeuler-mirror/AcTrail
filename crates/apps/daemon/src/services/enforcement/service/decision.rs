@@ -539,6 +539,7 @@ pub(super) fn control_decision_request(
         context_ref: Some(CONTROL_CURRENT_CONTEXT_TOKEN.to_string()),
         file_policy_context,
         command_execution_context: None,
+        network_action_context: None,
     })
 }
 

@@ -1,0 +1,29 @@
+[Unit]
+Description=AcTrail Guest sandbox observer
+After=local-fs.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=root
+Group=root
+Environment=LD_LIBRARY_PATH=/usr/local/lib/actrail
+RuntimeDirectory=actrail-sb
+RuntimeDirectoryMode=0700
+ExecStartPre=/usr/bin/rm -f /dev/actrail/sandbox-observer.ready /dev/actrail/sandbox-observer.log /dev/actrail/sandbox-observer-control.sock
+ExecStartPre=/usr/bin/systemd-tmpfiles --create --prefix=/dev/actrail
+ExecStartPre=/usr/bin/test -d /dev/actrail
+ExecStartPre=/bin/sh -ec 'exec >>/dev/actrail/sandbox-observer.log 2>&1; test -r /sys/kernel/tracing/events/sched/sched_process_fork/id || mount -t tracefs tracefs /sys/kernel/tracing; test -r /sys/kernel/tracing/events/sched/sched_process_fork/id'
+ExecStartPre=/bin/sh -ec 'exec >>/dev/actrail/sandbox-observer.log 2>&1; echo -1 > /proc/sys/kernel/perf_event_paranoid'
+ExecStartPre=/bin/sh -ec 'exec >>/dev/actrail/sandbox-observer.log 2>&1; echo "[DEBUG-sb-guest-permissions] identity"; id; grep -E "^(Cap(Inh|Prm|Eff|Bnd|Amb)|NoNewPrivs|Seccomp):" /proc/self/status; echo "[DEBUG-sb-guest-permissions] kernel"; printf "perf_event_paranoid="; cat /proc/sys/kernel/perf_event_paranoid; printf "unprivileged_bpf_disabled="; cat /proc/sys/kernel/unprivileged_bpf_disabled; printf "cap_last_cap="; cat /proc/sys/kernel/cap_last_cap; printf "lockdown="; cat /sys/kernel/security/lockdown 2>/dev/null || echo unavailable; cat /proc/cmdline'
+ExecStart=/bin/sh -ec 'exec /usr/local/bin/actrail-sb daemon --config /etc/actrail/sandbox-observer.toml >>/dev/actrail/sandbox-observer.log 2>&1'
+ExecStartPost=/bin/sh -ec 'until test -S /dev/actrail/sandbox-observer-control.sock; do sleep 0.05; done'
+ExecStartPost=/usr/bin/touch /dev/actrail/sandbox-observer.ready
+ExecStopPost=/usr/bin/rm -f /dev/actrail/sandbox-observer.ready /dev/actrail/sandbox-observer-control.sock /run/actrail-sb/instance.lock
+TimeoutStartSec=60
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target kata-containers.target

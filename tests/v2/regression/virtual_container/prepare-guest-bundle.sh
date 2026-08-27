@@ -44,7 +44,7 @@ esac
 [[ ! -L "$FINAL_BUNDLE_DIR" ]] || fail "BUNDLE_DIR must not be a symbolic link: $FINAL_BUNDLE_DIR"
 
 elf_machine() {
-  readelf -h "$1" 2>/dev/null \
+  LC_ALL=C readelf -h "$1" 2>/dev/null \
     | awk -F: '/^[[:space:]]*Machine:/ {
         sub(/^[[:space:]]+/, "", $2)
         print $2
@@ -53,17 +53,17 @@ elf_machine() {
 }
 
 elf_needed() {
-  readelf -d "$1" 2>/dev/null \
+  LC_ALL=C readelf -d "$1" 2>/dev/null \
     | sed -n 's/.*Shared library: \[\([^]]*\)\].*/\1/p'
 }
 
 elf_interpreter() {
-  readelf -l "$1" 2>/dev/null \
+  LC_ALL=C readelf -l "$1" 2>/dev/null \
     | sed -n 's/.*Requesting program interpreter: \([^]]*\).*/\1/p'
 }
 
 elf_max_glibc() {
-  readelf --version-info "$1" 2>/dev/null \
+  LC_ALL=C readelf --version-info "$1" 2>/dev/null \
     | grep -o 'GLIBC_[0-9][0-9.]*' \
     | sed 's/^GLIBC_//' \
     | sort -Vu \
@@ -223,6 +223,7 @@ if [[ "$ACTRAIL_BUILD" == "1" ]]; then
     cargo build "${CARGO_PROFILE_ARGS[@]}" \
     -p daemon \
     -p ctl \
+    -p sb \
     -p view \
     -p tls_payload_probe_sync
 fi
@@ -230,6 +231,7 @@ fi
 for artifact in \
   "$TARGET_DIR/actraild" \
   "$TARGET_DIR/actrailctl" \
+  "$TARGET_DIR/actrail-sb" \
   "$TARGET_DIR/actrailviewer" \
   "$TARGET_DIR/libactrail_tls_payload_probe_sync.so"; do
   [[ -f "$artifact" ]] || fail "build artifact missing: $artifact"
@@ -285,6 +287,7 @@ install -d \
   "$BUNDLE_DIR/tests/guest"
 install -m 0755 "$TARGET_DIR/actraild" "$BUNDLE_DIR/actraild"
 install -m 0755 "$TARGET_DIR/actrailctl" "$BUNDLE_DIR/actrailctl"
+install -m 0755 "$TARGET_DIR/actrail-sb" "$BUNDLE_DIR/actrail-sb"
 install -m 0755 "$TARGET_DIR/actrailviewer" "$BUNDLE_DIR/actrailviewer"
 install -m 0755 "$TARGET_DIR/libactrail_tls_payload_probe_sync.so" \
   "$BUNDLE_DIR/libactrail_tls_payload_probe_sync.so"
@@ -292,6 +295,7 @@ install -m 0755 "$TARGET_DIR/libactrail_tls_payload_probe_sync.so" \
 ELF_INPUTS=(
   "$BUNDLE_DIR/actraild"
   "$BUNDLE_DIR/actrailctl"
+  "$BUNDLE_DIR/actrail-sb"
   "$BUNDLE_DIR/actrailviewer"
   "$BUNDLE_DIR/libactrail_tls_payload_probe_sync.so"
 )

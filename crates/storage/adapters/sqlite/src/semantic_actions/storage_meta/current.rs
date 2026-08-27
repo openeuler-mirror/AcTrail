@@ -7,6 +7,8 @@ pub(in crate::semantic_actions) const LINK_ATTRIBUTES_FIELD_CODE: i16 = 2;
 
 pub(in crate::semantic_actions) const ENCODING_PLAIN_TEXT: i16 = 0;
 pub(in crate::semantic_actions) const ENCODING_ZSTD: i16 = 1;
+pub(in crate::semantic_actions) const ENCODING_COMPACT_PLAIN: i16 = 2;
+pub(in crate::semantic_actions) const ENCODING_COMPACT_ZSTD: i16 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ColdFieldCompression {
@@ -33,6 +35,8 @@ pub(in crate::semantic_actions) struct ColdFieldMeta {
     pub link_attributes: i16,
     pub plain_text: i16,
     pub zstd: i16,
+    pub compact_plain: i16,
+    pub compact_zstd: i16,
 }
 
 pub(in crate::semantic_actions) const CURRENT: StorageMeta = StorageMeta {
@@ -42,5 +46,7 @@ pub(in crate::semantic_actions) const CURRENT: StorageMeta = StorageMeta {
         link_attributes: LINK_ATTRIBUTES_FIELD_CODE,
         plain_text: ENCODING_PLAIN_TEXT,
         zstd: ENCODING_ZSTD,
+        compact_plain: ENCODING_COMPACT_PLAIN,
+        compact_zstd: ENCODING_COMPACT_ZSTD,
     },
 };

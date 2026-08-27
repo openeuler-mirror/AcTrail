@@ -19,15 +19,22 @@ bash -n "$BUILDER" || fail "openEuler image builder has invalid shell syntax"
 "$BUILDER" --help | grep -Fq 'root=/dev/vda1' \
   || fail "builder does not document the Kata root-device contract"
 "$BUILDER" --help | grep -Fq -- '--otel-endpoint' \
-  || fail "builder does not require an explicit Guest Collector endpoint"
-[[ "$(grep -Fc -- '--otel-endpoint "$OTEL_ENDPOINT"' "$BUILDER")" -ge 2 ]] \
-  || fail "builder must forward the endpoint to installer and verifier"
+  || fail "builder does not expose optional OTLP/HTTP export"
+grep -Fq -- 'install_args+=(--otel-endpoint "$OTEL_ENDPOINT")' "$BUILDER" \
+  || fail "builder does not conditionally enable the exporter"
+grep -Fq -- 'verify_args+=(--otel-endpoint "$OTEL_ENDPOINT")' "$BUILDER" \
+  || fail "builder does not conditionally verify the exporter"
 grep -Fq 'ID:-}" == "openEuler"' "$BUILDER" \
   || fail "builder does not reject a non-openEuler environment"
 grep -Fq 'VERSION_ID:-}" in' "$BUILDER" \
   || fail "builder does not pin the openEuler release family"
 grep -Fq -- '--installroot="$ROOTFS"' "$BUILDER" \
   || fail "builder does not create an isolated installroot"
+# socat carries the VSOCK bridge in vsock-bridge egress mode. It is always
+# installed so that one base image serves both egress modes; only the bridge
+# unit's enablement differs per mode.
+grep -Eq '^[[:space:]]+socat[[:space:]]+\\$' "$BUILDER" \
+  || fail "builder does not install socat for the VSOCK egress bridge"
 grep -Fq 'gzip -t "$KATA_INITRD"' "$BUILDER" \
   || fail "builder does not validate the installed Kata initrd"
 grep -Fq -- '--expected-agent-version' "$BUILDER" \

@@ -4,7 +4,7 @@ import json
 import shutil
 import subprocess
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 
 class PluginWebApi:
@@ -87,6 +87,42 @@ class PluginWebApi:
 
     def alerts(self, trace_id: int) -> dict[str, Any]:
         return self._request("GET", f"/api/traces/{trace_id}/alerts")
+
+    def llm_request_content(
+        self,
+        trace_id: int,
+        action_id: str,
+        *,
+        max_bytes: int,
+    ) -> dict[str, Any]:
+        return self._request(
+            "GET",
+            f"/api/traces/{trace_id}/actions/"
+            f"{quote(action_id, safe='')}/content/llm-request",
+            query={"max_bytes": str(max_bytes)},
+        )
+
+    def llm_request_lineage(
+        self,
+        trace_id: int,
+        action_id: str,
+    ) -> dict[str, Any]:
+        return self._request(
+            "GET",
+            f"/api/traces/{trace_id}/actions/"
+            f"{quote(action_id, safe='')}/lineage/llm-request",
+        )
+
+    def llm_request_trajectory(
+        self,
+        trace_id: int,
+        trajectory_id: str,
+    ) -> dict[str, Any]:
+        return self._request(
+            "GET",
+            f"/api/traces/{trace_id}/llm-trajectories/"
+            f"{quote(trajectory_id, safe='')}",
+        )
 
     def _request(
         self,

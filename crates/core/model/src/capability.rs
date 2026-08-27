@@ -26,6 +26,7 @@ pub enum Capability {
     PolicyDecisionRecord,
     EnforcementFilePermissionFanotify,
     EnforcementCommandExecutionSeccomp,
+    EnforcementNetworkConnectSeccomp,
 }
 
 impl Capability {
@@ -53,6 +54,7 @@ impl Capability {
             Self::PolicyDecisionRecord => "policy-decision-record",
             Self::EnforcementFilePermissionFanotify => "enforcement-file-permission-fanotify",
             Self::EnforcementCommandExecutionSeccomp => "enforcement-command-execution-seccomp",
+            Self::EnforcementNetworkConnectSeccomp => "enforcement-network-connect-seccomp",
         }
     }
 }
@@ -84,6 +86,7 @@ impl std::str::FromStr for Capability {
             "policy-decision-record" => Ok(Self::PolicyDecisionRecord),
             "enforcement-file-permission-fanotify" => Ok(Self::EnforcementFilePermissionFanotify),
             "enforcement-command-execution-seccomp" => Ok(Self::EnforcementCommandExecutionSeccomp),
+            "enforcement-network-connect-seccomp" => Ok(Self::EnforcementNetworkConnectSeccomp),
             other => Err(format!("unknown capability {other}")),
         }
     }

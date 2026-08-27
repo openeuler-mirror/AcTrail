@@ -4,8 +4,12 @@
 mod abi;
 #[path = "loader/attach_plan.rs"]
 mod attach_plan;
+#[path = "loader/consumer.rs"]
+mod consumer;
 #[path = "loader/program/environment.rs"]
 mod environment;
+#[path = "loader/fd.rs"]
+mod fd;
 #[path = "loader/file.rs"]
 mod file;
 #[path = "loader/launch_binding.rs"]
@@ -29,14 +33,12 @@ mod tls;
 #[path = "loader/program/tracepoint.rs"]
 mod tracepoint;
 
-use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::env;
 use std::ffi::OsStr;
 use std::os::fd::{OwnedFd, RawFd};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
-use std::rc::Rc;
 
 use config_core::daemon::{EbpfCollectorConfig, FileBulkReadFastPathConfig, PayloadConfig};
 use libbpf_rs::{Link, MapCore, MapFlags, MapHandle, Object, ObjectBuilder};
@@ -46,9 +48,11 @@ use model_core::process::{InitialSuppressedFd, KernelProcessCoordinates, Process
 
 pub use attach_plan::AttachPlan;
 use attach_plan::{configure_program_autoload, effective_config_for_attach_plan};
+use consumer::{EventConsumer, EventConsumerMessage};
 pub(crate) use launch_binding::ArmedLaunchBinding;
 use launch_binding::{LaunchBindingTarget, LaunchExecBindings, PendingLaunchBinding};
-use object::{EventBuffer, event_map_max_entries, map_handle, resize_map, ring_buffer_max_bytes};
+use object::{event_map_max_entries, map_handle, resize_map, ring_buffer_max_bytes};
+use ring_decode::decode_kernel_event;
 pub use ring_decode::{
     KernelEndpoint, KernelEvent, KernelFilePathEvent, KernelObservationEvent,
     KernelSocketPayloadCompletionEvent, KernelSocketPayloadEvent,
@@ -122,6 +126,9 @@ enum RuntimeAttachmentState {
 }
 
 pub struct EbpfRuntime {
+    /// Dedicated kernel transport consumer. Declared first so it stops (and
+    /// drops the kernel buffer) before the BPF object and its map fds close.
+    consumer: Option<EventConsumer>,
     object: Object,
     links: Vec<Link>,
     static_link_teardown: StaticLinkTeardown,
@@ -150,10 +157,9 @@ pub struct EbpfRuntime {
     event_transport_diagnostics: MapHandle,
     event_transport_diagnostics_baseline: EventTransportDiagnostics,
     events_map: MapHandle,
-    events: Rc<RefCell<Vec<KernelEvent>>>,
-    decode_error: Rc<RefCell<Option<LoaderError>>>,
+    pending_raw_events: Vec<Vec<u8>>,
+    last_perf_lost: u64,
     event_buffer_bytes: u32,
-    event_buffer: Option<EventBuffer>,
     last_event_transport_loss_summary: Option<String>,
     pending_event_transport_loss_summaries: Vec<String>,
     last_raw_sample_count: usize,
@@ -187,6 +193,7 @@ impl EbpfProgramLoader {
         let static_link_teardown =
             StaticLinkTeardown::new(self.config.preflight_link_teardown_workers)?;
         file::validate_file_config(&self.config)?;
+        fd::validate_fd_config(&self.config)?;
         tls::validate_payload_config(&self.payload.tls)?;
         stdio::validate_payload_config(&self.payload.stdio)?;
         socket::validate_payload_config(&self.payload.socket)?;
@@ -238,6 +245,47 @@ impl EbpfProgramLoader {
         resize_map(
             &mut open_object,
             "pending_ipc_fd_pair_ops",
+            self.config.pending_operation_max_entries,
+        )?;
+        // Unified fd lifecycle table plus its dense per-process active index.
+        resize_map(
+            &mut open_object,
+            "fd_table",
+            self.config.pending_operation_max_entries,
+        )?;
+        resize_map(
+            &mut open_object,
+            "fd_objects",
+            self.config.pending_operation_max_entries,
+        )?;
+        resize_map(
+            &mut open_object,
+            "fd_index_slots",
+            self.config.pending_operation_max_entries,
+        )?;
+        resize_map(
+            &mut open_object,
+            "fd_process_active_counts",
+            self.config.tracked_process_max_entries,
+        )?;
+        resize_map(
+            &mut open_object,
+            "pending_fd_open_ops",
+            self.config.pending_operation_max_entries,
+        )?;
+        resize_map(
+            &mut open_object,
+            "pending_fd_close_ops",
+            self.config.pending_operation_max_entries,
+        )?;
+        resize_map(
+            &mut open_object,
+            "pending_fd_dup_ops",
+            self.config.pending_operation_max_entries,
+        )?;
+        resize_map(
+            &mut open_object,
+            "pending_fd_flag_ops",
             self.config.pending_operation_max_entries,
         )?;
         resize_map(
@@ -373,6 +421,8 @@ struct EventTransportDiagnostics {
     output_fail_bytes: u64,
     stdio_pending_update_fail: u64,
     stdio_read_user_fail: u64,
+    socket_state_update_fail: u64,
+    socket_sequence_update_fail: u64,
 }
 
 impl EventTransportDiagnostics {
@@ -389,6 +439,12 @@ impl EventTransportDiagnostics {
             stdio_read_user_fail: self
                 .stdio_read_user_fail
                 .saturating_sub(baseline.stdio_read_user_fail),
+            socket_state_update_fail: self
+                .socket_state_update_fail
+                .saturating_sub(baseline.socket_state_update_fail),
+            socket_sequence_update_fail: self
+                .socket_sequence_update_fail
+                .saturating_sub(baseline.socket_sequence_update_fail),
         }
     }
 }
@@ -397,12 +453,12 @@ fn read_event_transport_diagnostics(
     map: &MapHandle,
 ) -> Result<EventTransportDiagnostics, LoaderError> {
     // The diagnostics map is a fixed-size ARRAY of counters; a single batch
-    // lookup returns all entries in one syscall instead of five lookups.
+    // lookup returns all entries in one syscall instead of separate lookups.
     // This runs twice per drain cycle, so the saving is material.
     let mut diagnostics = EventTransportDiagnostics::default();
-    let mut seen = [false; 6];
+    let mut seen = [false; 8];
     let batch = map
-        .lookup_batch(6, MapFlags::ANY, MapFlags::ANY)
+        .lookup_batch(8, MapFlags::ANY, MapFlags::ANY)
         .map_err(|error| LoaderError::new("event_transport_diagnostics", error.to_string()))?;
     for item in batch {
         let (key, value) = item;
@@ -435,10 +491,12 @@ fn read_event_transport_diagnostics(
             2 => diagnostics.output_fail_bytes = count,
             4 => diagnostics.stdio_pending_update_fail = count,
             5 => diagnostics.stdio_read_user_fail = count,
+            6 => diagnostics.socket_state_update_fail = count,
+            7 => diagnostics.socket_sequence_update_fail = count,
             _ => {}
         }
     }
-    for counter_id in [0_u32, 1, 2, 4, 5] {
+    for counter_id in [0_u32, 1, 2, 4, 5, 6, 7] {
         if !seen[counter_id as usize] {
             return Err(LoaderError::new(
                 "event_transport_diagnostics",

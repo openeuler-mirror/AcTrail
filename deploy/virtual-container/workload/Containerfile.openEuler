@@ -1,10 +1,26 @@
 ARG BASE_IMAGE=openeuler/openeuler:24.09
+ARG OPENCODE_VERSION=1.18.18
 FROM ${BASE_IMAGE}
+ARG OPENCODE_VERSION
 
 # openEuler containerd 1.6 has no `ctr run --user`; the regression runner uses
 # setpriv inside the workload to preserve the numeric non-root UID/GID boundary.
-RUN dnf install -y util-linux \
+RUN dnf install -y ca-certificates nodejs npm shadow socat util-linux \
+    && groupadd --gid 39000 actrail \
+    && useradd --uid 1000 --gid 39000 --create-home \
+      --home-dir /home/actrail --shell /bin/sh actrail \
     && dnf clean all \
     && rm -rf /var/cache/dnf
+RUN npm install --global --omit=dev "opencode-ai@${OPENCODE_VERSION}" \
+    && test "$(opencode --version)" = "${OPENCODE_VERSION}" \
+    && npm cache clean --force
+RUN npm install --prefix /opt/opencode-bootstrap --omit=dev \
+      "@opencode-ai/plugin@${OPENCODE_VERSION}" \
+    && chmod -R a+rX /opt/opencode-bootstrap \
+    && npm cache clean --force
+RUN install -d -m 0755 /opt/opencode-bootstrap-cache \
+    && node -e 'fetch("https://models.opencode.ai/api.json").then((response) => { if (!response.ok) throw new Error(`models HTTP ${response.status}`); return response.text(); }).then((body) => require("fs").writeFileSync("/opt/opencode-bootstrap-cache/models.json", body))' \
+    && test -s /opt/opencode-bootstrap-cache/models.json \
+    && chmod 0644 /opt/opencode-bootstrap-cache/models.json
 
 CMD ["/bin/sh"]

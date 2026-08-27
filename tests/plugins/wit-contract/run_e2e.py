@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-WIT = ROOT / "crates/core/plugin_system/wit/actrail-plugin.wit"
+WIT_DIR = ROOT / "crates/core/plugin_system/wit"
 
 
 def require(needle: str, haystack: str) -> None:
@@ -29,9 +29,10 @@ def record_body(name: str, wit: str) -> str:
 
 
 def main() -> int:
-    if not WIT.exists():
-        raise RuntimeError(f"WIT contract file missing: {WIT}")
-    raw = WIT.read_text(encoding="utf-8")
+    wit_files = sorted(WIT_DIR.glob("*.wit"))
+    if not wit_files:
+        raise RuntimeError(f"WIT contract files missing: {WIT_DIR}")
+    raw = "\n".join(path.read_text(encoding="utf-8") for path in wit_files)
 
     for required in [
         "package actrail:plugin@0.4.0;",
@@ -83,6 +84,13 @@ def main() -> int:
         "record command-policy-match-dry-run-request",
         "record command-policy-match-dry-run-result",
         "record command-execution-context",
+        "record network-action-context",
+        "record network-policy-rule-draft",
+        "record network-policy-apply-request",
+        "record network-policy-rule-view",
+        "record network-policy-list-result",
+        "record network-policy-match-dry-run-request",
+        "record network-policy-match-dry-run-result",
         "record plugin-command-request",
         "record plugin-command-result",
         "enum file-policy-apply-status",
@@ -97,6 +105,15 @@ def main() -> int:
         "command-policy-rules-match-dry-run: func(request: command-policy-match-dry-run-request) -> result<command-policy-match-dry-run-result, string>",
         "command-policy-rules-validate: func(request: command-policy-apply-request) -> result<command-policy-apply-result, string>",
         "command-policy-rules-apply: func(request: command-policy-apply-request) -> result<command-policy-apply-result, string>",
+        "interface network-control-host",
+        "network-action-current-context-query: func(context-ref: string, query: string) -> result<network-action-context, string>",
+        "network-policy-rules-version-get: func() -> result<u64, string>",
+        "network-policy-rules-list: func(filter: network-policy-list-filter, cursor: option<string>, limit: u32) -> result<network-policy-list-result, string>",
+        "network-policy-rules-match-dry-run: func(request: network-policy-match-dry-run-request) -> result<network-policy-match-dry-run-result, string>",
+        "network-policy-rules-validate: func(request: network-policy-apply-request) -> result<network-policy-apply-result, string>",
+        "network-policy-rules-apply: func(request: network-policy-apply-request) -> result<network-policy-apply-result, string>",
+        "world network-control-plugin",
+        "world managed-network-control-plugin",
         "interface management-command",
         "export management-command",
         "handle-command: func(request: plugin-command-request) -> result<plugin-command-result, string>",
@@ -140,7 +157,7 @@ def main() -> int:
     ]:
         reject(duplicated, alert_draft)
 
-    print(f"wit_contract={WIT}")
+    print(f"wit_contract={','.join(path.name for path in wit_files)}")
     return 0
 
 

@@ -3,7 +3,7 @@ use semantic_action::{
     SemanticAction, SemanticActionLink, SemanticActionStoreError, attr_keys as attrs,
 };
 
-use crate::records::{encode_map, encode_time};
+use crate::records::encode_time;
 use crate::semantic_actions::codebook::sqlite::{
     action_completeness_code, action_kind_code, action_status_code, evidence_kind_code,
 };
@@ -20,9 +20,9 @@ pub(super) fn write_action_row(
         .prepare_cached(
             "INSERT OR REPLACE INTO semantic_actions (
                 action_key, trace_id, kind_code, title, start_time, end_time, process_id,
-                status_code, completeness_code, confidence_millis,
-                action_valid_code, agent_observed, process_parent_conflict, attributes
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                status_code, completeness_code,
+                action_valid_code, process_parent_conflict
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         )
         .and_then(|mut statement| {
             statement.execute(params![
@@ -35,25 +35,39 @@ pub(super) fn write_action_row(
                 action.process.get(),
                 action_status_code(action.status),
                 action_completeness_code(action.completeness),
-                action.confidence_millis,
                 action_valid_code(action),
-                agent_observed(action),
                 process_parent_conflict(action),
-                "",
             ])
         })
         .map_err(|error| {
             SemanticActionStoreError::new("upsert_semantic_action", error.to_string())
         })?;
-    upsert_action_attributes(
-        connection,
-        action_key,
-        &encode_map(&action.attributes),
-        compression,
+    upsert_action_attributes(connection, action_key, &action.attributes, compression).map_err(
+        |error| {
+            SemanticActionStoreError::new("upsert_semantic_action_attributes", error.to_string())
+        },
     )
-    .map_err(|error| {
-        SemanticActionStoreError::new("upsert_semantic_action_attributes", error.to_string())
-    })
+}
+
+pub(super) fn write_agent_identity(
+    connection: &mut rusqlite::Connection,
+    trace_id: u64,
+    process_id: u64,
+    identity_action_key: i64,
+) -> Result<(), SemanticActionStoreError> {
+    connection
+        .prepare_cached(
+            "INSERT OR REPLACE INTO agent_identities (
+                trace_id, process_id, identity_action_key
+            ) VALUES (?1, ?2, ?3)",
+        )
+        .and_then(|mut statement| {
+            statement.execute(params![trace_id, process_id, identity_action_key])
+        })
+        .map_err(|error| {
+            SemanticActionStoreError::new("write_agent_identity", error.to_string())
+        })?;
+    Ok(())
 }
 
 pub(super) fn replace_action_evidence(
@@ -122,7 +136,6 @@ pub(super) fn action_row_matches(left: &SemanticAction, right: &SemanticAction) 
         && left.process == right.process
         && left.status == right.status
         && left.completeness == right.completeness
-        && left.confidence_millis == right.confidence_millis
         && left.attributes == right.attributes
 }
 
@@ -148,18 +161,6 @@ fn action_valid_code(action: &SemanticAction) -> i16 {
         0
     } else {
         1
-    }
-}
-
-fn agent_observed(action: &SemanticAction) -> i16 {
-    if action
-        .attributes
-        .get(attrs::agent::IDENTITY_STATUS)
-        .is_some_and(|value| value == "observed")
-    {
-        1
-    } else {
-        0
     }
 }
 

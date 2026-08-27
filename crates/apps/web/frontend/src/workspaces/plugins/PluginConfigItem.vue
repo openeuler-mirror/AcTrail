@@ -125,6 +125,7 @@ import { computed } from 'vue';
 import { LockKeyhole, Plus, Trash2 } from '@lucide/vue';
 
 import ConfigHint from './ConfigHint.vue';
+import PluginConfigObjectSchema from './config/PluginConfigObjectSchema.js';
 
 const props = defineProps({
   name: { type: String, required: true },
@@ -158,46 +159,17 @@ const rangeLabel = computed(() => {
 });
 const hintText = computed(() => [props.schema.description, rangeLabel.value].filter(Boolean).join(' '));
 const objectEntries = computed(() => {
-  const properties = props.schema.properties ?? {};
   const value = isObject(props.modelValue) ? props.modelValue : {};
+  const objectSchema = new PluginConfigObjectSchema(props.schema, value);
+  const properties = props.schema.properties ?? {};
   const inheritedBoolean = typeof value.default === 'boolean'
     ? value.default
     : properties.default?.default;
-  let activeConditionalProperties = {};
-  let activeConditionalRequired = [];
-  let hiddenConditionalKeys = new Set();
-  const condition = props.schema.if;
-  const discriminatorKeys = Array.isArray(condition?.required) ? condition.required : [];
-  if (discriminatorKeys.length === 1) {
-    const discriminator = discriminatorKeys[0];
-    const conditionSchema = condition?.properties?.[discriminator];
-    if (conditionSchema
-      && Object.prototype.hasOwnProperty.call(conditionSchema, 'const')
-      && isObject(props.schema.then)
-      && isObject(props.schema.else)) {
-      const discriminatorValue = Object.prototype.hasOwnProperty.call(value, discriminator)
-        ? value[discriminator]
-        : properties[discriminator]?.default;
-      const conditionMatches = Object.is(discriminatorValue, conditionSchema.const);
-      const activeBranch = conditionMatches ? props.schema.then : props.schema.else;
-      const inactiveBranch = conditionMatches ? props.schema.else : props.schema.then;
-      activeConditionalProperties = activeBranch.properties ?? {};
-      activeConditionalRequired = Array.isArray(activeBranch.required) ? activeBranch.required : [];
-      const activeKeys = new Set(Object.keys(activeConditionalProperties));
-      hiddenConditionalKeys = new Set(
-        Object.keys(inactiveBranch.properties ?? {}).filter((key) => !activeKeys.has(key)),
-      );
-    }
-  }
-  return Object.keys(properties)
-    .filter((key) => !hiddenConditionalKeys.has(key))
+  return objectSchema.propertyKeys()
     .map((key, index) => ({
       key,
       index,
-      schema: {
-        ...(properties[key] ?? {}),
-        ...(activeConditionalProperties[key] ?? {}),
-      },
+      schema: objectSchema.propertySchema(key),
       value: Object.prototype.hasOwnProperty.call(value, key)
         ? value[key]
         : key !== 'default'
@@ -205,16 +177,21 @@ const objectEntries = computed(() => {
           && typeof inheritedBoolean === 'boolean'
           ? inheritedBoolean
           : undefined,
-      required: (Array.isArray(props.schema.required) && props.schema.required.includes(key))
-        || activeConditionalRequired.includes(key),
+      required: objectSchema.isRequired(key),
+      deferredConditional: objectSchema.isDeferredConditional(key),
+      conditionalOrder: objectSchema.conditionalOrder(key),
     }))
     .sort((left, right) => Number(left.schema.readOnly === true) - Number(right.schema.readOnly === true)
-      || Number(right.required) - Number(left.required)
+      || Number(left.deferredConditional) - Number(right.deferredConditional)
+      || (left.deferredConditional
+        ? left.conditionalOrder - right.conditionalOrder
+        : Number(right.required) - Number(left.required))
       || left.index - right.index);
 });
 
 function updateObjectValue(key, value) {
-  emit('update:modelValue', { ...(isObject(props.modelValue) ? props.modelValue : {}), [key]: value });
+  const next = { ...(isObject(props.modelValue) ? props.modelValue : {}), [key]: value };
+  emit('update:modelValue', new PluginConfigObjectSchema(props.schema, next).sanitize(next));
 }
 
 function updateArrayValue(index, value) {

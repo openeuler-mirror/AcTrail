@@ -7,39 +7,42 @@ use model_core::ids::TraceId;
 use rusqlite::{OptionalExtension, params};
 use semantic_action::{
     FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
-    LlmRequestContentWrite, McpJsonRpcContentPage, McpJsonRpcContentWrite, SemanticAction,
-    SemanticActionLink, SemanticActionPage, SemanticActionReadStore, SemanticActionStoreError,
-    SemanticActionWriteStore, SemanticEvidence,
+    LlmRequestContentWrite, LlmRequestLineage, LlmRequestLineageWrite, McpJsonRpcContentPage,
+    McpJsonRpcContentWrite, SemanticAction, SemanticActionKind, SemanticActionLink,
+    SemanticActionPage, SemanticActionReadStore, SemanticActionStoreError,
+    SemanticActionWriteStore, SemanticEvidence, attr_keys as attrs,
 };
 
 use crate::SqliteStorage;
-use crate::records::encode_map;
 use crate::semantic_actions::action_ids::{intern_action_id, require_action_key};
 use crate::semantic_actions::codebook::sqlite::{
     LinkEvidenceKey, evidence_kind_code, link_confidence_code, link_role_code,
 };
 use crate::semantic_actions::cold_fields::upsert_link_attributes;
+use crate::semantic_actions::path_sets::intern_path;
 use crate::semantic_actions::storage_meta::current;
 use crate::semantic_actions::upsert_merge::merge_action;
 
 mod rows;
 mod write;
 
-use rows::action_link_from_row;
-pub(super) use rows::{action_from_row, evidence_from_row};
-use write::{action_row_matches, link_valid_code, replace_action_evidence, write_action_row};
+pub(super) use rows::{action_from_row, action_link_from_row, evidence_from_row};
+use write::{
+    action_row_matches, link_valid_code, replace_action_evidence, write_action_row,
+    write_agent_identity,
+};
 
 pub(super) const ACTION_SELECT_COLUMNS: &str = "ids.action_id AS action_id,
     action.trace_id, action.kind_code, action.title, action.start_time, action.end_time,
     action.process_id, action.status_code,
-    action.completeness_code, action.confidence_millis, action.attributes AS legacy_attributes,
+    action.completeness_code,
     action_attrs.encoding_code AS attributes_encoding_code,
     action_attrs.uncompressed_bytes AS attributes_uncompressed_bytes,
     action_attrs.payload AS attributes_payload";
 
 pub(super) const LINK_SELECT_COLUMNS: &str = "link.trace_id,
     parent_ids.action_id AS parent_action_id, child_ids.action_id AS child_action_id,
-    link.role_code, link.confidence_code, link.valid, link.attributes AS legacy_attributes,
+    link.role_code, link.confidence_code, link.valid,
     link_attrs.encoding_code AS attributes_encoding_code,
     link_attrs.uncompressed_bytes AS attributes_uncompressed_bytes,
     link_attrs.payload AS attributes_payload";
@@ -95,7 +98,21 @@ impl SemanticActionWriteStore for SqliteStorage {
         let mut action_key = None;
         if row_changed {
             let key = intern_action_id(&mut connection, action.trace_id.get(), &action.action_id)?;
+            if matches!(
+                action.kind,
+                SemanticActionKind::FileRead | SemanticActionKind::FileWrite
+            ) {
+                intern_file_path_attribute(&mut connection, action.trace_id.get(), &mut action)?;
+            }
             write_action_row(&mut connection, key, &action, self.cold_field_compression)?;
+            if action.kind == SemanticActionKind::AgentIdentity {
+                write_agent_identity(
+                    &mut connection,
+                    action.trace_id.get(),
+                    action.process.get(),
+                    key,
+                )?;
+            }
             action_key = Some(key);
         }
         if evidence_changed {
@@ -114,13 +131,12 @@ impl SemanticActionWriteStore for SqliteStorage {
         let child_action_key =
             intern_action_id(&mut connection, link.trace_id.get(), &link.child_action_id)?;
         let role_code = link_role_code(link.role);
-        let attributes = encode_map(&link.attributes);
         connection
             .prepare_cached(
                 "INSERT OR REPLACE INTO semantic_action_links (
                     trace_id, parent_action_key, child_action_key, role_code,
-                    confidence_code, valid, link_valid_code, attributes
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    confidence_code, valid, link_valid_code
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             )
             .and_then(|mut statement| {
                 statement.execute(params![
@@ -131,7 +147,6 @@ impl SemanticActionWriteStore for SqliteStorage {
                     link_confidence_code(link.confidence),
                     link.valid,
                     link_valid_code(&link),
-                    "",
                 ])
             })
             .map_err(|error| {
@@ -192,7 +207,7 @@ impl SemanticActionWriteStore for SqliteStorage {
             parent_action_key,
             child_action_key,
             role_code,
-            &attributes,
+            &link.attributes,
             self.cold_field_compression,
         )
         .map_err(|error| {
@@ -270,6 +285,17 @@ impl SemanticActionWriteStore for SqliteStorage {
         )
     }
 
+    fn upsert_llm_request_lineages(
+        &mut self,
+        lineages: &[LlmRequestLineageWrite],
+    ) -> Result<(), SemanticActionStoreError> {
+        let mut connection = self.connection().borrow_mut();
+        crate::semantic_actions::llm_request_lineage::LlmRequestLineageStore::upsert_batch(
+            &mut connection,
+            lineages,
+        )
+    }
+
     fn upsert_mcp_jsonrpc_contents(
         &mut self,
         contents: &[McpJsonRpcContentWrite],
@@ -286,6 +312,63 @@ impl SemanticActionWriteStore for SqliteStorage {
 }
 
 impl SemanticActionReadStore for SqliteStorage {
+    fn llm_request_lineage(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+    ) -> Result<Option<LlmRequestLineage>, SemanticActionStoreError> {
+        if self.is_purged(trace_id) {
+            return Err(SemanticActionStoreError::new(
+                "read_llm_request_lineage",
+                "trace has been purged",
+            ));
+        }
+        let connection = self.connection().borrow();
+        crate::semantic_actions::llm_request_lineage::LlmRequestLineageStore::by_action(
+            &connection,
+            trace_id,
+            action_id,
+        )
+    }
+
+    fn llm_request_trajectory(
+        &self,
+        trace_id: TraceId,
+        trajectory_id: &str,
+    ) -> Result<Vec<LlmRequestLineage>, SemanticActionStoreError> {
+        if self.is_purged(trace_id) {
+            return Err(SemanticActionStoreError::new(
+                "read_llm_request_trajectory",
+                "trace has been purged",
+            ));
+        }
+        let connection = self.connection().borrow();
+        crate::semantic_actions::llm_request_lineage::LlmRequestLineageStore::by_trajectory(
+            &connection,
+            trace_id,
+            trajectory_id,
+        )
+    }
+
+    fn llm_request_forks(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+    ) -> Result<Vec<LlmRequestLineage>, SemanticActionStoreError> {
+        if self.is_purged(trace_id) {
+            return Err(SemanticActionStoreError::new(
+                "read_llm_request_forks",
+                "trace has been purged",
+            ));
+        }
+        let connection = self.connection().borrow();
+        crate::semantic_actions::llm_request_lineage::LlmRequestLineageStore::forks_from(
+            &connection,
+            trace_id,
+            action_id,
+        )
+    }
+
     fn list_semantic_actions(
         &self,
         trace_id: TraceId,
@@ -326,6 +409,7 @@ impl SemanticActionReadStore for SqliteStorage {
         let mut evidence = read_evidence_for_trace(&connection, trace_id)?;
         for action in &mut actions {
             action.evidence = evidence.remove(&action.action_id).unwrap_or_default();
+            resolve_file_paths(&connection, action)?;
         }
         Ok(actions)
     }
@@ -382,6 +466,7 @@ impl SemanticActionReadStore for SqliteStorage {
         actions.truncate(limit);
         for action in &mut actions {
             action.evidence = read_evidence_shared(&connection, &action.action_id)?;
+            resolve_file_paths(&connection, action)?;
         }
         let next_offset = if has_more {
             Some(offset.checked_add(limit).ok_or_else(|| {
@@ -660,6 +745,7 @@ pub(super) fn read_action_by_id(
         })?;
     if let Some(action) = &mut action {
         action.evidence = read_evidence(connection, &action.action_id)?;
+        resolve_file_paths(connection, action)?;
     }
     Ok(action)
 }
@@ -677,6 +763,7 @@ pub(super) fn read_action_by_id_shared(
         })?;
     if let Some(action) = &mut action {
         action.evidence = read_evidence_shared(connection, &action.action_id)?;
+        resolve_file_paths(connection, action)?;
     }
     Ok(action)
 }
@@ -782,4 +869,51 @@ fn read_link_evidence_for_trace(
         evidence.entry(key).or_default().push(item);
     }
     Ok(evidence)
+}
+
+const FILE_PATH_REF_PREFIX: &str = "@file_path:";
+
+fn intern_file_path_attribute(
+    connection: &mut rusqlite::Connection,
+    trace_id: u64,
+    action: &mut SemanticAction,
+) -> Result<(), SemanticActionStoreError> {
+    let Some(path) = action.attributes.get_mut(attrs::file::PATH) else {
+        return Ok(());
+    };
+    if path.starts_with(FILE_PATH_REF_PREFIX) {
+        return Ok(());
+    }
+    let path_text = std::mem::take(path);
+    let path_id = intern_path(connection, trace_id, &path_text)?;
+    *path = format!("{FILE_PATH_REF_PREFIX}{path_id}");
+    Ok(())
+}
+
+pub(in crate::semantic_actions) fn resolve_file_paths(
+    connection: &rusqlite::Connection,
+    action: &mut SemanticAction,
+) -> Result<(), SemanticActionStoreError> {
+    let Some(value) = action.attributes.get_mut(attrs::file::PATH) else {
+        return Ok(());
+    };
+    let Some(encoded) = value.strip_prefix(FILE_PATH_REF_PREFIX) else {
+        return Ok(());
+    };
+    let path_id = encoded
+        .parse::<i64>()
+        .map_err(|error| SemanticActionStoreError::new("resolve_file_path", error.to_string()))?;
+    let path_text = connection
+        .query_row(
+            "SELECT path_text FROM file_paths WHERE trace_id = ?1 AND path_id = ?2",
+            params![action.trace_id.get(), path_id],
+            |row| row.get::<_, String>("path_text"),
+        )
+        .optional()
+        .map_err(|error| SemanticActionStoreError::new("resolve_file_path", error.to_string()))?
+        .ok_or_else(|| {
+            SemanticActionStoreError::new("resolve_file_path", "file path reference not found")
+        })?;
+    *value = path_text;
+    Ok(())
 }
