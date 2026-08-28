@@ -20,25 +20,28 @@ struct {
     __type(value, struct actrail_launch_binding_key);
 } pending_exec_pid_index SEC(".maps");
 
-struct {
-    __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, 1);
-    __type(key, __u32);
-    __type(value, __u64);
-} pending_exec_generation_tick_ns SEC(".maps");
-
 struct actrail_launch_binding_adapter_lookup {
     struct actrail_launch_binding_key key;
     struct actrail_pending_exec_binding *binding;
 };
 
 static __always_inline int actrail_launch_binding_adapter_lookup_current(
-    __u32 current_host_tgid,
+    __u32 current_kernel_tgid,
     struct actrail_launch_binding_adapter_lookup *lookup
 ) {
     struct actrail_launch_binding_key *key;
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+    __u32 observer_namespace_tgid;
 
-    key = bpf_map_lookup_elem(&pending_exec_pid_index, &current_host_tgid);
+    (void)current_kernel_tgid;
+    observer_namespace_tgid = observer_tgid_for_task(task);
+    if (!observer_namespace_tgid) {
+        return 0;
+    }
+    key = bpf_map_lookup_elem(
+        &pending_exec_pid_index,
+        &observer_namespace_tgid
+    );
     if (!key) {
         return 0;
     }
@@ -58,7 +61,9 @@ static __always_inline int actrail_launch_binding_adapter_match_current(
 
     if (!lookup->binding ||
         lookup->binding->trace_id != lookup->key.trace_id ||
-        lookup->binding->generation != lookup->key.generation) {
+        lookup->binding->generation != lookup->key.generation ||
+        lookup->binding->observer_namespace_tgid !=
+            lookup->key.observer_namespace_tgid) {
         return ACTRAIL_LAUNCH_BINDING_STALE;
     }
     generation_tick_ns = bpf_map_lookup_elem(
@@ -84,7 +89,7 @@ static __always_inline int actrail_launch_binding_adapter_delete(
     }
     if (bpf_map_delete_elem(
             &pending_exec_pid_index,
-            &lookup->key.host_pid) != 0) {
+            &lookup->key.observer_namespace_tgid) != 0) {
         return ACTRAIL_LAUNCH_BINDING_DELETED_WITH_CLEANUP_FAILURE;
     }
     return ACTRAIL_LAUNCH_BINDING_DELETED;

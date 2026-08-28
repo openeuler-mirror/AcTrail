@@ -9,7 +9,6 @@ use ingest_runtime::IngestMatch;
 use model_core::ids::TraceId;
 use model_core::process::{
     ExitObservationSource, ExitStatus, MembershipState, ProcessIdentity, ProcessMembership,
-    ProcessRecord,
 };
 use plugin_system::ControlActorProcessIdentity;
 use process_identity::ProcessIdentityManager;
@@ -51,7 +50,6 @@ impl ResolvedTraceProcess {
 #[derive(Debug)]
 pub(crate) struct SeccompIdentityPreparation {
     pub(crate) resolved: ResolvedTraceProcess,
-    pub(crate) inherited_record: Option<ProcessRecord>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -104,7 +102,7 @@ impl<'a> SeccompNotificationIdentityRegistrar<'a> {
         if let Some(resolved) = TraceIdentityResolver::new(trace_runtime, self.process_manager)
             .match_process_in_trace(trace_id, process)
         {
-            return Self::capturable_preparation(resolved, None);
+            return Self::capturable_preparation(resolved);
         }
         if let Some((other_trace_id, _)) = trace_runtime.find_membership(&process) {
             return Err(ControlError::new(
@@ -162,16 +160,6 @@ impl<'a> SeccompNotificationIdentityRegistrar<'a> {
         self.storage
             .upsert_membership(membership)
             .map_err(|error| ControlError::new(error.stage, error.message))?;
-        let record = self
-            .process_manager
-            .record(process)
-            .cloned()
-            .ok_or_else(|| {
-                ControlError::new(
-                    "command_control_identity",
-                    format!("process record {} is missing", process.get()),
-                )
-            })?;
         let resolved = TraceIdentityResolver::new(trace_runtime, self.process_manager)
             .match_process_in_trace(trace_id, process)
             .ok_or_else(|| {
@@ -180,7 +168,7 @@ impl<'a> SeccompNotificationIdentityRegistrar<'a> {
                     "cannot resolve inherited membership",
                 )
             })?;
-        Self::capturable_preparation(resolved, Some(record))
+        Self::capturable_preparation(resolved)
     }
 
     fn resolve_or_create(
@@ -338,7 +326,6 @@ impl<'a> SeccompNotificationIdentityRegistrar<'a> {
 
     fn capturable_preparation(
         resolved: ResolvedTraceProcess,
-        inherited_record: Option<ProcessRecord>,
     ) -> Result<SeccompIdentityPreparation, ControlError> {
         if !resolved.is_capturable() {
             return Err(ControlError::new(
@@ -350,10 +337,7 @@ impl<'a> SeccompNotificationIdentityRegistrar<'a> {
                 ),
             ));
         }
-        Ok(SeccompIdentityPreparation {
-            resolved,
-            inherited_record,
-        })
+        Ok(SeccompIdentityPreparation { resolved })
     }
 }
 

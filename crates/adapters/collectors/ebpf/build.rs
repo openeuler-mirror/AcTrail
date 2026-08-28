@@ -79,36 +79,7 @@ fn main() {
         other => panic!("unsupported eBPF target architecture {other}"),
     };
 
-    println!("cargo:rerun-if-changed=bpf/live_observation.bpf.c");
-    println!("cargo:rerun-if-changed=bpf/actrail_helpers.h");
-    println!("cargo:rerun-if-changed=bpf/actrail_file.h");
-    println!("cargo:rerun-if-changed=bpf/actrail_net.h");
-    println!("cargo:rerun-if-changed=bpf/actrail_fd.h");
-    println!("cargo:rerun-if-changed=bpf/fd/actrail_fd_index.h");
-    println!("cargo:rerun-if-changed=bpf/fd/actrail_fd_lifecycle.h");
-    println!("cargo:rerun-if-changed=bpf/fd/actrail_fd_sweep.h");
-    println!("cargo:rerun-if-changed=bpf/actrail_proc.h");
-    println!("cargo:rerun-if-changed=bpf/actrail_runtime.h");
-    println!("cargo:rerun-if-changed=bpf/actrail_suppressed_fd.h");
-    println!("cargo:rerun-if-changed=bpf/actrail_tls_payload.h");
-    println!("cargo:rerun-if-changed=bpf/actrail_uprobe_regs.h");
-    println!("cargo:rerun-if-changed=bpf/launch_binding/actrail_launch_binding.h");
-    println!("cargo:rerun-if-changed=bpf/launch_binding/impl/task_storage.h");
-    println!("cargo:rerun-if-changed=bpf/launch_binding/impl/pid_generation_hash.h");
-    println!("cargo:rerun-if-changed=bpf/file/actrail_file_bulk_read_fast.h");
-    println!("cargo:rerun-if-changed=bpf/file/actrail_file_path.h");
-    println!("cargo:rerun-if-changed=bpf/include/actrail_const.h");
-    println!("cargo:rerun-if-changed=bpf/payload/actrail_socket_fd_state.h");
-    println!("cargo:rerun-if-changed=bpf/payload/actrail_socket_payload.h");
-    println!("cargo:rerun-if-changed=bpf/payload/actrail_socket_tls.h");
-    println!("cargo:rerun-if-changed=bpf/payload/actrail_socket_payload_types.h");
-    println!("cargo:rerun-if-changed=bpf/payload/actrail_stdio_payload.h");
-    println!("cargo:rerun-if-changed=bpf/process/actrail_process_programs.h");
-    println!("cargo:rerun-if-changed=bpf/tls/actrail_tls_payload_capture.h");
-    println!("cargo:rerun-if-changed=bpf/tls/actrail_tls_payload_completion.h");
-    println!("cargo:rerun-if-changed=bpf/tls/actrail_tls_payload_diagnostics.h");
-    println!("cargo:rerun-if-changed=bpf/tls/actrail_tls_payload_probes.h");
-    println!("cargo:rerun-if-changed=bpf/tls/actrail_tls_rustls_internal.h");
+    println!("cargo:rerun-if-changed=bpf");
     println!("cargo:rerun-if-changed=/proc/sys/kernel/osrelease");
     println!("cargo:rerun-if-changed=/sys/kernel/btf/vmlinux");
     println!("cargo:rerun-if-env-changed=ACTRAIL_BPF_SYSTEM_INCLUDE");

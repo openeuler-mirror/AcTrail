@@ -22,6 +22,8 @@ mod ring_decode;
 mod runtime_implementation;
 #[path = "loader/runtime/link_teardown.rs"]
 mod runtime_link_teardown;
+#[path = "loader/runtime/process_identity.rs"]
+mod runtime_process_identity;
 #[path = "loader/socket.rs"]
 mod socket;
 #[path = "loader/stdio.rs"]
@@ -36,6 +38,7 @@ mod tracepoint;
 use std::collections::BTreeSet;
 use std::env;
 use std::ffi::OsStr;
+use std::io::Read;
 use std::os::fd::{OwnedFd, RawFd};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
@@ -54,8 +57,11 @@ use launch_binding::{LaunchBindingTarget, LaunchExecBindings, PendingLaunchBindi
 use object::{event_map_max_entries, map_handle, resize_map, ring_buffer_max_bytes};
 use ring_decode::decode_kernel_event;
 pub use ring_decode::{
-    KernelEndpoint, KernelEvent, KernelFilePathEvent, KernelObservationEvent,
-    KernelSocketPayloadCompletionEvent, KernelSocketPayloadEvent,
+    KernelEndpoint, KernelEndpointRole, KernelEndpointWithRole, KernelEvent, KernelEventIdentity,
+    KernelExecPayload, KernelExitPayload, KernelFdIoOperation, KernelFdIoPayload,
+    KernelFilePathEvent, KernelForkPayload, KernelNetworkOperation, KernelNetworkPayload,
+    KernelObservationCommon, KernelObservationEvent, KernelObservationPayload, KernelSignalPayload,
+    KernelSocketFdReleasePayload, KernelSocketPayloadCompletionEvent, KernelSocketPayloadEvent,
     KernelStdioPayloadCompletionEvent, KernelStdioPayloadEvent, KernelTlsCaptureRequestEvent,
     KernelTlsCompletionEvent, KernelTlsDiagnosticEvent, KernelTlsDirectCaptureEvent,
     LaunchBindingFailure, LaunchBindingFailureStatus,
@@ -69,6 +75,11 @@ pub use tls::{
 
 const PID_NAMESPACE_FIELD_SIZE: usize = std::mem::size_of::<u64>();
 const PID_NAMESPACE_VALUE_SIZE: usize = PID_NAMESPACE_FIELD_SIZE * 2;
+const OBSERVER_PID_NAMESPACE_VALUE_SIZE: usize = PID_NAMESPACE_VALUE_SIZE + 8;
+const PROCESS_IDENTITY_VALUE_SIZE: usize = 16;
+const PROCESS_IDENTITY_RESOLUTION_KEY_SIZE: usize = 16;
+const PROCESS_IDENTITY_RESOLUTION_VALUE_SIZE: usize = 16;
+const TRACE_NAMESPACE_THREAD_IDENTITY_VALUE_SIZE: usize = 24;
 const FILE_BULK_READ_FAST_PROCESS_KEY_SIZE: usize =
     std::mem::size_of::<u32>() + std::mem::size_of::<u64>();
 const FILE_BULK_READ_FAST_PROCESS_VALUE_SIZE: usize = std::mem::size_of::<u64>();
@@ -78,6 +89,8 @@ const LIBBPF_DEBUG_ENV: &str = "ACTRAIL_EBPF_LIBBPF_DEBUG";
 const FORK_TRACE_BINDING_TRACE_ID_OFFSET: usize = 0;
 const FORK_TRACE_BINDING_CHILD_GENERATION_OFFSET: usize = 16;
 const FORK_TRACE_BINDING_VALUE_SIZE: usize = 32;
+const OBSERVER_FORK_BINDING_KERNEL_TGID_OFFSET: usize = FORK_TRACE_BINDING_VALUE_SIZE;
+const OBSERVER_FORK_BINDING_VALUE_SIZE: usize = FORK_TRACE_BINDING_VALUE_SIZE + 8;
 const FORK_IDENTITY_PUBLISH_FAIL_COUNTER: u32 = 3;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -99,6 +112,18 @@ impl LoaderError {
 pub(crate) struct ForkTraceBinding {
     pub(crate) trace_id: TraceId,
     pub(crate) child_start_boottime_ns: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ProcessIdentityResolutionRequest {
+    pub(crate) observer_tgid: u32,
+    pub(crate) start_time_ticks: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ResolvedProcessIdentity {
+    pub(crate) kernel_tgid: u32,
+    pub(crate) start_boottime_ns: u64,
 }
 
 pub struct EbpfProgramLoader {
@@ -140,9 +165,14 @@ pub struct EbpfRuntime {
     attached_programs: Vec<String>,
     attached_capabilities: BTreeSet<Capability>,
     tracked_traces: MapHandle,
-    process_start_times: MapHandle,
+    process_identities: MapHandle,
+    process_identity_resolutions: MapHandle,
+    trace_namespace_thread_identities: MapHandle,
+    observer_pid_diagnostics: MapHandle,
+    observer_pid_diagnostics_baseline: ObserverPidDiagnostics,
     launch_bindings: LaunchExecBindings,
     fork_trace_bindings: MapHandle,
+    observer_fork_trace_bindings: MapHandle,
     trace_pid_namespaces: MapHandle,
     suppressed_fds: MapHandle,
     suppressed_fd_index: MapHandle,
@@ -216,8 +246,24 @@ impl EbpfProgramLoader {
         )?;
         resize_map(
             &mut open_object,
-            "process_start_times",
+            "process_identities",
             self.config.tracked_process_max_entries,
+        )?;
+        resize_map(
+            &mut open_object,
+            "process_identity_resolutions",
+            self.config.tracked_process_max_entries,
+        )?;
+        resize_map(
+            &mut open_object,
+            "trace_namespace_thread_identities",
+            self.config.pending_operation_max_entries,
+        )?;
+        #[cfg(actrail_launch_binding_task_storage)]
+        resize_map(
+            &mut open_object,
+            "pending_exec_observer_bindings",
+            self.config.pending_operation_max_entries,
         )?;
         #[cfg(actrail_launch_binding_pid_generation_hash)]
         {
@@ -291,6 +337,11 @@ impl EbpfProgramLoader {
         resize_map(
             &mut open_object,
             "fork_trace_bindings",
+            self.config.tracked_process_max_entries,
+        )?;
+        resize_map(
+            &mut open_object,
+            "observer_fork_trace_bindings",
             self.config.tracked_process_max_entries,
         )?;
         resize_map(
@@ -423,6 +474,33 @@ struct EventTransportDiagnostics {
     stdio_read_user_fail: u64,
     socket_state_update_fail: u64,
     socket_sequence_update_fail: u64,
+    process_identity_cache_miss: u64,
+    process_identity_cleanup_fail: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct ObserverPidDiagnostics {
+    level_discovery: u64,
+    level_mismatch: u64,
+    resolution_fail: u64,
+    index_publish_fail: u64,
+}
+
+impl ObserverPidDiagnostics {
+    fn saturating_delta_since(self, baseline: Self) -> Self {
+        Self {
+            level_discovery: self
+                .level_discovery
+                .saturating_sub(baseline.level_discovery),
+            level_mismatch: self.level_mismatch.saturating_sub(baseline.level_mismatch),
+            resolution_fail: self
+                .resolution_fail
+                .saturating_sub(baseline.resolution_fail),
+            index_publish_fail: self
+                .index_publish_fail
+                .saturating_sub(baseline.index_publish_fail),
+        }
+    }
 }
 
 impl EventTransportDiagnostics {
@@ -445,6 +523,12 @@ impl EventTransportDiagnostics {
             socket_sequence_update_fail: self
                 .socket_sequence_update_fail
                 .saturating_sub(baseline.socket_sequence_update_fail),
+            process_identity_cache_miss: self
+                .process_identity_cache_miss
+                .saturating_sub(baseline.process_identity_cache_miss),
+            process_identity_cleanup_fail: self
+                .process_identity_cleanup_fail
+                .saturating_sub(baseline.process_identity_cleanup_fail),
         }
     }
 }
@@ -456,9 +540,9 @@ fn read_event_transport_diagnostics(
     // lookup returns all entries in one syscall instead of separate lookups.
     // This runs twice per drain cycle, so the saving is material.
     let mut diagnostics = EventTransportDiagnostics::default();
-    let mut seen = [false; 8];
+    let mut seen = [false; 10];
     let batch = map
-        .lookup_batch(8, MapFlags::ANY, MapFlags::ANY)
+        .lookup_batch(10, MapFlags::ANY, MapFlags::ANY)
         .map_err(|error| LoaderError::new("event_transport_diagnostics", error.to_string()))?;
     for item in batch {
         let (key, value) = item;
@@ -493,13 +577,60 @@ fn read_event_transport_diagnostics(
             5 => diagnostics.stdio_read_user_fail = count,
             6 => diagnostics.socket_state_update_fail = count,
             7 => diagnostics.socket_sequence_update_fail = count,
+            8 => diagnostics.process_identity_cache_miss = count,
+            9 => diagnostics.process_identity_cleanup_fail = count,
             _ => {}
         }
     }
-    for counter_id in [0_u32, 1, 2, 4, 5, 6, 7] {
+    for counter_id in [0_u32, 1, 2, 4, 5, 6, 7, 8, 9] {
         if !seen[counter_id as usize] {
             return Err(LoaderError::new(
                 "event_transport_diagnostics",
+                format!("missing counter {counter_id}"),
+            ));
+        }
+    }
+    Ok(diagnostics)
+}
+
+fn read_observer_pid_diagnostics(map: &MapHandle) -> Result<ObserverPidDiagnostics, LoaderError> {
+    let mut diagnostics = ObserverPidDiagnostics::default();
+    let mut seen = [false; 5];
+    let batch = map
+        .lookup_batch(5, MapFlags::ANY, MapFlags::ANY)
+        .map_err(|error| LoaderError::new("observer_pid_diagnostics", error.to_string()))?;
+    for (key, value) in batch {
+        let counter_id = key
+            .get(..4)
+            .and_then(|raw| raw.try_into().ok())
+            .map(u32::from_ne_bytes)
+            .ok_or_else(|| {
+                LoaderError::new(
+                    "observer_pid_diagnostics",
+                    format!("unexpected counter key size {}", key.len()),
+                )
+            })?;
+        let count = value.chunks_exact(8).try_fold(0_u64, |total, raw| {
+            let counter = u64::from_ne_bytes(raw.try_into().map_err(|_| {
+                LoaderError::new("observer_pid_diagnostics", "truncated per-CPU counter")
+            })?);
+            Ok::<u64, LoaderError>(total.saturating_add(counter))
+        })?;
+        if let Some(slot) = seen.get_mut(counter_id as usize) {
+            *slot = true;
+        }
+        match counter_id {
+            1 => diagnostics.level_discovery = count,
+            2 => diagnostics.level_mismatch = count,
+            3 => diagnostics.resolution_fail = count,
+            4 => diagnostics.index_publish_fail = count,
+            _ => {}
+        }
+    }
+    for counter_id in 0_u32..5 {
+        if !seen[counter_id as usize] {
+            return Err(LoaderError::new(
+                "observer_pid_diagnostics",
                 format!("missing counter {counter_id}"),
             ));
         }
@@ -595,6 +726,21 @@ fn read_pid_namespace_for_pid(pid: u32) -> Result<PidNamespace, LoaderError> {
     })
 }
 
+fn read_observer_pid_namespace() -> Result<PidNamespace, LoaderError> {
+    let observer = read_pid_namespace_for_pid(std::process::id())?;
+    let procfs_root = read_pid_namespace_for_pid(1)?;
+    if observer != procfs_root {
+        return Err(LoaderError::new(
+            "observer_pid_namespace",
+            format!(
+                "actraild PID namespace dev={} ino={} does not match mounted procfs PID namespace dev={} ino={}",
+                observer.dev, observer.ino, procfs_root.dev, procfs_root.ino
+            ),
+        ));
+    }
+    Ok(observer)
+}
+
 fn write_trace_pid_namespace(
     trace_pid_namespaces: &MapHandle,
     trace_id: TraceId,
@@ -609,4 +755,35 @@ fn write_trace_pid_namespace(
     trace_pid_namespaces
         .update(&key, &value, MapFlags::ANY)
         .map_err(|error| LoaderError::new(stage, error.to_string()))
+}
+
+fn write_observer_pid_namespace(
+    map: &MapHandle,
+    namespace: PidNamespace,
+) -> Result<(), LoaderError> {
+    let key = 0_u32.to_ne_bytes();
+    let mut value = [0_u8; OBSERVER_PID_NAMESPACE_VALUE_SIZE];
+    value[0..PID_NAMESPACE_FIELD_SIZE].copy_from_slice(&namespace.dev.to_ne_bytes());
+    value[PID_NAMESPACE_FIELD_SIZE..PID_NAMESPACE_VALUE_SIZE]
+        .copy_from_slice(&namespace.ino.to_ne_bytes());
+    map.update(&key, &value, MapFlags::ANY)
+        .map_err(|error| LoaderError::new("observer_pid_namespace", error.to_string()))
+}
+
+fn parse_observer_fork_trace_binding(raw: &[u8]) -> Result<(u32, ForkTraceBinding), LoaderError> {
+    if raw.len() != OBSERVER_FORK_BINDING_VALUE_SIZE {
+        return Err(LoaderError::new(
+            "fork_trace_binding",
+            format!("unexpected observer fork binding size {}", raw.len()),
+        ));
+    }
+    let kernel_tgid = u32::from_ne_bytes(
+        raw[OBSERVER_FORK_BINDING_KERNEL_TGID_OFFSET..OBSERVER_FORK_BINDING_KERNEL_TGID_OFFSET + 4]
+            .try_into()
+            .expect("observer fork binding kernel TGID slice has fixed size"),
+    );
+    Ok((
+        kernel_tgid,
+        parse_fork_trace_binding(&raw[..FORK_TRACE_BINDING_VALUE_SIZE])?,
+    ))
 }

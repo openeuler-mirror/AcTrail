@@ -54,7 +54,7 @@ pub use crate::decode::{
 };
 use crate::loader::{
     ArmedLaunchBinding, AttachPlan, EbpfProgramLoader, EbpfRuntime, LoaderError,
-    PendingTlsPayloadOp, TlsPayloadDiagnostics,
+    PendingTlsPayloadOp, ProcessIdentityResolutionRequest, TlsPayloadDiagnostics,
 };
 pub use crate::loader::{LaunchBindingFailure, LaunchBindingFailureStatus, SocketPayloadFdState};
 use crate::maps::BindingStateMap;
@@ -126,14 +126,42 @@ pub enum ForkTraceLookup {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KernelForkTraceBinding {
     trace_id: TraceId,
-    host_pid: u32,
+    kernel_tgid: u32,
     start_boottime_ns: u64,
     start_time_ticks: u64,
 }
 
 impl KernelForkTraceBinding {
+    fn from_runtime(
+        kernel_tgid: u32,
+        binding: crate::loader::ForkTraceBinding,
+        clock_ticks_per_second: u64,
+    ) -> Result<Self, CollectorError> {
+        let start_time_ticks = u64::try_from(
+            u128::from(binding.child_start_boottime_ns)
+                .saturating_mul(u128::from(clock_ticks_per_second))
+                / 1_000_000_000_u128,
+        )
+        .map_err(|_| {
+            CollectorError::new(
+                "fork_trace_identity",
+                "fork start generation does not fit procfs clock ticks",
+            )
+        })?;
+        Ok(Self {
+            trace_id: binding.trace_id,
+            kernel_tgid,
+            start_boottime_ns: binding.child_start_boottime_ns,
+            start_time_ticks,
+        })
+    }
+
     pub fn trace_id(&self) -> TraceId {
         self.trace_id
+    }
+
+    pub fn kernel_tgid(&self) -> u32 {
+        self.kernel_tgid
     }
 
     pub fn validate_and_enrich(
@@ -146,12 +174,12 @@ impl KernelForkTraceBinding {
                 "procfs observation has no host coordinates",
             )
         })?;
-        if host.pid != self.host_pid || host.start_time_ticks != self.start_time_ticks {
+        if host.start_time_ticks != self.start_time_ticks {
             return Err(CollectorError::new(
                 "fork_trace_identity",
                 format!(
-                    "kernel fork binding generation mismatch for host PID {}",
-                    self.host_pid
+                    "kernel fork binding generation mismatch for kernel TGID {}",
+                    self.kernel_tgid
                 ),
             ));
         }

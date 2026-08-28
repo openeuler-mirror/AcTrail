@@ -20,7 +20,7 @@ from tests.v2.regression.container_agent_xiaoo.v2.config import (  # noqa: E402
 TEST_DEFINITION = TestDefinition(
     name="container_agent_xiaoo",
     description=(
-        "Run two real xiaoO agents in Docker and verify independent traces"
+        "Run actraild in a nested PID namespace with two real Docker xiaoO agents"
     ),
     build_case=lambda inputs: ContainerAgentXiaooCase(
         ContainerAgentXiaooConfig.from_environment(inputs)

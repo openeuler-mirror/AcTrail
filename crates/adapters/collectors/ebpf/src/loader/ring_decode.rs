@@ -1,5 +1,7 @@
 //! Ring-buffer record decoding.
 
+#[path = "ring_decode/file_path.rs"]
+mod file_path;
 #[path = "ring_decode/payload.rs"]
 mod payload;
 
@@ -7,6 +9,7 @@ use model_core::ids::TraceId;
 
 use crate::loader::LoaderError;
 
+use file_path::decode_file_path_event;
 pub use payload::{
     KernelSocketPayloadCompletionEvent, KernelSocketPayloadEvent,
     KernelStdioPayloadCompletionEvent, KernelStdioPayloadEvent, KernelTlsCaptureRequestEvent,
@@ -20,10 +23,13 @@ use payload::{
 };
 
 use super::abi::{
-    EXEC_EVENT_FILENAME_FLAGS_OFFSET, EXEC_EVENT_FILENAME_OFFSET, EXEC_EVENT_FILENAME_SIZE_OFFSET,
-    EXEC_EVENT_SIZE, EXEC_FILENAME_ABI_MAX_BYTES, EXEC_FILENAME_FLAG_TRUNCATED,
-    KERNEL_ENDPOINT_SIZE, KERNEL_OBSERVATION_EVENT_SIZE, KERNEL_OBSERVATION_HEADER_SIZE,
-    LAUNCH_BINDING_FAILURE_EVENT_SIZE, PROC_EXEC_EVENT_KIND,
+    EVENT_ABI_REVISION, EVENT_HEADER_SIZE, EXEC_EVENT_FILENAME_FLAGS_OFFSET,
+    EXEC_EVENT_FILENAME_OFFSET, EXEC_EVENT_FILENAME_SIZE_OFFSET, EXEC_FILENAME_ABI_MAX_BYTES,
+    EXEC_FILENAME_FLAG_TRUNCATED, FD_IO_EVENT_SIZE, KERNEL_ENDPOINT_SIZE,
+    LAUNCH_BINDING_FAILURE_EVENT_SIZE, NETWORK_EVENT_SIZE, PROC_EXEC_EVENT_KIND,
+    PROC_EXIT_EVENT_KIND, PROC_FORK_EVENT_KIND, PROC_SIGNAL_EVENT_KIND, PROCESS_EXEC_EVENT_SIZE,
+    PROCESS_EXIT_EVENT_SIZE, PROCESS_FORK_EVENT_SIZE, PROCESS_SIGNAL_EVENT_SIZE,
+    SOCKET_RELEASE_EVENT_SIZE,
 };
 
 pub const TLS_PAYLOAD_COMPLETION_EVENT_KIND: u32 = 201;
@@ -37,6 +43,16 @@ pub const STDIO_PAYLOAD_EVENT_KIND: u32 = 400;
 pub const STDIO_PAYLOAD_COMPLETION_EVENT_KIND: u32 = 401;
 pub const SOCKET_PAYLOAD_EVENT_KIND: u32 = 500;
 pub const SOCKET_PAYLOAD_COMPLETION_EVENT_KIND: u32 = 501;
+
+const NET_CONNECT_EVENT_KIND: u32 = 100;
+const NET_ACCEPT_EVENT_KIND: u32 = 101;
+const FD_IO_SEND_EVENT_KIND: u32 = 102;
+const FD_IO_RECV_EVENT_KIND: u32 = 103;
+const NET_BIND_EVENT_KIND: u32 = 104;
+const NET_LISTEN_EVENT_KIND: u32 = 105;
+const NET_CLOSE_EVENT_KIND: u32 = 106;
+const NET_SHUTDOWN_EVENT_KIND: u32 = 107;
+const SOCKET_FD_RELEASE_EVENT_KIND: u32 = 108;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum KernelEvent {
@@ -56,7 +72,7 @@ pub enum KernelEvent {
 impl KernelEvent {
     pub(super) fn observed_ktime_ns(&self) -> Option<u64> {
         Some(match self {
-            Self::Observation(event) => event.observed_ktime_ns,
+            Self::Observation(event) => event.common.observed_ktime_ns,
             Self::FilePath(event) => event.observed_ktime_ns,
             Self::TlsCaptureRequest(event) => event.observed_ktime_ns,
             Self::TlsCompletion(event) => event.observed_ktime_ns,
@@ -126,22 +142,178 @@ pub struct KernelEndpoint {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KernelObservationEvent {
-    pub kind: u32,
-    pub pid: u32,
-    pub aux: u32,
-    pub host_pid: u32,
-    pub aux_host_pid: u32,
-    pub result: i32,
+    pub common: KernelObservationCommon,
+    pub payload: KernelObservationPayload,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KernelObservationCommon {
     pub trace_id: TraceId,
     pub observed_ktime_ns: u64,
+    pub subject: KernelEventIdentity,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KernelEventIdentity {
+    pub observer_namespace_tgid: u32,
+    pub kernel_tgid: u32,
+    pub start_boottime_ns: u64,
+}
+
+impl KernelEventIdentity {
+    pub const fn binding_tgid(self) -> u32 {
+        if self.kernel_tgid != 0 {
+            self.kernel_tgid
+        } else {
+            self.observer_namespace_tgid
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum KernelObservationPayload {
+    Fork(KernelForkPayload),
+    Exec(KernelExecPayload),
+    Exit(KernelExitPayload),
+    SignalGenerate(KernelSignalPayload),
+    Network(KernelNetworkPayload),
+    FdIo(KernelFdIoPayload),
+    SocketFdRelease(KernelSocketFdReleasePayload),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KernelForkPayload {
+    pub parent: KernelEventIdentity,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KernelExecPayload {
+    pub filename: Option<KernelExecFilename>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KernelExitPayload {
+    pub exit_code: Option<i32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KernelSignalPayload {
+    pub signal_result: i32,
+    pub signal: u32,
+    pub target_kernel_tid: u32,
+    pub target_group: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KernelNetworkOperation {
+    Connect,
+    Accept,
+    Bind,
+    Listen,
+    Close,
+    Shutdown,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KernelFdIoOperation {
+    Send,
+    Recv,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KernelNetworkPayload {
+    pub operation: KernelNetworkOperation,
+    pub syscall_result: i32,
     pub fd: u32,
-    pub reserved: u32,
+    pub syscall_family: u32,
+    pub operation_flags: u32,
+    pub fd_object_generation: u64,
+    pub endpoint: Option<KernelEndpointWithRole>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KernelFdIoPayload {
+    pub operation: KernelFdIoOperation,
+    pub syscall_result: i32,
+    pub fd: u32,
+    pub syscall_family: u32,
+    pub fd_category: u32,
     pub requested_size: u64,
-    pub pid_generation: u64,
-    pub aux_generation: u64,
-    pub local: KernelEndpoint,
-    pub remote: KernelEndpoint,
-    pub exec_filename: Option<KernelExecFilename>,
+    pub fd_object_generation: u64,
+    pub endpoint: Option<KernelEndpointWithRole>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KernelSocketFdReleasePayload {
+    pub fd: u32,
+    pub fd_object_generation: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KernelEndpointRole {
+    Local,
+    Remote,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KernelEndpointWithRole {
+    pub role: KernelEndpointRole,
+    pub endpoint: KernelEndpoint,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct KernelTypedEventHeader {
+    kind: u32,
+    trace_id: TraceId,
+    observed_ktime_ns: u64,
+    subject_observer_namespace_tgid: u32,
+    subject_kernel_tgid: u32,
+    subject_start_boottime_ns: u64,
+}
+
+impl KernelTypedEventHeader {
+    fn decode(raw: &[u8], expected_kind: u32, expected_size: usize) -> Result<Self, LoaderError> {
+        if raw.len() != expected_size {
+            return Err(LoaderError::new(
+                "decode_typed_event_header",
+                format!(
+                    "unexpected event size {}, expected {expected_size} for kind {expected_kind}",
+                    raw.len()
+                ),
+            ));
+        }
+        let kind = read_u32(raw, 0).expect("event length checked");
+        let revision = read_u16(raw, 4).expect("event length checked");
+        let record_size = usize::from(read_u16(raw, 6).expect("event length checked"));
+        if kind != expected_kind || revision != EVENT_ABI_REVISION || record_size != expected_size {
+            return Err(LoaderError::new(
+                "decode_typed_event_header",
+                format!(
+                    "invalid typed event header kind={kind} revision={revision} record_size={record_size}; expected kind={expected_kind} revision={EVENT_ABI_REVISION} record_size={expected_size}"
+                ),
+            ));
+        }
+        Ok(Self {
+            kind,
+            trace_id: TraceId::new(read_u64(raw, 8).expect("event length checked")),
+            observed_ktime_ns: read_u64(raw, 16).expect("event length checked"),
+            subject_observer_namespace_tgid: read_u32(raw, 24).expect("event length checked"),
+            subject_kernel_tgid: read_u32(raw, 28).expect("event length checked"),
+            subject_start_boottime_ns: read_u64(raw, 32).expect("event length checked"),
+        })
+    }
+
+    fn common(self) -> KernelObservationCommon {
+        KernelObservationCommon {
+            trace_id: self.trace_id,
+            observed_ktime_ns: self.observed_ktime_ns,
+            subject: KernelEventIdentity {
+                observer_namespace_tgid: self.subject_observer_namespace_tgid,
+                kernel_tgid: self.subject_kernel_tgid,
+                start_boottime_ns: self.subject_start_boottime_ns,
+            },
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -184,6 +356,35 @@ pub fn decode_kernel_event(raw: &[u8]) -> Result<KernelEvent, LoaderError> {
             format!("unexpected empty kernel event size {}", raw.len()),
         ));
     };
+    if kind == PROC_FORK_EVENT_KIND {
+        return decode_process_fork_event(raw).map(KernelEvent::Observation);
+    }
+    if kind == PROC_EXEC_EVENT_KIND {
+        return decode_process_exec_event(raw).map(KernelEvent::Observation);
+    }
+    if kind == PROC_EXIT_EVENT_KIND {
+        return decode_process_exit_event(raw).map(KernelEvent::Observation);
+    }
+    if kind == PROC_SIGNAL_EVENT_KIND {
+        return decode_process_signal_event(raw).map(KernelEvent::Observation);
+    }
+    if matches!(
+        kind,
+        NET_CONNECT_EVENT_KIND
+            | NET_ACCEPT_EVENT_KIND
+            | NET_BIND_EVENT_KIND
+            | NET_LISTEN_EVENT_KIND
+            | NET_CLOSE_EVENT_KIND
+            | NET_SHUTDOWN_EVENT_KIND
+    ) {
+        return decode_network_event(raw, kind).map(KernelEvent::Observation);
+    }
+    if matches!(kind, FD_IO_SEND_EVENT_KIND | FD_IO_RECV_EVENT_KIND) {
+        return decode_fd_io_event(raw, kind).map(KernelEvent::Observation);
+    }
+    if kind == SOCKET_FD_RELEASE_EVENT_KIND {
+        return decode_socket_release_event(raw).map(KernelEvent::Observation);
+    }
     if kind == TLS_PAYLOAD_COMPLETION_EVENT_KIND {
         return decode_tls_completion_event(raw).map(KernelEvent::TlsCompletion);
     }
@@ -215,7 +416,10 @@ pub fn decode_kernel_event(raw: &[u8]) -> Result<KernelEvent, LoaderError> {
     if (FILE_EVENT_OPEN..=FILE_EVENT_READ_SUMMARY).contains(&kind) {
         return decode_file_path_event(raw).map(KernelEvent::FilePath);
     }
-    decode_observation_event(raw).map(KernelEvent::Observation)
+    Err(LoaderError::new(
+        "decode_kernel_event",
+        format!("unknown kernel event kind {kind}"),
+    ))
 }
 
 fn decode_launch_binding_failure(raw: &[u8]) -> Result<LaunchBindingFailure, LoaderError> {
@@ -244,46 +448,27 @@ fn decode_launch_binding_failure(raw: &[u8]) -> Result<LaunchBindingFailure, Loa
     })
 }
 
-fn decode_observation_event(raw: &[u8]) -> Result<KernelObservationEvent, LoaderError> {
-    let kind = read_u32(raw, 0).expect("event length checked");
-    if kind == PROC_EXEC_EVENT_KIND && raw.len() == EXEC_EVENT_SIZE {
-        return decode_exec_observation_event(raw);
-    }
-    if raw.len() != KERNEL_OBSERVATION_EVENT_SIZE {
-        return Err(LoaderError::new(
-            "decode_kernel_event",
-            format!(
-                "unexpected kernel event size {}, expected {}",
-                raw.len(),
-                KERNEL_OBSERVATION_EVENT_SIZE
-            ),
-        ));
-    }
-
-    let local_endpoint_start = KERNEL_OBSERVATION_HEADER_SIZE;
-    let remote_endpoint_start = local_endpoint_start + KERNEL_ENDPOINT_SIZE;
+fn decode_process_fork_event(raw: &[u8]) -> Result<KernelObservationEvent, LoaderError> {
+    let header =
+        KernelTypedEventHeader::decode(raw, PROC_FORK_EVENT_KIND, PROCESS_FORK_EVENT_SIZE)?;
     Ok(KernelObservationEvent {
-        kind,
-        pid: read_u32(raw, 4).expect("event length checked"),
-        aux: read_u32(raw, 8).expect("event length checked"),
-        host_pid: read_u32(raw, 12).expect("event length checked"),
-        aux_host_pid: read_u32(raw, 16).expect("event length checked"),
-        result: read_i32(raw, 20).expect("event length checked"),
-        trace_id: TraceId::new(read_u64(raw, 24).expect("event length checked")),
-        observed_ktime_ns: read_u64(raw, 32).expect("event length checked"),
-        fd: read_u32(raw, 40).expect("event length checked"),
-        reserved: read_u32(raw, 44).expect("event length checked"),
-        requested_size: read_u64(raw, 48).expect("event length checked"),
-        pid_generation: read_u64(raw, 56).expect("event length checked"),
-        aux_generation: read_u64(raw, 64).expect("event length checked"),
-        local: decode_endpoint(&raw[local_endpoint_start..remote_endpoint_start])?,
-        remote: decode_endpoint(&raw[remote_endpoint_start..KERNEL_OBSERVATION_EVENT_SIZE])?,
-        exec_filename: None,
+        common: header.common(),
+        payload: KernelObservationPayload::Fork(KernelForkPayload {
+            parent: KernelEventIdentity {
+                observer_namespace_tgid: read_u32(raw, EVENT_HEADER_SIZE)
+                    .expect("event length checked"),
+                kernel_tgid: read_u32(raw, EVENT_HEADER_SIZE + 4).expect("event length checked"),
+                start_boottime_ns: read_u64(raw, EVENT_HEADER_SIZE + 8)
+                    .expect("event length checked"),
+            },
+        }),
     })
 }
 
-fn decode_exec_observation_event(raw: &[u8]) -> Result<KernelObservationEvent, LoaderError> {
-    let mut event = decode_observation_event(&raw[..KERNEL_OBSERVATION_EVENT_SIZE])?;
+fn decode_process_exec_event(raw: &[u8]) -> Result<KernelObservationEvent, LoaderError> {
+    let header =
+        KernelTypedEventHeader::decode(raw, PROC_EXEC_EVENT_KIND, PROCESS_EXEC_EVENT_SIZE)?;
+    let mut filename = None;
     let filename_size =
         read_u32(raw, EXEC_EVENT_FILENAME_SIZE_OFFSET).expect("event length checked");
     let filename_size = usize::try_from(filename_size).map_err(|error| {
@@ -304,106 +489,138 @@ fn decode_exec_observation_event(raw: &[u8]) -> Result<KernelObservationEvent, L
     let flags = read_u32(raw, EXEC_EVENT_FILENAME_FLAGS_OFFSET).expect("event length checked");
     if filename_size > 0 {
         let filename_end = EXEC_EVENT_FILENAME_OFFSET + filename_size;
-        event.exec_filename = Some(KernelExecFilename {
+        filename = Some(KernelExecFilename {
             path: String::from_utf8_lossy(&raw[EXEC_EVENT_FILENAME_OFFSET..filename_end])
                 .into_owned(),
             truncated: flags & EXEC_FILENAME_FLAG_TRUNCATED != 0,
         });
     }
-    Ok(event)
-}
-
-fn decode_file_path_event(raw: &[u8]) -> Result<KernelFilePathEvent, LoaderError> {
-    const FILE_PATH_ABI_MAX_BYTES: usize = 256;
-    const FILE_EVENT_HEADER_SIZE: usize = 128;
-    const FILE_EVENT_PRIMARY_PATH_SIZE: usize = FILE_EVENT_HEADER_SIZE + FILE_PATH_ABI_MAX_BYTES;
-    const FILE_EVENT_SIZE: usize = FILE_EVENT_HEADER_SIZE + FILE_PATH_ABI_MAX_BYTES * 2;
-    let compact = raw.len() == FILE_EVENT_HEADER_SIZE;
-    let primary_path_only = raw.len() == FILE_EVENT_PRIMARY_PATH_SIZE;
-    if raw.len() != FILE_EVENT_SIZE && !compact && !primary_path_only {
-        return Err(LoaderError::new(
-            "decode_file_path",
-            format!(
-                "unexpected file path event size {}, expected {}, {}, or {}",
-                raw.len(),
-                FILE_EVENT_HEADER_SIZE,
-                FILE_EVENT_PRIMARY_PATH_SIZE,
-                FILE_EVENT_SIZE
-            ),
-        ));
-    }
-    let path_size = read_u32(raw, 48).expect("event length checked");
-    let secondary_path_size = read_u32(raw, 56).expect("event length checked");
-    if compact && (path_size != 0 || secondary_path_size != 0) {
-        return Err(LoaderError::new(
-            "decode_file_path",
-            format!(
-                "compact file event carried path sizes path={} secondary={}",
-                path_size, secondary_path_size
-            ),
-        ));
-    }
-    if primary_path_only && secondary_path_size != 0 {
-        return Err(LoaderError::new(
-            "decode_file_path",
-            format!("primary-path file event carried secondary path size {secondary_path_size}"),
-        ));
-    }
-    validate_path_size("path", path_size, FILE_PATH_ABI_MAX_BYTES)?;
-    validate_path_size(
-        "secondary_path",
-        secondary_path_size,
-        FILE_PATH_ABI_MAX_BYTES,
-    )?;
-    let path_start = FILE_EVENT_HEADER_SIZE;
-    let secondary_path_start = path_start + FILE_PATH_ABI_MAX_BYTES;
-    Ok(KernelFilePathEvent {
-        kind: read_u32(raw, 0).expect("event length checked"),
-        pid: read_u32(raw, 4).expect("event length checked"),
-        tid: read_u32(raw, 8).expect("event length checked"),
-        phase: read_u32(raw, 12).expect("event length checked"),
-        result: read_i64(raw, 16).expect("event length checked"),
-        trace_id: TraceId::new(read_u64(raw, 24).expect("event length checked")),
-        observed_ktime_ns: read_u64(raw, 32).expect("event length checked"),
-        fd: read_u32(raw, 40).expect("event length checked"),
-        aux: read_u32(raw, 44).expect("event length checked"),
-        path_size,
-        path_flags: read_u32(raw, 52).expect("event length checked"),
-        secondary_path_size,
-        secondary_path_flags: read_u32(raw, 60).expect("event length checked"),
-        path_max_bytes: read_u32(raw, 64).expect("event length checked"),
-        arg0: read_u64(raw, 72).expect("event length checked"),
-        arg1: read_u64(raw, 80).expect("event length checked"),
-        arg2: read_u64(raw, 88).expect("event length checked"),
-        arg3: read_u64(raw, 96).expect("event length checked"),
-        arg4: read_u64(raw, 104).expect("event length checked"),
-        arg5: read_u64(raw, 112).expect("event length checked"),
-        pid_generation: read_u64(raw, 120).expect("event length checked"),
-        path: if compact {
-            Vec::new()
-        } else {
-            raw[path_start..path_start + path_size as usize].to_vec()
-        },
-        secondary_path: if compact || primary_path_only {
-            Vec::new()
-        } else {
-            raw[secondary_path_start..secondary_path_start + secondary_path_size as usize].to_vec()
-        },
+    Ok(KernelObservationEvent {
+        common: header.common(),
+        payload: KernelObservationPayload::Exec(KernelExecPayload { filename }),
     })
 }
 
-fn validate_path_size(
-    label: &'static str,
-    value: u32,
-    max_bytes: usize,
-) -> Result<(), LoaderError> {
-    if value as usize > max_bytes {
-        return Err(LoaderError::new(
-            "decode_file_path",
-            format!("{label} size {value} exceeds ABI maximum {max_bytes}"),
-        ));
+fn decode_process_exit_event(raw: &[u8]) -> Result<KernelObservationEvent, LoaderError> {
+    const EXIT_CODE_VALID: u32 = 1;
+    let header =
+        KernelTypedEventHeader::decode(raw, PROC_EXIT_EVENT_KIND, PROCESS_EXIT_EVENT_SIZE)?;
+    let exit_flags = read_u32(raw, EVENT_HEADER_SIZE + 4).expect("event length checked");
+    Ok(KernelObservationEvent {
+        common: header.common(),
+        payload: KernelObservationPayload::Exit(KernelExitPayload {
+            exit_code: (exit_flags & EXIT_CODE_VALID != 0)
+                .then(|| read_i32(raw, EVENT_HEADER_SIZE).expect("event length checked")),
+        }),
+    })
+}
+
+fn decode_process_signal_event(raw: &[u8]) -> Result<KernelObservationEvent, LoaderError> {
+    let header =
+        KernelTypedEventHeader::decode(raw, PROC_SIGNAL_EVENT_KIND, PROCESS_SIGNAL_EVENT_SIZE)?;
+    Ok(KernelObservationEvent {
+        common: header.common(),
+        payload: KernelObservationPayload::SignalGenerate(KernelSignalPayload {
+            signal_result: read_i32(raw, EVENT_HEADER_SIZE).expect("event length checked"),
+            signal: read_u32(raw, EVENT_HEADER_SIZE + 4).expect("event length checked"),
+            target_kernel_tid: read_u32(raw, EVENT_HEADER_SIZE + 8).expect("event length checked"),
+            target_group: read_u32(raw, EVENT_HEADER_SIZE + 12).expect("event length checked"),
+        }),
+    })
+}
+
+fn decode_network_event(raw: &[u8], kind: u32) -> Result<KernelObservationEvent, LoaderError> {
+    const ENDPOINT_OFFSET: usize = EVENT_HEADER_SIZE + 28;
+    let header = KernelTypedEventHeader::decode(raw, kind, NETWORK_EVENT_SIZE)?;
+    let operation = match kind {
+        NET_CONNECT_EVENT_KIND => KernelNetworkOperation::Connect,
+        NET_ACCEPT_EVENT_KIND => KernelNetworkOperation::Accept,
+        NET_BIND_EVENT_KIND => KernelNetworkOperation::Bind,
+        NET_LISTEN_EVENT_KIND => KernelNetworkOperation::Listen,
+        NET_CLOSE_EVENT_KIND => KernelNetworkOperation::Close,
+        NET_SHUTDOWN_EVENT_KIND => KernelNetworkOperation::Shutdown,
+        _ => unreachable!("network kind dispatched"),
+    };
+    Ok(KernelObservationEvent {
+        common: header.common(),
+        payload: KernelObservationPayload::Network(KernelNetworkPayload {
+            operation,
+            syscall_result: read_i32(raw, EVENT_HEADER_SIZE).expect("event length checked"),
+            fd: read_u32(raw, EVENT_HEADER_SIZE + 4).expect("event length checked"),
+            syscall_family: read_u32(raw, EVENT_HEADER_SIZE + 8).expect("event length checked"),
+            operation_flags: read_u32(raw, EVENT_HEADER_SIZE + 12).expect("event length checked"),
+            fd_object_generation: read_u64(raw, EVENT_HEADER_SIZE + 16)
+                .expect("event length checked"),
+            endpoint: decode_typed_endpoint(
+                read_u32(raw, EVENT_HEADER_SIZE + 24).expect("event length checked"),
+                &raw[ENDPOINT_OFFSET..ENDPOINT_OFFSET + KERNEL_ENDPOINT_SIZE],
+            )?,
+        }),
+    })
+}
+
+fn decode_fd_io_event(raw: &[u8], kind: u32) -> Result<KernelObservationEvent, LoaderError> {
+    const ENDPOINT_OFFSET: usize = EVENT_HEADER_SIZE + 32;
+    let header = KernelTypedEventHeader::decode(raw, kind, FD_IO_EVENT_SIZE)?;
+    Ok(KernelObservationEvent {
+        common: header.common(),
+        payload: KernelObservationPayload::FdIo(KernelFdIoPayload {
+            operation: if kind == FD_IO_SEND_EVENT_KIND {
+                KernelFdIoOperation::Send
+            } else {
+                KernelFdIoOperation::Recv
+            },
+            syscall_result: read_i32(raw, EVENT_HEADER_SIZE).expect("event length checked"),
+            fd: read_u32(raw, EVENT_HEADER_SIZE + 4).expect("event length checked"),
+            syscall_family: read_u32(raw, EVENT_HEADER_SIZE + 8).expect("event length checked"),
+            fd_category: read_u32(raw, EVENT_HEADER_SIZE + 12).expect("event length checked"),
+            requested_size: read_u64(raw, EVENT_HEADER_SIZE + 16).expect("event length checked"),
+            fd_object_generation: read_u64(raw, EVENT_HEADER_SIZE + 24)
+                .expect("event length checked"),
+            endpoint: decode_typed_endpoint(
+                read_u32(raw, EVENT_HEADER_SIZE + 32).expect("event length checked"),
+                &raw[ENDPOINT_OFFSET + 4..ENDPOINT_OFFSET + 4 + KERNEL_ENDPOINT_SIZE],
+            )?,
+        }),
+    })
+}
+
+fn decode_socket_release_event(raw: &[u8]) -> Result<KernelObservationEvent, LoaderError> {
+    let header = KernelTypedEventHeader::decode(
+        raw,
+        SOCKET_FD_RELEASE_EVENT_KIND,
+        SOCKET_RELEASE_EVENT_SIZE,
+    )?;
+    Ok(KernelObservationEvent {
+        common: header.common(),
+        payload: KernelObservationPayload::SocketFdRelease(KernelSocketFdReleasePayload {
+            fd: read_u32(raw, EVENT_HEADER_SIZE).expect("event length checked"),
+            fd_object_generation: read_u64(raw, EVENT_HEADER_SIZE + 4)
+                .expect("event length checked"),
+        }),
+    })
+}
+
+fn decode_typed_endpoint(
+    role: u32,
+    raw: &[u8],
+) -> Result<Option<KernelEndpointWithRole>, LoaderError> {
+    let endpoint = decode_endpoint(raw)?;
+    match role {
+        0 => Ok(None),
+        1 => Ok(Some(KernelEndpointWithRole {
+            role: KernelEndpointRole::Local,
+            endpoint,
+        })),
+        2 => Ok(Some(KernelEndpointWithRole {
+            role: KernelEndpointRole::Remote,
+            endpoint,
+        })),
+        _ => Err(LoaderError::new(
+            "decode_typed_endpoint",
+            format!("unknown endpoint role {role}"),
+        )),
     }
-    Ok(())
 }
 
 fn decode_endpoint(raw: &[u8]) -> Result<KernelEndpoint, LoaderError> {
@@ -427,6 +644,12 @@ fn read_u32(raw: &[u8], offset: usize) -> Option<u32> {
     raw.get(offset..offset + 4)
         .and_then(|value| value.try_into().ok())
         .map(u32::from_ne_bytes)
+}
+
+fn read_u16(raw: &[u8], offset: usize) -> Option<u16> {
+    raw.get(offset..offset + 2)
+        .and_then(|value| value.try_into().ok())
+        .map(u16::from_ne_bytes)
 }
 
 fn read_i32(raw: &[u8], offset: usize) -> Option<i32> {

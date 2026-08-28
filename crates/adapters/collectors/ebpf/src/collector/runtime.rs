@@ -212,7 +212,7 @@ impl EbpfCollector {
                 .tracked_trace_id(
                     self.bindings
                         .by_host_pid(pid)
-                        .map(|tracked| tracked.map_pid)
+                        .map(|tracked| tracked.kernel_tgid)
                         .unwrap_or(pid),
                 )
                 .map_err(loader_error)?,

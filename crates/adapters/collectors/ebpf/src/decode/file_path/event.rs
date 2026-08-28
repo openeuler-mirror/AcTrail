@@ -60,10 +60,14 @@ pub(in crate::decode) fn decode(
         return Ok(None);
     }
 
-    let map_pid = event.pid;
-    let identity =
-        resolve_bound_event_observation(event.trace_id, map_pid, event.pid_generation, bindings)
-            .map_err(|error| DecodeError::new("file_identity", error))?;
+    let kernel_tgid = event.pid;
+    let identity = resolve_bound_event_observation(
+        event.trace_id,
+        kernel_tgid,
+        event.pid_generation,
+        bindings,
+    )
+    .map_err(|error| DecodeError::new("file_identity", error))?;
     if event.kind == FILE_EVENT_READ_SUMMARY {
         return decode_read_summary(event, identity, tracker);
     }
