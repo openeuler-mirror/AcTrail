@@ -9,11 +9,11 @@ use model_core::payload::{
 };
 use payload_event::{RawPayloadSegment, RawPayloadStreamClose};
 
-use crate::decode::{DecodeError, resolve_event_observation};
+use crate::decode::{DecodeError, resolve_event_observation, resolve_typed_event_observation};
 use crate::loader::{
-    KernelObservationEvent, KernelSocketPayloadCompletionEvent, KernelSocketPayloadEvent,
-    KernelStdioPayloadEvent, KernelTlsCaptureRequestEvent, KernelTlsCompletionEvent,
-    KernelTlsDiagnosticEvent, KernelTlsDirectCaptureEvent,
+    KernelObservationCommon, KernelSocketFdReleasePayload, KernelSocketPayloadCompletionEvent,
+    KernelSocketPayloadEvent, KernelStdioPayloadEvent, KernelTlsCaptureRequestEvent,
+    KernelTlsCompletionEvent, KernelTlsDiagnosticEvent, KernelTlsDirectCaptureEvent,
 };
 use crate::maps::BindingStateMap;
 
@@ -205,24 +205,20 @@ pub fn decode_socket_payload(
 }
 
 pub fn decode_socket_fd_release(
-    event: KernelObservationEvent,
+    common: &KernelObservationCommon,
+    event: &KernelSocketFdReleasePayload,
     bindings: &BindingStateMap,
 ) -> Result<RawPayloadStreamClose, DecodeError> {
-    let identity = resolve_payload_identity(
-        event.trace_id,
-        event.pid,
-        event.host_pid,
-        event.pid_generation,
-        bindings,
-    )?;
+    let identity = resolve_typed_event_observation(common, bindings)
+        .map_err(|error| DecodeError::new("payload_identity", error))?;
     Ok(RawPayloadStreamClose {
-        trace_id: event.trace_id,
-        observed_at: super::clock::wall_from_ktime(event.observed_ktime_ns),
+        trace_id: common.trace_id,
+        observed_at: super::clock::wall_from_ktime(common.observed_ktime_ns),
         process: identity,
         source_boundary: PayloadSourceBoundary::Syscall,
         stream_key: PayloadStreamKey::new(format!(
             "socket:{}:{}:{}",
-            event.pid, event.fd, event.aux_generation
+            common.subject.observer_namespace_tgid, event.fd, event.fd_object_generation
         )),
     })
 }

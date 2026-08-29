@@ -11,7 +11,7 @@ use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use libbpf_rs::{MapCore, MapHandle, Object};
+use libbpf_rs::{MapCore, MapFlags, MapHandle, Object};
 use model_core::ids::TraceId;
 use model_core::process::InitialSuppressedFd;
 
@@ -37,7 +37,8 @@ compile_error!("a launch binding Adapter must be selected");
 compile_error!("exactly one launch binding Adapter must be selected");
 
 const PENDING_EXEC_SUPPRESSED_FD_MAX: usize = SUPPRESSED_FD_INDEX_SLOT_MAX as usize;
-const PENDING_EXEC_BINDING_HEADER_SIZE: usize = 24;
+const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
+const PENDING_EXEC_BINDING_HEADER_SIZE: usize = 32;
 const PENDING_EXEC_SUPPRESSED_FD_SIZE: usize = 8;
 const PENDING_EXEC_BINDING_VALUE_SIZE: usize = PENDING_EXEC_BINDING_HEADER_SIZE
     + PENDING_EXEC_SUPPRESSED_FD_MAX * PENDING_EXEC_SUPPRESSED_FD_SIZE;
@@ -48,23 +49,25 @@ pub(crate) struct ArmedLaunchBinding {
 
 pub(super) struct LaunchBindingTarget {
     pidfd: OwnedFd,
-    #[cfg(actrail_launch_binding_pid_generation_hash)]
-    host_pid: u32,
+    observer_tgid: u32,
     generation: u64,
 }
 
 impl LaunchBindingTarget {
-    pub(super) fn new(pidfd: OwnedFd, host_pid: u32, generation: u64) -> Result<Self, LoaderError> {
-        if host_pid == 0 || generation == 0 {
+    pub(super) fn new(
+        pidfd: OwnedFd,
+        observer_tgid: u32,
+        generation: u64,
+    ) -> Result<Self, LoaderError> {
+        if observer_tgid == 0 || generation == 0 {
             return Err(LoaderError::new(
                 "launch_binding_target",
-                "launch binding requires non-zero host PID and generation",
+                "launch binding requires non-zero observer TGID and generation",
             ));
         }
         Ok(Self {
             pidfd,
-            #[cfg(actrail_launch_binding_pid_generation_hash)]
-            host_pid,
+            observer_tgid,
             generation,
         })
     }
@@ -114,8 +117,9 @@ impl<'a> PendingLaunchBinding<'a> {
         let mut value = [0_u8; PENDING_EXEC_BINDING_VALUE_SIZE];
         value[0..8].copy_from_slice(&self.trace_id.get().to_ne_bytes());
         value[8..16].copy_from_slice(&target.generation.to_ne_bytes());
-        value[16..20].copy_from_slice(&suppressed_fd_count.to_ne_bytes());
-        value[20..24].copy_from_slice(&u32::from(counted).to_ne_bytes());
+        value[16..20].copy_from_slice(&target.observer_tgid.to_ne_bytes());
+        value[20..24].copy_from_slice(&suppressed_fd_count.to_ne_bytes());
+        value[24..28].copy_from_slice(&u32::from(counted).to_ne_bytes());
         for (index, suppressed_fd) in self.suppressed_fds.iter().enumerate() {
             let offset = PENDING_EXEC_BINDING_HEADER_SIZE + index * PENDING_EXEC_SUPPRESSED_FD_SIZE;
             value[offset..offset + 4].copy_from_slice(&suppressed_fd.fd.to_ne_bytes());
@@ -208,7 +212,6 @@ impl LaunchExecBindings {
                 self.count.decrement()?;
                 Ok(true)
             }
-            #[cfg(actrail_launch_binding_pid_generation_hash)]
             DeleteOutcome::DeletedWithCleanupFailure(error) => {
                 self.count.decrement()?;
                 Err(error)
@@ -221,7 +224,6 @@ impl LaunchExecBindings {
 pub(super) enum DeleteOutcome {
     Missing,
     Deleted,
-    #[cfg(actrail_launch_binding_pid_generation_hash)]
     DeletedWithCleanupFailure(LoaderError),
     Failed(LoaderError),
 }
@@ -229,7 +231,6 @@ pub(super) enum DeleteOutcome {
 fn transaction_error(primary: LoaderError, rollback: DeleteOutcome) -> LoaderError {
     match rollback {
         DeleteOutcome::Missing | DeleteOutcome::Deleted => primary,
-        #[cfg(actrail_launch_binding_pid_generation_hash)]
         DeleteOutcome::DeletedWithCleanupFailure(rollback_error) => LoaderError::new(
             "launch_binding_rollback",
             format!(
@@ -245,6 +246,46 @@ fn transaction_error(primary: LoaderError, rollback: DeleteOutcome) -> LoaderErr
             ),
         ),
     }
+}
+
+fn configure_generation_ticks(map: &MapHandle, stage: &'static str) -> Result<(), LoaderError> {
+    if map.key_size() as usize != std::mem::size_of::<u32>()
+        || map.value_size() as usize != std::mem::size_of::<u64>()
+        || map.max_entries() != 1
+    {
+        return Err(LoaderError::new(
+            stage,
+            format!(
+                "unexpected generation config ABI key_size={} value_size={} max_entries={}",
+                map.key_size(),
+                map.value_size(),
+                map.max_entries()
+            ),
+        ));
+    }
+    let clock_ticks = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+    let clock_ticks = u64::try_from(clock_ticks).map_err(|_| {
+        LoaderError::new(
+            stage,
+            format!("invalid sysconf(_SC_CLK_TCK) value {clock_ticks}"),
+        )
+    })?;
+    if clock_ticks == 0 || NANOSECONDS_PER_SECOND % clock_ticks != 0 {
+        return Err(LoaderError::new(
+            stage,
+            format!(
+                "kernel clock tick rate {clock_ticks} cannot represent exact launch generations"
+            ),
+        ));
+    }
+    let tick_ns = NANOSECONDS_PER_SECOND / clock_ticks;
+    map.update(&0_u32.to_ne_bytes(), &tick_ns.to_ne_bytes(), MapFlags::ANY)
+        .map_err(|error| {
+            LoaderError::new(
+                stage,
+                format!("configure generation tick duration: {error}"),
+            )
+        })
 }
 
 struct PendingExecCount {

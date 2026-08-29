@@ -11,7 +11,7 @@
 | 组件组 | 当前职责 |
 |---|---|
 | Control 与 Attach | 处理控制协议，创建或绑定 trace，裁决 launch 权限并挂载采集器 |
-| Collectors 与 Ingest | 接收扩展伯克利包过滤器（eBPF）、seccomp、fanotify、TLS-sync 等来源，规范化事件并解析进程身份与 trace membership |
+| Collectors 与 Ingest | 接收扩展伯克利包过滤器（eBPF）、seccomp、fanotify、TLS-sync 等来源，按[进程身份统一时序](process-identity-runtime.md)规范化 PID 坐标并解析 trace membership |
 | Protocol 与 LLM | 在明文 payload 上恢复 HTTP、服务器发送事件（Server-Sent Events，SSE）和模型服务协议语义，生成大语言模型（LLM）action、content、lineage 和诊断 |
 | Semantic Runtime | 将 domain event 和 payload 投影为 agent、command、file、HTTP、MCP、tool action 与 link |
 | Governance | 对文件访问、命令执行和网络连接执行已配置的控制策略 |
@@ -22,7 +22,7 @@
 
 ## 事件路径
 
-内核 collector、TLS-sync service 和控制服务先把不同来源的数据转换成 daemon 内部 contract。Ingest 路径补齐稳定进程身份和 trace membership，再将 `DomainEvent` 交给实时语义运行时。Payload 路径保留来源边界和传输身份；应用协议与 LLM pipeline 只消费符合条件的明文段。
+内核 collector、TLS-sync service 和控制服务先把不同来源的数据转换成 daemon 内部 contract。Ingest 路径按[进程身份运行时](process-identity-runtime.md)将 raw kernel TGID、daemon 可见 PID 与稳定 `ProcessIdentity` 收敛，再补齐 trace membership 并将 `DomainEvent` 交给实时语义运行时。Payload 路径保留来源边界和传输身份；应用协议与 LLM pipeline 只消费符合条件的明文段。
 
 实时语义运行时根据事件种类调用对应的有状态 projector。LLM pipeline 的输出还会进入 [Live Tool Projector](live-tool-projector.md)，形成工具与 Agent 调用关系。所有 action、link、content write、lineage 和诊断在服务边界合并后进入 recording runtime。
 

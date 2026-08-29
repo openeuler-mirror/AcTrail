@@ -18,6 +18,10 @@ class ContainerAgentXiaooCase(TestCase):
         self._config = config
         self._script = (
             config.repo
+            / "tests/v2/regression/container_agent_xiaoo/v2/nested_observer_scenario.py"
+        )
+        self._inner_script = (
+            config.repo
             / "tests/v2/regression/container_agent_xiaoo/v2/xiaoo_scenario.py"
         )
 
@@ -44,6 +48,7 @@ class ContainerAgentXiaooCase(TestCase):
             self._config.image,
             "--xiaoo-bin",
             str(self._config.xiaoo_bin.resolve()),
+            "--keep-runtime-on-failure",
         ]
         if self._config.rebuild_image:
             command.append("--rebuild-image")
@@ -76,7 +81,8 @@ class ContainerAgentXiaooCase(TestCase):
         if process.returncode != 0:
             return TestResult(
                 TestStatus.FAILED,
-                f"real xiaoO container E2E exited with status {process.returncode}",
+                "real xiaoO container E2E exited with status "
+                f"{process.returncode}:\n{self._failure_report(stderr)}",
             )
         test_context.report_progress(
             "trace_validation",
@@ -94,15 +100,32 @@ class ContainerAgentXiaooCase(TestCase):
             self._config.bin_dir / "actrailviewer",
             self._config.bin_dir / "libactrail_tls_payload_probe_sync.so",
             self._script,
+            self._inner_script,
         )
         missing = [str(path) for path in required if not path.is_file()]
         if missing:
             return "required artifact(s) missing: " + ", ".join(missing)
         return None
 
+    def _failure_report(self, stderr: str) -> str:
+        lines = stderr.rstrip().splitlines()
+        diagnostic_lines = lines[-80:]
+        diagnostic = "\n".join(diagnostic_lines)
+        if len(diagnostic) > 16_000:
+            diagnostic = diagnostic[-16_000:]
+        return diagnostic or "scenario produced no stderr diagnostics"
+
     def _external_prerequisite_error(self) -> str | None:
-        if shutil.which("docker") is None:
-            return "external container prerequisite is unavailable: docker"
+        missing_commands = [
+            command
+            for command in ("docker", "dockerd", "unshare", "bpftool", "ip")
+            if shutil.which(command) is None
+        ]
+        if missing_commands:
+            return (
+                "external nested-container prerequisite is unavailable: "
+                + ", ".join(missing_commands)
+            )
         if self._config.xiaoo_bin is None:
             return (
                 "real xiaoO executable is unavailable; set "

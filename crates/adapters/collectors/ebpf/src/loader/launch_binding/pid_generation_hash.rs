@@ -5,11 +5,11 @@ use model_core::ids::TraceId;
 use process_identity::ProcessIdentityReader;
 
 use super::{
-    DeleteOutcome, LaunchBindingTarget, LoaderError, PENDING_EXEC_BINDING_VALUE_SIZE, map_handle,
+    DeleteOutcome, LaunchBindingTarget, LoaderError, PENDING_EXEC_BINDING_VALUE_SIZE,
+    configure_generation_ticks, map_handle,
 };
 
 const BINDING_KEY_SIZE: usize = 24;
-const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
 
 pub(super) struct Adapter {
     bindings: MapHandle,
@@ -52,7 +52,7 @@ impl Adapter {
         }
         let generation_tick_ns =
             map_handle(object, "pending_exec_generation_tick_ns", "launch_binding")?;
-        Self::configure_generation_ticks(&generation_tick_ns)?;
+        configure_generation_ticks(&generation_tick_ns, "launch_binding")?;
         Ok(Self {
             bindings,
             pid_index,
@@ -69,7 +69,7 @@ impl Adapter {
         self.validate_target(target)?;
         let reservation = Reservation {
             binding_key: Self::binding_key(target, trace_id),
-            pid_key: target.host_pid.to_ne_bytes(),
+            pid_key: target.observer_tgid.to_ne_bytes(),
         };
         self.bindings
             .update(&reservation.binding_key, value, MapFlags::NO_EXIST)
@@ -137,13 +137,13 @@ impl Adapter {
 
     fn validate_target(&self, target: &LaunchBindingTarget) -> Result<(), LoaderError> {
         let pidfd = target.pidfd.as_fd();
-        let observed_pid = Self::pidfd_host_pid(pidfd)?;
-        if observed_pid != target.host_pid {
+        let observed_pid = Self::pidfd_observer_pid(pidfd)?;
+        if observed_pid != target.observer_tgid {
             return Err(LoaderError::new(
                 "launch_binding_target",
                 format!(
-                    "pidfd identifies host PID {observed_pid}, not requested host PID {}",
-                    target.host_pid
+                    "pidfd identifies observer PID {observed_pid}, not requested observer TGID {}",
+                    target.observer_tgid
                 ),
             ));
         }
@@ -166,13 +166,13 @@ impl Adapter {
             ));
         }
         let observation = crate::procfs::ProcfsIdentityReader
-            .read_identity(target.host_pid)
+            .read_identity(target.observer_tgid)
             .map_err(|error| {
                 LoaderError::new(
                     "launch_binding_target",
                     format!(
                         "read generation for pidfd target {}: {error:?}",
-                        target.host_pid
+                        target.observer_tgid
                     ),
                 )
             })?;
@@ -183,7 +183,10 @@ impl Adapter {
             .ok_or_else(|| {
                 LoaderError::new(
                     "launch_binding_target",
-                    format!("pidfd target {} has no host generation", target.host_pid),
+                    format!(
+                        "pidfd target {} has no observer generation",
+                        target.observer_tgid
+                    ),
                 )
             })?;
         if observed_generation != target.generation {
@@ -191,14 +194,14 @@ impl Adapter {
                 "launch_binding_target",
                 format!(
                     "pidfd target {} has procfs generation {observed_generation}, not requested generation {}",
-                    target.host_pid, target.generation
+                    target.observer_tgid, target.generation
                 ),
             ));
         }
         Ok(())
     }
 
-    fn pidfd_host_pid(pidfd: BorrowedFd<'_>) -> Result<u32, LoaderError> {
+    fn pidfd_observer_pid(pidfd: BorrowedFd<'_>) -> Result<u32, LoaderError> {
         let path = format!("/proc/self/fdinfo/{}", pidfd.as_raw_fd());
         let content = std::fs::read_to_string(&path).map_err(|error| {
             LoaderError::new("launch_binding_target", format!("read {path}: {error}"))
@@ -223,49 +226,9 @@ impl Adapter {
 
     fn binding_key(target: &LaunchBindingTarget, trace_id: TraceId) -> [u8; BINDING_KEY_SIZE] {
         let mut key = [0_u8; BINDING_KEY_SIZE];
-        key[0..4].copy_from_slice(&target.host_pid.to_ne_bytes());
+        key[0..4].copy_from_slice(&target.observer_tgid.to_ne_bytes());
         key[8..16].copy_from_slice(&target.generation.to_ne_bytes());
         key[16..24].copy_from_slice(&trace_id.get().to_ne_bytes());
         key
-    }
-
-    fn configure_generation_ticks(map: &MapHandle) -> Result<(), LoaderError> {
-        if map.key_size() as usize != std::mem::size_of::<u32>()
-            || map.value_size() as usize != std::mem::size_of::<u64>()
-            || map.max_entries() != 1
-        {
-            return Err(LoaderError::new(
-                "launch_binding",
-                format!(
-                    "unexpected generation config ABI key_size={} value_size={} max_entries={}",
-                    map.key_size(),
-                    map.value_size(),
-                    map.max_entries()
-                ),
-            ));
-        }
-        let clock_ticks = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
-        let clock_ticks = u64::try_from(clock_ticks).map_err(|_| {
-            LoaderError::new(
-                "launch_binding",
-                format!("invalid sysconf(_SC_CLK_TCK) value {clock_ticks}"),
-            )
-        })?;
-        if clock_ticks == 0 || NANOSECONDS_PER_SECOND % clock_ticks != 0 {
-            return Err(LoaderError::new(
-                "launch_binding",
-                format!(
-                    "kernel clock tick rate {clock_ticks} cannot be represented by the exact launch generation conversion"
-                ),
-            ));
-        }
-        let tick_ns = NANOSECONDS_PER_SECOND / clock_ticks;
-        map.update(&0_u32.to_ne_bytes(), &tick_ns.to_ne_bytes(), MapFlags::ANY)
-            .map_err(|error| {
-                LoaderError::new(
-                    "launch_binding",
-                    format!("configure generation tick duration: {error}"),
-                )
-            })
     }
 }

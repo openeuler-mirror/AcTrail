@@ -8,6 +8,7 @@ import json
 import os
 import re
 import select
+import signal
 import shutil
 import sqlite3
 import subprocess
@@ -41,6 +42,12 @@ RUNTIME_TOKEN = "@RUNTIME_DIR@"
 LOCAL_API_KEY_ENV = "ACTRAIL_MULTI_CONTAINER_XIAOO_API_KEY"
 LOCAL_API_KEY = "actrail-multi-container-local-key"
 PROFILE_NAME = "multi-container-xiaoo"
+IDENTITY_HANDSHAKE_TRACE_NAME = "existing-process-identity-handshake"
+NONLEADER_EXEC_TRACE_NAME = "nonleader-thread-exec"
+BUSINESS_TRACE_NAMES = (
+    "container-a-release-summary",
+    "container-b-security-review",
+)
 
 
 @dataclass(frozen=True)
@@ -86,6 +93,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--drain-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--rebuild-image", action="store_true")
     parser.add_argument("--keep-runtime", action="store_true")
+    parser.add_argument("--keep-runtime-on-failure", action="store_true")
     return parser.parse_args()
 
 
@@ -105,6 +113,7 @@ def main() -> int:
     image_dockerfile = require_file(case_dir / "Dockerfile")
     docker_seccomp = resolve_docker_seccomp(args.seccomp_profile, repo)
     provider_script = require_file(repo / "tests/support/llm-http-proxy/provider_proxy.py")
+    nonleader_exec_script = require_file(case_dir / "nonleader_exec.py")
     require_command("docker")
 
     runtime = Path(tempfile.mkdtemp(prefix="actrail-multi-container-xiaoo.", dir="/tmp"))
@@ -167,10 +176,12 @@ def main() -> int:
     daemon: subprocess.Popen[str] | None = None
     test_image: ContainerImage | None = None
     succeeded = False
+    failure_stage = "runtime_preparation"
 
     try:
         prepare_runtime(runtime, operator_template, config, actraild)
         prepare_workload_files(workloads)
+        failure_stage = "container_image_preparation"
         test_image = prepare_agent_image(
             runtime,
             args.image,
@@ -178,6 +189,7 @@ def main() -> int:
             args.rebuild_image,
         )
         provider_urls = []
+        failure_stage = "provider_startup"
         for workload in workloads:
             provider, listen_url = start_provider(
                 provider_script,
@@ -190,6 +202,7 @@ def main() -> int:
         for workload, provider_url in zip(workloads, provider_urls):
             write_xiaoo_config(workload.config_path, provider_url)
 
+        failure_stage = "daemon_startup"
         daemon = start_daemon(actraild, config, daemon_log)
         wait_for_daemon(
             actrailctl,
@@ -198,7 +211,23 @@ def main() -> int:
             daemon_log,
             args.ready_timeout_seconds,
         )
+        failure_stage = "existing_process_identity_handshake"
+        verify_existing_process_identity_handshake(
+            actrailctl,
+            config,
+            args.ready_timeout_seconds,
+        )
+        failure_stage = "nonleader_exec_validation"
+        verify_nonleader_exec_lifecycle(
+            actrailctl,
+            config,
+            database,
+            nonleader_exec_script,
+            runtime / "nonleader-exec.marker",
+            args.ready_timeout_seconds,
+        )
 
+        failure_stage = "container_startup"
         for workload in workloads:
             container = TestContainer(
                 ContainerRequest(
@@ -228,6 +257,7 @@ def main() -> int:
         require_distinct_pid_namespaces(pid_namespaces)
         container_ids = {container.container_id for container in containers}
 
+        failure_stage = "workload_launch"
         launches.append(
             start_workload(
                 containers[0],
@@ -252,6 +282,7 @@ def main() -> int:
             )
         )
 
+        failure_stage = "active_trace_validation"
         trace_rows = wait_for_active_traces(
             database,
             len(workloads),
@@ -266,12 +297,14 @@ def main() -> int:
             args.container_start_stagger_seconds,
         )
 
+        failure_stage = "workload_completion"
         outputs = wait_for_launches(launches, workloads, args.launch_timeout_seconds)
         for workload in workloads:
             (runtime / f"container-{workload.suffix}.stdout").write_text(
                 outputs[workload.suffix],
                 encoding="utf-8",
             )
+        failure_stage = "trace_evidence_validation"
         wait_for_completed_traces(database, len(workloads), args.drain_timeout_seconds)
         trace_by_workload = wait_for_trace_evidence(
             database,
@@ -280,6 +313,7 @@ def main() -> int:
             workloads,
             args.drain_timeout_seconds,
         )
+        failure_stage = "output_and_isolation_validation"
         verify_outputs(outputs, workloads)
         verify_file_outputs(workloads)
         verify_no_cross_trace_llm_actions(
@@ -313,15 +347,20 @@ def main() -> int:
         if daemon is not None:
             terminate_process(daemon)
             if not succeeded:
+                daemon_lines = daemon_log.read_text(
+                    encoding="utf-8", errors="replace"
+                ).splitlines()
                 print(
-                    "daemon_log:\n" + daemon_log.read_text(encoding="utf-8"),
+                    "daemon_summary:\n" + "\n".join(daemon_lines[-80:]),
                     file=sys.stderr,
                 )
         for provider in provider_processes:
             terminate_process(provider)
             if not succeeded:
                 print_process_stderr("provider", provider)
-        if args.keep_runtime:
+        if not succeeded:
+            print(f"failure_stage={failure_stage}", file=sys.stderr)
+        if args.keep_runtime or (args.keep_runtime_on_failure and not succeeded):
             print(
                 f"multi_container_runtime_preserved={runtime} succeeded={succeeded}",
                 file=sys.stderr,
@@ -542,6 +581,197 @@ def start_workload(
     )
 
 
+def verify_existing_process_identity_handshake(
+    actrailctl: Path,
+    config: Path,
+    timeout: float,
+) -> None:
+    root = subprocess.Popen(
+        ["/bin/sh", "-c", "sleep 30 & wait"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        wait_for_process_child(root, timeout)
+        run_checked(
+            [
+                str(actrailctl),
+                "--config",
+                str(config),
+                "track-add",
+                "--pid",
+                str(root.pid),
+                "--name",
+                IDENTITY_HANDSHAKE_TRACE_NAME,
+            ]
+        )
+        if os.environ.get("ACTRAIL_REQUIRE_NESTED_PID_IDENTITY") == "1":
+            require_cached_identity_pid_separation(root.pid)
+        run_checked(
+            [
+                str(actrailctl),
+                "--config",
+                str(config),
+                "track-remove",
+                "--name",
+                IDENTITY_HANDSHAKE_TRACE_NAME,
+            ]
+        )
+    finally:
+        try:
+            os.killpg(root.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            root.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(root.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            root.communicate()
+
+
+def wait_for_process_child(root: subprocess.Popen[str], timeout: float) -> None:
+    children_path = Path(f"/proc/{root.pid}/task/{root.pid}/children")
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if root.poll() is not None:
+            _, stderr = root.communicate()
+            raise RuntimeError(
+                "existing-process identity root exited before attach: "
+                f"exit={root.returncode} stderr={stderr}"
+            )
+        try:
+            if children_path.read_text(encoding="utf-8").strip():
+                return
+        except FileNotFoundError:
+            pass
+        time.sleep(0.02)
+    raise RuntimeError("existing-process identity root did not create its snapshot child")
+
+
+def verify_nonleader_exec_lifecycle(
+    actrailctl: Path,
+    config: Path,
+    database: Path,
+    fixture: Path,
+    marker: Path,
+    timeout: float,
+) -> None:
+    completed = subprocess.run(
+        [
+            str(actrailctl),
+            "--config",
+            str(config),
+            "launch",
+            "--name",
+            NONLEADER_EXEC_TRACE_NAME,
+            "--host-ebpf",
+            "required",
+            "--seccomp-notify",
+            "disabled",
+            "--",
+            sys.executable,
+            str(fixture),
+            str(marker),
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            "non-leader exec fixture failed: "
+            f"exit={completed.returncode} stdout={completed.stdout} stderr={completed.stderr}"
+        )
+    if marker.read_text(encoding="utf-8").strip() != "NONLEADER_EXEC_COMPLETE":
+        raise RuntimeError("non-leader exec fixture did not write its completion marker")
+
+    deadline = time.monotonic() + timeout
+    last_row: tuple[int, int] | None = None
+    while time.monotonic() < deadline:
+        with sqlite3.connect(database) as connection:
+            last_row = connection.execute(
+                """
+                SELECT traces.trace_id, COUNT(events.event_id)
+                FROM traces
+                LEFT JOIN events ON events.trace_id = traces.trace_id
+                  AND events.collector = 'ebpf'
+                  AND events.kind = 'process'
+                WHERE traces.display_name = ?
+                GROUP BY traces.trace_id
+                """,
+                (NONLEADER_EXEC_TRACE_NAME,),
+            ).fetchone()
+        if last_row is not None and int(last_row[1]) >= 2:
+            return
+        time.sleep(0.05)
+    raise RuntimeError(
+        "non-leader exec did not preserve process lifecycle observation: "
+        f"last_row={last_row}"
+    )
+
+
+def require_cached_identity_pid_separation(observer_tgid: int) -> None:
+    maps = json.loads(run_checked(["bpftool", "-j", "map", "show"]))
+    candidates = [
+        item
+        for item in maps
+        if item.get("name") == "process_identit"
+        and item.get("bytes_key") == 4
+        and item.get("bytes_value") == 16
+    ]
+    for candidate in candidates:
+        entries = json.loads(
+            run_checked(
+                ["bpftool", "-j", "map", "dump", "id", str(candidate["id"])]
+            )
+        )
+        for entry in entries:
+            key = decode_bpftool_bytes(entry.get("key"))
+            value = decode_bpftool_bytes(entry.get("value"))
+            if len(key) != 4 or len(value) != 16:
+                continue
+            cached_observer_tgid = int.from_bytes(value[8:12], sys.byteorder)
+            if cached_observer_tgid != observer_tgid:
+                continue
+            kernel_tgid = int.from_bytes(key, sys.byteorder)
+            if kernel_tgid == observer_tgid:
+                raise RuntimeError(
+                    "nested observer PID unexpectedly equals raw kernel TGID: "
+                    f"pid={observer_tgid}"
+                )
+            print(
+                "nested_process_identity="
+                f"observer_tgid:{observer_tgid},kernel_tgid:{kernel_tgid}",
+                file=sys.stderr,
+            )
+            return
+    raise RuntimeError(
+        "nested observer identity was not present in the process identity cache: "
+        f"observer_tgid={observer_tgid} maps={[item.get('id') for item in candidates]}"
+    )
+
+
+def decode_bpftool_bytes(value: object) -> bytes:
+    if not isinstance(value, list):
+        return b""
+    decoded = bytearray()
+    for item in value:
+        if isinstance(item, int):
+            decoded.append(item)
+        elif isinstance(item, str):
+            decoded.append(int(item, 16))
+        else:
+            return b""
+    return bytes(decoded)
+
+
 def wait_for_active_traces(
     database: Path,
     expected: int,
@@ -566,9 +796,10 @@ def wait_for_active_traces(
                     SELECT trace_id, lifecycle_state, root_container_id
                     FROM traces
                     WHERE profile_name LIKE ?
+                      AND display_name IN (?, ?)
                     ORDER BY trace_id
                     """,
-                    (f"{PROFILE_NAME}%",),
+                    (f"{PROFILE_NAME}%", *BUSINESS_TRACE_NAMES),
                 ).fetchall()
             if len(last_rows) == expected and all(row[1] == "active" for row in last_rows):
                 return last_rows
@@ -612,9 +843,10 @@ def require_trace_display_names(database: Path, workloads: list[Workload]) -> No
             SELECT display_name
             FROM traces
             WHERE profile_name LIKE ?
+              AND display_name IN (?, ?)
             ORDER BY trace_id
             """,
-            (f"{PROFILE_NAME}%",),
+            (f"{PROFILE_NAME}%", *BUSINESS_TRACE_NAMES),
         ).fetchall()
     actual = {str(row[0]) for row in rows}
     expected = {workload.trace_name for workload in workloads}
@@ -631,9 +863,10 @@ def require_trace_start_stagger(database: Path, expected_seconds: float) -> None
             SELECT trace_id, created_at
             FROM traces
             WHERE profile_name LIKE ?
+              AND display_name IN (?, ?)
             ORDER BY created_at
             """,
-            (f"{PROFILE_NAME}%",),
+            (f"{PROFILE_NAME}%", *BUSINESS_TRACE_NAMES),
         ).fetchall()
     if len(rows) != 2:
         raise RuntimeError(f"cannot verify trace start stagger: {rows}")
@@ -678,9 +911,10 @@ def wait_for_completed_traces(database: Path, expected: int, timeout: float) -> 
                 SELECT trace_id, lifecycle_state
                 FROM traces
                 WHERE profile_name LIKE ?
+                  AND display_name IN (?, ?)
                 ORDER BY trace_id
                 """,
-                (f"{PROFILE_NAME}%",),
+                (f"{PROFILE_NAME}%", *BUSINESS_TRACE_NAMES),
             ).fetchall()
         if len(last_rows) == expected and all(
             state in ("completed", "exited") for _, state in last_rows
@@ -734,9 +968,10 @@ def identify_traces_by_response_marker(
                 SELECT trace_id
                 FROM traces
                 WHERE profile_name LIKE ?
+                  AND display_name IN (?, ?)
                 ORDER BY trace_id
                 """,
-                (f"{PROFILE_NAME}%",),
+                (f"{PROFILE_NAME}%", *BUSINESS_TRACE_NAMES),
             ).fetchall()
         ]
     actions_by_trace = {

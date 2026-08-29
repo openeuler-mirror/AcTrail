@@ -1,6 +1,6 @@
 //! Collector contract implementation for the eBPF adapter.
 
-use super::collector_trace_binding::{cleanup_suppressed_fds_for_trace, kernel_start_time};
+use super::collector_trace_binding::cleanup_suppressed_fds_for_trace;
 use super::*;
 
 impl CollectorInstance for EbpfCollector {
@@ -42,8 +42,28 @@ impl CollectorInstance for EbpfCollector {
         }
 
         self.ensure_runtime_for_requests(&request.requested_capabilities)?;
-        let root_start_time = kernel_start_time(&request.root_observation)?;
-        let root_map_pid = self.map_pid_for_observation(&request.root_observation)?;
+        let root_host =
+            request.root_observation.host.as_ref().ok_or_else(|| {
+                CollectorError::new("observer_tgid", "observer identity is missing")
+            })?;
+        let root_observer_tgid = root_host.pid;
+        let root_resolution = self
+            .runtime_mut()?
+            .resolve_process_identities(&[ProcessIdentityResolutionRequest {
+                observer_tgid: root_observer_tgid,
+                start_time_ticks: root_host.start_time_ticks,
+            }])
+            .map_err(loader_error)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                CollectorError::new(
+                    "process_identity_resolution",
+                    "kernel task iterator returned no root identity",
+                )
+            })?;
+        let root_kernel_tgid = root_resolution.kernel_tgid;
+        let root_start_time = root_resolution.start_boottime_ns;
         let root_pid_namespace = request
             .root_observation
             .namespace
@@ -55,19 +75,24 @@ impl CollectorInstance for EbpfCollector {
         let attached_capabilities = self.runtime_ref()?.attached_capabilities().clone();
         self.register_trace_pid_namespace(request.trace_id, &request.root_observation)?;
         let runtime = self.runtime_mut()?;
-        if let Err(error) = runtime.track_pid(root_map_pid, root_start_time, request.trace_id) {
+        if let Err(error) = runtime.track_pid(
+            root_kernel_tgid,
+            root_start_time,
+            root_observer_tgid,
+            request.trace_id,
+        ) {
             let _ = runtime.unregister_trace_pid_namespace(request.trace_id);
             return Err(loader_error(error));
         }
         if let Err(error) = self.register_initial_suppressed_fds(
             request.trace_id,
             root_start_time,
-            root_map_pid,
+            root_kernel_tgid,
             &request.initial_suppressed_fds,
         ) {
             let _ = self
                 .runtime_mut()
-                .and_then(|runtime| runtime.untrack_pid(root_map_pid).map_err(loader_error));
+                .and_then(|runtime| runtime.untrack_pid(root_kernel_tgid).map_err(loader_error));
             let _ = self.runtime_mut().and_then(|runtime| {
                 runtime
                     .unregister_trace_pid_namespace(request.trace_id)
@@ -86,10 +111,10 @@ impl CollectorInstance for EbpfCollector {
         );
         self.bindings
             .set_trace_pid_namespace(request.trace_id, root_pid_namespace);
-        self.bindings.track_with_map_pid(
+        self.bindings.track_with_kernel_tgid(
             request.trace_id,
             request.root_observation.clone(),
-            root_map_pid,
+            root_kernel_tgid,
             root_start_time,
         );
         self.file_tracker.seed_process(
@@ -118,7 +143,9 @@ impl CollectorInstance for EbpfCollector {
             runtime.untrack_fork_trace(trace_id).map_err(loader_error)?;
             cleanup_suppressed_fds_for_trace(runtime, &mut self.suppressed_fds, trace_id)?;
             for tracked in self.bindings.remove_trace(trace_id) {
-                runtime.untrack_pid(tracked.map_pid).map_err(loader_error)?;
+                runtime
+                    .untrack_pid(tracked.kernel_tgid)
+                    .map_err(loader_error)?;
             }
             runtime
                 .unregister_trace_pid_namespace(trace_id)

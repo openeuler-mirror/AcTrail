@@ -11,14 +11,62 @@ impl EbpfRuntime {
         static_link_teardown: StaticLinkTeardown,
     ) -> Result<Self, LoaderError> {
         let tracked_traces = map_handle(&object, "tracked_traces", "tracked_map")?;
-        let process_start_times =
-            map_handle(&object, "process_start_times", "process_start_time_map")?;
+        let process_identities = map_handle(&object, "process_identities", "process_identity_map")?;
+        let process_identity_resolutions = map_handle(
+            &object,
+            "process_identity_resolutions",
+            "process_identity_resolution_map",
+        )?;
+        runtime_process_identity::validate_process_identity_resolution_map(
+            &process_identity_resolutions,
+        )?;
+        runtime_process_identity::configure_process_identity_resolution_ticks(&object)?;
+        let trace_namespace_thread_identities = map_handle(
+            &object,
+            "trace_namespace_thread_identities",
+            "trace_namespace_thread_identities",
+        )?;
+        if trace_namespace_thread_identities.value_size() as usize
+            != TRACE_NAMESPACE_THREAD_IDENTITY_VALUE_SIZE
+        {
+            return Err(LoaderError::new(
+                "trace_namespace_thread_identities",
+                format!(
+                    "unexpected thread identity value size {}",
+                    trace_namespace_thread_identities.value_size()
+                ),
+            ));
+        }
+        if process_identities.value_size() as usize != PROCESS_IDENTITY_VALUE_SIZE {
+            return Err(LoaderError::new(
+                "process_identity_map",
+                format!(
+                    "unexpected process identity value size {}",
+                    process_identities.value_size()
+                ),
+            ));
+        }
         let launch_bindings =
             LaunchExecBindings::from_object(&object, config.suppressed_fd_index_slots_per_process)?;
         let fork_trace_bindings =
             map_handle(&object, "fork_trace_bindings", "fork_trace_bindings")?;
+        let observer_fork_trace_bindings = map_handle(
+            &object,
+            "observer_fork_trace_bindings",
+            "observer_fork_trace_bindings",
+        )?;
         let trace_pid_namespaces =
             map_handle(&object, "trace_pid_namespaces", "trace_pid_namespaces_map")?;
+        let observer_pid_namespace =
+            map_handle(&object, "observer_pid_namespace", "observer_pid_namespace")?;
+        let observer_pid_diagnostics = map_handle(
+            &object,
+            "observer_pid_diagnostics",
+            "observer_pid_diagnostics",
+        )?;
+        let observer_pid_diagnostics_baseline =
+            read_observer_pid_diagnostics(&observer_pid_diagnostics)?;
+        write_observer_pid_namespace(&observer_pid_namespace, read_observer_pid_namespace()?)?;
         let suppressed_fds = map_handle(&object, "suppressed_fds", "suppressed_fds")?;
         let suppressed_fd_index =
             map_handle(&object, "suppressed_fd_index", "suppressed_fd_index")?;
@@ -81,9 +129,14 @@ impl EbpfRuntime {
             attached_programs,
             attached_capabilities,
             tracked_traces,
-            process_start_times,
+            process_identities,
+            process_identity_resolutions,
+            trace_namespace_thread_identities,
+            observer_pid_diagnostics,
+            observer_pid_diagnostics_baseline,
             launch_bindings,
             fork_trace_bindings,
+            observer_fork_trace_bindings,
             trace_pid_namespaces,
             suppressed_fds,
             suppressed_fd_index,
@@ -120,6 +173,7 @@ impl EbpfRuntime {
             .filter(|program| program.autoload())
             .map(|program| program.name().to_string_lossy().into_owned())
             .filter(|program_name| !tls::is_payload_tls_program(program_name))
+            .filter(|program_name| program_name != "resolve_process_identities")
             .collect::<Vec<_>>();
         autoloaded_programs.sort_by_key(|program_name| attach_plan.attach_priority(program_name));
         let tracepoint_policy = tracepoint::TracepointAttachPolicy::new();
@@ -173,6 +227,8 @@ impl EbpfRuntime {
             tls::read_tls_payload_diagnostics(&self.payload_tls_diagnostics)?;
         self.event_transport_diagnostics_baseline =
             read_event_transport_diagnostics(&self.event_transport_diagnostics)?;
+        self.observer_pid_diagnostics_baseline =
+            read_observer_pid_diagnostics(&self.observer_pid_diagnostics)?;
         self.attached_programs.clear();
         self.attached_capabilities.clear();
         self.last_event_transport_loss_summary = None;
@@ -194,6 +250,8 @@ impl EbpfRuntime {
             tls::read_tls_payload_diagnostics(&self.payload_tls_diagnostics)?;
         let event_transport_diagnostics_baseline =
             read_event_transport_diagnostics(&self.event_transport_diagnostics)?;
+        let observer_pid_diagnostics_baseline =
+            read_observer_pid_diagnostics(&self.observer_pid_diagnostics)?;
         let (links, attached_programs) =
             Self::attach_loaded_programs(&mut self.object, &self.payload, &self.attach_plan)?;
         if attached_programs != self.planned_static_programs {
@@ -205,6 +263,7 @@ impl EbpfRuntime {
         self.links = links;
         self.tls_diagnostics_baseline = tls_diagnostics_baseline;
         self.event_transport_diagnostics_baseline = event_transport_diagnostics_baseline;
+        self.observer_pid_diagnostics_baseline = observer_pid_diagnostics_baseline;
         self.attached_programs = attached_programs;
         self.attached_capabilities = self.planned_capabilities.clone();
         self.attachment_state = RuntimeAttachmentState::Attached;
@@ -308,8 +367,11 @@ impl EbpfRuntime {
 
     fn capture_event_transport_loss(&mut self) -> Result<(), LoaderError> {
         let perf_lost = self.last_perf_lost;
-        let diagnostics = read_event_transport_diagnostics(&self.event_transport_diagnostics)?
-            .saturating_delta_since(self.event_transport_diagnostics_baseline);
+        let current_diagnostics =
+            read_event_transport_diagnostics(&self.event_transport_diagnostics)?;
+        let diagnostics =
+            current_diagnostics.saturating_delta_since(self.event_transport_diagnostics_baseline);
+        self.event_transport_diagnostics_baseline = current_diagnostics;
         if perf_lost != 0
             || diagnostics.reserve_fail != 0
             || diagnostics.output_fail != 0
@@ -329,7 +391,35 @@ impl EbpfRuntime {
                 diagnostics.socket_state_update_fail,
                 diagnostics.socket_sequence_update_fail,
             );
-            self.record_event_transport_loss_summary(summary);
+            self.record_event_transport_loss_delta(summary);
+        }
+        if diagnostics.process_identity_cache_miss != 0 {
+            self.record_event_transport_loss_delta(format!(
+                "kernel process identity cache missed {} typed events",
+                diagnostics.process_identity_cache_miss
+            ));
+        }
+        if diagnostics.process_identity_cleanup_fail != 0 {
+            self.record_event_transport_loss_delta(format!(
+                "kernel process identity cleanup failed {} times",
+                diagnostics.process_identity_cleanup_fail
+            ));
+        }
+        let current_observer_diagnostics =
+            read_observer_pid_diagnostics(&self.observer_pid_diagnostics)?;
+        let observer_diagnostics = current_observer_diagnostics
+            .saturating_delta_since(self.observer_pid_diagnostics_baseline);
+        self.observer_pid_diagnostics_baseline = current_observer_diagnostics;
+        if observer_diagnostics.level_mismatch != 0
+            || observer_diagnostics.resolution_fail != 0
+            || observer_diagnostics.index_publish_fail != 0
+        {
+            self.record_event_transport_loss_delta(format!(
+                "kernel observer PID identity failures: level_mismatch={}, resolution_fail={}, index_publish_fail={}",
+                observer_diagnostics.level_mismatch,
+                observer_diagnostics.resolution_fail,
+                observer_diagnostics.index_publish_fail,
+            ));
         }
         Ok(())
     }
@@ -341,35 +431,63 @@ impl EbpfRuntime {
         }
     }
 
+    fn record_event_transport_loss_delta(&mut self, summary: String) {
+        self.last_event_transport_loss_summary = None;
+        self.pending_event_transport_loss_summaries.push(summary);
+    }
+
     pub fn take_event_transport_loss_summaries(&mut self) -> Vec<String> {
         std::mem::take(&mut self.pending_event_transport_loss_summaries)
     }
 
     pub fn track_pid(
         &self,
-        map_pid: u32,
+        kernel_tgid: u32,
         kernel_start_time: u64,
+        observer_tgid: u32,
         trace_id: TraceId,
     ) -> Result<(), LoaderError> {
-        let key = map_pid.to_ne_bytes();
+        if kernel_tgid == 0 || kernel_start_time == 0 || observer_tgid == 0 {
+            return Err(LoaderError::new(
+                "track_pid_identity",
+                "process identity requires non-zero kernel TGID, observer TGID, and generation",
+            ));
+        }
+        let key = kernel_tgid.to_ne_bytes();
         let value = trace_id.get().to_ne_bytes();
         self.tracked_traces
             .update(&key, &value, MapFlags::ANY)
             .map_err(|error| LoaderError::new("track_pid", error.to_string()))?;
-        self.process_start_times
-            .update(&key, &kernel_start_time.to_ne_bytes(), MapFlags::ANY)
-            .map_err(|error| LoaderError::new("track_pid_start_time", error.to_string()))
+        let mut identity = [0_u8; PROCESS_IDENTITY_VALUE_SIZE];
+        identity[0..8].copy_from_slice(&kernel_start_time.to_ne_bytes());
+        identity[8..12].copy_from_slice(&observer_tgid.to_ne_bytes());
+        if let Err(error) = self
+            .process_identities
+            .update(&key, &identity, MapFlags::ANY)
+        {
+            let rollback = self.tracked_traces.delete(&key);
+            return Err(LoaderError::new(
+                "track_pid_identity",
+                match rollback {
+                    Ok(()) => error.to_string(),
+                    Err(rollback_error) => {
+                        format!("{error}; tracked trace rollback failed: {rollback_error}")
+                    }
+                },
+            ));
+        }
+        Ok(())
     }
 
     pub(crate) fn arm_launch_binding(
         &self,
         pidfd: OwnedFd,
-        host_pid: u32,
+        observer_tgid: u32,
         trace_id: TraceId,
         generation: u64,
         suppressed_fds: &[InitialSuppressedFd],
     ) -> Result<ArmedLaunchBinding, LoaderError> {
-        let target = LaunchBindingTarget::new(pidfd, host_pid, generation)?;
+        let target = LaunchBindingTarget::new(pidfd, observer_tgid, generation)?;
         let pending = PendingLaunchBinding::new(trace_id, suppressed_fds);
         self.launch_bindings.arm(target, &pending)
     }
@@ -404,6 +522,27 @@ impl EbpfRuntime {
             .is_none()
         {
             return Ok(());
+        }
+        for thread_key in self
+            .trace_namespace_thread_identities
+            .keys()
+            .collect::<Vec<_>>()
+        {
+            let cached_trace_id = self
+                .trace_namespace_thread_identities
+                .lookup(&thread_key, MapFlags::ANY)
+                .map_err(|error| {
+                    LoaderError::new("trace_namespace_thread_identities", error.to_string())
+                })?
+                .and_then(|value| value.get(..8).and_then(|raw| raw.try_into().ok()))
+                .map(u64::from_ne_bytes);
+            if cached_trace_id == Some(trace_id.get()) {
+                self.trace_namespace_thread_identities
+                    .delete(&thread_key)
+                    .map_err(|error| {
+                        LoaderError::new("trace_namespace_thread_identities", error.to_string())
+                    })?;
+            }
         }
         self.trace_pid_namespaces
             .delete(&key)
@@ -476,57 +615,6 @@ impl EbpfRuntime {
             .transpose()
     }
 
-    pub(crate) fn fork_trace_binding(
-        &self,
-        host_pid: u32,
-    ) -> Result<Option<ForkTraceBinding>, LoaderError> {
-        let key = host_pid.to_ne_bytes();
-        self.fork_trace_bindings
-            .lookup(&key, MapFlags::ANY)
-            .map_err(|error| LoaderError::new("fork_trace_binding", error.to_string()))?
-            .map(|value| parse_fork_trace_binding(&value))
-            .transpose()
-    }
-
-    pub(crate) fn fork_identity_publish_failures(&self) -> Result<u64, LoaderError> {
-        read_event_transport_counter(
-            &self.event_transport_diagnostics,
-            FORK_IDENTITY_PUBLISH_FAIL_COUNTER,
-        )
-    }
-
-    pub(crate) fn untrack_fork_host_pid(&self, host_pid: u32) -> Result<(), LoaderError> {
-        let key = host_pid.to_ne_bytes();
-        if self
-            .fork_trace_bindings
-            .lookup(&key, MapFlags::ANY)
-            .map_err(|error| LoaderError::new("fork_trace_binding", error.to_string()))?
-            .is_some()
-        {
-            self.fork_trace_bindings
-                .delete(&key)
-                .map_err(|error| LoaderError::new("fork_trace_binding", error.to_string()))?;
-        }
-        Ok(())
-    }
-
-    pub(crate) fn untrack_fork_trace(&self, trace_id: TraceId) -> Result<(), LoaderError> {
-        for key in self.fork_trace_bindings.keys().collect::<Vec<_>>() {
-            let binding = self
-                .fork_trace_bindings
-                .lookup(&key, MapFlags::ANY)
-                .map_err(|error| LoaderError::new("fork_trace_binding", error.to_string()))?
-                .map(|value| parse_fork_trace_binding(&value))
-                .transpose()?;
-            if binding.is_some_and(|binding| binding.trace_id == trace_id) {
-                self.fork_trace_bindings
-                    .delete(&key)
-                    .map_err(|error| LoaderError::new("fork_trace_binding", error.to_string()))?;
-            }
-        }
-        Ok(())
-    }
-
     pub fn lookup_socket_fd_state(
         &self,
         pid: u32,
@@ -565,16 +653,35 @@ impl EbpfRuntime {
     }
 
     pub fn untrack_pid(&self, pid: u32) -> Result<(), LoaderError> {
-        if self.tracked_trace_id(pid)?.is_none() {
+        let key = pid.to_ne_bytes();
+        let tracked = self.tracked_trace_id(pid)?.is_some();
+        let identity = self
+            .process_identities
+            .lookup(&key, MapFlags::ANY)
+            .map_err(|error| LoaderError::new("untrack_pid_identity", error.to_string()))?;
+        if identity.is_none() && !tracked {
             return Ok(());
         }
-        let key = pid.to_ne_bytes();
-        self.tracked_traces
-            .delete(&key)
-            .map_err(|error| LoaderError::new("untrack_pid", error.to_string()))?;
-        self.process_start_times
-            .delete(&key)
-            .map_err(|error| LoaderError::new("untrack_pid_start_time", error.to_string()))
+        if identity.is_some() {
+            self.process_identities
+                .delete(&key)
+                .map_err(|error| LoaderError::new("untrack_pid_identity", error.to_string()))?;
+        }
+        if tracked && let Err(error) = self.tracked_traces.delete(&key) {
+            let rollback = identity
+                .as_ref()
+                .map(|value| self.process_identities.update(&key, value, MapFlags::ANY));
+            return Err(LoaderError::new(
+                "untrack_pid",
+                match rollback {
+                    Some(Err(rollback_error)) => {
+                        format!("{error}; process identity rollback failed: {rollback_error}")
+                    }
+                    _ => error.to_string(),
+                },
+            ));
+        }
+        Ok(())
     }
 
     pub fn mark_file_bulk_read_fast_process(

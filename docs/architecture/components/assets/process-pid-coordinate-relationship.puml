@@ -1,0 +1,46 @@
+@startuml
+skinparam defaultFontName "WenQuanYi Micro Hei"
+skinparam componentStyle rectangle
+left to right direction
+
+title 同一个 agent task 的三层 PID 坐标
+
+rectangle "Linux kernel / init PID namespace\n\nraw kernel TGID\n1481919\n\ntask_struct / struct pid" as KernelAlias
+rectangle "actraild observer PID namespace\n\nobserver_pid\n1479599\n\ndaemon /proc 可见" as ObserverAlias
+rectangle "agent PID namespace\n\nagent_pid\n123\n\nagent 内部可见" as AgentAlias
+component "ProcessIdentity\nprocess-4099" as Identity
+
+KernelAlias -right-> ObserverAlias : 内核持有 task + observer_ns\n转换 current task
+ObserverAlias -right-> AgentAlias : 同 namespace 或\n可选 descendant alias
+
+KernelAlias -down-> Identity : map_pid alias\n+ start_boottime_ns
+ObserverAlias -down-> Identity : canonical observer alias\n+ start_time_ticks
+AgentAlias -down-> Identity : optional agent alias\n+ namespace generation
+
+note top of KernelAlias
+  仅用于 eBPF map
+  与内核 lineage
+end note
+
+note top of ObserverAlias
+  上层事件、seccomp、/proc
+  统一使用 observer_pid
+end note
+
+note top of AgentAlias
+  仅表达 agent 内部视图，
+  不作为 daemon 控制基准
+end note
+
+note bottom of Identity
+  三个数字可以不同，
+  但必须收敛为一个 ProcessIdentity
+end note
+
+legend bottom
+  |= namespace 部署关系 |= PID 数值关系 |
+  | actraild 与 agent 同 PID namespace | observer_pid = agent_pid |
+  | agent 位于 actraild 的 descendant namespace | raw kernel PID、observer_pid、agent_pid 可以全部不同 |
+  | agent 位于不可见的 sibling / ancestor namespace | 启动或 attach 必须拒绝，不能猜测转换 |
+endlegend
+@enduml

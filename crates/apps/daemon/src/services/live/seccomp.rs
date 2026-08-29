@@ -1,6 +1,5 @@
-//! Seccomp notification dispatch and deferred exec observation materialization.
+//! Seccomp notification dispatch for command and network control.
 
-use collector_instance::CollectorInstance;
 use control_contract::reply::{ControlError, LaunchTlsPlanStatus};
 use ebpf_collector::loader::DynamicTlsProbePlan;
 use trace_runtime::registry::TraceRuntime;
@@ -77,16 +76,7 @@ impl StorageAttachService {
                         process_id_block_size,
                     )
                     .ensure(trace_runtime, listener_trace_id, notification.pid)
-                    .and_then(|preparation| {
-                        if let Some(record) = preparation.inherited_record
-                            && collector.active_binding_trace_count() > 0
-                        {
-                            collector
-                                .seed_fork_bound_membership(listener_trace_id, record)
-                                .map_err(|error| ControlError::new(error.stage, error.message))?;
-                        }
-                        Ok(preparation.resolved)
-                    })
+                    .map(|preparation| preparation.resolved)
                     .map_err(|error| format!("{}: {}", error.code, error.message))
                 } else {
                     Err("command control identity was not requested".to_string())

@@ -7,7 +7,7 @@ use model_core::capability::Capability;
 
 use crate::loader::{AttachPlan, LoaderError};
 
-// Should be same with enum actrail_fd_category_flag in bpf/actrail_fd.h.
+// Should be same with enum actrail_fd_category_flag in bpf/fd/types.h.
 const FD_CATEGORY_FLAG_NET: u32 = 1 << 1;
 const FD_CATEGORY_FLAG_IPC_UNIX_SOCKET: u32 = 1 << 2;
 const FD_CATEGORY_FLAG_IPC_PIPE: u32 = 1 << 3;

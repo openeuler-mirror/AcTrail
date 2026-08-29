@@ -27,10 +27,11 @@ const PROCESS_CONTEXT_PROGRAMS: &[&str] = &[
 const TRACKING_REGISTRATION_PROGRAMS: &[&str] =
     &["handle_sched_process_exec", "handle_sched_process_exit"];
 
+const ON_DEMAND_PROGRAMS: &[&str] = &["resolve_process_identities"];
+
 const FD_PROCESS_LIFECYCLE_PROGRAMS: &[&str] = &[
     "handle_fd_sched_process_fork",
     "handle_fd_sched_process_exec",
-    "handle_fd_sched_process_exit",
 ];
 
 const NET_TRANSPORT_PROGRAMS: &[&str] = &[
@@ -39,7 +40,6 @@ const NET_TRANSPORT_PROGRAMS: &[&str] = &[
     "handle_sched_process_exit",
     "handle_fd_sched_process_fork",
     "handle_fd_sched_process_exec",
-    "handle_fd_sched_process_exit",
     // fd birth: socket() registers the fd in the unified fd table.
     "handle_sys_enter_socket",
     "handle_sys_exit_socket",
@@ -201,7 +201,6 @@ const IPC_PIPE_FIFO_PROGRAMS: &[&str] = &[
     "handle_sched_process_exit",
     "handle_fd_sched_process_fork",
     "handle_fd_sched_process_exec",
-    "handle_fd_sched_process_exit",
 ];
 
 const IPC_UNIX_SOCKET_PROGRAMS: &[&str] = &[
@@ -246,7 +245,6 @@ const IPC_UNIX_SOCKET_PROGRAMS: &[&str] = &[
     "handle_sched_process_exit",
     "handle_fd_sched_process_fork",
     "handle_fd_sched_process_exec",
-    "handle_fd_sched_process_exit",
 ];
 
 const SOCKET_PAYLOAD_PROGRAMS: &[&str] = &[
@@ -284,7 +282,7 @@ const SOCKET_PAYLOAD_PROGRAMS: &[&str] = &[
     "handle_sys_exit_fcntl",
     "handle_fd_sched_process_fork",
     "handle_fd_sched_process_exec",
-    "handle_fd_sched_process_exit",
+    "handle_sched_process_exit",
 ];
 
 const FS_MMAP_PROGRAMS: &[&str] = &["handle_sys_enter_mmap", "handle_sys_exit_mmap"];
@@ -337,6 +335,9 @@ impl AttachPlan {
         if tls::is_payload_tls_program(program_name) {
             return Ok(self.contains(&Capability::TlsPlaintextPayload)
                 || (self.dynamic_go_tls_enabled && tls::is_dynamic_tls_program(program_name)));
+        }
+        if ON_DEMAND_PROGRAMS.contains(&program_name) {
+            return Ok(true);
         }
         if capability_programs(program_name).is_none() {
             return Err(LoaderError::new(
