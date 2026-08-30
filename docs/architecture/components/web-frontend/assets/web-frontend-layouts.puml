@@ -13,7 +13,7 @@ rectangle "应用壳" as Shell {
 
 rectangle "Trace Workspace" as TraceLayout {
   rectangle "Trace 列表" as TraceRail
-  rectangle "指标条 + Trace 页签 + 当前页" as TraceMain
+  rectangle "指标条 + 一级分组 + 二级视图 + 当前页" as TraceMain
   rectangle "DetailPanel\n宽屏右栏 / 窄屏下栏" as TraceDetail
 }
 

@@ -364,7 +364,7 @@ function openTrace(row) {
   });
   emit('open-trace', {
     traceId: row.trace.id,
-    tabId: focus ? 'waterfall' : 'time_attribution',
+    tabId: 'waterfall',
     focus,
   });
 }

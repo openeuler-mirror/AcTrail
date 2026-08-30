@@ -26,21 +26,54 @@
         </div>
       </section>
 
-      <TraceTabs v-model="activeTab" :tabs="tabs" />
-
-      <div v-if="showLoadingPanel" class="loading-panel">
-        <span class="loading-spinner" aria-hidden="true"></span>
-        <p>Loading and analyzing captured data...</p>
-        <small>This may take a moment for larger traces.</small>
-      </div>
-      <component
-        v-else
-        :is="activeTabDefinition.component"
-        v-bind="activeTabProps"
-        @open-attribution="openTimeAttribution"
-        @open-waterfall="openWaterfall"
-        @load-full-waterfall="loadFullWaterfall"
+      <NavigationStrip
+        :model-value="activeGroupDefinition.id"
+        :items="primaryNavigationItems"
+        aria-label="Trace view groups"
+        controls-id="trace-group-panel"
+        id-prefix="trace-group"
+        variant="primary"
+        @update:model-value="selectTabGroup"
       />
+
+      <section
+        id="trace-group-panel"
+        class="trace-group-panel"
+        :class="{ 'trace-group-panel-single': secondaryNavigationItems.length === 1 }"
+        role="tabpanel"
+        :aria-labelledby="`trace-group-${activeGroupDefinition.id}-tab`"
+      >
+        <NavigationStrip
+          v-if="secondaryNavigationItems.length > 1"
+          :model-value="activeTab"
+          :items="secondaryNavigationItems"
+          :aria-label="`${activeGroupDefinition.label} views`"
+          controls-id="trace-view-panel"
+          id-prefix="trace-view"
+          variant="secondary"
+          @update:model-value="selectLeafTab"
+        />
+
+        <section
+          id="trace-view-panel"
+          class="trace-view-panel"
+          role="tabpanel"
+          :aria-labelledby="activeViewLabelId"
+        >
+          <div v-if="showLoadingPanel" class="loading-panel">
+            <span class="loading-spinner" aria-hidden="true"></span>
+            <p>Loading and analyzing captured data...</p>
+            <small>This may take a moment for larger traces.</small>
+          </div>
+          <component
+            v-else
+            :is="activeTabDefinition.component"
+            v-bind="activeTabProps"
+            @open-waterfall="openWaterfall"
+            @load-full-waterfall="loadFullWaterfall"
+          />
+        </section>
+      </section>
     </main>
 
     <div v-if="error" class="error-bar">{{ error }}</div>
@@ -65,8 +98,8 @@ import {
   readTraceTimeline,
   readWaterfall,
 } from '../api';
-import TraceTabs from '../tabs/TraceTabs.vue';
-import { TAB_DEFINITIONS, TAB_IDS } from '../tabs/registry';
+import NavigationStrip from '../components/navigation/NavigationStrip.vue';
+import { TAB_DEFINITIONS, TAB_GROUP_DEFINITIONS, TAB_IDS } from '../tabs/registry';
 
 const props = defineProps({
   traces: {
@@ -90,6 +123,26 @@ const props = defineProps({
 const emit = defineEmits(['active-title', 'loading', 'selection-consumed']);
 
 const tabs = TAB_DEFINITIONS;
+const tabGroups = TAB_GROUP_DEFINITIONS;
+const tabDefinitionsById = new Map(tabs.map((tab) => [tab.id, tab]));
+const tabGroupsById = new Map(tabGroups.map((group) => [group.id, group]));
+const tabGroupsByTabId = new Map();
+for (const group of tabGroups) {
+  for (const tabId of group.tabIds) {
+    if (!tabDefinitionsById.has(tabId)) {
+      throw new Error(`Trace navigation group ${group.id} references unknown view ${tabId}`);
+    }
+    if (tabGroupsByTabId.has(tabId)) {
+      throw new Error(`Trace view ${tabId} belongs to more than one navigation group`);
+    }
+    tabGroupsByTabId.set(tabId, group);
+  }
+}
+if (tabGroupsByTabId.size !== tabs.length) {
+  throw new Error('Every Trace view must belong to exactly one navigation group');
+}
+
+const primaryNavigationItems = tabGroups.map(({ id, label }) => ({ id, label }));
 const METRIC_ICONS = Object.freeze({
   events: markRaw(Activity),
   payloads: markRaw(Boxes),
@@ -97,6 +150,9 @@ const METRIC_ICONS = Object.freeze({
   processes: markRaw(Cpu),
 });
 const activeTab = ref(TAB_IDS.overview);
+const lastTabByGroup = ref(
+  Object.fromEntries(tabGroups.map((group) => [group.id, group.defaultTabId])),
+);
 const selectedTraceId = ref(null);
 const traceDetail = shallowRef(null);
 const actionTree = ref(emptyActionTree());
@@ -119,9 +175,17 @@ const activeTraceName = computed(
   () => traceDetail.value?.trace?.name ?? selectedTrace.value?.name ?? 'No trace selected',
 );
 
-const activeTabDefinition = computed(
-  () => tabs.find((tab) => tab.id === activeTab.value) ?? tabs[0],
+const activeTabDefinition = computed(() => tabDefinitionsById.get(activeTab.value));
+const activeGroupDefinition = computed(() => tabGroupsByTabId.get(activeTab.value));
+const secondaryNavigationItems = computed(() =>
+  activeGroupDefinition.value.tabIds.map((tabId) => tabDefinitionsById.get(tabId)),
 );
+const activeViewLabelId = computed(() => {
+  if (secondaryNavigationItems.value.length === 1) {
+    return `trace-group-${activeGroupDefinition.value.id}-tab`;
+  }
+  return `trace-view-${activeTab.value}-tab`;
+});
 const activeTabProps = computed(() => {
   const tabProps = {
     traceKey: selectedTraceId.value,
@@ -136,11 +200,6 @@ const activeTabProps = computed(() => {
     tabProps.waterfall = waterfall.value;
     tabProps.focusInterval = waterfallFocus.value;
     tabProps.attribution = timeAttribution.value;
-  }
-  if (activeTab.value === TAB_IDS.timeAttribution) {
-    tabProps.attribution = timeAttribution.value;
-    tabProps.initialDetail = waterfallFocus.value?.dimension ?? '';
-    tabProps.initialKey = waterfallFocus.value?.key ?? '';
   }
   return tabProps;
 });
@@ -217,7 +276,14 @@ watch(
   },
 );
 
-watch(activeTab, async () => {
+watch(activeTab, async (tabId) => {
+  const group = tabGroupsByTabId.get(tabId);
+  if (group) {
+    lastTabByGroup.value = {
+      ...lastTabByGroup.value,
+      [group.id]: tabId,
+    };
+  }
   await ensureDataForActiveTab();
 });
 
@@ -277,6 +343,26 @@ function reconcileSelectedTrace() {
 
 function selectTrace(traceId) {
   selectedTraceId.value = traceId;
+}
+
+function selectTabGroup(groupId) {
+  const group = tabGroupsById.get(groupId);
+  if (!group) {
+    error.value = `Unknown Trace view group: ${groupId}`;
+    return;
+  }
+  const rememberedTabId = lastTabByGroup.value[groupId];
+  activeTab.value = group.tabIds.includes(rememberedTabId)
+    ? rememberedTabId
+    : group.defaultTabId;
+}
+
+function selectLeafTab(tabId) {
+  if (!activeGroupDefinition.value.tabIds.includes(tabId)) {
+    error.value = `Trace view ${tabId} does not belong to ${activeGroupDefinition.value.label}`;
+    return;
+  }
+  activeTab.value = tabId;
 }
 
 async function loadTrace(traceId) {
@@ -451,13 +537,7 @@ async function loadFullWaterfall() {
 
 async function ensureTimeAttributionForActiveTab() {
   const traceId = selectedTraceId.value;
-  if (
-    !traceId
-    || (
-      activeTab.value !== TAB_IDS.timeAttribution
-      && activeTab.value !== TAB_IDS.waterfall
-    )
-  ) {
+  if (!traceId || activeTab.value !== TAB_IDS.waterfall) {
     return;
   }
   if (timeAttribution.value?.trace && traceIdMatches(timeAttribution.value.trace.id, traceId)) {
@@ -488,11 +568,6 @@ async function openWaterfall(target) {
   };
   activeTab.value = TAB_IDS.waterfall;
   await ensureWaterfallForActiveTab();
-}
-
-async function openTimeAttribution() {
-  activeTab.value = TAB_IDS.timeAttribution;
-  await ensureTimeAttributionForActiveTab();
 }
 
 function emptyActionTree(summary = null, rootData = null) {
@@ -577,3 +652,22 @@ function traceIdMatches(left, right) {
   return String(left ?? '') === String(right ?? '');
 }
 </script>
+
+<style scoped>
+.trace-group-panel,
+.trace-view-panel {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.trace-group-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.trace-group-panel-single {
+  grid-template-rows: minmax(0, 1fr);
+}
+</style>
