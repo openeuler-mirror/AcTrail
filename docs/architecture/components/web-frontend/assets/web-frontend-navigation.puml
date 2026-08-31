@@ -1,0 +1,41 @@
+@startwbs
+skinparam defaultFontName "WenQuanYi Micro Hei"
+skinparam monochrome true
+title actrailweb 当前工作区导航与控件路径
+
+* AcTrail Web\nApp.vue
+** Global navigation\nworkspaces/GlobalTabs.vue
+*** Statistics\nworkspaces/StatsWorkspace.vue
+**** LLM Requests\nworkspaces/stats/llm/LlmRequestsWorkspace.vue
+***** Overview\nworkspaces/stats/llm/OverviewPage.vue
+***** Trends\nworkspaces/stats/llm/TrendsPage.vue
+***** Latency\nworkspaces/stats/llm/LatencyPage.vue
+***** Explore\nworkspaces/stats/llm/ExplorePage.vue
+***** Settings\nworkspaces/stats/llm/SettingsPage.vue
+**** Time Attribution\nworkspaces/stats/time-attribution/TimeAttributionWorkspace.vue
+**** Alerts\nworkspaces/AlertsWorkspace.vue
+*** Config\nworkspaces/ConfigWorkspace.vue
+*** Plugins\nworkspaces/PluginsWorkspace.vue
+**** Loaded instances\nworkspaces/plugins/
+**** Plugin candidates\nworkspaces/plugins/
+*** Traces\nworkspaces/TraceWorkspace.vue
+**** Two-level navigation\ncomponents/navigation/NavigationStrip.vue + tabs/registry.js
+***** Overview\ntabs/core/overview/OverviewTab.vue
+***** Execution
+****** Actions\ntabs/core/action-tree/ActionTreeTab.vue
+****** Commands\ntabs/core/commands/CommandsTab.vue
+****** Processes\ntabs/system/processes/ProcessesTab.vue
+****** Process Tree\ntabs/system/process-tree/ProcessTreeTab.vue
+****** Waterfall\ntabs/core/waterfall/WaterfallTab.vue
+****** Time Attribution\ntabs/core/time-attribution/TimeAttributionTab.vue
+***** Activity
+****** Timeline\ntabs/core/timeline/TimelineTab.vue
+****** Events\ntabs/activity/events/EventsTab.vue
+****** Files\ntabs/activity/files/FilesTab.vue
+****** Network\ntabs/activity/network/NetworkTab.vue
+****** Payloads\ntabs/activity/payloads/PayloadsTab.vue
+****** Resources\ntabs/system/resources/ResourcesTab.vue
+***** Health
+****** Alerts\ntabs/system/alerts/AlertsTab.vue
+****** Diagnostics\ntabs/system/diagnostics/DiagnosticsTab.vue
+@endwbs

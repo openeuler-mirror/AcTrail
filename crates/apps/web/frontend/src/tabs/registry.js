@@ -6,7 +6,6 @@ import ActionTreeTab from './core/action-tree/ActionTreeTab.vue';
 import CommandsTab from './core/commands/CommandsTab.vue';
 import OverviewTab from './core/overview/OverviewTab.vue';
 import TimelineTab from './core/timeline/TimelineTab.vue';
-import TimeAttributionTab from './core/time-attribution/TimeAttributionTab.vue';
 import WaterfallTab from './core/waterfall/WaterfallTab.vue';
 import AlertsTab from './system/alerts/AlertsTab.vue';
 import DiagnosticsTab from './system/diagnostics/DiagnosticsTab.vue';
@@ -18,7 +17,6 @@ export const TAB_IDS = Object.freeze({
   overview: 'overview',
   actionTree: 'action_tree',
   waterfall: 'waterfall',
-  timeAttribution: 'time_attribution',
   commands: 'commands',
   timeline: 'timeline',
   events: 'events',
@@ -32,11 +30,17 @@ export const TAB_IDS = Object.freeze({
   alerts: 'alerts',
 });
 
+export const TAB_GROUP_IDS = Object.freeze({
+  overview: 'overview',
+  execution: 'execution',
+  activity: 'activity',
+  health: 'health',
+});
+
 export const TAB_DEFINITIONS = Object.freeze([
   { id: TAB_IDS.overview, label: 'Overview', component: OverviewTab },
-  { id: TAB_IDS.actionTree, label: 'Action Tree', component: ActionTreeTab },
-  { id: TAB_IDS.waterfall, label: 'Waterfall', component: WaterfallTab },
-  { id: TAB_IDS.timeAttribution, label: 'Time Attribution', component: TimeAttributionTab },
+  { id: TAB_IDS.actionTree, label: 'Actions', component: ActionTreeTab },
+  { id: TAB_IDS.waterfall, label: 'Time & Waterfall', component: WaterfallTab },
   { id: TAB_IDS.commands, label: 'Commands', component: CommandsTab },
   { id: TAB_IDS.timeline, label: 'Timeline', component: TimelineTab },
   { id: TAB_IDS.events, label: 'Events', component: EventsTab },
@@ -48,4 +52,44 @@ export const TAB_DEFINITIONS = Object.freeze([
   { id: TAB_IDS.resources, label: 'Resources', component: ResourcesTab },
   { id: TAB_IDS.alerts, label: 'Alerts', component: AlertsTab },
   { id: TAB_IDS.diagnostics, label: 'Diagnostics', component: DiagnosticsTab },
+]);
+
+export const TAB_GROUP_DEFINITIONS = Object.freeze([
+  {
+    id: TAB_GROUP_IDS.overview,
+    label: 'Overview',
+    defaultTabId: TAB_IDS.overview,
+    tabIds: Object.freeze([TAB_IDS.overview]),
+  },
+  {
+    id: TAB_GROUP_IDS.execution,
+    label: 'Execution',
+    defaultTabId: TAB_IDS.actionTree,
+    tabIds: Object.freeze([
+      TAB_IDS.actionTree,
+      TAB_IDS.commands,
+      TAB_IDS.processes,
+      TAB_IDS.processTree,
+      TAB_IDS.waterfall,
+    ]),
+  },
+  {
+    id: TAB_GROUP_IDS.activity,
+    label: 'Activity',
+    defaultTabId: TAB_IDS.timeline,
+    tabIds: Object.freeze([
+      TAB_IDS.timeline,
+      TAB_IDS.events,
+      TAB_IDS.files,
+      TAB_IDS.network,
+      TAB_IDS.payloads,
+      TAB_IDS.resources,
+    ]),
+  },
+  {
+    id: TAB_GROUP_IDS.health,
+    label: 'Health',
+    defaultTabId: TAB_IDS.alerts,
+    tabIds: Object.freeze([TAB_IDS.alerts, TAB_IDS.diagnostics]),
+  },
 ]);

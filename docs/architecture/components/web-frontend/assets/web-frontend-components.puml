@@ -19,9 +19,9 @@ component "插件控件\nConfigPanel / CommandForm\nLoadDialog / UnloadDialog" a
 component "Trace rail\ntrace 选择" as TraceRail
 component "Workspace main" as TraceMain
 component "Metrics strip" as Metrics
-component "TraceTabs\n仅负责页签导航" as TraceTabs
+component "NavigationStrip\n受控一级 / 二级导航\ncomponents/navigation/NavigationStrip.vue" as NavigationStrip
 component "Active trace page\n动态组件" as ActivePage
-component "tabs/registry.js\nID / 标签 / 组件" as Registry
+component "tabs/registry.js\nleaf ID / 标签 / 组件 / 分组" as Registry
 component "专用 Trace 页面\nOverview / Action Tree / Waterfall\nTime Attribution / Commands / Alerts" as DedicatedTabs
 component "TableTraceTab\n通用表格—详情布局" as TableTab
 component "DataTable" as DataTable
@@ -44,7 +44,7 @@ Plugins *-- PluginControls
 Trace *-- TraceRail
 Trace *-- TraceMain
 TraceMain *-- Metrics
-TraceMain *-- TraceTabs
+TraceMain *-- NavigationStrip : 一级与二级
 TraceMain *-- ActivePage
 Trace ..> Registry : 读取定义
 Registry ..> ActivePage : 选择组件

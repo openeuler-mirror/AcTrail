@@ -1,4 +1,24 @@
 <template>
+  <section class="time-waterfall-page">
+    <section ref="attributionSection" class="time-waterfall-attribution">
+      <TimeAttributionTab
+        :attribution="attribution"
+        :query="query"
+        :initial-detail="focusInterval?.dimension ?? ''"
+        :initial-key="focusInterval?.key ?? ''"
+        @open-waterfall="$emit('open-waterfall', $event)"
+      />
+    </section>
+
+    <section
+      ref="waterfallSection"
+      class="time-waterfall-section"
+      aria-labelledby="waterfall-section-title"
+    >
+      <header class="time-waterfall-heading">
+        <span>Trace chronology</span>
+        <h2 id="waterfall-section-title">Waterfall</h2>
+      </header>
   <section class="tab-detail-layout waterfall-detail-layout" :class="{ 'detail-open': selectedDetail }">
     <section class="waterfall-panel tab-detail-main">
     <div class="waterfall-toolbar">
@@ -84,7 +104,7 @@
         v-if="focusWindow && !zoomLabel"
         type="button"
         class="wf-zoom-reset"
-        @click="$emit('open-attribution', focusInterval)"
+        @click="showAttribution"
       >
         Back to attribution
       </button>
@@ -371,6 +391,8 @@
       @clear="clearDetail"
     />
   </section>
+    </section>
+  </section>
 </template>
 
 <script setup>
@@ -390,6 +412,7 @@ import {
 import DetailPanel from '../../../components/DetailPanel.vue';
 import DurationBadge from '../../../components/DurationBadge.vue';
 import { formatAttributionDuration } from '../../../components/time-attribution/model';
+import TimeAttributionTab from '../time-attribution/TimeAttributionTab.vue';
 import { TABLE_RENDER_LIMITS } from '../../tableConfig';
 import { normalizeTableQuery } from '../../tableModel';
 import {
@@ -443,7 +466,7 @@ const props = defineProps({
   },
 });
 
-const emit = defineEmits(['open-attribution', 'open-waterfall', 'load-full-waterfall']);
+const emit = defineEmits(['open-waterfall', 'load-full-waterfall']);
 
 const expandedIds = ref(new Set());
 const activeGroups = ref(new Set());
@@ -454,6 +477,8 @@ const expandedBottleneckGroups = ref(new Set());
 const visibleLimit = ref(TABLE_RENDER_LIMITS.initialRows);
 const selectedDetailId = ref(null);
 const selectedDetail = ref(null);
+const attributionSection = ref(null);
+const waterfallSection = ref(null);
 const waterfallScroll = ref(null);
 const axisTrack = ref(null);
 const manualTimeViewport = ref(null);
@@ -468,6 +493,10 @@ let pointerPosition = null;
 const heldTimelineKeys = new Set();
 let keyboardFrame = null;
 let keyboardFrameTime = null;
+
+function showAttribution() {
+  attributionSection.value?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
 
 const hasWaterfallData = computed(
   () => (props.waterfall?.actions?.length ?? 0) > 0 || (props.waterfall?.links?.length ?? 0) > 0,
@@ -805,11 +834,17 @@ watch(
 
 watch(
   () => props.focusInterval?.nonce,
-  () => {
+  (nonce) => {
     focusEnabled.value = true;
     zoomId.value = null;
     queueFocusApplication();
+    if (nonce) {
+      nextTick(() => {
+        waterfallSection.value?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    }
   },
+  { immediate: true },
 );
 
 watch(
