@@ -6,7 +6,8 @@ use crate::json;
 
 use super::model::{
     ActivitySnapshot, BucketTotal, Coverage, DimensionTotal, LlmActivityQuery, LlmRowsQuery,
-    LlmUsageDataset, LlmUsageRow, Rollup, Summary, TokenTotals, TrendSeries, unique_count,
+    LlmUsageDataset, LlmUsageRow, RequestShapeSnapshot, Rollup, Summary, TokenTotals, TrendSeries,
+    unique_count,
 };
 use super::projector::project_llm_usage;
 use super::render::row_json;
@@ -87,6 +88,23 @@ pub(super) fn activity_snapshot(dataset: &LlmUsageDataset) -> ActivitySnapshot {
         token_category_trends: token_category_trends(dataset),
         missing_usage_trend: missing_usage_trend(dataset),
         latency: latency_snapshot(dataset),
+        request_shape: RequestShapeSnapshot {
+            input_tokens_samples: dataset
+                .rows
+                .iter()
+                .filter_map(|row| row.tokens.input_tokens)
+                .collect(),
+            canonical_body_bytes_samples: dataset
+                .rows
+                .iter()
+                .filter_map(|row| row.request_shape.canonical_body_bytes)
+                .collect(),
+            block_count_samples: dataset
+                .rows
+                .iter()
+                .filter_map(|row| row.request_shape.block_count)
+                .collect(),
+        },
     }
 }
 
@@ -95,6 +113,10 @@ fn summary(dataset: &LlmUsageDataset) -> Summary {
     let mut trace_ids = BTreeSet::new();
     let mut completed_requests = 0usize;
     let mut missing_usage_count = 0usize;
+    let mut canonical_body_bytes = 0u64;
+    let mut canonical_body_bytes_count = 0usize;
+    let mut block_count = 0u64;
+    let mut block_count_rows = 0usize;
     for row in &dataset.rows {
         trace_ids.insert(row.trace_id);
         if row.tokens.has_any() {
@@ -102,6 +124,14 @@ fn summary(dataset: &LlmUsageDataset) -> Summary {
             totals.add_usage(row.tokens);
         } else {
             missing_usage_count += 1;
+        }
+        if let Some(value) = row.request_shape.canonical_body_bytes {
+            canonical_body_bytes = canonical_body_bytes.saturating_add(value);
+            canonical_body_bytes_count += 1;
+        }
+        if let Some(value) = row.request_shape.block_count {
+            block_count = block_count.saturating_add(value);
+            block_count_rows += 1;
         }
     }
     Summary {
@@ -118,6 +148,10 @@ fn summary(dataset: &LlmUsageDataset) -> Summary {
         ),
         app_count: unique_count(dataset.rows.iter().map(|row| row.app.executable.clone())),
         totals,
+        canonical_body_bytes,
+        canonical_body_bytes_count,
+        block_count,
+        block_count_rows,
     }
 }
 
@@ -300,8 +334,32 @@ fn activity_snapshot_json(snapshot: &ActivitySnapshot) -> String {
         "latency",
         &latency_snapshot_json(&snapshot.latency),
     );
+    output.push(',');
+    json::field(
+        &mut output,
+        "request_shape",
+        &request_shape_json(&snapshot.request_shape),
+    );
     output.push('}');
     output
+}
+
+fn request_shape_json(snapshot: &RequestShapeSnapshot) -> String {
+    let values = |rows: &[u64]| {
+        format!(
+            "[{}]",
+            rows.iter()
+                .map(|value| json::number(*value))
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+    };
+    format!(
+        "{{\"input_tokens_samples\":{},\"canonical_body_bytes_samples\":{},\"block_count_samples\":{}}}",
+        values(&snapshot.input_tokens_samples),
+        values(&snapshot.canonical_body_bytes_samples),
+        values(&snapshot.block_count_samples)
+    )
 }
 
 pub(super) fn range_json(query: LlmActivityQuery, rollup: Rollup) -> String {
@@ -319,7 +377,7 @@ fn capabilities_json() -> String {
 
 fn summary_json(summary: &Summary) -> String {
     format!(
-        "{{\"completed_requests\":{},\"failed_requests\":{},\"missing_usage_count\":{},\"trace_count\":{},\"model_count\":{},\"endpoint_count\":{},\"app_count\":{},\"total_tokens\":{},\"input_tokens\":{},\"output_tokens\":{},\"reasoning_tokens\":{},\"cache_hit_tokens\":{},\"cache_miss_tokens\":{},\"estimated_spend_cny\":null}}",
+        "{{\"completed_requests\":{},\"failed_requests\":{},\"missing_usage_count\":{},\"trace_count\":{},\"model_count\":{},\"endpoint_count\":{},\"app_count\":{},\"total_tokens\":{},\"input_tokens\":{},\"output_tokens\":{},\"reasoning_tokens\":{},\"cache_hit_tokens\":{},\"cache_miss_tokens\":{},\"canonical_body_bytes\":{},\"canonical_body_bytes_count\":{},\"block_count\":{},\"block_count_rows\":{},\"estimated_spend_cny\":null}}",
         json::number(summary.completed_requests),
         json::optional_number(summary.failed_requests),
         json::number(summary.missing_usage_count),
@@ -332,7 +390,11 @@ fn summary_json(summary: &Summary) -> String {
         json::number(summary.totals.output_tokens),
         json::number(summary.totals.reasoning_tokens),
         json::number(summary.totals.cache_hit_tokens),
-        json::number(summary.totals.cache_miss_tokens)
+        json::number(summary.totals.cache_miss_tokens),
+        json::number(summary.canonical_body_bytes),
+        json::number(summary.canonical_body_bytes_count),
+        json::number(summary.block_count),
+        json::number(summary.block_count_rows)
     )
 }
 

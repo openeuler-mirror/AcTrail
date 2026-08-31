@@ -9,7 +9,7 @@ use storage_core::{StorageBackend, TraceFilter};
 
 use super::model::{
     AppIdentity, EndpointIdentity, LlmActivityQuery, LlmLatency, LlmUsageDataset, LlmUsageRow,
-    Rollup, TokenUsage,
+    RequestShape, Rollup, TokenUsage,
 };
 use super::time_buckets::bucket_start_ms;
 
@@ -125,6 +125,7 @@ fn row_for_response(
         identity
     };
     let tokens = token_usage(response)?;
+    let request_shape = request_shape(request)?;
     let latency = latency_timing(request, response, tokens)?;
     Ok(LlmUsageRow {
         trace_id: trace.trace_id.get(),
@@ -139,7 +140,21 @@ fn row_for_response(
         endpoint: endpoint_identity(response, request),
         app,
         tokens,
+        request_shape,
         latency,
+    })
+}
+
+fn request_shape(request: Option<&SemanticAction>) -> Result<RequestShape, String> {
+    let Some(request) = request else {
+        return Ok(RequestShape::default());
+    };
+    Ok(RequestShape {
+        canonical_body_bytes: optional_u64_attr(
+            request,
+            attr_keys::llm_request::CANONICAL_BODY_BYTES,
+        )?,
+        block_count: optional_u64_attr(request, attr_keys::llm_request::BLOCK_COUNT)?,
     })
 }
 
@@ -288,11 +303,8 @@ fn latency_timing(
         .transpose()?;
     let response_start_ms = system_time_millis(response.start_time)?;
     let response_end_ms = response.end_time.map(system_time_millis).transpose()?;
-    let ttft_us = request.and_then(|action| {
-        action
-            .end_time
-            .and_then(|end| duration_micros_between(action.start_time, end))
-    });
+    let ttft_us =
+        request.and_then(|action| duration_micros_between(action.start_time, response.start_time));
     let output_token_count = output_token_count(tokens);
     let tpot_us = response
         .end_time

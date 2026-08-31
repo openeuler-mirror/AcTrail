@@ -1,6 +1,6 @@
 //! Owned correlation state for LLM requests, responses, and HTTP exchanges.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::time::SystemTime;
 
 use config_core::daemon::LlmProjectionStateConfig;
@@ -13,14 +13,39 @@ use crate::live::{HttpResponseMatch, MatchedHttpRequest};
 use crate::llm_pipeline::projection::ProjectionBatch as ActionBatch;
 
 use super::payload_sequence_start;
-use super::{BindingOwnershipIndex, StreamOwnershipIndex};
+use super::{BindingOwnershipIndex, IndexedQueue, StreamOwnershipIndex};
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(in crate::llm_pipeline) struct LlmStreamKey {
     pub(in crate::llm_pipeline) trace_id: TraceId,
     pub(in crate::llm_pipeline) process: ProcessIdentity,
     pub(in crate::llm_pipeline) stream_key: String,
     pub(in crate::llm_pipeline) http_stream_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct CorrelationStreamOwner {
+    trace_id: TraceId,
+    process: ProcessIdentity,
+    stream_key: String,
+}
+
+impl CorrelationStreamOwner {
+    fn from_stream_key(key: &LlmStreamKey) -> Self {
+        Self {
+            trace_id: key.trace_id,
+            process: key.process,
+            stream_key: key.stream_key.clone(),
+        }
+    }
+
+    fn from_identity(identity: &PayloadStreamIdentity) -> Self {
+        Self {
+            trace_id: identity.trace_id,
+            process: identity.process,
+            stream_key: identity.stream_key.to_string(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -50,6 +75,13 @@ impl LlmActionOrder {
 pub(in crate::llm_pipeline) struct PendingLlmResponse {
     pub(in crate::llm_pipeline) action: SemanticAction,
     pub(in crate::llm_pipeline) provider_response_id: Option<String>,
+    pub(in crate::llm_pipeline) closed: bool,
+    pub(in crate::llm_pipeline) compacted: bool,
+}
+
+pub(in crate::llm_pipeline) struct ClosedPendingResponseMarker {
+    pub(in crate::llm_pipeline) stream_key: LlmStreamKey,
+    pub(in crate::llm_pipeline) response_action_id: String,
 }
 
 pub(in crate::llm_pipeline) struct IncompleteHttp1Response {
@@ -65,21 +97,32 @@ pub(in crate::llm_pipeline) struct DamagedHttpResponseBinding {
 pub(in crate::llm_pipeline) struct LateHttpFailureBinding {
     pub(in crate::llm_pipeline) stream_key: LlmStreamKey,
     pub(in crate::llm_pipeline) request: SemanticAction,
-    pub(in crate::llm_pipeline) failed_response: SemanticAction,
 }
 
+pub(in crate::llm_pipeline) struct ClosedLlmExchangeBinding {
+    pub(in crate::llm_pipeline) request: OpenLlmRequest,
+    pub(in crate::llm_pipeline) response: PendingLlmResponse,
+}
+
+#[derive(Clone)]
 pub(in crate::llm_pipeline) struct ActiveLlmResponseBinding {
     pub(in crate::llm_pipeline) request: SemanticAction,
+    pub(in crate::llm_pipeline) response: SemanticAction,
     pub(in crate::llm_pipeline) http_request_action_id: String,
     pub(in crate::llm_pipeline) http_response_action_id: String,
 }
 
 pub(in crate::llm_pipeline) struct CorrelationCoordinator {
-    pub(in crate::llm_pipeline) open_requests: BTreeMap<LlmStreamKey, VecDeque<OpenLlmRequest>>,
+    pub(in crate::llm_pipeline) open_requests: HashMap<LlmStreamKey, IndexedQueue<OpenLlmRequest>>,
     pub(in crate::llm_pipeline) pending_responses:
-        BTreeMap<LlmStreamKey, VecDeque<PendingLlmResponse>>,
+        HashMap<LlmStreamKey, IndexedQueue<PendingLlmResponse>>,
     pub(in crate::llm_pipeline) confirmed_http_exchanges:
-        BTreeMap<LlmStreamKey, VecDeque<HttpResponseMatch>>,
+        HashMap<LlmStreamKey, IndexedQueue<HttpResponseMatch>>,
+    pub(in crate::llm_pipeline) closed_llm_exchanges:
+        HashMap<LlmStreamKey, IndexedQueue<ClosedLlmExchangeBinding>>,
+    closed_pending_responses:
+        HashMap<CorrelationStreamOwner, IndexedQueue<ClosedPendingResponseMarker>>,
+    closed_pending_response_ids_by_stream: HashMap<LlmStreamKey, HashSet<String>>,
     pub(in crate::llm_pipeline) incomplete_http1_responses:
         BTreeMap<LlmStreamKey, IncompleteHttp1Response>,
     pub(in crate::llm_pipeline) damaged_http_responses:
@@ -91,16 +134,11 @@ pub(in crate::llm_pipeline) struct CorrelationCoordinator {
     pub(in crate::llm_pipeline) localized_http1_request_outputs:
         BTreeMap<LlmStreamKey, ActionBatch>,
     pub(in crate::llm_pipeline) active_response_requests:
-        BTreeMap<(TraceId, String), ActiveLlmResponseBinding>,
+        HashMap<(TraceId, String), ActiveLlmResponseBinding>,
     pub(in crate::llm_pipeline) damaged_binding_owners: BindingOwnershipIndex,
     pub(in crate::llm_pipeline) late_failure_binding_owners: BindingOwnershipIndex,
     pub(in crate::llm_pipeline) active_binding_owners: BindingOwnershipIndex,
     pub(in crate::llm_pipeline) stream_owners: StreamOwnershipIndex,
-    /// Streams for which a non-CONNECT confirmed HTTP exchange was observed.
-    /// Pure TLS tunnels only ever produce a CONNECT exchange, so their LLM
-    /// request/response pairing is not covered by the confirmed-exchange model
-    /// and is reconciled at trace close.
-    pub(in crate::llm_pipeline) http_exchange_streams: BTreeSet<LlmStreamKey>,
     pub(in crate::llm_pipeline) max_confirmed_http_exchanges_per_stream: usize,
     pub(in crate::llm_pipeline) max_pending_requests_per_stream: usize,
     pub(in crate::llm_pipeline) max_pending_responses_per_stream: usize,
@@ -112,15 +150,18 @@ impl CorrelationCoordinator {
         state: LlmProjectionStateConfig,
     ) -> Self {
         Self {
-            open_requests: BTreeMap::new(),
-            pending_responses: BTreeMap::new(),
-            confirmed_http_exchanges: BTreeMap::new(),
+            open_requests: HashMap::new(),
+            pending_responses: HashMap::new(),
+            confirmed_http_exchanges: HashMap::new(),
+            closed_llm_exchanges: HashMap::new(),
+            closed_pending_responses: HashMap::new(),
+            closed_pending_response_ids_by_stream: HashMap::new(),
             incomplete_http1_responses: BTreeMap::new(),
             damaged_http_responses: BTreeMap::new(),
             damaged_response_bindings: BTreeMap::new(),
             late_http_failure_bindings: BTreeMap::new(),
             localized_http1_request_outputs: BTreeMap::new(),
-            active_response_requests: BTreeMap::new(),
+            active_response_requests: HashMap::new(),
             damaged_binding_owners: BindingOwnershipIndex::new(validated_limit(
                 state.max_damaged_response_bindings_per_trace,
             )),
@@ -133,7 +174,6 @@ impl CorrelationCoordinator {
             stream_owners: StreamOwnershipIndex::new(validated_limit(
                 state.max_correlation_streams_per_trace,
             )),
-            http_exchange_streams: BTreeSet::new(),
             max_confirmed_http_exchanges_per_stream,
             max_pending_requests_per_stream: validated_limit(state.max_pending_requests_per_stream),
             max_pending_responses_per_stream: validated_limit(
@@ -153,56 +193,132 @@ impl CorrelationCoordinator {
             .collect()
     }
 
+    pub(in crate::llm_pipeline) fn unconfirmed_streams_for_identity(
+        &self,
+        identity: &PayloadStreamIdentity,
+    ) -> Vec<LlmStreamKey> {
+        let stream_key = identity.stream_key.to_string();
+        self.stream_owners.keys_for_stream_identity(
+            identity.trace_id,
+            identity.process,
+            &stream_key,
+        )
+    }
+
+    pub(in crate::llm_pipeline) fn mark_closed_pending_response(
+        &mut self,
+        stream_key: &LlmStreamKey,
+        response_action_id: &str,
+    ) {
+        self.closed_pending_responses
+            .entry(CorrelationStreamOwner::from_stream_key(stream_key))
+            .or_default()
+            .upsert(
+                response_action_id.to_string(),
+                ClosedPendingResponseMarker {
+                    stream_key: stream_key.clone(),
+                    response_action_id: response_action_id.to_string(),
+                },
+            );
+        self.closed_pending_response_ids_by_stream
+            .entry(stream_key.clone())
+            .or_default()
+            .insert(response_action_id.to_string());
+    }
+
+    pub(in crate::llm_pipeline) fn take_closed_pending_responses(
+        &mut self,
+        identity: &PayloadStreamIdentity,
+    ) -> Vec<ClosedPendingResponseMarker> {
+        let Some(markers) = self
+            .closed_pending_responses
+            .remove(&CorrelationStreamOwner::from_identity(identity))
+        else {
+            return Vec::new();
+        };
+        let markers = markers.into_values().collect::<Vec<_>>();
+        for marker in &markers {
+            self.remove_closed_pending_response_reverse(marker);
+        }
+        markers
+    }
+
+    pub(in crate::llm_pipeline) fn forget_closed_pending_stream(
+        &mut self,
+        stream_key: &LlmStreamKey,
+    ) {
+        let Some(response_ids) = self
+            .closed_pending_response_ids_by_stream
+            .remove(stream_key)
+        else {
+            return;
+        };
+        let owner = CorrelationStreamOwner::from_stream_key(stream_key);
+        if let Some(markers) = self.closed_pending_responses.get_mut(&owner) {
+            for response_id in response_ids {
+                markers.remove(&response_id);
+            }
+            if markers.is_empty() {
+                self.closed_pending_responses.remove(&owner);
+            }
+        }
+    }
+
+    pub(in crate::llm_pipeline) fn forget_closed_pending_trace(&mut self, trace_id: TraceId) {
+        self.closed_pending_responses
+            .retain(|owner, _| owner.trace_id != trace_id);
+        self.closed_pending_response_ids_by_stream
+            .retain(|stream_key, _| stream_key.trace_id != trace_id);
+    }
+
+    fn remove_closed_pending_response_reverse(&mut self, marker: &ClosedPendingResponseMarker) {
+        let Some(response_ids) = self
+            .closed_pending_response_ids_by_stream
+            .get_mut(&marker.stream_key)
+        else {
+            return;
+        };
+        response_ids.remove(&marker.response_action_id);
+        if response_ids.is_empty() {
+            self.closed_pending_response_ids_by_stream
+                .remove(&marker.stream_key);
+        }
+    }
+
+    pub(in crate::llm_pipeline) fn compact_pending_response(
+        &mut self,
+        stream_key: &LlmStreamKey,
+        response_action_id: &str,
+    ) -> bool {
+        let Some(response) = self
+            .pending_responses
+            .get_mut(stream_key)
+            .and_then(|responses| responses.get_mut(response_action_id))
+            .filter(|response| response.closed)
+        else {
+            return false;
+        };
+        response.compact_for_correlation();
+        true
+    }
+
     pub(in crate::llm_pipeline) fn forget_stream_identity(
         &mut self,
         identity: &PayloadStreamIdentity,
     ) {
+        let _ = self.take_closed_pending_responses(identity);
         let stream_key = identity.stream_key.to_string();
-        let mut owned_keys = BTreeSet::new();
-        Self::collect_owned_map_keys(&self.open_requests, identity, &stream_key, &mut owned_keys);
-        Self::collect_owned_map_keys(
-            &self.pending_responses,
-            identity,
+        let owned_keys = self.stream_owners.keys_for_stream_identity(
+            identity.trace_id,
+            identity.process,
             &stream_key,
-            &mut owned_keys,
-        );
-        Self::collect_owned_map_keys(
-            &self.confirmed_http_exchanges,
-            identity,
-            &stream_key,
-            &mut owned_keys,
-        );
-        Self::collect_owned_map_keys(
-            &self.incomplete_http1_responses,
-            identity,
-            &stream_key,
-            &mut owned_keys,
-        );
-        Self::collect_owned_map_keys(
-            &self.damaged_http_responses,
-            identity,
-            &stream_key,
-            &mut owned_keys,
-        );
-        Self::collect_owned_map_keys(
-            &self.localized_http1_request_outputs,
-            identity,
-            &stream_key,
-            &mut owned_keys,
-        );
-        let lower = Self::identity_lower_bound(identity, &stream_key);
-        owned_keys.extend(
-            self.http_exchange_streams
-                .range(lower..)
-                .take_while(|key| Self::matches_identity(key, identity, &stream_key))
-                .cloned(),
         );
         for key in owned_keys {
             self.stream_owners.remove(&key);
             self.open_requests.remove(&key);
             self.pending_responses.remove(&key);
             self.confirmed_http_exchanges.remove(&key);
-            self.http_exchange_streams.remove(&key);
+            self.closed_llm_exchanges.remove(&key);
             self.incomplete_http1_responses.remove(&key);
             self.damaged_http_responses.remove(&key);
             self.localized_http1_request_outputs.remove(&key);
@@ -230,38 +346,109 @@ impl CorrelationCoordinator {
             self.active_response_requests.remove(&key);
         }
     }
+}
 
-    fn collect_owned_map_keys<V>(
-        map: &BTreeMap<LlmStreamKey, V>,
-        identity: &PayloadStreamIdentity,
-        stream_key: &str,
-        output: &mut BTreeSet<LlmStreamKey>,
-    ) {
-        let lower = Self::identity_lower_bound(identity, stream_key);
-        output.extend(
-            map.range(lower..)
-                .take_while(|(key, _)| Self::matches_identity(key, identity, stream_key))
-                .map(|(key, _)| key.clone()),
-        );
+impl LateHttpFailureBinding {
+    pub(in crate::llm_pipeline) fn new(stream_key: LlmStreamKey, request: &SemanticAction) -> Self {
+        Self {
+            stream_key,
+            request: compact_action(
+                request,
+                &[
+                    attrs::llm_request::MODEL,
+                    attrs::url::SCHEME,
+                    attrs::url::PATH,
+                    attrs::server::ADDRESS,
+                    attrs::payload::STREAM_KEY,
+                    attrs::payload::OPERATION_ID,
+                    attrs::http_request::STREAM_ID,
+                ],
+            ),
+        }
     }
+}
 
-    fn identity_lower_bound(identity: &PayloadStreamIdentity, stream_key: &str) -> LlmStreamKey {
-        LlmStreamKey {
-            trace_id: identity.trace_id,
-            process: identity.process,
-            stream_key: stream_key.to_string(),
-            http_stream_id: None,
+impl ClosedLlmExchangeBinding {
+    pub(in crate::llm_pipeline) fn new(
+        request: OpenLlmRequest,
+        mut response: PendingLlmResponse,
+    ) -> Self {
+        response.compact_for_correlation();
+        response.provider_response_id = None;
+        Self {
+            request: OpenLlmRequest {
+                action: compact_action(
+                    &request.action,
+                    &[
+                        attrs::llm_request::MODEL,
+                        attrs::http_request::METHOD,
+                        attrs::url::SCHEME,
+                        attrs::url::PATH,
+                        attrs::server::ADDRESS,
+                        attrs::payload::STREAM_KEY,
+                        attrs::payload::OPERATION_ID,
+                        attrs::payload::SEQUENCE,
+                        attrs::payload::SEQUENCE_START,
+                        attrs::payload::SEQUENCE_END,
+                        attrs::http_request::STREAM_ID,
+                    ],
+                ),
+                sequence_start: request.sequence_start,
+                sequence_end: request.sequence_end,
+            },
+            response,
         }
     }
 
-    fn matches_identity(
-        key: &LlmStreamKey,
-        identity: &PayloadStreamIdentity,
-        stream_key: &str,
+    pub(in crate::llm_pipeline) fn matches_http_exchange(
+        &self,
+        exchange: &HttpResponseMatch,
     ) -> bool {
-        key.trace_id == identity.trace_id
-            && key.process == identity.process
-            && key.stream_key == stream_key
+        self.request.matches_http_request(&exchange.request)
+            && self.response.matches_http_response(&exchange.response)
+    }
+
+    pub(in crate::llm_pipeline) fn precedes_http_exchange(
+        &self,
+        exchange: &HttpResponseMatch,
+    ) -> bool {
+        let Some(binding_sequence_end) = super::payload_sequence_end(&self.response.action) else {
+            return false;
+        };
+        let Some(exchange_sequence) = exchange
+            .response
+            .attributes
+            .get("payload_sequence")
+            .and_then(|value| value.parse::<u64>().ok())
+        else {
+            return false;
+        };
+        binding_sequence_end < exchange_sequence
+    }
+}
+
+fn compact_action(action: &SemanticAction, retained_attributes: &[&str]) -> SemanticAction {
+    let attributes = retained_attributes
+        .iter()
+        .filter_map(|key| {
+            action
+                .attributes
+                .get(*key)
+                .map(|value| ((*key).to_string(), value.clone()))
+        })
+        .collect::<BTreeMap<_, _>>();
+    SemanticAction {
+        action_id: action.action_id.clone(),
+        trace_id: action.trace_id,
+        kind: action.kind,
+        title: action.title.clone(),
+        start_time: action.start_time,
+        end_time: action.end_time,
+        process: action.process,
+        status: action.status,
+        completeness: action.completeness,
+        attributes,
+        evidence: action.evidence.clone(),
     }
 }
 
@@ -301,6 +488,27 @@ impl OpenLlmRequest {
 }
 
 impl PendingLlmResponse {
+    pub(in crate::llm_pipeline) fn compact_for_correlation(&mut self) {
+        if self.compacted {
+            return;
+        }
+        self.action = compact_action(
+            &self.action,
+            &[
+                attrs::llm_response::MODEL,
+                attrs::http_response::STATUS_CODE,
+                attrs::http_response::REASON,
+                attrs::http_response::STREAM_ID,
+                attrs::payload::STREAM_KEY,
+                attrs::payload::OPERATION_ID,
+                attrs::payload::SEQUENCE,
+                attrs::payload::SEQUENCE_START,
+                attrs::payload::SEQUENCE_END,
+            ],
+        );
+        self.compacted = true;
+    }
+
     pub(in crate::llm_pipeline) fn matches_http_response(&self, response: &SemanticAction) -> bool {
         if self.action.trace_id != response.trace_id || self.action.process != response.process {
             return false;

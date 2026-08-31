@@ -76,11 +76,17 @@ pub(super) fn action_tree_json(
         .iter()
         .map(link_json_lite)
         .collect::<Vec<_>>();
+    let associations = projection
+        .associations
+        .iter()
+        .map(link_json_lite)
+        .collect::<Vec<_>>();
     Ok(format!(
-        "{{\"roots\":[{}],\"actions\":[{}],\"links\":[{}]}}",
+        "{{\"roots\":[{}],\"actions\":[{}],\"links\":[{}],\"associations\":[{}]}}",
         roots.join(","),
         actions.join(","),
-        links.join(",")
+        links.join(","),
+        associations.join(",")
     ))
 }
 

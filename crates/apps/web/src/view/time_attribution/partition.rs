@@ -154,36 +154,30 @@ fn classify_segment(
         }
         let names = active_tools
             .iter()
-            .map(|index| {
-                tools[*index]
-                    .tool_name
-                    .as_deref()
-                    .unwrap_or(TOOL_UNKNOWN_KEY)
-            })
+            .filter_map(|index| tools[*index].tool_name.as_deref())
             .collect::<BTreeSet<_>>();
         let action_ids = active_tools
             .iter()
             .map(|index| tools[*index].action_id.clone())
             .collect::<Vec<_>>();
+        let mut concurrent_tool_labels = Vec::new();
         let (subcategory, key, label) = if names.len() > 1 {
+            concurrent_tool_labels = names.iter().map(|name| (*name).to_string()).collect();
             (
                 "concurrent_tools",
                 TOOL_CONCURRENT_KEY.to_string(),
                 "Concurrent tools".to_string(),
             )
+        } else if let Some(name) = names.iter().next() {
+            ("tool", (*name).to_string(), (*name).to_string())
         } else {
-            let name = names.iter().next().copied().unwrap_or(TOOL_UNKNOWN_KEY);
-            if name == TOOL_UNKNOWN_KEY {
-                (
-                    "tool",
-                    TOOL_UNKNOWN_KEY.to_string(),
-                    "Unidentified local command".to_string(),
-                )
-            } else {
-                ("tool", name.to_string(), name.to_string())
-            }
+            (
+                "orchestration",
+                TOOL_ORCHESTRATION_KEY.to_string(),
+                "Local orchestration / response handling".to_string(),
+            )
         };
-        return new_segment(
+        let mut segment = new_segment(
             Category::AgentSide,
             subcategory,
             key,
@@ -191,6 +185,10 @@ fn classify_segment(
             interval,
             action_ids,
         );
+        if subcategory == "concurrent_tools" {
+            segment.agent_tools = concurrent_tool_labels;
+        }
+        return segment;
     }
     new_segment(
         Category::Unattributed,
@@ -220,6 +218,7 @@ fn new_segment(
         end_unix_nanos: nanos_string(interval.end),
         duration_nanos: nanos_string(interval.duration()),
         action_ids,
+        agent_tools: Vec::new(),
         interval,
         category_value: category,
     }
@@ -289,11 +288,22 @@ fn classify_command_segment(
     active: &[&CommandInterval],
 ) -> CommandSegment {
     if active.is_empty() {
+        let concurrent_tools = attribution.key == TOOL_CONCURRENT_KEY;
         return new_command_segment(
-            "tool_overhead",
+            CommandSegmentKind::ToolOverhead,
             format!("{COMMAND_OVERHEAD_KEY}:{}", attribution.key),
-            format!("{} tool overhead", attribution.label),
-            vec![attribution.label.clone()],
+            if concurrent_tools {
+                "Concurrent tool overhead".to_string()
+            } else {
+                format!("{} tool overhead", attribution.label)
+            },
+            if concurrent_tools {
+                attribution.agent_tools.clone()
+            } else if attribution.key == TOOL_UNKNOWN_KEY {
+                Vec::new()
+            } else {
+                vec![attribution.label.clone()]
+            },
             interval,
             attribution.action_ids.clone(),
         );
@@ -305,6 +315,7 @@ fn classify_command_segment(
         .collect::<BTreeSet<_>>();
     let agent_tools = active
         .iter()
+        .filter(|command| command.agent_tool_key != TOOL_UNKNOWN_KEY)
         .map(|command| command.agent_tool_label.clone())
         .collect::<BTreeSet<_>>()
         .into_iter()
@@ -317,7 +328,7 @@ fn classify_command_segment(
         .collect::<Vec<_>>();
     if keys.len() > 1 {
         return new_command_segment(
-            "concurrent_commands",
+            CommandSegmentKind::ConcurrentCommands,
             COMMAND_CONCURRENT_KEY.to_string(),
             "Concurrent commands".to_string(),
             agent_tools,
@@ -327,7 +338,7 @@ fn classify_command_segment(
     }
     let command = active[0];
     new_command_segment(
-        "command",
+        CommandSegmentKind::Command,
         command.key.clone(),
         command.label.clone(),
         agent_tools,
@@ -337,7 +348,7 @@ fn classify_command_segment(
 }
 
 fn new_command_segment(
-    kind: &str,
+    kind: CommandSegmentKind,
     key: String,
     label: String,
     agent_tools: Vec<String>,
@@ -346,7 +357,7 @@ fn new_command_segment(
 ) -> CommandSegment {
     CommandSegment {
         id: String::new(),
-        kind: kind.to_string(),
+        kind,
         key,
         label,
         agent_tools,

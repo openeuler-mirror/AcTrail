@@ -2,7 +2,7 @@
   <section class="attribution-stats-workspace">
     <header class="stats-header">
       <div>
-        <span class="stats-kicker">Exclusive wall-clock statistics</span>
+        <span class="stats-kicker">Wall-clock attribution and tool workloads</span>
         <h2>Agent / model time attribution</h2>
         <p>Trace intervals that overlap the selected range are clipped before aggregation.</p>
       </div>
@@ -91,7 +91,7 @@
         <article class="breakdown-panel">
           <header>
             <h3>Agent Tools</h3>
-            <span>Logical tools requested by the model, plus local work</span>
+            <span>Each real tool invocation; overlapping tools retain their own wall time</span>
           </header>
           <button
             v-for="row in filteredTools"
@@ -109,7 +109,7 @@
               <small>{{ formatAttributionPercent(row.percentage_bps) }}</small>
             </span>
           </button>
-          <div v-if="!filteredTools.length" class="empty-panel">No Agent-side time in range.</div>
+          <div v-if="!filteredTools.length" class="empty-panel">No Agent Tool invocations in range.</div>
         </article>
 
         <article class="breakdown-panel">
@@ -172,7 +172,12 @@
             </span>
             <span class="measure">
               <strong>{{ formatAttributionDuration(row.contribution_duration_nanos) }}</strong>
-              <small>{{ formatAttributionPercent(row.percentage_bps) }} of clipped Trace</small>
+              <small v-if="selectedFilter?.dimension === 'tool'">
+                {{ formatAttributionPercent(row.percentage_bps) }} overlap-counted workload / clipped Trace
+              </small>
+              <small v-else>
+                {{ formatAttributionPercent(row.percentage_bps) }} of clipped Trace
+              </small>
             </span>
             <ExternalLink :size="15" aria-hidden="true" />
           </button>
@@ -203,9 +208,14 @@ import {
   attributionStatusLabel,
   formatAttributionDuration,
   formatAttributionPercent,
-  normalizeAttributionTarget,
 } from '../../../components/time-attribution/model';
 import { defaultRange, quickRange, rangeToMillis } from '../llm/model';
+import {
+  commandCountLabel,
+  filterBreakdownRows,
+  matchesAttributionQuery,
+  openTraceEvent,
+} from './workspace-model';
 
 const props = defineProps({
   query: {
@@ -234,12 +244,18 @@ let rowController = null;
 const loading = computed(() => activityLoading.value || rowLoading.value);
 const parsedRange = computed(() => rangeToMillis(range.value));
 const normalizedQuery = computed(() => props.query.trim().toLowerCase());
-const filteredModels = computed(() => filterRows(activity.value?.models ?? []));
-const filteredTools = computed(() => filterRows(activity.value?.tools ?? []));
-const filteredCommands = computed(() => filterRows(activity.value?.commands ?? []));
+const filteredModels = computed(() =>
+  filterBreakdownRows(activity.value?.models ?? [], normalizedQuery.value));
+const filteredTools = computed(() =>
+  filterBreakdownRows(activity.value?.tools ?? [], normalizedQuery.value));
+const filteredCommands = computed(() =>
+  filterBreakdownRows(activity.value?.commands ?? [], normalizedQuery.value));
 const filteredRows = computed(() =>
   rows.value.filter((row) =>
-    matchesQuery([row.trace?.name, row.trace?.id, row.trace?.state, row.status]),
+    matchesAttributionQuery(
+      [row.trace?.name, row.trace?.id, row.trace?.state, row.status],
+      normalizedQuery.value,
+    ),
   ),
 );
 
@@ -259,50 +275,60 @@ watch(
 
 onMounted(reload);
 onBeforeUnmount(() => {
-  activityController?.abort();
-  rowController?.abort();
+  const activeActivityController = activityController;
+  const activeRowController = rowController;
+  activityController = null;
+  rowController = null;
+  activeActivityController?.abort();
+  activeRowController?.abort();
   emit('loading', false);
 });
 
-function setQuickRange(days) {
-  range.value = quickRange(days);
-}
+function setQuickRange(days) { range.value = quickRange(days); }
 
 async function reload() {
   const parsed = parsedRange.value;
+  const previousActivityController = activityController;
+  const previousRowController = rowController;
+  activityController = null;
+  rowController = null;
+  previousActivityController?.abort();
+  previousRowController?.abort();
+  activityLoading.value = false;
+  rowLoading.value = false;
   if (!parsed.ok) {
     error.value = parsed.error;
     activity.value = null;
     return;
   }
-  activityController?.abort();
-  rowController?.abort();
-  activityController = new AbortController();
+  const activeController = new AbortController();
+  activityController = activeController;
   activityLoading.value = true;
-  rowLoading.value = false;
   selectedFilter.value = null;
   rows.value = [];
   rowTotal.value = 0;
   error.value = '';
   try {
-    activity.value = await readTimeAttributionActivity({
+    const result = await readTimeAttributionActivity({
       fromMs: parsed.fromMs,
       toMs: parsed.toMs,
-      signal: activityController.signal,
+      signal: activeController.signal,
     });
+    if (activityController === activeController) activity.value = result;
   } catch (err) {
-    if (err?.name !== 'AbortError') {
+    if (activityController === activeController && err?.name !== 'AbortError') {
       error.value = String(err.message ?? err);
       activity.value = null;
     }
   } finally {
-    activityLoading.value = false;
+    if (activityController === activeController) {
+      activityController = null;
+      activityLoading.value = false;
+    }
   }
 }
 
-function selectCategory(row) {
-  selectBreakdown('category', row);
-}
+function selectCategory(row) { selectBreakdown('category', row); }
 
 async function selectBreakdown(dimension, row) {
   if (!row?.key) {
@@ -329,7 +355,8 @@ async function loadRows(offset) {
     return;
   }
   rowController?.abort();
-  rowController = new AbortController();
+  const activeController = new AbortController();
+  rowController = activeController;
   rowLoading.value = true;
   error.value = '';
   try {
@@ -340,57 +367,26 @@ async function loadRows(offset) {
       limit: rowLimit,
       dimension: filter.dimension,
       key: filter.key,
-      signal: rowController.signal,
+      signal: activeController.signal,
     });
+    if (rowController !== activeController) return;
     const nextRows = Array.isArray(response.rows) ? response.rows : [];
     rows.value = offset === 0 ? nextRows : rows.value.concat(nextRows);
     rowTotal.value = Number(response.page?.total ?? rows.value.length);
   } catch (err) {
-    if (err?.name !== 'AbortError') {
+    if (rowController === activeController && err?.name !== 'AbortError') {
       error.value = String(err.message ?? err);
     }
   } finally {
-    rowLoading.value = false;
+    if (rowController === activeController) {
+      rowController = null;
+      rowLoading.value = false;
+    }
   }
 }
 
 function openTrace(row) {
-  const focus = normalizeAttributionTarget(row.target, {
-    source: 'Stats Time Attribution',
-    dimension: selectedFilter.value?.dimension,
-    key: selectedFilter.value?.key,
-    label: selectedFilter.value?.label,
-    description: `Longest contiguous interval in this Trace · ${formatAttributionDuration(row.contribution_duration_nanos)} total contribution`,
-  });
-  emit('open-trace', {
-    traceId: row.trace.id,
-    tabId: 'waterfall',
-    focus,
-  });
-}
-
-function filterRows(values) {
-  return values.filter((row) =>
-    matchesQuery([row.label, row.key, row.kind, ...(row.agent_tools ?? [])]),
-  );
-}
-
-function commandCountLabel(row) {
-  if (row.kind === 'tool_overhead') {
-    return `${row.segment_count} intervals · Agent Tool self-time`;
-  }
-  return `${row.action_count} command processes · ${row.segment_count} intervals`;
-}
-
-function matchesQuery(values) {
-  if (!normalizedQuery.value) {
-    return true;
-  }
-  return values
-    .filter((value) => value !== null && value !== undefined)
-    .join(' ')
-    .toLowerCase()
-    .includes(normalizedQuery.value);
+  emit('open-trace', openTraceEvent(row, selectedFilter.value));
 }
 </script>
 

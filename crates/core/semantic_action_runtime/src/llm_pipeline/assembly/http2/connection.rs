@@ -188,6 +188,9 @@ impl Http2StreamAssembly {
             return output;
         };
         self.plain.sse_parse_cache = sse_parse_cache;
+        if projection.terminal {
+            output.mark_closed_response_actions(&projection.actions);
+        }
         output.actions.extend(projection.actions);
         output
             .provider_response_ids

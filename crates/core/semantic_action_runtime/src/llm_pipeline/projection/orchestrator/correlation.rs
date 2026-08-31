@@ -1,17 +1,16 @@
 //! HTTP and LLM request/response correlation orchestration.
-
-use std::collections::{BTreeSet, VecDeque};
-use std::time::SystemTime;
-
 use model_core::diagnostics::LlmPipelineDiagnosticCode;
 use model_core::ids::TraceId;
 use semantic_action::{
     SemanticAction, SemanticActionCompleteness, SemanticActionStatus, attr_keys as attrs,
 };
+use std::collections::BTreeSet;
+use std::time::SystemTime;
 
 use crate::live::{HttpResponseMatch, MatchedHttpRequest};
 use crate::llm_pipeline::projection::correlation::{
-    self as call, ActiveLlmResponseBinding, LlmActionOrder, LlmStreamKey,
+    self as call, ActiveLlmResponseBinding, ClosedLlmExchangeBinding, IndexedQueue, LlmActionOrder,
+    LlmStreamKey,
 };
 use crate::llm_pipeline::projection::projector::capacity_diagnostic;
 use crate::llm_pipeline::transport::websocket;
@@ -26,12 +25,18 @@ impl ProjectionCoordinator {
         matched: HttpResponseMatch,
     ) -> (Option<LlmStreamKey>, LiveLlmOutput) {
         let mut output = LiveLlmOutput::default();
+        if !matched.eligible_for_llm_correlation() {
+            return (None, output);
+        }
         let candidates = LlmStreamKey::from_http_response_candidates(&matched.response);
         let stream_key = candidates
             .iter()
-            .find(|candidate| {
-                self.correlation.open_requests.contains_key(*candidate)
-                    && self.correlation.pending_responses.contains_key(*candidate)
+            .find(|candidate| self.http_exchange_ready(candidate, &matched))
+            .or_else(|| {
+                candidates.iter().find(|candidate| {
+                    self.correlation.open_requests.contains_key(*candidate)
+                        && self.correlation.pending_responses.contains_key(*candidate)
+                })
             })
             .or_else(|| {
                 candidates.iter().find(|candidate| {
@@ -39,7 +44,6 @@ impl ProjectionCoordinator {
                         || self.correlation.pending_responses.contains_key(*candidate)
                 })
             })
-            .or_else(|| candidates.first())
             .cloned();
         let Some(stream_key) = stream_key else {
             return (None, output);
@@ -47,24 +51,14 @@ impl ProjectionCoordinator {
         if !self.admit_correlation_stream(&stream_key, matched.response.start_time, &mut output) {
             return (None, output);
         }
-        // A CONNECT exchange only marks a TLS tunnel start; it does not make
-        // the stream "HTTP-visible" for confirmed-exchange binding, so those
-        // streams stay eligible for the trace-close pairing fallback.
-        if matched.request.method.as_deref() != Some("CONNECT") {
-            self.correlation
-                .http_exchange_streams
-                .insert(stream_key.clone());
-        }
         let exchanges = self
             .correlation
             .confirmed_http_exchanges
             .entry(stream_key.clone())
             .or_default();
-        if let Some(existing) = exchanges
-            .iter_mut()
-            .find(|exchange| exchange.response.action_id == matched.response.action_id)
-        {
-            *existing = matched;
+        let response_action_id = matched.response.action_id.clone();
+        if exchanges.get(&response_action_id).is_some() {
+            exchanges.upsert(response_action_id, matched);
             return (Some(stream_key), output);
         }
         if exchanges.len() >= self.correlation.max_confirmed_http_exchanges_per_stream {
@@ -83,48 +77,76 @@ impl ProjectionCoordinator {
                 "dropped oldest unconsumed confirmed HTTP exchange at configured capacity"
             );
         }
-        exchanges.push_back(matched);
+        exchanges.upsert(response_action_id, matched);
         (Some(stream_key), output)
+    }
+
+    pub(in crate::llm_pipeline) fn reconcile_ready_http_exchange(
+        &mut self,
+        matched: &HttpResponseMatch,
+    ) -> Option<LiveLlmOutput> {
+        let ready = LlmStreamKey::from_http_response_candidates(&matched.response)
+            .iter()
+            .any(|candidate| self.http_exchange_ready(candidate, matched));
+        if !ready {
+            return None;
+        }
+        let (stream_key, mut output) = self.remember_confirmed_http_exchange(matched.clone());
+        let stream_key = stream_key?;
+        output.extend(self.reconcile_confirmed_http_exchanges(&stream_key));
+        Some(output)
+    }
+
+    fn http_exchange_ready(&self, stream_key: &LlmStreamKey, matched: &HttpResponseMatch) -> bool {
+        self.correlation
+            .open_requests
+            .get(stream_key)
+            .and_then(IndexedQueue::front)
+            .zip(
+                self.correlation
+                    .pending_responses
+                    .get(stream_key)
+                    .and_then(IndexedQueue::front),
+            )
+            .is_some_and(|(request, response)| {
+                request.matches_http_request(&matched.request)
+                    && response.matches_http_response(&matched.response)
+            })
     }
 
     pub(in crate::llm_pipeline) fn reconcile_confirmed_http_exchanges(
         &mut self,
         stream_key: &LlmStreamKey,
     ) -> LiveLlmOutput {
-        let selection = self
+        let ready = self
             .correlation
             .confirmed_http_exchanges
             .get(stream_key)
-            .and_then(|exchanges| {
-                exchanges
-                    .iter()
-                    .enumerate()
-                    .find_map(|(exchange_index, exchange)| {
-                        let request_index = self
-                            .correlation
-                            .open_requests
-                            .get(stream_key)?
-                            .iter()
-                            .position(|request| request.matches_http_request(&exchange.request))?;
-                        let response_index = self
-                            .correlation
-                            .pending_responses
-                            .get(stream_key)?
-                            .iter()
-                            .position(|response| {
-                                response.matches_http_response(&exchange.response)
-                            })?;
-                        Some((exchange_index, request_index, response_index))
-                    })
+            .and_then(IndexedQueue::front)
+            .zip(
+                self.correlation
+                    .open_requests
+                    .get(stream_key)
+                    .and_then(IndexedQueue::front),
+            )
+            .zip(
+                self.correlation
+                    .pending_responses
+                    .get(stream_key)
+                    .and_then(IndexedQueue::front),
+            )
+            .is_some_and(|((exchange, request), response)| {
+                request.matches_http_request(&exchange.request)
+                    && response.matches_http_response(&exchange.response)
             });
-        let Some((exchange_index, request_index, response_index)) = selection else {
+        if !ready {
             return LiveLlmOutput::default();
-        };
+        }
         let Some(exchange) = self
             .correlation
             .confirmed_http_exchanges
             .get_mut(stream_key)
-            .and_then(|exchanges| exchanges.remove(exchange_index))
+            .and_then(IndexedQueue::pop_front)
         else {
             return LiveLlmOutput::default();
         };
@@ -132,7 +154,7 @@ impl ProjectionCoordinator {
             .correlation
             .open_requests
             .get_mut(stream_key)
-            .and_then(|requests| requests.remove(request_index))
+            .and_then(IndexedQueue::pop_front)
             .map(|request| request.action)
         else {
             return LiveLlmOutput::default();
@@ -141,16 +163,34 @@ impl ProjectionCoordinator {
             .correlation
             .pending_responses
             .get_mut(stream_key)
-            .and_then(|responses| responses.remove(response_index))
+            .and_then(IndexedQueue::pop_front)
         else {
             self.restore_open_request(request);
             return LiveLlmOutput::default();
         };
+        let response_binding_key = (response.action.trace_id, response.action.action_id.clone());
+        if let Some(owner) = self
+            .correlation
+            .active_response_requests
+            .get(&response_binding_key)
+        {
+            if owner.request.action_id != request.action_id {
+                tracing::warn!(
+                    trace_id = response.action.trace_id.get(),
+                    response_action_id = %response.action.action_id,
+                    owner_request_action_id = %owner.request.action_id,
+                    rejected_request_action_id = %request.action_id,
+                    "rejected a second request for an active LLM response"
+                );
+                self.restore_open_request(request);
+                return LiveLlmOutput::default();
+            }
+        }
         if self
             .correlation
             .open_requests
             .get(stream_key)
-            .is_some_and(VecDeque::is_empty)
+            .is_some_and(IndexedQueue::is_empty)
         {
             self.correlation.open_requests.remove(stream_key);
         }
@@ -158,7 +198,7 @@ impl ProjectionCoordinator {
             .correlation
             .pending_responses
             .get(stream_key)
-            .is_some_and(VecDeque::is_empty)
+            .is_some_and(IndexedQueue::is_empty)
         {
             self.correlation.pending_responses.remove(stream_key);
         }
@@ -166,7 +206,7 @@ impl ProjectionCoordinator {
             .correlation
             .confirmed_http_exchanges
             .get(stream_key)
-            .is_some_and(VecDeque::is_empty)
+            .is_some_and(IndexedQueue::is_empty)
         {
             self.correlation.confirmed_http_exchanges.remove(stream_key);
         }
@@ -203,7 +243,9 @@ impl ProjectionCoordinator {
                 .unwrap_or(response.action.start_time),
         );
         self.apply_resolved_trajectory_assignments(request.trace_id, assignments, &mut output);
-        self.push_recorded_action(response.action.clone(), &mut output);
+        if !response.compacted {
+            self.push_recorded_action(response.action.clone(), &mut output);
+        }
         let mut call = call::llm_call_from_request_response(&request, Some(&response.action));
         if let Some(finalized) = response
             .action
@@ -223,9 +265,11 @@ impl ProjectionCoordinator {
             &response.action,
             ActiveLlmResponseBinding {
                 request,
+                response: response.action.clone(),
                 http_request_action_id,
                 http_response_action_id,
             },
+            response.closed,
         ));
         self.push_recorded_action(call, &mut output);
         output
@@ -242,7 +286,7 @@ impl ProjectionCoordinator {
             .correlation
             .open_requests
             .get_mut(stream_key)
-            .and_then(VecDeque::pop_front)
+            .and_then(IndexedQueue::pop_front)
             .map(|request| request.action)
         else {
             return LiveLlmOutput::default();
@@ -251,7 +295,7 @@ impl ProjectionCoordinator {
             .correlation
             .pending_responses
             .get_mut(stream_key)
-            .and_then(VecDeque::pop_front)
+            .and_then(IndexedQueue::pop_front)
         else {
             self.restore_open_request(request);
             return LiveLlmOutput::default();
@@ -260,7 +304,7 @@ impl ProjectionCoordinator {
             .correlation
             .open_requests
             .get(stream_key)
-            .is_some_and(VecDeque::is_empty)
+            .is_some_and(IndexedQueue::is_empty)
         {
             self.correlation.open_requests.remove(stream_key);
         }
@@ -268,7 +312,7 @@ impl ProjectionCoordinator {
             .correlation
             .pending_responses
             .get(stream_key)
-            .is_some_and(VecDeque::is_empty)
+            .is_some_and(IndexedQueue::is_empty)
         {
             self.correlation.pending_responses.remove(stream_key);
         }
@@ -283,9 +327,143 @@ impl ProjectionCoordinator {
                 .unwrap_or(response.action.start_time),
         );
         self.apply_resolved_trajectory_assignments(request.trace_id, assignments, &mut output);
-        self.push_recorded_action(response.action.clone(), &mut output);
+        if !response.compacted {
+            self.push_recorded_action(response.action.clone(), &mut output);
+        }
         let call = call::llm_call_from_request_response(&request, Some(&response.action));
         self.push_recorded_action(call, &mut output);
+        output
+    }
+
+    /// Completes one closed exchange after the current payload transaction had
+    /// a chance to provide its exact application HTTP exchange.
+    fn reconcile_closed_unconfirmed_exchange(
+        &mut self,
+        stream_key: &LlmStreamKey,
+        response_action_id: &str,
+    ) -> (LiveLlmOutput, Option<ClosedLlmExchangeBinding>) {
+        if websocket::WebSocketLlmAdapter::is_exchange_stream_key(&stream_key.stream_key) {
+            return (LiveLlmOutput::default(), None);
+        }
+        let ready = self
+            .correlation
+            .pending_responses
+            .get(stream_key)
+            .and_then(IndexedQueue::back)
+            .filter(|response| response.action.action_id == response_action_id)
+            .filter(|response| response.closed)
+            .and_then(|response| {
+                let response_order = LlmActionOrder::from_action(&response.action)?;
+                let request = self.correlation.open_requests.get(stream_key)?.back()?;
+                let request_order = LlmActionOrder::from_action(&request.action)?;
+                (request_order <= response_order).then_some(())
+            })
+            .is_some();
+        if !ready {
+            return (LiveLlmOutput::default(), None);
+        }
+        let Some(response) = self
+            .correlation
+            .pending_responses
+            .get_mut(stream_key)
+            .and_then(|responses| responses.remove(response_action_id))
+        else {
+            return (LiveLlmOutput::default(), None);
+        };
+        let Some(request) = self
+            .correlation
+            .open_requests
+            .get_mut(stream_key)
+            .and_then(IndexedQueue::pop_back)
+        else {
+            self.correlation
+                .pending_responses
+                .entry(stream_key.clone())
+                .or_default()
+                .upsert(response.action.action_id.clone(), response);
+            return (LiveLlmOutput::default(), None);
+        };
+        if self
+            .correlation
+            .open_requests
+            .get(stream_key)
+            .is_some_and(IndexedQueue::is_empty)
+        {
+            self.correlation.open_requests.remove(stream_key);
+        }
+        if self
+            .correlation
+            .pending_responses
+            .get(stream_key)
+            .is_some_and(IndexedQueue::is_empty)
+        {
+            self.correlation.pending_responses.remove(stream_key);
+        }
+
+        let mut output = LiveLlmOutput::default();
+        let assignments = self.projector.register_provider_response(
+            &request.action,
+            response.provider_response_id.as_deref(),
+            response
+                .action
+                .end_time
+                .unwrap_or(response.action.start_time),
+        );
+        self.apply_resolved_trajectory_assignments(
+            request.action.trace_id,
+            assignments,
+            &mut output,
+        );
+        if !response.compacted {
+            self.push_recorded_action(response.action.clone(), &mut output);
+        }
+        let mut llm_call =
+            call::llm_call_from_request_response(&request.action, Some(&response.action));
+        if response.action.status == SemanticActionStatus::Error {
+            llm_call.status = SemanticActionStatus::Error;
+            llm_call.completeness = SemanticActionCompleteness::Partial;
+        }
+        self.push_recorded_action(llm_call, &mut output);
+        let binding = ClosedLlmExchangeBinding::new(request, response);
+        (output, Some(binding))
+    }
+
+    pub(in crate::llm_pipeline) fn reconcile_closed_unconfirmed_identity_exchanges(
+        &mut self,
+        identity: &model_core::payload::PayloadStreamIdentity,
+    ) -> LiveLlmOutput {
+        let mut output = LiveLlmOutput::default();
+        let markers = self.correlation.take_closed_pending_responses(identity);
+        let mut closed_bindings = Vec::new();
+        let mut blocked_markers = Vec::new();
+        for marker in markers.into_iter().rev() {
+            if websocket::WebSocketLlmAdapter::is_exchange_stream_key(&marker.stream_key.stream_key)
+            {
+                self.correlation
+                    .compact_pending_response(&marker.stream_key, &marker.response_action_id);
+                continue;
+            }
+            let (changed, binding) = self.reconcile_closed_unconfirmed_exchange(
+                &marker.stream_key,
+                &marker.response_action_id,
+            );
+            output.extend(changed);
+            if let Some(binding) = binding {
+                closed_bindings.push((marker.stream_key, binding));
+            } else if self
+                .correlation
+                .compact_pending_response(&marker.stream_key, &marker.response_action_id)
+            {
+                blocked_markers.push(marker);
+            }
+        }
+        for (stream_key, binding) in closed_bindings.into_iter().rev() {
+            self.remember_closed_llm_exchange(&stream_key, binding, &mut output);
+        }
+        for marker in blocked_markers.into_iter().rev() {
+            self.correlation
+                .mark_closed_pending_response(&marker.stream_key, &marker.response_action_id);
+        }
         output
     }
 
@@ -323,6 +501,21 @@ impl ProjectionCoordinator {
         output
     }
 
+    pub(in crate::llm_pipeline) fn reconcile_unconfirmed_identity_exchanges(
+        &mut self,
+        identity: &model_core::payload::PayloadStreamIdentity,
+        finished_at: SystemTime,
+    ) -> LiveLlmOutput {
+        let mut output = LiveLlmOutput::default();
+        for key in self.correlation.unconfirmed_streams_for_identity(identity) {
+            if websocket::WebSocketLlmAdapter::is_exchange_stream_key(&key.stream_key) {
+                continue;
+            }
+            output.extend(self.reconcile_ordered_stream(&key, finished_at));
+        }
+        output
+    }
+
     fn reconcile_ordered_stream(
         &mut self,
         stream_key: &LlmStreamKey,
@@ -338,46 +531,32 @@ impl ProjectionCoordinator {
                 .insert(stream_key.clone(), requests);
             return output;
         };
-        let mut requests = requests.into_iter().collect::<Vec<_>>();
-        requests.sort_by_key(|request| {
-            (
-                LlmActionOrder::from_action(&request.action).is_none(),
-                LlmActionOrder::from_action(&request.action),
-                request.action.action_id.clone(),
-            )
-        });
-        let mut responses = responses.into_iter().collect::<Vec<_>>();
-        responses.sort_by_key(|response| {
-            (
-                LlmActionOrder::from_action(&response.action).is_none(),
-                LlmActionOrder::from_action(&response.action),
-                response.action.action_id.clone(),
-            )
-        });
-        let mut requests = VecDeque::from(requests);
-        let mut responses = VecDeque::from(responses);
-        let mut remaining_responses = VecDeque::new();
-        while let (Some(request), Some(response)) = (requests.front(), responses.front()) {
-            let Some(request_order) = LlmActionOrder::from_action(&request.action) else {
-                break;
-            };
+        let mut requests = requests;
+        let mut eligible_requests = Vec::new();
+        let mut remaining_responses = IndexedQueue::new();
+        for response in responses.into_values() {
             let Some(response_order) = LlmActionOrder::from_action(&response.action) else {
-                if let Some(response) = responses.pop_front() {
-                    remaining_responses.push_back(response);
-                }
+                remaining_responses.upsert(response.action.action_id.clone(), response);
                 continue;
             };
-            if request_order > response_order {
-                if let Some(response) = responses.pop_front() {
-                    remaining_responses.push_back(response);
+            // Confirmed HTTP exchanges have already consumed their exact
+            // requests. For the remaining HTTP/1/TLS evidence, bind a
+            // response to the most recent preceding request. An older probe
+            // may legitimately have no response; FIFO pairing would shift
+            // every later response onto the wrong call.
+            while requests.front().is_some_and(|request| {
+                LlmActionOrder::from_action(&request.action)
+                    .is_some_and(|request_order| request_order <= response_order)
+            }) {
+                if let Some(request) = requests.pop_front() {
+                    eligible_requests.push(request);
                 }
-                continue;
             }
-            let request = requests
-                .pop_front()
-                .expect("front request was present")
-                .action;
-            let response = responses.pop_front().expect("front response was present");
+            let Some(request) = eligible_requests.pop() else {
+                remaining_responses.upsert(response.action.action_id.clone(), response);
+                continue;
+            };
+            let request = request.action;
 
             let assignments = self.projector.register_provider_response(
                 &request,
@@ -388,7 +567,9 @@ impl ProjectionCoordinator {
                     .unwrap_or(response.action.start_time),
             );
             self.apply_resolved_trajectory_assignments(request.trace_id, assignments, &mut output);
-            self.push_recorded_action(response.action.clone(), &mut output);
+            if !response.compacted {
+                self.push_recorded_action(response.action.clone(), &mut output);
+            }
             let mut call = call::llm_call_from_request_response(&request, Some(&response.action));
             if response.action.status == SemanticActionStatus::Error {
                 call.status = SemanticActionStatus::Error;
@@ -407,11 +588,14 @@ impl ProjectionCoordinator {
             }
             self.push_recorded_action(call, &mut output);
         }
-        remaining_responses.extend(responses);
-        if !requests.is_empty() {
+        let mut remaining_requests = IndexedQueue::new();
+        for request in eligible_requests.into_iter().chain(requests.into_values()) {
+            remaining_requests.upsert(request.action.action_id.clone(), request);
+        }
+        if !remaining_requests.is_empty() {
             self.correlation
                 .open_requests
-                .insert(stream_key.clone(), requests);
+                .insert(stream_key.clone(), remaining_requests);
         }
         if !remaining_responses.is_empty() {
             self.correlation
@@ -434,129 +618,82 @@ impl ProjectionCoordinator {
             .and_then(|exchanges| {
                 exchanges
                     .iter()
-                    .enumerate()
-                    .rev()
-                    .find_map(|(index, exchange)| {
+                    .filter_map(|exchange| {
                         let response_sequence = exchange
                             .response
                             .attributes
                             .get("payload_sequence")
                             .and_then(|value| value.parse::<u64>().ok())?;
-                        (response_sequence == operation_id)
-                            .then_some((index, exchange.request.clone()))
+                        (response_sequence == operation_id).then_some((
+                            exchange.response.action_id.clone(),
+                            exchange.request.clone(),
+                        ))
                     })
+                    .last()
             });
-        if let Some((exchange_index, matched_request)) = exchange_selection {
-            let request_index =
-                self.correlation
-                    .open_requests
-                    .get(stream_key)
-                    .and_then(|requests| {
-                        requests
-                            .iter()
-                            .position(|request| request.matches_http_request(&matched_request))
-                    });
+        if let Some((exchange_action_id, matched_request)) = exchange_selection {
+            let request_action_id = self
+                .correlation
+                .open_requests
+                .get(stream_key)?
+                .iter()
+                .find(|request| request.matches_http_request(&matched_request))?
+                .action
+                .action_id
+                .clone();
             let exchange = self
                 .correlation
                 .confirmed_http_exchanges
                 .get_mut(stream_key)?
-                .remove(exchange_index)?;
+                .remove(&exchange_action_id)?;
             if self
                 .correlation
                 .confirmed_http_exchanges
                 .get(stream_key)
-                .is_some_and(VecDeque::is_empty)
+                .is_some_and(IndexedQueue::is_empty)
             {
                 self.correlation.confirmed_http_exchanges.remove(stream_key);
             }
-            let Some(request_index) = request_index else {
-                return None;
-            };
             let request = self
                 .correlation
                 .open_requests
                 .get_mut(stream_key)?
-                .remove(request_index)?
+                .remove(&request_action_id)?
                 .action;
             if self
                 .correlation
                 .open_requests
                 .get(stream_key)
-                .is_some_and(VecDeque::is_empty)
+                .is_some_and(IndexedQueue::is_empty)
             {
                 self.correlation.open_requests.remove(stream_key);
             }
             return Some((request, exchange.request, Some(exchange.response)));
         }
         let matched_request = unmatched_request?;
-        let request_index = self
+        let request_action_id = self
             .correlation
             .open_requests
             .get(stream_key)?
             .iter()
-            .position(|request| request.matches_http_request(&matched_request))?;
+            .find(|request| request.matches_http_request(&matched_request))?
+            .action
+            .action_id
+            .clone();
         let request = self
             .correlation
             .open_requests
             .get_mut(stream_key)?
-            .remove(request_index)?
+            .remove(&request_action_id)?
             .action;
         if self
             .correlation
             .open_requests
             .get(stream_key)
-            .is_some_and(VecDeque::is_empty)
+            .is_some_and(IndexedQueue::is_empty)
         {
             self.correlation.open_requests.remove(stream_key);
         }
         Some((request, matched_request, None))
-    }
-
-    pub(in crate::llm_pipeline) fn take_open_request_for_http_response(
-        &mut self,
-        http_response: &SemanticAction,
-        matched_request: &MatchedHttpRequest,
-    ) -> Option<SemanticAction> {
-        for stream_key in LlmStreamKey::from_http_response_candidates(http_response) {
-            let Some(requests) = self.correlation.open_requests.get_mut(&stream_key) else {
-                continue;
-            };
-            if !requests
-                .front()
-                .is_some_and(|request| request.matches_http_request(matched_request))
-            {
-                continue;
-            }
-            let request = requests.pop_front()?.action;
-            if requests.is_empty() {
-                self.correlation.open_requests.remove(&stream_key);
-            }
-            return Some(request);
-        }
-        None
-    }
-
-    pub(in crate::llm_pipeline) fn take_open_request_for_unmatched_http_failure(
-        &mut self,
-        http_response: &SemanticAction,
-    ) -> Option<SemanticAction> {
-        for stream_key in LlmStreamKey::from_http_response_candidates(http_response) {
-            let Some(requests) = self.correlation.open_requests.get_mut(&stream_key) else {
-                continue;
-            };
-            if !requests
-                .front()
-                .is_some_and(|request| request.action.start_time <= http_response.start_time)
-            {
-                continue;
-            }
-            let request = requests.pop_front()?.action;
-            if requests.is_empty() {
-                self.correlation.open_requests.remove(&stream_key);
-            }
-            self.correlation.http_exchange_streams.insert(stream_key);
-            return Some(request);
-        }
-        None
     }
 }

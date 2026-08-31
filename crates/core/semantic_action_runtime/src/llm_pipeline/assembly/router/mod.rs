@@ -1,5 +1,6 @@
 mod identity;
 mod limits;
+mod partial;
 mod recovery;
 mod router;
 

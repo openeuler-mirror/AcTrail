@@ -1,6 +1,6 @@
 //! Wall-clock attribution for Agent-side, observable model-side, and unattributed time.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -19,8 +19,12 @@ use storage_core::{StorageBackend, TraceFilter};
 mod agents;
 #[path = "time_attribution/aggregate.rs"]
 mod aggregate;
+#[path = "time_attribution/api.rs"]
+mod api;
 #[path = "time_attribution/cache.rs"]
 mod cache;
+#[path = "time_attribution/model.rs"]
+mod model;
 #[path = "time_attribution/partition.rs"]
 mod partition;
 #[path = "time_attribution/projection.rs"]
@@ -31,8 +35,16 @@ mod summary;
 mod turns;
 
 use self::aggregate::{
-    aggregate_breakdowns, aggregate_coverage, aggregate_issues, aggregate_status, attribution_row,
-    dominant_category_target, project_range, sum_category_totals, trace_duration,
+    aggregate_breakdowns, aggregate_coverage, aggregate_issues, aggregate_status,
+    aggregate_tool_workloads, attribution_row, dominant_category_target, project_range,
+    sum_category_totals, trace_duration,
+};
+pub(crate) use self::api::{
+    TimeAttributionDimension, TimeAttributionRangeQuery, TimeAttributionRowsQuery,
+};
+pub(super) use self::api::{
+    aggregate_time_attribution_json, clear_time_attribution_cache, time_attribution_rows_json,
+    trace_time_attribution_json,
 };
 use self::cache::project_trace;
 use self::summary::exact_percentages;
@@ -49,52 +61,6 @@ const COMMAND_OVERHEAD_KEY: &str = "__tool_overhead__";
 const COMMAND_CONCURRENT_KEY: &str = "__concurrent_commands__";
 const BOTTLENECK_DEFAULT_DISPLAY_LIMIT: usize = 5;
 const TERMINAL_CACHE_CAPACITY: usize = 128;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct TimeAttributionRangeQuery {
-    pub from_ms: u64,
-    pub to_ms: u64,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum TimeAttributionDimension {
-    Category,
-    Model,
-    Tool,
-    Command,
-}
-
-impl TimeAttributionDimension {
-    pub(crate) fn parse(raw: &str) -> Result<Self, String> {
-        match raw {
-            "category" => Ok(Self::Category),
-            "model" => Ok(Self::Model),
-            "tool" => Ok(Self::Tool),
-            "command" => Ok(Self::Command),
-            _ => Err(format!(
-                "unsupported time attribution dimension {raw}; expected category, model, tool, or command"
-            )),
-        }
-    }
-
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Category => "category",
-            Self::Model => "model",
-            Self::Tool => "tool",
-            Self::Command => "command",
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct TimeAttributionRowsQuery {
-    pub range: TimeAttributionRangeQuery,
-    pub offset: usize,
-    pub limit: usize,
-    pub dimension: Option<TimeAttributionDimension>,
-    pub key: Option<String>,
-}
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -260,6 +226,15 @@ struct BreakdownShare {
 }
 
 #[derive(Clone, Debug, Serialize)]
+struct ToolWorkload {
+    key: String,
+    label: String,
+    call_count: usize,
+    measured_interval_count: usize,
+    measured_duration_nanos: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
 struct AttributionSegment {
     id: String,
     category: String,
@@ -270,16 +245,36 @@ struct AttributionSegment {
     end_unix_nanos: String,
     duration_nanos: String,
     action_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    agent_tools: Vec<String>,
     #[serde(skip)]
     interval: Interval,
     #[serde(skip)]
     category_value: Category,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum CommandSegmentKind {
+    ToolOverhead,
+    ConcurrentCommands,
+    Command,
+}
+
+impl CommandSegmentKind {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::ToolOverhead => "tool_overhead",
+            Self::ConcurrentCommands => "concurrent_commands",
+            Self::Command => "command",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 struct CommandSegment {
     id: String,
-    kind: String,
+    kind: CommandSegmentKind,
     key: String,
     label: String,
     agent_tools: Vec<String>,
@@ -289,6 +284,21 @@ struct CommandSegment {
     action_ids: Vec<String>,
     #[serde(skip)]
     interval: Interval,
+}
+
+impl CommandSegment {
+    const fn contains_command_interval(&self) -> bool {
+        !matches!(self.kind, CommandSegmentKind::ToolOverhead)
+    }
+
+    fn unique_command_count(segments: &[Self]) -> usize {
+        segments
+            .iter()
+            .filter(|segment| segment.contains_command_interval())
+            .flat_map(|segment| segment.action_ids.iter().map(String::as_str))
+            .collect::<BTreeSet<_>>()
+            .len()
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -404,6 +414,10 @@ struct TraceAttribution {
     command_segments: Vec<CommandSegment>,
     coverage: TraceCoverage,
     issues: Vec<AttributionIssue>,
+    #[serde(skip)]
+    workload_tool_intervals: Vec<ToolInterval>,
+    #[serde(skip)]
+    tool_calls: Vec<model::ToolCallOccurrence>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -446,6 +460,7 @@ struct AggregateAttribution {
     categories: Vec<DurationShare>,
     models: Vec<BreakdownShare>,
     tools: Vec<BreakdownShare>,
+    tool_workloads: Vec<ToolWorkload>,
     commands: Vec<BreakdownShare>,
     coverage: AggregateCoverage,
     issues: Vec<AggregateIssue>,
@@ -647,156 +662,6 @@ impl StatusTracker {
             AttributionStatus::Complete
         }
     }
-}
-
-pub(super) fn trace_time_attribution_json(
-    storage_path: &Path,
-    storage: &mut dyn StorageBackend,
-    trace_id: TraceId,
-) -> Result<String, String> {
-    let trace = storage
-        .get_trace(trace_id)
-        .map_err(|error| storage_error("read trace for time attribution", error))?
-        .ok_or_else(|| format!("trace {trace_id} not found"))?;
-    let attribution = project_trace(storage_path, storage, &trace, None)?;
-    serde_json::to_string(&attribution)
-        .map_err(|error| format!("serialize trace time attribution failed: {error}"))
-}
-
-pub(super) fn aggregate_time_attribution_json(
-    storage_path: &Path,
-    storage: &mut dyn StorageBackend,
-    query: TimeAttributionRangeQuery,
-) -> Result<String, String> {
-    let window = range_interval(query)?;
-    let projections = project_range(storage_path, storage, window)?;
-    let total_duration = projections.iter().map(trace_duration).sum::<u128>();
-
-    let category_totals = sum_category_totals(&projections);
-    let category_percentages = exact_percentages(
-        &Category::ALL.map(|category| {
-            category_totals
-                .get(category.key())
-                .copied()
-                .unwrap_or_default()
-        }),
-        total_duration,
-    );
-    let categories = Category::ALL
-        .iter()
-        .enumerate()
-        .map(|(index, category)| {
-            let duration = category_totals
-                .get(category.key())
-                .copied()
-                .unwrap_or_default();
-            DurationShare {
-                key: category.key().to_string(),
-                label: category.label().to_string(),
-                duration_nanos: nanos_string(duration),
-                percentage_bps: category_percentages[index],
-                segment_count: projections
-                    .iter()
-                    .map(|projection| {
-                        projection
-                            .segments
-                            .iter()
-                            .filter(|segment| segment.category_value == *category)
-                            .count()
-                    })
-                    .sum(),
-                target: dominant_category_target(&projections, *category),
-            }
-        })
-        .collect::<Vec<_>>();
-    let models = aggregate_breakdowns(&projections, total_duration, |projection| {
-        &projection.models
-    });
-    let tools = aggregate_breakdowns(&projections, total_duration, |projection| &projection.tools);
-    let commands = aggregate_breakdowns(&projections, total_duration, |projection| {
-        &projection.commands
-    });
-    let coverage = aggregate_coverage(&projections);
-    let status = aggregate_status(&coverage);
-    let issues = aggregate_issues(&projections);
-    let response = AggregateAttribution {
-        schema_version: SCHEMA_VERSION,
-        range: AggregateRange {
-            from_ms: query.from_ms,
-            to_ms: query.to_ms,
-            semantics: "trace_overlap_clipped",
-        },
-        status,
-        total_duration_nanos: nanos_string(total_duration),
-        categories,
-        models,
-        tools,
-        commands,
-        coverage,
-        issues,
-    };
-    serde_json::to_string(&response)
-        .map_err(|error| format!("serialize aggregate time attribution failed: {error}"))
-}
-
-pub(super) fn time_attribution_rows_json(
-    storage_path: &Path,
-    storage: &mut dyn StorageBackend,
-    query: TimeAttributionRowsQuery,
-) -> Result<String, String> {
-    let window = range_interval(query.range)?;
-    let projections = project_range(storage_path, storage, window)?;
-    let mut rows = projections
-        .iter()
-        .filter_map(|projection| attribution_row(projection, &query))
-        .collect::<Vec<_>>();
-    rows.sort_by(|left, right| {
-        parse_nanos(&right.contribution_duration_nanos)
-            .cmp(&parse_nanos(&left.contribution_duration_nanos))
-            .then_with(|| right.trace.id.cmp(&left.trace.id))
-    });
-    let total = rows.len();
-    let page_rows = rows
-        .into_iter()
-        .skip(query.offset)
-        .take(query.limit)
-        .collect::<Vec<_>>();
-    let next_offset = query
-        .offset
-        .checked_add(page_rows.len())
-        .filter(|next| *next < total);
-    let response = AttributionRows {
-        schema_version: SCHEMA_VERSION,
-        range: AggregateRange {
-            from_ms: query.range.from_ms,
-            to_ms: query.range.to_ms,
-            semantics: "trace_overlap_clipped",
-        },
-        filter: RowsFilter {
-            dimension: query.dimension.map(TimeAttributionDimension::as_str),
-            key: query.key,
-        },
-        page: Page {
-            offset: query.offset,
-            limit: query.limit,
-            total,
-            next_offset,
-        },
-        rows: page_rows,
-    };
-    serde_json::to_string(&response)
-        .map_err(|error| format!("serialize time attribution rows failed: {error}"))
-}
-
-pub(super) fn clear_time_attribution_cache() -> usize {
-    cache::clear_time_attribution_cache()
-}
-
-fn range_interval(query: TimeAttributionRangeQuery) -> Result<Interval, String> {
-    let start = u128::from(query.from_ms) * NANOS_PER_MILLI;
-    let end = u128::from(query.to_ms) * NANOS_PER_MILLI;
-    Interval::new(start, end)
-        .ok_or_else(|| "time attribution range must have from_ms less than to_ms".to_string())
 }
 
 fn system_time_nanos(time: SystemTime) -> Result<u128, String> {

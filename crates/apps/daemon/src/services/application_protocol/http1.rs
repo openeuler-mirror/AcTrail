@@ -53,7 +53,8 @@ impl Http1Analyzer {
         if buffer.is_opaque() {
             return Ok(Vec::new());
         }
-        if summary_only {
+        let analysis_mode = buffer.pin_analysis_mode(summary_only);
+        if analysis_mode == Http1AnalysisMode::SummaryOnly {
             let (append_outcome, messages) = buffer.take_summary_messages(
                 &segment.bytes,
                 segment.sequence,
@@ -77,7 +78,7 @@ impl Http1Analyzer {
                     ))
                 })
                 .collect();
-            if buffer.text.is_empty() && !buffer.summary_body_in_progress() && !buffer.is_opaque() {
+            if buffer.message_idle() {
                 self.buffers.remove(&key);
             }
             return Ok(drafts);
@@ -147,11 +148,7 @@ impl Http1Analyzer {
                 }
             }
         }
-        if buffer.text.is_empty()
-            && !buffer.expects_chunked_sse_body()
-            && !buffer.summary_body_in_progress()
-            && !buffer.is_opaque()
-        {
+        if buffer.message_idle() {
             self.buffers.remove(&key);
         }
         Ok(drafts)
@@ -255,6 +252,7 @@ impl From<PayloadDirection> for StreamDirectionKey {
 struct StreamBuffer {
     text: String,
     state: StreamBufferState,
+    analysis_mode: Option<Http1AnalysisMode>,
     summary_body: Option<SummaryBodyProgress>,
     summary_chunked: Option<SummaryChunkedProgress>,
     summary_header_sequence: Option<u64>,
@@ -267,6 +265,7 @@ impl Default for StreamBuffer {
         Self {
             text: String::new(),
             state: StreamBufferState::Http,
+            analysis_mode: None,
             summary_body: None,
             summary_chunked: None,
             summary_header_sequence: None,
@@ -280,6 +279,12 @@ impl Default for StreamBuffer {
 enum StreamAppendOutcome {
     Appended,
     InvalidUtf8,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Http1AnalysisMode {
+    Full,
+    SummaryOnly,
 }
 
 #[derive(Clone)]
@@ -334,6 +339,22 @@ impl Default for SummaryChunkedProgress {
 }
 
 impl StreamBuffer {
+    fn pin_analysis_mode(&mut self, summary_only: bool) -> Http1AnalysisMode {
+        *self.analysis_mode.get_or_insert(if summary_only {
+            Http1AnalysisMode::SummaryOnly
+        } else {
+            Http1AnalysisMode::Full
+        })
+    }
+
+    fn message_idle(&self) -> bool {
+        self.text.is_empty()
+            && self.utf8_tail_len == 0
+            && self.summary_body.is_none()
+            && self.summary_chunked.is_none()
+            && matches!(self.state, StreamBufferState::Http)
+    }
+
     fn incomplete_segment_message(
         &self,
         segment: &PayloadSegment,
@@ -402,6 +423,7 @@ impl StreamBuffer {
                     Err(_) => {
                         self.summary_chunked = None;
                         self.state = StreamBufferState::Opaque;
+                        self.analysis_mode = None;
                         return Ok((StreamAppendOutcome::Appended, messages));
                     }
                 };
@@ -463,6 +485,7 @@ impl StreamBuffer {
                 }
                 parser::SummaryFraming::Unsupported => {
                     self.state = StreamBufferState::Opaque;
+                    self.analysis_mode = None;
                     return Ok((StreamAppendOutcome::Appended, messages));
                 }
             };

@@ -28,7 +28,7 @@ use super::recovery::{RecoveryBoundary, RecoveryScanner};
 
 /// The byte-stream assembly for one (stream_key, direction): either a plain
 /// sequential stream (HTTP/1, raw) or a de-multiplexed HTTP/2 connection.
-enum StreamBody {
+pub(super) enum StreamBody {
     Plain(PlainStreamAssembly),
     Http2(Http2ConnectionAssembly),
 }
@@ -373,6 +373,15 @@ impl LiveStreamState {
     ) -> LiveLlmOutput {
         let reason = reset.reason;
         let mut output = LiveLlmOutput::default();
+        if key.direction == LiveStreamDirection::Outbound {
+            output.extend(self.body.materialize_incomplete_requests(
+                config,
+                codecs,
+                &key.group,
+                reason.finalization_reason(),
+                segment.observed_at,
+            ));
+        }
         for (mut actions, drafts, provider_response_ids) in
             self.materialize_in_flight_responses(config, codecs, &key.group)
         {
@@ -512,21 +521,8 @@ impl LiveStreamState {
             self.recovery_scanner.reset();
         }
         self.append_desynchronized_discard_diagnostic(&mut output, key, finished_at);
-        if key.direction == LiveStreamDirection::Outbound
-            && let StreamBody::Plain(plain) = &mut self.body
-        {
-            output.extend(plain.materialize_incomplete_request(
-                config,
-                codecs,
-                &key.group,
-                reason,
-                finished_at,
-            ));
-        }
-        if key.direction == LiveStreamDirection::Outbound
-            && let StreamBody::Http2(http2) = &mut self.body
-        {
-            output.extend(http2.materialize_incomplete_requests(
+        if key.direction == LiveStreamDirection::Outbound {
+            output.extend(self.body.materialize_incomplete_requests(
                 config,
                 codecs,
                 &key.group,

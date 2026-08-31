@@ -173,9 +173,22 @@ export default {
       },
       rail: {
         aria: '统计视图',
+        agentOverview: 'Agent 概览',
         llmRequests: 'LLM Requests',
         timeAttribution: '耗时归因',
         alerts: '告警',
+      },
+      agent: {
+        kicker: '本机可观测性',
+        title: 'Agent 活动概览',
+        refresh: '刷新',
+        loading: '加载中…',
+        trace: { title: 'Trace 导航', subtitle: '已观测请求窗口内的互斥类别泳道', recent: '最近 Trace', timeline: '所选 Trace 时间线', open: '打开完整 Trace' },
+        time: { total: '已分析请求时间', model_side: 'LLM 往返', agent_side: '已观测工具活动', unattributed: '其他 / 未观测', standard: '仅分析已观测到的用户请求窗口。LLM 往返优先于与之重叠的工具时间；其余已观测工具活动归为本地时间，空隙归为其他 / 未观测。工具工作量中的时长独立保留重叠区间。' },
+        load: { title: '工具活动', subtitle: '统计全部真实工具调用；仅在本地执行区间可测时显示时长', bubble: '工具调用画像', averageDuration: '每个可测区间平均墙钟耗时', frequency: '调用次数', measuredIntervals: '可测区间数', durationUnavailable: '时长不可用', toolTime: '各类工具可测耗时', totalDuration: '可测墙钟耗时', toolCategory: '工具类别', interaction: '滚轮缩放 · 拖拽平移 · Restore 复位', workloadHint: '仅可测的本地执行区间计入时长；重叠区间仍分别归属于各工具' },
+        features: { title: 'Agent 请求特征', subtitle: '平均值保留缺失数据语义', inputDistribution: '输入 Token 分布', inputHint: '仅统计报告了输入 Token 用量的请求', inputXAxis: '每请求输入 Token', inputYAxis: '请求数', tokens: 'Token' },
+        metrics: { turns: '平均已完成模型轮次 / Trace', prompt: '平均输入 Token / 请求', tools: '平均工具次数 / Trace', blocks: '平均 Blocks / 请求', reasoning: '平均推理 Token / Trace', ttft: '平均 TTFT' },
+        empty: { traces: '暂无最近 Trace。', timeline: '暂无可归因时间线。', tools: '暂无已观测工具调用。', distribution: '输入 Token 用量不可用。' },
       },
       llm: {
         tabs: {

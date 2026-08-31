@@ -1,3 +1,4 @@
+use super::model::ToolCallOccurrence;
 use super::*;
 
 pub(super) fn trace_bottlenecks(
@@ -177,6 +178,43 @@ pub(super) fn breakdown_shares(
     rows
 }
 
+pub(super) fn tool_breakdown_shares(
+    tools: &[ToolInterval],
+    calls: &[ToolCallOccurrence],
+    total: u128,
+) -> Vec<BreakdownShare> {
+    let mut groups = BTreeMap::<String, ToolBreakdownAccumulator>::new();
+    for call in calls {
+        groups.entry(call.name.clone()).or_default().add_call(call);
+    }
+    for tool in tools {
+        let Some(key) = tool.tool_name.as_deref() else {
+            continue;
+        };
+        groups.entry(key.to_string()).or_default().add_tool(tool);
+    }
+    let mut rows = groups
+        .into_iter()
+        .map(|(key, group)| BreakdownShare {
+            label: key.clone(),
+            key,
+            kind: "agent".to_string(),
+            agent_tools: Vec::new(),
+            duration_nanos: nanos_string(group.measured.duration),
+            percentage_bps: single_percentage(group.measured.duration, total),
+            segment_count: group.measured.action_ids.len(),
+            action_count: group.call_action_ids.len(),
+            target: group.measured.target,
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| {
+        parse_nanos(&right.duration_nanos)
+            .cmp(&parse_nanos(&left.duration_nanos))
+            .then_with(|| left.label.cmp(&right.label))
+    });
+    rows
+}
+
 pub(super) fn command_breakdown_shares(
     segments: &[CommandSegment],
     total: u128,
@@ -186,7 +224,7 @@ pub(super) fn command_breakdown_shares(
     for segment in segments {
         kinds
             .entry(segment.key.clone())
-            .or_insert_with(|| segment.kind.clone());
+            .or_insert_with(|| segment.kind.as_str().to_string());
         let group = groups
             .entry(segment.key.clone())
             .or_insert_with(|| BreakdownAccumulator {
@@ -239,10 +277,44 @@ struct BreakdownAccumulator {
     target: Option<AttributionTarget>,
 }
 
+#[derive(Default)]
+struct ToolBreakdownAccumulator {
+    measured: BreakdownAccumulator,
+    call_action_ids: BTreeSet<String>,
+}
+
+impl ToolBreakdownAccumulator {
+    fn add_call(&mut self, call: &ToolCallOccurrence) {
+        self.call_action_ids.insert(call.action_id.clone());
+    }
+
+    fn add_tool(&mut self, tool: &ToolInterval) {
+        self.measured.add_tool(tool);
+    }
+}
+
+impl BreakdownAccumulator {
+    fn add_tool(&mut self, tool: &ToolInterval) {
+        let duration = tool.interval.duration();
+        self.duration = self.duration.saturating_add(duration);
+        self.segment_count += 1;
+        self.action_ids.insert(tool.action_id.clone());
+        if duration > self.target_duration {
+            self.target_duration = duration;
+            self.target = Some(AttributionTarget {
+                start_unix_nanos: nanos_string(tool.interval.start),
+                end_unix_nanos: nanos_string(tool.interval.end),
+                action_ids: vec![tool.action_id.clone()],
+            });
+        }
+    }
+}
+
 pub(super) fn round_attributions(
     turns: &[UserTurn],
     calls: &[ModelInterval],
     segments: &[AttributionSegment],
+    tools: &[ToolInterval],
     provisional: bool,
 ) -> Vec<RoundAttribution> {
     turns
@@ -292,6 +364,7 @@ pub(super) fn round_attributions(
                 turn.interval,
                 &turn_calls,
                 segments,
+                tools,
             )
         })
         .collect()
@@ -305,6 +378,7 @@ fn round_for_interval(
     interval: Interval,
     calls: &[&ModelInterval],
     segments: &[AttributionSegment],
+    tools: &[ToolInterval],
 ) -> RoundAttribution {
     let clipped_segments = segments
         .iter()
@@ -353,12 +427,10 @@ fn round_for_interval(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
-    let tools = clipped_segments
+    let tools = tools
         .iter()
-        .filter(|(segment, _)| {
-            segment.category_value == Category::AgentSide && segment.key != TOOL_ORCHESTRATION_KEY
-        })
-        .map(|(segment, _)| segment.label.clone())
+        .filter(|tool| tool.interval.intersect(interval).is_some())
+        .filter_map(|tool| tool.tool_name.clone())
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();

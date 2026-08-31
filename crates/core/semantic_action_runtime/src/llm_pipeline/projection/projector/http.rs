@@ -294,16 +294,36 @@ pub(in crate::llm_pipeline) fn damaged_response_for_open_request(
     }
 }
 
-pub(in crate::llm_pipeline) fn mark_response_for_incomplete_request(
+pub(in crate::llm_pipeline) fn mark_response_for_http_failure(
     response: &mut SemanticAction,
     http_response: &SemanticAction,
 ) {
-    response.title = "LLM response for incomplete request capture".to_string();
+    let Some(failure) = HttpResponseFailure::classify(http_response) else {
+        return;
+    };
+    let status = http_response
+        .attributes
+        .get(STATUS_CODE_ATTR)
+        .cloned()
+        .unwrap_or_else(|| "HTTP error".to_string());
+    response.title = failure.title(&status);
     response.status = SemanticActionStatus::Error;
     response.end_time = response.end_time.or(Some(http_response.start_time));
     response.attributes.insert(
         attrs::llm_response::BODY_FORMAT.to_string(),
-        "request_capture_incomplete".to_string(),
+        failure.body_format().to_string(),
+    );
+    copy_http_attr(
+        http_response,
+        &mut response.attributes,
+        STATUS_CODE_ATTR,
+        attrs::http_response::STATUS_CODE,
+    );
+    copy_http_attr(
+        http_response,
+        &mut response.attributes,
+        "reason",
+        attrs::http_response::REASON,
     );
 }
 

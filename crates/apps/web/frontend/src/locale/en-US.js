@@ -172,9 +172,22 @@ export default {
       },
       rail: {
         aria: 'Stats views',
+        agentOverview: 'Agent Overview',
         llmRequests: 'LLM Requests',
         timeAttribution: 'Time Attribution',
         alerts: 'Alerts',
+      },
+      agent: {
+        kicker: 'Local observability',
+        title: 'Agent activity overview',
+        refresh: 'Refresh',
+        loading: 'Loading…',
+        trace: { title: 'Trace navigation', subtitle: 'Exclusive category lanes within observed request windows', recent: 'Recent traces', timeline: 'Selected trace timeline', open: 'Open full trace' },
+        time: { total: 'Analyzed request time', model_side: 'LLM round-trip', agent_side: 'Observed tool-active', unattributed: 'Other / unobserved', standard: 'Only observed user-request windows are analyzed. LLM round-trip takes precedence over overlapping tool time; remaining observed tool-active time is local, and gaps are other / unobserved. Tool workload durations count overlaps independently.' },
+        load: { title: 'Tool activity', subtitle: 'All real tool calls are counted; duration is shown only when a local execution interval is measurable', bubble: 'Tool call profile', averageDuration: 'Average measured wall time / interval', frequency: 'Calls', measuredIntervals: 'Measured intervals', durationUnavailable: 'Duration unavailable', toolTime: 'Measured tool time by category', totalDuration: 'Measured wall time', toolCategory: 'Tool category', interaction: 'Scroll to zoom · drag to pan · Restore to reset', workloadHint: 'Only measurable local intervals contribute duration; overlapping intervals remain attributed to each tool' },
+        features: { title: 'Agent request characteristics', subtitle: 'Averages preserve missing-data coverage', inputDistribution: 'Input token distribution', inputHint: 'Only requests reporting input-token usage are included', inputXAxis: 'Input tokens / request', inputYAxis: 'Requests', tokens: 'Tokens' },
+        metrics: { turns: 'Avg completed model turns / trace', prompt: 'Avg input tokens / request', tools: 'Avg tool count / trace', blocks: 'Avg blocks / request', reasoning: 'Avg reasoning tokens / trace', ttft: 'Avg TTFT' },
+        empty: { traces: 'No recent traces.', timeline: 'No attributable timeline.', tools: 'No observed tool calls.', distribution: 'Input-token usage is unavailable.' },
       },
       llm: {
         tabs: {
