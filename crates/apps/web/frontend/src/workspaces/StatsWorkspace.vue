@@ -13,8 +13,15 @@
       </button>
     </aside>
     <section class="stats-content">
+      <AgentStatsWorkspace
+        v-if="activeTab === STATS_TAB_IDS.agentOverview"
+        :traces="traces"
+        :refresh-nonce="refreshNonce"
+        @loading="$emit('loading', $event)"
+        @open-trace="$emit('open-trace', $event)"
+      />
       <LlmRequestsWorkspace
-        v-if="activeTab === STATS_TAB_IDS.llmRequests"
+        v-else-if="activeTab === STATS_TAB_IDS.llmRequests"
         :query="query"
         @loading="$emit('loading', $event)"
         @open-trace="$emit('open-trace', $event)"
@@ -45,10 +52,12 @@ import { computed, ref, watch } from 'vue';
 
 import { useLocale } from '../locale';
 import AlertsWorkspace from './AlertsWorkspace.vue';
+import AgentStatsWorkspace from './stats/agent/AgentStatsWorkspace.vue';
 import LlmRequestsWorkspace from './stats/llm/LlmRequestsWorkspace.vue';
 import TimeAttributionWorkspace from './stats/time-attribution/TimeAttributionWorkspace.vue';
 
 const STATS_TAB_IDS = Object.freeze({
+  agentOverview: 'agent_overview',
   llmRequests: 'llm_requests',
   timeAttribution: 'time_attribution',
   alerts: 'alerts',
@@ -56,6 +65,7 @@ const STATS_TAB_IDS = Object.freeze({
 
 const { t } = useLocale();
 const tabs = computed(() => [
+  { id: STATS_TAB_IDS.agentOverview, label: t('stats.rail.agentOverview') },
   { id: STATS_TAB_IDS.llmRequests, label: t('stats.rail.llmRequests') },
   { id: STATS_TAB_IDS.timeAttribution, label: t('stats.rail.timeAttribution') },
   { id: STATS_TAB_IDS.alerts, label: t('stats.rail.alerts') },
@@ -97,7 +107,7 @@ const emit = defineEmits([
   'selection-consumed',
 ]);
 
-const activeTab = ref(STATS_TAB_IDS.llmRequests);
+const activeTab = ref(STATS_TAB_IDS.agentOverview);
 const alertActivationNonce = ref(0);
 
 watch(

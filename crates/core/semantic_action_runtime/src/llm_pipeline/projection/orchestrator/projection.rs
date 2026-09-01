@@ -35,6 +35,8 @@ impl ProjectionCoordinator {
             .http_response_links
             .append(&mut output.http_response_links);
         let non_reusable_response_ids = output.non_reusable_response_ids;
+        let mut closed_response_ids = output.closed_response_ids;
+        closed_response_ids.extend(non_reusable_response_ids.iter().cloned());
         let mut request_contents = output
             .llm_request_contents
             .into_iter()
@@ -113,17 +115,19 @@ impl ProjectionCoordinator {
                     );
                 }
             }
+            let response_closed = state_action.kind == SemanticActionKind::LlmResponse
+                && closed_response_ids.contains(&state_action.action_id);
             let damaged_http_response = if state_action.kind == SemanticActionKind::LlmResponse {
                 let (damaged_http_response, damaged_output) =
-                    self.consume_damaged_http_response(&state_action);
+                    self.consume_damaged_http_response(&state_action, response_closed);
                 changed.extend(damaged_output);
                 damaged_http_response
             } else {
                 None
             };
             if let Some(http_response) = &damaged_http_response {
-                http::mark_response_for_incomplete_request(&mut state_action, http_response);
-                http::mark_response_for_incomplete_request(&mut action, http_response);
+                http::mark_response_for_http_failure(&mut state_action, http_response);
+                http::mark_response_for_http_failure(&mut action, http_response);
             }
             self.apply_resolved_trajectory_assignments(
                 state_action.trace_id,
@@ -178,15 +182,22 @@ impl ProjectionCoordinator {
                     }
                 }
                 SemanticActionKind::LlmResponse => {
-                    if let Some(http_response) = damaged_http_response {
-                        changed.http_response_links.push(LlmHttpResponseLink {
-                            llm_response: state_action,
-                            http_response,
-                        });
-                        continue;
-                    }
                     let provider_response_id =
                         provider_response_ids.remove(&state_action.action_id);
+                    if let Some(http_response) = damaged_http_response {
+                        changed.http_response_links.push(LlmHttpResponseLink {
+                            llm_response: state_action.clone(),
+                            http_response,
+                        });
+                        if !non_reusable_response_ids.contains(&state_action.action_id) {
+                            changed.extend(self.remember_pending_response(
+                                state_action,
+                                provider_response_id,
+                                response_closed,
+                            ));
+                        }
+                        continue;
+                    }
                     if let Some(binding) = self.request_for_response_update(&state_action) {
                         let assignments = self.projector.register_provider_response(
                             &binding.request,
@@ -206,15 +217,18 @@ impl ProjectionCoordinator {
                             attrs::llm_call::HTTP_RESPONSE_ACTION_ID.to_string(),
                             binding.http_response_action_id.clone(),
                         );
-                        changed.extend(self.update_active_response_request(&state_action, binding));
+                        changed.extend(self.update_active_response_request(
+                            &state_action,
+                            binding,
+                            response_closed,
+                        ));
                         self.push_recorded_action(call, &mut changed);
                     } else if !non_reusable_response_ids.contains(&state_action.action_id) {
-                        changed.extend(
-                            self.remember_pending_response(
-                                state_action.clone(),
-                                provider_response_id,
-                            ),
-                        );
+                        changed.extend(self.remember_pending_response(
+                            state_action.clone(),
+                            provider_response_id,
+                            response_closed,
+                        ));
                         if let Some(stream_key) = LlmStreamKey::from_llm_response(&state_action) {
                             changed.extend(self.reconcile_exact_websocket_exchange(&stream_key));
                             changed.extend(self.reconcile_confirmed_http_exchanges(&stream_key));

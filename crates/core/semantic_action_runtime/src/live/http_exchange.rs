@@ -1,6 +1,6 @@
 //! Bounded HTTP request/response identity reconciliation.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::time::SystemTime;
 
 use config_core::daemon::HttpExchangeConfig;
@@ -16,7 +16,7 @@ const HTTP_STREAM_ID_ATTR: &str = "stream_id";
 const HTTP_STREAM_KEY_ATTR: &str = "stream_key";
 
 pub(super) struct HttpExchangeTracker {
-    streams: BTreeMap<HttpExchangeKey, HttpStreamState>,
+    streams: HashMap<HttpExchangeKey, HttpStreamState>,
     config: HttpExchangeConfig,
 }
 
@@ -37,6 +37,15 @@ pub(super) enum DamagedHttp1RequestOutcome {
 pub(crate) struct HttpResponseMatch {
     pub(crate) response: SemanticAction,
     pub(crate) request: MatchedHttpRequest,
+    pub(crate) status_code: u16,
+    pub(crate) reconciled_late: bool,
+}
+
+impl HttpResponseMatch {
+    pub(crate) fn eligible_for_llm_correlation(&self) -> bool {
+        self.request.method.as_deref() != Some("CONNECT")
+            && !(100..=199).contains(&self.status_code)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -49,7 +58,7 @@ pub(crate) struct MatchedHttpRequest {
     pub(crate) stream_id: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct HttpExchangeKey {
     trace_id: TraceId,
     process: ProcessIdentity,
@@ -130,7 +139,9 @@ impl HttpStreamQuarantine {
 #[derive(Clone, Debug)]
 enum PendingHttpRequest {
     Observed {
-        action: SemanticAction,
+        action_id: String,
+        start_time: SystemTime,
+        evidence: Vec<SemanticEvidence>,
         sequence: u64,
         method: Option<String>,
         target: Option<String>,
@@ -142,14 +153,14 @@ enum PendingHttpRequest {
 struct PendingHttpResponse {
     action: SemanticAction,
     status_code: u16,
-    received_at: SystemTime,
+    observed_at: SystemTime,
     emitted_unassociated: bool,
 }
 
 impl HttpExchangeTracker {
     pub(super) fn new(config: HttpExchangeConfig) -> Self {
         Self {
-            streams: BTreeMap::new(),
+            streams: HashMap::new(),
             config,
         }
     }
@@ -161,19 +172,28 @@ impl HttpExchangeTracker {
         let Some(key) = HttpExchangeKey::from_http_message(&action) else {
             return HttpExchangeObservation::single(action);
         };
-        let now = SystemTime::now();
+        let observed_at = action.start_time;
         let state = self.streams.entry(key.clone()).or_default();
-        state.expire_responses(&key, now, self.config.response_lateness);
-        let observation = match http_message_direction_operation(&action) {
-            Some(("outbound", "request")) => state.observe_request(
-                &key,
-                action,
-                self.config.max_pending_requests_per_stream as usize,
-            ),
+        let operation = http_message_direction_operation(&action);
+        if operation == Some(("inbound", "response")) {
+            state.expire_responses(&key, observed_at, self.config.response_lateness);
+        }
+        let observation = match operation {
+            Some(("outbound", "request")) => {
+                let observation = state.observe_request(
+                    &key,
+                    action,
+                    self.config.max_pending_requests_per_stream as usize,
+                );
+                if observation.matches.is_empty() {
+                    state.expire_responses(&key, observed_at, self.config.response_lateness);
+                }
+                observation
+            }
             Some(("inbound", "response")) => state.observe_response(
                 &key,
                 action,
-                now,
+                observed_at,
                 self.config.max_pending_responses_per_stream as usize,
             ),
             _ => HttpExchangeObservation::single(action),
@@ -267,14 +287,16 @@ impl HttpStreamState {
         }
         match self.requests.pop_front()? {
             PendingHttpRequest::Observed {
-                action,
+                action_id,
+                evidence,
                 sequence,
                 method,
                 target,
                 stream_id,
+                ..
             } => Some(MatchedHttpRequest {
-                action_id: action.action_id,
-                evidence: action.evidence,
+                action_id,
+                evidence,
                 sequence,
                 method,
                 target,
@@ -325,11 +347,13 @@ impl HttpStreamState {
             return observation;
         }
         self.requests.push_back(PendingHttpRequest::Observed {
+            action_id: action.action_id.clone(),
+            start_time: action.start_time,
+            evidence: action.evidence.clone(),
             sequence,
             method: action.attributes.get("method").cloned(),
             target: action.attributes.get("target").cloned(),
             stream_id: action.attributes.get(HTTP_STREAM_ID_ATTR).cloned(),
-            action,
         });
         self.reconcile(key, &mut observation);
         observation
@@ -390,7 +414,7 @@ impl HttpStreamState {
         &mut self,
         key: &HttpExchangeKey,
         action: SemanticAction,
-        now: SystemTime,
+        observed_at: SystemTime,
         max_pending: usize,
     ) -> HttpExchangeObservation {
         let Some(status_code) = http_status_code(&action) else {
@@ -415,7 +439,7 @@ impl HttpStreamState {
         self.responses.push_back(PendingHttpResponse {
             action: action.clone(),
             status_code,
-            received_at: now,
+            observed_at,
             emitted_unassociated: false,
         });
         let mut observation = HttpExchangeObservation {
@@ -458,7 +482,9 @@ impl HttpStreamState {
                 continue;
             }
             let PendingHttpRequest::Observed {
-                action: request_action,
+                action_id: request_action_id,
+                start_time: request_start_time,
+                evidence: request_evidence,
                 sequence: request_sequence,
                 method: request_method,
                 target: request_target,
@@ -467,7 +493,7 @@ impl HttpStreamState {
             else {
                 unreachable!();
             };
-            if request_action.start_time > response.action.start_time {
+            if *request_start_time > response.action.start_time {
                 self.responses.pop_front();
                 tracing::warn!(
                     trace_id = key.trace_id.get(),
@@ -479,36 +505,29 @@ impl HttpStreamState {
                 );
                 continue;
             }
-            let request_action = request_action.clone();
+            let request_action_id = request_action_id.clone();
+            let request_evidence = request_evidence.clone();
             let request_sequence = *request_sequence;
             let request_method = request_method.clone();
             let request_target = request_target.clone();
             let request_stream_id = request_stream_id.clone();
-            let Some(mut response) = self.responses.pop_front() else {
+            let Some(response) = self.responses.pop_front() else {
                 break;
             };
             if response.emitted_unassociated {
-                response.action.attributes.insert(
-                    "http.exchange.reconciled_late".to_string(),
-                    "true".to_string(),
-                );
                 tracing::info!(
                     trace_id = key.trace_id.get(),
                     process_id = key.process.get(),
                     stream_key = %key.stream_key,
                     stream_id = ?key.stream_id,
-                    request_action_id = %request_action.action_id,
+                    request_action_id = %request_action_id,
                     response_action_id = %response.action.action_id,
                     "reconciled HTTP response projected before its request action"
                 );
             }
-            response.action.attributes.insert(
-                attrs::http_response::REQUEST_ACTION_ID.to_string(),
-                request_action.action_id.clone(),
-            );
             let matched_request = MatchedHttpRequest {
-                action_id: request_action.action_id,
-                evidence: request_action.evidence,
+                action_id: request_action_id,
+                evidence: request_evidence,
                 sequence: request_sequence,
                 method: request_method,
                 target: request_target,
@@ -517,10 +536,14 @@ impl HttpStreamState {
             if final_http_response(response.status_code) {
                 self.requests.pop_front();
             }
-            observation.actions.push(response.action.clone());
+            if !response.emitted_unassociated {
+                observation.actions.push(response.action.clone());
+            }
             observation.matches.push(HttpResponseMatch {
                 response: response.action,
                 request: matched_request,
+                status_code: response.status_code,
+                reconciled_late: response.emitted_unassociated,
             });
         }
     }
@@ -532,7 +555,7 @@ impl HttpStreamState {
         response_lateness: std::time::Duration,
     ) {
         let expired = self.responses.front().is_some_and(|response| {
-            now.duration_since(response.received_at)
+            now.duration_since(response.observed_at)
                 .is_ok_and(|age| age > response_lateness)
         });
         if expired {

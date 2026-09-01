@@ -34,10 +34,11 @@ impl ProjectionCoordinator {
             }
         };
         let mut discarded_entries = 0_u64;
+        self.correlation.forget_closed_pending_stream(&evicted);
         if let Some(requests) = self.correlation.open_requests.remove(&evicted) {
             discarded_entries =
                 discarded_entries.saturating_add(u64::try_from(requests.len()).unwrap_or(u64::MAX));
-            for request in requests {
+            for request in requests.into_values() {
                 let mut partial_call = call::llm_call_from_request_response(&request.action, None);
                 partial_call.status = SemanticActionStatus::Error;
                 partial_call.completeness = SemanticActionCompleteness::Partial;
@@ -61,9 +62,14 @@ impl ProjectionCoordinator {
                     u64::try_from(exchanges.len()).unwrap_or(u64::MAX)
                 }),
         );
-        discarded_entries = discarded_entries.saturating_add(u64::from(
-            self.correlation.http_exchange_streams.remove(&evicted),
-        ));
+        discarded_entries = discarded_entries.saturating_add(
+            self.correlation
+                .closed_llm_exchanges
+                .remove(&evicted)
+                .map_or(0, |bindings| {
+                    u64::try_from(bindings.len()).unwrap_or(u64::MAX)
+                }),
+        );
         discarded_entries = discarded_entries.saturating_add(u64::from(
             self.correlation
                 .incomplete_http1_responses
@@ -114,7 +120,8 @@ impl ProjectionCoordinator {
             .saturating_add(u64::try_from(active_bindings.len()).unwrap_or(u64::MAX));
         for key in active_bindings {
             if let Some(binding) = self.correlation.active_response_requests.remove(&key) {
-                let mut partial_call = call::llm_call_from_request_response(&binding.request, None);
+                let mut partial_call =
+                    call::llm_call_from_request_response(&binding.request, Some(&binding.response));
                 partial_call.status = SemanticActionStatus::Error;
                 partial_call.completeness = SemanticActionCompleteness::Partial;
                 partial_call.end_time = Some(observed_at);

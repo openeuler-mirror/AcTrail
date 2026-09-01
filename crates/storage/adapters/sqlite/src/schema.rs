@@ -383,6 +383,10 @@ CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_child_role ON semanti
     role_code
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_http_response_unique_request_owner
+    ON semantic_action_links (trace_id, child_action_key, role_code)
+    WHERE role_code = 527;
+
 CREATE INDEX IF NOT EXISTS idx_file_observation_paths_action_order ON file_observation_paths (
     trace_id,
     action_key,

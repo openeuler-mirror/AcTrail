@@ -73,6 +73,11 @@
         so cargo time already includes rustc and linker work without double counting.
       </p>
 
+      <p v-if="hasUserTurns && activeDetail === 'tools'" class="detail-note">
+        Each real tool invocation keeps its full wall time. Overlapping tools are counted
+        independently, so these workload percentages can overlap.
+      </p>
+
       <section v-if="hasUserTurns && activeDetail === 'rounds'" class="detail-list">
         <article
           v-for="round in filteredRounds"
@@ -157,7 +162,8 @@
       <footer class="attribution-footnote">
         Agent-side, model-side observable, and unattributed partition only the union of observed
         user-request windows. Agent lifetime and interaction idle are excluded, and concurrent
-        intervals are unioned before percentages are calculated.
+        intervals are unioned for category percentages; Agent Tool workload rows count each
+        invocation independently.
       </footer>
     </template>
   </section>

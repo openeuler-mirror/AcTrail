@@ -61,7 +61,14 @@ pub(super) struct LlmUsageRow {
     pub endpoint: EndpointIdentity,
     pub app: AppIdentity,
     pub tokens: TokenUsage,
+    pub request_shape: RequestShape,
     pub latency: LlmLatency,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct RequestShape {
+    pub canonical_body_bytes: Option<u64>,
+    pub block_count: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -137,6 +144,14 @@ pub(super) struct ActivitySnapshot {
     pub token_category_trends: Vec<TrendSeries>,
     pub missing_usage_trend: Vec<BucketTotal>,
     pub latency: LatencySnapshot,
+    pub request_shape: RequestShapeSnapshot,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(super) struct RequestShapeSnapshot {
+    pub input_tokens_samples: Vec<u64>,
+    pub canonical_body_bytes_samples: Vec<u64>,
+    pub block_count_samples: Vec<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -149,6 +164,10 @@ pub(super) struct Summary {
     pub endpoint_count: usize,
     pub app_count: usize,
     pub totals: TokenTotals,
+    pub canonical_body_bytes: u64,
+    pub canonical_body_bytes_count: usize,
+    pub block_count: u64,
+    pub block_count_rows: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

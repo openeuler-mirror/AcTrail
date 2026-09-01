@@ -19,6 +19,8 @@ pub const COMMAND_CONTAINS_PROCESS_FORK_ATTEMPT: &str =
     SemanticActionLinkRole::CommandContainsProcessForkAttempt.as_str();
 pub const FILE_WRITE_CONTAINS_FILE_EVENT: &str =
     SemanticActionLinkRole::FileWriteContainsFileEvent.as_str();
+pub const HTTP_REQUEST_HTTP_RESPONSE: &str =
+    SemanticActionLinkRole::HttpRequestHttpResponse.as_str();
 pub const LLM_CALL_REQUEST: &str = SemanticActionLinkRole::LlmCallRequest.as_str();
 pub const LLM_CALL_RESPONSE: &str = SemanticActionLinkRole::LlmCallResponse.as_str();
 pub const LLM_REQUEST_HTTP_MESSAGE: &str = SemanticActionLinkRole::LlmRequestHttpMessage.as_str();

@@ -80,17 +80,44 @@ impl LiveLlmProjector {
             );
         let identity = PayloadStreamIdentity::from_segment(segment);
         let mut changed = self.projection.changed_actions(&self.config, output);
+        changed.extend(
+            self.projection
+                .reconcile_unconfirmed_identity_exchanges(&identity, segment.observed_at),
+        );
         changed.extend(self.finalize_missing_response_calls(
             &identity,
             StreamFinalizationReason::ConfirmedGap,
             segment.observed_at,
         ));
-        self.forget_payload_associations(segment);
+        self.forget_payload_associations_by_identity(&identity);
         changed
     }
 
     pub(super) fn forget_payload_associations(&mut self, segment: &PayloadSegment) {
         self.forget_payload_associations_by_identity(&PayloadStreamIdentity::from_segment(segment));
+    }
+
+    pub(super) fn finish_incomplete_payload(&mut self, segment: &PayloadSegment) -> LiveLlmOutput {
+        let identity = PayloadStreamIdentity::from_segment(segment);
+        let mut output = self
+            .projection
+            .reconcile_unconfirmed_identity_exchanges(&identity, segment.observed_at);
+        output.extend(self.finalize_missing_response_calls(
+            &identity,
+            StreamFinalizationReason::OperationIncomplete,
+            segment.observed_at,
+        ));
+        self.forget_payload_associations_by_identity(&identity);
+        output
+    }
+
+    pub(super) fn finish_payload_transaction(&mut self, segment: &PayloadSegment) -> LiveLlmOutput {
+        if !self.config.llm_layer_enabled() || !plaintext_http_candidate(segment) {
+            return LiveLlmOutput::default();
+        }
+        let identity = PayloadStreamIdentity::from_segment(segment);
+        self.projection
+            .reconcile_closed_unconfirmed_identity_exchanges(&identity)
     }
 
     pub(super) fn finalize_payload_stream(
@@ -121,6 +148,10 @@ impl LiveLlmProjector {
             ));
         }
         let mut output = self.projection.changed_actions(&self.config, projected);
+        output.extend(
+            self.projection
+                .reconcile_unconfirmed_identity_exchanges(identity, finished_at),
+        );
         output.extend(self.finalize_missing_response_calls(
             identity,
             StreamFinalizationReason::PeerClosed,

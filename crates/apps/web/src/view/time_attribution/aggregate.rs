@@ -124,7 +124,7 @@ pub(super) fn aggregate_breakdowns(
             duration_nanos: nanos_string(group.duration),
             percentage_bps: single_percentage(group.duration, total_duration),
             segment_count: group.segment_count,
-            action_count: group.action_count.max(group.action_ids.len()),
+            action_count: group.action_count,
             target: group.target,
         })
         .collect::<Vec<_>>();
@@ -134,6 +134,19 @@ pub(super) fn aggregate_breakdowns(
             .then_with(|| left.label.cmp(&right.label))
     });
     output
+}
+
+pub(super) fn aggregate_tool_workloads(tools: &[BreakdownShare]) -> Vec<ToolWorkload> {
+    tools
+        .iter()
+        .map(|tool| ToolWorkload {
+            key: tool.key.clone(),
+            label: tool.label.clone(),
+            call_count: tool.action_count,
+            measured_interval_count: tool.segment_count,
+            measured_duration_nanos: (tool.segment_count > 0).then(|| tool.duration_nanos.clone()),
+        })
+        .collect()
 }
 
 pub(super) fn aggregate_coverage(projections: &[TraceAttribution]) -> AggregateCoverage {

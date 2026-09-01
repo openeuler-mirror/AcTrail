@@ -293,6 +293,9 @@ impl PlainStreamAssembly {
             } else if terminal || !projection.actions.is_empty() {
                 self.in_flight_response = None;
             }
+            if terminal {
+                output.mark_closed_response_actions(&projection.actions);
+            }
             output.actions.extend(projection.actions);
             output
                 .provider_response_ids
@@ -364,6 +367,9 @@ impl PlainStreamAssembly {
                     self.in_flight_response = projection.in_flight;
                 } else if !projection.actions.is_empty() {
                     self.in_flight_response = None;
+                }
+                if projection.terminal {
+                    output.mark_closed_response_actions(&projection.actions);
                 }
                 output.actions.extend(projection.actions);
                 output

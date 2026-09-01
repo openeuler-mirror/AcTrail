@@ -272,6 +272,7 @@ enum ParentRolePriority {
     LlmRequestHttpMessage,
     LlmRequestLlmResponse,
     LlmResponseHttpMessage,
+    HttpRequestHttpResponse,
 }
 
 fn parent_role_priority(role: SemanticActionLinkRole) -> ParentRolePriority {
@@ -325,6 +326,9 @@ fn parent_role_priority(role: SemanticActionLinkRole) -> ParentRolePriority {
         SemanticActionLinkRole::LlmRequestLlmResponse => ParentRolePriority::LlmRequestLlmResponse,
         SemanticActionLinkRole::LlmResponseHttpMessage => {
             ParentRolePriority::LlmResponseHttpMessage
+        }
+        SemanticActionLinkRole::HttpRequestHttpResponse => {
+            ParentRolePriority::HttpRequestHttpResponse
         }
     }
 }

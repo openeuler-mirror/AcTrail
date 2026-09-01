@@ -7,6 +7,7 @@ use super::command::CommandChildActionLinkProjector;
 use super::http::HttpMessageLinkProjector;
 use super::llm::LlmExchangeLinkProjector;
 use super::sse::SseLinkProjector;
+use crate::live::HttpResponseMatch;
 use crate::live::actions::action_for_live_state;
 use crate::llm_pipeline::{LlmHttpRequestLink, LlmHttpResponseLink};
 
@@ -19,6 +20,13 @@ pub(in crate::live) struct ActionLinkProjector {
 }
 
 impl ActionLinkProjector {
+    pub(in crate::live) fn observe_exact_http_exchange_link(
+        &self,
+        exchange: &HttpResponseMatch,
+    ) -> SemanticActionLink {
+        self.http.observe_exact_exchange_link(exchange)
+    }
+
     pub(in crate::live) fn observe_exact_http_request_link(
         &mut self,
         proposal: &LlmHttpRequestLink,
@@ -64,7 +72,6 @@ impl ActionLinkProjector {
             links.extend(self.command.link_pending_for_command(action));
         }
         for action in &state_actions {
-            links.extend(self.http.observe_action(action));
             links.extend(self.llm_exchange.observe_action(action));
             links.extend(self.sse.observe_action(action));
             links.extend(self.agent.link_child_action(action));
@@ -92,8 +99,6 @@ impl ActionLinkProjector {
     pub(in crate::live) fn forget_trace(&mut self, trace_id: TraceId) {
         self.agent.forget_trace(trace_id);
         self.command.forget_trace(trace_id);
-        self.http.forget_trace(trace_id);
-        self.llm_exchange.forget_trace(trace_id);
         self.sse.forget_trace(trace_id);
     }
 }

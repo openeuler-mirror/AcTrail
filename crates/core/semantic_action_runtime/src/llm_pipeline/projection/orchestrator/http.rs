@@ -1,7 +1,5 @@
 //! HTTP exchange and damaged-message projection coordination.
 
-use std::collections::VecDeque;
-
 use model_core::diagnostics::{
     LlmPipelineDiagnostic, LlmPipelineDiagnosticCode, LlmPipelineDiagnosticSeverity,
     LlmPipelineDiagnosticStage,
@@ -11,8 +9,8 @@ use semantic_action::{SemanticAction, SemanticActionStatus, attr_keys as attrs};
 
 use crate::live::{HttpResponseMatch, MatchedHttpRequest};
 use crate::llm_pipeline::projection::correlation::{
-    self as call, DamagedHttpResponseBinding, IncompleteHttp1Response, LateHttpFailureBinding,
-    LlmStreamKey,
+    self as call, DamagedHttpResponseBinding, IncompleteHttp1Response, IndexedQueue,
+    LateHttpFailureBinding, LlmStreamKey,
 };
 use crate::llm_pipeline::projection::links::{LlmHttpRequestLink, LlmHttpResponseLink};
 use crate::llm_pipeline::projection::projector::{self as http, capacity_diagnostic};
@@ -25,16 +23,23 @@ impl ProjectionCoordinator {
         &mut self,
         matched: &HttpResponseMatch,
     ) -> LiveLlmOutput {
-        if http::terminal_failure_response(&matched.response)
-            && matched
-                .response
-                .attributes
-                .get("http.exchange.reconciled_late")
-                .is_some_and(|value| value == "true")
-        {
-            return self.reconcile_late_http_failure(matched);
+        if !matched.eligible_for_llm_correlation() {
+            return LiveLlmOutput::default();
         }
-        if !http::terminal_failure_response(&matched.response) {
+        if http::terminal_failure_response(&matched.response)
+            && matched.reconciled_late
+            && let Some(output) = self.reconcile_late_http_failure(matched)
+        {
+            return output;
+        }
+        if let Some(output) = self.reconcile_late_closed_http_exchange(matched) {
+            return output;
+        }
+        if http::terminal_failure_response(&matched.response) {
+            if let Some(output) = self.reconcile_ready_http_exchange(matched) {
+                return output;
+            }
+        } else {
             let (stream_key, mut output) = self.remember_confirmed_http_exchange(matched.clone());
             let Some(stream_key) = stream_key else {
                 return output;
@@ -44,13 +49,6 @@ impl ProjectionCoordinator {
         }
         let action = &matched.response;
         let matched_request = &matched.request;
-        if action
-            .attributes
-            .get(attrs::http_response::REQUEST_ACTION_ID)
-            != Some(&matched_request.action_id)
-        {
-            return LiveLlmOutput::default();
-        }
         let Some(request) = self.take_open_request_for_http_response(action, matched_request)
         else {
             return LiveLlmOutput::default();
@@ -126,11 +124,7 @@ impl ProjectionCoordinator {
         if let Some(stream_key) = stream_key {
             self.remember_late_http_failure_binding(
                 binding_key,
-                LateHttpFailureBinding {
-                    stream_key,
-                    request: request.clone(),
-                    failed_response: failed_response.clone(),
-                },
+                LateHttpFailureBinding::new(stream_key, &request),
                 &mut output,
             );
         }
@@ -143,19 +137,25 @@ impl ProjectionCoordinator {
         Some(output)
     }
 
-    fn reconcile_late_http_failure(&mut self, matched: &HttpResponseMatch) -> LiveLlmOutput {
+    fn reconcile_late_http_failure(
+        &mut self,
+        matched: &HttpResponseMatch,
+    ) -> Option<LiveLlmOutput> {
         let key = (
             matched.response.trace_id,
             matched.response.action_id.clone(),
         );
-        let Some(binding) = self.take_late_http_failure_binding(&key) else {
+        let binding = self.take_late_http_failure_binding(&key)?;
+        let call = call::llm_call_from_request_response(&binding.request, None);
+        let Some(mut failed_response) =
+            http::failed_response_for_open_request(&matched.response, &binding.request, &call)
+        else {
             let mut output = LiveLlmOutput::default();
             output
                 .diagnostics
                 .push(late_http_failure_binding_gap(&matched.response));
-            return output;
+            return Some(output);
         };
-        let mut failed_response = binding.failed_response;
         failed_response.attributes.insert(
             attrs::http_response::REQUEST_ACTION_ID.to_string(),
             matched.request.action_id.clone(),
@@ -166,38 +166,35 @@ impl ProjectionCoordinator {
             http_request: matched.request.clone(),
         });
         self.push_recorded_action(failed_response, &mut output);
-        output
+        Some(output)
     }
 
     pub(in crate::llm_pipeline) fn observe_damaged_http_response(
         &mut self,
         response: &SemanticAction,
     ) -> LiveLlmOutput {
-        // The generic HTTP parser may retain a damaged outbound request tombstone
-        // even when the LLM request projector reconstructed that request in full.
-        // A terminal HTTP failure is therefore still exact enough to close the
-        // oldest open LLM request on the same HTTP stream.
-        if let Some(output) = self.project_unmatched_terminal_http_response(response) {
-            return output;
-        }
         for stream_key in LlmStreamKey::from_http_response_candidates(response) {
             let matched = self
                 .correlation
                 .pending_responses
                 .get_mut(&stream_key)
                 .and_then(|responses| {
-                    responses
+                    let action_id = responses
                         .iter()
-                        .position(|candidate| candidate.matches_http_response(response))
-                        .and_then(|index| responses.remove(index))
+                        .find(|candidate| candidate.matches_http_response(response))?
+                        .action
+                        .action_id
+                        .clone();
+                    let matched = responses.get_mut(&action_id)?;
+                    let was_in_progress = matched.action.status == SemanticActionStatus::InProgress;
+                    http::mark_response_for_http_failure(&mut matched.action, response);
+                    Some((matched.action.clone(), was_in_progress))
                 });
-            if let Some(mut matched) = matched {
+            if let Some((matched, was_in_progress)) = matched {
                 let mut output = LiveLlmOutput::default();
-                let was_in_progress = matched.action.status == SemanticActionStatus::InProgress;
-                http::mark_response_for_incomplete_request(&mut matched.action, response);
                 if was_in_progress {
                     self.remember_damaged_response_binding(
-                        (matched.action.trace_id, matched.action.action_id.clone()),
+                        (matched.trace_id, matched.action_id.clone()),
                         DamagedHttpResponseBinding {
                             stream_key: stream_key.clone(),
                             http_response: response.clone(),
@@ -205,21 +202,20 @@ impl ProjectionCoordinator {
                         &mut output,
                     );
                 }
-                if self
-                    .correlation
-                    .pending_responses
-                    .get(&stream_key)
-                    .is_some_and(VecDeque::is_empty)
-                {
-                    self.correlation.pending_responses.remove(&stream_key);
-                }
                 output.http_response_links.push(LlmHttpResponseLink {
-                    llm_response: matched.action.clone(),
+                    llm_response: matched.clone(),
                     http_response: response.clone(),
                 });
-                self.push_recorded_action(matched.action, &mut output);
+                self.push_recorded_action(matched, &mut output);
                 return output;
             }
+        }
+        // The generic HTTP parser may retain a damaged outbound request tombstone
+        // even when the LLM request projector reconstructed that request in full.
+        // Only synthesize a terminal failure after ruling out an exact decoded
+        // response on the same stream.
+        if let Some(output) = self.project_unmatched_terminal_http_response(response) {
+            return output;
         }
         let Some(stream_key) = LlmStreamKey::from_http_response_candidates(response)
             .into_iter()
@@ -295,16 +291,18 @@ impl ProjectionCoordinator {
             .and_then(|exchanges| {
                 exchanges
                     .iter()
-                    .rposition(|exchange| exchange.request.sequence == sequence)
+                    .filter(|exchange| exchange.request.sequence == sequence)
+                    .map(|exchange| exchange.response.action_id.clone())
+                    .last()
             });
-        let Some(exchange_index) = selection else {
+        let Some(exchange_action_id) = selection else {
             return false;
         };
         let Some(exchange) = self
             .correlation
             .confirmed_http_exchanges
             .get_mut(&stream_key)
-            .and_then(|exchanges| exchanges.remove(exchange_index))
+            .and_then(|exchanges| exchanges.remove(&exchange_action_id))
         else {
             return false;
         };
@@ -312,31 +310,32 @@ impl ProjectionCoordinator {
             .correlation
             .confirmed_http_exchanges
             .get(&stream_key)
-            .is_some_and(VecDeque::is_empty)
+            .is_some_and(IndexedQueue::is_empty)
         {
             self.correlation
                 .confirmed_http_exchanges
                 .remove(&stream_key);
         }
-        if let Some(request_index) =
+        if let Some(request_action_id) =
             self.correlation
                 .open_requests
                 .get(&stream_key)
                 .and_then(|requests| {
                     requests
                         .iter()
-                        .position(|request| request.matches_http_request(&exchange.request))
+                        .find(|request| request.matches_http_request(&exchange.request))
+                        .map(|request| request.action.action_id.clone())
                 })
         {
             self.correlation
                 .open_requests
                 .get_mut(&stream_key)
-                .and_then(|requests| requests.remove(request_index));
+                .and_then(|requests| requests.remove(&request_action_id));
             if self
                 .correlation
                 .open_requests
                 .get(&stream_key)
-                .is_some_and(VecDeque::is_empty)
+                .is_some_and(IndexedQueue::is_empty)
             {
                 self.correlation.open_requests.remove(&stream_key);
             }
@@ -405,6 +404,53 @@ impl ProjectionCoordinator {
         self.push_recorded_action(response, &mut output);
         self.push_recorded_action(call, &mut output);
         output
+    }
+
+    pub(in crate::llm_pipeline) fn take_open_request_for_http_response(
+        &mut self,
+        http_response: &SemanticAction,
+        matched_request: &MatchedHttpRequest,
+    ) -> Option<SemanticAction> {
+        for stream_key in LlmStreamKey::from_http_response_candidates(http_response) {
+            let Some(requests) = self.correlation.open_requests.get_mut(&stream_key) else {
+                continue;
+            };
+            if !requests
+                .front()
+                .is_some_and(|request| request.matches_http_request(matched_request))
+            {
+                continue;
+            }
+            let request = requests.pop_front()?.action;
+            if requests.is_empty() {
+                self.correlation.open_requests.remove(&stream_key);
+            }
+            return Some(request);
+        }
+        None
+    }
+
+    pub(in crate::llm_pipeline) fn take_open_request_for_unmatched_http_failure(
+        &mut self,
+        http_response: &SemanticAction,
+    ) -> Option<SemanticAction> {
+        for stream_key in LlmStreamKey::from_http_response_candidates(http_response) {
+            let Some(requests) = self.correlation.open_requests.get_mut(&stream_key) else {
+                continue;
+            };
+            if !requests
+                .front()
+                .is_some_and(|request| request.action.start_time <= http_response.start_time)
+            {
+                continue;
+            }
+            let request = requests.pop_front()?.action;
+            if requests.is_empty() {
+                self.correlation.open_requests.remove(&stream_key);
+            }
+            return Some(request);
+        }
+        None
     }
 }
 

@@ -29,6 +29,7 @@ pub(super) struct DisplayChild {
 pub(super) struct ActionDisplayProjection {
     pub actions: Vec<SemanticAction>,
     pub links: Vec<SemanticActionLink>,
+    pub associations: Vec<SemanticActionLink>,
     pub root_action_ids: Vec<String>,
     children_by_parent: BTreeMap<String, Vec<DisplayChild>>,
 }
@@ -82,9 +83,30 @@ impl ActionDisplayProjection {
             })
             .unwrap_or_default();
         let display_links = display_links(&parent_links, &root_links, &root_action_ids);
+        let display_link_ids = display_links
+            .iter()
+            .map(|link| {
+                (
+                    link.parent_action_id.as_str(),
+                    link.child_action_id.as_str(),
+                    link.role,
+                )
+            })
+            .collect::<BTreeSet<_>>();
+        let associations = links
+            .into_iter()
+            .filter(|link| {
+                !display_link_ids.contains(&(
+                    link.parent_action_id.as_str(),
+                    link.child_action_id.as_str(),
+                    link.role,
+                ))
+            })
+            .collect();
         let mut projection = Self {
             actions,
             links: display_links,
+            associations,
             root_action_ids,
             children_by_parent,
         };

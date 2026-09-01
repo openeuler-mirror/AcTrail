@@ -8,7 +8,7 @@ mod support;
 
 pub(in crate::llm_pipeline) use http::{
     damaged_response_for_open_request, failed_response_for_open_request,
-    mark_response_for_incomplete_request, terminal_failure_response,
+    mark_response_for_http_failure, terminal_failure_response,
 };
 pub(in crate::llm_pipeline) use live::{
     LiveLlmProjection, empty_terminal_projection, project_decoded_http1_request,

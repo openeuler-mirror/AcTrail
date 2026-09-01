@@ -1,23 +1,38 @@
 //! Ordered ownership for bounded response-correlation bindings.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::ops::Bound::{Included, Unbounded};
+use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
 
 use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 
 use super::LlmStreamKey;
 
-#[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
+type NodeId = u64;
+
+#[derive(Clone, Eq, Hash, PartialEq)]
 struct BindingOwner {
     trace_id: TraceId,
     process: ProcessIdentity,
     stream_key: String,
 }
 
-struct BindingPosition {
-    sequence: u64,
+struct OwnershipPosition {
+    node_id: NodeId,
     owner: BindingOwner,
+}
+
+struct OwnershipNode<K> {
+    key: K,
+    previous: Option<NodeId>,
+    next: Option<NodeId>,
+}
+
+#[derive(Default)]
+struct TraceOrder {
+    oldest: Option<NodeId>,
+    newest: Option<NodeId>,
+    len: usize,
 }
 
 pub(in crate::llm_pipeline) enum BindingAdmission {
@@ -36,10 +51,11 @@ pub(in crate::llm_pipeline) enum StreamAdmission {
 
 pub(in crate::llm_pipeline) struct StreamOwnershipIndex {
     limit_per_trace: usize,
-    next_sequence: u64,
-    positions: BTreeMap<LlmStreamKey, u64>,
-    order: BTreeMap<TraceId, BTreeMap<u64, LlmStreamKey>>,
-    counts: BTreeMap<TraceId, usize>,
+    next_sequence: NodeId,
+    positions: HashMap<LlmStreamKey, OwnershipPosition>,
+    nodes: HashMap<NodeId, OwnershipNode<LlmStreamKey>>,
+    order: HashMap<TraceId, TraceOrder>,
+    owners: HashMap<BindingOwner, HashSet<NodeId>>,
 }
 
 impl StreamOwnershipIndex {
@@ -47,9 +63,10 @@ impl StreamOwnershipIndex {
         Self {
             limit_per_trace,
             next_sequence: 0,
-            positions: BTreeMap::new(),
-            order: BTreeMap::new(),
-            counts: BTreeMap::new(),
+            positions: HashMap::new(),
+            nodes: HashMap::new(),
+            order: HashMap::new(),
+            owners: HashMap::new(),
         }
     }
 
@@ -57,42 +74,36 @@ impl StreamOwnershipIndex {
         if self.positions.contains_key(key) {
             return StreamAdmission::Existing;
         }
-        let Some(next_sequence) = self.next_sequence.checked_add(1) else {
+        let Some(node_id) = self.next_sequence.checked_add(1) else {
             return StreamAdmission::SequenceExhausted;
         };
-        let evicted = (self.counts.get(&key.trace_id).copied().unwrap_or_default()
-            >= self.limit_per_trace)
+        let evicted = (self.trace_len(key.trace_id) >= self.limit_per_trace)
             .then(|| self.oldest_for_trace(key.trace_id))
             .flatten();
         if let Some(evicted) = &evicted {
             self.remove(evicted);
         }
-        self.next_sequence = next_sequence;
-        self.positions.insert(key.clone(), next_sequence);
-        self.order
-            .entry(key.trace_id)
-            .or_default()
-            .insert(next_sequence, key.clone());
-        *self.counts.entry(key.trace_id).or_default() += 1;
+
+        self.next_sequence = node_id;
+        let owner = BindingOwner {
+            trace_id: key.trace_id,
+            process: key.process,
+            stream_key: key.stream_key.clone(),
+        };
+        self.insert_node(node_id, key.clone(), owner);
         evicted.map_or(StreamAdmission::Inserted, StreamAdmission::Evicted)
     }
 
     pub(in crate::llm_pipeline) fn remove(&mut self, key: &LlmStreamKey) -> bool {
-        let Some(sequence) = self.positions.remove(key) else {
+        let Some(position) = self.positions.remove(key) else {
             return false;
         };
-        if let Some(order) = self.order.get_mut(&key.trace_id) {
-            order.remove(&sequence);
-            if order.is_empty() {
-                self.order.remove(&key.trace_id);
-            }
-        }
-        if let Some(count) = self.counts.get_mut(&key.trace_id) {
-            *count = count.saturating_sub(1);
-            if *count == 0 {
-                self.counts.remove(&key.trace_id);
-            }
-        }
+        let Some(node) = self.nodes.remove(&position.node_id) else {
+            self.remove_owner_node(&position.owner, position.node_id);
+            return false;
+        };
+        self.unlink_node(key.trace_id, position.node_id, node.previous, node.next);
+        self.remove_owner_node(&position.owner, position.node_id);
         true
     }
 
@@ -102,11 +113,101 @@ impl StreamOwnershipIndex {
         }
     }
 
+    pub(in crate::llm_pipeline) fn keys_for_stream_identity(
+        &self,
+        trace_id: TraceId,
+        process: ProcessIdentity,
+        stream_key: &str,
+    ) -> Vec<LlmStreamKey> {
+        let owner = BindingOwner {
+            trace_id,
+            process,
+            stream_key: stream_key.to_string(),
+        };
+        self.owners
+            .get(&owner)
+            .into_iter()
+            .flatten()
+            .filter_map(|node_id| self.nodes.get(node_id))
+            .map(|node| node.key.clone())
+            .collect()
+    }
+
+    fn insert_node(&mut self, node_id: NodeId, key: LlmStreamKey, owner: BindingOwner) {
+        let previous = self.order.get(&key.trace_id).and_then(|order| order.newest);
+        if let Some(previous) = previous.and_then(|node_id| self.nodes.get_mut(&node_id)) {
+            previous.next = Some(node_id);
+        }
+        self.nodes.insert(
+            node_id,
+            OwnershipNode {
+                key: key.clone(),
+                previous,
+                next: None,
+            },
+        );
+        let order = self.order.entry(key.trace_id).or_default();
+        order.oldest.get_or_insert(node_id);
+        order.newest = Some(node_id);
+        order.len += 1;
+        self.positions.insert(
+            key,
+            OwnershipPosition {
+                node_id,
+                owner: owner.clone(),
+            },
+        );
+        self.owners.entry(owner).or_default().insert(node_id);
+    }
+
+    fn unlink_node(
+        &mut self,
+        trace_id: TraceId,
+        node_id: NodeId,
+        previous: Option<NodeId>,
+        next: Option<NodeId>,
+    ) {
+        if let Some(previous) = previous.and_then(|node_id| self.nodes.get_mut(&node_id)) {
+            previous.next = next;
+        }
+        if let Some(next) = next.and_then(|node_id| self.nodes.get_mut(&node_id)) {
+            next.previous = previous;
+        }
+        let Some(order) = self.order.get_mut(&trace_id) else {
+            return;
+        };
+        if order.oldest == Some(node_id) {
+            order.oldest = next;
+        }
+        if order.newest == Some(node_id) {
+            order.newest = previous;
+        }
+        order.len = order.len.saturating_sub(1);
+        if order.len == 0 {
+            self.order.remove(&trace_id);
+        }
+    }
+
+    fn remove_owner_node(&mut self, owner: &BindingOwner, node_id: NodeId) {
+        let Some(nodes) = self.owners.get_mut(owner) else {
+            return;
+        };
+        nodes.remove(&node_id);
+        if nodes.is_empty() {
+            self.owners.remove(owner);
+        }
+    }
+
+    fn trace_len(&self, trace_id: TraceId) -> usize {
+        self.order.get(&trace_id).map_or(0, |order| order.len)
+    }
+
     fn oldest_for_trace(&self, trace_id: TraceId) -> Option<LlmStreamKey> {
         self.order
             .get(&trace_id)
-            .and_then(|order| order.first_key_value())
-            .map(|(_, key)| key.clone())
+            .and_then(|order| order.oldest)
+            .and_then(|node_id| self.nodes.get(&node_id))
+            .map(|node| node.key.clone())
     }
 }
 
@@ -115,11 +216,11 @@ impl StreamOwnershipIndex {
 /// order and counts.
 pub(in crate::llm_pipeline) struct BindingOwnershipIndex {
     limit_per_trace: usize,
-    next_sequence: u64,
-    positions: BTreeMap<(TraceId, String), BindingPosition>,
-    order: BTreeSet<(TraceId, u64, String)>,
-    counts: BTreeMap<TraceId, usize>,
-    owners: BTreeMap<BindingOwner, BTreeSet<(TraceId, String)>>,
+    next_sequence: NodeId,
+    positions: HashMap<(TraceId, String), OwnershipPosition>,
+    nodes: HashMap<NodeId, OwnershipNode<(TraceId, String)>>,
+    order: HashMap<TraceId, TraceOrder>,
+    owners: HashMap<BindingOwner, HashSet<NodeId>>,
 }
 
 impl BindingOwnershipIndex {
@@ -127,10 +228,10 @@ impl BindingOwnershipIndex {
         Self {
             limit_per_trace,
             next_sequence: 0,
-            positions: BTreeMap::new(),
-            order: BTreeSet::new(),
-            counts: BTreeMap::new(),
-            owners: BTreeMap::new(),
+            positions: HashMap::new(),
+            nodes: HashMap::new(),
+            order: HashMap::new(),
+            owners: HashMap::new(),
         }
     }
 
@@ -143,32 +244,23 @@ impl BindingOwnershipIndex {
         if self.positions.contains_key(key) {
             return BindingAdmission::Existing;
         }
-        let Some(next_sequence) = self.next_sequence.checked_add(1) else {
+        let Some(node_id) = self.next_sequence.checked_add(1) else {
             return BindingAdmission::SequenceExhausted;
         };
-        let evicted = (self.counts.get(&key.0).copied().unwrap_or_default()
-            >= self.limit_per_trace)
+        let evicted = (self.trace_len(key.0) >= self.limit_per_trace)
             .then(|| self.oldest_for_trace(key.0))
             .flatten();
         if let Some(evicted) = &evicted {
             self.remove(evicted);
         }
-        self.next_sequence = next_sequence;
+
+        self.next_sequence = node_id;
         let owner = BindingOwner {
             trace_id: key.0,
             process,
             stream_key: stream_key.to_string(),
         };
-        self.positions.insert(
-            key.clone(),
-            BindingPosition {
-                sequence: next_sequence,
-                owner: owner.clone(),
-            },
-        );
-        self.order.insert((key.0, next_sequence, key.1.clone()));
-        *self.counts.entry(key.0).or_default() += 1;
-        self.owners.entry(owner).or_default().insert(key.clone());
+        self.insert_node(node_id, key.clone(), owner);
         evicted.map_or(BindingAdmission::Inserted, BindingAdmission::Evicted)
     }
 
@@ -176,20 +268,12 @@ impl BindingOwnershipIndex {
         let Some(position) = self.positions.remove(key) else {
             return false;
         };
-        self.order
-            .remove(&(key.0, position.sequence, key.1.clone()));
-        if let Some(keys) = self.owners.get_mut(&position.owner) {
-            keys.remove(key);
-            if keys.is_empty() {
-                self.owners.remove(&position.owner);
-            }
-        }
-        if let Some(count) = self.counts.get_mut(&key.0) {
-            *count = count.saturating_sub(1);
-            if *count == 0 {
-                self.counts.remove(&key.0);
-            }
-        }
+        let Some(node) = self.nodes.remove(&position.node_id) else {
+            self.remove_owner_node(&position.owner, position.node_id);
+            return false;
+        };
+        self.unlink_node(key.0, position.node_id, node.previous, node.next);
+        self.remove_owner_node(&position.owner, position.node_id);
         true
     }
 
@@ -210,22 +294,92 @@ impl BindingOwnershipIndex {
             process,
             stream_key: stream_key.to_string(),
         };
-        let keys = self
-            .owners
-            .get(&owner)
-            .map(|keys| keys.iter().cloned().collect::<Vec<_>>())
-            .unwrap_or_default();
+        let node_ids = self.owners.remove(&owner).unwrap_or_default();
+        let keys = node_ids
+            .iter()
+            .filter_map(|node_id| self.nodes.get(node_id))
+            .map(|node| node.key.clone())
+            .collect::<Vec<_>>();
         for key in &keys {
             self.remove(key);
         }
         keys
     }
 
+    fn insert_node(&mut self, node_id: NodeId, key: (TraceId, String), owner: BindingOwner) {
+        let previous = self.order.get(&key.0).and_then(|order| order.newest);
+        if let Some(previous) = previous.and_then(|node_id| self.nodes.get_mut(&node_id)) {
+            previous.next = Some(node_id);
+        }
+        self.nodes.insert(
+            node_id,
+            OwnershipNode {
+                key: key.clone(),
+                previous,
+                next: None,
+            },
+        );
+        let order = self.order.entry(key.0).or_default();
+        order.oldest.get_or_insert(node_id);
+        order.newest = Some(node_id);
+        order.len += 1;
+        self.positions.insert(
+            key,
+            OwnershipPosition {
+                node_id,
+                owner: owner.clone(),
+            },
+        );
+        self.owners.entry(owner).or_default().insert(node_id);
+    }
+
+    fn unlink_node(
+        &mut self,
+        trace_id: TraceId,
+        node_id: NodeId,
+        previous: Option<NodeId>,
+        next: Option<NodeId>,
+    ) {
+        if let Some(previous) = previous.and_then(|node_id| self.nodes.get_mut(&node_id)) {
+            previous.next = next;
+        }
+        if let Some(next) = next.and_then(|node_id| self.nodes.get_mut(&node_id)) {
+            next.previous = previous;
+        }
+        let Some(order) = self.order.get_mut(&trace_id) else {
+            return;
+        };
+        if order.oldest == Some(node_id) {
+            order.oldest = next;
+        }
+        if order.newest == Some(node_id) {
+            order.newest = previous;
+        }
+        order.len = order.len.saturating_sub(1);
+        if order.len == 0 {
+            self.order.remove(&trace_id);
+        }
+    }
+
+    fn remove_owner_node(&mut self, owner: &BindingOwner, node_id: NodeId) {
+        let Some(nodes) = self.owners.get_mut(owner) else {
+            return;
+        };
+        nodes.remove(&node_id);
+        if nodes.is_empty() {
+            self.owners.remove(owner);
+        }
+    }
+
+    fn trace_len(&self, trace_id: TraceId) -> usize {
+        self.order.get(&trace_id).map_or(0, |order| order.len)
+    }
+
     fn oldest_for_trace(&self, trace_id: TraceId) -> Option<(TraceId, String)> {
         self.order
-            .range((Included((trace_id, 0, String::new())), Unbounded))
-            .next()
-            .filter(|(candidate, _, _)| *candidate == trace_id)
-            .map(|(candidate, _, action_id)| (*candidate, action_id.clone()))
+            .get(&trace_id)
+            .and_then(|order| order.oldest)
+            .and_then(|node_id| self.nodes.get(&node_id))
+            .map(|node| node.key.clone())
     }
 }

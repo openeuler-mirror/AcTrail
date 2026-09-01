@@ -1,8 +1,4 @@
 //! Live semantic action runtime.
-
-use std::collections::BTreeMap;
-use std::time::SystemTime;
-
 use config_core::daemon::{
     AgentInvocationConfig, FileObservationConfig, PayloadMcpConfig, SemanticRetentionConfig,
 };
@@ -15,6 +11,8 @@ use semantic_action::{
     McpJsonRpcContentWrite, SemanticAction, SemanticActionKind, SemanticActionLink,
     SemanticEvidenceKind, attr_keys as attrs,
 };
+use std::collections::BTreeMap;
+use std::time::SystemTime;
 
 use crate::llm_pipeline::{
     ActionBatch, LlmActionPipeline, LlmCodecPlugin, LlmCodecPluginStatus, PipelineEvent,
@@ -253,6 +251,9 @@ impl LiveSemanticActionRuntime {
                     .observe_http_message(http_message_action(event));
                 let mut projected_llm = LiveSemanticActionOutput::default();
                 for matched in &observation.matches {
+                    output
+                        .links
+                        .push(self.links.observe_exact_http_exchange_link(matched));
                     let llm_output = self
                         .llm
                         .advance(PipelineEvent::HttpExchange(matched))
@@ -373,9 +374,7 @@ impl LiveSemanticActionRuntime {
         self.observe_payload_segment_with_evidence(segment, true)
     }
 
-    /// Projects an unretained stdio segment only through the local MCP path.
-    ///
-    /// Payload evidence is omitted because no payload row will be persisted.
+    /// Projects unretained stdio through MCP without payload evidence.
     pub fn observe_unretained_mcp_stdio_payload_segment(
         &mut self,
         segment: &PayloadSegment,
@@ -520,21 +519,38 @@ impl LiveSemanticActionRuntime {
         segment: &PayloadSegment,
         sequence: u64,
         header_projected: bool,
-    ) {
+    ) -> LiveSemanticActionOutput {
         let request = (!header_projected)
             .then(|| self.http_exchange.observe_damaged_http1_response(segment))
             .flatten();
-        self.llm
+        let llm_output = self
+            .llm
             .advance(PipelineEvent::PrepareIncompleteHttp1Response {
                 segment,
                 sequence,
                 request,
-            });
+            })
+            .output;
+        let mut output = self.observe_llm_batch(llm_output);
+        output
+            .links
+            .extend(self.links.observe_actions(&output.actions));
+        output
     }
 
-    pub fn finish_incomplete_payload(&mut self, segment: &PayloadSegment) {
-        self.llm
-            .advance(PipelineEvent::ForgetPayloadAssociations(segment));
+    pub fn finish_incomplete_payload(
+        &mut self,
+        segment: &PayloadSegment,
+    ) -> LiveSemanticActionOutput {
+        let llm_output = self
+            .llm
+            .advance(PipelineEvent::FinishIncompletePayload(segment))
+            .output;
+        let mut output = self.observe_llm_batch(llm_output);
+        output
+            .links
+            .extend(self.links.observe_actions(&output.actions));
+        output
     }
 
     pub fn finish_incomplete_http1_response(
@@ -544,6 +560,21 @@ impl LiveSemanticActionRuntime {
         let llm_output = self
             .llm
             .advance(PipelineEvent::FinishIncompleteHttp1Response(segment))
+            .output;
+        let mut output = self.observe_llm_batch(llm_output);
+        output
+            .links
+            .extend(self.links.observe_actions(&output.actions));
+        output
+    }
+
+    pub fn finish_payload_transaction(
+        &mut self,
+        segment: &PayloadSegment,
+    ) -> LiveSemanticActionOutput {
+        let llm_output = self
+            .llm
+            .advance(PipelineEvent::FinishPayloadTransaction(segment))
             .output;
         let mut output = self.observe_llm_batch(llm_output);
         output

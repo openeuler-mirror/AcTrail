@@ -163,8 +163,8 @@ export function readTraceSummary(traceId) {
   return fetchJson(`/api/traces/${traceId}/summary`);
 }
 
-export function readTraceTimeAttribution(traceId) {
-  return fetchJson(`/api/traces/${traceId}/time-attribution`);
+export function readTraceTimeAttribution(traceId, { signal } = {}) {
+  return fetchJson(`/api/traces/${traceId}/time-attribution`, { signal });
 }
 
 export function readTraceEvents(traceId) {

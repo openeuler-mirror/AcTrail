@@ -360,6 +360,7 @@ pub(crate) struct LinkRoleCodes {
     pub(crate) llm_response_tool_call: i16,
     pub(crate) llm_tool_call_result: i16,
     pub(crate) llm_tool_call_agent_invocation: i16,
+    pub(crate) http_request_http_response: i16,
     pub(crate) llm_request_http_message: i16,
     pub(crate) llm_request_llm_response: i16,
     pub(crate) llm_response_http_message: i16,
@@ -407,6 +408,7 @@ impl LinkRoleCodes {
             SemanticActionLinkRole::LlmToolCallAgentInvocation => {
                 self.llm_tool_call_agent_invocation
             }
+            SemanticActionLinkRole::HttpRequestHttpResponse => self.http_request_http_response,
             SemanticActionLinkRole::LlmRequestHttpMessage => self.llm_request_http_message,
             SemanticActionLinkRole::LlmRequestLlmResponse => self.llm_request_llm_response,
             SemanticActionLinkRole::LlmResponseHttpMessage => self.llm_response_http_message,
@@ -476,6 +478,9 @@ impl LinkRoleCodes {
             value if value == self.llm_tool_call_agent_invocation => {
                 Ok(SemanticActionLinkRole::LlmToolCallAgentInvocation)
             }
+            value if value == self.http_request_http_response => {
+                Ok(SemanticActionLinkRole::HttpRequestHttpResponse)
+            }
             value if value == self.llm_request_http_message => {
                 Ok(SemanticActionLinkRole::LlmRequestHttpMessage)
             }
@@ -508,7 +513,7 @@ impl LinkRoleCodes {
         }
     }
 
-    fn entries(self) -> [(&'static str, i16); 26] {
+    fn entries(self) -> [(&'static str, i16); 27] {
         [
             (
                 SemanticActionLinkRole::AgentPerformedAction.as_str(),
@@ -577,6 +582,10 @@ impl LinkRoleCodes {
             (
                 SemanticActionLinkRole::LlmToolCallAgentInvocation.as_str(),
                 self.llm_tool_call_agent_invocation,
+            ),
+            (
+                SemanticActionLinkRole::HttpRequestHttpResponse.as_str(),
+                self.http_request_http_response,
             ),
             (
                 SemanticActionLinkRole::LlmRequestHttpMessage.as_str(),

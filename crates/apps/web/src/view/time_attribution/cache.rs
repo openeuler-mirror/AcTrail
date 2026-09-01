@@ -1,12 +1,15 @@
 use super::projection::{project_trace_data, terminal_time};
-use super::summary::{breakdown_shares, category_shares, command_breakdown_shares};
-use super::turns::attribution_scope;
+use super::summary::{
+    breakdown_shares, category_shares, command_breakdown_shares, tool_breakdown_shares,
+};
+use super::turns::{attribution_scope, clip_tool_intervals};
 use super::*;
 
 const TIME_ATTRIBUTION_ACTION_KINDS: &[&str] = &[
     "llm.call",
     "llm.request",
     "llm.response",
+    "llm.tool_call",
     "command.invocation",
 ];
 const TIME_ATTRIBUTION_LINK_ROLES: &[&str] = &["llm.call.response", "agent.performed_action"];
@@ -123,7 +126,15 @@ fn clip_terminal_projection(projection: &TraceAttribution, window: Interval) -> 
     let total_duration = windows.iter().map(|window| window.duration()).sum::<u128>();
     let categories = category_shares(&segments, total_duration);
     let models = breakdown_shares(&segments, total_duration, Category::ModelSide, "model");
-    let tools = breakdown_shares(&segments, total_duration, Category::AgentSide, "agent");
+    let workload_tool_intervals =
+        clip_tool_intervals(&projection.workload_tool_intervals, &[window]);
+    let tool_calls = projection
+        .tool_calls
+        .iter()
+        .filter(|call| call.observed_in(window))
+        .cloned()
+        .collect::<Vec<_>>();
+    let tools = tool_breakdown_shares(&workload_tool_intervals, &tool_calls, total_duration);
     let commands = command_breakdown_shares(&command_segments, total_duration);
     let llm_call_count = segments
         .iter()
@@ -131,20 +142,13 @@ fn clip_terminal_projection(projection: &TraceAttribution, window: Interval) -> 
         .flat_map(|segment| segment.action_ids.iter().cloned())
         .collect::<BTreeSet<_>>()
         .len();
-    let tool_interval_count = segments
+    let tool_interval_count = workload_tool_intervals
         .iter()
-        .filter(|segment| {
-            segment.category_value == Category::AgentSide && segment.key != TOOL_ORCHESTRATION_KEY
-        })
-        .flat_map(|segment| segment.action_ids.iter().cloned())
+        .filter(|tool| tool.tool_name.is_some())
+        .map(|tool| tool.action_id.clone())
         .collect::<BTreeSet<_>>()
         .len();
-    let command_interval_count = command_segments
-        .iter()
-        .filter(|segment| segment.kind != "tool_overhead")
-        .flat_map(|segment| segment.action_ids.iter().cloned())
-        .collect::<BTreeSet<_>>()
-        .len();
+    let command_interval_count = CommandSegment::unique_command_count(&command_segments);
     TraceAttribution {
         schema_version: projection.schema_version,
         trace: projection.trace.clone(),
@@ -186,6 +190,8 @@ fn clip_terminal_projection(projection: &TraceAttribution, window: Interval) -> 
         segments,
         command_segments,
         issues: projection.issues.clone(),
+        workload_tool_intervals,
+        tool_calls,
     }
 }
 

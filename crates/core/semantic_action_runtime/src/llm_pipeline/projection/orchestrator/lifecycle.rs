@@ -73,8 +73,8 @@ impl ProjectionCoordinator {
             .confirmed_http_exchanges
             .retain(|key, _| key.trace_id != trace_id);
         self.correlation
-            .http_exchange_streams
-            .retain(|key| key.trace_id != trace_id);
+            .closed_llm_exchanges
+            .retain(|key, _| key.trace_id != trace_id);
         self.correlation
             .incomplete_http1_responses
             .retain(|key, _| key.trace_id != trace_id);
@@ -102,6 +102,7 @@ impl ProjectionCoordinator {
         self.correlation
             .active_binding_owners
             .forget_trace(trace_id);
+        self.correlation.forget_closed_pending_trace(trace_id);
         self.correlation.stream_owners.forget_trace(trace_id);
         self.projector.forget_trace(trace_id);
     }

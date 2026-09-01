@@ -14,6 +14,8 @@ use super::pipeline::LiveLlmProjector;
 pub(crate) enum PipelineEvent<'a> {
     PayloadSegment(&'a PayloadSegment),
     PayloadGap(&'a PayloadSegment),
+    FinishIncompletePayload(&'a PayloadSegment),
+    FinishPayloadTransaction(&'a PayloadSegment),
     ForgetPayloadAssociations(&'a PayloadSegment),
     ForgetPayloadStream(&'a PayloadStreamIdentity),
     FinalizePayloadStream {
@@ -51,6 +53,12 @@ impl LiveLlmProjector {
         match event {
             PipelineEvent::PayloadSegment(segment) => self.observe_payload_segment(segment).into(),
             PipelineEvent::PayloadGap(segment) => self.observe_payload_gap(segment).into(),
+            PipelineEvent::FinishIncompletePayload(segment) => {
+                self.finish_incomplete_payload(segment).into()
+            }
+            PipelineEvent::FinishPayloadTransaction(segment) => {
+                self.finish_payload_transaction(segment).into()
+            }
             PipelineEvent::ForgetPayloadAssociations(segment) => {
                 self.forget_payload_associations(segment);
                 PipelineAdvance::default()

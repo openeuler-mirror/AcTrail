@@ -1,6 +1,9 @@
 //! Payload segment policy and persistence.
 
+mod application;
 mod semantic_persistence;
+
+use application::{application_protocol_requested, tls_summary_application_draft};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::SystemTime;
@@ -367,7 +370,6 @@ impl PayloadTransactionContext<'_> {
         self.mark_semantic_projection_dirty(segment.trace_id);
         let (bytes, redaction) =
             redact_payload_bytes(policy.redaction, std::mem::take(&mut segment.bytes));
-        segment.captured_size = bytes.len() as u64;
         segment.redaction = redaction;
         segment.bytes = bytes;
         let stream_identity = PayloadStreamIdentity::from_segment(&segment);
@@ -383,7 +385,7 @@ impl PayloadTransactionContext<'_> {
                         | model_core::payload::PayloadOperationCompletionState::Failed
                 )
                 || segment.operation_original_size != segment.operation_captured_size);
-        let incomplete_http1_message = operation_incomplete
+        let incomplete_http1_message = (operation_incomplete && !discontinuity_before)
             .then(|| self.application_protocol.incomplete_http1_message(&segment))
             .flatten();
         if discontinuity_before || operation_incomplete {
@@ -391,8 +393,9 @@ impl PayloadTransactionContext<'_> {
             self.payload_body_retention_gate
                 .forget_stream(&stream_identity);
         }
+        let mut boundary_semantic_actions = SemanticActionBatch::default();
         if discontinuity_before {
-            export_batch.extend(self.observe_payload_gap(&segment));
+            boundary_semantic_actions.extend(self.observe_payload_gap(&segment));
         } else if operation_incomplete {
             match incomplete_http1_message {
                 Some(IncompleteHttp1Message::Request {
@@ -415,28 +418,26 @@ impl PayloadTransactionContext<'_> {
                         terminal_sequence = segment.operation_id,
                         "localized incomplete HTTP/1 response to one message"
                     );
-                    self.semantic_actions.prepare_incomplete_http1_response(
+                    boundary_semantic_actions.extend(self.prepare_incomplete_http1_response(
                         &segment,
                         sequence,
                         header_projected,
-                    )
+                    ));
                 }
                 None => self.semantic_actions.prepare_incomplete_payload(&segment),
             }
         }
         if stdio_dropped {
             let started = crate::services::workload_diagnostics::now();
-            let mut semantic_actions = self.observe_payload_semantics(&segment, false);
+            let mut semantic_actions = boundary_semantic_actions;
+            semantic_actions.extend(self.observe_payload_semantics(&segment, false));
             if operation_incomplete {
                 let finalized = match incomplete_http1_message {
                     Some(IncompleteHttp1Message::Response { .. }) => {
                         self.finish_incomplete_http1_response(&segment)
                     }
                     Some(IncompleteHttp1Message::Request { .. }) => Default::default(),
-                    _ => {
-                        self.semantic_actions.finish_incomplete_payload(&segment);
-                        Default::default()
-                    }
+                    _ => self.finish_incomplete_payload(&segment),
                 };
                 semantic_actions.extend(finalized);
             }
@@ -497,19 +498,16 @@ impl PayloadTransactionContext<'_> {
             None
         };
         let started = crate::services::workload_diagnostics::now();
-        let mut semantic_actions =
-            self.observe_payload_semantics(&analysis_segment, retain_payload_segment);
+        let mut semantic_actions = boundary_semantic_actions;
+        semantic_actions
+            .extend(self.observe_payload_semantics(&analysis_segment, retain_payload_segment));
         if operation_incomplete {
             let finalized = match incomplete_http1_message {
                 Some(IncompleteHttp1Message::Response { .. }) => {
                     self.finish_incomplete_http1_response(&analysis_segment)
                 }
                 Some(IncompleteHttp1Message::Request { .. }) => Default::default(),
-                _ => {
-                    self.semantic_actions
-                        .finish_incomplete_payload(&analysis_segment);
-                    Default::default()
-                }
+                _ => self.finish_incomplete_payload(&analysis_segment),
             };
             semantic_actions.extend(finalized);
         }
@@ -555,6 +553,9 @@ impl PayloadTransactionContext<'_> {
             application_drafts,
             export_batch,
         )?;
+        let transaction_tail = self.finish_llm_transaction(&analysis_segment);
+        export_batch.extend(transaction_tail.clone());
+        semantic_actions.extend(transaction_tail);
         self.payload_body_retention_gate
             .apply(&analysis_segment, body_retention);
 
@@ -603,40 +604,6 @@ impl PayloadTransactionContext<'_> {
         )
     }
 
-    fn prepare_application_events(
-        &mut self,
-        trace_id: TraceId,
-        observed_at: SystemTime,
-        process: ProcessIdentity,
-        drafts: Vec<ApplicationEventDraft>,
-        export_batch: &mut SemanticActionBatch,
-    ) -> Result<Vec<PreparedApplicationEvent>, ControlError> {
-        let mut prepared = Vec::with_capacity(drafts.len());
-        for draft in drafts {
-            let mut flags = EventFlags::clean();
-            flags.metadata_partial = draft.metadata_partial;
-            let event = DomainEvent::new(
-                EventEnvelope {
-                    event_id: self.next_event_id()?,
-                    trace_id,
-                    observed_at,
-                    process: process.clone(),
-                    collector: CollectorName::new(APPLICATION_PROTOCOL_COLLECTOR_NAME),
-                    kind: EventKind::Application,
-                    flags,
-                },
-                EventPayload::Application(draft.payload),
-            );
-            let event_actions = self.observe_semantic_actions_for_event(&event);
-            export_batch.extend(event_actions.clone());
-            prepared.push(PreparedApplicationEvent {
-                event,
-                semantic_actions: event_actions,
-            });
-        }
-        Ok(prepared)
-    }
-
     fn log_payload_diagnostic(&self, args: std::fmt::Arguments<'_>) {
         diagnostic_logging::log_diagnostic(
             self.diagnostic_log_level,
@@ -670,90 +637,4 @@ fn recording_error_to_control(error: RecordingError) -> ControlError {
 
 fn control_error_to_recording(error: ControlError) -> RecordingError {
     RecordingError::new(error.code, error.message)
-}
-
-fn tls_summary_application_draft(segment: &PayloadSegment) -> Option<ApplicationEventDraft> {
-    let hint = segment.protocol_hint.as_deref()?;
-    let fields = parse_tls_summary_hint(hint)?;
-    let reason = fields.get("reason").cloned().unwrap_or_default();
-    let protocol = fields
-        .get("protocol")
-        .cloned()
-        .unwrap_or_else(|| "unknown".to_string());
-    let operation = match segment.direction {
-        model_core::payload::PayloadDirection::Inbound => "download",
-        model_core::payload::PayloadDirection::Outbound => "upload",
-    };
-    let mut metadata = BTreeMap::from([
-        (
-            "direction".to_string(),
-            format!("{:?}", segment.direction).to_lowercase(),
-        ),
-        (
-            "source_boundary".to_string(),
-            format!("{:?}", segment.source_boundary),
-        ),
-        ("stream_key".to_string(), segment.stream_key.to_string()),
-        ("payload_sequence".to_string(), segment.sequence.to_string()),
-        (
-            "payload_segment_id".to_string(),
-            segment.segment_id.get().to_string(),
-        ),
-        (
-            "payload.original_size".to_string(),
-            segment.original_size.to_string(),
-        ),
-        (
-            "payload.captured_size".to_string(),
-            segment.captured_size.to_string(),
-        ),
-        ("payload.truncation".to_string(), "truncated".to_string()),
-        ("payload.summary.reason".to_string(), reason.clone()),
-        ("payload.summary.protocol".to_string(), protocol.clone()),
-    ]);
-    if segment.original_size > segment.captured_size {
-        metadata.insert(
-            "payload.omitted_size".to_string(),
-            (segment.original_size - segment.captured_size).to_string(),
-        );
-    }
-    Some(ApplicationEventDraft::partial(ApplicationPayload {
-        protocol,
-        operation: operation.to_string(),
-        summary: format!("{operation} {} bytes ({reason})", segment.original_size),
-        body: None,
-        metadata,
-    }))
-}
-
-fn parse_tls_summary_hint(hint: &str) -> Option<BTreeMap<String, String>> {
-    let rest = hint.strip_prefix("tls-summary;")?;
-    let mut fields = BTreeMap::new();
-    for item in rest.split(';') {
-        let Some((key, value)) = item.split_once('=') else {
-            continue;
-        };
-        fields.insert(key.to_string(), value.to_string());
-    }
-    Some(fields)
-}
-
-fn application_protocol_requested(
-    trace_runtime: &TraceRuntime,
-    trace_id: TraceId,
-) -> Result<bool, ControlError> {
-    let entry = trace_runtime
-        .get_trace(trace_id)
-        .ok_or_else(|| ControlError::new("payload_match", "payload trace does not exist"))?;
-    Ok(entry
-        .profile_snapshot
-        .capability_requests
-        .iter()
-        .any(|request| {
-            request.mode != RequestMode::Disabled
-                && matches!(
-                    request.capability,
-                    Capability::NetApplicationPlaintextHttp | Capability::NetApplicationHttp2Frames
-                )
-        }))
 }

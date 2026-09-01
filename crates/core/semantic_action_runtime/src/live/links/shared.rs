@@ -7,21 +7,6 @@ use semantic_action::{
 };
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(super) struct SemanticActionKey {
-    pub(super) trace_id: TraceId,
-    pub(super) action_id: String,
-}
-
-impl From<&SemanticAction> for SemanticActionKey {
-    fn from(action: &SemanticAction) -> Self {
-        Self {
-            trace_id: action.trace_id,
-            action_id: action.action_id.clone(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct ActionLinkKey {
     pub(super) trace_id: TraceId,
     pub(super) parent_action_id: String,

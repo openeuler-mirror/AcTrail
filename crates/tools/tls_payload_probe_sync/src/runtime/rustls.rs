@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tls_payload_core::PayloadDirection;
 
 use crate::runtime::config;
-use crate::runtime::decision::{RuntimeAction, decide_payload};
+use crate::runtime::decision::{PreparedPayloadDecision, RuntimeAction, decide_payload};
 use crate::runtime::{hook, maps, output};
 
 const RUSTLS_BUFFER_PLAINTEXT_SYMBOL: &str = "rustls_buffer_plaintext";
@@ -97,9 +97,13 @@ unsafe extern "C" fn hook_rustls_buffer_plaintext(
     if payload.is_null() {
         return unsafe { original(state, payload, sendable_plaintext) };
     }
-    match rewrite_outbound_chunks(state as usize, payload) {
-        RustlsDecision::Continue => unsafe { original(state, payload, sendable_plaintext) },
-        RustlsDecision::Block => 0,
+    match PreparedRustlsOutbound::prepare(state as usize, payload) {
+        PreparedRustlsOutbound::Continue(capture) => {
+            let accepted = unsafe { original(state, payload, sendable_plaintext) };
+            capture.record_completed(accepted);
+            accepted
+        }
+        PreparedRustlsOutbound::Block => 0,
     }
 }
 
@@ -116,9 +120,137 @@ unsafe extern "C" fn hook_rustls_take_received_plaintext(
     }
 }
 
-enum RustlsDecision {
-    Continue,
+enum PreparedRustlsOutbound {
+    Continue(RustlsOutboundCapture),
     Block,
+}
+
+struct RustlsOutboundCapture {
+    slices: Vec<PreparedRustlsSlice>,
+}
+
+struct PreparedRustlsSlice {
+    pointer: *mut u8,
+    length: usize,
+    decision: PreparedPayloadDecision,
+}
+
+impl PreparedRustlsOutbound {
+    fn prepare(stream_key: usize, payload: *mut RustlsOutboundChunks) -> Self {
+        let payload = unsafe { &mut *payload };
+        let capture = RustlsOutboundCapture { slices: Vec::new() };
+        if payload.q0 == RUSTLS_INLINE_TAG {
+            return capture.prepare_slice(stream_key, payload.q1 as *mut u8, payload.q2);
+        }
+        capture.prepare_multiple(stream_key, payload)
+    }
+}
+
+impl RustlsOutboundCapture {
+    fn prepare_multiple(
+        mut self,
+        stream_key: usize,
+        payload: &RustlsOutboundChunks,
+    ) -> PreparedRustlsOutbound {
+        let chunks = payload.q0 as *const RustlsChunk;
+        let chunk_count = payload.q1;
+        let start = payload.q2;
+        let end = payload.q3;
+        if chunks.is_null() {
+            abort_runtime("rustls outbound Multiple has null chunks pointer");
+        }
+        if start > end {
+            abort_runtime("rustls outbound Multiple has start > end");
+        }
+        let Some(selected_len) = end.checked_sub(start) else {
+            abort_runtime("rustls outbound Multiple selected length underflow");
+        };
+        if config::get().is_some_and(|config| selected_len > config.max_payload_bytes()) {
+            if config::get().is_some_and(|config| config.should_print_decision()) {
+                output::event_line(&format!(
+                    "sync_decision: block direction=outbound symbol={RUSTLS_BUFFER_PLAINTEXT_SYMBOL} reason=max_payload_bytes length={selected_len}\n"
+                ));
+            }
+            return PreparedRustlsOutbound::Block;
+        }
+        let mut cursor = 0usize;
+        for index in 0..chunk_count {
+            let chunk = unsafe { &*chunks.add(index) };
+            let Some(chunk_end) = cursor.checked_add(chunk.length) else {
+                abort_runtime("rustls outbound chunk cursor overflow");
+            };
+            let overlap_start = start.max(cursor);
+            let overlap_end = end.min(chunk_end);
+            if overlap_start < overlap_end {
+                let offset = overlap_start - cursor;
+                let length = overlap_end - overlap_start;
+                match self.push_slice(stream_key, unsafe { chunk.pointer.add(offset) }, length) {
+                    Ok(()) => {}
+                    Err(()) => return PreparedRustlsOutbound::Block,
+                }
+            }
+            cursor = chunk_end;
+            if cursor >= end {
+                break;
+            }
+        }
+        PreparedRustlsOutbound::Continue(self)
+    }
+
+    fn prepare_slice(
+        mut self,
+        stream_key: usize,
+        pointer: *mut u8,
+        length: usize,
+    ) -> PreparedRustlsOutbound {
+        match self.push_slice(stream_key, pointer, length) {
+            Ok(()) => PreparedRustlsOutbound::Continue(self),
+            Err(()) => PreparedRustlsOutbound::Block,
+        }
+    }
+
+    fn push_slice(&mut self, stream_key: usize, pointer: *mut u8, length: usize) -> Result<(), ()> {
+        if pointer.is_null() || length == 0 {
+            return Ok(());
+        }
+        let payload = unsafe { std::slice::from_raw_parts(pointer, length) };
+        let Some(decision) = PreparedPayloadDecision::prepare(
+            PayloadDirection::Outbound,
+            RUSTLS_BUFFER_PLAINTEXT_SYMBOL,
+            stream_key,
+            payload,
+        ) else {
+            return Ok(());
+        };
+        match decision.action() {
+            RuntimeAction::Allow => {}
+            RuntimeAction::Replace(replacement) => write_replacement_or_abort(
+                RUSTLS_BUFFER_PLAINTEXT_SYMBOL,
+                PayloadDirection::Outbound,
+                pointer,
+                replacement,
+            ),
+            RuntimeAction::Block => return Err(()),
+        }
+        self.slices.push(PreparedRustlsSlice {
+            pointer,
+            length,
+            decision,
+        });
+        Ok(())
+    }
+
+    fn record_completed(self, mut completed: usize) {
+        for slice in self.slices {
+            let accepted = completed.min(slice.length);
+            let payload = unsafe { std::slice::from_raw_parts(slice.pointer, slice.length) };
+            slice.decision.record_completed(payload, accepted);
+            completed = completed.saturating_sub(accepted);
+            if completed == 0 {
+                break;
+            }
+        }
+    }
 }
 
 fn rewrite_received_payload(stream_key: usize, payload: *mut RustlsPayload) {
@@ -142,89 +274,6 @@ fn rewrite_received_payload(stream_key: usize, payload: *mut RustlsPayload) {
         payload.pointer,
         payload.length,
     );
-}
-
-fn rewrite_outbound_chunks(
-    stream_key: usize,
-    payload: *mut RustlsOutboundChunks,
-) -> RustlsDecision {
-    let payload = unsafe { &mut *payload };
-    if payload.q0 == RUSTLS_INLINE_TAG {
-        return rewrite_outbound_slice(stream_key, payload.q1 as *mut u8, payload.q2);
-    }
-    rewrite_outbound_multiple(stream_key, payload)
-}
-
-fn rewrite_outbound_multiple(stream_key: usize, payload: &RustlsOutboundChunks) -> RustlsDecision {
-    let chunks = payload.q0 as *const RustlsChunk;
-    let chunk_count = payload.q1;
-    let start = payload.q2;
-    let end = payload.q3;
-    if chunks.is_null() {
-        abort_runtime("rustls outbound Multiple has null chunks pointer");
-    }
-    if start > end {
-        abort_runtime("rustls outbound Multiple has start > end");
-    }
-    let Some(selected_len) = end.checked_sub(start) else {
-        abort_runtime("rustls outbound Multiple selected length underflow");
-    };
-    if config::get().is_some_and(|config| selected_len > config.max_payload_bytes()) {
-        if config::get().is_some_and(|config| config.should_print_decision()) {
-            output::event_line(&format!(
-                "sync_decision: block direction=outbound symbol={RUSTLS_BUFFER_PLAINTEXT_SYMBOL} reason=max_payload_bytes length={selected_len}\n"
-            ));
-        }
-        return RustlsDecision::Block;
-    }
-    let mut cursor = 0usize;
-    for index in 0..chunk_count {
-        let chunk = unsafe { &*chunks.add(index) };
-        let Some(chunk_end) = cursor.checked_add(chunk.length) else {
-            abort_runtime("rustls outbound chunk cursor overflow");
-        };
-        let overlap_start = start.max(cursor);
-        let overlap_end = end.min(chunk_end);
-        if overlap_start < overlap_end {
-            let offset = overlap_start - cursor;
-            let length = overlap_end - overlap_start;
-            if let RustlsDecision::Block =
-                rewrite_outbound_slice(stream_key, unsafe { chunk.pointer.add(offset) }, length)
-            {
-                return RustlsDecision::Block;
-            }
-        }
-        cursor = chunk_end;
-        if cursor >= end {
-            break;
-        }
-    }
-    RustlsDecision::Continue
-}
-
-fn rewrite_outbound_slice(stream_key: usize, pointer: *mut u8, length: usize) -> RustlsDecision {
-    if pointer.is_null() || length == 0 {
-        return RustlsDecision::Continue;
-    }
-    let payload = unsafe { std::slice::from_raw_parts(pointer, length) };
-    match decide_payload(
-        PayloadDirection::Outbound,
-        RUSTLS_BUFFER_PLAINTEXT_SYMBOL,
-        stream_key,
-        payload,
-    ) {
-        RuntimeAction::Allow => RustlsDecision::Continue,
-        RuntimeAction::Replace(replacement) => {
-            write_replacement_or_abort(
-                RUSTLS_BUFFER_PLAINTEXT_SYMBOL,
-                PayloadDirection::Outbound,
-                pointer,
-                &replacement,
-            );
-            RustlsDecision::Continue
-        }
-        RuntimeAction::Block => RustlsDecision::Block,
-    }
 }
 
 fn rewrite_slice_or_abort(
