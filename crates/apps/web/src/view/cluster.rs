@@ -282,6 +282,17 @@ pub fn llm_request_lineage_json(
     Ok("{\"lineage\":null,\"forks\":[]}".to_string())
 }
 
+pub fn llm_trajectory_graph_json(root: &Path, trace_id: u64) -> Result<String, String> {
+    let row = row_by_ui_id(root, trace_id)?;
+    if let Some((storage, local_trace_id)) = sqlite_storage_for_row(&row)? {
+        return super::llm_trajectory_graph_json_for_trace(&storage, local_trace_id, trace_id);
+    }
+    Ok(format!(
+        "{{\"trace_id\":{},\"partial\":true,\"nodes\":[],\"edges\":[],\"stats\":{{\"node_count\":0,\"trajectory_count\":0,\"append_count\":0,\"fork_count\":0,\"duplicate_count\":0,\"strongly_linked_node_ratio\":0.0,\"duplicate_node_ratio\":0.0}},\"capabilities\":{{\"strict_prefix_edges\":false,\"related_edges\":false,\"compaction_detection\":false}}}}",
+        json::number(trace_id),
+    ))
+}
+
 pub fn llm_request_trajectory_json(
     root: &Path,
     trace_id: u64,

@@ -4,6 +4,7 @@ import NetworkTab from './activity/network/NetworkTab.vue';
 import PayloadsTab from './activity/payloads/PayloadsTab.vue';
 import ActionTreeTab from './core/action-tree/ActionTreeTab.vue';
 import CommandsTab from './core/commands/CommandsTab.vue';
+import LlmTrajectoryTab from './core/llm-trajectory/LlmTrajectoryTab.vue';
 import OverviewTab from './core/overview/OverviewTab.vue';
 import TimelineTab from './core/timeline/TimelineTab.vue';
 import WaterfallTab from './core/waterfall/WaterfallTab.vue';
@@ -16,6 +17,7 @@ import ResourcesTab from './system/resources/ResourcesTab.vue';
 export const TAB_IDS = Object.freeze({
   overview: 'overview',
   actionTree: 'action_tree',
+  llmTrajectory: 'llm_trajectory',
   waterfall: 'waterfall',
   commands: 'commands',
   timeline: 'timeline',
@@ -40,6 +42,7 @@ export const TAB_GROUP_IDS = Object.freeze({
 export const TAB_DEFINITIONS = Object.freeze([
   { id: TAB_IDS.overview, label: 'Overview', component: OverviewTab },
   { id: TAB_IDS.actionTree, label: 'Actions', component: ActionTreeTab },
+  { id: TAB_IDS.llmTrajectory, label: 'LLM Trajectory', component: LlmTrajectoryTab },
   { id: TAB_IDS.waterfall, label: 'Time & Waterfall', component: WaterfallTab },
   { id: TAB_IDS.commands, label: 'Commands', component: CommandsTab },
   { id: TAB_IDS.timeline, label: 'Timeline', component: TimelineTab },
@@ -67,6 +70,7 @@ export const TAB_GROUP_DEFINITIONS = Object.freeze([
     defaultTabId: TAB_IDS.actionTree,
     tabIds: Object.freeze([
       TAB_IDS.actionTree,
+      TAB_IDS.llmTrajectory,
       TAB_IDS.commands,
       TAB_IDS.processes,
       TAB_IDS.processTree,

@@ -32,28 +32,14 @@ class ProjectSubagentTrajectoryCase(TrajectoryCaseSupport):
         results: dict[str, TestResult] = {}
         try:
             discovery = AgentBinaryDiscovery(self._config.repo)
-            agent = ProjectSubagentAgent.resolve(
-                self._config.agent_binary,
-                discovery,
-            )
+            agent = self._select_agent(test_context, discovery)
             if agent is None:
                 return TestResult(
                     TestStatus.SKIPPED,
-                    f"{self._config.agent_binary} executable not found; set "
-                    f"{self._config.agent_binary.upper()}_E2E_BINARY",
-                )
-            test_context.report_progress(
-                "agent_availability",
-                f"checking {agent.name} availability before starting capture",
-            )
-            if not test_context.check_agent_availability(
-                agent.name,
-                agent.binary,
-                agent.environment,
-            ):
-                return TestResult(
-                    TestStatus.SKIPPED,
-                    f"{agent.name} external availability check failed",
+                    "no available real subagent-capable agent in "
+                    + "/".join(
+                        ProjectSubagentAgent.candidates(self._config.agent_binary)
+                    ),
                 )
 
             test_context.report_progress(
@@ -76,13 +62,13 @@ class ProjectSubagentTrajectoryCase(TrajectoryCaseSupport):
             scenario = ProjectSubagentTrajectoryScenario(
                 self._environment.runtime,
                 agent,
-                self._config.repo,
+                self._config.work_dir / "sorting-workspace",
                 self._config.launch_timeout_seconds,
                 self._config.trace_random_bytes,
             )
             test_context.report_progress(
                 "agent_launch",
-                f"running {agent.name} with three project-inspection subagents",
+                f"running {agent.name} with two sorting subagents and a benchmark",
             )
             scenario.run()
             trace_id = self._wait_for_trace_id(scenario.trace_name)
@@ -106,6 +92,20 @@ class ProjectSubagentTrajectoryCase(TrajectoryCaseSupport):
                 TestStatus.PASSED,
                 f"{len(evidence.pairs)} complete exchanges have consistent "
                 f"trajectory lineage for {agent.name}",
+            )
+            graph = assertion.require_graph(evidence)
+            results["trajectory-graph-api"] = TestResult(
+                TestStatus.PASSED,
+                f"graph returned {graph.node_count} nodes, {graph.edge_count} "
+                f"edges, and {graph.trajectory_count} trajectories with "
+                "lineage-derived fields and statistics",
+            )
+            analysis = assertion.require_real_analysis_scenario()
+            results["web-analysis-scenario"] = TestResult(
+                TestStatus.PASSED,
+                f"observed {analysis.independent_context_count} independent "
+                f"contexts, {analysis.continuous_context_count} continuous "
+                "contexts, increasing tool results, and interleaved trajectories",
             )
 
             test_context.report_progress(
@@ -139,9 +139,39 @@ class ProjectSubagentTrajectoryCase(TrajectoryCaseSupport):
             )
         return TestResult(
             TestStatus.COMPOSITE,
-            f"{self._config.agent_binary} project subagent LLM projection regression",
+            f"{self._config.agent_binary or 'auto'} sorting-subagent LLM "
+            "projection regression",
             results,
         )
+
+    def _select_agent(
+        self,
+        test_context: TestingContextSingleton,
+        discovery: AgentBinaryDiscovery,
+    ) -> ProjectSubagentAgent | None:
+        for name in ProjectSubagentAgent.candidates(self._config.agent_binary):
+            agent = ProjectSubagentAgent.resolve(name, discovery)
+            if agent is None:
+                test_context.report_progress(
+                    "agent_selection",
+                    f"{name} executable not found; trying next candidate",
+                )
+                continue
+            test_context.report_progress(
+                "agent_availability",
+                f"checking {name} availability before starting capture",
+            )
+            if test_context.check_agent_availability(
+                name,
+                agent.binary,
+                agent.environment,
+            ):
+                return agent
+            test_context.report_progress(
+                "agent_selection",
+                f"{name} is unavailable; trying next candidate",
+            )
+        return None
 
     def _wait_for_trace_id(self, trace_name: str) -> int:
         last_matches: list[dict[str, Any]] = []

@@ -212,6 +212,13 @@ export function readActionTreeLlmNav(traceId, { mode, afterId = null } = {}) {
   );
 }
 
+export function readLlmTrajectoryGraph(traceId, { signal } = {}) {
+  return fetchJson(
+    `/api/traces/${encodeURIComponent(traceId)}/llm-trajectories`,
+    { signal },
+  );
+}
+
 export function readActionDetail(traceId, actionId) {
   return fetchJson(`/api/traces/${traceId}/actions/${encodeURIComponent(actionId)}`);
 }

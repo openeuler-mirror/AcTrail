@@ -504,6 +504,13 @@ fn route_cluster_trace_api(
                 (Err(error), _) | (_, Err(error)) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
             }
         }
+
+        [trace_id, "llm-trajectories"] => match parse_u64(trace_id) {
+            Ok(trace_id) => view::cluster::llm_trajectory_graph_json(cluster_root, trace_id)
+                .map(Response::json)
+                .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
+            Err(error) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
+        },
         [trace_id, "llm-trajectories", trajectory_id] => {
             let trace_id = parse_u64(trace_id);
             let trajectory_id = percent_decode(trajectory_id);
@@ -693,6 +700,13 @@ fn route_trace_api(path: &str, query: &str, storage: &StorageConfig) -> Result<R
                 (Err(error), _) | (_, Err(error)) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
             }
         }
+
+        [trace_id, "llm-trajectories"] => match parse_u64(trace_id) {
+            Ok(trace_id) => view::llm_trajectory_graph_json(storage, trace_id)
+                .map(Response::json)
+                .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
+            Err(error) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
+        },
         [trace_id, "llm-trajectories", trajectory_id] => {
             let trace_id = parse_u64(trace_id);
             let trajectory_id = percent_decode(trajectory_id);

@@ -14,6 +14,8 @@ pub(crate) mod cluster;
 mod commands;
 #[path = "view/events.rs"]
 mod events;
+#[path = "view/llm_trajectory.rs"]
+mod llm_trajectory;
 #[path = "view/payloads.rs"]
 mod payloads;
 #[path = "view/projection_cache.rs"]
@@ -514,6 +516,26 @@ pub fn llm_request_trajectory_json(
 ) -> Result<String, String> {
     let mut storage = open_storage(storage_config)?;
     actions::llm_request_trajectory_json(storage.as_mut(), TraceId::new(trace_id), trajectory_id)
+}
+
+pub fn llm_trajectory_graph_json(
+    storage_config: &StorageConfig,
+    trace_id: u64,
+) -> Result<String, String> {
+    llm_trajectory_graph_json_for_trace(storage_config, trace_id, trace_id)
+}
+
+pub(crate) fn llm_trajectory_graph_json_for_trace(
+    storage_config: &StorageConfig,
+    local_trace_id: u64,
+    response_trace_id: u64,
+) -> Result<String, String> {
+    let mut storage = open_storage(storage_config)?;
+    llm_trajectory::graph_json(
+        storage.as_mut(),
+        TraceId::new(local_trace_id),
+        response_trace_id,
+    )
 }
 
 pub fn action_mcp_jsonrpc_content_json(

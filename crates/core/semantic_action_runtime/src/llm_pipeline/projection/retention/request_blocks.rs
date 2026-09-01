@@ -43,6 +43,7 @@ pub(in crate::llm_pipeline) struct CanonicalRequestContent {
     pub(in crate::llm_pipeline) block_count: usize,
     pub(in crate::llm_pipeline) message_preview: Option<String>,
     pub(in crate::llm_pipeline) user_message_count: usize,
+    pub(in crate::llm_pipeline) tool_result_count: usize,
     pub(in crate::llm_pipeline) latest_user_message_hash: Option<String>,
     pub(in crate::llm_pipeline) background_kind: Option<&'static str>,
 }
@@ -66,6 +67,7 @@ pub(in crate::llm_pipeline) fn canonical_request_content(
     project_trajectory_history: bool,
 ) -> Result<CanonicalRequestContent, String> {
     let user_messages = user_message_metadata(body);
+    let tool_result_count = metadata::tool_result_count(body);
     let canonical_body_json = canonical_json_string(body);
     let canonical_body_hash = sha256_hex(canonical_body_json.as_bytes());
     let canonical_body_bytes = canonical_body_json.len() as u64;
@@ -98,6 +100,7 @@ pub(in crate::llm_pipeline) fn canonical_request_content(
         block_count,
         message_preview: message_preview(body),
         user_message_count: user_messages.count,
+        tool_result_count,
         latest_user_message_hash: user_messages.latest_hash,
         background_kind: background_request_kind(body),
     })
@@ -110,6 +113,7 @@ pub(in crate::llm_pipeline) fn canonical_shape_metadata(
     u64,
     Option<String>,
     UserMessageMetadata,
+    usize,
     Option<&'static str>,
 ) {
     let canonical_body = canonical_json_bytes(body);
@@ -118,6 +122,7 @@ pub(in crate::llm_pipeline) fn canonical_shape_metadata(
         canonical_body.len() as u64,
         message_preview(body),
         user_message_metadata(body),
+        metadata::tool_result_count(body),
         background_request_kind(body),
     )
 }

@@ -534,6 +534,14 @@ impl StorageBackend for SqliteStorage {
             .map_err(StorageError::from)
     }
 
+    fn llm_request_lineages(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<Vec<LlmRequestLineage>, StorageError> {
+        semantic_action::SemanticActionReadStore::llm_request_lineages(self, trace_id)
+            .map_err(StorageError::from)
+    }
+
     fn llm_request_trajectory(
         &self,
         trace_id: TraceId,
